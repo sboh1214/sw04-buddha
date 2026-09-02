@@ -6,6 +6,10 @@
 #   docker compose down -v                        # wipe volumes (re-runs init SQL)
 name: buddha
 
+# Credentials in this file (postgres/postgres, buddha/buddha, unauthenticated Redis, Mailpit
+# accepting any SMTP login) are for LOCAL DEVELOPMENT ONLY. Ports are published on
+# 127.0.0.1 so nothing is reachable from the LAN; never reuse these values elsewhere.
+
 services:
   postgres:
     image: postgres:16.15-alpine
@@ -17,7 +21,7 @@ services:
       # Application database; init/01-roles.sql creates buddha_migrate / buddha_app in it.
       POSTGRES_DB: buddha
     ports:
-      - '5432:5432'
+      - '127.0.0.1:5432:5432'
     volumes:
       - postgres-data:/var/lib/postgresql/data
       # *.sql here run once, in name order, on first start with an empty data directory.
@@ -38,7 +42,7 @@ services:
     # noeviction is required by BullMQ; AOF keeps queued jobs across restarts.
     command: ['redis-server', '--appendonly', 'yes', '--maxmemory-policy', 'noeviction']
     ports:
-      - '6379:6379'
+      - '127.0.0.1:6379:6379'
     volumes:
       - redis-data:/data
     healthcheck:
@@ -53,8 +57,8 @@ services:
     image: axllent/mailpit:v1.31.0
     restart: unless-stopped
     ports:
-      - '1025:1025' # SMTP (SMTP_HOST/SMTP_PORT in .env)
-      - '8025:8025' # Web UI / API
+      - '127.0.0.1:1025:1025' # SMTP (SMTP_HOST/SMTP_PORT in .env)
+      - '127.0.0.1:8025:8025' # Web UI / API
     environment:
       MP_MAX_MESSAGES: 5000
       MP_DATABASE: /data/mailpit.db
@@ -78,7 +82,7 @@ services:
     tmpfs:
       - /var/lib/postgresql/data
     ports:
-      - '5433:5432'
+      - '127.0.0.1:5433:5432'
     volumes:
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
@@ -95,7 +99,7 @@ services:
     command:
       ['redis-server', '--save', '', '--appendonly', 'no', '--maxmemory-policy', 'noeviction']
     ports:
-      - '6380:6379'
+      - '127.0.0.1:6380:6379'
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
       interval: 5s

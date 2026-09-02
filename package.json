@@ -22,7 +22,7 @@
     "infra:down": "docker compose down",
     "infra:logs": "docker compose logs -f",
     "mobile:doctor": "pnpm --filter mobile run doctor",
-    "ci": "turbo run lint typecheck test build"
+    "check": "pnpm format:check && turbo run lint typecheck test build"
   },
   "devDependencies": {
     "prettier": "catalog:",

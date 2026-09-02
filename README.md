@@ -23,6 +23,11 @@ pnpm dev                         # web(3000) · api(4000) · worker + 공유 패
 - API 헬스체크: http://localhost:3000/api/health (web rewrite 경유) 또는 http://localhost:4000/api/health
 - Mailpit UI: http://localhost:8025
 
+참고:
+
+- 에디터에서 `@buddha/*` 패키지의 타입이 잡히려면 `pnpm build`(또는 `pnpm dev`)를 한 번 실행해야 한다. 공유 패키지는 컴파일된 `dist/`만 export한다.
+- `docker/docker-compose.yml`의 자격 증명(postgres/postgres, buddha/buddha, 인증 없는 Redis)은 로컬 개발 전용이며 모든 포트는 `127.0.0.1`에만 열린다. API도 기본적으로 `localhost`에만 바인드한다(`.env`의 `API_HOST`).
+
 ## 스크립트
 
 | 명령                                          | 설명                                                       |
@@ -34,7 +39,7 @@ pnpm dev                         # web(3000) · api(4000) · worker + 공유 패
 | `pnpm db:generate` / `db:migrate` / `db:seed` | drizzle-kit 생성 / 마이그레이션 적용 / 시드                |
 | `pnpm mobile:doctor`                          | Expo 스캐폴드 점검 (`expo-doctor`)                         |
 | `pnpm infra:up` / `infra:down` / `infra:logs` | Docker Compose 단축 명령                                   |
-| `pnpm ci`                                     | lint + typecheck + test + build (CI와 동일)                |
+| `pnpm check`                                  | format:check + lint + typecheck + test + build (CI와 동일) |
 
 통합 테스트용 인프라(포트 5433/6380)는 `docker compose --profile test up -d`로 따로 띄운다.
 

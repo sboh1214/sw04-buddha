@@ -4,7 +4,6 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/.env*"],
       "outputs": ["dist/**", ".next/**", "!.next/cache/**", "!.next/dev/**", "!.next/standalone/**"]
     },
     "dev": {
@@ -21,7 +20,7 @@
     },
     "test": {
       "dependsOn": ["^build"],
-      "env": ["DATABASE_URL", "REDIS_URL", "TEST_DISPUTE_WINDOW_SECONDS"]
+      "env": ["DATABASE_URL", "DATABASE_MIGRATE_URL", "REDIS_URL", "TEST_DISPUTE_WINDOW_SECONDS"]
     },
     "db:generate": {
       "cache": false,
@@ -40,7 +39,8 @@
       "cache": false
     },
     "generate": {
-      "cache": false
+      "cache": false,
+      "passThroughEnv": ["OPENAPI_JSON"]
     }
   }
 }

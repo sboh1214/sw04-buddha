@@ -101,20 +101,33 @@ function installShutdownHandlers(handles: Handles): void {
     }, SHUTDOWN_TIMEOUT_MS);
     forceExit.unref();
 
-    try {
+    // Each step runs to completion even if an earlier one rejects: the shared
+    // connection must always be closed, otherwise its socket keeps the event
+    // loop alive and the process never exits.
+    const steps: Array<[string, () => Promise<unknown>]> = [
       // 1. Stop taking new jobs, wait for in-flight ones, close blocking duplicates.
-      await Promise.all(handles.workers.map((worker) => worker.close()));
+      ['workers', () => Promise.all(handles.workers.map((worker) => worker.close()))],
       // 2. Release queue-side resources (the shared connection stays open).
-      await Promise.all(handles.queues.map((queue) => queue.close()));
+      ['queues', () => Promise.all(handles.queues.map((queue) => queue.close()))],
       // 3. Close the connection we own.
-      await handles.redis.quit();
-      logger.info('shutdown complete');
-    } catch (err) {
-      logger.error({ err }, 'shutdown failed');
-      process.exitCode = 1;
-    } finally {
-      clearTimeout(forceExit);
+      ['redis', () => handles.redis.quit()],
+    ];
+    let failed = false;
+    for (const [name, run] of steps) {
+      try {
+        await run();
+      } catch (err) {
+        failed = true;
+        logger.error({ err, step: name }, 'shutdown step failed');
+      }
     }
+    if (failed) {
+      // Leave the watchdog armed: if a handle is still open, it will force the exit.
+      process.exitCode = 1;
+      return;
+    }
+    clearTimeout(forceExit);
+    logger.info('shutdown complete');
   };
 
   process.once('SIGINT', () => void shutdown('SIGINT'));

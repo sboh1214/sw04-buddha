@@ -14,6 +14,7 @@ nodeLinker: isolated # default. Expo SDK 54+ supports isolated deps; switch to `
 allowBuilds:
   esbuild: true # tsx / vitest (vite) / drizzle-kit
   msgpackr-extract: true # optional native accelerator pulled in by bullmq (msgpackr)
+  fsevents: false # darwin-only optional dep of tsx/vite; ships a prebuilt binary, node-gyp must not run
   "@scarf/scarf": false # install-time telemetry only
 
 # ---- supply-chain policy --------------------------------------------------

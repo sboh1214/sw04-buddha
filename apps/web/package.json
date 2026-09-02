@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev --port 3000",
     "build": "next build && node scripts/copy-standalone.mjs",
-    "start": "node .next/standalone/apps/web/server.js",
+    "start": "node scripts/start-standalone.mjs",
     "typecheck": "next typegen && tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run"

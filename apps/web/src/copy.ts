@@ -1,6 +1,7 @@
 /** User-facing copy (Korean). Keep every UI string here; see PLAN.md Appendix A. */
 export const copy = {
   appName: 'buddha',
+  appDescription: '예/아니오로 미래를 예측하는 포인트 예측 시장',
   predict: '예측하기',
   yes: '예',
   no: '아니오',

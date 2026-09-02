@@ -8,6 +8,9 @@
     "./react": "./react.js",
     "./next": "./next.js"
   },
+  "scripts": {
+    "lint": "eslint ."
+  },
   "dependencies": {
     "@eslint/js": "catalog:",
     "@next/eslint-plugin-next": "catalog:",
@@ -17,6 +20,10 @@
     "typescript-eslint": "catalog:"
   },
   "peerDependencies": {
+    "eslint": "catalog:",
+    "typescript": "catalog:"
+  },
+  "devDependencies": {
     "eslint": "catalog:",
     "typescript": "catalog:"
   }

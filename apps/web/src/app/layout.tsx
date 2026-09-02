@@ -5,7 +5,7 @@ import { copy } from '@/copy';
 
 export const metadata: Metadata = {
   title: copy.appName,
-  description: '예/아니오로 미래를 예측하는 포인트 예측 시장',
+  description: copy.appDescription,
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

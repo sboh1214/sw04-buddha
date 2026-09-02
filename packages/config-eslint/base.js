@@ -39,13 +39,6 @@ export function base({ tsconfigRootDir }) {
       },
     },
     {
-      // *.config.ts files at a package root are usually outside tsconfig "include";
-      // lint them without type information instead of failing with a project-service error.
-      name: 'buddha/config-files',
-      files: ['*.config.{ts,mts,cts}'],
-      extends: [tseslint.configs.disableTypeChecked],
-    },
-    {
       name: 'buddha/javascript',
       files: [tseslint.globs.js],
       extends: [js.configs.recommended],

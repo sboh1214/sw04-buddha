@@ -22,14 +22,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
-    # Ready for later integration tests (harmless now). Roles/DB names mirror .env.example;
-    # the docker-compose role-init SQL is not applied here, so a superuser is used.
+    # Ready for later integration tests (harmless now). The superuser below is only used
+    # to apply docker/postgres/init/01-roles.sql; tasks then connect with the same
+    # buddha_app / buddha_migrate roles as local development (PLAN 6.4).
     services:
       postgres:
         image: postgres:16
         env:
-          POSTGRES_USER: buddha
-          POSTGRES_PASSWORD: buddha
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
           POSTGRES_DB: buddha
         ports:
           - 5432:5432
@@ -48,26 +49,27 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
+    # Only variables declared in turbo.json (`env` / `passThroughEnv` / framework
+    # inference) reach tasks: Turborepo runs in strict env mode. Add new keys there first.
     env:
-      NODE_ENV: test
-      DATABASE_URL: postgres://buddha:buddha@localhost:5432/buddha
-      DATABASE_MIGRATE_URL: postgres://buddha:buddha@localhost:5432/buddha
+      DATABASE_URL: postgres://buddha_app:buddha@localhost:5432/buddha
+      DATABASE_MIGRATE_URL: postgres://buddha_migrate:buddha@localhost:5432/buddha
       REDIS_URL: redis://localhost:6379
-      BETTER_AUTH_SECRET: ci-only-not-a-secret
-      BETTER_AUTH_URL: http://localhost:3000
       NEXT_PUBLIC_API_URL: http://localhost:4000
       TEST_DISPUTE_WINDOW_SECONDS: '86400'
 
     steps:
       - uses: actions/checkout@v7
 
-      # Installs pnpm (version from package.json "packageManager") AND Node 24, caches the pnpm store,
-      # then runs `pnpm install --frozen-lockfile` (require-lockfile). Replaces actions/setup-node.
+      # Installs pnpm (version from package.json "packageManager") and Node 24, caches the
+      # pnpm store, then runs `pnpm install` itself (frozen lockfile: pnpm's CI default).
       - uses: pnpm/setup@v2
         with:
           runtime: node@24
           cache: true
-          require-lockfile: true
+
+      - name: Create database roles (same SQL as docker compose)
+        run: psql postgres://postgres:postgres@localhost:5432/buddha -v ON_ERROR_STOP=1 -f docker/postgres/init/01-roles.sql
 
       - name: Restore Turborepo cache
         uses: actions/cache@v6

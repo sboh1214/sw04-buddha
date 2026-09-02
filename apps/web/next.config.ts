@@ -20,9 +20,9 @@ const nextConfig: NextConfig = {
     optimizePackageImports: ['@chakra-ui/react'],
   },
   // reactCompiler needs babel-plugin-react-compiler (Babel); intentionally not enabled.
-  async rewrites() {
+  rewrites() {
     // Same-origin /api/* for the browser; the API server handles /api/auth/* and /api/v1/*.
-    return [{ source: '/api/:path*', destination: `${apiUrl}/api/:path*` }];
+    return Promise.resolve([{ source: '/api/:path*', destination: `${apiUrl}/api/:path*` }]);
   },
 };
 

@@ -1,4 +1,4 @@
-import { Inject, Logger, Module, type OnModuleDestroy } from '@nestjs/common';
+import { Inject, Logger, Module, type OnApplicationShutdown } from '@nestjs/common';
 import { type Redis } from 'ioredis';
 import { REDIS, redisProvider } from './redis.provider.js';
 
@@ -6,12 +6,13 @@ import { REDIS, redisProvider } from './redis.provider.js';
   providers: [redisProvider],
   exports: [REDIS],
 })
-export class RedisModule implements OnModuleDestroy {
+export class RedisModule implements OnApplicationShutdown {
   private readonly logger = new Logger(RedisModule.name);
 
   constructor(@Inject(REDIS) private readonly redis: Redis) {}
 
-  async onModuleDestroy(): Promise<void> {
+  // Runs after the HTTP server has closed, so no request can still use the client.
+  async onApplicationShutdown(): Promise<void> {
     // quit() flushes pending commands; fall back to disconnect() if the
     // connection is already gone.
     try {

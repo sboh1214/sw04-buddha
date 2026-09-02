@@ -11,6 +11,16 @@ export interface CreateDbOptions {
   /** Shown as application_name in pg_stat_activity. */
   applicationName?: string;
   /**
+   * Fail a checkout that cannot obtain a connection within this time (ms, default 5_000).
+   * Without it a hung connect parks the client forever and eventually exhausts the pool.
+   */
+  connectTimeoutMs?: number;
+  /**
+   * Upper bound for a single statement, enforced both client-side (pg `query_timeout`)
+   * and server-side (`statement_timeout`). Milliseconds; default 30_000.
+   */
+  queryTimeoutMs?: number;
+  /**
    * Server-side guard for transactions that hold pg_advisory_xact_lock (PLAN 0.2):
    * a session idle inside a transaction longer than this is killed by Postgres.
    * Milliseconds; default 30_000.
@@ -29,10 +39,14 @@ export interface CreateDbOptions {
  * `casing: "snake_case"` must match drizzle.config.ts.
  */
 export function createDb(url: string, options: CreateDbOptions = {}): Db {
+  const queryTimeoutMs = options.queryTimeoutMs ?? 30_000;
   const pool = new Pool({
     connectionString: url,
     max: options.max ?? 10,
     application_name: options.applicationName ?? 'buddha',
+    connectionTimeoutMillis: options.connectTimeoutMs ?? 5_000,
+    query_timeout: queryTimeoutMs,
+    statement_timeout: queryTimeoutMs,
     idle_in_transaction_session_timeout: options.idleInTransactionTimeoutMs ?? 30_000,
   });
   // Without a listener an error on an idle client crashes the process.
