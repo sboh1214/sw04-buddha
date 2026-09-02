@@ -4,14 +4,15 @@ export const MINUS_SIGN = '−';
 /**
  * Formats an integer amount of points as `12,345P` / `−1,200P`.
  *
- * Accepts `bigint` (canonical for P amounts, see PLAN 0.2) or an integer
- * `number`. Non-integer numbers are rejected because P amounts are never
- * fractional. Grouping is done manually so the output does not depend on the
- * runtime's ICU locale data.
+ * Accepts `bigint` (canonical for P amounts, see PLAN 0.2) or a safe-integer
+ * `number`. Non-integers are rejected because P amounts are never fractional;
+ * numbers outside ±(2^53 − 1) are rejected because the double has already
+ * rounded them, so formatting would silently show a wrong amount. Grouping is
+ * done manually so the output does not depend on the runtime's ICU locale data.
  */
 export function formatP(n: bigint | number): string {
-  if (typeof n === 'number' && !Number.isInteger(n)) {
-    throw new RangeError(`formatP expects an integer, got ${n}`);
+  if (typeof n === 'number' && !Number.isSafeInteger(n)) {
+    throw new RangeError(`formatP expects a safe integer, got ${n}`);
   }
   const value = typeof n === 'bigint' ? n : BigInt(n);
   const negative = value < 0n;

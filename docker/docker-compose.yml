@@ -1,4 +1,7 @@
-# Local infrastructure for buddha (PLAN 15). Compose v2/v5 file format: no `version` key.
+# Local infrastructure for buddha (PLAN 15). Compose >= 2.20.2 file format (no `version` key;
+# healthcheck `start_interval` needs the 2.20.2 schema). start_interval only takes effect on Docker
+# Engine 25+ (API 1.44): on older engines Compose 2.24-5.0 refuses to start and other versions
+# silently ignore it. See README 요구 사항 and ADR-0014.
 #
 #   docker compose up -d                          # from the repo root (compose.yaml includes this file)
 #   docker compose -f docker/docker-compose.yml up -d

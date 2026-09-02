@@ -7,7 +7,7 @@
 ## 요구 사항
 
 - Node 24 LTS (`.nvmrc`), pnpm 11 (`packageManager` 필드로 자동 선택)
-- Docker Desktop (Compose v2 이상)
+- Docker Desktop 4.22 이상(Compose 2.20.2 이상, `docker compose version`으로 확인). 루트 `compose.yaml`의 `include`와 `docker/docker-compose.yml`의 헬스체크 `start_interval`이 요구하며, `start_interval`은 Docker Engine 25(Desktop 4.27) 이상에서만 실제로 적용된다.
 
 ## 로컬 실행
 
@@ -26,7 +26,7 @@ pnpm dev                         # web(3000) · api(4000) · worker + 공유 패
 참고:
 
 - 에디터에서 `@buddha/*` 패키지의 타입이 잡히려면 `pnpm build`(또는 `pnpm dev`)를 한 번 실행해야 한다. 공유 패키지는 컴파일된 `dist/`만 export한다.
-- `docker/docker-compose.yml`의 자격 증명(postgres/postgres, buddha/buddha, 인증 없는 Redis)은 로컬 개발 전용이며 모든 포트는 `127.0.0.1`에만 열린다. API도 기본적으로 `localhost`에만 바인드한다(`.env`의 `API_HOST`).
+- `docker/docker-compose.yml`의 자격 증명(postgres/postgres, buddha/buddha, 인증 없는 Redis)은 로컬 개발 전용이며 모든 포트는 `127.0.0.1`에만 열린다. API도 기본적으로 `localhost`에만 바인드한다(`.env`의 `API_HOST`). 웹 dev 서버도 `next dev --hostname localhost`로 루프백에만 바인드한다. Next 기본값(모든 인터페이스)이면 `/api/*` rewrite를 통해 API까지 LAN에 노출되기 때문이다. Next는 주소 하나에만 바인드하므로 Node 24에서는 `::1`만 열린다: `http://localhost:3000`은 브라우저·curl·fetch 모두 정상이고 `http://127.0.0.1:3000`은 거부된다. 다른 기기에서 웹을 열어야 하면 `pnpm --filter web exec next dev --port 3000 -H 0.0.0.0`으로 명시적으로 열고 `next.config.ts`에 `allowedDevOrigins`를 추가한다. 로컬 standalone 실행(`pnpm --filter web start`)은 `WEB_HOST`(기본 `localhost`)를 따른다. 모바일은 ADR-0017대로 API에 직접 붙으므로 그때는 웹 포트가 아니라 `API_HOST=0.0.0.0`이 필요하다.
 
 ## 스크립트
 

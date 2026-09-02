@@ -24,6 +24,18 @@ describe('formatP', () => {
     expect(() => formatP(Number.NaN)).toThrow(RangeError);
   });
 
+  it('rejects numbers outside the safe-integer range (already rounded by the double)', () => {
+    // 2 ** 53: a 9007199254740993 literal would already parse to this value.
+    expect(() => formatP(2 ** 53)).toThrow(RangeError);
+    expect(() => formatP(-(2 ** 53))).toThrow(RangeError);
+    expect(() => formatP(1e21)).toThrow(RangeError);
+    expect(() => formatP(Number.POSITIVE_INFINITY)).toThrow(RangeError);
+    // Safe boundaries stay accepted; bigint input is unbounded.
+    expect(formatP(Number.MAX_SAFE_INTEGER)).toBe('9,007,199,254,740,991P');
+    expect(formatP(Number.MIN_SAFE_INTEGER)).toBe('−9,007,199,254,740,991P');
+    expect(formatP(2n ** 53n)).toBe('9,007,199,254,740,992P');
+  });
+
   it('round-trips: stripping separators and sign yields the absolute value', () => {
     fc.assert(
       fc.property(fc.bigInt({ min: -(10n ** 30n), max: 10n ** 30n }), (v) => {

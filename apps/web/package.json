@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --port 3000",
+    "dev": "next dev --port 3000 --hostname localhost",
     "build": "next build && node scripts/copy-standalone.mjs",
     "start": "node scripts/start-standalone.mjs",
     "typecheck": "next typegen && tsc --noEmit",

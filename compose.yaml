@@ -1,6 +1,9 @@
 # Root shortcut so `docker compose up -d` works from the repo root (PLAN M0 acceptance criteria).
 # The real definition lives in docker/docker-compose.yml (PLAN 4). Both entry points share the
 # project name "buddha", so `docker compose down` from either location targets the same containers.
+# Needs Compose >= 2.20.2 (Docker Desktop >= 4.22): `include` shipped in 2.20.0 and the healthcheck
+# `start_interval` in docker/docker-compose.yml entered the schema in 2.20.2. The same floor applies
+# to `docker compose -f docker/docker-compose.yml`, so that is not a fallback for older Compose.
 name: buddha
 include:
   - docker/docker-compose.yml

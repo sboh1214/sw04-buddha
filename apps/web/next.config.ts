@@ -22,6 +22,8 @@ const nextConfig: NextConfig = {
   // reactCompiler needs babel-plugin-react-compiler (Babel); intentionally not enabled.
   rewrites() {
     // Same-origin /api/* for the browser; the API server handles /api/auth/* and /api/v1/*.
+    // The proxying is server-side, so anyone who can reach this server reaches the API through
+    // it: that is why the `dev` script passes `--hostname localhost` (README, ADR-0015).
     return Promise.resolve([{ source: '/api/:path*', destination: `${apiUrl}/api/:path*` }]);
   },
 };

@@ -24,7 +24,17 @@ if (buildId !== standaloneBuildId) {
   process.exit(1);
 }
 
-const child = spawn(process.execPath, [server], { stdio: 'inherit', cwd: standalone });
+// The standalone server.js binds process.env.HOSTNAME (Next default 0.0.0.0). This local runner
+// binds loopback unless WEB_HOST says otherwise, mirroring API_HOST, so `pnpm --filter web start`
+// does not expose the /api/* rewrite on the LAN. An inherited HOSTNAME is deliberately overridden:
+// RHEL-family shells export the machine name and Docker the container id, neither of which is a
+// bind address we want. A future deploy image must run server.js directly with HOSTNAME=0.0.0.0
+// (as Next's reference Dockerfile does) rather than through this script.
+const child = spawn(process.execPath, [server], {
+  stdio: 'inherit',
+  cwd: standalone,
+  env: { ...process.env, HOSTNAME: process.env.WEB_HOST || 'localhost' },
+});
 child.on('exit', (code, signal) => {
   process.exit(code ?? (signal ? 1 : 0));
 });
