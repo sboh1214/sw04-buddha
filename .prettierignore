@@ -1,0 +1,16 @@
+node_modules/
+pnpm-lock.yaml
+pnpm-workspace.yaml
+**/dist/
+**/.next/
+**/out/
+**/.turbo/
+**/.expo/
+**/coverage/
+**/*.tsbuildinfo
+# owner-authored plan: never reformat
+docs/PLAN.md
+# generated artifacts
+packages/db/drizzle/
+packages/api-client/src/generated/
+apps/api/openapi.json

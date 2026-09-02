@@ -1,0 +1,4 @@
+{
+  "extends": ["expo/tsconfig.base", "@buddha/config-ts/react-native.json"],
+  "include": ["**/*.ts", "**/*.tsx", ".expo/types/**/*.ts", "expo-env.d.ts"]
+}

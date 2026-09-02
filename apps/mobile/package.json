@@ -1,0 +1,40 @@
+{
+  "name": "mobile",
+  "version": "0.0.0",
+  "private": true,
+  "main": "index.ts",
+  "scripts": {
+    "start": "expo start --dev-client",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "doctor": "expo-doctor"
+  },
+  "dependencies": {
+    "expo": "catalog:",
+    "expo-dev-client": "catalog:",
+    "expo-status-bar": "catalog:",
+    "react": "catalog:expo",
+    "react-native": "catalog:expo"
+  },
+  "devDependencies": {
+    "@buddha/config-eslint": "workspace:*",
+    "@buddha/config-ts": "workspace:*",
+    "@types/react": "catalog:",
+    "eslint": "catalog:",
+    "expo-doctor": "catalog:",
+    "typescript": "catalog:"
+  },
+  "expo": {
+    "doctor": {
+      "reactNativeDirectoryCheck": {
+        "exclude": [
+          "@buddha/config-eslint",
+          "@buddha/config-ts",
+          "expo-doctor"
+        ]
+      }
+    }
+  }
+}

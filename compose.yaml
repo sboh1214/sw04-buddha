@@ -1,0 +1,6 @@
+# Root shortcut so `docker compose up -d` works from the repo root (PLAN M0 acceptance criteria).
+# The real definition lives in docker/docker-compose.yml (PLAN 4). Both entry points share the
+# project name "buddha", so `docker compose down` from either location targets the same containers.
+name: buddha
+include:
+  - docker/docker-compose.yml

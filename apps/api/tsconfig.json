@@ -1,0 +1,6 @@
+{
+  "extends": "@buddha/config-ts/nestjs.json",
+  "compilerOptions": {
+    "noEmit": true
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "extends": "@buddha/config-ts/node.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "lib": ["es2024", "dom", "dom.iterable"]
+  }
+}

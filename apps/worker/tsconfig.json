@@ -1,0 +1,6 @@
+{
+  "extends": "@buddha/config-ts/node.json",
+  "compilerOptions": {
+    "noEmit": true
+  }
+}
