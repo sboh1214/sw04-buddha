@@ -1,11 +1,22 @@
+# dependencies
 node_modules/
+
+# build / cache outputs (also required so Turborepo does not hash them as inputs)
+.turbo/
 dist/
 .next/
-.turbo/
+out/
+coverage/
+.expo/
+*.tsbuildinfo
+next-env.d.ts
+expo-env.d.ts
+
+# env
 .env
 .env.*
 !.env.example
+
+# logs / misc
 *.log
 .DS_Store
-coverage/
-.expo/

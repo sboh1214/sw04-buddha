@@ -1,0 +1,20 @@
+{
+  "name": "@buddha/config-ts",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Shared tsconfig bases for the buddha monorepo (TypeScript 6.0.x)",
+  "files": [
+    "base.json",
+    "node.json",
+    "nestjs.json",
+    "nextjs.json",
+    "react-native.json"
+  ],
+  "exports": {
+    "./base.json": "./base.json",
+    "./node.json": "./node.json",
+    "./nestjs.json": "./nestjs.json",
+    "./nextjs.json": "./nextjs.json",
+    "./react-native.json": "./react-native.json"
+  }
+}

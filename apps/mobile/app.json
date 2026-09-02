@@ -1,0 +1,18 @@
+{
+  "expo": {
+    "name": "buddha",
+    "slug": "buddha",
+    "scheme": "buddha",
+    "version": "0.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "bundleIdentifier": "dev.sboh.buddha",
+      "supportsTablet": false
+    },
+    "android": {
+      "package": "dev.sboh.buddha",
+      "predictiveBackGestureEnabled": false
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "extends": "@buddha/config-ts/node.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "lib": ["es2024", "dom", "dom.iterable"],
+    "rootDir": "${configDir}"
+  },
+  "include": ["${configDir}/src", "${configDir}/*.config.ts"]
+}

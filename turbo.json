@@ -1,0 +1,46 @@
+{
+  "$schema": "https://turborepo.dev/schema.json",
+  "ui": "tui",
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**", ".next/**", "!.next/cache/**", "!.next/dev/**", "!.next/standalone/**"]
+    },
+    "dev": {
+      "dependsOn": ["^build"],
+      "cache": false,
+      "persistent": true,
+      "interruptible": true
+    },
+    "typecheck": {
+      "dependsOn": ["^build"]
+    },
+    "lint": {
+      "dependsOn": ["^build"]
+    },
+    "test": {
+      "dependsOn": ["^build"],
+      "env": ["DATABASE_URL", "DATABASE_MIGRATE_URL", "REDIS_URL", "TEST_DISPUTE_WINDOW_SECONDS"]
+    },
+    "db:generate": {
+      "cache": false,
+      "passThroughEnv": ["DATABASE_URL", "DATABASE_MIGRATE_URL"]
+    },
+    "db:migrate": {
+      "cache": false,
+      "passThroughEnv": ["DATABASE_URL", "DATABASE_MIGRATE_URL"]
+    },
+    "db:seed": {
+      "cache": false,
+      "passThroughEnv": ["DATABASE_URL", "SEED_ADMIN_EMAIL", "SEED_ADMIN_PASSWORD"]
+    },
+    "openapi:export": {
+      "dependsOn": ["build"],
+      "cache": false
+    },
+    "generate": {
+      "cache": false,
+      "passThroughEnv": ["OPENAPI_JSON"]
+    }
+  }
+}

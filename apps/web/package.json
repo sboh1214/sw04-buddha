@@ -1,0 +1,35 @@
+{
+  "name": "web",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --port 3000 --hostname localhost",
+    "build": "next build && node scripts/copy-standalone.mjs",
+    "start": "node scripts/start-standalone.mjs",
+    "typecheck": "next typegen && tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@buddha/shared": "workspace:*",
+    "@chakra-ui/react": "catalog:",
+    "@emotion/cache": "catalog:",
+    "@emotion/react": "catalog:",
+    "dotenv": "catalog:",
+    "next": "catalog:",
+    "next-themes": "catalog:",
+    "pretendard": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:"
+  },
+  "devDependencies": {
+    "@buddha/config-eslint": "workspace:*",
+    "@buddha/config-ts": "workspace:*",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

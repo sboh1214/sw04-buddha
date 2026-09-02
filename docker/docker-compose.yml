@@ -1,0 +1,117 @@
+# Local infrastructure for buddha (PLAN 15). Compose >= 2.20.2 file format (no `version` key;
+# healthcheck `start_interval` needs the 2.20.2 schema). start_interval only takes effect on Docker
+# Engine 25+ (API 1.44): on older engines Compose 2.24-5.0 refuses to start and other versions
+# silently ignore it. See README 요구 사항 and ADR-0014.
+#
+#   docker compose up -d                          # from the repo root (compose.yaml includes this file)
+#   docker compose -f docker/docker-compose.yml up -d
+#   docker compose --profile test up -d           # + postgres-test/redis-test (PLAN 14)
+#   docker compose down -v                        # wipe volumes (re-runs init SQL)
+name: buddha
+
+# Credentials in this file (postgres/postgres, buddha/buddha, unauthenticated Redis, Mailpit
+# accepting any SMTP login) are for LOCAL DEVELOPMENT ONLY. Ports are published on
+# 127.0.0.1 so nothing is reachable from the LAN; never reuse these values elsewhere.
+
+services:
+  postgres:
+    image: postgres:16.15-alpine
+    restart: unless-stopped
+    environment:
+      # Superuser used only by the init scripts and for manual admin (psql).
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      # Application database; init/01-roles.sql creates buddha_migrate / buddha_app in it.
+      POSTGRES_DB: buddha
+    ports:
+      - '127.0.0.1:5432:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # *.sql here run once, in name order, on first start with an empty data directory.
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # -h localhost forces TCP: the temporary server used while init scripts run only
+      # listens on a unix socket, so the check cannot flap to healthy before init finishes.
+      test: ['CMD-SHELL', 'pg_isready -h localhost -U postgres -d buddha']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 20s
+      start_interval: 1s
+
+  redis:
+    image: redis:7.4.11-alpine
+    restart: unless-stopped
+    # noeviction is required by BullMQ; AOF keeps queued jobs across restarts.
+    command: ['redis-server', '--appendonly', 'yes', '--maxmemory-policy', 'noeviction']
+    ports:
+      - '127.0.0.1:6379:6379'
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+      start_interval: 1s
+
+  mailpit:
+    image: axllent/mailpit:v1.31.0
+    restart: unless-stopped
+    ports:
+      - '127.0.0.1:1025:1025' # SMTP (SMTP_HOST/SMTP_PORT in .env)
+      - '127.0.0.1:8025:8025' # Web UI / API
+    environment:
+      MP_MAX_MESSAGES: 5000
+      MP_DATABASE: /data/mailpit.db
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+    volumes:
+      - mailpit-data:/data
+    # The image ships its own HEALTHCHECK (`mailpit readyz`).
+
+  # ---- integration tests (PLAN 14). Off unless `--profile test` / COMPOSE_PROFILES=test ----
+  postgres-test:
+    image: postgres:16.15-alpine
+    profiles: ['test']
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: buddha
+    # Durability off + tmpfs data dir: disposable and fast; reset with `down`.
+    command:
+      ['postgres', '-c', 'fsync=off', '-c', 'synchronous_commit=off', '-c', 'full_page_writes=off']
+    tmpfs:
+      - /var/lib/postgresql/data
+    ports:
+      - '127.0.0.1:5433:5432'
+    volumes:
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -h localhost -U postgres -d buddha']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 20s
+      start_interval: 1s
+
+  redis-test:
+    image: redis:7.4.11-alpine
+    profiles: ['test']
+    command:
+      ['redis-server', '--save', '', '--appendonly', 'no', '--maxmemory-policy', 'noeviction']
+    ports:
+      - '127.0.0.1:6380:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+      start_interval: 1s
+
+volumes:
+  postgres-data:
+  redis-data:
+  mailpit-data:

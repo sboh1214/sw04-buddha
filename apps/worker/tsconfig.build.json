@@ -1,0 +1,10 @@
+{
+  "extends": "@buddha/config-ts/node.json",
+  "compilerOptions": {
+    "declaration": false,
+    "declarationMap": false,
+    "incremental": true,
+    "tsBuildInfoFile": "${configDir}/dist/.tsbuildinfo"
+  },
+  "exclude": ["${configDir}/node_modules", "${configDir}/dist", "${configDir}/src/**/*.test.ts"]
+}
