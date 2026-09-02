@@ -7,11 +7,11 @@
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "bundleIdentifier": "app.buddha.mobile",
+      "bundleIdentifier": "dev.sboh.buddha",
       "supportsTablet": false
     },
     "android": {
-      "package": "app.buddha.mobile",
+      "package": "dev.sboh.buddha",
       "predictiveBackGestureEnabled": false
     }
   }
