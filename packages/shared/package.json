@@ -23,6 +23,9 @@
     "test": "vitest run --coverage",
     "test:watch": "vitest"
   },
+  "dependencies": {
+    "zod": "catalog:"
+  },
   "devDependencies": {
     "@buddha/config-eslint": "workspace:*",
     "@buddha/config-ts": "workspace:*",

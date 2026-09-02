@@ -17,6 +17,10 @@
       "types": "./dist/schema/index.d.ts",
       "default": "./dist/schema/index.js"
     },
+    "./test": {
+      "types": "./dist/test/index.d.ts",
+      "default": "./dist/test/index.js"
+    },
     "./package.json": "./package.json"
   },
   "scripts": {
@@ -29,9 +33,12 @@
     "db:check": "drizzle-kit check",
     "db:migrate": "tsx src/migrate.ts",
     "db:seed": "tsx src/seed.ts",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "db:auth-schema": "auth generate --config better-auth.config.ts --output src/schema/auth.ts -y"
   },
   "dependencies": {
+    "@buddha/shared": "workspace:*",
+    "better-auth": "catalog:",
     "dotenv": "catalog:",
     "drizzle-orm": "catalog:",
     "pg": "catalog:"
@@ -41,6 +48,7 @@
     "@buddha/config-ts": "workspace:*",
     "@types/node": "catalog:",
     "@types/pg": "catalog:",
+    "auth": "catalog:",
     "drizzle-kit": "catalog:",
     "eslint": "catalog:",
     "tsx": "catalog:",

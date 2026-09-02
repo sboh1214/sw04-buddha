@@ -1,7 +1,150 @@
-// CLI entry: `pnpm db:seed` (tsx src/seed.ts)
-import { sql } from 'drizzle-orm';
-import { closeDb, createDb } from './client.js';
+// CLI entry: `pnpm db:seed` (tsx src/seed.ts). Idempotent: safe to re-run on every deploy.
+//
+// Runs as the runtime role (DATABASE_URL = buddha_app): 01-roles.sql grants it DML on every
+// table created by migrations, which is all the seed needs.
+import { randomUUID } from 'node:crypto';
+import { nicknameSchema } from '@buddha/shared';
+import { hashPassword } from 'better-auth/crypto';
+import { and, eq, sql } from 'drizzle-orm';
+import { closeDb, createDb, type Db } from './client.js';
 import { loadRootEnv } from './env.js';
+import { account, balances, categories, profiles, user } from './schema/index.js';
+
+/** PLAN 1.3 categories. Sports and elections are forbidden (PLAN 0.2): never add them. */
+const CATEGORIES = [
+  { slug: 'economy', nameKo: '경제', sortOrder: 10 },
+  { slug: 'culture', nameKo: '문화', sortOrder: 20 },
+  { slug: 'entertainment', nameKo: '엔터테인먼트', sortOrder: 30 },
+  { slug: 'tech', nameKo: '테크', sortOrder: 40 },
+  { slug: 'weather', nameKo: '날씨', sortOrder: 50 },
+] as const;
+
+/**
+ * better-auth 1.7 stores a synthetic issuer on every account row and looks credential
+ * accounts up by (issuer, accountId): `createLocalAccountIssuer('credential')`.
+ */
+const CREDENTIAL_ISSUER = 'local:credential';
+const CREDENTIAL_PROVIDER = 'credential';
+const ADMIN_NICKNAME = '관리자';
+
+async function seedCategories(db: Db): Promise<void> {
+  await db
+    .insert(categories)
+    .values(CATEGORIES.map((category) => ({ ...category })))
+    .onConflictDoUpdate({
+      target: categories.slug,
+      // is_active is an admin knob: re-seeding must not re-activate a disabled category.
+      set: { nameKo: sql`excluded.name_ko`, sortOrder: sql`excluded.sort_order` },
+    });
+  console.log(`[db:seed] categories: ${String(CATEGORIES.length)} upserted`);
+}
+
+interface AdminInput {
+  email: string;
+  password: string;
+}
+
+/** '관리자', then '관리자2', '관리자3', ... when another user already owns the nickname. */
+async function pickNickname(tx: Pick<Db, 'select'>, ownUserId: string): Promise<string> {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const candidate = attempt === 0 ? ADMIN_NICKNAME : `${ADMIN_NICKNAME}${String(attempt + 1)}`;
+    if (!nicknameSchema.safeParse(candidate).success) continue;
+    const [taken] = await tx
+      .select({ userId: profiles.userId })
+      .from(profiles)
+      .where(eq(profiles.nickname, candidate));
+    if (!taken || taken.userId === ownUserId) return candidate;
+  }
+  throw new Error('[db:seed] could not find a free admin nickname');
+}
+
+/**
+ * Creates the first admin (PLAN 10.5) the way better-auth's email sign-up does: a `user`
+ * row plus a credential `account` row (providerId 'credential', accountId = user id, scrypt
+ * hash from better-auth/crypto). The "user" AFTER INSERT trigger (migration 0002) creates
+ * the profile (auto nickname) and the zero balance; the seed then renames the profile to
+ * 관리자 and promotes it.
+ *
+ * Re-running never resets an existing password; it only guarantees that the user exists,
+ * has a credential account and has role 'admin'.
+ */
+async function seedAdmin(db: Db, input: AdminInput): Promise<void> {
+  // better-auth lower-cases the email on sign-up and sign-in; match it here.
+  const email = input.email.trim().toLowerCase();
+  if (input.password.length < 8 || input.password.length > 128) {
+    throw new Error(
+      '[db:seed] SEED_ADMIN_PASSWORD must be 8-128 characters (better-auth defaults)',
+    );
+  }
+
+  await db.transaction(async (tx) => {
+    const now = new Date();
+    let created = false;
+
+    let [existing] = await tx.select({ id: user.id }).from(user).where(eq(user.email, email));
+    if (!existing) {
+      const id = randomUUID();
+      await tx.insert(user).values({
+        id,
+        name: ADMIN_NICKNAME,
+        email,
+        emailVerified: true,
+        createdAt: now,
+        updatedAt: now,
+      });
+      existing = { id };
+      created = true;
+    }
+    const userId = existing.id;
+
+    const [credential] = await tx
+      .select({ id: account.id })
+      .from(account)
+      .where(and(eq(account.userId, userId), eq(account.providerId, CREDENTIAL_PROVIDER)));
+    if (!credential) {
+      await tx.insert(account).values({
+        id: randomUUID(),
+        issuer: CREDENTIAL_ISSUER,
+        accountId: userId,
+        providerId: CREDENTIAL_PROVIDER,
+        userId,
+        password: await hashPassword(input.password),
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+
+    const [profile] = await tx
+      .select({ role: profiles.role, nickname: profiles.nickname })
+      .from(profiles)
+      .where(eq(profiles.userId, userId));
+    if (!profile) {
+      throw new Error('[db:seed] the "user" trigger did not create a profile (run db:migrate)');
+    }
+    if (created) {
+      // Fresh admin: replace the trigger's auto nickname and promote in one statement.
+      const nickname = await pickNickname(tx, userId);
+      await tx
+        .update(profiles)
+        .set({ nickname, role: 'admin', updatedAt: now })
+        .where(eq(profiles.userId, userId));
+    } else if (profile.role !== 'admin') {
+      await tx
+        .update(profiles)
+        .set({ role: 'admin', updatedAt: now })
+        .where(eq(profiles.userId, userId));
+    }
+
+    // Balance starts at 0/0 (trigger). Never touched when it already exists: balances change
+    // only together with a ledger entry (PLAN 0.2).
+    await tx.insert(balances).values({ userId }).onConflictDoNothing({ target: balances.userId });
+
+    console.log(
+      `[db:seed] admin ${email}: ${created ? 'created' : 'already exists'}` +
+        ` (role=admin, credential ${credential ? 'kept' : 'created'})`,
+    );
+  });
+}
 
 loadRootEnv();
 
@@ -10,13 +153,17 @@ if (!url) {
   console.error('[db:seed] DATABASE_URL is not set (copy .env.example to .env)');
   process.exit(1);
 }
+const adminEmail = process.env.SEED_ADMIN_EMAIL;
+const adminPassword = process.env.SEED_ADMIN_PASSWORD;
 
 const db = createDb(url, { max: 1, applicationName: 'buddha-seed' });
 try {
-  // Connectivity check only. M1+ seeds the admin account (SEED_ADMIN_*) and demo markets
-  // (PLAN Appendix B; never sports/elections).
-  await db.execute(sql`select 1`);
-  console.log('[db:seed] M0: schema is empty, nothing to seed');
+  await seedCategories(db);
+  if (adminEmail && adminPassword) {
+    await seedAdmin(db, { email: adminEmail, password: adminPassword });
+  } else {
+    console.log('[db:seed] SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD not set: admin skipped');
+  }
 } finally {
   await closeDb(db);
 }

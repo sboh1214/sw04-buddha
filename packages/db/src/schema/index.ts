@@ -3,11 +3,27 @@
  * that drizzle-kit (drizzle.config.ts -> schema) and the ORM (createDb -> schema) see the
  * same objects.
  *
- * M0: intentionally empty. M1 adds the better-auth tables and profiles; later milestones
- * add the tables from PLAN 6.2.
- *
- * Conventions (PLAN 0.2): P amounts are `bigint({ mode: "bigint" })`, prices are
- * `smallint`, quantities are `integer`, LMSR liquidity is `numeric`, timestamps are
- * `timestamp({ withTimezone: true, mode: "date" })`, ids are `uuid().defaultRandom()`.
+ * Conventions (PLAN 0.2): P amounts are `bigint({ mode: 'bigint' })`, prices are
+ * `smallint`, quantities are `integer`, LMSR state is `numeric` (string in TS), timestamps
+ * are `timestamp({ withTimezone: true, mode: 'date' })`, ids are `uuid().defaultRandom()`
+ * or `bigserial` for append-only logs. Column names: TS camelCase -> DB snake_case via
+ * `casing: 'snake_case'` (drizzle.config.ts and createDb must agree). better-auth tables
+ * (auth.ts) declare explicit snake_case names and are managed by better-auth (PLAN 6.1).
  */
-export {};
+export * from './admin-actions.js';
+export * from './audit-failures.js';
+export * from './auth.js';
+export * from './balances.js';
+export * from './categories.js';
+export * from './disputes.js';
+export * from './enums.js';
+export * from './fills.js';
+export * from './ledger.js';
+export * from './market-events.js';
+export * from './markets.js';
+export * from './orders.js';
+export * from './payments.js';
+export * from './positions.js';
+export * from './price-ticks.js';
+export * from './profiles.js';
+export * from './relations.js';
