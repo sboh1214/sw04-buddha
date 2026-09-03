@@ -2,7 +2,7 @@
 import { VersioningType } from '@nestjs/common';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
-import { type Db } from '@buddha/db';
+import { schema, type Db } from '@buddha/db';
 import { connectTestDb, type TestDb } from '@buddha/db/test';
 import { AppModule } from '../app.module.js';
 import { AUTH, type Auth } from '../auth/auth.js';
@@ -69,6 +69,26 @@ export function tokenFromLink(link: string): string {
   const token = new URL(link).searchParams.get('token');
   if (!token) throw new Error(`no token in ${link}`);
   return token;
+}
+
+/** Inserts a charge package so a test can buy something (ADR-0026). */
+export async function createTestPackage(
+  db: Db,
+  input: { amountP?: bigint; priceKrw?: number; isActive?: boolean; sortOrder?: number } = {},
+): Promise<{ id: string; amountP: bigint; priceKrw: number }> {
+  const amountP = input.amountP ?? 10_000n;
+  const priceKrw = input.priceKrw ?? 9_700;
+  const [row] = await db
+    .insert(schema.chargePackages)
+    .values({
+      amountP,
+      priceKrw,
+      isActive: input.isActive ?? true,
+      sortOrder: input.sortOrder ?? 0,
+    })
+    .returning();
+  if (!row) throw new Error('failed to insert a charge package');
+  return { id: row.id, amountP: row.amountP, priceKrw: row.priceKrw };
 }
 
 export interface TestUser {

@@ -22,6 +22,20 @@
       "when": 1788376444854,
       "tag": "0002_user_profile_trigger",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1788457571415,
+      "tag": "0003_charge_packages_and_coupons",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1788457572415,
+      "tag": "0004_signup_bonus",
+      "breakpoints": true
     }
   ]
 }

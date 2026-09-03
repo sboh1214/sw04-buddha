@@ -1,47 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   ADJUST_MAX_ABS_P,
-  CHARGE_MAX_P,
-  CHARGE_MIN_P,
-  CHARGE_PRESETS_P,
   adminUserQuerySchema,
   auditFailureSchema,
   balanceAdjustBodySchema,
-  chargeBodySchema,
   ledgerEntrySchema,
   paymentSchema,
 } from './wallet.js';
-
-describe('chargeBodySchema', () => {
-  it('accepts the bounds and yields a bigint', () => {
-    expect(chargeBodySchema.parse({ amountP: CHARGE_MIN_P.toString() })).toEqual({
-      amountP: CHARGE_MIN_P,
-    });
-    expect(chargeBodySchema.parse({ amountP: CHARGE_MAX_P.toString() })).toEqual({
-      amountP: CHARGE_MAX_P,
-    });
-  });
-
-  it('rejects amounts outside the bounds, zero, negatives and non-integers', () => {
-    for (const amountP of [
-      (CHARGE_MIN_P - 1n).toString(),
-      (CHARGE_MAX_P + 1n).toString(),
-      '0',
-      '-10000',
-      '1000.5',
-      '10_000',
-      '',
-    ]) {
-      expect(chargeBodySchema.safeParse({ amountP }).success, amountP).toBe(false);
-    }
-  });
-
-  it('offers presets that are all chargeable', () => {
-    for (const preset of CHARGE_PRESETS_P) {
-      expect(chargeBodySchema.safeParse({ amountP: preset.toString() }).success).toBe(true);
-    }
-  });
-});
 
 describe('balanceAdjustBodySchema', () => {
   it('accepts a signed amount with a reason', () => {
@@ -59,6 +24,7 @@ describe('balanceAdjustBodySchema', () => {
       { amountP: (-ADJUST_MAX_ABS_P - 1n).toString(), memo: '과다' },
       { amountP: '1000', memo: '   ' },
       { amountP: '1000' },
+      { amountP: '1000.5', memo: '소수' },
     ]) {
       expect(balanceAdjustBodySchema.safeParse(body).success, JSON.stringify(body)).toBe(false);
     }
@@ -66,7 +32,7 @@ describe('balanceAdjustBodySchema', () => {
 });
 
 describe('response schemas', () => {
-  const createdAt = '2026-09-03T04:05:06.000Z';
+  const createdAt = '2026-09-04T04:05:06.000Z';
 
   it('parses a ledger entry, including a null reference and memo', () => {
     expect(
@@ -82,6 +48,20 @@ describe('response schemas', () => {
       }),
     ).toMatchObject({ type: 'DEPOSIT', amountP: '10000' });
 
+    // A coupon redemption is a BONUS entry pointing at the redemption row.
+    expect(
+      ledgerEntrySchema.parse({
+        id: '13',
+        type: 'BONUS',
+        amountP: '5000',
+        balanceAfterP: '15000',
+        refType: 'coupon',
+        refId: 'r1',
+        memo: '쿠폰 WELCOME',
+        createdAt,
+      }).refType,
+    ).toBe('coupon');
+
     expect(
       ledgerEntrySchema.safeParse({
         id: '12',
@@ -96,17 +76,33 @@ describe('response schemas', () => {
     ).toBe(false);
   });
 
-  it('parses a payment and an audit failure', () => {
+  it('parses a payment with its KRW price and package, and an audit failure', () => {
     expect(
       paymentSchema.parse({
         id: '3f1a5b6c-1111-4222-8333-444455556666',
         amountP: '5000',
+        priceKrw: 4900,
+        packageId: '3f1a5b6c-1111-4222-8333-444455556667',
         provider: 'mock',
         providerRef: 'mock_1',
         status: 'succeeded',
         createdAt,
-      }).status,
-    ).toBe('succeeded');
+      }),
+    ).toMatchObject({ priceKrw: 4900, status: 'succeeded' });
+
+    // A payment whose package was later deleted keeps its own amounts.
+    expect(
+      paymentSchema.parse({
+        id: '3f1a5b6c-1111-4222-8333-444455556666',
+        amountP: '5000',
+        priceKrw: 4900,
+        packageId: null,
+        provider: 'mock',
+        providerRef: null,
+        status: 'succeeded',
+        createdAt,
+      }).packageId,
+    ).toBeNull();
 
     expect(
       auditFailureSchema.parse({

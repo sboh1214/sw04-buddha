@@ -248,6 +248,40 @@
         ]
       }
     },
+    "/api/v1/charge-packages": {
+      "get": {
+        "operationId": "listChargePackages",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ChargePackage"
+                      }
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "summary": "Charge packages on sale, cheapest discount first",
+        "tags": [
+          "wallet"
+        ]
+      }
+    },
     "/api/v1/payments/charge": {
       "post": {
         "operationId": "charge",
@@ -318,7 +352,93 @@
             "buddha.session_token": []
           }
         ],
-        "summary": "Buy P (mock provider: succeeds immediately). P is never convertible back to cash.",
+        "summary": "Buy one charge package (mock provider: succeeds immediately). P is never convertible back to cash.",
+        "tags": [
+          "wallet"
+        ]
+      }
+    },
+    "/api/v1/coupons/redeem": {
+      "post": {
+        "operationId": "redeemCoupon",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RedeemCouponBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/RedeemCouponResult"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "DUPLICATE_REQUEST",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "buddha.session_token": []
+          }
+        ],
+        "summary": "Redeem a coupon code for P",
         "tags": [
           "wallet"
         ]
@@ -485,6 +605,549 @@
         "summary": "Charges, newest first",
         "tags": [
           "wallet"
+        ]
+      }
+    },
+    "/api/v1/admin/charge-packages": {
+      "get": {
+        "operationId": "adminListChargePackages",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ChargePackage"
+                      }
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "buddha.session_token": []
+          }
+        ],
+        "summary": "Every charge package, active or not",
+        "tags": [
+          "admin"
+        ]
+      },
+      "post": {
+        "operationId": "adminCreateChargePackage",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateChargePackageBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ChargePackage"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "buddha.session_token": []
+          }
+        ],
+        "summary": "Add a charge package",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/charge-packages/{id}": {
+      "patch": {
+        "operationId": "adminUpdateChargePackage",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateChargePackageBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ChargePackage"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "buddha.session_token": []
+          }
+        ],
+        "summary": "Change the amount, price, order or availability",
+        "tags": [
+          "admin"
+        ]
+      },
+      "delete": {
+        "operationId": "adminDeleteChargePackage",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "buddha.session_token": []
+          }
+        ],
+        "summary": "Remove a package (past payments keep their own amount and price)",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/coupons": {
+      "get": {
+        "operationId": "adminListCoupons",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Coupon"
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/PageMeta"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "buddha.session_token": []
+          }
+        ],
+        "summary": "Coupons, newest first",
+        "tags": [
+          "admin"
+        ]
+      },
+      "post": {
+        "operationId": "adminCreateCoupon",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCouponBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Coupon"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "buddha.session_token": []
+          }
+        ],
+        "summary": "Issue a coupon (the code is generated when omitted)",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/coupons/{id}": {
+      "patch": {
+        "operationId": "adminUpdateCoupon",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCouponBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Coupon"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "buddha.session_token": []
+          }
+        ],
+        "summary": "Disable a coupon or change its cap, expiry or memo",
+        "tags": [
+          "admin"
         ]
       }
     },
@@ -1124,19 +1787,52 @@
           "nickname"
         ]
       },
-      "ChargeBody": {
+      "ChargePackage": {
         "type": "object",
         "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
           "amountP": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/PAmount"
-              }
-            ]
+            "$ref": "#/components/schemas/PAmount"
+          },
+          "priceKrw": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true,
+            "maximum": 9007199254740991
+          },
+          "sortOrder": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "isActive": {
+            "type": "boolean"
           }
         },
         "required": [
-          "amountP"
+          "id",
+          "amountP",
+          "priceKrw",
+          "sortOrder",
+          "isActive"
+        ],
+        "additionalProperties": false
+      },
+      "ChargeBody": {
+        "type": "object",
+        "properties": {
+          "packageId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          }
+        },
+        "required": [
+          "packageId"
         ]
       },
       "ChargeResult": {
@@ -1144,6 +1840,9 @@
         "properties": {
           "payment": {
             "$ref": "#/components/schemas/Payment"
+          },
+          "package": {
+            "$ref": "#/components/schemas/ChargePackage"
           },
           "balance": {
             "$ref": "#/components/schemas/Balance"
@@ -1154,6 +1853,7 @@
         },
         "required": [
           "payment",
+          "package",
           "balance",
           "ledgerEntry"
         ],
@@ -1169,6 +1869,17 @@
           },
           "amountP": {
             "$ref": "#/components/schemas/PAmount"
+          },
+          "priceKrw": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "packageId": {
+            "nullable": true,
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
           },
           "provider": {
             "type": "string"
@@ -1194,6 +1905,8 @@
         "required": [
           "id",
           "amountP",
+          "priceKrw",
+          "packageId",
           "provider",
           "providerRef",
           "status",
@@ -1249,7 +1962,8 @@
               "payment",
               "fill",
               "market",
-              "admin_action"
+              "admin_action",
+              "coupon"
             ]
           },
           "refId": {
@@ -1275,6 +1989,47 @@
           "refId",
           "memo",
           "createdAt"
+        ],
+        "additionalProperties": false
+      },
+      "RedeemCouponBody": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/CouponCode"
+          }
+        },
+        "required": [
+          "code"
+        ]
+      },
+      "CouponCode": {
+        "type": "string",
+        "minLength": 4,
+        "maxLength": 32,
+        "pattern": "^[A-Z0-9-]+$"
+      },
+      "RedeemCouponResult": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "amountP": {
+            "$ref": "#/components/schemas/PAmount"
+          },
+          "balance": {
+            "$ref": "#/components/schemas/Balance"
+          },
+          "ledgerEntry": {
+            "$ref": "#/components/schemas/LedgerEntry"
+          }
+        },
+        "required": [
+          "code",
+          "amountP",
+          "balance",
+          "ledgerEntry"
         ],
         "additionalProperties": false
       },
@@ -1306,6 +2061,188 @@
           "nextCursor"
         ],
         "additionalProperties": false
+      },
+      "CreateChargePackageBody": {
+        "type": "object",
+        "properties": {
+          "amountP": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PAmount"
+              }
+            ]
+          },
+          "priceKrw": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true,
+            "maximum": 1000000
+          },
+          "sortOrder": {
+            "default": 0,
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "isActive": {
+            "default": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "amountP",
+          "priceKrw"
+        ]
+      },
+      "UpdateChargePackageBody": {
+        "type": "object",
+        "properties": {
+          "amountP": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PAmount"
+              }
+            ]
+          },
+          "priceKrw": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true,
+            "maximum": 1000000
+          },
+          "sortOrder": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "isActive": {
+            "type": "boolean"
+          }
+        }
+      },
+      "Coupon": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "code": {
+            "type": "string"
+          },
+          "amountP": {
+            "$ref": "#/components/schemas/PAmount"
+          },
+          "maxRedemptions": {
+            "nullable": true,
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true,
+            "maximum": 9007199254740991
+          },
+          "redeemedCount": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "expiresAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "isActive": {
+            "type": "boolean"
+          },
+          "memo": {
+            "nullable": true,
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          }
+        },
+        "required": [
+          "id",
+          "code",
+          "amountP",
+          "maxRedemptions",
+          "redeemedCount",
+          "expiresAt",
+          "isActive",
+          "memo",
+          "createdAt"
+        ],
+        "additionalProperties": false
+      },
+      "CreateCouponBody": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CouponCode"
+              }
+            ]
+          },
+          "amountP": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PAmount"
+              }
+            ]
+          },
+          "maxRedemptions": {
+            "nullable": true,
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true,
+            "maximum": 1000000
+          },
+          "expiresAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "memo": {
+            "nullable": true,
+            "type": "string",
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "amountP"
+        ]
+      },
+      "UpdateCouponBody": {
+        "type": "object",
+        "properties": {
+          "isActive": {
+            "type": "boolean"
+          },
+          "maxRedemptions": {
+            "nullable": true,
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true,
+            "maximum": 1000000
+          },
+          "expiresAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "memo": {
+            "nullable": true,
+            "type": "string",
+            "maxLength": 200
+          }
+        }
       },
       "AdminUserQuery": {
         "type": "object",
@@ -1416,6 +2353,17 @@
           "amountP": {
             "$ref": "#/components/schemas/PAmount"
           },
+          "priceKrw": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "packageId": {
+            "nullable": true,
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
           "provider": {
             "type": "string"
           },
@@ -1446,6 +2394,8 @@
         "required": [
           "id",
           "amountP",
+          "priceKrw",
+          "packageId",
           "provider",
           "providerRef",
           "status",

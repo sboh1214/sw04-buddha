@@ -20,6 +20,77 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/charge-packages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every charge package, active or not */
+        get: operations["adminListChargePackages"];
+        put?: never;
+        /** Add a charge package */
+        post: operations["adminCreateChargePackage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/charge-packages/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove a package (past payments keep their own amount and price) */
+        delete: operations["adminDeleteChargePackage"];
+        options?: never;
+        head?: never;
+        /** Change the amount, price, order or availability */
+        patch: operations["adminUpdateChargePackage"];
+        trace?: never;
+    };
+    "/api/v1/admin/coupons": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Coupons, newest first */
+        get: operations["adminListCoupons"];
+        put?: never;
+        /** Issue a coupon (the code is generated when omitted) */
+        post: operations["adminCreateCoupon"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/coupons/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Disable a coupon or change its cap, expiry or memo */
+        patch: operations["adminUpdateCoupon"];
+        trace?: never;
+    };
     "/api/v1/admin/payments": {
         parameters: {
             query?: never;
@@ -82,6 +153,40 @@ export type paths = {
         put?: never;
         /** Start an email sign-up: mails the verification link */
         post: operations["register"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/charge-packages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Charge packages on sale, cheapest discount first */
+        get: operations["listChargePackages"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/coupons/redeem": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Redeem a coupon code for P */
+        post: operations["redeemCoupon"];
         delete?: never;
         options?: never;
         head?: never;
@@ -166,7 +271,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Buy P (mock provider: succeeds immediately). P is never convertible back to cash. */
+        /** Buy one charge package (mock provider: succeeds immediately). P is never convertible back to cash. */
         post: operations["charge"];
         delete?: never;
         options?: never;
@@ -189,6 +294,9 @@ export type components = {
             /** Format: uuid */
             id: string;
             nickname: string;
+            /** Format: uuid */
+            packageId: string | null;
+            priceKrw: number;
             provider: string;
             providerRef: string | null;
             /** @enum {string} */
@@ -228,12 +336,53 @@ export type components = {
             memo: string;
         };
         ChargeBody: {
+            /** Format: uuid */
+            packageId: string;
+        };
+        ChargePackage: {
             amountP: components["schemas"]["PAmount"];
+            /** Format: uuid */
+            id: string;
+            isActive: boolean;
+            priceKrw: number;
+            sortOrder: number;
         };
         ChargeResult: {
             balance: components["schemas"]["Balance"];
             ledgerEntry: components["schemas"]["LedgerEntry"];
+            package: components["schemas"]["ChargePackage"];
             payment: components["schemas"]["Payment"];
+        };
+        Coupon: {
+            amountP: components["schemas"]["PAmount"];
+            code: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            expiresAt: string | null;
+            /** Format: uuid */
+            id: string;
+            isActive: boolean;
+            maxRedemptions: number | null;
+            memo: string | null;
+            redeemedCount: number;
+        };
+        CouponCode: string;
+        CreateChargePackageBody: {
+            amountP: components["schemas"]["PAmount"];
+            /** @default true */
+            isActive: boolean;
+            priceKrw: number;
+            /** @default 0 */
+            sortOrder: number;
+        };
+        CreateCouponBody: {
+            amountP: components["schemas"]["PAmount"];
+            code?: components["schemas"]["CouponCode"];
+            /** Format: date-time */
+            expiresAt?: string | null;
+            maxRedemptions?: number | null;
+            memo?: string | null;
         };
         CursorQuery: {
             cursor?: string;
@@ -258,7 +407,7 @@ export type components = {
             memo: string | null;
             refId: string | null;
             /** @enum {string|null} */
-            refType: "payment" | "fill" | "market" | "admin_action" | null;
+            refType: "payment" | "fill" | "market" | "admin_action" | "coupon" | null;
             /** @enum {string} */
             type: "DEPOSIT" | "TRADE_BUY" | "TRADE_SELL" | "FEE" | "SETTLEMENT_PAYOUT" | "MARKET_VOID_REFUND" | "ADMIN_ADJUST" | "BONUS";
         };
@@ -303,10 +452,22 @@ export type components = {
             createdAt: string;
             /** Format: uuid */
             id: string;
+            /** Format: uuid */
+            packageId: string | null;
+            priceKrw: number;
             provider: string;
             providerRef: string | null;
             /** @enum {string} */
             status: "pending" | "succeeded" | "failed";
+        };
+        RedeemCouponBody: {
+            code: components["schemas"]["CouponCode"];
+        };
+        RedeemCouponResult: {
+            amountP: components["schemas"]["PAmount"];
+            balance: components["schemas"]["Balance"];
+            code: string;
+            ledgerEntry: components["schemas"]["LedgerEntry"];
         };
         RegisterBody: {
             /** Format: email */
@@ -318,6 +479,19 @@ export type components = {
         };
         SetPasswordBody: {
             newPassword: components["schemas"]["Password"];
+        };
+        UpdateChargePackageBody: {
+            amountP?: components["schemas"]["PAmount"];
+            isActive?: boolean;
+            priceKrw?: number;
+            sortOrder?: number;
+        };
+        UpdateCouponBody: {
+            /** Format: date-time */
+            expiresAt?: string | null;
+            isActive?: boolean;
+            maxRedemptions?: number | null;
+            memo?: string | null;
         };
         UpdateMeBody: {
             nickname: components["schemas"]["Nickname"];
@@ -376,6 +550,367 @@ export interface operations {
             };
             /** @description FORBIDDEN */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminListChargePackages: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ChargePackage"][];
+                    };
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminCreateChargePackage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateChargePackageBody"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ChargePackage"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminDeleteChargePackage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminUpdateChargePackage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateChargePackageBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ChargePackage"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminListCoupons: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["Coupon"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminCreateCoupon: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateCouponBody"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["Coupon"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminUpdateCoupon: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateCouponBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["Coupon"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -587,6 +1122,88 @@ export interface operations {
             };
             /** @description VALIDATION_ERROR */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listChargePackages: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ChargePackage"][];
+                    };
+                };
+            };
+        };
+    };
+    redeemCoupon: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RedeemCouponBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["RedeemCouponResult"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description DUPLICATE_REQUEST */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

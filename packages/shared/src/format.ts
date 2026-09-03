@@ -10,6 +10,28 @@ export const MINUS_SIGN = '−';
  * rounded them, so formatting would silently show a wrong amount. Grouping is
  * done manually so the output does not depend on the runtime's ICU locale data.
  */
+/**
+ * Formats a KRW price as `4,900원`. Prices are plain integers (won has no minor unit) and
+ * always positive, so this is the P formatter without the sign handling.
+ */
+export function formatKrw(n: number): string {
+  if (!Number.isSafeInteger(n) || n < 0) {
+    throw new RangeError(`formatKrw expects a non-negative safe integer, got ${String(n)}`);
+  }
+  return `${groupDigits(n.toString())}원`;
+}
+
+/** Inserts a comma every three digits from the right. */
+function groupDigits(digits: string): string {
+  let grouped = '';
+  for (let i = 0; i < digits.length; i++) {
+    grouped += digits[i];
+    const remaining = digits.length - i - 1;
+    if (remaining > 0 && remaining % 3 === 0) grouped += ',';
+  }
+  return grouped;
+}
+
 export function formatP(n: bigint | number): string {
   if (typeof n === 'number' && !Number.isSafeInteger(n)) {
     throw new RangeError(`formatP expects a safe integer, got ${n}`);
@@ -17,11 +39,5 @@ export function formatP(n: bigint | number): string {
   const value = typeof n === 'bigint' ? n : BigInt(n);
   const negative = value < 0n;
   const digits = (negative ? -value : value).toString();
-  let grouped = '';
-  for (let i = 0; i < digits.length; i++) {
-    grouped += digits[i];
-    const remaining = digits.length - i - 1;
-    if (remaining > 0 && remaining % 3 === 0) grouped += ',';
-  }
-  return `${negative ? MINUS_SIGN : ''}${grouped}P`;
+  return `${negative ? MINUS_SIGN : ''}${groupDigits(digits)}P`;
 }

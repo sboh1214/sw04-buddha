@@ -1,30 +1,12 @@
 import * as z from 'zod';
 import { cursorQuerySchema } from './api/pagination.js';
 import { pAmountInputSchema, pAmountSchema } from './api/p-amount.js';
+import { chargePackageSchema } from './charge-package.js';
 import { ledgerEntryTypeSchema, ledgerRefTypeSchema, paymentStatusSchema } from './enums.js';
 
-/**
- * Charge bounds and presets (PLAN 17 Q3 defaults): 1,000P minimum, 1,000,000P per charge.
- * P is bought with KRW at 1P = 1원 and can never be converted back (PLAN 0.2).
- */
-export const CHARGE_MIN_P = 1_000n;
-export const CHARGE_MAX_P = 1_000_000n;
-export const CHARGE_PRESETS_P = [5_000n, 10_000n, 30_000n, 50_000n, 100_000n] as const;
-
-/** Admin adjustments are bounded by the same magnitude, in either direction (PLAN 7.3). */
-export const ADJUST_MAX_ABS_P = CHARGE_MAX_P;
+/** Admin adjustments are bounded in either direction (PLAN 7.3). */
+export const ADJUST_MAX_ABS_P = 1_000_000n;
 export const ADJUST_MEMO_MAX_LENGTH = 200;
-
-/** `POST /payments/charge`: the amount to buy, as the usual decimal string. */
-export const chargeBodySchema = z
-  .object({
-    amountP: pAmountInputSchema.refine(
-      (value) => value >= CHARGE_MIN_P && value <= CHARGE_MAX_P,
-      `must be between ${CHARGE_MIN_P.toString()} and ${CHARGE_MAX_P.toString()}`,
-    ),
-  })
-  .meta({ id: 'ChargeBody' });
-export type ChargeBody = z.infer<typeof chargeBodySchema>;
 
 export const balanceSchema = z
   .object({ availableP: pAmountSchema, lockedP: pAmountSchema })
@@ -34,7 +16,12 @@ export type Balance = z.infer<typeof balanceSchema>;
 export const paymentSchema = z
   .object({
     id: z.uuid(),
+    /** P credited. */
     amountP: pAmountSchema,
+    /** KRW actually paid: below amountP whenever the package carried a discount. */
+    priceKrw: z.number().int(),
+    /** The package bought, or null once an admin removed it (the amounts above stay). */
+    packageId: z.uuid().nullable(),
     /** PAYMENT_PROVIDERS; only 'mock' exists in the MVP. */
     provider: z.string(),
     providerRef: z.string().nullable(),
@@ -63,7 +50,12 @@ export type LedgerEntry = z.infer<typeof ledgerEntrySchema>;
 
 /** What `POST /payments/charge` answers with: the payment and the balance it produced. */
 export const chargeResultSchema = z
-  .object({ payment: paymentSchema, balance: balanceSchema, ledgerEntry: ledgerEntrySchema })
+  .object({
+    payment: paymentSchema,
+    package: chargePackageSchema,
+    balance: balanceSchema,
+    ledgerEntry: ledgerEntrySchema,
+  })
   .meta({ id: 'ChargeResult' });
 export type ChargeResult = z.infer<typeof chargeResultSchema>;
 

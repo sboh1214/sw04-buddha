@@ -10,6 +10,7 @@ import {
   type LedgerEntry,
   type Payment,
 } from '@buddha/shared';
+import { ChargePackageService } from './charge-package.service.js';
 import { and, desc, eq, lt, or, sql } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
 import { DB } from '../infra/db/db.provider.js';
@@ -36,6 +37,8 @@ export function toPayment(row: PaymentRow): Payment {
   return {
     id: row.id,
     amountP: serializePAmount(row.amountP),
+    priceKrw: row.priceKrw,
+    packageId: row.packageId,
     provider: row.provider,
     providerRef: row.providerRef,
     status: row.status,
@@ -62,11 +65,26 @@ export class WalletService {
   constructor(
     @Inject(DB) private readonly db: Db,
     @Inject(PAYMENT_PROVIDER) private readonly provider: PaymentProvider,
+    private readonly packages: ChargePackageService,
   ) {}
 
-  async charge(userId: string, amountP: bigint): Promise<ChargeResult> {
+  /**
+   * Buys one charge package (ADR-0026): users cannot name their own amount, so the P granted
+   * and the KRW charged both come from the row the admin configured, and both are snapshotted
+   * onto the payment.
+   */
+  async charge(userId: string, packageId: string): Promise<ChargeResult> {
+    const chargePackage = await this.packages.get(packageId);
+    if (!chargePackage.isActive) {
+      throw new AppError('VALIDATION_ERROR', {
+        message: 'This charge package is no longer available',
+        details: [{ path: ['packageId'], message: 'inactive' }],
+      });
+    }
+    const amountP = BigInt(chargePackage.amountP);
+    const priceKrw = chargePackage.priceKrw;
     const paymentId = randomUUID();
-    const outcome = await this.provider.charge({ paymentId, userId, amountP });
+    const outcome = await this.provider.charge({ paymentId, userId, amountP, priceKrw });
 
     if (outcome.status === 'failed') {
       // Record the attempt (no ledger entry, no balance change) so support can see it.
@@ -74,6 +92,8 @@ export class WalletService {
         id: paymentId,
         userId,
         amountP,
+        priceKrw,
+        packageId,
         provider: this.provider.name,
         providerRef: outcome.providerRef,
         status: 'failed',
@@ -92,6 +112,8 @@ export class WalletService {
           id: paymentId,
           userId,
           amountP,
+          priceKrw,
+          packageId,
           provider: this.provider.name,
           providerRef: outcome.providerRef,
           status: 'succeeded',
@@ -124,6 +146,7 @@ export class WalletService {
 
       return {
         payment: toPayment(payment),
+        package: chargePackage,
         balance: toBalance(balance),
         ledgerEntry: toLedgerEntry(entry),
       };

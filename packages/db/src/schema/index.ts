@@ -15,6 +15,8 @@ export * from './audit-failures.js';
 export * from './auth.js';
 export * from './balances.js';
 export * from './categories.js';
+export * from './charge-packages.js';
+export * from './coupons.js';
 export * from './disputes.js';
 export * from './enums.js';
 export * from './fills.js';

@@ -1,5 +1,5 @@
 import { schema } from '@buddha/db';
-import { errorEnvelopeSchema, meSchema } from '@buddha/shared';
+import { SIGNUP_BONUS_P, errorEnvelopeSchema, meSchema } from '@buddha/shared';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
@@ -34,7 +34,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/me (integration)', () => {
     expect(me.emailVerified).toBe(true); // signUpTestUser follows the verification link
     expect(me.profile.role).toBe('user');
     expect(me.profile.nickname).toMatch(/^예측가_[A-Z2-9]{4}$/);
-    expect(me.balance).toEqual({ availableP: '0', lockedP: '0' });
+    expect(me.balance).toEqual({ availableP: SIGNUP_BONUS_P.toString(), lockedP: '0' });
     expect(me.linkedAccounts).toHaveLength(1);
     const [credential] = me.linkedAccounts;
     expect(credential).toMatchObject({ providerId: 'credential', accountId: user.id });

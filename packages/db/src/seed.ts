@@ -8,7 +8,7 @@ import { hashPassword } from 'better-auth/crypto';
 import { and, eq, sql } from 'drizzle-orm';
 import { closeDb, createDb, type Db } from './client.js';
 import { loadRootEnv } from './env.js';
-import { account, balances, categories, profiles, user } from './schema/index.js';
+import { account, balances, categories, chargePackages, profiles, user } from './schema/index.js';
 
 /** PLAN 1.3 categories. Sports and elections are forbidden (PLAN 0.2): never add them. */
 const CATEGORIES = [
@@ -37,6 +37,29 @@ async function seedCategories(db: Db): Promise<void> {
       set: { nameKo: sql`excluded.name_ko`, sortOrder: sql`excluded.sort_order` },
     });
   console.log(`[db:seed] categories: ${String(CATEGORIES.length)} upserted`);
+}
+
+/**
+ * Starting charge packages (owner decision 2026-09-04): 4,900원 for 5,000P, and the discount
+ * grows with the size of the package. Admins edit these at runtime, so the seed only fills an
+ * empty table and never overwrites what an admin has changed.
+ */
+const CHARGE_PACKAGES = [
+  { amountP: 5_000n, priceKrw: 4_900, sortOrder: 10 }, // 2%
+  { amountP: 10_000n, priceKrw: 9_700, sortOrder: 20 }, // 3%
+  { amountP: 30_000n, priceKrw: 28_500, sortOrder: 30 }, // 5%
+  { amountP: 50_000n, priceKrw: 46_500, sortOrder: 40 }, // 7%
+  { amountP: 100_000n, priceKrw: 90_000, sortOrder: 50 }, // 10%
+] as const;
+
+async function seedChargePackages(db: Db): Promise<void> {
+  const [existing] = await db.select({ id: chargePackages.id }).from(chargePackages).limit(1);
+  if (existing) {
+    console.log('[db:seed] charge packages: already configured, left untouched');
+    return;
+  }
+  await db.insert(chargePackages).values(CHARGE_PACKAGES.map((row) => ({ ...row })));
+  console.log(`[db:seed] charge packages: ${String(CHARGE_PACKAGES.length)} inserted`);
 }
 
 interface AdminInput {
@@ -170,6 +193,7 @@ const adminPassword = process.env.SEED_ADMIN_PASSWORD;
 const db = createDb(url, { max: 1, applicationName: 'buddha-seed' });
 try {
   await seedCategories(db);
+  await seedChargePackages(db);
   if (adminEmail && adminPassword) {
     await seedAdmin(db, { email: adminEmail, password: adminPassword });
   } else {

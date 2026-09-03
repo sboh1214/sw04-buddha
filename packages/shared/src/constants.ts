@@ -20,6 +20,18 @@ export const INITIAL_PROB_BP_MAX = 9_999;
 /** Default LMSR liquidity parameter (PLAN 5.3 guide). */
 export const DEFAULT_LIQUIDITY_B = 1000;
 
+/**
+ * Granted to every new account by the "user" trigger, in the same transaction as the row
+ * itself (PLAN 17 Q2, owner decision 2026-09-04). Changing it needs a migration, because the
+ * amount lives in the trigger function as well — see packages/db/drizzle.
+ */
+export const SIGNUP_BONUS_P = 10_000n;
+
+/** Coupon codes are upper-case A-Z, 0-9 and '-', so they survive being read aloud. */
+export const COUPON_CODE_MIN_LENGTH = 4;
+export const COUPON_CODE_MAX_LENGTH = 32;
+export const COUPON_CODE_PATTERN = /^[A-Z0-9-]+$/;
+
 /** profiles.nickname: 2..20 characters (PLAN 17 Q4 default). */
 export const NICKNAME_MIN_LENGTH = 2;
 export const NICKNAME_MAX_LENGTH = 20;

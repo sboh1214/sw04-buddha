@@ -7,7 +7,10 @@ export interface ChargeRequest {
   /** Our payment id; a real PG receives it as the merchant order id. */
   paymentId: string;
   userId: string;
+  /** P to be credited on success. */
   amountP: bigint;
+  /** KRW to charge — what a real gateway actually collects (ADR-0026 discounts). */
+  priceKrw: number;
 }
 
 export interface ChargeOutcome {

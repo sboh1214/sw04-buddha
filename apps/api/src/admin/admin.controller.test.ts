@@ -3,11 +3,17 @@
  * profile. Skips when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
-import { type AdminBalanceAdjustResult, type AdminUser } from '@buddha/shared';
+import { SIGNUP_BONUS_P, type AdminBalanceAdjustResult, type AdminUser } from '@buddha/shared';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
-import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
+import {
+  createTestApp,
+  createTestPackage,
+  signUpTestUser,
+  type TestApp,
+  type TestUser,
+} from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
 
 const jsonHeaders = { origin: 'http://localhost:3000', 'content-type': 'application/json' };
@@ -43,13 +49,16 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
       payload,
     });
 
-  const chargeMember = (amountP: string) =>
-    t.app.inject({
+  /** Buys a package worth `amountP` (ADR-0026: users can only buy what an admin listed). */
+  const chargeMember = async (amountP: bigint) => {
+    const pack = await createTestPackage(t.db, { amountP, priceKrw: Number(amountP) });
+    return t.app.inject({
       method: 'POST',
       url: '/api/v1/payments/charge',
       headers: { ...jsonHeaders, cookie: member.cookie },
-      payload: { amountP },
+      payload: { packageId: pack.id },
     });
+  };
 
   async function balanceOf(userId: string) {
     const [row] = await t.db
@@ -59,22 +68,23 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
     return row;
   }
 
-  it('debits 3,000P from a 10,000P balance and records ADMIN_ADJUST with the reason (AC 3)', async () => {
-    await chargeMember('10000');
+  it('debits 3,000P from a charged balance and records ADMIN_ADJUST with the reason (AC 3)', async () => {
+    await chargeMember(10_000n);
+    const afterAdjust = SIGNUP_BONUS_P + 10_000n - 3_000n;
 
     const res = await adjust({ amountP: '-3000', memo: '중복 충전 회수' });
     expect(res.statusCode).toBe(200);
     const { data } = res.json<{ data: AdminBalanceAdjustResult }>();
-    expect(data.user.balance).toEqual({ availableP: '7000', lockedP: '0' });
+    expect(data.user.balance).toEqual({ availableP: afterAdjust.toString(), lockedP: '0' });
     expect(data.ledgerEntry).toMatchObject({
       type: 'ADMIN_ADJUST',
       amountP: '-3000',
-      balanceAfterP: '7000',
+      balanceAfterP: afterAdjust.toString(),
       refType: 'admin_action',
       memo: '중복 충전 회수',
     });
 
-    expect(await balanceOf(member.id)).toMatchObject({ availableP: 7_000n });
+    expect(await balanceOf(member.id)).toMatchObject({ availableP: afterAdjust });
     const [action] = await t.db
       .select()
       .from(schema.adminActions)
@@ -84,18 +94,21 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
   });
 
   it('refuses an adjustment that would make the balance negative, changing nothing (AC 4)', async () => {
-    await chargeMember('10000');
+    await chargeMember(10_000n);
+    const balance = SIGNUP_BONUS_P + 10_000n;
 
-    const res = await adjust({ amountP: '-10001', memo: '과다 회수' });
+    const res = await adjust({ amountP: (-balance - 1n).toString(), memo: '과다 회수' });
     expect(res.statusCode).toBe(409); // HTTP_STATUS_BY_CODE: INSUFFICIENT_BALANCE -> CONFLICT
     expect(res.json()).toMatchObject({ error: { code: 'INSUFFICIENT_BALANCE' } });
 
-    expect(await balanceOf(member.id)).toMatchObject({ availableP: 10_000n });
+    expect(await balanceOf(member.id)).toMatchObject({ availableP: balance });
     const entries = await t.db
       .select()
       .from(schema.ledgerEntries)
-      .where(eq(schema.ledgerEntries.userId, member.id));
-    expect(entries.map((entry) => entry.type)).toEqual(['DEPOSIT']);
+      .where(eq(schema.ledgerEntries.userId, member.id))
+      .orderBy(schema.ledgerEntries.id);
+    // The sign-up bonus and the charge; the refused adjustment added nothing.
+    expect(entries.map((entry) => entry.type)).toEqual(['BONUS', 'DEPOSIT']);
     // The audit row is rolled back with the rest of the transaction.
     expect(
       await t.db
@@ -108,7 +121,7 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
   it('credits P as well, and requires a memo and a non-zero amount', async () => {
     const credited = await adjust({ amountP: '2500', memo: '보상 지급' });
     expect(credited.statusCode).toBe(200);
-    expect(await balanceOf(member.id)).toMatchObject({ availableP: 2_500n });
+    expect(await balanceOf(member.id)).toMatchObject({ availableP: SIGNUP_BONUS_P + 2_500n });
 
     for (const payload of [
       { amountP: '1000' },
@@ -119,7 +132,7 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
       expect(res.statusCode, JSON.stringify(payload)).toBe(400);
       expect(res.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR' } });
     }
-    expect(await balanceOf(member.id)).toMatchObject({ availableP: 2_500n });
+    expect(await balanceOf(member.id)).toMatchObject({ availableP: SIGNUP_BONUS_P + 2_500n });
   });
 
   it('404s for an unknown user without writing an audit row', async () => {
@@ -176,7 +189,7 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
   });
 
   it('lists payments and audit failures', async () => {
-    await chargeMember('7000');
+    await chargeMember(7_000n);
     const payments = await t.app.inject({
       method: 'GET',
       url: '/api/v1/admin/payments',

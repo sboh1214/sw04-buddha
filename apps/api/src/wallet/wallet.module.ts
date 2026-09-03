@@ -3,7 +3,14 @@ import { AuthModule } from '../auth/auth.module.js';
 import { DbModule } from '../infra/db/db.module.js';
 import { MockPaymentProvider } from '../payments/mock-payment.provider.js';
 import { PAYMENT_PROVIDER } from '../payments/payment-provider.js';
-import { MeWalletController, PaymentsController } from './wallet.controller.js';
+import { ChargePackageService } from './charge-package.service.js';
+import { CouponService } from './coupon.service.js';
+import {
+  ChargePackagesController,
+  CouponsController,
+  MeWalletController,
+  PaymentsController,
+} from './wallet.controller.js';
 import { WalletService } from './wallet.service.js';
 
 /**
@@ -12,8 +19,18 @@ import { WalletService } from './wallet.service.js';
  */
 @Module({
   imports: [DbModule, AuthModule],
-  controllers: [PaymentsController, MeWalletController],
-  providers: [WalletService, { provide: PAYMENT_PROVIDER, useClass: MockPaymentProvider }],
-  exports: [WalletService],
+  controllers: [
+    ChargePackagesController,
+    PaymentsController,
+    CouponsController,
+    MeWalletController,
+  ],
+  providers: [
+    WalletService,
+    ChargePackageService,
+    CouponService,
+    { provide: PAYMENT_PROVIDER, useClass: MockPaymentProvider },
+  ],
+  exports: [WalletService, ChargePackageService, CouponService],
 })
 export class WalletModule {}
