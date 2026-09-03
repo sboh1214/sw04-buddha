@@ -2,7 +2,7 @@ import type { Metadata, Route } from 'next';
 import { redirect } from 'next/navigation';
 import { AuthCard } from '@/components/auth/auth-card';
 import { copy } from '@/copy';
-import { safeNextPath } from '@/lib/auth-client';
+import { authNoticeFor, safeNextPath } from '@/lib/auth-client';
 import { getServerSession } from '@/lib/session.server';
 import { LoginForm } from './login-form';
 
@@ -12,15 +12,16 @@ export const metadata: Metadata = { title: `${copy.loginTitle} | ${copy.appName}
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ next?: string; error?: string }>;
+  searchParams: Promise<{ next?: string; error?: string | string[] }>;
 }) {
   const { next, error } = await searchParams;
   const nextPath = safeNextPath(next);
   if (await getServerSession()) redirect(nextPath as Route);
   return (
     <AuthCard title={copy.loginTitle} subtitle={copy.loginSubtitle}>
-      {/* better-auth replaces the errorCallbackURL's error=social with the provider code. */}
-      <LoginForm next={nextPath} socialError={error !== undefined} />
+      {/* ?error= is a failed social round-trip or an expired verification link (both mails
+          from /signup and the login resend land here). */}
+      <LoginForm next={nextPath} notice={authNoticeFor(error, copy.socialUnavailable)} />
     </AuthCard>
   );
 }

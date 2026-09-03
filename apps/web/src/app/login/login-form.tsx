@@ -23,7 +23,7 @@ import { SocialButtons } from '@/components/auth/social-buttons';
 import { PasswordInput } from '@/components/ui/password-input';
 import { copy } from '@/copy';
 import { ME_QUERY_KEY } from '@/hooks/use-me';
-import { AUTH_ERROR, authErrorMessage, signIn } from '@/lib/auth-client';
+import { AUTH_ERROR, authClient, authErrorMessage, signIn } from '@/lib/auth-client';
 
 const schema = z.object({
   email: z.email(copy.errEmailInvalid),
@@ -31,12 +31,10 @@ const schema = z.object({
 });
 type FormValues = z.infer<typeof schema>;
 
-export function LoginForm({ next, socialError }: { next: string; socialError: boolean }) {
+export function LoginForm({ next, notice }: { next: string; notice?: string | undefined }) {
   const router = useRouter();
   const queryClient = useQueryClient();
-  const [formError, setFormError] = useState<string | null>(
-    socialError ? copy.socialUnavailable : null,
-  );
+  const [formError, setFormError] = useState<string | null>(notice ?? null);
   const {
     register,
     handleSubmit,
@@ -47,12 +45,20 @@ export function LoginForm({ next, socialError }: { next: string; socialError: bo
     setFormError(null);
     const { error } = await signIn.email({ email: values.email, password: values.password });
     if (error) {
+      if (error.code === AUTH_ERROR.EMAIL_NOT_VERIFIED) {
+        // The API does not mail on sign-in (ADR-0023); asking here keeps the link landing
+        // on /login, where an expired one shows a notice, and surfaces a mail outage.
+        const { error: resendError } = await authClient.sendVerificationEmail({
+          email: values.email,
+          callbackURL: '/login',
+        });
+        setFormError(resendError ? copy.emailNotVerifiedResendFailed : copy.emailNotVerified);
+        return;
+      }
       setFormError(
-        error.code === AUTH_ERROR.EMAIL_NOT_VERIFIED
-          ? copy.emailNotVerified
-          : error.status === 401 || error.code === AUTH_ERROR.INVALID_EMAIL_OR_PASSWORD
-            ? copy.loginFailed
-            : authErrorMessage(error),
+        error.status === 401 || error.code === AUTH_ERROR.INVALID_EMAIL_OR_PASSWORD
+          ? copy.loginFailed
+          : authErrorMessage(error),
       );
       return;
     }

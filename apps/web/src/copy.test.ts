@@ -1,7 +1,7 @@
 import { formatP } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
 import { copy } from './copy';
-import { authErrorMessage, safeNextPath } from './lib/auth-client';
+import { authErrorMessage, authNoticeFor, safeNextPath } from './lib/auth-client';
 
 // PLAN Appendix A: gambling vocabulary must never appear in user-facing copy.
 const FORBIDDEN_WORDS = ['베팅', '배당', '배당률', '승률', '판돈', '당첨'];
@@ -62,11 +62,39 @@ describe('authErrorMessage', () => {
   });
 
   it('never surfaces the English message: unknown codes use the fallback', () => {
+    expect(authErrorMessage({ code: 'INVALID_EMAIL', message: 'English text' })).toBe(
+      copy.errEmailInvalid,
+    );
     expect(authErrorMessage({ code: 'SOMETHING_NEW', message: 'English text' })).toBe(
       copy.errUnknown,
     );
     expect(authErrorMessage({ code: 'SOMETHING_NEW' }, copy.signupFailed)).toBe(copy.signupFailed);
     expect(authErrorMessage({ status: 0, message: 'Failed to fetch' })).toBe(copy.errNetwork);
     expect(authErrorMessage(null)).toBe(copy.errUnknown);
+  });
+});
+
+describe('authNoticeFor', () => {
+  it('reports only the verify-email codes as a broken link', () => {
+    expect(authNoticeFor('TOKEN_EXPIRED', copy.socialUnavailable)).toBe(copy.verifyLinkInvalid);
+    expect(authNoticeFor('INVALID_TOKEN', copy.linkFailed)).toBe(copy.verifyLinkInvalid);
+    expect(authNoticeFor('USER_NOT_FOUND', copy.linkFailed)).toBe(copy.verifyLinkInvalid);
+    expect(authNoticeFor('INVALID_USER', copy.linkFailed)).toBe(copy.verifyLinkInvalid);
+  });
+
+  it('keeps OAuth failures on the social copy even when the code contains "user"', () => {
+    // better-auth's OAuth callback emits these; a substring match on "user" would call them
+    // an expired verification link.
+    expect(authNoticeFor('unable_to_get_user_info', copy.socialUnavailable)).toBe(
+      copy.socialUnavailable,
+    );
+    expect(authNoticeFor('unable_to_create_user', copy.linkFailed)).toBe(copy.linkFailed);
+    expect(
+      authNoticeFor(['link', 'account_already_linked_to_different_user'], copy.linkFailed),
+    ).toBe(copy.linkAlreadyUsed);
+    expect(authNoticeFor(['social', 'TOKEN_EXPIRED'], copy.socialUnavailable)).toBe(
+      copy.verifyLinkInvalid,
+    );
+    expect(authNoticeFor(undefined, copy.linkFailed)).toBeUndefined();
   });
 });

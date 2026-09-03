@@ -81,6 +81,37 @@ export function authErrorMessage(
   }
 }
 
+/**
+ * Codes better-auth's verify-email route puts on `?error=` when a link fails
+ * (email-verification.mjs redirectOnError). Everything else on that parameter comes from an
+ * OAuth round-trip, whose codes must not be mistaken for a broken link: `unable_to_get_user_info`
+ * and `unable_to_create_user` contain "user", so the match is exact, not a substring test.
+ */
+const VERIFY_LINK_ERROR_CODES = new Set([
+  'token_expired',
+  'invalid_token',
+  'user_not_found',
+  'invalid_user',
+]);
+
+/**
+ * Korean notice for the `?error=` parameter better-auth redirects back with, or undefined
+ * when there is none. `fallback` names what the page was doing (social sign-in, linking).
+ */
+export function authNoticeFor(
+  error: string | string[] | undefined,
+  fallback: string,
+): string | undefined {
+  if (error === undefined) return undefined;
+  const codes = (Array.isArray(error) ? error : [error])
+    .flatMap((value) => value.split(','))
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+  if (codes.some((code) => VERIFY_LINK_ERROR_CODES.has(code))) return copy.verifyLinkInvalid;
+  if (codes.some((code) => code.includes('account_already_linked'))) return copy.linkAlreadyUsed;
+  return fallback;
+}
+
 /** ASCII control characters (0x00-0x1f, 0x7f) or a backslash (0x5c) anywhere in the path. */
 function hasControlCharOrBackslash(path: string): boolean {
   for (const ch of path) {

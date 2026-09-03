@@ -1,6 +1,6 @@
 'use client';
 
-import { Alert, Badge, Button, HStack, Skeleton, Stack, Text } from '@chakra-ui/react';
+import { Badge, Button, HStack, Skeleton, Stack, Text } from '@chakra-ui/react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
@@ -23,21 +23,15 @@ const PROVIDER_LABEL: Record<string, string> = {
   naver: copy.providerNaver,
 };
 
-/** better-auth appends `?error=<code>` to `errorCallbackURL`; pick the copy for the code. */
-function linkErrorMessage(code: string): string {
-  return code.includes('account_already_linked') ? copy.linkAlreadyUsed : copy.linkFailed;
-}
-
 /**
  * Linked login methods (PLAN 10.3). Reads better-auth `listAccounts` directly (the source of
  * truth for `account` rows, incl. the account id `unlinkAccount` needs); `GET /me` also
  * carries the list, so both caches are invalidated after link/unlink.
  * The 해제 button is disabled when only one method remains; the server enforces the same
  * rule (better-auth refuses to unlink the last account unless `allowUnlinkingAll`).
- * `linkError` is the `error` query parameter better-auth redirects back with when the
- * provider round-trip of a 연결 attempt fails (settings/page.tsx passes it through).
+ * A failed provider round-trip comes back as `/settings?error=<code>` (settings-notice.tsx).
  */
-export function LinkedAccounts({ linkError }: { linkError?: string | undefined }) {
+export function LinkedAccounts() {
   const queryClient = useQueryClient();
   const accounts = useQuery({
     queryKey: ACCOUNTS_QUERY_KEY,
@@ -94,55 +88,45 @@ export function LinkedAccounts({ linkError }: { linkError?: string | undefined }
       hint={copy.settingsLinkedHint}
       testId="settings-accounts"
     >
-      <Stack gap="4">
-        {linkError && (
-          <Alert.Root status="error" role="alert" data-testid="link-error">
-            <Alert.Indicator />
-            <Alert.Content>
-              <Alert.Description>{linkErrorMessage(linkError)}</Alert.Description>
-            </Alert.Content>
-          </Alert.Root>
-        )}
-        {accounts.isPending ? (
-          <Skeleton height="32" />
-        ) : (
-          <Stack gap="3" divideY="1px">
-            {rows.map(({ providerId, linked }) => (
-              <HStack key={providerId} justify="space-between" pt="3" _first={{ pt: 0 }}>
-                <HStack gap="2">
-                  <Text fontWeight="medium">{PROVIDER_LABEL[providerId] ?? providerId}</Text>
-                  <Badge colorPalette={linked ? 'yes' : 'gray'} variant="subtle">
-                    {linked ? copy.linked : copy.notLinked}
-                  </Badge>
-                </HStack>
-                {linked ? (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    colorPalette="no"
-                    disabled={!canUnlink}
-                    loading={unlink.isPending && unlink.variables?.id === linked.id}
-                    onClick={() => unlink.mutate({ id: linked.id })}
-                    data-testid={`unlink-${providerId}`}
-                  >
-                    {copy.unlink}
-                  </Button>
-                ) : providerId !== CREDENTIAL_PROVIDER_ID ? (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    loading={link.isPending && link.variables === providerId}
-                    onClick={() => link.mutate(providerId as SocialProvider)}
-                    data-testid={`link-${providerId}`}
-                  >
-                    {copy.link}
-                  </Button>
-                ) : null}
+      {accounts.isPending ? (
+        <Skeleton height="32" />
+      ) : (
+        <Stack gap="3" divideY="1px">
+          {rows.map(({ providerId, linked }) => (
+            <HStack key={providerId} justify="space-between" pt="3" _first={{ pt: 0 }}>
+              <HStack gap="2">
+                <Text fontWeight="medium">{PROVIDER_LABEL[providerId] ?? providerId}</Text>
+                <Badge colorPalette={linked ? 'yes' : 'gray'} variant="subtle">
+                  {linked ? copy.linked : copy.notLinked}
+                </Badge>
               </HStack>
-            ))}
-          </Stack>
-        )}
-      </Stack>
+              {linked ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  colorPalette="no"
+                  disabled={!canUnlink}
+                  loading={unlink.isPending && unlink.variables?.id === linked.id}
+                  onClick={() => unlink.mutate({ id: linked.id })}
+                  data-testid={`unlink-${providerId}`}
+                >
+                  {copy.unlink}
+                </Button>
+              ) : providerId !== CREDENTIAL_PROVIDER_ID ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  loading={link.isPending && link.variables === providerId}
+                  onClick={() => link.mutate(providerId as SocialProvider)}
+                  data-testid={`link-${providerId}`}
+                >
+                  {copy.link}
+                </Button>
+              ) : null}
+            </HStack>
+          ))}
+        </Stack>
+      )}
     </SettingsSection>
   );
 }

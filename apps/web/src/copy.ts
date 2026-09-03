@@ -57,7 +57,11 @@ export const copy = {
   loginSubtitle: '예측을 시작하려면 로그인하세요.',
   loginWithEmail: '이메일로 로그인',
   loginFailed: '이메일 또는 비밀번호가 올바르지 않습니다.',
-  emailNotVerified: '이메일 인증이 필요합니다. 받은 편지함을 확인해 주세요.',
+  emailNotVerified:
+    '이메일 인증이 필요합니다. 인증 메일을 다시 보냈으니 받은 편지함을 확인해 주세요.',
+  emailNotVerifiedResendFailed:
+    '이메일 인증이 필요합니다. 인증 메일을 보내지 못했으니 잠시 후 다시 시도해 주세요.',
+  verifyLinkInvalid: '인증 링크가 만료되었거나 올바르지 않습니다. 다시 요청해 주세요.',
   orContinueWith: '또는 다른 방법으로',
   continueWithGoogle: 'Google로 계속하기',
   continueWithKakao: '카카오로 계속하기',
@@ -73,8 +77,13 @@ export const copy = {
   signupFailed: '가입에 실패했습니다. 잠시 후 다시 시도해 주세요.',
   emailAlreadyUsed: '이미 가입된 이메일입니다.',
   alreadyHaveAccount: '이미 계정이 있나요?',
-  signupDone: '가입이 완료되었습니다.',
-  verificationSent: '인증 메일을 보냈습니다. 받은 편지함을 확인해 주세요.',
+  signupCheckMailTitle: '받은 편지함을 확인해 주세요',
+  signupCheckMailBefore: '다음 주소로 인증 메일을 보냈습니다.',
+  signupCheckMailAfter:
+    '메일의 링크를 누르면 가입이 완료되고 자동으로 로그인됩니다. 링크는 1시간 동안 유효합니다.',
+  signupCheckMailHint:
+    '메일이 오지 않으면 스팸함을 확인해 주세요. 이미 가입한 이메일이라면 로그인해 주세요.',
+  verificationResent: '인증 메일을 다시 보냈습니다.',
   signupNotice: '가입하면 서비스 안내에 동의한 것으로 간주합니다.',
 
   // --- reset password ---
@@ -115,8 +124,22 @@ export const copy = {
   settingsTheme: '테마',
   settingsThemeHint: '라이트/다크 모드를 전환합니다.',
   settingsAccount: '계정',
+  settingsAccountHint: '이메일은 인증을 거친 뒤에만 변경됩니다.',
   settingsEmailUnverified: '이메일 인증이 완료되지 않았습니다.',
   resendVerification: '인증 메일 다시 보내기',
+  emailVerifiedBadge: '인증됨',
+  emailUnverifiedBadge: '미인증',
+  noEmail: '이메일 없음',
+  noEmailNotice:
+    '카카오·네이버에서 이메일을 받지 못했습니다. 아래에서 이메일을 등록하고 인증해 주세요.',
+  newEmail: '새 이메일',
+  changeEmail: '이메일 변경',
+  changeEmailHintVerified:
+    '현재 이메일로 확인 메일이 가고, 확인하면 새 이메일로 인증 메일이 갑니다.',
+  changeEmailHintUnverified: '새 이메일로 인증 메일이 갑니다. 링크를 누르면 변경이 완료됩니다.',
+  changeEmailSentCurrent: '현재 이메일로 확인 메일을 보냈습니다.',
+  changeEmailSentNew: '새 이메일로 인증 메일을 보냈습니다.',
+  errEmailSame: '현재 이메일과 같습니다.',
 
   // --- generic ---
   errUnknown: '문제가 발생했습니다. 잠시 후 다시 시도해 주세요.',

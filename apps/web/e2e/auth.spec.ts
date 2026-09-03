@@ -12,12 +12,48 @@ function freshEmail() {
   return `e2e-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@buddha.local`;
 }
 
+/** Mailpit HTTP API (docker compose). Override with MAILPIT_URL. */
+const mailpit = process.env.MAILPIT_URL ?? 'http://127.0.0.1:8025';
+
+interface MailpitSearch {
+  messages: Array<{ ID: string }>;
+}
+interface MailpitMessage {
+  Text: string;
+}
+
+/** The verify-email link of the newest Mailpit message addressed to `email`. */
+async function verificationLink(email: string): Promise<string> {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const query = encodeURIComponent(`to:${email}`);
+    const search = (await (
+      await fetch(`${mailpit}/api/v1/search?query=${query}`)
+    ).json()) as MailpitSearch;
+    const newest = search.messages[0];
+    if (newest) {
+      const message = (await (
+        await fetch(`${mailpit}/api/v1/message/${newest.ID}`)
+      ).json()) as MailpitMessage;
+      const match = /https?:\/\/\S+\/verify-email\?\S+/.exec(message.Text);
+      if (match) return match[0];
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`no verification mail for ${email}`);
+}
+
+/**
+ * Verification is mandatory (PLAN 17 Q1 decision): the form shows the "check your mail"
+ * panel and the link in the mail completes the sign-up with an automatic sign-in.
+ */
 async function signUp(page: Page, email: string) {
   await page.goto('/signup');
   await page.getByLabel(copy.email).fill(email);
   await page.getByLabel(copy.password, { exact: true }).fill(password);
   await page.getByLabel(copy.passwordConfirm).fill(password);
   await page.getByRole('button', { name: copy.signupWithEmail }).click();
+  await expect(page.getByTestId('signup-check-mail')).toBeVisible();
+  await page.goto(await verificationLink(email));
   await expect(page).toHaveURL('/');
 }
 
@@ -49,7 +85,7 @@ test.describe('signup -> login -> settings', () => {
     await expect(page).toHaveURL('/settings');
 
     // --- /me rendered: email, auto-generated nickname (예측가_XXXX), credential linked
-    await expect(page.getByTestId('settings-email')).toContainText(email);
+    await expect(page.getByTestId('account-email')).toContainText(email);
     await expect(page.getByTestId('nickname-input')).toHaveValue(/^예측가_/);
     await expect(page.getByTestId('unlink-credential')).toBeDisabled();
   });

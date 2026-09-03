@@ -1,6 +1,6 @@
 'use client';
 
-import { Button, Field, HStack, Input, Skeleton, Stack, Text } from '@chakra-ui/react';
+import { Button, Field, HStack, Input, Skeleton, Stack } from '@chakra-ui/react';
 import { NICKNAME_MAX_LENGTH, NICKNAME_MIN_LENGTH, NICKNAME_PATTERN } from '@buddha/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMemo } from 'react';
@@ -31,7 +31,7 @@ export function NicknameForm() {
       {isPending || !me ? (
         <Skeleton height="10" />
       ) : (
-        <NicknameFields email={me.email} nickname={me.profile.nickname} />
+        <NicknameFields nickname={me.profile.nickname} />
       )}
     </SettingsSection>
   );
@@ -43,7 +43,7 @@ export function NicknameForm() {
  * form in sync with later refetches (deep-compared by react-hook-form, so an unrelated
  * refetch with the same nickname is a no-op) without discarding a dirty field.
  */
-function NicknameFields({ email, nickname }: { email: string; nickname: string }) {
+function NicknameFields({ nickname }: { nickname: string }) {
   const update = useUpdateNickname();
   const values = useMemo(() => ({ nickname }), [nickname]);
   const {
@@ -84,9 +84,6 @@ function NicknameFields({ email, nickname }: { email: string; nickname: string }
   return (
     <form onSubmit={(e) => void onSubmit(e)} noValidate>
       <Stack gap="4">
-        <Text fontSize="sm" color="fg.muted" data-testid="settings-email">
-          {copy.email}: {email}
-        </Text>
         <Field.Root invalid={!!errors.nickname} required>
           <Field.Label>{copy.nickname}</Field.Label>
           <HStack w="full" align="start">

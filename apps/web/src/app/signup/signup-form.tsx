@@ -12,9 +12,7 @@ import {
   Text,
 } from '@chakra-ui/react';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useQueryClient } from '@tanstack/react-query';
 import NextLink from 'next/link';
-import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import * as z from 'zod';
@@ -22,8 +20,7 @@ import { SocialButtons } from '@/components/auth/social-buttons';
 import { PasswordInput } from '@/components/ui/password-input';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
-import { ME_QUERY_KEY } from '@/hooks/use-me';
-import { AUTH_ERROR, authErrorMessage, signUp } from '@/lib/auth-client';
+import { authClient, authErrorMessage, signUp } from '@/lib/auth-client';
 
 /** PLAN 10.2: password >= 8 chars. 128 is better-auth's default maxPasswordLength. */
 export const passwordSchema = z
@@ -43,14 +40,19 @@ const schema = z
   });
 type FormValues = z.infer<typeof schema>;
 
+/**
+ * Verification is mandatory (PLAN 17 Q1 decision): the link in the mail completes the
+ * sign-up and signs the user in (`/login` then bounces a logged-in visitor to `/`).
+ * A duplicate email gets the same answer from the API (no enumeration), hence the hint.
+ */
+const VERIFY_CALLBACK = '/login';
+
 export function SignupForm() {
-  const router = useRouter();
-  const queryClient = useQueryClient();
   const [formError, setFormError] = useState<string | null>(null);
+  const [sentTo, setSentTo] = useState<string | null>(null);
   const {
     register,
     handleSubmit,
-    setError,
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({ resolver: zodResolver(schema) });
 
@@ -62,24 +64,16 @@ export function SignupForm() {
       email: values.email,
       password: values.password,
       name: values.email.split('@')[0] ?? values.email,
+      callbackURL: VERIFY_CALLBACK,
     });
     if (error) {
-      // better-auth 1.7.2 sign-up emits USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL.
-      if (
-        error.code === AUTH_ERROR.USER_ALREADY_EXISTS ||
-        error.code === AUTH_ERROR.USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL
-      ) {
-        setError('email', { message: copy.emailAlreadyUsed });
-      } else {
-        setFormError(authErrorMessage(error, copy.signupFailed));
-      }
+      setFormError(authErrorMessage(error, copy.signupFailed));
       return;
     }
-    toaster.create({ type: 'success', title: copy.signupDone, description: copy.verificationSent });
-    await queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY });
-    router.push('/');
-    router.refresh();
+    setSentTo(values.email);
   });
+
+  if (sentTo) return <CheckMailPanel email={sentTo} />;
 
   return (
     <Stack gap="6">
@@ -139,6 +133,55 @@ export function SignupForm() {
           <NextLink href="/login">{copy.login}</NextLink>
         </Link>
       </Text>
+    </Stack>
+  );
+}
+
+/** Shown after sign-up: where the mail went, how to get another one, and the way to login. */
+function CheckMailPanel({ email }: { email: string }) {
+  const [busy, setBusy] = useState(false);
+
+  async function resend() {
+    setBusy(true);
+    const { error } = await authClient.sendVerificationEmail({
+      email,
+      callbackURL: VERIFY_CALLBACK,
+    });
+    setBusy(false);
+    toaster.create(
+      error
+        ? { type: 'error', title: authErrorMessage(error) }
+        : { type: 'success', title: copy.verificationResent },
+    );
+  }
+
+  return (
+    <Stack gap="4" data-testid="signup-check-mail">
+      <Alert.Root status="success">
+        <Alert.Indicator />
+        <Alert.Content>
+          <Alert.Title>{copy.signupCheckMailTitle}</Alert.Title>
+          <Alert.Description>
+            {copy.signupCheckMailBefore}{' '}
+            <Text as="span" fontWeight="semibold" data-testid="signup-sent-to">
+              {email}
+            </Text>
+            <br />
+            {copy.signupCheckMailAfter}
+          </Alert.Description>
+        </Alert.Content>
+      </Alert.Root>
+      <Text fontSize="sm" color="fg.muted">
+        {copy.signupCheckMailHint}
+      </Text>
+      <HStack gap="4" flexWrap="wrap">
+        <Button variant="outline" onClick={() => void resend()} loading={busy}>
+          {copy.resendVerification}
+        </Button>
+        <Link asChild colorPalette="brand" color="colorPalette.fg" fontWeight="medium">
+          <NextLink href="/login">{copy.backToLogin}</NextLink>
+        </Link>
+      </HStack>
     </Stack>
   );
 }
