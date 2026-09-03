@@ -11,8 +11,8 @@ export type ApiClient = Client<paths>;
 
 export interface ApiClientOptions extends ClientOptions {
   /**
-   * "/api" in the browser (Next.js rewrites it to NEXT_PUBLIC_API_URL),
-   * an absolute URL on the server / in tests.
+   * Origin the generated paths (`/api/v1/...`) are appended to: '' in the browser (same
+   * origin, Next.js rewrites /api/* to the API), an absolute URL on the server / in tests.
    */
   baseUrl: string;
 }
