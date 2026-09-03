@@ -19,8 +19,9 @@ export default async function LoginPage({
   if (await getServerSession()) redirect(nextPath as Route);
   return (
     <AuthCard title={copy.loginTitle} subtitle={copy.loginSubtitle}>
-      {/* ?error= is a failed social round-trip or an expired verification link (both mails
-          from /signup and the login resend land here). */}
+      {/* ?error= is a failed social round-trip, a bad link from the login resend (its
+          callbackURL is /login), or one /set-password handed over — since ADR-0024 the
+          sign-up mail lands there, and a broken link leaves no session to show it with. */}
       <LoginForm next={nextPath} notice={authNoticeFor(error, copy.socialUnavailable)} />
     </AuthCard>
   );

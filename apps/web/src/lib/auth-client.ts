@@ -94,6 +94,26 @@ const VERIFY_LINK_ERROR_CODES = new Set([
   'invalid_user',
 ]);
 
+/** The `?error=` value split into comparable codes (better-auth sends one; a URL may carry more). */
+function errorCodes(error: string | string[] | undefined): string[] {
+  if (error === undefined) return [];
+  return (Array.isArray(error) ? error : [error])
+    .flatMap((value) => value.split(','))
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+/**
+ * The code in `?error=` that says a verification link itself failed, or undefined when the
+ * parameter is absent or describes something else (an OAuth round-trip). Pages that stay
+ * useful after a bad link (set-password) branch on this instead of `authNoticeFor`, whose
+ * fallback would turn any unknown code into a scary alert, and pass the returned code on so
+ * the next screen classifies it the same way.
+ */
+export function verifyLinkErrorCode(error: string | string[] | undefined): string | undefined {
+  return errorCodes(error).find((code) => VERIFY_LINK_ERROR_CODES.has(code));
+}
+
 /**
  * Korean notice for the `?error=` parameter better-auth redirects back with, or undefined
  * when there is none. `fallback` names what the page was doing (social sign-in, linking).
@@ -103,10 +123,7 @@ export function authNoticeFor(
   fallback: string,
 ): string | undefined {
   if (error === undefined) return undefined;
-  const codes = (Array.isArray(error) ? error : [error])
-    .flatMap((value) => value.split(','))
-    .map((value) => value.trim().toLowerCase())
-    .filter(Boolean);
+  const codes = errorCodes(error);
   if (codes.some((code) => VERIFY_LINK_ERROR_CODES.has(code))) return copy.verifyLinkInvalid;
   if (codes.some((code) => code.includes('account_already_linked'))) return copy.linkAlreadyUsed;
   return fallback;

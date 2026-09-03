@@ -1,7 +1,12 @@
 import { formatP } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
 import { copy } from './copy';
-import { authErrorMessage, authNoticeFor, safeNextPath } from './lib/auth-client';
+import {
+  authErrorMessage,
+  authNoticeFor,
+  safeNextPath,
+  verifyLinkErrorCode,
+} from './lib/auth-client';
 
 // PLAN Appendix A: gambling vocabulary must never appear in user-facing copy.
 const FORBIDDEN_WORDS = ['베팅', '배당', '배당률', '승률', '판돈', '당첨'];
@@ -96,5 +101,25 @@ describe('authNoticeFor', () => {
       copy.verifyLinkInvalid,
     );
     expect(authNoticeFor(undefined, copy.linkFailed)).toBeUndefined();
+  });
+});
+
+describe('verifyLinkErrorCode', () => {
+  // /set-password renders its own notice and forwards the code to /login, so it must pick
+  // the code that actually matched rather than whatever came first.
+  it('returns the verify-link code better-auth redirects with', () => {
+    expect(verifyLinkErrorCode('TOKEN_EXPIRED')).toBe('token_expired');
+    expect(verifyLinkErrorCode('INVALID_TOKEN')).toBe('invalid_token');
+    expect(verifyLinkErrorCode('USER_NOT_FOUND')).toBe('user_not_found');
+    expect(verifyLinkErrorCode(['social', 'TOKEN_EXPIRED'])).toBe('token_expired');
+  });
+
+  it('stays undefined for everything that is not a broken link', () => {
+    // Unlike authNoticeFor there is no fallback: an unknown code must not paint an alert on
+    // a page that still works.
+    expect(verifyLinkErrorCode(undefined)).toBeUndefined();
+    expect(verifyLinkErrorCode('')).toBeUndefined();
+    expect(verifyLinkErrorCode('unable_to_get_user_info')).toBeUndefined();
+    expect(verifyLinkErrorCode('social')).toBeUndefined();
   });
 });

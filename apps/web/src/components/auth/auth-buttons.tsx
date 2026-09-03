@@ -5,8 +5,9 @@ import { formatP, parsePAmount } from '@buddha/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import NextLink from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
+import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
-import { useMe } from '@/hooks/use-me';
+import { ME_QUERY_KEY, useMe } from '@/hooks/use-me';
 import { signOut } from '@/lib/auth-client';
 
 /**
@@ -37,8 +38,20 @@ export function AuthButtons() {
   }
 
   async function handleSignOut() {
-    await signOut();
-    queryClient.removeQueries({ queryKey: ['me'] });
+    // better-auth reports an HTTP failure as `{ error }` and rejects only when the request
+    // never lands; either way the session signal that clears `useSession` fires on success
+    // only (client/proxy.mjs), so navigating home regardless would just look like a logout.
+    let failed: boolean;
+    try {
+      failed = (await signOut()).error != null;
+    } catch {
+      failed = true;
+    }
+    if (failed) {
+      toaster.create({ type: 'error', title: copy.logoutFailed });
+      return;
+    }
+    queryClient.removeQueries({ queryKey: ME_QUERY_KEY });
     router.push('/');
     router.refresh();
   }

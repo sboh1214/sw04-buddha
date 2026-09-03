@@ -26,6 +26,9 @@ export const copy = {
   login: '로그인',
   signup: '가입하기',
   logout: '로그아웃',
+  // Deliberately does not claim the session survived: when the response is lost the sign-out
+  // may well have happened server-side. Retrying is safe either way.
+  logoutFailed: '로그아웃하지 못했습니다. 다시 시도해 주세요.',
   loading: '불러오는 중',
 
   // --- forms ---
@@ -128,6 +131,11 @@ export const copy = {
   setPasswordSubtitle: '이메일 인증이 끝났습니다. 로그인에 사용할 비밀번호를 정해 주세요.',
   setPasswordSubmit: '비밀번호 저장',
   passwordSet: '비밀번호를 설정했습니다.',
+  // Shown to a visitor who already has a session: the link they just clicked is stale, but
+  // their address is verified either way, so this must NOT tell them to request another one
+  // (re-registering a verified address mails nothing).
+  setPasswordLinkStale:
+    '이 링크는 이미 사용되었거나 만료되었습니다. 이메일 인증은 끝났으니 그대로 진행하셔도 됩니다.',
   passwordAlreadySet: '비밀번호가 이미 설정되어 있습니다.',
   goHome: '홈으로 가기',
   settingsPassword: '비밀번호 변경',
