@@ -4,6 +4,7 @@ import { Test } from '@nestjs/testing';
 import { type Db } from '@buddha/db';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DB } from '../infra/db/db.provider.js';
+import { CommonModule } from '../common/common.module.js';
 import { REDIS } from '../infra/redis/redis.provider.js';
 import { HealthController, type HealthResponse } from './health.controller.js';
 
@@ -30,6 +31,7 @@ function makeMocks(opts: MockOpts) {
 async function makeModule(opts: MockOpts) {
   const { db, execute, redis } = makeMocks(opts);
   const moduleRef = await Test.createTestingModule({
+    imports: [CommonModule],
     controllers: [HealthController],
     providers: [
       { provide: DB, useValue: db },

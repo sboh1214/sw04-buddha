@@ -11,18 +11,24 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "openapi:export": "node dist/openapi-export.js"
   },
   "dependencies": {
     "@buddha/db": "workspace:*",
+    "@buddha/shared": "workspace:*",
     "@nestjs/common": "catalog:",
     "@nestjs/config": "catalog:",
     "@nestjs/core": "catalog:",
     "@nestjs/platform-fastify": "catalog:",
+    "@nestjs/swagger": "catalog:",
+    "@thallesp/nestjs-better-auth": "catalog:",
+    "better-auth": "catalog:",
     "dotenv": "catalog:",
     "drizzle-orm": "catalog:",
     "fastify": "catalog:",
     "ioredis": "catalog:",
+    "nodemailer": "catalog:",
     "reflect-metadata": "catalog:",
     "rxjs": "catalog:",
     "zod": "catalog:"
@@ -32,7 +38,9 @@
     "@buddha/config-ts": "workspace:*",
     "@nestjs/cli": "catalog:",
     "@nestjs/testing": "catalog:",
+    "@standard-schema/spec": "catalog:",
     "@types/node": "catalog:",
+    "@types/nodemailer": "catalog:",
     "eslint": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
