@@ -27,10 +27,27 @@ function sessionCookieOf(setCookie: string | string[] | undefined): string | und
   return list.find((c) => c.startsWith('buddha.session_token='));
 }
 
+/**
+ * ORDERING CONTRACT — run this file whole; `-t` on a single case below the sign-up flow will
+ * fail on missing state rather than on the thing it names.
+ *
+ * The cases from 'register creates an unverified user' down to 'POST /api/v1/me/password' are
+ * one deliberate walk through ADR-0024, each asserting one step: `email` accumulates state
+ * across them and `cookie` is minted by the verification case. That is why there is a single
+ * `beforeAll` reset and not a `beforeEach` one.
+ *
+ * It stays this way on purpose. Per-case setup cannot serve it — three cases need three
+ * different intermediate states (registered-but-unverified, verified-without-password,
+ * fully set up) — and a lazy "establish the prerequisite if missing" helper was measured to
+ * make failures WORSE, not better: when the shared mechanism itself regresses, the helper
+ * fails first and collapses every downstream message into one unrelated error. Cases added
+ * after that walk build their own state on a fresh address; keep doing that.
+ */
 describe.skipIf(!hasTestInfra)('auth (integration)', () => {
   let t: TestApp;
   const email = 'it-auth@test.local';
   const password = 'password-1234';
+  /** Minted by 'the verification link verifies…'; every case below it reuses that session. */
   let cookie = '';
 
   beforeAll(async () => {

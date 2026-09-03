@@ -1,6 +1,6 @@
 'use client';
 
-import { Badge, Button, Field, HStack, Input, Skeleton, Stack, Text } from '@chakra-ui/react';
+import { Badge, Button, Field, HStack, Input, Stack, Text } from '@chakra-ui/react';
 import { isNoEmailAddress } from '@buddha/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation } from '@tanstack/react-query';
@@ -10,6 +10,7 @@ import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { useMe } from '@/hooks/use-me';
 import { authClient, authErrorMessage } from '@/lib/auth-client';
+import { ProfileUnavailable } from './profile-unavailable';
 import { SettingsSection } from './section';
 
 const schema = z.object({ newEmail: z.email(copy.errEmailInvalid) });
@@ -32,8 +33,10 @@ export function AccountSection() {
       hint={copy.settingsAccountHint}
       testId="settings-account"
     >
+      {/* `!me` covers a failed /me AND the session-gone case, where the query never runs and
+          `isError` stays false — either way the card must not sit on a skeleton forever. */}
       {isPending || !me ? (
-        <Skeleton height="10" />
+        <ProfileUnavailable />
       ) : (
         <AccountFields email={me.email} emailVerified={me.emailVerified} />
       )}

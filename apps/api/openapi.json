@@ -262,7 +262,8 @@
       "session": {
         "type": "apiKey",
         "in": "cookie",
-        "name": "buddha.session_token"
+        "name": "buddha.session_token",
+        "description": "better-auth session cookie: `buddha.session_token` when the API is served over HTTP, `__Secure-buddha.session_token` when BETTER_AUTH_URL is HTTPS. Browsers send it automatically with `credentials: \"include\"`."
       }
     },
     "schemas": {

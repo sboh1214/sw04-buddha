@@ -1,8 +1,17 @@
 import { type INestApplication } from '@nestjs/common';
 import { DocumentBuilder, type OpenAPIObject, SwaggerModule } from '@nestjs/swagger';
 
-/** Session cookie name: better-auth `advanced.cookiePrefix` 'buddha' + `session_token`. */
+/** Session cookie over plain HTTP: better-auth `advanced.cookiePrefix` 'buddha' + `session_token`. */
 export const SESSION_COOKIE = 'buddha.session_token';
+
+/**
+ * The same cookie over HTTPS. better-auth prepends `__Secure-` whenever
+ * `advanced.useSecureCookies` is unset and `baseURL` is https (cookies/index.mjs), which is
+ * every real deployment since auth.ts leaves that option alone. The document is exported with
+ * the dev `BETTER_AUTH_URL`, so the scheme carries the plain name and the description carries
+ * this one: deriving it would make the committed artifact depend on the exporting machine.
+ */
+const SECURE_SESSION_COOKIE = `__Secure-${SESSION_COOKIE}`;
 
 /**
  * `components.securitySchemes` key for the session cookie. `@ApiCookieAuth()` takes this
@@ -26,7 +35,18 @@ export function createOpenApiDocument(app: INestApplication): OpenAPIObject {
         'P amounts are decimal strings (bigint). Timestamps are ISO 8601 UTC.',
     )
     .setVersion('1')
-    .addCookieAuth(SESSION_COOKIE, { type: 'apiKey', in: 'cookie' }, SESSION_SECURITY_SCHEME)
+    .addCookieAuth(
+      SESSION_COOKIE,
+      {
+        type: 'apiKey',
+        in: 'cookie',
+        description:
+          `better-auth session cookie: \`${SESSION_COOKIE}\` when the API is served over HTTP, ` +
+          `\`${SECURE_SESSION_COOKIE}\` when BETTER_AUTH_URL is HTTPS. Browsers send it ` +
+          'automatically with `credentials: "include"`.',
+      },
+      SESSION_SECURITY_SCHEME,
+    )
     .build();
   return SwaggerModule.createDocument(app, config, {
     // getMe / updateMe instead of MeController_getMe_v1: method names are unique per app.

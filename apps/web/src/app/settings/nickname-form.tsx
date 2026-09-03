@@ -1,6 +1,6 @@
 'use client';
 
-import { Button, Field, HStack, Input, Skeleton, Stack } from '@chakra-ui/react';
+import { Button, Field, HStack, Input, Stack } from '@chakra-ui/react';
 import { NICKNAME_MAX_LENGTH, NICKNAME_MIN_LENGTH, NICKNAME_PATTERN } from '@buddha/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMemo } from 'react';
@@ -10,6 +10,7 @@ import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { useMe, useUpdateNickname } from '@/hooks/use-me';
 import { isApiError, validationField } from '@/lib/api';
+import { ProfileUnavailable } from './profile-unavailable';
 import { SettingsSection } from './section';
 
 // Same bounds/pattern as @buddha/shared nicknameSchema (PLAN 11.5: the policy is not
@@ -29,7 +30,7 @@ export function NicknameForm() {
   return (
     <SettingsSection title={copy.settingsProfile} testId="settings-profile">
       {isPending || !me ? (
-        <Skeleton height="10" />
+        <ProfileUnavailable />
       ) : (
         <NicknameFields nickname={me.profile.nickname} />
       )}

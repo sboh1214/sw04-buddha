@@ -18,7 +18,9 @@ export const PasswordInput = forwardRef<HTMLInputElement, InputProps>(
             aria-label={visible ? copy.hidePassword : copy.showPassword}
             aria-pressed={visible}
             onClick={() => setVisible((v) => !v)}
-            tabIndex={-1}
+            // No tabIndex={-1} on purpose: it would leave the reveal mouse-only. A native
+            // <button type="button"> in the tab order answers Space/Enter with no extra
+            // handler (WCAG 2.1.1 Keyboard, level A).
           >
             <EyeIcon open={visible} />
           </IconButton>
