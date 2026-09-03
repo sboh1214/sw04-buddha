@@ -60,7 +60,7 @@ export function AuthButtons() {
   return (
     <HStack gap="3">
       <Badge asChild size="lg" variant="subtle" colorPalette="brand" data-testid="balance-chip">
-        <NextLink href="/">
+        <NextLink href="/wallet">
           <Text as="span" color="fg.muted" fontWeight="normal" me="1">
             {copy.balance}
           </Text>
