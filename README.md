@@ -23,7 +23,7 @@ pnpm dev                         # web(3000) · api(4000) · worker + 공유 패
 - 웹: http://localhost:3000
 - API 헬스체크: http://localhost:3000/api/health (web rewrite 경유) 또는 http://localhost:4000/api/health
 - Mailpit UI: http://localhost:8025 (가입 인증·비밀번호 재설정·이메일 변경 메일이 여기로 온다). 이메일 가입은 주소만 입력하고, 메일의 인증 링크를 누르면 로그인된 뒤 /set-password에서 첫 비밀번호를 정한다(인증 전에는 비밀번호가 없어 로그인 불가). 운영 메일은 AWS SES(`.env.example`의 SMTP_* 주석).
-- 화면: /signup, /login, /set-password, /settings, /reset-password. 시드 관리자: .env의 SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD (기본 admin@buddha.local / admin1234!)
+- 화면: /signup, /login, /set-password, /settings, /reset-password, /wallet(충전·원장), /admin/users(관리자). 시드 관리자: .env의 SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD (기본 admin@buddha.local / admin1234!)
 - 통합 테스트(packages/db, apps/api)는 `docker compose --profile test up -d postgres-test redis-test`로 띄운 test 프로필(5433/6380)만 사용한다(`.env`의 `TEST_*`). 기본 `.env`는 `TEST_*`를 설정하므로 `pnpm test`/`pnpm check` 전에 test 프로필이 떠 있어야 한다(없으면 globalSetup에서 연결 오류로 실패). `TEST_*`를 비우면 해당 테스트를 건너뛴다(CI에서는 필수).
 - `pnpm db:migrate`/`db:seed`는 `@buddha/shared`를 먼저 빌드한다(Turbo `dependsOn: ^build`)—스키마 enum 값이 공유 패키지에서 오기 때문이다.
 - 소셜 로그인(Google/Kakao/Naver)은 `.env`에 프로바이더 키 쌍을 넣을 때만 켜진다(docs/QUESTIONS.md Q-M1-1).
@@ -42,6 +42,7 @@ pnpm dev                         # web(3000) · api(4000) · worker + 공유 패
 | `pnpm typecheck` / `lint` / `test`            | 각 패키지의 tsc / ESLint / Vitest                          |
 | `pnpm format` / `format:check`                | Prettier                                                   |
 | `pnpm db:generate` / `db:migrate` / `db:seed` | drizzle-kit 생성 / 마이그레이션 적용 / 시드                |
+| `pnpm --filter worker run job:ledger-audit`   | 원장-잔고 불변식 수동 검증 (불일치 시 종료 코드 1)         |
 | `pnpm mobile:doctor`                          | Expo 스캐폴드 점검 (`expo-doctor`)                         |
 | `pnpm infra:up` / `infra:down` / `infra:logs` | Docker Compose 단축 명령                                   |
 | `pnpm check`                                  | format:check + lint + typecheck + test + build (CI와 동일) |

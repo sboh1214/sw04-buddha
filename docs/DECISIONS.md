@@ -555,3 +555,26 @@ ADR-0023 이후 남은 두 가지를 오너가 결정했다(PLAN §17 Q6/Q7). �
 - 리뷰 반영(M1, PR #2 자동 리뷰 2차 4건): ① **전송 실패를 `authClient` 한 곳에서 정규화한다.** better-fetch는 자기 `fetch` 호출을 감싸지 않아 요청이 아예 닿지 못하면(오프라인·DNS·연결 리셋) `{ error }`가 아니라 **reject**한다. 앱의 모든 호출부는 `const { error } = await ...` 형태고 react-hook-form 제출은 `void onSubmit(e)`로 불리므로 그 reject는 삼켜졌다: 로그인은 아무 안내 없이 조용히 실패하며 **이미 떠 있던 오류 문구까지 지웠고**, 가입 재발송·소셜 버튼은 스피너가 영원히 돌았으며, react-query `onError`를 쓰는 곳은 브라우저의 영어 "Failed to fetch"를 한국어 토스트에 실었다(PLAN 0.1 rule 6 위반). `createAuthClient`에 `customFetchImpl`로 `fetchOrNetworkError`를 넣어 503 `{ code: 'NETWORK_ERROR' }`로 바꾸면 11개 호출부가 한 번에 평소의 `if (error)` 경로로 돌아온다. 두 가지를 함께 처리한다: 본문을 같은 try 안에서 읽어(better-fetch가 `response.text()`를 이 함수 바깥에서 부르므로) 연결이 본문 도중 끊기는 경우도 덮고, `AbortError`는 다시 던진다(취소는 네트워크 실패가 아니며 better-auth의 세션 atom이 둘을 구분한다). ② **가입의 임시 자격증명을 아예 만들지 않는다.** `signUpEmail` 커밋 후 `DELETE` 사이에서 프로세스가 죽으면 사용자에게 아무도 모르는 비밀번호가 남고, 재시도해도 better-auth가 기존 주소에 합성 id를 주므로 삭제가 아무것도 지우지 못해 `/set-password`가 영구히 `PASSWORD_ALREADY_SET`이 된다(탈취 위험은 없고 비밀번호 재설정으로는 복구된다). `databaseHooks.account.create.before`가 `/sign-up/email`의 credential insert를 취소하므로 행 자체가 쓰이지 않는다. `DELETE`는 백스톱으로 남겼다: 훅이 경로 문자열에 묶여 있어 better-auth 업그레이드가 경로를 바꾸면 조용히 멈출 수 있는데, 그때 삭제가 실제로 행을 지우면 에러 로그를 남긴다. ③ **`/set-password`가 프로필 로드 실패를 렌더한다.** `GET /me`가 재시도를 다 쓰고 실패하면 `isPending`은 false인데 `me`는 undefined라 스켈레톤이 영원히 남아, 첫 비밀번호를 정할 유일한 화면이 막혔다. `isError`가 아니라 "정착했는데 프로필이 없다"로 분기해 쿼리가 비활성인 경우까지 덮는다.
 - 리뷰 반영(M1, PR #2 자동 리뷰 3차 4건): ① **설정 화면이 프로필 로드 실패를 렌더한다.** `GET /me`가 재시도를 다 쓰고 실패해도 세션은 살아 있으므로 `isPending`은 false인데 `me`는 undefined라, 프로필·계정 카드가 설명도 재시도도 없는 스켈레톤으로 굳었다(같은 화면의 연결 수단·비밀번호·테마는 정상 동작). `ProfileUnavailable` 하나를 두 카드가 함께 쓴다. 오류로 넘어가는 조건은 `isError`가 아니라 "정착했는데 프로필이 없다"에 더해 **`isFetching`이 아니고 로그인 상태일 때**로 잡았다: 로그아웃은 세션 atom이 옛 세션을 든 채 `['me']` 캐시를 지우므로 그 두 가드가 없으면 정상 로그아웃마다 두 카드가 거짓 오류를 깜빡였고(검증 에이전트가 3/3 재현), 세션이 아예 없는 클라이언트에는 아무것도 못 불러오는 재시도 버튼이 남았다. `role="alert"`은 일부러 뺐다 — 두 카드가 동시에 뜨므로 같은 문장을 두세 번 읽어 준다. ② **OpenAPI가 HTTPS 쿠키 이름을 함께 알린다.** better-auth는 `useSecureCookies`가 비어 있고 baseURL이 https면 `__Secure-` 접두사를 붙이므로 실제 배포의 쿠키는 `__Secure-buddha.session_token`인데 문서는 평문 이름만 광고했다. 다만 **유도하지 않고 설명에 적었다**: 커밋된 `openapi.json`은 개발용 `BETTER_AUTH_URL`로 내보내므로, 값을 env에서 유도하면 아티팩트가 내보낸 기계의 환경에 의존해 CI 계약 검사가 깨진다. 실사용 영향은 문서뿐이다(Swagger UI 미제공, 생성 클라이언트는 security를 방출하지 않음, 서버 가드는 쿠키 이름을 보지 않음). ③ **비밀번호 표시 토글을 탭 순서에 되돌렸다.** `tabIndex={-1}`이 키보드 사용자에게 이 버튼을 도달 불가로 만들었고 대체 단축키도 없었다(WCAG 2.1.1 Keyboard, level A). 비밀번호 입력·제출 자체는 원래 키보드로 가능하므로 P3다.
 - M1 리뷰 3차에서 **채택하지 않은 지적**: `auth.test.ts`가 실행 순서에 의존한다는 P3 지적은 사실이지만(파일 아래쪽 케이스를 `-t`로 단독 실행하면 상태가 없어 실패한다), 제안된 재구성은 **측정 결과 더 나빴다**. 게으른 사전조건 헬퍼는 쿠키 프리픽스 회귀를 흉내냈을 때 실패가 7건→9건으로 늘고 모든 실패 메시지가 헬퍼 자신의 동일한 `TypeError`로 뭉개졌으며, 셔플 순서에서도 5건→7건이 됐다. 케이스별 setup은 세 가지 서로 다른 중간 상태(미인증 / 인증됐고 비밀번호 없음 / 완전 설정)를 하나로 만들 수 없어 애초에 성립하지 않는다. 대신 `describe` 위에 순서 계약을 명시해 두고, 이후 추가되는 케이스는 각자 새 주소로 상태를 만들도록 못 박았다.
+
+## ADR-0025 — 지갑: 충전·원장·관리자 조정과 원장 감사 (M2)
+
+### 맥락
+
+PLAN §5.1/5.6과 M2는 P의 유입(mock 충전, 관리자 조정)과 원장 불변식을 요구한다. 스키마(`payments`, `ledger_entries`, `balances`, `admin_actions`, `audit_failures`)는 M1에서 이미 만들었으므로 M2는 그 위의 트랜잭션·API·화면·감사 잡이다.
+
+### 결정
+
+- **`PaymentProvider` 인터페이스 + `MockPaymentProvider`**(`apps/api/src/payments`). 프로바이더 호출은 트랜잭션 밖에서 하고, 성공했을 때만 `payments`(succeeded) INSERT → `balances` UPDATE → `ledger_entries`(DEPOSIT) INSERT를 한 트랜잭션으로 처리한다. 실패는 `payments`를 `failed`로 남기고 400을 돌려준다. 토큰 바인딩만 바꾸면 실제 PG로 교체된다(PLAN §16).
+- **잔고 이동은 조건부 UPDATE**다: 충전은 `available_p + amount`, 관리자 조정은 `available_p + amount >= 0` 조건을 붙여 0행이면 `INSUFFICIENT_BALANCE`. 읽고-쓰기를 하지 않으므로 동시 요청이 합산된다(M2 AC 2, 통합 테스트로 검증).
+- **`ledger_entries.balance_after_p`는 UPDATE의 RETURNING 값**을 그대로 쓴다. 같은 트랜잭션 안이라 스냅샷이 실제 잔고와 어긋날 수 없다.
+- **관리자 조정은 `admin_actions` → `balances` → `ledger_entries` 순서의 한 트랜잭션**이고, 거부되면 감사 행까지 함께 롤백된다. 사유(memo)는 필수이며 원장 memo에도 남는다.
+- **API**: `POST /api/v1/payments/charge`, `GET /api/v1/me/ledger`, `GET /api/v1/me/payments`, `GET /api/v1/admin/users`, `POST /api/v1/admin/users/:id/balance-adjust`, `GET /api/v1/admin/payments`, `GET /api/v1/admin/audit-failures`. 목록은 `(created_at DESC, id DESC)` 키셋 커서(`@buddha/shared`의 `encodeKeyset`/`decodeKeyset`)를 쓴다.
+- **워커 `ledger.audit`**: `balances.available_p + locked_p = SUM(ledger_entries.amount_p)`를 계정별로 한 번의 그룹 쿼리로 검증하고, 불일치는 `audit_failures`에 **기록만** 한다(원장이 진실이므로 잔고를 자동으로 고치지 않는다). 매일 04:00 KST 반복 잡 + `pnpm --filter worker run job:ledger-audit` 수동 실행. 워커가 Postgres를 직접 쓰기 시작했으므로 `@buddha/db` 의존성과 종료 시 풀 정리를 추가했다.
+- **웹**: `/wallet`(고정 고지 → 잔고 → 충전 → 원장), `/admin/users`(검색 + 조정). 관리자 레이아웃은 서버에서 `GET /me`의 role로 접근을 막고, 실제 권한은 API의 AdminGuard가 강제한다.
+
+### 결과
+
+- 통합 테스트: 지갑 8건(10,000P 충전, 동시 20건, 범위 거부, 커서 페이지), 관리자 7건(−3,000P 조정, 음수 거부, 사유 필수, 404, 권한, 검색, 목록), 워커 감사 3건. 총 테스트 144건.
+- 브라우저 확인(2026-09-03): 충전 → 잔고·칩·원장 동시 갱신, 관리자 −3,000P → 7,000P + "관리자 조정" 원장 행, 과다 차감 → 한국어 거부 안내, 수동 감사 `{"checked":5,"mismatches":0}` → 잔고를 직접 +1,500 조작 후 재실행 시 `audit_failures` 1건.
+- `payments.provider_ref`는 mock이 `mock_<uuid>`를 채운다. 실제 PG의 승인번호가 들어갈 자리다.
+- 레이트 리밋(PLAN §7.5)은 아직 없다. 실제 PG 연동 전 필수(A-M2-6).
