@@ -5,6 +5,7 @@ import { copy } from '@/copy';
 import { getServerSession } from '@/lib/session.server';
 import { BalanceCard } from './balance-card';
 import { ChargeForm } from './charge-form';
+import { CouponForm } from './coupon-form';
 import { LedgerList } from './ledger-list';
 
 export const metadata: Metadata = { title: `${copy.walletTitle} | ${copy.appName}` };
@@ -29,6 +30,7 @@ export default async function WalletPage() {
         </Alert.Root>
         <BalanceCard />
         <ChargeForm />
+        <CouponForm />
         <LedgerList />
       </Stack>
     </Container>

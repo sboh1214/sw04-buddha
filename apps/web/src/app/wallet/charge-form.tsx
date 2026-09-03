@@ -1,109 +1,105 @@
 'use client';
 
-import { Button, Card, Field, HStack, Input, Stack, Text } from '@chakra-ui/react';
-import { CHARGE_MAX_P, CHARGE_MIN_P, CHARGE_PRESETS_P, formatP } from '@buddha/shared';
-import { zodResolver } from '@hookform/resolvers/zod';
-import { useForm } from 'react-hook-form';
-import * as z from 'zod';
+import { Alert, Badge, Button, Card, HStack, Skeleton, Stack, Text } from '@chakra-ui/react';
+import { discountPercent, formatKrw, formatP, parsePAmount } from '@buddha/shared';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
-import { useCharge } from '@/hooks/use-wallet';
-import { isApiError } from '@/lib/api';
+import { useChargePackages, useCharge } from '@/hooks/use-wallet';
+import { isApiError, type ChargePackage } from '@/lib/api';
 
 /**
- * The amount is typed as digits and validated against the same bounds the API enforces
- * (PLAN 17 Q3): it stays a string all the way to the request, because P is a bigint.
+ * PLAN 11.3 charging. Users buy one of the packages an admin configured (ADR-0026), so there
+ * is no free-form amount: each card shows the P granted, the KRW price and the discount.
  */
-const schema = z.object({
-  amountP: z
-    .string()
-    .trim()
-    .regex(/^\d+$/, copy.errChargeInteger)
-    .refine((value) => {
-      const amount = BigInt(value);
-      return amount >= CHARGE_MIN_P && amount <= CHARGE_MAX_P;
-    }, copy.errChargeRange),
-});
-type FormValues = z.infer<typeof schema>;
-
 export function ChargeForm() {
+  const packages = useChargePackages();
   const charge = useCharge();
-  const {
-    register,
-    handleSubmit,
-    setValue,
-    reset,
-    formState: { errors, isSubmitting },
-  } = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { amountP: '' } });
 
-  const submit = handleSubmit(async ({ amountP }) => {
+  async function buy(pack: ChargePackage) {
     try {
-      const result = await charge.mutateAsync(BigInt(amountP));
+      const result = await charge.mutateAsync(pack.id);
       toaster.create({
         type: 'success',
         title: copy.chargeDone,
-        description: formatP(BigInt(result.balance.availableP)),
+        description: formatP(parsePAmount(result.balance.availableP)),
       });
-      reset({ amountP: '' });
     } catch (error) {
       toaster.create({
         type: 'error',
-        title: isApiError(error, 'VALIDATION_ERROR') ? copy.errChargeRange : copy.chargeFailed,
+        title: isApiError(error, 'VALIDATION_ERROR') ? copy.chargeUnavailable : copy.chargeFailed,
       });
     }
-  });
+  }
 
   return (
     <Card.Root data-testid="charge-form">
       <Card.Header>
         <Text fontWeight="semibold">{copy.chargeTitle}</Text>
+        <Text fontSize="sm" color="fg.muted">
+          {copy.chargeHint}
+        </Text>
       </Card.Header>
       <Card.Body>
-        <form onSubmit={(e) => void submit(e)} noValidate>
-          <Stack gap="4">
-            <HStack gap="2" flexWrap="wrap">
-              {CHARGE_PRESETS_P.map((preset) => (
-                <Button
-                  key={preset.toString()}
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  data-testid={`charge-preset-${preset.toString()}`}
-                  onClick={() =>
-                    setValue('amountP', preset.toString(), {
-                      shouldValidate: true,
-                      shouldDirty: true,
-                    })
-                  }
-                >
-                  {formatP(preset)}
-                </Button>
-              ))}
-            </HStack>
-            <Field.Root invalid={!!errors.amountP} required>
-              <Field.Label>{copy.chargeAmount}</Field.Label>
-              <Input
-                inputMode="numeric"
-                autoComplete="off"
-                placeholder={copy.chargeCustom}
-                data-testid="charge-amount"
-                {...register('amountP')}
-              />
-              <Field.HelperText>
-                {formatP(CHARGE_MIN_P)} ~ {formatP(CHARGE_MAX_P)}
-              </Field.HelperText>
-              <Field.ErrorText>{errors.amountP?.message}</Field.ErrorText>
-            </Field.Root>
-            <Button
-              type="submit"
-              alignSelf="flex-start"
-              loading={isSubmitting}
-              data-testid="charge-submit"
-            >
-              {copy.chargeSubmit}
+        {packages.isPending ? (
+          <Skeleton height="24" />
+        ) : packages.isError ? (
+          <Stack gap="3" align="flex-start">
+            <Alert.Root status="error" role="alert">
+              <Alert.Indicator />
+              <Alert.Content>
+                <Alert.Description>{copy.errUnknown}</Alert.Description>
+              </Alert.Content>
+            </Alert.Root>
+            <Button size="sm" variant="outline" onClick={() => void packages.refetch()}>
+              {copy.retry}
             </Button>
           </Stack>
-        </form>
+        ) : packages.data.length === 0 ? (
+          <Text color="fg.muted">{copy.chargeNoPackages}</Text>
+        ) : (
+          <Stack gap="3">
+            {packages.data.map((pack) => {
+              const amountP = parsePAmount(pack.amountP);
+              const discount = discountPercent(amountP, pack.priceKrw);
+              const busy = charge.isPending && charge.variables === pack.id;
+              return (
+                <HStack
+                  key={pack.id}
+                  justify="space-between"
+                  borderWidth="1px"
+                  borderRadius="l2"
+                  p="3"
+                  gap="3"
+                  data-testid={`charge-package-${pack.id}`}
+                >
+                  <Stack gap="0.5">
+                    <HStack gap="2">
+                      <Text fontWeight="semibold" fontSize="lg">
+                        {formatP(amountP)}
+                      </Text>
+                      {discount > 0 && (
+                        <Badge colorPalette="yes" variant="subtle">
+                          {discount}% {copy.chargeDiscount}
+                        </Badge>
+                      )}
+                    </HStack>
+                    <Text fontSize="sm" color="fg.muted">
+                      {formatKrw(pack.priceKrw)}
+                    </Text>
+                  </Stack>
+                  <Button
+                    onClick={() => void buy(pack)}
+                    loading={busy}
+                    disabled={charge.isPending && !busy}
+                    data-testid={`charge-buy-${pack.id}`}
+                  >
+                    {copy.chargeSubmit}
+                  </Button>
+                </HStack>
+              );
+            })}
+          </Stack>
+        )}
       </Card.Body>
     </Card.Root>
   );

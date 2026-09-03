@@ -13,6 +13,8 @@ export type LinkedAccount = components['schemas']['LinkedAccount'];
 export type LedgerEntry = components['schemas']['LedgerEntry'];
 export type Payment = components['schemas']['Payment'];
 export type AdminUser = components['schemas']['AdminUser'];
+export type ChargePackage = components['schemas']['ChargePackage'];
+export type Coupon = components['schemas']['Coupon'];
 export type ErrorEnvelope = components['schemas']['ErrorEnvelope'];
 
 /** A non-2xx API response, carrying the `{ error: { code, message, details? } }` envelope. */

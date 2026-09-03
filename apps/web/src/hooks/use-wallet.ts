@@ -1,11 +1,13 @@
 'use client';
 
 import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api, unwrap, type LedgerEntry, type Payment } from '@/lib/api';
+import { useQuery } from '@tanstack/react-query';
+import { api, unwrap, type ChargePackage, type LedgerEntry, type Payment } from '@/lib/api';
 import { ME_QUERY_KEY } from './use-me';
 
 /** PLAN 11.5 key rules. Ledger and payments hang off their own roots. */
 export const LEDGER_QUERY_KEY = ['ledger'] as const;
+export const CHARGE_PACKAGES_QUERY_KEY = ['charge-packages'] as const;
 export const PAYMENTS_QUERY_KEY = ['payments'] as const;
 
 interface Page<T> {
@@ -46,6 +48,15 @@ export function usePayments() {
   });
 }
 
+/** The catalogue a user buys from (ADR-0026); public, so it loads for logged-out visitors too. */
+export function useChargePackages() {
+  return useQuery({
+    queryKey: CHARGE_PACKAGES_QUERY_KEY,
+    queryFn: async (): Promise<ChargePackage[]> =>
+      unwrap(await api.GET('/api/v1/charge-packages')).data,
+  });
+}
+
 /**
  * `POST /api/v1/payments/charge`. The response carries the new balance, so `['me']` and the
  * two lists are refreshed together — the nav chip and the ledger must never disagree.
@@ -53,14 +64,28 @@ export function usePayments() {
 export function useCharge() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (amountP: bigint) =>
-      unwrap(await api.POST('/api/v1/payments/charge', { body: { amountP: amountP.toString() } }))
-        .data,
+    mutationFn: async (packageId: string) =>
+      unwrap(await api.POST('/api/v1/payments/charge', { body: { packageId } })).data,
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY }),
         queryClient.invalidateQueries({ queryKey: LEDGER_QUERY_KEY }),
         queryClient.invalidateQueries({ queryKey: PAYMENTS_QUERY_KEY }),
+      ]);
+    },
+  });
+}
+
+/** `POST /api/v1/coupons/redeem`: an admin-issued grant, credited as a BONUS entry. */
+export function useRedeemCoupon() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (code: string) =>
+      unwrap(await api.POST('/api/v1/coupons/redeem', { body: { code } })).data,
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY }),
+        queryClient.invalidateQueries({ queryKey: LEDGER_QUERY_KEY }),
       ]);
     },
   });
