@@ -1,27 +1,12 @@
-import {
-  UnrecoverableError,
-  isNotConnectionError,
-  type Processor,
-  type Queue,
-  type Worker,
-} from 'bullmq';
+import { closeDb, createDb, type Db } from '@buddha/db';
+import { isNotConnectionError, type Queue, type Worker } from 'bullmq';
 import { Redis } from 'ioredis';
 import { getEnv } from './env.js';
+import { createProcessor } from './jobs/index.js';
 import { logger } from './logger.js';
-import { createQueues, createWorker, QUEUE_NAMES } from './queues.js';
+import { createQueues, createWorker, JOB_SCHEDULES, QUEUE_NAMES } from './queues.js';
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
-
-/**
- * M0: no job handlers exist yet. Anything that reaches a worker is unknown, and
- * unknown jobs must not be retried (UnrecoverableError bypasses the retry policy).
- */
-const processor: Processor = (job) =>
-  Promise.reject(
-    new UnrecoverableError(
-      `No handler registered for job "${job.name}" on queue "${job.queueName}"`,
-    ),
-  );
 
 function describeRedis(url: string): { host: string; db: string } {
   const parsed = new URL(url);
@@ -30,6 +15,7 @@ function describeRedis(url: string): { host: string; db: string } {
 
 interface Handles {
   redis: Redis;
+  db: Db;
   queues: Queue[];
   workers: Worker[];
 }
@@ -53,7 +39,13 @@ async function main(): Promise<void> {
   redis.on('reconnecting', () => logger.warn('redis reconnecting'));
   redis.on('end', () => logger.info('redis connection ended'));
 
-  const queues = Object.values(createQueues(redis));
+  // Jobs read and write Postgres (ledger audit today, settlement in M3), so the worker owns
+  // a small pool of its own: it never talks to apps/api (PLAN 9).
+  const db = createDb(env.DATABASE_URL, { max: 4, applicationName: 'buddha-worker' });
+  const processor = createProcessor({ db, logger });
+
+  const queueByName = createQueues(redis);
+  const queues = Object.values(queueByName);
   const workers = QUEUE_NAMES.map((name) => createWorker(name, processor, redis));
 
   // Every Queue/Worker re-emits errors of the shared connection. Connection
@@ -80,9 +72,23 @@ async function main(): Promise<void> {
   }
 
   await Promise.all([...queues, ...workers].map((instance) => instance.waitUntilReady()));
-  logger.info({ redis: describeRedis(env.REDIS_URL), queues: QUEUE_NAMES }, 'worker ready');
 
-  installShutdownHandlers({ redis, queues, workers });
+  for (const schedule of JOB_SCHEDULES) {
+    await queueByName[schedule.queue].upsertJobScheduler(schedule.id, schedule.repeat, {
+      name: schedule.name,
+    });
+  }
+
+  logger.info(
+    {
+      redis: describeRedis(env.REDIS_URL),
+      queues: QUEUE_NAMES,
+      schedules: JOB_SCHEDULES.map((schedule) => `${schedule.name}@${schedule.repeat.pattern}`),
+    },
+    'worker ready',
+  );
+
+  installShutdownHandlers({ redis, db, queues, workers });
 }
 
 function installShutdownHandlers(handles: Handles): void {
@@ -109,8 +115,9 @@ function installShutdownHandlers(handles: Handles): void {
       ['workers', () => Promise.all(handles.workers.map((worker) => worker.close()))],
       // 2. Release queue-side resources (the shared connection stays open).
       ['queues', () => Promise.all(handles.queues.map((queue) => queue.close()))],
-      // 3. Close the connection we own.
+      // 3. Close the connections we own.
       ['redis', () => handles.redis.quit()],
+      ['db', () => closeDb(handles.db)],
     ];
     let failed = false;
     for (const [name, run] of steps) {

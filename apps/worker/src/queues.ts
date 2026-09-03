@@ -39,6 +39,25 @@ export const DEFAULT_JOB_OPTIONS = {
   removeOnFail: { count: 5_000 },
 } as const satisfies JobsOptions;
 
+/**
+ * Repeatable jobs this worker installs at boot (PLAN 9). `upsertJobScheduler` is keyed by
+ * id, so restarting the worker updates the schedule instead of piling up duplicates.
+ */
+export const JOB_SCHEDULES = [
+  {
+    id: 'ledger-audit-daily',
+    queue: 'audit',
+    name: JOB_NAMES.ledgerAudit,
+    // 04:00 KST every day; BullMQ resolves the pattern in this zone, DST-free for Seoul.
+    repeat: { pattern: '0 4 * * *', tz: 'Asia/Seoul' },
+  },
+] as const satisfies readonly {
+  id: string;
+  queue: QueueName;
+  name: JobName;
+  repeat: { pattern: string; tz: string };
+}[];
+
 export function createQueue(name: QueueName, connection: ConnectionOptions): Queue {
   return new Queue(name, { connection, defaultJobOptions: DEFAULT_JOB_OPTIONS });
 }
