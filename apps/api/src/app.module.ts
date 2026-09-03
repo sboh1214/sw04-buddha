@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { AdminModule } from './admin/admin.module.js';
 import { AuthModule } from './auth/auth.module.js';
 import { CommonModule } from './common/common.module.js';
 import { envFilePaths, envSchema } from './config/env.js';
@@ -7,6 +8,7 @@ import { HealthController } from './health/health.controller.js';
 import { DbModule } from './infra/db/db.module.js';
 import { RedisModule } from './infra/redis/redis.module.js';
 import { MeModule } from './me/me.module.js';
+import { WalletModule } from './wallet/wallet.module.js';
 
 @Module({
   imports: [
@@ -23,6 +25,8 @@ import { MeModule } from './me/me.module.js';
     RedisModule,
     AuthModule,
     MeModule,
+    WalletModule,
+    AdminModule,
   ],
   controllers: [HealthController],
 })
