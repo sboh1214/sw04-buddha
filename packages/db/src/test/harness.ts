@@ -52,7 +52,17 @@ export async function migrateTestDb(): Promise<void> {
     connectionString: urls.migrateUrl,
     application_name: 'buddha-test-lock',
   });
-  await lock.connect();
+  try {
+    await lock.connect();
+  } catch (error) {
+    throw new Error(
+      '[test-db] cannot reach the test database (' +
+        String(error) +
+        '). Start it with "docker compose --profile test up -d postgres-test redis-test" ' +
+        'or unset TEST_DATABASE_URL to skip the integration tests.',
+      { cause: error },
+    );
+  }
   try {
     await lock.query('SELECT pg_advisory_lock(hashtext($1))', [MIGRATE_LOCK_KEY]);
     await runMigrations(urls.migrateUrl);

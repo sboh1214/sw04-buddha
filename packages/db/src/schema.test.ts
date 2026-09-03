@@ -103,6 +103,12 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     await expect(
       t.db.update(markets).set({ lastPrice: 100 }).where(eq(markets.id, market.id)),
     ).rejects.toSatisfy((e) => sqlState(e) === '23514');
+    await expect(
+      t.db.update(markets).set({ initialProbBp: 10_000 }).where(eq(markets.id, market.id)),
+    ).rejects.toSatisfy((e) => sqlState(e) === '23514');
+  });
+
+  it('createMarket factory rejects initialProbBp outside 1..9999 before writing', async () => {
     await expect(createMarket(t.db, { initialProbBp: 10_000 })).rejects.toThrow(RangeError);
   });
 
