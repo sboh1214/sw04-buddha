@@ -1,6 +1,57 @@
 {
   "openapi": "3.0.0",
   "paths": {
+    "/api/v1/auth/register": {
+      "post": {
+        "operationId": "register",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/RegisterResult"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Start an email sign-up: mails the verification link",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
     "/api/v1/me": {
       "get": {
         "operationId": "getMe",
@@ -130,6 +181,72 @@
           "me"
         ]
       }
+    },
+    "/api/v1/me/password": {
+      "post": {
+        "operationId": "setMyPassword",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetPasswordBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/OkResult"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "buddha.session_token": []
+          }
+        ],
+        "summary": "Set the first password (after verification, or for a social-only account)",
+        "tags": [
+          "me"
+        ]
+      }
     }
   },
   "info": {
@@ -149,6 +266,79 @@
       }
     },
     "schemas": {
+      "RegisterBody": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
+          }
+        },
+        "required": [
+          "email"
+        ]
+      },
+      "RegisterResult": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "sent"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "ErrorEnvelope": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "$ref": "#/components/schemas/ErrorCode"
+              },
+              "message": {
+                "type": "string"
+              },
+              "details": {}
+            },
+            "required": [
+              "code",
+              "message"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "additionalProperties": false
+      },
+      "ErrorCode": {
+        "type": "string",
+        "enum": [
+          "UNAUTHENTICATED",
+          "FORBIDDEN",
+          "NOT_FOUND",
+          "VALIDATION_ERROR",
+          "MARKET_NOT_OPEN",
+          "MARKET_CLOSED",
+          "INSUFFICIENT_BALANCE",
+          "INSUFFICIENT_POSITION",
+          "PRICE_MOVED",
+          "DUPLICATE_REQUEST",
+          "RATE_LIMITED",
+          "DISPUTE_WINDOW_CLOSED",
+          "RULES_REQUIRED",
+          "INTERNAL"
+        ]
+      },
       "Me": {
         "type": "object",
         "properties": {
@@ -262,50 +452,36 @@
         ],
         "additionalProperties": false
       },
-      "ErrorEnvelope": {
+      "SetPasswordBody": {
         "type": "object",
         "properties": {
-          "error": {
-            "type": "object",
-            "properties": {
-              "code": {
-                "$ref": "#/components/schemas/ErrorCode"
-              },
-              "message": {
-                "type": "string"
-              },
-              "details": {}
-            },
-            "required": [
-              "code",
-              "message"
-            ],
-            "additionalProperties": false
+          "newPassword": {
+            "$ref": "#/components/schemas/Password"
           }
         },
         "required": [
-          "error"
+          "newPassword"
+        ]
+      },
+      "Password": {
+        "type": "string",
+        "minLength": 8,
+        "maxLength": 128
+      },
+      "OkResult": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          }
+        },
+        "required": [
+          "ok"
         ],
         "additionalProperties": false
-      },
-      "ErrorCode": {
-        "type": "string",
-        "enum": [
-          "UNAUTHENTICATED",
-          "FORBIDDEN",
-          "NOT_FOUND",
-          "VALIDATION_ERROR",
-          "MARKET_NOT_OPEN",
-          "MARKET_CLOSED",
-          "INSUFFICIENT_BALANCE",
-          "INSUFFICIENT_POSITION",
-          "PRICE_MOVED",
-          "DUPLICATE_REQUEST",
-          "RATE_LIMITED",
-          "DISPUTE_WINDOW_CLOSED",
-          "RULES_REQUIRED",
-          "INTERNAL"
-        ]
       },
       "UpdateMeBody": {
         "type": "object",

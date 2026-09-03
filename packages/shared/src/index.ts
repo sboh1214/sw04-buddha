@@ -1,4 +1,5 @@
 export * from './api/envelope.js';
+export * from './auth.js';
 export * from './api/errors.js';
 export * from './api/p-amount.js';
 export * from './constants.js';

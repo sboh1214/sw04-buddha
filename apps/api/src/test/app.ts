@@ -74,6 +74,7 @@ export function tokenFromLink(link: string): string {
 export interface TestUser {
   id: string;
   email: string;
+  password: string;
   /** Value for the `Cookie` request header of an authenticated request. */
   cookie: string;
 }
@@ -81,20 +82,29 @@ export interface TestUser {
 let counter = 0;
 
 /**
- * Signs up through better-auth's server API (no HTTP), follows the verification link from
- * the in-memory mailer (verification is mandatory, PLAN 17 Q1) and returns the session
- * cookie the auto sign-in set, exactly as a browser would send it back. The "user" trigger
- * creates profile + balance.
+ * The whole sign-up of ADR-0024, as a browser would run it: register the address (no
+ * password), follow the verification link from the in-memory mailer (which verifies and
+ * signs the user in), then set the first password. The "user" trigger creates profile and
+ * balance on registration.
  */
 export async function signUpTestUser(
-  t: Pick<TestApp, 'auth' | 'mailer'>,
+  t: Pick<TestApp, 'app' | 'auth' | 'mailer'>,
   overrides: { email?: string; password?: string } = {},
 ): Promise<TestUser> {
   counter += 1;
   const email = overrides.email ?? `user${String(counter)}-${String(Date.now())}@test.local`;
-  const { user } = await t.auth.api.signUpEmail({
-    body: { email, password: overrides.password ?? 'password-1234', name: 'tester' },
+  const password = overrides.password ?? 'password-1234';
+
+  const registered = await t.app.inject({
+    method: 'POST',
+    url: '/api/v1/auth/register',
+    headers: { 'content-type': 'application/json' },
+    payload: { email },
   });
+  if (registered.statusCode !== 200) {
+    throw new Error(`register failed: ${String(registered.statusCode)} ${registered.body}`);
+  }
+
   const token = tokenFromLink(verificationLinkFor(t.mailer, email));
   const { headers } = await t.auth.api.verifyEmail({ query: { token }, returnHeaders: true });
   const cookie = headers
@@ -102,5 +112,13 @@ export async function signUpTestUser(
     .map((entry) => entry.split(';')[0]!)
     .join('; ');
   if (!cookie.includes('session_token=')) throw new Error('verify-email did not sign in');
-  return { id: user.id, email, cookie };
+  const session = await t.auth.api.getSession({ headers: new Headers({ cookie }) });
+  if (!session) throw new Error('verify-email did not sign in');
+  const id = session.user.id;
+
+  await t.auth.api.setPassword({
+    body: { newPassword: password },
+    headers: new Headers({ cookie }),
+  });
+  return { id, email, password, cookie };
 }

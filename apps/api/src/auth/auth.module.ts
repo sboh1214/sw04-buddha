@@ -11,6 +11,9 @@ import { MAILER } from '../mail/mail.provider.js';
 import { type Mailer } from '../mail/mailer.js';
 import { AdminGuard } from './admin.guard.js';
 import { AUTH, type Auth, createAuth } from './auth.js';
+import { PasswordService } from './password.service.js';
+import { RegisterController } from './register.controller.js';
+import { RegistrationService } from './registration.service.js';
 import { SessionGuard } from './session.guard.js';
 
 /** Keys of Env that better-auth reads; mirrors the schema in config/env.ts. */
@@ -88,7 +91,8 @@ export class AuthInstanceModule {}
       disableGlobalAuthGuard: true,
     }),
   ],
-  providers: [SessionGuard, AdminGuard],
-  exports: [AuthInstanceModule, SessionGuard, AdminGuard],
+  controllers: [RegisterController],
+  providers: [SessionGuard, AdminGuard, RegistrationService, PasswordService],
+  exports: [AuthInstanceModule, SessionGuard, AdminGuard, PasswordService],
 })
 export class AuthModule {}

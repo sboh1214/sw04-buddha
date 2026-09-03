@@ -2,8 +2,6 @@ import { Logger } from '@nestjs/common';
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { APIError, createAuthMiddleware } from 'better-auth/api';
-import { hashPassword } from 'better-auth/crypto';
-import { and, eq } from 'drizzle-orm';
 import { type Db, schema } from '@buddha/db';
 import { NO_EMAIL_DOMAIN, isNoEmailAddress } from '@buddha/shared';
 import { type Env, enabledOAuthProviders, webOrigins } from '../config/env.js';
@@ -21,10 +19,13 @@ export const AUTH = Symbol('AUTH');
 export const AUTH_BASE_PATH = '/api/auth';
 
 /** `account.providerId` of the email+password login method. */
-const CREDENTIAL_PROVIDER_ID = 'credential';
+export const CREDENTIAL_PROVIDER_ID = 'credential';
+
+/** Page that asks a freshly verified user for their first password (ADR-0024). */
+export const SET_PASSWORD_PATH = '/set-password';
 
 /** Where a verification link lands when the client did not ask for a specific page. */
-const DEFAULT_VERIFY_CALLBACK = '/login';
+const DEFAULT_VERIFY_CALLBACK = SET_PASSWORD_PATH;
 
 /** Endpoints that must never accept one of our synthetic no-email addresses. */
 const EMAIL_INPUT_PATHS = new Set([
@@ -55,9 +56,8 @@ export interface CreateAuthOptions {
   logger?: Pick<Logger, 'warn' | 'error'>;
 }
 
-/** `{ email, password, callbackURL }` of a sign-up request body, when it can be read. */
+/** The part of a sign-up request body the hooks read, when the body is still readable. */
 interface SignUpBody {
-  password?: unknown;
   callbackURL?: unknown;
 }
 
@@ -121,36 +121,14 @@ export function createAuth({ env, db, mailer, logger = new Logger('Auth') }: Cre
         await send(user.email, passwordResetEmail({ url }));
       },
       /**
-       * Signing up for an address that already has an UNVERIFIED account rebinds the
-       * password to this attempt and mails a fresh link. Without it, whoever registered
-       * the address first keeps the password, so an attacker could pre-register a victim's
-       * address and own the account the moment the victim (who alone receives the mail)
-       * verifies it — the "pre-hijacking" attack. Rebinding makes the mailbox owner's own
-       * sign-up win; a plain duplicate sign-up by the same person just resets their
-       * password to what they typed. Verified accounts are never touched.
+       * Registering an address that already has an UNVERIFIED account just mails the link
+       * again: there is no password to overwrite (ADR-0024 creates the account without one)
+       * and the answer must not reveal that the address exists. Verified accounts are left
+       * alone; their owner uses the login screen.
        */
       onExistingUserSignUp: async ({ user }, request) => {
         if (user.emailVerified) return;
         const body = await readJsonBody(request);
-        const password = typeof body?.password === 'string' ? body.password : undefined;
-        if (password) {
-          const hashed = await hashPassword(password);
-          const updated = await db
-            .update(schema.account)
-            .set({ password: hashed, updatedAt: new Date() })
-            .where(
-              and(
-                eq(schema.account.userId, user.id),
-                eq(schema.account.providerId, CREDENTIAL_PROVIDER_ID),
-              ),
-            )
-            .returning({ id: schema.account.id });
-          if (updated.length === 0) {
-            logger.warn(`sign-up for existing unverified ${user.email}: no credential account`);
-          }
-        } else {
-          logger.warn(`sign-up for existing unverified ${user.email}: password unreadable`);
-        }
         const callbackURL =
           typeof body?.callbackURL === 'string' ? body.callbackURL : DEFAULT_VERIFY_CALLBACK;
         await resendVerification(user.email, callbackURL);
@@ -175,16 +153,13 @@ export function createAuth({ env, db, mailer, logger = new Logger('Auth') }: Cre
             kakao: {
               ...providers.kakao,
               // The built-in provider maps kakao_account.email, which is undefined when
-              // the user withheld consent (email_needs_agreement). mapProfileToUser is
+              // the user withheld consent (email_needs_agreement); mapProfileToUser is
               // spread last by the provider, so these fields win.
+              // PLAN 17 Q6 decision (2026-09-03): an address the provider hands us counts
+              // as verified even when Kakao's own is_email_verified is false.
               mapProfileToUser: (profile) => ({
                 email: profile.kakao_account?.email ?? noEmailFallback('kakao', String(profile.id)),
-                // Same conjunction as the built-in provider: Kakao reports is_email_valid=false
-                // when the address has since been taken over by another Kakao account.
-                emailVerified:
-                  !!profile.kakao_account?.email &&
-                  !!profile.kakao_account.is_email_valid &&
-                  !!profile.kakao_account.is_email_verified,
+                emailVerified: !!profile.kakao_account?.email,
               }),
             },
           }
@@ -193,10 +168,11 @@ export function createAuth({ env, db, mailer, logger = new Logger('Auth') }: Cre
         ? {
             naver: {
               ...providers.naver,
-              // The built-in provider always reports emailVerified=false for Naver.
+              // The built-in provider always reports emailVerified=false for Naver; the
+              // owner's decision (PLAN 17 Q6) is to trust the provider's address instead.
               mapProfileToUser: (profile) => ({
                 email: profile.response.email ?? noEmailFallback('naver', profile.response.id),
-                emailVerified: false,
+                emailVerified: !!profile.response.email,
               }),
             },
           }
