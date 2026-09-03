@@ -1,8 +1,9 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useSession } from '@/lib/auth-client';
+import { copy } from '@/copy';
 import { api, unwrap, type Me } from '@/lib/api';
+import { authClient, authErrorMessage, useSession } from '@/lib/auth-client';
 
 /** Query key rule from PLAN 11.5. */
 export const ME_QUERY_KEY = ['me'] as const;
@@ -53,5 +54,34 @@ export function useUpdateNickname() {
     mutationFn: async (nickname: string) =>
       unwrap(await api.PATCH('/api/v1/me', { body: { nickname } })).data,
     onSuccess: (me) => queryClient.setQueryData(ME_QUERY_KEY, me),
+  });
+}
+
+/** Query key rule from PLAN 11.5. */
+export const ACCOUNTS_QUERY_KEY = ['me', 'accounts'] as const;
+
+/**
+ * better-auth `listAccounts`: the source of truth for `account` rows (incl. the row id
+ * `unlinkAccount` takes) and therefore for "does this user have a password yet".
+ *
+ * Lives here rather than in either settings section because both of them observe this one
+ * key: whichever renders last owns the fetch, so a queryFn written twice would make the
+ * error message depend on render order. The message is always Korean copy — better-fetch
+ * REJECTS on a transport failure instead of returning `{ error }`, so that path needs its
+ * own catch or the browser's English "Failed to fetch" would reach the screen.
+ */
+export function useLinkedAccounts() {
+  return useQuery({
+    queryKey: ACCOUNTS_QUERY_KEY,
+    queryFn: async () => {
+      let result;
+      try {
+        result = await authClient.listAccounts();
+      } catch {
+        throw new Error(copy.errNetwork);
+      }
+      if (result.error) throw new Error(authErrorMessage(result.error));
+      return result.data;
+    },
   });
 }

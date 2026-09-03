@@ -24,6 +24,25 @@ const optionalString = z
     return trimmed ? trimmed : undefined;
   });
 
+/**
+ * RFC 5322 mailbox: a bare `addr@host`, or the `<addr@host>` of `Name <addr@host>`. Only the
+ * address is checked — the display name may be quoted or Korean, and nodemailer MIME-encodes
+ * it — and it is checked with zod's own email format rather than a hand-rolled one.
+ *
+ * Worth validating at bootstrap because nodemailer degrades silently: a value with no
+ * parseable address (`SMTP_FROM=foo`) yields a message with no usable From header, which a
+ * real provider refuses, and better-auth swallows the resulting send failure on sign-up
+ * (ADR-0023). Without this the API starts happily with a permanently dead mail pipeline.
+ */
+const mailbox = z.string().refine(
+  (value) => {
+    const trimmed = value.trim();
+    const address = /<([^<>]*)>$/.exec(trimmed)?.[1] ?? trimmed;
+    return z.email().safeParse(address.trim()).success;
+  },
+  { error: 'must be an email address or `Name <address>`' },
+);
+
 export const OAUTH_PROVIDERS = ['google', 'kakao', 'naver'] as const;
 export type OAuthProvider = (typeof OAUTH_PROVIDERS)[number];
 
@@ -81,7 +100,7 @@ export const envSchema = z
     SMTP_HOST: z.string().min(1).default('localhost'),
     SMTP_PORT: z.coerce.number().int().min(1).max(65535).default(1025),
     /** From header: a bare address or `Name <address>` (SES: a verified identity). */
-    SMTP_FROM: z.string().min(3).default('noreply@buddha.local'),
+    SMTP_FROM: mailbox.default('noreply@buddha.local'),
     /** SMTP credentials (SES "SMTP credentials"); both or neither. */
     SMTP_USER: optionalString,
     SMTP_PASS: optionalString,

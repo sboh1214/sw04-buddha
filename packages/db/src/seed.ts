@@ -65,8 +65,8 @@ async function pickNickname(tx: Pick<Db, 'select'>, ownUserId: string): Promise<
  * the profile (auto nickname) and the zero balance; the seed then renames the profile to
  * 관리자 and promotes it.
  *
- * Re-running never resets an existing password; it only guarantees that the user exists,
- * has a credential account and has role 'admin'.
+ * Re-running never resets an existing password; it only guarantees that the user exists, is
+ * verified, has a credential account and has role 'admin'.
  */
 async function seedAdmin(db: Db, input: AdminInput): Promise<void> {
   // better-auth lower-cases the email on sign-up and sign-in; match it here.
@@ -81,7 +81,10 @@ async function seedAdmin(db: Db, input: AdminInput): Promise<void> {
     const now = new Date();
     let created = false;
 
-    let [existing] = await tx.select({ id: user.id }).from(user).where(eq(user.email, email));
+    let [existing] = await tx
+      .select({ id: user.id, emailVerified: user.emailVerified })
+      .from(user)
+      .where(eq(user.email, email));
     if (!existing) {
       const id = randomUUID();
       await tx.insert(user).values({
@@ -92,10 +95,18 @@ async function seedAdmin(db: Db, input: AdminInput): Promise<void> {
         createdAt: now,
         updatedAt: now,
       });
-      existing = { id };
+      existing = { id, emailVerified: true };
       created = true;
     }
     const userId = existing.id;
+    // The address may already exist unverified: ADR-0024 lets anyone register it (a user row
+    // with no password) before a deploy runs the seed. Adding the credential below would then
+    // produce an admin that `requireEmailVerification` answers with 403 EMAIL_NOT_VERIFIED, so
+    // verify it here as the fresh branch does — the operator owns SEED_ADMIN_EMAIL.
+    const verifiedNow = !created && !existing.emailVerified;
+    if (verifiedNow) {
+      await tx.update(user).set({ emailVerified: true, updatedAt: now }).where(eq(user.id, userId));
+    }
 
     const [credential] = await tx
       .select({ id: account.id })
@@ -141,7 +152,7 @@ async function seedAdmin(db: Db, input: AdminInput): Promise<void> {
 
     console.log(
       `[db:seed] admin ${email}: ${created ? 'created' : 'already exists'}` +
-        ` (role=admin, credential ${credential ? 'kept' : 'created'})`,
+        ` (role=admin, credential ${credential ? 'kept' : 'created'}${verifiedNow ? ', verified' : ''})`,
     );
   });
 }

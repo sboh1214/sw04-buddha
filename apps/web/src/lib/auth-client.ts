@@ -141,13 +141,17 @@ function hasControlCharOrBackslash(path: string): boolean {
 /**
  * Only same-origin paths are accepted as a post-auth destination, so a crafted
  * `?next=https://evil` can never turn the login page into an open redirect.
+ * - A repeated parameter (`?next=/a&next=/b`) reaches a page as an array. Nothing here ever
+ *   builds one, so the redirect gate REFUSES anything that is not a string rather than
+ *   picking a winner — deliberately unlike `errorCodes()` above, which flattens because a
+ *   notice is cosmetic while a redirect target is a security decision.
  * - `//host` is protocol-relative and `/\host` is treated the same by browsers.
  * - ASCII control characters are rejected anywhere: the WHATWG URL parser strips tab and
  *   newline before parsing, so `/\t/evil.com` would resolve to `http://evil.com/`.
  * - Finally the path must resolve on a fixed dummy origin, which is the authoritative check.
  */
-export function safeNextPath(next: string | null | undefined, fallback = '/'): string {
-  if (!next || !next.startsWith('/') || next.startsWith('//')) return fallback;
+export function safeNextPath(next: string | string[] | null | undefined, fallback = '/'): string {
+  if (typeof next !== 'string' || !next.startsWith('/') || next.startsWith('//')) return fallback;
   if (hasControlCharOrBackslash(next)) return fallback;
   try {
     if (new URL(next, 'https://x.invalid').origin !== 'https://x.invalid') return fallback;

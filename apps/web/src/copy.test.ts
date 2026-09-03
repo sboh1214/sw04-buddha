@@ -55,6 +55,13 @@ describe('safeNextPath', () => {
     expect(safeNextPath('/\r\n//evil.com')).toBe('/');
     expect(safeNextPath('/settings\\..')).toBe('/');
   });
+
+  it('rejects a repeated ?next= (Next hands the page an array, not a string)', () => {
+    // `/login?next=/a&next=/b` used to reach next.startsWith() and answer 500.
+    expect(safeNextPath(['/a', '/b'])).toBe('/');
+    expect(safeNextPath(['/a'], '/x')).toBe('/x');
+    expect(safeNextPath([], '/x')).toBe('/x');
+  });
 });
 
 describe('authErrorMessage', () => {

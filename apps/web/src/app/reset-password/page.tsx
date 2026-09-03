@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { AuthCard } from '@/components/auth/auth-card';
 import { copy } from '@/copy';
+import { verifyLinkErrorCode } from '@/lib/auth-client';
 import { RequestResetForm, SetNewPasswordForm } from './reset-password-form';
 
 export const metadata: Metadata = { title: `${copy.resetTitle} | ${copy.appName}` };
@@ -14,19 +15,23 @@ export const metadata: Metadata = { title: `${copy.resetTitle} | ${copy.appName}
 export default async function ResetPasswordPage({
   searchParams,
 }: {
-  searchParams: Promise<{ token?: string; error?: string }>;
+  // A repeated parameter arrives as an array: `token` would reach better-auth as one and be
+  // refused by its zod body schema (generic error instead of "link expired"), and a strict
+  // `error === 'INVALID_TOKEN'` would silently drop the banner.
+  searchParams: Promise<{ token?: string | string[]; error?: string | string[] }>;
 }) {
   const { token, error } = await searchParams;
-  if (token) {
+  const resetToken = Array.isArray(token) ? token[0] : token;
+  if (resetToken) {
     return (
       <AuthCard title={copy.resetNewTitle}>
-        <SetNewPasswordForm token={token} />
+        <SetNewPasswordForm token={resetToken} />
       </AuthCard>
     );
   }
   return (
     <AuthCard title={copy.resetTitle} subtitle={copy.resetSubtitle}>
-      <RequestResetForm tokenInvalid={error === 'INVALID_TOKEN'} />
+      <RequestResetForm tokenInvalid={verifyLinkErrorCode(error) === 'invalid_token'} />
     </AuthCard>
   );
 }

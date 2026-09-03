@@ -12,7 +12,8 @@ export const metadata: Metadata = { title: `${copy.loginTitle} | ${copy.appName}
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ next?: string; error?: string | string[] }>;
+  // Every searchParams value is an array when the parameter repeats; the types must say so.
+  searchParams: Promise<{ next?: string | string[]; error?: string | string[] }>;
 }) {
   const { next, error } = await searchParams;
   const nextPath = safeNextPath(next);

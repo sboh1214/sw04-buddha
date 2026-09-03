@@ -1,10 +1,10 @@
 'use client';
 
-import { Badge, Button, HStack, Skeleton, Stack, Text } from '@chakra-ui/react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Alert, Badge, Button, HStack, Skeleton, Stack, Text } from '@chakra-ui/react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
-import { ME_QUERY_KEY } from '@/hooks/use-me';
+import { ACCOUNTS_QUERY_KEY, ME_QUERY_KEY, useLinkedAccounts } from '@/hooks/use-me';
 import {
   CREDENTIAL_PROVIDER_ID,
   SOCIAL_PROVIDERS,
@@ -13,8 +13,6 @@ import {
   type SocialProvider,
 } from '@/lib/auth-client';
 import { SettingsSection } from './section';
-
-export const ACCOUNTS_QUERY_KEY = ['me', 'accounts'] as const;
 
 const PROVIDER_LABEL: Record<string, string> = {
   [CREDENTIAL_PROVIDER_ID]: copy.providerCredential,
@@ -33,14 +31,7 @@ const PROVIDER_LABEL: Record<string, string> = {
  */
 export function LinkedAccounts() {
   const queryClient = useQueryClient();
-  const accounts = useQuery({
-    queryKey: ACCOUNTS_QUERY_KEY,
-    queryFn: async () => {
-      const { data, error } = await authClient.listAccounts();
-      if (error) throw new Error(authErrorMessage(error));
-      return data;
-    },
-  });
+  const accounts = useLinkedAccounts();
 
   const invalidate = () =>
     Promise.all([
@@ -90,6 +81,25 @@ export function LinkedAccounts() {
     >
       {accounts.isPending ? (
         <Skeleton height="32" />
+      ) : accounts.isError ? (
+        // `data ?? []` would draw every method as 미연결, which is the same false claim the
+        // password section makes when it offers "설정" to an account that has a password.
+        <Stack gap="3" align="flex-start">
+          <Alert.Root status="error" role="alert" data-testid="accounts-error">
+            <Alert.Indicator />
+            <Alert.Content>
+              <Alert.Description>{accounts.error.message}</Alert.Description>
+            </Alert.Content>
+          </Alert.Root>
+          <Button
+            size="sm"
+            variant="outline"
+            loading={accounts.isFetching}
+            onClick={() => void accounts.refetch()}
+          >
+            {copy.retry}
+          </Button>
+        </Stack>
       ) : (
         <Stack gap="3" divideY="1px">
           {rows.map(({ providerId, linked }) => (

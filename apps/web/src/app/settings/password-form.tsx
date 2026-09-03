@@ -1,14 +1,13 @@
 'use client';
 
-import { Button, Field, Skeleton, Stack, Text } from '@chakra-ui/react';
+import { Alert, Button, Field, Skeleton, Stack, Text } from '@chakra-ui/react';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useQuery } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import * as z from 'zod';
 import { PasswordInput } from '@/components/ui/password-input';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
-import { useSetPassword } from '@/hooks/use-me';
+import { useLinkedAccounts, useSetPassword } from '@/hooks/use-me';
 import {
   AUTH_ERROR,
   CREDENTIAL_PROVIDER_ID,
@@ -16,7 +15,6 @@ import {
   authErrorMessage,
 } from '@/lib/auth-client';
 import { newPasswordSchema, passwordSchema, type NewPasswordValues } from '@/lib/password';
-import { ACCOUNTS_QUERY_KEY } from './linked-accounts';
 import { SettingsSection } from './section';
 
 const changeSchema = z
@@ -37,29 +35,66 @@ type ChangeValues = z.infer<typeof changeSchema>;
  * the sign-up (ADR-0024) unfinished.
  */
 export function PasswordForm() {
-  const accounts = useQuery({
-    queryKey: ACCOUNTS_QUERY_KEY,
-    queryFn: async () => {
-      const { data, error } = await authClient.listAccounts();
-      if (error) throw new Error(authErrorMessage(error));
-      return data;
-    },
-  });
+  const accounts = useLinkedAccounts();
   const hasCredential = accounts.data?.some((a) => a.providerId === CREDENTIAL_PROVIDER_ID);
 
   return (
     <SettingsSection
-      title={hasCredential ? copy.settingsPassword : copy.setPasswordTitle}
+      // On error `hasCredential` is undefined, and neither "변경" nor "설정" is known to be
+      // true, so the heading falls back to the neutral noun instead of picking a side.
+      title={
+        accounts.isError
+          ? copy.password
+          : hasCredential
+            ? copy.settingsPassword
+            : copy.setPasswordTitle
+      }
       testId="settings-password"
     >
       {accounts.isPending ? (
         <Skeleton height="10" />
+      ) : accounts.isError ? (
+        <AccountsUnavailable
+          message={accounts.error.message}
+          retrying={accounts.isFetching}
+          onRetry={() => void accounts.refetch()}
+        />
       ) : hasCredential ? (
         <ChangePasswordFields />
       ) : (
         <SetPasswordFields />
       )}
     </SettingsSection>
+  );
+}
+
+/**
+ * `listAccounts` failed (session gone, auth endpoint down). That list is the only thing that
+ * says whether this account already has a password, so neither form may be shown: offering
+ * "설정" to someone who has one misstates their account and dies on submit with a generic
+ * error. `message` is already Korean — the query normalises both failure shapes.
+ */
+function AccountsUnavailable({
+  message,
+  retrying,
+  onRetry,
+}: {
+  message: string;
+  retrying: boolean;
+  onRetry: () => void;
+}) {
+  return (
+    <Stack gap="3" align="flex-start">
+      <Alert.Root status="error" role="alert" data-testid="password-accounts-error">
+        <Alert.Indicator />
+        <Alert.Content>
+          <Alert.Description>{message}</Alert.Description>
+        </Alert.Content>
+      </Alert.Root>
+      <Button size="sm" variant="outline" loading={retrying} onClick={onRetry}>
+        {copy.retry}
+      </Button>
+    </Stack>
   );
 }
 
