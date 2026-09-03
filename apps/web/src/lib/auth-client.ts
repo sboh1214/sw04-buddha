@@ -1,6 +1,46 @@
 import { createAuthClient } from 'better-auth/react';
 import { copy } from '@/copy';
 
+/** Synthetic `error.code` for a request that never completed. Not a better-auth code. */
+const NETWORK_ERROR_CODE = 'NETWORK_ERROR';
+
+/**
+ * better-fetch never wraps its own `fetch` call, so a request that fails at the transport
+ * (offline, DNS, connection reset, the origin gone) REJECTS instead of answering `{ error }`.
+ * Every call site here is written as `const { error } = await ...`, and the react-hook-form
+ * submit handlers are invoked as `void onSubmit(e)`, so such a rejection is swallowed: the
+ * user gets a silent no-op, a spinner that never stops, or — through react-query's `onError`,
+ * which passes the raw throw — the browser's English "Failed to fetch" in a Korean toast.
+ *
+ * Answering with a normal error response instead puts all of them back on their usual
+ * `if (error)` path. Two details matter:
+ * - the body is read here, inside the same try: better-fetch calls `response.text()` outside
+ *   this function, so a connection that dies mid-body would reject there instead;
+ * - an AbortError is re-thrown, because a cancelled request is not a network failure and
+ *   better-auth's session atom relies on it to tell the two apart.
+ */
+export async function fetchOrNetworkError(
+  input: string | URL | Request,
+  init?: RequestInit,
+): Promise<Response> {
+  try {
+    const response = await fetch(input, init);
+    // 204/304 must stay body-less; everything better-auth returns is small JSON otherwise.
+    if (response.status === 204 || response.status === 304) return response;
+    return new Response(await response.arrayBuffer(), {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error;
+    return new Response(JSON.stringify({ code: NETWORK_ERROR_CODE }), {
+      status: 503,
+      headers: { 'content-type': 'application/json' },
+    });
+  }
+}
+
 /**
  * better-auth browser client. The API is reached same-origin through the Next.js rewrite
  * (`/api/auth/*` -> NEXT_PUBLIC_API_URL, next.config.ts), so no `baseURL` is given:
@@ -10,6 +50,8 @@ import { copy } from '@/copy';
  */
 export const authClient = createAuthClient({
   basePath: '/api/auth',
+  // better-auth spreads its own fetch options first, so this override wins.
+  fetchOptions: { customFetchImpl: fetchOrNetworkError },
 });
 
 export const { useSession, signIn, signUp, signOut } = authClient;
@@ -25,6 +67,8 @@ export type SocialProvider = (typeof SOCIAL_PROVIDERS)[number];
  * into a fetch function, so `$ERROR_CODES.X.code` is never a string).
  */
 export const AUTH_ERROR = {
+  /** Not better-auth's: `fetchOrNetworkError` above puts it on a request that never completed. */
+  NETWORK: NETWORK_ERROR_CODE,
   INVALID_PASSWORD: 'INVALID_PASSWORD',
   INVALID_EMAIL: 'INVALID_EMAIL',
   INVALID_EMAIL_OR_PASSWORD: 'INVALID_EMAIL_OR_PASSWORD',
@@ -61,6 +105,8 @@ export function authErrorMessage(
 ): string {
   if (error?.status === 0) return copy.errNetwork;
   switch (error?.code) {
+    case AUTH_ERROR.NETWORK:
+      return copy.errNetwork;
     case AUTH_ERROR.INVALID_EMAIL_OR_PASSWORD:
       return copy.loginFailed;
     case AUTH_ERROR.INVALID_EMAIL:

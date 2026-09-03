@@ -165,6 +165,7 @@ export const copy = {
   // --- generic ---
   errUnknown: '문제가 발생했습니다. 잠시 후 다시 시도해 주세요.',
   errNetwork: '서버에 연결할 수 없습니다.',
+  errProfileLoad: '내 정보를 불러오지 못했습니다.',
   errUnauthenticated: '로그인이 필요합니다.',
   retry: '다시 시도',
 } as const;

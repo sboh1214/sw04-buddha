@@ -1,9 +1,11 @@
 import { formatP } from '@buddha/shared';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { copy } from './copy';
 import {
+  AUTH_ERROR,
   authErrorMessage,
   authNoticeFor,
+  fetchOrNetworkError,
   safeNextPath,
   verifyLinkErrorCode,
 } from './lib/auth-client';
@@ -108,6 +110,45 @@ describe('authNoticeFor', () => {
       copy.verifyLinkInvalid,
     );
     expect(authNoticeFor(undefined, copy.linkFailed)).toBeUndefined();
+  });
+});
+
+describe('fetchOrNetworkError', () => {
+  // Without this wrapper better-fetch rejects on a transport failure, and every call site
+  // (`const { error } = await ...` inside `void onSubmit(e)`) swallows it silently.
+  it('turns a transport rejection into a response the UI can localize', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'));
+    try {
+      const response = await fetchOrNetworkError('/api/auth/sign-in/email');
+      expect(response.status).toBe(503);
+      await expect(response.json()).resolves.toEqual({ code: AUTH_ERROR.NETWORK });
+      expect(authErrorMessage({ code: AUTH_ERROR.NETWORK, status: 503 })).toBe(copy.errNetwork);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('re-throws an abort, which is a cancellation and not a network failure', async () => {
+    const abort = new DOMException('This operation was aborted', 'AbortError');
+    const spy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(abort);
+    try {
+      await expect(fetchOrNetworkError('/api/auth/get-session')).rejects.toBe(abort);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('passes a real response through with its status and body intact', async () => {
+    const spy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response('{"code":"INVALID_EMAIL_OR_PASSWORD"}', { status: 401 }));
+    try {
+      const response = await fetchOrNetworkError('/api/auth/sign-in/email');
+      expect(response.status).toBe(401);
+      await expect(response.json()).resolves.toEqual({ code: 'INVALID_EMAIL_OR_PASSWORD' });
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 

@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import { schema, type Db } from '@buddha/db';
@@ -13,12 +13,17 @@ import { AUTH, type Auth, CREDENTIAL_PROVIDER_ID, SET_PASSWORD_PATH } from './au
  * (`POST /api/v1/me/password`), so the account is worthless to anyone who registers an
  * address they do not own — the account-pre-hijacking class of attack disappears.
  *
- * better-auth has no password-less sign-up, so the user is created through `signUpEmail`
- * with a throwaway secret and the credential row is deleted immediately afterwards. The
- * response never says whether the address was new (no enumeration).
+ * better-auth has no password-less sign-up, so the user is created through `signUpEmail` with
+ * a throwaway secret that never reaches the database: the `account.create.before` hook in
+ * auth.ts cancels the credential insert for `/sign-up/email`. The delete below is the
+ * backstop for the day that hook stops matching (it is keyed on a route string, and a
+ * better-auth upgrade could rename the path) — it should always be a no-op, so it says so
+ * when it is not. The response never says whether the address was new (no enumeration).
  */
 @Injectable()
 export class RegistrationService {
+  private readonly logger = new Logger(RegistrationService.name);
+
   constructor(
     @Inject(AUTH) private readonly auth: Auth,
     @Inject(DB) private readonly db: Db,
@@ -43,7 +48,7 @@ export class RegistrationService {
         callbackURL: SET_PASSWORD_PATH,
       },
     });
-    await this.db
+    const removed = await this.db
       .delete(schema.account)
       .where(
         and(
@@ -51,5 +56,11 @@ export class RegistrationService {
           eq(schema.account.providerId, CREDENTIAL_PROVIDER_ID),
         ),
       );
+    if (removed.rowCount) {
+      this.logger.error(
+        'the account.create.before hook did not cancel the sign-up credential; a crash between' +
+          ' signUpEmail and this delete would strand the account with an unknown password',
+      );
+    }
   }
 }

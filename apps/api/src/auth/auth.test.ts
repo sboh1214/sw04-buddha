@@ -112,6 +112,38 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
     expect(await credentialAccount(rows[0]!.id)).toBeUndefined();
   });
 
+  /**
+   * The credential insert is cancelled for `/sign-up/email` only. If that suppression ever
+   * widened, a user could no longer obtain a password at all — this pins the other side of
+   * it, while the existing 'POST /api/v1/me/password' test below pins /set-password.
+   */
+  it('suppressing the sign-up credential does not stop password reset creating one', async () => {
+    const address = 'it-auth-reset-creates@test.local';
+    await register({ email: address });
+    const created = await userRow(address);
+    expect(await credentialAccount(created!.id)).toBeUndefined();
+
+    t.mailer.messages.length = 0;
+    const requested = await t.app.inject({
+      method: 'POST',
+      url: '/api/auth/request-password-reset',
+      headers: browserHeaders,
+      payload: { email: address, redirectTo: '/reset-password' },
+    });
+    expect(requested.statusCode).toBe(200);
+    const link = /https?:\/\/\S+\/reset-password\/\S+/.exec(t.mailer.messages[0]!.text)![0];
+    const token = new URL(link).pathname.split('/').pop()!;
+
+    const done = await t.app.inject({
+      method: 'POST',
+      url: '/api/auth/reset-password',
+      headers: browserHeaders,
+      payload: { newPassword: password, token },
+    });
+    expect(done.statusCode).toBe(200);
+    expect((await credentialAccount(created!.id))?.password).toBeTypeOf('string');
+  });
+
   it('created profile (예측가_XXXX) and balance 0 in the same transaction (trigger)', async () => {
     const rows = await t.db.execute<{ nickname: string; available_p: string }>(
       sql`select p.nickname, b.available_p from profiles p join balances b using (user_id)

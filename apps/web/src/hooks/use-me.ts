@@ -66,9 +66,9 @@ export const ACCOUNTS_QUERY_KEY = ['me', 'accounts'] as const;
  *
  * Lives here rather than in either settings section because both of them observe this one
  * key: whichever renders last owns the fetch, so a queryFn written twice would make the
- * error message depend on render order. The message is always Korean copy — better-fetch
- * REJECTS on a transport failure instead of returning `{ error }`, so that path needs its
- * own catch or the browser's English "Failed to fetch" would reach the screen.
+ * error message depend on render order. The catch is belt-and-braces: `fetchOrNetworkError`
+ * already turns a transport failure into an ordinary `{ error }`, so nothing should reach
+ * it, but a throw from anywhere else must still not surface an English message.
  */
 export function useLinkedAccounts() {
   return useQuery({

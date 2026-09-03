@@ -233,6 +233,33 @@ export function createAuth({ env, db, mailer, logger = new Logger('Auth') }: Cre
       },
     },
 
+    databaseHooks: {
+      account: {
+        create: {
+          /**
+           * ADR-0024: sign-up must leave NO password behind. better-auth has no password-less
+           * sign-up, so RegistrationService calls `signUpEmail` with a throwaway secret;
+           * cancelling the credential insert means the row is never written at all, instead
+           * of being removed by a second statement that a crash or a dead connection can
+           * skip. A leftover could not be repaired on retry — better-auth answers an existing
+           * address with a synthetic user id, so a delete keyed on it matches nothing — and
+           * the account would be stuck with a password nobody knows, failing /set-password
+           * with PASSWORD_ALREADY_SET.
+           *
+           * Returning `false` cancels the create (better-auth `createWithHooks`), and
+           * `signUpEmail` ignores what `linkAccount` returns. Scoped to `/sign-up/email`, so
+           * /set-password, password reset and social linking still create their accounts.
+           */
+          before: (account, context) =>
+            Promise.resolve(
+              context?.path === '/sign-up/email' && account.providerId === CREDENTIAL_PROVIDER_ID
+                ? false
+                : undefined,
+            ),
+        },
+      },
+    },
+
     /**
      * The synthetic no-email domain belongs to the server, not to users: nobody may sign up
      * with one, change their address to one, or trigger mail for one. Otherwise a stranger

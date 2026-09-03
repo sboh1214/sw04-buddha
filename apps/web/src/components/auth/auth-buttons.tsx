@@ -38,9 +38,10 @@ export function AuthButtons() {
   }
 
   async function handleSignOut() {
-    // better-auth reports an HTTP failure as `{ error }` and rejects only when the request
-    // never lands; either way the session signal that clears `useSession` fires on success
-    // only (client/proxy.mjs), so navigating home regardless would just look like a logout.
+    // better-auth reports every failure as `{ error }` now that `fetchOrNetworkError` covers
+    // the transport too; the catch stays as belt-and-braces. The session signal that clears
+    // `useSession` fires on success only (client/proxy.mjs), so navigating home regardless
+    // would just look like a logout.
     let failed: boolean;
     try {
       failed = (await signOut()).error != null;
