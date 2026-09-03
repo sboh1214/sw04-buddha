@@ -35,7 +35,10 @@
         "WEB_ORIGIN",
         "SMTP_HOST",
         "SMTP_PORT",
-        "SMTP_FROM"
+        "SMTP_FROM",
+        "SMTP_USER",
+        "SMTP_PASS",
+        "SMTP_SECURE"
       ]
     },
     "db:generate": {
