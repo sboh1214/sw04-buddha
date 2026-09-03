@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import 'pretendard/dist/web/variable/pretendardvariable-dynamic-subset.css';
+import { Nav } from '@/components/layout/nav';
 import { Provider } from '@/components/ui/provider';
 import { copy } from '@/copy';
 
@@ -13,7 +14,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     // suppressHydrationWarning: next-themes sets class/style on <html> before hydration.
     <html lang="ko" suppressHydrationWarning>
       <body>
-        <Provider>{children}</Provider>
+        <Provider>
+          <Nav />
+          <main>{children}</main>
+        </Provider>
       </body>
     </html>
   );

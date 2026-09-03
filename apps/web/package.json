@@ -8,23 +8,31 @@
     "start": "node scripts/start-standalone.mjs",
     "typecheck": "next typegen && tsc --noEmit",
     "lint": "eslint .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@buddha/api-client": "workspace:*",
     "@buddha/shared": "workspace:*",
     "@chakra-ui/react": "catalog:",
     "@emotion/cache": "catalog:",
     "@emotion/react": "catalog:",
+    "@hookform/resolvers": "catalog:",
+    "@tanstack/react-query": "catalog:",
+    "better-auth": "catalog:",
     "dotenv": "catalog:",
     "next": "catalog:",
     "next-themes": "catalog:",
     "pretendard": "catalog:",
     "react": "catalog:",
-    "react-dom": "catalog:"
+    "react-dom": "catalog:",
+    "react-hook-form": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@buddha/config-eslint": "workspace:*",
     "@buddha/config-ts": "workspace:*",
+    "@playwright/test": "catalog:",
     "@types/node": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
