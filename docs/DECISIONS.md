@@ -496,7 +496,7 @@ PLAN §14는 실제 Postgres/Redis로 통합 테스트를 요구한다. Turbo는
 ### 결과
 
 - 테스트 파일이 `close()`를 빠뜨리면 다음 파일이 락을 기다리며 멈춘다(`afterAll`에서 반드시 닫는다).
-- 통합 테스트 수(ADR-0024 반영 후): db 12, api 39(auth 15 · me 7 · admin guard 2 · templates 5 · health 5 · exception filter 5), shared 19, web 11.
+- 통합 테스트 수(M1 리뷰 반영 후): db 12, api 41(auth 17 · me 7 · admin guard 2 · templates 5 · health 5 · exception filter 5), shared 19, web 13, worker 7.
 - 리뷰 반영(M1): `safeNextPath`는 제어 문자·백슬래시를 거부하고 더미 오리진으로 해석해 같은 오리진인지 확인한다(탭/개행을 URL 파서가 제거해 `/%09/evil.com`이 외부로 빠지는 오픈 리디렉트 차단). 웹의 better-auth 오류는 `authErrorMessage()`로 코드→한국어 문구만 노출하고 영어 `message`는 쓰지 않는다(가입 중복 코드는 1.7.2의 `USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL`). 닉네임 폼은 프로필이 로드된 뒤 마운트되어 초기값을 동기적으로 채운다. 소셜 연결 실패는 `/settings?error=<code>`로 돌아오므로 설정 화면이 이를 읽어 안내한다. Kakao `emailVerified`는 내장 프로바이더처럼 `is_email_valid && is_email_verified`다. OpenAPI의 `/me` 두 작업에 세션 쿠키 보안 요구와 404를 명시했다.
 
 ## ADR-0023 — 이메일 인증 필수, 인증을 거친 이메일 변경, SES SMTP (오너 결정 2026-09-03)
