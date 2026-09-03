@@ -87,6 +87,13 @@ export function LoginForm({ next, notice }: { next: string; notice?: string | un
                   <NextLink href="/signup">{copy.signup}</NextLink>
                 </Link>
               </Text>
+              {/* The other half of ADR-0024: verified but never got as far as a password.
+                  Re-registering is silent for a verified address, so reset is the way back.
+                  Named, not linked — the link itself is the one on the password field, and a
+                  second link with the same name would break e2e locators. */}
+              <Text fontSize="xs" color="fg.subtle">
+                {copy.loginSetPasswordHint}
+              </Text>
             </Stack>
           )}
           <Field.Root invalid={!!errors.email} required>

@@ -99,7 +99,7 @@
         },
         "security": [
           {
-            "buddha.session_token": []
+            "session": []
           }
         ],
         "summary": "Profile, balance and linked sign-in methods",
@@ -173,7 +173,7 @@
         },
         "security": [
           {
-            "buddha.session_token": []
+            "session": []
           }
         ],
         "summary": "Change nickname",
@@ -239,7 +239,7 @@
         },
         "security": [
           {
-            "buddha.session_token": []
+            "session": []
           }
         ],
         "summary": "Set the first password (after verification, or for a social-only account)",

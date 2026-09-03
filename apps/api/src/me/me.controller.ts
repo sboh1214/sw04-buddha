@@ -16,12 +16,12 @@ import { CurrentUser } from '../auth/current-user.decorator.js';
 import { PasswordService } from '../auth/password.service.js';
 import { SessionGuard } from '../auth/session.guard.js';
 import { ApiData, ApiErrors } from '../common/openapi/api-response.decorators.js';
-import { SESSION_COOKIE } from '../openapi/document.js';
+import { SESSION_SECURITY_SCHEME } from '../openapi/document.js';
 import { MeService } from './me.service.js';
 
 /** PLAN 7.2: /api/v1/me. */
 @ApiTags('me')
-@ApiCookieAuth(SESSION_COOKIE)
+@ApiCookieAuth(SESSION_SECURITY_SCHEME)
 @Controller('me')
 @UseGuards(SessionGuard)
 export class MeController {

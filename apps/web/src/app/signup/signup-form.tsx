@@ -151,6 +151,12 @@ function CheckMailPanel({ email }: { email: string }) {
         <Link asChild colorPalette="brand" color="colorPalette.fg" fontWeight="medium">
           <NextLink href="/login">{copy.backToLogin}</NextLink>
         </Link>
+        {/* An address that is already verified gets no mail from either the register call or
+            the resend button above (better-auth answers both without sending, so the address
+            is not disclosed). Reset is the exit for a verified account with no password. */}
+        <Link asChild colorPalette="brand" color="colorPalette.fg" fontWeight="medium">
+          <NextLink href="/reset-password">{copy.resetTitle}</NextLink>
+        </Link>
       </HStack>
     </Stack>
   );

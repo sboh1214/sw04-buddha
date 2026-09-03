@@ -27,7 +27,11 @@ export const SET_PASSWORD_PATH = '/set-password';
 /** Where a verification link lands when the client did not ask for a specific page. */
 const DEFAULT_VERIFY_CALLBACK = SET_PASSWORD_PATH;
 
-/** Endpoints that must never accept one of our synthetic no-email addresses. */
+/**
+ * Endpoints that must never accept one of our synthetic no-email addresses. The hook also
+ * runs on server-side `auth.api.*` calls, which is all `/sign-up/email` is left to guard
+ * now that `disabledPaths` 404s it over HTTP.
+ */
 const EMAIL_INPUT_PATHS = new Set([
   '/sign-up/email',
   '/sign-in/email',
@@ -98,6 +102,21 @@ export function createAuth({ env, db, mailer, logger = new Logger('Auth') }: Cre
     // The BETTER_AUTH_URL origin is trusted implicitly (CSRF check on the Origin header);
     // WEB_ORIGIN adds the web origin(s) explicitly (redirectTo/callbackURL validation).
     trustedOrigins: webOrigins(env),
+    /**
+     * ADR-0024 holds only while `POST /api/v1/auth/register` is the ONLY sign-up surface.
+     * better-auth's own `/sign-up/email` stores a credential password for whatever address
+     * the caller names, which re-opens account pre-hijacking: an attacker signs up as the
+     * victim, the victim clicks OUR verification mail (or asks for one and clicks that),
+     * and from then on the attacker's password logs into the victim's account while the
+     * victim's own `/set-password` fails with PASSWORD_ALREADY_SET. Nothing stops a
+     * non-browser caller either: better-auth skips the Origin/CSRF check for a request
+     * with no cookie, no `Sec-Fetch-*` and no Origin.
+     *
+     * `disabledPaths` is checked in the HTTP router's `onRequest` only, so the route 404s
+     * for the outside world while `auth.api.signUpEmail` — the server-side call
+     * RegistrationService makes — still works. Paths are relative to `basePath`.
+     */
+    disabledPaths: ['/sign-up/email'],
     database: drizzleAdapter(db, {
       provider: 'pg',
       schema: {

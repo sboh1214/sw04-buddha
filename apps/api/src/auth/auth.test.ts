@@ -4,10 +4,11 @@
  * (fails under CI=true, see the harness).
  */
 import { schema } from '@buddha/db';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createTestApp, verificationLinkFor, type TestApp } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
+import { CREDENTIAL_PROVIDER_ID } from './auth.js';
 
 /** Header/body the browser would send through the Next.js rewrite (same-origin POST). */
 const browserHeaders = {
@@ -63,7 +64,12 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
     const [row] = await t.db
       .select({ id: schema.account.id, password: schema.account.password })
       .from(schema.account)
-      .where(eq(schema.account.userId, userId));
+      .where(
+        and(
+          eq(schema.account.userId, userId),
+          eq(schema.account.providerId, CREDENTIAL_PROVIDER_ID),
+        ),
+      );
     return row;
   }
 
@@ -297,14 +303,13 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
     expect(registered.statusCode).toBe(400);
     expect(registered.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR' } });
 
-    const signUp = await t.app.inject({
-      method: 'POST',
-      url: '/api/auth/sign-up/email',
-      headers: browserHeaders,
-      payload: { email: synthetic, password, name: 'squatter' },
-    });
-    expect(signUp.statusCode).toBe(400);
-    expect(signUp.json()).toMatchObject({ code: 'INVALID_EMAIL' });
+    // /sign-up/email is unroutable now (see the test below), so the hook that rejects the
+    // domain there is only reachable through the server-side call RegistrationService makes.
+    await expect(
+      t.auth.api.signUpEmail({
+        body: { email: synthetic, password, name: 'squatter' },
+      }),
+    ).rejects.toMatchObject({ body: { code: 'INVALID_EMAIL' } });
 
     const resend = await t.app.inject({
       method: 'POST',
@@ -356,5 +361,86 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
     expect(ok.statusCode).toBe(200);
     expect(t.mailer.messages).toHaveLength(1);
     expect(t.mailer.messages[0]).toMatchObject({ to: address });
+  });
+
+  /**
+   * ADR-0024 only holds while /api/v1/auth/register is the ONLY sign-up surface. Through
+   * better-auth's own /sign-up/email an attacker could store a password on someone else's
+   * address; the victim's verification click would then activate it (and their own
+   * /set-password would fail with PASSWORD_ALREADY_SET).
+   */
+  it('better-auth sign-up is not exposed, so nobody can plant a password on an address', async () => {
+    const victim = 'it-auth-victim@test.local';
+    const attempt = await t.app.inject({
+      method: 'POST',
+      url: '/api/auth/sign-up/email',
+      headers: browserHeaders,
+      payload: { email: victim, password: 'attacker-1234', name: 'squatter' },
+    });
+    // disabledPaths answers in the router, before any handler: plain text, not our envelope.
+    expect(attempt.statusCode).toBe(404);
+    expect(attempt.body).toBe('Not Found');
+    expect(await userRow(victim)).toBeUndefined();
+    expect(t.mailer.messages).toHaveLength(0);
+
+    // The server-side call behind /api/v1/auth/register is unaffected by disabledPaths.
+    expect((await register({ email: victim })).statusCode).toBe(200);
+    const user = await userRow(victim);
+    expect(user).toMatchObject({ emailVerified: false });
+    expect(await credentialAccount(user!.id)).toBeUndefined();
+    expect(t.mailer.messages).toHaveLength(1);
+  });
+
+  /**
+   * The recovery ADR-0024 promises for a user who verified but lost the session before
+   * choosing a password: re-registering stays silent (a verified address must not be
+   * confirmed to a stranger), and password reset builds the missing credential account.
+   */
+  it('a verified user with no password recovers through password reset (ADR-0024)', async () => {
+    const stranded = 'it-auth-stranded@test.local';
+    await register({ email: stranded });
+    const verify = await t.app.inject({
+      method: 'GET',
+      url: pathOf(verificationLinkFor(t.mailer, stranded)),
+    });
+    expect(verify.statusCode).toBe(302);
+    const user = await userRow(stranded);
+    expect(user).toMatchObject({ emailVerified: true });
+    expect(await credentialAccount(user!.id)).toBeUndefined();
+
+    // Registering a verified address again sends nothing (no enumeration), which is why the
+    // login and check-your-mail screens point at password reset instead.
+    t.mailer.messages.length = 0;
+    expect((await register({ email: stranded })).statusCode).toBe(200);
+    expect(t.mailer.messages).toHaveLength(0);
+
+    const reset = await t.app.inject({
+      method: 'POST',
+      url: '/api/auth/request-password-reset',
+      headers: browserHeaders,
+      payload: { email: stranded, redirectTo: '/reset-password' },
+    });
+    expect(reset.statusCode).toBe(200);
+    expect(t.mailer.messages).toHaveLength(1);
+    const link = /https?:\/\/\S+\/reset-password\/\S+/.exec(t.mailer.messages[0]!.text)![0];
+    const token = new URL(link).pathname.split('/').pop()!;
+
+    const done = await t.app.inject({
+      method: 'POST',
+      url: '/api/auth/reset-password',
+      headers: browserHeaders,
+      payload: { newPassword: password, token },
+    });
+    expect(done.statusCode).toBe(200);
+    expect((await credentialAccount(user!.id))?.password).toBeTypeOf('string');
+
+    const signIn = await t.app.inject({
+      method: 'POST',
+      url: '/api/auth/sign-in/email',
+      headers: browserHeaders,
+      payload: { email: stranded, password },
+    });
+    expect(signIn.statusCode).toBe(200);
+    expect(sessionCookieOf(signIn.headers['set-cookie'])).toBeDefined();
   });
 });
