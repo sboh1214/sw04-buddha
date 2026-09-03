@@ -25,7 +25,7 @@ describe.skipIf(!hasTestInfra)('AdminGuard role cache (integration, PLAN 10.5)',
   });
 
   it('reads the role from Postgres, caches it for 60 s, and honours invalidate()', async () => {
-    const user = await signUpTestUser(t.auth);
+    const user = await signUpTestUser(t);
     await redis.del(roleCacheKey(user.id));
 
     expect(await guard.roleOf(user.id)).toBe('user');

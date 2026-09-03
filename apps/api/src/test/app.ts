@@ -53,6 +53,24 @@ export async function createTestApp(): Promise<TestApp> {
   };
 }
 
+/** The `.../verify-email?token=...&callbackURL=...` link in the newest mail sent to `to`. */
+export function verificationLinkFor(mailer: MemoryMailer, to: string): string {
+  for (let i = mailer.messages.length - 1; i >= 0; i -= 1) {
+    const message = mailer.messages[i]!;
+    if (message.to !== to) continue;
+    const match = /https?:\/\/\S+\/verify-email\?\S+/.exec(message.text);
+    if (match) return match[0];
+  }
+  throw new Error(`no verification mail for ${to}`);
+}
+
+/** `token` query parameter of a verification link. */
+export function tokenFromLink(link: string): string {
+  const token = new URL(link).searchParams.get('token');
+  if (!token) throw new Error(`no token in ${link}`);
+  return token;
+}
+
 export interface TestUser {
   id: string;
   email: string;
@@ -63,22 +81,26 @@ export interface TestUser {
 let counter = 0;
 
 /**
- * Signs up through better-auth's server API (no HTTP) and returns the session cookie
- * exactly as a browser would send it back. The "user" trigger creates profile + balance.
+ * Signs up through better-auth's server API (no HTTP), follows the verification link from
+ * the in-memory mailer (verification is mandatory, PLAN 17 Q1) and returns the session
+ * cookie the auto sign-in set, exactly as a browser would send it back. The "user" trigger
+ * creates profile + balance.
  */
 export async function signUpTestUser(
-  auth: Auth,
+  t: Pick<TestApp, 'auth' | 'mailer'>,
   overrides: { email?: string; password?: string } = {},
 ): Promise<TestUser> {
   counter += 1;
   const email = overrides.email ?? `user${String(counter)}-${String(Date.now())}@test.local`;
-  const { headers, response } = await auth.api.signUpEmail({
+  const { user } = await t.auth.api.signUpEmail({
     body: { email, password: overrides.password ?? 'password-1234', name: 'tester' },
-    returnHeaders: true,
   });
+  const token = tokenFromLink(verificationLinkFor(t.mailer, email));
+  const { headers } = await t.auth.api.verifyEmail({ query: { token }, returnHeaders: true });
   const cookie = headers
     .getSetCookie()
     .map((entry) => entry.split(';')[0]!)
     .join('; ');
-  return { id: response.user.id, email, cookie };
+  if (!cookie.includes('session_token=')) throw new Error('verify-email did not sign in');
+  return { id: user.id, email, cookie };
 }

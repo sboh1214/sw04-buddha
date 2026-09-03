@@ -1,11 +1,11 @@
 /**
- * better-auth integration (PLAN 13 M1 AC, PLAN 10): real Postgres/Redis from the docker
- * `test` profile. Skips when TEST_* are unset (fails under CI=true, see packages/db harness).
+ * better-auth integration (PLAN 13 M1 AC, PLAN 10, ADR-0023): real Postgres/Redis from the
+ * docker `test` profile. Skips when TEST_* are unset (fails under CI=true, see the harness).
  */
 import { schema } from '@buddha/db';
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createTestApp, type TestApp } from '../test/app.js';
+import { createTestApp, verificationLinkFor, type TestApp } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
 
 /** Header/body the browser would send through the Next.js rewrite (same-origin POST). */
@@ -14,10 +14,23 @@ const browserHeaders = {
   'content-type': 'application/json',
 };
 
+/** Path + query of an absolute link, for app.inject(). */
+function pathOf(link: string): string {
+  const url = new URL(link);
+  return url.pathname + url.search;
+}
+
+function sessionCookieOf(setCookie: string | string[] | undefined): string | undefined {
+  const list = Array.isArray(setCookie) ? setCookie : setCookie ? [setCookie] : [];
+  return list.find((c) => c.startsWith('buddha.session_token='));
+}
+
 describe.skipIf(!hasTestInfra)('auth (integration)', () => {
   let t: TestApp;
   const email = 'it-auth@test.local';
-  const password = 'password123';
+  /** Password of the first sign-up; rebound by the second one (pre-hijacking mitigation). */
+  const firstPassword = 'password123';
+  const password = 'password-rebound-9';
   let cookie = '';
 
   beforeAll(async () => {
@@ -31,6 +44,14 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
     t.mailer.messages.length = 0;
   });
 
+  async function userRow(address: string) {
+    const [row] = await t.db
+      .select({ id: schema.user.id, emailVerified: schema.user.emailVerified })
+      .from(schema.user)
+      .where(eq(schema.user.email, address));
+    return row;
+  }
+
   it('rejects a password shorter than 8 characters', async () => {
     const res = await t.app.inject({
       method: 'POST',
@@ -42,35 +63,49 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
     expect(res.json()).toMatchObject({ code: 'PASSWORD_TOO_SHORT' });
   });
 
-  it('signs up, sets the session cookie and sends the verification mail', async () => {
+  it('sign-up creates an unverified user, mails the link and starts no session (PLAN 17 Q1)', async () => {
     const res = await t.app.inject({
       method: 'POST',
       url: '/api/auth/sign-up/email',
       headers: browserHeaders,
-      payload: { email, password, name: 'IT' },
+      payload: { email, password: firstPassword, name: 'IT', callbackURL: '/login' },
     });
     expect(res.statusCode).toBe(200);
-    const setCookie = res.headers['set-cookie'];
-    const raw = Array.isArray(setCookie) ? setCookie[0] : setCookie;
-    expect(raw).toMatch(/^buddha\.session_token=/);
-    expect(raw).toMatch(/HttpOnly/);
-    expect(raw).toMatch(/SameSite=Lax/);
-    expect(raw).not.toMatch(/Secure/); // http baseURL -> no __Secure- prefix, no Secure flag
-    cookie = raw!.split(';')[0]!;
+    expect(res.json()).toMatchObject({ token: null, user: { email, emailVerified: false } });
+    expect(sessionCookieOf(res.headers['set-cookie'])).toBeUndefined();
     expect(t.mailer.messages).toHaveLength(1);
     expect(t.mailer.messages[0]).toMatchObject({ to: email });
-    expect(t.mailer.messages[0]!.text).toContain('/api/auth/verify-email?token=');
+    expect(t.mailer.messages[0]!.text).toContain(
+      'http://localhost:3000/api/auth/verify-email?token=',
+    );
+    expect(await userRow(email)).toMatchObject({ emailVerified: false });
   });
 
-  it('rejects a second sign-up with the same email (code the web maps to Korean copy)', async () => {
+  it('a second sign-up rebinds the password of the unverified account and re-sends the link', async () => {
     const res = await t.app.inject({
       method: 'POST',
       url: '/api/auth/sign-up/email',
       headers: browserHeaders,
-      payload: { email, password, name: 'IT' },
+      payload: { email, password, name: 'IT', callbackURL: '/login' },
     });
-    expect(res.statusCode).toBe(422);
-    expect(res.json()).toMatchObject({ code: 'USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL' });
+    // No enumeration: 200 with token null, like a fresh sign-up; still exactly one user.
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ token: null });
+    const rows = await t.db.select().from(schema.user).where(eq(schema.user.email, email));
+    expect(rows).toHaveLength(1);
+    // The mailbox owner gets a link (the sign-up screen promises one) ...
+    expect(t.mailer.messages).toHaveLength(1);
+    expect(t.mailer.messages[0]).toMatchObject({ to: email });
+    // ... and the account now carries the password of this attempt, not the first one
+    // (pre-hijacking: whoever registered the address first must not keep the password).
+    const [account] = await t.db
+      .select({ password: schema.account.password })
+      .from(schema.account)
+      .where(eq(schema.account.userId, rows[0]!.id));
+    expect(account?.password).toBeTypeOf('string');
+    const { verifyPassword } = await import('better-auth/crypto');
+    expect(await verifyPassword({ hash: account!.password!, password })).toBe(true);
+    expect(await verifyPassword({ hash: account!.password!, password: firstPassword })).toBe(false);
   });
 
   it('created profile (예측가_XXXX) and balance 0 in the same transaction (trigger)', async () => {
@@ -83,6 +118,57 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
     expect(String(rows.rows[0]!.available_p)).toBe('0');
   });
 
+  it('sign-in before verification -> 403 EMAIL_NOT_VERIFIED, and sends no mail itself', async () => {
+    const res = await t.app.inject({
+      method: 'POST',
+      url: '/api/auth/sign-in/email',
+      headers: browserHeaders,
+      payload: { email, password },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ code: 'EMAIL_NOT_VERIFIED' });
+    expect(sessionCookieOf(res.headers['set-cookie'])).toBeUndefined();
+    // The client asks for a new link explicitly, so it controls where the link lands and
+    // learns about a send failure (ADR-0023).
+    expect(t.mailer.messages).toHaveLength(0);
+  });
+
+  it('POST /send-verification-email mails a link that returns to the requested page', async () => {
+    const res = await t.app.inject({
+      method: 'POST',
+      url: '/api/auth/send-verification-email',
+      headers: browserHeaders,
+      payload: { email, callbackURL: '/login' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(t.mailer.messages).toHaveLength(1);
+    expect(verificationLinkFor(t.mailer, email)).toContain(
+      `callbackURL=${encodeURIComponent('/login')}`,
+    );
+  });
+
+  it('the verification link verifies, signs the user in and redirects to callbackURL', async () => {
+    await t.app.inject({
+      method: 'POST',
+      url: '/api/auth/send-verification-email',
+      headers: browserHeaders,
+      payload: { email, callbackURL: '/login' },
+    });
+    const res = await t.app.inject({
+      method: 'GET',
+      url: pathOf(verificationLinkFor(t.mailer, email)),
+    });
+    expect(res.statusCode).toBe(302);
+    expect(String(res.headers.location)).toMatch(/\/login$/);
+    const raw = sessionCookieOf(res.headers['set-cookie']);
+    expect(raw).toBeDefined();
+    expect(raw).toMatch(/HttpOnly/);
+    expect(raw).toMatch(/SameSite=Lax/);
+    expect(raw).not.toMatch(/Secure/); // http baseURL -> no __Secure- prefix, no Secure flag
+    cookie = raw!.split(';')[0]!;
+    expect(await userRow(email)).toMatchObject({ emailVerified: true });
+  });
+
   it('GET /api/auth/get-session and the guarded /api/v1/me see the user; no cookie -> 401', async () => {
     const session = await t.app.inject({
       method: 'GET',
@@ -90,11 +176,11 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
       headers: { cookie },
     });
     expect(session.statusCode).toBe(200);
-    expect(session.json()).toMatchObject({ user: { email } });
+    expect(session.json()).toMatchObject({ user: { email, emailVerified: true } });
 
     const me = await t.app.inject({ method: 'GET', url: '/api/v1/me', headers: { cookie } });
     expect(me.statusCode).toBe(200);
-    expect(me.json()).toMatchObject({ data: { email } });
+    expect(me.json()).toMatchObject({ data: { email, emailVerified: true } });
 
     const anonymous = await t.app.inject({ method: 'GET', url: '/api/v1/me' });
     expect(anonymous.statusCode).toBe(401);
@@ -126,7 +212,7 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
     expect(res.json()).toMatchObject({ code: 'FAILED_TO_UNLINK_LAST_ACCOUNT' });
   });
 
-  it('rejects an untrusted Origin (CSRF) and signs in with a valid password', async () => {
+  it('rejects an untrusted Origin (CSRF) and signs in with the rebound password once verified', async () => {
     const bad = await t.app.inject({
       method: 'POST',
       url: '/api/auth/sign-in/email',
@@ -135,6 +221,14 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
     });
     expect(bad.statusCode).toBe(403);
 
+    const stale = await t.app.inject({
+      method: 'POST',
+      url: '/api/auth/sign-in/email',
+      headers: browserHeaders,
+      payload: { email, password: firstPassword },
+    });
+    expect(stale.statusCode).toBe(401);
+
     const ok = await t.app.inject({
       method: 'POST',
       url: '/api/auth/sign-in/email',
@@ -142,6 +236,7 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
       payload: { email, password },
     });
     expect(ok.statusCode).toBe(200);
+    expect(sessionCookieOf(ok.headers['set-cookie'])).toBeDefined();
   });
 
   it('sends the password reset mail with a link through the web origin', async () => {
@@ -156,19 +251,108 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
     expect(t.mailer.messages[0]!.text).toContain('http://localhost:3000/api/auth/reset-password/');
   });
 
-  it('a failing mailer does not break sign-up (verification is optional, PLAN 17 Q1)', async () => {
+  it('change-email (verified user): confirm at the current address, verify the new one, then it applies (PLAN 17 Q5)', async () => {
+    const newEmail = 'it-auth-new@test.local';
+    const res = await t.app.inject({
+      method: 'POST',
+      url: '/api/auth/change-email',
+      headers: { ...browserHeaders, cookie },
+      payload: { newEmail, callbackURL: '/settings' },
+    });
+    expect(res.statusCode).toBe(200);
+    // Step 1: confirmation mail to the CURRENT address; nothing changed yet.
+    expect(t.mailer.messages).toHaveLength(1);
+    expect(t.mailer.messages[0]).toMatchObject({ to: email });
+    expect(t.mailer.messages[0]!.text).toContain(newEmail);
+    expect(await userRow(newEmail)).toBeUndefined();
+
+    const confirm = await t.app.inject({
+      method: 'GET',
+      url: pathOf(verificationLinkFor(t.mailer, email)),
+      headers: { cookie },
+    });
+    expect(confirm.statusCode).toBe(302);
+    // Step 2: verification mail to the NEW address; still not applied.
+    expect(t.mailer.messages).toHaveLength(2);
+    expect(t.mailer.messages[1]).toMatchObject({ to: newEmail });
+    expect(await userRow(newEmail)).toBeUndefined();
+
+    const verify = await t.app.inject({
+      method: 'GET',
+      url: pathOf(verificationLinkFor(t.mailer, newEmail)),
+      headers: { cookie },
+    });
+    expect(verify.statusCode).toBe(302);
+    expect(String(verify.headers.location)).toContain('/settings');
+    expect(await userRow(newEmail)).toMatchObject({ emailVerified: true });
+    expect(await userRow(email)).toBeUndefined();
+  });
+
+  it('refuses the synthetic no-email domain on every credential endpoint', async () => {
+    const synthetic = 'kakao_42@noemail.buddha.local';
+    const signUp = await t.app.inject({
+      method: 'POST',
+      url: '/api/auth/sign-up/email',
+      headers: browserHeaders,
+      payload: { email: synthetic, password, name: 'squatter' },
+    });
+    expect(signUp.statusCode).toBe(400);
+    expect(signUp.json()).toMatchObject({ code: 'INVALID_EMAIL' });
+
+    const resend = await t.app.inject({
+      method: 'POST',
+      url: '/api/auth/send-verification-email',
+      headers: browserHeaders,
+      payload: { email: synthetic, callbackURL: '/settings' },
+    });
+    expect(resend.statusCode).toBe(400);
+
+    const change = await t.app.inject({
+      method: 'POST',
+      url: '/api/auth/change-email',
+      headers: { ...browserHeaders, cookie },
+      payload: { newEmail: synthetic },
+    });
+    expect(change.statusCode).toBe(400);
+
+    expect(t.mailer.messages).toHaveLength(0);
+    const rows = await t.db.select().from(schema.user).where(eq(schema.user.email, synthetic));
+    expect(rows).toHaveLength(0);
+  });
+
+  it('a failing mailer does not break sign-up; the explicit resend reports the failure', async () => {
+    const address = 'it-auth-2@test.local';
     t.mailer.failNext(1);
     const res = await t.app.inject({
       method: 'POST',
       url: '/api/auth/sign-up/email',
       headers: browserHeaders,
-      payload: { email: 'it-auth-2@test.local', password, name: 'IT2' },
+      payload: { email: address, password, name: 'IT2' },
     });
     expect(res.statusCode).toBe(200);
-    const [row] = await t.db
-      .select({ id: schema.user.id })
-      .from(schema.user)
-      .where(eq(schema.user.email, 'it-auth-2@test.local'));
-    expect(row).toBeDefined();
+    expect(await userRow(address)).toMatchObject({ emailVerified: false });
+    expect(t.mailer.messages).toHaveLength(0);
+
+    // Unlike sign-up, /send-verification-email surfaces a mail outage (ADR-0023) ...
+    t.mailer.failNext(1);
+    const failed = await t.app.inject({
+      method: 'POST',
+      url: '/api/auth/send-verification-email',
+      headers: browserHeaders,
+      payload: { email: address, callbackURL: '/login' },
+    });
+    expect(failed.statusCode).toBeGreaterThanOrEqual(400);
+    expect(t.mailer.messages).toHaveLength(0);
+
+    // ... and works on the next attempt.
+    const ok = await t.app.inject({
+      method: 'POST',
+      url: '/api/auth/send-verification-email',
+      headers: browserHeaders,
+      payload: { email: address, callbackURL: '/login' },
+    });
+    expect(ok.statusCode).toBe(200);
+    expect(t.mailer.messages).toHaveLength(1);
+    expect(t.mailer.messages[0]).toMatchObject({ to: address });
   });
 });

@@ -1,11 +1,15 @@
 import { createTransport, type Transporter } from 'nodemailer';
 
 export interface MailerOptions {
-  /** SMTP host (Mailpit locally). */
+  /** SMTP host (Mailpit locally, `email-smtp.<region>.amazonaws.com` for SES). */
   host: string;
   port: number;
   /** RFC 5322 From header: a bare address or `Name <address>`. */
   from: string;
+  /** SMTP credentials (SES "SMTP credentials"). Absent for Mailpit. */
+  auth?: { user: string; pass: string } | undefined;
+  /** Implicit TLS from the first byte (port 465). Default false: plain or STARTTLS. */
+  secure?: boolean | undefined;
 }
 
 export interface MailMessage {
@@ -23,19 +27,22 @@ export interface Mailer {
 }
 
 /**
- * Plain SMTP mailer (nodemailer 9). No auth and no TLS: the only target in this milestone
- * is Mailpit (docker/docker-compose.yml). A real provider (M6+) adds SMTP_USER/SMTP_PASS
- * and `secure`/STARTTLS here; nodemailer still upgrades opportunistically when the server
- * advertises STARTTLS, which Mailpit does not by default.
+ * SMTP mailer (nodemailer 9). Locally the target is Mailpit (docker/docker-compose.yml):
+ * no auth, no TLS. In production it is AWS SES over its SMTP interface (PLAN 17 Q3,
+ * decision 2026-09-03): with credentials present the connection must be encrypted, so
+ * STARTTLS is required unless `secure` (implicit TLS) is on; credentials are never sent
+ * over a plain connection.
  *
  * Tests must not hit SMTP: override the MAILER provider with an in-memory implementation
  * of this interface (see test/memory-mailer.ts).
  */
 export function createMailer(options: MailerOptions): Mailer {
+  const secure = options.secure ?? false;
   const transporter: Transporter = createTransport({
     host: options.host,
     port: options.port,
-    secure: false,
+    secure,
+    ...(options.auth ? { auth: options.auth, requireTLS: !secure } : {}),
     connectionTimeout: 5_000,
     greetingTimeout: 5_000,
     socketTimeout: 10_000,

@@ -76,11 +76,17 @@ export const envSchema = z
     NAVER_CLIENT_ID: optionalString,
     NAVER_CLIENT_SECRET: optionalString,
 
-    // --- Transactional email (Mailpit locally; no auth, no TLS) ---
+    // --- Transactional email: Mailpit locally (no auth, no TLS); AWS SES in production
+    //     (PLAN 17 Q3 decision 2026-09-03): SMTP credentials + STARTTLS on 587 or TLS on 465.
     SMTP_HOST: z.string().min(1).default('localhost'),
     SMTP_PORT: z.coerce.number().int().min(1).max(65535).default(1025),
-    /** From header: a bare address or `Name <address>`. */
+    /** From header: a bare address or `Name <address>` (SES: a verified identity). */
     SMTP_FROM: z.string().min(3).default('noreply@buddha.local'),
+    /** SMTP credentials (SES "SMTP credentials"); both or neither. */
+    SMTP_USER: optionalString,
+    SMTP_PASS: optionalString,
+    /** true = implicit TLS (465). false = plain (Mailpit) or STARTTLS, required with credentials. */
+    SMTP_SECURE: z.stringbool().default(false),
   })
   .superRefine((env, ctx) => {
     if (env.NODE_ENV !== 'test' && !env.BETTER_AUTH_SECRET) {
@@ -95,6 +101,13 @@ export const envSchema = z
         code: 'custom',
         path: ['BETTER_AUTH_SECRET'],
         message: 'must be at least 32 characters in production',
+      });
+    }
+    if (Boolean(env.SMTP_USER) !== Boolean(env.SMTP_PASS)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['SMTP_USER'],
+        message: 'SMTP_USER and SMTP_PASS must be set together',
       });
     }
     for (const provider of OAUTH_PROVIDERS) {

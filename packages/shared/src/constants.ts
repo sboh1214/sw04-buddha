@@ -23,3 +23,14 @@ export const DEFAULT_LIQUIDITY_B = 1000;
 /** profiles.nickname: 2..20 characters (PLAN 17 Q4 default). */
 export const NICKNAME_MIN_LENGTH = 2;
 export const NICKNAME_MAX_LENGTH = 20;
+
+/**
+ * Kakao/Naver may withhold the email (PLAN 10.3). better-auth needs one, so the API stores
+ * `{provider}_{providerAccountId}@` + NO_EMAIL_DOMAIN: an unroutable address the mailer
+ * never sends to and the UI shows as "이메일 없음" until the user registers a real one.
+ */
+export const NO_EMAIL_DOMAIN = 'noemail.buddha.local';
+
+export function isNoEmailAddress(email: string): boolean {
+  return email.toLowerCase().endsWith('@' + NO_EMAIL_DOMAIN);
+}

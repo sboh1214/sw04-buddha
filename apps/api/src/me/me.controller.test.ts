@@ -17,7 +17,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/me (integration)', () => {
   });
   beforeEach(async () => {
     await t.reset();
-    user = await signUpTestUser(t.auth);
+    user = await signUpTestUser(t);
   });
 
   it('GET /me returns user, profile, zero balance and the credential account (AC 1)', async () => {
@@ -31,7 +31,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/me (integration)', () => {
     const me = meSchema.parse(body.data);
     expect(me.id).toBe(user.id);
     expect(me.email).toBe(user.email);
-    expect(me.emailVerified).toBe(false);
+    expect(me.emailVerified).toBe(true); // signUpTestUser follows the verification link
     expect(me.profile.role).toBe('user');
     expect(me.profile.nickname).toMatch(/^예측가_[A-Z2-9]{4}$/);
     expect(me.balance).toEqual({ availableP: '0', lockedP: '0' });
@@ -65,7 +65,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/me (integration)', () => {
   });
 
   it('PATCH /me with a taken nickname -> 400 VALIDATION_ERROR with the field in details (AC 4)', async () => {
-    const other = await signUpTestUser(t.auth);
+    const other = await signUpTestUser(t);
     await t.app.inject({
       method: 'PATCH',
       url: '/api/v1/me',
