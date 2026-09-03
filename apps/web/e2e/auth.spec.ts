@@ -43,17 +43,20 @@ async function verificationLink(email: string): Promise<string> {
 }
 
 /**
- * Verification is mandatory (PLAN 17 Q1 decision): the form shows the "check your mail"
- * panel and the link in the mail completes the sign-up with an automatic sign-in.
+ * Sign-up (ADR-0024): the form takes the email only, the link in the mail signs the user in
+ * and lands on /set-password, where the first password is chosen.
  */
 async function signUp(page: Page, email: string) {
   await page.goto('/signup');
   await page.getByLabel(copy.email).fill(email);
-  await page.getByLabel(copy.password, { exact: true }).fill(password);
-  await page.getByLabel(copy.passwordConfirm).fill(password);
   await page.getByRole('button', { name: copy.signupWithEmail }).click();
   await expect(page.getByTestId('signup-check-mail')).toBeVisible();
+
   await page.goto(await verificationLink(email));
+  await expect(page).toHaveURL('/set-password');
+  await page.getByTestId('new-password').fill(password);
+  await page.getByTestId('new-password-confirm').fill(password);
+  await page.getByRole('button', { name: copy.setPasswordSubmit }).click();
   await expect(page).toHaveURL('/');
 }
 

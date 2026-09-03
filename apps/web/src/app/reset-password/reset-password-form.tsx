@@ -11,7 +11,7 @@ import { PasswordInput } from '@/components/ui/password-input';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { AUTH_ERROR, authClient, authErrorMessage } from '@/lib/auth-client';
-import { passwordSchema } from '@/app/signup/signup-form';
+import { passwordSchema } from '@/lib/password';
 
 const requestSchema = z.object({ email: z.email(copy.errEmailInvalid) });
 type RequestValues = z.infer<typeof requestSchema>;

@@ -17,35 +17,20 @@ import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import * as z from 'zod';
 import { SocialButtons } from '@/components/auth/social-buttons';
-import { PasswordInput } from '@/components/ui/password-input';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
-import { authClient, authErrorMessage, signUp } from '@/lib/auth-client';
+import { api, isApiError, unwrap } from '@/lib/api';
+import { authClient, authErrorMessage } from '@/lib/auth-client';
 
-/** PLAN 10.2: password >= 8 chars. 128 is better-auth's default maxPasswordLength. */
-export const passwordSchema = z
-  .string()
-  .min(8, copy.errPasswordTooShort)
-  .max(128, copy.errPasswordTooLong);
-
-const schema = z
-  .object({
-    email: z.email(copy.errEmailInvalid),
-    password: passwordSchema,
-    passwordConfirm: z.string(),
-  })
-  .refine((v) => v.password === v.passwordConfirm, {
-    message: copy.errPasswordMismatch,
-    path: ['passwordConfirm'],
-  });
+const schema = z.object({ email: z.email(copy.errEmailInvalid) });
 type FormValues = z.infer<typeof schema>;
 
 /**
- * Verification is mandatory (PLAN 17 Q1 decision): the link in the mail completes the
- * sign-up and signs the user in (`/login` then bounces a logged-in visitor to `/`).
- * A duplicate email gets the same answer from the API (no enumeration), hence the hint.
+ * Sign-up asks for the email only (ADR-0024): the account has no password until the
+ * verification link proves the mailbox, and the link itself leads to the set-password page.
+ * The answer never says whether the address was already registered.
  */
-const VERIFY_CALLBACK = '/login';
+const VERIFY_CALLBACK = '/set-password';
 
 export function SignupForm() {
   const [formError, setFormError] = useState<string | null>(null);
@@ -58,19 +43,14 @@ export function SignupForm() {
 
   const onSubmit = handleSubmit(async (values) => {
     setFormError(null);
-    // better-auth requires `name`; the visible nickname lives in `profiles` (PLAN 10.4) and is
-    // auto-generated server-side, so the local part of the email is enough here.
-    const { error } = await signUp.email({
-      email: values.email,
-      password: values.password,
-      name: values.email.split('@')[0] ?? values.email,
-      callbackURL: VERIFY_CALLBACK,
-    });
-    if (error) {
-      setFormError(authErrorMessage(error, copy.signupFailed));
-      return;
+    try {
+      unwrap(await api.POST('/api/v1/auth/register', { body: { email: values.email } }));
+      setSentTo(values.email);
+    } catch (error) {
+      setFormError(
+        isApiError(error, 'VALIDATION_ERROR') ? copy.errEmailInvalid : copy.signupFailed,
+      );
     }
-    setSentTo(values.email);
   });
 
   if (sentTo) return <CheckMailPanel email={sentTo} />;
@@ -95,18 +75,8 @@ export function SignupForm() {
               placeholder={copy.emailPlaceholder}
               {...register('email')}
             />
+            <Field.HelperText>{copy.signupEmailHint}</Field.HelperText>
             <Field.ErrorText>{errors.email?.message}</Field.ErrorText>
-          </Field.Root>
-          <Field.Root invalid={!!errors.password} required>
-            <Field.Label>{copy.password}</Field.Label>
-            <PasswordInput autoComplete="new-password" {...register('password')} />
-            <Field.HelperText>{copy.passwordHint}</Field.HelperText>
-            <Field.ErrorText>{errors.password?.message}</Field.ErrorText>
-          </Field.Root>
-          <Field.Root invalid={!!errors.passwordConfirm} required>
-            <Field.Label>{copy.passwordConfirm}</Field.Label>
-            <PasswordInput autoComplete="new-password" {...register('passwordConfirm')} />
-            <Field.ErrorText>{errors.passwordConfirm?.message}</Field.ErrorText>
           </Field.Root>
           <Button type="submit" size="lg" loading={isSubmitting}>
             {copy.signupWithEmail}
@@ -137,7 +107,7 @@ export function SignupForm() {
   );
 }
 
-/** Shown after sign-up: where the mail went, how to get another one, and the way to login. */
+/** Shown after registering: where the mail went, how to get another one, where to log in. */
 function CheckMailPanel({ email }: { email: string }) {
   const [busy, setBusy] = useState(false);
 

@@ -72,12 +72,22 @@ export function LoginForm({ next, notice }: { next: string; notice?: string | un
       <form onSubmit={(e) => void onSubmit(e)} noValidate>
         <Stack gap="4">
           {formError && (
-            <Alert.Root status="error" role="alert">
-              <Alert.Indicator />
-              <Alert.Content>
-                <Alert.Description>{formError}</Alert.Description>
-              </Alert.Content>
-            </Alert.Root>
+            <Stack gap="1">
+              <Alert.Root status="error" role="alert">
+                <Alert.Indicator />
+                <Alert.Content>
+                  <Alert.Description>{formError}</Alert.Description>
+                </Alert.Content>
+              </Alert.Root>
+              {/* An account whose link was never clicked has no password yet, so the failure
+                  above is indistinguishable from a typo (ADR-0024). */}
+              <Text fontSize="xs" color="fg.subtle">
+                {copy.loginResendHint}{' '}
+                <Link asChild colorPalette="brand" color="colorPalette.fg">
+                  <NextLink href="/signup">{copy.signup}</NextLink>
+                </Link>
+              </Text>
+            </Stack>
           )}
           <Field.Root invalid={!!errors.email} required>
             <Field.Label>{copy.email}</Field.Label>

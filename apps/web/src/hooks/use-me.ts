@@ -30,6 +30,22 @@ export function useMe() {
   };
 }
 
+/**
+ * `POST /api/v1/me/password`: the first password of an account that has none (after the
+ * sign-up verification, or for a social-only user). Refreshes the linked-account list, which
+ * decides whether the settings screen offers "set" or "change".
+ */
+export function useSetPassword() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (newPassword: string) =>
+      unwrap(await api.POST('/api/v1/me/password', { body: { newPassword } })).data,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY });
+    },
+  });
+}
+
 /** `PATCH /api/v1/me` (nickname). Replaces the `['me']` cache with the server's response. */
 export function useUpdateNickname() {
   const queryClient = useQueryClient();
