@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { boundedInteger, integerField } from './form-schema';
+import { boundedInteger, integerField, optionalCouponCode } from './form-schema';
 
 const inRange = (value: bigint) => value >= 1_000n && value <= 1_000_000n;
 
@@ -30,6 +30,32 @@ describe('boundedInteger', () => {
     expect(schema.safeParse('-300')).toMatchObject({ success: true });
     expect(schema.safeParse('0').error?.issues.map((issue) => issue.message)).toEqual(['range']);
     expect(schema.safeParse('-').error?.issues.map((issue) => issue.message)).toEqual(['format']);
+  });
+});
+
+describe('optionalCouponCode', () => {
+  const schema = optionalCouponCode('bad');
+
+  it('accepts a blank field, which asks the server to generate a code', () => {
+    expect(schema.safeParse('')).toMatchObject({ success: true, data: '' });
+    expect(schema.safeParse('   ')).toMatchObject({ success: true, data: '' });
+  });
+
+  it('normalises a typed code the way the API stores it', () => {
+    expect(schema.safeParse(' summer-2026 ')).toMatchObject({
+      success: true,
+      data: 'SUMMER-2026',
+    });
+  });
+
+  it('rejects what the API would reject, rather than leaving it to a generic 400', () => {
+    // Each of these passed the old `.max(32)`-only field and came back as an unexplained
+    // toast: an underscore and a space break the charset, and 'ABC' is under the minimum.
+    for (const code of ['WELCOME_2026', 'SUMMER SALE', 'ABC', 'A'.repeat(33)]) {
+      const result = schema.safeParse(code);
+      expect({ code, success: result.success }).toEqual({ code, success: false });
+      expect(result.error?.issues.map((issue) => issue.message)).toEqual(['bad']);
+    }
   });
 });
 

@@ -21,7 +21,7 @@ import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { api, isApiError, unwrap, type Coupon } from '@/lib/api';
 import { kstLocalToIso } from '@/lib/datetime';
-import { boundedInteger } from '@/lib/form-schema';
+import { boundedInteger, optionalCouponCode } from '@/lib/form-schema';
 
 const ADMIN_COUPONS_KEY = ['admin', 'coupons'] as const;
 
@@ -32,7 +32,7 @@ const dateFormat = new Intl.DateTimeFormat('ko-KR', {
 });
 
 const schema = z.object({
-  code: z.string().trim().toUpperCase().max(32),
+  code: optionalCouponCode(copy.errAdminCouponCode),
   amountP: boundedInteger(
     /^\d+$/,
     copy.errCouponAmount,
@@ -132,9 +132,10 @@ export function AdminCoupons() {
           <form onSubmit={(e) => void submit(e)} noValidate>
             <Stack gap="3">
               <HStack gap="2" align="start" flexWrap="wrap">
-                <Field.Root maxW="52">
+                <Field.Root invalid={!!errors.code} maxW="52">
                   <Field.Label>{copy.adminCouponCode}</Field.Label>
                   <Input autoComplete="off" data-testid="coupon-code-input" {...register('code')} />
+                  <Field.ErrorText>{errors.code?.message}</Field.ErrorText>
                 </Field.Root>
                 <Field.Root invalid={!!errors.amountP} required maxW="32">
                   <Field.Label>{copy.adminCouponAmount}</Field.Label>

@@ -187,6 +187,7 @@ export const copy = {
   errCouponInvalid: '사용할 수 없는 쿠폰입니다.',
   errCouponAlreadyUsed: '이미 사용한 쿠폰입니다.',
   errCouponAmount: '1P 이상 1,000,000P 이하의 정수로 입력해 주세요.',
+  errAdminCouponCode: '영문·숫자·하이픈 4~32자로 입력하거나 비워 두세요.',
   loadMore: '더 보기',
   ledgerTitle: '이용 내역',
   ledgerEmpty: '아직 내역이 없습니다.',
