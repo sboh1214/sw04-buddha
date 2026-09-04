@@ -20,6 +20,7 @@ import * as z from 'zod';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { api, isApiError, unwrap, type Coupon } from '@/lib/api';
+import { boundedInteger } from '@/lib/form-schema';
 
 const ADMIN_COUPONS_KEY = ['admin', 'coupons'] as const;
 
@@ -41,14 +42,12 @@ function toIsoOrNull(local: string): string | null {
 
 const schema = z.object({
   code: z.string().trim().toUpperCase().max(32),
-  amountP: z
-    .string()
-    .trim()
-    .regex(/^\d+$/, copy.errCouponAmount)
-    .refine((value) => {
-      const amount = BigInt(value);
-      return amount >= COUPON_MIN_P && amount <= COUPON_MAX_P;
-    }, copy.errCouponAmount),
+  amountP: boundedInteger(
+    /^\d+$/,
+    copy.errCouponAmount,
+    (amount) => amount >= COUPON_MIN_P && amount <= COUPON_MAX_P,
+    copy.errCouponAmount,
+  ),
   maxRedemptions: z.string().trim().regex(/^\d*$/, copy.errCouponAmount),
   expiresAt: z.string().trim(),
   memo: z.string().trim().max(200),

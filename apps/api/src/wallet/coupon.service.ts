@@ -40,6 +40,22 @@ function toCoupon(row: CouponRow): Coupon {
   };
 }
 
+/**
+ * What an `admin_actions` payload records about a coupon; jsonb, so P is a string. `code` is
+ * carried so the log reads without joining back to `coupons`. `amountP` is here for the
+ * create row only — it is immutable once issued, so an update's before/after never differ.
+ */
+function snapshot(row: CouponRow): Record<string, unknown> {
+  return {
+    code: row.code,
+    amountP: serializePAmount(row.amountP),
+    maxRedemptions: row.maxRedemptions,
+    expiresAt: row.expiresAt?.toISOString() ?? null,
+    isActive: row.isActive,
+    memo: row.memo,
+  };
+}
+
 /** Random, readable and unlikely to collide (32^10); the UNIQUE index is the real guard. */
 function generateCode(): string {
   const bytes = randomBytes(GENERATED_CODE_LENGTH);
@@ -151,19 +167,28 @@ export class CouponService {
       });
     }
     try {
-      const [row] = await this.db
-        .insert(schema.coupons)
-        .values({
-          code,
-          amountP: input.amountP,
-          maxRedemptions: input.maxRedemptions ?? null,
-          expiresAt: input.expiresAt ? new Date(input.expiresAt) : null,
-          memo: input.memo ?? null,
-          createdBy: adminId,
-        })
-        .returning();
-      if (!row) throw new AppError('INTERNAL', { message: 'Coupon insert failed' });
-      return toCoupon(row);
+      return await this.db.transaction(async (tx) => {
+        const [row] = await tx
+          .insert(schema.coupons)
+          .values({
+            code,
+            amountP: input.amountP,
+            maxRedemptions: input.maxRedemptions ?? null,
+            expiresAt: input.expiresAt ? new Date(input.expiresAt) : null,
+            memo: input.memo ?? null,
+            createdBy: adminId,
+          })
+          .returning();
+        if (!row) throw new AppError('INTERNAL', { message: 'Coupon insert failed' });
+        await tx.insert(schema.adminActions).values({
+          adminId,
+          type: 'coupon_create',
+          targetType: 'coupon',
+          targetId: row.id,
+          payload: snapshot(row),
+        });
+        return toCoupon(row);
+      });
     } catch (error) {
       if (isPgError(error, PG_UNIQUE_VIOLATION)) {
         throw new AppError('VALIDATION_ERROR', {
@@ -176,24 +201,44 @@ export class CouponService {
     }
   }
 
-  async update(id: string, input: UpdateCouponBody): Promise<Coupon> {
-    const [row] = await this.db
-      .update(schema.coupons)
-      .set({
-        ...(input.isActive === undefined ? {} : { isActive: input.isActive }),
-        ...(input.maxRedemptions === undefined
-          ? {}
-          : { maxRedemptions: input.maxRedemptions ?? null }),
-        ...(input.expiresAt === undefined
-          ? {}
-          : { expiresAt: input.expiresAt ? new Date(input.expiresAt) : null }),
-        ...(input.memo === undefined ? {} : { memo: input.memo ?? null }),
-        updatedAt: new Date(),
-      })
-      .where(eq(schema.coupons.id, id))
-      .returning();
-    if (!row) throw new AppError('NOT_FOUND', { message: 'Coupon not found' });
-    return toCoupon(row);
+  async update(adminId: string, id: string, input: UpdateCouponBody): Promise<Coupon> {
+    return this.db.transaction(async (tx) => {
+      // Only the supplied fields are written, so no read-then-write and nothing to lock; the
+      // audit row's `before` comes from the UPDATE's own view of the row.
+      const [current] = await tx
+        .select()
+        .from(schema.coupons)
+        .where(eq(schema.coupons.id, id))
+        .limit(1)
+        .for('update');
+      if (!current) throw new AppError('NOT_FOUND', { message: 'Coupon not found' });
+
+      const [row] = await tx
+        .update(schema.coupons)
+        .set({
+          ...(input.isActive === undefined ? {} : { isActive: input.isActive }),
+          ...(input.maxRedemptions === undefined
+            ? {}
+            : { maxRedemptions: input.maxRedemptions ?? null }),
+          ...(input.expiresAt === undefined
+            ? {}
+            : { expiresAt: input.expiresAt ? new Date(input.expiresAt) : null }),
+          ...(input.memo === undefined ? {} : { memo: input.memo ?? null }),
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.coupons.id, id))
+        .returning();
+      if (!row) throw new AppError('INTERNAL', { message: 'Coupon update failed' });
+
+      await tx.insert(schema.adminActions).values({
+        adminId,
+        type: 'coupon_update',
+        targetType: 'coupon',
+        targetId: row.id,
+        payload: { before: snapshot(current), after: snapshot(row) },
+      });
+      return toCoupon(row);
+    });
   }
 
   async list(cursor: string | undefined, limit: number): Promise<Page<Coupon>> {

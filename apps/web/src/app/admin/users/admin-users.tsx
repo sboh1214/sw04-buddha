@@ -28,6 +28,7 @@ import { copy } from '@/copy';
 import { ME_QUERY_KEY } from '@/hooks/use-me';
 import { LEDGER_QUERY_KEY } from '@/hooks/use-wallet';
 import { api, isApiError, unwrap, type AdminUser } from '@/lib/api';
+import { boundedInteger } from '@/lib/form-schema';
 
 const ADMIN_USERS_KEY = ['admin', 'users'] as const;
 
@@ -111,14 +112,12 @@ export function AdminUsers() {
 }
 
 const adjustSchema = z.object({
-  amountP: z
-    .string()
-    .trim()
-    .regex(/^-?\d+$/, copy.errAdjustRange)
-    .refine((value) => {
-      const amount = BigInt(value);
-      return amount !== 0n && amount >= -ADJUST_MAX_ABS_P && amount <= ADJUST_MAX_ABS_P;
-    }, copy.errAdjustRange),
+  amountP: boundedInteger(
+    /^-?\d+$/,
+    copy.errAdjustRange,
+    (amount) => amount !== 0n && amount >= -ADJUST_MAX_ABS_P && amount <= ADJUST_MAX_ABS_P,
+    copy.errAdjustRange,
+  ),
   memo: z.string().trim().min(1, copy.errAdjustMemo).max(200),
 });
 type AdjustValues = z.infer<typeof adjustSchema>;

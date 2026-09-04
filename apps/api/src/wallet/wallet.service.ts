@@ -18,6 +18,8 @@ import { PAYMENT_PROVIDER, type PaymentProvider } from '../payments/payment-prov
 
 type LedgerRow = typeof schema.ledgerEntries.$inferSelect;
 type PaymentRow = typeof schema.payments.$inferSelect;
+/** The handle `db.transaction` hands its callback; @buddha/db exports no alias for it. */
+type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 
 export function toLedgerEntry(row: LedgerRow): LedgerEntry {
   return {
@@ -87,16 +89,19 @@ export class WalletService {
     const outcome = await this.provider.charge({ paymentId, userId, amountP, priceKrw });
 
     if (outcome.status === 'failed') {
-      // Record the attempt (no ledger entry, no balance change) so support can see it.
-      await this.db.insert(schema.payments).values({
-        id: paymentId,
-        userId,
-        amountP,
-        priceKrw,
-        packageId,
-        provider: this.provider.name,
-        providerRef: outcome.providerRef,
-        status: 'failed',
+      // Record the attempt (no ledger entry, no balance change) so support can see it. The
+      // transaction exists only so the package reference can be pinned the same way as below.
+      await this.db.transaction(async (tx) => {
+        await tx.insert(schema.payments).values({
+          id: paymentId,
+          userId,
+          amountP,
+          priceKrw,
+          packageId: await this.pinnedPackageId(tx, packageId),
+          provider: this.provider.name,
+          providerRef: outcome.providerRef,
+          status: 'failed',
+        });
       });
       this.logger.warn(`charge ${paymentId} refused by ${this.provider.name}`);
       throw new AppError('VALIDATION_ERROR', {
@@ -113,7 +118,7 @@ export class WalletService {
           userId,
           amountP,
           priceKrw,
-          packageId,
+          packageId: await this.pinnedPackageId(tx, packageId),
           provider: this.provider.name,
           providerRef: outcome.providerRef,
           status: 'succeeded',
@@ -161,6 +166,28 @@ export class WalletService {
       .limit(1);
     if (!row) throw new AppError('NOT_FOUND', { message: 'Balance not found' });
     return toBalance(row);
+  }
+
+  /**
+   * The package id to store on a payment, pinned for the rest of the transaction.
+   *
+   * An admin may delete a package (ChargePackageService.remove) between the read at the top of
+   * `charge` and this insert. `ON DELETE SET NULL` governs what happens to rows that already
+   * exist, not an insert naming a parent that is already gone — that violates the FK, and the
+   * exception filter has no SQLSTATE branch, so the caller would get a 500 after the provider
+   * had already accepted the charge. FOR KEY SHARE makes a concurrent DELETE wait for this
+   * transaction, and a package that is gone already simply loses its reference, which is the
+   * state SET NULL would have produced a moment later. The payment keeps its own amount and
+   * price snapshot either way, so no history is lost (ADR-0026).
+   */
+  private async pinnedPackageId(tx: Tx, packageId: string): Promise<string | null> {
+    const [row] = await tx
+      .select({ id: schema.chargePackages.id })
+      .from(schema.chargePackages)
+      .where(eq(schema.chargePackages.id, packageId))
+      .limit(1)
+      .for('key share');
+    return row?.id ?? null;
   }
 
   /** Newest first, keyset-paginated over (created_at, id) — see @buddha/shared pagination. */

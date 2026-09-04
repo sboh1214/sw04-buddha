@@ -154,6 +154,38 @@ describe.skipIf(!hasTestInfra)('coupons (integration)', () => {
     expect(anonymous.statusCode).toBe(401);
   });
 
+  it('records the issuing and editing admin in admin_actions', async () => {
+    const created = await t.app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/coupons',
+      headers: { ...jsonHeaders, cookie: admin.cookie },
+      payload: { code: 'AUDIT1', amountP: '5000', maxRedemptions: 3 },
+    });
+    expect(created.statusCode).toBe(201);
+    const coupon = created.json<{ data: Coupon }>().data;
+
+    const patched = await t.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/admin/coupons/${coupon.id}`,
+      headers: { ...jsonHeaders, cookie: admin.cookie },
+      payload: { isActive: false },
+    });
+    expect(patched.statusCode).toBe(200);
+
+    const actions = await t.db
+      .select()
+      .from(schema.adminActions)
+      .orderBy(schema.adminActions.createdAt, schema.adminActions.id);
+    expect(actions.map((row) => row.type)).toEqual(['coupon_create', 'coupon_update']);
+    expect(actions.every((row) => row.adminId === admin.id)).toBe(true);
+    expect(actions.every((row) => row.targetType === 'coupon')).toBe(true);
+    expect(actions[0]?.payload).toMatchObject({ code: 'AUDIT1', amountP: '5000' });
+    expect(actions[1]?.payload).toMatchObject({
+      before: { isActive: true },
+      after: { isActive: false },
+    });
+  });
+
   it('lists coupons for the admin, newest first', async () => {
     await issue({ code: 'FIRST-ONE', amountP: '1000' });
     await issue({ code: 'SECOND-ONE', amountP: '2000' });

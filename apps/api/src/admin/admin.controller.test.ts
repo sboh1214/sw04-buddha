@@ -213,6 +213,26 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
     });
   });
 
+  it('rejects a malformed uuid path param as VALIDATION_ERROR, not a 500', async () => {
+    // Straight through to a `where id = 'not-a-uuid'` on a uuid column, Postgres raises
+    // 22P02, and the exception filter has no SQLSTATE mapping — so this used to be a 500.
+    const routes: [string, string][] = [
+      ['PATCH', '/api/v1/admin/charge-packages/not-a-uuid'],
+      ['DELETE', '/api/v1/admin/charge-packages/not-a-uuid'],
+      ['PATCH', '/api/v1/admin/coupons/not-a-uuid'],
+    ];
+    for (const [method, url] of routes) {
+      const res = await t.app.inject({
+        method: method as 'PATCH' | 'DELETE',
+        url,
+        headers: { ...jsonHeaders, cookie: admin.cookie },
+        ...(method === 'PATCH' ? { payload: { isActive: false } } : {}),
+      });
+      expect({ url, status: res.statusCode }).toEqual({ url, status: 400 });
+      expect(res.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR' } });
+    }
+  });
+
   it('pages past rows that share one created_at instead of dropping them', async () => {
     // One statement, so all five rows carry the same transaction `now()` — what the
     // ledger.audit job writes when it finds several broken accounts at once. The cursor is a

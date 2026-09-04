@@ -28,27 +28,33 @@ import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { CHARGE_PACKAGES_QUERY_KEY } from '@/hooks/use-wallet';
 import { api, isApiError, unwrap, type ChargePackage } from '@/lib/api';
+import { boundedInteger, integerField } from '@/lib/form-schema';
 
 const ADMIN_PACKAGES_KEY = ['admin', 'charge-packages'] as const;
+
+const DIGITS = /^\d+$/;
 
 /** Same rules as the API: a positive integer amount within bounds, price never above it. */
 const schema = z
   .object({
-    amountP: z
-      .string()
-      .trim()
-      .regex(/^\d+$/, copy.errPackagePrice)
-      .refine((value) => {
-        const amount = BigInt(value);
-        return amount >= CHARGE_PACKAGE_MIN_P && amount <= CHARGE_PACKAGE_MAX_P;
-      }, copy.errPackagePrice),
-    priceKrw: z.string().trim().regex(/^\d+$/, copy.errPackagePrice),
-    sortOrder: z.string().trim().regex(/^\d+$/, copy.errPackagePrice),
+    amountP: boundedInteger(
+      DIGITS,
+      copy.errPackagePrice,
+      (amount) => amount >= CHARGE_PACKAGE_MIN_P && amount <= CHARGE_PACKAGE_MAX_P,
+      copy.errPackagePrice,
+    ),
+    priceKrw: integerField(DIGITS, copy.errPackagePrice),
+    sortOrder: integerField(DIGITS, copy.errPackagePrice),
   })
-  .refine((value) => BigInt(value.priceKrw) <= BigInt(value.amountP), {
-    message: copy.errPackagePrice,
-    path: ['priceKrw'],
-  });
+  // Object-level, so it runs even when a field above failed and it sees the raw string: it
+  // has to prove both halves are digits itself before converting (see lib/form-schema).
+  .refine(
+    (value) =>
+      !DIGITS.test(value.amountP) ||
+      !DIGITS.test(value.priceKrw) ||
+      BigInt(value.priceKrw) <= BigInt(value.amountP),
+    { message: copy.errPackagePrice, path: ['priceKrw'] },
+  );
 type FormValues = z.infer<typeof schema>;
 
 export function AdminChargePackages() {

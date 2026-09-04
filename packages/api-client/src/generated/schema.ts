@@ -661,6 +661,15 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description UNAUTHENTICATED */
             401: {
                 headers: {

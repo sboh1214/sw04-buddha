@@ -25,6 +25,7 @@ import {
   auditFailureSchema,
   balanceAdjustBodySchema,
   cursorQuerySchema,
+  uuidParamSchema,
   type AdminBalanceAdjustResult,
   type AdminPayment,
   type AdminUser,
@@ -89,9 +90,10 @@ export class AdminController {
   @ApiData(chargePackageSchema, 201)
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'VALIDATION_ERROR')
   createChargePackage(
+    @CurrentUser() admin: SessionUser,
     @Body({ schema: createChargePackageBodySchema }) body: CreateChargePackageBody,
   ): Promise<ChargePackage> {
-    return this.packages.create(body);
+    return this.packages.create(admin.id, body);
   }
 
   @Patch('charge-packages/:id')
@@ -102,10 +104,11 @@ export class AdminController {
   @ApiData(chargePackageSchema)
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
   updateChargePackage(
-    @Param('id') id: string,
+    @CurrentUser() admin: SessionUser,
+    @Param('id', { schema: uuidParamSchema }) id: string,
     @Body({ schema: updateChargePackageBodySchema }) body: UpdateChargePackageBody,
   ): Promise<ChargePackage> {
-    return this.packages.update(id, body);
+    return this.packages.update(admin.id, id, body);
   }
 
   @Delete('charge-packages/:id')
@@ -114,9 +117,12 @@ export class AdminController {
     operationId: 'adminDeleteChargePackage',
     summary: 'Remove a package (past payments keep their own amount and price)',
   })
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND')
-  async deleteChargePackage(@Param('id') id: string): Promise<void> {
-    await this.packages.remove(id);
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
+  async deleteChargePackage(
+    @CurrentUser() admin: SessionUser,
+    @Param('id', { schema: uuidParamSchema }) id: string,
+  ): Promise<void> {
+    await this.packages.remove(admin.id, id);
   }
 
   // --- coupons (ADR-0026): P grants an admin hands out ---------------------------------
@@ -155,10 +161,11 @@ export class AdminController {
   @ApiData(couponSchema)
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
   updateCoupon(
-    @Param('id') id: string,
+    @CurrentUser() admin: SessionUser,
+    @Param('id', { schema: uuidParamSchema }) id: string,
     @Body({ schema: updateCouponBodySchema }) body: UpdateCouponBody,
   ): Promise<Coupon> {
-    return this.coupons.update(id, body);
+    return this.coupons.update(admin.id, id, body);
   }
 
   @Get('users')

@@ -22,6 +22,16 @@ export function toChargePackage(row: PackageRow): ChargePackage {
   };
 }
 
+/** What an `admin_actions` payload records about a package; jsonb, so P is a string. */
+function snapshot(row: PackageRow): Record<string, unknown> {
+  return {
+    amountP: serializePAmount(row.amountP),
+    priceKrw: row.priceKrw,
+    sortOrder: row.sortOrder,
+    isActive: row.isActive,
+  };
+}
+
 /**
  * The catalogue users buy from (ADR-0026). Everything here is admin-managed data, so the
  * service only reads and writes rows; the discount is derived by the client from
@@ -50,56 +60,102 @@ export class ChargePackageService {
     return rows.map(toChargePackage);
   }
 
-  async create(input: CreateChargePackageBody): Promise<ChargePackage> {
-    const [row] = await this.db
-      .insert(schema.chargePackages)
-      .values({
-        amountP: input.amountP,
-        priceKrw: input.priceKrw,
-        sortOrder: input.sortOrder,
-        isActive: input.isActive,
-      })
-      .returning();
-    if (!row) throw new AppError('INTERNAL', { message: 'Charge package insert failed' });
-    return toChargePackage(row);
+  async create(adminId: string, input: CreateChargePackageBody): Promise<ChargePackage> {
+    return this.db.transaction(async (tx) => {
+      const [row] = await tx
+        .insert(schema.chargePackages)
+        .values({
+          amountP: input.amountP,
+          priceKrw: input.priceKrw,
+          sortOrder: input.sortOrder,
+          isActive: input.isActive,
+        })
+        .returning();
+      if (!row) throw new AppError('INTERNAL', { message: 'Charge package insert failed' });
+      await tx.insert(schema.adminActions).values({
+        adminId,
+        type: 'charge_package_create',
+        targetType: 'charge_package',
+        targetId: row.id,
+        payload: snapshot(row),
+      });
+      return toChargePackage(row);
+    });
   }
 
-  async update(id: string, input: UpdateChargePackageBody): Promise<ChargePackage> {
-    // Both halves of the price/amount pair matter to the CHECK, so the missing half is read
-    // from the row and sent along; a violation comes back as VALIDATION_ERROR, not a 500.
-    const current = await this.get(id);
-    const amountP = input.amountP ?? BigInt(current.amountP);
-    const priceKrw = input.priceKrw ?? current.priceKrw;
-    if (BigInt(priceKrw) > amountP) {
-      throw new AppError('VALIDATION_ERROR', {
-        message: 'priceKrw must not exceed amountP',
-        details: [{ path: ['priceKrw'], message: 'must not exceed amountP' }],
+  async update(
+    adminId: string,
+    id: string,
+    input: UpdateChargePackageBody,
+  ): Promise<ChargePackage> {
+    return this.db.transaction(async (tx) => {
+      // Both halves of the price/amount pair matter to the CHECK, so the missing half is read
+      // from the row and written back with it — which is only sound while the row is locked.
+      // Unlocked, a patch of just `isActive` would restore a price a concurrent patch had
+      // already changed, and `charge` snapshots that price onto the payment. Writing the pair
+      // rather than only the supplied fields is deliberate: the CHECK then re-evaluates
+      // exactly what was validated here, so a violation stays a VALIDATION_ERROR and never
+      // reaches the exception filter, which has no SQLSTATE branch and would render it as 500.
+      const [current] = await tx
+        .select()
+        .from(schema.chargePackages)
+        .where(eq(schema.chargePackages.id, id))
+        .limit(1)
+        .for('update');
+      if (!current) throw new AppError('NOT_FOUND', { message: 'Charge package not found' });
+
+      const amountP = input.amountP ?? current.amountP;
+      const priceKrw = input.priceKrw ?? current.priceKrw;
+      if (BigInt(priceKrw) > amountP) {
+        throw new AppError('VALIDATION_ERROR', {
+          message: 'priceKrw must not exceed amountP',
+          details: [{ path: ['priceKrw'], message: 'must not exceed amountP' }],
+        });
+      }
+
+      const [row] = await tx
+        .update(schema.chargePackages)
+        .set({
+          amountP,
+          priceKrw,
+          ...(input.sortOrder === undefined ? {} : { sortOrder: input.sortOrder }),
+          ...(input.isActive === undefined ? {} : { isActive: input.isActive }),
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.chargePackages.id, id))
+        .returning();
+      // The row was found and is locked, so a miss here is not a 404.
+      if (!row) throw new AppError('INTERNAL', { message: 'Charge package update failed' });
+
+      await tx.insert(schema.adminActions).values({
+        adminId,
+        type: 'charge_package_update',
+        targetType: 'charge_package',
+        targetId: row.id,
+        payload: { before: snapshot(current), after: snapshot(row) },
       });
-    }
-    const [row] = await this.db
-      .update(schema.chargePackages)
-      .set({
-        amountP,
-        priceKrw,
-        ...(input.sortOrder === undefined ? {} : { sortOrder: input.sortOrder }),
-        ...(input.isActive === undefined ? {} : { isActive: input.isActive }),
-        updatedAt: new Date(),
-      })
-      .where(eq(schema.chargePackages.id, id))
-      .returning();
-    if (!row) throw new AppError('NOT_FOUND', { message: 'Charge package not found' });
-    return toChargePackage(row);
+      return toChargePackage(row);
+    });
   }
 
   /** Payments keep their own amount/price snapshot; `payments.package_id` becomes NULL. */
-  async remove(id: string): Promise<void> {
-    const deleted = await this.db
-      .delete(schema.chargePackages)
-      .where(eq(schema.chargePackages.id, id))
-      .returning({ id: schema.chargePackages.id });
-    if (deleted.length === 0) {
-      throw new AppError('NOT_FOUND', { message: 'Charge package not found' });
-    }
+  async remove(adminId: string, id: string): Promise<void> {
+    await this.db.transaction(async (tx) => {
+      // The whole row, not just its id: the package is hard-deleted, so this audit payload is
+      // the only place its amount and price survive.
+      const [row] = await tx
+        .delete(schema.chargePackages)
+        .where(eq(schema.chargePackages.id, id))
+        .returning();
+      if (!row) throw new AppError('NOT_FOUND', { message: 'Charge package not found' });
+      await tx.insert(schema.adminActions).values({
+        adminId,
+        type: 'charge_package_delete',
+        targetType: 'charge_package',
+        targetId: row.id,
+        payload: snapshot(row),
+      });
+    });
   }
 
   async get(id: string): Promise<ChargePackage> {
