@@ -22,7 +22,6 @@ import * as z from 'zod';
 import { SocialButtons } from '@/components/auth/social-buttons';
 import { PasswordInput } from '@/components/ui/password-input';
 import { copy } from '@/copy';
-import { ME_QUERY_KEY } from '@/hooks/use-me';
 import { AUTH_ERROR, authClient, authErrorMessage, signIn } from '@/lib/auth-client';
 
 const schema = z.object({
@@ -62,7 +61,11 @@ export function LoginForm({ next, notice }: { next: string; notice?: string | un
       );
       return;
     }
-    await queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY });
+    // Drop the previous account's cache rather than only invalidating `['me']`: signing out
+    // is not the only way to get here (an expired session, a failed sign-out, or simply
+    // opening /login), and no query key carries a user id, so anything left over would be
+    // served to this session. `signIn.social` needs no equivalent — it reloads the document.
+    queryClient.clear();
     router.push(next as Route);
     router.refresh();
   });

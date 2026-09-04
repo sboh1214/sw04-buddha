@@ -66,7 +66,7 @@ export function LedgerList() {
                 onClick={() => void fetchNextPage()}
                 data-testid="ledger-more"
               >
-                {copy.ledgerLoadMore}
+                {copy.loadMore}
               </Button>
             )}
           </Stack>

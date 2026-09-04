@@ -7,7 +7,7 @@ import NextLink from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
-import { ME_QUERY_KEY, useMe } from '@/hooks/use-me';
+import { useMe } from '@/hooks/use-me';
 import { signOut } from '@/lib/auth-client';
 
 /**
@@ -52,7 +52,11 @@ export function AuthButtons() {
       toaster.create({ type: 'error', title: copy.logoutFailed });
       return;
     }
-    queryClient.removeQueries({ queryKey: ME_QUERY_KEY });
+    // Everything, not just `['me']`. The browser QueryClient is a singleton for the tab's
+    // lifetime (lib/query-client.ts) and none of the keys carry a user id, so a ledger,
+    // payment list or admin memo left behind here would be served — fresh, for the 30s
+    // staleTime, so not even refetched — to whoever logs in next on this browser.
+    queryClient.clear();
     router.push('/');
     router.refresh();
   }

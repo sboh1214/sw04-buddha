@@ -212,4 +212,39 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
       data: [{ kind: 'ledger_balance_mismatch', payload: { userId: member.id } }],
     });
   });
+
+  it('pages past rows that share one created_at instead of dropping them', async () => {
+    // One statement, so all five rows carry the same transaction `now()` — what the
+    // ledger.audit job writes when it finds several broken accounts at once. The cursor is a
+    // JS Date, so before migration 0005 rounded the columns to milliseconds it was strictly
+    // older than the value it came from, and page 2 matched neither `< cursor` nor
+    // `= cursor`: the listing simply ended after 20 rows with no error.
+    await t.db.insert(schema.auditFailures).values(
+      [1, 2, 3, 4, 5].map((n) => ({
+        kind: 'ledger_balance_mismatch' as const,
+        payload: { userId: member.id, n },
+      })),
+    );
+
+    const seen: number[] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < 5; page++) {
+      const url: string = `/api/v1/admin/audit-failures?limit=2${
+        cursor === null ? '' : `&cursor=${encodeURIComponent(cursor)}`
+      }`;
+      const res = await t.app.inject({ method: 'GET', url, headers: { cookie: admin.cookie } });
+      expect(res.statusCode).toBe(200);
+      const body = res.json<{
+        data: { payload: { n: number } }[];
+        meta: { nextCursor: string | null };
+      }>();
+      seen.push(...body.data.map((row) => row.payload.n));
+      cursor = body.meta.nextCursor;
+      if (cursor === null) break;
+    }
+
+    expect(cursor).toBeNull();
+    // Newest first, every row exactly once — no gap and no repeat across the tie.
+    expect(seen).toEqual([5, 4, 3, 2, 1]);
+  });
 });

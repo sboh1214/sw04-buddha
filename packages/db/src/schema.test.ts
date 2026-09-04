@@ -1,7 +1,7 @@
 import { SIGNUP_BONUS_P } from '@buddha/shared';
-import { eq, sql } from 'drizzle-orm';
+import { eq, lt, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { balances, ledgerEntries, markets, profiles, user } from './schema/index.js';
+import { auditFailures, balances, ledgerEntries, markets, profiles, user } from './schema/index.js';
 import { createCategory, createMarket, createUser } from './test/factories.js';
 import { connectTestDb, hasTestDb, type TestDb } from './test/harness.js';
 
@@ -132,6 +132,40 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       .where(eq(profiles.userId, profile.userId))
       .returning();
     expect(updated!.updatedAt.getTime()).toBeGreaterThan(profile.updatedAt.getTime());
+  });
+
+  describe('timestamptz precision (migration 0005)', () => {
+    it('round-trips a shared now() through a JS Date, which every keyset cursor relies on', async () => {
+      // One statement, so all three rows carry a single transaction `now()`. While the columns
+      // kept microseconds, the Date read back here was strictly older than the stored value,
+      // and a cursor built from it skipped the whole group — page 2 of a listing came back
+      // empty (@buddha/shared encodeKeyset compares `created_at < cursor OR = cursor AND ...`).
+      await t.db
+        .insert(auditFailures)
+        .values([1, 2, 3].map((n) => ({ kind: 'ledger_balance_mismatch', payload: { n } })));
+
+      const rows = await t.db.select().from(auditFailures);
+      expect(rows).toHaveLength(3);
+      const stamp = rows[0]!.createdAt;
+      expect(rows.map((row) => row.createdAt.getTime())).toEqual([
+        stamp.getTime(),
+        stamp.getTime(),
+        stamp.getTime(),
+      ]);
+
+      // The Date is an exact representation, so the rows still match the timestamp they
+      // reported — and no row is stranded between `stamp` and its true stored value.
+      const matched = await t.db
+        .select()
+        .from(auditFailures)
+        .where(eq(auditFailures.createdAt, stamp));
+      expect(matched).toHaveLength(3);
+      const older = await t.db
+        .select()
+        .from(auditFailures)
+        .where(lt(auditFailures.createdAt, stamp));
+      expect(older).toHaveLength(0);
+    });
   });
 
   describe('buddha_app privileges (PLAN 6.4)', () => {

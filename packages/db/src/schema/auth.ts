@@ -2,7 +2,8 @@
  * better-auth 1.7.2 tables (PLAN 6.1). Generated with
  *   pnpm --filter @buddha/db run db:auth-schema
  * (the `auth` CLI, config in packages/db/better-auth.config.ts) and adjusted by hand:
- * every `timestamp()` got `{ withTimezone: true, mode: 'date' }` (repo convention) and the
+ * every `timestamp()` got `{ withTimezone: true, mode: 'date', precision: 3 }` (repo
+ * convention, matching schema/columns.ts — a JS Date holds no more than milliseconds) and the
  * `relations()` block the CLI appends was removed: every relation on these tables lives once
  * in relations.ts (drizzle merges duplicate `relations(user, ...)` calls at runtime but not
  * in the query types). Column names are explicit snake_case, so drizzle's `casing` setting
@@ -12,7 +13,8 @@
  */
 import { boolean, index, pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 
-const timestamptz = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' });
+const timestamptz = (name: string) =>
+  timestamp(name, { withTimezone: true, mode: 'date', precision: 3 });
 
 export const user = pgTable('user', {
   id: text('id').primaryKey(),

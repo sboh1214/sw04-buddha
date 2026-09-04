@@ -14,7 +14,12 @@ import {
 } from '@chakra-ui/react';
 import { ADJUST_MAX_ABS_P, formatP, parsePAmount } from '@buddha/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useMutation,
+  useQueryClient,
+} from '@tanstack/react-query';
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import * as z from 'zod';
@@ -30,13 +35,25 @@ export function AdminUsers() {
   const [query, setQuery] = useState('');
   const [term, setTerm] = useState('');
 
-  const users = useQuery({
+  // Cursor-paginated, 20 per page (PLAN 7). Same 더 보기 idiom as the wallet ledger: without
+  // it every user past the first page — including matches of a broad search — is unreachable.
+  const users = useInfiniteQuery({
     queryKey: [...ADMIN_USERS_KEY, term],
-    queryFn: async () =>
-      unwrap(await api.GET('/api/v1/admin/users', { params: { query: term ? { q: term } : {} } }))
-        .data,
+    queryFn: async ({ pageParam }: { pageParam: string | undefined }) => {
+      const { data, meta } = unwrap(
+        await api.GET('/api/v1/admin/users', {
+          params: {
+            query: { ...(term ? { q: term } : {}), ...(pageParam ? { cursor: pageParam } : {}) },
+          },
+        }),
+      );
+      return { items: data, nextCursor: meta.nextCursor };
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last: { nextCursor: string | null }) => last.nextCursor ?? undefined,
     placeholderData: keepPreviousData,
   });
+  const rows = users.data?.pages.flatMap((page) => page.items) ?? [];
 
   return (
     <Stack gap="4">
@@ -68,13 +85,25 @@ export function AdminUsers() {
             <Alert.Description>{copy.errUnknown}</Alert.Description>
           </Alert.Content>
         </Alert.Root>
-      ) : users.data.length === 0 ? (
+      ) : rows.length === 0 ? (
         <Text color="fg.muted">{copy.adminNoUsers}</Text>
       ) : (
         <Stack gap="3">
-          {users.data.map((user) => (
+          {rows.map((user) => (
             <UserCard key={user.id} user={user} />
           ))}
+          {users.hasNextPage && (
+            <Button
+              alignSelf="center"
+              size="sm"
+              variant="ghost"
+              loading={users.isFetchingNextPage}
+              onClick={() => void users.fetchNextPage()}
+              data-testid="admin-users-more"
+            >
+              {copy.loadMore}
+            </Button>
+          )}
         </Stack>
       )}
     </Stack>

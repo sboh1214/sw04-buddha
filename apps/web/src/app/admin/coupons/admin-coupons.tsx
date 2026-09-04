@@ -14,7 +14,7 @@ import {
 } from '@chakra-ui/react';
 import { COUPON_MAX_P, COUPON_MIN_P, formatP, parsePAmount } from '@buddha/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import * as z from 'zod';
 import { toaster } from '@/components/ui/toaster';
@@ -57,10 +57,23 @@ type FormValues = z.infer<typeof schema>;
 
 export function AdminCoupons() {
   const queryClient = useQueryClient();
-  const coupons = useQuery({
+  // Cursor-paginated, 20 per page (PLAN 7). Unlike the user list this screen has no search,
+  // so without 더 보기 a coupon past the first page — and its 중지 toggle — is unreachable,
+  // and an admin issuing them one click at a time reaches 20 quickly.
+  const coupons = useInfiniteQuery({
     queryKey: ADMIN_COUPONS_KEY,
-    queryFn: async (): Promise<Coupon[]> => unwrap(await api.GET('/api/v1/admin/coupons')).data,
+    queryFn: async ({ pageParam }: { pageParam: string | undefined }) => {
+      const { data, meta } = unwrap(
+        await api.GET('/api/v1/admin/coupons', {
+          params: { query: pageParam ? { cursor: pageParam } : {} },
+        }),
+      );
+      return { items: data, nextCursor: meta.nextCursor };
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last: { nextCursor: string | null }) => last.nextCursor ?? undefined,
   });
+  const rows = coupons.data?.pages.flatMap((page) => page.items) ?? [];
 
   const create = useMutation({
     mutationFn: async (values: FormValues) =>
@@ -182,7 +195,7 @@ export function AdminCoupons() {
         </Alert.Root>
       ) : (
         <Stack gap="2">
-          {coupons.data.map((coupon) => (
+          {rows.map((coupon) => (
             <HStack
               key={coupon.id}
               justify="space-between"
@@ -223,6 +236,18 @@ export function AdminCoupons() {
               </Button>
             </HStack>
           ))}
+          {coupons.hasNextPage && (
+            <Button
+              alignSelf="center"
+              size="sm"
+              variant="ghost"
+              loading={coupons.isFetchingNextPage}
+              onClick={() => void coupons.fetchNextPage()}
+              data-testid="admin-coupons-more"
+            >
+              {copy.loadMore}
+            </Button>
+          )}
         </Stack>
       )}
     </Stack>

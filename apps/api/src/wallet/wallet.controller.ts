@@ -22,7 +22,7 @@ import { CurrentUser } from '../auth/current-user.decorator.js';
 import { SessionGuard } from '../auth/session.guard.js';
 import { ApiData, ApiErrors, ApiPageOf } from '../common/openapi/api-response.decorators.js';
 import { ApiPage } from '../common/interceptors/response-envelope.interceptor.js';
-import { SESSION_COOKIE } from '../openapi/document.js';
+import { SESSION_SECURITY_SCHEME } from '../openapi/document.js';
 import { ChargePackageService } from './charge-package.service.js';
 import { CouponService, type RedeemResult } from './coupon.service.js';
 import { WalletService } from './wallet.service.js';
@@ -59,7 +59,7 @@ export class ChargePackagesController {
 
 /** `POST /api/v1/payments/charge` (PLAN 7.2, M2). */
 @ApiTags('wallet')
-@ApiCookieAuth(SESSION_COOKIE)
+@ApiCookieAuth(SESSION_SECURITY_SCHEME)
 @Controller('payments')
 @UseGuards(SessionGuard)
 export class PaymentsController {
@@ -84,7 +84,7 @@ export class PaymentsController {
 
 /** `POST /api/v1/coupons/redeem` (ADR-0026). */
 @ApiTags('wallet')
-@ApiCookieAuth(SESSION_COOKIE)
+@ApiCookieAuth(SESSION_SECURITY_SCHEME)
 @Controller('coupons')
 @UseGuards(SessionGuard)
 export class CouponsController {
@@ -121,7 +121,7 @@ export class CouponsController {
 
 /** `GET /api/v1/me/ledger` and `/me/payments` (PLAN 7.2, M2). */
 @ApiTags('wallet')
-@ApiCookieAuth(SESSION_COOKIE)
+@ApiCookieAuth(SESSION_SECURITY_SCHEME)
 @Controller('me')
 @UseGuards(SessionGuard)
 export class MeWalletController {

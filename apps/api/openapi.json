@@ -349,7 +349,7 @@
         },
         "security": [
           {
-            "buddha.session_token": []
+            "session": []
           }
         ],
         "summary": "Buy one charge package (mock provider: succeeds immediately). P is never convertible back to cash.",
@@ -435,7 +435,7 @@
         },
         "security": [
           {
-            "buddha.session_token": []
+            "session": []
           }
         ],
         "summary": "Redeem a coupon code for P",
@@ -517,7 +517,7 @@
         },
         "security": [
           {
-            "buddha.session_token": []
+            "session": []
           }
         ],
         "summary": "Ledger entries, newest first",
@@ -599,7 +599,7 @@
         },
         "security": [
           {
-            "buddha.session_token": []
+            "session": []
           }
         ],
         "summary": "Charges, newest first",
@@ -658,7 +658,7 @@
         },
         "security": [
           {
-            "buddha.session_token": []
+            "session": []
           }
         ],
         "summary": "Every charge package, active or not",
@@ -732,7 +732,7 @@
         },
         "security": [
           {
-            "buddha.session_token": []
+            "session": []
           }
         ],
         "summary": "Add a charge package",
@@ -827,7 +827,7 @@
         },
         "security": [
           {
-            "buddha.session_token": []
+            "session": []
           }
         ],
         "summary": "Change the amount, price, order or availability",
@@ -881,7 +881,7 @@
         },
         "security": [
           {
-            "buddha.session_token": []
+            "session": []
           }
         ],
         "summary": "Remove a package (past payments keep their own amount and price)",
@@ -973,7 +973,7 @@
         },
         "security": [
           {
-            "buddha.session_token": []
+            "session": []
           }
         ],
         "summary": "Coupons, newest first",
@@ -1047,7 +1047,7 @@
         },
         "security": [
           {
-            "buddha.session_token": []
+            "session": []
           }
         ],
         "summary": "Issue a coupon (the code is generated when omitted)",
@@ -1142,7 +1142,7 @@
         },
         "security": [
           {
-            "buddha.session_token": []
+            "session": []
           }
         ],
         "summary": "Disable a coupon or change its cap, expiry or memo",
@@ -1242,7 +1242,7 @@
         },
         "security": [
           {
-            "buddha.session_token": []
+            "session": []
           }
         ],
         "summary": "Search users by email or nickname",
@@ -1347,7 +1347,7 @@
         },
         "security": [
           {
-            "buddha.session_token": []
+            "session": []
           }
         ],
         "summary": "Credit or debit P with a mandatory reason (ADMIN_ADJUST)",
@@ -1439,7 +1439,7 @@
         },
         "security": [
           {
-            "buddha.session_token": []
+            "session": []
           }
         ],
         "summary": "Charges, newest first",
@@ -1531,7 +1531,7 @@
         },
         "security": [
           {
-            "buddha.session_token": []
+            "session": []
           }
         ],
         "summary": "Ledger/balance mismatches found by the ledger.audit job",

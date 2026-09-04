@@ -45,7 +45,7 @@ import { CurrentUser } from '../auth/current-user.decorator.js';
 import { SessionGuard } from '../auth/session.guard.js';
 import { ApiPage } from '../common/interceptors/response-envelope.interceptor.js';
 import { ApiData, ApiErrors, ApiPageOf } from '../common/openapi/api-response.decorators.js';
-import { SESSION_COOKIE } from '../openapi/document.js';
+import { SESSION_SECURITY_SCHEME } from '../openapi/document.js';
 import { ChargePackageService } from '../wallet/charge-package.service.js';
 import { CouponService } from '../wallet/coupon.service.js';
 import { AdminService } from './admin.service.js';
@@ -62,7 +62,7 @@ const LIMIT_PARAM = {
  * reads the role (401 without a session, 403 for a non-admin).
  */
 @ApiTags('admin')
-@ApiCookieAuth(SESSION_COOKIE)
+@ApiCookieAuth(SESSION_SECURITY_SCHEME)
 @Controller('admin')
 @UseGuards(SessionGuard, AdminGuard)
 export class AdminController {

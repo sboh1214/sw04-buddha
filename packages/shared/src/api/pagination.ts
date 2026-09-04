@@ -17,6 +17,12 @@ export type CursorQuery = z.infer<typeof cursorQuerySchema>;
  * Keyset cursor over `(created_at DESC, id DESC)`: the timestamp alone is not unique, and an
  * offset would skip or repeat rows while new entries arrive. Encoded as `<epochMillis>_<id>`
  * so it stays printable in a query string; treated as opaque by clients.
+ *
+ * `epochMillis` is only a faithful cursor because every timestamptz column is declared
+ * `timestamp(3)` (packages/db `timestampTz` and `schema/auth.ts`, migration 0005): a JS Date
+ * cannot hold more, and drizzle truncates the rest on the way in and out. Widen a column back
+ * to microseconds and the comparison silently drops every row sharing the cursor row's
+ * millisecond — the loss is one-directional, so it never repeats a row, only omits one.
  */
 export interface Keyset {
   createdAt: Date;
