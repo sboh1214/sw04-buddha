@@ -26,9 +26,11 @@ export function ChargeForm() {
     } catch (error) {
       toaster.create({
         type: 'error',
+        // NOT_FOUND is a package an admin deleted; it used to fall through to chargeFailed,
+        // which tells the user to try again in a moment — advice that can never work.
         title: isApiError(error, 'PRICE_MOVED')
           ? copy.chargePriceMoved
-          : isApiError(error, 'VALIDATION_ERROR')
+          : isApiError(error, 'VALIDATION_ERROR') || isApiError(error, 'NOT_FOUND')
             ? copy.chargeUnavailable
             : copy.chargeFailed,
       });

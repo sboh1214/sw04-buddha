@@ -2,7 +2,15 @@
 
 import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useQuery } from '@tanstack/react-query';
-import { api, unwrap, type ChargePackage, type LedgerEntry, type Payment } from '@/lib/api';
+import {
+  api,
+  isApiError,
+  unwrap,
+  validationField,
+  type ChargePackage,
+  type LedgerEntry,
+  type Payment,
+} from '@/lib/api';
 import { ME_QUERY_KEY } from './use-me';
 
 /** PLAN 11.5 key rules. Ledger and payments hang off their own roots. */
@@ -58,6 +66,23 @@ export function useChargePackages() {
 }
 
 /**
+ * The three ways the server says "the catalogue you are looking at is out of date": the
+ * package was re-priced (409 PRICE_MOVED), retired (400 VALIDATION_ERROR naming `packageId`)
+ * or deleted (404).
+ *
+ * Deliberately not every failure. A payment the provider declines is also a VALIDATION_ERROR
+ * but names `amountP`, and refetching has a cost when it fails: the query flips to
+ * `status: 'error'`, which swaps ChargeForm's cards for the generic error alert.
+ */
+export function isStaleCatalogue(error: unknown): boolean {
+  return (
+    isApiError(error, 'PRICE_MOVED') ||
+    isApiError(error, 'NOT_FOUND') ||
+    (isApiError(error, 'VALIDATION_ERROR') && validationField(error) === 'packageId')
+  );
+}
+
+/**
  * `POST /api/v1/payments/charge`. The response carries the new balance, so `['me']` and the
  * two lists are refreshed together — the nav chip and the ledger must never disagree.
  */
@@ -83,6 +108,15 @@ export function useCharge() {
         queryClient.invalidateQueries({ queryKey: LEDGER_QUERY_KEY }),
         queryClient.invalidateQueries({ queryKey: PAYMENTS_QUERY_KEY }),
       ]);
+    },
+    // Without this the refused card keeps showing the offer the server just rejected, and
+    // every further click re-sends the same expected amount and price. Awaited on purpose:
+    // react-query runs onError before it publishes the error, so the buy buttons stay
+    // disabled until the fresh catalogue lands and no card can change under the cursor.
+    onError: async (error) => {
+      if (isStaleCatalogue(error)) {
+        await queryClient.invalidateQueries({ queryKey: CHARGE_PACKAGES_QUERY_KEY });
+      }
     },
   });
 }

@@ -54,6 +54,7 @@ describe.skipIf(!hasTestDb())('ledger.audit (integration)', () => {
     expect(result.mismatches).toEqual([
       {
         userId: user.id,
+        balanceMissing: false,
         availableP: 11_500n,
         lockedP: 0n,
         ledgerSumP: 10_000n,
@@ -84,6 +85,42 @@ describe.skipIf(!hasTestDb())('ledger.audit (integration)', () => {
       .from(schema.balances)
       .where(eq(schema.balances.userId, untouched.user.id));
     expect(row?.availableP).toBe(5_000n);
+  });
+
+  it('reports an account whose balance row is gone instead of losing it', async () => {
+    // The audit used to be anchored on `balances`, so an account with no balance row simply
+    // vanished: no mismatch AND `checked` one short, while the job logged "clean". buddha_app
+    // keeps DELETE on balances, and such an account is broken in its own right — every wallet
+    // call 404s — so it is exactly what this job exists to surface.
+    const { user } = await createUser(t.db, { balanceP: 10_000n });
+    const untouched = await createUser(t.db, { balanceP: 5_000n });
+    await t.db.delete(schema.balances).where(eq(schema.balances.userId, user.id));
+
+    const result = await runLedgerAudit(t.db);
+    expect(result.checked).toBe(2); // driven from `user`, so the orphan is still counted
+    expect(result.mismatches).toEqual([
+      {
+        userId: user.id,
+        balanceMissing: true,
+        availableP: 0n,
+        lockedP: 0n,
+        ledgerSumP: 10_000n,
+        differenceP: -10_000n,
+      },
+    ]);
+
+    const [row] = await failures();
+    expect(row).toMatchObject({
+      kind: LEDGER_AUDIT_FAILURE_KIND,
+      payload: { userId: user.id, balanceMissing: true, ledgerSumP: '10000' },
+    });
+
+    // The healthy account is untouched and not flagged.
+    const [ok] = await t.db
+      .select()
+      .from(schema.balances)
+      .where(eq(schema.balances.userId, untouched.user.id));
+    expect(ok?.availableP).toBe(5_000n);
   });
 
   it('counts an account with no ledger entries and a zero balance as consistent', async () => {
