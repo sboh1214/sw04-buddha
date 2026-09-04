@@ -188,6 +188,25 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     expect(secondPage.meta.nextCursor).toBeNull();
   });
 
+  it('serves the first page for a malformed cursor instead of a 500', async () => {
+    // Same class as the admin lists, but these two are reachable by any signed-in user:
+    // /me/ledger compares a bigserial id and /me/payments a uuid (see @buddha/shared
+    // decodeKeyset, which now takes the shape the column expects).
+    await charge(pack.id);
+    for (const route of ['/api/v1/me/ledger', '/api/v1/me/payments']) {
+      for (const cursor of ['0_not-a-uuid', '0_not-a-number', '8640000000000001_x']) {
+        const res = await t.app.inject({
+          method: 'GET',
+          url: `${route}?cursor=${encodeURIComponent(cursor)}`,
+          headers: { cookie: user.cookie },
+        });
+        expect({ route, cursor, status: res.statusCode }).toEqual({ route, cursor, status: 200 });
+        // Falling back to the first page, not an empty one.
+        expect(res.json<{ data: unknown[] }>().data.length).toBeGreaterThan(0);
+      }
+    }
+  });
+
   it('GET /me/payments lists the caller charges with the price paid', async () => {
     await charge(pack.id);
     const res = await t.app.inject({

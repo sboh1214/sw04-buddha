@@ -233,6 +233,35 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
     }
   });
 
+  it('serves the first page for a malformed cursor instead of a 500', async () => {
+    // A cursor is opaque and server-minted, so a corrupted one is not worth an error — but it
+    // must not reach the query. `0_not-a-uuid` hit `id < $1` on a uuid column (22P02) and a
+    // digits-only id hit a bigint (also 22P02); both rendered as 500 because the exception
+    // filter has no SQLSTATE branch. The timestamp half is worse: between 8.64e15 and
+    // MAX_SAFE_INTEGER it built an Invalid Date, and drizzle's encoder threw RangeError before
+    // any query was sent — which broke even /admin/users, whose id column is plain text.
+    const routes = [
+      '/api/v1/admin/coupons',
+      '/api/v1/admin/payments',
+      '/api/v1/admin/audit-failures',
+      '/api/v1/admin/users',
+    ];
+    for (const route of routes) {
+      for (const cursor of ['0_not-a-uuid', '0_not-a-number', '8640000000000001_x']) {
+        const res = await t.app.inject({
+          method: 'GET',
+          url: `${route}?cursor=${encodeURIComponent(cursor)}`,
+          headers: { cookie: admin.cookie },
+        });
+        expect({ route, cursor, status: res.statusCode }).toEqual({
+          route,
+          cursor,
+          status: 200,
+        });
+      }
+    }
+  });
+
   it('pages past rows that share one created_at instead of dropping them', async () => {
     // One statement, so all five rows carry the same transaction `now()` — what the
     // ledger.audit job writes when it finds several broken accounts at once. The cursor is a

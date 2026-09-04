@@ -196,7 +196,7 @@ export class WalletService {
     cursor: string | undefined,
     limit: number,
   ): Promise<Page<LedgerEntry>> {
-    const keyset = decodeKeyset(cursor);
+    const keyset = decodeKeyset(cursor, 'int');
     const rows = await this.db
       .select()
       .from(schema.ledgerEntries)
@@ -229,7 +229,7 @@ export class WalletService {
     cursor: string | undefined,
     limit: number,
   ): Promise<Page<Payment>> {
-    const keyset = decodeKeyset(cursor);
+    const keyset = decodeKeyset(cursor, 'uuid');
     const rows = await this.db
       .select()
       .from(schema.payments)

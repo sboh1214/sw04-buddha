@@ -57,7 +57,7 @@ export class AdminService {
     cursor: string | undefined,
     limit: number,
   ): Promise<Page<AdminUser>> {
-    const keyset = decodeKeyset(cursor);
+    const keyset = decodeKeyset(cursor, 'text');
     const pattern = q ? `%${q.replaceAll(/[%_\\]/g, (m) => `\\${m}`)}%` : undefined;
     const rows = await this.db
       .select(userColumns)
@@ -168,7 +168,7 @@ export class AdminService {
   }
 
   async listPayments(cursor: string | undefined, limit: number): Promise<Page<AdminPayment>> {
-    const keyset = decodeKeyset(cursor);
+    const keyset = decodeKeyset(cursor, 'uuid');
     const rows = await this.db
       .select({
         id: schema.payments.id,
@@ -219,7 +219,7 @@ export class AdminService {
   }
 
   async listAuditFailures(cursor: string | undefined, limit: number): Promise<Page<AuditFailure>> {
-    const keyset = decodeKeyset(cursor);
+    const keyset = decodeKeyset(cursor, 'int');
     const rows = await this.db
       .select()
       .from(schema.auditFailures)

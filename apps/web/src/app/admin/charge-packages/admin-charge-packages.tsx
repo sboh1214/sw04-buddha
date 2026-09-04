@@ -85,6 +85,7 @@ export function AdminChargePackages() {
       ).data,
     onSuccess: async () => {
       toaster.create({ type: 'success', title: copy.adminPackageSaved });
+      reset({ amountP: '', priceKrw: '', sortOrder: '0' });
       await invalidate();
     },
     onError: (error) =>
@@ -129,9 +130,9 @@ export function AdminChargePackages() {
     defaultValues: { amountP: '', priceKrw: '', sortOrder: '0' },
   });
 
+  // Only on success (see the coupon screen): a refused price must not erase what was typed.
   const submit = handleSubmit(async (values) => {
     await create.mutateAsync(values).catch(() => undefined); // reported by onError
-    reset({ amountP: '', priceKrw: '', sortOrder: '0' });
   });
 
   return (

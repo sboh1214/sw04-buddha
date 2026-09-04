@@ -20,6 +20,7 @@ import * as z from 'zod';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { api, isApiError, unwrap, type Coupon } from '@/lib/api';
+import { kstLocalToIso } from '@/lib/datetime';
 import { boundedInteger } from '@/lib/form-schema';
 
 const ADMIN_COUPONS_KEY = ['admin', 'coupons'] as const;
@@ -29,16 +30,6 @@ const dateFormat = new Intl.DateTimeFormat('ko-KR', {
   timeStyle: 'short',
   timeZone: 'Asia/Seoul',
 });
-
-/**
- * `datetime-local` gives `2026-12-31T23:59` in the admin's own zone; the API wants UTC ISO.
- * An empty field means "no expiry".
- */
-function toIsoOrNull(local: string): string | null {
-  if (!local) return null;
-  const parsed = new Date(local);
-  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
-}
 
 const schema = z.object({
   code: z.string().trim().toUpperCase().max(32),
@@ -82,13 +73,14 @@ export function AdminCoupons() {
             ...(values.code ? { code: values.code } : {}),
             amountP: values.amountP,
             maxRedemptions: values.maxRedemptions ? Number(values.maxRedemptions) : null,
-            expiresAt: toIsoOrNull(values.expiresAt),
+            expiresAt: kstLocalToIso(values.expiresAt),
             memo: values.memo || null,
           },
         }),
       ).data,
     onSuccess: async (coupon) => {
       toaster.create({ type: 'success', title: copy.adminCouponCreated, description: coupon.code });
+      reset({ code: '', amountP: '', maxRedemptions: '', expiresAt: '', memo: '' });
       await queryClient.invalidateQueries({ queryKey: ADMIN_COUPONS_KEY });
     },
     onError: (error) =>
@@ -122,9 +114,12 @@ export function AdminCoupons() {
     defaultValues: { code: '', amountP: '', maxRedemptions: '', expiresAt: '', memo: '' },
   });
 
+  // Reset lives in onSuccess (as it does on the user screen): a duplicate code or a rejected
+  // one has to leave the five fields the admin typed exactly where they are, or the toast from
+  // onError is unactionable. The catch stays because the form discards this promise
+  // (`void submit(e)`), so a rethrow would surface as an unhandled rejection.
   const submit = handleSubmit(async (values) => {
     await create.mutateAsync(values).catch(() => undefined); // reported by onError
-    reset({ code: '', amountP: '', maxRedemptions: '', expiresAt: '', memo: '' });
   });
 
   return (

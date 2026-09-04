@@ -242,7 +242,7 @@ export class CouponService {
   }
 
   async list(cursor: string | undefined, limit: number): Promise<Page<Coupon>> {
-    const keyset = decodeKeyset(cursor);
+    const keyset = decodeKeyset(cursor, 'uuid');
     const rows = await this.db
       .select()
       .from(schema.coupons)
