@@ -104,6 +104,7 @@ export function AdminChargePackages() {
         }),
       ).data,
     onSuccess: invalidate,
+    onError: () => toaster.create({ type: 'error', title: copy.errUnknown }),
   });
 
   const remove = useMutation({

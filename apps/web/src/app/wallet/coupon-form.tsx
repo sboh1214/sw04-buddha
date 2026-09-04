@@ -7,7 +7,7 @@ import { useForm } from 'react-hook-form';
 import * as z from 'zod';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
-import { useRedeemCoupon } from '@/hooks/use-wallet';
+import { isCouponRejection, useRedeemCoupon } from '@/hooks/use-wallet';
 import { isApiError } from '@/lib/api';
 
 /** The same code rules the API enforces; the message is the only thing localised here. */
@@ -38,11 +38,17 @@ export function CouponForm() {
       });
       reset({ code: '' });
     } catch (error) {
-      setError('code', {
-        message: isApiError(error, 'DUPLICATE_REQUEST')
-          ? copy.errCouponAlreadyUsed
-          : copy.errCouponInvalid,
-      });
+      // Only the two answers that are actually about the code the user typed belong under the
+      // field. A 500, a missing balance row, a session that died with the tab open or an
+      // unreachable API would otherwise call a perfectly good code invalid and send the user
+      // looking for another one, when retrying is the only thing that could work.
+      if (isApiError(error, 'DUPLICATE_REQUEST')) {
+        setError('code', { message: copy.errCouponAlreadyUsed });
+      } else if (isCouponRejection(error)) {
+        setError('code', { message: copy.errCouponInvalid });
+      } else {
+        toaster.create({ type: 'error', title: copy.errUnknown });
+      }
     }
   });
 

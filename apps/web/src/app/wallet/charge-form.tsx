@@ -4,7 +4,7 @@ import { Alert, Badge, Button, Card, HStack, Skeleton, Stack, Text } from '@chak
 import { discountPercent, formatKrw, formatP, parsePAmount } from '@buddha/shared';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
-import { useChargePackages, useCharge } from '@/hooks/use-wallet';
+import { isStaleCatalogue, useChargePackages, useCharge } from '@/hooks/use-wallet';
 import { isApiError, type ChargePackage } from '@/lib/api';
 
 /**
@@ -26,11 +26,13 @@ export function ChargeForm() {
     } catch (error) {
       toaster.create({
         type: 'error',
-        // NOT_FOUND is a package an admin deleted; it used to fall through to chargeFailed,
-        // which tells the user to try again in a moment — advice that can never work.
+        // Only a stale catalogue may claim the package is gone — re-priced, retired or
+        // deleted — which is the same set `useCharge` refetches on, so the message and the
+        // cards changing under it always agree. A provider refusal is a VALIDATION_ERROR too
+        // but names `amountP`: nothing about the offer changed, so it must not say so.
         title: isApiError(error, 'PRICE_MOVED')
           ? copy.chargePriceMoved
-          : isApiError(error, 'VALIDATION_ERROR') || isApiError(error, 'NOT_FOUND')
+          : isStaleCatalogue(error)
             ? copy.chargeUnavailable
             : copy.chargeFailed,
       });

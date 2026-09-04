@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ApiError } from '@/lib/api';
-import { isStaleCatalogue } from './use-wallet';
+import { isCouponRejection, isStaleCatalogue } from './use-wallet';
 
 const apiError = (status: number, code: string, details?: unknown) =>
   new ApiError(status, {
@@ -35,5 +35,29 @@ describe('isStaleCatalogue', () => {
     expect(isStaleCatalogue(apiError(401, 'UNAUTHENTICATED'))).toBe(false);
     expect(isStaleCatalogue(new Error('network'))).toBe(false);
     expect(isStaleCatalogue(undefined)).toBe(false);
+  });
+});
+
+describe('isCouponRejection', () => {
+  it('is true only for the one answer the API gives about the code itself', () => {
+    // Unknown, disabled, expired and exhausted are deliberately indistinguishable (A-M2-9)
+    // and all arrive as a VALIDATION_ERROR naming `code`.
+    expect(
+      isCouponRejection(
+        apiError(400, 'VALIDATION_ERROR', [{ path: ['code'], message: 'invalid or expired' }]),
+      ),
+    ).toBe(true);
+  });
+
+  it('leaves everything else off the field, where it would call a good code invalid', () => {
+    // Its NOT_FOUND means the account has no balance row; a 500, a dead session or an
+    // unreachable API say nothing about what the user typed.
+    expect(isCouponRejection(apiError(404, 'NOT_FOUND'))).toBe(false);
+    expect(isCouponRejection(apiError(500, 'INTERNAL'))).toBe(false);
+    expect(isCouponRejection(apiError(401, 'UNAUTHENTICATED'))).toBe(false);
+    expect(isCouponRejection(apiError(400, 'VALIDATION_ERROR'))).toBe(false);
+    expect(isCouponRejection(new TypeError('Failed to fetch'))).toBe(false);
+    // The duplicate is handled on its own branch before this predicate runs.
+    expect(isCouponRejection(apiError(409, 'DUPLICATE_REQUEST'))).toBe(false);
   });
 });

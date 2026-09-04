@@ -83,6 +83,19 @@ export function isStaleCatalogue(error: unknown): boolean {
 }
 
 /**
+ * The one answer the API gives for a code that cannot be used — unknown, disabled, expired or
+ * exhausted are deliberately indistinguishable (A-M2-9), and all four arrive as a
+ * VALIDATION_ERROR naming `code`.
+ *
+ * Deliberately not every VALIDATION_ERROR: the exception filter hands that code to any
+ * unmapped 4xx too. Nothing else the redeem route can answer is about the code either — its
+ * NOT_FOUND means the account has no balance row, which is not the user's typo to fix.
+ */
+export function isCouponRejection(error: unknown): boolean {
+  return isApiError(error, 'VALIDATION_ERROR') && validationField(error) === 'code';
+}
+
+/**
  * `POST /api/v1/payments/charge`. The response carries the new balance, so `['me']` and the
  * two lists are refreshed together — the nav chip and the ledger must never disagree.
  */
