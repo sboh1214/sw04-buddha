@@ -1,0 +1,1 @@
+ALTER TABLE "coupons" ALTER COLUMN "expires_at" SET DATA TYPE timestamp (3) with time zone;

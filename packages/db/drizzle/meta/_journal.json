@@ -50,6 +50,13 @@
       "when": 1788506827695,
       "tag": "0006_payments_user_id_created_at_idx",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1788511330472,
+      "tag": "0007_coupon_expires_at_millisecond_precision",
+      "breakpoints": true
     }
   ]
 }

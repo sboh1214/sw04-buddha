@@ -7,13 +7,12 @@ import {
   integer,
   pgTable,
   text,
-  timestamp,
   unique,
   uuid,
   varchar,
 } from 'drizzle-orm/pg-core';
 import { user } from './auth.js';
-import { createdAt, updatedAt } from './columns.js';
+import { createdAt, timestampTz, updatedAt } from './columns.js';
 
 /**
  * Admin-issued P grants (owner decision 2026-09-04, ADR-0026). A coupon carries an amount, an
@@ -30,7 +29,7 @@ export const coupons = pgTable(
     /** null = unlimited redemptions. */
     maxRedemptions: integer(),
     redeemedCount: integer().notNull().default(0),
-    expiresAt: timestamp({ withTimezone: true }),
+    expiresAt: timestampTz(),
     isActive: boolean().notNull().default(true),
     memo: text(),
     createdBy: text()
