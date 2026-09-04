@@ -174,6 +174,7 @@ export const copy = {
   chargeDone: '충전이 완료되었습니다.',
   chargeFailed: '충전에 실패했습니다. 잠시 후 다시 시도해 주세요.',
   chargeUnavailable: '지금은 선택할 수 없는 상품입니다.',
+  chargePriceMoved: '상품 내용이 바뀌었습니다. 새로고침 후 다시 시도해 주세요.',
   chargeNoPackages: '판매 중인 충전 상품이 없습니다.',
 
   // --- coupons (M2) ---

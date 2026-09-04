@@ -43,6 +43,13 @@
       "when": 1788480902843,
       "tag": "0005_timestamp_millisecond_precision",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1788506827695,
+      "tag": "0006_payments_user_id_created_at_idx",
+      "breakpoints": true
     }
   ]
 }

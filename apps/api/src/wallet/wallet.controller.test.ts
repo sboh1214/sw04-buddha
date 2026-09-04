@@ -12,10 +12,12 @@ import {
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  chargeBody,
   createTestApp,
   createTestPackage,
   signUpTestUser,
   type TestApp,
+  type TestPackage,
   type TestUser,
 } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
@@ -40,12 +42,12 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     pack = await createTestPackage(t.db);
   });
 
-  const charge = (packageId: string, cookie = user.cookie) =>
+  const charge = (pack: TestPackage, cookie = user.cookie) =>
     t.app.inject({
       method: 'POST',
       url: '/api/v1/payments/charge',
       headers: { ...jsonHeaders, cookie },
-      payload: { packageId },
+      payload: chargeBody(pack),
     });
 
   async function balanceOf(userId: string) {
@@ -87,7 +89,7 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
   });
 
   it('charges a package: P credited, KRW price recorded, one DEPOSIT entry (AC 1)', async () => {
-    const res = await charge(pack.id);
+    const res = await charge(pack);
     expect(res.statusCode).toBe(200);
     const { data } = res.json<{ data: ChargeResult }>();
     const expected = SIGNUP_BONUS_P + pack.amountP;
@@ -114,7 +116,7 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
   });
 
   it('20 concurrent charges add up, with one ledger entry each (AC 2)', async () => {
-    const responses = await Promise.all(Array.from({ length: 20 }, () => charge(pack.id)));
+    const responses = await Promise.all(Array.from({ length: 20 }, () => charge(pack)));
     expect(responses.map((res) => res.statusCode)).toEqual(Array.from({ length: 20 }, () => 200));
 
     const total = SIGNUP_BONUS_P + pack.amountP * 20n;
@@ -132,10 +134,10 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
 
   it('refuses an unknown, retired or malformed package', async () => {
     const retired = await createTestPackage(t.db, { isActive: false });
-    const unknown = await charge('3f1a5b6c-1111-4222-8333-444455556666');
+    const unknown = await charge({ ...pack, id: '3f1a5b6c-1111-4222-8333-444455556666' });
     expect(unknown.statusCode).toBe(404);
 
-    const inactive = await charge(retired.id);
+    const inactive = await charge(retired);
     expect(inactive.statusCode).toBe(400);
     expect(inactive.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR' } });
 
@@ -150,22 +152,46 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     expect(await balanceOf(user.id)).toMatchObject({ availableP: SIGNUP_BONUS_P });
   });
 
+  it('refuses a purchase of terms the catalogue never showed (PRICE_MOVED)', async () => {
+    // An admin may re-price a live package (ADR-0026) while a catalogue is still on screen,
+    // and `useChargePackages` has no refetch interval — so the body echoes what the card said
+    // and the server sells only that offer. Both halves are guarded: raising the price alone
+    // is adverse to the user, raising the P alone is adverse to the house.
+    for (const stale of [
+      { ...chargeBody(pack), expectedPriceKrw: pack.priceKrw - 100 },
+      { ...chargeBody(pack), expectedAmountP: (pack.amountP + 1n).toString() },
+    ]) {
+      const res = await t.app.inject({
+        method: 'POST',
+        url: '/api/v1/payments/charge',
+        headers: { ...jsonHeaders, cookie: user.cookie },
+        payload: stale,
+      });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ error: { code: 'PRICE_MOVED' } });
+    }
+
+    // Refused before the provider runs, so nothing is credited and no payment row is left.
+    expect(await balanceOf(user.id)).toMatchObject({ availableP: SIGNUP_BONUS_P });
+    expect(await t.db.select().from(schema.payments)).toHaveLength(0);
+  });
+
   it('requires a session', async () => {
     const res = await t.app.inject({
       method: 'POST',
       url: '/api/v1/payments/charge',
       headers: jsonHeaders,
-      payload: { packageId: pack.id },
+      payload: chargeBody(pack),
     });
     expect(res.statusCode).toBe(401);
     expect(res.json()).toMatchObject({ error: { code: 'UNAUTHENTICATED' } });
   });
 
   it('GET /me/ledger pages newest first and only shows the caller entries', async () => {
-    await charge(pack.id);
-    await charge(pack.id);
+    await charge(pack);
+    await charge(pack);
     const other = await signUpTestUser(t);
-    await charge(pack.id, other.cookie);
+    await charge(pack, other.cookie);
 
     const first = await t.app.inject({
       method: 'GET',
@@ -192,7 +218,7 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     // Same class as the admin lists, but these two are reachable by any signed-in user:
     // /me/ledger compares a bigserial id and /me/payments a uuid (see @buddha/shared
     // decodeKeyset, which now takes the shape the column expects).
-    await charge(pack.id);
+    await charge(pack);
     for (const route of ['/api/v1/me/ledger', '/api/v1/me/payments']) {
       for (const cursor of ['0_not-a-uuid', '0_not-a-number', '8640000000000001_x']) {
         const res = await t.app.inject({
@@ -208,7 +234,7 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
   });
 
   it('GET /me/payments lists the caller charges with the price paid', async () => {
-    await charge(pack.id);
+    await charge(pack);
     const res = await t.app.inject({
       method: 'GET',
       url: '/api/v1/me/payments',

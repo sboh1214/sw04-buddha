@@ -64,8 +64,19 @@ export function useChargePackages() {
 export function useCharge() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (packageId: string) =>
-      unwrap(await api.POST('/api/v1/payments/charge', { body: { packageId } })).data,
+    // The whole package, not just its id: the body echoes the amount and price this card is
+    // showing so the server can refuse a purchase of terms the user never read (ADR-0026 lets
+    // an admin re-price a live package, and this catalogue has no refetch interval).
+    mutationFn: async (pack: ChargePackage) =>
+      unwrap(
+        await api.POST('/api/v1/payments/charge', {
+          body: {
+            packageId: pack.id,
+            expectedAmountP: pack.amountP,
+            expectedPriceKrw: pack.priceKrw,
+          },
+        }),
+      ).data,
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY }),

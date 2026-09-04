@@ -336,6 +336,8 @@ export type components = {
             memo: string;
         };
         ChargeBody: {
+            expectedAmountP: components["schemas"]["PAmount"];
+            expectedPriceKrw: number;
             /** Format: uuid */
             packageId: string;
         };
@@ -1485,6 +1487,15 @@ export interface operations {
             };
             /** @description NOT_FOUND */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description PRICE_MOVED */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

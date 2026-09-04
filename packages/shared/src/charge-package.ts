@@ -31,8 +31,24 @@ export const chargePackageSchema = z
   .meta({ id: 'ChargePackage' });
 export type ChargePackage = z.infer<typeof chargePackageSchema>;
 
-/** `POST /payments/charge`: users may only buy a package, never an arbitrary amount. */
-export const chargeBodySchema = z.object({ packageId: z.uuid() }).meta({ id: 'ChargeBody' });
+/**
+ * `POST /payments/charge`: users may only buy a package, never an arbitrary amount.
+ *
+ * The body echoes the terms the card showed. An admin may re-price a live package (ADR-0026)
+ * while a catalogue that is already on screen keeps rendering the old offer, and the server
+ * must not quietly substitute the new one — so the client states what it accepted and a
+ * mismatch is refused. Same shape as the PLAN 5.3 slippage guard, which makes a trade carry
+ * `maxCostP` / `minProceedsP` and answers `PRICE_MOVED` when the server disagrees.
+ */
+export const chargeBodySchema = z
+  .object({
+    packageId: z.uuid(),
+    /** P the card promised. */
+    expectedAmountP: pAmountInputSchema,
+    /** KRW the card asked for. */
+    expectedPriceKrw: chargePackageSchema.shape.priceKrw,
+  })
+  .meta({ id: 'ChargeBody' });
 export type ChargeBody = z.infer<typeof chargeBodySchema>;
 
 const packageFields = {

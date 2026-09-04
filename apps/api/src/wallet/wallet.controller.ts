@@ -73,12 +73,12 @@ export class PaymentsController {
       'Buy one charge package (mock provider: succeeds immediately). P is never convertible back to cash.',
   })
   @ApiData(chargeResultSchema)
-  @ApiErrors('UNAUTHENTICATED', 'NOT_FOUND', 'VALIDATION_ERROR')
+  @ApiErrors('UNAUTHENTICATED', 'NOT_FOUND', 'VALIDATION_ERROR', 'PRICE_MOVED')
   charge(
     @CurrentUser() user: SessionUser,
     @Body({ schema: chargeBodySchema }) body: ChargeBody,
   ): Promise<ChargeResult> {
-    return this.wallet.charge(user.id, body.packageId);
+    return this.wallet.charge(user.id, body);
   }
 }
 

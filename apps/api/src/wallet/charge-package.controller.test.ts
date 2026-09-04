@@ -9,6 +9,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { AdminGuard } from '../auth/admin.guard.js';
 import { PAYMENT_PROVIDER, type PaymentProvider } from '../payments/payment-provider.js';
 import {
+  chargeBody,
   createTestApp,
   createTestPackage,
   signUpTestUser,
@@ -117,7 +118,7 @@ describe.skipIf(!hasTestInfra)('admin charge packages (integration)', () => {
       method: 'POST',
       url: '/api/v1/payments/charge',
       headers: { ...jsonHeaders, cookie: member.cookie },
-      payload: { packageId: pack.id },
+      payload: chargeBody(pack),
     });
 
     const deleted = await t.app.inject({
@@ -215,7 +216,7 @@ describe.skipIf(!hasTestInfra)('admin charge packages (integration)', () => {
         method: 'POST',
         url: '/api/v1/payments/charge',
         headers: { ...jsonHeaders, cookie: member.cookie },
-        payload: { packageId: pack.id },
+        payload: chargeBody(pack),
       });
       expect(res.statusCode).toBe(200);
 

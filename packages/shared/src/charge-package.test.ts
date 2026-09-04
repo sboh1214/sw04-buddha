@@ -28,10 +28,18 @@ describe('discountPercent', () => {
 });
 
 describe('chargeBodySchema', () => {
-  it('takes a package id and nothing else', () => {
-    expect(chargeBodySchema.parse({ packageId })).toEqual({ packageId });
+  it('takes a package id and the terms the card showed', () => {
+    expect(
+      chargeBodySchema.parse({ packageId, expectedAmountP: '10000', expectedPriceKrw: 9_700 }),
+    ).toEqual({ packageId, expectedAmountP: 10_000n, expectedPriceKrw: 9_700 });
     expect(chargeBodySchema.safeParse({ amountP: '10000' }).success).toBe(false);
     expect(chargeBodySchema.safeParse({ packageId: 'not-a-uuid' }).success).toBe(false);
+  });
+
+  it('requires both terms: an id alone cannot say what offer was accepted', () => {
+    expect(chargeBodySchema.safeParse({ packageId }).success).toBe(false);
+    expect(chargeBodySchema.safeParse({ packageId, expectedAmountP: '10000' }).success).toBe(false);
+    expect(chargeBodySchema.safeParse({ packageId, expectedPriceKrw: 9_700 }).success).toBe(false);
   });
 });
 

@@ -6,6 +6,7 @@ import {
   encodeKeyset,
   serializePAmount,
   type Balance,
+  type ChargeBody,
   type ChargeResult,
   type LedgerEntry,
   type Payment,
@@ -75,7 +76,8 @@ export class WalletService {
    * and the KRW charged both come from the row the admin configured, and both are snapshotted
    * onto the payment.
    */
-  async charge(userId: string, packageId: string): Promise<ChargeResult> {
+  async charge(userId: string, body: ChargeBody): Promise<ChargeResult> {
+    const { packageId } = body;
     const chargePackage = await this.packages.get(packageId);
     if (!chargePackage.isActive) {
       throw new AppError('VALIDATION_ERROR', {
@@ -85,6 +87,15 @@ export class WalletService {
     }
     const amountP = BigInt(chargePackage.amountP);
     const priceKrw = chargePackage.priceKrw;
+    // Retired and deleted packages are already refused above and in `packages.get`; amount and
+    // price are the other two things an admin may change under a catalogue that is still on
+    // screen (and `useChargePackages` has no refetch interval, so "still on screen" has no
+    // bound). Sell only the offer the user actually read — PLAN 5.3 guards a trade the same way.
+    if (amountP !== body.expectedAmountP || priceKrw !== body.expectedPriceKrw) {
+      throw new AppError('PRICE_MOVED', {
+        message: 'This charge package has changed; reload and try again',
+      });
+    }
     const paymentId = randomUUID();
     const outcome = await this.provider.charge({ paymentId, userId, amountP, priceKrw });
 

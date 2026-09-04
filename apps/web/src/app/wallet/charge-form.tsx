@@ -17,7 +17,7 @@ export function ChargeForm() {
 
   async function buy(pack: ChargePackage) {
     try {
-      const result = await charge.mutateAsync(pack.id);
+      const result = await charge.mutateAsync(pack);
       toaster.create({
         type: 'success',
         title: copy.chargeDone,
@@ -26,7 +26,11 @@ export function ChargeForm() {
     } catch (error) {
       toaster.create({
         type: 'error',
-        title: isApiError(error, 'VALIDATION_ERROR') ? copy.chargeUnavailable : copy.chargeFailed,
+        title: isApiError(error, 'PRICE_MOVED')
+          ? copy.chargePriceMoved
+          : isApiError(error, 'VALIDATION_ERROR')
+            ? copy.chargeUnavailable
+            : copy.chargeFailed,
       });
     }
   }
@@ -61,7 +65,7 @@ export function ChargeForm() {
             {packages.data.map((pack) => {
               const amountP = parsePAmount(pack.amountP);
               const discount = discountPercent(amountP, pack.priceKrw);
-              const busy = charge.isPending && charge.variables === pack.id;
+              const busy = charge.isPending && charge.variables?.id === pack.id;
               return (
                 <HStack
                   key={pack.id}

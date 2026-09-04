@@ -1,5 +1,5 @@
-import { sql } from 'drizzle-orm';
-import { bigint, check, integer, pgTable, text, uuid, varchar } from 'drizzle-orm/pg-core';
+import { desc, sql } from 'drizzle-orm';
+import { bigint, check, index, integer, pgTable, text, uuid, varchar } from 'drizzle-orm/pg-core';
 import { user } from './auth.js';
 import { chargePackages } from './charge-packages.js';
 import { createdAt, updatedAt } from './columns.js';
@@ -30,6 +30,10 @@ export const payments = pgTable(
     updatedAt: updatedAt(),
   },
   (t) => [
+    // `/me/payments` is keyset-paginated per user, exactly like ledger_entries, orders and
+    // coupon_redemptions; without this the page is a seq scan plus a sort over every user's
+    // payments, and each cursor page costs the same again.
+    index('payments_user_id_created_at_idx').on(t.userId, desc(t.createdAt)),
     check('payments_amount_p_check', sql`${t.amountP} > 0`),
     check('payments_price_krw_check', sql`${t.priceKrw} > 0`),
   ],

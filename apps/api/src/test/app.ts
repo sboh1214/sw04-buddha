@@ -72,10 +72,30 @@ export function tokenFromLink(link: string): string {
 }
 
 /** Inserts a charge package so a test can buy something (ADR-0026). */
+/** A package as `createTestPackage` returns it: enough to build a charge body. */
+export interface TestPackage {
+  id: string;
+  amountP: bigint;
+  priceKrw: number;
+}
+
+/**
+ * The `POST /payments/charge` body. It echoes the terms the catalogue card showed, so the
+ * server can refuse a purchase of an offer the user never read (ADR-0026 lets an admin
+ * re-price a live package).
+ */
+export function chargeBody(pack: TestPackage): Record<string, unknown> {
+  return {
+    packageId: pack.id,
+    expectedAmountP: pack.amountP.toString(),
+    expectedPriceKrw: pack.priceKrw,
+  };
+}
+
 export async function createTestPackage(
   db: Db,
   input: { amountP?: bigint; priceKrw?: number; isActive?: boolean; sortOrder?: number } = {},
-): Promise<{ id: string; amountP: bigint; priceKrw: number }> {
+): Promise<TestPackage> {
   const amountP = input.amountP ?? 10_000n;
   const priceKrw = input.priceKrw ?? 9_700;
   const [row] = await db

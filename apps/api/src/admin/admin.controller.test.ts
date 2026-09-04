@@ -8,6 +8,7 @@ import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
 import {
+  chargeBody,
   createTestApp,
   createTestPackage,
   signUpTestUser,
@@ -56,7 +57,7 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
       method: 'POST',
       url: '/api/v1/payments/charge',
       headers: { ...jsonHeaders, cookie: member.cookie },
-      payload: { packageId: pack.id },
+      payload: chargeBody(pack),
     });
   };
 
