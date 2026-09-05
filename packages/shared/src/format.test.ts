@@ -1,6 +1,6 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import { MINUS_SIGN, formatP } from './format.js';
+import { MINUS_SIGN, formatKrw, formatP } from './format.js';
 
 describe('formatP', () => {
   it('groups thousands and appends P', () => {
@@ -61,5 +61,21 @@ describe('formatP', () => {
         expect(formatP(n)).toBe(formatP(BigInt(n)));
       }),
     );
+  });
+});
+
+describe('formatKrw', () => {
+  it('groups thousands and appends 원', () => {
+    expect(formatKrw(0)).toBe('0원');
+    expect(formatKrw(900)).toBe('900원');
+    expect(formatKrw(4900)).toBe('4,900원');
+    expect(formatKrw(90_000)).toBe('90,000원');
+    expect(formatKrw(1_000_000)).toBe('1,000,000원');
+  });
+
+  it('rejects negatives and non-integers: a price is neither', () => {
+    expect(() => formatKrw(-1)).toThrow(RangeError);
+    expect(() => formatKrw(4900.5)).toThrow(RangeError);
+    expect(() => formatKrw(Number.MAX_SAFE_INTEGER + 2)).toThrow(RangeError);
   });
 });

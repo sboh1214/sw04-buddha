@@ -6,6 +6,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   DEFAULT_LIQUIDITY_B,
+  SIGNUP_BONUS_P,
   INITIAL_PROB_BP_MAX,
   INITIAL_PROB_BP_MIN,
   PRICE_MAX,
@@ -26,7 +27,11 @@ export interface CreateUserInput {
   name?: string;
   nickname?: string;
   role?: Role;
-  /** Starting available_p. A matching ADMIN_ADJUST ledger entry keeps the PLAN 5.6 invariant. */
+  /**
+   * Balance the user should end up with. Every account is created with SIGNUP_BONUS_P by the
+   * trigger (migration 0004); asking for something else writes the difference as an
+   * ADMIN_ADJUST entry, so the PLAN 5.6 invariant keeps holding. Omit to keep the bonus.
+   */
   balanceP?: bigint;
 }
 
@@ -38,7 +43,7 @@ export interface CreateUserInput {
 export async function createUser(db: Db, input: CreateUserInput = {}) {
   const id = input.id ?? randomUUID();
   const t = tag();
-  const balanceP = input.balanceP ?? 0n;
+  const balanceP = input.balanceP ?? SIGNUP_BONUS_P;
   return db.transaction(async (tx) => {
     const [userRow] = await tx
       .insert(user)
@@ -58,7 +63,8 @@ export async function createUser(db: Db, input: CreateUserInput = {}) {
     if (!userRow || !profile || !balance) {
       throw new Error('user trigger did not create profiles/balances (migration 0002 missing?)');
     }
-    if (balanceP !== 0n) {
+    if (balanceP !== balance.availableP) {
+      const delta = balanceP - balance.availableP;
       [balance] = await tx
         .update(balances)
         .set({ availableP: balanceP })
@@ -67,7 +73,7 @@ export async function createUser(db: Db, input: CreateUserInput = {}) {
       await tx.insert(ledgerEntries).values({
         userId: id,
         type: 'ADMIN_ADJUST',
-        amountP: balanceP,
+        amountP: delta,
         balanceAfterP: balanceP,
         memo: 'test factory: initial balance',
       });

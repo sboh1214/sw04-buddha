@@ -4,6 +4,7 @@
  * (fails under CI=true, see the harness).
  */
 import { schema } from '@buddha/db';
+import { SIGNUP_BONUS_P } from '@buddha/shared';
 import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createTestApp, verificationLinkFor, type TestApp } from '../test/app.js';
@@ -55,7 +56,7 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
     await t.reset();
   });
   afterAll(async () => {
-    await t.close();
+    await t?.close(); // undefined when beforeAll timed out waiting for the file lock
   });
   beforeEach(() => {
     t.mailer.messages.length = 0;
@@ -161,14 +162,15 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
     expect((await credentialAccount(created!.id))?.password).toBeTypeOf('string');
   });
 
-  it('created profile (예측가_XXXX) and balance 0 in the same transaction (trigger)', async () => {
+  it('created profile (예측가_XXXX) and the bonus balance in the same transaction (trigger)', async () => {
     const rows = await t.db.execute<{ nickname: string; available_p: string }>(
       sql`select p.nickname, b.available_p from profiles p join balances b using (user_id)
           join "user" u on u.id = p.user_id where u.email = ${email}`,
     );
     expect(rows.rows).toHaveLength(1);
     expect(rows.rows[0]!.nickname).toMatch(/^예측가_[23456789A-HJ-NP-Z]{4}$/);
-    expect(String(rows.rows[0]!.available_p)).toBe('0');
+    // Migration 0004 grants the sign-up bonus in the same transaction (PLAN 17 Q2).
+    expect(String(rows.rows[0]!.available_p)).toBe(SIGNUP_BONUS_P.toString());
   });
 
   it('signing in before the link is clicked fails and sends nothing', async () => {

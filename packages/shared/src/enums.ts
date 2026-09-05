@@ -29,7 +29,7 @@ export type LedgerEntryType = (typeof LEDGER_ENTRY_TYPES)[number];
 export const ledgerEntryTypeSchema = z.enum(LEDGER_ENTRY_TYPES);
 
 /** ledger_entries.ref_type (varchar, not a Postgres enum): what ref_id points at. */
-export const LEDGER_REF_TYPES = ['payment', 'fill', 'market', 'admin_action'] as const;
+export const LEDGER_REF_TYPES = ['payment', 'fill', 'market', 'admin_action', 'coupon'] as const;
 export type LedgerRefType = (typeof LEDGER_REF_TYPES)[number];
 export const ledgerRefTypeSchema = z.enum(LEDGER_REF_TYPES);
 
@@ -121,6 +121,11 @@ export const disputeStatusSchema = z.enum(DISPUTE_STATUSES);
 // ---- admin / audit (varchar columns, PLAN 6.2) --------------------------------------
 export const ADMIN_ACTION_TYPES = [
   'balance_adjust',
+  'charge_package_create',
+  'charge_package_update',
+  'charge_package_delete',
+  'coupon_create',
+  'coupon_update',
   'market_create',
   'market_update',
   'market_open',

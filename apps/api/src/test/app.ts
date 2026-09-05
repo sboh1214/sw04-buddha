@@ -1,8 +1,9 @@
 // Helpers for HTTP-level integration tests against the real test Postgres/Redis.
+import { randomUUID } from 'node:crypto';
 import { VersioningType } from '@nestjs/common';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
-import { type Db } from '@buddha/db';
+import { schema, type Db } from '@buddha/db';
 import { connectTestDb, type TestDb } from '@buddha/db/test';
 import { AppModule } from '../app.module.js';
 import { AUTH, type Auth } from '../auth/auth.js';
@@ -69,6 +70,64 @@ export function tokenFromLink(link: string): string {
   const token = new URL(link).searchParams.get('token');
   if (!token) throw new Error(`no token in ${link}`);
   return token;
+}
+
+/** Inserts a charge package so a test can buy something (ADR-0026). */
+/** A package as `createTestPackage` returns it: enough to build a charge body. */
+export interface TestPackage {
+  id: string;
+  amountP: bigint;
+  priceKrw: number;
+}
+
+/**
+ * The `POST /payments/charge` body. It echoes the terms the catalogue card showed, so the
+ * server can refuse a purchase of an offer the user never read (ADR-0026 lets an admin
+ * re-price a live package), and the account the screen showed, so a tab whose session was
+ * switched elsewhere cannot charge whoever the cookie now belongs to.
+ */
+export function chargeBody(pack: TestPackage, accountId: string): Record<string, unknown> {
+  return {
+    packageId: pack.id,
+    expectedAmountP: pack.amountP.toString(),
+    expectedPriceKrw: pack.priceKrw,
+    expectedAccountId: accountId,
+  };
+}
+
+/**
+ * Headers for one `POST /payments/charge`: the session cookie plus a fresh `Idempotency-Key`
+ * (PLAN 5.4) unless the test deliberately re-sends one.
+ */
+export function chargeHeaders(
+  cookie: string,
+  idempotencyKey: string = randomUUID(),
+): Record<string, string> {
+  return {
+    origin: 'http://localhost:3000',
+    'content-type': 'application/json',
+    cookie,
+    'idempotency-key': idempotencyKey,
+  };
+}
+
+export async function createTestPackage(
+  db: Db,
+  input: { amountP?: bigint; priceKrw?: number; isActive?: boolean; sortOrder?: number } = {},
+): Promise<TestPackage> {
+  const amountP = input.amountP ?? 10_000n;
+  const priceKrw = input.priceKrw ?? 9_700;
+  const [row] = await db
+    .insert(schema.chargePackages)
+    .values({
+      amountP,
+      priceKrw,
+      isActive: input.isActive ?? true,
+      sortOrder: input.sortOrder ?? 0,
+    })
+    .returning();
+  if (!row) throw new Error('failed to insert a charge package');
+  return { id: row.id, amountP: row.amountP, priceKrw: row.priceKrw };
 }
 
 export interface TestUser {

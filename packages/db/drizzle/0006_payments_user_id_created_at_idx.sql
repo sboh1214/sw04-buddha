@@ -1,0 +1,1 @@
+CREATE INDEX "payments_user_id_created_at_idx" ON "payments" USING btree ("user_id","created_at" desc);

@@ -9,6 +9,8 @@ import { adminActions } from './admin-actions.js';
 import { account, session, user } from './auth.js';
 import { balances } from './balances.js';
 import { categories } from './categories.js';
+import { chargePackages } from './charge-packages.js';
+import { couponRedemptions, coupons } from './coupons.js';
 import { disputes } from './disputes.js';
 import { fills } from './fills.js';
 import { ledgerEntries } from './ledger.js';
@@ -36,6 +38,24 @@ export const ledgerEntriesRelations = relations(ledgerEntries, ({ one }) => ({
 
 export const paymentsRelations = relations(payments, ({ one }) => ({
   user: one(user, { fields: [payments.userId], references: [user.id] }),
+  package: one(chargePackages, {
+    fields: [payments.packageId],
+    references: [chargePackages.id],
+  }),
+}));
+
+export const chargePackagesRelations = relations(chargePackages, ({ many }) => ({
+  payments: many(payments),
+}));
+
+export const couponsRelations = relations(coupons, ({ one, many }) => ({
+  createdBy: one(user, { fields: [coupons.createdBy], references: [user.id] }),
+  redemptions: many(couponRedemptions),
+}));
+
+export const couponRedemptionsRelations = relations(couponRedemptions, ({ one }) => ({
+  coupon: one(coupons, { fields: [couponRedemptions.couponId], references: [coupons.id] }),
+  user: one(user, { fields: [couponRedemptions.userId], references: [user.id] }),
 }));
 
 export const categoriesRelations = relations(categories, ({ many }) => ({

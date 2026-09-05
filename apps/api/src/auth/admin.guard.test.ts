@@ -18,7 +18,7 @@ describe.skipIf(!hasTestInfra)('AdminGuard role cache (integration, PLAN 10.5)',
     redis = t.app.get<Redis>(REDIS);
   });
   afterAll(async () => {
-    await t.close();
+    await t?.close(); // undefined when beforeAll timed out waiting for the file lock
   });
   beforeEach(async () => {
     await t.reset();

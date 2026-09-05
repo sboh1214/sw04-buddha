@@ -1,6 +1,7 @@
-import { eq, sql } from 'drizzle-orm';
+import { SIGNUP_BONUS_P } from '@buddha/shared';
+import { eq, lt, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { balances, ledgerEntries, markets, profiles, user } from './schema/index.js';
+import { auditFailures, balances, ledgerEntries, markets, profiles, user } from './schema/index.js';
 import { createCategory, createMarket, createUser } from './test/factories.js';
 import { connectTestDb, hasTestDb, type TestDb } from './test/harness.js';
 
@@ -19,7 +20,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     t = await connectTestDb();
   });
   afterAll(async () => {
-    await t.close();
+    await t?.close(); // undefined when beforeAll timed out waiting for the file lock
   });
   beforeEach(async () => {
     await t.reset();
@@ -35,8 +36,18 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     });
     expect(profile?.nickname).toMatch(/^예측가_[23456789A-HJ-NP-Z]{4}$/);
     expect(profile?.role).toBe('user');
-    expect(balance?.availableP).toBe(0n);
+    // Migration 0004: the sign-up bonus lands in the same transaction, with its ledger entry.
+    expect(balance?.availableP).toBe(SIGNUP_BONUS_P);
     expect(balance?.lockedP).toBe(0n);
+    const bonus = await t.db.query.ledgerEntries.findFirst({
+      where: eq(ledgerEntries.userId, 'u-trigger'),
+    });
+    expect(bonus).toMatchObject({
+      type: 'BONUS',
+      amountP: SIGNUP_BONUS_P,
+      balanceAfterP: SIGNUP_BONUS_P,
+      memo: '가입 보너스',
+    });
   });
 
   it('createUser applies nickname/role/balance and keeps the ledger invariant', async () => {
@@ -123,11 +134,50 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     expect(updated!.updatedAt.getTime()).toBeGreaterThan(profile.updatedAt.getTime());
   });
 
+  describe('timestamptz precision (migration 0005)', () => {
+    it('round-trips a shared now() through a JS Date, which every keyset cursor relies on', async () => {
+      // One statement, so all three rows carry a single transaction `now()`. While the columns
+      // kept microseconds, the Date read back here was strictly older than the stored value,
+      // and a cursor built from it skipped the whole group — page 2 of a listing came back
+      // empty (@buddha/shared encodeKeyset compares `created_at < cursor OR = cursor AND ...`).
+      await t.db
+        .insert(auditFailures)
+        .values([1, 2, 3].map((n) => ({ kind: 'ledger_balance_mismatch', payload: { n } })));
+
+      const rows = await t.db.select().from(auditFailures);
+      expect(rows).toHaveLength(3);
+      const stamp = rows[0]!.createdAt;
+      expect(rows.map((row) => row.createdAt.getTime())).toEqual([
+        stamp.getTime(),
+        stamp.getTime(),
+        stamp.getTime(),
+      ]);
+
+      // The Date is an exact representation, so the rows still match the timestamp they
+      // reported — and no row is stranded between `stamp` and its true stored value.
+      const matched = await t.db
+        .select()
+        .from(auditFailures)
+        .where(eq(auditFailures.createdAt, stamp));
+      expect(matched).toHaveLength(3);
+      const older = await t.db
+        .select()
+        .from(auditFailures)
+        .where(lt(auditFailures.createdAt, stamp));
+      expect(older).toHaveLength(0);
+    });
+  });
+
   describe('buddha_app privileges (PLAN 6.4)', () => {
     it('can INSERT and SELECT ledger_entries but not UPDATE or DELETE', async () => {
       const { user: u } = await createUser(t.db, { balanceP: 500n });
-      const rows = await t.db.select().from(ledgerEntries).where(eq(ledgerEntries.userId, u.id));
-      expect(rows).toHaveLength(1);
+      const rows = await t.db
+        .select()
+        .from(ledgerEntries)
+        .where(eq(ledgerEntries.userId, u.id))
+        .orderBy(ledgerEntries.id);
+      // The trigger's sign-up BONUS, then the factory's correction down to 500P.
+      expect(rows.map((row) => row.type)).toEqual(['BONUS', 'ADMIN_ADJUST']);
       await expect(
         t.db.update(ledgerEntries).set({ memo: 'x' }).where(eq(ledgerEntries.id, rows[0]!.id)),
       ).rejects.toSatisfy((e) => sqlState(e) === '42501');

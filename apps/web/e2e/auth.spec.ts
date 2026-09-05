@@ -70,8 +70,9 @@ test.describe('signup -> login -> settings', () => {
   test('email signup, logout, login, /me visible in settings', async ({ page }) => {
     const email = freshEmail();
     await signUp(page, email);
-    // Nav shows the balance chip once `GET /me` resolves (balance 0P for a new user).
-    await expect(page.getByTestId('balance-chip')).toContainText('0P');
+    // Nav shows the balance chip once `GET /me` resolves: the sign-up bonus (migration 0004).
+    // Not '0P' — "10,000P" contains that too, so the old check could never fail.
+    await expect(page.getByTestId('balance-chip')).toContainText('10,000P');
 
     await logOut(page);
 

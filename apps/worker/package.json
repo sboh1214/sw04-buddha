@@ -10,10 +10,13 @@
     "start": "node dist/main.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "job:ledger-audit": "tsx src/scripts/run-ledger-audit.ts"
   },
   "dependencies": {
+    "@buddha/db": "workspace:*",
     "bullmq": "catalog:",
+    "drizzle-orm": "catalog:",
     "ioredis": "catalog:",
     "pino": "catalog:",
     "zod": "catalog:"

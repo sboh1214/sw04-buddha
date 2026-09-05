@@ -24,3 +24,7 @@ expo-env.d.ts
 # playwright (apps/web)
 apps/web/test-results/
 apps/web/playwright-report/
+
+# Local Docker port overrides (see the file header): never committed.
+compose.override.yaml
+compose.override.yml

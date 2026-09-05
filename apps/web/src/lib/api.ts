@@ -10,6 +10,12 @@ export const api = createApiClient({ baseUrl: '', credentials: 'include' });
 
 export type Me = components['schemas']['Me'];
 export type LinkedAccount = components['schemas']['LinkedAccount'];
+export type LedgerEntry = components['schemas']['LedgerEntry'];
+export type Payment = components['schemas']['Payment'];
+export type AdminUser = components['schemas']['AdminUser'];
+export type ChargePackage = components['schemas']['ChargePackage'];
+export type ChargeResult = components['schemas']['ChargeResult'];
+export type Coupon = components['schemas']['Coupon'];
 export type ErrorEnvelope = components['schemas']['ErrorEnvelope'];
 
 /** A non-2xx API response, carrying the `{ error: { code, message, details? } }` envelope. */
@@ -47,8 +53,12 @@ export function isApiError(error: unknown, code?: ErrorCode): error is ApiError 
 }
 
 /**
- * `details` of a VALIDATION_ERROR is a `ValidationIssue[]` (`[{ path, message }]`, PLAN 7).
- * Returns the first field name found, e.g. 'nickname'.
+ * The field an error is about, when `details` is a `ValidationIssue[]` (`[{ path, message }]`,
+ * PLAN 7): every VALIDATION_ERROR, and the few other codes that name a body field the same
+ * way (the charge route's 404 for an unknown `packageId`, INSUFFICIENT_BALANCE on `amountP`,
+ * the in-progress DUPLICATE_REQUEST on the `Idempotency-Key` header, the charge route's
+ * FORBIDDEN on `expectedAccountId` when the cookie belongs to another account).
+ * Returns the first field name found, e.g. 'nickname'; undefined when no field is named.
  */
 export function validationField(error: ApiError): string | undefined {
   if (!Array.isArray(error.details)) return undefined;

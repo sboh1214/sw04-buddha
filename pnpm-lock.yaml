@@ -414,9 +414,15 @@ importers:
 
   apps/worker:
     dependencies:
+      '@buddha/db':
+        specifier: workspace:*
+        version: link:../../packages/db
       bullmq:
         specifier: 'catalog:'
         version: 6.3.4(ioredis@6.0.0)(pg@8.23.0)
+      drizzle-orm:
+        specifier: 'catalog:'
+        version: 0.45.2(@types/pg@8.23.1)(kysely@0.29.5)(pg@8.23.0)
       ioredis:
         specifier: 'catalog:'
         version: 6.0.0(supports-color@10.2.2)

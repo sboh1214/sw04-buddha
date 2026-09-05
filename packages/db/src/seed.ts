@@ -1,4 +1,6 @@
-// CLI entry: `pnpm db:seed` (tsx src/seed.ts). Idempotent: safe to re-run on every deploy.
+// CLI entry: `pnpm db:seed` (tsx src/seed.ts). Idempotent: safe to re-run on every deploy, and
+// safe to run twice at once — every step that checks before it inserts holds the `buddha:seed`
+// advisory lock for its transaction, so a second seed waits and then finds the rows in place.
 //
 // Runs as the runtime role (DATABASE_URL = buddha_app): 01-roles.sql grants it DML on every
 // table created by migrations, which is all the seed needs.
@@ -8,7 +10,15 @@ import { hashPassword } from 'better-auth/crypto';
 import { and, eq, sql } from 'drizzle-orm';
 import { closeDb, createDb, type Db } from './client.js';
 import { loadRootEnv } from './env.js';
-import { account, balances, categories, profiles, user } from './schema/index.js';
+import {
+  account,
+  adminActions,
+  balances,
+  categories,
+  chargePackages,
+  profiles,
+  user,
+} from './schema/index.js';
 
 /** PLAN 1.3 categories. Sports and elections are forbidden (PLAN 0.2): never add them. */
 const CATEGORIES = [
@@ -39,6 +49,62 @@ async function seedCategories(db: Db): Promise<void> {
   console.log(`[db:seed] categories: ${String(CATEGORIES.length)} upserted`);
 }
 
+/**
+ * Starting charge packages (owner decision 2026-09-04): 4,900원 for 5,000P, and the discount
+ * grows with the size of the package. Admins edit these at runtime, so the seed only fills a
+ * table no admin has ever managed and never overwrites what an admin has changed — which also
+ * means that once a developer has touched packages through the admin screen, `db:seed` will
+ * not put the default ladder back (buddha_app cannot delete the admin_actions trace, migration
+ * 0001): recreate them in the admin screen, truncate admin_actions as buddha_migrate, or start
+ * from an empty database (`docker compose down -v`).
+ */
+const CHARGE_PACKAGES = [
+  { amountP: 5_000n, priceKrw: 4_900, sortOrder: 10 }, // 2%
+  { amountP: 10_000n, priceKrw: 9_700, sortOrder: 20 }, // 3%
+  { amountP: 30_000n, priceKrw: 28_500, sortOrder: 30 }, // 5%
+  { amountP: 50_000n, priceKrw: 46_500, sortOrder: 40 }, // 7%
+  { amountP: 100_000n, priceKrw: 90_000, sortOrder: 50 }, // 10%
+] as const;
+
+/**
+ * Serialises the steps that check before they insert. `charge_packages` has no natural key, so
+ * two seeds racing on an empty table would both pass the existence check and both insert — a
+ * doubled catalogue — and two admin inserts would end in a unique violation instead of a
+ * no-op. Transaction-scoped: released at commit, or on any error, whichever comes first.
+ */
+const SEED_LOCK_KEY = 'buddha:seed';
+async function lockSeed(tx: Pick<Db, 'execute'>): Promise<void> {
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${SEED_LOCK_KEY}))`);
+}
+
+async function seedChargePackages(db: Db): Promise<void> {
+  const outcome = await db.transaction(async (tx) => {
+    await lockSeed(tx);
+    const [existing] = await tx.select({ id: chargePackages.id }).from(chargePackages).limit(1);
+    if (existing) return 'configured';
+    // An empty table is not proof of a fresh database: deletion is a real DELETE (A-M2-8), so
+    // an admin who took every package off sale on purpose leaves it empty too, and the next
+    // deploy's seed must not reopen sales at the default prices. Every admin create, update
+    // and delete writes an `admin_actions` row (charge_package_*), which is the durable trace
+    // the seed reads: once an admin has managed the catalogue, it is theirs, empty or not.
+    const [managed] = await tx
+      .select({ id: adminActions.id })
+      .from(adminActions)
+      .where(eq(adminActions.targetType, 'charge_package'))
+      .limit(1);
+    if (managed) return 'managed';
+    await tx.insert(chargePackages).values(CHARGE_PACKAGES.map((row) => ({ ...row })));
+    return 'inserted';
+  });
+  console.log(
+    outcome === 'inserted'
+      ? `[db:seed] charge packages: ${String(CHARGE_PACKAGES.length)} inserted`
+      : outcome === 'managed'
+        ? '[db:seed] charge packages: emptied by an admin, left untouched'
+        : '[db:seed] charge packages: already configured, left untouched',
+  );
+}
+
 interface AdminInput {
   email: string;
   password: string;
@@ -61,9 +127,10 @@ async function pickNickname(tx: Pick<Db, 'select'>, ownUserId: string): Promise<
 /**
  * Creates the first admin (PLAN 10.5) the way better-auth's email sign-up does: a `user`
  * row plus a credential `account` row (providerId 'credential', accountId = user id, scrypt
- * hash from better-auth/crypto). The "user" AFTER INSERT trigger (migration 0002) creates
- * the profile (auto nickname) and the zero balance; the seed then renames the profile to
- * 관리자 and promotes it.
+ * hash from better-auth/crypto). The "user" AFTER INSERT trigger (migrations 0002 and 0004)
+ * creates the profile (auto nickname) and the balance, sign-up bonus included: the operator
+ * account starts with SIGNUP_BONUS_P like every account (Q-M2-2). The seed then renames the
+ * profile to 관리자 and promotes it.
  *
  * Re-running never resets an existing password; it only guarantees that the user exists, is
  * verified, has a credential account and has role 'admin'.
@@ -78,6 +145,7 @@ async function seedAdmin(db: Db, input: AdminInput): Promise<void> {
   }
 
   await db.transaction(async (tx) => {
+    await lockSeed(tx);
     const now = new Date();
     let created = false;
 
@@ -146,9 +214,17 @@ async function seedAdmin(db: Db, input: AdminInput): Promise<void> {
         .where(eq(profiles.userId, userId));
     }
 
-    // Balance starts at 0/0 (trigger). Never touched when it already exists: balances change
-    // only together with a ledger entry (PLAN 0.2).
-    await tx.insert(balances).values({ userId }).onConflictDoNothing({ target: balances.userId });
+    // The trigger created the balance, sign-up bonus included (migration 0004) — like every
+    // account. Never touched: balances change only together with a ledger entry (PLAN 0.2),
+    // and a missing row is a broken account for the ledger audit to report, not something
+    // the seed papers over with a silent 0.
+    const [balance] = await tx
+      .select({ userId: balances.userId })
+      .from(balances)
+      .where(eq(balances.userId, userId));
+    if (!balance) {
+      throw new Error('[db:seed] the "user" trigger did not create a balance (run db:migrate)');
+    }
 
     console.log(
       `[db:seed] admin ${email}: ${created ? 'created' : 'already exists'}` +
@@ -170,6 +246,7 @@ const adminPassword = process.env.SEED_ADMIN_PASSWORD;
 const db = createDb(url, { max: 1, applicationName: 'buddha-seed' });
 try {
   await seedCategories(db);
+  await seedChargePackages(db);
   if (adminEmail && adminPassword) {
     await seedAdmin(db, { email: adminEmail, password: adminPassword });
   } else {

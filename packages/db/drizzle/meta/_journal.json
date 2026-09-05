@@ -22,6 +22,48 @@
       "when": 1788376444854,
       "tag": "0002_user_profile_trigger",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1788457571415,
+      "tag": "0003_charge_packages_and_coupons",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1788457572415,
+      "tag": "0004_signup_bonus",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1788480902843,
+      "tag": "0005_timestamp_millisecond_precision",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1788506827695,
+      "tag": "0006_payments_user_id_created_at_idx",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1788511330472,
+      "tag": "0007_coupon_expires_at_millisecond_precision",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1788584904325,
+      "tag": "0008_payments_idempotency_key",
+      "breakpoints": true
     }
   ]
 }

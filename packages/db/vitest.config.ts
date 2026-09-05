@@ -12,6 +12,9 @@ export default defineConfig({
     // case, which is far past vitest's 5 s default on a cold runner. apps/api raises these
     // for the same reason.
     testTimeout: 30_000,
-    hookTimeout: 30_000,
+    // `beforeAll` also waits for the cross-package file lock (src/test/harness.ts) while the api
+    // and worker suites run on the same database, so in CI it can sit for the length of those
+    // suites — minutes, not seconds. The CI job has its own 30-minute ceiling.
+    hookTimeout: 600_000,
   },
 });

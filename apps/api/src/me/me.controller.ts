@@ -45,7 +45,7 @@ export class MeController {
     summary: 'Set the first password (after verification, or for a social-only account)',
   })
   @ApiData(okResultSchema)
-  @ApiErrors('UNAUTHENTICATED', 'VALIDATION_ERROR')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'VALIDATION_ERROR')
   async setPassword(
     @Req() request: FastifyRequest,
     @Body({ schema: setPasswordBodySchema }) body: SetPasswordBody,
@@ -57,7 +57,7 @@ export class MeController {
   @Patch()
   @ApiOperation({ operationId: 'updateMe', summary: 'Change nickname' })
   @ApiData(meSchema)
-  @ApiErrors('UNAUTHENTICATED', 'NOT_FOUND', 'VALIDATION_ERROR')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
   updateMe(
     @CurrentUser() user: SessionUser,
     @Body({ schema: updateMeBodySchema }) body: UpdateMeBody,

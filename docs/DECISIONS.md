@@ -398,7 +398,7 @@ PLAN §10.1은 `@thallesp/nestjs-better-auth`를 지정하지만 2.7.0의 peer �
 
 - 라이브러리를 그대로 쓴다. 스크래치 검증에서 Nest 12의 안정 API(`ApplicationConfig`, `@nestjs/core/middleware/utils`의 `mapToExcludeRoute`, `HttpAdapterHost`, middie)만 사용하며 sign-up/sign-in/get-session/list-accounts/unlink/reset 흐름이 모두 동작했다. Fastify에서는 `toNodeHandler(auth)`가 middie 미들웨어로 라우팅·prefix·버저닝·본문 파싱보다 먼저 실행되므로 `setGlobalPrefix('api')` + URI 버저닝을 바꿀 필요가 없다(`/api/auth/*` 동작, `/api/v1/auth/*`는 404).
 - `disableGlobalAuthGuard: true`(PLAN §7.1의 공개 라우트) + 자체 `SessionGuard`(`auth.api.getSession`, 실패 시 `AppError('UNAUTHENTICATED')` → PLAN §7 봉투). `disableTrustedOriginsCors: true`(REST는 rewrite로 같은 출처, ADR-0017).
-- `main.ts`의 `bodyParser: false`는 유지한다. 라이브러리가 자체 JSON/urlencoded 파서를 재등록하는데 잘못된 JSON에 순수 `SyntaxError`를 던지므로 `ApiExceptionFilter`가 이를 400 `VALIDATION_ERROR`로 매핑한다(`disableBodyParser`는 폐기된 옵션으로, 켜면 본문이 아예 파싱되지 않는다).
+- `main.ts`의 `bodyParser: false`는 유지한다. 라이브러리가 자체 JSON/urlencoded 파서를 재등록하는데 잘못된 JSON에 순수 `SyntaxError`를 던지므로 `ApiExceptionFilter`가 이를 400 `VALIDATION_ERROR`로 매핑한다(`disableBodyParser`는 폐기된 옵션으로, 켜면 본문이 아예 파싱되지 않는다). (2026-09-05 추기, PR #3 리뷰 9차) urlencoded 파서는 `bodyParser.urlencoded.enabled: false`로 끈다 — JSON만 받는 API에 폼 본문은 CSRF의 모양이고, `SessionGuard`의 `Origin` 검사와 함께 두 겹이다(ADR-0025 추기, A-M2-13).
 - `advanced.disableOriginCheck: false`를 명시한다. better-auth는 `NODE_ENV=test`에서 Origin/CSRF 검사를 조용히 건너뛰므로 통합 테스트가 운영 동작(다른 Origin → 403 `INVALID_ORIGIN`)을 검증하도록 강제한다.
 - 내장 레이트 리미터(프로세스 메모리, PLAN §16 위반)는 끈다. M6에서 `@nestjs/throttler` + Redis로 `/api/auth/*`까지 덮는다.
 - 쿠키: `advanced.cookiePrefix: 'buddha'` → `buddha.session_token`, http 개발 환경에서는 `Secure`/`__Secure-` 없이 발급되어 Next rewrite를 통과한다(https에서는 자동 전환). `trustedOrigins`는 `WEB_ORIGIN`(`webOrigins(env)`).
@@ -429,6 +429,7 @@ PLAN §10.4는 better-auth `databaseHooks.user.create.after`에서 `profiles`/`b
 ### 결과
 
 - `profiles`/`balances`에 대한 권한이 나중에 바뀌면 가입이 조용히 깨질 수 있으므로 통합 테스트가 "가입 → 프로필·잔고 생성"을 항상 검증한다.
+- (2026-09-05 추기) migration 0004(ADR-0026)부터 같은 트리거가 가입 보너스 10,000P와 `BONUS` 원장도 함께 쓴다. 시드 관리자도 `user` 행이므로 예외가 아니다(QUESTIONS A-M1-3).
 
 ---
 
@@ -555,3 +556,57 @@ ADR-0023 이후 남은 두 가지를 오너가 결정했다(PLAN §17 Q6/Q7). �
 - 리뷰 반영(M1, PR #2 자동 리뷰 2차 4건): ① **전송 실패를 `authClient` 한 곳에서 정규화한다.** better-fetch는 자기 `fetch` 호출을 감싸지 않아 요청이 아예 닿지 못하면(오프라인·DNS·연결 리셋) `{ error }`가 아니라 **reject**한다. 앱의 모든 호출부는 `const { error } = await ...` 형태고 react-hook-form 제출은 `void onSubmit(e)`로 불리므로 그 reject는 삼켜졌다: 로그인은 아무 안내 없이 조용히 실패하며 **이미 떠 있던 오류 문구까지 지웠고**, 가입 재발송·소셜 버튼은 스피너가 영원히 돌았으며, react-query `onError`를 쓰는 곳은 브라우저의 영어 "Failed to fetch"를 한국어 토스트에 실었다(PLAN 0.1 rule 6 위반). `createAuthClient`에 `customFetchImpl`로 `fetchOrNetworkError`를 넣어 503 `{ code: 'NETWORK_ERROR' }`로 바꾸면 11개 호출부가 한 번에 평소의 `if (error)` 경로로 돌아온다. 두 가지를 함께 처리한다: 본문을 같은 try 안에서 읽어(better-fetch가 `response.text()`를 이 함수 바깥에서 부르므로) 연결이 본문 도중 끊기는 경우도 덮고, `AbortError`는 다시 던진다(취소는 네트워크 실패가 아니며 better-auth의 세션 atom이 둘을 구분한다). ② **가입의 임시 자격증명을 아예 만들지 않는다.** `signUpEmail` 커밋 후 `DELETE` 사이에서 프로세스가 죽으면 사용자에게 아무도 모르는 비밀번호가 남고, 재시도해도 better-auth가 기존 주소에 합성 id를 주므로 삭제가 아무것도 지우지 못해 `/set-password`가 영구히 `PASSWORD_ALREADY_SET`이 된다(탈취 위험은 없고 비밀번호 재설정으로는 복구된다). `databaseHooks.account.create.before`가 `/sign-up/email`의 credential insert를 취소하므로 행 자체가 쓰이지 않는다. `DELETE`는 백스톱으로 남겼다: 훅이 경로 문자열에 묶여 있어 better-auth 업그레이드가 경로를 바꾸면 조용히 멈출 수 있는데, 그때 삭제가 실제로 행을 지우면 에러 로그를 남긴다. ③ **`/set-password`가 프로필 로드 실패를 렌더한다.** `GET /me`가 재시도를 다 쓰고 실패하면 `isPending`은 false인데 `me`는 undefined라 스켈레톤이 영원히 남아, 첫 비밀번호를 정할 유일한 화면이 막혔다. `isError`가 아니라 "정착했는데 프로필이 없다"로 분기해 쿼리가 비활성인 경우까지 덮는다.
 - 리뷰 반영(M1, PR #2 자동 리뷰 3차 4건): ① **설정 화면이 프로필 로드 실패를 렌더한다.** `GET /me`가 재시도를 다 쓰고 실패해도 세션은 살아 있으므로 `isPending`은 false인데 `me`는 undefined라, 프로필·계정 카드가 설명도 재시도도 없는 스켈레톤으로 굳었다(같은 화면의 연결 수단·비밀번호·테마는 정상 동작). `ProfileUnavailable` 하나를 두 카드가 함께 쓴다. 오류로 넘어가는 조건은 `isError`가 아니라 "정착했는데 프로필이 없다"에 더해 **`isFetching`이 아니고 로그인 상태일 때**로 잡았다: 로그아웃은 세션 atom이 옛 세션을 든 채 `['me']` 캐시를 지우므로 그 두 가드가 없으면 정상 로그아웃마다 두 카드가 거짓 오류를 깜빡였고(검증 에이전트가 3/3 재현), 세션이 아예 없는 클라이언트에는 아무것도 못 불러오는 재시도 버튼이 남았다. `role="alert"`은 일부러 뺐다 — 두 카드가 동시에 뜨므로 같은 문장을 두세 번 읽어 준다. ② **OpenAPI가 HTTPS 쿠키 이름을 함께 알린다.** better-auth는 `useSecureCookies`가 비어 있고 baseURL이 https면 `__Secure-` 접두사를 붙이므로 실제 배포의 쿠키는 `__Secure-buddha.session_token`인데 문서는 평문 이름만 광고했다. 다만 **유도하지 않고 설명에 적었다**: 커밋된 `openapi.json`은 개발용 `BETTER_AUTH_URL`로 내보내므로, 값을 env에서 유도하면 아티팩트가 내보낸 기계의 환경에 의존해 CI 계약 검사가 깨진다. 실사용 영향은 문서뿐이다(Swagger UI 미제공, 생성 클라이언트는 security를 방출하지 않음, 서버 가드는 쿠키 이름을 보지 않음). ③ **비밀번호 표시 토글을 탭 순서에 되돌렸다.** `tabIndex={-1}`이 키보드 사용자에게 이 버튼을 도달 불가로 만들었고 대체 단축키도 없었다(WCAG 2.1.1 Keyboard, level A). 비밀번호 입력·제출 자체는 원래 키보드로 가능하므로 P3다.
 - M1 리뷰 3차에서 **채택하지 않은 지적**: `auth.test.ts`가 실행 순서에 의존한다는 P3 지적은 사실이지만(파일 아래쪽 케이스를 `-t`로 단독 실행하면 상태가 없어 실패한다), 제안된 재구성은 **측정 결과 더 나빴다**. 게으른 사전조건 헬퍼는 쿠키 프리픽스 회귀를 흉내냈을 때 실패가 7건→9건으로 늘고 모든 실패 메시지가 헬퍼 자신의 동일한 `TypeError`로 뭉개졌으며, 셔플 순서에서도 5건→7건이 됐다. 케이스별 setup은 세 가지 서로 다른 중간 상태(미인증 / 인증됐고 비밀번호 없음 / 완전 설정)를 하나로 만들 수 없어 애초에 성립하지 않는다. 대신 `describe` 위에 순서 계약을 명시해 두고, 이후 추가되는 케이스는 각자 새 주소로 상태를 만들도록 못 박았다.
+
+## ADR-0025 — 지갑: 충전·원장·관리자 조정과 원장 감사 (M2)
+
+### 맥락
+
+PLAN §5.1/5.6과 M2는 P의 유입(mock 충전, 관리자 조정)과 원장 불변식을 요구한다. 스키마(`payments`, `ledger_entries`, `balances`, `admin_actions`, `audit_failures`)는 M1에서 이미 만들었으므로 M2는 그 위의 트랜잭션·API·화면·감사 잡이다.
+
+### 결정
+
+- **`PaymentProvider` 인터페이스 + `MockPaymentProvider`**(`apps/api/src/payments`). 프로바이더 호출은 트랜잭션 밖에서 하고, 성공했을 때만 `payments`(succeeded) INSERT → `balances` UPDATE → `ledger_entries`(DEPOSIT) INSERT를 한 트랜잭션으로 처리한다. 실패는 `payments`를 `failed`로 남기고 400을 돌려준다. 토큰 바인딩만 바꾸면 실제 PG로 교체된다(PLAN §16).
+- **잔고 이동은 조건부 UPDATE**다: 충전은 `available_p + amount`, 관리자 조정은 `available_p + amount >= 0` 조건을 붙여 0행이면 `INSUFFICIENT_BALANCE`. 읽고-쓰기를 하지 않으므로 동시 요청이 합산된다(M2 AC 2, 통합 테스트로 검증).
+- **`ledger_entries.balance_after_p`는 UPDATE의 RETURNING 값**을 그대로 쓴다. 같은 트랜잭션 안이라 스냅샷이 실제 잔고와 어긋날 수 없다.
+- **관리자 조정은 `admin_actions` → `balances` → `ledger_entries` 순서의 한 트랜잭션**이고, 거부되면 감사 행까지 함께 롤백된다. 사유(memo)는 필수이며 원장 memo에도 남는다.
+- **API**: `POST /api/v1/payments/charge`, `GET /api/v1/me/ledger`, `GET /api/v1/me/payments`, `GET /api/v1/admin/users`, `POST /api/v1/admin/users/:id/balance-adjust`, `GET /api/v1/admin/payments`, `GET /api/v1/admin/audit-failures`. 목록은 `(created_at DESC, id DESC)` 키셋 커서(`@buddha/shared`의 `encodeKeyset`/`decodeKeyset`)를 쓴다.
+- **워커 `ledger.audit`**: `balances.available_p + locked_p = SUM(ledger_entries.amount_p)`를 계정별로 한 번의 그룹 쿼리로 검증하고, 불일치는 `audit_failures`에 **기록만** 한다(원장이 진실이므로 잔고를 자동으로 고치지 않는다). 매일 04:00 KST 반복 잡 + `pnpm --filter worker run job:ledger-audit` 수동 실행. 워커가 Postgres를 직접 쓰기 시작했으므로 `@buddha/db` 의존성과 종료 시 풀 정리를 추가했다.
+- **웹**: `/wallet`(고정 고지 → 잔고 → 충전 → 원장), `/admin/users`(검색 + 조정). 관리자 레이아웃은 서버에서 `GET /me`의 role로 접근을 막고, 실제 권한은 API의 AdminGuard가 강제한다.
+
+### 결과
+
+- 통합 테스트: 지갑 8건(10,000P 충전, 동시 20건, 범위 거부, 커서 페이지), 관리자 7건(−3,000P 조정, 음수 거부, 사유 필수, 404, 권한, 검색, 목록), 워커 감사 3건. 총 테스트 144건.
+- 브라우저 확인(2026-09-03): 충전 → 잔고·칩·원장 동시 갱신, 관리자 −3,000P → 7,000P + "관리자 조정" 원장 행, 과다 차감 → 한국어 거부 안내, 수동 감사 `{"checked":5,"mismatches":0}` → 잔고를 직접 +1,500 조작 후 재실행 시 `audit_failures` 1건.
+- `payments.provider_ref`는 mock이 `mock_<uuid>`를 채운다. 실제 PG의 승인번호가 들어갈 자리다.
+- 레이트 리밋(PLAN §7.5)은 아직 없다. 실제 PG 연동 전 필수(A-M2-6).
+- (2026-09-05 추기, PR #3 리뷰 6차) `POST /payments/charge`는 `Idempotency-Key` 헤더가 필수다(QUESTIONS A-M2-11, migration 0008). 키를 프로바이더 호출 **전에** `payments` 행(`pending`)으로 예약하므로 위의 "성공했을 때만 `payments`(succeeded) INSERT" 순서는 "예약 → 프로바이더 → 같은 행을 `succeeded`/`failed`로 갱신"으로 바뀌었다. 잔고·원장은 여전히 `succeeded` 갱신과 한 트랜잭션이다. (9차 정정) 잔고 행은 예약 전에 확인하므로 없는 계정은 아무것도 예약하지 않고 404로 끝난다; 확인 뒤 사라진 행은 500이고 그때만 예약 행이 `pending`으로 남는다(프로바이더가 승인한 유일한 기록).
+- (2026-09-05 추기, PR #3 리뷰 6차) 웹의 `SessionCacheGuard`(`components/auth`)가 세션의 사용자 id가 바뀌는 것을 보면 QueryClient를 `resetQueries`로 비운다. 1차 리뷰의 `queryClient.clear()`는 로그아웃·로그인이 일어난 탭만 비웠고, 다른 탭은 better-auth가 전파하는 로그아웃(localStorage 브로드캐스트)과 `visibilitychange` 재조회로 계정이 바뀐 뒤에도 이전 계정의 `['me']`·원장·결제 캐시를 그대로 그렸다. `clear()`가 아닌 `resetQueries()`인 이유: clear는 마운트된 옵저버에 분리된 데이터를 남기고 다시 그리지 않는다.
+- (2026-09-05 추기, PR #3 리뷰 6차) `ledger.audit`의 `audit_failures` INSERT는 1,000행씩 나눠 한 트랜잭션에 쓴다. 한 문장으로 쓰면 32,768행(행당 바인드 파라미터 2개, int16 한계)에서 실패해 광범위한 손상일수록 기록이 남지 않았다. 한 트랜잭션이라 한 실행의 행은 여전히 같은 `created_at`을 갖는다.
+- (2026-09-05 추기, PR #3 리뷰 7차) 감사 잡은 문장 타임아웃 10분의 전용 풀(max 1, `buddha-worker-audit-job`)을 쓴다(A-M2-4). 진행 중인 멱등키에 대한 409는 `details`로 헤더를 지목해 웹이 키를 유지하도록 했다(A-M2-11). `audit_failures`·`coupons`의 목록 인덱스는 2·4차와 같은 이유로 M6 인덱스 점검(전역 키셋 목록 넷 + 행 비교 술어)에 남겼다.
+- (2026-09-05 추기, PR #3 리뷰 9차) `SessionGuard`가 쿠키 인증 라우트의 CSRF 검사를 맡는다: GET·HEAD·OPTIONS 외의 요청에서 `Origin`이 있고 `webOrigins`에 없으면 403(A-M2-13). 함께 better-auth Nest 모듈의 urlencoded 파서를 껐다(`bodyParser.urlencoded.enabled: false`) — 이 API는 JSON만 받고, 폼 본문은 CSRF가 보내는 바로 그 모양이다. 그전까지는 `qs` 피어 의존성이 없어 폼 본문이 500으로 막혀 있었을 뿐이다. 충전의 잔고 행 확인은 예약·프로바이더 호출보다 앞으로 옮겼고, 웹의 멱등키는 `sessionStorage`에 두어 새로 고침 뒤에도 같은 키를 보낸다(A-M2-11). 쿠폰 사용은 DUPLICATE_REQUEST·사용 불가 응답에서도 잔고·원장을 다시 읽는다 — 응답을 잃은 성공의 메아리일 수 있다.
+- (2026-09-05 추기, PR #3 리뷰 12차) `POST /coupons/redeem` 본문에도 `expectedAccountId`를 더했다(A-M2-9; 두 라우트가 `assertExpectedAccount`를 공유). `webOrigins`는 각 항목을 `new URL().origin`으로 정규화하고 절대 URL이 아니면 기동 시 실패한다(A-M2-13). `db:seed`는 `admin_actions`에 `charge_package` 흔적이 있으면 비어 있는 카탈로그도 건드리지 않는다(A-M2-8).
+- (2026-09-05 추기, PR #3 리뷰 11차) `POST /payments/charge` 본문에 `expectedAccountId`를 더했다(A-M2-11). 쿠키가 결제 주체를 정하고 본문은 화면이 보이는 계정을 말하며, 둘이 다르면 403이다 — 다른 탭에서 로그인이 바뀐 뒤 재조회 전인 탭이 보고 있지 않은 계정에 적립하거나 멱등키를 다른 이름 공간에 남기지 않게. PLAN §5.3의 PRICE_MOVED와 같은 모양의 가드다.
+- (2026-09-05 추기, PR #3 리뷰 10차) 웹 멱등키의 sessionStorage 항목은 계정 id로 이름 공간을 나눈다(A-M2-11). 9차는 같은 사용자의 새로 고침·탭 내 이동을 견디는 목적은 이뤘지만, 같은 탭을 다른 계정이 쓰면서 같은 상품을 살 때 이전 계정의 복구 키를 소모하는 경로를 문서화한 채 받아들였고, 이번에 그 경로를 닫았다. 세션의 사용자 id를 알기 전에는 충전 버튼을 비활성화한다.
+- (2026-09-05 추기, PR #3 리뷰 8차) `ChargeResult`에서 `package`를 뺐다. 결제 행이 구매의 불변 기록(지급 P·결제 금액·상품 id)이고 상품 행은 관리자가 고치거나 지울 수 있으므로, 상품 행을 되돌려 주면 새 응답에서는 중복이고 같은 멱등키의 재구성 응답에서는 첫 결과와 어긋난다(A-M2-11).
+
+## ADR-0026 — 충전 상품(할인), 쿠폰, 가입 보너스 (오너 결정 2026-09-04)
+
+### 맥락
+
+M2를 마친 뒤 오너가 세 가지를 정했다(PLAN §17 Q2/Q3): ① 충전은 원화 가격이 붙은 상품 단위로 하고 금액이 클수록 할인율을 높인다(4,900원 → 5,000P 시작), 상품은 관리자가 변경·추가·삭제하며 사용자는 상품 금액만 충전할 수 있다. ② 가입 보너스 10,000P와, 관리자가 유동적으로 P를 지급할 수 있는 쿠폰 시스템. ③ 환불 문구는 추후 검토.
+
+### 결정
+
+- **`charge_packages`** 테이블: `amount_p`(지급 P), `price_krw`(결제 금액), `sort_order`, `is_active`. 할인율은 저장하지 않고 `1 - price/amount`로 유도하며, `price_krw <= amount_p` CHECK가 액면가 초과 판매를 막는다. 시드는 2%→10% 사다리를 넣고, 이미 상품이 있으면 건드리지 않는다. (2026-09-05 추기, PR #3 리뷰 12차) 관리자가 상품을 모두 지워 비운 카탈로그도 건드리지 않는다 — `admin_actions`의 `charge_package` 흔적이 그 판단 근거다(A-M2-8).
+- **`POST /payments/charge`의 본문이 `{ packageId }`로 바뀌었다.** 지급 P와 결제 금액은 상품 행에서 오고 `payments`에 `price_krw`/`package_id`로 스냅샷된다. 상품을 삭제하면 `package_id`만 NULL이 되고 과거 결제 내역은 그대로다. 공개 `GET /charge-packages`는 판매 중인 상품만 보여 준다.
+- **관리자 CRUD**: `GET/POST /admin/charge-packages`, `PATCH|DELETE /admin/charge-packages/:id`. PATCH는 한쪽만 바꿔도 저장된 다른 쪽과 함께 액면가 조건을 다시 확인해 400을 돌려준다(CHECK 위반으로 500이 나지 않게).
+- **가입 보너스 10,000P**는 `user` AFTER INSERT 트리거(migration 0004)가 잔고와 `BONUS` 원장에 같은 트랜잭션으로 쓴다. ADR-0019와 같은 이유다: 모든 가입 경로(이메일·구글·카카오·네이버)가 이 INSERT를 지나고, PLAN 5.6 불변식이 계정 생성 첫 순간부터 성립한다. 금액은 트리거 리터럴과 `SIGNUP_BONUS_P` 상수 두 곳에 있으므로 변경에는 마이그레이션이 필요하다.
+- **쿠폰**: `coupons`(코드 UNIQUE·금액·사용 상한·만료·활성·메모·발급자) + `coupon_redemptions`(coupon_id, user_id UNIQUE). 사용은 한 트랜잭션에서 쿠폰 행을 `FOR UPDATE`로 잠그고 한도를 다시 확인한 뒤 사용 기록·카운트·잔고·`BONUS` 원장(ref_type `coupon`)을 쓴다. 계정당 1회는 UNIQUE 제약이 보장하고, 사용할 수 없는 코드는 존재 여부와 무관하게 같은 오류를 돌려준다.
+- 웹: 지갑의 충전 카드는 상품 목록(P·가격·할인 배지)이고 직접 입력 칸은 없다. 쿠폰 등록 카드가 그 아래에 붙는다. 관리자에 `/admin/charge-packages`, `/admin/coupons`를 추가했다.
+
+### 결과
+
+- 통합 테스트 171건(shared 45 · db 15 · api 84 · web 17 · worker 10). 신규: 상품 CRUD 6건, 쿠폰 6건, 지갑은 상품 기반으로 재작성.
+- 브라우저 확인(2026-09-04): 지갑에 2~10% 할인 상품 5개, 10,000P 구매 → 잔고·칩·원장 갱신, 쿠폰 발급 → 사용(+5,000P, "쿠폰 LAUNCH-2026" 원장) → 재사용 거부, 관리자에서 300,000P/255,000원(15%) 추가 후 삭제, 신규 가입 계정에 10,000P + "가입 보너스" 원장, 감사 잡 불일치 0.
+- 1P = 1원은 **액면가**로 유지된다(PLAN 5.1). 구매 가격만 할인되며, 지급·정산·환불은 모두 액면가 기준이다.
+- 가입 보너스는 미인증 계정에도 즉시 들어간다(가입 트랜잭션이므로). 인증 전에는 로그인할 수 없어 사용할 수는 없지만, 다중 계정 어뷰징은 M6 레이트 리밋과 함께 다뤄야 한다(A-M2-10).

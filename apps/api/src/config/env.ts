@@ -83,7 +83,11 @@ export const envSchema = z
     /**
      * Web origin(s) trusted for CSRF, redirectTo/callbackURL validation (better-auth
      * trustedOrigins) and CORS (ADR-0017: the browser talks to the API origin directly for
-     * Socket.IO). Comma-separated. Defaults to the origin of BETTER_AUTH_URL.
+     * Socket.IO). Comma-separated absolute URLs; each is reduced to its origin the way a
+     * browser serialises the `Origin` header (`webOrigins`), so a trailing slash, a path or an
+     * upper-case host in the value is harmless. Defaults to the origin of BETTER_AUTH_URL.
+     * SessionGuard compares the `Origin` of every cookie-authenticated mutation against this
+     * list, so list origins, not better-auth wildcard patterns — a pattern fails at startup.
      */
     WEB_ORIGIN: optionalString,
 
@@ -108,6 +112,21 @@ export const envSchema = z
     SMTP_SECURE: z.stringbool().default(false),
   })
   .superRefine((env, ctx) => {
+    // Validated here, not only where it is consumed, so `loadEnv()` fails with the readable
+    // `[WEB_ORIGIN]` line the header promises instead of a DI-factory exception later.
+    for (const entry of (env.WEB_ORIGIN ?? '').split(',')) {
+      const trimmed = entry.trim();
+      if (trimmed.length === 0) continue;
+      try {
+        canonicalOrigin(trimmed);
+      } catch (error) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['WEB_ORIGIN'],
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
     if (env.NODE_ENV !== 'test' && !env.BETTER_AUTH_SECRET) {
       ctx.addIssue({
         code: 'custom',
@@ -190,13 +209,49 @@ export function enabledOAuthProviders(env: Env): Partial<Record<OAuthProvider, O
 }
 
 /**
- * Origins allowed to call the API from a browser: better-auth `trustedOrigins` and the
- * CORS allow-list. WEB_ORIGIN when set, otherwise the origin of BETTER_AUTH_URL.
+ * Origins allowed to call the API from a browser: better-auth `trustedOrigins`, the CORS
+ * allow-list and SessionGuard's CSRF check. WEB_ORIGIN when set, otherwise the origin of
+ * BETTER_AUTH_URL.
+ *
+ * Every entry is canonicalised with `new URL(entry).origin` — lower-case scheme and host, no
+ * path, no trailing slash, no default port — because that is how browsers serialise the
+ * `Origin` header and SessionGuard matches it exactly. `https://App.example.com/` in .env would
+ * otherwise refuse every cookie-authenticated mutation with 403. An entry that is not an
+ * absolute URL (a better-auth wildcard pattern included) throws, so a bad value fails the
+ * process at startup — `createAuth` and the SessionGuard constructor both call this — instead
+ * of failing every write at runtime.
  */
-export function webOrigins(env: Env): string[] {
-  const configured = env.WEB_ORIGIN?.split(',')
-    .map((origin) => origin.trim())
-    .filter((origin) => origin.length > 0);
-  if (configured && configured.length > 0) return configured;
-  return [new URL(env.BETTER_AUTH_URL).origin];
+export function webOrigins(env: Pick<Env, 'WEB_ORIGIN' | 'BETTER_AUTH_URL'>): string[] {
+  const configured = (env.WEB_ORIGIN ?? '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  if (configured.length === 0) return [new URL(env.BETTER_AUTH_URL).origin];
+  return [...new Set(configured.map(canonicalOrigin))];
+}
+
+/**
+ * `new URL(entry).origin`, or a throw naming the entry. Stricter than the URL parser alone:
+ * only http(s) origins can appear in a browser's `Origin` header (`mailto:`, `myapp://` and the
+ * misspelling `localhost:3000` all parse to the literal origin "null", which must never enter
+ * the trusted set — it would admit `Origin: null` requests), and better-auth's wildcard
+ * patterns (`https://*.example.com`) parse fine in Node but SessionGuard cannot match them.
+ */
+export function canonicalOrigin(entry: string): string {
+  let url: URL;
+  try {
+    url = new URL(entry);
+  } catch {
+    throw new Error(`WEB_ORIGIN entry "${entry}" is not an absolute URL`);
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error(`WEB_ORIGIN entry "${entry}" must be an http(s) origin`);
+  }
+  // `?` cannot occur in a hostname (it starts the query), so only `*` needs a check here.
+  if (url.hostname.includes('*') || url.hostname.length === 0) {
+    throw new Error(
+      `WEB_ORIGIN entry "${entry}" must be one origin, not a pattern (SessionGuard matches exactly)`,
+    );
+  }
+  return url.origin;
 }

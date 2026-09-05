@@ -1,0 +1,525 @@
+/**
+ * Wallet integration tests (PLAN M2 AC 1-2, PLAN 5.1/5.6, ADR-0026) against the docker `test`
+ * profile. Skips when TEST_* are unset (fails under CI=true, see the harness).
+ */
+import { schema } from '@buddha/db';
+import {
+  SIGNUP_BONUS_P,
+  type ChargePackage,
+  type ChargeResult,
+  type LedgerEntry,
+} from '@buddha/shared';
+import { randomUUID } from 'node:crypto';
+import { eq } from 'drizzle-orm';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { PAYMENT_PROVIDER, type PaymentProvider } from '../payments/payment-provider.js';
+import {
+  chargeBody,
+  chargeHeaders,
+  createTestApp,
+  createTestPackage,
+  signUpTestUser,
+  type TestApp,
+  type TestPackage,
+  type TestUser,
+} from '../test/app.js';
+import { hasTestInfra } from '../test/setup-env.js';
+
+const jsonHeaders = { origin: 'http://localhost:3000', 'content-type': 'application/json' };
+
+describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
+  let t: TestApp;
+  let user: TestUser;
+  /** 10,000P for 9,700원 (a 3% discount), like the seeded ladder. */
+  let pack: { id: string; amountP: bigint; priceKrw: number };
+
+  beforeAll(async () => {
+    t = await createTestApp();
+  });
+  afterAll(async () => {
+    await t?.close(); // undefined when beforeAll timed out waiting for the file lock
+  });
+  beforeEach(async () => {
+    await t.reset();
+    user = await signUpTestUser(t);
+    pack = await createTestPackage(t.db);
+  });
+
+  /**
+   * One purchase by `as` (cookie and the account the screen shows): a fresh Idempotency-Key
+   * unless the test re-sends one (PLAN 5.4).
+   */
+  const charge = (pack: TestPackage, as: TestUser = user, idempotencyKey?: string) =>
+    t.app.inject({
+      method: 'POST',
+      url: '/api/v1/payments/charge',
+      headers: chargeHeaders(as.cookie, idempotencyKey),
+      payload: chargeBody(pack, as.id),
+    });
+
+  async function paymentsOf(userId: string) {
+    return t.db.select().from(schema.payments).where(eq(schema.payments.userId, userId));
+  }
+
+  async function balanceOf(userId: string) {
+    const [row] = await t.db
+      .select()
+      .from(schema.balances)
+      .where(eq(schema.balances.userId, userId));
+    return row;
+  }
+
+  async function ledgerOf(userId: string) {
+    return t.db.select().from(schema.ledgerEntries).where(eq(schema.ledgerEntries.userId, userId));
+  }
+
+  it('grants the sign-up bonus with a BONUS ledger entry (PLAN 17 Q2)', async () => {
+    expect(await balanceOf(user.id)).toMatchObject({ availableP: SIGNUP_BONUS_P, lockedP: 0n });
+    const entries = await ledgerOf(user.id);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      type: 'BONUS',
+      amountP: SIGNUP_BONUS_P,
+      balanceAfterP: SIGNUP_BONUS_P,
+      memo: '가입 보너스',
+    });
+  });
+
+  it('lists the packages on sale, hiding the retired ones', async () => {
+    const retired = await createTestPackage(t.db, {
+      amountP: 1_000n,
+      priceKrw: 1_000,
+      isActive: false,
+    });
+    const res = await t.app.inject({ method: 'GET', url: '/api/v1/charge-packages' });
+    expect(res.statusCode).toBe(200);
+    const packages = res.json<{ data: ChargePackage[] }>().data;
+    expect(packages.map((row) => row.id)).toEqual([pack.id]);
+    expect(packages.map((row) => row.id)).not.toContain(retired.id);
+    expect(packages[0]).toMatchObject({ amountP: '10000', priceKrw: 9700, isActive: true });
+  });
+
+  it('charges a package: P credited, KRW price recorded, one DEPOSIT entry (AC 1)', async () => {
+    const res = await charge(pack);
+    expect(res.statusCode).toBe(200);
+    const { data } = res.json<{ data: ChargeResult }>();
+    const expected = SIGNUP_BONUS_P + pack.amountP;
+    expect(data.balance).toEqual({ availableP: expected.toString(), lockedP: '0' });
+    expect(data.payment).toMatchObject({
+      amountP: '10000',
+      priceKrw: 9700,
+      packageId: pack.id,
+      provider: 'mock',
+      status: 'succeeded',
+    });
+    expect(data.ledgerEntry).toMatchObject({
+      type: 'DEPOSIT',
+      amountP: '10000',
+      balanceAfterP: expected.toString(),
+      refType: 'payment',
+      refId: data.payment.id,
+    });
+
+    expect(await balanceOf(user.id)).toMatchObject({ availableP: expected });
+    const deposits = (await ledgerOf(user.id)).filter((entry) => entry.type === 'DEPOSIT');
+    expect(deposits).toHaveLength(1);
+  });
+
+  it('20 concurrent charges add up, with one ledger entry each (AC 2)', async () => {
+    const responses = await Promise.all(Array.from({ length: 20 }, () => charge(pack)));
+    expect(responses.map((res) => res.statusCode)).toEqual(Array.from({ length: 20 }, () => 200));
+
+    const total = SIGNUP_BONUS_P + pack.amountP * 20n;
+    expect(await balanceOf(user.id)).toMatchObject({ availableP: total });
+
+    const deposits = (await ledgerOf(user.id)).filter((entry) => entry.type === 'DEPOSIT');
+    expect(deposits).toHaveLength(20);
+    expect(deposits.reduce((sum, entry) => sum + entry.amountP, 0n)).toBe(pack.amountP * 20n);
+    // Every snapshot is distinct and the last one equals the final balance: the updates were
+    // serialised by Postgres rather than overwriting each other.
+    const snapshots = deposits.map((entry) => entry.balanceAfterP).sort((a, b) => Number(a - b));
+    expect(new Set(snapshots).size).toBe(20);
+    expect(snapshots.at(-1)).toBe(total);
+  });
+
+  it('refuses an unknown, retired or malformed package', async () => {
+    const retired = await createTestPackage(t.db, { isActive: false });
+    const unknown = await charge({ ...pack, id: '3f1a5b6c-1111-4222-8333-444455556666' });
+    expect(unknown.statusCode).toBe(404);
+    // Names the field: the web refetches the catalogue for this 404 and not for the one a
+    // broken account gets (next test), which is not about the catalogue.
+    expect(unknown.json()).toMatchObject({
+      error: { code: 'NOT_FOUND', details: [{ path: ['packageId'] }] },
+    });
+
+    const inactive = await charge(retired);
+    expect(inactive.statusCode).toBe(400);
+    expect(inactive.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR' } });
+
+    const malformed = await t.app.inject({
+      method: 'POST',
+      url: '/api/v1/payments/charge',
+      headers: chargeHeaders(user.cookie),
+      payload: { amountP: '10000' },
+    });
+    expect(malformed.statusCode).toBe(400);
+
+    expect(await balanceOf(user.id)).toMatchObject({ availableP: SIGNUP_BONUS_P });
+  });
+
+  it('refuses an account with no balance row before the provider runs (404, no field)', async () => {
+    // The "user" trigger creates the row at sign-up, but buddha_app keeps DELETE on balances
+    // (migration 0001 revokes it only on the append-only tables), and ledger.audit reports
+    // such an account as `balanceMissing`. This 404 is not the catalogue's fault, so it must
+    // not carry the `packageId` detail that makes the web refetch the cards and call the
+    // package unavailable; the card the user clicked is still on sale. And it has to come
+    // before the reservation and the provider: found out afterwards, the account would have
+    // been charged with nothing credited, and the web — which spends its key on a 4xx — would
+    // charge it again on every click.
+    await t.db.delete(schema.balances).where(eq(schema.balances.userId, user.id));
+    const provider = t.app.get<PaymentProvider>(PAYMENT_PROVIDER);
+    const spy = vi.spyOn(provider, 'charge');
+    try {
+      const res = await charge(pack);
+      expect(res.statusCode).toBe(404);
+      const body = res.json<{ error: { code: string; details?: unknown } }>();
+      expect(body.error.code).toBe('NOT_FOUND');
+      expect(body.error.details).toBeUndefined();
+      expect(spy).not.toHaveBeenCalled();
+      // Nothing of the attempt is left: no reservation, no credit, no ledger entry.
+      expect(await t.db.select().from(schema.payments)).toHaveLength(0);
+      expect(await ledgerOf(user.id)).toHaveLength(1); // the sign-up bonus only
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('refuses a purchase of terms the catalogue never showed (PRICE_MOVED)', async () => {
+    // An admin may re-price a live package (ADR-0026) while a catalogue is still on screen,
+    // and `useChargePackages` has no refetch interval — so the body echoes what the card said
+    // and the server sells only that offer. Both halves are guarded: raising the price alone
+    // is adverse to the user, raising the P alone is adverse to the house.
+    for (const stale of [
+      { ...chargeBody(pack, user.id), expectedPriceKrw: pack.priceKrw - 100 },
+      { ...chargeBody(pack, user.id), expectedAmountP: (pack.amountP + 1n).toString() },
+    ]) {
+      const res = await t.app.inject({
+        method: 'POST',
+        url: '/api/v1/payments/charge',
+        headers: chargeHeaders(user.cookie),
+        payload: stale,
+      });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ error: { code: 'PRICE_MOVED' } });
+    }
+
+    // Refused before the provider runs, so nothing is credited and no payment row is left.
+    expect(await balanceOf(user.id)).toMatchObject({ availableP: SIGNUP_BONUS_P });
+    expect(await t.db.select().from(schema.payments)).toHaveLength(0);
+  });
+
+  it('refuses a body that names another account than the cookie holds (FORBIDDEN)', async () => {
+    // A tab whose session was switched in another tab keeps showing the old account until it
+    // refetches (sign-ins are not broadcast), so its click would charge whoever the cookie now
+    // belongs to and file the client's key under the account on screen. Refused before the
+    // replay lookup and the reservation: nothing charged, nothing reserved.
+    const other = await signUpTestUser(t);
+    const provider = t.app.get<PaymentProvider>(PAYMENT_PROVIDER);
+    const spy = vi.spyOn(provider, 'charge');
+    try {
+      const res = await t.app.inject({
+        method: 'POST',
+        url: '/api/v1/payments/charge',
+        headers: chargeHeaders(user.cookie),
+        payload: chargeBody(pack, other.id),
+      });
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toMatchObject({
+        error: { code: 'FORBIDDEN', details: [{ path: ['expectedAccountId'] }] },
+      });
+      expect(spy).not.toHaveBeenCalled();
+      expect(await t.db.select().from(schema.payments)).toHaveLength(0);
+      expect(await balanceOf(user.id)).toMatchObject({ availableP: SIGNUP_BONUS_P });
+      expect(await balanceOf(other.id)).toMatchObject({ availableP: SIGNUP_BONUS_P });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('requires a session', async () => {
+    const res = await t.app.inject({
+      method: 'POST',
+      url: '/api/v1/payments/charge',
+      headers: { ...jsonHeaders, 'idempotency-key': randomUUID() },
+      payload: chargeBody(pack, user.id),
+    });
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toMatchObject({ error: { code: 'UNAUTHENTICATED' } });
+  });
+
+  it('replays a charge whose answer was lost instead of selling it twice (PLAN 5.4)', async () => {
+    // The client re-sends the same Idempotency-Key when a request never came back. Before the
+    // key existed every request minted its own payment id, so the "retry" was a second
+    // purchase: two payments, two DEPOSIT entries, P credited twice.
+    const key = randomUUID();
+    const first = await charge(pack, user, key);
+    expect(first.statusCode).toBe(200);
+    const again = await charge(pack, user, key);
+    expect(again.statusCode).toBe(200);
+
+    const a = first.json<{ data: ChargeResult }>().data;
+    const b = again.json<{ data: ChargeResult }>().data;
+    expect(b.payment.id).toBe(a.payment.id);
+    expect(b.ledgerEntry.id).toBe(a.ledgerEntry.id);
+    expect(b.balance).toEqual(a.balance);
+
+    const expected = SIGNUP_BONUS_P + pack.amountP;
+    expect(await balanceOf(user.id)).toMatchObject({ availableP: expected });
+    expect(await paymentsOf(user.id)).toHaveLength(1);
+    expect((await ledgerOf(user.id)).filter((entry) => entry.type === 'DEPOSIT')).toHaveLength(1);
+  });
+
+  it('replays the terms actually bought after an admin re-priced the package', async () => {
+    // The answer is rebuilt from the payment row, never from the catalogue: an admin may edit
+    // a live package between the lost answer and the retry (ADR-0026), and a client that still
+    // holds the old card sends the old terms, which are exactly what it paid.
+    const key = randomUUID();
+    const first = await charge(pack, user, key);
+    expect(first.statusCode).toBe(200);
+    await t.db
+      .update(schema.chargePackages)
+      .set({ amountP: 12_000n, priceKrw: 9_900 })
+      .where(eq(schema.chargePackages.id, pack.id));
+
+    const again = await charge(pack, user, key);
+    expect(again.statusCode).toBe(200);
+    const a = first.json<{ data: ChargeResult }>().data;
+    const b = again.json<{ data: ChargeResult }>().data;
+    expect(b.payment).toEqual(a.payment);
+    expect(b.payment).toMatchObject({ amountP: '10000', priceKrw: 9700, packageId: pack.id });
+    expect(b.ledgerEntry).toEqual(a.ledgerEntry);
+    expect(await paymentsOf(user.id)).toHaveLength(1);
+
+    // The refreshed card carries the new terms: a different purchase, not a lost answer.
+    const fresh = await charge({ ...pack, amountP: 12_000n, priceKrw: 9_900 }, user, key);
+    expect(fresh.statusCode).toBe(409);
+    expect(fresh.json()).toMatchObject({ error: { code: 'DUPLICATE_REQUEST' } });
+    expect(await paymentsOf(user.id)).toHaveLength(1);
+  });
+
+  it('refuses a re-used Idempotency-Key that carries different terms (DUPLICATE_REQUEST)', async () => {
+    // A key is a name for one purchase. The same key with another package is a client bug or
+    // a replayed request, never a lost answer, so it must neither sell nor replay (PLAN 7.4).
+    const other = await createTestPackage(t.db, { amountP: 30_000n, priceKrw: 28_500 });
+    const key = randomUUID();
+    expect((await charge(pack, user, key)).statusCode).toBe(200);
+
+    const res = await charge(other, user, key);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: { code: 'DUPLICATE_REQUEST' } });
+    // No field named: unlike the in-progress 409 below, this one tells the client the key is
+    // spent, so its next click is a new purchase rather than a wait.
+    expect(res.json<{ error: { details?: unknown } }>().error.details).toBeUndefined();
+
+    expect(await balanceOf(user.id)).toMatchObject({ availableP: SIGNUP_BONUS_P + pack.amountP });
+    expect(await paymentsOf(user.id)).toHaveLength(1);
+  });
+
+  it('scopes keys to the account: another user may use the same value', async () => {
+    const key = randomUUID();
+    const other = await signUpTestUser(t);
+    expect((await charge(pack, user, key)).statusCode).toBe(200);
+    expect((await charge(pack, other, key)).statusCode).toBe(200);
+    expect(await balanceOf(other.id)).toMatchObject({ availableP: SIGNUP_BONUS_P + pack.amountP });
+    expect(await paymentsOf(other.id)).toHaveLength(1);
+  });
+
+  it('requires a well-formed Idempotency-Key header', async () => {
+    for (const headers of [
+      { ...jsonHeaders, cookie: user.cookie },
+      chargeHeaders(user.cookie, 'short'),
+      chargeHeaders(user.cookie, 'has space in it'),
+    ]) {
+      const res = await t.app.inject({
+        method: 'POST',
+        url: '/api/v1/payments/charge',
+        headers,
+        payload: chargeBody(pack, user.id),
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({
+        error: { code: 'VALIDATION_ERROR', details: [{ path: ['Idempotency-Key'] }] },
+      });
+    }
+    // Refused before the provider runs: nothing reserved, nothing credited.
+    expect(await paymentsOf(user.id)).toHaveLength(0);
+    expect(await balanceOf(user.id)).toMatchObject({ availableP: SIGNUP_BONUS_P });
+  });
+
+  it('lets 20 concurrent requests with one key reach the provider once', async () => {
+    // The key is reserved on a `pending` row before the provider is asked, so the losers of
+    // the race hit the unique index and never charge; they answer 409 while the winner is
+    // still running, or replay its 200 once it has committed. Either way: one payment.
+    const key = randomUUID();
+    const responses = await Promise.all(Array.from({ length: 20 }, () => charge(pack, user, key)));
+    const statuses = responses.map((res) => res.statusCode);
+    expect(statuses.every((status) => status === 200 || status === 409)).toBe(true);
+    expect(statuses.filter((status) => status === 200).length).toBeGreaterThanOrEqual(1);
+    for (const res of responses) {
+      if (res.statusCode === 409) {
+        expect(res.json()).toMatchObject({
+          error: { code: 'DUPLICATE_REQUEST', details: [{ path: ['Idempotency-Key'] }] },
+        });
+      }
+    }
+
+    expect(await balanceOf(user.id)).toMatchObject({ availableP: SIGNUP_BONUS_P + pack.amountP });
+    expect(await paymentsOf(user.id)).toHaveLength(1);
+    expect((await ledgerOf(user.id)).filter((entry) => entry.type === 'DEPOSIT')).toHaveLength(1);
+  });
+
+  it('tells an in-progress key apart, keeps one payment, then replays it', async () => {
+    // The first request is parked inside the provider; a retry with the same key (a click after
+    // the first answer was lost) must neither charge again nor look final. Its 409 names the
+    // header — the signal that makes the web keep the key — and once the first request has
+    // committed, the same key collects that purchase.
+    const provider = t.app.get<PaymentProvider>(PAYMENT_PROVIDER);
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const spy = vi.spyOn(provider, 'charge').mockImplementationOnce(async (request) => {
+      await gate;
+      return { status: 'succeeded', providerRef: `mock_${request.paymentId}` };
+    });
+    try {
+      const key = randomUUID();
+      // light-my-request dispatches lazily: `.then` is what sends the request.
+      const first = charge(pack, user, key).then((res) => res);
+      await vi.waitFor(async () => {
+        expect((await paymentsOf(user.id)).map((row) => row.status)).toEqual(['pending']);
+      });
+
+      const retry = await charge(pack, user, key);
+      expect(retry.statusCode).toBe(409);
+      expect(retry.json()).toMatchObject({
+        error: { code: 'DUPLICATE_REQUEST', details: [{ path: ['Idempotency-Key'] }] },
+      });
+      expect(spy).toHaveBeenCalledTimes(1);
+
+      release();
+      const res = await first;
+      expect(res.statusCode).toBe(200);
+      const replayed = await charge(pack, user, key);
+      expect(replayed.statusCode).toBe(200);
+      expect(replayed.json<{ data: ChargeResult }>().data.payment.id).toBe(
+        res.json<{ data: ChargeResult }>().data.payment.id,
+      );
+      expect(await paymentsOf(user.id)).toHaveLength(1);
+      expect(await balanceOf(user.id)).toMatchObject({ availableP: SIGNUP_BONUS_P + pack.amountP });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('answers 500 and keeps the reservation when the balance row vanishes mid-charge', async () => {
+    // The row was checked before the provider ran, so losing it between the check and the
+    // credit is a race with a DELETE, not a client error. A 500 is what makes the web keep its
+    // key (a 4xx would spend it and the next click would charge again), and the `pending`
+    // reservation is the only record that the provider accepted. The same key then answers
+    // "in progress", never a second purchase.
+    const provider = t.app.get<PaymentProvider>(PAYMENT_PROVIDER);
+    const spy = vi.spyOn(provider, 'charge').mockImplementationOnce(async (request) => {
+      await t.db.delete(schema.balances).where(eq(schema.balances.userId, user.id));
+      return { status: 'succeeded', providerRef: `mock_${request.paymentId}` };
+    });
+    try {
+      const key = randomUUID();
+      const res = await charge(pack, user, key);
+      expect(res.statusCode).toBe(500);
+      expect(res.json()).toMatchObject({ error: { code: 'INTERNAL' } });
+      expect((await paymentsOf(user.id)).map((row) => row.status)).toEqual(['pending']);
+      expect(await ledgerOf(user.id)).toHaveLength(1); // the sign-up bonus only
+
+      const retry = await charge(pack, user, key);
+      expect(retry.statusCode).toBe(409);
+      expect(retry.json()).toMatchObject({
+        error: { code: 'DUPLICATE_REQUEST', details: [{ path: ['Idempotency-Key'] }] },
+      });
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(await paymentsOf(user.id)).toHaveLength(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('GET /me/ledger pages newest first and only shows the caller entries', async () => {
+    await charge(pack);
+    await charge(pack);
+    const other = await signUpTestUser(t);
+    await charge(pack, other);
+
+    const first = await t.app.inject({
+      method: 'GET',
+      url: '/api/v1/me/ledger?limit=2',
+      headers: { cookie: user.cookie },
+    });
+    expect(first.statusCode).toBe(200);
+    const firstPage = first.json<{ data: LedgerEntry[]; meta: { nextCursor: string | null } }>();
+    expect(firstPage.data.map((entry) => entry.type)).toEqual(['DEPOSIT', 'DEPOSIT']);
+    expect(firstPage.meta.nextCursor).toBeTypeOf('string');
+
+    const second = await t.app.inject({
+      method: 'GET',
+      url: `/api/v1/me/ledger?limit=2&cursor=${encodeURIComponent(firstPage.meta.nextCursor!)}`,
+      headers: { cookie: user.cookie },
+    });
+    const secondPage = second.json<{ data: LedgerEntry[]; meta: { nextCursor: string | null } }>();
+    // The sign-up bonus is the oldest entry of every account.
+    expect(secondPage.data.map((entry) => entry.type)).toEqual(['BONUS']);
+    expect(secondPage.meta.nextCursor).toBeNull();
+  });
+
+  it('serves the first page for a malformed cursor instead of a 500', async () => {
+    // Same class as the admin lists, but these two are reachable by any signed-in user:
+    // /me/ledger compares a bigserial id and /me/payments a uuid (see @buddha/shared
+    // decodeKeyset, which now takes the shape the column expects).
+    await charge(pack);
+    for (const route of ['/api/v1/me/ledger', '/api/v1/me/payments']) {
+      for (const cursor of ['0_not-a-uuid', '0_not-a-number', '8640000000000001_x']) {
+        const res = await t.app.inject({
+          method: 'GET',
+          url: `${route}?cursor=${encodeURIComponent(cursor)}`,
+          headers: { cookie: user.cookie },
+        });
+        expect({ route, cursor, status: res.statusCode }).toEqual({ route, cursor, status: 200 });
+        // Falling back to the first page, not an empty one.
+        expect(res.json<{ data: unknown[] }>().data.length).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it('GET /me/payments lists the caller charges with the price paid', async () => {
+    await charge(pack);
+    const res = await t.app.inject({
+      method: 'GET',
+      url: '/api/v1/me/payments',
+      headers: { cookie: user.cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      data: [{ amountP: '10000', priceKrw: 9700, provider: 'mock', status: 'succeeded' }],
+      meta: { nextCursor: null },
+    });
+  });
+
+  it('rejects a cursor limit above the maximum', async () => {
+    const res = await t.app.inject({
+      method: 'GET',
+      url: '/api/v1/me/ledger?limit=101',
+      headers: { cookie: user.cookie },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR' } });
+  });
+});
