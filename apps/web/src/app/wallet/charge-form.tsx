@@ -108,7 +108,7 @@ export function ChargeForm() {
                   <Button
                     onClick={() => void buy(pack)}
                     loading={busy}
-                    disabled={charge.isPending && !busy}
+                    disabled={(charge.isPending && !busy) || !charge.ready}
                     data-testid={`charge-buy-${pack.id}`}
                   >
                     {copy.chargeSubmit}

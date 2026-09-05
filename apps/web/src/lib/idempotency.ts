@@ -51,21 +51,25 @@ const PREFIX = 'buddha:charge-key:';
  * exactly the moment a user reloads the page, and a key that dies with the form would make the
  * next click a second purchase. sessionStorage survives reload and in-tab navigation and ends
  * with the tab — so a key stuck on a reservation that never finished pins its card for this
- * tab, not forever. No per-account namespace: the server scopes keys by account, so a key left
- * behind by whoever used this tab before merely starts a purchase of one's own (and that
- * earlier user's own lost answer is then no longer recoverable — the same as before the
- * storage). A duplicated tab inherits the storage, so a key in flight there replays the same
- * purchase instead of buying again; that is the server's replay path, not a second charge.
+ * tab, not forever. Namespaced by account: the server already scopes keys by account, so
+ * nothing leaks between accounts either way, but a shared tab must not let account B's purchase
+ * of the same package pick up — and then settle away — the key account A is still waiting to
+ * replay; that lost answer is exactly what the storage exists to recover. A duplicated tab
+ * inherits the storage, so a key in flight there replays the same purchase instead of buying
+ * again; that is the server's replay path, not a second charge.
  */
 export class IdempotencyKeys {
   private storage: KeyStorage;
+  private readonly prefix: string;
 
-  constructor(storage: KeyStorage | null = browserSessionStorage()) {
+  /** `account` is the signed-in user's id: one account's keys are invisible to another. */
+  constructor(account: string, storage: KeyStorage | null = browserSessionStorage()) {
+    this.prefix = `${PREFIX}${account}:`;
     this.storage = storage ?? new MemoryStorage();
   }
 
   take(intent: string): string {
-    const name = PREFIX + intent;
+    const name = this.prefix + intent;
     const kept = this.guard(() => this.storage.getItem(name));
     // Storage is shared with whatever else runs on this origin: a value that is not a key the
     // server would accept is replaced rather than sent (and refused, and only then replaced).
@@ -76,7 +80,7 @@ export class IdempotencyKeys {
   }
 
   settle(intent: string, status: number): void {
-    if (status < 500) this.guard(() => this.storage.removeItem(PREFIX + intent));
+    if (status < 500) this.guard(() => this.storage.removeItem(this.prefix + intent));
   }
 
   /**

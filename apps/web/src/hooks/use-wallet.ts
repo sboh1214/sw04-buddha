@@ -2,7 +2,7 @@
 
 import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useRef } from 'react';
 import {
   api,
   isApiError,
@@ -13,6 +13,7 @@ import {
   type LedgerEntry,
   type Payment,
 } from '@/lib/api';
+import { useSession } from '@/lib/auth-client';
 import { IdempotencyKeys } from '@/lib/idempotency';
 import { ME_QUERY_KEY } from './use-me';
 
@@ -120,14 +121,36 @@ export function useCharge() {
   // PLAN 5.4): a click whose request died on the way back re-sends the key and gets the first
   // purchase back instead of buying again. Per package, so a dead click on one card never
   // blocks another. The keys themselves sit in sessionStorage, so a reload — the natural
-  // reaction to a request that never answered — finds the same key; this object is only the
-  // handle, created once per mounted form.
-  const [keys] = useState(() => new IdempotencyKeys());
-  return useMutation({
+  // reaction to a request that never answered — finds the same key, and they are filed under
+  // the account, so another account using this tab meanwhile cannot consume them. Until
+  // better-auth has said whose session this is (the first paint, while BalanceCard shows its
+  // skeleton) there is no account to file under: `ready` is false and ChargeForm keeps the buy
+  // buttons disabled. The wallet page is server-gated, so that answer is a session, not a
+  // sign-out; should the first /get-session fail with something other than a 401 the buttons
+  // stay disabled until better-auth's next refetch succeeds. A switch while the page stays
+  // mounted (SessionCacheGuard) yields the new account's handle on the next click — except
+  // inside the one round trip in which the session atom still holds the previous account
+  // while refetching; a click in that window files its key under the old account, the same
+  // window SessionCacheGuard itself has.
+  const { data: session } = useSession();
+  const accountId = session?.user.id;
+  // A ref, not useMemo: React may drop a memo, and with a throwing storage the handle's
+  // in-memory fallback IS the key. Resolved at call time, so no ref is touched during render.
+  const handle = useRef<{ account: string; keys: IdempotencyKeys } | null>(null);
+  const keysFor = (account: string): IdempotencyKeys => {
+    if (handle.current?.account !== account) {
+      handle.current = { account, keys: new IdempotencyKeys(account) };
+    }
+    return handle.current.keys;
+  };
+  const mutation = useMutation({
     // The whole package, not just its id: the body echoes the amount and price this card is
     // showing so the server can refuse a purchase of terms the user never read (ADR-0026 lets
     // an admin re-price a live package, and this catalogue has no refetch interval).
     mutationFn: async (pack: ChargePackage) => {
+      // Unreachable while the buttons honour `ready`; refusing beats sending an unfiled key.
+      if (!accountId) throw new Error('charge attempted before the session was known');
+      const keys = keysFor(accountId);
       const result = await api.POST('/api/v1/payments/charge', {
         params: { header: { 'Idempotency-Key': keys.take(pack.id) } },
         body: {
@@ -175,6 +198,7 @@ export function useCharge() {
       }
     },
   });
+  return { ...mutation, ready: accountId !== undefined };
 }
 
 /**
