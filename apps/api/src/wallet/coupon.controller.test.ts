@@ -21,7 +21,7 @@ describe.skipIf(!hasTestInfra)('coupons (integration)', () => {
     t = await createTestApp();
   });
   afterAll(async () => {
-    await t.close();
+    await t?.close(); // undefined when beforeAll timed out waiting for the file lock
   });
   beforeEach(async () => {
     await t.reset();

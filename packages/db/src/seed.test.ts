@@ -60,7 +60,7 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
     t = await connectTestDb();
   });
   afterAll(async () => {
-    await t.close();
+    await t?.close(); // undefined when beforeAll timed out waiting for the file lock
   });
   beforeEach(async () => {
     await t.reset();

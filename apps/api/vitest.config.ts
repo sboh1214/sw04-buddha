@@ -14,6 +14,9 @@ export default defineConfig({
     // Integration suites share one database: run files sequentially.
     fileParallelism: false,
     testTimeout: 20_000,
-    hookTimeout: 30_000,
+    // `beforeAll` waits for the cross-package file lock (packages/db harness) while the db and
+    // worker suites run on the same database, so in CI it can sit for the length of those
+    // suites — minutes, not seconds. The CI job has its own 30-minute ceiling.
+    hookTimeout: 600_000,
   },
 });

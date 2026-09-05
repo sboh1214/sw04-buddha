@@ -56,7 +56,7 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
     await t.reset();
   });
   afterAll(async () => {
-    await t.close();
+    await t?.close(); // undefined when beforeAll timed out waiting for the file lock
   });
   beforeEach(() => {
     t.mailer.messages.length = 0;

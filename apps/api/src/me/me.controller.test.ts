@@ -13,7 +13,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/me (integration)', () => {
     t = await createTestApp();
   });
   afterAll(async () => {
-    await t.close();
+    await t?.close(); // undefined when beforeAll timed out waiting for the file lock
   });
   beforeEach(async () => {
     await t.reset();
