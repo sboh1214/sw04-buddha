@@ -119,7 +119,9 @@ export function useCharge() {
   // One Idempotency-Key per package until the server has answered (lib/idempotency.ts,
   // PLAN 5.4): a click whose request died on the way back re-sends the key and gets the first
   // purchase back instead of buying again. Per package, so a dead click on one card never
-  // blocks another. Lives in state, not a ref, so it is created once per mounted form.
+  // blocks another. The keys themselves sit in sessionStorage, so a reload — the natural
+  // reaction to a request that never answered — finds the same key; this object is only the
+  // handle, created once per mounted form.
   const [keys] = useState(() => new IdempotencyKeys());
   return useMutation({
     // The whole package, not just its id: the body echoes the amount and price this card is
@@ -175,17 +177,34 @@ export function useCharge() {
   });
 }
 
-/** `POST /api/v1/coupons/redeem`: an admin-issued grant, credited as a BONUS entry. */
+/**
+ * `POST /api/v1/coupons/redeem`: an admin-issued grant, credited as a BONUS entry.
+ *
+ * Redemption is idempotent in effect per (coupon, account) by the UNIQUE constraint, so it
+ * needs no Idempotency-Key: a retry after a lost answer is refused, never credited twice. But
+ * that refusal can be the echo of a redemption that went through — "already used" is exactly
+ * that, and "cannot be used" is too when the coupon has since been exhausted by that very
+ * redemption, expired or disabled (the server checks those before it reaches the UNIQUE row)
+ * — so both answers refresh the balance and the ledger as a success would. The form still
+ * shows the refusal; what it must not do is keep showing the world from before the
+ * redemption. A typo pays one refetch for this; the first lost answer itself (a transport
+ * error, shown as errUnknown) refetches nothing, since the same network would likely fail.
+ */
 export function useRedeemCoupon() {
   const queryClient = useQueryClient();
+  const refresh = () =>
+    Promise.all([
+      queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY }),
+      queryClient.invalidateQueries({ queryKey: LEDGER_QUERY_KEY }),
+    ]);
   return useMutation({
     mutationFn: async (code: string) =>
       unwrap(await api.POST('/api/v1/coupons/redeem', { body: { code } })).data,
     onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY }),
-        queryClient.invalidateQueries({ queryKey: LEDGER_QUERY_KEY }),
-      ]);
+      await refresh();
+    },
+    onError: async (error) => {
+      if (isApiError(error, 'DUPLICATE_REQUEST') || isCouponRejection(error)) await refresh();
     },
   });
 }

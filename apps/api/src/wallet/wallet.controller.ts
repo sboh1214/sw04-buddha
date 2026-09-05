@@ -92,7 +92,15 @@ export class PaymentsController {
     },
   })
   @ApiData(chargeResultSchema)
-  @ApiErrors('UNAUTHENTICATED', 'NOT_FOUND', 'VALIDATION_ERROR', 'PRICE_MOVED', 'DUPLICATE_REQUEST')
+  // FORBIDDEN: a mutation whose Origin is not ours (SessionGuard's CSRF check).
+  @ApiErrors(
+    'UNAUTHENTICATED',
+    'FORBIDDEN',
+    'NOT_FOUND',
+    'VALIDATION_ERROR',
+    'PRICE_MOVED',
+    'DUPLICATE_REQUEST',
+  )
   charge(
     @CurrentUser() user: SessionUser,
     @IdempotencyKey() idempotencyKey: string,
@@ -119,7 +127,7 @@ export class CouponsController {
       .extend({ balance: chargeResultSchema.shape.balance, ledgerEntry: ledgerEntrySchema })
       .meta({ id: 'RedeemCouponResult' }),
   )
-  @ApiErrors('UNAUTHENTICATED', 'NOT_FOUND', 'VALIDATION_ERROR', 'DUPLICATE_REQUEST')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR', 'DUPLICATE_REQUEST')
   async redeem(
     @CurrentUser() user: SessionUser,
     @Body({ schema: redeemCouponBodySchema }) body: RedeemCouponBody,

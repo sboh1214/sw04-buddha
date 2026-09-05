@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { IdempotencyKeys } from './idempotency';
+import { IdempotencyKeys, type KeyStorage } from './idempotency';
+
+/** What sessionStorage looks like to the keys: a map that outlives any one form instance. */
+function fakeStorage(): KeyStorage & { size(): number } {
+  const items = new Map<string, string>();
+  return {
+    getItem: (name) => items.get(name) ?? null,
+    setItem: (name, value) => void items.set(name, value),
+    removeItem: (name) => void items.delete(name),
+    size: () => items.size,
+  };
+}
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -29,6 +40,65 @@ describe('IdempotencyKeys', () => {
     // A 500 may have acted before it failed: the retry must let the server answer for it.
     keys.settle('pack-1', 500);
     expect(keys.take('pack-1')).toBe(third);
+  });
+
+  it('outlives the form: a remounted instance over the same storage re-sends the key', () => {
+    // A request that died on the way back is exactly when a user reloads. Without the storage
+    // the new form would mint a new UUID and the reload would turn into a second purchase.
+    const storage = fakeStorage();
+    const before = new IdempotencyKeys(storage).take('pack-1');
+    const after = new IdempotencyKeys(storage);
+    expect(after.take('pack-1')).toBe(before);
+    after.settle('pack-1', 200);
+    expect(storage.size()).toBe(0);
+    expect(new IdempotencyKeys(storage).take('pack-1')).not.toBe(before);
+  });
+
+  it('replaces a stored value the server would refuse instead of sending it', () => {
+    // sessionStorage is shared with anything else on the origin (and with dev tools).
+    const storage = fakeStorage();
+    storage.setItem('buddha:charge-key:pack-1', 'not a key!');
+    const key = new IdempotencyKeys(storage).take('pack-1');
+    expect(key).toMatch(UUID);
+    expect(storage.getItem('buddha:charge-key:pack-1')).toBe(key);
+  });
+
+  it('degrades to memory when the storage throws, and still keeps the key for the mount', () => {
+    let calls = 0;
+    const broken: KeyStorage = {
+      getItem: () => {
+        calls += 1;
+        throw new Error('SecurityError');
+      },
+      setItem: () => {
+        throw new Error('QuotaExceededError');
+      },
+      removeItem: () => {
+        throw new Error('SecurityError');
+      },
+    };
+    const keys = new IdempotencyKeys(broken);
+    const first = keys.take('pack-1');
+    expect(first).toMatch(UUID);
+    expect(keys.take('pack-1')).toBe(first);
+    expect(calls).toBe(1); // replaced after the first throw, never consulted again
+  });
+
+  it('keeps the key for the mount when only writes fail', () => {
+    // Private mode: reads answer, writes throw. Without a sticky fallback every take() would
+    // read nothing and mint a fresh UUID — the double purchase all over again.
+    const storage: KeyStorage = {
+      getItem: () => null,
+      setItem: () => {
+        throw new Error('QuotaExceededError');
+      },
+      removeItem: () => undefined,
+    };
+    const keys = new IdempotencyKeys(storage);
+    const first = keys.take('pack-1');
+    expect(keys.take('pack-1')).toBe(first);
+    keys.settle('pack-1', 503);
+    expect(keys.take('pack-1')).toBe(first);
   });
 
   it('keeps one key per intent, so a failed click on one card never blocks another', () => {

@@ -118,6 +118,14 @@ export class WalletService {
         message: 'This charge package has changed; reload and try again',
       });
     }
+    // The "user" trigger creates the balance row at sign-up (PLAN 10.4); missing means a broken
+    // account. Checked before anything is reserved or charged: found out only after the
+    // provider had accepted, the failed credit would leave a `pending` reservation the client
+    // can retry into nothing but 404s — and, the key once spent, into further provider calls.
+    // Names no field: the web refetches the catalogue only for the 404 that `packages.get`
+    // marks with `packageId`, and this one is not about the catalogue.
+    await this.getBalance(userId);
+
     const paymentId = randomUUID();
     // Reserve the key before the provider runs. Reservation and credit are separate
     // transactions on purpose: no lock can span the provider call, which runs outside any
@@ -171,12 +179,20 @@ export class WalletService {
         })
         .where(eq(schema.balances.userId, userId))
         .returning();
-      // The "user" trigger creates the row at sign-up (PLAN 10.4); missing means a broken account.
-      // Deliberately names no field: the web refetches the catalogue only for the 404 that
-      // `packages.get` marks with `packageId`, and this one is not about the catalogue. The
-      // rollback leaves the reservation `pending`: the provider has accepted, so that row is
-      // the only record that this account is owed P.
-      if (!payment || !balance) throw new AppError('NOT_FOUND', { message: 'Balance not found' });
+      // Both rows were seen moments ago (the reservation, and the balance row checked before
+      // the provider ran), so a miss here is a race with a DELETE, not a client error: a 500,
+      // which the web answers by keeping its key, so the retry replays this reservation as
+      // in progress instead of buying again. The rollback leaves the reservation `pending`;
+      // the provider has accepted, so that row is the only record that this account is owed P.
+      if (!payment || !balance) {
+        // Loud, with the provider's reference: the row that would carry it rolls back here.
+        this.logger.error(
+          `charge ${paymentId} accepted by ${this.provider.name} (${outcome.providerRef}) but not credited: ${payment ? 'balance' : 'payment'} row vanished; reservation left pending`,
+        );
+        throw new AppError('INTERNAL', {
+          message: 'Balance row vanished after the provider accepted',
+        });
+      }
 
       const [entry] = await tx
         .insert(schema.ledgerEntries)

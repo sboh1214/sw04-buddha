@@ -83,7 +83,9 @@ export const envSchema = z
     /**
      * Web origin(s) trusted for CSRF, redirectTo/callbackURL validation (better-auth
      * trustedOrigins) and CORS (ADR-0017: the browser talks to the API origin directly for
-     * Socket.IO). Comma-separated. Defaults to the origin of BETTER_AUTH_URL.
+     * Socket.IO). Comma-separated. Defaults to the origin of BETTER_AUTH_URL. SessionGuard
+     * compares the `Origin` of every cookie-authenticated mutation against this list as exact
+     * strings, so list origins, not better-auth wildcard patterns.
      */
     WEB_ORIGIN: optionalString,
 
@@ -193,7 +195,7 @@ export function enabledOAuthProviders(env: Env): Partial<Record<OAuthProvider, O
  * Origins allowed to call the API from a browser: better-auth `trustedOrigins` and the
  * CORS allow-list. WEB_ORIGIN when set, otherwise the origin of BETTER_AUTH_URL.
  */
-export function webOrigins(env: Env): string[] {
+export function webOrigins(env: Pick<Env, 'WEB_ORIGIN' | 'BETTER_AUTH_URL'>): string[] {
   const configured = env.WEB_ORIGIN?.split(',')
     .map((origin) => origin.trim())
     .filter((origin) => origin.length > 0);

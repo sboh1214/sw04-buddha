@@ -162,9 +162,9 @@ export class ChargePackageService {
    * The package a user is buying (WalletService.charge is the only caller).
    *
    * The 404 names the body field, the way the VALIDATION_ERROR for a retired package does.
-   * `charge` answers NOT_FOUND for an account with no balance row too, after the provider has
-   * run, and the web tells the two apart by this detail: only a package that is gone means
-   * the catalogue on screen is stale and worth refetching.
+   * `charge` answers NOT_FOUND for an account with no balance row too (checked before anything
+   * is reserved or charged), and the web tells the two apart by this detail: only a package
+   * that is gone means the catalogue on screen is stale and worth refetching.
    */
   async get(id: string): Promise<ChargePackage> {
     const [row] = await this.db

@@ -164,23 +164,31 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     expect(await balanceOf(user.id)).toMatchObject({ availableP: SIGNUP_BONUS_P });
   });
 
-  it('answers an account with no balance row with a 404 that names no field', async () => {
+  it('refuses an account with no balance row before the provider runs (404, no field)', async () => {
     // The "user" trigger creates the row at sign-up, but buddha_app keeps DELETE on balances
     // (migration 0001 revokes it only on the append-only tables), and ledger.audit reports
     // such an account as `balanceMissing`. This 404 is not the catalogue's fault, so it must
     // not carry the `packageId` detail that makes the web refetch the cards and call the
-    // package unavailable; the card the user clicked is still on sale.
+    // package unavailable; the card the user clicked is still on sale. And it has to come
+    // before the reservation and the provider: found out afterwards, the account would have
+    // been charged with nothing credited, and the web — which spends its key on a 4xx — would
+    // charge it again on every click.
     await t.db.delete(schema.balances).where(eq(schema.balances.userId, user.id));
-    const res = await charge(pack);
-    expect(res.statusCode).toBe(404);
-    const body = res.json<{ error: { code: string; details?: unknown } }>();
-    expect(body.error.code).toBe('NOT_FOUND');
-    expect(body.error.details).toBeUndefined();
-    // The credit rolled back with the ledger entry. What stays is the key reservation, still
-    // `pending`: the provider had accepted, so that row is the only record that P is owed.
-    const payments = await t.db.select().from(schema.payments);
-    expect(payments.map((row) => row.status)).toEqual(['pending']);
-    expect(await ledgerOf(user.id)).toHaveLength(1); // the sign-up bonus only
+    const provider = t.app.get<PaymentProvider>(PAYMENT_PROVIDER);
+    const spy = vi.spyOn(provider, 'charge');
+    try {
+      const res = await charge(pack);
+      expect(res.statusCode).toBe(404);
+      const body = res.json<{ error: { code: string; details?: unknown } }>();
+      expect(body.error.code).toBe('NOT_FOUND');
+      expect(body.error.details).toBeUndefined();
+      expect(spy).not.toHaveBeenCalled();
+      // Nothing of the attempt is left: no reservation, no credit, no ledger entry.
+      expect(await t.db.select().from(schema.payments)).toHaveLength(0);
+      expect(await ledgerOf(user.id)).toHaveLength(1); // the sign-up bonus only
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('refuses a purchase of terms the catalogue never showed (PRICE_MOVED)', async () => {
@@ -380,6 +388,37 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
       );
       expect(await paymentsOf(user.id)).toHaveLength(1);
       expect(await balanceOf(user.id)).toMatchObject({ availableP: SIGNUP_BONUS_P + pack.amountP });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('answers 500 and keeps the reservation when the balance row vanishes mid-charge', async () => {
+    // The row was checked before the provider ran, so losing it between the check and the
+    // credit is a race with a DELETE, not a client error. A 500 is what makes the web keep its
+    // key (a 4xx would spend it and the next click would charge again), and the `pending`
+    // reservation is the only record that the provider accepted. The same key then answers
+    // "in progress", never a second purchase.
+    const provider = t.app.get<PaymentProvider>(PAYMENT_PROVIDER);
+    const spy = vi.spyOn(provider, 'charge').mockImplementationOnce(async (request) => {
+      await t.db.delete(schema.balances).where(eq(schema.balances.userId, user.id));
+      return { status: 'succeeded', providerRef: `mock_${request.paymentId}` };
+    });
+    try {
+      const key = randomUUID();
+      const res = await charge(pack, user.cookie, key);
+      expect(res.statusCode).toBe(500);
+      expect(res.json()).toMatchObject({ error: { code: 'INTERNAL' } });
+      expect((await paymentsOf(user.id)).map((row) => row.status)).toEqual(['pending']);
+      expect(await ledgerOf(user.id)).toHaveLength(1); // the sign-up bonus only
+
+      const retry = await charge(pack, user.cookie, key);
+      expect(retry.statusCode).toBe(409);
+      expect(retry.json()).toMatchObject({
+        error: { code: 'DUPLICATE_REQUEST', details: [{ path: ['Idempotency-Key'] }] },
+      });
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(await paymentsOf(user.id)).toHaveLength(1);
     } finally {
       spy.mockRestore();
     }

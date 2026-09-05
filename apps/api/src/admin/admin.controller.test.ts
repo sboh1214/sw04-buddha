@@ -298,4 +298,55 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
     // Newest first, every row exactly once — no gap and no repeat across the tie.
     expect(seen).toEqual([5, 4, 3, 2, 1]);
   });
+
+  it('refuses a cookie-authenticated mutation whose Origin is not ours (CSRF)', async () => {
+    // The session cookie is SameSite=Lax and web + API share one site (ADR-0017), so a page on
+    // a sibling host can submit a form with the admin's cookie attached, and the browser sends
+    // it without any CORS preflight. Two things stop it now: SessionGuard refuses a foreign
+    // Origin (403, before the session is even looked up), and the urlencoded body parser is
+    // off, so a form body is no body at all (400) even from our own origin — this API speaks
+    // JSON, which no cross-origin page can send without a preflight we never answer. Before
+    // this round the form was stopped by accident alone: the parser 500ed for want of `qs`.
+    const post = (origin: string | undefined, body: { type: 'form' | 'json' }) =>
+      t.app.inject({
+        method: 'POST',
+        url: `/api/v1/admin/users/${member.id}/balance-adjust`,
+        headers: {
+          ...(origin === undefined ? {} : { origin }),
+          cookie: admin.cookie,
+          'content-type':
+            body.type === 'form' ? 'application/x-www-form-urlencoded' : 'application/json',
+        },
+        payload:
+          body.type === 'form' ? 'amountP=-3000&memo=csrf' : { amountP: '-3000', memo: 'csrf' },
+      });
+
+    for (const origin of ['https://evil.example', 'null']) {
+      for (const type of ['form', 'json'] as const) {
+        const res = await post(origin, { type });
+        expect({ origin, type, status: res.statusCode }).toEqual({ origin, type, status: 403 });
+        expect(res.json()).toMatchObject({ error: { code: 'FORBIDDEN' } });
+      }
+    }
+    expect(await balanceOf(member.id)).toMatchObject({ availableP: SIGNUP_BONUS_P });
+    expect(await t.db.select().from(schema.adminActions)).toHaveLength(0);
+
+    // A form from our own origin is refused for its shape, not its origin.
+    const form = await post('http://localhost:3000', { type: 'form' });
+    expect(form.statusCode).toBe(400);
+    expect(form.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR' } });
+    // JSON from our own origin passes; so does JSON with no Origin at all (curl, a server):
+    // no browser sent it, so it cannot be a forgery.
+    expect((await post('http://localhost:3000', { type: 'json' })).statusCode).toBe(200);
+    expect((await post(undefined, { type: 'json' })).statusCode).toBe(200);
+    expect(await balanceOf(member.id)).toMatchObject({ availableP: SIGNUP_BONUS_P - 6_000n });
+
+    // Reads are never checked: without CORS headers nothing cross-origin can read them anyway.
+    const read = await t.app.inject({
+      method: 'GET',
+      url: '/api/v1/admin/users',
+      headers: { origin: 'https://evil.example', cookie: admin.cookie },
+    });
+    expect(read.statusCode).toBe(200);
+  });
 });

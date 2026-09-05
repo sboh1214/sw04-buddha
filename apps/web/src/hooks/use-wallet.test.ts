@@ -33,9 +33,10 @@ describe('isStaleCatalogue', () => {
       ),
     ).toBe(false);
     expect(isStaleCatalogue(apiError(400, 'VALIDATION_ERROR'))).toBe(false);
-    // `charge` answers 404 for an account with no balance row too, after the provider has
-    // run. That one names no field: the catalogue still lists the package, so refetching it
-    // and calling the package unavailable would only invite the same failure again.
+    // `charge` answers 404 for an account with no balance row too (refused before anything
+    // is reserved or charged). That one names no field: the catalogue still lists the
+    // package, so refetching it and calling the package unavailable would only invite the
+    // same failure again.
     expect(isStaleCatalogue(apiError(404, 'NOT_FOUND'))).toBe(false);
     expect(isStaleCatalogue(apiError(500, 'INTERNAL'))).toBe(false);
     expect(isStaleCatalogue(apiError(401, 'UNAUTHENTICATED'))).toBe(false);

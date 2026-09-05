@@ -85,9 +85,17 @@ export class AuthInstanceModule {}
       imports: [AuthInstanceModule],
       inject: [AUTH],
       // The library replaces Fastify's JSON/urlencoded parsers with its own (needed on
-      // Express, harmless here). Its parser throws a bare SyntaxError on malformed JSON,
-      // which ApiExceptionFilter maps to 400 VALIDATION_ERROR.
-      useFactory: (auth: Auth) => ({ auth, disableTrustedOriginsCors: true }),
+      // Express, harmless here). Its JSON parser throws a bare SyntaxError on malformed JSON,
+      // which ApiExceptionFilter maps to 400 VALIDATION_ERROR. The urlencoded one is switched
+      // off: this API speaks JSON only, and an HTML form is exactly what a cross-site request
+      // forgery submits (SessionGuard.refuseForeignOrigin). Left on, it also 500s on every
+      // form body today because its `qs` peer dependency is not installed — protection by
+      // accident, which any dependency pulling in `qs` would silently remove.
+      useFactory: (auth: Auth) => ({
+        auth,
+        disableTrustedOriginsCors: true,
+        bodyParser: { urlencoded: { enabled: false } },
+      }),
       disableGlobalAuthGuard: true,
     }),
   ],
