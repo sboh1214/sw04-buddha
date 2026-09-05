@@ -14,6 +14,7 @@ export type LedgerEntry = components['schemas']['LedgerEntry'];
 export type Payment = components['schemas']['Payment'];
 export type AdminUser = components['schemas']['AdminUser'];
 export type ChargePackage = components['schemas']['ChargePackage'];
+export type ChargeResult = components['schemas']['ChargeResult'];
 export type Coupon = components['schemas']['Coupon'];
 export type ErrorEnvelope = components['schemas']['ErrorEnvelope'];
 
@@ -54,7 +55,8 @@ export function isApiError(error: unknown, code?: ErrorCode): error is ApiError 
 /**
  * The field an error is about, when `details` is a `ValidationIssue[]` (`[{ path, message }]`,
  * PLAN 7): every VALIDATION_ERROR, and the few other codes that name a body field the same
- * way (the charge route's 404 for an unknown `packageId`, INSUFFICIENT_BALANCE on `amountP`).
+ * way (the charge route's 404 for an unknown `packageId`, INSUFFICIENT_BALANCE on `amountP`,
+ * the in-progress DUPLICATE_REQUEST on the `Idempotency-Key` header).
  * Returns the first field name found, e.g. 'nickname'; undefined when no field is named.
  */
 export function validationField(error: ApiError): string | undefined {

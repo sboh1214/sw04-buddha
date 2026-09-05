@@ -7,10 +7,15 @@
  */
 import { closeDb, createDb } from '@buddha/db';
 import { getEnv } from '../env.js';
-import { runLedgerAudit } from '../jobs/ledger-audit.js';
+import { LEDGER_AUDIT_QUERY_TIMEOUT_MS, runLedgerAudit } from '../jobs/ledger-audit.js';
 
 const env = getEnv();
-const db = createDb(env.DATABASE_URL, { max: 1, applicationName: 'buddha-worker-audit' });
+// Same timeout as the scheduled job: the one statement scans the whole ledger.
+const db = createDb(env.DATABASE_URL, {
+  max: 1,
+  applicationName: 'buddha-worker-audit',
+  queryTimeoutMs: LEDGER_AUDIT_QUERY_TIMEOUT_MS,
+});
 
 try {
   const result = await runLedgerAudit(db);

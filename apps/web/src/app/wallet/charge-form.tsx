@@ -4,8 +4,29 @@ import { Alert, Badge, Button, Card, HStack, Skeleton, Stack, Text } from '@chak
 import { discountPercent, formatKrw, formatP, parsePAmount } from '@buddha/shared';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
-import { isStaleCatalogue, useChargePackages, useCharge } from '@/hooks/use-wallet';
+import {
+  isChargeInProgress,
+  isStaleCatalogue,
+  useChargePackages,
+  useCharge,
+} from '@/hooks/use-wallet';
 import { isApiError, type ChargePackage } from '@/lib/api';
+
+/**
+ * Only a stale catalogue may claim the package is gone — re-priced, retired or deleted —
+ * which is the same set `useCharge` refetches on, so the message and the cards changing under
+ * it always agree. A provider refusal is a VALIDATION_ERROR too but names `amountP`: nothing
+ * about the offer changed, so it must not say so. The two DUPLICATE_REQUEST answers (PLAN 5.4)
+ * are told apart the way `useCharge` tells them apart: an earlier click is still running (the
+ * key was kept, so the next click collects it), or an earlier click already bought this.
+ */
+function chargeErrorTitle(error: unknown): string {
+  if (isApiError(error, 'PRICE_MOVED')) return copy.chargePriceMoved;
+  if (isChargeInProgress(error)) return copy.chargeInProgress;
+  if (isApiError(error, 'DUPLICATE_REQUEST')) return copy.chargeDuplicate;
+  if (isStaleCatalogue(error)) return copy.chargeUnavailable;
+  return copy.chargeFailed;
+}
 
 /**
  * PLAN 11.3 charging. Users buy one of the packages an admin configured (ADR-0026), so there
@@ -24,22 +45,7 @@ export function ChargeForm() {
         description: formatP(parsePAmount(result.balance.availableP)),
       });
     } catch (error) {
-      toaster.create({
-        type: 'error',
-        // Only a stale catalogue may claim the package is gone — re-priced, retired or
-        // deleted — which is the same set `useCharge` refetches on, so the message and the
-        // cards changing under it always agree. A provider refusal is a VALIDATION_ERROR too
-        // but names `amountP`: nothing about the offer changed, so it must not say so. A
-        // DUPLICATE_REQUEST means the key was spent by an earlier click (PLAN 5.4): the
-        // purchase may well exist, so the toast points at the balance instead of "failed".
-        title: isApiError(error, 'PRICE_MOVED')
-          ? copy.chargePriceMoved
-          : isApiError(error, 'DUPLICATE_REQUEST')
-            ? copy.chargeDuplicate
-            : isStaleCatalogue(error)
-              ? copy.chargeUnavailable
-              : copy.chargeFailed,
-      });
+      toaster.create({ type: 'error', title: chargeErrorTitle(error) });
     }
   }
 

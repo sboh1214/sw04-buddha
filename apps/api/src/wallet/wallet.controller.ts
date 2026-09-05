@@ -81,7 +81,9 @@ export class PaymentsController {
     required: true,
     description:
       'Client-generated key for this purchase (PLAN 5.4). Re-sending it returns the first ' +
-      'outcome instead of charging again; re-using it with a different body is DUPLICATE_REQUEST.',
+      'outcome instead of charging again. DUPLICATE_REQUEST (409) answers a key whose first ' +
+      'request is still running (details name Idempotency-Key: keep the key and retry) and a ' +
+      'key re-used with a different body (no details: the key is spent).',
     schema: {
       type: 'string',
       minLength: IDEMPOTENCY_KEY_MIN_LENGTH,

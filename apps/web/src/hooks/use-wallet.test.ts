@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ApiError } from '@/lib/api';
-import { isCouponRejection, isStaleCatalogue } from './use-wallet';
+import { isChargeInProgress, isCouponRejection, isStaleCatalogue } from './use-wallet';
 
 const apiError = (status: number, code: string, details?: unknown) =>
   new ApiError(status, {
@@ -41,6 +41,31 @@ describe('isStaleCatalogue', () => {
     expect(isStaleCatalogue(apiError(401, 'UNAUTHENTICATED'))).toBe(false);
     expect(isStaleCatalogue(new Error('network'))).toBe(false);
     expect(isStaleCatalogue(undefined)).toBe(false);
+  });
+});
+
+describe('isChargeInProgress', () => {
+  it('is true only for the DUPLICATE_REQUEST that names the header', () => {
+    // The first request with this key is still running: the key must be kept so the next
+    // click collects that purchase instead of opening another one (PLAN 5.4).
+    expect(
+      isChargeInProgress(
+        apiError(409, 'DUPLICATE_REQUEST', [{ path: ['Idempotency-Key'], message: 'in progress' }]),
+      ),
+    ).toBe(true);
+  });
+
+  it('is false for the other 409 and for everything else', () => {
+    // Same key, different terms: the key was spent by a different purchase, so a new one is
+    // right. Nothing else says anything about the key at all.
+    expect(isChargeInProgress(apiError(409, 'DUPLICATE_REQUEST'))).toBe(false);
+    expect(isChargeInProgress(apiError(409, 'PRICE_MOVED'))).toBe(false);
+    expect(
+      isChargeInProgress(
+        apiError(400, 'VALIDATION_ERROR', [{ path: ['Idempotency-Key'], message: 'required' }]),
+      ),
+    ).toBe(false);
+    expect(isChargeInProgress(new TypeError('Failed to fetch'))).toBe(false);
   });
 });
 

@@ -219,9 +219,25 @@ export class WalletService {
    * only when the first answer never arrived, so this is the same purchase, not a new one.
    */
   private async replay(earlier: PaymentRow, body: ChargeBody): Promise<ChargeResult> {
+    // Judged before the terms are compared: a client that re-sends its key while the first
+    // request is still running may well hold a refreshed catalogue by now (a focus refetch),
+    // and answering the terms mismatch would tell it the key is spent — so its next click
+    // would open a second purchase while the first commits. Its outcome is unknown, so
+    // neither a success nor a second purchase would be honest. A real gateway is reconciled by
+    // payment id — the reason ChargeRequest passes ours as the merchant order id. The detail
+    // names the header: unlike the different-terms 409 below, this one asks the client to KEEP
+    // its key and come back, so the next click collects this purchase instead of opening
+    // another. (With the mock provider the window is milliseconds; it matters for a real PG.)
+    if (earlier.status === 'pending') {
+      throw new AppError('DUPLICATE_REQUEST', {
+        message: 'A charge with this Idempotency-Key is still in progress',
+        details: [{ path: ['Idempotency-Key'], message: 'in progress' }],
+      });
+    }
     // Same key, different terms: a client bug or a re-used key, never a lost answer (PLAN 7.4
     // DUPLICATE_REQUEST). `packageId` is compared only while the payment still has one — an
-    // admin deleting the package sets it to NULL (ADR-0026).
+    // admin deleting the package sets it to NULL (ADR-0026). No detail, so the client spends
+    // the key: the purchase this key names has happened, and the next click is a new one.
     if (
       earlier.amountP !== body.expectedAmountP ||
       earlier.priceKrw !== body.expectedPriceKrw ||
@@ -231,41 +247,29 @@ export class WalletService {
         message: 'This Idempotency-Key was already used for a different charge',
       });
     }
-    switch (earlier.status) {
-      case 'pending':
-        // The first request is still running, or died between the provider and the commit.
-        // Its outcome is unknown, so neither a success nor a second purchase would be honest.
-        // A real gateway is reconciled by payment id — the reason ChargeRequest passes ours
-        // as the merchant order id.
-        throw new AppError('DUPLICATE_REQUEST', {
-          message: 'A charge with this Idempotency-Key is still in progress',
-        });
-      case 'failed':
-        throw paymentRefused();
-      case 'succeeded': {
-        // Written in the same transaction as the `succeeded` status, so a miss is corruption,
-        // not a race. Filtered by user first: that is the indexed half of the lookup.
-        const [entry] = await this.db
-          .select()
-          .from(schema.ledgerEntries)
-          .where(
-            and(
-              eq(schema.ledgerEntries.userId, earlier.userId),
-              eq(schema.ledgerEntries.refType, 'payment'),
-              eq(schema.ledgerEntries.refId, earlier.id),
-            ),
-          )
-          .limit(1);
-        if (!entry) throw new AppError('INTERNAL', { message: 'Ledger entry missing for payment' });
-        return {
-          payment: toPayment(earlier),
-          // Null once an admin removed the package; the payment keeps its own snapshot.
-          package: earlier.packageId ? await this.packages.find(earlier.packageId) : null,
-          balance: await this.getBalance(earlier.userId),
-          ledgerEntry: toLedgerEntry(entry),
-        };
-      }
-    }
+    if (earlier.status === 'failed') throw paymentRefused();
+
+    // Written in the same transaction as the `succeeded` status, so a miss is corruption, not
+    // a race. Filtered by user first: that is the indexed half of the lookup.
+    const [entry] = await this.db
+      .select()
+      .from(schema.ledgerEntries)
+      .where(
+        and(
+          eq(schema.ledgerEntries.userId, earlier.userId),
+          eq(schema.ledgerEntries.refType, 'payment'),
+          eq(schema.ledgerEntries.refId, earlier.id),
+        ),
+      )
+      .limit(1);
+    if (!entry) throw new AppError('INTERNAL', { message: 'Ledger entry missing for payment' });
+    return {
+      payment: toPayment(earlier),
+      // Null once an admin removed the package; the payment keeps its own snapshot.
+      package: earlier.packageId ? await this.packages.find(earlier.packageId) : null,
+      balance: await this.getBalance(earlier.userId),
+      ledgerEntry: toLedgerEntry(entry),
+    };
   }
 
   async getBalance(userId: string): Promise<Balance> {

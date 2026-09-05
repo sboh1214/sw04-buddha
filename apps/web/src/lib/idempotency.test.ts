@@ -20,7 +20,9 @@ describe('IdempotencyKeys', () => {
     const second = keys.take('pack-1');
     expect(second).not.toBe(first);
 
-    keys.settle('pack-1', 409); // DUPLICATE_REQUEST is a decision too
+    // The different-terms DUPLICATE_REQUEST is a decision too; the in-progress one is the
+    // caller's exception (useCharge never calls settle for it).
+    keys.settle('pack-1', 409);
     const third = keys.take('pack-1');
     expect(third).not.toBe(second);
 

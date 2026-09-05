@@ -38,6 +38,20 @@ export const LEDGER_AUDIT_FAILURE_KIND = 'ledger_balance_mismatch';
  */
 export const AUDIT_FAILURE_INSERT_CHUNK = 1_000;
 
+/**
+ * Statement timeout for the connection the audit runs on. The check is one grouped SELECT
+ * over every ledger row by design (ADR-0025), so its cost grows with the ledger, and under
+ * createDb's 30-second default every attempt of the nightly job would die at the same point
+ * once the ledger is large enough: a 'job failed' warning and a BullMQ failed-set entry, but
+ * no mismatch recorded and nothing that alerts. Ten minutes at 04:00 KST is cheap; the
+ * worker's other jobs keep the default guard on their own pool. A separate pool because
+ * node-postgres takes a per-query `query_timeout` but drizzle builds the query config itself
+ * and exposes no hook for it. The same cap covers the fallback count and the chunked INSERT
+ * transaction; `idle_in_transaction_session_timeout` stays at its 30s default, which the
+ * inter-chunk gap (one JS round trip) never approaches.
+ */
+export const LEDGER_AUDIT_QUERY_TIMEOUT_MS = 10 * 60_000;
+
 export interface LedgerAuditOptions {
   /** Overrides AUDIT_FAILURE_INSERT_CHUNK; the test drives the chunking with a few rows. */
   insertChunkSize?: number;

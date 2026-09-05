@@ -9,6 +9,7 @@ import {
   unwrap,
   validationField,
   type ChargePackage,
+  type ChargeResult,
   type LedgerEntry,
   type Payment,
 } from '@/lib/api';
@@ -100,6 +101,16 @@ export function isCouponRejection(error: unknown): boolean {
 }
 
 /**
+ * The 409 that means "your earlier request with this key is still running" (PLAN 5.4): the
+ * only DUPLICATE_REQUEST that names the header. The other one — same key, different terms —
+ * carries no field. They are told apart because the client must KEEP the key for the first
+ * (the next click should collect that purchase, not start another) and spend it on the second.
+ */
+export function isChargeInProgress(error: unknown): boolean {
+  return isApiError(error, 'DUPLICATE_REQUEST') && validationField(error) === 'Idempotency-Key';
+}
+
+/**
  * `POST /api/v1/payments/charge`. The response carries the new balance, so `['me']` and the
  * two lists are refreshed together — the nav chip and the ledger must never disagree.
  */
@@ -123,9 +134,18 @@ export function useCharge() {
           expectedPriceKrw: pack.priceKrw,
         },
       });
-      // Only reached when the server answered; a throw above (no response) keeps the key.
+      // Only reached when the server answered; a throw above (no response) keeps the key. So
+      // does an in-progress 409: the first request is still running, and the next click has
+      // to collect its result rather than open a second purchase under a fresh key.
+      let data: ChargeResult;
+      try {
+        data = unwrap(result).data;
+      } catch (error) {
+        if (!isChargeInProgress(error)) keys.settle(pack.id, result.response.status);
+        throw error;
+      }
       keys.settle(pack.id, result.response.status);
-      return unwrap(result).data;
+      return data;
     },
     onSuccess: async () => {
       await Promise.all([
@@ -142,8 +162,8 @@ export function useCharge() {
       if (isStaleCatalogue(error)) {
         await queryClient.invalidateQueries({ queryKey: CHARGE_PACKAGES_QUERY_KEY });
       }
-      // The key was spent by an earlier click — one the user took for a failure, or one still
-      // running — so the balance on screen may be behind what the server holds.
+      // Either an earlier click already bought this (the user took it for a failure) or that
+      // click is still running: the balance on screen may be behind what the server holds.
       if (isApiError(error, 'DUPLICATE_REQUEST')) {
         await Promise.all([
           queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY }),

@@ -11,7 +11,8 @@ import {
 } from '@buddha/shared';
 import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { PAYMENT_PROVIDER, type PaymentProvider } from '../payments/payment-provider.js';
 import {
   chargeBody,
   chargeHeaders,
@@ -251,6 +252,9 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     const res = await charge(other, user.cookie, key);
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ error: { code: 'DUPLICATE_REQUEST' } });
+    // No field named: unlike the in-progress 409 below, this one tells the client the key is
+    // spent, so its next click is a new purchase rather than a wait.
+    expect(res.json<{ error: { details?: unknown } }>().error.details).toBeUndefined();
 
     expect(await balanceOf(user.id)).toMatchObject({ availableP: SIGNUP_BONUS_P + pack.amountP });
     expect(await paymentsOf(user.id)).toHaveLength(1);
@@ -300,13 +304,59 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     expect(statuses.filter((status) => status === 200).length).toBeGreaterThanOrEqual(1);
     for (const res of responses) {
       if (res.statusCode === 409) {
-        expect(res.json()).toMatchObject({ error: { code: 'DUPLICATE_REQUEST' } });
+        expect(res.json()).toMatchObject({
+          error: { code: 'DUPLICATE_REQUEST', details: [{ path: ['Idempotency-Key'] }] },
+        });
       }
     }
 
     expect(await balanceOf(user.id)).toMatchObject({ availableP: SIGNUP_BONUS_P + pack.amountP });
     expect(await paymentsOf(user.id)).toHaveLength(1);
     expect((await ledgerOf(user.id)).filter((entry) => entry.type === 'DEPOSIT')).toHaveLength(1);
+  });
+
+  it('tells an in-progress key apart, keeps one payment, then replays it', async () => {
+    // The first request is parked inside the provider; a retry with the same key (a click after
+    // the first answer was lost) must neither charge again nor look final. Its 409 names the
+    // header — the signal that makes the web keep the key — and once the first request has
+    // committed, the same key collects that purchase.
+    const provider = t.app.get<PaymentProvider>(PAYMENT_PROVIDER);
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const spy = vi.spyOn(provider, 'charge').mockImplementationOnce(async (request) => {
+      await gate;
+      return { status: 'succeeded', providerRef: `mock_${request.paymentId}` };
+    });
+    try {
+      const key = randomUUID();
+      // light-my-request dispatches lazily: `.then` is what sends the request.
+      const first = charge(pack, user.cookie, key).then((res) => res);
+      await vi.waitFor(async () => {
+        expect((await paymentsOf(user.id)).map((row) => row.status)).toEqual(['pending']);
+      });
+
+      const retry = await charge(pack, user.cookie, key);
+      expect(retry.statusCode).toBe(409);
+      expect(retry.json()).toMatchObject({
+        error: { code: 'DUPLICATE_REQUEST', details: [{ path: ['Idempotency-Key'] }] },
+      });
+      expect(spy).toHaveBeenCalledTimes(1);
+
+      release();
+      const res = await first;
+      expect(res.statusCode).toBe(200);
+      const replayed = await charge(pack, user.cookie, key);
+      expect(replayed.statusCode).toBe(200);
+      expect(replayed.json<{ data: ChargeResult }>().data.payment.id).toBe(
+        res.json<{ data: ChargeResult }>().data.payment.id,
+      );
+      expect(await paymentsOf(user.id)).toHaveLength(1);
+      expect(await balanceOf(user.id)).toMatchObject({ availableP: SIGNUP_BONUS_P + pack.amountP });
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('GET /me/ledger pages newest first and only shows the caller entries', async () => {

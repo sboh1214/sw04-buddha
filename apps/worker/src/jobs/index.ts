@@ -6,6 +6,8 @@ import { runLedgerAudit } from './ledger-audit.js';
 
 export interface JobContext {
   db: Db;
+  /** Same database, longer statement timeout (LEDGER_AUDIT_QUERY_TIMEOUT_MS): the audit only. */
+  auditDb: Db;
   logger: Logger;
 }
 
@@ -19,8 +21,8 @@ type Handler = (job: Job, context: JobContext) => Promise<JobResult>;
  * unknown job must not be retried, so the dispatcher rejects it with UnrecoverableError.
  */
 const HANDLERS: Partial<Record<string, Handler>> = {
-  [JOB_NAMES.ledgerAudit]: async (_job, { db, logger }) => {
-    const result = await runLedgerAudit(db);
+  [JOB_NAMES.ledgerAudit]: async (_job, { auditDb, logger }) => {
+    const result = await runLedgerAudit(auditDb);
     if (result.recorded > 0) {
       logger.error(
         { checked: result.checked, recorded: result.recorded },
