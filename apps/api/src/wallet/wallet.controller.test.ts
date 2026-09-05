@@ -136,6 +136,11 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     const retired = await createTestPackage(t.db, { isActive: false });
     const unknown = await charge({ ...pack, id: '3f1a5b6c-1111-4222-8333-444455556666' });
     expect(unknown.statusCode).toBe(404);
+    // Names the field: the web refetches the catalogue for this 404 and not for the one a
+    // broken account gets (next test), which is not about the catalogue.
+    expect(unknown.json()).toMatchObject({
+      error: { code: 'NOT_FOUND', details: [{ path: ['packageId'] }] },
+    });
 
     const inactive = await charge(retired);
     expect(inactive.statusCode).toBe(400);
@@ -150,6 +155,22 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     expect(malformed.statusCode).toBe(400);
 
     expect(await balanceOf(user.id)).toMatchObject({ availableP: SIGNUP_BONUS_P });
+  });
+
+  it('answers an account with no balance row with a 404 that names no field', async () => {
+    // The "user" trigger creates the row at sign-up, but buddha_app keeps DELETE on balances
+    // (migration 0001 revokes it only on the append-only tables), and ledger.audit reports
+    // such an account as `balanceMissing`. This 404 is not the catalogue's fault, so it must
+    // not carry the `packageId` detail that makes the web refetch the cards and call the
+    // package unavailable; the card the user clicked is still on sale.
+    await t.db.delete(schema.balances).where(eq(schema.balances.userId, user.id));
+    const res = await charge(pack);
+    expect(res.statusCode).toBe(404);
+    const body = res.json<{ error: { code: string; details?: unknown } }>();
+    expect(body.error.code).toBe('NOT_FOUND');
+    expect(body.error.details).toBeUndefined();
+    // The credit and the payment row are one transaction, so nothing of the attempt is left.
+    expect(await t.db.select().from(schema.payments)).toHaveLength(0);
   });
 
   it('refuses a purchase of terms the catalogue never showed (PRICE_MOVED)', async () => {

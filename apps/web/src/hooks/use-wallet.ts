@@ -68,17 +68,19 @@ export function useChargePackages() {
 /**
  * The three ways the server says "the catalogue you are looking at is out of date": the
  * package was re-priced (409 PRICE_MOVED), retired (400 VALIDATION_ERROR naming `packageId`)
- * or deleted (404).
+ * or deleted (404 NOT_FOUND naming `packageId`).
  *
  * Deliberately not every failure. A payment the provider declines is also a VALIDATION_ERROR
- * but names `amountP`, and refetching has a cost when it fails: the query flips to
+ * but names `amountP`. The 404 for an account with no balance row names nothing: the
+ * catalogue it would refetch still lists the package, so the next click would only repeat
+ * the same failure. Refetching has a cost when it fails, too: the query flips to
  * `status: 'error'`, which swaps ChargeForm's cards for the generic error alert.
  */
 export function isStaleCatalogue(error: unknown): boolean {
+  if (isApiError(error, 'PRICE_MOVED')) return true;
   return (
-    isApiError(error, 'PRICE_MOVED') ||
-    isApiError(error, 'NOT_FOUND') ||
-    (isApiError(error, 'VALIDATION_ERROR') && validationField(error) === 'packageId')
+    (isApiError(error, 'NOT_FOUND') || isApiError(error, 'VALIDATION_ERROR')) &&
+    validationField(error) === 'packageId'
   );
 }
 

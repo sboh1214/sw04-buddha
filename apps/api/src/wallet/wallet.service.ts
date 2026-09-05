@@ -145,6 +145,8 @@ export class WalletService {
         .where(eq(schema.balances.userId, userId))
         .returning();
       // The "user" trigger creates the row at sign-up (PLAN 10.4); missing means a broken account.
+      // Deliberately names no field: the web refetches the catalogue only for the 404 that
+      // `packages.get` marks with `packageId`, and this one is not about the catalogue.
       if (!payment || !balance) throw new AppError('NOT_FOUND', { message: 'Balance not found' });
 
       const [entry] = await tx

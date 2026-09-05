@@ -14,7 +14,9 @@ describe('isStaleCatalogue', () => {
     // Re-priced, retired and deleted. Without the refetch the refused card keeps showing the
     // offer the server just rejected and every further click re-sends the same terms.
     expect(isStaleCatalogue(apiError(409, 'PRICE_MOVED'))).toBe(true);
-    expect(isStaleCatalogue(apiError(404, 'NOT_FOUND'))).toBe(true);
+    expect(
+      isStaleCatalogue(apiError(404, 'NOT_FOUND', [{ path: ['packageId'], message: 'not found' }])),
+    ).toBe(true);
     expect(
       isStaleCatalogue(
         apiError(400, 'VALIDATION_ERROR', [{ path: ['packageId'], message: 'inactive' }]),
@@ -31,6 +33,10 @@ describe('isStaleCatalogue', () => {
       ),
     ).toBe(false);
     expect(isStaleCatalogue(apiError(400, 'VALIDATION_ERROR'))).toBe(false);
+    // `charge` answers 404 for an account with no balance row too, after the provider has
+    // run. That one names no field: the catalogue still lists the package, so refetching it
+    // and calling the package unavailable would only invite the same failure again.
+    expect(isStaleCatalogue(apiError(404, 'NOT_FOUND'))).toBe(false);
     expect(isStaleCatalogue(apiError(500, 'INTERNAL'))).toBe(false);
     expect(isStaleCatalogue(apiError(401, 'UNAUTHENTICATED'))).toBe(false);
     expect(isStaleCatalogue(new Error('network'))).toBe(false);

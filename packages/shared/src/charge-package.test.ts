@@ -83,6 +83,42 @@ describe('createChargePackageBodySchema', () => {
   });
 });
 
+describe('face-value refinement', () => {
+  it('never sees a fractional price: that is one invalid_type issue, not a RangeError', async () => {
+    // `priceWithinFaceValue` calls BigInt(priceKrw), which throws on 1.5. It never gets the
+    // chance: zod 4's `.int()` reports a fraction as an aborting `invalid_type` issue, and an
+    // object's refinements are skipped once any aborting issue exists (documented as the
+    // `when` escape hatch, which nothing here uses). Exactly one issue proves the refinement
+    // did not run. Pinned because a zod upgrade that changed this would turn the documented
+    // VALIDATION_ERROR into a 500.
+    for (const priceKrw of [1.5, '1.5', -0.5]) {
+      for (const schema of [createChargePackageBodySchema, updateChargePackageBodySchema]) {
+        const result = schema.safeParse({ amountP: '5000', priceKrw });
+        expect(result.success, String(priceKrw)).toBe(false);
+        expect(result.error?.issues.map((issue) => [issue.path, issue.code])).toEqual([
+          [['priceKrw'], 'invalid_type'],
+        ]);
+      }
+    }
+    // The Standard Schema entry point is what the API's validation pipe calls.
+    const standard = await createChargePackageBodySchema['~standard'].validate({
+      amountP: '5000',
+      priceKrw: 1.5,
+    });
+    expect(standard.issues?.map((issue) => issue.path)).toEqual([['priceKrw']]);
+  });
+
+  it('still runs after a range failure, where the price is an integer and BigInt is safe', () => {
+    // `.max()` failing is not aborting, so the refinement does run — on an integer.
+    const result = createChargePackageBodySchema.safeParse({
+      amountP: '5000',
+      priceKrw: 2_000_000,
+    });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.map((issue) => issue.code)).toEqual(['too_big', 'custom']);
+  });
+});
+
 describe('updateChargePackageBodySchema', () => {
   it('accepts a single field but not an empty patch', () => {
     expect(updateChargePackageBodySchema.parse({ isActive: false })).toEqual({ isActive: false });

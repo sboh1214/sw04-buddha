@@ -52,8 +52,10 @@ export function isApiError(error: unknown, code?: ErrorCode): error is ApiError 
 }
 
 /**
- * `details` of a VALIDATION_ERROR is a `ValidationIssue[]` (`[{ path, message }]`, PLAN 7).
- * Returns the first field name found, e.g. 'nickname'.
+ * The field an error is about, when `details` is a `ValidationIssue[]` (`[{ path, message }]`,
+ * PLAN 7): every VALIDATION_ERROR, and the few other codes that name a body field the same
+ * way (the charge route's 404 for an unknown `packageId`, INSUFFICIENT_BALANCE on `amountP`).
+ * Returns the first field name found, e.g. 'nickname'; undefined when no field is named.
  */
 export function validationField(error: ApiError): string | undefined {
   if (!Array.isArray(error.details)) return undefined;
