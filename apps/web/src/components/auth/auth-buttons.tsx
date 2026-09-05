@@ -12,7 +12,7 @@ import { signOut } from '@/lib/auth-client';
 
 /**
  * Right side of the top nav (PLAN 11.4 AuthButtons): logged out -> 로그인 / 가입하기;
- * logged in -> 잔고 chip + profile menu (설정 / 로그아웃).
+ * logged in -> 잔고 chip + profile menu (관리자 for admins / 설정 / 로그아웃).
  */
 export function AuthButtons() {
   const { data: me, isPending, isLoggedIn } = useMe();
@@ -55,7 +55,10 @@ export function AuthButtons() {
     // Everything, not just `['me']`. The browser QueryClient is a singleton for the tab's
     // lifetime (lib/query-client.ts) and none of the keys carry a user id, so a ledger,
     // payment list or admin memo left behind here would be served — fresh, for the 30s
-    // staleTime, so not even refetched — to whoever logs in next on this browser.
+    // staleTime, so not even refetched — to whoever logs in next on this browser. This
+    // covers the tab that clicked; every other tab learns of the sign-out from better-auth
+    // (a localStorage broadcast) and is emptied by SessionCacheGuard when its session
+    // identity changes.
     queryClient.clear();
     router.push('/');
     router.refresh();
@@ -85,6 +88,14 @@ export function AuthButtons() {
         <Portal>
           <Menu.Positioner>
             <Menu.Content minW="40">
+              {/* The only way into /admin from the UI (PLAN 12). The layout there turns
+                  members away on the server and the API's AdminGuard decides for real, so
+                  this link is convenience, not the boundary. */}
+              {me?.profile.role === 'admin' && (
+                <Menu.Item value="admin" asChild data-testid="nav-admin">
+                  <NextLink href="/admin/users">{copy.navAdmin}</NextLink>
+                </Menu.Item>
+              )}
               <Menu.Item value="settings" asChild>
                 <NextLink href="/settings">{copy.navSettings}</NextLink>
               </Menu.Item>

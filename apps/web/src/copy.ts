@@ -21,6 +21,7 @@ export const copy = {
   navHome: '홈',
   navSettings: '설정',
   navWallet: '지갑',
+  navAdmin: '관리자',
   balance: '잔고',
   profileMenu: '프로필 메뉴',
   login: '로그인',

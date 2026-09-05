@@ -5,6 +5,7 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { ColorModeProvider, type ColorModeProviderProps } from './color-mode';
 import { EmotionRegistry } from './emotion-registry';
 import { Toaster } from './toaster';
+import { SessionCacheGuard } from '@/components/auth/session-cache-guard';
 import { getQueryClient } from '@/lib/query-client';
 import { system } from '@/theme/system';
 
@@ -20,6 +21,7 @@ export function Provider(props: ColorModeProviderProps) {
     <EmotionRegistry>
       <ChakraProvider value={system}>
         <QueryClientProvider client={queryClient}>
+          <SessionCacheGuard />
           <ColorModeProvider {...props} />
           <Toaster />
         </QueryClientProvider>

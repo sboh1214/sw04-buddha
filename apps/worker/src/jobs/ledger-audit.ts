@@ -27,6 +27,23 @@ export interface LedgerAuditResult {
 export const LEDGER_AUDIT_FAILURE_KIND = 'ledger_balance_mismatch';
 
 /**
+ * Rows per `audit_failures` INSERT. drizzle binds one parameter per written column per row
+ * (`kind` and `payload`; id and created_at take their defaults), and the Bind message of the
+ * Postgres wire protocol counts parameters in an int16 — node-postgres writes the count with
+ * no range check, so at 32,768 rows it wraps to 0 and the server rejects the statement. One
+ * multi-row INSERT of every mismatch therefore dies exactly on the run a systemic bug makes
+ * worth reading: the job lands in the BullMQ failed set, the per-account detail is lost.
+ * 1,000 rows is 2,000 parameters, far inside the limit and still a handful of round trips
+ * for anything short of a catastrophe.
+ */
+export const AUDIT_FAILURE_INSERT_CHUNK = 1_000;
+
+export interface LedgerAuditOptions {
+  /** Overrides AUDIT_FAILURE_INSERT_CHUNK; the test drives the chunking with a few rows. */
+  insertChunkSize?: number;
+}
+
+/**
  * Verifies the PLAN 5.6 invariant for every account:
  *
  *   balances.available_p + balances.locked_p == SUM(ledger_entries.amount_p)
@@ -44,7 +61,15 @@ export const LEDGER_AUDIT_FAILURE_KIND = 'ledger_balance_mismatch';
  * Idempotent by design: re-running writes one more failure row per still-broken account and
  * changes nothing else, which is what a daily job needs (PLAN 9).
  */
-export async function runLedgerAudit(db: Db): Promise<LedgerAuditResult> {
+export async function runLedgerAudit(
+  db: Db,
+  options: LedgerAuditOptions = {},
+): Promise<LedgerAuditResult> {
+  const chunkSize = options.insertChunkSize ?? AUDIT_FAILURE_INSERT_CHUNK;
+  if (!Number.isInteger(chunkSize) || chunkSize < 1) {
+    throw new RangeError(`insertChunkSize must be a positive integer, got ${String(chunkSize)}`);
+  }
+
   const { rows } = await db.execute<{
     user_id: string;
     balance_missing: boolean;
@@ -112,21 +137,29 @@ export async function runLedgerAudit(db: Db): Promise<LedgerAuditResult> {
   });
 
   if (mismatches.length > 0) {
-    await db.insert(schema.auditFailures).values(
-      mismatches.map((mismatch) => ({
-        kind: LEDGER_AUDIT_FAILURE_KIND,
-        // One kind, as AUDIT_FAILURE_KINDS declares; the two failures are told apart by
-        // `balanceMissing` in the free-form jsonb payload.
-        payload: {
-          userId: mismatch.userId,
-          balanceMissing: mismatch.balanceMissing,
-          availableP: mismatch.availableP.toString(),
-          lockedP: mismatch.lockedP.toString(),
-          ledgerSumP: mismatch.ledgerSumP.toString(),
-          differenceP: mismatch.differenceP.toString(),
-        },
-      })),
-    );
+    const rows = mismatches.map((mismatch) => ({
+      kind: LEDGER_AUDIT_FAILURE_KIND,
+      // One kind, as AUDIT_FAILURE_KINDS declares; the two failures are told apart by
+      // `balanceMissing` in the free-form jsonb payload.
+      payload: {
+        userId: mismatch.userId,
+        balanceMissing: mismatch.balanceMissing,
+        availableP: mismatch.availableP.toString(),
+        lockedP: mismatch.lockedP.toString(),
+        ledgerSumP: mismatch.ledgerSumP.toString(),
+        differenceP: mismatch.differenceP.toString(),
+      },
+    }));
+    // Chunked (see AUDIT_FAILURE_INSERT_CHUNK) but one transaction, so every row of a run
+    // still carries the same `created_at` — `now()` is fixed per transaction — exactly as the
+    // single statement gave them. That shared timestamp is what tells one run's rows from the
+    // next day's (re-running appends, by design), and a chunk that fails takes the run's
+    // earlier chunks down with it instead of leaving a half-written report.
+    await db.transaction(async (tx) => {
+      for (let start = 0; start < rows.length; start += chunkSize) {
+        await tx.insert(schema.auditFailures).values(rows.slice(start, start + chunkSize));
+      }
+    });
   }
 
   return { checked, mismatches, recorded: mismatches.length };

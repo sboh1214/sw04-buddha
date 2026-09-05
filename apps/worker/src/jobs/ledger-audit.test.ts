@@ -128,4 +128,35 @@ describe.skipIf(!hasTestDb())('ledger.audit (integration)', () => {
     const result = await runLedgerAudit(t.db);
     expect(result).toMatchObject({ checked: 1, recorded: 0 });
   });
+
+  it('records every mismatch when they span more than one INSERT chunk', async () => {
+    // One multi-row INSERT of every mismatch dies at 32,768 rows (Postgres counts bind
+    // parameters in an int16, and each row binds two). Driving the chunk size down to 2 runs
+    // the same loop over five accounts instead of thirty-three thousand.
+    const ids: string[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      const { user } = await createUser(t.db, { balanceP: 1_000n });
+      ids.push(user.id);
+    }
+    await t.db.update(schema.balances).set({ availableP: sql`${schema.balances.availableP} + 1` });
+
+    const result = await runLedgerAudit(t.db, { insertChunkSize: 2 });
+    expect(result.checked).toBe(5);
+    expect(result.recorded).toBe(5);
+    expect(result.mismatches.map((m) => m.userId).sort()).toEqual([...ids].sort());
+    expect(result.mismatches.every((m) => m.differenceP === 1n)).toBe(true);
+
+    const rows = await failures();
+    expect(rows).toHaveLength(5);
+    expect(rows.map((row) => (row.payload as { userId: string }).userId).sort()).toEqual(
+      [...ids].sort(),
+    );
+    // Three statements, one transaction: the rows of a run still share one `created_at`, the
+    // property that tells this run's report from tomorrow's. Autocommitted chunks would not.
+    expect(new Set(rows.map((row) => row.createdAt.getTime())).size).toBe(1);
+  });
+
+  it('refuses a chunk size that could not make progress', async () => {
+    await expect(runLedgerAudit(t.db, { insertChunkSize: 0 })).rejects.toThrow(RangeError);
+  });
 });

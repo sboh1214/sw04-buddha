@@ -65,6 +65,10 @@ export function LoginForm({ next, notice }: { next: string; notice?: string | un
     // is not the only way to get here (an expired session, a failed sign-out, or simply
     // opening /login), and no query key carries a user id, so anything left over would be
     // served to this session. `signIn.social` needs no equivalent — it reloads the document.
+    // Other tabs are SessionCacheGuard's job: they notice the new account when their session
+    // refetches, and reset their own caches then. The guard fires here too, one round-trip
+    // later, and re-issues what the landing page just started fetching; that duplicate is the
+    // price of not showing the previous account for a frame, so keep this clear() anyway.
     queryClient.clear();
     router.push(next as Route);
     router.refresh();
