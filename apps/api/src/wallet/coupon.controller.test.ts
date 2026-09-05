@@ -130,6 +130,35 @@ describe.skipIf(!hasTestInfra)('coupons (integration)', () => {
     expect(await balanceOf(other.id)).toMatchObject({ availableP: SIGNUP_BONUS_P });
   });
 
+  it('refuses to lower the cap below what has already been redeemed', async () => {
+    const created = await issue({ code: 'CAP-THREE', amountP: '1000', maxRedemptions: 3 });
+    const coupon = created.json<{ data: Coupon }>().data;
+    expect((await redeem('CAP-THREE')).statusCode).toBe(200);
+    const other = await signUpTestUser(t);
+    expect((await redeem('CAP-THREE', other.cookie)).statusCode).toBe(200);
+
+    const patch = (payload: Record<string, unknown>) =>
+      t.app.inject({
+        method: 'PATCH',
+        url: `/api/v1/admin/coupons/${coupon.id}`,
+        headers: { ...jsonHeaders, cookie: admin.cookie },
+        payload,
+      });
+    // Two redeemed: a cap of 1 would read "2 / 1". Down to the count, or unlimited, is fine.
+    const below = await patch({ maxRedemptions: 1 });
+    expect(below.statusCode).toBe(400);
+    expect(below.json()).toMatchObject({
+      error: { code: 'VALIDATION_ERROR', details: [{ path: ['maxRedemptions'] }] },
+    });
+    // Refused before the audit row is written, so the log shows no edit that never happened.
+    const actions = await t.db.select().from(schema.adminActions);
+    expect(actions.map((action) => action.type)).toEqual(['coupon_create']);
+    expect((await patch({ maxRedemptions: 2 })).statusCode).toBe(200);
+    expect((await patch({ maxRedemptions: null })).statusCode).toBe(200);
+    const [row] = await t.db.select().from(schema.coupons).where(eq(schema.coupons.id, coupon.id));
+    expect(row).toMatchObject({ redeemedCount: 2, maxRedemptions: null });
+  });
+
   it('generates a code when none is given and refuses a duplicate one', async () => {
     const generated = await issue({ amountP: '2000' });
     expect(generated.statusCode).toBe(201);

@@ -1,4 +1,6 @@
-// CLI entry: `pnpm db:seed` (tsx src/seed.ts). Idempotent: safe to re-run on every deploy.
+// CLI entry: `pnpm db:seed` (tsx src/seed.ts). Idempotent: safe to re-run on every deploy, and
+// safe to run twice at once — every step that checks before it inserts holds the `buddha:seed`
+// advisory lock for its transaction, so a second seed waits and then finds the rows in place.
 //
 // Runs as the runtime role (DATABASE_URL = buddha_app): 01-roles.sql grants it DML on every
 // table created by migrations, which is all the seed needs.
@@ -52,14 +54,30 @@ const CHARGE_PACKAGES = [
   { amountP: 100_000n, priceKrw: 90_000, sortOrder: 50 }, // 10%
 ] as const;
 
+/**
+ * Serialises the steps that check before they insert. `charge_packages` has no natural key, so
+ * two seeds racing on an empty table would both pass the existence check and both insert — a
+ * doubled catalogue — and two admin inserts would end in a unique violation instead of a
+ * no-op. Transaction-scoped: released at commit, or on any error, whichever comes first.
+ */
+const SEED_LOCK_KEY = 'buddha:seed';
+async function lockSeed(tx: Pick<Db, 'execute'>): Promise<void> {
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${SEED_LOCK_KEY}))`);
+}
+
 async function seedChargePackages(db: Db): Promise<void> {
-  const [existing] = await db.select({ id: chargePackages.id }).from(chargePackages).limit(1);
-  if (existing) {
-    console.log('[db:seed] charge packages: already configured, left untouched');
-    return;
-  }
-  await db.insert(chargePackages).values(CHARGE_PACKAGES.map((row) => ({ ...row })));
-  console.log(`[db:seed] charge packages: ${String(CHARGE_PACKAGES.length)} inserted`);
+  const inserted = await db.transaction(async (tx) => {
+    await lockSeed(tx);
+    const [existing] = await tx.select({ id: chargePackages.id }).from(chargePackages).limit(1);
+    if (existing) return false;
+    await tx.insert(chargePackages).values(CHARGE_PACKAGES.map((row) => ({ ...row })));
+    return true;
+  });
+  console.log(
+    inserted
+      ? `[db:seed] charge packages: ${String(CHARGE_PACKAGES.length)} inserted`
+      : '[db:seed] charge packages: already configured, left untouched',
+  );
 }
 
 interface AdminInput {
@@ -84,9 +102,10 @@ async function pickNickname(tx: Pick<Db, 'select'>, ownUserId: string): Promise<
 /**
  * Creates the first admin (PLAN 10.5) the way better-auth's email sign-up does: a `user`
  * row plus a credential `account` row (providerId 'credential', accountId = user id, scrypt
- * hash from better-auth/crypto). The "user" AFTER INSERT trigger (migration 0002) creates
- * the profile (auto nickname) and the zero balance; the seed then renames the profile to
- * 관리자 and promotes it.
+ * hash from better-auth/crypto). The "user" AFTER INSERT trigger (migrations 0002 and 0004)
+ * creates the profile (auto nickname) and the balance, sign-up bonus included: the operator
+ * account starts with SIGNUP_BONUS_P like every account (Q-M2-2). The seed then renames the
+ * profile to 관리자 and promotes it.
  *
  * Re-running never resets an existing password; it only guarantees that the user exists, is
  * verified, has a credential account and has role 'admin'.
@@ -101,6 +120,7 @@ async function seedAdmin(db: Db, input: AdminInput): Promise<void> {
   }
 
   await db.transaction(async (tx) => {
+    await lockSeed(tx);
     const now = new Date();
     let created = false;
 
@@ -169,9 +189,17 @@ async function seedAdmin(db: Db, input: AdminInput): Promise<void> {
         .where(eq(profiles.userId, userId));
     }
 
-    // Balance starts at 0/0 (trigger). Never touched when it already exists: balances change
-    // only together with a ledger entry (PLAN 0.2).
-    await tx.insert(balances).values({ userId }).onConflictDoNothing({ target: balances.userId });
+    // The trigger created the balance, sign-up bonus included (migration 0004) — like every
+    // account. Never touched: balances change only together with a ledger entry (PLAN 0.2),
+    // and a missing row is a broken account for the ledger audit to report, not something
+    // the seed papers over with a silent 0.
+    const [balance] = await tx
+      .select({ userId: balances.userId })
+      .from(balances)
+      .where(eq(balances.userId, userId));
+    if (!balance) {
+      throw new Error('[db:seed] the "user" trigger did not create a balance (run db:migrate)');
+    }
 
     console.log(
       `[db:seed] admin ${email}: ${created ? 'created' : 'already exists'}` +

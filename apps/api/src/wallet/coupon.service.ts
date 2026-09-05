@@ -203,8 +203,9 @@ export class CouponService {
 
   async update(adminId: string, id: string, input: UpdateCouponBody): Promise<Coupon> {
     return this.db.transaction(async (tx) => {
-      // Only the supplied fields are written, so no read-then-write and nothing to lock; the
-      // audit row's `before` comes from the UPDATE's own view of the row.
+      // Locked: the cap check below reads `redeemedCount`, and `redeem` increments it under
+      // the same row lock, so a redemption cannot slip in between the check and the UPDATE.
+      // The audit row's `before` is this same view of the row.
       const [current] = await tx
         .select()
         .from(schema.coupons)
@@ -212,6 +213,23 @@ export class CouponService {
         .limit(1)
         .for('update');
       if (!current) throw new AppError('NOT_FOUND', { message: 'Coupon not found' });
+
+      // A cap under what has already been redeemed would read as "7 of 5 used". Stopping a
+      // coupon is `isActive: false`; the cap may come down to the count, never below it.
+      if (
+        typeof input.maxRedemptions === 'number' &&
+        input.maxRedemptions < current.redeemedCount
+      ) {
+        throw new AppError('VALIDATION_ERROR', {
+          message: 'maxRedemptions must not be below the redeemed count',
+          details: [
+            {
+              path: ['maxRedemptions'],
+              message: `below the redeemed count (${String(current.redeemedCount)})`,
+            },
+          ],
+        });
+      }
 
       const [row] = await tx
         .update(schema.coupons)

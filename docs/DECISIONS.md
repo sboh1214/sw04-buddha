@@ -429,6 +429,7 @@ PLAN §10.4는 better-auth `databaseHooks.user.create.after`에서 `profiles`/`b
 ### 결과
 
 - `profiles`/`balances`에 대한 권한이 나중에 바뀌면 가입이 조용히 깨질 수 있으므로 통합 테스트가 "가입 → 프로필·잔고 생성"을 항상 검증한다.
+- (2026-09-05 추기) migration 0004(ADR-0026)부터 같은 트리거가 가입 보너스 10,000P와 `BONUS` 원장도 함께 쓴다. 시드 관리자도 `user` 행이므로 예외가 아니다(QUESTIONS A-M1-3).
 
 ---
 

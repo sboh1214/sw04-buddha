@@ -20,7 +20,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/me (integration)', () => {
     user = await signUpTestUser(t);
   });
 
-  it('GET /me returns user, profile, zero balance and the credential account (AC 1)', async () => {
+  it('GET /me returns user, profile, the bonus balance and the credential account (AC 1)', async () => {
     const res = await t.app.inject({
       method: 'GET',
       url: '/api/v1/me',
