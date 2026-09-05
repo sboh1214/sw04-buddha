@@ -10,7 +10,15 @@ import { hashPassword } from 'better-auth/crypto';
 import { and, eq, sql } from 'drizzle-orm';
 import { closeDb, createDb, type Db } from './client.js';
 import { loadRootEnv } from './env.js';
-import { account, balances, categories, chargePackages, profiles, user } from './schema/index.js';
+import {
+  account,
+  adminActions,
+  balances,
+  categories,
+  chargePackages,
+  profiles,
+  user,
+} from './schema/index.js';
 
 /** PLAN 1.3 categories. Sports and elections are forbidden (PLAN 0.2): never add them. */
 const CATEGORIES = [
@@ -43,8 +51,12 @@ async function seedCategories(db: Db): Promise<void> {
 
 /**
  * Starting charge packages (owner decision 2026-09-04): 4,900원 for 5,000P, and the discount
- * grows with the size of the package. Admins edit these at runtime, so the seed only fills an
- * empty table and never overwrites what an admin has changed.
+ * grows with the size of the package. Admins edit these at runtime, so the seed only fills a
+ * table no admin has ever managed and never overwrites what an admin has changed — which also
+ * means that once a developer has touched packages through the admin screen, `db:seed` will
+ * not put the default ladder back (buddha_app cannot delete the admin_actions trace, migration
+ * 0001): recreate them in the admin screen, truncate admin_actions as buddha_migrate, or start
+ * from an empty database (`docker compose down -v`).
  */
 const CHARGE_PACKAGES = [
   { amountP: 5_000n, priceKrw: 4_900, sortOrder: 10 }, // 2%
@@ -66,17 +78,30 @@ async function lockSeed(tx: Pick<Db, 'execute'>): Promise<void> {
 }
 
 async function seedChargePackages(db: Db): Promise<void> {
-  const inserted = await db.transaction(async (tx) => {
+  const outcome = await db.transaction(async (tx) => {
     await lockSeed(tx);
     const [existing] = await tx.select({ id: chargePackages.id }).from(chargePackages).limit(1);
-    if (existing) return false;
+    if (existing) return 'configured';
+    // An empty table is not proof of a fresh database: deletion is a real DELETE (A-M2-8), so
+    // an admin who took every package off sale on purpose leaves it empty too, and the next
+    // deploy's seed must not reopen sales at the default prices. Every admin create, update
+    // and delete writes an `admin_actions` row (charge_package_*), which is the durable trace
+    // the seed reads: once an admin has managed the catalogue, it is theirs, empty or not.
+    const [managed] = await tx
+      .select({ id: adminActions.id })
+      .from(adminActions)
+      .where(eq(adminActions.targetType, 'charge_package'))
+      .limit(1);
+    if (managed) return 'managed';
     await tx.insert(chargePackages).values(CHARGE_PACKAGES.map((row) => ({ ...row })));
-    return true;
+    return 'inserted';
   });
   console.log(
-    inserted
+    outcome === 'inserted'
       ? `[db:seed] charge packages: ${String(CHARGE_PACKAGES.length)} inserted`
-      : '[db:seed] charge packages: already configured, left untouched',
+      : outcome === 'managed'
+        ? '[db:seed] charge packages: emptied by an admin, left untouched'
+        : '[db:seed] charge packages: already configured, left untouched',
   );
 }
 

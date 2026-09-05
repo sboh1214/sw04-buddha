@@ -8,6 +8,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   account,
+  adminActions,
   balances,
   chargePackages,
   ledgerEntries,
@@ -136,6 +137,30 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
     // Re-running touches neither the balance nor the ledger.
     runSeed();
     expect(await wallet()).toEqual(first);
+  });
+
+  it('leaves a catalogue an admin emptied on purpose alone', async () => {
+    // Deletion is a real DELETE (A-M2-8), so an admin who takes every package off sale leaves
+    // the table as empty as a fresh database. Their actions are logged, and that log is what
+    // tells the next deploy's seed not to reopen sales at the default prices.
+    runSeed();
+    const seeded = await t.db.select().from(chargePackages);
+    expect(seeded).toHaveLength(5);
+    const { id: adminId } = await adminState();
+    for (const pack of seeded) {
+      await t.db.insert(adminActions).values({
+        adminId,
+        type: 'charge_package_delete',
+        targetType: 'charge_package',
+        targetId: pack.id,
+        payload: { amountP: pack.amountP.toString(), priceKrw: pack.priceKrw },
+      });
+    }
+    await t.db.delete(chargePackages);
+
+    const output = runSeed();
+    expect(output).toContain('emptied by an admin');
+    expect(await t.db.select().from(chargePackages)).toHaveLength(0);
   });
 
   it('seeds once when two seeds race on an empty database', async () => {

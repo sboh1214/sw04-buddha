@@ -42,12 +42,13 @@ describe.skipIf(!hasTestInfra)('coupons (integration)', () => {
       payload,
     });
 
-  const redeem = (code: string, cookie = member.cookie) =>
+  /** Redeems `code` as `as` — the cookie and the account the wallet screen shows. */
+  const redeem = (code: string, as: TestUser = member) =>
     t.app.inject({
       method: 'POST',
       url: '/api/v1/coupons/redeem',
-      headers: { ...jsonHeaders, cookie },
-      payload: { code },
+      headers: { ...jsonHeaders, cookie: as.cookie },
+      payload: { code, expectedAccountId: as.id },
     });
 
   async function balanceOf(userId: string) {
@@ -108,13 +109,13 @@ describe.skipIf(!hasTestInfra)('coupons (integration)', () => {
     expect((await redeem('CAP-ONE')).statusCode).toBe(200);
 
     const other = await signUpTestUser(t);
-    const capped = await redeem('CAP-ONE', other.cookie);
+    const capped = await redeem('CAP-ONE', other);
     expect(capped.statusCode).toBe(400);
     expect(capped.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR' } });
     expect(await balanceOf(other.id)).toMatchObject({ availableP: SIGNUP_BONUS_P });
 
     await issue({ code: 'EXPIRED', amountP: '1000', expiresAt: '2020-01-01T00:00:00.000Z' });
-    expect((await redeem('EXPIRED', other.cookie)).statusCode).toBe(400);
+    expect((await redeem('EXPIRED', other)).statusCode).toBe(400);
 
     const disabled = await issue({ code: 'DISABLED', amountP: '1000' });
     await t.app.inject({
@@ -123,10 +124,10 @@ describe.skipIf(!hasTestInfra)('coupons (integration)', () => {
       headers: { ...jsonHeaders, cookie: admin.cookie },
       payload: { isActive: false },
     });
-    expect((await redeem('DISABLED', other.cookie)).statusCode).toBe(400);
+    expect((await redeem('DISABLED', other)).statusCode).toBe(400);
 
     // An unknown code answers exactly like a disabled one: no way to map the catalogue.
-    expect((await redeem('NO-SUCH-CODE', other.cookie)).statusCode).toBe(400);
+    expect((await redeem('NO-SUCH-CODE', other)).statusCode).toBe(400);
     expect(await balanceOf(other.id)).toMatchObject({ availableP: SIGNUP_BONUS_P });
   });
 
@@ -135,7 +136,7 @@ describe.skipIf(!hasTestInfra)('coupons (integration)', () => {
     const coupon = created.json<{ data: Coupon }>().data;
     expect((await redeem('CAP-THREE')).statusCode).toBe(200);
     const other = await signUpTestUser(t);
-    expect((await redeem('CAP-THREE', other.cookie)).statusCode).toBe(200);
+    expect((await redeem('CAP-THREE', other)).statusCode).toBe(200);
 
     const patch = (payload: Record<string, unknown>) =>
       t.app.inject({
@@ -168,6 +169,39 @@ describe.skipIf(!hasTestInfra)('coupons (integration)', () => {
     const duplicate = await issue({ code, amountP: '2000' });
     expect(duplicate.statusCode).toBe(400);
     expect(duplicate.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR' } });
+  });
+
+  it('refuses to redeem for another account than the one on screen (FORBIDDEN)', async () => {
+    // A tab whose session was switched in another tab keeps showing the old account until it
+    // refetches; its redemption would spend the coupon — one use per account, capped — on
+    // whoever the cookie now belongs to, and that cannot be given back. Same check as the
+    // charge: refused before the redemption transaction, nothing spent.
+    const issued = await issue({ code: 'ONE-SHOT', amountP: '1000', maxRedemptions: 1 });
+    expect(issued.statusCode).toBe(201);
+    const other = await signUpTestUser(t);
+
+    const res = await t.app.inject({
+      method: 'POST',
+      url: '/api/v1/coupons/redeem',
+      headers: { ...jsonHeaders, cookie: member.cookie },
+      payload: { code: 'ONE-SHOT', expectedAccountId: other.id },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({
+      error: { code: 'FORBIDDEN', details: [{ path: ['expectedAccountId'] }] },
+    });
+    const [coupon] = await t.db
+      .select()
+      .from(schema.coupons)
+      .where(eq(schema.coupons.code, 'ONE-SHOT'));
+    expect(coupon?.redeemedCount).toBe(0);
+    expect(await t.db.select().from(schema.couponRedemptions)).toHaveLength(0);
+    // Nothing credited on either side: only the two sign-up bonuses in the ledger.
+    expect(await t.db.select().from(schema.ledgerEntries)).toHaveLength(3); // admin, member, other
+    expect(await balanceOf(member.id)).toMatchObject({ availableP: SIGNUP_BONUS_P });
+    expect(await balanceOf(other.id)).toMatchObject({ availableP: SIGNUP_BONUS_P });
+    // The account on screen can still use it.
+    expect((await redeem('ONE-SHOT', other)).statusCode).toBe(200);
   });
 
   it('is issued by admins only, and redemption needs a session', async () => {

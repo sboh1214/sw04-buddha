@@ -5,8 +5,8 @@ import { discountPercent, formatKrw, formatP, parsePAmount } from '@buddha/share
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import {
-  isChargeForAnotherAccount,
   isChargeInProgress,
+  isForAnotherAccount,
   isStaleCatalogue,
   useChargePackages,
   useCharge,
@@ -24,7 +24,7 @@ import { isApiError, type ChargePackage } from '@/lib/api';
  */
 function chargeErrorTitle(error: unknown): string {
   if (isApiError(error, 'PRICE_MOVED')) return copy.chargePriceMoved;
-  if (isChargeForAnotherAccount(error)) return copy.chargeSessionChanged;
+  if (isForAnotherAccount(error)) return copy.sessionChanged;
   if (isChargeInProgress(error)) return copy.chargeInProgress;
   if (isApiError(error, 'DUPLICATE_REQUEST')) return copy.chargeDuplicate;
   if (isStaleCatalogue(error)) return copy.chargeUnavailable;

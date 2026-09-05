@@ -11,7 +11,12 @@ import {
 describe('couponCodeSchema', () => {
   it('upper-cases and trims what the user types', () => {
     expect(couponCodeSchema.parse('  welcome-2026 ')).toBe('WELCOME-2026');
-    expect(redeemCouponBodySchema.parse({ code: 'abcd' })).toEqual({ code: 'ABCD' });
+    expect(redeemCouponBodySchema.parse({ code: 'abcd', expectedAccountId: 'user-1' })).toEqual({
+      code: 'ABCD',
+      expectedAccountId: 'user-1',
+    });
+    // The account the screen shows is required: a stale tab must not redeem for the cookie's.
+    expect(redeemCouponBodySchema.safeParse({ code: 'abcd' }).success).toBe(false);
   });
 
   it('rejects codes that are too short, too long or use other characters', () => {

@@ -7,7 +7,7 @@ import { useForm } from 'react-hook-form';
 import * as z from 'zod';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
-import { isCouponRejection, useRedeemCoupon } from '@/hooks/use-wallet';
+import { isCouponRejection, isForAnotherAccount, useRedeemCoupon } from '@/hooks/use-wallet';
 import { isApiError } from '@/lib/api';
 
 /** The same code rules the API enforces; the message is the only thing localised here. */
@@ -42,7 +42,10 @@ export function CouponForm() {
       // field. A 500, a missing balance row, a session that died with the tab open or an
       // unreachable API would otherwise call a perfectly good code invalid and send the user
       // looking for another one, when retrying is the only thing that could work.
-      if (isApiError(error, 'DUPLICATE_REQUEST')) {
+      if (isForAnotherAccount(error)) {
+        // The session was switched in another tab: nothing was redeemed; the guard refetches.
+        toaster.create({ type: 'error', title: copy.sessionChanged });
+      } else if (isApiError(error, 'DUPLICATE_REQUEST')) {
         setError('code', { message: copy.errCouponAlreadyUsed });
       } else if (isCouponRejection(error)) {
         setError('code', { message: copy.errCouponInvalid });
@@ -70,7 +73,12 @@ export function CouponForm() {
                 data-testid="coupon-code"
                 {...register('code')}
               />
-              <Button type="submit" loading={isSubmitting} data-testid="coupon-submit">
+              <Button
+                type="submit"
+                loading={isSubmitting}
+                disabled={!redeem.ready}
+                data-testid="coupon-submit"
+              >
                 {copy.couponSubmit}
               </Button>
             </HStack>

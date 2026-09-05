@@ -2093,10 +2093,16 @@
         "properties": {
           "code": {
             "$ref": "#/components/schemas/CouponCode"
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
           }
         },
         "required": [
-          "code"
+          "code",
+          "expectedAccountId"
         ]
       },
       "CouponCode": {

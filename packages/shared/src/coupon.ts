@@ -25,8 +25,18 @@ export const couponCodeSchema = z
   .regex(COUPON_CODE_PATTERN, 'only A-Z, 0-9 and -')
   .meta({ id: 'CouponCode' });
 
+/**
+ * `POST /coupons/redeem`. `expectedAccountId` names the account the wallet screen is showing:
+ * the cookie decides who redeems, and a tab whose session was switched elsewhere keeps showing
+ * the old account until it refetches, so the server refuses (403 FORBIDDEN naming the field)
+ * rather than spend a one-use or capped coupon on an account the user is not looking at.
+ */
 export const redeemCouponBodySchema = z
-  .object({ code: couponCodeSchema })
+  .object({
+    code: couponCodeSchema,
+    /** The signed-in user id the wallet screen is showing (better-auth `user.id`, text). */
+    expectedAccountId: z.string().min(1).max(255),
+  })
   .meta({ id: 'RedeemCouponBody' });
 export type RedeemCouponBody = z.infer<typeof redeemCouponBodySchema>;
 

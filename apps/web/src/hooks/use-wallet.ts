@@ -113,10 +113,11 @@ export function isChargeInProgress(error: unknown): boolean {
 
 /**
  * The 403 that means "the cookie belongs to somebody else than the account on screen": the
- * server refused to charge an account the user is not looking at (PLAN 5.3 shape, see
- * chargeBodySchema). Only this FORBIDDEN names the field; the CSRF refusal names none.
+ * server refused to charge, or redeem for, an account the user is not looking at (PLAN 5.3
+ * shape, see chargeBodySchema / redeemCouponBodySchema). Only this FORBIDDEN names the field;
+ * the CSRF refusal names none.
  */
-export function isChargeForAnotherAccount(error: unknown): boolean {
+export function isForAnotherAccount(error: unknown): boolean {
   return isApiError(error, 'FORBIDDEN') && validationField(error) === 'expectedAccountId';
 }
 
@@ -180,7 +181,7 @@ export function useCharge() {
       try {
         data = unwrap(result).data;
       } catch (error) {
-        if (!isChargeInProgress(error) && !isChargeForAnotherAccount(error)) {
+        if (!isChargeInProgress(error) && !isForAnotherAccount(error)) {
           keys.settle(pack.id, result.response.status);
         }
         throw error;
@@ -206,7 +207,7 @@ export function useCharge() {
       // The cookie is somebody else's now: have better-auth refetch the session so
       // SessionCacheGuard resets the caches and the screen shows the account that is really
       // signed in. Nothing was reserved, and the key stayed in the on-screen account's namespace.
-      if (isChargeForAnotherAccount(error)) void refetchSession();
+      if (isForAnotherAccount(error)) void refetchSession();
       // Either an earlier click already bought this (the user took it for a failure) or that
       // click is still running: the balance on screen may be behind what the server holds.
       if (isApiError(error, 'DUPLICATE_REQUEST')) {
@@ -236,19 +237,34 @@ export function useCharge() {
  */
 export function useRedeemCoupon() {
   const queryClient = useQueryClient();
+  // The account the screen shows rides along (`expectedAccountId`), as it does for a charge:
+  // a one-use or capped coupon redeemed for whoever the cookie now belongs to cannot be given
+  // back. `ready` is false until better-auth has said whose session this is.
+  const { data: session, refetch: refetchSession } = useSession();
+  const accountId = session?.user.id;
   const refresh = () =>
     Promise.all([
       queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY }),
       queryClient.invalidateQueries({ queryKey: LEDGER_QUERY_KEY }),
     ]);
-  return useMutation({
-    mutationFn: async (code: string) =>
-      unwrap(await api.POST('/api/v1/coupons/redeem', { body: { code } })).data,
+  const mutation = useMutation({
+    mutationFn: async (code: string) => {
+      // Unreachable while the form honours `ready`.
+      if (!accountId) throw new Error('redeem attempted before the session was known');
+      return unwrap(
+        await api.POST('/api/v1/coupons/redeem', {
+          body: { code, expectedAccountId: accountId },
+        }),
+      ).data;
+    },
     onSuccess: async () => {
       await refresh();
     },
     onError: async (error) => {
+      // Somebody else's cookie: refetch the session so SessionCacheGuard shows the real account.
+      if (isForAnotherAccount(error)) void refetchSession();
       if (isApiError(error, 'DUPLICATE_REQUEST') || isCouponRejection(error)) await refresh();
     },
   });
+  return { ...mutation, ready: accountId !== undefined };
 }

@@ -13,6 +13,7 @@ import {
 } from '@buddha/shared';
 import { ChargePackageService } from './charge-package.service.js';
 import { and, desc, eq, lt, or, sql } from 'drizzle-orm';
+import { assertExpectedAccount } from '../auth/expected-account.js';
 import { AppError } from '../common/errors/app-error.js';
 import { PG_UNIQUE_VIOLATION, isPgError } from '../common/errors/pg-error.js';
 import { DB } from '../infra/db/db.provider.js';
@@ -96,18 +97,10 @@ export class WalletService {
    * index and never reaches the provider a second time.
    */
   async charge(userId: string, body: ChargeBody, idempotencyKey: string): Promise<ChargeResult> {
-    // The cookie decides who is charged; the body says who the screen shows. They differ when
-    // another tab signed in as somebody else and this one has not refetched its session yet
-    // (sign-ins are not broadcast). Refused first of all: credited, the P would land on an
-    // account the user is not looking at, and the client's idempotency key would be filed
-    // under the wrong one — a lost answer then turns into a second purchase. Same "sell only
-    // what the user actually saw" shape as the PRICE_MOVED guard below.
-    if (body.expectedAccountId !== userId) {
-      throw new AppError('FORBIDDEN', {
-        message: 'This session belongs to a different account than the one on screen',
-        details: [{ path: ['expectedAccountId'], message: 'session belongs to another account' }],
-      });
-    }
+    // First of all (see assertExpectedAccount): credited to the cookie's account while the
+    // screen shows another, the client's idempotency key would also sit under the wrong
+    // account, and a lost answer would then turn into a second purchase.
+    assertExpectedAccount(userId, body.expectedAccountId);
     const earlier = await this.paymentByKey(userId, idempotencyKey);
     if (earlier) return this.replay(earlier, body);
 

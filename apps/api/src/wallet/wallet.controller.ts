@@ -22,6 +22,7 @@ import {
 } from '@buddha/shared';
 import { type SessionUser } from '../auth/auth.js';
 import { CurrentUser } from '../auth/current-user.decorator.js';
+import { assertExpectedAccount } from '../auth/expected-account.js';
 import { SessionGuard } from '../auth/session.guard.js';
 import { IdempotencyKey } from '../common/decorators/idempotency-key.decorator.js';
 import { ApiData, ApiErrors, ApiPageOf } from '../common/openapi/api-response.decorators.js';
@@ -128,6 +129,8 @@ export class CouponsController {
       .extend({ balance: chargeResultSchema.shape.balance, ledgerEntry: ledgerEntrySchema })
       .meta({ id: 'RedeemCouponResult' }),
   )
+  // FORBIDDEN: a foreign Origin (SessionGuard's CSRF check), or a body whose `expectedAccountId`
+  // is not the cookie's account (details name the field).
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR', 'DUPLICATE_REQUEST')
   async redeem(
     @CurrentUser() user: SessionUser,
@@ -138,6 +141,11 @@ export class CouponsController {
     balance: RedeemResult['balance'];
     ledgerEntry: RedeemResult['ledgerEntry'];
   }> {
+    // A one-use or capped coupon redeemed for the wrong account cannot be given back by the
+    // user. Here rather than in CouponService.redeem because this handler is its only caller
+    // and the service takes the resolved account; the charge keeps its check in the service
+    // because the replay lookup there must come after it.
+    assertExpectedAccount(user.id, body.expectedAccountId);
     const result = await this.coupons.redeem(user.id, body.code);
     return {
       code: result.coupon.code,

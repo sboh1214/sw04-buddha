@@ -464,6 +464,7 @@ export type components = {
         };
         RedeemCouponBody: {
             code: components["schemas"]["CouponCode"];
+            expectedAccountId: string;
         };
         RedeemCouponResult: {
             amountP: components["schemas"]["PAmount"];
