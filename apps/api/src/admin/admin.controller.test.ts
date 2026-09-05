@@ -9,6 +9,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
 import {
   chargeBody,
+  chargeHeaders,
   createTestApp,
   createTestPackage,
   signUpTestUser,
@@ -56,7 +57,7 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
     return t.app.inject({
       method: 'POST',
       url: '/api/v1/payments/charge',
-      headers: { ...jsonHeaders, cookie: member.cookie },
+      headers: chargeHeaders(member.cookie),
       payload: chargeBody(pack),
     });
   };

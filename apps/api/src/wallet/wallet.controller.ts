@@ -1,6 +1,9 @@
 import { Body, Controller, Get, HttpCode, Post, Query, UseGuards } from '@nestjs/common';
-import { ApiCookieAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
+import { ApiCookieAuth, ApiHeader, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import {
+  IDEMPOTENCY_KEY_HEADER,
+  IDEMPOTENCY_KEY_MAX_LENGTH,
+  IDEMPOTENCY_KEY_MIN_LENGTH,
   chargeBodySchema,
   chargePackageSchema,
   chargeResultSchema,
@@ -20,6 +23,7 @@ import {
 import { type SessionUser } from '../auth/auth.js';
 import { CurrentUser } from '../auth/current-user.decorator.js';
 import { SessionGuard } from '../auth/session.guard.js';
+import { IdempotencyKey } from '../common/decorators/idempotency-key.decorator.js';
 import { ApiData, ApiErrors, ApiPageOf } from '../common/openapi/api-response.decorators.js';
 import { ApiPage } from '../common/interceptors/response-envelope.interceptor.js';
 import { SESSION_SECURITY_SCHEME } from '../openapi/document.js';
@@ -72,13 +76,27 @@ export class PaymentsController {
     summary:
       'Buy one charge package (mock provider: succeeds immediately). P is never convertible back to cash.',
   })
+  @ApiHeader({
+    name: IDEMPOTENCY_KEY_HEADER,
+    required: true,
+    description:
+      'Client-generated key for this purchase (PLAN 5.4). Re-sending it returns the first ' +
+      'outcome instead of charging again; re-using it with a different body is DUPLICATE_REQUEST.',
+    schema: {
+      type: 'string',
+      minLength: IDEMPOTENCY_KEY_MIN_LENGTH,
+      maxLength: IDEMPOTENCY_KEY_MAX_LENGTH,
+      pattern: '^[A-Za-z0-9_-]+$',
+    },
+  })
   @ApiData(chargeResultSchema)
-  @ApiErrors('UNAUTHENTICATED', 'NOT_FOUND', 'VALIDATION_ERROR', 'PRICE_MOVED')
+  @ApiErrors('UNAUTHENTICATED', 'NOT_FOUND', 'VALIDATION_ERROR', 'PRICE_MOVED', 'DUPLICATE_REQUEST')
   charge(
     @CurrentUser() user: SessionUser,
+    @IdempotencyKey() idempotencyKey: string,
     @Body({ schema: chargeBodySchema }) body: ChargeBody,
   ): Promise<ChargeResult> {
-    return this.wallet.charge(user.id, body);
+    return this.wallet.charge(user.id, body, idempotencyKey);
   }
 }
 

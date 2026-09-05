@@ -29,12 +29,16 @@ export function ChargeForm() {
         // Only a stale catalogue may claim the package is gone — re-priced, retired or
         // deleted — which is the same set `useCharge` refetches on, so the message and the
         // cards changing under it always agree. A provider refusal is a VALIDATION_ERROR too
-        // but names `amountP`: nothing about the offer changed, so it must not say so.
+        // but names `amountP`: nothing about the offer changed, so it must not say so. A
+        // DUPLICATE_REQUEST means the key was spent by an earlier click (PLAN 5.4): the
+        // purchase may well exist, so the toast points at the balance instead of "failed".
         title: isApiError(error, 'PRICE_MOVED')
           ? copy.chargePriceMoved
-          : isStaleCatalogue(error)
-            ? copy.chargeUnavailable
-            : copy.chargeFailed,
+          : isApiError(error, 'DUPLICATE_REQUEST')
+            ? copy.chargeDuplicate
+            : isStaleCatalogue(error)
+              ? copy.chargeUnavailable
+              : copy.chargeFailed,
       });
     }
   }

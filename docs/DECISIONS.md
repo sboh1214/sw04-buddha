@@ -579,6 +579,7 @@ PLAN §5.1/5.6과 M2는 P의 유입(mock 충전, 관리자 조정)과 원장 불
 - 브라우저 확인(2026-09-03): 충전 → 잔고·칩·원장 동시 갱신, 관리자 −3,000P → 7,000P + "관리자 조정" 원장 행, 과다 차감 → 한국어 거부 안내, 수동 감사 `{"checked":5,"mismatches":0}` → 잔고를 직접 +1,500 조작 후 재실행 시 `audit_failures` 1건.
 - `payments.provider_ref`는 mock이 `mock_<uuid>`를 채운다. 실제 PG의 승인번호가 들어갈 자리다.
 - 레이트 리밋(PLAN §7.5)은 아직 없다. 실제 PG 연동 전 필수(A-M2-6).
+- (2026-09-05 추기, PR #3 리뷰 6차) `POST /payments/charge`는 `Idempotency-Key` 헤더가 필수다(QUESTIONS A-M2-11, migration 0008). 키를 프로바이더 호출 **전에** `payments` 행(`pending`)으로 예약하므로 위의 "성공했을 때만 `payments`(succeeded) INSERT" 순서는 "예약 → 프로바이더 → 같은 행을 `succeeded`/`failed`로 갱신"으로 바뀌었다. 잔고·원장은 여전히 `succeeded` 갱신과 한 트랜잭션이고, 잔고 행이 없어 롤백되면 예약 행만 `pending`으로 남는다(프로바이더가 승인한 유일한 기록).
 - (2026-09-05 추기, PR #3 리뷰 6차) 웹의 `SessionCacheGuard`(`components/auth`)가 세션의 사용자 id가 바뀌는 것을 보면 QueryClient를 `resetQueries`로 비운다. 1차 리뷰의 `queryClient.clear()`는 로그아웃·로그인이 일어난 탭만 비웠고, 다른 탭은 better-auth가 전파하는 로그아웃(localStorage 브로드캐스트)과 `visibilitychange` 재조회로 계정이 바뀐 뒤에도 이전 계정의 `['me']`·원장·결제 캐시를 그대로 그렸다. `clear()`가 아닌 `resetQueries()`인 이유: clear는 마운트된 옵저버에 분리된 데이터를 남기고 다시 그리지 않는다.
 - (2026-09-05 추기, PR #3 리뷰 6차) `ledger.audit`의 `audit_failures` INSERT는 1,000행씩 나눠 한 트랜잭션에 쓴다. 한 문장으로 쓰면 32,768행(행당 바인드 파라미터 2개, int16 한계)에서 실패해 광범위한 손상일수록 기록이 남지 않았다. 한 트랜잭션이라 한 실행의 행은 여전히 같은 `created_at`을 갖는다.
 

@@ -10,6 +10,7 @@ import { AdminGuard } from '../auth/admin.guard.js';
 import { PAYMENT_PROVIDER, type PaymentProvider } from '../payments/payment-provider.js';
 import {
   chargeBody,
+  chargeHeaders,
   createTestApp,
   createTestPackage,
   signUpTestUser,
@@ -117,7 +118,7 @@ describe.skipIf(!hasTestInfra)('admin charge packages (integration)', () => {
     await t.app.inject({
       method: 'POST',
       url: '/api/v1/payments/charge',
-      headers: { ...jsonHeaders, cookie: member.cookie },
+      headers: chargeHeaders(member.cookie),
       payload: chargeBody(pack),
     });
 
@@ -199,11 +200,13 @@ describe.skipIf(!hasTestInfra)('admin charge packages (integration)', () => {
   });
 
   it('survives a package deleted after the provider accepted the charge', async () => {
-    // The exact window the FK used to break in: `charge` reads the package, the provider
-    // accepts, and only then does it insert the payment. ON DELETE SET NULL governs rows that
-    // already exist, not an INSERT naming a parent that is gone — that is a 23503, which the
-    // exception filter can only render as a 500, after the user has been charged. Deleting
-    // from inside the provider call reproduces the race deterministically.
+    // The window the FK used to break in: `charge` read the package, the provider accepted,
+    // and only then was the payment inserted. ON DELETE SET NULL governs rows that already
+    // exist, not an INSERT naming a parent that is gone — that is a 23503, which the exception
+    // filter can only render as a 500, after the user has been charged. The payment row is
+    // now reserved before the provider runs (PLAN 5.4), so a package deleted during the call
+    // is the SET NULL case proper; deleting from inside the provider call still exercises the
+    // whole path deterministically.
     const pack = await createTestPackage(t.db, { amountP: 10_000n, priceKrw: 9_700 });
     const provider = t.app.get<PaymentProvider>(PAYMENT_PROVIDER);
     const spy = vi.spyOn(provider, 'charge').mockImplementation(async (request) => {
@@ -215,7 +218,7 @@ describe.skipIf(!hasTestInfra)('admin charge packages (integration)', () => {
       const res = await t.app.inject({
         method: 'POST',
         url: '/api/v1/payments/charge',
-        headers: { ...jsonHeaders, cookie: member.cookie },
+        headers: chargeHeaders(member.cookie),
         payload: chargeBody(pack),
       });
       expect(res.statusCode).toBe(200);

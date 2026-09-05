@@ -167,17 +167,23 @@ export class ChargePackageService {
    * the catalogue on screen is stale and worth refetching.
    */
   async get(id: string): Promise<ChargePackage> {
-    const [row] = await this.db
-      .select()
-      .from(schema.chargePackages)
-      .where(eq(schema.chargePackages.id, id))
-      .limit(1);
-    if (!row) {
+    const found = await this.find(id);
+    if (!found) {
       throw new AppError('NOT_FOUND', {
         message: 'Charge package not found',
         details: [{ path: ['packageId'], message: 'not found' }],
       });
     }
-    return toChargePackage(row);
+    return found;
+  }
+
+  /** `get` without the 404: for a reference that may legitimately be gone (a replayed charge). */
+  async find(id: string): Promise<ChargePackage | null> {
+    const [row] = await this.db
+      .select()
+      .from(schema.chargePackages)
+      .where(eq(schema.chargePackages.id, id))
+      .limit(1);
+    return row ? toChargePackage(row) : null;
   }
 }

@@ -9,10 +9,12 @@ import {
   type ChargeResult,
   type LedgerEntry,
 } from '@buddha/shared';
+import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   chargeBody,
+  chargeHeaders,
   createTestApp,
   createTestPackage,
   signUpTestUser,
@@ -42,13 +44,18 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     pack = await createTestPackage(t.db);
   });
 
-  const charge = (pack: TestPackage, cookie = user.cookie) =>
+  /** One purchase: a fresh Idempotency-Key unless the test re-sends one (PLAN 5.4). */
+  const charge = (pack: TestPackage, cookie = user.cookie, idempotencyKey?: string) =>
     t.app.inject({
       method: 'POST',
       url: '/api/v1/payments/charge',
-      headers: { ...jsonHeaders, cookie },
+      headers: chargeHeaders(cookie, idempotencyKey),
       payload: chargeBody(pack),
     });
+
+  async function paymentsOf(userId: string) {
+    return t.db.select().from(schema.payments).where(eq(schema.payments.userId, userId));
+  }
 
   async function balanceOf(userId: string) {
     const [row] = await t.db
@@ -149,7 +156,7 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     const malformed = await t.app.inject({
       method: 'POST',
       url: '/api/v1/payments/charge',
-      headers: { ...jsonHeaders, cookie: user.cookie },
+      headers: chargeHeaders(user.cookie),
       payload: { amountP: '10000' },
     });
     expect(malformed.statusCode).toBe(400);
@@ -169,8 +176,11 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     const body = res.json<{ error: { code: string; details?: unknown } }>();
     expect(body.error.code).toBe('NOT_FOUND');
     expect(body.error.details).toBeUndefined();
-    // The credit and the payment row are one transaction, so nothing of the attempt is left.
-    expect(await t.db.select().from(schema.payments)).toHaveLength(0);
+    // The credit rolled back with the ledger entry. What stays is the key reservation, still
+    // `pending`: the provider had accepted, so that row is the only record that P is owed.
+    const payments = await t.db.select().from(schema.payments);
+    expect(payments.map((row) => row.status)).toEqual(['pending']);
+    expect(await ledgerOf(user.id)).toHaveLength(1); // the sign-up bonus only
   });
 
   it('refuses a purchase of terms the catalogue never showed (PRICE_MOVED)', async () => {
@@ -185,7 +195,7 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
       const res = await t.app.inject({
         method: 'POST',
         url: '/api/v1/payments/charge',
-        headers: { ...jsonHeaders, cookie: user.cookie },
+        headers: chargeHeaders(user.cookie),
         payload: stale,
       });
       expect(res.statusCode).toBe(409);
@@ -201,11 +211,102 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     const res = await t.app.inject({
       method: 'POST',
       url: '/api/v1/payments/charge',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, 'idempotency-key': randomUUID() },
       payload: chargeBody(pack),
     });
     expect(res.statusCode).toBe(401);
     expect(res.json()).toMatchObject({ error: { code: 'UNAUTHENTICATED' } });
+  });
+
+  it('replays a charge whose answer was lost instead of selling it twice (PLAN 5.4)', async () => {
+    // The client re-sends the same Idempotency-Key when a request never came back. Before the
+    // key existed every request minted its own payment id, so the "retry" was a second
+    // purchase: two payments, two DEPOSIT entries, P credited twice.
+    const key = randomUUID();
+    const first = await charge(pack, user.cookie, key);
+    expect(first.statusCode).toBe(200);
+    const again = await charge(pack, user.cookie, key);
+    expect(again.statusCode).toBe(200);
+
+    const a = first.json<{ data: ChargeResult }>().data;
+    const b = again.json<{ data: ChargeResult }>().data;
+    expect(b.payment.id).toBe(a.payment.id);
+    expect(b.ledgerEntry.id).toBe(a.ledgerEntry.id);
+    expect(b.package).toEqual(a.package);
+    expect(b.balance).toEqual(a.balance);
+
+    const expected = SIGNUP_BONUS_P + pack.amountP;
+    expect(await balanceOf(user.id)).toMatchObject({ availableP: expected });
+    expect(await paymentsOf(user.id)).toHaveLength(1);
+    expect((await ledgerOf(user.id)).filter((entry) => entry.type === 'DEPOSIT')).toHaveLength(1);
+  });
+
+  it('refuses a re-used Idempotency-Key that carries different terms (DUPLICATE_REQUEST)', async () => {
+    // A key is a name for one purchase. The same key with another package is a client bug or
+    // a replayed request, never a lost answer, so it must neither sell nor replay (PLAN 7.4).
+    const other = await createTestPackage(t.db, { amountP: 30_000n, priceKrw: 28_500 });
+    const key = randomUUID();
+    expect((await charge(pack, user.cookie, key)).statusCode).toBe(200);
+
+    const res = await charge(other, user.cookie, key);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: { code: 'DUPLICATE_REQUEST' } });
+
+    expect(await balanceOf(user.id)).toMatchObject({ availableP: SIGNUP_BONUS_P + pack.amountP });
+    expect(await paymentsOf(user.id)).toHaveLength(1);
+  });
+
+  it('scopes keys to the account: another user may use the same value', async () => {
+    const key = randomUUID();
+    const other = await signUpTestUser(t);
+    expect((await charge(pack, user.cookie, key)).statusCode).toBe(200);
+    expect((await charge(pack, other.cookie, key)).statusCode).toBe(200);
+    expect(await balanceOf(other.id)).toMatchObject({ availableP: SIGNUP_BONUS_P + pack.amountP });
+    expect(await paymentsOf(other.id)).toHaveLength(1);
+  });
+
+  it('requires a well-formed Idempotency-Key header', async () => {
+    for (const headers of [
+      { ...jsonHeaders, cookie: user.cookie },
+      chargeHeaders(user.cookie, 'short'),
+      chargeHeaders(user.cookie, 'has space in it'),
+    ]) {
+      const res = await t.app.inject({
+        method: 'POST',
+        url: '/api/v1/payments/charge',
+        headers,
+        payload: chargeBody(pack),
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({
+        error: { code: 'VALIDATION_ERROR', details: [{ path: ['Idempotency-Key'] }] },
+      });
+    }
+    // Refused before the provider runs: nothing reserved, nothing credited.
+    expect(await paymentsOf(user.id)).toHaveLength(0);
+    expect(await balanceOf(user.id)).toMatchObject({ availableP: SIGNUP_BONUS_P });
+  });
+
+  it('lets 20 concurrent requests with one key reach the provider once', async () => {
+    // The key is reserved on a `pending` row before the provider is asked, so the losers of
+    // the race hit the unique index and never charge; they answer 409 while the winner is
+    // still running, or replay its 200 once it has committed. Either way: one payment.
+    const key = randomUUID();
+    const responses = await Promise.all(
+      Array.from({ length: 20 }, () => charge(pack, user.cookie, key)),
+    );
+    const statuses = responses.map((res) => res.statusCode);
+    expect(statuses.every((status) => status === 200 || status === 409)).toBe(true);
+    expect(statuses.filter((status) => status === 200).length).toBeGreaterThanOrEqual(1);
+    for (const res of responses) {
+      if (res.statusCode === 409) {
+        expect(res.json()).toMatchObject({ error: { code: 'DUPLICATE_REQUEST' } });
+      }
+    }
+
+    expect(await balanceOf(user.id)).toMatchObject({ availableP: SIGNUP_BONUS_P + pack.amountP });
+    expect(await paymentsOf(user.id)).toHaveLength(1);
+    expect((await ledgerOf(user.id)).filter((entry) => entry.type === 'DEPOSIT')).toHaveLength(1);
   });
 
   it('GET /me/ledger pages newest first and only shows the caller entries', async () => {

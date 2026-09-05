@@ -5,6 +5,7 @@ export * from './auth.js';
 export * from './charge-package.js';
 export * from './coupon.js';
 export * from './api/errors.js';
+export * from './api/idempotency.js';
 export * from './api/p-amount.js';
 export * from './constants.js';
 export * from './enums.js';

@@ -1,4 +1,5 @@
 // Helpers for HTTP-level integration tests against the real test Postgres/Redis.
+import { randomUUID } from 'node:crypto';
 import { VersioningType } from '@nestjs/common';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
@@ -89,6 +90,22 @@ export function chargeBody(pack: TestPackage): Record<string, unknown> {
     packageId: pack.id,
     expectedAmountP: pack.amountP.toString(),
     expectedPriceKrw: pack.priceKrw,
+  };
+}
+
+/**
+ * Headers for one `POST /payments/charge`: the session cookie plus a fresh `Idempotency-Key`
+ * (PLAN 5.4) unless the test deliberately re-sends one.
+ */
+export function chargeHeaders(
+  cookie: string,
+  idempotencyKey: string = randomUUID(),
+): Record<string, string> {
+  return {
+    origin: 'http://localhost:3000',
+    'content-type': 'application/json',
+    cookie,
+    'idempotency-key': idempotencyKey,
   };
 }
 

@@ -2,6 +2,7 @@
 
 import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
 import {
   api,
   isApiError,
@@ -11,6 +12,7 @@ import {
   type LedgerEntry,
   type Payment,
 } from '@/lib/api';
+import { IdempotencyKeys } from '@/lib/idempotency';
 import { ME_QUERY_KEY } from './use-me';
 
 /** PLAN 11.5 key rules. Ledger and payments hang off their own roots. */
@@ -103,20 +105,28 @@ export function isCouponRejection(error: unknown): boolean {
  */
 export function useCharge() {
   const queryClient = useQueryClient();
+  // One Idempotency-Key per package until the server has answered (lib/idempotency.ts,
+  // PLAN 5.4): a click whose request died on the way back re-sends the key and gets the first
+  // purchase back instead of buying again. Per package, so a dead click on one card never
+  // blocks another. Lives in state, not a ref, so it is created once per mounted form.
+  const [keys] = useState(() => new IdempotencyKeys());
   return useMutation({
     // The whole package, not just its id: the body echoes the amount and price this card is
     // showing so the server can refuse a purchase of terms the user never read (ADR-0026 lets
     // an admin re-price a live package, and this catalogue has no refetch interval).
-    mutationFn: async (pack: ChargePackage) =>
-      unwrap(
-        await api.POST('/api/v1/payments/charge', {
-          body: {
-            packageId: pack.id,
-            expectedAmountP: pack.amountP,
-            expectedPriceKrw: pack.priceKrw,
-          },
-        }),
-      ).data,
+    mutationFn: async (pack: ChargePackage) => {
+      const result = await api.POST('/api/v1/payments/charge', {
+        params: { header: { 'Idempotency-Key': keys.take(pack.id) } },
+        body: {
+          packageId: pack.id,
+          expectedAmountP: pack.amountP,
+          expectedPriceKrw: pack.priceKrw,
+        },
+      });
+      // Only reached when the server answered; a throw above (no response) keeps the key.
+      keys.settle(pack.id, result.response.status);
+      return unwrap(result).data;
+    },
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY }),
@@ -131,6 +141,15 @@ export function useCharge() {
     onError: async (error) => {
       if (isStaleCatalogue(error)) {
         await queryClient.invalidateQueries({ queryKey: CHARGE_PACKAGES_QUERY_KEY });
+      }
+      // The key was spent by an earlier click — one the user took for a failure, or one still
+      // running — so the balance on screen may be behind what the server holds.
+      if (isApiError(error, 'DUPLICATE_REQUEST')) {
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY }),
+          queryClient.invalidateQueries({ queryKey: LEDGER_QUERY_KEY }),
+          queryClient.invalidateQueries({ queryKey: PAYMENTS_QUERY_KEY }),
+        ]);
       }
     },
   });

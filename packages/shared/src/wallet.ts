@@ -48,11 +48,18 @@ export const ledgerEntrySchema = z
   .meta({ id: 'LedgerEntry' });
 export type LedgerEntry = z.infer<typeof ledgerEntrySchema>;
 
-/** What `POST /payments/charge` answers with: the payment and the balance it produced. */
+/**
+ * What `POST /payments/charge` answers with: the payment and the balance it produced.
+ *
+ * `package` is null only on a replayed answer (same `Idempotency-Key`, PLAN 5.4) whose package
+ * an admin has removed in the meantime; the payment keeps its own amount and price snapshot.
+ * `balance` is the account's balance at the time of the answer, so a replay reports the
+ * current one, which is what the client shows.
+ */
 export const chargeResultSchema = z
   .object({
     payment: paymentSchema,
-    package: chargePackageSchema,
+    package: chargePackageSchema.nullable(),
     balance: balanceSchema,
     ledgerEntry: ledgerEntrySchema,
   })

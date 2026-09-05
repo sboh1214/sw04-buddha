@@ -352,7 +352,7 @@ export type components = {
         ChargeResult: {
             balance: components["schemas"]["Balance"];
             ledgerEntry: components["schemas"]["LedgerEntry"];
-            package: components["schemas"]["ChargePackage"];
+            package: components["schemas"]["ChargePackage"] | null;
             payment: components["schemas"]["Payment"];
         };
         Coupon: {
@@ -1447,7 +1447,10 @@ export interface operations {
     charge: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description Client-generated key for this purchase (PLAN 5.4). Re-sending it returns the first outcome instead of charging again; re-using it with a different body is DUPLICATE_REQUEST. */
+                "Idempotency-Key": string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -1494,7 +1497,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description PRICE_MOVED */
+            /** @description PRICE_MOVED | DUPLICATE_REQUEST */
             409: {
                 headers: {
                     [name: string]: unknown;

@@ -1,5 +1,15 @@
 import { desc, sql } from 'drizzle-orm';
-import { bigint, check, index, integer, pgTable, text, uuid, varchar } from 'drizzle-orm/pg-core';
+import {
+  bigint,
+  check,
+  index,
+  integer,
+  pgTable,
+  text,
+  uniqueIndex,
+  uuid,
+  varchar,
+} from 'drizzle-orm/pg-core';
 import { user } from './auth.js';
 import { chargePackages } from './charge-packages.js';
 import { createdAt, updatedAt } from './columns.js';
@@ -26,6 +36,14 @@ export const payments = pgTable(
     provider: varchar({ length: 32 }).notNull(),
     providerRef: text(),
     status: paymentStatusEnum().notNull().default('pending'),
+    /**
+     * The client's `Idempotency-Key` (PLAN 5.4), unique per account: a retry of a request
+     * whose answer never arrived finds this row instead of buying again. The row is inserted
+     * (as `pending`) before the provider is asked, so two requests racing on one key reach the
+     * provider once. NOT NULL like `orders.idempotency_key` (PLAN 6.2); migration 0008 stamps
+     * rows written before it with `legacy_<id>`, a key no client holds.
+     */
+    idempotencyKey: text().notNull(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -34,6 +52,8 @@ export const payments = pgTable(
     // coupon_redemptions; without this the page is a seq scan plus a sort over every user's
     // payments, and each cursor page costs the same again.
     index('payments_user_id_created_at_idx').on(t.userId, desc(t.createdAt)),
+    // Per account, so one user's key can never collide with or probe another's.
+    uniqueIndex('payments_user_id_idempotency_key_unique').on(t.userId, t.idempotencyKey),
     check('payments_amount_p_check', sql`${t.amountP} > 0`),
     check('payments_price_krw_check', sql`${t.priceKrw} > 0`),
   ],

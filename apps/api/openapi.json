@@ -285,7 +285,20 @@
     "/api/v1/payments/charge": {
       "post": {
         "operationId": "charge",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Client-generated key for this purchase (PLAN 5.4). Re-sending it returns the first outcome instead of charging again; re-using it with a different body is DUPLICATE_REQUEST.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_-]+$"
+            }
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -347,7 +360,7 @@
             }
           },
           "409": {
-            "description": "PRICE_MOVED",
+            "description": "PRICE_MOVED | DUPLICATE_REQUEST",
             "content": {
               "application/json": {
                 "schema": {
@@ -1883,7 +1896,12 @@
             "$ref": "#/components/schemas/Payment"
           },
           "package": {
-            "$ref": "#/components/schemas/ChargePackage"
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ChargePackage"
+              }
+            ]
           },
           "balance": {
             "$ref": "#/components/schemas/Balance"
