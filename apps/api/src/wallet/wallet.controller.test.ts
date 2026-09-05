@@ -109,7 +109,6 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
       provider: 'mock',
       status: 'succeeded',
     });
-    expect(data.package).toMatchObject({ id: pack.id, amountP: '10000', priceKrw: 9700 });
     expect(data.ledgerEntry).toMatchObject({
       type: 'DEPOSIT',
       amountP: '10000',
@@ -233,13 +232,40 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     const b = again.json<{ data: ChargeResult }>().data;
     expect(b.payment.id).toBe(a.payment.id);
     expect(b.ledgerEntry.id).toBe(a.ledgerEntry.id);
-    expect(b.package).toEqual(a.package);
     expect(b.balance).toEqual(a.balance);
 
     const expected = SIGNUP_BONUS_P + pack.amountP;
     expect(await balanceOf(user.id)).toMatchObject({ availableP: expected });
     expect(await paymentsOf(user.id)).toHaveLength(1);
     expect((await ledgerOf(user.id)).filter((entry) => entry.type === 'DEPOSIT')).toHaveLength(1);
+  });
+
+  it('replays the terms actually bought after an admin re-priced the package', async () => {
+    // The answer is rebuilt from the payment row, never from the catalogue: an admin may edit
+    // a live package between the lost answer and the retry (ADR-0026), and a client that still
+    // holds the old card sends the old terms, which are exactly what it paid.
+    const key = randomUUID();
+    const first = await charge(pack, user.cookie, key);
+    expect(first.statusCode).toBe(200);
+    await t.db
+      .update(schema.chargePackages)
+      .set({ amountP: 12_000n, priceKrw: 9_900 })
+      .where(eq(schema.chargePackages.id, pack.id));
+
+    const again = await charge(pack, user.cookie, key);
+    expect(again.statusCode).toBe(200);
+    const a = first.json<{ data: ChargeResult }>().data;
+    const b = again.json<{ data: ChargeResult }>().data;
+    expect(b.payment).toEqual(a.payment);
+    expect(b.payment).toMatchObject({ amountP: '10000', priceKrw: 9700, packageId: pack.id });
+    expect(b.ledgerEntry).toEqual(a.ledgerEntry);
+    expect(await paymentsOf(user.id)).toHaveLength(1);
+
+    // The refreshed card carries the new terms: a different purchase, not a lost answer.
+    const fresh = await charge({ ...pack, amountP: 12_000n, priceKrw: 9_900 }, user.cookie, key);
+    expect(fresh.statusCode).toBe(409);
+    expect(fresh.json()).toMatchObject({ error: { code: 'DUPLICATE_REQUEST' } });
+    expect(await paymentsOf(user.id)).toHaveLength(1);
   });
 
   it('refuses a re-used Idempotency-Key that carries different terms (DUPLICATE_REQUEST)', async () => {

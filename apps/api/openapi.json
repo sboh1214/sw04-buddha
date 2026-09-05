@@ -1895,14 +1895,6 @@
           "payment": {
             "$ref": "#/components/schemas/Payment"
           },
-          "package": {
-            "nullable": true,
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/ChargePackage"
-              }
-            ]
-          },
           "balance": {
             "$ref": "#/components/schemas/Balance"
           },
@@ -1912,7 +1904,6 @@
         },
         "required": [
           "payment",
-          "package",
           "balance",
           "ledgerEntry"
         ],

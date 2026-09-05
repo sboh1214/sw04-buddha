@@ -193,7 +193,6 @@ export class WalletService {
 
       return {
         payment: toPayment(payment),
-        package: chargePackage,
         balance: toBalance(balance),
         ledgerEntry: toLedgerEntry(entry),
       };
@@ -263,10 +262,10 @@ export class WalletService {
       )
       .limit(1);
     if (!entry) throw new AppError('INTERNAL', { message: 'Ledger entry missing for payment' });
+    // Rebuilt from the rows the first request wrote — never from the catalogue, which an admin
+    // may have re-priced since (ADR-0026); the payment carries the terms actually bought.
     return {
       payment: toPayment(earlier),
-      // Null once an admin removed the package; the payment keeps its own snapshot.
-      package: earlier.packageId ? await this.packages.find(earlier.packageId) : null,
       balance: await this.getBalance(earlier.userId),
       ledgerEntry: toLedgerEntry(entry),
     };

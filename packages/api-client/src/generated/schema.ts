@@ -352,7 +352,6 @@ export type components = {
         ChargeResult: {
             balance: components["schemas"]["Balance"];
             ledgerEntry: components["schemas"]["LedgerEntry"];
-            package: components["schemas"]["ChargePackage"] | null;
             payment: components["schemas"]["Payment"];
         };
         Coupon: {

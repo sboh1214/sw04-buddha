@@ -1,7 +1,6 @@
 import * as z from 'zod';
 import { cursorQuerySchema } from './api/pagination.js';
 import { pAmountInputSchema, pAmountSchema } from './api/p-amount.js';
-import { chargePackageSchema } from './charge-package.js';
 import { ledgerEntryTypeSchema, ledgerRefTypeSchema, paymentStatusSchema } from './enums.js';
 
 /** Admin adjustments are bounded in either direction (PLAN 7.3). */
@@ -51,15 +50,16 @@ export type LedgerEntry = z.infer<typeof ledgerEntrySchema>;
 /**
  * What `POST /payments/charge` answers with: the payment and the balance it produced.
  *
- * `package` is null only on a replayed answer (same `Idempotency-Key`, PLAN 5.4) whose package
- * an admin has removed in the meantime; the payment keeps its own amount and price snapshot.
- * `balance` is the account's balance at the time of the answer, so a replay reports the
- * current one, which is what the client shows.
+ * No `package`: the payment row is the immutable record of the purchase (id, P granted, KRW
+ * paid — ADR-0026), while the catalogue row it points at may be re-priced or deleted by an
+ * admin at any time. Echoing that row would be redundant on a fresh answer and wrong on a
+ * replayed one (same `Idempotency-Key`, PLAN 5.4), which must be the first outcome, not the
+ * catalogue as it stands today. `balance` is the account's balance at the time of the answer,
+ * so a replay reports the current one, which is what the client shows.
  */
 export const chargeResultSchema = z
   .object({
     payment: paymentSchema,
-    package: chargePackageSchema.nullable(),
     balance: balanceSchema,
     ledgerEntry: ledgerEntrySchema,
   })
