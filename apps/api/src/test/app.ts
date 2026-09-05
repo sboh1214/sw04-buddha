@@ -83,13 +83,15 @@ export interface TestPackage {
 /**
  * The `POST /payments/charge` body. It echoes the terms the catalogue card showed, so the
  * server can refuse a purchase of an offer the user never read (ADR-0026 lets an admin
- * re-price a live package).
+ * re-price a live package), and the account the screen showed, so a tab whose session was
+ * switched elsewhere cannot charge whoever the cookie now belongs to.
  */
-export function chargeBody(pack: TestPackage): Record<string, unknown> {
+export function chargeBody(pack: TestPackage, accountId: string): Record<string, unknown> {
   return {
     packageId: pack.id,
     expectedAmountP: pack.amountP.toString(),
     expectedPriceKrw: pack.priceKrw,
+    expectedAccountId: accountId,
   };
 }
 

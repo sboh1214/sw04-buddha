@@ -5,6 +5,7 @@ import { discountPercent, formatKrw, formatP, parsePAmount } from '@buddha/share
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import {
+  isChargeForAnotherAccount,
   isChargeInProgress,
   isStaleCatalogue,
   useChargePackages,
@@ -18,10 +19,12 @@ import { isApiError, type ChargePackage } from '@/lib/api';
  * it always agree. A provider refusal is a VALIDATION_ERROR too but names `amountP`: nothing
  * about the offer changed, so it must not say so. The two DUPLICATE_REQUEST answers (PLAN 5.4)
  * are told apart the way `useCharge` tells them apart: an earlier click is still running (the
- * key was kept, so the next click collects it), or an earlier click already bought this.
+ * key was kept, so the next click collects it), or an earlier click already bought this. The
+ * account refusal means the session was switched in another tab: nothing was charged.
  */
 function chargeErrorTitle(error: unknown): string {
   if (isApiError(error, 'PRICE_MOVED')) return copy.chargePriceMoved;
+  if (isChargeForAnotherAccount(error)) return copy.chargeSessionChanged;
   if (isChargeInProgress(error)) return copy.chargeInProgress;
   if (isApiError(error, 'DUPLICATE_REQUEST')) return copy.chargeDuplicate;
   if (isStaleCatalogue(error)) return copy.chargeUnavailable;

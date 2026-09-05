@@ -336,6 +336,7 @@ export type components = {
             memo: string;
         };
         ChargeBody: {
+            expectedAccountId: string;
             expectedAmountP: components["schemas"]["PAmount"];
             expectedPriceKrw: number;
             /** Format: uuid */

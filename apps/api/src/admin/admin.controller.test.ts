@@ -58,7 +58,7 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
       method: 'POST',
       url: '/api/v1/payments/charge',
       headers: chargeHeaders(member.cookie),
-      payload: chargeBody(pack),
+      payload: chargeBody(pack, member.id),
     });
   };
 

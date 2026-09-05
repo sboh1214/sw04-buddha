@@ -119,7 +119,7 @@ describe.skipIf(!hasTestInfra)('admin charge packages (integration)', () => {
       method: 'POST',
       url: '/api/v1/payments/charge',
       headers: chargeHeaders(member.cookie),
-      payload: chargeBody(pack),
+      payload: chargeBody(pack, member.id),
     });
 
     const deleted = await t.app.inject({
@@ -219,7 +219,7 @@ describe.skipIf(!hasTestInfra)('admin charge packages (integration)', () => {
         method: 'POST',
         url: '/api/v1/payments/charge',
         headers: chargeHeaders(member.cookie),
-        payload: chargeBody(pack),
+        payload: chargeBody(pack, member.id),
       });
       expect(res.statusCode).toBe(200);
 

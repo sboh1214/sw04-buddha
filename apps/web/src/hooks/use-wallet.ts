@@ -112,6 +112,15 @@ export function isChargeInProgress(error: unknown): boolean {
 }
 
 /**
+ * The 403 that means "the cookie belongs to somebody else than the account on screen": the
+ * server refused to charge an account the user is not looking at (PLAN 5.3 shape, see
+ * chargeBodySchema). Only this FORBIDDEN names the field; the CSRF refusal names none.
+ */
+export function isChargeForAnotherAccount(error: unknown): boolean {
+  return isApiError(error, 'FORBIDDEN') && validationField(error) === 'expectedAccountId';
+}
+
+/**
  * `POST /api/v1/payments/charge`. The response carries the new balance, so `['me']` and the
  * two lists are refreshed together — the nav chip and the ledger must never disagree.
  */
@@ -128,11 +137,12 @@ export function useCharge() {
   // buttons disabled. The wallet page is server-gated, so that answer is a session, not a
   // sign-out; should the first /get-session fail with something other than a 401 the buttons
   // stay disabled until better-auth's next refetch succeeds. A switch while the page stays
-  // mounted (SessionCacheGuard) yields the new account's handle on the next click — except
-  // inside the one round trip in which the session atom still holds the previous account
-  // while refetching; a click in that window files its key under the old account, the same
-  // window SessionCacheGuard itself has.
-  const { data: session } = useSession();
+  // mounted (SessionCacheGuard) yields the new account's handle on the next click. A click
+  // while the atom still holds the previous account (side-by-side windows never fire
+  // visibilitychange; a refetch keeps the old data for one round trip) sends that account as
+  // `expectedAccountId`, and the server refuses rather than credit the cookie's account and
+  // leave the key filed under the wrong one; the refusal below asks the session to refetch.
+  const { data: session, refetch: refetchSession } = useSession();
   const accountId = session?.user.id;
   // A ref, not useMemo: React may drop a memo, and with a throwing storage the handle's
   // in-memory fallback IS the key. Resolved at call time, so no ref is touched during render.
@@ -157,16 +167,22 @@ export function useCharge() {
           packageId: pack.id,
           expectedAmountP: pack.amountP,
           expectedPriceKrw: pack.priceKrw,
+          expectedAccountId: accountId,
         },
       });
       // Only reached when the server answered; a throw above (no response) keeps the key. So
       // does an in-progress 409: the first request is still running, and the next click has
-      // to collect its result rather than open a second purchase under a fresh key.
+      // to collect its result rather than open a second purchase under a fresh key. And so
+      // does the account refusal: the server judged the cookie, not this key — which may be
+      // the one this account kept from an earlier lost answer — so spending it would throw
+      // away exactly the recovery the storage exists for.
       let data: ChargeResult;
       try {
         data = unwrap(result).data;
       } catch (error) {
-        if (!isChargeInProgress(error)) keys.settle(pack.id, result.response.status);
+        if (!isChargeInProgress(error) && !isChargeForAnotherAccount(error)) {
+          keys.settle(pack.id, result.response.status);
+        }
         throw error;
       }
       keys.settle(pack.id, result.response.status);
@@ -187,6 +203,10 @@ export function useCharge() {
       if (isStaleCatalogue(error)) {
         await queryClient.invalidateQueries({ queryKey: CHARGE_PACKAGES_QUERY_KEY });
       }
+      // The cookie is somebody else's now: have better-auth refetch the session so
+      // SessionCacheGuard resets the caches and the screen shows the account that is really
+      // signed in. Nothing was reserved, and the key stayed in the on-screen account's namespace.
+      if (isChargeForAnotherAccount(error)) void refetchSession();
       // Either an earlier click already bought this (the user took it for a failure) or that
       // click is still running: the balance on screen may be behind what the server holds.
       if (isApiError(error, 'DUPLICATE_REQUEST')) {

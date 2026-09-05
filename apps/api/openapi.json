@@ -1921,12 +1921,18 @@
             "minimum": 0,
             "exclusiveMinimum": true,
             "maximum": 9007199254740991
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
           }
         },
         "required": [
           "packageId",
           "expectedAmountP",
-          "expectedPriceKrw"
+          "expectedPriceKrw",
+          "expectedAccountId"
         ]
       },
       "ChargeResult": {

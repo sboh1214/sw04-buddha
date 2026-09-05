@@ -92,7 +92,8 @@ export class PaymentsController {
     },
   })
   @ApiData(chargeResultSchema)
-  // FORBIDDEN: a mutation whose Origin is not ours (SessionGuard's CSRF check).
+  // FORBIDDEN: a mutation whose Origin is not ours (SessionGuard's CSRF check), or a body whose
+  // `expectedAccountId` is not the cookie's account (details name the field).
   @ApiErrors(
     'UNAUTHENTICATED',
     'FORBIDDEN',

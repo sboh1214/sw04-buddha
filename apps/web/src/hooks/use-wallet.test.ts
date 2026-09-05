@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { ApiError } from '@/lib/api';
-import { isChargeInProgress, isCouponRejection, isStaleCatalogue } from './use-wallet';
+import {
+  isChargeForAnotherAccount,
+  isChargeInProgress,
+  isCouponRejection,
+  isStaleCatalogue,
+} from './use-wallet';
 
 const apiError = (status: number, code: string, details?: unknown) =>
   new ApiError(status, {
@@ -67,6 +72,29 @@ describe('isChargeInProgress', () => {
       ),
     ).toBe(false);
     expect(isChargeInProgress(new TypeError('Failed to fetch'))).toBe(false);
+  });
+});
+
+describe('isChargeForAnotherAccount', () => {
+  it('is true only for the FORBIDDEN that names the account field', () => {
+    // The screen showed A, the cookie was B's: the server refused instead of crediting B.
+    expect(
+      isChargeForAnotherAccount(
+        apiError(403, 'FORBIDDEN', [
+          { path: ['expectedAccountId'], message: 'session belongs to another account' },
+        ]),
+      ),
+    ).toBe(true);
+  });
+
+  it('is false for the CSRF 403, for other codes and for a transport failure', () => {
+    expect(isChargeForAnotherAccount(apiError(403, 'FORBIDDEN'))).toBe(false);
+    expect(
+      isChargeForAnotherAccount(
+        apiError(400, 'VALIDATION_ERROR', [{ path: ['expectedAccountId'], message: 'required' }]),
+      ),
+    ).toBe(false);
+    expect(isChargeForAnotherAccount(new TypeError('Failed to fetch'))).toBe(false);
   });
 });
 

@@ -45,13 +45,16 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     pack = await createTestPackage(t.db);
   });
 
-  /** One purchase: a fresh Idempotency-Key unless the test re-sends one (PLAN 5.4). */
-  const charge = (pack: TestPackage, cookie = user.cookie, idempotencyKey?: string) =>
+  /**
+   * One purchase by `as` (cookie and the account the screen shows): a fresh Idempotency-Key
+   * unless the test re-sends one (PLAN 5.4).
+   */
+  const charge = (pack: TestPackage, as: TestUser = user, idempotencyKey?: string) =>
     t.app.inject({
       method: 'POST',
       url: '/api/v1/payments/charge',
-      headers: chargeHeaders(cookie, idempotencyKey),
-      payload: chargeBody(pack),
+      headers: chargeHeaders(as.cookie, idempotencyKey),
+      payload: chargeBody(pack, as.id),
     });
 
   async function paymentsOf(userId: string) {
@@ -197,8 +200,8 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     // and the server sells only that offer. Both halves are guarded: raising the price alone
     // is adverse to the user, raising the P alone is adverse to the house.
     for (const stale of [
-      { ...chargeBody(pack), expectedPriceKrw: pack.priceKrw - 100 },
-      { ...chargeBody(pack), expectedAmountP: (pack.amountP + 1n).toString() },
+      { ...chargeBody(pack, user.id), expectedPriceKrw: pack.priceKrw - 100 },
+      { ...chargeBody(pack, user.id), expectedAmountP: (pack.amountP + 1n).toString() },
     ]) {
       const res = await t.app.inject({
         method: 'POST',
@@ -215,12 +218,40 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     expect(await t.db.select().from(schema.payments)).toHaveLength(0);
   });
 
+  it('refuses a body that names another account than the cookie holds (FORBIDDEN)', async () => {
+    // A tab whose session was switched in another tab keeps showing the old account until it
+    // refetches (sign-ins are not broadcast), so its click would charge whoever the cookie now
+    // belongs to and file the client's key under the account on screen. Refused before the
+    // replay lookup and the reservation: nothing charged, nothing reserved.
+    const other = await signUpTestUser(t);
+    const provider = t.app.get<PaymentProvider>(PAYMENT_PROVIDER);
+    const spy = vi.spyOn(provider, 'charge');
+    try {
+      const res = await t.app.inject({
+        method: 'POST',
+        url: '/api/v1/payments/charge',
+        headers: chargeHeaders(user.cookie),
+        payload: chargeBody(pack, other.id),
+      });
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toMatchObject({
+        error: { code: 'FORBIDDEN', details: [{ path: ['expectedAccountId'] }] },
+      });
+      expect(spy).not.toHaveBeenCalled();
+      expect(await t.db.select().from(schema.payments)).toHaveLength(0);
+      expect(await balanceOf(user.id)).toMatchObject({ availableP: SIGNUP_BONUS_P });
+      expect(await balanceOf(other.id)).toMatchObject({ availableP: SIGNUP_BONUS_P });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('requires a session', async () => {
     const res = await t.app.inject({
       method: 'POST',
       url: '/api/v1/payments/charge',
       headers: { ...jsonHeaders, 'idempotency-key': randomUUID() },
-      payload: chargeBody(pack),
+      payload: chargeBody(pack, user.id),
     });
     expect(res.statusCode).toBe(401);
     expect(res.json()).toMatchObject({ error: { code: 'UNAUTHENTICATED' } });
@@ -231,9 +262,9 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     // key existed every request minted its own payment id, so the "retry" was a second
     // purchase: two payments, two DEPOSIT entries, P credited twice.
     const key = randomUUID();
-    const first = await charge(pack, user.cookie, key);
+    const first = await charge(pack, user, key);
     expect(first.statusCode).toBe(200);
-    const again = await charge(pack, user.cookie, key);
+    const again = await charge(pack, user, key);
     expect(again.statusCode).toBe(200);
 
     const a = first.json<{ data: ChargeResult }>().data;
@@ -253,14 +284,14 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     // a live package between the lost answer and the retry (ADR-0026), and a client that still
     // holds the old card sends the old terms, which are exactly what it paid.
     const key = randomUUID();
-    const first = await charge(pack, user.cookie, key);
+    const first = await charge(pack, user, key);
     expect(first.statusCode).toBe(200);
     await t.db
       .update(schema.chargePackages)
       .set({ amountP: 12_000n, priceKrw: 9_900 })
       .where(eq(schema.chargePackages.id, pack.id));
 
-    const again = await charge(pack, user.cookie, key);
+    const again = await charge(pack, user, key);
     expect(again.statusCode).toBe(200);
     const a = first.json<{ data: ChargeResult }>().data;
     const b = again.json<{ data: ChargeResult }>().data;
@@ -270,7 +301,7 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     expect(await paymentsOf(user.id)).toHaveLength(1);
 
     // The refreshed card carries the new terms: a different purchase, not a lost answer.
-    const fresh = await charge({ ...pack, amountP: 12_000n, priceKrw: 9_900 }, user.cookie, key);
+    const fresh = await charge({ ...pack, amountP: 12_000n, priceKrw: 9_900 }, user, key);
     expect(fresh.statusCode).toBe(409);
     expect(fresh.json()).toMatchObject({ error: { code: 'DUPLICATE_REQUEST' } });
     expect(await paymentsOf(user.id)).toHaveLength(1);
@@ -281,9 +312,9 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     // a replayed request, never a lost answer, so it must neither sell nor replay (PLAN 7.4).
     const other = await createTestPackage(t.db, { amountP: 30_000n, priceKrw: 28_500 });
     const key = randomUUID();
-    expect((await charge(pack, user.cookie, key)).statusCode).toBe(200);
+    expect((await charge(pack, user, key)).statusCode).toBe(200);
 
-    const res = await charge(other, user.cookie, key);
+    const res = await charge(other, user, key);
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ error: { code: 'DUPLICATE_REQUEST' } });
     // No field named: unlike the in-progress 409 below, this one tells the client the key is
@@ -297,8 +328,8 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
   it('scopes keys to the account: another user may use the same value', async () => {
     const key = randomUUID();
     const other = await signUpTestUser(t);
-    expect((await charge(pack, user.cookie, key)).statusCode).toBe(200);
-    expect((await charge(pack, other.cookie, key)).statusCode).toBe(200);
+    expect((await charge(pack, user, key)).statusCode).toBe(200);
+    expect((await charge(pack, other, key)).statusCode).toBe(200);
     expect(await balanceOf(other.id)).toMatchObject({ availableP: SIGNUP_BONUS_P + pack.amountP });
     expect(await paymentsOf(other.id)).toHaveLength(1);
   });
@@ -313,7 +344,7 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
         method: 'POST',
         url: '/api/v1/payments/charge',
         headers,
-        payload: chargeBody(pack),
+        payload: chargeBody(pack, user.id),
       });
       expect(res.statusCode).toBe(400);
       expect(res.json()).toMatchObject({
@@ -330,9 +361,7 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     // the race hit the unique index and never charge; they answer 409 while the winner is
     // still running, or replay its 200 once it has committed. Either way: one payment.
     const key = randomUUID();
-    const responses = await Promise.all(
-      Array.from({ length: 20 }, () => charge(pack, user.cookie, key)),
-    );
+    const responses = await Promise.all(Array.from({ length: 20 }, () => charge(pack, user, key)));
     const statuses = responses.map((res) => res.statusCode);
     expect(statuses.every((status) => status === 200 || status === 409)).toBe(true);
     expect(statuses.filter((status) => status === 200).length).toBeGreaterThanOrEqual(1);
@@ -366,12 +395,12 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     try {
       const key = randomUUID();
       // light-my-request dispatches lazily: `.then` is what sends the request.
-      const first = charge(pack, user.cookie, key).then((res) => res);
+      const first = charge(pack, user, key).then((res) => res);
       await vi.waitFor(async () => {
         expect((await paymentsOf(user.id)).map((row) => row.status)).toEqual(['pending']);
       });
 
-      const retry = await charge(pack, user.cookie, key);
+      const retry = await charge(pack, user, key);
       expect(retry.statusCode).toBe(409);
       expect(retry.json()).toMatchObject({
         error: { code: 'DUPLICATE_REQUEST', details: [{ path: ['Idempotency-Key'] }] },
@@ -381,7 +410,7 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
       release();
       const res = await first;
       expect(res.statusCode).toBe(200);
-      const replayed = await charge(pack, user.cookie, key);
+      const replayed = await charge(pack, user, key);
       expect(replayed.statusCode).toBe(200);
       expect(replayed.json<{ data: ChargeResult }>().data.payment.id).toBe(
         res.json<{ data: ChargeResult }>().data.payment.id,
@@ -406,13 +435,13 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     });
     try {
       const key = randomUUID();
-      const res = await charge(pack, user.cookie, key);
+      const res = await charge(pack, user, key);
       expect(res.statusCode).toBe(500);
       expect(res.json()).toMatchObject({ error: { code: 'INTERNAL' } });
       expect((await paymentsOf(user.id)).map((row) => row.status)).toEqual(['pending']);
       expect(await ledgerOf(user.id)).toHaveLength(1); // the sign-up bonus only
 
-      const retry = await charge(pack, user.cookie, key);
+      const retry = await charge(pack, user, key);
       expect(retry.statusCode).toBe(409);
       expect(retry.json()).toMatchObject({
         error: { code: 'DUPLICATE_REQUEST', details: [{ path: ['Idempotency-Key'] }] },
@@ -428,7 +457,7 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     await charge(pack);
     await charge(pack);
     const other = await signUpTestUser(t);
-    await charge(pack, other.cookie);
+    await charge(pack, other);
 
     const first = await t.app.inject({
       method: 'GET',

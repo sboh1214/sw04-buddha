@@ -28,18 +28,37 @@ describe('discountPercent', () => {
 });
 
 describe('chargeBodySchema', () => {
-  it('takes a package id and the terms the card showed', () => {
-    expect(
-      chargeBodySchema.parse({ packageId, expectedAmountP: '10000', expectedPriceKrw: 9_700 }),
-    ).toEqual({ packageId, expectedAmountP: 10_000n, expectedPriceKrw: 9_700 });
+  const terms = { packageId, expectedAmountP: '10000', expectedPriceKrw: 9_700 };
+
+  it('takes a package id, the terms the card showed and the account on screen', () => {
+    expect(chargeBodySchema.parse({ ...terms, expectedAccountId: 'user-1' })).toEqual({
+      packageId,
+      expectedAmountP: 10_000n,
+      expectedPriceKrw: 9_700,
+      expectedAccountId: 'user-1',
+    });
     expect(chargeBodySchema.safeParse({ amountP: '10000' }).success).toBe(false);
     expect(chargeBodySchema.safeParse({ packageId: 'not-a-uuid' }).success).toBe(false);
   });
 
   it('requires both terms: an id alone cannot say what offer was accepted', () => {
-    expect(chargeBodySchema.safeParse({ packageId }).success).toBe(false);
-    expect(chargeBodySchema.safeParse({ packageId, expectedAmountP: '10000' }).success).toBe(false);
-    expect(chargeBodySchema.safeParse({ packageId, expectedPriceKrw: 9_700 }).success).toBe(false);
+    expect(chargeBodySchema.safeParse({ packageId, expectedAccountId: 'user-1' }).success).toBe(
+      false,
+    );
+    expect(
+      chargeBodySchema.safeParse({ ...terms, expectedPriceKrw: undefined, expectedAccountId: 'u' })
+        .success,
+    ).toBe(false);
+    expect(
+      chargeBodySchema.safeParse({ ...terms, expectedAmountP: undefined, expectedAccountId: 'u' })
+        .success,
+    ).toBe(false);
+  });
+
+  it('requires the account the screen is showing', () => {
+    // A stale tab must not be able to charge whoever the cookie now belongs to.
+    expect(chargeBodySchema.safeParse(terms).success).toBe(false);
+    expect(chargeBodySchema.safeParse({ ...terms, expectedAccountId: '' }).success).toBe(false);
   });
 });
 

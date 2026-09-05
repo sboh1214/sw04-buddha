@@ -39,6 +39,12 @@ export type ChargePackage = z.infer<typeof chargePackageSchema>;
  * must not quietly substitute the new one — so the client states what it accepted and a
  * mismatch is refused. Same shape as the PLAN 5.3 slippage guard, which makes a trade carry
  * `maxCostP` / `minProceedsP` and answers `PRICE_MOVED` when the server disagrees.
+ *
+ * It also names the account the screen is showing. The cookie decides who is charged, and a
+ * tab whose session was switched elsewhere (another tab signed in as somebody else; sign-ins
+ * are not broadcast) keeps rendering the old account until it refetches — so the server
+ * refuses (403 FORBIDDEN naming `expectedAccountId`) rather than credit an account the user is
+ * not looking at, and the client's idempotency key never gets filed under the wrong account.
  */
 export const chargeBodySchema = z
   .object({
@@ -47,6 +53,8 @@ export const chargeBodySchema = z
     expectedAmountP: pAmountInputSchema,
     /** KRW the card asked for. */
     expectedPriceKrw: chargePackageSchema.shape.priceKrw,
+    /** The signed-in user id the wallet screen is showing (better-auth `user.id`, text). */
+    expectedAccountId: z.string().min(1).max(255),
   })
   .meta({ id: 'ChargeBody' });
 export type ChargeBody = z.infer<typeof chargeBodySchema>;
