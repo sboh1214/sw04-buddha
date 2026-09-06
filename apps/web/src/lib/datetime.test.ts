@@ -58,13 +58,14 @@ describe('isoToKstLocal', () => {
 
 describe('formatKst', () => {
   it('renders in KST regardless of the machine zone', () => {
-    // 14:59Z is 23:59 in Seoul (and 09:59 in New York). The day period is "PM" rather than
-    // "오후" since CLDR 48 (ICU 78, the Node 24 the repo pins); an older Node would differ.
+    // 14:59Z is 23:59 in Seoul (and 09:59 in New York). The day period reads "오후" whether
+    // the ICU at hand renders ko-KR as "PM" (CLDR 48 / ICU 78, some Node 24 builds) or as
+    // "오후" (browsers, other Node builds): formatKst maps the token itself.
     for (const tz of ['UTC', 'Asia/Seoul', 'America/New_York']) {
       process.env.TZ = tz;
-      expect(formatKst('2026-12-31T14:59:00.000Z'), tz).toBe('2026. 12. 31. PM 11:59');
+      expect(formatKst('2026-12-31T14:59:00.000Z'), tz).toBe('2026. 12. 31. 오후 11:59');
       // Crosses a date line in KST: 20:30Z is 05:30 the next morning in Seoul.
-      expect(formatKst('2026-02-28T20:30:00.000Z'), tz).toBe('2026. 3. 1. AM 5:30');
+      expect(formatKst('2026-02-28T20:30:00.000Z'), tz).toBe('2026. 3. 1. 오전 5:30');
     }
   });
 

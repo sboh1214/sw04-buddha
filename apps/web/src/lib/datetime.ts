@@ -56,8 +56,21 @@ const kstDateTime = new Intl.DateTimeFormat('ko-KR', {
   timeZone: 'Asia/Seoul',
 });
 
+/**
+ * The day period as ko-KR data older than CLDR 48 renders it. ICU 78 (CLDR 48, the ICU of
+ * some Node 24 builds) says "AM"/"PM" for ko-KR; browsers and other Node builds say
+ * "오전"/"오후". The screen must not depend on which ICU rendered it.
+ */
+const DAY_PERIODS: Readonly<Record<string, string>> = { AM: '오전', PM: '오후' };
+
 /** An ISO instant rendered for reading in KST (`2026. 9. 6. 오후 3:00`), as the lists show it. */
 export function formatKst(iso: string): string {
   const parsed = new Date(iso);
-  return Number.isNaN(parsed.getTime()) ? '' : kstDateTime.format(parsed);
+  if (Number.isNaN(parsed.getTime())) return '';
+  return kstDateTime
+    .formatToParts(parsed)
+    .map((part) =>
+      part.type === 'dayPeriod' ? (DAY_PERIODS[part.value] ?? part.value) : part.value,
+    )
+    .join('');
 }
