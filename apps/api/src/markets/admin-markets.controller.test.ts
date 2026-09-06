@@ -25,24 +25,14 @@ import { Redis } from 'ioredis';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
+import { expectLedgerChain } from '../test/ledger.js';
 import { hasTestInfra } from '../test/setup-env.js';
+import { sleep, waitForLockWaiter, waitForMessages } from '../test/wait.js';
 
 const jsonHeaders = { origin: 'http://localhost:3000', 'content-type': 'application/json' };
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** U+0000: Postgres refuses it in text and jsonb, so the pipe must refuse it first. */
 const NUL = String.fromCharCode(0);
-
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-
-/** Polls until `received` holds `count` messages (bounded), so a lost publish fails loudly. */
-async function waitForMessages(received: unknown[], count: number, what: string) {
-  const started = Date.now();
-  while (received.length < count) {
-    if (Date.now() - started > 5_000)
-      throw new Error(`${what}: ${String(received.length)} of ${String(count)} received`);
-    await sleep(20);
-  }
-}
 
 type ListPage = { data: MarketSummary[]; meta: { nextCursor: string | null } };
 type ErrorBody = { error: { code: string; details?: { path: (string | number)[] }[] } };
@@ -610,12 +600,17 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
         ts: voided.voidedAt,
       });
       const events = received.map((message) => JSON.parse(message) as Record<string, unknown>);
+      // The balance event carries alice's last refund instant (stamped after her balance
+      // lock), the position events the void's own; see the ordering test below.
+      const lastRefund = (await ledgerOf(alice))
+        .filter((entry) => entry.type === 'MARKET_VOID_REFUND')
+        .at(-1)!;
       expect(events).toEqual([
         {
           type: 'user:balance',
           availableP: SIGNUP_BONUS_P.toString(),
           lockedP: '0',
-          ts: voided.voidedAt,
+          ts: lastRefund.createdAt.toISOString(),
         },
         {
           type: 'user:position',
@@ -674,6 +669,12 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       (await balanceOf(alice)).availableP,
     );
     expect(refunds.at(-1)!.balanceAfterP).toBe(SIGNUP_BONUS_P);
+    // Each refund is stamped after its balance lock: no earlier than the void itself, in
+    // refund order, and the balance row carries the last one.
+    expect(refunds[0]!.createdAt.getTime()).toBeGreaterThanOrEqual(Date.parse(voided.voidedAt!));
+    expect(refunds[1]!.createdAt.getTime()).toBeGreaterThanOrEqual(refunds[0]!.createdAt.getTime());
+    expect((await balanceOf(alice)).updatedAt.getTime()).toBe(refunds[1]!.createdAt.getTime());
+    expectLedgerChain(aliceLedger, (await balanceOf(alice)).availableP);
 
     // bob: nothing to refund, no ledger row, but the row is closed out; his other market stands.
     expect((await balanceOf(bob)).availableP).toBe(SIGNUP_BONUS_P - 90n);
@@ -718,6 +719,84 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     expect(again.statusCode).toBe(400);
     expect(detailPath(again)).toEqual(['status']);
     expect((await ledgerOf(alice)).filter((e) => e.type === 'MARKET_VOID_REFUND')).toHaveLength(2);
+  });
+
+  it('stamps each refund after its balance lock, so the ledger keeps commit order', async () => {
+    // The void's transaction begins (its `now()` is fixed) and waits on the market lock;
+    // while it waits alice buys elsewhere and that TRADE_BUY commits. Her refund runs after
+    // it and includes it in balance_after_p, so it must sort after it in `/me/ledger` too —
+    // the column default (transaction start) would put it before.
+    const row = await market({ status: 'closed' });
+    const elsewhere = await market({ status: 'open' });
+    const alice = (await createUser(t.db)).user.id;
+    await hold({ userId: alice, marketId: row.id, outcome: 'YES', qty: 10, costBasisP: 520n });
+
+    const subscriber = new Redis(process.env.TEST_REDIS_URL!, { maxRetriesPerRequest: 1 });
+    const received: string[] = [];
+    subscriber.on('message', (_channel: string, message: string) => received.push(message));
+    await subscriber.subscribe(userChannel(alice));
+    const holder = await t.db.$client.connect();
+    let pending: ReturnType<typeof voidMarket> | undefined;
+    let released = false;
+    let voided!: AdminMarket;
+    let releasedMs!: number;
+    try {
+      await holder.query('SELECT pg_advisory_lock(hashtext($1))', [row.id]);
+      pending = voidMarket(row.id).then((res) => res);
+      await waitForLockWaiter(holder, 'the void on the market lock');
+      expect((await marketRow(row.id)).status).toBe('closed');
+      await hold({ userId: alice, marketId: elsewhere.id, outcome: 'NO', qty: 2, costBasisP: 90n });
+      // The database clock just before the release, in the expression the services use.
+      const { rows } = await holder.query<{ ms: string }>(
+        'SELECT (extract(epoch FROM clock_timestamp()) * 1000)::bigint::text AS ms',
+      );
+      releasedMs = Number(rows[0]!.ms);
+      await holder.query('SELECT pg_advisory_unlock(hashtext($1))', [row.id]);
+      released = true;
+      const res = await pending;
+      expect(res.statusCode).toBe(200);
+      voided = detail(res);
+      await waitForMessages(received, 2, 'user events of the void');
+    } finally {
+      if (!released) await holder.query('SELECT pg_advisory_unlock_all()');
+      holder.release();
+      await pending?.catch(() => undefined);
+      await subscriber.quit();
+    }
+
+    const ledger = await ledgerOf(alice);
+    expect(ledger.map((entry) => entry.type)).toEqual([
+      'BONUS',
+      'TRADE_BUY',
+      'TRADE_BUY',
+      'MARKET_VOID_REFUND',
+    ]);
+    const trade = ledger[2]!;
+    const refund = ledger[3]!;
+    expect(refund.balanceAfterP).toBe(SIGNUP_BONUS_P - 90n);
+    expect(refund.createdAt.getTime()).toBeGreaterThanOrEqual(trade.createdAt.getTime());
+    expectLedgerChain(ledger, (await balanceOf(alice)).availableP);
+    // The void itself is stamped after the market lock, the refund after the balance lock.
+    expect(Date.parse(voided.voidedAt!)).toBeGreaterThanOrEqual(releasedMs);
+    expect(refund.createdAt.getTime()).toBeGreaterThanOrEqual(Date.parse(voided.voidedAt!));
+    expect((await balanceOf(alice)).updatedAt.getTime()).toBe(refund.createdAt.getTime());
+    expect(received.map((message) => JSON.parse(message) as Record<string, unknown>)).toEqual([
+      {
+        type: 'user:balance',
+        availableP: (SIGNUP_BONUS_P - 90n).toString(),
+        lockedP: '0',
+        ts: refund.createdAt.toISOString(),
+      },
+      {
+        type: 'user:position',
+        marketId: row.id,
+        outcome: 'YES',
+        qty: 0,
+        costBasisP: '0',
+        realizedPnlP: '0',
+        ts: voided.voidedAt,
+      },
+    ]);
   });
 
   it('voids open and resolving markets without positions, and refuses draft/settled/voided', async () => {

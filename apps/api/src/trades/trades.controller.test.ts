@@ -30,14 +30,14 @@ import {
   type TestApp,
   type TestUser,
 } from '../test/app.js';
+import { expectLedgerChain } from '../test/ledger.js';
 import { hasTestInfra } from '../test/setup-env.js';
+import { sleep, waitForLockWaiter, waitForMessages } from '../test/wait.js';
 
 type MarketRow = typeof schema.markets.$inferSelect;
 type ErrorBody = { error: { code: string; details?: { path: unknown[] }[] } };
 
 const jsonHeaders = { origin: 'http://localhost:3000', 'content-type': 'application/json' };
-
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /** The LMSR state a market row holds, exactly as the service reads it. */
 function stateOf(market: Pick<MarketRow, 'qYes' | 'qNo' | 'liquidityB'>): LmsrState {
@@ -749,6 +749,67 @@ describe.skipIf(!hasTestInfra)('trades (integration)', () => {
       expect(order?.createdAt.getTime()).toBe(fill.createdAt.getTime());
     }
     expect(dataOf(later).fill.createdAt >= dataOf(responses[0]!).fill.createdAt).toBe(true);
+  });
+
+  it('stamps a trade after the balance lock: one account keeps commit order across markets', async () => {
+    // A (this market) takes its advisory lock, then blocks on the market ROW a helper
+    // transaction holds — the window in which B (another market, same account) locks the
+    // balance row, trades and commits. A then debits the balance B left behind. Stamped
+    // before that wait, A would carry the older instant with the newer balance_after_p, and
+    // `/me/ledger` (created_at DESC) and a client keeping the newest `user:balance` by ts
+    // would both end on B's stale balance.
+    const elsewhere = await createMarket(t.db);
+    const subscriber = new Redis(process.env.TEST_REDIS_URL!, { maxRetriesPerRequest: 1 });
+    const received: string[] = [];
+    subscriber.on('message', (_channel: string, message: string) => received.push(message));
+    await subscriber.subscribe(userChannel(user.id));
+    const holder = await t.db.$client.connect();
+    let a: ReturnType<typeof buy> | undefined;
+    let committed = false;
+    try {
+      await holder.query('BEGIN');
+      await holder.query('SELECT id FROM markets WHERE id = $1 FOR UPDATE', [market.id]);
+      a = buy(market.id, 100).then((res) => res);
+      await waitForLockWaiter(holder, 'trade A on the market row');
+      expect(await ordersOf(user.id)).toHaveLength(0);
+      const b = await buy(elsewhere.id, 50);
+      expect(b.statusCode).toBe(200);
+      // The database clock just before the release: A's instant must follow it.
+      const { rows } = await holder.query<{ ms: string }>(
+        'SELECT (extract(epoch FROM clock_timestamp()) * 1000)::bigint::text AS ms',
+      );
+      const releasedMs = Number(rows[0]!.ms);
+      await holder.query('COMMIT');
+      committed = true;
+      const ra = await a;
+      expect(ra.statusCode).toBe(200);
+      await waitForMessages(received, 4, 'user events of the two trades');
+
+      const ledger = await ledgerOf(user.id);
+      const byA = ledger.find((entry) => entry.refId === dataOf(ra).fill.id);
+      const byB = ledger.find((entry) => entry.refId === dataOf(b).fill.id);
+      expect(byA).toBeDefined();
+      expect(byB).toBeDefined();
+      expect(byA!.createdAt.getTime()).toBeGreaterThanOrEqual(releasedMs);
+      expect(byA!.createdAt.getTime()).toBeGreaterThanOrEqual(byB!.createdAt.getTime());
+      expect(byA!.balanceAfterP).toBe(byB!.balanceAfterP + byA!.amountP);
+      expectLedgerChain(ledger, (await balanceOf(user.id))!.availableP);
+      expect(dataOf(ra).fill.createdAt >= dataOf(b).fill.createdAt).toBe(true);
+      expect(dataOf(ra).balance.availableP).toBe(byA!.balanceAfterP.toString());
+
+      // PLAN 8: a client that keeps the newest `user:balance` by ts ends on the true balance.
+      const balances = received
+        .map((message) => JSON.parse(message) as { type: string; availableP?: string; ts: string })
+        .filter((event) => event.type === 'user:balance');
+      expect(balances).toHaveLength(2);
+      const newest = balances.reduce((kept, event) => (event.ts >= kept.ts ? event : kept));
+      expect(newest.availableP).toBe(byA!.balanceAfterP.toString());
+    } finally {
+      if (!committed) await holder.query('ROLLBACK');
+      holder.release();
+      await a?.catch(() => undefined);
+      await subscriber.quit();
+    }
   });
 
   it('counts each account once in trader_count', async () => {

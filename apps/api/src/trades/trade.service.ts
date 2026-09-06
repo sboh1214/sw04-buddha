@@ -29,6 +29,7 @@ import { and, asc, count, desc, eq, gte, lt, or, sql } from 'drizzle-orm';
 import { assertExpectedAccount } from '../auth/expected-account.js';
 import { AppError } from '../common/errors/app-error.js';
 import { PG_UNIQUE_VIOLATION, isPgError } from '../common/errors/pg-error.js';
+import { clockTimestamp } from '../infra/db/clock.js';
 import { DB } from '../infra/db/db.provider.js';
 import { lockMarket } from '../markets/market-lock.js';
 import { MarketPublisher } from '../realtime/market-publisher.js';
@@ -218,10 +219,6 @@ export class TradeService {
     idempotencyKey: string,
   ): Promise<Executed> {
     await lockMarket(tx, body.marketId);
-    // Taken AFTER the lock: transaction-start `now()` would invert the timestamps of two
-    // trades that waited on the lock in the other order, and charts and "newest fills" would
-    // then disagree with execution order. One instant for the order, fill, ledger row and tick.
-    const executedAt = await this.clockTimestamp(tx);
 
     // Re-check under the lock: a twin that raced past the lookup in `trade` and committed
     // while this request waited is answered by replaying it, never by trading twice.
@@ -247,6 +244,40 @@ export class TradeService {
     if (market.status !== 'open') {
       throw new AppError('MARKET_NOT_OPEN', { message: `Market is ${market.status}` });
     }
+
+    // Locked for the rest of the transaction on both sides. Missing means a broken account
+    // (the "user" trigger creates the row at sign-up), like the charge's 404: no field named.
+    const [balanceBefore] = await tx
+      .select()
+      .from(schema.balances)
+      .where(eq(schema.balances.userId, userId))
+      .limit(1)
+      .for('update');
+    if (!balanceBefore) throw new AppError('NOT_FOUND', { message: 'Balance not found' });
+
+    // The position row, if any, locked too: a sell needs it now, a buy writes it below.
+    const [positionBefore] = await tx
+      .select()
+      .from(schema.positions)
+      .where(
+        and(
+          eq(schema.positions.userId, userId),
+          eq(schema.positions.marketId, market.id),
+          eq(schema.positions.outcome, body.outcome),
+        ),
+      )
+      .limit(1)
+      .for('update');
+
+    // Taken AFTER the last lock this trade can wait on, and once: one instant for the order,
+    // fill, ledger row, tick and events. Transaction-start `now()` would invert the
+    // timestamps of two trades that waited on the market lock in the other order, so charts
+    // and "newest fills" would disagree with execution order. Read before the balance lock,
+    // the same inversion happens between one account's trades on two markets: they queue on
+    // the balance row, not on a market lock, and the one that commits last would carry the
+    // older instant — `/me/ledger` would list its balance_after_p out of order and a client
+    // keeping the newest `user:balance` by ts would keep the stale one.
+    const executedAt = await clockTimestamp(tx);
     if (market.closeAt.getTime() <= executedAt.getTime()) {
       throw new AppError('MARKET_CLOSED', { message: 'Market has passed its close time' });
     }
@@ -273,30 +304,6 @@ export class TradeService {
         message: `Proceeds are now ${quote.amountP.toString()} P, below minProceedsP`,
       });
     }
-
-    // Locked for the rest of the transaction on both sides. Missing means a broken account
-    // (the "user" trigger creates the row at sign-up), like the charge's 404: no field named.
-    const [balanceBefore] = await tx
-      .select()
-      .from(schema.balances)
-      .where(eq(schema.balances.userId, userId))
-      .limit(1)
-      .for('update');
-    if (!balanceBefore) throw new AppError('NOT_FOUND', { message: 'Balance not found' });
-
-    // The position row, if any, locked too: a sell needs it now, a buy writes it below.
-    const [positionBefore] = await tx
-      .select()
-      .from(schema.positions)
-      .where(
-        and(
-          eq(schema.positions.userId, userId),
-          eq(schema.positions.marketId, market.id),
-          eq(schema.positions.outcome, body.outcome),
-        ),
-      )
-      .limit(1)
-      .for('update');
 
     let balance: BalanceRow;
     if (body.side === 'buy') {
@@ -527,23 +534,6 @@ export class TradeService {
         },
       ],
     };
-  }
-
-  /**
-   * `clock_timestamp()` as the database sees it right now (not the transaction start), at
-   * the millisecond precision every timestamptz column is declared with — as epoch millis,
-   * so no driver-side date parser is involved.
-   */
-  private async clockTimestamp(tx: Tx): Promise<Date> {
-    const result = await tx.execute(
-      sql`SELECT (extract(epoch FROM clock_timestamp()) * 1000)::bigint::text AS ms`,
-    );
-    const rows = (result as { rows?: { ms?: unknown }[] }).rows;
-    const ms = Number(rows?.[0]?.ms);
-    if (!Number.isSafeInteger(ms)) {
-      throw new AppError('INTERNAL', { message: 'clock_timestamp() returned no value' });
-    }
-    return new Date(ms);
   }
 
   private async orderByKey(userId: string, idempotencyKey: string): Promise<OrderRow | undefined> {

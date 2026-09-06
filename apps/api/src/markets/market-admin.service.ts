@@ -23,6 +23,7 @@ import {
 import { and, asc, desc, eq, lt, or, sql } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
 import { PG_UNIQUE_VIOLATION, isPgError } from '../common/errors/pg-error.js';
+import { clockTimestamp } from '../infra/db/clock.js';
 import { DB } from '../infra/db/db.provider.js';
 import { MarketPublisher } from '../realtime/market-publisher.js';
 import { toBalance, type Page } from '../wallet/wallet.service.js';
@@ -418,13 +419,15 @@ export class MarketAdminService {
    * (user_id, outcome) order — the same order finalize will use — so two settlements touching
    * one user's balance cannot deadlock. The refund is not bounded by `reserve_p`: it returns
    * what was paid, and earlier sells may already have realised part of it (ADR-0027).
+   *
+   * Instants come from the database clock after the locks, as in a trade: the void's own
+   * after the market lock, each refund's after that account's balance lock (see clock.ts).
    */
   async void(adminId: string, id: string, body: VoidMarketBody): Promise<AdminMarket> {
     const { market, refunds } = await this.db.transaction(async (tx) => {
       await lockMarket(tx, id);
       const current = await this.lockedRow(tx, id);
       if (!VOIDABLE_STATUSES.has(current.status)) throw wrongStatus(current.status);
-      const now = new Date();
 
       const holders = await tx
         .select()
@@ -432,6 +435,9 @@ export class MarketAdminService {
         .where(and(eq(schema.positions.marketId, id), eq(schema.positions.settled, false)))
         .orderBy(asc(schema.positions.userId), asc(schema.positions.outcome))
         .for('update');
+      // After the last lock the void as a whole can wait on (the rows above never do: they
+      // are only ever written under this market's lock, but the rule holds mechanically).
+      const now = await clockTimestamp(tx);
 
       const refunds: VoidRefund[] = [];
       const refundedAccounts = new Set<string>();
@@ -440,11 +446,28 @@ export class MarketAdminService {
         const after = voidRefund(position);
         let balance: BalanceRow | undefined;
         if (after.refundP > 0n) {
+          // The balance row first, then the clock: a trade or charge of this account may have
+          // committed while this transaction waited (on the market lock, or on this very row),
+          // and the refund's ledger row must sort after it. Left to the column default, the
+          // row would carry transaction-start `now()` — older than that trade although its
+          // balance_after_p already includes it — and `/me/ledger` would show them inverted.
+          const [locked] = await tx
+            .select({ userId: schema.balances.userId })
+            .from(schema.balances)
+            .where(eq(schema.balances.userId, position.userId))
+            .limit(1)
+            .for('update');
+          if (!locked) {
+            throw new AppError('NOT_FOUND', {
+              message: `Balance not found for account ${position.userId}`,
+            });
+          }
+          const refundedAt = await clockTimestamp(tx);
           [balance] = await tx
             .update(schema.balances)
             .set({
               availableP: sql`${schema.balances.availableP} + ${after.refundP}`,
-              updatedAt: now,
+              updatedAt: refundedAt,
             })
             .where(eq(schema.balances.userId, position.userId))
             .returning();
@@ -461,6 +484,7 @@ export class MarketAdminService {
             refType: 'market',
             refId: id,
             memo: `무효 환불: ${current.title}`,
+            createdAt: refundedAt,
           });
           refundedAccounts.add(position.userId);
           refundedP += after.refundP;
@@ -516,7 +540,13 @@ export class MarketAdminService {
     }
     const events: [string, UserRealtimeEvent][] = [];
     for (const [userId, balance] of balances) {
-      events.push([userId, { type: 'user:balance', ...toBalance(balance), ts }]);
+      // Stamped with the account's own refund instant (its `updated_at`), not the void's: a
+      // trade of this account elsewhere may sit between the two, and a client that keeps the
+      // newest `user:balance` by ts must keep this one.
+      events.push([
+        userId,
+        { type: 'user:balance', ...toBalance(balance), ts: balance.updatedAt.toISOString() },
+      ]);
     }
     for (const { position } of refunds) {
       events.push([

@@ -1,9 +1,5 @@
 import { sql } from 'drizzle-orm';
-
-/** Anything that can run a statement inside the current transaction (a drizzle `tx`). */
-export interface LockExecutor {
-  execute(query: ReturnType<typeof sql>): Promise<unknown>;
-}
+import type { StatementExecutor } from '../infra/db/clock.js';
 
 /**
  * Serialises every writer of one market (PLAN 0.2): trades, open, close and void all take
@@ -15,6 +11,6 @@ export interface LockExecutor {
  * Always call this on the transaction handle (`tx`), never on the pooled `db`: a session-level
  * call on a pooled connection would lock some other connection than the one doing the work.
  */
-export async function lockMarket(tx: LockExecutor, marketId: string): Promise<void> {
+export async function lockMarket(tx: StatementExecutor, marketId: string): Promise<void> {
   await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${marketId}))`);
 }
