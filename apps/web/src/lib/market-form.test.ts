@@ -275,6 +275,25 @@ const market: AdminMarket = {
   events: [],
 };
 
+describe('marketFormSchema rulesRequired', () => {
+  it('requires rules only for the edit form of an open market', () => {
+    const blank = { ...valid, rules: '   ' };
+    expect(marketFormSchema({ now }).safeParse(blank).success).toBe(true);
+    const refused = marketFormSchema({ now, rulesRequired: true }).safeParse(blank);
+    expect(refused.success).toBe(false);
+    expect(messages(refused)).toEqual([copy.errMarketRulesOpen]);
+    expect(marketFormSchema({ now, rulesRequired: true }).safeParse(valid).success).toBe(true);
+  });
+
+  it('does not exempt untouched blank rules on an open market', () => {
+    // Unlike closeAt: an open market without rules is an anomaly to fix, not a state to keep.
+    const original = { ...valid, rules: '' };
+    const refused = marketFormSchema({ now, original, rulesRequired: true }).safeParse(original);
+    expect(refused.success).toBe(false);
+    expect(messages(refused)).toEqual([copy.errMarketRulesOpen]);
+  });
+});
+
 /**
  * The edit form's reset policies, run against react-hook-form's form control without a DOM
  * (what `useForm` wraps): the `values` prop resets under FOLLOW_SERVER_RESET, a save resets

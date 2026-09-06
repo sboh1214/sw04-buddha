@@ -269,6 +269,10 @@ export function marketFormError(
   error: unknown,
 ): { field: MarketFormField; message: string } | undefined {
   if (!isApiError(error)) return undefined;
+  // A PATCH that would blank the rules of an open market: the API's RULES_REQUIRED names
+  // `rules`, and the field is where the admin can fix it.
+  if (isApiError(error, 'RULES_REQUIRED'))
+    return { field: 'rules', message: copy.errMarketRulesOpen };
   if (!isApiError(error, 'VALIDATION_ERROR') && !isApiError(error, 'NOT_FOUND')) return undefined;
   const named = validationField(error);
   if (named === undefined) return undefined;

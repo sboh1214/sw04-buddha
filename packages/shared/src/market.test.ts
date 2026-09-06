@@ -10,6 +10,7 @@ import {
 import {
   MARKET_SORTS,
   PUBLIC_MARKET_STATUSES,
+  QUOTE_VALUE_MAX_LENGTH,
   adminMarketListQuerySchema,
   adminMarketSchema,
   categorySchema,
@@ -288,6 +289,18 @@ describe('quoteBodySchema', () => {
     });
     expect(result.success).toBe(false);
     expect(issuePaths(result)).toEqual(['mode']);
+  });
+
+  it('bounds value to the digits of MAX_P_AMOUNT before the range refine parses it', () => {
+    // The route is public: a body-sized run of digits must be refused for its length, never
+    // handed to BigInt(). The longest valid value is MAX_P_AMOUNT itself.
+    expect(QUOTE_VALUE_MAX_LENGTH).toBe(MAX_P_AMOUNT.toString().length);
+    for (const value of [`1${MAX_P_AMOUNT.toString()}`, '7'.repeat(200_000)]) {
+      const result = quoteBodySchema.safeParse({ ...base, mode: 'spend', value });
+      expect(result.success).toBe(false);
+      expect(issuePaths(result)).toEqual(['value']);
+      expect(result.error?.issues[0]?.code).toBe('too_big');
+    }
   });
 
   it('refuses a value outside the mode range, naming value', () => {

@@ -35,7 +35,9 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const NUL = String.fromCharCode(0);
 
 type ListPage = { data: MarketSummary[]; meta: { nextCursor: string | null } };
-type ErrorBody = { error: { code: string; details?: { path: (string | number)[] }[] } };
+type ErrorBody = {
+  error: { code: string; message: string; details?: { path: (string | number)[] }[] };
+};
 
 describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
   let t: TestApp;
@@ -374,6 +376,34 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     expect(refused.statusCode).toBe(400);
     expect(detailPath(refused)).toEqual(['status']);
     expect(errorOf(refused)).toMatchObject({ message: 'Market is closed' });
+  });
+
+  it('keeps an open market from being edited down to blank rules (RULES_REQUIRED)', async () => {
+    // What open() required holds for as long as the market trades; a draft may still be
+    // saved with blank rules (it cannot open that way).
+    const row = await market({ status: 'open', rules: '한국은행 발표 기준.' });
+    for (const rules of ['', '   ']) {
+      const res = await patch(`/api/v1/admin/markets/${row.id}`, { rules });
+      expect({ rules, status: res.statusCode }).toEqual({ rules, status: 422 });
+      expect(errorOf(res).code).toBe('RULES_REQUIRED');
+      expect(errorOf(res).message).toBe('Rules cannot be blank while the market is open');
+      expect(detailPath(res)).toEqual(['rules']);
+    }
+    // Refused before anything is written, whatever else the body carries.
+    const withTitle = await patch(`/api/v1/admin/markets/${row.id}`, {
+      title: '새 제목',
+      rules: '',
+    });
+    expect(withTitle.statusCode).toBe(422);
+    expect((await marketRow(row.id)).title).toBe(row.title);
+    expect((await marketRow(row.id)).rules).toBe('한국은행 발표 기준.');
+    expect(await actionsFor(row.id)).toHaveLength(0);
+    expect(detail(await get(`/api/v1/admin/markets/${row.id}`)).events).toHaveLength(0);
+
+    const draft = await market({ status: 'draft', rules: '초안 규칙' });
+    const blanked = await patch(`/api/v1/admin/markets/${draft.id}`, { rules: '' });
+    expect(blanked.statusCode).toBe(200);
+    expect(detail(blanked).rules).toBe('');
   });
 
   // --- open / close ---------------------------------------------------------------------

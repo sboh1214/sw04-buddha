@@ -416,8 +416,12 @@ function EditMarketCard({ market }: { market: AdminMarket }) {
 function EditMarketForm({ market, categories }: { market: AdminMarket; categories: Category[] }) {
   const invalidate = useInvalidateMarket(market.id);
   const original = useMemo(() => marketToFormValues(market, categories), [market, categories]);
-  const schema = useMemo(() => marketFormSchema({ original }), [original]);
   const editable = isEditable(market.status);
+  const rulesRequired = market.status === 'open';
+  const schema = useMemo(
+    () => marketFormSchema({ original, rulesRequired }),
+    [original, rulesRequired],
+  );
   const [pending, setPending] = useState<UpdateMarketBody | null>(null);
 
   // `values` follows the server: react-hook-form deep-compares it with what it last applied,

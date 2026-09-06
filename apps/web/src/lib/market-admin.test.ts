@@ -177,6 +177,18 @@ describe('marketEventRows', () => {
   });
 });
 
+describe('marketFormError for RULES_REQUIRED', () => {
+  it('puts the refusal of blank rules on an open market under the rules field', () => {
+    const error = apiError(
+      422,
+      'RULES_REQUIRED',
+      'Rules cannot be blank while the market is open',
+      [{ path: ['rules'], message: 'required' }],
+    );
+    expect(marketFormError(error)).toEqual({ field: 'rules', message: copy.errMarketRulesOpen });
+  });
+});
+
 describe('isMarketId', () => {
   it('accepts only what the uuid path param of the API accepts', () => {
     expect(isMarketId('3f2504e0-4f89-11d3-9a0c-0305e82c3301')).toBe(true);

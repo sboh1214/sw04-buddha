@@ -1774,7 +1774,8 @@
             "schema": {
               "type": "string",
               "minLength": 1,
-              "maxLength": 80
+              "maxLength": 80,
+              "description": "A market id (uuid) or slug; a slug is NFC-normalised before the 80-character bound, so a decomposed spelling may be longer on the wire"
             }
           }
         ],
@@ -2458,6 +2459,16 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "RULES_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -2465,7 +2476,7 @@
             "session": []
           }
         ],
-        "summary": "Edit a draft (any field) or an open market (text, close time, category; liquidityB/initialProbBp/slug refused naming the field); other statuses refuse naming status",
+        "summary": "Edit a draft (any field) or an open market (text, close time, category; liquidityB/initialProbBp/slug refused naming the field, blank rules refused with RULES_REQUIRED); other statuses refuse naming status",
         "tags": [
           "admin"
         ]
@@ -3320,6 +3331,7 @@
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
           },
           "expectedAmountP": {
+            "maxLength": 17,
             "allOf": [
               {
                 "$ref": "#/components/schemas/PAmount"
@@ -3578,6 +3590,7 @@
         "type": "object",
         "properties": {
           "amountP": {
+            "maxLength": 17,
             "allOf": [
               {
                 "$ref": "#/components/schemas/PAmount"
@@ -3610,6 +3623,7 @@
         "type": "object",
         "properties": {
           "amountP": {
+            "maxLength": 17,
             "allOf": [
               {
                 "$ref": "#/components/schemas/PAmount"
@@ -3701,6 +3715,7 @@
             ]
           },
           "amountP": {
+            "maxLength": 17,
             "allOf": [
               {
                 "$ref": "#/components/schemas/PAmount"
@@ -3821,6 +3836,7 @@
         "type": "object",
         "properties": {
           "amountP": {
+            "maxLength": 17,
             "allOf": [
               {
                 "$ref": "#/components/schemas/PAmount"
@@ -4347,6 +4363,7 @@
           },
           "value": {
             "type": "string",
+            "maxLength": 16,
             "pattern": "^(0|[1-9]\\d*)$"
           }
         },
@@ -4816,6 +4833,7 @@
             "maximum": 1000000
           },
           "maxCostP": {
+            "maxLength": 17,
             "allOf": [
               {
                 "$ref": "#/components/schemas/PAmount"
@@ -4823,6 +4841,7 @@
             ]
           },
           "minProceedsP": {
+            "maxLength": 17,
             "allOf": [
               {
                 "$ref": "#/components/schemas/PAmount"

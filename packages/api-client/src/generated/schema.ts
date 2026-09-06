@@ -123,7 +123,7 @@ export type paths = {
         delete?: never;
         options?: never;
         head?: never;
-        /** Edit a draft (any field) or an open market (text, close time, category; liquidityB/initialProbBp/slug refused naming the field); other statuses refuse naming status */
+        /** Edit a draft (any field) or an open market (text, close time, category; liquidityB/initialProbBp/slug refused naming the field, blank rules refused with RULES_REQUIRED); other statuses refuse naming status */
         patch: operations["adminUpdateMarket"];
         trace?: never;
     };
@@ -1669,6 +1669,15 @@ export interface operations {
             };
             /** @description NOT_FOUND */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RULES_REQUIRED */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

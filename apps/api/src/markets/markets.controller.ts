@@ -31,10 +31,20 @@ import { MarketService } from './market.service.js';
 import { QuoteService } from './quote.service.js';
 
 /**
- * `GET /markets/:idOrSlug` takes either a uuid or a slug (at most MARKET_SLUG_MAX
- * characters, like the column); anything longer is malformed, not merely unknown.
+ * `GET /markets/:idOrSlug` takes either a uuid or a slug. The slug is NFC-normalised before
+ * its length is checked — a decomposed (NFD) spelling of a Korean slug carries two or three
+ * code units per syllable — so every stored slug (MARKET_SLUG_MAX characters at most, like
+ * the column) is reachable in either spelling; anything longer once normalised is malformed,
+ * not merely unknown. The router's own parameter bound is raised to match (fastify-options).
  */
-const idOrSlugParamSchema = z.string().min(1).max(MARKET_SLUG_MAX);
+const idOrSlugParamSchema = z
+  .string()
+  .min(1)
+  .normalize('NFC')
+  .max(MARKET_SLUG_MAX)
+  .describe(
+    `A market id (uuid) or slug; a slug is NFC-normalised before the ${String(MARKET_SLUG_MAX)}-character bound, so a decomposed spelling may be longer on the wire`,
+  );
 
 // Query parameters: `marketListQuerySchema` and `ticksQuerySchema` carry no `.meta({ id })`,
 // and @nestjs/swagger 12 expands such a `@Query({ schema })` object into one parameter per

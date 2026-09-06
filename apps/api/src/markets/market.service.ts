@@ -201,7 +201,9 @@ export class MarketService {
   async getPublic(idOrSlug: string): Promise<Market> {
     const { markets, categories } = schema;
     // The id branch goes through the schema's value, not just its verdict: lower-cased like
-    // every request-supplied uuid (api/uuid.ts), so the row is read by its canonical id.
+    // every request-supplied uuid (api/uuid.ts), so the row is read by its canonical id. The
+    // slug arrives NFC from the route schema already and is normalised again below, so the
+    // invariant holds for a caller that bypasses the pipe (an M4 subscription, say).
     const parsedId = uuidParamSchema.safeParse(idOrSlug);
     const [row] = await this.db
       .select(marketWithCategory)

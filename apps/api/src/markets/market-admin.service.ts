@@ -95,6 +95,14 @@ function wrongStatus(status: MarketStatus): AppError {
   return fieldError('status', `Market is ${status}`, `market is ${status}`);
 }
 
+/** PLAN 12: a market trades against its rules, so it cannot open — or stay open — without them. */
+function rulesRequired(message: string): AppError {
+  return new AppError('RULES_REQUIRED', {
+    message,
+    details: [{ path: ['rules'], message: 'required' }],
+  });
+}
+
 function assertFutureCloseAt(closeAt: Date, now: Date): void {
   if (closeAt.getTime() <= now.getTime()) {
     throw fieldError('closeAt', 'closeAt must be in the future', 'must be in the future');
@@ -257,6 +265,11 @@ export class MarketAdminService {
             );
           }
         }
+        // What open() required must hold for as long as the market trades: a draft may keep
+        // blank rules, a live market may not be edited down to none.
+        if (body.rules !== undefined && body.rules.trim() === '') {
+          throw rulesRequired('Rules cannot be blank while the market is open');
+        }
       } else if (current.status !== 'draft') {
         throw wrongStatus(current.status);
       }
@@ -338,10 +351,7 @@ export class MarketAdminService {
       const current = await this.lockedRow(tx, id);
       if (current.status !== 'draft') throw wrongStatus(current.status);
       if (current.rules.trim() === '') {
-        throw new AppError('RULES_REQUIRED', {
-          message: 'Rules are required before a market opens',
-          details: [{ path: ['rules'], message: 'required' }],
-        });
+        throw rulesRequired('Rules are required before a market opens');
       }
       const now = new Date();
       assertFutureCloseAt(current.closeAt, now);

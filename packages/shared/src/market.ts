@@ -149,6 +149,13 @@ export const quoteModeSchema = z.enum(QUOTE_MODES);
 const INTEGER_STRING = /^(0|[1-9]\d*)$/;
 
 /**
+ * The digits of MAX_P_AMOUNT (10^15): no valid `value` is longer in either mode, and the
+ * bound runs before the range refine turns the string into a BigInt — `POST /quotes` is
+ * public, and parsing a body-sized run of digits costs real CPU on the request thread.
+ */
+export const QUOTE_VALUE_MAX_LENGTH = MAX_P_AMOUNT.toString().length;
+
+/**
  * `POST /quotes` (PLAN 7.1). `value` is an integer string: contracts in mode 'shares'
  * (1..ORDER_QTY_MAX), P to spend in mode 'spend' (≥ 1). A spend quote only makes sense for
  * a buy — "sell for at most N P" has no answer — so spend + sell is refused naming `mode`.
@@ -159,7 +166,10 @@ export const quoteBodySchema = z
     outcome: outcomeSchema,
     side: orderSideSchema,
     mode: quoteModeSchema,
-    value: z.string().regex(INTEGER_STRING, 'must be a non-negative integer string'),
+    value: z
+      .string()
+      .max(QUOTE_VALUE_MAX_LENGTH, `must be at most ${String(QUOTE_VALUE_MAX_LENGTH)} digits`)
+      .regex(INTEGER_STRING, 'must be a non-negative integer string'),
   })
   .refine((body) => !(body.mode === 'spend' && body.side === 'sell'), {
     message: 'spend quotes are only available for buys',
@@ -167,9 +177,12 @@ export const quoteBodySchema = z
   })
   .refine(
     (body) => {
-      // A failed field regex is a non-aborting issue in zod 4, so this refine still runs on
-      // the raw string: skip it then, or BigInt('1.5') would throw out of safeParse.
-      if (!INTEGER_STRING.test(body.value)) return true;
+      // A failed field check is a non-aborting issue in zod 4, so this refine still runs on
+      // the raw string: skip it then, or BigInt('1.5') would throw out of safeParse and an
+      // over-long string would be parsed after all.
+      if (body.value.length > QUOTE_VALUE_MAX_LENGTH || !INTEGER_STRING.test(body.value)) {
+        return true;
+      }
       return body.mode === 'spend'
         ? BigInt(body.value) >= 1n && BigInt(body.value) <= MAX_P_AMOUNT
         : Number(body.value) >= TRADE_MIN_SHARES && Number(body.value) <= ORDER_QTY_MAX;

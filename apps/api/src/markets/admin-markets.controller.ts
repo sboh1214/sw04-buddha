@@ -94,10 +94,11 @@ export class AdminMarketsController {
     operationId: 'adminUpdateMarket',
     summary:
       'Edit a draft (any field) or an open market (text, close time, category; ' +
-      'liquidityB/initialProbBp/slug refused naming the field); other statuses refuse naming status',
+      'liquidityB/initialProbBp/slug refused naming the field, blank rules refused with ' +
+      'RULES_REQUIRED); other statuses refuse naming status',
   })
   @ApiData(adminMarketSchema)
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR', 'RULES_REQUIRED')
   adminUpdateMarket(
     @CurrentUser() admin: SessionUser,
     @Param('id', { schema: uuidParamSchema }) id: string,

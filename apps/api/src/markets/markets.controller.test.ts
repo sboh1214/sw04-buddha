@@ -7,6 +7,7 @@ import { schema } from '@buddha/db';
 import { createCategory, createMarket, createUser } from '@buddha/db/test';
 import {
   FILLS_RECENT_LIMIT,
+  MARKET_SLUG_MAX,
   TICKS_MAX_POINTS,
   type Fill,
   type Market,
@@ -16,6 +17,7 @@ import {
 } from '@buddha/shared';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { MAX_PARAM_LENGTH } from '../infra/http/fastify-options.js';
 import { createTestApp, type TestApp } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
 
@@ -249,6 +251,28 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     const byNfd = await get(`/api/v1/markets/${encodeURIComponent(nfd)}`);
     expect(byNfd.statusCode).toBe(200);
     expect(byNfd.json<{ data: Market }>().data.id).toBe(open.id);
+
+    // The longest slug the column takes, spelled decomposed: 힣 is three code units in NFD
+    // (ᄒ ᅵ ᇂ), the most a syllable can be, so the parameter is normalised before its length
+    // is checked and the router's own bound (MAX_PARAM_LENGTH) is sized for it. Composed, it
+    // is at the limit and also found.
+    const longSlug = `${'힣'.repeat(MARKET_SLUG_MAX - 5)}-2026`;
+    expect(longSlug).toHaveLength(MARKET_SLUG_MAX);
+    const long = await market({ slug: longSlug, title: '긴 slug' });
+    const longNfd = longSlug.normalize('NFD');
+    expect(longNfd).toHaveLength(MARKET_SLUG_MAX * 3 - 10);
+    for (const spelling of [longSlug, longNfd]) {
+      const res = await get(`/api/v1/markets/${encodeURIComponent(spelling)}`);
+      expect({ length: spelling.length, status: res.statusCode }).toEqual({
+        length: spelling.length,
+        status: 200,
+      });
+      expect(res.json<{ data: Market }>().data.id).toBe(long.id);
+    }
+    // The router's bound, pinned: at it the schema answers (400, an over-long NFC slug);
+    // past it Fastify itself refuses the parameter before any handler runs.
+    expect((await get(`/api/v1/markets/${'a'.repeat(MAX_PARAM_LENGTH)}`)).statusCode).toBe(400);
+    expect((await get(`/api/v1/markets/${'a'.repeat(MAX_PARAM_LENGTH + 1)}`)).statusCode).toBe(414);
 
     for (const url of [
       `/api/v1/markets/${draft.id}`,

@@ -80,16 +80,23 @@ const CATEGORY_ID_PATTERN = /^\d+$/;
  * title fixed (the PATCH body omits an unchanged `closeAt`, and the API checks only what is
  * sent). A category prefilled as '' — retired since the market was made — is exempt the same
  * way while it stays untouched: `toUpdateMarketBody` never sends the blank, and the API
- * accepts a PATCH without `categoryId`. `now` is injectable for tests.
+ * accepts a PATCH without `categoryId`. `rulesRequired` is the edit form of an open market:
+ * a draft may be saved with blank rules, a live market may not be edited down to none (the
+ * API refuses that with RULES_REQUIRED). Unlike `closeAt`, an untouched blank is not exempt
+ * there — an open market without rules is an anomaly the admin must fix before saving
+ * anything else. `now` is injectable for tests.
  */
 export function marketFormSchema(
-  options: { original?: MarketFormValues; now?: () => number } = {},
+  options: { original?: MarketFormValues; now?: () => number; rulesRequired?: boolean } = {},
 ) {
   const now = options.now ?? Date.now;
+  const rules = options.rulesRequired
+    ? z.string().trim().min(1, copy.errMarketRulesOpen)
+    : z.string().trim();
   return z.object({
     title: z.string().trim().min(1, copy.errMarketTitle).max(MARKET_TITLE_MAX, copy.errMarketTitle),
     description: z.string().trim().max(MARKET_TEXT_MAX, copy.errMarketText),
-    rules: z.string().trim().max(MARKET_TEXT_MAX, copy.errMarketText),
+    rules: rules.max(MARKET_TEXT_MAX, copy.errMarketText),
     resolutionSource: z.string().trim().max(MARKET_SOURCE_MAX, copy.errMarketSource),
     categoryId: z
       .string()

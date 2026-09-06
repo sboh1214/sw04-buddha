@@ -357,6 +357,7 @@ export const copy = {
   errMarketInvalid: '입력값을 확인해 주세요.',
   errMarketVoidReason: '사유를 1~500자로 입력해 주세요.',
   errMarketRulesRequired: '정산 기준을 채워야 시장을 열 수 있습니다.',
+  errMarketRulesOpen: '열린 시장의 정산 기준은 비울 수 없습니다.',
   errMarketNotOpen: '진행 중인 시장이 아닙니다. 화면을 새로 고쳐 주세요.',
   errMarketStatus: '지금 상태에서는 할 수 없는 작업입니다. 화면을 새로 고쳐 주세요.',
 

@@ -5,6 +5,7 @@
  */
 import { createCategory, createMarket, createUser } from '@buddha/db/test';
 import {
+  MAX_P_AMOUNT,
   ORDER_QTY_MAX,
   quoteBuy,
   quoteSell,
@@ -184,6 +185,25 @@ describe.skipIf(!hasTestInfra)('quotes (integration)', () => {
     }
     expect((await quote({ ...base, side: 'buy', mode: 'spend', value: '0' })).statusCode).toBe(400);
     expect((await quote({ marketId: 'nope' })).statusCode).toBe(400);
+  });
+
+  it('refuses an over-long value at the schema, before anything is parsed as a BigInt', async () => {
+    // The route is public and unauthenticated: a body-sized run of digits used to pass the
+    // integer pattern and be parsed twice on the request thread before the range check
+    // refused it. Bounded to the digits of MAX_P_AMOUNT, it is refused as too long instead.
+    const row = await market();
+    const base = { marketId: row.id, outcome: 'YES', side: 'buy', mode: 'spend' };
+    const longest = MAX_P_AMOUNT.toString();
+    expect((await quote({ ...base, value: longest })).statusCode).toBe(200);
+    for (const value of [`1${longest}`, '7'.repeat(300_000)]) {
+      const res = await quote({ ...base, value });
+      expect(res.statusCode).toBe(400);
+      const details = res.json<{ error: { details: { path: string[]; message: string }[] } }>()
+        .error.details;
+      expect(
+        details.some((issue) => issue.path[0] === 'value' && /at most/.test(issue.message)),
+      ).toBe(true);
+    }
   });
 
   it('answers MARKET_NOT_OPEN, MARKET_CLOSED or NOT_FOUND for a market not taking orders', async () => {
