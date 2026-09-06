@@ -25,14 +25,40 @@ function describeError(err: Error & { code?: string }): string {
  * in order, so a reply that arrives late lands on the entry that already timed out and the
  * queue stays aligned — a spurious timeout costs nothing. Every consumer degrades on the
  * rejection: the publisher logs, the role cache falls back to Postgres, the health probe
- * reports `error`. Recovering the connection from a Redis that stays silent (`socketTimeout`)
- * is a separate decision (Q-M3-7): it must be paired with `autoResendUnfulfilledCommands:
- * false`, or the reconnect re-sends the PUBLISHes that already timed out.
+ * reports `error`.
+ *
+ * It does not, however, free the command: `Command.setTimeout` only settles the promise, and
+ * the queue entry — which holds the serialized event — leaves `commandQueue` only when a
+ * reply arrives or the socket closes. On a connection that answered the handshake and then
+ * went silent, every later publish adds one more, so `socketTimeout` below is what bounds it.
  */
 export const REDIS_COMMAND_TIMEOUT_MS = 2_000;
 
+/**
+ * Upper bound on silence (ms) on a connection that has a command outstanding — the answer to
+ * Q-M3-7. ioredis arms this only while `commandQueue` is non-empty and clears it on any
+ * inbound byte, so it is not an idle timer: an idle client, and a subscriber waiting for
+ * messages, never arm it. When it fires the socket is destroyed and the client reconnects,
+ * which is what drops the retained entries.
+ *
+ * Twice `REDIS_COMMAND_TIMEOUT_MS`, and it must stay strictly greater: a merely slow reply
+ * has to fail on the caller's own bound and leave the connection up, so the socket goes only
+ * when nothing at all has arrived for twice that.
+ *
+ * `autoResendUnfulfilledCommands: false` is part of the same decision, not a separate knob.
+ * The default re-sends the queue on reconnect, which would republish events that already
+ * timed out (`market:trade` has no ordering key a client could use to drop a duplicate).
+ * With it false, ioredis DROPS those entries rather than rejecting them — despite what the
+ * option's own docstring says, `socketTimeout` settles nothing — so `commandTimeout` must
+ * stay set on every client this factory builds, or a caller could wait forever.
+ */
+export const REDIS_SOCKET_TIMEOUT_MS = 4_000;
+
 /** The shared client's options; exported so a test can build one against a mock server. */
-export function createRedisClient(url: string, options: { commandTimeoutMs?: number } = {}): Redis {
+export function createRedisClient(
+  url: string,
+  options: { commandTimeoutMs?: number; socketTimeoutMs?: number } = {},
+): Redis {
   const logger = new Logger('Redis');
   const redis = new Redis(url, {
     // Fail commands fast when the server is unreachable instead of queueing
@@ -40,6 +66,8 @@ export function createRedisClient(url: string, options: { commandTimeoutMs?: num
     maxRetriesPerRequest: 1,
     connectTimeout: 5_000,
     commandTimeout: options.commandTimeoutMs ?? REDIS_COMMAND_TIMEOUT_MS,
+    socketTimeout: options.socketTimeoutMs ?? REDIS_SOCKET_TIMEOUT_MS,
+    autoResendUnfulfilledCommands: false,
     retryStrategy: (times) => Math.min(times * 200, 2_000),
   });
   // ioredis emits 'error' on every failed (re)connect; without a listener it

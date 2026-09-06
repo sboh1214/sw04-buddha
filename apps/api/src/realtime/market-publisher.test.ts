@@ -10,10 +10,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   REDIS,
   REDIS_COMMAND_TIMEOUT_MS,
+  REDIS_SOCKET_TIMEOUT_MS,
   createRedisClient,
 } from '../infra/redis/redis.provider.js';
 import { createTestApp, type TestApp } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
+import { sleep } from '../test/wait.js';
 import { MarketPublisher } from './market-publisher.js';
 
 const MARKET_ID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
@@ -51,11 +53,14 @@ function parseResp(buffer: Buffer): { commands: string[][]; rest: Buffer } {
 function listenStalledRedis(): Promise<{
   port: number;
   publishes: string[];
+  connections: () => number;
   close(): Promise<void>;
 }> {
   const publishes: string[] = [];
   const sockets = new Set<Socket>();
+  let connections = 0;
   const server = createServer((socket) => {
+    connections += 1;
     sockets.add(socket);
     socket.on('close', () => sockets.delete(socket));
     socket.on('error', () => undefined);
@@ -79,6 +84,7 @@ function listenStalledRedis(): Promise<{
       resolve({
         port: (server.address() as AddressInfo).port,
         publishes,
+        connections: () => connections,
         close: () =>
           new Promise((done) => {
             for (const socket of sockets) socket.destroy();
@@ -87,6 +93,14 @@ function listenStalledRedis(): Promise<{
       }),
     ),
   );
+}
+
+/**
+ * One client event as a promise. Not `events.once`: ioredis emits `error` on every failed
+ * (re)connect, which `events.once` turns into a rejection.
+ */
+function nextEvent(client: Redis, event: 'ready' | 'close'): Promise<void> {
+  return new Promise((resolve) => client.once(event, () => resolve()));
 }
 
 describe.skipIf(!hasTestInfra)('MarketPublisher (integration)', () => {
@@ -176,7 +190,10 @@ describe.skipIf(!hasTestInfra)('MarketPublisher (integration)', () => {
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const { port } = server.address() as AddressInfo;
     const stalled = createRedisClient(`redis://127.0.0.1:${String(port)}`, {
+      // Long enough that this test measures `commandTimeout` alone: the socket bound is the
+      // next test's subject.
       commandTimeoutMs: 300,
+      socketTimeoutMs: 5_000,
     });
     const publisher = new MarketPublisher(stalled);
     const started = Date.now();
@@ -208,6 +225,7 @@ describe.skipIf(!hasTestInfra)('MarketPublisher (integration)', () => {
     const server = await listenStalledRedis();
     const stalled = createRedisClient(`redis://127.0.0.1:${String(server.port)}`, {
       commandTimeoutMs: 300,
+      socketTimeoutMs: 5_000,
     });
     try {
       await new Promise<void>((resolve) => stalled.once('ready', resolve));
@@ -254,5 +272,86 @@ describe.skipIf(!hasTestInfra)('MarketPublisher (integration)', () => {
       stalled.disconnect();
       await server.close();
     }
+  });
+
+  it('drops the stalled backlog by closing the socket, and does not republish it', async () => {
+    // `commandTimeout` frees the caller but not the queue entry: it leaves `commandQueue`
+    // only when a reply arrives or the socket closes, so on a connection that answered the
+    // handshake and then went silent every later publish added one more (each holding its
+    // event). `socketTimeout` closes such a connection, and `autoResendUnfulfilledCommands:
+    // false` is the other half of that decision — the default replays the timed-out
+    // PUBLISHes on the new socket, and `market:trade` has no key a client could dedupe with.
+    const server = await listenStalledRedis();
+    const stalled = createRedisClient(`redis://127.0.0.1:${String(server.port)}`, {
+      commandTimeoutMs: 200,
+      socketTimeoutMs: 600,
+    });
+    try {
+      await nextEvent(stalled, 'ready');
+      const publisher = new MarketPublisher(stalled);
+      const ts = new Date().toISOString();
+      // One trade's worth of events, issued the way the services issue them.
+      await Promise.all([
+        publisher.publishMarket(MARKET_ID, {
+          type: 'market:tick',
+          marketId: MARKET_ID,
+          pYesBp: 5200,
+          lastPrice: 52,
+          volumeP: '5125',
+          tradeCount: 1,
+          ts,
+        }),
+        publisher.publishMarket(MARKET_ID, {
+          type: 'market:trade',
+          marketId: MARKET_ID,
+          fillId: '7',
+          outcome: 'YES',
+          side: 'buy',
+          qty: 100,
+          priceAvgBp: 5125,
+          ts,
+        }),
+      ]);
+      expect(server.publishes).toHaveLength(2);
+
+      // The silent socket is dropped and the client comes back on a new one. On HEAD this
+      // never resolves: the connection stays 'ready' with the two entries still queued.
+      await nextEvent(stalled, 'close');
+      await nextEvent(stalled, 'ready');
+      stalled.disconnect(); // stop the loop before asserting: the mock stays silent
+      expect(server.connections()).toBeGreaterThanOrEqual(2);
+      // The reconnect does not replay them — that would be two duplicate market events.
+      expect(server.publishes).toHaveLength(2);
+      expect((stalled as unknown as { commandQueue: { length: number } }).commandQueue.length).toBe(
+        0,
+      );
+    } finally {
+      stalled.disconnect();
+      await server.close();
+    }
+  });
+
+  it('leaves an idle connection alone and carries both bounds on the shared client', async () => {
+    // The socket bound is armed only while a command is outstanding and cleared by any byte
+    // that arrives, so an idle client — and, in M4, a subscriber waiting for messages — is
+    // never dropped by it.
+    const idle = createRedisClient(process.env.TEST_REDIS_URL!, {
+      commandTimeoutMs: 300,
+      socketTimeoutMs: 300,
+    });
+    try {
+      await nextEvent(idle, 'ready');
+      await sleep(1_000);
+      expect(idle.status).toBe('ready');
+      expect(await idle.ping()).toBe('PONG');
+    } finally {
+      await idle.quit();
+    }
+
+    const shared = t.app.get<Redis>(REDIS).options;
+    expect(shared.socketTimeout).toBe(REDIS_SOCKET_TIMEOUT_MS);
+    expect(shared.autoResendUnfulfilledCommands).toBe(false);
+    // A slow reply must fail on the caller's own bound and leave the connection up.
+    expect(REDIS_SOCKET_TIMEOUT_MS).toBeGreaterThan(REDIS_COMMAND_TIMEOUT_MS);
   });
 });

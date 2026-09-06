@@ -14,6 +14,7 @@ import {
 import { and, desc, eq, lt, or, sql } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
 import { isPgError, PG_UNIQUE_VIOLATION } from '../common/errors/pg-error.js';
+import { clockTimestamp } from '../infra/db/clock.js';
 import { DB } from '../infra/db/db.provider.js';
 import { toBalance, toLedgerEntry, type Page } from './wallet.service.js';
 import { type Balance } from '@buddha/shared';
@@ -116,11 +117,27 @@ export class CouponService {
         .set({ redeemedCount: coupon.redeemedCount + 1, updatedAt: new Date() })
         .where(eq(schema.coupons.id, coupon.id))
         .returning();
+      // The balance row first, then the clock: another writer of this account (a trade, a
+      // void refund, another wallet write) may have committed while this transaction waited
+      // on that row, and the ledger row written below must sort after it — `now()` is the
+      // transaction start and would sort before work its own balance_after_p includes
+      // (clock.ts, A-M3-14). The lock is what the UPDATE below would take anyway, so no
+      // writer's lock order changes; the result is discarded, and a vanished row still falls
+      // through to the check the UPDATE already had.
+      await tx
+        .select({ userId: schema.balances.userId })
+        .from(schema.balances)
+        .where(eq(schema.balances.userId, userId))
+        .limit(1)
+        .for('update');
+      const redeemedAt = await clockTimestamp(tx);
+
       const [balance] = await tx
         .update(schema.balances)
         .set({
           availableP: sql`${schema.balances.availableP} + ${coupon.amountP}`,
-          updatedAt: new Date(),
+          // Explicit on purpose: the column's `$onUpdate` would write the API host's clock.
+          updatedAt: redeemedAt,
         })
         .where(eq(schema.balances.userId, userId))
         .returning();
@@ -146,6 +163,7 @@ export class CouponService {
           refType: 'coupon',
           refId: redemption?.id ?? coupon.id,
           memo: `쿠폰 ${coupon.code}`,
+          createdAt: redeemedAt,
         })
         .returning();
       if (!entry) throw new AppError('INTERNAL', { message: 'Ledger insert failed' });
