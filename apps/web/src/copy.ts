@@ -264,6 +264,8 @@ export const copy = {
   adminMarketAwaitingSettlement: '정산 대기',
   adminNoMarkets: '시장이 없습니다.',
   adminMarketNotFound: '시장을 찾을 수 없습니다.',
+  adminMarketRefreshFailed:
+    '최신 정보를 불러오지 못했습니다. 표시된 값은 마지막으로 불러온 것입니다.',
   adminBackToMarkets: '시장 목록으로',
   adminMarketTitle: '질문',
   adminMarketDescription: '설명',

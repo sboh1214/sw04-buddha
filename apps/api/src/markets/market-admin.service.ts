@@ -531,7 +531,6 @@ export class MarketAdminService {
       return { market: await this.toAdminMarket(tx, row), refunds };
     });
 
-    await this.publishStatus(market);
     const ts = market.voidedAt ?? market.updatedAt;
     // The last balance seen per account wins: a holder of both outcomes was credited twice.
     const balances = new Map<string, BalanceRow>();
@@ -562,7 +561,13 @@ export class MarketAdminService {
         },
       ]);
     }
-    for (const [userId, event] of events) await this.publisher.publishUser(userId, event);
+    // Issued back to back, awaited together (MarketPublisher): the status first, then each
+    // account's events, in call order on the wire; a Redis that stops answering costs one
+    // command timeout, not one per holder.
+    await Promise.all([
+      this.publishStatus(market),
+      ...events.map(([userId, event]) => this.publisher.publishUser(userId, event)),
+    ]);
     return market;
   }
 

@@ -11,23 +11,48 @@ function describeError(err: Error & { code?: string }): string {
   return [err.code, err.message].filter(Boolean).join(' ') || err.name;
 }
 
+/**
+ * Upper bound on one command's reply (ms), armed when the command is issued. A Redis that
+ * keeps the connection but stops answering — a PUBLISH whose reply never comes, a command
+ * parked in the offline queue behind a handshake that never completes — would otherwise park
+ * the caller forever; after a trade has COMMITted, that caller is the HTTP response of a
+ * trade that succeeded. `connectTimeout` covers the TCP connect only and
+ * `maxRetriesPerRequest` the reconnects; neither bounds a reply. The handshake (HELLO/INFO)
+ * and `quit()` at shutdown run under the same bound, so a Redis that accepts TCP and never
+ * answers surfaces as `connection error: Command timed out` and reconnects.
+ *
+ * A timeout rejects the caller and keeps the connection: ioredis matches replies to commands
+ * in order, so a reply that arrives late lands on the entry that already timed out and the
+ * queue stays aligned — a spurious timeout costs nothing. Every consumer degrades on the
+ * rejection: the publisher logs, the role cache falls back to Postgres, the health probe
+ * reports `error`. Recovering the connection from a Redis that stays silent (`socketTimeout`)
+ * is a separate decision (Q-M3-7): it must be paired with `autoResendUnfulfilledCommands:
+ * false`, or the reconnect re-sends the PUBLISHes that already timed out.
+ */
+export const REDIS_COMMAND_TIMEOUT_MS = 2_000;
+
+/** The shared client's options; exported so a test can build one against a mock server. */
+export function createRedisClient(url: string, options: { commandTimeoutMs?: number } = {}): Redis {
+  const logger = new Logger('Redis');
+  const redis = new Redis(url, {
+    // Fail commands fast when the server is unreachable instead of queueing
+    // them forever; the health check relies on this.
+    maxRetriesPerRequest: 1,
+    connectTimeout: 5_000,
+    commandTimeout: options.commandTimeoutMs ?? REDIS_COMMAND_TIMEOUT_MS,
+    retryStrategy: (times) => Math.min(times * 200, 2_000),
+  });
+  // ioredis emits 'error' on every failed (re)connect; without a listener it
+  // prints a noisy warning. Keep it to a single line.
+  redis.on('error', (err: Error & { code?: string }) => {
+    logger.warn(`connection error: ${describeError(err)}`);
+  });
+  return redis;
+}
+
 export const redisProvider: Provider<Redis> = {
   provide: REDIS,
   inject: [ConfigService],
-  useFactory: (config: ConfigService<Env, true>): Redis => {
-    const logger = new Logger('Redis');
-    const redis = new Redis(config.get('REDIS_URL', { infer: true }), {
-      // Fail commands fast when the server is unreachable instead of queueing
-      // them forever; the health check relies on this.
-      maxRetriesPerRequest: 1,
-      connectTimeout: 5_000,
-      retryStrategy: (times) => Math.min(times * 200, 2_000),
-    });
-    // ioredis emits 'error' on every failed (re)connect; without a listener it
-    // prints a noisy warning. Keep it to a single line.
-    redis.on('error', (err: Error & { code?: string }) => {
-      logger.warn(`connection error: ${describeError(err)}`);
-    });
-    return redis;
-  },
+  useFactory: (config: ConfigService<Env, true>): Redis =>
+    createRedisClient(config.get('REDIS_URL', { infer: true })),
 };

@@ -91,7 +91,11 @@ export function AdminMarketDetail({ id }: { id: string }) {
     );
   }
   if (market.isPending) return <Skeleton height="48" />;
-  if (market.isError) {
+  // Only the FIRST load failing leaves nothing to show. A refetch in the background that
+  // fails (a passing 503 on a window focus, say) keeps the cached row — react-query keeps
+  // `data` on a refetch error — and must keep this screen with it: replacing the page would
+  // unmount the edit form and the input it holds. That case is a notice above the content.
+  if (market.isLoadingError) {
     return (
       <Stack gap="4">
         <BackLink />
@@ -109,6 +113,14 @@ export function AdminMarketDetail({ id }: { id: string }) {
   return (
     <Stack gap="4">
       <BackLink />
+      {market.isRefetchError && (
+        <Alert.Root status="warning" role="status" data-testid="market-refresh-failed">
+          <Alert.Indicator />
+          <Alert.Content>
+            <Alert.Description>{copy.adminMarketRefreshFailed}</Alert.Description>
+          </Alert.Content>
+        </Alert.Root>
+      )}
 
       <Stack gap="1">
         <HStack gap="2" flexWrap="wrap" align="baseline">
@@ -382,9 +394,11 @@ function EditMarketCard({ market }: { market: AdminMarket }) {
         </HStack>
       </Card.Header>
       <Card.Body>
+        {/* As above: only a first load that failed has no list to offer; a refetch that
+            failed keeps the cached categories, and with them the form and its input. */}
         {categories.isPending ? (
           <Skeleton height="24" />
-        ) : categories.isError ? (
+        ) : categories.isLoadingError ? (
           <Alert.Root status="error" role="alert">
             <Alert.Indicator />
             <Alert.Content>
@@ -603,7 +617,7 @@ function RecentFills({ market }: { market: AdminMarket }) {
           <Text color="fg.muted">{copy.adminNoFills}</Text>
         ) : fills.isPending ? (
           <Skeleton height="12" />
-        ) : fills.isError ? (
+        ) : fills.isLoadingError ? (
           <Alert.Root status="error" role="alert">
             <Alert.Indicator />
             <Alert.Content>

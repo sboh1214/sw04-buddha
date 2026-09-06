@@ -226,9 +226,11 @@ function CreateMarketCard() {
         <Text fontWeight="semibold">{copy.adminMarketCreate}</Text>
       </Card.Header>
       <Card.Body>
+        {/* Only a first load that failed has no list to offer; a refetch that failed keeps the
+            cached categories, and with them the form and whatever is typed into it. */}
         {categories.isPending ? (
           <Skeleton height="24" />
-        ) : categories.isError ? (
+        ) : categories.isLoadingError ? (
           <Alert.Root status="error" role="alert">
             <Alert.Indicator />
             <Alert.Content>

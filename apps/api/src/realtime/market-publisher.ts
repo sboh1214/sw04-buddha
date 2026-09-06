@@ -16,9 +16,14 @@ import { REDIS } from '../infra/redis/redis.provider.js';
  *
  * Best effort by design. The transaction has already committed when this runs, so a failure
  * here must not turn a successful trade into an error response: it is logged and swallowed,
- * and the client's REST snapshot (PLAN 8: "REST로 스냅샷 → 구독") carries the truth. Two
- * trades on one market may publish out of commit order (the lock is released at COMMIT, the
- * publish happens after); every event carries `ts`, so the client keeps the newest.
+ * and the client's REST snapshot (PLAN 8: "REST로 스냅샷 → 구독") carries the truth. Nor may
+ * it hold that response: the client bounds every reply (`commandTimeout`, redis.provider.ts),
+ * so a Redis that keeps the connection but stops answering ends here as a logged timeout.
+ * Callers with several events issue them back to back and await them together — ioredis
+ * writes them in call order on the one connection, so the order on the wire is kept, and a
+ * stalled Redis costs one bound, not one per event. Two trades on one market may publish out
+ * of commit order (the lock is released at COMMIT, the publish happens after); every event
+ * carries `ts`, so the client keeps the newest.
  */
 @Injectable()
 export class MarketPublisher {

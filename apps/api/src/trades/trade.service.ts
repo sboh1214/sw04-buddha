@@ -199,17 +199,17 @@ export class TradeService {
       throw error;
     }
 
-    // COMMITted. Best effort from here (MarketPublisher swallows and logs), and in this order:
+    // COMMITted. Best effort from here (MarketPublisher swallows and logs). Issued back to
+    // back and awaited together: ioredis writes them in this order on the one connection —
     // the tick first, so a client that only keeps the newest price sees the stats before the
-    // fill that produced them.
-    // On the row's id, like the admin status publish: the channel name is a string, and the
-    // body's id — canonical since the boundary (api/uuid.ts) — is not the source of truth.
-    for (const event of executed.marketEvents) {
-      await this.publisher.publishMarket(executed.result.market.id, event);
-    }
-    for (const event of executed.userEvents) {
-      await this.publisher.publishUser(userId, event);
-    }
+    // fill that produced them — and a Redis that stops answering costs the response one
+    // command timeout, not one per event. On the row's id, like the admin status publish:
+    // the channel name is a string, and the body's id is not the source of truth.
+    const marketId = executed.result.market.id;
+    await Promise.all([
+      ...executed.marketEvents.map((event) => this.publisher.publishMarket(marketId, event)),
+      ...executed.userEvents.map((event) => this.publisher.publishUser(userId, event)),
+    ]);
     return executed.result;
   }
 
