@@ -610,3 +610,49 @@ M2를 마친 뒤 오너가 세 가지를 정했다(PLAN §17 Q2/Q3): ① 충전�
 - 브라우저 확인(2026-09-04): 지갑에 2~10% 할인 상품 5개, 10,000P 구매 → 잔고·칩·원장 갱신, 쿠폰 발급 → 사용(+5,000P, "쿠폰 LAUNCH-2026" 원장) → 재사용 거부, 관리자에서 300,000P/255,000원(15%) 추가 후 삭제, 신규 가입 계정에 10,000P + "가입 보너스" 원장, 감사 잡 불일치 0.
 - 1P = 1원은 **액면가**로 유지된다(PLAN 5.1). 구매 가격만 할인되며, 지급·정산·환불은 모두 액면가 기준이다.
 - 가입 보너스는 미인증 계정에도 즉시 들어간다(가입 트랜잭션이므로). 인증 전에는 로그인할 수 없어 사용할 수는 없지만, 다중 계정 어뷰징은 M6 레이트 리밋과 함께 다뤄야 한다(A-M2-10).
+
+## ADR-0027 — 시장 · LMSR · 거래 · 관리자 시장 CRUD (M3)
+
+- 날짜: 2026-09-06
+- 상태: 채택
+
+### 맥락
+
+PLAN §13 M3는 LMSR 엔진(§5.3)과 포지션 회계(§5.4)를 `@buddha/shared`에, 시장 CRUD·상태 전이·`market_events`, `POST /quotes`, `POST /trades`(§5.4 트랜잭션·멱등키·슬리피지 가드), `GET /markets*`, `GET /me/positions`, `GET /me/orders`, Redis 발행 경로(§8), 시드 시장 12개를 요구한다. 구현 전에 설계안을 여섯 관점(수치·트랜잭션·PLAN 대조·보안·DB·구현 가능성)에서 검토하고 지적 40건을 반론 검증했더니(98회), PLAN §5.3의 준비금 공식과 부동소수점 경계, 멱등 응답 캐시, 정렬별 커서, 상태 전이 오류 코드에서 PLAN 문구 그대로는 성립하지 않거나 500을 내는 지점이 나왔다. 아래는 그 결과다.
+
+### 결정
+
+**LMSR 엔진(`packages/shared/src/lmsr.ts`)**
+
+- 상태는 double `{ qYes, qNo, b }`, DB의 `numeric(24,10)`은 `serializeQuantity`(`toFixed(10)`)/`parseQuantity`로만 오간다. 비용 증분은 `C(q+Δe) − C(q)`를 두 큰 값의 차로 계산하지 않는다 — |q| ≈ 1e14에서 ulp가 이미 1.6P다. 대신 `C(q) = q_other + b·softplus((q_o − q_other)/b)`로 두고 스프레드만으로 증분을 구한다(`softplus(t) = max(t,0) + log1p(e^{−|t|})`, y ≥ 0이면 `x + softplus(−y−x) − softplus(−y)` 형태로 큰 항의 상쇄를 피한다). 매도 증분은 매도 후 상태에서 같은 함수를 평가하므로 매수→매도 왕복은 구조적으로 이익이 없다.
+- **정수 경계 클램프**: 매수 `amountP = clamp(ceil(100·ΔC), 1, 100·Δ)`, 매도 `clamp(floor(100·ΔC), 0, 100·Δ)`. C는 좌표별 1-Lipschitz라 수학적으로 `0 ≤ ΔC ≤ Δ`인데, double 반올림은 `100·Δ+1`(fills의 `price_avg_bp ≤ 10000` CHECK 위반 → 500)과 `0`(PLAN 불변식 2 위반, 0P 원장 행)을 모두 만들었다(검토에서 재현: b=3, qYes≈8.26e8에서 1계약 101P; |qY−qN| ≳ 30·b에서 0P). 클램프가 정확성의 보장이고 수식은 정밀도의 문제다.
+- 표시가 `priceOf = clamp(round(pYes·100), 1, 99)`, 틱은 `probabilityBp = round(pYes·10000)`. |qY−qN|/b ≳ 37이면 double에서 확률이 정확히 1로 포화하므로, 속성 테스트의 "매수 후 확률이 엄격히 오른다"는 양쪽 확률이 (1e-9, 1−1e-9) 안일 때만 주장하고 표시가는 단조(≥/≤)만 주장한다.
+- `sharesForSpend`는 정수 이분탐색(`cost(Δ) ≤ spend < cost(Δ+1)`), 상한 `ORDER_QTY_MAX = 1,000,000`(주문당 최대 1억P; int4·int8 한계에서 멀리 둔다). 포지션은 `POSITION_QTY_MAX = 2^31−1` 가드.
+- **준비금은 `maxLossP(p0, b) = ceil(100·b·−ln(min(p0, 1−p0)))`.** PLAN §5.3의 `100·b·ln2`는 p0 = 0.5에서만 맞다: PLAN의 초기화(qY = b·ln(p0/(1−p0)), qN = 0)에서 YES 승리 시 손실은 `100·[(qY_f − qY_0) − (C(q_f) − C(q_0))] ≤ 100·[C(q_0) − qY_0] = −100·b·ln p0`이고 NO 쪽은 `−100·b·ln(1−p0)`다(무차별 매수 시뮬레이션으로 확인: p0 = 0.1, b = 1000에서 230,259P vs 69,315P). 반올림은 항상 운영자에게 유리하므로 추가 항은 없다. PLAN §5.3의 도움말 값(b=1000 → 69,315P)은 50%에서만 유효하고, 관리자 폼은 입력한 확률·b로 계산한 값을 보여 준다. 무효 환불은 원가를 돌려주므로 이 상한에 묶이지 않는다(부분 매도로 실현한 이익은 그대로 남는다) — 수용.
+- PLAN §16의 `MarketMechanism` 인터페이스(`mechanism.ts`)를 두고 `mechanismFor(markets.mechanism)`으로 고른다. `clob`은 throw(관리자 생성이 `lmsr`만 만든다).
+
+**회계(`accounting.ts`)** — PLAN §5.4 그대로. `released = round_half_up(cost_basis·Δ/qty)`는 bigint `(cb·Δ + qty/2)/qty`. `settle`(M5용)과 `voidRefund`(원가 환불, `realized_pnl_p` 불변)를 API와 워커가 공유한다.
+
+**DTO(`market.ts`, `realtime.ts`)** — zod 4 규칙: 필드 맵을 한 번 선언하고 `.refine`은 마지막, `.meta({ id })`는 그 뒤, refine된 객체에 `.pick/.partial/.omit` 금지. **쿼리 DTO에는 `.meta`를 붙이지 않는다** — 컴포넌트 id가 있는 쿼리 객체는 swagger 12가 파라미터를 하나도 내보내지 않아 생성 클라이언트가 `query?: never`가 되고, id가 없으면 swagger가 필드마다 파라미터(기본값·enum·길이 포함)를 스스로 펼친다. `@ApiQuery`는 컴포넌트 id를 가진 `cursorQuerySchema`를 그대로 쓰는 라우트(원장·결제·쿠폰·주문 목록)에만 `CURSOR_QUERY_PARAMS`로 선언하고, 둘을 겹쳐 쓰면 같은 `(name, in)` 파라미터가 두 번 나와 OpenAPI 3.0 위반이므로 `openapi-export.ts`가 그 경우 실패한다. 견적 응답은 PLAN 7.1의 `priceAvg/priceAfter` 대신 `priceAvgBp/priceBeforeBp/priceAfterBp`(정수 bp, 와이어에 float 없음). `spend` 모드 견적은 매수에만 있다("최대 N P에 팔기"는 답이 없다). `tradeBody`는 매수에 `maxCostP`, 매도에 `minProceedsP`를 필수로 요구하고 반대쪽 필드를 거부한다(PLAN §5.3 "반드시 포함"). `expectedAccountId`는 충전·쿠폰(A-M2-11/12)과 같은 이유로 거래 본문에도 실린다. 실시간 이벤트는 PLAN §8의 다섯 가지를 `type`으로 구분하는 discriminated union이고 **모두 `ts`를 갖는다**(커밋 순서와 발행 순서가 어긋날 수 있어 클라이언트가 최신을 고른다).
+
+**거래(`POST /trades`, `apps/api/src/trades`)** — PLAN §5.4 순서를 지키되:
+
+- 멱등성은 **DB만으로** 판정한다. `orders.idempotency_key`는 계정별 UNIQUE(migration 0009; 클라이언트가 만드는 키가 계정 사이에서 충돌하면 안 된다 — payments 0008과 같다). 같은 키의 재요청은 저장된 주문의 조건(시장·결과·방향·수량·가드)을 와이어 문자열로 비교해 다르면 `DUPLICATE_REQUEST`(409), 같으면 주문·체결·원장 행(불변 절반)과 현재 잔고·포지션·시장 통계(가변 절반)로 재구성한다 — 충전 재구성(A-M2-11)과 같은 분할. PLAN §5.4의 Redis 24h 응답 캐시는 두지 않는다: 행이 답을 전부 담고 만료가 없으며, 두 재구성 경로가 어긋날 여지와 Redis 장애 시 매 거래가 몇 초씩 멈추는 경로(ioredis 재시도 백오프)를 함께 없앤다. 오너가 PLAN대로 캐시를 원하면 되돌릴 수 있는 결정이다(Q-M3-2).
+- 트랜잭션: `lockMarket`(advisory xact lock) → **`clock_timestamp()`를 락 획득 뒤에 한 번 읽어** 주문·체결·원장 `created_at`과 틱 `ts`로 쓴다(`now()`는 트랜잭션 시작 시각이라 락을 기다린 거래끼리 시각이 뒤집혀 차트와 "최근 체결"이 실행 순서와 어긋난다) → 락 안에서 키 재확인(쌍둥이 요청) → `markets FOR UPDATE`(없음·draft → 404, open 아님 → `MARKET_NOT_OPEN`, open이지만 `close_at` 경과 → `MARKET_CLOSED`) → 견적·슬리피지 가드(`PRICE_MOVED`) → 매수는 `balances FOR UPDATE`(행 없음 → 404) 뒤 조건부 UPDATE(0행 → `INSUFFICIENT_BALANCE`), 매도는 `positions FOR UPDATE`(부족 → `INSUFFICIENT_POSITION`) → orders → fills → (매도) balances += → ledger → positions(`applyBuy/applySell`) → `trader_count` → markets → price_ticks → COMMIT → Redis 발행(best effort, 실패는 로그만). 거부된 거래는 아무 행도 남기지 않으므로 같은 키로 충전 뒤 다시 시도할 수 있다.
+- `trader_count`는 같은 트랜잭션에서 정확히 유지한다(새 포지션 행이고 그 시장에 다른 행이 없을 때 +1). PLAN §9의 `market.trader_count` 디바운스 잡은 필요 없어졌다(Q-M3-3).
+
+**관리자(`apps/api/src/markets`)** — 생성은 draft, `reserve_p = maxLossP`, slug는 주어지지 않으면 `slugify(제목)-<태그>`(NFC, `[a-z0-9가-힣-]`, 비면 `market-<태그>`), **uuid 모양의 slug는 거부**(`/markets/:idOrSlug`가 uuid를 먼저 시도하므로 도달 불가). PATCH는 draft에서 전부, open에서는 제목·설명·rules·출처·이미지·마감·카테고리만(`liquidityB`·`initialProbBp`·slug는 필드를 지목해 400), 그 밖의 상태는 `status`를 지목해 400; draft에서 확률·b를 바꾸면 `initState`를 다시 돌린다; rules가 바뀌면 `market_events(rules_edited)`. open/close/void는 모두 advisory lock 안에서 `FOR UPDATE` 뒤에 상태를 확인한다(M5 finalize와 끼어들 수 없게). close는 open이 아니면 `MARKET_NOT_OPEN`(409), open은 draft가 아니면 400(`status`), rules 공백이면 `RULES_REQUIRED`(422). **무효는 한 트랜잭션**: 미정산 포지션을 `(user_id, outcome)` 순으로 잠가(다른 시장의 동시 무효·정산과 교착하지 않게) 원가를 환불하고(`MARKET_VOID_REFUND`, balances += , positions qty 0·settled), `market_events(voided)`를 남기며 커밋 뒤 `market:status`와 계정별 `user:balance/position`을 발행한다. 모든 관리자 쓰기는 같은 트랜잭션에 `admin_actions` 행을 남기고, jsonb payload의 P는 문자열이다(drizzle이 `JSON.stringify`로 직렬화해 bigint는 throw).
+
+**공개 읽기** — draft는 목록·상세·체결·틱·견적·거래 어디서도 404(존재 자체를 드러내지 않는다). 목록 정렬은 정렬별 키셋: `newest` = (created_at, id) desc, `closing` = (close_at, id) asc, `volume` = (volume_p, id) desc(`encodeSortCursor`). 틱은 SQL 창 함수로 500점으로 다운샘플한다(첫·끝점 유지; Node가 전 행을 들지 않는다). 체결은 익명 최근 20건. 공개 상세에는 `liquidity_b`·q·준비금·작성자가 없다(PLAN 7.1).
+
+**시드** — 12개 시장(경제 3·날씨 3·테크 2·엔터 2·문화 2)은 slug가 멱등키이고 시장마다 한 트랜잭션(`buddha:seed` 락)으로 시장·open 틱·created/opened 이벤트를 넣는다. `close_at`은 시드 시각 기준이 아니라 **rules가 정한 절대 시각(KST)**이다 — 늦게 돌린 시드가 결과가 이미 공개된 시장을 열면 안 된다.
+
+**웹(관리자만, 사용자 화면은 M4)** — `/admin/markets`(상태 필터·마감 임박·정산 대기 배지·생성 폼), `/admin/markets/[id]`(수정·열기·마감·무효·LMSR 상태·이벤트·체결), `/admin/payments`, `/admin/audit-failures`. PLAN §12의 카드·상세 미리보기는 M4의 `MarketCard`/`RulesSection`이 생긴 뒤에 붙인다.
+
+### 결과
+
+- 테스트 445건(shared 127 · db 27 · api 177 · web 101 · worker 13; M2 종료 시 194건). `packages/shared` 커버리지 98%(구문·줄), 100%(분기·함수). 설계 검토(6관점 40건 → 검증 98회)와 구현 검증(shared 3관점×2회, db 3관점×2회, api 4관점×2회 + 마무리, web 3관점×2회 + 마무리)에서 나온 지적은 P3까지 전부 반영하거나 이 ADR·QUESTIONS에 근거를 남겼다.
+- PLAN §13 M3 수용 기준: AC 1 `lmsr.test.ts`의 다섯 불변식(각 1,000회, 포화 영역 별도) — 통과. AC 2 `initState(0.5, 1000)` → 50, YES 100계약 매수 5,125P 뒤 52, NO 표시가 = 100 − YES(±1) — 통과. AC 3~9는 `apps/api/src/trades/trades.controller.test.ts`·`markets/*.test.ts`가 고정한다: 잔고 부족 시 잔고·원장·시장 상태 불변, 같은 키 2회 → 동일 주문·체결(+ 동시 20건 → 주문 1건, 다른 조건 → 409), `maxCostP` 미달 → `PRICE_MOVED`에 아무 행도 없음, 10계정×5건 병렬 → 전부 200 또는 `INSUFFICIENT_BALANCE`이고 `q_yes` = 공유 엔진 재계산과 문자열까지 일치·잔고 = 원장 합(+ advisory lock을 직접 잡고 거래가 기다리는지 확인하는 테스트), closed → `MARKET_NOT_OPEN`·`close_at` 경과 → `MARKET_CLOSED`·draft → 404, rules 공백 open → 422 `RULES_REQUIRED`, 보유 10 중 15 매도 → `INSUFFICIENT_POSITION`·10 매도 뒤 qty 0과 `realized_pnl_p` = 수취 − 원가.
+- 브라우저 확인(2026-09-06, 개발 스택): 관리자 로그인 → `/admin/markets`에 시드 12개(KST 마감) → 폼으로 시장 생성(초안, 한글 slug 자동 생성, b=500 → 준비금 34,658P) → 열기(마감 임박 배지, open 틱, 열림 이벤트) → curl로 거래: 견적 5,250P(= ⌈100·500·[0.2 + ln(1+e^{−0.2}) − ln 2]⌉), 매수 100 → 잔고 16,750P, 같은 키 재전송 → 같은 주문·체결 id, 다른 조건 → `DUPLICATE_REQUEST`, 매도 40 → 2,159P(원가 3,150P, 실현 59P), 60 보유에 100 매도 → `INSUFFICIENT_POSITION`, 다른 계정 명의 → 403 → 상세의 LMSR 패널(q(예) 60, 순 수취 3,091P, 미결제 60, 거래 2, 거래량 7,409P)과 익명 체결 2건 → 열린 시장 제목 수정(확인 대화상자) → 마감(정산 대기 배지, 수정 폼 잠김) → 무효(사유 필수, 환불 1계정 3,150P, 포지션 settled, 무효 시장 거래 → `MARKET_NOT_OPEN`) → 잔고 22,059P = 22,000 − 5,250 + 2,159 + 3,150 → `/admin/payments`·`/admin/audit-failures` 목록 → `pnpm --filter worker run job:ledger-audit` 불일치 0.
+- 인덱스는 M6로: 공개 목록의 `volume`/`newest` 정렬, 관리자 목록, `/me/orders`의 fills 조인(A-M3-10). 남은 열린 결정은 Q-M3-1~6.
+- OpenAPI는 30경로·36 operation. 생성 클라이언트의 쿼리 파라미터는 swagger가 id 없는 쿼리 DTO를 펼친 것이고, `openapi-export.ts`가 같은 파라미터가 두 번 나오면 실패한다.
