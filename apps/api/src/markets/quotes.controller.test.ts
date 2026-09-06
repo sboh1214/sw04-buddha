@@ -84,6 +84,19 @@ describe.skipIf(!hasTestInfra)('quotes (integration)', () => {
     expect(noQuote.priceAfterBp).toBeLessThan(noQuote.priceBeforeBp);
   });
 
+  it('takes an upper-case market id (lower-cased at the boundary, api/uuid.ts)', async () => {
+    const row = await market();
+    const res = await quote({
+      marketId: row.id.toUpperCase(),
+      outcome: 'YES',
+      side: 'buy',
+      mode: 'shares',
+      value: '10',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json<{ data: { shares: number } }>().data.shares).toBe(10);
+  });
+
   it('prices a sell without a position or a login, with no payout', async () => {
     const row = await market({ qYes: 300, qNo: 100 });
     const expected = quoteSell(lmsrStateOf(row), 'YES', 100);

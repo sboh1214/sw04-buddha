@@ -799,6 +799,24 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     ]);
   });
 
+  it('takes an upper-case path id and records the canonical one in the audit and ledger rows', async () => {
+    // The path parameter is lower-cased at the boundary (api/uuid.ts) and the rows that keep
+    // an id as text — admin_actions.target_id, the refund's ledger ref_id — are written from
+    // the locked row, so neither can hold a spelling that no lookup would match.
+    const row = await market({ status: 'closed' });
+    const alice = (await createUser(t.db)).user.id;
+    await hold({ userId: alice, marketId: row.id, outcome: 'YES', qty: 10, costBasisP: 520n });
+
+    const res = await voidMarket(row.id.toUpperCase());
+    expect(res.statusCode).toBe(200);
+    expect(detail(res).id).toBe(row.id);
+    const refund = (await ledgerOf(alice)).find((entry) => entry.type === 'MARKET_VOID_REFUND');
+    expect(refund).toMatchObject({ refId: row.id });
+    const [action] = await actionsFor(row.id);
+    expect(action).toMatchObject({ type: 'market_void', targetId: row.id });
+    expect((await get(`/api/v1/admin/markets/${row.id.toUpperCase()}`)).statusCode).toBe(200);
+  });
+
   it('voids open and resolving markets without positions, and refuses draft/settled/voided', async () => {
     for (const status of ['open', 'resolving'] as const) {
       const row = await market({ status });

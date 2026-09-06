@@ -321,7 +321,7 @@ export class MarketAdminService {
         adminId,
         type: 'market_update',
         targetType: 'market',
-        targetId: id,
+        targetId: current.id,
         payload: { before: snapshot(current), after: snapshot(row) },
       });
       return this.toAdminMarket(tx, row);
@@ -368,7 +368,7 @@ export class MarketAdminService {
         adminId,
         type: 'market_open',
         targetType: 'market',
-        targetId: id,
+        targetId: current.id,
         payload: { before: snapshot(current), after: snapshot(row) },
       });
       return this.toAdminMarket(tx, row);
@@ -402,7 +402,7 @@ export class MarketAdminService {
         adminId,
         type: 'market_close',
         targetType: 'market',
-        targetId: id,
+        targetId: current.id,
         payload: { before: snapshot(current), after: snapshot(row) },
       });
       return this.toAdminMarket(tx, row);
@@ -482,7 +482,7 @@ export class MarketAdminService {
             amountP: after.refundP,
             balanceAfterP: balance.availableP,
             refType: 'market',
-            refId: id,
+            refId: current.id,
             memo: `무효 환불: ${current.title}`,
             createdAt: refundedAt,
           });
@@ -525,7 +525,7 @@ export class MarketAdminService {
         adminId,
         type: 'market_void',
         targetType: 'market',
-        targetId: id,
+        targetId: current.id,
         payload: { ...summary, before: snapshot(current), after: snapshot(row) },
       });
       return { market: await this.toAdminMarket(tx, row), refunds };

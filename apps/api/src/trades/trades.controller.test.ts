@@ -464,6 +464,38 @@ describe.skipIf(!hasTestInfra)('trades (integration)', () => {
     expect(await marketRow()).toMatchObject({ tradeCount: 2, traderCount: 2 });
   });
 
+  it('lower-cases an upper-case market id: one lock, one channel, and the retry replays', async () => {
+    // z.uuid() takes either case and the row is the same either way; kept as sent, the id
+    // would name another advisory lock (hashtext), another Redis channel, and on the
+    // same-key retry would compare unequal to the stored order's lower-case id (409).
+    const shouted = market.id.toUpperCase();
+    const key = randomUUID();
+    const subscriber = new Redis(process.env.TEST_REDIS_URL!, { maxRetriesPerRequest: 1 });
+    const received: string[] = [];
+    subscriber.on('message', (_channel: string, message: string) => received.push(message));
+    await subscriber.subscribe(marketChannel(market.id));
+    try {
+      const first = await buy(shouted, 100, undefined, { idempotencyKey: key });
+      expect(first.statusCode).toBe(200);
+      expect(dataOf(first).order.marketId).toBe(market.id);
+      await waitForMessages(received, 2, 'market events of an upper-case trade');
+
+      const again = await buy(shouted, 100, undefined, { idempotencyKey: key });
+      expect(again.statusCode).toBe(200);
+      expect(dataOf(again).order).toEqual(dataOf(first).order);
+      const lower = await buy(market.id, 100, undefined, { idempotencyKey: key });
+      expect(lower.statusCode).toBe(200);
+      expect(dataOf(lower).order).toEqual(dataOf(first).order);
+
+      const orders = await ordersOf(user.id);
+      expect(orders).toHaveLength(1);
+      expect(orders[0]!.marketId).toBe(market.id);
+      expect(await marketRow()).toMatchObject({ tradeCount: 1 });
+    } finally {
+      await subscriber.quit();
+    }
+  });
+
   it('refuses a buy whose cost moved above maxCostP, writing nothing (AC 5)', async () => {
     const cost = quoteBuy(stateOf(market), 'YES', 100).amountP;
     const res = await buy(market.id, 100, cost - 1n);

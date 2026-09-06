@@ -1,9 +1,12 @@
 import { formatP, maxLossP } from '@buddha/shared';
+import { createFormControl } from 'react-hook-form';
 import { afterAll, describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
 import { type AdminMarket, type Category } from './api';
 import {
+  AFTER_SAVE_RESET,
   EMPTY_MARKET_FORM,
+  FOLLOW_SERVER_RESET,
   type MarketFormValues,
   isHttpUrl,
   marketFormSchema,
@@ -271,6 +274,54 @@ const market: AdminMarket = {
   openInterest: { yes: 0, no: 0 },
   events: [],
 };
+
+/**
+ * The edit form's reset policies, run against react-hook-form's form control without a DOM
+ * (what `useForm` wraps): the `values` prop resets under FOLLOW_SERVER_RESET, a save resets
+ * with AFTER_SAVE_RESET, and every `reset()` inherits the former unless told otherwise.
+ */
+describe('edit-form reset policies', () => {
+  const keys = Object.keys(EMPTY_MARKET_FORM) as (keyof MarketFormValues)[];
+
+  /** A form as the screen mounts it, every field registered. */
+  function mounted(values: MarketFormValues) {
+    const form = createFormControl<MarketFormValues>({ values, resetOptions: FOLLOW_SERVER_RESET });
+    for (const name of keys) form.register(name);
+    form.control._state.mount = true;
+    return form;
+  }
+
+  it('a background refetch keeps the fields the admin edited and follows the server elsewhere', () => {
+    const original = marketToFormValues(market, categories);
+    const form = mounted(original);
+    form.setValue('title', '  새 제목  ', { shouldDirty: true });
+
+    // Another writer changed the rules; the `values` prop resets the form to the new row.
+    const fromServer = { ...original, rules: '다른 관리자가 고친 규칙' };
+    form.reset(fromServer, FOLLOW_SERVER_RESET);
+    expect(form.getValues()).toEqual({ ...fromServer, title: '  새 제목  ' });
+    expect(form.control._getDirty()).toBe(true);
+  });
+
+  it('a save restarts clean on the saved row, including the fields just saved', () => {
+    const original = marketToFormValues(market, categories);
+    const saved = marketToFormValues({ ...market, title: '새 제목' }, categories);
+
+    const form = mounted(original);
+    form.setValue('title', '  새 제목  ', { shouldDirty: true });
+    form.reset(saved, AFTER_SAVE_RESET);
+    expect(form.getValues()).toEqual(saved);
+    expect(form.control._getDirty()).toBe(false);
+
+    // The trap the explicit options exist for: a bare reset() inherits the follow-server
+    // policy, keeps the untrimmed input of the field just saved, and leaves the form dirty.
+    const bare = mounted(original);
+    bare.setValue('title', '  새 제목  ', { shouldDirty: true });
+    bare.reset(saved);
+    expect(bare.getValues().title).toBe('  새 제목  ');
+    expect(bare.control._getDirty()).toBe(true);
+  });
+});
 
 describe('marketToFormValues', () => {
   it('prefills the form, looking the category id up by slug and rendering KST', () => {

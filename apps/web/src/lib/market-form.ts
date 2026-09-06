@@ -12,6 +12,7 @@ import {
   marketSlugSchema,
   maxLossP,
 } from '@buddha/shared';
+import type { KeepStateOptions } from 'react-hook-form';
 import * as z from 'zod';
 import { copy } from '@/copy';
 import {
@@ -128,6 +129,33 @@ export function marketFormSchema(
       ),
   });
 }
+
+/**
+ * Reset policies of the edit form. `useForm({ resetOptions })` governs the reset the `values`
+ * prop performs when the server's values change, and react-hook-form merges the same options
+ * under every explicit `reset()` — so a reset that must NOT keep edits has to say so.
+ */
+/**
+ * A refetch in the background (a window focus past staleTime, another admin's write, a socket
+ * update): fields the admin has edited keep their input, the rest follow the server, and the
+ * form stays dirty — nothing typed is lost, and the diff on save is taken against the newest
+ * server values.
+ */
+export const FOLLOW_SERVER_RESET = {
+  keepDirtyValues: true,
+  keepDirty: true,
+} satisfies KeepStateOptions;
+/**
+ * After a save: a clean restart on the row the API answered with (trimmed, normalised). The
+ * saved fields are still marked dirty at that point, so the follow-server policy would keep
+ * the untrimmed input and leave the form dirty. `keepFieldsRef` keeps the registered inputs
+ * bound across the reset, so a keystroke before the next render is not dropped.
+ */
+export const AFTER_SAVE_RESET = {
+  keepDirtyValues: false,
+  keepDirty: false,
+  keepFieldsRef: true,
+} satisfies KeepStateOptions;
 
 /** The 무효 dialog's one field (design §4: reason required, `voidMarketBodySchema { reason: 1..500 }`). */
 export const voidMarketFormSchema = z.object({

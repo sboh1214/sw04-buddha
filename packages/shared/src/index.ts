@@ -2,6 +2,7 @@ export * from './accounting.js';
 export * from './api/envelope.js';
 export * from './api/pagination.js';
 export * from './api/path-param.js';
+export * from './api/uuid.js';
 export * from './auth.js';
 export * from './charge-package.js';
 export * from './coupon.js';

@@ -200,14 +200,18 @@ export class MarketService {
    */
   async getPublic(idOrSlug: string): Promise<Market> {
     const { markets, categories } = schema;
-    const byId = uuidParamSchema.safeParse(idOrSlug).success;
+    // The id branch goes through the schema's value, not just its verdict: lower-cased like
+    // every request-supplied uuid (api/uuid.ts), so the row is read by its canonical id.
+    const parsedId = uuidParamSchema.safeParse(idOrSlug);
     const [row] = await this.db
       .select(marketWithCategory)
       .from(markets)
       .innerJoin(categories, eq(categories.id, markets.categoryId))
       .where(
         and(
-          byId ? eq(markets.id, idOrSlug) : eq(markets.slug, idOrSlug.normalize('NFC')),
+          parsedId.success
+            ? eq(markets.id, parsedId.data)
+            : eq(markets.slug, idOrSlug.normalize('NFC')),
           ne(markets.status, 'draft'),
         ),
       )

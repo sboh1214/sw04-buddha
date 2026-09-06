@@ -403,6 +403,21 @@ describe('tradeBodySchema', () => {
       sameTradeTerms(terms, { ...terms, marketId: '3f2504e0-4f89-41d3-9a0c-0305e82c3302' }),
     ).toBe(false);
   });
+
+  it('lower-cases the market id, so a replay compares like the stored order (api/uuid.ts)', () => {
+    // Postgres returns a uuid lower-case; a body kept as sent would name another lock key,
+    // another channel and — on the same-key retry — another trade (409).
+    const shouted = { ...buy, marketId: marketId.toUpperCase() };
+    expect(tradeBodySchema.parse(shouted).marketId).toBe(marketId);
+    expect(
+      sameTradeTerms(
+        tradeTerms(tradeBodySchema.parse(shouted)),
+        tradeTerms(tradeBodySchema.parse(buy)),
+      ),
+    ).toBe(true);
+    const terms = tradeTerms(tradeBodySchema.parse(buy));
+    expect(tradeTermsSchema.parse({ ...terms, marketId: marketId.toUpperCase() })).toEqual(terms);
+  });
 });
 
 // ---- admin bodies --------------------------------------------------------------------

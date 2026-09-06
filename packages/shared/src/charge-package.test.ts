@@ -39,6 +39,14 @@ describe('chargeBodySchema', () => {
     });
     expect(chargeBodySchema.safeParse({ amountP: '10000' }).success).toBe(false);
     expect(chargeBodySchema.safeParse({ packageId: 'not-a-uuid' }).success).toBe(false);
+    // Lower-cased on the way in: the replay compares it with the payment row's (api/uuid.ts).
+    expect(
+      chargeBodySchema.parse({
+        ...terms,
+        packageId: packageId.toUpperCase(),
+        expectedAccountId: 'user-1',
+      }).packageId,
+    ).toBe(packageId);
   });
 
   it('requires both terms: an id alone cannot say what offer was accepted', () => {

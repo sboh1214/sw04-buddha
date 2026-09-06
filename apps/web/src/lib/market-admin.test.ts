@@ -180,6 +180,8 @@ describe('marketEventRows', () => {
 describe('isMarketId', () => {
   it('accepts only what the uuid path param of the API accepts', () => {
     expect(isMarketId('3f2504e0-4f89-11d3-9a0c-0305e82c3301')).toBe(true);
+    // Either case, like the API (which lower-cases it on the way in).
+    expect(isMarketId('3F2504E0-4F89-11D3-9A0C-0305E82C3301')).toBe(true);
     // A malformed id is a 400 from the API, not a 404: the screen must not offer a retry.
     expect(isMarketId('abc')).toBe(false);
     expect(isMarketId('3f2504e0-4f89-11d3-9a0c')).toBe(false);

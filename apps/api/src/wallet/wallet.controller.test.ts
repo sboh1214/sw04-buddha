@@ -279,6 +279,22 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     expect((await ledgerOf(user.id)).filter((entry) => entry.type === 'DEPOSIT')).toHaveLength(1);
   });
 
+  it('replays a charge sent with an upper-case package id (the row keeps it lower-case)', async () => {
+    // z.uuid() takes either case; the replay compares the body's id with the payment row's,
+    // which Postgres returns lower-case — kept as sent, the same purchase would be a 409.
+    const key = randomUUID();
+    const shouted = { ...pack, id: pack.id.toUpperCase() };
+    const first = await charge(shouted, user, key);
+    expect(first.statusCode).toBe(200);
+    const a = first.json<{ data: ChargeResult }>().data;
+    expect(a.payment.packageId).toBe(pack.id);
+
+    const again = await charge(shouted, user, key);
+    expect(again.statusCode).toBe(200);
+    expect(again.json<{ data: ChargeResult }>().data.payment.id).toBe(a.payment.id);
+    expect(await paymentsOf(user.id)).toHaveLength(1);
+  });
+
   it('replays the terms actually bought after an admin re-priced the package', async () => {
     // The answer is rebuilt from the payment row, never from the catalogue: an admin may edit
     // a live package between the lost answer and the retry (ADR-0026), and a client that still

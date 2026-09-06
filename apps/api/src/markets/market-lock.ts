@@ -10,7 +10,13 @@ import type { StatementExecutor } from '../infra/db/clock.js';
  *
  * Always call this on the transaction handle (`tx`), never on the pooled `db`: a session-level
  * call on a pooled connection would lock some other connection than the one doing the work.
+ *
+ * The key is the id's canonical text (`::uuid::text`, lower-case however it was written), so
+ * two spellings of one market can never take two locks — every request-supplied uuid is
+ * lower-cased at the boundary already (api/uuid.ts), and this makes the lock itself hold the
+ * rule for any caller (an M5 job, say). A string that is not a uuid fails loudly (22P02)
+ * instead of locking a phantom key.
  */
 export async function lockMarket(tx: StatementExecutor, marketId: string): Promise<void> {
-  await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${marketId}))`);
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext((${marketId})::uuid::text))`);
 }

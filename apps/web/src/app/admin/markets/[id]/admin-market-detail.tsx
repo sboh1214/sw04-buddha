@@ -59,6 +59,8 @@ import {
   transitionErrorMessage,
 } from '@/lib/market-admin';
 import {
+  AFTER_SAVE_RESET,
+  FOLLOW_SERVER_RESET,
   type MarketFormValues,
   type VoidMarketFormValues,
   marketFormSchema,
@@ -176,9 +178,12 @@ export function AdminMarketDetail({ id }: { id: string }) {
         </Card.Body>
       </Card.Root>
 
-      {/* Keyed by updatedAt: every saved write refetches, and the form restarts from the
-          server's values with a schema whose "unchanged closeAt" exemption matches them. */}
-      <EditMarketCard key={data.updatedAt} market={data} />
+      {/* Keyed by status, not updatedAt: a transition is the admin's own act and changes which
+          fields may be edited, so the form restarts from the server's values then. updatedAt
+          moves on every trade too, and a refetch in the background (a window focus past
+          staleTime, a socket update) must not throw away what the admin is typing — inside,
+          EditMarketForm takes fresh server values only for fields that hold no edits. */}
+      <EditMarketCard key={data.status} market={data} />
 
       <LmsrPanel market={data} />
       <EventLog market={data} />
@@ -401,12 +406,19 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
   const editable = isEditable(market.status);
   const [pending, setPending] = useState<UpdateMarketBody | null>(null);
 
+  // `values` follows the server: react-hook-form deep-compares it with what it last applied,
+  // so a refetch that moved only LMSR state or updatedAt (every trade) changes nothing, and
+  // one that changed a form field resets under FOLLOW_SERVER_RESET — fields the admin has
+  // edited keep their input. A save resets explicitly (onSuccess), from the row the API
+  // answered with. The resolver reads the schema memoised on the newest `original`.
   const form = useForm<MarketFormValues>({
     resolver: zodResolver(schema),
-    defaultValues: original,
+    values: original,
+    resetOptions: FOLLOW_SERVER_RESET,
   });
   const {
     handleSubmit,
+    reset,
     setError,
     formState: { isSubmitting, isDirty },
   } = form;
@@ -419,9 +431,13 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
           body,
         }),
       ).data,
-    onSuccess: async () => {
+    onSuccess: async (saved) => {
       toaster.create({ type: 'success', title: copy.adminMarketSaved });
       setPending(null);
+      // The answer is the saved row (the same shape GET returns): the form restarts from it
+      // now, clean, with the trimmed values the API kept. Explicit options — a bare reset()
+      // would inherit FOLLOW_SERVER_RESET and keep the just-saved fields as "dirty" input.
+      reset(marketToFormValues(saved, categories), AFTER_SAVE_RESET);
       await invalidate();
     },
     onError: (error) => {

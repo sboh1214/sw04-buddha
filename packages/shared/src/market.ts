@@ -2,6 +2,7 @@ import * as z from 'zod';
 import { cursorQuerySchema } from './api/pagination.js';
 import { pAmountInputSchema, pAmountSchema, serializePAmount } from './api/p-amount.js';
 import { uuidParamSchema } from './api/path-param.js';
+import { uuidSchema } from './api/uuid.js';
 import {
   BP_MAX,
   INITIAL_PROB_BP_MAX,
@@ -154,7 +155,7 @@ const INTEGER_STRING = /^(0|[1-9]\d*)$/;
  */
 export const quoteBodySchema = z
   .object({
-    marketId: z.uuid(),
+    marketId: uuidSchema,
     outcome: outcomeSchema,
     side: orderSideSchema,
     mode: quoteModeSchema,
@@ -202,7 +203,8 @@ export type QuoteResult = z.infer<typeof quoteResultSchema>;
 
 // ---- trades -------------------------------------------------------------------------
 const tradeFields = {
-  marketId: z.uuid(),
+  /** Lower-cased on the way in: the replay compares it with the stored order's (uuid.ts). */
+  marketId: uuidSchema,
   outcome: outcomeSchema,
   side: orderSideSchema,
   shares: sharesSchema,
@@ -244,7 +246,7 @@ export type TradeBody = z.infer<typeof tradeBodySchema>;
  */
 export const tradeTermsSchema = z
   .object({
-    marketId: z.uuid(),
+    marketId: uuidSchema,
     outcome: outcomeSchema,
     side: orderSideSchema,
     shares: sharesSchema,

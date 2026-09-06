@@ -202,8 +202,10 @@ export class TradeService {
     // COMMITted. Best effort from here (MarketPublisher swallows and logs), and in this order:
     // the tick first, so a client that only keeps the newest price sees the stats before the
     // fill that produced them.
+    // On the row's id, like the admin status publish: the channel name is a string, and the
+    // body's id — canonical since the boundary (api/uuid.ts) — is not the source of truth.
     for (const event of executed.marketEvents) {
-      await this.publisher.publishMarket(body.marketId, event);
+      await this.publisher.publishMarket(executed.result.market.id, event);
     }
     for (const event of executed.userEvents) {
       await this.publisher.publishUser(userId, event);
