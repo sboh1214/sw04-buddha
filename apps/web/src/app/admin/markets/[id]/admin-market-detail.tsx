@@ -28,7 +28,7 @@ import { copy } from '@/copy';
 import {
   useAdminMarket,
   useCategories,
-  useInvalidateMarket,
+  useApplyMarket,
   useMarketFills,
 } from '@/hooks/use-admin-markets';
 import {
@@ -237,7 +237,7 @@ function Item({ label, children }: { label: string; children: ReactNode }) {
  * dispute handling are M5.
  */
 function TransitionButtons({ market }: { market: AdminMarket }) {
-  const invalidate = useInvalidateMarket(market.id);
+  const apply = useApplyMarket(market.id);
   const [confirm, setConfirm] = useState<'close' | 'void' | null>(null);
   const {
     register,
@@ -261,9 +261,12 @@ function TransitionButtons({ market }: { market: AdminMarket }) {
       unwrap(
         await api.POST('/api/v1/admin/markets/{id}/open', { params: { path: { id: market.id } } }),
       ).data,
-    onSuccess: async () => {
+    // The answer is the market as the transition committed it (the same shape GET returns):
+    // it goes on the screen now, so a refetch that fails cannot leave the old status under a
+    // toast that says otherwise.
+    onSuccess: async (opened) => {
       toaster.create({ type: 'success', title: copy.adminMarketOpened });
-      await invalidate();
+      await apply(opened);
     },
     onError,
   });
@@ -273,10 +276,10 @@ function TransitionButtons({ market }: { market: AdminMarket }) {
       unwrap(
         await api.POST('/api/v1/admin/markets/{id}/close', { params: { path: { id: market.id } } }),
       ).data,
-    onSuccess: async () => {
+    onSuccess: async (closed) => {
       toaster.create({ type: 'success', title: copy.adminMarketClosed });
       setConfirm(null);
-      await invalidate();
+      await apply(closed);
     },
     onError,
   });
@@ -289,10 +292,10 @@ function TransitionButtons({ market }: { market: AdminMarket }) {
           body,
         }),
       ).data,
-    onSuccess: async () => {
+    onSuccess: async (voided) => {
       toaster.create({ type: 'success', title: copy.adminMarketVoided });
       closeDialog();
-      await invalidate();
+      await apply(voided);
     },
     onError,
   });
@@ -414,7 +417,7 @@ function EditMarketCard({ market }: { market: AdminMarket }) {
 }
 
 function EditMarketForm({ market, categories }: { market: AdminMarket; categories: Category[] }) {
-  const invalidate = useInvalidateMarket(market.id);
+  const apply = useApplyMarket(market.id);
   const original = useMemo(() => marketToFormValues(market, categories), [market, categories]);
   const editable = isEditable(market.status);
   const rulesRequired = market.status === 'open';
@@ -456,7 +459,8 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
       // now, clean, with the trimmed values the API kept. Explicit options — a bare reset()
       // would inherit FOLLOW_SERVER_RESET and keep the just-saved fields as "dirty" input.
       reset(marketToFormValues(saved, categories), AFTER_SAVE_RESET);
-      await invalidate();
+      // Same row on the card above the form, whatever the refetch does.
+      await apply(saved);
     },
     onError: (error) => {
       setPending(null);
