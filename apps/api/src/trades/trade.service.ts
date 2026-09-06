@@ -31,6 +31,7 @@ import { AppError } from '../common/errors/app-error.js';
 import { PG_UNIQUE_VIOLATION, isPgError } from '../common/errors/pg-error.js';
 import { clockTimestamp } from '../infra/db/clock.js';
 import { DB } from '../infra/db/db.provider.js';
+import { assertTradable } from '../markets/market.service.js';
 import { lockMarket } from '../markets/market-lock.js';
 import { MarketPublisher } from '../realtime/market-publisher.js';
 import { toBalance, type Page } from '../wallet/wallet.service.js';
@@ -281,9 +282,11 @@ export class TradeService {
     // older instant — `/me/ledger` would list its balance_after_p out of order and a client
     // keeping the newest `user:balance` by ts would keep the stale one.
     const executedAt = await clockTimestamp(tx);
-    if (market.closeAt.getTime() <= executedAt.getTime()) {
-      throw new AppError('MARKET_CLOSED', { message: 'Market has passed its close time' });
-    }
+    // The same guard the quote route runs, on the same clock (market.service.ts). The status
+    // was already checked before the balance lock so a refused trade locks nothing; here it
+    // cannot have changed — the market row is held FOR UPDATE — and the close time is what
+    // this re-checks.
+    assertTradable(market, executedAt);
 
     const mechanism = mechanismFor(market.mechanism);
     const state = stateOf(market);

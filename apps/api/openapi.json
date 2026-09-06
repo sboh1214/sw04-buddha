@@ -4700,7 +4700,7 @@
             "type": "integer",
             "minimum": 0,
             "exclusiveMinimum": true,
-            "maximum": 9007199254740991
+            "maximum": 2147483647
           },
           "imageUrl": {
             "nullable": true,
@@ -4763,7 +4763,7 @@
             "type": "integer",
             "minimum": 0,
             "exclusiveMinimum": true,
-            "maximum": 9007199254740991
+            "maximum": 2147483647
           },
           "imageUrl": {
             "nullable": true,

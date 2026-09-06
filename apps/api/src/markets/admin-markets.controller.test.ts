@@ -6,6 +6,7 @@
 import { schema } from '@buddha/db';
 import { createCategory, createMarket, createPosition, createUser } from '@buddha/db/test';
 import {
+  INT4_MAX,
   SIGNUP_BONUS_P,
   initState,
   marketChannel,
@@ -116,6 +117,13 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       .from(schema.balances)
       .where(eq(schema.balances.userId, userId));
     return row!;
+  }
+  async function eventsFor(marketId: string) {
+    return t.db
+      .select()
+      .from(schema.marketEvents)
+      .where(eq(schema.marketEvents.marketId, marketId))
+      .orderBy(asc(schema.marketEvents.id));
   }
   async function ledgerOf(userId: string) {
     return t.db
@@ -241,6 +249,28 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     const created = detail(await create({ slug: nfd }));
     expect(created.slug).toBe('한글-슬러그');
     expect((await marketRow(created.id)).slug).toBe('한글-슬러그');
+  });
+
+  it('refuses a category id past the int4 range at the boundary, not with a 500', async () => {
+    // categories.id is serial (int4). Without the schema cap the id reaches Postgres as an
+    // out-of-range parameter (SQLSTATE 22003), which no handler recognises: malformed input
+    // came back as 500 INTERNAL instead of the documented refusal (A-M3-18).
+    const draft = detail(await create());
+    for (const value of [INT4_MAX + 1, Number.MAX_SAFE_INTEGER]) {
+      const created = await create({ categoryId: value });
+      expect({ value, code: created.statusCode }).toEqual({ value, code: 400 });
+      expect(errorOf(created).code).toBe('VALIDATION_ERROR');
+      expect(detailPath(created)).toEqual(['categoryId']);
+
+      const patched = await patch(`/api/v1/admin/markets/${draft.id}`, { categoryId: value });
+      expect({ value, code: patched.statusCode }).toEqual({ value, code: 400 });
+      expect(detailPath(patched)).toEqual(['categoryId']);
+    }
+
+    // The largest id the column can hold still reaches the lookup and gets the 404.
+    const edge = await create({ categoryId: INT4_MAX });
+    expect(edge.statusCode).toBe(404);
+    expect(detailPath(edge)).toEqual(['categoryId']);
   });
 
   it('validates the category, the close time and the body; a draft may have blank rules', async () => {
@@ -404,6 +434,71 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     const blanked = await patch(`/api/v1/admin/markets/${draft.id}`, { rules: '' });
     expect(blanked.statusCode).toBe(200);
     expect(detail(blanked).rules).toBe('');
+  });
+
+  it('stamps every transition row with the instant the transition happened (ADR-0027)', async () => {
+    // market_events.created_at used to fall back to the column default `now()`, which is the
+    // transaction START — fixed before the transaction waits on the market lock. The event
+    // log then sorted a transition below an edit that committed while it queued. Every row a
+    // transition writes now carries the post-lock database clock, so the row, its payload and
+    // the market column all name one instant.
+    const draft = detail(await create());
+    const opened = detail(await open(draft.id));
+    const openEvent = (await eventsFor(draft.id)).find((event) => event.type === 'opened')!;
+    expect(openEvent.createdAt.toISOString()).toBe(opened.openAt);
+    expect((await marketRow(draft.id)).updatedAt.toISOString()).toBe(opened.openAt);
+    const [tick] = await t.db
+      .select()
+      .from(schema.priceTicks)
+      .where(eq(schema.priceTicks.marketId, draft.id));
+    expect(tick!.ts.toISOString()).toBe(opened.openAt);
+    const openAction = (await actionsFor(draft.id)).find((row) => row.type === 'market_open')!;
+    expect(openAction.createdAt.toISOString()).toBe(opened.openAt);
+
+    const closed = detail(await close(draft.id));
+    const closeEvent = (await eventsFor(draft.id)).find((event) => event.type === 'closed')!;
+    expect((closeEvent.payload as { closedAt: string }).closedAt).toBe(
+      closeEvent.createdAt.toISOString(),
+    );
+    expect(closeEvent.createdAt.toISOString()).toBe(closed.updatedAt);
+
+    const voided = detail(await voidMarket(draft.id));
+    const voidEvent = (await eventsFor(draft.id)).find((event) => event.type === 'voided')!;
+    expect(voidEvent.createdAt.toISOString()).toBe(voided.voidedAt);
+  });
+
+  it('keeps a transition above an edit that commits while it waits on the market lock', async () => {
+    // The close begins (its transaction-start `now()` is fixed) and queues on the market
+    // lock; a rules PATCH, which takes only the market row, commits meanwhile. The close then
+    // commits with the later instant and must be shown as the later event: the log is ordered
+    // by market_events.id, which is drawn under the market row lock, so it is insert order.
+    const row = await market({ status: 'open', rules: '원래 규칙' });
+    const holder = await t.db.$client.connect();
+    let pending: ReturnType<typeof close> | undefined;
+    let released = false;
+    try {
+      await holder.query('SELECT pg_advisory_lock(hashtext($1))', [row.id]);
+      pending = close(row.id);
+      await waitForLockWaiter(holder, 'the close on the market lock');
+      const edited = await patch(`/api/v1/admin/markets/${row.id}`, { rules: '고친 규칙' });
+      expect(edited.statusCode).toBe(200);
+      await holder.query('SELECT pg_advisory_unlock(hashtext($1))', [row.id]);
+      released = true;
+      expect((await pending).statusCode).toBe(200);
+    } finally {
+      if (!released) await holder.query('SELECT pg_advisory_unlock_all()');
+      holder.release();
+      await pending?.catch(() => undefined);
+    }
+
+    const events = await eventsFor(row.id);
+    const closeEvent = events.find((event) => event.type === 'closed')!;
+    const editEvent = events.find((event) => event.type === 'rules_edited')!;
+    expect(closeEvent.id).toBeGreaterThan(editEvent.id);
+    expect(closeEvent.createdAt.getTime()).toBeGreaterThanOrEqual(editEvent.createdAt.getTime());
+    // What the admin screen renders, newest first.
+    const shown = detail(await get(`/api/v1/admin/markets/${row.id}`));
+    expect(shown.events.map((event) => event.type)).toEqual(['closed', 'rules_edited']);
   });
 
   // --- open / close ---------------------------------------------------------------------

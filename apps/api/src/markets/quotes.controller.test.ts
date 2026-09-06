@@ -14,7 +14,7 @@ import {
   type QuoteResult,
 } from '@buddha/shared';
 import { randomUUID } from 'node:crypto';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTestApp, type TestApp } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { lmsrStateOf } from './market.service.js';
@@ -204,6 +204,37 @@ describe.skipIf(!hasTestInfra)('quotes (integration)', () => {
         details.some((issue) => issue.path[0] === 'value' && /at most/.test(issue.message)),
       ).toBe(true);
     }
+  });
+
+  it('decides the close time on the database clock, not the API host one (PLAN 5.4)', async () => {
+    // `POST /trades` compares close_at against clock_timestamp() after its locks, so a quote
+    // that used the host clock would promise a price the trade refuses (and refuse one it
+    // fills) by the whole skew between the two machines. Only Date is faked here: the pg and
+    // ioredis timers keep running.
+    const row = await market({ closeAt: new Date(Date.now() + 10 * 60_000) });
+    const body = {
+      marketId: row.id,
+      outcome: 'YES' as const,
+      side: 'buy' as const,
+      mode: 'shares' as const,
+      value: '10',
+    };
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      // An API host running an hour fast: its own clock says the market closed 50 minutes ago.
+      vi.setSystemTime(new Date(Date.now() + 60 * 60_000));
+      const res = await quote(body);
+      expect(res.statusCode).toBe(200);
+      expect(res.json<{ data: QuoteResult }>().data.shares).toBe(10);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // And the database clock refuses on its own terms, with no faking involved.
+    const expired = await market({ closeAt: new Date(Date.now() - 60_000) });
+    const refused = await quote({ ...body, marketId: expired.id });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json()).toMatchObject({ error: { code: 'MARKET_CLOSED' } });
   });
 
   it('answers MARKET_NOT_OPEN, MARKET_CLOSED or NOT_FOUND for a market not taking orders', async () => {

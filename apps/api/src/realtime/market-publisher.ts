@@ -22,8 +22,10 @@ import { REDIS } from '../infra/redis/redis.provider.js';
  * Callers with several events issue them back to back and await them together — ioredis
  * writes them in call order on the one connection, so the order on the wire is kept, and a
  * stalled Redis costs one bound, not one per event. Two trades on one market may publish out
- * of commit order (the lock is released at COMMIT, the publish happens after); every event
- * carries `ts`, so the client keeps the newest.
+ * of commit order (the lock is released at COMMIT, the publish happens after), so an event
+ * whose entity can change again carries a strictly ordered key the client compares with
+ * `supersedes` (`realtime.ts`); `ts` is for display, and `market:status` is ordered by
+ * status rank instead.
  */
 @Injectable()
 export class MarketPublisher {

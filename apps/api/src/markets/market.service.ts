@@ -42,6 +42,25 @@ export const marketWithCategory = {
 };
 
 /** `numeric` columns cross drizzle as strings; the engine wants doubles (PLAN 0.2). */
+/**
+ * Refuses a trade or a quote on a market that is not taking orders (PLAN 5.2, design 3.6):
+ * MARKET_NOT_OPEN for any status but `open`, MARKET_CLOSED for an open market whose close
+ * time has passed (the M5 close job has not run yet, or is about to). A draft never gets
+ * here: `requirePublic` answers NOT_FOUND for it first.
+ *
+ * One implementation for both routes, and both call it with the database clock (the quote
+ * through `requirePublicAt`, the trade with its post-lock `executedAt`), so a quote cannot
+ * call a market tradable that `POST /trades` refuses a moment later for the time alone.
+ */
+export function assertTradable(market: Pick<MarketRow, 'status' | 'closeAt'>, now: Date): void {
+  if (market.status !== 'open') {
+    throw new AppError('MARKET_NOT_OPEN', { message: `Market is ${market.status}` });
+  }
+  if (market.closeAt.getTime() <= now.getTime()) {
+    throw new AppError('MARKET_CLOSED', { message: 'Market has passed its close time' });
+  }
+}
+
 export function lmsrStateOf(row: Pick<MarketRow, 'qYes' | 'qNo' | 'liquidityB'>): LmsrState {
   return {
     qYes: parseQuantity(row.qYes),
@@ -225,16 +244,30 @@ export class MarketService {
 
   /**
    * The market row for a public sub-resource (fills, ticks, quotes): NOT_FOUND for an unknown
-   * id and for a draft alike.
+   * id and for a draft alike — with the database clock read in the same statement, so a
+   * caller that decides on time (`assertTradable`) uses the clock `POST /trades` will use
+   * and not the API host's, at no extra round trip (clock.ts, A-M3-16). Epoch millis as
+   * text, like `clockTimestamp`: no driver-side date parser is involved.
    */
-  async requirePublic(marketId: string): Promise<MarketRow> {
+  async requirePublicAt(marketId: string): Promise<{ market: MarketRow; now: Date }> {
     const [row] = await this.db
-      .select()
+      .select({
+        market: schema.markets,
+        nowMs: sql<string>`(extract(epoch FROM clock_timestamp()) * 1000)::bigint::text`,
+      })
       .from(schema.markets)
       .where(and(eq(schema.markets.id, marketId), ne(schema.markets.status, 'draft')))
       .limit(1);
     if (!row) throw new AppError('NOT_FOUND', { message: 'Market not found' });
-    return row;
+    const ms = Number(row.nowMs);
+    if (!Number.isSafeInteger(ms)) {
+      throw new AppError('INTERNAL', { message: 'clock_timestamp() returned no value' });
+    }
+    return { market: row.market, now: new Date(ms) };
+  }
+
+  async requirePublic(marketId: string): Promise<MarketRow> {
+    return (await this.requirePublicAt(marketId)).market;
   }
 
   /** Newest FILLS_RECENT_LIMIT fills, anonymous (PLAN 7.1). */

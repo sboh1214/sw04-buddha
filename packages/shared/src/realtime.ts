@@ -15,8 +15,19 @@ import { marketStatusSchema, orderSideSchema, outcomeSchema } from './enums.js';
  * drawn under the account's balance lock, so strictly increasing per account in commit
  * order; `/me/ledger` shows the current one), `user:position.version` (the row's version,
  * bumped on every write under the market lock), `market:tick.tradeCount` and
- * `market:trade.fillId` (both per market, under the market lock). `ts` is for display.
- * `market:status` is a monotone state machine and keeps the newest by `ts`.
+ * `market:trade.fillId` (both per market, under the market lock). `ts` is for display, and
+ * keys are compared within one event type, never across them (they come from different
+ * sequences).
+ *
+ * `market:status` is the exception: it carries no key, and a client keeps the higher status
+ * rank in `MARKET_STATUSES` order (`enums.ts`). That is a total order only while no
+ * transition repeats a status — it holds through M3 (draft → open → closed, and void from
+ * open/closed/resolving, with `settled` never voidable) and it is what a REST snapshot can
+ * be compared against, which no event id would be. M5's `result_changed` repeats
+ * `resolving` with a new result and dispute deadline, so before it publishes its first
+ * event `market:status` must gain a strict key — `market_events.id` of the transition,
+ * which is drawn under the market's row lock and is therefore in commit order per market —
+ * and the market DTOs must carry that key so a snapshot can seed it (A-M3-19, Q-M3-8).
  */
 export const REALTIME_EVENT_TYPES = [
   'market:tick',

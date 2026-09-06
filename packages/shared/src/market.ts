@@ -6,6 +6,7 @@ import { uuidSchema } from './api/uuid.js';
 import {
   BP_MAX,
   INITIAL_PROB_BP_MAX,
+  INT4_MAX,
   INITIAL_PROB_BP_MIN,
   LIQUIDITY_B_MAX,
   LIQUIDITY_B_MIN,
@@ -474,7 +475,8 @@ const marketFields = {
   /** May be blank while draft; `open` refuses a blank one with RULES_REQUIRED. */
   rules: z.string().max(MARKET_TEXT_MAX),
   resolutionSource: z.string().trim().max(MARKET_SOURCE_MAX).nullish(),
-  categoryId: z.number().int().positive(),
+  /** int4 column: an unbounded id would reach Postgres as an out-of-range parameter (500). */
+  categoryId: z.number().int().positive().max(INT4_MAX),
   imageUrl: z
     .url({ protocol: /^https?$/ })
     .max(MARKET_IMAGE_URL_MAX)

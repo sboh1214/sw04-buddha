@@ -8,23 +8,7 @@ import {
   type QuoteBody,
   type QuoteResult,
 } from '@buddha/shared';
-import { AppError } from '../common/errors/app-error.js';
-import { MarketService, lmsrStateOf, type MarketRow } from './market.service.js';
-
-/**
- * Refuses a trade or a quote on a market that is not taking orders (PLAN 5.2, design 3.6):
- * MARKET_NOT_OPEN for any status but `open`, MARKET_CLOSED for an open market whose close
- * time has passed (the M5 close job has not run yet, or is about to). A draft never gets
- * here: `requirePublic` answers NOT_FOUND for it first.
- */
-export function assertTradable(market: Pick<MarketRow, 'status' | 'closeAt'>, now: Date): void {
-  if (market.status !== 'open') {
-    throw new AppError('MARKET_NOT_OPEN', { message: `Market is ${market.status}` });
-  }
-  if (market.closeAt.getTime() <= now.getTime()) {
-    throw new AppError('MARKET_CLOSED', { message: 'Market has passed its close time' });
-  }
-}
+import { MarketService, assertTradable, lmsrStateOf } from './market.service.js';
 
 /**
  * `POST /quotes` (PLAN 7.1): a read-only price check, public and side-effect free. The
@@ -37,8 +21,10 @@ export class QuoteService {
   constructor(private readonly markets: MarketService) {}
 
   async quote(body: QuoteBody): Promise<QuoteResult> {
-    const market = await this.markets.requirePublic(body.marketId);
-    assertTradable(market, new Date());
+    // The market and the database clock in one statement: the close time is decided on the
+    // clock the trade will use, not the API host's (A-M3-16).
+    const { market, now } = await this.markets.requirePublicAt(body.marketId);
+    assertTradable(market, now);
 
     const mechanism = mechanismFor(market.mechanism);
     const state = lmsrStateOf(market);

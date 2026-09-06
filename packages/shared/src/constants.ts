@@ -55,8 +55,16 @@ export function isNoEmailAddress(email: string): boolean {
 export const TRADE_MIN_SHARES = 1;
 export const ORDER_QTY_MAX = 1_000_000;
 
+/**
+ * Largest value a Postgres `integer`/`serial` column holds. A request field compared with
+ * one — `positions.qty`, `categories.id` — must be bounded by it at the boundary: the driver
+ * sends the value as an int4 parameter and Postgres answers SQLSTATE 22003, which the API
+ * has no handler for, so an unbounded field turns malformed input into a 500 (A-M3-18).
+ */
+export const INT4_MAX = 2_147_483_647;
+
 /** positions.qty is int4; `applyBuy` refuses to grow a position past it. */
-export const POSITION_QTY_MAX = 2_147_483_647;
+export const POSITION_QTY_MAX = INT4_MAX;
 
 /** Bound on request-side P fields (maxCostP, minProceedsP, quote spend): 10^15. */
 export const MAX_P_AMOUNT = 10n ** 15n;

@@ -1,6 +1,7 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import {
+  INT4_MAX,
   LIQUIDITY_B_MAX,
   MARKET_SLUG_PATTERN,
   MARKET_SLUG_STEM_MAX,
@@ -462,6 +463,13 @@ describe('createMarketBodySchema', () => {
     expect(full.slug).toBe('kospi-3000');
   });
 
+  it('accepts the largest category id a serial column can hold', () => {
+    const parsed = createMarketBodySchema.parse({ ...body, categoryId: INT4_MAX });
+    expect(parsed.categoryId).toBe(INT4_MAX);
+    expect(updateMarketBodySchema.safeParse({ categoryId: INT4_MAX }).success).toBe(true);
+    expect(updateMarketBodySchema.safeParse({ categoryId: INT4_MAX + 1 }).success).toBe(false);
+  });
+
   it('refuses bad fields', () => {
     for (const patch of [
       { title: '' },
@@ -469,6 +477,8 @@ describe('createMarketBodySchema', () => {
       { rules: 'x'.repeat(5001) },
       { categoryId: 0 },
       { categoryId: 1.5 },
+      // int4: without the cap this reaches Postgres as an out-of-range parameter (500).
+      { categoryId: INT4_MAX + 1 },
       { closeAt: 'tomorrow' },
       { initialProbBp: 0 },
       { initialProbBp: 10_000 },

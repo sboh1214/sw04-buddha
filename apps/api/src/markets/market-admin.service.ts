@@ -191,13 +191,16 @@ export class MarketAdminService {
    * title; a taken slug is a VALIDATION_ERROR naming `slug` (the unique index decides).
    */
   async create(adminId: string, body: CreateMarketBody): Promise<AdminMarket> {
-    const now = new Date();
     const closeAt = new Date(body.closeAt);
-    assertFutureCloseAt(closeAt, now);
     const slug = body.slug ?? generateSlug(body.title);
 
     try {
-      const row = await this.db.transaction(async (tx) => {
+      return await this.db.transaction(async (tx) => {
+        // Every instant this service writes or compares comes from the database clock, read
+        // inside the transaction (and after the locks, where there are any) — see clock.ts.
+        // The close time is checked before the category so the error precedence is unchanged.
+        const now = await clockTimestamp(tx);
+        assertFutureCloseAt(closeAt, now);
         await this.requireActiveCategory(tx, body.categoryId);
         const [row] = await tx
           .insert(schema.markets)
@@ -224,6 +227,7 @@ export class MarketAdminService {
           actorId: adminId,
           // The body is JSON-safe as parsed: strings, numbers and nulls only.
           payload: { ...body, slug },
+          createdAt: now,
         });
         await tx.insert(schema.adminActions).values({
           adminId,
@@ -231,10 +235,13 @@ export class MarketAdminService {
           targetType: 'market',
           targetId: row.id,
           payload: { after: snapshot(row) },
+          createdAt: now,
         });
-        return row;
+        // Read the detail inside the transaction, as every other write path does: after the
+        // commit it would be a fresh snapshot on the pool and could already show somebody
+        // else's write in the answer to "here is what you created".
+        return await this.toAdminMarket(tx, row);
       });
-      return await this.get(row.id);
     } catch (error) {
       if (isPgError(error, PG_UNIQUE_VIOLATION, MARKET_SLUG_UNIQUE)) {
         throw new AppError('VALIDATION_ERROR', {
@@ -276,7 +283,9 @@ export class MarketAdminService {
         throw wrongStatus(current.status);
       }
 
-      const now = new Date();
+      // After the row lock this transaction waited on: a transition (or another PATCH) may
+      // have committed meanwhile, and this edit's rows must sort after it (clock.ts).
+      const now = await clockTimestamp(tx);
       const set: Partial<typeof schema.markets.$inferInsert> = { updatedAt: now };
       if (body.title !== undefined) set.title = body.title;
       if (body.description !== undefined) set.description = body.description ?? null;
@@ -330,6 +339,7 @@ export class MarketAdminService {
           type: 'rules_edited',
           actorId: adminId,
           payload: { before: current.rules, after: row.rules },
+          createdAt: now,
         });
       }
       await tx.insert(schema.adminActions).values({
@@ -338,6 +348,7 @@ export class MarketAdminService {
         targetType: 'market',
         targetId: current.id,
         payload: { before: snapshot(current), after: snapshot(row) },
+        createdAt: now,
       });
       return this.toAdminMarket(tx, row);
     });
@@ -355,7 +366,10 @@ export class MarketAdminService {
       if (current.rules.trim() === '') {
         throw rulesRequired('Rules are required before a market opens');
       }
-      const now = new Date();
+      // The database clock after the market lock, as a trade reads it: this transaction may
+      // have waited behind one, and the open tick it writes must sort with that trade's ticks
+      // on one clock (clock.ts).
+      const now = await clockTimestamp(tx);
       assertFutureCloseAt(current.closeAt, now);
 
       const [row] = await tx
@@ -375,6 +389,7 @@ export class MarketAdminService {
         type: 'opened',
         actorId: adminId,
         payload: { openAt: now.toISOString(), closeAt: row.closeAt.toISOString() },
+        createdAt: now,
       });
       await tx.insert(schema.adminActions).values({
         adminId,
@@ -382,6 +397,7 @@ export class MarketAdminService {
         targetType: 'market',
         targetId: current.id,
         payload: { before: snapshot(current), after: snapshot(row) },
+        createdAt: now,
       });
       return this.toAdminMarket(tx, row);
     });
@@ -397,7 +413,9 @@ export class MarketAdminService {
       if (current.status !== 'open') {
         throw new AppError('MARKET_NOT_OPEN', { message: `Market is ${current.status}` });
       }
-      const now = new Date();
+      // The database clock after the market lock (clock.ts): a trade or a PATCH may have
+      // committed while this transaction queued, and every row it writes must sort after it.
+      const now = await clockTimestamp(tx);
       const [row] = await tx
         .update(schema.markets)
         .set({ status: 'closed', updatedAt: now })
@@ -409,6 +427,7 @@ export class MarketAdminService {
         type: 'closed',
         actorId: adminId,
         payload: { closedAt: now.toISOString() },
+        createdAt: now,
       });
       await tx.insert(schema.adminActions).values({
         adminId,
@@ -416,6 +435,7 @@ export class MarketAdminService {
         targetType: 'market',
         targetId: current.id,
         payload: { before: snapshot(current), after: snapshot(row) },
+        createdAt: now,
       });
       return this.toAdminMarket(tx, row);
     });
@@ -538,6 +558,7 @@ export class MarketAdminService {
         type: 'voided',
         actorId: adminId,
         payload: summary,
+        createdAt: now,
       });
       await tx.insert(schema.adminActions).values({
         adminId,
@@ -545,6 +566,7 @@ export class MarketAdminService {
         targetType: 'market',
         targetId: current.id,
         payload: { ...summary, before: snapshot(current), after: snapshot(row) },
+        createdAt: now,
       });
       return { market: await this.toAdminMarket(tx, row), refunds };
     });
@@ -716,11 +738,14 @@ export class MarketAdminService {
       else openInterest.no = Number(line.qty);
     }
 
+    // By id, not by created_at: every market_events row is inserted while its writer holds
+    // that market's row FOR UPDATE, so the bigserial is drawn in lock order and the newest
+    // id is the newest event. created_at can only tie-break, never correct an inversion.
     const events = await executor
       .select()
       .from(schema.marketEvents)
       .where(eq(schema.marketEvents.marketId, row.id))
-      .orderBy(desc(schema.marketEvents.createdAt), desc(schema.marketEvents.id))
+      .orderBy(desc(schema.marketEvents.id))
       .limit(ADMIN_EVENTS_LIMIT);
 
     return {
