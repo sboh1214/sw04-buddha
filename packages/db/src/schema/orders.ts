@@ -7,7 +7,7 @@ import {
   pgTable,
   smallint,
   text,
-  unique,
+  uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
 import { user } from './auth.js';
@@ -44,7 +44,13 @@ export const orders = pgTable(
     filledQty: integer().notNull().default(0),
     status: orderStatusEnum().notNull(),
     timeInForce: timeInForceEnum().notNull().default('ioc'),
-    /** Idempotency-Key header (PLAN 5.4); Redis is the fast path, this UNIQUE is the guard. */
+    /**
+     * The client's `Idempotency-Key` (PLAN 5.4), unique per account like
+     * `payments.idempotency_key` (migration 0009; before it the key was unique across every
+     * user, so client-minted keys could collide with, or probe, another account's). There is
+     * no Redis response cache: a replay is rebuilt from this row, its fill and its ledger
+     * entry, which already hold the answer and never expire (ADR-0027, M3 design 3.3).
+     */
     idempotencyKey: text().notNull(),
     // slippage guards (PLAN 5.3)
     maxCostP: bigint({ mode: 'bigint' }),
@@ -55,8 +61,8 @@ export const orders = pgTable(
   (t) => [
     index('orders_user_id_created_at_idx').on(t.userId, desc(t.createdAt)),
     index('orders_market_id_status_idx').on(t.marketId, t.status),
-    // Named explicitly: `.unique()` would derive `orders_idempotencyKey_unique` from the TS key.
-    unique('orders_idempotency_key_unique').on(t.idempotencyKey),
+    // Per account, so one user's key can never collide with or probe another's (as payments).
+    uniqueIndex('orders_user_id_idempotency_key_unique').on(t.userId, t.idempotencyKey),
     check('orders_qty_check', sql`${t.qty} > 0`),
     check('orders_filled_qty_check', sql`${t.filledQty} >= 0 AND ${t.filledQty} <= ${t.qty}`),
     check(

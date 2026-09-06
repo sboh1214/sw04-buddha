@@ -64,6 +64,13 @@
       "when": 1788584904325,
       "tag": "0008_payments_idempotency_key",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1788621636410,
+      "tag": "0009_orders_idempotency_per_user",
+      "breakpoints": true
     }
   ]
 }

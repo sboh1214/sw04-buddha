@@ -6,17 +6,28 @@
 import { randomUUID } from 'node:crypto';
 import {
   DEFAULT_LIQUIDITY_B,
-  SIGNUP_BONUS_P,
   INITIAL_PROB_BP_MAX,
   INITIAL_PROB_BP_MIN,
-  PRICE_MAX,
-  PRICE_MIN,
+  SIGNUP_BONUS_P,
+  initState,
+  maxLossP,
+  priceOf,
+  serializeQuantity,
   type MarketStatus,
+  type Outcome,
   type Role,
 } from '@buddha/shared';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../client.js';
-import { balances, categories, ledgerEntries, markets, profiles, user } from '../schema/index.js';
+import {
+  balances,
+  categories,
+  ledgerEntries,
+  markets,
+  positions,
+  profiles,
+  user,
+} from '../schema/index.js';
 
 /** Short unique tag for generated emails/slugs/nicknames. */
 const tag = () => randomUUID().replaceAll('-', '').slice(0, 8);
@@ -118,14 +129,23 @@ export interface CreateMarketInput {
   initialProbBp?: number;
   /** LMSR liquidity parameter (default DEFAULT_LIQUIDITY_B). */
   liquidityB?: number;
+  /**
+   * LMSR quantities to store instead of `initState(p0, b)`: a test that needs a market at a
+   * specific point of its price curve sets both. `lastPrice` follows whatever state is stored;
+   * `reserveP` always comes from (p0, b), as it does for a real market.
+   */
+  qYes?: number;
+  qNo?: number;
+  /** Statistics overrides (list sorting tests). Default 0 like a market nobody traded. */
+  volumeP?: bigint;
+  tradeCount?: number;
   closeAt?: Date;
 }
 
 /**
- * Inserts a market with LMSR state initialised per PLAN 5.3:
- *   qYes = b * ln(p0 / (1 - p0)), qNo = 0, reserve = ceil(100 * b * ln 2),
- *   lastPrice = clamp(round(p0 * 100), 1, 99).
- * TODO(M3): replace the inline maths with `initState`/`priceOf` from @buddha/shared/lmsr.
+ * Inserts a market with LMSR state initialised by @buddha/shared exactly as the admin create
+ * path does (PLAN 5.3, ADR-0027): `initState(p0, b)` for the quantities, `priceOf` for the
+ * displayed price and `maxLossP(p0, b)` for the reserve. Writes no tick and no event.
  */
 export async function createMarket(db: Db, input: CreateMarketInput = {}) {
   const t = tag();
@@ -134,13 +154,18 @@ export async function createMarket(db: Db, input: CreateMarketInput = {}) {
   const status = input.status ?? 'open';
   const initialProbBp = input.initialProbBp ?? 5000;
   if (initialProbBp < INITIAL_PROB_BP_MIN || initialProbBp > INITIAL_PROB_BP_MAX) {
-    throw new RangeError(`initialProbBp must be 1..9999, got ${initialProbBp}`);
+    throw new RangeError(`initialProbBp must be 1..9999, got ${String(initialProbBp)}`);
+  }
+  if ((input.qYes === undefined) !== (input.qNo === undefined)) {
+    throw new RangeError('qYes and qNo must be given together');
   }
   const b = input.liquidityB ?? DEFAULT_LIQUIDITY_B;
   const p0 = initialProbBp / 10_000;
-  const qYes = b * Math.log(p0 / (1 - p0));
-  const reserveP = BigInt(Math.ceil(100 * b * Math.LN2));
-  const lastPrice = Math.min(PRICE_MAX, Math.max(PRICE_MIN, Math.round(p0 * 100)));
+  const init = initState(p0, b);
+  const state =
+    input.qYes !== undefined && input.qNo !== undefined
+      ? { qYes: input.qYes, qNo: input.qNo, b }
+      : init;
   const now = new Date();
 
   const [row] = await db
@@ -154,14 +179,51 @@ export async function createMarket(db: Db, input: CreateMarketInput = {}) {
       categoryId,
       status,
       liquidityB: b.toFixed(6),
-      qYes: qYes.toFixed(10),
-      qNo: (0).toFixed(10),
+      qYes: serializeQuantity(state.qYes),
+      qNo: serializeQuantity(state.qNo),
       initialProbBp,
-      reserveP,
-      lastPrice,
+      reserveP: maxLossP(p0, b),
+      lastPrice: priceOf(state),
+      volumeP: input.volumeP ?? 0n,
+      tradeCount: input.tradeCount ?? 0,
       openAt: status === 'draft' ? null : now,
       closeAt: input.closeAt ?? new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),
       createdBy,
+    })
+    .returning();
+  return row!;
+}
+
+export interface CreatePositionInput {
+  userId: string;
+  marketId: string;
+  outcome: Outcome;
+  qty: number;
+  /** Default 0. */
+  costBasisP?: bigint;
+  /** Default 0. */
+  realizedPnlP?: bigint;
+  /** Default false. */
+  settled?: boolean;
+}
+
+/**
+ * Inserts a `positions` row and nothing else: no ledger entry, no balance change, no market
+ * statistics. That makes it right for tests of reads and settlement inputs (a holder exists),
+ * and wrong for anything that audits the books (PLAN 5.6) — a test that needs a position the
+ * ledger can explain trades through `POST /trades` instead.
+ */
+export async function createPosition(db: Db, input: CreatePositionInput) {
+  const [row] = await db
+    .insert(positions)
+    .values({
+      userId: input.userId,
+      marketId: input.marketId,
+      outcome: input.outcome,
+      qty: input.qty,
+      costBasisP: input.costBasisP ?? 0n,
+      realizedPnlP: input.realizedPnlP ?? 0n,
+      settled: input.settled ?? false,
     })
     .returning();
   return row!;

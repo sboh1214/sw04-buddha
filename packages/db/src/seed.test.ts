@@ -3,15 +3,19 @@ import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { SIGNUP_BONUS_P } from '@buddha/shared';
-import { and, eq, sql } from 'drizzle-orm';
+import { SIGNUP_BONUS_P, maxLossP } from '@buddha/shared';
+import { and, asc, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   account,
   adminActions,
   balances,
+  categories,
   chargePackages,
   ledgerEntries,
+  marketEvents,
+  markets,
+  priceTicks,
   profiles,
   user,
 } from './schema/index.js';
@@ -27,28 +31,71 @@ const packageRoot = fileURLToPath(new URL('..', import.meta.url));
 const ADMIN_EMAIL = 'seed-admin@test.local';
 const ADMIN_PASSWORD = 'seed-admin-1234';
 
-function seedSpawnOptions() {
+function seedSpawnOptions(options: { admin?: boolean } = {}) {
   const urls = testDbUrls();
   if (!urls) throw new Error('TEST_DATABASE_URL is not set');
+  const env: Record<string, string | undefined> = { ...process.env, DATABASE_URL: urls.appUrl };
+  if (options.admin ?? true) {
+    env.SEED_ADMIN_EMAIL = ADMIN_EMAIL;
+    env.SEED_ADMIN_PASSWORD = ADMIN_PASSWORD;
+  } else {
+    // Empty, not deleted: `loadRootEnv()` fills only variables that are absent, and the root
+    // .env sets both, so a deleted variable would come back from the file. An empty value is
+    // what a deploy without an admin configured looks like to the seed (`if (email && ...)`).
+    env.SEED_ADMIN_EMAIL = '';
+    env.SEED_ADMIN_PASSWORD = '';
+  }
   return {
     cwd: packageRoot,
     encoding: 'utf8' as const,
     // A child parked on a lock must not outlive the test that parked it.
     timeout: 55_000,
-    env: {
-      ...process.env,
-      DATABASE_URL: urls.appUrl,
-      SEED_ADMIN_EMAIL: ADMIN_EMAIL,
-      SEED_ADMIN_PASSWORD: ADMIN_PASSWORD,
-    },
+    env,
   };
 }
 
 const SEED_ARGS = ['--import', 'tsx', 'src/seed.ts'];
 
-function runSeed(): string {
-  return execFileSync(process.execPath, SEED_ARGS, seedSpawnOptions());
+function runSeed(options: { admin?: boolean } = {}): string {
+  return execFileSync(process.execPath, SEED_ARGS, seedSpawnOptions(options));
 }
+
+/** M3 design 2 / PLAN 13 M3: 12 open markets, 2-3 per category. */
+const EXPECTED_MARKETS: Record<string, string[]> = {
+  economy: [
+    'bok-october-rate-cut-2026',
+    'cpi-september-2026-above-2pct',
+    'krw-usd-yearend-2026-above-1400',
+  ],
+  weather: [
+    'seoul-first-snow-before-nov-20-2026',
+    'seoul-october-2026-rain-above-50mm',
+    'seoul-november-2026-below-minus-5',
+  ],
+  tech: ['korea-telco-6g-trial-2026', 'samsung-trifold-korea-launch-2026'],
+  entertainment: ['november-2026-korean-film-3m-in-2-weeks', 'melon-last-week-2026-domestic-no1'],
+  culture: ['national-museum-2026-visitors-above-4m', 'korea-new-books-2026-more-than-2025'],
+};
+
+/**
+ * Absolute close instants (UTC): each sits at or before its rule's own cutoff, so trading
+ * stops before the outcome is public no matter when the first seed ran. Kept in step with the
+ * content by hand — this is the one field a drift in seed.ts would not show in the copy.
+ */
+const EXPECTED_CLOSE_AT: Record<string, string> = {
+  'bok-october-rate-cut-2026': '2026-10-21T14:59:59.000Z',
+  'cpi-september-2026-above-2pct': '2026-09-30T14:59:59.000Z',
+  'krw-usd-yearend-2026-above-1400': '2026-12-29T14:59:59.000Z',
+  'seoul-first-snow-before-nov-20-2026': '2026-11-19T15:00:00.000Z',
+  'seoul-october-2026-rain-above-50mm': '2026-10-31T14:59:59.000Z',
+  'seoul-november-2026-below-minus-5': '2026-11-30T14:59:59.000Z',
+  'korea-telco-6g-trial-2026': '2026-12-31T14:59:59.000Z',
+  'samsung-trifold-korea-launch-2026': '2026-12-31T14:59:59.000Z',
+  'november-2026-korean-film-3m-in-2-weeks': '2026-12-13T14:59:59.000Z',
+  'melon-last-week-2026-domestic-no1': '2026-12-27T14:59:59.000Z',
+  'national-museum-2026-visitors-above-4m': '2026-12-31T14:59:59.000Z',
+  'korea-new-books-2026-more-than-2025': '2026-12-31T14:59:59.000Z',
+};
 
 /** The same CLI, not awaited: for running two seeds at once. Rejects on a non-zero exit. */
 function startSeed(): Promise<{ stdout: string; stderr: string }> {
@@ -163,6 +210,103 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
     expect(await t.db.select().from(chargePackages)).toHaveLength(0);
   });
 
+  describe('markets (M3 design 2, PLAN 13 M3)', () => {
+    async function marketState() {
+      const rows = await t.db
+        .select({
+          id: markets.id,
+          slug: markets.slug,
+          title: markets.title,
+          rules: markets.rules,
+          category: categories.slug,
+          status: markets.status,
+          mechanism: markets.mechanism,
+          initialProbBp: markets.initialProbBp,
+          liquidityB: markets.liquidityB,
+          reserveP: markets.reserveP,
+          lastPrice: markets.lastPrice,
+          openAt: markets.openAt,
+          closeAt: markets.closeAt,
+          createdBy: markets.createdBy,
+        })
+        .from(markets)
+        .innerJoin(categories, eq(categories.id, markets.categoryId))
+        .orderBy(asc(markets.slug));
+      const ticks = await t.db.select().from(priceTicks).orderBy(asc(priceTicks.id));
+      const events = await t.db.select().from(marketEvents).orderBy(asc(marketEvents.id));
+      return { rows, ticks, events };
+    }
+
+    it('creates the 12 open markets with their open tick and created/opened events', async () => {
+      const before = Date.now();
+      runSeed();
+      const { id: adminId } = await adminState();
+      const { rows, ticks, events } = await marketState();
+
+      expect(rows).toHaveLength(12);
+      const bySlug = Object.groupBy(rows, (row) => row.category);
+      for (const [category, slugs] of Object.entries(EXPECTED_MARKETS)) {
+        expect(bySlug[category]?.map((row) => row.slug).sort()).toEqual([...slugs].sort());
+      }
+      for (const row of rows) {
+        expect(row.status).toBe('open');
+        expect(row.mechanism).toBe('lmsr');
+        expect(row.createdBy).toBe(adminId);
+        expect(row.rules.length).toBeGreaterThan(20);
+        // ADR-0027: the reserve is the true worst case for (p0, b), not 100·b·ln 2.
+        expect(row.reserveP).toBe(maxLossP(row.initialProbBp / 10_000, Number(row.liquidityB)));
+        expect(row.lastPrice).toBe(Math.round(row.initialProbBp / 100));
+        expect(row.openAt!.getTime()).toBeGreaterThanOrEqual(before - 1000);
+        // Absolute, not seed time + N days: the rules name fixed cutoffs.
+        expect(row.closeAt.toISOString()).toBe(EXPECTED_CLOSE_AT[row.slug]);
+
+        const tick = ticks.filter((tickRow) => tickRow.marketId === row.id);
+        expect(tick).toHaveLength(1);
+        expect(tick[0]).toMatchObject({ trigger: 'open', pYesBp: row.initialProbBp });
+        expect(tick[0]!.ts.getTime()).toBe(row.openAt!.getTime());
+
+        const history = events.filter((event) => event.marketId === row.id);
+        expect(history.map((event) => event.type)).toEqual(['created', 'opened']);
+        for (const event of history) {
+          expect(event.actorId).toBe(adminId);
+          expect(event.payload).toEqual({ source: 'seed' });
+        }
+      }
+      expect(ticks).toHaveLength(12);
+      expect(events).toHaveLength(24);
+    });
+
+    it('is idempotent: a second run adds no market, tick or event', async () => {
+      runSeed();
+      const first = await marketState();
+      const output = runSeed();
+      expect(output).toContain('already exists');
+      expect(output).toContain('markets: 0 inserted, 12 already existed');
+      expect(await marketState()).toEqual(first);
+    });
+
+    it('never mentions sports or elections (PLAN 0.2)', async () => {
+      runSeed();
+      const { rows } = await marketState();
+      const categoryRows = await t.db.select().from(categories);
+      const text = [
+        ...rows.flatMap((row) => [row.slug, row.title, row.rules]),
+        ...categoryRows.flatMap((row) => [row.slug, row.nameKo]),
+      ].join(' ');
+      for (const banned of ['스포츠', '선거', 'sport', 'election']) {
+        expect(text).not.toContain(banned);
+      }
+    });
+
+    it('skips the markets when no admin is configured', async () => {
+      const output = runSeed({ admin: false });
+      expect(output).toContain('admin skipped');
+      expect(output).toContain('markets skipped (no admin)');
+      expect(await t.db.select().from(markets)).toHaveLength(0);
+      expect(await t.db.select().from(categories)).toHaveLength(5);
+    });
+  });
+
   it('seeds once when two seeds race on an empty database', async () => {
     // `charge_packages` has no natural key, so two seeds that both pass the existence check
     // both insert. To make the race certain rather than likely, hold the table lock while the
@@ -194,5 +338,9 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
     expect(await t.db.select().from(chargePackages)).toHaveLength(5);
     expect(await t.db.select().from(user).where(eq(user.email, ADMIN_EMAIL))).toHaveLength(1);
     expect(await adminState()).toMatchObject({ role: 'admin' });
+    // Each market is a check-then-insert under the same lock: 12, not 24, and one tick each.
+    expect(await t.db.select().from(markets)).toHaveLength(12);
+    expect(await t.db.select().from(priceTicks)).toHaveLength(12);
+    expect(await t.db.select().from(marketEvents)).toHaveLength(24);
   }, 60_000);
 });
