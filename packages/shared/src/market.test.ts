@@ -112,6 +112,7 @@ const position = {
   costBasisP: '520',
   realizedPnlP: '0',
   settled: false,
+  version: 1,
   updatedAt: at,
 };
 

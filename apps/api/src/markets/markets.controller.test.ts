@@ -9,6 +9,7 @@ import {
   FILLS_RECENT_LIMIT,
   MARKET_SLUG_MAX,
   TICKS_MAX_POINTS,
+  TICKS_SCAN_MAX,
   type Fill,
   type Market,
   type MarketSummary,
@@ -393,7 +394,6 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     expect(window).toHaveLength(101);
     expect(window[0]!.ts).toBe(from);
     expect(window.at(-1)!.ts).toBe(to);
-
     const inverted = await get(`/api/v1/markets/${open.id}/ticks?from=${to}&to=${from}`);
     expect(inverted.statusCode).toBe(400);
     expect(inverted.json()).toMatchObject({
@@ -406,6 +406,55 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     expect(
       (await get(`/api/v1/markets/${bare.id}/ticks`)).json<{ data: PriceTick[] }>().data,
     ).toEqual([]);
+  });
+
+  it('ranks only the newest TICKS_SCAN_MAX ticks of the range, so a busy market costs no more', async () => {
+    // Anonymous and unauthenticated: the window functions must never run over a market's
+    // whole history. Past the bound the oldest ticks of the range are left out; the newest
+    // TICKS_SCAN_MAX are sampled to about TICKS_MAX_POINTS as before.
+    const open = await market();
+    const base = new Date('2026-09-01T00:00:00.000Z').getTime();
+    const extra = 50;
+    const total = TICKS_SCAN_MAX + extra;
+    const values = Array.from({ length: total }, (_, i) => ({
+      marketId: open.id,
+      ts: new Date(base + i * 1_000),
+      pYesBp: 3_000 + (i % 100),
+      trigger: 'trade' as const,
+    }));
+    // The two ticks astride the bound share a millisecond: the (ts, id) DESC order keeps the
+    // later id (#extra) and drops #extra - 1.
+    values[extra - 1]!.ts = values[extra]!.ts;
+    for (let i = 0; i < total; i += 500) {
+      await t.db.insert(schema.priceTicks).values(values.slice(i, i + 500));
+    }
+
+    const res = await get(`/api/v1/markets/${open.id}/ticks`);
+    expect(res.statusCode).toBe(200);
+    const ticks = res.json<{ data: PriceTick[] }>().data;
+    // cnt = TICKS_SCAN_MAX: stride 20, so TICKS_MAX_POINTS points plus the last.
+    expect(ticks).toHaveLength(TICKS_MAX_POINTS + 1);
+    // The first served point is the oldest of the newest TICKS_SCAN_MAX, not tick #0.
+    expect(ticks[0]).toEqual({
+      ts: new Date(base + extra * 1_000).toISOString(),
+      pYesBp: 3_000 + (extra % 100),
+      trigger: 'trade',
+    });
+    expect(ticks.at(-1)!.ts).toBe(new Date(base + (total - 1) * 1_000).toISOString());
+    // `from` older than the bound is a filter, not a floor: the first point stays the same.
+    const fromOld = new Date(base).toISOString();
+    const fromRes = await get(`/api/v1/markets/${open.id}/ticks?from=${fromOld}`);
+    expect(fromRes.json<{ data: PriceTick[] }>().data[0]!.ts).toBe(ticks[0]!.ts);
+
+    // A `to` inside the history moves the bound with it: the newest TICKS_SCAN_MAX up to `to`.
+    const toIndex = total - 10;
+    const to = new Date(base + toIndex * 1_000).toISOString();
+    const upTo = (await get(`/api/v1/markets/${open.id}/ticks?to=${to}`)).json<{
+      data: PriceTick[];
+    }>().data;
+    expect(upTo.at(-1)!.ts).toBe(to);
+    expect(upTo).toHaveLength(TICKS_MAX_POINTS + 1);
+    expect(upTo[0]!.ts).toBe(new Date(base + (toIndex - TICKS_SCAN_MAX + 1) * 1_000).toISOString());
   });
 
   it('lists active categories in display order', async () => {

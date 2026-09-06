@@ -12,6 +12,7 @@ import {
   quoteBuy,
   quoteSell,
   serializeQuantity,
+  supersedes,
   userChannel,
   type LmsrState,
   type Order,
@@ -296,6 +297,7 @@ describe.skipIf(!hasTestInfra)('trades (integration)', () => {
       }
       const [fill] = await fillsOf();
       const ts = fill!.createdAt.toISOString();
+      const tradeEntry = (await ledgerOf(user.id)).find((entry) => entry.type === 'TRADE_BUY')!;
       const parse = (message: string) => JSON.parse(message) as Record<string, unknown>;
 
       const onMarket = received
@@ -314,6 +316,7 @@ describe.skipIf(!hasTestInfra)('trades (integration)', () => {
         {
           type: 'market:trade',
           marketId: market.id,
+          fillId: fill!.id.toString(),
           outcome: 'YES',
           side: 'buy',
           qty: 100,
@@ -331,6 +334,7 @@ describe.skipIf(!hasTestInfra)('trades (integration)', () => {
           type: 'user:balance',
           availableP: (SIGNUP_BONUS_P - quote.amountP).toString(),
           lockedP: '0',
+          ledgerEntryId: tradeEntry.id.toString(),
           ts,
         },
         {
@@ -340,10 +344,62 @@ describe.skipIf(!hasTestInfra)('trades (integration)', () => {
           qty: 100,
           costBasisP: quote.amountP.toString(),
           realizedPnlP: '0',
+          settled: false,
+          version: 1,
           ts,
         },
       ]);
       expect(received).toHaveLength(4);
+    } finally {
+      await subscriber.quit();
+    }
+  });
+
+  it('orders account events by keys that stay strict where ts may tie (PLAN 8)', async () => {
+    // Two serialised trades can share a millisecond `ts`; the keys cannot: the ledger id is
+    // drawn under the balance lock, the position version bumps under the market lock. A
+    // client keeps the greater key (`supersedes`), whatever order the events arrive in.
+    const subscriber = new Redis(process.env.TEST_REDIS_URL!, { maxRetriesPerRequest: 1 });
+    const received: string[] = [];
+    subscriber.on('message', (_channel: string, message: string) => received.push(message));
+    await subscriber.subscribe(userChannel(user.id));
+    try {
+      const answers: TradeResult[] = [];
+      for (let i = 0; i < 10; i += 1) {
+        const res = await buy(market.id, 1);
+        expect(res.statusCode).toBe(200);
+        answers.push(dataOf(res));
+      }
+      await waitForMessages(received, 20, 'user events of ten trades');
+      const events = received.map(
+        (message) =>
+          JSON.parse(message) as {
+            type: string;
+            ledgerEntryId?: string;
+            version?: number;
+            availableP?: string;
+            ts: string;
+          },
+      );
+      const balances = events.filter((event) => event.type === 'user:balance');
+      const positions = events.filter((event) => event.type === 'user:position');
+      const versions = Array.from({ length: 10 }, (_, i) => i + 1);
+      expect(positions.map((event) => event.version)).toEqual(versions);
+      expect(answers.map((answer) => answer.position.version)).toEqual(versions);
+      expect(balances).toHaveLength(10);
+      for (let i = 1; i < balances.length; i += 1) {
+        expect(supersedes(balances[i]!.ledgerEntryId!, balances[i - 1]!.ledgerEntryId)).toBe(true);
+        expect(Date.parse(balances[i]!.ts)).toBeGreaterThanOrEqual(Date.parse(balances[i - 1]!.ts));
+      }
+      const newest = balances.reduce((kept, event) =>
+        supersedes(event.ledgerEntryId!, kept.ledgerEntryId) ? event : kept,
+      );
+      expect(newest.availableP).toBe(answers.at(-1)!.balance.availableP);
+      // The keys are the ledger rows themselves, in the order `/me/ledger` lists them.
+      const buys = (await ledgerOf(user.id)).filter((entry) => entry.type === 'TRADE_BUY');
+      expect(balances.map((event) => event.ledgerEntryId)).toEqual(
+        buys.map((e) => e.id.toString()),
+      );
     } finally {
       await subscriber.quit();
     }

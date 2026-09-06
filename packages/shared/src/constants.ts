@@ -86,3 +86,11 @@ export const MARKET_SLUG_STEM_MAX = 60;
 export const FILLS_RECENT_LIMIT = 20;
 /** `GET /markets/:id/ticks` downsamples to at most this many points (PLAN 7.1). */
 export const TICKS_MAX_POINTS = 500;
+/**
+ * `GET /markets/:id/ticks` ranks at most this many ticks (the newest of the range) before
+ * downsampling: the route is anonymous and a busy market writes a tick per trade, so the
+ * work per request is bounded by this, not by the market's history. 20 × TICKS_MAX_POINTS:
+ * at the bound one point per 20 ticks is served, the window sorts ~10 k narrow rows inside
+ * the default `work_mem`, and the query stays around 10 ms on a million-tick market.
+ */
+export const TICKS_SCAN_MAX = 10_000;

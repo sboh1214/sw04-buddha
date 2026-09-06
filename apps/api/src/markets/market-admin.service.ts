@@ -167,6 +167,8 @@ function toMarketEvent(row: MarketEventRow): AdminMarket['events'][number] {
 interface VoidRefund {
   position: PositionRow;
   balance: BalanceRow | undefined;
+  /** The MARKET_VOID_REFUND row's id: the account's order key for its `user:balance` event. */
+  ledgerEntryId: number | undefined;
 }
 
 /**
@@ -455,6 +457,7 @@ export class MarketAdminService {
       for (const position of holders) {
         const after = voidRefund(position);
         let balance: BalanceRow | undefined;
+        let ledgerEntryId: number | undefined;
         if (after.refundP > 0n) {
           // The balance row first, then the clock: a trade or charge of this account may have
           // committed while this transaction waited (on the market lock, or on this very row),
@@ -486,16 +489,21 @@ export class MarketAdminService {
               message: `Balance not found for account ${position.userId}`,
             });
           }
-          await tx.insert(schema.ledgerEntries).values({
-            userId: position.userId,
-            type: 'MARKET_VOID_REFUND',
-            amountP: after.refundP,
-            balanceAfterP: balance.availableP,
-            refType: 'market',
-            refId: current.id,
-            memo: `무효 환불: ${current.title}`,
-            createdAt: refundedAt,
-          });
+          const [entry] = await tx
+            .insert(schema.ledgerEntries)
+            .values({
+              userId: position.userId,
+              type: 'MARKET_VOID_REFUND',
+              amountP: after.refundP,
+              balanceAfterP: balance.availableP,
+              refType: 'market',
+              refId: current.id,
+              memo: `무효 환불: ${current.title}`,
+              createdAt: refundedAt,
+            })
+            .returning({ id: schema.ledgerEntries.id });
+          if (!entry) throw new AppError('INTERNAL', { message: 'Ledger insert failed' });
+          ledgerEntryId = entry.id;
           refundedAccounts.add(position.userId);
           refundedP += after.refundP;
         }
@@ -511,7 +519,7 @@ export class MarketAdminService {
           )
           .returning();
         if (!updated) throw new AppError('INTERNAL', { message: 'Position update failed' });
-        refunds.push({ position: updated, balance });
+        refunds.push({ position: updated, balance, ledgerEntryId });
       }
 
       const [row] = await tx
@@ -542,19 +550,27 @@ export class MarketAdminService {
     });
 
     const ts = market.voidedAt ?? market.updatedAt;
-    // The last balance seen per account wins: a holder of both outcomes was credited twice.
-    const balances = new Map<string, BalanceRow>();
-    for (const { position, balance } of refunds) {
-      if (balance) balances.set(position.userId, balance);
+    // The last balance seen per account wins: a holder of both outcomes was credited twice,
+    // and the later refund's ledger row is the greater key.
+    const balances = new Map<string, { balance: BalanceRow; ledgerEntryId: number }>();
+    for (const { position, balance, ledgerEntryId } of refunds) {
+      if (balance && ledgerEntryId !== undefined) {
+        balances.set(position.userId, { balance, ledgerEntryId });
+      }
     }
     const events: [string, UserRealtimeEvent][] = [];
-    for (const [userId, balance] of balances) {
+    for (const [userId, { balance, ledgerEntryId }] of balances) {
       // Stamped with the account's own refund instant (its `updated_at`), not the void's: a
-      // trade of this account elsewhere may sit between the two, and a client that keeps the
-      // newest `user:balance` by ts must keep this one.
+      // trade of this account elsewhere may sit between the two. The ledger id is what a
+      // client orders by (realtime.ts); the instant is for display.
       events.push([
         userId,
-        { type: 'user:balance', ...toBalance(balance), ts: balance.updatedAt.toISOString() },
+        {
+          type: 'user:balance',
+          ...toBalance(balance),
+          ledgerEntryId: String(ledgerEntryId),
+          ts: balance.updatedAt.toISOString(),
+        },
       ]);
     }
     for (const { position } of refunds) {
@@ -567,6 +583,8 @@ export class MarketAdminService {
           qty: position.qty,
           costBasisP: serializePAmount(position.costBasisP),
           realizedPnlP: serializePAmount(position.realizedPnlP),
+          settled: position.settled,
+          version: position.version,
           ts,
         },
       ]);

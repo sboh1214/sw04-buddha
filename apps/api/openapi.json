@@ -1984,7 +1984,7 @@
             }
           }
         },
-        "summary": "Price history, ascending, downsampled to about 500 points (first and last always kept). `resolution` is accepted but served as raw until M4.",
+        "summary": "Price history, ascending, downsampled to about 500 points (first and last always kept) from the newest 10000 ticks of the range. `resolution` is accepted but served as raw until M4.",
         "tags": [
           "markets"
         ]
@@ -5064,6 +5064,11 @@
           "settled": {
             "type": "boolean"
           },
+          "version": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
           "updatedAt": {
             "type": "string",
             "format": "date-time",
@@ -5082,6 +5087,7 @@
           "costBasisP",
           "realizedPnlP",
           "settled",
+          "version",
           "updatedAt"
         ],
         "additionalProperties": false

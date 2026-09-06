@@ -6,6 +6,7 @@ import {
   marketTickEventSchema,
   marketTradeEventSchema,
   realtimeEventSchema,
+  supersedes,
   userBalanceEventSchema,
   userChannel,
   userPositionEventSchema,
@@ -26,6 +27,7 @@ const tick = {
 const trade = {
   type: 'market:trade',
   marketId,
+  fillId: '7',
   outcome: 'YES',
   side: 'buy',
   qty: 10,
@@ -40,7 +42,7 @@ const status = {
   disputeUntil: ts,
   ts,
 };
-const balance = { type: 'user:balance', availableP: '9480', lockedP: '0', ts };
+const balance = { type: 'user:balance', availableP: '9480', lockedP: '0', ledgerEntryId: '42', ts };
 const position = {
   type: 'user:position',
   marketId,
@@ -48,6 +50,8 @@ const position = {
   qty: 10,
   costBasisP: '520',
   realizedPnlP: '0',
+  settled: false,
+  version: 1,
   ts,
 };
 
@@ -109,5 +113,38 @@ describe('channels', () => {
   it('name the Redis channel and Socket.IO room per market and per user', () => {
     expect(marketChannel(marketId)).toBe(`market:${marketId}`);
     expect(userChannel('user-1')).toBe('user:user-1');
+  });
+});
+
+describe('ordering keys', () => {
+  it('requires a strictly ordered key on every event whose entity can change again', () => {
+    // A millisecond ts can tie between two serialised writes (PLAN 8, ADR-0027): the key
+    // is what the client orders by, so an event without one is refused.
+    const { fillId: _fillId, ...tradeWithoutKey } = trade;
+    expect(marketTradeEventSchema.safeParse(tradeWithoutKey).success).toBe(false);
+    const { ledgerEntryId: _ledgerEntryId, ...balanceWithoutKey } = balance;
+    expect(userBalanceEventSchema.safeParse(balanceWithoutKey).success).toBe(false);
+    for (const bad of ['0', '', 'abc', '1.5', '-1']) {
+      expect(userBalanceEventSchema.safeParse({ ...balance, ledgerEntryId: bad }).success).toBe(
+        false,
+      );
+    }
+    const { version: _version, ...positionWithoutKey } = position;
+    expect(userPositionEventSchema.safeParse(positionWithoutKey).success).toBe(false);
+    for (const bad of [0, 1.5, -1, '1']) {
+      expect(userPositionEventSchema.safeParse({ ...position, version: bad }).success).toBe(false);
+    }
+    const { settled: _settled, ...positionWithoutSettled } = position;
+    expect(userPositionEventSchema.safeParse(positionWithoutSettled).success).toBe(false);
+  });
+
+  it('supersedes compares keys as integers, not as strings', () => {
+    expect(supersedes('10', '9')).toBe(true); // '10' < '9' as strings: the reason it exists
+    expect(supersedes('9', '10')).toBe(false);
+    expect(supersedes('10', '10')).toBe(false); // a duplicate is dropped
+    expect(supersedes(2, 1)).toBe(true);
+    expect(supersedes('10', 9)).toBe(true);
+    expect(supersedes('1', null)).toBe(true); // nothing held yet takes anything
+    expect(supersedes(1, undefined)).toBe(true);
   });
 });

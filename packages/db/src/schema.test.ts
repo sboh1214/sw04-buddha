@@ -6,7 +6,7 @@ import {
   priceOf,
   serializeQuantity,
 } from '@buddha/shared';
-import { eq, lt, sql } from 'drizzle-orm';
+import { and, eq, lt, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   auditFailures,
@@ -198,6 +198,30 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     expect(await t.db.select().from(positions)).toHaveLength(1);
     const entries = await t.db.select().from(ledgerEntries).where(eq(ledgerEntries.userId, u.id));
     expect(entries.map((entry) => entry.type)).toEqual(['BONUS']);
+  });
+
+  it('positions.version starts at 1 and every ORM update bumps it (migration 0010)', async () => {
+    // The ordering key of a user:position event: $onUpdate puts the bump into the SET list
+    // of any db.update() that does not set it, so no writer can forget it.
+    const { user: u } = await createUser(t.db);
+    const market = await createMarket(t.db);
+    const row = await createPosition(t.db, {
+      userId: u.id,
+      marketId: market.id,
+      outcome: 'YES',
+      qty: 10,
+      costBasisP: 550n,
+    });
+    expect(row.version).toBe(1);
+    const where = and(
+      eq(positions.userId, u.id),
+      eq(positions.marketId, market.id),
+      eq(positions.outcome, 'YES'),
+    );
+    const [once] = await t.db.update(positions).set({ qty: 11 }).where(where).returning();
+    expect(once!.version).toBe(2);
+    const [twice] = await t.db.update(positions).set({ settled: true }).where(where).returning();
+    expect(twice!.version).toBe(3);
   });
 
   it('orders: an idempotency key is unique per user, not across users (migration 0009)', async () => {

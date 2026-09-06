@@ -342,6 +342,8 @@ export const positionSchema = z
     costBasisP: pAmountSchema,
     realizedPnlP: pAmountSchema,
     settled: z.boolean(),
+    /** The row's write count (1 on first buy); `user:position` events carry the same key. */
+    version: z.number().int().min(1),
     updatedAt: z.iso.datetime(),
   })
   .meta({ id: 'Position' });

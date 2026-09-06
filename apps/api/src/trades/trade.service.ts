@@ -116,6 +116,7 @@ export function toPosition(row: PositionRow, market: MarketRef): Position {
     costBasisP: serializePAmount(row.costBasisP),
     realizedPnlP: serializePAmount(row.realizedPnlP),
     settled: row.settled,
+    version: row.version,
     updatedAt: row.updatedAt.toISOString(),
   };
 }
@@ -511,6 +512,7 @@ export class TradeService {
         {
           type: 'market:trade',
           marketId: market.id,
+          fillId: fill.id.toString(),
           outcome: fill.outcome,
           side: fill.side,
           qty: fill.qty,
@@ -518,11 +520,14 @@ export class TradeService {
           ts,
         },
       ],
+      // The keys (realtime.ts): the ledger row of this balance change, the position row's
+      // version — strict where two serialised trades could share a millisecond `ts`.
       userEvents: [
         {
           type: 'user:balance',
           availableP: serializePAmount(balance.availableP),
           lockedP: serializePAmount(balance.lockedP),
+          ledgerEntryId: entry.id.toString(),
           ts,
         },
         {
@@ -532,6 +537,8 @@ export class TradeService {
           qty: position.qty,
           costBasisP: serializePAmount(position.costBasisP),
           realizedPnlP: serializePAmount(position.realizedPnlP),
+          settled: position.settled,
+          version: position.version,
           ts,
         },
       ],

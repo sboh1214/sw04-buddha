@@ -122,6 +122,7 @@ describe.skipIf(!hasTestInfra)('MarketPublisher (integration)', () => {
       type: 'user:balance',
       availableP: '4875',
       lockedP: '0',
+      ledgerEntryId: '2',
       ts,
     });
 
@@ -159,6 +160,7 @@ describe.skipIf(!hasTestInfra)('MarketPublisher (integration)', () => {
         type: 'user:balance',
         availableP: '1',
         lockedP: '0',
+        ledgerEntryId: '1',
         ts: new Date().toISOString(),
       }),
     ).resolves.toBeUndefined();
@@ -184,6 +186,7 @@ describe.skipIf(!hasTestInfra)('MarketPublisher (integration)', () => {
           type: 'user:balance',
           availableP: '1',
           lockedP: '0',
+          ledgerEntryId: '1',
           ts: new Date().toISOString(),
         }),
       ).resolves.toBeUndefined();
@@ -210,7 +213,13 @@ describe.skipIf(!hasTestInfra)('MarketPublisher (integration)', () => {
       await new Promise<void>((resolve) => stalled.once('ready', resolve));
       const publisher = new MarketPublisher(stalled);
       const ts = new Date().toISOString();
-      const balance = { type: 'user:balance' as const, availableP: '1', lockedP: '0', ts };
+      const balance = {
+        type: 'user:balance' as const,
+        availableP: '1',
+        lockedP: '0',
+        ledgerEntryId: '1',
+        ts,
+      };
 
       let started = Date.now();
       await expect(publisher.publishUser('user-3', balance)).resolves.toBeUndefined();

@@ -3,6 +3,7 @@ import { schema, type Db } from '@buddha/db';
 import {
   FILLS_RECENT_LIMIT,
   TICKS_MAX_POINTS,
+  TICKS_SCAN_MAX,
   decodeKeyset,
   decodeSortCursor,
   encodeKeyset,
@@ -250,22 +251,24 @@ export class MarketService {
 
   /**
    * Price history, downsampled IN SQL to at most TICKS_MAX_POINTS + 2 rows: the window ranks
-   * every tick of the range by (ts, id), and the outer query keeps the first, the last and
-   * every `ceil(count / TICKS_MAX_POINTS)`-th row, ascending. Node never holds the full
-   * series (a busy market writes a tick per trade). `resolution` is accepted and served as
-   * raw until M4 buckets it.
+   * the ticks by (ts, id), and the outer query keeps the first, the last and every
+   * `ceil(count / TICKS_MAX_POINTS)`-th row, ascending. Node never holds the full series (a
+   * busy market writes a tick per trade), and neither does the window: only the newest
+   * TICKS_SCAN_MAX ticks of the range are ranked — a backward index scan with a LIMIT on
+   * (market_id, ts, id), so an anonymous request costs the same on a market with a million ticks
+   * as on one with ten thousand. Older ticks of the range are not served at raw resolution
+   * (M4's bucketed resolutions will need pre-aggregation anyway). `resolution` is accepted and
+   * served as raw until M4 buckets it.
    */
   async listTicks(marketId: string, query: TicksQuery): Promise<PriceTick[]> {
     await this.requirePublic(marketId);
     const { priceTicks } = schema;
-    const ranked = this.db
+    const recent = this.db
       .select({
         id: priceTicks.id,
         ts: priceTicks.ts,
         pYesBp: priceTicks.pYesBp,
         trigger: priceTicks.trigger,
-        rn: sql<number>`row_number() over (order by ${priceTicks.ts}, ${priceTicks.id})`.as('rn'),
-        cnt: sql<number>`count(*) over ()`.as('cnt'),
       })
       .from(priceTicks)
       .where(
@@ -275,6 +278,19 @@ export class MarketService {
           query.to ? lte(priceTicks.ts, new Date(query.to)) : undefined,
         ),
       )
+      .orderBy(desc(priceTicks.ts), desc(priceTicks.id))
+      .limit(TICKS_SCAN_MAX)
+      .as('recent');
+    const ranked = this.db
+      .select({
+        id: recent.id,
+        ts: recent.ts,
+        pYesBp: recent.pYesBp,
+        trigger: recent.trigger,
+        rn: sql<number>`row_number() over (order by ${recent.ts}, ${recent.id})`.as('rn'),
+        cnt: sql<number>`count(*) over ()`.as('cnt'),
+      })
+      .from(recent)
       .as('ranked');
     // `cnt` is cast, not the literal: a `${n}.0` would reach Postgres as `$1.0`.
     const stride = sql`greatest(1, ceil(${ranked.cnt}::numeric / ${TICKS_MAX_POINTS}))::bigint`;

@@ -18,7 +18,10 @@ export const priceTicks = pgTable(
     trigger: priceTickTriggerEnum().notNull(),
   },
   (t) => [
-    index('price_ticks_market_id_ts_idx').on(t.marketId, t.ts),
+    // (market_id, ts, id): `GET /markets/:id/ticks` reads the newest TICKS_SCAN_MAX of a range
+    // as one backward index scan (ORDER BY ts DESC, id DESC LIMIT n) — no sort node, whatever
+    // the planner estimates for an incremental sort on (market_id, ts) alone (migration 0010).
+    index('price_ticks_market_id_ts_id_idx').on(t.marketId, t.ts, t.id),
     check('price_ticks_p_yes_bp_check', sql`${t.pYesBp} BETWEEN 0 AND 10000`),
   ],
 );

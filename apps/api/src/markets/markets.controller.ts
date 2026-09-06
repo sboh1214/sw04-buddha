@@ -4,6 +4,7 @@ import {
   FILLS_RECENT_LIMIT,
   MARKET_SLUG_MAX,
   TICKS_MAX_POINTS,
+  TICKS_SCAN_MAX,
   categorySchema,
   fillSchema,
   marketListQuerySchema,
@@ -102,7 +103,8 @@ export class MarketsController {
     operationId: 'listMarketTicks',
     summary:
       `Price history, ascending, downsampled to about ${String(TICKS_MAX_POINTS)} points ` +
-      '(first and last always kept). `resolution` is accepted but served as raw until M4.',
+      `(first and last always kept) from the newest ${String(TICKS_SCAN_MAX)} ticks of the ` +
+      'range. `resolution` is accepted but served as raw until M4.',
   })
   @ApiData(priceTickSchema.array())
   @ApiErrors('NOT_FOUND', 'VALIDATION_ERROR')

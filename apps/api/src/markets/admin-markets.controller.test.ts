@@ -640,6 +640,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
           type: 'user:balance',
           availableP: SIGNUP_BONUS_P.toString(),
           lockedP: '0',
+          ledgerEntryId: lastRefund.id.toString(),
           ts: lastRefund.createdAt.toISOString(),
         },
         {
@@ -649,6 +650,8 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
           qty: 0,
           costBasisP: '0',
           realizedPnlP: '0',
+          settled: true,
+          version: 2,
           ts: voided.voidedAt,
         },
         {
@@ -658,6 +661,8 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
           qty: 0,
           costBasisP: '0',
           realizedPnlP: '0',
+          settled: true,
+          version: 2,
           ts: voided.voidedAt,
         },
       ]);
@@ -815,6 +820,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
         type: 'user:balance',
         availableP: (SIGNUP_BONUS_P - 90n).toString(),
         lockedP: '0',
+        ledgerEntryId: refund.id.toString(),
         ts: refund.createdAt.toISOString(),
       },
       {
@@ -824,6 +830,8 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
         qty: 0,
         costBasisP: '0',
         realizedPnlP: '0',
+        settled: true,
+        version: 2,
         ts: voided.voidedAt,
       },
     ]);
