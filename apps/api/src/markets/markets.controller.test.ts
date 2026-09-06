@@ -371,7 +371,7 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     const res = await get(`/api/v1/markets/${open.id}/ticks`);
     expect(res.statusCode).toBe(200);
     const ticks = res.json<{ data: PriceTick[] }>().data;
-    expect(ticks.length).toBeLessThanOrEqual(TICKS_MAX_POINTS + 2);
+    expect(ticks.length).toBeLessThanOrEqual(TICKS_MAX_POINTS);
     expect(ticks.length).toBeGreaterThanOrEqual(TICKS_MAX_POINTS / 2);
     expect(ticks[0]).toEqual({ ts: new Date(base).toISOString(), pYesBp: 4_000, trigger: 'open' });
     expect(ticks.at(-1)).toEqual({
@@ -382,6 +382,26 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     for (let i = 1; i < ticks.length; i += 1) {
       expect(Date.parse(ticks[i]!.ts)).toBeGreaterThan(Date.parse(ticks[i - 1]!.ts));
     }
+
+    // Twice the cap exactly: the stride is 2 and the newest tick is off a grid anchored at
+    // the oldest row, which is where the answer used to come back one point over the maximum.
+    const dense = await market();
+    const denseTotal = TICKS_MAX_POINTS * 2;
+    const denseValues = Array.from({ length: denseTotal }, (_, i) => ({
+      marketId: dense.id,
+      ts: new Date(base + i * 1_000),
+      pYesBp: 5_000 + (i % 100),
+      trigger: i === 0 ? ('open' as const) : ('trade' as const),
+    }));
+    for (let i = 0; i < denseTotal; i += 500) {
+      await t.db.insert(schema.priceTicks).values(denseValues.slice(i, i + 500));
+    }
+    const capped = await get(`/api/v1/markets/${dense.id}/ticks`);
+    expect(capped.statusCode).toBe(200);
+    const cappedTicks = capped.json<{ data: PriceTick[] }>().data;
+    expect(cappedTicks).toHaveLength(TICKS_MAX_POINTS);
+    expect(cappedTicks[0]!.ts).toBe(new Date(base).toISOString());
+    expect(cappedTicks.at(-1)!.ts).toBe(new Date(base + (denseTotal - 1) * 1_000).toISOString());
 
     // A range under the cap comes back complete, bounded by from/to inclusive.
     const from = new Date(base + 100_000).toISOString();
@@ -432,8 +452,9 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     const res = await get(`/api/v1/markets/${open.id}/ticks`);
     expect(res.statusCode).toBe(200);
     const ticks = res.json<{ data: PriceTick[] }>().data;
-    // cnt = TICKS_SCAN_MAX: stride 20, so TICKS_MAX_POINTS points plus the last.
-    expect(ticks).toHaveLength(TICKS_MAX_POINTS + 1);
+    // cnt = TICKS_SCAN_MAX: stride 20, and the grid is anchored at the newest tick, so the
+    // answer is exactly the documented maximum — never one over it (PLAN 7.1).
+    expect(ticks).toHaveLength(TICKS_MAX_POINTS);
     // The first served point is the oldest of the newest TICKS_SCAN_MAX, not tick #0.
     expect(ticks[0]).toEqual({
       ts: new Date(base + extra * 1_000).toISOString(),
@@ -453,7 +474,7 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
       data: PriceTick[];
     }>().data;
     expect(upTo.at(-1)!.ts).toBe(to);
-    expect(upTo).toHaveLength(TICKS_MAX_POINTS + 1);
+    expect(upTo).toHaveLength(TICKS_MAX_POINTS);
     expect(upTo[0]!.ts).toBe(new Date(base + (toIndex - TICKS_SCAN_MAX + 1) * 1_000).toISOString());
   });
 

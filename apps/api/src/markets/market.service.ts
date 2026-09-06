@@ -283,9 +283,17 @@ export class MarketService {
   }
 
   /**
-   * Price history, downsampled IN SQL to at most TICKS_MAX_POINTS + 2 rows: the window ranks
-   * the ticks by (ts, id), and the outer query keeps the first, the last and every
-   * `ceil(count / TICKS_MAX_POINTS)`-th row, ascending. Node never holds the full series (a
+   * Price history, downsampled IN SQL to at most TICKS_MAX_POINTS rows (PLAN 7.1): the window
+   * ranks the ticks by (ts, id), and the outer query keeps a grid anchored at the NEWEST tick
+   * — it and every `ceil(count / TICKS_MAX_POINTS)`-th row walking back from it, at most
+   * TICKS_MAX_POINTS - 1 of them — plus the oldest row, ascending.
+   *
+   * Anchoring the grid at the newest end is what makes the cap exact. Anchored at the oldest
+   * row instead, the grid holds up to TICKS_MAX_POINTS rows and the newest tick — the live
+   * right edge of a chart, which the route promises to keep — falls off the stride, so the
+   * answer carried one row too many for 190 of the possible counts (from 1,000 ticks up).
+   * The unevenly spaced gap is now the first one, at the left edge, where nothing is live.
+   * Node never holds the full series (a
    * busy market writes a tick per trade), and neither does the window: only the newest
    * TICKS_SCAN_MAX ticks of the range are ranked — a backward index scan with a LIMIT on
    * (market_id, ts, id), so an anonymous request costs the same on a market with a million ticks
@@ -331,7 +339,14 @@ export class MarketService {
       .select({ ts: ranked.ts, pYesBp: ranked.pYesBp, trigger: ranked.trigger })
       .from(ranked)
       .where(
-        or(eq(ranked.rn, 1), eq(ranked.rn, ranked.cnt), sql`(${ranked.rn} - 1) % ${stride} = 0`),
+        or(
+          // The oldest row, and the grid running back from the newest: offset 0 (the newest
+          // tick itself) up to (TICKS_MAX_POINTS - 2) strides, so at most TICKS_MAX_POINTS - 1
+          // rows, and the oldest adds at most one more.
+          eq(ranked.rn, 1),
+          sql`(${ranked.cnt} - ${ranked.rn}) % ${stride} = 0
+              and ${ranked.cnt} - ${ranked.rn} <= ${stride} * ${TICKS_MAX_POINTS - 2}`,
+        ),
       )
       .orderBy(asc(ranked.ts), asc(ranked.id));
     return rows.map((row) => ({

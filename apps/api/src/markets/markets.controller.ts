@@ -102,7 +102,7 @@ export class MarketsController {
   @ApiOperation({
     operationId: 'listMarketTicks',
     summary:
-      `Price history, ascending, downsampled to about ${String(TICKS_MAX_POINTS)} points ` +
+      `Price history, ascending, downsampled to at most ${String(TICKS_MAX_POINTS)} points ` +
       `(first and last always kept) from the newest ${String(TICKS_SCAN_MAX)} ticks of the ` +
       'range. `resolution` is accepted but served as raw until M4.',
   })

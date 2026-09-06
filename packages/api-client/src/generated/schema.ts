@@ -338,7 +338,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** Price history, ascending, downsampled to about 500 points (first and last always kept) from the newest 10000 ticks of the range. `resolution` is accepted but served as raw until M4. */
+        /** Price history, ascending, downsampled to at most 500 points (first and last always kept) from the newest 10000 ticks of the range. `resolution` is accepted but served as raw until M4. */
         get: operations["listMarketTicks"];
         put?: never;
         post?: never;
