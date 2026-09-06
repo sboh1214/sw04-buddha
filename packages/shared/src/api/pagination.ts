@@ -79,3 +79,50 @@ export function decodeKeyset(
   if (id.length === 0 || !KEYSET_ID_SHAPES[idShape](id)) return undefined;
   return { createdAt: new Date(millis), id };
 }
+
+/**
+ * Keyset cursor for a sort whose first key is not `created_at`: `GET /markets?sort=volume`
+ * orders by `(volume_p DESC, id DESC)`, and `volume_p` is a bigint that `encodeKeyset`
+ * cannot carry. Encoded as `<sortValue>_<id>`; the value half is digits only.
+ */
+export interface SortCursor {
+  /** The sort key as a decimal string (`BigInt(value)` for 'int', `Number(value)` for 'millis'). */
+  value: string;
+  id: string;
+}
+
+export function encodeSortCursor(sortValue: string, id: string): string {
+  return `${sortValue}_${id}`;
+}
+
+/** Largest int8 Postgres accepts; anything above is SQLSTATE 22003. */
+const INT8_MAX = 9_223_372_036_854_775_807n;
+
+const SORT_VALUE_SHAPES = {
+  /** A non-negative bigint column (volume_p): digits only, within int8. */
+  int: (value: string) => /^\d+$/.test(value) && BigInt(value) <= INT8_MAX,
+  /** Epoch milliseconds for a timestamp(3) column, with the same range as `decodeKeyset`. */
+  millis: (value: string) =>
+    /^\d+$/.test(value) && Number.isSafeInteger(Number(value)) && Number(value) <= MAX_DATE_MS,
+} as const;
+export type SortCursorValueShape = keyof typeof SORT_VALUE_SHAPES;
+
+/**
+ * `undefined` for a malformed or absent cursor, like `decodeKeyset`. Both shapes are named
+ * by the caller for the same reason `idShape` is: the halves are compared against typed
+ * columns, and a bad comparand is a 500 rather than an empty page.
+ */
+export function decodeSortCursor(
+  cursor: string | undefined,
+  valueShape: SortCursorValueShape,
+  idShape: KeysetIdShape,
+): SortCursor | undefined {
+  if (!cursor) return undefined;
+  const separator = cursor.indexOf('_');
+  if (separator <= 0) return undefined;
+  const value = cursor.slice(0, separator);
+  const id = cursor.slice(separator + 1);
+  if (!SORT_VALUE_SHAPES[valueShape](value)) return undefined;
+  if (id.length === 0 || !KEYSET_ID_SHAPES[idShape](id)) return undefined;
+  return { value, id };
+}
