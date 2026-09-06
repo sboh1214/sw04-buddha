@@ -1,0 +1,141 @@
+import { Body, Controller, Get, HttpCode, Param, Post, Query } from '@nestjs/common';
+import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  FILLS_RECENT_LIMIT,
+  MARKET_SLUG_MAX,
+  TICKS_MAX_POINTS,
+  categorySchema,
+  fillSchema,
+  marketListQuerySchema,
+  marketSchema,
+  marketSummarySchema,
+  priceTickSchema,
+  quoteBodySchema,
+  quoteResultSchema,
+  ticksQuerySchema,
+  uuidParamSchema,
+  type Category,
+  type Fill,
+  type Market,
+  type MarketListQuery,
+  type MarketSummary,
+  type PriceTick,
+  type QuoteBody,
+  type QuoteResult,
+  type TicksQuery,
+} from '@buddha/shared';
+import * as z from 'zod';
+import { ApiPage } from '../common/interceptors/response-envelope.interceptor.js';
+import { ApiData, ApiErrors, ApiPageOf } from '../common/openapi/api-response.decorators.js';
+import { MarketService } from './market.service.js';
+import { QuoteService } from './quote.service.js';
+
+/**
+ * `GET /markets/:idOrSlug` takes either a uuid or a slug (at most MARKET_SLUG_MAX
+ * characters, like the column); anything longer is malformed, not merely unknown.
+ */
+const idOrSlugParamSchema = z.string().min(1).max(MARKET_SLUG_MAX);
+
+// Query parameters: `marketListQuerySchema` and `ticksQuerySchema` carry no `.meta({ id })`,
+// and @nestjs/swagger 12 expands such a `@Query({ schema })` object into one parameter per
+// field by itself (defaults, enums and lengths included). Declaring `@ApiQuery` on top would
+// emit every name twice, which OpenAPI 3.0 forbids — only a query DTO WITH a component id
+// (`cursorQuerySchema`, `adminUserQuerySchema`) needs the manual declarations.
+
+/**
+ * Public market reads and quotes (PLAN 7.1, M3). No guard: PLAN 7.1's "정보 조회 (공개)"
+ * routes serve anonymous visitors, and a quote is a price check with no side effect.
+ */
+@ApiTags('markets')
+@Controller('markets')
+export class MarketsController {
+  constructor(private readonly markets: MarketService) {}
+
+  @Get()
+  @ApiOperation({
+    operationId: 'listMarkets',
+    summary: 'Markets by status (default open), never drafts; sorted by volume, closing or newest',
+  })
+  @ApiPageOf(marketSummarySchema)
+  @ApiErrors('VALIDATION_ERROR')
+  async listMarkets(
+    @Query({ schema: marketListQuerySchema }) query: MarketListQuery,
+  ): Promise<ApiPage<MarketSummary>> {
+    const { items, nextCursor } = await this.markets.list(query);
+    return new ApiPage(items, { nextCursor });
+  }
+
+  @Get(':idOrSlug')
+  @ApiOperation({
+    operationId: 'getMarket',
+    summary: 'One market by id or slug (a draft is NOT_FOUND to the public)',
+  })
+  @ApiData(marketSchema)
+  @ApiErrors('NOT_FOUND', 'VALIDATION_ERROR')
+  getMarket(@Param('idOrSlug', { schema: idOrSlugParamSchema }) idOrSlug: string): Promise<Market> {
+    return this.markets.getPublic(idOrSlug);
+  }
+
+  @Get(':id/fills')
+  @ApiOperation({
+    operationId: 'listMarketFills',
+    summary: `Newest ${String(FILLS_RECENT_LIMIT)} fills, anonymous`,
+  })
+  @ApiData(fillSchema.array())
+  @ApiErrors('NOT_FOUND', 'VALIDATION_ERROR')
+  listMarketFills(@Param('id', { schema: uuidParamSchema }) id: string): Promise<Fill[]> {
+    return this.markets.listFills(id);
+  }
+
+  @Get(':id/ticks')
+  @ApiOperation({
+    operationId: 'listMarketTicks',
+    summary:
+      `Price history, ascending, downsampled to about ${String(TICKS_MAX_POINTS)} points ` +
+      '(first and last always kept). `resolution` is accepted but served as raw until M4.',
+  })
+  @ApiData(priceTickSchema.array())
+  @ApiErrors('NOT_FOUND', 'VALIDATION_ERROR')
+  listMarketTicks(
+    @Param('id', { schema: uuidParamSchema }) id: string,
+    @Query({ schema: ticksQuerySchema }) query: TicksQuery,
+  ): Promise<PriceTick[]> {
+    return this.markets.listTicks(id, query);
+  }
+}
+
+/** `GET /categories`: the active ones, in display order. */
+@ApiTags('markets')
+@Controller('categories')
+export class CategoriesController {
+  constructor(private readonly markets: MarketService) {}
+
+  @Get()
+  @ApiOperation({ operationId: 'listCategories', summary: 'Active categories in display order' })
+  @ApiData(categorySchema.array())
+  listCategories(): Promise<Category[]> {
+    return this.markets.listCategories();
+  }
+}
+
+/** `POST /quotes` (PLAN 7.1): a price check, public and without side effects. */
+@ApiTags('markets')
+@Controller('quotes')
+export class QuotesController {
+  constructor(private readonly quotes: QuoteService) {}
+
+  @Post()
+  @HttpCode(200)
+  @ApiOperation({
+    operationId: 'quote',
+    summary:
+      'Price a buy or sell (mode shares) or the contracts a budget buys (mode spend, buy only)',
+  })
+  @ApiData(quoteResultSchema)
+  // NOT_FOUND: unknown market or a draft. MARKET_NOT_OPEN: any status but open.
+  // MARKET_CLOSED: open, but past its close time.
+  @ApiErrors('NOT_FOUND', 'VALIDATION_ERROR', 'MARKET_NOT_OPEN', 'MARKET_CLOSED')
+  quote(@Body({ schema: quoteBodySchema }) body: QuoteBody): Promise<QuoteResult> {
+    return this.quotes.quote(body);
+  }
+}
