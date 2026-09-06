@@ -5,6 +5,7 @@ import { MINUS_SIGN, formatP, parsePAmount, type LedgerEntryType } from '@buddha
 import { copy } from '@/copy';
 import { useLedger } from '@/hooks/use-wallet';
 import { type LedgerEntry } from '@/lib/api';
+import { formatKst } from '@/lib/datetime';
 
 /** PLAN Appendix A: never "베팅"; every ledger type gets plain Korean. */
 const TYPE_LABEL: Record<LedgerEntryType, string> = {
@@ -17,12 +18,6 @@ const TYPE_LABEL: Record<LedgerEntryType, string> = {
   ADMIN_ADJUST: copy.ledgerTypeAdminAdjust,
   BONUS: copy.ledgerTypeBonus,
 };
-
-const dateFormat = new Intl.DateTimeFormat('ko-KR', {
-  dateStyle: 'medium',
-  timeStyle: 'short',
-  timeZone: 'Asia/Seoul',
-});
 
 export function LedgerList() {
   const { data, isPending, isError, fetchNextPage, hasNextPage, isFetchingNextPage, refetch } =
@@ -84,7 +79,7 @@ function LedgerRow({ entry }: { entry: LedgerEntry }) {
       <Stack gap="0.5">
         <Text fontWeight="medium">{TYPE_LABEL[entry.type]}</Text>
         <Text fontSize="xs" color="fg.muted">
-          {dateFormat.format(new Date(entry.createdAt))}
+          {formatKst(entry.createdAt)}
         </Text>
         {entry.memo && (
           <Text fontSize="xs" color="fg.muted">

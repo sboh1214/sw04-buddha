@@ -26,3 +26,38 @@ export function kstLocalToIso(local: string): string | null {
   const parsed = new Date(`${local}${seconds}${KST_OFFSET}`);
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }
+
+/** `+09:00` as a duration, for shifting an instant into KST wall-clock fields. */
+const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
+
+/**
+ * The inverse of `kstLocalToIso`: an ISO instant as the `YYYY-MM-DDTHH:mm` a `datetime-local`
+ * control shows in KST, so an edit form can be prefilled with what the server holds. `''` for
+ * an unparseable value (the control then shows blank rather than "Invalid Date").
+ *
+ * Seconds are dropped: the controls here have no `step`, and the API's timestamps for these
+ * fields were written by the same controls, so nothing is lost on the round trip.
+ */
+export function isoToKstLocal(iso: string): string {
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) return '';
+  // Shift by the fixed offset and read UTC fields: no dependence on the machine's zone.
+  const shifted = new Date(parsed.getTime() + KST_OFFSET_MS);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return (
+    `${String(shifted.getUTCFullYear())}-${pad(shifted.getUTCMonth() + 1)}-` +
+    `${pad(shifted.getUTCDate())}T${pad(shifted.getUTCHours())}:${pad(shifted.getUTCMinutes())}`
+  );
+}
+
+const kstDateTime = new Intl.DateTimeFormat('ko-KR', {
+  dateStyle: 'medium',
+  timeStyle: 'short',
+  timeZone: 'Asia/Seoul',
+});
+
+/** An ISO instant rendered for reading in KST (`2026. 9. 6. 오후 3:00`), as the lists show it. */
+export function formatKst(iso: string): string {
+  const parsed = new Date(iso);
+  return Number.isNaN(parsed.getTime()) ? '' : kstDateTime.format(parsed);
+}

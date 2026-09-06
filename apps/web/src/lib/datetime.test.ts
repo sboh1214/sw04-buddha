@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it } from 'vitest';
-import { kstLocalToIso } from './datetime';
+import { formatKst, isoToKstLocal, kstLocalToIso } from './datetime';
 
 const originalTz = process.env.TZ;
 afterAll(() => {
@@ -25,5 +25,50 @@ describe('kstLocalToIso', () => {
     expect(kstLocalToIso('')).toBeNull();
     expect(kstLocalToIso('not-a-date')).toBeNull();
     expect(kstLocalToIso('2026-13-45T99:99')).toBeNull();
+  });
+});
+
+describe('isoToKstLocal', () => {
+  it('renders the instant in KST whatever zone the machine is in', () => {
+    for (const tz of ['UTC', 'Asia/Seoul', 'America/New_York']) {
+      process.env.TZ = tz;
+      expect(isoToKstLocal('2026-12-31T14:59:00.000Z'), tz).toBe('2026-12-31T23:59');
+      // Crosses a date line in KST: 20:30Z is 05:30 the next morning in Seoul.
+      expect(isoToKstLocal('2026-02-28T20:30:00.000Z'), tz).toBe('2026-03-01T05:30');
+    }
+  });
+
+  it('is the inverse of kstLocalToIso for a minute-precision value', () => {
+    process.env.TZ = 'America/New_York';
+    const local = '2026-09-06T09:05';
+    const iso = kstLocalToIso(local);
+    expect(iso).not.toBeNull();
+    expect(isoToKstLocal(iso ?? '')).toBe(local);
+  });
+
+  it('pads single-digit months, days, hours and minutes', () => {
+    expect(isoToKstLocal('2026-01-02T00:03:00.000Z')).toBe('2026-01-02T09:03');
+  });
+
+  it('returns an empty field for an unparseable instant', () => {
+    expect(isoToKstLocal('')).toBe('');
+    expect(isoToKstLocal('not-a-date')).toBe('');
+  });
+});
+
+describe('formatKst', () => {
+  it('renders in KST regardless of the machine zone', () => {
+    // 14:59Z is 23:59 in Seoul (and 09:59 in New York). The day period is "PM" rather than
+    // "오후" since CLDR 48 (ICU 78, the Node 24 the repo pins); an older Node would differ.
+    for (const tz of ['UTC', 'Asia/Seoul', 'America/New_York']) {
+      process.env.TZ = tz;
+      expect(formatKst('2026-12-31T14:59:00.000Z'), tz).toBe('2026. 12. 31. PM 11:59');
+      // Crosses a date line in KST: 20:30Z is 05:30 the next morning in Seoul.
+      expect(formatKst('2026-02-28T20:30:00.000Z'), tz).toBe('2026. 3. 1. AM 5:30');
+    }
+  });
+
+  it('renders nothing for an unparseable instant', () => {
+    expect(formatKst('not-a-date')).toBe('');
   });
 });

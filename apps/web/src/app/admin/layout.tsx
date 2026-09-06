@@ -10,13 +10,16 @@ export const metadata: Metadata = { title: `${copy.adminTitle} | ${copy.appName}
 /**
  * PLAN 12: everything under /admin is admin-only. The check runs on the server so a member
  * never receives the page at all; the API enforces the same rule on every call (AdminGuard).
- * M2 ships the users screen only — markets, disputes and settlement arrive with M3.
+ * M3 adds markets, payments and audit failures; settlement and disputes arrive with M5.
  */
 /** Next 16 types `href`, so the list is declared as routes rather than plain strings. */
 const NAV: { href: Route; label: string }[] = [
+  { href: '/admin/markets', label: copy.adminMarkets },
   { href: '/admin/users', label: copy.adminUsers },
   { href: '/admin/charge-packages', label: copy.adminPackages },
   { href: '/admin/coupons', label: copy.adminCoupons },
+  { href: '/admin/payments', label: copy.adminPayments },
+  { href: '/admin/audit-failures', label: copy.adminAuditFailures },
 ];
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
