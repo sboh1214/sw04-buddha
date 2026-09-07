@@ -500,16 +500,40 @@ describe('applyTradeResult during a first private fetch', () => {
     }
   });
 
-  it('leaves a list that has already answered to the invalidation', () => {
-    // Not a blanket cancel: a query holding data is restarted by `cancelRefetch` already, and
-    // cancelling it would throw away a newer answer for nothing.
+  it('leaves a refetch that already has an answer to `cancelRefetch`', async () => {
+    // The `data === undefined` predicate is load-bearing, not decoration. A query that HOLDS
+    // rows is restarted by the invalidation on its own — `refetchQueries` passes
+    // `cancelRefetch` and query-core honours it there — so cancelling it too would REVERT it to
+    // the row it held before and throw away an answer already on the wire, costing a round trip
+    // to learn what was arriving anyway. Without the predicate the state below reads 'idle'.
     const queryClient = getQueryClient();
+    let land: (rows: Position[]) => void = () => undefined;
+    const observer = new QueryObserver<Position[]>(queryClient, {
+      queryKey: positionsKey('open'),
+      queryFn: () =>
+        new Promise<Position[]>((resolve) => {
+          land = resolve;
+        }),
+      retry: false,
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
     try {
-      queryClient.setQueryData<Position[]>(positionsKey('open'), [position]);
+      const first = observer.refetch();
+      land([position]);
+      await first;
+
+      // A refetch over rows that are already there — the case the predicate must skip.
+      const second = observer.refetch();
+      expect(queryClient.getQueryState(positionsKey('open'))?.fetchStatus).toBe('fetching');
+
       cancelFirstFetch(queryClient, POSITIONS_KEY);
 
-      expect(queryClient.getQueryData<Position[]>(positionsKey('open'))?.[0]).toBe(position);
+      expect(queryClient.getQueryState(positionsKey('open'))?.fetchStatus).toBe('fetching');
+      land([{ ...position, qty: 99 }]);
+      await second;
+      expect(queryClient.getQueryData<Position[]>(positionsKey('open'))?.[0]?.qty).toBe(99);
     } finally {
+      unsubscribe();
       queryClient.clear();
     }
   });

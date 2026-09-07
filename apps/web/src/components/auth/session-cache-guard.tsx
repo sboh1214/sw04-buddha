@@ -50,6 +50,33 @@ export function cacheOwnerAccount(): SessionIdentity | undefined {
 }
 
 /**
+ * The two steps a settled session answer takes, in the one order that is safe.
+ *
+ * Exported because both are decisions, and this app runs vitest under `environment: 'node'`
+ * where an effect body is unreachable — the same rule that keeps every seed and join in `lib/`.
+ * Left inline, either could be undone by moving one line and the suite would stay green.
+ *
+ * PUBLISH FIRST. `resetQueries` blanks `['me']` on its way past, so an owner read after it could
+ * only come from a cache that no longer names anybody. That is exactly the window
+ * `tradeAnswerScope` (use-trade.ts) has to refuse in: B's `['positions']` has refetched, B's
+ * `['me']` has not, and A's still-running trade answer would otherwise be waved through onto B's
+ * 보유 포지션.
+ *
+ * PUBLISH ALWAYS, the first answer a tab ever sees included — that one resets nothing, but it is
+ * the only answer most tabs get. Published only on a CHANGE, `cacheOwnerAccount()` would stay
+ * `undefined` for the whole life of a tab that never switched accounts, and the gate would fall
+ * back to the cached `Me` it cannot trust.
+ */
+export function claimCacheOwnership(
+  previous: SessionIdentity | undefined,
+  current: SessionIdentity,
+  resetCaches: () => void,
+): void {
+  rememberCacheOwner(current);
+  if (sessionIdentityChanged(previous, current)) resetCaches();
+}
+
+/**
  * Empties the query cache whenever the account behind the session changes.
  *
  * The browser QueryClient lives as long as the tab (lib/query-client.ts) and no key carries a
@@ -89,10 +116,7 @@ export function SessionCacheGuard() {
     if (identity === undefined) return;
     const previous = seen.current;
     seen.current = identity;
-    // Published BEFORE the reset, so nothing can read "the cache belongs to A" off a cache the
-    // next statement has already emptied for B.
-    rememberCacheOwner(identity);
-    if (sessionIdentityChanged(previous, identity)) void queryClient.resetQueries();
+    claimCacheOwnership(previous, identity, () => void queryClient.resetQueries());
   }, [identity, queryClient]);
 
   return null;

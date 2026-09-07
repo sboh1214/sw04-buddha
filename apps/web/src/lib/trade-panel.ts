@@ -1,4 +1,5 @@
 import {
+  MAX_P_AMOUNT,
   type MarketStatus,
   ORDER_QTY_MAX,
   type OrderSide,
@@ -415,22 +416,30 @@ export function quoteErrorMessage(error: unknown): string {
 }
 
 /**
- * What 최대 fills in, or `undefined` when there is no ceiling to offer.
+ * What 최대 fills in, or `undefined` when there is no ceiling to offer. Whatever it answers,
+ * `quoteRequest` accepts — that is the whole contract of a control whose one job is to fill in
+ * a VALID amount, and NEITHER branch held it before.
  *
- * A sell is capped by the contracts actually held AND by `ORDER_QTY_MAX`, the per-ORDER
- * ceiling `sharesSchema` enforces (@buddha/shared market.ts). Those two are not the same
- * number: a position accumulates across orders up to `POSITION_QTY_MAX` (INT4_MAX), so an
- * account that bought past a million contracts pressed 최대 and got a quantity the schema
- * refuses — `quoteRequest` answers undefined, `tradePanelView` falls to `invalid`, and the
- * chip that exists to fill in a VALID amount left the panel unable to quote or submit, with
- * 계약 수를 확인해 주세요 under a number the panel itself had written. Selling out then took
- * as many presses as it takes orders, which is the truth the chip should have offered in the
- * first place.
+ * A sell is capped by the contracts held AND by `ORDER_QTY_MAX`, the per-ORDER ceiling
+ * `sharesSchema` enforces. Those are not the same number: a POSITION accumulates across orders
+ * up to `POSITION_QTY_MAX` (INT4_MAX), so an account that bought past a million contracts
+ * pressed 최대 and got a quantity the schema refuses — `quoteRequest` answers undefined,
+ * `tradePanelView` falls to `invalid`, and the chip that exists to fill in a valid amount left
+ * the panel unable to quote or submit, showing `copy.errTradeShares` under a number the panel
+ * itself had written. Selling out then took as many presses as it takes orders, which is the
+ * truth the chip should have offered in the first place.
  *
- * A spend-mode buy is capped by the available balance; the P ceiling is the schema's amount
- * bound, which the field length already holds. Buying a COUNT has no ceiling this side of a
- * quote, so the chip is absent there rather than disabled — and the value still goes through
- * `setValue`, which is the only thing that bounds what a keystroke may write.
+ * A spend-mode buy is capped by the balance AND by `MAX_P_AMOUNT` for the same reason, which
+ * the field length does NOT already hold: `QUOTE_VALUE_MAX_LENGTH` is the DIGIT COUNT of
+ * `MAX_P_AMOUNT` (16), and 10^15 is itself 16 digits, so every 16-digit balance above the bound
+ * passes the length check and fails the range refine. Unreachable in practice — a charge is
+ * capped far below it — but the cap costs one comparison and makes the contract above total
+ * rather than true of one branch. A ternary and not `Math.min`, which is number-only and throws
+ * on a bigint.
+ *
+ * Buying a COUNT has no ceiling this side of a quote, so the chip is absent there rather than
+ * disabled — and the value still goes through `setValue`, which is the only thing that bounds
+ * what a keystroke may write.
  */
 export function maxValueFor(a: {
   inputs: TradeInputs;
@@ -444,5 +453,6 @@ export function maxValueFor(a: {
   }
   if (a.inputs.mode !== 'spend') return undefined;
   const available = a.availableP;
-  return available === undefined || available <= 0n ? undefined : available.toString();
+  if (available === undefined || available <= 0n) return undefined;
+  return String(available > MAX_P_AMOUNT ? MAX_P_AMOUNT : available);
 }

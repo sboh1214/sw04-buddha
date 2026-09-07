@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  type SessionIdentity,
   cacheOwnerAccount,
+  claimCacheOwnership,
   rememberCacheOwner,
   sessionIdentityChanged,
 } from './session-cache-guard';
@@ -44,5 +46,45 @@ describe('the published cache owner', () => {
     // `null` is signed out, which is not the same as "not answered yet".
     rememberCacheOwner(null);
     expect(cacheOwnerAccount()).toBeNull();
+  });
+});
+
+describe('claimCacheOwnership', () => {
+  it('publishes the owner before it empties the caches', () => {
+    // The ORDER is the fix. `resetQueries` blanks `['me']` as it goes, so an owner read after it
+    // could only come from a cache that no longer names anybody — the window an in-flight trade
+    // answer used to be waved through in (`tradeAnswerScope`, use-trade.ts).
+    rememberCacheOwner('user-1');
+    // Recorded rather than asserted inside the callback, so the case also fails if the reset
+    // never runs at all instead of silently asserting nothing.
+    const ownerAtReset: (SessionIdentity | undefined)[] = [];
+    claimCacheOwnership('user-1', 'user-2', () => {
+      ownerAtReset.push(cacheOwnerAccount());
+    });
+    expect(ownerAtReset).toEqual(['user-2']);
+  });
+
+  it('publishes the first answer a tab sees, which resets nothing', () => {
+    // A tab that never switches accounts still has to name its owner: published only on a
+    // CHANGE, `cacheOwnerAccount()` stays undefined for that tab's whole life and the gate
+    // falls back to the cached `Me` it cannot trust.
+    rememberCacheOwner(null);
+    let reset = false;
+    claimCacheOwnership(undefined, 'user-1', () => {
+      reset = true;
+    });
+    expect(cacheOwnerAccount()).toBe('user-1');
+    expect(reset).toBe(false);
+  });
+
+  it('still resets on a real change, in both directions', () => {
+    let resets = 0;
+    const count = () => {
+      resets += 1;
+    };
+    claimCacheOwnership('user-1', null, count);
+    claimCacheOwnership(null, 'user-2', count);
+    claimCacheOwnership('user-2', 'user-2', count);
+    expect(resets).toBe(2);
   });
 });

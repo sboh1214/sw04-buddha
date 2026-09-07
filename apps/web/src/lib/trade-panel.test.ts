@@ -185,7 +185,7 @@ describe('maxValueFor', () => {
     // THE BUG: a position accumulates across orders up to POSITION_QTY_MAX, but ORDER_QTY_MAX
     // is the ceiling on ONE order. Offering the whole holding wrote a number `quoteRequest`
     // answers undefined for, so pressing 최대 left the panel on `invalid` — no quote, no
-    // submit, and 계약 수를 확인해 주세요 under a number the panel itself had filled in.
+    // submit, and `copy.errTradeShares` under a number the panel itself had filled in.
     const held = ORDER_QTY_MAX + 1;
     expect(maxValueFor({ inputs: sell, heldQty: held, availableP: 1n })).toBe(
       String(ORDER_QTY_MAX),
@@ -213,6 +213,14 @@ describe('maxValueFor', () => {
 
   it('caps a spend-mode buy at the balance and offers nothing for a count buy', () => {
     expect(maxValueFor({ inputs: spend, heldQty: 5, availableP: 12_345n })).toBe('12345');
+    // The same contract on the other branch, and the field length does NOT hold it:
+    // QUOTE_VALUE_MAX_LENGTH is the digit count of MAX_P_AMOUNT, and 10^15 is itself 16
+    // digits, so a 16-digit balance above the bound passes `.max()` and fails the refine.
+    const overBound = MAX_P_AMOUNT + 1n;
+    expect(String(overBound)).toHaveLength(QUOTE_VALUE_MAX_LENGTH);
+    const offered = maxValueFor({ inputs: spend, heldQty: 5, availableP: overBound });
+    expect(offered).toBe(String(MAX_P_AMOUNT));
+    expect(quoteRequest(MARKET_ID, { ...spend, value: offered ?? '' }, true)).toBeDefined();
     // Buying a COUNT has no ceiling this side of a quote, so there is no chip at all.
     const countBuy: TradeInputs = { ...INITIAL_TRADE_INPUTS, side: 'buy', mode: 'shares' };
     expect(maxValueFor({ inputs: countBuy, heldQty: 5, availableP: 12_345n })).toBeUndefined();
