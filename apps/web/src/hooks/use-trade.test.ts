@@ -32,6 +32,7 @@ import {
   heldQtyOf,
   mergePosition,
   quoteQueryOptions,
+  tradeAnswerScope,
 } from './use-trade';
 
 /**
@@ -310,6 +311,38 @@ describe('quoteQueryOptions', () => {
     // Belt and braces for the day `enabled` is dropped: the queryFn refuses instead of posting
     // a body the schema would reject, which would read as a failed quote to the panel.
     await expect(idle.queryFn()).rejects.toThrow();
+  });
+});
+
+describe('tradeAnswerScope', () => {
+  /** The account the tab became. `Me.id` is the user id `expectedAccountId` is judged against. */
+  const otherMe: Me = { ...me, id: 'user-2', email: 'b@example.com' };
+
+  it('writes the private half only while the tab still belongs to the account that traded', () => {
+    // Nothing cancels an in-flight POST, and the private half is A's balance, A's row and A's
+    // 매수 완료 toast — none of which may land on the screen once it is B's.
+    expect(tradeAnswerScope({ sent: 'user-1', shown: 'user-1', cached: me })).toBe('account');
+    // The trader's own `GET /me` has simply not landed yet: there is nothing of anybody's to
+    // overwrite, and refusing here would swallow their own 체결 toast.
+    expect(tradeAnswerScope({ sent: 'user-1', shown: 'user-1', cached: undefined })).toBe(
+      'account',
+    );
+    expect(tradeAnswerScope({ sent: 'user-1', shown: 'user-2', cached: otherMe })).toBe('market');
+    // Signed out mid-flight: `['me']` is reset and `useMe` stops asking, so only `shown` can
+    // see this at all.
+    expect(tradeAnswerScope({ sent: 'user-1', shown: undefined, cached: undefined })).toBe(
+      'market',
+    );
+  });
+
+  it('reads the owner from the cache too, because an unmounted panel stops learning', () => {
+    // react-query only pushes fresh options into a PENDING mutation from an effect, so a
+    // trader who navigated off the market page while the POST hung leaves `shown` naming the
+    // account that pressed the button, however long the tab has since belonged to somebody
+    // else. `Me.id` is the reading that cannot go stale — SessionCacheGuard's reset and the
+    // refetch after it are what put it there.
+    expect(tradeAnswerScope({ sent: 'user-1', shown: 'user-1', cached: otherMe })).toBe('market');
+    expect(tradeAnswerScope({ sent: 'user-1', shown: 'user-1', cached: me })).toBe('account');
   });
 });
 

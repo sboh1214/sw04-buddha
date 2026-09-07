@@ -158,22 +158,25 @@ export function useTrade(market: Pick<Market, 'id'>, onDone?: (result: TradeResu
       keys.settle(market.id, result.response.status);
       return data;
     },
-    // The account the request LEFT as, carried to `onSuccess` as its context. It cannot be
-    // read back from `mutationFn`: that answers the `TradeResult`, which names an order and a
-    // market but never the account the server judged.
-    onMutate: () => ({ account: accountId }),
-    onSuccess: async (result, _body, sent) => {
+    onSuccess: async (result, body) => {
       // A trade answers for the account that SENT it, and this tab may no longer BE that
       // account: nothing cancels an in-flight POST, so a sign-out and a sign-in as somebody
-      // else — in this tab or broadcast from another one — lands A's balance, A's position row
-      // and A's 매수 완료 toast on B's screen, on top of the caches `SessionCacheGuard` has
-      // just reset for B. The refetches that follow would usually paper over it; if one of
-      // them fails, B keeps reading A's numbers with nothing left to correct them.
+      // else — in this tab or broadcast from another one — would land A's balance, A's
+      // position row and A's 매수 완료 toast on B's screen, on top of the caches
+      // `SessionCacheGuard` has just reset for B.
       //
-      // The comparison is sound because query-core hands a PENDING mutation the newest options
-      // on every render (`MutationObserver.setOptions`), so this closure's `accountId` is the
-      // account the tab currently shows rather than the one it showed when the CTA was pressed.
-      if (sent.account !== accountId) {
+      // The refetch that follows does NOT undo it, which is what makes the gate load-bearing
+      // rather than a nicety: `joinPositions` is registered on `['positions']`
+      // (query-client.ts) and keeps the HELD row wherever its `version` is the higher one.
+      // Two accounts' versions are unrelated per-row counters, so A's seeded row can sit on
+      // B's 매도 ceiling and B's 평가손익 until B's own version happens to pass it.
+      if (
+        tradeAnswerScope({
+          sent: body.expectedAccountId,
+          shown: accountId,
+          cached: queryClient.getQueryData<Me>(ME_QUERY_KEY),
+        }) === 'market'
+      ) {
         // The market itself is nobody's: a trade moved its probability and added a fill
         // whatever the cache belongs to now, and dropping that would leave the screen behind
         // for a reason that has nothing to do with the market.
@@ -238,6 +241,47 @@ export function useTrade(market: Pick<Market, 'id'>, onDone?: (result: TradeResu
 }
 
 // ---- what a TradeResult writes ------------------------------------------------------
+
+/** Which half of a `TradeResult` a tab is still entitled to write. */
+export type TradeAnswerScope = 'account' | 'market';
+
+/**
+ * Whether a trade answer still belongs to whoever is looking at this tab.
+ *
+ * `sent` is not a guess. The server compared `TradeBody.expectedAccountId` against the COOKIE
+ * before it reserved anything (`assertExpectedAccount`), so a 2xx PROVES that string names the
+ * account the trade actually moved — which `TradeResult` itself never says, carrying an order,
+ * a market and a balance but no owner.
+ *
+ * Two readings of "who is this tab now", because neither answers alone:
+ *
+ * `shown` is the account the panel last rendered, and it is the only one that can see a tab go
+ * LOGGED OUT — `SessionCacheGuard` resets `['me']`, `useMe` then stops asking, and the cache
+ * says nothing at all. But it FREEZES: react-query pushes fresh options into a pending
+ * mutation from an effect (`useMutation` → `MutationObserver.setOptions`), so a trader who
+ * navigates off the market while the POST hangs unmounts the panel, after which this closure
+ * keeps naming the account that pressed the button however long the tab has since belonged to
+ * somebody else. `Mutation.execute` awaits `onSuccess` with no observer left to correct it.
+ *
+ * `cached` is whoever the caches the seed would overwrite belong to, and it never freezes,
+ * because the reset and the refetch after it are what put it there. `Me.id` is the same user
+ * id `expectedAccountId` is judged against (`me.service.ts` selects `user.id`). Holding NO
+ * `Me` is not a refusal: there is nothing of anybody's to overwrite then — the seeds already
+ * decline an absent entry — and refusing would swallow the 체결 toast for a trader whose own
+ * `GET /me` merely has not landed yet.
+ *
+ * `market` rather than nothing at all: a market moved because SOMEBODY traded and a fill was
+ * added to 체결 내역, whoever the tab belongs to now.
+ */
+export function tradeAnswerScope(a: {
+  sent: string;
+  shown: string | undefined;
+  cached: Me | undefined;
+}): TradeAnswerScope {
+  if (a.shown !== a.sent) return 'market';
+  if (a.cached !== undefined && a.cached.id !== a.sent) return 'market';
+  return 'account';
+}
 
 /**
  * Seed what the answer carries, then invalidate what it does not — in ONE synchronous block,
