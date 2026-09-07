@@ -43,8 +43,10 @@ export const PAYMENT_PROVIDERS = ['mock'] as const;
 export type PaymentProvider = (typeof PAYMENT_PROVIDERS)[number];
 
 // ---- markets (PLAN 5.2) -------------------------------------------------------------
+/** PLAN 16: the engine behind a market; `MarketMechanism` in mechanism.ts is the interface. */
+/** PLAN 16: which engine prices a market. `MarketMechanism` (mechanism.ts) is the interface. */
 export const MARKET_MECHANISMS = ['lmsr', 'clob'] as const;
-export type MarketMechanism = (typeof MARKET_MECHANISMS)[number];
+export type MarketMechanismKind = (typeof MARKET_MECHANISMS)[number];
 export const marketMechanismSchema = z.enum(MARKET_MECHANISMS);
 
 export const MARKET_STATUSES = [

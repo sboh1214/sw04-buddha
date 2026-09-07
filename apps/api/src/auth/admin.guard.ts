@@ -46,10 +46,12 @@ export class AdminGuard implements CanActivate {
   /** Cached role lookup; `undefined` when the user has no profile row. */
   async roleOf(userId: string): Promise<Role | undefined> {
     const key = roleCacheKey(userId);
+    let cacheDown = false;
     try {
       const cached = await this.redis.get(key);
       if (cached !== null && KNOWN_ROLES.has(cached)) return cached as Role;
     } catch (error) {
+      cacheDown = true;
       this.logger.warn(`role cache read failed: ${String(error)}`);
     }
 
@@ -60,10 +62,14 @@ export class AdminGuard implements CanActivate {
       .limit(1);
     if (!row) return undefined;
 
-    try {
-      await this.redis.set(key, row.role, 'EX', ROLE_CACHE_TTL_SECONDS);
-    } catch (error) {
-      this.logger.warn(`role cache write failed: ${String(error)}`);
+    // A read that failed (a Redis that stopped answering: the client's command timeout) is
+    // not followed by a write that would fail the same way — one bound per request, not two.
+    if (!cacheDown) {
+      try {
+        await this.redis.set(key, row.role, 'EX', ROLE_CACHE_TTL_SECONDS);
+      } catch (error) {
+        this.logger.warn(`role cache write failed: ${String(error)}`);
+      }
     }
     return row.role;
   }

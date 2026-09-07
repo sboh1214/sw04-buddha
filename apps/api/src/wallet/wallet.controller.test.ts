@@ -10,7 +10,7 @@ import {
   type LedgerEntry,
 } from '@buddha/shared';
 import { randomUUID } from 'node:crypto';
-import { eq } from 'drizzle-orm';
+import { asc, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PAYMENT_PROVIDER, type PaymentProvider } from '../payments/payment-provider.js';
 import {
@@ -23,7 +23,9 @@ import {
   type TestPackage,
   type TestUser,
 } from '../test/app.js';
+import { expectLedgerChain } from '../test/ledger.js';
 import { hasTestInfra } from '../test/setup-env.js';
+import { waitForLockWaiter } from '../test/wait.js';
 
 const jsonHeaders = { origin: 'http://localhost:3000', 'content-type': 'application/json' };
 
@@ -70,7 +72,12 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
   }
 
   async function ledgerOf(userId: string) {
-    return t.db.select().from(schema.ledgerEntries).where(eq(schema.ledgerEntries.userId, userId));
+    // In commit order: the id is drawn under the balance lock, so it is the truthful one.
+    return t.db
+      .select()
+      .from(schema.ledgerEntries)
+      .where(eq(schema.ledgerEntries.userId, userId))
+      .orderBy(asc(schema.ledgerEntries.id));
   }
 
   it('grants the sign-up bonus with a BONUS ledger entry (PLAN 17 Q2)', async () => {
@@ -140,6 +147,43 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     const snapshots = deposits.map((entry) => entry.balanceAfterP).sort((a, b) => Number(a - b));
     expect(new Set(snapshots).size).toBe(20);
     expect(snapshots.at(-1)).toBe(total);
+    // And `/me/ledger`'s (created_at, id) order is the order they committed in: 20 waiters on
+    // one balance row is exactly where a transaction-start stamp puts the chain out of order.
+    expectLedgerChain(await ledgerOf(user.id), total);
+  });
+
+  it('stamps the DEPOSIT after the balance lock, not at transaction start (A-M3-14)', async () => {
+    // The credit transaction begins, then waits on the balance row this connection holds.
+    // Anything that committed against this account meanwhile is already in its
+    // balance_after_p, so its ledger row must sort after it — the column default `now()` is
+    // the transaction start and sorted before it.
+    const holder = await t.db.$client.connect();
+    let pending: ReturnType<typeof charge> | undefined;
+    let released = false;
+    let releasedMs!: number;
+    try {
+      await holder.query('BEGIN');
+      await holder.query(`SELECT user_id FROM balances WHERE user_id = '${user.id}' FOR UPDATE`);
+      pending = charge(pack);
+      await waitForLockWaiter(holder, 'the charge on the balance row');
+      const { rows } = await holder.query<{ ms: string }>(
+        'SELECT (extract(epoch FROM clock_timestamp()) * 1000)::bigint::text AS ms',
+      );
+      releasedMs = Number(rows[0]!.ms);
+      await holder.query('COMMIT');
+      released = true;
+      expect((await pending).statusCode).toBe(200);
+    } finally {
+      if (!released) await holder.query('ROLLBACK');
+      holder.release();
+      await pending?.catch(() => undefined);
+    }
+
+    const ledger = await ledgerOf(user.id);
+    const deposit = ledger.find((entry) => entry.type === 'DEPOSIT')!;
+    expect(deposit.createdAt.getTime()).toBeGreaterThanOrEqual(releasedMs);
+    expect((await balanceOf(user.id))!.updatedAt.getTime()).toBe(deposit.createdAt.getTime());
+    expectLedgerChain(ledger, SIGNUP_BONUS_P + pack.amountP);
   });
 
   it('refuses an unknown, retired or malformed package', async () => {
@@ -277,6 +321,22 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     expect(await balanceOf(user.id)).toMatchObject({ availableP: expected });
     expect(await paymentsOf(user.id)).toHaveLength(1);
     expect((await ledgerOf(user.id)).filter((entry) => entry.type === 'DEPOSIT')).toHaveLength(1);
+  });
+
+  it('replays a charge sent with an upper-case package id (the row keeps it lower-case)', async () => {
+    // z.uuid() takes either case; the replay compares the body's id with the payment row's,
+    // which Postgres returns lower-case — kept as sent, the same purchase would be a 409.
+    const key = randomUUID();
+    const shouted = { ...pack, id: pack.id.toUpperCase() };
+    const first = await charge(shouted, user, key);
+    expect(first.statusCode).toBe(200);
+    const a = first.json<{ data: ChargeResult }>().data;
+    expect(a.payment.packageId).toBe(pack.id);
+
+    const again = await charge(shouted, user, key);
+    expect(again.statusCode).toBe(200);
+    expect(again.json<{ data: ChargeResult }>().data.payment.id).toBe(a.payment.id);
+    expect(await paymentsOf(user.id)).toHaveLength(1);
   });
 
   it('replays the terms actually bought after an admin re-priced the package', async () => {

@@ -4,7 +4,9 @@ import {
   PAGE_LIMIT_MAX,
   cursorQuerySchema,
   decodeKeyset,
+  decodeSortCursor,
   encodeKeyset,
+  encodeSortCursor,
 } from './pagination.js';
 
 describe('cursorQuerySchema', () => {
@@ -77,5 +79,56 @@ describe('keyset cursors', () => {
     expect(decodeKeyset('8640000000000001_x', 'text')).toBeUndefined();
     expect(decodeKeyset('9007199254740991_x', 'text')).toBeUndefined();
     expect(decodeKeyset('8640000000000000_x', 'text')).toBeDefined(); // the boundary is valid
+  });
+});
+
+describe('sort cursors', () => {
+  const uuid = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+
+  it('round-trips a bigint sort value and a uuid id', () => {
+    const cursor = encodeSortCursor('1234567890123456789', uuid);
+    expect(cursor).toBe(`1234567890123456789_${uuid}`);
+    expect(decodeSortCursor(cursor, 'int', 'uuid')).toEqual({
+      value: '1234567890123456789',
+      id: uuid,
+    });
+    // The value half is what `GET /markets?sort=volume` compares against volume_p.
+    expect(decodeSortCursor(encodeSortCursor('0', uuid), 'int', 'uuid')).toEqual({
+      value: '0',
+      id: uuid,
+    });
+    expect(
+      decodeSortCursor(encodeSortCursor('9223372036854775807', uuid), 'int', 'uuid'),
+    ).toBeDefined();
+  });
+
+  it('accepts epoch milliseconds under the millis shape with the Date range', () => {
+    expect(decodeSortCursor(`1788408306789_${uuid}`, 'millis', 'uuid')).toEqual({
+      value: '1788408306789',
+      id: uuid,
+    });
+    expect(decodeSortCursor(`8640000000000000_${uuid}`, 'millis', 'uuid')).toBeDefined();
+    expect(decodeSortCursor(`8640000000000001_${uuid}`, 'millis', 'uuid')).toBeUndefined();
+    expect(decodeSortCursor(`9007199254740993_${uuid}`, 'millis', 'uuid')).toBeUndefined();
+  });
+
+  it('treats a missing or malformed cursor as the first page', () => {
+    expect(decodeSortCursor(undefined, 'int', 'uuid')).toBeUndefined();
+    expect(decodeSortCursor('', 'int', 'uuid')).toBeUndefined();
+    expect(decodeSortCursor('no-separator', 'int', 'uuid')).toBeUndefined();
+    expect(decodeSortCursor(`_${uuid}`, 'int', 'uuid')).toBeUndefined();
+    expect(decodeSortCursor('123_', 'int', 'uuid')).toBeUndefined();
+    expect(decodeSortCursor(`-1_${uuid}`, 'int', 'uuid')).toBeUndefined();
+    expect(decodeSortCursor(`1.5_${uuid}`, 'int', 'uuid')).toBeUndefined();
+    expect(decodeSortCursor(`abc_${uuid}`, 'int', 'uuid')).toBeUndefined();
+    // Past int8: Postgres would answer 22003, a 500.
+    expect(decodeSortCursor(`9223372036854775808_${uuid}`, 'int', 'uuid')).toBeUndefined();
+  });
+
+  it('applies the id shape like decodeKeyset', () => {
+    expect(decodeSortCursor('0_not-a-uuid', 'int', 'uuid')).toBeUndefined();
+    expect(decodeSortCursor('0_not-a-uuid', 'int', 'text')).toBeDefined();
+    expect(decodeSortCursor('0_42', 'int', 'int')).toEqual({ value: '0', id: '42' });
+    expect(decodeSortCursor('0_0.5', 'int', 'int')).toBeUndefined();
   });
 });

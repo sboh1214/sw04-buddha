@@ -46,17 +46,11 @@ import { CurrentUser } from '../auth/current-user.decorator.js';
 import { SessionGuard } from '../auth/session.guard.js';
 import { ApiPage } from '../common/interceptors/response-envelope.interceptor.js';
 import { ApiData, ApiErrors, ApiPageOf } from '../common/openapi/api-response.decorators.js';
+import { CURSOR_QUERY_PARAMS } from '../common/openapi/cursor-query.js';
 import { SESSION_SECURITY_SCHEME } from '../openapi/document.js';
 import { ChargePackageService } from '../wallet/charge-package.service.js';
 import { CouponService } from '../wallet/coupon.service.js';
 import { AdminService } from './admin.service.js';
-
-const CURSOR_PARAM = { name: 'cursor', required: false, schema: { type: 'string' as const } };
-const LIMIT_PARAM = {
-  name: 'limit',
-  required: false,
-  schema: { type: 'integer' as const, minimum: 1, maximum: 100 },
-};
 
 /**
  * PLAN 7.3 / 12. Guards run in order, so SessionGuard fills `request.auth` before AdminGuard
@@ -128,8 +122,8 @@ export class AdminController {
   // --- coupons (ADR-0026): P grants an admin hands out ---------------------------------
   @Get('coupons')
   @ApiOperation({ operationId: 'adminListCoupons', summary: 'Coupons, newest first' })
-  @ApiQuery(CURSOR_PARAM)
-  @ApiQuery(LIMIT_PARAM)
+  @ApiQuery(CURSOR_QUERY_PARAMS[0])
+  @ApiQuery(CURSOR_QUERY_PARAMS[1])
   @ApiPageOf(couponSchema)
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'VALIDATION_ERROR')
   async listCoupons(
@@ -171,8 +165,8 @@ export class AdminController {
   @Get('users')
   @ApiOperation({ operationId: 'adminListUsers', summary: 'Search users by email or nickname' })
   @ApiQuery({ name: 'q', required: false, schema: { type: 'string' } })
-  @ApiQuery(CURSOR_PARAM)
-  @ApiQuery(LIMIT_PARAM)
+  @ApiQuery(CURSOR_QUERY_PARAMS[0])
+  @ApiQuery(CURSOR_QUERY_PARAMS[1])
   @ApiPageOf(adminUserSchema)
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'VALIDATION_ERROR')
   async listUsers(
@@ -206,8 +200,8 @@ export class AdminController {
 
   @Get('payments')
   @ApiOperation({ operationId: 'adminListPayments', summary: 'Charges, newest first' })
-  @ApiQuery(CURSOR_PARAM)
-  @ApiQuery(LIMIT_PARAM)
+  @ApiQuery(CURSOR_QUERY_PARAMS[0])
+  @ApiQuery(CURSOR_QUERY_PARAMS[1])
   @ApiPageOf(adminPaymentSchema)
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'VALIDATION_ERROR')
   async listPayments(
@@ -222,8 +216,8 @@ export class AdminController {
     operationId: 'adminListAuditFailures',
     summary: 'Ledger/balance mismatches found by the ledger.audit job',
   })
-  @ApiQuery(CURSOR_PARAM)
-  @ApiQuery(LIMIT_PARAM)
+  @ApiQuery(CURSOR_QUERY_PARAMS[0])
+  @ApiQuery(CURSOR_QUERY_PARAMS[1])
   @ApiPageOf(auditFailureSchema)
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'VALIDATION_ERROR')
   async listAuditFailures(

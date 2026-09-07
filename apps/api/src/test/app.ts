@@ -8,6 +8,7 @@ import { connectTestDb, type TestDb } from '@buddha/db/test';
 import { AppModule } from '../app.module.js';
 import { AUTH, type Auth } from '../auth/auth.js';
 import { DB } from '../infra/db/db.provider.js';
+import { MAX_PARAM_LENGTH } from '../infra/http/fastify-options.js';
 import { MAILER } from '../mail/mail.provider.js';
 import { createMemoryMailer, type MemoryMailer } from './memory-mailer.js';
 
@@ -33,10 +34,10 @@ export async function createTestApp(): Promise<TestApp> {
     .overrideProvider(MAILER)
     .useValue(mailer)
     .compile();
-  const app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter(), {
-    bodyParser: false,
-    logger: false,
-  });
+  const app = moduleRef.createNestApplication<NestFastifyApplication>(
+    new FastifyAdapter({ routerOptions: { maxParamLength: MAX_PARAM_LENGTH } }),
+    { bodyParser: false, logger: false },
+  );
   app.setGlobalPrefix('api');
   app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
   await app.init();

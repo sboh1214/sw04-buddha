@@ -4,11 +4,13 @@
  */
 import { schema } from '@buddha/db';
 import { SIGNUP_BONUS_P, type Coupon } from '@buddha/shared';
-import { eq } from 'drizzle-orm';
+import { asc, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
+import { expectLedgerChain } from '../test/ledger.js';
 import { hasTestInfra } from '../test/setup-env.js';
+import { waitForLockWaiter } from '../test/wait.js';
 
 const jsonHeaders = { origin: 'http://localhost:3000', 'content-type': 'application/json' };
 
@@ -51,6 +53,14 @@ describe.skipIf(!hasTestInfra)('coupons (integration)', () => {
       payload: { code, expectedAccountId: as.id },
     });
 
+  async function ledgerOf(userId: string) {
+    return t.db
+      .select()
+      .from(schema.ledgerEntries)
+      .where(eq(schema.ledgerEntries.userId, userId))
+      .orderBy(asc(schema.ledgerEntries.id));
+  }
+
   async function balanceOf(userId: string) {
     const [row] = await t.db
       .select()
@@ -92,6 +102,41 @@ describe.skipIf(!hasTestInfra)('coupons (integration)', () => {
     expect(redemption).toMatchObject({ userId: member.id, amountP: 5_000n });
     const [coupon] = await t.db.select().from(schema.coupons);
     expect(coupon?.redeemedCount).toBe(1);
+  });
+
+  it('stamps the BONUS after the balance lock, not at transaction start (A-M3-14)', async () => {
+    // The redemption transaction begins (coupon row, redemption row, coupon update) and only
+    // then reaches this account's balance row, which this connection holds. Whatever
+    // committed against the account meanwhile is already in its balance_after_p, so the
+    // BONUS row must sort after it — the column default `now()` is the transaction start.
+    expect((await issue({ code: 'LOCK-WAIT', amountP: '3000' })).statusCode).toBe(201);
+    const holder = await t.db.$client.connect();
+    let pending: ReturnType<typeof redeem> | undefined;
+    let released = false;
+    let releasedMs!: number;
+    try {
+      await holder.query('BEGIN');
+      await holder.query(`SELECT user_id FROM balances WHERE user_id = '${member.id}' FOR UPDATE`);
+      pending = redeem('LOCK-WAIT');
+      await waitForLockWaiter(holder, 'the redemption on the balance row');
+      const { rows } = await holder.query<{ ms: string }>(
+        'SELECT (extract(epoch FROM clock_timestamp()) * 1000)::bigint::text AS ms',
+      );
+      releasedMs = Number(rows[0]!.ms);
+      await holder.query('COMMIT');
+      released = true;
+      expect((await pending).statusCode).toBe(200);
+    } finally {
+      if (!released) await holder.query('ROLLBACK');
+      holder.release();
+      await pending?.catch(() => undefined);
+    }
+
+    const ledger = await ledgerOf(member.id);
+    const bonus = ledger.find((entry) => entry.refType === 'coupon')!;
+    expect(bonus.createdAt.getTime()).toBeGreaterThanOrEqual(releasedMs);
+    expect((await balanceOf(member.id))!.updatedAt.getTime()).toBe(bonus.createdAt.getTime());
+    expectLedgerChain(ledger, SIGNUP_BONUS_P + 3_000n);
   });
 
   it('refuses a second redemption by the same account', async () => {

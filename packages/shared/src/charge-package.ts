@@ -1,5 +1,6 @@
 import * as z from 'zod';
 import { pAmountInputSchema, pAmountSchema } from './api/p-amount.js';
+import { uuidSchema } from './api/uuid.js';
 
 /**
  * A charge package: the only way a user buys P (owner decision 2026-09-04). The KRW price is
@@ -48,7 +49,8 @@ export type ChargePackage = z.infer<typeof chargePackageSchema>;
  */
 export const chargeBodySchema = z
   .object({
-    packageId: z.uuid(),
+    /** Lower-cased on the way in: the replay compares it with the payment row's (api/uuid.ts). */
+    packageId: uuidSchema,
     /** P the card promised. */
     expectedAmountP: pAmountInputSchema,
     /** KRW the card asked for. */

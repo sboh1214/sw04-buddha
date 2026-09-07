@@ -28,6 +28,27 @@ app.setGlobalPrefix('api');
 app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
 
 const document = createOpenApiDocument(app);
+
+// OpenAPI 3.0 forbids two parameters with one (name, in) on an operation. It happens when a
+// handler declares `@ApiQuery` for a field that swagger already expanded from a
+// `@Query({ schema })` object without a component id (see markets.controller.ts), and
+// openapi-typescript hides it (it keys parameters by name), so fail here instead.
+const duplicates: string[] = [];
+for (const [route, operations] of Object.entries(document.paths)) {
+  for (const [method, operation] of Object.entries(operations)) {
+    const seen = new Set<string>();
+    for (const parameter of (operation as { parameters?: { name: string; in: string }[] })
+      .parameters ?? []) {
+      const key = `${parameter.in}:${parameter.name}`;
+      if (seen.has(key)) duplicates.push(`${method.toUpperCase()} ${route} ${key}`);
+      seen.add(key);
+    }
+  }
+}
+if (duplicates.length > 0) {
+  throw new Error(`[openapi:export] duplicate parameters:\n  ${duplicates.join('\n  ')}`);
+}
+
 const output = path.resolve(import.meta.dirname, '../openapi.json');
 writeFileSync(output, `${JSON.stringify(document, null, 2)}\n`);
 console.log(

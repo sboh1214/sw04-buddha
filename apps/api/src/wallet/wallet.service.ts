@@ -16,6 +16,7 @@ import { and, desc, eq, lt, or, sql } from 'drizzle-orm';
 import { assertExpectedAccount } from '../auth/expected-account.js';
 import { AppError } from '../common/errors/app-error.js';
 import { PG_UNIQUE_VIOLATION, isPgError } from '../common/errors/pg-error.js';
+import { clockTimestamp } from '../infra/db/clock.js';
 import { DB } from '../infra/db/db.provider.js';
 import { PAYMENT_PROVIDER, type PaymentProvider } from '../payments/payment-provider.js';
 
@@ -176,11 +177,27 @@ export class WalletService {
         .where(eq(schema.payments.id, paymentId))
         .returning();
 
+      // The balance row first, then the clock: another writer of this account (a trade, a
+      // void refund, another wallet write) may have committed while this transaction waited
+      // on that row, and the ledger row written below must sort after it — `now()` is the
+      // transaction start and would sort before work its own balance_after_p includes
+      // (clock.ts, A-M3-14). The lock is what the UPDATE below would take anyway, so no
+      // writer's lock order changes; the result is discarded, and a vanished row still falls
+      // through to the check the UPDATE already had.
+      await tx
+        .select({ userId: schema.balances.userId })
+        .from(schema.balances)
+        .where(eq(schema.balances.userId, userId))
+        .limit(1)
+        .for('update');
+      const creditedAt = await clockTimestamp(tx);
+
       const [balance] = await tx
         .update(schema.balances)
         .set({
           availableP: sql`${schema.balances.availableP} + ${amountP}`,
-          updatedAt: new Date(),
+          // Explicit on purpose: the column's `$onUpdate` would write the API host's clock.
+          updatedAt: creditedAt,
         })
         .where(eq(schema.balances.userId, userId))
         .returning();
@@ -208,6 +225,7 @@ export class WalletService {
           balanceAfterP: balance.availableP,
           refType: 'payment',
           refId: payment.id,
+          createdAt: creditedAt,
         })
         .returning();
       if (!entry) throw new AppError('INTERNAL', { message: 'Ledger insert failed' });

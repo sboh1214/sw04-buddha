@@ -37,6 +37,16 @@ export const positions = pgTable(
       .notNull()
       .default(sql`0`),
     settled: boolean().notNull().default(false),
+    /**
+     * Strictly increasing per row: 1 on insert, +1 on every ORM update (`$onUpdate` puts the
+     * bump into the SET list of any `db.update()` that does not set it). Every write happens
+     * under the market's advisory lock, so this is the row's commit order — the key a
+     * `user:position` event carries, where a millisecond `ts` could tie (migration 0010).
+     */
+    version: integer()
+      .notNull()
+      .default(1)
+      .$onUpdate(() => sql`"version" + 1`),
     updatedAt: updatedAt(),
   },
   (t) => [

@@ -16,6 +16,16 @@ export type AdminUser = components['schemas']['AdminUser'];
 export type ChargePackage = components['schemas']['ChargePackage'];
 export type ChargeResult = components['schemas']['ChargeResult'];
 export type Coupon = components['schemas']['Coupon'];
+export type Market = components['schemas']['Market'];
+export type MarketSummary = components['schemas']['MarketSummary'];
+export type AdminMarket = components['schemas']['AdminMarket'];
+export type MarketEvent = components['schemas']['MarketEvent'];
+export type Category = components['schemas']['Category'];
+export type Fill = components['schemas']['Fill'];
+export type AdminPayment = components['schemas']['AdminPayment'];
+export type AuditFailure = components['schemas']['AuditFailure'];
+export type CreateMarketBody = components['schemas']['CreateMarketBody'];
+export type UpdateMarketBody = components['schemas']['UpdateMarketBody'];
 export type ErrorEnvelope = components['schemas']['ErrorEnvelope'];
 
 /** A non-2xx API response, carrying the `{ error: { code, message, details? } }` envelope. */

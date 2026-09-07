@@ -51,7 +51,7 @@ export const markets = pgTable(
     qNo: numeric({ precision: 24, scale: 10 }).notNull(),
     /** Initial YES probability in basis points, 1..9999. */
     initialProbBp: smallint().notNull(),
-    /** Operator's maximum loss: ceil(100 * b * ln 2). */
+    /** Operator's maximum loss, maxLossP(p0, b): ceil(100·b·−ln(min(p0, 1−p0))) — ADR-0027. */
     reserveP: bigint({ mode: 'bigint' }).notNull(),
     // statistics
     /** Displayed YES price 1..99 (PLAN 5.3). */

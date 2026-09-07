@@ -20,16 +20,10 @@ import * as z from 'zod';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { api, isApiError, unwrap, type Coupon } from '@/lib/api';
-import { kstLocalToIso } from '@/lib/datetime';
+import { formatKst, kstLocalToIso } from '@/lib/datetime';
 import { boundedInteger, optionalCouponCode } from '@/lib/form-schema';
 
 const ADMIN_COUPONS_KEY = ['admin', 'coupons'] as const;
-
-const dateFormat = new Intl.DateTimeFormat('ko-KR', {
-  dateStyle: 'medium',
-  timeStyle: 'short',
-  timeZone: 'Asia/Seoul',
-});
 
 const schema = z.object({
   code: optionalCouponCode(copy.errAdminCouponCode),
@@ -216,7 +210,7 @@ export function AdminCoupons() {
                   {coupon.maxRedemptions === null
                     ? ` / ${copy.adminCouponUnlimited}`
                     : ` / ${String(coupon.maxRedemptions)}`}
-                  {coupon.expiresAt ? ` · ~${dateFormat.format(new Date(coupon.expiresAt))}` : ''}
+                  {coupon.expiresAt ? ` · ~${formatKst(coupon.expiresAt)}` : ''}
                   {coupon.memo ? ` · ${coupon.memo}` : ''}
                 </Text>
               </Stack>

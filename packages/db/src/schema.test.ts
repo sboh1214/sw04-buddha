@@ -1,8 +1,24 @@
-import { SIGNUP_BONUS_P } from '@buddha/shared';
-import { eq, lt, sql } from 'drizzle-orm';
+import {
+  DEFAULT_LIQUIDITY_B,
+  SIGNUP_BONUS_P,
+  initState,
+  maxLossP,
+  priceOf,
+  serializeQuantity,
+} from '@buddha/shared';
+import { and, eq, lt, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { auditFailures, balances, ledgerEntries, markets, profiles, user } from './schema/index.js';
-import { createCategory, createMarket, createUser } from './test/factories.js';
+import {
+  auditFailures,
+  balances,
+  ledgerEntries,
+  markets,
+  orders,
+  positions,
+  profiles,
+  user,
+} from './schema/index.js';
+import { createCategory, createMarket, createPosition, createUser } from './test/factories.js';
 import { connectTestDb, hasTestDb, type TestDb } from './test/harness.js';
 
 /**
@@ -12,6 +28,12 @@ import { connectTestDb, hasTestDb, type TestDb } from './test/harness.js';
 function sqlState(error: unknown): string | undefined {
   const e = error as { code?: string; cause?: { code?: string } } | null;
   return e?.cause?.code ?? e?.code;
+}
+
+/** The constraint or index a 23505 names (node-postgres `error.constraint`). */
+function sqlConstraint(error: unknown): string | undefined {
+  const e = error as { constraint?: string; cause?: { constraint?: string } } | null;
+  return e?.cause?.constraint ?? e?.constraint;
 }
 
 describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () => {
@@ -100,7 +122,9 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     expect(market.lastPrice).toBe(70);
     expect(market.qNo).toBe('0.0000000000');
     expect(Number(market.qYes)).toBeCloseTo(1000 * Math.log(0.7 / 0.3), 6);
-    expect(market.reserveP).toBe(69_315n);
+    // ADR-0027: the reserve is the true worst case, not PLAN 5.3's ln 2 figure (69,315P here).
+    expect(market.reserveP).toBe(maxLossP(0.7, 1000));
+    expect(market.reserveP).toBe(120_398n);
     const withCategory = await t.db.query.markets.findFirst({
       where: eq(markets.id, market.id),
       with: { category: true, creator: { with: { profile: true } } },
@@ -121,6 +145,108 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
 
   it('createMarket factory rejects initialProbBp outside 1..9999 before writing', async () => {
     await expect(createMarket(t.db, { initialProbBp: 10_000 })).rejects.toThrow(RangeError);
+  });
+
+  it('createMarket stores maxLossP and the shared LMSR init for p0 != 0.5 (ADR-0027)', async () => {
+    const b = DEFAULT_LIQUIDITY_B;
+    const market = await createMarket(t.db, { initialProbBp: 1000 });
+    const init = initState(0.1, b);
+    expect(market.reserveP).toBe(maxLossP(0.1, b));
+    expect(market.reserveP).toBe(230_259n);
+    expect(market.reserveP).not.toBe(BigInt(Math.ceil(100 * b * Math.LN2)));
+    // The numeric(24,10) columns round-trip the serialised quantities byte for byte.
+    expect(market.qYes).toBe(serializeQuantity(init.qYes));
+    expect(market.qNo).toBe(serializeQuantity(init.qNo));
+    expect(market.liquidityB).toBe(b.toFixed(6));
+    expect(market.lastPrice).toBe(priceOf(init));
+    expect(market.lastPrice).toBe(10);
+    expect(market.volumeP).toBe(0n);
+    expect(market.tradeCount).toBe(0);
+  });
+
+  it('createMarket accepts an explicit LMSR state and statistics overrides', async () => {
+    const state = { qYes: 1234.5, qNo: -50.25, b: 500 };
+    const market = await createMarket(t.db, {
+      liquidityB: state.b,
+      initialProbBp: 5000,
+      qYes: state.qYes,
+      qNo: state.qNo,
+      volumeP: 12_345n,
+      tradeCount: 7,
+    });
+    expect(market.qYes).toBe(serializeQuantity(state.qYes));
+    expect(market.qNo).toBe(serializeQuantity(state.qNo));
+    expect(market.lastPrice).toBe(priceOf(state));
+    // The reserve is a property of (p0, b), not of where the price curve currently sits.
+    expect(market.reserveP).toBe(maxLossP(0.5, state.b));
+    expect(market.volumeP).toBe(12_345n);
+    expect(market.tradeCount).toBe(7);
+    await expect(createMarket(t.db, { qYes: 1 })).rejects.toThrow(RangeError);
+  });
+
+  it('createPosition inserts a holdings row and nothing else', async () => {
+    const { user: u } = await createUser(t.db);
+    const market = await createMarket(t.db);
+    const row = await createPosition(t.db, {
+      userId: u.id,
+      marketId: market.id,
+      outcome: 'YES',
+      qty: 10,
+      costBasisP: 550n,
+    });
+    expect(row).toMatchObject({ qty: 10, costBasisP: 550n, realizedPnlP: 0n, settled: false });
+    expect(await t.db.select().from(positions)).toHaveLength(1);
+    const entries = await t.db.select().from(ledgerEntries).where(eq(ledgerEntries.userId, u.id));
+    expect(entries.map((entry) => entry.type)).toEqual(['BONUS']);
+  });
+
+  it('positions.version starts at 1 and every ORM update bumps it (migration 0010)', async () => {
+    // The ordering key of a user:position event: $onUpdate puts the bump into the SET list
+    // of any db.update() that does not set it, so no writer can forget it.
+    const { user: u } = await createUser(t.db);
+    const market = await createMarket(t.db);
+    const row = await createPosition(t.db, {
+      userId: u.id,
+      marketId: market.id,
+      outcome: 'YES',
+      qty: 10,
+      costBasisP: 550n,
+    });
+    expect(row.version).toBe(1);
+    const where = and(
+      eq(positions.userId, u.id),
+      eq(positions.marketId, market.id),
+      eq(positions.outcome, 'YES'),
+    );
+    const [once] = await t.db.update(positions).set({ qty: 11 }).where(where).returning();
+    expect(once!.version).toBe(2);
+    const [twice] = await t.db.update(positions).set({ settled: true }).where(where).returning();
+    expect(twice!.version).toBe(3);
+  });
+
+  it('orders: an idempotency key is unique per user, not across users (migration 0009)', async () => {
+    const { user: a } = await createUser(t.db);
+    const { user: b } = await createUser(t.db);
+    const market = await createMarket(t.db);
+    const order = (userId: string, idempotencyKey: string) => ({
+      userId,
+      marketId: market.id,
+      outcome: 'YES' as const,
+      side: 'buy' as const,
+      type: 'market' as const,
+      qty: 1,
+      filledQty: 1,
+      status: 'filled' as const,
+      idempotencyKey,
+    });
+    await t.db.insert(orders).values(order(a.id, 'client-key'));
+    // Client-minted keys collide across accounts; that must not block the second user.
+    await t.db.insert(orders).values(order(b.id, 'client-key'));
+    expect(await t.db.select().from(orders)).toHaveLength(2);
+    await expect(t.db.insert(orders).values(order(a.id, 'client-key'))).rejects.toSatisfy(
+      (e) =>
+        sqlState(e) === '23505' && sqlConstraint(e) === 'orders_user_id_idempotency_key_unique',
+    );
   });
 
   it('$onUpdate refreshes updated_at through the ORM', async () => {

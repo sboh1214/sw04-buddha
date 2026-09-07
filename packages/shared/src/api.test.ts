@@ -3,13 +3,30 @@ import { describe, expect, it } from 'vitest';
 import { dataEnvelope, pageEnvelope, pageMetaSchema } from './api/envelope.js';
 import { ERROR_CODES, errorEnvelopeSchema, validationIssueSchema } from './api/errors.js';
 import {
+  P_AMOUNT_INPUT_MAX_LENGTH,
   pAmountInputSchema,
   pAmountSchema,
   parsePAmount,
   serializePAmount,
 } from './api/p-amount.js';
+import { MAX_P_AMOUNT } from './constants.js';
 
 describe('PAmount wire format', () => {
+  it('bounds a request amount to the digits of MAX_P_AMOUNT before parsing it', () => {
+    // A sign and the 16 digits of 10^15: nothing longer can be a valid amount, and a
+    // body-sized run of digits must never reach BigInt().
+    expect(P_AMOUNT_INPUT_MAX_LENGTH).toBe(MAX_P_AMOUNT.toString().length + 1);
+    expect(pAmountInputSchema.parse(MAX_P_AMOUNT.toString())).toBe(MAX_P_AMOUNT);
+    expect(pAmountInputSchema.parse(`-${MAX_P_AMOUNT.toString()}`)).toBe(-MAX_P_AMOUNT);
+    for (const long of ['1'.repeat(P_AMOUNT_INPUT_MAX_LENGTH + 1), '9'.repeat(200_000)]) {
+      const result = pAmountInputSchema.safeParse(long);
+      expect(result.success).toBe(false);
+      expect(result.error?.issues.map((issue) => issue.code)).toContain('too_big');
+    }
+    // The response schema is unbounded: it only describes what the API sends.
+    expect(pAmountSchema.safeParse('1'.repeat(40)).success).toBe(true);
+  });
+
   it('accepts decimal integer strings only', () => {
     for (const ok of ['0', '1', '12500', '-300', '9007199254740993']) {
       expect(pAmountSchema.parse(ok)).toBe(ok);

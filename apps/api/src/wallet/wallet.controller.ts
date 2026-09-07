@@ -26,21 +26,12 @@ import { assertExpectedAccount } from '../auth/expected-account.js';
 import { SessionGuard } from '../auth/session.guard.js';
 import { IdempotencyKey } from '../common/decorators/idempotency-key.decorator.js';
 import { ApiData, ApiErrors, ApiPageOf } from '../common/openapi/api-response.decorators.js';
+import { CURSOR_QUERY_PARAMS } from '../common/openapi/cursor-query.js';
 import { ApiPage } from '../common/interceptors/response-envelope.interceptor.js';
 import { SESSION_SECURITY_SCHEME } from '../openapi/document.js';
 import { ChargePackageService } from './charge-package.service.js';
 import { CouponService, type RedeemResult } from './coupon.service.js';
 import { WalletService } from './wallet.service.js';
-
-/** PLAN 7.2 cursor query, documented once for both listing endpoints. */
-const CURSOR_QUERY = [
-  { name: 'cursor', required: false, schema: { type: 'string' as const } },
-  {
-    name: 'limit',
-    required: false,
-    schema: { type: 'integer' as const, minimum: 1, maximum: 100 },
-  },
-];
 
 /**
  * The charge catalogue (ADR-0026). Public on purpose: prices and discounts are what a visitor
@@ -166,8 +157,8 @@ export class MeWalletController {
 
   @Get('ledger')
   @ApiOperation({ operationId: 'getMyLedger', summary: 'Ledger entries, newest first' })
-  @ApiQuery(CURSOR_QUERY[0]!)
-  @ApiQuery(CURSOR_QUERY[1]!)
+  @ApiQuery(CURSOR_QUERY_PARAMS[0])
+  @ApiQuery(CURSOR_QUERY_PARAMS[1])
   @ApiPageOf(ledgerEntrySchema)
   @ApiErrors('UNAUTHENTICATED', 'VALIDATION_ERROR')
   async getLedger(
@@ -180,8 +171,8 @@ export class MeWalletController {
 
   @Get('payments')
   @ApiOperation({ operationId: 'getMyPayments', summary: 'Charges, newest first' })
-  @ApiQuery(CURSOR_QUERY[0]!)
-  @ApiQuery(CURSOR_QUERY[1]!)
+  @ApiQuery(CURSOR_QUERY_PARAMS[0])
+  @ApiQuery(CURSOR_QUERY_PARAMS[1])
   @ApiPageOf(paymentSchema)
   @ApiErrors('UNAUTHENTICATED', 'VALIDATION_ERROR')
   async getPayments(

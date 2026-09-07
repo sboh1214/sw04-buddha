@@ -18,6 +18,24 @@ describe('enums', () => {
     expect(enums.CATEGORY_SLUGS).toHaveLength(5);
   });
 
+  it('orders MARKET_STATUSES so a client can rank two market:status events (A-M3-19)', () => {
+    // Until an event carries a strict key, a client keeps the higher rank in this order —
+    // which is only a total order because the tuple is written in transition order and no
+    // status repeats. Reordering it (which also reorders the Postgres enum type) or letting
+    // M5 move a settled market back would break that rule silently; this fails first.
+    const rank = (status: enums.MarketStatus) => enums.MARKET_STATUSES.indexOf(status);
+    for (const [earlier, later] of [
+      ['draft', 'open'],
+      ['open', 'closed'],
+      ['closed', 'resolving'],
+      ['resolving', 'settled'],
+      ['settled', 'voided'],
+    ] as const) {
+      expect(rank(earlier)).toBeLessThan(rank(later));
+    }
+    expect(new Set(enums.MARKET_STATUSES).size).toBe(enums.MARKET_STATUSES.length);
+  });
+
   it('keeps the remaining enum schemas parseable', () => {
     expect(enums.paymentStatusSchema.parse('succeeded')).toBe('succeeded');
     expect(enums.marketMechanismSchema.parse('lmsr')).toBe('lmsr');

@@ -91,6 +91,93 @@ export type paths = {
         patch: operations["adminUpdateCoupon"];
         trace?: never;
     };
+    "/api/v1/admin/markets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every market, drafts included, newest first */
+        get: operations["adminListMarkets"];
+        put?: never;
+        /** Create a draft market (LMSR initialised from initialProbBp and liquidityB) */
+        post: operations["adminCreateMarket"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/markets/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One market with its LMSR state, exposure and event log */
+        get: operations["adminGetMarket"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Edit a draft (any field) or an open market (text, close time, category; liquidityB/initialProbBp/slug refused naming the field, blank rules refused with RULES_REQUIRED); other statuses refuse naming status */
+        patch: operations["adminUpdateMarket"];
+        trace?: never;
+    };
+    "/api/v1/admin/markets/{id}/close": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** open → closed */
+        post: operations["adminCloseMarket"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/markets/{id}/open": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** draft → open; refused without rules (RULES_REQUIRED) or with a past closeAt */
+        post: operations["adminOpenMarket"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/markets/{id}/void": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Void an open, closed or resolving market: every unsettled position is refunded its cost basis (MARKET_VOID_REFUND) and closed out */
+        post: operations["adminVoidMarket"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/payments": {
         parameters: {
             query?: never;
@@ -159,6 +246,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/categories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Active categories in display order */
+        get: operations["listCategories"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/charge-packages": {
         parameters: {
             query?: never;
@@ -193,6 +297,74 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/markets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Markets by status (default open), never drafts; sorted by volume, closing or newest */
+        get: operations["listMarkets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/markets/{id}/fills": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Newest 20 fills, anonymous */
+        get: operations["listMarketFills"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/markets/{id}/ticks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Price history, ascending, downsampled to at most 500 points (first and last always kept) from the newest 10000 ticks of the range. `resolution` is accepted but served as raw until M4. */
+        get: operations["listMarketTicks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/markets/{idOrSlug}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One market by id or slug (a draft is NOT_FOUND to the public) */
+        get: operations["getMarket"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me": {
         parameters: {
             query?: never;
@@ -220,6 +392,23 @@ export type paths = {
         };
         /** Ledger entries, newest first */
         get: operations["getMyLedger"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/orders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Orders of the account with their fill, newest first */
+        get: operations["getMyOrders"];
         put?: never;
         post?: never;
         delete?: never;
@@ -262,6 +451,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/me/positions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every position of the account, most recently changed first. status=open keeps the unsettled rows (qty may be 0 after a full sell), status=settled the settled ones; omitted lists all. No cursor: bounded by the markets one account has touched. */
+        get: operations["getMyPositions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/payments/charge": {
         parameters: {
             query?: never;
@@ -279,6 +485,40 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/quotes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Price a buy or sell (mode shares) or the contracts a budget buys (mode spend, buy only) */
+        post: operations["quote"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/trades": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Buy or sell contracts against the AMM at the current LMSR price. A buy carries maxCostP and a sell minProceedsP (PRICE_MOVED when the recomputed amount is past it). */
+        post: operations["trade"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 };
 export type webhooks = Record<string, never>;
 export type components = {
@@ -286,6 +526,57 @@ export type components = {
         AdminBalanceAdjustResult: {
             ledgerEntry: components["schemas"]["LedgerEntry"];
             user: components["schemas"]["AdminUser"];
+        };
+        AdminMarket: {
+            category: {
+                nameKo: string;
+                slug: string;
+            };
+            /** Format: date-time */
+            closeAt: string;
+            /** Format: date-time */
+            createdAt: string;
+            createdBy: string;
+            description: string | null;
+            /** Format: date-time */
+            disputeUntil: string | null;
+            events: components["schemas"]["MarketEvent"][];
+            /** Format: uuid */
+            id: string;
+            imageUrl: string | null;
+            initialProbBp: number;
+            lastPrice: number;
+            liquidityB: string;
+            netCollectedP: components["schemas"]["PAmount"];
+            /** Format: date-time */
+            openAt: string | null;
+            openInterest: {
+                no: number;
+                yes: number;
+            };
+            pYesBp: number;
+            qNo: string;
+            qYes: string;
+            reserveP: components["schemas"]["PAmount"];
+            resolutionSource: string | null;
+            /** Format: date-time */
+            resolvedAt: string | null;
+            /** @enum {string|null} */
+            resolvedResult: "YES" | "NO" | null;
+            rules: string;
+            /** Format: date-time */
+            settledAt: string | null;
+            slug: string;
+            /** @enum {string} */
+            status: "draft" | "open" | "closed" | "resolving" | "settled" | "voided";
+            title: string;
+            tradeCount: number;
+            traderCount: number;
+            /** Format: date-time */
+            updatedAt: string;
+            /** Format: date-time */
+            voidedAt: string | null;
+            volumeP: components["schemas"]["PAmount"];
         };
         AdminPayment: {
             amountP: components["schemas"]["PAmount"];
@@ -334,6 +625,12 @@ export type components = {
         BalanceAdjustBody: {
             amountP: components["schemas"]["PAmount"];
             memo: string;
+        };
+        Category: {
+            id: number;
+            nameKo: string;
+            slug: string;
+            sortOrder: number;
         };
         ChargeBody: {
             expectedAccountId: string;
@@ -386,6 +683,20 @@ export type components = {
             maxRedemptions?: number | null;
             memo?: string | null;
         };
+        CreateMarketBody: {
+            categoryId: number;
+            /** Format: date-time */
+            closeAt: string;
+            description?: string | null;
+            /** Format: uri */
+            imageUrl?: string | null;
+            initialProbBp: number;
+            liquidityB: number;
+            resolutionSource?: string | null;
+            rules: string;
+            slug?: string;
+            title: string;
+        };
         CursorQuery: {
             cursor?: string;
             /** @default 20 */
@@ -399,6 +710,18 @@ export type components = {
                 details?: unknown;
                 message: string;
             };
+        };
+        Fill: {
+            amountP: components["schemas"]["PAmount"];
+            /** Format: date-time */
+            createdAt: string;
+            id: string;
+            /** @enum {string} */
+            outcome: "YES" | "NO";
+            priceAvgBp: number;
+            qty: number;
+            /** @enum {string} */
+            side: "buy" | "sell";
         };
         LedgerEntry: {
             amountP: components["schemas"]["PAmount"];
@@ -419,6 +742,86 @@ export type components = {
             createdAt: string;
             id: string;
             providerId: string;
+        };
+        Market: {
+            category: {
+                nameKo: string;
+                slug: string;
+            };
+            /** Format: date-time */
+            closeAt: string;
+            /** Format: date-time */
+            createdAt: string;
+            description: string | null;
+            /** Format: date-time */
+            disputeUntil: string | null;
+            /** Format: uuid */
+            id: string;
+            imageUrl: string | null;
+            lastPrice: number;
+            /** Format: date-time */
+            openAt: string | null;
+            pYesBp: number;
+            resolutionSource: string | null;
+            /** Format: date-time */
+            resolvedAt: string | null;
+            /** @enum {string|null} */
+            resolvedResult: "YES" | "NO" | null;
+            rules: string;
+            /** Format: date-time */
+            settledAt: string | null;
+            slug: string;
+            /** @enum {string} */
+            status: "draft" | "open" | "closed" | "resolving" | "settled" | "voided";
+            title: string;
+            tradeCount: number;
+            traderCount: number;
+            /** Format: date-time */
+            voidedAt: string | null;
+            volumeP: components["schemas"]["PAmount"];
+        };
+        MarketEvent: {
+            actorId: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            id: string;
+            payload: unknown;
+            /** @enum {string} */
+            type: "created" | "opened" | "closed" | "resolve_proposed" | "result_changed" | "finalized" | "voided" | "rules_edited";
+        };
+        MarketStats: {
+            /** Format: uuid */
+            id: string;
+            lastPrice: number;
+            pYesBp: number;
+            tradeCount: number;
+            volumeP: components["schemas"]["PAmount"];
+        };
+        MarketSummary: {
+            category: {
+                nameKo: string;
+                slug: string;
+            };
+            /** Format: date-time */
+            closeAt: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: uuid */
+            id: string;
+            imageUrl: string | null;
+            lastPrice: number;
+            /** Format: date-time */
+            openAt: string | null;
+            pYesBp: number;
+            /** @enum {string|null} */
+            resolvedResult: "YES" | "NO" | null;
+            slug: string;
+            /** @enum {string} */
+            status: "draft" | "open" | "closed" | "resolving" | "settled" | "voided";
+            title: string;
+            tradeCount: number;
+            traderCount: number;
+            volumeP: components["schemas"]["PAmount"];
         };
         Me: {
             balance: {
@@ -442,6 +845,30 @@ export type components = {
             /** @enum {boolean} */
             ok: true;
         };
+        Order: {
+            amountP: components["schemas"]["PAmount"] | null;
+            /** Format: date-time */
+            createdAt: string;
+            filledQty: number;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            marketId: string;
+            marketSlug: string;
+            marketTitle: string;
+            maxCostP: components["schemas"]["PAmount"] | null;
+            minProceedsP: components["schemas"]["PAmount"] | null;
+            /** @enum {string} */
+            outcome: "YES" | "NO";
+            priceAvgBp: number | null;
+            qty: number;
+            /** @enum {string} */
+            side: "buy" | "sell";
+            /** @enum {string} */
+            status: "open" | "partially_filled" | "filled" | "cancelled" | "rejected";
+            /** @enum {string} */
+            type: "market" | "limit";
+        };
         PageMeta: {
             nextCursor: string | null;
         };
@@ -461,6 +888,52 @@ export type components = {
             providerRef: string | null;
             /** @enum {string} */
             status: "pending" | "succeeded" | "failed";
+        };
+        Position: {
+            costBasisP: components["schemas"]["PAmount"];
+            /** Format: uuid */
+            marketId: string;
+            marketLastPrice: number;
+            marketSlug: string;
+            /** @enum {string} */
+            marketStatus: "draft" | "open" | "closed" | "resolving" | "settled" | "voided";
+            marketTitle: string;
+            /** @enum {string} */
+            outcome: "YES" | "NO";
+            qty: number;
+            realizedPnlP: components["schemas"]["PAmount"];
+            /** @enum {string|null} */
+            resolvedResult: "YES" | "NO" | null;
+            settled: boolean;
+            /** Format: date-time */
+            updatedAt: string;
+            version: number;
+        };
+        PriceTick: {
+            pYesBp: number;
+            /** @enum {string} */
+            trigger: "trade" | "open" | "resolve";
+            /** Format: date-time */
+            ts: string;
+        };
+        QuoteBody: {
+            /** Format: uuid */
+            marketId: string;
+            /** @enum {string} */
+            mode: "shares" | "spend";
+            /** @enum {string} */
+            outcome: "YES" | "NO";
+            /** @enum {string} */
+            side: "buy" | "sell";
+            value: string;
+        };
+        QuoteResult: {
+            amountP: components["schemas"]["PAmount"];
+            maxPayoutP: components["schemas"]["PAmount"];
+            priceAfterBp: number;
+            priceAvgBp: number;
+            priceBeforeBp: number;
+            shares: number;
         };
         RedeemCouponBody: {
             code: components["schemas"]["CouponCode"];
@@ -483,6 +956,25 @@ export type components = {
         SetPasswordBody: {
             newPassword: components["schemas"]["Password"];
         };
+        TradeBody: {
+            expectedAccountId: string;
+            /** Format: uuid */
+            marketId: string;
+            maxCostP?: components["schemas"]["PAmount"];
+            minProceedsP?: components["schemas"]["PAmount"];
+            /** @enum {string} */
+            outcome: "YES" | "NO";
+            shares: number;
+            /** @enum {string} */
+            side: "buy" | "sell";
+        };
+        TradeResult: {
+            balance: components["schemas"]["Balance"];
+            fill: components["schemas"]["Fill"];
+            market: components["schemas"]["MarketStats"];
+            order: components["schemas"]["Order"];
+            position: components["schemas"]["Position"];
+        };
         UpdateChargePackageBody: {
             amountP?: components["schemas"]["PAmount"];
             isActive?: boolean;
@@ -496,11 +988,28 @@ export type components = {
             maxRedemptions?: number | null;
             memo?: string | null;
         };
+        UpdateMarketBody: {
+            categoryId?: number;
+            /** Format: date-time */
+            closeAt?: string;
+            description?: string | null;
+            /** Format: uri */
+            imageUrl?: string | null;
+            initialProbBp?: number;
+            liquidityB?: number;
+            resolutionSource?: string | null;
+            rules?: string;
+            slug?: string;
+            title?: string;
+        };
         UpdateMeBody: {
             nickname: components["schemas"]["Nickname"];
         };
         /** @enum {string} */
         UserRole: "user" | "admin";
+        VoidMarketBody: {
+            reason: string;
+        };
     };
     responses: never;
     parameters: never;
@@ -513,6 +1022,7 @@ export interface operations {
     adminListAuditFailures: {
         parameters: {
             query?: {
+                /** @description Opaque; `meta.nextCursor` of the previous page. */
                 cursor?: string;
                 limit?: number;
             };
@@ -768,6 +1278,7 @@ export interface operations {
     adminListCoupons: {
         parameters: {
             query?: {
+                /** @description Opaque; `meta.nextCursor` of the previous page. */
                 cursor?: string;
                 limit?: number;
             };
@@ -932,9 +1443,454 @@ export interface operations {
             };
         };
     };
+    adminListMarkets: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+                status?: "draft" | "open" | "closed" | "resolving" | "settled" | "voided";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["MarketSummary"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminCreateMarket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateMarketBody"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminMarket"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminGetMarket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminMarket"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminUpdateMarket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateMarketBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminMarket"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RULES_REQUIRED */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminCloseMarket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminMarket"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description MARKET_NOT_OPEN */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminOpenMarket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminMarket"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RULES_REQUIRED */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminVoidMarket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VoidMarketBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminMarket"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     adminListPayments: {
         parameters: {
             query?: {
+                /** @description Opaque; `meta.nextCursor` of the previous page. */
                 cursor?: string;
                 limit?: number;
             };
@@ -987,6 +1943,7 @@ export interface operations {
     adminListUsers: {
         parameters: {
             query?: {
+                /** @description Opaque; `meta.nextCursor` of the previous page. */
                 cursor?: string;
                 limit?: number;
                 q?: string;
@@ -1143,6 +2100,27 @@ export interface operations {
             };
         };
     };
+    listCategories: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["Category"][];
+                    };
+                };
+            };
+        };
+    };
     listChargePackages: {
         parameters: {
             query?: never;
@@ -1225,6 +2203,171 @@ export interface operations {
             };
             /** @description DUPLICATE_REQUEST */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listMarkets: {
+        parameters: {
+            query?: {
+                category?: string;
+                cursor?: string;
+                limit?: number;
+                q?: string;
+                sort?: "volume" | "closing" | "newest";
+                status?: "open" | "closed" | "resolving" | "settled" | "voided";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["MarketSummary"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listMarketFills: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["Fill"][];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listMarketTicks: {
+        parameters: {
+            query?: {
+                from?: string;
+                resolution?: "raw" | "1m" | "1h";
+                to?: string;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["PriceTick"][];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getMarket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                idOrSlug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["Market"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1337,6 +2480,7 @@ export interface operations {
     getMyLedger: {
         parameters: {
             query?: {
+                /** @description Opaque; `meta.nextCursor` of the previous page. */
                 cursor?: string;
                 limit?: number;
             };
@@ -1353,6 +2497,50 @@ export interface operations {
                 content: {
                     "application/json": {
                         data: components["schemas"]["LedgerEntry"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getMyOrders: {
+        parameters: {
+            query?: {
+                /** @description Opaque; `meta.nextCursor` of the previous page. */
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["Order"][];
                         meta: components["schemas"]["PageMeta"];
                     };
                 };
@@ -1432,6 +2620,7 @@ export interface operations {
     getMyPayments: {
         parameters: {
             query?: {
+                /** @description Opaque; `meta.nextCursor` of the previous page. */
                 cursor?: string;
                 limit?: number;
             };
@@ -1449,6 +2638,47 @@ export interface operations {
                     "application/json": {
                         data: components["schemas"]["Payment"][];
                         meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getMyPositions: {
+        parameters: {
+            query?: {
+                status?: "open" | "settled";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["Position"][];
                     };
                 };
             };
@@ -1535,6 +2765,131 @@ export interface operations {
                 };
             };
             /** @description PRICE_MOVED | DUPLICATE_REQUEST */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    quote: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QuoteBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["QuoteResult"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description MARKET_NOT_OPEN | MARKET_CLOSED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    trade: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Client-generated key for this trade (PLAN 5.4). Re-sending it returns the first outcome (order and fill verbatim; balance, position and market current) instead of trading again. DUPLICATE_REQUEST (409, no details) answers a key re-used with different terms: the key is spent. */
+                "Idempotency-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TradeBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["TradeResult"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description MARKET_NOT_OPEN | MARKET_CLOSED | INSUFFICIENT_BALANCE | INSUFFICIENT_POSITION | PRICE_MOVED | DUPLICATE_REQUEST */
             409: {
                 headers: {
                     [name: string]: unknown;

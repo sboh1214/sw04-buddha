@@ -4,7 +4,7 @@
  */
 import { schema } from '@buddha/db';
 import { SIGNUP_BONUS_P, type AdminBalanceAdjustResult, type AdminUser } from '@buddha/shared';
-import { eq } from 'drizzle-orm';
+import { asc, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
 import {
@@ -16,7 +16,9 @@ import {
   type TestApp,
   type TestUser,
 } from '../test/app.js';
+import { expectLedgerChain } from '../test/ledger.js';
 import { hasTestInfra } from '../test/setup-env.js';
+import { waitForLockWaiter } from '../test/wait.js';
 
 const jsonHeaders = { origin: 'http://localhost:3000', 'content-type': 'application/json' };
 
@@ -118,6 +120,49 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
         .from(schema.adminActions)
         .where(eq(schema.adminActions.targetId, member.id)),
     ).toHaveLength(0);
+  });
+
+  it('stamps the adjustment after the balance lock, not at transaction start (A-M3-14)', async () => {
+    // The adjustment transaction begins and then waits on the balance row this connection
+    // holds. Whatever committed against the account meanwhile is already in its
+    // balance_after_p, so its ledger and audit rows must sort after it.
+    const holder = await t.db.$client.connect();
+    let pending: ReturnType<typeof adjust> | undefined;
+    let released = false;
+    let releasedMs!: number;
+    try {
+      await holder.query('BEGIN');
+      await holder.query(`SELECT user_id FROM balances WHERE user_id = '${member.id}' FOR UPDATE`);
+      pending = adjust({ amountP: '2500', memo: '보상 지급' });
+      await waitForLockWaiter(holder, 'the adjustment on the balance row');
+      const { rows } = await holder.query<{ ms: string }>(
+        'SELECT (extract(epoch FROM clock_timestamp()) * 1000)::bigint::text AS ms',
+      );
+      releasedMs = Number(rows[0]!.ms);
+      await holder.query('COMMIT');
+      released = true;
+      expect((await pending).statusCode).toBe(200);
+    } finally {
+      if (!released) await holder.query('ROLLBACK');
+      holder.release();
+      await pending?.catch(() => undefined);
+    }
+
+    const ledger = await t.db
+      .select()
+      .from(schema.ledgerEntries)
+      .where(eq(schema.ledgerEntries.userId, member.id))
+      .orderBy(asc(schema.ledgerEntries.id));
+    const adjusted = ledger.find((entry) => entry.type === 'ADMIN_ADJUST')!;
+    expect(adjusted.createdAt.getTime()).toBeGreaterThanOrEqual(releasedMs);
+    expect((await balanceOf(member.id))!.updatedAt.getTime()).toBe(adjusted.createdAt.getTime());
+    // The audit row of the same transaction carries that instant too.
+    const [action] = await t.db
+      .select()
+      .from(schema.adminActions)
+      .where(eq(schema.adminActions.targetId, member.id));
+    expect(action!.createdAt.getTime()).toBe(adjusted.createdAt.getTime());
+    expectLedgerChain(ledger, SIGNUP_BONUS_P + 2_500n);
   });
 
   it('credits P as well, and requires a memo and a non-zero amount', async () => {
