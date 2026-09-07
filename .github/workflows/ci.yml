@@ -20,11 +20,15 @@ jobs:
   ci:
     name: format / lint / typecheck / test / build
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 30 covered everything up to the OpenAPI check; the Playwright leg adds the chromium
+    # download, the seed and two projects' specs against one database (PLAN 14 AC 7).
+    timeout-minutes: 45
 
     # The superuser below is only used to apply docker/postgres/init/01-roles.sql; tasks then
     # connect with the same buddha_app / buddha_migrate roles as local development (PLAN 6.4).
-    # There is no Mailpit here: tests replace the MAILER provider with an in-memory mailer.
+    # Mailpit exists for the Playwright e2e alone: every spec signs up and reads the
+    # verification link out of Mailpit's HTTP API. The vitest suites never reach it — they
+    # replace the MAILER provider with an in-memory mailer (ADR-0022).
     services:
       postgres:
         image: postgres:16
@@ -48,9 +52,22 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+      # Same image and SMTP settings as docker/docker-compose.yml (accept any login, no TLS).
+      # No health options: the image ships its own HEALTHCHECK (`mailpit readyz`), which the
+      # runner waits for; no volume either, so each run starts with an empty mailbox.
+      mailpit:
+        image: axllent/mailpit:v1.31.0
+        env:
+          MP_SMTP_AUTH_ACCEPT_ANY: '1'
+          MP_SMTP_AUTH_ALLOW_INSECURE: '1'
+        ports:
+          - 1025:1025
+          - 8025:8025
 
     # Only variables declared in turbo.json (`env` / `passThroughEnv` / framework
     # inference) reach tasks: Turborepo runs in strict env mode. Add new keys there first.
+    # The exception is everything the e2e leg needs: Playwright and the two servers run
+    # outside turbo, so they read this block directly.
     # Locally TEST_* point at the docker `test` profile (5433/6380); here the service
     # containers double as the test database, so TEST_* and DATABASE_* are the same server.
     env:
@@ -66,10 +83,19 @@ jobs:
       BETTER_AUTH_SECRET: ci-only-better-auth-secret-0123456789abcdef
       BETTER_AUTH_URL: http://localhost:3000
       WEB_ORIGIN: http://localhost:3000
-      # Unreachable on purpose: any test that really sends mail is a bug.
+      # Reaches the Mailpit service container above. The vitest suites still never send mail:
+      # apps/api/src/test/setup-env.ts pins its own SMTP_HOST and the MAILER is overridden.
       SMTP_HOST: localhost
       SMTP_PORT: '1025'
       SMTP_FROM: noreply@buddha.local
+      # e2e only: the sign-up helper polls Mailpit's HTTP API for the verification link, and
+      # the specs drive the web server this job starts below.
+      MAILPIT_URL: http://127.0.0.1:8025
+      E2E_BASE_URL: http://localhost:3000
+      # db:seed skips the admin — and with it the seeded markets — unless both are set
+      # (packages/db/src/seed.ts); the e2e signs in as this admin to open its own market.
+      SEED_ADMIN_EMAIL: admin@buddha.local
+      SEED_ADMIN_PASSWORD: ci-only-admin-password
 
     steps:
       - uses: actions/checkout@v7
@@ -94,7 +120,7 @@ jobs:
 
       # Applies packages/db/drizzle/* as buddha_migrate (DATABASE_MIGRATE_URL) so the
       # integration tests find the schema. Also proves the committed migrations apply cleanly
-      # on an empty database. Seeding is not needed: tests create their own data (PLAN 14).
+      # on an empty database. Seeding happens later: it is needed by the e2e, not by vitest.
       - name: Run migrations
         run: pnpm db:migrate
 
@@ -110,3 +136,67 @@ jobs:
         run: |
           pnpm api:openapi
           git diff --exit-code -- apps/api/openapi.json packages/api-client/src/generated
+
+      # ---- e2e (PLAN 14 AC 7, A-M1-10): everything below runs against the build above ----
+
+      # ubuntu-latest ships no browser. Installing through the web package uses the
+      # @playwright/test version in the lockfile, so the download always matches the runner.
+      - name: Install Playwright chromium
+        run: pnpm --filter web exec playwright install --with-deps chromium
+
+      # The e2e flow needs the charge packages and the categories, and its market fixture is
+      # created through the admin API as the seeded admin (SEED_ADMIN_* above). db:seed already
+      # declares those three keys in passThroughEnv, so turbo.json needs no change.
+      - name: Seed the database
+        run: pnpm db:seed
+
+      # `next start`, not `pnpm --filter web start`: `.next/standalone/**` is excluded from
+      # build.outputs (turbo.json, ADR-0016), so after a Turborepo cache hit the standalone copy
+      # is missing and the start script exits 1 on its BUILD_ID check. `next start` serves the
+      # restored `.next` and only warns about output: 'standalone' (only 'export' throws).
+      # Logs go to files so the step can exit while both servers keep running.
+      - name: Start the API and the web server
+        run: |
+          mkdir -p "$RUNNER_TEMP/e2e-logs"
+          pnpm --filter api start > "$RUNNER_TEMP/e2e-logs/api.log" 2>&1 &
+          pnpm --filter web exec next start --port 3000 > "$RUNNER_TEMP/e2e-logs/web.log" 2>&1 &
+
+      # The API first: the home page renders server-side against it, so probing the web origin
+      # before the API is up would retry on a 500. `localhost` is IPv4-only on the runner, which
+      # is what both servers bind.
+      - name: Wait for the stack
+        run: |
+          for url in \
+            http://localhost:4000/api/health \
+            http://127.0.0.1:8025/readyz \
+            http://localhost:3000/; do
+            for _ in $(seq 1 60); do
+              if curl -fsS -o /dev/null "$url"; then
+                echo "ready: $url"
+                continue 2
+              fi
+              sleep 2
+            done
+            echo "::error::timed out waiting for $url"
+            tail -n 50 "$RUNNER_TEMP/e2e-logs/"*.log || true
+            exit 1
+          done
+
+      # Invoked outside turbo (pnpm runs the package script directly), so CI / E2E_BASE_URL /
+      # MAILPIT_URL reach Playwright from the job env and turbo.json stays untouched.
+      - name: Playwright e2e (mobile-375 + desktop-1280)
+        run: pnpm --filter web test:e2e
+
+      # Traces (trace: 'on-first-retry' with retries: 2 in CI) plus whatever report the run
+      # produced, and both server logs. Ignored when a step before the e2e is what failed.
+      - name: Upload the Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: playwright-report
+          path: |
+            apps/web/playwright-report/
+            apps/web/test-results/
+            ${{ runner.temp }}/e2e-logs/
+          if-no-files-found: ignore
+          retention-days: 7

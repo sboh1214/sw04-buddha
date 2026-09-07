@@ -6,6 +6,7 @@ import {
   REALTIME_NAMESPACE,
   REALTIME_ROOMS_MAX,
   REALTIME_SUBSCRIBE_MAX,
+  REALTIME_EXCEPTION_EVENT,
   RESYNC_EVENT,
   USER_CHANNEL_PATTERN,
   marketChannel,
@@ -218,6 +219,10 @@ describe('gateway protocol (M4)', () => {
     // A control event the gateway raises on its own after re-arming its Redis subscription:
     // it is never published to Redis, so nothing may parse it as a RealtimeEvent.
     expect(RESYNC_EVENT).toBe('realtime:resync');
+    // Both sides of the socket read these two names from here, so a drift is a test failure
+    // rather than a client that silently never hears a refusal.
+    expect(REALTIME_EXCEPTION_EVENT).toBe('exception');
+    expect(REALTIME_EVENT_TYPES).not.toContain(REALTIME_EXCEPTION_EVENT);
     expect(REALTIME_EVENT_TYPES).not.toContain(RESYNC_EVENT);
     expect(realtimeEventSchema.safeParse({ type: RESYNC_EVENT }).success).toBe(false);
     expect(realtimeEventSchema.safeParse({ type: RESYNC_EVENT, marketId, ts }).success).toBe(false);

@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, it } from 'vitest';
-import { formatKst, isoToKstLocal, kstLocalToIso } from './datetime';
+import { copy } from '@/copy';
+import { formatKst, formatRemaining, isoToKstLocal, kstLocalToIso } from './datetime';
 
 const originalTz = process.env.TZ;
 afterAll(() => {
@@ -71,5 +72,51 @@ describe('formatKst', () => {
 
   it('renders nothing for an unparseable instant', () => {
     expect(formatKst('not-a-date')).toBe('');
+  });
+});
+
+describe('formatRemaining', () => {
+  const closeAt = '2026-09-06T12:00:00.000Z';
+  const MINUTE = 60_000;
+  const HOUR = 60 * MINUTE;
+  const DAY = 24 * HOUR;
+  /** The instant `ms` before the close, as the caller's injected `now`. */
+  const before = (ms: number) => Date.parse(closeAt) - ms;
+
+  it('counts down in two units whatever zone the machine is in', () => {
+    for (const tz of ['UTC', 'Asia/Seoul', 'America/New_York']) {
+      process.env.TZ = tz;
+      // A duration is the same length in every zone: unlike formatKst, this must never
+      // acquire an offset, and the loop is what would catch it if it did.
+      expect(formatRemaining(closeAt, before(3 * DAY + 4 * HOUR)), tz).toBe(
+        `3${copy.unitDay} 4${copy.unitHour}`,
+      );
+      expect(formatRemaining(closeAt, before(4 * HOUR + 12 * MINUTE)), tz).toBe(
+        `4${copy.unitHour} 12${copy.unitMinute}`,
+      );
+      expect(formatRemaining(closeAt, before(12 * MINUTE + 30_000)), tz).toBe(
+        `12${copy.unitMinute} 30${copy.unitSecond}`,
+      );
+      expect(formatRemaining(closeAt, before(30_000)), tz).toBe(`30${copy.unitSecond}`);
+    }
+  });
+
+  it('drops the smaller unit when it has run out and truncates rather than rounds', () => {
+    expect(formatRemaining(closeAt, before(2 * DAY))).toBe(`2${copy.unitDay}`);
+    expect(formatRemaining(closeAt, before(HOUR))).toBe(`1${copy.unitHour}`);
+    // One second short of two days is 1일 23시간, never 2일: a countdown may not claim time
+    // the market does not have.
+    expect(formatRemaining(closeAt, before(2 * DAY - 1000))).toBe(
+      `1${copy.unitDay} 23${copy.unitHour}`,
+    );
+  });
+
+  it('renders nothing once the close has passed or the instant is unreadable', () => {
+    // A-M3-31: a market whose close time has passed stays `open` until the close job runs, so
+    // this is an ordinary state — the badge shows 마감됨 in this space.
+    expect(formatRemaining(closeAt, Date.parse(closeAt))).toBe('');
+    expect(formatRemaining(closeAt, Date.parse(closeAt) + 1000)).toBe('');
+    expect(formatRemaining('not-a-date', Date.parse(closeAt))).toBe('');
+    expect(formatRemaining('', Date.parse(closeAt))).toBe('');
   });
 });

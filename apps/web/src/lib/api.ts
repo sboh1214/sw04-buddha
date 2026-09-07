@@ -8,24 +8,43 @@ import { type ErrorCode, type ValidationIssue } from '@buddha/shared';
  */
 export const api = createApiClient({ baseUrl: '', credentials: 'include' });
 
+/**
+ * The wire DTOs, aliased here once. Nothing else in the app reaches into `components`: the
+ * generated schema is rewritten wholesale by `pnpm api:openapi` on every contract change, so a
+ * renamed or dropped schema has to break in this file rather than in every screen that named it.
+ */
 export type Me = components['schemas']['Me'];
 export type LinkedAccount = components['schemas']['LinkedAccount'];
 export type LedgerEntry = components['schemas']['LedgerEntry'];
 export type Payment = components['schemas']['Payment'];
+export type Balance = components['schemas']['Balance'];
 export type AdminUser = components['schemas']['AdminUser'];
 export type ChargePackage = components['schemas']['ChargePackage'];
 export type ChargeResult = components['schemas']['ChargeResult'];
 export type Coupon = components['schemas']['Coupon'];
 export type Market = components['schemas']['Market'];
 export type MarketSummary = components['schemas']['MarketSummary'];
+/** A list row: `MarketSummary` plus the card's `sparkline` — only `GET /markets` returns it. */
+export type MarketListItem = components['schemas']['MarketListItem'];
+/** The five fields a trade answer and a `market:tick` both carry, so both patch a cached market. */
+export type MarketStats = components['schemas']['MarketStats'];
 export type AdminMarket = components['schemas']['AdminMarket'];
 export type MarketEvent = components['schemas']['MarketEvent'];
 export type Category = components['schemas']['Category'];
 export type Fill = components['schemas']['Fill'];
+export type PriceTick = components['schemas']['PriceTick'];
+/** The tick route's envelope: the window and bucket the server chose, plus `points`. */
+export type PriceSeries = components['schemas']['PriceSeries'];
+export type Position = components['schemas']['Position'];
+export type Order = components['schemas']['Order'];
 export type AdminPayment = components['schemas']['AdminPayment'];
 export type AuditFailure = components['schemas']['AuditFailure'];
 export type CreateMarketBody = components['schemas']['CreateMarketBody'];
 export type UpdateMarketBody = components['schemas']['UpdateMarketBody'];
+export type QuoteBody = components['schemas']['QuoteBody'];
+export type QuoteResult = components['schemas']['QuoteResult'];
+export type TradeBody = components['schemas']['TradeBody'];
+export type TradeResult = components['schemas']['TradeResult'];
 export type ErrorEnvelope = components['schemas']['ErrorEnvelope'];
 
 /** A non-2xx API response, carrying the `{ error: { code, message, details? } }` envelope. */
@@ -74,4 +93,19 @@ export function validationField(error: ApiError): string | undefined {
   if (!Array.isArray(error.details)) return undefined;
   const first = (error.details as Partial<ValidationIssue>[])[0]?.path?.[0];
   return typeof first === 'string' ? first : undefined;
+}
+
+/**
+ * The 403 that means "the cookie belongs to somebody else than the account on screen": the
+ * server refused to charge, to redeem for, or to trade as an account the user is not looking
+ * at (PLAN 5.3 shape — `chargeBodySchema`, `redeemCouponBodySchema` and `tradeBodySchema` all
+ * carry `expectedAccountId`). Only this FORBIDDEN names the field; the CSRF refusal names none.
+ *
+ * It lives beside `validationField`, which it is built on, rather than in the wallet hook it
+ * started in: every flow that sends `expectedAccountId` must keep its idempotency key on this
+ * answer (the server judged the cookie, not the key), and the trade hook must not import a
+ * wallet hook — and a whole `'use client'` module — to ask a pure question about an ApiError.
+ */
+export function isForAnotherAccount(error: unknown): boolean {
+  return isApiError(error, 'FORBIDDEN') && validationField(error) === 'expectedAccountId';
 }

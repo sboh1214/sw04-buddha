@@ -1,3 +1,5 @@
+import { copy } from '@/copy';
+
 /**
  * KST at the edges, UTC on the wire — PLAN 7 ("시각은 ISO 8601 UTC. 클라이언트가 KST로 표시")
  * and PLAN 12's "마감 시각(KST 입력, UTC 저장)" for the market form M3 still has to build.
@@ -73,4 +75,54 @@ export function formatKst(iso: string): string {
       part.type === 'dayPeriod' ? (DAY_PERIODS[part.value] ?? part.value) : part.value,
     )
     .join('');
+}
+
+const SECOND_MS = 1000;
+const MINUTE_MS = 60 * SECOND_MS;
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
+
+/**
+ * The time left until `closeAt` for the countdown badge and the detail header: `3일 4시간`,
+ * `4시간 12분`, `12분 30초`, `30초`. Two units at most, and the smaller one is dropped when it
+ * is zero — the badge is a glance, not a stopwatch.
+ *
+ * `now` is injected rather than read from `Date.now()` for the reason `isClosingSoon` takes it
+ * (market-admin.ts): a countdown that reads the clock inside the render produces a different
+ * string on the server and in the first client render, which is a hydration mismatch on the
+ * page AC 2 measures. The caller seeds `now` once and ticks it.
+ *
+ * `''` both for an unparseable instant and for a close that has already passed; the badge shows
+ * `copy.marketClosed` there. A market whose close time is in the past stays `open` until the
+ * close job runs (A-M3-31), so this is an ordinary state, not an error.
+ *
+ * No zone and no `Intl`: a duration is the same length in every zone, and
+ * `Intl.RelativeTimeFormat` would hand the wording back to whichever ICU is at hand — the very
+ * thing DAY_PERIODS above had to correct for.
+ */
+export function formatRemaining(closeAt: string, now: number): string {
+  const parsed = new Date(closeAt).getTime();
+  if (Number.isNaN(parsed)) return '';
+  const remaining = parsed - now;
+  if (remaining <= 0) return '';
+  if (remaining >= DAY_MS) return unitPair(remaining, DAY_MS, copy.unitDay, HOUR_MS, copy.unitHour);
+  if (remaining >= HOUR_MS)
+    return unitPair(remaining, HOUR_MS, copy.unitHour, MINUTE_MS, copy.unitMinute);
+  if (remaining >= MINUTE_MS)
+    return unitPair(remaining, MINUTE_MS, copy.unitMinute, SECOND_MS, copy.unitSecond);
+  return `${String(Math.floor(remaining / SECOND_MS))}${copy.unitSecond}`;
+}
+
+/** `3일 4시간`, or just `3일` when the smaller unit has run out. Both units truncate. */
+function unitPair(
+  remaining: number,
+  majorMs: number,
+  majorUnit: string,
+  minorMs: number,
+  minorUnit: string,
+): string {
+  const major = Math.floor(remaining / majorMs);
+  const minor = Math.floor((remaining - major * majorMs) / minorMs);
+  const head = `${String(major)}${majorUnit}`;
+  return minor === 0 ? head : `${head} ${String(minor)}${minorUnit}`;
 }

@@ -1,4 +1,9 @@
-import { AUDIT_FAILURE_KINDS, MARKET_EVENT_TYPES, MARKET_STATUSES } from '@buddha/shared';
+import {
+  AUDIT_FAILURE_KINDS,
+  MARKET_EVENT_TYPES,
+  MARKET_STATUSES,
+  MINUS_SIGN,
+} from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
 import { ApiError } from './api';
@@ -13,7 +18,11 @@ import {
   canEditLiquidity,
   canVoid,
   compactJson,
+  deltaLabel,
   formatBp,
+  formatContracts,
+  formatNoPrice,
+  formatPricePerContract,
   formatQuantity,
   formatYesPrice,
   isAwaitingSettlement,
@@ -107,6 +116,24 @@ describe('formats', () => {
     expect(formatQuantity('abc')).toBe('abc');
   });
 
+  it('reads the 아니오 side as the complement of the same price', () => {
+    // The two labels on one card must add up to 100, so both come from lastPrice.
+    expect(formatNoPrice(63)).toBe(`${copy.no} 37%`);
+    expect(formatNoPrice(1)).toBe(`${copy.no} 99%`);
+  });
+
+  it('reads basis points as what one contract costs', () => {
+    expect(formatPricePerContract(6300)).toBe('63.00P');
+    expect(formatPricePerContract(5)).toBe('0.05P');
+  });
+
+  it('appends the contract unit to a grouped count', () => {
+    expect(formatContracts(1234)).toBe(`1,234${copy.tradeUnitContracts}`);
+    // A quote answers fractional shares; formatQuantity trims them the same way it trims the
+    // quantity strings the API sends.
+    expect(formatContracts(0.5)).toBe(`0.5${copy.tradeUnitContracts}`);
+  });
+
   it('renders a payload as one JSON line', () => {
     expect(compactJson({ a: 1, b: 'x' })).toBe('{"a":1,"b":"x"}');
     expect(compactJson(null)).toBe('');
@@ -114,6 +141,26 @@ describe('formats', () => {
     const cyclic: { self?: unknown } = {};
     cyclic.self = cyclic;
     expect(compactJson(cyclic)).toBe(copy.payloadUnreadable);
+  });
+});
+
+describe('deltaLabel', () => {
+  it('signs a rise and says nothing when there is nothing to report', () => {
+    expect(deltaLabel(2)).toBe('+2%p');
+    expect(deltaLabel(2.34)).toBe('+2.3%p');
+    expect(deltaLabel(0)).toBe('');
+    expect(deltaLabel(null)).toBe('');
+    // Under a tenth of a point the badge stays away entirely rather than showing "+0%p":
+    // 실시간은 조용하게 (PLAN 11.1-5).
+    expect(deltaLabel(0.04)).toBe('');
+    expect(deltaLabel(Number.NaN)).toBe('');
+  });
+
+  it('falls with U+2212, never an ASCII hyphen', () => {
+    // A hyphen is narrower than the plus and reads as a stray dash beside the number.
+    expect(deltaLabel(-2)).toBe(`${MINUS_SIGN}2%p`);
+    expect(deltaLabel(-2)).not.toContain('-');
+    expect(deltaLabel(-1.24)).toBe(`${MINUS_SIGN}1.2%p`);
   });
 });
 

@@ -6,12 +6,11 @@ import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import {
   isChargeInProgress,
-  isForAnotherAccount,
   isStaleCatalogue,
   useChargePackages,
   useCharge,
 } from '@/hooks/use-wallet';
-import { isApiError, type ChargePackage } from '@/lib/api';
+import { isApiError, isForAnotherAccount, type ChargePackage } from '@/lib/api';
 
 /**
  * Only a stale catalogue may claim the package is gone — re-priced, retired or deleted —

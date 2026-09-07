@@ -7,8 +7,8 @@ import { useForm } from 'react-hook-form';
 import * as z from 'zod';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
-import { isCouponRejection, isForAnotherAccount, useRedeemCoupon } from '@/hooks/use-wallet';
-import { isApiError } from '@/lib/api';
+import { isCouponRejection, useRedeemCoupon } from '@/hooks/use-wallet';
+import { isApiError, isForAnotherAccount } from '@/lib/api';
 
 /** The same code rules the API enforces; the message is the only thing localised here. */
 const schema = z.object({ code: couponCodeSchema.catch('') }).refine((v) => v.code.length > 0, {

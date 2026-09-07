@@ -196,6 +196,15 @@ export const REALTIME_MAX_MESSAGE_BYTES = 16_384;
 export const RESYNC_EVENT = 'realtime:resync';
 
 /**
+ * Gateway-only error channel: the answer to a `subscribe`/`unsubscribe` the gateway refused,
+ * carrying the same `{ error: { code, message, details? } }` envelope a REST route would
+ * (PLAN 7.4). The client protocol has no acks, so this is the only way a refusal reaches the
+ * browser — and it lives here rather than beside the filter so the two sides cannot drift.
+ * `exception` is socket.io's own convention for a server-side handler failure.
+ */
+export const REALTIME_EXCEPTION_EVENT = 'exception';
+
+/**
  * `subscribe` / `unsubscribe` payload. The ids are canonicalised here — A-M3-17's third
  * boundary: an upper-case uuid would join a room no publisher ever writes to, and the
  * socket would sit silent rather than fail.

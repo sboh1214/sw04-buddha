@@ -432,6 +432,11 @@ export const copy = {
   chartEmpty: '아직 확률 기록이 없습니다.',
   chartTruncated: '최근 구간만 표시하고 있습니다.',
   // 스크린 리더용 표의 캡션과 두 열 머리글. 한 쌍으로 읽히므로 차트 라벨 옆에 둔다.
+  // 차트의 접근 가능한 이름이 되는 한 문장('시작 61%, 최고 66%, 최저 60%, 현재 63%').
+  chartSummaryStart: '시작',
+  chartSummaryHigh: '최고',
+  chartSummaryLow: '최저',
+  chartSummaryCurrent: '현재',
   chartTableCaption: '시각별 확률',
   chartTime: '시각',
   chartValue: '확률',

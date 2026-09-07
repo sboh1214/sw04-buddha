@@ -1,13 +1,9 @@
 import { type ArgumentsHost, Catch, Logger, type WsExceptionFilter } from '@nestjs/common';
-import { type ErrorEnvelope } from '@buddha/shared';
+import { REALTIME_EXCEPTION_EVENT, type ErrorEnvelope } from '@buddha/shared';
 import { type Socket } from 'socket.io';
 import { AppError } from '../common/errors/app-error.js';
 
-/**
- * Event a gateway failure is delivered on. Nest's own BaseWsExceptionFilter uses this name,
- * so a client that listens for it keeps working whatever raises.
- */
-export const REALTIME_EXCEPTION_EVENT = 'exception';
+export { REALTIME_EXCEPTION_EVENT };
 
 /**
  * PLAN 7's error envelope for the socket. Applied gateway-scoped with `@UseFilters(...)`,

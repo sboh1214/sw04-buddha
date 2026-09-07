@@ -672,3 +672,143 @@ PLAN §13 M3는 LMSR 엔진(§5.3)과 포지션 회계(§5.4)를 `@buddha/shared
 - (2026-09-07 추기, M3 PR 리뷰 10차) **관리자 시장 상세의 캐시 키는 정규화한 id다**(A-M3-29): 화면이 URL 세그먼트를 그대로 키로 쓰고 자식들은 API가 돌려준 소문자 id로 캐시를 채워, 대문자 uuid로 연 주소에서는 8차의 씨앗·무효화가 화면이 읽지 않는 키에 떨어졌다. `marketIdParam`이 정규화 값을 돌려주고 `adminMarketQueryOptions`가 그 값으로 키를 만든다 — `market.id`가 곧 그 키가 되므로 자식은 손대지 않는다. 두 `useApplyMarket` 호출에만 라우트 id를 넘기는 형태는 체결 무효화를 깨뜨린다. 결정은 컴포넌트가 아니라 훅 모듈에 두어 노드 테스트가 실행할 수 있게 했다(웹에는 DOM 러너가 없다).
 - (2026-09-07 추기, M3 PR 리뷰 11차) **시드의 시장 시각도 락 뒤의 DB 시계다**(A-M3-30): `markets.open_at`과 'open' 틱만 러너의 `new Date()`여서 같은 행의 `created_at`(열 기본값)과 시계가 갈렸고, 러너가 앞선 만큼 open 틱이 거래 틱보다 뒤로 밀려 차트가 초기 확률을 중간 리셋으로 그릴 수 있었다 — 6차에서 관리자 open 경로를 고칠 때 적은 그 증상 그대로다. `packages/db`는 API 헬퍼를 import할 수 없어 `dbNow`를 시드에 복제했고, slug 확인 뒤에 읽는다. `seedAdmin`의 시각은 better-auth가 앱에서 만드는 열이라 그대로 둔다. 테스트는 자식 프로세스의 `Date`만 한 시간 앞으로 옮겨(`src/test/fake-clock.mjs`) 시드가 어느 시계를 쓰는지 결정적으로 가른다 — 같은 기계에서는 두 시계가 같아 그것 없이는 무엇도 실패하지 않는다.
 - (2026-09-07 추기, M3 PR 리뷰 12차) **마감이 지난 시드 시장은 열어 두되 실행마다 보고한다**(A-M3-31): 시드가 넣는 내용은 바꾸지 않는다 — 건너뛰면 2027년부터 시장을 0개 넣고, `closed`로 넣으면 기본 목록에서 사라지며 문안 수정 경로가 막힌다. 대신 경고를 삽입한 실행에만 걸어 두던 조건을 풀어 모든 실행에서 띄우고(이미 시드된 환경이 그 날짜를 넘기는 쪽이 더 크다), 파일의 리터럴이 아니라 행의 `close_at`과 비교하며, 없는 M5 스캔을 약속하는 대신 관리자 마감 버튼을 가리킨다. 마감이 지난 열린 시장이 목록에 남는다는 것과 관리자 마감이 그런 시장에도 듣는다는 것을 테스트로 고정했다.
+
+## ADR-0028 — 실시간 게이트웨이
+
+- 날짜: 2026-09-07
+- 상태: 채택
+
+### 맥락
+
+PLAN §8은 두 경로를 함께 적는다: 거래·전이가 커밋 뒤 Redis에 발행하고(M3의 `MarketPublisher`), 게이트웨이는 `@socket.io/redis-adapter`를 붙인다. 문자 그대로 구현하면 인스턴스마다 자기 구독에서 한 번 내보내고 어댑터가 그것을 다시 퍼뜨려, N 인스턴스에서 클라이언트마다 N부가 도착하고 발행마다 N² 어댑터 메시지가 돈다 — `market:trade`에는 클라이언트가 중복을 걸러 낼 키가 없다(A-M3-19). 연결 경로는 Q-M0-2에서 이미 CORS로 정해졌고(ADR-0017), Q-M3-7은 `autoResendUnfulfilledCommands: false`가 날려 버린 구독을 M4 게이트웨이가 스스로 다시 걸어야 한다는 항목을 남겨 두었다.
+
+### 결정
+
+- **`RealtimeModule` 안의 `@WebSocketGateway({ namespace: '/ws' })`**. 첫 인자가 정수가 아니면 `PORT_METADATA`가 0이라 두 번째 포트를 열지 않고 기존 Fastify raw 서버에 붙는다.
+- **불변식 하나로 PLAN §8의 두 경로를 함께 유지한다: 도메인 Redis 구독이 몰고 온 emit은 언제나 `.local`이고, 요청·수명주기 문맥의 emit만 어댑터를 지난다.** 인스턴스마다 같은 두 패턴을 들고 있어 이미 모든 이벤트를 받으므로 어댑터로 다시 보내는 것은 전부 중복이다. 컴파일러가 강제할 수 없는 규칙이고 단일 인스턴스 개발에서는 증상이 없어 운영에서만 드러나므로, 원시 ioredis로 `psubscribe('socket.io#*')`를 걸어 어댑터 트래픽이 0인지 보는 테스트가 이것을 직접 고정한다 — 지워서는 안 되는 테스트다.
+- **고정 패턴 두 개**(`psubscribe 'market:*','user:*'`)이고 방마다 SUBSCRIBE하지 않는다. 방 참가가 동기 in-process 연산으로 남아 구독 요청이 `commandTimeout`에 걸릴 수 있는 Redis 왕복을 기다리지 않고, 재연결 재무장이 구독 집합 재구축이 아니라 멱등한 명령 두 개다. 대가(모든 인스턴스가 모든 시장의 이벤트를 받는다)는 `JSON.parse` **앞의** `adapter.rooms.has(channel)` 한 번의 Map 조회가 갚는다 — 아무도 보지 않는 시장의 메시지는 파싱조차 하지 않는다. 인스턴스 수 × 초당 이벤트가 이 비용을 정당화하지 못하게 되면 동적 구독으로 옮긴다.
+- **`ready`마다 재무장, 무장 중복 가드, 1초 유계 재시도**(Q-M3-7의 답). ioredis는 _확인된_ 구독만 재발행하므로 비행 중이던 `psubscribe`는 버려지고, `commandTimeout`은 살아 있지만 조용한 Redis에서 `psubscribe`를 거절하면서 이후 `ready`를 주지 않는다 — 그러면 게이트웨이는 프로세스 수명 내내 귀머거리다. 첫 무장은 연결 중에 큐로 들어가고 ioredis는 큐를 흘린 **뒤** `ready`를 내므로 가드가 없으면 부팅마다 두 번 무장하고 두 번째 완료가 있지도 않은 공백을 알린다. 첫 무장이 아닌 모든 재무장은 `realtime:resync`를 `.local`로 내보내 클라이언트가 REST 스냅샷을 다시 읽게 한다. 구독 연결은 idle이라 `socketTimeout`이 걸리지 않으므로(A-M3-28) 30초마다 unref된 PING을 보내 반쯤 열린 연결이 조용히 배달을 멈추지 않게 한다.
+- **인증은 네임스페이스 미들웨어**이고 세션 조회가 실패하면 익명으로 강등된다(PLAN §8은 익명 소켓을 인정한다). `handleConnection`을 async로 두면 첫 `await`에서 돌아가므로 같은 틱에 `subscribe`를 보낸 클라이언트가 `userId` 없이 처리된다. `user:<id>` 방은 핸드셰이크 세션에서 서버가 넣고 페이로드로는 요청할 수 없다 — 클라이언트 프로토콜이 `marketIds`만 싣기 때문에 계정 방에는 인가 표면 자체가 없다.
+- **Origin 게이트는 `allowRequest`**다. `cors` 옵션은 폴링만 지킨다: engine.io가 업그레이드에서도 cors 미들웨어를 돌리지만 `cors` 패키지는 OPTIONS가 아닌 요청에 `next()`를 부르고(헤더를 빼먹을 뿐 중단하지 않는다) 브라우저는 WebSocket 업그레이드에 CORS를 강제하지 않으므로, `cors`만으로는 쿠키를 실은 교차 출처 소켓을 막지 못한다. `allowRequest`는 소켓도 세션 조회도 생기기 전에 engine.io 수준에서 FORBIDDEN으로 답한다. Origin이 없는 요청은 통과한다 — `SessionGuard.refuseForeignOrigin`과 같은 규칙(브라우저가 보낸 것이 아니면 위조가 될 수 없다). `app.enableCors()`는 쓰지 않는다(ADR-0017: REST는 같은 출처 rewrite 뒤에 남는다).
+- **ack가 없다.** `@SubscribeMessage` 핸들러는 `void`를 돌려주고 거절만 `exception` 이벤트에 PLAN §7.4 봉투(`{ error: { code, message, details } }`)로 답한다. 그래서 A-M3-19가 적은 "구독 → REST 스냅샷" 순서는 서버가 보장하는 것이 아니라 **클라이언트의 최선 노력**이 됐다: 방 참가가 동기이므로 emit과 참가 사이의 공백은 이벤트 루프 한 틱이고, 그 사이에 발행된 이벤트는 잃는다. 손실은 순서 키가 자가 치유한다(`market:tick`·`user:balance`·`user:position`은 다음 이벤트가 덮고, `market:trade`는 상태가 아니라 피드다). ack를 두면 그 답이 지나는 파이프라인(전역 인터셉터·파이프)과 `emitWithAck`의 타임아웃까지 프로토콜에 들어오는데, 그것으로 사는 것은 한 틱의 공백뿐이다.
+- **예외 필터는 게이트웨이 스코프**(`@UseFilters(RealtimeExceptionFilter)`)다. `@nestjs/websockets`의 `ExceptionFiltersContext.getGlobalMetadata()`가 `[]`를 돌려주므로 전역 `APP_FILTER`는 `@SubscribeMessage` 핸들러에 닿지 않고, 기본 `BaseWsExceptionFilter`는 `AppError`를 일반 메시지로 뭉개 PLAN §7.4 `code`를 잃는다. 필터가 반드시 잡아야 하는 잔여 throw는 전역 파이프의 NUL 스윕이다 — 스키마를 붙이지 않아도 `@MessageBody()`에서 돌기 때문에 핸들러의 `safeParse`가 선점할 수 없는 유일한 throw다.
+- **구독 페이로드는 세 번째 uuid 요청 경계**다(A-M3-17): `subscribeBodySchema`가 소문자로 정규화하지 않으면 대문자 id가 어떤 발행자도 쓰지 않는 방에 들어가 소켓이 실패하지 않고 조용해진다. 한계는 메시지당 시장 100개, 소켓당 방 200개, 프레임 16KB이고 넘으면 `VALIDATION_ERROR`다 — `RATE_LIMITED`는 PLAN §7.5/M6 몫이다. 방 상한은 `socket.rooms`가 아니라 전용 `socket.data.marketRooms` Set으로 센다(전자는 소켓 자신의 id 방과 계정 방을 함께 담고, 같은 id를 두 번 보내면 두 칸을 먹는다).
+- **`REDIS_ADAPTER_SUBSCRIBER`는 `duplicate()`가 아닌 별도 연결**이다. `createRedisClient`로 만들어야 `commandTimeout`·`socketTimeout`·`autoResendUnfulfilledCommands: false`(A-M3-28)를 그대로 물려받고, 어댑터의 notepack 프레임이 게이트웨이의 JSON `pmessage` 리스너에 섞이지 않는다. `market:tick`만 `.volatile`로 내보낸다 — `tradeCount` 순서의 스냅샷이라 다음 것이 덮는다.
+- **`RealtimeIoAdapter`를 `main.ts`와 `test/app.ts` 양쪽에 설치한다.** 데코레이터 메타데이터가 실을 수 없는 것(핸드셰이크 CORS, `allowRequest`, `maxHttpBufferSize`, Redis 어댑터)을 여기서 넣는다. `test/app.ts`를 빼먹으면 테스트가 Nest 기본 IoAdapter를 돌려 전부 통과하면서 운영만 다르게 동작한다. `connectionStateRecovery`는 켜지 않는다(세션 인식 어댑터로 갈아 끼우는데, 이 프로토콜은 재연결 시 REST로 다시 스냅샷을 읽는다).
+
+### 결과
+
+- 게이트웨이 통합 테스트 17건이 이 결정들을 고정한다: 익명 구독·배달, **어댑터 트래픽 0**, 구독하지 않은 소켓의 무수신, 계정 방 격리, 패밀리 분리(시장 채널에 실린 `user:balance`는 아무에게도 가지 않는다), 대문자 uuid, 한계 세 가지, `unsubscribe`, `allowRequest` 거절과 Origin 없는 접속, 모의 RESP 서버로 재현한 Q-M3-7 재무장 + `realtime:resync`, 유계 재시도, 클라이언트를 붙인 채의 종료(두 구독 연결 모두 `end`).
+- `WEB_ORIGIN`이 이제 `/ws` 핸드셰이크 CORS와 엔진 수준 Origin 검사까지 결정하고, `NEXT_PUBLIC_API_URL`은 브라우저가 직접 다이얼하는 값이 됐다(ADR-0017 결과가 M4로 넘긴 항목, `.env.example`에 반영). 새 환경 변수는 없다.
+- Redis 어댑터는 M4에서 **구조적으로 휴면**이다: 연결 하나와 네임스페이스당 구독 넷, 그리고 위 불변식을 비용으로 내고 얻는 것은 교차 노드 연산(`disconnectSockets`·`fetchSockets`·`serverSideEmit`)이 생길 때뿐이다. 지우는 것도 `adapter:` 한 줄과 프로바이더 하나이므로 Q-M4-8로 남긴다.
+- `@nestjs/websockets` 12.0.1을 설치하면서 `@thallesp/nestjs-better-auth`의 선택적 peer 범위(`^11.1.6`)와 어긋나 경고가 한 줄 늘었다 — Q-M0-4가 기록한 Nest 11/12 peer 경고와 같은 부류이고 런타임에는 영향이 없다(A-M4-9).
+
+## ADR-0029 — 틱 시리즈(PriceSeries·버킷)
+
+- 날짜: 2026-09-07
+- 상태: 채택
+
+### 맥락
+
+PLAN §7.1은 `resolution=raw|1m|1h`를 적었지만 M3는 `1m`/`1h`를 받아들이기만 하고 raw와 같게 서빙했다(A-M3-8). A-M3-20은 그 라우트의 창을 최신 `TICKS_SCAN_MAX`(10,000)틱으로 묶으면서 "M4의 버킷 해상도는 사전 집계가 필요하다"고 예고했고, Q-M3-8 (1)은 응답이 그 상한에 걸렸는지 클라이언트가 알 수 없다는 빈자리를 남겼다.
+
+### 결정
+
+- **경계 격자 + lateral 표본.** `generate_series`가 `[from, to]`의 절대 격자 경계를 만들고 `cross join lateral (… order by p.ts desc, p.id desc limit 1)`이 각 경계 이하의 마지막 틱을 읽는다. 값은 그 시점에 실제로 유효했던 LMSR 확률이므로 **"경계의 마지막 값"은 근사가 아니라 정확**하고, 단일 작성자 AMM 아래에서 OHLC는 아무 정보도 싣지 않는다(시가·고가·저가·종가가 모두 같은 계단의 값이다). 빈 버킷은 공짜로 앞 값을 잇고 연속 중복은 SQL(`where previous_bp is distinct from p_yes_bp or rn = cnt`)에서 지운다 — 조용한 시장이 500점 대신 두 점이다. `from` 경계가 구조적으로 `from` 이전을 돌아보므로 차트 왼쪽 끝이 비지 않는다: 앵커 행도, 재기록도, 추가 질의도 필요 없다.
+- 격자는 `date_bin(stride, start, timestamptz '1970-01-01 00:00:00+00')`에서 출발하는 **절대 격자**다. `date_trunc`도, 달력 `interval`도 아니다 — 둘 다 세션 TimeZone GUC를 타는데 `createDb`는 그것을 설정하지 않는다.
+- stride는 `sql.raw` 화이트리스트가 아니라 **바인딩 파라미터** `make_interval(secs => $n::double precision)`로 SQL에 닿는다(`date_bin`과 `generate_series` 양쪽에서 동작을 확인했다). 마지막 원시 SQL 조각과 그 화이트리스트가 함께 사라졌다.
+- **요청한 해상도는 굵게 바뀔 뿐(coarsen) 줄무늬로 솎이지 않는다**: `1m`은 1일 창에서 5분, 1주 창에서 1시간이 되고 `1h`는 2년 창에서 1주가 된다(`TICK_BUCKET_SECONDS` 사다리, 예산은 `TICKS_MAX_POINTS - 2` — 응답이 창의 양 끝을 항상 고정하기 때문이다). 솎으면 40분 간격의 점에 "1m"이라는 이름이 붙고 빈 구간에서는 간격이 들쭉날쭉해진다. 실제로 서빙한 stride는 `bucketSeconds`로 알린다. **서버가 요청 파라미터를 덮는 것은 PLAN §7.1의 일탈**이므로 Q-M4-1로 남겼다(PLAN §0.1-2).
+- 비용은 출력 점당 인덱스 하강 한 번(≤500)이라 시장의 틱 수와 무관하다 — `TICKS_SCAN_MAX` 행 상한보다 엄격히 낫고, 따라서 **버킷 읽기는 결코 잘리지 않는다**. raw 경로는 A-M3-25(최신 틱 고정 격자)와 A-M3-20(스캔 상한)을 그대로 두고 `truncated`만 정확해졌다: 싼 플래그(`cnt >= TICKS_SCAN_MAX`)를 예비 필터로 쓰고 그때만 `(market_id, ts, id)` 위의 행 비교 한 번으로 실제로 더 오래된 틱이 있는지 확인한다.
+- **응답 `data`가 배열이 아니라 `PriceSeries` 객체**다: `resolution`·`bucketSeconds`·`from`·`to`·`truncated`·`points`. **이것이 Q-M3-8 (1)의 답이다.** 봉투에 두 번째 `meta` 모양을 더하려면 `ApiPage`의 형제 클래스, `ResponseEnvelopeInterceptor`의 분기, 세 번째 응답 데코레이터가 boolean 하나 때문에 생긴다. 시리즈가 스스로를 설명하면 그 셋이 모두 없어지고, 클라이언트는 격자를 추측하는 대신 읽는다.
+
+### 결과
+
+- A-M3-20이 예고한 사전 집계 테이블(`price_tick_buckets`)은 **필요 없다**. 마이그레이션·거래 트랜잭션 안의 두 번째 작성자·백필·두 번째 진실 원천을 들이지 않고, `EXPLAIN`에서 중첩 루프가 지배하기 시작하면 그때 탈출구로 쓴다 — 그때도 DTO는 바뀌지 않는다.
+- 배열 → 객체는 깨는 변경이라 `pnpm api:openapi` 재생성을 강제했고 `components.schemas`에 `PriceSeries`가 들어왔다. 웹의 모든 소비자(`api.server.ts`·`lib/ticks.ts`·`useMarketTicks`·`ProbabilityChart`)가 `series.points`를 읽는다.
+- 테스트가 고정하는 것: 절대 격자(모든 내부 점이 `Date.parse(ts) % (bucketSeconds*1000) === 0`, `date_trunc`·원점 누락·달력 interval에서 전부 깨진다), 이월 + 중복 제거, 왼쪽 끝(틱 하나뿐인 시장을 10시간 뒤부터 읽어도 두 점), 사다리 상승(`1m`을 24시간에 → 300, 7일에 → 3600), 하루 20,000틱을 `1m`으로 → ≤500점·`truncated: false`, raw의 정확한 `truncated` 경계(`TICKS_SCAN_MAX` 정확히 → false, +50 → true).
+- 라우트 요약에서 "`resolution` is accepted but served as raw until M4" 문장이 사라졌다. 틱이 없는 시장은 `points: []`, `truncated: false`로 답한다.
+
+## ADR-0030 — 목록 스파크라인(MarketListItem)
+
+- 날짜: 2026-09-07
+- 상태: 채택
+
+### 맥락
+
+PLAN §11.4의 카드는 스파크라인을 요구한다. 카드마다 `/ticks`를 부르면 한 화면이 스무 번 왕복하고, 별도 배치 엔드포인트는 목록과 두 왕복이 되며 카드가 목록보다 늦게 채워진다.
+
+### 결정
+
+- **`GET /markets`의 항목 타입을 목록 전용 DTO `MarketListItem`**(= `MarketSummary` + `sparkline: number[]`)으로 바꾼다. `marketSummarySchema`·`marketSchema`·`adminMarketSchema`는 바이트 그대로다. `marketSchema`가 `...marketSummaryFields`로 만들어지고 `GET /admin/markets`가 같은 컴포넌트를 쓰므로, 공유 스키마를 넓히면 관리자 목록과 공개 상세까지 따라 넓어지고 `toMarketSummary`/`toMarket` 빌더를 갈라야 한다(응답은 zod로 파싱하지 않으므로 누수는 조용하다).
+- 표본은 "최신 N틱"이 아니라 **24시간 고정 1시간 as-of 격자 25점**이다(`SPARKLINE_WINDOW_HOURS`·`SPARKLINE_BUCKET_HOURS`·`SPARKLINE_MAX_POINTS`). 최신 N틱은 스파크라인의 시간 폭을 거래량의 함수로 만든다 — 바쁜 카드가 5분을, 조용한 카드가 24시간을 같은 격자에 나란히 그려 놓고 둘 다 24h라고 말한다. as-of 읽기(`ts <= bucket`, 하한 없음)라 하루 동안 거래가 없던 시장도 마지막 확률의 평평한 선을 그린다.
+- 페이지 SELECT에 lateral을 매달지 않고 **id로 한정한 별도의 문장**이다. Postgres는 LIMIT를 조인 위에 적용하므로 lateral은 페이지 밖 행까지 돌린다. 시장당 `SPARKLINE_MAX_POINTS`번의 상관 seek이라 비용은 틱 볼륨과 무관하다.
+- **앞쪽 미상 구간은 0으로 채우지 않고 잘라낸다**(`array_remove(…, null::int)`). 격자가 고정이고 미상 구간이 엄격한 접두이므로 **배열 길이가 시작 버킷을 뜻한다** — 클라이언트가 `SPARKLINE_MAX_POINTS - length`만큼 오른쪽으로 정렬해 그린다. 세 시간 된 시장은 카드 폭에 늘려 놓은 네 점 선이 아니라 오른쪽 끝의 짧은 선이고, 나란한 두 카드가 하나의 시간 축을 공유한다.
+- **`market:tick`은 마지막 표본을 교체한다.** 밀어 넣고 잘라 내면 바쁜 카드의 선이 틱마다 한 칸씩 왼쪽으로 기어가는데, PLAN §11.1-5는 실시간을 조용하게 두라고 한다. 시간 격자는 다음 refetch에서만 미끄러진다.
+- 카드 컴포넌트는 `{ market: MarketSummary; sparkline?: number[] }`로 타입을 잡는다. 그래서 관리자 미리보기(Q-M3-6)가 `MarketListItem`을 지어낼 필요가 없다.
+
+### 결과
+
+- 목록 응답 한 번으로 카드가 완성된다. 계약 테스트가 `GET /admin/markets` 항목과 `GET /markets/:idOrSlug`에는 `sparkline` 키가 아예 없고 `GET /markets` 항목에는 있다는 것을 고정한다.
+- 사전 집계 테이블은 만들지 않는다(ADR-0029와 같은 판단). 카드가 `1m` 격자를 요구하거나 하루 1만 틱을 넘는 시장이 흔해지면 A-M3-20과 함께 다시 본다.
+- 관리자 전이의 `open`과 시드는 모두 `open` 가격 틱을 남기므로(A-M3-30) 그 경로로 열린 시장의 카드는 빈 상자가 아니라 평평한 선이다. 다만 "공개 목록의 모든 시장에 틱이 있다"는 불변식은 아니다 — 테스트 팩토리는 틱 없는 `open` 시장을 만들고, 그 경우 `sparkline`은 `[]`이며 카드는 선을 그리지 않는다(높이는 그대로 유지한다).
+- 표본이 한 점뿐이면 선을 그리지 않는다. 상승·하락 색은 칠하지 않았다 — 색만으로 뜻을 전하지 않으려면 델타 텍스트를 함께 놓아야 하고(PLAN §11.2) 그것은 카드 레이아웃의 결정이라 Q-M4-11로 남겼다.
+
+## ADR-0031 — 웹 SSR·실시간 캐시
+
+- 날짜: 2026-09-07
+- 상태: 채택
+
+### 맥락
+
+M4 AC 2는 상세 화면 첫 페인트에 질문·확률·rules가 SSR로 들어 있을 것을(view-source 확인) 요구하고 AC 1은 다른 브라우저의 매수가 1초 안에 반영될 것을 요구한다. 두 요구는 서로 밀어낸다 — 서버가 그린 값과 소켓·재조회가 가져오는 값이 한 캐시 위에서 만나기 때문이다.
+
+### 결정
+
+- **SSR 스냅샷은 `dehydrate()` / `<HydrationBoundary>`로 옮긴다. `initialData`가 아니다.** `initialData`는 `dataUpdatedAt`을 갖지 않아 첫 마운트에서 곧바로 재조회를 부르고, 그러면 SSR로 그린 화면이 스스로 한 번 더 왕복한다.
+- **캐시 키는 언제나 정규화한 소문자 uuid**이고 slug가 아니다(A-M3-17, A-M3-29). 서버 컴포넌트가 slug → 행을 한 번 풀고 `marketKey(market.id)`에 씨앗을 놓는다. `/ticks`·`/fills`가 uuid 전용이라 어차피 `market.id`가 필요하고, slug로 건 항목은 하나도 만들지 않는다. 키 팩토리는 지시어가 없는 `lib/market-keys.ts`가 단독으로 소유한다 — `'use client'` 모듈의 export는 모두 클라이언트 참조가 되어 서버 컴포넌트가 부를 수 없다.
+- **`/`와 `/markets/[slug]`에 `export const dynamic = 'force-dynamic'`을 둔다.** Next 16은 `cache: 'no-store'`를 **fetch의 두 번째 인자에서 읽을 때만** 라우트를 동적으로 표시하는데(`init && typeof init === 'object'` 가드), openapi-fetch는 `fetch(request, requestInitExt)`를 `requestInitExt` 없이 부르므로 우리가 건 `no-store`는 Request 객체에 실려 그 분기에 닿지 않는다. 없으면 API가 떠 있지 않은 `pnpm check`·CI의 `next build`가 홈을 프리렌더하려 하고, 빌드에 성공한 상세는 Full Route Cache에서 빌드 시점 확률을 서빙해 AC 2를 정면으로 깬다.
+- **단조 join을 `['market']`·`['markets']` 접두의 `structuralSharing`으로 등록한다.** 순서 키를 소켓 핸들러 안에서만 비교하는 것은 부족하다: `refetchOnWindowFocus`/`refetchOnReconnect`가 켜져 있어 거래 전에 출발해 거래 후에 도착한 재조회가 소켓과 무관하게 확률을 되돌린다. `structuralSharing`은 `Query.setData` → `replaceData`를 지나는 **모든** 쓰기에 걸리고 기본값은 키 접두로 매칭되므로, 소켓·재조회·SSR 씨앗·거래 응답이 하나의 규칙 아래로 들어온다. `replaceEqualDeep`로 감싸 손대지 않은 페이지의 참조 동일성을 되살린다. 이벤트 리듀서(`apply*`)는 늦거나 중복인 이벤트에 `undefined`를 돌려주고 `setQueryData`는 그 경우 아무것도 쓰지 않는다 — `dataUpdatedAt`도 `staleTime`도 건드리지 않는다.
+- **개인 데이터는 SSR하지 않는다.** `['me']`·`['positions']`·`['orders']`·`['ledger']`는 `shouldDehydrateQuery`가 걸러 내고(두 번째 자물쇠), `/portfolio`는 서버에서 세션만 확인해 리다이렉트한 뒤 클라이언트가 읽는다. 캐시가 계정을 넘어 새지 않는 것은 `SessionCacheGuard`가 이미 하던 일이다.
+- **탭당 소켓 하나, 방은 참조 카운트.** 홈과 상세가 같은 시장을 보아도 두 번 구독하지 않고 서로의 구독을 끊지도 않는다. 세션 신원이 바뀌면 소켓을 **새로 만든다** — 게이트웨이는 쿠키를 핸드셰이크에서 한 번만 읽으므로, better-auth가 답하기 전에 열린 익명 소켓은 그 연결의 수명 내내 `user:<id>` 방에 들어가지 못하고 잔고 칩이 조용해진다.
+- ack가 없으므로(ADR-0028) 복구는 세 가지다: `connect`마다 보유한 방을 다시 구독하고, **두 번째** `connect`부터 활성 관측자만 재조회하며(첫 `connect`는 SSR 페이로드가 곧 스냅샷이라 무효화하지 않는다), `realtime:resync`에 같은 무효화를 돌리고, `exception`은 개발자 경고로 남긴다. 재조회와 이벤트가 겹쳐도 위의 단조 join이 순서를 지킨다.
+- 브라우저는 `NEXT_PUBLIC_API_URL` + `/ws`에 **직접** 붙는다(withCredentials, websocket 우선·polling 폴백). Next rewrite는 WebSocket 업그레이드를 프록시하지 않는다(Q-M0-2, ADR-0017).
+
+### 결과
+
+- `next build`가 `/`·`/markets/[slug]`·`/portfolio`를 동적 라우트로 낸다. 세 화면 모두 API가 없으면 빌드가 아니라 요청 시점에 실패한다.
+- 웹 테스트 325건은 전부 node 러너의 순수 함수다(`apps/web`에는 DOM 러너가 없다). 그래서 씨앗·조인·키·리듀서를 컴포넌트가 아니라 `lib/`에 두었고, 컴포넌트의 행동은 Playwright가 본다.
+- 남은 구멍: 첫 연결의 emit과 방 참가 사이 한 틱, 그리고 잔고 스냅샷에 순서 키가 없다는 것(Q-M3-8 (2)). 후자는 첫 `user:balance`를 무조건 받아들이고 그 다음부터 `ledgerEntryId`로 단조 비교하며 소켓마다 초기화하는 것으로 지금은 넘긴다 — 제대로 닫으려면 `Balance`에 필드를 더해 M2의 충전·쿠폰·조정 경로까지 손대야 한다(Q-M4-7).
+
+## ADR-0032 — 매수/매도 패널·무의존 차트
+
+- 날짜: 2026-09-07
+- 상태: 채택
+
+### 맥락
+
+PLAN §5.3은 거래 본문에 슬리피지 가드를 필수로 요구하고, PLAN §11.1-3은 패널을 버튼 둘과 금액 하나로 유지하라고 한다. 그리고 PLAN §11.4는 차트와 숫자 애니메이션의 라이브러리를 이름으로 적는다(`@number-flow/react` 또는 framer-motion) — 쓰지 않는다면 근거를 남겨야 한다(PLAN §0.1-4).
+
+### 결정
+
+**패널**
+
+- 슬리피지는 **고정 1%에 최소 1P 헤드룸을 양쪽에 대칭으로** 적용하고(`TRADE_SLIPPAGE_BP = 100`, `TRADE_SLIPPAGE_MIN_P = 1n`), spend 모드에서는 사용자가 입력한 예산이 상한이다. 바닥 나눗셈만 쓰면 40P 견적의 매도 헤드룸이 0이라 1P만 움직여도 `PRICE_MOVED`다. **슬라이더를 두는 대신 요약에 절대액으로 노출한다**(`최대 지불 …P` / `최소 수령 …P`) — 감춘 것이 없으면서 패널은 여전히 버튼 둘과 금액 하나다. 허용치를 사용자에게 열지는 Q-M4-3.
+- **견적 경합은 TanStack Query 키로 구조적으로 배제한다.** 의도 전체(`marketId, side, outcome, mode, value`)가 키이고 `keepPreviousData`로 이전 값을 그리며 `isPlaceholderData`를 패널이 읽는 `quote`에 접어 넣는다 — 늦게 온 응답은 자기 캐시 항목에 쓰이고 읽히지 않는다. 디바운스 300ms는 `value`에만 걸고 방향·결과·모드는 즉시 재견적한다.
+- **확인 모달이 없다**: 요약 + 금액이 적힌 버튼 한 번이고, 서버가 `PRICE_MOVED`를 답할 때만 명시적인 재확인 단계로 들어간다. 오류는 캐시를 고치고 화면이 다시 유도한다 — 충전하기를 그리는 경로도, 마감을 그리는 경로도 하나씩뿐이다.
+- **`Idempotency-Key` 인텐트는 시장 id**이고 조건 해시가 아니다. 응답을 잃은 사용자가 금액을 고쳐 다시 누르면 같은 키·다른 조건이라 `DUPLICATE_REQUEST`(409)를 받고 한 번 더 눌러야 하지만, 조건 해시는 새 키를 발급해 이미 체결됐을 수 있는 주문 위에 두 번째 주문을 얹는다 — 멱등성이 존재하는 바로 그 상황에서 조용히 두 번 거래한다. 키는 답이 온 모든 상태(2xx·4xx)에서 소모하고, 전송 실패·5xx와 `expectedAccountId`를 지목한 403에서는 유지한다(서버가 판단한 것은 키가 아니라 쿠키다). 거래 본문의 `expectedAccountId`는 세션의 계정 id다(Q-M3-5).
+- 비로그인 방문자에게 계산기 전체를 연다(`POST /quotes`는 공개 라우트다). 마지막 CTA만 로그인 링크가 되고, 왕복에서 입력값은 보존하지 않는다.
+
+**차트·롤링 숫자**
+
+- **새 의존성 0.** PLAN §11.4가 이름으로 적은 라이브러리를 쓰지 않는 일탈이므로 네 가지 근거를 남긴다. ① `apps/web`의 vitest는 `environment: 'node'`이고 jsdom도 testing-library도 없다 — 라이브러리 차트는 테스트 가능한 표면을 0으로 만드는 반면 path 문자열 빌더는 전부 테스트된다. ② Chakra의 `_dark`는 클래스 기반이고 `next-themes`도 클래스라 `stroke="currentColor"`가 JS 없이 페인트 시점에 테마를 푼다; JS 차트 라이브러리는 리터럴 색 문자열을 받으므로 `useColorModeValue` → `<ClientOnly>` → 테마 깜빡임이 되고 SSR을 잃는다. ③ AC 2는 view-source 단언인데 `ResponsiveContainer` 계열은 DOM을 재고 서버에서 아무것도 그리지 않으며 uPlot은 canvas라 볼 마크업이 없다. ④ ADR-0004의 카탈로그 규약상 핀 하나가 lockfile·workspace·`minimumReleaseAge` 비용인데, 필요한 것은 `d3-shape.line()` 열다섯 줄이다.
+- 기하는 고정 1000×300 user space + `preserveAspectRatio="none"` + `vector-effect="non-scaling-stroke"`이고 DOM을 재지 않는다. **모든 시각은 파라미터다** — 이 모듈에는 `Date.now()`도 `new Date()`도 `Intl`도 없다. 서버와 브라우저가 같은 `d` 문자열을 내야 AC 2가 재는 바로 그 페이지에서 하이드레이션 불일치로 인한 재페인트가 없기 때문이고, 같은 이유로 좌표는 전부 반올림한다. `NaN`/`Infinity`는 경로에 닿지 못하게 막는다 — SVG는 그런 경로를 통째로 버려 차트가 오류 없이 빈다.
+- y 도메인은 고정 0~100%도 자유 자동 맞춤도 아닌 **최소 스팬(`CHART_MIN_SPAN_BP` = 10%p) 자동 맞춤**이고 축에는 텍스트 레이블이 필수다: 61%→66% 시장이 화면 한가운데의 평평한 선이 되어도, 0.2%p 잔물결이 화면을 채워 폭락처럼 보여도 안 된다. 보간은 step-after — 값은 다음 거래까지 그대로 유효했다.
+- 롤링 숫자는 **현재 값의 순수 함수**다: 열 자리 열을 CSS `transition`으로 옮기는 클립 창이라 상태·ref·effect·`requestAnimationFrame`이 없고, 서버와 브라우저가 같은 마크업을 내므로 페이지를 열 때마다 모든 숫자가 0에서 굴러 오르지 않는다. 셀 키는 문자열 **끝에서** 센다(자릿수가 늘 때 왼쪽이 아니라 오른쪽이 고정된다). 카드에는 쓰지 않는다 — 그리드 전체가 동시에 구르면 PLAN §11.1-5를 어긴다. `_motionReduce`에서 전환을 끈다.
+- **차트 stroke·area·스파크라인은 `colorPalette.fg`를 쓰고 `colorPalette.solid`를 쓰지 않는다.** 설치된 팔레트에서 측정한 대비(라이트/다크): `yes.fg` 7.73/14.20, `no.fg` 8.37/11.06, `brand.fg` 7.90/10.53인 반면 `yes.solid`는 흰 배경에서 **3.74**로 WCAG 1.4.11(비텍스트 3:1)을 겨우 넘고 그 색을 툴팁 텍스트에 재사용하는 순간 4.5:1에서 떨어진다. 같은 AC 6 작업으로 커스텀 `brand`/`yes`/`no` 팔레트에 `border` 시맨틱 토큰(600/400 쌍)을 더했다 — 그것이 없어 `variant="outline"`이 조용히 `muted` 테두리로 떨어지고 있었다.
+
+### 결과
+
+- M4 종료 시 테스트 749건(shared 162 · db 27 · api 222 · web 325 · worker 13; M3 종료 시 445건). API 222건에는 게이트웨이 통합 17건이 들어 있다. `pnpm check` 통과.
+- 수용 기준: AC 1(다른 브라우저 1초 내 갱신)·AC 2(SSR view-source)·AC 3(견적·토스트·잔고 칩·포지션)·AC 4(잔고 부족 → 충전하기)·AC 5(375px 무스크롤)·AC 7(가입 → 충전 → 매수 → 포트폴리오)은 `apps/web/e2e`의 market·trade 스펙이 고정한다. AC 2는 `d="M`이 응답 HTML에 있는지까지 본다 — 이것이 무의존 인라인 SVG 결정을 직접 고정하는 단언이다(라이브러리 차트는 서버에서 이 문자열을 내지 못한다). AC 6은 자동 검사가 없다: 위 대비표와 역할·이름 단언이 근거이고 Lighthouse 실측은 수동으로 남긴다(A-M4-28).
+- 재검토 방아쇠 — 브러시·줌 선택기, 캔들/OHLC, 범례가 필요한 3개 이상의 시리즈, 로그·time-nice 눈금, 뷰당 5,000점 초과. 그중 하나가 M5/M6에서 나타나면 이음매는 `chartGeometry`이고 `LineChart`의 props와 `RollingNumber`는 손대지 않는다.
+- 브랜드 색은 여전히 PLAN §17 Q7의 인디고 placeholder다(A-M0-9). 팔레트가 정해지면 `theme/system.ts`의 세 팔레트와 위 대비표를 함께 다시 잰다.

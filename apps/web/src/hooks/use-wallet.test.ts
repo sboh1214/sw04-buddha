@@ -1,11 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { ApiError } from '@/lib/api';
-import {
-  isChargeInProgress,
-  isForAnotherAccount,
-  isCouponRejection,
-  isStaleCatalogue,
-} from './use-wallet';
+import { ApiError, isForAnotherAccount } from '@/lib/api';
+import { isChargeInProgress, isCouponRejection, isStaleCatalogue } from './use-wallet';
 
 const apiError = (status: number, code: string, details?: unknown) =>
   new ApiError(status, {

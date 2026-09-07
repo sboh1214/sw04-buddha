@@ -2,7 +2,7 @@
 
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
-import { useSession } from '@/lib/auth-client';
+import { useSession } from '@/lib/use-session';
 
 /** The account a session answer stands for: its user id, or null for "signed out". */
 export type SessionIdentity = string | null;
