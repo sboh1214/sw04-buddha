@@ -15,6 +15,7 @@ import {
   type TradePanelInput,
   type TradePanelView,
   isTradable,
+  maxValueFor,
   quoteErrorMessage,
   quoteRequest,
   setMode,
@@ -173,6 +174,48 @@ describe('the input reducer', () => {
       }),
       RUNS,
     );
+  });
+});
+
+describe('maxValueFor', () => {
+  const sell: TradeInputs = { ...INITIAL_TRADE_INPUTS, side: 'sell', mode: 'shares' };
+  const spend: TradeInputs = { ...INITIAL_TRADE_INPUTS, side: 'buy', mode: 'spend' };
+
+  it('never offers a sell quantity the schema would refuse', () => {
+    // THE BUG: a position accumulates across orders up to POSITION_QTY_MAX, but ORDER_QTY_MAX
+    // is the ceiling on ONE order. Offering the whole holding wrote a number `quoteRequest`
+    // answers undefined for, so pressing 최대 left the panel on `invalid` — no quote, no
+    // submit, and 계약 수를 확인해 주세요 under a number the panel itself had filled in.
+    const held = ORDER_QTY_MAX + 1;
+    expect(maxValueFor({ inputs: sell, heldQty: held, availableP: 1n })).toBe(
+      String(ORDER_QTY_MAX),
+    );
+    // Whatever it offers must be quotable, which is the property the chip exists for.
+    const offered = maxValueFor({ inputs: sell, heldQty: held, availableP: 1n });
+    expect(quoteRequest(MARKET_ID, { ...sell, value: offered ?? '' }, true)).toBeDefined();
+  });
+
+  it('offers the whole holding while it fits in one order', () => {
+    expect(maxValueFor({ inputs: sell, heldQty: 7, availableP: 1n })).toBe('7');
+    expect(maxValueFor({ inputs: sell, heldQty: ORDER_QTY_MAX, availableP: 1n })).toBe(
+      String(ORDER_QTY_MAX),
+    );
+  });
+
+  it('offers no ceiling it does not know, and none worth pressing', () => {
+    // `undefined` is 아직 모름 (the list has not loaded) and 0 is 보유 없음: neither is a
+    // number to fill in, and `no_position` is what the panel says about the second.
+    expect(maxValueFor({ inputs: sell, heldQty: undefined, availableP: 1n })).toBeUndefined();
+    expect(maxValueFor({ inputs: sell, heldQty: 0, availableP: 1n })).toBeUndefined();
+    expect(maxValueFor({ inputs: spend, heldQty: 5, availableP: undefined })).toBeUndefined();
+    expect(maxValueFor({ inputs: spend, heldQty: 5, availableP: 0n })).toBeUndefined();
+  });
+
+  it('caps a spend-mode buy at the balance and offers nothing for a count buy', () => {
+    expect(maxValueFor({ inputs: spend, heldQty: 5, availableP: 12_345n })).toBe('12345');
+    // Buying a COUNT has no ceiling this side of a quote, so there is no chip at all.
+    const countBuy: TradeInputs = { ...INITIAL_TRADE_INPUTS, side: 'buy', mode: 'shares' };
+    expect(maxValueFor({ inputs: countBuy, heldQty: 5, availableP: 12_345n })).toBeUndefined();
   });
 });
 

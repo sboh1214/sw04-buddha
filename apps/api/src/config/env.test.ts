@@ -91,3 +91,39 @@ describe('webOrigins', () => {
     );
   });
 });
+
+describe('AUTH_COOKIE_DOMAIN', () => {
+  it('is unset by default, which keeps the session cookie host-only', () => {
+    // Every environment the project has today. Locally the web and the API differ only by
+    // port, and a port is no part of a cookie's identity, so nothing has to be shared.
+    const parsed = envSchema.parse(base);
+    expect(parsed.AUTH_COOKIE_DOMAIN).toBeUndefined();
+  });
+
+  it('takes the registrable domain two hosts of one deployment share', () => {
+    expect(envSchema.parse({ ...base, AUTH_COOKIE_DOMAIN: 'example.com' }).AUTH_COOKIE_DOMAIN).toBe(
+      'example.com',
+    );
+    expect(
+      envSchema.parse({ ...base, AUTH_COOKIE_DOMAIN: 'buddha.co.kr' }).AUTH_COOKIE_DOMAIN,
+    ).toBe('buddha.co.kr');
+  });
+
+  it('refuses everything better-auth would accept and silently scope to nothing', () => {
+    // The whole point of the variable is that a wrong value fails LOUDLY: better-auth takes
+    // any string, and a cookie scoped to a domain that matches no host is indistinguishable
+    // at runtime from the bug this closes — realtime dead, nothing logged.
+    for (const bad of [
+      'https://example.com',
+      '.example.com',
+      'example.com/',
+      'localhost',
+      'app example.com',
+      'example.com:443',
+    ]) {
+      const result = envSchema.safeParse({ ...base, AUTH_COOKIE_DOMAIN: bad });
+      expect(result.success, bad).toBe(false);
+      if (!result.success) expect(result.error.issues[0]?.path).toEqual(['AUTH_COOKIE_DOMAIN']);
+    }
+  });
+});

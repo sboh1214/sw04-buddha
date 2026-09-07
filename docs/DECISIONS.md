@@ -376,6 +376,8 @@ PLAN §8/§10.1은 브라우저가 같은 출처의 `/api/*`만 쓴다고 가정
 - Socket.IO 클라이언트는 `NEXT_PUBLIC_API_URL`의 API 오리진에 직접 연결하며 `withCredentials: true`를 쓴다.
 - API는 Socket.IO 핸드셰이크(`/ws` 네임스페이스, polling 폴백 포함)에 대해서만 CORS를 허용한다: origin은 웹 오리진(`WEB_ORIGIN` env, 로컬 `http://localhost:3000`), credentials true. REST 라우트는 rewrite로만 접근하므로 CORS를 열지 않는다.
 - 세션 쿠키(SameSite=Lax)가 핸드셰이크에 실리려면 웹과 API가 같은 사이트여야 한다. 로컬은 `localhost:3000`/`localhost:4000`으로 충족되고, 운영은 `app.<도메인>`/`api.<도메인>` 형태를 전제한다. 게이트웨이 인증(PLAN §8)은 핸드셰이크 쿠키로 better-auth 세션을 조회한다.
+- (2026-09-08 추기, M4 PR 리뷰) **같은 사이트는 필요조건일 뿐 충분조건이 아니었다.** 위 문장은 SameSite만 따졌는데, 쿠키가 실제로 API 호스트로 돌아가려면 `Domain`이 있어야 한다: `Domain` 없이 발급된 쿠키는 자신을 발급한 호스트에만 돌아간다(RFC 6265 §5.1.3의 host-only). 그리고 로그인 쿠키는 **웹 호스트**에서 발급된다 — Next rewrite가 `/api/auth/*`를 서버 사이드로 대신 보내므로 브라우저는 `app.<도메인>`의 응답으로 그것을 받는다. 반면 소켓은 rewrite를 우회해 `api.<도메인>`로 직접 붙는다. 그래서 `app.`/`api.` 분리 배포에서는 로그인한 사용자도 **익명 핸드셰이크**가 되어 `user:<id>` 방에 들어가지 못하고, 잔고 칩과 내 포지션이 아무 오류 없이 조용히 멎는다. 로컬에서는 `localhost:3000`과 `localhost:4000`이 **같은 호스트**이므로(포트는 쿠키의 신원이 아니다) 이 결함이 드러나지 않는다.
+- 그래서 `AUTH_COOKIE_DOMAIN`(옵트인, 기본 미설정)을 둔다. 값이 있으면 better-auth의 `advanced.crossSubDomainCookies`로 그 도메인을 쿠키에 실어 두 호스트가 같은 쿠키를 공유한다(`SameSite=Lax`는 그대로, `__Secure-` 접두사는 `Domain`을 허용한다 — `__Host-`였다면 불가능했다). 값은 반드시 명시한다: better-auth의 기본값은 `BETTER_AUTH_URL`의 호스트, 즉 웹 호스트라서 API 호스트에는 여전히 닿지 않는다. 대가는 **그 도메인의 모든 서브도메인이 이 쿠키를 받는다**는 것이므로, 서브도메인 전부가 우리 것인 도메인만 적어야 한다. 대안(핸드셰이크용 단기 토큰을 REST로 발급)은 엔드포인트·수명·폐기를 새로 설계해야 해서 채택하지 않았다.
 
 ### 결과
 

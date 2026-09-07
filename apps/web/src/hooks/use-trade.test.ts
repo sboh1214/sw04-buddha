@@ -27,6 +27,7 @@ import { positionsKey } from './use-portfolio';
 import {
   applyMarketStats,
   applyPositionRow,
+  cancelFirstFetch,
   applyTradeMarket,
   applyTradeResult,
   heldQtyOf,
@@ -321,28 +322,39 @@ describe('tradeAnswerScope', () => {
   it('writes the private half only while the tab still belongs to the account that traded', () => {
     // Nothing cancels an in-flight POST, and the private half is A's balance, A's row and A's
     // 매수 완료 toast — none of which may land on the screen once it is B's.
-    expect(tradeAnswerScope({ sent: 'user-1', shown: 'user-1', cached: me })).toBe('account');
-    // The trader's own `GET /me` has simply not landed yet: there is nothing of anybody's to
-    // overwrite, and refusing here would swallow their own 체결 toast.
-    expect(tradeAnswerScope({ sent: 'user-1', shown: 'user-1', cached: undefined })).toBe(
-      'account',
-    );
-    expect(tradeAnswerScope({ sent: 'user-1', shown: 'user-2', cached: otherMe })).toBe('market');
-    // Signed out mid-flight: `['me']` is reset and `useMe` stops asking, so only `shown` can
-    // see this at all.
-    expect(tradeAnswerScope({ sent: 'user-1', shown: undefined, cached: undefined })).toBe(
+    expect(tradeAnswerScope({ sent: 'user-1', account: 'user-1', cached: me })).toBe('account');
+    expect(tradeAnswerScope({ sent: 'user-1', account: 'user-2', cached: otherMe })).toBe('market');
+    // Signed out mid-flight. `['me']` is reset and `useMe` stops asking, so the cache says
+    // nothing at all — the guard is the only reading that still names an account here.
+    expect(tradeAnswerScope({ sent: 'user-1', account: null, cached: undefined })).toBe('market');
+  });
+
+  it('does not wait for the new account\u2019s profile before refusing the old one', () => {
+    // THE HOLE this closes: SessionCacheGuard resets on a switch and B's ['me'] and B's
+    // ['positions'] refetch INDEPENDENTLY, so there is a window where B's holdings are loaded
+    // and B's profile is not. Waved through on "no Me yet", A's row lands on B's list — and
+    // `joinPositions` then KEEPS it, because two accounts' version counters are unrelated, so
+    // B's own refetch re-applies A's numbers instead of clearing them.
+    expect(tradeAnswerScope({ sent: 'user-1', account: 'user-2', cached: undefined })).toBe(
       'market',
+    );
+    // The trader's own profile merely has not landed yet: nothing of anybody's is on screen to
+    // overwrite, and refusing would swallow their own 체결 toast.
+    expect(tradeAnswerScope({ sent: 'user-1', account: 'user-1', cached: undefined })).toBe(
+      'account',
     );
   });
 
-  it('reads the owner from the cache too, because an unmounted panel stops learning', () => {
-    // react-query only pushes fresh options into a PENDING mutation from an effect, so a
-    // trader who navigated off the market page while the POST hung leaves `shown` naming the
-    // account that pressed the button, however long the tab has since belonged to somebody
-    // else. `Me.id` is the reading that cannot go stale — SessionCacheGuard's reset and the
-    // refetch after it are what put it there.
-    expect(tradeAnswerScope({ sent: 'user-1', shown: 'user-1', cached: otherMe })).toBe('market');
-    expect(tradeAnswerScope({ sent: 'user-1', shown: 'user-1', cached: me })).toBe('account');
+  it('falls back to the cached owner only before the guard has answered at all', () => {
+    // `undefined` is a tab better-auth has not answered in yet — no trade of ours can be older
+    // than that, but a tree without the guard (a test, a future embed) can be.
+    expect(tradeAnswerScope({ sent: 'user-1', account: undefined, cached: otherMe })).toBe(
+      'market',
+    );
+    expect(tradeAnswerScope({ sent: 'user-1', account: undefined, cached: me })).toBe('account');
+    expect(tradeAnswerScope({ sent: 'user-1', account: undefined, cached: undefined })).toBe(
+      'account',
+    );
   });
 });
 
@@ -447,6 +459,56 @@ describe('applyTradeMarket', () => {
       expect(queryClient.getQueryState(marketFillsKey(ID))?.isInvalidated).toBe(true);
       expect(queryClient.getQueryState(ME_QUERY_KEY)?.isInvalidated).toBe(false);
       expect(queryClient.getQueryState(positionsKey('open'))?.isInvalidated).toBe(false);
+    } finally {
+      queryClient.clear();
+    }
+  });
+});
+
+describe('applyTradeResult during a first private fetch', () => {
+  it('keeps a trade that answered while the positions list was still loading', async () => {
+    // THE HAZARD: the seed declines an absent entry, so nothing is written; and
+    // `invalidateQueries` does NOT restart a fetch that has answered nothing — query-core
+    // hands back the running promise instead. The pre-trade answer then landed and the row the
+    // trade created was missing from 보유 포지션 with nothing scheduled to correct it.
+    const queryClient = getQueryClient();
+    let fetches = 0;
+    const observer = new QueryObserver<Position[]>(queryClient, {
+      queryKey: positionsKey('open'),
+      // The first request left before the trade and knows nothing about it.
+      queryFn: () => {
+        fetches += 1;
+        return Promise.resolve(fetches === 1 ? [] : [tradeResult.position]);
+      },
+      retry: false,
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
+    try {
+      const first = observer.refetch();
+      expect(queryClient.getQueryData<Position[]>(positionsKey('open'))).toBeUndefined();
+
+      await applyTradeResult(queryClient, tradeResult);
+      await first;
+
+      expect(fetches).toBe(2);
+      const rows = queryClient.getQueryData<Position[]>(positionsKey('open'));
+      expect(rows?.[0]?.marketId).toBe(tradeResult.position.marketId);
+      expect(rows?.[0]?.qty).toBe(tradeResult.position.qty);
+    } finally {
+      unsubscribe();
+      queryClient.clear();
+    }
+  });
+
+  it('leaves a list that has already answered to the invalidation', () => {
+    // Not a blanket cancel: a query holding data is restarted by `cancelRefetch` already, and
+    // cancelling it would throw away a newer answer for nothing.
+    const queryClient = getQueryClient();
+    try {
+      queryClient.setQueryData<Position[]>(positionsKey('open'), [position]);
+      cancelFirstFetch(queryClient, POSITIONS_KEY);
+
+      expect(queryClient.getQueryData<Position[]>(positionsKey('open'))?.[0]).toBe(position);
     } finally {
       queryClient.clear();
     }

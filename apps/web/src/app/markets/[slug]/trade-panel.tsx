@@ -61,6 +61,7 @@ import {
   type TradeSummary,
   INITIAL_TRADE_INPUTS,
   isTradable,
+  maxValueFor,
   quoteRequest,
   setMode,
   setOutcome,
@@ -861,20 +862,4 @@ function fieldError(view: TradeView): string | undefined {
     default:
       return undefined;
   }
-}
-
-/**
- * What 최대 fills in, or `undefined` when there is no ceiling to offer. A sell is capped by the
- * contracts actually held; a spend-mode buy by the available balance. Buying a COUNT has no
- * ceiling this side of a quote, so the chip is absent there rather than disabled — and the value
- * still goes through `setValue`, which is the only thing that bounds it.
- */
-function maxValueFor(panel: TradePanelState): string | undefined {
-  if (panel.inputs.side === 'sell') {
-    const held = panel.heldQty;
-    return held === undefined || held <= 0 ? undefined : String(held);
-  }
-  if (panel.inputs.mode !== 'spend') return undefined;
-  const available = panel.availableP;
-  return available === undefined || available <= 0n ? undefined : available.toString();
 }

@@ -20,6 +20,36 @@ export function sessionIdentityChanged(
 }
 
 /**
+ * The account this tab's caches currently belong to, readable OUTSIDE React — `undefined`
+ * until better-auth has answered once.
+ *
+ * A module-scoped value rather than a hook, because the readers that need it most are the ones
+ * React has stopped talking to. An in-flight mutation keeps running after the component that
+ * started it unmounts, and react-query only pushes fresh options into a pending mutation from
+ * an effect, so a callback that closes over `useSession()`'s answer keeps naming the account
+ * that started the work however long the tab has since belonged to somebody else
+ * (`tradeAnswerScope`, use-trade.ts). The query cache cannot stand in for it either: the
+ * account is knowable there only while `['me']` holds an answer, and `resetQueries` below is
+ * precisely what empties it.
+ *
+ * The guard is the right publisher because it is mounted for the life of the tab, above every
+ * screen (components/ui/provider.tsx), and it already computes this exact value to decide
+ * whether to reset. Module state is per tab in the browser, which is the scope wanted. It also
+ * evaluates during SSR of client components, where the value stays `undefined` for good: it is
+ * only ever written from an effect, and effects do not run on the server — so one request can
+ * never read another's account.
+ */
+let cacheOwner: SessionIdentity | undefined = undefined;
+
+export function rememberCacheOwner(identity: SessionIdentity): void {
+  cacheOwner = identity;
+}
+
+export function cacheOwnerAccount(): SessionIdentity | undefined {
+  return cacheOwner;
+}
+
+/**
  * Empties the query cache whenever the account behind the session changes.
  *
  * The browser QueryClient lives as long as the tab (lib/query-client.ts) and no key carries a
@@ -59,6 +89,9 @@ export function SessionCacheGuard() {
     if (identity === undefined) return;
     const previous = seen.current;
     seen.current = identity;
+    // Published BEFORE the reset, so nothing can read "the cache belongs to A" off a cache the
+    // next statement has already emptied for B.
+    rememberCacheOwner(identity);
     if (sessionIdentityChanged(previous, identity)) void queryClient.resetQueries();
   }, [identity, queryClient]);
 

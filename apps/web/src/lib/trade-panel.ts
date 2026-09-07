@@ -1,5 +1,6 @@
 import {
   type MarketStatus,
+  ORDER_QTY_MAX,
   type OrderSide,
   type Outcome,
   type PAmount,
@@ -411,4 +412,37 @@ export function quoteErrorMessage(error: unknown): string {
   if (isApiError(error, 'MARKET_NOT_OPEN')) return copy.errMarketNotOpen;
   if (isApiError(error, 'NOT_FOUND')) return copy.errTradeNotFound;
   return copy.errTradeQuote;
+}
+
+/**
+ * What 최대 fills in, or `undefined` when there is no ceiling to offer.
+ *
+ * A sell is capped by the contracts actually held AND by `ORDER_QTY_MAX`, the per-ORDER
+ * ceiling `sharesSchema` enforces (@buddha/shared market.ts). Those two are not the same
+ * number: a position accumulates across orders up to `POSITION_QTY_MAX` (INT4_MAX), so an
+ * account that bought past a million contracts pressed 최대 and got a quantity the schema
+ * refuses — `quoteRequest` answers undefined, `tradePanelView` falls to `invalid`, and the
+ * chip that exists to fill in a VALID amount left the panel unable to quote or submit, with
+ * 계약 수를 확인해 주세요 under a number the panel itself had written. Selling out then took
+ * as many presses as it takes orders, which is the truth the chip should have offered in the
+ * first place.
+ *
+ * A spend-mode buy is capped by the available balance; the P ceiling is the schema's amount
+ * bound, which the field length already holds. Buying a COUNT has no ceiling this side of a
+ * quote, so the chip is absent there rather than disabled — and the value still goes through
+ * `setValue`, which is the only thing that bounds what a keystroke may write.
+ */
+export function maxValueFor(a: {
+  inputs: TradeInputs;
+  heldQty: number | undefined;
+  availableP: bigint | undefined;
+}): string | undefined {
+  if (a.inputs.side === 'sell') {
+    const held = a.heldQty;
+    if (held === undefined || held <= 0) return undefined;
+    return String(Math.min(held, ORDER_QTY_MAX));
+  }
+  if (a.inputs.mode !== 'spend') return undefined;
+  const available = a.availableP;
+  return available === undefined || available <= 0n ? undefined : available.toString();
 }

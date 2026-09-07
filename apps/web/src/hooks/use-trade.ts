@@ -23,6 +23,7 @@ import {
   isForAnotherAccount,
   unwrap,
 } from '@/lib/api';
+import { type SessionIdentity, cacheOwnerAccount } from '@/components/auth/session-cache-guard';
 import { useSession } from '@/lib/use-session';
 import { IdempotencyKeys } from '@/lib/idempotency';
 import {
@@ -173,7 +174,7 @@ export function useTrade(market: Pick<Market, 'id'>, onDone?: (result: TradeResu
       if (
         tradeAnswerScope({
           sent: body.expectedAccountId,
-          shown: accountId,
+          account: cacheOwnerAccount(),
           cached: queryClient.getQueryData<Me>(ME_QUERY_KEY),
         }) === 'market'
       ) {
@@ -253,32 +254,41 @@ export type TradeAnswerScope = 'account' | 'market';
  * account the trade actually moved — which `TradeResult` itself never says, carrying an order,
  * a market and a balance but no owner.
  *
- * Two readings of "who is this tab now", because neither answers alone:
+ * `account` is who this TAB belongs to, from `cacheOwnerAccount()` (session-cache-guard.tsx),
+ * and it is the whole answer whenever it has one. Neither of the two readings this started
+ * with could be trusted alone, which is why the decision reads a third thing that is neither:
  *
- * `shown` is the account the panel last rendered, and it is the only one that can see a tab go
- * LOGGED OUT — `SessionCacheGuard` resets `['me']`, `useMe` then stops asking, and the cache
- * says nothing at all. But it FREEZES: react-query pushes fresh options into a pending
- * mutation from an effect (`useMutation` → `MutationObserver.setOptions`), so a trader who
- * navigates off the market while the POST hangs unmounts the panel, after which this closure
- * keeps naming the account that pressed the button however long the tab has since belonged to
- * somebody else. `Mutation.execute` awaits `onSuccess` with no observer left to correct it.
+ * - the account the PANEL last rendered freezes. react-query pushes fresh options into a
+ *   pending mutation from an effect (`useMutation` → `MutationObserver.setOptions`), so a
+ *   trader who navigates off the market while the POST hangs unmounts the panel, and the
+ *   closure then keeps naming the account that pressed the button however long the tab has
+ *   since belonged to somebody else. `Mutation.execute` awaits `onSuccess` with no observer
+ *   left to correct it.
+ * - the CACHED `Me` is empty exactly when it matters. `SessionCacheGuard` resets `['me']` on a
+ *   switch, and B's `['me']` and B's `['positions']` refetch INDEPENDENTLY — so there is a
+ *   window where B's holdings are loaded and B's profile is not, and an answer waved through
+ *   on "no `Me` yet" lands A's row on B's list. `joinPositions` (query-client.ts) then keeps
+ *   it: two accounts' `version` counters are unrelated, so B's own refetch re-applies A's
+ *   numbers rather than clearing them.
  *
- * `cached` is whoever the caches the seed would overwrite belong to, and it never freezes,
- * because the reset and the refetch after it are what put it there. `Me.id` is the same user
- * id `expectedAccountId` is judged against (`me.service.ts` selects `user.id`). Holding NO
- * `Me` is not a refusal: there is nothing of anybody's to overwrite then — the seeds already
- * decline an absent entry — and refusing would swallow the 체결 toast for a trader whose own
- * `GET /me` merely has not landed yet.
+ * The guard is mounted above every screen for the life of the tab and publishes this from an
+ * effect, so it neither freezes with a component nor empties with a cache.
+ *
+ * `cached` stays as the fallback for the only moment the guard cannot speak — before
+ * better-auth has answered at all in this tab, which no trade of ours can be older than, but
+ * a tree without the guard (a test, a future embed) can be. Holding no `Me` is not a refusal
+ * there: nothing of anybody's is on screen to overwrite, and refusing would swallow the 체결
+ * toast for a trader whose own `GET /me` merely has not landed yet.
  *
  * `market` rather than nothing at all: a market moved because SOMEBODY traded and a fill was
  * added to 체결 내역, whoever the tab belongs to now.
  */
 export function tradeAnswerScope(a: {
   sent: string;
-  shown: string | undefined;
+  account: SessionIdentity | undefined;
   cached: Me | undefined;
 }): TradeAnswerScope {
-  if (a.shown !== a.sent) return 'market';
+  if (a.account !== undefined) return a.account === a.sent ? 'account' : 'market';
   if (a.cached !== undefined && a.cached.id !== a.sent) return 'market';
   return 'account';
 }
@@ -309,12 +319,45 @@ export function applyTradeResult(queryClient: QueryClient, result: TradeResult):
   // Evaluated here rather than inside the array below so the whole synchronous block reads in
   // the order it runs: every seed, then every invalidation.
   const market = applyTradeMarket(queryClient, result);
+  // The seeds above wrote NOTHING into a cache that held nothing, so these three have to be
+  // real requests rather than a wait on the one already running (`cancelFirstFetch`).
+  for (const queryKey of [ME_QUERY_KEY, POSITIONS_KEY, ORDERS_KEY]) {
+    cancelFirstFetch(queryClient, queryKey);
+  }
   return Promise.all([
     market,
     queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY }),
     queryClient.invalidateQueries({ queryKey: POSITIONS_KEY }),
     queryClient.invalidateQueries({ queryKey: ORDERS_KEY }),
   ]).then(() => undefined);
+}
+
+/**
+ * Cancels every query under `queryKey` that has answered NOTHING yet, so the invalidation that
+ * follows issues a REQUEST rather than a subscription to the one already in flight.
+ *
+ * `invalidateQueries` restarts a running fetch only where the query already holds data:
+ * `refetchQueries` passes `cancelRefetch`, and query-core honours it under
+ * `if (this.state.data !== undefined && fetchOptions?.cancelRefetch)` — otherwise it hands
+ * back the RUNNING promise (`Query.fetch`). So a trade answered while the account's FIRST
+ * `GET /me/positions`, `GET /me` or `GET /me/orders` was still in flight vanished: the seeds
+ * decline an absent entry (`mergePosition` and the `Me` updater both answer undefined, which
+ * is what keeps a logged-out tab from gaining session state), the socket's own
+ * `applyPositionEvent` answers `none` for an empty cache, and then the invalidation waited on
+ * the very request that left BEFORE the trade — so a pre-trade `[]` landed and the new row,
+ * the new balance and the new order were all missing from the screen until an unrelated
+ * refetch happened by.
+ *
+ * A cancel leaves the retryer `rejected`, which is what lets the next `fetch()` start a second
+ * request instead of taking the dedupe branch. Queries that DO hold data are left alone by the
+ * predicate: `cancelRefetch` already restarts those, and cancelling them would throw away a
+ * newer answer for no gain.
+ */
+export function cancelFirstFetch(queryClient: QueryClient, queryKey: readonly unknown[]): void {
+  void queryClient.cancelQueries({
+    queryKey,
+    predicate: (query) => query.state.data === undefined,
+  });
 }
 
 /**

@@ -73,6 +73,14 @@ import { appendTick } from '@/lib/ticks';
  * ADR-0017). `withCredentials` then carries the SameSite=Lax session cookie, which needs web
  * and API to stay same-site (localhost:3000 / localhost:4000; never 127.0.0.1 for the web
  * host, ADR-0015).
+ *
+ * Same-site is necessary and NOT sufficient once the two are different HOSTS. The login cookie
+ * is minted through the web host — the Next rewrite proxies `/api/auth/*` server-side — and a
+ * cookie with no `Domain` goes back only to the host that set it, so on an `app.`/`api.` split
+ * this handshake would be anonymous however same-site it is: no `user:<id>` room, and the
+ * balance chip and 내 포지션 silently stop moving. `AUTH_COOKIE_DOMAIN` on the API is what
+ * gives the two hosts one cookie (ADR-0017 추기); locally the two ports are one host and it
+ * stays unset.
  */
 const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000').replace(/\/$/, '');
 

@@ -90,6 +90,28 @@ export const envSchema = z
      * list, so list origins, not better-auth wildcard patterns — a pattern fails at startup.
      */
     WEB_ORIGIN: optionalString,
+    /**
+     * The registrable domain the session cookie is scoped to, e.g. `example.com` for a
+     * production split of `app.example.com` (web) and `api.example.com` (API). Unset — and so
+     * unset locally, where the two differ only by port — the cookie stays HOST-ONLY, which is
+     * the safer default and the behaviour every environment has today.
+     *
+     * ADR-0017 stated the requirement for the Socket.IO handshake as same-SITE, which is
+     * necessary and not sufficient: `app.` and `api.` of one domain are same-site for
+     * SameSite=Lax, but a cookie minted with no `Domain` is sent back to its exact host alone
+     * (RFC 6265 §5.1.3), and the login cookie is minted through the WEB host because the Next
+     * rewrite proxies `/api/auth/*` server-side. The socket dials the API host directly (a
+     * rewrite does not proxy a WebSocket upgrade), so without this every signed-in user got an
+     * anonymous handshake: no `user:<id>` room, and the balance chip and 내 포지션 silently
+     * stopped moving with nothing logged.
+     *
+     * The cost is real and is why this is opt-in and never derived: a cookie carrying `Domain`
+     * is sent to EVERY subdomain of that domain, so it must name a domain whose subdomains are
+     * all ours. A hostname, never a URL or a leading dot — better-auth would otherwise silently
+     * default it to the `BETTER_AUTH_URL` host, which is the web host and reaches no API host
+     * at all.
+     */
+    AUTH_COOKIE_DOMAIN: optionalString,
 
     // --- OAuth providers: a provider is enabled only when BOTH keys are set ---
     GOOGLE_CLIENT_ID: optionalString,
@@ -126,6 +148,20 @@ export const envSchema = z
           message: error instanceof Error ? error.message : String(error),
         });
       }
+    }
+    // A URL or a leading dot here would be accepted by better-auth and silently scope the
+    // cookie to nothing that exists, which is exactly the failure this variable is here to
+    // fix: no error anywhere, and realtime dead for every signed-in user.
+    const cookieDomain = env.AUTH_COOKIE_DOMAIN;
+    if (
+      cookieDomain !== undefined &&
+      !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i.test(cookieDomain)
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['AUTH_COOKIE_DOMAIN'],
+        message: `AUTH_COOKIE_DOMAIN must be a bare hostname such as "example.com", not "${cookieDomain}"`,
+      });
     }
     if (env.NODE_ENV !== 'test' && !env.BETTER_AUTH_SECRET) {
       ctx.addIssue({
