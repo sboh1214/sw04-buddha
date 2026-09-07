@@ -158,7 +158,28 @@ export function useTrade(market: Pick<Market, 'id'>, onDone?: (result: TradeResu
       keys.settle(market.id, result.response.status);
       return data;
     },
-    onSuccess: async (result) => {
+    // The account the request LEFT as, carried to `onSuccess` as its context. It cannot be
+    // read back from `mutationFn`: that answers the `TradeResult`, which names an order and a
+    // market but never the account the server judged.
+    onMutate: () => ({ account: accountId }),
+    onSuccess: async (result, _body, sent) => {
+      // A trade answers for the account that SENT it, and this tab may no longer BE that
+      // account: nothing cancels an in-flight POST, so a sign-out and a sign-in as somebody
+      // else — in this tab or broadcast from another one — lands A's balance, A's position row
+      // and A's 매수 완료 toast on B's screen, on top of the caches `SessionCacheGuard` has
+      // just reset for B. The refetches that follow would usually paper over it; if one of
+      // them fails, B keeps reading A's numbers with nothing left to correct them.
+      //
+      // The comparison is sound because query-core hands a PENDING mutation the newest options
+      // on every render (`MutationObserver.setOptions`), so this closure's `accountId` is the
+      // account the tab currently shows rather than the one it showed when the CTA was pressed.
+      if (sent.account !== accountId) {
+        // The market itself is nobody's: a trade moved its probability and added a fill
+        // whatever the cache belongs to now, and dropping that would leave the screen behind
+        // for a reason that has nothing to do with the market.
+        await applyTradeMarket(queryClient, result);
+        return;
+      }
       onDone?.(result);
       await applyTradeResult(queryClient, result);
     },
@@ -241,13 +262,29 @@ export function applyTradeResult(queryClient: QueryClient, result: TradeResult):
     return { ...me, balance: result.balance };
   });
   applyPositionRow(queryClient, result.position);
-  applyMarketStats(queryClient, result.market);
+  // Evaluated here rather than inside the array below so the whole synchronous block reads in
+  // the order it runs: every seed, then every invalidation.
+  const market = applyTradeMarket(queryClient, result);
   return Promise.all([
+    market,
     queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY }),
     queryClient.invalidateQueries({ queryKey: POSITIONS_KEY }),
     queryClient.invalidateQueries({ queryKey: ORDERS_KEY }),
-    queryClient.invalidateQueries({ queryKey: marketFillsKey(result.market.id) }),
   ]).then(() => undefined);
+}
+
+/**
+ * The half of a `TradeResult` that belongs to nobody: the market's own stats, and the 체결
+ * 내역 the fill was added to.
+ *
+ * Split out because it is the ONLY half a tab may still write once it has moved to another
+ * account (see `useTrade`'s `onSuccess`). Both writes are keyed by `result.market.id` and
+ * neither reads the session: a market moved because SOMEBODY traded, and which account that
+ * was is what the private half above is about.
+ */
+export function applyTradeMarket(queryClient: QueryClient, result: TradeResult): Promise<void> {
+  applyMarketStats(queryClient, result.market);
+  return queryClient.invalidateQueries({ queryKey: marketFillsKey(result.market.id) });
 }
 
 /**

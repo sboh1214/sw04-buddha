@@ -43,7 +43,7 @@ import {
   BalanceOrder,
   type MarketPages,
   Throttle,
-  applyBalance,
+  applyBalanceEvent,
   applyPositionEvent,
   applyStatus,
   applyTick,
@@ -409,13 +409,30 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         if (identity === null) return;
         const parsed = userBalanceEventSchema.safeParse(raw);
         if (!parsed.success || !balanceOrder.accept(parsed.data)) return;
-        const event = parsed.data;
+        const patch = applyBalanceEvent(queryClient.getQueryData<Me>(ME_QUERY_KEY), parsed.data);
         // Kills an in-flight `GET /me` that would otherwise resolve after this write carrying
         // an older balance. The primary path for the trading AC is still `TradeResult.balance`
         // from the HTTP answer (an Idempotency-Key replay publishes NO event); this is the
         // redundant second delivery, and the only delivery on a void refund or a payout.
+        //
+        // The cancel is synchronous down to the state change (query-core's retryer rejects and
+        // calls `onCancel` in the same tick), so both branches below act on a query that is
+        // already idle.
         void queryClient.cancelQueries({ queryKey: ME_QUERY_KEY, exact: true });
-        queryClient.setQueryData<Me>(ME_QUERY_KEY, (held) => applyBalance(held, event));
+        if (patch.kind === 'refetch') {
+          // Nothing to patch, and the cancel has just REVERTED the first `GET /me` to the
+          // state it had before it started — `pending` with no data, and no observer left
+          // fetching. So the request has to be re-issued, or the balance chip and the 잔고
+          // 요약 spin until the next window focus. Issued after the event was received, so
+          // its answer cannot be the snapshot this event already superseded.
+          void queryClient.invalidateQueries({
+            queryKey: ME_QUERY_KEY,
+            exact: true,
+            refetchType: 'active',
+          });
+          return;
+        }
+        queryClient.setQueryData<Me>(ME_QUERY_KEY, patch.me);
       },
 
       'user:position': (raw: unknown) => {

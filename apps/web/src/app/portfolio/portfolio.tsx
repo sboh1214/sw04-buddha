@@ -24,10 +24,15 @@ import { useMarketSocket } from '@/hooks/use-market-socket';
 import { marketQueryOptions } from '@/hooks/use-markets';
 import { useMe } from '@/hooks/use-me';
 import {
+  type ListState,
   averageCostP,
+  combinedListState,
+  listState,
   markPriceP,
+  markToLivePrice,
   portfolioTotals,
   positionValueP,
+  realizedPnlAcross,
   unrealizedPnlP,
   useOrders,
   usePositions,
@@ -76,31 +81,6 @@ const ORDER_STATUS_PALETTE: Record<OrderStatus, 'brand' | 'gray' | 'orange' | 'n
   rejected: 'no',
 };
 
-/** What a section can say about a list it needs: it has one, it is coming, or it failed. */
-type ListState = 'ready' | 'pending' | 'failed';
-
-function listState(query: { data: unknown; isPending: boolean }): ListState {
-  if (query.data !== undefined) return 'ready';
-  return query.isPending ? 'pending' : 'failed';
-}
-
-/**
- * The position as the arithmetic must read it: the market's LIVE price where the tab holds one,
- * and the row's own snapshot otherwise.
- *
- * `Position.marketLastPrice` is a join taken when the list was fetched, and nothing refreshes it
- * on somebody else's trade — `applyPositionEvent` (market-live.ts) patches qty, cost and realised
- * PnL from a `user:position` event, which is only ever this account's own change. The market
- * cache below is the thing a `market:tick` writes, so reading the mark price from there is what
- * makes 현재가 and 평가손익 move within the second PLAN 11.1 asks for.
- *
- * The same object is returned when nothing moved, so an untouched row keeps its reference.
- */
-function markToLivePrice(position: Position, lastPrice: number | undefined): Position {
-  if (lastPrice === undefined || lastPrice === position.marketLastPrice) return position;
-  return { ...position, marketLastPrice: lastPrice };
-}
-
 export function Portfolio() {
   const me = useMe();
   const open = usePositions('open');
@@ -127,11 +107,13 @@ export function Portfolio() {
   }
   const positions = held.map((row) => markToLivePrice(row, livePrice.get(row.marketId)));
 
-  // 총 평가 금액/평가손익 come from the open holdings and 총 실현 손익 from the settled ones:
-  // settlement writes no price, so a settled market's `lastPrice` is the last price something
-  // traded at, not the 100/0 it resolved to, and marking those rows to it would be fiction.
+  // 총 평가 금액/평가손익 come from the open holdings alone — settlement writes no price, so a
+  // settled market's `lastPrice` is the last price something traded at, not the 100/0 it
+  // resolved to, and marking those rows to it would be fiction. 총 실현 손익 spans BOTH lists,
+  // because selling books the profit where the row already is (`realizedPnlAcross`).
   const openTotals = portfolioTotals(positions);
   const settledTotals = portfolioTotals(settled.data);
+  const realizedState = combinedListState(listState(open), listState(settled));
   const orderRows = orders.data?.pages.flatMap((page) => page.items) ?? [];
 
   return (
@@ -170,10 +152,10 @@ export function Portfolio() {
               </Total>
               <Total
                 label={copy.portfolioRealizedPnl}
-                state={listState(settled)}
+                state={realizedState}
                 testId="portfolio-realized"
               >
-                <Signed amount={settledTotals.realizedPnlP} />
+                <Signed amount={realizedPnlAcross(openTotals, settledTotals)} />
               </Total>
             </DataList.Root>
           </Stack>

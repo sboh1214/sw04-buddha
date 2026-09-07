@@ -222,3 +222,64 @@ export function portfolioTotals(positions: readonly PositionMath[] = []): Portfo
   }
   return { valueP, costBasisP, unrealizedPnlP: valueP - costBasisP, realizedPnlP };
 }
+
+/**
+ * 총 실현 손익, which spans BOTH position lists.
+ *
+ * Realised PnL is booked the moment contracts are SOLD, and `applySell` writes it onto the
+ * position row while leaving the row where it is: a market that is still open keeps its row in
+ * `usePositions('open')`. Reading the settled list alone therefore told an account that had
+ * just taken a 100P profit that it had realised nothing at all — and it stayed 0P until the
+ * market itself finished, which may never happen. A row MOVES between the two lists when the
+ * market settles or is voided (`positions.settled`, `positionListStatusFor`), carrying its
+ * accumulated `realizedPnlP` with it, so it is never in both and this cannot double count.
+ *
+ * The two other totals are open-only and stay that way: settlement writes no price, so a
+ * settled row's `marketLastPrice` is the last price something TRADED at rather than the 100/0
+ * it resolved to, and marking those rows to it would be fiction.
+ */
+export function realizedPnlAcross(...totals: readonly PortfolioTotals[]): bigint {
+  return totals.reduce((sum, total) => sum + total.realizedPnlP, 0n);
+}
+
+/**
+ * The position as the arithmetic must read it: the market's LIVE price where the tab holds one,
+ * and the row's own snapshot otherwise.
+ *
+ * `Position.marketLastPrice` is a join taken when the list was fetched, and nothing refreshes it
+ * on somebody else's trade — `applyPositionEvent` (market-live.ts) patches qty, cost and realised
+ * PnL from a `user:position` event, which is only ever this account's own change. The `['market',
+ * id]` cache is the thing a `market:tick` writes, so reading the mark price from there is what
+ * makes 현재가 and 평가손익 move within the second PLAN 11.1 asks for — and what keeps the
+ * probability in a market's header from disagreeing with the 내 포지션 card below it.
+ *
+ * The same object is returned when nothing moved, so an untouched row keeps its reference.
+ *
+ * Applied at RENDER time by both readers and never written back to `['positions', …]`:
+ * `joinPositions` (market-live.ts) deliberately gives `marketLastPrice` to the REST answer, so
+ * a live price stored in the row would be the one field with two owners.
+ */
+export function markToLivePrice(position: Position, lastPrice: number | undefined): Position {
+  if (lastPrice === undefined || lastPrice === position.marketLastPrice) return position;
+  return { ...position, marketLastPrice: lastPrice };
+}
+
+/** What a section can say about a list it needs: it has one, it is coming, or it failed. */
+export type ListState = 'ready' | 'pending' | 'failed';
+
+export function listState(query: { data: unknown; isPending: boolean }): ListState {
+  if (query.data !== undefined) return 'ready';
+  return query.isPending ? 'pending' : 'failed';
+}
+
+/**
+ * The reading of a figure that needs SEVERAL lists at once — 총 실현 손익 needs both. A failure
+ * anywhere makes the sum unknowable, and a list still loading makes it incomplete, so neither
+ * may be reported as a number: a total drawn from one of two lists is not a smaller total, it
+ * is a wrong one.
+ */
+export function combinedListState(...states: readonly ListState[]): ListState {
+  if (states.includes('failed')) return 'failed';
+  if (states.includes('pending')) return 'pending';
+  return 'ready';
+}

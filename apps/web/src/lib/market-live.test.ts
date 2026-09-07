@@ -25,7 +25,7 @@ import {
   BalanceOrder,
   type MarketPages,
   Throttle,
-  applyBalance,
+  applyBalanceEvent,
   applyPositionEvent,
   applyStatus,
   applyTick,
@@ -33,6 +33,7 @@ import {
   chunkIds,
   joinMarket,
   joinMarketPages,
+  joinPositions,
   statusRank,
 } from './market-live';
 
@@ -414,16 +415,78 @@ describe('applyPositionEvent', () => {
   });
 });
 
-describe('applyBalance', () => {
+describe('joinPositions', () => {
+  /** The row as a REST answer that left BEFORE the trade carries it: one version behind. */
+  const stale: Position = { ...position, qty: 10, costBasisP: '5000', version: 3 };
+  /** The same row after a `user:position` event applied the trade. */
+  const live: Position = {
+    ...position,
+    qty: 14,
+    costBasisP: '7000',
+    realizedPnlP: '120',
+    version: 4,
+    updatedAt: '2026-09-07T00:00:00.000Z',
+  };
+
+  it('keeps the newer held row under a late answer while taking its descriptive fields', () => {
+    // THE RACE: a mount or a focus refetch left before another tab's trade and lands after the
+    // event. Without the join the 매도 ceiling and 평가손익 fall back to the pre-trade row and
+    // nothing is scheduled to correct them.
+    const renamed = { ...stale, marketTitle: '기준금리 인하? (수정)', marketLastPrice: 63 };
+    expect(joinPositions([live], [renamed])).toEqual([
+      {
+        ...renamed,
+        qty: 14,
+        costBasisP: '7000',
+        realizedPnlP: '120',
+        settled: false,
+        version: 4,
+        updatedAt: '2026-09-07T00:00:00.000Z',
+      },
+    ]);
+  });
+
+  it('takes a strictly newer answer whole, including a tie', () => {
+    // `supersedes` is strict, so an answer at the same version wins: it is the fuller row.
+    expect(joinPositions([stale], [live])).toEqual([live]);
+    expect(joinPositions([live], [live])).toEqual([live]);
+  });
+
+  it('takes the list from the incoming answer, which is the only thing that knows it', () => {
+    // A settled market moves the row to the other list, and a first trade adds one. Neither is
+    // knowable from the held array, so membership is never merged.
+    expect(joinPositions([live, otherPosition], [live])).toEqual([live]);
+    expect(joinPositions([live], [live, otherPosition])).toEqual([live, otherPosition]);
+    expect(joinPositions(undefined, [stale])).toEqual([stale]);
+  });
+
+  it('keys on (marketId, outcome), so the other side of one market is untouched', () => {
+    const otherSide: Position = { ...live, outcome: 'NO', qty: 2, version: 9 };
+    expect(joinPositions([otherSide], [stale])).toEqual([stale]);
+  });
+
+  it('is idempotent and order-independent, whichever snapshot arrives second', () => {
+    const once = joinPositions([live], [stale]);
+    expect(joinPositions(once, [stale])).toEqual(once);
+    // Both interleavings end on the same row, which is what makes the join safe for a cache
+    // three writers share (REST, socket, trade answer).
+    expect(joinPositions(joinPositions([stale], [live]), [stale])).toEqual(once);
+  });
+});
+
+describe('applyBalanceEvent', () => {
   it('patches the balance and leaves the rest of the profile alone', () => {
-    expect(applyBalance(me, balanceEvent({ availableP: '80000', lockedP: '1200' }))).toEqual({
-      ...me,
-      balance: { availableP: '80000', lockedP: '1200' },
+    expect(applyBalanceEvent(me, balanceEvent({ availableP: '80000', lockedP: '1200' }))).toEqual({
+      kind: 'replace',
+      me: { ...me, balance: { availableP: '80000', lockedP: '1200' } },
     });
   });
 
-  it('never invents a Me for a visitor who is not signed in', () => {
-    expect(applyBalance(undefined, balanceEvent())).toBeUndefined();
+  it('asks for the profile rather than inventing one it cannot build', () => {
+    // Never a `Me` synthesised from the event — it carries two amounts and no profile — and
+    // never "do nothing" either: the caller cancels the in-flight `GET /me` before it writes,
+    // so a tab that is still loading would be left on a skeleton with nothing to restart it.
+    expect(applyBalanceEvent(undefined, balanceEvent())).toEqual({ kind: 'refetch' });
   });
 });
 

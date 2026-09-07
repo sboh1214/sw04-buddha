@@ -1,8 +1,19 @@
-import { type MarketTickEvent, type UserBalanceEvent } from '@buddha/shared';
+import {
+  type MarketTickEvent,
+  type UserBalanceEvent,
+  type UserPositionEvent,
+} from '@buddha/shared';
 import { QueryObserver, hydrate } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 import { ME_QUERY_KEY } from '@/hooks/use-me';
-import { type Market, type MarketListItem, type MarketSummary, type Me } from './api';
+import { positionsKey } from '@/hooks/use-portfolio';
+import {
+  type Market,
+  type MarketListItem,
+  type MarketSummary,
+  type Me,
+  type Position,
+} from './api';
 import {
   DEFAULT_MARKET_FILTERS,
   MARKETS_KEY,
@@ -10,7 +21,13 @@ import {
   marketKey,
   marketsKey,
 } from './market-keys';
-import { type MarketPages, applyBalance, applyTick, applyToPages } from './market-live';
+import {
+  type MarketPages,
+  applyBalanceEvent,
+  applyPositionEvent,
+  applyTick,
+  applyToPages,
+} from './market-live';
 import { getQueryClient } from './query-client';
 
 /**
@@ -76,6 +93,45 @@ const balance: UserBalanceEvent = {
   availableP: '80000',
   lockedP: '1200',
   ledgerEntryId: '9',
+  ts: '2026-09-07T00:00:00.000Z',
+};
+
+const me: Me = {
+  id: 'user-1',
+  email: 'a@example.com',
+  emailVerified: true,
+  profile: { nickname: '테스터', role: 'user', createdAt: '2026-08-01T00:00:00.000Z' },
+  balance: { availableP: '100000', lockedP: '0' },
+  linkedAccounts: [],
+};
+
+/** The row as a snapshot taken before the trade carries it. */
+const beforeTrade: Position = {
+  marketId: ID,
+  marketSlug: summary.slug,
+  marketTitle: summary.title,
+  marketStatus: 'open',
+  marketLastPrice: 50,
+  resolvedResult: null,
+  outcome: 'YES',
+  qty: 10,
+  costBasisP: '5000',
+  realizedPnlP: '0',
+  settled: false,
+  version: 3,
+  updatedAt: '2026-09-06T00:00:00.000Z',
+};
+
+/** The `user:position` that carries the trade the snapshot above is missing. */
+const traded: UserPositionEvent = {
+  type: 'user:position',
+  marketId: ID,
+  outcome: 'YES',
+  qty: 14,
+  costBasisP: '7000',
+  realizedPnlP: '0',
+  settled: false,
+  version: 4,
   ts: '2026-09-07T00:00:00.000Z',
 };
 
@@ -220,12 +276,121 @@ describe('the me cache', () => {
   it('is not created by a balance event for a visitor who is not signed in', () => {
     // `user:balance` is only delivered to a signed-in socket, but a sign-out that races the
     // last event must not leave a synthesised profile behind for the next screen to read.
+    // `refetch` is the answer the reducer gives, and an invalidation of a key nothing has
+    // asked for builds no entry — which is what makes that answer safe here.
     const queryClient = getQueryClient();
 
-    queryClient.setQueryData<Me>(ME_QUERY_KEY, (held) => applyBalance(held, balance));
+    const patch = applyBalanceEvent(queryClient.getQueryData<Me>(ME_QUERY_KEY), balance);
+    expect(patch.kind).toBe('refetch');
+    void queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY, exact: true });
 
     expect(queryClient.getQueryData(ME_QUERY_KEY)).toBeUndefined();
     expect(queryClient.getQueryState(ME_QUERY_KEY)).toBeUndefined();
+    queryClient.clear();
+  });
+
+  it('re-asks for a profile the event interrupted, instead of spinning for good', async () => {
+    // THE HAZARD: a balance event lands while the FIRST `GET /me` is still in flight. The
+    // handler cancels that request so a snapshot taken before the event cannot land on top of
+    // it — and a cancel REVERTS the query to the state it had before it started, which for a
+    // first load is `pending` with no data and no observer fetching. Writing nothing there
+    // left the balance chip and 잔고 요약 on a skeleton until the next window focus.
+    const queryClient = getQueryClient();
+    let answer: Me = { ...me, balance: { availableP: '100000', lockedP: '0' } };
+    let fetches = 0;
+    const observer = new QueryObserver<Me>(queryClient, {
+      queryKey: ME_QUERY_KEY,
+      queryFn: () => {
+        fetches += 1;
+        return Promise.resolve(answer);
+      },
+      retry: false,
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
+    try {
+      // The first request is in flight and has answered nothing yet.
+      const first = observer.refetch();
+      expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)).toBeUndefined();
+
+      const patch = applyBalanceEvent(queryClient.getQueryData<Me>(ME_QUERY_KEY), balance);
+      expect(patch.kind).toBe('refetch');
+      void queryClient.cancelQueries({ queryKey: ME_QUERY_KEY, exact: true });
+      // The cancel is synchronous down to the state change, so the query is idle again and the
+      // refetch below is a REAL second request rather than a subscription to the cancelled one.
+      // This is also the stuck state itself: nothing is fetching, nothing has answered, and no
+      // observer is going to try again on its own.
+      expect(queryClient.getQueryState(ME_QUERY_KEY)?.fetchStatus).toBe('idle');
+      expect(observer.getCurrentResult().isPending).toBe(true);
+      expect(observer.getCurrentResult().data).toBeUndefined();
+      // What the server answers now reflects the event the socket delivered.
+      answer = { ...me, balance: { availableP: balance.availableP, lockedP: balance.lockedP } };
+      await queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY, exact: true });
+      await first;
+
+      expect(observer.getCurrentResult().data?.balance).toEqual({
+        availableP: '80000',
+        lockedP: '1200',
+      });
+      expect(observer.getCurrentResult().isPending).toBe(false);
+      expect(fetches).toBe(2);
+    } finally {
+      unsubscribe();
+      queryClient.clear();
+    }
+  });
+});
+
+describe('the positions caches', () => {
+  it('does not let a fetch that started before a trade roll the row back', async () => {
+    // The same race the market detail closes above, on the list the 매도 ceiling and 평가손익
+    // are read from: a mount or a focus refetch left before another tab's trade, the
+    // `user:position` event applied it, and then the older answer landed. Nothing refetches
+    // again afterwards, so the rollback stood until the next unrelated trigger.
+    const queryClient = getQueryClient();
+    let answer: Position[] = [beforeTrade];
+    const observer = new QueryObserver<Position[]>(queryClient, {
+      queryKey: positionsKey('open'),
+      queryFn: () => Promise.resolve(answer),
+      retry: false,
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
+    try {
+      await observer.refetch();
+      const patch = applyPositionEvent(queryClient.getQueryData(positionsKey('open')), traded);
+      expect(patch.kind).toBe('replace');
+      if (patch.kind === 'replace') {
+        queryClient.setQueryData<Position[]>(positionsKey('open'), patch.positions);
+      }
+      // The in-flight answer: one trade behind, and news only about the market it names.
+      answer = [{ ...beforeTrade, marketTitle: '10월 기준금리 인하?', marketLastPrice: 63 }];
+      await observer.refetch();
+
+      const row = observer.getCurrentResult().data?.[0];
+      expect(row?.qty).toBe(14);
+      expect(row?.costBasisP).toBe('7000');
+      expect(row?.version).toBe(4);
+      // …while everything only a REST answer knows still comes from it.
+      expect(row?.marketTitle).toBe('10월 기준금리 인하?');
+      expect(row?.marketLastPrice).toBe(63);
+    } finally {
+      unsubscribe();
+      queryClient.clear();
+    }
+  });
+
+  it('keeps the two lists apart, so one join cannot reach the other', () => {
+    // `['positions']` covers both variants by prefix; a settled row at an older version must
+    // not be merged into the open list's row of the same (market, outcome).
+    const queryClient = getQueryClient();
+    queryClient.setQueryData<Position[]>(positionsKey('open'), [
+      { ...beforeTrade, qty: 14, version: 4 },
+    ]);
+    queryClient.setQueryData<Position[]>(positionsKey('settled'), [
+      { ...beforeTrade, qty: 0, settled: true, version: 2 },
+    ]);
+
+    expect(queryClient.getQueryData<Position[]>(positionsKey('open'))?.[0]?.qty).toBe(14);
+    expect(queryClient.getQueryData<Position[]>(positionsKey('settled'))?.[0]?.qty).toBe(0);
     queryClient.clear();
   });
 });

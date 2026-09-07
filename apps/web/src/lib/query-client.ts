@@ -1,7 +1,7 @@
 import { QueryClient, isServer, replaceEqualDeep } from '@tanstack/react-query';
-import { type Market, isApiError } from './api';
-import { MARKETS_KEY, MARKET_KEY } from './market-keys';
-import { type MarketPages, joinMarket, joinMarketPages } from './market-live';
+import { type Market, type Position, isApiError } from './api';
+import { MARKETS_KEY, MARKET_KEY, POSITIONS_KEY } from './market-keys';
+import { type MarketPages, joinMarket, joinMarketPages, joinPositions } from './market-live';
 
 function makeQueryClient() {
   const client = new QueryClient({
@@ -44,6 +44,16 @@ function makeQueryClient() {
         held,
         joinMarketPages(held as MarketPages | undefined, incoming as MarketPages),
       ),
+  });
+  // The same duty for the account's own rows, and for the same reason: `applyPositionEvent`
+  // orders `user:position` events by `version`, but a `GET /me/positions` answer went in raw,
+  // so a fetch that left before another tab's trade landed after the event and rolled the row
+  // back — a stale 매도 ceiling on the detail and stale 평가손익 on /portfolio, with nothing
+  // scheduled to correct either. `['positions']` covers `['positions', 'open']` and
+  // `['positions', 'settled']` by prefix and never reaches `['orders']`.
+  client.setQueryDefaults(POSITIONS_KEY, {
+    structuralSharing: (held, incoming) =>
+      replaceEqualDeep(held, joinPositions(held as Position[] | undefined, incoming as Position[])),
   });
   return client;
 }

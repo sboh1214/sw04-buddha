@@ -16,13 +16,17 @@ import { ORDERS_KEY, POSITIONS_KEY } from '@/lib/market-keys';
 import {
   type OrdersPage,
   averageCostP,
+  combinedListState,
+  listState,
   markPriceP,
+  markToLivePrice,
   ordersInfiniteQueryOptions,
   portfolioTotals,
   positionListStatusFor,
   positionValueP,
   positionsKey,
   positionsQueryOptions,
+  realizedPnlAcross,
   unrealizedPnlP,
 } from './use-portfolio';
 
@@ -219,6 +223,72 @@ describe('portfolioTotals', () => {
     expect(totals.valueP).toBe(212_600_881_053n);
     expect(totals.unrealizedPnlP).toBe(-9_999_787_399_118_947n);
     expect(BigInt(Number(totals.unrealizedPnlP))).not.toBe(totals.unrealizedPnlP);
+  });
+});
+
+describe('realizedPnlAcross', () => {
+  it('counts a profit taken in a market that is still open', () => {
+    // THE BUG: selling books the realised PnL onto the row and LEAVES it in the open list, so
+    // 총 실현 손익 read from the settled list alone answered 0P to an account that had just
+    // taken 100P out of a market that has not finished — and would keep saying 0P until it did.
+    const open = portfolioTotals([position({ qty: 0, costBasisP: '0', realizedPnlP: '10000' })]);
+    const settled = portfolioTotals([]);
+    expect(realizedPnlAcross(open, settled)).toBe(10_000n);
+  });
+
+  it('sums the two lists, which a row is never in at once', () => {
+    // A row MOVES to the settled list when the market finishes, carrying the same accumulated
+    // figure with it, so adding the lists cannot count one row twice.
+    const open = portfolioTotals([position({ realizedPnlP: '700' })]);
+    const settled = portfolioTotals([
+      position({ settled: true, realizedPnlP: '-250' }),
+      position({ settled: true, outcome: 'NO', realizedPnlP: '4000' }),
+    ]);
+    expect(realizedPnlAcross(open, settled)).toBe(4_450n);
+    expect(realizedPnlAcross()).toBe(0n);
+  });
+
+  it('carries a total past 2^53, where a number implementation silently rounds', () => {
+    const huge = serializePAmount(MAX_P_AMOUNT);
+    const open = portfolioTotals([position({ realizedPnlP: huge })]);
+    const settled = portfolioTotals([position({ settled: true, realizedPnlP: huge })]);
+    expect(realizedPnlAcross(open, settled)).toBe(MAX_P_AMOUNT * 2n);
+  });
+});
+
+describe('listState / combinedListState', () => {
+  it('tells a list that is coming from one that failed', () => {
+    expect(listState({ data: [], isPending: false })).toBe('ready');
+    expect(listState({ data: undefined, isPending: true })).toBe('pending');
+    expect(listState({ data: undefined, isPending: false })).toBe('failed');
+  });
+
+  it('reports a figure that needs both lists as unknown until both are known', () => {
+    // A total drawn from one of two lists is not a smaller total, it is a wrong one — so
+    // failure dominates, and anything still loading holds the figure back.
+    expect(combinedListState('ready', 'ready')).toBe('ready');
+    expect(combinedListState('ready', 'pending')).toBe('pending');
+    expect(combinedListState('pending', 'failed')).toBe('failed');
+    expect(combinedListState('ready', 'failed')).toBe('failed');
+    expect(combinedListState()).toBe('ready');
+  });
+});
+
+describe('markToLivePrice', () => {
+  it('marks the row to the price the market cache holds, not the one the list was fetched at', () => {
+    // `marketLastPrice` is a join taken when the list was fetched and nothing refreshes it on
+    // somebody else's trade — that arrives as a `market:tick` on the market cache instead.
+    const row = position({ marketLastPrice: 50 });
+    expect(markToLivePrice(row, 63).marketLastPrice).toBe(63);
+    expect(unrealizedPnlP(markToLivePrice(row, 63))).toBe(63n * 100n - 5_000n);
+  });
+
+  it('keeps the row itself when there is nothing newer to mark it to', () => {
+    // The same reference, so an untouched row does not re-render; `undefined` is a market this
+    // tab holds no cache entry for, which is not a reason to invent a price.
+    const row = position({ marketLastPrice: 63 });
+    expect(markToLivePrice(row, undefined)).toBe(row);
+    expect(markToLivePrice(row, 63)).toBe(row);
   });
 });
 

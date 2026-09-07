@@ -211,6 +211,14 @@ export function joinMarketPages(held: MarketPages | undefined, incoming: MarketP
 }
 
 /**
+ * A position row is identified by the pair `(marketId, outcome)` and by nothing else — the API
+ * holds one row per pair — so every writer here keys on the same string rather than restating
+ * the pair as its own comparison.
+ */
+const positionRowKey = (row: Pick<Position, 'marketId' | 'outcome'>): string =>
+  `${row.marketId}:${row.outcome}`;
+
+/**
  * What a `user:position` event may do to the cached list. `refetch` is the answer for a row
  * the cache does not hold: the event carries no marketSlug, marketTitle, marketStatus or
  * marketLastPrice, so a full row cannot be built — asking the API beats inventing one that the
@@ -229,9 +237,8 @@ export function applyPositionEvent(
   event: UserPositionEvent,
 ): PositionPatch {
   if (held === undefined) return { kind: 'none' };
-  const index = held.findIndex(
-    (row) => row.marketId === event.marketId && row.outcome === event.outcome,
-  );
+  const key = positionRowKey(event);
+  const index = held.findIndex((row) => positionRowKey(row) === key);
   // `findIndex` answered -1 when the row is not cached, and reading it back is undefined.
   const current = held[index];
   if (current === undefined) return { kind: 'refetch' };
@@ -251,10 +258,74 @@ export function applyPositionEvent(
   return { kind: 'replace', positions };
 }
 
-/** `user:balance` — never invents a `Me` for a visitor who is not signed in. */
-export function applyBalance(held: Me | undefined, event: UserBalanceEvent): Me | undefined {
-  if (held === undefined) return undefined;
-  return { ...held, balance: { availableP: event.availableP, lockedP: event.lockedP } };
+/**
+ * The positions list join — `joinMarket`'s counterpart for `['positions', status]`, registered
+ * as that key's `structuralSharing` in query-client.ts.
+ *
+ * Without it the version order held ONLY between events: `applyPositionEvent` compares versions
+ * because two deliveries of one write must not undo each other, but an HTTP answer went into
+ * the cache raw. So a `GET /me/positions` that left before another tab's trade — a mount, a
+ * window-focus refetch, the invalidation a `market:status` or a trade triggers — landed after
+ * the `user:position` event and rolled qty, cost basis and version back to the pre-trade row.
+ * On the market detail that is a stale 매도 ceiling (`heldQtyOf`), and nothing refetches again
+ * to correct it.
+ *
+ * The LIST comes from `incoming` — rows move between the open and settled lists as markets
+ * finish, and only a REST answer knows the membership — and so do the fields only it carries
+ * (marketTitle, marketSlug, marketStatus, marketLastPrice, resolvedResult). Only the six fields
+ * a `user:position` event writes are kept from the held row, and only while its `version` is
+ * strictly newer. Monotone, idempotent and order-independent, exactly like `joinMarket`.
+ *
+ * It is account-BLIND — no key carries a user id (PLAN 11.5) and the pair above is all it
+ * matches on — so it is correct only because `SessionCacheGuard` answers an account change with
+ * `resetQueries()`, which puts every positions query back to `data === undefined` and makes the
+ * next answer win whole. Weakening that guard to anything lazier would graft one account's qty
+ * and version onto another's row.
+ */
+export function joinPositions(held: Position[] | undefined, incoming: Position[]): Position[] {
+  if (held === undefined) return incoming;
+  const heldByRow = new Map<string, Position>();
+  for (const row of held) heldByRow.set(positionRowKey(row), row);
+  return incoming.map((row) => {
+    const current = heldByRow.get(positionRowKey(row));
+    if (current === undefined || !supersedes(current.version, row.version)) return row;
+    return {
+      ...row,
+      qty: current.qty,
+      costBasisP: current.costBasisP,
+      realizedPnlP: current.realizedPnlP,
+      settled: current.settled,
+      version: current.version,
+      updatedAt: current.updatedAt,
+    };
+  });
+}
+
+/**
+ * What a `user:balance` event may do to the cached `Me`. A KIND rather than a value, the shape
+ * `applyPositionEvent` already answers in, because the two outcomes are not both cache writes.
+ */
+export type BalancePatch = { kind: 'replace'; me: Me } | { kind: 'refetch' };
+
+/**
+ * `user:balance` — never invents a `Me` for a visitor who is not signed in, and never leaves a
+ * tab that is still loading one with nothing.
+ *
+ * `refetch` is the answer for a cache that holds no `Me`. It cannot be `none`: the caller
+ * CANCELS the in-flight `GET /me` before writing (that is how a snapshot served before this
+ * event is kept from landing on top of it), and a cancel reverts the query to the state it
+ * held before the fetch — for a first load, `pending` with no data and nothing left to restart
+ * it. Answering `none` there stranded the balance chip and the 잔고 요약 on a skeleton until
+ * the next window focus, on every refund, payout or other-tab trade that arrived while the
+ * profile was still loading. The event's own numbers cannot fill that gap either: `Me` carries
+ * the profile and the linked login methods too, so there is no `Me` to build from it.
+ */
+export function applyBalanceEvent(held: Me | undefined, event: UserBalanceEvent): BalancePatch {
+  if (held === undefined) return { kind: 'refetch' };
+  return {
+    kind: 'replace',
+    me: { ...held, balance: { availableP: event.availableP, lockedP: event.lockedP } },
+  };
 }
 
 /**

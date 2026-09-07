@@ -2,6 +2,7 @@ import { QueryClient, hashKey, partialMatchKey } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 import { ADMIN_MARKETS_KEY } from '@/hooks/use-admin-markets';
 import { ACCOUNTS_QUERY_KEY, ME_QUERY_KEY } from '@/hooks/use-me';
+import { positionsKey } from '@/hooks/use-portfolio';
 import {
   CHARGE_PACKAGES_QUERY_KEY,
   LEDGER_QUERY_KEY,
@@ -108,6 +109,19 @@ describe('key prefix isolation', () => {
     expect(partialMatchKey(marketKey(ID), MARKETS_KEY)).toBe(false);
     expect(partialMatchKey(listKey, MARKETS_KEY)).toBe(true);
     expect(partialMatchKey(marketKey(ID), MARKET_KEY)).toBe(true);
+  });
+
+  it('gives the positions join both lists and nothing else', () => {
+    // The third `setQueryDefaults` registration joins `Position[]` by row version. It has to
+    // reach `['positions', 'open']` and `['positions', 'settled']` — the socket, the trade
+    // answer and every REST fetch all write those two — and it must reach neither `['orders']`
+    // (a paged `{ items, nextCursor }`) nor any market key, whose values are a different shape
+    // entirely.
+    expect(partialMatchKey(positionsKey('open'), POSITIONS_KEY)).toBe(true);
+    expect(partialMatchKey(positionsKey('settled'), POSITIONS_KEY)).toBe(true);
+    expect(partialMatchKey(ORDERS_KEY, POSITIONS_KEY)).toBe(false);
+    expect(partialMatchKey(marketKey(ID), POSITIONS_KEY)).toBe(false);
+    expect(partialMatchKey(positionsKey('open'), MARKETS_KEY)).toBe(false);
   });
 });
 

@@ -27,6 +27,7 @@ import { positionsKey } from './use-portfolio';
 import {
   applyMarketStats,
   applyPositionRow,
+  applyTradeMarket,
   applyTradeResult,
   heldQtyOf,
   mergePosition,
@@ -380,6 +381,39 @@ describe('applyTradeResult', () => {
       expect(queryClient.getQueryData(ME_QUERY_KEY)).toBeUndefined();
       expect(queryClient.getQueryCache().find({ queryKey: ME_QUERY_KEY })).toBeUndefined();
       expect(queryClient.getQueryCache().find({ queryKey: POSITIONS_KEY })).toBeUndefined();
+    } finally {
+      queryClient.clear();
+    }
+  });
+});
+
+describe('applyTradeMarket', () => {
+  it('writes the market and nothing private, which is all a foreign answer may write', async () => {
+    // What `useTrade` applies when the answer belongs to an account this tab has left: nothing
+    // cancels an in-flight POST, so A's balance and A's position row would otherwise land on
+    // top of the caches SessionCacheGuard has just reset for B. The market moved because
+    // SOMEBODY traded, so that half is written whoever is now signed in.
+    const queryClient = getQueryClient();
+    try {
+      queryClient.setQueryData(marketKey(ID), market);
+      queryClient.setQueryData<Me>(ME_QUERY_KEY, me);
+      queryClient.setQueryData<Position[]>(positionsKey('open'), [position]);
+      queryClient.setQueryData(marketFillsKey(ID), []);
+
+      const done = applyTradeMarket(queryClient, tradeResult);
+
+      expect(queryClient.getQueryData<Market>(marketKey(ID))?.pYesBp).toBe(6300);
+      expect(queryClient.getQueryData<Market>(marketKey(ID))?.tradeCount).toBe(11);
+      // The other account's balance and holdings are untouched, by reference.
+      expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)).toBe(me);
+      expect(queryClient.getQueryData<Position[]>(positionsKey('open'))?.[0]).toBe(position);
+
+      await done;
+
+      // 체결 내역 is public too: a fill happened, and the list has to go and read it.
+      expect(queryClient.getQueryState(marketFillsKey(ID))?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryState(ME_QUERY_KEY)?.isInvalidated).toBe(false);
+      expect(queryClient.getQueryState(positionsKey('open'))?.isInvalidated).toBe(false);
     } finally {
       queryClient.clear();
     }

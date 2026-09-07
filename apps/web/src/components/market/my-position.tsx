@@ -20,6 +20,7 @@ import { copy } from '@/copy';
 import {
   averageCostP,
   markPriceP,
+  markToLivePrice,
   positionListStatusFor,
   unrealizedPnlP,
   usePositions,
@@ -64,12 +65,25 @@ export interface MyPositionProps {
    * default is a fallback and not the ordinary path.
    */
   status?: MarketStatus;
+  /**
+   * The market's live YES price, which is what 현재가 and 평가손익 are marked to.
+   *
+   * `Position.marketLastPrice` is a join taken when the positions list was fetched, and only
+   * this account's own trades ever move that list; somebody else's trade arrives as a
+   * `market:tick` and writes the `['market', id]` cache instead. Without this prop the
+   * probability in the header above and the valuation in this card drifted apart on a market
+   * anyone else was trading — the same reading, from two different prices, one screen apart.
+   * `undefined` (the row not loaded) keeps the snapshot the list carried, which is exactly
+   * what /portfolio does for a market it has no cache entry for.
+   */
+  lastPrice?: number;
   'data-testid'?: string;
 }
 
 export function MyPosition({
   marketId,
   status = 'open',
+  lastPrice,
   'data-testid': testId = 'market-my-position',
 }: MyPositionProps) {
   const listStatus = positionListStatusFor(status);
@@ -118,9 +132,11 @@ export function MyPosition({
           <Stack gap="4">
             {rows.map((row) =>
               listStatus === 'settled' ? (
+                // A finished market is never marked to a price (see `SettledPositionRows`), so
+                // the live one is not passed down here — there is nothing for it to value.
                 <SettledPositionRows key={row.outcome} position={row} />
               ) : (
-                <PositionRows key={row.outcome} position={row} />
+                <PositionRows key={row.outcome} position={markToLivePrice(row, lastPrice)} />
               ),
             )}
           </Stack>
