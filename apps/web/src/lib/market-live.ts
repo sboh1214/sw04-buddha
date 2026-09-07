@@ -241,7 +241,7 @@ export type PositionPatch =
  *
  * That is a different tab from the one that traded, which is why the trade path cannot cover it
  * — `applyTradeResult` runs only in the trading tab — and why the handler must CANCEL before it
- * invalidates (`cancelFirstFetch`, query-client.ts): an invalidation alone waits on the request
+ * invalidates (`restartQueries`, query-client.ts): an invalidation alone waits on the request
  * already running rather than issuing one that knows about the trade.
  */
 export function applyPositionEvent(

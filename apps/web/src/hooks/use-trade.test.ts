@@ -21,7 +21,7 @@ import {
   quoteQueryKey,
 } from '@/lib/market-keys';
 import { type MarketPages } from '@/lib/market-live';
-import { cancelFirstFetch, getQueryClient } from '@/lib/query-client';
+import { getQueryClient } from '@/lib/query-client';
 import { ME_QUERY_KEY } from './use-me';
 import { positionsKey } from './use-portfolio';
 import {
@@ -493,44 +493,6 @@ describe('applyTradeResult during a first private fetch', () => {
       const rows = queryClient.getQueryData<Position[]>(positionsKey('open'));
       expect(rows?.[0]?.marketId).toBe(tradeResult.position.marketId);
       expect(rows?.[0]?.qty).toBe(tradeResult.position.qty);
-    } finally {
-      unsubscribe();
-      queryClient.clear();
-    }
-  });
-
-  it('leaves a refetch that already has an answer to `cancelRefetch`', async () => {
-    // The `data === undefined` predicate is load-bearing, not decoration. A query that HOLDS
-    // rows is restarted by the invalidation on its own — `refetchQueries` passes
-    // `cancelRefetch` and query-core honours it there — so cancelling it too would REVERT it to
-    // the row it held before and throw away an answer already on the wire, costing a round trip
-    // to learn what was arriving anyway. Without the predicate the state below reads 'idle'.
-    const queryClient = getQueryClient();
-    let land: (rows: Position[]) => void = () => undefined;
-    const observer = new QueryObserver<Position[]>(queryClient, {
-      queryKey: positionsKey('open'),
-      queryFn: () =>
-        new Promise<Position[]>((resolve) => {
-          land = resolve;
-        }),
-      retry: false,
-    });
-    const unsubscribe = observer.subscribe(() => undefined);
-    try {
-      const first = observer.refetch();
-      land([position]);
-      await first;
-
-      // A refetch over rows that are already there — the case the predicate must skip.
-      const second = observer.refetch();
-      expect(queryClient.getQueryState(positionsKey('open'))?.fetchStatus).toBe('fetching');
-
-      cancelFirstFetch(queryClient, POSITIONS_KEY);
-
-      expect(queryClient.getQueryState(positionsKey('open'))?.fetchStatus).toBe('fetching');
-      land([{ ...position, qty: 99 }]);
-      await second;
-      expect(queryClient.getQueryData<Position[]>(positionsKey('open'))?.[0]?.qty).toBe(99);
     } finally {
       unsubscribe();
       queryClient.clear();

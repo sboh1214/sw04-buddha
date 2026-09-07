@@ -91,9 +91,15 @@ export function getQueryClient(): QueryClient {
  * refetch happened by.
  *
  * A cancel leaves the retryer `rejected`, which is what lets the next `fetch()` start a second
- * request instead of taking the dedupe branch. Queries that DO hold data are left alone by the
- * predicate: `cancelRefetch` already restarts those, and cancelling them would throw away a
- * newer answer for no gain.
+ * request instead of taking the dedupe branch.
+ *
+ * The `data === undefined` predicate is what keeps this from COSTING an answer, and the case it
+ * saves is not the obvious one. For a MOUNTED list holding rows it changes nothing — the
+ * invalidation's own `cancelRefetch` was going to cancel and restart that refetch anyway. An
+ * UNMOUNTED one mid-refetch is the one that pays: `cancelQueries` reverts it to the rows it held
+ * before, and an `active` invalidation then declines to restart what nobody is watching — so the
+ * answer already on the wire is thrown away and the stale row stands until the list is mounted
+ * again. The predicate leaves it alone to land (query-client.test.ts pins both halves).
  */
 export function cancelFirstFetch(queryClient: QueryClient, queryKey: readonly unknown[]): void {
   void queryClient.cancelQueries({
