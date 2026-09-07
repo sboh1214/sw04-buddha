@@ -50,6 +50,7 @@ import {
   applyToPages,
   chunkIds,
 } from '@/lib/market-live';
+import { restartQueries } from '@/lib/query-client';
 import { appendTick } from '@/lib/ticks';
 
 /**
@@ -464,7 +465,12 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
           }
         }
         if (refetch) {
-          void queryClient.invalidateQueries({ queryKey: POSITIONS_KEY, refetchType: 'active' });
+          // `restartQueries`, not a bare invalidation: a list that has answered nothing yet
+          // would otherwise subscribe to the request it already has instead of issuing one,
+          // and that request left before the trade this event announces — 보유 없음 on a
+          // market the account just bought into, and a 매도 ceiling to match. Lists that DO
+          // hold rows are refetched exactly as before.
+          void restartQueries(queryClient, POSITIONS_KEY);
         }
       },
     } satisfies Record<RealtimeEventType, (raw: unknown) => void>;

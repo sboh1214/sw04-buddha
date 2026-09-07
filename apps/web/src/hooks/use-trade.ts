@@ -36,6 +36,7 @@ import {
   quoteQueryKey,
 } from '@/lib/market-keys';
 import { type MarketPages, type MarketTickPatch, applyTick, applyToPages } from '@/lib/market-live';
+import { restartQueries } from '@/lib/query-client';
 import { ME_QUERY_KEY } from './use-me';
 import { positionsKey } from './use-portfolio';
 
@@ -319,45 +320,15 @@ export function applyTradeResult(queryClient: QueryClient, result: TradeResult):
   // Evaluated here rather than inside the array below so the whole synchronous block reads in
   // the order it runs: every seed, then every invalidation.
   const market = applyTradeMarket(queryClient, result);
-  // The seeds above wrote NOTHING into a cache that held nothing, so these three have to be
-  // real requests rather than a wait on the one already running (`cancelFirstFetch`).
-  for (const queryKey of [ME_QUERY_KEY, POSITIONS_KEY, ORDERS_KEY]) {
-    cancelFirstFetch(queryClient, queryKey);
-  }
+  // `restartQueries`, not a bare invalidation: the seeds above wrote NOTHING into a cache that
+  // held nothing, so a list still on its first fetch would otherwise wait on the request that
+  // left before this trade.
   return Promise.all([
     market,
-    queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY }),
-    queryClient.invalidateQueries({ queryKey: POSITIONS_KEY }),
-    queryClient.invalidateQueries({ queryKey: ORDERS_KEY }),
+    restartQueries(queryClient, ME_QUERY_KEY),
+    restartQueries(queryClient, POSITIONS_KEY),
+    restartQueries(queryClient, ORDERS_KEY),
   ]).then(() => undefined);
-}
-
-/**
- * Cancels every query under `queryKey` that has answered NOTHING yet, so the invalidation that
- * follows issues a REQUEST rather than a subscription to the one already in flight.
- *
- * `invalidateQueries` restarts a running fetch only where the query already holds data:
- * `refetchQueries` passes `cancelRefetch`, and query-core honours it under
- * `if (this.state.data !== undefined && fetchOptions?.cancelRefetch)` — otherwise it hands
- * back the RUNNING promise (`Query.fetch`). So a trade answered while the account's FIRST
- * `GET /me/positions`, `GET /me` or `GET /me/orders` was still in flight vanished: the seeds
- * decline an absent entry (`mergePosition` and the `Me` updater both answer undefined, which
- * is what keeps a logged-out tab from gaining session state), the socket's own
- * `applyPositionEvent` answers `none` for an empty cache, and then the invalidation waited on
- * the very request that left BEFORE the trade — so a pre-trade `[]` landed and the new row,
- * the new balance and the new order were all missing from the screen until an unrelated
- * refetch happened by.
- *
- * A cancel leaves the retryer `rejected`, which is what lets the next `fetch()` start a second
- * request instead of taking the dedupe branch. Queries that DO hold data are left alone by the
- * predicate: `cancelRefetch` already restarts those, and cancelling them would throw away a
- * newer answer for no gain.
- */
-export function cancelFirstFetch(queryClient: QueryClient, queryKey: readonly unknown[]): void {
-  void queryClient.cancelQueries({
-    queryKey,
-    predicate: (query) => query.state.data === undefined,
-  });
 }
 
 /**

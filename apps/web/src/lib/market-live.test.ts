@@ -408,10 +408,18 @@ describe('applyPositionEvent', () => {
     expect(applyPositionEvent(held, positionEvent({ outcome: 'NO' }))).toEqual({ kind: 'refetch' });
   });
 
-  it('ignores a duplicate or late version, and an empty cache', () => {
+  it('ignores a duplicate or late version', () => {
     expect(applyPositionEvent(held, positionEvent({ version: 3 }))).toEqual({ kind: 'none' });
     expect(applyPositionEvent(held, positionEvent({ version: 2 }))).toEqual({ kind: 'none' });
-    expect(applyPositionEvent(undefined, positionEvent())).toEqual({ kind: 'none' });
+  });
+
+  it('asks again for a list that has answered nothing yet, rather than dropping the event', () => {
+    // The caller only asks about a query the cache already HOLDS, so an empty list is not an
+    // absent screen — it is one whose FIRST `GET /me/positions` is in flight, and that request
+    // left before the trade this event announces. Answering `none` let the pre-trade answer
+    // land and stand: 보유 없음 on a market the account had just bought into, in every tab but
+    // the one that traded.
+    expect(applyPositionEvent(undefined, positionEvent())).toEqual({ kind: 'refetch' });
   });
 });
 

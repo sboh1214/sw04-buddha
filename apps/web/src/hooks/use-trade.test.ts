@@ -21,13 +21,12 @@ import {
   quoteQueryKey,
 } from '@/lib/market-keys';
 import { type MarketPages } from '@/lib/market-live';
-import { getQueryClient } from '@/lib/query-client';
+import { cancelFirstFetch, getQueryClient } from '@/lib/query-client';
 import { ME_QUERY_KEY } from './use-me';
 import { positionsKey } from './use-portfolio';
 import {
   applyMarketStats,
   applyPositionRow,
-  cancelFirstFetch,
   applyTradeMarket,
   applyTradeResult,
   heldQtyOf,

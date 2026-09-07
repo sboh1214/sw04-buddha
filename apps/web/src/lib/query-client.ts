@@ -69,3 +69,56 @@ export function getQueryClient(): QueryClient {
   browserQueryClient ??= makeQueryClient();
   return browserQueryClient;
 }
+
+/**
+ * Cancels every query under `queryKey` that has answered NOTHING yet, so the invalidation that
+ * follows issues a REQUEST rather than a subscription to the one already in flight.
+ *
+ * Here rather than beside either caller because both of this app's private-cache writers need
+ * it and neither owns it: the trade answer (`applyTradeResult`, use-trade.ts) in the tab that
+ * traded, and the socket's `user:position` handler (realtime-provider.tsx) in every OTHER tab
+ * of the same account, which never runs the trade path at all.
+ *
+ * `invalidateQueries` restarts a running fetch only where the query already holds data:
+ * `refetchQueries` passes `cancelRefetch`, and query-core honours it under
+ * `if (this.state.data !== undefined && fetchOptions?.cancelRefetch)` — otherwise it hands
+ * back the RUNNING promise (`Query.fetch`). So a trade answered while the account's FIRST
+ * `GET /me/positions`, `GET /me` or `GET /me/orders` was still in flight vanished: the seeds
+ * decline an absent entry (`mergePosition` and the `Me` updater both answer undefined, which
+ * is what keeps a logged-out tab from gaining session state), and the invalidation then waited
+ * on the very request that left BEFORE the trade — so a pre-trade `[]` landed and the new row,
+ * the new balance and the new order were all missing from the screen until an unrelated
+ * refetch happened by.
+ *
+ * A cancel leaves the retryer `rejected`, which is what lets the next `fetch()` start a second
+ * request instead of taking the dedupe branch. Queries that DO hold data are left alone by the
+ * predicate: `cancelRefetch` already restarts those, and cancelling them would throw away a
+ * newer answer for no gain.
+ */
+export function cancelFirstFetch(queryClient: QueryClient, queryKey: readonly unknown[]): void {
+  void queryClient.cancelQueries({
+    queryKey,
+    predicate: (query) => query.state.data === undefined,
+  });
+}
+
+/**
+ * Cancel whatever has answered nothing, then ask again — and never one without the other.
+ *
+ * The two halves are a PAIR, which is why they are one function rather than two lines at each
+ * call site. A cancel with no invalidation behind it strands the query on `pending` with
+ * nothing left fetching (the hazard `applyBalanceEvent` grew its own `refetch` kind to avoid),
+ * and an invalidation with no cancel in front of it subscribes to the request already running
+ * instead of issuing one — which is the whole bug above. Written apart, either half could be
+ * removed and every test would stay green.
+ *
+ * `refetchType` is left at its default `'active'` (query-core `invalidateQueries`), so only
+ * mounted observers ask again and the rest merely go stale — PLAN 11.5's "refetch 남발 금지".
+ */
+export function restartQueries(
+  queryClient: QueryClient,
+  queryKey: readonly unknown[],
+): Promise<void> {
+  cancelFirstFetch(queryClient, queryKey);
+  return queryClient.invalidateQueries({ queryKey });
+}

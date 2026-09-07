@@ -17,6 +17,7 @@ import {
 import {
   DEFAULT_MARKET_FILTERS,
   MARKETS_KEY,
+  POSITIONS_KEY,
   dehydratePublic,
   marketKey,
   marketsKey,
@@ -28,7 +29,7 @@ import {
   applyTick,
   applyToPages,
 } from './market-live';
-import { getQueryClient } from './query-client';
+import { getQueryClient, restartQueries } from './query-client';
 
 /**
  * The reducers of market-live.ts driven through a real QueryClient, because the contracts that
@@ -372,6 +373,47 @@ describe('the positions caches', () => {
       // …while everything only a REST answer knows still comes from it.
       expect(row?.marketTitle).toBe('10월 기준금리 인하?');
       expect(row?.marketLastPrice).toBe(63);
+    } finally {
+      unsubscribe();
+      queryClient.clear();
+    }
+  });
+
+  it('re-asks when an event lands during the FIRST fetch, in the tab that did not trade', async () => {
+    // THE HAZARD, and it belongs to the OTHER tab: `applyTradeResult` (and the cancel it now
+    // does) runs only where the trade was made. Here the socket delivers the same account's
+    // change while this tab's first `GET /me/positions` is still in flight — a request that
+    // left before the trade. Dropping the event left that pre-trade answer standing, so 보유
+    // 목록 and the 매도 panel said 보유 없음 about a market the account had just bought into.
+    //
+    // An invalidation alone does not fix it either: query-core honours `cancelRefetch` only
+    // where the query holds data, so it would have subscribed to the very request that is
+    // wrong. This drives the provider's handler shape — reducer, then cancel, then invalidate.
+    const queryClient = getQueryClient();
+    let fetches = 0;
+    const observer = new QueryObserver<Position[]>(queryClient, {
+      queryKey: positionsKey('open'),
+      queryFn: () => {
+        fetches += 1;
+        // The first request knows nothing about the trade the event announces.
+        return Promise.resolve(fetches === 1 ? [] : [{ ...beforeTrade, qty: 14, version: 4 }]);
+      },
+      retry: false,
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
+    try {
+      const first = observer.refetch();
+      expect(queryClient.getQueryData<Position[]>(positionsKey('open'))).toBeUndefined();
+
+      const patch = applyPositionEvent(queryClient.getQueryData(positionsKey('open')), traded);
+      expect(patch.kind).toBe('refetch');
+      await restartQueries(queryClient, POSITIONS_KEY);
+      await first;
+
+      expect(fetches).toBe(2);
+      const rows = queryClient.getQueryData<Position[]>(positionsKey('open'));
+      expect(rows?.[0]?.qty).toBe(14);
+      expect(rows?.[0]?.version).toBe(4);
     } finally {
       unsubscribe();
       queryClient.clear();

@@ -229,14 +229,26 @@ export type PositionPatch =
 
 /**
  * `user:position` — ordered by the row's `version`, which the REST snapshot carries too, so a
- * snapshot seeds the comparison. Nothing cached means nothing to correct: the next mount
- * fetches the change anyway, so an event for an empty cache is a no-op rather than a refetch.
+ * snapshot seeds the comparison.
+ *
+ * A list that holds NOTHING answers `refetch`, not `none`. It used to answer `none`, reasoning
+ * that "the next mount fetches the change anyway" — but the caller only ever asks about a query
+ * the cache already HOLDS (the handler walks `findAll`, which visits no key a screen has not
+ * asked for), so an empty one is not an absent screen. It is a screen whose FIRST
+ * `GET /me/positions` is in flight right now, and that request left before the trade this event
+ * announces: its answer is about to land and stand. The mount that was supposed to fix it is the
+ * mount already doing the fetching.
+ *
+ * That is a different tab from the one that traded, which is why the trade path cannot cover it
+ * — `applyTradeResult` runs only in the trading tab — and why the handler must CANCEL before it
+ * invalidates (`cancelFirstFetch`, query-client.ts): an invalidation alone waits on the request
+ * already running rather than issuing one that knows about the trade.
  */
 export function applyPositionEvent(
   held: Position[] | undefined,
   event: UserPositionEvent,
 ): PositionPatch {
-  if (held === undefined) return { kind: 'none' };
+  if (held === undefined) return { kind: 'refetch' };
   const key = positionRowKey(event);
   const index = held.findIndex((row) => positionRowKey(row) === key);
   // `findIndex` answered -1 when the row is not cached, and reading it back is undefined.
