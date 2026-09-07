@@ -19,7 +19,7 @@ import {
   isAwaitingSettlement,
   isClosingSoon,
   isEditable,
-  isMarketId,
+  marketIdParam,
   marketEventRows,
   marketFormError,
   transitionErrorMessage,
@@ -189,15 +189,17 @@ describe('marketFormError for RULES_REQUIRED', () => {
   });
 });
 
-describe('isMarketId', () => {
-  it('accepts only what the uuid path param of the API accepts', () => {
-    expect(isMarketId('3f2504e0-4f89-11d3-9a0c-0305e82c3301')).toBe(true);
-    // Either case, like the API (which lower-cases it on the way in).
-    expect(isMarketId('3F2504E0-4F89-11D3-9A0C-0305E82C3301')).toBe(true);
+describe('marketIdParam', () => {
+  it('answers the canonical id, which is the one the API answers rows with', () => {
+    const lower = '3f2504e0-4f89-11d3-9a0c-0305e82c3301';
+    expect(marketIdParam(lower)).toBe(lower);
+    // Either case is accepted, like the API — and both name ONE market. Keeping the segment
+    // as typed instead is what left an upper-case URL reading a key its own rows do not name.
+    expect(marketIdParam(lower.toUpperCase())).toBe(lower);
     // A malformed id is a 400 from the API, not a 404: the screen must not offer a retry.
-    expect(isMarketId('abc')).toBe(false);
-    expect(isMarketId('3f2504e0-4f89-11d3-9a0c')).toBe(false);
-    expect(isMarketId('')).toBe(false);
+    expect(marketIdParam('abc')).toBeUndefined();
+    expect(marketIdParam('3f2504e0-4f89-11d3-9a0c')).toBeUndefined();
+    expect(marketIdParam('')).toBeUndefined();
   });
 });
 

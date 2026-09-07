@@ -4,6 +4,7 @@ import { type AdminMarket } from '@/lib/api';
 import {
   ADMIN_MARKETS_KEY,
   adminMarketKey,
+  adminMarketQueryOptions,
   applyMarket,
   marketFillsKey,
 } from './use-admin-markets';
@@ -53,13 +54,13 @@ const opened: AdminMarket = { ...draft, status: 'open', openAt: '2026-09-07T00:0
  * nothing and any assertion here would pass against the unfixed code too), the first fetch
  * answers the draft, every later one fails.
  */
-async function loadedDetail(key = ID) {
+async function loadedDetail(id = ID, queryKey: readonly unknown[] = adminMarketKey(id)) {
   let fetches = 0;
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   const observer = new QueryObserver<AdminMarket>(queryClient, {
-    queryKey: adminMarketKey(key),
+    queryKey,
     queryFn: () => {
       fetches += 1;
       return fetches === 1 ? Promise.resolve(draft) : Promise.reject(new Error('API is down'));
@@ -118,19 +119,35 @@ describe('applyMarket', () => {
     }
   });
 
-  it('seeds the key the screen reads, not the id the API answered with', async () => {
-    // The screen keys its query on the id in the URL. A request uuid is accepted in upper case
-    // and answered in lower (uuidSchema lower-cases at the boundary), so seeding under
-    // `fresh.id` would write a key nothing is reading and leave the screen stale.
-    const upper = ID.toUpperCase();
-    const { queryClient, observer, unsubscribe } = await loadedDetail(upper);
+  it('lands a transition opened from an upper-case URL on the key that screen reads', async () => {
+    // The two decisions the detail screen is made of, composed the way it composes them: the
+    // query is keyed by `adminMarketQueryOptions(routeId)` and every child writes through
+    // `market.id`. A uuid is accepted in either case and answered in lower, so keying on the
+    // segment as typed left the write on a key the screen never read — the status badge and
+    // the transition buttons kept the old row while the toast said otherwise.
+    const routeId = ID.toUpperCase();
+    const key = adminMarketQueryOptions(routeId).queryKey;
+    expect(key).toEqual(adminMarketKey(ID));
+    const { queryClient, observer, unsubscribe } = await loadedDetail(routeId, key);
     try {
-      await applyMarket(queryClient, upper, opened);
+      // What RecentFills reads, keyed on the same `market.id` its sibling writes through.
+      queryClient.setQueryData(marketFillsKey(opened.id), []);
+
+      await applyMarket(queryClient, opened.id, opened);
+
       expect(observer.getCurrentResult().data?.status).toBe('open');
-      expect(queryClient.getQueryData(adminMarketKey(ID))).toBeUndefined();
+      // And the fills of that market are asked for again — the half fix (route id for the
+      // detail, response id for the fills) breaks exactly this.
+      expect(queryClient.getQueryState(marketFillsKey(opened.id))?.isInvalidated).toBe(true);
     } finally {
       unsubscribe();
       queryClient.clear();
     }
+  });
+
+  it('sends no request for a segment that cannot name a market', () => {
+    expect(adminMarketQueryOptions('abc').enabled).toBe(false);
+    expect(adminMarketQueryOptions(ID).enabled).toBe(true);
+    expect(adminMarketQueryOptions(ID).queryKey).toEqual(adminMarketKey(ID));
   });
 });

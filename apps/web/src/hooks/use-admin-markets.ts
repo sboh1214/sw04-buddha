@@ -2,6 +2,7 @@
 
 import { type QueryClient, useQuery, useQueryClient } from '@tanstack/react-query';
 import { type Category, api, unwrap, type AdminMarket, type Fill } from '@/lib/api';
+import { marketIdParam } from '@/lib/market-admin';
 
 /**
  * Query keys the admin market screens share (PLAN 11.5 rules, admin-prefixed like
@@ -25,17 +26,32 @@ export function useCategories() {
 }
 
 /**
- * One market with its LMSR state, exposure and event log (`GET /admin/markets/:id`). Not
- * sent while `enabled` is false — the detail screen passes `isMarketId(id)`, since the API
- * would only answer a malformed id with a 400.
+ * One market with its LMSR state, exposure and event log (`GET /admin/markets/:id`), keyed
+ * on the CANONICAL id rather than the route segment as typed.
+ *
+ * A uuid is accepted in either case and the API answers with the row's own lower-case id, so
+ * a screen keyed on an upper-case URL would hold a row whose `market.id` names a different
+ * key — and every child that writes through `market.id` (a transition, a save) would then
+ * seed and invalidate a key nothing on that screen reads (A-M3-29). Exported apart from the
+ * hook because the decision is what matters and a component cannot be executed in this
+ * app's test runner.
+ *
+ * No request goes out for a segment that cannot name a market: the API would answer 400,
+ * which reads as "try again" for what is a wrong address.
  */
-export function useAdminMarket(id: string, enabled = true) {
-  return useQuery({
-    queryKey: adminMarketKey(id),
+export function adminMarketQueryOptions(routeId: string) {
+  const id = marketIdParam(routeId);
+  return {
+    queryKey: adminMarketKey(id ?? ''),
     queryFn: async (): Promise<AdminMarket> =>
-      unwrap(await api.GET('/api/v1/admin/markets/{id}', { params: { path: { id } } })).data,
-    enabled,
-  });
+      unwrap(await api.GET('/api/v1/admin/markets/{id}', { params: { path: { id: id ?? '' } } }))
+        .data,
+    enabled: id !== undefined,
+  };
+}
+
+export function useAdminMarket(routeId: string) {
+  return useQuery(adminMarketQueryOptions(routeId));
 }
 
 /**
@@ -71,9 +87,10 @@ function invalidateMarket(queryClient: QueryClient, id: string) {
  * happens: the response is the row as of its own transaction, and a refetch that lands after
  * it wins.
  *
- * `id` is the caller's, never `fresh.id`: the screen keys its query on the id in the URL,
- * which the API accepts in upper case and answers in lower (uuidSchema lower-cases requests),
- * so seeding under the response's id would leave the screen reading an untouched key.
+ * `id` is the key the caller's own query uses — this function cannot know which string that
+ * is. The detail screen keys on the canonical id (`adminMarketQueryOptions`), so there
+ * `market.id` is that string by construction, not by a convention a call site must remember
+ * (A-M3-29).
  *
  * The two statements stay in one synchronous block — an `await` between them would let a GET
  * that is already in flight (started before the write) land on top of the seed instead of

@@ -53,7 +53,7 @@ import {
   isAwaitingSettlement,
   isClosingSoon,
   isEditable,
-  isMarketId,
+  marketIdParam,
   marketEventRows,
   marketFormError,
   transitionErrorMessage,
@@ -72,9 +72,12 @@ import { MarketFormFields } from '../market-form-fields';
 
 export function AdminMarketDetail({ id }: { id: string }) {
   // A malformed id (not a uuid) would be a 400 from the API, which reads as "try again";
-  // it is a wrong address, so it is 찾을 수 없습니다 without a request (isMarketId).
-  const validId = isMarketId(id);
-  const market = useAdminMarket(id, validId);
+  // it is a wrong address, so it is 찾을 수 없습니다 without a request (marketIdParam).
+  const validId = marketIdParam(id) !== undefined;
+  // Keyed on the canonical id inside the hook, not on the segment as typed: an upper-case
+  // URL would otherwise read a key that `market.id` — what every child below writes
+  // through — does not name (A-M3-29).
+  const market = useAdminMarket(id);
 
   // The alerts keep the way back too: without it, a wrong address leaves only the layout nav.
   if (!validId || (market.isError && isApiError(market.error, 'NOT_FOUND'))) {

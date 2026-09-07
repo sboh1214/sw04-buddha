@@ -135,9 +135,15 @@ export function formatQuantity(q: string): string {
  * which is not a "try again" situation: the detail screen shows 찾을 수 없습니다 without a
  * request. The refusal's issue path is `[]` (a scalar schema), so it cannot be told apart
  * from any other 400 after the fact — hence the check up front.
+ *
+ * The parsed value, not a boolean, and that is the point: a uuid is accepted in either case
+ * and `uuidParamSchema` lower-cases it (A-M3-17), which is also the case every row the API
+ * answers with carries. A screen that keys its cache on this value keys it on the same
+ * string its children read back as `market.id`; one that keeps the segment as typed holds
+ * two strings for one market (A-M3-29).
  */
-export function isMarketId(id: string): boolean {
-  return uuidParamSchema.safeParse(id).success;
+export function marketIdParam(id: string): string | undefined {
+  return uuidParamSchema.safeParse(id).data;
 }
 
 /** An event/audit payload as one compact line; `null` and `undefined` render as nothing. */
