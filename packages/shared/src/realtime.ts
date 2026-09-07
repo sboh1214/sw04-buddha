@@ -1,5 +1,6 @@
 import * as z from 'zod';
 import { pAmountSchema } from './api/p-amount.js';
+import { uuidSchema } from './api/uuid.js';
 import { BP_MAX, PRICE_MAX, PRICE_MIN } from './constants.js';
 import { marketStatusSchema, orderSideSchema, outcomeSchema } from './enums.js';
 
@@ -28,6 +29,14 @@ import { marketStatusSchema, orderSideSchema, outcomeSchema } from './enums.js';
  * event `market:status` must gain a strict key — `market_events.id` of the transition,
  * which is drawn under the market's row lock and is therefore in commit order per market —
  * and the market DTOs must carry that key so a snapshot can seed it (A-M3-19, Q-M3-8).
+ *
+ * Families. `realtimeEventSchema` is the publisher's union — everything that may reach
+ * Redis. The gateway never parses an inbound message with it: a `market:*` message is
+ * parsed with `marketRealtimeEventSchema` and a `user:*` message with
+ * `userRealtimeEventSchema`, so parsing per family IS the authorization check. A
+ * `user:balance` that appears on a market channel — a publisher bug, or anything else able
+ * to write to Redis — then fails to parse instead of being fanned out to every subscriber
+ * of that public room, which the wide union would have waved through.
  */
 export const REALTIME_EVENT_TYPES = [
   'market:tick',
@@ -157,3 +166,62 @@ export function marketChannel(marketId: string): `market:${string}` {
 export function userChannel(userId: string): `user:${string}` {
   return `user:${userId}`;
 }
+
+/** PLAN 8 namespace. The browser connects to `${NEXT_PUBLIC_API_URL}/ws` (ADR-0017). */
+export const REALTIME_NAMESPACE = '/ws';
+
+/**
+ * The two Redis patterns the gateway holds. Fixed patterns, not one SUBSCRIBE per room:
+ * joining a room stays a synchronous in-process operation, so the ack a client waits on
+ * before reading its REST snapshot (A-M3-19) cannot race a Redis round trip, and the
+ * reconnect re-arm of Q-M3-7 is two idempotent commands instead of a rebuilt set. They must
+ * keep matching what `marketChannel`/`userChannel` publish to.
+ */
+export const MARKET_CHANNEL_PATTERN = 'market:*';
+export const USER_CHANNEL_PATTERN = 'user:*';
+
+/** Market rooms one `subscribe` may add — one page of `GET /markets` (PAGE_LIMIT_MAX). */
+export const REALTIME_SUBSCRIBE_MAX = 100;
+/** Market rooms one socket may hold at once (~10 pages of the list). */
+export const REALTIME_ROOMS_MAX = 200;
+/** Largest client message the gateway accepts; 100 uuids in JSON is ~4 KB. */
+export const REALTIME_MAX_MESSAGE_BYTES = 16_384;
+
+/**
+ * Gateway-only control event: the Redis subscription was lost and re-armed, so events in
+ * the gap are gone and the client must re-run its REST snapshots (A-M3-19). NOT a
+ * `RealtimeEvent` — it is never published to Redis, so it is deliberately absent from
+ * `REALTIME_EVENT_TYPES` and `realtimeEventSchema`, and it carries no payload.
+ */
+export const RESYNC_EVENT = 'realtime:resync';
+
+/**
+ * `subscribe` / `unsubscribe` payload. The ids are canonicalised here — A-M3-17's third
+ * boundary: an upper-case uuid would join a room no publisher ever writes to, and the
+ * socket would sit silent rather than fail.
+ */
+export const subscribeBodySchema = z.object({
+  marketIds: z.array(uuidSchema).min(1).max(REALTIME_SUBSCRIBE_MAX),
+});
+export type SubscribeBody = z.infer<typeof subscribeBodySchema>;
+
+/**
+ * The `market:<id>` room's events; a `market:*` message parses with this and nothing else.
+ * Infers `MarketRealtimeEvent`. No `.meta({ id })` on this or the mirror below: neither
+ * reaches a controller, and a dangling `components['schemas']` entry is the swagger trap.
+ */
+export const marketRealtimeEventSchema = z.discriminatedUnion('type', [
+  marketTickEventSchema,
+  marketTradeEventSchema,
+  marketStatusEventSchema,
+]);
+
+/**
+ * The `user:<id>` room's events; infers `UserRealtimeEvent`. Splitting the union is what
+ * keeps a `user:balance` published on a market channel from reaching every subscriber of
+ * that market — see the family paragraph at the top of this module.
+ */
+export const userRealtimeEventSchema = z.discriminatedUnion('type', [
+  userBalanceEventSchema,
+  userPositionEventSchema,
+]);

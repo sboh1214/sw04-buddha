@@ -21,6 +21,8 @@ import {
   ORDER_QTY_MAX,
   PRICE_MAX,
   PRICE_MIN,
+  SPARKLINE_MAX_POINTS,
+  TICKS_MAX_POINTS,
   TRADE_MIN_SHARES,
 } from './constants.js';
 import {
@@ -97,6 +99,25 @@ const marketSummaryFields = {
 /** List card. */
 export const marketSummarySchema = z.object(marketSummaryFields).meta({ id: 'MarketSummary' });
 export type MarketSummary = z.infer<typeof marketSummarySchema>;
+
+/**
+ * `GET /markets` card (PLAN 11.4). `MarketSummary` plus the sparkline: the public list is the
+ * only reader, so the shared component stays as it is and `GET /admin/markets`, `Market` and
+ * `AdminMarket` are not made to carry a chart they never draw.
+ *
+ * Oldest to newest, at most SPARKLINE_MAX_POINTS hourly samples ending at the response
+ * instant, in the same basis points as `pYesBp`. Shorter when the market's first tick falls
+ * inside the window — leading unknowns are trimmed, never zero-filled (0 bp is a real
+ * probability) — and because the grid is fixed, the length says where the series starts:
+ * bucket index = SPARKLINE_MAX_POINTS - length. Empty only for a market with no ticks at all.
+ */
+export const marketListItemSchema = z
+  .object({
+    ...marketSummaryFields,
+    sparkline: z.array(bpSchema).max(SPARKLINE_MAX_POINTS),
+  })
+  .meta({ id: 'MarketListItem' });
+export type MarketListItem = z.infer<typeof marketListItemSchema>;
 
 /**
  * Public detail (PLAN 7.1): no LMSR state, liquidity, reserve or author — those are
@@ -387,6 +408,13 @@ export const tradeResultSchema = z
 export type TradeResult = z.infer<typeof tradeResultSchema>;
 
 // ---- ticks --------------------------------------------------------------------------
+/**
+ * One point of a price series. At `resolution=raw` it is a stored tick and `ts` is the tick's
+ * own instant. At a bucketed resolution it is a SAMPLE: `ts` is a boundary on the absolute
+ * grid and `pYesBp`/`trigger` come from the last tick at or before it — the probability in
+ * force then, exact because the series is a step function (the LMSR state holds between
+ * trades). Render it with a step curve, never straight interpolation.
+ */
 export const priceTickSchema = z
   .object({
     ts: z.iso.datetime(),
@@ -400,7 +428,7 @@ export const TICK_RESOLUTIONS = ['raw', '1m', '1h'] as const;
 export type TickResolution = (typeof TICK_RESOLUTIONS)[number];
 export const tickResolutionSchema = z.enum(TICK_RESOLUTIONS);
 
-/** `GET /markets/:id/ticks` (no `.meta`: query DTO). M3 serves raw for every resolution. */
+/** `GET /markets/:id/ticks` (no `.meta`: query DTO). `resolution` selects the sampled grid. */
 export const ticksQuerySchema = z
   .object({
     from: z.iso.datetime().optional(),
@@ -416,6 +444,37 @@ export const ticksQuerySchema = z
     { message: 'from must not be after to', path: ['from'] },
   );
 export type TicksQuery = z.infer<typeof ticksQuerySchema>;
+
+/**
+ * `GET /markets/:id/ticks` (PLAN 7.1, M4). An object, not a bare array, so the series says
+ * what the server actually served: the stride it picked (`bucketSeconds` — a requested
+ * resolution is coarsened rather than striped, so points are evenly spaced), the window it
+ * covered (`from`/`to`, filled in by the server when a bound is omitted) and whether older
+ * points inside that window were left out (`truncated`, Q-M3-8 (1)).
+ *
+ * Not `meta`: in this API `meta` is cursor pagination and nothing else (api/pagination.ts),
+ * and a second meta shape would have to be threaded through ResponseEnvelopeInterceptor,
+ * ApiPage and ApiData for one boolean — and could not carry `bucketSeconds`/`from`/`to`.
+ */
+export const priceSeriesSchema = z
+  .object({
+    /** The resolution the caller asked for, echoed. */
+    resolution: tickResolutionSchema,
+    /** The stride actually served, in seconds; 0 for `raw`. */
+    bucketSeconds: z.number().int().min(0),
+    /** The window the answer describes; equals the request when both bounds were given. */
+    from: z.iso.datetime(),
+    to: z.iso.datetime(),
+    /** Points older than the served ones exist inside the window but were left out. */
+    truncated: z.boolean(),
+    /**
+     * Ascending by `ts`; at most TICKS_MAX_POINTS (documented as maxItems only — nothing
+     * validates a response at runtime; ApiData is an OpenAPI decorator).
+     */
+    points: z.array(priceTickSchema).max(TICKS_MAX_POINTS),
+  })
+  .meta({ id: 'PriceSeries' });
+export type PriceSeries = z.infer<typeof priceSeriesSchema>;
 
 // ---- events -------------------------------------------------------------------------
 export const marketEventSchema = z

@@ -1730,7 +1730,7 @@
                     "data": {
                       "type": "array",
                       "items": {
-                        "$ref": "#/components/schemas/MarketSummary"
+                        "$ref": "#/components/schemas/MarketListItem"
                       }
                     },
                     "meta": {
@@ -1757,7 +1757,7 @@
             }
           }
         },
-        "summary": "Markets by status (default open), never drafts; sorted by volume, closing or newest",
+        "summary": "Markets by status (default open), never drafts; sorted by volume, closing or newest. Each card carries up to 25 hourly YES samples over the last 24 hours, oldest first.",
         "tags": [
           "markets"
         ]
@@ -1949,10 +1949,7 @@
                   "type": "object",
                   "properties": {
                     "data": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/PriceTick"
-                      }
+                      "$ref": "#/components/schemas/PriceSeries"
                     }
                   },
                   "required": [
@@ -1984,7 +1981,7 @@
             }
           }
         },
-        "summary": "Price history, ascending, downsampled to at most 500 points (first and last always kept) from the newest 10000 ticks of the range. `resolution` is accepted but served as raw until M4.",
+        "summary": "Price series, ascending, at most 500 points. `raw` returns stored ticks, downsampled from the newest 10000 of the range (`truncated` says when older ones were left out). `1m`/`1h` sample the probability in force on an absolute grid, coarsening the stride until the window fits; `bucketSeconds` reports the stride served, and the point at `from` carries the last value at or before it, so the left edge is never empty.",
         "tags": [
           "markets"
         ]
@@ -3959,7 +3956,7 @@
         ],
         "additionalProperties": false
       },
-      "MarketSummary": {
+      "MarketListItem": {
         "type": "object",
         "properties": {
           "id": {
@@ -4050,6 +4047,15 @@
             "type": "string",
             "format": "date-time",
             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "sparkline": {
+            "maxItems": 25,
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000
+            }
           }
         },
         "required": [
@@ -4067,7 +4073,8 @@
           "closeAt",
           "openAt",
           "resolvedResult",
-          "createdAt"
+          "createdAt",
+          "sparkline"
         ],
         "additionalProperties": false
       },
@@ -4275,6 +4282,53 @@
         ],
         "additionalProperties": false
       },
+      "PriceSeries": {
+        "type": "object",
+        "properties": {
+          "resolution": {
+            "type": "string",
+            "enum": [
+              "raw",
+              "1m",
+              "1h"
+            ]
+          },
+          "bucketSeconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "from": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "points": {
+            "maxItems": 500,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PriceTick"
+            }
+          }
+        },
+        "required": [
+          "resolution",
+          "bucketSeconds",
+          "from",
+          "to",
+          "truncated",
+          "points"
+        ],
+        "additionalProperties": false
+      },
       "PriceTick": {
         "type": "object",
         "properties": {
@@ -4412,6 +4466,118 @@
           "priceBeforeBp",
           "priceAfterBp",
           "maxPayoutP"
+        ],
+        "additionalProperties": false
+      },
+      "MarketSummary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "category": {
+            "type": "object",
+            "properties": {
+              "slug": {
+                "type": "string"
+              },
+              "nameKo": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "slug",
+              "nameKo"
+            ],
+            "additionalProperties": false
+          },
+          "imageUrl": {
+            "nullable": true,
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "open",
+              "closed",
+              "resolving",
+              "settled",
+              "voided"
+            ]
+          },
+          "lastPrice": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 99
+          },
+          "pYesBp": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "volumeP": {
+            "$ref": "#/components/schemas/PAmount"
+          },
+          "tradeCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "traderCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "closeAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "openAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "resolvedResult": {
+            "nullable": true,
+            "type": "string",
+            "enum": [
+              "YES",
+              "NO"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          }
+        },
+        "required": [
+          "id",
+          "slug",
+          "title",
+          "category",
+          "imageUrl",
+          "status",
+          "lastPrice",
+          "pYesBp",
+          "volumeP",
+          "tradeCount",
+          "traderCount",
+          "closeAt",
+          "openAt",
+          "resolvedResult",
+          "createdAt"
         ],
         "additionalProperties": false
       },

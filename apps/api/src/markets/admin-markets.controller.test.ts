@@ -18,6 +18,7 @@ import {
   type AdminMarket,
   type Market,
   type MarketSummary,
+  type PriceSeries,
   type Outcome,
 } from '@buddha/shared';
 import { randomUUID } from 'node:crypto';
@@ -536,9 +537,13 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       expect(pub.statusCode).toBe(200);
       expect(data<Market>(pub)).toMatchObject({ status: 'open', pYesBp: 4_000 });
       const chart = await t.app.inject({ method: 'GET', url: `/api/v1/markets/${draft.id}/ticks` });
-      expect(data<unknown[]>(chart)).toEqual([
-        { ts: opened.openAt, pYesBp: 4_000, trigger: 'open' },
-      ]);
+      // `data` is a PriceSeries object since M4, not a bare array (ADR-0029).
+      expect(data<PriceSeries>(chart)).toMatchObject({
+        resolution: 'raw',
+        bucketSeconds: 0,
+        truncated: false,
+        points: [{ ts: opened.openAt, pYesBp: 4_000, trigger: 'open' }],
+      });
 
       // PLAN 8: `market:status` published after commit on the market's channel.
       await new Promise<void>((resolve, reject) => {
