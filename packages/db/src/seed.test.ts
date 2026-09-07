@@ -31,10 +31,13 @@ const packageRoot = fileURLToPath(new URL('..', import.meta.url));
 const ADMIN_EMAIL = 'seed-admin@test.local';
 const ADMIN_PASSWORD = 'seed-admin-1234';
 
-function seedSpawnOptions(options: { admin?: boolean } = {}) {
+function seedSpawnOptions(options: { admin?: boolean; clockShiftMs?: number } = {}) {
   const urls = testDbUrls();
   if (!urls) throw new Error('TEST_DATABASE_URL is not set');
   const env: Record<string, string | undefined> = { ...process.env, DATABASE_URL: urls.appUrl };
+  // On the child only: nothing reads it from the runner's environment, so turbo's strict env
+  // mode has nothing to declare.
+  if (options.clockShiftMs) env.SEED_TEST_CLOCK_SHIFT_MS = String(options.clockShiftMs);
   if (options.admin ?? true) {
     env.SEED_ADMIN_EMAIL = ADMIN_EMAIL;
     env.SEED_ADMIN_PASSWORD = ADMIN_PASSWORD;
@@ -54,10 +57,21 @@ function seedSpawnOptions(options: { admin?: boolean } = {}) {
   };
 }
 
-const SEED_ARGS = ['--import', 'tsx', 'src/seed.ts'];
+/**
+ * `--import tsx` compiles the CLI. The optional second one shifts the CHILD's own `Date`, so a
+ * case can prove which clock a seeded instant came from. An absolute file URL because node
+ * resolves a relative `--import` against the cwd, which `seedSpawnOptions` sets to the package
+ * root.
+ */
+const CLOCK_SHIM = new URL('./test/fake-clock.mjs', import.meta.url).href;
+function seedArgs(clockShiftMs = 0): string[] {
+  return clockShiftMs
+    ? ['--import', 'tsx', '--import', CLOCK_SHIM, 'src/seed.ts']
+    : ['--import', 'tsx', 'src/seed.ts'];
+}
 
-function runSeed(options: { admin?: boolean } = {}): string {
-  return execFileSync(process.execPath, SEED_ARGS, seedSpawnOptions(options));
+function runSeed(options: { admin?: boolean; clockShiftMs?: number } = {}): string {
+  return execFileSync(process.execPath, seedArgs(options.clockShiftMs), seedSpawnOptions(options));
 }
 
 /** M3 design 2 / PLAN 13 M3: 12 open markets, 2-3 per category. */
@@ -99,7 +113,7 @@ const EXPECTED_CLOSE_AT: Record<string, string> = {
 
 /** The same CLI, not awaited: for running two seeds at once. Rejects on a non-zero exit. */
 function startSeed(): Promise<{ stdout: string; stderr: string }> {
-  return promisify(execFile)(process.execPath, SEED_ARGS, seedSpawnOptions());
+  return promisify(execFile)(process.execPath, seedArgs(), seedSpawnOptions());
 }
 
 describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () => {
@@ -211,6 +225,14 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
   });
 
   describe('markets (M3 design 2, PLAN 13 M3)', () => {
+    /** The database's own clock, so a bound on a seeded instant compares like with like. */
+    async function dbNow(): Promise<number> {
+      const result = await t.db.execute<{ ms: string }>(
+        sql`select (extract(epoch from clock_timestamp()) * 1000)::bigint::text as ms`,
+      );
+      return Number(result.rows[0]?.ms);
+    }
+
     async function marketState() {
       const rows = await t.db
         .select({
@@ -227,6 +249,7 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
           lastPrice: markets.lastPrice,
           openAt: markets.openAt,
           closeAt: markets.closeAt,
+          createdAt: markets.createdAt,
           createdBy: markets.createdBy,
         })
         .from(markets)
@@ -238,8 +261,11 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
     }
 
     it('creates the 12 open markets with their open tick and created/opened events', async () => {
-      const before = Date.now();
+      // Both ends read from the database, like the instants they bound: a runner-clock window
+      // would be the very comparison this seed stopped making (ADR-0027, A-M3-30).
+      const before = await dbNow();
       runSeed();
+      const after = await dbNow();
       const { id: adminId } = await adminState();
       const { rows, ticks, events } = await marketState();
 
@@ -256,7 +282,10 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
         // ADR-0027: the reserve is the true worst case for (p0, b), not 100·b·ln 2.
         expect(row.reserveP).toBe(maxLossP(row.initialProbBp / 10_000, Number(row.liquidityB)));
         expect(row.lastPrice).toBe(Math.round(row.initialProbBp / 100));
-        expect(row.openAt!.getTime()).toBeGreaterThanOrEqual(before - 1000);
+        expect(row.openAt!.getTime()).toBeGreaterThanOrEqual(before);
+        expect(row.openAt!.getTime()).toBeLessThanOrEqual(after);
+        // Read after the seed lock, so it cannot precede the transaction's own `now()`.
+        expect(row.openAt!.getTime()).toBeGreaterThanOrEqual(row.createdAt.getTime());
         // Absolute, not seed time + N days: the rules name fixed cutoffs.
         expect(row.closeAt.toISOString()).toBe(EXPECTED_CLOSE_AT[row.slug]);
 
@@ -274,6 +303,32 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
       }
       expect(ticks).toHaveLength(12);
       expect(events).toHaveLength(24);
+    });
+
+    it('takes the market instants from the database, not from the runner (ADR-0027)', async () => {
+      // The one case that can tell the two clocks apart: the child runs an hour ahead of the
+      // database. `open_at` and the open tick must not move — a runner-clock value would land
+      // an hour in the future, sorting the opening tick after every trade made in that hour
+      // and drawing the initial probability as a reset partway along the chart.
+      const shift = 60 * 60 * 1000;
+      runSeed({ clockShiftMs: shift });
+      const after = await dbNow();
+      const { rows, ticks } = await marketState();
+
+      expect(rows).toHaveLength(12);
+      for (const row of rows) {
+        expect(row.openAt!.getTime()).toBeLessThanOrEqual(after);
+        expect(row.openAt!.getTime()).toBeGreaterThanOrEqual(row.createdAt.getTime());
+      }
+      for (const tick of ticks) expect(tick.ts.getTime()).toBeLessThanOrEqual(after);
+
+      // And the shim really was in the child: better-auth's own columns follow the runner on
+      // every real sign-up, so the seeded admin keeps that clock deliberately (A-M3-30).
+      const [admin] = await t.db
+        .select({ createdAt: user.createdAt })
+        .from(user)
+        .where(eq(user.email, ADMIN_EMAIL));
+      expect(admin!.createdAt.getTime()).toBeGreaterThan(after + shift / 2);
     });
 
     it('is idempotent: a second run adds no market, tick or event', async () => {

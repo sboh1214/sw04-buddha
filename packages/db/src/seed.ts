@@ -88,6 +88,30 @@ async function lockSeed(tx: Pick<Db, 'execute'>): Promise<void> {
   await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${SEED_LOCK_KEY}))`);
 }
 
+/**
+ * The database clock, read AFTER `lockSeed` — the instant rule every market write follows
+ * (ADR-0027; apps/api/src/infra/db/clock.ts, and the same read inlined in
+ * `MarketService.requirePublicAt`). The seed runner and Postgres are two machines: a Windows
+ * host and a Docker VM, most obviously. A runner that is ahead writes an `open_at` in the
+ * future and an open tick that sorts AFTER the first trades' ticks, so `/markets/:id/ticks`
+ * draws the initial probability as a reset partway along the chart; a runner that is behind
+ * writes `open_at` earlier than the same row's `created_at`. packages/db cannot import the
+ * API's helper — it throws `AppError`, a Nest-side class — so this is the CLI's own copy,
+ * failing the CLI's way.
+ *
+ * Epoch millis as text, so no driver-side date parser is involved.
+ */
+async function dbNow(tx: Pick<Db, 'execute'>): Promise<Date> {
+  const result = await tx.execute<{ ms: string }>(
+    sql`select (extract(epoch from clock_timestamp()) * 1000)::bigint::text as ms`,
+  );
+  const ms = Number(result.rows[0]?.ms);
+  if (!Number.isSafeInteger(ms)) {
+    throw new Error('[db:seed] clock_timestamp() returned no value');
+  }
+  return new Date(ms);
+}
+
 async function seedChargePackages(db: Db): Promise<void> {
   const outcome = await db.transaction(async (tx) => {
     await lockSeed(tx);
@@ -458,15 +482,17 @@ async function seedMarkets(db: Db, adminId: string): Promise<void> {
     if (Number.isNaN(closeAt.getTime())) {
       throw new Error(`[db:seed] market ${seed.slug}: closeAt "${seed.closeAt}" is not a date`);
     }
-    const created = await db.transaction(async (tx) => {
+    const openedAt = await db.transaction(async (tx) => {
       await lockSeed(tx);
       const [existing] = await tx
         .select({ id: markets.id })
         .from(markets)
         .where(eq(markets.slug, seed.slug));
-      if (existing) return false;
+      if (existing) return null;
 
-      const now = new Date();
+      // After the slug check, not before it: a re-run that inserts nothing then spends no
+      // round trip on a clock it will not use.
+      const now = await dbNow(tx);
       const p0 = seed.initialProbBp / 10_000;
       const state = initState(p0, seed.liquidityB);
       const [market] = await tx
@@ -506,11 +532,13 @@ async function seedMarkets(db: Db, adminId: string): Promise<void> {
       await tx
         .insert(marketEvents)
         .values({ marketId: market.id, type: 'opened', actorId: adminId, payload });
-      return true;
+      return now;
     });
-    if (created) inserted++;
-    console.log(`[db:seed] market ${seed.slug}: ${created ? 'created' : 'already exists'}`);
-    if (created && closeAt.getTime() <= Date.now()) {
+    if (openedAt) inserted++;
+    console.log(`[db:seed] market ${seed.slug}: ${openedAt ? 'created' : 'already exists'}`);
+    // The instant the transaction already read, not the runner's: the same clock the M5 close
+    // scan will compare `close_at` against.
+    if (openedAt && closeAt.getTime() <= openedAt.getTime()) {
       // Seeded as written rather than skipped, so the environment still gets its 12 markets
       // and the PLAN 5.5 close scan (M5) turns it into a closed one within a minute. The real
       // fix is fresh copy: this content is dated (Q-M3, copy refresh cadence).
