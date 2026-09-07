@@ -148,6 +148,32 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     }
   });
 
+  it('lists a market past its close time until someone closes it (A-M3-31)', async () => {
+    // The list filters on status alone. M3 has no close job, so a market whose close time has
+    // passed keeps its `open` status — the seed writes such markets on purpose — and it stays
+    // listed, first under `closing`, while every quote and trade answers MARKET_CLOSED. If a
+    // later milestone hides it here, this is the assertion that says so out loud.
+    const expired = await market({
+      title: '마감 시각이 지난 시장',
+      closeAt: new Date(Date.now() - 60_000),
+    });
+    const later = await market({ title: '아직 열린 시장', closeAt: new Date(Date.now() + DAY_MS) });
+
+    const page = (await get('/api/v1/markets')).json<ListPage>();
+    expect(page.data.map((row) => row.id)).toContain(expired.id);
+    const closing = (await get('/api/v1/markets?sort=closing')).json<ListPage>();
+    expect(closing.data.map((row) => row.id)).toEqual([expired.id, later.id]);
+
+    const quote = await t.app.inject({
+      method: 'POST',
+      url: '/api/v1/quotes',
+      headers: { 'content-type': 'application/json' },
+      payload: { marketId: expired.id, outcome: 'YES', side: 'buy', mode: 'shares', value: '10' },
+    });
+    expect(quote.statusCode).toBe(409);
+    expect(quote.json()).toMatchObject({ error: { code: 'MARKET_CLOSED' } });
+  });
+
   it('filters by category slug and searches titles with LIKE wildcards escaped', async () => {
     const weather = await createCategory(t.db, { slug: 'weather', nameKo: '날씨' });
     const rain = await market({ title: '9월 서울 강수량 100mm 초과?', categoryId: weather.id });

@@ -463,12 +463,22 @@ const SEED_MARKETS: readonly SeedMarket[] = [
  * and the 'created' / 'opened' events, all in one commit so a crash never leaves a market
  * without its history. A market whose slug exists is skipped, never updated. Runs after
  * `seedAdmin`: the admin is `created_by` and the actor of both events.
+ *
+ * One deliberate divergence from that path: `close_at` is an absolute instant (ADR-0027), and
+ * `assertFutureCloseAt` refuses a past one on both admin routes while this writes it anyway,
+ * open, so a late-run seed still gets its 12 markets. Such a market refuses every trade until
+ * someone closes it; the loop below says so on every run.
  */
 async function seedMarkets(db: Db, adminId: string): Promise<void> {
   const categoryRows = await db
     .select({ id: categories.id, slug: categories.slug })
     .from(categories);
   const categoryIds = new Map(categoryRows.map((row) => [row.slug, row.id]));
+
+  // One read for the staleness report below. The rows' own instants still come from each
+  // transaction's post-lock read (A-M3-30); this one only decides what to warn about, and a
+  // re-run that inserts nothing spends this single round trip rather than one per market.
+  const reportedAt = await dbNow(db);
 
   let inserted = 0;
   for (const seed of SEED_MARKETS) {
@@ -482,13 +492,16 @@ async function seedMarkets(db: Db, adminId: string): Promise<void> {
     if (Number.isNaN(closeAt.getTime())) {
       throw new Error(`[db:seed] market ${seed.slug}: closeAt "${seed.closeAt}" is not a date`);
     }
-    const openedAt = await db.transaction(async (tx) => {
+    const outcome = await db.transaction(async (tx) => {
       await lockSeed(tx);
       const [existing] = await tx
-        .select({ id: markets.id })
+        .select({ id: markets.id, closeAt: markets.closeAt })
         .from(markets)
         .where(eq(markets.slug, seed.slug));
-      if (existing) return null;
+      // Left exactly as it is, status included: a re-seed never rewrites a market an admin
+      // has been working with. Its close time is read back so the report below judges the
+      // row that exists, not the literal in this file.
+      if (existing) return { inserted: false, closeAt: existing.closeAt };
 
       // After the slug check, not before it: a re-run that inserts nothing then spends no
       // round trip on a clock it will not use.
@@ -532,18 +545,25 @@ async function seedMarkets(db: Db, adminId: string): Promise<void> {
       await tx
         .insert(marketEvents)
         .values({ marketId: market.id, type: 'opened', actorId: adminId, payload });
-      return now;
+      return { inserted: true, closeAt };
     });
-    if (openedAt) inserted++;
-    console.log(`[db:seed] market ${seed.slug}: ${openedAt ? 'created' : 'already exists'}`);
-    // The instant the transaction already read, not the runner's: the same clock the M5 close
-    // scan will compare `close_at` against.
-    if (openedAt && closeAt.getTime() <= openedAt.getTime()) {
-      // Seeded as written rather than skipped, so the environment still gets its 12 markets
-      // and the PLAN 5.5 close scan (M5) turns it into a closed one within a minute. The real
-      // fix is fresh copy: this content is dated (Q-M3, copy refresh cadence).
+    if (outcome.inserted) inserted++;
+    console.log(
+      `[db:seed] market ${seed.slug}: ${outcome.inserted ? 'created' : 'already exists'}`,
+    );
+    // Every run, not only the one that inserts: the cutoffs are absolute, so an environment
+    // seeded before one passes reaches the same state without the seed doing anything — and
+    // that is the larger half. Against the row's own close time, so an admin who pushed it
+    // forward (the copy refresh Q-M3-4 describes) is not nagged about a market they fixed.
+    if (outcome.closeAt.getTime() <= reportedAt.getTime()) {
+      // Seeded as written rather than skipped: skipping would make the fixture's size a
+      // function of the calendar (every cutoff is in 2026, so a fresh seed would insert
+      // nothing at all from 2027). M3 has no close automation — PLAN 5.5's scan is M5, and
+      // apps/worker registers no `market.close` handler yet — so until then the market
+      // refuses every quote and trade with MARKET_CLOSED and an admin closes it from
+      // 관리자 → 시장 상세 → 마감. The real fix is fresh copy (Q-M3-4), under a new slug.
       console.warn(
-        `[db:seed] market ${seed.slug}: closeAt ${seed.closeAt} is already past, refresh the seed copy`,
+        `[db:seed] market ${seed.slug}: closeAt ${seed.closeAt} is already past — it refuses every trade until an admin closes it (관리자 → 시장 상세 → 마감); refresh the seed copy`,
       );
     }
   }

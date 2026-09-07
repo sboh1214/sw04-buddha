@@ -1,4 +1,4 @@
-import { execFile, execFileSync } from 'node:child_process';
+import { execFile, execFileSync, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
@@ -72,6 +72,21 @@ function seedArgs(clockShiftMs = 0): string[] {
 
 function runSeed(options: { admin?: boolean; clockShiftMs?: number } = {}): string {
   return execFileSync(process.execPath, seedArgs(options.clockShiftMs), seedSpawnOptions(options));
+}
+
+/** Both streams: the staleness report is a warning, and a warning goes to stderr. */
+function runSeedIo(options: { admin?: boolean; clockShiftMs?: number } = {}): {
+  stdout: string;
+  stderr: string;
+} {
+  const result = spawnSync(process.execPath, seedArgs(options.clockShiftMs), {
+    ...seedSpawnOptions(options),
+  });
+  if (result.status !== 0) {
+    throw new Error(`[db:seed] exited ${String(result.status)}
+${result.stderr}`);
+  }
+  return { stdout: result.stdout, stderr: result.stderr };
 }
 
 /** M3 design 2 / PLAN 13 M3: 12 open markets, 2-3 per category. */
@@ -329,6 +344,45 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
         .from(user)
         .where(eq(user.email, ADMIN_EMAIL));
       expect(admin!.createdAt.getTime()).toBeGreaterThan(after + shift / 2);
+    });
+
+    it('reports a market whose cutoff has passed on every run, not only the one that inserts it', async () => {
+      // The cutoffs are absolute, so the state arrives on its own date in an environment that
+      // was seeded long before — and the seed never rewrites an existing row. That half used
+      // to pass in silence: the warning was guarded on having just inserted the market.
+      const slug = 'cpi-september-2026-above-2pct';
+      runSeed();
+      await t.db
+        .update(markets)
+        .set({ closeAt: sql`clock_timestamp() - interval '1 minute'` })
+        .where(eq(markets.slug, slug));
+
+      const { stdout, stderr } = runSeedIo();
+      expect(stdout).toContain('markets: 0 inserted, 12 already existed');
+      expect(stderr).toContain(slug);
+      expect(stderr).toContain('마감');
+      // Only that one: the other eleven cutoffs are still ahead.
+      const warned = stderr.split(/\r?\n/).filter((line) => line.includes('is already past'));
+      expect(warned).toHaveLength(1);
+      // And it is still open, untouched — the seed reports, it does not rewrite.
+      const [row] = await t.db
+        .select({ status: markets.status })
+        .from(markets)
+        .where(eq(markets.slug, slug));
+      expect(row!.status).toBe('open');
+    });
+
+    it('goes quiet once the close time is pushed forward (the Q-M3-4 copy refresh)', async () => {
+      // The report judges the row, not the literal in seed.ts: an admin who moved the cutoff
+      // has done the documented refresh and must not be told about it on every deploy.
+      const slug = 'cpi-september-2026-above-2pct';
+      runSeed();
+      await t.db
+        .update(markets)
+        .set({ closeAt: sql`clock_timestamp() + interval '30 days'` })
+        .where(eq(markets.slug, slug));
+
+      expect(runSeedIo().stderr).not.toContain(slug);
     });
 
     it('is idempotent: a second run adds no market, tick or event', async () => {

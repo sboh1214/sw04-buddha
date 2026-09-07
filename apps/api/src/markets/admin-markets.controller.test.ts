@@ -589,6 +589,17 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     expect((await open('not-a-uuid')).statusCode).toBe(400);
   });
 
+  it('closes a market whose close time has already passed (the seed remedy)', async () => {
+    // What an operator does with a market the absolute cutoffs left open (A-M3-31): the seed
+    // writes it open because M3 has no close job, and this button is the way out. `close`
+    // does not check the close time — only `open` and the edits do — so it must work here.
+    const row = await market({ status: 'open', closeAt: new Date(Date.now() - 60_000) });
+    const res = await close(row.id);
+    expect(res.statusCode).toBe(200);
+    expect(detail(res).status).toBe('closed');
+    expect((await marketRow(row.id)).status).toBe('closed');
+  });
+
   it('closes an open market and answers MARKET_NOT_OPEN for anything else', async () => {
     const row = await market({ status: 'open' });
     const subscriber = new Redis(process.env.TEST_REDIS_URL!, { maxRetriesPerRequest: 1 });
