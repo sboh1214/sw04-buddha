@@ -3,6 +3,7 @@
 import {
   REALTIME_EXCEPTION_EVENT,
   REALTIME_NAMESPACE,
+  REALTIME_SUBSCRIBE_MAX,
   RESYNC_EVENT,
   type RealtimeEventType,
   type SubscribeBody,
@@ -21,6 +22,7 @@ import {
   useContext,
   useEffect,
   useRef,
+  useState,
 } from 'react';
 import { type Socket, io } from 'socket.io-client';
 import { type SessionIdentity } from '@/components/auth/session-cache-guard';
@@ -46,6 +48,7 @@ import {
   applyStatus,
   applyTick,
   applyToPages,
+  chunkIds,
 } from '@/lib/market-live';
 import { appendTick } from '@/lib/ticks';
 
@@ -169,13 +172,23 @@ class RoomRegistry implements Realtime {
    * the room map — the buffered copy would be a redundant second subscribe, and a buffered
    * `unsubscribe` would arrive AFTER that re-subscribe and undo it. There is no ack to wait
    * for (MERGE-NOTES R8): the gateway answers only when it refuses, on `exception`.
+   *
+   * Chunked at `REALTIME_SUBSCRIBE_MAX`, because the two caps differ on purpose: one MESSAGE
+   * may name 100 markets while one SOCKET may hold 200 rooms, and `subscribeBodySchema`
+   * refuses an over-long message whole — the gateway joins no room at all, not even the first
+   * hundred. Sending a single frame therefore did not merely lose the tail: the home grid
+   * crossing 100 rooms (five 더 보기) or a portfolio with 101 positions dropped ALL of its
+   * realtime, `resubscribe()` re-sent the same doomed frame on every reconnect, and a
+   * refused `unsubscribe` left the socket holding rooms this registry had already released.
    */
   private emit(event: 'subscribe' | 'unsubscribe', marketIds: string[]): void {
     if (marketIds.length === 0) return;
     const socket = this.socket;
     if (socket === null || !socket.connected) return;
-    const body: SubscribeBody = { marketIds };
-    socket.emit(event, body);
+    for (const slice of chunkIds(marketIds, REALTIME_SUBSCRIBE_MAX)) {
+      const body: SubscribeBody = { marketIds: slice };
+      socket.emit(event, body);
+    }
   }
 }
 
@@ -184,10 +197,36 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
   const { data: session, isPending } = useSession();
   // SessionCacheGuard's definition of "whose cache is this", reused deliberately: undefined
   // while better-auth is still asking, null for signed out, the user id otherwise.
-  const identity: SessionIdentity | undefined = isPending ? undefined : (session?.user.id ?? null);
+  const answered: SessionIdentity | undefined = isPending ? undefined : (session?.user.id ?? null);
+  /**
+   * The last identity better-auth actually ANSWERED, held across its refetches.
+   *
+   * `isPending` is not a sign-out and must not cost a handshake. better-auth recomputes it as
+   * `data === null` on every session refetch (client/session-atom.mjs), which is ALWAYS true
+   * for a signed-out visitor, and it refetches on focus, on `visibilitychange`, on regaining
+   * connectivity and on any other tab's broadcast. Keying the socket effect on the raw value
+   * therefore tore the connection down and rebuilt it every time an anonymous visitor came
+   * back to the tab, leaving it in no room at all for the length of a `GET /get-session` —
+   * and every event published in that window reached nobody. Only a real change of ACCOUNT
+   * needs a new socket, because the gateway reads the cookie once, at the handshake.
+   *
+   * Adjusted during render rather than in an effect (React's "adjust state when props
+   * change"): the extra render is discarded before the children are touched, and the socket
+   * does not have to wait a commit for an identity that is already known.
+   */
+  const [identity, setIdentity] = useState<SessionIdentity | undefined>(undefined);
+  if (answered !== undefined && answered !== identity) setIdentity(answered);
   // Built during render because a descendant's join effect runs BEFORE this component's effect
   // (effects fire child-first), so the registry has to exist by then. Never read here.
   const registry = useRef<RoomRegistry>(new RoomRegistry());
+  /**
+   * Whether this TAB has ever been connected — deliberately not "this socket", which is what a
+   * `let` inside the effect measured. A socket is rebuilt whenever the account changes, and
+   * the events published while the old one was gone are gone with it, so the rebuilt socket's
+   * FIRST connect is still the tab's second and must re-snapshot. A ref, not state: nothing
+   * renders from it.
+   */
+  const bootstrapped = useRef(false);
 
   useEffect(() => {
     // Never open an anonymous handshake first: the gateway reads the cookie ONCE, at the
@@ -201,6 +240,13 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       // websocket first, polling only as the fallback: the upgrade dance costs a round trip
       // this app never needs, while polling still works behind a proxy that refuses upgrades.
       transports: ['websocket', 'polling'],
+      // Without this the fallback above is dead code: engine.io-client only walks the
+      // `transports` list inside `if (this.opts.tryAllTransports && ...)` (socket.js
+      // `_onError`), and the option defaults to false — "the client will not test the other
+      // transports and will abort the connection". A refused upgrade would then fail, the
+      // Manager would reconnect with a fresh engine that starts at transports[0] again, and
+      // the client the server keeps polling enabled for would never reach it.
+      tryAllTransports: true,
     });
     rooms.attach(socket);
 
@@ -208,7 +254,12 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     // so a rebuilt socket starts from nothing seen and nothing spent.
     const balanceOrder = new BalanceOrder();
     const fills = new Throttle(FILLS_INVALIDATE_MS);
-    let bootstrapped = false;
+    /**
+     * The fills throttle's trailing-edge timers, one per market, cancelled with the socket.
+     * The value is the canceller rather than the handle so nothing here has to name the type
+     * of a timer: `lib.dom` and `@types/node` are both in scope and disagree about it.
+     */
+    const fillsPending = new Map<string, () => void>();
 
     /**
      * PLAN 8's "클라이언트 재연결 시 스냅샷 재요청", once per gap rather than once per event.
@@ -224,12 +275,47 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       }
     };
 
+    /**
+     * One fills refetch per market per window, LEADING and trailing.
+     *
+     * The trailing edge is not an optimisation: `['market-fills', id]` has no other writer for
+     * somebody else's trade — the trader's own fill is written by `applyTradeResult`, and
+     * `useMarketFills` carries no `refetchInterval` — so a refused invalidation that is simply
+     * dropped leaves the 체결 내역 list one row short until an unrelated trigger happens by.
+     * A refusal therefore schedules itself for the rest of the window and every event inside
+     * it coalesces into that one late refetch; re-entering rather than invalidating from the
+     * timer keeps a single statement of when a refetch is allowed.
+     */
+    const refreshFills = (marketId: string) => {
+      const now = Date.now();
+      if (fills.take(marketId, now)) {
+        void queryClient.invalidateQueries({
+          queryKey: marketFillsKey(marketId),
+          refetchType: 'active',
+        });
+        return;
+      }
+      if (fillsPending.has(marketId)) return;
+      const timer = setTimeout(
+        () => {
+          fillsPending.delete(marketId);
+          refreshFills(marketId);
+        },
+        fills.retryDelay(marketId, now),
+      );
+      fillsPending.set(marketId, () => {
+        clearTimeout(timer);
+      });
+    };
+
     socket.on('connect', () => {
       rooms.resubscribe();
-      if (bootstrapped) resnapshot();
-      // The FIRST connect must not invalidate: the SSR payload IS the snapshot, and re-reading
-      // it would cost a request per mounted observer on every single page load.
-      bootstrapped = true;
+      if (bootstrapped.current) resnapshot();
+      // The tab's FIRST connect must not invalidate: the SSR payload IS the snapshot, and
+      // re-reading it would cost a request per mounted observer on every single page load.
+      // Every connect after it re-snapshots, whether this socket reconnected or a new one
+      // replaced it — the ADR's "두 번째 connect부터" is per tab (ADR-0031).
+      bootstrapped.current = true;
     });
 
     // The gateway lost its Redis subscription and re-armed it, so whatever was published in
@@ -238,9 +324,11 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     socket.on(RESYNC_EVENT, resnapshot);
 
     // A refused `subscribe`/`unsubscribe` arrives here and nowhere else, so swallowing it
-    // would leave the screen quietly un-live with nothing to explain it. The envelope names no
-    // ids — the cap is per socket, not per market — so there is nothing to drop from the
-    // registry; this is a developer-facing warning, and a reload is the recovery.
+    // would leave the screen quietly un-live with nothing to explain it. Now that `emit`
+    // chunks at the per-message cap, the refusal left is the per-SOCKET room cap
+    // (REALTIME_ROOMS_MAX): the gateway joins ids until it is reached and refuses the rest,
+    // and the envelope names no ids, so there is nothing to drop from the registry. This is a
+    // developer-facing warning about that tail, and a reload is the recovery.
     socket.on(REALTIME_EXCEPTION_EVENT, (raw: unknown) => {
       const parsed = errorEnvelopeSchema.safeParse(raw);
       const detail = parsed.success
@@ -308,15 +396,10 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       'market:trade': (raw: unknown) => {
         const parsed = marketTradeEventSchema.safeParse(raw);
         if (!parsed.success) return;
-        const { marketId } = parsed.data;
         // Invalidate, never prepend a synthetic row: the event has no `amountP` while the REST
         // `Fill` does, and `['market-fills', id]` is SHARED with the admin detail, which
         // renders formatP(parsePAmount(fill.amountP)) and would throw on a null.
-        if (!fills.take(marketId, Date.now())) return;
-        void queryClient.invalidateQueries({
-          queryKey: marketFillsKey(marketId),
-          refetchType: 'active',
-        });
+        refreshFills(parsed.data.marketId);
       },
 
       'user:balance': (raw: unknown) => {
@@ -367,6 +450,10 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       rooms.detach(socket);
       socket.removeAllListeners();
       socket.disconnect();
+      // A trailing fills refetch belongs to the socket that earned it: firing it after the
+      // teardown would invalidate on behalf of a connection this tab no longer has.
+      for (const cancel of fillsPending.values()) cancel();
+      fillsPending.clear();
     };
   }, [identity, queryClient]);
 

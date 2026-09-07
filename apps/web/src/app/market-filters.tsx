@@ -9,9 +9,9 @@ import {
 } from '@buddha/shared';
 import NextLink from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
 import { copy } from '@/copy';
 import { useCategories } from '@/hooks/use-markets';
+import { type Category } from '@/lib/api';
 import { MARKET_STATUS_LABEL } from '@/lib/market-admin';
 // Aliased: this module exports a COMPONENT called `MarketFilters`, and the filter object it
 // renders is the type of the same name from the key module. The component keeps the name the
@@ -28,9 +28,13 @@ import { DEFAULT_MARKET_FILTERS, type MarketFilters as Filters } from '@/lib/mar
  * navigation lands rather than on the keystroke, which is the honest thing to show anyway: the
  * list below it has not changed yet either.
  *
- * The categories come from the same `['categories']` entry the page prefetched, so the tabs are
- * in the first paint. A failed read is not worth an error region here — 전체 still works and the
- * list underneath reports its own failure.
+ * The categories arrive twice: as a server-read PROP, which is what puts the tabs in the first
+ * paint, and from `useCategories()` afterwards, which is what keeps them fresh and gives the
+ * screen a value at all when this component is rendered without the prop. It has to be a prop and
+ * not the `['categories']` cache entry, because `Nav` renders above this page and builds that
+ * query first, which makes react-query defer its hydration to an effect that never runs on the
+ * server (see app/page.tsx). A failed read is not worth an error region here — 전체 still works
+ * and the list underneath reports its own failure.
  */
 
 /** PLAN 11.3's three orders. Local to this file: no other screen sorts a market list. */
@@ -60,22 +64,21 @@ export function filterQuery(filters: Filters): Record<string, string> {
 export interface MarketFiltersProps {
   /** Normalised once on the server; every control's value is read from here. */
   filters: Filters;
+  /** Read by the server component for the first paint; absent if that read failed. */
+  categories?: Category[];
   'data-testid'?: string;
 }
 
 export function MarketFilters({
   filters,
+  categories: seeded,
   'data-testid': testId = 'market-filters',
 }: MarketFiltersProps) {
   const router = useRouter();
   const categories = useCategories();
-  /**
-   * The only local state on the screen, and it is a draft rather than a filter: what is typed
-   * before Enter is not yet part of the URL. It is seeded from the URL and deliberately not
-   * re-synced afterwards — an effect that wrote state back on every navigation would fight the
-   * user's typing, and `react-hooks` refuses `setState` in an effect body outright.
-   */
-  const [term, setTerm] = useState(filters.q ?? '');
+  // The query wins once it has an answer, so a client-side refresh moves the tabs; until then
+  // the server's own read stands, which is why there is no skeleton on a served page.
+  const items = categories.data ?? seeded;
 
   const go = (patch: Partial<Filters>) => {
     const search = new URLSearchParams(filterQuery({ ...filters, ...patch })).toString();
@@ -93,7 +96,8 @@ export function MarketFilters({
         role="search"
         onSubmit={(event) => {
           event.preventDefault();
-          const trimmed = term.trim();
+          const typed = new FormData(event.currentTarget).get('q');
+          const trimmed = (typeof typed === 'string' ? typed : '').trim();
           go({ q: trimmed === '' ? undefined : trimmed });
         }}
       >
@@ -101,10 +105,21 @@ export function MarketFilters({
           <Field.Root flex="1">
             {/* Visually hidden, not absent: a placeholder is not an accessible name (AC 6). */}
             <Field.Label srOnly>{copy.searchLabel}</Field.Label>
+            {/* Uncontrolled and KEYED on the term the URL carries, which is the whole of the
+                reconciliation this field needs. What is typed before Enter is a draft, so it must
+                survive a navigation the draft itself did not cause — picking a category, changing
+                the sort — and it must NOT survive one that replaced the term: Back out of a
+                search, or the header's own `/?q=…` form (nav.tsx), which posts from every route.
+                A `useState` seeded on mount could do neither, because a search-param-only
+                navigation on `/` re-renders this component without remounting it, so the seed was
+                read once and the box then outlived every filter it was supposed to describe.
+                Keying on `filters.q` remounts the field exactly when the URL's term changes and
+                leaves it alone otherwise — no effect, and nothing that can fight the typing. */}
             <Input
+              key={filters.q ?? ''}
+              name="q"
               type="search"
-              value={term}
-              onChange={(event) => setTerm(event.target.value)}
+              defaultValue={filters.q ?? ''}
               placeholder={copy.searchPlaceholder}
               data-testid="market-search"
             />
@@ -131,10 +146,12 @@ export function MarketFilters({
             query={filterQuery({ ...filters, category: undefined })}
             testId="market-category-tab-all"
           />
-          {categories.isPending ? (
+          {/* The skeleton is only for a render that has neither source yet — a client-side
+              navigation onto `/` before the query has answered. A served page has the prop. */}
+          {items === undefined && categories.isPending ? (
             <Skeleton height="8" width="48" borderRadius="l2" />
           ) : (
-            (categories.data ?? []).map((category) => (
+            (items ?? []).map((category) => (
               <CategoryChip
                 key={category.slug}
                 label={category.nameKo}

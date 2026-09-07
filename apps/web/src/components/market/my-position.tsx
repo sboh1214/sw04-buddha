@@ -11,29 +11,43 @@ import {
   Stack,
   Text,
 } from '@chakra-ui/react';
-import { formatP, parsePAmount } from '@buddha/shared';
+import { type MarketStatus, formatP, parsePAmount } from '@buddha/shared';
 import NextLink from 'next/link';
 import { usePathname } from 'next/navigation';
 import { type ReactNode } from 'react';
 import { EmptyState } from '@/components/ui/empty-state';
 import { copy } from '@/copy';
-import { averageCostP, markPriceP, unrealizedPnlP, usePositions } from '@/hooks/use-portfolio';
+import {
+  averageCostP,
+  markPriceP,
+  positionListStatusFor,
+  unrealizedPnlP,
+  usePositions,
+} from '@/hooks/use-portfolio';
 import { type Position } from '@/lib/api';
 import { formatContracts } from '@/lib/market-admin';
 
 /**
  * 내 포지션 on the market detail (PLAN 11.3): what this visitor holds in THIS market, marked to
- * the market's own last price.
+ * the market's own last price while it still trades, and what the market paid them once it has
+ * finished.
  *
  * Every figure is `use-portfolio.ts`'s arithmetic, in `bigint`. Not one of them is recomputed
  * here, and `markPriceP` in particular is the reason: a NO contract is worth the complement of
  * the YES price, and valuing it at the YES price is a silent error that produces a plausible
  * number wrong by 100 − 2·price per contract.
  *
- * The list itself is `usePositions('open')` — the same query the portfolio screen and the trade
- * panel read, so a trade's `applyPositionRow` seeds the rows this section shows rather than a
- * second copy of them. It waits for the session on its own, so a signed-out visitor never
- * provokes the 401 that the retry rule refuses to retry; they get the sign-in prompt instead.
+ * The list itself is `usePositions` — the same query the portfolio screen and the trade panel
+ * read, so a trade's `applyPositionRow` seeds the rows this section shows rather than a second
+ * copy of them. It waits for the session on its own, so a signed-out visitor never provokes
+ * the 401 that the retry rule refuses to retry; they get the sign-in prompt instead.
+ *
+ * WHICH of the two lists it reads follows the market's own status through
+ * `positionListStatusFor`: a finished market moved its holders' rows to the settled list, so
+ * asking only for `'open'` would answer "아직 이 시장에 참여하지 않았습니다" to an account that
+ * did hold and was paid out — while /portfolio, reading the same rows, listed it under 정산
+ * 이력 at the same moment. A finished market therefore shows 결과 · 실현 손익 (PLAN 11.3),
+ * field for field the 정산 이력 row, so the two screens cannot say different things.
  */
 
 /** The repo's placeholder for a figure that does not exist (admin-market-detail.tsx). */
@@ -42,14 +56,24 @@ const EMPTY = '—';
 export interface MyPositionProps {
   /** The market's canonical lower-cased uuid — `Position.marketId` carries the same string. */
   marketId: string;
+  /**
+   * The market's current status, which is what says which of the two position lists this
+   * account's rows are in. Optional and `'open'` by default: a caller that has not loaded the
+   * row yet keeps exactly the pre-terminal reading rather than guessing at the wrong list, and
+   * the detail page seeds the row into the cache before the first client render, so the
+   * default is a fallback and not the ordinary path.
+   */
+  status?: MarketStatus;
   'data-testid'?: string;
 }
 
 export function MyPosition({
   marketId,
+  status = 'open',
   'data-testid': testId = 'market-my-position',
 }: MyPositionProps) {
-  const positions = usePositions('open');
+  const listStatus = positionListStatusFor(status);
+  const positions = usePositions(listStatus);
   const pathname = usePathname();
   const rows = (positions.data ?? []).filter((row) => row.marketId === marketId);
 
@@ -92,9 +116,13 @@ export function MyPosition({
           <EmptyState message={copy.marketMyPositionEmpty} />
         ) : (
           <Stack gap="4">
-            {rows.map((row) => (
-              <PositionRows key={row.outcome} position={row} />
-            ))}
+            {rows.map((row) =>
+              listStatus === 'settled' ? (
+                <SettledPositionRows key={row.outcome} position={row} />
+              ) : (
+                <PositionRows key={row.outcome} position={row} />
+              ),
+            )}
           </Stack>
         )}
       </Card.Body>
@@ -125,6 +153,41 @@ function PositionRows({ position }: { position: Position }) {
         </Item>
         <Item label={copy.positionRealizedPnl}>
           <Signed amount={realized} />
+        </Item>
+      </DataList.Root>
+    </Stack>
+  );
+}
+
+/**
+ * 결과 · 실현 손익 for a market that has finished (PLAN 11.3) — the same three fields, in the
+ * same order, as /portfolio's 정산 이력 row, so one account's row cannot read differently on
+ * the two screens. It carries no market link or status badge: this IS that market's page, and
+ * the header badge and the status notice above have already said what it became.
+ *
+ * No 현재가 and no 평가손익. Void and settlement both close the row out (`voidRefund` and
+ * `settle` both leave qty and cost basis at 0), the P has already landed in the balance,
+ * and `marketLastPrice` on a finished market is only the last price something TRADED at — so
+ * marking such a row to it would print a plausible number that is not a result. `realizedPnlP`
+ * is the whole story, and on a void it is only what earlier sells made, the refund itself
+ * being a return of the cost rather than a gain.
+ */
+function SettledPositionRows({ position }: { position: Position }) {
+  const yes = position.outcome === 'YES';
+  const result = position.resolvedResult;
+  return (
+    <Stack gap="2" data-testid={`market-settled-${yes ? 'yes' : 'no'}`}>
+      <Badge colorPalette={yes ? 'yes' : 'no'} variant="subtle" alignSelf="flex-start">
+        {yes ? copy.yes : copy.no}
+      </Badge>
+      <DataList.Root orientation="horizontal" size="sm">
+        {/* A voided market resolved to nothing at all, and every P it took was refunded. */}
+        <Item label={copy.marketResolvedResult}>
+          {result === null ? EMPTY : result === 'YES' ? copy.yes : copy.no}
+        </Item>
+        <Item label={copy.positionQty}>{formatContracts(position.qty)}</Item>
+        <Item label={copy.positionRealizedPnl}>
+          <Signed amount={parsePAmount(position.realizedPnlP)} />
         </Item>
       </DataList.Root>
     </Stack>

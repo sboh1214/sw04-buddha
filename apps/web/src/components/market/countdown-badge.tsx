@@ -84,6 +84,9 @@ export function CountdownBadge({
   }
 
   return isClosingSoon(market, clock) ? (
+    // `solid` is what makes 마감 임박 louder than the ordinary countdown next to it in the grid,
+    // and it is legible only because theme/system.ts overrides `orange.solid`: Chakra's built-in
+    // light pair is white on orange.600 = 3.56:1, and a card renders this badge at 10px.
     <Badge colorPalette="orange" variant="solid" size={size} data-testid={testId}>
       {copy.marketClosingSoon} {remaining}
     </Badge>

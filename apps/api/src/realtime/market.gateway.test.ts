@@ -31,7 +31,6 @@ import {
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { type Auth } from '../auth/auth.js';
 import { AppError } from '../common/errors/app-error.js';
-import { NUL_MESSAGE } from '../common/pipes/validation.pipe.js';
 import {
   REDIS_ADAPTER_SUBSCRIBER,
   REDIS_SUBSCRIBER,
@@ -41,7 +40,7 @@ import { createTestApp, signUpTestUser, type TestApp } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { sleep, waitForMessages } from '../test/wait.js';
 import { MarketPublisher } from './market-publisher.js';
-import { MarketGateway } from './market.gateway.js';
+import { ARM_RETRY_MS, MarketGateway } from './market.gateway.js';
 import { REALTIME_EXCEPTION_EVENT, RealtimeExceptionFilter } from './realtime-exception.filter.js';
 
 /** setup-env.ts fixes WEB_ORIGIN to this, so it is the one Origin the handshake accepts. */
@@ -375,16 +374,28 @@ describe.skipIf(!hasTestInfra)('MarketGateway (integration)', () => {
     expect(anonymous.connected).toBe(true);
   });
 
-  it('renders the global pipe NUL sweep as a VALIDATION_ERROR envelope', async () => {
-    // The one throw the handler's own safeParse cannot pre-empt: the pipe runs first, and it
-    // sweeps @MessageBody() even with no schema attached. Without the gateway-scoped filter it
-    // would arrive as Nest's generic `{ status: 'error' }` with no PLAN 7.4 code.
+  it('narrows the payload with the schema before the global pipe walks it', async () => {
+    // The pipe runs before the handler either way, so what it is handed is the whole question.
+    // With no schema on @MessageBody() it passes the value through and its NUL sweep — the one
+    // walk in this app over an unvalidated, attacker-shaped structure — recurses the payload,
+    // copying the path array at every level (quadratic in depth: ~33 ms of blocked event loop
+    // for 4 KB of nesting, against ~0.02 ms for a legitimate 100-uuid body). With
+    // `@MessageBody({ schema })` the schema strips this junk first, so the sweep only ever sees
+    // the ids that survived it, and the subscription the junk rode along with is applied.
+    // Unschema'd, the sweep instead finds the NUL at the bottom and refuses the whole message.
+    const marketId = randomUUID();
     const socket = await open();
-    const refused = nextSocketEvent<unknown>(socket, REALTIME_EXCEPTION_EVENT);
-    socket.emit('subscribe', { marketIds: ['\u0000'] });
-    const envelope = errorEnvelopeSchema.parse(await refused);
-    expect(envelope.error.code).toBe('VALIDATION_ERROR');
-    expect(envelope.error.details).toEqual([{ path: ['marketIds', 0], message: NUL_MESSAGE }]);
+    const ticks = collect<unknown>(socket, 'market:tick');
+    const failures = collect<unknown>(socket, REALTIME_EXCEPTION_EVENT);
+    let junk: unknown = '\u0000';
+    for (let depth = 0; depth < 200; depth += 1) junk = [junk];
+    socket.emit('subscribe', { marketIds: [marketId], junk });
+    await roundTrip(socket);
+
+    await publisher.publishMarket(marketId, tickEvent(marketId));
+    await waitForMessages(ticks, 1, 'market:tick');
+    // The barrier's own refusal is the only one: the junk key cost the message nothing.
+    expect(failures).toHaveLength(1);
   });
 });
 
@@ -440,12 +451,40 @@ async function publishUntilForwarded(
   }
 }
 
+/** What Redis answers a PSUBSCRIBE with: one confirmation per pattern, each with the count. */
+function psubscribeConfirmations(patterns: readonly string[]): string {
+  return patterns
+    .map((pattern, index) => {
+      const bytes = String(Buffer.byteLength(pattern));
+      return `*3\r\n$10\r\npsubscribe\r\n$${bytes}\r\n${pattern}\r\n:${String(index + 1)}\r\n`;
+    })
+    .join('');
+}
+
+/** What the fake server writes back for the `nth` PSUBSCRIBE; `undefined` keeps it silent. */
+type PsubscribeAnswer = (nth: number, patterns: string[]) => string | undefined;
+
+/** A live-but-silent server: the case `ready` alone cannot recover from. */
+const neverAnswers: PsubscribeAnswer = () => undefined;
+
+/**
+ * `-LOADING` for the first PSUBSCRIBE, a confirmation for every later one: a Redis that is up
+ * and refusing, so the arm rejects with the command REMOVED from ioredis's queue and the next
+ * one can succeed on the same connection (a rejection on `commandTimeout` leaves its entry in
+ * the queue instead, and only a reconnect clears it — see redis.provider.ts).
+ */
+const loadingThenReady: PsubscribeAnswer = (nth, patterns) =>
+  nth === 1
+    ? '-LOADING Redis is loading the dataset in memory\r\n'
+    : psubscribeConfirmations(patterns);
+
 /**
  * RESP arrays → argv (the shape of market-publisher.test.ts's mock Redis, trimmed): answers the
- * ioredis handshake with +OK and then records every PSUBSCRIBE without ever replying to one —
- * a live-but-silent server, the case `ready` alone cannot recover from.
+ * ioredis handshake with +OK, records every PSUBSCRIBE, and writes back whatever `answer` makes
+ * of it (`undefined` = stay silent). In-process, so a reply is written before the test's next
+ * `psubscribes` observation returns.
  */
-function listenSilentPsubscribe(): Promise<{
+function listenFakeRedis(answer: PsubscribeAnswer): Promise<{
   port: number;
   psubscribes: string[][];
   close(): Promise<void>;
@@ -483,8 +522,11 @@ function listenSilentPsubscribe(): Promise<{
         }
         if (!complete) break;
         buffer = buffer.subarray(pos);
-        if ((args[0] ?? '').toUpperCase() === 'PSUBSCRIBE') psubscribes.push(args);
-        else socket.write('+OK\r\n');
+        if ((args[0] ?? '').toUpperCase() === 'PSUBSCRIBE') {
+          psubscribes.push(args);
+          const reply = answer(psubscribes.length, args.slice(1));
+          if (reply !== undefined) socket.write(reply);
+        } else socket.write('+OK\r\n');
       }
     });
   });
@@ -537,7 +579,7 @@ describe.skipIf(!hasTestInfra)('MarketGateway subscription lifecycle', () => {
   it('retries a psubscribe that never gets an answer', async () => {
     // `ready` alone is not enough: commandTimeout rejects this PSUBSCRIBE and no later `ready`
     // follows, so without the bounded retry the gateway would stay deaf for good.
-    const server = await listenSilentPsubscribe();
+    const server = await listenFakeRedis(neverAnswers);
     const subscriber = createRedisClient(`redis://127.0.0.1:${String(server.port)}`, {
       commandTimeoutMs: 300,
       socketTimeoutMs: 5_000,
@@ -550,6 +592,85 @@ describe.skipIf(!hasTestInfra)('MarketGateway subscription lifecycle', () => {
       expect(server.psubscribes[1]?.slice(1)).toEqual(['market:*', 'user:*']);
     } finally {
       gateway.onApplicationShutdown();
+      subscriber.disconnect();
+      await server.close();
+    }
+  });
+
+  it('resyncs after a failed FIRST arm, not only after a re-arm', async () => {
+    // The gap that matters is "an arm has failed since the last successful one", not "an arm has
+    // ever succeeded". `afterInit` runs inside `app.init()`, which returns either way, and
+    // `app.listen()` follows at once — so sockets connect and take their REST snapshots during
+    // the retry window, and they are precisely the ones that missed events. Keying the resync on
+    // the earlier arm's success suppresses it for exactly those clients.
+    const server = await listenFakeRedis(loadingThenReady);
+    const subscriber = createRedisClient(`redis://127.0.0.1:${String(server.port)}`);
+    const { namespace, control } = fakeNamespace([]);
+    const gateway = new MarketGateway({} as unknown as Auth, subscriber);
+    try {
+      gateway.afterInit(namespace);
+      await waitForMessages(control, 1, RESYNC_EVENT);
+      expect(control).toEqual([RESYNC_EVENT]);
+      expect(server.psubscribes).toHaveLength(2);
+    } finally {
+      gateway.onApplicationShutdown();
+      subscriber.disconnect();
+      await server.close();
+    }
+  });
+
+  it('drops the queued retry when an intervening re-arm succeeds', async () => {
+    // A retry that outlives the arm it was queued for psubscribes a second time, and the gateway
+    // is armed by then — so it announces a gap the re-arm already closed, and every connected
+    // browser resnapshots twice. Measured as arms, not as resyncs: one reconnect must cost
+    // exactly one PSUBSCRIBE.
+    const server = await listenFakeRedis(loadingThenReady);
+    const subscriber = createRedisClient(`redis://127.0.0.1:${String(server.port)}`);
+    const { namespace, control } = fakeNamespace([]);
+    const gateway = new MarketGateway({} as unknown as Auth, subscriber);
+    try {
+      gateway.afterInit(namespace);
+      await waitForMessages(server.psubscribes, 1, 'the first PSUBSCRIBE');
+      // The server is in this process and answered synchronously, so the boot arm has already
+      // been rejected and its retry queued. Whether `ready` then re-armed inside this window is
+      // an ioredis ordering detail (see the `arming` guard), so count rather than assume.
+      await sleep(100);
+      const armsBeforeReconnect = server.psubscribes.length;
+
+      subscriber.disconnect(true);
+      await waitForMessages(control, 1, RESYNC_EVENT);
+      // Proving a timer does NOT fire needs a window rather than a barrier: wait past the moment
+      // the queued retry was due.
+      await sleep(ARM_RETRY_MS + 300);
+      expect(server.psubscribes).toHaveLength(armsBeforeReconnect + 1);
+    } finally {
+      gateway.onApplicationShutdown();
+      subscriber.disconnect();
+      await server.close();
+    }
+  });
+
+  it('schedules no retry once shutdown has run', async () => {
+    // Clearing the timer is not enough on its own: the arm outstanding here rejects AFTER the
+    // shutdown, and an unguarded catch would then psubscribe a connection RedisModule has quit —
+    // which ioredis rejects synchronously, scheduling another. One warn per ARM_RETRY_MS for the
+    // life of the process, which this file's own retry test above used to leave behind.
+    const commandTimeoutMs = 300;
+    const server = await listenFakeRedis(neverAnswers);
+    const subscriber = createRedisClient(`redis://127.0.0.1:${String(server.port)}`, {
+      commandTimeoutMs,
+      socketTimeoutMs: 5_000,
+    });
+    const { namespace } = fakeNamespace([]);
+    const gateway = new MarketGateway({} as unknown as Auth, subscriber);
+    try {
+      gateway.afterInit(namespace);
+      await waitForMessages(server.psubscribes, 1, 'the first PSUBSCRIBE');
+      gateway.onApplicationShutdown();
+      // Past the rejection AND past the retry it would have queued.
+      await sleep(commandTimeoutMs + ARM_RETRY_MS + 500);
+      expect(server.psubscribes).toHaveLength(1);
+    } finally {
       subscriber.disconnect();
       await server.close();
     }

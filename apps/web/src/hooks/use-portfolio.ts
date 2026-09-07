@@ -1,6 +1,11 @@
 'use client';
 
-import { PAYOUT_PER_CONTRACT_P, type PositionStatus, parsePAmount } from '@buddha/shared';
+import {
+  PAYOUT_PER_CONTRACT_P,
+  type MarketStatus,
+  type PositionStatus,
+  parsePAmount,
+} from '@buddha/shared';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { type Order, type Position, api, unwrap } from '@/lib/api';
 import { useSession } from '@/lib/use-session';
@@ -68,6 +73,23 @@ export function usePositions(status: PositionStatus) {
     isPending: sessionPending || (session != null && query.isPending),
     isLoggedIn: session != null,
   };
+}
+
+/**
+ * Which of the two lists a given market's rows are in, from the market's own status.
+ *
+ * `GET /me/positions?status=` filters on `positions.settled`, and the only thing that ever
+ * flips that flag is the market finishing: the void writes `settled: true` on every holder row
+ * inside the same transaction that writes `status: 'voided'` (market-admin.service.ts), and
+ * M5's settlement will write the pair together the same way. So the market's status is an
+ * exact reading of which list its positions moved to, and a screen that only ever asks for
+ * `'open'` tells a holder who was refunded that they never participated.
+ *
+ * `closed` and `resolving` are deliberately NOT terminal: trading has stopped, but nothing has
+ * been paid out, so those rows are still open holdings marked to the market's last price.
+ */
+export function positionListStatusFor(marketStatus: MarketStatus): PositionStatus {
+  return marketStatus === 'settled' || marketStatus === 'voided' ? 'settled' : 'open';
 }
 
 /** One cursor page of `GET /me/orders`, the page shape every infinite list in this app holds. */

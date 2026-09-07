@@ -6,7 +6,7 @@ import { RulesSection } from '@/components/market/rules-section';
 import { copy } from '@/copy';
 import { fetchMarketServer, fetchTicksServer } from '@/lib/api.server';
 import { dehydratePublic } from '@/lib/market-keys';
-import { seedMarketDetail } from '@/lib/market-ssr';
+import { detailWindowEnd, seedMarketDetail } from '@/lib/market-ssr';
 import { getQueryClient } from '@/lib/query-client';
 import { DEFAULT_TICK_RANGE } from '@/lib/ticks';
 import { MarketDetail } from './market-detail';
@@ -64,19 +64,13 @@ export default async function MarketPage({ params }: { params: Promise<{ slug: s
 
   // Both sub-resources of the detail are uuid-only routes, so everything below the row speaks
   // `market.id` and never the slug the URL carried (A-M3-29).
+  //
+  // `null` when the ticks read failed, and the page renders anyway: the chart is one region of
+  // this screen and it reports its own failure, while the question and the 정산 기준 below are
+  // already in hand. Only the row may 404 or 500 this route (api.server.ts).
   const series = await fetchTicksServer(market.id, DEFAULT_TICK_RANGE);
   const queryClient = getQueryClient();
   seedMarketDetail(queryClient, market, series);
-
-  /*
-   * The instant the countdown measures its FIRST render against. It is the window end the API
-   * closed on its own `clock_timestamp()`, carried in the payload that is already being
-   * dehydrated — never `Date.now()` here: a clock read during render puts one string in the
-   * server's HTML and another in the browser's first render, which is a hydration mismatch on
-   * the very page AC 2 measures. `Date.parse` of an `z.iso.datetime()` cannot realistically
-   * fail, and if it ever did the badge falls back to the absolute close time.
-   */
-  const windowEnd = Date.parse(series.to);
 
   return (
     // `pb` clears the fixed 예/아니오 bar the trade panel mounts below `md`, which leaves the
@@ -99,10 +93,9 @@ export default async function MarketPage({ params }: { params: Promise<{ slug: s
           {market.title}
         </Heading>
         <HydrationBoundary state={dehydratePublic(queryClient)}>
-          <MarketDetail
-            marketId={market.id}
-            now={Number.isFinite(windowEnd) ? windowEnd : undefined}
-          >
+          {/* `now` is the server's own window end, never a clock read in this render body —
+              see `detailWindowEnd`. It is absent when the series is. */}
+          <MarketDetail marketId={market.id} now={detailWindowEnd(series)}>
             {/* PLAN 11.1's Kalshi principle: 정산 기준 is never collapsed on the detail.
                 `disputeUntil` is null until a result is proposed, so 정산 예정 appears exactly
                 when the instant is real (PLAN 17 Q8 stays closed until then). */}

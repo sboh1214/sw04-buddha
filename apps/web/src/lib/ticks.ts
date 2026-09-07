@@ -112,7 +112,7 @@ export function ticksQueryOptions(marketId: string, range: TickRange) {
  * The comparison is written `!(a > b)` rather than `a <= b` so an unparseable `ts` (NaN, which
  * fails both) is dropped instead of written into the cache.
  *
- * An event inside the last bucket REPLACES the last point rather than appending, so a busy
+ * An event in the last point's bucket REPLACES that point rather than appending, so a busy
  * market does not grow a spike of sub-stride points the next refetch would erase.
  * `bucketSeconds === 0` (raw) makes that test false for every event, so raw always appends.
  * The replacement carries the event's own instant, so the right edge is the live truth rather
@@ -138,10 +138,18 @@ export function appendTickToSeries(
   // 'trade' is the honest label for a live point; a tick published by a status transition is
   // relabelled by the next fetch, which reads the stored row.
   const point: PriceTick = { ts: event.ts, pYesBp: event.pYesBp, trigger: 'trade' };
-  const points =
-    eventMs - lastMs < held.bucketSeconds * 1000
-      ? [...held.points.slice(0, -1), point]
-      : [...held.points, point];
+  // Bucket membership is read off the SAME absolute grid the server bins on (`date_bin(stride,
+  // …, '1970-01-01 00:00:00+00')` in market.service.ts), never as the gap `eventMs - lastMs`:
+  // neither instant a gap would measure from is a boundary — the server closes its answer at
+  // `to`, which is its own clock, and a point this function has already replaced carries the
+  // event's instant — so a gap test slides its origin forward with every tick and keeps
+  // replacing, and a market trading more often than one bucket would never gain a point again.
+  // `bucketMs > 0` keeps raw appending (and never divides by zero); an empty series has
+  // `lastMs === -Infinity`, whose floor equals no real bucket, so its first event appends.
+  const bucketMs = held.bucketSeconds * 1000;
+  const sameBucket =
+    bucketMs > 0 && Math.floor(eventMs / bucketMs) === Math.floor(lastMs / bucketMs);
+  const points = sameBucket ? [...held.points.slice(0, -1), point] : [...held.points, point];
 
   return {
     ...held,

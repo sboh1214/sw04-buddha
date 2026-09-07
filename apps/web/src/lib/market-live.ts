@@ -299,4 +299,42 @@ export class Throttle {
     this.last.set(key, now);
     return true;
   }
+
+  /**
+   * How long `key` still has to wait, 0 once its window has passed. Paired with a refused
+   * `take` this is what lets a caller give itself a TRAILING edge — sleep exactly this long,
+   * then take again — instead of dropping the action: a leading-edge-only throttle loses the
+   * last event of a burst, and `['market-fills', id]` has no other writer for somebody else's
+   * trade, so a lost one stays missing. Reading the window rather than owning a timer keeps
+   * this class clock-free and testable under the node runner.
+   */
+  retryDelay(key: string, now: number): number {
+    const previous = this.last.get(key);
+    if (previous === undefined) return 0;
+    return Math.max(0, this.windowMs - (now - previous));
+  }
+}
+
+/**
+ * `ids` in slices of at most `size`, in order; empty in, empty out.
+ *
+ * The realtime protocol caps a `subscribe`/`unsubscribe` MESSAGE at `REALTIME_SUBSCRIBE_MAX`
+ * ids while a socket may HOLD `REALTIME_ROOMS_MAX` of them (@buddha/shared realtime.ts), and
+ * the gateway refuses an over-long message whole — it joins no room at all and answers on
+ * `exception`. A client that wants the bigger number therefore has to send the smaller one
+ * repeatedly, which the home grid needs after five 더 보기 (PAGE_LIMIT_DEFAULT 20) and
+ * /portfolio needs for an account holding more than 100 markets, `GET /me/positions` having
+ * no pagination. Pure and here rather than inside the room registry so the boundary is
+ * testable without a socket.
+ *
+ * `size` is floored at 1 because a non-positive one would never advance the cursor: an
+ * infinite loop in the tab is a worse answer than one id per message.
+ */
+export function chunkIds(ids: readonly string[], size: number): string[][] {
+  const step = Math.max(1, size);
+  const chunks: string[][] = [];
+  for (let start = 0; start < ids.length; start += step) {
+    chunks.push(ids.slice(start, start + step));
+  }
+  return chunks;
 }

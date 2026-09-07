@@ -486,6 +486,11 @@ export const copy = {
   // 매수/매도 패널. 계약 수·P·확률은 전부 호출 쪽에서 붙인다 — 값은 평범한 문자열이어야 한다.
   tradeBuy: '매수',
   tradeSell: '매도',
+  // SegmentGroup의 접근 가능한 이름. 라디오 그룹은 이름이 없으면 스크린 리더가 무엇을
+  // 고르는 것인지 말해 주지 못한다(chartRangeLabel과 같은 자리).
+  tradeModeLabel: '입력 방식',
+  tradeSideLabel: '매수 · 매도',
+  tradeOutcomeLabel: '예 · 아니오',
   tradeModeAmount: 'P 금액',
   tradeModeShares: '계약 수',
   tradeUnitContracts: '계약',

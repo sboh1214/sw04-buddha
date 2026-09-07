@@ -172,15 +172,25 @@ export const REALTIME_NAMESPACE = '/ws';
 
 /**
  * The two Redis patterns the gateway holds. Fixed patterns, not one SUBSCRIBE per room:
- * joining a room stays a synchronous in-process operation, so the ack a client waits on
- * before reading its REST snapshot (A-M3-19) cannot race a Redis round trip, and the
- * reconnect re-arm of Q-M3-7 is two idempotent commands instead of a rebuilt set. They must
- * keep matching what `marketChannel`/`userChannel` publish to.
+ * joining a room stays a synchronous in-process operation, so a `subscribe` never waits on
+ * a Redis round trip that `commandTimeout` could reject, and the gap between an emit and
+ * the join stays one event-loop tick instead of a network hop. That gap is all there is to
+ * cover, because the protocol has no ack at all (ADR-0028, A-M4-8) — a client's REST
+ * snapshot is what closes it, not a wait on the server. The reconnect re-arm of Q-M3-7 is
+ * then two idempotent commands rather than a rebuilt subscription set. They must keep
+ * matching what `marketChannel`/`userChannel` publish to.
  */
 export const MARKET_CHANNEL_PATTERN = 'market:*';
 export const USER_CHANNEL_PATTERN = 'user:*';
 
-/** Market rooms one `subscribe` may add — one page of `GET /markets` (PAGE_LIMIT_MAX). */
+/**
+ * Market ids one `subscribe`/`unsubscribe` MESSAGE may carry — one page of `GET /markets`
+ * (PAGE_LIMIT_MAX). A per-message cap, not a per-socket one: `REALTIME_ROOMS_MAX` is
+ * deliberately higher, so a caller that holds more rooms than this (the home grid after a
+ * few "load more" presses, a portfolio with many positions) MUST slice its ids into chunks
+ * of this size. The gateway validates the whole payload before it joins anything, so one
+ * over-long message is refused entire and joins zero rooms.
+ */
 export const REALTIME_SUBSCRIBE_MAX = 100;
 /** Market rooms one socket may hold at once (~10 pages of the list). */
 export const REALTIME_ROOMS_MAX = 200;

@@ -52,6 +52,20 @@ const SUMMARY_LABELS: ChartSummaryLabels = {
 /** More rows than this in the accessibility tree is worse for a screen reader than a sample. */
 const TABLE_ROWS = 12;
 
+/**
+ * The read point, plus WHICH input put it there. Only the keyboard's moves are announced: a
+ * polite live region queues its changes instead of coalescing them, and `onPointerMove` writes a
+ * new index for roughly every pixel the pointer crosses (a 1D range on a busy market carries
+ * enough points to fill the ~343px plot a 375px viewport draws, one per pixel), so a single sweep
+ * of the pointer buys a screen reader half a minute of timestamps it has long left behind. The
+ * arrow keys move once per press, which is the rate an announcement is for.
+ */
+interface Readout {
+  index: number;
+  /** True when the last move came from `onKeyDown`; drives `aria-live` on the readout. */
+  spoken: boolean;
+}
+
 /** The toggle's options. `SegmentGroup.Items` renders the hidden radio inputs the roles need. */
 const RANGE_ITEMS: { value: TickRange; label: string }[] = [
   { value: '1D', label: copy.chartRangeDay },
@@ -82,7 +96,7 @@ export function ProbabilityChart({
   'data-testid': testId = 'probability-chart',
 }: ProbabilityChartProps) {
   const [range, setRange] = useState<TickRange>(defaultRange);
-  const [hovered, setHovered] = useState<number | null>(null);
+  const [hovered, setHovered] = useState<Readout | null>(null);
   const series = useMarketTicks(marketId, range);
   const tableId = useId();
   const readoutId = useId();
@@ -95,8 +109,8 @@ export function ProbabilityChart({
       ? []
       : extendToNow(toChartPoints(held.points), Date.parse(held.to), currentBp);
   const geometry = chartGeometry(points);
-  const point: ChartPoint | undefined = hovered === null ? undefined : points[hovered];
-  const marker = hovered === null ? undefined : geometry.at[hovered];
+  const point: ChartPoint | undefined = hovered === null ? undefined : points[hovered.index];
+  const marker = hovered === null ? undefined : geometry.at[hovered.index];
 
   return (
     <Stack gap="2" data-testid={testId}>
@@ -156,8 +170,11 @@ export function ProbabilityChart({
               position="relative"
               h={{ base: '32', md: '56' }}
               colorPalette="brand"
-              // `colorPalette.fg` is 7.90:1 light / 10.53:1 dark; `solid` would be 4.70:1 in
-              // dark mode and fails the moment anything reuses the stroke colour for text.
+              // `fg` is the token whose contract is "legible ON the page" — 7.90:1 light and
+              // 9.98:1 dark against `bg` — which is what a stroke that is also drawn as the
+              // marker dot needs. `solid` is tuned against the label that sits on IT instead
+              // (theme/system.ts), so it tracks a different background: it happens to resolve to
+              // the same indigo.700 in light mode and is 6.67:1 against the page in dark.
               color="colorPalette.fg"
               tabIndex={0}
               aria-describedby={readoutId}
@@ -171,7 +188,10 @@ export function ProbabilityChart({
                 // path is what makes a chart re-render itself into a loop.
                 const rect = event.currentTarget.getBoundingClientRect();
                 if (rect.width === 0) return;
-                setHovered(nearestIndex(points, (event.clientX - rect.left) / rect.width));
+                setHovered({
+                  index: nearestIndex(points, (event.clientX - rect.left) / rect.width),
+                  spoken: false,
+                });
               }}
               onPointerLeave={() => {
                 setHovered(null);
@@ -184,11 +204,11 @@ export function ProbabilityChart({
                 // Nothing to read yet — the query is still in flight, or the market has no
                 // tick at all. Bailing out here is what keeps the readout alive: without it
                 // `last` is -1, every branch below clamps to -1, and `hovered` LATCHES there,
-                // so `points[hovered]` stays undefined and the readout is dead for the rest
-                // of the mount even once the series arrives. Returning also leaves the arrow
-                // keys scrolling the page, which is the right thing when there is no series.
+                // so `points[hovered.index]` stays undefined and the readout is dead for the
+                // rest of the mount even once the series arrives. Returning also leaves the
+                // arrow keys scrolling the page, which is right when there is no series.
                 if (last < 0) return;
-                const current = hovered ?? last;
+                const current = hovered?.index ?? last;
                 let next: number | null;
                 switch (event.key) {
                   case 'ArrowLeft':
@@ -212,7 +232,7 @@ export function ProbabilityChart({
                 // Only for the keys handled above, so the page still scrolls with the arrows
                 // whenever the chart is not the focused element.
                 event.preventDefault();
-                setHovered(next);
+                setHovered(next === null ? null : { index: next, spoken: true });
               }}
             >
               {/* Gridlines and their values. The y window floats (`CHART_MIN_SPAN_BP`), so an
@@ -295,8 +315,16 @@ export function ProbabilityChart({
       <Text
         id={readoutId}
         data-testid="chart-readout"
-        role="status"
-        aria-live="polite"
+        // The chart's `aria-describedby` target, and — for the keyboard alone — its live region.
+        // The pointer rewrites this text about once per pixel of travel and a polite region
+        // queues every change it sees, so the announcement is gated on the input that wrote it:
+        // an explicit `aria-live` rather than `role="status"`, because an author's `off` outranks
+        // a role's implicit `polite` while the role itself cannot be silenced. `aria-atomic`
+        // restores what `role="status"` implied, so one move reads as one sentence. The single
+        // update that can still slip out is the first pointer move after a keypress, which
+        // changes the text and the attribute in the same commit.
+        aria-live={hovered?.spoken === true ? 'polite' : 'off'}
+        aria-atomic="true"
         // Reserved so the layout does not jump the first time the pointer enters the chart.
         minH="5"
         fontSize="sm"

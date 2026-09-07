@@ -2,7 +2,7 @@ import { QueryClient, dehydrate, hashKey } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 import { type Market, type PriceSeries } from './api';
 import { DEFAULT_MARKET_FILTERS, dehydratePublic, marketsKey } from './market-keys';
-import { filtersFromSearchParams, seedMarketDetail } from './market-ssr';
+import { detailWindowEnd, filtersFromSearchParams, seedMarketDetail } from './market-ssr';
 
 const MARKET_ID = '1f2e3d4c-0000-4000-8000-000000000000';
 
@@ -86,6 +86,35 @@ describe('seedMarketDetail', () => {
       'market',
       'ticks',
     ]);
+  });
+
+  it('seeds the row alone when the ticks read failed, leaving the key for the client', () => {
+    const queryClient = new QueryClient();
+    // A failed `GET /markets/:id/ticks` must not take the question and the 정산 기준 down with
+    // it, so the page renders with `null` here. The ticks key must then stay UNBUILT: seeding
+    // the `null` would build a SUCCESSFUL query holding it, and the chart reads `held.points`
+    // straight off a settled ticks query instead of fetching and reporting the failure itself.
+    seedMarketDetail(queryClient, market, null);
+
+    const keys = dehydrate(queryClient).queries.map((query) => query.queryKey);
+    expect(keys).toEqual([['market', MARKET_ID]]);
+    expect(queryClient.getQueryState(['ticks', MARKET_ID, '1D'])).toBeUndefined();
+  });
+});
+
+describe('detailWindowEnd', () => {
+  it('is the window end the server closed on its own clock', () => {
+    expect(detailWindowEnd(series)).toBe(Date.parse('2026-09-07T00:00:00.000Z'));
+  });
+
+  it('is absent when there is no series, so the countdown falls back to the close time', () => {
+    expect(detailWindowEnd(null)).toBeUndefined();
+  });
+
+  it('is absent rather than NaN for an unparseable `to`', () => {
+    // `z.iso.datetime()` makes this unrealistic, but a NaN would reach `CountdownBadge` as a
+    // number, and `formatRemaining` divides by it — the badge would render a literal `NaN초`.
+    expect(detailWindowEnd({ ...series, to: 'not a date' })).toBeUndefined();
   });
 });
 

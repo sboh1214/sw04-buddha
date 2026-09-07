@@ -56,17 +56,31 @@ export const fetchMarketServer = cache(async (idOrSlug: string): Promise<Market 
  * not just its points: the window and stride the server chose are what let a live `market:tick`
  * be merged into the right edge of the held series.
  *
+ * `null` on ANY failure, where `fetchMarketServer` above rethrows what it cannot turn into a 404.
+ * The asymmetry is deliberate: the row IS the page, but the series is one region of it, and that
+ * region already owns a complete error rung of its own (`series.isLoadingError` → 다시 시도,
+ * probability-chart.tsx). Letting the rejection out would 500 the whole route over a failed
+ * sub-resource and take the question and the 정산 기준 — the two things AC 2 reads out of
+ * view-source, both of which the page already holds by the time this call runs — down with it,
+ * onto Next's own untranslated error screen (there is no `app/error.tsx`). An unseeded ticks key
+ * instead lets the chart fetch it on the client and report the failure where it happened, the
+ * same way the home page's own public reads degrade.
+ *
  * The route takes a uuid only, so a slug-routed page resolves the row first and passes
  * `market.id`. `Date.now()` here builds the request window, never any geometry — `ticksQueryFor`
  * quantises `from` to the range's own stride, and the answer carries the `from`/`to` the chart
  * is drawn against.
  */
-export async function fetchTicksServer(id: string, range: TickRange): Promise<PriceSeries> {
-  return unwrap(
-    await serverApi.GET('/api/v1/markets/{id}/ticks', {
-      params: { path: { id }, query: ticksQueryFor(range, Date.now()) },
-    }),
-  ).data;
+export async function fetchTicksServer(id: string, range: TickRange): Promise<PriceSeries | null> {
+  try {
+    return unwrap(
+      await serverApi.GET('/api/v1/markets/{id}/ticks', {
+        params: { path: { id }, query: ticksQueryFor(range, Date.now()) },
+      }),
+    ).data;
+  } catch {
+    return null;
+  }
 }
 
 /**

@@ -3,7 +3,7 @@ import { HydrationBoundary } from '@tanstack/react-query';
 import type { Metadata } from 'next';
 import { copy } from '@/copy';
 import { fetchCategoriesServer, fetchMarketsPageServer } from '@/lib/api.server';
-import { CATEGORIES_QUERY_KEY, dehydratePublic, marketsKey } from '@/lib/market-keys';
+import { dehydratePublic, marketsKey } from '@/lib/market-keys';
 import { type MarketSearchParams, filtersFromSearchParams } from '@/lib/market-ssr';
 import { getQueryClient } from '@/lib/query-client';
 import { MarketFilters } from './market-filters';
@@ -33,8 +33,21 @@ export const metadata: Metadata = { title: `${copy.homeTitle} | ${copy.appName}`
  *
  * `prefetchInfiniteQuery`, never `prefetchQuery`: only the infinite form dehydrates `pageParams`
  * and the query type, which `hydrate` restores as `_type` so `useInfiniteQuery` picks the seeded
- * page up instead of fetching it again. Neither prefetch rejects (both end in `.catch(noop)`), so
- * an API that is down degrades to the client's own error state rather than a 500 on a public page.
+ * page up instead of fetching it again. It never rejects — a prefetch swallows its own failure —
+ * so an API that is down degrades to the client's own error state rather than a 500 on a public
+ * page; the categories read below is given the same treatment by hand.
+ *
+ * The categories go down as a PROP rather than through the query cache, which is the one place
+ * this screen cannot use hydration. `Nav` renders above `{children}` in the root layout and its
+ * own `useCategories()` builds `['categories']` in the context QueryClient while it renders —
+ * before this page's `HydrationBoundary` ever runs. react-query hydrates a query that already
+ * exists only from an EFFECT (`existingQueries` → `hydrationQueue`, HydrationBoundary.tsx), and
+ * effects do not run during SSR, so a dehydrated `['categories']` would reach the browser but
+ * never the HTML. Seeding it above `Nav` instead would mean the root layout prefetching on every
+ * route — including the statically prerendered ones, which would bake a build-time category list
+ * into /login and friends — for a short, rarely-changing list that no AC measures. So the server
+ * value is handed straight to the one consumer whose first paint we care about, and `Nav`'s
+ * shortcut row fills in from the client's own fetch a moment later.
  *
  * No `cookies()` is read and `dehydratePublic` drops every private root, so this HTML is
  * byte-identical for a signed-in and an anonymous visitor (decision-ssr-hydration §9).
@@ -46,7 +59,7 @@ export default async function HomePage({
 }) {
   const filters = filtersFromSearchParams(await searchParams);
   const queryClient = getQueryClient();
-  await Promise.all([
+  const [, categories] = await Promise.all([
     queryClient.prefetchInfiniteQuery({
       queryKey: marketsKey(filters),
       queryFn: ({ pageParam }: { pageParam: string | undefined }) =>
@@ -55,10 +68,9 @@ export default async function HomePage({
       // declares, and a mismatch there is a refetch of the page that is already in the payload.
       initialPageParam: undefined as string | undefined,
     }),
-    queryClient.prefetchQuery({
-      queryKey: CATEGORIES_QUERY_KEY,
-      queryFn: fetchCategoriesServer,
-    }),
+    // `undefined` rather than a rejection: the tabs are a convenience, and 전체 plus the list
+    // below them still work without one. The prefetch above swallows its failure the same way.
+    fetchCategoriesServer().catch(() => undefined),
   ]);
 
   /**
@@ -84,7 +96,7 @@ export default async function HomePage({
           {copy.homeTitle}
         </Heading>
         <HydrationBoundary state={dehydratePublic(queryClient)}>
-          <MarketFilters filters={filters} />
+          <MarketFilters filters={filters} categories={categories} />
           <MarketList filters={filters} now={fetchedAt === 0 ? undefined : fetchedAt} />
         </HydrationBoundary>
       </Stack>

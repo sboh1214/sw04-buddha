@@ -158,6 +158,43 @@ describe('appendTickToSeries', () => {
     });
   });
 
+  it('keeps the point a first live tick wrote when a second one crosses the boundary', () => {
+    // The regression this pins: measuring the bucket as `eventMs - lastMs` re-anchors on the
+    // instant of the point that was just replaced, so the second tick reads as "inside the
+    // bucket" again and deletes the first. While trades keep arriving less than one bucket
+    // apart the series would never gain a point at all — the tail just slides right.
+    const first = appendTickToSeries(series(), tick('2026-09-07T01:30:00.000Z', 4600));
+    const second = appendTickToSeries(first, tick('2026-09-07T02:15:00.000Z', 5100));
+
+    expect(second?.points).toEqual([
+      series().points[0],
+      { ts: '2026-09-07T01:30:00.000Z', pYesBp: 4600, trigger: 'trade' },
+      { ts: '2026-09-07T02:15:00.000Z', pYesBp: 5100, trigger: 'trade' },
+    ]);
+  });
+
+  it('bins on the absolute grid, not on the mid-bucket instant the answer closed at', () => {
+    // The server closes its window at `to` — its own clock — so the last point of a pristine
+    // answer usually sits INSIDE a bucket rather than on a boundary, exactly as the server's
+    // own left edge does. A tick twenty seconds later has crossed onto the next boundary of
+    // the grid `date_bin` bins on and must open a new point.
+    const held = series({
+      to: '2026-09-07T01:59:50.000Z',
+      points: [
+        { ts: '2026-09-07T00:00:00.000Z', pYesBp: 4000, trigger: 'open' },
+        { ts: '2026-09-07T01:59:50.000Z', pYesBp: 4200, trigger: 'trade' },
+      ],
+    });
+
+    expect(appendTickToSeries(held, tick('2026-09-07T02:00:10.000Z', 4600))?.points).toHaveLength(
+      3,
+    );
+    // A tick still inside that same grid bucket replaces, as it did before.
+    expect(appendTickToSeries(held, tick('2026-09-07T01:59:59.000Z', 4300))?.points).toHaveLength(
+      2,
+    );
+  });
+
   it('always appends at raw resolution', () => {
     // bucketSeconds 0 makes the "inside the bucket" test false for every event.
     const held = series({ resolution: 'raw', bucketSeconds: 0 });

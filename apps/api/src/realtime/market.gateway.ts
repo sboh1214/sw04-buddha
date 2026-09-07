@@ -18,20 +18,20 @@ import {
   subscribeBodySchema,
   userChannel,
   userRealtimeEventSchema,
+  type SubscribeBody,
 } from '@buddha/shared';
 import { fromNodeHeaders } from 'better-auth/node';
 import { type Redis } from 'ioredis';
 import { type DefaultEventsMap, type Namespace, type Socket } from 'socket.io';
 import { AUTH, type Auth } from '../auth/auth.js';
 import { AppError } from '../common/errors/app-error.js';
-import { toValidationIssue } from '../common/pipes/validation.pipe.js';
 import { REDIS_SUBSCRIBER } from '../infra/redis/redis.provider.js';
 import { RealtimeExceptionFilter } from './realtime-exception.filter.js';
 
 /** Keep-alive on the subscriber connection; unref'd so it never holds the process open. */
 const PING_INTERVAL_MS = 30_000;
-/** Delay before a rejected `psubscribe` is retried. */
-const ARM_RETRY_MS = 1_000;
+/** Delay before a rejected `psubscribe` is retried; exported so a test can wait one out. */
+export const ARM_RETRY_MS = 1_000;
 
 /** Per-socket state. Both fields are set by the handshake middleware, before any handler. */
 interface RealtimeSocketData {
@@ -90,6 +90,10 @@ export class MarketGateway
   private retry?: NodeJS.Timeout;
   private armed = false;
   private arming = false;
+  /** An arm has been rejected since the last successful one, so events were missed. */
+  private gap = false;
+  /** Shutdown has run; no further psubscribe and no further retry. */
+  private stopped = false;
 
   constructor(
     @Inject(AUTH) private readonly auth: Auth,
@@ -127,22 +131,36 @@ export class MarketGateway
   }
 
   onApplicationShutdown(): void {
+    // First, because clearing the timer is not enough on its own: an arm in flight right now
+    // rejects AFTER this runs (on `commandTimeout`, or on the flush when RedisModule quits the
+    // client), and an unguarded catch would then schedule a retry against a client whose status
+    // is `end` — which ioredis rejects synchronously, scheduling another: one psubscribe and one
+    // warning per ARM_RETRY_MS for the life of the process.
+    this.stopped = true;
     if (this.ping) clearInterval(this.ping);
-    if (this.retry) clearTimeout(this.retry);
+    this.clearRetry();
     // RedisModule quits the connection itself; drop the listeners so a message arriving during
     // shutdown cannot emit into a namespace that is already closing.
     this.subscriber.off('pmessage', this.onChannelMessage);
     this.subscriber.off('ready', this.arm);
   }
 
+  /** A pending retry must outlive neither the shutdown nor an arm that made it unnecessary. */
+  private clearRetry(): void {
+    if (this.retry) clearTimeout(this.retry);
+    this.retry = undefined;
+  }
+
   /**
    * `ready` alone is not enough: `commandTimeout` can reject a PSUBSCRIBE on a live-but-silent
    * Redis with no later `ready`, and the gateway would stay deaf for the life of the process.
-   * A bounded retry closes that. On any re-arm after the first, events published in the gap are
-   * gone, so the clients are told to re-read their REST snapshots (A-M3-19) — `.local`, because
-   * this runs on every instance.
+   * A bounded retry closes that. Whenever an arm lands on a gap — the subscription was down
+   * while the publisher (another connection, and under multi-instance another process) kept
+   * publishing — the clients are told to re-read their REST snapshots (A-M3-19); `.local`,
+   * because this runs on every instance.
    */
   private readonly arm = (): void => {
+    if (this.stopped) return;
     // One arm in flight at a time. The eager arm above is queued when the client is still
     // connecting, and ioredis flushes that queue and THEN emits `ready` (setStatus defers the
     // emit a tick), so without this guard every boot would psubscribe twice and the second
@@ -155,11 +173,29 @@ export class MarketGateway
       .psubscribe(MARKET_CHANNEL_PATTERN, USER_CHANNEL_PATTERN)
       .then(() => {
         this.arming = false;
-        if (this.armed) this.namespace?.local.emit(RESYNC_EVENT);
+        // The patterns are live again, so a retry queued by an earlier rejection has nothing
+        // left to repair. Left pending it would psubscribe a second time and announce a gap
+        // this arm has already closed — a duplicate resync storm from every client at once.
+        this.clearRetry();
+        // Two different gaps, and the flag pair is not redundant. `armed` catches the one a
+        // reconnect makes: the first arm succeeded, the subscription was later lost, and this
+        // is the re-arm. `gap` catches its mirror — a FAILED arm since the last successful one
+        // (including a failed FIRST arm, where `armed` is still false). `app.init()` returns
+        // whether or not the eager arm succeeded and `app.listen()` follows immediately, so
+        // sockets connect and take their snapshots during the retry window; those are exactly
+        // the clients that missed events, and `armed` alone would suppress their resync.
+        if (this.armed || this.gap) this.namespace?.local.emit(RESYNC_EVENT);
+        this.gap = false;
         this.armed = true;
       })
       .catch((error: unknown) => {
         this.arming = false;
+        // A rejection after shutdown is our own doing (RedisModule quits the client) and needs
+        // neither a warning nor a retry: see onApplicationShutdown.
+        if (this.stopped) return;
+        // Whatever is published between here and the next successful arm is lost; that arm is
+        // the only place that can say so.
+        this.gap = true;
         this.logger.warn(`psubscribe failed, retrying: ${String(error)}`);
         this.retry = setTimeout(this.arm, ARM_RETRY_MS);
         this.retry.unref();
@@ -240,13 +276,31 @@ export class MarketGateway
   /**
    * Joins the `market:<id>` rooms of the payload. No ack and no return value: the handler
    * answers only when it refuses, through RealtimeExceptionFilter's `exception` event.
+   *
+   * The schema rides on the parameter rather than being parsed inside the handler, because the
+   * global `ApiValidationPipe` runs first either way: with no schema attached it passes the
+   * value through and its NUL sweep is then the one place in the app that walks an unvalidated,
+   * attacker-shaped structure — and that walk is quadratic in depth (it copies the path array at
+   * every level), so 4 KB of nesting from an anonymous socket costs ~30 ms of blocked event loop
+   * against ~0.02 ms for a legitimate 100-uuid body. Validating first bounds what the sweep can
+   * ever see to those 100 ids; the pre-validation walk the pipe still does (`stripProtoKeys`) is
+   * linear, and is what every REST body already pays. The refusal is unchanged: the pipe's
+   * `exceptionFactory` (createValidationPipe) builds the same AppError with the PLAN 7.4 code
+   * and the same `details` shape this handler used to build itself.
+   *
+   * `subscribeBodySchema` lower-cases the ids — A-M3-17's third boundary: an upper-case uuid
+   * would join a room no publisher ever writes to, and the socket would sit silent rather than
+   * fail.
    */
   @SubscribeMessage('subscribe')
-  handleSubscribe(@ConnectedSocket() client: RealtimeSocket, @MessageBody() body: unknown): void {
+  handleSubscribe(
+    @ConnectedSocket() client: RealtimeSocket,
+    @MessageBody({ schema: subscribeBodySchema }) body: SubscribeBody,
+  ): void {
     // A dedicated Set, not socket.rooms: that one also holds the socket's own id room and the
     // user room, and a repeated marketId would double-count against the cap.
     const rooms = client.data.marketRooms;
-    for (const marketId of marketIdsOf(body)) {
+    for (const marketId of body.marketIds) {
       const room = marketChannel(marketId);
       if (rooms.has(room)) continue;
       if (rooms.size >= REALTIME_ROOMS_MAX) {
@@ -261,30 +315,17 @@ export class MarketGateway
     }
   }
 
+  /** Same payload and the same pipe-first reasoning as `handleSubscribe` above. */
   @SubscribeMessage('unsubscribe')
-  handleUnsubscribe(@ConnectedSocket() client: RealtimeSocket, @MessageBody() body: unknown): void {
+  handleUnsubscribe(
+    @ConnectedSocket() client: RealtimeSocket,
+    @MessageBody({ schema: subscribeBodySchema }) body: SubscribeBody,
+  ): void {
     const rooms = client.data.marketRooms;
-    for (const marketId of marketIdsOf(body)) {
+    for (const marketId of body.marketIds) {
       const room = marketChannel(marketId);
       if (!rooms.delete(room)) continue;
       void client.leave(room);
     }
   }
-}
-
-/**
- * The third uuid request boundary (A-M3-17): an upper-case id would join a room no publisher
- * ever writes to, and the socket would sit silent rather than fail. Parsed here rather than
- * with `@MessageBody({ schema })` so the failure is our AppError with the PLAN 7.4 code,
- * carrying the same `details` shape as a REST VALIDATION_ERROR.
- */
-function marketIdsOf(body: unknown): readonly string[] {
-  const parsed = subscribeBodySchema.safeParse(body);
-  if (!parsed.success) {
-    throw new AppError('VALIDATION_ERROR', {
-      message: 'Request validation failed',
-      details: parsed.error.issues.map((issue) => toValidationIssue(issue)),
-    });
-  }
-  return parsed.data.marketIds;
 }

@@ -53,22 +53,37 @@ const aQuote = (over: Partial<QuoteResult> = {}): QuoteResult => ({
   ...over,
 });
 
-/** A buy of 10,000P worth on an open market, signed in and funded: the `ready` row. */
-const anInput = (over: Partial<TradePanelInput> = {}): TradePanelInput => ({
-  market: { id: MARKET_ID, status: 'open', closeAt: CLOSE_AT },
-  inputs: { side: 'buy', outcome: 'YES', mode: 'spend', value: '10000' },
-  quote: aQuote(),
-  quoteError: null,
-  stale: false,
-  accountId: ACCOUNT_ID,
-  sessionPending: false,
-  availableP: 1_000_000n,
-  heldQty: 0,
-  submitting: false,
-  reconfirmFrom: undefined,
-  now: NOW,
-  ...over,
-});
+/**
+ * A buy of 10,000P worth on an open market, signed in and funded: the `ready` row.
+ *
+ * `quotedValue` defaults to whatever value the test put in the field — the settled state, where
+ * the debounce has caught up — so a test that wants the quote to belong to another amount has to
+ * say so, which is exactly the case that must never reach a wire body.
+ */
+const anInput = (over: Partial<TradePanelInput> = {}): TradePanelInput => {
+  const inputs: TradeInputs = over.inputs ?? {
+    side: 'buy',
+    outcome: 'YES',
+    mode: 'spend',
+    value: '10000',
+  };
+  return {
+    market: { id: MARKET_ID, status: 'open', closeAt: CLOSE_AT },
+    inputs,
+    quote: aQuote(),
+    quotedValue: inputs.value,
+    quoteError: null,
+    stale: false,
+    accountId: ACCOUNT_ID,
+    sessionPending: false,
+    availableP: 1_000_000n,
+    heldQty: 0,
+    submitting: false,
+    reconfirmFrom: undefined,
+    now: NOW,
+    ...over,
+  };
+};
 
 /** Selling 100 held contracts: mode is always 'shares' on the sell tab. */
 const aSellInput = (over: Partial<TradePanelInput> = {}): TradePanelInput =>
@@ -407,6 +422,42 @@ describe('tradePanelView', () => {
 
   it('waits while the quote is pending or is another intent’s placeholder', () => {
     expect(tradePanelView(anInput({ quote: undefined }))).toEqual({ kind: 'quoting' });
+  });
+
+  it('never prices the field against a quote asked for another amount', () => {
+    // The quote is keyed on the DEBOUNCED value (PLAN 11.4's 300ms), so for the length of that
+    // window the held answer belongs to an amount the trader has already typed past. Pairing the
+    // two builds a trade nobody saw priced, and both modes fail differently.
+    //
+    // 'shares': the guard comes from the OLD cost and there is no budget to clamp it, so the
+    // server fills the old contract count — 1,000 for ~50,120P with `100` in the field.
+    const shares = anInput({
+      inputs: { side: 'buy', outcome: 'YES', mode: 'shares', value: '100' },
+      quotedValue: '1000',
+      quote: aQuote({ shares: 1000, amountP: '50120', maxPayoutP: '100000' }),
+    });
+    expect(tradePanelView(shares)).toEqual({ kind: 'quoting' });
+
+    // 'spend': the freshly typed budget clamps `maxCostP` below the old quote's own `amountP`,
+    // which trade.service.ts answers with PRICE_MOVED — for a price that never moved.
+    const spend = anInput({
+      inputs: { side: 'buy', outcome: 'YES', mode: 'spend', value: '1000' },
+      quotedValue: '10000',
+      quote: aQuote({ shares: 199, amountP: '9987' }),
+    });
+    expect(tradePanelView(spend)).toEqual({ kind: 'quoting' });
+
+    // Once the debounce has caught up there is one intent again, and the body carries the guard
+    // the summary discloses: a 1,000P budget on a 998P quote.
+    const settled = anInput({
+      inputs: { side: 'buy', outcome: 'YES', mode: 'spend', value: '1000' },
+      quote: aQuote({ shares: 19, amountP: '998', maxPayoutP: '1900' }),
+    });
+    expect(tradePanelView(settled)).toMatchObject({
+      kind: 'ready',
+      summary: { amountP: 998n, guardP: 1000n },
+      body: { shares: 19, maxCostP: '1000' },
+    });
   });
 
   it('says a spend below one contract is too small, before any session check', () => {

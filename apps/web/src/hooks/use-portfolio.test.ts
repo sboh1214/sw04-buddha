@@ -1,4 +1,5 @@
 import {
+  MARKET_STATUSES,
   MAX_P_AMOUNT,
   MINUS_SIGN,
   POSITION_QTY_MAX,
@@ -18,6 +19,7 @@ import {
   markPriceP,
   ordersInfiniteQueryOptions,
   portfolioTotals,
+  positionListStatusFor,
   positionValueP,
   positionsKey,
   positionsQueryOptions,
@@ -217,6 +219,40 @@ describe('portfolioTotals', () => {
     expect(totals.valueP).toBe(212_600_881_053n);
     expect(totals.unrealizedPnlP).toBe(-9_999_787_399_118_947n);
     expect(BigInt(Number(totals.unrealizedPnlP))).not.toBe(totals.unrealizedPnlP);
+  });
+});
+
+describe('positionListStatusFor', () => {
+  it('sends a finished market to the settled list and everything else to the open one', () => {
+    // The bug this pins is a false statement on screen: `GET /me/positions?status=open`
+    // filters on `settled = false`, and the void sets that flag on every holder row in the
+    // same transaction that writes `status: 'voided'`. A detail screen that only ever asked
+    // for 'open' therefore answered "아직 이 시장에 참여하지 않았습니다" to an account that had
+    // just been refunded — while /portfolio listed the very same row under 정산 이력.
+    expect(positionListStatusFor('voided')).toBe('settled');
+    expect(positionListStatusFor('settled')).toBe('settled');
+    // Trading has stopped in these two and nothing has been paid out yet: the rows are still
+    // open holdings, and asking for the settled list would empty the card the other way.
+    expect(positionListStatusFor('closed')).toBe('open');
+    expect(positionListStatusFor('resolving')).toBe('open');
+    expect(positionListStatusFor('open')).toBe('open');
+    // A draft never reaches the detail route (the API 404s it), but the prop is typed over
+    // every status, so it must still answer with the list that exists.
+    expect(positionListStatusFor('draft')).toBe('open');
+  });
+
+  it('classifies every status, so a new one cannot fall to a list by default', () => {
+    // Pinned as the whole table rather than as a predicate: a status added to MARKET_STATUSES
+    // fails this with the pair it was silently given, which is the decision that has to be
+    // made deliberately — the wrong default is invisible on screen, it just empties the card.
+    expect(MARKET_STATUSES.map((status) => [status, positionListStatusFor(status)])).toEqual([
+      ['draft', 'open'],
+      ['open', 'open'],
+      ['closed', 'open'],
+      ['resolving', 'open'],
+      ['settled', 'settled'],
+      ['voided', 'settled'],
+    ]);
   });
 });
 

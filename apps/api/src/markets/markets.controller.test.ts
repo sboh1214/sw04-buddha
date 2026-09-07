@@ -657,6 +657,64 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     expect(oneWeek.points.length).toBeLessThanOrEqual(TICKS_MAX_POINTS);
   });
 
+  it('clamps a one-sided window down to `to`, and never calls a bucketed answer truncated', async () => {
+    // `ticksQuerySchema` orders the bounds only when BOTH are given, so with one bound the
+    // service is what has to keep the window ordered — and it must do it by moving the
+    // DEFAULTED end, never the caller's.
+    const open = await market();
+    const tickAt = open.openAt!.getTime() - HOUR_MS;
+    await t.db.insert(schema.priceTicks).values({
+      marketId: open.id,
+      ts: new Date(tickAt),
+      pYesBp: 4_000,
+      trigger: 'open' as const,
+    });
+
+    // A client paging backwards asks for history older than the market itself. Both
+    // resolutions must answer the window that was asked for, and answer it empty: `to` used
+    // to be pulled UP to the defaulted `from`, so the grid pinned a boundary at the market's
+    // opening and served a point NEWER than the requested `to` while `raw` — which filters on
+    // the untouched `query.to` — served nothing for the very same request.
+    const before = iso(open.openAt!.getTime() - DAY_MS);
+    for (const resolution of ['1h', 'raw'] as const) {
+      const older = await series(
+        `/api/v1/markets/${open.id}/ticks?to=${before}&resolution=${resolution}`,
+      );
+      expect({ resolution, from: older.from, to: older.to, points: older.points }).toEqual({
+        resolution,
+        from: before,
+        to: before,
+        points: [],
+      });
+    }
+
+    // The mirror case: a clock running days fast sends a `from` past the server's own `now`
+    // with no `to`. The window collapses onto the DB clock, not onto the future instant, so
+    // the series is the probability in force now rather than a point stamped in the future.
+    const ahead = Date.now() + 2 * DAY_MS;
+    const skewed = await series(
+      `/api/v1/markets/${open.id}/ticks?from=${iso(ahead)}&resolution=1h`,
+    );
+    expect(Date.parse(skewed.to)).toBeLessThan(ahead);
+    expect(skewed.from).toBe(skewed.to);
+    expect(skewed.points).toEqual([{ ts: skewed.to, pYesBp: 4_000, trigger: 'open' }]);
+
+    // A window no ladder entry can cover (about ten years) is trimmed at the old end, and the
+    // narrowed `from` is the entire report of it. `truncated` stays false: it is the raw
+    // path's probed claim that points older than the served ones were left out INSIDE the
+    // window, and a grid cannot hit it — its first point is the trimmed edge itself, carrying
+    // the value in force there. Asserting it from the trim alone claimed dropped history for
+    // a market whose whole life is inside the served window.
+    const wide = await series(
+      `/api/v1/markets/${open.id}/ticks?from=${iso(0)}&to=${iso(tickAt)}&resolution=1h`,
+    );
+    expect(wide).toMatchObject({ bucketSeconds: 604_800, truncated: false, to: iso(tickAt) });
+    expect(Date.parse(wide.to) - Date.parse(wide.from)).toBe(
+      604_800 * 1_000 * (TICKS_MAX_POINTS - 2),
+    );
+    expect(wide.points).toEqual([{ ts: iso(tickAt), pYesBp: 4_000, trigger: 'open' }]);
+  });
+
   it('samples the card sparkline on a fixed hourly grid, carrying values forward', async () => {
     // Ticks sit MID-bucket (…30m) so a slow test or a little clock skew cannot straddle a grid
     // edge and move a sample into the neighbouring bucket.

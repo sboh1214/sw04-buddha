@@ -243,6 +243,16 @@ export interface TradePanelInput {
   inputs: TradeInputs;
   /** `undefined` while the quote is pending AND while it is placeholder data (design 4.1). */
   quote: QuoteResult | undefined;
+  /**
+   * The amount `quote` was ASKED for: the debounced value the quote's key carries, which the
+   * field runs up to `QUOTE_DEBOUNCE_MS` ahead of. The pair is checked here rather than assumed
+   * by the caller because both the summary's guard and the wire body read `inputs.value` as the
+   * trader's budget, so pricing the typed value against an answer for another one sends a trade
+   * nobody saw: in mode 'shares' the OLD contract count with a guard from the old cost, and in
+   * mode 'spend' a `maxCostP` clamped under the quote's own `amountP`, which the API answers
+   * with PRICE_MOVED for a price that never moved.
+   */
+  quotedValue: string;
   quoteError: unknown;
   /** `market.dataUpdatedAt > quote.dataUpdatedAt`: the price moved under the shown numbers. */
   stale: boolean;
@@ -287,7 +297,10 @@ export function tradePanelView(input: TradePanelInput): TradePanelView {
   if (input.quoteError !== undefined && input.quoteError !== null) {
     return { kind: 'quote_failed', message: quoteErrorMessage(input.quoteError) };
   }
-  if (quote === undefined) return { kind: 'quoting' };
+  // An answer for an amount the field has typed past prices nothing on this screen: `quoting`
+  // is the only phase in which the summary, the disclosed guard and the wire body below are
+  // one intent, so the debounced value catching up is what re-opens the button.
+  if (quote === undefined || input.quotedValue !== inputs.value) return { kind: 'quoting' };
   if (quote.shares < TRADE_MIN_SHARES) return { kind: 'too_small' };
 
   const summary = tradeSummary(inputs, quote, input.stale);

@@ -7,6 +7,7 @@ import {
   type Outcome,
   PRICE_MAX,
   PRICE_MIN,
+  REALTIME_SUBSCRIBE_MAX,
   SPARKLINE_MAX_POINTS,
   type UserBalanceEvent,
   type UserPositionEvent,
@@ -29,6 +30,7 @@ import {
   applyStatus,
   applyTick,
   applyToPages,
+  chunkIds,
   joinMarket,
   joinMarketPages,
   statusRank,
@@ -456,5 +458,53 @@ describe('Throttle', () => {
     expect(throttle.take(ID, 0)).toBe(true);
     expect(throttle.take(OTHER_ID, 0)).toBe(true);
     expect(throttle.take(OTHER_ID, 500)).toBe(false);
+  });
+
+  it('reports what a refused key must wait, which is what buys the trailing edge', () => {
+    // A leading-edge-only throttle DROPS the last event of a burst, and nothing else writes
+    // `['market-fills', id]` for somebody ELSE's trade — the trader's own fill comes from the
+    // HTTP answer, and the query has no refetchInterval. So the provider sleeps exactly this
+    // long and takes again: a burst costs one late refetch instead of a missing row.
+    const throttle = new Throttle(1000);
+    expect(throttle.retryDelay(ID, 0)).toBe(0);
+    expect(throttle.take(ID, 0)).toBe(true);
+    expect(throttle.take(ID, 400)).toBe(false);
+    expect(throttle.retryDelay(ID, 400)).toBe(600);
+    expect(throttle.take(ID, 1000)).toBe(true);
+    // Never negative, whatever the caller's clock does past the end of a window.
+    expect(throttle.retryDelay(ID, 2500)).toBe(0);
+  });
+});
+
+describe('chunkIds', () => {
+  /**
+   * The two realtime caps differ on purpose — 100 ids per MESSAGE, 200 rooms per SOCKET — and
+   * the gateway refuses an over-long message whole, joining no room at all. The home grid
+   * crosses 100 rooms after five 더 보기, so a single frame left the tab with no live card at
+   * all rather than with the tail missing.
+   */
+  it('splits a room set larger than one message into full messages, in order', () => {
+    const ids = Array.from({ length: 120 }, (_value, index) => `market-${String(index)}`);
+    const chunks = chunkIds(ids, REALTIME_SUBSCRIBE_MAX);
+    expect(chunks.map((chunk) => chunk.length)).toEqual([REALTIME_SUBSCRIBE_MAX, 20]);
+    // Every id is sent exactly once and in the order it was held: a dropped or repeated id
+    // would leave the registry and `socket.data.marketRooms` disagreeing about a room.
+    expect(chunks.flat()).toEqual(ids);
+  });
+
+  it('sends one message for a set that fits and nothing at all for an empty one', () => {
+    expect(chunkIds([ID, OTHER_ID], REALTIME_SUBSCRIBE_MAX)).toEqual([[ID, OTHER_ID]]);
+    expect(chunkIds([], REALTIME_SUBSCRIBE_MAX)).toEqual([]);
+  });
+
+  it('never leaves an empty trailing message when the set divides exactly', () => {
+    // An empty `marketIds` fails `subscribeBodySchema`'s `.min(1)`, so a trailing empty slice
+    // would turn a perfectly sized set into a VALIDATION_ERROR on `exception`.
+    expect(chunkIds([ID, OTHER_ID, THIRD_ID], 3)).toEqual([[ID, OTHER_ID, THIRD_ID]]);
+    expect(chunkIds([ID, OTHER_ID], 1)).toEqual([[ID], [OTHER_ID]]);
+  });
+
+  it('never spins on a non-positive size', () => {
+    expect(chunkIds([ID, OTHER_ID], 0)).toEqual([[ID], [OTHER_ID]]);
   });
 });

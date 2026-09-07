@@ -93,6 +93,13 @@ import {
 /** 1,000 / 5,000 / 10,000P — the spend-mode shortcuts; they go through the same debounce. */
 const AMOUNT_CHIPS_P = [1_000n, 5_000n, 10_000n] as const;
 
+/**
+ * The 마감 gate's clock, at `CountdownBadge`'s own cadence (`countdown-badge.tsx` TICK_MS): the
+ * badge above this panel and the panel itself must flip within the same second, or the header
+ * says 마감됨 over live 예/아니오 buttons.
+ */
+const CLOCK_TICK_MS = 1000;
+
 /** An unpriced row. The repo already writes an em dash inline for "nothing here yet". */
 const DASH = '—';
 
@@ -140,33 +147,60 @@ function useTradePanel(market: Market): TradePanelState {
   const positions = usePositions('open');
   // A second observer on the `['market', id]` entry the screen around this panel already reads:
   // it costs no request (one key, one query function) and `dataUpdatedAt` is the only thing this
-  // panel wants from it — both the staleness signal and the clock below.
+  // panel wants from it — the staleness signal, and the floor under the 마감 clock below.
   const marketQuery = useMarket(market.id);
   const marketUpdatedAt = marketQuery.dataUpdatedAt;
 
   /*
-   * The clock the 마감 gate reads. Deliberately NOT `Date.now()`: this client component also
-   * renders on the server, where a browser-read instant is both a hydration mismatch on the page
-   * AC 2 measures and a `react-hooks/purity` error. `dataUpdatedAt` is the instant the SERVER
-   * last answered for this market — it rides the dehydrated payload, so the SSR render and its
-   * hydration agree byte for byte, and it moves forward on every refetch and every `market:tick`
-   * the socket writes into the cache.
+   * The clock the 마감 gate reads, and it has to TICK. `dataUpdatedAt` — the instant the SERVER
+   * last answered for this market — only moves when something WRITES the `['market', id]` cache,
+   * and M4 ships no close job (that is M5), so on a market nobody is trading it stays pinned at
+   * the load instant: the header's `CountdownBadge` runs its own 1s interval and would say 마감됨
+   * over a panel still offering 예/아니오 and quoting a market that can no longer trade.
    *
-   * It is a lower bound on the real clock, which is the safe direction: the panel is never EARLY
-   * in calling a market 마감, only late, and the last word belongs to `assertTradable` on the
-   * database clock anyway (A-M3-16) — a late refusal arrives as MARKET_CLOSED and renders through
-   * the same string.
+   * `Date.now()` is still never read during a render: this client component also renders on the
+   * server, where a browser-read instant is both a hydration mismatch on the page AC 2 measures
+   * and a `react-hooks/purity` error. The first render answers `dataUpdatedAt` alone — it rides
+   * the dehydrated payload, so the SSR render and its hydration agree byte for byte — and the
+   * interval takes over from the first browser frame, exactly as the badge does.
+   *
+   * The server's instant stays the FLOOR, so a browser clock running behind it cannot re-open a
+   * market the cache already describes past its close time. The last word belongs to
+   * `assertTradable` on the database clock anyway (A-M3-16) — a refusal arrives as MARKET_CLOSED
+   * and renders through the same string.
    */
-  const now = marketUpdatedAt;
+  const [clock, setClock] = useState<number | undefined>(undefined);
+  const now = clock === undefined ? marketUpdatedAt : Math.max(marketUpdatedAt, clock);
+  const tradable = isTradable(market, now);
+  useEffect(() => {
+    // Nothing left to watch once the market cannot be traded: the panel has replaced itself with
+    // the 마감 notice, and only a cache write can undo that — which moves `marketUpdatedAt` on
+    // its own.
+    if (!tradable) return;
+    // `setClock` is called from a timer callback and never synchronously in the effect body: the
+    // second form is what `react-hooks/set-state-in-effect` refuses. The zero-delay timeout is
+    // what corrects a load instant that is already old on the first browser frame rather than up
+    // to a second later.
+    const tick = () => {
+      setClock(Date.now());
+    };
+    const first = setTimeout(tick, 0);
+    const timer = setInterval(tick, CLOCK_TICK_MS);
+    return () => {
+      clearTimeout(first);
+      clearInterval(timer);
+    };
+  }, [tradable]);
 
   // PLAN 11.4's 300ms, on the typed amount ONLY. 매수/매도, 예/아니오 and the mode reach the
   // quote key undebounced, so a discrete tap re-prices instantly (design 4.2).
   const settledValue = useDebouncedValue(inputs.value, QUOTE_DEBOUNCE_MS);
-  const quoteBody = quoteRequest(
-    market.id,
-    { ...inputs, value: settledValue },
-    isTradable(market, now),
-  );
+  // The ONE intent everything below describes. The field runs up to `QUOTE_DEBOUNCE_MS` ahead of
+  // this value, and the two are never mixed: `tradePanelView` is handed `quotedValue` and holds
+  // the panel in `quoting` — disabled, dimmed — until they agree again, so the quote, the
+  // summary, the disclosed slippage guard and the wire body all price the same amount.
+  const quoteInputs = { ...inputs, value: settledValue };
+  const quoteBody = quoteRequest(market.id, quoteInputs, tradable);
   const quoteQuery = useQuote(quoteBody);
   // The whole race fix in one line (design 4.1): every input is in the query key, so a late
   // answer lands on its own entry, and placeholder data — which belongs to an intent the trader
@@ -198,6 +232,7 @@ function useTradePanel(market: Market): TradePanelState {
     market,
     inputs,
     quote,
+    quotedValue: settledValue,
     quoteError: quoteQuery.error,
     stale,
     accountId,
@@ -218,30 +253,49 @@ function useTradePanel(market: Market): TradePanelState {
    *
    * Suppressed while a submit is in flight or a re-confirm is pending, so the guard that is sent
    * is the guard the user read. `marketUpdatedAt` is a dependency rather than a derived boolean:
-   * a run the throttle turns away must be retried by the NEXT tick, and a boolean that stays true
-   * would never re-fire the effect.
+   * every tick has to re-enter this effect, and a boolean that stays true would never re-fire it.
+   *
+   * A run the throttle turns away is ARMED, not dropped. The last tick of a burst is the one that
+   * matters and there is no later event to retry on — once the market goes quiet nothing changes
+   * a dependency again — so the invalidation runs itself when the window expires. The cleanup
+   * cancels it, which is also how a further tick coalesces into the same deadline instead of
+   * queueing a second re-quote.
    */
   const lastRequoteAt = useRef(0);
   useEffect(() => {
     if (submitting || reconfirmFrom !== undefined) return;
     if (quoteUpdatedAt === 0 || marketUpdatedAt <= quoteUpdatedAt) return;
-    const at = Date.now();
-    if (at - lastRequoteAt.current < REQUOTE_THROTTLE_MS) return;
-    lastRequoteAt.current = at;
-    void queryClient.invalidateQueries({
-      queryKey: quoteMarketKey(market.id),
-      refetchType: 'active',
-    });
+    const requote = () => {
+      lastRequoteAt.current = Date.now();
+      void queryClient.invalidateQueries({
+        queryKey: quoteMarketKey(market.id),
+        refetchType: 'active',
+      });
+    };
+    const wait = REQUOTE_THROTTLE_MS - (Date.now() - lastRequoteAt.current);
+    if (wait <= 0) {
+      requote();
+      return;
+    }
+    const timer = setTimeout(requote, wait);
+    return () => {
+      clearTimeout(timer);
+    };
   }, [marketUpdatedAt, quoteUpdatedAt, submitting, reconfirmFrom, queryClient, market.id]);
 
   // While a new quote is in flight the previous numbers stay on screen instead of flashing a
-  // skeleton — the same summary the machine builds, from the placeholder the query still holds,
-  // marked stale so it is dimmed and can never be pressed on.
+  // skeleton — the same summary the machine builds, from the answer the query still holds,
+  // marked stale so it is dimmed and can never be pressed on (`tradeCta` of `quoting` is
+  // disabled). Built from `quoteInputs`, never from the field: inside the debounce window that
+  // pair is exactly the intent the held answer was asked for. Once the window has fired the held
+  // answer is `keepPreviousData`'s placeholder from the amount before it, so these rows are an
+  // approximation of numbers already on screen — which is the only reason they may be shown at
+  // all, and why nothing here can become a wire body.
   const summary =
     'summary' in view
       ? view.summary
       : view.kind === 'quoting' && quoteQuery.data !== undefined
-        ? tradeSummary(inputs, quoteQuery.data, true)
+        ? tradeSummary(quoteInputs, quoteQuery.data, true)
         : undefined;
 
   // Steps 1-2 of the machine run before anything else, so these two kinds are exactly "this
@@ -284,6 +338,8 @@ function useTradePanel(market: Market): TradePanelState {
     }
     // A pending re-confirm holds the machine out of `ready` (step 10), so the body it never built
     // is built here — by the same builder, on the fresh quote the summary is already showing.
+    // Reaching `reconfirm` at all means the machine paired that quote with the field's own value
+    // (step 6), so these two arguments cannot be two different intents.
     if (view.kind !== 'reconfirm' || quote === undefined || accountId === undefined) return;
     const body = tradeRequest({ marketId: market.id, inputs, quote, accountId });
     if (body !== undefined) void send(body, view.summary.amountP);
@@ -482,7 +538,12 @@ function TradePanelView({ panel, testIdPrefix: prefix, amountRef }: TradePanelVi
   }
 
   const errorText = fieldError(view);
-  const inputDisabled = view.kind === 'no_position' || panel.submitting;
+  // ONLY a submit in flight locks the field. `no_position` used to be here too, and it is a
+  // phase that can only be reached from a field that already holds a digit (step 3 answers
+  // `empty` first), so it trapped that digit: on the 매도 tab holding nothing there is no chip,
+  // no 최대 and no other control that writes the value, and a disabled input cannot be
+  // backspaced either. The refusal is the `Field.ErrorText` below plus the disabled button.
+  const inputDisabled = panel.submitting;
   const unit = inputs.mode === 'spend' ? 'P' : copy.tradeUnitContracts;
   const maxValue = maxValueFor(panel);
   // While the summary is unpriced the row set still follows the tab, so nothing jumps when the
@@ -502,8 +563,11 @@ function TradePanelView({ panel, testIdPrefix: prefix, amountRef }: TradePanelVi
     <Stack gap="4">
       {/* 예/아니오. The colour is never the only signal (PLAN 11.2): each label is that side's
           own price, which is also the comparison this panel exists to make. `subtle`, not
-          `outline`, so the unselected side stays a filled affordance at AA contrast. */}
-      <HStack gap="2">
+          `outline`, so the unselected side stays a filled affordance at AA contrast.
+          Two `aria-pressed` buttons are a pair only visually, so the row is a named group —
+          otherwise a screen reader cannot tell it from the 매수/매도 tabs or the 입력 방식
+          toggle, which are three two-option controls stacked on one card. */}
+      <HStack gap="2" role="group" aria-label={copy.tradeOutcomeLabel}>
         <Button
           flex="1"
           colorPalette="yes"
@@ -533,10 +597,15 @@ function TradePanelView({ panel, testIdPrefix: prefix, amountRef }: TradePanelVi
       </HStack>
 
       {/* Hidden on 매도, not disabled: `quoteBodySchema` refuses spend + sell, so this control
-          could never work there, and an absent control beats a dead one. */}
+          could never work there, and an absent control beats a dead one.
+          The `aria-label` is not optional: zag's radio-group always emits `role="radiogroup"`
+          with an `aria-labelledby` pointing at the id a `SegmentGroup.Label` would carry, and
+          Chakra ships no such part — so without it the group has no accessible name at all
+          (the `chartRangeLabel` precedent on the chart's own range toggle). */}
       {inputs.side === 'buy' && (
         <SegmentGroup.Root
           size="sm"
+          aria-label={copy.tradeModeLabel}
           value={inputs.mode}
           disabled={panel.submitting}
           onValueChange={(details) => {
@@ -611,40 +680,55 @@ function TradePanelView({ panel, testIdPrefix: prefix, amountRef }: TradePanelVi
       </HStack>
 
       {/* Always on screen (PLAN 11.1-2), including the slippage guard as an ABSOLUTE amount —
-          there is no hidden tolerance and no slider. Dimmed while the numbers belong to the
-          previous intent or the market has moved under them; a fade, never a colour flash, and
-          instant for a reader who asked for less motion. */}
+          there is no hidden tolerance and no slider. The VALUES are dimmed while they belong to
+          the previous intent or the market has moved under them; a fade, never a colour flash,
+          and instant for a reader who asked for less motion.
+          The dimming stops at the values on purpose. `DataList` colours its labels `fg.muted`
+          and `size="sm"` renders them at 12px, so 60% of that over the card is 2.90:1 — under
+          AA, on the six words that say which number is which, for the whole debounce plus round
+          trip of every keystroke. 60% of a value's near-black still clears 4.5:1, and what is
+          stale is the numbers anyway. */}
       <Skeleton loading={panel.loadingSummary}>
-        <DataList.Root
-          orientation="horizontal"
-          size="sm"
-          opacity={panel.dim ? 0.6 : 1}
-          transition="opacity"
-          _motionReduce={{ transitionDuration: '0ms' }}
-          data-testid={`${prefix}-summary`}
-        >
-          <SummaryRow label={copy.tradeContracts} testId={`${prefix}-summary-shares`}>
+        <DataList.Root orientation="horizontal" size="sm" data-testid={`${prefix}-summary`}>
+          <SummaryRow
+            label={copy.tradeContracts}
+            testId={`${prefix}-summary-shares`}
+            dim={panel.dim}
+          >
             {summary === undefined ? DASH : formatContracts(summary.shares)}
           </SummaryRow>
-          <SummaryRow label={copy.tradeAvgPrice} testId={`${prefix}-summary-avg`}>
+          <SummaryRow label={copy.tradeAvgPrice} testId={`${prefix}-summary-avg`} dim={panel.dim}>
             {summary === undefined ? DASH : formatPricePerContract(summary.priceAvgBp)}
           </SummaryRow>
           {guardKind === 'maxCost' && (
-            <SummaryRow label={copy.tradePayout} testId={`${prefix}-summary-payout`}>
+            <SummaryRow
+              label={copy.tradePayout}
+              testId={`${prefix}-summary-payout`}
+              dim={panel.dim}
+            >
               {summary === undefined ? DASH : formatP(summary.maxPayoutP)}
             </SummaryRow>
           )}
           {guardKind === 'maxCost' && (
-            <SummaryRow label={copy.tradeProfit} testId={`${prefix}-summary-profit`}>
+            <SummaryRow
+              label={copy.tradeProfit}
+              testId={`${prefix}-summary-profit`}
+              dim={panel.dim}
+            >
               {summary === undefined ? DASH : formatP(summary.profitP)}
             </SummaryRow>
           )}
-          <SummaryRow label={copy.tradeAfterProb} testId={`${prefix}-summary-after`}>
+          <SummaryRow
+            label={copy.tradeAfterProb}
+            testId={`${prefix}-summary-after`}
+            dim={panel.dim}
+          >
             {summary === undefined ? DASH : formatBp(summary.priceAfterBp)}
           </SummaryRow>
           <SummaryRow
             label={guardKind === 'maxCost' ? copy.tradeMaxCost : copy.tradeMinProceeds}
             testId={`${prefix}-summary-guard`}
+            dim={panel.dim}
           >
             {summary === undefined ? DASH : formatP(summary.guardP)}
           </SummaryRow>
@@ -710,7 +794,9 @@ function TradePanelView({ panel, testIdPrefix: prefix, amountRef }: TradePanelVi
       }}
       data-testid={`${prefix}-panel`}
     >
-      <Tabs.List>
+      {/* Zag puts `role="tablist"` here and no name with it; the two triggers read 매수/매도 but
+          say nothing about what the pair selects. */}
+      <Tabs.List aria-label={copy.tradeSideLabel}>
         <Tabs.Trigger value="buy" disabled={panel.submitting} data-testid={`${prefix}-side-buy`}>
           {copy.tradeBuy}
         </Tabs.Trigger>
@@ -724,19 +810,28 @@ function TradePanelView({ panel, testIdPrefix: prefix, amountRef }: TradePanelVi
   );
 }
 
+/** The label always reads at full contrast; only the number it names fades (see the row set). */
 function SummaryRow({
   label,
   testId,
+  dim,
   children,
 }: {
   label: string;
   testId: string;
+  dim: boolean;
   children: ReactNode;
 }) {
   return (
     <DataList.Item>
       <DataList.ItemLabel>{label}</DataList.ItemLabel>
-      <DataList.ItemValue fontWeight="medium" data-testid={testId}>
+      <DataList.ItemValue
+        fontWeight="medium"
+        opacity={dim ? 0.6 : 1}
+        transition="opacity"
+        _motionReduce={{ transitionDuration: '0ms' }}
+        data-testid={testId}
+      >
         {children}
       </DataList.ItemValue>
     </DataList.Item>

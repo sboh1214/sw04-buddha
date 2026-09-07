@@ -383,28 +383,42 @@ export class MarketService {
    * `from` looks back past `from`, so the chart's left edge is never empty.
    *
    * The stride is coarsened until the window fits (`tickBucketSeconds`) rather than striped,
-   * so points stay evenly spaced; `bucketSeconds` reports what was served.
+   * so points stay evenly spaced; `bucketSeconds` reports what was served. A bucketed answer
+   * is never `truncated`: its grid spans the whole window it echoes (ADR-0029).
    */
   async listTicks(marketId: string, query: TicksQuery): Promise<PriceSeries> {
     // The row and the DB clock in one statement, as every public sub-resource reads them: the
     // window's open end is `now` as the database sees it and its start defaults to the
     // market's own opening, so no probe query is needed.
     const { market, now } = await this.requirePublicAt(marketId);
-    const from = query.from ? new Date(query.from) : (market.openAt ?? market.createdAt);
-    const to = new Date(Math.max(from.getTime(), query.to ? Date.parse(query.to) : now.getTime()));
+    // Close the window first, then clamp its start DOWN to it. `ticksQuerySchema` only orders
+    // the two bounds when both are given, so a defaulted one can still invert the window — a
+    // `to` older than the market's opening (a client paging backwards through history), or a
+    // `from` from a clock running fast against an omitted `to`. Restoring the invariant by
+    // moving `to` UP instead would answer a window NEWER than the one asked for: the grid
+    // would pin a boundary at the opening and serve a point after the caller's `to`, while
+    // `raw` — which filters on the untouched `query.to` — answered nothing for the same
+    // request. Clamping down keeps both resolutions describing the same window.
+    const to = new Date(query.to ? Date.parse(query.to) : now.getTime());
+    const requestedFrom = query.from ? new Date(query.from) : (market.openAt ?? market.createdAt);
+    const from = new Date(Math.min(requestedFrom.getTime(), to.getTime()));
     const bucketSeconds = tickBucketSeconds(query.resolution, to.getTime() - from.getTime());
     if (bucketSeconds === 0) return this.rawSeries(marketId, query, from, to);
     // Even the coarsest stride cannot cover a window this wide (about ten years). Trim the old
-    // end rather than overrun the documented cap.
+    // end rather than overrun the documented cap; the narrowed `from` in the response is what
+    // says so. `truncated` stays false and keeps the raw path's verified meaning — "points
+    // older than the served ones exist INSIDE the served window but were left out" — which no
+    // bucketed answer can hit: the boundary at `start` looks back past `start`, so the oldest
+    // point returned is always the window's own left edge. Reporting the trim here instead
+    // would assert dropped history without ever probing for it.
     const maxSpanMs = bucketSeconds * 1_000 * (TICKS_MAX_POINTS - 2);
-    const truncated = to.getTime() - from.getTime() > maxSpanMs;
-    const start = truncated ? new Date(to.getTime() - maxSpanMs) : from;
+    const start = new Date(Math.max(from.getTime(), to.getTime() - maxSpanMs));
     return {
       resolution: query.resolution,
       bucketSeconds,
       from: start.toISOString(),
       to: to.toISOString(),
-      truncated,
+      truncated: false,
       points: await this.sampleTicks(marketId, start, to, bucketSeconds),
     };
   }
