@@ -255,7 +255,10 @@ export class MarketGateway
           this.logger.warn(`handshake session lookup failed, retrying: ${String(error)}`);
           continue;
         }
-        this.logger.warn(`handshake session lookup failed, admitting anonymous: ${String(error)}`);
+        // `error`, not `warn`: every socket that reaches here presented a session cookie, so
+        // this line means a signed-in account is about to stop being told about its own money
+        // for the life of this connection. It is the only record that it happened.
+        this.logger.error(`handshake session lookup failed, admitting anonymous: ${String(error)}`);
       }
     }
     next();

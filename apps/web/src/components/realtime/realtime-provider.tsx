@@ -49,6 +49,7 @@ import {
   applyTick,
   applyToPages,
   chunkIds,
+  tickRestartsMarket,
   wroteAnOrder,
 } from '@/lib/market-live';
 import { restartQueries } from '@/lib/query-client';
@@ -88,6 +89,17 @@ const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000').rep
 
 /** At most one fills refetch per market per second — a busy market publishes a fill per trade. */
 const FILLS_INVALIDATE_MS = 1_000;
+
+/**
+ * At most one first-fetch restart per market per second (`tickRestartsMarket`).
+ *
+ * LEADING EDGE ONLY, unlike `refreshFills` below — do NOT copy its trailing timer in here. A
+ * refused window loses nothing on this path: the request this declines to restart is still
+ * running, and the moment any answer lands the row exists and every later tick is a free cache
+ * write. Fills needs the trailing edge because `['market-fills', id]` has no other writer for
+ * somebody else's trade, so a dropped invalidation there leaves 체결 내역 a row short.
+ */
+const MARKET_RESTART_MS = 1_000;
 
 /** The public caches a reconnect re-reads; any of them may have moved during the gap. */
 const SNAPSHOT_KEYS = [MARKET_KEY, MARKETS_KEY, TICKS_KEY, MARKET_FILLS_KEY] as const;
@@ -264,9 +276,9 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     // so a rebuilt socket starts from nothing seen and nothing spent.
     const balanceOrder = new BalanceOrder();
     const fills = new Throttle(FILLS_INVALIDATE_MS);
-    // Bounds the first-fetch rescue in the tick handler below; see its comment for why a
-    // restart per tick can starve the very request it is restarting.
-    const marketRestart = new Throttle(FILLS_INVALIDATE_MS);
+    // Per connection like the two above: a rebuilt socket starts with nothing spent, because the
+    // window bounds requests made ON BEHALF of this connection's events.
+    const marketRestart = new Throttle(MARKET_RESTART_MS);
     /**
      * The fills throttle's trailing-edge timers, one per market, cancelled with the socket.
      * The value is the canceller rather than the handle so nothing here has to name the type
@@ -369,19 +381,23 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     // (REALTIME_ROOMS_MAX): the gateway joins ids until it is reached and refuses the rest,
     // and the envelope names no ids, so there is nothing to drop from the registry.
     //
-    // WHICH rooms survive is not the tail of the screen: `useMarketSocket` joins
-    // `[...new Set(ids)].sort()`, so the 200 the gateway accepts are the lexicographically first
-    // uuids, and `resubscribe()` re-sends that same ordering on every reconnect. The silent
-    // cards are therefore scattered through the grid rather than gathered at the bottom.
+    // WHICH rooms are dropped is deterministic; whether a reload recovers them depends on the
+    // SCREEN, and this comment has stated both halves wrongly before. `useMarketSocket` joins
+    // `[...new Set(ids)].sort()` and the gateway consumes that order, so the rooms it keeps are
+    // the lexicographically first uuids and the dead cards are scattered through the grid rather
+    // than being its tail. On the home grid a reload IS the recovery: `page.tsx` prefetches ONE
+    // page and this app persists no query cache, so a reloaded tab is back to
+    // PAGE_LIMIT_DEFAULT 20 rows, all live, and it takes ten presses of 더 보기 to pass 200
+    // again. On /portfolio it is not: `GET /me/positions` is uncursored by design, so every load
+    // selects the same first 200 markets and the same holdings stay dark.
     //
-    // A reload recovers the HOME GRID and only it: the page prefetches one page and nothing
-    // persists the cache, so the grid comes back at PAGE_LIMIT_DEFAULT 20 rows, under the cap.
-    // It does NOT recover /portfolio, whose position list is uncursored by design — the same
-    // 200+ markets are joined again and the same tail stays dark. So this warning is the only
-    // signal that a screen is over the cap, which is why it is not silenced by capping the
-    // registry client-side: that would send one frame fewer and print nothing, while the same
-    // 200 rooms live and the same tail dies. Reached only past 200 markets on ONE screen — ten
-    // presses of 더 보기 over the seeded page, or an account holding that many open markets.
+    // Two "fixes" are refused here on purpose. Capping the registry client-side buys ZERO live
+    // rooms — the gateway joins ids until the cap wherever the boundary falls, so the same 200
+    // live and the same rows die — while deleting the only signal that a screen is over the cap,
+    // which is this warning. And 더 보기 is not bounded at `REALTIME_ROOMS_MAX`: that mirrors a
+    // limit only the server holds, does nothing for /portfolio, and hides rows — which A-M3-31
+    // already refused for a market whose close time has passed. A stale card is a smaller lie
+    // than a market that is not on the page at all.
     socket.on(REALTIME_EXCEPTION_EVENT, (raw: unknown) => {
       const parsed = errorEnvelopeSchema.safeParse(raw);
       const detail = parsed.success
@@ -405,38 +421,17 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         if (!parsed.success) return;
         const event = parsed.data;
         /**
-         * THE HAZARD, and the fourth place this repo has met it: `applyTick` answers `undefined`
-         * for a cache that holds NO row, so the event was dropped — and /portfolio opens exactly
-         * that entry, one unseeded `['market', id]` per held market (`useQueries`), while
-         * `useMarketSocket` has already joined the room. A first request that took its snapshot
-         * before the trade then landed with the old price and stood: `staleTime` is 30s, the
-         * next tick may be an hour away on a quiet market, and 현재가 · 평가 금액 · 총 평가
-         * 금액 were all marked to it.
+         * The one event this app answers by ASKING, and every reason it is allowed to is stated
+         * on `tickRestartsMarket` (market-live.ts) rather than here — a gate written inside an
+         * effect body is a gate the node runner cannot reach, and its test can only paraphrase it.
+         * What is local to this handler is the wiring: the query's state is read BEFORE the write
+         * (`setQueryData` cannot create an entry when the updater answers `undefined`, so before
+         * and after are the same reading, and before is the clearer one), and the throttle is the
+         * socket's, so a rebuilt connection starts with nothing spent.
          *
-         * Gated on the query being ON that first fetch RIGHT NOW, and each of the three tests
-         * refuses a different way of turning this into 남발:
-         *
-         *  - it EXISTS: the home grid joins every card's room and keeps no `['market', id]`
-         *    entry at all, so without this every tick on the list would run an invalidation
-         *    against a key nothing holds.
-         *  - it holds NO data: `applyTick` answers `undefined` for two reasons, and only "no
-         *    row" may become a request. Restarting on "not superseded" would buy one per late
-         *    or duplicate tick — and systematically, because the trading tab's own
-         *    `applyMarketStats` has already written the answer's `tradeCount`, so that tab's
-         *    echo of its own trade never supersedes. Measured: 10 such ticks cost ZERO requests.
-         *  - it is FETCHING: a query that has ERRORED also holds no data, and restarting it on
-         *    every tick would fight its own retry rule and its own error UI. The hazard is an
-         *    answer on the wire, so that is the state to name.
-         *
-         * Throttled per market on top of that, because the gate alone can starve what it is
-         * rescuing: each restart CANCELS the request in flight, so on a market trading faster
-         * than one round trip the row would never arrive at all. Leading edge only — unlike
-         * `refreshFills`, a refused window needs no trailing retry, because the restart already
-         * on the wire is the thing that ends the hazard.
-         *
-         * `restartQueries`, not a bare invalidation, for the reason `refreshFills` gives right
-         * above: a query that has answered nothing hands back the request already running, which
-         * is precisely the pre-trade one. Self-limiting — once the restarted answer lands the row
+         * `restartQueries`, not a bare invalidation, for the reason `refreshFills` gives above: a
+         * query that has answered nothing hands back the request already running, which is
+         * precisely the pre-trade one. Self-limiting — once the restarted answer lands the row
          * exists and every later tick is a free cache write.
          */
         const row = queryClient
@@ -445,11 +440,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         queryClient.setQueryData<Market>(marketKey(event.marketId), (held) =>
           applyTick(held, event),
         );
-        if (
-          row?.state.data === undefined &&
-          row?.state.fetchStatus === 'fetching' &&
-          marketRestart.take(event.marketId, Date.now())
-        ) {
+        if (tickRestartsMarket(row?.state, marketRestart, event.marketId, Date.now())) {
           void restartQueries(queryClient, marketKey(event.marketId));
         }
         // Every filtered list at once: the same market sits in as many cache entries as the

@@ -22,6 +22,7 @@ import {
   Throttle,
   applyTick,
   applyToPages,
+  tickRestartsMarket,
 } from '@/lib/market-live';
 import { getQueryClient, restartQueries } from '@/lib/query-client';
 import { marketQueryOptions, marketsInfiniteQueryOptions } from './use-markets';
@@ -295,19 +296,16 @@ describe('the live list', () => {
 });
 
 /**
- * The `market:tick` handler's first two lines, copied from realtime-provider.tsx so the GATE is
- * what is under test rather than a paraphrase of it. Everything it touches is exported.
+ * The `market:tick` handler's market-row half, wired exactly as realtime-provider.tsx wires it:
+ * the query's state read BEFORE the write, the REAL `tickRestartsMarket` gate, and the socket's
+ * own throttle. Only the composition is restated here; every rule it applies is the export's.
  */
 function onTick(queryClient: QueryClient, event: MarketTickEvent, restart = new Throttle(1_000)) {
   const row = queryClient
     .getQueryCache()
     .find<Market>({ queryKey: marketKey(event.marketId), exact: true });
   queryClient.setQueryData<Market>(marketKey(event.marketId), (held) => applyTick(held, event));
-  if (
-    row?.state.data === undefined &&
-    row?.state.fetchStatus === 'fetching' &&
-    restart.take(event.marketId, Date.now())
-  ) {
+  if (tickRestartsMarket(row?.state, restart, event.marketId, Date.now())) {
     void restartQueries(queryClient, marketKey(event.marketId));
   }
 }

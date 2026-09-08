@@ -235,6 +235,15 @@ export function portfolioTotals(positions: readonly PositionMath[] = []): Portfo
  * market settles or is voided (`positions.settled`, `positionListStatusFor`), carrying its
  * accumulated `realizedPnlP` with it, so it is never in both and this cannot double count.
  *
+ * "Never in both" is an invariant the SOCKET has to keep too, and it did not. A void publishes
+ * `user:position` with `settled: true`, and `applyPositionEvent` used to write that flag back
+ * into `['positions', 'open']` — the list the row had just LEFT — so a market-detail tab, which
+ * mounts only the open list, kept the holding in 보유 포지션 while /portfolio fetched the same
+ * row into 정산 이력, and this sum printed 500P for one 250P row. The write refreshed
+ * `dataUpdatedAt` as well, so the poisoned list sat inside `staleTime` and the next mount did not
+ * correct it. The reducer now answers `refetch` when the flag MOVES (market-live.ts), which is
+ * what makes the sentence above true rather than merely intended.
+ *
  * The two other totals are open-only and stay that way: settlement writes no price, so a
  * settled row's `marketLastPrice` is the last price something TRADED at rather than the 100/0
  * it resolved to, and marking those rows to it would be fiction.
@@ -257,8 +266,11 @@ export function realizedPnlAcross(...totals: readonly PortfolioTotals[]): bigint
  *
  * A status that would move the row to the OTHER list is refused outright. Membership is the
  * server's `positions.settled` flag (`positionListStatusFor`), and a void or a settlement
- * publishes its own `user:position` — which restarts BOTH lists — so the terminal case is
- * already delivered and needs no help here. Taking it anyway would draw an open holding badged
+ * publishes its own `user:position` that `applyPositionEvent` answers with `refetch` PRECISELY
+ * because the flag moved — so both lists are re-asked and the terminal case is already delivered,
+ * with no help needed here. That is a recent guarantee rather than an old one: while the reducer
+ * wrote the flag in place, this sentence was a promise nothing kept, and the refusal below was
+ * resting on it. Taking it anyway would draw an open holding badged
  * 무효 while 평가 금액 and 총 평가 금액 still value the row at the last traded price, which is
  * the fiction `positionValueP` and 정산 이력 are both documented never to print. It is the same
  * rule `wroteAnOrder` (market-live.ts) states from the other side: a terminal transition is the

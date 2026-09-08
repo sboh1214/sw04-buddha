@@ -119,6 +119,52 @@ export function applyTick<T extends LiveMarket>(
 }
 
 /**
+ * Whether a `market:tick` may become a REQUEST for `['market', id]` — the one place this app
+ * answers an event by asking, and the whole of the decision so the handler holds none of it.
+ *
+ * THE HAZARD: /portfolio opens one UNSEEDED `['market', id]` per held market (`useQueries`,
+ * portfolio.tsx) and `useMarketSocket` has already joined every one of those rooms, so a tick can
+ * arrive while the opening GET is on the wire. `applyTick` above answers `undefined` for a cache
+ * with no row — it will not invent one — and the request, whose snapshot predates the trade, then
+ * lands with the old price and STANDS: `staleTime` is 30s, the next tick on a quiet market may be
+ * an hour away, and `markToLiveMarket` (use-portfolio.ts) gives that row precedence, so 현재가 ·
+ * 평가 금액 · 총 평가 금액 are all marked to a price the market has left. The detail screen never
+ * meets this, because `seedMarketDetail` fills the entry before the client renders.
+ *
+ * Four tests, each refusing a different way of turning an event into a request (PLAN 11.5's
+ * "refetch 남발 금지"):
+ *
+ *  - the entry EXISTS: the home grid joins every card's room while keeping no `['market', id]`
+ *    entry at all — it reads `['markets', filters]` — so without this every tick on the grid
+ *    would invalidate a key nothing holds.
+ *  - it holds NO data: `applyTick` answers `undefined` for TWO reasons and only "no row" may
+ *    become a request. Restarting on "not superseded" would buy one per late or duplicate tick,
+ *    and systematically: the trading tab's own `applyMarketStats` has already written the
+ *    answer's `tradeCount`, so that tab never supersedes its own echo. Measured at ZERO requests
+ *    for ten such ticks.
+ *  - it is FETCHING: an ERRORED query holds no data either, and restarting it per tick would
+ *    fight both the retry rule and the error UI. The hazard is an answer ON THE WIRE.
+ *  - the WINDOW is free, and this bound is on the FIX rather than on the bug. The three tests
+ *    above stay true for as long as the row is absent, and `restartQueries` CANCELS the request
+ *    in flight — so a market ticking faster than its own request answers restarts it once per
+ *    tick and never settles. Measured: ten ticks cost eleven requests unthrottled, two throttled.
+ *
+ * `throttle.take` is deliberately LAST: it is a short circuit, so a tick the cache could apply
+ * never spends a market's window and cannot block a real race a moment later.
+ */
+export function tickRestartsMarket(
+  state: { data: unknown; fetchStatus: string } | undefined,
+  throttle: Throttle,
+  marketId: string,
+  now: number,
+): boolean {
+  if (state === undefined) return false;
+  if (state.data !== undefined) return false;
+  if (state.fetchStatus !== 'fetching') return false;
+  return throttle.take(marketId, now);
+}
+
+/**
  * `market:status` — rank order. The result is REPLACED, not merged, so a void clears the
  * result an earlier resolve proposed; the dispute deadline follows it, and only on a row that
  * already has that field.
