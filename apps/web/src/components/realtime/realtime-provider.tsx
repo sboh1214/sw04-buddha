@@ -276,26 +276,26 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
      * ("refetch 남발 금지"); safe against an event landing mid-refetch, because the
      * `structuralSharing` join registered in query-client.ts keeps every market write monotone.
      *
-     * The fills key alone cancels first, and the asymmetry is the point rather than an
-     * oversight. A bare invalidation is swallowed whole by a query still on its FIRST fetch
-     * (query-core hands back the running request), and this is the ONE snapshot key nothing
-     * else writes: the market and the lists are seeded and then patched by `applyTick` on every
-     * event, the series keeps its right edge through `appendTick`, and the private three are
-     * re-read by `SessionCacheGuard`'s own reset whenever they can be pending here — while
-     * `['market-fills', id]` is never seeded, carries no `refetchInterval`, and has no reducer.
-     * Losing it HERE is the worst case of all: a resnapshot runs exactly because events were
-     * missed, so it is several rows short, not one. Cancelling the others would only spend a
-     * round trip on an answer already arriving.
+     * EVERY key restarts rather than merely invalidating, and on this path the reason is not
+     * the usual one. A bare invalidation is swallowed whole by a query still on its FIRST fetch
+     * — query-core hands back the request already running — and here that request is precisely
+     * the one that must not be accepted: a resnapshot runs BECAUSE events were missed, so an
+     * answer that left before the gap is the stale thing it exists to replace. Waiting on it
+     * ends the recovery having recovered nothing, and the caller cannot tell, because the
+     * `success` dispatch clears `isInvalidated` on the way past.
+     *
+     * It was briefly a special case for `['market-fills']` alone, on the grounds that the other
+     * keys are seeded or have a second writer. That was the wrong reading twice over: every
+     * private key first-fetches on an ORDINARY page load (they are never dehydrated), and the
+     * argument was about how likely the loss is rather than whether the recovery is honest.
+     * The special case bought nothing either — `cancelFirstFetch` cancels only a query with NO
+     * data, so on a seeded or already-answered key `restartQueries` IS the plain invalidation.
      */
     const resnapshot = () => {
       balanceOrder.reset();
       const keys = identity === null ? SNAPSHOT_KEYS : [...SNAPSHOT_KEYS, ...PRIVATE_SNAPSHOT_KEYS];
       for (const queryKey of keys) {
-        if (queryKey === MARKET_FILLS_KEY) {
-          void restartQueries(queryClient, queryKey);
-          continue;
-        }
-        void queryClient.invalidateQueries({ queryKey, refetchType: 'active' });
+        void restartQueries(queryClient, queryKey);
       }
     };
 

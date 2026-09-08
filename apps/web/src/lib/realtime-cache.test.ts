@@ -13,6 +13,7 @@ import {
   type MarketSummary,
   type Me,
   type Position,
+  type PriceSeries,
 } from './api';
 import {
   DEFAULT_MARKET_FILTERS,
@@ -21,7 +22,9 @@ import {
   dehydratePublic,
   marketKey,
   marketsKey,
+  ticksKey,
 } from './market-keys';
+import { DEFAULT_TICK_RANGE, appendTick } from './ticks';
 import {
   type MarketPages,
   applyBalanceEvent,
@@ -104,6 +107,16 @@ const me: Me = {
   profile: { nickname: '테스터', role: 'user', createdAt: '2026-08-01T00:00:00.000Z' },
   balance: { availableP: '100000', lockedP: '0' },
   linkedAccounts: [],
+};
+
+/** The series as the server answered it a moment BEFORE the trade the tick announces. */
+const seriesBeforeTrade: PriceSeries = {
+  resolution: '1m',
+  bucketSeconds: 3600,
+  from: '2026-09-06T00:00:00.000Z',
+  to: '2026-09-06T23:00:00.000Z',
+  truncated: false,
+  points: [{ ts: '2026-09-06T23:00:00.000Z', pYesBp: 5000, trigger: 'trade' }],
 };
 
 /** The row as a snapshot taken before the trade carries it. */
@@ -334,6 +347,42 @@ describe('the me cache', () => {
       });
       expect(observer.getCurrentResult().isPending).toBe(false);
       expect(fetches).toBe(2);
+    } finally {
+      unsubscribe();
+      queryClient.clear();
+    }
+  });
+});
+
+describe('the tick series cache', () => {
+  it('does not let a refetch that started before a trade pull the chart back', async () => {
+    // The market detail's two readings of one trade: the header takes `joinMarket` and keeps
+    // the new probability, while the chart draws this series. Without a join here a refetch
+    // that left first — the invalidation a `market:status` fires, a resnapshot, a focus
+    // refetch — landed after the socket had drawn the tick and reverted the right edge, so the
+    // two disagreed on screen until the next tick or fetch.
+    const queryClient = getQueryClient();
+    const key = ticksKey(ID, DEFAULT_TICK_RANGE);
+    let answer: PriceSeries = seriesBeforeTrade;
+    const observer = new QueryObserver<PriceSeries>(queryClient, {
+      queryKey: key,
+      queryFn: () => Promise.resolve(answer),
+      retry: false,
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
+    try {
+      await observer.refetch();
+      queryClient.setQueryData<PriceSeries>(key, (held) => appendTick(held, tick()));
+      expect(queryClient.getQueryData<PriceSeries>(key)?.points.at(-1)?.pYesBp).toBe(6300);
+
+      // The in-flight answer: the same pre-trade window, with news only about the head.
+      answer = { ...seriesBeforeTrade, truncated: true };
+      await observer.refetch();
+
+      const drawn = observer.getCurrentResult().data;
+      expect(drawn?.points.at(-1)?.pYesBp).toBe(6300);
+      // …while what the SERVER owns still comes from the answer.
+      expect(drawn?.truncated).toBe(true);
     } finally {
       unsubscribe();
       queryClient.clear();

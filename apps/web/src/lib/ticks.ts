@@ -138,24 +138,87 @@ export function appendTickToSeries(
   // 'trade' is the honest label for a live point; a tick published by a status transition is
   // relabelled by the next fetch, which reads the stored row.
   const point: PriceTick = { ts: event.ts, pYesBp: event.pYesBp, trigger: 'trade' };
-  // Bucket membership is read off the SAME absolute grid the server bins on (`date_bin(stride,
-  // …, '1970-01-01 00:00:00+00')` in market.service.ts), never as the gap `eventMs - lastMs`:
-  // neither instant a gap would measure from is a boundary — the server closes its answer at
-  // `to`, which is its own clock, and a point this function has already replaced carries the
-  // event's instant — so a gap test slides its origin forward with every tick and keeps
-  // replacing, and a market trading more often than one bucket would never gain a point again.
-  // `bucketMs > 0` keeps raw appending (and never divides by zero); an empty series has
-  // `lastMs === -Infinity`, whose floor equals no real bucket, so its first event appends.
+  return pushPoint(held, point, eventMs, lastMs);
+}
+
+/**
+ * One point onto the right edge of a series, replacing the last when the two share a bucket.
+ * Factored out because the socket and `joinSeries` both put a live point onto a series and the
+ * bucket rule must not be stated twice; the caller has already established that `point` is the
+ * newer of the two.
+ *
+ * Bucket membership is read off the SAME absolute grid the server bins on (`date_bin(stride,
+ * …, '1970-01-01 00:00:00+00')` in market.service.ts), never as the gap `pointMs - lastMs`:
+ * neither instant a gap would measure from is a boundary — the server closes its answer at
+ * `to`, which is its own clock, and a point this function has already replaced carries the
+ * event's instant — so a gap test slides its origin forward with every tick and keeps
+ * replacing, and a market trading more often than one bucket would never gain a point again.
+ * `bucketMs > 0` keeps raw appending (and never divides by zero); an empty series has
+ * `lastMs === -Infinity`, whose floor equals no real bucket, so its first point appends.
+ */
+function pushPoint(
+  held: PriceSeries,
+  point: PriceTick,
+  pointMs: number,
+  lastMs: number,
+): PriceSeries {
   const bucketMs = held.bucketSeconds * 1000;
   const sameBucket =
-    bucketMs > 0 && Math.floor(eventMs / bucketMs) === Math.floor(lastMs / bucketMs);
+    bucketMs > 0 && Math.floor(pointMs / bucketMs) === Math.floor(lastMs / bucketMs);
   const points = sameBucket ? [...held.points.slice(0, -1), point] : [...held.points, point];
 
   return {
     ...held,
     points: points.length > TICKS_MAX_POINTS ? points.slice(-TICKS_MAX_POINTS) : points,
-    to: eventMs > Date.parse(held.to) ? event.ts : held.to,
+    to: pointMs > Date.parse(held.to) ? point.ts : held.to,
   };
+}
+
+/**
+ * The series join — `joinMarket`'s counterpart for `['ticks', id, range]`, registered as that
+ * key's `structuralSharing` in query-client.ts.
+ *
+ * Without it the `ts` order held only between EVENTS. `appendTickToSeries` refuses a tick that
+ * is not newer than the right edge, but an HTTP answer went into the cache raw, so a refetch
+ * that left before a trade — the invalidation a `market:status` fires, a `resnapshot`, a
+ * window-focus refetch past the 30s staleTime — landed after the socket had already drawn that
+ * trade and pulled the chart's right edge back to the old probability. The header could not
+ * follow it there: `['market', id]` has `joinMarket` and keeps the new one, so the two readings
+ * of the same trade sat on screen disagreeing until the next tick or fetch.
+ *
+ * The WINDOW is the incoming answer's, always: `from`, `resolution`, `bucketSeconds` and
+ * `truncated` describe what the server chose, and its `points` are authoritative for everything
+ * inside it. Only points strictly newer than `incoming.to` survive from the held copy — that
+ * instant is the server's own clock at answer time, so a point past it is exactly a tick the
+ * server could not have known about, and a point before it that the answer omits was omitted on
+ * purpose (out of window, or trimmed). Reading the cutoff off the last incoming POINT instead
+ * would resurrect a whole stale series whenever the server answered an empty window.
+ *
+ * Each survivor goes back through `pushPoint`, so a live point sharing the last bucket replaces
+ * rather than doubles it, and `TICKS_MAX_POINTS` still bounds the result. Idempotent (a second
+ * join against the same answer keeps the same tail) and a no-op in the ordinary case, where the
+ * answer already contains the tick and nothing is newer than its `to`.
+ */
+export function joinSeries(held: PriceSeries | undefined, incoming: PriceSeries): PriceSeries {
+  if (held === undefined) return incoming;
+  const cutoffMs = Date.parse(incoming.to);
+  let next = incoming;
+  for (const point of held.points) {
+    const pointMs = Date.parse(point.ts);
+    // `!(a > b)` rather than `a <= b` so an unparseable `ts` (NaN, which fails both) is
+    // dropped rather than carried into the cache — the rule `appendTickToSeries` follows.
+    if (!(pointMs > cutoffMs)) continue;
+    const last = next.points.at(-1);
+    const lastMs = last === undefined ? Number.NEGATIVE_INFINITY : Date.parse(last.ts);
+    if (!(pointMs > lastMs)) continue;
+    next = pushPoint(next, point, pointMs, lastMs);
+  }
+  // `to` takes the LATER of the two, which the loop above cannot always reach: two refetches
+  // in flight can land newest-first, and then the older answer names an earlier right edge
+  // than one this cache already held with no point past it to carry the difference. Letting it
+  // through would move `to` backwards, which `appendTickToSeries` forbids for its own writes —
+  // and `to` is what `extendToNow` (chart.ts) draws the live probability out to.
+  return Date.parse(held.to) > Date.parse(next.to) ? { ...next, to: held.to } : next;
 }
 
 /**

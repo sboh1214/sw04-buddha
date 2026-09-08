@@ -6,6 +6,7 @@ import {
   DEFAULT_TICK_RANGE,
   TICK_RANGES,
   appendTickToSeries,
+  joinSeries,
   tickRangeFrom,
   ticksQueryFor,
   ticksQueryOptions,
@@ -260,5 +261,101 @@ describe('appendTickToSeries', () => {
     appendTickToSeries(held, tick('2026-09-07T01:30:00.000Z'));
 
     expect(held).toEqual(before);
+  });
+});
+
+describe('joinSeries', () => {
+  /** The live edge the socket drew while a refetch was in flight. */
+  const live = (): PriceSeries =>
+    appendTickToSeries(series(), tick('2026-09-07T01:30:00.000Z', 6000)) as PriceSeries;
+
+  it('keeps a tick the answer left before, which is the whole race', () => {
+    // THE BUG: the refetch was served at 01:00, the trade committed at 01:30, the socket drew
+    // it, and then the older answer landed and pulled the chart back to 42% while the header —
+    // which has `joinMarket` — still read 60%.
+    const held = live();
+    expect(held.points.at(-1)?.pYesBp).toBe(6000);
+
+    const joined = joinSeries(held, series());
+
+    expect(joined.points.at(-1)).toEqual({
+      ts: '2026-09-07T01:30:00.000Z',
+      pYesBp: 6000,
+      trigger: 'trade',
+    });
+    expect(joined.to).toBe('2026-09-07T01:30:00.000Z');
+    // Everything the SERVER owns still comes from the answer.
+    expect(joined.from).toBe(series().from);
+    expect(joined.resolution).toBe(series().resolution);
+    expect(joined.bucketSeconds).toBe(series().bucketSeconds);
+  });
+
+  it('is a no-op once the answer carries the tick itself', () => {
+    // The ordinary case: the server was served after the trade, so its window already ends
+    // there and nothing is newer than its `to`.
+    const answered = series({
+      to: '2026-09-07T02:00:00.000Z',
+      points: [
+        ...series().points,
+        { ts: '2026-09-07T01:30:00.000Z', pYesBp: 6000, trigger: 'trade' },
+      ],
+    });
+    expect(joinSeries(live(), answered)).toBe(answered);
+    expect(joinSeries(undefined, answered)).toBe(answered);
+  });
+
+  it('resurrects nothing the server left out of its window', () => {
+    // The cutoff is the answer's `to`, not its last POINT. Read off the last point, an empty
+    // window — a range whose span now holds no trade — would drag the whole stale series back.
+    const slid = series({
+      from: '2026-09-08T00:00:00.000Z',
+      to: '2026-09-08T01:00:00.000Z',
+      points: [],
+    });
+    expect(joinSeries(live(), slid)).toBe(slid);
+  });
+
+  it('replaces rather than doubles a live point inside the last bucket', () => {
+    // `pushPoint`'s rule, reached through the join: the answer's 01:00 point and the live
+    // 01:30 one share the hourly bucket, so the series keeps ONE point there — the live one.
+    const held = live();
+    const joined = joinSeries(held, series());
+    expect(joined.points).toHaveLength(2);
+    expect(joined.points.at(-1)?.ts).toBe('2026-09-07T01:30:00.000Z');
+  });
+
+  it('never lets the right edge move backwards, even with nothing to carry it', () => {
+    // Two refetches in flight can land newest-first; the older answer then names an earlier
+    // `to` with no point past it for the loop to advance on. `appendTickToSeries` forbids a
+    // backwards `to` for its own writes, and `extendToNow` draws the live probability out to
+    // exactly this instant.
+    const ahead = series({ to: '2026-09-07T05:00:00.000Z' });
+    expect(joinSeries(ahead, series()).to).toBe('2026-09-07T05:00:00.000Z');
+    // …and it does not run FORWARD on its own: a newer answer's own `to` stands.
+    expect(joinSeries(series(), ahead).to).toBe('2026-09-07T05:00:00.000Z');
+  });
+
+  it('is idempotent, so a second answer cannot double the tail', () => {
+    const once = joinSeries(live(), series());
+    expect(joinSeries(once, series())).toEqual(once);
+  });
+
+  it('never grows past the cap the socket path also honours', () => {
+    const many = Array.from({ length: TICKS_MAX_POINTS }, (_, i) => ({
+      ts: new Date(NOON + i * MINUTE).toISOString(),
+      pYesBp: 5000,
+      trigger: 'trade' as const,
+    }));
+    const held = series({
+      bucketSeconds: 0,
+      resolution: 'raw',
+      to: new Date(NOON + 10 * HOUR).toISOString(),
+      points: many,
+    });
+    const joined = joinSeries(
+      held,
+      series({ bucketSeconds: 0, resolution: 'raw', points: [], to: '2026-09-07T00:00:00.000Z' }),
+    );
+    expect(joined.points.length).toBeLessThanOrEqual(TICKS_MAX_POINTS);
   });
 });

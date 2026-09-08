@@ -1,7 +1,8 @@
 import { QueryClient, isServer, replaceEqualDeep } from '@tanstack/react-query';
-import { type Market, type Position, isApiError } from './api';
-import { MARKETS_KEY, MARKET_KEY, POSITIONS_KEY } from './market-keys';
+import { type Market, type Position, type PriceSeries, isApiError } from './api';
+import { MARKETS_KEY, MARKET_KEY, POSITIONS_KEY, TICKS_KEY } from './market-keys';
 import { type MarketPages, joinMarket, joinMarketPages, joinPositions } from './market-live';
+import { joinSeries } from './ticks';
 
 function makeQueryClient() {
   const client = new QueryClient({
@@ -54,6 +55,14 @@ function makeQueryClient() {
   client.setQueryDefaults(POSITIONS_KEY, {
     structuralSharing: (held, incoming) =>
       replaceEqualDeep(held, joinPositions(held as Position[] | undefined, incoming as Position[])),
+  });
+  // And the chart's series, for the third time and the same reason: `appendTickToSeries` orders
+  // the socket's ticks by `ts`, but a REST answer went in raw, so a refetch that left before a
+  // trade pulled the right edge back to the old probability — while the header, which has
+  // `joinMarket` above, kept the new one. Two readings of one trade, disagreeing on one screen.
+  client.setQueryDefaults(TICKS_KEY, {
+    structuralSharing: (held, incoming) =>
+      replaceEqualDeep(held, joinSeries(held as PriceSeries | undefined, incoming as PriceSeries)),
   });
   return client;
 }
