@@ -142,3 +142,40 @@ export function restartQueries(
   cancelFirstFetch(queryClient, queryKey);
   return queryClient.invalidateQueries({ queryKey });
 }
+
+/** What a section that renders a LIST can say about the query behind it. */
+export type ListView = 'pending' | 'failed' | 'stale' | 'ready';
+
+/**
+ * Which of the four a list section is in — and `stale` is the one the screens kept missing.
+ *
+ * THE HAZARD: query-core reports a failure two different ways, and a ladder written on
+ * `isLoadingError` alone collapses one of them into `ready`. A FIRST fetch that exhausts its
+ * retries has no data and answers `isLoadingError` — the ladders caught that. A refetch that
+ * fails after data exists answers `isRefetchError` instead, KEEPS the rows, and was rendered as
+ * an ordinary list with nothing to say it had stopped being refreshed (measured: `isLoadingError
+ * false, isRefetchError true, rows kept`).
+ *
+ * That silence costs differently per screen and both are real. 보유 포지션 shows a holding whose
+ * membership refresh failed — a void or a settlement asks for both lists (`applyPositionEvent`
+ * answers `refetch` when the row must MOVE), so a failed one leaves the row in 보유 포지션, out of
+ * 정산 이력, and inside 총 평가 금액 where it no longer belongs. 체결 내역 shows a list one row
+ * short, and there the refetch is the ONLY path a new fill can arrive by: `market:trade` carries
+ * no `amountP`, so it is deliberately never merged into the cache.
+ *
+ * `stale` is deliberately NOT `failed`: the rows are real and the last answer is worth keeping on
+ * screen — dropping a screenful because one refresh failed loses more than the staleness costs,
+ * which is the reading `market-list.tsx` already takes. It is the caller's job to render the rows
+ * AND say so, with a way back.
+ *
+ * `pending` is checked first because a query refetching after a failure reports both.
+ */
+export function listView(query: {
+  isPending: boolean;
+  isLoadingError: boolean;
+  isRefetchError: boolean;
+}): ListView {
+  if (query.isPending) return 'pending';
+  if (query.isLoadingError) return 'failed';
+  return query.isRefetchError ? 'stale' : 'ready';
+}

@@ -27,6 +27,7 @@ import {
 import { type Socket, io } from 'socket.io-client';
 import { type SessionIdentity } from '@/components/auth/session-cache-guard';
 import { ME_QUERY_KEY } from '@/hooks/use-me';
+import { listStatusOf } from '@/hooks/use-portfolio';
 import { type Market, type Me, type Position } from '@/lib/api';
 import { useSession } from '@/lib/use-session';
 import {
@@ -617,7 +618,11 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         let refetch = false;
         for (const query of queryClient.getQueryCache().findAll({ queryKey: POSITIONS_KEY })) {
           const held = queryClient.getQueryData<Position[]>(query.queryKey);
-          const patch = applyPositionEvent(held, event);
+          // WHICH list this is, read off the key `positionsKey` built (`['positions', status]`).
+          // Without it the reducer cannot tell an absence that is a GAP from one that is the
+          // list's own definition, and every ordinary trade restarted both lists — see
+          // `applyPositionEvent`. An unsuffixed root answers `undefined` and keeps the old path.
+          const patch = applyPositionEvent(held, event, listStatusOf(query.queryKey));
           if (patch.kind === 'refetch') refetch = true;
           if (patch.kind === 'replace') {
             queryClient.setQueryData<Position[]>(query.queryKey, patch.positions);

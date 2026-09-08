@@ -15,6 +15,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { copy } from '@/copy';
 import { usePublicMarketFills } from '@/hooks/use-markets';
 import { formatKst } from '@/lib/datetime';
+import { listView } from '@/lib/query-client';
 import { formatContracts, formatPricePerContract } from '@/lib/market-admin';
 
 /**
@@ -47,6 +48,11 @@ export function RecentFills({
   'data-testid': testId = 'market-fills',
 }: RecentFillsProps) {
   const fills = usePublicMarketFills(marketId, enabled);
+  // Four states, not three: `listView` is where `stale` stops being folded into `ready`.
+  const view = listView(fills);
+  // `view` no longer narrows `data` for the compiler the way the old `isPending`/`isLoadingError`
+  // ladder did, and a `stale` list renders its rows by design — so the rows are read once here.
+  const rows = fills.data ?? [];
   return (
     <Card.Root data-testid={testId}>
       <Card.Header>
@@ -55,9 +61,24 @@ export function RecentFills({
         </Heading>
       </Card.Header>
       <Card.Body>
-        {fills.isPending ? (
+        {/* A refetch that FAILED keeps the rows it last answered, and on this list that silence
+            costs a row: `market:trade` carries no `amountP`, so it is deliberately never merged
+            into the cache and the refetch is the only path a new fill arrives by. The rows stay
+            — the same reading `market-list.tsx` takes — with the same notice and a way back. */}
+        {view === 'stale' && (
+          <Alert.Root status="warning" role="status" data-testid="market-fills-stale" mb="3">
+            <Alert.Indicator />
+            <Alert.Content>
+              <Alert.Description>{copy.marketRefreshFailed}</Alert.Description>
+            </Alert.Content>
+            <Button size="xs" variant="outline" ml="auto" onClick={() => void fills.refetch()}>
+              {copy.retry}
+            </Button>
+          </Alert.Root>
+        )}
+        {view === 'pending' ? (
           <Skeleton height="12" />
-        ) : fills.isLoadingError ? (
+        ) : view === 'failed' ? (
           <Stack gap="2" align="flex-start">
             <Alert.Root status="error" role="alert">
               <Alert.Indicator />
@@ -69,11 +90,11 @@ export function RecentFills({
               {copy.retry}
             </Button>
           </Stack>
-        ) : fills.data.length === 0 ? (
+        ) : rows.length === 0 ? (
           <EmptyState message={copy.marketFillsEmpty} />
         ) : (
           <Stack gap="1">
-            {fills.data.map((fill) => (
+            {rows.map((fill) => (
               <HStack
                 key={fill.id}
                 gap="3"

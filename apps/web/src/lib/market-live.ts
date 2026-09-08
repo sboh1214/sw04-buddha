@@ -3,6 +3,7 @@ import {
   type MarketStatus,
   type MarketStatusEvent,
   type MarketTickEvent,
+  type PositionStatus,
   type Outcome,
   type UserBalanceEvent,
   type UserPositionEvent,
@@ -303,11 +304,33 @@ export type PositionPatch =
  *
  * A row whose `settled` flag MOVED answers `refetch` for the same reason, and it is the second
  * thing this reducer refuses to invent. See the comment on that branch.
+ *
+ * `listStatus` — which of the two lists is being asked about — is what lets it tell an absence
+ * that is a GAP from one that is the list's own definition. Optional: an unsuffixed
+ * `['positions']` root would answer `undefined` and keep the old, safe reading.
  */
 export function applyPositionEvent(
   held: Position[] | undefined,
   event: UserPositionEvent,
+  listStatus?: PositionStatus,
 ): PositionPatch {
+  // An UNSETTLED event says nothing about the settled list, and skipping it here is what stops a
+  // storm. `refetch` is this reducer's answer for a row the cache does not hold, and on
+  // /portfolio — where both lists are mounted — the settled list holds no unsettled row BY
+  // DEFINITION, so every ordinary trade reported an expected absence as a gap and the handler
+  // restarted the whole `['positions']` root. Measured: five of the account's own trades cost ten
+  // requests, and the open list had already been patched in place for each of them.
+  //
+  // Sound because settlement is TERMINAL: `settled: true` is written by the void and settle paths
+  // (market-admin.service.ts) and `settled: false` only ever by the INSERT of a brand-new row
+  // (trade.service.ts) — never by an update. So a row this event describes as unsettled was never
+  // in the settled list and cannot have left it, and there is nothing for that list to re-ask.
+  //
+  // Deliberately NOT the general form "ignore any list the event does not belong to". A SETTLED
+  // event must still restart the OPEN list even when that list holds no such row, because its
+  // first fetch may be in flight and about to land with the row still unsettled — which is the
+  // membership guard below, seen from the other side.
+  if (listStatus === 'settled' && !event.settled) return { kind: 'none' };
   if (held === undefined) return { kind: 'refetch' };
   const key = positionRowKey(event);
   const index = held.findIndex((row) => positionRowKey(row) === key);

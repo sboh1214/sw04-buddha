@@ -2,6 +2,7 @@
 
 import {
   PAYOUT_PER_CONTRACT_P,
+  POSITION_STATUSES,
   type MarketStatus,
   type PositionStatus,
   parsePAmount,
@@ -37,6 +38,22 @@ import { statusRank } from '@/lib/market-live';
  * matches by key PREFIX, so `['positions']` covers both and never reaches `['orders']`.
  */
 export const positionsKey = (status: PositionStatus) => [...POSITIONS_KEY, status] as const;
+
+/**
+ * Which list a cached `['positions', …]` key names, or `undefined` for a key that names none.
+ *
+ * The socket walks every query under the root and has to hand each one's status to
+ * `applyPositionEvent` — that is what lets the reducer tell an absence that is a GAP from one
+ * that is the list's own definition. Read from the key rather than tracked beside it: the key IS
+ * where the status lives, and a cache entry the app never built (a bare root) must answer
+ * `undefined` rather than be guessed at.
+ */
+export function listStatusOf(queryKey: readonly unknown[]): PositionStatus | undefined {
+  const status = queryKey[POSITIONS_KEY.length];
+  return POSITION_STATUSES.includes(status as PositionStatus)
+    ? (status as PositionStatus)
+    : undefined;
+}
 
 /**
  * Just enough of better-auth's `useSession().data` to answer "is anybody signed in":

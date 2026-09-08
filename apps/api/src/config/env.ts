@@ -55,6 +55,20 @@ export type OAuthProvider = (typeof OAUTH_PROVIDERS)[number];
  * empty optional strings are undefined): @nestjs/config merges the schema output over the
  * raw values.
  */
+/**
+ * Whether a cookie `Domain` would be sent to `host` — RFC 6265 domain-matching, which is either
+ * equality or `host` being a sub-domain of it.
+ *
+ * Compared LABEL-WISE, and that is the whole care in it: a plain `endsWith` makes `example.com`
+ * cover `badexample.com`, which is the mistake this kind of check usually ships with. Both sides
+ * are lower-cased because a hostname is case-insensitive and the schema does not normalise.
+ */
+export function domainCovers(cookieDomain: string, host: string): boolean {
+  const domain = cookieDomain.toLowerCase();
+  const target = host.toLowerCase();
+  return target === domain || target.endsWith(`.${domain}`);
+}
+
 export const envSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -153,15 +167,31 @@ export const envSchema = z
     // cookie to nothing that exists, which is exactly the failure this variable is here to
     // fix: no error anywhere, and realtime dead for every signed-in user.
     const cookieDomain = env.AUTH_COOKIE_DOMAIN;
-    if (
-      cookieDomain !== undefined &&
-      !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i.test(cookieDomain)
-    ) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['AUTH_COOKIE_DOMAIN'],
-        message: `AUTH_COOKIE_DOMAIN must be a bare hostname such as "example.com", not "${cookieDomain}"`,
-      });
+    if (cookieDomain !== undefined) {
+      if (
+        !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i.test(cookieDomain)
+      ) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['AUTH_COOKIE_DOMAIN'],
+          message: `AUTH_COOKIE_DOMAIN must be a bare hostname such as "example.com", not "${cookieDomain}"`,
+        });
+      } else if (!domainCovers(cookieDomain, new URL(env.BETTER_AUTH_URL).hostname)) {
+        // Shape alone was never the question. A well-formed hostname that the auth host is not
+        // under is exactly as dead as a URL or a leading dot: RFC 6265 domain-matching requires
+        // the cookie's Domain to be the host or a parent of it, so the browser DROPS the
+        // Set-Cookie and the session never persists — with nothing logged anywhere, which is the
+        // failure this variable exists to make loud.
+        //
+        // Compared label-wise, so `example.com` does not cover `badexample.com`; equality counts,
+        // so a host-only-equivalent value is allowed. `BETTER_AUTH_URL` is `z.url()` with a
+        // default, so it always parses here.
+        ctx.addIssue({
+          code: 'custom',
+          path: ['AUTH_COOKIE_DOMAIN'],
+          message: `AUTH_COOKIE_DOMAIN "${cookieDomain}" does not cover the BETTER_AUTH_URL host "${new URL(env.BETTER_AUTH_URL).hostname}" — a browser would drop the cookie`,
+        });
+      }
     }
     if (env.NODE_ENV !== 'test' && !env.BETTER_AUTH_SECRET) {
       ctx.addIssue({

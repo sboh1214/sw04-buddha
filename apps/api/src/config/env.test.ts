@@ -101,12 +101,48 @@ describe('AUTH_COOKIE_DOMAIN', () => {
   });
 
   it('takes the registrable domain two hosts of one deployment share', () => {
-    expect(envSchema.parse({ ...base, AUTH_COOKIE_DOMAIN: 'example.com' }).AUTH_COOKIE_DOMAIN).toBe(
-      'example.com',
-    );
+    // The auth host must be UNDER it — this pairing used to be written against the defaulted
+    // `http://localhost:3000`, which is a cookie no browser would ever send back.
     expect(
-      envSchema.parse({ ...base, AUTH_COOKIE_DOMAIN: 'buddha.co.kr' }).AUTH_COOKIE_DOMAIN,
+      envSchema.parse({
+        ...base,
+        BETTER_AUTH_URL: 'https://app.example.com',
+        AUTH_COOKIE_DOMAIN: 'example.com',
+      }).AUTH_COOKIE_DOMAIN,
+    ).toBe('example.com');
+    // Equality counts too: a domain that IS the auth host is sent back to it.
+    expect(
+      envSchema.parse({
+        ...base,
+        BETTER_AUTH_URL: 'https://buddha.co.kr',
+        AUTH_COOKIE_DOMAIN: 'buddha.co.kr',
+      }).AUTH_COOKIE_DOMAIN,
     ).toBe('buddha.co.kr');
+  });
+
+  it('refuses a well-formed domain the auth host is not under', () => {
+    // THE HAZARD: shape was the only test, so an unrelated hostname started the API cleanly and
+    // then emitted `Domain=example.net` from `app.example.com`. RFC 6265 domain-matching requires
+    // the Domain to be the host or a parent of it, so the browser DROPS the Set-Cookie: sign-in
+    // never persists and nothing is logged — the exact silent death this variable exists to
+    // convert into a boot failure.
+    for (const [authUrl, bad] of [
+      ['https://app.example.com', 'example.net'],
+      // Label-wise, so a plain `endsWith` cannot be mistaken for domain-matching.
+      ['https://badexample.com', 'example.com'],
+      // A localhost deployment has no parent domain to share, which is why the default is unset.
+      ['http://localhost:3000', 'example.com'],
+      // A CHILD of the auth host is not a parent of it, so the cookie would not come back either.
+      ['https://example.com', 'app.example.com'],
+    ] as const) {
+      const result = envSchema.safeParse({
+        ...base,
+        BETTER_AUTH_URL: authUrl,
+        AUTH_COOKIE_DOMAIN: bad,
+      });
+      expect(result.success, `${authUrl} / ${bad}`).toBe(false);
+      if (!result.success) expect(result.error.issues[0]?.path).toEqual(['AUTH_COOKIE_DOMAIN']);
+    }
   });
 
   it('refuses everything better-auth would accept and silently scope to nothing', () => {

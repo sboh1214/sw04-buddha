@@ -20,6 +20,7 @@ import NextLink from 'next/link';
 import { type ReactNode } from 'react';
 import { EmptyState } from '@/components/ui/empty-state';
 import { copy } from '@/copy';
+import { listView } from '@/lib/query-client';
 import { useMarketSocket } from '@/hooks/use-market-socket';
 import { marketQueryOptions } from '@/hooks/use-markets';
 import { useMe } from '@/hooks/use-me';
@@ -111,6 +112,16 @@ export function Portfolio() {
    * The reading itself is `priceIsStale` (use-portfolio.ts) — a node-only runner cannot reach a
    * decision left in this body, and the state this notice must cover was got wrong once already.
    */
+  /**
+   * Which of the four each list section is in. `stale` is the state both ladders used to fold
+   * into `ready`: a refetch that fails after the rows exist keeps them and reports
+   * `isRefetchError`, and on THESE lists that silence has a shape — a void or a settlement asks
+   * for both (`applyPositionEvent` answers `refetch` when a row must MOVE), so a failed refresh
+   * leaves the holding in 보유 포지션, out of 정산 이력, and inside 총 평가 금액 where it no
+   * longer belongs. The rows stay on screen and the notice says so; see `listView`.
+   */
+  const openView = listView(open);
+  const settledView = listView(settled);
   const marketsStale = markets.some((market) => priceIsStale(market));
   /** Re-asks only the ones that failed; a healthy row is already live off the socket. */
   const retryStaleMarkets = () => {
@@ -197,9 +208,20 @@ export function Portfolio() {
             </Button>
           </Alert.Root>
         )}
-        {open.isPending ? (
+        {openView === 'stale' && (
+          <Alert.Root status="warning" role="status" data-testid="portfolio-positions-stale" mb="4">
+            <Alert.Indicator />
+            <Alert.Content>
+              <Alert.Description>{copy.marketRefreshFailed}</Alert.Description>
+            </Alert.Content>
+            <Button size="xs" variant="outline" ml="auto" onClick={() => void open.refetch()}>
+              {copy.retry}
+            </Button>
+          </Alert.Root>
+        )}
+        {openView === 'pending' ? (
           <Skeleton height="24" />
-        ) : open.isLoadingError ? (
+        ) : openView === 'failed' ? (
           <LoadFailed message={copy.errUnknown} onRetry={() => void open.refetch()} />
         ) : positions.length === 0 ? (
           <EmptyState
@@ -220,9 +242,20 @@ export function Portfolio() {
       </Section>
 
       <Section title={copy.portfolioSettled} testId="portfolio-settled">
-        {settled.isPending ? (
+        {settledView === 'stale' && (
+          <Alert.Root status="warning" role="status" data-testid="portfolio-settled-stale" mb="4">
+            <Alert.Indicator />
+            <Alert.Content>
+              <Alert.Description>{copy.marketRefreshFailed}</Alert.Description>
+            </Alert.Content>
+            <Button size="xs" variant="outline" ml="auto" onClick={() => void settled.refetch()}>
+              {copy.retry}
+            </Button>
+          </Alert.Root>
+        )}
+        {settledView === 'pending' ? (
           <Skeleton height="24" />
-        ) : settled.isLoadingError ? (
+        ) : settledView === 'failed' ? (
           <LoadFailed message={copy.errUnknown} onRetry={() => void settled.refetch()} />
         ) : (settled.data ?? []).length === 0 ? (
           <EmptyState message={copy.portfolioSettledEmpty} />

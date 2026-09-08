@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { positionsKey } from '@/hooks/use-portfolio';
 import { type Position } from './api';
 import { POSITIONS_KEY } from './market-keys';
-import { cancelFirstFetch, getQueryClient } from './query-client';
+import { cancelFirstFetch, getQueryClient, listView } from './query-client';
 
 /**
  * `cancelFirstFetch`'s predicate, driven through the REAL client this app ships.
@@ -102,5 +102,39 @@ describe('cancelFirstFetch', () => {
       unsubscribe();
       queryClient.clear();
     }
+  });
+});
+
+describe('listView', () => {
+  it('calls a list STALE when its refetch failed but the rows are still there', () => {
+    // THE HAZARD: query-core reports a failure two ways, and a ladder written on
+    // `isLoadingError` alone folds one of them into `ready`. Measured with a real observer: a
+    // refetch that fails after data exists answers `isLoadingError: false, isRefetchError: true`
+    // and KEEPS the rows — so 보유 포지션 and 체결 내역 went on rendering a list that had stopped
+    // being refreshed, with nothing on screen to say so and no way back.
+    expect(listView({ isPending: false, isLoadingError: false, isRefetchError: true })).toBe(
+      'stale',
+    );
+  });
+
+  it('keeps the two failures apart, because only one of them has rows to show', () => {
+    // A FIRST fetch that exhausts its retries has nothing to render, so the section is replaced
+    // by `LoadFailed`. A failed refetch keeps its answer, and dropping a screenful because one
+    // refresh failed loses more than the staleness costs — the reading `market-list.tsx` takes.
+    expect(listView({ isPending: false, isLoadingError: true, isRefetchError: false })).toBe(
+      'failed',
+    );
+  });
+
+  it('reports pending first, because a query retrying after a failure reports both', () => {
+    expect(listView({ isPending: true, isLoadingError: false, isRefetchError: true })).toBe(
+      'pending',
+    );
+  });
+
+  it('is ready only when nothing failed', () => {
+    expect(listView({ isPending: false, isLoadingError: false, isRefetchError: false })).toBe(
+      'ready',
+    );
   });
 });

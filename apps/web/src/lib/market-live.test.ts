@@ -451,6 +451,43 @@ describe('applyPositionEvent', () => {
     );
   });
 
+  it('says nothing to the settled list about an unsettled event, which is the storm', () => {
+    // THE HAZARD: `refetch` is this reducer's answer for a row the cache does not hold, and the
+    // settled list holds no UNSETTLED row by definition — so on /portfolio, where both lists are
+    // mounted, every ordinary trade reported an expected absence as a gap and the handler
+    // restarted the whole `['positions']` root. Measured before the fix: five of the account's
+    // own trades cost ten requests, with the open list already patched in place each time.
+    expect(applyPositionEvent([], positionEvent(), 'settled')).toEqual({ kind: 'none' });
+    expect(applyPositionEvent(held, positionEvent(), 'settled')).toEqual({ kind: 'none' });
+    // Sound only because settlement is TERMINAL: nothing ever writes `settled: false` over an
+    // existing row (trade.service.ts writes it on INSERT alone), so such a row was never in the
+    // settled list and cannot have left it.
+  });
+
+  it('still restarts the OPEN list on a settlement, even when that list holds no such row', () => {
+    // The half that must NOT be swept up with it: a settled event means the row LEFT the open
+    // list, and that list's first fetch may be in flight and about to land with it still
+    // unsettled. This is the membership guard from the other side, so the general form ("ignore
+    // any list the event does not belong to") is deliberately not what the branch above says.
+    expect(applyPositionEvent(undefined, positionEvent({ settled: true }), 'open')).toEqual({
+      kind: 'refetch',
+    });
+    expect(applyPositionEvent([], positionEvent({ settled: true }), 'open')).toEqual({
+      kind: 'refetch',
+    });
+    // And a held row that has just moved out of this list still asks, as it did before.
+    expect(applyPositionEvent(held, positionEvent({ settled: true, version: 5 }), 'open')).toEqual({
+      kind: 'refetch',
+    });
+  });
+
+  it('is unchanged for a key that names no list', () => {
+    // An unsuffixed `['positions']` root is not built anywhere today, but the reducer must not
+    // guess at one: no status means the old, safe reading.
+    expect(applyPositionEvent([], positionEvent()).kind).toBe('refetch');
+    expect(applyPositionEvent([], positionEvent(), undefined).kind).toBe('refetch');
+  });
+
   it('orders before it asks, so a late settlement event costs no request', () => {
     // The membership test sits AFTER the version check: a duplicate delivery of the same void
     // would otherwise buy a private refetch per copy, in every signed-in tab.
