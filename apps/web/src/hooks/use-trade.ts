@@ -188,61 +188,13 @@ export function useTrade(market: Pick<Market, 'id'>, onDone?: (result: TradeResu
       onDone?.(result);
       await applyTradeResult(queryClient, result);
     },
-    // Design 5.5's table: every refusal corrects the cache it contradicts, and the panel then
-    // re-derives through `tradePanelView` from the corrected cache. That is why there is
-    // exactly one code path that renders 충전하기 and one that renders 마감, whether the
-    // shortfall was seen before the request or only after it. Awaited like `useCharge`'s, so
-    // the button stays disabled until the corrected numbers have landed.
+    // Every refusal corrects the cache it contradicts — `applyTradeError` holds the table, so
+    // the decision is reachable by a test rather than sealed in this hook body. Awaited like
+    // `useCharge`'s, so the CTA stays disabled until the corrected numbers have landed; the
+    // session refetch is NOT awaited (`void`), because what it resolves to is a reset this tab
+    // does not wait on — `SessionCacheGuard` performs it whenever the answer lands.
     onError: async (error) => {
-      if (isApiError(error, 'PRICE_MOVED')) {
-        // The panel enters its reconfirm phase; both the price it showed and the quote behind
-        // it are now known to be behind the market.
-        await Promise.all([
-          queryClient.invalidateQueries({ queryKey: quoteMarketKey(market.id) }),
-          queryClient.invalidateQueries({ queryKey: marketKey(market.id) }),
-        ]);
-        return;
-      }
-      if (isApiError(error, 'INSUFFICIENT_BALANCE')) {
-        await queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY });
-        return;
-      }
-      if (isApiError(error, 'INSUFFICIENT_POSITION')) {
-        await queryClient.invalidateQueries({ queryKey: POSITIONS_KEY });
-        return;
-      }
-      if (isApiError(error, 'DUPLICATE_REQUEST')) {
-        // Same key, other terms: an earlier press may well have traded, so the balance and the
-        // position on screen are behind what the server holds. The key is already spent.
-        //
-        // `restartQueries`, for the reason the success path uses it: this answer PROVES the key
-        // was already spent, so a first fetch still in flight may have taken its snapshot before
-        // that trade — and a bare invalidation subscribes to the request already running rather
-        // than issuing one. The refusals above need no such thing: they mean nothing committed,
-        // so a snapshot from before the request is not stale.
-        await Promise.all([
-          restartQueries(queryClient, ME_QUERY_KEY),
-          restartQueries(queryClient, POSITIONS_KEY),
-        ]);
-        return;
-      }
-      // The cookie belongs to another account, or to nobody: have better-auth refetch, so
-      // SessionCacheGuard resets the caches and the CTA flips to 로그인. Nothing traded, and
-      // the key stayed in the on-screen account's namespace (see mutationFn). A FORBIDDEN
-      // that names no field is CSRF and corrects nothing.
-      if (isForAnotherAccount(error) || isApiError(error, 'UNAUTHENTICATED')) {
-        void refetchSession();
-        return;
-      }
-      // The market itself moved on: 마감, 종료, or gone from the public routes entirely. Only
-      // the market this panel trades — the id is canonical (A-M3-29), so the key is knowable.
-      if (
-        isApiError(error, 'MARKET_CLOSED') ||
-        isApiError(error, 'MARKET_NOT_OPEN') ||
-        isApiError(error, 'NOT_FOUND')
-      ) {
-        await queryClient.invalidateQueries({ queryKey: marketKey(market.id) });
-      }
+      await applyTradeError(queryClient, market.id, error, () => void refetchSession());
     },
   });
   return { ...mutation, ready: accountId !== undefined };
@@ -298,6 +250,84 @@ export function tradeAnswerScope(a: {
   if (a.account !== undefined) return a.account === a.sent ? 'account' : 'market';
   if (a.cached !== undefined && a.cached.id !== a.sent) return 'market';
   return 'account';
+}
+
+/**
+ * Design 5.5's table: every refusal corrects the cache it contradicts, and the panel then
+ * re-derives through `tradePanelView` from the corrected cache. That is why there is exactly one
+ * code path that renders 충전하기 and one that renders 마감, whether the shortfall was seen
+ * before the request or only after it. The caller awaits it, so the CTA stays disabled until the
+ * corrected numbers have landed (the `useCharge` precedent).
+ *
+ * The asymmetry between the branches is the load-bearing part. `restartQueries` is only for the
+ * answer that PROVES something committed: a refusal that traded nothing leaves a first fetch's
+ * in-flight snapshot perfectly good, and cancelling it would buy a second request for an answer
+ * that was never stale.
+ *
+ * Exported apart from the hook for the reason the file header gives: a decision left inside a
+ * mutation callback is a decision this app's node-only vitest cannot reach.
+ */
+export async function applyTradeError(
+  queryClient: QueryClient,
+  marketId: string,
+  error: unknown,
+  onSessionChanged: () => void,
+): Promise<void> {
+  if (isApiError(error, 'PRICE_MOVED')) {
+    // The panel enters its reconfirm phase; both the price it showed and the quote behind
+    // it are now known to be behind the market.
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: quoteMarketKey(marketId) }),
+      queryClient.invalidateQueries({ queryKey: marketKey(marketId) }),
+    ]);
+    return;
+  }
+  if (isApiError(error, 'INSUFFICIENT_BALANCE')) {
+    await queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY });
+    return;
+  }
+  if (isApiError(error, 'INSUFFICIENT_POSITION')) {
+    await queryClient.invalidateQueries({ queryKey: POSITIONS_KEY });
+    return;
+  }
+  if (isApiError(error, 'DUPLICATE_REQUEST')) {
+    // Same key, other terms: an earlier press may well have traded, so the balance and the
+    // position on screen are behind what the server holds. The key is already spent.
+    //
+    // `restartQueries`, for the reason the success path uses it: this answer PROVES the key
+    // was already spent, so a first fetch still in flight may have taken its snapshot before
+    // that trade — and a bare invalidation subscribes to the request already running rather
+    // than issuing one. The refusals above need no such thing: they mean nothing committed,
+    // so a snapshot from before the request is not stale.
+    //
+    // `['orders']` for the same proof, and this is the one branch that HAS it: `replay()` is
+    // reached only after an order row for this key was FOUND (trade.service.ts), which is the
+    // very thing `applyTradeResult` restarts the list on. There is no 주문 이력 observer on a
+    // screen that trades, so the default `refetchType: 'active'` only marks it stale.
+    await Promise.all([
+      restartQueries(queryClient, ME_QUERY_KEY),
+      restartQueries(queryClient, POSITIONS_KEY),
+      restartQueries(queryClient, ORDERS_KEY),
+    ]);
+    return;
+  }
+  // The cookie belongs to another account, or to nobody: have better-auth refetch, so
+  // SessionCacheGuard resets the caches and the CTA flips to 로그인. Nothing traded, and
+  // the key stayed in the on-screen account's namespace (see mutationFn). A FORBIDDEN
+  // that names no field is CSRF and corrects nothing.
+  if (isForAnotherAccount(error) || isApiError(error, 'UNAUTHENTICATED')) {
+    onSessionChanged();
+    return;
+  }
+  // The market itself moved on: 마감, 종료, or gone from the public routes entirely. Only
+  // the market this panel trades — the id is canonical (A-M3-29), so the key is knowable.
+  if (
+    isApiError(error, 'MARKET_CLOSED') ||
+    isApiError(error, 'MARKET_NOT_OPEN') ||
+    isApiError(error, 'NOT_FOUND')
+  ) {
+    await queryClient.invalidateQueries({ queryKey: marketKey(marketId) });
+  }
 }
 
 /**

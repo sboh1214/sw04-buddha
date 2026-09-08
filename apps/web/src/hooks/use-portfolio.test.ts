@@ -18,6 +18,7 @@ import {
   averageCostP,
   combinedListState,
   listState,
+  liveMarketStatus,
   markPriceP,
   markToLiveMarket,
   ordersInfiniteQueryOptions,
@@ -293,12 +294,73 @@ describe('markToLiveMarket', () => {
     expect(markToLiveMarket(row, { status: 'closed' }).marketLastPrice).toBe(row.marketLastPrice);
   });
 
+  it('runs the status through `liveMarketStatus` rather than a `??`, wiring included', () => {
+    // The guard has to be reached THROUGH this function, not merely exist beside it: a row the
+    // list fetched as 마감 must survive a `['market', id]` entry left at 진행 중 by a failed
+    // refetch, and an open holding must not be badged 무효 while it is still valued at the last
+    // traded price. Both are `markToLiveMarket`'s callers' actual arguments (portfolio.tsx).
+    const closed = position({ marketStatus: 'closed', marketLastPrice: 50 });
+    expect(markToLiveMarket(closed, { status: 'open', lastPrice: 50 })).toBe(closed);
+    const open = position({ marketStatus: 'open', marketLastPrice: 50 });
+    expect(markToLiveMarket(open, { status: 'voided', lastPrice: 50 })).toBe(open);
+  });
+
   it('keeps the row itself when there is nothing newer to mark it to', () => {
     // The same reference, so an untouched row does not re-render; an absent field is a market
     // this tab holds no cache entry for, which is not a reason to invent one.
     const row = position({ marketLastPrice: 63, marketStatus: 'open' });
     expect(markToLiveMarket(row, {})).toBe(row);
     expect(markToLiveMarket(row, { lastPrice: 63, status: 'open' })).toBe(row);
+  });
+});
+
+describe('liveMarketStatus', () => {
+  it('takes the live status only while it is strictly newer, so a market refetch that failed cannot walk 마감 back to 진행 중', () => {
+    // `['market', id]` and `['positions', …]` are two independent fetches, and the market's can
+    // be the OLDER of the two: react-query keeps the row it already had when a REFETCH fails,
+    // so a positions answer carrying 마감 was overwritten on screen by a market entry still
+    // saying 진행 중 — with nothing scheduled to correct it. Ranked by the same order
+    // `applyStatus` and `joinMarket` compare on, so no reading here walks a badge backwards.
+    expect(liveMarketStatus('closed', 'open')).toBe('closed');
+    expect(liveMarketStatus('resolving', 'closed')).toBe('resolving');
+    // Equal is not newer: an event that has already been applied writes nothing either.
+    expect(liveMarketStatus('closed', 'closed')).toBe('closed');
+    // And an absent entry — the market this tab holds no cache row for — is not a status.
+    expect(liveMarketStatus('closed', undefined)).toBe('closed');
+    // The half this guard must NOT break: 진행 중 → 마감 is strictly newer and stays taken.
+    expect(liveMarketStatus('open', 'closed')).toBe('closed');
+  });
+
+  it('leaves a terminal status to the REST answer, the only thing that moves a row between the two lists', () => {
+    // A settlement or a void moves the row to 정산 이력 (`positions.settled`), and both publish
+    // their own `user:position`, which restarts BOTH lists. Taking the status here instead would
+    // badge an open holding 무효 while 평가 금액 and 총 평가 금액 still value it at the last
+    // traded price — the fiction `positionValueP` and 정산 이력 are documented never to print.
+    expect(liveMarketStatus('open', 'settled')).toBe('open');
+    expect(liveMarketStatus('resolving', 'voided')).toBe('resolving');
+    // The refusal is about MEMBERSHIP, not about the word: a row already in the settled list
+    // takes a terminal status from the live row like any other same-list transition.
+    expect(liveMarketStatus('settled', 'voided')).toBe('voided');
+  });
+
+  it('classifies every pair, so a new status cannot fall through by default', () => {
+    // The whole table, like `positionListStatusFor`'s: a status added to MARKET_STATUSES fails
+    // this with whatever it was silently given, which is a decision that has to be made rather
+    // than inherited. Every cell is the held status unless the live one is BOTH strictly newer
+    // and in the same list.
+    const table = MARKET_STATUSES.map((held) =>
+      MARKET_STATUSES.map((live) => liveMarketStatus(held, live)),
+    );
+    expect(table).toEqual([
+      // held 'draft'  — nothing is newer only for itself; settled/voided change the list.
+      ['draft', 'open', 'closed', 'resolving', 'draft', 'draft'],
+      ['open', 'open', 'closed', 'resolving', 'open', 'open'],
+      ['closed', 'closed', 'closed', 'resolving', 'closed', 'closed'],
+      ['resolving', 'resolving', 'resolving', 'resolving', 'resolving', 'resolving'],
+      // held 'settled' — already in 정산 이력, so a terminal live status is same-list.
+      ['settled', 'settled', 'settled', 'settled', 'settled', 'voided'],
+      ['voided', 'voided', 'voided', 'voided', 'voided', 'voided'],
+    ]);
   });
 });
 

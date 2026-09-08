@@ -278,6 +278,23 @@ export function applyPositionEvent(
 }
 
 /**
+ * Whether this event announces an order row that 주문 이력 does not hold yet.
+ *
+ * A trade writes one (`trade.service.ts` inserts the order and its fill in the same
+ * transaction), and no `user:` event carries an `Order`'s id, status, filledQty, amountP or
+ * priceAvgBp — so the list cannot be built from the event and has to be asked for. A void or a
+ * settlement writes NO order row at all (`market-admin.service.ts` moves positions and
+ * balances only), so a refetch there could answer nothing the list does not already hold.
+ *
+ * The same rule `liveMarketStatus` (use-portfolio.ts) states from the other side: a terminal
+ * transition is the REST answer's business. Exported apart from the socket handler because a
+ * decision left inside an effect body is a decision this app's node-only vitest cannot reach.
+ */
+export function wroteAnOrder(event: UserPositionEvent): boolean {
+  return !event.settled;
+}
+
+/**
  * The positions list join — `joinMarket`'s counterpart for `['positions', status]`, registered
  * as that key's `structuralSharing` in query-client.ts.
  *

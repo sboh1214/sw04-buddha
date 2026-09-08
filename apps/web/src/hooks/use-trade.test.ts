@@ -1,6 +1,7 @@
 import { QueryObserver } from '@tanstack/react-query';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  ApiError,
   type Market,
   type MarketListItem,
   type MarketStats,
@@ -27,6 +28,7 @@ import { positionsKey } from './use-portfolio';
 import {
   applyMarketStats,
   applyPositionRow,
+  applyTradeError,
   applyTradeMarket,
   applyTradeResult,
   heldQtyOf,
@@ -532,6 +534,103 @@ describe('applyTradeResult during a first private fetch', () => {
       expect(rows?.[0]?.qty).toBe(tradeResult.position.qty);
     } finally {
       unsubscribe();
+      queryClient.clear();
+    }
+  });
+});
+
+/** The thrown shape `unwrap` builds, so these run against the real `isApiError` narrowing. */
+const apiError = (status: number, code: string, details?: unknown) =>
+  new ApiError(status, { code, message: code, details } as never);
+
+/**
+ * A private list on its FIRST fetch: nothing cached, one request in flight that left before the
+ * request `applyTradeError` is recovering from. Answers `[]` first and a marker row after, so a
+ * test can tell "restarted" from "subscribed to what was already running" by the count alone.
+ */
+function firstFetch(queryClient: ReturnType<typeof getQueryClient>, queryKey: readonly unknown[]) {
+  let fetches = 0;
+  const observer = new QueryObserver<Position[]>(queryClient, {
+    queryKey,
+    queryFn: () => {
+      fetches += 1;
+      return Promise.resolve(fetches === 1 ? [] : [tradeResult.position]);
+    },
+    retry: false,
+  });
+  const unsubscribe = observer.subscribe(() => undefined);
+  return { count: () => fetches, inflight: observer.refetch(), unsubscribe };
+}
+
+describe('applyTradeError', () => {
+  it('re-asks for the balance, the holdings and the order list that a first fetch would otherwise answer from before the committed trade', async () => {
+    // DUPLICATE_REQUEST comes out of `replay()`, which is reached only after an order row for
+    // this key was FOUND (trade.service.ts) — so this refusal PROVES a trade committed, and a
+    // request still in flight took its snapshot before it. `invalidateQueries` alone hands back
+    // the running promise on a query that has answered nothing, so the pre-trade answer would
+    // land and stand.
+    const queryClient = getQueryClient();
+    const positions = firstFetch(queryClient, positionsKey('open'));
+    const orders = firstFetch(queryClient, ORDERS_KEY);
+    try {
+      await applyTradeError(queryClient, ID, apiError(409, 'DUPLICATE_REQUEST'), () => undefined);
+      await Promise.all([positions.inflight, orders.inflight]);
+
+      expect(positions.count()).toBe(2);
+      expect(orders.count()).toBe(2);
+    } finally {
+      positions.unsubscribe();
+      orders.unsubscribe();
+      queryClient.clear();
+    }
+  });
+
+  it('waits on the answer already on the wire for a refusal that committed nothing', async () => {
+    // The asymmetry this whole table rests on: a shortfall means the server traded NOTHING, so
+    // a snapshot taken before the request is not stale and cancelling it would buy a second
+    // request for an answer that was already correct. Only the proof-of-commit branch restarts.
+    const queryClient = getQueryClient();
+    const positions = firstFetch(queryClient, positionsKey('open'));
+    try {
+      await applyTradeError(
+        queryClient,
+        ID,
+        apiError(422, 'INSUFFICIENT_POSITION', [{ path: ['qty'], message: '보유 부족' }]),
+        () => undefined,
+      );
+      await positions.inflight;
+
+      expect(positions.count()).toBe(1);
+    } finally {
+      positions.unsubscribe();
+      queryClient.clear();
+    }
+  });
+
+  it('corrects only the market for a 마감, and asks better-auth for a foreign cookie', async () => {
+    // 마감/종료/사라짐 move the MARKET and nothing private: the panel re-derives 마감 from the
+    // corrected row through `tradePanelView`. A cookie that belongs to somebody else corrects no
+    // cache at all — `SessionCacheGuard` resets them on the session it fetches, and writing here
+    // would be this tab writing for an account it is no longer showing.
+    const queryClient = getQueryClient();
+    queryClient.setQueryData<Market>(marketKey(ID), market);
+    queryClient.setQueryData<Me>(ME_QUERY_KEY, me);
+    try {
+      await applyTradeError(queryClient, ID, apiError(409, 'MARKET_CLOSED'), () => undefined);
+      expect(queryClient.getQueryState(marketKey(ID))?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryState(ME_QUERY_KEY)?.isInvalidated).toBe(false);
+
+      let sessionRefetched = 0;
+      await applyTradeError(
+        queryClient,
+        ID,
+        apiError(403, 'FORBIDDEN', [{ path: ['expectedAccountId'], message: '다른 계정' }]),
+        () => {
+          sessionRefetched += 1;
+        },
+      );
+      expect(sessionRefetched).toBe(1);
+    } finally {
       queryClient.clear();
     }
   });

@@ -49,6 +49,7 @@ import {
   applyTick,
   applyToPages,
   chunkIds,
+  wroteAnOrder,
 } from '@/lib/market-live';
 import { restartQueries } from '@/lib/query-client';
 import { type CachedSeries, appendTick } from '@/lib/ticks';
@@ -417,8 +418,12 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // The reducer above has already moved the badge and disabled the panel; this fills in
         // what the event does not carry. A transition carries no price, yet `open` writes a
         // price tick and moves lastPrice/pYesBp while publishing only `market:status`
-        // (market-admin.service.ts), and create/update publish nothing at all — so this is the
-        // second, and last, sanctioned refetch.
+        // (market-admin.service.ts), and create/update publish nothing at all.
+        //
+        // It is one of THREE sanctioned refetches in this file, and the count is the point:
+        // `market:trade` → `refreshFills` and `user:position` → `['orders']` are the other two,
+        // and each is there because the event cannot BUILD the row it is about. A refetch for
+        // anything a reducer can write is the 남발 PLAN 11.5 refuses.
         void queryClient.invalidateQueries({
           queryKey: marketKey(event.marketId),
           refetchType: 'active',
@@ -502,7 +507,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // all, so the request could only answer what the list already holds. `refetchType`
         // stays at its default `'active'`, so every tab not showing 주문 이력 pays nothing and
         // is merely marked stale.
-        if (!event.settled) void restartQueries(queryClient, ORDERS_KEY);
+        if (wroteAnOrder(event)) void restartQueries(queryClient, ORDERS_KEY);
         if (refetch) {
           // `restartQueries`, not a bare invalidation: a list that has answered nothing yet
           // would otherwise subscribe to the request it already has instead of issuing one,

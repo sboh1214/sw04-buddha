@@ -10,6 +10,7 @@ import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { type Order, type Position, api, unwrap } from '@/lib/api';
 import { useSession } from '@/lib/use-session';
 import { ORDERS_KEY, POSITIONS_KEY } from '@/lib/market-keys';
+import { statusRank } from '@/lib/market-live';
 
 /**
  * The portfolio's two private lists and the arithmetic /portfolio renders (PLAN 11.3:
@@ -243,6 +244,33 @@ export function realizedPnlAcross(...totals: readonly PortfolioTotals[]): bigint
 }
 
 /**
+ * Which status the badge reads, given the row's OWN snapshot and the live `['market', id]` row
+ * beside it.
+ *
+ * THE HAZARD is the one the four `structuralSharing` joins exist for, arriving at RENDER time
+ * instead of through a cache write. `['market', id]` and `['positions', …]` are two independent
+ * fetches and the market's can be the OLDER of the two — react-query keeps the row it already
+ * had when a REFETCH fails, so a positions answer carrying 마감 could be overwritten on screen
+ * by a market entry still saying 진행 중, with nothing scheduled to correct it. Ranked by
+ * `statusRank`, the same order `applyStatus` and `joinMarket` compare on, so no reading here can
+ * walk a badge backwards.
+ *
+ * A status that would move the row to the OTHER list is refused outright. Membership is the
+ * server's `positions.settled` flag (`positionListStatusFor`), and a void or a settlement
+ * publishes its own `user:position` — which restarts BOTH lists — so the terminal case is
+ * already delivered and needs no help here. Taking it anyway would draw an open holding badged
+ * 무효 while 평가 금액 and 총 평가 금액 still value the row at the last traded price, which is
+ * the fiction `positionValueP` and 정산 이력 are both documented never to print. It is the same
+ * rule `wroteAnOrder` (market-live.ts) states from the other side: a terminal transition is the
+ * REST answer's business, not an event's.
+ */
+export function liveMarketStatus(held: MarketStatus, live: MarketStatus | undefined): MarketStatus {
+  if (live === undefined) return held;
+  if (statusRank(live) <= statusRank(held)) return held;
+  return positionListStatusFor(live) === positionListStatusFor(held) ? live : held;
+}
+
+/**
  * The position as the screen must read it: the market's LIVE price and status where the tab
  * holds the row, and the position's own snapshot otherwise.
  *
@@ -261,7 +289,9 @@ export function realizedPnlAcross(...totals: readonly PortfolioTotals[]): bigint
  * unrelated positions refetch. The detail screen already made this call once, passing the live
  * `status` to `MyPosition` rather than trusting the row's copy; this is /portfolio doing the
  * same. Refetching the lists on a status event would be the wrong half: two private requests
- * per event per signed-in tab, to move one denormalized enum.
+ * per event per signed-in tab, to move one denormalized enum. WHICH of the two statuses wins is
+ * `liveMarketStatus`'s decision, not a `??`: the live row may be the older of the two, and a
+ * terminal one would badge a row the list it is in cannot value.
  *
  * Applied at RENDER time by both readers and never written back to `['positions', …]`:
  * `joinPositions` (market-live.ts) deliberately gives both fields to the REST answer, so a live
@@ -272,7 +302,7 @@ export function markToLiveMarket(
   live: { lastPrice?: number; status?: MarketStatus },
 ): Position {
   const marketLastPrice = live.lastPrice ?? position.marketLastPrice;
-  const marketStatus = live.status ?? position.marketStatus;
+  const marketStatus = liveMarketStatus(position.marketStatus, live.status);
   if (marketLastPrice === position.marketLastPrice && marketStatus === position.marketStatus) {
     return position;
   }

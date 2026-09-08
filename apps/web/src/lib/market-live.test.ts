@@ -35,6 +35,7 @@ import {
   joinMarketPages,
   joinPositions,
   statusRank,
+  wroteAnOrder,
 } from './market-live';
 
 const ID = '3f2504e0-4f89-11d3-9a0c-0305e82c3301';
@@ -428,6 +429,22 @@ describe('applyPositionEvent', () => {
     // land and stand: 보유 없음 on a market the account had just bought into, in every tab but
     // the one that traded.
     expect(applyPositionEvent(undefined, positionEvent())).toEqual({ kind: 'refetch' });
+  });
+});
+
+describe('wroteAnOrder', () => {
+  it('asks for 주문 이력 on a trade and never on a settlement, which writes no order row', () => {
+    // 주문 이력 has no reducer and no event of its own — an `Order` carries an id, status,
+    // filledQty, amountP and priceAvgBp that no `user:` event does — so a trade's row can only
+    // be asked for. A void or a settlement moves positions and balances and inserts NO order
+    // (market-admin.service.ts), so the same request could answer only what the list holds:
+    // one private refetch per holder per settled market, for nothing.
+    expect(wroteAnOrder(positionEvent())).toBe(true);
+    expect(wroteAnOrder(positionEvent({ settled: true }))).toBe(false);
+    // The flag, not the shape of the change: a settlement that closes a row out to qty 0 and a
+    // sell that does the same are told apart by `settled` alone.
+    expect(wroteAnOrder(positionEvent({ qty: 0, settled: false }))).toBe(true);
+    expect(wroteAnOrder(positionEvent({ qty: 0, settled: true }))).toBe(false);
   });
 });
 

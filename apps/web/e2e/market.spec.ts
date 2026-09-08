@@ -91,7 +91,11 @@ test.describe('시장 상세', () => {
     expect(html).toContain(`${copy.yes} ${String(market.lastPrice)}%`);
     expect(html).toContain(`${(market.pYesBp / 100).toFixed(2)}%`);
 
-    // rules — never collapsed, never behind a client boundary (PLAN 11.1's Kalshi principle).
+    // rules — never collapsed, and never behind a cache BRANCH (PLAN 11.1's Kalshi
+    // principle). `LiveRulesSection` is a client component now, which is fine: it renders
+    // inside the page's HydrationBoundary and falls back to the row the server fetched
+    // (`?? fallback`), so this holds whether or not the seeded query is readable. Delete
+    // that fallback and this assertion goes red, which is why it is not optional polish.
     expect(html).toContain(copy.rulesSectionTitle);
     expect(html).toContain(market.rules);
 
