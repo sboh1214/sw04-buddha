@@ -27,6 +27,7 @@ import {
 } from '@/hooks/use-portfolio';
 import { type Position } from '@/lib/api';
 import { formatContracts } from '@/lib/market-admin';
+import { sessionListSection } from '@/lib/query-client';
 
 /**
  * 내 포지션 on the market detail (PLAN 11.3): what this visitor holds in THIS market, marked to
@@ -90,6 +91,18 @@ export function MyPosition({
   const positions = usePositions(listStatus);
   const pathname = usePathname();
   const rows = (positions.data ?? []).filter((row) => row.marketId === marketId);
+  // Four states, not three. A refetch that fails after the list has answered KEEPS the rows and
+  // reports `isRefetchError`, which this ladder folded into the ordinary reading — and on this
+  // card that silence is a false sentence, not merely a stale one. `user:position` can neither
+  // BUILD a row (it carries no marketSlug/Title/Status/LastPrice) nor MOVE one between the two
+  // lists, so `applyPositionEvent` answers `refetch` for exactly the two cases that matter here:
+  // another tab opening this market's first holding, and a settlement. That refetch is the only
+  // path, and when it failed the card told an account that DOES hold — and on a settled market,
+  // one that was already paid out — 아직 이 시장에 참여하지 않았습니다.
+  //
+  // The count is the MARKET-FILTERED one: a stale list full of other markets' rows is empty for
+  // this market, which is the reading that has to reach the empty rung rather than an empty list.
+  const section = sessionListSection(positions, rows.length);
 
   return (
     <Card.Root data-testid={testId}>
@@ -99,7 +112,7 @@ export function MyPosition({
         </Heading>
       </Card.Header>
       <Card.Body>
-        {!positions.isLoggedIn && !positions.isPending ? (
+        {section.body === 'signedOut' ? (
           <EmptyState
             message={copy.marketLoginToSeePosition}
             action={
@@ -112,32 +125,58 @@ export function MyPosition({
               </Button>
             }
           />
-        ) : positions.isPending ? (
-          <Skeleton height="12" />
-        ) : positions.isLoadingError ? (
-          <Stack gap="2" align="flex-start">
-            <Alert.Root status="error" role="alert">
-              <Alert.Indicator />
-              <Alert.Content>
-                <Alert.Description>{copy.errUnknown}</Alert.Description>
-              </Alert.Content>
-            </Alert.Root>
-            <Button size="sm" variant="outline" onClick={() => void positions.refetch()}>
-              {copy.retry}
-            </Button>
-          </Stack>
-        ) : rows.length === 0 ? (
-          <EmptyState message={copy.marketMyPositionEmpty} />
         ) : (
-          <Stack gap="4">
-            {rows.map((row) =>
-              listStatus === 'settled' ? (
-                // A finished market is never marked to a price (see `SettledPositionRows`), so
-                // the live one is not passed down here — there is nothing for it to value.
-                <SettledPositionRows key={row.outcome} position={row} />
-              ) : (
-                <PositionRows key={row.outcome} position={markToLiveMarket(row, { lastPrice })} />
-              ),
+          <Stack gap="3">
+            {/* Above the body, never in place of it: the rows are real and worth keeping on
+                screen, and the empty rung is the one that needs the label most. The same shape
+                as 체결 내역 directly below this card. */}
+            {section.stale && (
+              <Alert.Root status="warning" role="status" data-testid="market-my-position-stale">
+                <Alert.Indicator />
+                <Alert.Content>
+                  <Alert.Description>{copy.marketRefreshFailed}</Alert.Description>
+                </Alert.Content>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  ml="auto"
+                  onClick={() => void positions.refetch()}
+                >
+                  {copy.retry}
+                </Button>
+              </Alert.Root>
+            )}
+            {section.body === 'pending' ? (
+              <Skeleton height="12" />
+            ) : section.body === 'failed' ? (
+              <Stack gap="2" align="flex-start">
+                <Alert.Root status="error" role="alert">
+                  <Alert.Indicator />
+                  <Alert.Content>
+                    <Alert.Description>{copy.errUnknown}</Alert.Description>
+                  </Alert.Content>
+                </Alert.Root>
+                <Button size="sm" variant="outline" onClick={() => void positions.refetch()}>
+                  {copy.retry}
+                </Button>
+              </Stack>
+            ) : section.body === 'empty' ? (
+              <EmptyState message={copy.marketMyPositionEmpty} />
+            ) : (
+              <Stack gap="4">
+                {rows.map((row) =>
+                  listStatus === 'settled' ? (
+                    // A finished market is never marked to a price (see `SettledPositionRows`),
+                    // so the live one is not passed down here — there is nothing to value.
+                    <SettledPositionRows key={row.outcome} position={row} />
+                  ) : (
+                    <PositionRows
+                      key={row.outcome}
+                      position={markToLiveMarket(row, { lastPrice })}
+                    />
+                  ),
+                )}
+              </Stack>
             )}
           </Stack>
         )}

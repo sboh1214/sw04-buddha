@@ -201,6 +201,28 @@ export function listSection(
   return { stale: view === 'stale', body: rowCount === 0 ? 'empty' : 'rows' };
 }
 
+/**
+ * A list section that sits behind a SESSION gate, which `listSection` cannot see — the same hole
+ * `profileView` exists for: three query flags cannot tell a signed-out reader from an empty one.
+ *
+ * `signedOut` is answered before `stale` so a notice can never ride above a sign-in prompt: a
+ * query `SessionCacheGuard` reset has no rows to be stale ABOUT, and the 다시 시도 beside such a
+ * notice could only 401. `pending` still wins over both, because `useSession` pins `isPending`
+ * through hydration and a bare `!isLoggedIn` would flash the prompt on every single load.
+ */
+export function sessionListSection(
+  query: {
+    isLoggedIn: boolean;
+    isPending: boolean;
+    isLoadingError: boolean;
+    isRefetchError: boolean;
+  },
+  rowCount: number,
+): { stale: boolean; body: 'signedOut' | 'pending' | 'failed' | 'empty' | 'rows' } {
+  if (!query.isLoggedIn && !query.isPending) return { stale: false, body: 'signedOut' };
+  return listSection(query, rowCount);
+}
+
 /** What a screen that needs the signed-in profile can say about it. */
 export type ProfileView = 'pending' | 'signedOut' | 'failed' | 'ready';
 

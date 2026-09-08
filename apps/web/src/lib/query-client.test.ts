@@ -9,6 +9,7 @@ import {
   listSection,
   listView,
   profileView,
+  sessionListSection,
 } from './query-client';
 
 /**
@@ -226,5 +227,62 @@ describe('profileView', () => {
     expect(
       profileView({ isLoggedIn: false, isPending: false, isFetching: false, hasProfile: true }),
     ).toBe('ready');
+  });
+});
+
+describe('sessionListSection', () => {
+  it('says the refresh failed instead of asserting 아직 이 시장에 참여하지 않았습니다', () => {
+    // THE FALSE SENTENCE: `user:position` can neither BUILD a row (it carries no marketSlug,
+    // marketTitle, marketStatus or marketLastPrice) nor MOVE one between the open and settled
+    // lists, so `applyPositionEvent` answers `refetch` for both — another tab opening this
+    // market's first holding, and a settlement. That refetch is the ONLY path, and when it
+    // failed the detail card told an account that DOES hold — on a settled market, one already
+    // paid out — that it never participated. The empty rung is the one that most needs a label.
+    expect(
+      sessionListSection(
+        { isLoggedIn: true, isPending: false, isLoadingError: false, isRefetchError: true },
+        0,
+      ),
+    ).toEqual({ stale: true, body: 'empty' });
+  });
+
+  it('keeps the rows and still says they stopped being refreshed', () => {
+    expect(
+      sessionListSection(
+        { isLoggedIn: true, isPending: false, isLoadingError: false, isRefetchError: true },
+        1,
+      ),
+    ).toEqual({ stale: true, body: 'rows' });
+  });
+
+  it('never puts a stale notice above a sign-in prompt', () => {
+    // A query `SessionCacheGuard` reset holds no rows to be stale ABOUT, and the 다시 시도 such
+    // a notice offers could only 401. The session rung has to be answered first.
+    expect(
+      sessionListSection(
+        { isLoggedIn: false, isPending: false, isLoadingError: false, isRefetchError: true },
+        0,
+      ),
+    ).toEqual({ stale: false, body: 'signedOut' });
+  });
+
+  it('lets pending win over signedOut, so no prompt flashes through hydration', () => {
+    expect(
+      sessionListSection(
+        { isLoggedIn: false, isPending: true, isLoadingError: false, isRefetchError: true },
+        0,
+      ),
+    ).toEqual({ stale: false, body: 'pending' });
+  });
+
+  it('leaves a FIRST-load failure replacing the body, which is still right', () => {
+    // Only `stale` keeps its content. A load that never answered has nothing to keep, so the
+    // error and its 다시 시도 take the whole card as they always did.
+    expect(
+      sessionListSection(
+        { isLoggedIn: true, isPending: false, isLoadingError: true, isRefetchError: false },
+        0,
+      ),
+    ).toEqual({ stale: false, body: 'failed' });
   });
 });
