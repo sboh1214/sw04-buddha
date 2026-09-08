@@ -462,6 +462,41 @@ describe('applyTradeMarket', () => {
       queryClient.clear();
     }
   });
+
+  it('re-asks for a 체결 내역 that has answered nothing yet', async () => {
+    // The fills list is the one cache on the detail screen that is NEVER seeded —
+    // `seedMarketDetail` carries the market and the ticks — so its first fetch is the ordinary
+    // path on every visit. A trader who submits inside that window would otherwise have this
+    // invalidation wait on the request that left before their own fill, and nothing else writes
+    // this key for them: `useMarketFills` has no `refetchInterval`, and the socket's own
+    // `market:trade` is published for OTHER people's trades.
+    const queryClient = getQueryClient();
+    let fetches = 0;
+    const observer = new QueryObserver<TradeResult['fill'][]>(queryClient, {
+      queryKey: marketFillsKey(ID),
+      queryFn: () => {
+        fetches += 1;
+        return Promise.resolve(fetches === 1 ? [] : [tradeResult.fill]);
+      },
+      retry: false,
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
+    try {
+      const first = observer.refetch();
+      expect(queryClient.getQueryData(marketFillsKey(ID))).toBeUndefined();
+
+      await applyTradeMarket(queryClient, tradeResult);
+      await first;
+
+      expect(fetches).toBe(2);
+      expect(queryClient.getQueryData<TradeResult['fill'][]>(marketFillsKey(ID))?.[0]?.id).toBe(
+        tradeResult.fill.id,
+      );
+    } finally {
+      unsubscribe();
+      queryClient.clear();
+    }
+  });
 });
 
 describe('applyTradeResult during a first private fetch', () => {

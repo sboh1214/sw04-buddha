@@ -294,14 +294,26 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
      * A refusal therefore schedules itself for the rest of the window and every event inside
      * it coalesces into that one late refetch; re-entering rather than invalidating from the
      * timer keeps a single statement of when a refetch is allowed.
+     *
+     * `restartQueries` and not a bare invalidation, for the same reason the position and the
+     * balance handlers cancel first. The fills list is never seeded (`seedMarketDetail` carries
+     * the market and the ticks, not this), so its FIRST fetch is the ordinary path on every
+     * visit to a market — and a trade landing in that window is exactly what this handler is
+     * for. A bare invalidation there subscribes to the request already running, which left
+     * before the fill; and because `take` SUCCEEDED, the trailing edge that rescues a refused
+     * window is never armed either, so that event buys nothing at all.
+     *
+     * Self-healing, not permanent: once the first answer has landed the query holds data, so
+     * the NEXT trade in this market refetches normally (that is the `cancelRefetch` gate) and
+     * the missing row appears. Which is the whole shape of it — the busy markets where the race
+     * is likely repair themselves within a second, and it is the quiet market, where one trade
+     * an hour arrives just as somebody opens the page, that shows 체결 없음 under a probability
+     * that plainly just moved.
      */
     const refreshFills = (marketId: string) => {
       const now = Date.now();
       if (fills.take(marketId, now)) {
-        void queryClient.invalidateQueries({
-          queryKey: marketFillsKey(marketId),
-          refetchType: 'active',
-        });
+        void restartQueries(queryClient, marketFillsKey(marketId));
         return;
       }
       if (fillsPending.has(marketId)) return;

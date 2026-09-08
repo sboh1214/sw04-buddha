@@ -342,7 +342,13 @@ export function applyTradeResult(queryClient: QueryClient, result: TradeResult):
  */
 export function applyTradeMarket(queryClient: QueryClient, result: TradeResult): Promise<void> {
   applyMarketStats(queryClient, result.market);
-  return queryClient.invalidateQueries({ queryKey: marketFillsKey(result.market.id) });
+  // `restartQueries` for symmetry with the socket path rather than because it bites: the fills
+  // list is never seeded (`seedMarketDetail` carries the market and the ticks), so a bare
+  // invalidation would wait on the request that left before this fill — but reaching it takes a
+  // trade submitted while 체결 내역 is still on its FIRST fetch, which is a press within a
+  // moment of mount. It costs nothing and leaves no invalidation of an unseeded key on the
+  // shape this repo has twice had to correct.
+  return restartQueries(queryClient, marketFillsKey(result.market.id));
 }
 
 /**
