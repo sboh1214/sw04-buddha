@@ -43,6 +43,7 @@ import {
   useTrade,
 } from '@/hooks/use-trade';
 import { type Market, type TradeBody, isApiError } from '@/lib/api';
+import { tickingNow } from '@/lib/datetime';
 import { useSession } from '@/lib/use-session';
 import {
   formatBp,
@@ -166,13 +167,25 @@ function useTradePanel(market: Market): TradePanelState {
    * the dehydrated payload, so the SSR render and its hydration agree byte for byte — and the
    * interval takes over from the first browser frame, exactly as the badge does.
    *
-   * The server's instant stays the FLOOR, so a browser clock running behind it cannot re-open a
-   * market the cache already describes past its close time. The last word belongs to
-   * `assertTradable` on the database clock anyway (A-M3-16) — a refusal arrives as MARKET_CLOSED
-   * and renders through the same string.
+   * The browser is asked only for a DURATION, never for an instant: `tickingNow` adds a monotonic
+   * elapsed to the server's anchor. `Math.max(anchor, Date.now())` was not a repair — the two
+   * numbers come from different machines, and `closeAt` is the server's — so a browser running
+   * BEHIND stayed pinned at the anchor and went on offering trades in a closed market, while one
+   * running AHEAD won the max outright and drew 마감 over a market still open. See `tickingNow`
+   * for which half is worse and what the fix does not recover.
+   *
+   * The ANCHOR is captured once, at the first render, and deliberately not refreshed: only the
+   * SSR-hydrated `dataUpdatedAt` is a server instant. query-core restamps it with the BROWSER's
+   * clock on every later success — a refetch, and every `market:tick` the socket writes — so
+   * re-anchoring would quietly put the skew back (measured: hydrate keeps the server stamp,
+   * refetch and `setQueryData` do not).
+   *
+   * The last word belongs to `assertTradable` on the database clock anyway (A-M3-16) — a refusal
+   * arrives as MARKET_CLOSED and renders through the same string.
    */
+  const [anchor] = useState(marketUpdatedAt);
   const [clock, setClock] = useState<number | undefined>(undefined);
-  const now = clock === undefined ? marketUpdatedAt : Math.max(marketUpdatedAt, clock);
+  const now = clock ?? anchor;
   const tradable = isTradable(market, now);
   useEffect(() => {
     // Nothing left to watch once the market cannot be traded: the panel has replaced itself with
@@ -180,11 +193,21 @@ function useTradePanel(market: Market): TradePanelState {
     // its own.
     if (!tradable) return;
     // `setClock` is called from a timer callback and never synchronously in the effect body: the
-    // second form is what `react-hooks/set-state-in-effect` refuses. The zero-delay timeout is
-    // what corrects a load instant that is already old on the first browser frame rather than up
-    // to a second later.
+    // second form is what `react-hooks/set-state-in-effect` refuses. The zero-delay timeout no
+    // longer CORRECTS anything — at elapsed 0 it answers the anchor itself — but it still starts
+    // the clock on the first browser frame rather than up to a second later, which is what keeps
+    // this and the badge stepping together.
+    // `performance.now()` and not `Date.now()`: the elapsed has to survive an NTP step, which is
+    // the very moment a wall-clock delta would jump. Read in the callback, never in a render.
+    //
+    // And measured from the DOCUMENT's origin — `performance.now()` bare — rather than from an
+    // instant captured here. Capturing one would restart it whenever this effect does, so an
+    // admin extending `closeAt` on an expired market (A-M3-31 makes that ordinary) would rewind
+    // the clock to the page-load anchor; and it would give every component its own origin, so
+    // cards added by 더 보기 would count from their own mount and disagree with the cards beside
+    // them over one shared anchor. The document origin is the one clock the whole page shares.
     const tick = () => {
-      setClock(Date.now());
+      setClock(tickingNow(anchor, performance.now(), Date.now()));
     };
     const first = setTimeout(tick, 0);
     const timer = setInterval(tick, CLOCK_TICK_MS);
@@ -192,7 +215,7 @@ function useTradePanel(market: Market): TradePanelState {
       clearTimeout(first);
       clearInterval(timer);
     };
-  }, [tradable]);
+  }, [tradable, anchor]);
 
   // PLAN 11.4's 300ms, on the typed amount ONLY. 매수/매도, 예/아니오 and the mode reach the
   // quote key undebounced, so a discrete tap re-prices instantly (design 4.2).

@@ -4,7 +4,7 @@ import { Badge } from '@chakra-ui/react';
 import { type MarketStatus } from '@buddha/shared';
 import { useEffect, useState } from 'react';
 import { copy } from '@/copy';
-import { formatKst, formatRemaining } from '@/lib/datetime';
+import { formatKst, formatRemaining, tickingNow } from '@/lib/datetime';
 import { isClosingSoon } from '@/lib/market-admin';
 
 /**
@@ -16,9 +16,19 @@ import { isClosingSoon } from '@/lib/market-admin';
  * `Date.now()` in the render body would put a different string in the server's HTML than in
  * the first client render, which is a hydration mismatch on the page AC 2 measures.
  *
+ * That instant is then an ANCHOR the browser only adds a duration to (`tickingNow`), never a
+ * value it replaces with its own clock. The badge used to tick on a raw `Date.now()`, so a
+ * visitor whose clock was wrong counted down wrong by exactly the skew — and the trade panel
+ * beside it anchors now, so ticking differently here would put the two readings of one close
+ * time on one screen in disagreement, which is what A-M4-23 promises they never are. On the
+ * detail screen the two anchors are both the SERVER's (this one is the API's own
+ * `clock_timestamp()`, carried as the series' window end), so no browser clock reaches either.
+ *
  * With no `now` at all the badge still renders something true — the absolute close time in KST
- * — and swaps to the countdown once mounted. That is what lets a caller that has no server
- * instant (the home grid, the admin preview) drop the component in unchanged.
+ * — and swaps to the countdown once mounted, ticking on the wall clock because there is nothing
+ * to anchor to. That is what lets a caller with no server instant (the home grid, the admin
+ * preview) drop the component in unchanged, and it is safe there: the badge is display-only and
+ * has no panel beside it to disagree with.
  *
  * Colour never carries the state alone (PLAN 11.2): 마감 임박 and 마감됨 are written out beside
  * the orange and the grey.
@@ -45,6 +55,7 @@ export function CountdownBadge({
   size = 'sm',
   'data-testid': testId = 'market-countdown',
 }: CountdownBadgeProps) {
+  const [anchor] = useState(now);
   const [clock, setClock] = useState(now);
   const remaining = clock === undefined ? '' : formatRemaining(market.closeAt, clock);
   // A market whose close time has passed stays `open` until the close job runs (A-M3-31), so
@@ -55,9 +66,14 @@ export function CountdownBadge({
     if (!running) return;
     // `setClock` is called from a timer callback, never synchronously in the effect body: the
     // second form is what `react-hooks/set-state-in-effect` refuses. The zero-delay timeout is
-    // what fills in a missing `now` on the first client frame rather than a second later.
+    // what fills in a MISSING `now` on the first client frame rather than a second later; with an
+    // anchor it answers that anchor unchanged, and the ticking starts from there.
+    // `performance.now()` and not `Date.now()`: the browser is asked for a DURATION, which its
+    // clock measures correctly, and never for an instant to compare against a server's. Bare,
+    // so every badge on a grid counts from the DOCUMENT's origin — see the trade panel for why
+    // a per-component origin makes cards added by 더 보기 disagree with the ones beside them.
     const tick = () => {
-      setClock(Date.now());
+      setClock(tickingNow(anchor, performance.now(), Date.now()));
     };
     const first = setTimeout(tick, 0);
     const timer = setInterval(tick, TICK_MS);
@@ -65,7 +81,7 @@ export function CountdownBadge({
       clearTimeout(first);
       clearInterval(timer);
     };
-  }, [running]);
+  }, [running, anchor]);
 
   if (!running) {
     return (

@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
-import { formatKst, formatRemaining, isoToKstLocal, kstLocalToIso } from './datetime';
+import { formatKst, formatRemaining, isoToKstLocal, kstLocalToIso, tickingNow } from './datetime';
 
 const originalTz = process.env.TZ;
 afterAll(() => {
@@ -118,5 +118,58 @@ describe('formatRemaining', () => {
     expect(formatRemaining(closeAt, Date.parse(closeAt) + 1000)).toBe('');
     expect(formatRemaining('not-a-date', Date.parse(closeAt))).toBe('');
     expect(formatRemaining('', Date.parse(closeAt))).toBe('');
+  });
+});
+
+describe('tickingNow', () => {
+  /** The server answered ten seconds before this market closes. */
+  const CLOSE = Date.parse('2026-09-08T12:00:00.000Z');
+  const anchor = CLOSE - 10_000;
+  /** What the panel and the badge both ask: has the close passed yet? */
+  const closed = (now: number) => now >= CLOSE;
+
+  it('advances the server anchor by the browser duration, so a wrong clock cannot move the close', () => {
+    // THE HAZARD: `closeAt` is the SERVER's instant and `Date.now()` is the visitor's, so the old
+    // `Math.max(anchor, Date.now())` compared two machines. Here the browser supplies only the
+    // elapsed — the one thing its clock measures correctly — and the reading is the same at every
+    // skew, which is the whole point of the change.
+    for (const elapsedMs of [0, 5_000, 9_999, 10_000, 30_000]) {
+      const wallNow = anchor + elapsedMs; // a synced browser
+      expect(tickingNow(anchor, elapsedMs, wallNow)).toBe(anchor + elapsedMs);
+      // A minute fast and a minute slow answer identically: the wall clock is not consulted.
+      expect(tickingNow(anchor, elapsedMs, wallNow + 60_000)).toBe(anchor + elapsedMs);
+      expect(tickingNow(anchor, elapsedMs, wallNow - 60_000)).toBe(anchor + elapsedMs);
+    }
+  });
+
+  it('keeps a slow browser from trading past the close, which the old floor did not', () => {
+    // A browser a minute BEHIND used to be pinned at the anchor for the whole minute — the panel
+    // went on offering 예/아니오 in a market that had closed, and the server refused each press.
+    const elapsedMs = 11_000;
+    const slowWall = anchor + elapsedMs - 60_000;
+    expect(closed(Math.max(anchor, slowWall))).toBe(false); // the old reading: still open
+    expect(closed(tickingNow(anchor, elapsedMs, slowWall))).toBe(true);
+  });
+
+  it('keeps a fast browser from taking a live market away, the half A-M4-23 dismissed', () => {
+    // The worse direction, and the one the record called impossible ("only at the instant the
+    // countdown reaches zero"): a browser a minute AHEAD won the `Math.max` outright and drew
+    // 마감 a full minute early, so the visitor simply could not trade an open market.
+    const elapsedMs = 5_000;
+    const fastWall = anchor + elapsedMs + 60_000;
+    expect(closed(Math.max(anchor, fastWall))).toBe(true); // the old reading: closed, wrongly
+    expect(closed(tickingNow(anchor, elapsedMs, fastWall))).toBe(false);
+  });
+
+  it('hands back the wall clock when there is no anchor to add to', () => {
+    // A card on the home grid renders the badge with no `now`: nothing to anchor to, no panel
+    // beside it to disagree with, and display-only. That is today's behaviour, kept.
+    expect(tickingNow(undefined, 5_000, 1_234_567)).toBe(1_234_567);
+  });
+
+  it('never runs backwards on a negative elapsed', () => {
+    // `performance.now()` is monotonic, so this is defence rather than a case seen — but the
+    // clock feeding a close gate must not be the thing that re-opens a closed market.
+    expect(tickingNow(anchor, -5_000, anchor)).toBe(anchor);
   });
 });

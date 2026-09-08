@@ -126,3 +126,53 @@ function unitPair(
   const head = `${String(major)}${majorUnit}`;
   return minor === 0 ? head : `${head} ${String(minor)}${minorUnit}`;
 }
+
+/**
+ * The instant a ticking clock should report, given the ANCHOR it started from and how long the
+ * browser has observed since. Both the 마감 countdown and the trade panel's close gate read it,
+ * so the two cannot drift apart (A-M4-23 says they run the same clock).
+ *
+ * THE HAZARD it closes: the two numbers being compared come from DIFFERENT MACHINES. `closeAt`
+ * is the server's, and `Date.now()` is the visitor's — a browser whose clock is wrong is wrong
+ * about the close by exactly its skew, in whichever direction the skew runs. The panel used to
+ * take `Math.max(anchor, Date.now())`, which is not a repair: a browser running BEHIND is pinned
+ * at the anchor and its clock never advances until the skew is spent, so it goes on offering
+ * trades in a market that has closed; one running AHEAD wins the `Math.max` outright and draws
+ * 마감 over a market that is still open, which is the worse half — the first costs a round trip
+ * the server refuses with `copy.errTradeClosed`, the second takes the trade away. A-M4-23
+ * recorded the first and dismissed the second as "only at the instant the countdown reaches
+ * zero", which measurement did not bear out: a 60s-fast browser reads 마감 a full minute early.
+ *
+ * So the browser is asked only for a DURATION, which is the one thing its clock measures
+ * correctly, and it is added to a server instant. `elapsedMs` must come from a MONOTONIC source
+ * (`performance.now()` deltas): `Date.now()` deltas jump when NTP steps the clock mid-session,
+ * which is exactly the moment this is protecting.
+ *
+ * `elapsedMs` should be `performance.now()` BARE, measured from the document's own origin rather
+ * than from an instant a component captured. A captured origin restarts whenever its effect does
+ * — an admin extending `closeAt` on an expired market (A-M3-31 makes that ordinary) would rewind
+ * the clock — and it gives every component its own, so cards added by 더 보기 count from their
+ * own mount and disagree with the cards beside them over one shared anchor.
+ *
+ * What that leaves uncounted is only the navigation's own head: the anchor is stamped after the
+ * request arrives, so the document origin precedes it by the server's processing and the request
+ * travel, and the clock therefore runs that far AHEAD. It is tens to hundreds of milliseconds,
+ * well inside the one-second tick either component redraws on, and it is the last of the error —
+ * where the old reading was wrong by the visitor's whole skew, minutes or hours.
+ *
+ * A suspend is the other residue, in the other direction: `performance.now()` may stop while wall
+ * time passes, so a resumed tab reads behind. Advancing by `Math.max(monotonic, wallDelta)` would
+ * close it and was REJECTED, because it re-opens the failure this exists to remove — on the very
+ * machine this is for, the one whose clock is wrong, an NTP correction lands inside the wall
+ * delta, and a measured 60s forward step then draws 마감 60s early on an open market. A resumed
+ * tab is behind in every other way too and the server still refuses the late trade; a corrected
+ * clock is not, and being shown 마감 on a live market takes the trade away with no recourse.
+ *
+ * With NO anchor the wall clock is all there is, and the caller gets it back unchanged: a card
+ * on the home grid renders the badge with no `now`, has no panel beside it to disagree with, and
+ * is display-only.
+ */
+export function tickingNow(anchor: number | undefined, elapsedMs: number, wallNow: number): number {
+  if (anchor === undefined) return wallNow;
+  return anchor + Math.max(0, elapsedMs);
+}
