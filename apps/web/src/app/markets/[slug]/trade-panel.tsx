@@ -185,6 +185,9 @@ function useTradePanel(market: Market): TradePanelState {
    */
   const [anchor] = useState(marketUpdatedAt);
   const [clock, setClock] = useState<number | undefined>(undefined);
+  // The monotonic origin the elapsed is measured from. A ref and not state: written inside the
+  // effect and read only there, so no render touches it (`react-hooks/refs` is an error).
+  const originRef = useRef<number | undefined>(undefined);
   const now = clock ?? anchor;
   const tradable = isTradable(market, now);
   useEffect(() => {
@@ -200,14 +203,16 @@ function useTradePanel(market: Market): TradePanelState {
     // `performance.now()` and not `Date.now()`: the elapsed has to survive an NTP step, which is
     // the very moment a wall-clock delta would jump. Read in the callback, never in a render.
     //
-    // And measured from the DOCUMENT's origin — `performance.now()` bare — rather than from an
-    // instant captured here. Capturing one would restart it whenever this effect does, so an
-    // admin extending `closeAt` on an expired market (A-M3-31 makes that ordinary) would rewind
-    // the clock to the page-load anchor; and it would give every component its own origin, so
-    // cards added by 더 보기 would count from their own mount and disagree with the cards beside
-    // them over one shared anchor. The document origin is the one clock the whole page shares.
+    // Measured from an origin captured ONCE for this panel — `??=`, so an effect re-run cannot
+    // restart it and rewind the gate to the page-load anchor (an admin extending `closeAt` on an
+    // expired market is ordinary, A-M3-31). NOT `performance.now()` bare: bare is the DOCUMENT's
+    // age, and a `next/link` navigation keeps the document, so a panel reached from the grid
+    // would add the visitor's whole browsing session to the anchor and draw 마감 over an open
+    // market — the worse half of the very hazard this fix exists to remove. See `tickingNow`.
+    originRef.current ??= performance.now();
+    const startedAt = originRef.current;
     const tick = () => {
-      setClock(tickingNow(anchor, performance.now(), Date.now()));
+      setClock(tickingNow(anchor, performance.now() - startedAt, Date.now()));
     };
     const first = setTimeout(tick, 0);
     const timer = setInterval(tick, CLOCK_TICK_MS);

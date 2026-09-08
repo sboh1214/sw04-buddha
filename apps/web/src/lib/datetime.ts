@@ -148,17 +148,24 @@ function unitPair(
  * (`performance.now()` deltas): `Date.now()` deltas jump when NTP steps the clock mid-session,
  * which is exactly the moment this is protecting.
  *
- * `elapsedMs` should be `performance.now()` BARE, measured from the document's own origin rather
- * than from an instant a component captured. A captured origin restarts whenever its effect does
- * — an admin extending `closeAt` on an expired market (A-M3-31 makes that ordinary) would rewind
- * the clock — and it gives every component its own, so cards added by 더 보기 count from their
- * own mount and disagree with the cards beside them over one shared anchor.
+ * `elapsedMs` must be measured from the moment THIS reader adopted THIS anchor — a monotonic
+ * origin captured once per component instance, `??=` into a ref so an effect re-run cannot
+ * restart it and rewind the clock. Nothing recovers time that passed before the adoption, so an
+ * anchor adopted LATE is read as the present; `rowAnchor` below is what keeps a late reader from
+ * adopting one at all.
  *
- * What that leaves uncounted is only the navigation's own head: the anchor is stamped after the
- * request arrives, so the document origin precedes it by the server's processing and the request
- * travel, and the clock therefore runs that far AHEAD. It is tens to hundreds of milliseconds,
- * well inside the one-second tick either component redraws on, and it is the last of the error —
- * where the old reading was wrong by the visitor's whole skew, minutes or hours.
+ * `performance.now()` BARE was tried and is WRONG, and naming it is the point of this paragraph:
+ * bare is the DOCUMENT's age, and a `next/link` navigation keeps the document. The grid links to
+ * the detail that way (market-card.tsx), so a visitor who browsed for five minutes before
+ * clicking a card landed on a panel reading five minutes AHEAD of the anchor — measured, a market
+ * 30s from closing drew 마감 with every trade control gone. That is the fast-clock half of the
+ * hazard above, reintroduced for every visitor whether or not their clock is wrong.
+ *
+ * What a per-instance origin leaves uncounted is the head of the visit: the anchor is stamped
+ * before the response is serialized, transferred, parsed and hydrated, so the clock runs that far
+ * BEHIND. That direction is the safe one — `assertTradable` on the database clock covers it
+ * (A-M3-16, MARKET_CLOSED → `copy.errTradeClosed`) — where the old reading was wrong by the
+ * visitor's whole skew, minutes or hours, in the direction that takes the trade away.
  *
  * A suspend is the other residue, in the other direction: `performance.now()` may stop while wall
  * time passes, so a resumed tab reads behind. Advancing by `Math.max(monotonic, wallDelta)` would
@@ -175,4 +182,31 @@ function unitPair(
 export function tickingNow(anchor: number | undefined, elapsedMs: number, wallNow: number): number {
   if (anchor === undefined) return wallNow;
   return anchor + Math.max(0, elapsedMs);
+}
+
+/**
+ * The server instant a grid row may anchor its countdown to, or `undefined` for a row that must
+ * fall back to the wall clock.
+ *
+ * THE HAZARD: `tickingNow` adds the duration observed since the anchor was ADOPTED, so an anchor
+ * is only usable by a reader that mounted with it. The home page stamps ONE instant and hands it
+ * to every card, including the rows 더 보기 appends minutes later. Those adopt it long after it
+ * was stamped and would read it as the present — a card mounted five minutes on would show five
+ * minutes more remaining than is true, and would go on being wrong by that much.
+ *
+ * So the instant is offered only to the rows the SERVER rendered — the first page — and only
+ * while the list still holds the server's own answer for them: any client write (a refetch, a
+ * `market:tick`) restamps `listUpdatedAt` with the BROWSER's clock, and a browser instant is
+ * exactly what must not reach a close reading. Every other row gets `undefined`, which
+ * `tickingNow` answers with the wall clock — the reading those cards had before anchoring
+ * existed, and safe there because a grid badge is display-only with no trade panel beside it.
+ */
+export function rowAnchor(
+  index: number,
+  serverRowCount: number,
+  listUpdatedAt: number,
+  now: number | undefined,
+): number | undefined {
+  if (now === undefined) return undefined;
+  return index < serverRowCount && listUpdatedAt === now ? now : undefined;
 }

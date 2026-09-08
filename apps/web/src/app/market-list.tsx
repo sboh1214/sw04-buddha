@@ -6,6 +6,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { copy } from '@/copy';
 import { useMarketSocket } from '@/hooks/use-market-socket';
 import { useMarkets } from '@/hooks/use-markets';
+import { rowAnchor } from '@/lib/datetime';
 import { type MarketFilters } from '@/lib/market-keys';
 
 /**
@@ -50,6 +51,14 @@ export function MarketList({
 }: MarketListProps) {
   const markets = useMarkets(filters);
   const rows = markets.data?.pages.flatMap((page) => page.items) ?? [];
+  /**
+   * Which rows may keep the server's `now` as their countdown anchor (`rowAnchor`): the ones the
+   * SERVER rendered, and only while the list still holds its answer for them. A card 더 보기
+   * appends adopts the anchor at ITS mount, minutes after it was stamped, and would read that
+   * instant as the present — so those tick on the wall clock instead, exactly as every card did
+   * before anchoring existed.
+   */
+  const serverRowCount = markets.data?.pages[0]?.items.length ?? 0;
   useMarketSocket(rows.map((row) => row.id));
 
   return (
@@ -95,10 +104,15 @@ export function MarketList({
       ) : (
         <>
           <SimpleGrid columns={{ base: 1, md: 2, lg: 3 }} gap="4" data-testid="markets-grid">
-            {rows.map((row) => (
+            {rows.map((row, index) => (
               // `sparkline` is a separate prop because the card is also the admin's 미리보기,
               // where a draft has no history at all (Q-M3-6).
-              <MarketCard key={row.id} market={row} sparkline={row.sparkline} now={now} />
+              <MarketCard
+                key={row.id}
+                market={row}
+                sparkline={row.sparkline}
+                now={rowAnchor(index, serverRowCount, markets.dataUpdatedAt, now)}
+              />
             ))}
           </SimpleGrid>
           {markets.hasNextPage && (

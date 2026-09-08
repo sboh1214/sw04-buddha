@@ -1,6 +1,13 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
-import { formatKst, formatRemaining, isoToKstLocal, kstLocalToIso, tickingNow } from './datetime';
+import {
+  formatKst,
+  formatRemaining,
+  isoToKstLocal,
+  kstLocalToIso,
+  rowAnchor,
+  tickingNow,
+} from './datetime';
 
 const originalTz = process.env.TZ;
 afterAll(() => {
@@ -171,5 +178,52 @@ describe('tickingNow', () => {
     // `performance.now()` is monotonic, so this is defence rather than a case seen — but the
     // clock feeding a close gate must not be the thing that re-opens a closed market.
     expect(tickingNow(anchor, -5_000, anchor)).toBe(anchor);
+  });
+});
+
+describe('the elapsed a ticking clock is given', () => {
+  const CLOSE = Date.parse('2026-09-08T12:00:00.000Z');
+
+  it('counts from when the reader adopted the anchor, never from the document', () => {
+    // THE REGRESSION this pins, which a first attempt shipped: `performance.now()` BARE is the
+    // DOCUMENT's age, and `next/link` keeps the document — so a visitor who browsed the grid for
+    // five minutes and then opened a card handed the panel `anchor + 300s`. A market 30s from
+    // closing drew 마감 with every trade control gone, for every visitor, skewed clock or not.
+    const anchor = CLOSE - 30_000; // the detail says: 30 seconds left
+    const documentAge = 300_000; // the visitor browsed for five minutes first
+    expect(tickingNow(anchor, documentAge, 0)).toBeGreaterThan(CLOSE); // what bare gave: closed
+    // Measured from THIS reader's own origin, a panel that just mounted reads the anchor.
+    expect(tickingNow(anchor, 0, 0)).toBe(anchor);
+    expect(tickingNow(anchor, 0, 0)).toBeLessThan(CLOSE); // open, which is the truth
+  });
+});
+
+describe('rowAnchor', () => {
+  const SERVER_NOW = 1_000_000_000_000;
+
+  it('anchors the rows the server rendered, and only while the list is still its answer', () => {
+    // The list holds the server's own answer: its stamp IS the instant handed down.
+    expect(rowAnchor(0, 20, SERVER_NOW, SERVER_NOW)).toBe(SERVER_NOW);
+    expect(rowAnchor(19, 20, SERVER_NOW, SERVER_NOW)).toBe(SERVER_NOW);
+  });
+
+  it('refuses a row 더 보기 appended, which would adopt the anchor minutes late', () => {
+    // `tickingNow` counts from ADOPTION, so a card mounted five minutes on would read a
+    // five-minute-old instant as the present and show that much more time remaining, forever.
+    expect(rowAnchor(20, 20, SERVER_NOW, SERVER_NOW)).toBeUndefined();
+    expect(rowAnchor(57, 20, SERVER_NOW, SERVER_NOW)).toBeUndefined();
+  });
+
+  it('refuses every row once a client write has restamped the list', () => {
+    // A refetch or a `market:tick` restamps `dataUpdatedAt` with the BROWSER's clock (query-core
+    // stamps every success that way; only the hydrated payload carries the server's). A browser
+    // instant is exactly what must not reach a close reading, so the anchor is dropped.
+    expect(rowAnchor(0, 20, SERVER_NOW + 5_000, SERVER_NOW)).toBeUndefined();
+  });
+
+  it('has nothing to offer when the page had no instant to hand down', () => {
+    // A failed prefetch: every badge shows the absolute close time until it mounts, then ticks
+    // on the wall clock — the behaviour those cards have always had.
+    expect(rowAnchor(0, 20, SERVER_NOW, undefined)).toBeUndefined();
   });
 });

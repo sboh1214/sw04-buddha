@@ -2,7 +2,7 @@
 
 import { Badge } from '@chakra-ui/react';
 import { type MarketStatus } from '@buddha/shared';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { copy } from '@/copy';
 import { formatKst, formatRemaining, tickingNow } from '@/lib/datetime';
 import { isClosingSoon } from '@/lib/market-admin';
@@ -61,6 +61,9 @@ export function CountdownBadge({
   // A market whose close time has passed stays `open` until the close job runs (A-M3-31), so
   // "the countdown ran out" is an ordinary state and the badge, not the status, reports it.
   const running = market.status === 'open' && (clock === undefined || remaining !== '');
+  // The monotonic origin the elapsed is measured from. A ref and not state: it is written inside
+  // the effect and read only there, so no render touches it (`react-hooks/refs` is an error).
+  const originRef = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     if (!running) return;
@@ -68,12 +71,17 @@ export function CountdownBadge({
     // second form is what `react-hooks/set-state-in-effect` refuses. The zero-delay timeout is
     // what fills in a MISSING `now` on the first client frame rather than a second later; with an
     // anchor it answers that anchor unchanged, and the ticking starts from there.
+    //
     // `performance.now()` and not `Date.now()`: the browser is asked for a DURATION, which its
-    // clock measures correctly, and never for an instant to compare against a server's. Bare,
-    // so every badge on a grid counts from the DOCUMENT's origin — see the trade panel for why
-    // a per-component origin makes cards added by 더 보기 disagree with the ones beside them.
+    // clock measures correctly, and never for an instant to compare against a server's. The
+    // origin is captured ONCE for this badge — `??=`, so an effect re-run (an admin extending
+    // `closeAt` on an expired market, which A-M3-31 makes ordinary) cannot restart it and rewind
+    // the countdown — and never `performance.now()` BARE: bare is the DOCUMENT's age, which a
+    // `next/link` navigation carries over. See `tickingNow` for what that cost.
+    originRef.current ??= performance.now();
+    const startedAt = originRef.current;
     const tick = () => {
-      setClock(tickingNow(anchor, performance.now(), Date.now()));
+      setClock(tickingNow(anchor, performance.now() - startedAt, Date.now()));
     };
     const first = setTimeout(tick, 0);
     const timer = setInterval(tick, TICK_MS);
