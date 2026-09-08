@@ -82,7 +82,12 @@ test.describe('시장 상세', () => {
     expect(response.status()).toBe(200);
     const html = await response.text();
 
-    // 질문 — rendered by the server component itself, outside any cache-dependent branch.
+    // 질문 — a client component now (`LiveQuestionHeading`, so an admin's title edit reaches
+    // the heading the way it already reaches the chart label), which is why this assertion
+    // is the guard and not a formality: it renders inside the page's HydrationBoundary and
+    // falls back to the row the server fetched (`?? fallback`). Move it above the boundary
+    // and the seed is not there yet — measured, that also strips 확률, the chart path and
+    // the panel below out of this same HTML. Delete the fallback and this line goes red.
     expect(html).toContain(market.title);
     expect(html).toContain('data-testid="market-detail-question"');
 

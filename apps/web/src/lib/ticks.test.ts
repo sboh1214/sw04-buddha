@@ -8,6 +8,7 @@ import {
   appendTickToSeries,
   joinSeries,
   recentDelta,
+  recentMove,
   rowSupersedesSeries,
   tickRangeFrom,
   ticksQueryFor,
@@ -542,5 +543,52 @@ describe('rowSupersedesSeries', () => {
     expect(rowSupersedesSeries(series(), Number.NaN)).toBe(false);
     expect(rowSupersedesSeries(series(), 42.5)).toBe(false);
     expect(rowSupersedesSeries({ ...series(), tradeCount: 1.5 }, 42)).toBe(false);
+  });
+});
+
+describe('recentMove', () => {
+  it('gives every move a monotone identity, which no later move can repeat', () => {
+    // THE HAZARD: `ProbabilityDisplay` hides a badge whose identity matches the last one it
+    // DISMISSED, and `dismissed` holds the last move whose five-second timer actually FIRED — so
+    // a move superseded before then leaves an OLDER identity in the slot. A value-based key
+    // therefore fails on an oscillation: up, down, up put the third move back on the first
+    // move's key (measured [SHOWN, SHOWN, NOT SHOWN]). `tradeCount` only ever increases.
+    let live = series({ bucketSeconds: 300, to: '2026-09-07T01:00:00.000Z' });
+    const ids: string[] = [];
+    for (const [i, bp] of [4700, 4200, 4700].entries()) {
+      live =
+        appendTickToSeries(live, tick(`2026-09-07T01:0${String(i + 1)}:00.000Z`, bp, 42 + i)) ??
+        live;
+      const move = recentMove(live.points);
+      ids.push(move?.moveId ?? '(none)');
+    }
+    expect(ids).toEqual(['t42', 't43', 't44']);
+    // The probability came back to where it began, and the identities still differ.
+    expect(new Set(ids).size).toBe(3);
+  });
+
+  it('reads the delta and its identity off the SAME point', () => {
+    // Read apart they can drift; `recentMove` is what makes that impossible.
+    const live =
+      appendTickToSeries(
+        series({ bucketSeconds: 300 }),
+        tick('2026-09-07T01:30:00.000Z', 4700, 42),
+      ) ?? series();
+    expect(recentMove(live.points)).toEqual({
+      deltaPoints: recentDelta(live.points),
+      moveId: 't42',
+    });
+  });
+
+  it('falls back to the instant for a server point, which carries no counter', () => {
+    // A pristine answer has no socket-tagged point; its right edge is pinned at the answer's
+    // `to`, which moves with every fetch, so the instant is monotone here too.
+    const answered = series();
+    expect(recentMove(answered.points)?.moveId).toBe(`s${String(answered.points.at(-1)?.ts)}`);
+  });
+
+  it('has nothing to report when the delta does not', () => {
+    expect(recentMove(undefined)).toBeNull();
+    expect(recentMove(series({ points: [] }).points)).toBeNull();
   });
 });

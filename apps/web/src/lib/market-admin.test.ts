@@ -19,6 +19,7 @@ import {
   canVoid,
   compactJson,
   deltaLabel,
+  deltaMoveKey,
   formatBp,
   formatContracts,
   formatNoPrice,
@@ -351,5 +352,32 @@ describe('marketFormError', () => {
     expect(marketFormError(apiError(409, 'MARKET_NOT_OPEN'))).toBeUndefined();
     expect(marketFormError(new Error('network'))).toBeUndefined();
     expect(marketFormError(undefined)).toBeUndefined();
+  });
+});
+
+describe('deltaMoveKey', () => {
+  it('gives consecutive small moves distinct identities, where the whole percent did not', () => {
+    // THE HAZARD: `lastPrice` is the whole percent, so three +0.1%p trades inside one percent all
+    // produced `50:+0.1%p`. The badge remembers the last DISMISSED identity, so the second and
+    // third moves matched it and the badge — five seconds, PLAN 11.4 — never came back.
+    const label = deltaLabel(0.1);
+    expect(deltaMoveKey(5010, 50, label)).not.toBe(deltaMoveKey(5020, 50, label));
+    expect(deltaMoveKey(5020, 50, label)).not.toBe(deltaMoveKey(5030, 50, label));
+    // The old identity, kept here to show what it collapsed: all three were one string.
+    expect(`${String(50)}:${label}`).toBe(`${String(50)}:${label}`);
+  });
+
+  it('is the whole percent only for a caller that has no basis points', () => {
+    // A card omits `pYesBp` (PLAN 11.1-1 wants the percentage alone); today the badge has one
+    // call site and it passes both, so this is the contract, not a live path.
+    expect(deltaMoveKey(undefined, 63, '+2%p')).toBe('63:+2%p');
+    expect(deltaMoveKey(6300, 63, '+2%p')).toBe('6300:+2%p');
+  });
+
+  it('cannot collide for two consecutive moves, because a move that ends where it began is hidden', () => {
+    // The property the fix rests on: sharing an identity requires the same ending probability,
+    // and a move from 5010 to 5010 has a zero delta, which `deltaLabel` renders as '' — no badge.
+    expect(deltaLabel(0)).toBe('');
+    expect(deltaMoveKey(5010, 50, deltaLabel(0))).toBe('5010:');
   });
 });

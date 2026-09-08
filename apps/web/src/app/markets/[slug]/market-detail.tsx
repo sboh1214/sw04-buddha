@@ -25,7 +25,7 @@ import { useMarket, useMarketTicks } from '@/hooks/use-markets';
 import { type Market } from '@/lib/api';
 import { formatKst } from '@/lib/datetime';
 import { MARKET_STATUS_LABEL, MARKET_STATUS_PALETTE } from '@/lib/market-admin';
-import { recentDelta } from '@/lib/ticks';
+import { type RecentMove, recentMove } from '@/lib/ticks';
 import { TradePanel } from './trade-panel';
 
 /**
@@ -137,7 +137,7 @@ export function MarketDetail({ marketId, now, children }: MarketDetailProps) {
                 </Alert.Content>
               </Alert.Root>
             )}
-            <MarketHeader market={data} now={now} deltaPoints={recentDelta(series.data?.points)} />
+            <MarketHeader market={data} now={now} move={recentMove(series.data?.points)} />
             <StatusNotice market={data} />
             {/* `currentBp` and `currentTradeCount` come from ONE read of the row, so the
                 chart can never draw one trade's probability under another's claim. */}
@@ -184,11 +184,12 @@ export function MarketDetail({ marketId, now, children }: MarketDetailProps) {
 function MarketHeader({
   market,
   now,
-  deltaPoints,
+  move,
 }: {
   market: Market;
   now?: number;
-  deltaPoints: number | null;
+  /** The last move and its monotone identity, read off ONE point — see `recentMove`. */
+  move: RecentMove | null;
 }) {
   return (
     <Stack gap="3">
@@ -209,7 +210,8 @@ function MarketHeader({
       <ProbabilityDisplay
         lastPrice={market.lastPrice}
         pYesBp={market.pYesBp}
-        deltaPoints={deltaPoints}
+        deltaPoints={move?.deltaPoints ?? null}
+        moveId={move?.moveId}
       />
 
       <HStack gap="4" flexWrap="wrap" fontSize="sm" color="fg.muted">

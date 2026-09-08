@@ -4,7 +4,12 @@ import { Badge, HStack, Text, VisuallyHidden } from '@chakra-ui/react';
 import { useEffect, useState } from 'react';
 import { RollingNumber } from '@/components/ui/rolling-number';
 import { copy } from '@/copy';
-import { deltaLabel, formatPricePerContract, formatYesPrice } from '@/lib/market-admin';
+import {
+  deltaLabel,
+  deltaMoveKey,
+  formatPricePerContract,
+  formatYesPrice,
+} from '@/lib/market-admin';
 
 /**
  * The detail screen's big probability (PLAN 11.4 ProbabilityDisplay): "예 63% · 63.00P" plus a
@@ -51,6 +56,13 @@ export interface ProbabilityDisplayProps {
   pYesBp?: number;
   /** Percentage points moved, or `null` for "no move to report" — the badge then stays away. */
   deltaPoints?: number | null;
+  /**
+   * The MONOTONE identity of that move (`recentMove`, lib/ticks.ts), which is what a dismissal is
+   * remembered against. Passed with `deltaPoints` and from the same read, never derived here: a
+   * value-based identity cannot tell two moves apart when the market oscillates back onto a
+   * probability it already left. Absent only for a caller that shows no badge at all.
+   */
+  moveId?: string;
   size?: 'sm' | 'lg';
   'data-testid'?: string;
 }
@@ -59,16 +71,15 @@ export function ProbabilityDisplay({
   lastPrice,
   pYesBp,
   deltaPoints = null,
+  moveId,
   size = 'lg',
   'data-testid': testId = 'market-probability',
 }: ProbabilityDisplayProps) {
   const label = deltaLabel(deltaPoints);
-  /**
-   * What "this move" is. The label alone would not do: two consecutive +2%p ticks share it, and
-   * the badge would stay hidden for the second one. The price the move landed on changes with
-   * every move, so the pair identifies the move and a later one revives the badge.
-   */
-  const move = `${String(lastPrice)}:${label}`;
+  // What "this move" is: the string a dismissal is remembered against, so the NEXT move revives
+  // the badge. `moveId` is monotone and therefore cannot repeat — see `recentMove`, and
+  // `deltaMoveKey` for why the value-based fallback below is not enough on its own.
+  const move = moveId ?? deltaMoveKey(pYesBp, lastPrice, label);
   const [dismissed, setDismissed] = useState<string | null>(null);
 
   useEffect(() => {

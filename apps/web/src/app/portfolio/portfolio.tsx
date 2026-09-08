@@ -30,6 +30,7 @@ import {
   listState,
   markPriceP,
   markToLiveMarket,
+  priceIsStale,
   portfolioTotals,
   positionValueP,
   realizedPnlAcross,
@@ -106,15 +107,17 @@ export function Portfolio() {
     if (market.data !== undefined) live.set(market.data.id, market.data);
   }
   /**
-   * A market whose refetch FAILED keeps the row it last answered (`isRefetchError`), and this
-   * screen goes on valuing the holding at it — which is right, since dropping a screenful of
-   * prices because one 503 landed loses more than the staleness costs. But the two other screens
-   * that keep a retained-stale row SAY so (`market-list.tsx`, `market-detail.tsx`), and this one
-   * was the exception: 현재가, 평가 금액 and 총 평가 금액 quietly stopped moving with nothing on
-   * screen to explain it. The prices themselves are not re-ordered against the position row's
-   * snapshot — see `markToLiveMarket` for why that has no key to order on.
+   * Whether any market price behind these holdings has stopped being refreshed, and the way back.
+   * The reading itself is `priceIsStale` (use-portfolio.ts) — a node-only runner cannot reach a
+   * decision left in this body, and the state this notice must cover was got wrong once already.
    */
-  const marketsStale = markets.some((market) => market.isRefetchError);
+  const marketsStale = markets.some((market) => priceIsStale(market));
+  /** Re-asks only the ones that failed; a healthy row is already live off the socket. */
+  const retryStaleMarkets = () => {
+    for (const market of markets) {
+      if (priceIsStale(market)) void market.refetch();
+    }
+  };
   // Price AND status, both marked from the row the socket keeps live: a `market:status` moves
   // `['market', id]` and publishes no `user:position`, so a holding in a market that has just
   // closed would otherwise keep announcing 진행 중 here until an unrelated refetch.
@@ -185,6 +188,13 @@ export function Portfolio() {
             <Alert.Content>
               <Alert.Description>{copy.marketRefreshFailed}</Alert.Description>
             </Alert.Content>
+            {/* The holdings stay on screen behind this — dropping them because one price failed
+                loses more than the staleness costs — so the retry is an action beside the notice
+                rather than the `LoadFailed` ladder the two sections below use, which replaces
+                what it reports on. */}
+            <Button size="xs" variant="outline" ml="auto" onClick={retryStaleMarkets}>
+              {copy.retry}
+            </Button>
           </Alert.Root>
         )}
         {open.isPending ? (

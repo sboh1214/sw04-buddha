@@ -389,6 +389,41 @@ export function recentDelta(points: readonly CachedTick[] | undefined): number |
   return (last.pYesBp - previous.pYesBp) / 100;
 }
 
+/** The move the badge announces, and the identity it is remembered by — read off ONE point. */
+export interface RecentMove {
+  deltaPoints: number;
+  moveId: string;
+}
+
+/**
+ * `recentDelta` and the identity of the move it describes, together, because reading them apart
+ * is how they drift: both come from `points.at(-1)`, so no render can pair a delta with another
+ * move's id.
+ *
+ * THE HAZARD the id closes: `ProbabilityDisplay` hides a badge whose identity matches the last
+ * one it DISMISSED, so the identity has to be unique per move. A value-based one is not. Keying
+ * on the whole percent collapsed every move too small to change it — three consecutive +0.1%p
+ * trades inside one percent lit the badge once and stayed dark for the other two. Keying on
+ * `pYesBp` fixes that pair but not an oscillation: `dismissed` remembers the last move whose
+ * five-second timer actually FIRED, and a move superseded before then never writes the slot, so
+ * up-down-up put the third move's identity back on a slot the first had left — measured
+ * [SHOWN, SHOWN, NOT SHOWN].
+ *
+ * So the id is MONOTONE, never a value. `tradeCount` for a point the socket drew (`pushPoint`
+ * stamps it beside `movedFromBp`, so a tagged point always has one), and the point's own `ts`
+ * otherwise: a server point carries no counter, and its right edge is pinned at the answer's
+ * `to`, which moves with every fetch. Neither can repeat, so no later move can collide with an
+ * earlier one however the market moves. Both are values already in the cache, so the string is
+ * the same on the server render and the first client render.
+ */
+export function recentMove(points: readonly CachedTick[] | undefined): RecentMove | null {
+  const deltaPoints = recentDelta(points);
+  const last = points?.at(-1);
+  if (deltaPoints === null || last === undefined) return null;
+  const moveId = last.tradeCount === undefined ? `s${last.ts}` : `t${String(last.tradeCount)}`;
+  return { deltaPoints, moveId };
+}
+
 /**
  * The shorter name the hooks may import; both resolve to the one implementation above. The
  * declared name is the long one because `applyTick` in market-live.ts patches a market ROW

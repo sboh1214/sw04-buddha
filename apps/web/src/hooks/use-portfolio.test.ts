@@ -21,6 +21,7 @@ import {
   listState,
   liveMarketStatus,
   markPriceP,
+  priceIsStale,
   markToLiveMarket,
   ordersInfiniteQueryOptions,
   portfolioTotals,
@@ -506,5 +507,24 @@ describe('ordersInfiniteQueryOptions', () => {
     } finally {
       queryClient.clear();
     }
+  });
+});
+
+describe('priceIsStale', () => {
+  it('counts a FIRST-load failure, which is the state the notice used to miss', () => {
+    // Measured against a real QueryObserver: a first fetch that exhausts its retries answers
+    // `isLoadingError: true, isRefetchError: false` and holds NO row, so `markToLiveMarket` falls
+    // back to the position's frozen join — a plausible, unlabelled price that no tick repairs
+    // (`applyTick` will not build a row; `tickRestartsMarket` refuses an idle query). A notice
+    // written on `isRefetchError` alone said nothing in exactly that case.
+    expect(priceIsStale({ isLoadingError: true, isRefetchError: false })).toBe(true);
+  });
+
+  it('still counts a failed refetch, which keeps its row and is repaired by the next tick', () => {
+    expect(priceIsStale({ isLoadingError: false, isRefetchError: true })).toBe(true);
+  });
+
+  it('says nothing about a market that is answering', () => {
+    expect(priceIsStale({ isLoadingError: false, isRefetchError: false })).toBe(false);
   });
 });

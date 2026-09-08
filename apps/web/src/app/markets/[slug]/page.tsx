@@ -1,7 +1,8 @@
-import { Container, Heading, Stack } from '@chakra-ui/react';
+import { Container, Stack } from '@chakra-ui/react';
 import { HydrationBoundary } from '@tanstack/react-query';
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
+import { LiveQuestionHeading } from '@/components/market/live-question-heading';
 import { LiveRulesSection } from '@/components/market/live-rules-section';
 import { copy } from '@/copy';
 import { fetchMarketServer, fetchTicksServer } from '@/lib/api.server';
@@ -79,20 +80,23 @@ export default async function MarketPage({ params }: { params: Promise<{ slug: s
     // bar's containing block and pull it back inside the grid column (AC 5).
     <Container maxW="4xl" pt={{ base: '6', md: '10' }} pb="20">
       <Stack gap="6">
-        {/* AC-critical text, rendered by the SERVER component itself: the question here, the
-            정산 기준 passed through as children below. Neither has a cache dependency, so no
-            hydration path can take them out of view-source. 확률 IS volatile, so it lives in
-            the hydrated client tree — and still reaches the HTML, because HydrationBoundary
-            hydrates a not-yet-present query synchronously during render, so the server's own
-            `useQuery` already sees the seeded row. */}
-        {/* h2, not h1: `Nav` renders the site name as this document's only h1 on every screen
-            (nav.tsx, since M1), and /wallet, /settings and / all title themselves h2 under it.
-            A second h1 here would give the page two, and heading level is not a place for one
-            screen to have its own convention. */}
-        <Heading as="h2" size="2xl" data-testid="market-detail-question">
-          {market.title}
-        </Heading>
+        {/* Every AC 2 string reaches view-source through the SAME door: this boundary. It
+            hydrates a not-yet-present query synchronously during render, so the server pass of
+            each client component below already reads the seeded row — the question, the 확률
+            and the 정산 기준 alike — while each still follows the live cache afterwards.
+            The heading is INSIDE it for exactly that reason and must stay: rendered above the
+            boundary it would run before the seed existed, and measurement showed that takes
+            확률, the status badge, the chart path and the trade panel out of the first paint
+            with it. Each component carries the server row as its own `fallback` besides, so no
+            branch can leave an AC 2 string out even if the query is unreadable. */}
         <HydrationBoundary state={dehydratePublic(queryClient)}>
+          {/* h2, not h1: `Nav` renders the site name as this document's only h1 on every screen
+              (nav.tsx, since M1), and /wallet, /settings and / all title themselves h2 under it.
+              A second h1 here would give the page two, and heading level is not a place for one
+              screen to have its own convention (A-M4-31). The row fetched here is the FALLBACK,
+              not the source: `title` is editable while a market is open, and the chart's label
+              and the trade panel already follow the live row. */}
+          <LiveQuestionHeading fallback={market} />
           {/* `now` is the server's own window end, never a clock read in this render body —
               see `detailWindowEnd`. It is absent when the series is. */}
           <MarketDetail marketId={market.id} now={detailWindowEnd(series)}>

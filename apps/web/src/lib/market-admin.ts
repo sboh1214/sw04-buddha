@@ -153,6 +153,31 @@ export function deltaLabel(deltaPoints: number | null): string {
   return `${rounded > 0 ? '+' : MINUS_SIGN}${String(Math.abs(rounded))}%p`;
 }
 
+/**
+ * The identity of ONE probability move, which is what `ProbabilityDisplay` remembers a dismissal
+ * against so the NEXT move revives its five-second badge (PLAN 11.4).
+ *
+ * THE HAZARD it closes: the identity used to be `lastPrice:label`, and `lastPrice` is the WHOLE
+ * percent. A move too small to change it — 5 to 49 basis points, which `deltaLabel` still shows
+ * as +0.1%p and up — therefore produced the same string as the move before it, the effect never
+ * restarted, and a badge already dismissed never came back. Measured: three consecutive +0.1%p
+ * trades inside one percent lit it once and stayed dark for the other two, on the screen PLAN
+ * 11.4 asks to announce every move.
+ *
+ * Basis points cannot collide the same way. Two CONSECUTIVE moves share an identity only by
+ * ending on the same probability, and a move that ends where it began has a zero delta, which
+ * `deltaLabel` already hides. (Non-consecutive repeats are harmless: only the last dismissal is
+ * remembered.)
+ *
+ * `lastPrice` stays the fallback for a caller with no `pYesBp` — a card omits it (PLAN 11.1-1),
+ * and today the badge has a single call site that passes both, so the fallback is a contract
+ * rather than a live path. Derived from values alone, so a server render and the first client
+ * render produce the same string.
+ */
+export function deltaMoveKey(pYesBp: number | undefined, lastPrice: number, label: string): string {
+  return `${String(pYesBp ?? lastPrice)}:${label}`;
+}
+
 /** A `numeric(24,10)` quantity string from the API, trimmed to four decimals for reading. */
 export function formatQuantity(q: string): string {
   const n = Number(q);

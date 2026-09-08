@@ -348,6 +348,31 @@ export function markToLiveMarket(
   return { ...position, marketLastPrice, marketStatus };
 }
 
+/**
+ * Whether a market price this screen values a holding at has stopped being refreshed — the
+ * question 보유 포지션's stale notice asks of every `['market', id]` query beside it.
+ *
+ * `isError` covers BOTH failures, and that is the point: they are different states and the
+ * FIRST-LOAD one is the worse of the two. A failed refetch keeps the row it last answered
+ * (`isRefetchError`, data retained). A first fetch that exhausts its retries has NO row at all
+ * (`isLoadingError`, `data === undefined`), so `markToLiveMarket` falls back to
+ * `position.marketLastPrice` — a join frozen when the positions list was fetched, plausible and
+ * unlabelled. Measured: a first-fetch failure answers `isLoadingError: true` and
+ * `isRefetchError: false`, so a condition written on the latter alone said nothing at all in
+ * exactly the case with the least live data behind it.
+ *
+ * Nothing else repairs the absent-row case either: `applyTick` will not build a row and
+ * `tickRestartsMarket` (market-live.ts) requires the query to be FETCHING, while an errored one
+ * is idle — whereas a RETAINED row is repaired by the very next tick. So the worse half is also
+ * the one that waits longest, and it waited with nothing on screen to say so.
+ *
+ * Named as the two flags rather than `isError` (which is their disjunction) so a test can state
+ * WHICH state was missed instead of restating the call.
+ */
+export function priceIsStale(query: { isLoadingError: boolean; isRefetchError: boolean }): boolean {
+  return query.isLoadingError || query.isRefetchError;
+}
+
 /** What a section can say about a list it needs: it has one, it is coming, or it failed. */
 export type ListState = 'ready' | 'pending' | 'failed';
 
