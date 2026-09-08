@@ -305,6 +305,33 @@ export function liveMarketStatus(held: MarketStatus, live: MarketStatus | undefi
  * `liveMarketStatus`'s decision, not a `??`: the live row may be the older of the two, and a
  * terminal one would badge a row the list it is in cannot value.
  *
+ * `marketLastPrice` gets NO such guard, and the asymmetry is a decision rather than an oversight
+ * — it is the first thing a reader of the two lines below will ask. Status can be ordered from
+ * the VALUE: `statusRank` reads the position in `MARKET_STATUSES`, and transitions are monotone,
+ * so "newer" is knowable without a counter. A price is not — it moves both ways, and nothing in
+ * either row says which reading is later. `Position.version` cannot stand in: it bumps on writes
+ * to the POSITION row (`$onUpdate`, migration 0010), and somebody else's trade moves
+ * `markets.last_price` without touching it. Ordering them would mean widening the wire (a market
+ * counter on `positionSchema` plus the join in `listPositions`), which is A-M4-33 — recorded
+ * beside the two other snapshots missing an ordering key rather than bolted on here.
+ *
+ * The live row is the fresher of the two in the ordinary case: /portfolio joins every held
+ * market's room, so `market:tick` patches it, while `marketLastPrice` is a join frozen when the
+ * list was fetched. For it to be the OLDER one it has to have MISSED a move — `market:tick` goes
+ * out `.volatile`, so a congested tab may simply lose one (A-M4-7); a first page load is
+ * subscribed only after the SSR read (A-M4-8); past `REALTIME_ROOMS_MAX` some held markets are
+ * in no room at all; and a failed refetch keeps the row it last answered.
+ *
+ * The second half is NOT rare, which a first draft of this comment got wrong: a positions answer
+ * has to land after the miss for it to show, and one does on ANY of this account's own trades.
+ * `user:position` is absent from `['positions', 'settled']`, so `applyPositionEvent` answers
+ * `refetch` and the provider restarts the whole `['positions']` root — both lists, never
+ * `['market', id]`. So the honest statement is "one missed tick plus any own trade", not a
+ * compound failure. What bounds it is that any LATER tick repairs it (`setQueryData` even puts
+ * an errored query back to `success` with the new price), and what the screen does about the
+ * window is SAY so rather than reorder: see `marketsStale` (portfolio.tsx), the same notice the
+ * home grid and the detail already render.
+ *
  * Applied at RENDER time by both readers and never written back to `['positions', …]`:
  * `joinPositions` (market-live.ts) deliberately gives both fields to the REST answer, so a live
  * value stored in the row would be the one field with two owners.

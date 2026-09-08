@@ -561,11 +561,17 @@ describe('BalanceOrder', () => {
     expect(order.accept(balanceEvent({ ledgerEntryId: '10' }))).toBe(true);
   });
 
-  it('takes the first event again after a reset, whatever it has seen', () => {
+  it('keeps its watermark for the life of the tab, because there is nothing to clear it with', () => {
+    // The guard is the ABSENCE of a `reset()`. It had one, called from `resnapshot()` on every
+    // reconnect and every `realtime:resync` — which threw away a bound that was still true and
+    // re-opened the one window this class cannot order (its first event, which `supersedes(x,
+    // null)` takes whatever it says). `ledger_entries.id` is drawn under the ACCOUNT's balance
+    // lock, so it is that account's commit order, not the connection's.
     const order = new BalanceOrder();
     expect(order.accept(balanceEvent({ ledgerEntryId: '100' }))).toBe(true);
-    order.reset();
-    expect(order.accept(balanceEvent({ ledgerEntryId: '1' }))).toBe(true);
+    expect('reset' in order).toBe(false);
+    // So a delayed event from before the gap is still refused after one.
+    expect(order.accept(balanceEvent({ ledgerEntryId: '1' }))).toBe(false);
   });
 });
 

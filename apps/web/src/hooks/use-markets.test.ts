@@ -1,4 +1,4 @@
-import { type MarketTickEvent } from '@buddha/shared';
+import { type MarketStatusEvent, type MarketTickEvent } from '@buddha/shared';
 import {
   InfiniteQueryObserver,
   type QueryClient,
@@ -20,6 +20,7 @@ import {
   type MarketPage,
   type MarketPages,
   Throttle,
+  applyStatus,
   applyTick,
   applyToPages,
   tickRestartsMarket,
@@ -82,6 +83,16 @@ const tick = (patch: Partial<MarketTickEvent> = {}): MarketTickEvent => ({
   volumeP: '130000',
   tradeCount: 11,
   traderCount: 5,
+  ts: '2026-09-07T00:00:00.000Z',
+  ...patch,
+});
+
+/** A close, the transition that publishes no `user:position` and so has no second delivery. */
+const statusEvent = (patch: Partial<MarketStatusEvent> = {}): MarketStatusEvent => ({
+  type: 'market:status',
+  marketId: ID,
+  status: 'closed',
+  resolvedResult: null,
   ts: '2026-09-07T00:00:00.000Z',
   ...patch,
 });
@@ -433,6 +444,79 @@ describe('a tick that arrives during an unseeded first fetch', () => {
       expect(queryClient.getQueryState(marketKey(ID))?.dataUpdatedAt).toBe(updatedAt);
       expect(queryClient.getQueryData<Market>(marketKey(ID))?.tradeCount).toBe(99);
     } finally {
+      queryClient.clear();
+    }
+  });
+});
+
+/**
+ * The `market:status` handler's market-row half, wired as realtime-provider.tsx wires it. No
+ * gate: this refetch is sanctioned on every status event, so `restartQueries` only adds the
+ * cancel a first fetch needs and is the plain invalidation on any other cache.
+ */
+function onStatus(queryClient: QueryClient, event: MarketStatusEvent) {
+  queryClient.setQueryData<Market>(marketKey(event.marketId), (held) => applyStatus(held, event));
+  void restartQueries(queryClient, marketKey(event.marketId));
+}
+
+describe('a status event that arrives during an unseeded first fetch', () => {
+  it('re-asks, because the answer on the wire read the market before the transition', async () => {
+    // THE HAZARD, and the more serious half of the pair the tick handler fixed. `applyStatus`
+    // writes nothing into a cache with no row, and a bare invalidation hands back the request
+    // already running — the one that read the market BEFORE the close. /portfolio's
+    // `['market', id]` entries are unseeded (`useQueries`), so that pre-close snapshot landed as
+    // fresh and the row went on saying `open` — which on screen is the MISSING 마감 badge, since
+    // `OpenPositionRow` draws one only when `marketStatus !== 'open'`. A close publishes NO
+    // `user:position`, so the positions row cannot correct it, the closed market publishes no
+    // further tick, and the success dispatch cleared the invalidation flag: nothing was
+    // scheduled to ask again.
+    const queryClient = getQueryClient();
+    let fetches = 0;
+    const observer = new QueryObserver<Market>(queryClient, {
+      queryKey: marketKey(ID),
+      queryFn: () =>
+        Promise.resolve((fetches += 1) === 1 ? detail : { ...detail, status: 'closed' as const }),
+      retry: false,
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
+    try {
+      onStatus(queryClient, statusEvent());
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(fetches).toBe(2);
+      expect(queryClient.getQueryData<Market>(marketKey(ID))?.status).toBe('closed');
+    } finally {
+      unsubscribe();
+      queryClient.clear();
+    }
+  });
+
+  it('still invalidates a market row it DID patch, which is the ordinary path', async () => {
+    // The seeded detail screen: the reducer moved the badge, and the invalidation is what fills
+    // in the price a transition does not carry. Restarting here would buy nothing.
+    const queryClient = getQueryClient();
+    let fetches = 0;
+    const observer = new QueryObserver<Market>(queryClient, {
+      queryKey: marketKey(ID),
+      queryFn: () => {
+        fetches += 1;
+        return Promise.resolve({ ...detail, status: 'closed' as const });
+      },
+      retry: false,
+    });
+    queryClient.setQueryData<Market>(marketKey(ID), detail);
+    const unsubscribe = observer.subscribe(() => undefined);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const seeded = fetches;
+      onStatus(queryClient, statusEvent());
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      // The reducer moved the badge synchronously, and exactly one refetch followed.
+      expect(queryClient.getQueryData<Market>(marketKey(ID))?.status).toBe('closed');
+      expect(fetches).toBe(seeded + 1);
+    } finally {
+      unsubscribe();
       queryClient.clear();
     }
   });

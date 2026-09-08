@@ -119,8 +119,12 @@ export function applyTick<T extends LiveMarket>(
 }
 
 /**
- * Whether a `market:tick` may become a REQUEST for `['market', id]` — the one place this app
- * answers an event by asking, and the whole of the decision so the handler holds none of it.
+ * Whether a `market:tick` may become a REQUEST for `['market', id]` — the whole of that decision,
+ * so the handler holds none of it.
+ *
+ * Not the only place this app answers an event by asking, which an earlier draft of this line
+ * claimed: `realtime-provider.tsx` states the rule and enumerates all of them. This is the
+ * strictest of them, because a tick arrives many times a second while the others are rare.
  *
  * THE HAZARD: /portfolio opens one UNSEEDED `['market', id]` per held market (`useQueries`,
  * portfolio.tsx) and `useMarketSocket` has already joined every one of those rooms, so a tick can
@@ -435,16 +439,21 @@ export function applyBalanceEvent(held: Me | undefined, event: UserBalanceEvent)
  * tradeCount and version the key cannot be seeded from a snapshot — Q-M3-8(2), still open.
  * This therefore orders `user:balance` events AGAINST EACH OTHER only, per tab: a duplicate or
  * a late delivery is dropped, while a `GET /me` answer is a queryFn result and always wins the
- * write (the socket handler narrows that race with `cancelQueries` instead). Reset it on
- * reconnect and whenever the socket is rebuilt for a new session identity, because the events
- * it has seen belong to the connection that delivered them.
+ * write (the socket handler narrows that race with `cancelQueries` instead).
+ *
+ * There is deliberately NO `reset()`, and the absence is the guard. It used to have one, called
+ * from `resnapshot()` on every reconnect and every `realtime:resync`, on the reading that "the
+ * events it has seen belong to the connection that delivered them". That reading was wrong:
+ * `ledger_entries.id` is a bigserial drawn while the ACCOUNT's balance row is held FOR UPDATE
+ * (trade.service.ts, wallet.service.ts and the admin and void paths all lock before they
+ * insert), so it is that account's commit order and has nothing to do with which socket carried
+ * it. Clearing it discarded a bound that was still true and re-opened the one window this class
+ * cannot order — its FIRST event, which `supersedes(x, null)` takes whatever it says — on every
+ * reconnect. A new tab or a new identity still starts clean, because the provider builds a fresh
+ * one; nothing else may.
  */
 export class BalanceOrder {
   private last: string | null = null;
-
-  reset(): void {
-    this.last = null;
-  }
 
   accept(event: UserBalanceEvent): boolean {
     if (!supersedes(event.ledgerEntryId, this.last)) return false;

@@ -105,6 +105,16 @@ export function Portfolio() {
   for (const market of markets) {
     if (market.data !== undefined) live.set(market.data.id, market.data);
   }
+  /**
+   * A market whose refetch FAILED keeps the row it last answered (`isRefetchError`), and this
+   * screen goes on valuing the holding at it — which is right, since dropping a screenful of
+   * prices because one 503 landed loses more than the staleness costs. But the two other screens
+   * that keep a retained-stale row SAY so (`market-list.tsx`, `market-detail.tsx`), and this one
+   * was the exception: 현재가, 평가 금액 and 총 평가 금액 quietly stopped moving with nothing on
+   * screen to explain it. The prices themselves are not re-ordered against the position row's
+   * snapshot — see `markToLiveMarket` for why that has no key to order on.
+   */
+  const marketsStale = markets.some((market) => market.isRefetchError);
   // Price AND status, both marked from the row the socket keeps live: a `market:status` moves
   // `['market', id]` and publishes no `user:position`, so a holding in a market that has just
   // closed would otherwise keep announcing 진행 중 here until an unrelated refetch.
@@ -169,6 +179,14 @@ export function Portfolio() {
       </Section>
 
       <Section title={copy.portfolioPositions} testId="portfolio-positions">
+        {marketsStale && (
+          <Alert.Root status="warning" role="status" data-testid="portfolio-markets-stale" mb="4">
+            <Alert.Indicator />
+            <Alert.Content>
+              <Alert.Description>{copy.marketRefreshFailed}</Alert.Description>
+            </Alert.Content>
+          </Alert.Root>
+        )}
         {open.isPending ? (
           <Skeleton height="24" />
         ) : open.isLoadingError ? (

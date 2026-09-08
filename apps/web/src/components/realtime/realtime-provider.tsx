@@ -308,7 +308,17 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
      * data, so on a seeded or already-answered key `restartQueries` IS the plain invalidation.
      */
     const resnapshot = () => {
-      balanceOrder.reset();
+      // The balance watermark is NOT reset here, and that is the fix rather than an omission.
+      // `ledger_entries.id` is a bigserial drawn while the account's balance row is held
+      // FOR UPDATE (trade.service.ts, wallet.service.ts, the admin and void paths), so for one
+      // account it is commit order — a property of the ACCOUNT, not of the socket that happened
+      // to deliver it. Clearing it on every reconnect and every `realtime:resync` threw away a
+      // bound that was still true and re-opened the one window `BalanceOrder` cannot order: its
+      // FIRST event, which `supersedes(x, null)` takes whatever it says. That window is now once
+      // per tab per identity (the effect builds a fresh `BalanceOrder` when `identity` changes)
+      // instead of once per connection — which was exactly the route Q-M4-7 names, and the one a
+      // Redis blip opens. An event whose id is not past the watermark committed before a balance
+      // this tab has already applied, so refusing it can lose nothing.
       const keys = identity === null ? SNAPSHOT_KEYS : [...SNAPSHOT_KEYS, ...PRIVATE_SNAPSHOT_KEYS];
       for (const queryKey of keys) {
         void restartQueries(queryClient, queryKey);
@@ -363,10 +373,24 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     socket.on('connect', () => {
       rooms.resubscribe();
       if (bootstrapped.current) resnapshot();
-      // The tab's FIRST connect must not invalidate: the SSR payload IS the snapshot, and
-      // re-reading it would cost a request per mounted observer on every single page load.
-      // Every connect after it re-snapshots, whether this socket reconnected or a new one
-      // replaced it — the ADR's "두 번째 connect부터" is per tab (ADR-0031).
+      // The tab's FIRST connect must not invalidate. Every connect after it re-snapshots,
+      // whether this socket reconnected or a new one replaced it — the ADR's "두 번째
+      // connect부터" is per tab (ADR-0031).
+      //
+      // What the SSR payload is, stated accurately: a PRE-SUBSCRIBE snapshot. The server read
+      // the market before this tab held any room, so a trade committing between that read and
+      // the join above reaches no socket of this tab — a window the whole client bootstrap wide
+      // (stream, hydrate, the session round trip this effect waits on, the handshake), not the
+      // one event-loop tick the protocol's own comment used to claim was all of it.
+      //
+      // Accepted, not overlooked. `market:tick` and `market:status` carry ABSOLUTE values, so
+      // the market's next event repairs the reading in full at zero request cost, and the
+      // residue is a market that trades once inside the gap and then goes quiet. Re-snapshotting
+      // here instead costs a request per mounted observer on EVERY page load by every visitor —
+      // measured at three on a signed-out detail screen — which is the request `dehydrate()`
+      // exists to remove. Closing it honestly would mean the gateway replying to a `subscribe`
+      // with the rooms' current state, which is an ack (A-M4-8) and a read on the anonymous
+      // path (A-M4-3): two recorded refusals, not a client-side refetch.
       bootstrapped.current = true;
     });
 
@@ -485,18 +509,56 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // price tick and moves lastPrice/pYesBp while publishing only `market:status`
         // (market-admin.service.ts), and create/update publish nothing at all.
         //
-        // It is one of THREE sanctioned refetches in this file, and the count is the point:
-        // `market:trade` → `refreshFills` and `user:position` → `['orders']` are the other two,
-        // and each is there because the event cannot BUILD the row it is about. A refetch for
-        // anything a reducer can write is the 남발 PLAN 11.5 refuses.
-        void queryClient.invalidateQueries({
-          queryKey: marketKey(event.marketId),
-          refetchType: 'active',
-        });
-        void queryClient.invalidateQueries({
-          queryKey: [...TICKS_KEY, event.marketId],
-          refetchType: 'active',
-        });
+        // It is a SANCTIONED refetch, and this file has kept a count of those twice now and been
+        // wrong twice — "the second and last" became three, and three became six. So here is the
+        // RULE instead, which does not go stale: a refetch is allowed only where the cache cannot
+        // end up right without one, and it falls into exactly two kinds.
+        //
+        //  - the event cannot BUILD the row it is about: this one (a transition carries no
+        //    price), `market:trade` → `refreshFills`, `user:position` → `['orders']`.
+        //  - the cache could not TAKE the event, so the answer already on the wire is the stale
+        //    one: this one again on an unseeded key (below), `market:tick` → `['market', id]`
+        //    while its first answer is in flight, `user:position` → `['positions']` for a list
+        //    that holds no such row, `user:balance` → `['me']` for a tab holding no `Me`.
+        //
+        // A refetch for anything a reducer can write belongs to neither kind, and is the 남발
+        // PLAN 11.5 refuses.
+        //
+        // `restartQueries`, not the bare invalidation this used to be — the fourth time that
+        // distinction has bitten, and the worst of them. `applyStatus` writes NOTHING into a
+        // cache with no row, and a bare invalidation on a query that has answered nothing hands
+        // back the request already running: the one that read the market BEFORE the transition.
+        // /portfolio's `['market', id]` entries are unseeded (`useQueries`), so that pre-close
+        // snapshot landed as fresh and the row went on saying `open`. What that costs on screen
+        // is the MISSING 마감 badge, not a wrong one: `OpenPositionRow` draws a status badge only
+        // when `marketStatus !== 'open'`, so the holding is listed with no sign that the market
+        // can no longer be traded. No figure is wrong — a close writes no price tick and no
+        // arithmetic here reads the status — which is why this is P3 and not higher.
+        //
+        // Unlike a dropped tick, NOTHING repairs it: a close publishes no `user:position`, so the
+        // positions row cannot correct it, the closed market publishes no further tick, and the
+        // success dispatch cleared the invalidation flag and restamped `dataUpdatedAt`, so the
+        // row sits inside `staleTime` with nothing scheduled. Only a focus, a reconnect or a
+        // remount does. The reachable transition is open → closed alone: draft → open cannot be
+        // held (a draft is on no public route) and a void arrives per holder as `user:position`,
+        // which `liveMarketStatus` refuses as terminal anyway. Measured: bare invalidation → one
+        // fetch and the row stays `open`; restarted → two and it reads `closed`.
+        //
+        // No gate and no throttle here, unlike the tick handler. This refetch is sanctioned on
+        // EVERY status event whatever the cache holds, so `restartQueries` only adds the cancel
+        // — and on a seeded or already-answered key it IS the plain invalidation (query-client.ts
+        // cancels only a query with no data). Measured: 0 → 0 on a key nothing holds, 5 → 5 over
+        // a load and four events on an answered one, 0 → 1 in the broken state, which is the
+        // correction itself. It adds no new refetch site; it upgrades one that was already here.
+        //
+        // The ticks line is SYMMETRY, not a second fix, and saying so is the point: its hole is
+        // inert. Only the draft → open transition writes a price tick (`market-admin.service.ts`
+        // — close, resolve and void write none), and a draft is invisible on every public route,
+        // so no tab can hold a ticks series for a market whose next transition writes one.
+        // `restartQueries` is still the right call there because it matches by PREFIX, which is
+        // what these entries need: they are `['ticks', id, range]`, one per range this tab opened.
+        void restartQueries(queryClient, marketKey(event.marketId));
+        void restartQueries(queryClient, [...TICKS_KEY, event.marketId]);
       },
 
       'market:trade': (raw: unknown) => {

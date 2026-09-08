@@ -176,11 +176,20 @@ export const REALTIME_NAMESPACE = '/ws';
  * The two Redis patterns the gateway holds. Fixed patterns, not one SUBSCRIBE per room:
  * joining a room stays a synchronous in-process operation, so a `subscribe` never waits on
  * a Redis round trip that `commandTimeout` could reject, and the gap between an emit and
- * the join stays one event-loop tick instead of a network hop. That gap is all there is to
- * cover, because the protocol has no ack at all (ADR-0028, A-M4-8) — a client's REST
- * snapshot is what closes it, not a wait on the server. The reconnect re-arm of Q-M3-7 is
- * then two idempotent commands rather than a rebuilt subscription set. They must keep
- * matching what `marketChannel`/`userChannel` publish to.
+ * the join stays one event-loop tick instead of a network hop.
+ *
+ * That tick is all this pattern choice has to cover — it is NOT all the protocol leaves
+ * uncovered, which this comment used to say. A-M3-19's order is "subscribe, then take the REST
+ * snapshot", and a first page load runs it BACKWARDS by construction: the server takes the
+ * snapshot, and the room is joined only after the HTML has streamed, hydrated, waited on the
+ * session and completed a handshake. Everything published in that window reaches no socket of
+ * that tab, and it is hundreds of milliseconds to seconds wide, not one tick. It is accepted
+ * (A-M4-8, ADR-0031) because the ordering keys self-heal it: `market:tick` and `market:status`
+ * carry ABSOLUTE values, so the market's next event repairs the reading in full at no request
+ * cost. The residue is a market that trades once inside the gap and then goes quiet.
+ *
+ * The reconnect re-arm of Q-M3-7 is two idempotent commands rather than a rebuilt subscription
+ * set. They must keep matching what `marketChannel`/`userChannel` publish to.
  */
 export const MARKET_CHANNEL_PATTERN = 'market:*';
 export const USER_CHANNEL_PATTERN = 'user:*';
