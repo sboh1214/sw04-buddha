@@ -447,12 +447,31 @@ export const TICK_RESOLUTIONS = ['raw', '1m', '1h'] as const;
 export type TickResolution = (typeof TICK_RESOLUTIONS)[number];
 export const tickResolutionSchema = z.enum(TICK_RESOLUTIONS);
 
-/** `GET /markets/:id/ticks` (no `.meta`: query DTO). `resolution` selects the sampled grid. */
+/** Ten years, the widest window `tickBucketSeconds` has a stride for. */
+export const TICKS_WINDOW_SECONDS_MAX = 315_360_000;
+
+/**
+ * `GET /markets/:id/ticks` (no `.meta`: query DTO). `resolution` selects the sampled grid.
+ *
+ * `windowSeconds` is how a RELATIVE range is asked for — "the last day" — and it exists because
+ * `from` cannot express one honestly. A client computing `from` from its own clock is naming an
+ * INSTANT for a window whose other end the server closes on the database clock, so the two come
+ * from different machines and the served span is wrong by the visitor's skew. The same principle
+ * A-M4-23 settled for the close gate: ask the browser for a DURATION, which its clock measures
+ * correctly, never for an instant to be compared against a server's.
+ *
+ * Mutually exclusive with `from`, so one request can never name its window twice.
+ */
 export const ticksQuerySchema = z
   .object({
     from: z.iso.datetime().optional(),
     to: z.iso.datetime().optional(),
+    windowSeconds: z.coerce.number().int().positive().max(TICKS_WINDOW_SECONDS_MAX).optional(),
     resolution: tickResolutionSchema.default('raw'),
+  })
+  .refine((query) => query.from === undefined || query.windowSeconds === undefined, {
+    message: 'from and windowSeconds are mutually exclusive',
+    path: ['windowSeconds'],
   })
   .refine(
     // Compare instants, not strings: '…00Z' and '…00.000Z' are the same moment.

@@ -10,7 +10,7 @@ import {
   recentDelta,
   recentMove,
   rowSupersedesSeries,
-  tickRangeFrom,
+  tickRangeWindowSeconds,
   ticksQueryFor,
   ticksQueryOptions,
 } from './ticks';
@@ -69,33 +69,14 @@ describe('TICK_RANGES', () => {
   });
 });
 
-describe('tickRangeFrom', () => {
-  it('quantises the bound so two renders inside one stride agree', () => {
-    // The regression this pins: an unquantised bound changes every render, so the request
-    // (and any cache built on it) never repeats and the query never settles.
-    for (const tz of ZONES) {
-      process.env.TZ = tz;
-      expect(tickRangeFrom('1D', NOON), tz).toBe('2026-09-06T12:00:00.000Z');
-      expect(tickRangeFrom('1D', NOON + 30 * 1000), tz).toBe('2026-09-06T12:00:00.000Z');
-      expect(tickRangeFrom('1D', NOON + MINUTE), tz).toBe('2026-09-06T12:01:00.000Z');
-
-      expect(tickRangeFrom('1W', NOON), tz).toBe('2026-08-31T12:00:00.000Z');
-      expect(tickRangeFrom('1W', NOON + 30 * MINUTE), tz).toBe('2026-08-31T12:00:00.000Z');
-      expect(tickRangeFrom('1W', NOON + HOUR), tz).toBe('2026-08-31T13:00:00.000Z');
-    }
+describe('tickRangeWindowSeconds', () => {
+  it("answers a DURATION, which is the one thing a visitor's clock measures correctly", () => {
+    expect(tickRangeWindowSeconds('1D')).toBe(24 * 60 * 60);
+    expect(tickRangeWindowSeconds('1W')).toBe(7 * 24 * 60 * 60);
   });
 
-  it('sends no lower bound for the whole life of the market', () => {
-    expect(tickRangeFrom('all', NOON)).toBeUndefined();
-  });
-
-  it('lands on the stride grid for every instant in it', () => {
-    fc.assert(
-      fc.property(fc.integer({ min: 0, max: MINUTE - 1 }), (offset) => {
-        expect(tickRangeFrom('1D', NOON + offset)).toBe(tickRangeFrom('1D', NOON));
-        expect(Date.parse(tickRangeFrom('1D', NOON + offset) ?? '') % MINUTE).toBe(0);
-      }),
-    );
+  it('has no window for the whole life of the market — only the server knows the open', () => {
+    expect(tickRangeWindowSeconds('all')).toBeUndefined();
   });
 });
 
@@ -103,21 +84,36 @@ describe('ticksQueryFor', () => {
   it('asks for the resolution the range means', () => {
     for (const tz of ZONES) {
       process.env.TZ = tz;
-      expect(ticksQueryFor('1D', NOON).resolution, tz).toBe('1m');
-      expect(ticksQueryFor('1W', NOON).resolution, tz).toBe('1h');
-      expect(ticksQueryFor('all', NOON).resolution, tz).toBe('1h');
+      expect(ticksQueryFor('1D').resolution, tz).toBe('1m');
+      expect(ticksQueryFor('1W').resolution, tz).toBe('1h');
+      expect(ticksQueryFor('all').resolution, tz).toBe('1h');
     }
   });
 
-  it('never sends `to`, so the server closes the window on its own clock', () => {
-    // A client-sent upper bound would freeze the chart at the instant the component rendered.
-    expect(Object.keys(ticksQueryFor('1D', NOON)).sort()).toEqual(['from', 'resolution']);
-    expect(Object.keys(ticksQueryFor('1W', NOON)).sort()).toEqual(['from', 'resolution']);
-    expect(Object.keys(ticksQueryFor('all', NOON))).toEqual(['resolution']);
+  it('names NEITHER end of the window as an instant, which is the whole fix', () => {
+    // THE HAZARD: `from` used to be `Date.now()` minus the range while the server closed `to` on
+    // the DATABASE clock — one end measured on each machine, so the served span was wrong by the
+    // visitor's skew (25h an hour slow, 23h an hour fast). Past a full day fast the request
+    // inverted, the server clamped it to a single instant, and the chart's accessible summary
+    // then asserted `시작 61%, 최고 61%, 최저 61%` on a day that had opened at 41%.
+    expect(Object.keys(ticksQueryFor('1D')).sort()).toEqual(['resolution', 'windowSeconds']);
+    expect(Object.keys(ticksQueryFor('1W')).sort()).toEqual(['resolution', 'windowSeconds']);
+    // 'all' was always immune: it names no lower bound at all.
+    expect(Object.keys(ticksQueryFor('all'))).toEqual(['resolution']);
   });
 
-  it('carries the quantised bound', () => {
-    expect(ticksQueryFor('1D', NOON).from).toBe(tickRangeFrom('1D', NOON));
+  it('reads the same in every zone and at every instant, so it needs no clock at all', () => {
+    // The old bound had to be floored onto a stride so a server render and its hydration agreed;
+    // a duration is the same number whenever it is asked for, so that quantisation is gone.
+    for (const tz of ZONES) {
+      process.env.TZ = tz;
+      expect(ticksQueryFor('1D'), tz).toEqual({ windowSeconds: 86_400, resolution: '1m' });
+    }
+    fc.assert(
+      fc.property(fc.integer({ min: 0, max: MINUTE - 1 }), () => {
+        expect(ticksQueryFor('1D').windowSeconds).toBe(86_400);
+      }),
+    );
   });
 });
 

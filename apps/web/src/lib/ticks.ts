@@ -31,16 +31,6 @@ const RANGE_MS: Record<Exclude<TickRange, 'all'>, number> = {
 };
 
 /**
- * Stride the `from` bound is floored onto, one per range. Without it every render would
- * produce a different millisecond and therefore a different request, so nothing downstream —
- * the browser cache, the API's own plan cache — could ever hit twice.
- */
-const RANGE_STRIDE_MS: Record<Exclude<TickRange, 'all'>, number> = {
-  '1D': 60 * 1000,
-  '1W': 60 * 60 * 1000,
-};
-
-/**
  * The resolution a range asks for. It is a floor, not a promise: the server coarsens it to a
  * grid that fits the window (`tickBucketSeconds`) and reports what it actually served as
  * `bucketSeconds`, so a `1m` request over a day comes back on a 5-minute grid.
@@ -53,31 +43,36 @@ const RANGE_RESOLUTION: Record<TickRange, TickResolution> = {
 
 /** Query string of `GET /markets/:id/ticks`. `to` is deliberately not a member — see below. */
 export interface TicksQuery {
-  from?: string;
+  windowSeconds?: number;
   resolution: TickResolution;
 }
 
-/**
- * ISO `from` for a range, or undefined for 'all' (only the server knows when the market
- * opened). `nowMs` is injected so a server render and its hydration derive the same bound,
- * and the instant is floored onto the range's stride so two renders inside one bucket produce
- * the SAME string — a query whose parameters move every render never settles.
- */
-export function tickRangeFrom(range: TickRange, nowMs: number): string | undefined {
-  if (range === 'all') return undefined;
-  const stride = RANGE_STRIDE_MS[range];
-  return new Date(Math.floor((nowMs - RANGE_MS[range]) / stride) * stride).toISOString();
+/** How far back a range reaches, in seconds; `undefined` for 'all', which reaches to the open. */
+export function tickRangeWindowSeconds(range: TickRange): number | undefined {
+  return range === 'all' ? undefined : RANGE_MS[range] / 1_000;
 }
 
 /**
- * The whole query for a range. `to` is never sent: the server closes the window on its own
- * clock, so the right edge of the answer is live by construction, while a client-sent `to`
- * would freeze the series at the instant the component happened to render.
+ * The whole query for a range: a DURATION and nothing else.
+ *
+ * Neither end is an instant this client names, and that is the fix rather than a simplification.
+ * `to` is not sent so the server closes the window on its own clock and the right edge is live by
+ * construction. `from` is not sent either — it used to be `Date.now()` minus the range, which
+ * measured one end of the window on the visitor's machine and the other on the database's, so a
+ * skewed clock got a span wrong by the skew: measured, 25 hours at an hour slow, 23 at an hour
+ * fast, and past a full day fast the request inverted and the server clamped it to a single
+ * instant. That last case was not merely a short chart — the accessible summary then asserted
+ * `시작 61%, 최고 61%, 최저 61%` on a day that opened at 41%, a false reading delivered silently.
+ *
+ * `windowSeconds` is the same principle A-M4-23 settled for the close gate: the browser is asked
+ * only for a DURATION, which its clock measures correctly. It needs no `nowMs`, so it also cannot
+ * differ between a server render and its hydration — the reason the old bound was floored onto a
+ * stride, now unnecessary.
  */
-export function ticksQueryFor(range: TickRange, nowMs: number): TicksQuery {
+export function ticksQueryFor(range: TickRange): TicksQuery {
   const resolution = RANGE_RESOLUTION[range];
-  const from = tickRangeFrom(range, nowMs);
-  return from === undefined ? { resolution } : { from, resolution };
+  const windowSeconds = tickRangeWindowSeconds(range);
+  return windowSeconds === undefined ? { resolution } : { windowSeconds, resolution };
 }
 
 /**
@@ -134,7 +129,7 @@ export function ticksQueryOptions(marketId: string, range: TickRange) {
     queryFn: async (): Promise<CachedSeries> =>
       unwrap(
         await api.GET('/api/v1/markets/{id}/ticks', {
-          params: { path: { id: marketId }, query: ticksQueryFor(range, Date.now()) },
+          params: { path: { id: marketId }, query: ticksQueryFor(range) },
         }),
       ).data,
   };

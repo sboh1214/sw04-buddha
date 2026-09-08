@@ -1926,6 +1926,17 @@
             }
           },
           {
+            "name": "windowSeconds",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "exclusiveMinimum": true,
+              "maximum": 315360000
+            }
+          },
+          {
             "name": "resolution",
             "required": false,
             "in": "query",

@@ -417,7 +417,16 @@ export class MarketService {
     // `raw` — which filters on the untouched `query.to` — answered nothing for the same
     // request. Clamping down keeps both resolutions describing the same window.
     const to = new Date(query.to ? Date.parse(query.to) : now.getTime());
-    const requestedFrom = query.from ? new Date(query.from) : (market.openAt ?? market.createdAt);
+    // A RELATIVE range is opened from `to` — the DATABASE's own instant — so the window a client
+    // asked for is the window it gets whatever its clock says. `from` names an absolute instant
+    // and is kept for a caller that really means one; a client deriving it from `Date.now()` was
+    // measuring one end of the window on its machine and the other on this one, and the span came
+    // out wrong by the skew (A-M4-35). The two are mutually exclusive at the schema.
+    const requestedFrom = query.from
+      ? new Date(query.from)
+      : query.windowSeconds !== undefined
+        ? new Date(to.getTime() - query.windowSeconds * 1_000)
+        : (market.openAt ?? market.createdAt);
     const from = new Date(Math.min(requestedFrom.getTime(), to.getTime()));
     const bucketSeconds = tickBucketSeconds(query.resolution, to.getTime() - from.getTime());
     if (bucketSeconds === 0) return this.rawSeries(marketId, query, from, to, market.tradeCount);

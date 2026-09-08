@@ -2338,6 +2338,7 @@ export interface operations {
                 from?: string;
                 resolution?: "raw" | "1m" | "1h";
                 to?: string;
+                windowSeconds?: number;
             };
             header?: never;
             path: {

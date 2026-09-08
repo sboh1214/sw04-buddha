@@ -657,6 +657,42 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     expect(oneWeek.points.length).toBeLessThanOrEqual(TICKS_MAX_POINTS);
   });
 
+  it('opens a `windowSeconds` range from its OWN clock, so a skewed caller still gets the span', async () => {
+    // THE HAZARD it closes (A-M4-35): a client deriving `from` from `Date.now()` names an INSTANT
+    // for a window whose other end this service closes on the database clock, so the served span
+    // came out wrong by the visitor's skew — and past a full day fast the request inverted, the
+    // clamp below collapsed it to one instant, and the chart's accessible summary then asserted
+    // 시작/최고/최저 all equal on a day that had moved. A DURATION is the one thing a wrong clock
+    // still measures correctly, so that is what the client sends now.
+    const open = await market();
+    const twoHoursAgo = open.openAt!.getTime() - 2 * HOUR_MS;
+    await t.db.insert(schema.priceTicks).values({
+      marketId: open.id,
+      ts: new Date(twoHoursAgo),
+      pYesBp: 4_000,
+      trigger: 'open' as const,
+    });
+
+    const windowed = await series(
+      `/api/v1/markets/${open.id}/ticks?windowSeconds=3600&resolution=1m`,
+    );
+    // The window is exactly an hour wide and both ends are the service's own reading.
+    const span = Date.parse(windowed.to) - Date.parse(windowed.from);
+    expect(span).toBe(HOUR_MS);
+    // And it is anchored to NOW, not to anything the caller said: the older tick is outside it.
+    expect(Date.parse(windowed.from)).toBeGreaterThan(twoHoursAgo);
+  });
+
+  it('refuses a request that names its window twice', async () => {
+    // `from` and `windowSeconds` are mutually exclusive at the schema: one request, one window.
+    const open = await market();
+    const response = await t.app.inject({
+      method: 'GET',
+      url: `/api/v1/markets/${open.id}/ticks?from=${iso(Date.now() - HOUR_MS)}&windowSeconds=3600`,
+    });
+    expect(response.statusCode).toBe(400);
+  });
+
   it('clamps a one-sided window down to `to`, and never calls a bucketed answer truncated', async () => {
     // `ticksQuerySchema` orders the bounds only when BOTH are given, so with one bound the
     // service is what has to keep the window ordered — and it must do it by moving the

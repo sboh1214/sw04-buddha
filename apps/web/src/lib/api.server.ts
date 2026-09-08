@@ -67,15 +67,15 @@ export const fetchMarketServer = cache(async (idOrSlug: string): Promise<Market 
  * same way the home page's own public reads degrade.
  *
  * The route takes a uuid only, so a slug-routed page resolves the row first and passes
- * `market.id`. `Date.now()` here builds the request window, never any geometry — `ticksQueryFor`
- * quantises `from` to the range's own stride, and the answer carries the `from`/`to` the chart
- * is drawn against.
+ * `market.id`. The window is asked for as a DURATION, never as an instant this render computes
+ * (`ticksQueryFor`), so the server opens it from its own clock and the answer carries the
+ * `from`/`to` the chart is drawn against.
  */
 export async function fetchTicksServer(id: string, range: TickRange): Promise<PriceSeries | null> {
   try {
     return unwrap(
       await serverApi.GET('/api/v1/markets/{id}/ticks', {
-        params: { path: { id }, query: ticksQueryFor(range, Date.now()) },
+        params: { path: { id }, query: ticksQueryFor(range) },
       }),
     ).data;
   } catch {
