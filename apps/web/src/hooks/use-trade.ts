@@ -372,6 +372,7 @@ export function applyMarketStats(queryClient: QueryClient, stats: MarketStats): 
     lastPrice: stats.lastPrice,
     volumeP: stats.volumeP,
     tradeCount: stats.tradeCount,
+    traderCount: stats.traderCount,
   };
   queryClient.setQueryData<Market>(marketKey(stats.id), (held) => applyTick(held, patch));
   queryClient.setQueriesData<MarketPages>({ queryKey: MARKETS_KEY }, (held) =>

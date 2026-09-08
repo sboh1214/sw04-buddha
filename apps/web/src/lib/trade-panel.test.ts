@@ -16,6 +16,7 @@ import {
   type TradePanelView,
   isTradable,
   maxValueFor,
+  quoteIsStale,
   quoteErrorMessage,
   quoteRequest,
   setMode,
@@ -47,6 +48,7 @@ const apiError = (status: number, code: string, details?: unknown) =>
 const aQuote = (over: Partial<QuoteResult> = {}): QuoteResult => ({
   shares: 100,
   amountP: '6300',
+  tradeCount: 10,
   priceAvgBp: 6300,
   priceBeforeBp: 6250,
   priceAfterBp: 6350,
@@ -711,5 +713,26 @@ describe('quoteErrorMessage', () => {
     expect(quoteErrorMessage(apiError(400, 'VALIDATION_ERROR'))).toBe(copy.errTradeQuote);
     expect(quoteErrorMessage(apiError(500, 'INTERNAL'))).toBe(copy.errTradeQuote);
     expect(quoteErrorMessage(new TypeError('Failed to fetch'))).toBe(copy.errTradeQuote);
+  });
+});
+
+describe('quoteIsStale', () => {
+  const market = { tradeCount: 11 };
+
+  it('follows the market REVISION, never two clocks', () => {
+    // THE BUG it replaces: the SSR-seeded market carries the web SERVER's cache timestamp and a
+    // quote answered later carries the BROWSER's, so a device running behind the server made
+    // every fresh quote look older than the market it was priced from.
+    expect(quoteIsStale(market, aQuote({ tradeCount: 10 }))).toBe(true);
+    expect(quoteIsStale(market, aQuote({ tradeCount: 11 }))).toBe(false);
+    // A quote priced ahead of the row this tab holds is not stale either — `supersedes` is
+    // strict, so only a market that has genuinely moved past the quote re-prices it.
+    expect(quoteIsStale(market, aQuote({ tradeCount: 12 }))).toBe(false);
+  });
+
+  it('has nothing to judge with no quote on screen', () => {
+    // The resting state and the debounce window both land here; a `true` would arm the requote
+    // effect against a price nobody is looking at.
+    expect(quoteIsStale(market, undefined)).toBe(false);
   });
 });

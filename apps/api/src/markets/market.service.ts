@@ -116,6 +116,18 @@ export function toMarketSummary(row: MarketRow, category: CategoryRef): MarketSu
   };
 }
 
+/**
+ * A card's sparkline ending on the probability that card reports.
+ *
+ * Not `withLatestSample` (apps/web market-live.ts) moved here, and the difference is the empty
+ * case: the client replaces the newest sample of a line it is already drawing, while an empty
+ * answer here means the market has no tick in the window at all, and pinning one sample would
+ * draw a flat line where the card should draw nothing.
+ */
+function endingOnRow(sparkline: number[], pYesBp: number): number[] {
+  return sparkline.length === 0 ? sparkline : [...sparkline.slice(0, -1), pYesBp];
+}
+
 /** Public detail (PLAN 7.1): no LMSR state, liquidity, reserve or author. */
 export function toMarket(row: MarketRow, category: CategoryRef): Market {
   return {
@@ -235,7 +247,12 @@ export class MarketService {
     return {
       items: kept.map((row) => ({
         ...toMarketSummary(row.market, row.category),
-        sparkline: spark.get(row.market.id) ?? [],
+        // The line has to end where the badge says it does. The rows above and the samples
+        // here are two statements and therefore two snapshots, so a trade committing between
+        // them left the card carrying the old probability beside a line already drawn to the
+        // new one. Ending the line on the ROW's own probability makes the pair consistent by
+        // construction rather than by timing.
+        sparkline: endingOnRow(spark.get(row.market.id) ?? [], pYesBpOf(row.market)),
       })),
       nextCursor: hasMore && last ? nextCursorOf(last.market) : null,
     };
@@ -419,10 +436,12 @@ export class MarketService {
       from: start.toISOString(),
       to: to.toISOString(),
       truncated: false,
-      // From `requirePublicAt` above — the same statement that produced `to`, and deliberately
-      // BEFORE the sampling statement below. An earlier snapshot can only LAG the points, and
-      // lagging is the harmless direction; a counter read after them could claim a trade they
-      // predate (packages/shared market.ts states which way that fails).
+      // From `requirePublicAt` above — the same statement that produced the LIVE `to`, and
+      // deliberately BEFORE the sampling statement below. An earlier snapshot can only LAG the
+      // points, and lagging is the harmless direction; a counter read after them could claim a
+      // trade they predate (packages/shared market.ts states which way that fails). When the
+      // CALLER pinned `to`, this is still the counter at answer time — the schema says so, and
+      // says why the row cannot answer otherwise.
       tradeCount: market.tradeCount,
       points: await this.sampleTicks(marketId, start, to, bucketSeconds),
     };
@@ -551,7 +570,12 @@ export class MarketService {
         and(
           eq(priceTicks.marketId, marketId),
           query.from ? gte(priceTicks.ts, new Date(query.from)) : undefined,
-          query.to ? lte(priceTicks.ts, new Date(query.to)) : undefined,
+          // The window's own end, not `query.to`. `listTicks` closes the window on the database
+          // clock when the caller sends no `to`, and this statement runs afterwards under its
+          // own snapshot — so filtering on the REQUEST let a trade committing in between answer
+          // with `ts` past the `to` this response echoes, and past the `tradeCount` read with
+          // it. The bucketed path never had the gap: its grid is built from the same `to`.
+          lte(priceTicks.ts, to),
         ),
       )
       .orderBy(desc(priceTicks.ts), desc(priceTicks.id))

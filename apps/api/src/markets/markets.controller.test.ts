@@ -748,6 +748,16 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     const page = (await get('/api/v1/markets?limit=10')).json<ListPage>();
     const byId = new Map(page.data.map((row): [string, number[]] => [row.id, row.sparkline]));
     expect(byId.size).toBe(4);
+    // The line ends where the badge says it does: the newest sample is the CARD's own
+    // probability, not the newest tick's. The two agree in production — one trade writes both —
+    // but the rows and the samples are read in separate statements, so a trade committing
+    // between them used to leave the card carrying the old price beside a line already drawn to
+    // the new one. These fixtures insert ticks without moving the row, which is exactly that
+    // disagreement, frozen.
+    for (const row of page.data) {
+      if (row.sparkline.length > 0) expect(row.sparkline.at(-1)).toBe(row.pYesBp);
+    }
+    const cardBp = new Map(page.data.map((row): [string, number] => [row.id, row.pYesBp]));
 
     const quietSpark = byId.get(quiet.id)!;
     expect(quietSpark).toHaveLength(SPARKLINE_MAX_POINTS);
@@ -756,11 +766,11 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     // true flat line instead of coming back empty.
     expect(quietSpark.slice(0, 15)).toEqual(Array.from({ length: 15 }, () => 3_000));
     expect(quietSpark.slice(15, -1)).toEqual(Array.from({ length: 9 }, () => 5_000));
-    expect(quietSpark.at(-1)).toBe(7_000);
+    expect(quietSpark.at(-1)).toBe(cardBp.get(quiet.id));
 
     // Leading unknowns are TRIMMED, never zero-filled (0 bp is a real probability), so the
     // array's length is what says where the series starts: 25 - 4 = bucket 21.
-    expect(byId.get(young.id)).toEqual([9_100, 9_100, 9_100, 9_100]);
+    expect(byId.get(young.id)).toEqual([9_100, 9_100, 9_100, cardBp.get(young.id)]);
     // A factory market bypasses the `open` transition that writes the first tick, so it is the
     // only shape that answers with no samples at all — with the key present.
     expect(byId.get(bare.id)).toEqual([]);
@@ -770,12 +780,11 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     for (let i = 1; i < risingSpark.length; i += 1) {
       expect(risingSpark[i]!).toBeGreaterThanOrEqual(risingSpark[i - 1]!);
     }
-    expect(risingSpark.at(-1)).toBe(4_500);
+    expect(risingSpark.at(-1)).toBe(cardBp.get(rising.id));
     // Three cards, three different series: the correlated seek is bound to each row's own id,
-    // not to the first market of the page.
-    expect(new Set([quietSpark.at(-1), byId.get(young.id)!.at(-1), risingSpark.at(-1)]).size).toBe(
-      3,
-    );
+    // not to the first market of the page. Fingerprinted on the OLDEST sample, because the
+    // newest is now every card's own probability and these three fixtures share one.
+    expect(new Set([quietSpark[0], byId.get(young.id)![0], risingSpark[0]]).size).toBe(3);
   });
 
   it('keeps the sparkline bounded by the grid, not by the market tick volume', async () => {
@@ -823,7 +832,8 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
 
     const item = (await get('/api/v1/markets')).json<ListPage>().data[0]!;
     expect(Object.keys(item)).toContain('sparkline');
-    expect(item.sparkline).toEqual([6_100]);
+    // One bucket, and its sample is the card's own probability — see the grid case above.
+    expect(item.sparkline).toEqual([item.pYesBp]);
 
     // `toMarketSummary`/`toMarket` were left alone, so the shared `MarketSummary` component is
     // not widened: neither the public detail nor the admin list ships a chart it never draws.

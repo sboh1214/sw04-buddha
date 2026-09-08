@@ -68,6 +68,7 @@ const tick = (patch: Partial<MarketTickEvent> = {}): MarketTickEvent => ({
   lastPrice: 63,
   volumeP: '130000',
   tradeCount: 11,
+  traderCount: 5,
   ts: '2026-09-07T00:00:00.000Z',
   ...patch,
 });

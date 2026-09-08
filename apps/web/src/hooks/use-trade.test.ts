@@ -164,6 +164,7 @@ const stats: MarketStats = {
   pYesBp: 6300,
   volumeP: '130000',
   tradeCount: 11,
+  traderCount: 5,
 };
 
 const tradeResult: TradeResult = {
@@ -210,6 +211,7 @@ const spend2000: QuoteBody = { ...spend1000, value: '2000' };
 const quoteOf = (shares: number, amountP: string): QuoteResult => ({
   shares,
   amountP,
+  tradeCount: 10,
   maxPayoutP: String(shares * 100),
   priceAvgBp: 5100,
   priceBeforeBp: 5000,
@@ -557,6 +559,9 @@ describe('applyMarketStats', () => {
         pYesBp: 6300,
         volumeP: '130000',
         tradeCount: 11,
+        // The trade answer moves the participant count with the price, exactly as the socket
+        // event does — the two carry one field set on purpose.
+        traderCount: 5,
       });
       const first = queryClient.getQueryData<MarketPages>(marketsKey(DEFAULT_MARKET_FILTERS));
       expect(first?.pages[0]?.items[0]).toEqual({
@@ -565,6 +570,7 @@ describe('applyMarketStats', () => {
         pYesBp: 6300,
         volumeP: '130000',
         tradeCount: 11,
+        traderCount: 5,
         // The card's line has to end where its badge says it does.
         sparkline: [4800, 4900, 6300],
       });

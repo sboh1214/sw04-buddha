@@ -241,6 +241,9 @@ describe.skipIf(!hasTestInfra)('trades (integration)', () => {
       pYesBp: quote.priceAfterBp,
       volumeP: quote.amountP.toString(),
       tradeCount: 1,
+      // The buyer held nothing here before, so the same trade moved this too — it rides in the
+      // answer and in the tick event, which carry one field set on purpose.
+      traderCount: 1,
     });
 
     const after = await marketRow();
@@ -311,6 +314,7 @@ describe.skipIf(!hasTestInfra)('trades (integration)', () => {
           lastPrice: 52,
           volumeP: quote.amountP.toString(),
           tradeCount: 1,
+          traderCount: 1,
           ts,
         },
         {

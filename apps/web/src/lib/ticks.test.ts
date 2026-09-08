@@ -55,6 +55,7 @@ function tick(ts: string, pYesBp = 5000, tradeCount = 42): MarketTickEvent {
     lastPrice: Math.round(pYesBp / 100),
     volumeP: '12000',
     tradeCount,
+    traderCount: 5,
     ts,
   };
 }

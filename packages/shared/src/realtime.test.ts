@@ -33,6 +33,7 @@ const tick = {
   lastPrice: 52,
   volumeP: '520',
   tradeCount: 1,
+  traderCount: 1,
   ts,
 };
 const trade = {

@@ -8,7 +8,7 @@ import {
   type QuoteBody,
   type QuoteResult,
 } from '@buddha/shared';
-import { MarketService, assertTradable, lmsrStateOf } from './market.service.js';
+import { type MarketRow, MarketService, assertTradable, lmsrStateOf } from './market.service.js';
 
 /**
  * `POST /quotes` (PLAN 7.1): a read-only price check, public and side-effect free. The
@@ -43,9 +43,10 @@ export class QuoteService {
           priceBeforeBp,
           priceAfterBp: priceBeforeBp,
           maxPayoutP: '0',
+          tradeCount: market.tradeCount,
         };
       }
-      return toQuoteResult(mechanism.quoteBuy(state, body.outcome, shares), 'buy');
+      return toQuoteResult(mechanism.quoteBuy(state, body.outcome, shares), 'buy', market);
     }
 
     const quote =
@@ -54,11 +55,17 @@ export class QuoteService {
         : // The engine does not know the caller's holdings and the route needs no login:
           // a sell quote is a price, not a promise (INSUFFICIENT_POSITION is the trade's).
           mechanism.quoteSell(state, body.outcome, value.shares);
-    return toQuoteResult(quote, body.side);
+    return toQuoteResult(quote, body.side, market);
   }
 }
 
-function toQuoteResult(quote: Quote, side: 'buy' | 'sell'): QuoteResult {
+function toQuoteResult(
+  quote: Quote,
+  side: 'buy' | 'sell',
+  // The row this price was computed from, read in the same statement as the clock above: its
+  // counter is the revision the panel compares the market against (`QuoteResult.tradeCount`).
+  market: Pick<MarketRow, 'tradeCount'>,
+): QuoteResult {
   return {
     shares: quote.shares,
     amountP: serializePAmount(quote.amountP),
@@ -67,5 +74,6 @@ function toQuoteResult(quote: Quote, side: 'buy' | 'sell'): QuoteResult {
     priceAfterBp: quote.priceAfterBp,
     maxPayoutP:
       side === 'buy' ? serializePAmount(BigInt(quote.shares) * PAYOUT_PER_CONTRACT_P) : '0',
+    tradeCount: market.tradeCount,
   };
 }

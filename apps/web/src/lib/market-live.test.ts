@@ -81,6 +81,7 @@ const tick = (patch: Partial<MarketTickEvent> = {}): MarketTickEvent => ({
   lastPrice: 63,
   volumeP: '130000',
   tradeCount: 11,
+  traderCount: 5,
   ts: '2026-09-07T00:00:00.000Z',
   ...patch,
 });
@@ -161,6 +162,9 @@ describe('applyTick', () => {
       lastPrice: 63,
       volumeP: '130000',
       tradeCount: 11,
+      // Moves with the same trade, so the patch carries it: a first-time buyer raises it, and
+      // leaving it behind kept the header's 참여자 stale for as long as the market stayed busy.
+      traderCount: 5,
     });
   });
 
@@ -279,6 +283,7 @@ describe('joinMarket', () => {
     lastPrice: 63,
     volumeP: '130000',
     tradeCount: 11,
+    traderCount: 7,
   };
   const stale: Market = { ...detail, title: '10월 기준금리 인하?', traderCount: 9 };
 
@@ -289,7 +294,10 @@ describe('joinMarket', () => {
     expect(joined.volumeP).toBe('130000');
     expect(joined.tradeCount).toBe(11);
     expect(joined.title).toBe(stale.title);
-    expect(joined.traderCount).toBe(9);
+    // `traderCount` rides with the price, NOT with the descriptive fields: a trade moves it, so
+    // an older snapshot must not drag the participant count back under a newer probability —
+    // even though this stale answer names a higher one.
+    expect(joined.traderCount).toBe(7);
   });
 
   it('keeps the higher status rank in both directions', () => {

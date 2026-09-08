@@ -4463,6 +4463,11 @@
           },
           "maxPayoutP": {
             "$ref": "#/components/schemas/PAmount"
+          },
+          "tradeCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
           }
         },
         "required": [
@@ -4471,7 +4476,8 @@
           "priceAvgBp",
           "priceBeforeBp",
           "priceAfterBp",
-          "maxPayoutP"
+          "maxPayoutP",
+          "tradeCount"
         ],
         "additionalProperties": false
       },
@@ -5289,6 +5295,11 @@
             "type": "integer",
             "minimum": 0,
             "maximum": 9007199254740991
+          },
+          "traderCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
           }
         },
         "required": [
@@ -5296,7 +5307,8 @@
           "lastPrice",
           "pYesBp",
           "volumeP",
-          "tradeCount"
+          "tradeCount",
+          "traderCount"
         ],
         "additionalProperties": false
       }

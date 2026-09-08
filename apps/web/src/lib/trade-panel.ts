@@ -11,6 +11,7 @@ import {
   parsePAmount,
   quoteBodySchema,
   slippageGuard,
+  supersedes,
 } from '@buddha/shared';
 import { copy } from '@/copy';
 import {
@@ -134,6 +135,24 @@ export function quoteRequest(
     value: inputs.value,
   });
   return parsed.success ? parsed.data : undefined;
+}
+
+/**
+ * Whether the market has moved under the price on screen — by the market's own REVISION.
+ *
+ * Never by comparing cache timestamps, which was the defect: the SSR-seeded market carries the
+ * value the WEB SERVER stamped and hydration copies it into the browser verbatim, while a quote
+ * answered afterwards carries `Date.now()` in the BROWSER. A device whose clock runs behind the
+ * server therefore made every fresh quote look older than the market it had just been priced
+ * from, so the summary stayed dimmed and the panel re-quoted on its throttle until real time
+ * caught up with the skew. `QuoteResult.tradeCount` is the counter the answer was priced at and
+ * the row's is kept newest by `joinMarket`, so both sides come from one sequence.
+ */
+export function quoteIsStale(
+  market: Pick<Market, 'tradeCount'>,
+  quote: Pick<QuoteResult, 'tradeCount'> | undefined,
+): boolean {
+  return quote !== undefined && supersedes(market.tradeCount, quote.tradeCount);
 }
 
 /**

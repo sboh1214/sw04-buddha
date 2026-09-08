@@ -54,6 +54,7 @@ function tickEvent(marketId: string, tradeCount = 1): MarketTickEvent {
     marketId,
     pYesBp: 5200,
     lastPrice: 52,
+    traderCount: 3,
     volumeP: '5125',
     tradeCount,
     ts: new Date().toISOString(),

@@ -148,7 +148,14 @@ describe('read DTOs', () => {
         fill,
         balance: { availableP: '9480', lockedP: '0' },
         position,
-        market: { id: marketId, lastPrice: 52, pYesBp: 5250, volumeP: '520', tradeCount: 1 },
+        market: {
+          id: marketId,
+          lastPrice: 52,
+          pYesBp: 5250,
+          volumeP: '520',
+          tradeCount: 1,
+          traderCount: 1,
+        },
       }).market.tradeCount,
     ).toBe(1);
     expect(
@@ -159,6 +166,7 @@ describe('read DTOs', () => {
         priceBeforeBp: 5000,
         priceAfterBp: 5000,
         maxPayoutP: '0',
+        tradeCount: 0,
       }).shares,
     ).toBe(0);
   });

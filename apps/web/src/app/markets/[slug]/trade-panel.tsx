@@ -62,6 +62,7 @@ import {
   INITIAL_TRADE_INPUTS,
   isTradable,
   maxValueFor,
+  quoteIsStale,
   quoteRequest,
   setMode,
   setOutcome,
@@ -207,8 +208,20 @@ function useTradePanel(market: Market): TradePanelState {
   // answer lands on its own entry, and placeholder data — which belongs to an intent the trader
   // has already typed past — may dim the summary but must never build a wire body.
   const quote = quoteQuery.isPlaceholderData ? undefined : quoteQuery.data;
-  const quoteUpdatedAt = quoteQuery.dataUpdatedAt;
-  const stale = quoteUpdatedAt > 0 && marketUpdatedAt > quoteUpdatedAt;
+  /**
+   * Whether the market has moved under the price on screen — by the market's own REVISION, not
+   * by two clocks.
+   *
+   * It used to compare `marketUpdatedAt` with the quote's `dataUpdatedAt`, and those are stamped
+   * by different machines: the SSR-seeded market carries the value the WEB SERVER wrote, which
+   * hydration copies into the browser cache verbatim, while a quote answered afterwards carries
+   * `Date.now()` in the BROWSER. On a device whose clock runs behind the server, every fresh
+   * quote therefore looked older than the market it had just been priced from — the summary
+   * stayed dimmed and the effect below re-quoted on its throttle until real time caught up with
+   * the skew. `QuoteResult.tradeCount` is the counter the answer was priced at, and `market`
+   * carries the same counter kept newest by `joinMarket`, so both sides come from one sequence.
+   */
+  const stale = quoteIsStale(market, quote);
 
   const trade = useTrade(market, (result) => {
     // Fires BEFORE the cache work (useTrade awaits it after), so the toast and the closing sheet
@@ -247,14 +260,15 @@ function useTradePanel(market: Market): TradePanelState {
 
   /*
    * Follow the live price without importing the socket (design 4.3): whatever patches the market
-   * cache — a `market:tick`, this tab's own trade answer, a background refetch — shows up as
-   * `marketUpdatedAt > quoteUpdatedAt`, and one throttled invalidation re-prices the single active
-   * quote. At most one quote query exists, so this is <= 1 `POST /quotes` per second on the
-   * busiest market, and the request is public and side-effect free.
+   * cache — a `market:tick`, this tab's own trade answer, a background refetch — raises the row's
+   * `tradeCount` past the one the quote was priced at, and one throttled invalidation re-prices
+   * the single active quote. At most one quote query exists, so this is <= 1 `POST /quotes` per
+   * second on the busiest market, and the request is public and side-effect free.
    *
    * Suppressed while a submit is in flight or a re-confirm is pending, so the guard that is sent
-   * is the guard the user read. `marketUpdatedAt` is a dependency rather than a derived boolean:
-   * every tick has to re-enter this effect, and a boolean that stays true would never re-fire it.
+   * is the guard the user read. The two COUNTERS are the dependencies rather than the derived
+   * boolean: every tick has to re-enter this effect, and a boolean that stays true would never
+   * re-fire it.
    *
    * A run the throttle turns away is ARMED, not dropped. The last tick of a burst is the one that
    * matters and there is no later event to retry on — once the market goes quiet nothing changes
@@ -265,7 +279,7 @@ function useTradePanel(market: Market): TradePanelState {
   const lastRequoteAt = useRef(0);
   useEffect(() => {
     if (submitting || reconfirmFrom !== undefined) return;
-    if (quoteUpdatedAt === 0 || marketUpdatedAt <= quoteUpdatedAt) return;
+    if (!quoteIsStale(market, quote)) return;
     const requote = () => {
       lastRequoteAt.current = Date.now();
       void queryClient.invalidateQueries({
@@ -282,7 +296,7 @@ function useTradePanel(market: Market): TradePanelState {
     return () => {
       clearTimeout(timer);
     };
-  }, [marketUpdatedAt, quoteUpdatedAt, submitting, reconfirmFrom, queryClient, market.id]);
+  }, [market, quote, submitting, reconfirmFrom, queryClient]);
 
   // While a new quote is in flight the previous numbers stay on screen instead of flashing a
   // skeleton — the same summary the machine builds, from the answer the query still holds,

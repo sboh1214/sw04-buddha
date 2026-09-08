@@ -822,6 +822,7 @@ export type components = {
             lastPrice: number;
             pYesBp: number;
             tradeCount: number;
+            traderCount: number;
             volumeP: components["schemas"]["PAmount"];
         };
         MarketSummary: {
@@ -973,6 +974,7 @@ export type components = {
             priceAvgBp: number;
             priceBeforeBp: number;
             shares: number;
+            tradeCount: number;
         };
         RedeemCouponBody: {
             code: components["schemas"]["CouponCode"];

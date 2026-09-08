@@ -75,6 +75,8 @@ export const marketTickEventSchema = z
     lastPrice: z.number().int().min(PRICE_MIN).max(PRICE_MAX),
     volumeP: pAmountSchema,
     tradeCount: z.number().int().min(0),
+    /** Raised by a trade from an account new to this market; see `MarketStats.traderCount`. */
+    traderCount: z.number().int().min(0),
     ts: tsSchema,
   })
   .meta({ id: 'MarketTickEvent' });

@@ -232,6 +232,17 @@ export const quoteResultSchema = z
     priceAfterBp: bpSchema,
     /** shares · 100 for a buy; '0' for a sell. */
     maxPayoutP: pAmountSchema,
+    /**
+     * The market's trade count this price was computed from — the revision a client compares
+     * against the market row to ask "has the market moved under this quote?".
+     *
+     * A timestamp cannot answer that. A cached market seeded during SSR carries the SERVER's
+     * `dataUpdatedAt`, while a quote answered later carries the BROWSER's, so on a device whose
+     * clock runs behind the server every fresh quote looks older than the market it was priced
+     * from — the summary dims and the panel re-quotes on its throttle until the skew is spent.
+     * Both sides of this comparison come from one counter instead.
+     */
+    tradeCount: countSchema,
   })
   .meta({ id: 'QuoteResult' });
 export type QuoteResult = z.infer<typeof quoteResultSchema>;
@@ -388,6 +399,14 @@ export const marketStatsSchema = z
     pYesBp: bpSchema,
     volumeP: pAmountSchema,
     tradeCount: countSchema,
+    /**
+     * Moves with the same trade, so it belongs to the same patch. A trade by an account that
+     * held nothing in this market raises it, and a client that patched every OTHER
+     * trade-derived field kept showing the old participant count for as long as the market
+     * stayed busy — each patch restarted the query's own staleness clock, so the refetch that
+     * would have corrected it never came due.
+     */
+    traderCount: countSchema,
   })
   .meta({ id: 'MarketStats' });
 export type MarketStats = z.infer<typeof marketStatsSchema>;
@@ -468,8 +487,15 @@ export const priceSeriesSchema = z
     /** Points older than the served ones exist inside the window but were left out. */
     truncated: z.boolean(),
     /**
-     * The market's trade count as of `to`, read in the same statement as `to` itself: the only
-     * field here that says what the answer CONTAINS rather than when it was written.
+     * The market's trade count when this answer was read — the only field here that says what
+     * the answer CONTAINS rather than when it was written.
+     *
+     * A watermark for a LIVE window only, which is the window a client merging `market:tick`
+     * events has. Ask for an explicit `to` and this is still the counter at answer time, not
+     * the count as of that cutoff: the market row keeps no history, and deriving one from the
+     * ticks would make the field mean something the row cannot confirm. A pinned window is
+     * history, so nothing merges live events into it — but a client that treated this as an
+     * as-of watermark there would over-report and drop events it should have taken.
      *
      * `to` cannot say it. A trade stamps its tick with `clock_timestamp()` read INSIDE its
      * transaction, before its writes (trade.service.ts), so the instant is fixed several

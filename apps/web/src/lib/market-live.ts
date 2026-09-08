@@ -41,6 +41,7 @@ export interface LiveMarket {
   pYesBp: number;
   volumeP: string;
   tradeCount: number;
+  traderCount: number;
   resolvedResult: Outcome | null;
 }
 
@@ -61,7 +62,7 @@ export type MarketPages = InfiniteData<MarketPage, string | undefined>;
  */
 export type MarketTickPatch = Pick<
   MarketTickEvent,
-  'marketId' | 'pYesBp' | 'lastPrice' | 'volumeP' | 'tradeCount'
+  'marketId' | 'pYesBp' | 'lastPrice' | 'volumeP' | 'tradeCount' | 'traderCount'
 >;
 
 /**
@@ -111,6 +112,7 @@ export function applyTick<T extends LiveMarket>(
     lastPrice: event.lastPrice,
     volumeP: event.volumeP,
     tradeCount: event.tradeCount,
+    traderCount: event.traderCount,
   };
   if (!hasSparkline(held)) return next;
   return { ...next, sparkline: withLatestSample(held.sparkline, event.pYesBp) };
@@ -160,8 +162,10 @@ export function applyToPages(
 
 /**
  * Take the newer of two snapshots of the same market, per ordering group. Descriptive fields
- * (title, rules, closeAt, traderCount, category) always come from `incoming`: only a REST
- * answer has them, and only a REST answer can change them. Monotone, idempotent and — apart
+ * (title, rules, closeAt, category) always come from `incoming`: only a REST answer has them,
+ * and only a REST answer can change them. `traderCount` is NOT one of them — a trade moves it,
+ * so it rides with the price under `tradeCount`, or an older snapshot would drag the
+ * participant count back while the probability beside it stayed new. Monotone, idempotent and — apart
  * from a tie, where `incoming` wins because `supersedes` is strict — order-independent.
  */
 export function joinMarket<T extends LiveMarket>(held: T | undefined, incoming: T): T {
@@ -174,6 +178,9 @@ export function joinMarket<T extends LiveMarket>(held: T | undefined, incoming: 
       lastPrice: held.lastPrice,
       volumeP: held.volumeP,
       tradeCount: held.tradeCount,
+      // In the ORDERED group, not the descriptive one: it moves with the same trade, so a
+      // snapshot older than what is held must not drag it back with the price.
+      traderCount: held.traderCount,
     };
     // The card's line has to end where its badge says it does: the hourly grid still comes
     // from the newer fetch, only its newest sample follows the probability we kept.
