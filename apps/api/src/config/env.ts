@@ -167,6 +167,13 @@ export const envSchema = z
     // cookie to nothing that exists, which is exactly the failure this variable is here to
     // fix: no error anywhere, and realtime dead for every signed-in user.
     const cookieDomain = env.AUTH_COOKIE_DOMAIN;
+    // `URL.parse` rather than `new URL`: a superRefine runs even when a FIELD of the object
+    // failed, so `BETTER_AUTH_URL: 'not-a-url'` (and `''`) reaches this body as the raw string
+    // and `new URL` threw a bare TypeError straight through `safeParse` — replacing the readable
+    // boot error that names BETTER_AUTH_URL with a stack trace that names nothing. Unresolvable
+    // means the cross-check is SKIPPED, which is right: `z.url()` has already filed the issue
+    // that says what is actually wrong, and one value must not raise two.
+    const authHost = URL.parse(env.BETTER_AUTH_URL)?.hostname;
     if (cookieDomain !== undefined) {
       if (
         !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i.test(cookieDomain)
@@ -176,7 +183,7 @@ export const envSchema = z
           path: ['AUTH_COOKIE_DOMAIN'],
           message: `AUTH_COOKIE_DOMAIN must be a bare hostname such as "example.com", not "${cookieDomain}"`,
         });
-      } else if (!domainCovers(cookieDomain, new URL(env.BETTER_AUTH_URL).hostname)) {
+      } else if (authHost !== undefined && !domainCovers(cookieDomain, authHost)) {
         // Shape alone was never the question. A well-formed hostname that the auth host is not
         // under is exactly as dead as a URL or a leading dot: RFC 6265 domain-matching requires
         // the cookie's Domain to be the host or a parent of it, so the browser DROPS the
@@ -184,12 +191,21 @@ export const envSchema = z
         // failure this variable exists to make loud.
         //
         // Compared label-wise, so `example.com` does not cover `badexample.com`; equality counts,
-        // so a host-only-equivalent value is allowed. `BETTER_AUTH_URL` is `z.url()` with a
-        // default, so it always parses here.
+        // so a host-only-equivalent value is allowed.
+        //
+        // TWO GAPS, on purpose. (1) This sees the WEB host only. `AUTH_COOKIE_DOMAIN` exists
+        // because the cookie is minted through the web host while the socket dials the API host
+        // (ADR-0017 추기), and `envSchema` does not carry the public API origin — so
+        // `AUTH_COOKIE_DOMAIN=app.example.com` still boots and still leaves api.example.com
+        // uncovered, which is the very failure class the variable was added for. (2) A public
+        // suffix such as `co.kr` covers `buddha.co.kr` by this test and is discarded by the
+        // browser all the same; catching that needs a public-suffix list, which is not a
+        // dependency worth pulling into boot validation. This check is one-directional: what it
+        // rejects is certainly dead, what it passes is not thereby certainly alive.
         ctx.addIssue({
           code: 'custom',
           path: ['AUTH_COOKIE_DOMAIN'],
-          message: `AUTH_COOKIE_DOMAIN "${cookieDomain}" does not cover the BETTER_AUTH_URL host "${new URL(env.BETTER_AUTH_URL).hostname}" — a browser would drop the cookie`,
+          message: `AUTH_COOKIE_DOMAIN "${cookieDomain}" does not cover the BETTER_AUTH_URL host "${authHost}" — a browser would drop the cookie. Note this checks the web host only; it cannot see the API host.`,
         });
       }
     }

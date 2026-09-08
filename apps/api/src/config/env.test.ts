@@ -120,6 +120,25 @@ describe('AUTH_COOKIE_DOMAIN', () => {
     ).toBe('buddha.co.kr');
   });
 
+  it('leaves an unparseable BETTER_AUTH_URL to its own error instead of throwing', () => {
+    // A superRefine runs even when a FIELD failed, so the body sees the raw string. Reading the
+    // host with `new URL` threw a bare TypeError straight through `safeParse` — the readable boot
+    // error naming BETTER_AUTH_URL became a stack trace naming nothing, and only for deployments
+    // that set AUTH_COOKIE_DOMAIN, which is to say the ones that split hosts.
+    for (const bad of ['not-a-url', '']) {
+      const run = () =>
+        envSchema.safeParse({ ...base, BETTER_AUTH_URL: bad, AUTH_COOKIE_DOMAIN: 'example.com' });
+      expect(run, JSON.stringify(bad)).not.toThrow();
+      const result = run();
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        // Only BETTER_AUTH_URL is named: one value must not raise two issues, and the cookie
+        // domain is not what is wrong here.
+        expect(result.error.issues.map((issue) => issue.path)).toEqual([['BETTER_AUTH_URL']]);
+      }
+    }
+  });
+
   it('refuses a well-formed domain the auth host is not under', () => {
     // THE HAZARD: shape was the only test, so an unrelated hostname started the API cleanly and
     // then emitted `Domain=example.net` from `app.example.com`. RFC 6265 domain-matching requires
