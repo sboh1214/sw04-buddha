@@ -275,11 +275,26 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
      * `refetchType: 'active'` so only mounted observers refetch and the rest merely go stale
      * ("refetch 남발 금지"); safe against an event landing mid-refetch, because the
      * `structuralSharing` join registered in query-client.ts keeps every market write monotone.
+     *
+     * The fills key alone cancels first, and the asymmetry is the point rather than an
+     * oversight. A bare invalidation is swallowed whole by a query still on its FIRST fetch
+     * (query-core hands back the running request), and this is the ONE snapshot key nothing
+     * else writes: the market and the lists are seeded and then patched by `applyTick` on every
+     * event, the series keeps its right edge through `appendTick`, and the private three are
+     * re-read by `SessionCacheGuard`'s own reset whenever they can be pending here — while
+     * `['market-fills', id]` is never seeded, carries no `refetchInterval`, and has no reducer.
+     * Losing it HERE is the worst case of all: a resnapshot runs exactly because events were
+     * missed, so it is several rows short, not one. Cancelling the others would only spend a
+     * round trip on an answer already arriving.
      */
     const resnapshot = () => {
       balanceOrder.reset();
       const keys = identity === null ? SNAPSHOT_KEYS : [...SNAPSHOT_KEYS, ...PRIVATE_SNAPSHOT_KEYS];
       for (const queryKey of keys) {
+        if (queryKey === MARKET_FILLS_KEY) {
+          void restartQueries(queryClient, queryKey);
+          continue;
+        }
         void queryClient.invalidateQueries({ queryKey, refetchType: 'active' });
       }
     };
