@@ -428,8 +428,28 @@ export class MarketService {
         ? new Date(to.getTime() - query.windowSeconds * 1_000)
         : (market.openAt ?? market.createdAt);
     const from = new Date(Math.min(requestedFrom.getTime(), to.getTime()));
+    // The window the CALLER named is a FILTER; a defaulted one is only a description. Those are
+    // different jobs and the raw path has to be handed the first, not left to re-derive it: it
+    // filtered on `query.from` alone, so a RELATIVE window — which names its start just as
+    // definitely, only by duration — bounded nothing. `?windowSeconds=3600` echoed one hour and
+    // served the newest TICKS_SCAN_MAX ticks of the market's whole history, points hours older
+    // than the `from` beside them. Reachable on the DEFAULT resolution: `resolution` defaults to
+    // `raw` (market.ts), which is the one value `tickBucketSeconds` answers 0 for.
+    //
+    // `market.openAt` deliberately stays OUT of the filter. No tick can predate a market's
+    // opening — the 'open' tick is written in the same transaction that stamps `openAt` — so
+    // flooring there would only make the answer depend on a bound it cannot need, and the suite
+    // pins that reading outright ("`from` older than the bound is a filter, not a floor").
+    const filterFrom =
+      query.from !== undefined
+        ? new Date(query.from)
+        : query.windowSeconds !== undefined
+          ? from
+          : undefined;
     const bucketSeconds = tickBucketSeconds(query.resolution, to.getTime() - from.getTime());
-    if (bucketSeconds === 0) return this.rawSeries(marketId, query, from, to, market.tradeCount);
+    if (bucketSeconds === 0) {
+      return this.rawSeries(marketId, query.resolution, filterFrom, from, to, market.tradeCount);
+    }
     // Even the coarsest stride cannot cover a window this wide (about ten years). Trim the old
     // end rather than overrun the documented cap; the narrowed `from` in the response is what
     // says so. `truncated` stays false and keeps the raw path's verified meaning — "points
@@ -556,12 +576,16 @@ export class MarketService {
    * index scan with a LIMIT on (market_id, ts, id), so an anonymous request costs the same on
    * a market with a million ticks as on one with ten thousand.
    *
-   * The WHERE stays on `query.from`/`query.to`, never on the defaulted window, so `from` is a
-   * filter and not a floor; the echoed window only describes what the answer covers.
+   * The WHERE floors on the window the CALLER named — `filterFrom`, which is `query.from` or the
+   * instant `windowSeconds` counts back from — and never on a defaulted one, so a defaulted
+   * `from` describes what the answer covers while a requested one bounds it. `listTicks` decides
+   * which is which; taking `filterFrom` as a parameter rather than re-reading `query` is what
+   * stops this WHERE and the `truncated` probe below drifting apart from it again.
    */
   private async rawSeries(
     marketId: string,
-    query: TicksQuery,
+    resolution: TicksQuery['resolution'],
+    filterFrom: Date | undefined,
     from: Date,
     to: Date,
     tradeCount: number,
@@ -578,7 +602,7 @@ export class MarketService {
       .where(
         and(
           eq(priceTicks.marketId, marketId),
-          query.from ? gte(priceTicks.ts, new Date(query.from)) : undefined,
+          filterFrom ? gte(priceTicks.ts, filterFrom) : undefined,
           // The window's own end, not `query.to`. `listTicks` closes the window on the database
           // clock when the caller sends no `to`, and this statement runs afterwards under its
           // own snapshot — so filtering on the REQUEST let a trade committing in between answer
@@ -630,9 +654,9 @@ export class MarketService {
     const truncated =
       first !== undefined &&
       Number(first.cnt) >= TICKS_SCAN_MAX &&
-      (await this.hasOlderTick(marketId, first.ts, first.id, query.from));
+      (await this.hasOlderTick(marketId, first.ts, first.id, filterFrom));
     return {
-      resolution: query.resolution,
+      resolution,
       bucketSeconds: 0,
       from: from.toISOString(),
       to: to.toISOString(),
@@ -656,7 +680,7 @@ export class MarketService {
     marketId: string,
     ts: Date,
     id: number,
-    from: string | undefined,
+    filterFrom: Date | undefined,
   ): Promise<boolean> {
     const { priceTicks } = schema;
     const [row] = await this.db
@@ -666,7 +690,7 @@ export class MarketService {
         and(
           eq(priceTicks.marketId, marketId),
           sql`(${priceTicks.ts}, ${priceTicks.id}) < (${ts.toISOString()}::timestamptz, ${id}::bigint)`,
-          from ? gte(priceTicks.ts, new Date(from)) : undefined,
+          filterFrom ? gte(priceTicks.ts, filterFrom) : undefined,
         ),
       )
       .limit(1);

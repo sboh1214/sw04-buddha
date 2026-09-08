@@ -362,3 +362,66 @@ export function sampleForTable(points: readonly ChartPoint[], max: number): Char
   }
   return rows;
 }
+
+/** What a keypress does to the readout: move it, clear it, or leave the key to the page. */
+export type ReadoutMove = { kind: 'move'; index: number } | { kind: 'clear' } | { kind: 'ignore' };
+
+/**
+ * The index a held readout resolves to against the series ON SCREEN NOW, or -1 for "nothing to
+ * read".
+ *
+ * THE HAZARD: a hover index points into an array the chart does not own. `['ticks', id, range]`
+ * is a ROLLING window — `ticksQueryFor` sends a duration and the server closes it on its own
+ * clock — and the sampler keeps only the boundaries whose value CHANGED plus the window's ends,
+ * so the SAME range answers FEWER points as old changes slide off the left edge. A focus refetch
+ * past the 30s staleTime, a reconnect resnapshot or a `market:status` restart lands it. The
+ * keyboard ENTERS at the last index, so a single dropped boundary is enough to put a parked
+ * readout past the end, and both the reading and the crosshair vanish with nothing said.
+ *
+ * Clamped at READ rather than reset in state, twice over: `set-state-in-effect` and
+ * `set-state-in-render` are both errors here, and a reset would be worse than the bug — the
+ * count changes by one on ordinary refetches, so it would routinely discard a still-valid
+ * selection. The last index is exactly where End and ArrowRight already put the readout, so
+ * clamping keeps it naming a real point instead of blanking.
+ *
+ * A NEGATIVE held index stays -1: it means nothing was selected, and lifting it to 0 would
+ * invent a selection the reader never made.
+ */
+export function readoutIndex(held: number | null, length: number): number {
+  if (held === null || held < 0 || length <= 0) return -1;
+  return Math.min(held, length - 1);
+}
+
+/**
+ * Where an arrow, Home, End or Escape moves the readout, measured against the CURRENT series.
+ *
+ * `held === null` enters at the right edge — the newest reading, which is the one a chart is
+ * usually asked about. A held index past the end is clamped BEFORE it is stepped, and that
+ * ordering is the whole point: ArrowLeft used to decrement a number the series no longer had,
+ * one press at a time, so a shrink of a few dozen points left the readout blank for that many
+ * dead presses. Every other handled key already recovered in one (ArrowRight and End clamp to
+ * the last index, Home to 0, Escape clears), which is why only ArrowLeft showed the symptom.
+ *
+ * An empty series answers `ignore`, not a clamp to -1: -1 would LATCH in state and kill the
+ * readout for the rest of the mount even once the series arrived, and the arrow keys must still
+ * scroll the page when there is nothing to read.
+ */
+export function readoutMove(key: string, held: number | null, length: number): ReadoutMove {
+  if (length <= 0) return { kind: 'ignore' };
+  const last = length - 1;
+  const current = held === null || held < 0 ? last : Math.min(held, last);
+  switch (key) {
+    case 'ArrowLeft':
+      return { kind: 'move', index: Math.max(0, current - 1) };
+    case 'ArrowRight':
+      return { kind: 'move', index: Math.min(last, current + 1) };
+    case 'Home':
+      return { kind: 'move', index: 0 };
+    case 'End':
+      return { kind: 'move', index: last };
+    case 'Escape':
+      return { kind: 'clear' };
+    default:
+      return { kind: 'ignore' };
+  }
+}

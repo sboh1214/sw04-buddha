@@ -2,18 +2,36 @@
 
 import { Alert, Button, Card, HStack, Skeleton, Stack, Text } from '@chakra-ui/react';
 import { formatP, parsePAmount } from '@buddha/shared';
+import NextLink from 'next/link';
+import { EmptyState } from '@/components/ui/empty-state';
 import { copy } from '@/copy';
 import { useMe } from '@/hooks/use-me';
+import { profileView } from '@/lib/query-client';
 
 /** Balance summary (PLAN 11.3). `locked_p` is always 0 in the MVP but shown for honesty. */
 export function BalanceCard() {
-  const { data: me, isPending, isFetching, refetch } = useMe();
+  const { data: me, isPending, isFetching, isLoggedIn, refetch } = useMe();
+  // The same four states /portfolio reads, and for the same reason: this screen's gate is
+  // server-side and runs only on navigation, so a session that ends under it left this card
+  // blaming a profile load that never failed, with a 다시 시도 that can only 401.
+  const view = profileView({ isLoggedIn, isPending, isFetching, hasProfile: me !== undefined });
 
   return (
     <Card.Root data-testid="wallet-balance">
       <Card.Body>
-        {isPending ? (
+        {view === 'pending' ? (
           <Skeleton height="12" />
+        ) : view === 'signedOut' ? (
+          <EmptyState
+            message={copy.portfolioSignedOut}
+            action={
+              <Button asChild size="sm" variant="outline">
+                <NextLink href={{ pathname: '/login', query: { next: '/wallet' } }}>
+                  {copy.login}
+                </NextLink>
+              </Button>
+            }
+          />
         ) : !me ? (
           <Stack gap="3" align="flex-start">
             <Alert.Root status="error" role="alert">

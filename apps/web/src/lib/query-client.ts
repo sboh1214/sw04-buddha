@@ -179,3 +179,67 @@ export function listView(query: {
   if (query.isLoadingError) return 'failed';
   return query.isRefetchError ? 'stale' : 'ready';
 }
+
+/**
+ * A list section's rungs INCLUDING its empty one, because `stale` is not a rung — it is a notice
+ * that rides ABOVE whatever the section would otherwise show.
+ *
+ * Spending the stale state as one more `:` arm hides the very rows it is describing, which is
+ * the loss `listView` refuses. And on an EMPTY list it is worse than a silence: the section goes
+ * on printing its own "there is nothing here" copy as though that were current. That empty
+ * variant is the one reading that is positively FALSE rather than merely incomplete — an account
+ * with no prior rows acts in another tab, the refresh fails, and the screen asserts there is
+ * nothing while the balance beside it already moved.
+ */
+export function listSection(
+  query: { isPending: boolean; isLoadingError: boolean; isRefetchError: boolean },
+  rowCount: number,
+): { stale: boolean; body: 'pending' | 'failed' | 'empty' | 'rows' } {
+  const view = listView(query);
+  if (view === 'pending') return { stale: false, body: 'pending' };
+  if (view === 'failed') return { stale: false, body: 'failed' };
+  return { stale: view === 'stale', body: rowCount === 0 ? 'empty' : 'rows' };
+}
+
+/** What a screen that needs the signed-in profile can say about it. */
+export type ProfileView = 'pending' | 'signedOut' | 'failed' | 'ready';
+
+/**
+ * Which of the four a screen that needs the profile is in — and `signedOut` is the rung
+ * `listView` cannot have, because three query flags cannot see a session.
+ *
+ * THE HAZARD: when a session ends UNDER a mounted screen, every private query is disabled during
+ * the same render (`enabled: session != null`) and `SessionCacheGuard` then resets the cache, so
+ * the observer settles at `status: 'pending', fetchStatus: 'idle', data: undefined` while the
+ * hooks' own override collapses `isPending` to false. "Settled, no data" then reads as a LOAD
+ * FAILURE — a screen blaming a fetch that never ran and never failed — and every list beside it
+ * answers `ready` with no rows, so the screen also asserts the account holds nothing. The server
+ * gate on these routes only runs on NAVIGATION, so nothing moves the reader off the page.
+ *
+ * A HELD profile answers `ready` before anything else is asked, and that ordering is not a
+ * detail. `isFetching` is true for every background refetch — a focus refetch, an expired
+ * staleTime — so testing it ahead of the data would replace a perfectly good balance with a
+ * skeleton several times an hour (measured: `isPending false, isFetching true, hasData true`).
+ * The flags below decide what to say when there is NO profile to show, which is the only
+ * question this function exists to answer.
+ *
+ * Among those, `pending` comes first and includes `isFetching`, and both halves are
+ * load-bearing. `useSession` pins `isPending` through hydration, so a bare `!isLoggedIn` would
+ * flash a sign-in prompt on every single load — an always-on regression worse than the bug. And
+ * the tab that signs out clears `['me']` while better-auth's atom still holds the old session,
+ * which without `isFetching` flashed a false error on every ordinary logout (recorded in
+ * DECISIONS.md, M1 PR #2 round 3, reproduced 3/3).
+ *
+ * `failed` therefore keeps its honest meaning and only that: signed in, settled, and the profile
+ * really did not arrive.
+ */
+export function profileView(me: {
+  isLoggedIn: boolean;
+  isPending: boolean;
+  isFetching: boolean;
+  hasProfile: boolean;
+}): ProfileView {
+  if (me.hasProfile) return 'ready';
+  if (me.isPending || me.isFetching) return 'pending';
+  return me.isLoggedIn ? 'failed' : 'signedOut';
+}

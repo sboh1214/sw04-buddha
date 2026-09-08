@@ -683,6 +683,41 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     expect(Date.parse(windowed.from)).toBeGreaterThan(twoHoursAgo);
   });
 
+  it('bounds a RAW answer by the relative window too, not just the bucketed one', async () => {
+    // THE HAZARD: `listTicks` computed the window for both resolutions, but the raw statement
+    // re-derived its floor from `query.from` — which a relative window never sets. So
+    // `?windowSeconds=3600` echoed a one-hour `from` and served the newest TICKS_SCAN_MAX ticks
+    // of the market's ENTIRE history: points hours older than the `from` printed beside them,
+    // and `truncated` judged against a different range than the one described. Reachable on the
+    // DEFAULT resolution — `resolution` defaults to `raw`, the one value that takes this path.
+    const open = await market();
+    const openedAt = open.openAt!.getTime();
+    const outside = openedAt - 2 * HOUR_MS;
+    const inside = openedAt - 5 * 60 * 1_000;
+    await t.db.insert(schema.priceTicks).values([
+      { marketId: open.id, ts: new Date(outside), pYesBp: 4_000, trigger: 'open' as const },
+      { marketId: open.id, ts: new Date(inside), pYesBp: 5_500, trigger: 'trade' as const },
+    ]);
+
+    // No `resolution` at all: this is the default the schema fills in, and it is the raw path.
+    const windowed = await series(`/api/v1/markets/${open.id}/ticks?windowSeconds=3600`);
+    expect(windowed.bucketSeconds).toBe(0);
+    // The invariant the bug broke: nothing older than the window the answer names is in it.
+    const floor = Date.parse(windowed.from);
+    expect(windowed.points.every((point) => Date.parse(point.ts) >= floor)).toBe(true);
+    expect(windowed.points.map((point) => point.ts)).not.toContain(new Date(outside).toISOString());
+    expect(windowed.points.map((point) => point.ts)).toContain(new Date(inside).toISOString());
+
+    // And the stronger statement: a RELATIVE window answers exactly what the ABSOLUTE window it
+    // denotes answers. One request names its start by duration and the other by instant; they
+    // describe the same window, so they must describe the same points.
+    const absolute = await series(
+      `/api/v1/markets/${open.id}/ticks?from=${windowed.from}&to=${windowed.to}`,
+    );
+    expect(absolute.points).toEqual(windowed.points);
+    expect(absolute.truncated).toBe(windowed.truncated);
+  });
+
   it('refuses a request that names its window twice', async () => {
     // `from` and `windowSeconds` are mutually exclusive at the schema: one request, one window.
     const open = await market();

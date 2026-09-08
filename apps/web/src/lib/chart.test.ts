@@ -13,6 +13,8 @@ import {
   chartSummary,
   extendToNow,
   nearestIndex,
+  readoutIndex,
+  readoutMove,
   sampleForTable,
   toChartPoints,
   withLiveEdge,
@@ -329,5 +331,71 @@ describe('withLiveEdge', () => {
         },
       ),
     );
+  });
+});
+
+describe('readoutIndex', () => {
+  it('resolves a held index against the series that is on screen NOW', () => {
+    // THE HAZARD: `['ticks', id, range]` is a ROLLING window — the client sends a duration and
+    // the server closes it on its own clock — and the sampler keeps only the boundaries whose
+    // value changed plus the ends. So the SAME range answers FEWER points as old changes slide
+    // off the left edge, on any focus refetch past the 30s staleTime. A readout parked at the
+    // right edge (where the keyboard enters) then pointed past the end and both the reading and
+    // the crosshair vanished with nothing said.
+    expect(readoutIndex(212, 182)).toBe(181);
+    expect(readoutIndex(217, 218)).toBe(217);
+  });
+
+  it('never invents a selection the reader did not make', () => {
+    // `null` is "nothing selected" and must stay that; a negative is the same statement. Lifting
+    // either to 0 would draw a crosshair on the oldest point of a chart nobody pointed at.
+    expect(readoutIndex(null, 182)).toBe(-1);
+    expect(readoutIndex(-1, 182)).toBe(-1);
+    expect(readoutIndex(5, 0)).toBe(-1);
+  });
+
+  it('always lands inside the series, for any index and any length', () => {
+    fc.assert(
+      fc.property(fc.nat({ max: 10_000 }), fc.integer({ min: 1, max: 5_000 }), (held, length) => {
+        const index = readoutIndex(held, length);
+        expect(index).toBeGreaterThanOrEqual(0);
+        expect(index).toBeLessThan(length);
+      }),
+    );
+  });
+});
+
+describe('readoutMove', () => {
+  it('clamps a stale index BEFORE stepping it, which is the whole repair', () => {
+    // THE REGRESSION: the component computed `current - 1` from the index it was still holding,
+    // so after a 218 -> 182 shrink ArrowLeft walked 211, 210, 209 … — 31 presses that each moved
+    // a number the series no longer had and left the readout blank. Clamping first means one
+    // press moves one point, from the right edge where the readout actually is.
+    expect(readoutMove('ArrowLeft', 212, 182)).toEqual({ kind: 'move', index: 180 });
+    expect(readoutMove('ArrowLeft', 0, 182)).toEqual({ kind: 'move', index: 0 });
+  });
+
+  it('recovers in one press on every other handled key, as it always did', () => {
+    // These three already clamped, which is why only ArrowLeft showed the symptom — worth
+    // pinning so the repair cannot regress them into the same walk.
+    expect(readoutMove('ArrowRight', 212, 182)).toEqual({ kind: 'move', index: 181 });
+    expect(readoutMove('End', 212, 182)).toEqual({ kind: 'move', index: 181 });
+    expect(readoutMove('Home', 212, 182)).toEqual({ kind: 'move', index: 0 });
+    expect(readoutMove('Escape', 212, 182)).toEqual({ kind: 'clear' });
+  });
+
+  it('enters at the right edge, and cannot overshoot it', () => {
+    expect(readoutMove('ArrowLeft', null, 182)).toEqual({ kind: 'move', index: 180 });
+    expect(readoutMove('ArrowRight', null, 182)).toEqual({ kind: 'move', index: 181 });
+  });
+
+  it('leaves an unhandled key, and an empty series, to the page', () => {
+    // The empty case must answer `ignore` rather than clamp to -1: -1 LATCHES in state and kills
+    // the readout for the rest of the mount even once the series arrives, and the arrow keys
+    // have to keep scrolling the page while there is nothing to move through.
+    expect(readoutMove('a', 5, 182)).toEqual({ kind: 'ignore' });
+    for (const key of ['ArrowLeft', 'ArrowRight', 'Home', 'End', 'Escape']) {
+      expect(readoutMove(key, 3, 0), key).toEqual({ kind: 'ignore' });
+    }
   });
 });

@@ -3,7 +3,13 @@ import { describe, expect, it } from 'vitest';
 import { positionsKey } from '@/hooks/use-portfolio';
 import { type Position } from './api';
 import { POSITIONS_KEY } from './market-keys';
-import { cancelFirstFetch, getQueryClient, listView } from './query-client';
+import {
+  cancelFirstFetch,
+  getQueryClient,
+  listSection,
+  listView,
+  profileView,
+} from './query-client';
 
 /**
  * `cancelFirstFetch`'s predicate, driven through the REAL client this app ships.
@@ -136,5 +142,89 @@ describe('listView', () => {
     expect(listView({ isPending: false, isLoadingError: false, isRefetchError: false })).toBe(
       'ready',
     );
+  });
+});
+
+describe('listSection', () => {
+  it('shows the rows AND says the refresh failed, because the notice is not a rung', () => {
+    // 주문 이력 rendered `isLoadingError` alone, so a refetch that failed after the rows existed
+    // — the ONLY path a new order arrives by, since nothing patches `['orders']` in place —
+    // landed on the ordinary rows arm with no notice and no way back.
+    expect(
+      listSection({ isPending: false, isLoadingError: false, isRefetchError: true }, 1),
+    ).toEqual({ stale: true, body: 'rows' });
+  });
+
+  it('keeps saying 아직 주문 내역이 없습니다 UNDER the notice, never instead of it', () => {
+    // The empty variant is the one that states something FALSE rather than merely stale: an
+    // account with no prior orders trades in another tab, the orders refetch fails, and the
+    // section asserts there is no order history about an order the balance and the holding on
+    // the same screen already show. The empty body is still the last thing the server said, so
+    // it stays — but it does not stay unlabelled. A ladder that spent `stale` as a fourth arm
+    // would replace it and say nothing at all.
+    expect(
+      listSection({ isPending: false, isLoadingError: false, isRefetchError: true }, 0),
+    ).toEqual({ stale: true, body: 'empty' });
+  });
+
+  it('never marks a first-load failure stale — there is nothing to keep', () => {
+    expect(
+      listSection({ isPending: false, isLoadingError: true, isRefetchError: false }, 0),
+    ).toEqual({ stale: false, body: 'failed' });
+    expect(
+      listSection({ isPending: true, isLoadingError: false, isRefetchError: true }, 0),
+    ).toEqual({ stale: false, body: 'pending' });
+  });
+});
+
+describe('profileView', () => {
+  it('calls a lost session what it is, not a profile that failed to load', () => {
+    // THE HAZARD: a session ending under a MOUNTED screen disables every private query in the
+    // same render and `SessionCacheGuard` then resets the cache, so the observer settles at
+    // "no data, not pending" — which every one of these screens read as a load failure, offering
+    // a 다시 시도 that can only 401. The page gate is server-side and runs on navigation only,
+    // so nothing moves the reader off the screen. Measured: status 'pending', fetchStatus
+    // 'idle', data undefined, and the hook's own override collapses isPending to false.
+    expect(
+      profileView({ isLoggedIn: false, isPending: false, isFetching: false, hasProfile: false }),
+    ).toBe('signedOut');
+  });
+
+  it('tests pending FIRST, so a sign-in prompt never flashes on an ordinary load', () => {
+    // `useSession` pins `isPending` through hydration and `isLoggedIn` is false there too, so a
+    // bare `!isLoggedIn` would show the prompt on EVERY load — an always-on regression worse
+    // than the bug. `isFetching` covers the other half: the tab that signs out clears `['me']`
+    // while better-auth's atom still holds the old session (DECISIONS.md, M1 PR #2 round 3,
+    // where its absence flashed a false error on every ordinary logout, reproduced 3/3).
+    expect(
+      profileView({ isLoggedIn: false, isPending: true, isFetching: false, hasProfile: false }),
+    ).toBe('pending');
+    expect(
+      profileView({ isLoggedIn: false, isPending: false, isFetching: true, hasProfile: false }),
+    ).toBe('pending');
+  });
+
+  it('keeps `failed` honest: signed in, settled, and the profile really did not arrive', () => {
+    expect(
+      profileView({ isLoggedIn: true, isPending: false, isFetching: false, hasProfile: false }),
+    ).toBe('failed');
+    expect(
+      profileView({ isLoggedIn: true, isPending: false, isFetching: false, hasProfile: true }),
+    ).toBe('ready');
+  });
+
+  it('never blanks a profile it already holds, which `isFetching` first would do', () => {
+    // `isFetching` is true for EVERY background refetch — a focus refetch, an expired staleTime
+    // — so asking it before the data would drop a skeleton over a good balance several times an
+    // hour. Measured on a real observer mid-refetch: `isPending false, isFetching true, hasData
+    // true`. The flags only decide what to say when there is nothing to show.
+    expect(
+      profileView({ isLoggedIn: true, isPending: false, isFetching: true, hasProfile: true }),
+    ).toBe('ready');
+    // Even a session already gone keeps the last figure on screen for the tick before
+    // `SessionCacheGuard` empties the cache; a stale number beats a flash of nothing.
+    expect(
+      profileView({ isLoggedIn: false, isPending: false, isFetching: false, hasProfile: true }),
+    ).toBe('ready');
   });
 });

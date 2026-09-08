@@ -14,6 +14,8 @@ import {
   extendToNow,
   withLiveEdge,
   nearestIndex,
+  readoutIndex,
+  readoutMove,
   sampleForTable,
   toChartPoints,
 } from '@/lib/chart';
@@ -128,8 +130,12 @@ export function ProbabilityChart({
     ? withLiveEdge(plotted, currentBp)
     : plotted;
   const geometry = chartGeometry(points);
-  const point: ChartPoint | undefined = hovered === null ? undefined : points[hovered.index];
-  const marker = hovered === null ? undefined : geometry.at[hovered.index];
+  // Resolved against the series ON SCREEN NOW, never the one the index was taken from: the
+  // window rolls, so the same range answers fewer points as old changes slide off the left edge
+  // and a parked readout would otherwise point past the end (`readoutIndex`).
+  const index = readoutIndex(hovered?.index ?? null, points.length);
+  const point: ChartPoint | undefined = index < 0 ? undefined : points[index];
+  const marker = index < 0 ? undefined : geometry.at[index];
 
   return (
     <Stack gap="2" data-testid={testId}>
@@ -219,39 +225,17 @@ export function ProbabilityChart({
                 setHovered(null);
               }}
               onKeyDown={(event) => {
-                const last = points.length - 1;
-                // Nothing to read yet — the query is still in flight, or the market has no
-                // tick at all. Bailing out here is what keeps the readout alive: without it
-                // `last` is -1, every branch below clamps to -1, and `hovered` LATCHES there,
-                // so `points[hovered.index]` stays undefined and the readout is dead for the
-                // rest of the mount even once the series arrives. Returning also leaves the
-                // arrow keys scrolling the page, which is right when there is no series.
-                if (last < 0) return;
-                const current = hovered?.index ?? last;
-                let next: number | null;
-                switch (event.key) {
-                  case 'ArrowLeft':
-                    next = Math.max(0, current - 1);
-                    break;
-                  case 'ArrowRight':
-                    next = Math.min(last, current + 1);
-                    break;
-                  case 'Home':
-                    next = 0;
-                    break;
-                  case 'End':
-                    next = last;
-                    break;
-                  case 'Escape':
-                    next = null;
-                    break;
-                  default:
-                    return;
-                }
-                // Only for the keys handled above, so the page still scrolls with the arrows
-                // whenever the chart is not the focused element.
+                // No arithmetic here on purpose: `readoutMove` owns every decision, so the lib
+                // test binds what the keyboard actually does. It clamps a held index to the
+                // CURRENT series before stepping it — without that, ArrowLeft walked a stale
+                // number down one press at a time after the window rolled.
+                const move = readoutMove(event.key, hovered?.index ?? null, points.length);
+                // A key this chart does not handle, or no series to read: leave it to the page,
+                // which is what keeps the arrows scrolling when there is nothing to move
+                // through, and what stops `hovered` latching at -1 for the rest of the mount.
+                if (move.kind === 'ignore') return;
                 event.preventDefault();
-                setHovered(next === null ? null : { index: next, spoken: true });
+                setHovered(move.kind === 'clear' ? null : { index: move.index, spoken: true });
               }}
             >
               {/* Gridlines and their values. The y window floats (`CHART_MIN_SPAN_BP`), so an

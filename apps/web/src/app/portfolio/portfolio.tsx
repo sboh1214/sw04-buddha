@@ -20,7 +20,7 @@ import NextLink from 'next/link';
 import { type ReactNode } from 'react';
 import { EmptyState } from '@/components/ui/empty-state';
 import { copy } from '@/copy';
-import { listView } from '@/lib/query-client';
+import { listSection, listView, profileView } from '@/lib/query-client';
 import { useMarketSocket } from '@/hooks/use-market-socket';
 import { marketQueryOptions } from '@/hooks/use-markets';
 import { useMe } from '@/hooks/use-me';
@@ -145,11 +145,50 @@ export function Portfolio() {
   const settledTotals = portfolioTotals(settled.data);
   const realizedState = combinedListState(listState(open), listState(settled));
   const orderRows = orders.data?.pages.flatMap((page) => page.items) ?? [];
+  // 주문 이력 has no reducer and no event of its own — `restartQueries(queryClient, ORDERS_KEY)`
+  // (realtime-provider.tsx, use-trade.ts) is the ONLY path a new order arrives by, so a failed
+  // refresh is a list one row short. On an account with no prior orders it is worse than short:
+  // the section positively says 아직 주문 내역이 없습니다 about an order the balance and the
+  // holding on this same screen already show. Hence `listSection`, which keeps the empty rung
+  // and puts the notice ABOVE it rather than in place of it.
+  const ordersSection = listSection(orders, orderRows.length);
+  const balanceView = profileView({
+    isLoggedIn: me.isLoggedIn,
+    isPending: me.isPending,
+    isFetching: me.isFetching,
+    hasProfile: me.data !== undefined,
+  });
+
+  // The session ended while this screen stayed mounted — another tab signed out, the session
+  // expired, or the reader signed out from here and the navigation has not landed yet. The page
+  // gate is server-side and runs only on navigation, so nothing else moves them off it. Without
+  // this, the screen blamed a profile load that never failed AND every list below reported an
+  // empty account: `listView` answers `ready` for a reset, disabled query holding no rows.
+  // One page-level fact, gated once, rather than the same session patched into four ladders.
+  if (balanceView === 'signedOut') {
+    return (
+      <Card.Root data-testid="portfolio-signed-out">
+        <Card.Body>
+          <EmptyState
+            message={copy.portfolioSignedOut}
+            action={
+              <Button asChild size="sm" variant="outline">
+                {/* A literal, not `usePathname`: this component IS /portfolio. */}
+                <NextLink href={{ pathname: '/login', query: { next: '/portfolio' } }}>
+                  {copy.login}
+                </NextLink>
+              </Button>
+            }
+          />
+        </Card.Body>
+      </Card.Root>
+    );
+  }
 
   return (
     <Stack gap="6">
       <Section title={copy.portfolioBalance} testId="portfolio-balance">
-        {me.isPending ? (
+        {balanceView === 'pending' ? (
           <Skeleton height="24" />
         ) : !me.data ? (
           <LoadFailed message={copy.errProfileLoad} onRetry={() => void me.refetch()} />
@@ -269,11 +308,22 @@ export function Portfolio() {
       </Section>
 
       <Section title={copy.portfolioOrders} testId="portfolio-orders">
-        {orders.isPending ? (
+        {ordersSection.stale && (
+          <Alert.Root status="warning" role="status" data-testid="portfolio-orders-stale" mb="4">
+            <Alert.Indicator />
+            <Alert.Content>
+              <Alert.Description>{copy.marketRefreshFailed}</Alert.Description>
+            </Alert.Content>
+            <Button size="xs" variant="outline" ml="auto" onClick={() => void orders.refetch()}>
+              {copy.retry}
+            </Button>
+          </Alert.Root>
+        )}
+        {ordersSection.body === 'pending' ? (
           <Skeleton height="24" />
-        ) : orders.isLoadingError ? (
+        ) : ordersSection.body === 'failed' ? (
           <LoadFailed message={copy.errUnknown} onRetry={() => void orders.refetch()} />
-        ) : orderRows.length === 0 ? (
+        ) : ordersSection.body === 'empty' ? (
           <EmptyState message={copy.portfolioOrdersEmpty} />
         ) : (
           <Stack gap="2">

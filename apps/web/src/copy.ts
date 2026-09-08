@@ -471,6 +471,12 @@ export const copy = {
   portfolioSettledEmpty: '아직 정산된 포지션이 없습니다.',
   portfolioOrders: '주문 이력',
   portfolioOrdersEmpty: '아직 주문 내역이 없습니다.',
+  /**
+   * Shown when the session ends while a private screen is still mounted — never a load failure,
+   * because nothing failed to load. The reader is told what actually happened and given the way
+   * back to the same screen.
+   */
+  portfolioSignedOut: '로그인이 풀렸습니다. 다시 로그인하면 이어서 볼 수 있습니다.',
 
   // 상단 네비와 모바일 하단 탭. 홈/지갑/설정 라벨은 M1 블록에 이미 있다.
   navMarkets: '시장',
