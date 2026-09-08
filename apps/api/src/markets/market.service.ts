@@ -403,7 +403,7 @@ export class MarketService {
     const requestedFrom = query.from ? new Date(query.from) : (market.openAt ?? market.createdAt);
     const from = new Date(Math.min(requestedFrom.getTime(), to.getTime()));
     const bucketSeconds = tickBucketSeconds(query.resolution, to.getTime() - from.getTime());
-    if (bucketSeconds === 0) return this.rawSeries(marketId, query, from, to);
+    if (bucketSeconds === 0) return this.rawSeries(marketId, query, from, to, market.tradeCount);
     // Even the coarsest stride cannot cover a window this wide (about ten years). Trim the old
     // end rather than overrun the documented cap; the narrowed `from` in the response is what
     // says so. `truncated` stays false and keeps the raw path's verified meaning — "points
@@ -419,6 +419,11 @@ export class MarketService {
       from: start.toISOString(),
       to: to.toISOString(),
       truncated: false,
+      // From `requirePublicAt` above — the same statement that produced `to`, and deliberately
+      // BEFORE the sampling statement below. An earlier snapshot can only LAG the points, and
+      // lagging is the harmless direction; a counter read after them could claim a trade they
+      // predate (packages/shared market.ts states which way that fails).
+      tradeCount: market.tradeCount,
       points: await this.sampleTicks(marketId, start, to, bucketSeconds),
     };
   }
@@ -531,6 +536,7 @@ export class MarketService {
     query: TicksQuery,
     from: Date,
     to: Date,
+    tradeCount: number,
   ): Promise<PriceSeries> {
     const { priceTicks } = schema;
     const recent = this.db
@@ -598,6 +604,8 @@ export class MarketService {
       from: from.toISOString(),
       to: to.toISOString(),
       truncated,
+      // Handed down from `listTicks`, which read it beside `to` — see the bucketed return.
+      tradeCount,
       points: rows.map((row) => ({
         ts: row.ts.toISOString(),
         pYesBp: row.pYesBp,

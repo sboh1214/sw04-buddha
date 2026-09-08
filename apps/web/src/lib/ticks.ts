@@ -1,4 +1,9 @@
-import { type MarketTickEvent, TICKS_MAX_POINTS, type TickResolution } from '@buddha/shared';
+import {
+  type MarketTickEvent,
+  TICKS_MAX_POINTS,
+  type TickResolution,
+  supersedes,
+} from '@buddha/shared';
 import { type PriceSeries, type PriceTick, api, unwrap } from './api';
 import { ticksKey } from './market-keys';
 
@@ -76,6 +81,24 @@ export function ticksQueryFor(range: TickRange, nowMs: number): TicksQuery {
 }
 
 /**
+ * What the CACHE holds under `['ticks', id, range]`: a server answer, plus the points this
+ * tab's own socket drew onto it. The tag is the only difference — a point the socket appended
+ * names the trade it came from, and a server point never does, because `price_ticks` carries
+ * no counter and the wire DTO is not widened for one.
+ *
+ * The tag answers what a window cannot: could this answer have held this point? `PriceSeries`'
+ * own `tradeCount` asks the same question about the right edge, and both are compared with
+ * `supersedes` — the ordering `joinMarket` already gives the market row.
+ */
+export interface CachedTick extends PriceTick {
+  tradeCount?: number;
+}
+
+export interface CachedSeries extends Omit<PriceSeries, 'points'> {
+  points: CachedTick[];
+}
+
+/**
  * The series behind ProbabilityChart. Exported apart from the hook because the decision is
  * what matters and a component cannot be executed in this app's test runner — the rule
  * `adminMarketQueryOptions` (use-admin-markets.ts) states.
@@ -91,7 +114,7 @@ export function ticksQueryFor(range: TickRange, nowMs: number): TicksQuery {
 export function ticksQueryOptions(marketId: string, range: TickRange) {
   return {
     queryKey: ticksKey(marketId, range),
-    queryFn: async (): Promise<PriceSeries> =>
+    queryFn: async (): Promise<CachedSeries> =>
       unwrap(
         await api.GET('/api/v1/markets/{id}/ticks', {
           params: { path: { id: marketId }, query: ticksQueryFor(range, Date.now()) },
@@ -105,12 +128,17 @@ export function ticksQueryOptions(marketId: string, range: TickRange) {
  * "do not write"**: `setQueryData` returns early on an undefined updater result, so a late or
  * duplicate event costs no cache write and does not restart `staleTime`.
  *
- * Ordering is by `ts` because a series carries no counter — the caller has already gated the
- * event on `supersedes(event.tradeCount, …)` against the market row, so a duplicate never gets
- * this far, and the only case a strict comparison loses is a second trade inside the same
- * millisecond: one interior point of five hundred, which the next tick corrects at the edge.
- * The comparison is written `!(a > b)` rather than `a <= b` so an unparseable `ts` (NaN, which
- * fails both) is dropped instead of written into the cache.
+ * Ordering is by `tradeCount`, the same key `applyTick` gives the market row. It cannot be by
+ * `ts`: the server pins a point at its own window END (`rn = cnt`, market.service.ts) and that
+ * instant is LATER than the `executedAt` this event carries, so a `ts` test refuses exactly
+ * the tick an answer could not see — the series kept the answer's synthetic right edge and the
+ * trade never reached the chart at all, with no cache write to show for it. A duplicate or a
+ * late event still costs nothing, `supersedes` being strict.
+ *
+ * A held series with no counter is one an API older than that field answered; it falls back to
+ * the `ts` rule, because `supersedes` takes anything over an absent key and would admit every
+ * event. An unparseable `ts` is dropped explicitly, where `!(a > b)` used to drop it by
+ * accident.
  *
  * An event in the last point's bucket REPLACES that point rather than appending, so a busy
  * market does not grow a spike of sub-stride points the next refetch would erase.
@@ -123,29 +151,47 @@ export function ticksQueryOptions(marketId: string, range: TickRange) {
  * window the SERVER answered, and the next fetch re-derives both. `to` moves forward only.
  */
 export function appendTickToSeries(
-  held: PriceSeries | undefined,
+  held: CachedSeries | undefined,
   event: MarketTickEvent,
-): PriceSeries | undefined {
+): CachedSeries | undefined {
   if (held === undefined) return undefined;
 
   const eventMs = Date.parse(event.ts);
+  if (!Number.isFinite(eventMs)) return undefined;
   const last = held.points.at(-1);
   // An empty series (a market whose first trade is this event) takes it: nothing is newer.
   const lastMs = last === undefined ? Number.NEGATIVE_INFINITY : Date.parse(last.ts);
-  if (!(eventMs > lastMs)) return undefined;
+  const ordered =
+    typeof held.tradeCount === 'number'
+      ? supersedes(event.tradeCount, held.tradeCount)
+      : eventMs > lastMs;
+  if (!ordered) return undefined;
 
   // The event carries no `trigger`, and nothing draws one — the chart is a single step line.
   // 'trade' is the honest label for a live point; a tick published by a status transition is
   // relabelled by the next fetch, which reads the stored row.
-  const point: PriceTick = { ts: event.ts, pYesBp: event.pYesBp, trigger: 'trade' };
-  return pushPoint(held, point, eventMs, lastMs);
+  const point: CachedTick = {
+    ts: event.ts,
+    pYesBp: event.pYesBp,
+    trigger: 'trade',
+    tradeCount: event.tradeCount,
+  };
+  return pushPoint(held, point, eventMs);
 }
 
 /**
  * One point onto the right edge of a series, replacing the last when the two share a bucket.
  * Factored out because the socket and `joinSeries` both put a live point onto a series and the
  * bucket rule must not be stated twice; the caller has already established that `point` is the
- * newer of the two.
+ * newer of the two BY COUNTER, and the trim below is what that means for an array ordered by
+ * `ts`.
+ *
+ * The trim comes first. Every held point at or after `point`'s instant was sampled from a
+ * snapshot that could not see the trade `point` names — the boundary the server pins at its own
+ * window end above all — so each carries the PRE-trade price forward across that trade's own
+ * moment. Dropping them is what lets a point be pushed at all when it sits BEHIND that
+ * boundary, and it keeps the ascending order `chartGeometry` assumes. In the ordinary case, a
+ * live tick newer than everything held, nothing matches and the whole series is kept.
  *
  * Bucket membership is read off the SAME absolute grid the server bins on (`date_bin(stride,
  * …, '1970-01-01 00:00:00+00')` in market.service.ts), never as the gap `pointMs - lastMs`:
@@ -156,21 +202,29 @@ export function appendTickToSeries(
  * `bucketMs > 0` keeps raw appending (and never divides by zero); an empty series has
  * `lastMs === -Infinity`, whose floor equals no real bucket, so its first point appends.
  */
-function pushPoint(
-  held: PriceSeries,
-  point: PriceTick,
-  pointMs: number,
-  lastMs: number,
-): PriceSeries {
+function pushPoint(held: CachedSeries, point: CachedTick, pointMs: number): CachedSeries {
+  const kept: CachedTick[] = [];
+  for (const candidate of held.points) {
+    if (!(Date.parse(candidate.ts) < pointMs)) break;
+    kept.push(candidate);
+  }
+  const previous = kept.at(-1);
+  const lastMs = previous === undefined ? Number.NEGATIVE_INFINITY : Date.parse(previous.ts);
   const bucketMs = held.bucketSeconds * 1000;
   const sameBucket =
     bucketMs > 0 && Math.floor(pointMs / bucketMs) === Math.floor(lastMs / bucketMs);
-  const points = sameBucket ? [...held.points.slice(0, -1), point] : [...held.points, point];
+  const points = sameBucket ? [...kept.slice(0, -1), point] : [...kept, point];
 
   return {
     ...held,
     points: points.length > TICKS_MAX_POINTS ? points.slice(-TICKS_MAX_POINTS) : points,
     to: pointMs > Date.parse(held.to) ? point.ts : held.to,
+    // The newest trade this series' RIGHT EDGE reflects — the meaning `joinMarket` gives the
+    // same field on the market row, and what the next event is admitted against.
+    tradeCount:
+      point.tradeCount !== undefined && supersedes(point.tradeCount, held.tradeCount)
+        ? point.tradeCount
+        : held.tradeCount,
   };
 }
 
@@ -187,31 +241,67 @@ function pushPoint(
  * of the same trade sat on screen disagreeing until the next tick or fetch.
  *
  * The WINDOW is the incoming answer's, always: `from`, `resolution`, `bucketSeconds` and
- * `truncated` describe what the server chose, and its `points` are authoritative for everything
- * inside it. Only points strictly newer than `incoming.to` survive from the held copy — that
- * instant is the server's own clock at answer time, so a point past it is exactly a tick the
- * server could not have known about, and a point before it that the answer omits was omitted on
- * purpose (out of window, or trimmed). Reading the cutoff off the last incoming POINT instead
- * would resurrect a whole stale series whenever the server answered an empty window.
+ * `truncated` describe what the server chose. Which held points SURVIVE is two tests OR-ed, and
+ * it has to be both — neither subsumes the other:
+ *
+ *  - past `incoming.to`: the answer's WINDOW does not reach the point. (Reading this cutoff off
+ *    the last incoming POINT instead would resurrect a whole stale series whenever the server
+ *    answered an empty window.)
+ *  - newer than `incoming.tradeCount`: the answer's SNAPSHOT does not reach the trade the point
+ *    names. `to` cannot decide this. A tick's `ts` is fixed before its row commits, so an
+ *    answer can close its window PAST that instant and still omit the tick, and this loop then
+ *    dropped the socket's point as already covered — while the header, which has `joinMarket`,
+ *    kept it. That is the very divergence this function exists to remove, re-entered through
+ *    its own cutoff.
+ *
+ * A trade whose `executedAt` lands after the route's clock read but which commits before its
+ * sampling snapshot is COUNTED by the answer and excluded from its points: only the first test
+ * keeps that one. A trade committed after the snapshot is inside the window: only the second.
  *
  * Each survivor goes back through `pushPoint`, so a live point sharing the last bucket replaces
  * rather than doubles it, and `TICKS_MAX_POINTS` still bounds the result. Idempotent (a second
  * join against the same answer keeps the same tail) and a no-op in the ordinary case, where the
  * answer already contains the tick and nothing is newer than its `to`.
  */
-export function joinSeries(held: PriceSeries | undefined, incoming: PriceSeries): PriceSeries {
+export function joinSeries(held: CachedSeries | undefined, incoming: CachedSeries): CachedSeries {
   if (held === undefined) return incoming;
   const cutoffMs = Date.parse(incoming.to);
+  const fromMs = Date.parse(incoming.from);
   let next = incoming;
+  let carried = false;
   for (const point of held.points) {
     const pointMs = Date.parse(point.ts);
-    // `!(a > b)` rather than `a <= b` so an unparseable `ts` (NaN, which fails both) is
-    // dropped rather than carried into the cache — the rule `appendTickToSeries` follows.
-    if (!(pointMs > cutoffMs)) continue;
-    const last = next.points.at(-1);
-    const lastMs = last === undefined ? Number.NEGATIVE_INFINITY : Date.parse(last.ts);
-    if (!(pointMs > lastMs)) continue;
-    next = pushPoint(next, point, pointMs, lastMs);
+    // Explicit, where the old `!(a > b)` dropped a NaN by accident: with two tests OR-ed, an
+    // unparseable `ts` could otherwise reach the cache through the counter half.
+    if (!Number.isFinite(pointMs)) continue;
+    if (pointMs > cutoffMs) {
+      const last = next.points.at(-1);
+      const lastMs = last === undefined ? Number.NEGATIVE_INFINITY : Date.parse(last.ts);
+      // Past the window and not past what is already pushed is a duplicate.
+      if (!(pointMs > lastMs)) continue;
+      next = pushPoint(next, point, pointMs);
+      carried = true;
+      continue;
+    }
+    // Inside the window, so the answer's snapshot decides — and it can only be asked about a
+    // point the socket tagged. `pointMs >= fromMs` is what stops a range that has slid forward
+    // from dragging yesterday's live edge back into today's window.
+    const unseen =
+      point.tradeCount !== undefined &&
+      supersedes(point.tradeCount, incoming.tradeCount) &&
+      pointMs >= fromMs;
+    if (!unseen) continue;
+    next = pushPoint(next, point, pointMs);
+    carried = true;
+  }
+  // The counter describes the RIGHT EDGE, so it follows whichever side still owns it: `held`
+  // when one of its points survived above, the answer otherwise. Conditioning on `carried` is
+  // the whole point — taking `held.tradeCount` unconditionally, as a mirror of the `to` rule
+  // below, would let the counter claim a trade whose point was just dropped, and every later
+  // event for that trade would then be refused as a duplicate. That is this same bug, one
+  // layer in.
+  if (carried && supersedes(held.tradeCount, next.tradeCount)) {
+    next = { ...next, tradeCount: held.tradeCount };
   }
   // `to` takes the LATER of the two, which the loop above cannot always reach: two refetches
   // in flight can land newest-first, and then the older answer names an earlier right edge

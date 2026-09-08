@@ -116,6 +116,9 @@ const seriesBeforeTrade: PriceSeries = {
   from: '2026-09-06T00:00:00.000Z',
   to: '2026-09-06T23:00:00.000Z',
   truncated: false,
+  // The same counter the market snapshot carries, so the `tick()` above (11) supersedes it —
+  // the ordering `appendTickToSeries` and `joinSeries` both read.
+  tradeCount: 10,
   points: [{ ts: '2026-09-06T23:00:00.000Z', pYesBp: 5000, trigger: 'trade' }],
 };
 
@@ -385,6 +388,70 @@ describe('the tick series cache', () => {
       expect(drawn?.truncated).toBe(true);
     } finally {
       unsubscribe();
+      queryClient.clear();
+    }
+  });
+
+  it('keeps a trade the answer was served too early to contain', async () => {
+    // THE CLAIM. A tick's `ts` is fixed inside the trade transaction, before its row commits,
+    // so this answer closed its window 4ms AFTER that instant and still could not see the row.
+    // Judged by `to` the live point looks already covered and is dropped; judged by the count
+    // the answer attests to, it is exactly the trade the answer is missing.
+    const queryClient = getQueryClient();
+    const key = ticksKey(ID, DEFAULT_TICK_RANGE);
+    const servedTooEarly: PriceSeries = {
+      ...seriesBeforeTrade,
+      to: '2026-09-06T23:00:00.004Z',
+      // Its own boundary, pinned at `to` and carrying the PRE-trade price.
+      points: [{ ts: '2026-09-06T23:00:00.004Z', pYesBp: 5000, trigger: 'trade' }],
+    };
+    let answer: PriceSeries = seriesBeforeTrade;
+    const observer = new QueryObserver<PriceSeries>(queryClient, {
+      queryKey: key,
+      queryFn: () => Promise.resolve(answer),
+      retry: false,
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
+    try {
+      await observer.refetch();
+      queryClient.setQueryData<PriceSeries>(key, (held) =>
+        appendTick(held, tick({ ts: '2026-09-06T23:00:00.000Z' })),
+      );
+      expect(queryClient.getQueryData<PriceSeries>(key)?.points.at(-1)?.pYesBp).toBe(6300);
+
+      answer = servedTooEarly;
+      await observer.refetch();
+
+      const drawn = observer.getCurrentResult().data;
+      expect(drawn?.points.at(-1)?.pYesBp).toBe(6300);
+      // …and the stale boundary is gone rather than merely outvoted, so nothing draws the old
+      // price after the trade's own instant.
+      expect(drawn?.points.map((point) => point.pYesBp)).not.toContain(5000);
+    } finally {
+      unsubscribe();
+      queryClient.clear();
+    }
+  });
+
+  it('takes that trade in the other arrival order, where it used to be refused outright', () => {
+    // Answer first, event second. The old `ts` rule compared the event against the answer's
+    // pinned boundary — which sits AFTER it — so `appendTick` answered undefined and there was
+    // no cache write at all to correct later.
+    const queryClient = getQueryClient();
+    const key = ticksKey(ID, DEFAULT_TICK_RANGE);
+    try {
+      queryClient.setQueryData<PriceSeries>(key, {
+        ...seriesBeforeTrade,
+        to: '2026-09-06T23:00:00.004Z',
+        points: [{ ts: '2026-09-06T23:00:00.004Z', pYesBp: 5000, trigger: 'trade' }],
+      });
+
+      queryClient.setQueryData<PriceSeries>(key, (held) =>
+        appendTick(held, tick({ ts: '2026-09-06T23:00:00.000Z' })),
+      );
+
+      expect(queryClient.getQueryData<PriceSeries>(key)?.points.at(-1)?.pYesBp).toBe(6300);
+    } finally {
       queryClient.clear();
     }
   });

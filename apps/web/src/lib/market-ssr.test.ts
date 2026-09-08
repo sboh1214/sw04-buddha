@@ -37,6 +37,7 @@ const series: PriceSeries = {
   from: '2026-09-06T00:00:00.000Z',
   to: '2026-09-07T00:00:00.000Z',
   truncated: false,
+  tradeCount: 41,
   points: [
     { ts: '2026-09-06T00:00:00.000Z', pYesBp: 5000, trigger: 'open' },
     { ts: '2026-09-06T12:00:00.000Z', pYesBp: 6300, trigger: 'trade' },

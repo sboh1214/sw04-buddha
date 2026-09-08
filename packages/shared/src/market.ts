@@ -468,6 +468,25 @@ export const priceSeriesSchema = z
     /** Points older than the served ones exist inside the window but were left out. */
     truncated: z.boolean(),
     /**
+     * The market's trade count as of `to`, read in the same statement as `to` itself: the only
+     * field here that says what the answer CONTAINS rather than when it was written.
+     *
+     * `to` cannot say it. A trade stamps its tick with `clock_timestamp()` read INSIDE its
+     * transaction, before its writes (trade.service.ts), so the instant is fixed several
+     * statements before the row commits — and this route's own clock read takes no lock, so it
+     * can pass that instant while the sampling snapshot still cannot see the row. The answer
+     * then truthfully names a `to` LATER than a tick it truthfully omits, and no window can
+     * tell the two apart. A client merging live `market:tick` events, which carry this same
+     * counter, compares this instead.
+     *
+     * Read BEFORE the points, never after: an earlier snapshot can only lag them, which at
+     * worst makes a client keep a point the answer already has — the same trade at the same
+     * price. A count read AFTER the points could claim a trade the points predate, and the
+     * client would then drop the live tick it is holding, which is the failure this field
+     * exists to prevent.
+     */
+    tradeCount: z.number().int().min(0),
+    /**
      * Ascending by `ts`; at most TICKS_MAX_POINTS (documented as maxItems only — nothing
      * validates a response at runtime; ApiData is an OpenAPI decorator).
      */

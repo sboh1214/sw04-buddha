@@ -222,9 +222,16 @@ describe('read DTOs', () => {
       from: at,
       to: '2026-09-05T04:00:00.000Z',
       truncated: false,
+      tradeCount: 3,
       points: [point],
     };
     expect(priceSeriesSchema.parse(series)).toEqual(series);
+    // Required, and the ordering key a client compares an event against — `to` cannot serve as
+    // one, because a tick's `ts` is fixed before its row commits.
+    expect(priceSeriesSchema.safeParse({ ...series, tradeCount: undefined }).success).toBe(false);
+    expect(priceSeriesSchema.safeParse({ ...series, tradeCount: -1 }).success).toBe(false);
+    expect(priceSeriesSchema.safeParse({ ...series, tradeCount: 1.5 }).success).toBe(false);
+    expect(priceSeriesSchema.parse({ ...series, tradeCount: 0 }).tradeCount).toBe(0);
     expect(priceSeriesSchema.parse({ ...series, resolution: 'raw', bucketSeconds: 0 })).toEqual({
       ...series,
       resolution: 'raw',

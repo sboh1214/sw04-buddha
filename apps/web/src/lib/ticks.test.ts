@@ -31,6 +31,7 @@ function series(overrides: Partial<PriceSeries> = {}): PriceSeries {
     from: '2026-09-07T00:00:00.000Z',
     to: '2026-09-07T01:00:00.000Z',
     truncated: false,
+    tradeCount: 41,
     points: [
       { ts: '2026-09-07T00:00:00.000Z', pYesBp: 4000, trigger: 'open' },
       { ts: '2026-09-07T01:00:00.000Z', pYesBp: 4200, trigger: 'trade' },
@@ -39,14 +40,20 @@ function series(overrides: Partial<PriceSeries> = {}): PriceSeries {
   };
 }
 
-function tick(ts: string, pYesBp = 5000): MarketTickEvent {
+/**
+ * `tradeCount` defaults ABOVE the series' 41, because that counter — not `ts` — is what
+ * `appendTickToSeries` orders on: the server pins its right edge at its own window end, which
+ * is later than the `executedAt` an event carries, so a `ts` rule refuses the very tick the
+ * answer could not see.
+ */
+function tick(ts: string, pYesBp = 5000, tradeCount = 42): MarketTickEvent {
   return {
     type: 'market:tick',
     marketId: MARKET_ID,
     pYesBp,
     lastPrice: Math.round(pYesBp / 100),
     volumeP: '12000',
-    tradeCount: 7,
+    tradeCount,
     ts,
   };
 }
@@ -144,7 +151,7 @@ describe('appendTickToSeries', () => {
 
     expect(merged?.points).toEqual([
       held.points[0],
-      { ts: '2026-09-07T01:30:00.000Z', pYesBp: 4600, trigger: 'trade' },
+      { ts: '2026-09-07T01:30:00.000Z', pYesBp: 4600, tradeCount: 42, trigger: 'trade' },
     ]);
   });
 
@@ -155,6 +162,7 @@ describe('appendTickToSeries', () => {
     expect(merged?.points.at(-1)).toEqual({
       ts: '2026-09-07T02:00:00.000Z',
       pYesBp: 4600,
+      tradeCount: 42,
       trigger: 'trade',
     });
   });
@@ -165,12 +173,12 @@ describe('appendTickToSeries', () => {
     // bucket" again and deletes the first. While trades keep arriving less than one bucket
     // apart the series would never gain a point at all — the tail just slides right.
     const first = appendTickToSeries(series(), tick('2026-09-07T01:30:00.000Z', 4600));
-    const second = appendTickToSeries(first, tick('2026-09-07T02:15:00.000Z', 5100));
+    const second = appendTickToSeries(first, tick('2026-09-07T02:15:00.000Z', 5100, 43));
 
     expect(second?.points).toEqual([
       series().points[0],
-      { ts: '2026-09-07T01:30:00.000Z', pYesBp: 4600, trigger: 'trade' },
-      { ts: '2026-09-07T02:15:00.000Z', pYesBp: 5100, trigger: 'trade' },
+      { ts: '2026-09-07T01:30:00.000Z', pYesBp: 4600, tradeCount: 42, trigger: 'trade' },
+      { ts: '2026-09-07T02:15:00.000Z', pYesBp: 5100, tradeCount: 43, trigger: 'trade' },
     ]);
   });
 
@@ -210,12 +218,55 @@ describe('appendTickToSeries', () => {
     expect(merged?.points).toHaveLength(1);
   });
 
-  it('does not write for an event that is not strictly newer', () => {
+  it('does not write for an event the series already counts', () => {
     // undefined is the "do not write" contract: setQueryData returns early on it, so a late
-    // event costs no cache write and does not restart staleTime.
-    expect(appendTickToSeries(series(), tick('2026-09-07T01:00:00.000Z'))).toBeUndefined();
-    expect(appendTickToSeries(series(), tick('2026-09-07T00:30:00.000Z'))).toBeUndefined();
+    // event costs no cache write and does not restart staleTime. The comparison is the
+    // COUNTER — a duplicate and a late delivery are both refused however new their `ts` is.
+    expect(
+      appendTickToSeries(series(), tick('2026-09-07T09:00:00.000Z', 5000, 41)),
+    ).toBeUndefined();
+    expect(
+      appendTickToSeries(series(), tick('2026-09-07T09:00:00.000Z', 5000, 40)),
+    ).toBeUndefined();
     expect(appendTickToSeries(undefined, tick('2026-09-07T02:00:00.000Z'))).toBeUndefined();
+  });
+
+  it('takes a tick the answer pinned its right edge after', () => {
+    // THE OTHER ARRIVAL ORDER of the same race, and it used to lose the trade outright. The
+    // server pins a point at its own window end, which is LATER than the `executedAt` the
+    // event carries, so the old `ts` rule refused exactly the tick that answer could not see —
+    // and refusing means no cache write at all, so nothing corrected it either.
+    // The answer closed its window 4ms after the trade's own instant and pinned a boundary
+    // there carrying the PRE-trade price — the shape every bucketed answer has.
+    const answered = series({
+      to: '2026-09-07T01:00:00.004Z',
+      points: [
+        { ts: '2026-09-07T00:00:00.000Z', pYesBp: 4000, trigger: 'open' },
+        { ts: '2026-09-07T01:00:00.004Z', pYesBp: 4200, trigger: 'trade' },
+      ],
+    });
+    const merged = appendTickToSeries(answered, tick('2026-09-07T01:00:00.000Z', 6000, 42));
+
+    expect(merged?.points.at(-1)).toEqual({
+      ts: '2026-09-07T01:00:00.000Z',
+      pYesBp: 6000,
+      tradeCount: 42,
+      trigger: 'trade',
+    });
+    // That stale boundary carried the pre-trade price across the trade's own instant, so it
+    // goes rather than sitting after the live point out of order.
+    expect(merged?.points.map((point) => point.ts)).toEqual([
+      '2026-09-07T00:00:00.000Z',
+      '2026-09-07T01:00:00.000Z',
+    ]);
+  });
+
+  it('falls back to `ts` against a series an older API answered', () => {
+    // A rolling deploy: the cached answer predates the counter, and `supersedes` takes anything
+    // over an absent key, so without this the series would admit every event.
+    const legacy = { ...series(), tradeCount: undefined } as unknown as ReturnType<typeof series>;
+    expect(appendTickToSeries(legacy, tick('2026-09-07T02:00:00.000Z'))?.points).toHaveLength(3);
+    expect(appendTickToSeries(legacy, tick('2026-09-07T00:30:00.000Z'))).toBeUndefined();
   });
 
   it('trims the oldest points rather than growing past the documented cap', () => {
@@ -281,6 +332,7 @@ describe('joinSeries', () => {
     expect(joined.points.at(-1)).toEqual({
       ts: '2026-09-07T01:30:00.000Z',
       pYesBp: 6000,
+      tradeCount: 42,
       trigger: 'trade',
     });
     expect(joined.to).toBe('2026-09-07T01:30:00.000Z');
@@ -295,6 +347,7 @@ describe('joinSeries', () => {
     // there and nothing is newer than its `to`.
     const answered = series({
       to: '2026-09-07T02:00:00.000Z',
+      tradeCount: 42,
       points: [
         ...series().points,
         { ts: '2026-09-07T01:30:00.000Z', pYesBp: 6000, trigger: 'trade' },
@@ -302,6 +355,31 @@ describe('joinSeries', () => {
     });
     expect(joinSeries(live(), answered)).toBe(answered);
     expect(joinSeries(undefined, answered)).toBe(answered);
+  });
+
+  it('costs only a rewrite when the answer counts fewer trades than its own points show', () => {
+    // The server reads `tradeCount` in the statement BEFORE it samples, so a trade committing
+    // between the two is in the points and not in the count. That direction is deliberate and
+    // harmless: the join keeps a point the answer already has — same trade, same price — so
+    // the content matches even though the object does not.
+    const lagging = series({
+      to: '2026-09-07T02:00:00.000Z',
+      tradeCount: 41,
+      points: [
+        ...series().points,
+        { ts: '2026-09-07T02:00:00.000Z', pYesBp: 6000, trigger: 'trade' },
+      ],
+    });
+    const joined = joinSeries(live(), lagging);
+    // The price the chart draws at its right edge is the answer's own, and no pre-trade value
+    // survives after the trade's instant. The edge sits at the trade rather than at the window
+    // end, which is the whole cost of reading the counter one statement early.
+    expect(joined.points.at(-1)?.pYesBp).toBe(6000);
+    expect(joined.points.map((point) => point.ts)).toEqual([
+      '2026-09-07T00:00:00.000Z',
+      '2026-09-07T01:30:00.000Z',
+    ]);
+    expect(joined.to).toBe('2026-09-07T02:00:00.000Z');
   });
 
   it('resurrects nothing the server left out of its window', () => {

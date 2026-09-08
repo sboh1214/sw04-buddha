@@ -945,6 +945,7 @@ export type components = {
             resolution: "raw" | "1m" | "1h";
             /** Format: date-time */
             to: string;
+            tradeCount: number;
             truncated: boolean;
         };
         PriceTick: {

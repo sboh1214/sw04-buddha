@@ -27,7 +27,7 @@ import {
 import { type Socket, io } from 'socket.io-client';
 import { type SessionIdentity } from '@/components/auth/session-cache-guard';
 import { ME_QUERY_KEY } from '@/hooks/use-me';
-import { type Market, type Me, type Position, type PriceSeries } from '@/lib/api';
+import { type Market, type Me, type Position } from '@/lib/api';
 import { useSession } from '@/lib/use-session';
 import {
   MARKETS_KEY,
@@ -51,7 +51,7 @@ import {
   chunkIds,
 } from '@/lib/market-live';
 import { restartQueries } from '@/lib/query-client';
-import { appendTick } from '@/lib/ticks';
+import { type CachedSeries, appendTick } from '@/lib/ticks';
 
 /**
  * The tab's ONE Socket.IO connection (PLAN 8, 11.5): the room registry every screen drives
@@ -398,7 +398,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         );
         // And every range of this market's series, so the open chart's right edge moves
         // without a refetch (PLAN 11.5: an event must not become a request).
-        queryClient.setQueriesData<PriceSeries>(
+        queryClient.setQueriesData<CachedSeries>(
           { queryKey: [...TICKS_KEY, event.marketId] },
           (held) => appendTick(held, event),
         );

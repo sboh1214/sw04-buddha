@@ -4311,6 +4311,11 @@
           "truncated": {
             "type": "boolean"
           },
+          "tradeCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
           "points": {
             "maxItems": 500,
             "type": "array",
@@ -4325,6 +4330,7 @@
           "from",
           "to",
           "truncated",
+          "tradeCount",
           "points"
         ],
         "additionalProperties": false

@@ -1,8 +1,8 @@
 import { QueryClient, isServer, replaceEqualDeep } from '@tanstack/react-query';
-import { type Market, type Position, type PriceSeries, isApiError } from './api';
+import { type Market, type Position, isApiError } from './api';
 import { MARKETS_KEY, MARKET_KEY, POSITIONS_KEY, TICKS_KEY } from './market-keys';
 import { type MarketPages, joinMarket, joinMarketPages, joinPositions } from './market-live';
-import { joinSeries } from './ticks';
+import { type CachedSeries, joinSeries } from './ticks';
 
 function makeQueryClient() {
   const client = new QueryClient({
@@ -60,9 +60,14 @@ function makeQueryClient() {
   // the socket's ticks by `ts`, but a REST answer went in raw, so a refetch that left before a
   // trade pulled the right edge back to the old probability — while the header, which has
   // `joinMarket` above, kept the new one. Two readings of one trade, disagreeing on one screen.
+  // Ordering here is by `tradeCount`, like the three joins above; it was briefly the answer's
+  // own clock, which is not a watermark over committed rows (ticks.ts says why).
   client.setQueryDefaults(TICKS_KEY, {
     structuralSharing: (held, incoming) =>
-      replaceEqualDeep(held, joinSeries(held as PriceSeries | undefined, incoming as PriceSeries)),
+      replaceEqualDeep(
+        held,
+        joinSeries(held as CachedSeries | undefined, incoming as CachedSeries),
+      ),
   });
   return client;
 }
