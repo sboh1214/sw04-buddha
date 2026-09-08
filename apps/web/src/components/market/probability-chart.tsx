@@ -12,13 +12,14 @@ import {
   chartGeometry,
   chartSummary,
   extendToNow,
+  withLiveEdge,
   nearestIndex,
   sampleForTable,
   toChartPoints,
 } from '@/lib/chart';
 import { formatKst } from '@/lib/datetime';
 import { formatBp } from '@/lib/market-admin';
-import { DEFAULT_TICK_RANGE, TICK_RANGES, type TickRange } from '@/lib/ticks';
+import { DEFAULT_TICK_RANGE, TICK_RANGES, type TickRange, rowSupersedesSeries } from '@/lib/ticks';
 
 /** The four words the accessible summary joins its readings with (lib/chart.ts keeps `copy` out). */
 const SUMMARY_LABELS: ChartSummaryLabels = {
@@ -83,6 +84,16 @@ export interface ProbabilityChartProps {
   label: string;
   /** Live probability in bp, from the market cache the socket writes to. */
   currentBp: number;
+  /**
+   * The trade count of the SAME row `currentBp` was read from — the two must come from one
+   * read, or the chart could draw one trade's probability under another's claim.
+   *
+   * It is what decides whether that probability may overrule the series' own right edge: the
+   * row is kept newest by `joinMarket`, the answer carries its own count, and a series can be a
+   * trade behind for reasons no refetch closes — a range still on its first fetch when the tick
+   * arrived, or this tab's own trade, which patches the row and never the series.
+   */
+  currentTradeCount: number;
   /** The range the toggle opens on. Defaults to the one the server seeds into the cache. */
   defaultRange?: TickRange;
   'data-testid'?: string;
@@ -92,6 +103,7 @@ export function ProbabilityChart({
   marketId,
   label,
   currentBp,
+  currentTradeCount,
   defaultRange = DEFAULT_TICK_RANGE,
   'data-testid': testId = 'probability-chart',
 }: ProbabilityChartProps) {
@@ -104,10 +116,17 @@ export function ProbabilityChart({
   const held = series.data;
   // `extendToNow` holds the newest fill's price out to the window's right edge, so a quiet
   // market draws the line it actually had rather than stopping at its last trade.
-  const points =
+  const plotted =
     held === undefined
       ? []
       : extendToNow(toChartPoints(held.points), Date.parse(held.to), currentBp);
+  // `extendToNow` alone cannot reach a series that is a trade behind: it draws PAST the right
+  // edge, and every bucketed answer pins a point at its own window end, so the test it makes is
+  // a tie. Only when the row names a trade the series does not does the newest level replace
+  // that edge — an ordering, decided by the counter both sides carry.
+  const points = rowSupersedesSeries(held, currentTradeCount)
+    ? withLiveEdge(plotted, currentBp)
+    : plotted;
   const geometry = chartGeometry(points);
   const point: ChartPoint | undefined = hovered === null ? undefined : points[hovered.index];
   const marker = hovered === null ? undefined : geometry.at[hovered.index];

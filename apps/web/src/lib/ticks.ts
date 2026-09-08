@@ -140,6 +140,15 @@ export function ticksQueryOptions(marketId: string, range: TickRange) {
  * event. An unparseable `ts` is dropped explicitly, where `!(a > b)` used to drop it by
  * accident.
  *
+ * An EMPTY cache is a deliberate discard, not "nothing to merge into". The event really is
+ * offered — `setQueriesData` matches on the key alone, so it reaches a range that exists and is
+ * still on its first fetch (the first press of 1주 or 전체; only 1D is seeded) — and it is
+ * refused because this event cannot BUILD a series: it carries no window, resolution or stride,
+ * and inventing one would flip a pending query to `success` over its own skeleton and outlive a
+ * fetch that then failed. What covers the gap instead is the chart reading the row it is a
+ * trade behind (`rowSupersedesSeries` below), and the NEXT event, which supersedes the answer's
+ * own `tradeCount` and appends normally.
+ *
  * An event in the last point's bucket REPLACES that point rather than appending, so a busy
  * market does not grow a spike of sub-stride points the next refetch would erase.
  * `bucketSeconds === 0` (raw) makes that test false for every event, so raw always appends.
@@ -317,4 +326,27 @@ export function joinSeries(held: CachedSeries | undefined, incoming: CachedSerie
  * from the same event, and two functions called `app…Tick` on one screen are one
  * autocomplete away from each other.
  */
+/**
+ * Whether the market ROW knows a trade this series does not — the question the chart asks
+ * before it draws `withLiveEdge` (chart.ts) over its right edge.
+ *
+ * The two counters are the same one: `PriceSeries.tradeCount` is the market's count as of the
+ * answer, and the row's is kept newest by `joinMarket`. So this is an ordering, not a policy,
+ * and in the ordinary case — both sides on the same trade — it is provably inert.
+ *
+ * Both integers are checked before `supersedes` sees them, and neither guard is decoration.
+ * An ABSENT count (a series an older API answered) makes `supersedes` answer true for anything,
+ * which would turn this into the unconditional override it exists to avoid. A fractional or NaN
+ * count makes `BigInt()` THROW — and this is the first caller inside a render, where a throw
+ * blanks the page rather than mis-drawing a line.
+ */
+export function rowSupersedesSeries(
+  held: CachedSeries | undefined,
+  rowTradeCount: number,
+): boolean {
+  if (held === undefined) return false;
+  if (!Number.isInteger(rowTradeCount) || !Number.isInteger(held.tradeCount)) return false;
+  return supersedes(rowTradeCount, held.tradeCount);
+}
+
 export { appendTickToSeries as appendTick };

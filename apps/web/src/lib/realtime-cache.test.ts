@@ -24,7 +24,7 @@ import {
   marketsKey,
   ticksKey,
 } from './market-keys';
-import { DEFAULT_TICK_RANGE, appendTick } from './ticks';
+import { DEFAULT_TICK_RANGE, appendTick, rowSupersedesSeries } from './ticks';
 import {
   type MarketPages,
   applyBalanceEvent,
@@ -32,6 +32,7 @@ import {
   applyTick,
   applyToPages,
 } from './market-live';
+import { extendToNow, toChartPoints, withLiveEdge } from './chart';
 import { getQueryClient, restartQueries } from './query-client';
 
 /**
@@ -427,6 +428,52 @@ describe('the tick series cache', () => {
       // …and the stale boundary is gone rather than merely outvoted, so nothing draws the old
       // price after the trade's own instant.
       expect(drawn?.points.map((point) => point.pYesBp)).not.toContain(5000);
+    } finally {
+      unsubscribe();
+      queryClient.clear();
+    }
+  });
+
+  it('keeps the header and the chart on one trade when the range was on its FIRST fetch', async () => {
+    // Only 1D is seeded, so the first press of 1주 or 전체 mints a key the cache has never
+    // held. A tick arriving then IS offered — `setQueriesData` matches on the key alone — and
+    // is refused, because the event carries no window and cannot build a series. The pre-trade
+    // answer then lands and the cache is legitimately a trade behind.
+    const queryClient = getQueryClient();
+    const key = ticksKey(ID, '1W');
+    const observer = new QueryObserver<PriceSeries>(queryClient, {
+      queryKey: key,
+      queryFn: () => Promise.resolve(seriesBeforeTrade),
+      retry: false,
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
+    try {
+      const first = observer.refetch();
+      expect(queryClient.getQueryState(key)?.data).toBeUndefined();
+
+      queryClient.setQueryData<PriceSeries>(key, (held) => appendTick(held, tick()));
+      // Nothing was written: the discard is deliberate, not a lost write.
+      expect(queryClient.getQueryData(key)).toBeUndefined();
+      await first;
+
+      const held = queryClient.getQueryData<PriceSeries>(key);
+      // The residual this fix does NOT close: the series really is a trade behind.
+      expect(held?.tradeCount).toBe(10);
+      expect(held?.points.at(-1)?.pYesBp).toBe(5000);
+
+      // What the chart draws is not. The row is a trade ahead, so its probability replaces the
+      // stale right edge — at the server's own instant, which is all that is known.
+      const row = queryClient.getQueryData<Market>(marketKey(ID));
+      expect(rowSupersedesSeries(held, 11)).toBe(true);
+      const plotted = extendToNow(toChartPoints(held!.points), Date.parse(held!.to), 6300);
+      expect(withLiveEdge(plotted, 6300).at(-1)).toEqual({ t: Date.parse(held!.to), bp: 6300 });
+      expect(row).toBeUndefined();
+
+      // And the next event still appends normally, so the series heals on its own.
+      queryClient.setQueryData<PriceSeries>(key, (h) =>
+        appendTick(h, tick({ tradeCount: 12, pYesBp: 6400, ts: '2026-09-07T00:00:00.000Z' })),
+      );
+      expect(queryClient.getQueryData<PriceSeries>(key)?.points.at(-1)?.pYesBp).toBe(6400);
     } finally {
       unsubscribe();
       queryClient.clear();

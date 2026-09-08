@@ -15,6 +15,7 @@ import {
   nearestIndex,
   sampleForTable,
   toChartPoints,
+  withLiveEdge,
 } from './chart';
 
 const originalTz = process.env.TZ;
@@ -284,5 +285,49 @@ describe('sampleForTable', () => {
     const points = series(5);
     expect(sampleForTable(points, 1)).toEqual([points[4]]);
     expect(sampleForTable(points, 0)).toEqual([]);
+  });
+});
+
+describe('withLiveEdge', () => {
+  it('replaces the newest level and moves no instant', () => {
+    // The row is a trade ahead of the series, so its probability IS the newest reading — but
+    // the instant stays the server's, because only the level is known to be newer.
+    const points = [point(0, 6000), point(10, 6100)];
+    expect(withLiveEdge(points, 6300)).toEqual([point(0, 6000), point(10, 6300)]);
+  });
+
+  it('leaves an empty series empty, so the empty state still renders', () => {
+    // The same rule `extendToNow` states: a synthesised point would replace 아직 확률 기록이
+    // 없습니다 with a line drawn from nothing.
+    expect(withLiveEdge([], 6300)).toEqual([]);
+  });
+
+  it('refuses a level it cannot plot rather than writing a NaN into the path', () => {
+    const points = [point(0, 6000)];
+    expect(withLiveEdge(points, Number.NaN)).toEqual(points);
+    expect(withLiveEdge(points, Number.POSITIVE_INFINITY)).toEqual(points);
+  });
+
+  it('costs nothing once the line already ends on that level', () => {
+    // The ordinary path: the socket wrote the tick, so the edge already carries it and this is
+    // a rewrite to the same value.
+    const points = [point(0, 6000), point(10, 6300)];
+    expect(withLiveEdge(points, 6300)).toEqual(points);
+  });
+
+  it('keeps the shape and reports the level as the newest reading', () => {
+    fc.assert(
+      fc.property(
+        fc.array(fc.integer({ min: 1, max: BP_MAX - 1 }), { minLength: 1, maxLength: 40 }),
+        fc.integer({ min: 1, max: BP_MAX - 1 }),
+        (levels, bp) => {
+          const series = levels.map((level, index) => point(index, level));
+          const edged = withLiveEdge(series, bp);
+          expect(edged).toHaveLength(series.length);
+          expect(edged.map((p) => p.t)).toEqual(series.map((p) => p.t));
+          expect(edged.at(-1)?.bp).toBe(bp);
+        },
+      ),
+    );
   });
 });

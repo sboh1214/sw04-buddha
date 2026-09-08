@@ -138,7 +138,14 @@ export function MarketDetail({ marketId, now, children }: MarketDetailProps) {
             )}
             <MarketHeader market={data} now={now} deltaPoints={recentDelta(series.data?.points)} />
             <StatusNotice market={data} />
-            <ProbabilityChart marketId={marketId} label={data.title} currentBp={data.pYesBp} />
+            {/* `currentBp` and `currentTradeCount` come from ONE read of the row, so the
+                chart can never draw one trade's probability under another's claim. */}
+            <ProbabilityChart
+              marketId={marketId}
+              label={data.title}
+              currentBp={data.pYesBp}
+              currentTradeCount={data.tradeCount}
+            />
           </Stack>
         )}
 

@@ -163,6 +163,30 @@ export function extendToNow(
 }
 
 /**
+ * The newest known probability AS the newest reading: the last point keeps its instant and
+ * takes `bp`. Only the level moves, never the time, so the drawn shape and every hover readout
+ * keep the instants the server sent.
+ *
+ * This is what `extendToNow` above cannot do. Its `nowMs <= last.t` test is a GEOMETRY guard —
+ * a segment running backwards would draw a fold — and every bucketed answer makes it a tie,
+ * because the server pins a point at its own window end (`rn = cnt`, market.service.ts). So a
+ * series that is a trade behind keeps drawing the old level while the header, which reads the
+ * market row, has moved. The caller decides WHETHER the row is newer, by counter
+ * (`rowSupersedesSeries`, ticks.ts); this only carries out the decision.
+ *
+ * `withLatestSample` (market-live.ts) does the same thing to a card's sparkline and `joinMarket`
+ * to the row itself — the detail chart was the one live line on the site without the treatment.
+ * An empty series stays empty for the reason `extendToNow` gives, and a level that cannot be
+ * plotted is refused rather than written into the path as a NaN.
+ */
+export function withLiveEdge(points: readonly ChartPoint[], bp: number): ChartPoint[] {
+  const last = points[points.length - 1];
+  if (last === undefined) return [];
+  if (!Number.isFinite(bp)) return [...points];
+  return [...points.slice(0, -1), { t: last.t, bp }];
+}
+
+/**
  * The window the axes describe: the points' own time span, and their probability span widened
  * to at least `CHART_MIN_SPAN_BP` (A-M4-1).
  *

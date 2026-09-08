@@ -7,6 +7,7 @@ import {
   TICK_RANGES,
   appendTickToSeries,
   joinSeries,
+  rowSupersedesSeries,
   tickRangeFrom,
   ticksQueryFor,
   ticksQueryOptions,
@@ -435,5 +436,37 @@ describe('joinSeries', () => {
       series({ bucketSeconds: 0, resolution: 'raw', points: [], to: '2026-09-07T00:00:00.000Z' }),
     );
     expect(joined.points.length).toBeLessThanOrEqual(TICKS_MAX_POINTS);
+  });
+});
+
+describe('rowSupersedesSeries', () => {
+  it('answers yes only when the row names a trade the series does not', () => {
+    // The chart asks this before it draws the row's probability over the series' right edge.
+    // Same trade on both sides — the ordinary path — is provably inert.
+    expect(rowSupersedesSeries(series(), 42)).toBe(true);
+    expect(rowSupersedesSeries(series(), 41)).toBe(false);
+  });
+
+  it('refuses to overrule a series that is the newer of the two', () => {
+    // A live tick already appended: the series is ahead, so the row has nothing to add.
+    const live = appendTickToSeries(series(), tick('2026-09-07T01:30:00.000Z', 6000));
+    expect(rowSupersedesSeries(live, 41)).toBe(false);
+    expect(rowSupersedesSeries(undefined, 99)).toBe(false);
+  });
+
+  it('refuses a series an older API answered, rather than letting the row always win', () => {
+    // `supersedes` takes anything over an absent key, which would turn this into the
+    // unconditional override it exists to avoid.
+    const legacy = { ...series(), tradeCount: undefined } as unknown as ReturnType<typeof series>;
+    expect(rowSupersedesSeries(legacy, 99)).toBe(false);
+  });
+
+  it('never throws out of a render for a count that is not an integer', () => {
+    // `supersedes` compares as BigInt, which THROWS on a fraction or a NaN — and this is the
+    // first caller inside a render, where a throw blanks the page.
+    expect(() => rowSupersedesSeries(series(), Number.NaN)).not.toThrow();
+    expect(rowSupersedesSeries(series(), Number.NaN)).toBe(false);
+    expect(rowSupersedesSeries(series(), 42.5)).toBe(false);
+    expect(rowSupersedesSeries({ ...series(), tradeCount: 1.5 }, 42)).toBe(false);
   });
 });
