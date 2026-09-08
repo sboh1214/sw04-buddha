@@ -491,6 +491,18 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
             queryClient.setQueryData<Position[]>(query.queryKey, patch.positions);
           }
         }
+        // 주문 이력 has no reducer and no event of its own: an `Order` carries its id, status,
+        // filledQty, amountP, priceAvgBp and the market's slug and title, none of which any
+        // `user:` event does, so a row cannot be built and has to be asked for — the same answer
+        // `market:trade` gives 체결 내역. Without it a second tab's /portfolio moved its balance
+        // and its holding on this event and left the order list a row short until a focus or a
+        // reconnect; the trading tab's own `applyTradeResult` never reached this tab.
+        //
+        // A SETTLING event is excluded because a void or a settlement writes no order row at
+        // all, so the request could only answer what the list already holds. `refetchType`
+        // stays at its default `'active'`, so every tab not showing 주문 이력 pays nothing and
+        // is merely marked stale.
+        if (!event.settled) void restartQueries(queryClient, ORDERS_KEY);
         if (refetch) {
           // `restartQueries`, not a bare invalidation: a list that has answered nothing yet
           // would otherwise subscribe to the request it already has instead of issuing one,

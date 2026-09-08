@@ -2,7 +2,7 @@ import { Container, Heading, Stack } from '@chakra-ui/react';
 import { HydrationBoundary } from '@tanstack/react-query';
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
-import { RulesSection } from '@/components/market/rules-section';
+import { LiveRulesSection } from '@/components/market/live-rules-section';
 import { copy } from '@/copy';
 import { fetchMarketServer, fetchTicksServer } from '@/lib/api.server';
 import { dehydratePublic } from '@/lib/market-keys';
@@ -98,8 +98,11 @@ export default async function MarketPage({ params }: { params: Promise<{ slug: s
           <MarketDetail marketId={market.id} now={detailWindowEnd(series)}>
             {/* PLAN 11.1's Kalshi principle: 정산 기준 is never collapsed on the detail.
                 `disputeUntil` is null until a result is proposed, so 정산 예정 appears exactly
-                when the instant is real (PLAN 17 Q8 stays closed until then). */}
-            <RulesSection market={market} settlementAt={market.disputeUntil} />
+                when the instant is real (PLAN 17 Q8 stays closed until then). The row fetched
+                here is the FALLBACK, not the source: the section follows the live cache so an
+                admin's edit to the rules or the close time cannot leave this panel describing a
+                market the countdown above has already moved past. */}
+            <LiveRulesSection fallback={market} />
           </MarketDetail>
         </HydrationBoundary>
       </Stack>

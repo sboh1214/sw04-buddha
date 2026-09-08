@@ -243,8 +243,8 @@ export function realizedPnlAcross(...totals: readonly PortfolioTotals[]): bigint
 }
 
 /**
- * The position as the arithmetic must read it: the market's LIVE price where the tab holds one,
- * and the row's own snapshot otherwise.
+ * The position as the screen must read it: the market's LIVE price and status where the tab
+ * holds the row, and the position's own snapshot otherwise.
  *
  * `Position.marketLastPrice` is a join taken when the list was fetched, and nothing refreshes it
  * on somebody else's trade — `applyPositionEvent` (market-live.ts) patches qty, cost and realised
@@ -255,13 +255,28 @@ export function realizedPnlAcross(...totals: readonly PortfolioTotals[]): bigint
  *
  * The same object is returned when nothing moved, so an untouched row keeps its reference.
  *
+ * `marketStatus` is the same story and was the half that was missing. A transition publishes
+ * `market:status`, which moves `['market', id]` and nothing else — no `user:position` is
+ * published for it — so 보유 포지션 kept announcing a closed market as 진행 중 until an
+ * unrelated positions refetch. The detail screen already made this call once, passing the live
+ * `status` to `MyPosition` rather than trusting the row's copy; this is /portfolio doing the
+ * same. Refetching the lists on a status event would be the wrong half: two private requests
+ * per event per signed-in tab, to move one denormalized enum.
+ *
  * Applied at RENDER time by both readers and never written back to `['positions', …]`:
- * `joinPositions` (market-live.ts) deliberately gives `marketLastPrice` to the REST answer, so
- * a live price stored in the row would be the one field with two owners.
+ * `joinPositions` (market-live.ts) deliberately gives both fields to the REST answer, so a live
+ * value stored in the row would be the one field with two owners.
  */
-export function markToLivePrice(position: Position, lastPrice: number | undefined): Position {
-  if (lastPrice === undefined || lastPrice === position.marketLastPrice) return position;
-  return { ...position, marketLastPrice: lastPrice };
+export function markToLiveMarket(
+  position: Position,
+  live: { lastPrice?: number; status?: MarketStatus },
+): Position {
+  const marketLastPrice = live.lastPrice ?? position.marketLastPrice;
+  const marketStatus = live.status ?? position.marketStatus;
+  if (marketLastPrice === position.marketLastPrice && marketStatus === position.marketStatus) {
+    return position;
+  }
+  return { ...position, marketLastPrice, marketStatus };
 }
 
 /** What a section can say about a list it needs: it has one, it is coming, or it failed. */

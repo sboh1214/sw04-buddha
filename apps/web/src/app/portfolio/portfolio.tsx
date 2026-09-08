@@ -29,7 +29,7 @@ import {
   combinedListState,
   listState,
   markPriceP,
-  markToLivePrice,
+  markToLiveMarket,
   portfolioTotals,
   positionValueP,
   realizedPnlAcross,
@@ -37,7 +37,7 @@ import {
   useOrders,
   usePositions,
 } from '@/hooks/use-portfolio';
-import { type Order, type Position } from '@/lib/api';
+import { type Market, type Order, type Position } from '@/lib/api';
 import { formatKst } from '@/lib/datetime';
 import {
   MARKET_STATUS_LABEL,
@@ -101,11 +101,17 @@ export function Portfolio() {
    * would be a sum of prices no row on screen was ever drawn with.
    */
   const markets = useQueries({ queries: marketIds.map((id) => marketQueryOptions(id)) });
-  const livePrice = new Map<string, number>();
+  const live = new Map<string, Market>();
   for (const market of markets) {
-    if (market.data !== undefined) livePrice.set(market.data.id, market.data.lastPrice);
+    if (market.data !== undefined) live.set(market.data.id, market.data);
   }
-  const positions = held.map((row) => markToLivePrice(row, livePrice.get(row.marketId)));
+  // Price AND status, both marked from the row the socket keeps live: a `market:status` moves
+  // `['market', id]` and publishes no `user:position`, so a holding in a market that has just
+  // closed would otherwise keep announcing 진행 중 here until an unrelated refetch.
+  const positions = held.map((row) => {
+    const market = live.get(row.marketId);
+    return markToLiveMarket(row, { lastPrice: market?.lastPrice, status: market?.status });
+  });
 
   // 총 평가 금액/평가손익 come from the open holdings alone — settlement writes no price, so a
   // settled market's `lastPrice` is the last price something traded at, not the 100/0 it

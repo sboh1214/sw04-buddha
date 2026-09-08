@@ -19,7 +19,7 @@ import {
   combinedListState,
   listState,
   markPriceP,
-  markToLivePrice,
+  markToLiveMarket,
   ordersInfiniteQueryOptions,
   portfolioTotals,
   positionListStatusFor,
@@ -274,21 +274,31 @@ describe('listState / combinedListState', () => {
   });
 });
 
-describe('markToLivePrice', () => {
+describe('markToLiveMarket', () => {
   it('marks the row to the price the market cache holds, not the one the list was fetched at', () => {
     // `marketLastPrice` is a join taken when the list was fetched and nothing refreshes it on
     // somebody else's trade — that arrives as a `market:tick` on the market cache instead.
     const row = position({ marketLastPrice: 50 });
-    expect(markToLivePrice(row, 63).marketLastPrice).toBe(63);
-    expect(unrealizedPnlP(markToLivePrice(row, 63))).toBe(63n * 100n - 5_000n);
+    expect(markToLiveMarket(row, { lastPrice: 63 }).marketLastPrice).toBe(63);
+    expect(unrealizedPnlP(markToLiveMarket(row, { lastPrice: 63 }))).toBe(63n * 100n - 5_000n);
+  });
+
+  it('marks the STATUS too, which no user event ever moves', () => {
+    // A transition publishes `market:status` and nothing else — no `user:position` — so a
+    // holding in a market that has just closed kept announcing 진행 중 until an unrelated
+    // positions refetch. Refetching the lists on that event would be two private requests per
+    // signed-in tab to move one denormalized enum.
+    const row = position({ marketStatus: 'open' });
+    expect(markToLiveMarket(row, { status: 'closed' }).marketStatus).toBe('closed');
+    expect(markToLiveMarket(row, { status: 'closed' }).marketLastPrice).toBe(row.marketLastPrice);
   });
 
   it('keeps the row itself when there is nothing newer to mark it to', () => {
-    // The same reference, so an untouched row does not re-render; `undefined` is a market this
-    // tab holds no cache entry for, which is not a reason to invent a price.
-    const row = position({ marketLastPrice: 63 });
-    expect(markToLivePrice(row, undefined)).toBe(row);
-    expect(markToLivePrice(row, 63)).toBe(row);
+    // The same reference, so an untouched row does not re-render; an absent field is a market
+    // this tab holds no cache entry for, which is not a reason to invent one.
+    const row = position({ marketLastPrice: 63, marketStatus: 'open' });
+    expect(markToLiveMarket(row, {})).toBe(row);
+    expect(markToLiveMarket(row, { lastPrice: 63, status: 'open' })).toBe(row);
   });
 });
 

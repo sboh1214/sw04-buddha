@@ -20,7 +20,7 @@ import { copy } from '@/copy';
 import {
   averageCostP,
   markPriceP,
-  markToLivePrice,
+  markToLiveMarket,
   positionListStatusFor,
   unrealizedPnlP,
   usePositions,
@@ -136,7 +136,7 @@ export function MyPosition({
                 // the live one is not passed down here — there is nothing for it to value.
                 <SettledPositionRows key={row.outcome} position={row} />
               ) : (
-                <PositionRows key={row.outcome} position={markToLivePrice(row, lastPrice)} />
+                <PositionRows key={row.outcome} position={markToLiveMarket(row, { lastPrice })} />
               ),
             )}
           </Stack>

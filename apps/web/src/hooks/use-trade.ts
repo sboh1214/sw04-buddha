@@ -214,9 +214,15 @@ export function useTrade(market: Pick<Market, 'id'>, onDone?: (result: TradeResu
       if (isApiError(error, 'DUPLICATE_REQUEST')) {
         // Same key, other terms: an earlier press may well have traded, so the balance and the
         // position on screen are behind what the server holds. The key is already spent.
+        //
+        // `restartQueries`, for the reason the success path uses it: this answer PROVES the key
+        // was already spent, so a first fetch still in flight may have taken its snapshot before
+        // that trade — and a bare invalidation subscribes to the request already running rather
+        // than issuing one. The refusals above need no such thing: they mean nothing committed,
+        // so a snapshot from before the request is not stale.
         await Promise.all([
-          queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY }),
-          queryClient.invalidateQueries({ queryKey: POSITIONS_KEY }),
+          restartQueries(queryClient, ME_QUERY_KEY),
+          restartQueries(queryClient, POSITIONS_KEY),
         ]);
         return;
       }
