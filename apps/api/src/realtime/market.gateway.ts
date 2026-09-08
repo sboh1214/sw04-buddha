@@ -32,6 +32,14 @@ import { RealtimeExceptionFilter } from './realtime-exception.filter.js';
 const PING_INTERVAL_MS = 30_000;
 /** Delay before a rejected `psubscribe` is retried; exported so a test can wait one out. */
 export const ARM_RETRY_MS = 1_000;
+/**
+ * How many times a handshake asks for the session before it gives up and admits the socket as
+ * anonymous. Exported so a test can count the attempts rather than guess at them.
+ *
+ * Two, not more: the cost is paid on the ERROR path only (see `authenticate`), and a handshake
+ * that waits is a screen that stays blank — this runs before Nest binds the socket's handlers.
+ */
+export const SESSION_LOOKUP_ATTEMPTS = 2;
 
 /** Per-socket state. Both fields are set by the handshake middleware, before any handler. */
 interface RealtimeSocketData {
@@ -202,22 +210,53 @@ export class MarketGateway
       });
   };
 
+  /**
+   * The handshake's one and only reading of who this socket is. `handleConnection` joins
+   * `user:<id>` from it and nothing re-reads it afterwards, so what this decides holds for the
+   * life of the connection.
+   *
+   * A failed lookup is RETRIED before it degrades, and the reason is that the degradation is
+   * silent and permanent. A signed-in socket admitted as anonymous never joins `user:<id>`,
+   * `onChannelMessage` drops every balance and position event for it (`rooms.has(channel)` is
+   * false), and nothing re-authenticates: the client opens one handshake per IDENTITY
+   * (realtime-provider.tsx), and a session refetch that answers the same account rebuilds
+   * nothing. The tab stays connected, stays subscribed, and quietly stops being told about its
+   * own money until the transport itself drops.
+   *
+   * The retry is free for a visitor who is not signed in. better-auth reads the session cookie
+   * FIRST and returns null without touching the adapter when there is none
+   * (api/routes/session.mjs), so an anonymous handshake cannot reach this catch at all — every
+   * socket that does presented a signed session cookie and is claiming an account.
+   *
+   * It still DEGRADES rather than refusing, and that is not timidity: `next(error)` on a
+   * namespace middleware is a CONNECT_ERROR, and socket.io-client answers one with
+   * `destroy()` — "clean subscriptions to avoid reconnections" (socket.js) — so the tab would
+   * lose public ticks too, permanently, with no retry of its own. Refusing trades a silent
+   * partial loss for a silent total one. PLAN 8 admits anonymous sockets; this keeps that true
+   * while making it the answer of last resort.
+   */
   private readonly authenticate = async (
     socket: RealtimeSocket,
     next: (error?: Error) => void,
   ): Promise<void> => {
     socket.data.marketRooms = new Set();
-    try {
-      // The exact call SessionGuard makes; fromNodeHeaders is a pure loop over
-      // IncomingHttpHeaders and needs no request object.
-      const session = await this.auth.api.getSession({
-        headers: fromNodeHeaders(socket.handshake.headers),
-      });
-      socket.data.userId = session?.user.id;
-    } catch (error) {
-      // PLAN 8 admits anonymous sockets, so a session store that is down must degrade to one
-      // rather than refuse a public subscription.
-      this.logger.warn(`handshake session lookup failed: ${String(error)}`);
+    for (let attempt = 1; attempt <= SESSION_LOOKUP_ATTEMPTS; attempt += 1) {
+      try {
+        // The exact call SessionGuard makes; fromNodeHeaders is a pure loop over
+        // IncomingHttpHeaders and needs no request object.
+        const session = await this.auth.api.getSession({
+          headers: fromNodeHeaders(socket.handshake.headers),
+        });
+        socket.data.userId = session?.user.id;
+        break;
+      } catch (error) {
+        // The last attempt is the one that degrades; the earlier ones say so and try again.
+        if (attempt < SESSION_LOOKUP_ATTEMPTS) {
+          this.logger.warn(`handshake session lookup failed, retrying: ${String(error)}`);
+          continue;
+        }
+        this.logger.warn(`handshake session lookup failed, admitting anonymous: ${String(error)}`);
+      }
     }
     next();
   };

@@ -92,6 +92,23 @@ export function ticksQueryFor(range: TickRange, nowMs: number): TicksQuery {
  */
 export interface CachedTick extends PriceTick {
   tradeCount?: number;
+  /**
+   * The probability this point MOVED FROM, in basis points — present only on a point the socket
+   * drew, and the reason 확률 변화 can report a trade at all.
+   *
+   * The badge used to read the last STEP of the series (`points.at(-1)` minus `points.at(-2)`),
+   * which is the same thing only while every trade gets its own point. It does not: `pushPoint`
+   * REPLACES the last point when the two share a bucket, and a 1D window comes back on a
+   * 5-minute grid (`tickBucketSeconds`), so the second trade in five minutes made the
+   * penultimate point the PREVIOUS bucket's and the badge reported the whole bucket's movement.
+   * It accumulated: measured at +6, +7, +8%p for three consecutive +3, +1, +1%p trades.
+   *
+   * Recorded here rather than in a ref or in state, which is what a "previous render" reading
+   * would need: this page is server-rendered, and a first client render that differs from the
+   * HTML is a hydration mismatch. A point the server answered has no tag and the badge falls
+   * back to the step — the reading the first paint has always had.
+   */
+  movedFromBp?: number;
 }
 
 export interface CachedSeries extends Omit<PriceSeries, 'points'> {
@@ -210,6 +227,9 @@ export function appendTickToSeries(
  * replacing, and a market trading more often than one bucket would never gain a point again.
  * `bucketMs > 0` keeps raw appending (and never divides by zero); an empty series has
  * `lastMs === -Infinity`, whose floor equals no real bucket, so its first point appends.
+ *
+ * It is also where a live point's `movedFromBp` is stamped, because the replacement is exactly
+ * what destroys the evidence the 확률 변화 badge needs — see the branch's own comment.
  */
 function pushPoint(held: CachedSeries, point: CachedTick, pointMs: number): CachedSeries {
   const kept: CachedTick[] = [];
@@ -222,7 +242,21 @@ function pushPoint(held: CachedSeries, point: CachedTick, pointMs: number): Cach
   const bucketMs = held.bucketSeconds * 1000;
   const sameBucket =
     bucketMs > 0 && Math.floor(pointMs / bucketMs) === Math.floor(lastMs / bucketMs);
-  const points = sameBucket ? [...kept.slice(0, -1), point] : [...kept, point];
+  // The probability this point moved FROM, recorded here because here is the only place that
+  // knows it: `previous` is the reading the point supersedes in BOTH branches — the point being
+  // replaced when they share a bucket, the last kept point when they do not — and one line down
+  // the replaced one is gone. `recentDelta` (market-detail.tsx) reads it so 확률 변화 reports
+  // the trade rather than the bucket; see `CachedTick.movedFromBp` for what that was worth.
+  //
+  // Only a point that does not already carry one is tagged. `joinSeries` re-pushes a live point
+  // that survived a refetch, and that point's move was measured when it was CREATED — against
+  // the reading the socket superseded, not against whatever the server's answer happens to end
+  // with now.
+  const tagged =
+    point.movedFromBp === undefined && previous !== undefined
+      ? { ...point, movedFromBp: previous.pYesBp }
+      : point;
+  const points = sameBucket ? [...kept.slice(0, -1), tagged] : [...kept, tagged];
 
   return {
     ...held,
@@ -318,6 +352,41 @@ export function joinSeries(held: CachedSeries | undefined, incoming: CachedSerie
   // through would move `to` backwards, which `appendTickToSeries` forbids for its own writes —
   // and `to` is what `extendToNow` (chart.ts) draws the live probability out to.
   return Date.parse(held.to) > Date.parse(next.to) ? { ...next, to: held.to } : next;
+}
+
+/**
+ * The move the 확률 변화 badge reports, in percentage points, or `null` when there is nothing
+ * to report.
+ *
+ * It is a property of the SERIES, not a difference between two renders, and that is the whole
+ * reason it can be computed at all: a previous-render value would have to be held in state or a
+ * ref, which on this server-rendered page means a first client render that differs from the
+ * HTML. The series is a pure value both sides read from the same seeded cache entry.
+ *
+ * It lives here rather than beside its one caller for the reason `ticksQueryOptions` gives above:
+ * a decision inside a component is a decision this app's node-only vitest cannot reach, and it
+ * IS a decision — which of two readings the badge takes, and what a market with no live point
+ * gets instead.
+ *
+ * A point the socket drew names the probability it moved FROM (`CachedTick.movedFromBp`), and
+ * that is the badge's first reading. It has to be: the last STEP of the series is the same
+ * number only while every trade gets its own point, and `pushPoint` REPLACES the last point
+ * when the two share a bucket — a 1D window comes back on a 5-minute grid — so the second trade
+ * in five minutes left the penultimate point in the PREVIOUS bucket and the badge reported that
+ * bucket's whole movement, accumulating with each further trade (+6, +7, +8%p for +3, +1, +1).
+ *
+ * Falling back to the step is what keeps the first paint unchanged: the server's points carry no
+ * tag, and a market that has been quiet answers 0 there — the server samples the window's right
+ * edge onto the grid and carries the last price forward to it, so the final two points are equal
+ * and `deltaLabel` hides the badge.
+ */
+export function recentDelta(points: readonly CachedTick[] | undefined): number | null {
+  const last = points?.at(-1);
+  if (last === undefined) return null;
+  if (last.movedFromBp !== undefined) return (last.pYesBp - last.movedFromBp) / 100;
+  const previous = points?.at(-2);
+  if (previous === undefined) return null;
+  return (last.pYesBp - previous.pYesBp) / 100;
 }
 
 /**

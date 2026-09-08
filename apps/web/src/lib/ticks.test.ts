@@ -7,6 +7,7 @@ import {
   TICK_RANGES,
   appendTickToSeries,
   joinSeries,
+  recentDelta,
   rowSupersedesSeries,
   tickRangeFrom,
   ticksQueryFor,
@@ -153,7 +154,15 @@ describe('appendTickToSeries', () => {
 
     expect(merged?.points).toEqual([
       held.points[0],
-      { ts: '2026-09-07T01:30:00.000Z', pYesBp: 4600, tradeCount: 42, trigger: 'trade' },
+      // The move is measured against the point this one REPLACED, which is the only place it
+      // still exists — see `CachedTick.movedFromBp`.
+      {
+        ts: '2026-09-07T01:30:00.000Z',
+        pYesBp: 4600,
+        tradeCount: 42,
+        trigger: 'trade',
+        movedFromBp: 4200,
+      },
     ]);
   });
 
@@ -166,6 +175,7 @@ describe('appendTickToSeries', () => {
       pYesBp: 4600,
       tradeCount: 42,
       trigger: 'trade',
+      movedFromBp: 4200,
     });
   });
 
@@ -179,8 +189,22 @@ describe('appendTickToSeries', () => {
 
     expect(second?.points).toEqual([
       series().points[0],
-      { ts: '2026-09-07T01:30:00.000Z', pYesBp: 4600, tradeCount: 42, trigger: 'trade' },
-      { ts: '2026-09-07T02:15:00.000Z', pYesBp: 5100, tradeCount: 43, trigger: 'trade' },
+      {
+        ts: '2026-09-07T01:30:00.000Z',
+        pYesBp: 4600,
+        tradeCount: 42,
+        trigger: 'trade',
+        movedFromBp: 4200,
+      },
+      // Each live point names the reading IT superseded, so two trades in a row report +5 and
+      // then +5 rather than +6 and +11.
+      {
+        ts: '2026-09-07T02:15:00.000Z',
+        pYesBp: 5100,
+        tradeCount: 43,
+        trigger: 'trade',
+        movedFromBp: 4600,
+      },
     ]);
   });
 
@@ -254,6 +278,9 @@ describe('appendTickToSeries', () => {
       pYesBp: 6000,
       tradeCount: 42,
       trigger: 'trade',
+      // The stale boundary is trimmed FIRST, so the move is measured against the last point
+      // that survives the trim rather than against a price the trade already invalidated.
+      movedFromBp: 4000,
     });
     // That stale boundary carried the pre-trade price across the trade's own instant, so it
     // goes rather than sitting after the live point out of order.
@@ -317,6 +344,49 @@ describe('appendTickToSeries', () => {
   });
 });
 
+describe('recentDelta', () => {
+  it('reports the trade, not the bucket, when several land inside one sampled stride', () => {
+    // THE HAZARD. A 1D window comes back on a 5-minute grid (`tickBucketSeconds`), and
+    // `pushPoint` REPLACES the last point when a tick shares its bucket — so from the second
+    // trade onwards `points.at(-2)` is the PREVIOUS bucket's point and the badge measured the
+    // whole bucket's movement. It accumulated with every further trade: the three trades below
+    // moved the probability +5, +5 and +5%p, and 확률 변화 announced +10, +15 and +20 — a
+    // number that is not the move, on the badge PLAN 11.4 shows for five seconds after a trade.
+    let live = series({ bucketSeconds: 300, to: '2026-09-07T01:00:00.000Z' });
+    live = appendTickToSeries(live, tick('2026-09-07T01:01:00.000Z', 4700, 42)) ?? live;
+    expect(recentDelta(live.points)).toBe(5);
+    live = appendTickToSeries(live, tick('2026-09-07T01:02:00.000Z', 5200, 43)) ?? live;
+    expect(recentDelta(live.points)).toBe(5);
+    live = appendTickToSeries(live, tick('2026-09-07T01:03:00.000Z', 5700, 44)) ?? live;
+    expect(recentDelta(live.points)).toBe(5);
+    // All three replaced one another, so the series never grew the sub-stride spike the next
+    // refetch would erase — the rule this fix had to leave alone.
+    expect(live.points).toHaveLength(2);
+  });
+
+  it('falls back to the last step for a series only the server answered', () => {
+    // The first paint, unchanged: the server tags no point, and a market that has been quiet
+    // has its last price carried forward onto the window edge, so the final two points are
+    // equal, the delta is 0 and `deltaLabel` hides the badge (실시간은 조용하게, PLAN 11.1-5).
+    const quiet = series({
+      points: [
+        { ts: '2026-09-07T00:00:00.000Z', pYesBp: 4200, trigger: 'trade' },
+        { ts: '2026-09-07T01:00:00.000Z', pYesBp: 4200, trigger: 'trade' },
+      ],
+    });
+    expect(recentDelta(quiet.points)).toBe(0);
+    expect(recentDelta(series().points)).toBe(2);
+  });
+
+  it('has nothing to report for a series with no points, and for none at all', () => {
+    expect(recentDelta(series({ points: [] }).points)).toBeNull();
+    expect(recentDelta(undefined)).toBeNull();
+    // One point is a market whose first trade is on screen: there is no earlier reading to
+    // measure against, and inventing 0 would claim the probability had not moved.
+    expect(recentDelta(series({ points: [series().points[0]!] }).points)).toBeNull();
+  });
+});
+
 describe('joinSeries', () => {
   /** The live edge the socket drew while a refetch was in flight. */
   const live = (): PriceSeries =>
@@ -336,6 +406,9 @@ describe('joinSeries', () => {
       pYesBp: 6000,
       tradeCount: 42,
       trigger: 'trade',
+      // Carried through the re-push unchanged: the move was measured when the socket CREATED
+      // this point, against the reading it superseded — not against the answer's right edge.
+      movedFromBp: 4200,
     });
     expect(joined.to).toBe('2026-09-07T01:30:00.000Z');
     // Everything the SERVER owns still comes from the answer.

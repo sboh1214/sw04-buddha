@@ -13,6 +13,7 @@ import { QueryClient } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 import { type Order, type Position } from '@/lib/api';
 import { ORDERS_KEY, POSITIONS_KEY } from '@/lib/market-keys';
+import { applyPositionEvent } from '@/lib/market-live';
 import {
   type OrdersPage,
   averageCostP,
@@ -311,6 +312,47 @@ describe('markToLiveMarket', () => {
     const row = position({ marketLastPrice: 63, marketStatus: 'open' });
     expect(markToLiveMarket(row, {})).toBe(row);
     expect(markToLiveMarket(row, { lastPrice: 63, status: 'open' })).toBe(row);
+  });
+});
+
+describe('총 실현 손익 across the two lists', () => {
+  it('is only summable because a row is never in both lists, which the socket used to break', () => {
+    // `realizedPnlAcross` sums BOTH lists on a promise its own doc makes: "a row MOVES between
+    // the two lists … so it is never in both and this cannot double count". The socket broke
+    // that promise. `applyPositionEvent` matched a row on (marketId, outcome) alone, so a void's
+    // `settled: true` was written back into `['positions', 'open']` — the list the row had just
+    // LEFT — and the patch kind stayed `replace`, so nothing was scheduled to correct it. The
+    // write refreshed `dataUpdatedAt` too, putting the poisoned list inside `staleTime`.
+    const openRow = position({ realizedPnlP: '250', qty: 10, costBasisP: '5000' });
+    const event = {
+      type: 'user:position' as const,
+      marketId: openRow.marketId,
+      outcome: openRow.outcome,
+      qty: 0,
+      costBasisP: '0',
+      realizedPnlP: '250',
+      settled: true,
+      version: openRow.version + 1,
+      ts: '2026-09-07T01:00:00.000Z',
+    };
+    // 정산 이력, once fetched, holds this row: that is where a void puts it.
+    const settledList: Position[] = [
+      { ...openRow, qty: 0, costBasisP: '0', settled: true, version: event.version },
+    ];
+
+    // The arithmetic that made it visible, kept as the counterfactual this guard exists for:
+    // one 250P row read as 500P, on the 총 실현 손익 line of /portfolio.
+    const poisonedOpen: Position[] = [
+      { ...openRow, qty: 0, costBasisP: '0', settled: true, version: event.version },
+    ];
+    expect(realizedPnlAcross(portfolioTotals(poisonedOpen), portfolioTotals(settledList))).toBe(
+      500n,
+    );
+
+    // The guard: the reducer will not write a row into a list it has left, so the poisoned
+    // state above is not reachable — the list is ASKED for, and `joinPositions` takes its
+    // membership from the answer.
+    expect(applyPositionEvent([openRow], event)).toEqual({ kind: 'refetch' });
   });
 });
 

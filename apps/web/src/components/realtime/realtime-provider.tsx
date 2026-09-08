@@ -264,6 +264,9 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     // so a rebuilt socket starts from nothing seen and nothing spent.
     const balanceOrder = new BalanceOrder();
     const fills = new Throttle(FILLS_INVALIDATE_MS);
+    // Bounds the first-fetch rescue in the tick handler below; see its comment for why a
+    // restart per tick can starve the very request it is restarting.
+    const marketRestart = new Throttle(FILLS_INVALIDATE_MS);
     /**
      * The fills throttle's trailing-edge timers, one per market, cancelled with the socket.
      * The value is the canceller rather than the handle so nothing here has to name the type
@@ -364,8 +367,21 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     // would leave the screen quietly un-live with nothing to explain it. Now that `emit`
     // chunks at the per-message cap, the refusal left is the per-SOCKET room cap
     // (REALTIME_ROOMS_MAX): the gateway joins ids until it is reached and refuses the rest,
-    // and the envelope names no ids, so there is nothing to drop from the registry. This is a
-    // developer-facing warning about that tail, and a reload is the recovery.
+    // and the envelope names no ids, so there is nothing to drop from the registry.
+    //
+    // WHICH rooms survive is not the tail of the screen: `useMarketSocket` joins
+    // `[...new Set(ids)].sort()`, so the 200 the gateway accepts are the lexicographically first
+    // uuids, and `resubscribe()` re-sends that same ordering on every reconnect. The silent
+    // cards are therefore scattered through the grid rather than gathered at the bottom.
+    //
+    // A reload recovers the HOME GRID and only it: the page prefetches one page and nothing
+    // persists the cache, so the grid comes back at PAGE_LIMIT_DEFAULT 20 rows, under the cap.
+    // It does NOT recover /portfolio, whose position list is uncursored by design — the same
+    // 200+ markets are joined again and the same tail stays dark. So this warning is the only
+    // signal that a screen is over the cap, which is why it is not silenced by capping the
+    // registry client-side: that would send one frame fewer and print nothing, while the same
+    // 200 rooms live and the same tail dies. Reached only past 200 markets on ONE screen — ten
+    // presses of 더 보기 over the seeded page, or an account holding that many open markets.
     socket.on(REALTIME_EXCEPTION_EVENT, (raw: unknown) => {
       const parsed = errorEnvelopeSchema.safeParse(raw);
       const detail = parsed.success
@@ -388,12 +404,70 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         const parsed = marketTickEventSchema.safeParse(raw);
         if (!parsed.success) return;
         const event = parsed.data;
+        /**
+         * THE HAZARD, and the fourth place this repo has met it: `applyTick` answers `undefined`
+         * for a cache that holds NO row, so the event was dropped — and /portfolio opens exactly
+         * that entry, one unseeded `['market', id]` per held market (`useQueries`), while
+         * `useMarketSocket` has already joined the room. A first request that took its snapshot
+         * before the trade then landed with the old price and stood: `staleTime` is 30s, the
+         * next tick may be an hour away on a quiet market, and 현재가 · 평가 금액 · 총 평가
+         * 금액 were all marked to it.
+         *
+         * Gated on the query being ON that first fetch RIGHT NOW, and each of the three tests
+         * refuses a different way of turning this into 남발:
+         *
+         *  - it EXISTS: the home grid joins every card's room and keeps no `['market', id]`
+         *    entry at all, so without this every tick on the list would run an invalidation
+         *    against a key nothing holds.
+         *  - it holds NO data: `applyTick` answers `undefined` for two reasons, and only "no
+         *    row" may become a request. Restarting on "not superseded" would buy one per late
+         *    or duplicate tick — and systematically, because the trading tab's own
+         *    `applyMarketStats` has already written the answer's `tradeCount`, so that tab's
+         *    echo of its own trade never supersedes. Measured: 10 such ticks cost ZERO requests.
+         *  - it is FETCHING: a query that has ERRORED also holds no data, and restarting it on
+         *    every tick would fight its own retry rule and its own error UI. The hazard is an
+         *    answer on the wire, so that is the state to name.
+         *
+         * Throttled per market on top of that, because the gate alone can starve what it is
+         * rescuing: each restart CANCELS the request in flight, so on a market trading faster
+         * than one round trip the row would never arrive at all. Leading edge only — unlike
+         * `refreshFills`, a refused window needs no trailing retry, because the restart already
+         * on the wire is the thing that ends the hazard.
+         *
+         * `restartQueries`, not a bare invalidation, for the reason `refreshFills` gives right
+         * above: a query that has answered nothing hands back the request already running, which
+         * is precisely the pre-trade one. Self-limiting — once the restarted answer lands the row
+         * exists and every later tick is a free cache write.
+         */
+        const row = queryClient
+          .getQueryCache()
+          .find<Market>({ queryKey: marketKey(event.marketId), exact: true });
         queryClient.setQueryData<Market>(marketKey(event.marketId), (held) =>
           applyTick(held, event),
         );
+        if (
+          row?.state.data === undefined &&
+          row?.state.fetchStatus === 'fetching' &&
+          marketRestart.take(event.marketId, Date.now())
+        ) {
+          void restartQueries(queryClient, marketKey(event.marketId));
+        }
         // Every filtered list at once: the same market sits in as many cache entries as the
         // tab has visited filters, and `applyToPages` answers undefined for the ones that do
         // not hold it, so those cost nothing.
+        //
+        // It writes a card's NUMBERS and never its RANK, and that is a decision rather than an
+        // oversight. `sort=volume` is keyset-paginated on `(volume_p DESC, id DESC)`
+        // (market.service.ts), so the order belongs to the fetch that produced the page — the
+        // same rule `joinMarketPages` states from the other side ("the page SHAPE comes from
+        // `incoming`"), and the same rule list MEMBERSHIP already follows: a market that closes
+        // stays in a `status=open` list until the next answer says otherwise. Re-sorting here
+        // could only sort the pages this tab happens to hold, which is neither the server's
+        // order nor a correct global one; invalidating instead was measured at one request per
+        // cached page per tick — six for a reader who pressed 더 보기 five times — and it does
+        // not even converge, because each invalidation cancels the chain the last one started.
+        // The order is restored by the next ordinary fetch: a filter change, a reconnect's
+        // `resnapshot`, or a mount past `staleTime`.
         queryClient.setQueriesData<MarketPages>({ queryKey: MARKETS_KEY }, (held) =>
           applyToPages(held, (row) => applyTick(row, event)),
         );

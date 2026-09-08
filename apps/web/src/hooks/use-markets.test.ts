@@ -1,5 +1,11 @@
 import { type MarketTickEvent } from '@buddha/shared';
-import { InfiniteQueryObserver, type QueryClient, hashKey, hydrate } from '@tanstack/react-query';
+import {
+  InfiniteQueryObserver,
+  type QueryClient,
+  QueryObserver,
+  hashKey,
+  hydrate,
+} from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 import { type Market, type MarketListItem, type MarketSummary } from '@/lib/api';
 import {
@@ -10,8 +16,14 @@ import {
   marketKey,
   marketsKey,
 } from '@/lib/market-keys';
-import { type MarketPage, type MarketPages, applyTick, applyToPages } from '@/lib/market-live';
-import { getQueryClient } from '@/lib/query-client';
+import {
+  type MarketPage,
+  type MarketPages,
+  Throttle,
+  applyTick,
+  applyToPages,
+} from '@/lib/market-live';
+import { getQueryClient, restartQueries } from '@/lib/query-client';
 import { marketQueryOptions, marketsInfiniteQueryOptions } from './use-markets';
 
 /**
@@ -212,6 +224,45 @@ describe('the live list', () => {
     }
   });
 
+  it("moves a card's numbers and never its rank, which belongs to the fetch", () => {
+    // A DELIBERATE refusal, pinned so it is not "fixed" back. `sort=volume` is keyset-paginated
+    // on `(volume_p DESC, id DESC)` (market.service.ts), so the order is the answer's: a tick
+    // that overtakes the row above leaves the two cards in the order the server sent them, the
+    // same way a market that closes stays in a `status=open` list until the next answer. The
+    // alternatives were measured and are worse — invalidating costs one request per cached page
+    // per tick and starves under a burst (each invalidation cancels the chain the last one
+    // started), and a local re-sort can only order the keyset prefix this tab happens to hold,
+    // which is neither the server's order nor a correct global one.
+    const queryClient = getQueryClient();
+    const leader = { ...card, id: THIRD_ID, slug: 'leader', volumeP: '900000', pYesBp: 4000 };
+    const key = marketsKey(DEFAULT_MARKET_FILTERS);
+    queryClient.setQueryData<MarketPages>(key, pagesOf([leader, card]));
+
+    let fetches = 0;
+    const observer = listObserver(queryClient, DEFAULT_MARKET_FILTERS, () => {
+      fetches += 1;
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
+    try {
+      // The trailing card's volume overtakes the leader's.
+      queryClient.setQueriesData<MarketPages>({ queryKey: MARKETS_KEY }, (held) =>
+        applyToPages(held, (row) => applyTick(row, tick({ volumeP: '999999' }))),
+      );
+
+      const items = observer.getCurrentResult().data?.pages[0]?.items;
+      // The number moved…
+      expect(items?.[1]?.volumeP).toBe('999999');
+      // …and the position did not.
+      expect(items?.map((row) => row.id)).toEqual([THIRD_ID, ID]);
+      // No request, and no invalidation waiting to become one.
+      expect(fetches).toBe(0);
+      expect(queryClient.getQueryState(key)?.isInvalidated).toBe(false);
+    } finally {
+      unsubscribe();
+      queryClient.clear();
+    }
+  });
+
   it('writes nothing at all when no cached page holds the market', () => {
     // `applyToPages` answers `undefined`, `setQueryData` returns early on it, and the observer is
     // never notified: a tick for a market the visitor is not looking at costs nothing, and — the
@@ -238,6 +289,152 @@ describe('the live list', () => {
       expect(fetches).toBe(0);
     } finally {
       unsubscribe();
+      queryClient.clear();
+    }
+  });
+});
+
+/**
+ * The `market:tick` handler's first two lines, copied from realtime-provider.tsx so the GATE is
+ * what is under test rather than a paraphrase of it. Everything it touches is exported.
+ */
+function onTick(queryClient: QueryClient, event: MarketTickEvent, restart = new Throttle(1_000)) {
+  const row = queryClient
+    .getQueryCache()
+    .find<Market>({ queryKey: marketKey(event.marketId), exact: true });
+  queryClient.setQueryData<Market>(marketKey(event.marketId), (held) => applyTick(held, event));
+  if (
+    row?.state.data === undefined &&
+    row?.state.fetchStatus === 'fetching' &&
+    restart.take(event.marketId, Date.now())
+  ) {
+    void restartQueries(queryClient, marketKey(event.marketId));
+  }
+}
+
+describe('a tick that arrives during an unseeded first fetch', () => {
+  it('re-asks for the market, because the answer on the wire left before the trade', async () => {
+    // THE HAZARD: /portfolio opens one `['market', id]` per held market (`useQueries`) and joins
+    // every room, and NOTHING seeds those entries — only the detail page is seeded. `applyTick`
+    // answers `undefined` for a cache with no row, so the event was dropped; the first request,
+    // whose snapshot predates the trade, then landed with the old price and stood. `staleTime`
+    // is 30s and the next tick on a quiet market may be an hour away, so 현재가, 평가 금액 and
+    // 총 평가 금액 were all marked to a price the market had already left.
+    const queryClient = getQueryClient();
+    let fetches = 0;
+    const observer = new QueryObserver<Market>(queryClient, {
+      queryKey: marketKey(ID),
+      // The first request left before the trade and knows nothing about it.
+      queryFn: () =>
+        Promise.resolve(
+          (fetches += 1) === 1
+            ? detail
+            : { ...detail, lastPrice: 63, pYesBp: 6300, tradeCount: 11 },
+        ),
+      retry: false,
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
+    try {
+      onTick(queryClient, tick());
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(fetches).toBe(2);
+      expect(queryClient.getQueryData<Market>(marketKey(ID))?.lastPrice).toBe(63);
+    } finally {
+      unsubscribe();
+      queryClient.clear();
+    }
+  });
+
+  it('restarts at most once a window, so a busy market cannot starve its own rescue', async () => {
+    // Each restart CANCELS the request in flight. Without the throttle, a market trading faster
+    // than one round trip would cancel every attempt before it landed and the row would never
+    // arrive — the rescue eating itself, which is the same `cancelRefetch` starvation that made
+    // invalidating the volume list on every tick worthless.
+    const queryClient = getQueryClient();
+    const restart = new Throttle(1_000);
+    let fetches = 0;
+    const observer = new QueryObserver<Market>(queryClient, {
+      queryKey: marketKey(ID),
+      queryFn: () =>
+        new Promise((resolve) => {
+          fetches += 1;
+          // Slower than the burst, which is the whole point.
+          setTimeout(() => resolve(detail), 50);
+        }),
+      retry: false,
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
+    try {
+      for (let i = 0; i < 10; i += 1) onTick(queryClient, tick(), restart);
+      await new Promise((resolve) => setTimeout(resolve, 120));
+
+      // The mount's own fetch, plus exactly one restart for the whole burst.
+      expect(fetches).toBe(2);
+      expect(queryClient.getQueryData<Market>(marketKey(ID))).toBeDefined();
+    } finally {
+      unsubscribe();
+      queryClient.clear();
+    }
+  });
+
+  it('leaves a market query that FAILED to its own retry rule', async () => {
+    // An errored query holds no data either, and restarting it per tick would fight both the
+    // retry rule (query-client.ts refuses to retry a 4xx) and the error UI the screen renders.
+    // The hazard is an answer ON THE WIRE, so `fetchStatus` is the test, not `data` alone.
+    const queryClient = getQueryClient();
+    let fetches = 0;
+    const observer = new QueryObserver<Market>(queryClient, {
+      queryKey: marketKey(ID),
+      queryFn: () => {
+        fetches += 1;
+        return Promise.reject(new Error('down'));
+      },
+      retry: false,
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const failed = fetches;
+      for (let i = 0; i < 5; i += 1) onTick(queryClient, tick());
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(fetches).toBe(failed);
+    } finally {
+      unsubscribe();
+      queryClient.clear();
+    }
+  });
+
+  it('does nothing for a market the tab keeps no entry for, which is every card on the home grid', () => {
+    // The list joins every rendered card's room but keeps no `['market', id]` entry — the grid
+    // reads `['markets', filters]`. Without the "exists" test, every tick on the home page would
+    // run an invalidation against a key nothing holds.
+    const queryClient = getQueryClient();
+    try {
+      onTick(queryClient, tick());
+
+      expect(queryClient.getQueryCache().find({ queryKey: marketKey(ID) })).toBeUndefined();
+    } finally {
+      queryClient.clear();
+    }
+  });
+
+  it('costs nothing once the row is cached, which is what keeps it from being 남발', () => {
+    // `applyTick` answers `undefined` for TWO reasons — no row at all, and a row this event does
+    // not supersede — and only the first may become a request. Restarting on the second would
+    // buy one per duplicate or late tick, which is the 남발 PLAN 11.5 refuses.
+    const queryClient = getQueryClient();
+    queryClient.setQueryData<Market>(marketKey(ID), { ...detail, tradeCount: 99 });
+    const updatedAt = queryClient.getQueryState(marketKey(ID))?.dataUpdatedAt;
+    try {
+      for (let i = 0; i < 10; i += 1) onTick(queryClient, tick());
+
+      // Not invalidated, not rewritten: ten late ticks cost exactly nothing.
+      expect(queryClient.getQueryState(marketKey(ID))?.isInvalidated).toBe(false);
+      expect(queryClient.getQueryState(marketKey(ID))?.dataUpdatedAt).toBe(updatedAt);
+      expect(queryClient.getQueryData<Market>(marketKey(ID))?.tradeCount).toBe(99);
+    } finally {
       queryClient.clear();
     }
   });

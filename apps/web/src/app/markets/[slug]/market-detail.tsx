@@ -25,6 +25,7 @@ import { useMarket, useMarketTicks } from '@/hooks/use-markets';
 import { type Market } from '@/lib/api';
 import { formatKst } from '@/lib/datetime';
 import { MARKET_STATUS_LABEL, MARKET_STATUS_PALETTE } from '@/lib/market-admin';
+import { recentDelta } from '@/lib/ticks';
 import { TradePanel } from './trade-panel';
 
 /**
@@ -263,26 +264,4 @@ function StatusNotice({ market }: { market: Market }) {
       </Alert.Content>
     </Alert.Root>
   );
-}
-
-/**
- * The move the 확률 변화 badge reports, in percentage points, or `null` when there is nothing
- * to report.
- *
- * It is the last STEP of the live series, not a difference between two renders, and that is
- * the whole reason it can be computed at all: a previous-render value would have to be held in
- * state or a ref, which on this server-rendered page means a first client render that differs
- * from the HTML. The series is a pure value both sides read from the same seeded cache entry.
- *
- * The two readings it produces are exactly the ones the badge wants. A market that has been
- * quiet answers 0 — the server samples the window's right edge onto the grid and carries the
- * last price forward to it, so the final two points are equal and `deltaLabel` hides the badge
- * — while a live `market:tick`, which `appendTickToSeries` merges into that right edge, leaves
- * the last point holding the new probability and the one before it the old one.
- */
-function recentDelta(points: readonly { pYesBp: number }[] | undefined): number | null {
-  const last = points?.at(-1);
-  const previous = points?.at(-2);
-  if (last === undefined || previous === undefined) return null;
-  return (last.pYesBp - previous.pYesBp) / 100;
 }

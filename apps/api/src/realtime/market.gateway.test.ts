@@ -40,7 +40,7 @@ import { createTestApp, signUpTestUser, type TestApp } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { sleep, waitForMessages } from '../test/wait.js';
 import { MarketPublisher } from './market-publisher.js';
-import { ARM_RETRY_MS, MarketGateway } from './market.gateway.js';
+import { ARM_RETRY_MS, MarketGateway, SESSION_LOOKUP_ATTEMPTS } from './market.gateway.js';
 import { REALTIME_EXCEPTION_EVENT, RealtimeExceptionFilter } from './realtime-exception.filter.js';
 
 /** setup-env.ts fixes WEB_ORIGIN to this, so it is the one Origin the handshake accepts. */
@@ -403,6 +403,8 @@ describe.skipIf(!hasTestInfra)('MarketGateway (integration)', () => {
 // --- the subscription's own lifecycle (Q-M3-7), driven without a socket server ---
 
 type GatewayNamespace = Parameters<MarketGateway['afterInit']>[0];
+/** Same trick as above: the socket shape the gateway itself declares, never a copy of it. */
+type GatewaySocket = Parameters<MarketGateway['handleConnection']>[0];
 
 interface RoomEmit {
   room: string;
@@ -423,6 +425,9 @@ function fakeNamespace(rooms: readonly string[]) {
       emits.push({ room, event, payload, volatile: isVolatile });
     },
   });
+  // The handshake middleware is CAPTURED rather than dropped, so a test can drive the real one
+  // `afterInit` registers instead of a copy of it — the wiring is half of what these pin.
+  const middlewares: ((socket: GatewaySocket, next: (error?: Error) => void) => void)[] = [];
   const namespace = {
     adapter: { rooms: new Map(rooms.map((room) => [room, new Set<string>()])) },
     local: {
@@ -430,10 +435,12 @@ function fakeNamespace(rooms: readonly string[]) {
       to: (room: string) => broadcast(room, false),
       volatile: { to: (room: string) => broadcast(room, true) },
     },
-    use: () => undefined,
+    use: (middleware: (socket: GatewaySocket, next: (error?: Error) => void) => void) => {
+      middlewares.push(middleware);
+    },
     server: { of: () => ({ use: () => undefined }) },
   };
-  return { namespace: namespace as unknown as GatewayNamespace, emits, control };
+  return { namespace: namespace as unknown as GatewayNamespace, emits, control, middlewares };
 }
 
 /** Republishes until the gateway has forwarded one, so the test never guesses at the arm. */
@@ -574,6 +581,83 @@ describe.skipIf(!hasTestInfra)('MarketGateway subscription lifecycle', () => {
       gateway.onApplicationShutdown();
       await subscriber.quit();
       await publisher.quit();
+    }
+  });
+
+  it('retries a failed session lookup before it admits a signed-in socket as anonymous', async () => {
+    // THE HAZARD: the handshake reads the session ONCE and `handleConnection` joins `user:<id>`
+    // from that reading alone, so a socket admitted anonymous stays anonymous for its whole
+    // life — `onChannelMessage` drops every balance and position event for it, the client opens
+    // one handshake per IDENTITY and so never rebuilds, and the tab goes on looking connected
+    // while it is no longer told about its own money.
+    //
+    // Only a COOKIE-BEARING handshake can reach that catch: better-auth reads the session cookie
+    // first and returns null without touching the adapter when there is none, so this retry is
+    // never paid by a visitor who is not signed in.
+    const subscriber = createRedisClient(process.env.TEST_REDIS_URL!);
+    const { namespace, middlewares } = fakeNamespace([]);
+    let calls = 0;
+    const flaky = {
+      api: {
+        getSession: () => {
+          calls += 1;
+          if (calls < SESSION_LOOKUP_ATTEMPTS) return Promise.reject(new Error('store is down'));
+          return Promise.resolve({ user: { id: 'u1' } });
+        },
+      },
+    } as unknown as Auth;
+    const gateway = new MarketGateway(flaky, subscriber);
+    try {
+      gateway.afterInit(namespace);
+      const socket = { handshake: { headers: {} }, data: {} } as unknown as GatewaySocket;
+      await new Promise<void>((resolve) => {
+        // The middleware the gateway itself registered, so the registration is under test too.
+        middlewares[0]!(socket, () => {
+          resolve();
+        });
+      });
+
+      expect(calls).toBe(SESSION_LOOKUP_ATTEMPTS);
+      expect(socket.data.userId).toBe('u1');
+    } finally {
+      gateway.onApplicationShutdown();
+      await subscriber.quit();
+    }
+  });
+
+  it('still admits the socket when every attempt fails, rather than killing its public feed', async () => {
+    // The degradation stays, and it is not timidity. `next(error)` on a NAMESPACE middleware is
+    // a CONNECT_ERROR, and socket.io-client answers one with `destroy()` — "clean subscriptions
+    // to avoid reconnections" — so refusing would cost the tab its public ticks too,
+    // permanently and with no retry of its own. A silent partial loss is not worth trading for
+    // a silent total one; PLAN 8 admits anonymous sockets and this keeps that true.
+    const subscriber = createRedisClient(process.env.TEST_REDIS_URL!);
+    const { namespace, middlewares } = fakeNamespace([]);
+    let calls = 0;
+    const down = {
+      api: {
+        getSession: () => {
+          calls += 1;
+          return Promise.reject(new Error('store is down'));
+        },
+      },
+    } as unknown as Auth;
+    const gateway = new MarketGateway(down, subscriber);
+    try {
+      gateway.afterInit(namespace);
+      const socket = { handshake: { headers: {} }, data: {} } as unknown as GatewaySocket;
+      const refusal = await new Promise<Error | undefined>((resolve) => {
+        middlewares[0]!(socket, resolve);
+      });
+
+      expect(refusal).toBeUndefined();
+      expect(calls).toBe(SESSION_LOOKUP_ATTEMPTS);
+      expect(socket.data.userId).toBeUndefined();
+      // And the socket is usable: `marketRooms` is what every subscribe counts against.
+      expect(socket.data.marketRooms).toEqual(new Set());
+    } finally {
+      gateway.onApplicationShutdown();
+      await subscriber.quit();
     }
   });
 

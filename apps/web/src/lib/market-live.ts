@@ -250,6 +250,9 @@ export type PositionPatch =
  * — `applyTradeResult` runs only in the trading tab — and why the handler must CANCEL before it
  * invalidates (`restartQueries`, query-client.ts): an invalidation alone waits on the request
  * already running rather than issuing one that knows about the trade.
+ *
+ * A row whose `settled` flag MOVED answers `refetch` for the same reason, and it is the second
+ * thing this reducer refuses to invent. See the comment on that branch.
  */
 export function applyPositionEvent(
   held: Position[] | undefined,
@@ -262,6 +265,23 @@ export function applyPositionEvent(
   const current = held[index];
   if (current === undefined) return { kind: 'refetch' };
   if (!supersedes(event.version, current.version)) return { kind: 'none' };
+  // A change of the `settled` flag is a change of MEMBERSHIP, not of a field: the flag is what
+  // `GET /me/positions?status=` filters on, so the row this event describes has LEFT the list
+  // being patched and joined the other one. Writing it back in place is what
+  // `realizedPnlAcross` (use-portfolio.ts) documents as impossible — "a row MOVES between the
+  // two lists … so it is never in both and this cannot double count" — and the double count is
+  // exactly what it produced: a voided holding stayed in `['positions', 'open']` carrying its
+  // realised PnL while 정산 이력 fetched the same row, and 총 실현 손익 printed the sum of one
+  // row with itself. The write also refreshed `dataUpdatedAt`, so the poisoned list was inside
+  // `staleTime` and the next mount did not correct it.
+  //
+  // `refetch` for the same reason an absent row takes it: the event cannot BUILD the row in its
+  // new list. It carries no `resolvedResult` and no `marketStatus` (realtime.ts), so a client
+  // that moved the row itself would draw 정산 이력 with 결과 — for a market that resolved 예.
+  // Membership is the REST answer's, which is the rule `joinPositions` states from the other
+  // side ("the LIST comes from `incoming`") and `liveMarketStatus` (use-portfolio.ts) states
+  // from the third: a terminal transition is not an event's to apply.
+  if (event.settled !== current.settled) return { kind: 'refetch' };
   const positions = [...held];
   positions[index] = {
     ...current,

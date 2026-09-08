@@ -430,6 +430,34 @@ describe('applyPositionEvent', () => {
     // the one that traded.
     expect(applyPositionEvent(undefined, positionEvent())).toEqual({ kind: 'refetch' });
   });
+
+  it('asks rather than writing a settled row back into the list it just left', () => {
+    // THE HAZARD: `settled` is the flag `GET /me/positions?status=` filters on, so a void or a
+    // settlement MOVES the row to the other list. Writing it back in place broke the invariant
+    // `realizedPnlAcross` states in writing — "a row MOVES between the two lists … so it is
+    // never in both and this cannot double count" — and the double count was the visible half:
+    // the voided row stayed in `['positions', 'open']` carrying its realised PnL while 정산
+    // 이력 fetched the same row, and 총 실현 손익 printed 500P for one 250P row. The write also
+    // refreshed `dataUpdatedAt`, so the poisoned list sat inside `staleTime` and the next mount
+    // did not correct it.
+    expect(applyPositionEvent(held, positionEvent({ settled: true, version: 5 }))).toEqual({
+      kind: 'refetch',
+    });
+    // Not a policy about the word `settled`: it is the CHANGE that moves the row. A settled row
+    // taking a settled event is an ordinary patch of the list it is already in.
+    const settledHeld = held.map((row) => ({ ...row, settled: true }));
+    expect(applyPositionEvent(settledHeld, positionEvent({ settled: true, version: 5 })).kind).toBe(
+      'replace',
+    );
+  });
+
+  it('orders before it asks, so a late settlement event costs no request', () => {
+    // The membership test sits AFTER the version check: a duplicate delivery of the same void
+    // would otherwise buy a private refetch per copy, in every signed-in tab.
+    expect(applyPositionEvent(held, positionEvent({ settled: true, version: 3 }))).toEqual({
+      kind: 'none',
+    });
+  });
 });
 
 describe('wroteAnOrder', () => {
