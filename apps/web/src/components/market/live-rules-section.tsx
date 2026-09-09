@@ -3,6 +3,7 @@
 import { RulesSection } from '@/components/market/rules-section';
 import { useMarket } from '@/hooks/use-markets';
 import { type Market } from '@/lib/api';
+import { disputeDeadlineShown } from '@/lib/dispute';
 
 /**
  * 정산 기준, drawn from the live `['market', id]` row rather than the snapshot the server
@@ -20,8 +21,15 @@ import { type Market } from '@/lib/api';
  * rules into the HTML exactly as `MarketDetail`'s own header writes the question and the
  * probability — and if the query ever holds nothing, `fallback` is the row the server fetched,
  * so no branch here can leave 정산 기준 out of view-source.
+ *
+ * `settlementAt` is `disputeDeadlineShown(market)`, never the column itself: `dispute_until`
+ * survives the settle (the worker writes status·settled_at·status_event_id and nothing else), so
+ * passing the row straight through drew 정산 예정 · <이미 지난 시각> on every settled market for
+ * good — a schedule PLAN 17 Q8 declined to promise, under a notice saying the payout already
+ * landed. The prop's own doc says this section is handed the instant "once a market is
+ * resolving, where the instant is real"; this is the line that makes that true.
  */
 export function LiveRulesSection({ fallback }: { fallback: Market }) {
   const market = useMarket(fallback.id).data ?? fallback;
-  return <RulesSection market={market} settlementAt={market.disputeUntil} />;
+  return <RulesSection market={market} settlementAt={disputeDeadlineShown(market)} />;
 }

@@ -13,6 +13,7 @@ import {
   maxLossP,
   priceOf,
   serializeQuantity,
+  type DisputeStatus,
   type MarketStatus,
   type Outcome,
   type Role,
@@ -22,6 +23,7 @@ import type { Db } from '../client.js';
 import {
   balances,
   categories,
+  disputes,
   ledgerEntries,
   markets,
   positions,
@@ -140,6 +142,17 @@ export interface CreateMarketInput {
   volumeP?: bigint;
   tradeCount?: number;
   closeAt?: Date;
+  /**
+   * Resolution columns (M5), stored as given and null by default: a test that needs a market
+   * mid-settlement sets `status: 'resolving'` with a result and a `disputeUntil` in the past or
+   * the future. The factory writes no market event, so `statusEventId` stays null unless given —
+   * the rank fallback of `statusSupersedes` is what such a row orders by.
+   */
+  resolvedResult?: Outcome | null;
+  resolvedAt?: Date | null;
+  disputeUntil?: Date | null;
+  settledAt?: Date | null;
+  statusEventId?: number | null;
 }
 
 /**
@@ -188,7 +201,46 @@ export async function createMarket(db: Db, input: CreateMarketInput = {}) {
       tradeCount: input.tradeCount ?? 0,
       openAt: status === 'draft' ? null : now,
       closeAt: input.closeAt ?? new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),
+      resolvedResult: input.resolvedResult ?? null,
+      resolvedAt: input.resolvedAt ?? null,
+      disputeUntil: input.disputeUntil ?? null,
+      settledAt: input.settledAt ?? null,
+      statusEventId: input.statusEventId ?? null,
       createdBy,
+    })
+    .returning();
+  return row!;
+}
+
+export interface CreateDisputeInput {
+  marketId: string;
+  userId: string;
+  reason?: string;
+  evidenceUrl?: string | null;
+  /** Default 'open'. */
+  status?: DisputeStatus;
+  adminNote?: string | null;
+  reviewedBy?: string | null;
+  reviewedAt?: Date | null;
+}
+
+/**
+ * Inserts a `disputes` row and nothing else (no admin action, no market change): the state a
+ * review or a list test starts from. The UNIQUE (market_id, user_id) applies, so a second row
+ * for one pair throws exactly as the API's filing path would refuse it.
+ */
+export async function createDispute(db: Db, input: CreateDisputeInput) {
+  const [row] = await db
+    .insert(disputes)
+    .values({
+      marketId: input.marketId,
+      userId: input.userId,
+      reason: input.reason ?? '출처가 다릅니다.',
+      evidenceUrl: input.evidenceUrl ?? null,
+      status: input.status ?? 'open',
+      adminNote: input.adminNote ?? null,
+      reviewedBy: input.reviewedBy ?? null,
+      reviewedAt: input.reviewedAt ?? null,
     })
     .returning();
   return row!;

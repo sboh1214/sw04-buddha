@@ -1,5 +1,6 @@
 import { QueryClient, QueryObserver } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
+import { adminDisputesKey } from '@/lib/admin-disputes';
 import { type AdminMarket } from '@/lib/api';
 import {
   ADMIN_MARKETS_KEY,
@@ -43,6 +44,8 @@ const draft: AdminMarket = {
   createdBy: 'admin',
   netCollectedP: '0',
   openInterest: { yes: 0, no: 0 },
+  disputeCounts: { open: 0, accepted: 0, rejected: 0 },
+  statusEventId: '1',
   events: [],
 };
 
@@ -113,6 +116,30 @@ describe('applyMarket', () => {
       expect(queryClient.getQueryData(marketFillsKey(ID))).toEqual([]);
       expect(queryClient.getQueryState(marketFillsKey(ID))?.isInvalidated).toBe(true);
       expect(queryClient.getQueryState([...ADMIN_MARKETS_KEY, 'draft'])?.isInvalidated).toBe(true);
+    } finally {
+      unsubscribe();
+      queryClient.clear();
+    }
+  });
+
+  it('re-asks the 이의 목록, whose rows carry a copy of the market', async () => {
+    // The mirror of `applyReviewedDispute`, which already invalidates the market detail because
+    // its 이의 counts moved. An `AdminDispute` embeds `marketStatus`, `resolvedResult` and
+    // `statusEventId` (A-M5-20), and the list joins no market room — so after a 결과 변경 or a
+    // 무효 the cached group heading kept the result the admin had just replaced, for whatever
+    // its 30초 staleTime had left. The admin's own path runs through it: the 수용 dialog sends
+    // them to the market detail to change a result, and the detail links back to this list.
+    //
+    // Marked, not refetched: `refetchType` stays `'active'` and no 이의 목록 is mounted on
+    // `/admin/markets/[id]`, so this costs no request (PLAN 11.5).
+    const { queryClient, unsubscribe } = await loadedDetail();
+    try {
+      const filtered = adminDisputesKey({ marketId: ID });
+      queryClient.setQueryData(filtered, { pages: [], pageParams: [] });
+
+      await applyMarket(queryClient, ID, opened);
+
+      expect(queryClient.getQueryState(filtered)?.isInvalidated).toBe(true);
     } finally {
       unsubscribe();
       queryClient.clear();

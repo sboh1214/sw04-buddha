@@ -1,7 +1,6 @@
 import {
   BP_MAX,
   MARKET_STATUSES,
-  type MarketStatus,
   type MarketStatusEvent,
   type MarketTickEvent,
   type Outcome,
@@ -11,6 +10,7 @@ import {
   SPARKLINE_MAX_POINTS,
   type UserBalanceEvent,
   type UserPositionEvent,
+  supersedes,
 } from '@buddha/shared';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
@@ -34,7 +34,6 @@ import {
   joinMarket,
   joinMarketPages,
   joinPositions,
-  statusRank,
   wroteAnOrder,
 } from './market-live';
 
@@ -57,6 +56,8 @@ const summary: MarketSummary = {
   closeAt: '2026-10-01T00:00:00.000Z',
   openAt: '2026-09-01T00:00:00.000Z',
   resolvedResult: null,
+  // The `opened` event (`created` is 1): the key every transition below is compared against.
+  statusEventId: '2',
   createdAt: '2026-08-30T00:00:00.000Z',
 };
 
@@ -93,6 +94,8 @@ const statusEvent = (patch: Partial<MarketStatusEvent> = {}): MarketStatusEvent 
   status: 'closed',
   resolvedResult: null,
   disputeUntil: null,
+  // One transition after the `opened` the fixtures hold, so the default event is newer.
+  statusEventId: '3',
   ts: '2026-09-07T00:00:00.000Z',
   ...patch,
 });
@@ -193,64 +196,86 @@ describe('applyTick', () => {
   });
 });
 
-describe('statusRank', () => {
-  /**
-   * Every transition M3 can publish. `market:status` carries no ordering key, so this table is
-   * the whole ordering argument (A-M3-19): M5's `result_changed` repeats `resolving` with a new
-   * result, and the day it is added here this assertion goes red — which is the point. Fixing
-   * it means putting `market_events.id` on the event and on the market DTOs, not widening this.
-   */
-  const TRANSITIONS: [MarketStatus, MarketStatus][] = [
-    ['draft', 'open'],
-    ['open', 'closed'],
-    ['closed', 'resolving'],
-    ['resolving', 'settled'],
-    ['open', 'voided'],
-    ['closed', 'voided'],
-    ['resolving', 'voided'],
-  ];
-
-  it('rises on every M3 transition', () => {
-    for (const [from, to] of TRANSITIONS) {
-      expect(statusRank(to)).toBeGreaterThan(statusRank(from));
-    }
-  });
-
-  it('gives each status its own rank, which is what makes the order total', () => {
-    const ranks = MARKET_STATUSES.map(statusRank);
-    expect(new Set(ranks).size).toBe(MARKET_STATUSES.length);
-  });
-});
-
 describe('applyStatus', () => {
+  /** The market after the admin proposed 예: `resolve_proposed` is event 4 of this market. */
   const resolving: Market = {
     ...detail,
     status: 'resolving',
     resolvedResult: 'YES',
     disputeUntil: '2026-10-02T00:00:00.000Z',
+    statusEventId: '4',
   };
 
   it('replaces the result and the deadline, so a void clears both', () => {
-    const next = applyStatus(resolving, statusEvent({ status: 'voided' }));
+    const next = applyStatus(resolving, statusEvent({ status: 'voided', statusEventId: '5' }));
     expect(next?.status).toBe('voided');
     expect(next?.resolvedResult).toBeNull();
     expect(next?.disputeUntil).toBeNull();
+    expect(next?.statusEventId).toBe('5');
   });
 
-  it('writes nothing when the rank does not move forward', () => {
-    const settled: Market = { ...detail, status: 'settled', resolvedResult: 'NO' };
-    expect(applyStatus(settled, statusEvent({ status: 'resolving' }))).toBeUndefined();
-    expect(applyStatus(settled, statusEvent({ status: 'settled' }))).toBeUndefined();
+  it('takes a result change — the same status under a newer key — with its result and deadline', () => {
+    // THE DAY the rank order stopped holding (A-M3-19): `result_changed` repeats `resolving`,
+    // and rank alone could only drop it — leaving 결과 예 on screen after the admin said 아니오,
+    // with an 이의 마감 that had already been restarted server-side. The event id says it is a
+    // LATER transition, so the whole status group is replaced.
+    const changed = statusEvent({
+      status: 'resolving',
+      resolvedResult: 'NO',
+      disputeUntil: '2026-10-03T00:00:00.000Z',
+      statusEventId: '5',
+    });
+    expect(applyStatus(resolving, changed)).toEqual({
+      ...resolving,
+      resolvedResult: 'NO',
+      disputeUntil: '2026-10-03T00:00:00.000Z',
+      statusEventId: '5',
+    });
+  });
+
+  it('drops an equal or lower key even when the status itself ranks higher', () => {
+    // Equal is a duplicate and lower is late, whatever the status says: a `settled` under key 4
+    // cannot be newer than the `resolving` key 4 wrote, and a status is not a counter. The
+    // out-of-band cases — another market, an empty cache — write nothing either.
+    expect(
+      applyStatus(resolving, statusEvent({ status: 'settled', statusEventId: '4' })),
+    ).toBeUndefined();
+    expect(
+      applyStatus(resolving, statusEvent({ status: 'settled', statusEventId: '3' })),
+    ).toBeUndefined();
     expect(applyStatus(detail, statusEvent({ marketId: OTHER_ID }))).toBeUndefined();
     expect(applyStatus(undefined, statusEvent())).toBeUndefined();
   });
 
+  it('falls back to the status rank when either side has no key, in both directions', () => {
+    // A row a test factory wrote carries no `statusEventId`, and neither does an event
+    // published for one. Rank is the one order such a row can still join, so a keyed event
+    // over an unkeyed row and an unkeyed event over a keyed row both go by status alone.
+    const unkeyed: Market = { ...detail, statusEventId: null };
+    expect(applyStatus(unkeyed, statusEvent({ status: 'closed' }))?.status).toBe('closed');
+    expect(
+      applyStatus(unkeyed, statusEvent({ status: 'open', statusEventId: '9' })),
+    ).toBeUndefined();
+    const closedByNull = applyStatus(
+      detail,
+      statusEvent({ status: 'closed', statusEventId: null }),
+    );
+    expect(closedByNull?.status).toBe('closed');
+    // The key follows the event even when it is null: the row now reads as an unkeyed one.
+    expect(closedByNull?.statusEventId).toBeNull();
+    expect(
+      applyStatus(detail, statusEvent({ status: 'open', statusEventId: null })),
+    ).toBeUndefined();
+  });
+
   it('drops the repeat an admin edit publishes, so the edit arrives by refetch alone', () => {
-    // `update` republishes the unchanged status after an edit that moves an open market
-    // (A-M4-36). The event carries no `closeAt`, so applying it could only restate the row —
-    // and a later `closed` that overtakes it still wins on rank, which is why a repeat is safe.
-    expect(applyStatus(detail, statusEvent({ status: 'open' }))).toBeUndefined();
-    expect(applyStatus(card, statusEvent({ status: 'open' }))).toBeUndefined();
+    // `update` republishes the unchanged status under the UNCHANGED key after an edit that moves
+    // an open market (A-M4-36). The event carries no `closeAt`, so applying it could only restate
+    // the row — and a later `closed` under a newer key still wins, which is why a repeat is safe.
+    expect(
+      applyStatus(detail, statusEvent({ status: 'open', statusEventId: '2' })),
+    ).toBeUndefined();
+    expect(applyStatus(card, statusEvent({ status: 'open', statusEventId: '2' }))).toBeUndefined();
     expect(applyStatus(detail, statusEvent({ status: 'closed' }))?.status).toBe('closed');
   });
 
@@ -259,11 +284,13 @@ describe('applyStatus', () => {
       status: 'resolving',
       resolvedResult: 'YES',
       disputeUntil: '2026-10-02T00:00:00.000Z',
+      statusEventId: '4',
     });
     expect(applyStatus(card, proposed)).toEqual({
       ...card,
       status: 'resolving',
       resolvedResult: 'YES',
+      statusEventId: '4',
     });
   });
 });
@@ -310,10 +337,48 @@ describe('joinMarket', () => {
     expect(joined.traderCount).toBe(7);
   });
 
-  it('keeps the higher status rank in both directions', () => {
-    const closed: Market = { ...detail, status: 'closed' };
+  it('keeps the newer transition in both directions', () => {
+    const closed: Market = { ...detail, status: 'closed', statusEventId: '3' };
     expect(joinMarket(closed, detail).status).toBe('closed');
     expect(joinMarket(detail, closed).status).toBe('closed');
+  });
+
+  it('keeps the higher key with its result and deadline, whatever the status says', () => {
+    // THE RACE the key exists for: the admin changes 예 to 아니오 (`result_changed`, key 5) and a
+    // `GET /markets/:id` that left BEFORE it lands after the socket applied it. Both snapshots
+    // say `resolving`, so rank sees a tie and the late answer would restore 예 with the old
+    // deadline; the key says which `resolving` is later. The group moves as one: a row that kept
+    // the newer key with the older result would be a transition that never happened.
+    const proposed: Market = {
+      ...detail,
+      status: 'resolving',
+      resolvedResult: 'YES',
+      disputeUntil: '2026-10-02T00:00:00.000Z',
+      statusEventId: '4',
+    };
+    const changed: Market = {
+      ...proposed,
+      resolvedResult: 'NO',
+      disputeUntil: '2026-10-03T00:00:00.000Z',
+      statusEventId: '5',
+    };
+    for (const joined of [joinMarket(changed, proposed), joinMarket(proposed, changed)]) {
+      expect(joined.statusEventId).toBe('5');
+      expect(joined.resolvedResult).toBe('NO');
+      expect(joined.disputeUntil).toBe('2026-10-03T00:00:00.000Z');
+    }
+    // And the key, not the status, decides. Synthetic — `settled` is terminal, so no market ever
+    // produces this pair — but it pins that the status is never consulted while both sides carry
+    // a key: a lower key is an earlier commit, and the row follows the commit.
+    const staleSettled: Market = { ...proposed, status: 'settled', statusEventId: '4' };
+    expect(joinMarket(changed, staleSettled).status).toBe('resolving');
+    expect(joinMarket(staleSettled, changed).status).toBe('resolving');
+  });
+
+  it('falls back to rank for a snapshot with no key, so a factory row still joins', () => {
+    const unkeyedClosed: Market = { ...detail, status: 'closed', statusEventId: null };
+    expect(joinMarket(unkeyedClosed, detail).status).toBe('closed');
+    expect(joinMarket(detail, unkeyedClosed).status).toBe('closed');
   });
 
   it('is idempotent, and answers the incoming row for an empty or foreign cache', () => {
@@ -347,6 +412,9 @@ describe('joinMarket', () => {
         volumeP: fc.integer({ min: 0, max: 1_000_000 }).map(String),
         tradeCount: fc.integer({ min: 0, max: 1000 }),
         resolvedResult: fc.constantFrom<Outcome | null>('YES', 'NO', null),
+        // Keyed on both sides: the status is then never consulted, so it is drawn freely above
+        // and the assertion is on the key alone. The unkeyed fallback has its own test.
+        statusEventId: fc.integer({ min: 1, max: 1000 }).map(String),
       })
       .map((fields) => ({ ...detail, ...fields }));
 
@@ -354,12 +422,27 @@ describe('joinMarket', () => {
       fc.property(liveArb, liveArb, (held, incoming) => {
         const joined = joinMarket(held, incoming);
         expect(joined.tradeCount).toBe(Math.max(held.tradeCount, incoming.tradeCount));
-        expect(statusRank(joined.status)).toBe(
-          Math.max(statusRank(held.status), statusRank(incoming.status)),
+        // Compared as integers, the way `supersedes` compares: '10' is later than '9'.
+        expect(Number(joined.statusEventId)).toBe(
+          Math.max(Number(held.statusEventId), Number(incoming.statusEventId)),
         );
+        // The whole group rides with the key: the status is the one the winning key wrote.
+        const winner = supersedes(held.statusEventId ?? '0', incoming.statusEventId ?? '0')
+          ? held
+          : incoming;
+        expect(joined.status).toBe(winner.status);
+        expect(joined.resolvedResult).toBe(winner.resolvedResult);
         // Absorbing: replaying the older snapshot over the join changes nothing, which is what
         // makes a duplicated refetch (two tabs, a reconnect) free.
         expect(joinMarket(joined, incoming)).toEqual(joined);
+        // Order-independent up to a tie, where `incoming` wins because `supersedes` is strict —
+        // so with both keys distinct, the two interleavings end on the same row.
+        if (
+          held.statusEventId !== incoming.statusEventId &&
+          held.tradeCount !== incoming.tradeCount
+        ) {
+          expect(joinMarket(incoming, held)).toEqual(joined);
+        }
       }),
     );
   });

@@ -91,6 +91,40 @@ export type paths = {
         patch: operations["adminUpdateCoupon"];
         trace?: never;
     };
+    "/api/v1/admin/disputes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every dispute, newest first; `status` and `marketId` narrow the list */
+        get: operations["adminListDisputes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/disputes/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Accept or reject a dispute with a note (revisable; accepting does not change the market result — use POST /admin/markets/:id/resolve for that) */
+        patch: operations["adminReviewDispute"];
+        trace?: never;
+    };
     "/api/v1/admin/markets": {
         parameters: {
             query?: never;
@@ -155,6 +189,23 @@ export type paths = {
         put?: never;
         /** draft → open; refused without rules (RULES_REQUIRED) or with a past closeAt */
         post: operations["adminOpenMarket"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/markets/{id}/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** closed → resolving: propose the result and start the dispute window; on a resolving market change the proposed result (the window restarts, the pending finalize is replaced) */
+        post: operations["adminResolveMarket"];
         delete?: never;
         options?: never;
         head?: never;
@@ -314,6 +365,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/markets/{id}/disputes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Object to the proposed result while the market is resolving and its dispute window is open (one per user per market) */
+        post: operations["fileDispute"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/markets/{id}/fills": {
         parameters: {
             query?: never;
@@ -381,6 +449,23 @@ export type paths = {
         head?: never;
         /** Change nickname */
         patch: operations["updateMe"];
+        trace?: never;
+    };
+    "/api/v1/me/disputes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** My disputes, newest first; `marketId` narrows the list to one market */
+        get: operations["listMyDisputes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/me/ledger": {
@@ -527,6 +612,31 @@ export type components = {
             ledgerEntry: components["schemas"]["LedgerEntry"];
             user: components["schemas"]["AdminUser"];
         };
+        AdminDispute: {
+            adminNote: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            evidenceUrl: string | null;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            marketId: string;
+            marketSlug: string;
+            /** @enum {string} */
+            marketStatus: "draft" | "open" | "closed" | "resolving" | "settled" | "voided";
+            marketTitle: string;
+            nickname: string;
+            reason: string;
+            /** @enum {string|null} */
+            resolvedResult: "YES" | "NO" | null;
+            /** Format: date-time */
+            reviewedAt: string | null;
+            reviewedBy: string | null;
+            /** @enum {string} */
+            status: "open" | "accepted" | "rejected";
+            statusEventId: string | null;
+            userId: string;
+        };
         AdminMarket: {
             category: {
                 nameKo: string;
@@ -538,6 +648,11 @@ export type components = {
             createdAt: string;
             createdBy: string;
             description: string | null;
+            disputeCounts: {
+                accepted: number;
+                open: number;
+                rejected: number;
+            };
             /** Format: date-time */
             disputeUntil: string | null;
             events: components["schemas"]["MarketEvent"][];
@@ -569,6 +684,7 @@ export type components = {
             slug: string;
             /** @enum {string} */
             status: "draft" | "open" | "closed" | "resolving" | "settled" | "voided";
+            statusEventId: string | null;
             title: string;
             tradeCount: number;
             traderCount: number;
@@ -683,6 +799,11 @@ export type components = {
             maxRedemptions?: number | null;
             memo?: string | null;
         };
+        CreateDisputeBody: {
+            /** Format: uri */
+            evidenceUrl?: string | null;
+            reason: string;
+        };
         CreateMarketBody: {
             categoryId: number;
             /** Format: date-time */
@@ -701,6 +822,27 @@ export type components = {
             cursor?: string;
             /** @default 20 */
             limit: number;
+        };
+        Dispute: {
+            adminNote: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            evidenceUrl: string | null;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            marketId: string;
+            marketSlug: string;
+            /** @enum {string} */
+            marketStatus: "draft" | "open" | "closed" | "resolving" | "settled" | "voided";
+            marketTitle: string;
+            reason: string;
+            /** @enum {string|null} */
+            resolvedResult: "YES" | "NO" | null;
+            /** Format: date-time */
+            reviewedAt: string | null;
+            /** @enum {string} */
+            status: "open" | "accepted" | "rejected";
         };
         /** @enum {string} */
         ErrorCode: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "VALIDATION_ERROR" | "MARKET_NOT_OPEN" | "MARKET_CLOSED" | "INSUFFICIENT_BALANCE" | "INSUFFICIENT_POSITION" | "PRICE_MOVED" | "DUPLICATE_REQUEST" | "RATE_LIMITED" | "DISPUTE_WINDOW_CLOSED" | "RULES_REQUIRED" | "INTERNAL";
@@ -773,6 +915,7 @@ export type components = {
             slug: string;
             /** @enum {string} */
             status: "draft" | "open" | "closed" | "resolving" | "settled" | "voided";
+            statusEventId: string | null;
             title: string;
             tradeCount: number;
             traderCount: number;
@@ -811,6 +954,7 @@ export type components = {
             sparkline: number[];
             /** @enum {string} */
             status: "draft" | "open" | "closed" | "resolving" | "settled" | "voided";
+            statusEventId: string | null;
             title: string;
             tradeCount: number;
             traderCount: number;
@@ -846,6 +990,7 @@ export type components = {
             slug: string;
             /** @enum {string} */
             status: "draft" | "open" | "closed" | "resolving" | "settled" | "voided";
+            statusEventId: string | null;
             title: string;
             tradeCount: number;
             traderCount: number;
@@ -993,6 +1138,18 @@ export type components = {
         RegisterResult: {
             /** @enum {string} */
             status: "sent";
+        };
+        ResolveMarketBody: {
+            /** Format: uri */
+            evidenceUrl?: string | null;
+            note?: string | null;
+            /** @enum {string} */
+            result: "YES" | "NO";
+        };
+        ReviewDisputeBody: {
+            adminNote?: string | null;
+            /** @enum {string} */
+            status: "accepted" | "rejected";
         };
         SetPasswordBody: {
             newPassword: components["schemas"]["Password"];
@@ -1484,6 +1641,123 @@ export interface operations {
             };
         };
     };
+    adminListDisputes: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+                marketId?: string;
+                status?: "open" | "accepted" | "rejected";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminDispute"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminReviewDispute: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReviewDisputeBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminDispute"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     adminListMarkets: {
         parameters: {
             query?: {
@@ -1856,6 +2130,69 @@ export interface operations {
             };
             /** @description RULES_REQUIRED */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminResolveMarket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResolveMarketBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminMarket"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2291,6 +2628,78 @@ export interface operations {
             };
         };
     };
+    fileDispute: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateDisputeBody"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["Dispute"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description DISPUTE_WINDOW_CLOSED | DUPLICATE_REQUEST */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     listMarketFills: {
         parameters: {
             query?: never;
@@ -2510,6 +2919,50 @@ export interface operations {
             };
             /** @description NOT_FOUND */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listMyDisputes: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+                marketId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["Dispute"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };

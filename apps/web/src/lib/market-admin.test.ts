@@ -1,5 +1,6 @@
 import {
   AUDIT_FAILURE_KINDS,
+  DISPUTE_STATUSES,
   MARKET_EVENT_TYPES,
   MARKET_STATUSES,
   MINUS_SIGN,
@@ -11,11 +12,15 @@ import { formatKst } from './datetime';
 import {
   AUDIT_FAILURE_KIND_LABEL,
   CLOSING_SOON_MS,
+  DISPUTE_STATUS_LABEL,
+  DISPUTE_STATUS_PALETTE,
   MARKET_EVENT_LABEL,
   MARKET_STATUS_LABEL,
   MARKET_STATUS_PALETTE,
   auditFailureKindLabel,
+  canChangeResult,
   canEditLiquidity,
+  canResolve,
   canVoid,
   compactJson,
   deltaLabel,
@@ -63,6 +68,14 @@ describe('status and event labels', () => {
     });
   });
 
+  it('names every dispute status in Korean, never by colour alone', () => {
+    for (const status of DISPUTE_STATUSES) {
+      expect(DISPUTE_STATUS_LABEL[status], status).toMatch(/[가-힣]/);
+    }
+    // Orange while it waits for the admin, brand once accepted, gray once rejected.
+    expect(DISPUTE_STATUS_PALETTE).toEqual({ open: 'orange', accepted: 'brand', rejected: 'gray' });
+  });
+
   it('names every audit failure kind in Korean and shows an unknown kind verbatim', () => {
     for (const kind of AUDIT_FAILURE_KINDS) {
       expect(AUDIT_FAILURE_KIND_LABEL[kind], kind).toMatch(/[가-힣]/);
@@ -101,6 +114,25 @@ describe('status predicates', () => {
     expect(MARKET_STATUSES.filter(isEditable)).toEqual(['draft', 'open']);
     expect(MARKET_STATUSES.filter(canEditLiquidity)).toEqual(['draft']);
     expect(MARKET_STATUSES.filter(canVoid)).toEqual(['open', 'closed', 'resolving']);
+  });
+
+  it('proposes a result on a closed market only', () => {
+    expect(MARKET_STATUSES.filter(canResolve)).toEqual(['closed']);
+  });
+
+  it('changes a result only while resolving with the dispute window still open', () => {
+    const now = Date.parse('2026-09-06T00:00:00.000Z');
+    const at = (offsetMs: number) => new Date(now + offsetMs).toISOString();
+    expect(canChangeResult({ status: 'resolving', disputeUntil: at(1) }, now)).toBe(true);
+    // At or past the instant the worker's finalize is due: the API refuses, so no button.
+    expect(canChangeResult({ status: 'resolving', disputeUntil: at(0) }, now)).toBe(false);
+    expect(canChangeResult({ status: 'resolving', disputeUntil: at(-60_000) }, now)).toBe(false);
+    // A resolving row with no window (a factory row) has no instant to compare against.
+    expect(canChangeResult({ status: 'resolving', disputeUntil: null }, now)).toBe(false);
+    expect(canChangeResult({ status: 'resolving', disputeUntil: 'not-a-date' }, now)).toBe(false);
+    for (const status of MARKET_STATUSES.filter((s) => s !== 'resolving')) {
+      expect(canChangeResult({ status, disputeUntil: at(60_000) }, now), status).toBe(false);
+    }
   });
 });
 
@@ -201,9 +233,110 @@ describe('marketEventRows', () => {
     ]);
   });
 
+  it('adds the discarded proposal to a void from resolving, and nothing to one from closed', () => {
+    // A-M3-23: voiding a resolving market clears its result; the event keeps what was thrown
+    // away. A void from `closed` never had one, and the API omits the pair entirely.
+    expect(
+      marketEventRows('voided', {
+        reason: '출처 오류',
+        refundedAccounts: 2,
+        refundedP: '300',
+        discardedResult: 'NO',
+        discardedDisputeUntil: closeAt,
+      }),
+    ).toEqual([
+      { label: copy.eventVoidReason, value: '출처 오류' },
+      { label: copy.eventRefundedAccounts, value: '2' },
+      { label: copy.eventRefundedTotal, value: '300P' },
+      { label: copy.eventDiscardedResult, value: copy.no },
+    ]);
+    expect(
+      marketEventRows('voided', {
+        reason: 'x',
+        refundedAccounts: 0,
+        refundedP: '0',
+        discardedResult: null,
+        discardedDisputeUntil: null,
+      })?.map((row) => row.label),
+    ).toEqual([copy.eventVoidReason, copy.eventRefundedAccounts, copy.eventRefundedTotal]);
+  });
+
+  it('reads a proposed result with its note, evidence and window; blanks are left out', () => {
+    // The API nulls a blank note / evidence (market-admin.service.ts `detail`): a row saying
+    // "메모 null" would be worse than no row.
+    expect(
+      marketEventRows('resolve_proposed', {
+        result: 'YES',
+        note: '공식 발표 확인',
+        evidenceUrl: 'https://example.com/a',
+        disputeUntil: closeAt,
+      }),
+    ).toEqual([
+      { label: copy.marketResolvedResult, value: copy.yes },
+      { label: copy.adminMarketResolveNote, value: '공식 발표 확인' },
+      { label: copy.adminMarketResolveEvidence, value: 'https://example.com/a' },
+      { label: copy.marketDisputeUntil, value: formatKst(closeAt) },
+    ]);
+    expect(
+      marketEventRows('resolve_proposed', {
+        result: 'NO',
+        note: null,
+        evidenceUrl: null,
+        disputeUntil: closeAt,
+      }),
+    ).toEqual([
+      { label: copy.marketResolvedResult, value: copy.no },
+      { label: copy.marketDisputeUntil, value: formatKst(closeAt) },
+    ]);
+  });
+
+  it('reads a changed result as before / after with the restarted window', () => {
+    expect(
+      marketEventRows('result_changed', {
+        before: 'YES',
+        after: 'NO',
+        note: '이의 수용',
+        evidenceUrl: null,
+        disputeUntil: closeAt,
+      }),
+    ).toEqual([
+      { label: copy.eventRulesBefore, value: copy.yes },
+      { label: copy.eventRulesAfter, value: copy.no },
+      { label: copy.adminMarketResolveNote, value: '이의 수용' },
+      { label: copy.marketDisputeUntil, value: formatKst(closeAt) },
+    ]);
+  });
+
+  it('reads the finalize summary the worker writes, with the counts optional', () => {
+    // apps/worker/src/jobs/market-finalize.ts also writes `positions`, which is not shown.
+    expect(
+      marketEventRows('finalized', {
+        result: 'YES',
+        settledAccounts: 3,
+        paidAccounts: 2,
+        paidP: '20000',
+        positions: 4,
+      }),
+    ).toEqual([
+      { label: copy.marketResolvedResult, value: copy.yes },
+      { label: copy.eventSettledAccounts, value: '3' },
+      { label: copy.eventPaidAccounts, value: '2' },
+      { label: copy.eventPaidTotal, value: '20,000P' },
+    ]);
+    expect(marketEventRows('finalized', { result: 'NO' })).toEqual([
+      { label: copy.marketResolvedResult, value: copy.no },
+    ]);
+  });
+
   it('leaves the create body and every unknown type to compactJson', () => {
     expect(marketEventRows('created', { title: 'x', closeAt })).toBeUndefined();
+    // A proposal without its window, a change without its before, a result off the enum.
     expect(marketEventRows('resolve_proposed', { result: 'YES' })).toBeUndefined();
+    expect(
+      marketEventRows('result_changed', { after: 'NO', disputeUntil: closeAt }),
+    ).toBeUndefined();
+    expect(marketEventRows('finalized', { result: 'MAYBE' })).toBeUndefined();
+    expect(marketEventRows('finalized', { result: 'YES', paidP: 'abc' })).toBeUndefined();
     expect(marketEventRows('finalized', null)).toBeUndefined();
   });
 
@@ -272,6 +405,47 @@ describe('transitionErrorMessage', () => {
         apiError(400, 'VALIDATION_ERROR', 'x', [{ path: ['reason'], message: 'blank' }]),
       ),
     ).toBe(copy.errMarketVoidReason);
+  });
+
+  it('names the refusals of resolve: an unchanged result, and a window that has passed', () => {
+    expect(
+      transitionErrorMessage(
+        apiError(400, 'VALIDATION_ERROR', 'Result is unchanged', [
+          { path: ['result'], message: 'result is unchanged' },
+        ]),
+      ),
+    ).toBe(copy.errMarketResultUnchanged);
+    // The market IS resolving and its window has passed: not a stale screen, and the message
+    // says only a void remains. Told apart by the issue text, exactly as the API writes it.
+    expect(
+      transitionErrorMessage(
+        apiError(400, 'VALIDATION_ERROR', 'Dispute window has closed; finalize is pending', [
+          { path: ['status'], message: 'dispute window has closed' },
+        ]),
+      ),
+    ).toBe(copy.errMarketDisputeWindowOver);
+    expect(
+      transitionErrorMessage(
+        apiError(400, 'VALIDATION_ERROR', 'Validation failed', [
+          { path: ['status'], message: 'dispute window has closed' },
+        ]),
+      ),
+    ).toBe(copy.errMarketDisputeWindowOver);
+    // The same route's `status` refusal for a market the worker has since settled is the
+    // ordinary "refresh the screen" case.
+    expect(
+      transitionErrorMessage(
+        apiError(400, 'VALIDATION_ERROR', 'Market is settled', [
+          { path: ['status'], message: 'market is settled' },
+        ]),
+      ),
+    ).toBe(copy.errMarketStatus);
+    const named = (path: string) =>
+      transitionErrorMessage(
+        apiError(400, 'VALIDATION_ERROR', 'x', [{ path: [path], message: 'bad' }]),
+      );
+    expect(named('note')).toBe(copy.errMarketResolveNote);
+    expect(named('evidenceUrl')).toBe(copy.errMarketResolveEvidence);
   });
 
   it('names a market that no longer exists rather than asking for a retry', () => {

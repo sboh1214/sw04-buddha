@@ -1,4 +1,6 @@
+import path from 'node:path';
 import { defineConfig, devices } from '@playwright/test';
+import { config as loadEnv } from 'dotenv';
 
 /**
  * E2E (PLAN 14): chromium at 375px (mobile) and 1280px (desktop), both projects running every
@@ -6,20 +8,40 @@ import { defineConfig, devices } from '@playwright/test';
  *
  * The suite needs a whole stack: Postgres, Redis and Mailpit (`pnpm infra:up`), a migrated and
  * SEEDED database (`pnpm db:migrate && pnpm db:seed` — the specs create their own markets, but
- * the first admin and the category rows have no route that could make them), the API on :4000
- * and the web server on :3000. The `webServer` blocks below start the two servers when nothing
- * is listening; the containers and the migrations remain a prerequisite.
+ * the first admin and the category rows have no route that could make them), the API on :4000,
+ * the web server on :3000 and, since M5, the worker. The `webServer` blocks below start the
+ * three processes when nothing is listening; the containers and the migrations remain a
+ * prerequisite.
  *
- * Playwright does NOT read the repo's root `.env` (Next loads it itself in next.config.ts), so
- * every value below falls back to the same default `.env.example` documents. CI, and a
- * developer who exports them, override through the environment.
+ * The repo's root `.env` is read here the way the worker (env.ts) and Next (next.config.ts)
+ * read it, so a probe below is aimed at the port the process it waits for actually took —
+ * `WORKER_HEALTH_PORT=4200` in `.env` used to leave the probe on 4100 and abort the whole run
+ * on the worker's startup timeout. `dotenv` never overrides what is already exported, so CI and
+ * a developer's shell still win; a value in neither place falls back to the default
+ * `.env.example` documents. Playwright hands `process.env` on to its workers, which is how the
+ * specs (helpers.ts) see the same values.
  */
+loadEnv({ path: path.join(__dirname, '../../.env'), quiet: true });
 
 /** The web origin under test. */
 const baseURL = process.env.E2E_BASE_URL ?? 'http://localhost:3000';
 
 /** The API origin — the same one the browser dials for the Socket.IO handshake (ADR-0017). */
 const apiURL = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000').replace(/\/$/, '');
+
+/**
+ * The worker's liveness probe (M5). The settlement spec waits on a `market.finalize` job that
+ * only the worker runs, so a stack without one fails as "실현 손익 never appeared" rather than as
+ * "no worker" — the probe turns that into a startup timeout with the worker's name on it.
+ *
+ * `WORKER_HEALTH_PORT=0` is the documented "no listener" (worker env.ts), and a port nothing
+ * will ever answer on cannot be probed: the worker entry is left out below, and the settlement
+ * specs skip themselves (helpers.ts `workerProbeDisabled`) instead of waiting on a job whose
+ * runner the suite cannot see.
+ */
+const workerHealthPort = process.env.WORKER_HEALTH_PORT ?? '4100';
+const workerProbeDisabled = workerHealthPort === '0';
+const workerURL = `http://${process.env.WORKER_HOST ?? 'localhost'}:${workerHealthPort}/health`;
 
 /** `nest start` compiles the whole API and `next dev` compiles a route on first request. */
 const SERVER_START_MS = 240_000;
@@ -60,9 +82,11 @@ export default defineConfig({
     },
   ],
   /*
-   * Both servers, because the browser talks to both: the web server for the pages and the API
-   * directly for `/ws` (a Next rewrite does not proxy a WebSocket upgrade), so a run with only
-   * one of them up fails as "the probability never moved" rather than as "the API is down".
+   * All three processes, because the specs depend on all three: the web server for the pages,
+   * the API directly for `/ws` (a Next rewrite does not proxy a WebSocket upgrade), and since
+   * M5 the worker for the close and finalize jobs — so a run with one of them down fails as
+   * "the probability never moved" or "실현 손익 never appeared" rather than as "X is down".
+   * (The worker entry is the one exception, and only when its probe is switched off — above.)
    *
    * `reuseExistingServer` is true even in CI, deliberately. The CI job builds the app and
    * starts its own `next start` before calling this suite (a dev server would measure Turbopack
@@ -94,5 +118,23 @@ export default defineConfig({
       stdout: 'pipe',
       stderr: 'pipe',
     },
+    // `pnpm dev` already runs one; this only starts a worker when nothing answers the probe.
+    // Two workers on one Redis would share the queues harmlessly, but the second one fails on
+    // the health port first (EADDRINUSE), which is the louder and therefore better outcome.
+    // With the health listener disabled (`WORKER_HEALTH_PORT=0`) there is no probe to wait on,
+    // so no entry at all: the api and web entries are unaffected either way.
+    ...(workerProbeDisabled
+      ? []
+      : [
+          {
+            name: 'worker',
+            command: 'pnpm --filter worker dev',
+            url: workerURL,
+            reuseExistingServer: true,
+            timeout: SERVER_START_MS,
+            stdout: 'pipe' as const,
+            stderr: 'pipe' as const,
+          },
+        ]),
   ],
 });

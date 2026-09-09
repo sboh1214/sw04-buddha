@@ -264,6 +264,9 @@ importers:
       better-auth:
         specifier: 'catalog:'
         version: 1.7.2(drizzle-kit@0.31.10)(drizzle-orm@0.45.2(@types/pg@8.23.1)(kysely@0.29.5)(pg@8.23.0))(next@16.3.4(@playwright/test@1.62.1)(@types/node@24.13.3)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(pg@8.23.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(vitest@4.1.11)
+      bullmq:
+        specifier: 'catalog:'
+        version: 6.3.4(ioredis@6.0.0)(pg@8.23.0)
       dotenv:
         specifier: 'catalog:'
         version: 17.4.2
@@ -318,7 +321,7 @@ importers:
         version: 10.9.1(jiti@2.7.0)(supports-color@10.2.2)
       socket.io-client:
         specifier: 'catalog:'
-        version: 4.8.3
+        version: 4.8.3(supports-color@10.2.2)
       typescript:
         specifier: 'catalog:'
         version: 6.0.3
@@ -412,7 +415,7 @@ importers:
         version: 7.87.0(react@19.2.8)
       socket.io-client:
         specifier: 'catalog:'
-        version: 4.8.3
+        version: 4.8.3(supports-color@10.2.2)
       zod:
         specifier: 'catalog:'
         version: 4.5.4
@@ -453,6 +456,9 @@ importers:
       '@buddha/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@buddha/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       bullmq:
         specifier: 'catalog:'
         version: 6.3.4(ioredis@6.0.0)(pg@8.23.0)
@@ -9857,7 +9863,7 @@ snapshots:
     dependencies:
       once: 1.4.0
 
-  engine.io-client@6.6.6:
+  engine.io-client@6.6.6(supports-color@10.2.2):
     dependencies:
       '@socket.io/component-emitter': 3.1.2
       debug: 4.4.3(supports-color@10.2.2)
@@ -11776,11 +11782,11 @@ snapshots:
       - supports-color
       - utf-8-validate
 
-  socket.io-client@4.8.3:
+  socket.io-client@4.8.3(supports-color@10.2.2):
     dependencies:
       '@socket.io/component-emitter': 3.1.2
       debug: 4.4.3(supports-color@10.2.2)
-      engine.io-client: 6.6.6
+      engine.io-client: 6.6.6(supports-color@10.2.2)
       socket.io-parser: 4.2.7
     transitivePeerDependencies:
       - bufferutil

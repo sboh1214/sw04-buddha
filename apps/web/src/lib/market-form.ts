@@ -3,11 +3,14 @@ import {
   LIQUIDITY_B_MAX,
   LIQUIDITY_B_MIN,
   MARKET_IMAGE_URL_MAX,
+  MARKET_RESOLVE_EVIDENCE_URL_MAX,
+  MARKET_RESOLVE_NOTE_MAX,
   MARKET_SOURCE_MAX,
   MARKET_TEXT_MAX,
   MARKET_TITLE_MAX,
   MARKET_VOID_REASON_MAX,
   type MarketStatus,
+  OUTCOMES,
   formatP,
   marketSlugSchema,
   maxLossP,
@@ -19,6 +22,7 @@ import {
   type AdminMarket,
   type Category,
   type CreateMarketBody,
+  type ResolveMarketBody,
   type UpdateMarketBody,
 } from './api';
 import { isoToKstLocal, kstLocalToIso } from './datetime';
@@ -173,6 +177,48 @@ export const voidMarketFormSchema = z.object({
     .max(MARKET_VOID_REASON_MAX, copy.errMarketVoidReason),
 });
 export type VoidMarketFormValues = z.infer<typeof voidMarketFormSchema>;
+
+/**
+ * The 정산 / 결과 변경 dialog (PLAN 12 정산 화면, design 5.5): the result is the one required
+ * field, chosen by radio, so an untouched form holds no `result` at all rather than a
+ * sentinel. The field's INPUT therefore admits `undefined` and its OUTPUT does not — the
+ * `.optional().pipe(...)` is what lets `zodResolver` type the form's values one way and the
+ * submitted values the other (`ResolveMarketFormValues` / `ResolveMarketFormOutput`), so the
+ * dialog says 결과를 선택해 주세요 for a blank and the submit handler still receives a result
+ * it need not re-check. Note and evidence are the strings the inputs hold; blanks become null
+ * on the wire (`toResolveMarketBody`), and the API bounds both the same way
+ * (`resolveMarketBodySchema`). Whether the chosen result differs from the current one is the
+ * dialog's business, not the schema's: the change variant disables its button for the result
+ * on screen, and the API refuses a stale one naming `result` (`transitionErrorMessage`).
+ */
+export const resolveMarketFormSchema = z.object({
+  result: z
+    .enum(OUTCOMES, copy.errMarketResultRequired)
+    .optional()
+    .pipe(z.enum(OUTCOMES, copy.errMarketResultRequired)),
+  note: z.string().trim().max(MARKET_RESOLVE_NOTE_MAX, copy.errMarketResolveNote),
+  evidenceUrl: z
+    .string()
+    .trim()
+    .refine(
+      (value) =>
+        value === '' || (value.length <= MARKET_RESOLVE_EVIDENCE_URL_MAX && isHttpUrl(value)),
+      copy.errMarketResolveEvidence,
+    ),
+});
+/** What the inputs hold: `result` is absent until a radio is chosen. */
+export type ResolveMarketFormValues = z.input<typeof resolveMarketFormSchema>;
+/** What the schema hands the submit handler: a result, always. */
+export type ResolveMarketFormOutput = z.output<typeof resolveMarketFormSchema>;
+
+/** Only for values `resolveMarketFormSchema` accepted: trimmed, blanks to null. */
+export function toResolveMarketBody(values: ResolveMarketFormOutput): ResolveMarketBody {
+  return {
+    result: values.result,
+    note: orNull(values.note),
+    evidenceUrl: orNull(values.evidenceUrl),
+  };
+}
 
 const orNull = (value: string): string | null => (value.trim() === '' ? null : value.trim());
 

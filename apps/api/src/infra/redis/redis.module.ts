@@ -3,9 +3,11 @@ import { type Redis } from 'ioredis';
 import {
   REDIS,
   REDIS_ADAPTER_SUBSCRIBER,
+  REDIS_QUEUE,
   REDIS_SUBSCRIBER,
   redisAdapterSubscriberProvider,
   redisProvider,
+  redisQueueProvider,
   redisSubscriberProvider,
 } from './redis.provider.js';
 
@@ -20,8 +22,13 @@ async function closeClient(client: Redis): Promise<void> {
 }
 
 @Module({
-  providers: [redisProvider, redisSubscriberProvider, redisAdapterSubscriberProvider],
-  exports: [REDIS, REDIS_SUBSCRIBER, REDIS_ADAPTER_SUBSCRIBER],
+  providers: [
+    redisProvider,
+    redisSubscriberProvider,
+    redisAdapterSubscriberProvider,
+    redisQueueProvider,
+  ],
+  exports: [REDIS, REDIS_SUBSCRIBER, REDIS_ADAPTER_SUBSCRIBER, REDIS_QUEUE],
 })
 export class RedisModule implements OnApplicationShutdown {
   private readonly logger = new Logger(RedisModule.name);
@@ -32,13 +39,18 @@ export class RedisModule implements OnApplicationShutdown {
     @Inject(REDIS) private readonly redis: Redis,
     @Inject(REDIS_SUBSCRIBER) private readonly subscriber: Redis,
     @Inject(REDIS_ADAPTER_SUBSCRIBER) private readonly adapterSubscriber: Redis,
+    @Inject(REDIS_QUEUE) private readonly queueClient: Redis,
   ) {}
 
   // onApplicationShutdown, not onModuleDestroy: it runs after dispose(), so the Socket.IO
-  // server has closed and each RedisAdapter has punsubscribed before any client quits.
+  // server has closed and each RedisAdapter has punsubscribed before any client quits. The
+  // queue client is quit here too: BullMQ never closes a connection it was handed (it marks
+  // it shared), and JobsModule — which imports this module — has closed its Queue by then.
   async onApplicationShutdown(): Promise<void> {
     await Promise.all(
-      [this.redis, this.subscriber, this.adapterSubscriber].map((client) => closeClient(client)),
+      [this.redis, this.subscriber, this.adapterSubscriber, this.queueClient].map((client) =>
+        closeClient(client),
+      ),
     );
     this.logger.log('Redis connections closed');
   }

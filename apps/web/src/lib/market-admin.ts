@@ -1,10 +1,12 @@
 import {
   AUDIT_FAILURE_KINDS,
   type AuditFailureKind,
+  type DisputeStatus,
   MINUS_SIGN,
   type MarketEventType,
   type MarketStatus,
   formatP,
+  outcomeSchema,
   pAmountSchema,
   parsePAmount,
   uuidParamSchema,
@@ -112,6 +114,45 @@ export function canEditLiquidity(status: MarketStatus): boolean {
 export function canVoid(status: MarketStatus): boolean {
   return status === 'open' || status === 'closed' || status === 'resolving';
 }
+
+/** 정산 (PLAN 12, design 5.5): a result is proposed on a closed market only. */
+export function canResolve(status: MarketStatus): boolean {
+  return status === 'closed';
+}
+
+/**
+ * 결과 변경 (design 5.5): only while resolving AND the dispute window is still open. Once
+ * `disputeUntil` has passed the worker's finalize is due or running and the API refuses the
+ * change naming `status` (`errMarketDisputeWindowOver`) — an admin who still wants another
+ * outcome must void — so the button goes away rather than offering a refusal. `now` is
+ * injected like `isClosingSoon`'s: the screen anchors it, a test pins it. A `resolving` row
+ * with no window (a factory row) offers nothing: there is no instant to compare against.
+ */
+export function canChangeResult(
+  market: { status: MarketStatus; disputeUntil: string | null },
+  now: number = Date.now(),
+): boolean {
+  if (market.status !== 'resolving' || market.disputeUntil === null) return false;
+  const until = new Date(market.disputeUntil).getTime();
+  return !Number.isNaN(until) && until > now;
+}
+
+export const DISPUTE_STATUS_LABEL: Record<DisputeStatus, string> = {
+  open: copy.disputeStatusOpen,
+  accepted: copy.disputeStatusAccepted,
+  rejected: copy.disputeStatusRejected,
+};
+
+/**
+ * Orange while it waits for the admin (the same "needs attention" the awaiting-settlement
+ * markets carry), brand once accepted, gray once rejected. Never colour alone: every badge
+ * shows `DISPUTE_STATUS_LABEL` beside it (PLAN 11.2).
+ */
+export const DISPUTE_STATUS_PALETTE: Record<DisputeStatus, 'brand' | 'gray' | 'orange'> = {
+  open: 'orange',
+  accepted: 'brand',
+  rejected: 'gray',
+};
 
 /** PLAN 11.2: never colour alone — "예 63%". */
 export function formatYesPrice(lastPrice: number): string {
@@ -230,22 +271,68 @@ export interface EventRow {
 /** An instant `formatKst` can render; the row would otherwise be a blank. */
 const kstInstant = z.string().refine((iso) => formatKst(iso) !== '');
 
-/** The payloads `market-admin.service` writes for each event, as the web reads them. */
+/**
+ * The payloads `market-admin.service` (and the worker's `market-finalize`) write for each
+ * event, as the web reads them. `.nullish()` where the writer may omit or null a field: the
+ * resolve detail nulls a blank note, and a void of a `closed` market — never proposed —
+ * carries no discarded proposal at all.
+ */
 const VOIDED_PAYLOAD = z.object({
   reason: z.string(),
   refundedAccounts: z.number().int().nonnegative(),
   refundedP: pAmountSchema,
+  discardedResult: outcomeSchema.nullish(),
 });
 const RULES_EDITED_PAYLOAD = z.object({ before: z.string(), after: z.string() });
 const OPENED_PAYLOAD = z.object({ openAt: kstInstant, closeAt: kstInstant });
 const CLOSED_PAYLOAD = z.object({ closedAt: kstInstant });
+const RESOLVE_DETAIL = {
+  note: z.string().nullish(),
+  evidenceUrl: z.string().nullish(),
+  disputeUntil: kstInstant,
+};
+const RESOLVE_PROPOSED_PAYLOAD = z.object({ result: outcomeSchema, ...RESOLVE_DETAIL });
+const RESULT_CHANGED_PAYLOAD = z.object({
+  before: outcomeSchema,
+  after: outcomeSchema,
+  ...RESOLVE_DETAIL,
+});
+// The counts and the total are what the worker writes today; optional so an older row (or a
+// leaner writer) still reads as "확정 · 결과 예" rather than falling back to JSON.
+const FINALIZED_PAYLOAD = z.object({
+  result: outcomeSchema,
+  settledAccounts: z.number().int().nonnegative().optional(),
+  paidAccounts: z.number().int().nonnegative().optional(),
+  paidP: pAmountSchema.optional(),
+});
+
+/** "예" / "아니오" for a result row: never the wire's YES/NO on an admin screen. */
+function outcomeLabel(outcome: 'YES' | 'NO'): string {
+  return outcome === 'YES' ? copy.yes : copy.no;
+}
+
+/** The note / evidence / window rows the two resolve events share; blanks are left out. */
+function resolveDetailRows(detail: {
+  note?: string | null;
+  evidenceUrl?: string | null;
+  disputeUntil: string;
+}): EventRow[] {
+  return [
+    ...(detail.note ? [{ label: copy.adminMarketResolveNote, value: detail.note }] : []),
+    ...(detail.evidenceUrl
+      ? [{ label: copy.adminMarketResolveEvidence, value: detail.evidenceUrl }]
+      : []),
+    { label: copy.marketDisputeUntil, value: formatKst(detail.disputeUntil) },
+  ];
+}
 
 /**
- * An event's payload as label/value rows in Korean, for the shapes the API writes (design
- * 3.4's 이벤트 로그): the void summary, the rules diff, the open and close instants. The
- * payload is `unknown` on the wire (jsonb), so each shape is checked before it is read;
- * `created` (the whole create body) and anything that does not match are `undefined`, and
- * the screen shows those as `compactJson` instead of a half-read row.
+ * An event's payload as label/value rows in Korean, for the shapes the API and the worker
+ * write (design 3.4's 이벤트 로그, 5.5): the void summary, the rules diff, the open and close
+ * instants, the proposed / changed result with its window, the finalize summary. The payload
+ * is `unknown` on the wire (jsonb), so each shape is checked before it is read; `created`
+ * (the whole create body) and anything that does not match are `undefined`, and the screen
+ * shows those as `compactJson` instead of a half-read row.
  */
 export function marketEventRows(type: MarketEventType, payload: unknown): EventRow[] | undefined {
   switch (type) {
@@ -256,6 +343,44 @@ export function marketEventRows(type: MarketEventType, payload: unknown): EventR
         { label: copy.eventVoidReason, value: parsed.data.reason },
         { label: copy.eventRefundedAccounts, value: String(parsed.data.refundedAccounts) },
         { label: copy.eventRefundedTotal, value: formatP(parsePAmount(parsed.data.refundedP)) },
+        // A void from `resolving` discards the proposal (A-M3-23); the row says which one.
+        ...(parsed.data.discardedResult
+          ? [{ label: copy.eventDiscardedResult, value: outcomeLabel(parsed.data.discardedResult) }]
+          : []),
+      ];
+    }
+    case 'resolve_proposed': {
+      const parsed = RESOLVE_PROPOSED_PAYLOAD.safeParse(payload);
+      if (!parsed.success) return undefined;
+      return [
+        { label: copy.marketResolvedResult, value: outcomeLabel(parsed.data.result) },
+        ...resolveDetailRows(parsed.data),
+      ];
+    }
+    case 'result_changed': {
+      const parsed = RESULT_CHANGED_PAYLOAD.safeParse(payload);
+      if (!parsed.success) return undefined;
+      return [
+        { label: copy.eventRulesBefore, value: outcomeLabel(parsed.data.before) },
+        { label: copy.eventRulesAfter, value: outcomeLabel(parsed.data.after) },
+        ...resolveDetailRows(parsed.data),
+      ];
+    }
+    case 'finalized': {
+      const parsed = FINALIZED_PAYLOAD.safeParse(payload);
+      if (!parsed.success) return undefined;
+      const { result, settledAccounts, paidAccounts, paidP } = parsed.data;
+      return [
+        { label: copy.marketResolvedResult, value: outcomeLabel(result) },
+        ...(settledAccounts === undefined
+          ? []
+          : [{ label: copy.eventSettledAccounts, value: String(settledAccounts) }]),
+        ...(paidAccounts === undefined
+          ? []
+          : [{ label: copy.eventPaidAccounts, value: String(paidAccounts) }]),
+        ...(paidP === undefined
+          ? []
+          : [{ label: copy.eventPaidTotal, value: formatP(parsePAmount(paidP)) }]),
       ];
     }
     case 'rules_edited': {
@@ -285,12 +410,21 @@ export function marketEventRows(type: MarketEventType, payload: unknown): EventR
 }
 
 /**
- * The toast for a refused transition (design 3.4/3.6): RULES_REQUIRED on open, MARKET_NOT_OPEN
- * on close, VALIDATION_ERROR naming `status` for any other state-machine violation — the two
- * "refresh the screen" messages, since the state on screen is what is stale. NOT_FOUND is the
- * market itself (every admin write answers 404 for an unknown id): not a "try again". A
- * NOT_FOUND naming `categoryId` never reaches here — the form callers hand it to
- * `marketFormError` first.
+ * The toast for a refused transition (design 3.4/3.6, 5.5): RULES_REQUIRED on open,
+ * MARKET_NOT_OPEN on close, VALIDATION_ERROR naming `status` for any other state-machine
+ * violation — the two "refresh the screen" messages, since the state on screen is what is
+ * stale. NOT_FOUND is the market itself (every admin write answers 404 for an unknown id):
+ * not a "try again". A NOT_FOUND naming `categoryId` never reaches here — the form callers
+ * hand it to `marketFormError` first.
+ *
+ * Two refusals of the resolve route are named apart from the rest. `result` is the change
+ * that changes nothing (the dialog disables the button for the result on screen, so this is
+ * the stale case: another admin changed it first). `status` with the dispute-window issue is
+ * not a stale screen at all — the market IS resolving, and its window has passed, so the
+ * worker's finalize is due and only a void remains; told by the issue text (as `isSlugTaken`
+ * reads the slug refusal) rather than by the status on screen, because a screen showing
+ * `resolving` for a market the worker has since settled gets `market is settled` from the
+ * same route, and that one is the ordinary "refresh" case.
  */
 export function transitionErrorMessage(error: unknown): string {
   if (isApiError(error, 'RULES_REQUIRED')) return copy.errMarketRulesRequired;
@@ -298,12 +432,23 @@ export function transitionErrorMessage(error: unknown): string {
   if (isApiError(error, 'NOT_FOUND')) return copy.adminMarketNotFound;
   if (isApiError(error, 'VALIDATION_ERROR')) {
     const field = validationField(error);
-    if (field === 'status') return copy.errMarketStatus;
+    if (field === 'status') {
+      return isDisputeWindowOver(error) ? copy.errMarketDisputeWindowOver : copy.errMarketStatus;
+    }
+    if (field === 'result') return copy.errMarketResultUnchanged;
     if (field === 'closeAt') return copy.errMarketCloseAt;
     if (field === 'reason') return copy.errMarketVoidReason;
+    if (field === 'note') return copy.errMarketResolveNote;
+    if (field === 'evidenceUrl') return copy.errMarketResolveEvidence;
     return copy.errMarketInvalid;
   }
   return copy.errUnknown;
+}
+
+/** The resolve route's `status` refusal for a window that has passed (market-admin.service.ts). */
+function isDisputeWindowOver(error: ApiError): boolean {
+  if (/dispute window/i.test(error.message)) return true;
+  return /dispute window/i.test(firstIssueMessage(error) ?? '');
 }
 
 export type MarketFormField =
@@ -381,12 +526,14 @@ function fieldMessage(field: MarketFormField, error: ApiError): string {
 
 function isSlugTaken(error: ApiError): boolean {
   if (/already taken/i.test(error.message)) return true;
-  if (!Array.isArray(error.details)) return false;
+  return firstIssueMessage(error) === 'already exists';
+}
+
+/** The first issue's `message` when `details` is a `ValidationIssue[]` (PLAN 7); else undefined. */
+function firstIssueMessage(error: ApiError): string | undefined {
+  if (!Array.isArray(error.details)) return undefined;
   const first: unknown = error.details[0];
-  return (
-    typeof first === 'object' &&
-    first !== null &&
-    'message' in first &&
-    (first as { message?: unknown }).message === 'already exists'
-  );
+  if (typeof first !== 'object' || first === null || !('message' in first)) return undefined;
+  const message: unknown = (first as { message?: unknown }).message;
+  return typeof message === 'string' ? message : undefined;
 }

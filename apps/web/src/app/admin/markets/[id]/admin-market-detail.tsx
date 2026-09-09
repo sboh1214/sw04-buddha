@@ -10,19 +10,22 @@ import {
   Field,
   HStack,
   Heading,
+  Input,
   Link as ChakraLink,
   Portal,
+  RadioGroup,
   Skeleton,
   Stack,
   Text,
   Textarea,
 } from '@chakra-ui/react';
-import { type MarketEventType, formatP, parsePAmount } from '@buddha/shared';
+import { type MarketEventType, OUTCOMES, formatP, parsePAmount } from '@buddha/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation } from '@tanstack/react-query';
+import type { Route } from 'next';
 import NextLink from 'next/link';
 import { type ReactNode, useMemo, useState } from 'react';
-import { useForm } from 'react-hook-form';
+import { Controller, useForm, useWatch } from 'react-hook-form';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { listView } from '@/lib/query-client';
@@ -32,6 +35,7 @@ import {
   useApplyMarket,
   useMarketFills,
 } from '@/hooks/use-admin-markets';
+import { disputeCountsLabel } from '@/lib/admin-disputes';
 import {
   type AdminMarket,
   type Category,
@@ -45,7 +49,9 @@ import {
   MARKET_EVENT_LABEL,
   MARKET_STATUS_LABEL,
   MARKET_STATUS_PALETTE,
+  canChangeResult,
   canEditLiquidity,
+  canResolve,
   canVoid,
   compactJson,
   formatBp,
@@ -63,9 +69,13 @@ import {
   AFTER_SAVE_RESET,
   FOLLOW_SERVER_RESET,
   type MarketFormValues,
+  type ResolveMarketFormOutput,
+  type ResolveMarketFormValues,
   type VoidMarketFormValues,
   marketFormSchema,
   marketToFormValues,
+  resolveMarketFormSchema,
+  toResolveMarketBody,
   toUpdateMarketBody,
   voidMarketFormSchema,
 } from '@/lib/market-form';
@@ -183,6 +193,22 @@ export function AdminMarketDetail({ id }: { id: string }) {
               <Item label={copy.marketSettledAt}>{formatKst(data.settledAt)}</Item>
             )}
             {data.voidedAt && <Item label={copy.marketVoidedAt}>{formatKst(data.voidedAt)}</Item>}
+            <Item label={copy.adminMarketDisputes}>
+              <HStack gap="3" flexWrap="wrap">
+                <Text as="span" data-testid="market-dispute-counts">
+                  {disputeCountsLabel(data.disputeCounts)}
+                </Text>
+                {/* `as Route`: the typed routes know `/admin/disputes`, not the query on it. */}
+                <ChakraLink asChild fontSize="sm" colorPalette="brand" color="colorPalette.fg">
+                  <NextLink
+                    href={`/admin/disputes?marketId=${data.id}` as Route}
+                    data-testid="market-disputes-link"
+                  >
+                    {copy.adminMarketDisputesLink}
+                  </NextLink>
+                </ChakraLink>
+              </HStack>
+            </Item>
             <Item label={copy.marketCreatedAt}>{formatKst(data.createdAt)}</Item>
             <Item label={copy.marketUpdatedAt}>{formatKst(data.updatedAt)}</Item>
             <Item label={copy.marketCreatedBy}>
@@ -234,15 +260,17 @@ function Item({ label, children }: { label: string; children: ReactNode }) {
 }
 
 /**
- * 열기 / 마감 / 무효 (PLAN 12, design 3.4). Each is a Dialog except 열기, whose only refusal
- * — blank rules — is reversible from the form below and is named in its toast. The void
- * reason is a form like every other (zodResolver), reset when the dialog closes either way,
- * so a cancelled dialog does not reopen with the old text and its error lit. Resolve and
- * dispute handling are M5.
+ * 열기 / 마감 / 정산 / 결과 변경 / 무효 (PLAN 12, design 3.4, 5.5). Each is a Dialog except
+ * 열기, whose only refusal — blank rules — is reversible from the form below and is named in
+ * its toast. The void reason is a form like every other (zodResolver), reset when the dialog
+ * closes either way, so a cancelled dialog does not reopen with the old text and its error
+ * lit. The resolve form lives in its own component, mounted only while its dialog is open:
+ * its defaults depend on which variant opened it (the change variant preselects the result
+ * on file), and a fresh mount is what makes those defaults right every time.
  */
 function TransitionButtons({ market }: { market: AdminMarket }) {
   const apply = useApplyMarket(market.id);
-  const [confirm, setConfirm] = useState<'close' | 'void' | null>(null);
+  const [confirm, setConfirm] = useState<'close' | 'void' | 'resolve' | 'change' | null>(null);
   const {
     register,
     handleSubmit,
@@ -329,6 +357,23 @@ function TransitionButtons({ market }: { market: AdminMarket }) {
           {copy.adminMarketClose}
         </Button>
       )}
+      {canResolve(market.status) && (
+        <Button size="sm" onClick={() => setConfirm('resolve')} data-testid="market-resolve">
+          {copy.adminMarketResolve}
+        </Button>
+      )}
+      {/* `Date.now()` in render, as `isClosingSoon` above: this branch renders on the client
+          only (the admin query never runs on the server), so there is no hydration to mismatch. */}
+      {canChangeResult(market) && (
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => setConfirm('change')}
+          data-testid="market-change-result"
+        >
+          {copy.adminMarketChangeResult}
+        </Button>
+      )}
       {canVoid(market.status) && (
         <Button
           size="sm"
@@ -339,6 +384,10 @@ function TransitionButtons({ market }: { market: AdminMarket }) {
         >
           {copy.adminMarketVoid}
         </Button>
+      )}
+
+      {(confirm === 'resolve' || confirm === 'change') && (
+        <ResolveDialog market={market} variant={confirm} onClose={closeDialog} />
       )}
 
       <ConfirmDialog
@@ -373,6 +422,148 @@ function TransitionButtons({ market }: { market: AdminMarket }) {
         </Stack>
       </ConfirmDialog>
     </HStack>
+  );
+}
+
+/**
+ * 정산 / 결과 변경 (PLAN 12 정산 화면, design 5.5): result by radio, note, evidence URL, and
+ * the confirmation PLAN 12 asks for — "이의 기간 후 자동 확정됩니다" — with the exact instant
+ * in the toast once the API has fixed it. The change variant preselects the result on file
+ * and keeps its button dead until a DIFFERENT one is chosen: the API would refuse the same
+ * result naming `result`, and a dead button says so before the round trip. A stale screen —
+ * another admin changed it first — still meets that refusal, and `transitionErrorMessage`
+ * names it. The answer is applied like every other transition (`useApplyMarket`), so the
+ * status, the result and the window on the card above are the server's the moment the toast
+ * shows, whatever the refetch does.
+ */
+function ResolveDialog({
+  market,
+  variant,
+  onClose,
+}: {
+  market: AdminMarket;
+  variant: 'resolve' | 'change';
+  onClose: () => void;
+}) {
+  const apply = useApplyMarket(market.id);
+  const changing = variant === 'change';
+  const {
+    control,
+    register,
+    handleSubmit,
+    formState: { errors },
+  } = useForm<ResolveMarketFormValues, unknown, ResolveMarketFormOutput>({
+    resolver: zodResolver(resolveMarketFormSchema),
+    defaultValues: {
+      ...(changing && market.resolvedResult !== null ? { result: market.resolvedResult } : {}),
+      note: '',
+      evidenceUrl: '',
+    },
+  });
+  // `useWatch`, not `watch()`: the latter is a function React Compiler cannot memoise safely
+  // (react-hooks/incompatible-library), and this is the one value the dialog re-renders on.
+  const selected = useWatch({ control, name: 'result' });
+  const unchanged = changing && selected === market.resolvedResult;
+
+  const resolve = useMutation({
+    mutationFn: async (values: ResolveMarketFormOutput) =>
+      unwrap(
+        await api.POST('/api/v1/admin/markets/{id}/resolve', {
+          params: { path: { id: market.id } },
+          body: toResolveMarketBody(values),
+        }),
+      ).data,
+    onSuccess: async (resolved) => {
+      toaster.create({
+        type: 'success',
+        title: changing ? copy.adminMarketResultChanged : copy.adminMarketResolved,
+        // The window as the server fixed it — the body text only promises "24시간".
+        ...(resolved.disputeUntil
+          ? { description: `${copy.adminMarketResolvedUntil} ${formatKst(resolved.disputeUntil)}` }
+          : {}),
+      });
+      onClose();
+      await apply(resolved);
+    },
+    onError: (error) => toaster.create({ type: 'error', title: transitionErrorMessage(error) }),
+  });
+
+  const submit = handleSubmit((values) => resolve.mutate(values));
+
+  return (
+    <ConfirmDialog
+      testId="market-resolve"
+      open
+      onClose={onClose}
+      title={changing ? copy.adminMarketChangeResultTitle : copy.adminMarketResolveTitle}
+      confirmLabel={changing ? copy.adminMarketChangeResult : copy.adminMarketResolve}
+      loading={resolve.isPending}
+      confirmDisabled={unchanged}
+      onConfirm={() => void submit()}
+    >
+      <Stack gap="3">
+        <Text>{changing ? copy.adminMarketChangeResultBody : copy.adminMarketResolveBody}</Text>
+        <Field.Root invalid={!!errors.result} required>
+          <Controller
+            name="result"
+            control={control}
+            render={({ field }) => (
+              // The group's accessible name is its own Label part: zag emits `role="radiogroup"`
+              // with `aria-labelledby` pointing at that id (the SegmentGroup precedent in the
+              // trade panel), so a `Field.Label` here would leave the group unnamed.
+              <RadioGroup.Root
+                name={field.name}
+                value={field.value ?? null}
+                onValueChange={(details) => {
+                  if (details.value === 'YES' || details.value === 'NO')
+                    field.onChange(details.value);
+                }}
+                colorPalette="brand"
+              >
+                <RadioGroup.Label fontWeight="medium" mb="1">
+                  {copy.adminMarketResolveResult}
+                </RadioGroup.Label>
+                <HStack gap="6">
+                  {/* The test id rides on the Item — the label element that carries the hidden
+                      input — so a click on it is the click that selects. */}
+                  {OUTCOMES.map((outcome) => (
+                    <RadioGroup.Item
+                      key={outcome}
+                      value={outcome}
+                      data-testid={`market-resolve-${outcome.toLowerCase()}`}
+                    >
+                      <RadioGroup.ItemHiddenInput onBlur={field.onBlur} />
+                      <RadioGroup.ItemIndicator />
+                      <RadioGroup.ItemText>
+                        {outcome === 'YES' ? copy.yes : copy.no}
+                      </RadioGroup.ItemText>
+                    </RadioGroup.Item>
+                  ))}
+                </HStack>
+              </RadioGroup.Root>
+            )}
+          />
+          <Field.ErrorText>{errors.result?.message}</Field.ErrorText>
+        </Field.Root>
+        <Field.Root invalid={!!errors.note}>
+          <Field.Label>{copy.adminMarketResolveNote}</Field.Label>
+          <Textarea rows={3} data-testid="market-resolve-note" {...register('note')} />
+          <Field.ErrorText>{errors.note?.message}</Field.ErrorText>
+        </Field.Root>
+        <Field.Root invalid={!!errors.evidenceUrl}>
+          <Field.Label>{copy.adminMarketResolveEvidence}</Field.Label>
+          <Input
+            type="url"
+            inputMode="url"
+            autoComplete="off"
+            placeholder={copy.adminMarketResolveEvidencePlaceholder}
+            data-testid="market-resolve-evidence"
+            {...register('evidenceUrl')}
+          />
+          <Field.ErrorText>{errors.evidenceUrl?.message}</Field.ErrorText>
+        </Field.Root>
+      </Stack>
+    </ConfirmDialog>
   );
 }
 
@@ -701,13 +892,15 @@ interface ConfirmDialogProps {
   confirmLabel: string;
   loading: boolean;
   onConfirm: () => void;
+  /** The confirm alone, dead before the request: the change variant's "same result" gate. */
+  confirmDisabled?: boolean;
   destructive?: boolean;
   children: ReactNode;
 }
 
 /**
  * The one confirmation shape the transitions and the open-market edit share. Mounted only
- * while open (three of these live on the page; a closed one must not answer a test id), and
+ * while open (four of these live on the page; a closed one must not answer a test id), and
  * pinned while the mutation runs: Cancel, Esc and the backdrop all wait, since dismissing it
  * mid-flight would leave the request running against a screen that no longer shows it.
  */
@@ -719,6 +912,7 @@ function ConfirmDialog({
   confirmLabel,
   loading,
   onConfirm,
+  confirmDisabled = false,
   destructive = false,
   children,
 }: ConfirmDialogProps) {
@@ -756,6 +950,7 @@ function ConfirmDialog({
                 size="sm"
                 colorPalette={destructive ? 'no' : undefined}
                 loading={loading}
+                disabled={confirmDisabled}
                 onClick={onConfirm}
                 data-testid={`${testId}-confirm`}
               >

@@ -117,3 +117,28 @@ export const SPARKLINE_WINDOW_HOURS = 24;
 export const SPARKLINE_BUCKET_HOURS = 1;
 /** Both endpoints included: 24 / 1 + 1 = 25. */
 export const SPARKLINE_MAX_POINTS = SPARKLINE_WINDOW_HOURS / SPARKLINE_BUCKET_HOURS + 1;
+
+// ---- settlement / disputes (PLAN 5.5, 7.2, 7.3; M5) ---------------------------------
+/**
+ * How long a proposed result stays open to disputes before the worker finalizes it:
+ * `dispute_until = resolved_at + window` (PLAN 5.5: 24 hours). The API reads the actual value
+ * from `TEST_DISPUTE_WINDOW_SECONDS` (PLAN M5 AC 2) so an e2e can shorten it; this is the
+ * default that variable falls back to, and the only place the figure 86,400 is written.
+ */
+export const DISPUTE_WINDOW_SECONDS_DEFAULT = 86_400;
+/** disputes.reason (text). */
+export const DISPUTE_REASON_MAX = 2_000;
+/** disputes.evidence_url (text). */
+export const DISPUTE_EVIDENCE_URL_MAX = 500;
+/** disputes.admin_note (text). */
+export const DISPUTE_ADMIN_NOTE_MAX = 1_000;
+/** `POST /admin/markets/:id/resolve` note — stored in the market event's payload, not a column. */
+export const MARKET_RESOLVE_NOTE_MAX = 1_000;
+/** `POST /admin/markets/:id/resolve` evidenceUrl, likewise. */
+export const MARKET_RESOLVE_EVIDENCE_URL_MAX = 500;
+/**
+ * Markets one scan job closes or finalizes per run (PLAN 9: `market.close` / `market.finalize`
+ * without a market id scan everything due). The scans repeat every minute, so a backlog wider
+ * than this is drained over several runs instead of holding one job for as long as it takes.
+ */
+export const MARKET_SCAN_BATCH_MAX = 500;

@@ -11,6 +11,8 @@ import {
   LIQUIDITY_B_MAX,
   LIQUIDITY_B_MIN,
   MARKET_IMAGE_URL_MAX,
+  MARKET_RESOLVE_EVIDENCE_URL_MAX,
+  MARKET_RESOLVE_NOTE_MAX,
   MARKET_SLUG_PATTERN,
   MARKET_SLUG_STEM_MAX,
   MARKET_SOURCE_MAX,
@@ -93,6 +95,15 @@ const marketSummaryFields = {
   closeAt: z.iso.datetime(),
   openAt: z.iso.datetime().nullable(),
   resolvedResult: outcomeSchema.nullable(),
+  /**
+   * `market_events.id` of the transition that produced the current status, as a decimal string
+   * — the ordering key of `market:status` (A-M3-19, Q-M3-8 (3)). Drawn while the writer holds
+   * the market row FOR UPDATE, so it is the market's commit order: a client compares a snapshot
+   * against an event with `statusSupersedes` (realtime.ts) instead of ranking statuses, which
+   * stopped being a total order once M5's `result_changed` repeated `resolving`. Null only for a
+   * row written outside the transition paths (a test factory); the rank order is the fallback.
+   */
+  statusEventId: z.string().nullable(),
   createdAt: z.iso.datetime(),
 };
 
@@ -572,6 +583,8 @@ export const adminMarketSchema = marketSchema
     netCollectedP: pAmountSchema,
     /** Σ positions.qty per outcome where settled = false. */
     openInterest: z.object({ yes: countSchema, no: countSchema }),
+    /** Disputes filed on this market, per status (PLAN 12: the detail links to the list). */
+    disputeCounts: z.object({ open: countSchema, accepted: countSchema, rejected: countSchema }),
     /** Newest first, at most 100. */
     events: z.array(marketEventSchema),
   })
@@ -630,11 +643,30 @@ export const updateMarketBodySchema = z
   .meta({ id: 'UpdateMarketBody' });
 export type UpdateMarketBody = z.infer<typeof updateMarketBodySchema>;
 
-/** `POST /admin/markets/:id/void`. (The resolve body arrives with M5.) */
+/** `POST /admin/markets/:id/void`. */
 export const voidMarketBodySchema = z
   .object({ reason: z.string().trim().min(1).max(MARKET_VOID_REASON_MAX) })
   .meta({ id: 'VoidMarketBody' });
 export type VoidMarketBody = z.infer<typeof voidMarketBodySchema>;
+
+/**
+ * `POST /admin/markets/:id/resolve` (PLAN 5.5, 7.3): propose a result on a closed market, or
+ * change the proposed one while the market is still resolving (the dispute window restarts).
+ * The note and the evidence are kept on the `market_events` payload and the admin action, not
+ * on the market row — they are the audit trail of one proposal, and a changed result carries its
+ * own.
+ */
+export const resolveMarketBodySchema = z
+  .object({
+    result: outcomeSchema,
+    note: z.string().trim().max(MARKET_RESOLVE_NOTE_MAX).nullish(),
+    evidenceUrl: z
+      .url({ protocol: /^https?$/ })
+      .max(MARKET_RESOLVE_EVIDENCE_URL_MAX)
+      .nullish(),
+  })
+  .meta({ id: 'ResolveMarketBody' });
+export type ResolveMarketBody = z.infer<typeof resolveMarketBodySchema>;
 
 /** `GET /admin/markets` (no `.meta`: query DTO). Any status, draft included; omitted = all. */
 export const adminMarketListQuerySchema = cursorQuerySchema.extend({

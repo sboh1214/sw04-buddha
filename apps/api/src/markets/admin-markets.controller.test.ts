@@ -188,6 +188,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       createdBy: admin.id,
       netCollectedP: '0',
       openInterest: { yes: 0, no: 0 },
+      disputeCounts: { open: 0, accepted: 0, rejected: 0 },
       description: null,
       imageUrl: null,
     });
@@ -198,6 +199,9 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       actorId: admin.id,
       payload: { slug: 'rate-cut-2026' },
     });
+    // Keyed from birth (M5): the `created` event is the row's first transition event.
+    expect(created.statusEventId).toBe(created.events[0]!.id);
+    expect((await marketRow(created.id)).statusEventId).toBe(Number(created.events[0]!.id));
 
     const [action] = await actionsFor(created.id);
     expect(action).toMatchObject({
@@ -604,7 +608,10 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
         type: 'market:status',
         marketId: draft.id,
         status: 'open',
+        // The `opened` event's id: what a client orders this event by (A-M3-19).
+        statusEventId: opened.events[0]!.id,
       });
+      expect(opened.statusEventId).toBe(opened.events[0]!.id);
 
       // Twice: the second open finds an open market, which is a status error, not a no-op.
       const twice = await open(draft.id);
@@ -669,12 +676,14 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
         type: 'market:status',
         marketId: row.id,
         status: 'closed',
+        statusEventId: closed.events[0]!.id,
       });
     } finally {
       await subscriber.quit();
     }
     expect(closed.status).toBe('closed');
     expect(closed.events.map((event) => event.type)).toEqual(['closed']);
+    expect(closed.statusEventId).toBe(closed.events[0]!.id);
     const actions = await actionsFor(row.id);
     expect(actions.map((action) => action.type)).toEqual(['market_close']);
     expect(actions[0]).toMatchObject({ adminId: admin.id, targetType: 'market' });
@@ -783,6 +792,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
         type: 'market:status',
         marketId: row.id,
         status: 'voided',
+        statusEventId: voided.events[0]!.id,
         ts: voided.voidedAt,
       });
       const events = received.map((message) => JSON.parse(message) as Record<string, unknown>);

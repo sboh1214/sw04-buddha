@@ -125,3 +125,21 @@ function subscriberProvider(token: symbol): Provider<Redis> {
 
 export const redisSubscriberProvider = subscriberProvider(REDIS_SUBSCRIBER);
 export const redisAdapterSubscriberProvider = subscriberProvider(REDIS_ADAPTER_SUBSCRIBER);
+
+/**
+ * The BullMQ producer's connection (M5, PLAN 9: the API registers the delayed `market.close`
+ * and `market.finalize` jobs). Its own client, not the shared one: BullMQ `defineCommand`s
+ * its Lua scripts on the client it is handed and runs them through EVALSHA on that client's
+ * command queue, and a producer's script must never queue behind — or be resent ahead of — a
+ * `PUBLISH` of the publisher's, whose ordering the realtime events rely on (market-publisher.ts).
+ * Built by the same factory, so it keeps every bound above: a `queue.add` after a COMMITted
+ * transition answers on `commandTimeout` rather than parking the HTTP response.
+ */
+export const REDIS_QUEUE = Symbol('REDIS_QUEUE');
+
+export const redisQueueProvider: Provider<Redis> = {
+  provide: REDIS_QUEUE,
+  inject: [ConfigService],
+  useFactory: (config: ConfigService<Env, true>): Redis =>
+    createRedisClient(config.get('REDIS_URL', { infer: true })),
+};
