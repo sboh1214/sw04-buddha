@@ -138,6 +138,7 @@ function toMarketStats(market: MarketRow, pYesBp: number): MarketStats {
     pYesBp,
     volumeP: serializePAmount(market.volumeP),
     tradeCount: market.tradeCount,
+    traderCount: market.traderCount,
   };
 }
 
@@ -510,6 +511,9 @@ export class TradeService {
           lastPrice: updatedMarket.lastPrice,
           volumeP: serializePAmount(updatedMarket.volumeP),
           tradeCount: updatedMarket.tradeCount,
+          // From the row this transaction just wrote, so it costs no extra read: `traderCount`
+          // moves with the same trade when the buyer held nothing here before.
+          traderCount: updatedMarket.traderCount,
           ts,
         },
         {

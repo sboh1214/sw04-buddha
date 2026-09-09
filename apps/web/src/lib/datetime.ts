@@ -1,3 +1,5 @@
+import { copy } from '@/copy';
+
 /**
  * KST at the edges, UTC on the wire — PLAN 7 ("시각은 ISO 8601 UTC. 클라이언트가 KST로 표시")
  * and PLAN 12's "마감 시각(KST 입력, UTC 저장)" for the market form M3 still has to build.
@@ -73,4 +75,138 @@ export function formatKst(iso: string): string {
       part.type === 'dayPeriod' ? (DAY_PERIODS[part.value] ?? part.value) : part.value,
     )
     .join('');
+}
+
+const SECOND_MS = 1000;
+const MINUTE_MS = 60 * SECOND_MS;
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
+
+/**
+ * The time left until `closeAt` for the countdown badge and the detail header: `3일 4시간`,
+ * `4시간 12분`, `12분 30초`, `30초`. Two units at most, and the smaller one is dropped when it
+ * is zero — the badge is a glance, not a stopwatch.
+ *
+ * `now` is injected rather than read from `Date.now()` for the reason `isClosingSoon` takes it
+ * (market-admin.ts): a countdown that reads the clock inside the render produces a different
+ * string on the server and in the first client render, which is a hydration mismatch on the
+ * page AC 2 measures. The caller seeds `now` once and ticks it.
+ *
+ * `''` both for an unparseable instant and for a close that has already passed; the badge shows
+ * `copy.marketClosed` there. A market whose close time is in the past stays `open` until the
+ * close job runs (A-M3-31), so this is an ordinary state, not an error.
+ *
+ * No zone and no `Intl`: a duration is the same length in every zone, and
+ * `Intl.RelativeTimeFormat` would hand the wording back to whichever ICU is at hand — the very
+ * thing DAY_PERIODS above had to correct for.
+ */
+export function formatRemaining(closeAt: string, now: number): string {
+  const parsed = new Date(closeAt).getTime();
+  if (Number.isNaN(parsed)) return '';
+  const remaining = parsed - now;
+  if (remaining <= 0) return '';
+  if (remaining >= DAY_MS) return unitPair(remaining, DAY_MS, copy.unitDay, HOUR_MS, copy.unitHour);
+  if (remaining >= HOUR_MS)
+    return unitPair(remaining, HOUR_MS, copy.unitHour, MINUTE_MS, copy.unitMinute);
+  if (remaining >= MINUTE_MS)
+    return unitPair(remaining, MINUTE_MS, copy.unitMinute, SECOND_MS, copy.unitSecond);
+  return `${String(Math.floor(remaining / SECOND_MS))}${copy.unitSecond}`;
+}
+
+/** `3일 4시간`, or just `3일` when the smaller unit has run out. Both units truncate. */
+function unitPair(
+  remaining: number,
+  majorMs: number,
+  majorUnit: string,
+  minorMs: number,
+  minorUnit: string,
+): string {
+  const major = Math.floor(remaining / majorMs);
+  const minor = Math.floor((remaining - major * majorMs) / minorMs);
+  const head = `${String(major)}${majorUnit}`;
+  return minor === 0 ? head : `${head} ${String(minor)}${minorUnit}`;
+}
+
+/**
+ * The instant a ticking clock should report, given the ANCHOR it started from and how long the
+ * browser has observed since. Both the 마감 countdown and the trade panel's close gate read it,
+ * so the two cannot drift apart (A-M4-23 says they run the same clock).
+ *
+ * THE HAZARD it closes: the two numbers being compared come from DIFFERENT MACHINES. `closeAt`
+ * is the server's, and `Date.now()` is the visitor's — a browser whose clock is wrong is wrong
+ * about the close by exactly its skew, in whichever direction the skew runs. The panel used to
+ * take `Math.max(anchor, Date.now())`, which is not a repair: a browser running BEHIND is pinned
+ * at the anchor and its clock never advances until the skew is spent, so it goes on offering
+ * trades in a market that has closed; one running AHEAD wins the `Math.max` outright and draws
+ * 마감 over a market that is still open, which is the worse half — the first costs a round trip
+ * the server refuses with `copy.errTradeClosed`, the second takes the trade away. A-M4-23
+ * recorded the first and dismissed the second as "only at the instant the countdown reaches
+ * zero", which measurement did not bear out: a 60s-fast browser reads 마감 a full minute early.
+ *
+ * So the browser is asked only for a DURATION, which is the one thing its clock measures
+ * correctly, and it is added to a server instant. `elapsedMs` must come from a MONOTONIC source
+ * (`performance.now()` deltas): `Date.now()` deltas jump when NTP steps the clock mid-session,
+ * which is exactly the moment this is protecting.
+ *
+ * `elapsedMs` must be measured from the moment THIS reader adopted THIS anchor — a monotonic
+ * origin captured once per component instance, `??=` into a ref so an effect re-run cannot
+ * restart it and rewind the clock. Nothing recovers time that passed before the adoption, so an
+ * anchor adopted LATE is read as the present; `rowAnchor` below is what keeps a late reader from
+ * adopting one at all.
+ *
+ * `performance.now()` BARE was tried and is WRONG, and naming it is the point of this paragraph:
+ * bare is the DOCUMENT's age, and a `next/link` navigation keeps the document. The grid links to
+ * the detail that way (market-card.tsx), so a visitor who browsed for five minutes before
+ * clicking a card landed on a panel reading five minutes AHEAD of the anchor — measured, a market
+ * 30s from closing drew 마감 with every trade control gone. That is the fast-clock half of the
+ * hazard above, reintroduced for every visitor whether or not their clock is wrong.
+ *
+ * What a per-instance origin leaves uncounted is the head of the visit: the anchor is stamped
+ * before the response is serialized, transferred, parsed and hydrated, so the clock runs that far
+ * BEHIND. That direction is the safe one — `assertTradable` on the database clock covers it
+ * (A-M3-16, MARKET_CLOSED → `copy.errTradeClosed`) — where the old reading was wrong by the
+ * visitor's whole skew, minutes or hours, in the direction that takes the trade away.
+ *
+ * A suspend is the other residue, in the other direction: `performance.now()` may stop while wall
+ * time passes, so a resumed tab reads behind. Advancing by `Math.max(monotonic, wallDelta)` would
+ * close it and was REJECTED, because it re-opens the failure this exists to remove — on the very
+ * machine this is for, the one whose clock is wrong, an NTP correction lands inside the wall
+ * delta, and a measured 60s forward step then draws 마감 60s early on an open market. A resumed
+ * tab is behind in every other way too and the server still refuses the late trade; a corrected
+ * clock is not, and being shown 마감 on a live market takes the trade away with no recourse.
+ *
+ * With NO anchor the wall clock is all there is, and the caller gets it back unchanged: a card
+ * on the home grid renders the badge with no `now`, has no panel beside it to disagree with, and
+ * is display-only.
+ */
+export function tickingNow(anchor: number | undefined, elapsedMs: number, wallNow: number): number {
+  if (anchor === undefined) return wallNow;
+  return anchor + Math.max(0, elapsedMs);
+}
+
+/**
+ * The server instant a grid row may anchor its countdown to, or `undefined` for a row that must
+ * fall back to the wall clock.
+ *
+ * THE HAZARD: `tickingNow` adds the duration observed since the anchor was ADOPTED, so an anchor
+ * is only usable by a reader that mounted with it. The home page stamps ONE instant and hands it
+ * to every card, including the rows 더 보기 appends minutes later. Those adopt it long after it
+ * was stamped and would read it as the present — a card mounted five minutes on would show five
+ * minutes more remaining than is true, and would go on being wrong by that much.
+ *
+ * So the instant is offered only to the rows the SERVER rendered — the first page — and only
+ * while the list still holds the server's own answer for them: any client write (a refetch, a
+ * `market:tick`) restamps `listUpdatedAt` with the BROWSER's clock, and a browser instant is
+ * exactly what must not reach a close reading. Every other row gets `undefined`, which
+ * `tickingNow` answers with the wall clock — the reading those cards had before anchoring
+ * existed, and safe there because a grid badge is display-only with no trade panel beside it.
+ */
+export function rowAnchor(
+  index: number,
+  serverRowCount: number,
+  listUpdatedAt: number,
+  now: number | undefined,
+): number | undefined {
+  if (now === undefined) return undefined;
+  return index < serverRowCount && listUpdatedAt === now ? now : undefined;
 }

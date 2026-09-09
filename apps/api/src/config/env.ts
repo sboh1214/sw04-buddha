@@ -55,6 +55,20 @@ export type OAuthProvider = (typeof OAUTH_PROVIDERS)[number];
  * empty optional strings are undefined): @nestjs/config merges the schema output over the
  * raw values.
  */
+/**
+ * Whether a cookie `Domain` would be sent to `host` — RFC 6265 domain-matching, which is either
+ * equality or `host` being a sub-domain of it.
+ *
+ * Compared LABEL-WISE, and that is the whole care in it: a plain `endsWith` makes `example.com`
+ * cover `badexample.com`, which is the mistake this kind of check usually ships with. Both sides
+ * are lower-cased because a hostname is case-insensitive and the schema does not normalise.
+ */
+export function domainCovers(cookieDomain: string, host: string): boolean {
+  const domain = cookieDomain.toLowerCase();
+  const target = host.toLowerCase();
+  return target === domain || target.endsWith(`.${domain}`);
+}
+
 export const envSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -90,6 +104,28 @@ export const envSchema = z
      * list, so list origins, not better-auth wildcard patterns — a pattern fails at startup.
      */
     WEB_ORIGIN: optionalString,
+    /**
+     * The registrable domain the session cookie is scoped to, e.g. `example.com` for a
+     * production split of `app.example.com` (web) and `api.example.com` (API). Unset — and so
+     * unset locally, where the two differ only by port — the cookie stays HOST-ONLY, which is
+     * the safer default and the behaviour every environment has today.
+     *
+     * ADR-0017 stated the requirement for the Socket.IO handshake as same-SITE, which is
+     * necessary and not sufficient: `app.` and `api.` of one domain are same-site for
+     * SameSite=Lax, but a cookie minted with no `Domain` is sent back to its exact host alone
+     * (RFC 6265 §5.1.3), and the login cookie is minted through the WEB host because the Next
+     * rewrite proxies `/api/auth/*` server-side. The socket dials the API host directly (a
+     * rewrite does not proxy a WebSocket upgrade), so without this every signed-in user got an
+     * anonymous handshake: no `user:<id>` room, and the balance chip and 내 포지션 silently
+     * stopped moving with nothing logged.
+     *
+     * The cost is real and is why this is opt-in and never derived: a cookie carrying `Domain`
+     * is sent to EVERY subdomain of that domain, so it must name a domain whose subdomains are
+     * all ours. A hostname, never a URL or a leading dot — better-auth would otherwise silently
+     * default it to the `BETTER_AUTH_URL` host, which is the web host and reaches no API host
+     * at all.
+     */
+    AUTH_COOKIE_DOMAIN: optionalString,
 
     // --- OAuth providers: a provider is enabled only when BOTH keys are set ---
     GOOGLE_CLIENT_ID: optionalString,
@@ -124,6 +160,52 @@ export const envSchema = z
           code: 'custom',
           path: ['WEB_ORIGIN'],
           message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    // A URL or a leading dot here would be accepted by better-auth and silently scope the
+    // cookie to nothing that exists, which is exactly the failure this variable is here to
+    // fix: no error anywhere, and realtime dead for every signed-in user.
+    const cookieDomain = env.AUTH_COOKIE_DOMAIN;
+    // `URL.parse` rather than `new URL`: a superRefine runs even when a FIELD of the object
+    // failed, so `BETTER_AUTH_URL: 'not-a-url'` (and `''`) reaches this body as the raw string
+    // and `new URL` threw a bare TypeError straight through `safeParse` — replacing the readable
+    // boot error that names BETTER_AUTH_URL with a stack trace that names nothing. Unresolvable
+    // means the cross-check is SKIPPED, which is right: `z.url()` has already filed the issue
+    // that says what is actually wrong, and one value must not raise two.
+    const authHost = URL.parse(env.BETTER_AUTH_URL)?.hostname;
+    if (cookieDomain !== undefined) {
+      if (
+        !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i.test(cookieDomain)
+      ) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['AUTH_COOKIE_DOMAIN'],
+          message: `AUTH_COOKIE_DOMAIN must be a bare hostname such as "example.com", not "${cookieDomain}"`,
+        });
+      } else if (authHost !== undefined && !domainCovers(cookieDomain, authHost)) {
+        // Shape alone was never the question. A well-formed hostname that the auth host is not
+        // under is exactly as dead as a URL or a leading dot: RFC 6265 domain-matching requires
+        // the cookie's Domain to be the host or a parent of it, so the browser DROPS the
+        // Set-Cookie and the session never persists — with nothing logged anywhere, which is the
+        // failure this variable exists to make loud.
+        //
+        // Compared label-wise, so `example.com` does not cover `badexample.com`; equality counts,
+        // so a host-only-equivalent value is allowed.
+        //
+        // TWO GAPS, on purpose. (1) This sees the WEB host only. `AUTH_COOKIE_DOMAIN` exists
+        // because the cookie is minted through the web host while the socket dials the API host
+        // (ADR-0017 추기), and `envSchema` does not carry the public API origin — so
+        // `AUTH_COOKIE_DOMAIN=app.example.com` still boots and still leaves api.example.com
+        // uncovered, which is the very failure class the variable was added for. (2) A public
+        // suffix such as `co.kr` covers `buddha.co.kr` by this test and is discarded by the
+        // browser all the same; catching that needs a public-suffix list, which is not a
+        // dependency worth pulling into boot validation. This check is one-directional: what it
+        // rejects is certainly dead, what it passes is not thereby certainly alive.
+        ctx.addIssue({
+          code: 'custom',
+          path: ['AUTH_COOKIE_DOMAIN'],
+          message: `AUTH_COOKIE_DOMAIN "${cookieDomain}" does not cover the BETTER_AUTH_URL host "${authHost}" — a browser would drop the cookie. Note this checks the web host only; it cannot see the API host.`,
         });
       }
     }

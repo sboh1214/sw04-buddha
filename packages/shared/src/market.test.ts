@@ -7,6 +7,8 @@ import {
   MARKET_SLUG_STEM_MAX,
   MAX_P_AMOUNT,
   ORDER_QTY_MAX,
+  SPARKLINE_MAX_POINTS,
+  TICKS_MAX_POINTS,
 } from './constants.js';
 import {
   MARKET_SORTS,
@@ -18,6 +20,7 @@ import {
   createMarketBodySchema,
   fillSchema,
   marketEventSchema,
+  marketListItemSchema,
   marketListQuerySchema,
   marketSchema,
   marketSlugSchema,
@@ -25,6 +28,7 @@ import {
   orderSchema,
   positionSchema,
   positionsQuerySchema,
+  priceSeriesSchema,
   priceTickSchema,
   quoteBodySchema,
   quoteResultSchema,
@@ -144,7 +148,14 @@ describe('read DTOs', () => {
         fill,
         balance: { availableP: '9480', lockedP: '0' },
         position,
-        market: { id: marketId, lastPrice: 52, pYesBp: 5250, volumeP: '520', tradeCount: 1 },
+        market: {
+          id: marketId,
+          lastPrice: 52,
+          pYesBp: 5250,
+          volumeP: '520',
+          tradeCount: 1,
+          traderCount: 1,
+        },
       }).market.tradeCount,
     ).toBe(1);
     expect(
@@ -155,6 +166,7 @@ describe('read DTOs', () => {
         priceBeforeBp: 5000,
         priceAfterBp: 5000,
         maxPayoutP: '0',
+        tradeCount: 0,
       }).shares,
     ).toBe(0);
   });
@@ -186,6 +198,64 @@ describe('read DTOs', () => {
     expect(marketSummarySchema.safeParse({ ...summary, volumeP: '1.5' }).success).toBe(false);
     expect(fillSchema.safeParse({ ...fill, userId: 'u' }).success).toBe(true); // stripped
     expect(fillSchema.parse({ ...fill, userId: 'u' })).not.toHaveProperty('userId');
+  });
+
+  it('carry the card sparkline on the list item only, never on the shared summary', () => {
+    const full = Array.from({ length: SPARKLINE_MAX_POINTS }, () => 5250);
+    expect(marketListItemSchema.parse({ ...summary, sparkline: [] })).toEqual({
+      ...summary,
+      sparkline: [],
+    });
+    expect(marketListItemSchema.parse({ ...summary, sparkline: full }).sparkline).toHaveLength(
+      SPARKLINE_MAX_POINTS,
+    );
+    expect(marketListItemSchema.safeParse({ ...summary, sparkline: [...full, 5250] }).success).toBe(
+      false,
+    );
+    expect(marketListItemSchema.safeParse({ ...summary, sparkline: [10_001] }).success).toBe(false);
+    // The shared component was not widened: GET /admin/markets and the embedded summaries ship
+    // it too, so a summary without a sparkline still parses and one handed a sparkline strips it.
+    expect(marketSummarySchema.safeParse(summary).success).toBe(true);
+    expect(marketSummarySchema.parse({ ...summary, sparkline: full })).not.toHaveProperty(
+      'sparkline',
+    );
+    expect(marketListItemSchema.safeParse(summary).success).toBe(false);
+  });
+
+  it('describe a price series by the stride and the window the server served', () => {
+    const point = { ts: at, pYesBp: 5250, trigger: 'trade' };
+    const series = {
+      resolution: '1h',
+      bucketSeconds: 3_600,
+      from: at,
+      to: '2026-09-05T04:00:00.000Z',
+      truncated: false,
+      tradeCount: 3,
+      points: [point],
+    };
+    expect(priceSeriesSchema.parse(series)).toEqual(series);
+    // Required, and the ordering key a client compares an event against — `to` cannot serve as
+    // one, because a tick's `ts` is fixed before its row commits.
+    expect(priceSeriesSchema.safeParse({ ...series, tradeCount: undefined }).success).toBe(false);
+    expect(priceSeriesSchema.safeParse({ ...series, tradeCount: -1 }).success).toBe(false);
+    expect(priceSeriesSchema.safeParse({ ...series, tradeCount: 1.5 }).success).toBe(false);
+    expect(priceSeriesSchema.parse({ ...series, tradeCount: 0 }).tradeCount).toBe(0);
+    expect(priceSeriesSchema.parse({ ...series, resolution: 'raw', bucketSeconds: 0 })).toEqual({
+      ...series,
+      resolution: 'raw',
+      bucketSeconds: 0,
+    });
+    expect(
+      priceSeriesSchema.safeParse({
+        ...series,
+        points: Array.from({ length: TICKS_MAX_POINTS + 1 }, () => point),
+      }).success,
+    ).toBe(false);
+    expect(priceSeriesSchema.safeParse({ ...series, bucketSeconds: -1 }).success).toBe(false);
+    expect(priceSeriesSchema.safeParse({ ...series, bucketSeconds: 1.5 }).success).toBe(false);
+    expect(priceSeriesSchema.safeParse({ ...series, from: 'yesterday' }).success).toBe(false);
+    expect(priceSeriesSchema.safeParse({ ...series, to: '2026-09-05' }).success).toBe(false);
+    expect(priceSeriesSchema.safeParse({ ...series, resolution: '5m' }).success).toBe(false);
   });
 });
 

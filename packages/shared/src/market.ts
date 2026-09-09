@@ -21,6 +21,8 @@ import {
   ORDER_QTY_MAX,
   PRICE_MAX,
   PRICE_MIN,
+  SPARKLINE_MAX_POINTS,
+  TICKS_MAX_POINTS,
   TRADE_MIN_SHARES,
 } from './constants.js';
 import {
@@ -97,6 +99,25 @@ const marketSummaryFields = {
 /** List card. */
 export const marketSummarySchema = z.object(marketSummaryFields).meta({ id: 'MarketSummary' });
 export type MarketSummary = z.infer<typeof marketSummarySchema>;
+
+/**
+ * `GET /markets` card (PLAN 11.4). `MarketSummary` plus the sparkline: the public list is the
+ * only reader, so the shared component stays as it is and `GET /admin/markets`, `Market` and
+ * `AdminMarket` are not made to carry a chart they never draw.
+ *
+ * Oldest to newest, at most SPARKLINE_MAX_POINTS hourly samples ending at the response
+ * instant, in the same basis points as `pYesBp`. Shorter when the market's first tick falls
+ * inside the window — leading unknowns are trimmed, never zero-filled (0 bp is a real
+ * probability) — and because the grid is fixed, the length says where the series starts:
+ * bucket index = SPARKLINE_MAX_POINTS - length. Empty only for a market with no ticks at all.
+ */
+export const marketListItemSchema = z
+  .object({
+    ...marketSummaryFields,
+    sparkline: z.array(bpSchema).max(SPARKLINE_MAX_POINTS),
+  })
+  .meta({ id: 'MarketListItem' });
+export type MarketListItem = z.infer<typeof marketListItemSchema>;
 
 /**
  * Public detail (PLAN 7.1): no LMSR state, liquidity, reserve or author — those are
@@ -211,6 +232,17 @@ export const quoteResultSchema = z
     priceAfterBp: bpSchema,
     /** shares · 100 for a buy; '0' for a sell. */
     maxPayoutP: pAmountSchema,
+    /**
+     * The market's trade count this price was computed from — the revision a client compares
+     * against the market row to ask "has the market moved under this quote?".
+     *
+     * A timestamp cannot answer that. A cached market seeded during SSR carries the SERVER's
+     * `dataUpdatedAt`, while a quote answered later carries the BROWSER's, so on a device whose
+     * clock runs behind the server every fresh quote looks older than the market it was priced
+     * from — the summary dims and the panel re-quotes on its throttle until the skew is spent.
+     * Both sides of this comparison come from one counter instead.
+     */
+    tradeCount: countSchema,
   })
   .meta({ id: 'QuoteResult' });
 export type QuoteResult = z.infer<typeof quoteResultSchema>;
@@ -367,6 +399,14 @@ export const marketStatsSchema = z
     pYesBp: bpSchema,
     volumeP: pAmountSchema,
     tradeCount: countSchema,
+    /**
+     * Moves with the same trade, so it belongs to the same patch. A trade by an account that
+     * held nothing in this market raises it, and a client that patched every OTHER
+     * trade-derived field kept showing the old participant count for as long as the market
+     * stayed busy — each patch restarted the query's own staleness clock, so the refetch that
+     * would have corrected it never came due.
+     */
+    traderCount: countSchema,
   })
   .meta({ id: 'MarketStats' });
 export type MarketStats = z.infer<typeof marketStatsSchema>;
@@ -387,6 +427,13 @@ export const tradeResultSchema = z
 export type TradeResult = z.infer<typeof tradeResultSchema>;
 
 // ---- ticks --------------------------------------------------------------------------
+/**
+ * One point of a price series. At `resolution=raw` it is a stored tick and `ts` is the tick's
+ * own instant. At a bucketed resolution it is a SAMPLE: `ts` is a boundary on the absolute
+ * grid and `pYesBp`/`trigger` come from the last tick at or before it — the probability in
+ * force then, exact because the series is a step function (the LMSR state holds between
+ * trades). Render it with a step curve, never straight interpolation.
+ */
 export const priceTickSchema = z
   .object({
     ts: z.iso.datetime(),
@@ -400,12 +447,31 @@ export const TICK_RESOLUTIONS = ['raw', '1m', '1h'] as const;
 export type TickResolution = (typeof TICK_RESOLUTIONS)[number];
 export const tickResolutionSchema = z.enum(TICK_RESOLUTIONS);
 
-/** `GET /markets/:id/ticks` (no `.meta`: query DTO). M3 serves raw for every resolution. */
+/** Ten years, the widest window `tickBucketSeconds` has a stride for. */
+export const TICKS_WINDOW_SECONDS_MAX = 315_360_000;
+
+/**
+ * `GET /markets/:id/ticks` (no `.meta`: query DTO). `resolution` selects the sampled grid.
+ *
+ * `windowSeconds` is how a RELATIVE range is asked for — "the last day" — and it exists because
+ * `from` cannot express one honestly. A client computing `from` from its own clock is naming an
+ * INSTANT for a window whose other end the server closes on the database clock, so the two come
+ * from different machines and the served span is wrong by the visitor's skew. The same principle
+ * A-M4-23 settled for the close gate: ask the browser for a DURATION, which its clock measures
+ * correctly, never for an instant to be compared against a server's.
+ *
+ * Mutually exclusive with `from`, so one request can never name its window twice.
+ */
 export const ticksQuerySchema = z
   .object({
     from: z.iso.datetime().optional(),
     to: z.iso.datetime().optional(),
+    windowSeconds: z.coerce.number().int().positive().max(TICKS_WINDOW_SECONDS_MAX).optional(),
     resolution: tickResolutionSchema.default('raw'),
+  })
+  .refine((query) => query.from === undefined || query.windowSeconds === undefined, {
+    message: 'from and windowSeconds are mutually exclusive',
+    path: ['windowSeconds'],
   })
   .refine(
     // Compare instants, not strings: '…00Z' and '…00.000Z' are the same moment.
@@ -416,6 +482,63 @@ export const ticksQuerySchema = z
     { message: 'from must not be after to', path: ['from'] },
   );
 export type TicksQuery = z.infer<typeof ticksQuerySchema>;
+
+/**
+ * `GET /markets/:id/ticks` (PLAN 7.1, M4). An object, not a bare array, so the series says
+ * what the server actually served: the stride it picked (`bucketSeconds` — a requested
+ * resolution is coarsened rather than striped, so points are evenly spaced), the window it
+ * covered (`from`/`to`, filled in by the server when a bound is omitted) and whether older
+ * points inside that window were left out (`truncated`, Q-M3-8 (1)).
+ *
+ * Not `meta`: in this API `meta` is cursor pagination and nothing else (api/pagination.ts),
+ * and a second meta shape would have to be threaded through ResponseEnvelopeInterceptor,
+ * ApiPage and ApiData for one boolean — and could not carry `bucketSeconds`/`from`/`to`.
+ */
+export const priceSeriesSchema = z
+  .object({
+    /** The resolution the caller asked for, echoed. */
+    resolution: tickResolutionSchema,
+    /** The stride actually served, in seconds; 0 for `raw`. */
+    bucketSeconds: z.number().int().min(0),
+    /** The window the answer describes; equals the request when both bounds were given. */
+    from: z.iso.datetime(),
+    to: z.iso.datetime(),
+    /** Points older than the served ones exist inside the window but were left out. */
+    truncated: z.boolean(),
+    /**
+     * The market's trade count when this answer was read — the only field here that says what
+     * the answer CONTAINS rather than when it was written.
+     *
+     * A watermark for a LIVE window only, which is the window a client merging `market:tick`
+     * events has. Ask for an explicit `to` and this is still the counter at answer time, not
+     * the count as of that cutoff: the market row keeps no history, and deriving one from the
+     * ticks would make the field mean something the row cannot confirm. A pinned window is
+     * history, so nothing merges live events into it — but a client that treated this as an
+     * as-of watermark there would over-report and drop events it should have taken.
+     *
+     * `to` cannot say it. A trade stamps its tick with `clock_timestamp()` read INSIDE its
+     * transaction, before its writes (trade.service.ts), so the instant is fixed several
+     * statements before the row commits — and this route's own clock read takes no lock, so it
+     * can pass that instant while the sampling snapshot still cannot see the row. The answer
+     * then truthfully names a `to` LATER than a tick it truthfully omits, and no window can
+     * tell the two apart. A client merging live `market:tick` events, which carry this same
+     * counter, compares this instead.
+     *
+     * Read BEFORE the points, never after: an earlier snapshot can only lag them, which at
+     * worst makes a client keep a point the answer already has — the same trade at the same
+     * price. A count read AFTER the points could claim a trade the points predate, and the
+     * client would then drop the live tick it is holding, which is the failure this field
+     * exists to prevent.
+     */
+    tradeCount: z.number().int().min(0),
+    /**
+     * Ascending by `ts`; at most TICKS_MAX_POINTS (documented as maxItems only — nothing
+     * validates a response at runtime; ApiData is an OpenAPI decorator).
+     */
+    points: z.array(priceTickSchema).max(TICKS_MAX_POINTS),
+  })
+  .meta({ id: 'PriceSeries' });
+export type PriceSeries = z.infer<typeof priceSeriesSchema>;
 
 // ---- events -------------------------------------------------------------------------
 export const marketEventSchema = z

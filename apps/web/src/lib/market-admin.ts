@@ -1,6 +1,7 @@
 import {
   AUDIT_FAILURE_KINDS,
   type AuditFailureKind,
+  MINUS_SIGN,
   type MarketEventType,
   type MarketStatus,
   formatP,
@@ -14,9 +15,10 @@ import { type ApiError, isApiError, validationField } from './api';
 import { formatKst } from './datetime';
 
 /**
- * Pure helpers behind the admin market screens (PLAN 12): status and event labels, the two
- * list badges, and the number formats. No domain maths lives here — probabilities and P come
- * from the API and @buddha/shared (PLAN 11.5).
+ * Pure helpers behind the market screens: status and event labels, the two list badges (PLAN
+ * 12), and the number formats the public cards, the detail header and the trade panel share
+ * with the admin screens. No domain maths lives here — probabilities and P come from the API
+ * and @buddha/shared (PLAN 11.5).
  */
 
 export const MARKET_STATUS_LABEL: Record<MarketStatus, string> = {
@@ -116,9 +118,64 @@ export function formatYesPrice(lastPrice: number): string {
   return `${copy.yes} ${String(lastPrice)}%`;
 }
 
+/**
+ * The other side of the same reading — "아니오 37%" for a 63% market. The complement is taken
+ * from `lastPrice` (the whole percent the API rounds), not from `pYesBp`, so 예 and 아니오 on
+ * the same card always add up to 100.
+ */
+export function formatNoPrice(lastPrice: number): string {
+  return `${copy.no} ${String(100 - lastPrice)}%`;
+}
+
 /** Basis points (0..10000) as a percentage with two decimals: 6300 → "63.00%". */
 export function formatBp(bp: number): string {
   return `${(bp / 100).toFixed(2)}%`;
+}
+
+/** The same basis points as what one contract costs: 6300 → "63.00P" (a winner pays 100P). */
+export function formatPricePerContract(bp: number): string {
+  return `${(bp / 100).toFixed(2)}P`;
+}
+
+/**
+ * The probability move for the delta badge (PLAN 11.4), in percentage points: "+2%p" or
+ * "−2%p" with U+2212, never an ASCII hyphen — the minus then has the same width as the plus
+ * and does not read as a stray dash beside the number.
+ *
+ * An empty string hides the badge: there is no move to report (`null`), or the move is smaller
+ * than the tenth of a point shown, and 실시간은 조용하게 (PLAN 11.1-5) means a wiggle gets no
+ * badge at all rather than a "+0%p" one.
+ */
+export function deltaLabel(deltaPoints: number | null): string {
+  if (deltaPoints === null || !Number.isFinite(deltaPoints)) return '';
+  const rounded = Math.round(deltaPoints * 10) / 10;
+  if (rounded === 0) return '';
+  return `${rounded > 0 ? '+' : MINUS_SIGN}${String(Math.abs(rounded))}%p`;
+}
+
+/**
+ * The identity of ONE probability move, which is what `ProbabilityDisplay` remembers a dismissal
+ * against so the NEXT move revives its five-second badge (PLAN 11.4).
+ *
+ * THE HAZARD it closes: the identity used to be `lastPrice:label`, and `lastPrice` is the WHOLE
+ * percent. A move too small to change it — 5 to 49 basis points, which `deltaLabel` still shows
+ * as +0.1%p and up — therefore produced the same string as the move before it, the effect never
+ * restarted, and a badge already dismissed never came back. Measured: three consecutive +0.1%p
+ * trades inside one percent lit it once and stayed dark for the other two, on the screen PLAN
+ * 11.4 asks to announce every move.
+ *
+ * Basis points cannot collide the same way. Two CONSECUTIVE moves share an identity only by
+ * ending on the same probability, and a move that ends where it began has a zero delta, which
+ * `deltaLabel` already hides. (Non-consecutive repeats are harmless: only the last dismissal is
+ * remembered.)
+ *
+ * `lastPrice` stays the fallback for a caller with no `pYesBp` — a card omits it (PLAN 11.1-1),
+ * and today the badge has a single call site that passes both, so the fallback is a contract
+ * rather than a live path. Derived from values alone, so a server render and the first client
+ * render produce the same string.
+ */
+export function deltaMoveKey(pYesBp: number | undefined, lastPrice: number, label: string): string {
+  return `${String(pYesBp ?? lastPrice)}:${label}`;
 }
 
 /** A `numeric(24,10)` quantity string from the API, trimmed to four decimals for reading. */
@@ -127,6 +184,15 @@ export function formatQuantity(q: string): string {
   return Number.isFinite(n)
     ? n.toLocaleString('ko-KR', { minimumFractionDigits: 0, maximumFractionDigits: 4 })
     : q;
+}
+
+/**
+ * A contract count as the quote summary and the position rows read it: "1,234계약". The number
+ * goes through `formatQuantity` so a fractional quote (the quote returns shares, not an
+ * integer) groups and truncates exactly like the quantities the API sends as strings.
+ */
+export function formatContracts(n: number): string {
+  return `${formatQuantity(String(n))}${copy.tradeUnitContracts}`;
 }
 
 /**

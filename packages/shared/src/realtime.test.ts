@@ -1,15 +1,26 @@
 import { describe, expect, it } from 'vitest';
 import {
+  MARKET_CHANNEL_PATTERN,
   REALTIME_EVENT_TYPES,
+  REALTIME_MAX_MESSAGE_BYTES,
+  REALTIME_NAMESPACE,
+  REALTIME_ROOMS_MAX,
+  REALTIME_SUBSCRIBE_MAX,
+  REALTIME_EXCEPTION_EVENT,
+  RESYNC_EVENT,
+  USER_CHANNEL_PATTERN,
   marketChannel,
+  marketRealtimeEventSchema,
   marketStatusEventSchema,
   marketTickEventSchema,
   marketTradeEventSchema,
   realtimeEventSchema,
+  subscribeBodySchema,
   supersedes,
   userBalanceEventSchema,
   userChannel,
   userPositionEventSchema,
+  userRealtimeEventSchema,
 } from './realtime.js';
 
 const marketId = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
@@ -22,6 +33,7 @@ const tick = {
   lastPrice: 52,
   volumeP: '520',
   tradeCount: 1,
+  traderCount: 1,
   ts,
 };
 const trade = {
@@ -146,5 +158,92 @@ describe('ordering keys', () => {
     expect(supersedes('10', 9)).toBe(true);
     expect(supersedes('1', null)).toBe(true); // nothing held yet takes anything
     expect(supersedes(1, undefined)).toBe(true);
+  });
+});
+
+describe('subscribe payload', () => {
+  const maxIds = Array.from({ length: REALTIME_SUBSCRIBE_MAX }, () => marketId);
+
+  it('canonicalises ids so a socket joins the room the publisher writes to (A-M3-17)', () => {
+    expect(subscribeBodySchema.parse({ marketIds: [marketId.toUpperCase()] })).toEqual({
+      marketIds: [marketId],
+    });
+  });
+
+  it('bounds the batch and refuses anything that is not a list of uuids', () => {
+    expect(subscribeBodySchema.safeParse({ marketIds: maxIds }).success).toBe(true);
+    expect(subscribeBodySchema.safeParse({ marketIds: [...maxIds, marketId] }).success).toBe(false);
+    expect(subscribeBodySchema.safeParse({ marketIds: [] }).success).toBe(false);
+    expect(subscribeBodySchema.safeParse({ marketIds: marketId }).success).toBe(false);
+    expect(subscribeBodySchema.safeParse({}).success).toBe(false);
+    expect(subscribeBodySchema.safeParse([marketId]).success).toBe(false);
+    expect(subscribeBodySchema.safeParse(marketId).success).toBe(false);
+    expect(subscribeBodySchema.safeParse(undefined).success).toBe(false);
+  });
+
+  it('names the offending element, so the ack can say which id was refused', () => {
+    const result = subscribeBodySchema.safeParse({ marketIds: [marketId, 'not-a-uuid'] });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.path).toEqual(['marketIds', 1]);
+    expect(result.error?.issues[0]?.message).toBe('must be a uuid');
+  });
+});
+
+describe('per-family event unions', () => {
+  const marketEvents = [tick, trade, status];
+  const userEvents = [balance, position];
+
+  it('parses its own family and refuses the other, which is the authorization check', () => {
+    for (const event of marketEvents) {
+      expect(marketRealtimeEventSchema.parse(event)).toEqual(event);
+      // A market:* message carrying a user event must not reach that public room.
+      expect(userRealtimeEventSchema.safeParse(event).success).toBe(false);
+    }
+    for (const event of userEvents) {
+      expect(userRealtimeEventSchema.parse(event)).toEqual(event);
+      expect(marketRealtimeEventSchema.safeParse(event).success).toBe(false);
+    }
+  });
+
+  it('together claim every published type exactly once, and gate as strictly as the union', () => {
+    const claimed = [...marketEvents, ...userEvents].map((event) => event.type);
+    expect([...REALTIME_EVENT_TYPES].sort()).toEqual([...claimed].sort());
+    expect(marketRealtimeEventSchema.safeParse({ ...tick, pYesBp: 10_001 }).success).toBe(false);
+    expect(marketRealtimeEventSchema.safeParse({ ...trade, fillId: '0' }).success).toBe(false);
+    expect(userRealtimeEventSchema.safeParse({ ...balance, availableP: 9480 }).success).toBe(false);
+    expect(userRealtimeEventSchema.safeParse({}).success).toBe(false);
+  });
+});
+
+describe('gateway protocol (M4)', () => {
+  it('keeps realtime:resync out of the published union', () => {
+    // A control event the gateway raises on its own after re-arming its Redis subscription:
+    // it is never published to Redis, so nothing may parse it as a RealtimeEvent.
+    expect(RESYNC_EVENT).toBe('realtime:resync');
+    // Both sides of the socket read these two names from here, so a drift is a test failure
+    // rather than a client that silently never hears a refusal.
+    expect(REALTIME_EXCEPTION_EVENT).toBe('exception');
+    expect(REALTIME_EVENT_TYPES).not.toContain(REALTIME_EXCEPTION_EVENT);
+    expect(REALTIME_EVENT_TYPES).not.toContain(RESYNC_EVENT);
+    expect(realtimeEventSchema.safeParse({ type: RESYNC_EVENT }).success).toBe(false);
+    expect(realtimeEventSchema.safeParse({ type: RESYNC_EVENT, marketId, ts }).success).toBe(false);
+    expect(marketRealtimeEventSchema.safeParse({ type: RESYNC_EVENT, marketId, ts }).success).toBe(
+      false,
+    );
+  });
+
+  it('psubscribes to patterns that cover the channels the publisher writes', () => {
+    expect(REALTIME_NAMESPACE).toBe('/ws');
+    expect(marketChannel(marketId).startsWith(MARKET_CHANNEL_PATTERN.slice(0, -1))).toBe(true);
+    expect(userChannel('user-1').startsWith(USER_CHANNEL_PATTERN.slice(0, -1))).toBe(true);
+  });
+
+  it('sizes the caps so a full subscribe fits in one accepted frame', () => {
+    // A socket fills its room budget over several messages, so one batch stays the smaller cap.
+    expect(REALTIME_SUBSCRIBE_MAX).toBeLessThanOrEqual(REALTIME_ROOMS_MAX);
+    const largest = JSON.stringify({
+      marketIds: Array.from({ length: REALTIME_SUBSCRIBE_MAX }, () => marketId),
+    });
+    expect(largest.length).toBeLessThan(REALTIME_MAX_MESSAGE_BYTES);
   });
 });

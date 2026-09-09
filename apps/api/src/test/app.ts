@@ -10,6 +10,7 @@ import { AUTH, type Auth } from '../auth/auth.js';
 import { DB } from '../infra/db/db.provider.js';
 import { MAX_PARAM_LENGTH } from '../infra/http/fastify-options.js';
 import { MAILER } from '../mail/mail.provider.js';
+import { RealtimeIoAdapter } from '../realtime/realtime-io.adapter.js';
 import { createMemoryMailer, type MemoryMailer } from './memory-mailer.js';
 
 export interface TestApp {
@@ -18,16 +19,28 @@ export interface TestApp {
   db: Db;
   auth: Auth;
   mailer: MemoryMailer;
+  /** `http://127.0.0.1:<port>`, only with `{ listen: true }`. */
+  url?: string;
   /** Truncates every table (owner role, via the packages/db harness). Call in beforeEach. */
   reset(): Promise<void>;
   close(): Promise<void>;
 }
 
+export interface CreateTestAppOptions {
+  /**
+   * Bind an ephemeral port on 127.0.0.1 and fill in `url`. Needed only by the socket suites:
+   * `app.inject()` cannot perform a WebSocket upgrade. Off by default so the HTTP suites keep
+   * running without a listening socket.
+   */
+  listen?: boolean;
+}
+
 /**
- * Boots AppModule exactly like main.ts (prefix, versioning, bodyParser: false) without
- * listening, with the in-memory mailer. Holds the packages/db test-file lock until close().
+ * Boots AppModule exactly like main.ts (prefix, versioning, bodyParser: false, the realtime
+ * WebSocket adapter) with the in-memory mailer, and by default without listening. Holds the
+ * packages/db test-file lock until close().
  */
-export async function createTestApp(): Promise<TestApp> {
+export async function createTestApp(options: CreateTestAppOptions = {}): Promise<TestApp> {
   const harness: TestDb = await connectTestDb();
   const mailer = createMemoryMailer();
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
@@ -40,13 +53,23 @@ export async function createTestApp(): Promise<TestApp> {
   );
   app.setGlobalPrefix('api');
   app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
+  // Must be installed before init, exactly as in main.ts: without it the suites would exercise
+  // Nest's default IoAdapter — no Origin gate, no Redis adapter, no message bound — and pass
+  // while production behaves differently.
+  app.useWebSocketAdapter(new RealtimeIoAdapter(app));
   await app.init();
   await app.getHttpAdapter().getInstance().ready();
+  let url: string | undefined;
+  if (options.listen) {
+    await app.listen(0, '127.0.0.1');
+    url = await app.getUrl();
+  }
   return {
     app,
     db: app.get<Db>(DB),
     auth: app.get<Auth>(AUTH),
     mailer,
+    url,
     reset: () => harness.reset(),
     close: async () => {
       await app.close();

@@ -369,6 +369,168 @@ export const copy = {
   adminNoAuditFailures: '감사 실패가 없습니다.',
   auditKindLedgerMismatch: '원장·잔고 불일치',
 
+  // --- markets (M4) ---
+  // 홈 (PLAN 11.3): 카테고리 탭 · 정렬 · 검색. 카테고리 목록은 API가 주고 '전체'만 붙인다.
+  homeTitle: '예측 시장',
+  marketsAll: '전체',
+  marketCategories: '카테고리',
+  marketSort: '정렬',
+  sortVolume: '거래량',
+  sortClosing: '마감임박',
+  sortNewest: '신규',
+  marketStatusFilter: '상태',
+  searchLabel: '시장 검색',
+  searchPlaceholder: '질문이나 키워드로 검색',
+  searchSubmit: '검색',
+  marketsEmpty: '아직 열린 시장이 없습니다.',
+  marketsSearchEmpty: '검색 결과가 없습니다.',
+
+  // 카드와 상세 헤더의 짧은 라벨. 숫자·시각은 언제나 호출 쪽에서 붙인다.
+  marketCloseAt: '마감',
+  marketClosingSoon: '마감 임박',
+  marketRemaining: '남은 시간',
+  // A-M3-31: 마감 시각이 지난 `open` 시장도 목록에 남는다. 카운트다운이 이 문구로 바뀌고,
+  // 거래는 서버가 MARKET_CLOSED로 거절한다. 상태 배지의 marketStatusClosed와는 다른 자리다.
+  marketClosed: '마감됨',
+  marketTraders: '참여자',
+  // formatRemaining(lib/datetime.ts)이 숫자에 붙이는 단위. 문자열은 여기에만 있다.
+  unitDay: '일',
+  unitHour: '시간',
+  unitMinute: '분',
+  unitSecond: '초',
+
+  // 상세
+  marketDetailTitle: '시장 상세',
+  marketNotFound: '시장을 찾을 수 없습니다.',
+  marketRefreshFailed: '최신 정보를 불러오지 못했습니다. 표시된 값은 마지막으로 불러온 것입니다.',
+  marketRecentFills: '최근 체결',
+  marketFillsEmpty: '아직 체결이 없습니다.',
+  marketMyPosition: '내 포지션',
+  marketMyPositionEmpty: '아직 이 시장에 참여하지 않았습니다.',
+  marketLoginToSeePosition: '로그인하면 내 포지션을 볼 수 있습니다.',
+
+  // 상태별 안내 (PLAN 11.3). 색과 배지는 MARKET_STATUS_LABEL/PALETTE가 맡고, 이 문구는
+  // 그 아래에서 "지금 무엇을 할 수 있는지"를 말한다.
+  marketClosedNotice: '마감된 시장입니다. 더 이상 예측할 수 없습니다.',
+  marketResolvingNotice: '결과를 확인하는 중입니다. 이의 기간이 끝나면 정산됩니다.',
+  marketSettledNotice: '정산이 끝난 시장입니다.',
+  marketVoidedNotice: '무효 처리된 시장입니다. 매수에 쓴 P는 모두 환불했습니다.',
+
+  // 정산 기준 섹션 (PLAN 11.1의 Kalshi 원칙: 상세에서 접지 않는다)
+  rulesSectionTitle: '정산 기준',
+  rulesSource: '출처',
+  rulesCloseAt: '마감',
+  rulesSettlement: '정산 예정',
+  rulesNone: '따로 지정된 출처가 없습니다.',
+
+  // 확률 추이 차트
+  chartLabel: '확률 추이',
+  chartRangeLabel: '기간 선택',
+  chartRangeDay: '1일',
+  chartRangeWeek: '1주',
+  chartRangeAll: '전체',
+  chartEmpty: '아직 확률 기록이 없습니다.',
+  chartTruncated: '최근 구간만 표시하고 있습니다.',
+  // 스크린 리더용 표의 캡션과 두 열 머리글. 한 쌍으로 읽히므로 차트 라벨 옆에 둔다.
+  // 차트의 접근 가능한 이름이 되는 한 문장('시작 61%, 최고 66%, 최저 60%, 현재 63%').
+  chartSummaryStart: '시작',
+  chartSummaryHigh: '최고',
+  chartSummaryLow: '최저',
+  chartSummaryCurrent: '현재',
+  chartTableCaption: '시각별 확률',
+  chartTime: '시각',
+  chartValue: '확률',
+  probabilityChange: '확률 변화',
+
+  // 포지션 한 줄 (상세의 내 포지션과 포트폴리오 목록이 같이 쓴다)
+  positionQty: '보유 수량',
+  positionAvgPrice: '평단',
+  positionCurrentPrice: '현재가',
+  positionValue: '평가 금액',
+  positionPnl: '평가손익',
+  positionRealizedPnl: '실현 손익',
+
+  // 주문 이력 한 줄. 수량·평균가는 체결 쪽 라벨(fillQty/fillAvgPrice)을 그대로 쓴다.
+  orderStatus: '상태',
+  orderCreatedAt: '주문 시각',
+  orderStatusOpen: '대기',
+  orderStatusPartiallyFilled: '부분 체결',
+  orderStatusFilled: '체결 완료',
+  orderStatusCancelled: '취소됨',
+  orderStatusRejected: '거절됨',
+
+  // 포트폴리오 (PLAN 11.3). 합계는 행 라벨과 헷갈리지 않도록 '총'을 붙인다.
+  portfolioTitle: '포트폴리오',
+  portfolioBalance: '잔고 요약',
+  portfolioValue: '총 평가 금액',
+  portfolioUnrealizedPnl: '총 평가손익',
+  portfolioRealizedPnl: '총 실현 손익',
+  portfolioPositions: '보유 포지션',
+  portfolioPositionsEmpty: '아직 보유한 포지션이 없습니다.',
+  portfolioSettled: '정산 이력',
+  portfolioSettledEmpty: '아직 정산된 포지션이 없습니다.',
+  portfolioOrders: '주문 이력',
+  portfolioOrdersEmpty: '아직 주문 내역이 없습니다.',
+  /**
+   * Shown when the session ends while a private screen is still mounted — never a load failure,
+   * because nothing failed to load. The reader is told what actually happened and given the way
+   * back to the same screen.
+   */
+  portfolioSignedOut: '로그인이 풀렸습니다. 다시 로그인하면 이어서 볼 수 있습니다.',
+
+  // 상단 네비와 모바일 하단 탭. 홈/지갑/설정 라벨은 M1 블록에 이미 있다.
+  navMarkets: '시장',
+  navPortfolio: '포트폴리오',
+  navMenu: '메뉴',
+
+  // 관리자 시장 폼의 미리보기 (Q-M3-6): 실제 카드·정산 기준 컴포넌트를 그대로 그린다.
+  adminMarketPreview: '미리보기',
+  adminMarketPreviewCard: '카드 미리보기',
+  adminMarketPreviewDetail: '상세 미리보기',
+
+  // --- markets / trade (M4) ---
+  // 매수/매도 패널. 계약 수·P·확률은 전부 호출 쪽에서 붙인다 — 값은 평범한 문자열이어야 한다.
+  tradeBuy: '매수',
+  tradeSell: '매도',
+  // SegmentGroup의 접근 가능한 이름. 라디오 그룹은 이름이 없으면 스크린 리더가 무엇을
+  // 고르는 것인지 말해 주지 못한다(chartRangeLabel과 같은 자리).
+  tradeModeLabel: '입력 방식',
+  tradeSideLabel: '매수 · 매도',
+  tradeOutcomeLabel: '예 · 아니오',
+  tradeModeAmount: 'P 금액',
+  tradeModeShares: '계약 수',
+  tradeUnitContracts: '계약',
+  tradeAmountLabel: '금액',
+  tradeMax: '최대',
+  tradeHolding: '보유',
+  // 견적 요약 (PLAN 11.1-2): "N계약 · 평균 63P · 맞히면 N×100P (수익 +X P)".
+  tradeContracts: '계약 수',
+  tradeAvgPrice: '평균가',
+  tradePayout: '맞히면 지급',
+  tradeProfit: '예상 수익',
+  tradeAfterProb: '거래 후 확률',
+  // 슬리피지 허용치는 숨기지 않고 절대 금액으로 보여 준다.
+  tradeMaxCost: '최대 지불',
+  tradeMinProceeds: '최소 수령',
+  tradeLoginToTrade: '로그인하고 예측하기',
+  tradeCharge: '충전하기',
+  tradeBought: '매수가 완료되었습니다.',
+  tradeSold: '매도가 완료되었습니다.',
+  // PRICE_MOVED(409) 뒤의 재확인 단계. 새 견적을 보고 한 번 더 눌러야 주문이 나간다.
+  tradePrevious: '이전',
+  tradeReconfirm: '가격이 바뀌었습니다. 새 견적으로 다시 눌러 주세요.',
+  errTradeTooSmall: '한 계약도 살 수 없는 금액입니다.',
+  errTradeAmount: '금액은 1P 이상으로 입력해 주세요.',
+  errTradeShares: '계약 수는 1 이상 1,000,000 이하로 입력해 주세요.',
+  errTradeSharesMax: '보유할 수 있는 계약 수를 넘습니다.',
+  errTradeNoPosition: '보유한 계약이 없습니다.',
+  errTradePosition: '보유한 계약보다 많이 팔 수 없습니다.',
+  errTradeBalance: '잔고가 부족합니다.',
+  errTradeClosed: '마감된 시장입니다.',
+  errTradeDuplicate: '이미 처리된 주문입니다. 잔고와 포지션을 확인해 주세요.',
+  errTradeNotFound: '시장을 찾을 수 없습니다.',
+  errTradeQuote: '견적을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.',
+
   // --- generic ---
   errUnknown: '문제가 발생했습니다. 잠시 후 다시 시도해 주세요.',
   errNetwork: '서버에 연결할 수 없습니다.',

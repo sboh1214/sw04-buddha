@@ -25,6 +25,7 @@ import { type ReactNode, useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
+import { listView } from '@/lib/query-client';
 import {
   useAdminMarket,
   useCategories,
@@ -498,6 +499,10 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
             categories={categories}
             disabled={!editable}
             lmsrDisabled={!canEditLiquidity(market.status)}
+            // The row itself, so the 미리보기 shows the price this market TRADES at rather than
+            // re-deriving the one it opened at from an `initialProbBp` the API will not let the
+            // form change any more.
+            base={market}
           />
           <Button
             type="submit"
@@ -618,28 +623,45 @@ function EventPayload({ type, payload }: { type: MarketEventType; payload: unkno
 /** Newest fills, anonymous (PLAN 7.1). Waits for the market to leave draft (public 404). */
 function RecentFills({ market }: { market: AdminMarket }) {
   const fills = useMarketFills(market.id, market.status !== 'draft');
+  // The public twin's ladder, and the same fourth state: a refetch that fails keeps the rows and
+  // reports `isRefetchError`, which `isLoadingError` alone folds into an ordinary list. Here as
+  // there, the refetch is the only path a new fill arrives by — and the card above already draws
+  // `adminMarketRefreshFailed` for exactly this, so saying nothing here was the odd one out.
+  const view = listView(fills);
+  const rows = fills.data ?? [];
   return (
     <Card.Root>
       <Card.Header>
         <Text fontWeight="semibold">{copy.adminMarketFills}</Text>
       </Card.Header>
       <Card.Body>
+        {view === 'stale' && market.status !== 'draft' && (
+          <Alert.Root status="warning" role="status" data-testid="admin-market-fills-stale" mb="3">
+            <Alert.Indicator />
+            <Alert.Content>
+              <Alert.Description>{copy.adminMarketRefreshFailed}</Alert.Description>
+            </Alert.Content>
+            <Button size="xs" variant="outline" ml="auto" onClick={() => void fills.refetch()}>
+              {copy.retry}
+            </Button>
+          </Alert.Root>
+        )}
         {market.status === 'draft' ? (
           <Text color="fg.muted">{copy.adminNoFills}</Text>
-        ) : fills.isPending ? (
+        ) : view === 'pending' ? (
           <Skeleton height="12" />
-        ) : fills.isLoadingError ? (
+        ) : view === 'failed' ? (
           <Alert.Root status="error" role="alert">
             <Alert.Indicator />
             <Alert.Content>
               <Alert.Description>{copy.errUnknown}</Alert.Description>
             </Alert.Content>
           </Alert.Root>
-        ) : fills.data.length === 0 ? (
+        ) : rows.length === 0 ? (
           <Text color="fg.muted">{copy.adminNoFills}</Text>
         ) : (
           <Stack gap="1">
-            {fills.data.map((fill) => (
+            {rows.map((fill) => (
               <HStack
                 key={fill.id}
                 gap="3"

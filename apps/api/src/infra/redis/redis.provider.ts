@@ -84,3 +84,44 @@ export const redisProvider: Provider<Redis> = {
   useFactory: (config: ConfigService<Env, true>): Redis =>
     createRedisClient(config.get('REDIS_URL', { infer: true })),
 };
+
+/**
+ * The M4 gateway's own pub/sub connection (`market:*`, `user:*`). A connection in subscriber
+ * mode refuses ordinary commands, so it cannot be the shared client.
+ */
+export const REDIS_SUBSCRIBER = Symbol('REDIS_SUBSCRIBER');
+
+/**
+ * The connection `@socket.io/redis-adapter` puts in subscriber mode. Kept apart from
+ * REDIS_SUBSCRIBER so the adapter owns its own (p)subscribe lifecycle and its notepack frames
+ * never interleave with our JSON on one `pmessage` listener.
+ */
+export const REDIS_ADAPTER_SUBSCRIBER = Symbol('REDIS_ADAPTER_SUBSCRIBER');
+
+/**
+ * A subscriber built by the same factory as the shared client — never `redis.duplicate()`,
+ * which would copy the options object but skip the error logger, and never a hand-rolled
+ * `new Redis(url)`, which would drop every bound above.
+ *
+ * Both bounds are deliberately kept, because neither one measures the wait for messages:
+ * `commandTimeout` is armed per command when it is issued, so on a subscriber it bounds only
+ * the reply to a command WE send (PSUBSCRIBE, the keep-alive PING, QUIT) and is cleared when
+ * that reply lands — a delivered `pmessage` is not a command reply and needs no queue entry.
+ * `socketTimeout` is armed only while `commandQueue` is non-empty (see above), so a connection
+ * parked on `pmessage` never arms it either; `market-publisher.test.ts` pins exactly that.
+ * What is left is a PSUBSCRIBE rejected on `commandTimeout` against a live-but-silent Redis,
+ * which — with `autoResendUnfulfilledCommands: false` — is dropped rather than resent and
+ * produces no later `ready`. That is a gateway concern, not a client one, and MarketGateway
+ * answers it with a bounded re-arm retry (Q-M3-7).
+ */
+function subscriberProvider(token: symbol): Provider<Redis> {
+  return {
+    provide: token,
+    inject: [ConfigService],
+    useFactory: (config: ConfigService<Env, true>): Redis =>
+      createRedisClient(config.get('REDIS_URL', { infer: true })),
+  };
+}
+
+export const redisSubscriberProvider = subscriberProvider(REDIS_SUBSCRIBER);
+export const redisAdapterSubscriberProvider = subscriberProvider(REDIS_ADAPTER_SUBSCRIBER);

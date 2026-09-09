@@ -12,8 +12,9 @@ import {
 } from '@chakra-ui/react';
 import { Controller, type UseFormReturn } from 'react-hook-form';
 import { copy } from '@/copy';
-import { type Category } from '@/lib/api';
+import { type Category, type MarketSummary } from '@/lib/api';
 import { type MarketFormValues, maxLossHelp } from '@/lib/market-form';
+import { MarketPreview } from './market-preview';
 
 interface MarketFormFieldsProps {
   form: UseFormReturn<MarketFormValues>;
@@ -24,11 +25,19 @@ interface MarketFormFieldsProps {
   lmsrDisabled?: boolean;
   /** The slug is chosen at creation only. */
   showSlug?: boolean;
+  /**
+   * The market being edited, passed straight to the 미리보기 so an already-traded market previews
+   * at its LIVE price rather than the one it opened at. Absent on 시장 만들기.
+   */
+  base?: MarketSummary;
 }
 
 /**
  * The inputs of the market form (PLAN 12), shared by 시장 만들기 and the detail's 수정 card so
  * the two cannot drift. The owner holds the `useForm` and decides what a submit means.
+ *
+ * The 미리보기 beneath them (Q-M3-6) is fed from the same `watch()`, so both screens got it at
+ * once and neither can show a stale card.
  */
 export function MarketFormFields({
   form,
@@ -36,6 +45,7 @@ export function MarketFormFields({
   disabled = false,
   lmsrDisabled = false,
   showSlug = false,
+  base,
 }: MarketFormFieldsProps) {
   const {
     register,
@@ -43,9 +53,11 @@ export function MarketFormFields({
     watch,
     formState: { errors },
   } = form;
-  const probabilityPct = watch('probabilityPct');
-  const liquidityB = watch('liquidityB');
-  const maxLoss = maxLossHelp(probabilityPct, liquidityB);
+  // The whole values object rather than the two fields the max-loss line needs: `watch()`
+  // re-renders this component on every keystroke, which is what makes the preview below track
+  // typing. Nothing else changes — the help line still reads the same two fields.
+  const values = watch();
+  const maxLoss = maxLossHelp(values.probabilityPct, values.liquidityB);
 
   return (
     <Stack gap="3">
@@ -174,6 +186,8 @@ export function MarketFormFields({
           <Field.ErrorText>{errors.slug?.message}</Field.ErrorText>
         </Field.Root>
       )}
+
+      <MarketPreview values={values} categories={categories} base={base} />
     </Stack>
   );
 }

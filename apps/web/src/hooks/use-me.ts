@@ -3,7 +3,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { copy } from '@/copy';
 import { api, unwrap, type Me } from '@/lib/api';
-import { authClient, authErrorMessage, useSession } from '@/lib/auth-client';
+import { authClient, authErrorMessage } from '@/lib/auth-client';
+import { useSession } from '@/lib/use-session';
 
 /** Query key rule from PLAN 11.5. */
 export const ME_QUERY_KEY = ['me'] as const;

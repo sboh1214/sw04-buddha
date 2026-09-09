@@ -304,7 +304,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** Markets by status (default open), never drafts; sorted by volume, closing or newest */
+        /** Markets by status (default open), never drafts; sorted by volume, closing or newest. Each card carries up to 25 hourly YES samples over the last 24 hours, oldest first. */
         get: operations["listMarkets"];
         put?: never;
         post?: never;
@@ -338,7 +338,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** Price history, ascending, downsampled to at most 500 points (first and last always kept) from the newest 10000 ticks of the range. `resolution` is accepted but served as raw until M4. */
+        /** Price series, ascending, at most 500 points. `raw` returns stored ticks, downsampled from the newest 10000 of the range (`truncated` says when older ones were left out). `1m`/`1h` sample the probability in force on an absolute grid, coarsening the stride until the window fits; `bucketSeconds` reports the stride served, and the point at `from` carries the last value at or before it, so the left edge is never empty. */
         get: operations["listMarketTicks"];
         put?: never;
         post?: never;
@@ -789,12 +789,40 @@ export type components = {
             /** @enum {string} */
             type: "created" | "opened" | "closed" | "resolve_proposed" | "result_changed" | "finalized" | "voided" | "rules_edited";
         };
+        MarketListItem: {
+            category: {
+                nameKo: string;
+                slug: string;
+            };
+            /** Format: date-time */
+            closeAt: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: uuid */
+            id: string;
+            imageUrl: string | null;
+            lastPrice: number;
+            /** Format: date-time */
+            openAt: string | null;
+            pYesBp: number;
+            /** @enum {string|null} */
+            resolvedResult: "YES" | "NO" | null;
+            slug: string;
+            sparkline: number[];
+            /** @enum {string} */
+            status: "draft" | "open" | "closed" | "resolving" | "settled" | "voided";
+            title: string;
+            tradeCount: number;
+            traderCount: number;
+            volumeP: components["schemas"]["PAmount"];
+        };
         MarketStats: {
             /** Format: uuid */
             id: string;
             lastPrice: number;
             pYesBp: number;
             tradeCount: number;
+            traderCount: number;
             volumeP: components["schemas"]["PAmount"];
         };
         MarketSummary: {
@@ -909,6 +937,18 @@ export type components = {
             updatedAt: string;
             version: number;
         };
+        PriceSeries: {
+            bucketSeconds: number;
+            /** Format: date-time */
+            from: string;
+            points: components["schemas"]["PriceTick"][];
+            /** @enum {string} */
+            resolution: "raw" | "1m" | "1h";
+            /** Format: date-time */
+            to: string;
+            tradeCount: number;
+            truncated: boolean;
+        };
         PriceTick: {
             pYesBp: number;
             /** @enum {string} */
@@ -934,6 +974,7 @@ export type components = {
             priceAvgBp: number;
             priceBeforeBp: number;
             shares: number;
+            tradeCount: number;
         };
         RedeemCouponBody: {
             code: components["schemas"]["CouponCode"];
@@ -2234,7 +2275,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        data: components["schemas"]["MarketSummary"][];
+                        data: components["schemas"]["MarketListItem"][];
                         meta: components["schemas"]["PageMeta"];
                     };
                 };
@@ -2297,6 +2338,7 @@ export interface operations {
                 from?: string;
                 resolution?: "raw" | "1m" | "1h";
                 to?: string;
+                windowSeconds?: number;
             };
             header?: never;
             path: {
@@ -2312,7 +2354,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        data: components["schemas"]["PriceTick"][];
+                        data: components["schemas"]["PriceSeries"];
                     };
                 };
             };

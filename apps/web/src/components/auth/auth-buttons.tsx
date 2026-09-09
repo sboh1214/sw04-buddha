@@ -13,6 +13,12 @@ import { signOut } from '@/lib/auth-client';
 /**
  * Right side of the top nav (PLAN 11.4 AuthButtons): logged out -> 로그인 / 가입하기;
  * logged in -> 잔고 chip + profile menu (관리자 for admins / 설정 / 로그아웃).
+ *
+ * The pending skeleton below is the same on the server and through hydration because
+ * `useSession` holds `isPending` until the tab has hydrated (lib/auth-client.ts). Without
+ * that, this component was the repo's loudest hydration mismatch — the server sent a skeleton
+ * where the client wanted the 로그인/가입하기 pair — and React recovered by regenerating the
+ * tree from the root, wiping typed input and focus anywhere on the page.
  */
 export function AuthButtons() {
   const { data: me, isPending, isLoggedIn } = useMe();

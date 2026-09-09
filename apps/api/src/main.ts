@@ -4,6 +4,7 @@ import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fa
 import { AppModule } from './app.module.js';
 import { loadEnv, parseTrustProxy } from './config/env.js';
 import { MAX_PARAM_LENGTH } from './infra/http/fastify-options.js';
+import { RealtimeIoAdapter } from './realtime/realtime-io.adapter.js';
 
 async function bootstrap(): Promise<void> {
   // Fastify server options (trustProxy) and the listen address must be known before
@@ -28,6 +29,11 @@ async function bootstrap(): Promise<void> {
   app.setGlobalPrefix('api');
   app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
   app.enableShutdownHooks();
+
+  // Before init (app.listen() runs it): the /ws handshake CORS, the Origin gate, the Redis
+  // adapter and the message bound cannot be expressed as @WebSocketGateway() metadata. The same
+  // line exists in test/app.ts — the two must not drift.
+  app.useWebSocketAdapter(new RealtimeIoAdapter(app));
 
   await app.listen(env.API_PORT, env.API_HOST);
   Logger.log(`API listening on http://${env.API_HOST}:${String(env.API_PORT)}/api`, 'Bootstrap');

@@ -36,7 +36,25 @@ const AUTH_ENV_KEYS = [
   'SMTP_HOST',
   'SMTP_PORT',
   'SMTP_FROM',
+  'SMTP_USER',
+  'SMTP_PASS',
+  'SMTP_SECURE',
+  'AUTH_COOKIE_DOMAIN',
 ] as const satisfies readonly (keyof Env)[];
+
+/**
+ * Every key of `Env` is projected, and this line is what keeps that true.
+ *
+ * `envFromConfig` below builds a `Partial<Env>` and CASTS it, so a key missing from the list is
+ * not a type error — it is `undefined` at runtime, in a value the auth instance reads as
+ * configuration. `AUTH_COOKIE_DOMAIN` was added to the schema and to `createAuth` and dropped
+ * here, so the session cookie would have stayed host-only in exactly the deployment the setting
+ * exists for, with nothing failing and nothing logged. `satisfies` above only checks that each
+ * entry IS a key; this checks that no key is MISSING, so the next one cannot slip through.
+ */
+type UnprojectedEnvKey = Exclude<keyof Env, (typeof AUTH_ENV_KEYS)[number]>;
+type AssertNoUnprojectedEnvKey<T extends never> = T;
+export type _EveryEnvKeyIsProjected = AssertNoUnprojectedEnvKey<UnprojectedEnvKey>;
 
 /** Rebuilds the validated Env from ConfigService (typed values, not raw strings). */
 function envFromConfig(config: ConfigService<Env, true>): Env {

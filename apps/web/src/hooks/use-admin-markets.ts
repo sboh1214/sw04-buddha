@@ -3,6 +3,7 @@
 import { type QueryClient, useQuery, useQueryClient } from '@tanstack/react-query';
 import { type Category, api, unwrap, type AdminMarket, type Fill } from '@/lib/api';
 import { marketIdParam } from '@/lib/market-admin';
+import { CATEGORIES_QUERY_KEY, MARKET_FILLS_KEY, marketFillsKey } from '@/lib/market-keys';
 
 /**
  * Query keys the admin market screens share (PLAN 11.5 rules, admin-prefixed like
@@ -11,11 +12,16 @@ import { marketIdParam } from '@/lib/market-admin';
  */
 export const ADMIN_MARKETS_KEY = ['admin', 'markets'] as const;
 export const ADMIN_MARKET_KEY = ['admin', 'market'] as const;
-export const CATEGORIES_QUERY_KEY = ['categories'] as const;
-export const MARKET_FILLS_KEY = ['market-fills'] as const;
 
 export const adminMarketKey = (id: string) => [...ADMIN_MARKET_KEY, id] as const;
-export const marketFillsKey = (id: string) => [...MARKET_FILLS_KEY, id] as const;
+
+/**
+ * The two keys the admin screens share with the public market screens now live in the
+ * directive-free `lib/market-keys.ts`, because a server component may not import them from
+ * here: every export of a `'use client'` module is a client reference, which throws when it
+ * is called during the server render. Re-exported so no admin import site had to move.
+ */
+export { CATEGORIES_QUERY_KEY, MARKET_FILLS_KEY, marketFillsKey };
 
 /** Active categories in display order (`GET /categories`, public). */
 export function useCategories() {

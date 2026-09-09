@@ -53,6 +53,22 @@ export function noEmailFallback(provider: 'kakao' | 'naver', providerAccountId: 
   return `${provider}_${providerAccountId}@${NO_EMAIL_DOMAIN}`;
 }
 
+/**
+ * The `advanced` half that decides whether the session cookie carries a `Domain`.
+ *
+ * Exported and pure so the contract can be pinned without booting an app: what matters is not
+ * that we pass the option but what better-auth DOES with it, and that is a library behaviour
+ * an upgrade can change silently (auth-cookie.test.ts reads the resulting attributes back
+ * through better-auth's own `getCookies`).
+ *
+ * `domain` is always explicit. better-auth's fallback when `crossSubDomainCookies` is enabled
+ * without one is `new URL(baseURL).hostname` — the WEB host — which reaches no API host at
+ * all, so the option would appear to be on while changing nothing that matters.
+ */
+export function crossSubDomainCookies(domain: string | undefined) {
+  return domain === undefined ? {} : { crossSubDomainCookies: { enabled: true, domain } };
+}
+
 export interface CreateAuthOptions {
   env: Env;
   db: Db;
@@ -294,6 +310,21 @@ export function createAuth({ env, db, mailer, logger = new Logger('Auth') }: Cre
       // better-auth silently skips the Origin/CSRF check when NODE_ENV=test; keep it on so
       // integration tests exercise the same protection as production.
       disableOriginCheck: false,
+      /**
+       * Only when `AUTH_COOKIE_DOMAIN` names one (ADR-0017 추기). Unset, the cookie carries no
+       * `Domain` and is host-only, which is what every environment has today and what local
+       * development needs — `localhost:3000` and `localhost:4000` are the SAME host, ports
+       * being no part of a cookie's identity.
+       *
+       * A deployment that splits web and API across hosts needs it: the login cookie is minted
+       * through the WEB host (the Next rewrite proxies `/api/auth/*` server-side) while the
+       * Socket.IO client dials the API host directly, and same-site is not the same thing as
+       * same-host. `domain` is passed explicitly and never left to better-auth, whose fallback
+       * is `new URL(baseURL).hostname` — the web host, which reaches no API host at all. Only
+       * `Domain` is added: SameSite stays `lax` and the `__Secure-` prefix (https) permits a
+       * `Domain`, unlike `__Host-`.
+       */
+      ...crossSubDomainCookies(env.AUTH_COOKIE_DOMAIN),
     },
     telemetry: { enabled: false },
   });

@@ -1,4 +1,9 @@
-import { AUDIT_FAILURE_KINDS, MARKET_EVENT_TYPES, MARKET_STATUSES } from '@buddha/shared';
+import {
+  AUDIT_FAILURE_KINDS,
+  MARKET_EVENT_TYPES,
+  MARKET_STATUSES,
+  MINUS_SIGN,
+} from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
 import { ApiError } from './api';
@@ -13,7 +18,12 @@ import {
   canEditLiquidity,
   canVoid,
   compactJson,
+  deltaLabel,
+  deltaMoveKey,
   formatBp,
+  formatContracts,
+  formatNoPrice,
+  formatPricePerContract,
   formatQuantity,
   formatYesPrice,
   isAwaitingSettlement,
@@ -107,6 +117,24 @@ describe('formats', () => {
     expect(formatQuantity('abc')).toBe('abc');
   });
 
+  it('reads the 아니오 side as the complement of the same price', () => {
+    // The two labels on one card must add up to 100, so both come from lastPrice.
+    expect(formatNoPrice(63)).toBe(`${copy.no} 37%`);
+    expect(formatNoPrice(1)).toBe(`${copy.no} 99%`);
+  });
+
+  it('reads basis points as what one contract costs', () => {
+    expect(formatPricePerContract(6300)).toBe('63.00P');
+    expect(formatPricePerContract(5)).toBe('0.05P');
+  });
+
+  it('appends the contract unit to a grouped count', () => {
+    expect(formatContracts(1234)).toBe(`1,234${copy.tradeUnitContracts}`);
+    // A quote answers fractional shares; formatQuantity trims them the same way it trims the
+    // quantity strings the API sends.
+    expect(formatContracts(0.5)).toBe(`0.5${copy.tradeUnitContracts}`);
+  });
+
   it('renders a payload as one JSON line', () => {
     expect(compactJson({ a: 1, b: 'x' })).toBe('{"a":1,"b":"x"}');
     expect(compactJson(null)).toBe('');
@@ -114,6 +142,26 @@ describe('formats', () => {
     const cyclic: { self?: unknown } = {};
     cyclic.self = cyclic;
     expect(compactJson(cyclic)).toBe(copy.payloadUnreadable);
+  });
+});
+
+describe('deltaLabel', () => {
+  it('signs a rise and says nothing when there is nothing to report', () => {
+    expect(deltaLabel(2)).toBe('+2%p');
+    expect(deltaLabel(2.34)).toBe('+2.3%p');
+    expect(deltaLabel(0)).toBe('');
+    expect(deltaLabel(null)).toBe('');
+    // Under a tenth of a point the badge stays away entirely rather than showing "+0%p":
+    // 실시간은 조용하게 (PLAN 11.1-5).
+    expect(deltaLabel(0.04)).toBe('');
+    expect(deltaLabel(Number.NaN)).toBe('');
+  });
+
+  it('falls with U+2212, never an ASCII hyphen', () => {
+    // A hyphen is narrower than the plus and reads as a stray dash beside the number.
+    expect(deltaLabel(-2)).toBe(`${MINUS_SIGN}2%p`);
+    expect(deltaLabel(-2)).not.toContain('-');
+    expect(deltaLabel(-1.24)).toBe(`${MINUS_SIGN}1.2%p`);
   });
 });
 
@@ -304,5 +352,32 @@ describe('marketFormError', () => {
     expect(marketFormError(apiError(409, 'MARKET_NOT_OPEN'))).toBeUndefined();
     expect(marketFormError(new Error('network'))).toBeUndefined();
     expect(marketFormError(undefined)).toBeUndefined();
+  });
+});
+
+describe('deltaMoveKey', () => {
+  it('gives consecutive small moves distinct identities, where the whole percent did not', () => {
+    // THE HAZARD: `lastPrice` is the whole percent, so three +0.1%p trades inside one percent all
+    // produced `50:+0.1%p`. The badge remembers the last DISMISSED identity, so the second and
+    // third moves matched it and the badge — five seconds, PLAN 11.4 — never came back.
+    const label = deltaLabel(0.1);
+    expect(deltaMoveKey(5010, 50, label)).not.toBe(deltaMoveKey(5020, 50, label));
+    expect(deltaMoveKey(5020, 50, label)).not.toBe(deltaMoveKey(5030, 50, label));
+    // The old identity, kept here to show what it collapsed: all three were one string.
+    expect(`${String(50)}:${label}`).toBe(`${String(50)}:${label}`);
+  });
+
+  it('is the whole percent only for a caller that has no basis points', () => {
+    // A card omits `pYesBp` (PLAN 11.1-1 wants the percentage alone); today the badge has one
+    // call site and it passes both, so this is the contract, not a live path.
+    expect(deltaMoveKey(undefined, 63, '+2%p')).toBe('63:+2%p');
+    expect(deltaMoveKey(6300, 63, '+2%p')).toBe('6300:+2%p');
+  });
+
+  it('cannot collide for two consecutive moves, because a move that ends where it began is hidden', () => {
+    // The property the fix rests on: sharing an identity requires the same ending probability,
+    // and a move from 5010 to 5010 has a zero delta, which `deltaLabel` renders as '' — no badge.
+    expect(deltaLabel(0)).toBe('');
+    expect(deltaMoveKey(5010, 50, deltaLabel(0))).toBe('5010:');
   });
 });

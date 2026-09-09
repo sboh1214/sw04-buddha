@@ -17,4 +17,6 @@ export * from './market.js';
 export * from './me.js';
 export * from './mechanism.js';
 export * from './realtime.js';
+export * from './slippage.js';
+export * from './ticks.js';
 export * from './wallet.js';

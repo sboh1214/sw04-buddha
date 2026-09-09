@@ -30,22 +30,29 @@ export function browserSessionStorage(): KeyStorage | null {
   }
 }
 
-const PREFIX = 'buddha:charge-key:';
+const PREFIX = 'buddha:';
+
+/**
+ * Which flow a key belongs to. `charge-key` files a package purchase under the package id;
+ * `trade-key` files a trade under the market id (PLAN 5.4, decision-trade-panel §5.1).
+ */
+export type KeyNamespace = 'charge-key' | 'trade-key';
 
 /**
  * Client side of PLAN 5.4: one `Idempotency-Key` per intent, kept until the server has decided.
  *
  * `take(intent)` hands out the key for an intent — the one an unanswered attempt left behind,
  * or a fresh UUID. `settle(intent, status)` is called with the HTTP status the server answered
- * with. A 2xx or 4xx is a decision (the purchase happened, or was refused for a reason the user
- * has to act on), so the key is spent and the next click is a new purchase. A 5xx, like a
- * request that never came back at all, may have acted before it failed, so the key stays and
- * the retry lets the server answer for what it did.
+ * with. A 2xx or 4xx is a decision (the purchase or the trade happened, or was refused for a
+ * reason the user has to act on), so the key is spent and the next click is a new one. A 5xx,
+ * like a request that never came back at all, may have acted before it failed, so the key stays
+ * and the retry lets the server answer for what it did.
  *
  * One 4xx is not a decision: the DUPLICATE_REQUEST that says the first request is still
  * running (`isChargeInProgress` in hooks/use-wallet). The caller skips `settle` for it, so the
- * next click collects that purchase rather than opening another. The class stays ignorant of
- * response bodies on purpose; it only counts statuses.
+ * next click collects that purchase rather than opening another. A trade has no such answer —
+ * its 409 always means "same key, other terms" — so `useTrade` settles on every answered
+ * status. The class stays ignorant of response bodies on purpose; it only counts statuses.
  *
  * Keys live in `sessionStorage`, not in the component: a request that died on the way back is
  * exactly the moment a user reloads the page, and a key that dies with the form would make the
@@ -57,14 +64,24 @@ const PREFIX = 'buddha:charge-key:';
  * replay; that lost answer is exactly what the storage exists to recover. A duplicated tab
  * inherits the storage, so a key in flight there replays the same purchase instead of buying
  * again; that is the server's replay path, not a second charge.
+ *
+ * And by flow, for the same reason one level up: a charge intent is a package id while a trade
+ * intent is a market id, and the two settle by different rules, so neither may read or spend a
+ * key the other is still waiting on. `charge-key` is the default and the namespace is the third
+ * parameter so that existing call sites compile and — the part that matters — every key already
+ * sitting in a tab's sessionStorage keeps its exact name and stays replayable across the deploy.
  */
 export class IdempotencyKeys {
   private storage: KeyStorage;
   private readonly prefix: string;
 
   /** `account` is the signed-in user's id: one account's keys are invisible to another. */
-  constructor(account: string, storage: KeyStorage | null = browserSessionStorage()) {
-    this.prefix = `${PREFIX}${account}:`;
+  constructor(
+    account: string,
+    storage: KeyStorage | null = browserSessionStorage(),
+    namespace: KeyNamespace = 'charge-key',
+  ) {
+    this.prefix = `${PREFIX}${namespace}:${account}:`;
     this.storage = storage ?? new MemoryStorage();
   }
 

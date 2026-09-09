@@ -69,6 +69,7 @@ describe.skipIf(!hasTestInfra)('quotes (integration)', () => {
       priceBeforeBp: expected.priceBeforeBp,
       priceAfterBp: expected.priceAfterBp,
       maxPayoutP: '25000',
+      tradeCount: 0,
     });
     expect(expected.priceAfterBp).toBeGreaterThan(expected.priceBeforeBp);
 
@@ -116,6 +117,7 @@ describe.skipIf(!hasTestInfra)('quotes (integration)', () => {
       priceBeforeBp: expected.priceBeforeBp,
       priceAfterBp: expected.priceAfterBp,
       maxPayoutP: '0',
+      tradeCount: 0,
     });
     expect(expected.priceAfterBp).toBeLessThan(expected.priceBeforeBp);
   });
@@ -144,6 +146,7 @@ describe.skipIf(!hasTestInfra)('quotes (integration)', () => {
       priceBeforeBp: exact.priceBeforeBp,
       priceAfterBp: exact.priceAfterBp,
       maxPayoutP: (BigInt(shares) * 100n).toString(),
+      tradeCount: 0,
     });
     // Exact: this many fit the budget, one more does not.
     expect(BigInt(data.amountP)).toBeLessThanOrEqual(spend);
@@ -165,6 +168,7 @@ describe.skipIf(!hasTestInfra)('quotes (integration)', () => {
       priceBeforeBp: 5_000,
       priceAfterBp: 5_000,
       maxPayoutP: '0',
+      tradeCount: 0,
     });
   });
 

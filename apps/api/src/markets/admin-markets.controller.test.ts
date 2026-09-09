@@ -18,6 +18,7 @@ import {
   type AdminMarket,
   type Market,
   type MarketSummary,
+  type PriceSeries,
   type Outcome,
 } from '@buddha/shared';
 import { randomUUID } from 'node:crypto';
@@ -408,6 +409,51 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     expect(errorOf(refused)).toMatchObject({ message: 'Market is closed' });
   });
 
+  it('publishes the unchanged status after an edit that moves an open market, and only then', async () => {
+    // The ONLY delivery a descriptive edit has: no event carries `closeAt`, and the web takes it
+    // from a REST answer alone, so `update` republishes `market:status` and the client's handler
+    // turns that into the refetch (A-M4-36). Three assertions on one subscription: an edit that
+    // MOVED an open row publishes exactly one, a resave of the same text publishes none, and a
+    // draft — which no public route shows — publishes none either.
+    const row = await market({ status: 'open' });
+    const draft = await market({ status: 'draft' });
+    const subscriber = new Redis(process.env.TEST_REDIS_URL!, { maxRetriesPerRequest: 1 });
+    const received: [string, string][] = [];
+    subscriber.on('message', (channel, message) => received.push([channel, message]));
+    await subscriber.subscribe(marketChannel(row.id), marketChannel(draft.id));
+    try {
+      const extended = new Date(Date.now() + 30 * DAY_MS).toISOString();
+      const res = await patch(`/api/v1/admin/markets/${row.id}`, { closeAt: extended });
+      expect(res.statusCode).toBe(200);
+      const edited = detail(res);
+      expect(edited.closeAt).toBe(extended);
+      await waitForMessages(received, 1, 'market:status of the close-time edit');
+      await sleep(100);
+      expect(received).toHaveLength(1);
+      expect(received[0]![0]).toBe(marketChannel(row.id));
+      // The status is deliberately the one the market already had, and `ts` is this edit's
+      // post-lock database clock — the same instant the row and its audit entry carry.
+      expect(JSON.parse(received[0]![1])).toMatchObject({
+        type: 'market:status',
+        marketId: row.id,
+        status: 'open',
+        ts: edited.updatedAt,
+      });
+
+      // A PATCH that writes the same text moves `updated_at` and the audit row and nothing on
+      // the wire: the gate is the audit projection, not "the body was non-empty". A draft edit
+      // publishes nothing either — there is no room anyone could have joined.
+      const resaved = await patch(`/api/v1/admin/markets/${row.id}`, { title: row.title });
+      expect(resaved.statusCode).toBe(200);
+      const drafted = await patch(`/api/v1/admin/markets/${draft.id}`, { title: '초안 제목' });
+      expect(drafted.statusCode).toBe(200);
+      await sleep(100);
+      expect(received).toHaveLength(1);
+    } finally {
+      await subscriber.quit();
+    }
+  });
+
   it('keeps an open market from being edited down to blank rules (RULES_REQUIRED)', async () => {
     // What open() required holds for as long as the market trades; a draft may still be
     // saved with blank rules (it cannot open that way).
@@ -536,9 +582,13 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       expect(pub.statusCode).toBe(200);
       expect(data<Market>(pub)).toMatchObject({ status: 'open', pYesBp: 4_000 });
       const chart = await t.app.inject({ method: 'GET', url: `/api/v1/markets/${draft.id}/ticks` });
-      expect(data<unknown[]>(chart)).toEqual([
-        { ts: opened.openAt, pYesBp: 4_000, trigger: 'open' },
-      ]);
+      // `data` is a PriceSeries object since M4, not a bare array (ADR-0029).
+      expect(data<PriceSeries>(chart)).toMatchObject({
+        resolution: 'raw',
+        bucketSeconds: 0,
+        truncated: false,
+        points: [{ ts: opened.openAt, pYesBp: 4_000, trigger: 'open' }],
+      });
 
       // PLAN 8: `market:status` published after commit on the market's channel.
       await new Promise<void>((resolve, reject) => {

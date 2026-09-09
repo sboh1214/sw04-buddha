@@ -3,14 +3,16 @@ import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import {
   FILLS_RECENT_LIMIT,
   MARKET_SLUG_MAX,
+  SPARKLINE_MAX_POINTS,
+  SPARKLINE_WINDOW_HOURS,
   TICKS_MAX_POINTS,
   TICKS_SCAN_MAX,
   categorySchema,
   fillSchema,
+  marketListItemSchema,
   marketListQuerySchema,
   marketSchema,
-  marketSummarySchema,
-  priceTickSchema,
+  priceSeriesSchema,
   quoteBodySchema,
   quoteResultSchema,
   ticksQuerySchema,
@@ -18,9 +20,9 @@ import {
   type Category,
   type Fill,
   type Market,
+  type MarketListItem,
   type MarketListQuery,
-  type MarketSummary,
-  type PriceTick,
+  type PriceSeries,
   type QuoteBody,
   type QuoteResult,
   type TicksQuery,
@@ -65,13 +67,16 @@ export class MarketsController {
   @Get()
   @ApiOperation({
     operationId: 'listMarkets',
-    summary: 'Markets by status (default open), never drafts; sorted by volume, closing or newest',
+    summary:
+      'Markets by status (default open), never drafts; sorted by volume, closing or newest. ' +
+      `Each card carries up to ${String(SPARKLINE_MAX_POINTS)} hourly YES samples over the ` +
+      `last ${String(SPARKLINE_WINDOW_HOURS)} hours, oldest first.`,
   })
-  @ApiPageOf(marketSummarySchema)
+  @ApiPageOf(marketListItemSchema)
   @ApiErrors('VALIDATION_ERROR')
   async listMarkets(
     @Query({ schema: marketListQuerySchema }) query: MarketListQuery,
-  ): Promise<ApiPage<MarketSummary>> {
+  ): Promise<ApiPage<MarketListItem>> {
     const { items, nextCursor } = await this.markets.list(query);
     return new ApiPage(items, { nextCursor });
   }
@@ -102,16 +107,19 @@ export class MarketsController {
   @ApiOperation({
     operationId: 'listMarketTicks',
     summary:
-      `Price history, ascending, downsampled to at most ${String(TICKS_MAX_POINTS)} points ` +
-      `(first and last always kept) from the newest ${String(TICKS_SCAN_MAX)} ticks of the ` +
-      'range. `resolution` is accepted but served as raw until M4.',
+      `Price series, ascending, at most ${String(TICKS_MAX_POINTS)} points. ` +
+      '`raw` returns stored ticks, downsampled from the newest ' +
+      `${String(TICKS_SCAN_MAX)} of the range (\`truncated\` says when older ones were left ` +
+      'out). `1m`/`1h` sample the probability in force on an absolute grid, coarsening the ' +
+      'stride until the window fits; `bucketSeconds` reports the stride served, and the point ' +
+      'at `from` carries the last value at or before it, so the left edge is never empty.',
   })
-  @ApiData(priceTickSchema.array())
+  @ApiData(priceSeriesSchema)
   @ApiErrors('NOT_FOUND', 'VALIDATION_ERROR')
   listMarketTicks(
     @Param('id', { schema: uuidParamSchema }) id: string,
     @Query({ schema: ticksQuerySchema }) query: TicksQuery,
-  ): Promise<PriceTick[]> {
+  ): Promise<PriceSeries> {
     return this.markets.listTicks(id, query);
   }
 }

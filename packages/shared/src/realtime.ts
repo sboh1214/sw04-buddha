@@ -1,5 +1,6 @@
 import * as z from 'zod';
 import { pAmountSchema } from './api/p-amount.js';
+import { uuidSchema } from './api/uuid.js';
 import { BP_MAX, PRICE_MAX, PRICE_MIN } from './constants.js';
 import { marketStatusSchema, orderSideSchema, outcomeSchema } from './enums.js';
 
@@ -28,6 +29,14 @@ import { marketStatusSchema, orderSideSchema, outcomeSchema } from './enums.js';
  * event `market:status` must gain a strict key — `market_events.id` of the transition,
  * which is drawn under the market's row lock and is therefore in commit order per market —
  * and the market DTOs must carry that key so a snapshot can seed it (A-M3-19, Q-M3-8).
+ *
+ * Families. `realtimeEventSchema` is the publisher's union — everything that may reach
+ * Redis. The gateway never parses an inbound message with it: a `market:*` message is
+ * parsed with `marketRealtimeEventSchema` and a `user:*` message with
+ * `userRealtimeEventSchema`, so parsing per family IS the authorization check. A
+ * `user:balance` that appears on a market channel — a publisher bug, or anything else able
+ * to write to Redis — then fails to parse instead of being fanned out to every subscriber
+ * of that public room, which the wide union would have waved through.
  */
 export const REALTIME_EVENT_TYPES = [
   'market:tick',
@@ -66,6 +75,8 @@ export const marketTickEventSchema = z
     lastPrice: z.number().int().min(PRICE_MIN).max(PRICE_MAX),
     volumeP: pAmountSchema,
     tradeCount: z.number().int().min(0),
+    /** Raised by a trade from an account new to this market; see `MarketStats.traderCount`. */
+    traderCount: z.number().int().min(0),
     ts: tsSchema,
   })
   .meta({ id: 'MarketTickEvent' });
@@ -86,7 +97,13 @@ export const marketTradeEventSchema = z
   .meta({ id: 'MarketTradeEvent' });
 export type MarketTradeEvent = z.infer<typeof marketTradeEventSchema>;
 
-/** Room `market:<id>`: a status transition (open, close, resolve, finalize, void). */
+/**
+ * Room `market:<id>`: a status transition (open, close, resolve, finalize, void), or the same
+ * status republished so subscribers refetch a descriptive edit (A-M4-36, `MarketAdminService`
+ * `update`). Nothing in the payload changes on that repeat, which is what makes it safe: a
+ * client keeps the higher rank and drops it, and only the REST snapshot it triggers carries
+ * `closeAt`, `title` or `rules`.
+ */
 export const marketStatusEventSchema = z
   .object({
     type: z.literal('market:status'),
@@ -157,3 +174,90 @@ export function marketChannel(marketId: string): `market:${string}` {
 export function userChannel(userId: string): `user:${string}` {
   return `user:${userId}`;
 }
+
+/** PLAN 8 namespace. The browser connects to `${NEXT_PUBLIC_API_URL}/ws` (ADR-0017). */
+export const REALTIME_NAMESPACE = '/ws';
+
+/**
+ * The two Redis patterns the gateway holds. Fixed patterns, not one SUBSCRIBE per room:
+ * joining a room stays a synchronous in-process operation, so a `subscribe` never waits on
+ * a Redis round trip that `commandTimeout` could reject, and the gap between an emit and
+ * the join stays one event-loop tick instead of a network hop.
+ *
+ * That tick is all this pattern choice has to cover — it is NOT all the protocol leaves
+ * uncovered, which this comment used to say. A-M3-19's order is "subscribe, then take the REST
+ * snapshot", and a first page load runs it BACKWARDS by construction: the server takes the
+ * snapshot, and the room is joined only after the HTML has streamed, hydrated, waited on the
+ * session and completed a handshake. Everything published in that window reaches no socket of
+ * that tab, and it is hundreds of milliseconds to seconds wide, not one tick. It is accepted
+ * (A-M4-8, ADR-0031) because the ordering keys self-heal it: `market:tick` and `market:status`
+ * carry ABSOLUTE values, so the market's next event repairs the reading in full at no request
+ * cost. The residue is a market that trades once inside the gap and then goes quiet.
+ *
+ * The reconnect re-arm of Q-M3-7 is two idempotent commands rather than a rebuilt subscription
+ * set. They must keep matching what `marketChannel`/`userChannel` publish to.
+ */
+export const MARKET_CHANNEL_PATTERN = 'market:*';
+export const USER_CHANNEL_PATTERN = 'user:*';
+
+/**
+ * Market ids one `subscribe`/`unsubscribe` MESSAGE may carry — one page of `GET /markets`
+ * (PAGE_LIMIT_MAX). A per-message cap, not a per-socket one: `REALTIME_ROOMS_MAX` is
+ * deliberately higher, so a caller that holds more rooms than this (the home grid after a
+ * few "load more" presses, a portfolio with many positions) MUST slice its ids into chunks
+ * of this size. The gateway validates the whole payload before it joins anything, so one
+ * over-long message is refused entire and joins zero rooms.
+ */
+export const REALTIME_SUBSCRIBE_MAX = 100;
+/** Market rooms one socket may hold at once (~10 pages of the list). */
+export const REALTIME_ROOMS_MAX = 200;
+/** Largest client message the gateway accepts; 100 uuids in JSON is ~4 KB. */
+export const REALTIME_MAX_MESSAGE_BYTES = 16_384;
+
+/**
+ * Gateway-only control event: the Redis subscription was lost and re-armed, so events in
+ * the gap are gone and the client must re-run its REST snapshots (A-M3-19). NOT a
+ * `RealtimeEvent` — it is never published to Redis, so it is deliberately absent from
+ * `REALTIME_EVENT_TYPES` and `realtimeEventSchema`, and it carries no payload.
+ */
+export const RESYNC_EVENT = 'realtime:resync';
+
+/**
+ * Gateway-only error channel: the answer to a `subscribe`/`unsubscribe` the gateway refused,
+ * carrying the same `{ error: { code, message, details? } }` envelope a REST route would
+ * (PLAN 7.4). The client protocol has no acks, so this is the only way a refusal reaches the
+ * browser — and it lives here rather than beside the filter so the two sides cannot drift.
+ * `exception` is socket.io's own convention for a server-side handler failure.
+ */
+export const REALTIME_EXCEPTION_EVENT = 'exception';
+
+/**
+ * `subscribe` / `unsubscribe` payload. The ids are canonicalised here — A-M3-17's third
+ * boundary: an upper-case uuid would join a room no publisher ever writes to, and the
+ * socket would sit silent rather than fail.
+ */
+export const subscribeBodySchema = z.object({
+  marketIds: z.array(uuidSchema).min(1).max(REALTIME_SUBSCRIBE_MAX),
+});
+export type SubscribeBody = z.infer<typeof subscribeBodySchema>;
+
+/**
+ * The `market:<id>` room's events; a `market:*` message parses with this and nothing else.
+ * Infers `MarketRealtimeEvent`. No `.meta({ id })` on this or the mirror below: neither
+ * reaches a controller, and a dangling `components['schemas']` entry is the swagger trap.
+ */
+export const marketRealtimeEventSchema = z.discriminatedUnion('type', [
+  marketTickEventSchema,
+  marketTradeEventSchema,
+  marketStatusEventSchema,
+]);
+
+/**
+ * The `user:<id>` room's events; infers `UserRealtimeEvent`. Splitting the union is what
+ * keeps a `user:balance` published on a market channel from reaching every subscriber of
+ * that market — see the family paragraph at the top of this module.
+ */
+export const userRealtimeEventSchema = z.discriminatedUnion('type', [
+  userBalanceEventSchema,
+  userPositionEventSchema,
+]);

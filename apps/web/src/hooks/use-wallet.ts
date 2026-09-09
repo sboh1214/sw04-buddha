@@ -6,6 +6,7 @@ import { useRef } from 'react';
 import {
   api,
   isApiError,
+  isForAnotherAccount,
   unwrap,
   validationField,
   type ChargePackage,
@@ -13,7 +14,7 @@ import {
   type LedgerEntry,
   type Payment,
 } from '@/lib/api';
-import { useSession } from '@/lib/auth-client';
+import { useSession } from '@/lib/use-session';
 import { IdempotencyKeys } from '@/lib/idempotency';
 import { ME_QUERY_KEY } from './use-me';
 
@@ -109,16 +110,6 @@ export function isCouponRejection(error: unknown): boolean {
  */
 export function isChargeInProgress(error: unknown): boolean {
   return isApiError(error, 'DUPLICATE_REQUEST') && validationField(error) === 'Idempotency-Key';
-}
-
-/**
- * The 403 that means "the cookie belongs to somebody else than the account on screen": the
- * server refused to charge, or redeem for, an account the user is not looking at (PLAN 5.3
- * shape, see chargeBodySchema / redeemCouponBodySchema). Only this FORBIDDEN names the field;
- * the CSRF refusal names none.
- */
-export function isForAnotherAccount(error: unknown): boolean {
-  return isApiError(error, 'FORBIDDEN') && validationField(error) === 'expectedAccountId';
 }
 
 /**

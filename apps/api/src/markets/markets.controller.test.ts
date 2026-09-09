@@ -8,23 +8,27 @@ import { createCategory, createMarket, createUser } from '@buddha/db/test';
 import {
   FILLS_RECENT_LIMIT,
   MARKET_SLUG_MAX,
+  SPARKLINE_MAX_POINTS,
   TICKS_MAX_POINTS,
   TICKS_SCAN_MAX,
   type Fill,
   type Market,
-  type MarketSummary,
+  type MarketListItem,
   type Outcome,
-  type PriceTick,
+  type PriceSeries,
 } from '@buddha/shared';
 import { randomUUID } from 'node:crypto';
+import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { AdminGuard } from '../auth/admin.guard.js';
 import { MAX_PARAM_LENGTH } from '../infra/http/fastify-options.js';
-import { createTestApp, type TestApp } from '../test/app.js';
+import { createTestApp, signUpTestUser, type TestApp } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
 
-type ListPage = { data: MarketSummary[]; meta: { nextCursor: string | null } };
+type ListPage = { data: MarketListItem[]; meta: { nextCursor: string | null } };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
 
 describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
   let t: TestApp;
@@ -48,6 +52,18 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     createMarket(t.db, { createdBy: creatorId, categoryId: category.id, ...input });
 
   const get = (url: string) => t.app.inject({ method: 'GET', url });
+
+  /**
+   * `GET …/ticks` answers a self-describing `PriceSeries` object, never a bare array: the
+   * window, the stride served and `truncated` travel with the points (Q-M3-8 (1)).
+   */
+  const series = async (url: string): Promise<PriceSeries> => {
+    const res = await get(url);
+    expect(res.statusCode).toBe(200);
+    return res.json<{ data: PriceSeries }>().data;
+  };
+
+  const iso = (ms: number) => new Date(ms).toISOString();
 
   /** Follows `meta.nextCursor` to the end and returns every id in page order. */
   async function walk(url: string): Promise<string[]> {
@@ -129,6 +145,9 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
       tradeCount: 0,
       traderCount: 0,
       resolvedResult: null,
+      // The key is always present; a factory market never wrote the `open` tick the admin
+      // transition (and the seed) writes, so this is the one shape with no samples at all.
+      sparkline: [],
     });
     // The card carries nothing the public must not see (PLAN 7.1).
     expect(page.data[0]).not.toHaveProperty('qYes');
@@ -394,9 +413,10 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
       await t.db.insert(schema.priceTicks).values(values.slice(i, i + 400));
     }
 
-    const res = await get(`/api/v1/markets/${open.id}/ticks`);
-    expect(res.statusCode).toBe(200);
-    const ticks = res.json<{ data: PriceTick[] }>().data;
+    const raw = await series(`/api/v1/markets/${open.id}/ticks`);
+    // `raw` serves stored ticks, so it reports no stride at all; nothing was left out either.
+    expect(raw).toMatchObject({ resolution: 'raw', bucketSeconds: 0, truncated: false });
+    const ticks = raw.points;
     expect(ticks.length).toBeLessThanOrEqual(TICKS_MAX_POINTS);
     expect(ticks.length).toBeGreaterThanOrEqual(TICKS_MAX_POINTS / 2);
     expect(ticks[0]).toEqual({ ts: new Date(base).toISOString(), pYesBp: 4_000, trigger: 'open' });
@@ -422,24 +442,42 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     for (let i = 0; i < denseTotal; i += 500) {
       await t.db.insert(schema.priceTicks).values(denseValues.slice(i, i + 500));
     }
-    const capped = await get(`/api/v1/markets/${dense.id}/ticks`);
-    expect(capped.statusCode).toBe(200);
-    const cappedTicks = capped.json<{ data: PriceTick[] }>().data;
+    const capped = await series(`/api/v1/markets/${dense.id}/ticks`);
+    const cappedTicks = capped.points;
+    expect(capped.truncated).toBe(false);
     expect(cappedTicks).toHaveLength(TICKS_MAX_POINTS);
     expect(cappedTicks[0]!.ts).toBe(new Date(base).toISOString());
     expect(cappedTicks.at(-1)!.ts).toBe(new Date(base + (denseTotal - 1) * 1_000).toISOString());
 
-    // A range under the cap comes back complete, bounded by from/to inclusive.
+    // A raw range under the cap comes back complete, bounded by from/to inclusive.
     const from = new Date(base + 100_000).toISOString();
     const to = new Date(base + 200_000).toISOString();
-    const ranged = await get(
+    const window = await series(`/api/v1/markets/${open.id}/ticks?from=${from}&to=${to}`);
+    expect(window.points).toHaveLength(101);
+    expect(window.points[0]!.ts).toBe(from);
+    expect(window.points.at(-1)!.ts).toBe(to);
+
+    // The SAME window at `1m` is no longer served raw: it is a 60-second grid binned from the
+    // epoch, with both ends of the window pinned as boundaries. 00:01:40 and 00:03:20 are the
+    // requested edges; 00:02:00 and 00:03:00 are the only interior grid points, each carrying
+    // the tick in force there (one tick per second, so the boundary tick itself).
+    const minute = await series(
       `/api/v1/markets/${open.id}/ticks?from=${from}&to=${to}&resolution=1m`,
     );
-    expect(ranged.statusCode).toBe(200);
-    const window = ranged.json<{ data: PriceTick[] }>().data;
-    expect(window).toHaveLength(101);
-    expect(window[0]!.ts).toBe(from);
-    expect(window.at(-1)!.ts).toBe(to);
+    expect(minute).toMatchObject({
+      resolution: '1m',
+      bucketSeconds: 60,
+      truncated: false,
+      from,
+      to,
+    });
+    expect(minute.points).toEqual([
+      { ts: from, pYesBp: 4_000, trigger: 'trade' },
+      { ts: new Date(base + 120_000).toISOString(), pYesBp: 4_020, trigger: 'trade' },
+      { ts: new Date(base + 180_000).toISOString(), pYesBp: 4_080, trigger: 'trade' },
+      { ts: to, pYesBp: 4_000, trigger: 'trade' },
+    ]);
+
     const inverted = await get(`/api/v1/markets/${open.id}/ticks?from=${to}&to=${from}`);
     expect(inverted.statusCode).toBe(400);
     expect(inverted.json()).toMatchObject({
@@ -447,11 +485,17 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     });
     expect((await get(`/api/v1/markets/${open.id}/ticks?resolution=5m`)).statusCode).toBe(400);
 
-    // A market without ticks (a factory market never wrote its 'open' tick) is an empty series.
+    // A market without ticks (a factory market never wrote its 'open' tick) is an empty series
+    // — at every resolution: the boundaries have nothing to carry forward and vanish.
     const bare = await market();
-    expect(
-      (await get(`/api/v1/markets/${bare.id}/ticks`)).json<{ data: PriceTick[] }>().data,
-    ).toEqual([]);
+    for (const resolution of ['raw', '1m', '1h']) {
+      const empty = await series(`/api/v1/markets/${bare.id}/ticks?resolution=${resolution}`);
+      expect({ resolution, points: empty.points, truncated: empty.truncated }).toEqual({
+        resolution,
+        points: [],
+        truncated: false,
+      });
+    }
   });
 
   it('ranks only the newest TICKS_SCAN_MAX ticks of the range, so a busy market costs no more', async () => {
@@ -475,9 +519,11 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
       await t.db.insert(schema.priceTicks).values(values.slice(i, i + 500));
     }
 
-    const res = await get(`/api/v1/markets/${open.id}/ticks`);
-    expect(res.statusCode).toBe(200);
-    const ticks = res.json<{ data: PriceTick[] }>().data;
+    const res = await series(`/api/v1/markets/${open.id}/ticks`);
+    const ticks = res.points;
+    // The 50 oldest ticks of the range were left out, and the answer says so. The cheap
+    // `cnt >= TICKS_SCAN_MAX` flag alone cannot know that; the confirmation probe can.
+    expect(res.truncated).toBe(true);
     // cnt = TICKS_SCAN_MAX: stride 20, and the grid is anchored at the newest tick, so the
     // answer is exactly the documented maximum — never one over it (PLAN 7.1).
     expect(ticks).toHaveLength(TICKS_MAX_POINTS);
@@ -490,18 +536,397 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     expect(ticks.at(-1)!.ts).toBe(new Date(base + (total - 1) * 1_000).toISOString());
     // `from` older than the bound is a filter, not a floor: the first point stays the same.
     const fromOld = new Date(base).toISOString();
-    const fromRes = await get(`/api/v1/markets/${open.id}/ticks?from=${fromOld}`);
-    expect(fromRes.json<{ data: PriceTick[] }>().data[0]!.ts).toBe(ticks[0]!.ts);
+    const fromRes = await series(`/api/v1/markets/${open.id}/ticks?from=${fromOld}`);
+    expect(fromRes.points[0]!.ts).toBe(ticks[0]!.ts);
 
     // A `to` inside the history moves the bound with it: the newest TICKS_SCAN_MAX up to `to`.
     const toIndex = total - 10;
     const to = new Date(base + toIndex * 1_000).toISOString();
-    const upTo = (await get(`/api/v1/markets/${open.id}/ticks?to=${to}`)).json<{
-      data: PriceTick[];
-    }>().data;
-    expect(upTo.at(-1)!.ts).toBe(to);
-    expect(upTo).toHaveLength(TICKS_MAX_POINTS);
-    expect(upTo[0]!.ts).toBe(new Date(base + (toIndex - TICKS_SCAN_MAX + 1) * 1_000).toISOString());
+    const upTo = await series(`/api/v1/markets/${open.id}/ticks?to=${to}`);
+    expect(upTo.points.at(-1)!.ts).toBe(to);
+    expect(upTo.points).toHaveLength(TICKS_MAX_POINTS);
+    expect(upTo.points[0]!.ts).toBe(
+      new Date(base + (toIndex - TICKS_SCAN_MAX + 1) * 1_000).toISOString(),
+    );
+
+    // Exactly TICKS_SCAN_MAX ticks in range and nothing older inside it: the cheap flag fires
+    // (cnt is at the cap) and the probe answers false. This is the off-by-one the flag alone
+    // gets wrong, and the reason `truncated` costs a second statement at the bound.
+    const exact = await series(
+      `/api/v1/markets/${open.id}/ticks?to=${new Date(base + (TICKS_SCAN_MAX - 1) * 1_000).toISOString()}`,
+    );
+    expect(exact.truncated).toBe(false);
+    expect(exact.points).toHaveLength(TICKS_MAX_POINTS);
+    expect(exact.points[0]!.ts).toBe(new Date(base).toISOString());
+  });
+
+  it('samples a bucketed resolution on the absolute grid, carrying the value in force', async () => {
+    // t0 is hour-aligned only to make the boundaries easy to name: the grid is binned from the
+    // 1970 epoch with a +00 origin, never from `from` and never from the session time zone.
+    const open = await market();
+    const t0 = new Date('2026-09-01T00:00:00.000Z').getTime();
+    await t.db.insert(schema.priceTicks).values([
+      { marketId: open.id, ts: new Date(t0), pYesBp: 4_000, trigger: 'open' as const },
+      {
+        marketId: open.id,
+        ts: new Date(t0 + 3 * HOUR_MS),
+        pYesBp: 6_500,
+        trigger: 'trade' as const,
+      },
+    ]);
+
+    const window = await series(
+      `/api/v1/markets/${open.id}/ticks?from=${iso(t0)}&to=${iso(t0 + 4 * HOUR_MS)}&resolution=1h`,
+    );
+    expect(window).toMatchObject({
+      resolution: '1h',
+      bucketSeconds: 3_600,
+      truncated: false,
+      from: iso(t0),
+      to: iso(t0 + 4 * HOUR_MS),
+    });
+    // An hour with no trade repeats the value in force and the repeat is dropped in SQL, so
+    // nothing is emitted at +1h or +2h; the closing boundary is kept even though it repeats.
+    // Gap-fill rows would cost 1,440 points for three trades and say nothing more.
+    expect(window.points).toEqual([
+      { ts: iso(t0), pYesBp: 4_000, trigger: 'open' },
+      { ts: iso(t0 + 3 * HOUR_MS), pYesBp: 6_500, trigger: 'trade' },
+      { ts: iso(t0 + 4 * HOUR_MS), pYesBp: 6_500, trigger: 'trade' },
+    ]);
+
+    // The left edge looks back PAST `from` by construction, so a window that opens ten hours
+    // after the last trade still starts at a value instead of at nothing. This is the pin for
+    // the empty-left-edge regression an `ts >= from` filter would bring back.
+    const edge = await series(
+      `/api/v1/markets/${open.id}/ticks?from=${iso(t0 + 10 * HOUR_MS)}&to=${iso(t0 + 12 * HOUR_MS)}&resolution=1h`,
+    );
+    expect(edge.points).toHaveLength(2);
+    expect(edge.points[0]).toEqual({ ts: edge.from, pYesBp: 6_500, trigger: 'trade' });
+    expect(edge.points.at(-1)).toEqual({ ts: edge.to, pYesBp: 6_500, trigger: 'trade' });
+  });
+
+  it('coarsens the stride until the window fits and stays bounded by the answer', async () => {
+    // 20,000 ticks across one day: a bucketed read costs one index descent per OUTPUT point,
+    // so the TICKS_SCAN_MAX row cap does not apply and density cannot push the answer over
+    // TICKS_MAX_POINTS or set `truncated`.
+    const open = await market();
+    const base = new Date('2026-09-01T00:00:00.000Z').getTime();
+    const total = 20_000;
+    const values = Array.from({ length: total }, (_, i) => ({
+      marketId: open.id,
+      ts: new Date(base + Math.floor((i * DAY_MS) / total)),
+      pYesBp: 1_000 + (i % 9_000),
+      trigger: i === 0 ? ('open' as const) : ('trade' as const),
+    }));
+    for (let i = 0; i < total; i += 1_000) {
+      await t.db.insert(schema.priceTicks).values(values.slice(i, i + 1_000));
+    }
+
+    const day = await series(
+      `/api/v1/markets/${open.id}/ticks?from=${iso(base)}&to=${iso(base + DAY_MS)}&resolution=1m`,
+    );
+    // A 1-minute grid over a day would be 1,440 points, so the stride is coarsened to five
+    // minutes rather than striped — points stay evenly spaced — and the request's own
+    // `resolution` is echoed back beside the stride actually served.
+    expect(day).toMatchObject({ resolution: '1m', bucketSeconds: 300, truncated: false });
+    expect(day.points.length).toBeLessThanOrEqual(TICKS_MAX_POINTS);
+    for (let i = 1; i < day.points.length; i += 1) {
+      expect(Date.parse(day.points[i]!.ts)).toBeGreaterThan(Date.parse(day.points[i - 1]!.ts));
+    }
+    // Every interior point sits on the absolute grid. Swapping `date_bin` for `date_trunc`,
+    // dropping the `+00` from the origin or using a calendar interval drifts off it.
+    for (const point of day.points.slice(1, -1)) {
+      expect(Date.parse(point.ts) % (day.bucketSeconds * 1_000)).toBe(0);
+    }
+    // Consecutive duplicates are dropped; only the closing boundary may repeat its neighbour.
+    for (let i = 1; i < day.points.length - 1; i += 1) {
+      expect(day.points[i]!.pYesBp).not.toBe(day.points[i - 1]!.pYesBp);
+    }
+
+    // Escalation is driven by the window, not by the data: the same `1m` request over a week
+    // is served hourly. `to` is omitted, so the server closes the window on its own clock.
+    const now = Date.now();
+    const oneDay = await series(
+      `/api/v1/markets/${open.id}/ticks?from=${iso(now - DAY_MS)}&resolution=1m`,
+    );
+    expect(oneDay.bucketSeconds).toBe(300);
+    const oneWeek = await series(
+      `/api/v1/markets/${open.id}/ticks?from=${iso(now - 7 * DAY_MS)}&resolution=1m`,
+    );
+    expect(oneWeek).toMatchObject({ resolution: '1m', bucketSeconds: 3_600 });
+    expect(oneWeek.points.length).toBeLessThanOrEqual(TICKS_MAX_POINTS);
+  });
+
+  it('opens a `windowSeconds` range from its OWN clock, so a skewed caller still gets the span', async () => {
+    // THE HAZARD it closes (A-M4-35): a client deriving `from` from `Date.now()` names an INSTANT
+    // for a window whose other end this service closes on the database clock, so the served span
+    // came out wrong by the visitor's skew — and past a full day fast the request inverted, the
+    // clamp below collapsed it to one instant, and the chart's accessible summary then asserted
+    // 시작/최고/최저 all equal on a day that had moved. A DURATION is the one thing a wrong clock
+    // still measures correctly, so that is what the client sends now.
+    const open = await market();
+    const twoHoursAgo = open.openAt!.getTime() - 2 * HOUR_MS;
+    await t.db.insert(schema.priceTicks).values({
+      marketId: open.id,
+      ts: new Date(twoHoursAgo),
+      pYesBp: 4_000,
+      trigger: 'open' as const,
+    });
+
+    const windowed = await series(
+      `/api/v1/markets/${open.id}/ticks?windowSeconds=3600&resolution=1m`,
+    );
+    // The window is exactly an hour wide and both ends are the service's own reading.
+    const span = Date.parse(windowed.to) - Date.parse(windowed.from);
+    expect(span).toBe(HOUR_MS);
+    // And it is anchored to NOW, not to anything the caller said: the older tick is outside it.
+    expect(Date.parse(windowed.from)).toBeGreaterThan(twoHoursAgo);
+  });
+
+  it('bounds a RAW answer by the relative window too, not just the bucketed one', async () => {
+    // THE HAZARD: `listTicks` computed the window for both resolutions, but the raw statement
+    // re-derived its floor from `query.from` — which a relative window never sets. So
+    // `?windowSeconds=3600` echoed a one-hour `from` and served the newest TICKS_SCAN_MAX ticks
+    // of the market's ENTIRE history: points hours older than the `from` printed beside them,
+    // and `truncated` judged against a different range than the one described. Reachable on the
+    // DEFAULT resolution — `resolution` defaults to `raw`, the one value that takes this path.
+    const open = await market();
+    const openedAt = open.openAt!.getTime();
+    const outside = openedAt - 2 * HOUR_MS;
+    const inside = openedAt - 5 * 60 * 1_000;
+    await t.db.insert(schema.priceTicks).values([
+      { marketId: open.id, ts: new Date(outside), pYesBp: 4_000, trigger: 'open' as const },
+      { marketId: open.id, ts: new Date(inside), pYesBp: 5_500, trigger: 'trade' as const },
+    ]);
+
+    // No `resolution` at all: this is the default the schema fills in, and it is the raw path.
+    const windowed = await series(`/api/v1/markets/${open.id}/ticks?windowSeconds=3600`);
+    expect(windowed.bucketSeconds).toBe(0);
+    // The invariant the bug broke: nothing older than the window the answer names is in it.
+    const floor = Date.parse(windowed.from);
+    expect(windowed.points.every((point) => Date.parse(point.ts) >= floor)).toBe(true);
+    expect(windowed.points.map((point) => point.ts)).not.toContain(new Date(outside).toISOString());
+    expect(windowed.points.map((point) => point.ts)).toContain(new Date(inside).toISOString());
+
+    // And the stronger statement: a RELATIVE window answers exactly what the ABSOLUTE window it
+    // denotes answers. One request names its start by duration and the other by instant; they
+    // describe the same window, so they must describe the same points.
+    const absolute = await series(
+      `/api/v1/markets/${open.id}/ticks?from=${windowed.from}&to=${windowed.to}`,
+    );
+    expect(absolute.points).toEqual(windowed.points);
+    expect(absolute.truncated).toBe(windowed.truncated);
+  });
+
+  it('refuses a request that names its window twice', async () => {
+    // `from` and `windowSeconds` are mutually exclusive at the schema: one request, one window.
+    const open = await market();
+    const response = await t.app.inject({
+      method: 'GET',
+      url: `/api/v1/markets/${open.id}/ticks?from=${iso(Date.now() - HOUR_MS)}&windowSeconds=3600`,
+    });
+    expect(response.statusCode).toBe(400);
+  });
+
+  it('clamps a one-sided window down to `to`, and never calls a bucketed answer truncated', async () => {
+    // `ticksQuerySchema` orders the bounds only when BOTH are given, so with one bound the
+    // service is what has to keep the window ordered — and it must do it by moving the
+    // DEFAULTED end, never the caller's.
+    const open = await market();
+    const tickAt = open.openAt!.getTime() - HOUR_MS;
+    await t.db.insert(schema.priceTicks).values({
+      marketId: open.id,
+      ts: new Date(tickAt),
+      pYesBp: 4_000,
+      trigger: 'open' as const,
+    });
+
+    // A client paging backwards asks for history older than the market itself. Both
+    // resolutions must answer the window that was asked for, and answer it empty: `to` used
+    // to be pulled UP to the defaulted `from`, so the grid pinned a boundary at the market's
+    // opening and served a point NEWER than the requested `to` while `raw` — which filters on
+    // the untouched `query.to` — served nothing for the very same request.
+    const before = iso(open.openAt!.getTime() - DAY_MS);
+    for (const resolution of ['1h', 'raw'] as const) {
+      const older = await series(
+        `/api/v1/markets/${open.id}/ticks?to=${before}&resolution=${resolution}`,
+      );
+      expect({ resolution, from: older.from, to: older.to, points: older.points }).toEqual({
+        resolution,
+        from: before,
+        to: before,
+        points: [],
+      });
+    }
+
+    // The mirror case: a clock running days fast sends a `from` past the server's own `now`
+    // with no `to`. The window collapses onto the DB clock, not onto the future instant, so
+    // the series is the probability in force now rather than a point stamped in the future.
+    const ahead = Date.now() + 2 * DAY_MS;
+    const skewed = await series(
+      `/api/v1/markets/${open.id}/ticks?from=${iso(ahead)}&resolution=1h`,
+    );
+    expect(Date.parse(skewed.to)).toBeLessThan(ahead);
+    expect(skewed.from).toBe(skewed.to);
+    expect(skewed.points).toEqual([{ ts: skewed.to, pYesBp: 4_000, trigger: 'open' }]);
+
+    // A window no ladder entry can cover (about ten years) is trimmed at the old end, and the
+    // narrowed `from` is the entire report of it. `truncated` stays false: it is the raw
+    // path's probed claim that points older than the served ones were left out INSIDE the
+    // window, and a grid cannot hit it — its first point is the trimmed edge itself, carrying
+    // the value in force there. Asserting it from the trim alone claimed dropped history for
+    // a market whose whole life is inside the served window.
+    const wide = await series(
+      `/api/v1/markets/${open.id}/ticks?from=${iso(0)}&to=${iso(tickAt)}&resolution=1h`,
+    );
+    expect(wide).toMatchObject({ bucketSeconds: 604_800, truncated: false, to: iso(tickAt) });
+    expect(Date.parse(wide.to) - Date.parse(wide.from)).toBe(
+      604_800 * 1_000 * (TICKS_MAX_POINTS - 2),
+    );
+    expect(wide.points).toEqual([{ ts: iso(tickAt), pYesBp: 4_000, trigger: 'open' }]);
+  });
+
+  it('samples the card sparkline on a fixed hourly grid, carrying values forward', async () => {
+    // Ticks sit MID-bucket (…30m) so a slow test or a little clock skew cannot straddle a grid
+    // edge and move a sample into the neighbouring bucket.
+    const tick = (marketId: string, msAgo: number, pYesBp: number) => ({
+      marketId,
+      ts: new Date(Date.now() - msAgo),
+      pYesBp,
+      trigger: 'trade' as const,
+    });
+
+    const quiet = await market({ title: '조용한 시장' });
+    await t.db
+      .insert(schema.priceTicks)
+      .values([
+        tick(quiet.id, 30 * HOUR_MS - HOUR_MS / 2, 3_000),
+        tick(quiet.id, 10 * HOUR_MS - HOUR_MS / 2, 5_000),
+        tick(quiet.id, 10 * 60 * 1_000, 7_000),
+      ]);
+    const young = await market({ title: '어린 시장' });
+    await t.db.insert(schema.priceTicks).values([tick(young.id, 3 * HOUR_MS + HOUR_MS / 2, 9_100)]);
+    const bare = await market({ title: '틱 없는 시장' });
+    const rising = await market({ title: '오르는 시장' });
+    await t.db
+      .insert(schema.priceTicks)
+      .values(
+        Array.from({ length: 6 }, (_, i) =>
+          tick(rising.id, (26 - i * 5) * HOUR_MS - HOUR_MS / 2, 2_000 + i * 500),
+        ),
+      );
+
+    const page = (await get('/api/v1/markets?limit=10')).json<ListPage>();
+    const byId = new Map(page.data.map((row): [string, number[]] => [row.id, row.sparkline]));
+    expect(byId.size).toBe(4);
+    // The line ends where the badge says it does: the newest sample is the CARD's own
+    // probability, not the newest tick's. The two agree in production — one trade writes both —
+    // but the rows and the samples are read in separate statements, so a trade committing
+    // between them used to leave the card carrying the old price beside a line already drawn to
+    // the new one. These fixtures insert ticks without moving the row, which is exactly that
+    // disagreement, frozen.
+    for (const row of page.data) {
+      if (row.sparkline.length > 0) expect(row.sparkline.at(-1)).toBe(row.pYesBp);
+    }
+    const cardBp = new Map(page.data.map((row): [string, number] => [row.id, row.pYesBp]));
+
+    const quietSpark = byId.get(quiet.id)!;
+    expect(quietSpark).toHaveLength(SPARKLINE_MAX_POINTS);
+    // An as-of read, not a `ts >= now() - 24h` window: the 29½-hour-old tick is the value in
+    // force for every bucket up to now-10h, so a market that has not traded in a day draws a
+    // true flat line instead of coming back empty.
+    expect(quietSpark.slice(0, 15)).toEqual(Array.from({ length: 15 }, () => 3_000));
+    expect(quietSpark.slice(15, -1)).toEqual(Array.from({ length: 9 }, () => 5_000));
+    expect(quietSpark.at(-1)).toBe(cardBp.get(quiet.id));
+
+    // Leading unknowns are TRIMMED, never zero-filled (0 bp is a real probability), so the
+    // array's length is what says where the series starts: 25 - 4 = bucket 21.
+    expect(byId.get(young.id)).toEqual([9_100, 9_100, 9_100, cardBp.get(young.id)]);
+    // A factory market bypasses the `open` transition that writes the first tick, so it is the
+    // only shape that answers with no samples at all — with the key present.
+    expect(byId.get(bare.id)).toEqual([]);
+
+    const risingSpark = byId.get(rising.id)!;
+    expect(risingSpark).toHaveLength(SPARKLINE_MAX_POINTS);
+    for (let i = 1; i < risingSpark.length; i += 1) {
+      expect(risingSpark[i]!).toBeGreaterThanOrEqual(risingSpark[i - 1]!);
+    }
+    expect(risingSpark.at(-1)).toBe(cardBp.get(rising.id));
+    // Three cards, three different series: the correlated seek is bound to each row's own id,
+    // not to the first market of the page. Fingerprinted on the OLDEST sample, because the
+    // newest is now every card's own probability and these three fixtures share one.
+    expect(new Set([quietSpark[0], byId.get(young.id)![0], risingSpark[0]]).size).toBe(3);
+  });
+
+  it('keeps the sparkline bounded by the grid, not by the market tick volume', async () => {
+    const busy = await market();
+    const now = Date.now();
+    // One tick older than the window so every bucket has a value in force, then a burst of
+    // TICKS_SCAN_MAX + 1 ticks inside the last half hour. The answer is still 25 samples read
+    // by 25 index seeks: the card never scans the history the chart route has to cap.
+    const values = [
+      {
+        marketId: busy.id,
+        ts: new Date(now - 30 * HOUR_MS),
+        pYesBp: 2_000,
+        trigger: 'open' as const,
+      },
+      ...Array.from({ length: TICKS_SCAN_MAX + 1 }, (_, i) => ({
+        marketId: busy.id,
+        ts: new Date(now - HOUR_MS / 2 + i),
+        pYesBp: 4_000 + (i % 3_000),
+        trigger: 'trade' as const,
+      })),
+    ];
+    for (let i = 0; i < values.length; i += 1_000) {
+      await t.db.insert(schema.priceTicks).values(values.slice(i, i + 1_000));
+    }
+
+    const item = (await get('/api/v1/markets')).json<ListPage>().data[0]!;
+    expect(item.sparkline).toHaveLength(SPARKLINE_MAX_POINTS);
+    // Every bucket but the last predates the burst and carries the anchor; the last one is the
+    // newest tick, so the sample is the probability in force at the response instant.
+    expect(item.sparkline.slice(0, -1)).toEqual(
+      Array.from({ length: SPARKLINE_MAX_POINTS - 1 }, () => 2_000),
+    );
+    expect(item.sparkline.at(-1)).toBe(4_000 + (TICKS_SCAN_MAX % 3_000));
+  });
+
+  it('carries the sparkline on the list card only, never on the detail or the admin list', async () => {
+    const open = await market();
+    await t.db.insert(schema.priceTicks).values({
+      marketId: open.id,
+      ts: new Date(Date.now() - 30 * 60 * 1_000),
+      pYesBp: 6_100,
+      trigger: 'open' as const,
+    });
+
+    const item = (await get('/api/v1/markets')).json<ListPage>().data[0]!;
+    expect(Object.keys(item)).toContain('sparkline');
+    // One bucket, and its sample is the card's own probability — see the grid case above.
+    expect(item.sparkline).toEqual([item.pYesBp]);
+
+    // `toMarketSummary`/`toMarket` were left alone, so the shared `MarketSummary` component is
+    // not widened: neither the public detail nor the admin list ships a chart it never draws.
+    const detail = (await get(`/api/v1/markets/${open.id}`)).json<{ data: Market }>().data;
+    expect(detail).not.toHaveProperty('sparkline');
+
+    const admin = await signUpTestUser(t);
+    await t.db
+      .update(schema.profiles)
+      .set({ role: 'admin' })
+      .where(eq(schema.profiles.userId, admin.id));
+    // The guard caches roles for 60 s (PLAN 10.5); the promotion above happened behind it.
+    await t.app.get(AdminGuard).invalidate(admin.id);
+    const adminList = await t.app.inject({
+      method: 'GET',
+      url: '/api/v1/admin/markets',
+      headers: { cookie: admin.cookie },
+    });
+    expect(adminList.statusCode).toBe(200);
+    const adminItems = adminList.json<{ data: Record<string, unknown>[] }>().data;
+    expect(adminItems.length).toBeGreaterThan(0);
+    for (const row of adminItems) expect(row).not.toHaveProperty('sparkline');
   });
 
   it('lists active categories in display order', async () => {

@@ -57,7 +57,14 @@ export const authClient = createAuthClient({
   fetchOptions: { customFetchImpl: fetchOrNetworkError },
 });
 
-export const { useSession, signIn, signUp, signOut } = authClient;
+/**
+ * `useSession` is deliberately NOT re-exported here: it lives in `lib/use-session.ts`, which
+ * wraps it so the server and the hydrating render agree. This module is imported by SERVER
+ * components too (login/page.tsx, set-password/page.tsx and the two beside them read
+ * `authNoticeFor` / `safeNextPath` / `verifyLinkErrorCode`), so it must not pull a React hook
+ * into a Server Component module — importing `useSyncExternalStore` here fails the build.
+ */
+export const { signIn, signUp, signOut } = authClient;
 
 /** Social providers wired in apps/api (PLAN 10.2). Order = button order. */
 export const SOCIAL_PROVIDERS = ['google', 'kakao', 'naver'] as const;

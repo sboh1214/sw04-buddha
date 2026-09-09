@@ -102,3 +102,18 @@ export const TICKS_MAX_POINTS = 500;
  * the default `work_mem`, and the query stays around 10 ms on a million-tick market.
  */
 export const TICKS_SCAN_MAX = 10_000;
+
+/**
+ * `GET /markets` card sparkline (PLAN 11.4): the YES probability sampled on a fixed hourly
+ * grid over the last SPARKLINE_WINDOW_HOURS, each sample the newest tick at or before that
+ * instant (an as-of read, so an hour without a trade carries the previous value forward
+ * instead of dropping out). A market opened through the admin transition — or through the
+ * seed — carries the `open` tick that transition writes, so its card draws a flat line rather
+ * than an empty one; only a market that has no tick at all answers with an empty array. The
+ * grid is fixed, so the work is SPARKLINE_MAX_POINTS index seeks per market whatever the
+ * market's tick volume — the same kind of bound TICKS_SCAN_MAX gives the chart route (A-M3-20).
+ */
+export const SPARKLINE_WINDOW_HOURS = 24;
+export const SPARKLINE_BUCKET_HOURS = 1;
+/** Both endpoints included: 24 / 1 + 1 = 25. */
+export const SPARKLINE_MAX_POINTS = SPARKLINE_WINDOW_HOURS / SPARKLINE_BUCKET_HOURS + 1;

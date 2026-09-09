@@ -1,11 +1,15 @@
-import { QueryClient, isServer } from '@tanstack/react-query';
-import { isApiError } from './api';
+import { QueryClient, isServer, replaceEqualDeep } from '@tanstack/react-query';
+import { type Market, type Position, isApiError } from './api';
+import { MARKETS_KEY, MARKET_KEY, POSITIONS_KEY, TICKS_KEY } from './market-keys';
+import { type MarketPages, joinMarket, joinMarketPages, joinPositions } from './market-live';
+import { type CachedSeries, joinSeries } from './ticks';
 
 function makeQueryClient() {
-  return new QueryClient({
+  const client = new QueryClient({
     defaultOptions: {
       queries: {
-        // Do not refetch immediately on mount; sockets (M4) update caches via setQueryData.
+        // Do not refetch immediately on mount; the realtime socket patches the caches with
+        // setQueryData instead (PLAN 11.5: an event must not become a request).
         staleTime: 30 * 1000,
         retry: (failureCount, error) => {
           // 4xx never fixes itself by retrying (401 in particular must fail fast).
@@ -15,6 +19,57 @@ function makeQueryClient() {
       },
     },
   });
+  // Ordering is enforced on EVERY write to a market, not only in the socket handler: a value
+  // written by `setQueryData` and a value answered by a queryFn both route through
+  // `replaceData`, which hands a function-valued `structuralSharing` both sides. The
+  // race this fixes has nothing to do with sockets — refetchOnWindowFocus and
+  // refetchOnReconnect are on, so a refetch that started before a trade and lands after it
+  // would roll the probability backwards on its own.
+  //
+  // Query defaults match by key PREFIX, so `['market']` covers `['market', <any id>]` and
+  // never `['markets', filters]` (element-wise comparison; 'market' !== 'markets'), and the
+  // two registrations below stay disjoint — market-keys.test.ts pins that. Hydration is the
+  // one write that bypasses this path (it sets the query state directly) and carries its own
+  // `dataUpdatedAt` guard. `replaceEqualDeep` restores reference equality wherever the join
+  // rebuilt an equal subtree, so an untouched list page does not re-render; it is re-exported
+  // by @tanstack/react-query, the only specifier that resolves here (node_modules is
+  // isolated and query-core is not a direct dependency of apps/web). The casts are the price
+  // of query-core typing both sides `unknown`.
+  client.setQueryDefaults(MARKET_KEY, {
+    structuralSharing: (held, incoming) =>
+      replaceEqualDeep(held, joinMarket(held as Market | undefined, incoming as Market)),
+  });
+  client.setQueryDefaults(MARKETS_KEY, {
+    structuralSharing: (held, incoming) =>
+      replaceEqualDeep(
+        held,
+        joinMarketPages(held as MarketPages | undefined, incoming as MarketPages),
+      ),
+  });
+  // The same duty for the account's own rows, and for the same reason: `applyPositionEvent`
+  // orders `user:position` events by `version`, but a `GET /me/positions` answer went in raw,
+  // so a fetch that left before another tab's trade landed after the event and rolled the row
+  // back — a stale 매도 ceiling on the detail and stale 평가손익 on /portfolio, with nothing
+  // scheduled to correct either. `['positions']` covers `['positions', 'open']` and
+  // `['positions', 'settled']` by prefix and never reaches `['orders']`.
+  client.setQueryDefaults(POSITIONS_KEY, {
+    structuralSharing: (held, incoming) =>
+      replaceEqualDeep(held, joinPositions(held as Position[] | undefined, incoming as Position[])),
+  });
+  // And the chart's series, for the third time and the same reason: `appendTickToSeries` orders
+  // the socket's ticks by `ts`, but a REST answer went in raw, so a refetch that left before a
+  // trade pulled the right edge back to the old probability — while the header, which has
+  // `joinMarket` above, kept the new one. Two readings of one trade, disagreeing on one screen.
+  // Ordering here is by `tradeCount`, like the three joins above; it was briefly the answer's
+  // own clock, which is not a watermark over committed rows (ticks.ts says why).
+  client.setQueryDefaults(TICKS_KEY, {
+    structuralSharing: (held, incoming) =>
+      replaceEqualDeep(
+        held,
+        joinSeries(held as CachedSeries | undefined, incoming as CachedSeries),
+      ),
+  });
+  return client;
 }
 
 let browserQueryClient: QueryClient | undefined;
@@ -27,4 +82,186 @@ export function getQueryClient(): QueryClient {
   if (isServer) return makeQueryClient();
   browserQueryClient ??= makeQueryClient();
   return browserQueryClient;
+}
+
+/**
+ * Cancels every query under `queryKey` that has answered NOTHING yet, so the invalidation that
+ * follows issues a REQUEST rather than a subscription to the one already in flight.
+ *
+ * Here rather than beside either caller because both of this app's private-cache writers need
+ * it and neither owns it: the trade answer (`applyTradeResult`, use-trade.ts) in the tab that
+ * traded, and the socket's `user:position` handler (realtime-provider.tsx) in every OTHER tab
+ * of the same account, which never runs the trade path at all.
+ *
+ * `invalidateQueries` restarts a running fetch only where the query already holds data:
+ * `refetchQueries` passes `cancelRefetch`, and query-core honours it under
+ * `if (this.state.data !== undefined && fetchOptions?.cancelRefetch)` — otherwise it hands
+ * back the RUNNING promise (`Query.fetch`). So a trade answered while the account's FIRST
+ * `GET /me/positions`, `GET /me` or `GET /me/orders` was still in flight vanished: the seeds
+ * decline an absent entry (`mergePosition` and the `Me` updater both answer undefined, which
+ * is what keeps a logged-out tab from gaining session state), and the invalidation then waited
+ * on the very request that left BEFORE the trade — so a pre-trade `[]` landed and the new row,
+ * the new balance and the new order were all missing from the screen until an unrelated
+ * refetch happened by.
+ *
+ * A cancel leaves the retryer `rejected`, which is what lets the next `fetch()` start a second
+ * request instead of taking the dedupe branch.
+ *
+ * The `data === undefined` predicate is what keeps this from COSTING an answer, and the case it
+ * saves is not the obvious one. For a MOUNTED list holding rows it changes nothing — the
+ * invalidation's own `cancelRefetch` was going to cancel and restart that refetch anyway. An
+ * UNMOUNTED one mid-refetch is the one that pays: `cancelQueries` reverts it to the rows it held
+ * before, and an `active` invalidation then declines to restart what nobody is watching — so the
+ * answer already on the wire is thrown away and the stale row stands until the list is mounted
+ * again. The predicate leaves it alone to land (query-client.test.ts pins both halves).
+ */
+export function cancelFirstFetch(queryClient: QueryClient, queryKey: readonly unknown[]): void {
+  void queryClient.cancelQueries({
+    queryKey,
+    predicate: (query) => query.state.data === undefined,
+  });
+}
+
+/**
+ * Cancel whatever has answered nothing, then ask again — and never one without the other.
+ *
+ * The two halves are a PAIR, which is why they are one function rather than two lines at each
+ * call site. A cancel with no invalidation behind it strands the query on `pending` with
+ * nothing left fetching (the hazard `applyBalanceEvent` grew its own `refetch` kind to avoid),
+ * and an invalidation with no cancel in front of it subscribes to the request already running
+ * instead of issuing one — which is the whole bug above. Written apart, either half could be
+ * removed and every test would stay green.
+ *
+ * `refetchType` is left at its default `'active'` (query-core `invalidateQueries`), so only
+ * mounted observers ask again and the rest merely go stale — PLAN 11.5's "refetch 남발 금지".
+ */
+export function restartQueries(
+  queryClient: QueryClient,
+  queryKey: readonly unknown[],
+): Promise<void> {
+  cancelFirstFetch(queryClient, queryKey);
+  return queryClient.invalidateQueries({ queryKey });
+}
+
+/** What a section that renders a LIST can say about the query behind it. */
+export type ListView = 'pending' | 'failed' | 'stale' | 'ready';
+
+/**
+ * Which of the four a list section is in — and `stale` is the one the screens kept missing.
+ *
+ * THE HAZARD: query-core reports a failure two different ways, and a ladder written on
+ * `isLoadingError` alone collapses one of them into `ready`. A FIRST fetch that exhausts its
+ * retries has no data and answers `isLoadingError` — the ladders caught that. A refetch that
+ * fails after data exists answers `isRefetchError` instead, KEEPS the rows, and was rendered as
+ * an ordinary list with nothing to say it had stopped being refreshed (measured: `isLoadingError
+ * false, isRefetchError true, rows kept`).
+ *
+ * That silence costs differently per screen and both are real. 보유 포지션 shows a holding whose
+ * membership refresh failed — a void or a settlement asks for both lists (`applyPositionEvent`
+ * answers `refetch` when the row must MOVE), so a failed one leaves the row in 보유 포지션, out of
+ * 정산 이력, and inside 총 평가 금액 where it no longer belongs. 체결 내역 shows a list one row
+ * short, and there the refetch is the ONLY path a new fill can arrive by: `market:trade` carries
+ * no `amountP`, so it is deliberately never merged into the cache.
+ *
+ * `stale` is deliberately NOT `failed`: the rows are real and the last answer is worth keeping on
+ * screen — dropping a screenful because one refresh failed loses more than the staleness costs,
+ * which is the reading `market-list.tsx` already takes. It is the caller's job to render the rows
+ * AND say so, with a way back.
+ *
+ * `pending` is checked first because a query refetching after a failure reports both.
+ */
+export function listView(query: {
+  isPending: boolean;
+  isLoadingError: boolean;
+  isRefetchError: boolean;
+}): ListView {
+  if (query.isPending) return 'pending';
+  if (query.isLoadingError) return 'failed';
+  return query.isRefetchError ? 'stale' : 'ready';
+}
+
+/**
+ * A list section's rungs INCLUDING its empty one, because `stale` is not a rung — it is a notice
+ * that rides ABOVE whatever the section would otherwise show.
+ *
+ * Spending the stale state as one more `:` arm hides the very rows it is describing, which is
+ * the loss `listView` refuses. And on an EMPTY list it is worse than a silence: the section goes
+ * on printing its own "there is nothing here" copy as though that were current. That empty
+ * variant is the one reading that is positively FALSE rather than merely incomplete — an account
+ * with no prior rows acts in another tab, the refresh fails, and the screen asserts there is
+ * nothing while the balance beside it already moved.
+ */
+export function listSection(
+  query: { isPending: boolean; isLoadingError: boolean; isRefetchError: boolean },
+  rowCount: number,
+): { stale: boolean; body: 'pending' | 'failed' | 'empty' | 'rows' } {
+  const view = listView(query);
+  if (view === 'pending') return { stale: false, body: 'pending' };
+  if (view === 'failed') return { stale: false, body: 'failed' };
+  return { stale: view === 'stale', body: rowCount === 0 ? 'empty' : 'rows' };
+}
+
+/**
+ * A list section that sits behind a SESSION gate, which `listSection` cannot see — the same hole
+ * `profileView` exists for: three query flags cannot tell a signed-out reader from an empty one.
+ *
+ * `signedOut` is answered before `stale` so a notice can never ride above a sign-in prompt: a
+ * query `SessionCacheGuard` reset has no rows to be stale ABOUT, and the 다시 시도 beside such a
+ * notice could only 401. `pending` still wins over both, because `useSession` pins `isPending`
+ * through hydration and a bare `!isLoggedIn` would flash the prompt on every single load.
+ */
+export function sessionListSection(
+  query: {
+    isLoggedIn: boolean;
+    isPending: boolean;
+    isLoadingError: boolean;
+    isRefetchError: boolean;
+  },
+  rowCount: number,
+): { stale: boolean; body: 'signedOut' | 'pending' | 'failed' | 'empty' | 'rows' } {
+  if (!query.isLoggedIn && !query.isPending) return { stale: false, body: 'signedOut' };
+  return listSection(query, rowCount);
+}
+
+/** What a screen that needs the signed-in profile can say about it. */
+export type ProfileView = 'pending' | 'signedOut' | 'failed' | 'ready';
+
+/**
+ * Which of the four a screen that needs the profile is in — and `signedOut` is the rung
+ * `listView` cannot have, because three query flags cannot see a session.
+ *
+ * THE HAZARD: when a session ends UNDER a mounted screen, every private query is disabled during
+ * the same render (`enabled: session != null`) and `SessionCacheGuard` then resets the cache, so
+ * the observer settles at `status: 'pending', fetchStatus: 'idle', data: undefined` while the
+ * hooks' own override collapses `isPending` to false. "Settled, no data" then reads as a LOAD
+ * FAILURE — a screen blaming a fetch that never ran and never failed — and every list beside it
+ * answers `ready` with no rows, so the screen also asserts the account holds nothing. The server
+ * gate on these routes only runs on NAVIGATION, so nothing moves the reader off the page.
+ *
+ * A HELD profile answers `ready` before anything else is asked, and that ordering is not a
+ * detail. `isFetching` is true for every background refetch — a focus refetch, an expired
+ * staleTime — so testing it ahead of the data would replace a perfectly good balance with a
+ * skeleton several times an hour (measured: `isPending false, isFetching true, hasData true`).
+ * The flags below decide what to say when there is NO profile to show, which is the only
+ * question this function exists to answer.
+ *
+ * Among those, `pending` comes first and includes `isFetching`, and both halves are
+ * load-bearing. `useSession` pins `isPending` through hydration, so a bare `!isLoggedIn` would
+ * flash a sign-in prompt on every single load — an always-on regression worse than the bug. And
+ * the tab that signs out clears `['me']` while better-auth's atom still holds the old session,
+ * which without `isFetching` flashed a false error on every ordinary logout (recorded in
+ * DECISIONS.md, M1 PR #2 round 3, reproduced 3/3).
+ *
+ * `failed` therefore keeps its honest meaning and only that: signed in, settled, and the profile
+ * really did not arrive.
+ */
+export function profileView(me: {
+  isLoggedIn: boolean;
+  isPending: boolean;
+  isFetching: boolean;
+  hasProfile: boolean;
+}): ProfileView {
+  if (me.hasProfile) return 'ready';
+  if (me.isPending || me.isFetching) return 'pending';
+  return me.isLoggedIn ? 'failed' : 'signedOut';
 }
