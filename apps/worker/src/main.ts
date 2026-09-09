@@ -2,10 +2,12 @@ import { closeDb, createDb, type Db } from '@buddha/db';
 import { isNotConnectionError, type Queue, type Worker } from 'bullmq';
 import { Redis } from 'ioredis';
 import { getEnv } from './env.js';
+import { startHealthServer, type HealthServer } from './health.js';
 import { createProcessor } from './jobs/index.js';
 import { LEDGER_AUDIT_QUERY_TIMEOUT_MS } from './jobs/ledger-audit.js';
 import { logger } from './logger.js';
 import { createQueues, createWorker, JOB_SCHEDULES, QUEUE_NAMES } from './queues.js';
+import { createPublisher } from './realtime.js';
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 
@@ -15,6 +17,8 @@ function describeRedis(url: string): { host: string; db: string } {
 }
 
 interface Handles {
+  /** null when WORKER_HEALTH_PORT is 0. */
+  health: HealthServer | null;
   redis: Redis;
   db: Db;
   auditDb: Db;
@@ -24,6 +28,18 @@ interface Handles {
 
 async function main(): Promise<void> {
   const env = getEnv();
+
+  // Up first, answering 503, so a runner that polls /health from the moment the process
+  // starts (Playwright's webServer, CI) sees "starting" rather than a refused connection it
+  // might read as "not this port". Bound before anything else is opened: an EADDRINUSE then
+  // fails startup with nothing to tear down.
+  let ready = false;
+  const health = await startHealthServer({
+    port: env.WORKER_HEALTH_PORT,
+    host: env.WORKER_HOST,
+    isReady: () => ready,
+    logger,
+  });
 
   // One shared ioredis connection for every Queue and for the workers'
   // non-blocking commands. BullMQ duplicates it internally for each Worker's
@@ -41,8 +57,8 @@ async function main(): Promise<void> {
   redis.on('reconnecting', () => logger.warn('redis reconnecting'));
   redis.on('end', () => logger.info('redis connection ended'));
 
-  // Jobs read and write Postgres (ledger audit today, settlement in M3), so the worker owns
-  // a small pool of its own: it never talks to apps/api (PLAN 9).
+  // Jobs read and write Postgres (ledger audit, close, settlement), so the worker owns a
+  // small pool of its own: it never talks to apps/api (PLAN 9).
   const db = createDb(env.DATABASE_URL, { max: 4, applicationName: 'buddha-worker' });
   // The ledger audit aggregates the whole ledger in one statement, so it gets its own single
   // connection with a timeout to match; the pool above keeps the 30-second guard for
@@ -55,7 +71,14 @@ async function main(): Promise<void> {
     applicationName: 'buddha-worker-audit-job',
     queryTimeoutMs: LEDGER_AUDIT_QUERY_TIMEOUT_MS,
   });
-  const processor = createProcessor({ db, auditDb, logger });
+  // Realtime events (PLAN 8) go out on the same shared connection: PUBLISH is a plain
+  // command, and only a SUBSCRIBE would put the connection into subscriber mode.
+  const processor = createProcessor({
+    db,
+    auditDb,
+    publish: createPublisher(redis, logger),
+    logger,
+  });
 
   const queueByName = createQueues(redis);
   const queues = Object.values(queueByName);
@@ -100,8 +123,9 @@ async function main(): Promise<void> {
     },
     'worker ready',
   );
+  ready = true;
 
-  installShutdownHandlers({ redis, db, auditDb, queues, workers });
+  installShutdownHandlers({ health, redis, db, auditDb, queues, workers });
 }
 
 function installShutdownHandlers(handles: Handles): void {
@@ -124,6 +148,9 @@ function installShutdownHandlers(handles: Handles): void {
     // connection must always be closed, otherwise its socket keeps the event
     // loop alive and the process never exits.
     const steps: Array<[string, () => Promise<unknown>]> = [
+      // 0. Stop answering /health: a poller must not take a worker that is draining for one
+      //    that will pick up the next job.
+      ['health', () => handles.health?.close() ?? Promise.resolve()],
       // 1. Stop taking new jobs, wait for in-flight ones, close blocking duplicates.
       ['workers', () => Promise.all(handles.workers.map((worker) => worker.close()))],
       // 2. Release queue-side resources (the shared connection stays open).

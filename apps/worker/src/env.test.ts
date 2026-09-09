@@ -25,4 +25,28 @@ describe('parseEnv', () => {
   it('rejects a missing DATABASE_URL', () => {
     expect(() => parseEnv({ REDIS_URL: required.REDIS_URL })).toThrow(/DATABASE_URL/);
   });
+
+  it('defaults the health server to localhost:4100 (what the e2e runner polls)', () => {
+    expect(parseEnv(required)).toMatchObject({
+      WORKER_HEALTH_PORT: 4100,
+      WORKER_HOST: 'localhost',
+    });
+  });
+
+  it('accepts WORKER_HEALTH_PORT=0 (server disabled) and coerces the string', () => {
+    expect(parseEnv({ ...required, WORKER_HEALTH_PORT: '0' }).WORKER_HEALTH_PORT).toBe(0);
+    expect(
+      parseEnv({ ...required, WORKER_HEALTH_PORT: '4101', WORKER_HOST: '0.0.0.0' }),
+    ).toMatchObject({ WORKER_HEALTH_PORT: 4101, WORKER_HOST: '0.0.0.0' });
+  });
+
+  it('rejects a health port outside 0..65535 and names the key', () => {
+    expect(() => parseEnv({ ...required, WORKER_HEALTH_PORT: '65536' })).toThrow(
+      /WORKER_HEALTH_PORT/,
+    );
+    expect(() => parseEnv({ ...required, WORKER_HEALTH_PORT: '-1' })).toThrow(/WORKER_HEALTH_PORT/);
+    expect(() => parseEnv({ ...required, WORKER_HEALTH_PORT: 'health' })).toThrow(
+      /WORKER_HEALTH_PORT/,
+    );
+  });
 });

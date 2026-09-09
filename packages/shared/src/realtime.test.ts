@@ -15,6 +15,8 @@ import {
   marketTickEventSchema,
   marketTradeEventSchema,
   realtimeEventSchema,
+  statusRank,
+  statusSupersedes,
   subscribeBodySchema,
   supersedes,
   userBalanceEventSchema,
@@ -52,6 +54,7 @@ const status = {
   status: 'resolving',
   resolvedResult: 'YES',
   disputeUntil: ts,
+  statusEventId: '12',
   ts,
 };
 const balance = { type: 'user:balance', availableP: '9480', lockedP: '0', ledgerEntryId: '42', ts };
@@ -111,13 +114,22 @@ describe('realtime events (PLAN 8)', () => {
     expect(realtimeEventSchema.parse({ ...position, qty: 0 }).type).toBe('user:position');
   });
 
-  it('lets a status event omit or null the resolution fields', () => {
-    const opened = { type: 'market:status', marketId, status: 'open', ts };
+  it('lets a status event omit or null the resolution fields, but never its ordering key', () => {
+    const opened = { type: 'market:status', marketId, status: 'open', statusEventId: '3', ts };
     expect(realtimeEventSchema.parse(opened)).toEqual(opened);
     expect(
       realtimeEventSchema.parse({ ...opened, resolvedResult: null, disputeUntil: null }),
     ).toEqual({ ...opened, resolvedResult: null, disputeUntil: null });
     expect(realtimeEventSchema.safeParse({ ...opened, status: 'paused' }).success).toBe(false);
+    // The key may be null (a row with no transition event) but a publisher must say so.
+    expect(realtimeEventSchema.parse({ ...opened, statusEventId: null }).type).toBe(
+      'market:status',
+    );
+    const { statusEventId: _key, ...withoutKey } = opened;
+    expect(marketStatusEventSchema.safeParse(withoutKey).success).toBe(false);
+    expect(marketStatusEventSchema.safeParse({ ...opened, statusEventId: '0' }).success).toBe(
+      false,
+    );
   });
 });
 
@@ -158,6 +170,42 @@ describe('ordering keys', () => {
     expect(supersedes('10', 9)).toBe(true);
     expect(supersedes('1', null)).toBe(true); // nothing held yet takes anything
     expect(supersedes(1, undefined)).toBe(true);
+  });
+
+  it('orders market:status by the transition event id, and by rank only without one', () => {
+    const resolvingYes = { status: 'resolving', statusEventId: '10' } as const;
+    // M5's result_changed: the same status with a newer event id is a later transition — the
+    // case rank order could not express, and the reason the key exists (A-M3-19).
+    expect(statusSupersedes({ status: 'resolving', statusEventId: '11' }, resolvingYes)).toBe(true);
+    // The admin edit's repeat (A-M4-36) and a duplicate carry the SAME id: dropped.
+    expect(statusSupersedes({ status: 'resolving', statusEventId: '10' }, resolvingYes)).toBe(
+      false,
+    );
+    // A late event with a lower id loses even when its status ranks higher: the key, not the
+    // rank, is the order once both sides have one.
+    expect(statusSupersedes({ status: 'settled', statusEventId: '9' }, resolvingYes)).toBe(false);
+    expect(statusSupersedes({ status: 'settled', statusEventId: '12' }, resolvingYes)).toBe(true);
+    // Rank is the fallback for a row without a key (a test factory's), on either side.
+    expect(
+      statusSupersedes(
+        { status: 'closed', statusEventId: '5' },
+        { status: 'open', statusEventId: null },
+      ),
+    ).toBe(true);
+    expect(
+      statusSupersedes(
+        { status: 'open', statusEventId: null },
+        { status: 'closed', statusEventId: '5' },
+      ),
+    ).toBe(false);
+    expect(
+      statusSupersedes(
+        { status: 'open', statusEventId: undefined },
+        { status: 'open', statusEventId: null },
+      ),
+    ).toBe(false);
+    expect(statusRank('draft')).toBe(0);
+    expect(statusRank('voided')).toBe(5);
   });
 });
 

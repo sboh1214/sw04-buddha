@@ -112,6 +112,9 @@ export function toMarketSummary(row: MarketRow, category: CategoryRef): MarketSu
     closeAt: row.closeAt.toISOString(),
     openAt: row.openAt?.toISOString() ?? null,
     resolvedResult: row.resolvedResult,
+    // bigint column read in number mode; on the wire it is a decimal string like every other
+    // serial key an event is ordered by (`supersedes`, realtime.ts).
+    statusEventId: row.statusEventId === null ? null : String(row.statusEventId),
     createdAt: row.createdAt.toISOString(),
   };
 }

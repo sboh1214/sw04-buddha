@@ -1,3 +1,4 @@
+import { JOB_NAMES, QUEUE_NAMES, type JobName, type QueueName } from '@buddha/shared';
 import {
   Queue,
   Worker,
@@ -7,18 +8,12 @@ import {
   type WorkerOptions,
 } from 'bullmq';
 
-/** Queues consumed by this worker (PLAN 9). */
-export const QUEUE_NAMES = ['markets', 'audit', 'stats'] as const;
-export type QueueName = (typeof QUEUE_NAMES)[number];
-
-/** Job names (PLAN 9). Producers (apps/api) must use the same strings. */
-export const JOB_NAMES = {
-  marketClose: 'market.close',
-  marketFinalize: 'market.finalize',
-  ledgerAudit: 'ledger.audit',
-  marketTraderCount: 'market.trader_count',
-} as const;
-export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];
+/**
+ * Queue and job names live in @buddha/shared (jobs.ts) since M5: the API is the producer of
+ * `market.close` / `market.finalize` and one module keeps a renamed job from leaving it adding
+ * work no worker handles. Re-exported so the worker's own modules keep one import site.
+ */
+export { JOB_NAMES, QUEUE_NAMES, type JobName, type QueueName };
 
 /** Which jobs belong to which queue. */
 export const QUEUE_JOBS: Record<QueueName, readonly JobName[]> = {
@@ -40,6 +35,15 @@ export const DEFAULT_JOB_OPTIONS = {
 } as const satisfies JobsOptions;
 
 /**
+ * The per-minute safety-net scans of PLAN 5.5: the delayed job the API registers per market
+ * is the fast path, and a market whose job was lost (Redis restarted, the API's best-effort
+ * add failed after COMMIT) is still closed or settled within a minute. Both run the same
+ * per-market transaction as the delayed job, so a scan and a delayed job for one market are
+ * one close, never two (market-close.ts, market-finalize.ts).
+ */
+const EVERY_MINUTE = { pattern: '* * * * *', tz: 'Asia/Seoul' } as const;
+
+/**
  * Repeatable jobs this worker installs at boot (PLAN 9). `upsertJobScheduler` is keyed by
  * id, so restarting the worker updates the schedule instead of piling up duplicates.
  */
@@ -50,6 +54,14 @@ export const JOB_SCHEDULES = [
     name: JOB_NAMES.ledgerAudit,
     // 04:00 KST every day; BullMQ resolves the pattern in this zone, DST-free for Seoul.
     repeat: { pattern: '0 4 * * *', tz: 'Asia/Seoul' },
+  },
+  // No `data`: a scan is the job without a market id (marketJobDataSchema).
+  { id: 'market-close-scan', queue: 'markets', name: JOB_NAMES.marketClose, repeat: EVERY_MINUTE },
+  {
+    id: 'market-finalize-scan',
+    queue: 'markets',
+    name: JOB_NAMES.marketFinalize,
+    repeat: EVERY_MINUTE,
   },
 ] as const satisfies readonly {
   id: string;

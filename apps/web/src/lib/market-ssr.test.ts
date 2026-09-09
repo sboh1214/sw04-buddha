@@ -21,6 +21,7 @@ const market: Market = {
   closeAt: '2026-12-01T00:00:00.000Z',
   openAt: '2026-09-01T00:00:00.000Z',
   resolvedResult: null,
+  statusEventId: '2',
   createdAt: '2026-08-31T00:00:00.000Z',
   description: null,
   rules: 'rules text',

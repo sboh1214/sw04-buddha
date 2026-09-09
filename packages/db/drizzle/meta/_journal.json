@@ -78,6 +78,13 @@
       "when": 1788700862838,
       "tag": "0010_positions_version_ticks_index",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1788941520421,
+      "tag": "0011_market_status_event_disputes_indexes",
+      "breakpoints": true
     }
   ]
 }

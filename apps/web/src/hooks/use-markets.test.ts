@@ -58,6 +58,8 @@ const summary: MarketSummary = {
   closeAt: '2026-10-01T00:00:00.000Z',
   openAt: '2026-09-01T00:00:00.000Z',
   resolvedResult: null,
+  // The `opened` event: the key `applyStatus` and `joinMarket` order the status by (M5).
+  statusEventId: '2',
   createdAt: '2026-08-30T00:00:00.000Z',
 };
 
@@ -93,6 +95,8 @@ const statusEvent = (patch: Partial<MarketStatusEvent> = {}): MarketStatusEvent 
   marketId: ID,
   status: 'closed',
   resolvedResult: null,
+  // One transition after the `opened` the fixture holds, so the event is newer by key.
+  statusEventId: '3',
   ts: '2026-09-07T00:00:00.000Z',
   ...patch,
 });

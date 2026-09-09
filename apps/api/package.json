@@ -27,6 +27,7 @@
     "@socket.io/redis-adapter": "catalog:",
     "@thallesp/nestjs-better-auth": "catalog:",
     "better-auth": "catalog:",
+    "bullmq": "catalog:",
     "dotenv": "catalog:",
     "drizzle-orm": "catalog:",
     "fastify": "catalog:",

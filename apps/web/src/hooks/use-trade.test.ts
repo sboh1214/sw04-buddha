@@ -71,6 +71,7 @@ const market: Market = {
   disputeUntil: null,
   settledAt: null,
   voidedAt: null,
+  statusEventId: '2',
   createdAt: '2026-08-30T00:00:00.000Z',
 };
 
@@ -89,6 +90,7 @@ const card: MarketListItem = {
   closeAt: market.closeAt,
   openAt: market.openAt,
   resolvedResult: null,
+  statusEventId: market.statusEventId,
   createdAt: market.createdAt,
   sparkline: [4800, 4900, 5000],
 };

@@ -1,0 +1,43 @@
+import { describe, expect, it } from 'vitest';
+import {
+  JOB_NAMES,
+  QUEUE_NAMES,
+  marketCloseJobId,
+  marketFinalizeJobId,
+  marketJobDataSchema,
+} from './jobs.js';
+
+const marketId = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+
+describe('jobs (PLAN 9)', () => {
+  it('declares the three queues and the four job names', () => {
+    expect(QUEUE_NAMES).toEqual(['markets', 'audit', 'stats']);
+    expect(Object.values(JOB_NAMES)).toEqual([
+      'market.close',
+      'market.finalize',
+      'ledger.audit',
+      'market.trader_count',
+    ]);
+  });
+
+  it('accepts a job payload with or without a market id, and canonicalises the id', () => {
+    expect(marketJobDataSchema.parse({})).toEqual({});
+    expect(marketJobDataSchema.parse({ marketId: marketId.toUpperCase() })).toEqual({ marketId });
+    // The scan scheduler passes no data at all; a job with `undefined` data must parse too.
+    expect(marketJobDataSchema.safeParse(undefined).success).toBe(false);
+    expect(marketJobDataSchema.parse(marketJobDataSchema.parse({}))).toEqual({});
+    expect(marketJobDataSchema.safeParse({ marketId: 'nope' }).success).toBe(false);
+  });
+
+  it('builds job ids that carry the instant and never contain a colon', () => {
+    const closeAt = new Date('2026-10-01T00:00:00.000Z');
+    const id = marketCloseJobId(marketId, closeAt);
+    expect(id).toBe(`market.close.${marketId}.${String(closeAt.getTime())}`);
+    expect(id).not.toContain(':'); // BullMQ: "Custom Id cannot contain :"
+    expect(marketFinalizeJobId(marketId, closeAt)).toBe(
+      `market.finalize.${marketId}.${String(closeAt.getTime())}`,
+    );
+    // A moved instant is a different job, so the stale one can be removed and the new one added.
+    expect(marketCloseJobId(marketId, new Date(closeAt.getTime() + 1))).not.toBe(id);
+  });
+});

@@ -43,6 +43,8 @@ const draft: AdminMarket = {
   createdBy: 'admin',
   netCollectedP: '0',
   openInterest: { yes: 0, no: 0 },
+  disputeCounts: { open: 0, accepted: 0, rejected: 0 },
+  statusEventId: '1',
   events: [],
 };
 

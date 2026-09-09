@@ -33,6 +33,7 @@ import {
   quoteBodySchema,
   quoteResultSchema,
   quoteValue,
+  resolveMarketBodySchema,
   sameTradeTerms,
   slugify,
   ticksQuerySchema,
@@ -66,6 +67,7 @@ const summary = {
   closeAt: at,
   openAt: at,
   resolvedResult: null,
+  statusEventId: '2',
   createdAt: at,
 };
 const market = {
@@ -183,6 +185,7 @@ describe('read DTOs', () => {
       updatedAt: at,
       netCollectedP: '520',
       openInterest: { yes: 10, no: 0 },
+      disputeCounts: { open: 1, accepted: 0, rejected: 0 },
       events: [event],
     };
     expect(adminMarketSchema.parse(admin)).toEqual(admin);
@@ -610,6 +613,42 @@ describe('voidMarketBodySchema', () => {
     expect(voidMarketBodySchema.safeParse({ reason: '  ' }).success).toBe(false);
     expect(voidMarketBodySchema.safeParse({ reason: 'x'.repeat(501) }).success).toBe(false);
     expect(voidMarketBodySchema.safeParse({}).success).toBe(false);
+  });
+});
+
+describe('resolveMarketBodySchema', () => {
+  it('requires a result and accepts an optional note and http(s) evidence url', () => {
+    expect(resolveMarketBodySchema.parse({ result: 'YES' })).toEqual({ result: 'YES' });
+    expect(
+      resolveMarketBodySchema.parse({
+        result: 'NO',
+        note: ' 발표 없음 ',
+        evidenceUrl: 'https://www.bok.or.kr/press/1',
+      }),
+    ).toEqual({ result: 'NO', note: '발표 없음', evidenceUrl: 'https://www.bok.or.kr/press/1' });
+    expect(resolveMarketBodySchema.parse({ result: 'YES', note: null, evidenceUrl: null })).toEqual(
+      { result: 'YES', note: null, evidenceUrl: null },
+    );
+    for (const body of [
+      {},
+      { result: 'MAYBE' },
+      { result: 'YES', note: 'x'.repeat(1001) },
+      { result: 'YES', evidenceUrl: 'javascript:alert(1)' },
+      { result: 'YES', evidenceUrl: `https://a.b/${'c'.repeat(500)}` },
+    ]) {
+      expect(resolveMarketBodySchema.safeParse(body).success, JSON.stringify(body)).toBe(false);
+    }
+  });
+});
+
+describe('statusEventId', () => {
+  it('rides on every market shape and must be a string or null', () => {
+    expect(marketSummarySchema.parse(summary).statusEventId).toBe('2');
+    expect(marketSchema.parse({ ...market, statusEventId: null }).statusEventId).toBeNull();
+    expect(marketListItemSchema.parse({ ...summary, sparkline: [] }).statusEventId).toBe('2');
+    expect(marketSummarySchema.safeParse({ ...summary, statusEventId: 2 }).success).toBe(false);
+    const { statusEventId: _key, ...withoutKey } = summary;
+    expect(marketSummarySchema.safeParse(withoutKey).success).toBe(false);
   });
 });
 

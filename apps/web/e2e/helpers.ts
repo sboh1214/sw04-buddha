@@ -242,6 +242,81 @@ export async function createOpenMarket(admin: APIRequestContext): Promise<TestMa
 }
 
 /**
+ * 마감 through the admin API (`POST /admin/markets/:id/close`): trading stops, and the market is
+ * one 정산 away from a dispute window. The API, not the UI, because closing is a means here —
+ * the settlement spec measures what comes after it.
+ */
+export async function closeMarket(
+  admin: APIRequestContext,
+  marketId: string,
+): Promise<AdminMarket> {
+  return unwrap<AdminMarket>(await admin.post(`/api/v1/admin/markets/${marketId}/close`));
+}
+
+/**
+ * 정산 제안 through the admin API (`POST /admin/markets/:id/resolve`, M5): the market goes to
+ * `resolving` with `disputeUntil` one window ahead of `resolvedAt`, and the worker finalizes it
+ * when that window ends. The dispute spec uses this rather than the admin dialog so the whole
+ * window budget is spent on the reader's side; the settlement spec goes through the dialog,
+ * because the dialog IS what it verifies.
+ */
+export async function resolveMarket(
+  admin: APIRequestContext,
+  marketId: string,
+  result: 'YES' | 'NO',
+): Promise<AdminMarket> {
+  return unwrap<AdminMarket>(
+    await admin.post(`/api/v1/admin/markets/${marketId}/resolve`, { data: { result } }),
+  );
+}
+
+/**
+ * The dispute window the API is running with, read off a RESOLVING market: `disputeUntil -
+ * resolvedAt`, which `MarketAdminService.resolve` sets to `TEST_DISPUTE_WINDOW_SECONDS`. The
+ * specs read it rather than assume it — the default is a day, and a spec that waited for it
+ * would time out with nothing to say; `test.skip` on this number names the env var instead.
+ */
+export function disputeWindowMs(market: Pick<AdminMarket, 'resolvedAt' | 'disputeUntil'>): number {
+  if (market.resolvedAt === null || market.disputeUntil === null) {
+    throw new Error('the market carries no dispute window: is it resolving?');
+  }
+  return Date.parse(market.disputeUntil) - Date.parse(market.resolvedAt);
+}
+
+/** Longest window a settlement spec will wait out; past this it skips and says which env var. */
+export const DISPUTE_WINDOW_WAIT_MAX_MS = 60_000;
+
+/**
+ * True when the worker's health listener is switched off (`WORKER_HEALTH_PORT=0`, worker env.ts),
+ * which is when playwright.config.ts lists no worker to wait for. A spec that needs the
+ * `market.finalize` job then has nothing to tell it a worker is up, so it skips rather than sit
+ * out a window that may never end. Read from `process.env` here, not in the config: the config
+ * loaded the root `.env` into the runner, and Playwright passes that environment to its workers.
+ */
+export function workerProbeDisabled(): boolean {
+  return process.env.WORKER_HEALTH_PORT === '0';
+}
+
+/**
+ * Sets a marker on the document so a later assertion can prove no reload happened in between
+ * ("리프레시 없이"): a navigation wipes `window`, and with it the marker.
+ */
+const NO_RELOAD_MARKER = 'buddhaE2eNoReload';
+
+export async function markDocument(page: Page): Promise<void> {
+  await page.evaluate((key) => {
+    (window as unknown as Record<string, boolean>)[key] = true;
+  }, NO_RELOAD_MARKER);
+}
+
+export function documentSurvived(page: Page): Promise<boolean> {
+  return page.evaluate(
+    (key) => (window as unknown as Record<string, boolean | undefined>)[key] === true,
+    NO_RELOAD_MARKER,
+  );
+}
+
+/**
  * Makes sure the charge catalogue has something to buy. The seed fills it, but an admin who
  * emptied it leaves it empty on purpose (seed.ts), and AC 7 needs a 충전 step either way.
  */

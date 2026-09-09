@@ -5,6 +5,7 @@ import {
   Badge,
   Button,
   Card,
+  Field,
   HStack,
   Link as ChakraLink,
   NativeSelect,
@@ -81,10 +82,11 @@ export function AdminMarkets() {
     <Stack gap="4">
       <CreateMarketCard />
 
-      <HStack gap="2">
-        <Text fontSize="sm" fontWeight="medium" flexShrink="0">
-          {copy.adminMarketStatusFilter}
-        </Text>
+      {/* A Field, not a Text beside the select: only the label's `htmlFor` gives the select an
+          accessible name. Horizontal and shrink-wrapped, so it reads as the one-line filter it
+          was (the dispute list's is the same). */}
+      <Field.Root orientation="horizontal" w="auto" gap="2">
+        <Field.Label flex="0 0 auto">{copy.adminMarketStatusFilter}</Field.Label>
         <NativeSelect.Root maxW="48" size="sm">
           <NativeSelect.Field
             value={status}
@@ -100,7 +102,7 @@ export function AdminMarkets() {
           </NativeSelect.Field>
           <NativeSelect.Indicator />
         </NativeSelect.Root>
-      </HStack>
+      </Field.Root>
 
       {markets.isPending ? (
         <Skeleton height="24" />

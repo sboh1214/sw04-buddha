@@ -65,6 +65,8 @@ const summary: MarketSummary = {
   closeAt: '2026-10-01T00:00:00.000Z',
   openAt: '2026-09-01T00:00:00.000Z',
   resolvedResult: null,
+  // The `opened` event: the key `joinMarket` orders the status group by (M5).
+  statusEventId: '2',
   createdAt: '2026-08-30T00:00:00.000Z',
 };
 

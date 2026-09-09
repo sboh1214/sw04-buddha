@@ -11,6 +11,15 @@ export const envSchema = z.object({
   REDIS_URL: z.url({ protocol: /^rediss?$/ }),
   DATABASE_URL: z.url({ protocol: /^postgres(ql)?$/ }),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).optional(),
+  /**
+   * `GET /health` (health.ts) so the e2e runner and CI can wait for the worker the way they
+   * wait for the API — a worker that is still connecting must not be taken for one that will
+   * close and settle markets on time (PLAN M5 AC 7). 0 disables the server: a deployment that
+   * probes the process some other way keeps no listening socket it never asked for.
+   */
+  WORKER_HEALTH_PORT: z.coerce.number().int().min(0).max(65535).default(4100),
+  /** Bind address of the health server; 'localhost' keeps it off the network by default. */
+  WORKER_HOST: z.string().min(1).default('localhost'),
 });
 
 export type Env = z.infer<typeof envSchema>;

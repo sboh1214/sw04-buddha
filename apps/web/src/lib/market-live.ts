@@ -1,5 +1,4 @@
 import {
-  MARKET_STATUSES,
   type MarketStatus,
   type MarketStatusEvent,
   type MarketTickEvent,
@@ -7,6 +6,7 @@ import {
   type Outcome,
   type UserBalanceEvent,
   type UserPositionEvent,
+  statusSupersedes,
   supersedes,
 } from '@buddha/shared';
 import { type InfiniteData } from '@tanstack/react-query';
@@ -44,6 +44,12 @@ export interface LiveMarket {
   tradeCount: number;
   traderCount: number;
   resolvedResult: Outcome | null;
+  /**
+   * The `market_events.id` of the transition that produced `status` — the ordering key of
+   * `market:status` (A-M3-19, Q-M3-8(3), M5). Null only for a row written outside the
+   * transition paths (a test factory), which falls back to rank in `statusSupersedes`.
+   */
+  statusEventId: string | null;
 }
 
 /** One page of `GET /markets` as the list hook keeps it. */
@@ -67,20 +73,23 @@ export type MarketTickPatch = Pick<
 >;
 
 /**
- * `market:status` carries no ordering key, so rank by index in `MARKET_STATUSES` (A-M3-19) —
- * the one order a REST snapshot can also be compared against, which no event id could be. A
- * total order only while no transition repeats a status: it holds through M3 (draft → open →
- * closed → resolving → settled, and voided from open/closed/resolving), and M5's
- * `result_changed` repeats `resolving`, which must add `market_events.id` to the event AND to
- * the market DTOs before it publishes. The transition table in market-live.test.ts turns red
- * on exactly that day.
+ * The status ORDER, in two forms.
  *
- * A REPEAT of the status a market already holds is published on purpose and is not that day: an
- * edit to an open market republishes `market:status` unchanged so the handler refetches the row
- * (A-M4-36). It is dropped below, which is the whole point — it carries no descriptive field to
- * apply, and only the REST answer it triggers does.
+ * `statusSupersedes` (@buddha/shared realtime.ts) is what every writer of a market ROW compares
+ * on since M5: `market:status` carries `statusEventId` — the `market_events.id` of the
+ * transition, drawn under the market row lock — and every market DTO carries the same key, so a
+ * REST snapshot seeds the comparison the way `tradeCount` does for a tick. That is what lets
+ * `result_changed` repeat `resolving` with a new result and a fresh deadline and still be taken
+ * as NEWER, which the rank order below could never say; and it is also what keeps the deliberate
+ * repeat an admin edit publishes (A-M4-36) a drop — same id, not newer — so only the REST answer
+ * that repeat triggers carries the edit.
+ *
+ * `statusRank` — position in `MARKET_STATUSES` — is re-exported for the one reader that holds NO
+ * key: a position row (`liveMarketStatus`, use-portfolio.ts). `Position.marketStatus` is a join
+ * with no event id beside it, and rank is the one order such a row can still join. It is the
+ * FALLBACK inside `statusSupersedes` for the same reason, taken only when a side has no key.
  */
-export const statusRank = (status: MarketStatus): number => MARKET_STATUSES.indexOf(status);
+export { statusRank } from '@buddha/shared';
 
 /** Only a list row carries a sparkline; the detail and the admin row do not. */
 function hasSparkline(row: object): row is { sparkline: number[] } {
@@ -175,22 +184,30 @@ export function tickRestartsMarket(
 }
 
 /**
- * `market:status` — rank order. The result is REPLACED, not merged, so a void clears the
- * result an earlier resolve proposed; the dispute deadline follows it, and only on a row that
- * already has that field.
+ * `market:status` — ordered by `statusEventId` through `statusSupersedes`, rank as the fallback
+ * for a side with no key. The result is REPLACED, not merged, so a void clears the result an
+ * earlier resolve proposed and a `result_changed` swaps it; the dispute deadline follows it, and
+ * only on a row that already has that field. The key is written with the status, so the next
+ * event and the next REST answer are both compared against the transition this one delivered.
  *
- * `undefined` for a rank that does not ADVANCE covers two senders: a late or duplicate
- * transition, and the deliberate repeat an admin edit publishes (A-M4-36). Both must write
- * nothing — the event carries no `closeAt`, `title` or `rules`, so applying it could only
- * restate what is held; the refetch the handler fires beside it is what delivers the edit.
+ * `undefined` for an event that is not NEWER covers two senders: a late or duplicate
+ * transition, and the deliberate repeat an admin edit publishes (A-M4-36) — the same id the row
+ * already holds. Both must write nothing — the event carries no `closeAt`, `title` or `rules`,
+ * so applying it could only restate what is held; the refetch the handler fires beside it is
+ * what delivers the edit.
  */
 export function applyStatus<T extends LiveMarket>(
   held: T | undefined,
   event: MarketStatusEvent,
 ): T | undefined {
   if (held === undefined || held.id !== event.marketId) return undefined;
-  if (statusRank(event.status) <= statusRank(held.status)) return undefined;
-  const next = { ...held, status: event.status, resolvedResult: event.resolvedResult ?? null };
+  if (!statusSupersedes(event, held)) return undefined;
+  const next = {
+    ...held,
+    status: event.status,
+    resolvedResult: event.resolvedResult ?? null,
+    statusEventId: event.statusEventId,
+  };
   if (!hasDisputeUntil(held)) return next;
   return { ...next, disputeUntil: event.disputeUntil ?? null };
 }
@@ -249,8 +266,17 @@ export function joinMarket<T extends LiveMarket>(held: T | undefined, incoming: 
       next = { ...next, sparkline: withLatestSample(next.sparkline, held.pYesBp) };
     }
   }
-  if (statusRank(held.status) > statusRank(incoming.status)) {
-    next = { ...next, status: held.status, resolvedResult: held.resolvedResult };
+  // The status GROUP moves together: the result and the deadline were written by the same
+  // transition as the status and its key, so a snapshot older than what is held must not drag
+  // any one of them back alone — a `result_changed` kept by status but joined with the previous
+  // result would badge 정산 중 over the wrong answer.
+  if (statusSupersedes(held, incoming)) {
+    next = {
+      ...next,
+      status: held.status,
+      resolvedResult: held.resolvedResult,
+      statusEventId: held.statusEventId,
+    };
     if (hasDisputeUntil(held)) next = { ...next, disputeUntil: held.disputeUntil };
   }
   return next;

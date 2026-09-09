@@ -40,6 +40,7 @@ const AUTH_ENV_KEYS = [
   'SMTP_PASS',
   'SMTP_SECURE',
   'AUTH_COOKIE_DOMAIN',
+  'TEST_DISPUTE_WINDOW_SECONDS',
 ] as const satisfies readonly (keyof Env)[];
 
 /**

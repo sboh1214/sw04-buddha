@@ -105,6 +105,9 @@ export function toPreviewMarket(
   return {
     id: PREVIEW_ID,
     slug: body.slug ?? PREVIEW_SLUG,
+    // The ordering key of `market:status` (A-M3-19), which only a live subscriber compares —
+    // the preview card subscribes to nothing, so it carries none even when `base` has one.
+    statusEventId: null,
     title: body.title,
     // The lookup only misses while the select still shows its placeholder — or, on the edit form,
     // when the market's category has since been retired — so the tag says what the field says.

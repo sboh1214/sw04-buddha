@@ -2,7 +2,13 @@ import * as z from 'zod';
 import { pAmountSchema } from './api/p-amount.js';
 import { uuidSchema } from './api/uuid.js';
 import { BP_MAX, PRICE_MAX, PRICE_MIN } from './constants.js';
-import { marketStatusSchema, orderSideSchema, outcomeSchema } from './enums.js';
+import {
+  MARKET_STATUSES,
+  marketStatusSchema,
+  orderSideSchema,
+  outcomeSchema,
+  type MarketStatus,
+} from './enums.js';
 
 /**
  * Socket.IO event payloads (PLAN 8). The API publishes them to Redis after a trade or a
@@ -20,15 +26,15 @@ import { marketStatusSchema, orderSideSchema, outcomeSchema } from './enums.js';
  * keys are compared within one event type, never across them (they come from different
  * sequences).
  *
- * `market:status` is the exception: it carries no key, and a client keeps the higher status
- * rank in `MARKET_STATUSES` order (`enums.ts`). That is a total order only while no
- * transition repeats a status — it holds through M3 (draft → open → closed, and void from
- * open/closed/resolving, with `settled` never voidable) and it is what a REST snapshot can
- * be compared against, which no event id would be. M5's `result_changed` repeats
- * `resolving` with a new result and dispute deadline, so before it publishes its first
- * event `market:status` must gain a strict key — `market_events.id` of the transition,
- * which is drawn under the market's row lock and is therefore in commit order per market —
- * and the market DTOs must carry that key so a snapshot can seed it (A-M3-19, Q-M3-8).
+ * `market:status` is ordered by `statusEventId` — the `market_events.id` of the transition,
+ * drawn while the writer holds the market row FOR UPDATE and therefore the market's commit
+ * order — and the market DTOs carry the same key (`MarketSummary.statusEventId`) so a REST
+ * snapshot seeds the comparison (A-M3-19, Q-M3-8 (3), M5). Until M5 the event carried no key
+ * and a client kept the higher status rank in `MARKET_STATUSES` order, which was a total order
+ * only while no transition repeated a status; M5's `result_changed` repeats `resolving` with a
+ * new result and deadline, which is the day that rule stopped holding. The rank stays as the
+ * FALLBACK for a row with no key (`statusSupersedes`): a row written outside the transition
+ * paths — a test factory — has none, and rank is still the one order such a row can join.
  *
  * Families. `realtimeEventSchema` is the publisher's union — everything that may reach
  * Redis. The gateway never parses an inbound message with it: a `market:*` message is
@@ -66,6 +72,35 @@ export function supersedes(
   return BigInt(incoming) > BigInt(current);
 }
 
+/** What `statusSupersedes` reads off an event or a market DTO. */
+export interface StatusKeyed {
+  status: MarketStatus;
+  statusEventId: string | null | undefined;
+}
+
+/** Position in `MARKET_STATUSES`: the transition order, and the fallback order below. */
+export function statusRank(status: MarketStatus): number {
+  return MARKET_STATUSES.indexOf(status);
+}
+
+/**
+ * Whether `incoming` describes a LATER transition than `held` — the rule for `market:status`
+ * against a cached row, and for one REST snapshot against another.
+ *
+ * With a key on both sides it is `supersedes` on `statusEventId`, which is strict: a repeat of
+ * the same status (an admin edit republishes it unchanged, A-M4-36) and a late or duplicate
+ * delivery both answer false, while `result_changed` — the same `resolving` with a NEWER event
+ * id — answers true. Without a key on either side it falls back to the status rank, the order
+ * every row can join; that path is only ever taken for rows a test factory wrote, but it keeps
+ * the function total rather than throwing on a null.
+ */
+export function statusSupersedes(incoming: StatusKeyed, held: StatusKeyed): boolean {
+  if (incoming.statusEventId != null && held.statusEventId != null) {
+    return supersedes(incoming.statusEventId, held.statusEventId);
+  }
+  return statusRank(incoming.status) > statusRank(held.status);
+}
+
 /** Room `market:<id>`: price and stats after a trade (or a tick-writing transition). */
 export const marketTickEventSchema = z
   .object({
@@ -98,11 +133,13 @@ export const marketTradeEventSchema = z
 export type MarketTradeEvent = z.infer<typeof marketTradeEventSchema>;
 
 /**
- * Room `market:<id>`: a status transition (open, close, resolve, finalize, void), or the same
- * status republished so subscribers refetch a descriptive edit (A-M4-36, `MarketAdminService`
- * `update`). Nothing in the payload changes on that repeat, which is what makes it safe: a
- * client keeps the higher rank and drops it, and only the REST snapshot it triggers carries
- * `closeAt`, `title` or `rules`.
+ * Room `market:<id>`: a status transition (open, close, resolve, result change, finalize,
+ * void), or the same status republished so subscribers refetch a descriptive edit (A-M4-36,
+ * `MarketAdminService` `update`). `statusEventId` is the transition's `market_events.id` — the
+ * key `statusSupersedes` orders by — and the repeat carries the UNCHANGED one, which is what
+ * makes it safe: a client drops it as not newer, and only the REST snapshot it triggers
+ * carries `closeAt`, `title` or `rules`. Required (nullable, never absent) so every publisher
+ * states it; null only from a row that has no transition event.
  */
 export const marketStatusEventSchema = z
   .object({
@@ -111,6 +148,7 @@ export const marketStatusEventSchema = z
     status: marketStatusSchema,
     resolvedResult: outcomeSchema.nullish(),
     disputeUntil: z.iso.datetime().nullish(),
+    statusEventId: serialIdSchema.nullable(),
     ts: tsSchema,
   })
   .meta({ id: 'MarketStatusEvent' });

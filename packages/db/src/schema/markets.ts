@@ -72,6 +72,15 @@ export const markets = pgTable(
     disputeUntil: timestampTz(),
     settledAt: timestampTz(),
     voidedAt: timestampTz(),
+    /**
+     * `market_events.id` of the transition that produced `status` (M5, A-M3-19): the ordering
+     * key of `market:status` and of the market DTOs. Written by every transition in the same
+     * transaction as its event row, under the market's advisory lock, so it is the market's
+     * commit order. No FK — market_events is append-only and the id is never reused. Null
+     * only for a row written outside the transition paths (a test factory; migration 0011
+     * backfills every existing market from its newest transition event).
+     */
+    statusEventId: bigint({ mode: 'number' }),
     createdBy: text()
       .notNull()
       .references(() => user.id, { onDelete: 'restrict' }),

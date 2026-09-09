@@ -15,6 +15,7 @@ import {
 import { type MarketStatus, formatP, parsePAmount } from '@buddha/shared';
 import { type ReactNode } from 'react';
 import { CountdownBadge } from '@/components/market/countdown-badge';
+import { DisputeSection } from '@/components/market/dispute-section';
 import { MyPosition } from '@/components/market/my-position';
 import { ProbabilityChart } from '@/components/market/probability-chart';
 import { ProbabilityDisplay } from '@/components/market/probability-display';
@@ -59,11 +60,16 @@ import { TradePanel } from './trade-panel';
  * here is carried by colour alone (PLAN 11.2, AC 6).
  */
 const STATUS_NOTICE: Partial<
-  Record<MarketStatus, { tone: 'info' | 'warning' | 'success' | 'error'; message: string }>
+  Record<
+    MarketStatus,
+    { tone: 'info' | 'warning' | 'success' | 'error'; message: string; detail?: string }
+  >
 > = {
   closed: { tone: 'warning', message: copy.marketClosedNotice },
   resolving: { tone: 'info', message: copy.marketResolvingNotice },
-  settled: { tone: 'success', message: copy.marketSettledNotice },
+  // The second line says where the P went: the payout is already in the balance (the worker's
+  // finalize wrote it, PLAN 5.5), and 내 손익 is the 내 포지션 card below, not this notice.
+  settled: { tone: 'success', message: copy.marketSettledNotice, detail: copy.marketSettledPayout },
   voided: { tone: 'error', message: copy.marketVoidedNotice },
 };
 
@@ -142,6 +148,12 @@ export function MarketDetail({ marketId, now, children }: MarketDetailProps) {
             )}
             <MarketHeader market={data} now={now} move={recentMove(series.data?.points)} />
             <StatusNotice market={data} />
+            {/* Under the notice that names the result and the deadline, and above the chart:
+                for a resolving market the objection is the next thing to read. It renders
+                nothing for any other status unless this account filed one (design 5.3), and
+                the deadline it measures against is the same server instant the countdown and
+                the trade panel use, so the three cannot disagree on what "now" is. */}
+            <DisputeSection market={data} now={now} />
             {/* `currentBp` and `currentTradeCount` come from ONE read of the row, so the
                 chart can never draw one trade's probability under another's claim. */}
             <ProbabilityChart
@@ -234,8 +246,8 @@ function MarketHeader({
 
 /**
  * 상태별 안내 (PLAN 11.3), plus the two read-only facts a decided market carries: the 결과 and
- * — while it is resolving — the 이의 마감 instant. The dispute FORM is M5; this milestone shows
- * the deadline and nothing to press.
+ * — while it is resolving — the 이의 마감 instant. The dispute FORM is `DisputeSection`, rendered
+ * right under this notice; a settled market adds the line that says the payout has landed.
  *
  * `role="status"` rather than `role="alert"`: a market closing while someone reads it is worth
  * announcing, but it is not an emergency that should interrupt them mid-sentence.
@@ -248,6 +260,11 @@ function StatusNotice({ market }: { market: Market }) {
       <Alert.Indicator />
       <Alert.Content>
         <Alert.Description>{notice.message}</Alert.Description>
+        {notice.detail !== undefined && (
+          <Alert.Description data-testid="market-status-notice-detail">
+            {notice.detail}
+          </Alert.Description>
+        )}
         {market.resolvedResult === null && market.disputeUntil === null ? null : (
           <DataList.Root orientation="horizontal" size="sm">
             {market.resolvedResult !== null && (

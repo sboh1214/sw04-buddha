@@ -66,7 +66,7 @@ jobs:
 
     # Only variables declared in turbo.json (`env` / `passThroughEnv` / framework
     # inference) reach tasks: Turborepo runs in strict env mode. Add new keys there first.
-    # The exception is everything the e2e leg needs: Playwright and the two servers run
+    # The exception is everything the e2e leg needs: Playwright and the three servers run
     # outside turbo, so they read this block directly.
     # Locally TEST_* point at the docker `test` profile (5433/6380); here the service
     # containers double as the test database, so TEST_* and DATABASE_* are the same server.
@@ -78,7 +78,13 @@ jobs:
       TEST_DATABASE_MIGRATE_URL: postgres://buddha_migrate:buddha@localhost:5432/buddha
       TEST_REDIS_URL: redis://localhost:6379
       NEXT_PUBLIC_API_URL: http://localhost:4000
-      TEST_DISPUTE_WINDOW_SECONDS: '86400'
+      # Short on purpose (PLAN M5 AC 2): the settlement e2e waits for the worker's finalize job,
+      # which the API delays by exactly this. The vitest suites read the value from the app's
+      # own config rather than assuming 24h, so they pass under either.
+      TEST_DISPUTE_WINDOW_SECONDS: '8'
+      # The worker's liveness probe the e2e leg waits on (apps/worker/src/health.ts).
+      WORKER_HOST: localhost
+      WORKER_HEALTH_PORT: '4100'
       # better-auth (M1). Fixed test secret; never reuse outside CI.
       BETTER_AUTH_SECRET: ci-only-better-auth-secret-0123456789abcdef
       BETTER_AUTH_URL: http://localhost:3000
@@ -154,20 +160,24 @@ jobs:
       # build.outputs (turbo.json, ADR-0016), so after a Turborepo cache hit the standalone copy
       # is missing and the start script exits 1 on its BUILD_ID check. `next start` serves the
       # restored `.next` and only warns about output: 'standalone' (only 'export' throws).
-      # Logs go to files so the step can exit while both servers keep running.
-      - name: Start the API and the web server
+      # Logs go to files so the step can exit while all three servers keep running.
+      # The worker too (M5): the settlement spec waits on its `market.finalize` job, and the
+      # per-minute `market.close` scan is what the seed's past-dated markets rely on.
+      - name: Start the API, the worker and the web server
         run: |
           mkdir -p "$RUNNER_TEMP/e2e-logs"
           pnpm --filter api start > "$RUNNER_TEMP/e2e-logs/api.log" 2>&1 &
+          pnpm --filter worker start > "$RUNNER_TEMP/e2e-logs/worker.log" 2>&1 &
           pnpm --filter web exec next start --port 3000 > "$RUNNER_TEMP/e2e-logs/web.log" 2>&1 &
 
       # The API first: the home page renders server-side against it, so probing the web origin
       # before the API is up would retry on a 500. `localhost` is IPv4-only on the runner, which
-      # is what both servers bind.
+      # is what all three servers bind.
       - name: Wait for the stack
         run: |
           for url in \
             http://localhost:4000/api/health \
+            http://localhost:4100/health \
             http://127.0.0.1:8025/readyz \
             http://localhost:3000/; do
             for _ in $(seq 1 60); do
@@ -188,7 +198,7 @@ jobs:
         run: pnpm --filter web test:e2e
 
       # Traces (trace: 'on-first-retry' with retries: 2 in CI) plus whatever report the run
-      # produced, and both server logs. Ignored when a step before the e2e is what failed.
+      # produced, and all three server logs. Ignored when a step before the e2e is what failed.
       - name: Upload the Playwright report
         if: failure()
         uses: actions/upload-artifact@v6

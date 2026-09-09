@@ -12,7 +12,9 @@ import {
   marketFormSchema,
   marketToFormValues,
   maxLossHelp,
+  resolveMarketFormSchema,
   toCreateMarketBody,
+  toResolveMarketBody,
   toUpdateMarketBody,
   voidMarketFormSchema,
 } from './market-form';
@@ -272,6 +274,8 @@ const market: AdminMarket = {
   createdBy: 'admin',
   netCollectedP: '0',
   openInterest: { yes: 0, no: 0 },
+  disputeCounts: { open: 0, accepted: 0, rejected: 0 },
+  statusEventId: '1',
   events: [],
 };
 
@@ -388,6 +392,61 @@ describe('voidMarketFormSchema', () => {
     expect(messages(voidMarketFormSchema.safeParse({ reason: 'a'.repeat(501) }))).toEqual([
       copy.errMarketVoidReason,
     ]);
+  });
+});
+
+describe('resolveMarketFormSchema', () => {
+  const chosen = { result: 'YES' as const, note: '', evidenceUrl: '' };
+
+  it('requires a result, which an untouched form does not hold at all', () => {
+    // The radio group starts unselected, so `result` is `undefined` rather than a sentinel.
+    expect(messages(resolveMarketFormSchema.safeParse({ note: '', evidenceUrl: '' }))).toEqual([
+      copy.errMarketResultRequired,
+    ]);
+    expect(messages(resolveMarketFormSchema.safeParse({ ...chosen, result: 'MAYBE' }))).toEqual([
+      copy.errMarketResultRequired,
+    ]);
+    expect(resolveMarketFormSchema.safeParse(chosen).success).toBe(true);
+    expect(resolveMarketFormSchema.safeParse({ ...chosen, result: 'NO' }).success).toBe(true);
+  });
+
+  it('bounds the note to 1,000 characters and trims it', () => {
+    expect(resolveMarketFormSchema.safeParse({ ...chosen, note: '  근거 확인  ' }).data?.note).toBe(
+      '근거 확인',
+    );
+    expect(resolveMarketFormSchema.safeParse({ ...chosen, note: 'a'.repeat(1000) }).success).toBe(
+      true,
+    );
+    expect(
+      messages(resolveMarketFormSchema.safeParse({ ...chosen, note: 'a'.repeat(1001) })),
+    ).toEqual([copy.errMarketResolveNote]);
+  });
+
+  it('accepts a blank or an http(s) evidence URL of at most 500 characters', () => {
+    expect(resolveMarketFormSchema.safeParse(chosen).success).toBe(true);
+    expect(
+      resolveMarketFormSchema.safeParse({ ...chosen, evidenceUrl: ' https://example.com/x ' }).data
+        ?.evidenceUrl,
+    ).toBe('https://example.com/x');
+    for (const bad of ['javascript:alert(1)', 'example.com', `https://e.com/${'a'.repeat(500)}`]) {
+      expect(
+        messages(resolveMarketFormSchema.safeParse({ ...chosen, evidenceUrl: bad })),
+        bad,
+      ).toEqual([copy.errMarketResolveEvidence]);
+    }
+  });
+});
+
+describe('toResolveMarketBody', () => {
+  it('sends the result with blanks as null and text trimmed', () => {
+    expect(toResolveMarketBody({ result: 'NO', note: '', evidenceUrl: '  ' })).toEqual({
+      result: 'NO',
+      note: null,
+      evidenceUrl: null,
+    });
+    expect(
+      toResolveMarketBody({ result: 'YES', note: ' 공식 발표 ', evidenceUrl: 'https://e.com/a ' }),
+    ).toEqual({ result: 'YES', note: '공식 발표', evidenceUrl: 'https://e.com/a' });
   });
 });
 

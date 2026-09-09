@@ -15,6 +15,7 @@ import {
   adminMarketSchema,
   createMarketBodySchema,
   marketSummarySchema,
+  resolveMarketBodySchema,
   updateMarketBodySchema,
   uuidParamSchema,
   voidMarketBodySchema,
@@ -22,6 +23,7 @@ import {
   type AdminMarketListQuery,
   type CreateMarketBody,
   type MarketSummary,
+  type ResolveMarketBody,
   type UpdateMarketBody,
   type VoidMarketBody,
 } from '@buddha/shared';
@@ -133,6 +135,26 @@ export class AdminMarketsController {
     @Param('id', { schema: uuidParamSchema }) id: string,
   ): Promise<AdminMarket> {
     return this.markets.close(admin.id, id);
+  }
+
+  @Post(':id/resolve')
+  @HttpCode(200)
+  @ApiOperation({
+    operationId: 'adminResolveMarket',
+    summary:
+      'closed → resolving: propose the result and start the dispute window; on a resolving ' +
+      'market change the proposed result (the window restarts, the pending finalize is replaced)',
+  })
+  @ApiData(adminMarketSchema)
+  // VALIDATION_ERROR names `status` (not closed/resolving, or the dispute window already
+  // passed — the worker's finalize is pending) or `result` (the same result again).
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
+  adminResolveMarket(
+    @CurrentUser() admin: SessionUser,
+    @Param('id', { schema: uuidParamSchema }) id: string,
+    @Body({ schema: resolveMarketBodySchema }) body: ResolveMarketBody,
+  ): Promise<AdminMarket> {
+    return this.markets.resolve(admin.id, id, body);
   }
 
   @Post(':id/void')

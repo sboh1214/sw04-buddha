@@ -18,6 +18,7 @@ import { hashPassword } from 'better-auth/crypto';
 import { and, eq, sql } from 'drizzle-orm';
 import { closeDb, createDb, type Db } from './client.js';
 import { loadRootEnv } from './env.js';
+import { clockTimestamp } from './tx-helpers.js';
 import {
   account,
   adminActions,
@@ -90,26 +91,19 @@ async function lockSeed(tx: Pick<Db, 'execute'>): Promise<void> {
 
 /**
  * The database clock, read AFTER `lockSeed` — the instant rule every market write follows
- * (ADR-0027; apps/api/src/infra/db/clock.ts, and the same read inlined in
- * `MarketService.requirePublicAt`). The seed runner and Postgres are two machines: a Windows
- * host and a Docker VM, most obviously. A runner that is ahead writes an `open_at` in the
- * future and an open tick that sorts AFTER the first trades' ticks, so `/markets/:id/ticks`
- * draws the initial probability as a reset partway along the chart; a runner that is behind
- * writes `open_at` earlier than the same row's `created_at`. packages/db cannot import the
- * API's helper — it throws `AppError`, a Nest-side class — so this is the CLI's own copy,
- * failing the CLI's way.
- *
- * Epoch millis as text, so no driver-side date parser is involved.
+ * (ADR-0027; `clockTimestamp` in tx-helpers.ts, which the API and the worker share since M5).
+ * The seed runner and Postgres are two machines: a Windows host and a Docker VM, most
+ * obviously. A runner that is ahead writes an `open_at` in the future and an open tick that
+ * sorts AFTER the first trades' ticks, so `/markets/:id/ticks` draws the initial probability as
+ * a reset partway along the chart; a runner that is behind writes `open_at` earlier than the
+ * same row's `created_at`.
  */
 async function dbNow(tx: Pick<Db, 'execute'>): Promise<Date> {
-  const result = await tx.execute<{ ms: string }>(
-    sql`select (extract(epoch from clock_timestamp()) * 1000)::bigint::text as ms`,
-  );
-  const ms = Number(result.rows[0]?.ms);
-  if (!Number.isSafeInteger(ms)) {
-    throw new Error('[db:seed] clock_timestamp() returned no value');
+  try {
+    return await clockTimestamp(tx);
+  } catch (error) {
+    throw new Error('[db:seed] clock_timestamp() returned no value', { cause: error });
   }
-  return new Date(ms);
 }
 
 async function seedChargePackages(db: Db): Promise<void> {
@@ -542,9 +536,16 @@ async function seedMarkets(db: Db, adminId: string): Promise<void> {
       await tx
         .insert(marketEvents)
         .values({ marketId: market.id, type: 'created', actorId: adminId, payload });
-      await tx
+      const [opened] = await tx
         .insert(marketEvents)
-        .values({ marketId: market.id, type: 'opened', actorId: adminId, payload });
+        .values({ marketId: market.id, type: 'opened', actorId: adminId, payload })
+        .returning({ id: marketEvents.id });
+      // The status key every transition writes (M5): the 'opened' event is what put the row in
+      // `open`, so a `market:status` a client compares this row against orders after it.
+      await tx
+        .update(markets)
+        .set({ statusEventId: opened?.id ?? null })
+        .where(eq(markets.id, market.id));
       return { inserted: true, closeAt };
     });
     if (outcome.inserted) inserted++;
@@ -558,12 +559,12 @@ async function seedMarkets(db: Db, adminId: string): Promise<void> {
     if (outcome.closeAt.getTime() <= reportedAt.getTime()) {
       // Seeded as written rather than skipped: skipping would make the fixture's size a
       // function of the calendar (every cutoff is in 2026, so a fresh seed would insert
-      // nothing at all from 2027). M3 has no close automation — PLAN 5.5's scan is M5, and
-      // apps/worker registers no `market.close` handler yet — so until then the market
-      // refuses every quote and trade with MARKET_CLOSED and an admin closes it from
-      // 관리자 → 시장 상세 → 마감. The real fix is fresh copy (Q-M3-4), under a new slug.
+      // nothing at all from 2027). Such a market refuses every quote and trade with
+      // MARKET_CLOSED until the worker's per-minute `market.close` scan closes it (PLAN 5.5,
+      // M5) — or an admin does from 관리자 → 시장 상세 → 마감. The real fix is fresh copy
+      // (Q-M3-4), under a new slug.
       console.warn(
-        `[db:seed] market ${seed.slug}: closeAt ${seed.closeAt} is already past — it refuses every trade until an admin closes it (관리자 → 시장 상세 → 마감); refresh the seed copy`,
+        `[db:seed] market ${seed.slug}: closeAt ${seed.closeAt} is already past — the worker's market.close scan will close it within a minute (or 관리자 → 시장 상세 → 마감); refresh the seed copy`,
       );
     }
   }

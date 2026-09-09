@@ -41,6 +41,14 @@ export type AdminPayment = components['schemas']['AdminPayment'];
 export type AuditFailure = components['schemas']['AuditFailure'];
 export type CreateMarketBody = components['schemas']['CreateMarketBody'];
 export type UpdateMarketBody = components['schemas']['UpdateMarketBody'];
+/** `POST /admin/markets/{id}/resolve`: propose a result, or change the proposed one (M5). */
+export type ResolveMarketBody = components['schemas']['ResolveMarketBody'];
+/** The caller's own objection (`GET /me/disputes`, and the answer to filing one). */
+export type Dispute = components['schemas']['Dispute'];
+/** The admin list row: the same plus who filed and who reviewed it. */
+export type AdminDispute = components['schemas']['AdminDispute'];
+export type CreateDisputeBody = components['schemas']['CreateDisputeBody'];
+export type ReviewDisputeBody = components['schemas']['ReviewDisputeBody'];
 export type QuoteBody = components['schemas']['QuoteBody'];
 export type QuoteResult = components['schemas']['QuoteResult'];
 export type TradeBody = components['schemas']['TradeBody'];

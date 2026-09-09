@@ -33,6 +33,7 @@ const traded: MarketSummary = {
   openAt: '2026-09-01T00:00:00.000Z',
   createdAt: '2026-08-31T00:00:00.000Z',
   resolvedResult: null,
+  statusEventId: '42',
 };
 
 describe('toPreviewMarket', () => {
@@ -69,6 +70,13 @@ describe('toPreviewMarket', () => {
     expect(preview.tradeCount).toBe(0);
     expect(preview.volumeP).toBe('0');
     expect(preview.openAt).toBeNull();
+  });
+
+  it('carries no status ordering key, even over a base that has one', () => {
+    // `statusEventId` orders `market:status` events for a live subscriber (A-M3-19); the preview
+    // card subscribes to nothing, so the key is dropped rather than copied from the base.
+    expect(toPreviewMarket(body, categories, traded).statusEventId).toBeNull();
+    expect(toPreviewMarket(body, categories).statusEventId).toBeNull();
   });
 
   it('keeps them on 시장 만들기, where there is no market at all', () => {
