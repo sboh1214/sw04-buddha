@@ -26,7 +26,9 @@ export interface RulesSectionProps {
   /**
    * 정산 예정 — the instant a result becomes final. Omitted by default: PLAN §17 Q8 is still
    * open and the conservative default is to promise no schedule (A-M3). The detail screen
-   * passes `disputeUntil` once a market is resolving, where the instant is real.
+   * passes `disputeDeadlineShown(market)` (lib/dispute.ts) — the deadline only while the market
+   * is resolving, where the instant is still ahead. Never the raw `disputeUntil`: it outlives
+   * the settle, and this label says 예정.
    */
   settlementAt?: string | null;
   /**

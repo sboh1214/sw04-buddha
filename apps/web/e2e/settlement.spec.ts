@@ -141,6 +141,14 @@ test.describe('정산', () => {
       copy.marketSettledPayout,
     );
 
+    // 확정된 시장은 결과만 남기고 이의 마감·정산 예정을 지운다. `dispute_until`은 행에도 DTO에도
+    // 그대로 남아 있고(확정은 제안을 버리는 것이 아니라 완성한다) 관리자 상세가 감사 행으로 읽는다
+    // — 잠근 것은 열이 아니라 공개 화면이다. 확정은 종료 상태라 이의 기간과 경주하지 않는다.
+    const notice = page.getByTestId('market-status-notice');
+    await expect(notice.getByTestId('market-detail-result')).toHaveText(copy.yes);
+    await expect(notice).not.toContainText(copy.marketDisputeUntil);
+    await expect(page.getByTestId('market-rules')).not.toContainText(copy.rulesSettlement);
+
     // --- 포트폴리오: the holding moved to 정산 이력 with a positive 실현 손익 — 예 won, and a
     // winning contract pays 100P against a cost of well under that.
     await page.goto('/portfolio');

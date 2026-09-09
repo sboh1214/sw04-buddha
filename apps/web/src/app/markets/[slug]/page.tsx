@@ -101,8 +101,10 @@ export default async function MarketPage({ params }: { params: Promise<{ slug: s
               see `detailWindowEnd`. It is absent when the series is. */}
           <MarketDetail marketId={market.id} now={detailWindowEnd(series)}>
             {/* PLAN 11.1's Kalshi principle: 정산 기준 is never collapsed on the detail.
-                `disputeUntil` is null until a result is proposed, so 정산 예정 appears exactly
-                when the instant is real (PLAN 17 Q8 stays closed until then). The row fetched
+                `disputeUntil` is null until a result is proposed and STAYS set through the
+                settle (only the void clears it, A-M3-23), so 정산 예정 is drawn behind
+                `disputeDeadlineShown` — exactly while the market is resolving, which is where
+                the instant is still ahead (PLAN 17 Q8 stays closed until then). The row fetched
                 here is the FALLBACK, not the source: the section follows the live cache so an
                 admin's edit to the rules or the close time cannot leave this panel describing a
                 market the countdown above has already moved past. */}

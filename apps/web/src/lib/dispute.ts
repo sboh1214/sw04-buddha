@@ -113,6 +113,37 @@ export function disputeSectionWanted(status: MarketStatus): boolean {
 }
 
 /**
+ * The 이의 마감 instant the PUBLIC detail may still show — `null` once it has stopped being a
+ * deadline. Its two readers are outside this card: the status notice's 이의 마감 row
+ * (markets/[slug]/market-detail.tsx) and 정산 기준's 정산 예정 row (live-rules-section.tsx).
+ *
+ * `dispute_until` SURVIVES the settle, on purpose: the worker's UPDATE writes status, settled_at
+ * and status_event_id and nothing else, because a settle CONSUMES the proposal — the row keeps
+ * 결과 and 결과 확정 시각, so it keeps the window that closed beside them. The void is the
+ * opposite and clears all three, echoing them into its payload as `discardedResult` /
+ * `discardedDisputeUntil` (A-M3-23). The `finalized` payload carries no deadline, so the column
+ * is the only record of when the window actually shut, and the ADMIN detail draws it beside
+ * 정산 시각 as exactly that audit row.
+ *
+ * None of which is the public screen's business. PLAN 11.3 assigns the row by STATUS, not by
+ * nullness — "`resolving`이면 결과·이의 마감시각·이의 제기 버튼. `settled`면 결과·내 손익" — and drawn
+ * on a settled market the same instant is labelled 정산 예정 two cards above a notice saying the
+ * payout already landed, which is the schedule PLAN 17 Q8 declined to promise at all. So the
+ * gate lives here and the column stays.
+ *
+ * `closeAt` is the display twin and the precedent: it outlives its own deadline too, and the
+ * countdown is drawn for `open` alone because a settled market has nothing to count down to.
+ * `canChangeResult` (market-admin.ts) and `disputeSectionView` below already read this column
+ * behind this same status question before they ever parse the instant.
+ */
+export function disputeDeadlineShown(market: {
+  status: MarketStatus;
+  disputeUntil: string | null;
+}): string | null {
+  return market.status === 'resolving' ? market.disputeUntil : null;
+}
+
+/**
  * Which state the section is in.
  *
  * The section exists for a `resolving` market, and for a FINISHED one (settled, voided) only

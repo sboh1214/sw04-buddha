@@ -25,6 +25,7 @@ import { useMarketSocket } from '@/hooks/use-market-socket';
 import { useMarket, useMarketTicks } from '@/hooks/use-markets';
 import { type Market } from '@/lib/api';
 import { formatKst } from '@/lib/datetime';
+import { disputeDeadlineShown } from '@/lib/dispute';
 import { MARKET_STATUS_LABEL, MARKET_STATUS_PALETTE } from '@/lib/market-admin';
 import { type RecentMove, recentMove } from '@/lib/ticks';
 import { TradePanel } from './trade-panel';
@@ -251,9 +252,17 @@ function MarketHeader({
  *
  * `role="status"` rather than `role="alert"`: a market closing while someone reads it is worth
  * announcing, but it is not an emergency that should interrupt them mid-sentence.
+ *
+ * "while it is resolving" is `disputeDeadlineShown`, not `disputeUntil !== null` — a clause that
+ * was vacuously true until M5 started writing the column. The settle KEEPS it and only the void
+ * clears it (A-M3-23), so the raw test drew a spent deadline inside the 정산이 끝났습니다 alert for
+ * good. The 결과 row is deliberately NOT gated: it is the market's answer and PLAN 11.3 asks for
+ * it on a settled screen, which is why the emptiness test below reads the deadline rather than
+ * the column — a settled market keeps this DataList for 결과 alone.
  */
 function StatusNotice({ market }: { market: Market }) {
   const notice = STATUS_NOTICE[market.status];
+  const deadline = disputeDeadlineShown(market);
   if (notice === undefined) return null;
   return (
     <Alert.Root status={notice.tone} role="status" data-testid="market-status-notice">
@@ -265,7 +274,7 @@ function StatusNotice({ market }: { market: Market }) {
             {notice.detail}
           </Alert.Description>
         )}
-        {market.resolvedResult === null && market.disputeUntil === null ? null : (
+        {market.resolvedResult === null && deadline === null ? null : (
           <DataList.Root orientation="horizontal" size="sm">
             {market.resolvedResult !== null && (
               <DataList.Item>
@@ -275,10 +284,10 @@ function StatusNotice({ market }: { market: Market }) {
                 </DataList.ItemValue>
               </DataList.Item>
             )}
-            {market.disputeUntil !== null && (
+            {deadline !== null && (
               <DataList.Item>
                 <DataList.ItemLabel>{copy.marketDisputeUntil}</DataList.ItemLabel>
-                <DataList.ItemValue>{formatKst(market.disputeUntil)}</DataList.ItemValue>
+                <DataList.ItemValue>{formatKst(deadline)}</DataList.ItemValue>
               </DataList.Item>
             )}
           </DataList.Root>

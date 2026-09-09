@@ -8,6 +8,7 @@ import {
   disputeFieldError,
   disputeFormSchema,
   disputeRefusalEndsDialog,
+  disputeDeadlineShown,
   disputeSectionView,
   disputeSectionWanted,
   toCreateDisputeBody,
@@ -120,6 +121,31 @@ describe('disputeSectionWanted', () => {
       expect(disputeSectionWanted(status), status).toBe(
         status === 'resolving' || status === 'settled' || status === 'voided',
       );
+    }
+  });
+});
+
+describe('disputeDeadlineShown', () => {
+  const DEADLINE = '2026-10-02T01:00:00.000Z';
+
+  it('shows the deadline while the result is open to objection, and never after', () => {
+    // The settle KEEPS the column — the worker's UPDATE writes status·settled_at·
+    // status_event_id and nothing else — so a settled row still carries the instant the window
+    // shut. PLAN 11.3 assigns the row by STATUS ("`settled`면 결과·내 손익"), and the same value
+    // is labelled 정산 예정 on 정산 기준: drawn on a settled market it promises a settlement that
+    // already happened.
+    for (const status of MARKET_STATUSES) {
+      expect(disputeDeadlineShown({ status, disputeUntil: DEADLINE }), status).toBe(
+        status === 'resolving' ? DEADLINE : null,
+      );
+    }
+  });
+
+  it('is null wherever the column is empty', () => {
+    // A `resolving` row with no window is the one `disputeSectionView` answers `notResolving`
+    // for: there is no instant, so neither reader draws anything either.
+    for (const status of MARKET_STATUSES) {
+      expect(disputeDeadlineShown({ status, disputeUntil: null }), status).toBeNull();
     }
   });
 });
