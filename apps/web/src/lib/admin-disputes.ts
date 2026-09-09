@@ -52,6 +52,25 @@ export function normalizeAdminDisputeFilters(filters: AdminDisputeFilters): Admi
 }
 
 /**
+ * The list's cache keys (design 5.2, 5.6), admin-prefixed like `['admin', 'markets']` so the
+ * root is private (`PRIVATE_QUERY_ROOTS`) and one invalidation of `ADMIN_DISPUTES_KEY` refreshes
+ * every filtered page. The filter set travels as one normalised object rather than positional
+ * segments (`marketsKey`'s reasoning): a new filter cannot silently reorder the key, and `{}` /
+ * `{ status: undefined }` / an upper-case `marketId` all hash to one entry.
+ *
+ * Here rather than in `hooks/use-admin-disputes.ts`, which re-exports both: `use-admin-markets.ts`
+ * invalidates this root after an admin market write, and the hook module already imports
+ * `adminMarketKey` from it — so keeping the key in the hook would close a RUNTIME cycle between
+ * two `'use client'` modules. This module imports no hook, which makes the edge one-way. It is
+ * the same move `lib/market-keys.ts` made for the keys the server components share, and its
+ * header states the rule.
+ */
+export const ADMIN_DISPUTES_KEY = ['admin', 'disputes'] as const;
+
+export const adminDisputesKey = (filters: AdminDisputeFilters) =>
+  [...ADMIN_DISPUTES_KEY, normalizeAdminDisputeFilters(filters)] as const;
+
+/**
  * Normalises the URL into the filter set, once, on the server (the public list's
  * `filtersFromSearchParams` precedent): nothing here throws, a hand-typed `?status=x` or a
  * `marketId` that is not a uuid is dropped rather than sent — the API's query schema refuses

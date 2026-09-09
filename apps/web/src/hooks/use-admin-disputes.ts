@@ -9,8 +9,10 @@ import {
   useQueryClient,
 } from '@tanstack/react-query';
 import {
+  ADMIN_DISPUTES_KEY,
   type AdminDisputeFilters,
   type DisputePage,
+  adminDisputesKey,
   normalizeAdminDisputeFilters,
   replaceDisputeRow,
 } from '@/lib/admin-disputes';
@@ -18,16 +20,14 @@ import { type AdminDispute, type ReviewDisputeBody, api, unwrap } from '@/lib/ap
 import { adminMarketKey } from './use-admin-markets';
 
 /**
- * The admin 이의 목록's queries (design 5.2, 5.6), admin-prefixed like `['admin', 'markets']`
- * so the root is private (`PRIVATE_QUERY_ROOTS`) and one invalidation of `ADMIN_DISPUTES_KEY`
- * refreshes every filtered page. The filter set travels as one normalised object rather than
- * positional segments (`marketsKey`'s reasoning): a new filter cannot silently reorder the
- * key, and `{}` / `{ status: undefined }` / an upper-case `marketId` all hash to one entry.
+ * The two keys moved down into the directive-free `lib/admin-disputes.ts` and are re-exported
+ * here, so no import site had to move — the `use-admin-markets.ts` precedent, for a reason that
+ * is not the server-render one this time: `use-admin-markets.ts` now invalidates
+ * `ADMIN_DISPUTES_KEY` after an admin market write, and this module already imports
+ * `adminMarketKey` from it. Taking the key back would make that a RUNTIME cycle between two
+ * `'use client'` modules; `lib/admin-disputes.ts` imports no hook, so the edge is one-way.
  */
-export const ADMIN_DISPUTES_KEY = ['admin', 'disputes'] as const;
-
-export const adminDisputesKey = (filters: AdminDisputeFilters) =>
-  [...ADMIN_DISPUTES_KEY, normalizeAdminDisputeFilters(filters)] as const;
+export { ADMIN_DISPUTES_KEY, adminDisputesKey };
 
 /**
  * Cursor-paginated, 20 per page (PLAN 7), newest first. `keepPreviousData` keeps the previous
