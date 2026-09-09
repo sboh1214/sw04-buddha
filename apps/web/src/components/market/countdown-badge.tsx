@@ -21,8 +21,11 @@ import { isClosingSoon } from '@/lib/market-admin';
  * visitor whose clock was wrong counted down wrong by exactly the skew — and the trade panel
  * beside it anchors now, so ticking differently here would put the two readings of one close
  * time on one screen in disagreement, which is what A-M4-23 promises they never are. On the
- * detail screen the two anchors are both the SERVER's (this one is the API's own
- * `clock_timestamp()`, carried as the series' window end), so no browser clock reaches either.
+ * detail screen the two anchors are now ONE value — the API's own `clock_timestamp()`, carried
+ * as the series' window end and handed to both. It used to be two: the panel read the
+ * `['market', id]` cache stamp, which is the NEXT host's on the seeded load and the BROWSER's on
+ * a revisit, so the two readings of one close time could and did disagree. The panel keeps that
+ * stamp only as a fallback for a page whose ticks read failed, which has no window end to share.
  *
  * With no `now` at all the badge still renders something true — the absolute close time in KST
  * — and swaps to the countdown once mounted, ticking on the wall clock because there is nothing

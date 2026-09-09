@@ -529,7 +529,7 @@ export const copy = {
   errTradeClosed: '마감된 시장입니다.',
   errTradeDuplicate: '이미 처리된 주문입니다. 잔고와 포지션을 확인해 주세요.',
   errTradeNotFound: '시장을 찾을 수 없습니다.',
-  errTradeQuote: '견적을 불러오지 못했습니다.',
+  errTradeQuote: '견적을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.',
 
   // --- generic ---
   errUnknown: '문제가 발생했습니다. 잠시 후 다시 시도해 주세요.',

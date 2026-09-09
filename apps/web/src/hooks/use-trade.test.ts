@@ -232,6 +232,53 @@ function deferred<T>() {
 }
 
 describe('quoteQueryOptions', () => {
+  /** Counts how many times the query function ran before the observer settled on an error. */
+  const attempts = async (fail: () => Error) => {
+    const queryClient = getQueryClient();
+    queryClient.mount();
+    let calls = 0;
+    const observer = new QueryObserver(queryClient, {
+      ...quoteQueryOptions(spend1000),
+      queryFn: () => {
+        calls += 1;
+        return Promise.reject(fail());
+      },
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
+    try {
+      await observer.refetch();
+      await vi.waitFor(
+        () => {
+          expect(observer.getCurrentResult().status).toBe('error');
+        },
+        { timeout: 5000 },
+      );
+      return calls;
+    } finally {
+      unsubscribe();
+      queryClient.unmount();
+      queryClient.clear();
+    }
+  };
+
+  it('re-asks a 5xx and a dropped connection, which the market cannot answer', async () => {
+    // THE HAZARD: this hook overrode the client's retry policy with `retry: false`, so ONE blip
+    // stranded a typed amount in `quote_failed` with no way forward — the panel carries two
+    // buttons and one field by design, so there is no retry control to press, and only touching
+    // a control (which re-keys the query) asks again. A 5xx and a transport failure are the two
+    // failures the trader can do nothing about, and the request is public and side-effect free.
+    expect(await attempts(() => apiError(500, 'INTERNAL'))).toBe(3);
+    expect(await attempts(() => new TypeError('Failed to fetch'))).toBe(3);
+  }, 20000);
+
+  it('never re-asks a refusal the market itself answered', async () => {
+    // The recorded reason the override existed — 마감·종료 are 409, an unknown market 404 — and
+    // it survives without the override: `query-client.ts` already refuses to retry any 4xx.
+    // That is why deleting the line loses nothing it was written to protect.
+    expect(await attempts(() => apiError(409, 'MARKET_CLOSED'))).toBe(1);
+    expect(await attempts(() => apiError(404, 'NOT_FOUND'))).toBe(1);
+  }, 20000);
+
   it('leaves a late answer on its own key, so the newer intent never reads it', async () => {
     // THE RACE, without React: the trader typed 1,000 then 2,000, and the first request comes
     // back last. Nothing cancels it and no sequence number is kept — every input is in the key,

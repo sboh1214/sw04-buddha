@@ -75,8 +75,16 @@ export const REQUOTE_THROTTLE_MS = 1_000;
  * another intent's numbers, and clearing the field clears the summary.
  *
  * `staleTime: 0` because this is a price — the client's 30s default would freeze it — while
- * `gcTime` is short because typing mints keys that must evict, and `retry: false` because a
- * refused quote is answered by the market's own state (마감, 종료), which retrying cannot change.
+ * `gcTime` is short because typing mints keys that must evict.
+ *
+ * There is NO `retry` override, and its absence is the decision. The reason one was written here
+ * — a refused quote is answered by the market's own state (마감, 종료), which retrying cannot
+ * change — is true and is already discharged by the client's own policy: those refusals are 409
+ * and an unknown market is 404, and `query-client.ts` refuses to retry any 4xx. Overriding it
+ * therefore removed nothing but the retries a 5xx and a dropped connection are worth, and those
+ * are the two failures the trader can do nothing about — one blip stranded a typed amount in
+ * `quote_failed` until they touched a control. This request is public, side-effect free and
+ * keyed on the body, so re-asking it is the same question, not a second one.
  */
 export function quoteQueryOptions(body: QuoteBody | undefined) {
   return {
@@ -90,7 +98,6 @@ export function quoteQueryOptions(body: QuoteBody | undefined) {
     enabled: body !== undefined,
     staleTime: 0,
     gcTime: 60_000,
-    retry: false,
     placeholderData: keepPreviousData,
   };
 }

@@ -499,6 +499,10 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
             categories={categories}
             disabled={!editable}
             lmsrDisabled={!canEditLiquidity(market.status)}
+            // The row itself, so the 미리보기 shows the price this market TRADES at rather than
+            // re-deriving the one it opened at from an `initialProbBp` the API will not let the
+            // form change any more.
+            base={market}
           />
           <Button
             type="submit"

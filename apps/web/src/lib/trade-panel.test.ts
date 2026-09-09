@@ -28,6 +28,7 @@ import {
   tradePanelView,
   tradeRequest,
   tradeSummary,
+  panelAnchor,
 } from './trade-panel';
 
 const RUNS = { numRuns: 1000 };
@@ -734,5 +735,37 @@ describe('quoteIsStale', () => {
     // The resting state and the debounce window both land here; a `true` would arm the requote
     // effect against a price nobody is looking at.
     expect(quoteIsStale(market, undefined)).toBe(false);
+  });
+});
+
+describe('panelAnchor', () => {
+  it('takes the API window end over the cache stamp, so the gate and the badge agree', () => {
+    // THE HAZARD: `closeAt` is the DATABASE's clock, and `dataUpdatedAt` is not. On the seeded
+    // first load it is the NEXT host's, so any skew between the web and database hosts moved the
+    // 마감 gate while the badge — which already anchors on the API's own `clock_timestamp()`,
+    // carried as the series window end — stayed right. Measured with a 90s web-host lead: the
+    // gate read CLOSED on a market open for another 60 seconds, and the panel replaced 예/아니오
+    // with 마감된 시장입니다 next to a badge still counting down.
+    const windowEnd = 1_700_000_000_000;
+    expect(panelAnchor(windowEnd, windowEnd + 90_000)).toBe(windowEnd);
+    // Including when the cache stamp is BEHIND: the point is provenance, not recency. Picking the
+    // later of two machines' clocks is the `Math.max` repair that was already tried and refused —
+    // it always picks the fast one, the half that takes a trade away from an open market.
+    expect(panelAnchor(windowEnd, windowEnd - 90_000)).toBe(windowEnd);
+  });
+
+  it('falls back to the cache stamp when the ticks read failed, never to no anchor', () => {
+    // `detailWindowEnd` is undefined on a failed ticks read — a supported page state. With no
+    // anchor at all `tickingNow` answers the raw wall clock, which is worse by the visitor's
+    // WHOLE skew; the seeded stamp is wrong only by the gap between two servers.
+    expect(panelAnchor(undefined, 1_700_000_000_123)).toBe(1_700_000_000_123);
+  });
+
+  it('prefers the window end for every pair of instants', () => {
+    fc.assert(
+      fc.property(fc.nat(), fc.nat(), (windowEnd, updatedAt) => {
+        expect(panelAnchor(windowEnd, updatedAt)).toBe(windowEnd);
+      }),
+    );
   });
 });

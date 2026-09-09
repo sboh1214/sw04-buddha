@@ -12,7 +12,7 @@ import {
 } from '@chakra-ui/react';
 import { Controller, type UseFormReturn } from 'react-hook-form';
 import { copy } from '@/copy';
-import { type Category } from '@/lib/api';
+import { type Category, type MarketSummary } from '@/lib/api';
 import { type MarketFormValues, maxLossHelp } from '@/lib/market-form';
 import { MarketPreview } from './market-preview';
 
@@ -25,6 +25,11 @@ interface MarketFormFieldsProps {
   lmsrDisabled?: boolean;
   /** The slug is chosen at creation only. */
   showSlug?: boolean;
+  /**
+   * The market being edited, passed straight to the 미리보기 so an already-traded market previews
+   * at its LIVE price rather than the one it opened at. Absent on 시장 만들기.
+   */
+  base?: MarketSummary;
 }
 
 /**
@@ -40,6 +45,7 @@ export function MarketFormFields({
   disabled = false,
   lmsrDisabled = false,
   showSlug = false,
+  base,
 }: MarketFormFieldsProps) {
   const {
     register,
@@ -181,7 +187,7 @@ export function MarketFormFields({
         </Field.Root>
       )}
 
-      <MarketPreview values={values} categories={categories} />
+      <MarketPreview values={values} categories={categories} base={base} />
     </Stack>
   );
 }

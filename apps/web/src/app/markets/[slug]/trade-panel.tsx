@@ -62,6 +62,7 @@ import {
   type TradeSummary,
   INITIAL_TRADE_INPUTS,
   isTradable,
+  panelAnchor,
   maxValueFor,
   quoteIsStale,
   quoteRequest,
@@ -135,7 +136,7 @@ interface TradePanelState {
   press: () => void;
 }
 
-function useTradePanel(market: Market): TradePanelState {
+function useTradePanel(market: Market, windowEnd: number | undefined): TradePanelState {
   const [inputs, setInputs] = useState<TradeInputs>(INITIAL_TRADE_INPUTS);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [reconfirmFrom, setReconfirmFrom] = useState<bigint | undefined>(undefined);
@@ -174,16 +175,21 @@ function useTradePanel(market: Market): TradePanelState {
    * running AHEAD won the max outright and drew 마감 over a market still open. See `tickingNow`
    * for which half is worse and what the fix does not recover.
    *
-   * The ANCHOR is captured once, at the first render, and deliberately not refreshed: only the
-   * SSR-hydrated `dataUpdatedAt` is a server instant. query-core restamps it with the BROWSER's
-   * clock on every later success — a refetch, and every `market:tick` the socket writes — so
-   * re-anchoring would quietly put the skew back (measured: hydrate keeps the server stamp,
-   * refetch and `setQueryData` do not).
+   * WHICH instant is anchored on is `panelAnchor`'s decision, and `dataUpdatedAt` is only its
+   * fallback. It is not the API's clock: on the seeded first load it is the NEXT host's, and on a
+   * `next/link` revisit it is the BROWSER's — `HydrationBoundary` hydrates an already-present
+   * query in an effect that runs after this render. `closeAt` is the DATABASE's, so anchoring on
+   * either of those compared two machines and moved the gate under a badge that stayed right.
+   * The window end this panel is handed is that database clock (`detailWindowEnd`).
+   *
+   * The anchor is still captured ONCE and deliberately not refreshed: `tickingNow` measures a
+   * monotonic elapsed FROM the instant it adopted, so re-adopting would rewind the clock and call
+   * a later instant the present.
    *
    * The last word belongs to `assertTradable` on the database clock anyway (A-M3-16) — a refusal
    * arrives as MARKET_CLOSED and renders through the same string.
    */
-  const [anchor] = useState(marketUpdatedAt);
+  const [anchor] = useState(() => panelAnchor(windowEnd, marketUpdatedAt));
   const [clock, setClock] = useState<number | undefined>(undefined);
   // The monotonic origin the elapsed is measured from. A ref and not state: written inside the
   // effect and read only there, so no render touches it (`react-hooks/refs` is an error).
@@ -429,6 +435,12 @@ function useTradePanel(market: Market): TradePanelState {
 export interface TradePanelProps {
   /** The live market row the detail screen holds; `lastPrice`/`status` drive the bar and gate. */
   market: Market;
+  /**
+   * The API's own `clock_timestamp()`, carried as the series' window end — the same instant
+   * `CountdownBadge` counts down from, so the gate and the badge cannot disagree. Absent when the
+   * ticks read failed, and then the panel falls back to the cache stamp (`panelAnchor`).
+   */
+  now?: number;
 }
 
 /**
@@ -437,8 +449,8 @@ export interface TradePanelProps {
  * `position: fixed`, so it leaves the column and takes the mobile tab bar's place on this route —
  * the page container owes it a bottom padding.
  */
-export function TradePanel({ market }: TradePanelProps) {
-  const panel = useTradePanel(market);
+export function TradePanel({ market, now }: TradePanelProps) {
+  const panel = useTradePanel(market, now);
   // Only the sheet's field takes the ref: at < md the inline card is still mounted behind
   // `display: none`, and focusing a hidden input does nothing.
   const sheetAmountRef = useRef<HTMLInputElement>(null);

@@ -71,9 +71,12 @@ export interface MarketDetailProps {
   /** The row's canonical lower-cased uuid — the key the page seeded and the socket writes. */
   marketId: string;
   /**
-   * The instant the countdown measures its first render against: the server's own window end,
-   * passed down from the page. Never read from the clock here — a `Date.now()` in a render
-   * body is a different string on the server and in the browser's first render.
+   * The instant the countdown AND the trade panel's 마감 gate measure their first render against:
+   * the API's own window end, passed down from the page. Both, because they read one close time
+   * and must not read it off two different machines' clocks — the panel's own fallback, the
+   * `['market', id]` cache stamp, is written by the Next host on the seeded load and by the
+   * browser on a revisit. Never read from the clock here — a `Date.now()` in a render body is a
+   * different string on the server and in the browser's first render.
    */
   now?: number;
   /**
@@ -165,7 +168,7 @@ export function MarketDetail({ marketId, now, children }: MarketDetailProps) {
       {/* Mounted ONCE. It emits three siblings — the sticky card that is this grid item, the
           fixed mobile bar and its portalled sheet — and the last two are out of flow, so
           neither claims a grid track. */}
-      {data === undefined ? null : <TradePanel market={data} />}
+      {data === undefined ? null : <TradePanel market={data} now={now} />}
     </Grid>
   );
 }

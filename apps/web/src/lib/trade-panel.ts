@@ -116,6 +116,33 @@ export function isTradable(market: Pick<Market, 'status' | 'closeAt'>, now: numb
 }
 
 /**
+ * The instant the 마감 gate anchors on.
+ *
+ * FIRST the API's own `clock_timestamp()`, carried as the series' window end (`detailWindowEnd`).
+ * That is the clock `assertTradable` compares `closeAt` against and the one the badge above the
+ * panel already counts down from, so taking it here is what makes the two readings ONE reading
+ * instead of two machines' opinions.
+ *
+ * `dataUpdatedAt` is the FALLBACK and not the source, because it is stamped by whichever machine
+ * last WROTE the cache entry — and that is two different wrong ones. On the seeded first load it
+ * is the NEXT host, not the API, so any skew between the web and database hosts moved the gate
+ * while the badge beside it stayed right (measured: a 90s web-host lead drew 마감 on a market
+ * open for another 60s). And on a `next/link` revisit within `gcTime` it is the BROWSER's:
+ * `HydrationBoundary` hydrates an ALREADY-PRESENT query in an effect that runs AFTER its children
+ * render, and `hydrate` drops the server payload outright when the held stamp is newer — so the
+ * panel's first render reads whatever the last refetch or `market:tick` stamped locally. That
+ * path needs no host skew at all, only the visitor's own clock.
+ *
+ * It stays the fallback rather than being dropped: with no anchor `tickingNow` answers the raw
+ * wall clock, which is worse by the visitor's WHOLE skew (A-M4-23). And never `Math.max` of the
+ * two — they are different machines' clocks and the max picks the FAST one, which is the half
+ * that takes a trade away from an open market.
+ */
+export function panelAnchor(windowEnd: number | undefined, updatedAt: number): number {
+  return windowEnd ?? updatedAt;
+}
+
+/**
  * The `POST /quotes` body, or `undefined` when the inputs are not askable yet. The bounds are
  * `quoteBodySchema`'s and are never restated: digits, the mode's range, spend + sell. Its
  * `uuidSchema` lower-cases the id, which is also what makes the quote's query key canonical
