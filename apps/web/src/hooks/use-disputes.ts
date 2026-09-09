@@ -191,8 +191,10 @@ export function disputeAnswerScope(a: {
  * from the button to 이의 접수됨 on it, and no realtime event carries a dispute (PLAN 8 has
  * none), so nothing else would deliver it. The invalidation deliberately EXCLUDES the entry
  * just seeded — a refetch of it could only restate what was written, which is the 남발 PLAN
- * 11.5 refuses — while any other list of the account's disputes (none is mounted on the detail
- * today, but the root is theirs) must not go on saying there is none.
+ * 11.5 refuses; true of a request issued AFTER the seed, and false of one already RUNNING,
+ * which is what the cancel below is for and why it costs no request — while any other list of
+ * the account's disputes (none is mounted on the detail today, but the root is theirs) must not
+ * go on saying there is none.
  *
  * Keyed on the ROW's `marketId`, not the mutation's argument: the API answers with the
  * canonical lower-cased id, which is the string the section's key is built from.
@@ -204,6 +206,38 @@ export function disputeAnswerScope(a: {
  */
 export function applyDisputeFiled(queryClient: QueryClient, dispute: Dispute): Promise<void> {
   const seeded = myDisputesKey(dispute.marketId);
+  // Kills a `GET /me/disputes` of THIS entry that is already on the wire and would otherwise
+  // resolve after the write below, carrying the "no dispute" it read before the row committed.
+  // `staleTime` is 30s and `refetchOnWindowFocus`/`refetchOnReconnect` are query-core's `true`
+  // defaults (query-client.ts overrides neither), and the dialog's second field is 근거 URL — so
+  // leaving the tab to copy the link and coming back to press 제출 is the ORDINARY way to fill
+  // this form, and the return refetches this very key moments before the POST. Landing late, that
+  // answer writes `null` over the row and the section flips back from 이의 접수됨 to the 이의
+  // 제기 button, with the typed reason gone (the form is `unmountOnExit`), under the toast that
+  // says it was filed.
+  //
+  // Nothing corrects it, and that is what makes the cancel load-bearing here rather than a
+  // nicety: this is the app's one seeded key that is neither cancelled nor re-asked, since the
+  // predicate below excludes it by design. It heals only on the reader's next tab switch, or on
+  // a second press earning DUPLICATE_REQUEST.
+  //
+  // NOT `cancelFirstFetch`: its `data === undefined` predicate is the one shape that cannot
+  // happen here. The button is drawn only on `disputeSectionView`'s `canFile` rung, which is
+  // `sessionListSection`'s `empty` — signed in, ANSWERED, no row — so a first fetch renders a
+  // skeleton with nothing to press and this entry provably holds `null`, which IS data. The
+  // predicate would make the call a no-op against the only form a reader can reach. `exact: true`
+  // for the mirror reason: a SIBLING `['disputes', 'mine', …]` mid-refetch with nobody watching
+  // would lose its answer to the revert while the `active` invalidation declined to ask again —
+  // the case that predicate does exist for (query-client.test.ts pins it).
+  //
+  // BEFORE the seed and in the same synchronous block (`applyTradeResult`'s rule): the cancel is
+  // synchronous down to the state change — query-core's retryer rejects and calls `onCancel` in
+  // the same tick, the `user:balance` handler's reading — and it needs no request behind it, the
+  // pair `restartQueries` insists on, because the SEED is what fills the reverted entry and the
+  // POST's row is the whole answer for this key. It closes the window, not the last microtask of
+  // it: a fetch whose retryer has already resolved is past cancelling, and ordering `['disputes']`
+  // by a watermark the way `joinMarket` does is not open to us — a `Dispute` carries no such key.
+  void queryClient.cancelQueries({ queryKey: seeded, exact: true });
   queryClient.setQueryData<Dispute | null>(seeded, dispute);
   const seededHash = hashKey(seeded);
   return queryClient.invalidateQueries({

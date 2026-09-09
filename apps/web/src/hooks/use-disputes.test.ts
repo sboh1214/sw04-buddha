@@ -95,6 +95,45 @@ function firstFetch<T>(
   return { count: () => fetches, inflight: observer.refetch(), unsubscribe };
 }
 
+/**
+ * A query that has ALREADY answered and is now on a BACKGROUND refetch — the shape the seed's
+ * cancel exists for, and the one `firstFetch` cannot make: this entry holds a value, so
+ * `cancelFirstFetch`'s `data === undefined` predicate cannot see it.
+ *
+ * Driven through `observer.refetch()`, which is what a window focus itself calls (`Query.onFocus`)
+ * — apps/web runs vitest under `environment: 'node'`, so the focus event cannot be raised here.
+ * The second answer lands only when the test says so (`land`), which is what makes the ordering
+ * the case is about explicit rather than left to the microtask queue.
+ */
+async function refetchOverHeld<T>(
+  queryClient: ReturnType<typeof getQueryClient>,
+  queryKey: readonly unknown[],
+  held: T,
+) {
+  let fetches = 0;
+  let land: (value: T) => void = () => undefined;
+  const observer = new QueryObserver<T>(queryClient, {
+    queryKey,
+    queryFn: () => {
+      fetches += 1;
+      if (fetches === 1) return Promise.resolve(held);
+      return new Promise<T>((resolve) => {
+        land = resolve;
+      });
+    },
+    retry: false,
+  });
+  const unsubscribe = observer.subscribe(() => undefined);
+  await observer.refetch();
+  return {
+    count: () => fetches,
+    observer,
+    land: (value: T) => land(value),
+    inflight: observer.refetch(),
+    unsubscribe,
+  };
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -178,9 +217,87 @@ describe('applyDisputeFiled', () => {
     }
   });
 
+  it('keeps the seed against a refetch that left before the row was committed', async () => {
+    // The reader pressed 이의 제기, left the tab to copy the 근거 URL the dialog's second field
+    // asks for, and came back: the return refetched this key (staleTime 30s,
+    // refetchOnWindowFocus at query-core's `true` default) and that GET read "no dispute" before
+    // the INSERT committed. It must not land on top of the answer.
+    //
+    // `null` is DATA, so this refetch is invisible to `cancelFirstFetch`, and the invalidation
+    // excludes this very key — without the cancel the section flips back from 이의 접수됨 to the
+    // 이의 제기 button under the toast that says the dispute was filed.
+    const queryClient = getQueryClient();
+    const mine = await refetchOverHeld<Dispute | null>(queryClient, myDisputesKey(ID), null);
+    try {
+      // The state that draws the button: answered, no row — never `pending`, which renders a
+      // skeleton with nothing to press.
+      expect(mine.observer.getCurrentResult().isPending).toBe(false);
+      await applyDisputeFiled(queryClient, dispute);
+      mine.land(null); // the pre-INSERT snapshot arrives now
+      await mine.inflight;
+
+      expect(queryClient.getQueryData<Dispute | null>(myDisputesKey(ID))).toEqual(dispute);
+      // Cancelled, never re-asked: the seed IS the answer, so the fix costs no request (PLAN 11.5).
+      expect(mine.count()).toBe(2);
+      expect(queryClient.getQueryState(myDisputesKey(ID))?.fetchStatus).toBe('idle');
+      expect(queryClient.getQueryState(myDisputesKey(ID))?.isInvalidated).toBe(false);
+    } finally {
+      mine.unsubscribe();
+      queryClient.clear();
+    }
+  });
+
+  it('spends no request of its own when nothing is in flight', async () => {
+    // The healthy path, and the guard against "fixing" this with a refetch of the seeded key.
+    // The entry is left `success` with the row rather than reverted to a skeleton — a cancel with
+    // nothing behind it strands a query on `pending` (`restartQueries` says so), and what fills
+    // the reverted entry here is the seed, not a request.
+    const queryClient = getQueryClient();
+    const mine = await refetchOverHeld<Dispute | null>(queryClient, myDisputesKey(ID), null);
+    try {
+      mine.land(null);
+      await mine.inflight;
+      const before = mine.count();
+
+      await applyDisputeFiled(queryClient, dispute);
+
+      expect(mine.count()).toBe(before);
+      expect(mine.observer.getCurrentResult().data).toEqual(dispute);
+      expect(mine.observer.getCurrentResult().isPending).toBe(false);
+    } finally {
+      mine.unsubscribe();
+      queryClient.clear();
+    }
+  });
+
+  it('leaves a sibling entry nobody is watching to land its own answer', async () => {
+    // Why the cancel is `exact`. An UNMOUNTED sibling mid-refetch is the case
+    // `cancelFirstFetch`'s predicate exists for: a cancel would revert it and the `active`
+    // invalidation would decline to restart what nobody watches, so the answer on the wire would
+    // be thrown away. Fails if anyone ever widens this cancel to the whole `['disputes']` root.
+    const queryClient = getQueryClient();
+    const sibling = await refetchOverHeld<Dispute | null>(
+      queryClient,
+      myDisputesKey(OTHER_ID),
+      null,
+    );
+    const other = { ...dispute, id: 'c0ffee00-0000-4000-8000-000000000002', marketId: OTHER_ID };
+    try {
+      sibling.unsubscribe(); // unmounted, with its refetch still on the wire
+      await applyDisputeFiled(queryClient, dispute);
+      sibling.land(other);
+      await sibling.inflight;
+
+      expect(queryClient.getQueryData<Dispute | null>(myDisputesKey(OTHER_ID))).toEqual(other);
+    } finally {
+      queryClient.clear();
+    }
+  });
+
   it('writes the row even into a cache that held no entry yet', () => {
     // Unlike a `Me` or a position list, the row IS the whole answer, so there is nothing a
-    // later fetch could add — and the section is only ever mounted once the row was asked for.
+    // later fetch could add — but one already RUNNING carries an older one, which is the case
+    // above — and the section is only ever mounted once the row was asked for.
     // Whose row it is, is not this writer's question: `disputeAnswerScope` answers it in
     // `useFileDispute` and this is never reached for another account's (the `applyTradeResult`
     // split), so guarding here would only break the seed for an ordinary filer.

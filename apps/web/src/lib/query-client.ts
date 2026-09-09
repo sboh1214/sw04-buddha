@@ -114,6 +114,15 @@ export function getQueryClient(): QueryClient {
  * before, and an `active` invalidation then declines to restart what nobody is watching — so the
  * answer already on the wire is thrown away and the stale row stands until the list is mounted
  * again. The predicate leaves it alone to land (query-client.test.ts pins both halves).
+ *
+ * That same predicate makes this the WRONG call in front of a SEED, which is the mistake to
+ * expect here. A seed does not WAIT for the answer, it REPLACES it, so what has to be cancelled
+ * there is a fetch over data every bit as much as a first one — and a key deliberately left out
+ * of its own invalidation (`applyDisputeFiled`, use-disputes.ts) has no second chance to correct
+ * what lands late. That call site writes its own unconditional `cancelQueries({ queryKey, exact:
+ * true })` and pairs it with the seed rather than with a request; it is not a third helper here
+ * because the pair these two enforce is cancel-then-ASK, and the asking is the one thing PLAN
+ * 11.5 refuses for that key (A-M5-18).
  */
 export function cancelFirstFetch(queryClient: QueryClient, queryKey: readonly unknown[]): void {
   void queryClient.cancelQueries({
