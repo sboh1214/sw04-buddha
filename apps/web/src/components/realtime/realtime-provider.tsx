@@ -27,6 +27,7 @@ import {
 import { type Socket, io } from 'socket.io-client';
 import { type SessionIdentity } from '@/components/auth/session-cache-guard';
 import { ME_QUERY_KEY } from '@/hooks/use-me';
+import { LEDGER_QUERY_KEY } from '@/hooks/use-wallet';
 import { listStatusOf } from '@/hooks/use-portfolio';
 import { type Market, type Me, type Position } from '@/lib/api';
 import { useSession } from '@/lib/use-session';
@@ -104,8 +105,15 @@ const MARKET_RESTART_MS = 1_000;
 
 /** The public caches a reconnect re-reads; any of them may have moved during the gap. */
 const SNAPSHOT_KEYS = [MARKET_KEY, MARKETS_KEY, TICKS_KEY, MARKET_FILLS_KEY] as const;
-/** The same for a signed-in tab. Never SSR'd, so they exist only once the client has fetched. */
-const PRIVATE_SNAPSHOT_KEYS = [ME_QUERY_KEY, POSITIONS_KEY, ORDERS_KEY] as const;
+/**
+ * The same for a signed-in tab. Never SSR'd, so they exist only once the client has fetched.
+ *
+ * `['ledger']` is here for the reason `['orders']` is: a resnapshot runs BECAUSE events were
+ * missed, and a missed `user:balance` is a ledger row nothing else in this tab writes. It earned
+ * the place by becoming event-driven below; before that it would have been a refetch with no
+ * event behind it.
+ */
+const PRIVATE_SNAPSHOT_KEYS = [ME_QUERY_KEY, POSITIONS_KEY, ORDERS_KEY, LEDGER_QUERY_KEY] as const;
 
 /** What a screen may ask of the tab's socket. */
 export interface Realtime {
@@ -581,6 +589,26 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         if (identity === null) return;
         const parsed = userBalanceEventSchema.safeParse(raw);
         if (!parsed.success || !balanceOrder.accept(parsed.data)) return;
+        // 원장 is the other half of this event, and it was the one balance writer that moved the
+        // chip and left the history behind: `useCharge`, `useRedeemCoupon` and the admin
+        // adjustment all refresh `['me']` and `['ledger']` together ("the nav chip and the ledger
+        // must never disagree", use-wallet.ts). A tab parked on /wallet showed the post-payout
+        // balance above a newest row still asserting the pre-payout 잔고 후, with 정산 지급 absent
+        // — self-contradicting rather than merely behind, which is what makes it worth a request.
+        //
+        // Both kinds of the RULE above, and the first one literally: the event carries the ID of
+        // the row it cannot draw (a `LedgerEntry` is type, amount, 잔고 후, memo and instant; a
+        // `UserBalanceEvent` is two figures, that id and a `ts`), and a /wallet on its first fetch
+        // could not take it either. Not 남발: the accept gate is `ledger_entries.id`, the
+        // account's own commit order, so an ACCEPTED event always names a row this tab has never
+        // held and a late or duplicate delivery spends nothing.
+        //
+        // Above the `patch.kind` branch because that branch RETURNS, and the tab it returns for —
+        // one whose `GET /me` is in flight — is on /wallet precisely the tab whose FIRST
+        // `GET /me/ledger` is in flight too. `restartQueries` for that same reason: `['ledger']`
+        // is never seeded and never SSR'd, so a bare invalidation would hand back the request
+        // that left before the payout committed.
+        void restartQueries(queryClient, LEDGER_QUERY_KEY);
         const patch = applyBalanceEvent(queryClient.getQueryData<Me>(ME_QUERY_KEY), parsed.data);
         // Kills an in-flight `GET /me` that would otherwise resolve after this write carrying
         // an older balance. The primary path for the trading AC is still `TradeResult.balance`

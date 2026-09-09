@@ -4,7 +4,9 @@ import {
   type DisputeVerdict,
   type MarketStatus,
   type Outcome,
+  type StatusKeyed,
   disputeStatusSchema,
+  statusSupersedes,
   uuidSchema,
 } from '@buddha/shared';
 import type { InfiniteData } from '@tanstack/react-query';
@@ -66,23 +68,52 @@ export function adminDisputeFiltersFromSearchParams(
   });
 }
 
-/** One market's disputes, headed by the market as the newest row describes it. */
+/** One market's disputes, headed by the market as the FRESHEST of its rows describes it. */
 export interface DisputeGroup {
   marketId: string;
   marketSlug: string;
   marketTitle: string;
   marketStatus: MarketStatus;
   resolvedResult: Outcome | null;
+  /** The order of `marketStatus`/`resolvedResult` above; null for a market with no event. */
+  statusEventId: string | null;
   disputes: AdminDispute[];
+}
+
+/**
+ * `statusSupersedes` reads `{ status, statusEventId }`, and on this row the market's status is
+ * spelled `marketStatus` — `status` is the VERDICT. Written once, as a named adapter, because
+ * the two enums overlap on `'open'`: TypeScript does refuse `DisputeStatus` where `MarketStatus`
+ * is wanted, but a reader skimming an inline object literal would not.
+ */
+function marketSnapshotOf(row: Pick<DisputeGroup, 'marketStatus' | 'statusEventId'>): StatusKeyed {
+  return { status: row.marketStatus, statusEventId: row.statusEventId };
 }
 
 /**
  * PLAN 12's 시장별 그룹 over the flat, newest-first page rows. Groups keep the order their
  * first (newest) dispute appears in, so the market with the freshest objection is on top and
- * 더 보기 only ever appends — a group already on screen never moves. The heading takes the
- * market's status and result from that same first row: every row of one market was joined to
- * the same market row within one response, and across pages the newer answer is the one to
- * trust.
+ * 더 보기 only ever appends — a group already on screen never moves.
+ *
+ * ORDER comes from the first row; the market SNAPSHOT does not, and the difference is the whole
+ * of this function. Every row of one market was joined to the same market row within ONE
+ * response, but the flattened list holds several responses: `listAdmin` orders `(created_at
+ * desc, id desc)`, so a LATER page carries OLDER disputes joined to a market row read LATER —
+ * and `replaceDisputeRow` seeds a reviewed row whose snapshot was read inside the review
+ * transaction, wherever that row happens to sit. So up to three snapshots of one market can be
+ * on screen at once, and arrival order does not rank them: it would have let an older page
+ * overwrite the seed, which is the freshest thing the cache holds.
+ *
+ * `statusSupersedes` (@buddha/shared) ranks them instead, the same helper `applyStatus` and
+ * `joinMarket` use — total, monotone and order-independent, by `statusEventId` where both rows
+ * carry one and by status rank where they do not (migration 0011 backfilled every real market,
+ * so the fallback is a factory's concern). The status and the result move TOGETHER, as one
+ * snapshot, exactly as `joinMarket` moves them.
+ *
+ * `marketTitle` and `marketSlug` stay with the first row and are deliberately not reconciled:
+ * `MarketAdminService.update` refuses every status past `open` and a dispute exists only from
+ * `resolving`, so a market with an objection can no longer be retitled. Ranking a field that
+ * cannot change would be a rule with no case behind it.
  */
 export function groupDisputesByMarket(rows: readonly AdminDispute[]): DisputeGroup[] {
   const groups = new Map<string, DisputeGroup>();
@@ -90,6 +121,11 @@ export function groupDisputesByMarket(rows: readonly AdminDispute[]): DisputeGro
     const group = groups.get(row.marketId);
     if (group) {
       group.disputes.push(row);
+      if (statusSupersedes(marketSnapshotOf(row), marketSnapshotOf(group))) {
+        group.marketStatus = row.marketStatus;
+        group.resolvedResult = row.resolvedResult;
+        group.statusEventId = row.statusEventId;
+      }
       continue;
     }
     groups.set(row.marketId, {
@@ -98,6 +134,7 @@ export function groupDisputesByMarket(rows: readonly AdminDispute[]): DisputeGro
       marketTitle: row.marketTitle,
       marketStatus: row.marketStatus,
       resolvedResult: row.resolvedResult,
+      statusEventId: row.statusEventId,
       disputes: [row],
     });
   }

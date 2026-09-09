@@ -74,10 +74,22 @@ describe('dispute read DTOs', () => {
 
   it('parse the own row and the admin row, which adds the filer and the reviewer', () => {
     expect(disputeSchema.parse(dispute)).toEqual(dispute);
-    const admin = { ...dispute, userId: 'u1', nickname: '예측가_1', reviewedBy: null };
+    const admin = {
+      ...dispute,
+      userId: 'u1',
+      nickname: '예측가_1',
+      reviewedBy: null,
+      statusEventId: '42',
+    };
     expect(adminDisputeSchema.parse(admin)).toEqual(admin);
     // The own DTO never carries another user's identity.
     expect('userId' in disputeSchema.shape).toBe(false);
+    // Nor the market snapshot's ordering key: only the admin list reconciles two snapshots of
+    // one market (`groupDisputesByMarket`), and a key nothing compares is a key nothing keeps
+    // honest — the asymmetry `Position.marketStatus` already carries.
+    expect('statusEventId' in disputeSchema.shape).toBe(false);
+    // Nullable, not optional: a market with no transition event orders by status rank instead.
+    expect(adminDisputeSchema.safeParse({ ...admin, statusEventId: null }).success).toBe(true);
     expect(disputeSchema.safeParse({ ...dispute, status: 'pending' }).success).toBe(false);
   });
 });

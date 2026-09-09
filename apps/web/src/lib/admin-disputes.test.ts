@@ -32,6 +32,9 @@ function dispute(overrides: Partial<AdminDispute> = {}): AdminDispute {
     reviewedBy: null,
     reviewedAt: null,
     createdAt: '2026-09-08T00:00:00.000Z',
+    // The order of the market snapshot above (A-M3-19). Every real row carries one — migration
+    // 0011 backfilled every market — so the default is a key, not null.
+    statusEventId: '5',
     ...overrides,
   };
 }
@@ -99,15 +102,87 @@ describe('groupDisputesByMarket', () => {
     });
   });
 
-  it('heads the group with the market as its newest row describes it', () => {
-    // Across pages the older row may predate a result change; the newer answer is trusted.
+  it('heads the group with the freshest snapshot, not the first row', () => {
+    // THE REAL PAGE ORDER, which the fixture here used to have backwards: `listAdmin` answers
+    // `(created_at desc, id desc)`, so page 2 holds the OLDER disputes — joined to a market row
+    // read a minute LATER, after the worker settled it. First-wins headed the group `resolving`
+    // while the rows under it belonged to a settled market.
     const groups = groupDisputesByMarket([
-      dispute({ id: 'd2', resolvedResult: 'NO', marketStatus: 'settled' }),
-      dispute({ id: 'd1', resolvedResult: 'YES', marketStatus: 'resolving' }),
+      dispute({ id: 'd2', resolvedResult: 'YES', marketStatus: 'resolving', statusEventId: '5' }),
+      dispute({ id: 'd1', resolvedResult: 'YES', marketStatus: 'settled', statusEventId: '9' }),
     ]);
     expect(groups).toHaveLength(1);
-    expect(groups[0]?.resolvedResult).toBe('NO');
     expect(groups[0]?.marketStatus).toBe('settled');
+    expect(groups[0]?.statusEventId).toBe('9');
+    // Order is still the first row's business: the group did not move.
+    expect(groups[0]?.disputes.map((d) => d.id)).toEqual(['d2', 'd1']);
+  });
+
+  it('keeps the freshest snapshot when it arrives first (the seeded row)', () => {
+    // `replaceDisputeRow` writes the PATCH answer — a snapshot read inside the review
+    // transaction — into whichever page holds the reviewed row, and on a newest-first list that
+    // is usually the market's FIRST. "Later page wins" would overwrite the freshest thing the
+    // cache holds with an older page's; the key does not.
+    const groups = groupDisputesByMarket([
+      dispute({ id: 'd2', resolvedResult: null, marketStatus: 'voided', statusEventId: '11' }),
+      dispute({ id: 'd1', resolvedResult: 'YES', marketStatus: 'resolving', statusEventId: '5' }),
+    ]);
+    expect(groups[0]?.marketStatus).toBe('voided');
+    expect(groups[0]?.resolvedResult).toBeNull();
+  });
+
+  it('moves the status and the result together, never one without the other', () => {
+    // One snapshot, as `joinMarket` moves them: a heading that took the newer status and kept
+    // the older result would show 무효 beside the result the void just discarded.
+    const groups = groupDisputesByMarket([
+      dispute({ id: 'd2', resolvedResult: 'YES', marketStatus: 'resolving', statusEventId: '5' }),
+      dispute({ id: 'd1', resolvedResult: 'NO', marketStatus: 'resolving', statusEventId: '9' }),
+    ]);
+    expect(groups[0]).toMatchObject({ marketStatus: 'resolving', resolvedResult: 'NO' });
+  });
+
+  it('drops a repeat of the same key, and falls back to the status rank without one', () => {
+    // `supersedes` is strict, so an equal key is a duplicate — the same strictness that makes an
+    // admin edit's republish a no-op (A-M4-36). Two rows of one market inside ONE response were
+    // joined to the same market row, so they always agree; only pages can disagree.
+    const same = groupDisputesByMarket([
+      dispute({ id: 'd2', marketStatus: 'resolving', statusEventId: '9' }),
+      dispute({ id: 'd1', marketStatus: 'settled', statusEventId: '9' }),
+    ]);
+    expect(same[0]?.marketStatus).toBe('resolving');
+    // No key on either side is a factory's case (0011 backfilled every real market); rank is the
+    // one order such a row can still join, and it is order-independent.
+    for (const pair of [
+      ['resolving', 'settled'],
+      ['settled', 'resolving'],
+    ] as const) {
+      const groups = groupDisputesByMarket([
+        dispute({ id: 'd2', marketStatus: pair[0], statusEventId: null }),
+        dispute({ id: 'd1', marketStatus: pair[1], statusEventId: null }),
+      ]);
+      expect(groups[0]?.marketStatus).toBe('settled');
+    }
+  });
+
+  it('never reconciles the title or the slug', () => {
+    // They cannot change on a market that has a dispute: `MarketAdminService.update` refuses
+    // every status past `open`, and a dispute can only be filed from `resolving`. Ranking a
+    // field with no case behind it is the half of the review that was dead code.
+    const groups = groupDisputesByMarket([
+      dispute({ id: 'd2', statusEventId: '5' }),
+      dispute({
+        id: 'd1',
+        marketTitle: '고쳐진 제목',
+        marketSlug: 'renamed',
+        marketStatus: 'settled',
+        statusEventId: '9',
+      }),
+    ]);
+    expect(groups[0]).toMatchObject({
+      marketTitle: '기준금리 인하?',
+      marketSlug: 'rate-cut-2026',
+      marketStatus: 'settled',
+    });
   });
 
   it('is empty for no rows', () => {

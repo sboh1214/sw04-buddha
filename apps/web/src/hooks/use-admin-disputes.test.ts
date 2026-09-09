@@ -30,6 +30,8 @@ function dispute(overrides: Partial<AdminDispute> = {}): AdminDispute {
     reviewedBy: null,
     reviewedAt: null,
     createdAt: '2026-09-08T00:00:00.000Z',
+    /** The market snapshot's order (A-M3-19); `groupDisputesByMarket` is what compares it. */
+    statusEventId: '5',
     ...overrides,
   };
 }

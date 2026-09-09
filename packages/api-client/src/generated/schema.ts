@@ -634,6 +634,7 @@ export type components = {
             reviewedBy: string | null;
             /** @enum {string} */
             status: "open" | "accepted" | "rejected";
+            statusEventId: string | null;
             userId: string;
         };
         AdminMarket: {

@@ -28,14 +28,23 @@ type MarketRow = typeof schema.markets.$inferSelect;
 /** UNIQUE (market_id, user_id) on disputes (migration 0000): one objection per user per market. */
 export const DISPUTE_MARKET_USER_UNIQUE = 'disputes_market_id_user_id_unique';
 
-/** What a dispute DTO needs from its market: the answer says which market, and where it stands. */
+/**
+ * What a dispute DTO needs from its market: the answer says which market, and where it stands.
+ * `statusEventId` rides along for the admin row only (`toAdminDispute`): it is the order of the
+ * status and result beside it (A-M3-19), and the admin list is the one reader that compares two
+ * snapshots of one market.
+ */
 const marketColumns = {
   slug: schema.markets.slug,
   title: schema.markets.title,
   status: schema.markets.status,
   resolvedResult: schema.markets.resolvedResult,
+  statusEventId: schema.markets.statusEventId,
 };
-type MarketColumns = Pick<MarketRow, 'slug' | 'title' | 'status' | 'resolvedResult'>;
+type MarketColumns = Pick<
+  MarketRow,
+  'slug' | 'title' | 'status' | 'resolvedResult' | 'statusEventId'
+>;
 
 /** One dispute joined with its market (`GET /me/disputes`, and the answer to filing one). */
 const disputeWithMarket = { dispute: schema.disputes, market: marketColumns };
@@ -65,6 +74,8 @@ function toAdminDispute(row: DisputeRow, market: MarketColumns, nickname: string
     userId: row.userId,
     nickname,
     reviewedBy: row.reviewedBy,
+    // A bigint on the wire as a decimal string, the way `MarketSummary` carries the same column.
+    statusEventId: market.statusEventId === null ? null : String(market.statusEventId),
   };
 }
 

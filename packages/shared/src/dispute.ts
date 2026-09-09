@@ -60,6 +60,18 @@ export const adminDisputeSchema = z
     nickname: z.string(),
     /** Reviewing admin's user id; no FK (PLAN 6.2), so it is a plain string. */
     reviewedBy: z.string().nullable(),
+    /**
+     * The ordering key of the market snapshot above (`markets.status_event_id`, A-M3-19), as a
+     * decimal string like `MarketSummary`'s; null for a market with no transition event.
+     *
+     * Only on the ADMIN row, because only the admin list ever reconciles two snapshots of one
+     * market: its 시장별 그룹 flattens several pages, each joined to the market as it stood when
+     * that page was fetched, and `statusSupersedes` is what decides which heading wins
+     * (`groupDisputesByMarket`). The caller's own `Dispute` gains nothing from a key nothing
+     * compares — the same asymmetry `Position.marketStatus` already carries, "a join with no
+     * event id beside it, and rank is the one order such a row can still join".
+     */
+    statusEventId: z.string().nullable(),
   })
   .meta({ id: 'AdminDispute' });
 export type AdminDispute = z.infer<typeof adminDisputeSchema>;

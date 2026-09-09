@@ -79,6 +79,9 @@ describe.skipIf(!hasTestInfra)('disputes (integration)', () => {
       resolvedResult: 'YES',
       resolvedAt,
       disputeUntil: new Date(resolvedAt.getTime() + 24 * HOUR_MS),
+      // `POST /admin/markets/:id/resolve` always writes one alongside the status (A-M3-19), so
+      // a factory-made resolving market carries one too, and the admin row can answer it.
+      statusEventId: 7101,
       ...input,
     });
   };
@@ -331,10 +334,12 @@ describe.skipIf(!hasTestInfra)('disputes (integration)', () => {
         adminNote: '출처가 다릅니다',
       });
       expect(page.data[0]!.reviewedAt).not.toBeNull();
-      // The own shape carries no user id and no reviewer (those are the admin's columns).
+      // The own shape carries no user id and no reviewer (those are the admin's columns), and
+      // no ordering key for the market snapshot: only the admin list reconciles two of those.
       expect(page.data[0]).not.toHaveProperty('userId');
       expect(page.data[0]).not.toHaveProperty('reviewedBy');
       expect(page.data[0]).not.toHaveProperty('nickname');
+      expect(page.data[0]).not.toHaveProperty('statusEventId');
 
       const theirs = await get('/api/v1/me/disputes', other.cookie);
       expect(pageOf<Dispute>(theirs).data.map((d) => d.marketId)).toEqual([first.id]);
@@ -433,6 +438,9 @@ describe.skipIf(!hasTestInfra)('disputes (integration)', () => {
         marketTitle: first.title,
         marketStatus: 'resolving',
         resolvedResult: 'YES',
+        // The bigint column reaches the wire as a decimal string, like `MarketSummary`'s: it is
+        // what orders two snapshots of one market in the admin list's 시장별 그룹.
+        statusEventId: '7101',
         status: 'accepted',
         reviewedBy: admin.id,
       });

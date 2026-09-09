@@ -6091,6 +6091,10 @@
           "reviewedBy": {
             "nullable": true,
             "type": "string"
+          },
+          "statusEventId": {
+            "nullable": true,
+            "type": "string"
           }
         },
         "required": [
@@ -6108,7 +6112,8 @@
           "createdAt",
           "userId",
           "nickname",
-          "reviewedBy"
+          "reviewedBy",
+          "statusEventId"
         ],
         "additionalProperties": false
       },

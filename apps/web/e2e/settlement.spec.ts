@@ -97,6 +97,16 @@ test.describe('정산', () => {
     await buyThroughPanel(page, 'YES', '5000');
     await markDocument(page);
 
+    // A second tab of the SAME account parked on 지갑 before anything is resolved. The payout's
+    // `user:balance` moves the balance chip there through the socket, but a `LedgerEntry` cannot
+    // be built from that event — it carries the id of the row and none of its columns — so the
+    // 정산 지급 row is only ever a refetch. Parked here rather than visited at the end, because
+    // a `goto` would fetch the ledger anyway and prove nothing about the live path.
+    const wallet = await page.context().newPage();
+    await wallet.goto('/wallet');
+    await expect(wallet.getByTestId('ledger-list')).toBeVisible();
+    await markDocument(wallet);
+
     // --- 마감 through the API: trading stops, and the badge says so without a reload.
     await closeMarket(admin, market.id);
     const badge = page.getByTestId('market-status-badge');
@@ -145,11 +155,14 @@ test.describe('정산', () => {
     expect(amount.startsWith(MINUS_SIGN), amount).toBe(false);
     expect(amount, amount).not.toBe('0');
 
-    // --- 지갑: the payout is a 정산 지급 ledger row.
-    await page.goto('/wallet');
-    await expect(page.getByText(copy.ledgerTypeSettlement).first()).toBeVisible({
+    // --- 지갑: the payout is a 정산 지급 ledger row, and it reaches the tab that was ALREADY
+    // there — no navigation, no reload. The balance chip moved on the event itself; this row is
+    // the refetch the event triggers, because nothing in a `user:balance` can draw a ledger row.
+    await expect(wallet.getByText(copy.ledgerTypeSettlement).first()).toBeVisible({
       timeout: windowMs + 15_000,
     });
+    expect(await documentSurvived(wallet), wallet.url()).toBe(true);
+    await wallet.close();
   });
 });
 
