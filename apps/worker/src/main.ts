@@ -1,6 +1,8 @@
 import { closeDb, createDb, type Db } from '@buddha/db';
 import { isNotConnectionError, type Queue, type Worker } from 'bullmq';
+import { sql } from 'drizzle-orm';
 import { Redis } from 'ioredis';
+import { waitForDb } from './db-ready.js';
 import { getEnv } from './env.js';
 import { startHealthServer, type HealthServer } from './health.js';
 import { createProcessor } from './jobs/index.js';
@@ -123,9 +125,29 @@ async function main(): Promise<void> {
     });
   }
 
+  // Everything awaited above proved REDIS. `createDb` only constructs a pool — node-postgres
+  // connects on first checkout — so without this the flag promised a settlement worker on a
+  // database it had never reached, and `/health` answered 200 while every close and finalize
+  // transaction failed. env.ts says the runners wait for this "the way they wait for the API",
+  // and the API's probe covers db AND redis (health.controller.ts); closing and settling are
+  // Postgres transactions, so the flag has to have touched Postgres once.
+  //
+  // Retries rather than throwing, and `waitForDb` says why at length: a rejecting one-shot would
+  // reach `main().catch` and `process.exit(1)`, killing the health port that was bound first
+  // precisely so a poller sees 503 rather than a refused connection. The Redis half already
+  // parks the same way.
+  //
+  // This gates the PROBE, not the queue: the Workers above are already consuming, and a scan
+  // that runs while we wait fails and is retried exactly as before (A-M5-15). `db` only, not
+  // `auditDb` — same DATABASE_URL, so probing it would prove the same server twice while
+  // holding the audit pool's single slot. It is a fact about BOOT: a Postgres that dies later
+  // leaves this flag at 200 (Q-M5-11).
+  const dbReady = await waitForDb(() => db.execute(sql`select 1`), { logger });
+
   logger.info(
     {
       redis: describeRedis(env.REDIS_URL),
+      db: { attempts: dbReady.attempts },
       queues: QUEUE_NAMES,
       schedules: JOB_SCHEDULES.map((schedule) => `${schedule.name}@${schedule.repeat.pattern}`),
     },

@@ -14,8 +14,12 @@ export const envSchema = z.object({
   /**
    * `GET /health` (health.ts) so the e2e runner and CI can wait for the worker the way they
    * wait for the API — a worker that is still connecting must not be taken for one that will
-   * close and settle markets on time (PLAN M5 AC 7). 0 disables the server: a deployment that
-   * probes the process some other way keeps no listening socket it never asked for.
+   * close and settle markets on time (PLAN M5 AC 7). 200 once the queues are attached AND
+   * Postgres has answered one `select 1` (`waitForDb`, main.ts); both, because closing and
+   * settling are database transactions and the API's own probe covers both too. It is a fact
+   * about BOOT: a Postgres that dies afterwards leaves the flag at 200 (Q-M5-11). 0 disables
+   * the server: a deployment that probes the process some other way keeps no listening socket
+   * it never asked for.
    */
   WORKER_HEALTH_PORT: z.coerce.number().int().min(0).max(65535).default(4100),
   /** Bind address of the health server; 'localhost' keeps it off the network by default. */
