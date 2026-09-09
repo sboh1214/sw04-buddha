@@ -287,7 +287,9 @@ export async function finalizeMarket(
   }
   // Issued back to back, awaited together (realtime.ts): the status first, then each
   // account's events, in call order on the wire; a Redis that stops answering costs one
-  // command timeout, not one per holder.
+  // command timeout for the batch, not one per holder — the bound is on the publisher's own
+  // connection (`createPublisherRedis`), and the backlog it leaves is dropped when that socket
+  // goes rather than resent, so a settled market never republishes a payout event.
   await Promise.all([
     publish(marketChannel(marketId), status),
     ...events.map(([userId, event]) => publish(userChannel(userId), event)),

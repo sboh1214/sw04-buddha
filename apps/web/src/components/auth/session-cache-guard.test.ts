@@ -31,7 +31,8 @@ describe('sessionIdentityChanged', () => {
 describe('the published cache owner', () => {
   it('answers undefined until better-auth has answered in this tab', () => {
     // Read before anything is published — the state a tree without the guard stays in, and the
-    // one `tradeAnswerScope` falls back to the cached `Me` for.
+    // one both gates fall back in: `tradeAnswerScope` to the cached `Me`, `disputeAnswerScope`
+    // (use-disputes.ts) to writing anyway, since nothing of anybody's is on screen there.
     expect(cacheOwnerAccount()).toBeUndefined();
   });
 

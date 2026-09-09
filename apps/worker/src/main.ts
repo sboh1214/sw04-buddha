@@ -6,8 +6,14 @@ import { startHealthServer, type HealthServer } from './health.js';
 import { createProcessor } from './jobs/index.js';
 import { LEDGER_AUDIT_QUERY_TIMEOUT_MS } from './jobs/ledger-audit.js';
 import { logger } from './logger.js';
-import { createQueues, createWorker, JOB_SCHEDULES, QUEUE_NAMES } from './queues.js';
-import { createPublisher } from './realtime.js';
+import {
+  BULLMQ_REDIS_OPTIONS,
+  createQueues,
+  createWorker,
+  JOB_SCHEDULES,
+  QUEUE_NAMES,
+} from './queues.js';
+import { createPublisher, createPublisherRedis } from './realtime.js';
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 
@@ -20,6 +26,7 @@ interface Handles {
   /** null when WORKER_HEALTH_PORT is 0. */
   health: HealthServer | null;
   redis: Redis;
+  publishRedis: Redis;
   db: Db;
   auditDb: Db;
   queues: Queue[];
@@ -45,14 +52,7 @@ async function main(): Promise<void> {
   // non-blocking commands. BullMQ duplicates it internally for each Worker's
   // blocking connection and closes those duplicates in Worker.close(); this
   // instance is ours to close.
-  const redis = new Redis(env.REDIS_URL, {
-    // Required by BullMQ for connections used by Workers: never fail a blocking
-    // command because of transient reconnects.
-    maxRetriesPerRequest: null,
-    // Same backoff BullMQ applies to connections it creates itself (1s..20s).
-    retryStrategy: (times) => Math.max(Math.min(Math.exp(times), 20_000), 1_000),
-    connectionName: 'buddha-worker',
-  });
+  const redis = new Redis(env.REDIS_URL, BULLMQ_REDIS_OPTIONS);
   redis.on('error', (err) => logger.error({ err }, 'redis error'));
   redis.on('reconnecting', () => logger.warn('redis reconnecting'));
   redis.on('end', () => logger.info('redis connection ended'));
@@ -71,12 +71,20 @@ async function main(): Promise<void> {
     applicationName: 'buddha-worker-audit-job',
     queryTimeoutMs: LEDGER_AUDIT_QUERY_TIMEOUT_MS,
   });
-  // Realtime events (PLAN 8) go out on the same shared connection: PUBLISH is a plain
-  // command, and only a SUBSCRIBE would put the connection into subscriber mode.
+  // Realtime events (PLAN 8) go out on a connection of their OWN, not the shared one. Subscriber
+  // mode is not the reason — the worker never subscribes — the option sets are: the connection
+  // above must keep `maxRetriesPerRequest: null` for BullMQ's blocking reads, and a client with
+  // that option never rejects a command it has queued, nor may it carry a `commandTimeout` that
+  // would. A publish on it can therefore park forever, and because both publishes happen after
+  // their transaction commits, `runScan` is sequential and the `markets` queue is
+  // `concurrency: 1`, one parked publish stops every market behind it and every later close and
+  // settlement job — with `/health` still answering ready. `createPublisherRedis` (realtime.ts)
+  // bounds it, the way the API splits `REDIS_QUEUE` off its shared client for the same reason.
+  const publishRedis = createPublisherRedis(env.REDIS_URL, logger);
   const processor = createProcessor({
     db,
     auditDb,
-    publish: createPublisher(redis, logger),
+    publish: createPublisher(publishRedis, logger),
     logger,
   });
 
@@ -125,7 +133,7 @@ async function main(): Promise<void> {
   );
   ready = true;
 
-  installShutdownHandlers({ health, redis, db, auditDb, queues, workers });
+  installShutdownHandlers({ health, redis, publishRedis, db, auditDb, queues, workers });
 }
 
 function installShutdownHandlers(handles: Handles): void {
@@ -155,8 +163,11 @@ function installShutdownHandlers(handles: Handles): void {
       ['workers', () => Promise.all(handles.workers.map((worker) => worker.close()))],
       // 2. Release queue-side resources (the shared connection stays open).
       ['queues', () => Promise.all(handles.queues.map((queue) => queue.close()))],
-      // 3. Close the connections we own.
+      // 3. Close the connections we own. The publisher's `quit()` runs under its own
+      //    `commandTimeout`, so a Redis that has stopped answering cannot hold the shutdown
+      //    here either; the shared one has no such bound and is what the watchdog is for.
       ['redis', () => handles.redis.quit()],
+      ['publishRedis', () => handles.publishRedis.quit()],
       ['db', () => closeDb(handles.db)],
       ['auditDb', () => closeDb(handles.auditDb)],
     ];

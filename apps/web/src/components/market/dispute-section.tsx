@@ -83,6 +83,11 @@ export function DisputeSection({ market, now }: DisputeSectionProps) {
   const file = useFileDispute(market.id, () => {
     // Fires BEFORE the cache work (`useFileDispute` awaits it after), so the toast and the
     // closing dialog are instant while the button stays disabled until the row has landed.
+    //
+    // It does not fire at all when the account changed under the request (`disputeAnswerScope`),
+    // so this toast can never tell somebody they filed an objection they did not file. The
+    // dialog then stays open with the reader's own typed text, which is what the card behind it
+    // says too: their own row is still null, so the section reads `canFile`.
     toaster.create({ type: 'success', title: copy.disputeFiled });
     setOpen(false);
   });

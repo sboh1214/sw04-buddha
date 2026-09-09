@@ -7,6 +7,7 @@ import {
   type Processor,
   type WorkerOptions,
 } from 'bullmq';
+import { type RedisOptions } from 'ioredis';
 
 /**
  * Queue and job names live in @buddha/shared (jobs.ts) since M5: the API is the producer of
@@ -14,6 +15,28 @@ import {
  * work no worker handles. Re-exported so the worker's own modules keep one import site.
  */
 export { JOB_NAMES, QUEUE_NAMES, type JobName, type QueueName };
+
+/**
+ * The options of the ONE connection every Queue and Worker shares (main.ts builds it). Exported
+ * so the constraint that shapes it is a value a test can read — main.ts has no test of its own,
+ * and this is the reason the worker opens a second connection for realtime events.
+ *
+ * `maxRetriesPerRequest: null` is BullMQ's requirement for a connection its Workers use: a
+ * blocking read must never fail because of a transient reconnect. It is also what makes this
+ * connection unusable for a PUBLISH — ioredis flushes its offline queue with an error only when
+ * that option is a NUMBER, so a queued command here is never rejected.
+ *
+ * `commandTimeout` and `socketTimeout` must NEVER be added here, tempting as it is: ioredis arms
+ * the per-command timer for every command, blocking ones included, so a two-second bound would
+ * reject BullMQ's BRPOPLPUSH/BZPOPMIN every two seconds and the worker would thrash. The bounds
+ * live on the publisher's own connection instead (`createPublisherRedis`, realtime.ts).
+ */
+export const BULLMQ_REDIS_OPTIONS = {
+  maxRetriesPerRequest: null,
+  // Same backoff BullMQ applies to connections it creates itself (1s..20s).
+  retryStrategy: (times: number) => Math.max(Math.min(Math.exp(times), 20_000), 1_000),
+  connectionName: 'buddha-worker',
+} as const satisfies RedisOptions;
 
 /** Which jobs belong to which queue. */
 export const QUEUE_JOBS: Record<QueueName, readonly JobName[]> = {

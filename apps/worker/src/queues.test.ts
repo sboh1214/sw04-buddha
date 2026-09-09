@@ -1,6 +1,7 @@
 import { JOB_NAMES as SHARED_JOB_NAMES, QUEUE_NAMES as SHARED_QUEUE_NAMES } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
 import {
+  BULLMQ_REDIS_OPTIONS,
   DEFAULT_JOB_OPTIONS,
   JOB_NAMES,
   JOB_SCHEDULES,
@@ -24,6 +25,22 @@ describe('queues', () => {
     const assigned = Object.values(QUEUE_JOBS).flat();
     expect([...assigned].sort()).toEqual([...Object.values(JOB_NAMES)].sort());
     expect(new Set(assigned).size).toBe(assigned.length);
+  });
+
+  it('keeps the shared connection unbounded, which is why the publisher has its own', () => {
+    // `null` is BullMQ's requirement — a blocking read must not fail on a reconnect — and is
+    // exactly what makes this connection unusable for a PUBLISH: ioredis flushes its offline
+    // queue with an error only when the option is a number, so a command queued here is never
+    // rejected. A `commandTimeout` cannot make up for it either, because ioredis arms that timer
+    // for blocking commands too and would reject BRPOPLPUSH/BZPOPMIN every bound. The bounds
+    // live on `createPublisherRedis` (realtime.ts) instead; this case is here so the next reader
+    // does not try the one-line version.
+    expect(BULLMQ_REDIS_OPTIONS.maxRetriesPerRequest).toBeNull();
+    expect(BULLMQ_REDIS_OPTIONS).not.toHaveProperty('commandTimeout');
+    expect(BULLMQ_REDIS_OPTIONS).not.toHaveProperty('socketTimeout');
+    // The 1s..20s backoff BullMQ applies to connections it creates itself.
+    expect(BULLMQ_REDIS_OPTIONS.retryStrategy(1)).toBeGreaterThanOrEqual(1_000);
+    expect(BULLMQ_REDIS_OPTIONS.retryStrategy(20)).toBe(20_000);
   });
 
   it('retries 3 times with exponential backoff', () => {

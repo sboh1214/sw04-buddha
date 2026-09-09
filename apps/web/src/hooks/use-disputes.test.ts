@@ -3,7 +3,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, type Dispute, type Market, api } from '@/lib/api';
 import { DISPUTES_KEY, marketKey, myDisputesKey } from '@/lib/market-keys';
 import { getQueryClient } from '@/lib/query-client';
-import { applyDisputeError, applyDisputeFiled, myDisputeQueryOptions } from './use-disputes';
+import {
+  applyDisputeError,
+  applyDisputeFiled,
+  disputeAnswerScope,
+  myDisputeQueryOptions,
+} from './use-disputes';
 
 /**
  * The dispute section's cache decisions, driven through the REAL QueryClient (`getQueryClient()`
@@ -120,6 +125,34 @@ describe('myDisputeQueryOptions', () => {
   });
 });
 
+describe('disputeAnswerScope', () => {
+  it('files only while the tab still belongs to the account that pressed', () => {
+    // The whole of a dispute is private — the reason, the evidence URL, the admin's note — so a
+    // tab that has moved to another account must write none of it, and must not lose the
+    // 이의 제기 button to a row that is not its own. Nothing cancels an in-flight POST, which is
+    // the only way the two readings come to disagree.
+    expect(disputeAnswerScope({ sent: 'user-1', account: 'user-1' })).toBe('file');
+    expect(disputeAnswerScope({ sent: 'user-1', account: 'user-2' })).toBe('refetch');
+    // Signed out under the dialog, and signed in as somebody after pressing while signed out:
+    // both are the same change of owner.
+    expect(disputeAnswerScope({ sent: 'user-1', account: null })).toBe('refetch');
+    expect(disputeAnswerScope({ sent: null, account: 'user-2' })).toBe('refetch');
+  });
+
+  it('falls back to filing whenever the guard has not spoken', () => {
+    // `undefined` is "the guard has not published yet", not "nobody": before better-auth's first
+    // answer, or in a tree that never mounts `SessionCacheGuard` (this app's node tests, a
+    // future embed). Nothing of anybody's is on screen to overwrite there, and refusing would
+    // swallow an ordinary filer's toast and the seed the section flips on — `tradeAnswerScope`'s
+    // fallback, for the same reason.
+    expect(disputeAnswerScope({ sent: 'user-1', account: undefined })).toBe('file');
+    expect(disputeAnswerScope({ sent: undefined, account: 'user-1' })).toBe('file');
+    expect(disputeAnswerScope({ sent: undefined, account: undefined })).toBe('file');
+    // A signed-out pair is not a change: `null` is an answer, and it is the same one twice.
+    expect(disputeAnswerScope({ sent: null, account: null })).toBe('file');
+  });
+});
+
 describe('applyDisputeFiled', () => {
   it('seeds the row where the section reads and re-asks every other entry under the root', async () => {
     const queryClient = getQueryClient();
@@ -148,6 +181,9 @@ describe('applyDisputeFiled', () => {
   it('writes the row even into a cache that held no entry yet', () => {
     // Unlike a `Me` or a position list, the row IS the whole answer, so there is nothing a
     // later fetch could add — and the section is only ever mounted once the row was asked for.
+    // Whose row it is, is not this writer's question: `disputeAnswerScope` answers it in
+    // `useFileDispute` and this is never reached for another account's (the `applyTradeResult`
+    // split), so guarding here would only break the seed for an ordinary filer.
     const queryClient = getQueryClient();
     try {
       void applyDisputeFiled(queryClient, dispute);

@@ -15,6 +15,7 @@ import {
   unwrap,
   validationField,
 } from '@/lib/api';
+import { type SessionIdentity, cacheOwnerAccount } from '@/components/auth/session-cache-guard';
 import { DISPUTES_KEY, marketKey, myDisputesKey } from '@/lib/market-keys';
 import { restartQueries } from '@/lib/query-client';
 import { useSession } from '@/lib/use-session';
@@ -97,6 +98,13 @@ export function useFileDispute(marketId: string, onDone?: (dispute: Dispute) => 
   // turns out to belong to nobody: `void`, because the reset it resolves to is not waited on.
   const { refetch: refetchSession } = useSession();
   return useMutation({
+    // The account that PRESSED, read from the guard rather than from a render closure
+    // (session-cache-guard.tsx says why: react-query pushes fresh options into a pending
+    // mutation from an effect, so a closure keeps naming the account that started the work
+    // however long the tab has since belonged to somebody else). query-core stores what this
+    // answers as the mutation's own `context` and hands it to `onSuccess`, so the reading
+    // survives the section unmounting and needs no ref.
+    onMutate: () => ({ sent: cacheOwnerAccount() }),
     mutationFn: async (body: CreateDisputeBody) =>
       unwrap(
         await api.POST('/api/v1/markets/{id}/disputes', {
@@ -104,7 +112,31 @@ export function useFileDispute(marketId: string, onDone?: (dispute: Dispute) => 
           body,
         }),
       ).data,
-    onSuccess: async (dispute) => {
+    onSuccess: async (dispute, _body, { sent }) => {
+      // A dispute answers for the account that SENT it, and this tab may no longer BE that
+      // account: nothing cancels an in-flight POST, so a sign-out and a sign-in as somebody
+      // else would land A's `reason` and A's `evidenceUrl` — free text nobody but A and the
+      // admins may read — in the cache `SessionCacheGuard` has just reset for B, under a
+      // 이의를 접수했습니다 toast telling B they filed it. Unlike a trade, NOTHING here is
+      // public, so a mismatch writes nothing at all: there is no `applyTradeMarket` half to
+      // keep. And nothing would undo it — no realtime event carries a dispute (PLAN 8 has
+      // none) and `applyDisputeFiled` excludes the very key it seeds from the invalidation
+      // that follows, so B would go on reading A's objection, without the 이의 제기 button,
+      // until that entry happened to be refetched.
+      if (disputeAnswerScope({ sent, account: cacheOwnerAccount() }) === 'refetch') {
+        // Re-asked rather than dropped, because `sent` is a BELIEF and not a proof: the body
+        // names no account (see above), so unlike `tradeAnswerScope`'s server-compared
+        // `expectedAccountId` this reading can be wrong in the OTHER direction too — the
+        // cookie may already have been B's when the POST left, in which case the row the
+        // server filed is B's OWN and dropping it would leave the section offering 이의 제기
+        // until the server refuses the next press as DUPLICATE_REQUEST.
+        //
+        // `restartQueries` for the reason `applyDisputeError`'s DUPLICATE_REQUEST branch uses
+        // it: a first fetch that left before this row was committed would otherwise be waited
+        // on rather than replaced.
+        await restartQueries(queryClient, DISPUTES_KEY);
+        return;
+      }
       onDone?.(dispute);
       await applyDisputeFiled(queryClient, dispute);
     },
@@ -112,6 +144,43 @@ export function useFileDispute(marketId: string, onDone?: (dispute: Dispute) => 
       await applyDisputeError(queryClient, marketId, error, () => void refetchSession());
     },
   });
+}
+
+/** What a dispute answer may still do in this tab. */
+export type DisputeAnswerScope = 'file' | 'refetch';
+
+/**
+ * Whether a filed dispute still belongs to whoever is looking at this tab — `tradeAnswerScope`'s
+ * job (use-trade.ts) for the one answer in this app that is private the whole way through.
+ *
+ * Both readings come from `cacheOwnerAccount()` (session-cache-guard.tsx), which is module state
+ * published from an effect above every screen: `sent` is what it said when the button was
+ * pressed, `account` what it says now. Neither may be read from a render closure, for the reason
+ * that module exists at all.
+ *
+ * Two things make this NOT a copy of the trade gate:
+ *
+ * - there is no proof. A trade sends `expectedAccountId` and the server compares it with the
+ *   cookie before it reserves anything, so a 2xx PROVES whose trade it was. A dispute sends no
+ *   such field on purpose (`useFileDispute` says why) and `Dispute` carries no `userId` — only
+ *   `AdminDispute` does — so the press-time reading is the best this tab has, and it can be
+ *   stale in either direction. That is why `refetch` means "ask the server", not "throw away".
+ * - there is no public half. `applyTradeMarket` exists because a market moved whoever the tab
+ *   belongs to now; a dispute's reason, evidence URL and admin note are one account's, so a
+ *   mismatch keeps none of it.
+ *
+ * `undefined` on either side means the guard has not spoken — before better-auth's first answer,
+ * or in a tree that does not mount it (this app's node tests, a future embed) — and answers
+ * `file`, `tradeAnswerScope`'s permissive fallback: nothing of anybody's is on screen to
+ * overwrite there, and refusing would swallow the toast and the seed the section flips on for an
+ * ordinary filer.
+ */
+export function disputeAnswerScope(a: {
+  sent: SessionIdentity | undefined;
+  account: SessionIdentity | undefined;
+}): DisputeAnswerScope {
+  if (a.sent === undefined || a.account === undefined) return 'file';
+  return a.sent === a.account ? 'file' : 'refetch';
 }
 
 /**
@@ -127,6 +196,11 @@ export function useFileDispute(marketId: string, onDone?: (dispute: Dispute) => 
  *
  * Keyed on the ROW's `marketId`, not the mutation's argument: the API answers with the
  * canonical lower-cased id, which is the string the section's key is built from.
+ *
+ * Deliberately unguarded: WHOSE answer this is, is `disputeAnswerScope`'s call in
+ * `useFileDispute`, which never reaches this writer for another account's row — the
+ * `applyTradeResult` split, where the gate lives in the hook and the writer stays dumb. The
+ * exclusion above is correct on the healthy path and is not what that gate replaces.
  */
 export function applyDisputeFiled(queryClient: QueryClient, dispute: Dispute): Promise<void> {
   const seeded = myDisputesKey(dispute.marketId);

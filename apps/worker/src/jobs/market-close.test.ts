@@ -12,7 +12,7 @@ import { asc, eq } from 'drizzle-orm';
 import { Redis } from 'ioredis';
 import { pino } from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createPublisher, type Publish } from '../realtime.js';
+import { createPublisher, createPublisherRedis, type Publish } from '../realtime.js';
 import { closeDueMarkets, closeMarket } from './market-close.js';
 
 // hasTestDb() loads the root .env first, so TEST_REDIS_URL is visible after it.
@@ -239,13 +239,12 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
     // A publisher on a dead connection: the warn-and-swallow contract of realtime.ts is what
     // keeps a finished close out of the failed set — a retry would find `closed` and never
     // republish anyway.
-    const dead = new Redis({
-      port: 1,
-      host: '127.0.0.1',
-      maxRetriesPerRequest: 0,
-      lazyConnect: true,
-    });
-    dead.on('error', () => undefined);
+    //
+    // Built by the PRODUCTION factory, not by hand. A hand-rolled client could carry
+    // `maxRetriesPerRequest: 0` — precisely the option the deployed connection does not have —
+    // and the case would then pass whatever main.ts actually wires up. `createPublisherRedis`
+    // takes its own silent logger so only `createPublisher`'s warn reaches `logs`.
+    const dead = createPublisherRedis('redis://127.0.0.1:1', pino({ level: 'silent' }));
     const logs: unknown[] = [];
     const logger = pino(
       { level: 'warn' },

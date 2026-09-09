@@ -22,7 +22,7 @@ import { and, asc, eq, sql } from 'drizzle-orm';
 import { Redis } from 'ioredis';
 import { pino } from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createPublisher, type Publish } from '../realtime.js';
+import { createPublisher, createPublisherRedis, type Publish } from '../realtime.js';
 import { runLedgerAudit } from './ledger-audit.js';
 import { finalizeDueMarkets, finalizeMarket } from './market-finalize.js';
 
@@ -420,6 +420,36 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
       settled: true,
     });
     expectLedgerChain(await ledgerOf(bob), 10_200n);
+  });
+
+  it('pays out even when every publish fails (the transaction has committed)', async () => {
+    // The settlement twin of market-close's swallow case, and the one that matters most: this
+    // is the money path, and it publishes 1 + 2N events. A throw here would put a settlement
+    // that already paid into the failed set, and its retry would find `settled` and skip.
+    //
+    // The client is the production factory's, so what is pinned is the DEPLOYED option set: on
+    // the shared BullMQ connection these publishes would not fail at all — they would never
+    // settle, and this whole `await` would park with the scan behind it (realtime.ts).
+    const market = await resolving('YES');
+    const alice = (await createUser(t.db, { balanceP: 10_000n })).user.id;
+    await hold({ userId: alice, marketId: market.id, outcome: 'YES', qty: 10, costBasisP: 500n });
+    const dead = createPublisherRedis('redis://127.0.0.1:1', pino({ level: 'silent' }));
+    const warns: unknown[] = [];
+    const logger = pino(
+      { level: 'warn' },
+      { write: (line: string) => warns.push(JSON.parse(line)) },
+    );
+    try {
+      const result = await finalizeMarket(t.db, market.id, createPublisher(dead, logger));
+      expect(result).toMatchObject({ outcome: 'settled', paidAccounts: 1, paidP: 1_000n });
+      expect((await balanceOf(alice)).availableP).toBe(10_000n - 500n + 1_000n);
+      expect(await positionOf(alice, market.id, 'YES')).toMatchObject({ qty: 0, settled: true });
+      // One warn per event that could not go out: the status, the balance and the position.
+      expect(warns).toHaveLength(3);
+      expect(warns.every((line) => (line as { msg: string }).msg === 'realtime publish failed'));
+    } finally {
+      dead.disconnect();
+    }
   });
 
   it('re-run: a second finalize is skipped and pays nothing twice (M5 AC 3 멱등)', async () => {
