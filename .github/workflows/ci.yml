@@ -145,8 +145,15 @@ jobs:
 
       # ---- e2e (PLAN 14 AC 7, A-M1-10): everything below runs against the build above ----
 
-      # ubuntu-latest ships no browser. Installing through the web package uses the
-      # @playwright/test version in the lockfile, so the download always matches the runner.
+      # Playwright uses its own Chromium build, not the runner's Google Chrome package.
+      # Disable that unused APT source so its index (e.g. Hash Sum mismatch) cannot break
+      # the apt-get update performed by --with-deps. Keep Ubuntu's dependency sources.
+      - name: Disable unused Google Chrome APT repository
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list \
+            /etc/apt/sources.list.d/google-chrome.sources
+
+      # Install the browser through the web package to match the lockfile's Playwright.
       - name: Install Playwright chromium
         run: pnpm --filter web exec playwright install --with-deps chromium
 
