@@ -658,6 +658,48 @@ describe.skipIf(!hasTestInfra)('disputes (integration)', () => {
       expect(await actionsFor(row.id)).toHaveLength(0);
     });
 
+    it.each(['settled', 'voided'] as const)(
+      'reviews an open dispute on a %s market, and the list keeps it (PLAN 5.5, Q-M5-6)',
+      async (status) => {
+        // The state A-M5-23 says the design produces on purpose, pinned so it stays legal: a
+        // filing nobody reviewed before `dispute_until` is left `open` when finalize runs
+        // (PLAN 5.5), and a void keeps its open objections (Q-M5-6). The filing race the review
+        // round raised lands on this same state, which is why no lock was added — and why the
+        // review path must stay open on a terminal market: the verdict is what the filer reads.
+        const market = await resolving();
+        const row = await createDispute(t.db, { marketId: market.id, userId: user.id });
+        const terminal =
+          status === 'settled'
+            ? { status, settledAt: new Date(), statusEventId: 7102 }
+            : { status, resolvedResult: null, resolvedAt: null, disputeUntil: null };
+        await t.db.update(schema.markets).set(terminal).where(eq(schema.markets.id, market.id));
+
+        const res = await review(row.id, { status: 'rejected', adminNote: '창이 닫힌 뒤 확인' });
+
+        expect(res.statusCode).toBe(200);
+        expect(data<AdminDispute>(res)).toMatchObject({
+          id: row.id,
+          marketStatus: status,
+          resolvedResult: status === 'settled' ? 'YES' : null,
+          status: 'rejected',
+          reviewedBy: admin.id,
+        });
+        expect((await disputeRows(market.id))[0]).toMatchObject({ status: 'rejected' });
+        expect(await actionsFor(row.id)).toHaveLength(1);
+
+        // A review changes nothing on the market (PLAN 12) — including a finished one.
+        const [after] = await t.db
+          .select()
+          .from(schema.markets)
+          .where(eq(schema.markets.id, market.id));
+        expect(after).toMatchObject(terminal);
+
+        // And the admin list still shows the row, carrying the market's own status.
+        const page = pageOf<AdminDispute>(await get('/api/v1/admin/disputes', admin.cookie));
+        expect(page.data.find((d) => d.id === row.id)).toMatchObject({ marketStatus: status });
+      },
+    );
+
     it('answers 404 for an unknown id and 400 for a malformed one', async () => {
       const missing = await review(randomUUID(), { status: 'accepted' });
       expect(missing.statusCode).toBe(404);

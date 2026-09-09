@@ -91,11 +91,38 @@ function windowClosed(message: string): AppError {
  * changes the result through `POST /admin/markets/:id/resolve`, explicitly (PLAN 12: two
  * steps), and finalize runs on `dispute_until` whether or not disputes are open (PLAN 5.5).
  *
- * Filing takes no market lock: a dispute writes nothing a trade, a resolve or a finalize
- * reads, so `lockMarket` would only queue objections behind trades. The status check is a
- * plain read inside the filing transaction; the race it leaves — a market settled between
- * that read and the INSERT — yields an `open` dispute on a settled market, which the admin
- * list shows with the market's status and may still review, so nothing is lost.
+ * Filing takes no market advisory lock, and the reason is NOT that it would queue objections
+ * behind trades: a filing is legal only on `resolving` and `assertTradable` (market.service.ts)
+ * refuses every status but `open` on a one-way ladder, so no trade that gets anywhere can hold
+ * the lock on a disputable market. What the lock WOULD queue a filing behind is `void`
+ * (market-admin.service.ts) and `finalizeMarket` (worker), which hold it across the whole
+ * close-out — one transaction, all rows or nothing (A-M5-4), a handful of statements per
+ * position — with only `statement_timeout` (30s, client.ts) bounding the wait, and a
+ * `pg_advisory_xact_lock` killed there is a 500, not an answer.
+ *
+ * So the status check is a plain read inside the filing transaction (READ COMMITTED, like every
+ * transaction here) and the race it leaves is a finalize OR a void committing between that read
+ * and the INSERT — the void is the wider half, since an admin may void at any instant of the
+ * window while the finalize variant needs the two clock reads to straddle `dispute_until`. The
+ * filer gets 201 carrying the market as it was read at the top of the transaction, and the 201
+ * guarantees only what it says: the filing's own `clock_timestamp()` — the clock finalize
+ * compares `dispute_until` against — fell inside the window. It does not promise the market was
+ * still `resolving` at COMMIT.
+ *
+ * That is not a loss, because it is the state the design produces with no race at all: finalize
+ * runs whether or not disputes are open (PLAN 5.5) and a void leaves them as they are on purpose
+ * (Q-M5-6), so an `open` dispute on a terminal market is the ordinary end of a filing nobody
+ * reviewed in time. Taking the lock would not remove it — a filing that won the lock is followed
+ * by the same finalize — it would only turn this one 201 into a slow 409. What reviewing such a
+ * dispute cannot do is move the payout, since `resolve` refuses a terminal market; it records a
+ * verdict the filer still reads (design 5.3), which is as true of every dispute left open when
+ * finalize runs as it is of this race (A-M5-23).
+ *
+ * The one thing a filing writes that a market writer reads is a display value: the admin
+ * detail's `disputeCounts`, which `resolve` and `void` count inside their own transaction
+ * (`toAdminMarket`), so a filing committing beside them can leave that count one short in the
+ * answer they hand back, until the next fetch re-asks the lists (A-M5-22). Nothing else in
+ * apps/api or apps/worker reads this table.
  */
 @Injectable()
 export class DisputeService {
