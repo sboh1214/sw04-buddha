@@ -508,7 +508,10 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // The reducer above has already moved the badge and disabled the panel; this fills in
         // what the event does not carry. A transition carries no price, yet `open` writes a
         // price tick and moves lastPrice/pYesBp while publishing only `market:status`
-        // (market-admin.service.ts), and create/update publish nothing at all.
+        // (market-admin.service.ts); `create` publishes nothing, and an EDIT to an open market
+        // publishes this event with the status unchanged for exactly this refetch — no event
+        // carries `closeAt`, `title` or `rules`, and `applyStatus` drops a repeat on rank, so
+        // the restart below is the whole delivery of an admin edit (A-M4-36).
         //
         // It is a SANCTIONED refetch, and this file has kept a count of those twice now and been
         // wrong twice — "the second and last" became three, and three became six. So here is the

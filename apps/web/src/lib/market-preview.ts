@@ -16,9 +16,10 @@ import { isHttpUrl } from '@/lib/market-form';
 
 /**
  * A draft has no id and no page yet, and the card needs both fields to exist rather than to be
- * real: the id only names the card's testid, and the slug only builds a link the component
- * neutralises. Constants, not something derived from the form, so the markup does not churn on
- * every keystroke.
+ * real: the id only names the card's testid, and the slug is only there because `MarketSummary`
+ * has one — the preview draws the card with `interactive={false}`, so no link is built from it
+ * at all. Constants, not something derived from the form, so the markup does not churn on every
+ * keystroke.
  */
 export const PREVIEW_ID = '00000000-0000-0000-0000-000000000000';
 export const PREVIEW_SLUG = 'preview';

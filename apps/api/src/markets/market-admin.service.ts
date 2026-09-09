@@ -260,9 +260,18 @@ export class MarketAdminService {
    * time and the category, and refuses `liquidityB`, `initialProbBp` and `slug` naming the
    * field; any other status refuses everything naming `status`. A rules change is also a
    * `rules_edited` market event (PLAN 12: allowed after a warning, which is the web's dialog).
+   *
+   * An edit that MOVES an open market publishes `market:status` after COMMIT — the delivery
+   * half this path never had. No live event can carry a descriptive field: `market:tick` and
+   * `market:status` carry absolute numbers, and a client takes `title`, `rules`, `category` and
+   * `closeAt` from a REST answer alone (`joinMarket`, market-live.ts). Shortening `closeAt`
+   * already healed itself — the quote AND the trade are refused on the database clock (A-M3-16)
+   * and the web invalidates the row on MARKET_CLOSED — but EXTENDING one did not: a panel
+   * already showing 마감 asks for no quote, so it had no round trip left to be corrected by,
+   * while other traders' ticks went on moving the price in the same cached row (A-M4-36).
    */
   async update(adminId: string, id: string, body: UpdateMarketBody): Promise<AdminMarket> {
-    return this.db.transaction(async (tx) => {
+    const { market, moved } = await this.db.transaction(async (tx) => {
       const current = await this.lockedRow(tx, id);
       if (current.status === 'open') {
         for (const field of ['liquidityB', 'initialProbBp', 'slug'] as const) {
@@ -342,16 +351,32 @@ export class MarketAdminService {
           createdAt: now,
         });
       }
+      const before = snapshot(current);
+      const after = snapshot(row);
       await tx.insert(schema.adminActions).values({
         adminId,
         type: 'market_update',
         targetType: 'market',
         targetId: current.id,
-        payload: { before: snapshot(current), after: snapshot(row) },
+        payload: { before, after },
         createdAt: now,
       });
-      return this.toAdminMarket(tx, row);
+      // Gated twice, so a no-op PATCH costs no viewer a request. Only an OPEN market has
+      // viewers — a draft is on no public route — and only a row that actually MOVED leaves one
+      // holding something stale. The gate is the AUDIT projection rather than "the body was
+      // non-empty": `snapshot` carries every column a PATCH can reach and not `updatedAt`, so
+      // resaving identical text differs nowhere, and the gate stays exact when the next editable
+      // column is added.
+      return {
+        market: await this.toAdminMarket(tx, row),
+        moved: current.status === 'open' && JSON.stringify(before) !== JSON.stringify(after),
+      };
     });
+    // Outside the transaction, exactly as open/close/void publish: a subscriber answers
+    // `market:status` with a REFETCH, and one issued before COMMIT would read the row this
+    // transaction has not written yet.
+    if (moved) await this.publishStatus(market);
+    return market;
   }
 
   /**
@@ -764,7 +789,30 @@ export class MarketAdminService {
     };
   }
 
-  /** `market:status` on the market's channel, after COMMIT (best effort). */
+  /**
+   * `market:status` on the market's channel, after COMMIT (best effort).
+   *
+   * Sent by the four transitions and by an edit to an open market, where the status is
+   * deliberately UNCHANGED. That is not a misuse of the event but the cheapest correct delivery:
+   * the web answers every `market:status` by restarting `['market', id]` (realtime-provider.tsx)
+   * while `applyStatus` drops an event whose status rank does not ADVANCE (market-live.ts) — so
+   * a repeat writes nothing into a cache and still forces the REST snapshot, which is the only
+   * thing that carries `closeAt`.
+   *
+   * A `market:edit` event carrying the new fields was rejected, and not only for its cost across
+   * shared + gateway + client: the market DTOs carry no revision key (Q-M3-8), so an
+   * event-applied `closeAt` could not defend itself against a REST answer already in flight and
+   * the panel would flip between 마감 and open by arrival order. A repeat of the RANKED event
+   * cannot lose that race — it patches nothing and asks for the truth instead, and a `closed`
+   * that overtakes it still wins on rank.
+   *
+   * Two costs, named. A subscriber pays up to two extra requests — the handler restarts the row
+   * AND its ticks series, and an edit writes no tick — bounded by editors rather than traders and
+   * only for a MOUNTED observer (`refetchType: 'active'`). And `market:status` no longer means "a
+   * transition happened": M5's `result_changed` must add `market_events.id` to this event and to
+   * the market DTOs before it publishes (A-M3-19), and that work decides what key an edit
+   * carries; until then rank order is what makes a repeat safe.
+   */
   private async publishStatus(market: AdminMarket): Promise<void> {
     await this.publisher.publishMarket(market.id, {
       type: 'market:status',

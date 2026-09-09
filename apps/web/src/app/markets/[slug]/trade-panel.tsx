@@ -199,7 +199,9 @@ function useTradePanel(market: Market, windowEnd: number | undefined): TradePane
   useEffect(() => {
     // Nothing left to watch once the market cannot be traded: the panel has replaced itself with
     // the 마감 notice, and only a cache write can undo that — which moves `marketUpdatedAt` on
-    // its own.
+    // its own. An admin EXTENDING `closeAt` now schedules that write rather than waiting for a
+    // focus: the edit publishes `market:status` unchanged and the handler restarts
+    // `['market', id]` (A-M4-36).
     if (!tradable) return;
     // `setClock` is called from a timer callback and never synchronously in the effect body: the
     // second form is what `react-hooks/set-state-in-effect` refuses. The zero-delay timeout no

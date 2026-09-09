@@ -39,6 +39,8 @@ import { MarketSparkline } from './market-sparkline';
  * `LinkBox`/`LinkOverlay` rather than an anchor wrapped round the card: the accessible name of
  * the link is then the question alone, while the whole card stays clickable. An anchor around
  * everything would announce the category, the price, the volume and the countdown as one name.
+ * `interactive` below drops that overlay entirely for the admin 미리보기 — a card that is not a
+ * link must not RENDER one, however thoroughly its clicks are cancelled.
  *
  * The picture is a Chakra `Image` — a plain `<img>` — and never `next/image`: `next.config.ts`
  * declares no `images` block, so the optimizer answers 400 for the off-origin URLs an admin
@@ -58,10 +60,29 @@ export interface MarketCardProps {
    * badge shows the absolute close time until it has mounted (countdown-badge.tsx).
    */
   now?: number;
+  /**
+   * False in the admin 미리보기 (Q-M3-6), which draws a market that has no page yet: an unsaved
+   * draft's `/markets/[slug]` is a 404, and following it from 수정 would abandon what is typed.
+   * The title is then plain text and the card is NOT a link.
+   *
+   * Cancelling the click on the way up — what the preview used to do — was not enough. A
+   * default-prevented anchor still holds a tab stop and still announces as a link named after
+   * the market, so a keyboard or screen-reader admin reached a control whose activation does
+   * nothing; and `click` is not `auxclick`, so a middle-click opened the href in a new tab
+   * regardless. `aria-disabled` + `tabIndex={-1}` was rejected for the same reason: it leaves
+   * `role=link` in the reader's links list and the href live.
+   */
+  interactive?: boolean;
   'data-testid'?: string;
 }
 
-export function MarketCard({ market, sparkline, now, 'data-testid': testId }: MarketCardProps) {
+export function MarketCard({
+  market,
+  sparkline,
+  now,
+  interactive = true,
+  'data-testid': testId,
+}: MarketCardProps) {
   /**
    * The URL that failed, not a boolean: a card whose image is replaced (an admin edit arriving
    * over the socket, or the preview being typed into) then tries the new one instead of staying
@@ -75,6 +96,15 @@ export function MarketCard({ market, sparkline, now, 'data-testid': testId }: Ma
    * the cast the repo already uses for `redirect(nextPath as Route)` is correct either way.
    */
   const href = `/markets/${market.slug}` as Route;
+  /**
+   * One element, two parents: the anchor is the ONLY difference between a real card and the
+   * 미리보기, and two copies of this `Text` would drift the moment either was restyled.
+   */
+  const title = (
+    <Text fontWeight="semibold" lineClamp="2">
+      {market.title}
+    </Text>
+  );
 
   return (
     <LinkBox
@@ -83,7 +113,9 @@ export function MarketCard({ market, sparkline, now, 'data-testid': testId }: Ma
       borderRadius="l2"
       p="4"
       bg="bg"
-      _hover={{ bg: 'bg.subtle' }}
+      // Only where the card actually goes somewhere: the 미리보기 lighting up under the pointer
+      // would promise a click it no longer has.
+      _hover={interactive ? { bg: 'bg.subtle' } : undefined}
       data-testid={testId ?? `market-card-${market.id}`}
     >
       <HStack align="start" gap="3">
@@ -122,13 +154,13 @@ export function MarketCard({ market, sparkline, now, 'data-testid': testId }: Ma
             )}
           </HStack>
 
-          <LinkOverlay asChild>
-            <NextLink href={href}>
-              <Text fontWeight="semibold" lineClamp="2">
-                {market.title}
-              </Text>
-            </NextLink>
-          </LinkOverlay>
+          {interactive ? (
+            <LinkOverlay asChild>
+              <NextLink href={href}>{title}</NextLink>
+            </LinkOverlay>
+          ) : (
+            title
+          )}
 
           <HStack gap="3" justify="space-between">
             <Badge

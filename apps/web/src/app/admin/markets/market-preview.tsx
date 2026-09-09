@@ -45,21 +45,20 @@ export function MarketPreview({ values, categories, base }: MarketPreviewProps) 
     <Stack gap="3" borderTopWidth="1px" pt="4" data-testid="market-preview">
       <Text fontWeight="semibold">{copy.adminMarketPreview}</Text>
       <SimpleGrid columns={{ base: 1, md: 2 }} gap="4" alignItems="start">
-        <Stack
-          gap="2"
-          // The card is a picture of the form, not a way out of it: `LinkOverlay` makes the whole
-          // card a link to `/markets/[slug]`, which for an unsaved draft is a page that does not
-          // exist and from an edit would abandon what is typed. `next/link` returns early when
-          // the click is already default-prevented, so this one capture-phase handler stops both
-          // the anchor's navigation and the router's, and the card stays readable and focusable.
-          onClickCapture={(event) => {
-            event.preventDefault();
-          }}
-        >
+        <Stack gap="2">
           <Text fontSize="sm" color="fg.muted">
             {copy.adminMarketPreviewCard}
           </Text>
-          <MarketCard market={toPreviewMarket(body, categories, base)} />
+          {/*
+            The card is a picture of the form, not a way out of it: `/markets/[slug]` is a page
+            that does not exist for an unsaved draft, and following it from 수정 would abandon
+            what is typed. `interactive={false}` makes the title plain text; the capture-phase
+            `preventDefault` that used to sit on this Stack is gone with it, because cancelling a
+            click leaves the anchor in the tab order and in a screen reader's links list — an
+            admin reached a link named after the market that did nothing — and never saw the
+            middle-click (`auxclick`) that opened the href in a new tab anyway.
+          */}
+          <MarketCard market={toPreviewMarket(body, categories, base)} interactive={false} />
         </Stack>
         <Stack gap="2">
           <Text fontSize="sm" color="fg.muted">

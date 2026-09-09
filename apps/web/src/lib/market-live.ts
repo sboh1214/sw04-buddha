@@ -74,6 +74,11 @@ export type MarketTickPatch = Pick<
  * `result_changed` repeats `resolving`, which must add `market_events.id` to the event AND to
  * the market DTOs before it publishes. The transition table in market-live.test.ts turns red
  * on exactly that day.
+ *
+ * A REPEAT of the status a market already holds is published on purpose and is not that day: an
+ * edit to an open market republishes `market:status` unchanged so the handler refetches the row
+ * (A-M4-36). It is dropped below, which is the whole point — it carries no descriptive field to
+ * apply, and only the REST answer it triggers does.
  */
 export const statusRank = (status: MarketStatus): number => MARKET_STATUSES.indexOf(status);
 
@@ -173,6 +178,11 @@ export function tickRestartsMarket(
  * `market:status` — rank order. The result is REPLACED, not merged, so a void clears the
  * result an earlier resolve proposed; the dispute deadline follows it, and only on a row that
  * already has that field.
+ *
+ * `undefined` for a rank that does not ADVANCE covers two senders: a late or duplicate
+ * transition, and the deliberate repeat an admin edit publishes (A-M4-36). Both must write
+ * nothing — the event carries no `closeAt`, `title` or `rules`, so applying it could only
+ * restate what is held; the refetch the handler fires beside it is what delivers the edit.
  */
 export function applyStatus<T extends LiveMarket>(
   held: T | undefined,

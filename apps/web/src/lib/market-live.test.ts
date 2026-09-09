@@ -245,6 +245,15 @@ describe('applyStatus', () => {
     expect(applyStatus(undefined, statusEvent())).toBeUndefined();
   });
 
+  it('drops the repeat an admin edit publishes, so the edit arrives by refetch alone', () => {
+    // `update` republishes the unchanged status after an edit that moves an open market
+    // (A-M4-36). The event carries no `closeAt`, so applying it could only restate the row —
+    // and a later `closed` that overtakes it still wins on rank, which is why a repeat is safe.
+    expect(applyStatus(detail, statusEvent({ status: 'open' }))).toBeUndefined();
+    expect(applyStatus(card, statusEvent({ status: 'open' }))).toBeUndefined();
+    expect(applyStatus(detail, statusEvent({ status: 'closed' }))?.status).toBe('closed');
+  });
+
   it('never gives a card a dispute deadline it has no field for', () => {
     const proposed = statusEvent({
       status: 'resolving',

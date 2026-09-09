@@ -97,7 +97,13 @@ export const marketTradeEventSchema = z
   .meta({ id: 'MarketTradeEvent' });
 export type MarketTradeEvent = z.infer<typeof marketTradeEventSchema>;
 
-/** Room `market:<id>`: a status transition (open, close, resolve, finalize, void). */
+/**
+ * Room `market:<id>`: a status transition (open, close, resolve, finalize, void), or the same
+ * status republished so subscribers refetch a descriptive edit (A-M4-36, `MarketAdminService`
+ * `update`). Nothing in the payload changes on that repeat, which is what makes it safe: a
+ * client keeps the higher rank and drops it, and only the REST snapshot it triggers carries
+ * `closeAt`, `title` or `rules`.
+ */
 export const marketStatusEventSchema = z
   .object({
     type: z.literal('market:status'),
