@@ -8,6 +8,28 @@ import { CommonModule } from '../common/common.module.js';
 import { REDIS } from '../infra/redis/redis.provider.js';
 import { HealthController, type HealthResponse } from './health.controller.js';
 
+/**
+ * The whole body, with the two fields no assertion can pin to a literal: `uptimeSeconds` moves
+ * and a latency is whatever the mock took. Asserted with `toEqual` and not `toMatchObject`, so
+ * a field added to the response without a decision here still fails.
+ */
+function expectedBody(
+  status: HealthResponse['status'],
+  db: HealthResponse['db'],
+  redis: HealthResponse['redis'],
+) {
+  return {
+    status,
+    db,
+    redis,
+    uptimeSeconds: expect.any(Number) as number,
+    checks: {
+      db: { status: db, latencyMs: expect.any(Number) as number },
+      redis: { status: redis, latencyMs: expect.any(Number) as number },
+    },
+  };
+}
+
 interface MockOpts {
   dbOk: boolean;
   redisOk: boolean;
@@ -45,11 +67,7 @@ describe('HealthController (unit)', () => {
   it('returns ok when db and redis both answer', async () => {
     const { moduleRef, execute, redis } = await makeModule({ dbOk: true, redisOk: true });
     const controller = moduleRef.get(HealthController);
-    await expect(controller.check()).resolves.toEqual({
-      status: 'ok',
-      db: 'ok',
-      redis: 'ok',
-    });
+    await expect(controller.check()).resolves.toEqual(expectedBody('ok', 'ok', 'ok'));
     expect(execute).toHaveBeenCalledTimes(1);
     expect(redis.ping).toHaveBeenCalledTimes(1);
   });
@@ -61,22 +79,14 @@ describe('HealthController (unit)', () => {
     expect(err).toBeInstanceOf(ServiceUnavailableException);
     const ex = err as ServiceUnavailableException;
     expect(ex.getStatus()).toBe(503);
-    expect(ex.getResponse()).toEqual<HealthResponse>({
-      status: 'degraded',
-      db: 'ok',
-      redis: 'error',
-    });
+    expect(ex.getResponse()).toEqual(expectedBody('degraded', 'ok', 'error'));
   });
 
   it('reports both dependencies down', async () => {
     const { moduleRef } = await makeModule({ dbOk: false, redisOk: false });
     const controller = moduleRef.get(HealthController);
     const err = (await controller.check().catch((e: unknown) => e)) as ServiceUnavailableException;
-    expect(err.getResponse()).toEqual<HealthResponse>({
-      status: 'degraded',
-      db: 'error',
-      redis: 'error',
-    });
+    expect(err.getResponse()).toEqual(expectedBody('degraded', 'error', 'error'));
   });
 });
 
@@ -105,15 +115,27 @@ describe('HealthController (HTTP through the Fastify adapter)', () => {
     const a = await makeApp({ dbOk: true, redisOk: true });
     const res = await a.inject({ method: 'GET', url: '/api/health' });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ status: 'ok', db: 'ok', redis: 'ok' });
+    expect(res.json()).toEqual(expectedBody('ok', 'ok', 'ok'));
     const versioned = await a.inject({ method: 'GET', url: '/api/v1/health' });
     expect(versioned.statusCode).toBe(404);
+  });
+
+  it('GET /api/health/live answers 200 without consulting a dependency', async () => {
+    // Both dependencies are down. Liveness must still be 200, or an orchestrator restarts an
+    // instance for an outage a restart cannot fix — and drops every socket it was holding.
+    const a = await makeApp({ dbOk: false, redisOk: false });
+    const res = await a.inject({ method: 'GET', url: '/api/health/live' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      status: 'ok',
+      uptimeSeconds: expect.any(Number) as number,
+    });
   });
 
   it('GET /api/health -> 503 with the degraded body when db fails', async () => {
     const a = await makeApp({ dbOk: false, redisOk: true });
     const res = await a.inject({ method: 'GET', url: '/api/health' });
     expect(res.statusCode).toBe(503);
-    expect(res.json()).toEqual({ status: 'degraded', db: 'error', redis: 'ok' });
+    expect(res.json()).toEqual(expectedBody('degraded', 'error', 'ok'));
   });
 });

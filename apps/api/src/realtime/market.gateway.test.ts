@@ -10,6 +10,7 @@
 import { randomUUID } from 'node:crypto';
 import { createServer, type AddressInfo, type Socket as NetSocket } from 'node:net';
 import {
+  REALTIME_MESSAGES_PER_WINDOW,
   REALTIME_NAMESPACE,
   REALTIME_ROOMS_MAX,
   REALTIME_SUBSCRIBE_MAX,
@@ -320,6 +321,44 @@ describe.skipIf(!hasTestInfra)('MarketGateway (integration)', () => {
     expect(envelope.error.details).toEqual([
       { path: ['marketIds'], message: 'subscription limit reached' },
     ]);
+  });
+
+  it(`refuses message ${String(REALTIME_MESSAGES_PER_WINDOW + 1)} of a socket's window (A-M4-5)`, async () => {
+    const socket = await open();
+    const failures = collect<unknown>(socket, REALTIME_EXCEPTION_EVENT);
+    // Deliberately INVALID payloads. They are refused by the validation pipe long before any
+    // handler runs, which is exactly why the counter is a packet middleware: the flood this
+    // bound exists for is malformed messages, and a check inside a handler would miss them.
+    for (let i = 0; i < REALTIME_MESSAGES_PER_WINDOW; i += 1) {
+      socket.emit('subscribe', { marketIds: [] });
+    }
+    await waitUntil(
+      () => failures.length === REALTIME_MESSAGES_PER_WINDOW,
+      'the window to be spent',
+    );
+    for (const failure of failures) {
+      expect(errorEnvelopeSchema.parse(failure).error.code).toBe('VALIDATION_ERROR');
+    }
+
+    socket.emit('subscribe', { marketIds: [randomUUID()] });
+    await waitUntil(() => failures.length > REALTIME_MESSAGES_PER_WINDOW, 'the refusal');
+    const envelope = errorEnvelopeSchema.parse(failures.at(-1));
+    expect(envelope.error.code).toBe('RATE_LIMITED');
+    const details = envelope.error.details as { retryAfterSeconds: number };
+    expect(details.retryAfterSeconds).toBeGreaterThan(0);
+    // The connection survives a refusal — a client that merely talked too fast must not lose
+    // the public ticks it was quietly receiving.
+    expect(socket.connected).toBe(true);
+
+    // And the bound is PER CONNECTION: a socket opened after the first one spent its window
+    // subscribes and receives normally.
+    const other = await open();
+    const tick = nextSocketEvent<MarketTickEvent>(other, 'market:tick');
+    const marketId = randomUUID();
+    other.emit('subscribe', { marketIds: [marketId] });
+    await roundTrip(other);
+    await publisher.publishMarket(marketId, tickEvent(marketId));
+    expect((await tick).marketId).toBe(marketId);
   });
 
   it('stops delivery after unsubscribe, and a publish after disconnect is a no-op', async () => {

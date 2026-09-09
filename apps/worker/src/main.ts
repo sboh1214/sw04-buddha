@@ -47,6 +47,7 @@ async function main(): Promise<void> {
     port: env.WORKER_HEALTH_PORT,
     host: env.WORKER_HOST,
     isReady: () => ready,
+    queues: QUEUE_NAMES,
     logger,
   });
 

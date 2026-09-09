@@ -44,6 +44,16 @@
                 }
               }
             }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         },
         "summary": "Start an email sign-up: mails the verification link",
@@ -398,6 +408,16 @@
                 }
               }
             }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -487,6 +507,16 @@
           },
           "409": {
             "description": "DUPLICATE_REQUEST",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
             "content": {
               "application/json": {
                 "schema": {
@@ -2974,6 +3004,16 @@
                 }
               }
             }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -3145,6 +3185,40 @@
         ]
       }
     },
+    "/api/v1/leaderboard": {
+      "get": {
+        "operationId": "listLeaderboard",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/LeaderboardEntry"
+                      }
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "summary": "Top 20 accounts by realized profit and loss, ties broken deterministically",
+        "tags": [
+          "leaderboard"
+        ]
+      }
+    },
     "/api/v1/markets/{id}/disputes": {
       "post": {
         "operationId": "fileDispute",
@@ -3232,6 +3306,16 @@
           },
           "409": {
             "description": "DISPUTE_WINDOW_CLOSED | DUPLICATE_REQUEST",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
             "content": {
               "application/json": {
                 "schema": {
@@ -5907,6 +5991,28 @@
           "volumeP",
           "tradeCount",
           "traderCount"
+        ],
+        "additionalProperties": false
+      },
+      "LeaderboardEntry": {
+        "type": "object",
+        "properties": {
+          "rank": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "nickname": {
+            "$ref": "#/components/schemas/Nickname"
+          },
+          "realizedPnlP": {
+            "$ref": "#/components/schemas/PAmount"
+          }
+        },
+        "required": [
+          "rank",
+          "nickname",
+          "realizedPnlP"
         ],
         "additionalProperties": false
       },

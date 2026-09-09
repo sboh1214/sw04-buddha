@@ -131,6 +131,9 @@ function startSeed(): Promise<{ stdout: string; stderr: string }> {
   return promisify(execFile)(process.execPath, seedArgs(), seedSpawnOptions());
 }
 
+/** The seed's own output; Windows and the CI runner disagree about the line ending. */
+const NEWLINE = /\r?\n/;
+
 describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () => {
   let t: TestDb;
   beforeAll(async () => {
@@ -383,6 +386,29 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
         .where(eq(markets.slug, slug));
 
       expect(runSeedIo().stderr).not.toContain(slug);
+    });
+
+    it('asks for fresh copy BEFORE a cutoff passes, not only after (M6)', async () => {
+      // The warning above only fires once the fixture is already broken; a developer who clones
+      // the repo that week gets a home page of closed markets and no warning that it was
+      // foreseeable. This is the same signal at a distance that can still be acted on.
+      const slug = 'cpi-september-2026-above-2pct';
+      runSeed();
+      await t.db
+        .update(markets)
+        .set({ closeAt: sql`clock_timestamp() + interval '3 days'` })
+        .where(eq(markets.slug, slug));
+
+      const { stderr } = runSeedIo();
+      const soon = stderr.split(NEWLINE).filter((line) => line.includes('within 14 days'));
+      // `toContain`, not `toHaveLength(1)`: the other eleven cutoffs are absolute dates in 2026,
+      // so as the calendar advances they enter the same window on their own and the count here
+      // would start rising — a test that fails on a date rather than on a change. What this
+      // pins is that the market THIS case moved is reported, which stays true for good.
+      expect(soon.filter((line) => line.includes(slug))).toHaveLength(1);
+      // Not the past-cutoff wording: a market that is still open must not be reported as one
+      // the worker is about to close.
+      expect(stderr).not.toContain('is already past');
     });
 
     it('is idempotent: a second run adds no market, tick or event', async () => {

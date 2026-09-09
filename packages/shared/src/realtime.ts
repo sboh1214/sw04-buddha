@@ -251,6 +251,18 @@ export const REALTIME_SUBSCRIBE_MAX = 100;
 export const REALTIME_ROOMS_MAX = 200;
 /** Largest client message the gateway accepts; 100 uuids in JSON is ~4 KB. */
 export const REALTIME_MAX_MESSAGE_BYTES = 16_384;
+/**
+ * Messages one CONNECTION may send per RATE_LIMIT_WINDOW_SECONDS before the gateway answers
+ * `RATE_LIMITED` (A-M4-5; M6). Generous next to what a screen does — the home grid subscribes
+ * once per page of cards and the detail view once — and low enough that a socket cannot spend
+ * the event loop on validation.
+ *
+ * Counted on the socket itself rather than in Redis, unlike every other limit in PLAN 7.5: a
+ * connection lives in exactly one process, so its own message rate is not shared state and
+ * PLAN 16's "no rate-limit state in process memory" has nothing to be true of here. The state
+ * dies with the socket, which is the only thing it describes.
+ */
+export const REALTIME_MESSAGES_PER_WINDOW = 120;
 
 /**
  * Gateway-only control event: the Redis subscription was lost and re-armed, so events in

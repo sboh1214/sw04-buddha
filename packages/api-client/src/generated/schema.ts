@@ -348,6 +348,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/leaderboard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Top 20 accounts by realized profit and loss, ties broken deterministically */
+        get: operations["listLeaderboard"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/markets": {
         parameters: {
             query?: never;
@@ -864,6 +881,11 @@ export type components = {
             qty: number;
             /** @enum {string} */
             side: "buy" | "sell";
+        };
+        LeaderboardEntry: {
+            nickname: components["schemas"]["Nickname"];
+            rank: number;
+            realizedPnlP: components["schemas"]["PAmount"];
         };
         LedgerEntry: {
             amountP: components["schemas"]["PAmount"];
@@ -2476,6 +2498,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
         };
     };
     listCategories: {
@@ -2588,6 +2619,36 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listLeaderboard: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["LeaderboardEntry"][];
+                    };
+                };
+            };
         };
     };
     listMarkets: {
@@ -2691,6 +2752,15 @@ export interface operations {
             };
             /** @description DISPUTE_WINDOW_CLOSED | DUPLICATE_REQUEST */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -3268,6 +3338,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
         };
     };
     quote: {
@@ -3386,6 +3465,15 @@ export interface operations {
             };
             /** @description MARKET_NOT_OPEN | MARKET_CLOSED | INSUFFICIENT_BALANCE | INSUFFICIENT_POSITION | PRICE_MOVED | DUPLICATE_REQUEST */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };

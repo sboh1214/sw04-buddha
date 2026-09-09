@@ -10,9 +10,11 @@ import { timestamp } from 'drizzle-orm/pg-core';
  * microsecond value read back is therefore strictly older than the one still in the column.
  *
  * That silently breaks the keyset cursors of @buddha/shared, whose comparison is
- * `created_at < cursor OR (= cursor AND id < cursorId)`: a row inside the cursor row's own
- * millisecond matches neither branch and is dropped — a whole page when a batch INSERT gives
- * many rows one `now()`. Rounding in the database keeps both sides of that comparison at one
+ * `(created_at, id) < (cursor, cursorId)` (apps/api common/keyset.ts; it was the equivalent
+ * `a < $1 OR (a = $1 AND b < $2)` disjunction until M6 made it a row comparison, and the
+ * failure below is the same either way): a row inside the cursor row's own millisecond is
+ * ordered before it and dropped — a whole page when a batch INSERT gives many rows one
+ * `now()`. Rounding in the database keeps both sides of that comparison at one
  * precision, and `Date` becomes an exact representation of the column.
  */
 export const timestampTz = () => timestamp({ withTimezone: true, mode: 'date', precision: 3 });

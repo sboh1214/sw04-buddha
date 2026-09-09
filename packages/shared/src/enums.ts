@@ -111,6 +111,14 @@ export type CounterpartyType = (typeof COUNTERPARTY_TYPES)[number];
 export const counterpartyTypeSchema = z.enum(COUNTERPARTY_TYPES);
 
 // ---- price ticks --------------------------------------------------------------------
+/**
+ * `'resolve'` is RESERVED and nothing writes it: the seed, the trade transaction and the admin
+ * open transition write `'trade'` and `'open'` only, and the worker writes no tick at all
+ * (M6 review, A-M6-6). It is kept rather than removed because Q-M5-4 — whether a settled market
+ * should get a 100%/0% tick so the chart ends on the result — is an open owner question whose
+ * answer would need exactly this value, and dropping it would cost a Postgres enum migration
+ * to add back.
+ */
 export const PRICE_TICK_TRIGGERS = ['trade', 'open', 'resolve'] as const;
 export type PriceTickTrigger = (typeof PRICE_TICK_TRIGGERS)[number];
 export const priceTickTriggerSchema = z.enum(PRICE_TICK_TRIGGERS);

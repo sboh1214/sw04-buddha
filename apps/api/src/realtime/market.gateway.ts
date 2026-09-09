@@ -9,10 +9,14 @@ import {
 } from '@nestjs/websockets';
 import {
   MARKET_CHANNEL_PATTERN,
+  RATE_LIMIT_WINDOW_SECONDS,
+  REALTIME_MESSAGES_PER_WINDOW,
   REALTIME_NAMESPACE,
   REALTIME_ROOMS_MAX,
   RESYNC_EVENT,
   USER_CHANNEL_PATTERN,
+  REALTIME_EXCEPTION_EVENT,
+  errorEnvelope,
   marketChannel,
   marketRealtimeEventSchema,
   subscribeBodySchema,
@@ -41,12 +45,68 @@ export const ARM_RETRY_MS = 1_000;
  */
 export const SESSION_LOOKUP_ATTEMPTS = 2;
 
-/** Per-socket state. Both fields are set by the handshake middleware, before any handler. */
+/** Per-socket state. Every field is set by the handshake middleware, before any handler. */
 interface RealtimeSocketData {
   /** From the handshake session; undefined for an anonymous socket (PLAN 8 admits those). */
   userId?: string;
   /** The `market:<id>` rooms this socket holds, for the REALTIME_ROOMS_MAX cap. */
   marketRooms: Set<string>;
+  /** Messages counted in the window that ends at `windowEndsAt` (REALTIME_MESSAGES_PER_WINDOW). */
+  messages: number;
+  /** Epoch millis at which the message window rolls over and `messages` resets to zero. */
+  windowEndsAt: number;
+}
+
+/**
+ * Counts one message against this socket's window and answers how long the caller must wait,
+ * or `null` while it is inside the bound (A-M4-5).
+ *
+ * A fixed window, like the Redis-backed limits: the first message of a window arms the next
+ * boundary, and everything until then is counted against it. `Date.now()` is the right clock
+ * here and the one place in this file it is — there is nothing to order against a database
+ * write, only elapsed wall time on this process, and a monotonic reading would not survive the
+ * socket outliving a clock step any better.
+ */
+export function overMessageRate(data: RealtimeSocketData, now: number): number | null {
+  if (now >= data.windowEndsAt) {
+    data.messages = 0;
+    data.windowEndsAt = now + RATE_LIMIT_WINDOW_SECONDS * 1_000;
+  }
+  data.messages += 1;
+  if (data.messages <= REALTIME_MESSAGES_PER_WINDOW) return null;
+  return Math.max(1, Math.ceil((data.windowEndsAt - now) / 1_000));
+}
+
+/**
+ * PLAN 7.5's `RATE_LIMITED` on the socket — the code the room cap deliberately did NOT use,
+ * because it was reserved for this (A-M4-5).
+ *
+ * A socket.io PACKET middleware, not a check at the top of each handler, and that placement is
+ * the whole point: a `@MessageBody({ schema })` parameter is validated by the global pipe
+ * BEFORE the handler body runs, so a handler-level check would count only well-formed messages
+ * and leave the flood this bound exists for — malformed payloads, whose validation is the
+ * expensive part (A-M4-5's quadratic NUL sweep) — entirely uncounted.
+ *
+ * A refused packet is DROPPED (no `next()`) and answered on the existing refusal channel rather
+ * than through `next(error)`, which socket.io turns into a socket-level `error` and a
+ * disconnect: the connection has to survive, or a client that merely talked too fast would also
+ * lose the public ticks it was quietly receiving.
+ */
+function installMessageRateLimit(client: RealtimeSocket): void {
+  const message = `At most ${String(REALTIME_MESSAGES_PER_WINDOW)} messages per ${String(
+    RATE_LIMIT_WINDOW_SECONDS,
+  )} seconds`;
+  client.use((_packet, next) => {
+    const retryAfterSeconds = overMessageRate(client.data, Date.now());
+    if (retryAfterSeconds === null) {
+      next();
+      return;
+    }
+    client.emit(
+      REALTIME_EXCEPTION_EVENT,
+      errorEnvelope('RATE_LIMITED', message, { retryAfterSeconds }),
+    );
+  });
 }
 
 type RealtimeSocket = Socket<
@@ -240,6 +300,8 @@ export class MarketGateway
     next: (error?: Error) => void,
   ): Promise<void> => {
     socket.data.marketRooms = new Set();
+    socket.data.messages = 0;
+    socket.data.windowEndsAt = 0;
     for (let attempt = 1; attempt <= SESSION_LOOKUP_ATTEMPTS; attempt += 1) {
       try {
         // The exact call SessionGuard makes; fromNodeHeaders is a pure loop over
@@ -270,6 +332,7 @@ export class MarketGateway
    * precede the join.
    */
   handleConnection(client: RealtimeSocket): void {
+    installMessageRateLimit(client);
     const userId = client.data.userId;
     // Derived from the handshake session and never from a payload: the client protocol carries
     // marketIds only, so there is no user-room authorization surface to get wrong.
@@ -346,7 +409,10 @@ export class MarketGateway
       const room = marketChannel(marketId);
       if (rooms.has(room)) continue;
       if (rooms.size >= REALTIME_ROOMS_MAX) {
-        // VALIDATION_ERROR, not RATE_LIMITED: that code is reserved for PLAN 7.5 / M6.
+        // VALIDATION_ERROR, still not RATE_LIMITED now that M6 has brought that code to the
+        // socket: this is a bound on WHAT one connection may hold, not on how fast it asks.
+        // Waiting does not help — the caller has to unsubscribe — and `details` naming the
+        // field is what tells it so.
         throw new AppError('VALIDATION_ERROR', {
           message: `At most ${String(REALTIME_ROOMS_MAX)} markets per socket`,
           details: [{ path: ['marketIds'], message: 'subscription limit reached' }],

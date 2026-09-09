@@ -78,9 +78,17 @@ export const envSchema = z
     API_PORT: z.coerce.number().int().min(1).max(65535).default(4000),
     /**
      * Proxies allowed to set X-Forwarded-*: "true", "false", or a comma-separated list of
-     * addresses/CIDRs. Default false: the Next.js rewrite does not add X-Forwarded-For.
+     * addresses/CIDRs. Default false: the Next.js rewrite does not add a trustworthy
+     * X-Forwarded-For (Next fills it as `client-supplied ?? socket address`, so a caller can
+     * set it), and PLAN 7.5's per-address limit reads `request.ip` — see ADR-0034.
      */
     TRUST_PROXY: z.string().default('false'),
+    /**
+     * pino level for this process (apps/api/src/logger.ts). Same key, same values and the same
+     * defaults as apps/worker: `debug` in development, `info` in production, `silent` under
+     * test. Unset, the default for NODE_ENV applies.
+     */
+    LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).optional(),
     DATABASE_URL: z.url({ protocol: /^postgres(ql)?$/ }),
     REDIS_URL: z.url({ protocol: /^rediss?$/ }),
 

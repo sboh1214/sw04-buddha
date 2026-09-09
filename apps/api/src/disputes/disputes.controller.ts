@@ -15,6 +15,7 @@ import { SessionGuard } from '../auth/session.guard.js';
 import { ApiPage } from '../common/interceptors/response-envelope.interceptor.js';
 import { ApiData, ApiErrors, ApiPageOf } from '../common/openapi/api-response.decorators.js';
 import { SESSION_SECURITY_SCHEME } from '../openapi/document.js';
+import { RateLimit } from '../rate-limit/rate-limit.decorator.js';
 import { DisputeService } from './dispute.service.js';
 
 /**
@@ -31,6 +32,9 @@ export class DisputesController {
 
   @Post(':id/disputes')
   @HttpCode(201)
+  // Q-M5-1 left abuse to "M6 레이트 리밋 + 시장당 1건": the unique constraint already caps a user
+  // at one dispute per market, and this caps how fast they can probe for markets to file on.
+  @RateLimit('dispute')
   @ApiOperation({
     operationId: 'fileDispute',
     summary:
@@ -48,6 +52,7 @@ export class DisputesController {
     'VALIDATION_ERROR',
     'DISPUTE_WINDOW_CLOSED',
     'DUPLICATE_REQUEST',
+    'RATE_LIMITED',
   )
   fileDispute(
     @CurrentUser() user: SessionUser,

@@ -36,7 +36,11 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
   let pack: { id: string; amountP: bigint; priceKrw: number };
 
   beforeAll(async () => {
-    t = await createTestApp();
+    // PLAN M2 AC 2 proves the charge transaction with twenty concurrent charges by one
+    // account, which is above PLAN 7.5's own 10/min/user ceiling for the same route. The
+    // shipped limit is pinned by rate-limit.controller.test.ts; this suite is about the
+    // transaction, so it raises the ceiling out of the way instead of thinning the AC.
+    t = await createTestApp({ rateLimits: { charge: 500 } });
   });
   afterAll(async () => {
     await t?.close(); // undefined when beforeAll timed out waiting for the file lock

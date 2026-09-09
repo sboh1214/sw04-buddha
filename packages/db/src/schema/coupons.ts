@@ -39,6 +39,15 @@ export const coupons = pgTable(
     updatedAt: updatedAt(),
   },
   (t) => [
+    /**
+     * `GET /admin/coupons`: the global list, ordered `(created_at DESC, id DESC)`. One of the
+     * "전역 키셋 목록 넷" A-M3-10 handed to M6, and it arrives with the row-comparison cursor
+     * predicate (`keysetPredicate`, apps/api) because the two are one change. This table showed
+     * the largest index-alone trap of the four: measured at 2M rows the deep page was 198 ms
+     * with NO index, 1158 ms with the index under the old OR-form predicate, and 0.13 ms with
+     * both.
+     */
+    index('coupons_created_at_id_idx').on(desc(t.createdAt), desc(t.id)),
     check('coupons_amount_p_check', sql`${t.amountP} > 0`),
     check(
       'coupons_max_redemptions_check',

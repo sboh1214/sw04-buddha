@@ -612,6 +612,18 @@ export const copy = {
   eventDiscardedResult: '취소된 제안 결과',
   adminDisputeNotFound: '이의를 찾을 수 없습니다.',
 
+  // --- leaderboard (M6 선택) ---
+  // 순위는 실현 손익 기준이고, 아직 아무것도 실현하지 않은 계정은 목록에 없다.
+  leaderboardTitle: '실현 손익 순위',
+  leaderboardIntro:
+    '정산과 매도로 확정된 손익의 합계 기준 상위 20명입니다. 아직 확정된 손익이 없는 계정은 표시되지 않습니다.',
+  leaderboardRank: '순위',
+  leaderboardNickname: '닉네임',
+  leaderboardRealizedPnl: '실현 손익',
+  leaderboardEmpty: '아직 확정된 손익이 있는 계정이 없습니다.',
+  errLeaderboardLoad: '순위를 불러오지 못했습니다.',
+  leaderboardLink: '전체 순위 보기',
+
   // --- generic ---
   errUnknown: '문제가 발생했습니다. 잠시 후 다시 시도해 주세요.',
   errNetwork: '서버에 연결할 수 없습니다.',

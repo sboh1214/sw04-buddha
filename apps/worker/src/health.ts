@@ -7,7 +7,21 @@ export interface HealthServerOptions {
   host: string;
   /** Read per request: the answer flips to 200 the moment the worker logs 'worker ready'. */
   isReady: () => boolean;
+  /**
+   * Queues this process consumes, reported for the operator who has to answer "is the worker
+   * doing what it was started to do" without reading the boot log. Descriptive only: a name
+   * here never moves the 200/503 (see the body doc below).
+   */
+  queues?: readonly string[];
   logger: Logger;
+}
+
+/** The body `GET /health` answers with. `status` alone decides the HTTP code. */
+export interface WorkerHealthBody {
+  status: 'ok' | 'starting';
+  /** Whole seconds since this process started; the cheapest way to spot a restart loop. */
+  uptimeSeconds: number;
+  queues: readonly string[];
 }
 
 export interface HealthServer {
@@ -33,7 +47,7 @@ export interface HealthServer {
 export async function startHealthServer(
   options: HealthServerOptions,
 ): Promise<HealthServer | null> {
-  const { port, host, isReady, logger } = options;
+  const { port, host, isReady, queues, logger } = options;
   if (port === 0) {
     logger.info('health server disabled (WORKER_HEALTH_PORT=0)');
     return null;
@@ -46,11 +60,22 @@ export async function startHealthServer(
       return;
     }
     const ready = isReady();
+    // PLAN M6 "헬스체크 상세" — detail ADDED, semantics untouched. Making this a live probe of
+    // Postgres and Redis the way the API's is (Q-M5-11) would change what a 200 means for a
+    // queue consumer whose normal state between scans is zero open connections, and that is an
+    // owner decision this milestone records rather than takes. `uptimeSeconds` and `queues`
+    // answer the two questions the old one-word body could not — is it restarting, and is it
+    // the worker I think it is — without touching the flag Playwright and CI wait on.
+    const body: WorkerHealthBody = {
+      status: ready ? 'ok' : 'starting',
+      uptimeSeconds: Math.floor(process.uptime()),
+      queues: queues ?? [],
+    };
     res.writeHead(ready ? 200 : 503, {
       'content-type': 'application/json',
       'cache-control': 'no-store',
     });
-    res.end(JSON.stringify({ status: ready ? 'ok' : 'starting' }));
+    res.end(JSON.stringify(body));
   });
 
   await new Promise<void>((resolve, reject) => {

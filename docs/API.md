@@ -1,0 +1,359 @@
+<!-- 이 파일은 scripts/generate-api-doc.mjs 가 생성합니다. 직접 수정하지 마세요. -->
+
+# buddha API
+
+`apps/api/openapi.json` 의 한국어 요약본이다. **직접 고치지 않는다.**
+`scripts/generate-api-doc.mjs` 가 만들고, CI 의 `OpenAPI contract check` 단계가
+`pnpm api:openapi` 를 다시 실행한 뒤 `git diff --exit-code` 로 검사한다 — 손으로 고친 줄은
+다음 CI 에서 그대로 빨간불이 된다.
+
+내용을 바꾸는 곳은 두 군데다.
+
+- 오퍼레이션(경로·요약·인증·오류): 컨트롤러의 `@ApiOperation` / `@ApiData` / `@ApiPageOf` /
+  `@ApiErrors` 데코레이터와 zod 스키마. 고친 뒤 `pnpm api:openapi` 를 실행한다.
+- 문서의 문장(개요·인증·헬스체크·better-auth·레이트 리밋·실시간 절): `scripts/generate-api-doc.mjs`
+  맨 위의 템플릿 상수.
+
+## 개요
+
+- **기본 경로** — 이 문서에 실린 모든 오퍼레이션은 `/api/v1` 아래에 있다(전역 prefix `api` +
+  URI 버저닝, 기본 버전 1). 버전 접두어가 없는 두 표면은 OpenAPI 문서 밖이라 아래에 손으로 적었다:
+  헬스체크(`/api/health`, `/api/health/live`)와 `/api/auth/*`(better-auth). 문서에 `servers` 가
+  없으므로 경로는 API 오리진 기준 상대 경로다. 브라우저는 Next.js
+  rewrite(`/api/:path*` → `NEXT_PUBLIC_API_URL`)를 거쳐 같은 오리진으로 호출한다.
+- **성공 봉투** — 단일 리소스는 `{ "data": ... }`, 커서 목록은
+  `{ "data": [...], "meta": { "nextCursor": ... } }`.
+- **실패 봉투** — `{ "error": { "code": ..., "message": ..., "details"?: ... } }`. `details` 는
+  값이 없으면 키 자체가 없다(`undefined` 로 넣지 않는다). `VALIDATION_ERROR` 의 `details` 는
+  `{ path, message }` 배열(`ValidationIssue`)이다. `message` 는 개발자용 영어 문자열이고,
+  사용자에게 보여 줄 한국어 문구는 웹이 `code` 로 고른다.
+- **커서 페이지네이션** — `?cursor=&limit=`. `limit` 은 기본 20, 최대 100. 다음 페이지는
+  `meta.nextCursor` 를 `cursor` 로 다시 넘겨 요청하고, `nextCursor` 가 `null` 이면 마지막
+  페이지다. 커서는 불투명한 문자열이니 클라이언트가 해석하지 않는다(내부적으로는
+  `(created_at DESC, id DESC)` 키셋이다).
+- **시각** — 모든 타임스탬프는 ISO 8601 UTC 문자열이다. 정밀도는 밀리초 — timestamptz 컬럼이
+  전부 `timestamp(3)` 이다.
+- **P 금액** — 10진 정수 문자열이다(`"12500"`, `"-300"`). JSON number 는 IEEE double 이라
+  Postgres bigint 를 정확히 담지 못해서, P 는 요청·응답 양방향 모두 문자열로 오간다. 요청 본문의
+  P 금액은 부호 1자 + `MAX_P_AMOUNT`(10^15)의 16자리 = 17자까지만 받는다(그보다 긴 문자열은
+  파싱하기 전에 거절한다: 백만 자리 `BigInt()` 는 요청 스레드에서 실제로 CPU 를 쓴다).
+- **본문 형식** — 요청·응답 모두 `application/json` 이다.
+  `application/x-www-form-urlencoded` 파서는 꺼져 있다(HTML 폼이 바로 CSRF 의 모양이다).
+- **operationId** — 컨트롤러의 메서드 이름 그대로다(`openapi/document.ts` 의
+  `operationIdFactory`).
+
+**필수 요청 헤더** — 없으면 요청이 거절된다.
+
+| 헤더 | 오퍼레이션 | 설명 |
+| --- | --- | --- |
+| `Idempotency-Key` | `POST /api/v1/payments/charge` | Client-generated key for this purchase (PLAN 5.4). Re-sending it returns the first outcome instead of charging again. DUPLICATE_REQUEST (409) answers a key whose first request is still running (details name Idempotency-Key: keep the key and retry) and a key re-used with a different body (no details: the key is spent). |
+| `Idempotency-Key` | `POST /api/v1/trades` | Client-generated key for this trade (PLAN 5.4). Re-sending it returns the first outcome (order and fill verbatim; balance, position and market current) instead of trading again. DUPLICATE_REQUEST (409, no details) answers a key re-used with different terms: the key is spent. |
+
+## 인증
+
+문서가 선언하는 보안 스킴은 세션 쿠키 하나다.
+
+| 스킴 | 종류 | 위치 | 쿠키 이름 | 설명 |
+| --- | --- | --- | --- | --- |
+| `session` | `apiKey` | `cookie` | `buddha.session_token` | better-auth session cookie: `buddha.session_token` when the API is served over HTTP, `__Secure-buddha.session_token` when BETTER_AUTH_URL is HTTPS. Browsers send it automatically with `credentials: "include"`. |
+
+- 아래 표의 `인증` 칸이 `🔒` 인 오퍼레이션은 이 쿠키를 요구한다. `—` 는 공개 라우트다.
+- 쿠키가 없거나 만료되었으면 `401 UNAUTHENTICATED`.
+- `/api/v1/admin/*` 는 쿠키에 더해 `profiles.role = 'admin'` 을 요구한다(`AdminGuard`, 역할은
+  60초 캐시). 아니면 `403 FORBIDDEN`.
+- 상태를 바꾸는 요청(GET·HEAD·OPTIONS 외)은 `Origin` 헤더가 신뢰 목록(`WEB_ORIGIN`,
+  `BETTER_AUTH_URL`)에 없으면 `403 FORBIDDEN` 이다(`SessionGuard` 의 CSRF 검사). 헤더가 아예
+  없는 요청은 브라우저가 보낸 것이 아니므로 통과한다(curl, 서버 간 호출, 테스트).
+- 쿠키를 **만드는** 쪽(로그인·로그아웃·소셜 연결)은 이 REST 표면이 아니라 아래 `/api/auth/*` 다.
+
+## 에러 코드
+
+코드 목록과 순서는 `packages/shared/src/api/errors.ts` 의 `ERROR_CODES`, HTTP 상태는
+`apps/api/src/common/errors/app-error.ts` 의 `HTTP_STATUS_BY_CODE` 에서 그대로 읽었다.
+API 는 이 목록 밖의 코드를 내지 않는다.
+
+| 코드 | HTTP | 뜻 |
+| --- | --- | --- |
+| `UNAUTHENTICATED` | 401 | 세션 쿠키가 없거나 만료되었다. 로그인이 필요하다. |
+| `FORBIDDEN` | 403 | 로그인은 했지만 권한이 없다. 관리자 전용 라우트, 교차 출처 요청 거부, 남의 계정을 지목한 본문이 여기에 들어간다. |
+| `NOT_FOUND` | 404 | 대상이 없다. 공개에 보이지 않는 초안(draft) 시장도 여기로 답한다. |
+| `VALIDATION_ERROR` | 400 | 요청이 스키마에 맞지 않는다. `details` 에 `{ path, message }` 배열이 붙는다. |
+| `MARKET_NOT_OPEN` | 409 | 시장이 `open` 이 아니라 그 동작을 할 수 없다. |
+| `MARKET_CLOSED` | 409 | `open` 이지만 마감 시각(`close_at`)이 지났다. |
+| `INSUFFICIENT_BALANCE` | 409 | 잔고가 모자란다. |
+| `INSUFFICIENT_POSITION` | 409 | 팔려는 수량만큼 보유하고 있지 않다. |
+| `PRICE_MOVED` | 409 | 다시 계산한 금액이 `maxCostP`(매수) 또는 `minProceedsP`(매도)를 벗어났다. |
+| `DUPLICATE_REQUEST` | 409 | 이미 쓴 멱등 키를 다른 조건으로 다시 썼거나(키는 소모된다), 한 번만 할 수 있는 일을 두 번 했다(쿠폰 재사용, 같은 시장에 이의 2회). |
+| `RATE_LIMITED` | 429 | 레이트 리밋 초과. `details.retryAfterSeconds` 와 `Retry-After` 헤더에 대기 초. |
+| `DISPUTE_WINDOW_CLOSED` | 409 | 이의 접수 창이 닫혔다(정산이 확정되었거나 `resolving` 이 아니다). |
+| `RULES_REQUIRED` | 422 | 정산 규칙(`rules`)이 비어 있어 개장하거나 그대로 저장할 수 없다. |
+| `INTERNAL` | 500 | 그 밖의 서버 오류. 본문에 내부 사정을 담지 않는다. |
+
+## 오퍼레이션 (42개)
+
+태그별로 묶었고, 태그 안의 순서는 OpenAPI 문서의 경로 순서 그대로다.
+
+### `auth` — 가입
+
+| 메서드 | 경로 | 설명 | 인증 | 오류 |
+| --- | --- | --- | --- | --- |
+| POST | `/api/v1/auth/register` | Start an email sign-up: mails the verification link | — | `VALIDATION_ERROR`, `RATE_LIMITED` |
+
+### `me` — 내 계정
+
+| 메서드 | 경로 | 설명 | 인증 | 오류 |
+| --- | --- | --- | --- | --- |
+| GET | `/api/v1/me` | Profile, balance and linked sign-in methods | 🔒 | `UNAUTHENTICATED`, `NOT_FOUND` |
+| PATCH | `/api/v1/me` | Change nickname | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND` |
+| POST | `/api/v1/me/password` | Set the first password (after verification, or for a social-only account) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN` |
+
+### `wallet` — 지갑·결제
+
+| 메서드 | 경로 | 설명 | 인증 | 오류 |
+| --- | --- | --- | --- | --- |
+| GET | `/api/v1/charge-packages` | Charge packages on sale, cheapest discount first | — | — |
+| POST | `/api/v1/payments/charge` | Buy one charge package (mock provider: succeeds immediately). P is never convertible back to cash. | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `PRICE_MOVED`, `DUPLICATE_REQUEST`, `RATE_LIMITED` |
+| POST | `/api/v1/coupons/redeem` | Redeem a coupon code for P | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `DUPLICATE_REQUEST`, `RATE_LIMITED` |
+| GET | `/api/v1/me/ledger` | Ledger entries, newest first | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED` |
+| GET | `/api/v1/me/payments` | Charges, newest first | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED` |
+
+### `admin` — 관리자
+
+| 메서드 | 경로 | 설명 | 인증 | 오류 |
+| --- | --- | --- | --- | --- |
+| GET | `/api/v1/admin/charge-packages` | Every charge package, active or not | 🔒 | `UNAUTHENTICATED`, `FORBIDDEN` |
+| POST | `/api/v1/admin/charge-packages` | Add a charge package | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN` |
+| PATCH | `/api/v1/admin/charge-packages/{id}` | Change the amount, price, order or availability | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND` |
+| DELETE | `/api/v1/admin/charge-packages/{id}` | Remove a package (past payments keep their own amount and price) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND` |
+| GET | `/api/v1/admin/coupons` | Coupons, newest first | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN` |
+| POST | `/api/v1/admin/coupons` | Issue a coupon (the code is generated when omitted) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN` |
+| PATCH | `/api/v1/admin/coupons/{id}` | Disable a coupon or change its cap, expiry or memo | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND` |
+| GET | `/api/v1/admin/users` | Search users by email or nickname | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN` |
+| POST | `/api/v1/admin/users/{id}/balance-adjust` | Credit or debit P with a mandatory reason (ADMIN_ADJUST) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `INSUFFICIENT_BALANCE` |
+| GET | `/api/v1/admin/payments` | Charges, newest first | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN` |
+| GET | `/api/v1/admin/audit-failures` | Ledger/balance mismatches found by the ledger.audit job | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN` |
+| GET | `/api/v1/admin/markets` | Every market, drafts included, newest first | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN` |
+| POST | `/api/v1/admin/markets` | Create a draft market (LMSR initialised from initialProbBp and liquidityB) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND` |
+| GET | `/api/v1/admin/markets/{id}` | One market with its LMSR state, exposure and event log | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND` |
+| PATCH | `/api/v1/admin/markets/{id}` | Edit a draft (any field) or an open market (text, close time, category; liquidityB/initialProbBp/slug refused naming the field, blank rules refused with RULES_REQUIRED); other statuses refuse naming status | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RULES_REQUIRED` |
+| POST | `/api/v1/admin/markets/{id}/open` | draft → open; refused without rules (RULES_REQUIRED) or with a past closeAt | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RULES_REQUIRED` |
+| POST | `/api/v1/admin/markets/{id}/close` | open → closed | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `MARKET_NOT_OPEN` |
+| POST | `/api/v1/admin/markets/{id}/resolve` | closed → resolving: propose the result and start the dispute window; on a resolving market change the proposed result (the window restarts, the pending finalize is replaced) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND` |
+| POST | `/api/v1/admin/markets/{id}/void` | Void an open, closed or resolving market: every unsettled position is refunded its cost basis (MARKET_VOID_REFUND) and closed out | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND` |
+| GET | `/api/v1/admin/disputes` | Every dispute, newest first; `status` and `marketId` narrow the list | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN` |
+| PATCH | `/api/v1/admin/disputes/{id}` | Accept or reject a dispute with a note (revisable; accepting does not change the market result — use POST /admin/markets/:id/resolve for that) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND` |
+
+### `markets` — 시장·시세
+
+| 메서드 | 경로 | 설명 | 인증 | 오류 |
+| --- | --- | --- | --- | --- |
+| GET | `/api/v1/markets` | Markets by status (default open), never drafts; sorted by volume, closing or newest. Each card carries up to 25 hourly YES samples over the last 24 hours, oldest first. | — | `VALIDATION_ERROR` |
+| GET | `/api/v1/markets/{idOrSlug}` | One market by id or slug (a draft is NOT_FOUND to the public) | — | `VALIDATION_ERROR`, `NOT_FOUND` |
+| GET | `/api/v1/markets/{id}/fills` | Newest 20 fills, anonymous | — | `VALIDATION_ERROR`, `NOT_FOUND` |
+| GET | `/api/v1/markets/{id}/ticks` | Price series, ascending, at most 500 points. `raw` returns stored ticks, downsampled from the newest 10000 of the range (`truncated` says when older ones were left out). `1m`/`1h` sample the probability in force on an absolute grid, coarsening the stride until the window fits; `bucketSeconds` reports the stride served, and the point at `from` carries the last value at or before it, so the left edge is never empty. | — | `VALIDATION_ERROR`, `NOT_FOUND` |
+| GET | `/api/v1/categories` | Active categories in display order | — | — |
+| POST | `/api/v1/quotes` | Price a buy or sell (mode shares) or the contracts a budget buys (mode spend, buy only) | — | `VALIDATION_ERROR`, `NOT_FOUND`, `MARKET_NOT_OPEN`, `MARKET_CLOSED` |
+
+### `trades` — 거래·포지션
+
+| 메서드 | 경로 | 설명 | 인증 | 오류 |
+| --- | --- | --- | --- | --- |
+| POST | `/api/v1/trades` | Buy or sell contracts against the AMM at the current LMSR price. A buy carries maxCostP and a sell minProceedsP (PRICE_MOVED when the recomputed amount is past it). | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `MARKET_NOT_OPEN`, `MARKET_CLOSED`, `INSUFFICIENT_BALANCE`, `INSUFFICIENT_POSITION`, `PRICE_MOVED`, `DUPLICATE_REQUEST`, `RATE_LIMITED` |
+| GET | `/api/v1/me/positions` | Every position of the account, most recently changed first. status=open keeps the unsettled rows (qty may be 0 after a full sell), status=settled the settled ones; omitted lists all. No cursor: bounded by the markets one account has touched. | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED` |
+| GET | `/api/v1/me/orders` | Orders of the account with their fill, newest first | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED` |
+
+### `leaderboard`
+
+| 메서드 | 경로 | 설명 | 인증 | 오류 |
+| --- | --- | --- | --- | --- |
+| GET | `/api/v1/leaderboard` | Top 20 accounts by realized profit and loss, ties broken deterministically | — | — |
+
+### `disputes` — 이의
+
+| 메서드 | 경로 | 설명 | 인증 | 오류 |
+| --- | --- | --- | --- | --- |
+| POST | `/api/v1/markets/{id}/disputes` | Object to the proposed result while the market is resolving and its dispute window is open (one per user per market) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `DISPUTE_WINDOW_CLOSED`, `DUPLICATE_REQUEST`, `RATE_LIMITED` |
+| GET | `/api/v1/me/disputes` | My disputes, newest first; `marketId` narrows the list to one market | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED` |
+
+## 스키마 (60개)
+
+요청·응답 본문의 실제 모양은 `apps/api/openapi.json` 의 `components.schemas` 에 있다. 이름만
+적어 두니 거기서 찾아 읽는다. 이름은 zod 스키마의 `.meta({ id })` 에서 온다.
+
+`AdminBalanceAdjustResult`, `AdminDispute`, `AdminMarket`, `AdminPayment`, `AdminUser`, `AdminUserQuery`, `AuditFailure`, `Balance`, `BalanceAdjustBody`, `Category`, `ChargeBody`, `ChargePackage`, `ChargeResult`, `Coupon`, `CouponCode`, `CreateChargePackageBody`, `CreateCouponBody`, `CreateDisputeBody`, `CreateMarketBody`, `CursorQuery`, `Dispute`, `ErrorCode`, `ErrorEnvelope`, `Fill`, `LeaderboardEntry`, `LedgerEntry`, `LinkedAccount`, `Market`, `MarketEvent`, `MarketListItem`, `MarketStats`, `MarketSummary`, `Me`, `Nickname`, `OkResult`, `Order`, `PAmount`, `PageMeta`, `Password`, `Payment`, `Position`, `PriceSeries`, `PriceTick`, `QuoteBody`, `QuoteResult`, `RedeemCouponBody`, `RedeemCouponResult`, `RegisterBody`, `RegisterResult`, `ResolveMarketBody`, `ReviewDisputeBody`, `SetPasswordBody`, `TradeBody`, `TradeResult`, `UpdateChargePackageBody`, `UpdateCouponBody`, `UpdateMarketBody`, `UpdateMeBody`, `UserRole`, `VoidMarketBody`
+
+## 헬스체크 (문서 밖)
+
+`@ApiExcludeController()` 라 OpenAPI 문서에 없다(클라이언트 계약이 아니라 인프라가 읽는 표면이다).
+버전 접두어가 없고(`VERSION_NEUTRAL`), PLAN 7 봉투로 감싸지 않으며(ADR-0015 의 본문 모양),
+레이트 리밋에서도 면제된다 — 자기를 방어하는 중인 인스턴스가 프로브에 429 를 답하면
+오케스트레이터는 그것을 "재시작하라"로 읽는다.
+
+| 메서드 | 경로 | 뜻 |
+| --- | --- | --- |
+| GET | `/api/health` | 레디니스: 이 API 가 요청을 처리하는 데 필요한 의존성 상태 |
+| GET | `/api/health/live` | 라이브니스: 프로세스가 살아 있는지. 아무것도 프로브하지 않는다 |
+
+`GET /api/health` 의 본문:
+
+```json
+{
+  "status": "ok",
+  "db": "ok",
+  "redis": "ok",
+  "uptimeSeconds": 1234,
+  "checks": {
+    "db": { "status": "ok", "latencyMs": 3 },
+    "redis": { "status": "ok", "latencyMs": 1 }
+  }
+}
+```
+
+- `db` 와 `redis` 는 각각 `"ok"` 또는 `"error"`. 둘 다 `"ok"` 면 `status` 는 `"ok"` 이고
+  HTTP 200, 하나라도 실패하면 `status` 는 `"degraded"` 이고 **HTTP 503(본문 모양은 동일)**.
+- `db`·`redis` 는 M0 부터의 계약이라 평평한 자리에 그대로 두고, `checks` 가 프로브별 지연을
+  더한다. 실패 이유는 로그에만 남는다 — 이 엔드포인트는 인증이 없고, 드라이버 오류 문구는 호스트·
+  포트·롤·DB 이름을 담는다.
+- 프로브 하나당 상한은 2초다(`PROBE_TIMEOUT_MS`). `latencyMs` 는 실제로 걸린 시간이므로, 타임아웃이면 그 상한에 가까운 값이 된다.
+- `GET /api/health/live` 는 `{ "status": "ok", "uptimeSeconds": 1234 }` 만 답한다. 200 말고 다른
+  답이 없는 것이 요점이다: 레디니스에 라이브니스 프로브를 물리면 Redis 가 한 번 흔들렸다는 이유로
+  컨테이너가 재시작되고, 그 인스턴스가 들고 있던 소켓이 전부 끊긴다.
+
+## `/api/auth/*` — better-auth (문서 밖)
+
+better-auth 인스턴스가 `/api/auth` 에 통째로 마운트된다(PLAN 10.1). @fastify/middie 미들웨어로
+Nest 라우팅·전역 prefix·버저닝·본문 파싱보다 **먼저** 실행되므로 OpenAPI 문서에 나타나지 않고,
+`/api/v1/auth/*` 로는 닿지 않는다(그쪽에 있는 Nest 라우트는 `POST /api/v1/auth/register` 하나뿐이다).
+
+**오류 모양이 다르다.** 이 표면의 실패는 PLAN 7 봉투가 아니라 better-auth 의
+`{ "code": ..., "message": ... }` 이다(HTTP 상태는 그대로). 웹은 `code` 를 문자열로 비교해
+한국어 문구를 고른다(`INVALID_EMAIL_OR_PASSWORD`, `EMAIL_NOT_VERIFIED`,
+`FAILED_TO_UNLINK_LAST_ACCOUNT` 등).
+
+이 저장소가 실제로 쓰는 경로:
+
+| 메서드 | 경로 | 쓰임 |
+| --- | --- | --- |
+| POST | `/api/auth/sign-in/email` | 이메일+비밀번호 로그인. 미인증 계정은 `EMAIL_NOT_VERIFIED` |
+| POST | `/api/auth/sign-in/social` | google·kakao·naver OAuth 시작(브라우저 리디렉트) |
+| GET·POST | `/api/auth/callback/:id` | OAuth 공급자 콜백. 실패는 `?error=` 로 웹에 되돌아온다 |
+| POST | `/api/auth/sign-out` | 로그아웃 |
+| GET | `/api/auth/get-session` | 현재 세션 조회(웹의 `useSession`) |
+| POST | `/api/auth/send-verification-email` | 인증 메일 재발송 |
+| GET | `/api/auth/verify-email` | 메일 링크. 성공하면 자동 로그인 후 `callbackURL` 로 리디렉트 |
+| POST | `/api/auth/request-password-reset` | 비밀번호 재설정 메일 요청 |
+| GET | `/api/auth/reset-password/:token` | 재설정 메일 링크 → `callbackURL` 로 리디렉트 |
+| POST | `/api/auth/reset-password` | 토큰으로 새 비밀번호 설정 |
+| POST | `/api/auth/change-password` | 현재 비밀번호를 알고 바꾸기 |
+| POST | `/api/auth/change-email` | 주소 변경(확인 메일 → 새 주소 인증까지 끝나야 반영) |
+| GET | `/api/auth/list-accounts` | 연결된 로그인 수단 목록 |
+| POST | `/api/auth/link-social` | 소셜 계정 연결 |
+| POST | `/api/auth/unlink-account` | 연결 해제. 마지막 하나는 `FAILED_TO_UNLINK_LAST_ACCOUNT` |
+
+**꺼져 있는 경로**
+
+- `POST /api/auth/sign-up/email` — `disabledPaths` 로 막혀 HTTP 로는 **404** 다. 가입 표면은
+  `POST /api/v1/auth/register` 하나뿐이어야 하기 때문이다(ADR-0024): better-auth 의 가입은 아무
+  주소에나 비밀번호를 먼저 심을 수 있어서, 공격자가 피해자 주소로 가입해 두고 피해자가 우리 인증
+  메일을 누르면 그 비밀번호가 피해자 계정의 것이 된다. 서버 안에서 호출하는
+  `auth.api.signUpEmail` 은 계속 동작한다(`disabledPaths` 는 HTTP 라우터에서만 검사된다).
+- 최초 비밀번호 설정에는 대응하는 HTTP 경로가 없다. better-auth 의 `setPassword` 는 서버 전용
+  엔드포인트라, 이 저장소는 `POST /api/v1/me/password` 로 감싸 노출한다.
+
+**공통 규칙**
+
+- 합성 주소(`@noemail.buddha.local`)는 주소를 입력받는 모든 경로에서 거절된다
+  (`INVALID_EMAIL`). Kakao·Naver 가 이메일을 주지 않았을 때 서버가 붙이는 주소이므로, 남이 먼저
+  차지할 수 있으면 안 된다.
+- 레이트 리밋은 아래 `email` 버킷을 쓴다. 이 표면의 429 는 헤더가 아니라 본문에 초를 담는다:
+  `{ "code": "RATE_LIMITED", "message": ..., "retryAfterSeconds": N }`. better-auth 내장 리미터는
+  꺼져 있다(프로세스 메모리에 상태를 두고 IP 로 세는데, Next rewrite 뒤에서는 모든 방문자가 소켓
+  하나다).
+- CSRF 는 better-auth 자신의 `Origin` 검사가 담당한다(`disableOriginCheck: false`).
+
+## 레이트 리밋
+
+PLAN 7.5 의 표는 `packages/shared/src/rate-limit.ts` 한 곳에 있고, 아래 표는 거기서 읽은 것이다.
+모든 한도는 **60초 고정 창** 기준이며, 카운터는 Redis 에 있다(프로세스 메모리가 아니다).
+
+| 버킷 | 기준 | 한도(/60초) | 적용 라우트 |
+| --- | --- | --- | --- |
+| `default` | 클라이언트 주소 (API 전체에 하나) | 100 | 아래에 없는 모든 HTTP 라우트(주소 하나당 API 전체 합산) |
+| `trade` | 로그인 계정 (라우트별) | 20 | `POST /api/v1/trades` |
+| `charge` | 로그인 계정 (라우트별) | 10 | `POST /api/v1/payments/charge` |
+| `coupon` | 로그인 계정 (라우트별) | 10 | `POST /api/v1/coupons/redeem` |
+| `dispute` | 로그인 계정 (라우트별) | 10 | `POST /api/v1/markets/{id}/disputes` |
+| `email` | 본문이 지목한 이메일 주소 (라우트별) | 5 | 메일을 보내는 경로 — `POST /api/v1/auth/register` 와 `/api/auth/*` 의 `/change-email`, `/send-verification-email`, `/request-password-reset`, `/forget-password`. 시도 자체를 센다(시도가 곧 피해다). |
+| `signIn` | 본문이 지목한 이메일 주소 (라우트별) | 10 | `/api/auth/sign-in/email`. 시도를 세되 **성공한 로그인이 버킷을 지운다** — 비밀번호가 맞은 로그인은 공격이 아니고, 그것까지 남기면 공유 계정이 쓰이는 것만으로 스스로 잠긴다. `/api/auth/*` 전체는 이와 별도로 `default`(주소) 버킷에도 들어간다. |
+
+- **버킷은 라우트마다 정확히 하나.** `@RateLimit('<bucket>')` 이 붙은 라우트는 그 버킷의 한도만
+  적용받고 기본 100/분 이 추가로 겹치지 않는다. 그래서 `X-RateLimit-*` 헤더의 뜻이 하나로 정해진다.
+- **헤더** — 계수된 응답에는 `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`
+  이 붙는다. 거절될 때는 `Retry-After`(초)가 더 붙고, 본문은 PLAN 7 봉투의
+  `RATE_LIMITED` 이며 `details.retryAfterSeconds` 에 같은 숫자가 들어 있다.
+- **`ip` 스코프는 API 전체가 한 통이다.** PLAN 7.5 의 기본값은 주소당으로 쓰여 있으므로 경로별로
+  나누면 한 호출자가 경로 수만큼 100번을 쓸 수 있다. 클라이언트를 지목할 수 없는 주소(신뢰할 수
+  없는 프록시 뒤 등)는 아예 계수하지 않는다 — 거절이 아니라 무계수다.
+- **키는 해시로 저장한다.** 계정 id 는 사람을 지목하고 이메일은 개인정보인데, 리미터가 그것을
+  `KEYS rl:*` 로 읽히는 자리에 둘 이유가 없다.
+- **면제** — `/api/health`, `/api/health/live`(`@SkipRateLimit()`).
+- **Redis 가 죽으면 열린다**(fail-open). 리미터 때문에 API 전체가 멈추지는 않는다.
+- **Socket.IO 는 따로 센다** — 아래 실시간 절 참고.
+
+## 실시간 (Socket.IO)
+
+연결은 Socket.IO 네임스페이스 하나다. 핸드셰이크에서 세션 쿠키를 읽어 로그인 상태면
+`user:<userId>` 룸에 자동으로 들어간다(페이로드로 사용자 룸을 고를 수 있는 표면은 없다).
+로그인하지 않은 소켓도 붙을 수 있고, 공개 이벤트만 받는다.
+
+**룸**
+
+- `market:<marketId>` — 공개. 클라이언트가 `subscribe` 로 직접 들어간다.
+- `user:<userId>` — 비공개. 핸드셰이크의 세션에서만 정해진다.
+
+**클라이언트 → 서버**
+
+- `subscribe` / `unsubscribe`, 페이로드는 `{ "marketIds": ["<uuid>", ...] }`.
+- 메시지 하나가 담을 수 있는 id 수와 소켓 하나가 들고 있을 수 있는 룸 수는 다르다(아래 표).
+  룸 상한이 더 크므로, 그보다 많은 id 를 가진 화면은 메시지 상한 크기로 잘라서 보내야 한다.
+  게이트웨이는 페이로드 전체를 검증한 뒤에 룸에 넣기 때문에, 한 번에 너무 많이 보낸 메시지는
+  통째로 거절되고 룸에는 하나도 들어가지 않는다.
+- 거절은 `exception` 이벤트로 돌아온다. 본문은 REST 와 같은
+  `{ "error": { "code", "message", "details"? } }` 봉투다(프로토콜에 ack 이 없다).
+
+**서버 → 클라이언트**
+
+이벤트 이름이 곧 `type` 필드다.
+
+| 이벤트 | 룸 | 뜻 | 순서 키 |
+| --- | --- | --- | --- |
+| `market:tick` | `market:<id>` | 체결(또는 틱을 남기는 전이) 후의 가격·통계 | `tradeCount` |
+| `market:trade` | `market:<id>` | 익명 체결 1건 | `fillId` |
+| `market:status` | `market:<id>` | 상태 전이(개장·마감·정산 제안·결과 변경·확정·무효). 설명만 고친 편집도 같은 상태로 다시 발행된다 | `statusEventId` |
+| `user:balance` | `user:<id>` | 거래·환불·지급 후의 잔고 | `ledgerEntryId` |
+| `user:position` | `user:<id>` | 변경된 포지션 1행 | `version` |
+
+이벤트는 커밋 순서대로 도착하지 않을 수 있고(인스턴스 두 대, 늦게 흘러나온 Redis 큐),
+밀리초 `ts` 는 동점이 날 수 있다. 그래서 다시 바뀔 수 있는 엔티티의 이벤트는 위 표의 **순서 키**를
+싣는다. 클라이언트는 들고 있는 값보다 큰 키만 받아들이고(`supersedes`), 같거나 작으면 중복이거나
+늦은 것이므로 버린다. 키는 같은 이벤트 종류 안에서만 비교한다 — 서로 다른 시퀀스에서 나온 숫자다.
+
+그 밖에 게이트웨이만 보내는 이벤트가 둘 있다.
+
+- `realtime:resync` — Redis 구독이 끊겼다가 다시 걸렸다는 신호(페이로드 없음). 그 사이의 이벤트는
+  사라졌으므로 클라이언트는 REST 스냅샷을 다시 받아야 한다.
+- `exception` — 위의 거절 봉투.
+
+`market:tick` 만 volatile 로 보낸다: 다음 틱이 곧바로 덮어쓰는 스냅샷이라, 전송이 밀린 클라이언트는
+하나쯤 잃어도 된다. 나머지는 사실(fact)이라 반드시 도착해야 한다.
+
+**한도**
+
+| 항목 | 값 |
+| --- | --- |
+| 네임스페이스 | `/ws` (`${NEXT_PUBLIC_API_URL}/ws`) |
+| 메시지 하나의 `marketIds` 최대 | 100개 |
+| 소켓 하나가 들고 있을 수 있는 시장 룸 | 200개 |
+| 메시지 하나의 최대 크기 | 16384 바이트 |
+| 연결 하나가 60초에 보낼 수 있는 메시지 | 120개 (초과분은 `exception` 이벤트로 `RATE_LIMITED`) |
+| 재동기화 신호 | `realtime:resync` |

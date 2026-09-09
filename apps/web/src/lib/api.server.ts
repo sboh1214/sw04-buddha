@@ -2,6 +2,7 @@ import { createApiClient } from '@buddha/api-client';
 import { cache } from 'react';
 import {
   type Category,
+  type LeaderboardEntry,
   type Market,
   type MarketListItem,
   type PriceSeries,
@@ -112,4 +113,9 @@ export async function fetchMarketsPageServer(
 /** Active categories in display order (`GET /categories`, public), for the home page's tabs. */
 export async function fetchCategoriesServer(): Promise<Category[]> {
   return unwrap(await serverApi.GET('/api/v1/categories')).data;
+}
+
+/** The global ranking (`GET /leaderboard`, public; PLAN M6 선택). */
+export async function fetchLeaderboardServer(): Promise<LeaderboardEntry[]> {
+  return unwrap(await serverApi.GET('/api/v1/leaderboard')).data;
 }

@@ -1,0 +1,46 @@
+# WINDOWS ONLY. Copy this file to `compose.override.yaml` (which .gitignore keeps out of the
+# repository, so the copy is yours to edit) and `docker compose up -d` picks it up automatically:
+#
+#   cp compose.override.example.yaml compose.override.yaml
+#
+# (`cp` is an alias for Copy-Item in PowerShell, so the same line works there.)
+#
+# Compose only auto-loads `compose.override.yaml` / `.yml`, never this `.example.` name, so
+# nothing here takes effect until it is copied.
+#
+# WHY. Windows reserves dynamic TCP ranges for WinNAT/Hyper-V, and Docker cannot publish a host
+# port that falls inside one ("bind: An attempt was made to access a socket in a way forbidden
+# by its access permissions"). The ranges are 100 ports wide, they MOVE on every reboot, and
+# three ports from docker/docker-compose.yml keep landing in them: Redis 6379 and 6380, and
+# Mailpit's web/API port 8025. List the current reservation with:
+#
+#   netsh int ipv4 show excludedportrange protocol=tcp
+#
+# An elevated shell can clear it once (`net stop winnat; net start winnat`), but a reboot brings
+# it back at a new offset. Moving the published ports out of the way instead is permanent, which
+# is what this file does. The CONTAINER-side ports are untouched (6379, 8025): only the host
+# side moves.
+#
+# AFTER COPYING, match `.env` and the e2e to the ports below — nothing reads this file:
+#
+#   REDIS_URL=redis://localhost:6479
+#   TEST_REDIS_URL=redis://localhost:6480
+#   MAILPIT_URL=http://127.0.0.1:8125    # apps/web/e2e/helpers.ts, default 8025
+#
+# The Mailpit UI then lives at http://localhost:8125 rather than :8025.
+services:
+  redis:
+    # !override replaces the published list instead of appending to it (Compose 2.24+).
+    ports: !override
+      - '127.0.0.1:6479:6379'
+  redis-test:
+    ports: !override
+      - '127.0.0.1:6480:6379'
+
+  mailpit:
+    # SMTP 1025 has stayed clear of the reserved ranges, so it is republished unchanged; only the
+    # web/API port moves. It has to remain reachable from the host: the Playwright sign-up helper
+    # reads the verification mail over this HTTP API (MAILPIT_URL above).
+    ports: !override
+      - '127.0.0.1:1025:1025'
+      - '127.0.0.1:8125:8025'

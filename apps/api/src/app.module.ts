@@ -9,8 +9,10 @@ import { HealthController } from './health/health.controller.js';
 import { DbModule } from './infra/db/db.module.js';
 import { RedisModule } from './infra/redis/redis.module.js';
 import { JobsModule } from './jobs/jobs.module.js';
+import { LeaderboardModule } from './leaderboard/leaderboard.module.js';
 import { MarketsModule } from './markets/markets.module.js';
 import { MeModule } from './me/me.module.js';
+import { RateLimitModule } from './rate-limit/rate-limit.module.js';
 import { RealtimeModule } from './realtime/realtime.module.js';
 import { TradesModule } from './trades/trades.module.js';
 import { WalletModule } from './wallet/wallet.module.js';
@@ -29,6 +31,9 @@ import { WalletModule } from './wallet/wallet.module.js';
     DbModule,
     RedisModule,
     AuthModule,
+    // Global rate-limit guard (PLAN 7.5). After AuthModule: its `user` scope reads sessions
+    // through the same better-auth instance, and a guard is only reachable once routing exists.
+    RateLimitModule,
     MeModule,
     WalletModule,
     AdminModule,
@@ -36,6 +41,7 @@ import { WalletModule } from './wallet/wallet.module.js';
     JobsModule,
     MarketsModule,
     TradesModule,
+    LeaderboardModule,
     DisputesModule,
   ],
   controllers: [HealthController],

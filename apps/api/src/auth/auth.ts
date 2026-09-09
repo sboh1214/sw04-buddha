@@ -3,9 +3,16 @@ import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { APIError, createAuthMiddleware } from 'better-auth/api';
 import { type Db, schema } from '@buddha/db';
-import { NO_EMAIL_DOMAIN, isNoEmailAddress } from '@buddha/shared';
+import {
+  DEFAULT_RATE_LIMITS,
+  NO_EMAIL_DOMAIN,
+  isNoEmailAddress,
+  type RateLimits,
+} from '@buddha/shared';
 import { type Env, enabledOAuthProviders, webOrigins } from '../config/env.js';
 import { type Mailer } from '../mail/mailer.js';
+import { authRateLimitFor, type AuthRateLimiter } from '../rate-limit/auth-rate-limit.js';
+import { emailTracker } from '../rate-limit/email-tracker.js';
 import {
   changeEmailConfirmationEmail,
   passwordResetEmail,
@@ -32,9 +39,11 @@ const DEFAULT_VERIFY_CALLBACK = SET_PASSWORD_PATH;
  * runs on server-side `auth.api.*` calls, which is all `/sign-up/email` is left to guard
  * now that `disabledPaths` 404s it over HTTP.
  */
+const SIGN_IN_PATH = '/sign-in/email';
+
 const EMAIL_INPUT_PATHS = new Set([
   '/sign-up/email',
-  '/sign-in/email',
+  SIGN_IN_PATH,
   '/change-email',
   '/send-verification-email',
   '/request-password-reset',
@@ -73,6 +82,14 @@ export interface CreateAuthOptions {
   env: Env;
   db: Db;
   mailer: Mailer;
+  /**
+   * PLAN 7.5 for the routes better-auth owns. Optional so a unit test can build an instance
+   * without Redis; when it is absent those routes are simply unlimited, which is what every
+   * build before M6 did.
+   */
+  rateLimiter?: AuthRateLimiter;
+  /** The limits `rateLimiter` counts against; ignored when there is no limiter. */
+  rateLimits?: RateLimits;
   logger?: Pick<Logger, 'warn' | 'error'>;
 }
 
@@ -85,7 +102,14 @@ interface SignUpBody {
  * Builds the better-auth instance (PLAN 10). Pure factory: no env loading, no Nest, so
  * tests and scripts can build one with another db/mailer.
  */
-export function createAuth({ env, db, mailer, logger = new Logger('Auth') }: CreateAuthOptions) {
+export function createAuth({
+  env,
+  db,
+  mailer,
+  rateLimiter,
+  rateLimits = DEFAULT_RATE_LIMITS,
+  logger = new Logger('Auth'),
+}: CreateAuthOptions) {
   const secret = env.BETTER_AUTH_SECRET;
   if (!secret) throw new Error('BETTER_AUTH_SECRET is required to create the auth instance');
   const providers = enabledOAuthProviders(env);
@@ -282,18 +306,69 @@ export function createAuth({ env, db, mailer, logger = new Logger('Auth') }: Cre
      * could claim `kakao_<id>@noemail.buddha.local` before that Kakao user ever signs in.
      */
     hooks: {
-      before: createAuthMiddleware((ctx) => {
-        if (!EMAIL_INPUT_PATHS.has(ctx.path)) return Promise.resolve();
+      before: createAuthMiddleware(async (ctx) => {
+        if (!EMAIL_INPUT_PATHS.has(ctx.path)) return;
+        // A hook runs for server-side `auth.api.*` calls too, and those must not spend a
+        // user-facing budget: `POST /api/v1/auth/register` already carries its own
+        // `@RateLimit('email')` and then calls `auth.api.signUpEmail`, which would count the one
+        // registration a second time — and `onExistingUserSignUp` calls
+        // `auth.api.sendVerificationEmail` for a third. A call with no `request` did not come
+        // from the network; whatever did is already limited at its own door.
+        const overHttp = ctx.request !== undefined;
         const body = ctx.body as { email?: unknown; newEmail?: unknown } | undefined;
+        const addresses: string[] = [];
         for (const value of [body?.email, body?.newEmail]) {
-          if (typeof value === 'string' && isNoEmailAddress(value)) {
+          if (typeof value !== 'string') continue;
+          if (isNoEmailAddress(value)) {
             throw new APIError('BAD_REQUEST', {
               message: 'This email address cannot be used',
               code: 'INVALID_EMAIL',
             });
           }
+          const tracker = emailTracker(value);
+          if (tracker !== undefined) addresses.push(tracker);
         }
-        return Promise.resolve();
+        // PLAN 7.5 for the routes Nest never sees (rate-limit/auth-rate-limit.ts explains why
+        // this is the hook and not a guard). Checked AFTER the address has been accepted as a
+        // real one and BEFORE better-auth verifies a password or sends anything.
+        //
+        // `/sign-in/email` only READS its bucket here: on that path the thing worth counting is
+        // a FAILURE, which the after-hook below records once the answer is known. Every other
+        // path counts the attempt, because on those the attempt IS the harm — each one puts
+        // mail in somebody's inbox.
+        for (const address of addresses) {
+          if (!overHttp) break;
+          const retryAfterSeconds = await rateLimiter?.consume(
+            ctx.path,
+            address,
+            authRateLimitFor(ctx.path, rateLimits),
+          );
+          if (retryAfterSeconds != null) {
+            throw new APIError('TOO_MANY_REQUESTS', {
+              message: 'Too many requests',
+              code: 'RATE_LIMITED',
+              retryAfterSeconds,
+            });
+          }
+        }
+      }),
+      /**
+       * The other half of the sign-in limit: a sign-in that SUCCEEDED clears the bucket.
+       *
+       * `ctx.context.returned` is what the endpoint answered — and better-auth catches a thrown
+       * `APIError` and puts it there before running these hooks (`api/dispatch.mjs`), so a wrong
+       * password arrives as an `APIError` instance rather than as a rejection, and anything else
+       * means the password was right.
+       *
+       * Clearing here rather than not counting in the first place is what keeps the count
+       * atomic — see `AuthRateLimiter.reset`.
+       */
+      after: createAuthMiddleware(async (ctx) => {
+        if (ctx.path !== SIGN_IN_PATH || ctx.request === undefined) return;
+        if (ctx.context.returned instanceof APIError) return;
+        const address = emailTracker((ctx.body as { email?: unknown } | undefined)?.email);
+        if (address === undefined) return;
+        await rateLimiter?.reset(ctx.path, address);
       }),
     },
 
@@ -301,8 +376,10 @@ export function createAuth({ env, db, mailer, logger = new Logger('Auth') }: Cre
     // (packages/db/drizzle/0002_user_profile_trigger.sql), not by databaseHooks:
     // better-auth runs `user.create.after` after the insert has committed, never inside it.
 
-    // better-auth's built-in limiter keeps state in process memory (PLAN 16 forbids that).
-    // TODO(M6): @nestjs/throttler with Redis storage covers /api/auth/* as well (PLAN 7.5).
+    // The built-in limiter stays off: it keeps state in process memory (PLAN 16 forbids that)
+    // and counts by IP, which behind the Next rewrite is one socket for every visitor
+    // (rate-limit.tracker.ts). M6's answer is the `hooks.before` above — same Redis, same `rl:`
+    // namespace as the HTTP guard, keyed on the ADDRESS the request names.
     rateLimit: { enabled: false },
 
     advanced: {

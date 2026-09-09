@@ -1,14 +1,19 @@
 import { Module, type Provider } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { type Db } from '@buddha/db';
+import { type RateLimits } from '@buddha/shared';
 import { AuthModule as BetterAuthModule } from '@thallesp/nestjs-better-auth';
+import { type Redis } from 'ioredis';
 import { type Env } from '../config/env.js';
 import { DbModule } from '../infra/db/db.module.js';
 import { DB } from '../infra/db/db.provider.js';
 import { RedisModule } from '../infra/redis/redis.module.js';
+import { REDIS } from '../infra/redis/redis.provider.js';
 import { MailModule } from '../mail/mail.module.js';
 import { MAILER } from '../mail/mail.provider.js';
 import { type Mailer } from '../mail/mailer.js';
+import { authRateLimiter } from '../rate-limit/auth-rate-limit.js';
+import { RATE_LIMITS, RateLimitsModule } from '../rate-limit/rate-limit.limits.js';
 import { AdminGuard } from './admin.guard.js';
 import { AUTH, type Auth, createAuth } from './auth.js';
 import { PasswordService } from './password.service.js';
@@ -22,6 +27,7 @@ const AUTH_ENV_KEYS = [
   'API_HOST',
   'API_PORT',
   'TRUST_PROXY',
+  'LOG_LEVEL',
   'DATABASE_URL',
   'REDIS_URL',
   'BETTER_AUTH_SECRET',
@@ -68,14 +74,28 @@ function envFromConfig(config: ConfigService<Env, true>): Env {
 
 const authProvider: Provider<Auth> = {
   provide: AUTH,
-  inject: [ConfigService, DB, MAILER],
-  useFactory: (config: ConfigService<Env, true>, db: Db, mailer: Mailer): Auth =>
-    createAuth({ env: envFromConfig(config), db, mailer }),
+  inject: [ConfigService, DB, MAILER, REDIS, RATE_LIMITS],
+  useFactory: (
+    config: ConfigService<Env, true>,
+    db: Db,
+    mailer: Mailer,
+    redis: Redis,
+    limits: RateLimits,
+  ): Auth =>
+    createAuth({
+      env: envFromConfig(config),
+      db,
+      mailer,
+      // PLAN 7.5 for /api/auth/*: better-auth's own `hooks.before` is the only place a limit
+      // can reach those routes, because middie serves them before Nest routing exists.
+      rateLimiter: authRateLimiter(redis),
+      rateLimits: limits,
+    }),
 };
 
 /** Owns the single better-auth instance so the HTTP mount and the guards share it. */
 @Module({
-  imports: [DbModule, MailModule],
+  imports: [DbModule, MailModule, RedisModule, RateLimitsModule],
   providers: [authProvider],
   exports: [AUTH],
 })

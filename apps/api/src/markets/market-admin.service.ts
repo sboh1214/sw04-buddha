@@ -23,8 +23,9 @@ import {
   type UserRealtimeEvent,
   type VoidMarketBody,
 } from '@buddha/shared';
-import { and, asc, desc, eq, lt, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, sql } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
+import { keysetPredicate } from '../common/keyset.js';
 import { PG_UNIQUE_VIOLATION, isPgError } from '../common/errors/pg-error.js';
 import { type Env } from '../config/env.js';
 import { clockTimestamp } from '../infra/db/clock.js';
@@ -841,12 +842,7 @@ export class MarketAdminService {
       .where(
         and(
           status ? eq(markets.status, status) : undefined,
-          keyset
-            ? or(
-                lt(markets.createdAt, keyset.createdAt),
-                and(eq(markets.createdAt, keyset.createdAt), lt(markets.id, keyset.id)),
-              )
-            : undefined,
+          keyset ? keysetPredicate(markets.createdAt, markets.id, keyset, 'uuid') : undefined,
         ),
       )
       .orderBy(desc(markets.createdAt), desc(markets.id))
