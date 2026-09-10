@@ -52,6 +52,18 @@ export const payments = pgTable(
     // coupon_redemptions; without this the page is a seq scan plus a sort over every user's
     // payments, and each cursor page costs the same again.
     index('payments_user_id_created_at_idx').on(t.userId, desc(t.createdAt)),
+    /**
+     * `GET /admin/payments`: the global list, ordered `(created_at DESC, id DESC)`.
+     *
+     * One of the "전역 키셋 목록 넷" the M2 and M3 reviews refused to index on its own and
+     * handed to M6 (A-M3-10). It arrives together with the row-comparison cursor predicate
+     * (`keysetPredicate`, apps/api) because the two are one change: an ordered index under the
+     * old OR-form predicate pulls the planner off the bounded `Seq Scan + top-N Sort` and onto
+     * an index walk whose Filter then discards every row in front of the cursor. Measured at
+     * 2M rows: first page 3169 ms -> 0.34 ms, deep page 1069 ms -> 0.37 ms (64,757 -> 111
+     * buffers); with the index but the OLD predicate the deep page was 679 ms.
+     */
+    index('payments_created_at_id_idx').on(desc(t.createdAt), desc(t.id)),
     // Per account, so one user's key can never collide with or probe another's.
     uniqueIndex('payments_user_id_idempotency_key_unique').on(t.userId, t.idempotencyKey),
     check('payments_amount_p_check', sql`${t.amountP} > 0`),

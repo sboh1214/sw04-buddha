@@ -1,4 +1,4 @@
-import { sql } from 'drizzle-orm';
+import { desc, sql } from 'drizzle-orm';
 import {
   bigint,
   check,
@@ -90,6 +90,32 @@ export const markets = pgTable(
   (t) => [
     index('markets_status_close_at_idx').on(t.status, t.closeAt),
     index('markets_category_id_status_idx').on(t.categoryId, t.status),
+    /**
+     * The home page's DEFAULT sort: `GET /markets?status=open&sort=volume`, ordered
+     * `(volume_p DESC, id DESC)` under a status filter (A-M3-10).
+     *
+     * `markets_status_close_at_idx` is not a substitute and the planner says so: it can serve
+     * the `status` predicate but never removes the Sort, because `(status, close_at)` cannot
+     * supply `volume_p` ordering — and at 2M rows it stops choosing it at all (40% of the table
+     * is `open`, too many for a bitmap scan). Measured at 2M: 758 ms -> 0.23 ms first page,
+     * 355 ms -> 0.13 ms deep. With the index but the OLD OR-form cursor predicate the deep page
+     * was 2053 ms — worse than no index — which is why this and `keysetPredicate` are one change.
+     */
+    index('markets_status_volume_p_id_idx').on(t.status, desc(t.volumeP), desc(t.id)),
+    /**
+     * `GET /admin/markets`, whose `status` filter is OPTIONAL, ordered `(created_at DESC,
+     * id DESC)`.
+     *
+     * Its own index rather than a `(status, created_at DESC, id DESC)` one, and the plan is the
+     * reason: a leading column that is not constrained cannot yield an index-ordered scan, so
+     * with only the status-leading index the unfiltered admin list falls back to
+     * `Seq Scan + top-N Sort` — measured at 1626 ms on 2M rows against 0.10 ms here. It also
+     * serves `GET /markets?sort=newest` at the same 0.11 ms as a dedicated status-leading index
+     * would, so that fourth markets index was measured and NOT added; the measurement was taken
+     * at 40% `open`, and a deployment whose open share is tiny should re-measure before relying
+     * on that.
+     */
+    index('markets_created_at_id_idx').on(desc(t.createdAt), desc(t.id)),
     check('markets_liquidity_b_check', sql`${t.liquidityB} > 0`),
     check(
       'markets_initial_prob_bp_check',

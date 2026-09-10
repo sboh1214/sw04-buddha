@@ -136,12 +136,13 @@ jobs:
       - name: Lint / typecheck / test / build
         run: pnpm turbo run lint typecheck test build
 
-      # PLAN 14 API contract check: the committed OpenAPI document and the generated client
-      # types must match the code.
+      # PLAN 14 API contract check: the committed OpenAPI document, the generated client types
+      # and docs/API.md (generated from that document by scripts/generate-api-doc.mjs) must all
+      # match the code.
       - name: OpenAPI contract check
         run: |
           pnpm api:openapi
-          git diff --exit-code -- apps/api/openapi.json packages/api-client/src/generated
+          git diff --exit-code -- apps/api/openapi.json packages/api-client/src/generated docs/API.md
 
       # ---- e2e (PLAN 14 AC 7, A-M1-10): everything below runs against the build above ----
 

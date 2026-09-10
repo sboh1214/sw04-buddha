@@ -31,6 +31,8 @@ export type MarketStats = components['schemas']['MarketStats'];
 export type AdminMarket = components['schemas']['AdminMarket'];
 export type MarketEvent = components['schemas']['MarketEvent'];
 export type Category = components['schemas']['Category'];
+/** One row of the global ranking (`GET /leaderboard`, public; PLAN M6 선택). */
+export type LeaderboardEntry = components['schemas']['LeaderboardEntry'];
 export type Fill = components['schemas']['Fill'];
 export type PriceTick = components['schemas']['PriceTick'];
 /** The tick route's envelope: the window and bucket the server chose, plus `points`. */

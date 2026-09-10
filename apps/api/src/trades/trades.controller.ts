@@ -24,6 +24,7 @@ import { IdempotencyKey } from '../common/decorators/idempotency-key.decorator.j
 import { ApiPage } from '../common/interceptors/response-envelope.interceptor.js';
 import { ApiData, ApiErrors, ApiPageOf } from '../common/openapi/api-response.decorators.js';
 import { CURSOR_QUERY_PARAMS } from '../common/openapi/cursor-query.js';
+import { RateLimit } from '../rate-limit/rate-limit.decorator.js';
 import { SESSION_SECURITY_SCHEME } from '../openapi/document.js';
 import { TradeService } from './trade.service.js';
 
@@ -37,6 +38,10 @@ export class TradesController {
 
   @Post()
   @HttpCode(200)
+  // PLAN 7.5. Per account, not per address: every browser reaches this API through the Next
+  // rewrite, so an address here names the web server (rate-limit.tracker.ts). A refusal is safe
+  // to retry — the `Idempotency-Key` this route already requires makes the retry the same trade.
+  @RateLimit('trade')
   @ApiOperation({
     operationId: 'trade',
     summary:
@@ -74,6 +79,7 @@ export class TradesController {
     'INSUFFICIENT_POSITION',
     'PRICE_MOVED',
     'DUPLICATE_REQUEST',
+    'RATE_LIMITED',
   )
   trade(
     @CurrentUser() user: SessionUser,

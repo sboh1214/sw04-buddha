@@ -11,8 +11,9 @@ import {
   type LedgerEntry,
   type UpdateCouponBody,
 } from '@buddha/shared';
-import { and, desc, eq, lt, or, sql } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
+import { keysetPredicate } from '../common/keyset.js';
 import { isPgError, PG_UNIQUE_VIOLATION } from '../common/errors/pg-error.js';
 import { clockTimestamp } from '../infra/db/clock.js';
 import { DB } from '../infra/db/db.provider.js';
@@ -284,10 +285,7 @@ export class CouponService {
       .from(schema.coupons)
       .where(
         keyset
-          ? or(
-              lt(schema.coupons.createdAt, keyset.createdAt),
-              and(eq(schema.coupons.createdAt, keyset.createdAt), lt(schema.coupons.id, keyset.id)),
-            )
+          ? keysetPredicate(schema.coupons.createdAt, schema.coupons.id, keyset, 'uuid')
           : undefined,
       )
       .orderBy(desc(schema.coupons.createdAt), desc(schema.coupons.id))

@@ -22,6 +22,15 @@ async function freePort(): Promise<number> {
   });
 }
 
+/** The whole body; `uptimeSeconds` is the one field no assertion can pin to a literal. */
+function body(status: 'ok' | 'starting') {
+  return {
+    status,
+    uptimeSeconds: expect.any(Number) as number,
+    queues: ['markets', 'audit'],
+  };
+}
+
 describe('health server', () => {
   let server: HealthServer | null = null;
 
@@ -33,20 +42,28 @@ describe('health server', () => {
   it('answers 503 "starting" until the worker is ready, then 200 "ok"', async () => {
     const port = await freePort();
     let ready = false;
-    server = await startHealthServer({ port, host: '127.0.0.1', isReady: () => ready, logger });
+    server = await startHealthServer({
+      port,
+      host: '127.0.0.1',
+      isReady: () => ready,
+      queues: ['markets', 'audit'],
+      logger,
+    });
     expect(server).not.toBeNull();
     const url = `http://127.0.0.1:${String(port)}/health`;
 
     const starting = await fetch(url);
     expect(starting.status).toBe(503);
     expect(starting.headers.get('content-type')).toBe('application/json');
-    expect(await starting.json()).toEqual({ status: 'starting' });
+    // The detail travels on BOTH answers, so a poller waiting on 503 can already see which
+    // process it is talking to and how long it has been trying (PLAN M6 "헬스체크 상세").
+    expect(await starting.json()).toEqual(body('starting'));
 
     // Read per request, not captured at start: the flag flips after the queues are ready.
     ready = true;
     const ok = await fetch(url);
     expect(ok.status).toBe(200);
-    expect(await ok.json()).toEqual({ status: 'ok' });
+    expect(await ok.json()).toEqual(body('ok'));
   });
 
   it('answers 404 for anything but GET /health', async () => {

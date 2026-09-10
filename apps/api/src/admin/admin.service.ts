@@ -10,8 +10,9 @@ import {
   type AuditFailure,
   type Role,
 } from '@buddha/shared';
-import { and, desc, eq, ilike, lt, or, sql } from 'drizzle-orm';
+import { and, desc, eq, ilike, or, sql } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
+import { keysetPredicate } from '../common/keyset.js';
 import { clockTimestamp } from '../infra/db/clock.js';
 import { DB } from '../infra/db/db.provider.js';
 import { toLedgerEntry, toBalance, type Page } from '../wallet/wallet.service.js';
@@ -70,15 +71,16 @@ export class AdminService {
           pattern
             ? or(ilike(schema.user.email, pattern), ilike(schema.profiles.nickname, pattern))
             : undefined,
+          // `profiles.user_id`, not `user.id`: the two hold the same value (the FK guarantees
+          // it, so the cursor a client already has keeps working), but a row comparison can only
+          // become an index condition when both halves come from ONE table. Measured at 384 ms
+          // with `user.id` during the M2 review, against one descent this way.
           keyset
-            ? or(
-                lt(schema.profiles.createdAt, keyset.createdAt),
-                and(eq(schema.profiles.createdAt, keyset.createdAt), lt(schema.user.id, keyset.id)),
-              )
+            ? keysetPredicate(schema.profiles.createdAt, schema.profiles.userId, keyset, 'text')
             : undefined,
         ),
       )
-      .orderBy(desc(schema.profiles.createdAt), desc(schema.user.id))
+      .orderBy(desc(schema.profiles.createdAt), desc(schema.profiles.userId))
       .limit(limit + 1);
 
     const hasMore = rows.length > limit;
@@ -205,13 +207,7 @@ export class AdminService {
       .innerJoin(schema.profiles, eq(schema.profiles.userId, schema.payments.userId))
       .where(
         keyset
-          ? or(
-              lt(schema.payments.createdAt, keyset.createdAt),
-              and(
-                eq(schema.payments.createdAt, keyset.createdAt),
-                lt(schema.payments.id, keyset.id),
-              ),
-            )
+          ? keysetPredicate(schema.payments.createdAt, schema.payments.id, keyset, 'uuid')
           : undefined,
       )
       .orderBy(desc(schema.payments.createdAt), desc(schema.payments.id))
@@ -244,12 +240,11 @@ export class AdminService {
       .from(schema.auditFailures)
       .where(
         keyset
-          ? or(
-              lt(schema.auditFailures.createdAt, keyset.createdAt),
-              and(
-                eq(schema.auditFailures.createdAt, keyset.createdAt),
-                lt(schema.auditFailures.id, Number(keyset.id)),
-              ),
+          ? keysetPredicate(
+              schema.auditFailures.createdAt,
+              schema.auditFailures.id,
+              keyset,
+              'bigint',
             )
           : undefined,
       )

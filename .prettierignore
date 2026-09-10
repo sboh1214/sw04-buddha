@@ -14,3 +14,6 @@ docs/PLAN.md
 packages/db/drizzle/
 packages/api-client/src/generated/
 apps/api/openapi.json
+# written by scripts/generate-api-doc.mjs; prettier re-pads its tables, which would fight the
+# `git diff --exit-code` of the OpenAPI contract check on every run
+docs/API.md

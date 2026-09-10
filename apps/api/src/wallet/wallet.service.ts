@@ -12,9 +12,10 @@ import {
   type Payment,
 } from '@buddha/shared';
 import { ChargePackageService } from './charge-package.service.js';
-import { and, desc, eq, lt, or, sql } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { assertExpectedAccount } from '../auth/expected-account.js';
 import { AppError } from '../common/errors/app-error.js';
+import { keysetPredicate } from '../common/keyset.js';
 import { PG_UNIQUE_VIOLATION, isPgError } from '../common/errors/pg-error.js';
 import { clockTimestamp } from '../infra/db/clock.js';
 import { DB } from '../infra/db/db.provider.js';
@@ -357,12 +358,11 @@ export class WalletService {
         and(
           eq(schema.ledgerEntries.userId, userId),
           keyset
-            ? or(
-                lt(schema.ledgerEntries.createdAt, keyset.createdAt),
-                and(
-                  eq(schema.ledgerEntries.createdAt, keyset.createdAt),
-                  lt(schema.ledgerEntries.id, Number(keyset.id)),
-                ),
+            ? keysetPredicate(
+                schema.ledgerEntries.createdAt,
+                schema.ledgerEntries.id,
+                keyset,
+                'bigint',
               )
             : undefined,
         ),
@@ -390,13 +390,7 @@ export class WalletService {
         and(
           eq(schema.payments.userId, userId),
           keyset
-            ? or(
-                lt(schema.payments.createdAt, keyset.createdAt),
-                and(
-                  eq(schema.payments.createdAt, keyset.createdAt),
-                  lt(schema.payments.id, keyset.id),
-                ),
-              )
+            ? keysetPredicate(schema.payments.createdAt, schema.payments.id, keyset, 'uuid')
             : undefined,
         ),
       )

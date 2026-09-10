@@ -29,6 +29,7 @@ import { ApiData, ApiErrors, ApiPageOf } from '../common/openapi/api-response.de
 import { CURSOR_QUERY_PARAMS } from '../common/openapi/cursor-query.js';
 import { ApiPage } from '../common/interceptors/response-envelope.interceptor.js';
 import { SESSION_SECURITY_SCHEME } from '../openapi/document.js';
+import { RateLimit } from '../rate-limit/rate-limit.decorator.js';
 import { ChargePackageService } from './charge-package.service.js';
 import { CouponService, type RedeemResult } from './coupon.service.js';
 import { WalletService } from './wallet.service.js';
@@ -63,6 +64,9 @@ export class PaymentsController {
 
   @Post('charge')
   @HttpCode(200)
+  // PLAN 7.5. Per account: the mock provider costs nothing, but the real one will, and
+  // A-M2-6 makes this limit a precondition of ever wiring a PG.
+  @RateLimit('charge')
   @ApiOperation({
     operationId: 'charge',
     summary:
@@ -93,6 +97,7 @@ export class PaymentsController {
     'VALIDATION_ERROR',
     'PRICE_MOVED',
     'DUPLICATE_REQUEST',
+    'RATE_LIMITED',
   )
   charge(
     @CurrentUser() user: SessionUser,
@@ -113,6 +118,9 @@ export class CouponsController {
 
   @Post('redeem')
   @HttpCode(200)
+  // Not in PLAN 7.5, but a coupon code is a secret short enough to guess and this is the only
+  // route that tests one. Per account, like the two PLAN names.
+  @RateLimit('coupon')
   @ApiOperation({ operationId: 'redeemCoupon', summary: 'Redeem a coupon code for P' })
   @ApiData(
     couponSchema
@@ -122,7 +130,14 @@ export class CouponsController {
   )
   // FORBIDDEN: a foreign Origin (SessionGuard's CSRF check), or a body whose `expectedAccountId`
   // is not the cookie's account (details name the field).
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR', 'DUPLICATE_REQUEST')
+  @ApiErrors(
+    'UNAUTHENTICATED',
+    'FORBIDDEN',
+    'NOT_FOUND',
+    'VALIDATION_ERROR',
+    'DUPLICATE_REQUEST',
+    'RATE_LIMITED',
+  )
   async redeem(
     @CurrentUser() user: SessionUser,
     @Body({ schema: redeemCouponBodySchema }) body: RedeemCouponBody,

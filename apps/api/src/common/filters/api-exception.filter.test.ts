@@ -6,7 +6,7 @@ import { CommonModule } from '../common.module.js';
 import { RawResponse } from '../decorators/raw-response.decorator.js';
 import { AppError } from '../errors/app-error.js';
 
-/** Every failure mode the global filter maps (PLAN 9.3 envelope), through real Fastify. */
+/** Every failure mode the global filter maps (the PLAN 7 envelope), through real Fastify. */
 @Controller('boom')
 class BoomController {
   @Get('app-error')
@@ -32,6 +32,14 @@ class BoomController {
   @Get('crash')
   crash(): never {
     throw new Error('secret internal detail');
+  }
+
+  @Get('internal-app-error')
+  internalAppError(): never {
+    throw new AppError('INTERNAL', {
+      message: 'Ledger insert failed for balance 42',
+      details: { table: 'ledger_entries' },
+    });
   }
 
   @Get('raw')
@@ -86,7 +94,23 @@ describe('ApiExceptionFilter (HTTP)', () => {
 
     const upstream = await app.inject({ method: 'GET', url: '/boom/upstream' });
     expect(upstream.statusCode).toBe(502);
-    expect(upstream.json()).toMatchObject({ error: { code: 'INTERNAL' } });
+    // 502, and still no message of its own: ADR-0020's rule is about the status class, not
+    // about which class threw. `bad gateway` names an upstream this API has.
+    expect(upstream.json()).toEqual({
+      error: { code: 'INTERNAL', message: 'Internal server error' },
+    });
+    expect(upstream.body).not.toContain('bad gateway');
+  });
+
+  it('AppError(INTERNAL) does not leak its developer message either', async () => {
+    // The codebase throws this shape in three dozen places, with sentences written for someone
+    // reading a stack trace: which table was written, which row was missing. The envelope must
+    // not hand that to whoever asked.
+    const res = await app.inject({ method: 'GET', url: '/boom/internal-app-error' });
+    expect(res.statusCode).toBe(500);
+    expect(res.json()).toEqual({ error: { code: 'INTERNAL', message: 'Internal server error' } });
+    expect(res.body).not.toContain('Ledger insert failed');
+    expect(res.body).not.toContain('ledger_entries');
   });
 
   it('unexpected Error -> 500 INTERNAL without leaking the message', async () => {

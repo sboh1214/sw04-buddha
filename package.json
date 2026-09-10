@@ -17,7 +17,7 @@
     "db:generate": "turbo run db:generate --filter=@buddha/db",
     "db:migrate": "turbo run db:migrate --filter=@buddha/db",
     "db:seed": "turbo run db:seed --filter=@buddha/db",
-    "api:openapi": "turbo run openapi:export --filter=api && turbo run generate --filter=@buddha/api-client",
+    "api:openapi": "turbo run openapi:export --filter=api && turbo run generate --filter=@buddha/api-client && node scripts/generate-api-doc.mjs",
     "infra:up": "docker compose up -d --wait",
     "infra:down": "docker compose down",
     "infra:logs": "docker compose logs -f",

@@ -27,8 +27,9 @@ import {
   type TickBucketSeconds,
   type TicksQuery,
 } from '@buddha/shared';
-import { and, asc, desc, eq, gt, gte, ilike, inArray, lt, lte, ne, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, ilike, inArray, lte, ne, or, sql } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
+import { keysetPredicate, sortKeysetPredicate } from '../common/keyset.js';
 import { DB } from '../infra/db/db.provider.js';
 import { type Page } from '../wallet/wallet.service.js';
 
@@ -193,25 +194,18 @@ export class MarketService {
     switch (query.sort) {
       case 'newest': {
         const keyset = decodeKeyset(cursor, 'uuid');
-        where = keyset
-          ? or(
-              lt(markets.createdAt, keyset.createdAt),
-              and(eq(markets.createdAt, keyset.createdAt), lt(markets.id, keyset.id)),
-            )
-          : undefined;
+        where = keyset ? keysetPredicate(markets.createdAt, markets.id, keyset, 'uuid') : undefined;
         order = [desc(markets.createdAt), desc(markets.id)];
         nextCursorOf = (row) => encodeKeyset({ createdAt: row.createdAt, id: row.id });
         break;
       }
       case 'closing': {
         // Soonest first: the same encoding as `newest`, with `close_at` as the timestamp half
-        // and the comparison flipped.
+        // and the comparison flipped — `after` rather than `before`, because this is the one
+        // ascending page in the API.
         const keyset = decodeKeyset(cursor, 'uuid');
         where = keyset
-          ? or(
-              gt(markets.closeAt, keyset.createdAt),
-              and(eq(markets.closeAt, keyset.createdAt), gt(markets.id, keyset.id)),
-            )
+          ? keysetPredicate(markets.closeAt, markets.id, keyset, 'uuid', 'after')
           : undefined;
         order = [asc(markets.closeAt), asc(markets.id)];
         nextCursorOf = (row) => encodeKeyset({ createdAt: row.closeAt, id: row.id });
@@ -219,14 +213,9 @@ export class MarketService {
       }
       case 'volume': {
         const keyset = decodeSortCursor(cursor, 'int', 'uuid');
-        const volume = keyset ? BigInt(keyset.value) : undefined;
-        where =
-          keyset && volume !== undefined
-            ? or(
-                lt(markets.volumeP, volume),
-                and(eq(markets.volumeP, volume), lt(markets.id, keyset.id)),
-              )
-            : undefined;
+        where = keyset
+          ? sortKeysetPredicate(markets.volumeP, markets.id, keyset, 'bigint', 'uuid')
+          : undefined;
         order = [desc(markets.volumeP), desc(markets.id)];
         nextCursorOf = (row) => encodeSortCursor(serializePAmount(row.volumeP), row.id);
         break;

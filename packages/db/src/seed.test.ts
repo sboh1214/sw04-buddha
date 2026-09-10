@@ -131,6 +131,9 @@ function startSeed(): Promise<{ stdout: string; stderr: string }> {
   return promisify(execFile)(process.execPath, seedArgs(), seedSpawnOptions());
 }
 
+/** The seed's own output; Windows and the CI runner disagree about the line ending. */
+const NEWLINE = /\r?\n/;
+
 describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () => {
   let t: TestDb;
   beforeAll(async () => {
@@ -359,11 +362,15 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
 
       const { stdout, stderr } = runSeedIo();
       expect(stdout).toContain('markets: 0 inserted, 12 already existed');
-      expect(stderr).toContain(slug);
-      expect(stderr).toContain('마감');
-      // Only that one: the other eleven cutoffs are still ahead.
-      const warned = stderr.split(/\r?\n/).filter((line) => line.includes('is already past'));
-      expect(warned).toHaveLength(1);
+      // Judged on THIS slug's own line, not on how many lines carry the wording: the other
+      // eleven cutoffs are absolute 2026 dates that pass on their own as the calendar advances
+      // (the earliest, bok-october-rate-cut-2026, on 2026-10-21), and from then on the second
+      // run legitimately reports them too. A market gets at most one line (seed.ts's
+      // if / else if), so exactly one line names it.
+      const mine = stderr.split(NEWLINE).filter((line) => line.includes(slug));
+      expect(mine).toHaveLength(1);
+      expect(mine[0]).toContain('is already past');
+      expect(mine[0]).toContain('마감');
       // And it is still open, untouched — the seed reports, it does not rewrite.
       const [row] = await t.db
         .select({ status: markets.status })
@@ -383,6 +390,30 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
         .where(eq(markets.slug, slug));
 
       expect(runSeedIo().stderr).not.toContain(slug);
+    });
+
+    it('asks for fresh copy BEFORE a cutoff passes, not only after (M6)', async () => {
+      // The warning above only fires once the fixture is already broken; a developer who clones
+      // the repo that week gets a home page of closed markets and no warning that it was
+      // foreseeable. This is the same signal at a distance that can still be acted on.
+      const slug = 'cpi-september-2026-above-2pct';
+      runSeed();
+      await t.db
+        .update(markets)
+        .set({ closeAt: sql`clock_timestamp() + interval '3 days'` })
+        .where(eq(markets.slug, slug));
+
+      const { stderr } = runSeedIo();
+      // This slug's line only, for BOTH wordings: the other eleven cutoffs are absolute dates in
+      // 2026, so as the calendar advances they enter the same window and then pass, each on its
+      // own — a count of either wording across the whole stream would be a test that fails on
+      // a date rather than on a change. What this pins is that the market THIS case moved is
+      // reported, and reported as approaching rather than as past (a market that is still open
+      // must not be announced as one the worker is about to close), which stays true for good.
+      const mine = stderr.split(NEWLINE).filter((line) => line.includes(slug));
+      expect(mine).toHaveLength(1);
+      expect(mine[0]).toContain('within 14 days');
+      expect(mine[0]).not.toContain('is already past');
     });
 
     it('is idempotent: a second run adds no market, tick or event', async () => {

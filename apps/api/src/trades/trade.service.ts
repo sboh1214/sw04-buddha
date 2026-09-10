@@ -25,9 +25,10 @@ import {
   type TradeTerms,
   type UserRealtimeEvent,
 } from '@buddha/shared';
-import { and, asc, count, desc, eq, gte, lt, or, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gte, sql } from 'drizzle-orm';
 import { assertExpectedAccount } from '../auth/expected-account.js';
 import { AppError } from '../common/errors/app-error.js';
+import { keysetPredicate } from '../common/keyset.js';
 import { PG_UNIQUE_VIOLATION, isPgError } from '../common/errors/pg-error.js';
 import { clockTimestamp } from '../infra/db/clock.js';
 import { DB } from '../infra/db/db.provider.js';
@@ -675,10 +676,7 @@ export class TradeService {
         and(
           eq(schema.orders.userId, userId),
           keyset
-            ? or(
-                lt(schema.orders.createdAt, keyset.createdAt),
-                and(eq(schema.orders.createdAt, keyset.createdAt), lt(schema.orders.id, keyset.id)),
-              )
+            ? keysetPredicate(schema.orders.createdAt, schema.orders.id, keyset, 'uuid')
             : undefined,
         ),
       )

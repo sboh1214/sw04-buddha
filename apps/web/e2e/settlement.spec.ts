@@ -163,6 +163,56 @@ test.describe('정산', () => {
     expect(amount.startsWith(MINUS_SIGN), amount).toBe(false);
     expect(amount, amount).not.toBe('0');
 
+    // --- 리더보드(M6 선택): the same realized figure, now in the public ranking. Reached the way
+    // a reader reaches it — the link this screen carries.
+    //
+    // The assertion is "on the board, OR beaten by twenty", not "on the board": the ranking is
+    // GLOBAL and the development database this suite runs against accumulates every account
+    // every previous run created, all of which realized the same 3,958P from the same fixture.
+    // A run that demanded its own nickname in the top 20 would pass on a fresh database and fail
+    // on a used one — which is exactly what it did the first time. What is always true is that a
+    // board of twenty is either short enough to include this account or entirely made of
+    // accounts that did at least as well.
+    const me = (await (await page.request.get('/api/v1/me')).json()) as {
+      data: { profile: { nickname: string } };
+    };
+    await page.getByRole('link', { name: copy.leaderboardLink }).click();
+    await expect(page).toHaveURL(/leaderboard$/);
+    const board = page.getByTestId('leaderboard-table');
+    await expect(board).toBeVisible();
+    const rows = board.locator('tbody tr');
+    const rowCount = await rows.count();
+    expect(rowCount, 'the board has rows').toBeGreaterThan(0);
+    expect(rowCount, 'at most LEADERBOARD_LIMIT rows').toBeLessThanOrEqual(20);
+    // Descending, densely ranked: what the service promises, read out of the rendered table.
+    const amounts: number[] = [];
+    for (let i = 0; i < rowCount; i += 1) {
+      const cells = rows.nth(i).locator('td');
+      await expect(cells.nth(0)).toHaveText(String(i + 1));
+      // The MINUS_SIGN goes to an ASCII one BEFORE the strip: `[^\d-]` keeps a hyphen, and
+      // U+2212 is not one, so a loss came through as its own absolute value. Losses are on
+      // this board by contract — the service leaves out only a zero (`having(ne(total, 0))`,
+      // "Losses stay in") — so a parse that drops the sign checks the order of ABSOLUTE
+      // values, which is neither necessary nor sufficient for the one the service promises:
+      // it fails a correctly ordered board with two different losses on it, and passes one
+      // ordered −900P before −100P.
+      const cell = ((await cells.nth(2).textContent()) ?? '').replaceAll(MINUS_SIGN, '-');
+      amounts.push(Number(cell.replace(/[^\d-]/g, '')));
+    }
+    expect(
+      [...amounts].sort((a, b) => b - a),
+      'ordered by realized P&L',
+    ).toEqual(amounts);
+
+    const mine = await board.getByText(me.data.profile.nickname).count();
+    if (mine === 0) {
+      const realizedP = Number(amount.replace(/[^\d]/g, ''));
+      expect(
+        amounts.at(-1) ?? 0,
+        'off the board only because twenty accounts did as well or better',
+      ).toBeGreaterThanOrEqual(realizedP);
+    }
+
     // --- 지갑: the payout is a 정산 지급 ledger row, and it reaches the tab that was ALREADY
     // there — no navigation, no reload. The balance chip moved on the event itself; this row is
     // the refetch the event triggers, because nothing in a `user:balance` can draw a ledger row.

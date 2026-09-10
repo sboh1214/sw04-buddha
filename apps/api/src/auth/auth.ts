@@ -1,11 +1,19 @@
 import { Logger } from '@nestjs/common';
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
-import { APIError, createAuthMiddleware } from 'better-auth/api';
+import { APIError, createAuthMiddleware, getSessionFromCtx } from 'better-auth/api';
+import { verifyJWT } from 'better-auth/crypto';
 import { type Db, schema } from '@buddha/db';
-import { NO_EMAIL_DOMAIN, isNoEmailAddress } from '@buddha/shared';
+import {
+  DEFAULT_RATE_LIMITS,
+  NO_EMAIL_DOMAIN,
+  isNoEmailAddress,
+  type RateLimits,
+} from '@buddha/shared';
 import { type Env, enabledOAuthProviders, webOrigins } from '../config/env.js';
 import { type Mailer } from '../mail/mailer.js';
+import { authRateLimitFor, type AuthRateLimiter } from '../rate-limit/auth-rate-limit.js';
+import { emailTracker } from '../rate-limit/email-tracker.js';
 import {
   changeEmailConfirmationEmail,
   passwordResetEmail,
@@ -32,14 +40,96 @@ const DEFAULT_VERIFY_CALLBACK = SET_PASSWORD_PATH;
  * runs on server-side `auth.api.*` calls, which is all `/sign-up/email` is left to guard
  * now that `disabledPaths` 404s it over HTTP.
  */
+const SIGN_IN_PATH = '/sign-in/email';
+const CHANGE_EMAIL_PATH = '/change-email';
+
 const EMAIL_INPUT_PATHS = new Set([
   '/sign-up/email',
-  '/sign-in/email',
-  '/change-email',
+  SIGN_IN_PATH,
+  CHANGE_EMAIL_PATH,
   '/send-verification-email',
   '/request-password-reset',
   '/forget-password',
 ]);
+
+/**
+ * The `email` bucket `/change-email` charges to the ACCOUNT asking, on top of the one it
+ * charges to `newEmail`. For a verified account the confirmation goes to the address the
+ * account already has (`sendChangeEmailConfirmation` below), and `newEmail` is only mailed
+ * later, once that link is clicked — so a key on `newEmail` alone let a caller rotate it and
+ * mail their own inbox without limit (PR #8 review). The account, not its current address:
+ * the two are one mailbox, and keying on the address under the `/change-email` path would land
+ * on the very key a stranger charges by naming that address as THEIR `newEmail` (better-auth
+ * answers an address that already exists with a silent 200), which would let anyone lock a
+ * user out of changing their email. A path of its own cannot be reached from a request body.
+ */
+const CHANGE_EMAIL_ACCOUNT_BUCKET = `${CHANGE_EMAIL_PATH}/account`;
+
+/**
+ * The one mail-sending path with no address in its body: a GET whose whole input is a token.
+ *
+ * better-auth's verification links are stateless one-hour JWTs (`createEmailVerificationToken`),
+ * and clicking one does not consume it. For a plain sign-up link that is harmless — it verifies
+ * an address and mails nobody. The CONFIRMATION half of a change of address is different: every
+ * click re-mints the verification token and mails the NEW address again, no session required
+ * (the endpoint refuses only a mismatching one). So one confirmation mail in a caller's own inbox
+ * was, until this, an hour of mail to somebody else's — the only path around the per-recipient
+ * bound the other five carry (Q-M6-8). Counted here, on the address the link is about to mail.
+ *
+ * Not a single-use token instead: mail scanners prefetch links (Outlook Safe Links, Gmail's
+ * proxy), and a link that the first GET consumes is a link the real click finds already spent.
+ * The same 5/min bound every other mail path has is what the contract promises, and it is what
+ * a replay needs to be denied.
+ */
+const VERIFY_EMAIL_PATH = '/verify-email';
+
+/** What a verification link carries, as far as the limit reads it (better-auth's payload). */
+interface VerificationTokenPayload {
+  updateTo?: unknown;
+  requestType?: unknown;
+}
+
+/**
+ * The address a `/verify-email` call is about to MAIL, or `undefined` when it mails nobody.
+ *
+ * Verified with the same secret the endpoint verifies with, not merely decoded: a payload
+ * anybody can forge would be a bucket anybody can spend for free — no account, no request, no
+ * mail — and five forged tokens naming an address would refuse the genuine confirmation click
+ * for that address a minute at a time. What remains is the flip side every per-recipient bound
+ * has: whoever holds a GENUINE link toward X can spend X's bucket by replaying it, at the
+ * price of mailing X in their own name (on `/change-email` the price is the caller's own
+ * account bucket — five addresses a minute, signed in). A token that fails here fails
+ * in the endpoint too (INVALID_TOKEN / TOKEN_EXPIRED), mailing nobody, so it costs nothing;
+ * `verifyJWT` accepts a superset of the endpoint's HS256 — the other HMAC sizes, a missing
+ * `exp` — and every member of it needs the secret, which is all a bucket key requires. The
+ * VERIFICATION half (`change-email-verification`) applies the change and mails nobody either,
+ * so the final click of a legitimate change is never counted — and never refused because a
+ * stranger has been replaying the other half. Everything else with an `updateTo` mails it: the
+ * confirmation, and the legacy single-step token of older better-auth versions.
+ */
+async function mailedByVerifyEmail(token: unknown, secret: string): Promise<string | undefined> {
+  if (typeof token !== 'string' || token.length === 0) return undefined;
+  const payload = await verifyJWT<VerificationTokenPayload>(token, secret);
+  if (payload === null || payload.requestType === 'change-email-verification') return undefined;
+  return emailTracker(payload.updateTo);
+}
+
+/** Counts one attempt against `path`'s bucket for `tracker`, refusing it the way PLAN 7 does. */
+async function consumeOrRefuse(
+  rateLimiter: AuthRateLimiter,
+  path: string,
+  tracker: string,
+  limit: number,
+): Promise<void> {
+  const retryAfterSeconds = await rateLimiter.consume(path, tracker, limit);
+  if (retryAfterSeconds != null) {
+    throw new APIError('TOO_MANY_REQUESTS', {
+      message: 'Too many requests',
+      code: 'RATE_LIMITED',
+      retryAfterSeconds,
+    });
+  }
+}
 
 /**
  * PLAN 10.3: Kakao/Naver may withhold the email. better-auth refuses an OAuth sign-in
@@ -73,6 +163,14 @@ export interface CreateAuthOptions {
   env: Env;
   db: Db;
   mailer: Mailer;
+  /**
+   * PLAN 7.5 for the routes better-auth owns. Optional so a unit test can build an instance
+   * without Redis; when it is absent those routes are simply unlimited, which is what every
+   * build before M6 did.
+   */
+  rateLimiter?: AuthRateLimiter;
+  /** The limits `rateLimiter` counts against; ignored when there is no limiter. */
+  rateLimits?: RateLimits;
   logger?: Pick<Logger, 'warn' | 'error'>;
 }
 
@@ -85,7 +183,14 @@ interface SignUpBody {
  * Builds the better-auth instance (PLAN 10). Pure factory: no env loading, no Nest, so
  * tests and scripts can build one with another db/mailer.
  */
-export function createAuth({ env, db, mailer, logger = new Logger('Auth') }: CreateAuthOptions) {
+export function createAuth({
+  env,
+  db,
+  mailer,
+  rateLimiter,
+  rateLimits = DEFAULT_RATE_LIMITS,
+  logger = new Logger('Auth'),
+}: CreateAuthOptions) {
   const secret = env.BETTER_AUTH_SECRET;
   if (!secret) throw new Error('BETTER_AUTH_SECRET is required to create the auth instance');
   const providers = enabledOAuthProviders(env);
@@ -242,6 +347,8 @@ export function createAuth({ env, db, mailer, logger = new Logger('Auth') }: Cre
         // - current email unverified (synthetic Kakao/Naver address or an unverified real
         //   one): a verification link to the new address; clicking it applies the change
         // A new address that already belongs to another user gets the same 200 without mail.
+        // Because the first branch mails the CURRENT address, the `hooks.before` limit counts
+        // the account asking as well as `newEmail` (CHANGE_EMAIL_ACCOUNT_BUCKET).
         updateEmailWithoutVerification: false,
         sendChangeEmailConfirmation: async ({ user, newEmail, url }) => {
           await send(user.email, changeEmailConfirmationEmail({ url, newEmail }));
@@ -282,18 +389,102 @@ export function createAuth({ env, db, mailer, logger = new Logger('Auth') }: Cre
      * could claim `kakao_<id>@noemail.buddha.local` before that Kakao user ever signs in.
      */
     hooks: {
-      before: createAuthMiddleware((ctx) => {
-        if (!EMAIL_INPUT_PATHS.has(ctx.path)) return Promise.resolve();
-        const body = ctx.body as { email?: unknown; newEmail?: unknown } | undefined;
-        for (const value of [body?.email, body?.newEmail]) {
-          if (typeof value === 'string' && isNoEmailAddress(value)) {
-            throw new APIError('BAD_REQUEST', {
-              message: 'This email address cannot be used',
-              code: 'INVALID_EMAIL',
-            });
-          }
+      before: createAuthMiddleware(async (ctx) => {
+        // A hook runs for server-side `auth.api.*` calls too, and those must not spend a
+        // user-facing budget: `POST /api/v1/auth/register` already carries its own
+        // `@RateLimit('email')` and then calls `auth.api.signUpEmail`, which would count the one
+        // registration a second time — and `onExistingUserSignUp` calls
+        // `auth.api.sendVerificationEmail` for a third. A call with no `request` did not come
+        // from the network; whatever did is already limited at its own door.
+        const overHttp = ctx.request !== undefined;
+        if (ctx.path === VERIFY_EMAIL_PATH) {
+          // No body to reject a synthetic address in and nothing else to check: the link is
+          // the whole request. Counted on the address it mails (mailedByVerifyEmail).
+          if (!overHttp || rateLimiter === undefined) return;
+          const token = (ctx.query as { token?: unknown } | undefined)?.token;
+          const recipient = await mailedByVerifyEmail(token, ctx.context.secret);
+          if (recipient === undefined) return;
+          await consumeOrRefuse(
+            rateLimiter,
+            ctx.path,
+            recipient,
+            authRateLimitFor(ctx.path, rateLimits),
+          );
+          return;
         }
-        return Promise.resolve();
+        if (!EMAIL_INPUT_PATHS.has(ctx.path)) return;
+        // The ONE field the path reads — `newEmail` on `/change-email`, `email` everywhere
+        // else — and never both. A hook runs on the raw body, before the endpoint's schema
+        // strips the keys it does not know, so reading both fields let a signed-in caller send
+        // `{ newEmail: X, email: Y }` and spend two recipient keys per request: the account
+        // bound below is five ADDRESSES a minute only if a request names one address.
+        const body = ctx.body as { email?: unknown; newEmail?: unknown } | undefined;
+        const value = ctx.path === CHANGE_EMAIL_PATH ? body?.newEmail : body?.email;
+        if (typeof value === 'string' && isNoEmailAddress(value)) {
+          throw new APIError('BAD_REQUEST', {
+            message: 'This email address cannot be used',
+            code: 'INVALID_EMAIL',
+          });
+        }
+        const address = emailTracker(value);
+        // PLAN 7.5 for the routes Nest never sees (rate-limit/auth-rate-limit.ts explains why
+        // this is the hook and not a guard). Checked AFTER the address has been accepted as a
+        // real one and BEFORE better-auth verifies a password or sends anything.
+        //
+        // EVERY unauthenticated path counts the attempt here, `/sign-in/email` included. On the
+        // mail paths the attempt IS the harm — each one puts mail in somebody's inbox. On
+        // sign-in it is the scrypt: better-auth hashes the submitted password even for an
+        // address that does not exist, so an uncounted attempt is an unconditional one anybody
+        // can ask for. What makes sign-in different is the after-hook below, which CLEARS the
+        // bucket once the password turns out to have been right.
+        if (!overHttp || rateLimiter === undefined) return;
+        const limit = authRateLimitFor(ctx.path, rateLimits);
+        const consume = (path: string, tracker: string) =>
+          consumeOrRefuse(rateLimiter, path, tracker, limit);
+        if (ctx.path === CHANGE_EMAIL_PATH) {
+          // The one path that REQUIRES a session, so nothing is counted without one: a request
+          // the endpoint is about to refuse 401 mails nobody, and counting it would let anyone
+          // — no account, no cookie — spend five requests naming X and refuse every genuine
+          // change to X for a minute (PR #8 review; the same free lockout Q-M6-8 closed for
+          // forged tokens). The session is not on `ctx.context` yet in a before-hook (dispatch
+          // sets it to null); this reads the cookie itself. A missing or forged cookie fails
+          // the HMAC check before any DB access, so an unauthenticated flood costs a hash; a
+          // validly signed one costs the `findSession` the endpoint's own
+          // `sensitiveSessionMiddleware` repeats authoritatively a moment later (this read is
+          // never reused for that). `disableRefresh`: a rate-limit check must not renew a
+          // session, and a `Set-Cookie` minted here would not reach the response anyway.
+          const session = await getSessionFromCtx(ctx, { disableRefresh: true });
+          if (!session) return;
+          // The ACCOUNT first (CHANGE_EMAIL_ACCOUNT_BUCKET), then `newEmail`: a caller whose
+          // own five are spent is refused before touching anyone else's recipient key, so one
+          // account can name at most five addresses a minute — the bound that makes the
+          // recipient key a cost rather than a free lockout. Keyed on the user id, so the
+          // account's OWN address never meets the synthetic-address rejection above: an
+          // unverified Kakao/Naver account's current address is one of ours, and `/change-email`
+          // is exactly how it registers a real one (auth.test.ts). Two INCRs, not one
+          // transaction — a refusal by the second leaves the first spent, which is the attempt
+          // being counted rather than the outcome.
+          await consume(CHANGE_EMAIL_ACCOUNT_BUCKET, session.user.id);
+        }
+        if (address !== undefined) await consume(ctx.path, address);
+      }),
+      /**
+       * The other half of the sign-in limit: a sign-in that SUCCEEDED clears the bucket.
+       *
+       * `ctx.context.returned` is what the endpoint answered — and better-auth catches a thrown
+       * `APIError` and puts it there before running these hooks (`api/dispatch.mjs`), so a wrong
+       * password arrives as an `APIError` instance rather than as a rejection, and anything else
+       * means the password was right.
+       *
+       * Clearing here rather than not counting in the first place is what keeps the count
+       * atomic — see `AuthRateLimiter.reset`.
+       */
+      after: createAuthMiddleware(async (ctx) => {
+        if (ctx.path !== SIGN_IN_PATH || ctx.request === undefined) return;
+        if (ctx.context.returned instanceof APIError) return;
+        const address = emailTracker((ctx.body as { email?: unknown } | undefined)?.email);
+        if (address === undefined) return;
+        await rateLimiter?.reset(ctx.path, address);
       }),
     },
 
@@ -301,8 +492,11 @@ export function createAuth({ env, db, mailer, logger = new Logger('Auth') }: Cre
     // (packages/db/drizzle/0002_user_profile_trigger.sql), not by databaseHooks:
     // better-auth runs `user.create.after` after the insert has committed, never inside it.
 
-    // better-auth's built-in limiter keeps state in process memory (PLAN 16 forbids that).
-    // TODO(M6): @nestjs/throttler with Redis storage covers /api/auth/* as well (PLAN 7.5).
+    // The built-in limiter stays off: it keeps state in process memory (PLAN 16 forbids that)
+    // and counts by IP, which behind the Next rewrite is one socket for every visitor
+    // (rate-limit.tracker.ts). M6's answer is the `hooks.before` above — same Redis, same `rl:`
+    // namespace as the HTTP guard, keyed on the ADDRESS the request names (and, on
+    // `/change-email`, on the account asking — first, and only when there is one).
     rateLimit: { enabled: false },
 
     advanced: {

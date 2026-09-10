@@ -20,7 +20,9 @@ describe.skipIf(!hasTestInfra)('coupons (integration)', () => {
   let member: TestUser;
 
   beforeAll(async () => {
-    t = await createTestApp();
+    // Redemption is capped at 10/min/user (PLAN 7.5 is silent; ADR-0034 adds it). This suite
+    // walks a user through more redemptions than that in one window.
+    t = await createTestApp({ rateLimits: { coupon: 500 } });
   });
   afterAll(async () => {
     await t?.close(); // undefined when beforeAll timed out waiting for the file lock

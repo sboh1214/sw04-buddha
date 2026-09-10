@@ -40,3 +40,15 @@ export const errorEnvelopeSchema = z
   })
   .meta({ id: 'ErrorEnvelope' });
 export type ErrorEnvelope = z.infer<typeof errorEnvelopeSchema>;
+
+/**
+ * The PLAN 7 failure envelope, built in one place.
+ *
+ * `details` is OMITTED rather than set to `undefined` when there is none: the REST filter and
+ * the realtime filter used to build this object by hand in two files, and the socket's copy
+ * always carried the key. JSON drops an `undefined` value, so the wire bytes agreed and the
+ * drift was invisible until something serialised the envelope some other way.
+ */
+export function errorEnvelope(code: ErrorCode, message: string, details?: unknown): ErrorEnvelope {
+  return { error: details === undefined ? { code, message } : { code, message, details } };
+}

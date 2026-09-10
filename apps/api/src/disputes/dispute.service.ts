@@ -10,8 +10,9 @@ import {
   type MyDisputesQuery,
   type ReviewDisputeBody,
 } from '@buddha/shared';
-import { and, desc, eq, lt, or } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
+import { keysetPredicate } from '../common/keyset.js';
 import { PG_UNIQUE_VIOLATION, isPgError } from '../common/errors/pg-error.js';
 import { clockTimestamp } from '../infra/db/clock.js';
 import { DB } from '../infra/db/db.provider.js';
@@ -215,12 +216,7 @@ export class DisputeService {
         and(
           eq(disputes.userId, userId),
           query.marketId ? eq(disputes.marketId, query.marketId) : undefined,
-          keyset
-            ? or(
-                lt(disputes.createdAt, keyset.createdAt),
-                and(eq(disputes.createdAt, keyset.createdAt), lt(disputes.id, keyset.id)),
-              )
-            : undefined,
+          keyset ? keysetPredicate(disputes.createdAt, disputes.id, keyset, 'uuid') : undefined,
         ),
       )
       .orderBy(desc(disputes.createdAt), desc(disputes.id))
@@ -241,12 +237,7 @@ export class DisputeService {
         and(
           query.status ? eq(disputes.status, query.status) : undefined,
           query.marketId ? eq(disputes.marketId, query.marketId) : undefined,
-          keyset
-            ? or(
-                lt(disputes.createdAt, keyset.createdAt),
-                and(eq(disputes.createdAt, keyset.createdAt), lt(disputes.id, keyset.id)),
-              )
-            : undefined,
+          keyset ? keysetPredicate(disputes.createdAt, disputes.id, keyset, 'uuid') : undefined,
         ),
       )
       .orderBy(desc(disputes.createdAt), desc(disputes.id))

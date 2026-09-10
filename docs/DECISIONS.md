@@ -402,7 +402,7 @@ PLAN §10.1은 `@thallesp/nestjs-better-auth`를 지정하지만 2.7.0의 peer �
 - `disableGlobalAuthGuard: true`(PLAN §7.1의 공개 라우트) + 자체 `SessionGuard`(`auth.api.getSession`, 실패 시 `AppError('UNAUTHENTICATED')` → PLAN §7 봉투). `disableTrustedOriginsCors: true`(REST는 rewrite로 같은 출처, ADR-0017).
 - `main.ts`의 `bodyParser: false`는 유지한다. 라이브러리가 자체 JSON/urlencoded 파서를 재등록하는데 잘못된 JSON에 순수 `SyntaxError`를 던지므로 `ApiExceptionFilter`가 이를 400 `VALIDATION_ERROR`로 매핑한다(`disableBodyParser`는 폐기된 옵션으로, 켜면 본문이 아예 파싱되지 않는다). (2026-09-05 추기, PR #3 리뷰 9차) urlencoded 파서는 `bodyParser.urlencoded.enabled: false`로 끈다 — JSON만 받는 API에 폼 본문은 CSRF의 모양이고, `SessionGuard`의 `Origin` 검사와 함께 두 겹이다(ADR-0025 추기, A-M2-13).
 - `advanced.disableOriginCheck: false`를 명시한다. better-auth는 `NODE_ENV=test`에서 Origin/CSRF 검사를 조용히 건너뛰므로 통합 테스트가 운영 동작(다른 Origin → 403 `INVALID_ORIGIN`)을 검증하도록 강제한다.
-- 내장 레이트 리미터(프로세스 메모리, PLAN §16 위반)는 끈다. M6에서 `@nestjs/throttler` + Redis로 `/api/auth/*`까지 덮는다.
+- 내장 레이트 리미터(프로세스 메모리, PLAN §16 위반)는 끈다. M6에서 `@nestjs/throttler` + Redis로 `/api/auth/*`까지 덮는다. (2026-09-10 추기, M6) **`@nestjs/throttler`로는 덮지 못했다.** better-auth는 middie 미들웨어라 Nest 라우팅보다 먼저 서비스되므로 전역 가드가 그 요청을 영원히 보지 못한다. 실제로 덮은 것은 better-auth 자신의 훅과 middie 앞에 등록한 Fastify 훅이고, 공유되는 것은 Redis 스토리지·`rl:` 네임스페이스·고정창이다(ADR-0034).
 - 쿠키: `advanced.cookiePrefix: 'buddha'` → `buddha.session_token`, http 개발 환경에서는 `Secure`/`__Secure-` 없이 발급되어 Next rewrite를 통과한다(https에서는 자동 전환). `trustedOrigins`는 `WEB_ORIGIN`(`webOrigins(env)`).
 - 소셜: Google/Kakao/Naver는 better-auth 내장 프로바이더이며 두 키가 모두 있을 때만 켜진다. Kakao/Naver가 이메일을 주지 않으면 `mapProfileToUser`가 `{provider}_{id}@noemail.buddha.local`(`emailVerified=false`)로 대체한다(PLAN §10.3). 계정 연결은 설정 화면에서 명시적으로만(`disableImplicitLinking: true`, `trustedProviders` 3종, `allowDifferentEmails`), 마지막 로그인 수단 해제는 거부(`allowUnlinkingAll: false`). `unlinkAccount`는 1.7에서 `{ accountId }`(account 행 id)만 받는다.
 
@@ -885,3 +885,252 @@ PLAN §13 M5는 워커의 `market.close`·`market.finalize`(지연 잡 + 매 분
 - (2026-09-10 추기, PR #6 리뷰 4차 1건 **반려** — 주석만 고쳤다) "이의 접수를 시장 전이와 직렬화하라"는 P2를 재현·반박·선례 세 관점으로 검증했고 **셋 다 반려로 답했다.** 경합 자체는 실재한다: READ COMMITTED에서 접수의 상태 읽기와 INSERT 사이에 `finalize`·`void`가 커밋할 수 있고 접수자는 201을 받는다. 그러나 그 끝 상태는 PLAN 5.5(이의가 있어도 확정은 진행)와 Q-M5-6(무효는 열린 이의를 남긴다)이 경합 없이도 만드는 상태와 열 단위로 같고, `lockMarket`을 잡아도 없어지지 않는다 — 락을 이긴 접수 뒤에 같은 확정이 오기 때문이다. 락의 대가만 실재한다: 무효·확정은 포지션 전체를 한 트랜잭션에서 닫으며 시장 락을 쥐므로(A-M5-4) 접수자는 그 시간을 기다린 뒤 409를 받고, 30초 `statement_timeout`을 넘기면 `AppError`가 아닌 500이 된다. 리뷰가 든 근거("종료된 시장의 이의를 수용해도 지급이 안 바뀐다")도 마감까지 검토되지 않은 **모든** 이의에 똑같이 해당하므로 이 경합의 성질이 아니다. **대신 근거 주석이 틀렸다**(A-M5-17과 같은 부류): (가) "락은 거래 뒤에 줄 세울 뿐" — 접수는 `resolving`, 거래는 `assertTradable`로 `open`에서만 되니 겹칠 수 없다, (나) "이의는 시장 쓰기가 읽는 것을 쓰지 않는다" — `resolve`·`void`가 자기 트랜잭션에서 `toAdminMarket`의 `disputeCounts`를 센다, (다) "확정된 시장"이 더 도달하기 쉬운 무효를 빠뜨렸다, (라) "잃는 것이 없다"가 절대적 주장으로 읽혔다. 넷을 고쳐 쓰고 201이 보장하는 것(접수 자신의 `clock_timestamp()`가 창 안이었다는 것뿐, 커밋 시점 상태가 아니다)을 명시했다(A-M5-23, A-M5-5의 같은 괄호도 함께). 동작·스키마·DTO 변경은 없다 — 그래서 **이 변경 없이 실패하는 테스트는 없다.** 대신 결정 자체를 고정하는 케이스 둘을 더했다: 종료된(확정·무효) 시장의 열린 이의가 검토되고, 검토가 시장을 건드리지 않으며, 관리자 목록이 시장 상태와 함께 계속 보여 준다 — 누군가 `review()`에 시장 상태 게이트를 넣거나 확정 시 이의를 자동 기각하면 이 케이스가 빨개진다. api 277 → 279.
 - (2026-09-10 추기, PR #6 리뷰 5차 1건 반영) **워커가 Postgres를 한 번도 확인하지 않고 ready를 세웠다.** `createDb`는 풀을 만들 뿐이라(node-postgres는 첫 체크아웃에서 연결한다) 부팅 경로가 증명한 것은 Redis뿐이었고, Redis는 살고 Postgres는 죽은 워커가 `/health`에 200을 답하면서 모든 마감·정산 트랜잭션은 실패했다. 직접 확인했다: 닫힌 포트를 가리킨 `DATABASE_URL`로 띄우면 고치기 전에는 200 `{status:'ok'}`, 고친 뒤에는 503 `{status:'starting'}`이다. **다만 지적이 든 피해(CI·배포 프로브가 속는다)는 이 저장소에서 도달 불가다** — CI의 대기 루프는 `/api/health`를 먼저 폴링하고 API의 프로브는 db를 보므로 거기서 먼저 멈추며, Playwright의 webServer도 api·web·worker 순차 기동이고, 배포 대상 자체가 없다. 그래서 P2가 아니라, env.ts가 "API를 기다리는 방식으로"라고 적어 둔 보증을 코드가 지키지 못하던 A-M5-17 부류로 다뤘다 — 다만 이번에는 보증을 철회하는 대신 **참으로 만드는 쪽이 더 쌌다**(왕복 한 번). **리뷰가 제안한 일회성 `select 1`은 반려했다**: 거절이 `main().catch` → `process.exit(1)`로 이어져 먼저 바인드해 둔 헬스 포트가 사라지는데, 그것이 바로 main.ts가 리스너를 먼저 여는 이유(refused connection 방지)이고 워커를 되살릴 감독자도 없으며, 게으른 풀 덕에 얻던 자가 복구(다음 분 스캔이 연결되면 밀린 것을 쓸어 담는다)도 잃는다. 대신 `waitForDb`(db-ready.ts)가 연결될 때까지 재시도하며 절대 거절하지 않는다 — Redis 쪽이 이미 고른 정책 그대로다(A-M5-24). `Promise.race`로 묶지 않는다(경주는 connect를 취소하지 않아 풀 슬롯을 잠식한다). 소비는 막지 않는다: Worker는 이미 돌고 있고 대기 중 도는 스캔은 전과 같이 실패·재시도한다(A-M5-15). 닫은 것은 **부팅 순간뿐**이고, 부팅 뒤에 죽은 Postgres는 여전히 200이다 — Q-M5-11로 남겼다. 새 테스트 4건은 인프라 없이 계약을 고정한다(거절하지 않음·시도마다 warn 한 줄·성공 즉시 반환·상한 5초). worker 71 → 75.
 - (2026-09-09 추기, PR 리뷰 2차 1건 반영) **P3, 확정**(재현·반박·선례 세 관점 모두 실재로 답했다). **이의 접수 응답의 시드가 같은 키의 진행 중인 GET을 취소하지 않았다.** 커밋 전에 "이의 없음"을 읽은 조회가 시드 뒤에 도착하면 `null`이 접수된 행을 덮고, 섹션은 "이의를 접수했습니다" 토스트 아래에서 이의 접수됨에서 이의 제기 버튼으로 되돌아간다 — 대화상자가 `unmountOnExit`이라 적어 둔 사유도 함께 사라진다. 실제 QueryClient로 재현했다. 도달 경로는 하나뿐이다: **이미 `null`을 들고 있는 항목의 배경 재조회**다. 첫 조회 중에는 `disputeSectionView`가 `pending`(스켈레톤)이라 누를 버튼 자체가 없기 때문이고, 그래서 `cancelFirstFetch`의 `data === undefined` 조건은 유일하게 도달 가능한 형태에 대해 무동작이 된다. `staleTime` 30초에 `refetchOnWindowFocus`·`refetchOnReconnect`가 query-core 기본값 `true`이고 대화상자의 두 번째 필드가 근거 URL이므로, 링크를 복사하러 탭을 떠났다 돌아와 제출을 누르는 순서가 이 폼이 부르는 평범한 흐름이다. 이 앱에서 취소도 재조회도 받지 못하는 유일한 시드라는 것이 P3이면서도 고칠 값어치가 있는 이유다(A-M5-16이 짚은 "스스로 낫지도 않았다"는 성질의 다른 얼굴이며, 예정된 복구가 없을 뿐 다음 탭 전환이나 두 번째 누름의 `DUPLICATE_REQUEST`로는 낫는다). 시드 바로 앞 같은 동기 블록에서 조건 없는 `cancelQueries({ queryKey: seeded, exact: true })`를 부른다(A-M5-18) — 되돌린 자리는 재요청이 아니라 시드가 채우므로 요청은 늘지 않고, PLAN 11.5가 이 키에 대해 거부하는 것이 바로 그 재요청이라 무효화의 제외 조건과 `isInvalidated === false` 단언은 그대로다. **반려한 대안 셋**: 제외 조건을 없애 `restartQueries(DISPUTES_KEY)`로 가는 길(동작은 하지만 접수마다 GET 하나를 쓴다 — 남발), `cancelFirstFetch` 재사용(무동작), query-client.ts에 세 번째 헬퍼(두 헬퍼는 취소-그리고-요청 쌍인데 여기는 취소-그리고-쓰기이고 호출자도 하나다; `realtime-provider.tsx`의 `user:balance`가 인라인 취소의 선례다). `cancelFirstFetch`의 주석에 "시드 앞에서는 이 조건이 틀리다"를 적어 다음 사람이 잘못된 헬퍼를 집지 않게 했다. 남은 창(재조회의 retryer가 이미 resolve된 뒤의 마이크로태스크) 은 `Dispute`에 순서 키가 없어 `joinMarket` 식 `structuralSharing`으로 닫을 수 없으므로 주석에 적고 남겼다. 테스트 3건: 커밋 전에 떠난 재조회가 시드를 덮지 못한다(취소를 빼면 실패한다), 아무것도 날지 않을 때 요청을 쓰지 않는다(재조회로 "고치는" 것을 막는다), 아무도 보지 않는 형제 항목은 제 답을 그대로 받는다(`exact`를 고정한다). web 544 → 547.
+
+---
+
+## ADR-0034 — 레이트 리밋: Redis 고정창, 계정·주소·수신자별 버킷 (PLAN 7.5, M6)
+
+- 날짜: 2026-09-10
+- 상태: 채택
+
+### 맥락
+
+PLAN §7.5는 `@nestjs/throttler` + Redis 스토리지로 **기본 100req/분/IP, `/trades` 20req/분/사용자, `/payments/charge` 10req/분/사용자**를 요구한다. M2·M3·M4·M5는 이 항목을 통째로 M6에 미뤘고(A-M2-6, A-M2-10, A-M3-24, A-M4-5, Q-M5-1), `RATE_LIMITED`는 코드·상태(429)·필터 매핑까지 준비된 채 **어디에서도 발생하지 않는 코드**였다.
+
+착수해 보니 세 가지가 PLAN의 문장대로는 성립하지 않았다.
+
+**(가) 이 배포에서 클라이언트 주소는 알 수 없다.** 브라우저의 REST는 전부 Next rewrite를 거치는 서버 사이드 프록시이므로 Fastify가 보는 주소는 웹 서버의 것이다. `TRUST_PROXY`를 켜서 `X-Forwarded-For`를 믿는 것도 답이 아니다 — Next 16의 `base-server.js`는 그 헤더를 `req.headers['x-forwarded-for'] ??= socket.remoteAddress`로 채운다. **`??=`이므로 클라이언트가 보낸 값이 이긴다.** 게다가 SSR은 rewrite를 아예 지나지 않는다(`api.server.ts`는 API 오리진에 직접 건다). 즉 100req/분/IP를 글자 그대로 구현하면 전 사용자와 모든 서버 렌더가 한 버킷을 나눠 쓰고, 학대자가 아니라 제품을 제한한다.
+
+**(나) `/api/auth/*`에는 Nest 가드가 닿지 않는다.** `auth.ts:305`의 `TODO(M6)`는 "throttler가 `/api/auth/*`까지 덮는다"고 적었지만, better-auth는 `@fastify/middie` 미들웨어로 **Nest 라우팅보다 먼저** 서비스된다(ADR-0018). 전역 `APP_GUARD`는 그 요청을 영원히 보지 못한다.
+
+**(다) PLAN이 스스로와 충돌한다.** PLAN §7.5는 `/payments/charge`를 10req/분/사용자로 묶는데, PLAN M2 AC 2는 같은 라우트를 **한 계정의 동시 충전 20건**으로 증명하라고 한다. 둘 다 만족시키려면 한쪽을 시험 가능한 형태로 열어 두어야 한다.
+
+### 결정
+
+- **throttler는 둘(당시; 지금은 `route` 하나 — 주소 버킷은 훅으로 옮겼다, 아래 추기), 버킷은 여럿.** `@nestjs/throttler`는 설정된 모든 throttler를 모든 라우트에 적용하므로 버킷마다 throttler를 두면 `/trades`가 세 번 세어지고 `X-RateLimit-*`가 세 벌 나간다. 그래서 throttler는 **주소용 하나(`default`)와 라우트용 하나(`route`)** 뿐이고, 라우트는 `@RateLimit('<bucket>')`로 후자가 쓸 PLAN §7.5 표의 행을 고른다. **지목한 버킷은 주소 상한을 대체하지 않고 더한다** — 먼저 닿는 쪽이 거절한다. 대체하던 첫 판본이 무엇을 부쉈는지는 「결과」에 적었다.
+- **표는 `packages/shared/src/rate-limit.ts`에 둔다**(`RATE_LIMIT_BUCKETS`). 한도는 클라이언트가 상대하는 계약이고(웹이 429의 재시도 여부를 이 숫자로 판단한다), M6 AC가 20이라는 값을 직접 세기 때문이다.
+- **버킷의 키(scope)는 셋이다.**
+  - `ip` — 기본 100req/분. **API 전체에 한 버킷**이지 라우트별이 아니다. 라우트마다 초기화되면 한 호출자가 마흔 번 나눠 쓴다.
+  - `user` — `/trades` 20, `/payments/charge` 10(PLAN §7.5), `/coupons/redeem` 10, `/markets/:id/disputes` 10(Q-M5-1).
+  - `email` — **요청 본문이 지목한 주소**별 5. `POST /auth/register`와 better-auth의 비밀번호 재설정·인증메일·이메일 변경 경로. A-M2-10이 요구한 것은 "가입 속도 제한"이고, 남의 사서함을 채우는 남용은 **보낸 쪽이 아니라 받는 쪽**으로 묶어야 막힌다. 이 경로들은 **시도 자체**를 센다 — 시도가 곧 피해(메일 한 통)이기 때문이다.
+  - `signIn` — `/sign-in/email`의 시도별 10. **모든 시도를 핸들러 전에 세고(`consume` → INCR), 비밀번호가 맞은 로그인이 버킷을 지운다(`reset` → DEL).** 맞은 비밀번호가 흔적을 남기면 안 된다는 것은 **e2e가 잡아냈다**: 처음에는 세기만 하고 지우지 않았고, 그 결과 시드 관리자로 로그인하는 스펙 13개가 429로 죽었다. 공유 계정(이 저장소의 시드 관리자, 데모 로그인, 팀 사서함)이 **쓰이는 것만으로 스스로 잠기는** 설계였다는 뜻이다. 지우는 쪽을 고른 이유는 「결과」에 있다 — 세지 않는 쪽은 원자적일 수 없다. 성공과 실패는 `hooks.after`에서 `ctx.context.returned`가 `APIError`인지로 가른다(better-auth가 던져진 `APIError`를 잡아 그 자리에 넣으므로 틀린 비밀번호는 거절이 아니라 값으로 도착한다).
+- **(가)의 답: 클라이언트를 지목할 수 없는 주소는 세지 않는다.** `isCountableAddress`가 루프백 피어(개발자 자신의 스택이거나 같은 호스트의 rewrite)를 `ip` 버킷에서 제외한다. 진짜 리버스 프록시를 앞에 두는 배포는 `TRUST_PROXY`에 그 CIDR을 넣으면 `request.ip`가 실제 클라이언트가 되고 다른 변경 없이 한도가 살아난다. API 오리진에 직접 REST를 거는 클라이언트(Expo 앱 — ADR-0017)는 언제나 실주소를 제시하므로 언제나 세어진다. **소켓 핸드셰이크는 이 버킷에 들어가지 않는다**: engine.io가 `attach`에서 HTTP 서버의 `request` 리스너를 걷어내고 자기 경로를 직접 처리하므로 그 요청은 Fastify에도 전역 가드에도 닿지 않는다. 소켓에 있는 상한은 연결당 메시지 빈도뿐이다(아래 A-M4-5). **계정·수신자 버킷은 이 문제와 무관하게 rewrite 뒤에서도 그대로 동작하고, 실제로 지키는 것은 그쪽이다.**
+- **(나)의 답은 둘이다. 하나는 better-auth의 `hooks.before`.** 이미 존재하고, 이미 그 경로들에서만 돌며, 무엇보다 **파싱된 본문**을 가진다 — Fastify 훅에는 없는 것이고 주소별 키를 만들 수 있는 유일한 자리다. 같은 Redis, 같은 `rl:` 네임스페이스, 같은 고정창. better-auth 내장 리미터는 계속 끈다(프로세스 메모리 = PLAN §16 위반이고, IP로 세므로 (가)에 걸린다).
+- **서버 사이드 `auth.api.*` 호출은 세지 않는다**(`ctx.request === undefined`). better-auth의 훅은 HTTP 요청과 우리 코드가 직접 부른 호출을 구분하지 않는다: `POST /api/v1/auth/register`는 자기 `@RateLimit('email')`을 지나고 나서 `auth.api.signUpEmail`을 부르고, 미인증 계정이 이미 있으면 `onExistingUserSignUp`이 `auth.api.sendVerificationEmail`까지 부른다 — 그대로 두면 가입 한 번이 버킷 셋을 쓰고, 출하되는 한도는 그중 먼저 차는 것이 된다. 네트워크에서 오지 않은 호출은 이미 자기 입구에서 제한받았다.
+- **다른 하나는 raw Fastify `onRequest` 훅**(당시 `auth-address-limit.ts`, 지금은 API 전체를 세는 `address-limit.ts` — 아래 추기)이다. 본문의 주소로 묶는 것만으로는 **호출자**가 묶이지 않는다 — 주소를 바꿔 가며 부르면 매번 새 버킷이고, `/sign-in/email`은 존재하지 않는 주소에도 scrypt를 돌리므로(better-auth가 응답 시간을 같게 하려고 일부러 그렇게 한다) 묶이지 않은 호출자는 묶이지 않은 CPU다. `/api/v1/*`는 이미 주소 버킷을 가지므로, 나머지 절반에도 같은 것을 준다. **같은 버킷을 쓴다**: PLAN §7.5의 기본값은 "API 전체에 주소당 100req/분"이지 표면당이 아니다. 훅은 `app.init()` 전에 등록되어 middie보다 먼저 돈다(Nest는 `httpAdapter.use()`를 모아 두었다가 init에서 흘려보내고, Fastify는 같은 단계의 훅을 등록 순서로 돈다).
+- **(다)의 답: `RATE_LIMITS` 프로바이더.** 숫자는 DI로 들어오고 `createTestApp({ rateLimits })`가 그것만 덮는다. 지갑 스위트는 charge 한도를 올려 M2 AC 2의 동시성 불변식을 그대로 증명하고, `rate-limit.controller.test.ts`는 **덮지 않은 기본값**으로 M6 AC 1(21번째 `/trades` → `RATE_LIMITED`)을 잰다. 운영에서 한도를 코드 배포 없이 조정할 수 있는 이음매이기도 하다.
+- **스토리지는 직접 쓴다**(`RedisThrottlerStorage`, 약 40줄). `@nest-lab/throttler-storage-redis`는 넘겨받은 값이 `instanceof Redis`인지로 판단하고, 빗나가면 **조용히 자기 연결을 만든다** — `createRedisClient`가 부과하는 모든 상한(`commandTimeout`·`socketTimeout`·`autoResendUnfulfilledCommands: false`·에러 로거)을 잃고 `RedisModule.onApplicationShutdown`이 닫지도 않는 연결이다. 알고리즘은 `INCR` + `PEXPIRE … NX` + `PTTL`을 한 MULTI로 묶은 같은 고정창이다. `NX`가 창을 고정으로 만든다(매 히트마다 `PEXPIRE`면 창이 트래픽을 따라 미끄러져 초당 1회 호출자가 영원히 거절된다).
+- **저장소가 죽으면 통과시킨다(fail open).** Redis가 없는 동안 거절하는 리미터는 Redis를 전혀 쓰지 않는 조회·견적·거래까지 죽인다 — 막으려던 홍수보다 나쁜 장애다. `AdminGuard`의 역할 캐시가 이미 같은 자세다.
+- **키는 해시한다.** `rl:<throttler>:<route|any>:<sha256(tracker) 32자>`. 계정 id는 개인을 지목하고 주소는 개인정보이며, 카운터에는 그것을 `KEYS rl:*`로 읽히는 곳에 둘 이유가 없다.
+- **소켓의 메시지 빈도(A-M4-5)는 소켓 자신이 센다**(`REALTIME_MESSAGES_PER_WINDOW = 120`). Redis가 아닌 이유: 연결은 정확히 한 프로세스에 살아 있으므로 자기 메시지 속도는 공유 상태가 아니고, PLAN §16이 말하는 것이 아니다. **socket.io 패킷 미들웨어**로 달았다 — 핸들러 안이었다면 전역 파이프가 먼저 도는 탓에 **잘 만들어진 메시지만** 세고, 이 상한이 존재하는 이유인 잘못된 페이로드(A-M4-5의 제곱 NUL 스윕)는 하나도 세지 못한다. 거절된 패킷은 버리고 기존 `exception` 채널로 답한다 — `next(error)`는 소켓을 끊고, 말이 빨랐을 뿐인 클라이언트가 조용히 받고 있던 공개 틱까지 잃는다.
+- **`/api/health`는 면제다**(당시 `@SkipRateLimit()`, 지금은 `address-limit.ts`의 `UNCOUNTED_ROUTES` — 아래 추기). 스스로를 방어하는 인스턴스가 헬스체크에 429를 답하면 오케스트레이터는 그것을 재시작 신호로 읽는다.
+
+### 결과
+
+- **e2e가 설계 결함을 하나 잡았다.** 모든 시도를 세던 첫 판본은 `pnpm --filter web test:e2e`에서 13개 스펙을 429로 죽였다 — 시드 관리자로 로그인하는 픽스처가 테스트마다 도는데, 성공한 로그인까지 예산을 쓰고 있었다. 단위 테스트로는 보이지 않았을 종류의 결함이고(각 스위트는 자기 계정을 새로 만든다), 이 마일스톤에서 실행이 추론을 이긴 유일한 자리다.
+- `RATE_LIMITED`가 처음으로 실제 발생한다. 거절 본문은 `{ error: { code: 'RATE_LIMITED', message, details: { retryAfterSeconds } } }`이고 그 숫자는 `Retry-After` 헤더와 같다. `/api/auth/*`의 거절만 better-auth 자신의 `{ code, message }` 모양이다 — middie가 예외 필터보다 먼저이므로 그 경로의 다른 모든 오류와 같은 성질이다(ADR-0018).
+- **계수된** 응답에 주소 버킷의 `X-RateLimit-Limit`/`-Remaining`/`-Reset`이 접미사 없이 붙고, 버킷을 지목한 라우트는 `-route`가 붙은 세 개를 더 받는다(라이브러리가 `default` 외의 이름에 접미사를 단다). 세지 않은 요청 — 클라이언트를 지목할 수 없는 주소 — 에는 하나도 붙지 않는다. `Retry-After`만은 어느 버킷이 거절했든 접미사 없이 쓴다.
+- `@ApiErrors('RATE_LIMITED')`를 `/trades`·`/payments/charge`·`/coupons/redeem`·`/markets/:id/disputes`·`/auth/register`에 더했다. OpenAPI 문서가 바뀌므로 CI의 계약 검사와 함께 커밋한다.
+- **버킷을 지목한 라우트는 두 번 세어진다.** 주소 100req/분은 그대로 걸리고 그 위에 그 버킷의 한도가 더해진다. 이름 붙은 버킷은 모두 기본값보다 엄격하므로, 한 호출자가 한 계정으로 그 라우트만 두드리는 동안은 대개 그쪽이 먼저 닿는다.
+- `SessionGuard`가 `request.auth`를 재사용한다: `user` 버킷은 리미터가 세션을 먼저 읽으므로, 그러지 않으면 PLAN §7.5가 지목한 바로 그 두 라우트에서 세션 조회가 두 번이 된다. 공개 라우트는 `user` 버킷이 아니므로 한 번도 읽지 않는다.
+- **자체 검토가 이 ADR의 첫 판본에서 결함 둘을 찾았고, 둘 다 고쳤다.** (가) 실패한 로그인을 세는 첫 구현이 `hooks.before`에서 버킷을 읽고 `hooks.after`에서 더하는 **읽고-쓰기**였다. 그 사이에 scrypt 한 번이 통째로 들어가므로 동시에 들어온 N개의 추측이 모두 같은 값을 읽고 모두 통과했다 — 문서상 10회인 한도가 실제로는 "공격자의 동시 연결 수"였다. 이제 시도를 **먼저** 세고(INCR), 성공이 버킷을 지운다. (나) `@RateLimit`이 기본 throttler를 **덮어써서**, 버킷을 지목한 라우트에서 100req/분의 주소 상한이 사라졌다 — 하필 `POST /auth/register`의 버킷은 수신자의 사서함이라, 한 호출자가 주소를 바꿔 가며 무한히 메일을 보낼 수 있었다. 이제 throttler 두 개가 나란히 돈다(당시; 아래 추기에서 주소 쪽은 훅이 됐다).
+- 남은 것: **운영에서 `TRUST_PROXY`를 실제 프록시 CIDR로 세우기 전까지 주소별 한도는 직접 연결에만 유효하다.** A-M0-13이 "운영 값은 배포 시 정한다"고 남긴 항목이고, 여기서 그 조건이 무엇인지가 확정됐다 — 앞단 프록시가 `X-Forwarded-For`를 **덮어써야** 한다(추가가 아니라). `apps/web/src/proxy.ts`의 matcher를 `/api/*`로 넓히는 안은 **기각한다**: Next의 `??=`가 이미 클라이언트 값을 통과시킨 뒤라 프록시가 진짜 주소를 알 방법이 없고, SSR은 rewrite를 지나지도 않는다. A-M3-24와 `proxy.ts`의 주석이 이 검토를 "ADR-0022"로 지목한 것은 **오기**다(ADR-0022는 통합 테스트 인프라). 이 ADR이 그 자리를 대신한다.
+- (2026-09-10 추기, PR #8 리뷰) **`/change-email`은 `newEmail`에 더해 요청한 계정에도 `email` 크기의 버킷을 하나 더 센다**(`auth/change-email/account:<hash(user id)>`). 위의 "요청 본문이 지목한 주소"는 이 경로에서 수신자가 아니었다: better-auth 1.7.2는 **인증된** 계정의 확인 메일을 `newEmail`이 아니라 계정이 이미 가진 주소로 보내고(`sendChangeEmailConfirmation`), `newEmail`은 그 링크를 누른 뒤에야 메일을 받는다. 그래서 `newEmail`을 바꿔 가며 부르면 매번 새 버킷이었고, 같은 사서함에 무한히 보낼 수 있었다 — rewrite 뒤에서는 주소 버킷도 루프백이라 비어 있다. 키는 현재 주소가 아니라 **계정 id**이고 경로도 따로다: 현재 주소를 `/change-email` 경로 아래 세면 남이 그 주소를 자기 `newEmail`로 지목해(이미 있는 주소는 메일 없이 200) 다섯 번 만에 그 사용자의 이메일 변경을 잠글 수 있다. 본문에서 닿을 수 없는 경로가 그것을 막는다. 계정 id를 키로 삼는 데는 이유가 하나 더 있다: 합성 주소를 거절하는 검사는 **본문**의 주소만 보므로 계정 자신의 현재 주소는 그 검사에 들어갈 일이 없다 — 현재 주소를 키로 삼는 변형이었다면 미인증 Kakao/Naver 계정이 실제 주소를 등록하는 바로 그 경로가 400이 됐을 것이다(`auth.test.ts`가 고정). 세션은 before-hook에서 `getSessionFromCtx(ctx, { disableRefresh: true })`로 직접 읽고(훅 시점에 `ctx.context.session`은 null; 갱신을 끄지 않으면 레이트 리밋 검사가 세션을 갱신하고 그 `Set-Cookie`는 응답에 실리지도 않는다), 주소 버킷을 먼저 소진한 **뒤에** 읽는다 — DB 조회이므로 거절될 요청이 그 비용을 내지 않게. 남는 것이었던 확인 링크의 재생(Q-M6-8)은 바로 아래 추기에서 닫았다.
+- (2026-09-10 추기, Q-M6-8) **`GET /verify-email`도 `email` 버킷에 들어간다 — 링크가 메일을 보내는 종류이면, 그 수신 주소로.** better-auth의 인증 링크는 1시간짜리 무상태 JWT라 누른다고 소모되지 않는다. 가입 링크는 그래도 무해하다(주소를 검증하고 아무에게도 보내지 않는다). 이메일 변경의 **확인** 링크는 다르다: 누를 때마다 검증 토큰을 새로 찍어 새 주소에 다시 보내고, 세션도 필요 없다(불일치하는 세션만 거절). 그래서 자기 사서함에 온 확인 메일 한 통이 남의 사서함으로 가는 한 시간짜리 메일이었다 — 다른 다섯 경로가 지는 수신자별 한도를 비켜 가는 유일한 길. 훅이 `/verify-email`에서 토큰을 읽어 `updateTo`를 `auth/verify-email:<hash>`로 센다. **디코드가 아니라 검증이다**(`better-auth/crypto`의 `verifyJWT`, 엔드포인트와 같은 secret): 아무나 위조할 수 있는 페이로드는 아무나 — 계정도 요청도 메일도 없이 — 소진시킬 수 있는 버킷이고, 위조 토큰 다섯 개로 그 주소의 진짜 확인 클릭을 1분씩 막을 수 있었을 것이다. 남는 것은 수신자별 한도라면 어디나 있는 뒷면이다: X로 가는 **정품** 링크를 가진 사람은 그것을 재생해 X의 버킷을 소진시킬 수 있다 — 자기 이름으로 X에 메일을 보내는 값을 치르고(`/change-email`의 `newEmail` 버킷에서 그 값은 메일이 아니라 자기 계정의 버킷이다: 로그인한 채로, 1분에 다섯 주소까지 — 아래 추기). 검증에 실패하는 토큰은 엔드포인트에서도 실패하며(INVALID_TOKEN / TOKEN_EXPIRED) 아무에게도 보내지 않으므로 세지 않는다. **검증** 링크(`change-email-verification`)도 세지 않는다 — 변경을 적용할 뿐 메일을 보내지 않고, 세면 남이 확인 링크를 재생하는 것만으로 정당한 변경의 마지막 클릭이 거절된다. 단회용 토큰은 택하지 않았다: 메일 스캐너(Outlook Safe Links, Gmail 프록시)가 링크를 미리 가져오므로 첫 GET이 소모하는 링크는 진짜 클릭이 이미 쓰인 것으로 만나는 링크다. 다른 메일 경로와 같은 수신자별 5/분이 계약이 약속한 것이고 재생을 거절하는 데 필요한 전부다. `rate-limit.controller.test.ts`가 여섯 번째 재생의 429, 그 뒤에도 통과하는 검증 링크, 아무것도 소진시키지 않는 위조 토큰을 고정한다.
+- (2026-09-10 추기, PR #8 리뷰) **429는 OpenAPI 문서의 모든 오퍼레이션에 있다**(`openapi/document.ts`의 `addGlobalResponse`). 위의 다섯 라우트에만 `@ApiErrors('RATE_LIMITED')`를 더한 것은 절반이었다: 주소 throttler는 전역 가드라(당시; 지금은 훅) `GET /markets`도 `POST /trades`와 똑같이 거절될 수 있는데, 42개 중 37개의 계약에 그 응답이 없었다. 다섯 개의 명시적 항목은 그대로 둔다 — 같은 상태의 메서드 수준 응답이 전역 응답을 같은 모양으로 대체하므로 문서는 동일하고, 핸들러 위에서 `@RateLimit` 옆에 읽힌다. `components.schemas`의 순서가 바뀐 것(`ErrorEnvelope`·`ErrorCode`가 맨 앞)은 전역 응답이 메서드보다 먼저 변환되기 때문이지 의미 변화가 아니다.
+- (2026-09-10 추기, PR #8 리뷰 2차) **`/change-email`은 세션이 없으면 아무것도 세지 않고, 세션이 있으면 계정 버킷을 먼저 센다.** 위 추기의 "주소 버킷을 먼저 소진한 뒤에 읽는다 — 거절될 요청이 그 비용을 내지 않게"는 **철회한다**: 그 순서는 세션 검사보다 먼저 `newEmail` 버킷을 소진시켰고, 엔드포인트가 401로 거절할 요청 — 아무에게도 메일이 가지 않는 요청 — 이 X를 다섯 번 지목하면 X로의 정당한 변경이 1분간 429였다. 계정도 쿠키도 없이, 공짜로(Q-M6-8이 위조 토큰에서 막은 것과 같은 모양의 잠금). 이제 이 경로만은 훅이 세션을 **먼저** 읽고(`getSessionFromCtx`; 쿠키가 없거나 위조면 HMAC 검사에서 끝나 DB에 닿지 않고, 유효한 쿠키면 엔드포인트의 `sensitiveSessionMiddleware`가 어차피 다시 읽는 `findSession` 한 번), 없으면 세지 않는다. 있으면 **계정 버킷 → `newEmail` 버킷** 순서다 — 리뷰의 제안(세션 → `newEmail` → 계정)으로는 계정 버킷이 고갈된 호출자가 여전히 지목하는 모든 주소의 수신자 키를 먼저 소진시키고 나서야 거절됐다. 계정을 먼저 세면 한 계정은 1분에 다섯 주소까지만 지목할 수 있고, 그것이 수신자 키를 공짜 잠금이 아니라 비용으로 만든다. 나머지 다섯 경로는 그대로 시도를 먼저 센다 — 인증 없는 경로이고 시도가 곧 메일(또는 scrypt)이다. `rate-limit.controller.test.ts`가 세션 없는 여섯 요청이 401이고 키를 하나도 만들지 않는 것, 그리고 여섯 번째 거절이 수신자 키를 늘리지 않는 것을 고정한다.
+- (2026-09-10 추기, PR #8 리뷰 2차) **주소 버킷은 가드가 아니라 Fastify `onRequest` 훅 하나가 API 전체에서 센다**(`address-limit.ts`). 가드는 라우트 핸들러 **안에서** 돌고, 핸들러는 Fastify 수명주기의 마지막 단계다: 파싱할 수 없는 본문(400), `bodyLimit` 초과(413), 라우트 없는 경로(404)는 핸들러 전에 답하므로 `default` throttler는 그것들을 하나도 세지 못했다 — "모든 HTTP 라우트"라고 적은 계약의 절반에서. 다른 절반(`/api/auth/*`)은 같은 이유로 처음부터 훅이었다. 그래서 훅을 `/api/*` 전체로 넓히고 가드의 `default` throttler를 뺐다(이중 계수 없음). 리뷰가 든 "파싱 비용" 논거는 과장이다 — 세어지던 요청도 파싱 뒤에야 가드가 돌았으므로 리미터가 파싱 비용을 막은 적은 없었다 — 그러나 계약의 불일치와 두 표면의 비대칭은 실재했고, 훅으로 옮기고 나면 고갈된 피어의 본문은 파싱되기 전에 429다. 세부: 면제는 `request.url`이 아니라 Fastify가 매칭한 라우트(`routeOptions.url`)로 판정한다 — URL 문자열은 쿼리와 호출자의 인코딩(`/api/he%61lth`)을 싣는다; 훅은 핸들러 메타데이터를 읽을 수 없으므로 `@SkipRateLimit()`은 죽은 코드가 되어 없앴고 두 헬스 경로는 훅의 `UNCOUNTED_ROUTES`에 있다; 계수된 응답의 `X-RateLimit-*` 셋과 거절의 `Retry-After`는 라이브러리가 쓰던 이름 그대로 `reply.raw.setHeader`로 쓴다 — better-auth는 raw 응답에 직접 쓰고 Fastify의 reply 헤더를 흘려보내지 않아 `reply.header`로는 `/api/auth/*`에 닿지 않았다(helmet과 같은 방법); 거절은 `/api/auth/*`에서는 better-auth 모양으로 직접 보내고(ADR-0018) 나머지는 가드와 같은 `AppError`를 **던져** `ApiExceptionFilter`가 PLAN 7 봉투와 `request refused` 로그를 맡는다(훅의 예외는 Nest가 설치한 오류 핸들러로 간다 — 잘못된 JSON의 400이 이미 그 길로 온다). `rate-limit.controller.test.ts`가 잘못된 JSON·404가 세어지는 것, 고갈된 피어의 잘못된 본문이 400이 아니라 429인 것, `/api/health?x=1`·`/api/he%61lth`가 면제인 것, 양쪽 표면의 헤더를 고정한다.
+- (2026-09-10 추기, PR #8 리뷰 2차) **루프백 규칙은 "클라이언트를 지목할 수 없는 피어" 규칙의 특수 사례였고, 일반형에는 이름이 필요했다: `RATE_LIMIT_UNCOUNTED_PEERS`.** (가)의 답은 같은 호스트의 rewrite만 알았다. 웹과 API를 다른 호스트·컨테이너에 두는 배포(ADR-0017이 지원하는 형태)에서는 rewrite를 거친 모든 요청과 모든 SSR이 웹 호스트의 **라우팅 가능한** 주소로 도착하므로 `isCountableAddress`가 전원을 한 클라이언트로 보고, 사이트 전체가 100req/분 한 통을 나눠 쓰다가 429를 냈다. 이 변수는 신뢰하지 않는 프록시(`TRUST_PROXY`에 넣을 수 없는 — Next는 클라이언트가 보낸 `X-Forwarded-For`를 그대로 통과시킨다)이면서 API 앞에 있는 피어의 주소·CIDR 목록이고, `node:net`의 `BlockList`로 판정한다(family를 매번 명시한다 — `BlockList`는 IPv6 주소를 IPv4로 검사하면 오류 없이 `false`를 답한다). 잘못된 항목은 `[RATE_LIMIT_UNCOUNTED_PEERS]` 이름으로 기동을 거부한다. 사설 대역 전체를 무조건 빼는 안은 기각했다 — LAN의 직접 클라이언트와 내부 배포의 방문자를 말없이 제외한다. **방문자별 한도를 되살리는 조건도 정정한다**: "앞단 프록시의 CIDR을 `TRUST_PROXY`에" 만으로는 안 된다. 웹 호스트를 신뢰하면 Next가 통과시킨 클라이언트 값이 읽히고, 프록시를 신뢰해도 rewrite를 거친 요청의 소켓 피어는 웹 호스트라 proxy-addr이 거기서 멈춘다. 되살리는 것은 웹 서버 **앞**에서 `/api/*`를 API로 바로 넘기며 방문자를 `X-Forwarded-For`에 덧붙이는 프록시와 그 CIDR을 담은 `TRUST_PROXY`다(위 「결과」의 "덮어써야 한다(추가가 아니라)"도 정정한다: `TRUST_PROXY`가 CIDR인 한 proxy-addr는 오른쪽부터 첫 비신뢰 홉에서 멈추므로 덧붙이는 것으로 충분하다). 웹 호스트를 `TRUST_PROXY`에 넣는 것이 답이 아닌 이유도 정확히는 이렇다 — 웹 서버가 그런 프록시를 **통해서만** 닿을 수 있는 경우가 아니면 Next가 통과시킨 클라이언트 값이 읽힌다. 그리고 프록시가 있어도 분리 배포는 웹 호스트를 이 변수에 적는다 — SSR과 서버 컴포넌트의 세션 호출은 여전히 웹 호스트 주소로, 헤더 없이 도착한다(A-M0-13, Q-M6-2, A-M6-1 추기).
+
+---
+
+## ADR-0035 — 관측: pino 요청 로깅, 5xx 본문 봉인, 레디니스와 라이브니스 (M6)
+
+- 날짜: 2026-09-10
+- 상태: 채택
+
+### 맥락
+
+PLAN M6은 "요청 로깅(pino), 에러 핸들링 통일, 헬스체크 상세"를 한 줄에 묶는다. 착수 시점의 상태는 이랬다.
+
+- **apps/api에 로그가 없다.** 워커는 pino를 쓰지만(`apps/worker/src/logger.ts`), API는 Nest의 `ConsoleLogger` 22개 호출부가 전부였고 요청 한 건도 기록되지 않았다. M6 AC 2("홈 API p95 < 200ms")를 재려 해도 지연 시간이 남는 곳이 없었다.
+- **`AppError('INTERNAL', { message })`가 개발자용 문장을 그대로 클라이언트에 돌려준다.** 저장소는 이 모양을 서른여섯 곳에서 던진다 — `'Ledger insert failed'`, `'Order vanished after its key was taken'`, `'Balance row vanished after the provider accepted'`. ADR-0020은 "5xx는 스택을 로그로 남기되 본문에는 노출하지 않는다"고 적었고 필터의 docstring도 그렇게 주장했지만, 실제로 가려지는 것은 **예상 밖의 `Error`뿐**이었다. `HttpException(…, 502)`도 마찬가지로 자기 메시지를 실어 나갔다.
+- **REST 필터와 소켓 필터가 봉투를 각자 손으로 짓는다.** `details`가 없을 때의 모양이 서로 달랐고(한쪽은 키를 빼고 한쪽은 `undefined`를 넣었다), 소켓 쪽에는 상태→코드 매핑이 아예 없어 공유 가드/파이프가 던진 `HttpException`이 401·403의 뜻을 잃고 맨 `INTERNAL`로 도착했다. 소켓 필터의 로그는 스택뿐이라 **누구의 소켓인지 적히지 않았다.**
+- **`/health`의 실패 이유가 아무 데도 남지 않는다.** `probe()`의 `catch { return 'error' }`가 원인을 삼켰다. 그리고 한 엔드포인트가 레디니스와 라이브니스를 겸했다.
+
+### 결정
+
+- **pino 인스턴스 하나가 프로세스 전체를 쓴다.** `loggerInstance`로 Fastify에 주고, `NestFactory.create`의 `logger` 옵션으로 Nest의 `Logger`도 같은 스트림에 태운다. `app.useLogger`가 아니라 **생성 시점에** 주는 이유: 컨테이너를 세우는 동안 Nest가 하는 말(라우트 지도, 해결되지 않은 프로바이더)은 `create` 중에 나오므로, 나중에 설치하면 매 부팅의 첫 스무 줄이 다른 형식으로 찍힌다.
+- **형식은 워커와 같게 둔다** — 같은 레벨 기본값(development `debug` / production `info` / test `silent`), 같은 `LOG_LEVEL` 덮어쓰기, 개발에서만 `pino-pretty`. 나란히 읽히는 두 서비스가 두 개의 사고 모형을 요구할 이유가 없다.
+- **요청 한 건에 한 줄.** Fastify는 기본적으로 도착과 완료를 각각 `info`로 찍는데, 상태와 `responseTime`은 완료 줄에만 있다. `logController`(Fastify 5가 `disableRequestLogging` 대신 도입한 것)를 상속해 도착 줄을 `debug`로 내리고 — 끝나지 않는 요청에서는 그 줄이 유일한 증거이므로 지우지는 않는다 — 완료 줄에 요청을 함께 싣는다. 라우트를 못 붙이면 "상태와 시간만 있고 어느 경로인지 모르는" 스트림이 된다.
+- **로그의 URL에서 쿼리 문자열을 뗀다.** `GET /api/v1/admin/users?q=someone@example.com`은 이 API가 실제로 서비스하는 요청이고, 그 쿼리는 관리자가 검색한 주소다. 매칭된 라우트 패턴을 함께 실어 10,000개의 시장 id가 한 줄로 묶이게 한다. `redact`로 쿠키·인증 헤더도 방어적으로 막는다.
+- **5xx 본문은 무엇이 던졌든 자기 메시지를 싣지 않는다.** `AppError('INTERNAL')`도, 5xx `HttpException`도 `'Internal server error'`로 봉인하고 `details`도 함께 버린다(같은 throw가 쓴 것이라 컬럼·제약·행 id를 똑같이 자유롭게 지목한다). 원문은 사라지지 않고 그 요청의 로그 줄에 `hidden`으로 남는다.
+- **필터는 `request.log`를 쓴다.** `reqId`가 묶인 자식 로거이므로 실패와 그 뒤의 `request completed`가 한 이야기로 읽힌다. 4xx는 `debug`로 남긴다 — 거절은 정상 트래픽이라 `info`를 채우면 안 되지만, "이 주소의 모든 요청이 401이다"는 코드를 고치지 않고 볼 수 있어야 한다.
+- **봉투는 `@buddha/shared`의 `errorEnvelope` 하나로 짓는다**, REST와 소켓이 같은 것을 쓴다. 소켓 필터에 REST와 같은 상태→코드 매핑을 주고, 로그에 소켓 id와 계정을 붙인다.
+- **헬스체크를 둘로 나눈다.** `GET /api/health`는 **레디니스**(의존성 프로브, 200/503), `GET /api/health/live`는 **라이브니스**(아무것도 묻지 않으므로 200 외의 답이 없다). 레디니스에 연결된 오케스트레이터는 Redis가 깜빡였다고 컨테이너를 재시작하는데, 그것은 아무것도 고치지 못하면서 그 인스턴스가 들고 있던 소켓을 전부 끊는다.
+- **본문에 상세를 더하되 기존 필드는 그대로 둔다.** `status`·`db`·`redis`는 M0이 출하한 계약(ADR-0015)이고 어떤 프로브가 읽고 있을지 모른다. 여기에 `uptimeSeconds`와 `checks.{db,redis}.{status,latencyMs}`를 더한다. **실패 이유는 로그로만 간다** — 이 엔드포인트는 비인증이고, 드라이버의 오류 문구는 호스트·포트·롤·데이터베이스 이름을 지목한다.
+- **워커의 `/health`도 `uptimeSeconds`와 `queues`를 답하되 200/503의 의미는 건드리지 않는다.** API처럼 매 요청 프로브로 바꾸는 것(Q-M5-11)은 스캔 사이 연결이 0개인 것이 정상인 큐 소비자에게 다른 의미를 부여하는 일이고, 이 마일스톤은 그 결정을 **기록하되 대신 내리지 않는다.**
+
+### 결과
+
+- 한 줄에 `reqId`·메서드·경로·라우트·상태·`responseTime`이 있으므로 M6 AC 2의 p95는 로그에서 바로 나온다. 측정값은 이 브랜치에서 `GET /api/v1/markets`(시드 12개, 로컬, 워밍업 후 200회) p50 13.4ms · **p95 15.5ms** · max 36.6ms로, 200ms 예산의 8%다.
+- `api-exception.filter.test.ts`에 두 케이스를 더했다: `AppError('INTERNAL')`이 `'Ledger insert failed …'`도 `details`도 흘리지 않는다는 것, 502 `HttpException`이 `'bad gateway'`를 흘리지 않는다는 것. 둘 다 고치기 전에는 실패한다.
+- `LOG_LEVEL`이 apps/api의 `envSchema`·`AUTH_ENV_KEYS`·`turbo.json`의 test env에 더해졌다.
+- 남은 것: Q-M5-7(워커 헬스 포트를 기본으로 열어 둘지)과 Q-M5-11(워커 프로브를 매 요청으로 바꿀지)은 **여전히 열려 있다.** 둘 다 "컨테이너 헬스체크로 쓰기 시작할 때 함께 본다"였는데, 저장소에는 아직 Dockerfile도 앱 컨테이너도 없다 — 붙일 컨테이너가 없는 결정이다.
+
+---
+
+## ADR-0036 — 보안 헤더: API는 @fastify/helmet, 웹은 nonce 없는 CSP (M6)
+
+- 날짜: 2026-09-10
+- 상태: 채택
+
+### 맥락
+
+PLAN M6은 "보안: 헤더(helmet 상당), CSRF(better-auth 기본), 관리자 라우트 감사 로그 완전성 확인"을 요구한다. 저장소 전체를 훑은 결과 **보안 헤더를 세우는 곳이 한 군데도 없었다** — API에도, 웹에도. `next.config.ts`에는 `headers()` 키 자체가 없었고 `poweredByHeader`도 끄지 않아 `X-Powered-By: Next.js`가 나가고 있었다.
+
+CSRF는 이미 되어 있다. `SessionGuard.refuseForeignOrigin`이 쿠키 인증 라우트의 상태 변경 요청에서 `Origin`을 검사하고(A-M2-13), better-auth는 자기 경로에서 자기 검사를 한다(`disableOriginCheck: false`) — PLAN의 "CSRF(better-auth 기본)"이 그 범위에만 맞다는 사실도 이미 기록되어 있다. M6에서 새로 한 것은 없고, 이 ADR은 그 상태가 검토되었음을 기록한다.
+
+관리자 감사 로그는 **완전했다**: 상태를 바꾸는 관리자 라우트 13개가 전부 효과와 같은 트랜잭션에서 `admin_actions` 한 행을 쓰고, `ADMIN_ACTION_TYPES` 13개 값과 정확히 일대일이다.
+
+### 결정
+
+- **API에는 `@fastify/helmet` 13.1.1**을, JSON만 답하는 서버에 맞게 줄여서 건다.
+  - CSP는 `default-src 'none'; frame-ancestors 'none'`뿐(`useDefaults: false`). 페이지가 아니므로 나머지 지시어는 존재하지 않는 문서를 위한 것이고, `frame-ancestors`는 어떤 응답에도 적용되므로 **오류 본문이 프레임되어 읽히는 것**을 막는다.
+  - `crossOriginResourcePolicy: 'same-site'`. helmet 기본값 `same-origin`은 ADR-0017이 일부러 설계한 구조(브라우저가 소켓 때문에 API 오리진에 직접 붙고, 앱은 전부 직접 붙는다)를 위반하는 규칙이다.
+  - `crossOriginEmbedderPolicy: false`. 문서가 무엇을 임베드할 수 있는지에 대한 규칙이고, 이 서버는 문서를 내지 않는다.
+  - HSTS는 켠 채로 둔다. 브라우저는 HTTPS로 오지 않은 응답의 이 헤더를 **무시하므로**(RFC 6797 §7.2) 개발 스택은 영향이 없고, TLS 배포는 운영 전용 설정 경로 없이 보호된다. `preload`는 넣지 않는다 — 브라우저 벤더의 목록에 제출하는 일이고 헤더가 조용히 내릴 결정이 아니다.
+- **등록은 `registerSecurityHeaders(app)` 한 함수로, `main.ts`와 `test/app.ts` 양쪽에서 부른다.** 운영에서만 나가는 헤더는 어떤 테스트도 증명하지 못하는 헤더다 — 바로 옆의 `useWebSocketAdapter`가 같은 이유로 같은 경고 주석을 달고 있다. Socket.IO 핸드셰이크는 그대로 남는다: engine.io는 자기 경로에서 raw HTTP 서버에 붙고 Fastify의 요청 수명주기에 들어오지 않는다.
+- **웹의 CSP는 Next와 Chakra가 실제로 필요로 하는 것을 정직하게 적는다.**
+  - `script-src 'self' 'unsafe-inline'`. App Router는 flight 페이로드와 부트스트랩 스크립트를 HTML에 인라인하고, 그것을 멈추는 `next.config` 옵션은 없다. **더 잘하려면 요청마다 nonce가 필요하고**, 그러려면 proxy가 발급하고 모든 인라인 `<script>`/`<style>`이 그것을 실어야 한다 — 실제 회귀 표면이 있는 실제 변경이므로 절반만 해 두지 않고 **열린 항목으로 남긴다.** 남는 것만으로도 "이 오리진 외의 스크립트 로드 금지"는 유효하고, 그것이 이 정책이 실제로 막을 수 있는 주입이다.
+  - `'unsafe-eval'`은 **개발에서만**. React Refresh가 교체하는 모듈을 평가한다. 운영에 실으면 주입된 문자열에 코드가 되는 길을 준다.
+  - `style-src 'unsafe-inline'`은 Emotion이다(ADR-0009의 레지스트리). 없으면 스타일이 없는 페이지가 그려진다.
+  - `img-src https:`는 시장 이미지가 관리자가 입력하는 URL이기 때문이다(PLAN §17 Q5). (2026-09-10 추기, PR #8 리뷰) 검증기는 `http:`도 받으므로(`z.url({ protocol: /^https?$/ })`) **API 오리진이 평문 http일 때만 `http:`를 함께 적는다.** 문서는 자기 API에 닿을 수 있는 스킴으로 서빙된다 — TLS 페이지는 평문 http 오리진에 fetch도 소켓도 열 수 없으므로(혼합 콘텐츠; `localhost`만 예외이고 거기서는 추가 스킴이 무해하다), 평문 `NEXT_PUBLIC_API_URL`은 곧 평문 문서(개발, CI, 로컬 standalone)이고 거기가 http 이미지가 실제로 로드되는 곳이다. `https:`만 적었던 첫 판은 그 환경에서 저장에 성공한 시장을 말없이 회색 폴백으로 그렸다. TLS 뒤에서는 브라우저가 CSP를 보기 전에 http 이미지를 업그레이드하거나 거부하므로 거기 적힌 `http:`는 아무것도 허용하지 않으면서 스캐너에게는 "안전하지 않은 로드를 허용하는 정책"으로 읽힌다. 남는 것: TLS 배포에서 관리자가 http 이미지 URL을 넣으면 브라우저가 https로 올려 받을 수 있을 때만 그려지고 그러지 못하면 폴백이다 — CSP가 아니라 혼합 콘텐츠 규칙이고, 검증에서 http를 거절하면 개발 환경이 막히므로 그대로 둔다.
+  - `connect-src`는 API 오리진을 http와 ws 양쪽으로 명시한다 — M4부터 브라우저가 `NEXT_PUBLIC_API_URL`에 직접 붙는다(ADR-0017).
+  - `frame-ancestors 'none'`(+ 구형 브라우저용 `X-Frame-Options: DENY`), `object-src 'none'`, `base-uri 'self'`, `form-action 'self'`.
+- **웹 헤더는 `/api/*`를 제외한다**(`source: '/((?!api/).*)'`). 프록시된 API 응답은 이미 API 자신의 헤더를 달고 있고, 한 응답에 CSP가 둘이면 브라우저는 **교집합**을 강제한다 — 두 파일에서 우연히 조립된 규칙이다.
+- **관리자 감사 로그의 완전성은 테스트로 고정한다**(`admin-audit.test.ts`). 개별 스위트는 각 쓰기가 _올바른_ 행을 남기는 것을 이미 증명하지만, 존재하는 라우트에 대해서만 말하므로 **내일 추가될 관리자 쓰기**는 아무것도 깨뜨리지 않는다. 이 테스트는 모듈 그래프에서 관리자 라우트를 스스로 발견해, 상태를 바꾸는 것마다 `ADMIN_ACTION_TYPES` 값을 지목하라고 요구한다. 읽기 전용 GET은 의도적으로 비워 둔다 — PLAN §6.2/§12가 정한 것은 **행위 로그이지 접근 로그가 아니다.**
+
+### 결과
+
+- API의 모든 응답(오류 포함)이 CSP·nosniff·referrer-policy·HSTS·CORP를 단다. `security-headers.test.ts`가 404 응답에서도 그것을 확인한다 — 라우트별 규칙이 가장 놓치기 쉬운 응답이다.
+- 웹의 모든 문서 응답이 여섯 헤더를 달고, `X-Powered-By`는 사라진다. `apps/web/src/lib/security-headers.test.ts`가 정책의 내용과 `'unsafe-eval'`의 환경별 유무를 고정한다. (2026-09-10 추기, PR #8 리뷰) `img-src`의 `http:`(API 오리진의 스킴)도 같은 테스트가 양방향으로 고정한다.
+- 남은 것: **nonce 기반 `script-src`**. `'unsafe-inline'`이 남아 있는 한 스크립트 CSP는 주입된 인라인 스크립트를 막지 못한다. QUESTIONS의 새 항목으로 남긴다.
+- 감사 로그에 대한 판정: **빈틈 없음.** 쓰기 라우트 13개 ↔ 액션 타입 13개가 전단사이고, 모든 삽입이 효과와 같은 트랜잭션 안에 있다. 다만 `charge_package_*`·`coupon_*`의 다섯 삽입만 `createdAt`을 명시하지 않아 트랜잭션 시작 시각을 쓴다(나머지 여덟은 잠금 뒤 `clockTimestamp`). 지금은 무해하지만 `admin_actions`를 `(created_at, id)` 키셋으로 페이지네이션하는 날 물린다 — 그날의 항목으로 남긴다.
+
+---
+
+## ADR-0037 — `docs/API.md`는 openapi.json에서 생성한다 (M6)
+
+- 날짜: 2026-09-10
+- 상태: 채택
+
+### 맥락
+
+PLAN §4의 저장소 구조는 `docs/API.md`("생성된 OpenAPI 요약")를 M3 이후의 산출물로 적어 두었지만 파일은 존재한 적이 없다. 그 자리를 대신하고 있던 것은 **README의 다섯 문단**이다 — 라우트, DTO 모양, 실시간 이벤트, 정산·이의 흐름이 각각 1,000~1,800자짜리 한 불릿에 들어 있었고, 로컬 기동 절차 사이에 끼어 있었다. M6 AC 3("README만 보고 15분 내 기동")과 정면으로 부딪힌다.
+
+한편 계약 자체는 이미 기계가 안다: 41개 오퍼레이션 전부가 `@ApiOperation`의 `summary`와 명시적 `operationId`를 달고 있고, `apps/api/openapi.json`은 커밋되며 CI가 코드와의 일치를 `git diff --exit-code`로 강제한다.
+
+### 결정
+
+- **`docs/API.md`는 손으로 쓰지 않고 `scripts/generate-api-doc.mjs`가 `apps/api/openapi.json`에서 만든다.** 의존성 없는 Node ESM 스크립트이고, `pnpm api:openapi` 체인의 마지막 단계다(`openapi:export` → api-client `generate` → 이 스크립트).
+- **CI의 계약 검사가 이 파일도 본다.** `git diff --exit-code`의 경로 목록에 `docs/API.md`를 더했다. 생성물이 검사받지 않으면 그것은 문서가 아니라 한때 문서였던 파일이다.
+- **결정론적으로 만든다.** 시각도 난수도 없고, 정렬하는 것은 스키마 이름 목록뿐이다. 같은 입력이면 바이트까지 같은 출력이어야 CI의 diff 검사가 성립한다.
+- **문서가 알 수 없는 것은 생성기의 템플릿 상수로 박아 넣는다** — 파일 맨 위 한 블록에 모아 두어 손댈 자리가 분명하다: `GET /api/health`(`@ApiExcludeController()`라 문서에 없다), `/api/auth/*`(middie가 Nest보다 먼저 서비스하므로 문서에도 없고 오류 모양도 다르다), 레이트 리밋 표, 실시간 프로토콜.
+- **드리프트 가드를 넣는다.** 오류 코드·HTTP 상태·레이트 리밋 버킷·실시간 이벤트 상수는 하드코딩하지 않고 `errors.ts`·`app-error.ts`·`rate-limit.ts`·`realtime.ts`에서 **파싱**한다. 새 오류 코드에 상태나 한국어 설명이 없으면, 새 버킷이나 이벤트에 설명이 없으면 생성이 실패한다.
+- **`docs/API.md`는 `.prettierignore`에 넣는다.** prettier는 Markdown 표를 자기 문자열 폭 규칙으로 다시 채우는데(이모지 1, 한글 2), 그것을 생성기가 바이트까지 흉내 내는 것은 깨지기 쉽다. 저장소는 다른 생성 산출물도 이미 그 목록에 두고 있다.
+- **README는 실행과 길찾기만 남긴다.** 계약 서술은 전부 `docs/API.md`로 옮겼다.
+
+### 결과
+
+- `pnpm api:openapi` 한 번이 `openapi.json` · `packages/api-client/src/generated` · `docs/API.md` 셋을 함께 갱신한다. 컨트롤러 데코레이터를 고치고 이 명령을 잊으면 CI가 잡는다.
+- 문서에 손을 대고 싶으면 고칠 자리는 둘뿐이다: 오퍼레이션의 설명은 컨트롤러의 `@ApiOperation`, 그 밖의 산문은 생성기의 템플릿 상수. (2026-09-10 추기, PR #8 리뷰) 예외 하나 — 모든 오퍼레이션에 공통인 `RATE_LIMITED`(429)는 컨트롤러가 아니라 `openapi/document.ts`의 `addGlobalResponse`가 붙인다(ADR-0034 추기).
+- `/api/health`·`/api/health/live`와 `/api/auth/*`는 **사람이 쓴 문단**으로 문서에 들어간다. OpenAPI가 그것들을 모르는 이유가 각각 명시되어 있으므로, 나중에 문서에 넣기로 하면 그 문단이 먼저 지워져야 한다.
+
+---
+
+## ADR-0038 — 글로벌 리더보드: 매 조회 집계, 닉네임만, 고정 20행 (PLAN M6 선택)
+
+- 날짜: 2026-09-10
+- 상태: 채택
+
+### 맥락
+
+PLAN M6의 선택 항목은 "글로벌 리더보드(실현 손익 상위 20) — 그룹 기능의 전신. 시간이 남을 때만"이다. PLAN §6.3은 이미 그 준비를 지시해 두었다: "랭킹은 `positions.realized_pnl_p`, `fills`, `ledger_entries`에서 사용자별로 집계 가능하도록 인덱스를 둔다. **별도 집계 테이블은 그룹 마일스톤에서**." 즉 테이블을 만들지 않는 것이 이미 정해진 결정이다.
+
+### 결정
+
+- **`GET /api/v1/leaderboard`, 공개.** PLAN §7.1의 "정보 조회 (공개)" 라우트가 익명 방문자를 위한 것이고, 닉네임의 순위에는 세션이 있어야만 볼 수 있는 것이 없다. 공개이므로 홈 화면처럼 SSR에서 프리페치되어 첫 페인트에 표가 들어간다.
+- **커서 없음, 고정 20행.** PLAN §7의 커서 페이지네이션은 이어지는 목록을 위한 것이고 스무 명의 순위는 이어지지 않는다. 게다가 `SORT_VALUE_SHAPES.int`는 숫자만 받는데 **실현 손익은 부호가 있어** 손실을 실은 정렬 커서를 만들 수 없다. `FILLS_RECENT_LIMIT`과 같은 모양(고정 공개 슬라이스)을 따른다.
+- **매 조회 집계.** `positions`를 계정별로 묶어 `sum(realized_pnl_p)`. MVP 규모에서 이 그룹핑은 `/me/positions`가 이미 사용자당 읽는 행을 사용자 필터 없이 읽는 것이다. 집계 테이블은 PLAN §6.3이 그룹 마일스톤에 배정했다.
+- **계정 id를 싣지 않는다.** 공개 화면에 id를 실으면 순위가 한 사람의 포지션을 상관시키는 손잡이가 된다 — PLAN §7.1이 `fills`를 익명으로 두는 것과 같은 이유다. 닉네임은 PLAN §6.3이 랭킹과 이의를 위해 처음부터 필수로 만든 값이다.
+- **아무것도 확정하지 않은 계정은 목록에서 뺀다**(`having sum(...) <> 0`). 포지션 행은 첫 매수부터 존재하므로, 0을 순위에 넣으면 갓 배포된 환경의 리더보드는 **불투명한 id 순서로 정렬된 0 P 스무 개**가 된다 — 아무것도 순위 매기지 않는 순위표다. 손실은 남긴다: "상위 20"은 금액 기준이고, 손실을 감추면 그 표는 계정이 아니라 제품에 대한 주장이 된다.
+- **동점은 `user_id`로 깬다.** 없으면 두 번의 조회가 서로 다른 순서를 답하고, 서버가 그린 HTML과 클라이언트의 재조회가 어긋난다 — `market-keys.ts`와 SSR 하이드레이션 규칙이 존재하는 바로 그 부류의 버그다.
+- **금액은 끝까지 문자열이다.** 서비스에서 `sql<string>`, 전선에서 `pAmountSchema`, 화면에서 `parsePAmount`+`formatP`. bigint의 합에 `Number()`를 쓰는 것이 PLAN §0.2가 금지하는 유일한 일이고, `use-portfolio.test.ts`가 그 대가를 이미 보여 준다.
+- **진입점은 포트폴리오 화면의 링크 하나.** 실현 손익은 포트폴리오의 수치이고 독자가 방금 자기 것을 본 자리다. 모바일 하단 탭은 PLAN §11.4가 정한 네 개 그대로 둔다.
+
+### 결과
+
+- 새 라우트 하나, 새 테이블 없음, 새 마이그레이션 없음. 정산 중인 시장의 행을 읽을 수는 있으므로 순위는 초 단위로 최종적이지 않다 — 잠금 없는 순수 `SELECT`이고, 그 정도의 지연은 순위표가 감당한다.
+- `leaderboard.controller.test.ts`가 공개 접근·손실 포함·bigint 합·0 제외·상한·동점 안정성·id 미노출을 고정한다.
+- 그룹 마일스톤이 이것을 물려받는다: 같은 집계에 `group_id` 필터를 더하는 것이 그룹 랭킹이고, 그때 비로소 집계 테이블이 필요한지 판단한다.
+
+---
+
+## ADR-0039 — 인덱스 점검, 키셋 행 비교, `price_ticks` 파티셔닝 미채택 (M6)
+
+- 날짜: 2026-09-10
+- 상태: 채택
+
+### 맥락
+
+PLAN M6은 "`price_ticks` 월 파티셔닝 여부 검토(DECISIONS.md), 인덱스 점검, N+1 제거"를 요구한다. 인덱스 쪽에는 이미 두 마일스톤 치의 기록이 쌓여 있었다.
+
+M2와 M3의 PR 리뷰가 **네 번** "이 목록에 인덱스를 더하라"는 지적을 받고 **네 번 반려**했다. 반려의 근거는 매번 같았다 — 그리고 그 근거가 이번 결정의 전제다.
+
+> 제안된 인덱스만으로는 리뷰가 기대한 것을 주지도 못합니다. 키셋 술어가 OR 형태라 Postgres가 Index Cond가 아닌 Filter로 붙이므로, 인덱스가 있어도 깊은 페이지는 여전히 커서 깊이에 비례합니다. 진짜 seek이 되려면 `(created_at, id) < ($1, $2)` 행 비교로 바꿔야 합니다. (PR #3 리뷰 2차)
+
+그래서 A-M3-10이 **"전역 키셋 목록 넷 + 행 비교 술어"**를 한 묶음으로 M6에 넘겼다. 한쪽만 넣으면 회귀한다는 것이 반려문에 이미 적혀 있었다.
+
+M6은 그것을 실제로 쟀다. 커밋된 마이그레이션 12개를 그대로 적용한 별도 데이터베이스에 **1만 · 20만 · 200만 행**을 채우고(타임스탬프 1%가 서로 충돌하도록, `volume_p`에 39만 행짜리 동점 블록을 두고), 커서 깊이 셋(첫 페이지 · 1,000번째 · 90%)마다 네 변형을 `EXPLAIN (ANALYZE, BUFFERS)`로 비교했다 — (A) OR 술어 + 인덱스 없음, (B) OR 술어 + 인덱스, (C) 행 비교 + 인덱스 없음, (D) 행 비교 + 인덱스. `max_parallel_workers_per_gather = 0`, JIT 끔, 첫 실행 버리고 3회 중앙값.
+
+### 결정
+
+**1. 키셋 커서 술어를 전부 행 비교로 바꾼다**(`apps/api/src/common/keyset.ts`). 커서를 쓰는 목록 라우트 11개, 술어 13개(`GET /markets` 하나가 정렬 셋을 가진다). 두 반쪽은 바인드 파라미터이고 캐스트 키워드만 렌더링된다.
+
+**2. 인덱스 일곱 개를 더한다**(마이그레이션 0012). 200만 행 기준 근거를 함께 적는다.
+
+| 인덱스                                      | 첫 페이지            | 깊은 페이지                              |
+| ------------------------------------------- | -------------------- | ---------------------------------------- |
+| `profiles (created_at DESC, user_id DESC)`  | 4,193ms → **0.22ms** | 1,810ms → **0.19ms** (78,098 → 215 버퍼) |
+| `payments (created_at DESC, id DESC)`       | 3,169ms → **0.34ms** | 1,069ms → **0.37ms**                     |
+| `audit_failures (created_at DESC, id DESC)` | 358ms → **0.16ms**   | 172ms → **0.07ms** (버퍼 4개)            |
+| `coupons (created_at DESC, id DESC)`        | 397ms → **0.06ms**   | 198ms → **0.13ms**                       |
+| `disputes (created_at DESC, id DESC)`       | 5,614ms → **3.81ms** | 2,424ms → **3.74ms**                     |
+| `markets (status, volume_p DESC, id DESC)`  | 758ms → **0.23ms**   | 355ms → **0.13ms**                       |
+| `markets (created_at DESC, id DESC)`        | 1,626ms → **0.10ms** | —                                        |
+
+**3. `markets (status, created_at DESC, id DESC)`는 재지 않고 넘기지 않았다 — 재고 넣지 않았다.** `markets_created_at_id_idx`가 있으면 플래너가 `?sort=newest`(상태 필터 있음)를 **그쪽에서** 같은 0.11ms에 처리한다. 전용 인덱스는 95MB를 더 쓰고 아무것도 더 주지 않는다. 단, 측정은 `open` 비율 40%에서 했다 — 열린 시장이 극소수인 배포는 다시 재야 한다.
+
+**4. `/admin/disputes`의 반려를 뒤집는다.** PR #6 3차 리뷰가 이 인덱스를 거절했고 그 근거는 옳았다: "제안한 인덱스만으로는 지적이 든 키셋 페이지가 빨라지지 않는다 — 커서 술어가 OR 분리형이라 Filter로 붙는다." 200만 행에서 그대로 재현된다(변형 B, 깊은 페이지 **1,281ms · 1.75M 버퍼**). 그러나 같은 리뷰가 이 가족 전체를 M6으로 넘긴 이유가 **술어와 인덱스를 함께 넣기 위해서**였고, 함께 넣으면 같은 페이지가 Index Cond로 **3.74ms · 206 버퍼**다. 반려의 다른 근거였던 "합성 50만 행에서 316ms"도 곡선이 이어진다 — 200만 행에서 **5.6초**이고, 그것은 "천만 행 단위가 필요하다"던 예상보다 한 자릿수 이르다. `UNIQUE (market_id, user_id)`가 테이블 크기를 묶는다는 나머지 근거는 성능이 아니라 제품 판단이라 측정으로 답할 수 없다.
+
+**5. `/admin/users`의 희귀 검색어 회귀는 실재하고, 인덱스를 막을 이유는 아니다.** M2 리뷰가 경고한 그대로 재현됐다 — 200만 행에서 `%rareold%`(10건 매치) 첫 페이지가 **3.6초 → 10.0초**, 버퍼는 181배다. 플래너가 `LIMIT 21`을 정렬된 인덱스로 금방 채울 것이라 오판하고 200만 항목을 걷는다. 세 가지가 분명하다: (가) **행 비교는 이것을 고치지 못하고 고칠 수도 없다** — 실패하는 질의는 커서가 아예 없는 첫 페이지이고, 원인은 `ILIKE` 필터와 정렬된 `LIMIT`의 만남이다. (나) `enable_seqscan=off`로 강제해도 같은 계획·같은 비용이라 통계로 되돌릴 여지가 없다. (다) **1만·20만 행에서는 회귀가 전혀 없다** — 20만에서 인덱스 없이 303ms, 있으면 294ms다. 그리고 그 분기는 인덱스가 없어도 200만 행에서 이미 3.6초로 못 쓴다. 인덱스는 망가진 질의를 더 망가뜨리는 것이지 멀쩡한 질의를 망가뜨리는 것이 아니고, **같은 인덱스가 흔한 검색어를 4,535ms → 1.06ms로, 기본 목록을 4,193ms → 0.22ms로** 만든다. 고치려면 trigram 인덱스가 필요하다 — 별도 항목(Q-M6-7)으로 남긴다.
+
+**6. `price_ticks` 월 파티셔닝은 하지 않는다.** PLAN §6.2의 주석("월 단위 파티셔닝은 M6에서 검토")에 대한 답이다. 네 가지가 반대한다.
+
+- **읽기 모양이 프루닝과 맞지 않는다.** 네 가지 읽기 중 셋이 `ts <= 경계 ORDER BY ts DESC LIMIT 1`(카드 스파크라인, 격자 표본, 절단 프로브)이고 아래쪽 경계가 없다. 파티션 프루닝은 그런 술어의 **오래된 쪽을 잘라 내지 못하므로**, 실행기는 행이 나올 때까지 최신 파티션부터 차례로 뒤진다. 지금은 인덱스 하강 한 번인 것이 파티션 N개면 최대 N번이다 — 그리고 그것이 M6 AC 2가 재는 바로 그 홈 API다(카드당 25회 하강 × 페이지 크기).
+- **기본 키를 잃는다.** 파티션된 테이블의 UNIQUE/PK는 파티션 키를 포함해야 하므로 `id bigserial PRIMARY KEY`가 그대로 살아남지 못한다. `hasOlderTick`이 `(ts, id)`를 비교하고 `rawSeries`가 `(ts DESC, id DESC)`로 정렬하는데, 그 결정성을 주는 것이 시장 안에서의 id 유일성이다.
+- **보관 요구가 없다.** 파티셔닝의 고전적 이득인 `DROP PARTITION`을 쓸 곳이 없다 — 저장소 어디에도 `price_ticks`를 지우는 코드가 없고, 어떤 라우트도 시장의 `open_at`보다 오래된 데이터를 내주지 않는다. A-M4-14가 사전 집계 테이블을 거절한 근거도 같다.
+- **주인이 없다.** 이미지에 `pg_partman`이 없으므로 파티션 생성은 매달 마이그레이션을 늘리거나 새 워커 크론이 되어야 하고, drizzle-kit은 선언적 파티셔닝을 표현하지 못해(0.31.10에서 확인) 커스텀 마이그레이션과 영원히 다른 스냅샷을 남긴다.
+
+**재검토 방아쇠**를 대신 적어 둔다: (가) 보관 정책이 생겨 오래된 틱을 실제로 지워야 할 때, (나) 한 시장의 틱이 수천만 행에 이르러 `price_ticks_market_id_ts_id_idx`가 버퍼 풀에 들어가지 않을 때, (다) 읽기 모양이 바뀌어 아래쪽 경계가 있는 범위 조회가 주가 될 때. 그중 하나라도 오면 이 결정을 다시 연다.
+
+**7. N+1은 읽기 경로에 없다.** 목록을 답하는 서비스 여덟 개를 전부 읽었다 — `market.service`·`market-admin.service`·`me.service`·`wallet.service`·`dispute.service`·`admin.service`·`trade.service`·`coupon.service` — 그리고 반복 안의 질의는 하나도 없다. 카드 스파크라인은 페이지당 문장 하나이고(일부러 lateral이 아니다), 관리자 시장 상세의 여섯 질의는 행 수와 무관한 고정 팬아웃이다. 남은 두 루프는 **쓰기** 경로다: 무효 환불(`market-admin.service`)과 정산 지급(워커 `market-finalize`)이 보유자마다 잠금·시계·잔고·원장·포지션을 돈다. **고치지 않는다** — 계정별 `clock_timestamp()`가 `/me/ledger`의 `balance_after_p` 사슬과 `user:balance` 이벤트의 순서 키를 만들고, 묶어서 쓰면 그 순서가 사라진다. 성능 문제가 아니라 회계 순서의 문제다.
+
+### 결과
+
+- 마이그레이션 0012가 인덱스 일곱 개를 만든다. 200만 행 기준 합계 593MB이고, 가장 큰 것은 `profiles`의 128MB다(`user_id`가 33자 text).
+- 커서 술어 13개가 전부 `(a, b) < ($1, $2)`다. `/admin/users`의 타이브레이크는 `user.id`에서 `profiles.user_id`로 옮겼다 — 값은 같고(FK), 교차 테이블 행 비교는 **어떤 볼륨에서도 Index Cond가 되지 못한다**(200만 행에서 7.36초 · 860만 버퍼, 같은 테이블 판의 38,300배).
+- `price_ticks`는 그대로 한 테이블이다. PLAN §6.2의 주석과 `packages/db/src/schema/price-ticks.ts`의 "Monthly partitioning: M6"이 이 결정을 가리키도록 고쳤다.
+- 새 열린 항목: **Q-M6-7** — `/admin/users`의 희귀 검색어. 200만 행에서 10초이고 인덱스 없이도 3.6초다.
+- 측정에서 한 번 설명되지 않은 계획 흔들림이 있었다: 20만 행 · 깊은 페이지 · `?sort=volume`에서 변형 D가 정렬된 중첩 루프 대신 해시 조인 + 정렬을 골랐다(8.8ms). 커서가 39만 행짜리 동점 블록 안이라 커서 이후 행 수 추정이 컸기 때문으로 보이고, 200만 행에서는 재현되지 않았다(0.13ms). 기록만 남긴다.

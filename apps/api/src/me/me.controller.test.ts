@@ -114,6 +114,8 @@ describe.skipIf(!hasTestInfra)('/api/v1/me (integration)', () => {
     expect(errorEnvelopeSchema.parse(missing.json()).error.code).toBe('NOT_FOUND');
     const health = await t.app.inject({ method: 'GET', url: '/api/health' });
     expect(health.statusCode).toBe(200);
-    expect(health.json()).toEqual({ status: 'ok', db: 'ok', redis: 'ok' });
+    // The point here is that it is NOT the PLAN 7 envelope; the body's own shape is pinned by
+    // health.controller.test.ts, which is where a field added to it has to be decided.
+    expect(health.json()).toMatchObject({ status: 'ok', db: 'ok', redis: 'ok' });
   });
 });

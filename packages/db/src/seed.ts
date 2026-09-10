@@ -452,6 +452,14 @@ const SEED_MARKETS: readonly SeedMarket[] = [
 ];
 
 /**
+ * How close a seeded market's cutoff may come before `db:seed` starts asking for fresh copy.
+ * Two weeks: long enough that a warning is actionable (new copy needs an owner decision on the
+ * subject, Q-M3-4), short enough that it is not shouting for most of the fixture's life.
+ */
+const SEED_CLOSE_SOON_DAYS = 14;
+const SEED_CLOSE_SOON_MS = SEED_CLOSE_SOON_DAYS * 24 * 60 * 60 * 1_000;
+
+/**
  * Inserts the seed markets, one transaction per market under the seed lock, exactly as the
  * admin create + open path writes them (M3 design 3.4): the market row, its 'open' price tick
  * and the 'created' / 'opened' events, all in one commit so a crash never leaves a market
@@ -556,7 +564,8 @@ async function seedMarkets(db: Db, adminId: string): Promise<void> {
     // seeded before one passes reaches the same state without the seed doing anything — and
     // that is the larger half. Against the row's own close time, so an admin who pushed it
     // forward (the copy refresh Q-M3-4 describes) is not nagged about a market they fixed.
-    if (outcome.closeAt.getTime() <= reportedAt.getTime()) {
+    const remainingMs = outcome.closeAt.getTime() - reportedAt.getTime();
+    if (remainingMs <= 0) {
       // Seeded as written rather than skipped: skipping would make the fixture's size a
       // function of the calendar (every cutoff is in 2026, so a fresh seed would insert
       // nothing at all from 2027). Such a market refuses every quote and trade with
@@ -565,6 +574,16 @@ async function seedMarkets(db: Db, adminId: string): Promise<void> {
       // (Q-M3-4), under a new slug.
       console.warn(
         `[db:seed] market ${seed.slug}: closeAt ${seed.closeAt} is already past — the worker's market.close scan will close it within a minute (or 관리자 → 시장 상세 → 마감); refresh the seed copy`,
+      );
+    } else if (remainingMs <= SEED_CLOSE_SOON_MS) {
+      // The M6 half of the same mechanism. The warning above only fires once the fixture is
+      // already broken — a developer who clones the repo that week gets a home page of closed
+      // markets and no idea it was foreseeable. This one fires while it can still be acted on,
+      // and it is the same signal at a different distance, so refreshing the copy silences both.
+      console.warn(
+        `[db:seed] market ${seed.slug}: closeAt ${seed.closeAt} is within ${String(
+          SEED_CLOSE_SOON_DAYS,
+        )} days — refresh the seed copy (Q-M3-4) before the fixture expires`,
       );
     }
   }

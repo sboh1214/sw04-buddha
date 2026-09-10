@@ -5,11 +5,20 @@ import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fa
 import { Test } from '@nestjs/testing';
 import { schema, type Db } from '@buddha/db';
 import { connectTestDb, type TestDb } from '@buddha/db/test';
+import { type Redis } from 'ioredis';
+import { DEFAULT_RATE_LIMITS, type RateLimits } from '@buddha/shared';
 import { AppModule } from '../app.module.js';
 import { AUTH, type Auth } from '../auth/auth.js';
+import { uncountedPeers } from '../config/env.js';
 import { DB } from '../infra/db/db.provider.js';
 import { MAX_PARAM_LENGTH } from '../infra/http/fastify-options.js';
+import { registerSecurityHeaders } from '../infra/http/security-headers.js';
 import { MAILER } from '../mail/mail.provider.js';
+import { REDIS } from '../infra/redis/redis.provider.js';
+import { installAddressLimit } from '../rate-limit/address-limit.js';
+import { RATE_LIMITS } from '../rate-limit/rate-limit.limits.js';
+import { RATE_LIMIT_KEY_PREFIX } from '../rate-limit/redis-throttler.storage.js';
+import { UNCOUNTED_PEERS } from '../rate-limit/uncounted-peers.js';
 import { RealtimeIoAdapter } from '../realtime/realtime-io.adapter.js';
 import { createMemoryMailer, type MemoryMailer } from './memory-mailer.js';
 
@@ -33,6 +42,21 @@ export interface CreateTestAppOptions {
    * running without a listening socket.
    */
   listen?: boolean;
+  /**
+   * Raises (or lowers) PLAN 7.5's limits for this app only. Needed by the suites that prove a
+   * concurrency invariant PLAN itself specifies above the shipped limit — twenty concurrent
+   * charges by one account (PLAN M2 AC 2) against `/payments/charge`'s 10/min/user — and by any
+   * test that wants a bound it can reach quickly. Left out, the app runs PLAN's own numbers,
+   * which is what `rate-limit.controller.test.ts` measures the acceptance criterion against.
+   */
+  rateLimits?: Partial<RateLimits>;
+  /**
+   * RATE_LIMIT_UNCOUNTED_PEERS for this app only (config/env.ts): peers whose requests the
+   * per-address limit does not count. `inject()` presents a loopback peer, which is never
+   * counted, so a suite that wants to prove the list works names a routable one here and
+   * presents it with `remoteAddress`.
+   */
+  uncountedPeers?: string;
 }
 
 /**
@@ -46,11 +70,19 @@ export async function createTestApp(options: CreateTestAppOptions = {}): Promise
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(MAILER)
     .useValue(mailer)
+    .overrideProvider(RATE_LIMITS)
+    .useValue({ ...DEFAULT_RATE_LIMITS, ...options.rateLimits })
+    .overrideProvider(UNCOUNTED_PEERS)
+    .useValue(uncountedPeers({ RATE_LIMIT_UNCOUNTED_PEERS: options.uncountedPeers }))
     .compile();
   const app = moduleRef.createNestApplication<NestFastifyApplication>(
     new FastifyAdapter({ routerOptions: { maxParamLength: MAX_PARAM_LENGTH } }),
     { bodyParser: false, logger: false },
   );
+  // Exactly as in main.ts, and for the same reason the adapter below is: a bound the suites do
+  // not see is a bound nothing proves.
+  await registerSecurityHeaders(app);
+  installAddressLimit(app);
   app.setGlobalPrefix('api');
   app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
   // Must be installed before init, exactly as in main.ts: without it the suites would exercise
@@ -70,12 +102,39 @@ export async function createTestApp(options: CreateTestAppOptions = {}): Promise
     auth: app.get<Auth>(AUTH),
     mailer,
     url,
-    reset: () => harness.reset(),
+    reset: async () => {
+      await harness.reset();
+      await clearRateLimitBuckets(app.get<Redis>(REDIS));
+    },
     close: async () => {
       await app.close();
       await harness.close();
     },
   };
+}
+
+/**
+ * Drops every rate-limit bucket, as part of the per-test reset.
+ *
+ * Postgres is truncated between tests and Redis is not, so without this a suite that uses FIXED
+ * addresses — `auth.test.ts` does — carries its spent `email` buckets into the next run and
+ * starts failing with 429 whenever the whole suite is run twice inside one 60-second window.
+ * Scoped to the `rl:` prefix by SCAN rather than FLUSHDB: `market-jobs.service.test.ts` inspects
+ * `bull:*` keys and would lose them.
+ */
+async function clearRateLimitBuckets(redis: Redis): Promise<void> {
+  let cursor = '0';
+  do {
+    const [next, keys] = await redis.scan(
+      cursor,
+      'MATCH',
+      `${RATE_LIMIT_KEY_PREFIX}:*`,
+      'COUNT',
+      500,
+    );
+    cursor = next;
+    if (keys.length > 0) await redis.del(...keys);
+  } while (cursor !== '0');
 }
 
 /** The `.../verify-email?token=...&callbackURL=...` link in the newest mail sent to `to`. */
