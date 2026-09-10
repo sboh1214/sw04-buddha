@@ -189,7 +189,15 @@ test.describe('정산', () => {
     for (let i = 0; i < rowCount; i += 1) {
       const cells = rows.nth(i).locator('td');
       await expect(cells.nth(0)).toHaveText(String(i + 1));
-      amounts.push(Number(((await cells.nth(2).textContent()) ?? '').replace(/[^\d-]/g, '')));
+      // The MINUS_SIGN goes to an ASCII one BEFORE the strip: `[^\d-]` keeps a hyphen, and
+      // U+2212 is not one, so a loss came through as its own absolute value. Losses are on
+      // this board by contract — the service leaves out only a zero (`having(ne(total, 0))`,
+      // "Losses stay in") — so a parse that drops the sign checks the order of ABSOLUTE
+      // values, which is neither necessary nor sufficient for the one the service promises:
+      // it fails a correctly ordered board with two different losses on it, and passes one
+      // ordered −900P before −100P.
+      const cell = ((await cells.nth(2).textContent()) ?? '').replaceAll(MINUS_SIGN, '-');
+      amounts.push(Number(cell.replace(/[^\d-]/g, '')));
     }
     expect(
       [...amounts].sort((a, b) => b - a),
