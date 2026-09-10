@@ -14,12 +14,13 @@ import { RATE_LIMIT_WINDOW_SECONDS } from '@buddha/shared';
  *
  * better-auth is mounted as `@fastify/middie` middleware that runs BEFORE Nest routing
  * (auth.module.ts), so `RateLimitGuard` never sees `/api/auth/*` — sign-in, password reset,
- * verification mail. `authRateLimiter` bounds those per ADDRESS IN THE BODY, which is the right
- * key for the two abuses they have, but it leaves no bound on the CALLER: rotating the address
- * gets a fresh bucket every time, and `/sign-in/email` hashes the submitted password even for
- * an address that does not exist (better-auth does that deliberately, so the answer takes the
- * same time either way), so an unbounded caller is an unbounded scrypt. Every `/api/v1/*` route
- * already has that bound; this gives it to the other half of the API.
+ * verification mail. `authRateLimiter` bounds those per ADDRESS IN THE BODY (and `/change-email`
+ * per account as well — auth.ts), which is the right key for the two abuses they have, but on
+ * the unauthenticated routes it leaves no bound on the CALLER: rotating the address gets a fresh
+ * bucket every time, and `/sign-in/email` hashes the submitted password even for an address that
+ * does not exist (better-auth does that deliberately, so the answer takes the same time either
+ * way), so an unbounded caller is an unbounded scrypt. Every `/api/v1/*` route already has that
+ * bound; this gives it to the other half of the API.
  *
  * THE SAME BUCKET, deliberately. PLAN 7.5's default is "100req/분/IP" for the API, not per
  * surface, so this counts into the key `RateLimitGuard` uses for the address throttler

@@ -21,7 +21,9 @@ export const RATE_LIMIT_WINDOW_SECONDS = 60;
  * - `user`  — the signed-in account, per route. The rows PLAN 7.5 states per user.
  * - `email` — the address in the request body, per route: for routes that put mail in
  *             somebody's inbox, what has to be bounded is the recipient, not the sender
- *             (A-M2-10).
+ *             (A-M2-10). `/change-email` charges a second bucket of this size to the ACCOUNT
+ *             asking, because for a verified account the mail goes to the address it already
+ *             has, not to the one in the body (auth.ts).
  */
 export type RateLimitScope = 'ip' | 'user' | 'email';
 

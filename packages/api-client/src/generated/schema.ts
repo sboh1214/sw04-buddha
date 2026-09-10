@@ -1290,6 +1290,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
         };
     };
     adminListChargePackages: {
@@ -1322,6 +1331,15 @@ export interface operations {
             };
             /** @description FORBIDDEN */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1381,6 +1399,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
         };
     };
     adminDeleteChargePackage: {
@@ -1423,6 +1450,15 @@ export interface operations {
             };
             /** @description NOT_FOUND */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1493,6 +1529,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
         };
     };
     adminListCoupons: {
@@ -1546,6 +1591,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
         };
     };
     adminCreateCoupon: {
@@ -1591,6 +1645,15 @@ export interface operations {
             };
             /** @description FORBIDDEN */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1661,6 +1724,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
         };
     };
     adminListDisputes: {
@@ -1708,6 +1780,15 @@ export interface operations {
             };
             /** @description FORBIDDEN */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1778,6 +1859,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
         };
     };
     adminListMarkets: {
@@ -1824,6 +1914,15 @@ export interface operations {
             };
             /** @description FORBIDDEN */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1892,6 +1991,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
         };
     };
     adminGetMarket: {
@@ -1944,6 +2052,15 @@ export interface operations {
             };
             /** @description NOT_FOUND */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2023,6 +2140,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
         };
     };
     adminCloseMarket: {
@@ -2084,6 +2210,15 @@ export interface operations {
             };
             /** @description MARKET_NOT_OPEN */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2159,6 +2294,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
         };
     };
     adminResolveMarket: {
@@ -2215,6 +2359,15 @@ export interface operations {
             };
             /** @description NOT_FOUND */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2285,6 +2438,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
         };
     };
     adminListPayments: {
@@ -2331,6 +2493,15 @@ export interface operations {
             };
             /** @description FORBIDDEN */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2385,6 +2556,15 @@ export interface operations {
             };
             /** @description FORBIDDEN */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2464,6 +2644,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
         };
     };
     register: {
@@ -2528,6 +2717,15 @@ export interface operations {
                     };
                 };
             };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
         };
     };
     listChargePackages: {
@@ -2547,6 +2745,15 @@ export interface operations {
                     "application/json": {
                         data: components["schemas"]["ChargePackage"][];
                     };
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
         };
@@ -2649,6 +2856,15 @@ export interface operations {
                     };
                 };
             };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
         };
     };
     listMarkets: {
@@ -2680,6 +2896,15 @@ export interface operations {
             };
             /** @description VALIDATION_ERROR */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2809,6 +3034,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
         };
     };
     listMarketTicks: {
@@ -2848,6 +3082,15 @@ export interface operations {
             };
             /** @description NOT_FOUND */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2896,6 +3139,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
         };
     };
     getMe: {
@@ -2928,6 +3180,15 @@ export interface operations {
             };
             /** @description NOT_FOUND */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2996,6 +3257,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
         };
     };
     listMyDisputes: {
@@ -3033,6 +3303,15 @@ export interface operations {
             };
             /** @description UNAUTHENTICATED */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -3084,6 +3363,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
         };
     };
     getMyOrders: {
@@ -3121,6 +3409,15 @@ export interface operations {
             };
             /** @description UNAUTHENTICATED */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -3180,6 +3477,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
         };
     };
     getMyPayments: {
@@ -3224,6 +3530,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
         };
     };
     getMyPositions: {
@@ -3258,6 +3573,15 @@ export interface operations {
             };
             /** @description UNAUTHENTICATED */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -3392,6 +3716,15 @@ export interface operations {
             };
             /** @description MARKET_NOT_OPEN | MARKET_CLOSED */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };

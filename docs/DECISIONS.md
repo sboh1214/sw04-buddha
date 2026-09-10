@@ -935,6 +935,8 @@ PLAN §7.5는 `@nestjs/throttler` + Redis 스토리지로 **기본 100req/분/IP
 - `SessionGuard`가 `request.auth`를 재사용한다: `user` 버킷은 리미터가 세션을 먼저 읽으므로, 그러지 않으면 PLAN §7.5가 지목한 바로 그 두 라우트에서 세션 조회가 두 번이 된다. 공개 라우트는 `user` 버킷이 아니므로 한 번도 읽지 않는다.
 - **자체 검토가 이 ADR의 첫 판본에서 결함 둘을 찾았고, 둘 다 고쳤다.** (가) 실패한 로그인을 세는 첫 구현이 `hooks.before`에서 버킷을 읽고 `hooks.after`에서 더하는 **읽고-쓰기**였다. 그 사이에 scrypt 한 번이 통째로 들어가므로 동시에 들어온 N개의 추측이 모두 같은 값을 읽고 모두 통과했다 — 문서상 10회인 한도가 실제로는 "공격자의 동시 연결 수"였다. 이제 시도를 **먼저** 세고(INCR), 성공이 버킷을 지운다. (나) `@RateLimit`이 기본 throttler를 **덮어써서**, 버킷을 지목한 라우트에서 100req/분의 주소 상한이 사라졌다 — 하필 `POST /auth/register`의 버킷은 수신자의 사서함이라, 한 호출자가 주소를 바꿔 가며 무한히 메일을 보낼 수 있었다. 이제 throttler 두 개가 나란히 돈다.
 - 남은 것: **운영에서 `TRUST_PROXY`를 실제 프록시 CIDR로 세우기 전까지 주소별 한도는 직접 연결에만 유효하다.** A-M0-13이 "운영 값은 배포 시 정한다"고 남긴 항목이고, 여기서 그 조건이 무엇인지가 확정됐다 — 앞단 프록시가 `X-Forwarded-For`를 **덮어써야** 한다(추가가 아니라). `apps/web/src/proxy.ts`의 matcher를 `/api/*`로 넓히는 안은 **기각한다**: Next의 `??=`가 이미 클라이언트 값을 통과시킨 뒤라 프록시가 진짜 주소를 알 방법이 없고, SSR은 rewrite를 지나지도 않는다. A-M3-24와 `proxy.ts`의 주석이 이 검토를 "ADR-0022"로 지목한 것은 **오기**다(ADR-0022는 통합 테스트 인프라). 이 ADR이 그 자리를 대신한다.
+- (2026-09-10 추기, PR #8 리뷰) **`/change-email`은 `newEmail`에 더해 요청한 계정에도 `email` 크기의 버킷을 하나 더 센다**(`auth/change-email/account:<hash(user id)>`). 위의 "요청 본문이 지목한 주소"는 이 경로에서 수신자가 아니었다: better-auth 1.7.2는 **인증된** 계정의 확인 메일을 `newEmail`이 아니라 계정이 이미 가진 주소로 보내고(`sendChangeEmailConfirmation`), `newEmail`은 그 링크를 누른 뒤에야 메일을 받는다. 그래서 `newEmail`을 바꿔 가며 부르면 매번 새 버킷이었고, 같은 사서함에 무한히 보낼 수 있었다 — rewrite 뒤에서는 주소 버킷도 루프백이라 비어 있다. 키는 현재 주소가 아니라 **계정 id**이고 경로도 따로다: 현재 주소를 `/change-email` 경로 아래 세면 남이 그 주소를 자기 `newEmail`로 지목해(이미 있는 주소는 메일 없이 200) 다섯 번 만에 그 사용자의 이메일 변경을 잠글 수 있다. 본문에서 닿을 수 없는 경로가 그것을 막는다. 계정 id를 키로 삼는 데는 이유가 하나 더 있다: 합성 주소를 거절하는 검사는 **본문**의 주소만 보므로 계정 자신의 현재 주소는 그 검사에 들어갈 일이 없다 — 현재 주소를 키로 삼는 변형이었다면 미인증 Kakao/Naver 계정이 실제 주소를 등록하는 바로 그 경로가 400이 됐을 것이다(`auth.test.ts`가 고정). 세션은 before-hook에서 `getSessionFromCtx(ctx, { disableRefresh: true })`로 직접 읽고(훅 시점에 `ctx.context.session`은 null; 갱신을 끄지 않으면 레이트 리밋 검사가 세션을 갱신하고 그 `Set-Cookie`는 응답에 실리지도 않는다), 주소 버킷을 먼저 소진한 **뒤에** 읽는다 — DB 조회이므로 거절될 요청이 그 비용을 내지 않게. 남는 것: 확인 링크(`GET /verify-email`, 1시간짜리 무상태 JWT)는 누를 때마다 `newEmail`에 다시 보내고 어떤 `email` 버킷에도 들어가지 않는다(주소 버킷뿐이고, rewrite 뒤에서는 그것도 비어 있다) — Q-M6-8.
+- (2026-09-10 추기, PR #8 리뷰) **429는 OpenAPI 문서의 모든 오퍼레이션에 있다**(`openapi/document.ts`의 `addGlobalResponse`). 위의 다섯 라우트에만 `@ApiErrors('RATE_LIMITED')`를 더한 것은 절반이었다: 주소 throttler는 전역 가드라 `GET /markets`도 `POST /trades`와 똑같이 거절될 수 있는데, 42개 중 37개의 계약에 그 응답이 없었다. 다섯 개의 명시적 항목은 그대로 둔다 — 같은 상태의 메서드 수준 응답이 전역 응답을 같은 모양으로 대체하므로 문서는 동일하고, 핸들러 위에서 `@RateLimit` 옆에 읽힌다. `components.schemas`의 순서가 바뀐 것(`ErrorEnvelope`·`ErrorCode`가 맨 앞)은 전역 응답이 메서드보다 먼저 변환되기 때문이지 의미 변화가 아니다.
 
 ---
 
@@ -999,7 +1001,7 @@ CSRF는 이미 되어 있다. `SessionGuard.refuseForeignOrigin`이 쿠키 인�
   - `script-src 'self' 'unsafe-inline'`. App Router는 flight 페이로드와 부트스트랩 스크립트를 HTML에 인라인하고, 그것을 멈추는 `next.config` 옵션은 없다. **더 잘하려면 요청마다 nonce가 필요하고**, 그러려면 proxy가 발급하고 모든 인라인 `<script>`/`<style>`이 그것을 실어야 한다 — 실제 회귀 표면이 있는 실제 변경이므로 절반만 해 두지 않고 **열린 항목으로 남긴다.** 남는 것만으로도 "이 오리진 외의 스크립트 로드 금지"는 유효하고, 그것이 이 정책이 실제로 막을 수 있는 주입이다.
   - `'unsafe-eval'`은 **개발에서만**. React Refresh가 교체하는 모듈을 평가한다. 운영에 실으면 주입된 문자열에 코드가 되는 길을 준다.
   - `style-src 'unsafe-inline'`은 Emotion이다(ADR-0009의 레지스트리). 없으면 스타일이 없는 페이지가 그려진다.
-  - `img-src https:`는 시장 이미지가 관리자가 입력하는 URL이기 때문이다(PLAN §17 Q5).
+  - `img-src https:`는 시장 이미지가 관리자가 입력하는 URL이기 때문이다(PLAN §17 Q5). (2026-09-10 추기, PR #8 리뷰) 검증기는 `http:`도 받으므로(`z.url({ protocol: /^https?$/ })`) **API 오리진이 평문 http일 때만 `http:`를 함께 적는다.** 문서는 자기 API에 닿을 수 있는 스킴으로 서빙된다 — TLS 페이지는 평문 http 오리진에 fetch도 소켓도 열 수 없으므로(혼합 콘텐츠; `localhost`만 예외이고 거기서는 추가 스킴이 무해하다), 평문 `NEXT_PUBLIC_API_URL`은 곧 평문 문서(개발, CI, 로컬 standalone)이고 거기가 http 이미지가 실제로 로드되는 곳이다. `https:`만 적었던 첫 판은 그 환경에서 저장에 성공한 시장을 말없이 회색 폴백으로 그렸다. TLS 뒤에서는 브라우저가 CSP를 보기 전에 http 이미지를 업그레이드하거나 거부하므로 거기 적힌 `http:`는 아무것도 허용하지 않으면서 스캐너에게는 "안전하지 않은 로드를 허용하는 정책"으로 읽힌다. 남는 것: TLS 배포에서 관리자가 http 이미지 URL을 넣으면 브라우저가 https로 올려 받을 수 있을 때만 그려지고 그러지 못하면 폴백이다 — CSP가 아니라 혼합 콘텐츠 규칙이고, 검증에서 http를 거절하면 개발 환경이 막히므로 그대로 둔다.
   - `connect-src`는 API 오리진을 http와 ws 양쪽으로 명시한다 — M4부터 브라우저가 `NEXT_PUBLIC_API_URL`에 직접 붙는다(ADR-0017).
   - `frame-ancestors 'none'`(+ 구형 브라우저용 `X-Frame-Options: DENY`), `object-src 'none'`, `base-uri 'self'`, `form-action 'self'`.
 - **웹 헤더는 `/api/*`를 제외한다**(`source: '/((?!api/).*)'`). 프록시된 API 응답은 이미 API 자신의 헤더를 달고 있고, 한 응답에 CSP가 둘이면 브라우저는 **교집합**을 강제한다 — 두 파일에서 우연히 조립된 규칙이다.
@@ -1008,7 +1010,7 @@ CSRF는 이미 되어 있다. `SessionGuard.refuseForeignOrigin`이 쿠키 인�
 ### 결과
 
 - API의 모든 응답(오류 포함)이 CSP·nosniff·referrer-policy·HSTS·CORP를 단다. `security-headers.test.ts`가 404 응답에서도 그것을 확인한다 — 라우트별 규칙이 가장 놓치기 쉬운 응답이다.
-- 웹의 모든 문서 응답이 여섯 헤더를 달고, `X-Powered-By`는 사라진다. `apps/web/src/lib/security-headers.test.ts`가 정책의 내용과 `'unsafe-eval'`의 환경별 유무를 고정한다.
+- 웹의 모든 문서 응답이 여섯 헤더를 달고, `X-Powered-By`는 사라진다. `apps/web/src/lib/security-headers.test.ts`가 정책의 내용과 `'unsafe-eval'`의 환경별 유무를 고정한다. (2026-09-10 추기, PR #8 리뷰) `img-src`의 `http:`(API 오리진의 스킴)도 같은 테스트가 양방향으로 고정한다.
 - 남은 것: **nonce 기반 `script-src`**. `'unsafe-inline'`이 남아 있는 한 스크립트 CSP는 주입된 인라인 스크립트를 막지 못한다. QUESTIONS의 새 항목으로 남긴다.
 - 감사 로그에 대한 판정: **빈틈 없음.** 쓰기 라우트 13개 ↔ 액션 타입 13개가 전단사이고, 모든 삽입이 효과와 같은 트랜잭션 안에 있다. 다만 `charge_package_*`·`coupon_*`의 다섯 삽입만 `createdAt`을 명시하지 않아 트랜잭션 시작 시각을 쓴다(나머지 여덟은 잠금 뒤 `clockTimestamp`). 지금은 무해하지만 `admin_actions`를 `(created_at, id)` 키셋으로 페이지네이션하는 날 물린다 — 그날의 항목으로 남긴다.
 
@@ -1038,7 +1040,7 @@ PLAN §4의 저장소 구조는 `docs/API.md`("생성된 OpenAPI 요약")를 M3 
 ### 결과
 
 - `pnpm api:openapi` 한 번이 `openapi.json` · `packages/api-client/src/generated` · `docs/API.md` 셋을 함께 갱신한다. 컨트롤러 데코레이터를 고치고 이 명령을 잊으면 CI가 잡는다.
-- 문서에 손을 대고 싶으면 고칠 자리는 둘뿐이다: 오퍼레이션의 설명은 컨트롤러의 `@ApiOperation`, 그 밖의 산문은 생성기의 템플릿 상수.
+- 문서에 손을 대고 싶으면 고칠 자리는 둘뿐이다: 오퍼레이션의 설명은 컨트롤러의 `@ApiOperation`, 그 밖의 산문은 생성기의 템플릿 상수. (2026-09-10 추기, PR #8 리뷰) 예외 하나 — 모든 오퍼레이션에 공통인 `RATE_LIMITED`(429)는 컨트롤러가 아니라 `openapi/document.ts`의 `addGlobalResponse`가 붙인다(ADR-0034 추기).
 - `/api/health`·`/api/health/live`와 `/api/auth/*`는 **사람이 쓴 문단**으로 문서에 들어간다. OpenAPI가 그것들을 모르는 이유가 각각 명시되어 있으므로, 나중에 문서에 넣기로 하면 그 문단이 먼저 지워져야 한다.
 
 ---

@@ -10,7 +10,9 @@
 내용을 바꾸는 곳은 두 군데다.
 
 - 오퍼레이션(경로·요약·인증·오류): 컨트롤러의 `@ApiOperation` / `@ApiData` / `@ApiPageOf` /
-  `@ApiErrors` 데코레이터와 zod 스키마. 고친 뒤 `pnpm api:openapi` 를 실행한다.
+  `@ApiErrors` 데코레이터와 zod 스키마. 모든 오퍼레이션에 공통인 `RATE_LIMITED`(429) 하나만은
+  `apps/api/src/openapi/document.ts` 의 `addGlobalResponse` 가 붙인다(주소 버킷은 모든 라우트에
+  걸리므로). 고친 뒤 `pnpm api:openapi` 를 실행한다.
 - 문서의 문장(개요·인증·헬스체크·better-auth·레이트 리밋·실시간 절): `scripts/generate-api-doc.mjs`
   맨 위의 템플릿 상수.
 
@@ -103,77 +105,77 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 
 | 메서드 | 경로 | 설명 | 인증 | 오류 |
 | --- | --- | --- | --- | --- |
-| GET | `/api/v1/me` | Profile, balance and linked sign-in methods | 🔒 | `UNAUTHENTICATED`, `NOT_FOUND` |
-| PATCH | `/api/v1/me` | Change nickname | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND` |
-| POST | `/api/v1/me/password` | Set the first password (after verification, or for a social-only account) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN` |
+| GET | `/api/v1/me` | Profile, balance and linked sign-in methods | 🔒 | `UNAUTHENTICATED`, `NOT_FOUND`, `RATE_LIMITED` |
+| PATCH | `/api/v1/me` | Change nickname | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
+| POST | `/api/v1/me/password` | Set the first password (after verification, or for a social-only account) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
 
 ### `wallet` — 지갑·결제
 
 | 메서드 | 경로 | 설명 | 인증 | 오류 |
 | --- | --- | --- | --- | --- |
-| GET | `/api/v1/charge-packages` | Charge packages on sale, cheapest discount first | — | — |
+| GET | `/api/v1/charge-packages` | Charge packages on sale, cheapest discount first | — | `RATE_LIMITED` |
 | POST | `/api/v1/payments/charge` | Buy one charge package (mock provider: succeeds immediately). P is never convertible back to cash. | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `PRICE_MOVED`, `DUPLICATE_REQUEST`, `RATE_LIMITED` |
 | POST | `/api/v1/coupons/redeem` | Redeem a coupon code for P | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `DUPLICATE_REQUEST`, `RATE_LIMITED` |
-| GET | `/api/v1/me/ledger` | Ledger entries, newest first | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED` |
-| GET | `/api/v1/me/payments` | Charges, newest first | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED` |
+| GET | `/api/v1/me/ledger` | Ledger entries, newest first | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `RATE_LIMITED` |
+| GET | `/api/v1/me/payments` | Charges, newest first | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `RATE_LIMITED` |
 
 ### `admin` — 관리자
 
 | 메서드 | 경로 | 설명 | 인증 | 오류 |
 | --- | --- | --- | --- | --- |
-| GET | `/api/v1/admin/charge-packages` | Every charge package, active or not | 🔒 | `UNAUTHENTICATED`, `FORBIDDEN` |
-| POST | `/api/v1/admin/charge-packages` | Add a charge package | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN` |
-| PATCH | `/api/v1/admin/charge-packages/{id}` | Change the amount, price, order or availability | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND` |
-| DELETE | `/api/v1/admin/charge-packages/{id}` | Remove a package (past payments keep their own amount and price) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND` |
-| GET | `/api/v1/admin/coupons` | Coupons, newest first | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN` |
-| POST | `/api/v1/admin/coupons` | Issue a coupon (the code is generated when omitted) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN` |
-| PATCH | `/api/v1/admin/coupons/{id}` | Disable a coupon or change its cap, expiry or memo | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND` |
-| GET | `/api/v1/admin/users` | Search users by email or nickname | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN` |
-| POST | `/api/v1/admin/users/{id}/balance-adjust` | Credit or debit P with a mandatory reason (ADMIN_ADJUST) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `INSUFFICIENT_BALANCE` |
-| GET | `/api/v1/admin/payments` | Charges, newest first | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN` |
-| GET | `/api/v1/admin/audit-failures` | Ledger/balance mismatches found by the ledger.audit job | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN` |
-| GET | `/api/v1/admin/markets` | Every market, drafts included, newest first | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN` |
-| POST | `/api/v1/admin/markets` | Create a draft market (LMSR initialised from initialProbBp and liquidityB) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND` |
-| GET | `/api/v1/admin/markets/{id}` | One market with its LMSR state, exposure and event log | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND` |
-| PATCH | `/api/v1/admin/markets/{id}` | Edit a draft (any field) or an open market (text, close time, category; liquidityB/initialProbBp/slug refused naming the field, blank rules refused with RULES_REQUIRED); other statuses refuse naming status | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RULES_REQUIRED` |
-| POST | `/api/v1/admin/markets/{id}/open` | draft → open; refused without rules (RULES_REQUIRED) or with a past closeAt | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RULES_REQUIRED` |
-| POST | `/api/v1/admin/markets/{id}/close` | open → closed | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `MARKET_NOT_OPEN` |
-| POST | `/api/v1/admin/markets/{id}/resolve` | closed → resolving: propose the result and start the dispute window; on a resolving market change the proposed result (the window restarts, the pending finalize is replaced) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND` |
-| POST | `/api/v1/admin/markets/{id}/void` | Void an open, closed or resolving market: every unsettled position is refunded its cost basis (MARKET_VOID_REFUND) and closed out | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND` |
-| GET | `/api/v1/admin/disputes` | Every dispute, newest first; `status` and `marketId` narrow the list | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN` |
-| PATCH | `/api/v1/admin/disputes/{id}` | Accept or reject a dispute with a note (revisable; accepting does not change the market result — use POST /admin/markets/:id/resolve for that) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND` |
+| GET | `/api/v1/admin/charge-packages` | Every charge package, active or not | 🔒 | `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
+| POST | `/api/v1/admin/charge-packages` | Add a charge package | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
+| PATCH | `/api/v1/admin/charge-packages/{id}` | Change the amount, price, order or availability | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
+| DELETE | `/api/v1/admin/charge-packages/{id}` | Remove a package (past payments keep their own amount and price) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
+| GET | `/api/v1/admin/coupons` | Coupons, newest first | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
+| POST | `/api/v1/admin/coupons` | Issue a coupon (the code is generated when omitted) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
+| PATCH | `/api/v1/admin/coupons/{id}` | Disable a coupon or change its cap, expiry or memo | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
+| GET | `/api/v1/admin/users` | Search users by email or nickname | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
+| POST | `/api/v1/admin/users/{id}/balance-adjust` | Credit or debit P with a mandatory reason (ADMIN_ADJUST) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `INSUFFICIENT_BALANCE`, `RATE_LIMITED` |
+| GET | `/api/v1/admin/payments` | Charges, newest first | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
+| GET | `/api/v1/admin/audit-failures` | Ledger/balance mismatches found by the ledger.audit job | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
+| GET | `/api/v1/admin/markets` | Every market, drafts included, newest first | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
+| POST | `/api/v1/admin/markets` | Create a draft market (LMSR initialised from initialProbBp and liquidityB) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
+| GET | `/api/v1/admin/markets/{id}` | One market with its LMSR state, exposure and event log | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
+| PATCH | `/api/v1/admin/markets/{id}` | Edit a draft (any field) or an open market (text, close time, category; liquidityB/initialProbBp/slug refused naming the field, blank rules refused with RULES_REQUIRED); other statuses refuse naming status | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RULES_REQUIRED`, `RATE_LIMITED` |
+| POST | `/api/v1/admin/markets/{id}/open` | draft → open; refused without rules (RULES_REQUIRED) or with a past closeAt | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RULES_REQUIRED`, `RATE_LIMITED` |
+| POST | `/api/v1/admin/markets/{id}/close` | open → closed | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `MARKET_NOT_OPEN`, `RATE_LIMITED` |
+| POST | `/api/v1/admin/markets/{id}/resolve` | closed → resolving: propose the result and start the dispute window; on a resolving market change the proposed result (the window restarts, the pending finalize is replaced) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
+| POST | `/api/v1/admin/markets/{id}/void` | Void an open, closed or resolving market: every unsettled position is refunded its cost basis (MARKET_VOID_REFUND) and closed out | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
+| GET | `/api/v1/admin/disputes` | Every dispute, newest first; `status` and `marketId` narrow the list | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
+| PATCH | `/api/v1/admin/disputes/{id}` | Accept or reject a dispute with a note (revisable; accepting does not change the market result — use POST /admin/markets/:id/resolve for that) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
 
 ### `markets` — 시장·시세
 
 | 메서드 | 경로 | 설명 | 인증 | 오류 |
 | --- | --- | --- | --- | --- |
-| GET | `/api/v1/markets` | Markets by status (default open), never drafts; sorted by volume, closing or newest. Each card carries up to 25 hourly YES samples over the last 24 hours, oldest first. | — | `VALIDATION_ERROR` |
-| GET | `/api/v1/markets/{idOrSlug}` | One market by id or slug (a draft is NOT_FOUND to the public) | — | `VALIDATION_ERROR`, `NOT_FOUND` |
-| GET | `/api/v1/markets/{id}/fills` | Newest 20 fills, anonymous | — | `VALIDATION_ERROR`, `NOT_FOUND` |
-| GET | `/api/v1/markets/{id}/ticks` | Price series, ascending, at most 500 points. `raw` returns stored ticks, downsampled from the newest 10000 of the range (`truncated` says when older ones were left out). `1m`/`1h` sample the probability in force on an absolute grid, coarsening the stride until the window fits; `bucketSeconds` reports the stride served, and the point at `from` carries the last value at or before it, so the left edge is never empty. | — | `VALIDATION_ERROR`, `NOT_FOUND` |
-| GET | `/api/v1/categories` | Active categories in display order | — | — |
-| POST | `/api/v1/quotes` | Price a buy or sell (mode shares) or the contracts a budget buys (mode spend, buy only) | — | `VALIDATION_ERROR`, `NOT_FOUND`, `MARKET_NOT_OPEN`, `MARKET_CLOSED` |
+| GET | `/api/v1/markets` | Markets by status (default open), never drafts; sorted by volume, closing or newest. Each card carries up to 25 hourly YES samples over the last 24 hours, oldest first. | — | `VALIDATION_ERROR`, `RATE_LIMITED` |
+| GET | `/api/v1/markets/{idOrSlug}` | One market by id or slug (a draft is NOT_FOUND to the public) | — | `VALIDATION_ERROR`, `NOT_FOUND`, `RATE_LIMITED` |
+| GET | `/api/v1/markets/{id}/fills` | Newest 20 fills, anonymous | — | `VALIDATION_ERROR`, `NOT_FOUND`, `RATE_LIMITED` |
+| GET | `/api/v1/markets/{id}/ticks` | Price series, ascending, at most 500 points. `raw` returns stored ticks, downsampled from the newest 10000 of the range (`truncated` says when older ones were left out). `1m`/`1h` sample the probability in force on an absolute grid, coarsening the stride until the window fits; `bucketSeconds` reports the stride served, and the point at `from` carries the last value at or before it, so the left edge is never empty. | — | `VALIDATION_ERROR`, `NOT_FOUND`, `RATE_LIMITED` |
+| GET | `/api/v1/categories` | Active categories in display order | — | `RATE_LIMITED` |
+| POST | `/api/v1/quotes` | Price a buy or sell (mode shares) or the contracts a budget buys (mode spend, buy only) | — | `VALIDATION_ERROR`, `NOT_FOUND`, `MARKET_NOT_OPEN`, `MARKET_CLOSED`, `RATE_LIMITED` |
 
 ### `trades` — 거래·포지션
 
 | 메서드 | 경로 | 설명 | 인증 | 오류 |
 | --- | --- | --- | --- | --- |
 | POST | `/api/v1/trades` | Buy or sell contracts against the AMM at the current LMSR price. A buy carries maxCostP and a sell minProceedsP (PRICE_MOVED when the recomputed amount is past it). | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `MARKET_NOT_OPEN`, `MARKET_CLOSED`, `INSUFFICIENT_BALANCE`, `INSUFFICIENT_POSITION`, `PRICE_MOVED`, `DUPLICATE_REQUEST`, `RATE_LIMITED` |
-| GET | `/api/v1/me/positions` | Every position of the account, most recently changed first. status=open keeps the unsettled rows (qty may be 0 after a full sell), status=settled the settled ones; omitted lists all. No cursor: bounded by the markets one account has touched. | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED` |
-| GET | `/api/v1/me/orders` | Orders of the account with their fill, newest first | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED` |
+| GET | `/api/v1/me/positions` | Every position of the account, most recently changed first. status=open keeps the unsettled rows (qty may be 0 after a full sell), status=settled the settled ones; omitted lists all. No cursor: bounded by the markets one account has touched. | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `RATE_LIMITED` |
+| GET | `/api/v1/me/orders` | Orders of the account with their fill, newest first | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `RATE_LIMITED` |
 
 ### `leaderboard`
 
 | 메서드 | 경로 | 설명 | 인증 | 오류 |
 | --- | --- | --- | --- | --- |
-| GET | `/api/v1/leaderboard` | Top 20 accounts by realized profit and loss, ties broken deterministically | — | — |
+| GET | `/api/v1/leaderboard` | Top 20 accounts by realized profit and loss, ties broken deterministically | — | `RATE_LIMITED` |
 
 ### `disputes` — 이의
 
 | 메서드 | 경로 | 설명 | 인증 | 오류 |
 | --- | --- | --- | --- | --- |
 | POST | `/api/v1/markets/{id}/disputes` | Object to the proposed result while the market is resolving and its dispute window is open (one per user per market) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `DISPUTE_WINDOW_CLOSED`, `DUPLICATE_REQUEST`, `RATE_LIMITED` |
-| GET | `/api/v1/me/disputes` | My disputes, newest first; `marketId` narrows the list to one market | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED` |
+| GET | `/api/v1/me/disputes` | My disputes, newest first; `marketId` narrows the list to one market | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `RATE_LIMITED` |
 
 ## 스키마 (60개)
 
@@ -286,7 +288,7 @@ PLAN 7.5 의 표는 `packages/shared/src/rate-limit.ts` 한 곳에 있고, 아�
 | `charge` | 로그인 계정 (라우트별) | 10 | `POST /api/v1/payments/charge` |
 | `coupon` | 로그인 계정 (라우트별) | 10 | `POST /api/v1/coupons/redeem` |
 | `dispute` | 로그인 계정 (라우트별) | 10 | `POST /api/v1/markets/{id}/disputes` |
-| `email` | 본문이 지목한 이메일 주소 (라우트별) | 5 | 메일을 보내는 경로 — `POST /api/v1/auth/register` 와 `/api/auth/*` 의 `/change-email`, `/send-verification-email`, `/request-password-reset`, `/forget-password`. 시도 자체를 센다(시도가 곧 피해다). |
+| `email` | 본문이 지목한 이메일 주소 (라우트별) | 5 | 메일을 보내는 경로 — `POST /api/v1/auth/register` 와 `/api/auth/*` 의 `/change-email`, `/send-verification-email`, `/request-password-reset`, `/forget-password`. 시도 자체를 센다(시도가 곧 피해다). `/change-email` 은 `newEmail` 에 더해 **요청한 계정**에도 같은 크기의 버킷을 하나 더 센다 — 인증된 계정의 확인 메일은 본문의 주소가 아니라 계정이 이미 가진 주소로 가기 때문이다. |
 | `signIn` | 본문이 지목한 이메일 주소 (라우트별) | 10 | `/api/auth/sign-in/email`. 시도를 세되 **성공한 로그인이 버킷을 지운다** — 비밀번호가 맞은 로그인은 공격이 아니고, 그것까지 남기면 공유 계정이 쓰이는 것만으로 스스로 잠긴다. `/api/auth/*` 전체는 이와 별도로 `default`(주소) 버킷에도 들어간다. |
 
 - **버킷을 지목한 라우트는 두 번 세어진다.** `@RateLimit('<bucket>')` 이 붙어도 기본 100/분 의

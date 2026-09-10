@@ -17,7 +17,9 @@ import { RedisThrottlerStorage } from './redis-throttler.storage.js';
  * rewrite every sign-in in the country arrives from one socket. Counting the address instead
  * bounds precisely the two abuses these routes have — a password guessed against one account,
  * and a stranger's inbox filled with verification mail (A-M2-10) — and does it identically
- * whether the request came through the rewrite or straight to the API.
+ * whether the request came through the rewrite or straight to the API. The one route whose
+ * mail does not go to the address in the body — `/change-email`, which for a verified account
+ * writes to the address the account already has — is counted per account too (auth.ts).
  *
  * Same Redis, same `rl:` namespace, same fixed window and the same fail-open posture as the
  * HTTP guard: one store, one set of keys to sweep, one behaviour when Redis is down.
@@ -33,7 +35,7 @@ export interface AuthRateLimiter {
    * `password.hash` on the not-found branch, deliberately, so the answer takes the same time
    * either way), so an uncounted attempt is an unconditional scrypt anybody can ask for.
    */
-  consume(path: string, email: string, limit: number): Promise<number | null>;
+  consume(path: string, tracker: string, limit: number): Promise<number | null>;
   /**
    * Clears the bucket. Called after a sign-in that SUCCEEDED.
    *
@@ -49,7 +51,7 @@ export interface AuthRateLimiter {
    * guess is refused before better-auth spends anything on it. It is also what every real
    * account lockout does: a correct password resets the failure counter.
    */
-  reset(path: string, email: string): Promise<void>;
+  reset(path: string, tracker: string): Promise<void>;
 }
 
 const WINDOW_MS = RATE_LIMIT_WINDOW_SECONDS * 1_000;
@@ -57,15 +59,17 @@ const WINDOW_MS = RATE_LIMIT_WINDOW_SECONDS * 1_000;
 export function authRateLimiter(redis: Redis): AuthRateLimiter {
   const storage = new RedisThrottlerStorage(redis);
   // Hashed for the same reason the guard hashes its tracker: a limiter has no business keeping
-  // addresses where `KEYS rl:*` can read them. The path stays legible so an operator can tell a
-  // sign-in flood from a password-reset flood.
-  const keyOf = (path: string, email: string) =>
-    `auth${path}:${createHash('sha256').update(email).digest('hex').slice(0, 32)}`;
+  // addresses (or account ids) where `KEYS rl:*` can read them. The path stays legible so an
+  // operator can tell a sign-in flood from a password-reset flood — and `/change-email/account`
+  // from `/change-email`, which is why the account bucket has a path of its own rather than
+  // sharing one with a body address a stranger can name (auth.ts).
+  const keyOf = (path: string, tracker: string) =>
+    `auth${path}:${createHash('sha256').update(tracker).digest('hex').slice(0, 32)}`;
 
   return {
-    async consume(path, email, limit) {
+    async consume(path, tracker, limit) {
       const record = await storage.increment(
-        keyOf(path, email),
+        keyOf(path, tracker),
         WINDOW_MS,
         limit,
         WINDOW_MS,
@@ -73,13 +77,13 @@ export function authRateLimiter(redis: Redis): AuthRateLimiter {
       );
       return record.isBlocked ? record.timeToBlockExpire : null;
     },
-    async reset(path, email) {
-      await storage.clear(keyOf(path, email), 'default');
+    async reset(path, tracker) {
+      await storage.clear(keyOf(path, tracker), 'default');
     },
   };
 }
 
-/** The limit each better-auth path is counted against. */
+/** The limit each better-auth path is counted against (`/change-email`'s account bucket too). */
 export function authRateLimitFor(path: string, limits: RateLimits): number {
   return path === '/sign-in/email' ? limits.signIn : limits.email;
 }

@@ -277,6 +277,40 @@ describe.skipIf(!hasTestInfra)('rate limits (integration)', () => {
       );
       for (const key of keys) expect(key).not.toContain('@');
     });
+
+    it('bounds /change-email by the account asking, which is the mailbox a verified account is mailed at', async () => {
+      // For a verified account better-auth mails the confirmation to the address the account
+      // already has and `newEmail` only later, once that link is clicked (auth.ts
+      // `sendChangeEmailConfirmation`). A hook that counted `newEmail` alone let a caller rotate
+      // it and put the same mail in their own inbox without limit; the account is counted too.
+      const user = await signUpTestUser(t);
+      const sent = t.mailer.messages.length; // the registration mail
+      const change = (newEmail: string) =>
+        t.app.inject({
+          method: 'POST',
+          url: '/api/auth/change-email',
+          headers: { ...jsonHeaders, cookie: user.cookie },
+          payload: { newEmail },
+        });
+      for (let i = 0; i < DEFAULT_RATE_LIMITS.email; i += 1) {
+        const ok = await change(`rotating-${String(i)}-${String(Date.now())}@test.local`);
+        expect([i, ok.statusCode]).toEqual([i, 200]);
+      }
+      const refused = await change(`rotating-last-${String(Date.now())}@test.local`);
+      expect(refused.statusCode).toBe(429);
+      expect(refused.json()).toMatchObject({ code: 'RATE_LIMITED' });
+      const toCurrent = t.mailer.messages.slice(sent).filter((m) => m.to === user.email);
+      expect(toCurrent).toHaveLength(DEFAULT_RATE_LIMITS.email);
+
+      // Its own key, under its own path: a stranger who names this user's address as THEIR
+      // `newEmail` spends `auth/change-email:<hash(address)>`, never this bucket — otherwise
+      // anyone could lock a user out of changing their email with five silent 200s.
+      const keys = await redis.keys(`${RATE_LIMIT_KEY_PREFIX}:default:auth/change-email*`);
+      expect(keys).toContainEqual(
+        expect.stringMatching(/^rl:default:auth\/change-email\/account:[0-9a-f]{32}$/),
+      );
+      for (const key of keys) expect(key).not.toContain(user.id);
+    });
   });
 
   describe('the per-address default', () => {

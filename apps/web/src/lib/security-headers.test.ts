@@ -8,9 +8,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 type HeaderRule = { source: string; headers: { key: string; value: string }[] };
 
-async function rulesFor(nodeEnv: string): Promise<HeaderRule[]> {
+/**
+ * `apiUrl` is stubbed explicitly, in both directions, rather than left to the default: the
+ * config loads the repo-root `.env` first (values already in the environment win), so an
+ * assertion that relied on the default would be reading whatever the developer's `.env` says.
+ */
+async function rulesFor(nodeEnv: string, apiUrl = 'http://localhost:4000'): Promise<HeaderRule[]> {
   vi.stubEnv('NODE_ENV', nodeEnv);
-  // The branch is decided when the module is evaluated, so the module has to be evaluated
+  vi.stubEnv('NEXT_PUBLIC_API_URL', apiUrl);
+  // The branches are decided when the module is evaluated, so the module has to be evaluated
   // again — a plain second import would hand back the first one's cache.
   vi.resetModules();
   const loaded: { default: NextConfig } = await import('../../next.config.js');
@@ -56,8 +62,19 @@ describe('security headers', () => {
     expect(policy).toContain('connect-src');
     expect(policy).toMatch(/connect-src [^;]*http:\/\/localhost:4000/);
     expect(policy).toMatch(/connect-src [^;]*ws:\/\/localhost:4000/);
-    // A market image is a URL an admin types (PLAN 17 Q5).
-    expect(policy).toContain("img-src 'self' data: https:");
+    // A market image is a URL an admin types (PLAN 17 Q5), and the validator takes http(s).
+    expect(policy).toContain("img-src 'self' data: https: http:");
+  });
+
+  it('lists http: images only for a plain-http API origin, where the document is plain http too', async () => {
+    // A TLS page cannot reach a plain-http API (mixed content), so the API scheme is the
+    // document's. Behind TLS an http image is upgraded or refused before the CSP is consulted,
+    // and a scheme that permits nothing would only read as a policy allowing insecure loads.
+    const plain = policyOf(await rulesFor('production', 'http://api.example.com'));
+    expect(plain).toMatch(/img-src [^;]* http:/);
+    const tls = policyOf(await rulesFor('production', 'https://api.example.com'));
+    expect(tls).toMatch(/img-src [^;]*https:/);
+    expect(tls).not.toMatch(/img-src [^;]* http:/);
   });
 
   it('forbids the three redirects an injected tag would otherwise still have', async () => {

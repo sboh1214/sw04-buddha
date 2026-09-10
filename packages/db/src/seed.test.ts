@@ -362,11 +362,15 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
 
       const { stdout, stderr } = runSeedIo();
       expect(stdout).toContain('markets: 0 inserted, 12 already existed');
-      expect(stderr).toContain(slug);
-      expect(stderr).toContain('마감');
-      // Only that one: the other eleven cutoffs are still ahead.
-      const warned = stderr.split(/\r?\n/).filter((line) => line.includes('is already past'));
-      expect(warned).toHaveLength(1);
+      // Judged on THIS slug's own line, not on how many lines carry the wording: the other
+      // eleven cutoffs are absolute 2026 dates that pass on their own as the calendar advances
+      // (the earliest, bok-october-rate-cut-2026, on 2026-10-21), and from then on the second
+      // run legitimately reports them too. A market gets at most one line (seed.ts's
+      // if / else if), so exactly one line names it.
+      const mine = stderr.split(NEWLINE).filter((line) => line.includes(slug));
+      expect(mine).toHaveLength(1);
+      expect(mine[0]).toContain('is already past');
+      expect(mine[0]).toContain('마감');
       // And it is still open, untouched — the seed reports, it does not rewrite.
       const [row] = await t.db
         .select({ status: markets.status })
@@ -400,15 +404,16 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
         .where(eq(markets.slug, slug));
 
       const { stderr } = runSeedIo();
-      const soon = stderr.split(NEWLINE).filter((line) => line.includes('within 14 days'));
-      // `toContain`, not `toHaveLength(1)`: the other eleven cutoffs are absolute dates in 2026,
-      // so as the calendar advances they enter the same window on their own and the count here
-      // would start rising — a test that fails on a date rather than on a change. What this
-      // pins is that the market THIS case moved is reported, which stays true for good.
-      expect(soon.filter((line) => line.includes(slug))).toHaveLength(1);
-      // Not the past-cutoff wording: a market that is still open must not be reported as one
-      // the worker is about to close.
-      expect(stderr).not.toContain('is already past');
+      // This slug's line only, for BOTH wordings: the other eleven cutoffs are absolute dates in
+      // 2026, so as the calendar advances they enter the same window and then pass, each on its
+      // own — a count of either wording across the whole stream would be a test that fails on
+      // a date rather than on a change. What this pins is that the market THIS case moved is
+      // reported, and reported as approaching rather than as past (a market that is still open
+      // must not be announced as one the worker is about to close), which stays true for good.
+      const mine = stderr.split(NEWLINE).filter((line) => line.includes(slug));
+      expect(mine).toHaveLength(1);
+      expect(mine[0]).toContain('within 14 days');
+      expect(mine[0]).not.toContain('is already past');
     });
 
     it('is idempotent: a second run adds no market, tick or event', async () => {

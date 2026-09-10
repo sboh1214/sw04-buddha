@@ -1,7 +1,7 @@
 import { Logger } from '@nestjs/common';
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
-import { APIError, createAuthMiddleware } from 'better-auth/api';
+import { APIError, createAuthMiddleware, getSessionFromCtx } from 'better-auth/api';
 import { type Db, schema } from '@buddha/db';
 import {
   DEFAULT_RATE_LIMITS,
@@ -40,15 +40,29 @@ const DEFAULT_VERIFY_CALLBACK = SET_PASSWORD_PATH;
  * now that `disabledPaths` 404s it over HTTP.
  */
 const SIGN_IN_PATH = '/sign-in/email';
+const CHANGE_EMAIL_PATH = '/change-email';
 
 const EMAIL_INPUT_PATHS = new Set([
   '/sign-up/email',
   SIGN_IN_PATH,
-  '/change-email',
+  CHANGE_EMAIL_PATH,
   '/send-verification-email',
   '/request-password-reset',
   '/forget-password',
 ]);
+
+/**
+ * The `email` bucket `/change-email` charges to the ACCOUNT asking, on top of the one it
+ * charges to `newEmail`. For a verified account the confirmation goes to the address the
+ * account already has (`sendChangeEmailConfirmation` below), and `newEmail` is only mailed
+ * later, once that link is clicked — so a key on `newEmail` alone let a caller rotate it and
+ * mail their own inbox without limit (PR #8 review). The account, not its current address:
+ * the two are one mailbox, and keying on the address under the `/change-email` path would land
+ * on the very key a stranger charges by naming that address as THEIR `newEmail` (better-auth
+ * answers an address that already exists with a silent 200), which would let anyone lock a
+ * user out of changing their email. A path of its own cannot be reached from a request body.
+ */
+const CHANGE_EMAIL_ACCOUNT_BUCKET = `${CHANGE_EMAIL_PATH}/account`;
 
 /**
  * PLAN 10.3: Kakao/Naver may withhold the email. better-auth refuses an OAuth sign-in
@@ -266,6 +280,8 @@ export function createAuth({
         // - current email unverified (synthetic Kakao/Naver address or an unverified real
         //   one): a verification link to the new address; clicking it applies the change
         // A new address that already belongs to another user gets the same 200 without mail.
+        // Because the first branch mails the CURRENT address, the `hooks.before` limit counts
+        // the account asking as well as `newEmail` (CHANGE_EMAIL_ACCOUNT_BUCKET).
         updateEmailWithoutVerification: false,
         sendChangeEmailConfirmation: async ({ user, newEmail, url }) => {
           await send(user.email, changeEmailConfirmationEmail({ url, newEmail }));
@@ -338,11 +354,11 @@ export function createAuth({
         // exist, so an uncounted attempt is an unconditional one anybody can ask for. What
         // makes sign-in different is the after-hook below, which CLEARS the bucket once the
         // password turns out to have been right.
-        for (const address of addresses) {
-          if (!overHttp) break;
-          const retryAfterSeconds = await rateLimiter?.consume(
-            ctx.path,
-            address,
+        if (!overHttp || rateLimiter === undefined) return;
+        const consume = async (path: string, tracker: string) => {
+          const retryAfterSeconds = await rateLimiter.consume(
+            path,
+            tracker,
             authRateLimitFor(ctx.path, rateLimits),
           );
           if (retryAfterSeconds != null) {
@@ -352,6 +368,26 @@ export function createAuth({
               retryAfterSeconds,
             });
           }
+        };
+        for (const address of addresses) await consume(ctx.path, address);
+        if (ctx.path === CHANGE_EMAIL_PATH) {
+          // The account asking, on top of `newEmail` (CHANGE_EMAIL_ACCOUNT_BUCKET). Keyed on
+          // the user id, so the account's OWN address never meets the synthetic-address
+          // rejection above — an unverified Kakao/Naver account's current address is one of
+          // ours, and `/change-email` is exactly how it registers a real one (auth.test.ts).
+          //
+          // The session is not on `ctx.context` yet in a before-hook (dispatch sets it to
+          // null); this reads the cookie itself, which is a DB lookup — hence after the address
+          // buckets, so a request they refuse costs none. `disableRefresh`: a rate-limit check
+          // must not renew a session, and a `Set-Cookie` minted here would not reach the
+          // response anyway. The endpoint's own `sensitiveSessionMiddleware` re-reads
+          // authoritatively regardless, so this is a second lookup, not a cached one. No
+          // session → nothing to charge; the endpoint answers 401 a moment later.
+          //
+          // Two INCRs, not one transaction: a refusal here leaves the `newEmail` bucket spent.
+          // Consistent with counting the attempt rather than the outcome.
+          const session = await getSessionFromCtx(ctx, { disableRefresh: true });
+          if (session) await consume(CHANGE_EMAIL_ACCOUNT_BUCKET, session.user.id);
         }
       }),
       /**
@@ -381,7 +417,8 @@ export function createAuth({
     // The built-in limiter stays off: it keeps state in process memory (PLAN 16 forbids that)
     // and counts by IP, which behind the Next rewrite is one socket for every visitor
     // (rate-limit.tracker.ts). M6's answer is the `hooks.before` above — same Redis, same `rl:`
-    // namespace as the HTTP guard, keyed on the ADDRESS the request names.
+    // namespace as the HTTP guard, keyed on the ADDRESS the request names (and, on
+    // `/change-email`, on the account asking as well).
     rateLimit: { enabled: false },
 
     advanced: {

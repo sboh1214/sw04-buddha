@@ -7,7 +7,10 @@ import { schema } from '@buddha/db';
 import { SIGNUP_BONUS_P } from '@buddha/shared';
 import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createTestApp, verificationLinkFor, type TestApp } from '../test/app.js';
+import { type Redis } from 'ioredis';
+import { REDIS } from '../infra/redis/redis.provider.js';
+import { RATE_LIMIT_KEY_PREFIX } from '../rate-limit/redis-throttler.storage.js';
+import { createTestApp, signUpTestUser, verificationLinkFor, type TestApp } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { CREDENTIAL_PROVIDER_ID } from './auth.js';
 
@@ -381,6 +384,36 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
     expect(t.mailer.messages).toHaveLength(0);
     const rows = await t.db.select().from(schema.user).where(eq(schema.user.email, synthetic));
     expect(rows).toHaveLength(0);
+  });
+
+  it('an account whose CURRENT address is synthetic still registers a real one through /change-email (PLAN 17 Q5)', async () => {
+    // The flow a Kakao/Naver user without an email is given (auth.ts `noEmailFallback`): their
+    // current address is one of ours and unverified, so the mail goes to `newEmail`. The
+    // before-hook rejects synthetic addresses in the BODY and also counts the account asking;
+    // that count is keyed on the account, never on its address — a variant keyed on the
+    // address would refuse this user here. This case passes on the old hook too; what it pins
+    // is that constraint on the new one, and that the account WAS counted for this branch.
+    const own = await signUpTestUser(t, { email: 'it-auth-synthetic@test.local' });
+    await t.db
+      .update(schema.user)
+      .set({ email: 'kakao_777@noemail.buddha.local', emailVerified: false })
+      .where(eq(schema.user.id, own.id));
+    t.mailer.messages.length = 0;
+    const redis = t.app.get<Redis>(REDIS);
+    const accountBuckets = `${RATE_LIMIT_KEY_PREFIX}:default:auth/change-email/account:*`;
+    const before = (await redis.keys(accountBuckets)).length;
+
+    const newEmail = 'it-auth-synthetic-real@test.local';
+    const res = await t.app.inject({
+      method: 'POST',
+      url: '/api/auth/change-email',
+      headers: { ...browserHeaders, cookie: own.cookie },
+      payload: { newEmail, callbackURL: '/settings' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(t.mailer.messages).toHaveLength(1);
+    expect(t.mailer.messages[0]).toMatchObject({ to: newEmail });
+    expect(await redis.keys(accountBuckets)).toHaveLength(before + 1);
   });
 
   it('a failing mailer does not break registration; the explicit resend reports the failure', async () => {

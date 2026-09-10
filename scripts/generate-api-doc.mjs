@@ -60,7 +60,9 @@ const BANNER = `<!-- 이 파일은 scripts/generate-api-doc.mjs 가 생성합니
 내용을 바꾸는 곳은 두 군데다.
 
 - 오퍼레이션(경로·요약·인증·오류): 컨트롤러의 \`@ApiOperation\` / \`@ApiData\` / \`@ApiPageOf\` /
-  \`@ApiErrors\` 데코레이터와 zod 스키마. 고친 뒤 \`pnpm api:openapi\` 를 실행한다.
+  \`@ApiErrors\` 데코레이터와 zod 스키마. 모든 오퍼레이션에 공통인 \`RATE_LIMITED\`(429) 하나만은
+  \`apps/api/src/openapi/document.ts\` 의 \`addGlobalResponse\` 가 붙인다(주소 버킷은 모든 라우트에
+  걸리므로). 고친 뒤 \`pnpm api:openapi\` 를 실행한다.
 - 문서의 문장(개요·인증·헬스체크·better-auth·레이트 리밋·실시간 절): \`scripts/generate-api-doc.mjs\`
   맨 위의 템플릿 상수.`;
 
@@ -320,7 +322,7 @@ const RATE_LIMIT_ROUTES = {
   coupon: '`POST /api/v1/coupons/redeem`',
   dispute: '`POST /api/v1/markets/{id}/disputes`',
   email:
-    '메일을 보내는 경로 — `POST /api/v1/auth/register` 와 `/api/auth/*` 의 `/change-email`, `/send-verification-email`, `/request-password-reset`, `/forget-password`. 시도 자체를 센다(시도가 곧 피해다).',
+    '메일을 보내는 경로 — `POST /api/v1/auth/register` 와 `/api/auth/*` 의 `/change-email`, `/send-verification-email`, `/request-password-reset`, `/forget-password`. 시도 자체를 센다(시도가 곧 피해다). `/change-email` 은 `newEmail` 에 더해 **요청한 계정**에도 같은 크기의 버킷을 하나 더 센다 — 인증된 계정의 확인 메일은 본문의 주소가 아니라 계정이 이미 가진 주소로 가기 때문이다.',
   signIn:
     '`/api/auth/sign-in/email`. 시도를 세되 **성공한 로그인이 버킷을 지운다** — 비밀번호가 맞은 로그인은 공격이 아니고, 그것까지 남기면 공유 계정이 쓰이는 것만으로 스스로 잠긴다. `/api/auth/*` 전체는 이와 별도로 `default`(주소) 버킷에도 들어간다.',
 };
@@ -488,7 +490,9 @@ const VERSIONED_PREFIX = '/api/v1/';
 /**
  * 한 오퍼레이션이 문서화한 오류 코드들. `@ApiErrors` 가 상태 하나당 응답 하나를 만들고 그 상태를
  * 공유하는 코드들을 `description` 에 `' | '` 로 이어 두므로, 4xx·5xx 응답의 description 이 곧
- * 코드 목록이다. 코드가 아닌 문장이 그 자리에 오면(다른 데코레이터가 4xx 를 문서화했다면) 멈춘다:
+ * 코드 목록이다. 429 만은 `openapi/document.ts` 의 `addGlobalResponse` 가 같은 모양으로 모든
+ * 오퍼레이션에 붙인다(주소 버킷은 라우트를 가리지 않는다) — 그래서 표의 모든 행에 `RATE_LIMITED` 가
+ * 있다. 코드가 아닌 문장이 그 자리에 오면(다른 데코레이터가 4xx 를 문서화했다면) 멈춘다:
  * 조용히 넘기면 표의 `오류` 칸이 문장 하나를 코드인 척 싣게 된다.
  */
 function errorCodesOf(operation, where) {
@@ -509,6 +513,14 @@ function errorCodesOf(operation, where) {
       }
       codes.push(code);
     }
+  }
+  // 전역 응답이 빠지면 CI 의 drift 검사는 그것을 잡지 못한다(재생성물을 함께 커밋하면 초록이다).
+  // 주소 버킷이 모든 라우트에 걸리는 한 429 가 없는 오퍼레이션은 문서의 오류이므로 여기서 멈춘다.
+  if (!codes.includes('RATE_LIMITED')) {
+    fail(
+      `${where} documents no RATE_LIMITED (429); the address throttler is an APP_GUARD on every ` +
+        'route — see openapi/document.ts addGlobalResponse',
+    );
   }
   return codes;
 }

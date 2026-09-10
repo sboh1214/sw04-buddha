@@ -30,7 +30,16 @@ const isProduction = process.env.NODE_ENV === 'production';
  * - `style-src 'unsafe-inline'` is Emotion: Chakra's runtime inserts rules into a `<style>` tag
  *   it creates (ADR-0009's registry), so a policy without it renders an unstyled page.
  * - `img-src https:` because a market's image is a URL an admin types (PLAN 17 Q5), and `data:`
- *   for the inline placeholders the card uses.
+ *   for the inline placeholders the card uses. The validator accepts `http:` as well
+ *   (shared market.ts, `z.url({ protocol: /^https?$/ })`), so `http:` is listed too — but only
+ *   when the API origin is plain http. A document is served on the scheme that can reach its
+ *   API: a TLS page cannot fetch from or open a socket to a plain-http origin (mixed content;
+ *   `localhost` is the one exception, and there the extra scheme is inert), so a plain-http
+ *   `NEXT_PUBLIC_API_URL` means a plain-http document — development, CI, a local standalone run
+ *   — which is exactly where an http image can load and where a policy without the scheme
+ *   turned a saved market into a silent grey fallback. Behind TLS the browser upgrades or
+ *   refuses an http image before the CSP is consulted, so listing the scheme there would
+ *   permit nothing and read, to a scanner, as a policy that allows insecure loads.
  * - `connect-src` has to name the API origin explicitly, both schemes: since M4 the browser
  *   dials `NEXT_PUBLIC_API_URL` directly for the Socket.IO handshake (ADR-0017) and upgrades it
  *   to a WebSocket, and neither is 'self'.
@@ -39,11 +48,12 @@ const isProduction = process.env.NODE_ENV === 'production';
  *   three redirects an injected tag would otherwise still have.
  */
 const wsUrl = apiUrl.replace(/^http/, 'ws');
+const apiIsPlainHttp = apiUrl.startsWith('http:');
 const contentSecurityPolicy = [
   "default-src 'self'",
   `script-src 'self' 'unsafe-inline'${isProduction ? '' : " 'unsafe-eval'"}`,
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: https:",
+  `img-src 'self' data: https:${apiIsPlainHttp ? ' http:' : ''}`,
   "font-src 'self' data:",
   `connect-src 'self' ${apiUrl} ${wsUrl}`,
   "object-src 'none'",
