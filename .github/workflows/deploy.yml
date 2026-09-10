@@ -1,0 +1,298 @@
+name: Deploy
+
+# Builds the three runtime images from the root Dockerfile, pushes them to ECR and tells the single
+# EC2 host to roll forward through SSM Run Command (ADR-0040, terraform/README.md). There is no
+# S3 bucket, no SSH and no host-side agent: the deploy bundle (deploy/) travels inside the api image.
+#
+# The only GitHub secret is AWS_DEPLOY_ROLE_ARN (`terraform output github_actions_deploy_role_arn`).
+# Everything else is discovered at run time: the registry is fixed per account/region, the host is
+# looked up by its Name tag, the runtime .env is rendered on the host from SSM by deploy.sh.
+on:
+  push:
+    branches: [main]
+    # None of these change an image. terraform/ is applied by hand from a workstation.
+    paths-ignore: ['docs/**', '**.md', 'terraform/**']
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: existing ECR tag (full git sha) to redeploy/roll back without building; empty = build HEAD
+        type: string
+        required: false
+        default: ''
+  # Build-only check: proves the Dockerfile still builds for arm64 before anything reaches main.
+  pull_request:
+
+env:
+  AWS_REGION: ap-northeast-2
+  ECR_REGISTRY: 210146911118.dkr.ecr.ap-northeast-2.amazonaws.com
+  PUBLIC_URL: https://buddha.sboh.dev
+  # The EC2 instance is found by this Name tag (terraform/ec2.tf) — no instance id to configure.
+  INSTANCE_NAME: tf-buddha-app
+  # ECR repositories are tf-buddha-<image> (terraform/ecr.tf) and the Dockerfile targets share the names.
+  IMAGES: 'api worker web'
+
+jobs:
+  # ---- pull requests: build all three targets, push nothing, no AWS credentials ----------------------
+  build-check:
+    name: Build check (arm64, no push)
+    if: github.event_name == 'pull_request'
+    # ubuntu-24.04-arm builds linux/arm64 natively: the host is a Graviton t4g, and QEMU emulation
+    # of a Next.js build on an x86 runner takes several times longer.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v3
+
+      # One GitHub Actions cache scope per target: the three images share the deps/build stages, but
+      # a single scope would be overwritten by whichever build finishes last (mode=max exports all
+      # stages, so each scope still carries the shared layers).
+      - name: Build api
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: api
+          push: false
+          platforms: linux/arm64
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+
+      - name: Build worker
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: worker
+          push: false
+          platforms: linux/arm64
+          cache-from: type=gha,scope=worker
+          cache-to: type=gha,mode=max,scope=worker
+
+      # NEXT_PUBLIC_API_URL is baked into the web bundle at `next build` (apps/web/next.config.ts),
+      # so the check must build with the production origin to exercise the same code path.
+      - name: Build web
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: web
+          push: false
+          platforms: linux/arm64
+          build-args: NEXT_PUBLIC_API_URL=${{ env.PUBLIC_URL }}
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+
+  # ---- main / manual: build (or reuse), push, deploy through SSM, smoke test ------------------------
+  deploy:
+    name: Build, push to ECR, deploy over SSM
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04-arm
+    # A cold arm64 build on the 2-vCPU private-repo runner plus the SSM step's 20-minute ceiling.
+    timeout-minutes: 60
+    # One production deploy at a time; a second push waits for the first instead of cancelling it
+    # (cancelling mid-deploy could leave the host between two releases). deploy.sh also holds a
+    # flock on the host, so this is belt and braces.
+    concurrency:
+      group: deploy-prod
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      # OIDC token for configure-aws-credentials. The IAM role's trust policy (terraform/github-oidc.tf)
+      # pins the token subject to the repository's IMMUTABLE form
+      #   repo:sboh1214@30364442/sw04-buddha@1354856480:ref:refs/heads/main
+      # (owner id + repository id, `gh api repos/sboh1214/sw04-buddha/actions/oidc/customization/sub`),
+      # so renaming or re-creating the repository — or a fork — cannot assume the role, and only runs
+      # on main can. workflow_dispatch from another branch will fail here by design.
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # `image_tag` on workflow_dispatch selects an image already in ECR (redeploy / roll back) and
+      # skips the build; otherwise the merge sha of this run is built and pushed. Tags are always
+      # the full 40-hex sha — the same value ends up in the host's .env as IMAGE_TAG (deploy.sh).
+      - name: Compute image tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          if [ -n "$INPUT_TAG" ]; then
+            tag="$INPUT_TAG"
+            build=false
+          else
+            tag="$GITHUB_SHA"
+            build=true
+          fi
+          if ! [[ "$tag" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::image tag must be a full git sha, got '$tag'"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag build=$build"
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: github-actions-deploy
+
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # Roll back / redeploy path: refuse to touch the host unless all three images carry the tag,
+      # otherwise compose would fail half-way through `pull` with a less obvious error.
+      - name: Verify the requested tag exists in ECR
+        if: steps.tag.outputs.build == 'false'
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          for image in $IMAGES; do
+            if ! aws ecr describe-images --repository-name "tf-buddha-$image" \
+              --image-ids imageTag="$TAG" --query 'imageDetails[0].imageDigest' --output text; then
+              echo "::error::tf-buddha-$image:$TAG is not in ECR"
+              exit 1
+            fi
+          done
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.tag.outputs.build == 'true'
+
+      # Only the sha tag is pushed — nothing consumes :latest and a roll back is `image_tag=<sha>`.
+      # provenance: false keeps a plain single-arch manifest in ECR (an attestation manifest list
+      # would show up as an extra untagged "image" and confuses `docker pull` by tag on older CLIs).
+      # Cache scopes match build-check, but Actions caches are branch-isolated: this main run only
+      # restores what earlier main runs wrote (PR caches under refs/pull/N/merge are invisible here),
+      # while main's caches do warm later PR build-checks. The very first main deploy is a cold build.
+      - name: Build and push api
+        if: steps.tag.outputs.build == 'true'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: api
+          push: true
+          provenance: false
+          platforms: linux/arm64
+          tags: ${{ env.ECR_REGISTRY }}/tf-buddha-api:${{ steps.tag.outputs.tag }}
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+
+      - name: Build and push worker
+        if: steps.tag.outputs.build == 'true'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: worker
+          push: true
+          provenance: false
+          platforms: linux/arm64
+          tags: ${{ env.ECR_REGISTRY }}/tf-buddha-worker:${{ steps.tag.outputs.tag }}
+          cache-from: type=gha,scope=worker
+          cache-to: type=gha,mode=max,scope=worker
+
+      - name: Build and push web
+        if: steps.tag.outputs.build == 'true'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: web
+          push: true
+          provenance: false
+          platforms: linux/arm64
+          tags: ${{ env.ECR_REGISTRY }}/tf-buddha-web:${{ steps.tag.outputs.tag }}
+          build-args: NEXT_PUBLIC_API_URL=${{ env.PUBLIC_URL }}
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+
+      # The host runs everything as root through SSM Run Command (no SSH, no inbound port 22).
+      # The deploy bundle (compose.yaml, Caddyfile, deploy.sh, host-setup.sh, postgres-init/) is
+      # copied out of the api image being deployed rather than synced from S3: it is then versioned
+      # with — and rolled back with — the image, and the pipeline needs no bucket and no extra IAM.
+      - name: Deploy over SSM
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          IID=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=$INSTANCE_NAME" Name=instance-state-name,Values=running \
+            --query 'Reservations[0].Instances[0].InstanceId' --output text)
+          if [ -z "$IID" ] || [ "$IID" = None ]; then
+            echo "::error::no running instance tagged Name=$INSTANCE_NAME in $AWS_REGION"
+            exit 1
+          fi
+          echo "instance: $IID"
+
+          # Header is expanded here (the host knows none of these); the body is literal ('EOF').
+          # host-setup.sh (idempotent host config) runs before deploy.sh on every deploy so host
+          # settings roll forward with git instead of living in the one-shot user-data.
+          SCRIPT=$(
+            cat <<EOF
+          set -euo pipefail
+          export AWS_DEFAULT_REGION='$AWS_REGION'
+          TAG='$TAG'
+          ECR_REGISTRY='$ECR_REGISTRY'
+          EOF
+            cat <<'EOF'
+          mkdir -p /data/buddha
+          aws ecr get-login-password | docker login --username AWS --password-stdin "$ECR_REGISTRY"
+          docker pull -q "$ECR_REGISTRY/tf-buddha-api:$TAG"
+          docker rm -f buddha-deploy-src 2>/dev/null || true
+          docker create --name buddha-deploy-src "$ECR_REGISTRY/tf-buddha-api:$TAG"
+          docker cp buddha-deploy-src:/app/deploy/. /data/buddha/
+          docker rm buddha-deploy-src
+          chmod 700 /data/buddha
+          chmod +x /data/buddha/deploy.sh /data/buddha/host-setup.sh /data/buddha/postgres-init/*.sh
+          /data/buddha/host-setup.sh
+          /data/buddha/deploy.sh "$TAG"
+          EOF
+          )
+
+          # --timeout-seconds: how long SSM waits for the agent to pick the command up.
+          # executionTimeout: how long the script itself may run (first deploy pulls ~1 GB of images
+          # and runs initdb + migrations, so it is generous; the polling below matches it).
+          CMD=$(aws ssm send-command --instance-ids "$IID" --document-name AWS-RunShellScript \
+            --comment "deploy $TAG" --timeout-seconds 600 \
+            --parameters "$(jq -n --arg s "$SCRIPT" '{commands: [$s], executionTimeout: ["1200"]}')" \
+            --query Command.CommandId --output text)
+          echo "command: $CMD"
+
+          # Poll rather than `aws ssm wait command-executed`: that waiter gives up after ~100 s
+          # (20 × 5 s), far less than a deploy takes. Right after send-command the invocation may
+          # not exist yet (InvocationDoesNotExist), so any error is treated as Pending.
+          STATUS=Pending
+          for _ in $(seq 1 120); do
+            STATUS=$(aws ssm get-command-invocation --command-id "$CMD" --instance-id "$IID" \
+              --query Status --output text 2>/dev/null || echo Pending)
+            case "$STATUS" in
+              Pending | InProgress | Delayed) sleep 10 ;;
+              *) break ;;
+            esac
+          done
+
+          # Both streams are capped at 24 000 characters by SSM; for the full log open a session:
+          #   aws ssm start-session --target <instance id>; sudo docker compose -f /data/buddha/compose.yaml logs
+          RESULT=$(aws ssm get-command-invocation --command-id "$CMD" --instance-id "$IID" \
+            --query '{Status: Status, StandardOutputContent: StandardOutputContent, StandardErrorContent: StandardErrorContent}' \
+            --output json)
+          STATUS=$(jq -r .Status <<<"$RESULT")
+          echo "::group::remote stdout ($STATUS)"
+          jq -r .StandardOutputContent <<<"$RESULT"
+          echo "::endgroup::"
+          echo "::group::remote stderr"
+          jq -r .StandardErrorContent <<<"$RESULT"
+          echo "::endgroup::"
+          if [ "$STATUS" != Success ]; then
+            echo "::error::SSM command $CMD on $IID ended with status $STATUS"
+            exit 1
+          fi
+
+      # Through Caddy and the public DNS name, i.e. the path a browser takes. --retry-all-errors
+      # covers the few seconds Caddy needs after a restart (and the first ACME issuance).
+      - name: Smoke test
+        run: curl -fsS --retry 20 --retry-delay 10 --retry-all-errors "$PUBLIC_URL/api/health"

@@ -1,0 +1,24 @@
+# Build context hygiene for the root Dockerfile (three targets: api, worker, web).
+# The local root .env is read by apps/web/next.config.ts at `next build` and must never enter an
+# image; nested .env files sit on the api/worker dotenv paths. deploy/ and docker/postgres/init/
+# are deliberately NOT ignored: the api image carries the deploy bundle (ADR-0040).
+.git
+node_modules
+**/node_modules
+**/dist
+**/.next
+**/.turbo
+.turbo
+**/coverage
+**/playwright-report
+**/test-results
+**/*.tsbuildinfo
+**/.env
+**/.env.*
+!**/.env.example
+apps/mobile/*
+!apps/mobile/package.json
+terraform
+docs
+.github
+*.md

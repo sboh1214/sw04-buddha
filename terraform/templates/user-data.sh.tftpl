@@ -1,0 +1,79 @@
+#!/bin/bash
+# First-boot provisioning for the tf-buddha host (AL2023 arm64). Runs ONCE via cloud-init; the
+# instance is ignore_changes'd on user_data, so keep this minimal and put everything that may need
+# to change later in deploy/host-setup.sh (run by every deploy). No secrets, no application files.
+#
+# Rendered with templatefile(): only $${...} is Terraform interpolation. Shell variables are written
+# as $VAR (no braces) so nothing here collides with the template syntax.
+set -euxo pipefail
+exec > >(tee -a /var/log/buddha-user-data.log) 2>&1
+
+# The EIP is associated after launch; the ephemeral public IP covers the gap, but wait for the
+# network to be usable before touching dnf (also rides out the SSM agent's own dnf lock).
+# (The CDN root answers 403; the mirror list is a real object that answers 200.)
+for i in $(seq 1 60); do
+  curl -fsSI https://cdn.amazonlinux.com/al2023/core/mirrors/latest/aarch64/mirror.list >/dev/null 2>&1 && break
+  sleep 5
+done
+for i in $(seq 1 12); do
+  dnf install -y docker && break
+  sleep 10
+done
+rpm -q docker
+
+# --- /data: the separate EBS volume (terraform/storage.tf), mounted by filesystem label so a
+# replacement instance re-attaches the same data without formatting it.
+DEV=/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_${data_volume_id_nodash}
+for i in $(seq 1 60); do
+  [ -e "$DEV" ] && break
+  sleep 5
+done
+[ -e "$DEV" ]
+if ! blkid "$DEV" >/dev/null 2>&1; then
+  mkfs.ext4 -L buddha-data "$DEV"
+fi
+mkdir -p /data
+grep -q 'LABEL=buddha-data' /etc/fstab || \
+  echo 'LABEL=buddha-data /data ext4 defaults,nofail,x-systemd.device-timeout=60 0 2' >> /etc/fstab
+mount -a
+findmnt /data
+mkdir -p /data/buddha /data/postgres /data/redis /data/caddy/data /data/caddy/config
+chmod 700 /data/buddha
+
+# Log rotation + live-restore must be in place BEFORE the first container is created: log options
+# are fixed per container at creation and `log-driver`/`log-opts` are not SIGHUP-reloadable.
+# deploy/host-setup.sh rewrites the same file (and restarts dockerd) if it ever changes.
+mkdir -p /etc/docker
+cat > /etc/docker/daemon.json <<'JSON'
+{
+  "log-driver": "json-file",
+  "log-opts": { "max-size": "10m", "max-file": "3" },
+  "live-restore": true
+}
+JSON
+
+# dockerd must never start before /data is mounted: it would create the bind-mount directories on
+# the root filesystem and postgres would run a fresh initdb over an empty directory.
+mkdir -p /etc/systemd/system/docker.service.d
+cat > /etc/systemd/system/docker.service.d/10-data-mount.conf <<'UNIT'
+[Unit]
+RequiresMountsFor=/data
+UNIT
+systemctl daemon-reload
+systemctl enable --now docker
+
+# --- 2 GiB swap on a 2 GiB box. dd, not fallocate: the AL2023 root filesystem is XFS and swapon
+# refuses a swapfile with unwritten extents.
+if [ ! -f /swapfile ]; then
+  dd if=/dev/zero of=/swapfile bs=64M count=32 status=none
+  chmod 600 /swapfile
+  mkswap /swapfile
+fi
+grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+swapon -a
+printf 'vm.swappiness = 10\nvm.overcommit_memory = 1\n' > /etc/sysctl.d/90-buddha.conf
+sysctl --system >/dev/null
+
+# SSM Agent and AWS CLI v2 are preinstalled on AL2023; the instance profile does the rest.
+systemctl is-active amazon-ssm-agent
+echo "user-data: done"

@@ -179,6 +179,14 @@ PLAN 부록 C의 다이어그램은 M4 이전 그림이라 위와 다르다(브�
 - **헬스체크** — `GET /api/health`는 **레디니스**(db·redis를 각각 2초 상한으로 프로브하고, 하나라도 실패하면 같은 본문 모양으로 503), `GET /api/health/live`는 **라이브니스**(아무것도 프로브하지 않는다). 둘을 바꿔 물리면 Redis가 한 번 흔들렸다는 이유로 컨테이너가 재시작된다. 워커의 `GET :4100/health`도 `uptimeSeconds`와 소비 중인 큐 이름을 함께 답한다(200/503의 뜻은 그대로).
 - **보안 헤더** — API는 `@fastify/helmet`(`apps/api/src/infra/http/security-headers.ts`), 웹은 `next.config.ts`의 `headers()`가 각자 붙인다. `/api/*`로 프록시되는 응답에는 웹이 헤더를 덧붙이지 않는다 — 한 응답에 CSP가 둘이면 브라우저가 교집합으로 강제해서, 어느 파일에도 적혀 있지 않은 정책이 만들어진다.
 
+## 배포
+
+운영은 **AWS EC2 `t4g.small` 한 대**(`ap-northeast-2`)에 Docker Compose로 올라간다 — Caddy가 `https://buddha.sboh.dev` 하나의 오리진에서 `/api/*`·`/socket.io/*`를 api로, 나머지를 web으로 넘기고, Postgres·Redis는 같은 호스트의 별도 EBS(`/data`, 일일 스냅샷)에 산다. 내부 테스터 3명용 최소 비용 구성(월 ≈ $22)이고, 그렇게 정한 이유와 재검토 조건은 [ADR-0040](docs/DECISIONS.md)에 있다. 앱 코드는 로컬과 같다 — 위 아키텍처 그림에서 브라우저가 API에 닿는 두 길(Next rewrite, `NEXT_PUBLIC_API_URL` 직접 연결)이 운영에서는 둘 다 Caddy를 지난다는 점만 다르다.
+
+- **인프라**는 [terraform/](terraform/README.md)(리소스는 전부 `tf-buddha-` 접두사, 부트스트랩·롤백·복구·시크릿 교체 절차가 그 README에 있다).
+- **호스트에서 도는 것**은 [deploy/](deploy/)(`compose.yaml` · `Caddyfile` · `deploy.sh` · `host-setup.sh`) — api 이미지에 동봉되어 배포마다 `/data/buddha`에 풀린다. 이미지는 루트 `Dockerfile`의 세 타깃(`api` / `worker` / `web`)이다.
+- **배포**는 `main`에 push하면 [.github/workflows/deploy.yml](.github/workflows/deploy.yml)이 arm64 이미지를 ECR에 밀고 SSM으로 호스트에서 `migrate && seed` → 컨테이너 교체 → `/api/health` 스모크까지 한다. 롤백은 `gh workflow run deploy.yml --ref main -f image_tag=<sha>`. SSH는 없고 셸은 `aws ssm start-session`이다.
+
 ## 스크립트
 
 | 명령                                          | 설명                                                                                                                                                                                                  |
@@ -219,7 +227,9 @@ pnpm --filter web test:e2e
 ```
 apps/       web (Next.js) · api (NestJS + Fastify) · worker (BullMQ) · mobile (Expo 스캐폴드)
 packages/   shared (순수 도메인 로직) · db (Drizzle) · api-client (OpenAPI 클라이언트) · config-ts · config-eslint
-docker/     docker-compose.yml, postgres 롤 초기화 SQL
+docker/     docker-compose.yml, postgres 롤 초기화 SQL (로컬 개발 스택)
+deploy/     운영 compose.yaml · Caddyfile · deploy.sh · host-setup.sh (api 이미지에 동봉)
+terraform/  AWS 인프라 (tf-buddha-*), README.md 에 운영 절차
 scripts/    generate-api-doc.mjs (pnpm api:openapi 의 마지막 단계)
 docs/       PLAN.md · API.md · DECISIONS.md · QUESTIONS.md
 ```

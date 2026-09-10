@@ -1,0 +1,267 @@
+# Production stack for ONE EC2 host (ADR-0040). This file is shipped inside the api image under
+# /app/deploy and unpacked to /data/buddha by the SSM deploy command, so the compose file and the
+# images it references always come from the same commit. `${VAR}` values are interpolated from the
+# sibling `.env`, which deploy.sh renders from the SSM parameter /tf-buddha/env (never committed).
+#
+# Topology (single public origin https://${DOMAIN}):
+#   caddy (172.28.0.10)  --/api/*, /socket.io/*-->  api:4000
+#                        --everything else------>  web:3000 (172.28.0.20)
+# The fixed IPAM addresses are part of the contract: the api's TRUST_PROXY names Caddy and its
+# RATE_LIMIT_UNCOUNTED_PEERS names web (ADR-0034), and web's extra_hosts points the public hostname
+# at Caddy so server-side rendering reaches the API without leaving the host. Change one, change all.
+#
+# No named volumes: every stateful path is a bind mount under /data (a separate EBS volume with a
+# daily DLM snapshot), so a snapshot captures postgres, redis, Caddy's certificates and this dir.
+# Images for the infrastructure services come from ECR Public (same digests as Docker Hub) so an
+# anonymous Docker Hub pull limit can never fail a deploy.
+name: buddha
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
+
+services:
+  caddy:
+    image: public.ecr.aws/docker/library/caddy:2.11-alpine
+    restart: unless-stopped
+    ports:
+      - '80:80' # ACME HTTP-01 + redirect to https
+      - '443:443'
+    networks:
+      default:
+        ipv4_address: 172.28.0.10
+    environment:
+      DOMAIN: ${DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+      # Optional: point at the Let's Encrypt staging CA to rehearse issuance without rate limits.
+      ACME_CA: ${ACME_CA:-https://acme-v02.api.letsencrypt.org/directory}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - /data/caddy/data:/data
+      - /data/caddy/config:/config
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+
+  web:
+    image: ${ECR_REGISTRY}/tf-buddha-web:${IMAGE_TAG}
+    restart: unless-stopped
+    networks:
+      default:
+        ipv4_address: 172.28.0.20
+    # SSR hairpin: session.server.ts / api.server.ts dial the PUBLIC NEXT_PUBLIC_API_URL (baked at
+    # build time, no server-only override exists). Resolving the hostname to Caddy in-host keeps
+    # the request local, still validates the real certificate, and arrives at the API with
+    # X-Forwarded-For = 172.28.0.20 — which RATE_LIMIT_UNCOUNTED_PEERS excludes from the limit.
+    extra_hosts:
+      - '${DOMAIN}:172.28.0.10'
+    environment:
+      NODE_ENV: production
+      # Docker injects HOSTNAME=<container id>; Next's standalone server binds that name unless
+      # told otherwise (ADR-0016).
+      HOSTNAME: 0.0.0.0
+      PORT: '3000'
+      NODE_OPTIONS: --max-old-space-size=256
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      # /login renders without calling the API when no session cookie is present.
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000/login').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+    stop_grace_period: 10s
+
+  api:
+    image: ${ECR_REGISTRY}/tf-buddha-api:${IMAGE_TAG}
+    restart: unless-stopped
+    # An explicit list rather than env_file: the rendered .env also holds the postgres superuser
+    # and seed passwords, which the API process has no reason to see.
+    environment:
+      NODE_ENV: production
+      API_HOST: 0.0.0.0
+      API_PORT: '4000'
+      TRUST_PROXY: ${TRUST_PROXY}
+      RATE_LIMIT_UNCOUNTED_PEERS: ${RATE_LIMIT_UNCOUNTED_PEERS}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL}
+      WEB_ORIGIN: ${WEB_ORIGIN}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_SECURE: ${SMTP_SECURE}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASS: ${SMTP_PASS}
+      SMTP_FROM: ${SMTP_FROM}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      KAKAO_CLIENT_ID: ${KAKAO_CLIENT_ID}
+      KAKAO_CLIENT_SECRET: ${KAKAO_CLIENT_SECRET}
+      NAVER_CLIENT_ID: ${NAVER_CLIENT_ID}
+      NAVER_CLIENT_SECRET: ${NAVER_CLIENT_SECRET}
+      NODE_OPTIONS: --max-old-space-size=256
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      # Readiness (db + redis probes). README warns against wiring readiness to restarts, but
+      # with `restart: unless-stopped` a failing check only marks the container unhealthy; it is
+      # `depends_on` ordering that consumes it.
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:4000/api/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 448m
+    stop_grace_period: 15s
+
+  worker:
+    image: ${ECR_REGISTRY}/tf-buddha-worker:${IMAGE_TAG}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      WORKER_HOST: 127.0.0.1
+      WORKER_HEALTH_PORT: '4100'
+      NODE_OPTIONS: --max-old-space-size=160
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:4100/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+    # The worker's own shutdown watchdog is 10 s (apps/worker/src/main.ts); give it room.
+    stop_grace_period: 15s
+
+  # One-shot: `docker compose run --rm migrate` (the profile keeps `up` from starting it). Runs the
+  # committed drizzle migrations as buddha_migrate, then the idempotent seed as buddha_app
+  # (categories, charge packages, first admin, sample markets — safe on every deploy).
+  migrate:
+    image: ${ECR_REGISTRY}/tf-buddha-api:${IMAGE_TAG}
+    profiles: ['tools']
+    environment:
+      NODE_ENV: production
+      DATABASE_MIGRATE_URL: ${DATABASE_MIGRATE_URL}
+      DATABASE_URL: ${DATABASE_URL}
+      SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD}
+    command: ['sh', '-c', 'node packages/db/dist/migrate.js && node packages/db/dist/seed.js']
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: public.ecr.aws/docker/library/postgres:16.15-alpine
+    restart: unless-stopped
+    command:
+      [
+        'postgres',
+        '-c',
+        'shared_buffers=128MB',
+        '-c',
+        'max_connections=40',
+        '-c',
+        'work_mem=4MB',
+        '-c',
+        'log_min_duration_statement=1000',
+      ]
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: buddha
+      # Consumed once by postgres-init/02-passwords.sh on the first initdb.
+      BUDDHA_APP_PASSWORD: ${BUDDHA_APP_PASSWORD}
+      BUDDHA_MIGRATE_PASSWORD: ${BUDDHA_MIGRATE_PASSWORD}
+    volumes:
+      - /data/postgres:/var/lib/postgresql/data
+      # 01-roles.sql is the unchanged repo file (docker/postgres/init), 02-passwords.sh is deploy-only.
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    shm_size: 128m
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -h localhost -U postgres -d buddha']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 20s
+      start_interval: 1s
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+    stop_grace_period: 30s
+
+  redis:
+    image: public.ecr.aws/docker/library/redis:7.4.11-alpine
+    restart: unless-stopped
+    # noeviction is required by BullMQ (a full Redis errors on writes instead of dropping jobs);
+    # AOF keeps queued jobs across restarts. maxmemory keeps it inside mem_limit with room for the
+    # AOF-rewrite fork.
+    command:
+      [
+        'redis-server',
+        '--appendonly',
+        'yes',
+        '--maxmemory-policy',
+        'noeviction',
+        '--maxmemory',
+        '128mb',
+      ]
+    volumes:
+      - /data/redis:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+      start_interval: 1s
+    deploy:
+      resources:
+        limits:
+          memory: 224m
+    stop_grace_period: 15s

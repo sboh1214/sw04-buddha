@@ -17,3 +17,8 @@ apps/api/openapi.json
 # written by scripts/generate-api-doc.mjs; prettier re-pads its tables, which would fight the
 # `git diff --exit-code` of the OpenAPI contract check on every run
 docs/API.md
+# Caddyfile is not a prettier language; the .tftpl templates are rendered by Terraform and must keep their exact bytes
+deploy/Caddyfile
+terraform/templates/
+# provider binaries from `terraform init` (nested terraform/.gitignore is not read by prettier)
+terraform/.terraform/

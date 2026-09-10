@@ -1,6 +1,6 @@
 import { StandardSchemaValidationPipe, type ArgumentMetadata } from '@nestjs/common';
 import { type ValidationIssue } from '@buddha/shared';
-import { type StandardSchemaV1 } from '@standard-schema/spec';
+import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { AppError } from '../errors/app-error.js';
 
 /** Standard Schema paths may contain `{ key }` segments; flatten to strings/numbers. */

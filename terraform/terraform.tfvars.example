@@ -1,0 +1,29 @@
+# Copy to terraform.tfvars (gitignored) and fill in. Everything not listed here has a default in
+# variables.tf. DNS records are NOT a variable: after `terraform apply`, run
+# `terraform output dns_records` and enter them in the Cloudflare zone sboh.dev by hand (proxy OFF).
+
+# --- Let's Encrypt account e-mail (Caddy sends expiry/problem notices here) ------------------------
+acme_email = ""
+
+# --- First admin, created by the seed on the first deploy (packages/db/src/seed.ts) ----------------
+# The password must be 8-128 characters of [A-Za-z0-9] only (it travels through dotenv and compose
+# interpolation). The seed never resets an existing password; changing the e-mail later creates a
+# second admin instead of renaming this one.
+seed_admin_email    = ""
+seed_admin_password = ""
+
+# --- Optional OAuth providers (a provider is enabled only when BOTH of its keys are set) ----------
+# Register these redirect URIs in each console first:
+#   https://buddha.sboh.dev/api/auth/callback/google
+#   https://buddha.sboh.dev/api/auth/callback/kakao
+#   https://buddha.sboh.dev/api/auth/callback/naver
+# google_client_id     = ""
+# google_client_secret = ""
+# kakao_client_id      = ""
+# kakao_client_secret  = ""
+# naver_client_id      = ""
+# naver_client_secret  = ""
+
+# --- Only if you need to change the defaults -------------------------------------------------------
+# profile       = "inno-frame"   # AWS CLI profile that maps to the terraform-iam user (never root)
+# instance_type = "t4g.small"    # t4g.medium if 2 GiB proves too small
