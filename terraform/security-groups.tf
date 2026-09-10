@@ -32,7 +32,7 @@ resource "aws_vpc_security_group_ingress_rule" "app_https" {
 
 resource "aws_vpc_security_group_egress_rule" "app_to_anywhere" {
   security_group_id = aws_security_group.app.id
-  description       = "Egress for ECR, SSM, SES SMTP, Let's Encrypt, dnf, GitHub releases"
+  description       = "Egress for ECR, SSM, SES SMTP, ACME (Lets Encrypt), dnf, GitHub releases"
   ip_protocol       = "-1"
   cidr_ipv4         = "0.0.0.0/0"
 }
