@@ -1134,3 +1134,44 @@ M6은 그것을 실제로 쟀다. 커밋된 마이그레이션 12개를 그대�
 - `price_ticks`는 그대로 한 테이블이다. PLAN §6.2의 주석과 `packages/db/src/schema/price-ticks.ts`의 "Monthly partitioning: M6"이 이 결정을 가리키도록 고쳤다.
 - 새 열린 항목: **Q-M6-7** — `/admin/users`의 희귀 검색어. 200만 행에서 10초이고 인덱스 없이도 3.6초다.
 - 측정에서 한 번 설명되지 않은 계획 흔들림이 있었다: 20만 행 · 깊은 페이지 · `?sort=volume`에서 변형 D가 정렬된 중첩 루프 대신 해시 조인 + 정렬을 골랐다(8.8ms). 커서가 39만 행짜리 동점 블록 안이라 커서 이후 행 수 추정이 컸기 때문으로 보이고, 200만 행에서는 재현되지 않았다(0.13ms). 기록만 남긴다.
+
+---
+
+## ADR-0040 — AWS 최소 비용 배포: EC2 t4g.small + Docker Compose + Caddy + Terraform(tf-buddha) (배포)
+
+- 날짜: 2026-09-11
+- 상태: 채택
+
+### 맥락
+
+PLAN §13(docs/PLAN.md:801)은 "이후(MVP 외)"로 CDK + Fargate 3서비스 + RDS + ElastiCache Valkey + ALB를 스케치해 두었다. 그 구성은 월 $100을 넘고, 지금 필요한 것은 **내부 팀원 3명의 시험 사용**이다. 같은 계정(`210146911118`, `ap-northeast-2`)에는 이미 Terraform으로 올린 `tf-inno-frame-prod-*`가 있고 그 리포의 관례(`tf-` 접두사, `default_tags`, 관심사별 파일, `aws_iam_policy_document`, 분리형 SG rule, 영문 HCL 주석 + 한국어 README/AGENTS.md, 로컬 tfstate)가 검증되어 있다.
+
+배포 마일스톤으로 넘어와 있던 미결이 셋이다. **Q-M6-2** — 운영의 `TRUST_PROXY`와 앞단 프록시: 주소별 레이트 리밋은 프록시가 `/api/*`를 API로 **바로** 넘기며 `X-Forwarded-For`에 방문자를 덧붙일 때만 산다(ADR-0034 추기). **Q-M1-3** — SES 발신 도메인 검증과 샌드박스. **Q-M5-7 · Q-M5-11** — 워커 헬스 포트를 컨테이너 헬스체크에 붙일 것인가, 그런데 붙일 컨테이너가 없었다. 저장소에는 Dockerfile·운영 compose·리버스 프록시 설정·CD 워크플로가 하나도 없었다.
+
+사용자 결정(확정): 도메인 `buddha.sboh.dev`(존은 Cloudflare, 레코드는 수동 등록) · EC2 `t4g.small` 1대 + docker compose · GitHub Actions(OIDC) → ECR → SSM 배포 · Terraform 자격증명은 `terraform-iam`(root 금지) · 리소스 접두사는 리터럴 **`tf-buddha-`**.
+
+### 결정
+
+- **단일 오리진 `https://buddha.sboh.dev`.** Caddy(`deploy/Caddyfile`)가 `/api/*`와 `/socket.io/*`를 api:4000으로, 나머지를 web:3000으로 넘긴다. Socket.IO의 `/ws`는 **네임스페이스이지 URL 경로가 아니다** — engine.io의 HTTP 경로는 기본값 `/socket.io/*`다(`realtime-io.adapter.ts`에 path 옵션이 없다). 별도 API 호스트가 없으므로 ADR-0017의 `AUTH_COOKIE_DOMAIN`은 미설정이고 쿠키는 host-only다. Caddy는 들어온 `X-Forwarded-For`를 버리고 직접 클라이언트로 바꾸므로 ADR-0034가 요구한 "덮어쓰는 프록시"다.
+- **web의 SSR은 `extra_hosts`로 Caddy에 헤어핀한다.** `NEXT_PUBLIC_API_URL`은 빌드 시 베이킹되고 `session.server.ts`·`api.server.ts`가 같은 공개 URL을 부른다. web 컨테이너에 `buddha.sboh.dev → 172.28.0.10`(Caddy의 고정 IPAM 주소)을 넣어 그 호출이 호스트 밖으로 나가지 않으면서 실제 Let's Encrypt 인증서로 TLS를 검증하게 했다. 그 요청의 `X-Forwarded-For`는 web의 고정 주소 `172.28.0.20`이다.
+- **`TRUST_PROXY=172.28.0.10/32`, `RATE_LIMIT_UNCOUNTED_PEERS=172.28.0.20/32`.** Q-M6-2의 답이다. 프록시는 Caddy 하나이고 CIDR은 그 컨테이너의 고정 주소다(`true`가 아니다). 웹 호스트는 ADR-0034 추기대로 세지 않는 피어 목록에 남는다 — SSR과 서버 컴포넌트의 세션 호출은 여전히 거기서 온다. 브라우저의 REST는 Next rewrite를 거치지 않고 Caddy가 API로 바로 넘기므로 주소별 한도가 방문자별로 산다.
+- **데이터는 별도 EBS(`/data`, gp3 10 GiB, `prevent_destroy`) + DLM 일일 스냅샷 7개.** 인스턴스는 소모품이다 — `ignore_changes = [ami, user_data]`로 월간 AMI 갱신이 호스트를 재생성하지 못하게 하고, 교체는 `-replace`로만 한다. compose에 named volume은 없다. 전부 `/data` bind mount라 스냅샷 하나가 postgres·redis AOF·Caddy 인증서·배포 디렉터리를 함께 담는다. docker.service에 `RequiresMountsFor=/data`를 걸어 마운트 전에 dockerd가 떠서 루트 FS에 빈 초기화를 돌리는 사고를 막는다.
+- **시크릿은 SSM SecureString 하나 `/tf-buddha/env`(운영 `.env` 전체).** `random_password` 넷(`better_auth_secret` 48자, DB 롤 셋 32자, 전부 `special = false`)과 SES SMTP 자격증명, 사용자가 준 OAuth 키·seed 관리자를 Terraform이 `templates/env.tftpl`로 렌더한다. Standard 티어라 무료이고 4 KB 안이다. git·user-data에는 시크릿이 없다. `deploy.sh`가 배포마다 이 값을 `/data/buddha/.env`(0600)로 내려받는다.
+- **배포 번들은 api 이미지 안에 있다.** `deploy/`(compose.yaml · Caddyfile · deploy.sh · host-setup.sh · postgres-init/02-passwords.sh)와 `docker/postgres/init/01-roles.sql`을 api 이미지에 `COPY`하고, SSM 배포 명령이 `docker cp`로 `/data/buddha`에 푼다. S3 버킷 없이 compose 파일과 이미지가 같은 커밋에서 온다. `.dockerignore`는 그래서 `deploy/`를 제외하지 않는다.
+- **GitHub Actions `ubuntu-24.04-arm` + OIDC → ECR → SSM Run Command.** arm64 네이티브 빌드(QEMU 없음). 신뢰 정책의 subject는 이 저장소의 **immutable 형식** `repo:sboh1214@30364442/sw04-buddha@1354856480:ref:refs/heads/main`이다(`gh api .../actions/oidc/customization/sub`로 확인) — inno-frame의 `repo:<owner>/<repo>:ref:...`를 복사하면 영원히 매치되지 않는다. `aws_iam_openid_connect_provider`는 inno-frame state가 소유하므로 data source로 참조한다. 배포 역할은 ECR push·`ec2:DescribeInstances`·인스턴스 ARN에 고정된 `ssm:SendCommand`만 갖는다. `:latest`는 밀지 않고 롤백은 `workflow_dispatch`의 `image_tag=<sha>`다.
+- **SES identity `buddha.sboh.dev` + MAIL FROM `mail.buddha.sboh.dev` + SMTP 전용 IAM user.** Q-M1-3의 나머지 절반. 계정은 이미 이 리전에서 production 모드라 샌드박스 해제 요청은 없다. `dkim_signing_attributes`는 지정하지 않는다(inno-frame 규칙 — 명시하는 순간 새 토큰). API는 SMTP 587 STARTTLS로 보낸다(`SMTP_SECURE=false` + 자격증명 → STARTTLS 강제).
+- **DNS는 Terraform 밖에서, 사용자가 Cloudflare에 손으로 넣는다.** 처음 안은 cloudflare provider(v5)로 레코드 7개를 코드에 두는 것이었으나 사용자가 "AWS만 Terraform, Cloudflare는 수동"으로 정했다(2026-09-11). 그래서 `outputs.tf`의 `dns_records`가 apply 뒤에 등록할 값을 그대로 찍는다: A(EIP, **DNS-only** — Caddy가 HTTP-01을 호스트에서 푼다), DKIM CNAME ×3(identity 속성에서), MAIL FROM MX/SPF, DMARC. 대가는 둘이다: EIP를 재생성하면 A 레코드를 손으로 고쳐야 하고, DNS drift는 plan에 안 뜬다(둘 다 `terraform/README.md` drift 절에 있다). 얻는 것은 Cloudflare API 토큰이 tfvars·plan 파일 어디에도 없다는 점이다.
+- **`01-roles.sql`은 그대로 두고 `02-passwords.sh`가 비밀번호를 바꾼다.** 원본은 로컬·CI와 공유하는 파일이고 `'buddha'`가 하드코딩되어 있다. initdb의 임시 서버는 unix socket만 듣고, 두 번째 스크립트가 `psql -v` 바인딩으로 `ALTER ROLE`을 돈다. 중간 비밀번호는 네트워크에 노출되지 않는다.
+- **매 배포 `migrate && seed`.** 원샷 `migrate` 서비스(`profiles: [tools]`)가 api/worker/web을 교체하기 **전에** 돈다 — 실패하면 이전 릴리스가 그대로 서비스하고 워크플로가 실패한다. seed는 멱등(advisory lock)이고 카테고리·충전 상품·첫 관리자는 seed로만 생긴다. `packages/db/drizzle`를 api 이미지에 넣어 tsx 없이 `dist/migrate.js`로 실행한다.
+- **`kms:Decrypt`는 `kms:ViaService = ssm.ap-northeast-2.amazonaws.com` 조건으로 `*`에.** `alias/aws/ssm` 키는 첫 SecureString에서 lazy 생성되어 apply 시점에 ARN이 없다. ViaService 조건이 SSM을 거치지 않는 복호화를 막는다.
+- **tfstate는 로컬(inno-frame 관례).** 시크릿이 전부 들어가므로 `gpg -c`로 오프머신 백업하고, 팀이 늘면 S3 backend(`use_lockfile = true`)로 옮기는 경로를 `terraform/README.md`에 적었다.
+- **앱 코드 변경은 한 줄.** `apps/api/src/common/pipes/validation.pipe.ts`의 `import { type StandardSchemaV1 }`를 `import type { StandardSchemaV1 }`로 바꿨다. `verbatimModuleSyntax`에서 전자는 `import {} from '@standard-schema/spec'`이라는 부수효과 import로 남는데, 그 패키지는 devDependency라 `--prod` 이미지에서 첫 부팅이 `ERR_MODULE_NOT_FOUND`로 죽었다(로컬 arm64 이미지 부팅 검증에서 발견). 후자는 타입 전용이라 완전히 지워진다. 그 외에는 런타임 이미지 ENV(`NODE_ENV=production`, `API_HOST=0.0.0.0`, `HOSTNAME=0.0.0.0`, `WORKER_HOST=127.0.0.1`)와 env 값만으로 기존 코드가 그대로 돈다. 컨테이너 헬스체크는 api `/api/health`(레디니스), web `/login`(쿠키 없으면 API 호출 없이 200), worker `:4100/health`다 — 워커 헬스 포트는 컨테이너 안에서만 열리므로(`WORKER_HOST=127.0.0.1`) Q-M5-7의 "기본으로 열어 두는 것"은 호스트 밖에 아무것도 노출하지 않고, `/health`가 부팅 사실만 답하는 것(Q-M5-11)은 `restart: unless-stopped` + `depends_on` 순서 용도로 충분하다.
+
+### 결과
+
+- 월 **≈ $22**(EC2 15.18 + EBS 2.37 + 스냅샷 0.15 + EIP 3.65 + ECR 0.30 + SES 0.05; 인스턴스 중지 시 ≈ 6.5). NAT·ALB·RDS·ElastiCache 없음. 2 GiB 메모리에 mem_limit 합 ≈ 1.8 GiB + swap 2 GiB이고, 부족하면 `instance_type = "t4g.medium"` 한 줄이다.
+- 새 파일: `terraform/*`(단일 root, `tf-buddha-` 39개 리소스), `Dockerfile` + `.dockerignore`(multi-target `api|worker|web`), `deploy/*`, `.github/workflows/deploy.yml`. 앱 코드 변경은 위의 타입 전용 import 한 줄뿐이다.
+- 이행된 ADR: **ADR-0016**(standalone은 Linux에서 `next build`로 만들고 `HOSTNAME=0.0.0.0`으로 실행), **ADR-0017**(Socket.IO는 공개 오리진에 직접 — 이제 그 오리진이 web과 같다), **ADR-0034**(`TRUST_PROXY`는 프록시 CIDR, 웹 호스트는 `RATE_LIMIT_UNCOUNTED_PEERS`), **ADR-0035**(레디니스는 `depends_on` 순서에만 쓰고 재시작에 물리지 않는다; 요청 로그는 json-file 10 MB × 3 회전).
+- 닫힌 항목: Q-M6-2(답), Q-M1-3(발신 도메인·DKIM·MAIL FROM·production 모드), Q-M5-7 · Q-M5-11(컨테이너 헬스체크에 붙었고 의미는 그대로), A-M0-13의 운영 값. PLAN §13의 CDK/Fargate 스케치는 이 ADR로 대체된다.
+- 알려진 한계: 단일 AZ·단일 인스턴스라 가용성이 없다(인스턴스 교체 ≈ 5분 다운타임). `AmazonSSMManagedInstanceCore`가 `ssm:GetParameter *`를 주므로 인스턴스 역할의 파라미터 한정은 문서일 뿐이다. `@msgpackr-extract`의 linux-arm64는 musl 바이너리만 배포해 glibc 이미지에서 node-gyp 경고가 나고 순수 JS 폴백을 쓴다 — 무해하다. `terraform-iam`은 AdministratorAccess다.
+- **재검토 방아쇠**: (가) 외부 공개 — 트래픽과 공격 표면이 바뀌면 WAF·ALB가 필요하다; (나) 가용성 요구 — 인스턴스 교체 5분을 감당할 수 없으면 ECS + ALB로; (다) 데이터 보존 요구 — 스냅샷 7일과 수동 pg_dump로 부족하면 RDS(PITR)로. 셋 중 하나라도 오면 PLAN §13의 스케치를 이 Terraform root 위에 얹는다(VPC·ECR·SES·OIDC 역할은 재사용). 팀이 늘어 두 머신에서 apply하게 되면 S3 backend로 이관한다.

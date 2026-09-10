@@ -1,0 +1,32 @@
+# Edge for the single public origin (ADR-0040). Automatic HTTPS: Caddy solves HTTP-01 on :80 (and
+# TLS-ALPN-01 on :443) against the CA named in `acme_ca` below (Let's Encrypt by default; an
+# explicit CA disables Caddy's fallback issuers), so the Cloudflare A record MUST stay DNS-only
+# (grey cloud) and both ports open. Certificates persist under /data (bind-mounted
+# from /data/caddy/data) and survive redeploys and instance replacement.
+{
+	email {$ACME_EMAIL}
+	# Override with the staging directory to rehearse issuance without touching production limits.
+	acme_ca {$ACME_CA:https://acme-v02.api.letsencrypt.org/directory}
+	servers {
+		# Only tcp/443 is open in the security group; do not advertise HTTP/3.
+		protocols h1 h2
+	}
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	# REST, better-auth (/api/auth/*) and health go straight to the API so X-Forwarded-For names the
+	# visitor (ADR-0034: the API trusts this proxy through TRUST_PROXY=172.28.0.10/32). Caddy sets
+	# X-Forwarded-For to the direct client and drops any client-supplied value by default.
+	# /socket.io/* is the engine.io HTTP path; the "/ws" namespace travels inside the protocol, not
+	# in the URL. reverse_proxy upgrades WebSockets without extra configuration.
+	@api path /api/* /socket.io/*
+	handle @api {
+		reverse_proxy api:4000
+	}
+
+	handle {
+		reverse_proxy web:3000
+	}
+}
