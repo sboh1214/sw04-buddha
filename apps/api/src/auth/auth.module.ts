@@ -27,6 +27,7 @@ const AUTH_ENV_KEYS = [
   'API_HOST',
   'API_PORT',
   'TRUST_PROXY',
+  'RATE_LIMIT_UNCOUNTED_PEERS',
   'LOG_LEVEL',
   'DATABASE_URL',
   'REDIS_URL',
@@ -89,8 +90,8 @@ const authProvider: Provider<Auth> = {
       // PLAN 7.5 for /api/auth/*, half of it: middie serves those routes before Nest routing
       // exists, so no guard sees them, and better-auth's own `hooks.before` is the only place
       // that has the PARSED BODY — the address the mail and sign-in buckets key on. The other
-      // half, the per-CALLER address bucket, is a raw Fastify hook registered ahead of middie
-      // (rate-limit/auth-address-limit.ts).
+      // half, the per-CALLER address bucket, is the raw Fastify hook registered ahead of
+      // middie that counts the whole API (rate-limit/address-limit.ts).
       rateLimiter: authRateLimiter(redis),
       rateLimits: limits,
     }),

@@ -288,7 +288,7 @@ PLAN 7.5 의 표는 `packages/shared/src/rate-limit.ts` 한 곳에 있고, 아�
 | `charge` | 로그인 계정 (라우트별) | 10 | `POST /api/v1/payments/charge` |
 | `coupon` | 로그인 계정 (라우트별) | 10 | `POST /api/v1/coupons/redeem` |
 | `dispute` | 로그인 계정 (라우트별) | 10 | `POST /api/v1/markets/{id}/disputes` |
-| `email` | 본문이 지목한 이메일 주소 (라우트별) | 5 | 메일을 보내는 경로 — `POST /api/v1/auth/register` 와 `/api/auth/*` 의 `/change-email`, `/send-verification-email`, `/request-password-reset`, `/forget-password`. 시도 자체를 센다(시도가 곧 피해다). `/change-email` 은 `newEmail` 에 더해 **요청한 계정**에도 같은 크기의 버킷을 하나 더 센다 — 인증된 계정의 확인 메일은 본문의 주소가 아니라 계정이 이미 가진 주소로 가기 때문이다. `GET /verify-email` 도 링크가 메일을 보내는 종류(이메일 변경의 **확인** 링크: 누를 때마다 새 주소에 다시 보낸다)이면 그 수신 주소로 센다 — 토큰은 1시간짜리 무상태 JWT 라 누른다고 소모되지 않기 때문이다. 서명이 유효한 토큰만 세고, 변경을 적용하는 **검증** 링크는 메일을 보내지 않으므로 세지 않는다. |
+| `email` | 본문이 지목한 이메일 주소 (라우트별) | 5 | 메일을 보내는 경로 — `POST /api/v1/auth/register` 와 `/api/auth/*` 의 `/change-email`, `/send-verification-email`, `/request-password-reset`, `/forget-password`. 시도 자체를 센다(시도가 곧 피해다). `/change-email` 만은 **로그인한 요청만** 센다(세션 없는 요청은 401 이고 아무에게도 메일이 가지 않으므로): 먼저 **요청한 계정**의 버킷을, 그다음 `newEmail` 의 버킷을 — 인증된 계정의 확인 메일은 본문의 주소가 아니라 계정이 이미 가진 주소로 가고, 계정을 먼저 세야 한 계정이 1분에 다섯 주소까지만 지목할 수 있기 때문이다. `GET /verify-email` 도 링크가 메일을 보내는 종류(이메일 변경의 **확인** 링크: 누를 때마다 새 주소에 다시 보낸다)이면 그 수신 주소로 센다 — 토큰은 1시간짜리 무상태 JWT 라 누른다고 소모되지 않기 때문이다. 서명이 유효한 토큰만 세고, 변경을 적용하는 **검증** 링크는 메일을 보내지 않으므로 세지 않는다. |
 | `signIn` | 본문이 지목한 이메일 주소 (라우트별) | 10 | `/api/auth/sign-in/email`. 시도를 세되 **성공한 로그인이 버킷을 지운다** — 비밀번호가 맞은 로그인은 공격이 아니고, 그것까지 남기면 공유 계정이 쓰이는 것만으로 스스로 잠긴다. `/api/auth/*` 전체는 이와 별도로 `default`(주소) 버킷에도 들어간다. |
 
 - **버킷을 지목한 라우트는 두 번 세어진다.** `@RateLimit('<bucket>')` 이 붙어도 기본 100/분 의
@@ -298,12 +298,16 @@ PLAN 7.5 의 표는 `packages/shared/src/rate-limit.ts` 한 곳에 있고, 아�
   `X-RateLimit-Reset` 이 붙는다. 버킷을 지목한 라우트는 같은 이름에 `-route` 가 붙은 세 개를
   더 받는다. 거절될 때는 `Retry-After`(초)가 더 붙고 — 어느 버킷이 거절했든 접미사 없이 —,
   본문은 PLAN 7 봉투의 `RATE_LIMITED` 이며 `details.retryAfterSeconds` 에 같은 숫자가 들어 있다.
-- **`ip` 스코프는 API 전체가 한 통이다.** PLAN 7.5 의 기본값은 주소당으로 쓰여 있으므로 경로별로
-  나누면 한 호출자가 경로 수만큼 100번을 쓸 수 있다. 클라이언트를 지목할 수 없는 주소(신뢰할 수
-  없는 프록시 뒤 등)는 아예 계수하지 않는다 — 거절이 아니라 무계수다.
+- **`ip` 스코프는 API 전체가 한 통이고, 파싱과 핸들러보다 앞에서 센다.** PLAN 7.5 의 기본값은
+  주소당으로 쓰여 있으므로 경로별로 나누면 한 호출자가 경로 수만큼 100번을 쓸 수 있다. 세는 곳은
+  Fastify 의 `onRequest` 훅이라 핸들러에 닿지 못하는 요청 — 파싱할 수 없는 본문(400), `bodyLimit`
+  초과(413), 라우트 없는 경로(404) — 도 센다(라우터가 훅 이전에 직접 답하는 둘, 해독할 수 없는
+  경로 400 과 `maxParamLength` 초과 414 만 예외다). 클라이언트를 지목할 수 없는 피어는 아예
+  계수하지 않는다 — 거절이 아니라 무계수다: 루프백과, `RATE_LIMIT_UNCOUNTED_PEERS` 가 지목한
+  프록시(다른 호스트의 웹 서버).
 - **키는 해시로 저장한다.** 계정 id 는 사람을 지목하고 이메일은 개인정보인데, 리미터가 그것을
   `KEYS rl:*` 로 읽히는 자리에 둘 이유가 없다.
-- **면제** — `/api/health`, `/api/health/live`(`@SkipRateLimit()`).
+- **면제** — `/api/health`, `/api/health/live`(주소 리미터 훅의 `UNCOUNTED_ROUTES`; 지목한 버킷은 없다).
 - **Redis 가 죽으면 열린다**(fail-open). 리미터 때문에 API 전체가 멈추지는 않는다.
 - **Socket.IO 는 따로 센다** — 아래 실시간 절 참고.
 

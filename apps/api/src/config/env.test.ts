@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { envSchema, webOrigins } from './env.js';
+import { envSchema, uncountedPeers, webOrigins } from './env.js';
 
 /**
  * The env schema is pure (no DB, no Redis), so this suite runs with the docker test profile
@@ -89,6 +89,54 @@ describe('webOrigins', () => {
     expect(envSchema.safeParse({ ...base, WEB_ORIGIN: 'https://App.Example.com/' }).success).toBe(
       true,
     );
+  });
+});
+
+describe('RATE_LIMIT_UNCOUNTED_PEERS', () => {
+  it('is optional, and empty means nobody', () => {
+    expect(envSchema.safeParse(base).success).toBe(true);
+    const list = uncountedPeers({ RATE_LIMIT_UNCOUNTED_PEERS: ' , ' });
+    expect(list.check('10.0.0.1')).toBe(false);
+  });
+
+  it('accepts addresses and CIDRs of both families, with the family passed to BlockList', () => {
+    const list = uncountedPeers({
+      RATE_LIMIT_UNCOUNTED_PEERS: '10.0.0.5, 172.18.0.0/16, fd00::5, 2001:db8::/32',
+    });
+    expect(list.check('10.0.0.5')).toBe(true);
+    expect(list.check('172.18.200.1')).toBe(true);
+    // `BlockList.check` defaults to IPv4 and answers `false` for an IPv6 address checked as
+    // such — the caller passes the family; these prove the entries were ADDED as IPv6.
+    expect(list.check('fd00::5', 'ipv6')).toBe(true);
+    expect(list.check('2001:db8:1::1', 'ipv6')).toBe(true);
+    expect(list.check('2001:db9::1', 'ipv6')).toBe(false);
+  });
+
+  it('reads an IPv4-mapped entry as the IPv4 it is, prefix included', () => {
+    // `::ffff:172.18.0.0/16` taken as IPv6 is `::/16`, which matches every IPv4 address there
+    // is — the per-address limit switched off for everyone, with nothing to say so.
+    const list = uncountedPeers({ RATE_LIMIT_UNCOUNTED_PEERS: '::ffff:172.18.0.0/16' });
+    expect(list.check('172.18.9.9')).toBe(true);
+    expect(list.check('203.0.113.9')).toBe(false);
+    expect(list.check('8.8.8.8')).toBe(false);
+  });
+
+  it.each([
+    'not-an-address',
+    '10.0.0.5/33',
+    'fd00::/129',
+    '10.0.0.0/8/1',
+    '10.0.0.0/x',
+    '10.0.0.0/-1',
+  ])('refuses %j under its own name, at load time', (bad) => {
+    expect(() => uncountedPeers({ RATE_LIMIT_UNCOUNTED_PEERS: bad })).toThrow(
+      /RATE_LIMIT_UNCOUNTED_PEERS/,
+    );
+    const result = envSchema.safeParse({ ...base, RATE_LIMIT_UNCOUNTED_PEERS: bad });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0]?.path).toEqual(['RATE_LIMIT_UNCOUNTED_PEERS']);
+    }
   });
 });
 

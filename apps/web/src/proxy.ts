@@ -18,8 +18,12 @@ import { NextResponse, type NextRequest } from 'next/server';
  * `base-server.js` as `client-supplied ?? socket address` — with `??=`, so a caller's value
  * wins — and it does so BEFORE this proxy runs, which leaves no way here to tell a real client
  * address from a claimed one. Server-rendered reads do not even take this path: `api.server.ts`
- * dials the API origin directly. The answer is a real reverse proxy in front that OVERWRITES
- * the header, with `TRUST_PROXY` naming its CIDR (Q-M6-2).
+ * dials the API origin directly. The answer is a real reverse proxy AHEAD of this server that
+ * routes `/api/*` straight to the API and appends the visitor to the header, with `TRUST_PROXY`
+ * naming its CIDR (Q-M6-2). A web server on another host goes in the API's
+ * `RATE_LIMIT_UNCOUNTED_PEERS` either way — with the proxy, for the server-rendered reads and
+ * session calls that still come from it; without it, or the whole site shares one address
+ * bucket (ADR-0034 추기).
  *
  * (Earlier revisions of this comment and of QUESTIONS A-M3-24 cited "ADR-0022" for that
  * review; ADR-0022 is the integration-test infrastructure. ADR-0034 is the one.)

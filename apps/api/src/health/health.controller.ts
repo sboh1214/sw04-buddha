@@ -13,7 +13,6 @@ import { type Redis } from 'ioredis';
 import { RawResponse } from '../common/decorators/raw-response.decorator.js';
 import { DB } from '../infra/db/db.provider.js';
 import { REDIS } from '../infra/redis/redis.provider.js';
-import { SkipRateLimit } from '../rate-limit/rate-limit.decorator.js';
 
 export type ProbeResult = 'ok' | 'error';
 
@@ -61,12 +60,15 @@ const PROBE_TIMEOUT_MS = 2_000;
  *
  * Neither is wrapped in the PLAN 7 envelope (ADR-0015 body shape, read by infrastructure) or
  * counted against the rate limit — a probe that is refused 429 while an instance defends itself
- * reads to an orchestrator as an instance to restart. Excluded from the OpenAPI document: not
- * part of the client contract (docs/API.md documents them by hand).
+ * reads to an orchestrator as an instance to restart. That exemption is not a decorator here:
+ * the address bucket is counted by a Fastify hook ahead of parsing, which sees the Fastify
+ * route and not this controller's metadata, so the two routes are named in address-limit.ts
+ * (`UNCOUNTED_ROUTES`) —
+ * a route added to this controller is counted until it is added there. Excluded from the
+ * OpenAPI document: not part of the client contract (docs/API.md documents them by hand).
  */
 @ApiExcludeController()
 @RawResponse()
-@SkipRateLimit()
 @Controller({ path: 'health', version: VERSION_NEUTRAL })
 export class HealthController {
   private readonly logger = new Logger(HealthController.name);

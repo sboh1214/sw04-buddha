@@ -1,3 +1,4 @@
+import { type BlockList } from 'node:net';
 import { type ExecutionContext, Logger } from '@nestjs/common';
 import { type ConfigService } from '@nestjs/config';
 import { type Reflector } from '@nestjs/core';
@@ -5,7 +6,7 @@ import { RATE_LIMIT_BUCKETS, type RateLimitBucket, type RateLimitScope } from '@
 import { fromNodeHeaders } from 'better-auth/node';
 import { type Auth, type SessionData } from '../auth/auth.js';
 import { type AuthenticatedRequest, isTrustedOrigin } from '../auth/session.guard.js';
-import { type Env, webOrigins } from '../config/env.js';
+import { type Env, ipFamily, webOrigins } from '../config/env.js';
 import { emailTracker } from './email-tracker.js';
 import { RATE_LIMIT_BUCKET } from './rate-limit.decorator.js';
 
@@ -26,7 +27,7 @@ export function rateLimitScope(reflector: Reflector, context: ExecutionContext):
 }
 
 /**
- * Loopback peers are not counted by address.
+ * A peer that cannot name a client is not counted by address.
  *
  * Every browser request reaches this API through the Next.js rewrite, which is a server-side
  * proxy: the address Fastify reports is the web server's, not the visitor's, and `TRUST_PROXY`
@@ -36,21 +37,42 @@ export function rateLimitScope(reflector: Reflector, context: ExecutionContext):
  * dials the API origin directly. Counting all of it together would put every visitor and every
  * render in one 100/min bucket and rate-limit the product rather than an abuser.
  *
- * So the rule is: an address that cannot name a client is not counted, and a loopback peer is
- * exactly that case — a developer's own stack, or a rewrite on the same host. A deployment that
- * puts a real reverse proxy in front sets `TRUST_PROXY` to its CIDR, Fastify resolves
- * `request.ip` to the forwarded client, and the limit applies again with nothing else to
- * change. Direct clients — the Socket.IO handshake, the Expo app (ADR-0017), anything dialling
- * the API origin — always present a real address and are always counted.
+ * So the rule is: an address that cannot name a client is not counted. A loopback peer is one
+ * case — a developer's own stack, or a rewrite on the same host — and it is built in. The web
+ * server on ANOTHER host is the same case with a routable address, and it is named:
+ * `RATE_LIMIT_UNCOUNTED_PEERS` (config/env.ts) lists the peers that are proxies whose
+ * forwarding is not trusted. The first shape of this knew only loopback, so a split web/API
+ * deployment counted every visitor as the web host and the whole site shared one 100/min
+ * window (PR #8 review). Direct clients — the Expo app (ADR-0017), anything dialling the API
+ * origin over HTTP — always present a real address and are always counted; the Socket.IO
+ * handshake is not, because engine.io takes it off the raw HTTP server before Fastify sees it
+ * (ADR-0034, A-M6-3).
  *
- * The per-account and per-address buckets are unaffected: they are what actually protects
- * `/trades`, `/payments/charge` and sign-up, and they work identically behind the rewrite.
+ * What restores a PER-VISITOR limit behind the rewrite is a reverse proxy AHEAD of the web
+ * server that routes `/api/*` straight to this API and appends the visitor to
+ * `X-Forwarded-For`, with `TRUST_PROXY` naming that proxy: then `request.ip` is the visitor.
+ * Naming the web host in `TRUST_PROXY` is not the answer either: unless the web server is
+ * reachable ONLY through a proxy that always appends the header, Next passes a client-supplied
+ * one through untouched and Fastify would read whatever the caller wrote — and the web host
+ * stays in the uncounted list regardless, because server-rendered reads and the session calls
+ * of server components come from it with no header at all.
+ *
+ * The per-account and per-recipient buckets are unaffected: they are what actually protects
+ * `/trades`, `/payments/charge` and sign-up, and they work identically behind the rewrite. The
+ * one place the address still stands in for them — the route throttler's fallback for a
+ * request it can attribute to neither an account nor an address in the body — is a request
+ * the route is about to refuse anyway (401, 403 or 400), and it is counted as it always was.
  */
-export function isCountableAddress(ip: string | undefined): boolean {
+export function isCountableAddress(ip: string | undefined, uncounted?: BlockList): boolean {
   if (ip === undefined || ip.length === 0) return false;
   // ::ffff:127.0.0.1 is how Node reports an IPv4 peer on a dual-stack socket.
   const address = ip.startsWith('::ffff:') ? ip.slice('::ffff:'.length) : ip;
-  return !(address === '::1' || address === '127.0.0.1' || address.startsWith('127.'));
+  if (address === '::1' || address === '127.0.0.1' || address.startsWith('127.')) return false;
+  if (uncounted === undefined) return true;
+  // The family is explicit on every check: `BlockList` defaults to IPv4 and answers `false`,
+  // not an error, for an IPv6 address checked as IPv4.
+  const family = ipFamily(address);
+  return family === undefined || !uncounted.check(address, family);
 }
 
 /** The tracker of the address throttler: the client address, whatever the route. */

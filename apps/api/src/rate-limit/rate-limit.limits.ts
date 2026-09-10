@@ -1,5 +1,6 @@
 import { Module, type Provider } from '@nestjs/common';
 import { DEFAULT_RATE_LIMITS, type RateLimits } from '@buddha/shared';
+import { UNCOUNTED_PEERS, uncountedPeersProvider } from './uncounted-peers.js';
 
 /**
  * Injection token for the resolved limit of every bucket (PLAN 7.5).
@@ -26,7 +27,11 @@ export const rateLimitsProvider: Provider<RateLimits> = {
  * Its own module because two modules need the same instance: `RateLimitModule` for the HTTP
  * guard, and `AuthInstanceModule` for the limit better-auth's own routes are checked against
  * (`authRateLimiter`). Declaring the provider twice would give a test's `overrideProvider` two
- * targets and one of them would keep the shipped numbers.
+ * targets and one of them would keep the shipped numbers. `UNCOUNTED_PEERS` rides along for
+ * the same reason (uncounted-peers.ts).
  */
-@Module({ providers: [rateLimitsProvider], exports: [RATE_LIMITS] })
+@Module({
+  providers: [rateLimitsProvider, uncountedPeersProvider],
+  exports: [RATE_LIMITS, UNCOUNTED_PEERS],
+})
 export class RateLimitsModule {}

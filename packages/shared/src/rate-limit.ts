@@ -15,17 +15,21 @@ export const RATE_LIMIT_WINDOW_SECONDS = 60;
 /**
  * What a bucket counts.
  *
- * - `ip`    — the client address, in ONE bucket for the whole API. PLAN 7.5's default
+ * - `ip`    — the client address, in ONE bucket for the whole API, counted ahead of parsing
+ *             and the handler (so a body that cannot be parsed or a path with no route still
+ *             counts; only what Fastify's router refuses before any hook does not). PLAN 7.5's default
  *             ("100req/분/IP") is stated per address, not per route: a limit that reset on
- *             every path would let a caller spend it once per handler.
+ *             every path would let a caller spend it once per handler. A peer that cannot name
+ *             a client — loopback, or a proxy the API's RATE_LIMIT_UNCOUNTED_PEERS names — is
+ *             not counted at all.
  * - `user`  — the signed-in account, per route. The rows PLAN 7.5 states per user.
  * - `email` — the address in the request body, per route: for routes that put mail in
  *             somebody's inbox, what has to be bounded is the recipient, not the sender
- *             (A-M2-10). `/change-email` charges a second bucket of this size to the ACCOUNT
- *             asking, because for a verified account the mail goes to the address it already
- *             has, not to the one in the body; and `GET /verify-email`, whose only input is
- *             a token, is charged to the address a mail-sending token is about to mail
- *             (auth.ts).
+ *             (A-M2-10). `/change-email` counts signed-in requests only (a 401 mails nobody),
+ *             and charges the ACCOUNT asking first — a second bucket of this size, because for
+ *             a verified account the mail goes to the address it already has, not to the one
+ *             in the body — then `newEmail`; and `GET /verify-email`, whose only input is a
+ *             token, is charged to the address a mail-sending token is about to mail (auth.ts).
  */
 export type RateLimitScope = 'ip' | 'user' | 'email';
 

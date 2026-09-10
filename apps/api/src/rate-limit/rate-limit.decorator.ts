@@ -1,5 +1,4 @@
 import { SetMetadata } from '@nestjs/common';
-import { SkipThrottle } from '@nestjs/throttler';
 import { type RateLimitBucket } from '@buddha/shared';
 
 export const RATE_LIMIT_BUCKET = 'buddha:rateLimitBucket';
@@ -17,16 +16,16 @@ export const RATE_LIMIT_BUCKET = 'buddha:rateLimitBucket';
  * ON TOP OF, not instead of. The first shape of this REPLACED the default, on the argument that
  * one limit per route keeps `X-RateLimit-*` unambiguous — which quietly removed the only
  * per-caller bound from `POST /auth/register`, whose own bucket is the RECIPIENT's inbox. A
- * caller could then mail five links each to unlimited addresses. The two throttlers now run
- * side by side (rate-limit.module.ts) and the second reports itself as `X-RateLimit-*-route`.
+ * caller could then mail five links each to unlimited addresses. The address bucket now runs
+ * ahead of the guard, in a Fastify hook (address-limit.ts), and this one reports itself as
+ * `X-RateLimit-*-route`.
+ *
+ * There is no decorator to exempt a route from the address bucket: the hook sees the Fastify
+ * route it matched, not the Nest controller behind it, so `Reflector` metadata is out of its
+ * reach and the two health routes it exempts are named in address-limit.ts itself.
+ * (`@SkipThrottle()` would be inert — it names a throttler this guard no longer runs — which is
+ * why the one this file used to export is gone.)
  */
 export const RateLimit = (
   bucket: Exclude<RateLimitBucket, 'default'>,
 ): MethodDecorator & ClassDecorator => SetMetadata(RATE_LIMIT_BUCKET, bucket);
-
-/**
- * Exempts a handler entirely. Used by `/api/health`, which infrastructure polls on a schedule
- * and which must answer even while a flood is being refused — a health check that returns 429
- * tells an orchestrator to restart the instance that was defending itself.
- */
-export const SkipRateLimit = (): MethodDecorator & ClassDecorator => SkipThrottle();

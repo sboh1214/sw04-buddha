@@ -51,15 +51,15 @@ export function createOpenApiDocument(app: INestApplication): OpenAPIObject {
     )
     /**
      * 429 on EVERY operation, not only the five with a named `@RateLimit` bucket: the address
-     * throttler runs as an APP_GUARD on every HTTP route (rate-limit.guard.ts `handleRequest`,
+     * bucket is a Fastify hook ahead of parsing that counts every request (address-limit.ts,
      * PLAN 7.5's default row), so `GET /markets` can be refused exactly as `POST /trades` can.
      * The first document listed 429 only where a handler wrote `@ApiErrors('RATE_LIMITED')`,
      * and a generated client had no such response for 37 of 42 operations (PR #8 review). The
      * five explicit entries stay: on those handlers `RATE_LIMITED` reads next to the
      * `@RateLimit` that makes it likely, and a method-level response of the same status replaces
      * this one byte for byte (`ApiErrors` emits the same shape), so the document is unchanged
-     * there. `/api/health` is `@ApiExcludeController()` and `@SkipRateLimit()`, so it is neither
-     * documented nor limited.
+     * there. `/api/health` is `@ApiExcludeController()` and exempt in the hook's route list, so
+     * it is neither documented nor limited.
      */
     .addGlobalResponse({
       status: 429,

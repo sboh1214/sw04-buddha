@@ -6,7 +6,7 @@ import { AppModule } from './app.module.js';
 import { loadEnv, parseTrustProxy } from './config/env.js';
 import { MAX_PARAM_LENGTH } from './infra/http/fastify-options.js';
 import { registerSecurityHeaders } from './infra/http/security-headers.js';
-import { installAuthAddressLimit } from './rate-limit/auth-address-limit.js';
+import { installAddressLimit } from './rate-limit/address-limit.js';
 import { ApiLogController, NestPinoLogger, createLogger } from './logger.js';
 import { RealtimeIoAdapter } from './realtime/realtime-io.adapter.js';
 
@@ -49,9 +49,10 @@ async function bootstrap(): Promise<void> {
 
   // Before init, like the WebSocket adapter below, and mirrored in test/app.ts (PLAN M6
   // "보안: 헤더"). A Fastify plugin cannot be registered on a started instance, and the address
-  // limit's hook has to be registered ahead of the middie middleware Nest flushes during init.
+  // limit's hook has to be registered ahead of the middie middleware Nest flushes during init —
+  // and after the headers, so a 429 it sends carries them.
   await registerSecurityHeaders(app);
-  installAuthAddressLimit(app);
+  installAddressLimit(app);
 
   // /api/health (VERSION_NEUTRAL) and /api/v1/<resource> for everything else.
   app.setGlobalPrefix('api');

@@ -8,30 +8,32 @@ import { AuthInstanceModule } from '../auth/auth.module.js';
 import { type Env } from '../config/env.js';
 import { RedisModule } from '../infra/redis/redis.module.js';
 import { REDIS } from '../infra/redis/redis.provider.js';
-import {
-  ADDRESS_THROTTLER,
-  ROUTE_THROTTLER,
-  RateLimitGuard,
-  rateLimitKey,
-} from './rate-limit.guard.js';
+import { ROUTE_THROTTLER, RateLimitGuard, rateLimitKey } from './rate-limit.guard.js';
 import { RateLimitsModule } from './rate-limit.limits.js';
-import { addressTracker, rateLimitScope, rateLimitTracker } from './rate-limit.tracker.js';
+import { rateLimitScope, rateLimitTracker } from './rate-limit.tracker.js';
 import { RedisThrottlerStorage } from './redis-throttler.storage.js';
 import { ConfigService } from '@nestjs/config';
 
 /**
- * PLAN 7.5 (M6): two Redis-backed limiters, applied to every HTTP route.
+ * PLAN 7.5 (M6): the NAMED buckets, as one Redis-backed `@nestjs/throttler` throttler applied
+ * to every HTTP route.
  *
- * TWO, not one per bucket. `@nestjs/throttler` applies every configured throttler to every
- * route, so a named throttler per row of PLAN 7.5's table would count `/trades` three times
- * over. But one alone was wrong in the other direction: `@RateLimit` overrode the single
- * throttler, so naming a bucket REMOVED the 100/min address cap — and `POST /auth/register`,
- * whose bucket is the recipient's inbox, ended up with no per-caller bound at all.
- *
- * So: `default` counts the client address on every route, and `route` counts the row of the
- * table a handler names, if it names one. A route with a named bucket is subject to both, and
- * the `X-RateLimit-*-route` headers carry the second (the library suffixes any name but
+ * ONE throttler, not one per bucket: the library applies every configured throttler to every
+ * route, so a throttler per row of PLAN 7.5's table would count `/trades` three times over.
+ * `route` counts the row a handler names with `@RateLimit`, if it names one, and is a no-op
+ * elsewhere; its headers carry the `-route` suffix (the library suffixes any name but
  * `default`).
+ *
+ * The per-address default is NOT here. It was, as a second throttler named `default`, until PR
+ * #8's review pointed out that a guard runs inside the route handler and so never saw a body
+ * Fastify refused to parse, a request over `bodyLimit` or a path with no route — and that the
+ * other half of the API (`/api/auth/*`, served by middie ahead of Nest routing) already had to
+ * be counted by a raw Fastify hook for the same reason. The address bucket now lives in that
+ * hook alone (address-limit.ts), after routing and ahead of parsing, for every request; a route with
+ * a named bucket is subject to both, and whichever bound it reaches first refuses. The earlier
+ * lesson stands: naming a bucket must ADD to the address cap, never replace it — `POST
+ * /auth/register`'s bucket is the recipient's inbox, and without the cap a caller who varied
+ * the address had no bound at all.
  *
  * `AuthInstanceModule` is imported for the better-auth instance the `user` scope reads sessions
  * with — the instance module, not `AuthModule`, so this does not pull the HTTP mount and its
@@ -51,22 +53,11 @@ import { ConfigService } from '@nestjs/config';
       ) => {
         const storage = new RedisThrottlerStorage(redis);
         const ttl = RATE_LIMIT_WINDOW_SECONDS * 1_000;
-        // The limits below are placeholders: RateLimitGuard substitutes each bucket's own
+        // The limit below is a placeholder: RateLimitGuard substitutes each bucket's own
         // number from the RATE_LIMITS provider before the storage ever sees one.
         return {
           storage,
           throttlers: [
-            {
-              name: ADDRESS_THROTTLER,
-              ttl,
-              limit: RATE_LIMIT_BUCKETS.default.limit,
-              getTracker: addressTracker,
-              // No route in the key: PLAN 7.5's default is stated per address for the whole
-              // API, so splitting it per handler would let a caller spend 100 requests on each
-              // of forty paths.
-              generateKey: (_context: ExecutionContext, tracker: string) =>
-                rateLimitKey(null, tracker),
-            },
             {
               name: ROUTE_THROTTLER,
               ttl,
@@ -77,10 +68,6 @@ import { ConfigService } from '@nestjs/config';
                 rateLimitKey(context, tracker),
             },
           ],
-          // Read by nothing here, but the library reads `commonOptions.getTracker` when a
-          // throttler declares none; both declare one, so this is only a guard against a
-          // future third throttler silently keying on `req.ip`.
-          getTracker: addressTracker,
         };
       },
     }),

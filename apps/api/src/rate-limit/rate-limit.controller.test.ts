@@ -8,6 +8,7 @@
  * because reaching 100 would cost a hundred injections; a separate test pins that the shipped
  * table still says 100.
  */
+import { createHash } from 'node:crypto';
 import { createMarket } from '@buddha/db/test';
 import { DEFAULT_RATE_LIMITS, RATE_LIMIT_BUCKETS, RATE_LIMIT_WINDOW_SECONDS } from '@buddha/shared';
 import { type Redis } from 'ioredis';
@@ -47,7 +48,12 @@ describe.skipIf(!hasTestInfra)('rate limits (integration)', () => {
     // spending 100 injections to prove one refusal would be the slowest test in the file.
     // A second app cannot be the answer: `connectTestDb` holds the packages/db file lock for
     // the life of the app, so building one inside a suite that already holds it deadlocks.
-    t = await createTestApp({ rateLimits: { default: 2 } });
+    // `uncountedPeers` names two networks a split deployment's web host could live on; the
+    // cases below present a peer from each and one from outside them.
+    t = await createTestApp({
+      rateLimits: { default: 2 },
+      uncountedPeers: '10.0.0.0/8, fd00::/8',
+    });
     redis = t.app.get<Redis>(REDIS);
   });
   afterAll(async () => {
@@ -119,8 +125,9 @@ describe.skipIf(!hasTestInfra)('rate limits (integration)', () => {
     it('counts each account separately, and reports what is left', async () => {
       const first = await buy(user);
       expect(first.statusCode).toBe(200);
-      // `-route`: the library suffixes every throttler but the address one, and the per-route
-      // bucket is the second (rate-limit.module.ts).
+      // `-route`: the library suffixes every throttler name but `default`, and the only
+      // throttler left in rate-limit.module.ts is `route` — the address bucket writes its
+      // unsuffixed headers from the hook (address-limit.ts).
       expect(first.headers['x-ratelimit-limit-route']).toBe(String(DEFAULT_RATE_LIMITS.trade));
       expect(first.headers['x-ratelimit-remaining-route']).toBe(
         String(DEFAULT_RATE_LIMITS.trade - 1),
@@ -189,8 +196,9 @@ describe.skipIf(!hasTestInfra)('rate limits (integration)', () => {
   describe('/api/auth/* — the routes Nest never sees', () => {
     /**
      * better-auth is mounted as @fastify/middie middleware, which runs before Nest routing:
-     * no guard, global or otherwise, ever sees these paths. The limit lives in better-auth's
-     * own `hooks.before` and shares this Redis and this namespace.
+     * no guard, global or otherwise, ever sees these paths. The named limits live in
+     * better-auth's own `hooks.before` and share this Redis and this namespace; the address
+     * bucket is the same Fastify hook that counts the rest of the API (address-limit.ts).
      */
     const signIn = (email: string, password: string) =>
       t.app.inject({
@@ -236,9 +244,9 @@ describe.skipIf(!hasTestInfra)('rate limits (integration)', () => {
     it('counts the CALLER too, in the same bucket as every /api/v1 route', async () => {
       // The address bucket is the one thing better-auth's own hook cannot give these paths: it
       // keys on the address in the BODY, so rotating that address is free. Rotating it does not
-      // rotate the peer, and `/api/auth/*` shares PLAN 7.5's single per-address bucket with the
-      // rest of the API — this app's `default` is 2 (beforeAll), so the third request from one
-      // peer is refused whichever surface it lands on.
+      // rotate the peer, and `/api/auth/*` is counted by the same Fastify hook as the rest of
+      // the API, into PLAN 7.5's single per-address bucket — this app's `default` is 2
+      // (beforeAll), so the third request from one peer is refused whichever surface it lands on.
       const from = (remoteAddress: string) =>
         t.app.inject({
           method: 'POST',
@@ -297,20 +305,89 @@ describe.skipIf(!hasTestInfra)('rate limits (integration)', () => {
         const ok = await change(`rotating-${String(i)}-${String(Date.now())}@test.local`);
         expect([i, ok.statusCode]).toEqual([i, 200]);
       }
+      const recipientKeys = () =>
+        redis.keys(`${RATE_LIMIT_KEY_PREFIX}:default:auth/change-email:*`);
+      const spent = (await recipientKeys()).length;
+      expect(spent).toBe(DEFAULT_RATE_LIMITS.email);
       const refused = await change(`rotating-last-${String(Date.now())}@test.local`);
       expect(refused.statusCode).toBe(429);
       expect(refused.json()).toMatchObject({ code: 'RATE_LIMITED' });
       const toCurrent = t.mailer.messages.slice(sent).filter((m) => m.to === user.email);
       expect(toCurrent).toHaveLength(DEFAULT_RATE_LIMITS.email);
+      // The account is charged FIRST: a caller whose five are spent never touches the
+      // recipient key of the sixth address they name, so one account can lock at most five
+      // addresses a minute rather than every address it can type.
+      expect(await recipientKeys()).toHaveLength(spent);
 
       // Its own key, under its own path: a stranger who names this user's address as THEIR
-      // `newEmail` spends `auth/change-email:<hash(address)>`, never this bucket — otherwise
-      // anyone could lock a user out of changing their email with five silent 200s.
+      // `newEmail` spends `auth/change-email:<hash(address)>` (signed in, and out of their own
+      // account's five), never this bucket — otherwise anyone could lock a user out of changing
+      // their email with five silent 200s.
       const keys = await redis.keys(`${RATE_LIMIT_KEY_PREFIX}:default:auth/change-email*`);
       expect(keys).toContainEqual(
         expect.stringMatching(/^rl:default:auth\/change-email\/account:[0-9a-f]{32}$/),
       );
       for (const key of keys) expect(key).not.toContain(user.id);
+    });
+
+    it('reads one field per path: an `email` smuggled into /change-email spends nothing', async () => {
+      // The hook runs on the raw body, before better-auth's schema strips keys it does not
+      // know. Reading `email` AND `newEmail` let a signed-in caller name two addresses per
+      // request — ten a minute, not the five the account bucket promises.
+      const user = await signUpTestUser(t);
+      const smuggled = `smuggled-${String(Date.now())}@test.local`;
+      const named = `named-${String(Date.now())}@test.local`;
+      const res = await t.app.inject({
+        method: 'POST',
+        url: '/api/auth/change-email',
+        headers: { ...jsonHeaders, cookie: user.cookie },
+        payload: { newEmail: named, email: smuggled },
+      });
+      expect(res.statusCode).toBe(200);
+      // One recipient key, and it is the named address's (the key is the tracker's sha256
+      // prefix, auth-rate-limit.ts); the smuggled one never got a key at all.
+      const digest = (address: string) =>
+        createHash('sha256').update(address).digest('hex').slice(0, 32);
+      expect(await redis.keys(`${RATE_LIMIT_KEY_PREFIX}:default:auth/change-email:*`)).toEqual([
+        `${RATE_LIMIT_KEY_PREFIX}:default:auth/change-email:${digest(named)}`,
+      ]);
+      expect(
+        await redis.exists(
+          `${RATE_LIMIT_KEY_PREFIX}:default:auth/change-email:${digest(smuggled)}`,
+        ),
+      ).toBe(0);
+    });
+
+    it('spends nothing on /change-email without a session: a 401 mails nobody', async () => {
+      // The one better-auth path that requires a session. Counting `newEmail` before the
+      // session was checked let anyone — no account, no cookie — name X five times and refuse
+      // every genuine change to X for a minute, at no cost and with no mail: the same free
+      // lockout Q-M6-8 closed for forged tokens (PR #8 review).
+      const victim = `victim-${String(Date.now())}@test.local`;
+      for (let i = 0; i <= DEFAULT_RATE_LIMITS.email; i += 1) {
+        const anonymous = await t.app.inject({
+          method: 'POST',
+          url: '/api/auth/change-email',
+          headers: jsonHeaders,
+          payload: { newEmail: victim },
+        });
+        expect([i, anonymous.statusCode]).toEqual([i, 401]);
+      }
+      expect(await redis.keys(`${RATE_LIMIT_KEY_PREFIX}:default:auth/change-email*`)).toEqual([]);
+
+      // The genuine change to that address goes through, and is what spends the first count.
+      const user = await signUpTestUser(t);
+      const sent = t.mailer.messages.length;
+      const genuine = await t.app.inject({
+        method: 'POST',
+        url: '/api/auth/change-email',
+        headers: { ...jsonHeaders, cookie: user.cookie },
+        payload: { newEmail: victim },
+      });
+      expect(genuine.statusCode).toBe(200);
+      expect(t.mailer.messages.slice(sent).map((m) => m.to)).toEqual([user.email]);
+      const keys = await redis.keys(`${RATE_LIMIT_KEY_PREFIX}:default:auth/change-email*`);
+      expect(keys).toHaveLength(2);
     });
 
     it('bounds replays of the confirmation link by the mailbox each click mails (Q-M6-8)', async () => {
@@ -429,11 +506,106 @@ describe.skipIf(!hasTestInfra)('rate limits (integration)', () => {
     it('never refuses /api/health, whatever the address has spent', async () => {
       for (let i = 0; i < 3; i += 1) await anonymous('/api/v1/categories', '203.0.113.9');
       expect((await anonymous('/api/v1/categories', '203.0.113.9')).statusCode).toBe(429);
-      for (let i = 0; i < 3; i += 1) {
-        const health = await anonymous('/api/health', '203.0.113.9');
-        expect([i, health.statusCode]).toEqual([i, 200]);
-        expect(health.json()).toMatchObject({ status: 'ok' });
+      // The exemption is by the route Fastify matched, so neither a query string nor the
+      // caller's choice of encoding — `/api/he%61lth` is served by the same handler — puts a
+      // probe back into the bucket.
+      for (const url of ['/api/health', '/api/health?x=1', '/api/he%61lth', '/api/health/live']) {
+        const health = await anonymous(url, '203.0.113.9');
+        expect([url, health.statusCode]).toEqual([url, 200]);
       }
+      expect((await anonymous('/api/health', '203.0.113.9')).json()).toMatchObject({
+        status: 'ok',
+      });
+    });
+
+    it('counts what never reaches a handler: a body Fastify cannot parse, and a path with no route', async () => {
+      // The bucket used to be a guard, and a guard runs inside the route handler — the last
+      // stage of Fastify's lifecycle. Malformed JSON (400), a body over `bodyLimit` (413) and a
+      // 404 are answered before it, so a peer could send those without limit while the contract
+      // said "every route" (PR #8 review). The hook runs after routing and ahead of parsing.
+      const malformed = () =>
+        t.app.inject({
+          method: 'POST',
+          url: '/api/v1/quotes',
+          headers: { 'content-type': 'application/json' },
+          payload: '{',
+          remoteAddress: '203.0.113.10',
+        });
+      expect((await malformed()).statusCode).toBe(400);
+      expect((await anonymous('/api/v1/no-such-route', '203.0.113.10')).statusCode).toBe(404);
+      // Two counted; the third — whatever it is — is refused BEFORE its body is parsed: an
+      // exhausted peer's malformed body no longer buys a 400, it buys the 429.
+      const refused = await malformed();
+      expect(refused.statusCode).toBe(429);
+      expect(refused.json()).toMatchObject({ error: { code: 'RATE_LIMITED' } });
+      expect(await redis.keys(`${RATE_LIMIT_KEY_PREFIX}:*`)).toEqual([
+        expect.stringMatching(/^rl:default:any:[0-9a-f]{32}$/),
+      ]);
+    });
+
+    it('writes the address headers on a counted response — on both halves of the API', async () => {
+      // docs/API.md: a counted response carries the unsuffixed X-RateLimit-* three; a refusal
+      // carries Retry-After. Written on the raw response, because better-auth answers on the
+      // raw response and never flushes Fastify's reply headers — so the /api/auth/* half gets
+      // them too, which the first shape of the hook never managed.
+      const first = await anonymous('/api/v1/categories', '203.0.113.11');
+      expect(first.statusCode).toBe(200);
+      expect(first.headers['x-ratelimit-limit']).toBe('2');
+      expect(first.headers['x-ratelimit-remaining']).toBe('1');
+      expect(Number(first.headers['x-ratelimit-reset'])).toBeGreaterThan(0);
+      const second = await t.app.inject({
+        method: 'POST',
+        url: '/api/auth/sign-in/email',
+        headers: jsonHeaders,
+        remoteAddress: '203.0.113.11',
+        payload: { email: 'nobody@test.local', password: 'x' },
+      });
+      expect(second.statusCode).toBe(401);
+      expect(second.headers['x-ratelimit-limit']).toBe('2');
+      expect(second.headers['x-ratelimit-remaining']).toBe('0');
+      const refused = await anonymous('/api/v1/categories', '203.0.113.11');
+      expect(refused.statusCode).toBe(429);
+      expect(Number(refused.headers['retry-after'])).toBeGreaterThan(0);
+      expect(refused.headers['x-ratelimit-limit']).toBeUndefined();
+      // Sent from the hook, so the API's security headers must still be on it (the helmet
+      // plugin is registered first, main.ts / test/app.ts).
+      expect(refused.headers['x-content-type-options']).toBe('nosniff');
+      // A loopback peer is not counted, and says so by carrying none of them.
+      const uncounted = await anonymous('/api/v1/categories');
+      expect(uncounted.statusCode).toBe(200);
+      expect(uncounted.headers['x-ratelimit-limit']).toBeUndefined();
+    });
+
+    it('skips a peer RATE_LIMIT_UNCOUNTED_PEERS names, on both halves — a web host elsewhere', async () => {
+      // The loopback rule generalised: a split deployment's web server presents a routable
+      // address that still cannot name a visitor. Counting it put the whole site in one 100/min
+      // window (PR #8 review). Listed peers are skipped, not refused — and IPv6 ones too, which
+      // `BlockList` silently answers `false` for unless the family is passed.
+      for (const peer of ['10.1.2.3', 'fd00::5']) {
+        for (let i = 0; i < 6; i += 1) {
+          expect([peer, i, (await anonymous('/api/v1/categories', peer)).statusCode]).toEqual([
+            peer,
+            i,
+            200,
+          ]);
+        }
+        for (let i = 0; i < 3; i += 1) {
+          const auth = await t.app.inject({
+            method: 'POST',
+            url: '/api/auth/sign-in/email',
+            headers: jsonHeaders,
+            remoteAddress: peer,
+            payload: { email: 'nobody@test.local', password: 'x' },
+          });
+          expect([peer, i, auth.statusCode]).toEqual([peer, i, 401]);
+        }
+      }
+      // Nothing counted at all — not merely allowed.
+      expect(await redis.keys(`${RATE_LIMIT_KEY_PREFIX}:default:any:*`)).toEqual([]);
+      // A neighbour outside the listed networks is a client, and is counted as before.
+      expect((await anonymous('/api/v1/categories', '11.1.2.3')).statusCode).toBe(200);
+      expect((await anonymous('/api/v1/categories', '11.1.2.3')).statusCode).toBe(200);
+      expect((await anonymous('/api/v1/categories', '11.1.2.3')).statusCode).toBe(429);
     });
   });
 });

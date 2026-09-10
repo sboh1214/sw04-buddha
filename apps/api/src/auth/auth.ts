@@ -96,8 +96,9 @@ interface VerificationTokenPayload {
  * anybody can forge would be a bucket anybody can spend for free — no account, no request, no
  * mail — and five forged tokens naming an address would refuse the genuine confirmation click
  * for that address a minute at a time. What remains is the flip side every per-recipient bound
- * has, `/change-email`'s included: whoever holds a GENUINE link toward X can spend X's bucket
- * by replaying it, at the price of mailing X in their own name. A token that fails here fails
+ * has: whoever holds a GENUINE link toward X can spend X's bucket by replaying it, at the
+ * price of mailing X in their own name (on `/change-email` the price is the caller's own
+ * account bucket — five addresses a minute, signed in). A token that fails here fails
  * in the endpoint too (INVALID_TOKEN / TOKEN_EXPIRED), mailing nobody, so it costs nothing;
  * `verifyJWT` accepts a superset of the endpoint's HS256 — the other HMAC sizes, a missing
  * `exp` — and every member of it needs the secret, which is all a bucket key requires. The
@@ -412,53 +413,60 @@ export function createAuth({
           return;
         }
         if (!EMAIL_INPUT_PATHS.has(ctx.path)) return;
+        // The ONE field the path reads — `newEmail` on `/change-email`, `email` everywhere
+        // else — and never both. A hook runs on the raw body, before the endpoint's schema
+        // strips the keys it does not know, so reading both fields let a signed-in caller send
+        // `{ newEmail: X, email: Y }` and spend two recipient keys per request: the account
+        // bound below is five ADDRESSES a minute only if a request names one address.
         const body = ctx.body as { email?: unknown; newEmail?: unknown } | undefined;
-        const addresses: string[] = [];
-        for (const value of [body?.email, body?.newEmail]) {
-          if (typeof value !== 'string') continue;
-          if (isNoEmailAddress(value)) {
-            throw new APIError('BAD_REQUEST', {
-              message: 'This email address cannot be used',
-              code: 'INVALID_EMAIL',
-            });
-          }
-          const tracker = emailTracker(value);
-          if (tracker !== undefined) addresses.push(tracker);
+        const value = ctx.path === CHANGE_EMAIL_PATH ? body?.newEmail : body?.email;
+        if (typeof value === 'string' && isNoEmailAddress(value)) {
+          throw new APIError('BAD_REQUEST', {
+            message: 'This email address cannot be used',
+            code: 'INVALID_EMAIL',
+          });
         }
+        const address = emailTracker(value);
         // PLAN 7.5 for the routes Nest never sees (rate-limit/auth-rate-limit.ts explains why
         // this is the hook and not a guard). Checked AFTER the address has been accepted as a
         // real one and BEFORE better-auth verifies a password or sends anything.
         //
-        // EVERY path counts the attempt here, `/sign-in/email` included. On the mail paths the
-        // attempt IS the harm — each one puts mail in somebody's inbox. On sign-in it is the
-        // scrypt: better-auth hashes the submitted password even for an address that does not
-        // exist, so an uncounted attempt is an unconditional one anybody can ask for. What
-        // makes sign-in different is the after-hook below, which CLEARS the bucket once the
-        // password turns out to have been right.
+        // EVERY unauthenticated path counts the attempt here, `/sign-in/email` included. On the
+        // mail paths the attempt IS the harm — each one puts mail in somebody's inbox. On
+        // sign-in it is the scrypt: better-auth hashes the submitted password even for an
+        // address that does not exist, so an uncounted attempt is an unconditional one anybody
+        // can ask for. What makes sign-in different is the after-hook below, which CLEARS the
+        // bucket once the password turns out to have been right.
         if (!overHttp || rateLimiter === undefined) return;
         const limit = authRateLimitFor(ctx.path, rateLimits);
         const consume = (path: string, tracker: string) =>
           consumeOrRefuse(rateLimiter, path, tracker, limit);
-        for (const address of addresses) await consume(ctx.path, address);
         if (ctx.path === CHANGE_EMAIL_PATH) {
-          // The account asking, on top of `newEmail` (CHANGE_EMAIL_ACCOUNT_BUCKET). Keyed on
-          // the user id, so the account's OWN address never meets the synthetic-address
-          // rejection above — an unverified Kakao/Naver account's current address is one of
-          // ours, and `/change-email` is exactly how it registers a real one (auth.test.ts).
-          //
-          // The session is not on `ctx.context` yet in a before-hook (dispatch sets it to
-          // null); this reads the cookie itself, which is a DB lookup — hence after the address
-          // buckets, so a request they refuse costs none. `disableRefresh`: a rate-limit check
-          // must not renew a session, and a `Set-Cookie` minted here would not reach the
-          // response anyway. The endpoint's own `sensitiveSessionMiddleware` re-reads
-          // authoritatively regardless, so this is a second lookup, not a cached one. No
-          // session → nothing to charge; the endpoint answers 401 a moment later.
-          //
-          // Two INCRs, not one transaction: a refusal here leaves the `newEmail` bucket spent.
-          // Consistent with counting the attempt rather than the outcome.
+          // The one path that REQUIRES a session, so nothing is counted without one: a request
+          // the endpoint is about to refuse 401 mails nobody, and counting it would let anyone
+          // — no account, no cookie — spend five requests naming X and refuse every genuine
+          // change to X for a minute (PR #8 review; the same free lockout Q-M6-8 closed for
+          // forged tokens). The session is not on `ctx.context` yet in a before-hook (dispatch
+          // sets it to null); this reads the cookie itself. A missing or forged cookie fails
+          // the HMAC check before any DB access, so an unauthenticated flood costs a hash; a
+          // validly signed one costs the `findSession` the endpoint's own
+          // `sensitiveSessionMiddleware` repeats authoritatively a moment later (this read is
+          // never reused for that). `disableRefresh`: a rate-limit check must not renew a
+          // session, and a `Set-Cookie` minted here would not reach the response anyway.
           const session = await getSessionFromCtx(ctx, { disableRefresh: true });
-          if (session) await consume(CHANGE_EMAIL_ACCOUNT_BUCKET, session.user.id);
+          if (!session) return;
+          // The ACCOUNT first (CHANGE_EMAIL_ACCOUNT_BUCKET), then `newEmail`: a caller whose
+          // own five are spent is refused before touching anyone else's recipient key, so one
+          // account can name at most five addresses a minute — the bound that makes the
+          // recipient key a cost rather than a free lockout. Keyed on the user id, so the
+          // account's OWN address never meets the synthetic-address rejection above: an
+          // unverified Kakao/Naver account's current address is one of ours, and `/change-email`
+          // is exactly how it registers a real one (auth.test.ts). Two INCRs, not one
+          // transaction — a refusal by the second leaves the first spent, which is the attempt
+          // being counted rather than the outcome.
+          await consume(CHANGE_EMAIL_ACCOUNT_BUCKET, session.user.id);
         }
+        if (address !== undefined) await consume(ctx.path, address);
       }),
       /**
        * The other half of the sign-in limit: a sign-in that SUCCEEDED clears the bucket.
@@ -488,7 +496,7 @@ export function createAuth({
     // and counts by IP, which behind the Next rewrite is one socket for every visitor
     // (rate-limit.tracker.ts). M6's answer is the `hooks.before` above — same Redis, same `rl:`
     // namespace as the HTTP guard, keyed on the ADDRESS the request names (and, on
-    // `/change-email`, on the account asking as well).
+    // `/change-email`, on the account asking — first, and only when there is one).
     rateLimit: { enabled: false },
 
     advanced: {

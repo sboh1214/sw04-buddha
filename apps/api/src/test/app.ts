@@ -9,14 +9,16 @@ import { type Redis } from 'ioredis';
 import { DEFAULT_RATE_LIMITS, type RateLimits } from '@buddha/shared';
 import { AppModule } from '../app.module.js';
 import { AUTH, type Auth } from '../auth/auth.js';
+import { uncountedPeers } from '../config/env.js';
 import { DB } from '../infra/db/db.provider.js';
 import { MAX_PARAM_LENGTH } from '../infra/http/fastify-options.js';
 import { registerSecurityHeaders } from '../infra/http/security-headers.js';
 import { MAILER } from '../mail/mail.provider.js';
 import { REDIS } from '../infra/redis/redis.provider.js';
-import { installAuthAddressLimit } from '../rate-limit/auth-address-limit.js';
+import { installAddressLimit } from '../rate-limit/address-limit.js';
 import { RATE_LIMITS } from '../rate-limit/rate-limit.limits.js';
 import { RATE_LIMIT_KEY_PREFIX } from '../rate-limit/redis-throttler.storage.js';
+import { UNCOUNTED_PEERS } from '../rate-limit/uncounted-peers.js';
 import { RealtimeIoAdapter } from '../realtime/realtime-io.adapter.js';
 import { createMemoryMailer, type MemoryMailer } from './memory-mailer.js';
 
@@ -48,6 +50,13 @@ export interface CreateTestAppOptions {
    * which is what `rate-limit.controller.test.ts` measures the acceptance criterion against.
    */
   rateLimits?: Partial<RateLimits>;
+  /**
+   * RATE_LIMIT_UNCOUNTED_PEERS for this app only (config/env.ts): peers whose requests the
+   * per-address limit does not count. `inject()` presents a loopback peer, which is never
+   * counted, so a suite that wants to prove the list works names a routable one here and
+   * presents it with `remoteAddress`.
+   */
+  uncountedPeers?: string;
 }
 
 /**
@@ -63,6 +72,8 @@ export async function createTestApp(options: CreateTestAppOptions = {}): Promise
     .useValue(mailer)
     .overrideProvider(RATE_LIMITS)
     .useValue({ ...DEFAULT_RATE_LIMITS, ...options.rateLimits })
+    .overrideProvider(UNCOUNTED_PEERS)
+    .useValue(uncountedPeers({ RATE_LIMIT_UNCOUNTED_PEERS: options.uncountedPeers }))
     .compile();
   const app = moduleRef.createNestApplication<NestFastifyApplication>(
     new FastifyAdapter({ routerOptions: { maxParamLength: MAX_PARAM_LENGTH } }),
@@ -71,7 +82,7 @@ export async function createTestApp(options: CreateTestAppOptions = {}): Promise
   // Exactly as in main.ts, and for the same reason the adapter below is: a bound the suites do
   // not see is a bound nothing proves.
   await registerSecurityHeaders(app);
-  installAuthAddressLimit(app);
+  installAddressLimit(app);
   app.setGlobalPrefix('api');
   app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
   // Must be installed before init, exactly as in main.ts: without it the suites would exercise

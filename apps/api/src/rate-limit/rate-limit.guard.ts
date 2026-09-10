@@ -16,9 +16,13 @@ import {
 import { type RateLimits } from '@buddha/shared';
 import { AppError } from '../common/errors/app-error.js';
 import { RATE_LIMITS } from './rate-limit.limits.js';
-import { isCountableAddress, rateLimitBucket } from './rate-limit.tracker.js';
+import { rateLimitBucket } from './rate-limit.tracker.js';
 
-/** Counts the client address across the whole API (PLAN 7.5's default row). */
+/**
+ * The storage namespace of the per-address bucket (PLAN 7.5's default row): `rl:default:…`.
+ * Not a throttler of this guard any more — the bucket is counted by the Fastify hook in
+ * address-limit.ts, ahead of parsing and the handler — but the name stays, so the keys do.
+ */
 export const ADDRESS_THROTTLER = 'default';
 /** Counts the row of PLAN 7.5's table a handler names with `@RateLimit`. */
 export const ROUTE_THROTTLER = 'route';
@@ -30,7 +34,9 @@ export const ROUTE_THROTTLER = 'route';
  * a rate limiter has no reason to keep either where a `KEYS rl:*` can read them. The digest is
  * stable for the life of a window, which is all a counter needs.
  *
- * `context` is null for the address bucket, whose key deliberately carries no route.
+ * `context` is null for the address bucket (address-limit.ts), whose key deliberately carries
+ * no route: PLAN 7.5's default is stated per address for the whole API, so a key per handler
+ * would let a caller spend 100 requests on each of forty paths.
  */
 export function rateLimitKey(context: ExecutionContext | null, tracker: string): string {
   const digest = createHash('sha256').update(tracker).digest('hex').slice(0, 32);
@@ -39,14 +45,15 @@ export function rateLimitKey(context: ExecutionContext | null, tracker: string):
 }
 
 /**
- * PLAN 7.5, registered once as an APP_GUARD (rate-limit.module.ts) and running both throttlers.
+ * PLAN 7.5's NAMED buckets, registered once as an APP_GUARD (rate-limit.module.ts).
  *
  * Everything route-specific is metadata: `@RateLimit('<bucket>')` on a handler adds the row of
- * PLAN 7.5's table it names on top of the address bucket, `@SkipRateLimit()` exempts one, and
- * the numbers come from the `RATE_LIMITS` provider. Trackers and keys come from the module
- * options, so this class carries only the three things the library cannot express: which
- * contexts it applies to, which throttler applies to which request, and what a refusal looks
- * like on the wire.
+ * PLAN 7.5's table it names on top of the address bucket, and the numbers come from the
+ * `RATE_LIMITS` provider. Trackers and keys come from the module options, so this class
+ * carries only the three things the library cannot express: which contexts it applies to,
+ * which routes the throttler applies to, and what a refusal looks like on the wire. The address
+ * bucket itself is not here: a guard runs inside the route handler and sees only what reaches
+ * one, so it is counted by a Fastify hook ahead of parsing and the handler (address-limit.ts).
  */
 @Injectable()
 export class RateLimitGuard extends ThrottlerGuard {
@@ -71,27 +78,15 @@ export class RateLimitGuard extends ThrottlerGuard {
   }
 
   /**
-   * Decides which of the two throttlers applies to this request, and with what number.
-   *
-   * - `default` (the address) applies to every route, but only when the address can name a
-   *   client (`isCountableAddress`). Returning `true` — not throwing — leaves the request
-   *   unmetered rather than refused.
-   * - `route` applies only where a handler named a bucket; on every other route it is a no-op,
-   *   so an unnamed route is counted exactly once.
-   *
-   * Both here rather than in `@Throttle` metadata or `skipIf`: the limit comes from an injected
-   * table, and the address check needs the request.
+   * Applies the route throttler only where a handler named a bucket, with that bucket's number;
+   * on every other route it is a no-op (the address bucket already counted the request, in the
+   * hook). Here rather than in `@Throttle` metadata: the limit comes from an injected table.
    */
   protected override handleRequest(requestProps: ThrottlerRequest): Promise<boolean> {
-    const { context, throttler } = requestProps;
-    if (throttler.name === ROUTE_THROTTLER) {
-      const bucket = rateLimitBucket(this.reflector, context);
-      if (bucket === 'default') return Promise.resolve(true);
-      return super.handleRequest({ ...requestProps, limit: this.limits[bucket] });
-    }
-    const { req } = this.getRequestResponse(context);
-    if (!isCountableAddress((req as { ip?: string }).ip)) return Promise.resolve(true);
-    return super.handleRequest({ ...requestProps, limit: this.limits.default });
+    const { context } = requestProps;
+    const bucket = rateLimitBucket(this.reflector, context);
+    if (bucket === 'default') return Promise.resolve(true);
+    return super.handleRequest({ ...requestProps, limit: this.limits[bucket] });
   }
 
   /**
@@ -104,11 +99,11 @@ export class RateLimitGuard extends ThrottlerGuard {
     context: ExecutionContext,
     detail: ThrottlerLimitDetail,
   ): Promise<void> {
-    // `Retry-After` unsuffixed, whichever throttler refused. The base class writes
-    // `Retry-After-route` for a named one, and a client looking for the standard header would
-    // find nothing on exactly the refusals it is most likely to meet — the per-route buckets are
-    // the strict ones. The `X-RateLimit-*` family keeps the library's suffixes: those are for an
-    // operator reading a response, and there the distinction is the useful part.
+    // `Retry-After` unsuffixed, as the address hook writes it. The base class writes
+    // `Retry-After-route` for a named throttler, and a client looking for the standard header
+    // would find nothing on exactly the refusals it is most likely to meet — the per-route
+    // buckets are the strict ones. The `X-RateLimit-*` family keeps the library's suffix: those
+    // are for an operator reading a response, and there the distinction is the useful part.
     const { res } = this.getRequestResponse(context);
     (res as { header: (name: string, value: number) => void }).header(
       'Retry-After',

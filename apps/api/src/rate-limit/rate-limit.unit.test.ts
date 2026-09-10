@@ -4,6 +4,7 @@
  */
 import { type Redis } from 'ioredis';
 import { describe, expect, it, vi } from 'vitest';
+import { uncountedPeers } from '../config/env.js';
 import { emailTracker } from './email-tracker.js';
 import { isCountableAddress } from './rate-limit.tracker.js';
 import { RATE_LIMIT_KEY_PREFIX, RedisThrottlerStorage } from './redis-throttler.storage.js';
@@ -30,8 +31,30 @@ describe('isCountableAddress', () => {
     expect(isCountableAddress('2001:db8::1')).toBe(true);
     // A private address is a client too: behind a real reverse proxy with TRUST_PROXY set,
     // this is what an internal caller looks like, and it is not this function's business to
-    // decide that a LAN visitor may flood.
+    // decide that a LAN visitor may flood. A private peer that is a PROXY is named, below.
     expect(isCountableAddress('10.1.2.3')).toBe(true);
+  });
+
+  it('refuses the peers RATE_LIMIT_UNCOUNTED_PEERS names — addresses and CIDRs, both families', () => {
+    // The web server on another host: a routable address that cannot name a visitor, exactly
+    // the loopback case with a different number (rate-limit.tracker.ts).
+    const listed = uncountedPeers({
+      RATE_LIMIT_UNCOUNTED_PEERS: '172.18.0.0/16, 10.0.0.5, fd00::/8, 2001:db8::7',
+    });
+    expect(isCountableAddress('172.18.3.4', listed)).toBe(false);
+    expect(isCountableAddress('::ffff:172.18.3.4', listed)).toBe(false);
+    expect(isCountableAddress('10.0.0.5', listed)).toBe(false);
+    expect(isCountableAddress('fd00::5', listed)).toBe(false);
+    expect(isCountableAddress('2001:db8::7', listed)).toBe(false);
+    // Neighbours outside the list are still clients.
+    expect(isCountableAddress('172.19.3.4', listed)).toBe(true);
+    expect(isCountableAddress('10.0.0.6', listed)).toBe(true);
+    expect(isCountableAddress('2001:db8::8', listed)).toBe(true);
+    // Loopback stays built in, list or no list.
+    expect(isCountableAddress('127.0.0.1', listed)).toBe(false);
+    expect(
+      isCountableAddress('::1', uncountedPeers({ RATE_LIMIT_UNCOUNTED_PEERS: undefined })),
+    ).toBe(false);
   });
 });
 

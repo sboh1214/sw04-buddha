@@ -1,3 +1,4 @@
+import { BlockList, isIP } from 'node:net';
 import path from 'node:path';
 import { DISPUTE_WINDOW_SECONDS_DEFAULT } from '@buddha/shared';
 import { config as loadDotenv } from 'dotenv';
@@ -80,9 +81,20 @@ export const envSchema = z
      * Proxies allowed to set X-Forwarded-*: "true", "false", or a comma-separated list of
      * addresses/CIDRs. Default false: the Next.js rewrite does not add a trustworthy
      * X-Forwarded-For (Next fills it as `client-supplied ?? socket address`, so a caller can
-     * set it), and PLAN 7.5's per-address limit reads `request.ip` — see ADR-0034.
+     * set it), and PLAN 7.5's per-address limit reads `request.ip` — see ADR-0034. A proxy
+     * that must NOT be trusted but still sits in front of this API belongs in
+     * RATE_LIMIT_UNCOUNTED_PEERS instead.
      */
     TRUST_PROXY: z.string().default('false'),
+    /**
+     * Peers whose requests are NOT counted against PLAN 7.5's per-address limit: proxies in
+     * front of this API whose forwarded headers are not trusted (TRUST_PROXY) and which
+     * therefore cannot name a client — the web server's Next rewrite when it runs on another
+     * host. Comma-separated addresses or CIDRs (IPv4 or IPv6); loopback is always one. Without
+     * it, a split web/API deployment counts every visitor as the web host and the whole site
+     * shares one 100/min window (rate-limit.tracker.ts, ADR-0034 추기).
+     */
+    RATE_LIMIT_UNCOUNTED_PEERS: optionalString,
     /**
      * pino level for this process (apps/api/src/logger.ts). Same key, same values and the same
      * defaults as apps/worker: `debug` in development, `info` in production, `silent` under
@@ -171,6 +183,16 @@ export const envSchema = z
       .default(DISPUTE_WINDOW_SECONDS_DEFAULT),
   })
   .superRefine((env, ctx) => {
+    // Same reason as WEB_ORIGIN below: a bad entry must fail at `loadEnv()` under its own name.
+    try {
+      uncountedPeers(env);
+    } catch (error) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['RATE_LIMIT_UNCOUNTED_PEERS'],
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
     // Validated here, not only where it is consumed, so `loadEnv()` fails with the readable
     // `[WEB_ORIGIN]` line the header promises instead of a DI-factory exception later.
     for (const entry of (env.WEB_ORIGIN ?? '').split(',')) {
@@ -277,6 +299,57 @@ export type Env = z.infer<typeof envSchema>;
 export function loadEnv(): Env {
   loadDotenv({ path: envFilePaths, quiet: true });
   return envSchema.parse(process.env);
+}
+
+/**
+ * RATE_LIMIT_UNCOUNTED_PEERS as a `node:net` BlockList (`check(address, family)` answers whether
+ * a peer is on it). Built here, from the validated string, rather than stored in `Env`: the
+ * schema is parsed twice (main.ts and ConfigModule) and @nestjs/config drops non-primitive
+ * values when it copies the result into `process.env`. Throws naming the offending entry;
+ * the schema's `superRefine` turns that into the `[RATE_LIMIT_UNCOUNTED_PEERS]` line.
+ *
+ * The family is passed explicitly on every add and every check: `BlockList` defaults to IPv4
+ * and answers `false` — not an error — for an IPv6 address checked as IPv4, so a ULA peer on a
+ * container network would have been counted with nothing to say so.
+ */
+export function uncountedPeers(env: Pick<Env, 'RATE_LIMIT_UNCOUNTED_PEERS'>): BlockList {
+  const list = new BlockList();
+  for (const entry of (env.RATE_LIMIT_UNCOUNTED_PEERS ?? '').split(',')) {
+    const trimmed = entry.trim();
+    if (trimmed.length === 0) continue;
+    const [mapped, prefix, ...rest] = trimmed.split('/');
+    // `::ffff:a.b.c.d` is IPv4 in an IPv6 coat — how a dual-stack listener reports an IPv4 peer,
+    // and so what an operator copies out of a request log. As IPv6 it would be added under the
+    // wrong family AND the wrong width: `::ffff:172.18.0.0/16` is `::/16`, which matches every
+    // IPv4 address there is. Stripped, so the entry means what it looks like.
+    const address =
+      mapped?.startsWith('::ffff:') && ipFamily(mapped.slice(7)) === 'ipv4'
+        ? mapped.slice(7)
+        : mapped;
+    const family = ipFamily(address ?? '');
+    if (family === undefined || rest.length > 0) {
+      throw new Error(`RATE_LIMIT_UNCOUNTED_PEERS entry "${trimmed}" is not an IP address or CIDR`);
+    }
+    if (prefix === undefined) {
+      list.addAddress(address ?? '', family);
+      continue;
+    }
+    const bits = Number(prefix);
+    const maxBits = family === 'ipv4' ? 32 : 128;
+    if (!/^\d{1,3}$/.test(prefix) || bits > maxBits) {
+      throw new Error(
+        `RATE_LIMIT_UNCOUNTED_PEERS entry "${trimmed}" has no prefix length in 0..${String(maxBits)}`,
+      );
+    }
+    list.addSubnet(address ?? '', bits, family);
+  }
+  return list;
+}
+
+/** `BlockList`'s family label for an address, or `undefined` when it is not an address. */
+export function ipFamily(address: string): 'ipv4' | 'ipv6' | undefined {
+  const version = isIP(address);
+  return version === 4 ? 'ipv4' : version === 6 ? 'ipv6' : undefined;
 }
 
 /** Translates TRUST_PROXY into Fastify's `trustProxy` option. */
