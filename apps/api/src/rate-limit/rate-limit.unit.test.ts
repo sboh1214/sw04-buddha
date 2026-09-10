@@ -4,6 +4,7 @@
  */
 import { type Redis } from 'ioredis';
 import { describe, expect, it, vi } from 'vitest';
+import { emailTracker } from './email-tracker.js';
 import { isCountableAddress } from './rate-limit.tracker.js';
 import { RATE_LIMIT_KEY_PREFIX, RedisThrottlerStorage } from './redis-throttler.storage.js';
 
@@ -31,6 +32,25 @@ describe('isCountableAddress', () => {
     // this is what an internal caller looks like, and it is not this function's business to
     // decide that a LAN visitor may flood.
     expect(isCountableAddress('10.1.2.3')).toBe(true);
+  });
+});
+
+describe('emailTracker', () => {
+  it('folds case and whitespace: one mailbox, one bucket', () => {
+    expect(emailTracker(' A@Example.COM ')).toBe('a@example.com');
+  });
+
+  it('keys on anything that claims to be an address, however long', () => {
+    // `z.email()` has no length cap, and a value the limiter declined to key on was a recipient
+    // string free to name on every mail path. The callers hash it, so length costs nothing.
+    const long = `${'a'.repeat(400)}@test.local`;
+    expect(emailTracker(long)).toBe(long);
+  });
+
+  it('has no bucket for a non-string or an empty string', () => {
+    expect(emailTracker(undefined)).toBeUndefined();
+    expect(emailTracker(42)).toBeUndefined();
+    expect(emailTracker('   ')).toBeUndefined();
   });
 });
 

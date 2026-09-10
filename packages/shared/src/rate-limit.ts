@@ -23,7 +23,9 @@ export const RATE_LIMIT_WINDOW_SECONDS = 60;
  *             somebody's inbox, what has to be bounded is the recipient, not the sender
  *             (A-M2-10). `/change-email` charges a second bucket of this size to the ACCOUNT
  *             asking, because for a verified account the mail goes to the address it already
- *             has, not to the one in the body (auth.ts).
+ *             has, not to the one in the body; and `GET /verify-email`, whose only input is
+ *             a token, is charged to the address a mail-sending token is about to mail
+ *             (auth.ts).
  */
 export type RateLimitScope = 'ip' | 'user' | 'email';
 

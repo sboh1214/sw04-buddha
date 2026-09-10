@@ -19,6 +19,7 @@ import {
   signUpTestUser,
   type TestApp,
   type TestUser,
+  verificationLinkFor,
 } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { RATE_LIMIT_KEY_PREFIX } from './redis-throttler.storage.js';
@@ -310,6 +311,86 @@ describe.skipIf(!hasTestInfra)('rate limits (integration)', () => {
         expect.stringMatching(/^rl:default:auth\/change-email\/account:[0-9a-f]{32}$/),
       );
       for (const key of keys) expect(key).not.toContain(user.id);
+    });
+
+    it('bounds replays of the confirmation link by the mailbox each click mails (Q-M6-8)', async () => {
+      // better-auth's confirmation link is a stateless one-hour JWT that clicking does not
+      // consume, and every click mails the NEW address again — no session needed, no body to
+      // key on. One link in a caller's own inbox was an hour of mail to somebody else's: the
+      // only way around the per-recipient bound above. The hook now reads the token and counts
+      // the address it is about to mail.
+      const user = await signUpTestUser(t);
+      const victim = `victim-${String(Date.now())}@test.local`;
+      const requested = await t.app.inject({
+        method: 'POST',
+        url: '/api/auth/change-email',
+        headers: { ...jsonHeaders, cookie: user.cookie },
+        payload: { newEmail: victim, callbackURL: '/settings' },
+      });
+      expect(requested.statusCode).toBe(200);
+      const link = new URL(verificationLinkFor(t.mailer, user.email));
+      const click = () => t.app.inject({ method: 'GET', url: link.pathname + link.search });
+
+      const sent = t.mailer.messages.length;
+      for (let i = 0; i < DEFAULT_RATE_LIMITS.email; i += 1) {
+        const ok = await click();
+        expect([i, ok.statusCode]).toEqual([i, 302]);
+      }
+      const refused = await click();
+      expect(refused.statusCode).toBe(429);
+      expect(refused.json()).toMatchObject({ code: 'RATE_LIMITED' });
+      const toVictim = t.mailer.messages.slice(sent).filter((m) => m.to === victim);
+      expect(toVictim).toHaveLength(DEFAULT_RATE_LIMITS.email);
+
+      // The bucket is the MAILBOX, not the token or the account: a second account's own
+      // confirmation link toward the same address is refused on its first click. A bucket per
+      // token would have let five `/change-email` requests buy twenty-five mails.
+      const other = await signUpTestUser(t);
+      const alsoRequested = await t.app.inject({
+        method: 'POST',
+        url: '/api/auth/change-email',
+        headers: { ...jsonHeaders, cookie: other.cookie },
+        payload: { newEmail: victim, callbackURL: '/settings' },
+      });
+      expect(alsoRequested.statusCode).toBe(200);
+      const otherLink = new URL(verificationLinkFor(t.mailer, other.email));
+      const otherClick = await t.app.inject({
+        method: 'GET',
+        url: otherLink.pathname + otherLink.search,
+      });
+      expect(otherClick.statusCode).toBe(429);
+      expect(t.mailer.messages.filter((m) => m.to === victim)).toHaveLength(
+        DEFAULT_RATE_LIMITS.email,
+      );
+
+      // The other half is not counted: the verification link the victim's inbox now holds
+      // applies the change and mails nobody, so a stranger replaying the confirmation cannot
+      // spend the click that finishes a legitimate change of address.
+      const verify = new URL(verificationLinkFor(t.mailer, victim));
+      const beforeApply = t.mailer.messages.length;
+      const applied = await t.app.inject({
+        method: 'GET',
+        url: verify.pathname + verify.search,
+        headers: { cookie: user.cookie },
+      });
+      expect(applied.statusCode).toBe(302);
+      expect(t.mailer.messages).toHaveLength(beforeApply);
+
+      // And a forged token spends nothing: the bucket is keyed on a payload only the secret can
+      // sign, otherwise anybody could lock an address out of its own confirmation for free.
+      // The one key is the victim's, in the same shape and namespace as every other bucket.
+      const victimBucket = [expect.stringMatching(/^rl:default:auth\/verify-email:[0-9a-f]{32}$/)];
+      const pattern = `${RATE_LIMIT_KEY_PREFIX}:default:auth/verify-email:*`;
+      expect(await redis.keys(pattern)).toEqual(victimBucket);
+      const forged = Buffer.from(
+        JSON.stringify({ email: user.email, updateTo: 'stranger@test.local' }),
+      ).toString('base64url');
+      const rejected = await t.app.inject({
+        method: 'GET',
+        url: `/api/auth/verify-email?token=eyJhbGciOiJIUzI1NiJ9.${forged}.forged`,
+      });
+      expect(rejected.statusCode).toBe(401);
+      expect(await redis.keys(pattern)).toEqual(victimBucket);
     });
   });
 

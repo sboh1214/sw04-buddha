@@ -2,6 +2,7 @@ import { Logger } from '@nestjs/common';
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { APIError, createAuthMiddleware, getSessionFromCtx } from 'better-auth/api';
+import { verifyJWT } from 'better-auth/crypto';
 import { type Db, schema } from '@buddha/db';
 import {
   DEFAULT_RATE_LIMITS,
@@ -63,6 +64,71 @@ const EMAIL_INPUT_PATHS = new Set([
  * user out of changing their email. A path of its own cannot be reached from a request body.
  */
 const CHANGE_EMAIL_ACCOUNT_BUCKET = `${CHANGE_EMAIL_PATH}/account`;
+
+/**
+ * The one mail-sending path with no address in its body: a GET whose whole input is a token.
+ *
+ * better-auth's verification links are stateless one-hour JWTs (`createEmailVerificationToken`),
+ * and clicking one does not consume it. For a plain sign-up link that is harmless — it verifies
+ * an address and mails nobody. The CONFIRMATION half of a change of address is different: every
+ * click re-mints the verification token and mails the NEW address again, no session required
+ * (the endpoint refuses only a mismatching one). So one confirmation mail in a caller's own inbox
+ * was, until this, an hour of mail to somebody else's — the only path around the per-recipient
+ * bound the other five carry (Q-M6-8). Counted here, on the address the link is about to mail.
+ *
+ * Not a single-use token instead: mail scanners prefetch links (Outlook Safe Links, Gmail's
+ * proxy), and a link that the first GET consumes is a link the real click finds already spent.
+ * The same 5/min bound every other mail path has is what the contract promises, and it is what
+ * a replay needs to be denied.
+ */
+const VERIFY_EMAIL_PATH = '/verify-email';
+
+/** What a verification link carries, as far as the limit reads it (better-auth's payload). */
+interface VerificationTokenPayload {
+  updateTo?: unknown;
+  requestType?: unknown;
+}
+
+/**
+ * The address a `/verify-email` call is about to MAIL, or `undefined` when it mails nobody.
+ *
+ * Verified with the same secret the endpoint verifies with, not merely decoded: a payload
+ * anybody can forge would be a bucket anybody can spend for free — no account, no request, no
+ * mail — and five forged tokens naming an address would refuse the genuine confirmation click
+ * for that address a minute at a time. What remains is the flip side every per-recipient bound
+ * has, `/change-email`'s included: whoever holds a GENUINE link toward X can spend X's bucket
+ * by replaying it, at the price of mailing X in their own name. A token that fails here fails
+ * in the endpoint too (INVALID_TOKEN / TOKEN_EXPIRED), mailing nobody, so it costs nothing;
+ * `verifyJWT` accepts a superset of the endpoint's HS256 — the other HMAC sizes, a missing
+ * `exp` — and every member of it needs the secret, which is all a bucket key requires. The
+ * VERIFICATION half (`change-email-verification`) applies the change and mails nobody either,
+ * so the final click of a legitimate change is never counted — and never refused because a
+ * stranger has been replaying the other half. Everything else with an `updateTo` mails it: the
+ * confirmation, and the legacy single-step token of older better-auth versions.
+ */
+async function mailedByVerifyEmail(token: unknown, secret: string): Promise<string | undefined> {
+  if (typeof token !== 'string' || token.length === 0) return undefined;
+  const payload = await verifyJWT<VerificationTokenPayload>(token, secret);
+  if (payload === null || payload.requestType === 'change-email-verification') return undefined;
+  return emailTracker(payload.updateTo);
+}
+
+/** Counts one attempt against `path`'s bucket for `tracker`, refusing it the way PLAN 7 does. */
+async function consumeOrRefuse(
+  rateLimiter: AuthRateLimiter,
+  path: string,
+  tracker: string,
+  limit: number,
+): Promise<void> {
+  const retryAfterSeconds = await rateLimiter.consume(path, tracker, limit);
+  if (retryAfterSeconds != null) {
+    throw new APIError('TOO_MANY_REQUESTS', {
+      message: 'Too many requests',
+      code: 'RATE_LIMITED',
+      retryAfterSeconds,
+    });
+  }
+}
 
 /**
  * PLAN 10.3: Kakao/Naver may withhold the email. better-auth refuses an OAuth sign-in
@@ -323,7 +389,6 @@ export function createAuth({
      */
     hooks: {
       before: createAuthMiddleware(async (ctx) => {
-        if (!EMAIL_INPUT_PATHS.has(ctx.path)) return;
         // A hook runs for server-side `auth.api.*` calls too, and those must not spend a
         // user-facing budget: `POST /api/v1/auth/register` already carries its own
         // `@RateLimit('email')` and then calls `auth.api.signUpEmail`, which would count the one
@@ -331,6 +396,22 @@ export function createAuth({
         // `auth.api.sendVerificationEmail` for a third. A call with no `request` did not come
         // from the network; whatever did is already limited at its own door.
         const overHttp = ctx.request !== undefined;
+        if (ctx.path === VERIFY_EMAIL_PATH) {
+          // No body to reject a synthetic address in and nothing else to check: the link is
+          // the whole request. Counted on the address it mails (mailedByVerifyEmail).
+          if (!overHttp || rateLimiter === undefined) return;
+          const token = (ctx.query as { token?: unknown } | undefined)?.token;
+          const recipient = await mailedByVerifyEmail(token, ctx.context.secret);
+          if (recipient === undefined) return;
+          await consumeOrRefuse(
+            rateLimiter,
+            ctx.path,
+            recipient,
+            authRateLimitFor(ctx.path, rateLimits),
+          );
+          return;
+        }
+        if (!EMAIL_INPUT_PATHS.has(ctx.path)) return;
         const body = ctx.body as { email?: unknown; newEmail?: unknown } | undefined;
         const addresses: string[] = [];
         for (const value of [body?.email, body?.newEmail]) {
@@ -355,20 +436,9 @@ export function createAuth({
         // makes sign-in different is the after-hook below, which CLEARS the bucket once the
         // password turns out to have been right.
         if (!overHttp || rateLimiter === undefined) return;
-        const consume = async (path: string, tracker: string) => {
-          const retryAfterSeconds = await rateLimiter.consume(
-            path,
-            tracker,
-            authRateLimitFor(ctx.path, rateLimits),
-          );
-          if (retryAfterSeconds != null) {
-            throw new APIError('TOO_MANY_REQUESTS', {
-              message: 'Too many requests',
-              code: 'RATE_LIMITED',
-              retryAfterSeconds,
-            });
-          }
-        };
+        const limit = authRateLimitFor(ctx.path, rateLimits);
+        const consume = (path: string, tracker: string) =>
+          consumeOrRefuse(rateLimiter, path, tracker, limit);
         for (const address of addresses) await consume(ctx.path, address);
         if (ctx.path === CHANGE_EMAIL_PATH) {
           // The account asking, on top of `newEmail` (CHANGE_EMAIL_ACCOUNT_BUCKET). Keyed on
