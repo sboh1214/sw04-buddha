@@ -195,18 +195,23 @@ Nest 라우팅·전역 prefix·버저닝·본문 파싱보다 **먼저** 실행�
 - 합성 주소(\`@noemail.buddha.local\`)는 주소를 입력받는 모든 경로에서 거절된다
   (\`INVALID_EMAIL\`). Kakao·Naver 가 이메일을 주지 않았을 때 서버가 붙이는 주소이므로, 남이 먼저
   차지할 수 있으면 안 된다.
-- 레이트 리밋은 아래 \`email\` 버킷을 쓴다. 이 표면의 429 는 헤더가 아니라 본문에 초를 담는다:
-  \`{ "code": "RATE_LIMITED", "message": ..., "retryAfterSeconds": N }\`. better-auth 내장 리미터는
+- 레이트 리밋은 세 겹이다 — 메일을 보내는 경로는 아래 \`email\` 버킷, \`/sign-in/email\` 은
+  \`signIn\` 버킷, 그리고 이 표면 **전체**가 \`/api/v1/*\` 와 같은 \`default\`(주소) 버킷에도
+  들어간다. 앞의 둘이 거절할 때의 429 는 헤더가 아니라 본문에 초를 담는다:
+  \`{ "code": "RATE_LIMITED", "message": ..., "retryAfterSeconds": N }\`(주소 버킷의 거절은
+  \`Retry-After\` 헤더도 함께 보낸다). better-auth 내장 리미터는
   꺼져 있다(프로세스 메모리에 상태를 두고 IP 로 세는데, Next rewrite 뒤에서는 모든 방문자가 소켓
   하나다).
 - CSRF 는 better-auth 자신의 \`Origin\` 검사가 담당한다(\`disableOriginCheck: false\`).`;
 
 /** 레이트 리밋 산문. Read from apps/api/src/rate-limit/* and packages/shared/src/rate-limit.ts. */
-const RATE_LIMIT_NOTES = `- **버킷은 라우트마다 정확히 하나.** \`@RateLimit('<bucket>')\` 이 붙은 라우트는 그 버킷의 한도만
-  적용받고 기본 100/분 이 추가로 겹치지 않는다. 그래서 \`X-RateLimit-*\` 헤더의 뜻이 하나로 정해진다.
-- **헤더** — 계수된 응답에는 \`X-RateLimit-Limit\`, \`X-RateLimit-Remaining\`, \`X-RateLimit-Reset\`
-  이 붙는다. 거절될 때는 \`Retry-After\`(초)가 더 붙고, 본문은 PLAN 7 봉투의
-  \`RATE_LIMITED\` 이며 \`details.retryAfterSeconds\` 에 같은 숫자가 들어 있다.
+const RATE_LIMIT_NOTES = `- **버킷을 지목한 라우트는 두 번 세어진다.** \`@RateLimit('<bucket>')\` 이 붙어도 기본 100/분 의
+  주소 상한은 그대로 걸리고, 그 위에 그 버킷의 한도가 더해진다. 먼저 닿는 쪽이 거절한다. 지목한
+  버킷이 기본값보다 언제나 엄격하므로, 한 호출자가 한 계정으로 부르는 동안은 대개 그쪽이 먼저 닿는다.
+- **헤더** — 계수된 응답에는 주소 버킷의 \`X-RateLimit-Limit\`, \`X-RateLimit-Remaining\`,
+  \`X-RateLimit-Reset\` 이 붙는다. 버킷을 지목한 라우트는 같은 이름에 \`-route\` 가 붙은 세 개를
+  더 받는다. 거절될 때는 \`Retry-After\`(초)가 더 붙고 — 어느 버킷이 거절했든 접미사 없이 —,
+  본문은 PLAN 7 봉투의 \`RATE_LIMITED\` 이며 \`details.retryAfterSeconds\` 에 같은 숫자가 들어 있다.
 - **\`ip\` 스코프는 API 전체가 한 통이다.** PLAN 7.5 의 기본값은 주소당으로 쓰여 있으므로 경로별로
   나누면 한 호출자가 경로 수만큼 100번을 쓸 수 있다. 클라이언트를 지목할 수 없는 주소(신뢰할 수
   없는 프록시 뒤 등)는 아예 계수하지 않는다 — 거절이 아니라 무계수다.
@@ -308,7 +313,8 @@ const ERROR_NOTES = {
 
 /** 레이트 리밋 버킷별 적용 라우트. 버킷 목록·스코프·한도는 소스에서 읽는다. */
 const RATE_LIMIT_ROUTES = {
-  default: '아래에 없는 모든 HTTP 라우트(주소 하나당 API 전체 합산)',
+  default:
+    '모든 HTTP 라우트. 아래 버킷을 지목한 라우트도 여기에 함께 들어간다(주소 하나당 API 전체 합산).',
   trade: '`POST /api/v1/trades`',
   charge: '`POST /api/v1/payments/charge`',
   coupon: '`POST /api/v1/coupons/redeem`',

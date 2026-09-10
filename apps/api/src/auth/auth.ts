@@ -332,10 +332,12 @@ export function createAuth({
         // this is the hook and not a guard). Checked AFTER the address has been accepted as a
         // real one and BEFORE better-auth verifies a password or sends anything.
         //
-        // `/sign-in/email` only READS its bucket here: on that path the thing worth counting is
-        // a FAILURE, which the after-hook below records once the answer is known. Every other
-        // path counts the attempt, because on those the attempt IS the harm — each one puts
-        // mail in somebody's inbox.
+        // EVERY path counts the attempt here, `/sign-in/email` included. On the mail paths the
+        // attempt IS the harm — each one puts mail in somebody's inbox. On sign-in it is the
+        // scrypt: better-auth hashes the submitted password even for an address that does not
+        // exist, so an uncounted attempt is an unconditional one anybody can ask for. What
+        // makes sign-in different is the after-hook below, which CLEARS the bucket once the
+        // password turns out to have been right.
         for (const address of addresses) {
           if (!overHttp) break;
           const retryAfterSeconds = await rateLimiter?.consume(

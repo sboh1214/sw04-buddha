@@ -32,9 +32,13 @@ export interface RateLimitBucketSpec {
 }
 
 /**
- * `default` covers every route that does not name a bucket. The rest are attached with
- * `@RateLimit('<bucket>')` in apps/api and are stricter than the default, so a route has
- * exactly one limit and a refusal has exactly one explanation.
+ * `default` counts the client address on EVERY route. The rest are attached with
+ * `@RateLimit('<bucket>')` in apps/api and ADD to it rather than replace it: a route that names
+ * one is bounded twice, and whichever bound it reaches first refuses.
+ *
+ * Replacing was the first shape of this, and it took the address bound off precisely the routes
+ * that most needed one — `POST /auth/register` counts the RECIPIENT's inbox, so a caller who
+ * varied the address had no bound at all.
  */
 export const RATE_LIMIT_BUCKETS = {
   /** PLAN 7.5 default. */
@@ -50,11 +54,19 @@ export const RATE_LIMIT_BUCKETS = {
   /** Routes that mail an address the caller chose, counted per address (A-M2-10). */
   email: { scope: 'email', limit: 5 },
   /**
-   * FAILED sign-ins against one address, per window. Only better-auth's `/sign-in/email` uses
-   * it, and only failures are counted (auth-rate-limit.ts): a sign-in with the right password
-   * is not an attack, and counting it would let a shared account lock itself out by being
-   * used. Higher than `email` because a mistyped password is ordinary and a mail flood is not,
-   * and still far below what a guessing loop needs.
+   * Sign-in attempts against one address, per window. Only better-auth's `/sign-in/email` uses
+   * it. EVERY attempt is counted, BEFORE the handler runs, and a sign-in that SUCCEEDS clears
+   * the bucket (auth-rate-limit.ts).
+   *
+   * Both halves are load-bearing. Counting first is what makes the count atomic — reading the
+   * bucket in a before-hook and adding to it after left a gap the width of a scrypt, so N
+   * concurrent guesses all read a bucket under the limit and all got through. Clearing on
+   * success is what keeps a shared account (a seeded admin, a demo login, a team mailbox) from
+   * locking itself out by being used, which is what a "count every attempt" limit did to
+   * thirteen e2e specs the first time it shipped.
+   *
+   * Higher than `email` because a mistyped password is ordinary and a mail flood is not, and
+   * still far below what a guessing loop needs.
    */
   signIn: { scope: 'email', limit: 10 },
 } as const satisfies Record<string, RateLimitBucketSpec>;

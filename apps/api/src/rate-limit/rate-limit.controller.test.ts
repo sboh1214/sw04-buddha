@@ -211,7 +211,8 @@ describe.skipIf(!hasTestInfra)('rate limits (integration)', () => {
       // exception filter, exactly as every other /api/auth/* error does (ADR-0018).
       expect(refused.json()).toMatchObject({ code: 'RATE_LIMITED' });
       // The right password is refused too once the bucket is spent: that is the point of a
-      // lockout, and it is why only FAILURES may fill it.
+      // lockout, and it is why a sign-in that succeeds CLEARS the bucket rather than going
+      // uncounted — the count has to happen before the answer is known.
       expect((await signIn(user.email, user.password)).statusCode).toBe(429);
 
       // Another account is unaffected: the bucket is the address, not the caller.
@@ -219,7 +220,7 @@ describe.skipIf(!hasTestInfra)('rate limits (integration)', () => {
       expect((await signIn(bystander.email, bystander.password)).statusCode).toBe(200);
     });
 
-    it('never spends the bucket on a sign-in that SUCCEEDS', async () => {
+    it('clears the bucket on a sign-in that SUCCEEDS', async () => {
       // A shared account — this repo's seeded admin, a demo login, a team mailbox — signs in
       // many times a minute with the correct password. Counting those locked the e2e suite out
       // of its own admin the first time this shipped.
