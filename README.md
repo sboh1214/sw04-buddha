@@ -30,7 +30,7 @@ pnpm install
 
 docker compose up -d --wait      # postgres(5432) · redis(6379) · mailpit(1025/8025)
 pnpm db:migrate                  # drizzle 마이그레이션 (스키마 + 롤 권한 + 프로필 트리거)
-pnpm db:seed                     # 카테고리 5개 + 충전 상품 5개 + 관리자 + 시장 12개
+pnpm db:seed                     # 카테고리 5개(+세부 21개) + 충전 상품 5개 + 관리자 + 시장 14개
 pnpm dev                         # web(3000) · api(4000) · worker + 공유 패키지 watch
 ```
 
@@ -47,16 +47,17 @@ pnpm dev                         # web(3000) · api(4000) · worker + 공유 패
 
 화면은 다음과 같다. 모바일 폭에서는 하단 탭(홈·포트폴리오·지갑·설정)이 붙고, 시장 상세에서만 그 자리를 거래 바가 대신한다.
 
-| 경로                                                                                               | 화면                                                                                                                                         |
-| -------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/`                                                                                                | 홈 — 카테고리 탭·정렬·검색·시장 카드 그리드(카드마다 24시간 스파크라인)                                                                      |
-| `/markets/[slug]`                                                                                  | 시장 상세 — 확률 차트·정산 기준·최근 체결·내 포지션·매수/매도 패널. `resolving`이면 제안된 결과와 이의 제기 폼, `settled`면 결과와 실현 손익 |
-| `/portfolio`                                                                                       | 잔고·보유 포지션·정산 이력·주문 이력                                                                                                         |
-| `/wallet`                                                                                          | 충전 상품·쿠폰·원장(정산 지급은 `SETTLEMENT_PAYOUT` 행)                                                                                      |
-| `/leaderboard`                                                                                     | 실현 손익 상위 20 (공개, `LEADERBOARD_LIMIT`)                                                                                                |
-| `/signup` `/login` `/set-password` `/reset-password` `/settings`                                   | 인증과 계정                                                                                                                                  |
-| `/admin/markets` `/admin/markets/[id]` `/admin/disputes`                                           | 시장 생성·수정·열기·마감·정산 제안·결과 변경·무효, 이의 수용/기각                                                                            |
-| `/admin/users` `/admin/charge-packages` `/admin/coupons` `/admin/payments` `/admin/audit-failures` | 계정·상품·쿠폰·결제·원장 감사 실패                                                                                                           |
+| 경로                                                                                               | 화면                                                                                                                                                          |
+| -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/`                                                                                                | 홈(Kalshi 형, ADR-0041) — 헤더 2단(시장·랭킹·커뮤니티 / 전체·카테고리)·세부 분류 사이드바·정렬·시장 카드 그리드(카드마다 예/아니오 두 줄과 24시간 스파크라인) |
+| `/community`                                                                                       | 커뮤니티 — 자리만 있는 화면(준비 중)                                                                                                                          |
+| `/markets/[slug]`                                                                                  | 시장 상세 — 확률 차트·정산 기준·최근 체결·내 포지션·매수/매도 패널. `resolving`이면 제안된 결과와 이의 제기 폼, `settled`면 결과와 실현 손익                  |
+| `/portfolio`                                                                                       | 잔고·보유 포지션·정산 이력·주문 이력                                                                                                                          |
+| `/wallet`                                                                                          | 충전 상품·쿠폰·원장(정산 지급은 `SETTLEMENT_PAYOUT` 행)                                                                                                       |
+| `/leaderboard`                                                                                     | 실현 손익 상위 20 (공개, `LEADERBOARD_LIMIT`)                                                                                                                 |
+| `/signup` `/login` `/set-password` `/reset-password` `/settings`                                   | 인증과 계정                                                                                                                                                   |
+| `/admin/markets` `/admin/markets/[id]` `/admin/disputes`                                           | 시장 생성·수정·열기·마감·정산 제안·결과 변경·무효, 이의 수용/기각                                                                                             |
+| `/admin/users` `/admin/charge-packages` `/admin/coupons` `/admin/payments` `/admin/audit-failures` | 계정·상품·쿠폰·결제·원장 감사 실패                                                                                                                            |
 
 ## 문제 해결
 

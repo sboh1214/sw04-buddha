@@ -1176,3 +1176,35 @@ PLAN §13(docs/PLAN.md:801)은 "이후(MVP 외)"로 CDK + Fargate 3서비스 + R
 - 닫힌 항목: Q-M6-2(답), Q-M1-3(발신 도메인·DKIM·MAIL FROM·production 모드), Q-M5-7 · Q-M5-11(컨테이너 헬스체크에 붙었고 의미는 그대로), A-M0-13의 운영 값. PLAN §13의 CDK/Fargate 스케치는 이 ADR로 대체된다.
 - 알려진 한계: 단일 AZ·단일 인스턴스라 가용성이 없다(인스턴스 교체 ≈ 5분 다운타임). `AmazonSSMManagedInstanceCore`가 `ssm:GetParameter *`를 주므로 인스턴스 역할의 파라미터 한정은 문서일 뿐이다. `@msgpackr-extract`의 linux-arm64는 musl 바이너리만 배포해 glibc 이미지에서 node-gyp 경고가 나고 순수 JS 폴백을 쓴다 — 무해하다. `terraform-iam`은 AdministratorAccess다.
 - **재검토 방아쇠**: (가) 외부 공개 — 트래픽과 공격 표면이 바뀌면 WAF·ALB가 필요하다; (나) 가용성 요구 — 인스턴스 교체 5분을 감당할 수 없으면 ECS + ALB로; (다) 데이터 보존 요구 — 스냅샷 7일과 수동 pg_dump로 부족하면 RDS(PITR)로. 셋 중 하나라도 오면 PLAN §13의 스케치를 이 Terraform root 위에 얹는다(VPC·ECR·SES·OIDC 역할은 재사용). 팀이 늘어 두 머신에서 apply하게 되면 S3 backend로 이관한다.
+
+## ADR-0041 — 홈을 Kalshi 형으로: 2단 헤더, 2단계 카테고리, Kalshi 타일 카드 (UI)
+
+- 날짜: 2026-09-11
+- 상태: 채택
+
+### 맥락
+
+PLAN §11.1은 "Polymarket의 카드 기반 탐색 + Kalshi의 정산 기준 노출 + Robinhood의 롤링"을 섞어 두었고, M4의 홈은 그 절충이었다 — 헤더 한 줄(로고·검색·카테고리 링크 한 줄·잔고·프로필), 페이지 안에 검색 폼과 카테고리 칩 한 줄, 카드는 이미지·태그·질문·확률 배지·스파크라인·거래량·마감을 한 덩어리에 넣은 것. 카테고리는 한 단계(경제·문화·엔터테인먼트·테크·날씨)였다.
+
+사용자 결정(2026-09-11): **홈 화면 전체를 kalshi.com처럼.** 구체적으로 (가) 최상단 내비를 Kalshi처럼 2단으로 — 1단은 시장·랭킹·커뮤니티, 2단은 시장의 하위 메뉴(전체·경제·문화·엔터테인먼트·테크·날씨); (나) 시장 분류를 2단계로 — "경제" 아래 주택·일자리·환율 같은 세부 분류; (다) 카드를 Kalshi와 똑같이.
+
+기준은 2026-09-11의 kalshi.com을 브라우저로 직접 재서 잡았다(DOM의 computed style과 CSS 변수). 헤더 107px = 40px 행(위아래 12px) + 30px 카테고리 행(아래 8px), 콘텐츠 폭 1320px, 좌우 24px. 타일은 16px 라운드·1px 8% 스트로크·2% 틴트 위에 "아이콘 28px + 대문자 오버라인(세부 분류) / 제목 15px 600 한 줄 / 마감 12px / 결과 행 2개(라벨 + 2px 진행 막대 + 배수 + 36px 알약 %) / 거래량 12px". 결과 행은 **이진 시장도 두 줄**이다 — 49ers 52% / Rams 48%처럼 첫 줄 초록(`--green-x10`), 둘째 줄 파랑(`--blue-x10`). 색 변수는 라이트 `#0ac285/#265cff/#d91616`, 다크 `#28cc95/#408fff/#ff4d6a`, 다크 표면 `#0a0c0f`, 스트로크는 알파(6·10·20%).
+
+### 결정
+
+- **카테고리는 두 단계, 테이블 하나.** `categories.parent_id`(자기 참조 FK, `ON DELETE RESTRICT`, 마이그레이션 0013). 최상위는 NULL, 잎은 부모 id. 깊이 제한은 시드와 API가 지키는 관례이지 DB 제약이 아니다 — 30행짜리 테이블에 트리거를 두는 것보다 규칙 한 줄이 싸다. 슬러그는 **트리 전체에서 유일**하다: `?category=<slug>`가 단계를 말하지 않고 행 하나를 가리켜야 하기 때문이다. 시드 트리는 `packages/shared/src/enums.ts`의 `SUBCATEGORY_SLUGS`에 있고(경제 5 · 문화 4 · 엔터 4 · 테크 4 · 날씨 4 = 21), 이름은 `seed.ts`의 `SUBCATEGORY_NAMES`가 `satisfies`로 빠짐없이 붙인다. 스포츠·선거는 여전히 없다(PLAN 0.2).
+- **`GET /categories`는 평평하게, `parentId`를 붙여서.** 중첩 응답 대신 `Category`에 필드 하나를 더했다 — 관리자 셀렉트·카드 라벨처럼 잎만 필요한 쪽은 트리를 걸을 필요가 없고, 트리는 웹의 `groupCategories` 한 곳에서만 만든다. 순서는 부모 먼저(`parent_id NULLS FIRST`), 잎은 부모별 `sort_order`. 은퇴한 부모의 잎은 빠진다(고아를 줄 곳이 없다).
+- **`GET /markets?category=`는 어느 단계의 슬러그든 받고, 최상위면 하위 전체를 잡는다.** `markets.category_id IN (슬러그 자신 ∪ 그 부모를 가진 잎)` 서브쿼리다. 조인에 부모 별칭을 하나 더 붙이는 대신 술어를 `category_id`에 두어 M3 키셋 테스트가 고정한 카드 쿼리 모양과 `markets_category_id_status_idx`를 그대로 쓴다. `MarketSummary.category`는 `{slug, nameKo}` 그대로다 — 카드는 잎 이름과 잎으로 가는 링크만 필요하고, 부모는 시드 트리(`parentCategorySlug`)에서 정적으로 안다. 스무 곳의 픽스처를 흔들지 않은 이유이기도 하다.
+- **시장은 잎에 둔다.** 시드 12개를 잎으로 옮기고(경제 3 → 금리·물가·환율, 날씨 3 → 강수 2·기온, 테크 2 → 기기·통신, 엔터 2 → 영화·음악, 문화 2 → 전시·출판) 사용자가 예로 든 주택·일자리에 시장을 하나씩 더해 14개. 관리자 폼은 잎이 있는 부모를 고를 수 없게 한다(Kalshi도 시리즈는 세부 분류 아래에 있다). API는 어느 단계든 활성 카테고리면 받는다 — 잎이 하나도 없는 부모에 시장을 두는 길을 막을 이유는 없다.
+- **헤더 2단.** 1단: 로고 · 시장(`/`) · 랭킹(`/leaderboard`) · 커뮤니티(`/community`) · 검색 알약 · 테마 · 로그인/가입하기(알약). 2단: 전체 + 최상위 카테고리, `emphasis 15px/500`, 비활성 불투명도 0.5. 2단의 현재 항목은 `?category=`를 읽어야 하는데 루트 레이아웃의 `useSearchParams`는 정적 페이지의 prerender를 깨므로, 그 행만 `<Suspense>`로 감싸고 **폴백을 현재 표시가 없는 같은 행**으로 둔다 — `/login` 같은 정적 HTML에도 행은 통째로 들어가고, 하이드레이션 뒤 `aria-current`만 붙는다. 잎이 선택되면 그 부모가 현재다. 커뮤니티는 화면만 있고 기능은 없다(PLAN §2 비목표) — 헤더가 가리키는 자리를 비워 둘 수 없어서다.
+- **홈 = Kalshi의 카테고리 페이지.** 상위 카테고리(또는 잎)가 선택되면 왼쪽 180px 사이드바에 "전체 시장 + 잎들"(Kalshi의 "All markets / Econ Daily / Fed …"), 오른쪽에 제목(30px)과 정렬·상태 알약, 그 아래 `repeat(auto-fill, minmax(360px, 1fr))` 그리드. 전체(카테고리 없음)면 사이드바 없이 그리드만. 페이지 안의 검색 폼과 카테고리 칩 행은 없앴다 — 헤더가 둘 다 갖는다. 검색이 카테고리를 버리고 `/?q=`로 가는 것은 M4 그대로다(Kalshi도 카테고리 안 검색이 없다). URL이 유일한 진실이라는 M4의 설계(`filtersFromSearchParams` → 캐시 키 → prop)는 한 글자도 바꾸지 않았다.
+- **카드는 Kalshi 타일 구조 그대로, 두 줄은 예/아니오.** 헤더(아이콘 타일 + 잎 이름 오버라인, 상태 배지) / 제목 한 줄 truncate(접근 가능한 이름은 질문 전체) / 마감 텍스트 / 예·아니오 두 줄(2px 막대, `100/가격` 배수, 36px 알약 `63%`) / 거래량 + 스파크라인. 막대 색은 `yes`/`no` 팔레트가 아니라 Kalshi의 초록·파랑(`row.first`/`row.second`)이다 — 줄마다 예·아니오가 글자로 있어 색이 뜻을 혼자 지지 않는다(PLAN 11.2). 라이트의 초록 `#0ac285`는 흰 바탕에서 2.32:1이지만 막대 길이는 옆 알약의 숫자를 되풀이하는 것이라 1.4.11의 "텍스트와 중복" 예외에 든다; 알약 **테두리**는 컴포넌트 경계라 `brand.border`(라이트 600 `#08a370` 3.24:1, 다크는 Kalshi 그대로 `#28cc95`)다. Kalshi가 "27 markets"를 두는 자리에는 스파크라인이 간다(PLAN 11.4가 요구하고, 우리는 이벤트당 시장이 하나다). 아이콘은 Kalshi의 시리즈 이미지 자리인데 우리에게 이미지가 없으므로 최상위 5개의 손그림 글리프를 잎이 물려받고, 관리자가 이미지 URL을 넣은 시장은 그것을 쓴다. `interactive={false}`(관리자 미리보기)에서는 링크가 하나도 없다는 M4 규칙 그대로다.
+- **테마.** 브랜드는 인디고 플레이스홀더(Q7)에서 Kalshi 초록 계열로: 라이트 solid는 Kalshi의 라이트 `green-x50` `#067450`(흰 라벨 5.80:1, 호버 4.74:1), 다크 solid는 `#28cc95` 위 검정 라벨(10.16:1) — 곧 Kalshi의 Sign up 버튼이다. 다크 페이지는 `#0a0c0f`, 층은 `#13161a`/`#1b2029`. 테두리는 회색 단계 대신 알파 스트로크(6/10/20%)라 어느 표면 위에서도 같게 보인다. Kalshi의 타입 사다리(11·12·13·15·18·30px)를 `textStyles`로, 라운드(6·8·16·100px)를 `radii`로 두었다. 폰트는 Pretendard 그대로(한글). `contrast.test.ts`가 hex 리터럴도 풀도록 한 줄 바꿨다.
+
+### 결과
+
+- 마이그레이션 0013, `Category.parentId`(OpenAPI·api-client·docs/API.md 재생성), 시드 카테고리 26행·시장 14개. 기존 DB의 시장은 옮기지 않는다(시드는 있는 시장을 덮지 않는다) — 로컬은 `UPDATE`로 한 번 옮기고, 운영은 아직 시드 시장뿐이라 배포 시 새 DB이거나 그대로 두어도 상위 카테고리에서 보인다.
+- 새 파일: `lib/category-tree.ts`(그룹·위치·정적 부모), `lib/market-card.ts`(배수·행), `lib/home-view.ts`(제목·사이드바 행), `lib/nav.ts`, `lib/category-label.ts`, `components/market/category-icon.tsx`, `app/subcategory-sidebar.tsx`, `app/community/page.tsx`. 각 순수 함수에 테스트.
+- 지워진 것: 홈의 페이지 내 검색 폼(`market-search`), 카테고리 칩 행(`market-category-tabs`), 헤더의 md 전용 `CategoryLinks`. e2e가 쓰는 test id(`market-card-<id>`, `market-card-probability`, `nav-search*`, `balance-chip`)는 유지.
+- PLAN 드리프트: §11.3 홈 행("카테고리 탭 · 정렬 · 마켓 카드 그리드 · 검색"), §11.4 MarketCard·레이아웃 줄, §6.2 `categories`, §17 Q7(브랜드 색)이 이 ADR과 다르다. QUESTIONS.md「정리 — PLAN 드리프트」에 적었다.
+- 알려진 한계: 카테고리에 관리자 UI가 없으므로 트리는 시드로만 바뀐다(전과 같다). 세부 분류 아이콘은 부모 것을 물려받는다 — Kalshi처럼 시리즈마다 이미지를 두려면 `categories.image_url` 같은 컬럼이 필요하고, 그건 관리자 카테고리 UI와 함께 온다. 커뮤니티는 자리만 있다.
