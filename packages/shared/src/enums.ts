@@ -151,7 +151,35 @@ export const AUDIT_FAILURE_KINDS = ['ledger_balance_mismatch'] as const;
 export type AuditFailureKind = (typeof AUDIT_FAILURE_KINDS)[number];
 export const auditFailureKindSchema = z.enum(AUDIT_FAILURE_KINDS);
 
-/** Seed categories (PLAN 1.3, 6.2). Never sports or elections (PLAN 0.2). */
+/**
+ * Seed categories (PLAN 1.3, 6.2): the five TOP-LEVEL slugs. Never sports or elections
+ * (PLAN 0.2). These are the second row of the header and the tabs of the home screen.
+ */
 export const CATEGORY_SLUGS = ['economy', 'culture', 'entertainment', 'tech', 'weather'] as const;
 export type CategorySlug = (typeof CATEGORY_SLUGS)[number];
 export const categorySlugSchema = z.enum(CATEGORY_SLUGS);
+
+/**
+ * The second level (Kalshi's "Economics → Housing / Jobs / Inflation" shape): each top-level
+ * category's sub-categories, in display order. A market is filed under ONE of these leaves — a
+ * card's header names the leaf, and `GET /markets?category=economy` lists every leaf under it.
+ *
+ * Two levels and no more: `categories.parent_id` points at a top-level row, and nothing here or
+ * in the seed makes a leaf a parent. The slugs are unique ACROSS the whole tree, not just within
+ * a parent, because `?category=<slug>` names one row without saying which level it is on.
+ * Never sports or elections here either (PLAN 0.2).
+ */
+export const SUBCATEGORY_SLUGS = {
+  economy: ['housing', 'jobs', 'fx', 'rates', 'prices'],
+  culture: ['books', 'exhibitions', 'performances', 'food'],
+  entertainment: ['movies', 'music', 'tv', 'games'],
+  tech: ['ai', 'devices', 'semiconductors', 'space'],
+  weather: ['temperature', 'rain', 'typhoons', 'air-quality'],
+} as const satisfies Record<CategorySlug, readonly string[]>;
+export type SubcategorySlug = (typeof SUBCATEGORY_SLUGS)[CategorySlug][number];
+/** Every slug on either level: what a seeded market's `category` may name. */
+export const ALL_CATEGORY_SLUGS = [
+  ...CATEGORY_SLUGS,
+  ...Object.values(SUBCATEGORY_SLUGS).flat(),
+] as const;
+export type AnyCategorySlug = (typeof ALL_CATEGORY_SLUGS)[number];

@@ -12,7 +12,10 @@ import {
   priceOf,
   probabilityBp,
   serializeQuantity,
+  type AnyCategorySlug,
   type CategorySlug,
+  SUBCATEGORY_SLUGS,
+  type SubcategorySlug,
 } from '@buddha/shared';
 import { hashPassword } from 'better-auth/crypto';
 import { and, eq, sql } from 'drizzle-orm';
@@ -32,7 +35,7 @@ import {
   user,
 } from './schema/index.js';
 
-/** PLAN 1.3 categories. Sports and elections are forbidden (PLAN 0.2): never add them. */
+/** PLAN 1.3 top-level categories. Sports and elections are forbidden (PLAN 0.2): never add them. */
 const CATEGORIES: readonly { slug: CategorySlug; nameKo: string; sortOrder: number }[] = [
   { slug: 'economy', nameKo: '경제', sortOrder: 10 },
   { slug: 'culture', nameKo: '문화', sortOrder: 20 },
@@ -40,6 +43,37 @@ const CATEGORIES: readonly { slug: CategorySlug; nameKo: string; sortOrder: numb
   { slug: 'tech', nameKo: '테크', sortOrder: 40 },
   { slug: 'weather', nameKo: '날씨', sortOrder: 50 },
 ];
+
+/**
+ * The second level, one Korean name per slug in `SUBCATEGORY_SLUGS` (shared enums.ts, which is
+ * also where the two-level rule is written down). `satisfies` over every leaf slug: a slug added
+ * to the shared list without a name here fails to compile rather than seeding a nameless row.
+ * Display order within a parent is the order of the shared tuple, spaced by ten like the
+ * parents so an admin can slot one between two later.
+ */
+const SUBCATEGORY_NAMES = {
+  housing: '주택',
+  jobs: '일자리',
+  fx: '환율',
+  rates: '금리',
+  prices: '물가',
+  books: '출판',
+  exhibitions: '전시',
+  performances: '공연',
+  food: '음식',
+  movies: '영화',
+  music: '음악',
+  tv: '방송',
+  games: '게임',
+  ai: 'AI',
+  devices: '기기·통신',
+  semiconductors: '반도체',
+  space: '우주',
+  temperature: '기온',
+  rain: '강수',
+  typhoons: '태풍',
+  'air-quality': '대기질',
+} as const satisfies Record<SubcategorySlug, string>;
 
 /**
  * better-auth 1.7 stores a synthetic issuer on every account row and looks credential
@@ -50,15 +84,46 @@ const CREDENTIAL_PROVIDER = 'credential';
 const ADMIN_NICKNAME = '관리자';
 
 async function seedCategories(db: Db): Promise<void> {
-  await db
+  // Parents first, then the leaves under them: a leaf's `parent_id` is the id the first
+  // statement produced (or already held — the upsert returns the surviving row either way).
+  const parents = await db
     .insert(categories)
-    .values(CATEGORIES.map((category) => ({ ...category })))
+    .values(CATEGORIES.map((category) => ({ ...category, parentId: null })))
     .onConflictDoUpdate({
       target: categories.slug,
-      // is_active is an admin knob: re-seeding must not re-activate a disabled category.
-      set: { nameKo: sql`excluded.name_ko`, sortOrder: sql`excluded.sort_order` },
+      // is_active is an admin knob: re-seeding must not re-activate a disabled category. The
+      // parent is rewritten to NULL on purpose: a slug in CATEGORIES is top-level by definition.
+      set: { nameKo: sql`excluded.name_ko`, sortOrder: sql`excluded.sort_order`, parentId: null },
+    })
+    .returning({ id: categories.id, slug: categories.slug });
+  const parentIds = new Map(parents.map((row) => [row.slug, row.id]));
+
+  const leaves = CATEGORIES.flatMap((parent) => {
+    const parentId = parentIds.get(parent.slug);
+    if (parentId === undefined) {
+      throw new Error(`[db:seed] category ${parent.slug}: upsert returned no row`);
+    }
+    return SUBCATEGORY_SLUGS[parent.slug].map((slug, index) => ({
+      slug,
+      nameKo: SUBCATEGORY_NAMES[slug],
+      sortOrder: (index + 1) * 10,
+      parentId,
+    }));
+  });
+  await db
+    .insert(categories)
+    .values(leaves)
+    .onConflictDoUpdate({
+      target: categories.slug,
+      set: {
+        nameKo: sql`excluded.name_ko`,
+        sortOrder: sql`excluded.sort_order`,
+        parentId: sql`excluded.parent_id`,
+      },
     });
-  console.log(`[db:seed] categories: ${String(CATEGORIES.length)} upserted`);
+  console.log(
+    `[db:seed] categories: ${String(CATEGORIES.length)} top-level + ${String(leaves.length)} sub-categories upserted`,
+  );
 }
 
 /**
@@ -265,7 +330,8 @@ async function seedAdmin(db: Db, input: AdminInput): Promise<string> {
 }
 
 interface SeedMarket {
-  category: CategorySlug;
+  /** Almost always a leaf: a card's header names it, and the parent lists it too. */
+  category: AnyCategorySlug;
   slug: string;
   title: string;
   description: string;
@@ -285,7 +351,8 @@ interface SeedMarket {
 }
 
 /**
- * PLAN 13 M3: 12 open markets, 2-3 per category, in the shape of Appendix B — every one with
+ * PLAN 13 M3: 14 open markets, 2-3 per top-level category (12 in M3, plus 주택 and 일자리 with
+ * the second level), in the shape of Appendix B — every one with
  * rules that state the criterion, its boundary and the "no announcement → 아니오" clause, plus
  * a resolution source. Never sports or elections (PLAN 0.2). The slug is the idempotency key
  * of the seed: a market whose slug exists is left exactly as it is, copy included — an admin
@@ -293,7 +360,7 @@ interface SeedMarket {
  */
 const SEED_MARKETS: readonly SeedMarket[] = [
   {
-    category: 'economy',
+    category: 'rates',
     slug: 'bok-october-rate-cut-2026',
     title: '10월 한국은행 금융통화위원회에서 기준금리가 인하될까?',
     description: '한국은행 금융통화위원회의 10월 통화정책방향 결정회의 결과를 예측합니다.',
@@ -306,7 +373,7 @@ const SEED_MARKETS: readonly SeedMarket[] = [
     closeAt: '2026-10-21T14:59:59Z',
   },
   {
-    category: 'economy',
+    category: 'prices',
     slug: 'cpi-september-2026-above-2pct',
     title: '9월 소비자물가 상승률(전년 동월 대비)이 2.0% 이상으로 발표될까?',
     description: '통계청이 발표하는 2026년 9월 소비자물가 동향을 예측합니다.',
@@ -319,7 +386,7 @@ const SEED_MARKETS: readonly SeedMarket[] = [
     closeAt: '2026-09-30T14:59:59Z',
   },
   {
-    category: 'economy',
+    category: 'fx',
     slug: 'krw-usd-yearend-2026-above-1400',
     title: '올해 마지막 거래일 원/달러 환율 종가가 1,400원 이상일까?',
     description: '2026년 서울외환시장 마지막 거래일의 원/달러 환율 종가를 예측합니다.',
@@ -333,7 +400,34 @@ const SEED_MARKETS: readonly SeedMarket[] = [
     closeAt: '2026-12-29T14:59:59Z',
   },
   {
-    category: 'weather',
+    category: 'housing',
+    slug: 'seoul-apartment-price-november-2026-up',
+    title: '11월 서울 아파트 매매가격지수가 전월 대비 상승할까?',
+    description:
+      '한국부동산원이 발표하는 2026년 11월 전국주택가격동향의 서울 아파트 매매가격지수를 예측합니다.',
+    rules:
+      "한국부동산원 '2026년 11월 전국주택가격동향조사'에서 서울 아파트 매매가격지수의 전월 대비 변동률이 0.00%를 초과하면 '예'로 정산합니다. 0.00% 이하(보합·하락)는 '아니오'입니다. 2026년 12월 31일(KST)까지 공식 발표가 없으면 '아니오'로 정산합니다. 이후 정정치는 반영하지 않습니다.",
+    resolutionSource: '한국부동산원 전국주택가격동향조사 https://www.reb.or.kr',
+    initialProbBp: 6000,
+    liquidityB: 1000,
+    // 2026-11-30 23:59:59 KST: the November survey is published in mid-December.
+    closeAt: '2026-11-30T14:59:59Z',
+  },
+  {
+    category: 'jobs',
+    slug: 'unemployment-october-2026-below-3pct',
+    title: '10월 실업률(계절조정)이 3.0% 미만으로 발표될까?',
+    description: '통계청이 발표하는 2026년 10월 고용동향의 계절조정 실업률을 예측합니다.',
+    rules:
+      "통계청 '2026년 10월 고용동향'의 계절조정 실업률이 3.0% 미만이면 '예'로 정산합니다. 3.0% 이상은 '아니오'입니다. 2026년 11월 30일(KST)까지 공식 발표가 없으면 '아니오'로 정산합니다. 이후 정정치는 반영하지 않습니다.",
+    resolutionSource: '통계청 고용동향 보도자료 https://kostat.go.kr',
+    initialProbBp: 4500,
+    liquidityB: 800,
+    // 2026-10-31 23:59:59 KST: the October release lands in the second week of November.
+    closeAt: '2026-10-31T14:59:59Z',
+  },
+  {
+    category: 'rain',
     slug: 'seoul-first-snow-before-nov-20-2026',
     title: '서울의 올해 첫눈이 11월 20일 이전에 관측될까?',
     description: '기상청 서울 관측소 기준 올해 첫눈 관측일을 예측합니다.',
@@ -346,7 +440,7 @@ const SEED_MARKETS: readonly SeedMarket[] = [
     closeAt: '2026-11-19T15:00:00Z',
   },
   {
-    category: 'weather',
+    category: 'rain',
     slug: 'seoul-october-2026-rain-above-50mm',
     title: '10월 서울 월 강수량이 50mm를 넘을까?',
     description: '기상청 서울 관측소의 2026년 10월 월 강수량을 예측합니다.',
@@ -359,7 +453,7 @@ const SEED_MARKETS: readonly SeedMarket[] = [
     closeAt: '2026-10-31T14:59:59Z',
   },
   {
-    category: 'weather',
+    category: 'temperature',
     slug: 'seoul-november-2026-below-minus-5',
     title: '11월 중 서울 일 최저기온이 영하 5도 이하로 내려가는 날이 있을까?',
     description: '2026년 11월 서울의 일 최저기온을 예측합니다.',
@@ -372,7 +466,7 @@ const SEED_MARKETS: readonly SeedMarket[] = [
     closeAt: '2026-11-30T14:59:59Z',
   },
   {
-    category: 'tech',
+    category: 'devices',
     slug: 'korea-telco-6g-trial-2026',
     title: '연내 국내 통신 3사 중 한 곳이라도 6G 시범 서비스 개시를 공식 발표할까?',
     description: '국내 통신 3사의 6G 시범 서비스 발표 여부를 예측합니다.',
@@ -385,7 +479,7 @@ const SEED_MARKETS: readonly SeedMarket[] = [
     closeAt: '2026-12-31T14:59:59Z',
   },
   {
-    category: 'tech',
+    category: 'devices',
     slug: 'samsung-trifold-korea-launch-2026',
     title: '삼성전자가 연내 국내에 3단 접이식(트라이폴드) 스마트폰을 정식 출시할까?',
     description: '삼성전자의 3단 접이식 스마트폰 국내 정식 출시 여부를 예측합니다.',
@@ -398,7 +492,7 @@ const SEED_MARKETS: readonly SeedMarket[] = [
     closeAt: '2026-12-31T14:59:59Z',
   },
   {
-    category: 'entertainment',
+    category: 'movies',
     slug: 'november-2026-korean-film-3m-in-2-weeks',
     title: '11월 개봉 한국 영화 중 개봉 2주 안에 누적 관객 300만을 넘는 작품이 나올까?',
     description: '2026년 11월 개봉 한국 영화의 초반 흥행을 예측합니다.',
@@ -411,7 +505,7 @@ const SEED_MARKETS: readonly SeedMarket[] = [
     closeAt: '2026-12-13T14:59:59Z',
   },
   {
-    category: 'entertainment',
+    category: 'music',
     slug: 'melon-last-week-2026-domestic-no1',
     title: '12월 마지막 주 멜론 주간 차트 1위가 국내 아티스트의 곡일까?',
     description: '2026년 마지막 멜론 주간 차트 1위 곡을 예측합니다.',
@@ -424,7 +518,7 @@ const SEED_MARKETS: readonly SeedMarket[] = [
     closeAt: '2026-12-27T14:59:59Z',
   },
   {
-    category: 'culture',
+    category: 'exhibitions',
     slug: 'national-museum-2026-visitors-above-4m',
     title: '국립중앙박물관의 2026년 연간 관람객이 400만 명을 넘을까?',
     description: '국립중앙박물관의 2026년 연간 관람객 수를 예측합니다.',
@@ -437,7 +531,7 @@ const SEED_MARKETS: readonly SeedMarket[] = [
     closeAt: '2026-12-31T14:59:59Z',
   },
   {
-    category: 'culture',
+    category: 'books',
     slug: 'korea-new-books-2026-more-than-2025',
     title: '2026년 국내 신간 발행 종수가 2025년보다 많을까?',
     description: '2026년 국내 출판 신간 발행 종수를 예측합니다.',
@@ -468,7 +562,7 @@ const SEED_CLOSE_SOON_MS = SEED_CLOSE_SOON_DAYS * 24 * 60 * 60 * 1_000;
  *
  * One deliberate divergence from that path: `close_at` is an absolute instant (ADR-0027), and
  * `assertFutureCloseAt` refuses a past one on both admin routes while this writes it anyway,
- * open, so a late-run seed still gets its 12 markets. Such a market refuses every trade until
+ * open, so a late-run seed still gets its 14 markets. Such a market refuses every trade until
  * someone closes it; the loop below says so on every run.
  */
 async function seedMarkets(db: Db, adminId: string): Promise<void> {

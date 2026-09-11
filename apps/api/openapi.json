@@ -1875,7 +1875,8 @@
             "schema": {
               "type": "string",
               "minLength": 1,
-              "maxLength": 50
+              "maxLength": 50,
+              "description": "A category slug on either level; a top-level slug lists every sub-category under it"
             }
           },
           {
@@ -2276,7 +2277,7 @@
             }
           }
         },
-        "summary": "Active categories in display order",
+        "summary": "Active categories in display order: top-level rows (parentId null) first, then their sub-categories",
         "tags": [
           "markets"
         ]
@@ -5371,13 +5372,20 @@
             "type": "integer",
             "minimum": -9007199254740991,
             "maximum": 9007199254740991
+          },
+          "parentId": {
+            "nullable": true,
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
           }
         },
         "required": [
           "id",
           "slug",
           "nameKo",
-          "sortOrder"
+          "sortOrder",
+          "parentId"
         ],
         "additionalProperties": false
       },

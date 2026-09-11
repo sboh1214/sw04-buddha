@@ -124,14 +124,18 @@ export class MarketsController {
   }
 }
 
-/** `GET /categories`: the active ones, in display order. */
+/** `GET /categories`: the active ones on both levels, flat, parents first, in display order. */
 @ApiTags('markets')
 @Controller('categories')
 export class CategoriesController {
   constructor(private readonly markets: MarketService) {}
 
   @Get()
-  @ApiOperation({ operationId: 'listCategories', summary: 'Active categories in display order' })
+  @ApiOperation({
+    operationId: 'listCategories',
+    summary:
+      'Active categories in display order: top-level rows (parentId null) first, then their sub-categories',
+  })
   @ApiData(categorySchema.array())
   listCategories(): Promise<Category[]> {
     return this.markets.listCategories();

@@ -100,6 +100,8 @@ export interface CreateCategoryInput {
   nameKo?: string;
   sortOrder?: number;
   isActive?: boolean;
+  /** A sub-category names its parent; omitted (or null) makes a top-level one. */
+  parentId?: number | null;
 }
 
 export async function createCategory(db: Db, input: CreateCategoryInput = {}) {
@@ -111,6 +113,7 @@ export async function createCategory(db: Db, input: CreateCategoryInput = {}) {
       nameKo: input.nameKo ?? `카테고리 ${t}`,
       sortOrder: input.sortOrder ?? 0,
       isActive: input.isActive ?? true,
+      parentId: input.parentId ?? null,
     })
     .returning();
   return row!;

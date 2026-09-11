@@ -92,6 +92,13 @@
       "when": 1788982583933,
       "tag": "0012_global_keyset_list_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1789090715141,
+      "tag": "0013_category_parent",
+      "breakpoints": true
     }
   ]
 }

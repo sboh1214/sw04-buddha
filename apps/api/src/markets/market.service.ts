@@ -184,7 +184,7 @@ export class MarketService {
     const { cursor, limit } = query;
     const filters = [
       eq(markets.status, query.status),
-      query.category ? eq(categories.slug, query.category) : undefined,
+      query.category ? this.inCategory(query.category) : undefined,
       query.q ? ilike(markets.title, likePattern(query.q)) : undefined,
     ];
 
@@ -248,6 +248,29 @@ export class MarketService {
       })),
       nextCursor: hasMore && last ? nextCursorOf(last.market) : null,
     };
+  }
+
+  /**
+   * `?category=<slug>` on either level of the two-level tree: a top-level slug lists every
+   * market filed under any of its sub-categories (and under itself, should an admin file one
+   * there), a leaf slug lists its own. A predicate on `markets.category_id` rather than a second
+   * join on the aliased parent row, so the card query keeps the exact shape the M3 keyset tests
+   * pin and `markets_category_id_status_idx` still applies; the inner selects touch a table of
+   * ~30 rows. An unknown slug resolves to an empty set, which is the empty page it always was.
+   */
+  private inCategory(slug: string) {
+    const { markets, categories } = schema;
+    const named = this.db
+      .select({ id: categories.id })
+      .from(categories)
+      .where(eq(categories.slug, slug));
+    return inArray(
+      markets.categoryId,
+      this.db
+        .select({ id: categories.id })
+        .from(categories)
+        .where(or(eq(categories.slug, slug), inArray(categories.parentId, named))),
+    );
   }
 
   /**
@@ -689,18 +712,39 @@ export class MarketService {
     return row !== undefined;
   }
 
-  /** Active categories in display order. */
+  /**
+   * Active categories, both levels, flat: parents in display order, then their leaves in
+   * theirs — `parent_id` NULLS FIRST puts every top-level row ahead of every leaf, and the leaf
+   * order within a parent is `sort_order`. A client groups leaves under parents by `parentId`
+   * (web `groupCategories`); a leaf whose parent an admin retired is left out here rather than
+   * handed over as an orphan the tree could not place.
+   */
   async listCategories(): Promise<Category[]> {
+    const { categories } = schema;
+    const activeParents = this.db
+      .select({ id: categories.id })
+      .from(categories)
+      .where(and(eq(categories.isActive, true), sql`${categories.parentId} is null`));
     const rows = await this.db
       .select({
-        id: schema.categories.id,
-        slug: schema.categories.slug,
-        nameKo: schema.categories.nameKo,
-        sortOrder: schema.categories.sortOrder,
+        id: categories.id,
+        slug: categories.slug,
+        nameKo: categories.nameKo,
+        sortOrder: categories.sortOrder,
+        parentId: categories.parentId,
       })
-      .from(schema.categories)
-      .where(eq(schema.categories.isActive, true))
-      .orderBy(asc(schema.categories.sortOrder), asc(schema.categories.id));
+      .from(categories)
+      .where(
+        and(
+          eq(categories.isActive, true),
+          or(sql`${categories.parentId} is null`, inArray(categories.parentId, activeParents)),
+        ),
+      )
+      .orderBy(
+        sql`${categories.parentId} nulls first`,
+        asc(categories.sortOrder),
+        asc(categories.id),
+      );
     return rows;
   }
 }

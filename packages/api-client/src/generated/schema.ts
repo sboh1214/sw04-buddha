@@ -304,7 +304,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** Active categories in display order */
+        /** Active categories in display order: top-level rows (parentId null) first, then their sub-categories */
         get: operations["listCategories"];
         put?: never;
         post?: never;
@@ -762,6 +762,7 @@ export type components = {
         Category: {
             id: number;
             nameKo: string;
+            parentId: number | null;
             slug: string;
             sortOrder: number;
         };
