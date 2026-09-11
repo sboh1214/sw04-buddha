@@ -1,4 +1,4 @@
-import { Container, Heading, Stack } from '@chakra-ui/react';
+import { Container, Flex, Stack } from '@chakra-ui/react';
 import { HydrationBoundary } from '@tanstack/react-query';
 import type { Metadata } from 'next';
 import { copy } from '@/copy';
@@ -8,6 +8,7 @@ import { type MarketSearchParams, filtersFromSearchParams } from '@/lib/market-s
 import { getQueryClient } from '@/lib/query-client';
 import { MarketFilters } from './market-filters';
 import { MarketList } from './market-list';
+import { SubcategorySidebar } from './subcategory-sidebar';
 
 /**
  * Rendered per request. Next 16 only marks a scope dynamic when `cache: 'no-store'` is read off
@@ -23,7 +24,8 @@ export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: `${copy.homeTitle} | ${copy.appName}` };
 
 /**
- * PLAN 11.3 홈: 카테고리 탭 · 정렬 · 검색 · 마켓 카드 그리드.
+ * PLAN 11.3 홈 (ADR-0041, Kalshi's category page): 세부 분류 사이드바 · 제목과 정렬 · 마켓 카드 그리드.
+ * The search box and the top-level categories are the header's (nav.tsx).
  *
  * The whole screen hangs off ONE normalisation of the URL: `filtersFromSearchParams` runs here,
  * the result is the infinite query's cache key, and the same object is handed to both client
@@ -68,8 +70,9 @@ export default async function HomePage({
       // declares, and a mismatch there is a refetch of the page that is already in the payload.
       initialPageParam: undefined as string | undefined,
     }),
-    // `undefined` rather than a rejection: the tabs are a convenience, and 전체 plus the list
-    // below them still work without one. The prefetch above swallows its failure the same way.
+    // `undefined` rather than a rejection: the categories are a convenience — the headline
+    // falls back to 예측 시장, the sidebar renders nothing, and the list still works without
+    // them. The prefetch above swallows its failure the same way.
     fetchCategoriesServer().catch(() => undefined),
   ]);
 
@@ -89,17 +92,23 @@ export default async function HomePage({
   const fetchedAt = queryClient.getQueryState(marketsKey(filters))?.dataUpdatedAt ?? 0;
 
   return (
-    <Container maxW="6xl" py={{ base: '6', md: '10' }}>
-      <Stack gap="6">
-        {/* The nav owns the h1, so the page's own title is an h2 (wallet/settings do the same). */}
-        <Heading as="h2" size="2xl">
-          {copy.homeTitle}
-        </Heading>
-        <HydrationBoundary state={dehydratePublic(queryClient)}>
-          <MarketFilters filters={filters} categories={categories} />
-          <MarketList filters={filters} now={fetchedAt === 0 ? undefined : fetchedAt} />
-        </HydrationBoundary>
-      </Stack>
+    // Kalshi's content width and side padding (`--content-width` 1320px, 24px); the 24px top
+    // gap is what the sidebar's sticky offset adds to the header's height.
+    <Container maxW="1320px" px="6" pt="6" pb="10">
+      <HydrationBoundary state={dehydratePublic(queryClient)}>
+        {/* Sidebar beside the main column, both from the top. The sidebar renders nothing when
+            no category is selected and hides itself below md, so the main column takes the
+            whole width in both cases; `minW="0"` is what lets the grid inside it shrink below
+            its content instead of pushing the column out of the container. The h2 the nav's h1
+            is followed by is `MarketFilters`' headline. */}
+        <Flex align="flex-start" gap="6">
+          <SubcategorySidebar filters={filters} categories={categories} />
+          <Stack flex="1" minW="0" gap="4">
+            <MarketFilters filters={filters} categories={categories} />
+            <MarketList filters={filters} now={fetchedAt === 0 ? undefined : fetchedAt} />
+          </Stack>
+        </Flex>
+      </HydrationBoundary>
     </Container>
   );
 }

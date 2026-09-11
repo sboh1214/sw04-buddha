@@ -18,6 +18,7 @@ import {
   Stack,
   Tabs,
   Text,
+  useBreakpointValue,
 } from '@chakra-ui/react';
 import {
   type OrderSide,
@@ -53,6 +54,7 @@ import {
   formatYesPrice,
 } from '@/lib/market-admin';
 import { quoteMarketKey } from '@/lib/market-keys';
+import { HEADER_HEIGHT_PX } from '@/lib/nav';
 import {
   type TradeCta,
   type TradeInputs,
@@ -86,7 +88,10 @@ import {
  * on rotation; two renderers of one state cost a `testIdPrefix` and nothing else. The split is
  * CSS (`hideBelow`/`hideFrom`), never `useBreakpointValue`: that hook answers `T | undefined` on
  * the first client render (`ssr: true, fallback: 'base'`), which flashes exactly the bar AC 5
- * measures at 375px.
+ * measures at 375px. The ONE breakpoint read in this file (`useTradePanel`, the sheet's initial
+ * state) is the opposite way round — it decides whether to OPEN the sheet for a `?outcome=`
+ * entry, falls back to "not phone" so the first render opens nothing anywhere, and never touches
+ * what the bar or the card render.
  *
  * Nothing here decides anything. The phase, the button, the summary numbers, the refusal text and
  * the slippage guard all come from `lib/trade-panel.ts` and `@buddha/shared`, because this file
@@ -136,9 +141,38 @@ interface TradePanelState {
   press: () => void;
 }
 
-function useTradePanel(market: Market, windowEnd: number | undefined): TradePanelState {
-  const [inputs, setInputs] = useState<TradeInputs>(INITIAL_TRADE_INPUTS);
-  const [sheetOpen, setSheetOpen] = useState(false);
+function useTradePanel(
+  market: Market,
+  windowEnd: number | undefined,
+  initialOutcome: Outcome | undefined,
+): TradePanelState {
+  // The first render's outcome comes from the URL a card's pill wrote (`?outcome=`), parsed on
+  // the server (page.tsx); the initialiser form so a later change to the prop — there is none,
+  // but a `useState(value)` would silently ignore one anyway — is not mistaken for state.
+  const [inputs, setInputs] = useState<TradeInputs>(() =>
+    initialOutcome === undefined
+      ? INITIAL_TRADE_INPUTS
+      : setOutcome(INITIAL_TRADE_INPUTS, initialOutcome),
+  );
+  /**
+   * Whether the visitor has opened or closed the sheet themselves; `undefined` until they have.
+   * Until then the sheet follows the URL: a phone that arrived through a card's pill
+   * (`?outcome=`) opens on that outcome's sheet, because below md the inline form the outcome
+   * was written into is `display: none` and the only trace of the choice would otherwise be
+   * inside a sheet the visitor still had to open — by tapping 예/아니오 again, which overwrites
+   * the very choice they came in with. On a desktop the inline form shows it and no sheet opens.
+   *
+   * The phone/desktop question is asked with `fallback: 'md'`: the server and the first client
+   * render answer "not a phone", so nothing opens before the real breakpoint is known and a
+   * desktop never sees the sheet flash; a phone opens it one render after hydration, from the
+   * hook's own effect, which is the same moment `initialFocusEl` puts the caret in the amount.
+   * Rotating a phone to a desktop width while the sheet is auto-open closes it — the inline
+   * form takes over, holding the same state — which is the right answer, not a bug. The comment
+   * at the top of the file explains why THIS is the only breakpoint read here.
+   */
+  const [sheetChoice, setSheetChoice] = useState<boolean | undefined>(undefined);
+  const onPhone = useBreakpointValue({ base: true, md: false }, { fallback: 'md' }) ?? false;
+  const sheetOpen = sheetChoice ?? (initialOutcome !== undefined && onPhone);
   const [reconfirmFrom, setReconfirmFrom] = useState<bigint | undefined>(undefined);
 
   const queryClient = useQueryClient();
@@ -266,7 +300,7 @@ function useTradePanel(market: Market, windowEnd: number | undefined): TradePane
       type: 'success',
       title: result.order.side === 'buy' ? copy.tradeBought : copy.tradeSold,
     });
-    setSheetOpen(false);
+    setSheetChoice(false);
     // The amount that was just spent is not a proposal for the next trade: left in the field it
     // would keep a quote running for P the balance no longer holds, one tap from a second order.
     setInputs((current) => setValue(current, ''));
@@ -423,10 +457,10 @@ function useTradePanel(market: Market, windowEnd: number | undefined): TradePane
     },
     openSheet: (outcome) => {
       change((current) => setOutcome(current, outcome));
-      setSheetOpen(true);
+      setSheetChoice(true);
     },
     closeSheet: () => {
-      setSheetOpen(false);
+      setSheetChoice(false);
     },
     press,
   };
@@ -443,6 +477,12 @@ export interface TradePanelProps {
    * ticks read failed, and then the panel falls back to the cache stamp (`panelAnchor`).
    */
   now?: number;
+  /**
+   * The outcome the panel opens on, from a card's pill (`?outcome=`, ADR-0041): the pill named
+   * "아니오 37%" opens the panel on 아니오, the way Kalshi's tile opens the trade for the outcome
+   * clicked. Absent, 예 — the default the panel has always had.
+   */
+  initialOutcome?: Outcome;
 }
 
 /**
@@ -451,15 +491,24 @@ export interface TradePanelProps {
  * `position: fixed`, so it leaves the column and takes the mobile tab bar's place on this route —
  * the page container owes it a bottom padding.
  */
-export function TradePanel({ market, now }: TradePanelProps) {
-  const panel = useTradePanel(market, now);
+export function TradePanel({ market, now, initialOutcome }: TradePanelProps) {
+  const panel = useTradePanel(market, now, initialOutcome);
   // Only the sheet's field takes the ref: at < md the inline card is still mounted behind
   // `display: none`, and focusing a hidden input does nothing.
   const sheetAmountRef = useRef<HTMLInputElement>(null);
 
   return (
     <>
-      <Box hideBelow="md" position="sticky" top="4" alignSelf="start">
+      {/* Sticky UNDER the two-row header, not at the viewport's top: the header is sticky too
+          and paints above this column, so a `top` smaller than its height would pin the panel's
+          예/아니오 buttons behind it. `HEADER_HEIGHT_PX` is the same number the home screen's
+          sidebar offsets against; the 16px is this panel's own breathing room. */}
+      <Box
+        hideBelow="md"
+        position="sticky"
+        top={`calc(${String(HEADER_HEIGHT_PX)}px + 16px)`}
+        alignSelf="start"
+      >
         <Card.Root>
           <Card.Body>
             <TradePanelView panel={panel} testIdPrefix="trade" />

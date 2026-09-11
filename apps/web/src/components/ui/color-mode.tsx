@@ -26,12 +26,28 @@ export function useColorModeValue<T>(light: T, dark: T) {
   return colorMode === 'dark' ? dark : light;
 }
 
-/** Light/dark toggle. Client-only because the resolved theme is unknown during SSR. */
+/**
+ * Light/dark toggle. Client-only because the resolved theme is unknown during SSR.
+ *
+ * A ghost pill, 36px tall like the header's primary items (ADR-0041): it sits in row 1 between
+ * the search field and the auth buttons, and an outlined button there would read as a fourth
+ * auth control. `fg` and the `surface.hover` wash rather than the ghost variant's brand green
+ * and green tint, so it takes the same hover as the pills beside it.
+ */
 export function ColorModeButton(props: ButtonProps) {
   const { colorMode, toggleColorMode } = useColorMode();
   return (
-    <ClientOnly fallback={<Skeleton width="24" height="9" />}>
-      <Button variant="outline" size="sm" onClick={toggleColorMode} {...props}>
+    <ClientOnly fallback={<Skeleton width="24" height="9" borderRadius="pill" />}>
+      <Button
+        variant="ghost"
+        size="sm"
+        h="36px"
+        borderRadius="pill"
+        color="fg"
+        _hover={{ bg: 'surface.hover' }}
+        onClick={toggleColorMode}
+        {...props}
+      >
         {colorMode === 'dark' ? copy.lightMode : copy.darkMode}
       </Button>
     </ClientOnly>

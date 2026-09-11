@@ -2,7 +2,12 @@ import { QueryClient, dehydrate, hashKey } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 import { type Market, type PriceSeries } from './api';
 import { DEFAULT_MARKET_FILTERS, dehydratePublic, marketsKey } from './market-keys';
-import { detailWindowEnd, filtersFromSearchParams, seedMarketDetail } from './market-ssr';
+import {
+  detailWindowEnd,
+  filtersFromSearchParams,
+  outcomeFromSearchParams,
+  seedMarketDetail,
+} from './market-ssr';
 
 const MARKET_ID = '1f2e3d4c-0000-4000-8000-000000000000';
 
@@ -177,5 +182,22 @@ describe('filtersFromSearchParams', () => {
     const a = filtersFromSearchParams({ q: 'snow', status: 'open', sort: 'volume' });
     const b = filtersFromSearchParams({ sort: 'volume', q: 'snow', status: 'open' });
     expect(hashKey(marketsKey(a))).toBe(hashKey(marketsKey(b)));
+  });
+});
+
+describe('outcomeFromSearchParams', () => {
+  it('reads the API spelling and nothing else', () => {
+    expect(outcomeFromSearchParams({ outcome: 'YES' })).toBe('YES');
+    expect(outcomeFromSearchParams({ outcome: 'NO' })).toBe('NO');
+    // Not case-folded: `outcomeSchema` is the contract, and a lower-case value is not in it.
+    expect(outcomeFromSearchParams({ outcome: 'yes' })).toBeUndefined();
+    expect(outcomeFromSearchParams({ outcome: 'maybe' })).toBeUndefined();
+    expect(outcomeFromSearchParams({ outcome: '' })).toBeUndefined();
+    expect(outcomeFromSearchParams({})).toBeUndefined();
+  });
+
+  it('takes the first value of a repeated param, like the home filters', () => {
+    expect(outcomeFromSearchParams({ outcome: ['NO', 'YES'] })).toBe('NO');
+    expect(outcomeFromSearchParams({ outcome: [] })).toBeUndefined();
   });
 });

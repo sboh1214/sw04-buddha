@@ -12,10 +12,24 @@ describe('enums', () => {
   });
 
   it('never contains sports or election categories (PLAN 0.2)', () => {
-    for (const slug of enums.CATEGORY_SLUGS) {
+    for (const slug of enums.ALL_CATEGORY_SLUGS) {
       expect(slug).not.toMatch(/sport|election|politic/i);
     }
     expect(enums.CATEGORY_SLUGS).toHaveLength(5);
+  });
+
+  it('keeps the category tree two levels deep with slugs unique across both', () => {
+    // `?category=<slug>` names one row without saying its level, so a leaf may not reuse a
+    // top-level slug, and every top-level slug has at least one leaf to file a market under.
+    expect(Object.keys(enums.SUBCATEGORY_SLUGS).sort()).toEqual([...enums.CATEGORY_SLUGS].sort());
+    for (const parent of enums.CATEGORY_SLUGS) {
+      expect(enums.SUBCATEGORY_SLUGS[parent].length).toBeGreaterThan(0);
+    }
+    expect(new Set(enums.ALL_CATEGORY_SLUGS).size).toBe(enums.ALL_CATEGORY_SLUGS.length);
+    // `categories.slug` is varchar(32) and the seed writes these verbatim.
+    for (const slug of enums.ALL_CATEGORY_SLUGS) {
+      expect(slug).toMatch(/^[a-z][a-z0-9-]{1,31}$/);
+    }
   });
 
   it('orders MARKET_STATUSES so a client can rank two market:status events (A-M3-19)', () => {

@@ -12,7 +12,8 @@ import {
   Tag,
   Text,
 } from '@chakra-ui/react';
-import { type MarketStatus, formatP, parsePAmount } from '@buddha/shared';
+import { type MarketStatus, type Outcome, formatP, parsePAmount } from '@buddha/shared';
+import NextLink from 'next/link';
 import { type ReactNode } from 'react';
 import { CountdownBadge } from '@/components/market/countdown-badge';
 import { DisputeSection } from '@/components/market/dispute-section';
@@ -22,8 +23,9 @@ import { ProbabilityDisplay } from '@/components/market/probability-display';
 import { RecentFills } from '@/components/market/recent-fills';
 import { copy } from '@/copy';
 import { useMarketSocket } from '@/hooks/use-market-socket';
-import { useMarket, useMarketTicks } from '@/hooks/use-markets';
+import { useCategories, useMarket, useMarketTicks } from '@/hooks/use-markets';
 import { type Market } from '@/lib/api';
+import { CATEGORY_TRAIL_SEPARATOR, categoryBreadcrumb } from '@/lib/category-label';
 import { formatKst } from '@/lib/datetime';
 import { disputeDeadlineShown } from '@/lib/dispute';
 import { MARKET_STATUS_LABEL, MARKET_STATUS_PALETTE } from '@/lib/market-admin';
@@ -87,6 +89,11 @@ export interface MarketDetailProps {
    */
   now?: number;
   /**
+   * The side the trade panel opens on, from the URL's `?outcome=` — a card's pill asks for the
+   * outcome it names (ADR-0041). Absent, the panel starts on 예 as it always has.
+   */
+  initialOutcome?: Outcome;
+  /**
    * 정산 기준, rendered by the SERVER component and passed through. It sits in the left column
    * for reading order, but it is never rendered by this file, so no branch of the ladder below
    * — and no hydration failure — can take it out of the HTML that AC 2 reads.
@@ -94,7 +101,7 @@ export interface MarketDetailProps {
   children: ReactNode;
 }
 
-export function MarketDetail({ marketId, now, children }: MarketDetailProps) {
+export function MarketDetail({ marketId, now, initialOutcome, children }: MarketDetailProps) {
   useMarketSocket([marketId]);
   const market = useMarket(marketId);
   // The same seeded series the chart draws (one key, one query, no second request). It is read
@@ -181,7 +188,9 @@ export function MarketDetail({ marketId, now, children }: MarketDetailProps) {
       {/* Mounted ONCE. It emits three siblings — the sticky card that is this grid item, the
           fixed mobile bar and its portalled sheet — and the last two are out of flow, so
           neither claims a grid track. */}
-      {data === undefined ? null : <TradePanel market={data} now={now} />}
+      {data === undefined ? null : (
+        <TradePanel market={data} now={now} initialOutcome={initialOutcome} />
+      )}
     </Grid>
   );
 }
@@ -196,6 +205,19 @@ export function MarketDetail({ marketId, now, children }: MarketDetailProps) {
  * disagree for an open market whose close time has passed (진행 중 + 마감됨), and that is the
  * truth: the close job has not run yet, so the row is still `open` while trading is already
  * refused (A-M3-31) — the panel below says the same thing in its own words.
+ *
+ * The category tag writes the whole trail, 경제 › 주택, rather than the leaf alone (ADR-0041's
+ * two-level tree): the row only carries the leaf's `{slug, nameKo}`, so the parent's name is
+ * read off the `['categories']` query — the one the header's `Nav` already holds, so this is a
+ * second observer of a query in flight, never a second request. Until it resolves (the server
+ * render, the first client paint) `categoryBreadcrumb` answers the leaf name the row carries,
+ * i.e. exactly what this tag said before the tree existed, so the HTML and the hydrating render
+ * agree and nothing waits on the query. The tag is also the way back to that leaf's list, as
+ * the card's category header is: `prefetch={false}` because `/` is force-dynamic and a
+ * prefetch there is a whole filtered list rendered for a link that may never be clicked — the
+ * rule every link into `/` in this app follows (the header's search form, the category rows).
+ * A UrlObject rather than a template literal, so `href` takes it without a `Route` cast and
+ * Next encodes the slug.
  */
 function MarketHeader({
   market,
@@ -207,11 +229,23 @@ function MarketHeader({
   /** The last move and its monotone identity, read off ONE point — see `recentMove`. */
   move: RecentMove | null;
 }) {
+  const categories = useCategories();
+  const trail = categoryBreadcrumb(
+    categories.data,
+    market.category.slug,
+    market.category.nameKo,
+  ).join(CATEGORY_TRAIL_SEPARATOR);
   return (
     <Stack gap="3">
       <HStack gap="2" flexWrap="wrap">
-        <Tag.Root size="sm" variant="surface">
-          <Tag.Label>{market.category.nameKo}</Tag.Label>
+        <Tag.Root size="sm" variant="surface" asChild>
+          <NextLink
+            href={{ pathname: '/', query: { category: market.category.slug } }}
+            prefetch={false}
+            data-testid="market-detail-category"
+          >
+            <Tag.Label>{trail}</Tag.Label>
+          </NextLink>
         </Tag.Root>
         <Badge
           colorPalette={MARKET_STATUS_PALETTE[market.status]}

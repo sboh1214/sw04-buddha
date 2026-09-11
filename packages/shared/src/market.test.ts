@@ -125,14 +125,24 @@ const position = {
 
 describe('read DTOs', () => {
   it('parse the shapes the API maps rows into', () => {
-    expect(categorySchema.parse({ id: 1, slug: 'economy', nameKo: '경제', sortOrder: 10 })).toEqual(
-      {
+    expect(
+      categorySchema.parse({
         id: 1,
         slug: 'economy',
         nameKo: '경제',
         sortOrder: 10,
-      },
-    );
+        parentId: null,
+      }),
+    ).toEqual({ id: 1, slug: 'economy', nameKo: '경제', sortOrder: 10, parentId: null });
+    // A sub-category names its parent; the field is required, never defaulted, so a row that
+    // forgot it fails loudly rather than being filed at the top level.
+    expect(
+      categorySchema.parse({ id: 2, slug: 'housing', nameKo: '주택', sortOrder: 10, parentId: 1 })
+        .parentId,
+    ).toBe(1);
+    expect(
+      categorySchema.safeParse({ id: 2, slug: 'housing', nameKo: '주택', sortOrder: 10 }).success,
+    ).toBe(false);
     expect(marketSummarySchema.parse(summary)).toEqual(summary);
     expect(marketSchema.parse(market)).toEqual(market);
     expect(orderSchema.parse(order)).toEqual(order);

@@ -67,12 +67,21 @@ const boundedPAmount = (min: bigint) =>
   );
 
 // ---- categories ---------------------------------------------------------------------
+/**
+ * One row of the two-level tree `GET /categories` returns flat: a top-level category carries
+ * `parentId: null`, a sub-category carries its parent's `id`. Flat rather than nested so the
+ * shape is one object whatever the level and a client that only wants the leaves (the admin's
+ * category select, a card's label) does not have to walk anything; `groupCategories` on the web
+ * side builds the tree once. `sortOrder` orders siblings; the parent's order places the group.
+ */
 export const categorySchema = z
   .object({
     id: z.number().int(),
     slug: z.string(),
     nameKo: z.string(),
     sortOrder: z.number().int(),
+    /** `null` for a top-level category; a sub-category names its parent's `id`. */
+    parentId: z.number().int().nullable(),
   })
   .meta({ id: 'Category' });
 export type Category = z.infer<typeof categorySchema>;
@@ -165,8 +174,14 @@ export const marketSortSchema = z.enum(MARKET_SORTS);
 
 /** `GET /markets` (no `.meta`: query DTO). */
 export const marketListQuerySchema = cursorQuerySchema.extend({
-  /** Category slug. */
-  category: z.string().trim().min(1).max(50).optional(),
+  /** A category slug on either level: a top-level slug lists every sub-category under it. */
+  category: z
+    .string()
+    .trim()
+    .min(1)
+    .max(50)
+    .describe('A category slug on either level; a top-level slug lists every sub-category under it')
+    .optional(),
   status: publicMarketStatusSchema.default('open'),
   sort: marketSortSchema.default('volume'),
   /** Title search. */

@@ -153,7 +153,7 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | GET | `/api/v1/markets/{idOrSlug}` | One market by id or slug (a draft is NOT_FOUND to the public) | — | `VALIDATION_ERROR`, `NOT_FOUND`, `RATE_LIMITED` |
 | GET | `/api/v1/markets/{id}/fills` | Newest 20 fills, anonymous | — | `VALIDATION_ERROR`, `NOT_FOUND`, `RATE_LIMITED` |
 | GET | `/api/v1/markets/{id}/ticks` | Price series, ascending, at most 500 points. `raw` returns stored ticks, downsampled from the newest 10000 of the range (`truncated` says when older ones were left out). `1m`/`1h` sample the probability in force on an absolute grid, coarsening the stride until the window fits; `bucketSeconds` reports the stride served, and the point at `from` carries the last value at or before it, so the left edge is never empty. | — | `VALIDATION_ERROR`, `NOT_FOUND`, `RATE_LIMITED` |
-| GET | `/api/v1/categories` | Active categories in display order | — | `RATE_LIMITED` |
+| GET | `/api/v1/categories` | Active categories in display order: top-level rows (parentId null) first, then their sub-categories | — | `RATE_LIMITED` |
 | POST | `/api/v1/quotes` | Price a buy or sell (mode shares) or the contracts a budget buys (mode spend, buy only) | — | `VALIDATION_ERROR`, `NOT_FOUND`, `MARKET_NOT_OPEN`, `MARKET_CLOSED`, `RATE_LIMITED` |
 
 ### `trades` — 거래·포지션

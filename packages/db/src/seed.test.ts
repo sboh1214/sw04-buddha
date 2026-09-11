@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { SIGNUP_BONUS_P, maxLossP } from '@buddha/shared';
+import { ALL_CATEGORY_SLUGS, CATEGORY_SLUGS, SIGNUP_BONUS_P, maxLossP } from '@buddha/shared';
 import { and, asc, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -89,22 +89,43 @@ ${result.stderr}`);
   return { stdout: result.stdout, stderr: result.stderr };
 }
 
-/** M3 design 2 / PLAN 13 M3: 12 open markets, 2-3 per category. */
+/**
+ * M3 design 2 / PLAN 13 M3: 12 open markets, 2-3 per top-level category — plus the two the
+ * second level added (주택, 일자리), so 14. Keyed by the LEAF each market is filed under; the
+ * parent is checked separately below, through the row's `parent_id`.
+ */
 const EXPECTED_MARKETS: Record<string, string[]> = {
-  economy: [
-    'bok-october-rate-cut-2026',
-    'cpi-september-2026-above-2pct',
-    'krw-usd-yearend-2026-above-1400',
-  ],
-  weather: [
-    'seoul-first-snow-before-nov-20-2026',
-    'seoul-october-2026-rain-above-50mm',
-    'seoul-november-2026-below-minus-5',
-  ],
-  tech: ['korea-telco-6g-trial-2026', 'samsung-trifold-korea-launch-2026'],
-  entertainment: ['november-2026-korean-film-3m-in-2-weeks', 'melon-last-week-2026-domestic-no1'],
-  culture: ['national-museum-2026-visitors-above-4m', 'korea-new-books-2026-more-than-2025'],
+  rates: ['bok-october-rate-cut-2026'],
+  prices: ['cpi-september-2026-above-2pct'],
+  fx: ['krw-usd-yearend-2026-above-1400'],
+  housing: ['seoul-apartment-price-november-2026-up'],
+  jobs: ['unemployment-october-2026-below-3pct'],
+  rain: ['seoul-first-snow-before-nov-20-2026', 'seoul-october-2026-rain-above-50mm'],
+  temperature: ['seoul-november-2026-below-minus-5'],
+  devices: ['korea-telco-6g-trial-2026', 'samsung-trifold-korea-launch-2026'],
+  movies: ['november-2026-korean-film-3m-in-2-weeks'],
+  music: ['melon-last-week-2026-domestic-no1'],
+  exhibitions: ['national-museum-2026-visitors-above-4m'],
+  books: ['korea-new-books-2026-more-than-2025'],
 };
+
+/** Which top-level category each leaf above hangs under (shared `SUBCATEGORY_SLUGS`). */
+const EXPECTED_PARENT: Record<string, string> = {
+  rates: 'economy',
+  prices: 'economy',
+  fx: 'economy',
+  housing: 'economy',
+  jobs: 'economy',
+  rain: 'weather',
+  temperature: 'weather',
+  devices: 'tech',
+  movies: 'entertainment',
+  music: 'entertainment',
+  exhibitions: 'culture',
+  books: 'culture',
+};
+
+const SEED_MARKET_COUNT = 14;
 
 /**
  * Absolute close instants (UTC): each sits at or before its rule's own cutoff, so trading
@@ -124,6 +145,8 @@ const EXPECTED_CLOSE_AT: Record<string, string> = {
   'melon-last-week-2026-domestic-no1': '2026-12-27T14:59:59.000Z',
   'national-museum-2026-visitors-above-4m': '2026-12-31T14:59:59.000Z',
   'korea-new-books-2026-more-than-2025': '2026-12-31T14:59:59.000Z',
+  'seoul-apartment-price-november-2026-up': '2026-11-30T14:59:59.000Z',
+  'unemployment-october-2026-below-3pct': '2026-10-31T14:59:59.000Z',
 };
 
 /** The same CLI, not awaited: for running two seeds at once. Rejects on a non-zero exit. */
@@ -278,7 +301,7 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
       return { rows, ticks, events };
     }
 
-    it('creates the 12 open markets with their open tick and created/opened events', async () => {
+    it('creates the 14 open markets with their open tick and created/opened events', async () => {
       // Both ends read from the database, like the instants they bound: a runner-clock window
       // would be the very comparison this seed stopped making (ADR-0027, A-M3-30).
       const before = await dbNow();
@@ -287,10 +310,24 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
       const { id: adminId } = await adminState();
       const { rows, ticks, events } = await marketState();
 
-      expect(rows).toHaveLength(12);
+      expect(rows).toHaveLength(SEED_MARKET_COUNT);
       const bySlug = Object.groupBy(rows, (row) => row.category);
       for (const [category, slugs] of Object.entries(EXPECTED_MARKETS)) {
         expect(bySlug[category]?.map((row) => row.slug).sort()).toEqual([...slugs].sort());
+      }
+      // Every market sits on a LEAF whose parent is the top-level category M3 filed it under:
+      // the second level reorganised the tree without moving a market across parents.
+      const parentOf = new Map<string, string | null>();
+      const categoryRows = await t.db.select().from(categories);
+      const byId = new Map(categoryRows.map((row) => [row.id, row]));
+      for (const row of categoryRows) {
+        parentOf.set(
+          row.slug,
+          row.parentId === null ? null : (byId.get(row.parentId)?.slug ?? null),
+        );
+      }
+      for (const [leaf, parent] of Object.entries(EXPECTED_PARENT)) {
+        expect(parentOf.get(leaf), leaf).toBe(parent);
       }
       for (const row of rows) {
         expect(row.status).toBe('open');
@@ -319,8 +356,8 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
           expect(event.payload).toEqual({ source: 'seed' });
         }
       }
-      expect(ticks).toHaveLength(12);
-      expect(events).toHaveLength(24);
+      expect(ticks).toHaveLength(SEED_MARKET_COUNT);
+      expect(events).toHaveLength(SEED_MARKET_COUNT * 2);
     });
 
     it('takes the market instants from the database, not from the runner (ADR-0027)', async () => {
@@ -333,7 +370,7 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
       const after = await dbNow();
       const { rows, ticks } = await marketState();
 
-      expect(rows).toHaveLength(12);
+      expect(rows).toHaveLength(SEED_MARKET_COUNT);
       for (const row of rows) {
         expect(row.openAt!.getTime()).toBeLessThanOrEqual(after);
         expect(row.openAt!.getTime()).toBeGreaterThanOrEqual(row.createdAt.getTime());
@@ -361,9 +398,9 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
         .where(eq(markets.slug, slug));
 
       const { stdout, stderr } = runSeedIo();
-      expect(stdout).toContain('markets: 0 inserted, 12 already existed');
+      expect(stdout).toContain('markets: 0 inserted, 14 already existed');
       // Judged on THIS slug's own line, not on how many lines carry the wording: the other
-      // eleven cutoffs are absolute 2026 dates that pass on their own as the calendar advances
+      // cutoffs are absolute 2026 dates that pass on their own as the calendar advances
       // (the earliest, bok-october-rate-cut-2026, on 2026-10-21), and from then on the second
       // run legitimately reports them too. A market gets at most one line (seed.ts's
       // if / else if), so exactly one line names it.
@@ -404,7 +441,7 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
         .where(eq(markets.slug, slug));
 
       const { stderr } = runSeedIo();
-      // This slug's line only, for BOTH wordings: the other eleven cutoffs are absolute dates in
+      // This slug's line only, for BOTH wordings: the other cutoffs are absolute dates in
       // 2026, so as the calendar advances they enter the same window and then pass, each on its
       // own — a count of either wording across the whole stream would be a test that fails on
       // a date rather than on a change. What this pins is that the market THIS case moved is
@@ -421,7 +458,7 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
       const first = await marketState();
       const output = runSeed();
       expect(output).toContain('already exists');
-      expect(output).toContain('markets: 0 inserted, 12 already existed');
+      expect(output).toContain('markets: 0 inserted, 14 already existed');
       expect(await marketState()).toEqual(first);
     });
 
@@ -443,7 +480,10 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
       expect(output).toContain('admin skipped');
       expect(output).toContain('markets skipped (no admin)');
       expect(await t.db.select().from(markets)).toHaveLength(0);
-      expect(await t.db.select().from(categories)).toHaveLength(5);
+      // The tree needs no admin: five top-level rows and every leaf under them.
+      const categoryRows = await t.db.select().from(categories);
+      expect(categoryRows.filter((row) => row.parentId === null)).toHaveLength(5);
+      expect(categoryRows).toHaveLength(5 + ALL_CATEGORY_SLUGS.length - CATEGORY_SLUGS.length);
     });
   });
 
@@ -478,9 +518,9 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
     expect(await t.db.select().from(chargePackages)).toHaveLength(5);
     expect(await t.db.select().from(user).where(eq(user.email, ADMIN_EMAIL))).toHaveLength(1);
     expect(await adminState()).toMatchObject({ role: 'admin' });
-    // Each market is a check-then-insert under the same lock: 12, not 24, and one tick each.
-    expect(await t.db.select().from(markets)).toHaveLength(12);
-    expect(await t.db.select().from(priceTicks)).toHaveLength(12);
-    expect(await t.db.select().from(marketEvents)).toHaveLength(24);
+    // Each market is a check-then-insert under the same lock: 14, not 28, and one tick each.
+    expect(await t.db.select().from(markets)).toHaveLength(SEED_MARKET_COUNT);
+    expect(await t.db.select().from(priceTicks)).toHaveLength(SEED_MARKET_COUNT);
+    expect(await t.db.select().from(marketEvents)).toHaveLength(SEED_MARKET_COUNT * 2);
   }, 60_000);
 });

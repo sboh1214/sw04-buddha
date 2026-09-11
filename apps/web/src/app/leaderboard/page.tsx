@@ -24,15 +24,20 @@ export const metadata: Metadata = { title: `${copy.leaderboardTitle} | ${copy.ap
  * `['leaderboard']` because the board holds nothing session-scoped, so the first paint carries
  * the table rather than a skeleton. The prefetch swallows its own failure — an API that is down
  * degrades to the client's error state instead of a 500 on a public page.
+ *
+ * The chrome is the home page's (ADR-0041, Kalshi's `--content-width`): a 1320px container with
+ * 24px side padding and the 30px `headline`, so 시장 → 랭킹 in the header's first row does not
+ * make the page jump between two widths. Only the chrome: the board below is untouched, and so
+ * are its test ids.
  */
 export default async function LeaderboardPage() {
   const queryClient = getQueryClient();
   await queryClient.prefetchQuery({ queryKey: LEADERBOARD_KEY, queryFn: fetchLeaderboardServer });
 
   return (
-    <Container maxW="3xl" py={{ base: '6', md: '10' }}>
+    <Container maxW="1320px" px="6" py={{ base: '6', md: '10' }}>
       <Stack gap="6">
-        <Heading as="h2" size="2xl">
+        <Heading as="h2" textStyle="headline">
           {copy.leaderboardTitle}
         </Heading>
         <HydrationBoundary state={dehydratePublic(queryClient)}>

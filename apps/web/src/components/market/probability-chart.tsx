@@ -195,11 +195,11 @@ export function ProbabilityChart({
               position="relative"
               h={{ base: '32', md: '56' }}
               colorPalette="brand"
-              // `fg` is the token whose contract is "legible ON the page" — 7.90:1 light and
-              // 9.98:1 dark against `bg` — which is what a stroke that is also drawn as the
+              // `fg` is the token whose contract is "legible ON the page" — 5.80:1 light and
+              // 11.09:1 dark against `bg` — which is what a stroke that is also drawn as the
               // marker dot needs. `solid` is tuned against the label that sits on IT instead
               // (theme/system.ts), so it tracks a different background: it happens to resolve to
-              // the same indigo.700 in light mode and is 6.67:1 against the page in dark.
+              // the same brand.700 in light mode and is 9.48:1 against the page in dark.
               color="colorPalette.fg"
               tabIndex={0}
               aria-describedby={readoutId}

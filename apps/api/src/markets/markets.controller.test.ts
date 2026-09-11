@@ -11,6 +11,7 @@ import {
   SPARKLINE_MAX_POINTS,
   TICKS_MAX_POINTS,
   TICKS_SCAN_MAX,
+  type Category,
   type Fill,
   type Market,
   type MarketListItem,
@@ -202,6 +203,32 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     const byCategory = (await get('/api/v1/markets?category=weather')).json<ListPage>();
     expect(byCategory.data.map((row) => row.id)).toEqual([rain.id]);
     expect((await get('/api/v1/markets?category=nope')).json<ListPage>().data).toHaveLength(0);
+
+    // Two levels: a top-level slug lists what is filed under its leaves as well as under
+    // itself; a leaf slug lists its own only; a sibling leaf sees none of it.
+    const temperature = await createCategory(t.db, {
+      slug: 'temperature',
+      nameKo: '기온',
+      parentId: weather.id,
+    });
+    const typhoons = await createCategory(t.db, {
+      slug: 'typhoons',
+      nameKo: '태풍',
+      parentId: weather.id,
+    });
+    const cold = await market({ title: '11월 서울 영하 5도?', categoryId: temperature.id });
+    const list = (category: string) =>
+      get(`/api/v1/markets?category=${category}`).then((res) =>
+        res.json<ListPage>().data.map((row) => row.id),
+      );
+    expect((await list('weather')).sort()).toEqual([rain.id, cold.id].sort());
+    expect(await list('temperature')).toEqual([cold.id]);
+    expect(await list(typhoons.slug)).toEqual([]);
+    // The card names the leaf, which is what its header links back to.
+    expect(byCategory.data[0]?.category).toEqual({ slug: 'weather', nameKo: '날씨' });
+    expect(
+      (await get('/api/v1/markets?category=temperature')).json<ListPage>().data[0]?.category,
+    ).toEqual({ slug: 'temperature', nameKo: '기온' });
 
     const search = (q: string) =>
       get(`/api/v1/markets?q=${encodeURIComponent(q)}`).then((res) => res.json<ListPage>().data);
@@ -929,15 +956,52 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     for (const row of adminItems) expect(row).not.toHaveProperty('sparkline');
   });
 
-  it('lists active categories in display order', async () => {
-    await createCategory(t.db, { slug: 'tech', nameKo: '기술', sortOrder: 5 });
-    await createCategory(t.db, { slug: 'weather', nameKo: '날씨', sortOrder: 1 });
-    await createCategory(t.db, { slug: 'retired', nameKo: '은퇴', sortOrder: 0, isActive: false });
+  it('lists active categories in display order, parents before leaves', async () => {
+    const tech = await createCategory(t.db, { slug: 'tech', nameKo: '기술', sortOrder: 5 });
+    const weather = await createCategory(t.db, { slug: 'weather', nameKo: '날씨', sortOrder: 1 });
+    const retired = await createCategory(t.db, {
+      slug: 'retired',
+      nameKo: '은퇴',
+      sortOrder: 0,
+      isActive: false,
+    });
+    // Leaves: sorted within their parent by sort_order, whatever the parents' order; one
+    // retired leaf and one leaf under a retired parent both stay out of the answer.
+    await createCategory(t.db, { slug: 'ai', nameKo: 'AI', sortOrder: 20, parentId: tech.id });
+    await createCategory(t.db, { slug: 'space', nameKo: '우주', sortOrder: 10, parentId: tech.id });
+    await createCategory(t.db, {
+      slug: 'rain',
+      nameKo: '강수',
+      sortOrder: 10,
+      parentId: weather.id,
+    });
+    await createCategory(t.db, {
+      slug: 'fog',
+      nameKo: '안개',
+      sortOrder: 5,
+      parentId: weather.id,
+      isActive: false,
+    });
+    await createCategory(t.db, {
+      slug: 'orphan',
+      nameKo: '고아',
+      sortOrder: 0,
+      parentId: retired.id,
+    });
 
     const res = await get('/api/v1/categories');
     expect(res.statusCode).toBe(200);
-    const data = res.json<{ data: { slug: string; nameKo: string; sortOrder: number }[] }>().data;
-    expect(data.map((row) => row.slug)).toEqual(['economy', 'weather', 'tech']);
-    expect(data[1]).toMatchObject({ nameKo: '날씨', sortOrder: 1 });
+    const data = res.json<{ data: Category[] }>().data;
+    expect(data.map((row) => row.slug)).toEqual([
+      'economy',
+      'weather',
+      'tech',
+      'space',
+      'ai',
+      'rain',
+    ]);
+    expect(data[1]).toMatchObject({ nameKo: '날씨', sortOrder: 1, parentId: null });
+    expect(data.find((row) => row.slug === 'rain')).toMatchObject({ parentId: weather.id });
+    expect(data.find((row) => row.slug === 'space')).toMatchObject({ parentId: tech.id });
   });
 });

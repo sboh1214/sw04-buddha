@@ -27,16 +27,30 @@ export function AuthButtons() {
   const queryClient = useQueryClient();
 
   if (isPending) {
-    return <Skeleton width="28" height="9" />;
+    // 40px tall: the height of the pair it stands in for, so the header does not move when
+    // the session resolves.
+    return <Skeleton width="28" height="10" borderRadius="pill" />;
   }
 
   if (!isLoggedIn) {
+    // Kalshi's pair (ADR-0041): 로그인 an outline pill on the neutral `border.emphasized` stroke
+    // with the brand green as its text, 가입하기 the solid brand pill. Both 40px tall and both
+    // `emphasisSm`, so the two read as one control at two weights rather than two controls.
     return (
       <HStack gap="2">
-        <Button asChild variant="ghost" size="sm">
+        <Button
+          asChild
+          variant="outline"
+          h="40px"
+          px="3"
+          borderRadius="pill"
+          borderColor="border.emphasized"
+          color="brand.fg"
+          textStyle="emphasisSm"
+        >
           <NextLink href={{ pathname: '/login', query: { next: pathname } }}>{copy.login}</NextLink>
         </Button>
-        <Button asChild size="sm">
+        <Button asChild h="40px" px="3" borderRadius="pill" textStyle="emphasisSm">
           <NextLink href="/signup">{copy.signup}</NextLink>
         </Button>
       </HStack>
@@ -72,7 +86,14 @@ export function AuthButtons() {
 
   return (
     <HStack gap="3">
-      <Badge asChild size="lg" variant="subtle" colorPalette="brand" data-testid="balance-chip">
+      <Badge
+        asChild
+        size="lg"
+        variant="subtle"
+        colorPalette="brand"
+        borderRadius="pill"
+        data-testid="balance-chip"
+      >
         <NextLink href="/wallet">
           <Text as="span" color="fg.muted" fontWeight="normal" me="1">
             {copy.balance}
