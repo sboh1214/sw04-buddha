@@ -370,20 +370,29 @@ export const copy = {
   auditKindLedgerMismatch: '원장·잔고 불일치',
 
   // --- markets (M4) ---
-  // 홈 (PLAN 11.3): 카테고리 탭 · 정렬 · 검색. 카테고리 목록은 API가 주고 '전체'만 붙인다.
+  // 홈 (PLAN 11.3, ADR-0041 Kalshi 형): 헤더 2단의 상위 카테고리 · 왼쪽 세부 분류 · 정렬 · 검색.
+  // 카테고리 목록은 API가 주고 '전체'만 붙인다.
   homeTitle: '예측 시장',
   marketsAll: '전체',
+  // 세부 분류 사이드바의 첫 줄 — 상위 카테고리 하나의 전체 시장(Kalshi의 "All markets").
+  marketsAllInCategory: '전체 시장',
   marketCategories: '카테고리',
+  marketSubcategories: '세부 분류',
   marketSort: '정렬',
   sortVolume: '거래량',
   sortClosing: '마감임박',
   sortNewest: '신규',
   marketStatusFilter: '상태',
   searchLabel: '시장 검색',
-  searchPlaceholder: '질문이나 키워드로 검색',
+  // Kalshi의 "Trade on anything". 라벨은 searchLabel이 따로 지므로 자리 표시자는 초대장이어도 된다.
+  searchPlaceholder: '무엇이든 예측해 보세요',
   searchSubmit: '검색',
   marketsEmpty: '아직 열린 시장이 없습니다.',
   marketsSearchEmpty: '검색 결과가 없습니다.',
+  // 카드의 두 줄(예/아니오) 오른쪽 배수 "2.14x" 앞에 스크린리더에만 읽히는 설명. '배당'은 금지어(부록 A).
+  payoutMultiple: '맞히면 투입 대비',
+  // 카드 오른쪽 아래 24시간 추이 — 시각적으로는 선 하나, 이름은 여기서 붙인다.
+  marketSparkline: '24시간 확률 추이',
 
   // 카드와 상세 헤더의 짧은 라벨. 숫자·시각은 언제나 호출 쪽에서 붙인다.
   marketCloseAt: '마감',
@@ -479,9 +488,19 @@ export const copy = {
   portfolioSignedOut: '로그인이 풀렸습니다. 다시 로그인하면 이어서 볼 수 있습니다.',
 
   // 상단 네비와 모바일 하단 탭. 홈/지갑/설정 라벨은 M1 블록에 이미 있다.
+  // 헤더 1단(ADR-0041): 시장 · 랭킹 · 커뮤니티. 2단은 시장의 상위 카테고리다.
   navMarkets: '시장',
+  navRanking: '랭킹',
+  navCommunity: '커뮤니티',
+  navPrimary: '주 메뉴',
   navPortfolio: '포트폴리오',
   navMenu: '메뉴',
+
+  // --- community (placeholder) ---
+  // 헤더가 가리키는 자리는 있어야 하므로 화면은 있고, 기능은 아직 없다.
+  communityTitle: '커뮤니티',
+  communityComingSoon:
+    '커뮤니티는 준비 중입니다. 예측을 두고 이야기 나눌 자리가 곧 열립니다. 그때까지는 시장과 랭킹을 둘러봐 주세요.',
 
   // 관리자 시장 폼의 미리보기 (Q-M3-6): 실제 카드·정산 기준 컴포넌트를 그대로 그린다.
   adminMarketPreview: '미리보기',

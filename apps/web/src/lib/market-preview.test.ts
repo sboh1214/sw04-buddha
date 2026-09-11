@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { type Category, type CreateMarketBody, type MarketSummary } from './api';
 import { toPreviewMarket } from './market-preview';
 
-const categories: Category[] = [{ id: 1, slug: 'weather', nameKo: '날씨', sortOrder: 1 }];
+const categories: Category[] = [
+  { id: 1, slug: 'weather', nameKo: '날씨', sortOrder: 1, parentId: null },
+];
 
 const body: CreateMarketBody = {
   title: '첫눈이 올까?',

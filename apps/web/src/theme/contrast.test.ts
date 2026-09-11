@@ -32,12 +32,22 @@ const HOVER_ALPHA = 0.9;
 /** A `contrast` value is a CSS keyword rather than a scale reference, here and in Chakra's own. */
 const KEYWORDS: Record<string, string | undefined> = { white: '#ffffff', black: '#000000' };
 
-/** The `#rrggbb` a semantic colour token paints in one mode. */
+/**
+ * The `#rrggbb` a semantic colour token paints in one mode. Three spellings reach here:
+ * `{colors.teal.700}` is a reference into a scale, `white`/`black` are the keywords Chakra's own
+ * `contrast` values use, and `#0a0c0f` is a literal — the page surfaces are Kalshi's measured
+ * hex values (theme/system.ts) rather than a step of any scale. An alpha stroke (`rgba(...)`) is
+ * deliberately NOT resolved: it has no single colour until it is painted over something, and
+ * nothing this suite measures sits on one.
+ */
 function resolve(token: string, mode: Mode): string {
   const raw: unknown = system.tokens.getByName(`colors.${token}`)?.extensions.conditions?.[mode];
   if (typeof raw !== 'string') throw new Error(`colors.${token} has no ${mode} value`);
-  // `{colors.teal.700}` is a reference into the scale; anything else is a literal CSS colour.
-  const value: unknown = raw.startsWith('{') ? system.token(raw.slice(1, -1)) : KEYWORDS[raw];
+  const value: unknown = raw.startsWith('{')
+    ? system.token(raw.slice(1, -1))
+    : raw.startsWith('#')
+      ? raw
+      : KEYWORDS[raw];
   if (typeof value !== 'string') throw new Error(`colors.${token} ${mode} is unresolvable: ${raw}`);
   return value;
 }

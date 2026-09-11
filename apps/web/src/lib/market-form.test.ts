@@ -238,8 +238,8 @@ describe('toUpdateMarketBody', () => {
 });
 
 const categories: Category[] = [
-  { id: 1, slug: 'economy', nameKo: '경제', sortOrder: 1 },
-  { id: 2, slug: 'weather', nameKo: '날씨', sortOrder: 2 },
+  { id: 1, slug: 'economy', nameKo: '경제', sortOrder: 1, parentId: null },
+  { id: 2, slug: 'weather', nameKo: '날씨', sortOrder: 2, parentId: null },
 ];
 
 const market: AdminMarket = {
