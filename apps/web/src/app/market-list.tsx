@@ -1,6 +1,6 @@
 'use client';
 
-import { Alert, Button, SimpleGrid, Skeleton, Stack } from '@chakra-ui/react';
+import { Alert, Button, Grid, Skeleton, Stack } from '@chakra-ui/react';
 import { MarketCard } from '@/components/market/market-card';
 import { EmptyState } from '@/components/ui/empty-state';
 import { copy } from '@/copy';
@@ -29,8 +29,18 @@ import { type MarketFilters } from '@/lib/market-keys';
  * say 마감됨 in the HTML rather than one frame after hydration.
  */
 
-/** Six placeholders: two full rows at md, one at lg — enough to hold the fold's height. */
+/**
+ * Six placeholders at a tile's height (~230px, spec: Kalshi's card): two full rows of the
+ * three-across grid at the content width, three of two — enough to hold the fold's height.
+ */
 const SKELETON_ROWS = [0, 1, 2, 3, 4, 5];
+
+/**
+ * Kalshi's tile grid (ADR-0041): as many 360px-minimum columns as the main column fits, from md
+ * up; one column below. `auto-fill` rather than a breakpoint ladder because the column's width
+ * depends on whether the 180px sidebar is beside it, which no breakpoint knows.
+ */
+const GRID_COLUMNS = { base: '1fr', md: 'repeat(auto-fill, minmax(360px, 1fr))' };
 
 export interface MarketListProps {
   /** The SAME object the page put in the cache key; never re-derived from the URL here. */
@@ -76,11 +86,11 @@ export function MarketList({
         </Alert.Root>
       )}
       {markets.isPending ? (
-        <SimpleGrid columns={{ base: 1, md: 2, lg: 3 }} gap="4" data-testid="markets-skeleton">
+        <Grid templateColumns={GRID_COLUMNS} gap="4" data-testid="markets-skeleton">
           {SKELETON_ROWS.map((row) => (
-            <Skeleton key={row} height="32" borderRadius="l2" />
+            <Skeleton key={row} height="232px" borderRadius="card" />
           ))}
-        </SimpleGrid>
+        </Grid>
       ) : markets.isLoadingError ? (
         <Stack gap="3" align="flex-start" data-testid="markets-error">
           <Alert.Root status="error" role="alert">
@@ -103,7 +113,7 @@ export function MarketList({
         />
       ) : (
         <>
-          <SimpleGrid columns={{ base: 1, md: 2, lg: 3 }} gap="4" data-testid="markets-grid">
+          <Grid templateColumns={GRID_COLUMNS} gap="4" data-testid="markets-grid">
             {rows.map((row, index) => (
               // `sparkline` is a separate prop because the card is also the admin's 미리보기,
               // where a draft has no history at all (Q-M3-6).
@@ -114,12 +124,17 @@ export function MarketList({
                 now={rowAnchor(index, serverRowCount, markets.dataUpdatedAt, now)}
               />
             ))}
-          </SimpleGrid>
+          </Grid>
           {markets.hasNextPage && (
+            // The same pill as the headline bar's controls: 40px, outlined, no fill.
             <Button
               alignSelf="center"
-              size="sm"
-              variant="ghost"
+              variant="outline"
+              borderRadius="pill"
+              borderColor="border.emphasized"
+              h="40px"
+              px="4"
+              textStyle="emphasisSm"
               loading={markets.isFetchingNextPage}
               onClick={() => void markets.fetchNextPage()}
               data-testid="markets-more"

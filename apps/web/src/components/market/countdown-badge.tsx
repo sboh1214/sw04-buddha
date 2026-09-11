@@ -1,6 +1,6 @@
 'use client';
 
-import { Badge } from '@chakra-ui/react';
+import { Badge, Text } from '@chakra-ui/react';
 import { type MarketStatus } from '@buddha/shared';
 import { useEffect, useRef, useState } from 'react';
 import { copy } from '@/copy';
@@ -35,10 +35,43 @@ import { isClosingSoon } from '@/lib/market-admin';
  *
  * Colour never carries the state alone (PLAN 11.2): 마감 임박 and 마감됨 are written out beside
  * the orange and the grey.
+ *
+ * Two looks, one reading. The detail header and the admin screens draw the `badge` — the Chakra
+ * `Badge` this component always was — and the home card (ADR-0041's Kalshi tile) draws the
+ * same words as a line of muted text under the question, which is `variant="text"`. The
+ * anchoring and the ticking above are shared as they stand, and the strings go through one
+ * `countdownReading`, so the two variants cannot say different things about one close time;
+ * only the paint differs.
  */
 
 /** PLAN 11.4: the countdown moves once a second, so a sub-minute close reads as a stopwatch. */
 const TICK_MS = 1000;
+
+/**
+ * What the countdown says and how loudly, decided ONCE for both variants. `urgent` is the
+ * 마감 임박 state — orange in either look — and everything else is the neutral grey. The badge
+ * used to make this decision inline in three `return`s; factoring it out is what keeps the
+ * `text` variant from drifting a word away from the badge the detail header shows.
+ */
+interface CountdownReading {
+  text: string;
+  urgent: boolean;
+}
+
+function countdownReading(
+  market: CountdownBadgeProps['market'],
+  running: boolean,
+  clock: number | undefined,
+  remaining: string,
+): CountdownReading {
+  if (!running) return { text: copy.marketClosed, urgent: false };
+  if (clock === undefined) {
+    return { text: `${copy.marketCloseAt} ${formatKst(market.closeAt)}`, urgent: false };
+  }
+  return isClosingSoon(market, clock)
+    ? { text: `${copy.marketClosingSoon} ${remaining}`, urgent: true }
+    : { text: `${copy.marketCloseAt} ${remaining}`, urgent: false };
+}
 
 export interface CountdownBadgeProps {
   /** Both fields `isClosingSoon` needs; `Market`, `MarketSummary` and `MarketListItem` fit. */
@@ -48,7 +81,14 @@ export interface CountdownBadgeProps {
    * render. Omit it and the badge shows the absolute close time until it has mounted.
    */
   now?: number;
+  /** The `badge` variant's Chakra size; the `text` variant is always `bodyXs`. */
   size?: 'xs' | 'sm' | 'md' | 'lg';
+  /**
+   * `badge` (default) is the Chakra `Badge` the detail header and the admin lists show — every
+   * existing caller is unchanged. `text` is the home card's line under the question: the same
+   * strings as a `bodyXs` span in `fg.muted`, `orange.fg` while 마감 임박.
+   */
+  variant?: 'badge' | 'text';
   'data-testid'?: string;
 }
 
@@ -56,6 +96,7 @@ export function CountdownBadge({
   market,
   now,
   size = 'sm',
+  variant = 'badge',
   'data-testid': testId = 'market-countdown',
 }: CountdownBadgeProps) {
   const [anchor] = useState(now);
@@ -94,32 +135,36 @@ export function CountdownBadge({
     };
   }, [running, anchor]);
 
-  if (!running) {
+  const reading = countdownReading(market, running, clock, remaining);
+
+  if (variant === 'text') {
+    // A span, not a `<p>`: it sits under the card's `<h2>` inside a flex column, and the caller
+    // decides the block. `orange.fg` rather than a solid fill — the tile has no badge to be
+    // louder than, and Kalshi's line is text — and the words 마감 임박 are still there, so the
+    // colour is an accent and never the message (PLAN 11.2).
     return (
-      <Badge colorPalette="gray" variant="subtle" size={size} data-testid={testId}>
-        {copy.marketClosed}
-      </Badge>
+      <Text
+        as="span"
+        textStyle="bodyXs"
+        color={reading.urgent ? 'orange.fg' : 'fg.muted'}
+        data-testid={testId}
+      >
+        {reading.text}
+      </Text>
     );
   }
 
-  if (clock === undefined) {
-    return (
-      <Badge colorPalette="gray" variant="subtle" size={size} data-testid={testId}>
-        {copy.marketCloseAt} {formatKst(market.closeAt)}
-      </Badge>
-    );
-  }
-
-  return isClosingSoon(market, clock) ? (
-    // `solid` is what makes 마감 임박 louder than the ordinary countdown next to it in the grid,
-    // and it is legible only because theme/system.ts overrides `orange.solid`: Chakra's built-in
-    // light pair is white on orange.600 = 3.56:1, and a card renders this badge at 10px.
+  return reading.urgent ? (
+    // `solid` is what makes 마감 임박 louder than the ordinary countdown beside it in the detail
+    // header, and it is legible only because theme/system.ts overrides `orange.solid`: Chakra's
+    // built-in light pair is white on orange.600 = 3.56:1, and the header renders this badge at
+    // 12px. (The card used to draw it at 10px; since ADR-0041 the card is the `text` variant.)
     <Badge colorPalette="orange" variant="solid" size={size} data-testid={testId}>
-      {copy.marketClosingSoon} {remaining}
+      {reading.text}
     </Badge>
   ) : (
     <Badge colorPalette="gray" variant="subtle" size={size} data-testid={testId}>
-      {copy.marketCloseAt} {remaining}
+      {reading.text}
     </Badge>
   );
 }
