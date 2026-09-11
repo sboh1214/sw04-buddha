@@ -128,7 +128,8 @@ export function usePublicMarketFills(marketId: string, enabled = true) {
 export { usePublicMarketFills as useMarketFills };
 
 /**
- * Active categories in display order (`GET /categories`) for the home page's tabs. Public, and
+ * Active categories in display order (`GET /categories`) for the header's category row, the
+ * home headline and the sub-category sidebar. Public, and
  * re-exported for the same reason the fills are delegated: `CATEGORIES_QUERY_KEY` is one key, so
  * it deserves one query function.
  */

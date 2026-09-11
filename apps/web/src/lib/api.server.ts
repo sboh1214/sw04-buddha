@@ -110,7 +110,10 @@ export async function fetchMarketsPageServer(
   return { items: data, nextCursor: meta.nextCursor };
 }
 
-/** Active categories in display order (`GET /categories`, public), for the home page's tabs. */
+/**
+ * Active categories in display order (`GET /categories`, public), both levels flat: the home
+ * page's first paint of its headline and sub-category sidebar reads them from this prop.
+ */
 export async function fetchCategoriesServer(): Promise<Category[]> {
   return unwrap(await serverApi.GET('/api/v1/categories')).data;
 }

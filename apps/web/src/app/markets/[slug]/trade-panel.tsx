@@ -53,6 +53,7 @@ import {
   formatYesPrice,
 } from '@/lib/market-admin';
 import { quoteMarketKey } from '@/lib/market-keys';
+import { HEADER_HEIGHT_PX } from '@/lib/nav';
 import {
   type TradeCta,
   type TradeInputs,
@@ -136,8 +137,19 @@ interface TradePanelState {
   press: () => void;
 }
 
-function useTradePanel(market: Market, windowEnd: number | undefined): TradePanelState {
-  const [inputs, setInputs] = useState<TradeInputs>(INITIAL_TRADE_INPUTS);
+function useTradePanel(
+  market: Market,
+  windowEnd: number | undefined,
+  initialOutcome: Outcome | undefined,
+): TradePanelState {
+  // The first render's outcome comes from the URL a card's pill wrote (`?outcome=`), parsed on
+  // the server (page.tsx); the initialiser form so a later change to the prop — there is none,
+  // but a `useState(value)` would silently ignore one anyway — is not mistaken for state.
+  const [inputs, setInputs] = useState<TradeInputs>(() =>
+    initialOutcome === undefined
+      ? INITIAL_TRADE_INPUTS
+      : setOutcome(INITIAL_TRADE_INPUTS, initialOutcome),
+  );
   const [sheetOpen, setSheetOpen] = useState(false);
   const [reconfirmFrom, setReconfirmFrom] = useState<bigint | undefined>(undefined);
 
@@ -443,6 +455,12 @@ export interface TradePanelProps {
    * ticks read failed, and then the panel falls back to the cache stamp (`panelAnchor`).
    */
   now?: number;
+  /**
+   * The outcome the panel opens on, from a card's pill (`?outcome=`, ADR-0041): the pill named
+   * "아니오 37%" opens the panel on 아니오, the way Kalshi's tile opens the trade for the outcome
+   * clicked. Absent, 예 — the default the panel has always had.
+   */
+  initialOutcome?: Outcome;
 }
 
 /**
@@ -451,15 +469,24 @@ export interface TradePanelProps {
  * `position: fixed`, so it leaves the column and takes the mobile tab bar's place on this route —
  * the page container owes it a bottom padding.
  */
-export function TradePanel({ market, now }: TradePanelProps) {
-  const panel = useTradePanel(market, now);
+export function TradePanel({ market, now, initialOutcome }: TradePanelProps) {
+  const panel = useTradePanel(market, now, initialOutcome);
   // Only the sheet's field takes the ref: at < md the inline card is still mounted behind
   // `display: none`, and focusing a hidden input does nothing.
   const sheetAmountRef = useRef<HTMLInputElement>(null);
 
   return (
     <>
-      <Box hideBelow="md" position="sticky" top="4" alignSelf="start">
+      {/* Sticky UNDER the two-row header, not at the viewport's top: the header is sticky too
+          and paints above this column, so a `top` smaller than its height would pin the panel's
+          예/아니오 buttons behind it. `HEADER_HEIGHT_PX` is the same number the home screen's
+          sidebar offsets against; the 16px is this panel's own breathing room. */}
+      <Box
+        hideBelow="md"
+        position="sticky"
+        top={`calc(${String(HEADER_HEIGHT_PX)}px + 16px)`}
+        alignSelf="start"
+      >
         <Card.Root>
           <Card.Body>
             <TradePanelView panel={panel} testIdPrefix="trade" />

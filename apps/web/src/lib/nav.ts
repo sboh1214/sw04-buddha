@@ -12,13 +12,24 @@ import { type CategoryNode, locateCategory } from './category-tree';
 export type PrimaryNavKey = 'markets' | 'ranking' | 'community';
 
 /**
- * The header's height at md and up, in CSS px: Kalshi's measured 107 (12 + 40 + 12 for row 1,
- * 30 + 12 for row 2, the 1px rule), which `nav.tsx` is built to. One number in one place because
- * two things depend on it — the header's own layout and the home screen's sticky sidebar, which
- * has to stop exactly under it — and a drift between them shows as a sidebar sliding under the
- * header. Below md the header is shorter (no primary links) but nothing sticks under it there.
+ * The header's height in CSS px: Kalshi's measured 107 (12 + 40 + 12 for row 1, 30 + 12 for
+ * row 2, the 1px rule), which `nav.tsx` is built to. One number in one place because three
+ * things depend on it — the header's own layout, the home screen's sticky sidebar and the
+ * detail screen's sticky trade panel, both of which have to stop exactly under it — and a
+ * drift between them shows as a column sliding under the header. It is the same on every
+ * breakpoint (row 1 keeps its 40px without the primary links) and grows only while the mobile
+ * search form is open, when nothing is sticky beneath it.
  */
 export const HEADER_HEIGHT_PX = 107;
+
+/**
+ * The resting opacity of row 2's inactive category items. Kalshi rests them at 0.5, which puts
+ * 15px text at 3.74:1 on the light page (`fg` is gray.950, #09090b, not black) — under the
+ * 4.5:1 WCAG 1.4.3 asks of text and the theme file otherwise measures (AC 6). 0.6 is the first
+ * tenth that clears it in both modes (light 5.32:1, dark 7.03:1 on `#0a0c0f`), pinned in
+ * theme/contrast.test.ts; the difference from Kalshi's value is not visible side by side.
+ */
+export const CATEGORY_ITEM_OPACITY = 0.6;
 
 /**
  * Whether a row-1 item is the page being shown. 시장 owns the home list AND every market detail —

@@ -400,7 +400,7 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
       const { stdout, stderr } = runSeedIo();
       expect(stdout).toContain('markets: 0 inserted, 14 already existed');
       // Judged on THIS slug's own line, not on how many lines carry the wording: the other
-      // eleven cutoffs are absolute 2026 dates that pass on their own as the calendar advances
+      // cutoffs are absolute 2026 dates that pass on their own as the calendar advances
       // (the earliest, bok-october-rate-cut-2026, on 2026-10-21), and from then on the second
       // run legitimately reports them too. A market gets at most one line (seed.ts's
       // if / else if), so exactly one line names it.
@@ -441,7 +441,7 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
         .where(eq(markets.slug, slug));
 
       const { stderr } = runSeedIo();
-      // This slug's line only, for BOTH wordings: the other eleven cutoffs are absolute dates in
+      // This slug's line only, for BOTH wordings: the other cutoffs are absolute dates in
       // 2026, so as the calendar advances they enter the same window and then pass, each on its
       // own — a count of either wording across the whole stream would be a test that fails on
       // a date rather than on a change. What this pins is that the market THIS case moved is

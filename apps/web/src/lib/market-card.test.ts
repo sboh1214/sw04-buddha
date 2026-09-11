@@ -47,6 +47,9 @@ describe('outcomeRows', () => {
     expect(no.label).toBe(copy.no);
     expect(yes.accent).toBe('row.first');
     expect(no.accent).toBe('row.second');
+    // The pill's `?outcome=` is the API's spelling, which the detail page parses back.
+    expect(yes.outcome).toBe('YES');
+    expect(no.outcome).toBe('NO');
   });
 
   it('shows lastPrice on the 예 row and its complement on the 아니오 row', () => {

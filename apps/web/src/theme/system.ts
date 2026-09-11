@@ -28,15 +28,15 @@ const fontStack = [
 //
 // The values are the 600/400 pair rather than the built-ins' 500/400. A border is a UI component
 // boundary, so WCAG 1.4.11 asks for 3:1, and teal.500 on white is only 2.49:1; 600/400 clears it
-// on every palette in both modes (light teal 3.74, red 4.83, indigo 6.29; dark 11.3/7.6/7.0).
+// on every palette in both modes (light teal 3.74, red 4.83, brand 3.24; dark 11.3/7.6/9.48).
 //
 // `solid` is measured against `contrast`, never against the page: the button and the badge recipe
 // both resolve `bg: colorPalette.solid` with `color: colorPalette.contrast`, so that pair carries
 // label text (`size="lg"` is 16px, `size="sm"` 14px) and owes WCAG 1.4.3 its 4.5:1 — in the
 // resting state AND under `_hover`, which the button recipe paints as `colorPalette.solid/90`
 // composited over the page. A white label does not pay it on the 600 step (teal.600 3.74:1,
-// red.600 4.83:1 dropping to 4.30:1 on hover), and the 500 step this file used in dark mode is
-// worse still (teal 2.49, red 3.76, indigo 4.47).
+// red.600 4.83:1 dropping to 4.30:1 on hover), and the 500 step this file once used in dark
+// mode was worse still (teal 2.49, red 3.76, and 4.47 for the indigo of the time).
 //
 // So light drops all three to the 700 step and keeps the white label — teal 7.73/6.07 rest/hover,
 // red 8.37/6.95, brand green 5.80/4.74 (#067450, Kalshi's own light green-x50). Kalshi's light
@@ -141,14 +141,22 @@ const config = defineConfig({
           muted: { value: { _light: '{colors.brand.100}', _dark: '{colors.brand.900}' } },
           subtle: { value: { _light: '{colors.brand.50}', _dark: '{colors.brand.950}' } },
           emphasized: { value: { _light: '{colors.brand.200}', _dark: '{colors.brand.800}' } },
-          focusRing: { value: { _light: '{colors.brand.500}', _dark: '{colors.brand.400}' } },
-          // 600 on white is 3.24:1 (1.4.11); 500 would be 2.34:1.
+          // The ring is a component boundary too (1.4.11, 3:1) and it is painted on MORE
+          // grounds than a border: the page, a card, `bg.subtle`, and — for the search field's
+          // `inside` ring — `surface.input`. Light 500 is 2.32:1 on white and 600 only 2.77:1 on
+          // `surface.input`, so light takes the 700 step `solid` and `fg` already use (5.80 on
+          // white, 4.95 on the search ground); dark keeps 400 (9.48:1 on the page). Measured in
+          // contrast.test.ts.
+          focusRing: { value: { _light: '{colors.brand.700}', _dark: '{colors.brand.400}' } },
+          // 600 on white is 3.24:1 (1.4.11); 500 would be 2.32:1.
           border: { value: { _light: '{colors.brand.600}', _dark: '{colors.brand.400}' } },
         },
         // The page and its layers (Kalshi `--surface-x10/x20/x30`). Chakra's defaults are
         // merged, not replaced, so `bg.emphasized`, `bg.inverted`, the status tints and the
         // whole light side except `subtle` stay built-in. Light `bg.subtle` is Kalshi's
-        // `--surface-foreground-opaque`, the hover fill a card and a row sit on.
+        // `--surface-foreground-opaque`; it is a page LAYER (panels, skeletons, Chakra's own
+        // recipes read it), not a hover fill — the tile sits on `surface.card` and only its
+        // stroke changes under the pointer.
         bg: {
           DEFAULT: { value: { _light: '#ffffff', _dark: '#0a0c0f' } },
           subtle: { value: { _light: '#f7f7f7', _dark: '#13161a' } },
@@ -213,7 +221,8 @@ const config = defineConfig({
           border: { value: { _light: '{colors.red.600}', _dark: '{colors.red.400}' } },
         },
         // The one BUILT-IN palette this app paints `variant="solid"` on: the 마감 임박 countdown
-        // badge (10px on a card, 12px in the detail header) and the admin 마감 지남 badge. Chakra
+        // badge (12px in the detail header; the card draws the same words as `orange.fg` text
+        // since ADR-0041) and the admin 마감 지남 badge. Chakra
         // pairs white with orange.600 there — 3.56:1, the same 1.4.3 miss as the three palettes
         // above — so light moves to the 700 step (7.88:1). Dark already pairs a black label with
         // orange.500 (7.49:1) and is restated unchanged; the config is merged rather than

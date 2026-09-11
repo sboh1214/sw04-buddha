@@ -23,6 +23,7 @@ import { copy } from '@/copy';
 import { useCategories } from '@/hooks/use-markets';
 import { type CategoryNode, groupCategories } from '@/lib/category-tree';
 import {
+  CATEGORY_ITEM_OPACITY,
   type PrimaryNavKey,
   currentTopLevelSlug,
   isAllCategoriesCurrent,
@@ -53,9 +54,8 @@ import {
  */
 export function Nav() {
   // The mobile row already carries the logo, the balance chip and the profile menu, so search
-  // collapses to an icon that opens the same form under it. It deliberately does not reach into
-  // the home screen's own search box: that box lives in a file this component does not own, and a
-  // header whose search only works on `/` would be worse than one that works everywhere.
+  // collapses to an icon that opens the same form under it — the one search box the app has
+  // since ADR-0041, and it works from every route.
   const [searchOpen, setSearchOpen] = useState(false);
 
   return (
@@ -244,7 +244,10 @@ function SearchForm({
           borderRadius="pill"
           bg="surface.input"
           // The placeholder is not a label: it disappears on the first keystroke and screen
-          // readers are not required to announce it (WCAG 3.3.2).
+          // readers are not required to announce it (WCAG 3.3.2). It is still text a visitor
+          // reads, so it is `fg.muted` (6.60:1 light / 5.69:1 dark on `surface.input`) rather
+          // than Chakra's default placeholder tint, which measures 4.14:1 there.
+          _placeholder={{ color: 'fg.muted' }}
           aria-label={copy.searchLabel}
           placeholder={copy.searchPlaceholder}
           autoFocus={autoFocus}
@@ -304,10 +307,8 @@ function CurrentCategoryRow({ tree, isPending }: { tree?: CategoryNode[]; isPend
  * `aria-current="page"` (PLAN 11.2). Only the TOP level is listed: a leaf is picked in the home
  * screen's sidebar, and the strip marks the leaf's parent (lib/nav.ts).
  *
- * Kalshi rests its items at opacity 0.5, which puts 15px text at 3.95:1 on the light page —
- * under the 4.5:1 WCAG 1.4.3 asks of text and the theme file otherwise measures (AC 6). 0.55 is
- * the first step that clears it in both modes (light 4.74:1, dark 6.04:1 on `#0a0c0f`) and is
- * the resting value here; the difference from Kalshi's is not visible side by side.
+ * The resting opacity is `CATEGORY_ITEM_OPACITY` (lib/nav.ts), a notch above Kalshi's 0.5 so
+ * the dimmed text still reads at 4.5:1; the number and its measurement live there.
  *
  * A failed `GET /categories` renders the 전체 link alone — a header must not shout about a list
  * it only offers as a shortcut. Each href is a UrlObject rather than a template literal: `href`
@@ -318,7 +319,8 @@ function CurrentCategoryRow({ tree, isPending }: { tree?: CategoryNode[]; isPend
  * `::-webkit-scrollbar` rule for the rest). A scroll container clips its children's outlines,
  * which would cut the keyboard focus ring off the top and the left of the first item; the 4px
  * of padding pulled back with a matching negative margin keeps the row exactly where Kalshi's
- * measurements put it (30px + 8px below) while giving the 2px ring and its 2px offset room.
+ * measurements put it (30px, then 12px below — see `h`) while giving the 2px ring and its 2px
+ * offset room.
  *
  * Labelled 카테고리: the row-1 landmark is 주 메뉴 and the home screen's sidebar is 세부 분류
  * (`copy.marketSubcategories`), so no two navigation landmarks on a page share a name and a
@@ -396,7 +398,7 @@ function CategoryLink({
       whiteSpace="nowrap"
       flexShrink="0"
       textDecoration="none"
-      opacity={current ? 1 : 0.55}
+      opacity={current ? 1 : CATEGORY_ITEM_OPACITY}
       transition="opacity 0.2s"
       _hover={{ opacity: 1, textDecoration: 'none' }}
       data-testid={testId}

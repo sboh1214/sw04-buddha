@@ -153,7 +153,8 @@ export const auditFailureKindSchema = z.enum(AUDIT_FAILURE_KINDS);
 
 /**
  * Seed categories (PLAN 1.3, 6.2): the five TOP-LEVEL slugs. Never sports or elections
- * (PLAN 0.2). These are the second row of the header and the tabs of the home screen.
+ * (PLAN 0.2). These are the second row of the header and, through their leaves, the home
+ * screen's sub-category sidebar.
  */
 export const CATEGORY_SLUGS = ['economy', 'culture', 'entertainment', 'tech', 'weather'] as const;
 export type CategorySlug = (typeof CATEGORY_SLUGS)[number];

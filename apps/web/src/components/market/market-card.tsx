@@ -57,7 +57,10 @@ import { MarketSparkline } from './market-sparkline';
  * the link is then the question alone, while the whole card stays clickable. An anchor around
  * everything would announce the category, the price, the volume and the countdown as one name.
  * The tile also holds links of its own INSIDE the box — the category header goes to that leaf's
- * list, each pill to the detail — and they work because Chakra's `LinkBox` raises every nested
+ * list, each pill to the detail with THAT outcome preselected in the trade panel
+ * (`?outcome=YES|NO`, the way Kalshi's pill opens the trade for the outcome it names; it is
+ * what makes the pill a destination of its own and not a third tab stop to the same URL) —
+ * and they work because Chakra's `LinkBox` raises every nested
  * `a[href]` that is not the overlay to `position: relative; z-index: 1`, above the overlay's
  * `::before` that covers the card. A click on a pill hits the pill; a click anywhere else hits
  * the overlay. `interactive` below drops every one of those links for the admin 미리보기 — a
@@ -65,8 +68,8 @@ import { MarketSparkline } from './market-sparkline';
  *
  * The question is clamped to one line (`lineClamp="1"`): Kalshi truncates, and it is what keeps
  * every tile in a row the same height so the rows and the footers line up across the grid. The
- * accessible name of the overlay is the full question — the clamp is paint, not content — and
- * the detail page shows all of it.
+ * accessible name of the overlay is the full question — the clamp is paint, not content — a
+ * `title` attribute shows the rest on hover, and the detail page shows all of it (A-UI-4).
  *
  * The sparkline sits in the footer's right slot, where Kalshi prints a market count ("27
  * markets") that has no counterpart here — a market is one question, not a series — and PLAN
@@ -168,7 +171,10 @@ export function MarketCard({
    * restyled. The category header and the pills below follow the same rule.
    */
   const title = (
-    <Heading as="h2" textStyle="title" lineClamp="1" color="fg">
+    // `title` on the heading is what the 미리보기 shows on hover; in the real card the overlay's
+    // `::before` covers the tile and is the element the pointer is over, so the overlay anchor
+    // below carries the same attribute — one string, two hosts, because the hit target differs.
+    <Heading as="h2" textStyle="title" lineClamp="1" color="fg" title={market.title}>
       {market.title}
     </Heading>
   );
@@ -250,7 +256,9 @@ export function MarketCard({
         <Stack gap="2px">
           {interactive ? (
             <LinkOverlay asChild>
-              <NextLink href={href}>{title}</NextLink>
+              <NextLink href={href} title={market.title}>
+                {title}
+              </NextLink>
             </LinkOverlay>
           ) : (
             title
@@ -389,7 +397,11 @@ function OutcomeRowCells({
             transition="background-color 0.15s"
             _hover={{ bg: 'row.firstTint' }}
           >
-            <NextLink href={href} aria-label={row.accessibleName} data-testid={testId}>
+            <NextLink
+              href={{ pathname: href, query: { outcome: row.outcome } }}
+              aria-label={row.accessibleName}
+              data-testid={testId}
+            >
               {percentText}
             </NextLink>
           </Box>

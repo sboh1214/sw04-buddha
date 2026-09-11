@@ -70,8 +70,9 @@ export default async function HomePage({
       // declares, and a mismatch there is a refetch of the page that is already in the payload.
       initialPageParam: undefined as string | undefined,
     }),
-    // `undefined` rather than a rejection: the tabs are a convenience, and 전체 plus the list
-    // below them still work without one. The prefetch above swallows its failure the same way.
+    // `undefined` rather than a rejection: the categories are a convenience — the headline
+    // falls back to 예측 시장, the sidebar renders nothing, and the list still works without
+    // them. The prefetch above swallows its failure the same way.
     fetchCategoriesServer().catch(() => undefined),
   ]);
 

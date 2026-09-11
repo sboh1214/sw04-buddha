@@ -12,7 +12,7 @@ import {
   Tag,
   Text,
 } from '@chakra-ui/react';
-import { type MarketStatus, formatP, parsePAmount } from '@buddha/shared';
+import { type MarketStatus, type Outcome, formatP, parsePAmount } from '@buddha/shared';
 import NextLink from 'next/link';
 import { type ReactNode } from 'react';
 import { CountdownBadge } from '@/components/market/countdown-badge';
@@ -89,6 +89,11 @@ export interface MarketDetailProps {
    */
   now?: number;
   /**
+   * The side the trade panel opens on, from the URL's `?outcome=` — a card's pill asks for the
+   * outcome it names (ADR-0041). Absent, the panel starts on 예 as it always has.
+   */
+  initialOutcome?: Outcome;
+  /**
    * 정산 기준, rendered by the SERVER component and passed through. It sits in the left column
    * for reading order, but it is never rendered by this file, so no branch of the ladder below
    * — and no hydration failure — can take it out of the HTML that AC 2 reads.
@@ -96,7 +101,7 @@ export interface MarketDetailProps {
   children: ReactNode;
 }
 
-export function MarketDetail({ marketId, now, children }: MarketDetailProps) {
+export function MarketDetail({ marketId, now, initialOutcome, children }: MarketDetailProps) {
   useMarketSocket([marketId]);
   const market = useMarket(marketId);
   // The same seeded series the chart draws (one key, one query, no second request). It is read
@@ -183,7 +188,9 @@ export function MarketDetail({ marketId, now, children }: MarketDetailProps) {
       {/* Mounted ONCE. It emits three siblings — the sticky card that is this grid item, the
           fixed mobile bar and its portalled sheet — and the last two are out of flow, so
           neither claims a grid track. */}
-      {data === undefined ? null : <TradePanel market={data} now={now} />}
+      {data === undefined ? null : (
+        <TradePanel market={data} now={now} initialOutcome={initialOutcome} />
+      )}
     </Grid>
   );
 }

@@ -1,4 +1,4 @@
-import { PRICE_MAX, PRICE_MIN } from '@buddha/shared';
+import { PRICE_MAX, PRICE_MIN, type Outcome } from '@buddha/shared';
 import { copy } from '@/copy';
 import { formatNoPrice, formatYesPrice } from './market-admin';
 
@@ -18,6 +18,11 @@ import { formatNoPrice, formatYesPrice } from './market-admin';
 /** One of the tile's two rows: 예 first, 아니오 second, as `outcomeRows` orders them. */
 export interface OutcomeRow {
   key: 'yes' | 'no';
+  /**
+   * The API's spelling of the same side, `'YES' | 'NO'`: what the pill's link carries as
+   * `?outcome=` so the detail's trade panel opens on this outcome (`outcomeFromSearchParams`).
+   */
+  outcome: Outcome;
   /** The visible label, `copy.yes` / `copy.no`: the words that carry the meaning (PLAN 11.2). */
   label: string;
   /** The whole-percent reading the pill shows: `lastPrice` for 예, its complement for 아니오. */
@@ -70,6 +75,7 @@ export function outcomeRows(lastPrice: number): [OutcomeRow, OutcomeRow] {
   return [
     {
       key: 'yes',
+      outcome: 'YES',
       label: copy.yes,
       percent: lastPrice,
       multiple: payoutMultiple(lastPrice),
@@ -78,6 +84,7 @@ export function outcomeRows(lastPrice: number): [OutcomeRow, OutcomeRow] {
     },
     {
       key: 'no',
+      outcome: 'NO',
       label: copy.no,
       percent: no,
       multiple: payoutMultiple(no),

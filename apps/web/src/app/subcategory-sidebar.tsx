@@ -147,6 +147,11 @@ export function SubcategoryChips({ links }: { links: readonly SidebarLink[] }) {
       overflowX="auto"
       scrollbarWidth="none"
       css={{ '&::-webkit-scrollbar': { display: 'none' } }}
+      // A scroll container clips its children's outlines: 4px of padding, pulled back with
+      // matching negative margins so the strip does not move, gives a chip's 2px focus ring and
+      // its 2px offset room on every side (the same trick the header's category row uses).
+      p="1"
+      m="-1"
       data-testid="market-subcategories-mobile"
     >
       <HStack gap="2" minW="max-content">

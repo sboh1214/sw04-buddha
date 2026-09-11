@@ -7,7 +7,12 @@ import { LiveRulesSection } from '@/components/market/live-rules-section';
 import { copy } from '@/copy';
 import { fetchMarketServer, fetchTicksServer } from '@/lib/api.server';
 import { dehydratePublic } from '@/lib/market-keys';
-import { detailWindowEnd, seedMarketDetail } from '@/lib/market-ssr';
+import {
+  type MarketDetailSearchParams,
+  detailWindowEnd,
+  outcomeFromSearchParams,
+  seedMarketDetail,
+} from '@/lib/market-ssr';
 import { getQueryClient } from '@/lib/query-client';
 import { DEFAULT_TICK_RANGE } from '@/lib/ticks';
 import { MarketDetail } from './market-detail';
@@ -55,8 +60,19 @@ export async function generateMetadata({
   };
 }
 
-export default async function MarketPage({ params }: { params: Promise<{ slug: string }> }) {
+export default async function MarketPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ slug: string }>;
+  searchParams: Promise<MarketDetailSearchParams>;
+}) {
   const { slug } = await params;
+  // `?outcome=YES|NO` from a card's pill (ADR-0041): the side the trade panel opens on. Read
+  // here, on the server, for the same reason the home page normalises its own URL once — the
+  // panel's first render then already shows the asked-for side, and no client re-derivation
+  // can disagree with it. Anything else parses to `undefined`, the panel's own default.
+  const initialOutcome = outcomeFromSearchParams(await searchParams);
   // `null` is every address that cannot name a public market: an unknown slug, a slug the route
   // schema refuses, and a draft — which the API answers as NOT_FOUND because it is invisible
   // outside the admin. All three are one 404 to a visitor.
@@ -99,7 +115,11 @@ export default async function MarketPage({ params }: { params: Promise<{ slug: s
           <LiveQuestionHeading fallback={market} />
           {/* `now` is the server's own window end, never a clock read in this render body —
               see `detailWindowEnd`. It is absent when the series is. */}
-          <MarketDetail marketId={market.id} now={detailWindowEnd(series)}>
+          <MarketDetail
+            marketId={market.id}
+            now={detailWindowEnd(series)}
+            initialOutcome={initialOutcome}
+          >
             {/* PLAN 11.1's Kalshi principle: 정산 기준 is never collapsed on the detail.
                 `disputeUntil` is null until a result is proposed and STAYS set through the
                 settle (only the void clears it, A-M3-23), so 정산 예정 is drawn behind
