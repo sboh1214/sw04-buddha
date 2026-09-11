@@ -15,7 +15,7 @@ import type { Route } from 'next';
 import Form from 'next/form';
 import NextLink from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
-import { Suspense, useState } from 'react';
+import { type ReactNode, Suspense, useState } from 'react';
 import type { UrlObject } from 'url';
 import { AuthButtons } from '@/components/auth/auth-buttons';
 import { ColorModeButton } from '@/components/ui/color-mode';
@@ -25,6 +25,7 @@ import { type CategoryNode, groupCategories } from '@/lib/category-tree';
 import {
   CATEGORY_ITEM_OPACITY,
   type PrimaryNavKey,
+  currentSearchTerm,
   currentTopLevelSlug,
   isAllCategoriesCurrent,
   isPrimaryCurrent,
@@ -83,7 +84,9 @@ export function Nav() {
               left after the primary items and the buttons, up to Kalshi's 400px. */}
           <HStack gap="2" flex="1" justify="flex-end" minW="0">
             <Box hideBelow="md" flex="1" maxW="400px">
-              <SearchForm testId="nav-search" />
+              <WithSearchTerm>
+                {(term) => <SearchForm testId="nav-search" initialTerm={term} />}
+              </WithSearchTerm>
             </Box>
             <IconButton
               hideFrom="md"
@@ -109,13 +112,18 @@ export function Nav() {
         </HStack>
         {searchOpen && (
           <Box hideFrom="md" pb="3">
-            <SearchForm
-              testId="nav-search-mobile"
-              autoFocus
-              onSubmitted={() => {
-                setSearchOpen(false);
-              }}
-            />
+            <WithSearchTerm>
+              {(term) => (
+                <SearchForm
+                  testId="nav-search-mobile"
+                  initialTerm={term}
+                  autoFocus
+                  onSubmitted={() => {
+                    setSearchOpen(false);
+                  }}
+                />
+              )}
+            </WithSearchTerm>
           </Box>
         )}
         <CategoryNav />
@@ -202,13 +210,28 @@ function PrimaryLinks() {
  * `testId` is required, not defaulted, for the reason the trade panel takes a prefix: at <md the
  * desktop form is still mounted behind `display: none`, so while the mobile form is open both are
  * in the DOM and a shared id would make every Playwright selector ambiguous.
+ *
+ * The field is uncontrolled and KEYED on the term the URL carries (`initialTerm`, read by
+ * `WithSearchTerm`), which is the whole of the reconciliation it needs — the same rule the home
+ * screen's own box followed before ADR-0041 moved search up here. What is typed before Enter is
+ * a draft, so it must survive a navigation the draft itself did not cause — picking a category
+ * in row 2, changing the sort — and it must NOT survive one that replaced the term: Back out of
+ * a search, or a second search. A `useState` seeded on mount could do neither, because a
+ * search-param-only navigation re-renders this header without remounting it. Keying on the term
+ * remounts the input exactly when the URL's term changes and leaves it alone otherwise — no
+ * effect, and nothing that can fight the typing. Without it, `/?q=rain` opened cold showed an
+ * empty box over a filtered list, and Back from a second search kept the newer word in the box
+ * over the older list.
  */
 function SearchForm({
   testId,
+  initialTerm,
   autoFocus = false,
   onSubmitted,
 }: {
   testId: string;
+  /** The home list's current `q`, or `undefined` off `/` and when there is no search. */
+  initialTerm?: string;
   autoFocus?: boolean;
   onSubmitted?: () => void;
 }) {
@@ -232,9 +255,11 @@ function SearchForm({
         startElementProps={{ pointerEvents: 'auto', ps: '2', pe: '0' }}
       >
         <Input
+          key={initialTerm ?? ''}
           name="q"
           type="search"
           size="sm"
+          defaultValue={initialTerm ?? ''}
           // `subtle` is the variant with a transparent stroke; the fill is the theme's search
           // ground rather than the variant's `bg.muted`. The stroke stays in the box (at 0 alpha)
           // so the focus ring the variant paints on it still shows.
@@ -256,6 +281,28 @@ function SearchForm({
       </InputGroup>
     </Form>
   );
+}
+
+/**
+ * Hands `SearchForm` the term the home list is filtered on. `useSearchParams` in the root layout
+ * has to sit behind a Suspense boundary (see `CategoryNav` for the whole argument), and the
+ * fallback is the same form with no term: a static page prerenders the box empty, which is
+ * right — off `/` there is no term to show (`currentSearchTerm`) — and `/` is dynamic, so its
+ * HTML carries the real one. A render prop rather than a hook because the boundary is what
+ * makes the read safe, and a hook cannot bring its own boundary.
+ */
+function WithSearchTerm({ children }: { children: (term: string | undefined) => ReactNode }) {
+  return (
+    <Suspense fallback={children(undefined)}>
+      <SearchTermReader>{children}</SearchTermReader>
+    </Suspense>
+  );
+}
+
+function SearchTermReader({ children }: { children: (term: string | undefined) => ReactNode }) {
+  const pathname = usePathname();
+  const q = useSearchParams().get('q');
+  return children(currentSearchTerm(pathname, q));
 }
 
 /**

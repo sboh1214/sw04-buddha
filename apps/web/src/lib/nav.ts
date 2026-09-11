@@ -93,3 +93,22 @@ export function currentTopLevelSlug(
   if (pathname !== '/') return undefined;
   return locateCategory(tree, filteredCategory(category))?.parent.category.slug;
 }
+
+/**
+ * The `?q=` value AS THE LIST READS IT, for the header's search box: the term the home list is
+ * filtered on, or `undefined` when there is none — or when the visitor is not on `/`, where a
+ * `q` in the URL filters nothing and a box that still showed it would describe a list that is
+ * not on screen. Normalised by the same schema field `filtersFromSearchParams` uses (blank and
+ * whitespace-only are "no search"; over-long is dropped), so the box and the list agree on what
+ * was searched. This is what the box's `key`/`defaultValue` follow (nav.tsx `SearchForm`).
+ */
+const qParam = marketListQuerySchema.shape.q;
+
+export function currentSearchTerm(
+  pathname: string,
+  q: string | null | undefined,
+): string | undefined {
+  if (pathname !== '/') return undefined;
+  const parsed = qParam.safeParse(q ?? undefined);
+  return parsed.success ? parsed.data : undefined;
+}

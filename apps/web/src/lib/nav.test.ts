@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { type Category } from './api';
 import { groupCategories } from './category-tree';
-import { currentTopLevelSlug, isAllCategoriesCurrent, isPrimaryCurrent } from './nav';
+import {
+  currentSearchTerm,
+  currentTopLevelSlug,
+  isAllCategoriesCurrent,
+  isPrimaryCurrent,
+} from './nav';
 
 const category = (id: number, slug: string, parentId: number | null): Category => ({
   id,
@@ -94,5 +99,26 @@ describe('currentTopLevelSlug', () => {
   it('lights nothing off the home route, even for a slug in the tree', () => {
     expect(currentTopLevelSlug('/login', TREE, 'economy')).toBeUndefined();
     expect(currentTopLevelSlug('/markets/btc-100k', TREE, 'housing')).toBeUndefined();
+  });
+});
+
+describe('currentSearchTerm', () => {
+  it("is the home list's own term, trimmed the way the list trims it", () => {
+    expect(currentSearchTerm('/', 'rain')).toBe('rain');
+    expect(currentSearchTerm('/', '  rain  ')).toBe('rain');
+  });
+
+  it('is undefined for no search, a blank one, or one the list would refuse', () => {
+    expect(currentSearchTerm('/', null)).toBeUndefined();
+    expect(currentSearchTerm('/', undefined)).toBeUndefined();
+    expect(currentSearchTerm('/', '')).toBeUndefined();
+    expect(currentSearchTerm('/', '   ')).toBeUndefined();
+    expect(currentSearchTerm('/', 'a'.repeat(101))).toBeUndefined();
+  });
+
+  it('is undefined off the home route, whatever the URL carries', () => {
+    // A `q` on /leaderboard filters nothing; the box must not claim a search that is not shown.
+    expect(currentSearchTerm('/leaderboard', 'rain')).toBeUndefined();
+    expect(currentSearchTerm('/markets/btc-100k', 'rain')).toBeUndefined();
   });
 });
