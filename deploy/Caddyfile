@@ -1,12 +1,13 @@
 # Edge for the single public origin (ADR-0040). Automatic HTTPS: Caddy solves HTTP-01 on :80 (and
-# TLS-ALPN-01 on :443) against the CA named in `acme_ca` below (Let's Encrypt by default; an
-# explicit CA disables Caddy's fallback issuers), so the Cloudflare A record MUST stay DNS-only
-# (grey cloud) and both ports open. Certificates persist under /data (bind-mounted
-# from /data/caddy/data) and survive redeploys and instance replacement.
+# TLS-ALPN-01 on :443), so the Cloudflare A record MUST stay DNS-only (grey cloud) and both ports
+# open. No `acme_ca` on purpose: with only `email` set Caddy uses its default issuer chain —
+# Let's Encrypt first, ZeroSSL as fallback (Caddy fetches the ZeroSSL EAB from that e-mail by
+# itself). An explicit `acme_ca` would pin a single CA and remove the fallback; the first deploy
+# (2026-09-11) needed it when Let's Encrypt's remote validation perspectives were failing DNS
+# lookups for hours while every public resolver answered. Certificates persist under /data
+# (bind-mounted from /data/caddy/data) and survive redeploys and instance replacement.
 {
 	email {$ACME_EMAIL}
-	# Override with the staging directory to rehearse issuance without touching production limits.
-	acme_ca {$ACME_CA:https://acme-v02.api.letsencrypt.org/directory}
 	servers {
 		# Only tcp/443 is open in the security group; do not advertise HTTP/3.
 		protocols h1 h2

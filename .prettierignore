@@ -22,3 +22,4 @@ deploy/Caddyfile
 terraform/templates/
 # provider binaries from `terraform init` (nested terraform/.gitignore is not read by prettier)
 terraform/.terraform/
+terraform/*.tfstate*

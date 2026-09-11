@@ -35,8 +35,6 @@ services:
     environment:
       DOMAIN: ${DOMAIN}
       ACME_EMAIL: ${ACME_EMAIL}
-      # Optional: point at the Let's Encrypt staging CA to rehearse issuance without rate limits.
-      ACME_CA: ${ACME_CA:-https://acme-v02.api.letsencrypt.org/directory}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - /data/caddy/data:/data

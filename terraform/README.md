@@ -29,7 +29,7 @@ flowchart LR
 
   subgraph VPC["VPC 10.30.0.0/16 · public subnet · SG 80/443"]
     subgraph EC2["EC2 t4g.small (AL2023 arm64)"]
-      Caddy["caddy 172.28.0.10<br/>Let's Encrypt HTTP-01"]
+      Caddy["caddy 172.28.0.10<br/>ACME HTTP-01 (Let's Encrypt → ZeroSSL 폴백)"]
       Web["web :3000 172.28.0.20<br/>Next standalone"]
       Api["api :4000<br/>NestJS + Fastify"]
       Worker["worker :4100<br/>BullMQ"]
@@ -322,6 +322,17 @@ aws ssm send-command --profile inno-frame --document-name AWS-RunShellScript \
 
 `needs-restarting -r`는 재부팅이 필요할 때만 1을 답한다. 재부팅 ≈ 1분, 컨테이너는 스스로 올라온다.
 
+### TLS 인증서 (ACME)
+
+Caddy가 호스트에서 직접 받는다. `deploy/Caddyfile`에는 일부러 `acme_ca`가 없다 — `email`만 있으면 Caddy의 기본 발급자 사슬(**Let's Encrypt → ZeroSSL 폴백**, ZeroSSL의 EAB는 Caddy가 그 이메일로 자동 발급)이 동작한다. 인증서와 ACME 계정은 `/data/caddy/data`에 있어 재배포·인스턴스 교체에도 남고, 갱신은 자동이다(`docker compose logs caddy | grep -i renew`).
+
+첫 배포(2026-09-11)에서 겪은 일: Let's Encrypt의 원격 검증 지점 하나가 몇 시간 동안 `During secondary validation: DNS problem: networking error looking up A`를 내면서(우리 DNS는 전 세계 리졸버·LE와 같은 Unbound 프로파일에서 전부 정상) 발급이 막혔고, 그 사이 Caddy를 재시작할 때마다 실패가 쌓여 **"failed authorizations 5회/시간" 한도**에 걸렸다. ZeroSSL로 넘기자 30초 만에 발급됐다. 그래서:
+
+- 발급 실패 로그가 보이면 **Caddy를 반복 재시작하지 않는다** — 실패마다 LE 한도를 소모한다. Caddy는 스스로 10분 간격으로 재시도하고, LE가 계속 실패하면 ZeroSSL로 넘어간다.
+- 문구가 `During secondary validation: … networking error` / `query timed out`이면 LE 쪽이다. `dig +short A buddha.sboh.dev @1.1.1.1`과 https://unboundtest.com 으로 우리 쪽을 확인하고 기다린다.
+- 특정 CA를 강제해야 하면(예: LE 스테이징 리허설) 호스트에서 `/data/buddha/Caddyfile`의 전역 블록에 `acme_ca <directory url>`을 임시로 넣고 `docker compose up -d caddy`한다 — 다음 배포가 이미지의 Caddyfile로 덮어쓴다. 스테이징 디렉터리: `https://acme-staging-v02.api.letsencrypt.org/directory`.
+- 첫 배포의 워크플로 스모크 테스트(`curl https://…/api/health`, ≈ 3분 재시도)는 발급이 늦으면 실패로 끝날 수 있다. 배포 자체(`Deploy over SSM` 단계)가 성공이면 재실행할 필요 없이 `curl`로 다시 확인한다.
+
 ## 주시해야 할 drift
 
 - **`aws_instance.app` — `ignore_changes = [ami, user_data]`.** AL2023 AMI는 달마다 새 id가 나오고 `data.aws_ssm_parameter.al2023_arm64`가 그것을 읽지만, plan에는 뜨지 않는다. `templates/user-data.sh.tftpl`을 고쳐도 마찬가지다. 둘 다 `-replace=aws_instance.app`로만 반영된다(위 절차). 첫 부팅 이후에 바뀔 수 있는 호스트 설정은 그래서 `deploy/host-setup.sh`에 있다.
@@ -368,16 +379,16 @@ terraform output -raw github_oidc_subject                            # 신뢰 �
 
 ap-northeast-2 온디맨드, Pricing API로 확인(2026-09).
 
-| 항목                                                                                                                             |                              USD/월 |
-| -------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------: |
-| EC2 t4g.small 730h(standard credits)                                                                                             |                               15.18 |
-| EBS gp3 root 16 GiB + data 10 GiB(암호화)                                                                                        |                                2.37 |
-| EBS 스냅샷(DLM 일일 7개, 증분)                                                                                                   |                               ~0.15 |
-| Public IPv4(EIP)                                                                                                                 |                                3.65 |
-| ECR(3 repo × ≤10 이미지, 공유 레이어)                                                                                            |                               ~0.30 |
-| SES(수백 통/월; 신규 리전 사용 시 Essentials $0.16/1k)                                                                           |                               ~0.05 |
-| SSM Parameter Store·Run Command·Session Manager·KMS(무료 구간)·DLM·VPC·Cloudflare DNS·Let's Encrypt·GitHub arm 러너(플랜 포함분) |                                   0 |
-| **합계**                                                                                                                         | **≈ 21.7** (인스턴스 중지 시 ≈ 6.5) |
+| 항목                                                                                                                                     |                              USD/월 |
+| ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------: |
+| EC2 t4g.small 730h(standard credits)                                                                                                     |                               15.18 |
+| EBS gp3 root 16 GiB + data 10 GiB(암호화)                                                                                                |                                2.37 |
+| EBS 스냅샷(DLM 일일 7개, 증분)                                                                                                           |                               ~0.15 |
+| Public IPv4(EIP)                                                                                                                         |                                3.65 |
+| ECR(3 repo × ≤10 이미지, 공유 레이어)                                                                                                    |                               ~0.30 |
+| SES(수백 통/월; 신규 리전 사용 시 Essentials $0.16/1k)                                                                                   |                               ~0.05 |
+| SSM Parameter Store·Run Command·Session Manager·KMS(무료 구간)·DLM·VPC·Cloudflare DNS·Let's Encrypt/ZeroSSL·GitHub arm 러너(플랜 포함분) |                                   0 |
+| **합계**                                                                                                                                 | **≈ 21.7** (인스턴스 중지 시 ≈ 6.5) |
 
 - `t4g.small`은 CPU credit을 `standard`로 둔다 — `unlimited`면 지속 부하 때 시간당 추가 청구가 생긴다. 크레딧 고갈이 보이면(CloudWatch `CPUCreditBalance`) `t4g.medium`이 답이다.
 - NAT Gateway(월 $45)가 없다. 인스턴스가 퍼블릭 서브넷에 있고 SG가 80/443만 연다.
