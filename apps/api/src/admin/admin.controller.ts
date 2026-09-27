@@ -25,6 +25,7 @@ import {
   auditFailureSchema,
   balanceAdjustBodySchema,
   cursorQuerySchema,
+  refundPaymentBodySchema,
   uuidParamSchema,
   type AdminBalanceAdjustResult,
   type AdminPayment,
@@ -37,6 +38,7 @@ import {
   type CreateChargePackageBody,
   type CreateCouponBody,
   type CursorQuery,
+  type RefundPaymentBody,
   type UpdateChargePackageBody,
   type UpdateCouponBody,
 } from '@buddha/shared';
@@ -51,6 +53,7 @@ import { SESSION_SECURITY_SCHEME } from '../openapi/document.js';
 import { ChargePackageService } from '../wallet/charge-package.service.js';
 import { CouponService } from '../wallet/coupon.service.js';
 import { AdminService } from './admin.service.js';
+import { PaymentRefundService } from './payment-refund.service.js';
 
 /**
  * PLAN 7.3 / 12. Guards run in order, so SessionGuard fills `request.auth` before AdminGuard
@@ -65,6 +68,7 @@ export class AdminController {
     private readonly admin: AdminService,
     private readonly packages: ChargePackageService,
     private readonly coupons: CouponService,
+    private readonly refunds: PaymentRefundService,
   ) {}
 
   // --- charge packages (ADR-0026): the catalogue users buy from -----------------------
@@ -209,6 +213,38 @@ export class AdminController {
   ): Promise<ApiPage<AdminPayment>> {
     const { items, nextCursor } = await this.admin.listPayments(query.cursor, query.limit);
     return new ApiPage(items, { nextCursor });
+  }
+
+  @Post('payments/:id/refund')
+  @HttpCode(200)
+  @ApiOperation({
+    operationId: 'adminRefundPayment',
+    summary:
+      'Refund an unused charge within 7 days of its approval: claw back all its P, then cancel the whole KRW at the provider (retry a refunding one)',
+  })
+  @ApiData(adminPaymentSchema)
+  // INSUFFICIENT_BALANCE: part of the P was used. REFUND_NOT_ALLOWED: details[0].message is
+  // `window_closed`, `status` or `provider`. PAYMENT_GATEWAY_REFUSED: the PG said no and the P
+  // was restored. PAYMENT_GATEWAY_ERROR: no answer; the payment stays `refunding` for a retry.
+  // DUPLICATE_REQUEST (details[0].message `in progress`): a retry while the last attempt is
+  // still waiting on the PG.
+  @ApiErrors(
+    'UNAUTHENTICATED',
+    'FORBIDDEN',
+    'NOT_FOUND',
+    'VALIDATION_ERROR',
+    'INSUFFICIENT_BALANCE',
+    'DUPLICATE_REQUEST',
+    'REFUND_NOT_ALLOWED',
+    'PAYMENT_GATEWAY_REFUSED',
+    'PAYMENT_GATEWAY_ERROR',
+  )
+  refundPayment(
+    @CurrentUser() admin: SessionUser,
+    @Param('id', { schema: uuidParamSchema }) id: string,
+    @Body({ schema: refundPaymentBodySchema }) body: RefundPaymentBody,
+  ): Promise<AdminPayment> {
+    return this.refunds.refund(admin.id, id, body.reason);
   }
 
   @Get('audit-failures')

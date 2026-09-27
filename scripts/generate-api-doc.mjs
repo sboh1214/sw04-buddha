@@ -63,7 +63,8 @@ const BANNER = `<!-- 이 파일은 scripts/generate-api-doc.mjs 가 생성합니
   \`@ApiErrors\` 데코레이터와 zod 스키마. 모든 오퍼레이션에 공통인 \`RATE_LIMITED\`(429) 하나만은
   \`apps/api/src/openapi/document.ts\` 의 \`addGlobalResponse\` 가 붙인다(주소 버킷은 모든 라우트에
   걸리므로). 고친 뒤 \`pnpm api:openapi\` 를 실행한다.
-- 문서의 문장(개요·인증·헬스체크·better-auth·레이트 리밋·실시간 절): \`scripts/generate-api-doc.mjs\`
+- 문서의 문장(개요·인증·헬스체크·SmartroPay 콜백·better-auth·레이트 리밋·실시간 절):
+  \`scripts/generate-api-doc.mjs\`
   맨 위의 템플릿 상수.`;
 
 /**
@@ -75,8 +76,9 @@ const OVERVIEW = `## 개요
 
 - **기본 경로** — 이 문서에 실린 모든 오퍼레이션은 \`/api/v1\` 아래에 있다(전역 prefix \`api\` +
   URI 버저닝, 기본 버전 1). 버전 접두어가 없는 두 표면은 OpenAPI 문서 밖이라 아래에 손으로 적었다:
-  헬스체크(\`/api/health\`, \`/api/health/live\`)와 \`/api/auth/*\`(better-auth). 문서에 \`servers\` 가
-  없으므로 경로는 API 오리진 기준 상대 경로다. 브라우저는 Next.js
+  헬스체크(\`/api/health\`, \`/api/health/live\`)와 \`/api/auth/*\`(better-auth). SmartroPay 가 부르는
+  콜백 셋(\`/api/v1/payments/smartro/{return,stop,notify}\`)도 PG 의 계약이라 문서 밖이다(아래 절).
+  문서에 \`servers\` 가 없으므로 경로는 API 오리진 기준 상대 경로다. 브라우저는 Next.js
   rewrite(\`/api/:path*\` → \`NEXT_PUBLIC_API_URL\`)를 거쳐 같은 오리진으로 호출한다.
 - **성공 봉투** — 단일 리소스는 \`{ "data": ... }\`, 커서 목록은
   \`{ "data": [...], "meta": { "nextCursor": ... } }\`.
@@ -95,9 +97,10 @@ const OVERVIEW = `## 개요
   P 금액은 부호 1자 + \`MAX_P_AMOUNT\`(10^15)의 16자리 = 17자까지만 받는다(그보다 긴 문자열은
   파싱하기 전에 거절한다: 백만 자리 \`BigInt()\` 는 요청 스레드에서 실제로 CPU 를 쓴다).
 - **본문 형식** — 요청·응답 모두 \`application/json\` 이다.
-  \`application/x-www-form-urlencoded\` 파서는 꺼져 있다(HTML 폼이 바로 CSRF 의 모양이다).
-- **operationId** — 컨트롤러의 메서드 이름 그대로다(\`openapi/document.ts\` 의
-  \`operationIdFactory\`).`;
+  \`application/x-www-form-urlencoded\` 파서는 꺼져 있다(HTML 폼이 바로 CSRF 의 모양이다). 폼을
+  받는 곳은 문서 밖의 SmartroPay 콜백 셋뿐이고, 그 핸들러들만 원문 바이트를 직접 읽는다.
+- **operationId** — 오퍼레이션마다 \`@ApiOperation({ operationId })\` 로 명시한다. 명시하지 않은
+  오퍼레이션만 컨트롤러의 메서드 이름을 쓴다(\`openapi/document.ts\` 의 \`operationIdFactory\`).`;
 
 /** 인증. Read from openapi/document.ts, auth/session.guard.ts and auth/admin.guard.ts. */
 const AUTH_NOTES = `- 아래 표의 \`인증\` 칸이 \`🔒\` 인 오퍼레이션은 이 쿠키를 요구한다. \`—\` 는 공개 라우트다.
@@ -146,6 +149,57 @@ const HEALTH_SECTION = `## 헬스체크 (문서 밖)
 - \`GET /api/health/live\` 는 \`{ "status": "ok", "uptimeSeconds": 1234 }\` 만 답한다. 200 말고 다른
   답이 없는 것이 요점이다: 레디니스에 라이브니스 프로브를 물리면 Redis 가 한 번 흔들렸다는 이유로
   컨테이너가 재시작되고, 그 인스턴스가 들고 있던 소켓이 전부 끊긴다.`;
+
+/**
+ * SmartroPay 콜백. Read from apps/api/src/payments/smartro/smartro-callback.controller.ts,
+ * smartro-pay.service.ts, callback-form.ts, smartro-protocol.ts (SMARTRO_NOTIFY_IPS),
+ * payments/payments-config.ts (notifyIps) and packages/shared/src/payment-gateway.ts
+ * (PAYMENT_RETURN_RESULTS).
+ */
+const PAYMENT_CALLBACK_SECTION = `## SmartroPay 콜백 (문서 밖)
+
+스마트로페이 결제창과 스마트로페이 서버가 부르는 경로 셋이다(ADR-0042). 클라이언트가 아니라 PG 의
+계약이라 \`@ApiExcludeController()\` 로 OpenAPI 문서에서 뺐고, PLAN 7 봉투로 감싸지 않는다.
+**공개 라우트**다 — 모바일 결제창의 ReturnUrl POST 는 스마트로페이 사이트에서 쿠키 없이 다른 출처로
+오고, 재통보는 서버 간 호출이다. 그래서 세션이 아니라 Moid(결제 id 에서 하이픈을 뺀 소문자 16진수
+32자리 — ReturnUrl·StopUrl 에는 쿼리 \`m\` 으로 우리가 넣어 둔다)로만 결제를 찾는다.
+
+| 메서드 | 경로 | 뜻 |
+| --- | --- | --- |
+| POST | \`/api/v1/payments/smartro/return?m=<moid>\` | ReturnUrl. \`Tid\`·\`TrAuthKey\` 로 승인을 요청하고, 검증을 통과하면 P 를 적립한다 |
+| GET·POST | \`/api/v1/payments/smartro/stop?m=<moid>\` | StopUrl. 아직 어떤 승인도 잡지 않은 \`pending\` 결제를 \`failed\` 로 닫는다 |
+| POST | \`/api/v1/payments/smartro/notify\` | 재통보(신통보 파라미터). 가맹점 관리자(smilebiz)에 운영자가 등록하는 URL |
+
+- **본문** — \`application/x-www-form-urlencoded\`(UTF-8). 전역 폼 파서는 계속 꺼져 있고, 이 세
+  핸들러만 파서가 남겨 둔 원문(\`rawBody\`)을 직접 디코딩한다. 다른 라우트에 보낸 폼은 여전히 400 이다.
+- **return·stop 의 답** — 언제나 \`303 See Other\` 로 웹의 \`/wallet?payment=<id>&result=<r>\`(웹
+  오리진은 \`BETTER_AUTH_URL\` 의 오리진). \`r\` 은 \`succeeded\`·\`failed\`·\`stopped\`·\`pending\`·
+  \`cancelled\` 중 하나이고, Moid 를 알아볼 수 없으면 \`payment\` 없이 \`result=failed\` 다.
+- **승인은 한 번만** — ReturnUrl 은 \`pending\` 이고 아직 아무도 잡지 않은 결제에 \`provider_ref\` 를
+  먼저 적는 요청만 승인을 요청한다. 두 번째 제출(뒤로 가기)은 승인을 다시 부르지 않고 지금 상태를
+  답한다. 승인 응답이 오지 않으면 결과 조회를 한 번 하고, 그래도 모르면 \`pending\` 으로 두어
+  재통보나 관리자가 정리하게 한다. 승인됐는데 \`SignValue\`·\`Mid\`·\`Moid\`·금액이 맞지 않거나 적립이
+  실패하면 곧바로 망취소하고 \`cancelled\` 로 답한다(취소마저 실패하면 \`pending\`). 단, 그 승인이
+  우리의 **다른** 결제의 것이면(\`Moid\` 가 다른 결제를 가리키거나 그 \`Tid\` 를 다른 결제가 이미
+  들고 있으면) 취소하지 않고 이 결제를 \`failed\` 로 닫는다 — 그 승인은 그 결제의 흐름이 맡는다.
+  적립이 실패했어도 다시 읽은 결제가 더는 \`pending\` 이 아니면(커밋 뒤에 난 오류, 또는 그사이
+  재통보가 적립) 취소하지 않고 지금 상태로 답한다.
+- **notify 의 답** — 처리했거나 무시해도 되는 통보는 \`200 text/plain\` \`OK\`. 보낸 주소가 그
+  모드의 스마트로페이 서버가 아니면 \`403\`(STG \`211.193.35.11\`, REAL 재통보 서버
+  \`211.193.35.216\`·\`211.193.35.217\` 와 결제 서버 \`211.193.35.20\`; 주소는 Caddy 가 적은
+  \`X-Forwarded-For\` 를 \`TRUST_PROXY\` 로 믿어 읽는다. \`SMARTRO_APPROVAL_BASE_URL\` 로 로컬 가짜 PG
+  를 쓸 때만 이 검사를 끈다 — 운영에서는 그 변수가 거부된다), \`SignValue\` 가 맞지 않으면 \`400\`, 우리
+  쪽 처리가 실패하면 5xx(셋 다 본문에 \`OK\` 가 없으므로 스마트로페이가 다시 보낸다). 승인
+  통보(\`StateCd=0\`)는 아직 적립하지 않은 결제(\`pending\`, 또는 우리가 \`failed\` 로 적은 결제)를
+  적립하되, **우리 ReturnUrl 이 잡은 결제(\`provider_ref\` 가 있는 결제)만** 적립한다: 인증/승인
+  분리에서 PG 는 우리 서버가 승인을 요청할 때만 승인하고, 그 요청은 언제나 잡기가 커밋된 뒤에 나간다.
+  잡히지 않은 결제의 승인 통보는 진짜일 수 없으므로 기록만 하고 \`OK\` 로 답한다(다시 보내도 바뀔 것이
+  없다). 취소 통보(\`StateCd=1|2\`)는 기록만 하고 P 를 회수하지 않는다(가맹점 관리자에서 한 취소 —
+  ADR-0042 의 열린 질문).
+- PG 와의 교환은 \`payment_events\` 에 남는다(MerchantKey·CancelPwd·HashData·EncData 와 구매자
+  개인정보는 빼고). return·stop 은 결제를 실제로 잡거나 닫을 때만 남기고, 알려진 SmartroPay 필드만
+  적는다 — 공개 경로라 이미 끝난 결제에 같은 폼을 다시 보내도 아무것도 쌓이지 않는다. 레이트 리밋은
+  다른 라우트처럼 주소 버킷만 걸린다.`;
 
 /**
  * /api/auth/*. Read from apps/api/src/auth/auth.ts, auth/auth.module.ts, the better-auth 1.7.2
@@ -310,7 +364,7 @@ const ERROR_NOTES = {
   INSUFFICIENT_POSITION: '팔려는 수량만큼 보유하고 있지 않다.',
   PRICE_MOVED: '다시 계산한 금액이 `maxCostP`(매수) 또는 `minProceedsP`(매도)를 벗어났다.',
   DUPLICATE_REQUEST:
-    '이미 쓴 멱등 키를 다른 조건으로 다시 썼거나(키는 소모된다), 한 번만 할 수 있는 일을 두 번 했다(쿠폰 재사용, 같은 시장에 이의 2회).',
+    '이미 쓴 멱등 키를 다른 조건으로 다시 썼거나(키는 소모된다), 한 번만 할 수 있는 일을 두 번 했다(쿠폰 재사용, 같은 시장에 이의 2회). 환불 재시도는 앞선 시도가 아직 PG 의 답을 기다리는 동안 이것으로 답한다(`details[0].message` 가 `in progress`).',
   RATE_LIMITED: '레이트 리밋 초과. `details.retryAfterSeconds` 와 `Retry-After` 헤더에 대기 초.',
   DISPUTE_WINDOW_CLOSED: '이의 접수 창이 닫혔다(정산이 확정되었거나 `resolving` 이 아니다).',
   RULES_REQUIRED: '정산 규칙(`rules`)이 비어 있어 개장하거나 그대로 저장할 수 없다.',
@@ -330,7 +384,7 @@ const RATE_LIMIT_ROUTES = {
   default:
     '모든 HTTP 라우트. 아래 버킷을 지목한 라우트도 여기에 함께 들어간다(주소 하나당 API 전체 합산).',
   trade: '`POST /api/v1/trades`',
-  charge: '`POST /api/v1/payments/charge`',
+  charge: '`POST /api/v1/payments/charge`, `POST /api/v1/payments/smartro/prepare`',
   coupon: '`POST /api/v1/coupons/redeem`',
   dispute: '`POST /api/v1/markets/{id}/disputes`',
   email:
@@ -653,7 +707,7 @@ blocks.push(
   schemaNames.map((name) => `\`${name}\``).join(', '),
 );
 
-blocks.push(HEALTH_SECTION, BETTER_AUTH_SECTION);
+blocks.push(HEALTH_SECTION, PAYMENT_CALLBACK_SECTION, BETTER_AUTH_SECTION);
 
 blocks.push(
   '## 레이트 리밋',

@@ -140,10 +140,16 @@ export class AuthInstanceModule {}
       // forgery submits (SessionGuard.refuseForeignOrigin). Left on, it also 500s on every
       // form body today because its `qs` peer dependency is not installed — protection by
       // accident, which any dependency pulling in `qs` would silently remove.
+      //
+      // `rawBody` keeps every parsed body's bytes on `request.rawBody` — the disabled
+      // urlencoded parser included, which still answers `body: undefined`. That is how the three
+      // SmartroPay callbacks read their form posts (payments/smartro/callback-form.ts) while
+      // every other route keeps refusing a form with 400. Nest's own `rawBody` app option
+      // cannot do it: main.ts passes `bodyParser: false`, and these parsers are the library's.
       useFactory: (auth: Auth) => ({
         auth,
         disableTrustedOriginsCors: true,
-        bodyParser: { urlencoded: { enabled: false } },
+        bodyParser: { rawBody: true, urlencoded: { enabled: false } },
       }),
       disableGlobalAuthGuard: true,
     }),

@@ -5,12 +5,15 @@
 import { schema } from '@buddha/db';
 import {
   SIGNUP_BONUS_P,
+  userChannel,
   type ChargePackage,
   type ChargeResult,
   type LedgerEntry,
+  type Payment,
 } from '@buddha/shared';
 import { randomUUID } from 'node:crypto';
 import { asc, eq } from 'drizzle-orm';
+import { Redis } from 'ioredis';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PAYMENT_PROVIDER, type PaymentProvider } from '../payments/payment-provider.js';
 import {
@@ -25,7 +28,7 @@ import {
 } from '../test/app.js';
 import { expectLedgerChain } from '../test/ledger.js';
 import { hasTestInfra } from '../test/setup-env.js';
-import { waitForLockWaiter } from '../test/wait.js';
+import { waitForLockWaiter, waitForMessages } from '../test/wait.js';
 
 const jsonHeaders = { origin: 'http://localhost:3000', 'content-type': 'application/json' };
 
@@ -122,6 +125,14 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
       packageId: pack.id,
       provider: 'mock',
       status: 'succeeded',
+    });
+    // ADR-0042 fields: a mock charge has no PG method or message, is approved at the instant it
+    // is credited (the DEPOSIT's own clock, after the balance lock) and is not refunded.
+    expect(data.payment).toMatchObject({
+      method: null,
+      refundedAt: null,
+      resultMessage: null,
+      approvedAt: data.ledgerEntry.createdAt,
     });
     expect(data.ledgerEntry).toMatchObject({
       type: 'DEPOSIT',
@@ -575,6 +586,82 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
       data: [{ amountP: '10000', priceKrw: 9700, provider: 'mock', status: 'succeeded' }],
       meta: { nextCursor: null },
     });
+  });
+
+  it('GET /me/payments/:id answers the caller own payment only', async () => {
+    const charged = (await charge(pack)).json<{ data: ChargeResult }>().data.payment;
+    const own = await t.app.inject({
+      method: 'GET',
+      url: `/api/v1/me/payments/${charged.id}`,
+      headers: { cookie: user.cookie },
+    });
+    expect(own.statusCode).toBe(200);
+    expect(own.json<{ data: Payment }>().data).toEqual(charged);
+
+    // Someone else's payment is indistinguishable from none at all.
+    const other = await signUpTestUser(t);
+    for (const [cookie, id] of [
+      [other.cookie, charged.id],
+      [user.cookie, '3f1a5b6c-1111-4222-8333-444455556666'],
+    ] as const) {
+      const res = await t.app.inject({
+        method: 'GET',
+        url: `/api/v1/me/payments/${id}`,
+        headers: { cookie },
+      });
+      expect(res.statusCode).toBe(404);
+      expect(res.json()).toMatchObject({ error: { code: 'NOT_FOUND' } });
+    }
+    const malformed = await t.app.inject({
+      method: 'GET',
+      url: '/api/v1/me/payments/not-a-uuid',
+      headers: { cookie: user.cookie },
+    });
+    expect(malformed.statusCode).toBe(400);
+    const anonymous = await t.app.inject({
+      method: 'GET',
+      url: `/api/v1/me/payments/${charged.id}`,
+    });
+    expect(anonymous.statusCode).toBe(401);
+  });
+
+  it('offers the immediate mock charge and keeps the SmartroPay window closed', async () => {
+    // GET /payments/provider is public: the web picks the flow before anyone signs in.
+    const info = await t.app.inject({ method: 'GET', url: '/api/v1/payments/provider' });
+    expect(info.statusCode).toBe(200);
+    expect(info.json()).toEqual({ data: { provider: 'mock' } });
+
+    const prepare = await t.app.inject({
+      method: 'POST',
+      url: '/api/v1/payments/smartro/prepare',
+      headers: chargeHeaders(user.cookie),
+      payload: chargeBody(pack, user.id),
+    });
+    expect(prepare.statusCode).toBe(404);
+    expect(prepare.json()).toMatchObject({ error: { code: 'NOT_FOUND' } });
+    expect(await paymentsOf(user.id)).toHaveLength(0);
+  });
+
+  it('publishes the new balance after a charge commits (PLAN 8)', async () => {
+    const subscriber = new Redis(process.env.TEST_REDIS_URL!, { maxRetriesPerRequest: 1 });
+    const received: string[] = [];
+    subscriber.on('message', (_channel: string, message: string) => received.push(message));
+    await subscriber.subscribe(userChannel(user.id));
+    try {
+      const { data } = (await charge(pack)).json<{ data: ChargeResult }>();
+      await waitForMessages(received, 1, 'user:balance after a charge');
+      expect(received.map((message) => JSON.parse(message) as unknown)).toEqual([
+        {
+          type: 'user:balance',
+          availableP: data.balance.availableP,
+          lockedP: '0',
+          ledgerEntryId: data.ledgerEntry.id,
+          ts: data.ledgerEntry.createdAt,
+        },
+      ]);
+    } finally {
+      await subscriber.quit();
+    }
   });
 
   it('rejects a cursor limit above the maximum', async () => {

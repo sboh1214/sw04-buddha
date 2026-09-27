@@ -51,14 +51,8 @@ const AUDITED: Readonly<Record<string, AdminActionType>> = {
   'POST /admin/markets/:id/resolve': 'market_resolve',
   'POST /admin/markets/:id/void': 'market_void',
   'PATCH /admin/disputes/:id': 'dispute_review',
+  'POST /admin/payments/:id/refund': 'payment_refund',
 };
-
-/**
- * TEMPORARY (SmartroPay, ADR-0042): `payment_refund` is declared in @buddha/shared ahead of
- * `POST /admin/payments/:id/refund`, which lands in the next stage of the same branch. Adding
- * that route means moving this value into AUDITED above and deleting this list.
- */
-const ROUTE_NOT_YET_ADDED: readonly AdminActionType[] = ['payment_refund'];
 
 interface DiscoveredRoute {
   method: string;
@@ -160,7 +154,7 @@ describe('admin audit log completeness', () => {
     const used = Object.values(AUDITED);
     // Every type is produced by some route: a value nothing writes is a value a reader of the
     // enum would look for in the audit log and never find.
-    expect([...used, ...ROUTE_NOT_YET_ADDED].sort()).toEqual([...ADMIN_ACTION_TYPES].sort());
+    expect([...used].sort()).toEqual([...ADMIN_ACTION_TYPES].sort());
     expect(new Set(used).size).toBe(used.length);
   });
 

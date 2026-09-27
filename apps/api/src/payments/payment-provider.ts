@@ -1,6 +1,6 @@
 import { type PaymentStatus } from '@buddha/shared';
 
-/** Injection token for the configured PaymentProvider. */
+/** Injection token for the configured PaymentProvider (PAYMENT_PROVIDER in the env). */
 export const PAYMENT_PROVIDER = Symbol('PAYMENT_PROVIDER');
 
 export interface ChargeRequest {
@@ -22,14 +22,40 @@ export interface ChargeOutcome {
   failureReason?: string;
 }
 
+export interface CancelRequest {
+  paymentId: string;
+  /** The provider's transaction id (`payments.provider_ref`; SmartroPay's Tid). */
+  providerRef: string;
+  /** KRW to give back: always the whole amount collected — a full cancel (owner decision 5). */
+  priceKrw: number;
+  /** Why; SmartroPay's CancelMsg takes the first 100 characters. */
+  reason: string;
+}
+
+export interface CancelOutcome {
+  /**
+   * `cancelled`: the provider confirmed (SmartroPay 2001, or 2013 "already cancelled" — a retry
+   * of a cancel whose answer was lost). `refused`: it answered and said no. `unknown`: no
+   * readable answer arrived, so the card may or may not have been cancelled.
+   */
+  status: 'cancelled' | 'refused' | 'unknown';
+  resultCode?: string;
+  resultMessage?: string;
+  /** The provider's answer for `payment_events`, secrets already removed; absent for the mock. */
+  payload?: Record<string, unknown>;
+}
+
 /**
- * The seam a real payment gateway will slot into (PLAN 16). Everything the wallet needs from
- * a provider is here: a name for `payments.provider` and one call that either succeeds with a
- * reference or fails with a reason. A redirect/webhook provider will add its own module and
- * keep this interface for the immediate-capture path.
+ * The seam every payment gateway slots into (PLAN 16, ADR-0042). `name` goes into
+ * `payments.provider`. `charge` is the immediate-capture path and only a provider that settles in
+ * one call has it (the mock); a redirect provider (SmartroPay) takes its money through the
+ * payment window and its callbacks instead, so the configured provider decides which charge
+ * flow is open. `cancel` is what refunds and net cancels need, and every provider has it: a
+ * refund goes to the provider recorded on the payment row, whatever is configured today.
  */
 export interface PaymentProvider {
   /** Stored in `payments.provider` (PAYMENT_PROVIDERS in @buddha/shared). */
   readonly name: string;
-  charge(request: ChargeRequest): Promise<ChargeOutcome>;
+  charge?(request: ChargeRequest): Promise<ChargeOutcome>;
+  cancel(request: CancelRequest): Promise<CancelOutcome>;
 }

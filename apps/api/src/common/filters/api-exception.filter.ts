@@ -24,6 +24,8 @@ interface Rendered {
    * one, so the log keeps what the body drops; `undefined` when the body already says it.
    */
   hidden?: string;
+  /** The envelope's code; `undefined` for a @RawResponse() body, which has none. */
+  code?: ErrorCode;
 }
 
 const CODE_BY_STATUS: Readonly<Partial<Record<number, ErrorCode>>> = {
@@ -43,6 +45,22 @@ export function codeForStatus(status: number): ErrorCode {
   if (mapped) return mapped;
   // 400, 413, 415, 422 and any other client error: the request itself is malformed.
   return status >= 400 && status < 500 ? 'VALIDATION_ERROR' : 'INTERNAL';
+}
+
+/**
+ * What a refused (4xx) request's debug line says about its error: the error itself, except for
+ * a SyntaxError — a body that did not parse, and V8 quotes part of that body in the message
+ * (`Unexpected token 'x', "x{"realNam"... is not valid JSON`, or all of a short one). That can
+ * be a real name or a phone number (PUT /me/contact, sign-up), which no log may hold (DESIGN
+ * §5.7), so of a SyntaxError only its name, the status and the envelope code are logged.
+ */
+export function refusalLogFields(
+  exception: unknown,
+  status: number,
+  code: ErrorCode | undefined,
+): Record<string, unknown> {
+  if (exception instanceof SyntaxError) return { status, code, errName: exception.name };
+  return { err: exception };
 }
 
 /** Nest's built-in exceptions store `{ statusCode, message, error }`; extract the message. */
@@ -72,7 +90,8 @@ function httpExceptionMessage(exception: HttpException): string {
  * That is a map of the internals handed to whoever asked. The message is not lost: `hidden`
  * below carries it into the log line, next to the request that produced it.
  *
- * Handlers marked @RawResponse() (health) keep the HttpException body verbatim.
+ * Handlers marked @RawResponse() (health, the SmartroPay callbacks) keep the HttpException body
+ * verbatim.
  */
 @Catch()
 export class ApiExceptionFilter implements ExceptionFilter {
@@ -81,18 +100,34 @@ export class ApiExceptionFilter implements ExceptionFilter {
     const reply = http.getResponse<FastifyReply>();
     const request = http.getRequest<FastifyRequest>();
     const raw = isRawResponse(request);
-    const { status, body, hidden } = this.render(exception, raw);
+    const { status, body, hidden, code } = this.render(exception, raw);
 
     // `request.log`, not a module-level Logger: it is the child bound to this request's `reqId`
     // (main.ts `genReqId`), so the failure and the `request completed` line that follows it can
     // be read as one story. Under `logger: false` — every test — it is a no-op.
-    if (raw) {
-      // A @RawResponse() handler owns its own body, and the only one is `/api/health`, whose
-      // 503 is a REPORT rather than a failure: the probe found a dependency down and said so.
-      // Logging that at `error` as "unhandled failure: Internal server error" would fill the
-      // stream with the loudest possible line for the API's most routine bad news, and describe
-      // it wrongly — the health controller has already logged which probe failed and why.
-      request.log.warn({ status }, 'health check reported a problem');
+    if (raw && exception instanceof HttpException) {
+      // A @RawResponse() handler owns its own body, and an HttpException is how it ANSWERS with
+      // an error status on purpose: `/api/health`'s 503 is a report (the probe found a
+      // dependency down and said so), a SmartroPay 재통보 from an address that is not
+      // SmartroPay's gets a 403 and one whose SignValue does not verify a 400. Logging those at
+      // `error` as "unhandled failure" would fill the stream with the loudest line for routine
+      // answers, and describe them wrongly — the handler has already logged what it found.
+      request.log.warn(
+        { status, route: request.routeOptions.url },
+        'raw-response route answered with an error status',
+      );
+    } else if (raw && status >= 500) {
+      // Anything else a raw route throws is a real failure (a 재통보 we could not process —
+      // SmartroPay retries it because the body is not `OK`), logged like any other 5xx.
+      request.log.error(
+        { err: exception, hidden, route: request.routeOptions.url },
+        `raw-response route failed: ${hidden ?? INTERNAL_MESSAGE}`,
+      );
+    } else if (raw) {
+      request.log.debug(
+        { ...refusalLogFields(exception, status, code), route: request.routeOptions.url },
+        'request refused',
+      );
     } else if (status >= 500) {
       request.log.error(
         { err: exception, hidden },
@@ -102,7 +137,7 @@ export class ApiExceptionFilter implements ExceptionFilter {
       // 4xx at DEBUG, not silence. A refused request is normal traffic and must not fill the
       // stream at info, but "every request from this address is a 401" is a fact an operator
       // needs to be able to see without adding code first.
-      request.log.debug({ err: exception }, 'request refused');
+      request.log.debug(refusalLogFields(exception, status, code), 'request refused');
     }
     void reply.status(status).send(body);
   }
@@ -131,13 +166,14 @@ export class ApiExceptionFilter implements ExceptionFilter {
 
   /** Builds the envelope, replacing the message of anything 5xx and remembering the original. */
   private rendered(status: number, code: ErrorCode, message: string, details?: unknown): Rendered {
-    if (status < 500) return { status, body: errorEnvelope(code, message, details) };
+    if (status < 500) return { status, body: errorEnvelope(code, message, details), code };
     // `details` is dropped with the message: it is authored by the same throw and can name a
     // column, a constraint or a row id just as freely.
     return {
       status,
       body: errorEnvelope(code, INTERNAL_MESSAGE),
       hidden: message === INTERNAL_MESSAGE ? undefined : message,
+      code,
     };
   }
 }

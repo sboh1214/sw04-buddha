@@ -49,6 +49,46 @@ function toAdminUser(row: UserRow): AdminUser {
   };
 }
 
+const adminPaymentColumns = {
+  id: schema.payments.id,
+  userId: schema.payments.userId,
+  nickname: schema.profiles.nickname,
+  amountP: schema.payments.amountP,
+  priceKrw: schema.payments.priceKrw,
+  packageId: schema.payments.packageId,
+  provider: schema.payments.provider,
+  providerRef: schema.payments.providerRef,
+  status: schema.payments.status,
+  method: schema.payments.method,
+  approvedAt: schema.payments.approvedAt,
+  refundedAt: schema.payments.refundedAt,
+  resultMessage: schema.payments.resultMessage,
+  createdAt: schema.payments.createdAt,
+};
+
+type AdminPaymentRow = Omit<typeof schema.payments.$inferSelect, 'idempotencyKey' | 'updatedAt'> & {
+  nickname: string;
+};
+
+function toAdminPayment(row: AdminPaymentRow): AdminPayment {
+  return {
+    id: row.id,
+    userId: row.userId,
+    nickname: row.nickname,
+    amountP: serializePAmount(row.amountP),
+    priceKrw: row.priceKrw,
+    packageId: row.packageId,
+    provider: row.provider,
+    providerRef: row.providerRef,
+    status: row.status,
+    method: row.method,
+    approvedAt: row.approvedAt?.toISOString() ?? null,
+    refundedAt: row.refundedAt?.toISOString() ?? null,
+    resultMessage: row.resultMessage,
+    createdAt: row.createdAt.toISOString(),
+  };
+}
+
 /** Admin reads and the balance adjustment (PLAN 7.3, 12; M2). */
 @Injectable()
 export class AdminService {
@@ -191,22 +231,7 @@ export class AdminService {
   async listPayments(cursor: string | undefined, limit: number): Promise<Page<AdminPayment>> {
     const keyset = decodeKeyset(cursor, 'uuid');
     const rows = await this.db
-      .select({
-        id: schema.payments.id,
-        userId: schema.payments.userId,
-        nickname: schema.profiles.nickname,
-        amountP: schema.payments.amountP,
-        priceKrw: schema.payments.priceKrw,
-        packageId: schema.payments.packageId,
-        provider: schema.payments.provider,
-        providerRef: schema.payments.providerRef,
-        status: schema.payments.status,
-        method: schema.payments.method,
-        approvedAt: schema.payments.approvedAt,
-        refundedAt: schema.payments.refundedAt,
-        resultMessage: schema.payments.resultMessage,
-        createdAt: schema.payments.createdAt,
-      })
+      .select(adminPaymentColumns)
       .from(schema.payments)
       .innerJoin(schema.profiles, eq(schema.profiles.userId, schema.payments.userId))
       .where(
@@ -221,24 +246,21 @@ export class AdminService {
     const kept = hasMore ? rows.slice(0, limit) : rows;
     const last = kept.at(-1);
     return {
-      items: kept.map((row) => ({
-        id: row.id,
-        userId: row.userId,
-        nickname: row.nickname,
-        amountP: serializePAmount(row.amountP),
-        priceKrw: row.priceKrw,
-        packageId: row.packageId,
-        provider: row.provider,
-        providerRef: row.providerRef,
-        status: row.status,
-        method: row.method,
-        approvedAt: row.approvedAt?.toISOString() ?? null,
-        refundedAt: row.refundedAt?.toISOString() ?? null,
-        resultMessage: row.resultMessage,
-        createdAt: row.createdAt.toISOString(),
-      })),
+      items: kept.map(toAdminPayment),
       nextCursor: hasMore && last ? encodeKeyset({ createdAt: last.createdAt, id: last.id }) : null,
     };
+  }
+
+  /** One payment as the admin list shows it (the refund answers with it). */
+  async getPayment(paymentId: string): Promise<AdminPayment> {
+    const [row] = await this.db
+      .select(adminPaymentColumns)
+      .from(schema.payments)
+      .innerJoin(schema.profiles, eq(schema.profiles.userId, schema.payments.userId))
+      .where(eq(schema.payments.id, paymentId))
+      .limit(1);
+    if (!row) throw new AppError('NOT_FOUND', { message: 'Payment not found' });
+    return toAdminPayment(row);
   }
 
   async listAuditFailures(cursor: string | undefined, limit: number): Promise<Page<AuditFailure>> {
