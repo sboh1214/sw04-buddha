@@ -1,0 +1,192 @@
+import { describe, expect, it } from 'vitest';
+import {
+  ACTIVE_CHECKOUT_PHASES,
+  CHECKOUT_START,
+  type CheckoutEffect,
+  type CheckoutEvent,
+  type CheckoutPhase,
+  type CheckoutState,
+  SMARTRO_APPROVAL_TIMEOUT_MS,
+  checkoutStep,
+  withCheckoutPhase,
+} from './smartro-checkout';
+
+/**
+ * The events through one window, as `SmartroCheckout` feeds them: every phase that moved (what
+ * it reports to the caller) and every step's effect (what it carries out).
+ */
+function run(events: CheckoutEvent[], from: CheckoutState = CHECKOUT_START) {
+  let state = from;
+  const reported: CheckoutPhase[] = [];
+  const effects: (CheckoutEffect | undefined)[] = [];
+  for (const event of events) {
+    const step = checkoutStep(state, event);
+    if (step.state.phase !== state.phase) reported.push(step.state.phase);
+    effects.push(step.effect);
+    state = step.state;
+  }
+  return { state, reported, effects };
+}
+
+const PC_OPENED: CheckoutEvent = { type: 'payment', wentAhead: true, mobile: false, layer: true };
+const REMOVED: CheckoutEvent = { type: 'layer-removed' };
+const GRACE: CheckoutEvent = { type: 'grace-elapsed' };
+const CALLBACK: CheckoutEvent = { type: 'callback' };
+const APPROVAL_TIMEOUT: CheckoutEvent = { type: 'approval-timeout' };
+const RESTORED: CheckoutEvent = { type: 'restored' };
+
+describe('the phases', () => {
+  it('keeps the buttons while a window is on its way, open, leaving or approving', () => {
+    for (const phase of ['loading', 'open', 'leaving', 'approving'] as const) {
+      expect(ACTIVE_CHECKOUT_PHASES.has(phase), phase).toBe(true);
+    }
+    for (const phase of ['closed', 'failed'] as const) {
+      expect(ACTIVE_CHECKOUT_PHASES.has(phase), phase).toBe(false);
+    }
+    expect(CHECKOUT_START).toEqual({ phase: 'loading', layerGone: false, answered: false });
+  });
+});
+
+describe('opening the window', () => {
+  it('opens the PC layer, or leaves the page on a phone', () => {
+    expect(run([PC_OPENED]).reported).toEqual(['open']);
+    // A phone has no layer to find: the SDK is submitting the page.
+    for (const layer of [true, false]) {
+      expect(run([{ type: 'payment', wentAhead: true, mobile: true, layer }]).reported).toEqual([
+        'leaving',
+      ]);
+    }
+  });
+
+  it('closes at once when the SDK refused its own form, or went ahead with no layer', () => {
+    // `payment()` answered nothing: its validation refused, and its `alert` said why.
+    for (const mobile of [true, false]) {
+      expect(run([{ type: 'payment', wentAhead: false, mobile, layer: false }]).reported).toEqual([
+        'closed',
+      ]);
+    }
+    expect(
+      run([{ type: 'payment', wentAhead: true, mobile: false, layer: false }]).reported,
+    ).toEqual(['closed']);
+  });
+
+  it('fails, with the buttons back, when the SDK is missing or threw — once', () => {
+    for (const event of [{ type: 'unavailable' }, { type: 'threw' }] as const) {
+      const { state, reported } = run([event]);
+      expect(reported, event.type).toEqual(['failed']);
+      expect(ACTIVE_CHECKOUT_PHASES.has(state.phase)).toBe(false);
+    }
+    // next/script's onError, then a ready callback finding no SDK: one failure, one report.
+    expect(run([{ type: 'unavailable' }, { type: 'unavailable' }]).reported).toEqual(['failed']);
+  });
+
+  it('opens a window only once, and only while it is loading', () => {
+    expect(run([PC_OPENED, PC_OPENED]).reported).toEqual(['open']);
+    expect(run([{ type: 'unavailable' }, PC_OPENED]).reported).toEqual(['failed']);
+    expect(run([PC_OPENED, { type: 'threw' }]).reported).toEqual(['open']);
+  });
+});
+
+describe('closing the PC layer', () => {
+  it('calls the window closed when the layer went and no callback came within the grace', () => {
+    const { state, reported, effects } = run([PC_OPENED, REMOVED, GRACE]);
+    expect(effects).toEqual([undefined, 'await-callback', undefined]);
+    expect(reported).toEqual(['open', 'closed']);
+    expect(state).toEqual({ phase: 'closed', layerGone: true, answered: false });
+  });
+
+  it('keeps the window open between the removal and the end of the grace', () => {
+    expect(run([PC_OPENED, REMOVED]).state.phase).toBe('open');
+  });
+
+  it('posts the callback that follows the removal, and the grace then changes nothing', () => {
+    const { state, reported, effects } = run([PC_OPENED, REMOVED, CALLBACK, GRACE]);
+    expect(reported).toEqual(['open', 'approving']);
+    expect(effects).toEqual([undefined, 'await-callback', 'post-approval', undefined]);
+    expect(state).toEqual({ phase: 'approving', layerGone: true, answered: true });
+  });
+
+  it('still posts a callback that comes after the grace ran out, but a window approves once', () => {
+    // A main thread busy enough to run the grace out first: the payer did approve.
+    const late = run([PC_OPENED, REMOVED, GRACE, CALLBACK]);
+    expect(late.reported).toEqual(['open', 'closed', 'approving']);
+    expect(late.effects.at(-1)).toBe('post-approval');
+    const twice = run([CALLBACK, CALLBACK], late.state);
+    expect(twice.effects).toEqual([undefined, undefined]);
+    expect(twice.reported).toEqual([]);
+  });
+
+  it('starts the grace clock once, and only for an open layer', () => {
+    expect(run([PC_OPENED, REMOVED, REMOVED]).effects).toEqual([
+      undefined,
+      'await-callback',
+      undefined,
+    ]);
+    // The page came back from the cache first: nothing is waiting for a callback any more.
+    expect(run([PC_OPENED, RESTORED, REMOVED]).effects).toEqual([undefined, undefined, undefined]);
+    // A grace with no removal before it closes nothing.
+    expect(run([PC_OPENED, GRACE]).reported).toEqual(['open']);
+  });
+});
+
+describe('the approval post', () => {
+  it('gives the buttons back when the page is still here after the approval clock', () => {
+    const { state, reported } = run([PC_OPENED, REMOVED, CALLBACK, APPROVAL_TIMEOUT]);
+    expect(reported).toEqual(['open', 'approving', 'closed']);
+    // The window has still answered: a second callback does not post again.
+    expect(checkoutStep(state, CALLBACK)).toEqual({ state });
+  });
+
+  it('lets the approval clock end nothing but an approval', () => {
+    expect(run([PC_OPENED, APPROVAL_TIMEOUT]).reported).toEqual(['open']);
+    expect(run([PC_OPENED, REMOVED, GRACE, APPROVAL_TIMEOUT]).reported).toEqual(['open', 'closed']);
+  });
+
+  it("outlasts the API's bound on one PG call, so a slow approval is not taken for a lost one", () => {
+    // apps/api smartro-client `SMARTRO_TIMEOUT_MS`.
+    // Approval (≤ 25 s) and then the result inquiry (≤ 25 s): both fit.
+    expect(SMARTRO_APPROVAL_TIMEOUT_MS).toBeGreaterThan(2 * 25_000);
+  });
+});
+
+describe('the back/forward cache', () => {
+  it('closes a window the cache hands back while it still holds the buttons', () => {
+    const phone = run([{ type: 'payment', wentAhead: true, mobile: true, layer: false }, RESTORED]);
+    expect(phone.reported).toEqual(['leaving', 'closed']);
+    const approved = run([PC_OPENED, REMOVED, CALLBACK, RESTORED]);
+    expect(approved.reported).toEqual(['open', 'approving', 'closed']);
+    expect(run([PC_OPENED, RESTORED]).reported).toEqual(['open', 'closed']);
+    expect(run([RESTORED]).reported).toEqual(['closed']);
+  });
+
+  it('leaves a window that already gave the buttons back as it is', () => {
+    expect(run([{ type: 'unavailable' }, RESTORED]).reported).toEqual(['failed']);
+    expect(run([PC_OPENED, REMOVED, GRACE, RESTORED]).reported).toEqual(['open', 'closed']);
+  });
+});
+
+describe('withCheckoutPhase', () => {
+  const current: { packageId: string; prepared: { paymentId: string }; phase: CheckoutPhase } = {
+    packageId: 'pack-1',
+    prepared: { paymentId: 'pay-new' },
+    phase: 'open',
+  };
+
+  it("moves the window on screen when the report is that payment's", () => {
+    expect(withCheckoutPhase(current, 'pay-new', 'closed')).toEqual({
+      ...current,
+      phase: 'closed',
+    });
+  });
+
+  it('ignores a report from a window a newer purchase replaced', () => {
+    // The replaced window's clock runs out after the newer window opened.
+    expect(withCheckoutPhase(current, 'pay-old', 'closed')).toBe(current);
+    expect(withCheckoutPhase(current, 'pay-old', 'failed')).toBe(current);
+    expect(withCheckoutPhase(null, 'pay-old', 'closed')).toBeNull();
+  });
+
+  it('answers the same object for an unchanged phase, so nothing re-renders', () => {
+    expect(withCheckoutPhase(current, 'pay-new', 'open')).toBe(current);
+  });
+});

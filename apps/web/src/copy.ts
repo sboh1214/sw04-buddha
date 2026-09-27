@@ -680,6 +680,98 @@ export const copy = {
   chargeGuideRefundLink: '환불정책 자세히 보기',
   chargeGuideLoadError: '충전 상품을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.',
 
+  // --- 실명·휴대전화와 온보딩 (ADR-0043) ---
+  // 결제 창의 구매자 정보(BuyerName/BuyerTel)로 쓰인다. 본인인증은 아직 없어서 형식만 확인하고
+  // 입력한 그대로 저장한다. 규칙은 @buddha/shared의 realNameSchema·phoneSchema(lib/contact-form.ts)다.
+  realName: '실명',
+  realNameHint: '2~30자의 문자(한글·영문 등). 띄어쓰기와 가운뎃점(·)을 쓸 수 있습니다.',
+  phone: '휴대전화 번호',
+  phonePlaceholder: '010-1234-5678',
+  phoneHint: '하이픈(-)은 넣어도 되고 빼도 됩니다.',
+  contactVerificationNotice:
+    '본인인증은 추후 도입 예정입니다. 지금은 입력한 실명과 번호를 그대로 저장합니다.',
+  contactPrivacyLink: '개인정보처리방침 보기',
+  errRealNameRequired: '실명을 입력해 주세요.',
+  errRealNameFormat:
+    '실명은 2~30자의 문자(한글·영문 등)로 입력해 주세요. 숫자와 기호는 쓸 수 없고, 띄어쓰기와 가운뎃점(·)은 글자 사이에만 쓸 수 있습니다.',
+  errPhoneRequired: '휴대전화 번호를 입력해 주세요.',
+  errPhoneFormat:
+    '010·011·016~019로 시작하는 휴대전화 번호 10~11자리를 입력해 주세요. (예: 010-1234-5678)',
+  onboardingTitle: '실명·연락처 입력',
+  onboardingSignedOut: '로그인이 풀렸습니다. 다시 로그인하면 이어서 입력할 수 있습니다.',
+  onboardingSubtitle:
+    '결제에 필요한 실명과 휴대전화 번호를 입력해 주세요. 입력을 마치면 서비스를 계속 이용할 수 있습니다.',
+  onboardingSubmit: '저장하고 계속하기',
+  contactSaved: '실명과 휴대전화 번호를 저장했습니다.',
+  settingsContact: '실명·연락처',
+  settingsContactHint: '결제할 때 구매자 정보로 전달됩니다.',
+  setPasswordContactHeading: '결제에 쓰일 실명과 휴대전화 번호도 입력해 주세요.',
+  // 비밀번호는 이미 저장된 뒤라 이 화면에서 다시 시도할 수 없다(설정 완료 안내로 바뀐다).
+  setPasswordContactFailed:
+    '비밀번호는 저장했지만 실명·연락처를 저장하지 못했습니다. 다음 화면에서 다시 입력해 주세요.',
+
+  // --- 스마트로페이 결제 창 · 결제 결과 · 결제 내역 · 관리자 환불 (ADR-0042) ---
+  // 결제 창(PC 레이어, 모바일 페이지 이동)에서 돌아온 지갑의 안내와, 관리자의 청약철회 환불.
+  // 기한 7일과 최소 1,000원은 @buddha/shared의 PAYMENT_REFUND_WINDOW_DAYS·CARD_MIN_PRICE_KRW와
+  // 같아야 한다(smartro-payments.test.ts가 확인한다).
+  chargeApproving: '결제를 승인하고 있습니다. 잠시만 기다려 주세요.',
+  chargeWindowFailed: '결제 창을 열지 못했습니다. 페이지를 새로고침한 뒤 다시 시도해 주세요.',
+  chargeContactRequired: '결제하려면 실명과 휴대전화 번호를 먼저 등록해 주세요.',
+  chargeBelowCardMinimum: '1,000원 미만 상품은 결제 창에서 결제할 수 없습니다.',
+  chargePackageSelected: '선택한 상품',
+  paymentResultSucceeded: '결제가 완료되어 P가 충전되었습니다.',
+  paymentResultFailed: '결제가 완료되지 않았습니다. 청구된 금액은 없습니다.',
+  paymentResultStopped: '결제를 취소했습니다. 청구된 금액은 없습니다.',
+  paymentResultPending:
+    '결제 결과를 확인하고 있습니다. 확인되면 이 화면과 결제 내역에 반영되며, 오래 걸리면 고객센터로 문의해 주세요.',
+  paymentResultCancelled:
+    '결제는 승인되었지만 P를 충전하지 못해 결제를 자동으로 취소했습니다. 카드사에 따라 취소가 반영되기까지 며칠이 걸릴 수 있습니다.',
+  paymentResultReason: '사유:',
+  paymentHistoryTitle: '결제 내역',
+  paymentHistoryEmpty: '아직 결제 내역이 없습니다.',
+  paymentStatusUnfinished: '미완료',
+  paymentApprovedAt: '승인',
+  paymentRefundedAt: '환불',
+  paymentMethodCard: '카드',
+  paymentMethodBank: '계좌이체',
+  paymentMethodCellphone: '휴대폰',
+  paymentMethodKakao: '카카오페이',
+  paymentMethodNaver: '네이버페이',
+  paymentMethodPayco: '페이코',
+  paymentMethodSamsung: '삼성페이',
+  paymentMethodApple: '애플페이',
+  paymentMethodToss: '토스페이',
+  paymentMethodLpay: 'L.PAY',
+  paymentMethodPinpay: '핀페이',
+  paymentMethodSmile: '스마일페이',
+  paymentMethodTmoney: '티머니페이',
+  adminPaymentRefund: '환불',
+  adminPaymentRefundRetry: '환불 재시도',
+  adminPaymentRefundDeadline: '환불 기한',
+  adminPaymentRefundTitle: '결제를 환불합니다',
+  adminPaymentRefundBody:
+    '결제 금액 전액을 결제대행사에서 취소하고, 이 결제로 충전된 P를 모두 회수합니다. 승인 후 7일 이내이고 회원이 그 P를 전혀 쓰지 않았을 때(사용 가능 잔고가 그 P 이상)만 환불됩니다.',
+  adminPaymentRefundRetryTitle: '환불을 다시 시도합니다',
+  adminPaymentRefundRetryBody:
+    '이전 환불 요청에서 P는 이미 회수했지만 결제대행사의 취소 결과를 받지 못했습니다. 결제대행사에 취소를 다시 요청합니다.',
+  adminPaymentRefundReason: '환불 사유',
+  adminPaymentRefundReasonHint: '감사 기록에 남고, 결제대행사에 취소 사유로도 전달됩니다.',
+  adminPaymentRefundSubmit: '환불하기',
+  adminPaymentRefunded: '환불했습니다. 결제를 취소하고 P를 회수했습니다.',
+  refundGatewayAnswer: '결제대행사 응답:',
+  errRefundReason: '환불 사유를 1~500자로 입력해 주세요.',
+  errRefundPUsed: '이미 사용한 P가 있어 환불할 수 없습니다.',
+  errRefundWindowClosed: '승인 후 7일이 지나 환불할 수 없습니다.',
+  errRefundStatus: '환불할 수 있는 상태의 결제가 아닙니다. 목록에서 현재 상태를 확인해 주세요.',
+  errRefundProvider: '이 결제는 결제대행사에서 취소할 수 없습니다.',
+  // 거절 뒤 회수했던 P를 되돌렸는지는 그때 결제가 어떤 상태였는지에 달려 있다(이미 「환불 처리 중」이
+  // 아니었다면 되돌리지 않는다). 그래서 단정하지 않고 목록의 현재 상태를 보게 한다.
+  errRefundGatewayRefused: '결제대행사가 취소를 거절했습니다. 목록에서 현재 상태를 확인해 주세요.',
+  errRefundGatewayError:
+    '결제대행사의 응답을 받지 못했습니다. 결제는 「환불 처리 중」으로 남아 있으니 잠시 뒤 다시 시도해 주세요.',
+  errRefundInProgress: '이전 환불 요청이 아직 처리 중입니다. 1분쯤 뒤에 다시 시도해 주세요.',
+  errRefundNotFound: '결제를 찾을 수 없습니다.',
+
   // --- generic ---
   errUnknown: '문제가 발생했습니다. 잠시 후 다시 시도해 주세요.',
   errNetwork: '서버에 연결할 수 없습니다.',

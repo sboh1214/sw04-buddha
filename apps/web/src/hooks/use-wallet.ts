@@ -1,6 +1,6 @@
 'use client';
 
-import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { skipToken, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useQuery } from '@tanstack/react-query';
 import { useRef } from 'react';
 import {
@@ -13,15 +13,32 @@ import {
   type ChargeResult,
   type LedgerEntry,
   type Payment,
+  type PaymentProviderInfo,
+  type SmartroPrepareResult,
 } from '@/lib/api';
 import { useSession } from '@/lib/use-session';
 import { IdempotencyKeys } from '@/lib/idempotency';
+import { isFlowUnavailable, paymentPollInterval } from '@/lib/smartro-payments';
 import { ME_QUERY_KEY } from './use-me';
 
 /** PLAN 11.5 key rules. Ledger and payments hang off their own roots. */
 export const LEDGER_QUERY_KEY = ['ledger'] as const;
 export const CHARGE_PACKAGES_QUERY_KEY = ['charge-packages'] as const;
 export const PAYMENTS_QUERY_KEY = ['payments'] as const;
+
+/**
+ * One payment of the caller's (`GET /me/payments/:id`), under the payments root: everything
+ * that refreshes the list after a charge refreshes the notice's payment with it, and a session
+ * switch empties both (`PRIVATE_QUERY_ROOTS`).
+ */
+export const myPaymentKey = (id: string) => [...PAYMENTS_QUERY_KEY, 'one', id] as const;
+
+/**
+ * Which charge flow the server offers (ADR-0042). Public and the same for everyone — it is the
+ * deployment's `PAYMENT_PROVIDER` — so its own root, outside `PRIVATE_QUERY_ROOTS`: nothing
+ * personal could ride an SSR payload in it.
+ */
+export const PAYMENT_PROVIDER_QUERY_KEY = ['payment-provider'] as const;
 
 interface Page<T> {
   items: T[];
@@ -67,6 +84,40 @@ export function useChargePackages() {
     queryKey: CHARGE_PACKAGES_QUERY_KEY,
     queryFn: async (): Promise<ChargePackage[]> =>
       unwrap(await api.GET('/api/v1/charge-packages')).data,
+  });
+}
+
+/**
+ * `GET /payments/provider`: `mock` keeps the one-click charge, `smartro` opens the payment
+ * window. It changes only with a deploy, so it is kept for five minutes; a charge refused as
+ * unavailable (`isFlowUnavailable`) re-reads it at once, so a switch made while a wallet tab
+ * was open costs that tab one refused click, not five minutes.
+ */
+export function usePaymentProvider() {
+  return useQuery({
+    queryKey: PAYMENT_PROVIDER_QUERY_KEY,
+    queryFn: async (): Promise<PaymentProviderInfo> =>
+      unwrap(await api.GET('/api/v1/payments/provider')).data,
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
+/**
+ * The payment the wallet's result notice is about (`/wallet?payment=<id>`). Re-read every few
+ * seconds while it is still `pending` (`paymentPollInterval`), so a return whose approval
+ * answer was lost turns into its real outcome on screen once the 재통보 settles it. Someone
+ * else's id is a 404 and stays one (4xx are not retried); the notice then says what the URL
+ * said.
+ */
+export function useMyPayment(id: string | undefined) {
+  return useQuery({
+    queryKey: myPaymentKey(id ?? ''),
+    queryFn:
+      id === undefined
+        ? skipToken
+        : async (): Promise<Payment> =>
+            unwrap(await api.GET('/api/v1/me/payments/{id}', { params: { path: { id } } })).data,
+    refetchInterval: (query) => paymentPollInterval(query.state.data, query.state.dataUpdateCount),
   });
 }
 
@@ -199,8 +250,100 @@ export function useCharge() {
       // SessionCacheGuard resets the caches and the screen shows the account that is really
       // signed in. Nothing was reserved, and the key stayed in the on-screen account's namespace.
       if (isForAnotherAccount(error)) void refetchSession();
+      // The provider was switched to SmartroPay under this tab (the immediate charge is a 404
+      // then): re-read it, so the next click opens the payment window instead.
+      if (isFlowUnavailable(error)) {
+        void queryClient.invalidateQueries({ queryKey: PAYMENT_PROVIDER_QUERY_KEY });
+      }
       // Either an earlier click already bought this (the user took it for a failure) or that
       // click is still running: the balance on screen may be behind what the server holds.
+      if (isApiError(error, 'DUPLICATE_REQUEST')) {
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY }),
+          queryClient.invalidateQueries({ queryKey: LEDGER_QUERY_KEY }),
+          queryClient.invalidateQueries({ queryKey: PAYMENTS_QUERY_KEY }),
+        ]);
+      }
+    },
+  });
+  return { ...mutation, ready: accountId !== undefined };
+}
+
+/**
+ * The key intent of a payment-window purchase. Filed apart from the immediate charge's
+ * (`pack.id`) in the same namespace: a key a mock charge left unanswered must never be replayed
+ * as a SmartroPay reservation after a provider switch — the server would refuse it as another
+ * charge's key — nor the other way round.
+ */
+export function smartroKeyIntent(packageId: string): string {
+  return `smartro:${packageId}`;
+}
+
+/**
+ * `POST /payments/smartro/prepare` (ADR-0042): reserve a `pending` payment for the package and
+ * get the signed form that opens the SmartroPay window for it. The body is the immediate
+ * charge's, for the same reasons (the terms on screen, the account on screen).
+ *
+ * Keys: a fresh one per click, settled on ANY answer (DESIGN §6.2). An answered prepare is
+ * finished business — the window it opens is where the purchase happens, and the next click is
+ * a new window for a new reservation; re-sending a spent key would only earn DUPLICATE_REQUEST
+ * once that window's payment is claimed. `settle` still keeps a key a 5xx answered, as it keeps
+ * one no answer came back for: the reservation may exist, and the next click replaying the key
+ * gets a freshly signed form for that SAME payment (while it is unclaimed) instead of a second
+ * reservation. Unlike the immediate charge there is no answer to keep a key FOR — this route
+ * has no "still running" state, and the account refusal settles too: nothing was reserved.
+ */
+export function useSmartroPrepare() {
+  const queryClient = useQueryClient();
+  // The account on screen, as `useCharge` files its keys under it: `ready` is false until
+  // better-auth has said whose session this is, and the buttons wait for it.
+  const { data: session, refetch: refetchSession } = useSession();
+  const accountId = session?.user.id;
+  // A ref for the same reason as `useCharge`'s: with a throwing storage the handle's in-memory
+  // fallback IS the key, and a memo React may drop would lose it.
+  const handle = useRef<{ account: string; keys: IdempotencyKeys } | null>(null);
+  const keysFor = (account: string): IdempotencyKeys => {
+    if (handle.current?.account !== account) {
+      handle.current = { account, keys: new IdempotencyKeys(account) };
+    }
+    return handle.current.keys;
+  };
+  const mutation = useMutation({
+    mutationFn: async (pack: ChargePackage): Promise<SmartroPrepareResult> => {
+      // Unreachable while the buttons honour `ready`.
+      if (!accountId) throw new Error('payment window requested before the session was known');
+      const keys = keysFor(accountId);
+      const intent = smartroKeyIntent(pack.id);
+      const result = await api.POST('/api/v1/payments/smartro/prepare', {
+        params: { header: { 'Idempotency-Key': keys.take(intent) } },
+        body: {
+          packageId: pack.id,
+          expectedAmountP: pack.amountP,
+          expectedPriceKrw: pack.priceKrw,
+          expectedAccountId: accountId,
+        },
+      });
+      keys.settle(intent, result.response.status);
+      return unwrap(result).data;
+    },
+    // The reservation is a row of 결제 내역 from now on (미완료 until the window hands it back).
+    // Not awaited: the window should not wait for a list refetch.
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: PAYMENTS_QUERY_KEY, exact: true });
+    },
+    // The immediate charge's reactions, answer for answer (`useCharge`); awaited where they
+    // are there, so a stale card never changes under the cursor.
+    onError: async (error) => {
+      if (isStaleCatalogue(error)) {
+        await queryClient.invalidateQueries({ queryKey: CHARGE_PACKAGES_QUERY_KEY });
+      }
+      if (isForAnotherAccount(error)) void refetchSession();
+      // Switched back to the immediate charge under this tab: the next click takes it.
+      if (isFlowUnavailable(error)) {
+        void queryClient.invalidateQueries({ queryKey: PAYMENT_PROVIDER_QUERY_KEY });
+      }
+      // A key whose payment an approval already claimed or settled: what it bought may not be
+      // on screen yet.
       if (isApiError(error, 'DUPLICATE_REQUEST')) {
         await Promise.all([
           queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY }),

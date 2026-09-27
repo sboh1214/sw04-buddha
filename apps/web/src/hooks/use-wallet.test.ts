@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { ApiError, isForAnotherAccount } from '@/lib/api';
-import { isChargeInProgress, isCouponRejection, isStaleCatalogue } from './use-wallet';
+import { IdempotencyKeys } from '@/lib/idempotency';
+import {
+  isChargeInProgress,
+  isCouponRejection,
+  isStaleCatalogue,
+  smartroKeyIntent,
+} from './use-wallet';
 
 const apiError = (status: number, code: string, details?: unknown) =>
   new ApiError(status, {
@@ -114,5 +120,47 @@ describe('isCouponRejection', () => {
     expect(isCouponRejection(new TypeError('Failed to fetch'))).toBe(false);
     // The duplicate is handled on its own branch before this predicate runs.
     expect(isCouponRejection(apiError(409, 'DUPLICATE_REQUEST'))).toBe(false);
+  });
+});
+
+describe('smartroKeyIntent', () => {
+  // A plain Map-backed storage, as `idempotency.test.ts` fakes one.
+  function memoryStorage() {
+    const items = new Map<string, string>();
+    return {
+      getItem: (name: string) => items.get(name) ?? null,
+      setItem: (name: string, value: string) => void items.set(name, value),
+      removeItem: (name: string) => void items.delete(name),
+    };
+  }
+
+  it("files a payment-window key apart from the immediate charge's key for the same package", () => {
+    // After a provider switch, a key a mock charge left unanswered must not be replayed as a
+    // SmartroPay reservation (the server would call it another charge's key), nor back.
+    const storage = memoryStorage();
+    const keys = new IdempotencyKeys('user-a', storage);
+    const charge = keys.take('pack-1');
+    const windowKey = keys.take(smartroKeyIntent('pack-1'));
+    expect(smartroKeyIntent('pack-1')).not.toBe('pack-1');
+    expect(windowKey).not.toBe(charge);
+    expect(new IdempotencyKeys('user-a', storage).take(smartroKeyIntent('pack-1'))).toBe(windowKey);
+  });
+
+  it('gives every answered click a fresh key, and replays only an unanswered or 5xx one', () => {
+    // useSmartroPrepare settles on every answer (DESIGN §6.2): a 200 opened its window, a 4xx
+    // refused it; the next click is a new reservation. No answer, or a 5xx, may have reserved:
+    // the replay gets the SAME payment's form back instead of a second reservation.
+    const keys = new IdempotencyKeys('user-a', memoryStorage());
+    const intent = smartroKeyIntent('pack-1');
+    for (const status of [200, 403, 404, 409]) {
+      const key = keys.take(intent);
+      keys.settle(intent, status);
+      expect(keys.take(intent), String(status)).not.toBe(key);
+      keys.settle(intent, 200);
+    }
+    const lost = keys.take(intent);
+    expect(keys.take(intent)).toBe(lost);
+    keys.settle(intent, 503);
+    expect(keys.take(intent)).toBe(lost);
   });
 });

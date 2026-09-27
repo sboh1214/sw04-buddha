@@ -46,19 +46,37 @@ const isProduction = process.env.NODE_ENV === 'production';
  * - `frame-ancestors 'none'` replaces `X-Frame-Options` (which is set as well, for browsers
  *   that predate it); `object-src 'none'`, `base-uri 'self'` and `form-action 'self'` close the
  *   three redirects an injected tag would otherwise still have.
+ * - The SmartroPay payment window (ADR-0042) is the one third party the document talks to, and
+ *   it gets exactly its three needs, by exact host: `script-src` its SDK (the PC build from
+ *   tpay/pay, the mobile build from tmpay/mpay — the page loads the one matching the device),
+ *   `frame-src` the PC layer's iframe (tpay/pay only: a phone leaves the page instead), and
+ *   `form-action` the SDK's own form posts — into that iframe on a PC, the whole page to
+ *   tmpay/mpay on a phone. STG and REAL are both listed because this policy is fixed when
+ *   `next build` runs and the mode is the API's runtime setting. Nothing else moved: the SDK
+ *   makes no XHR on the happy path (only a mode-mismatch report, which stays blocked), loads
+ *   no images, and its stop and our approval both post to our own origin ('self').
  */
 const wsUrl = apiUrl.replace(/^http/, 'ws');
 const apiIsPlainHttp = apiUrl.startsWith('http:');
+const SMARTRO_PC_HOSTS = 'https://tpay.smartropay.co.kr https://pay.smartropay.co.kr';
+const SMARTRO_MOBILE_HOSTS = 'https://tmpay.smartropay.co.kr https://mpay.smartropay.co.kr';
 const contentSecurityPolicy = [
   "default-src 'self'",
-  `script-src 'self' 'unsafe-inline'${isProduction ? '' : " 'unsafe-eval'"}`,
+  `script-src 'self' 'unsafe-inline'${isProduction ? '' : " 'unsafe-eval'"} ${SMARTRO_PC_HOSTS} ${SMARTRO_MOBILE_HOSTS}`,
   "style-src 'self' 'unsafe-inline'",
   `img-src 'self' data: https:${apiIsPlainHttp ? ' http:' : ''}`,
   "font-src 'self' data:",
   `connect-src 'self' ${apiUrl} ${wsUrl}`,
+  // frame-src and form-action hold the SmartroPay hosts seen so far. Every navigation of the
+  // layer's own iframe (a card company's authentication, an easy-pay's page) must pass frame-src
+  // — frames and popups nested inside SmartroPay's page answer to its CSP, not ours — and every
+  // redirect of the SDK's post must pass form-action: pay through the PC layer on STG with each
+  // (card, ISP/안심클릭, KakaoPay, NaverPay) and watch the console for CSP violations. A host
+  // they need is added here by exact name, never a wildcard, with security-headers.test.ts.
+  `frame-src ${SMARTRO_PC_HOSTS}`,
   "object-src 'none'",
   "base-uri 'self'",
-  "form-action 'self'",
+  `form-action 'self' ${SMARTRO_PC_HOSTS} ${SMARTRO_MOBILE_HOSTS}`,
   "frame-ancestors 'none'",
 ].join('; ');
 

@@ -15,12 +15,19 @@ export const api = createApiClient({ baseUrl: '', credentials: 'include' });
  */
 export type Me = components['schemas']['Me'];
 export type LinkedAccount = components['schemas']['LinkedAccount'];
+/** Real name + mobile number (ADR-0043): `Me.contact`, and the answer to `PUT /me/contact`. */
+export type Contact = components['schemas']['Contact'];
+export type ContactBody = components['schemas']['ContactBody'];
 export type LedgerEntry = components['schemas']['LedgerEntry'];
 export type Payment = components['schemas']['Payment'];
 export type Balance = components['schemas']['Balance'];
 export type AdminUser = components['schemas']['AdminUser'];
 export type ChargePackage = components['schemas']['ChargePackage'];
 export type ChargeResult = components['schemas']['ChargeResult'];
+/** `GET /payments/provider`: which charge flow the wallet offers (ADR-0042). */
+export type PaymentProviderInfo = components['schemas']['PaymentProviderInfo'];
+/** `POST /payments/smartro/prepare`: the reserved payment and its signed payment-window form. */
+export type SmartroPrepareResult = components['schemas']['SmartroPrepareResult'];
 export type Coupon = components['schemas']['Coupon'];
 export type Market = components['schemas']['Market'];
 export type MarketSummary = components['schemas']['MarketSummary'];
@@ -40,6 +47,8 @@ export type PriceSeries = components['schemas']['PriceSeries'];
 export type Position = components['schemas']['Position'];
 export type Order = components['schemas']['Order'];
 export type AdminPayment = components['schemas']['AdminPayment'];
+/** `POST /admin/payments/{id}/refund`: why the admin refunds (required, audited). */
+export type RefundPaymentBody = components['schemas']['RefundPaymentBody'];
 export type AuditFailure = components['schemas']['AuditFailure'];
 export type CreateMarketBody = components['schemas']['CreateMarketBody'];
 export type UpdateMarketBody = components['schemas']['UpdateMarketBody'];
