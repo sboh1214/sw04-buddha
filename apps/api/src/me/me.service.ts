@@ -25,10 +25,15 @@ export class MeService {
           createdAt: schema.profiles.createdAt,
           availableP: schema.balances.availableP,
           lockedP: schema.balances.lockedP,
+          realName: schema.userContacts.realName,
+          phone: schema.userContacts.phone,
         })
         .from(schema.user)
         .innerJoin(schema.profiles, eq(schema.profiles.userId, schema.user.id))
         .innerJoin(schema.balances, eq(schema.balances.userId, schema.user.id))
+        // At most one row per account (user_id is its primary key); none until the member
+        // provides a name and number (ADR-0043).
+        .leftJoin(schema.userContacts, eq(schema.userContacts.userId, schema.user.id))
         .where(eq(schema.user.id, userId))
         .limit(1),
       // Read-only view of better-auth's account table (PLAN 6.1: never written by us).
@@ -66,6 +71,10 @@ export class MeService {
         accountId: a.accountId,
         createdAt: a.createdAt.toISOString(),
       })),
+      contact:
+        row.realName !== null && row.phone !== null
+          ? { realName: row.realName, phone: row.phone }
+          : null,
     };
   }
 

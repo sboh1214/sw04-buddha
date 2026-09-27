@@ -201,6 +201,10 @@ export class AdminService {
         provider: schema.payments.provider,
         providerRef: schema.payments.providerRef,
         status: schema.payments.status,
+        method: schema.payments.method,
+        approvedAt: schema.payments.approvedAt,
+        refundedAt: schema.payments.refundedAt,
+        resultMessage: schema.payments.resultMessage,
         createdAt: schema.payments.createdAt,
       })
       .from(schema.payments)
@@ -227,6 +231,10 @@ export class AdminService {
         provider: row.provider,
         providerRef: row.providerRef,
         status: row.status,
+        method: row.method,
+        approvedAt: row.approvedAt?.toISOString() ?? null,
+        refundedAt: row.refundedAt?.toISOString() ?? null,
+        resultMessage: row.resultMessage,
         createdAt: row.createdAt.toISOString(),
       })),
       nextCursor: hasMore && last ? encodeKeyset({ createdAt: last.createdAt, id: last.id }) : null,

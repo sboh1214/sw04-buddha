@@ -314,6 +314,14 @@ const ERROR_NOTES = {
   RATE_LIMITED: '레이트 리밋 초과. `details.retryAfterSeconds` 와 `Retry-After` 헤더에 대기 초.',
   DISPUTE_WINDOW_CLOSED: '이의 접수 창이 닫혔다(정산이 확정되었거나 `resolving` 이 아니다).',
   RULES_REQUIRED: '정산 규칙(`rules`)이 비어 있어 개장하거나 그대로 저장할 수 없다.',
+  CONTACT_REQUIRED:
+    '실명과 휴대전화 번호를 아직 등록하지 않은 계정이다. `PUT /api/v1/me/contact` 로 등록한 뒤 다시 시도한다.',
+  REFUND_NOT_ALLOWED:
+    '환불 정책 밖의 결제다. `details[0].message` 가 까닭을 말한다 — `window_closed`(승인 후 7일이 지났다), `status`(환불할 수 있는 상태가 아니다), `provider`(그 결제 수단은 취소를 지원하지 않는다). 이미 쓴 P 가 있으면 `INSUFFICIENT_BALANCE` 로 답한다.',
+  PAYMENT_GATEWAY_REFUSED:
+    'PG 가 요청을 거절했다. `details[0].message` 에 PG 의 `<ResultCode> <ResultMsg>` 가 붙는다. 환불이면 회수했던 P 를 되돌려 놓았다.',
+  PAYMENT_GATEWAY_ERROR:
+    'PG 에 닿지 못했거나 결과를 알 수 없다(502). 다른 5xx 처럼 본문에 내부 사정을 담지 않는다. 환불이면 `refunding` 으로 남으니 다시 시도한다.',
   INTERNAL: '그 밖의 서버 오류. 본문에 내부 사정을 담지 않는다.',
 };
 
@@ -356,6 +364,7 @@ const HTTP_STATUS_NUMBERS = {
   UNPROCESSABLE_ENTITY: 422,
   TOO_MANY_REQUESTS: 429,
   INTERNAL_SERVER_ERROR: 500,
+  BAD_GATEWAY: 502,
 };
 
 function read(file) {

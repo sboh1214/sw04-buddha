@@ -1,6 +1,10 @@
 import { BlockList, isIP } from 'node:net';
 import path from 'node:path';
-import { DISPUTE_WINDOW_SECONDS_DEFAULT } from '@buddha/shared';
+import {
+  DISPUTE_WINDOW_SECONDS_DEFAULT,
+  paymentProviderSchema,
+  smartroModeSchema,
+} from '@buddha/shared';
 import { config as loadDotenv } from 'dotenv';
 import * as z from 'zod';
 
@@ -44,6 +48,19 @@ const mailbox = z.string().refine(
   },
   { error: 'must be an email address or `Name <address>`' },
 );
+
+/**
+ * The SmartroPay credentials `PAYMENT_PROVIDER=smartro` cannot run without. The merchant key
+ * signs every request (EncryptData, HashData) and its first 32 characters are the AES-256 key of
+ * the cancel payload, hence the minimum length.
+ */
+export const SMARTRO_REQUIRED_KEYS = [
+  'SMARTRO_MID',
+  'SMARTRO_MERCHANT_KEY',
+  'SMARTRO_CANCEL_PASSWORD',
+] as const;
+export const SMARTRO_MID_MAX_LENGTH = 10;
+export const SMARTRO_MERCHANT_KEY_MIN_LENGTH = 32;
 
 export const OAUTH_PROVIDERS = ['google', 'kakao', 'naver'] as const;
 export type OAuthProvider = (typeof OAUTH_PROVIDERS)[number];
@@ -168,6 +185,28 @@ export const envSchema = z
     /** true = implicit TLS (465). false = plain (Mailpit) or STARTTLS, required with credentials. */
     SMTP_SECURE: z.stringbool().default(false),
 
+    // --- Payments (ADR-0042) ---
+    /**
+     * Which provider takes NEW charges: `mock` succeeds immediately with no money moving (the
+     * default, and what CI and e2e run), `smartro` opens the SmartroPay payment window. A refund
+     * uses the provider recorded on the payment row, so switching keeps old payments refundable.
+     */
+    PAYMENT_PROVIDER: optionalString.pipe(paymentProviderSchema.default('mock')),
+    /** SmartroPay environment: `STG` (test hosts) or `REAL`. Picks the SDK and approval hosts. */
+    SMARTRO_MODE: optionalString.pipe(smartroModeSchema.default('STG')),
+    /** Merchant id (≤ 10 characters). Required with PAYMENT_PROVIDER=smartro. */
+    SMARTRO_MID: optionalString,
+    /** Merchant key (≥ 32 characters): signs requests, keys the cancel payload. Secret. */
+    SMARTRO_MERCHANT_KEY: optionalString,
+    /** Cancel password set in the merchant admin; sent (encrypted) with every cancel. Secret. */
+    SMARTRO_CANCEL_PASSWORD: optionalString,
+    /**
+     * Overrides the approval/cancel host (`https://tapproval.smartropay.co.kr` for STG,
+     * `https://approval.smartropay.co.kr` for REAL) — for a local fake PG only, so production
+     * refuses it: pointed elsewhere, the approval and the cancel would go to whoever answers there.
+     */
+    SMARTRO_APPROVAL_BASE_URL: optionalString.pipe(z.url({ protocol: /^https?$/ }).optional()),
+
     // --- settlement (PLAN 5.5, M5) ---
     /**
      * Seconds between a proposed result and its automatic finalization:
@@ -273,6 +312,51 @@ export const envSchema = z
         code: 'custom',
         path: ['SMTP_USER'],
         message: 'SMTP_USER and SMTP_PASS must be set together',
+      });
+    }
+    // Shapes are checked whenever set, whichever provider is active: a bad value is bad anywhere.
+    if (env.SMARTRO_MID !== undefined && env.SMARTRO_MID.length > SMARTRO_MID_MAX_LENGTH) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['SMARTRO_MID'],
+        message: `must be at most ${String(SMARTRO_MID_MAX_LENGTH)} characters`,
+      });
+    }
+    if (
+      env.SMARTRO_MERCHANT_KEY !== undefined &&
+      env.SMARTRO_MERCHANT_KEY.length < SMARTRO_MERCHANT_KEY_MIN_LENGTH
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['SMARTRO_MERCHANT_KEY'],
+        message: `must be at least ${String(SMARTRO_MERCHANT_KEY_MIN_LENGTH)} characters`,
+      });
+    }
+    if (env.PAYMENT_PROVIDER === 'smartro') {
+      for (const key of SMARTRO_REQUIRED_KEYS) {
+        if (!env[key]) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [key],
+            message: 'required when PAYMENT_PROVIDER=smartro',
+          });
+        }
+      }
+    }
+    // Only for a value `z.url()` accepted: a bad one already has its issue (the superRefine still
+    // runs and sees the raw string), and one value must not raise two.
+    const approvalProtocol =
+      env.SMARTRO_APPROVAL_BASE_URL === undefined
+        ? undefined
+        : URL.parse(env.SMARTRO_APPROVAL_BASE_URL)?.protocol;
+    if (
+      env.NODE_ENV === 'production' &&
+      (approvalProtocol === 'http:' || approvalProtocol === 'https:')
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['SMARTRO_APPROVAL_BASE_URL'],
+        message: 'is for a local fake PG and must not be set in production',
       });
     }
     for (const provider of OAUTH_PROVIDERS) {

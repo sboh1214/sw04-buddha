@@ -60,6 +60,10 @@ export function toPayment(row: PaymentRow): Payment {
     provider: row.provider,
     providerRef: row.providerRef,
     status: row.status,
+    method: row.method,
+    approvedAt: row.approvedAt?.toISOString() ?? null,
+    refundedAt: row.refundedAt?.toISOString() ?? null,
+    resultMessage: row.resultMessage,
     createdAt: row.createdAt.toISOString(),
   };
 }
@@ -172,12 +176,6 @@ export class WalletService {
     }
 
     return this.db.transaction(async (tx) => {
-      const [payment] = await tx
-        .update(schema.payments)
-        .set({ status: 'succeeded', providerRef: outcome.providerRef, updatedAt: new Date() })
-        .where(eq(schema.payments.id, paymentId))
-        .returning();
-
       // The balance row first, then the clock: another writer of this account (a trade, a
       // void refund, another wallet write) may have committed while this transaction waited
       // on that row, and the ledger row written below must sort after it — `now()` is the
@@ -192,6 +190,19 @@ export class WalletService {
         .limit(1)
         .for('update');
       const creditedAt = await clockTimestamp(tx);
+
+      // Approved at the instant it is credited: the same clock as the ledger row, so the admin
+      // refund window (PAYMENT_REFUND_WINDOW_DAYS) counts from the moment the P arrived.
+      const [payment] = await tx
+        .update(schema.payments)
+        .set({
+          status: 'succeeded',
+          providerRef: outcome.providerRef,
+          approvedAt: creditedAt,
+          updatedAt: creditedAt,
+        })
+        .where(eq(schema.payments.id, paymentId))
+        .returning();
 
       const [balance] = await tx
         .update(schema.balances)

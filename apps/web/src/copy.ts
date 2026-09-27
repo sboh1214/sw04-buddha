@@ -205,6 +205,8 @@ export const copy = {
   ledgerTypeVoidRefund: '무효 환불',
   ledgerTypeAdminAdjust: '관리자 조정',
   ledgerTypeBonus: '보너스',
+  ledgerTypePaymentCancel: '결제 취소(환불)',
+  ledgerTypePaymentCancelReversal: '결제 취소 복원',
 
   // --- admin (M2 minimum, PLAN 12) ---
   adminTitle: '관리자',
@@ -366,6 +368,9 @@ export const copy = {
   paymentStatusPending: '처리 중',
   paymentStatusSucceeded: '완료',
   paymentStatusFailed: '실패',
+  paymentStatusCancelled: '취소됨',
+  paymentStatusRefunding: '환불 처리 중',
+  paymentStatusRefunded: '환불됨',
   adminNoAuditFailures: '감사 실패가 없습니다.',
   auditKindLedgerMismatch: '원장·잔고 불일치',
 

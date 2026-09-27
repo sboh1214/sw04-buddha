@@ -86,9 +86,13 @@ describe('response schemas', () => {
         provider: 'mock',
         providerRef: 'mock_1',
         status: 'succeeded',
+        method: null,
+        approvedAt: createdAt,
+        refundedAt: null,
+        resultMessage: null,
         createdAt,
       }),
-    ).toMatchObject({ priceKrw: 4900, status: 'succeeded' });
+    ).toMatchObject({ priceKrw: 4900, status: 'succeeded', approvedAt: createdAt });
 
     // A payment whose package was later deleted keeps its own amounts.
     expect(
@@ -100,9 +104,33 @@ describe('response schemas', () => {
         provider: 'mock',
         providerRef: null,
         status: 'succeeded',
+        method: null,
+        approvedAt: createdAt,
+        refundedAt: null,
+        resultMessage: null,
         createdAt,
       }).packageId,
     ).toBeNull();
+
+    // A refunded SmartroPay card payment carries the PG's method, both instants and its message.
+    const refunded = {
+      id: '3f1a5b6c-1111-4222-8333-444455556666',
+      amountP: '10000',
+      priceKrw: 9700,
+      packageId: null,
+      provider: 'smartro',
+      providerRef: 'tid_0001',
+      status: 'refunded',
+      method: 'CARD',
+      approvedAt: createdAt,
+      refundedAt: '2026-09-05T01:02:03.000Z',
+      resultMessage: '취소 성공',
+      createdAt,
+    };
+    expect(paymentSchema.parse(refunded)).toEqual(refunded);
+    // The new fields are required (nullable, never absent), like every other DTO field.
+    const { refundedAt: _dropped, ...withoutRefundedAt } = refunded;
+    expect(paymentSchema.safeParse(withoutRefundedAt).success).toBe(false);
 
     expect(
       auditFailureSchema.parse({

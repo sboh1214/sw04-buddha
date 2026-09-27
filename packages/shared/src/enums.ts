@@ -24,6 +24,13 @@ export const LEDGER_ENTRY_TYPES = [
   'MARKET_VOID_REFUND',
   'ADMIN_ADJUST',
   'BONUS',
+  /** An admin refund claws back a charge's P (−amount_p, ref payment) before the PG cancel. */
+  'PAYMENT_CANCEL',
+  /**
+   * Puts that P back (+amount_p, ref payment) when the PG refused the cancel. Written only
+   * after a PAYMENT_CANCEL of the same payment, so the ledger shows both halves.
+   */
+  'PAYMENT_CANCEL_REVERSAL',
 ] as const;
 export type LedgerEntryType = (typeof LEDGER_ENTRY_TYPES)[number];
 export const ledgerEntryTypeSchema = z.enum(LEDGER_ENTRY_TYPES);
@@ -34,13 +41,56 @@ export type LedgerRefType = (typeof LEDGER_REF_TYPES)[number];
 export const ledgerRefTypeSchema = z.enum(LEDGER_REF_TYPES);
 
 // ---- payments -----------------------------------------------------------------------
-export const PAYMENT_STATUSES = ['pending', 'succeeded', 'failed'] as const;
+/**
+ * payments.status (ADR-0042). Appended in lifecycle order; a Postgres enum only grows.
+ * - `pending`: reserved, waiting for the PG (or an approval in flight / outcome unknown)
+ * - `succeeded`: approved and credited
+ * - `failed`: refused, stopped by the payer, or never approved — no money moved
+ * - `cancelled`: approved by the PG but net-cancelled by us before any P was credited
+ * - `refunding`: admin refund in progress — P already clawed back, PG cancel not yet confirmed
+ * - `refunded`: admin refund done — card cancelled, P clawed back
+ */
+export const PAYMENT_STATUSES = [
+  'pending',
+  'succeeded',
+  'failed',
+  'cancelled',
+  'refunding',
+  'refunded',
+] as const;
 export type PaymentStatus = (typeof PAYMENT_STATUSES)[number];
 export const paymentStatusSchema = z.enum(PAYMENT_STATUSES);
 
-/** payments.provider (varchar). Only the mock provider exists in the MVP (PLAN 1.2). */
-export const PAYMENT_PROVIDERS = ['mock'] as const;
+/**
+ * payments.provider (varchar): `mock` succeeds immediately (PLAN 1.2); `smartro` is the
+ * SmartroPay 일반연동 (ADR-0042). The API's PAYMENT_PROVIDER env picks which one takes new
+ * charges; a refund follows the provider recorded on the row.
+ */
+export const PAYMENT_PROVIDERS = ['mock', 'smartro'] as const;
 export type PaymentProvider = (typeof PAYMENT_PROVIDERS)[number];
+export const paymentProviderSchema = z.enum(PAYMENT_PROVIDERS);
+
+/**
+ * payment_events.type (varchar(32), append-only): one row per exchange with the PG, so an
+ * outcome can be reconstructed without reading logs (ADR-0042).
+ * - `return`: the browser came back to ReturnUrl (Tid/TrAuthKey received)
+ * - `approval` / `approval_inquiry`: the approval call and its 1-hour result inquiry
+ * - `stop`: the payer closed the payment window (StopUrl)
+ * - `notify`: SmartroPay's server-to-server 재통보
+ * - `net_cancel`: we cancelled an approval we could not credit (망취소)
+ * - `refund_cancel`: the PG cancel of an admin refund
+ */
+export const PAYMENT_EVENT_TYPES = [
+  'return',
+  'approval',
+  'approval_inquiry',
+  'stop',
+  'notify',
+  'net_cancel',
+  'refund_cancel',
+] as const;
+export type PaymentEventType = (typeof PAYMENT_EVENT_TYPES)[number];
+export const paymentEventTypeSchema = z.enum(PAYMENT_EVENT_TYPES);
 
 // ---- markets (PLAN 5.2) -------------------------------------------------------------
 /** PLAN 16: the engine behind a market; `MarketMechanism` in mechanism.ts is the interface. */
@@ -143,6 +193,7 @@ export const ADMIN_ACTION_TYPES = [
   'market_resolve',
   'market_void',
   'dispute_review',
+  'payment_refund',
 ] as const;
 export type AdminActionType = (typeof ADMIN_ACTION_TYPES)[number];
 export const adminActionTypeSchema = z.enum(ADMIN_ACTION_TYPES);

@@ -249,3 +249,116 @@ describe('TEST_DISPUTE_WINDOW_SECONDS', () => {
     }
   });
 });
+
+describe('payments (ADR-0042)', () => {
+  const smartro = {
+    PAYMENT_PROVIDER: 'smartro',
+    SMARTRO_MID: 't_2409001m',
+    SMARTRO_MERCHANT_KEY: 'k'.repeat(64),
+    SMARTRO_CANCEL_PASSWORD: 'cancel-pw',
+  } as const;
+
+  it('defaults to the mock provider on STG with no SmartroPay credentials', () => {
+    // Production included: nothing has to be set until the owner switches to SmartroPay.
+    const parsed = envSchema.parse(base);
+    expect(parsed.PAYMENT_PROVIDER).toBe('mock');
+    expect(parsed.SMARTRO_MODE).toBe('STG');
+    expect(parsed.SMARTRO_MID).toBeUndefined();
+    expect(parsed.SMARTRO_MERCHANT_KEY).toBeUndefined();
+    expect(parsed.SMARTRO_CANCEL_PASSWORD).toBeUndefined();
+    expect(parsed.SMARTRO_APPROVAL_BASE_URL).toBeUndefined();
+    // Empty values (the .env.example lines) mean unset, as for the OAuth keys.
+    expect(
+      envSchema.parse({ ...base, SMARTRO_MID: '', SMARTRO_APPROVAL_BASE_URL: '' }).SMARTRO_MID,
+    ).toBeUndefined();
+    // So do the provider and mode: compose renders an unset `${PAYMENT_PROVIDER}` as ''.
+    expect(envSchema.parse({ ...base, PAYMENT_PROVIDER: '', SMARTRO_MODE: ' ' })).toMatchObject({
+      PAYMENT_PROVIDER: 'mock',
+      SMARTRO_MODE: 'STG',
+    });
+  });
+
+  it('accepts SmartroPay with all three credentials, in either mode', () => {
+    const parsed = envSchema.parse({ ...base, ...smartro, SMARTRO_MODE: 'REAL' });
+    expect(parsed).toMatchObject({ ...smartro, SMARTRO_MODE: 'REAL' });
+  });
+
+  it('refuses an unknown provider or mode', () => {
+    for (const [key, value] of [
+      ['PAYMENT_PROVIDER', 'toss'],
+      ['SMARTRO_MODE', 'DEV'],
+      ['SMARTRO_MODE', 'stg'],
+    ] as const) {
+      const result = envSchema.safeParse({ ...base, [key]: value });
+      expect(result.success, `${key}=${value}`).toBe(false);
+      if (!result.success) expect(result.error.issues[0]?.path).toEqual([key]);
+    }
+  });
+
+  it.each(['SMARTRO_MID', 'SMARTRO_MERCHANT_KEY', 'SMARTRO_CANCEL_PASSWORD'] as const)(
+    'requires %s when PAYMENT_PROVIDER=smartro, naming it',
+    (key) => {
+      const result = envSchema.safeParse({ ...base, ...smartro, [key]: '' });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.map((issue) => issue.path)).toEqual([[key]]);
+      }
+    },
+  );
+
+  it('checks the credential shapes whenever they are set', () => {
+    // The key's first 32 characters are the AES-256 key of the cancel payload.
+    for (const [key, value] of [
+      ['SMARTRO_MERCHANT_KEY', 'k'.repeat(31)],
+      ['SMARTRO_MID', 'x'.repeat(11)],
+    ] as const) {
+      for (const provider of ['mock', 'smartro'] as const) {
+        const result = envSchema.safeParse({
+          ...base,
+          ...smartro,
+          PAYMENT_PROVIDER: provider,
+          [key]: value,
+        });
+        expect(result.success, `${provider} ${key}`).toBe(false);
+        if (!result.success) expect(result.error.issues.map((i) => i.path)).toEqual([[key]]);
+      }
+    }
+    expect(
+      envSchema.safeParse({ ...base, ...smartro, SMARTRO_MERCHANT_KEY: 'k'.repeat(32) }).success,
+    ).toBe(true);
+  });
+
+  it('takes an approval host override for a local fake PG, but never in production', () => {
+    const override = { ...smartro, SMARTRO_APPROVAL_BASE_URL: 'http://localhost:4010' };
+    expect(
+      envSchema.parse({ ...base, ...override, NODE_ENV: 'development' }).SMARTRO_APPROVAL_BASE_URL,
+    ).toBe('http://localhost:4010');
+    expect(envSchema.safeParse({ ...base, ...override, NODE_ENV: 'test' }).success).toBe(true);
+
+    const production = envSchema.safeParse({ ...base, ...override });
+    expect(production.success).toBe(false);
+    if (!production.success) {
+      expect(production.error.issues.map((issue) => issue.path)).toEqual([
+        ['SMARTRO_APPROVAL_BASE_URL'],
+      ]);
+    }
+  });
+
+  it('refuses an approval host override that is not an http(s) URL, with one issue', () => {
+    for (const NODE_ENV of ['development', 'production'] as const) {
+      for (const bad of ['localhost:4010', 'ftp://fake-pg.local', 'not a url']) {
+        const result = envSchema.safeParse({
+          ...base,
+          NODE_ENV,
+          SMARTRO_APPROVAL_BASE_URL: bad,
+        });
+        expect(result.success, `${NODE_ENV} ${bad}`).toBe(false);
+        if (!result.success) {
+          expect(result.error.issues.map((issue) => issue.path)).toEqual([
+            ['SMARTRO_APPROVAL_BASE_URL'],
+          ]);
+        }
+      }
+    }
+  });
+});

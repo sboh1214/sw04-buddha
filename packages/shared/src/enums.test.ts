@@ -50,6 +50,33 @@ describe('enums', () => {
     expect(new Set(enums.MARKET_STATUSES).size).toBe(enums.MARKET_STATUSES.length);
   });
 
+  it('only ever appends to the Postgres-backed payment and ledger enums (ADR-0042)', () => {
+    // `ALTER TYPE ... ADD VALUE` appends; reordering a tuple would reorder nothing in the
+    // database and make drizzle-kit emit a BEFORE/AFTER migration nobody meant to write.
+    expect(enums.PAYMENT_STATUSES.slice(0, 3)).toEqual(['pending', 'succeeded', 'failed']);
+    expect(enums.PAYMENT_STATUSES.slice(3)).toEqual(['cancelled', 'refunding', 'refunded']);
+    expect(enums.LEDGER_ENTRY_TYPES.slice(-2)).toEqual([
+      'PAYMENT_CANCEL',
+      'PAYMENT_CANCEL_REVERSAL',
+    ]);
+    expect(enums.paymentStatusSchema.parse('refunding')).toBe('refunding');
+    expect(enums.ledgerEntryTypeSchema.parse('PAYMENT_CANCEL_REVERSAL')).toBe(
+      'PAYMENT_CANCEL_REVERSAL',
+    );
+  });
+
+  it('names the payment providers, payment event types and the refund admin action', () => {
+    expect(enums.paymentProviderSchema.options).toEqual(['mock', 'smartro']);
+    expect(enums.paymentProviderSchema.safeParse('toss').success).toBe(false);
+    // payment_events.type is varchar(32).
+    for (const type of enums.PAYMENT_EVENT_TYPES) {
+      expect(enums.paymentEventTypeSchema.parse(type)).toBe(type);
+      expect(type.length).toBeLessThanOrEqual(32);
+    }
+    // admin_actions.type is varchar(40).
+    expect(enums.adminActionTypeSchema.parse('payment_refund')).toBe('payment_refund');
+  });
+
   it('keeps the remaining enum schemas parseable', () => {
     expect(enums.paymentStatusSchema.parse('succeeded')).toBe('succeeded');
     expect(enums.marketMechanismSchema.parse('lmsr')).toBe('lmsr');

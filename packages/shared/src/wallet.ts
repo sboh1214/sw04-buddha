@@ -21,10 +21,19 @@ export const paymentSchema = z
     priceKrw: z.number().int(),
     /** The package bought, or null once an admin removed it (the amounts above stay). */
     packageId: z.uuid().nullable(),
-    /** PAYMENT_PROVIDERS; only 'mock' exists in the MVP. */
+    /** PAYMENT_PROVIDERS ('mock' or 'smartro'); kept a plain string like the column. */
     provider: z.string(),
+    /** The provider's transaction id (SmartroPay: the Tid of the approval). */
     providerRef: z.string().nullable(),
     status: paymentStatusSchema,
+    /** The PG's PayMethod of the approval (CARD, KAKAO, …); null for mock and unapproved rows. */
+    method: z.string().nullable(),
+    /** When the charge was approved and credited; null until then. */
+    approvedAt: z.iso.datetime().nullable(),
+    /** When an admin refund was confirmed by the PG (status `refunded`). */
+    refundedAt: z.iso.datetime().nullable(),
+    /** The PG's last ResultMsg, shown to the payer when a payment failed. */
+    resultMessage: z.string().nullable(),
     createdAt: z.iso.datetime(),
   })
   .meta({ id: 'Payment' });

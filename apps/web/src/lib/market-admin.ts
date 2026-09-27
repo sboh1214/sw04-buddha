@@ -5,6 +5,7 @@ import {
   MINUS_SIGN,
   type MarketEventType,
   type MarketStatus,
+  type PaymentStatus,
   formatP,
   outcomeSchema,
   pAmountSchema,
@@ -53,16 +54,23 @@ export const MARKET_EVENT_LABEL: Record<MarketEventType, string> = {
   rules_edited: copy.eventRulesEdited,
 };
 
-export const PAYMENT_STATUS_LABEL: Record<'pending' | 'succeeded' | 'failed', string> = {
+export const PAYMENT_STATUS_LABEL: Record<PaymentStatus, string> = {
   pending: copy.paymentStatusPending,
   succeeded: copy.paymentStatusSucceeded,
   failed: copy.paymentStatusFailed,
+  cancelled: copy.paymentStatusCancelled,
+  refunding: copy.paymentStatusRefunding,
+  refunded: copy.paymentStatusRefunded,
 };
 
-export const PAYMENT_STATUS_PALETTE: Record<'pending' | 'succeeded' | 'failed', string> = {
+/** In flight is orange, credited is brand, refused is `no`, money given back is gray. */
+export const PAYMENT_STATUS_PALETTE: Record<PaymentStatus, string> = {
   pending: 'orange',
   succeeded: 'brand',
   failed: 'no',
+  cancelled: 'gray',
+  refunding: 'orange',
+  refunded: 'gray',
 };
 
 export const AUDIT_FAILURE_KIND_LABEL: Record<AuditFailureKind, string> = {
