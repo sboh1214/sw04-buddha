@@ -1,5 +1,11 @@
-import { schema } from '@buddha/db';
-import { SIGNUP_BONUS_P, errorEnvelopeSchema, meSchema } from '@buddha/shared';
+import { clockTimestamp, schema } from '@buddha/db';
+import {
+  SIGNUP_BONUS_P,
+  contactSchema,
+  errorEnvelopeSchema,
+  meSchema,
+  type ValidationIssue,
+} from '@buddha/shared';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
@@ -40,6 +46,29 @@ describe.skipIf(!hasTestInfra)('/api/v1/me (integration)', () => {
     expect(credential).toMatchObject({ providerId: 'credential', accountId: user.id });
     expect(credential?.id).toBeTypeOf('string');
     expect(credential?.createdAt).toBeTypeOf('string');
+  });
+
+  it('GET /me reports contact as null until a user_contacts row exists, then its values (ADR-0043)', async () => {
+    const before = await t.app.inject({
+      method: 'GET',
+      url: '/api/v1/me',
+      headers: { cookie: user.cookie },
+    });
+    expect(meSchema.parse(before.json<{ data: unknown }>().data).contact).toBeNull();
+
+    await t.db
+      .insert(schema.userContacts)
+      .values({ userId: user.id, realName: '홍길동', phone: '01012345678' });
+    const after = await t.app.inject({
+      method: 'GET',
+      url: '/api/v1/me',
+      headers: { cookie: user.cookie },
+    });
+    expect(after.statusCode).toBe(200);
+    expect(meSchema.parse(after.json<{ data: unknown }>().data).contact).toEqual({
+      realName: '홍길동',
+      phone: '01012345678',
+    });
   });
 
   it('GET /me without a session -> 401 UNAUTHENTICATED envelope', async () => {
@@ -117,5 +146,163 @@ describe.skipIf(!hasTestInfra)('/api/v1/me (integration)', () => {
     // The point here is that it is NOT the PLAN 7 envelope; the body's own shape is pinned by
     // health.controller.test.ts, which is where a field added to it has to be decided.
     expect(health.json()).toMatchObject({ status: 'ok', db: 'ok', redis: 'ok' });
+  });
+
+  // --- PUT /me/contact (ADR-0043) ------------------------------------------------------
+  describe('PUT /me/contact', () => {
+    const TRUSTED_ORIGIN = 'http://localhost:3000';
+    const putContact = (payload: unknown, headers: Record<string, string> = {}) =>
+      t.app.inject({
+        method: 'PUT',
+        url: '/api/v1/me/contact',
+        headers: { origin: TRUSTED_ORIGIN, 'content-type': 'application/json', ...headers },
+        payload: JSON.stringify(payload),
+      });
+    const contactRows = () => t.db.select().from(schema.userContacts);
+    const getMe = async (cookie: string) => {
+      const res = await t.app.inject({ method: 'GET', url: '/api/v1/me', headers: { cookie } });
+      expect(res.statusCode).toBe(200);
+      return meSchema.parse(res.json<{ data: unknown }>().data);
+    };
+
+    it('creates the row and returns the Contact; GET /me reflects it', async () => {
+      const res = await putContact(
+        { realName: '홍길동', phone: '01012345678' },
+        { cookie: user.cookie },
+      );
+      expect(res.statusCode).toBe(200);
+      expect(contactSchema.parse(res.json<{ data: unknown }>().data)).toEqual({
+        realName: '홍길동',
+        phone: '01012345678',
+      });
+      const rows = await contactRows();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ userId: user.id, realName: '홍길동', phone: '01012345678' });
+      expect(rows[0]!.updatedAt.getTime()).toBe(rows[0]!.createdAt.getTime());
+      expect((await getMe(user.cookie)).contact).toEqual({
+        realName: '홍길동',
+        phone: '01012345678',
+      });
+    });
+
+    it('replaces an existing row in place: same created_at, updated_at from the database clock', async () => {
+      await putContact({ realName: '홍길동', phone: '01012345678' }, { cookie: user.cookie });
+      // Backdated so "refreshed" is visible whatever the clock resolution.
+      const past = new Date('2020-01-01T00:00:00.000Z');
+      await t.db
+        .update(schema.userContacts)
+        .set({ createdAt: past, updatedAt: past })
+        .where(eq(schema.userContacts.userId, user.id));
+
+      const res = await putContact(
+        { realName: 'Jane Doe', phone: '01198765432' },
+        { cookie: user.cookie },
+      );
+      expect(res.statusCode).toBe(200);
+      expect(res.json<{ data: unknown }>().data).toEqual({
+        realName: 'Jane Doe',
+        phone: '01198765432',
+      });
+      const rows = await contactRows();
+      expect(rows).toHaveLength(1);
+      const [row] = rows;
+      expect(row).toMatchObject({ userId: user.id, realName: 'Jane Doe', phone: '01198765432' });
+      expect(row!.createdAt.toISOString()).toBe(past.toISOString());
+      expect(row!.updatedAt.getTime()).toBeGreaterThan(past.getTime());
+      expect(row!.updatedAt.getTime()).toBeLessThanOrEqual((await clockTimestamp(t.db)).getTime());
+      expect((await getMe(user.cookie)).contact).toEqual({
+        realName: 'Jane Doe',
+        phone: '01198765432',
+      });
+    });
+
+    it('normalises the input: phone to digits, name trimmed', async () => {
+      for (const [phone, realName] of [
+        ['010-1234-5678', '  홍길동 '],
+        [' 010 1234 5678 ', '홍길동'],
+        ['016-123-4567', '남궁 민수'],
+      ] as const) {
+        const res = await putContact({ realName, phone }, { cookie: user.cookie });
+        expect({ phone, status: res.statusCode }).toEqual({ phone, status: 200 });
+        const expected = { realName: realName.trim(), phone: phone.replace(/[ -]/g, '') };
+        expect(res.json<{ data: unknown }>().data).toEqual(expected);
+        expect(await contactRows()).toMatchObject([{ userId: user.id, ...expected }]);
+      }
+    });
+
+    it('refuses an invalid name or phone with 400 VALIDATION_ERROR naming the field, and writes nothing', async () => {
+      const valid = { realName: '홍길동', phone: '01012345678' };
+      const cases: [Record<string, unknown>, string][] = [
+        [{ ...valid, realName: '홍' }, 'realName'],
+        [{ ...valid, realName: '홍길동1' }, 'realName'],
+        [{ ...valid, realName: '홍길동!' }, 'realName'],
+        [{ ...valid, realName: '가'.repeat(31) }, 'realName'],
+        [{ ...valid, realName: '   ' }, 'realName'],
+        [{ ...valid, phone: '02-123-4567' }, 'phone'],
+        [{ ...valid, phone: '010-1234-567a' }, 'phone'],
+        [{ ...valid, phone: '0101234567890' }, 'phone'],
+        [{ ...valid, phone: '+821012345678' }, 'phone'],
+        [{ ...valid, phone: 1012345678 }, 'phone'],
+        [{ realName: '홍길동' }, 'phone'],
+        [{ phone: '01012345678' }, 'realName'],
+      ];
+      for (const [payload, field] of cases) {
+        const res = await putContact(payload, { cookie: user.cookie });
+        expect({ payload, status: res.statusCode }).toEqual({ payload, status: 400 });
+        const { error } = errorEnvelopeSchema.parse(res.json());
+        expect(error.code).toBe('VALIDATION_ERROR');
+        // One issue or several (a one-letter name is both too short and off-pattern), all
+        // about the field that was wrong.
+        const paths = (error.details as ValidationIssue[]).map((issue) => issue.path);
+        expect(paths.length).toBeGreaterThan(0);
+        expect({ payload, paths: [...new Set(paths.flat())] }).toEqual({ payload, paths: [field] });
+      }
+      expect(await contactRows()).toHaveLength(0);
+      expect((await getMe(user.cookie)).contact).toBeNull();
+    });
+
+    it('answers 401 without a session and 403 for a foreign Origin, writing nothing', async () => {
+      const body = { realName: '홍길동', phone: '01012345678' };
+      const anonymous = await putContact(body);
+      expect(anonymous.statusCode).toBe(401);
+      expect(errorEnvelopeSchema.parse(anonymous.json()).error.code).toBe('UNAUTHENTICATED');
+
+      for (const origin of ['https://evil.example', 'null']) {
+        const res = await putContact(body, { cookie: user.cookie, origin });
+        expect({ origin, status: res.statusCode }).toEqual({ origin, status: 403 });
+        expect(errorEnvelopeSchema.parse(res.json()).error.code).toBe('FORBIDDEN');
+      }
+      expect(await contactRows()).toHaveLength(0);
+    });
+
+    it('keeps each account to its own row: another member sees neither the values nor the row', async () => {
+      const other = await signUpTestUser(t);
+      await putContact({ realName: '홍길동', phone: '01012345678' }, { cookie: user.cookie });
+      expect((await getMe(other.cookie)).contact).toBeNull();
+
+      const res = await putContact(
+        { realName: '김철수', phone: '01087654321' },
+        { cookie: other.cookie },
+      );
+      expect(res.statusCode).toBe(200);
+      expect((await getMe(user.cookie)).contact).toEqual({
+        realName: '홍길동',
+        phone: '01012345678',
+      });
+      expect((await getMe(other.cookie)).contact).toEqual({
+        realName: '김철수',
+        phone: '01087654321',
+      });
+      const rows = await t.db
+        .select({ userId: schema.userContacts.userId, realName: schema.userContacts.realName })
+        .from(schema.userContacts);
+      expect(rows).toHaveLength(2);
+      expect(rows).toEqual(
+        expect.arrayContaining([
+          { userId: user.id, realName: '홍길동' },
+          { userId: other.id, realName: '김철수' },
+        ]),
+      );
+    });
   });
 });

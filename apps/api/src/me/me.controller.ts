@@ -1,11 +1,15 @@
-import { Body, Controller, Get, HttpCode, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Patch, Post, Put, Req, UseGuards } from '@nestjs/common';
 import { ApiCookieAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { type FastifyRequest } from 'fastify';
 import {
+  type Contact,
+  type ContactBody,
   type Me,
   type OkResult,
   type SetPasswordBody,
   type UpdateMeBody,
+  contactBodySchema,
+  contactSchema,
   meSchema,
   okResultSchema,
   setPasswordBodySchema,
@@ -63,5 +67,25 @@ export class MeController {
     @Body({ schema: updateMeBodySchema }) body: UpdateMeBody,
   ): Promise<Me> {
     return this.me.updateNickname(user.id, body.nickname);
+  }
+
+  /**
+   * ADR-0043: real name and mobile number, which the PG's payment window needs (BuyerName /
+   * BuyerTel). Stored as given, shape-checked only (본인인증 comes later); `phone` comes back
+   * as digits. An account without them is sent to `/onboarding` by the web, and `GET /me`
+   * reports them as `contact`.
+   *
+   * Counted like `PATCH /me`: the per-address bucket every route has (address-limit.ts), no
+   * named one — a write of the caller's own row, repeated, costs nothing anyone else pays for.
+   */
+  @Put('contact')
+  @ApiOperation({ operationId: 'updateMyContact', summary: 'Set real name and mobile number' })
+  @ApiData(contactSchema)
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'VALIDATION_ERROR', 'RATE_LIMITED')
+  updateContact(
+    @CurrentUser() user: SessionUser,
+    @Body({ schema: contactBodySchema }) body: ContactBody,
+  ): Promise<Contact> {
+    return this.me.updateContact(user.id, body);
   }
 }
