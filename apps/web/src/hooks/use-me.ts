@@ -33,8 +33,9 @@ export function useMe() {
 }
 
 /**
- * `POST /api/v1/me/password`: the first password of an account that has none (after the
- * sign-up verification, or for a social-only user). Refreshes the linked-account list, which
+ * `POST /api/v1/me/password`: the first password of an account that has none, set from the
+ * settings screen (a social-only user). The sign-up's /set-password step uses
+ * `useSetPasswordAndContact` (use-contact.ts) instead. Refreshes the linked-account list, which
  * decides whether the settings screen offers "set" or "change".
  */
 export function useSetPassword() {
