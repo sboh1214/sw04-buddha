@@ -10,7 +10,8 @@ import { copy } from '@/copy';
  * The mobile bottom tab bar (PLAN 11.4 레이아웃): 홈 · 포트폴리오 · 지갑 · 설정, below `md` only.
  *
  * Fixed to the bottom of the viewport, so the document needs that much extra scroll length or
- * every page's last row would sit under it — the root layout pays it as `<main>`'s bottom padding.
+ * every page's last row would sit under it — the site footer, the last row of every page, pays it
+ * as extra bottom padding (footer.tsx).
  *
  * The four destinations are shown to signed-out visitors too. Three of them are session-gated on
  * the server and answer with `redirect('/login?next=…')`, which is the same thing a tap on a

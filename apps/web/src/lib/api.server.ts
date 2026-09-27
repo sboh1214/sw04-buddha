@@ -2,6 +2,7 @@ import { createApiClient } from '@buddha/api-client';
 import { cache } from 'react';
 import {
   type Category,
+  type ChargePackage,
   type LeaderboardEntry,
   type Market,
   type MarketListItem,
@@ -121,4 +122,13 @@ export async function fetchCategoriesServer(): Promise<Category[]> {
 /** The global ranking (`GET /leaderboard`, public; PLAN M6 선택). */
 export async function fetchLeaderboardServer(): Promise<LeaderboardEntry[]> {
   return unwrap(await serverApi.GET('/api/v1/leaderboard')).data;
+}
+
+/**
+ * The charge catalogue (`GET /charge-packages`, public — ADR-0026) for the `/charge` guide page
+ * (ADR-0044), in the API's display order. Rejects on failure; the page turns that into its own
+ * error notice rather than a 500.
+ */
+export async function fetchChargePackagesServer(): Promise<ChargePackage[]> {
+  return unwrap(await serverApi.GET('/api/v1/charge-packages')).data;
 }

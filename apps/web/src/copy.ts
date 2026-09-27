@@ -648,6 +648,38 @@ export const copy = {
   errLeaderboardLoad: '순위를 불러오지 못했습니다.',
   leaderboardLink: '전체 순위 보기',
 
+  // --- 사업자 정보 푸터 · 약관 3종 · 충전 안내 (ADR-0044) ---
+  // `{{key}}` is a business fact from src/legal/business-info.ts, substituted by `fillTemplate`
+  // at render time (owner decision: the facts live in ONE config). legal.test.ts resolves every
+  // string here that carries one.
+  legalTermsTitle: '이용약관',
+  legalPrivacyTitle: '개인정보처리방침',
+  legalRefundTitle: '환불정책',
+  legalAddendum: '부칙',
+  footerNavLabel: '약관 및 정책',
+  footerBusinessInfoLabel: '사업자 정보',
+  footerCompany: '상호: {{companyName}}',
+  footerCeo: '대표자: {{ceoName}}',
+  footerBusinessNumber: '사업자등록번호: {{businessNumber}}',
+  footerMailOrderNumber: '통신판매업 신고번호: {{mailOrderNumber}}',
+  footerAddress: '주소: {{address}}',
+  footerPhone: '고객센터: {{phone}}',
+  footerEmail: '이메일: {{email}}',
+  footerPrivacyOfficer: '개인정보 보호책임자: {{privacyOfficer}}',
+  footerHosting: '호스팅 서비스 제공자: {{hostingProvider}}',
+  footerCopyright: '© {{serviceName}}',
+  chargeGuideTitle: '충전 안내',
+  chargeGuideIntro:
+    'P는 {{serviceName}}의 예측 시장에서 예·아니오 계약을 사고파는 데 쓰는 서비스 전용 포인트입니다. 아래 상품 가운데 하나를 골라 충전할 수 있습니다.',
+  chargeGuideDelivery:
+    '결제는 {{pgName}}의 결제 창에서 카드로 진행되며, 가격에는 부가가치세가 포함되어 있습니다. 결제가 승인되면 P가 바로 지갑에 충전됩니다. 충전하려면 로그인이 필요합니다.',
+  chargeGuidePrice: '결제 금액',
+  chargeGuideNoticeTitle: '충전 전에 확인해 주세요',
+  chargeGuideRefundSummary:
+    '결제가 승인된 때부터 {{refundWindowDays}}일 이내이고 그 결제로 충전된 P를 전혀 쓰지 않았다면 결제 금액 전액을 환불받을 수 있습니다. 쿠폰·정산 등 결제 없이 받은 P는 환불되지 않습니다.',
+  chargeGuideRefundLink: '환불정책 자세히 보기',
+  chargeGuideLoadError: '충전 상품을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.',
+
   // --- generic ---
   errUnknown: '문제가 발생했습니다. 잠시 후 다시 시도해 주세요.',
   errNetwork: '서버에 연결할 수 없습니다.',
