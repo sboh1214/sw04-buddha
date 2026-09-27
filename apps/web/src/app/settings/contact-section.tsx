@@ -62,7 +62,9 @@ function ContactFields({ contact }: { contact: Contact | null }) {
   const onSubmit = handleSubmit(async (form) => {
     try {
       const saved = await update.mutateAsync(form);
-      reset(contactFormValues(saved));
+      // Explicitly not keepDirtyValues: react-hook-form merges the form's resetOptions into a
+      // manual reset too, which would keep the typed '010 9876 5432' instead of the saved number.
+      reset(contactFormValues(saved), { keepDirtyValues: false });
       toaster.create({ type: 'success', title: copy.contactSaved });
     } catch (error) {
       const fieldError = contactFieldError(error);
