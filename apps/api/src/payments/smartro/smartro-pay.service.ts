@@ -653,7 +653,8 @@ export class SmartroPayService {
     }
     await this.db
       .update(schema.payments)
-      .set({ resultMessage: resultMessageOf(outcome.resultMessage), updatedAt: new Date() })
+      // Why the payment ended, not the PG's "취소 성공": the payer and the admin list read it as the reason.
+      .set({ resultMessage: NET_CANCEL_REASON, updatedAt: new Date() })
       .where(and(eq(schema.payments.id, payment.id), eq(schema.payments.status, 'cancelled')));
     return this.walletUrl(payment.id, 'cancelled');
   }

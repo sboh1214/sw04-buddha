@@ -495,7 +495,7 @@ describe.skipIf(!hasTestInfra)('SmartroPay (integration)', () => {
       expect(await paymentRow(form.paymentId)).toMatchObject({
         status: 'cancelled',
         providerRef: tid,
-        resultMessage: '취소 성공',
+        resultMessage: '가맹점 승인 처리 실패로 인한 자동 취소',
       });
     }
     // Nothing was ever credited.
