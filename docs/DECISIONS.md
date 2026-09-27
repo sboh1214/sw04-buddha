@@ -1208,3 +1208,190 @@ PLAN §11.1은 "Polymarket의 카드 기반 탐색 + Kalshi의 정산 기준 노
 - 지워진 것: 홈의 페이지 내 검색 폼(`market-search`), 카테고리 칩 행(`market-category-tabs`), 헤더의 md 전용 `CategoryLinks`. e2e가 쓰는 test id(`market-card-<id>`, `market-card-probability`, `nav-search*`, `balance-chip`)는 유지.
 - PLAN 드리프트: §11.3 홈 행("카테고리 탭 · 정렬 · 마켓 카드 그리드 · 검색"), §11.4 MarketCard·레이아웃 줄, §6.2 `categories`, §17 Q7(브랜드 색)이 이 ADR과 다르다. QUESTIONS.md「정리 — PLAN 드리프트」에 적었다.
 - 알려진 한계: 카테고리에 관리자 UI가 없으므로 트리는 시드로만 바뀐다(전과 같다). 세부 분류 아이콘은 부모 것을 물려받는다 — Kalshi처럼 시리즈마다 이미지를 두려면 `categories.image_url` 같은 컬럼이 필요하고, 그건 관리자 카테고리 UI와 함께 온다. 커뮤니티는 자리만 있다.
+
+---
+
+## ADR-0042 — 스마트로페이(SmartroPay) 일반연동: 결제창·콜백 셋·망취소·관리자 환불 (오너 결정 2026-09-28)
+
+- 날짜: 2026-09-28
+- 상태: 채택 (오너 결정 2026-09-28, PLAN §0.2의 청약철회 예외 포함)
+
+### 맥락
+
+PLAN은 결제를 끝까지 mock으로 두었다 — §1.2(:42) "충전 버튼 → 즉시 성공", §2(:65) 비목표 "실제 PG 연동, 환불 처리", §13(:797) "이후: 토스페이먼츠/포트원". 오너가 스마트로페이에 PG 가입을 신청했고, **PG 심사는 사이트에 실제로 연동된 결제창을 요구한다**(함께 요구하는 사업자 정보·약관·판매 상품 화면은 ADR-0044). 아직 테스트 MID·상점키가 발급되지 않았으므로 모든 것을 가짜 PG로 증명하고 STG 검증은 나중에 한다.
+
+기존 구조는 그대로 맞지 않았다. `PaymentProvider.charge()`는 한 번 불러 `succeeded|failed`를 받는 즉시 결제였고(ADR-0025), 리디렉션 PG는 "준비 → 브라우저 결제창 → ReturnUrl → 서버 승인 → (선택) 재통보"로 흐른다. HTTP 층에는 막는 것이 셋 있었다: API는 JSON만 받고 urlencoded 파서가 꺼져 있다(A-M2-13), `SessionGuard`는 다른 출처의 `Origin`을 403으로 막는다, 세션 쿠키는 SameSite=Lax라 모바일 결제창이 다른 사이트에서 보내는 POST에 실리지 않는다. 웹 CSP는 SDK 스크립트·iframe·폼 제출을 전부 막고(ADR-0036), 컨테이너는 UTC인데 SmartroPay의 `EdiDate`는 한국 시각이다. 마지막으로 PLAN §0.2(:25)는 "P → 원화 방향의 코드, 화면, API, DB 컬럼을 어떤 형태로도 추가하지 않는다"고 못 박았는데, 청약철회(카드 결제 취소)는 원화를 돌려주는 일이다.
+
+오너 결정(2026-09-28): ① 일반연동(PC 레이어 팝업 + Callback, 모바일 전체 페이지 리디렉션) ② `PayMethod=CARD`만, 결제창의 간편결제는 보이는 채로 ③ 과세, 상품 가격은 부가세 포함, `TaxAmt`/`VatAmt`/`TaxFreeAmt`를 보낸다(MID 기본값 "부가세 직접계산") ④ mock을 남기고 env로 고른다(CI·e2e는 mock) ⑤ 적립할 수 없는 승인의 자동 망취소 + **관리자 환불**(아래) ⑥ 실명·휴대전화 수집(ADR-0043) ⑦~⑨ 사업자 정보·약관·공개 충전 안내(ADR-0044).
+
+### 결정
+
+**흐름과 요청 값**
+
+- **일반연동, 인증과 승인을 나눈다.** PC: SDK가 iframe 레이어(`smartropay-window`)를 열고, 닫힌 뒤 `Callback({ Tid, TrAuthKey })`를 부르면 우리 페이지가 숨은 `approvalForm`을 우리 ReturnUrl로 제출한다(같은 출처의 최상위 POST). 모바일: SDK가 페이지 전체를 tmpay/mpay로 제출하고, 스마트로페이가 결과를 ReturnUrl(취소면 StopUrl)로 **다른 사이트에서, 쿠키 없이, 폼으로** POST한다. SDK는 자기 모드를 `<script src>`의 호스트로 판단하므로, 웹은 SDK와 같은 정규식(`/iPhone|iPad|iPod|Android/i`)으로 PC 빌드와 모바일 빌드 중 하나를 싣는다. URL에는 `?version=<서울 날짜 yyyyMMdd>`를 붙여 하루 안에 새 SDK를 받는다.
+- **요청 값.** `PayMethod=CARD`, `GoodsCnt=1`, `GoodsName`은 `포인트 10,000P`(40자, PLAN 부록 A의 금지어 없음), `Moid`는 결제 uuid에서 하이픈을 뺀 소문자 16진수 32자(특수문자 금지 규칙; `paymentIdToMoid`/`moidToPaymentId`는 유효한 uuid만 통과), `MallUserId`는 `sha256(userId)`의 앞 16진수 20자(계정마다 같고 되돌릴 수 없다), `BuyerName`/`BuyerTel`은 `user_contacts`(ADR-0043), `BuyerEmail`은 계정 이메일이되 소셜 로그인의 대체 주소(`…@noemail.buddha.local`)이거나 60자를 넘으면 빈 문자열이다.
+- **`EdiDate`는 서울 시각.** 컨테이너는 UTC로 돈다. 한국에는 일광 절약 시간이 없으므로 고정 +9시간으로 `yyyyMMddHHmmss`를 만든다. `EncryptData = base64(sha256(EdiDate + Mid + Amt + MerchantKey))`.
+- **부가세는 정수 `floor(Amt / 11)`.** 매뉴얼의 공식은 `floor(Amt - Amt / 1.1)`이고 부동소수점이다 — PLAN §0.2는 금액에 부동소수점을 금한다. `Amt - Amt/1.1 = Amt/11`이므로 정수 나눗셈 한 번이 **수학적으로 같은 값**이고, 부동소수점 공식이 경계(예: `Amt/11`이 정수인 금액)에서 1원 틀릴 여지도 없다. `TaxAmt = Amt - VatAmt`, `TaxFreeAmt = 0`(`vatSplit`, `@buddha/shared`; 5,000원 → 4,546/454로 매뉴얼의 예와 같다). 취소도 같은 분할을 `CancelTaxAmt`·`CancelVatAmt`·`CancelTaxFreeAmt`로 보낸다 — 부가세 직접계산 MID는 그것이 없으면 취소를 거절한다.
+
+**프로바이더 레지스트리와 env 전환**
+
+- **`PAYMENT_PROVIDER=mock|smartro`(기본 `mock`).** `PaymentProviderRegistry`가 이름별로 프로바이더를 들고 있다: mock은 언제나, 스마트로페이는 `SMARTRO_MID`·`SMARTRO_MERCHANT_KEY`·`SMARTRO_CANCEL_PASSWORD` 셋이 있을 때. **설정된 프로바이더는 어느 충전 흐름이 열리는지만 정한다** — smartro면 `POST /payments/charge`가 404, mock이면 `/payments/smartro/prepare`가 404다. 이미 있는 결제에 대한 일(환불, 망취소)은 **결제 행의 `provider`** 로 찾는다. 그래서 스마트로페이로 바꾼 뒤에도 mock 결제는 환불되고, mock으로 되돌려도 키가 남아 있으면 진행 중인 스마트로페이 결제의 콜백·환불이 계속 동작한다(재통보는 키가 없으면 404). 인터페이스에서 `charge`는 선택(한 번에 끝나는 프로바이더만), `cancel`은 필수가 됐다(mock의 취소는 언제나 성공).
+- **env.** `SMARTRO_MODE`(`STG`|`REAL`, 기본 STG), `SMARTRO_MID`(10자 이하), `SMARTRO_MERCHANT_KEY`(32자 이상 — 앞 32자가 취소 AES 키라 ASCII여야 한다), `SMARTRO_CANCEL_PASSWORD`. smartro면 셋 다 필수(OAuth 쌍과 같은 `superRefine`), 빈 문자열은 미설정이다. `SMARTRO_APPROVAL_BASE_URL`은 로컬 가짜 PG 전용 승인·취소 호스트이고 `NODE_ENV=production`이면 거부된다. 스마트로페이 키가 있는데 ReturnUrl·StopUrl이 100자를 넘을 오리진이면 **기동이 실패한다** — 요청 시점에 알면 모든 충전이 예약 행을 남기고 500이 된다.
+- **SmartroPay HTTP는 주입 토큰 `SMARTRO_CLIENT`(approve·inquire·cancel) 뒤에.** 실구현은 전역 `fetch`에 호출당 25초 상한 하나(`AbortSignal.timeout`)다 — 연결 5초를 따로 두려면 undici `Agent`가 필요하고 그것은 의존성이 아니다. 응답은 느슨하게 읽는다(매뉴얼: 필드가 예고 없이 늘 수 있다). 테스트는 이 토큰을 언제나 가짜 PG로 바꾼다 — 개발자 `.env`에 키가 있어도 실제 PG에 닿지 않는다.
+
+**라우트**
+
+| 라우트                                            | 인증                                   | 답                                               |
+| ------------------------------------------------- | -------------------------------------- | ------------------------------------------------ |
+| `GET /api/v1/payments/provider`                   | 공개                                   | `PaymentProviderInfo`(mock, 또는 모드와 SDK URL) |
+| `POST /api/v1/payments/smartro/prepare`           | 세션, `charge` 버킷, `Idempotency-Key` | `SmartroPrepareResult`(결제 id와 서명된 폼)      |
+| `POST /api/v1/payments/smartro/return?m=<moid>`   | **공개**, OpenAPI 밖                   | 303 → `/wallet?payment=<id>&result=<r>`          |
+| `GET·POST /api/v1/payments/smartro/stop?m=<moid>` | **공개**, OpenAPI 밖                   | 303 → `result=stopped`                           |
+| `POST /api/v1/payments/smartro/notify`            | **공개**, OpenAPI 밖, 발신 IP 제한     | `200 text/plain` `OK`                            |
+| `GET /api/v1/me/payments/:id`                     | 세션                                   | 자기 결제만(아니면 404)                          |
+| `POST /api/v1/admin/payments/:id/refund`          | 관리자                                 | `AdminPayment`                                   |
+
+- **콜백 셋이 공개이고 폼을 `rawBody`로 읽는 이유.** 모바일 ReturnUrl POST는 스마트로페이 사이트에서 오고(다른 `Origin`, SameSite=Lax 쿠키 없음) 재통보는 서버 간 호출이다. 그래서 `SessionGuard`를 걸지 않고, 세션이 아니라 Moid(우리가 URL에 넣어 둔 쿼리 `m`, 또는 폼의 `Moid`)로만 결제를 찾는다. 전역 urlencoded 파서는 **계속 꺼 둔다**(A-M2-13 — 폼 본문은 CSRF가 보내는 바로 그 모양이고, 다른 라우트가 폼을 400으로 거절하는 것을 `admin.controller.test.ts`가 고정한다). 대신 better-auth 모듈의 `bodyParser.rawBody: true`로 원문 바이트를 남기고, 이 세 핸들러만 `URLSearchParams`로 디코딩한다(UTF-8, 필드 100개 상한, NUL 제거, 키를 호출자가 정하므로 객체가 아니라 `Map`). Nest 자체의 `rawBody` 옵션은 `bodyParser: false`에서 아무 일도 하지 않는다 — 파서가 라이브러리의 것이다. 답은 `@RawResponse()`의 303이고 `@ApiExcludeController()`로 OpenAPI에서 빠지며, `docs/API.md`에는 생성기의 손으로 쓴 문단으로 들어간다(ADR-0037). 리디렉션 목적지와 ReturnUrl·StopUrl의 기준은 새 변수 없이 `BETTER_AUTH_URL`의 오리진이다 — 그 오리진의 `/api/*`는 개발에서는 Next rewrite, 운영에서는 Caddy가 API로 넘긴다. return·stop에서 예상 밖의 오류가 나도 브라우저는 오류 화면 대신 `result=pending`의 지갑으로 간다. GET stop의 `HEAD`(링크 검사기)는 아무것도 바꾸지 않는다.
+- **prepare**는 즉시 충전과 같은 순서로 검사한다: `expectedAccountId` → 같은 키의 재요청 → 상품·`PRICE_MOVED` → **카드 최소 1,000원**(`CARD_MIN_PRICE_KRW`, 아니면 `packageId`를 지목한 `VALIDATION_ERROR` — PG는 결제자가 카드를 다 입력한 뒤에야 3041로 거절한다) → 실명·휴대전화(`CONTACT_REQUIRED` 409, ADR-0043) → 잔고 행 → `pending` 예약(`provider='smartro'`). 같은 키로 다시 오면 아직 `pending`이고 아무도 잡지 않은 결제에 **새로 서명한 폼**(새 `EdiDate`)을 돌려주고, 조건이 다르거나 이미 잡혔거나 끝난 결제면 `DUPLICATE_REQUEST`(키 소모)다. 레이트 리밋은 즉시 충전의 `charge` 버킷을 같이 쓴다.
+
+**ReturnUrl — 승인은 한 번만, 경쟁에 안전하게**
+
+1. Moid를 알아볼 수 없거나 스마트로페이 결제가 아니면 `/wallet?result=failed`(결제 id 없음). `pending`이 아니면 지금 상태로 답한다(뒤로 가기·이중 제출 — 매뉴얼 FAQ의 "Tid 중복"). `refunding`·`refunded`는 `succeeded`로 답한다 — 결제 자체는 성공했고 환불은 그 뒤의 별개 사건이다. `pending`인데 `provider_ref`가 이미 있으면 다른 요청이 승인 중이므로 `pending`.
+2. `TrAuthKey`가 없으면 승인할 것이 없다: `failed`(스마트로페이의 `ResultMsg`를 `result_message`로).
+3. **잡기(claim)**: `UPDATE payments SET provider_ref = <Tid> WHERE id = ? AND status = 'pending' AND provider_ref IS NULL` + `return` 이벤트를 한 트랜잭션에. 0행이면 진 요청이라 지금 상태로 답한다. 그 Tid를 **다른** 결제가 이미 들고 있으면(부분 UNIQUE `(provider, provider_ref)`) 한 PG 거래를 두 번 적립할 수 있으므로 이 결제를 `failed`로 닫는다.
+4. 승인(`urlCallApproval`) — 응답이 없으면(네트워크·타임아웃·읽을 수 없는 본문) 결과 조회(`approvalInquiry`, 승인 후 1시간 안)를 **한 번** 한다. 그래도 모르면 잡힌 `pending`으로 두고 재통보나 관리자가 정리한다.
+5. 성공 코드가 아니면 `failed` + `result_message`(결제자에게 보인다).
+6. 성공이면 `SignValue`(상수 시간 비교)·`Mid`·`Moid`·`Amt == price_krw`를 검증한다. 하나라도 어긋나면 망취소.
+7. **적립**은 `WalletService.charge`에서 뽑아낸 `creditPayment` 하나를 mock과 함께 쓴다: 잔고 행 잠금 → DB 시계 → 결제 UPDATE(`status IN (from)` 가드 — 두 번 적립은 불가능하다) → `provider_ref`(승인이 돌려준 Tid — 인증 Tid와 다를 수 있다), `method`(PayMethod), `approved_at`(잠금 뒤의 시계), `result_message` → 잔고 UPDATE → `DEPOSIT` 원장. 커밋 뒤 `user:balance`를 발행한다. **잠금 순서는 어디서나 잔고 → 결제**(적립, 환불의 회수, 거절 복원)이고, 콜백의 한 문장짜리 결제 UPDATE는 결제 행만 잡으므로 교착이 생기지 않는다.
+8. 적립이 예외를 던지면 먼저 결제를 **다시 읽는다**. 이미 `pending`이 아니면(응답만 잃은 커밋, 또는 그사이 재통보가 적립) 취소하지 않고 지금 상태로 답한다 — 적립된 결제의 카드를 취소하면 P를 공짜로 주게 된다. 여전히 `pending`일 때만 망취소한다.
+
+**성공 코드 표** — 승인: `3001` CARD, `4000` BANK, `A000` CELLPHONE, `KP00` KAKAO, `NP00` NAVER, `PP00` PAYCO, `LP00` LPAY, `PI00` PINPAY, `0000` 그 밖(SAMSUNGPAY·TOSS·TMONEYPAY·SMILEPAY…). 우리는 CARD만 요청하지만 결제자가 결제창에서 간편결제로 옮겨 갈 수 있으므로 PayMethod와 무관하게 이 표로 판정한다. `4100`/`4110`(가상계좌 채번·입금)은 카드 결제의 완료가 아니므로 **일부러 뺐다**. 취소: `2001` 취소됨, `2013` 이미 취소됨(응답을 잃은 취소의 재시도) — 둘 다 성공이고, 그 밖의 코드는 거절, ResultCode 없는 답이나 무응답은 "모름"이다.
+
+**망취소(net cancel)**
+
+- 승인됐지만 적립하지 않을 결제는 곧바로 카드를 취소한다 — 금액은 `price_krw`가 아니라 **PG가 실제로 승인한 `Amt`**, CancelMsg는 "가맹점 승인 처리 실패로 인한 자동 취소".
+- **먼저 예약한다**: `UPDATE … SET status = 'cancelled', provider_ref = <Tid> WHERE status = 'pending'` 뒤에 PG에 묻는다. 거절·무응답·예외면 `pending`으로 되돌리고 오류 로그를 남긴다(돈이 빠져나갔을 수 있다 — 재통보가 여전히 적립할 수 있고, 아니면 운영자가 가맹점 관리자에서 취소한다). 예약과 PG의 답 사이에 온 승인 재통보(`cancelled`인데 `net_cancel` 이벤트가 아직 없음)에는 5xx로 답해 다시 보내게 한다 — 결과를 모르는 채로 `OK`를 주면 그 적립 기회가 사라진다.
+- **우리의 다른 결제의 승인은 절대 취소하지 않는다.** 승인의 Moid가 다른 결제를 가리키거나 그 Tid를 다른 결제가 이미 들고 있으면(결제자가 예전 결제의 Tid·TrAuthKey를 새 결제의 ReturnUrl에 재생하고 조회가 그 승인을 돌려주는 경우) 이 결제만 `failed`로 닫고 오류 로그를 남긴다 — 그 승인은 그 결제의 흐름이 맡는다.
+
+**재통보(notify, 신통보 파라미터)**
+
+- **발신 IP를 제한한다.** 그 모드의 스마트로페이 서버에서 온 것만 받는다(`SMARTRO_NOTIFY_IPS`: STG `211.193.35.11`, REAL 재통보 서버 `211.193.35.216`·`211.193.35.217`와 결제 서버 `211.193.35.20` — 매뉴얼의 SERVER IP 표). 주소는 `request.ip`이고, `TRUST_PROXY=172.28.0.10/32`(Caddy만)라 Caddy가 적은 `X-Forwarded-For`다 — Caddy는 클라이언트가 보낸 그 헤더를 버리므로 위조할 수 없다(ADR-0040). 아니면 `403 FORBIDDEN` + 오류 로그. 검사를 끄는 길은 `SMARTRO_APPROVAL_BASE_URL`(로컬 가짜 PG)뿐이고 운영은 그 변수를 거부한다. 목록은 코드에 박혀 있으므로 스마트로페이 서버가 바뀌면 배포가 필요하다.
+- `SignValue`가 맞지 않으면 `400`, 우리 쪽 처리가 실패하면 5xx — 셋 다 본문에 `OK`가 없으므로 스마트로페이가 다시 보낸다. 처리했거나 무시해도 되는 통보는 `200 text/plain` `OK`. 구통보 이름(`TID`·`OID`·`MID`)도 받는다.
+- **`SignValue`는 Tid와 ResultCode만 덮는다** — `Moid`·`Amt`·`StateCd`는 서명 밖이다. 그래서 IP 제한에 더해 **잡힌 결제만 적립한다**: 승인 통보(`StateCd=0` + 성공 코드)는 `pending`이나 우리가 `failed`로 적은 결제를 적립하되(PG의 승인이 우리 쪽 실패 기록보다 우선한다), **우리 ReturnUrl이 잡은 결제**(`provider_ref`가 있는 결제)만이다. 인증/승인 분리에서 PG는 우리가 `urlCallApproval`을 불러야만 승인하고, 그 호출은 언제나 잡기가 커밋된 뒤에 나간다 — 잡히지 않은 결제의 승인 통보는 진짜일 수 없으므로 기록만 하고 `OK`다. **처음 설계("`pending`·`failed`면 적립")에서 의도적으로 좁힌 것**이다 — 구현 리뷰(2차)가 서명 밖의 필드로 위조 통보가 적립되는 경로를 짚었다. `Mid`·`Amt`가 맞지 않거나 그 Tid가 이미 다른 결제의 것이면 적립하지 않고 오류 로그와 함께 `OK`(다시 보내도 바뀔 것이 없다).
+- **취소 통보(`StateCd=1|2`)는 기록만 한다.** 우리 쪽이 `succeeded`인 결제의 취소 통보는 가맹점 관리자에서 한 외부 취소다 — P를 자동으로 회수하지 않고 오류 로그만 남긴다(오너 질문 Q-PG-4).
+
+**`payment_events` — PG와의 교환 기록(append-only)**
+
+- 결제마다 교환 한 번이 한 행: `return`·`approval`·`approval_inquiry`·`stop`·`notify`·`net_cancel`·`refund_cancel`. `buddha_app`은 INSERT/SELECT만 갖는다(마이그레이션 0015의 REVOKE, `schema.test.ts`가 고정). 로그에는 PG 페이로드를 남기지 않으므로 결과를 재구성하는 자리는 이 테이블이다.
+- 페이로드는 정화해서 남긴다: MerchantKey·CancelPwd·HashData·EncData·EncryptData는 **절대** 남기지 않고, 구매자 개인정보(`Buyer*`·`Receiver*`·`Delivery*`·`Parent*`)도 뺀다 — 이 테이블은 계정보다 오래 살고(`user_contacts`는 계정과 함께 지워진다) 아무도 지울 수 없다. 키 64개 × 값 500자 상한, NUL 제거. `TrAuthKey`는 남긴다(1시간 결과 조회에 필요).
+- 공개 ReturnUrl·StopUrl은 **결제를 실제로 바꿀 때만**(잡기·닫기, 같은 트랜잭션) 행을 쓰고, 알려진 SmartroPay 필드만 적는다. 처음 안은 요청마다 받은 필드를 통째로 적었는데, Moid를 아는 누구나 끝난 결제에 같은 폼을 무한히 다시 보내 지울 수 없는 행을 쌓을 수 있었다(구현 리뷰의 유일한 major).
+- 로그에는 실명·전화번호·MerchantKey·CancelPwd·TrAuthKey·PG 페이로드가 없다 — 결과 코드와 결제 id뿐이다. 드라이버 오류는 SQLSTATE로 줄인다(drizzle은 바인드 값을 오류 메시지에 넣는다).
+
+**CSP(웹, `next.config.ts`)**
+
+- `script-src`에 SDK 호스트 넷(`tpay`·`tmpay`·`pay`·`mpay` `.smartropay.co.kr`), `frame-src`에 PC 레이어의 `tpay`·`pay`, `form-action 'self'`에 같은 호스트 넷을 더한다. 그 밖에는 아무것도 풀지 않는다. CSP는 `next build`에 구워지므로 STG와 REAL 호스트를 **둘 다** 적는다 — 모드 전환에 웹 재빌드가 필요 없다. `frame-ancestors 'none'`은 그대로라 PC는 반드시 Callback 함수 모드다(그렇지 않으면 스마트로페이가 우리 ReturnUrl을 자기 iframe 안에 여는데 그것은 막혀 있다). `connect-src`는 그대로다 — SDK의 XHR(`modeLog`)은 모드가 어긋날 때만 나간다.
+- 웹의 나머지: `GET /payments/provider`로 흐름을 고른다. mock은 지금의 한 번 클릭 충전 그대로(e2e가 그것에 기댄다), smartro는 클릭마다 새 멱등키로 prepare → 결제창 컴포넌트가 숨은 `tranMgr`(id와 name 모두)·`approvalForm`을 그리고 `smartropay.init({ mode })` → `smartropay.payment({ FormId: 'tranMgr', Callback })`. `/wallet`은 `payment`·`result`·`package` 쿼리로 결과 안내(실패면 `GET /me/payments/:id`의 `resultMessage`)와 상품 강조를 하고 결제 내역을 보여 준다. `/admin/payments`는 여섯 상태의 라벨, 결제 수단, 승인 시각, 환불 버튼(사유 필수 대화상자)과 새 오류 코드의 한국어 문구를 갖는다. 원장 라벨은 `PAYMENT_CANCEL` "결제 취소(환불)", `PAYMENT_CANCEL_REVERSAL` "결제 취소 복원".
+
+**관리자 환불 — 오너 결정이 PLAN §0.2를 넘는다**
+
+- **PLAN §0.2(:25)의 예외는 청약철회 하나다.** 오너가 2026-09-28에 정했고 다시 다투지 않는다: 승인 후 **7일**(`PAYMENT_REFUND_WINDOW_DAYS`, 승인 시각부터 7×24시간) 안이고 **사용하지 않은** 결제 — 계정의 `available_p`가 그 결제의 `amount_p` 이상 — 만, **실제로 결제한 원화 전액**(`price_krw`, 할인된 가격)을 카드 취소로 돌려주고 그 결제의 **P 전부**를 회수한다. 그 밖은 거절한다. 부분 환불·결제 없이 받은 P(가입 보너스·쿠폰·정산 지급·관리자 조정)의 환불·카드 취소 외의 수단은 없다. §0.2의 나머지(P의 환전·출금, 그 밖의 P → 원화 경로)는 그대로 금지다. 환불은 관리자만 할 수 있고 회원용 환불 API는 없다(회원은 고객센터로 요청 — 환불정책, ADR-0044).
+- **순서: 회수 먼저 → PG 취소 → 거절이면 보상.** 카드를 취소하는 동안 P를 쓸 수 없게 하려면 P를 먼저 빼야 하고, 원장은 고치지 않고 덧붙이는 것이라 거절은 반대 방향의 행으로 되돌린다.
+  1. `refunding`이면 재시도로 3단계부터. 그 밖에는 `succeeded`여야 하고(`REFUND_NOT_ALLOWED` `status`), 취소할 수 있는 프로바이더와 `provider_ref`가 있어야 하며(`provider`), 잠금 아래 DB 시계로 `approved_at`(없으면 `created_at`)부터 7×24시간 안이어야 한다(`window_closed`).
+  2. tx1: 잔고 → 결제 순으로 잠그고, `available_p = available_p - amount_p WHERE available_p >= amount_p`(0행이면 `INSUFFICIENT_BALANCE`, details `amountP`/`P already used`), `PAYMENT_CANCEL` 원장(−amount_p, `balance_after_p`는 RETURNING, 시각은 잠금 뒤 시계; memo는 비운다 — 원장 memo는 사용자에게 보인다), 결제 `refunding`, `admin_actions`(`payment_refund`, 사유는 payload의 memo). 커밋 뒤 `user:balance`.
+  3. `provider.cancel()` — `CancelAmt = price_krw`, 같은 부가세 분할, CancelMsg = 사유(100자).
+  4. 취소됨(2001/2013) → tx2: `refunded` + `refunded_at` + `refund_cancel` 이벤트. 거절 → tx2: `PAYMENT_CANCEL_REVERSAL`(+amount_p)로 잔고 복원, 결제는 다시 `succeeded`, 이벤트, `PAYMENT_GATEWAY_REFUSED`(409, details `<ResultCode> <ResultMsg>`). 무응답 → `refunding`으로 두고 이벤트, `PAYMENT_GATEWAY_ERROR`(502) — 관리자가 다시 누르면 3단계부터 하고, 첫 취소가 실제로 됐다면 2013이 마무리한다.
+- **한 번에 한 시도.** 시도는 결제의 `updated_at`을 찍으며 시작하고(회수, 또는 재시도의 임대) `refund_cancel` 이벤트로 끝난다. 마지막 시도가 60초 안이고 아직 답이 없으면 재시도는 `DUPLICATE_REQUEST`(details `payment`/`in progress`)다 — 한 카드에 대한 두 취소가 나란히 가면 한쪽의 취소와 다른 쪽의 거절 복원이 겹쳐 "카드는 취소됐는데 P도 돌아온" 상태가 된다. 재시도도 `admin_actions`에 `retry: true`로 남는다(누가 다시 눌렀는지, PG에 간 사유).
+- 모든 잔고 이동은 같은 트랜잭션의 원장 행과 함께이고(불변식 `available + locked = SUM(ledger)`, 테스트는 `expectLedgerChain`), 시각은 잔고 잠금 뒤의 `clockTimestamp`다(A-M3-27). 관리자 감사 테스트(`admin-audit.test.ts`)가 새 쓰기 라우트를 `payment_refund`에 묶는다.
+- mock 결제도 같은 라우트로 환불된다(mock의 취소는 언제나 성공). 마이그레이션 0015가 기존 `succeeded` mock 결제의 `approved_at`을 `updated_at`으로 채웠으므로 창 계산이 된다.
+
+**상태·원장 타입·오류 코드**
+
+- `PAYMENT_STATUSES` += `cancelled`(PG가 승인했지만 P를 주기 전에 우리가 망취소), `refunding`(P는 회수했고 PG 취소는 아직), `refunded`. `LEDGER_ENTRY_TYPES` += `PAYMENT_CANCEL`(−), `PAYMENT_CANCEL_REVERSAL`(+, PG가 거절한 환불의 복원에만). `ADMIN_ACTION_TYPES` += `payment_refund`. `PAYMENT_EVENT_TYPES` 7종.
+- 마이그레이션 0014는 enum 값 추가만 담는다 — drizzle은 밀린 마이그레이션을 한 트랜잭션으로 돌리므로 같은 배치에서 새 값을 쓰면 55P04다. 0015: `payments.method`·`approved_at`·`refunded_at`·`result_message`, `approved_at` 백필, 부분 UNIQUE `(provider, provider_ref) WHERE provider_ref IS NOT NULL`, `payment_events`(+ REVOKE), `user_contacts`(ADR-0043).
+- 오류 코드: `CONTACT_REQUIRED`(409), `REFUND_NOT_ALLOWED`(409, details `window_closed`|`status`|`provider`), `PAYMENT_GATEWAY_REFUSED`(409), `PAYMENT_GATEWAY_ERROR`(502, 다른 5xx처럼 본문 봉인). 이미 쓴 P는 기존 `INSUFFICIENT_BALANCE`.
+- 운영 배포는 키가 전부 선택 사항이라 순서 위험이 없다: SSM의 `.env`에 키가 없거나 비어 있으면 mock으로 뜬다. 켜는 절차는 README와 `terraform/README.md`(tfvars → apply → 재배포).
+
+### 결과
+
+- 새 파일(API): `apps/api/src/payments/`의 `payments.module.ts`·`payments-config.ts`·`payment-provider.registry.ts`·`payment-events.ts`, `payments/smartro/`의 `smartro-protocol.ts`(순수 함수: 서명·AES·EdiDate·코드 표·IP 목록)·`smartro-client.ts`·`smartro-payment.provider.ts`·`smartro-pay.service.ts`·`smartro-callback.controller.ts`·`callback-form.ts`, `admin/payment-refund.service.ts`, 테스트 도우미 `test/smartro.ts`(가짜 PG, 매뉴얼 공식으로 따로 계산한 서명). 공유: `packages/shared/src/payment-gateway.ts`. DB: `schema/payment-events.ts`, 마이그레이션 0014·0015. `wallet.service.ts`의 충전은 `quote`·`reservePayment`·`creditPayment`로 나뉘어 두 흐름이 같이 쓴다(그래서 mock 충전도 이제 `user:balance`를 발행한다).
+- 테스트: `smartro-protocol.test.ts` 15(고정 벡터 — 기대값은 openssl CLI로 따로 계산), `smartro-client.test.ts` 4, `payments-support.test.ts` 10(설정·레지스트리·IP 목록·100자 경계), `smartro-pay.controller.test.ts` 33(통합: prepare의 정상·재요청·연락처·가격 변동·카드 최소·404, return의 동시 이중 제출에도 한 번만 적립·거절 코드·서명/Mid/Moid/금액 불일치 → 망취소·적립 실패·조회·모름·TrAuthKey 없음·다른 결제의 승인, stop, notify의 IP·서명·적립·멱등·잡히지 않은 결제·외부 취소·처리 실패 5xx, 이벤트 화이트리스트), `payment-refund.controller.test.ts` 10(성공 smartro·mock, 이미 쓴 P, 창, 상태·프로바이더, 거절 → 복원과 원장 사슬, 무응답 → 재시도 2013, 경쟁, 진행 중 임대, 환불 뒤 mock 재요청의 DEPOSIT), `wallet.controller.test.ts`(새 필드·`/me/payments/:id`·제공자 정보), `env.test.ts`·`schema.test.ts`의 새 사례, 공유 `payment-gateway.test.ts` 12. 통합 시점 전체: api 33파일 435, shared 196(커버리지 게이트 90% 유지), db 37, worker 75.
+- 웹(같은 브랜치) — 새 파일 `app/wallet/smartro-checkout.tsx`·`payment-result-notice.tsx`·`payment-history.tsx`, `lib/smartro-sdk.ts`·`lib/smartro-checkout.ts`·`lib/smartro-payments.ts`(순수 함수), `hooks/use-admin-payments.ts`. 바뀐 것: `next.config.ts`(CSP), `hooks/use-wallet.ts`(`usePaymentProvider`·`useMyPayment`·`useSmartroPrepare`), `app/wallet/charge-form.tsx`·`page.tsx`, `app/admin/payments/admin-payments.tsx`.
+  - **결제창.** SDK는 지갑과 함께 싣지 않고 **결제창을 여는 순간에만** `next/script`로 싣는다(URL마다 페이지에 한 번). 결제마다 새 컴포넌트 인스턴스(결제 id가 key)이므로 예전 결제창의 늦은 Callback이 새 결제의 ReturnUrl로 갈 수 없다. `approvalForm`은 그 결제의 `approvalUrl`에서 **같은 오리진의 경로**(경로 + 쿼리, `approvalAction`)만 떼어 POST한다 — 절대 URL이면 페이지를 연 오리진이 API가 아는 오리진과 다를 때(예: `127.0.0.1`로 연 로컬) `form-action 'self'`가 제출을 소리 없이 막는다. `Tid`·`TrAuthKey`에 더해 `ResultCode`·`ResultMsg`도 싣는다(없으면 빈 값 — API는 빈 값을 없음으로 읽는다): 인증 없이 돌아온 결제창은 PG의 사유와 함께 `failed`로 닫히고 지갑이 그 사유를 보인다.
+  - **PC 레이어가 닫힌 것의 감지.** SDK는 닫힐 때마다 `#smartropay-wrapper`를 지우고, 승인이면 **지운 뒤 약 500ms에** Callback을 부른다 — 지워짐만으로는 닫기와 승인을 가를 수 없으므로 1.5초 유예(`SMARTRO_CALLBACK_GRACE_MS`) 안에 Callback이 없을 때만 닫힌 것으로 보고 버튼을 돌려준다. Callback 뒤의 제출은 최상위 이동이라 보통 페이지가 함께 떠난다. 30초(`SMARTRO_APPROVAL_TIMEOUT_MS` — API의 PG 호출 상한 25초보다 길게) 뒤에도 페이지가 그대로면(브라우저가 이동을 막았거나 결제자가 이동을 멈춘 경우) 버튼을 돌려준다 — 그 뒤에 승인 응답이 와도 지갑으로 가는 것은 같고, 버튼이 일찍 돌아왔을 뿐이다. SDK가 자기 폼 검증에서 거절하면(`alert`) 곧바로, bfcache에서 돌아온 페이지(`pageshow`, 모바일의 뒤로 가기)도 버튼을 돌려주고, 스크립트를 싣지 못하면 오류 토스트다. 이 판정들은 순수 함수 `checkoutStep`(`lib/smartro-checkout.ts`)이고, 컴포넌트는 SDK·레이어·브라우저의 신호를 넣고 답(유예 시계 시작, 승인 POST)을 실행할 뿐이다. 새 구매가 대신한 결제창의 보고는 결제 id로 걸러 버린다(`withCheckoutPhase`).
+  - **충전 폼.** `GET /payments/provider`를 알기 전에는 버튼이 기다린다. mock은 test id·토스트·멱등키 처리까지 그대로다. 스마트로페이 모드에서는 **1,000원 미만 상품의 버튼을 끄고** 안내를 붙인다. 멱등키는 클릭마다 새것(`smartro:<packageId>`)이고 답을 받으면 정산한다 — 그래서 닫고 다시 누를 때마다 잡히지 않은 `pending`이 하나씩 남는다(A-PG-2). `CONTACT_REQUIRED`는 문구만 보이고 `/onboarding`은 게이트가 맡는다(ADR-0043). 흐름이 없다는 404(필드 없음)를 받으면 제공자 정보를 다시 읽는다 — 탭을 연 채 모드가 바뀌어도 한 번의 거절로 끝난다.
+  - **지갑.** `payment`·`result`·`package` 쿼리는 모양이 맞을 때만 읽고, 로그인하지 않은 방문자는 그 셋을 `next`에 실어 로그인으로 보낸다. 결과 안내(`payment-result-notice`, `data-outcome`)는 URL의 `result`보다 **결제의 지금 상태**(`GET /me/payments/:id`)를 따른다 — `pending`이면 5초마다 **최대 2분** 다시 읽어 재통보가 정리한 결과로 바뀌고, URL만 아는 "사용자가 멈춤"(`stopped`)만 `failed` 위에 남는다. 실패·망취소면 PG의 `resultMessage`를 사유로 보인다. 도착할 때와 결과가 바뀔 때 잔고·원장·결제 내역을 새로 읽는다. `?package=`는 그 상품을 강조하고 한 번 스크롤한다. 새 **결제 내역** 카드는 상태 배지(잡히지 않은 `pending`은 "미완료")·결제 수단·승인/환불 시각·실패 사유를 보인다.
+  - **관리자 `/admin/payments`.** 여섯 상태의 라벨, 결제 수단, 승인·환불 시각, 환불 기한, 실패 사유. 환불 버튼은 기한 안의 `succeeded`(환불)와 `refunding`(환불 재시도)에만 있고, 사유(1~500자)를 받는 대화상자를 거친다. 오류는 코드마다(`REFUND_NOT_ALLOWED`는 detail마다) 한국어 문구다: `INSUFFICIENT_BALANCE` "이미 사용한 P가 있어 환불할 수 없습니다", `window_closed`·`status`·`provider`, `PAYMENT_GATEWAY_REFUSED`(PG의 답을 그대로 덧붙인다), `PAYMENT_GATEWAY_ERROR`, 진행 중(`DUPLICATE_REQUEST`), `NOT_FOUND`. 환불 뒤에는 `admin` 캐시 전체를 새로 읽는다(회원 잔고가 바뀐다).
+  - **CSP의 남은 위험.** 호스트는 위 결정대로 정확한 이름뿐이고 와일드카드는 없다(`security-headers.test.ts`가 고정한다). 그래서 **레이어 iframe 안의 이동** — 카드사 인증·ISP/안심클릭·간편결제 화면이 iframe을 다른 호스트로 옮기거나 첫 POST가 다른 호스트로 리디렉션되는 경우 — 은 `frame-src`·`form-action`에 막힐 수 있고, 그러면 레이어가 닫기 버튼 없이 멈춘다. STG 확인 목록(Q-PG-9)이 이것을 본다. 필요한 호스트는 정확한 이름으로만 더하고 테스트를 함께 고친다.
+  - 테스트: `smartro-sdk.test.ts` 11(빌드 선택·폼 필드·`approvalAction`·콜백 정규화), `smartro-checkout.test.ts` 18(열기·유예 안의 닫기와 승인·늦은 Callback·한 번만 승인·승인 시계·bfcache·다른 결제의 보고), `smartro-payments.test.ts` 33(URL 파싱·로그인 `next`·안내의 판정·폴링·라벨·환불 버튼과 오류 문구), `security-headers.test.ts` +2, `use-wallet.test.ts` +2. e2e `payment.spec.ts`(mock): 결제창에서 돌아온 지갑의 안내(성공·`pending` → 지금 상태·`stopped`·안내 없음), 관리자 환불(사유 필수·환불됨·원장의 "결제 취소(환불)"·잔고·두 번째 환불의 409). 컴포넌트 자체(DOM·`next/script`)는 단위 테스트 밖이고(vitest는 node 환경) e2e는 mock만 돌므로, SDK와 브라우저가 실제로 그 신호를 그 순서로 주는지는 STG에서 확인한다(Q-PG-9).
+- 영향받은 기존 기록: ADR-0025의 "`provider_ref`는 실제 PG의 승인번호가 들어갈 자리"는 정확히는 **거래 id(Tid)** 다(승인번호 `AuthCode`는 이벤트에만 있다). A-M2-2의 "실제 PG가 들어오면 `PaymentProvider` 구현만 추가한다"는 리디렉션 PG에서는 성립하지 않았다 — 준비·콜백 셋이 따로 생겼고 공유된 것은 적립 트랜잭션이다. A-M2-11의 멱등키 계약은 prepare로 확장됐다. ADR-0036의 CSP에 SDK 호스트가 더해졌다.
+- 알려진 한계: **STG에서 한 번도 돌려 보지 않았다**(MID·키 없음) — 모든 것이 매뉴얼과 SDK 소스로 만든 가짜 PG에 대한 증명이다. PC `Callback`이 실제로 어떤 필드를 주는지, 브라우저를 거치는 인증 결과에 성공 코드의 `SignValue`가 실리는지는 STG에서 확인한다(재통보의 IP 제한과 "잡힌 결제만"이 그 경우의 방어다). 한 번도 잡히지 않은 `pending`(결제창을 닫고 떠난 경우)은 영원히 `pending`이다 — 정리 잡이 없다(A-PG-2). 결과를 모르는 채 잡힌 `pending`에 재통보도 오지 않으면 관리자 화면에 정리 도구가 없다 — 가맹점 관리자에서 확인·취소하고, 적립이 맞으면 잔고 조정으로 한다(A-PG-3). 외부 취소의 P 회수는 오너 질문이다(Q-PG-4). 환불 창은 요청이 아니라 **처리 시점**으로 판단한다(Q-PG-1). 부분 취소·현금영수증·가상계좌는 없다(카드만).
+- **재검토 방아쇠**: (가) STG 첫 결제 — 콜백 필드, 성공 코드, 부가세 분할, 망취소, 레이어 안의 CSP가 매뉴얼·예상대로인지(확인 목록 Q-PG-9); (나) REAL 전환 — 재통보 URL 등록(신통보)과 서버 IP 목록; (다) 결제 수단을 카드 밖으로 넓힐 때(가상계좌는 `4100/4110`과 입금 통보가 새로 필요하다).
+- PLAN 드리프트(:25, :42, :53, :65, :182-184, :276-285, :330-337, :482, :515, :520-534, :797, :823-853, :860)는 QUESTIONS.md「정리 — PLAN 드리프트」에 적었다.
+
+---
+
+## ADR-0043 — 실명·휴대전화 수집과 온보딩 게이트 (오너 결정 2026-09-28)
+
+- 날짜: 2026-09-28
+- 상태: 채택 (오너 결정 2026-09-28)
+
+### 맥락
+
+스마트로페이 결제창은 구매자 이름(`BuyerName`, 30자)과 전화번호(`BuyerTel`, 숫자)를 요청 값으로 받는다(ADR-0042). 이 서비스는 그것을 한 번도 가진 적이 없다 — 계정은 이메일·닉네임·역할뿐이고(PLAN §6.2 `profiles`), 카카오·네이버 계정은 이메일조차 대체 주소(`…@noemail.buddha.local`, Q-M1-5)일 수 있다. 환불 요청(ADR-0044의 환불정책)을 받을 때 회원을 확인할 수단도 없었다.
+
+오너 결정(2026-09-28): **실명과 휴대전화 번호를 받는다.** 이메일 가입은 가입 과정에서 받고, 소셜 로그인 계정과 이미 있는 계정은 **로그인 직후 `/onboarding`으로 보내 제출하기 전에는 다른 화면을 쓰지 못하게** 한다. 본인인증은 나중이고 지금은 하지 않는다. 값은 BuyerName/BuyerTel로 쓴다.
+
+### 결정
+
+- **저장은 별도 테이블 `user_contacts`**(마이그레이션 0015): `user_id` PK → `user.id` ON DELETE CASCADE(`profiles`와 같다), `real_name varchar(30)`, `phone varchar(11)`(숫자만), `created_at`, `updated_at`. `profiles`에 컬럼을 더하지 않은 이유: `profiles`는 순위표·관리자 목록·이의 등 여러 읽기 경로가 조인하는 공개에 가까운 행이고, 개인정보가 그 경로에 딸려 다니면 안 된다. 계정당 0..1행이므로 **행이 없음 = 아직 받지 않음**이 게이트의 신호가 된다. 다른 어떤 테이블도 이 행을 참조하지 않으므로 계정이 지워지면 함께 지워진다.
+- **모양만 검사한다**(`packages/shared/src/contact.ts`). 이름: 앞뒤 공백 제거, NFC 정규화, 2~30자, 문자(한글·라틴 등 모든 문자 체계)·결합 부호·공백·`·`만, 처음과 끝은 문자. 전화: 숫자에 공백·`-`를 섞어 받고(20자 이하) 숫자만 저장, `^01[016789]\d{7,8}$`. 본인인증이 아니므로 남의 이름이나 번호를 적어도 막지 못한다 — 약관 제5조가 회원에게 정확한 입력 의무를 지운다.
+- **API.** `PUT /api/v1/me/contact`(세션, `Origin` 검사, 본문 `ContactBody`) → `Contact`. `INSERT … ON CONFLICT (user_id) DO UPDATE` 한 문장이라 첫 저장이 동시에 와도 안전하고, 갱신의 `updated_at`은 DB 시계(`now()`)다. `GET /me`가 `contact: Contact | null`을 싣는다(왼쪽 조인) — 따로 `GET /me/contact`를 두지 않았다. 이름 붙은 레이트 리밋 버킷은 없다: 닉네임 변경(`PATCH /me`)과 같이 주소별 기본 한도만 걸린다. DB 오류는 SQLSTATE만 남긴 500으로 바꾼다(`contactWriteFailure`) — drizzle이 바인드 값(이름·번호)을 오류 메시지에 넣고 그것이 5xx 로그로 가기 때문이다.
+- **API가 강제하는 곳은 한 군데, 결제창 준비뿐이다.** `POST /payments/smartro/prepare`는 연락처가 없으면 `CONTACT_REQUIRED`(409)다. 거래·쿠폰·mock 충전·이의 등 나머지 API는 연락처를 요구하지 않는다. 연락처를 실제로 소비하는 것은 PG뿐이고, 모든 쓰기 라우트에 걸면 이 결정과 무관한 계약(e2e, 테스트, 앞으로의 API 클라이언트)을 깨면서 데이터 무결성으로 얻는 것이 없다. "다른 화면을 쓰지 못한다"는 오너 결정은 **웹의 게이트**가 구현한다.
+- **웹 게이트.** 로그인했고 `me.contact`가 `null`인 사용자는 어느 화면에서든 `/onboarding?next=<경로>`로 보낸다. 예외: `/onboarding`·`/login`·`/signup`·`/set-password`·`/reset-password`·`/terms`·`/privacy`·`/refund`·`/charge`와 인증 API 경로 — 가입·로그인·비밀번호 흐름과, 무엇에 동의하는지 읽을 문서와, 로그인 없이 보는 충전 안내다. `next`는 같은 오리진의 경로만 받는다(열린 리디렉션 방지). 판정은 `src/lib`의 순수 함수이고 단위 테스트가 고정한다. `/onboarding`은 실명·전화 폼 → `PUT /me/contact` → `next`(없으면 `/`).
+- **이메일 가입은 `/set-password` 단계에서 받는다.** 메일함이 증명된 첫 단계다 — 가입 폼(주소만 받는다)에서 받으면 인증하지 않은 주소의 개인정보를 저장하게 된다. 그 단계에서 둘 다 저장하고 지금처럼 진행한다. 소셜·기존 계정은 게이트를 만난다. `/settings`에서 보고 고칠 수 있다.
+- **개인정보.** 개인정보처리방침이 수집 항목(실명·휴대전화, 회원이 직접 입력), 목적(결제의 구매자 정보, 문의·환불의 본인 확인), 위탁(스마트로(주)에 BuyerName·BuyerTel·BuyerEmail — ADR-0044)을 적는다. 이 값은 로그에 남지 않고, 정화 규칙이 구매자 필드를 빼므로 `payment_events`(append-only, 계정보다 오래 산다)에도 없다. PG에 가는 회원 식별 값 `MallUserId`는 되돌릴 수 없는 해시다(ADR-0042). 관리자 화면은 연락처를 보여 주지 않는다.
+
+### 결과
+
+- API: `apps/api/src/me/me.controller.ts`·`me.service.ts`(`updateContact`, `contactWriteFailure`), 통합 테스트 7건(생성·갱신의 `created_at` 유지와 DB 시계·정규화·잘못된 입력 12가지·401/403·계정 간 분리·`GET /me`의 `contact`)과 단위 테스트 2건(오류 메시지에 이름·번호가 남지 않음). 공유 `contact.ts`(+ 테스트), DB `schema/user-contacts.ts`.
+- 웹(같은 브랜치) — 새 파일 `lib/onboarding.ts`(판정, 테스트 14), `lib/contact-form.ts`(폼 스키마와 번호 표시, 테스트 10), `hooks/use-contact.ts`(+ 테스트 8), `components/auth/onboarding-gate.tsx`·`contact-inputs.tsx`, `app/onboarding/`, `app/settings/contact-section.tsx`. 바뀐 것: `app/layout.tsx`, `app/set-password/set-password-form.tsx`, `app/settings/page.tsx`.
+  - **게이트는 루트 레이아웃의 클라이언트 컴포넌트다**(`<main>` 안에서 모든 화면을 감싼다). `proxy.ts`는 쓰지 않았다 — 연락처가 있는지는 `GET /me`로만 알 수 있어서, 프록시에 두면 **탐색마다 `/me` 요청이 하나씩 더** 붙는다(게다가 `proxy.ts`의 matcher는 `/admin/:path*`뿐이고 A-M6-2가 넓히지 않기로 했다). 웹은 잔고 칩 때문에 `['me']`를 이미 들고 있다.
+  - 세션이나 `/me`가 아직이거나 실패했으면 보내지 않는다(연락처가 있는 회원이 로딩 중에 튕기지 않게). "없음"이 확인되면 같은 렌더에서 화면을 자리표시자로 바꾸고 `router.replace`로 보낸다(뒤로 가기가 다시 튕길 화면으로 돌아가지 않게). 그래서 **하드 로드에서는 세션과 `/me` 왕복 동안 게이트 뒤의 화면이 보인다** — 클라이언트 탐색에서는 보이지 않는다. 모든 회원에게 모든 화면을 그만큼 가리는 것보다 이것이 싸다고 봤다. 쿼리 문자열은 `useSearchParams` 대신 `window.location`에서 읽는다(루트 레이아웃에서 쓰면 모든 화면에 Suspense 경계가 필요하다).
+  - 예외 목록은 위 결정의 경로에 **`/api` 전체**를 더했다 — "인증 API 경로"보다 넓다. 레이아웃은 API 경로에 그려지지 않지만, 판정을 나중에 `proxy.ts`로 옮겨도 API 호출에 HTML 리디렉션을 답하지 않게 목록을 완전하게 두었다. 항목마다 자기와 하위 경로(`/terms/…`)를 덮고 비슷한 접두사(`/termsx`)는 덮지 않는다. **`/admin`은 예외가 아니다** — 관리자 계정도 계정이다.
+  - `/onboarding`은 `?next=`를 서버에서 한 번 검증한다: 기존 `safeNextPath`(같은 오리진의 경로만, 배열 거부)를 지나야 하고, 어떤 표기로든(인코딩·점 세그먼트·끝 슬래시) `/onboarding` 자신을 가리키면 `/`다 — 게이트와 이 화면 사이의 고리가 생기지 않는다. 세션이 없으면 `/login?next=<이 화면과 그 next>`로 보내 로그인 뒤 같은 왕복을 잇는다.
+  - **이메일 가입은 `/set-password`에서 연락처도 받는다**(`me.contact === null`일 때만 두 칸이 나오고, 기존 test id·분기·`/`로의 이동은 그대로). 한 뮤테이션(`useSetPasswordAndContact`)이 **비밀번호 먼저, 그다음 `PUT /me/contact`**, 끝에 `['me']`를 한 번 새로 읽는다 — 기존 `useSetPassword`는 비밀번호 직후 `['me']`를 새로 읽어 폼을 "비밀번호 설정됨"으로 바꿔 버린다. 비밀번호는 저장됐는데 연락처가 실패하면(`ContactStepError`) 그 화면에서는 다시 시도할 수 없으므로 안내 토스트와 함께 `/onboarding`으로 보낸다.
+  - `/settings`의 "실명·연락처" 카드는 저장된 이름과 `010-1234-5678` 꼴 번호를 보이고, 바뀐 것이 있을 때만 저장한다. 세 폼이 공유 `realNameSchema`·`phoneSchema`를 그대로 쓴다(속성 테스트가 폼과 API 본문 스키마가 같은 것을 받고 같은 값으로 정규화함을 확인한다). 저장한 연락처는 `['me']`에 바로 써 넣되 진행 중인 `/me` 요청을 먼저 취소한다 — 늦게 도착한 `contact: null`이 덮으면 게이트가 회원을 곧바로 되돌려 보낸다. `use-contact.test.ts`가 실제 QueryClient로 이 캐시 쓰기와 `/set-password` 단계의 순서(비밀번호 → 연락처 → 한 번의 새로 읽기, 비밀번호가 거절되면 연락처 요청 없음, 그 뒤의 실패만 `ContactStepError`)를 고정한다.
+  - e2e: `helpers.ts`의 `signUp`이 두 칸을 채우고(앞 절반은 `openSetPassword`로 나눴다), `admin` 픽스처가 시드 관리자에게 연락처를 `PUT`한다(아래 한계). `onboarding.spec.ts`: `/set-password`의 필수·형식 오류(유선 번호 거절), 설정 카드의 보기·수정·재정렬·새로고침 뒤 유지, 게이트(`/terms`는 예외, `/wallet` → `/onboarding?next=%2Fwallet` → 저장 → `/wallet`), `next` 검증(`https://evil.example/`·`//evil.example` → `/`), 로그아웃 상태의 `/onboarding` → 로그인. `auth.spec.ts`의 닉네임 저장 버튼은 연락처 카드의 같은 이름 버튼과 겹치지 않게 카드 안으로 범위를 좁혔다.
+- 알려진 한계: **본인인증이 없다** — PG로 가는 이름·번호는 회원이 적은 그대로다(오너 질문 Q-PG-6). 번호는 UNIQUE가 아니라 여러 계정이 같은 번호를 쓸 수 있다. 만 14세 이상이라는 가입 조건(약관)을 확인하는 수단도 없다(Q-PG-5). 게이트는 웹에만 있으므로 API를 직접 부르는 클라이언트는 연락처 없이 결제 외의 모든 것을 한다. 기존 계정은 배포 뒤 첫 화면에서 게이트를 만난다. **시드 관리자도 그렇다** — `pnpm db:seed`는 `user_contacts` 행을 만들지 않고 `/admin`은 예외가 아니므로, 로컬에서도 운영에서도 관리자는 첫 로그인에서 `/onboarding`을 만나 실명·휴대전화를 한 번 입력한다. e2e는 `admin` 픽스처가 로그인 직후 연락처를 넣어 이것을 피한다.
+- PLAN 드리프트: §6.2 사용자 정보(:306-310)와 §11.3 화면 목록(`/onboarding`)이 이 ADR과 다르다. QUESTIONS.md「정리 — PLAN 드리프트」.
+
+---
+
+## ADR-0044 — 사업자 정보 푸터 · 약관 3종 · 공개 충전 안내 `/charge` (오너 결정 2026-09-28)
+
+- 날짜: 2026-09-28
+- 상태: 채택 (오너 결정 2026-09-28; 문서 본문은 법률 검토 전 — Q-M2-3, Q-PG-1)
+
+### 맥락
+
+PG 심사는 결제창(ADR-0042)만 보지 않는다. 사이트에 **사업자 정보**(「전자상거래 등에서의 소비자보호에 관한 법률」이 사이버몰에 표시하라는 상호·대표자·주소·전화·이메일·사업자등록번호·통신판매업 신고번호·호스팅 제공자·약관), **이용약관·개인정보처리방침·환불정책**, 그리고 **바로 판매할 수 있는 상품과 그 이미지**가 있어야 한다. PLAN §11.3(:646)은 `/about`에 약관·개인정보를 플레이스홀더로 두었지만(§17 Q6) 그 화면은 만들어진 적이 없고, 법률 검토는 Q-M2-3로 열려 있다. 사업자 정보의 실제 값은 아직 없다.
+
+오너 결정(2026-09-28): ⑦ 모든 화면에 사업자 정보 푸터 — 값은 **설정 한 곳**에 두고 `{{key}}` 자리표시자로 본문에 끼워 넣으며, 모르는 값은 지금 `미정`. ⑧ 로그인 없이 보는 `/charge` — 판매 중인 충전 상품을 가격과 이미지(코드로 그린 SVG)와 함께. ⑨ 이용약관·개인정보처리방침·환불정책은 **Claude가 쓴다** — 국내 플랫폼의 흔한 관행을 본뜨되 문장은 새로 쓰고(다른 회사의 문서를 베끼지 않는다), 사업 사실은 자리표시자로.
+
+### 결정
+
+- **사업자 정보는 `apps/web/src/legal/business-info.ts`의 `BUSINESS_INFO` 하나.** 오너가 줄 값 12개는 전부 `미정`이다: `companyName`·`ceoName`·`businessNumber`·`mailOrderNumber`·`address`·`phone`·`email`·`privacyOfficer`·`privacyOfficerEmail`·`pointExpiry`(P 유효기간 문구)·`refundProcessingTime`(환불 처리 기한 문구)·`effectiveDate`(시행일). 이미 정해진 사실도 같은 객체에 둔다: `serviceName`은 `copy.appName`, 결제대행사 `스마트로(주)`·`스마트로페이(SmartroPay)`, 호스팅 `Amazon Web Services, Inc.`·`아시아 태평양(서울) 리전`(terraform의 `ap-northeast-2`, SES도 같은 리전), 가입 최소 연령 `14`, 청약철회 기간은 API의 환불 검사와 같은 상수 `PAYMENT_REFUND_WINDOW_DAYS` — 문서와 코드가 어긋날 수 없다. 실제 상호를 넣는 일은 이 파일 한 줄이고, 푸터와 세 문서에 한 번에 반영된다.
+- **`fillTemplate(text, values)`는 `{{key}}`를 한 번에 바꾸고 모르는 키면 던진다**(`UnknownTemplateKeyError`; 상속된 키도 — `Object.hasOwn`이라 `__proto__`도 던진다). 테스트가 세 문서의 모든 문자열(표 칸·하위 항목·제목 포함)을 걸으며 실제 설정으로 완전히 풀리는지(`{{`가 남지 않는지), 아는 키만 쓰는지, PLAN 부록 A의 금지어가 없는지를 확인한다. **자리표시자 바로 뒤에 받침에 따라 모양이 바뀌는 조사(이/가, 은/는, 을/를, 과/와, (으)로)를 두지 않는다** — `미정`과 실제 상호가 다른 조사를 요구하기 때문이다. 그래서 `회사(상호: {{companyName}}, 이하 "회사")가`처럼 조사는 `회사`에 붙인다. 이 규칙도 테스트가 강제한다.
+- **문서는 마크업이 아니라 구조화된 데이터**(`LegalDocument`: 문단, 가/나 하위 항목이 있는 목록, 표)이고 렌더러 하나(`legal-document-view.tsx`)가 세 화면의 타이포그래피를 맞춘다 — 이용약관·개인정보처리방침은 `제N조(제목)`, 환불정책은 `N. 제목`. `/terms`·`/privacy`·`/refund`는 정적·공개다.
+- **내용.** 이용약관 18개 조(목적·정의·게시와 개정·서비스 내용·이용계약(만 14세 이상, 실명과 휴대전화의 정확한 입력 의무)·계정 관리·P 충전(스마트로페이, 카드와 결제창의 간편결제, 부가세 포함)·P의 성격(현금 가치 없음, 양도 금지, 유효기간 `{{pointExpiry}}`, 탈퇴 시 소멸)·예측과 정산·결제 정보(카드 번호 전체는 받지 않는다)·청약철회와 환불·회사의 의무·금지 행위·이용 제한·서비스 변경과 중단·책임의 제한·개인정보의 보호·분쟁과 관할). 개인정보처리방침 13개 조 — 수집 항목은 **코드가 실제로 저장하는 것**(better-auth의 이메일·비밀번호 해시·소셜 제공자가 주는 이름·사진·IP·브라우저, 닉네임, 실명·휴대전화(ADR-0043), PG의 결과 정보와 가려진 카드 번호)이고, 보유는 전자상거래법 5년/5년/3년과 통신비밀보호법 3개월, 위탁은 스마트로(주)(결제)와 AWS(호스팅·SES 메일), 제3자 제공 없음, 쿠키는 로그인 세션뿐(광고·행태 분석 없음). 환불정책은 ADR-0042의 오너 정책을 **그대로** 적는다 — 승인 시각부터 7일, 사용 가능 잔고가 그 결제의 P 이상, 할인된 결제 금액 전액을 카드 취소로, P 전부 회수, 부분 환불 없음, 결제 없이 받은 P는 환불 대상이 아님, P는 현금화 불가(지갑 고지 문구 그대로). 더해서: **두 조건 모두 회원이 요청한 때가 아니라 회사가 처리하는 때 판단한다**(API가 관리자가 처리하는 순간의 DB 시계로 판단하므로 문서가 그렇게 말하고, 여유를 두고 요청하라고 안내한다), 요청은 `{{email}}`·`{{phone}}`, 처리 기한 `{{refundProcessingTime}}`, 결제 오류는 "원칙적으로 자동 취소", 탈퇴 시 P 소멸, 미성년자의 법정대리인 동의 없는 결제는 민법 제5조로 취소 가능, 법령이 회원에게 더 유리하면 법령. 오너 정책 밖의 이 조항들은 전부 법률 검토 목록(Q-PG-1)에 있다.
+- **푸터는 루트 레이아웃이 모든 화면에 그린다**(서버 컴포넌트 — 세션·URL·API를 읽지 않으므로 정적 페이지에 비용이 없다). 링크 넷: 이용약관 · **개인정보처리방침**(국내 관행대로 굵게) · 환불정책 · 충전 안내. 그 아래 사업자 정보 아홉 줄과 저작권 줄. Chakra 의미 토큰(`fg.muted` on `bg.subtle`, 라이트 7.2:1·다크 7.1:1). md 미만에서는 하단 고정 바(탭 바, 시장 상세의 거래 바) 높이만큼 아래 여백을 푸터가 갖는다 — `<main>`의 `pb`를 푸터로 옮겼다.
+- **공개 `/charge`.** 서버 컴포넌트(`force-dynamic` — 카탈로그는 관리자가 고치는 목록이고 빌드 시점에는 API가 없다)가 공개 `GET /charge-packages`를 서버에서 읽어 **첫 HTML에 상품이 들어 있게** 한다(심사자의 크롤러). 상품마다 카드: 인라인 SVG 그림, 지급 P, 가격, 할인 배지. 그림은 동전 더미 넷 중 하나이고 계층은 **판매 중인 서로 다른 P 금액 사이의 순위**로 정한다(`chargeTiers` — 관리자가 카탈로그를 바꿔도 가장 작은 상품이 동전 하나, 가장 큰 상품이 세 더미). 색은 전부 `currentColor`(`brand` 토큰)의 불투명도라 두 테마에서 한 그림이 맞고, 외부 이미지가 없으므로 CSP에 더할 것도 없다(`aria-hidden` — 뜻은 옆의 숫자가 진다). 버튼은 `/wallet?package=<id>`로 간다 — 결제는 지갑에서만 시작하고, 로그인하지 않은 방문자는 지갑이 로그인으로 보낸다. 아래에 지갑 고지·환불정책 요약·`/refund` 링크. 빈 카탈로그는 EmptyState, 읽기 실패는 500 대신 이 화면의 안내(다시 시도 링크).
+- **`/about`은 만들지 않는다.** PLAN §11.3의 그 화면이 하려던 일(환전 불가 고지, 약관·개인정보)은 지갑 고지·푸터·세 문서가 나눠 한다.
+- 화면 문구는 `copy.ts`(`legal*`·`footer*`·`chargeGuide*` 24개), 문서 본문은 `src/legal/`의 모듈에 있다.
+
+### 결과
+
+- 새 파일: `apps/web/src/legal/`(`template.ts`·`business-info.ts`·`document.ts`·`terms.ts`·`privacy.ts`·`refund.ts`·`legal-document-view.tsx`·`legal.test.ts`), `app/terms`·`app/privacy`·`app/refund`·`app/charge`(+ `package-illustration.tsx`), `components/layout/footer.tsx`, `lib/charge-guide.ts`(+ 테스트). `lib/api.server.ts`에 `fetchChargePackagesServer`. 테스트: `legal.test.ts` 38, `charge-guide.test.ts` 6; 웹 전체 37파일 658. 문서 렌더는 테스트 안에서 HTML로 그려 라이트·다크 스크린숏으로 봤다 — 375px 실제 브라우저 확인은 아직이다.
+- 푸터와 세 문서는 지금 **오너가 줄 값 열둘을 전부 `미정`으로 공개한다.** 심사 전에 오너가 값을 줘야 한다(Q-PG-2). P 유효기간은 문구 이전에 정책 결정이다 — 코드에는 P 소멸이 없다(Q-PG-3).
+- 알려진 한계: 세 문서는 **법률 검토 전**이다(Q-M2-3를 열어 둔 채 Q-PG-1이 검토할 지점을 모았다). 이용약관 제11조는 환불정책을 글자로만 가리킨다 — 문서 모델에 인라인 링크가 없고, 푸터 링크가 그 자리를 메운다. 가입 화면에는 약관 동의 절차가 없다. 지갑은 로그인하지 않은 방문자를 로그인으로 보낼 때 `?package=`를 `next`에 실어 보낸다(ADR-0042 결과).
+- 닫힌·바뀐 항목: PLAN §17 Q6의 "플레이스홀더"는 원문으로 바뀌었고 검토만 남았다(Q-M2-3 추기). PLAN 드리프트(§11.3 화면 목록, :646 `/about`, :874 §17 Q6)는 QUESTIONS.md「정리 — PLAN 드리프트」.
