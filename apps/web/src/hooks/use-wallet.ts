@@ -34,6 +34,15 @@ export const PAYMENTS_QUERY_KEY = ['payments'] as const;
 export const myPaymentKey = (id: string) => [...PAYMENTS_QUERY_KEY, 'one', id] as const;
 
 /**
+ * The account's histories a balance change can add to or move, which the realtime
+ * `user:balance` handler restarts (and a resnapshot with them): 원장 gains the change's row, and
+ * 결제 내역 follows the payment behind it — an admin refund's claw-back (완료 → 환불 처리 중),
+ * a 재통보 that credited a payment after the result notice stopped polling. The payments root
+ * covers the list and the notice's payment (`myPaymentKey`) alike.
+ */
+export const BALANCE_HISTORY_KEYS = [LEDGER_QUERY_KEY, PAYMENTS_QUERY_KEY] as const;
+
+/**
  * Which charge flow the server offers (ADR-0042). Public and the same for everyone — it is the
  * deployment's `PAYMENT_PROVIDER` — so its own root, outside `PRIVATE_QUERY_ROOTS`: nothing
  * personal could ride an SSR payload in it.

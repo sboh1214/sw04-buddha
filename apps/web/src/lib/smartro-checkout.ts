@@ -2,7 +2,7 @@
  * The decisions of one SmartroPay window (ADR-0042, DESIGN §6.2): what each signal from the SDK,
  * its layer and the browser means for the buy buttons. Pure, so they run in this app's node-only
  * test runner; `SmartroCheckout` feeds it the signals and carries out what it answers (the two
- * clocks, the approval post), and `ChargeForm` keeps the phase it reports.
+ * clocks, the approval post, the layer's close), and `ChargeForm` keeps the phase it reports.
  */
 
 /**
@@ -13,7 +13,7 @@
  * - `approving`: the PC callback came back; `approvalForm` is posting to our ReturnUrl.
  * - `closed`: the payer closed the layer, or the SDK refused its own form (it has said why in
  *   an `alert`), or the page came back from the back/forward cache, or the approval post was
- *   still here when its clock ran out.
+ *   still here when its clock ran out, or the window unmounted while loading or open.
  * - `failed`: the SDK never became available (blocked, offline, or broken).
  * The first four keep every buy button disabled; the last two give them back.
  */
@@ -67,6 +67,9 @@ export const CHECKOUT_START: CheckoutState = {
  * - `callback`: the PC `Callback` ran.
  * - `approval-timeout`: `SMARTRO_APPROVAL_TIMEOUT_MS` after the approval post, page still here.
  * - `restored`: `pageshow` with `persisted`: the back/forward cache handed this page back.
+ * - `unmounted`: the component went away for good while the page stayed — a client-side
+ *   navigation (the browser's back button, a link reached behind the overlay). Not a development
+ *   StrictMode replay of its effects, which the component tells apart before it says so.
  */
 export type CheckoutEvent =
   | { type: 'unavailable' }
@@ -76,15 +79,17 @@ export type CheckoutEvent =
   | { type: 'grace-elapsed' }
   | { type: 'callback' }
   | { type: 'approval-timeout' }
-  | { type: 'restored' };
+  | { type: 'restored' }
+  | { type: 'unmounted' };
 
 /**
  * What the component must do after a step, besides reporting a phase that moved:
  * - `await-callback`: start the grace clock, which ends in `grace-elapsed`.
  * - `post-approval`: fill and submit `approvalForm`, then start the approval clock, which ends
  *   in `approval-timeout`.
+ * - `close-layer`: take the PC layer down (the SDK's `end`, or `#smartropay-wrapper` itself).
  */
-export type CheckoutEffect = 'await-callback' | 'post-approval';
+export type CheckoutEffect = 'await-callback' | 'post-approval' | 'close-layer';
 
 export interface CheckoutStep {
   state: CheckoutState;
@@ -105,6 +110,15 @@ export interface CheckoutStep {
  * - The approval clock and the back/forward cache end the window only where it still holds the
  *   buttons: a page restored after the approval's navigation is the same page, buttons disabled
  *   for a window that is gone.
+ * - A layer still up when its window unmounts is closed with it. The SDK put the layer straight
+ *   into `<body>`, outside React, so it would stay over the next page and keep working; an
+ *   approval there would call back into a window with no `approvalForm` left, and the payer
+ *   would have authenticated a payment that is never approved — no P, no word. Closed, it is an
+ *   abandoned window like any other: nothing charged, the payment left unclaimed. A layer
+ *   already gone is past saving this way (its callback is on its way) and is left alone.
+ *   A window still `loading` when it unmounts is over too, with nothing to take down: a load
+ *   that finishes or fails after that finds it `closed`, so it neither opens a layer over the
+ *   next page nor has the payer told there that a window they left failed to open.
  */
 export function checkoutStep(state: CheckoutState, event: CheckoutEvent): CheckoutStep {
   const to = (phase: CheckoutPhase): CheckoutStep =>
@@ -134,6 +148,11 @@ export function checkoutStep(state: CheckoutState, event: CheckoutEvent): Checko
       return state.phase === 'approving' ? to('closed') : { state };
     case 'restored':
       return ACTIVE_CHECKOUT_PHASES.has(state.phase) ? to('closed') : { state };
+    case 'unmounted':
+      if (state.phase === 'loading') return to('closed');
+      return state.phase === 'open' && !state.layerGone
+        ? { state: { ...state, phase: 'closed' }, effect: 'close-layer' }
+        : { state };
   }
 }
 

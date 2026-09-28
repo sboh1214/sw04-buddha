@@ -1,5 +1,11 @@
+import { CARD_MIN_PRICE_KRW } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
-import { CHARGE_TIER_COUNT, chargeTiers, walletPackageHref } from './charge-guide';
+import {
+  CHARGE_TIER_COUNT,
+  chargeGuideOffers,
+  chargeTiers,
+  walletPackageHref,
+} from './charge-guide';
 
 describe('chargeTiers', () => {
   it('spans the smallest to the largest package over the four pictures', () => {
@@ -37,5 +43,25 @@ describe('walletPackageHref', () => {
       pathname: '/wallet',
       query: { package: '0190c7a4-0000-7000-8000-000000000001' },
     });
+  });
+});
+
+describe('chargeGuideOffers', () => {
+  it('holds back a package the SmartroPay window cannot take, from 1,000원 up it offers', () => {
+    expect(chargeGuideOffers('smartro', CARD_MIN_PRICE_KRW - 1)).toBe(false);
+    expect(chargeGuideOffers('smartro', 0)).toBe(false);
+    expect(chargeGuideOffers('smartro', CARD_MIN_PRICE_KRW)).toBe(true);
+    expect(chargeGuideOffers('smartro', 50_000)).toBe(true);
+  });
+
+  it('offers everything under the mock charge, which has no card minimum', () => {
+    for (const price of [0, CARD_MIN_PRICE_KRW - 1, CARD_MIN_PRICE_KRW, 50_000]) {
+      expect(chargeGuideOffers('mock', price), String(price)).toBe(true);
+    }
+  });
+
+  it('leaves the page as it was when the provider could not be read — the wallet decides', () => {
+    expect(chargeGuideOffers(null, CARD_MIN_PRICE_KRW - 1)).toBe(true);
+    expect(chargeGuideOffers(null, CARD_MIN_PRICE_KRW)).toBe(true);
   });
 });

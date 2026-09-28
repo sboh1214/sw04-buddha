@@ -229,7 +229,11 @@ describe('legal document contents (owner decisions 2026-09-28)', () => {
     expect(privacy).toContain('회사는 이를 받거나 저장하지 않습니다');
     expect(privacy).toContain('5년');
     expect(privacy).toContain('3년');
-    expect(privacy).toContain('3개월');
+    // Access records: why and for how long, with no period the deployment does not keep.
+    expect(privacy).toContain('서비스 접속 기록(IP 주소, 접속 일시)');
+    expect(privacy).toContain('그 목적에 필요한 기간 동안만 보관합니다');
+    expect(privacy).not.toContain('3개월');
+    expect(privacy).not.toContain('접속 기록을 보관합니다');
     expect(privacy).toContain('스마트로(주)');
     expect(privacy).toContain('Amazon Web Services');
     expect(privacy).toContain('서울');

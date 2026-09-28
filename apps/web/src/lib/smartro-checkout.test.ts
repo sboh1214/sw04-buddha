@@ -165,6 +165,56 @@ describe('the back/forward cache', () => {
   });
 });
 
+describe('unmounting', () => {
+  const UNMOUNTED: CheckoutEvent = { type: 'unmounted' };
+
+  it('closes a PC layer that is still up, so no approval can call back into nothing', () => {
+    const { state, reported, effects } = run([PC_OPENED, UNMOUNTED]);
+    expect(effects).toEqual([undefined, 'close-layer']);
+    expect(reported).toEqual(['open', 'closed']);
+    // The SDK's removal of the layer that follows starts no grace clock, and closes it once.
+    const after = run([REMOVED, GRACE, UNMOUNTED], state);
+    expect(after.effects).toEqual([undefined, undefined, undefined]);
+    expect(after.reported).toEqual([]);
+  });
+
+  it('leaves alone a layer already gone, and every window with no layer up', () => {
+    // Gone: the approval's callback may be on its way, and there is nothing left to close.
+    expect(run([PC_OPENED, REMOVED, UNMOUNTED]).effects.at(-1)).toBeUndefined();
+    expect(run([PC_OPENED, REMOVED, CALLBACK, UNMOUNTED]).effects.at(-1)).toBeUndefined();
+    const noLayer: CheckoutEvent[][] = [
+      [{ type: 'payment', wentAhead: true, mobile: true, layer: false }],
+      [{ type: 'payment', wentAhead: false, mobile: false, layer: false }],
+      [{ type: 'unavailable' }],
+      [PC_OPENED, RESTORED],
+    ];
+    for (const before of noLayer) {
+      const { effects, reported } = run([...before, UNMOUNTED]);
+      expect(effects.at(-1), JSON.stringify(before)).toBeUndefined();
+      expect(reported).toEqual(run(before).reported);
+    }
+  });
+
+  it('ends a window still loading, so a load that settles afterwards opens and reports nothing', () => {
+    const { state, reported, effects } = run([UNMOUNTED]);
+    expect(effects).toEqual([undefined]);
+    expect(reported).toEqual(['closed']);
+    // next/script's onError, or a ready callback, after the page has moved on: no 'failed' —
+    // the caller's toast would tell the payer on another page about a window they left.
+    const late: CheckoutEvent[] = [
+      { type: 'unavailable' },
+      { type: 'threw' },
+      PC_OPENED,
+      { type: 'payment', wentAhead: true, mobile: true, layer: false },
+    ];
+    for (const event of late) {
+      const after = run([event], state);
+      expect(after.reported, event.type).toEqual([]);
+      expect(after.effects, event.type).toEqual([undefined]);
+    }
+  });
+});
+
 describe('withCheckoutPhase', () => {
   const current: { packageId: string; prepared: { paymentId: string }; phase: CheckoutPhase } = {
     packageId: 'pack-1',

@@ -1,4 +1,6 @@
 import type { UrlObject } from 'url';
+import { type PaymentProviderInfo } from './api';
+import { isBelowCardMinimum } from './smartro-payments';
 
 /**
  * Pure helpers for the public `/charge` page (ADR-0044), kept out of the page so they can be
@@ -42,4 +44,20 @@ export function chargeTiers(amounts: readonly bigint[]): ChargeTier[] {
  */
 export function walletPackageHref(packageId: string): UrlObject {
   return { pathname: '/wallet', query: { package: packageId } };
+}
+
+/**
+ * Whether the page offers 충전하기 for a package, given the provider it read (`null`: the read
+ * failed). The SmartroPay window takes cards from 1,000원 (`isBelowCardMinimum`), so there a
+ * cheaper package is listed with its price and picture but not put on sale — what the wallet
+ * does with the same package. Only a deployment known to take SmartroPay holds one back: the
+ * immediate mock charge has no such floor, and a provider the page could not read leaves the
+ * page as it was — every package offered — since the wallet decides again with the provider it
+ * reads, and would say so there.
+ */
+export function chargeGuideOffers(
+  provider: PaymentProviderInfo['provider'] | null,
+  priceKrw: number,
+): boolean {
+  return provider !== 'smartro' || !isBelowCardMinimum(priceKrw);
 }

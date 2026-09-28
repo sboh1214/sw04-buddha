@@ -12,6 +12,11 @@ import { type LegalDocument, bullets, numbered, paragraph, table } from './docum
  * `payment_events` (the PG's approval result, whose card number arrives masked — SmartroPay
  * masks digits 7-12). The processors are the PG and AWS (terraform/: ap-northeast-2, SES in the
  * same region). Keep this list in step with the schema when either changes.
+ *
+ * Access records get no fixed retention period on purpose: the deployment keeps no access log of
+ * its own (no Caddy `log`, container logs capped and replaced on every deploy), so the policy
+ * says what is true — collected for security and abuse prevention, kept only as long as that
+ * needs or a law requires — and the period is an open question (QUESTIONS.md), not a promise.
  */
 export const PRIVACY: LegalDocument = {
   title: copy.legalPrivacyTitle,
@@ -103,8 +108,10 @@ export const PRIVACY: LegalDocument = {
               '3년',
               '「전자상거래 등에서의 소비자보호에 관한 법률」',
             ],
-            ['서비스 접속 기록(로그 기록, 접속지 정보)', '3개월', '「통신비밀보호법」'],
           ],
+        ),
+        paragraph(
+          '서비스 접속 기록(IP 주소, 접속 일시)은 서비스의 보안을 유지하고 부정 이용을 막기 위해 수집하며, 그 목적에 필요한 기간 동안만 보관합니다. 다만 관계 법령이 보관을 요구하는 경우에는 그 법령이 정한 기간 동안 보관합니다.',
         ),
       ],
     },
@@ -180,7 +187,7 @@ export const PRIVACY: LegalDocument = {
         paragraph('회사는 개인정보를 안전하게 처리하기 위해 다음 조치를 합니다.'),
         numbered(
           '관리적 조치: 개인정보에 접근할 수 있는 사람을 최소한으로 제한하고, 접근 권한을 업무에 필요한 범위로 관리합니다.',
-          '기술적 조치: 비밀번호를 복원할 수 없는 방식으로 암호화하여 저장하고, 모든 통신 구간을 암호화(HTTPS)하며, 데이터베이스 접근 권한을 제한하고, 접속 기록을 보관합니다.',
+          '기술적 조치: 비밀번호를 복원할 수 없는 방식으로 암호화하여 저장하고, 모든 통신 구간을 암호화(HTTPS)하며, 데이터베이스 접근 권한을 제한합니다.',
           '물리적 조치: 개인정보를 저장하는 서버를 {{hostingProvider}}의 데이터센터에서 운영하여 물리적 접근을 통제합니다.',
         ),
       ],

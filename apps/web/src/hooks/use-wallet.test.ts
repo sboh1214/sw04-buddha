@@ -1,10 +1,19 @@
+import { QueryClient } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 import { ApiError, isForAnotherAccount } from '@/lib/api';
 import { IdempotencyKeys } from '@/lib/idempotency';
+import { restartQueries } from '@/lib/query-client';
+import { ME_QUERY_KEY } from './use-me';
 import {
+  BALANCE_HISTORY_KEYS,
+  CHARGE_PACKAGES_QUERY_KEY,
+  LEDGER_QUERY_KEY,
+  PAYMENTS_QUERY_KEY,
+  PAYMENT_PROVIDER_QUERY_KEY,
   isChargeInProgress,
   isCouponRejection,
   isStaleCatalogue,
+  myPaymentKey,
   smartroKeyIntent,
 } from './use-wallet';
 
@@ -162,5 +171,30 @@ describe('smartroKeyIntent', () => {
     expect(keys.take(intent)).toBe(lost);
     keys.settle(intent, 503);
     expect(keys.take(intent)).toBe(lost);
+  });
+});
+
+describe('BALANCE_HISTORY_KEYS', () => {
+  it("reaches 원장, 결제 내역 and the notice's payment, and nothing else of the wallet", async () => {
+    // What the `user:balance` handler restarts: an admin refund or a late 재통보 credit moves a
+    // payment as well as the balance, and 결제 내역 must not go on saying 완료 beside the ledger.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const page = { pages: [{ items: [], nextCursor: null }], pageParams: [undefined] };
+    const held = [
+      LEDGER_QUERY_KEY,
+      PAYMENTS_QUERY_KEY,
+      myPaymentKey('3f2504e0-4f89-11d3-9a0c-0305e82c3301'),
+      ME_QUERY_KEY,
+      CHARGE_PACKAGES_QUERY_KEY,
+      PAYMENT_PROVIDER_QUERY_KEY,
+    ];
+    for (const key of held) queryClient.setQueryData(key, page);
+    try {
+      for (const key of BALANCE_HISTORY_KEYS) await restartQueries(queryClient, key);
+      const invalidated = held.map((key) => queryClient.getQueryState(key)?.isInvalidated ?? false);
+      expect(invalidated).toEqual([true, true, true, false, false, false]);
+    } finally {
+      queryClient.clear();
+    }
   });
 });

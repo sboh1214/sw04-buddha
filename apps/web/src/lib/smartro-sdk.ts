@@ -73,6 +73,12 @@ export interface SmartroPaySdk {
     FormId: string;
     Callback: (data: SmartroCallbackData) => void;
   }): SmartroPaySdk | undefined;
+  /**
+   * Closes the PC layer — removes `#smartropay-wrapper` and forgets the window, callback
+   * included. What the payer's own close runs. It reads the wrapper without checking for it, so
+   * it throws when there is none; optional because nothing about the script is ours to rely on.
+   */
+  end?(): void;
 }
 
 declare global {

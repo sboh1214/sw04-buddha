@@ -17,9 +17,9 @@ import NextLink from 'next/link';
 import { EmptyState } from '@/components/ui/empty-state';
 import { copy } from '@/copy';
 import { fillBusinessInfo } from '@/legal/business-info';
-import type { ChargePackage } from '@/lib/api';
-import { fetchChargePackagesServer } from '@/lib/api.server';
-import { chargeTiers, walletPackageHref } from '@/lib/charge-guide';
+import type { ChargePackage, PaymentProviderInfo } from '@/lib/api';
+import { fetchChargePackagesServer, fetchPaymentProviderServer } from '@/lib/api.server';
+import { chargeGuideOffers, chargeTiers, walletPackageHref } from '@/lib/charge-guide';
 import { PackageIllustration } from './package-illustration';
 
 /**
@@ -41,12 +41,19 @@ export const metadata: Metadata = { title: `${copy.chargeGuideTitle} | ${copy.ap
  *
  * Buying still happens on `/wallet`: each card links there with `?package=<id>`, and the wallet
  * sends an anonymous visitor to the login page first. This page never starts a payment itself.
+ * Under SmartroPay a package below the card minimum is listed without that link, as the wallet
+ * lists it (`chargeGuideOffers`); the provider is public too (`GET /payments/provider`).
  *
  * A failed read is the page's own notice, not a 500 — there is no `app/error.tsx`, and Next's
  * default error screen is untranslated.
  */
 export default async function ChargeGuidePage() {
-  const packages = await fetchChargePackagesServer().catch(() => null);
+  const [packages, provider] = await Promise.all([
+    fetchChargePackagesServer().catch(() => null),
+    fetchPaymentProviderServer()
+      .then((info) => info.provider)
+      .catch(() => null),
+  ]);
 
   return (
     <Container maxW="1320px" px="6" py={{ base: '6', md: '10' }}>
@@ -74,7 +81,7 @@ export default async function ChargeGuidePage() {
         ) : packages.length === 0 ? (
           <EmptyState message={copy.chargeNoPackages} data-testid="charge-guide-empty" />
         ) : (
-          <PackageGrid packages={packages} />
+          <PackageGrid packages={packages} provider={provider} />
         )}
 
         <Text>{fillBusinessInfo(copy.chargeGuideDelivery)}</Text>
@@ -99,7 +106,17 @@ export default async function ChargeGuidePage() {
   );
 }
 
-function PackageGrid({ packages }: { packages: ChargePackage[] }) {
+function PackageGrid({
+  packages,
+  provider,
+}: {
+  packages: ChargePackage[];
+  /**
+   * The deployment's charge flow, `null` when it could not be read — which leaves every package
+   * offered, as before; the wallet decides again with the provider it reads (`chargeGuideOffers`).
+   */
+  provider: PaymentProviderInfo['provider'] | null;
+}) {
   const amounts = packages.map((pack) => parsePAmount(pack.amountP));
   const tiers = chargeTiers(amounts);
 
@@ -109,6 +126,8 @@ function PackageGrid({ packages }: { packages: ChargePackage[] }) {
         const amountP = amounts[index] ?? 0n;
         const discount = discountPercent(amountP, pack.priceKrw);
         const label = formatP(amountP);
+        const offered = chargeGuideOffers(provider, pack.priceKrw);
+        const hintId = `charge-guide-hint-${pack.id}`;
         return (
           <Card.Root
             as="li"
@@ -138,19 +157,37 @@ function PackageGrid({ packages }: { packages: ChargePackage[] }) {
                     {formatKrw(pack.priceKrw)}
                   </Text>
                 </Text>
+                {!offered && (
+                  <Text id={hintId} textStyle="bodySm" color="fg.muted">
+                    {copy.chargeBelowCardMinimum}
+                  </Text>
+                )}
               </Stack>
             </Card.Body>
             <Card.Footer>
-              <Button asChild width="full">
-                <NextLink
-                  href={walletPackageHref(pack.id)}
-                  // Four identical "충전하기" links are one name four times to a screen reader.
+              {offered ? (
+                <Button asChild width="full">
+                  <NextLink
+                    href={walletPackageHref(pack.id)}
+                    // Four identical "충전하기" links are one name four times to a screen reader.
+                    aria-label={`${label} ${copy.chargeSubmit}`}
+                    data-testid={`charge-guide-buy-${pack.id}`}
+                  >
+                    {copy.chargeSubmit}
+                  </NextLink>
+                </Button>
+              ) : (
+                // Shown, not offered — no link to a wallet that would refuse it.
+                <Button
+                  width="full"
+                  disabled
                   aria-label={`${label} ${copy.chargeSubmit}`}
+                  aria-describedby={hintId}
                   data-testid={`charge-guide-buy-${pack.id}`}
                 >
                   {copy.chargeSubmit}
-                </NextLink>
-              </Button>
+                </Button>
+              )}
             </Card.Footer>
           </Card.Root>
         );

@@ -27,7 +27,7 @@ import {
 import { type Socket, io } from 'socket.io-client';
 import { type SessionIdentity } from '@/components/auth/session-cache-guard';
 import { ME_QUERY_KEY } from '@/hooks/use-me';
-import { LEDGER_QUERY_KEY } from '@/hooks/use-wallet';
+import { BALANCE_HISTORY_KEYS } from '@/hooks/use-wallet';
 import { listStatusOf } from '@/hooks/use-portfolio';
 import { type Market, type Me, type Position } from '@/lib/api';
 import { useSession } from '@/lib/use-session';
@@ -111,9 +111,14 @@ const SNAPSHOT_KEYS = [MARKET_KEY, MARKETS_KEY, TICKS_KEY, MARKET_FILLS_KEY] as 
  * `['ledger']` is here for the reason `['orders']` is: a resnapshot runs BECAUSE events were
  * missed, and a missed `user:balance` is a ledger row nothing else in this tab writes. It earned
  * the place by becoming event-driven below; before that it would have been a refetch with no
- * event behind it.
+ * event behind it. `['payments']` came with it, on the same event (`BALANCE_HISTORY_KEYS`).
  */
-const PRIVATE_SNAPSHOT_KEYS = [ME_QUERY_KEY, POSITIONS_KEY, ORDERS_KEY, LEDGER_QUERY_KEY] as const;
+const PRIVATE_SNAPSHOT_KEYS = [
+  ME_QUERY_KEY,
+  POSITIONS_KEY,
+  ORDERS_KEY,
+  ...BALANCE_HISTORY_KEYS,
+] as const;
 
 /** What a screen may ask of the tab's socket. */
 export interface Realtime {
@@ -608,7 +613,17 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // `GET /me/ledger` is in flight too. `restartQueries` for that same reason: `['ledger']`
         // is never seeded and never SSR'd, so a bare invalidation would hand back the request
         // that left before the payout committed.
-        void restartQueries(queryClient, LEDGER_QUERY_KEY);
+        //
+        // 결제 내역 sits beside 원장 on /wallet and contradicts it the same way when left behind:
+        // an admin refund claws the P back (a 결제 취소(환불) row) while the payment still says
+        // 완료, and a 재통보 credit after the result notice stopped polling adds a 충전 row over
+        // a payment still 처리 중 or 미완료. The event names no payment, so the list is asked again —
+        // the same kind as the ledger's, and on the same accepted event, so it costs a request
+        // only where 결제 내역 is on screen. Unseeded as well, hence `restartQueries` again.
+        // Only as far as the P goes: a refund's claw-back is the one step that moves a balance,
+        // so the list lands on 환불 처리 중, and its finish (환불 완료) — like a settle — publishes
+        // nothing; that row waits for the list's next fetch (window focus, a return to /wallet).
+        for (const queryKey of BALANCE_HISTORY_KEYS) void restartQueries(queryClient, queryKey);
         const patch = applyBalanceEvent(queryClient.getQueryData<Me>(ME_QUERY_KEY), parsed.data);
         // Kills an in-flight `GET /me` that would otherwise resolve after this write carrying
         // an older balance. The primary path for the trading AC is still `TradeResult.balance`
