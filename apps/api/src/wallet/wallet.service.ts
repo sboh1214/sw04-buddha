@@ -123,22 +123,30 @@ export interface CreditInput {
   method: string | null;
   /** The PG's ResultMsg; null for the mock. */
   resultMessage: string | null;
+  /**
+   * Asked with the payment as locked — its row's lock taken after the balance row's, before
+   * anything moves — while it is still in `from`: true holds the credit back (nothing written,
+   * `heldBack`). SmartroPay's approval 재통보 holds back a card a cancel 재통보 is on record for,
+   * judged under the lock that notice's own transaction takes.
+   */
+  holdBack?: (tx: Tx, payment: PaymentRow) => Promise<boolean>;
 }
 
 /**
  * `credited`: this call moved the payment to `succeeded` and credited the P. Otherwise the
  * payment was not in `from` any more — another request settled it first — and `status` is what
- * it is now (undefined: the row is gone).
+ * it is now (undefined: the row is gone); or `holdBack` held it back (`heldBack`).
  */
 export type CreditOutcome =
-  { credited: true; result: ChargeResult } | { credited: false; status: PaymentStatus | undefined };
+  | { credited: true; result: ChargeResult }
+  | { credited: false; status: PaymentStatus | undefined; heldBack?: true };
 
 /**
  * `creditWithin`'s answer inside the transaction: the credit and the `user:balance` event to
  * publish after COMMIT, or — nothing credited — the status the payment has now.
  */
 export type CreditTxOutcome =
-  { result: ChargeResult; event: UserBalanceEvent } | { status?: PaymentStatus };
+  { result: ChargeResult; event: UserBalanceEvent } | { status?: PaymentStatus; heldBack?: true };
 
 /**
  * Charging and reading the wallet (PLAN 5.1, 5.6, M2).
@@ -322,7 +330,11 @@ export class WalletService {
    */
   async creditPayment(input: CreditInput): Promise<CreditOutcome> {
     const outcome = await this.db.transaction((tx) => this.creditWithin(tx, input));
-    if (!('result' in outcome)) return { credited: false, status: outcome.status };
+    if (!('result' in outcome)) {
+      return outcome.heldBack
+        ? { credited: false, status: outcome.status, heldBack: true }
+        : { credited: false, status: outcome.status };
+    }
     await this.publisher.publishUser(input.userId, outcome.event);
     return { credited: true, result: outcome.result };
   }
@@ -342,6 +354,19 @@ export class WalletService {
       .where(eq(schema.balances.userId, input.userId))
       .limit(1)
       .for('update');
+    if (input.holdBack) {
+      const [locked] = await tx
+        .select()
+        .from(schema.payments)
+        .where(
+          and(eq(schema.payments.id, input.paymentId), eq(schema.payments.userId, input.userId)),
+        )
+        .limit(1)
+        .for('update');
+      if (locked && input.from.includes(locked.status) && (await input.holdBack(tx, locked))) {
+        return { status: locked.status, heldBack: true };
+      }
+    }
     const creditedAt = await clockTimestamp(tx);
 
     // Approved at the instant it is credited: the same clock as the ledger row, so the admin

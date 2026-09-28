@@ -52,6 +52,16 @@ interface RecordedApproval {
   payMethod: string | undefined;
 }
 
+/**
+ * The approvals of a payment on record (approvalsOnRecord), newest first within each:
+ * `verified` — answers to our own calls whose SignValue verifies, then 재통보 — and `unverified`,
+ * answers of ours whose SignValue does not.
+ */
+interface ApprovalsOnRecord {
+  verified: RecordedApproval[];
+  unverified: RecordedApproval[];
+}
+
 /** What `apply` did: the `user:balance` event to publish, and the approval Tid a credit stored. */
 interface Applied {
   event?: UserBalanceEvent;
@@ -94,11 +104,13 @@ type Transition =
  * A CREDIT STORES THE APPROVAL'S TID. The refund cancels `provider_ref`, and the authentication's
  * Tid a claim recorded may differ from the approval's (the manual, STEP 4). So a credit takes the
  * Tid, PayMethod — and the word — of the approval on record that matches the payment's Mid,
- * amount and Moid (approvalsOnRecord, our own verified answers first). With records and none of
- * them matching, the approval was net-cancelled for it, and the credit is refused
+ * amount and Moid (approvalsOnRecord, our own verified answers first; one whose SignValue does
+ * not verify only while no verified record contradicts it). With records and none of them
+ * matching, the approval was net-cancelled for it, and the credit is refused
  * (`approval_mismatch`: cancel the card in the merchant admin and settle it `cancelled`). With
- * none on record (every answer was lost) the admin gives the approval's Tid (`tid`) as the
- * merchant admin shows it. A cancel 재통보 recorded meanwhile (recordedCancelNotices) refuses a
+ * no successful approval on record (every answer was lost, or it was the PG's own error) the
+ * admin gives the approval's Tid (`tid`) as the merchant admin shows it. A cancel 재통보
+ * recorded meanwhile (recordedCancelNotices) refuses a
  * credit or a restore: a full one says the card IS cancelled (`status`), a partial one that part
  * of it is (`partial_cancel`: settle it `cancelled` or `refunded`, and adjust the balance by
  * hand — no outcome here says how much P the rest is worth).
@@ -339,30 +351,58 @@ export class PaymentSettleService {
   }
 
   /**
-   * The approval a credit stores: the first on record (approvalsOnRecord's order) that matches
-   * the payment — refused as `approval_mismatch` when records exist and none matches, or when
+   * The approval a credit stores: the first verified record (approvalsOnRecord's order) that
+   * matches the payment, else the first unverified one that does — unless a verified record
+   * contradicts it (disagreementsOf, or another Tid): the PG vouched for that record, not for
+   * this one. Refused as `approval_mismatch` when records exist and none can be taken, or when
    * the admin's `tid` is not the one taken; with none on record, the `tid` the admin read in the
    * merchant admin (VALIDATION_ERROR without it).
    */
   private creditedApproval(
     payment: PaymentRow,
-    recorded: readonly RecordedApproval[],
+    recorded: ApprovalsOnRecord,
     tid: string | undefined,
   ): { tid: string; payMethod: string | undefined } {
-    const [first] = recorded;
+    const matches = (approval: RecordedApproval) =>
+      this.mismatchesOf(payment, approval).length === 0;
+    const [first] = [...recorded.verified, ...recorded.unverified];
     if (!first) {
       if (tid === undefined) {
         throw new AppError('VALIDATION_ERROR', {
           message:
-            "No approval of this payment is on record: give the approval's Tid as the merchant admin shows it",
+            "No successful approval of this payment is on record: give the approval's Tid as the merchant admin shows it",
           details: [
-            { path: ['tid'], message: 'required: no approval of this payment is on record' },
+            {
+              path: ['tid'],
+              message: 'required: no successful approval of this payment is on record',
+            },
           ],
         });
       }
       return { tid, payMethod: undefined };
     }
-    const matching = recorded.find((approval) => this.mismatchesOf(payment, approval).length === 0);
+    let matching = recorded.verified.find(matches);
+    if (!matching) {
+      const unverified = recorded.unverified.find(matches);
+      if (unverified) {
+        const contradiction = recorded.verified
+          .map((approval) => ({
+            approval,
+            reasons: [
+              ...(approval.tid === unverified.tid ? [] : ['Tid']),
+              ...this.disagreementsOf(payment, approval),
+            ],
+          }))
+          .find(({ reasons }) => reasons.length > 0);
+        if (contradiction) {
+          throw refundNotAllowed(
+            'approval_mismatch',
+            `The verified approval on record (${contradiction.approval.tid}) contradicts the unverified one (${unverified.tid}): ${contradiction.reasons.join(', ')}`,
+          );
+        }
+        matching = unverified;
+      }
+    }
     if (!matching) {
       throw refundNotAllowed(
         'approval_mismatch',
@@ -378,7 +418,7 @@ export class PaymentSettleService {
     return matching;
   }
 
-  /** Where a recorded approval disagrees with the payment: its Mid, amount or Moid. */
+  /** Where a recorded approval disagrees with the payment, or says nothing: Mid, amount, Moid. */
   private mismatchesOf(payment: PaymentRow, approval: RecordedApproval): string[] {
     const mismatches: string[] = [];
     const smartro = this.config.smartro;
@@ -392,6 +432,20 @@ export class PaymentSettleService {
   }
 
   /**
+   * Where a recorded approval says something else than the payment — a Mid, an amount or a Moid
+   * it carries that is not the payment's. A field it lacks (a notice without its Mid) is no
+   * disagreement: mismatchesOf counts it, this does not.
+   */
+  private disagreementsOf(payment: PaymentRow, approval: RecordedApproval): string[] {
+    const smartro = this.config.smartro;
+    return this.mismatchesOf(payment, approval).filter((field) => {
+      if (field === 'Mid') return smartro !== null && approval.mid !== undefined;
+      if (field === 'Amt') return approval.amt !== undefined;
+      return true;
+    });
+  }
+
+  /**
    * The PG's approvals of the payment on record — every success among the approval's answer,
    * the result inquiry's and the approval 재통보 (StateCd 0) — in the order a credit trusts them,
    * newest first within each:
@@ -399,10 +453,10 @@ export class PaymentSettleService {
    * 2. a 재통보 (recorded only once its SignValue verified — but its fields are the notice's, and
    *    a notice missing its Mid or writing its amount otherwise must not hide an answer of ours);
    * 3. an answer of ours that does not verify (an approval net-cancelled for that alone), which
-   *    still names the Tid the merchant admin shows.
-   * creditedApproval takes the first that matches the payment.
+   *    still names the Tid the merchant admin shows — `unverified`, taken only while no verified
+   *    record contradicts it (creditedApproval).
    */
-  private async approvalsOnRecord(tx: Tx, payment: PaymentRow): Promise<RecordedApproval[]> {
+  private async approvalsOnRecord(tx: Tx, payment: PaymentRow): Promise<ApprovalsOnRecord> {
     const rows = await tx
       .select({
         type: schema.paymentEvents.type,
@@ -418,7 +472,9 @@ export class PaymentSettleService {
       )
       .orderBy(desc(schema.paymentEvents.id));
     const smartro = this.config.smartro;
-    const ranked: [RecordedApproval[], RecordedApproval[], RecordedApproval[]] = [[], [], []];
+    const answers: RecordedApproval[] = [];
+    const notices: RecordedApproval[] = [];
+    const unverified: RecordedApproval[] = [];
     for (const row of rows) {
       const fields = row.payload as Record<string, unknown> | null;
       const text = (...keys: string[]): string | undefined => {
@@ -442,7 +498,7 @@ export class PaymentSettleService {
         payMethod: text('PayMethod'),
       };
       if (row.type === 'notify') {
-        ranked[1].push(approval);
+        notices.push(approval);
         continue;
       }
       const sign = text('SignValue');
@@ -450,9 +506,9 @@ export class PaymentSettleService {
         smartro !== null &&
         sign !== undefined &&
         verifySignValue(sign, tid, code, smartro.merchantKey);
-      ranked[verified ? 0 : 2].push(approval);
+      (verified ? answers : unverified).push(approval);
     }
-    return ranked.flat();
+    return { verified: [...answers, ...notices], unverified };
   }
 
   /** `pending`/`failed`/`cancelled` → `status`, guarded by the status the row was locked in. */

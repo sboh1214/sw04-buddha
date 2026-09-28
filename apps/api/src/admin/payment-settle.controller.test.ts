@@ -627,6 +627,99 @@ describe.skipIf(!hasTestInfra)('admin payment settle (integration)', () => {
     expectLedgerChain(await ledgerOf(member.id), SIGNUP_BONUS_P + 50_000n);
   });
 
+  it('never credits an unverified approval answer a verified record contradicts', async () => {
+    /** A claimed pending payment every verified answer of which was lost, aged. */
+    const claimed = async () => {
+      const payment = await reserveSmartroPayment(t.db, member.id, {
+        packageId: pack.id,
+        claimedBy: testTid(),
+      });
+      await age(payment.id);
+      return payment;
+    };
+    /** An approval 재통보 as recorded (callbackEvent's fields): verified before it was stored. */
+    const recordNotice = (paymentId: string, tid: string, fields: Record<string, string>) =>
+      recordPaymentEvent(t.db, {
+        paymentId,
+        type: 'notify',
+        resultCode: '3001',
+        payload: {
+          Tid: tid,
+          Otid: tid,
+          Moid: paymentIdToMoid(paymentId),
+          Mid: 'buddhatest',
+          ResultCode: '3001',
+          PayMethod: 'CARD',
+          Amt: '9700',
+          StateCd: '0',
+          ...fields,
+        },
+      });
+    /** Our approval's answer, matching the payment, whose SignValue does not verify. */
+    const recordUnverified = (paymentId: string, tid: string) =>
+      recordPaymentEvent(t.db, {
+        paymentId,
+        type: 'approval',
+        resultCode: '3001',
+        payload: approvalAnswer({
+          paymentId,
+          priceKrw: 9_700,
+          tid,
+          overrides: { SignValue: 'forged' },
+        }),
+      });
+    const mismatch = {
+      error: { code: 'REFUND_NOT_ALLOWED', details: [{ message: 'approval_mismatch' }] },
+    };
+
+    // The PG's verified notice says 5,000원, or another Mid; the unverified answer says the
+    // payment's own: the PG vouched for the notice, so nothing is credited.
+    for (const [fields, reason] of [
+      [{ Amt: '5000' }, 'Amt'],
+      [{ Mid: 'someoneels' }, 'Mid'],
+    ] as const) {
+      const tid = testTid();
+      const payment = await claimed();
+      await recordNotice(payment.id, tid, fields);
+      await recordUnverified(payment.id, tid);
+      const refused = await settle(payment.id, 'credit');
+      expect(refused.statusCode).toBe(409);
+      expect(refused.json()).toMatchObject({
+        error: { details: [{ path: ['payment'], message: 'approval_mismatch' }] },
+      });
+      expect(refused.json<{ error: { message: string } }>().error.message).toContain(
+        `(${tid}) contradicts the unverified one (${tid}): ${reason}`,
+      );
+      // Nor with its Tid given.
+      expect((await settleCredit(payment.id, tid)).json()).toMatchObject(mismatch);
+      expect(await paymentRow(payment.id)).toMatchObject({ status: 'pending' });
+    }
+
+    // A verified notice of ANOTHER approval — even one that only lacks a field — the same.
+    const other = await claimed();
+    await recordNotice(other.id, testTid(), { Mid: '' });
+    await recordUnverified(other.id, testTid());
+    const otherRefused = await settle(other.id, 'credit');
+    expect(otherRefused.json()).toMatchObject(mismatch);
+    expect(otherRefused.json<{ error: { message: string } }>().error.message).toMatch(/: Tid$/);
+
+    // A notice of the same approval that merely lacks a field (no Mid) contradicts nothing: the
+    // unverified answer is credited, under its Tid.
+    const lackingTid = testTid();
+    const lacking = await claimed();
+    await recordNotice(lacking.id, lackingTid, { Mid: '' });
+    await recordUnverified(lacking.id, lackingTid);
+    const credited = await settle(lacking.id, 'credit');
+    expect(credited.statusCode).toBe(200);
+    expect(credited.json<{ data: AdminPayment }>().data).toMatchObject({
+      status: 'succeeded',
+      providerRef: lackingTid,
+    });
+
+    expect(await settleActions()).toHaveLength(1);
+    expectLedgerChain(await ledgerOf(member.id), SIGNUP_BONUS_P + 10_000n);
+  });
+
   it("refunds a settled credit whose card the merchant admin cancelled: the approval's Tid", async () => {
     // The approval's Tid differs from the authentication's the claim holds; the admin read it
     // in the merchant admin.
@@ -889,6 +982,49 @@ describe.skipIf(!hasTestInfra)('admin payment settle (integration)', () => {
       'DEPOSIT',
     ]);
     expectLedgerChain(ledger, SIGNUP_BONUS_P + 10_000n);
+  });
+
+  it('reads the full cancel 재통보 of an approval for another amount as a cancel, not a partial one', async () => {
+    // Approved for 5,000원 on a 9,700원 payment: net-cancelled for the 5,000 it approved, with
+    // no clear answer, so it stays `cancelled`. The PG's full cancel notice carries 5,000 — here
+    // recorded only, as its event is before its own transaction runs.
+    const payment = await reserveSmartroPayment(t.db, member.id, { packageId: pack.id });
+    const tid = testTid();
+    pg.onApprove = () =>
+      approvalAnswer({
+        paymentId: payment.id,
+        priceKrw: payment.priceKrw,
+        tid,
+        overrides: { Amt: '5000' },
+      });
+    pg.onCancel = () => {
+      throw new SmartroUnreachableError('timed out');
+    };
+    await postReturn(payment.id, { Tid: tid, TrAuthKey: 'k' });
+    pg.reset();
+    expect(await paymentRow(payment.id)).toMatchObject({ status: 'cancelled', providerRef: tid });
+    await t.db.insert(schema.paymentEvents).values({
+      paymentId: payment.id,
+      type: 'notify',
+      resultCode: '2001',
+      payload: { StateCd: '1', ResultCode: '2001', Tid: tid, Amt: '5000' },
+    });
+    await age(payment.id);
+
+    // The card IS cancelled, in full — judged against the 5,000 the net cancel asked for: a
+    // credit is refused `status`, not `partial_cancel`.
+    const credit = await settle(payment.id, 'credit');
+    expect(credit.statusCode).toBe(409);
+    expect(credit.json()).toMatchObject({
+      error: { code: 'REFUND_NOT_ALLOWED', details: [{ path: ['payment'], message: 'status' }] },
+    });
+    const cancelled = await settle(payment.id, 'cancelled');
+    expect(cancelled.statusCode).toBe(200);
+    expect(cancelled.json<{ data: AdminPayment }>().data).toMatchObject({
+      status: 'cancelled',
+      needsReview: false,
+    });
+    expect(await ledgerOf(member.id)).toHaveLength(1);
   });
 
   // --- a claimed `failed` payment ---------------------------------------------------------

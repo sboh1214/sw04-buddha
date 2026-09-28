@@ -31,6 +31,7 @@ import {
   cancelsApprovalOf,
   markRefunded,
   netCancelOutcome,
+  recordedCancelNotices,
 } from '../payment-transitions.js';
 import { PAYMENTS_CONFIG, type PaymentsConfig, type SmartroConfig } from '../payments-config.js';
 import { type CallbackFields, type CallbackRequest, field } from './callback-form.js';
@@ -83,6 +84,39 @@ type CancelNoticeVerdict =
   | 'unclaimed'
   | 'other-approval'
   | 'settled';
+
+/**
+ * How an admin reconciles a partial cancel of a payment's card, by the payment as the notice
+ * found it. No settle outcome moves part of the P: a credit or a restore is refused
+ * (`partial_cancel`), so the payment is closed by the settle that says the card is (partly)
+ * cancelled, and the P the rest is worth is set with a balance adjustment. A payment credited
+ * (`succeeded`) or refunded is no settle's, nor is a `cancelled` one whose net cancel is
+ * confirmed: only the adjustment applies. One no ReturnUrl claimed was never approved
+ * (settleNotify): there is no card of it to reconcile.
+ */
+function partialCancelFix(
+  paymentId: string,
+  payment: { status?: PaymentStatus; providerRef?: string | null },
+): string {
+  const settle = `POST /admin/payments/${paymentId}/settle`;
+  const adjust = 'POST /admin/users/:id/balance-adjust';
+  switch (payment.status) {
+    case 'pending':
+    case 'failed':
+      if (payment.providerRef === null) {
+        return 'no ReturnUrl claimed it, so none of its approvals is ours — check the notice by hand';
+      }
+      return `a settle credit is refused (partial_cancel) — settle it cancelled (${settle}), then adjust the balance (${adjust})`;
+    case 'cancelled':
+      // Open to a settle only while its net cancel is unconfirmed (needsReview); once confirmed
+      // it is closed, and every settle outcome answers `status`.
+      return `if the admin list flags it (its net cancel unconfirmed), settle it cancelled (${settle}; a settle credit is refused: partial_cancel); either way adjust the balance (${adjust})`;
+    case 'refunding':
+      return `a settle restore is refused (partial_cancel) — settle it refunded (${settle}), then adjust the balance (${adjust})`;
+    default:
+      return `no settle applies to a ${String(payment.status)} payment — adjust the balance only (${adjust})`;
+  }
+}
 
 /**
  * A cancel 재통보 judged under the payment row's lock: the verdict, and the payment as it was
@@ -930,6 +964,11 @@ export class SmartroPayService {
       }
       // `failed` too (a claimed one): the PG's approval is authoritative over a failure recorded
       // on our side (an admin who settled it failed, the merchant admin not showing it yet).
+      // Unless a cancel 재통보 of the card is on record (judged under the payment row's lock,
+      // which that notice's own transaction takes too): a full one's own judgement closes the
+      // payment (a person settles one it left open), and a partial one means the whole P is not
+      // owed — nothing here says how much is.
+      const held: { by: 'full' | 'partial' | undefined } = { by: undefined };
       let credit: CreditOutcome;
       try {
         credit = await this.wallet.creditPayment({
@@ -940,6 +979,11 @@ export class SmartroPayService {
           providerRef: tid,
           method: field(fields, 'PayMethod')?.slice(0, METHOD_MAX) ?? null,
           resultMessage: resultMessageOf(field(fields, 'ResultMsg')),
+          holdBack: async (tx, locked) => {
+            const notices = await recordedCancelNotices(tx, locked);
+            held.by = notices.full ? 'full' : notices.partial ? 'partial' : undefined;
+            return held.by !== undefined;
+          },
         });
       } catch (error) {
         if (!isPgError(error, PG_UNIQUE_VIOLATION, PROVIDER_REF_UNIQUE)) throw error;
@@ -953,6 +997,18 @@ export class SmartroPayService {
       }
       if (credit.credited) {
         this.logger.log(`payment ${payment.id} credited by the 재통보 (${tid})`);
+      } else if (credit.heldBack && held.by === 'full') {
+        // That notice is recorded before it is judged (under this same lock), so its judgement
+        // normally follows and closes the payment. It may also have run already and closed
+        // nothing — judged against the Tid a net cancel had reserved the payment with, say —
+        // leaving the payment as it is: pending or failed and claimed, which needsReview flags.
+        this.logger.warn(
+          `재통보 approval ${tid} for payment ${payment.id}, which is ${String(credit.status)}: a full cancel 재통보 of the card is on record; not credited — that notice closes it cancelled unless it already ran and did not; if it stays ${String(credit.status)}, check the card in the merchant admin and settle it (POST /admin/payments/${payment.id}/settle)`,
+        );
+      } else if (credit.heldBack) {
+        this.logger.error(
+          `재통보 approval ${tid} for payment ${payment.id}, which is ${String(credit.status)}: a partial cancel 재통보 of the card is on record; not credited — check the card in the merchant admin, settle it cancelled (POST /admin/payments/${payment.id}/settle; a settle credit is refused: partial_cancel), then adjust the balance by hand (POST /admin/users/:id/balance-adjust)`,
+        );
       } else if (credit.status === 'cancelled') {
         // A net cancel reserved the payment between our read and the credit: the same rule as
         // for a payment found `cancelled` above, on the status as it is now.
@@ -1018,8 +1074,9 @@ export class SmartroPayService {
         .for('update');
       if (!locked) return { verdict: 'settled', amount: payment.priceKrw };
       // Against the approval's amount: a net-cancelled payment's approval may have been for
-      // another amount than its price (that is why it was net-cancelled), and a full cancel of
-      // it carries that amount.
+      // another amount than its price (that is why it was net-cancelled — also when the PG
+      // refused that cancel and the payment is `pending` again), and a full cancel of it
+      // carries that amount.
       const amount = await approvedAmountOf(tx, locked);
       const verdict = await this.cancelNoticeVerdict(tx, locked, cancel, amount, confirmation);
       return { verdict, status: locked.status, providerRef: locked.providerRef, amount };
@@ -1055,7 +1112,7 @@ export class SmartroPayService {
         // Only ever made by hand in the merchant admin: full cancels are all this service does
         // (owner decision 5), so no state here describes a card that is partly cancelled.
         this.logger.error(
-          `payment ${payment.id}: the PG reports a partial cancel (${where}, Otid ${cancel.otid ?? 'none'}, Amt ${cancel.amt ?? 'none'} of ${String(amount)}); nothing changed — this service cancels in full only: check the card in the merchant admin and reconcile the payment and its P by hand (a settle credit or restore is refused: partial_cancel — settle it cancelled or refunded, then adjust the balance: POST /admin/users/:id/balance-adjust)`,
+          `payment ${payment.id}: the PG reports a partial cancel (${where}, Otid ${cancel.otid ?? 'none'}, Amt ${cancel.amt ?? 'none'} of ${String(amount)}); nothing changed — this service cancels in full only: check the card in the merchant admin and reconcile the payment and its P by hand: ${partialCancelFix(payment.id, judged)}`,
         );
         break;
       case 'unclaimed':

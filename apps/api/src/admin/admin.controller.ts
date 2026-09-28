@@ -229,9 +229,10 @@ export class AdminController {
   @ApiData(adminPaymentSchema)
   // INSUFFICIENT_BALANCE: part of the P was used. REFUND_NOT_ALLOWED: details[0].message is
   // `window_closed`, `status` or `provider`. PAYMENT_GATEWAY_REFUSED: the PG said no and the P
-  // was restored — or, on a retry or a first attempt a retry took over (details[1].message
-  // `settle_required`), nothing was restored and the payment stays `refunding` for the settle
-  // below. A refusal after a full-cancel 재통보 answers 200 `refunded`. PAYMENT_GATEWAY_ERROR: no answer;
+  // was restored — or, on a retry, a first attempt a retry took over, or a payment a partial
+  // cancel 재통보 is on record for (details[1].message `settle_required`), nothing was restored
+  // and the payment stays `refunding` for the settle below. A refusal after a full-cancel
+  // 재통보 answers 200 `refunded`. PAYMENT_GATEWAY_ERROR: no answer;
   // the payment stays `refunding` for a retry. DUPLICATE_REQUEST (details[0].message
   // `in progress`): a retry while the last attempt is still waiting on the PG.
   @ApiErrors(
@@ -265,10 +266,12 @@ export class AdminController {
   // (the outcome is not allowed from the payment's status, or a cancel 재통보 reports the card
   // cancelled), `in_progress` (touched within the last 2 minutes: a callback or a refund may
   // still be working on it), `approval_mismatch` (a credit: no approval on record matches the
-  // payment, or its Tid — or the one given — is another's) or `partial_cancel` (a credit or a
-  // restore: a partial cancel 재통보 is on record; settle it cancelled or refunded and adjust the
-  // balance by hand). VALIDATION_ERROR with
-  // details path `tid`: a credit with no approval on record needs the approval's Tid.
+  // payment, or its Tid — or the one given — is another's; an approval answer whose SignValue
+  // does not verify is not taken against a verified record that disagrees) or `partial_cancel`
+  // (a credit or a restore: a partial cancel 재통보 is on record; settle it cancelled or refunded
+  // and adjust the balance by hand). VALIDATION_ERROR with details path `tid`: a credit with no
+  // successful approval on record (none answered, or it answered a PG error) needs the
+  // approval's Tid.
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR', 'REFUND_NOT_ALLOWED')
   settlePayment(
     @CurrentUser() admin: SessionUser,

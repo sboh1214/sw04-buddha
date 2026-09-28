@@ -181,11 +181,13 @@ const PAYMENT_CALLBACK_SECTION = `## SmartroPay 콜백 (문서 밖)
   처리한다 — 조회의 다른 코드(\`6017\` 승인이력 없음, \`6021\` 거래조회 오류, \`9999\` 등)는 늦게 오는
   승인을 아직 못 찾은 것일 수 있어 아무것도 증명하지 않는다. 그래서 모르면 \`pending\` 으로 두어
   재통보가, 오지 않으면 관리자가 수동 정리(\`POST /api/v1/admin/payments/{id}/settle\`)로 정리하게
-  한다(승인 응답이 없어 기록된 승인도 없으면 가맹점 관리자에 보이는 승인 \`Tid\` 를 \`tid\` 로 준다).
-  승인 응답이 성공 코드가 아니면 결제는 \`failed\` 다 — 그 코드가 거절이 아니라 PG 쪽 오류(\`9999\`·
-  \`W999\`·\`W027\`~\`W030\`·\`NP98\` 등 시스템·연결 오류)면 카드가 청구됐을 수 있으니 관리자 목록이
-  \`needsReview\` 로 표시한다. 승인됐는데 \`SignValue\`·\`Mid\`·\`Moid\`·금액이 맞지 않거나 적립이 실패하면 곧바로 망취소하고
-  \`cancelled\` 로 답한다. 망취소의 결과는 \`net_cancel\` 이벤트의 \`payload.outcome\`
+  한다. 기록된 성공 승인이 없으면(승인 응답이 없었거나 PG 오류 코드였으면) 가맹점 관리자에 보이는 승인
+  \`Tid\` 를 \`tid\` 로 준다. 승인 응답이 성공 코드가 아니면 결제는 \`failed\` 다 — 그 코드가 거절이
+  아니라 PG 쪽 오류(\`9999\`·\`W999\`·\`W027\`~\`W030\`·\`W038\`·\`W051\`·\`NP98\` 등 시스템·저장·연결
+  오류)면 카드가 청구됐을 수 있으니 관리자 목록이 \`needsReview\` 로 표시한다(\`3002\` VAN실패·\`3095\`
+  카드사 실패 응답은 카드 쪽이 답한 거절이라 표시하지 않는다). 그런 결제를 \`credit\` 으로 정리할 때도
+  기록된 성공 승인이 없으므로 \`tid\` 를 준다. 승인됐는데 \`SignValue\`·\`Mid\`·\`Moid\`·금액이 맞지
+  않거나 적립이 실패하면 곧바로 망취소하고 \`cancelled\` 로 답한다. 망취소의 결과는 \`net_cancel\` 이벤트의 \`payload.outcome\`
   (\`cancelled\`·\`refused\`·\`unknown\`)에 남는다: PG 가 분명히 거절하면(승인이 살아 있다) 그 기록과
   한 트랜잭션에서 결제를 \`pending\` 으로 되돌려 재통보가 적립할 수 있게 하고(단 그사이 취소 통보가
   취소를 확인했으면 되돌리지 않고 \`cancelled\` 로 두고 그렇게 답한다), 답이 없거나 취소가 아직
@@ -210,12 +212,23 @@ const PAYMENT_CALLBACK_SECTION = `## SmartroPay 콜백 (문서 밖)
   결제를 잡은 경우도 같다. 취소 통보(\`StateCd=1|2\`)는 **전체 취소**일 때만 카드가 취소됐다는 PG
   의 말로 받는다: \`ResultCode\` 가 그 결제수단에서 취소 완료(\`2001\`·\`2013\` 등)를 뜻하고, \`Otid\`
   (구통보 \`OTID\`)가 없거나 자기 \`Tid\` 와 같고, \`Amt\` 가 없거나 승인 금액과 같아야 한다(승인
-  금액은 결제 금액이고, 망취소된 결제는 망취소가 취소를 요청한 금액이다 — 다른 금액의 승인이라
-  망취소했을 수 있다). 다른 코드(취소 실패 등)는 기록만 하고 아무것도 바꾸지 않는다. 다른 거래를
+  금액은 결제 금액이다 — 적립된 \`succeeded\`·\`refunding\`·\`refunded\` 결제는 결제 금액의 승인만
+  적립했으니 늘 그렇다. 단 적립되지 않은 결제(\`pending\`·\`failed\`·\`cancelled\`)가 망취소를
+  시도했으면(PG 가 망취소를 거절해 \`pending\` 으로 돌아간 결제도) 망취소가 취소를 요청한 금액이고 —
+  다른 금액의 승인이라 망취소했을 수 있다 — 망취소가 PG 의 답을 기다리는 중이라 그 금액이 아직
+  기록되지 않은 \`cancelled\` 결제는 기록된 성공 승인 응답의 금액이다). 다른 코드(취소 실패 등)는
+  기록만 하고 아무것도 바꾸지 않는다. 다른 거래를
   \`Otid\` 로 가리키거나(매뉴얼: 부분취소의 경우 원거래 TID 를 넣는다) 금액이 다른 통보는
   **부분취소**다 — 이 서비스는 전체 취소만 하므로(가맹점 관리자에서 한 부분취소) 기록하고 오류 로그만
-  남기며 아무것도 바꾸지 않는다. 전체 취소 통보는, 승인 \`Tid\` 를 저장한 결제(적립된
-  \`succeeded\`·\`refunding\`, 망취소된 \`cancelled\`)라면 그 \`Tid\`(구통보 \`TID\`)가 결제의
+  남기며 아무것도 바꾸지 않는다(로그는 결제 상태에 맞는 정리 방법을 적는다: \`pending\`·\`failed\`·
+  \`cancelled\` 는 \`cancelled\` 로, \`refunding\` 은 \`refunded\` 로 수동 정리한 뒤 잔고 조정, 적립된
+  \`succeeded\`·\`refunded\` 는 수동 정리 없이 잔고 조정 \`POST /api/v1/admin/users/{id}/balance-adjust\`
+  만). 부분취소 통보가 기록된 결제는 뒤이어 오는 승인 통보도 적립하지 않고(기록하고 오류 로그를 남기고
+  \`OK\` — 관리자가 \`cancelled\` 로 정리하고 잔고를 맞춘다), 전체 취소 통보가 기록됐는데 결제가
+  아직 닫히지 않았을 때 오는 승인 통보도 적립하지 않는다(보통은 그 통보의 처리가 곧 결제를 닫는다 — 그 처리가 이미
+  끝났는데 결제가 \`pending\`·\`failed\` 로 남았다면 관리자 목록이 표시하니 가맹점 관리자에서 확인하고
+  수동 정리한다). 전체 취소 통보는, 승인
+  \`Tid\` 를 저장한 결제(적립된 \`succeeded\`·\`refunding\`, 망취소된 \`cancelled\`)라면 그 \`Tid\`(구통보 \`TID\`)가 결제의
   \`provider_ref\`(승인 \`Tid\`)일 때만 그 결제의 것으로 본다: \`refunding\` 환불을 \`refunded\` 로
   마치고(P 는 이미 회수했다), \`cancelled\` 결제의 확인되지 않은 망취소를 확인된 것으로 기록한다.
   우리 ReturnUrl 이 잡았지만 아직 적립하지 않은 결제(\`pending\`·\`failed\`)는 \`provider_ref\` 가 인증
@@ -404,9 +417,9 @@ const ERROR_NOTES = {
   CONTACT_REQUIRED:
     '실명과 휴대전화 번호를 아직 등록하지 않은 계정이다. `PUT /api/v1/me/contact` 로 등록한 뒤 다시 시도한다.',
   REFUND_NOT_ALLOWED:
-    '환불 정책 밖의 결제다. `details[0].message` 가 까닭을 말한다 — `window_closed`(승인 후 7일이 지났다), `status`(환불할 수 있는 상태가 아니다), `provider`(그 결제 수단은 취소를 지원하지 않는다). 이미 쓴 P 가 있으면 `INSUFFICIENT_BALANCE` 로 답한다. 관리자 수동 정리(`POST /api/v1/admin/payments/{id}/settle`)도 이 코드로 답한다 — `provider`(SmartroPay 결제가 아니다), `status`(그 상태에서 고를 수 없는 결과다, 또는 취소 재통보가 카드가 취소됐다고 알려 와 `credit`·`restore` 할 수 없다), `in_progress`(2분 안에 바뀌어 콜백이나 환불이 아직 처리 중일 수 있다), `approval_mismatch`(`credit`: 기록된 승인의 `Mid`·금액·`Moid` 가 결제와 맞지 않거나 — 그 승인은 그래서 망취소됐으니 카드를 가맹점 관리자에서 취소하고 `cancelled` 로 정리한다 — 준 `tid` 가 기록된 승인의 것이 아니거나, 그 `Tid` 를 다른 결제가 이미 들고 있다 — 기록된 승인이 여럿이면 결제와 맞는 것을 쓰고, 맞는 것이 하나도 없을 때만 이렇게 답한다), `partial_cancel`(`credit`·`restore`: 그 카드의 부분취소 재통보가 기록돼 있다 — 카드의 일부만 청구된 상태라 수동 정리의 어떤 결과도 맞지 않으니 `cancelled`·`refunded` 로 정리하고 잔고를 손으로 맞춘다). 기록된 승인이 없는데 `credit` 에 `tid` 를 주지 않으면 `VALIDATION_ERROR`(`details[0].path` 가 `["tid"]`)로 답한다.',
+    '환불 정책 밖의 결제다. `details[0].message` 가 까닭을 말한다 — `window_closed`(승인 후 7일이 지났다), `status`(환불할 수 있는 상태가 아니다), `provider`(그 결제 수단은 취소를 지원하지 않는다). 이미 쓴 P 가 있으면 `INSUFFICIENT_BALANCE` 로 답한다. 관리자 수동 정리(`POST /api/v1/admin/payments/{id}/settle`)도 이 코드로 답한다 — `provider`(SmartroPay 결제가 아니다), `status`(그 상태에서 고를 수 없는 결과다, 또는 취소 재통보가 카드가 취소됐다고 알려 와 `credit`·`restore` 할 수 없다), `in_progress`(2분 안에 바뀌어 콜백이나 환불이 아직 처리 중일 수 있다), `approval_mismatch`(`credit`: 기록된 승인의 `Mid`·금액·`Moid` 가 결제와 맞지 않거나 — 그 승인은 그래서 망취소됐으니 카드를 가맹점 관리자에서 취소하고 `cancelled` 로 정리한다 — 준 `tid` 가 기록된 승인의 것이 아니거나, 그 `Tid` 를 다른 결제가 이미 들고 있다 — 기록된 승인이 여럿이면 결제와 맞는 것을 쓰고, 맞는 것이 하나도 없을 때만 이렇게 답한다. 단 `SignValue` 가 맞지 않는 우리 승인 응답은 서명이 맞는 기록(우리 승인 응답이나 재통보)이 그와 어긋나지 않을 때만 쓴다 — 서명이 맞는 기록이 다른 `Tid`·`Mid`·금액·`Moid` 를 말하면 이렇게 답한다), `partial_cancel`(`credit`·`restore`: 그 카드의 부분취소 재통보가 기록돼 있다 — 카드의 일부만 청구된 상태라 수동 정리의 어떤 결과도 맞지 않으니 `cancelled`·`refunded` 로 정리하고 잔고를 손으로 맞춘다). 기록된 성공 승인이 없는데(승인 응답이 없었거나 PG 오류 코드였으면) `credit` 에 `tid` 를 주지 않으면 `VALIDATION_ERROR`(`details[0].path` 가 `["tid"]`)로 답한다.',
   PAYMENT_GATEWAY_REFUSED:
-    'PG 가 요청을 거절했다. `details[0].message` 에 PG 의 `<ResultCode> <ResultMsg>` 가 붙는다. 환불이면 회수했던 P 를 되돌려 놓았다. 단 환불 **재시도**가 거절되면 첫 시도가 이미 카드를 취소했을 수 있어 P 를 되돌리지 않고 `refunding` 으로 둔다 — 첫 시도라도 PG 의 답을 기다리는 사이 재시도가 결제를 넘겨받았으면 마찬가지다. 이때 `details[1].message` 가 `settle_required` 이고, 관리자가 가맹점 관리자에서 확인한 뒤 수동 정리(`restore` 또는 `refunded`)한다. 거절됐어도 그 결제의 전체 취소 재통보가 와 있으면 오류가 아니라 `refunded` 로 마친 결제로 답한다.',
+    'PG 가 요청을 거절했다. `details[0].message` 에 PG 의 `<ResultCode> <ResultMsg>` 가 붙는다. 환불이면 회수했던 P 를 되돌려 놓았다. 단 환불 **재시도**가 거절되면 첫 시도가 이미 카드를 취소했을 수 있어 P 를 되돌리지 않고 `refunding` 으로 둔다 — 첫 시도라도 PG 의 답을 기다리는 사이 재시도가 결제를 넘겨받았으면 마찬가지다. 이때 `details[1].message` 가 `settle_required` 이고, 관리자가 가맹점 관리자에서 확인한 뒤 수동 정리(`restore` 또는 `refunded`)한다. 그 카드의 **부분취소** 재통보가 기록돼 있을 때도(가맹점 관리자에서 일부만 취소했다) 거절된 환불은 첫 시도든 재시도든 P 를 되돌리지 않고 `refunding` 으로 두며 `settle_required` 로 답한다 — 카드의 나머지는 청구된 채라, 관리자가 `refunded` 로 수동 정리하고(`restore` 는 `partial_cancel` 로 거절된다) 잔고를 손으로 맞춘다. 거절됐어도 그 결제의 전체 취소 재통보가 와 있으면 오류가 아니라 `refunded` 로 마친 결제로 답한다.',
   PAYMENT_GATEWAY_ERROR:
     'PG 에 닿지 못했거나 결과를 알 수 없다(502). 다른 5xx 처럼 본문에 내부 사정을 담지 않는다. 환불이면 `refunding` 으로 남으니 다시 시도하거나, 가맹점 관리자에서 확인한 뒤 수동 정리한다.',
   INTERNAL: '그 밖의 서버 오류. 본문에 내부 사정을 담지 않는다.',

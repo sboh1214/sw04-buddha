@@ -1,9 +1,9 @@
 import { schema, type Db } from '@buddha/db';
 import { type PaymentStatus, type UserBalanceEvent } from '@buddha/shared';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
 import { balanceEvent } from '../wallet/wallet.service.js';
-import { classifyCancel, parseKrw } from './smartro/smartro-protocol.js';
+import { APPROVAL_SUCCESS_CODES, classifyCancel, parseKrw } from './smartro/smartro-protocol.js';
 
 /** The handle `db.transaction` hands its callback; @buddha/db exports no alias for it. */
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
@@ -148,16 +148,77 @@ export async function netCancelAmount(db: Db | Tx, paymentId: string): Promise<n
 }
 
 /**
- * The amount of the approval a full cancel of `payment` cancels: its price — except for a
- * net-cancelled (`cancelled`) payment, whose approval may have been for another amount (that is
- * why it was net-cancelled): what its net cancel asked to cancel (netCancelAmount), else the price.
+ * The amount of the approval a full cancel of `payment` cancels. A payment has one approval,
+ * which a net cancel cancels whole.
+ * - A credited payment (`succeeded`, `refunding`, `refunded`): its price. Every credit took an
+ *   approval for the price only (the ReturnUrl's, the approval 재통보's and a settle credit's
+ *   checks), so a net cancel recorded before it — an answer for another amount, which the PG
+ *   refused to cancel, then a verified record for the price — says nothing of what it approved.
+ * - One not credited (`pending`, `failed`, `cancelled`):
+ *   1. what a net cancel of it asked to cancel (netCancelAmount) — an approval for another
+ *      amount is why it was net-cancelled, also when the PG refused that cancel and the payment
+ *      is `pending` again (never creditable: its amount is not the price);
+ *   2. for a `cancelled` one with none recorded yet — its net cancel is still waiting on the PG,
+ *      which may send the cancel 재통보 first, or its process died — the amount of the approval
+ *      it is cancelling (approvalAmount), which is what the net cancel asks for;
+ *   3. the price.
  */
 export async function approvedAmountOf(
   db: Db | Tx,
-  payment: { id: string; status: PaymentStatus; priceKrw: number },
+  payment: { id: string; status: PaymentStatus; providerRef: string | null; priceKrw: number },
 ): Promise<number> {
-  if (payment.status !== 'cancelled') return payment.priceKrw;
-  return (await netCancelAmount(db, payment.id)) ?? payment.priceKrw;
+  if (!UNCREDITED.has(payment.status)) return payment.priceKrw;
+  const netCancelled = await netCancelAmount(db, payment.id);
+  if (netCancelled !== undefined) return netCancelled;
+  if (payment.status === 'cancelled') {
+    const approved = await approvalAmount(db, payment);
+    if (approved !== undefined) return approved;
+  }
+  return payment.priceKrw;
+}
+
+/** Statuses of a payment whose approval, if any, was never credited (approvedAmountOf). */
+const UNCREDITED: ReadonlySet<PaymentStatus> = new Set<PaymentStatus>([
+  'pending',
+  'failed',
+  'cancelled',
+]);
+
+/**
+ * The Amt of the payment's newest successful approval on record — our approval's answer or the
+ * result inquiry's — under its `provider_ref` (the Tid a net cancel reserves the payment with;
+ * an answer that names no Tid counts too, as netCancel then cancels under the authentication's).
+ * Undefined when none carries a readable amount.
+ */
+async function approvalAmount(
+  db: Db | Tx,
+  payment: { id: string; providerRef: string | null },
+): Promise<number | undefined> {
+  const rows = await db
+    .select({ payload: schema.paymentEvents.payload })
+    .from(schema.paymentEvents)
+    .where(
+      and(
+        eq(schema.paymentEvents.paymentId, payment.id),
+        inArray(schema.paymentEvents.type, ['approval', 'approval_inquiry']),
+        inArray(schema.paymentEvents.resultCode, [...APPROVAL_SUCCESS_CODES]),
+      ),
+    )
+    .orderBy(desc(schema.paymentEvents.id));
+  for (const row of rows) {
+    const fields = row.payload as Record<string, unknown> | null;
+    const tid = fields?.Tid;
+    if (typeof tid === 'string' && tid.length > 0 && tid !== payment.providerRef) continue;
+    const amt = fields?.Amt;
+    const amount =
+      typeof amt === 'number'
+        ? parseKrw(String(amt))
+        : typeof amt === 'string'
+          ? parseKrw(amt)
+          : null;
+    if (amount !== null) return amount;
+  }
+  return undefined;
 }
 
 /**
@@ -178,8 +239,8 @@ export interface CancelNotice {
  * - `full`: the whole approval was cancelled — StateCd 1 (전취소) or 2 (후취소), a ResultCode
  *   classifyCancel reads as `cancelled` for the payment's method (`payments.method`, else the
  *   notice's own PayMethod), and the shape of a full cancel: no Otid other than its own Tid, and
- *   no Amt other than the approval's (`priceKrw`: approvedAmountOf — the payment's price, or what
- *   a net cancel of an approval for another amount asked to cancel).
+ *   no Amt other than the approval's (`priceKrw`: approvedAmountOf — the payment's price, or the
+ *   amount of an approval for another amount, which a net cancel cancels).
  * - `partial`: a cancel that went through for PART of the amount. The manual sets Otid "부분취소의
  *   경우" to the original Tid (retryModule) — a partial cancel has a Tid of its own (cancelModule:
  *   PTid) — and its Amt is not the whole amount. This service only ever cancels in full (owner

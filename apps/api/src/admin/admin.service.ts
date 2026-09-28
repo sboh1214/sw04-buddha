@@ -82,7 +82,7 @@ const APPROVAL_UNKNOWN = codeList(APPROVAL_UNKNOWN_CODES);
  *   without a ResultCode — the payment failed on something else's word) or answered the PG's own
  *   failure rather than a decline (isApprovalUnknown: 9999, W999, … — it still fails the payment,
  *   DESIGN §5.4), or an approval 재통보 (StateCd 0, a success code) left it uncredited (its Mid or
- *   amount did not match).
+ *   amount did not match, or a cancel 재통보 of the card on record held it back).
  * Only SmartroPay rows: the settle refuses the rest (a mock refund is simply retried).
  */
 const needsReview = sql<boolean>`(${schema.payments.provider} = 'smartro' and (

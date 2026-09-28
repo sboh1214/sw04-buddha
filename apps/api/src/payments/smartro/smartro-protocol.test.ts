@@ -164,6 +164,8 @@ describe('result codes', () => {
       'W028',
       'W029',
       'W030',
+      'W051',
+      'W038',
       'W299',
       'NP98',
       'NP99',
@@ -177,8 +179,21 @@ describe('result codes', () => {
     ]) {
       expect({ code, unknown: isApprovalUnknown(code) }).toEqual({ code, unknown: true });
     }
-    // Declines (the card company or the easy-pay said no), a success, nothing at all.
-    for (const code of ['3011', '3002', '3095', 'KP01', 'NP01', 'PP01', '3001', '', undefined]) {
+    // Declines (the card company, its VAN or the easy-pay said no — 3002 and 3095 included), the
+    // inquiry's own failures, a success, nothing at all.
+    for (const code of [
+      '3011',
+      '3002',
+      '3095',
+      'KP01',
+      'NP01',
+      'PP01',
+      '6017',
+      'W036',
+      '3001',
+      '',
+      undefined,
+    ]) {
       expect({ code, unknown: isApprovalUnknown(code) }).toEqual({ code, unknown: false });
     }
     // No code is both.

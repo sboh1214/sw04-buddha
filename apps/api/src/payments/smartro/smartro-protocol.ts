@@ -101,7 +101,11 @@ export function isApprovalSuccess(resultCode: string | null | undefined): boolea
  * the easy-pays ShowEasyPay leaves visible) and the payment server's own error codes:
  * - undefined or system errors, retry later: 9999 (미지정 오류 / 시스템에러 - 잠시 후 재거래;
  *   토스페이: 정의되지 않은 코드… PG사로 문의), W999 (시스템에러 잠시후 재 거래);
- * - the payment server's internal failures: W027–W030 (내부 처리 오류, DB Insert/Update/Select);
+ * - the payment server's internal failures: W027–W030 (내부 처리 오류, DB Insert/Update/Select),
+ *   W051 (데이터 저장 실패, code.do_level_ L1647–1648 — its own storage failing, after the card
+ *   company may have approved);
+ * - W038 (중복 결제 요청, code.do_level_ L1621–1622): an approval asked again for a transaction
+ *   already on its way, which only a charge that went through (or is going through) can meet;
  * - a connection failing: W299 ({변수} 연결오류), NP98 / NP99 (잠시 후 재거래, 네이버페이 연결
  *   오류 / 오류), SmilePay 9998 (연결 실패), 1101 (응답 지연으로인한 실패), 1032 (서비스
  *   지연처리 발생);
@@ -109,6 +113,16 @@ export function isApprovalSuccess(resultCode: string | null | undefined): boolea
  *   PI51 (서버에서 에러가 발생), 티머니페이 6001 (처리중 에러가 발생).
  * Kept apart from classifyCancel's UNKNOWN_CODES, which answer a cancel, not an approval — but
  * every generic one of those (NP98, NP99, LP99, 9999, SmilePay's 1101 and 9998) is here too.
+ * A false positive only costs a person one look, so a code in doubt is flagged.
+ *
+ * Deliberately NOT here: 3002 (VAN실패 응답, L571–572) and 3095 (카드사 실패 응답, L625–626).
+ * Each is the card side's own answer — the VAN, or the card company, answered and said no — so
+ * the charge was refused, not left unknown; flagging them would flag every such decline. (The
+ * manual gives them no text beyond that; if one ever turns out to be a VAN link failure, it
+ * belongs here.) Nor are the
+ * generic easy-pay "결제 실패" codes (PP01, KP01, NP01, S999: declines), the result inquiry's own
+ * codes (6017, 6021, W036: an inquiry fails no payment), or codes of methods a CARD window never
+ * reaches (A101, 4008, TS51, W210, W399, PS51).
  */
 export const APPROVAL_UNKNOWN_CODES: readonly string[] = [
   '9999',
@@ -117,6 +131,8 @@ export const APPROVAL_UNKNOWN_CODES: readonly string[] = [
   'W028',
   'W029',
   'W030',
+  'W051',
+  'W038',
   'W299',
   'NP98',
   'NP99',

@@ -14,7 +14,12 @@ import { DB } from '../infra/db/db.provider.js';
 import { recordPaymentEvent } from '../payments/payment-events.js';
 import { type CancelOutcome, type PaymentProvider } from '../payments/payment-provider.js';
 import { PaymentProviderRegistry } from '../payments/payment-provider.registry.js';
-import { hasCancelNotice, markRefunded, restoreClawBack } from '../payments/payment-transitions.js';
+import {
+  hasCancelNotice,
+  markRefunded,
+  recordedCancelNotices,
+  restoreClawBack,
+} from '../payments/payment-transitions.js';
 import { MarketPublisher } from '../realtime/market-publisher.js';
 import { balanceEvent, type PaymentRow } from '../wallet/wallet.service.js';
 import { AdminService } from './admin.service.js';
@@ -66,7 +71,9 @@ export function refundNotAllowed(reason: RefusalReason, message?: string): AppEr
  * a retry skips the claw-back and asks the PG again (2013 "already cancelled" finishes it).
  * Whatever the answer, a verified 재통보 of a full cancel of the approval (hasCancelNotice) is
  * the PG's word that the card is cancelled, and finishes the refund instead of putting the P
- * back — checked again under the payment row's lock before any P goes back.
+ * back — checked again under the payment row's lock before any P goes back. A verified 재통보 of
+ * a PARTIAL cancel (made in the merchant admin) keeps a refused refund `refunding` instead: part
+ * of the card is still charged, so an admin settles it and sets the P by hand.
  *
  * A RETRY NEVER PUTS THE P BACK BY ITSELF. Its first attempt may have cancelled the card before
  * the answer was lost, so a refusal now may only mean "not again" in a code we do not know as
@@ -354,6 +361,11 @@ export class PaymentRefundService {
    *   PG's word that the card IS cancelled: the refund finishes instead, answering normally;
    * - no longer `refunding` — the 재통보 finished it, or anything else moved it — nothing is
    *   put back: `refunded` answers normally, anything else PAYMENT_GATEWAY_REFUSED;
+   * - a PARTIAL cancel 재통보 on record (made in the merchant admin): part of the card is
+   *   cancelled and the rest still charged, so neither all of the P nor none of it is owed —
+   *   nothing is put back and the payment stays `refunding`, for an admin to settle `refunded`
+   *   and adjust the balance by hand (PAYMENT_GATEWAY_REFUSED `settle_required`, as holdRefused;
+   *   the settle refuses `restore` on it: `partial_cancel`);
    * - no longer this attempt's (`stamp`): a retry took it over and may be cancelling the card
    *   right now, so nothing is put back and it is left to that retry, or a settle
    *   (PAYMENT_GATEWAY_REFUSED `settle_required`, as holdRefused).
@@ -369,7 +381,7 @@ export class PaymentRefundService {
         tx,
       ): Promise<
         | { kind: 'restored'; event: UserBalanceEvent }
-        | { kind: 'finished' | 'taken' }
+        | { kind: 'finished' | 'partial' | 'taken' }
         | { kind: 'moved'; status: PaymentStatus | undefined }
       > => {
         await tx
@@ -393,10 +405,12 @@ export class PaymentRefundService {
           payload: outcome.payload,
         });
         if (locked?.status !== 'refunding') return { kind: 'moved', status: locked?.status };
-        if (await hasCancelNotice(tx, locked)) {
+        const notices = await recordedCancelNotices(tx, locked);
+        if (notices.full) {
           if (!(await markRefunded(tx, locked.id, at))) throw this.movedUnderLock();
           return { kind: 'finished' };
         }
+        if (notices.partial) return { kind: 'partial' };
         if (locked.updatedAt.getTime() !== stamp.getTime()) return { kind: 'taken' };
         const event = await restoreClawBack(tx, locked.id, at);
         if (!event) throw this.movedUnderLock();
@@ -436,6 +450,15 @@ export class PaymentRefundService {
         throw new AppError('PAYMENT_GATEWAY_REFUSED', {
           message: 'The payment gateway refused the cancel',
           details: [gateway],
+        });
+      case 'partial':
+        this.logger.error(
+          `refund of payment ${payment.id}: ${provider.name} refused the cancel (${code}), and a partial cancel 재통보 of the card is on record; nothing restored, left refunding — check the card in the merchant admin, settle it refunded (POST /admin/payments/${payment.id}/settle; a settle restore is refused: partial_cancel), then adjust the balance by hand (POST /admin/users/:id/balance-adjust)`,
+        );
+        throw new AppError('PAYMENT_GATEWAY_REFUSED', {
+          message:
+            'The payment gateway refused the cancel, and a partial cancel of this card is on record; the payment stays refunding until it is settled',
+          details: [gateway, { path: ['payment'], message: 'settle_required' }],
         });
       case 'taken':
         this.logger.error(
@@ -482,8 +505,13 @@ export class PaymentRefundService {
       resultMessage: outcome.resultMessage,
       payload: outcome.payload,
     });
+    // A partial cancel 재통보 on record leaves one settle: a restore is refused (partial_cancel).
+    const { partial } = await recordedCancelNotices(this.db, { ...payment, status: 'refunding' });
+    const fix = partial
+      ? `a partial cancel 재통보 of the card is on record — settle it refunded (POST /admin/payments/${payment.id}/settle; a settle restore is refused: partial_cancel), then adjust the balance by hand (POST /admin/users/:id/balance-adjust)`
+      : `then settle it (POST /admin/payments/${payment.id}/settle: refunded or restore)`;
     this.logger.error(
-      `refund of payment ${payment.id}: ${provider.name} refused the retried cancel (${outcome.resultCode ?? 'no code'}) of ${String(payment.providerRef)}; left refunding — check the card in the merchant admin, then settle it (POST /admin/payments/${payment.id}/settle: refunded or restore)`,
+      `refund of payment ${payment.id}: ${provider.name} refused the retried cancel (${outcome.resultCode ?? 'no code'}) of ${String(payment.providerRef)}; left refunding — check the card in the merchant admin; ${fix}`,
     );
     throw new AppError('PAYMENT_GATEWAY_REFUSED', {
       message:

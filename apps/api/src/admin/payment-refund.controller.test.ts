@@ -550,7 +550,19 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
 
     // The first attempt may have cancelled the card: this "no" must not give the P back.
     pg.onCancel = () => ({ ResultCode: '2002', ResultMsg: '취소 실패' });
-    const retry = await refund(id, '재시도');
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    let retry: Awaited<ReturnType<typeof refund>>;
+    try {
+      retry = await refund(id, '재시도');
+      // No partial cancel on record: either settle fits, as the card turns out.
+      expect(error).toHaveBeenCalledWith(
+        expect.stringMatching(
+          /refused the retried cancel \(2002\).*then settle it \(POST \/admin\/payments\/[0-9a-f-]+\/settle: refunded or restore\)$/,
+        ),
+      );
+    } finally {
+      error.mockRestore();
+    }
     expect(retry.statusCode).toBe(409);
     expect(retry.json()).toMatchObject({
       error: {
@@ -795,7 +807,7 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
     expectLedgerChain(ledger, SIGNUP_BONUS_P);
   });
 
-  it("never finishes a refund on a recorded partial cancel's notice, even the PG refusing", async () => {
+  it("never finishes a refund on a recorded partial cancel's notice, nor puts its P back", async () => {
     // An operator cancelled 1,000원 of a charge in the merchant admin while it was `succeeded`:
     // recorded, nothing moved. A refund then asks for the whole amount, which the PG refuses.
     const { id, tid } = await smartroCharge();
@@ -806,22 +818,106 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
       payload: { Tid: testTid(), Otid: tid, StateCd: '2', ResultCode: '2001', Amt: '1000' },
     });
     pg.onCancel = () => ({ ResultCode: '2031', ResultMsg: '전체금액취소 불가' });
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
     const res = await refund(id);
-    // Not `refunded`: 8,700원 of the card is still charged. The P goes back as for any refusal.
+    try {
+      expect(error).toHaveBeenCalledWith(
+        expect.stringMatching(/partial cancel 재통보 of the card is on record.*settle it refunded/),
+      );
+    } finally {
+      error.mockRestore();
+    }
+    // Not `refunded` — 8,700원 of the card is still charged — and not put back either: 1,000원
+    // of it is not. It stays `refunding`, the P out, for an admin to settle refunded and adjust
+    // the balance by hand.
     expect(res.statusCode).toBe(409);
-    expect(await paymentRow(id)).toMatchObject({ status: 'succeeded' });
-    expectLedgerChain(await ledgerOf(member.id), SIGNUP_BONUS_P + 10_000n);
-
-    // A retry of a stuck refund does not finish on it either.
-    pg.onCancel = () => {
-      throw new SmartroUnreachableError('timed out');
-    };
-    expect((await refund(id)).statusCode).toBe(502);
-    pg.onCancel = () => ({ ResultCode: '2031', ResultMsg: '전체금액취소 불가' });
-    expect((await refund(id, '재시도')).json()).toMatchObject({
-      error: { details: [{ path: ['gateway'] }, { message: 'settle_required' }] },
+    expect(res.json()).toMatchObject({
+      error: {
+        code: 'PAYMENT_GATEWAY_REFUSED',
+        details: [
+          { path: ['gateway'], message: '2031 전체금액취소 불가' },
+          { path: ['payment'], message: 'settle_required' },
+        ],
+      },
     });
+    expect(await paymentRow(id)).toMatchObject({ status: 'refunding', refundedAt: null });
+    const ledger = await ledgerOf(member.id);
+    expect(ledger.map((entry) => entry.type)).toEqual(['BONUS', 'DEPOSIT', 'PAYMENT_CANCEL']);
+    expectLedgerChain(ledger, SIGNUP_BONUS_P);
+    expect((await eventsOf(id)).at(-1)).toMatchObject({
+      type: 'refund_cancel',
+      resultCode: '2031',
+    });
+
+    // A retry does not finish on it either, and puts nothing back; its log names the one settle
+    // left, as a restore is refused (partial_cancel).
+    const retryError = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    try {
+      expect((await refund(id, '재시도')).json()).toMatchObject({
+        error: { details: [{ path: ['gateway'] }, { message: 'settle_required' }] },
+      });
+      expect(retryError).toHaveBeenCalledWith(
+        expect.stringMatching(
+          /refused the retried cancel \(2031\).*a partial cancel 재통보 of the card is on record — settle it refunded \(POST \/admin\/payments\/[0-9a-f-]+\/settle; a settle restore is refused: partial_cancel\), then adjust the balance by hand/,
+        ),
+      );
+      expect(retryError).not.toHaveBeenCalledWith(expect.stringContaining('refunded or restore'));
+    } finally {
+      retryError.mockRestore();
+    }
     expect(await paymentRow(id)).toMatchObject({ status: 'refunding' });
+    expect(await ledgerOf(member.id)).toHaveLength(3);
+  });
+
+  it('holds a credited payment to its price, whatever a refused net cancel asked for', async () => {
+    // The PG's records disagree on the approval: its answer said 5,000원 — net-cancelled, which
+    // the PG refused — and a verified record then said 9,700 and credited it. A later cancel of
+    // 5,000 under the approval's Tid, without an Otid, is a PARTIAL cancel of what was credited,
+    // not a full cancel of what the net cancel asked for.
+    const { id, tid } = await smartroCharge();
+    await t.db.insert(schema.paymentEvents).values({
+      paymentId: id,
+      type: 'net_cancel',
+      resultCode: '2002',
+      payload: { outcome: 'refused', cancelAmt: 5000 },
+    });
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    try {
+      const notice = await postNotify(
+        notifyForm({
+          paymentId: id,
+          priceKrw: 9_700,
+          tid,
+          amt: '5000',
+          resultCode: '2001',
+          stateCd: '2',
+        }),
+      );
+      expect(notice.body).toBe('OK');
+      expect(error).toHaveBeenCalledWith(
+        expect.stringMatching(
+          /reports a partial cancel .*Amt 5000 of 9700.*no settle applies to a succeeded payment/,
+        ),
+      );
+      expect(await paymentRow(id)).toMatchObject({ status: 'succeeded' });
+
+      pg.onCancel = () => ({ ResultCode: '2031', ResultMsg: '전체금액취소 불가' });
+      const res = await refund(id);
+      // Not `refunded` on it: 4,700원 of the card is still charged. Nor put back.
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({
+        error: {
+          code: 'PAYMENT_GATEWAY_REFUSED',
+          details: [{ path: ['gateway'] }, { path: ['payment'], message: 'settle_required' }],
+        },
+      });
+    } finally {
+      error.mockRestore();
+    }
+    expect(await paymentRow(id)).toMatchObject({ status: 'refunding', refundedAt: null });
+    const ledger = await ledgerOf(member.id);
+    expect(ledger.map((entry) => entry.type)).toEqual(['BONUS', 'DEPOSIT', 'PAYMENT_CANCEL']);
+    expectLedgerChain(ledger, SIGNUP_BONUS_P);
   });
 
   it('finishes an unanswered cancel, first attempt or retry, once a 재통보 reported it cancelled', async () => {
@@ -1004,6 +1100,76 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
       error.mockRestore();
     }
     expect(await paymentRow(id)).toMatchObject({ status: 'refunded', providerRef: tid });
+    const ledger = await ledgerOf(member.id);
+    expect(ledger.map((entry) => entry.type)).toEqual(['BONUS', 'DEPOSIT', 'PAYMENT_CANCEL']);
+    expectLedgerChain(ledger, SIGNUP_BONUS_P);
+  });
+
+  it('words a taken-over refusal by the partial cancel on record: only a settle refunded fits', async () => {
+    // A first attempt a retry took over, refused after a partial cancel 재통보 landed: both keep
+    // the P out, but the partial cancel decides what the admin is told — a restore is refused
+    // (partial_cancel), so "the retry decides it, or settle refunded or restore" would mislead.
+    const { id, tid } = await smartroCharge();
+    let refuseFirst: () => void = () => undefined;
+    const firstGate = new Promise<void>((resolve) => (refuseFirst = resolve));
+    const answers = [
+      async () => {
+        await firstGate;
+        return { ResultCode: '2002', ResultMsg: '취소 실패' };
+      },
+      () => Promise.resolve({ ResultCode: '2031', ResultMsg: '전체금액취소 불가' }),
+    ];
+    pg.onCancel = () => answers[pg.cancels.length - 1]!();
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    try {
+      const first = refund(id).then((res) => res);
+      await vi.waitFor(() => {
+        expect(pg.cancels).toHaveLength(1);
+      });
+      await t.db
+        .update(schema.payments)
+        .set({ updatedAt: sql`now() - interval '70 seconds'` })
+        .where(eq(schema.payments.id, id));
+      // The retry is refused too, with the partial cancel already on record.
+      await t.db.insert(schema.paymentEvents).values({
+        paymentId: id,
+        type: 'notify',
+        resultCode: '2001',
+        payload: { Tid: testTid(), Otid: tid, StateCd: '2', ResultCode: '2001', Amt: '1000' },
+      });
+      const retry = await refund(id, '재시도');
+      expect(retry.json()).toMatchObject({
+        error: { details: [{ path: ['gateway'] }, { message: 'settle_required' }] },
+      });
+      expect(pg.cancels).toHaveLength(2);
+
+      error.mockClear();
+      refuseFirst();
+      const late = await first;
+      expect(late.statusCode).toBe(409);
+      expect(late.json()).toMatchObject({
+        error: {
+          code: 'PAYMENT_GATEWAY_REFUSED',
+          message:
+            'The payment gateway refused the cancel, and a partial cancel of this card is on record; the payment stays refunding until it is settled',
+          details: [
+            { path: ['gateway'], message: '2002 취소 실패' },
+            { path: ['payment'], message: 'settle_required' },
+          ],
+        },
+      });
+      expect(error).toHaveBeenCalledWith(
+        expect.stringMatching(
+          /partial cancel 재통보 of the card is on record; nothing restored, left refunding .*settle it refunded/,
+        ),
+      );
+      expect(error).not.toHaveBeenCalledWith(
+        expect.stringContaining('after a retry took the payment over'),
+      );
+    } finally {
+      error.mockRestore();
+    }
+    expect(await paymentRow(id)).toMatchObject({ status: 'refunding', refundedAt: null });
     const ledger = await ledgerOf(member.id);
     expect(ledger.map((entry) => entry.type)).toEqual(['BONUS', 'DEPOSIT', 'PAYMENT_CANCEL']);
     expectLedgerChain(ledger, SIGNUP_BONUS_P);

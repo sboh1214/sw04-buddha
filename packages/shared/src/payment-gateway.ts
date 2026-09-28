@@ -136,8 +136,9 @@ export const SETTLE_TID_MAX_LENGTH = 64;
 /**
  * `POST /admin/payments/:id/settle`: the outcome and why (required, audited like a refund).
  * `tid`, read only for `credit`: the approval's Tid (거래번호) as the merchant admin shows it —
- * required when no approval of the payment is on record (VALIDATION_ERROR path `tid`), and when
- * one is, it must be that one's. Leave it out rather than sending it empty.
+ * required when no successful approval of the payment is on record (none answered, or it
+ * answered a PG error: VALIDATION_ERROR path `tid`), and when one is, it must be that one's.
+ * Leave it out rather than sending it empty.
  */
 export const settlePaymentBodySchema = z
   .object({
