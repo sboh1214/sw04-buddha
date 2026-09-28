@@ -275,7 +275,9 @@ gh workflow run deploy.yml --ref main -f image_tag=<현재 sha>     # .env 재�
 
 - 값은 dotenv 줄로 들어가 compose가 보간하므로 validation이 `$ " ' #`·공백·비ASCII를 거절한다(상점키 앞 32자는 취소 요청의 AES 키이기도 하다). `payment_provider = "smartro"`인데 가맹점 값 셋 중 하나라도 비면 plan이 거절한다 — api도 그 조합으로는 기동하지 않는다.
 - terraform만 바뀐 push는 배포를 돌리지 않으므로(`paths-ignore: terraform/**`) 워크플로를 손으로 돌린다. 키 교체도 같은 두 단계다.
-- 되돌리기는 `payment_provider = "mock"`으로 같은 두 단계다. 가맹점 값을 남겨 두면 이미 진행 중인 스마트로페이 결제의 콜백과 환불은 계속 동작한다(QUESTIONS A-PG-1).
+- 되돌리기는 `payment_provider = "mock"`으로 같은 두 단계다. 가맹점 값을 남겨 두면 이미 진행 중인 스마트로페이 결제의 콜백과 환불은 계속 동작한다(QUESTIONS A-PG-1). **`smartro_mode`·`smartro_mid`를 바꾸는 것은 다르다**: 취소는 결제가 만들어진 MID·모드가 아니라 지금 설정된 값으로 가므로, 바꾸기 전의 결제는 앱에서 환불할 수 없고 예전 모드의 가맹점 관리자에서만 취소된다.
+- **STG 운영 기간은 짧게.** `smartro_mode = "STG"`인 동안의 승인은 전부 테스트다 — 운영자 계정으로만 결제한다(STG에서 적립된 P는 실제 돈이 뒷받침하지 않는다). 카카오페이 카드의 테스트 결제는 당일 취소하지 않으면 청구된다. REAL로 바꾸기 **전에** STG의 `succeeded` 결제를 앱에서 환불하고 「확인 필요」 행을 모두 수동 정리한다 — 앱이 환불할 수 없는 결제(P를 썼거나 7일이 지난 것)는 아직 STG인 동안 STG 가맹점 관리자에서 취소한다. 확인 목록과 전환 절차는 `docs/QUESTIONS.md` Q-PG-9.
+- **결과를 모르는 결제.** API가 스스로 결론을 내지 못한 결제는 `/admin/payments`에 「확인 필요」 배지가 붙는다 — 승인의 답·재통보가 오지 않은 잡힌 결제와 환불 중에 남은 결제는 2분 뒤, 답이 분명하지 않은 망취소는 곧바로, PG 오류 코드로 답했거나 적립되지 않은 승인 재통보가 있는 실패 결제는 2분 뒤다. 가맹점 관리자에서 확인한 뒤 그 행의 「수동 정리」(`POST /api/v1/admin/payments/:id/settle`, 마지막 변경 2분 뒤부터)로 닫는다 — 잔고 조정으로 충전하지 않는다(ADR-0042 추기, QUESTIONS A-PG-3).
 - 가맹점 관리자(STG `https://newbiz.smilebiz.co.kr`, REAL `https://www.smilebiz.co.kr`)에서 재통보 URL `https://buddha.sboh.dev/api/v1/payments/smartro/notify`를 지불수단별로 넣고 **신통보**를 고른다. api는 그 모드의 스마트로페이 서버 IP에서 온 재통보만 받는다. ReturnUrl·StopUrl은 결제마다 실려 가므로 등록하지 않는다.
 - 스마트로페이가 가맹점 서버 IP를 물으면 EIP `13.124.223.103`(`terraform output -raw public_ip`)이다 — SG의 egress가 열려 있고 컨테이너의 승인·취소 호출은 이 주소로 나간다. EIP를 다시 만들면 스마트로페이에도 다시 알려야 한다.
 - `SMARTRO_APPROVAL_BASE_URL`은 `templates/env.tftpl`에 넣지 않는다. 로컬 가짜 PG용이고 api가 production에서 기동을 거절한다.

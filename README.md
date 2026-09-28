@@ -60,7 +60,7 @@ pnpm dev                         # web(3000) · api(4000) · worker + 공유 패
 | `/onboarding`                                                                                      | 실명·휴대전화 입력(ADR-0043). 로그인했는데 아직 입력하지 않은 계정(소셜 로그인·기존 계정·시드 관리자)은 인증·약관·`/charge`를 뺀 어느 화면에서든(관리자 화면 포함) 여기로 온다        |
 | `/terms` `/privacy` `/refund`                                                                      | 이용약관·개인정보처리방침·환불정책(공개, ADR-0044). 사업자 정보는 `apps/web/src/legal/business-info.ts` 한 곳에 있고(지금은 `미정`), 모든 화면 아래의 푸터가 이 셋과 `/charge`를 건다 |
 | `/admin/markets` `/admin/markets/[id]` `/admin/disputes`                                           | 시장 생성·수정·열기·마감·정산 제안·결과 변경·무효, 이의 수용/기각                                                                                                                     |
-| `/admin/users` `/admin/charge-packages` `/admin/coupons` `/admin/payments` `/admin/audit-failures` | 계정·상품·쿠폰·결제(환불 — 승인 후 7일·미사용·전액, ADR-0042)·원장 감사 실패                                                                                                          |
+| `/admin/users` `/admin/charge-packages` `/admin/coupons` `/admin/payments` `/admin/audit-failures` | 계정·상품·쿠폰·결제(환불 — 승인 후 7일·미사용·전액 — 와 「확인 필요」 행의 수동 정리, ADR-0042)·원장 감사 실패                                                                        |
 
 ## 문제 해결
 
@@ -205,7 +205,7 @@ SMARTRO_MERCHANT_KEY=<발급받은 상점키>           # 32자 이상
 SMARTRO_CANCEL_PASSWORD=<가맹점 관리자의 취소 비밀번호>
 ```
 
-셋 중 하나라도 비면 API가 기동을 거절한다. mock으로 돌아가려면 `PAYMENT_PROVIDER=mock`이다 — 키를 남겨 두면 이미 진행 중인 스마트로페이 결제의 콜백과 환불은 계속 동작한다. 웹 CSP는 STG·REAL의 SDK 호스트를 모두 허용하므로 모드를 바꿔도 웹을 다시 빌드하지 않는다. `SMARTRO_APPROVAL_BASE_URL`은 로컬 가짜 PG를 가리키는 승인·취소 호스트이고(재통보의 발신 IP 검사도 끈다) 운영에서는 API가 거부한다.
+셋 중 하나라도 비면 API가 기동을 거절한다. mock으로 돌아가려면 `PAYMENT_PROVIDER=mock`이다 — 키를 남겨 두면 이미 진행 중인 스마트로페이 결제의 콜백과 환불은 계속 동작한다(`SMARTRO_MODE`·`SMARTRO_MID`를 바꾸는 것은 다르다 — 아래 STG 운영 기간). 웹 CSP는 STG·REAL의 SDK 호스트를 모두 허용하므로 모드를 바꿔도 웹을 다시 빌드하지 않는다. `SMARTRO_APPROVAL_BASE_URL`은 로컬 가짜 PG를 가리키는 승인·취소 호스트이고(재통보의 발신 IP 검사도 끈다) 운영에서는 API가 거부한다.
 
 **URL 셋.** 경로는 전부 `/api/v1/payments/smartro/` 아래이고 로그인 없이 열려 있다(PG가 부르는 계약이라 [docs/API.md](docs/API.md)에는 손으로 쓴 절로 있다).
 
@@ -222,7 +222,11 @@ SMARTRO_CANCEL_PASSWORD=<가맹점 관리자의 취소 비밀번호>
 
 **운영 전환.** 코드는 바꾸지 않는다. `terraform/terraform.tfvars`에 `payment_provider = "smartro"`와 `smartro_mode`·`smartro_mid`·`smartro_merchant_key`·`smartro_cancel_password`를 넣고 `terraform apply`(SSM `/tf-buddha/env` 갱신) → `gh workflow run deploy.yml --ref main -f image_tag=<현재 sha>`(`.env` 재렌더, 컨테이너 재생성). terraform만 바뀐 push는 배포를 돌리지 않는다. 되돌리기는 `payment_provider = "mock"`으로 같은 두 단계다. 값의 제약과 절차는 [terraform/README.md](terraform/README.md#smartropay-켜기키-교체). REAL은 STG에서 결제·취소·재통보를 확인한 뒤 REAL MID로 같은 절차다(QUESTIONS Q-PG-7).
 
-**환불**은 관리자 `/admin/payments`에서만 한다 — 승인 후 7일 안이고 그 결제의 P를 쓰지 않았을 때(사용 가능 잔고 ≥ 그 결제의 P), 결제 금액 전액을 카드 취소로 돌려주고 그 P 전부를 회수한다(오너 결정, ADR-0042). 회원은 고객센터로 요청한다(환불정책 `/refund`).
+**STG 운영 기간과 REAL 전환.** 운영이 `smartro_mode = "STG"`로 도는 동안의 승인은 전부 테스트다 — 운영자 계정으로만 결제하고 그 기간을 짧게 둔다(STG에서 적립된 P는 mock P처럼 실제 돈이 뒷받침하지 않는다). 카카오페이 카드의 테스트 결제는 당일 취소하지 않으면 실제로 청구된다(매뉴얼). 취소는 결제가 만들어진 MID·모드가 아니라 **지금 설정된** MID·모드로 가므로, REAL로 바꾸기 **전에** STG의 `succeeded` 결제를 앱에서 환불하고 「확인 필요」 행을 모두 수동 정리한다. 앱이 환불할 수 없는 결제(P를 썼거나 7일이 지난 것)는 아직 STG인 동안 STG 가맹점 관리자에서 취소한다 — 바꾼 뒤 남은 STG 결제는 STG 가맹점 관리자에서만 취소되고, 수동 정리의 P 충전도 기록된 STG 승인이 새 MID와 맞지 않아 거절된다(`approval_mismatch`). 확인 목록과 절차는 QUESTIONS Q-PG-9.
+
+**결과를 모르는 결제 — 수동 정리.** API가 스스로 결론을 내지 못한 스마트로페이 결제는 `/admin/payments`에 **「확인 필요」** 배지가 붙는다 — 승인의 답과 재통보가 모두 오지 않은 잡힌 결제와 환불 취소의 답이 분명하지 않아 환불 중에 남은 결제는 2분 뒤, 답이 분명하지 않은 망취소는 곧바로, PG 오류 코드로 답했거나 적립되지 않은 승인 재통보가 있는 실패 결제는 2분 뒤다. 가맹점 관리자에서 주문번호로 카드 거래를 확인한 뒤 그 행의 **「수동 정리」**(`POST /api/v1/admin/payments/:id/settle`, 마지막 변경 2분 뒤부터)로 닫는다 — 승인이면 P 충전(승인 기록이 없으면 가맹점 관리자의 승인 TID를 함께), 취소면 취소 확인, 승인이 없으면 실패, 환불 중이면 환불 완료 또는 P 복원. 결과를 모르는 결제를 잔고 조정으로 충전하지 않는다 — 결제 행이 그대로 남아 뒤늦은 재통보가 한 번 더 충전한다. 규칙은 ADR-0042 추기와 QUESTIONS A-PG-3.
+
+**환불**은 관리자 `/admin/payments`에서만 한다 — 승인 후 7일 안이고 그 결제의 P를 쓰지 않았을 때(사용 가능 잔고 ≥ 그 결제의 P), 결제 금액 전액을 카드 취소로 돌려주고 그 P 전부를 회수한다(오너 결정, ADR-0042). 회원은 고객센터로 요청한다(환불정책 `/refund`). PG가 **재시도**를 거절하면 P를 돌려주지 않고 「환불 처리 중」에 남긴다 — 첫 시도가 카드를 이미 취소했을 수 있어서다(부분 취소 통보가 있거나 재시도가 넘겨받은 첫 시도도 같다). 그 행은 수동 정리로 닫는다 — 부분 취소 통보가 있으면 환불 완료로 닫고 잔고 조정으로 맞춘다(QUESTIONS Q-PG-12).
 
 ## 스크립트
 

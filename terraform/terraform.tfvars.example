@@ -30,6 +30,12 @@ seed_admin_password = ""
 # a terraform-only push does not deploy). Visible ASCII only, no $ " ' # (dotenv/compose safety).
 # Register the notify URL https://buddha.sboh.dev/api/v1/payments/smartro/notify in the merchant
 # admin first (STG https://newbiz.smilebiz.co.kr, REAL https://www.smilebiz.co.kr; 신통보).
+# While smartro_mode is STG every approval is a test: pay from operator accounts only and keep the
+# window short. Before switching to REAL (or changing the MID), refund every STG payment in the
+# admin and settle every one marked for review: a cancel goes out with the mode/MID set now, so a
+# payment left from before can only be cancelled in its own merchant admin. Payments marked
+# "확인 필요" in /admin/payments are closed with its settle action ("수동 정리"). See
+# terraform/README.md "SmartroPay 켜기·키 교체" and docs/QUESTIONS.md Q-PG-9.
 # payment_provider        = "smartro"
 # smartro_mode            = "STG"   # "REAL" with the live MID, once STG checks out
 # smartro_mid             = ""      # at most 10 characters
