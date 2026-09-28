@@ -74,7 +74,7 @@ export function smartroCallbackUrl(
  * PI00 PINPAY, 0000 SAMSUNGPAY/TOSS/TMONEYPAY/SMILEPAY and the rest. 4100/4110 (a virtual
  * account issued or paid) are deliberately absent: we only ever ask for CARD.
  */
-const APPROVAL_SUCCESS_CODES: ReadonlySet<string> = new Set([
+export const APPROVAL_SUCCESS_CODES: readonly string[] = [
   '3001',
   '4000',
   'A000',
@@ -84,17 +84,85 @@ const APPROVAL_SUCCESS_CODES: ReadonlySet<string> = new Set([
   'LP00',
   'PI00',
   '0000',
-]);
+];
 
-/** 2001 cancelled; 2013 already cancelled — a retried cancel whose first answer was lost. */
-const CANCEL_SUCCESS_CODES: ReadonlySet<string> = new Set(['2001', '2013']);
+const APPROVAL_SUCCESS: ReadonlySet<string> = new Set(APPROVAL_SUCCESS_CODES);
 
-export function isApprovalSuccess(resultCode: string | undefined): boolean {
-  return resultCode !== undefined && APPROVAL_SUCCESS_CODES.has(resultCode);
+export function isApprovalSuccess(resultCode: string | null | undefined): boolean {
+  return typeof resultCode === 'string' && APPROVAL_SUCCESS.has(resultCode);
 }
 
-export function isCancelSuccess(resultCode: string | undefined): boolean {
-  return resultCode !== undefined && CANCEL_SUCCESS_CODES.has(resultCode);
+/** A KRW amount as SmartroPay writes it (digits only, above zero), or null. */
+export function parseKrw(value: string | undefined): number | null {
+  if (value === undefined || !/^\d{1,12}$/.test(value)) return null;
+  const amount = Number(value);
+  return amount > 0 ? amount : null;
+}
+
+/**
+ * What a cancel answer says about the card (the 통합코드 table):
+ * - `cancelled`: it is cancelled now, or was already.
+ * - `refused`: a definite "no" — the card stays charged, so a refund may put the P back.
+ * - `unknown`: the card may or may not be cancelled — never put P back or reopen on this.
+ */
+export type CancelClassification = 'cancelled' | 'refused' | 'unknown';
+
+/**
+ * Cancelled whatever the method: 2001 취소 성공, 2013 기취소 (a retried cancel whose first
+ * answer was lost), and the easy-pay "already cancelled" codes, whose prefix names their payer
+ * (NP17 NaverPay, LP17 L.pay: 이미 전체 취소된 결제; PI15 PinPay: 이미 취소 완료된 결제).
+ */
+const CANCELLED_CODES: ReadonlySet<string> = new Set(['2001', '2013', 'NP17', 'LP17', 'PI15']);
+
+/**
+ * "Already cancelled" codes that mean it only for ONE method: for CARD, 2015 is 해당거래
+ * 취소실패 — an ordinary refusal — and only SmilePay uses it for 기취소 거래; 3402 is T-money's.
+ */
+const CANCELLED_CODES_BY_METHOD: Readonly<Record<string, ReadonlySet<string>>> = {
+  SMILEPAY: new Set(['2015']),
+  TMONEYPAY: new Set(['3402']),
+};
+
+/**
+ * Unknown whatever the method: NP19/NP24 and LP19/LP24 (a previous cancel is not finished and
+ * must be retried), 2045 취소 차수 불일치 (a CancelSeq=1 resend after a completed cancel), and
+ * the unspecified or connection errors NP98, NP99, LP99 and 9999.
+ */
+const UNKNOWN_CODES: ReadonlySet<string> = new Set([
+  'NP19',
+  'NP24',
+  'LP19',
+  'LP24',
+  '2045',
+  'NP98',
+  'NP99',
+  'LP99',
+  '9999',
+]);
+
+/** SmilePay's own "no answer": 1101 응답 지연으로 인한 실패, 9998 연결 실패. */
+const UNKNOWN_CODES_BY_METHOD: Readonly<Record<string, ReadonlySet<string>>> = {
+  SMILEPAY: new Set(['1101', '9998']),
+};
+
+/**
+ * Classifies a cancel answer by its ResultCode and the payment's PayMethod (`payments.method`,
+ * or the answer's own PayMethod when the payment has none): the codes are per method, and one
+ * number can mean "already cancelled" for one method and "refused" for another. No ResultCode
+ * at all says nothing about the card: `unknown`.
+ */
+export function classifyCancel(
+  resultCode: string | undefined,
+  method: string | null | undefined,
+): CancelClassification {
+  const code = resultCode?.trim().toUpperCase() ?? '';
+  if (code.length === 0) return 'unknown';
+  const payMethod = method?.trim().toUpperCase() ?? '';
+  if (CANCELLED_CODES.has(code) || CANCELLED_CODES_BY_METHOD[payMethod]?.has(code)) {
+    return 'cancelled';
+  }
+  if (UNKNOWN_CODES.has(code) || UNKNOWN_CODES_BY_METHOD[payMethod]?.has(code)) return 'unknown';
+  return 'refused';
 }
 
 /** `base64(sha256(text))` over the UTF-8 bytes — the one digest every SmartroPay signature uses. */

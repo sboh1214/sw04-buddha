@@ -8,6 +8,7 @@ import { WalletModule } from '../wallet/wallet.module.js';
 import { AdminController } from './admin.controller.js';
 import { AdminService } from './admin.service.js';
 import { PaymentRefundService } from './payment-refund.service.js';
+import { PaymentSettleService } from './payment-settle.service.js';
 
 /**
  * PLAN 12 admin surface. Guards are instantiated in the module that declares the controller,
@@ -17,6 +18,6 @@ import { PaymentRefundService } from './payment-refund.service.js';
 @Module({
   imports: [DbModule, RedisModule, AuthModule, WalletModule, PaymentsModule, RealtimeModule],
   controllers: [AdminController],
-  providers: [AdminService, PaymentRefundService],
+  providers: [AdminService, PaymentRefundService, PaymentSettleService],
 })
 export class AdminModule {}

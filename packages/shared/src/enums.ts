@@ -77,8 +77,10 @@ export const paymentProviderSchema = z.enum(PAYMENT_PROVIDERS);
  * - `approval` / `approval_inquiry`: the approval call and its 1-hour result inquiry
  * - `stop`: the payer closed the payment window (StopUrl)
  * - `notify`: SmartroPay's server-to-server 재통보
- * - `net_cancel`: we cancelled an approval we could not credit (망취소)
- * - `refund_cancel`: the PG cancel of an admin refund
+ * - `net_cancel`: we cancelled an approval we could not credit (망취소); `payload.outcome` is
+ *   `cancelled`, `refused` or `unknown`, and `payload.manual` marks a cancel an admin confirmed
+ *   by hand (`POST /admin/payments/:id/settle`)
+ * - `refund_cancel`: the PG cancel of an admin refund (`payload.manual`: settled by hand)
  */
 export const PAYMENT_EVENT_TYPES = [
   'return',
@@ -194,6 +196,7 @@ export const ADMIN_ACTION_TYPES = [
   'market_void',
   'dispute_review',
   'payment_refund',
+  'payment_settle',
 ] as const;
 export type AdminActionType = (typeof ADMIN_ACTION_TYPES)[number];
 export const adminActionTypeSchema = z.enum(ADMIN_ACTION_TYPES);

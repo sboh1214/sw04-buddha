@@ -15,6 +15,8 @@ import { AppError } from '../common/errors/app-error.js';
 import { keysetPredicate } from '../common/keyset.js';
 import { clockTimestamp } from '../infra/db/clock.js';
 import { DB } from '../infra/db/db.provider.js';
+import { SETTLE_MIN_AGE_MS } from '../payments/payment-transitions.js';
+import { APPROVAL_SUCCESS_CODES } from '../payments/smartro/smartro-protocol.js';
 import { toLedgerEntry, toBalance, type Page } from '../wallet/wallet.service.js';
 
 const userColumns = {
@@ -49,6 +51,52 @@ function toAdminUser(row: UserRow): AdminUser {
   };
 }
 
+/** SETTLE_MIN_AGE_MS as an SQL interval literal (a constant, never user input). */
+const SETTLE_MIN_AGE = sql.raw(`interval '${String(SETTLE_MIN_AGE_MS / 1000)} seconds'`);
+
+/** The approval success codes, as SQL literals (constants, never user input). */
+const APPROVAL_SUCCESS = sql.raw(APPROVAL_SUCCESS_CODES.map((code) => `'${code}'`).join(', '));
+
+/**
+ * `AdminPayment.needsReview`, computed where the rows are (ADR-0042): a SmartroPay payment the
+ * API could not settle by itself and no request is still working on — for an admin to check in
+ * the merchant admin and settle by hand (payment-settle.service):
+ * - `pending` and claimed (`provider_ref` set: an approval was asked for), untouched for
+ *   SETTLE_MIN_AGE_MS — the approval's answer never came and neither did the 재통보;
+ * - `cancelled` without a net cancel the PG confirmed (`net_cancel` with outcome `cancelled`) —
+ *   the cancel got no clear answer, or its process died before recording one;
+ * - `refunding`, untouched for SETTLE_MIN_AGE_MS — the refund's cancel got no clear answer;
+ * - `failed` and claimed, untouched for SETTLE_MIN_AGE_MS, with a sign the card may be charged
+ *   after all that no settle has checked since: its approval got no answer (an `approval` event
+ *   without a ResultCode — the payment failed on something else's word), or an approval
+ *   재통보 (StateCd 0, a success code) left it uncredited (its Mid or amount did not match).
+ * Only SmartroPay rows: the settle refuses the rest (a mock refund is simply retried).
+ */
+const needsReview = sql<boolean>`(${schema.payments.provider} = 'smartro' and (
+  (${schema.payments.status} = 'pending' and ${schema.payments.providerRef} is not null
+    and ${schema.payments.updatedAt} < now() - ${SETTLE_MIN_AGE})
+  or (${schema.payments.status} = 'cancelled' and not exists (
+    select 1 from ${schema.paymentEvents}
+    where ${schema.paymentEvents.paymentId} = ${schema.payments.id}
+      and ${schema.paymentEvents.type} = 'net_cancel'
+      and ${schema.paymentEvents.payload}->>'outcome' = 'cancelled'))
+  or (${schema.payments.status} = 'refunding'
+    and ${schema.payments.updatedAt} < now() - ${SETTLE_MIN_AGE})
+  or (${schema.payments.status} = 'failed' and ${schema.payments.providerRef} is not null
+    and ${schema.payments.updatedAt} < now() - ${SETTLE_MIN_AGE}
+    and exists (
+      select 1 from ${schema.paymentEvents} hint
+      where hint.payment_id = ${schema.payments.id}
+        and ((hint.type = 'approval' and hint.result_code is null)
+          or (hint.type = 'notify' and hint.payload->>'StateCd' = '0'
+            and hint.result_code in (${APPROVAL_SUCCESS})))
+        and not exists (
+          select 1 from ${schema.adminActions} checked
+          where checked.type = 'payment_settle' and checked.target_type = 'payment'
+            and checked.target_id = ${schema.payments.id}::text
+            and checked.created_at >= hint.created_at)))
+))`;
+
 const adminPaymentColumns = {
   id: schema.payments.id,
   userId: schema.payments.userId,
@@ -64,10 +112,12 @@ const adminPaymentColumns = {
   refundedAt: schema.payments.refundedAt,
   resultMessage: schema.payments.resultMessage,
   createdAt: schema.payments.createdAt,
+  needsReview,
 };
 
 type AdminPaymentRow = Omit<typeof schema.payments.$inferSelect, 'idempotencyKey' | 'updatedAt'> & {
   nickname: string;
+  needsReview: boolean;
 };
 
 function toAdminPayment(row: AdminPaymentRow): AdminPayment {
@@ -86,6 +136,7 @@ function toAdminPayment(row: AdminPaymentRow): AdminPayment {
     refundedAt: row.refundedAt?.toISOString() ?? null,
     resultMessage: row.resultMessage,
     createdAt: row.createdAt.toISOString(),
+    needsReview: row.needsReview,
   };
 }
 

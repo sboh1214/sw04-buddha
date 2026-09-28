@@ -19,9 +19,13 @@ export const ERROR_CODES = [
   // with a regex. The detail shapes of the codes below are in its ERROR_NOTES.
   /** No real name / mobile number on the account yet, and the action needs them (ADR-0043). */
   'CONTACT_REQUIRED',
-  /** An admin refund outside the policy; the first detail names why (ADR-0042). */
+  /** An admin refund or settle outside the policy; the first detail names why (ADR-0042). */
   'REFUND_NOT_ALLOWED',
-  /** The PG answered and said no; the first detail carries its ResultCode and ResultMsg. */
+  /**
+   * The PG answered and said no; the first detail carries its ResultCode and ResultMsg. A
+   * second detail `settle_required` (path `payment`): a retried refund stays `refunding` for an
+   * admin to settle by hand.
+   */
   'PAYMENT_GATEWAY_REFUSED',
   /** The PG could not be reached, or its answer is unknown (502). */
   'PAYMENT_GATEWAY_ERROR',

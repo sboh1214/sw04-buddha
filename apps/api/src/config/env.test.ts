@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { envSchema, uncountedPeers, webOrigins } from './env.js';
+import { envSchema, parseTrustProxy, uncountedPeers, webOrigins } from './env.js';
 
 /**
  * The env schema is pure (no DB, no Redis), so this suite runs with the docker test profile
@@ -89,6 +89,23 @@ describe('webOrigins', () => {
     expect(envSchema.safeParse({ ...base, WEB_ORIGIN: 'https://App.Example.com/' }).success).toBe(
       true,
     );
+  });
+});
+
+describe('TRUST_PROXY', () => {
+  it('defaults to trusting nobody, so a client cannot name its own address', () => {
+    const parsed = envSchema.parse(base);
+    expect(parsed.TRUST_PROXY).toBe('false');
+    expect(parseTrustProxy(parsed.TRUST_PROXY)).toBe(false);
+    expect(parseTrustProxy('')).toBe(false);
+    expect(parseTrustProxy(' FALSE ')).toBe(false);
+  });
+
+  it('reads `true` as every hop (never the deployed value) and a list as those hops only', () => {
+    expect(parseTrustProxy('true')).toBe(true);
+    // The deployment's value (terraform env.tftpl): Caddy's fixed address on the compose network.
+    expect(parseTrustProxy('172.28.0.10/32')).toEqual(['172.28.0.10/32']);
+    expect(parseTrustProxy(' 10.0.0.1 , 10.0.0.2/32 ,')).toEqual(['10.0.0.1', '10.0.0.2/32']);
   });
 });
 

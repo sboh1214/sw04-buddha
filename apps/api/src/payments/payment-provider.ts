@@ -30,13 +30,20 @@ export interface CancelRequest {
   priceKrw: number;
   /** Why; SmartroPay's CancelMsg takes the first 100 characters. */
   reason: string;
+  /**
+   * The PG's PayMethod of the approval (`payments.method`; CARD, NAVER, SMILEPAY…), when known:
+   * SmartroPay's cancel codes are per method (classifyCancel). Null or absent: the answer's own
+   * PayMethod decides.
+   */
+  method?: string | null;
 }
 
 export interface CancelOutcome {
   /**
-   * `cancelled`: the provider confirmed (SmartroPay 2001, or 2013 "already cancelled" — a retry
-   * of a cancel whose answer was lost). `refused`: it answered and said no. `unknown`: no
-   * readable answer arrived, so the card may or may not have been cancelled.
+   * `cancelled`: the provider confirmed (SmartroPay 2001, or an "already cancelled" code such
+   * as 2013 — a retry of a cancel whose answer was lost). `refused`: it answered and said a
+   * definite no. `unknown`: no readable answer arrived, or one that leaves the card's state open
+   * (a cancel still in progress at the easy-pay company), so it may or may not be cancelled.
    */
   status: 'cancelled' | 'refused' | 'unknown';
   resultCode?: string;

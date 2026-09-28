@@ -105,6 +105,55 @@ export const refundPaymentBodySchema = z
   .meta({ id: 'RefundPaymentBody' });
 export type RefundPaymentBody = z.infer<typeof refundPaymentBodySchema>;
 
+/**
+ * What an admin settles a SmartroPay payment to by hand (`POST /admin/payments/:id/settle`),
+ * once the merchant admin (smilebiz) has shown what really happened to the card. Each outcome is
+ * allowed only from some statuses (the API refuses the rest with REFUND_NOT_ALLOWED `status`):
+ * - `credit`: the card was approved and stays charged — a claimed `pending` or `failed` payment,
+ *   or a `cancelled` one whose net cancel never confirmed; the P is credited (DEPOSIT) and the
+ *   approval's Tid stored (the one on record, else the body's `tid`).
+ * - `cancelled`: the card was cancelled — a claimed `pending` or `failed` payment, or a
+ *   `cancelled` one whose net cancel never confirmed; no P moves.
+ * - `failed`: nothing was ever approved — a `pending` payment, or a claimed `failed` one checked
+ *   (it stays `failed`); no P moves.
+ * - `refunded`: a `refunding` refund whose card cancel went through; the P stays clawed back.
+ * - `restore`: a `refunding` refund whose card was NOT cancelled; the P goes back
+ *   (PAYMENT_CANCEL_REVERSAL) and the payment is `succeeded` again.
+ */
+export const PAYMENT_SETTLE_OUTCOMES = [
+  'credit',
+  'cancelled',
+  'failed',
+  'restore',
+  'refunded',
+] as const;
+export type PaymentSettleOutcome = (typeof PAYMENT_SETTLE_OUTCOMES)[number];
+export const paymentSettleOutcomeSchema = z.enum(PAYMENT_SETTLE_OUTCOMES);
+
+/** A SmartroPay Tid is 30 characters (the manual); anything printable up to this is taken. */
+export const SETTLE_TID_MAX_LENGTH = 64;
+
+/**
+ * `POST /admin/payments/:id/settle`: the outcome and why (required, audited like a refund).
+ * `tid`, read only for `credit`: the approval's Tid (거래번호) as the merchant admin shows it —
+ * required when no approval of the payment is on record (VALIDATION_ERROR path `tid`), and when
+ * one is, it must be that one's. Leave it out rather than sending it empty.
+ */
+export const settlePaymentBodySchema = z
+  .object({
+    outcome: paymentSettleOutcomeSchema,
+    reason: z.string().trim().min(1).max(REFUND_REASON_MAX_LENGTH),
+    tid: z
+      .string()
+      .trim()
+      .min(1)
+      .max(SETTLE_TID_MAX_LENGTH)
+      .regex(/^[\x21-\x7e]+$/)
+      .optional(),
+  })
+  .meta({ id: 'SettlePaymentBody' });
+export type SettlePaymentBody = z.infer<typeof settlePaymentBodySchema>;
+
 export interface VatSplit {
   /** 공급가액: `amt - vatAmt`. */
   taxAmt: number;

@@ -134,6 +134,13 @@ export type CreditOutcome =
   { credited: true; result: ChargeResult } | { credited: false; status: PaymentStatus | undefined };
 
 /**
+ * `creditWithin`'s answer inside the transaction: the credit and the `user:balance` event to
+ * publish after COMMIT, or — nothing credited — the status the payment has now.
+ */
+export type CreditTxOutcome =
+  { result: ChargeResult; event: UserBalanceEvent } | { status?: PaymentStatus };
+
+/**
  * Charging and reading the wallet (PLAN 5.1, 5.6, M2).
  *
  * Every balance change happens in the same transaction as its `ledger_entries` INSERT
@@ -314,102 +321,104 @@ export class WalletService {
    * HTTP answer to carry the new balance to the screen.
    */
   async creditPayment(input: CreditInput): Promise<CreditOutcome> {
-    const outcome = await this.db.transaction(
-      async (
-        tx,
-      ): Promise<
-        { result: ChargeResult; event: UserBalanceEvent } | { status?: PaymentStatus }
-      > => {
-        // The lock is what the balance UPDATE below would take anyway; the result is discarded,
-        // and a vanished row still falls through to the check that UPDATE has.
-        await tx
-          .select({ userId: schema.balances.userId })
-          .from(schema.balances)
-          .where(eq(schema.balances.userId, input.userId))
-          .limit(1)
-          .for('update');
-        const creditedAt = await clockTimestamp(tx);
-
-        // Approved at the instant it is credited: the same clock as the ledger row, so the admin
-        // refund window (PAYMENT_REFUND_WINDOW_DAYS) counts from the moment the P arrived.
-        const [payment] = await tx
-          .update(schema.payments)
-          .set({
-            status: 'succeeded',
-            providerRef: input.providerRef,
-            method: input.method,
-            resultMessage: input.resultMessage,
-            approvedAt: creditedAt,
-            updatedAt: creditedAt,
-          })
-          .where(
-            and(
-              eq(schema.payments.id, input.paymentId),
-              eq(schema.payments.userId, input.userId),
-              inArray(schema.payments.status, [...input.from]),
-            ),
-          )
-          .returning();
-        if (!payment) {
-          const [current] = await tx
-            .select({ status: schema.payments.status })
-            .from(schema.payments)
-            .where(eq(schema.payments.id, input.paymentId))
-            .limit(1);
-          return { status: current?.status };
-        }
-
-        const [balance] = await tx
-          .update(schema.balances)
-          .set({
-            availableP: sql`${schema.balances.availableP} + ${input.amountP}`,
-            // Explicit on purpose: the column's `$onUpdate` would write the API host's clock.
-            updatedAt: creditedAt,
-          })
-          .where(eq(schema.balances.userId, input.userId))
-          .returning();
-        // The balance row was seen before the reservation, so a miss here is a race with a
-        // DELETE, not a client error: a 500, which the web answers by keeping its key, so the
-        // retry replays the reservation as in progress instead of buying again. The rollback
-        // leaves the payment where it was; the provider has accepted, so that row is the only
-        // record that this account is owed P.
-        if (!balance) {
-          // Loud, with the provider's reference: the row that would carry it rolls back here.
-          this.logger.error(
-            `payment ${input.paymentId} accepted (${input.providerRef}) but not credited: balance row vanished; payment left ${input.from.join('/')}`,
-          );
-          throw new AppError('INTERNAL', {
-            message: 'Balance row vanished after the provider accepted',
-          });
-        }
-
-        const [entry] = await tx
-          .insert(schema.ledgerEntries)
-          .values({
-            userId: input.userId,
-            type: 'DEPOSIT',
-            amountP: input.amountP,
-            balanceAfterP: balance.availableP,
-            refType: 'payment',
-            refId: payment.id,
-            createdAt: creditedAt,
-          })
-          .returning();
-        if (!entry) throw new AppError('INTERNAL', { message: 'Ledger insert failed' });
-
-        return {
-          result: {
-            payment: toPayment(payment),
-            balance: toBalance(balance),
-            ledgerEntry: toLedgerEntry(entry),
-          },
-          event: balanceEvent(balance, entry),
-        };
-      },
-    );
+    const outcome = await this.db.transaction((tx) => this.creditWithin(tx, input));
     if (!('result' in outcome)) return { credited: false, status: outcome.status };
     await this.publisher.publishUser(input.userId, outcome.event);
     return { credited: true, result: outcome.result };
+  }
+
+  /**
+   * creditPayment's transaction, run inside the caller's: for a caller that must commit more
+   * with the credit (the admin settle writes its audit row in it). The caller publishes the
+   * returned `event` after COMMIT, and — the lock order above — locks the balance row before
+   * anything else it locks, the payment row included.
+   */
+  async creditWithin(tx: Tx, input: CreditInput): Promise<CreditTxOutcome> {
+    // The lock is what the balance UPDATE below would take anyway; the result is discarded,
+    // and a vanished row still falls through to the check that UPDATE has.
+    await tx
+      .select({ userId: schema.balances.userId })
+      .from(schema.balances)
+      .where(eq(schema.balances.userId, input.userId))
+      .limit(1)
+      .for('update');
+    const creditedAt = await clockTimestamp(tx);
+
+    // Approved at the instant it is credited: the same clock as the ledger row, so the admin
+    // refund window (PAYMENT_REFUND_WINDOW_DAYS) counts from the moment the P arrived.
+    const [payment] = await tx
+      .update(schema.payments)
+      .set({
+        status: 'succeeded',
+        providerRef: input.providerRef,
+        method: input.method,
+        resultMessage: input.resultMessage,
+        approvedAt: creditedAt,
+        updatedAt: creditedAt,
+      })
+      .where(
+        and(
+          eq(schema.payments.id, input.paymentId),
+          eq(schema.payments.userId, input.userId),
+          inArray(schema.payments.status, [...input.from]),
+        ),
+      )
+      .returning();
+    if (!payment) {
+      const [current] = await tx
+        .select({ status: schema.payments.status })
+        .from(schema.payments)
+        .where(eq(schema.payments.id, input.paymentId))
+        .limit(1);
+      return { status: current?.status };
+    }
+
+    const [balance] = await tx
+      .update(schema.balances)
+      .set({
+        availableP: sql`${schema.balances.availableP} + ${input.amountP}`,
+        // Explicit on purpose: the column's `$onUpdate` would write the API host's clock.
+        updatedAt: creditedAt,
+      })
+      .where(eq(schema.balances.userId, input.userId))
+      .returning();
+    // The balance row was seen before the reservation, so a miss here is a race with a
+    // DELETE, not a client error: a 500, which the web answers by keeping its key, so the
+    // retry replays the reservation as in progress instead of buying again. The rollback
+    // leaves the payment where it was; the provider has accepted, so that row is the only
+    // record that this account is owed P.
+    if (!balance) {
+      // Loud, with the provider's reference: the row that would carry it rolls back here.
+      this.logger.error(
+        `payment ${input.paymentId} accepted (${input.providerRef}) but not credited: balance row vanished; payment left ${input.from.join('/')}`,
+      );
+      throw new AppError('INTERNAL', {
+        message: 'Balance row vanished after the provider accepted',
+      });
+    }
+
+    const [entry] = await tx
+      .insert(schema.ledgerEntries)
+      .values({
+        userId: input.userId,
+        type: 'DEPOSIT',
+        amountP: input.amountP,
+        balanceAfterP: balance.availableP,
+        refType: 'payment',
+        refId: payment.id,
+        createdAt: creditedAt,
+      })
+      .returning();
+    if (!entry) throw new AppError('INTERNAL', { message: 'Ledger insert failed' });
+
+    return {
+      result: {
+        payment: toPayment(payment),
+        balance: toBalance(balance),
+        ledgerEntry: toLedgerEntry(entry),
+      },
+      event: balanceEvent(balance, entry),
+    };
   }
 
   async paymentByKey(userId: string, idempotencyKey: string): Promise<PaymentRow | undefined> {

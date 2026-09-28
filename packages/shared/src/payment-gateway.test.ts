@@ -5,13 +5,16 @@ import {
   CARD_MIN_PRICE_KRW,
   PAYMENT_REFUND_WINDOW_DAYS,
   PAYMENT_RETURN_RESULTS,
+  PAYMENT_SETTLE_OUTCOMES,
   REFUND_REASON_MAX_LENGTH,
+  SETTLE_TID_MAX_LENGTH,
   SMARTRO_MODES,
   moidToPaymentId,
   paymentIdToMoid,
   paymentProviderInfoSchema,
   paymentReturnResultSchema,
   refundPaymentBodySchema,
+  settlePaymentBodySchema,
   smartroModeSchema,
   smartroPrepareResultSchema,
   vatSplit,
@@ -171,6 +174,70 @@ describe('refundPaymentBodySchema', () => {
       { reason: 'x'.repeat(REFUND_REASON_MAX_LENGTH + 1) },
     ]) {
       expect(refundPaymentBodySchema.safeParse(body).success, JSON.stringify(body)).toBe(false);
+    }
+  });
+});
+
+describe('settlePaymentBodySchema', () => {
+  it('names the five settle outcomes', () => {
+    expect(PAYMENT_SETTLE_OUTCOMES).toEqual([
+      'credit',
+      'cancelled',
+      'failed',
+      'restore',
+      'refunded',
+    ]);
+  });
+
+  it('requires a known outcome and a trimmed, non-empty reason within the limit', () => {
+    for (const outcome of PAYMENT_SETTLE_OUTCOMES) {
+      expect(
+        settlePaymentBodySchema.parse({ outcome, reason: '  가맹점 관리자에서 확인  ' }),
+      ).toEqual({ outcome, reason: '가맹점 관리자에서 확인' });
+    }
+    expect(
+      settlePaymentBodySchema.safeParse({
+        outcome: 'credit',
+        reason: 'x'.repeat(REFUND_REASON_MAX_LENGTH),
+      }).success,
+    ).toBe(true);
+    for (const body of [
+      {},
+      { outcome: 'credit' },
+      { reason: '확인' },
+      { outcome: 'succeeded', reason: '확인' },
+      { outcome: 'CREDIT', reason: '확인' },
+      { outcome: 'credit', reason: '   ' },
+      { outcome: 'credit', reason: 'x'.repeat(REFUND_REASON_MAX_LENGTH + 1) },
+    ]) {
+      expect(settlePaymentBodySchema.safeParse(body).success, JSON.stringify(body)).toBe(false);
+    }
+  });
+
+  it('takes an optional approval Tid: trimmed, printable, no spaces, within the limit', () => {
+    const tid = 'buddhatest0928123456780000001';
+    expect(
+      settlePaymentBodySchema.parse({ outcome: 'credit', reason: '확인', tid: `  ${tid} ` }),
+    ).toEqual({ outcome: 'credit', reason: '확인', tid });
+    expect(
+      settlePaymentBodySchema.safeParse({
+        outcome: 'credit',
+        reason: '확인',
+        tid: 'x'.repeat(SETTLE_TID_MAX_LENGTH),
+      }).success,
+    ).toBe(true);
+    for (const bad of [
+      '',
+      '   ',
+      'two words',
+      '거래번호',
+      'x'.repeat(SETTLE_TID_MAX_LENGTH + 1),
+      7,
+    ]) {
+      expect(
+        settlePaymentBodySchema.safeParse({ outcome: 'credit', reason: '확인', tid: bad }).success,
+        JSON.stringify(bad),
+      ).toBe(false);
     }
   });
 });

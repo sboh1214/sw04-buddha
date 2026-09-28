@@ -107,7 +107,19 @@ export type AdminUserQuery = z.infer<typeof adminUserQuerySchema>;
 
 /** `GET /admin/payments`: every charge, with the account it belongs to. */
 export const adminPaymentSchema = paymentSchema
-  .extend({ userId: z.string(), nickname: z.string() })
+  .extend({
+    userId: z.string(),
+    nickname: z.string(),
+    /**
+     * A SmartroPay payment whose outcome the API could not settle by itself, for an admin to
+     * check in the merchant admin and settle by hand (`POST /admin/payments/:id/settle`): a
+     * claimed `pending` one, or a `refunding` one, untouched for 2 minutes (no request is still
+     * working on it); a `cancelled` one whose net cancel the PG never confirmed; or a claimed
+     * `failed` one the card may be charged for (its approval got no answer, or an approval
+     * 재통보 could not be credited) that no settle has checked since.
+     */
+    needsReview: z.boolean(),
+  })
   .meta({ id: 'AdminPayment' });
 export type AdminPayment = z.infer<typeof adminPaymentSchema>;
 

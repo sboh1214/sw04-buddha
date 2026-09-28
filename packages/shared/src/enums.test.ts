@@ -75,6 +75,8 @@ describe('enums', () => {
     }
     // admin_actions.type is varchar(40).
     expect(enums.adminActionTypeSchema.parse('payment_refund')).toBe('payment_refund');
+    expect(enums.adminActionTypeSchema.parse('payment_settle')).toBe('payment_settle');
+    for (const type of enums.ADMIN_ACTION_TYPES) expect(type.length).toBeLessThanOrEqual(40);
   });
 
   it('keeps the remaining enum schemas parseable', () => {

@@ -10,8 +10,8 @@ import { type SmartroConfig } from '../payments-config.js';
 import { type SmartroClient, SmartroUnreachableError } from './smartro-client.js';
 import {
   cancelHashData,
+  classifyCancel,
   encryptCancelPayload,
-  isCancelSuccess,
   truncateChars,
 } from './smartro-protocol.js';
 
@@ -71,13 +71,12 @@ export class SmartroPaymentProvider implements PaymentProvider {
     const payload = sanitizePayload(answer);
     // An answer without a ResultCode says nothing about the card: unknown, not refused, so a
     // refund stays `refunding` for a retry instead of restoring P for a card that was cancelled.
-    if (resultCode === undefined) return { status: 'unknown', resultMessage, payload };
-    return {
-      status: isCancelSuccess(resultCode) ? 'cancelled' : 'refused',
-      resultCode,
-      resultMessage,
-      payload,
-    };
+    if (resultCode === undefined || resultCode.trim().length === 0) {
+      return { status: 'unknown', resultMessage, payload };
+    }
+    // The payment's own method first: the answer's PayMethod is only what this answer says.
+    const method = request.method?.trim() ? request.method : stringField(answer, 'PayMethod');
+    return { status: classifyCancel(resultCode, method), resultCode, resultMessage, payload };
   }
 }
 

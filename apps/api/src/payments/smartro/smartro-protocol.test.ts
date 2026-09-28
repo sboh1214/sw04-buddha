@@ -8,13 +8,13 @@ import { createDecipheriv } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
   cancelHashData,
+  classifyCancel,
   ediDate,
   encryptCancelPayload,
   encryptData,
   goodsName,
   isAllowedNotifyAddress,
   isApprovalSuccess,
-  isCancelSuccess,
   mallUserId,
   signValue,
   smartroScriptUrls,
@@ -153,9 +153,50 @@ describe('result codes', () => {
     }
   });
 
-  it('counts 2001 and 2013 (already cancelled) as a cancel, nothing else', () => {
-    expect(isCancelSuccess('2001')).toBe(true);
-    expect(isCancelSuccess('2013')).toBe(true);
-    for (const code of ['2002', '3001', '', undefined]) expect(isCancelSuccess(code)).toBe(false);
+  it('classifies a cancel answer by its code and the payment method', () => {
+    const cases: [string | undefined, string | null | undefined, string][] = [
+      // Cancelled (or already cancelled) whatever the method.
+      ['2001', 'CARD', 'cancelled'],
+      ['2013', 'CARD', 'cancelled'],
+      ['2013', null, 'cancelled'],
+      ['NP17', 'NAVER', 'cancelled'],
+      ['LP17', 'LPAY', 'cancelled'],
+      ['PI15', 'PINPAY', 'cancelled'],
+      // 2015 is 기취소 only for SmilePay; for a card it is an ordinary 취소 실패.
+      ['2015', 'SMILEPAY', 'cancelled'],
+      ['2015', 'smilepay', 'cancelled'],
+      ['2015', 'CARD', 'refused'],
+      ['2015', null, 'refused'],
+      ['3402', 'TMONEYPAY', 'cancelled'],
+      ['3402', 'CARD', 'refused'],
+      // The card may or may not be cancelled: never a refusal.
+      ['NP19', 'NAVER', 'unknown'],
+      ['NP24', 'NAVER', 'unknown'],
+      ['LP19', 'LPAY', 'unknown'],
+      ['LP24', 'LPAY', 'unknown'],
+      ['2045', 'CARD', 'unknown'],
+      ['NP98', 'NAVER', 'unknown'],
+      ['NP99', 'NAVER', 'unknown'],
+      ['LP99', 'LPAY', 'unknown'],
+      ['9999', 'CARD', 'unknown'],
+      ['1101', 'SMILEPAY', 'unknown'],
+      ['9998', 'SMILEPAY', 'unknown'],
+      ['1101', 'CARD', 'refused'],
+      [undefined, 'CARD', 'unknown'],
+      ['', 'CARD', 'unknown'],
+      ['  ', 'CARD', 'unknown'],
+      // A definite no.
+      ['2002', 'CARD', 'refused'],
+      ['2016', 'CARD', 'refused'],
+      ['2024', undefined, 'refused'],
+      ['3001', 'CARD', 'refused'],
+    ];
+    for (const [code, method, expected] of cases) {
+      expect({ code, method, status: classifyCancel(code, method) }).toEqual({
+        code,
+        method,
+        status: expected,
+      });
+    }
   });
 });

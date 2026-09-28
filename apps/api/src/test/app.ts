@@ -13,7 +13,7 @@ import {
 } from '@buddha/shared';
 import { AppModule } from '../app.module.js';
 import { AUTH, type Auth } from '../auth/auth.js';
-import { uncountedPeers } from '../config/env.js';
+import { parseTrustProxy, uncountedPeers } from '../config/env.js';
 import { DB } from '../infra/db/db.provider.js';
 import { MAX_PARAM_LENGTH } from '../infra/http/fastify-options.js';
 import { registerSecurityHeaders } from '../infra/http/security-headers.js';
@@ -74,6 +74,13 @@ export interface CreateTestAppOptions {
    * developer's .env says) and any call to a PG fails loudly.
    */
   smartro?: { client: SmartroClient; provider?: PaymentProviderName };
+  /**
+   * TRUST_PROXY for this app only, parsed as main.ts parses it (config/env.ts): which peers'
+   * X-Forwarded-For Fastify believes for `request.ip`. Production trusts Caddy alone
+   * (`172.28.0.10/32`); a suite about what `request.ip` becomes behind it names that here and
+   * presents the proxy with `remoteAddress`. Left out, nothing is trusted (the socket peer).
+   */
+  trustProxy?: string;
 }
 
 /**
@@ -103,7 +110,10 @@ export async function createTestApp(options: CreateTestAppOptions = {}): Promise
   }
   const moduleRef = await builder.compile();
   const app = moduleRef.createNestApplication<NestFastifyApplication>(
-    new FastifyAdapter({ routerOptions: { maxParamLength: MAX_PARAM_LENGTH } }),
+    new FastifyAdapter({
+      trustProxy: parseTrustProxy(options.trustProxy ?? 'false'),
+      routerOptions: { maxParamLength: MAX_PARAM_LENGTH },
+    }),
     { bodyParser: false, logger: false },
   );
   // Exactly as in main.ts, and for the same reason the adapter below is: a bound the suites do

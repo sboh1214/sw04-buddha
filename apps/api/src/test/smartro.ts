@@ -108,10 +108,15 @@ export function approvalAnswer(input: ApprovalAnswerInput): SmartroResponse {
 export interface NotifyFormInput {
   paymentId: string;
   priceKrw: number;
+  /** The notice's own Tid, which its SignValue covers (a cancel's may be a new one). */
   tid: string;
+  /** The original approval's Tid; `tid` unless given (a cancel's may differ). */
+  otid?: string;
   resultCode?: string;
+  resultMsg?: string;
   /** 0 approval, 1 cancel, 2 cancel after settlement. */
   stateCd?: string;
+  payMethod?: string;
   mid?: string;
   amt?: string;
   signValue?: string;
@@ -121,7 +126,7 @@ export interface NotifyFormInput {
 export function notifyForm(input: NotifyFormInput): Record<string, string> {
   const resultCode = input.resultCode ?? '3001';
   return {
-    PayMethod: 'CARD',
+    PayMethod: input.payMethod ?? 'CARD',
     Mid: input.mid ?? TEST_SMARTRO.mid,
     Amt: input.amt ?? String(input.priceKrw),
     BuyerName: '홍길동',
@@ -129,12 +134,12 @@ export function notifyForm(input: NotifyFormInput): Record<string, string> {
     BuyerTel: '01012345678',
     GoodsName: '포인트 10,000P',
     Tid: input.tid,
-    Otid: input.tid,
+    Otid: input.otid ?? input.tid,
     Moid: paymentIdToMoid(input.paymentId),
     AuthDate: '260928103000',
     AuthCode: '30001234',
     ResultCode: resultCode,
-    ResultMsg: resultCode === '3001' ? '카드 결제 성공' : '취소 성공',
+    ResultMsg: input.resultMsg ?? (resultCode === '3001' ? '카드 결제 성공' : '취소 성공'),
     StateCd: input.stateCd ?? '0',
     FnCd: '04',
     FnName: '삼성',

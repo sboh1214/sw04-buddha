@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   ADJUST_MAX_ABS_P,
+  adminPaymentSchema,
   adminUserQuerySchema,
   auditFailureSchema,
   balanceAdjustBodySchema,
@@ -131,6 +132,15 @@ describe('response schemas', () => {
     // The new fields are required (nullable, never absent), like every other DTO field.
     const { refundedAt: _dropped, ...withoutRefundedAt } = refunded;
     expect(paymentSchema.safeParse(withoutRefundedAt).success).toBe(false);
+
+    // The admin row adds the account and whether an admin must settle it by hand.
+    const adminRow = { ...refunded, status: 'refunding', userId: 'u1', nickname: '예측가' };
+    expect(adminPaymentSchema.parse({ ...adminRow, needsReview: true })).toMatchObject({
+      status: 'refunding',
+      needsReview: true,
+    });
+    expect(adminPaymentSchema.safeParse(adminRow).success).toBe(false);
+    expect(adminPaymentSchema.safeParse({ ...adminRow, needsReview: 'yes' }).success).toBe(false);
 
     expect(
       auditFailureSchema.parse({

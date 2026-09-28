@@ -1,11 +1,13 @@
 /**
  * The small pure pieces around the providers: the payments configuration built from the env,
- * what `payment_events.payload` may keep, and how a callback's form is read.
+ * what `payment_events.payload` may keep, how a callback's form is read, and when a cancel
+ * 재통보 counts as the PG's word that the card was cancelled.
  */
 import { type RawBodyRequest } from '@nestjs/common';
 import { type FastifyRequest } from 'fastify';
 import { describe, expect, it } from 'vitest';
 import { resultMessageOf, sanitizePayload } from './payment-events.js';
+import { cancelNoticeKind, cancelsApprovalOf } from './payment-transitions.js';
 import { paymentsConfigFromEnv } from './payments-config.js';
 import { field, readCallback } from './smartro/callback-form.js';
 
@@ -183,5 +185,77 @@ describe('readCallback', () => {
     expect(field(link.fields, 'ResultMsg')).toBe('중단');
     expect(field(link.fields, 'Missing', 'ResultMsg')).toBe('중단');
     expect(field(link.fields, 'Missing')).toBeUndefined();
+  });
+});
+
+describe('cancelNoticeKind', () => {
+  const TID = 'buddhatest0928000000000000000001';
+  const notice = (
+    stateCd: string | undefined,
+    resultCode: string | undefined,
+    payMethod = 'CARD',
+    shape: { tid?: string; otid?: string; amt?: string } = {},
+  ) => ({ stateCd, resultCode, payMethod, tid: TID, otid: TID, amt: '9700', ...shape });
+  const kind = (of: ReturnType<typeof notice>, method: string | null, priceKrw = 9_700) =>
+    cancelNoticeKind(of, { method, priceKrw });
+
+  it('takes a 전취소 or 후취소 whose code says cancelled as a full cancel', () => {
+    expect(kind(notice('1', '2001'), 'CARD')).toBe('full');
+    expect(kind(notice('2', '2001'), null)).toBe('full');
+    expect(kind(notice('2', '2013'), 'KAKAO')).toBe('full');
+    expect(kind(notice('1', 'NP17', 'NAVER'), 'NAVER')).toBe('full');
+    // No Otid, no Amt: nothing says it was partial.
+    expect(kind(notice('1', '2001', 'CARD', { otid: undefined, amt: undefined }), 'CARD')).toBe(
+      'full',
+    );
+  });
+
+  it('takes nothing from an approval, or from a cancel that failed or says nothing clear', () => {
+    expect(kind(notice('0', '2001'), 'CARD')).toBe('none');
+    expect(kind(notice('3', '2001'), 'CARD')).toBe('none');
+    expect(kind(notice(undefined, '2001'), 'CARD')).toBe('none');
+    expect(kind(notice('1', '2002'), 'CARD')).toBe('none');
+    expect(kind(notice('1', undefined), 'CARD')).toBe('none');
+    // Unknown (a previous cancel unfinished): not proof either.
+    expect(kind(notice('1', 'NP24', 'NAVER'), 'NAVER')).toBe('none');
+    // A failed cancel stays `none` whatever its shape.
+    expect(kind(notice('2', '2002', 'CARD', { otid: 'another' }), 'CARD')).toBe('none');
+  });
+
+  it("reads the code by the payment's method, else by the notice's PayMethod", () => {
+    // 2015 is 기취소 for SmilePay only; for a card, an ordinary 취소실패.
+    expect(kind(notice('2', '2015', 'SMILEPAY'), null)).toBe('full');
+    expect(kind(notice('2', '2015', 'CARD'), null)).toBe('none');
+    expect(kind(notice('2', '2015', 'SMILEPAY'), 'CARD')).toBe('none');
+    expect(kind(notice('2', '2015', 'CARD'), 'SMILEPAY')).toBe('full');
+  });
+
+  it('reads the shape of a partial cancel: an Otid of another transaction, or another amount', () => {
+    // retryModule: Otid carries the original Tid "부분취소의 경우"; the cancel has its own Tid.
+    expect(kind(notice('2', '2001', 'CARD', { tid: 'partial-tid', otid: TID }), 'CARD')).toBe(
+      'partial',
+    );
+    // Whatever Amt holds — the part cancelled, or a remainder — it is not the whole price.
+    expect(kind(notice('1', '2001', 'CARD', { amt: '1000' }), 'CARD')).toBe('partial');
+    expect(kind(notice('1', '2001', 'CARD', { amt: '0' }), 'CARD')).toBe('partial');
+    expect(kind(notice('1', '2001', 'CARD', { amt: 'x' }), 'CARD')).toBe('partial');
+    expect(kind(notice('1', '2001'), 'CARD', 4_900)).toBe('partial');
+  });
+});
+
+describe('cancelsApprovalOf', () => {
+  it('names a payment not yet credited by its Moid alone, if a ReturnUrl claimed it', () => {
+    for (const status of ['pending', 'failed'] as const) {
+      expect(cancelsApprovalOf({ status, providerRef: 'auth-tid' }, 'approval-tid')).toBe(true);
+      expect(cancelsApprovalOf({ status, providerRef: null }, 'approval-tid')).toBe(false);
+    }
+  });
+
+  it("names any other by the approval's own Tid, which it stores", () => {
+    for (const status of ['succeeded', 'refunding', 'cancelled', 'refunded'] as const) {
+      expect(cancelsApprovalOf({ status, providerRef: 'approval-tid' }, 'approval-tid')).toBe(true);
+      expect(cancelsApprovalOf({ status, providerRef: 'approval-tid' }, 'another')).toBe(false);
+      expect(cancelsApprovalOf({ status, providerRef: 'approval-tid' }, undefined)).toBe(false);
+    }
   });
 });

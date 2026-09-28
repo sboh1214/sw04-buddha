@@ -5,6 +5,7 @@
  * under CI=true, see the harness).
  */
 import { createHash } from 'node:crypto';
+import { Logger } from '@nestjs/common';
 import { schema } from '@buddha/db';
 import {
   SIGNUP_BONUS_P,
@@ -378,6 +379,42 @@ describe.skipIf(!hasTestInfra)('SmartroPay (integration)', () => {
     expect(pg.approvals).toHaveLength(1);
   });
 
+  it("takes the mobile flow's cross-site ReturnUrl and StopUrl posts (a foreign Origin, a cookie)", async () => {
+    // On a phone, SmartroPay's own page (tmpay/mpay) posts the form to our URLs: cross-site,
+    // with its Origin (or `null` from a sandboxed or redirected context). The callbacks sit
+    // outside SessionGuard's Origin check, and must stay there; a cookie changes nothing.
+    for (const origin of ['https://tmpay.smartropay.co.kr', 'null']) {
+      const approved = await prepared();
+      const tid = testTid();
+      approveWith(approved, tid);
+      const returned = await t.app.inject({
+        method: 'POST',
+        url: `/api/v1/payments/smartro/return?m=${approved.form.Moid}`,
+        headers: { ...FORM_HEADERS, origin, cookie: user.cookie },
+        payload: formBody({ Tid: tid, TrAuthKey: 'k' }),
+      });
+      expect({ origin, redirect: redirectOf(returned) }).toEqual({
+        origin,
+        redirect: { payment: approved.paymentId, result: 'succeeded' },
+      });
+      expect(await paymentRow(approved.paymentId)).toMatchObject({ status: 'succeeded' });
+
+      const stopped = await prepared();
+      const stop = await t.app.inject({
+        method: 'POST',
+        url: `/api/v1/payments/smartro/stop?m=${stopped.form.Moid}`,
+        headers: { ...FORM_HEADERS, origin, cookie: user.cookie },
+        payload: formBody({ ResultCode: 'W002', ResultMsg: '사용자 결제 중단' }),
+      });
+      expect({ origin, redirect: redirectOf(stop) }).toEqual({
+        origin,
+        redirect: { payment: stopped.paymentId, result: 'stopped' },
+      });
+      expect(await paymentRow(stopped.paymentId)).toMatchObject({ status: 'failed' });
+    }
+    expectLedgerChain(await ledgerOf(user.id), SIGNUP_BONUS_P + 20_000n);
+  });
+
   it('stores only the known fields of a callback, and nothing for one that changes nothing', async () => {
     // The ReturnUrl and StopUrl are public, and payment_events is append-only: whoever knows a
     // Moid may post to them as often as the rate limit lets, with any fields they like.
@@ -569,8 +606,12 @@ describe.skipIf(!hasTestInfra)('SmartroPay (integration)', () => {
     };
     const returning = postReturn(form.form.Moid, { Tid: tid, TrAuthKey: 'k' });
     await asked;
-    // Reserved before the PG was asked: a credit racing the cancel cannot slip in.
-    expect(await paymentRow(form.paymentId)).toMatchObject({ status: 'cancelled' });
+    // Reserved before the PG was asked: a credit racing the cancel cannot slip in. The reason
+    // goes with it, whatever the cancel comes to.
+    expect(await paymentRow(form.paymentId)).toMatchObject({
+      status: 'cancelled',
+      resultMessage: '가맹점 승인 처리 실패로 인한 자동 취소',
+    });
     const notice = notifyForm({ paymentId: form.paymentId, priceKrw: pack.priceKrw, tid });
     const racing = await postNotify(notice);
     expect(racing.statusCode).toBeGreaterThanOrEqual(500);
@@ -580,7 +621,17 @@ describe.skipIf(!hasTestInfra)('SmartroPay (integration)', () => {
     // and the re-sent 재통보 credits it.
     release({ ResultCode: '2002', ResultMsg: '취소 불가' });
     expect(redirectOf(await returning).result).toBe('pending');
-    expect(await paymentRow(form.paymentId)).toMatchObject({ status: 'pending', providerRef: tid });
+    expect(await paymentRow(form.paymentId)).toMatchObject({
+      status: 'pending',
+      providerRef: tid,
+      resultMessage: null,
+    });
+    // The refusal is recorded with the revert, and says what it was.
+    expect((await eventsOf(form.paymentId)).at(-1)).toMatchObject({
+      type: 'net_cancel',
+      resultCode: '2002',
+      payload: { outcome: 'refused', ResultCode: '2002' },
+    });
     const again = await postNotify(notice);
     expect(again.body).toBe('OK');
     expect(await paymentRow(form.paymentId)).toMatchObject({ status: 'succeeded' });
@@ -594,12 +645,239 @@ describe.skipIf(!hasTestInfra)('SmartroPay (integration)', () => {
     expect(redirectOf(await postReturn(form.form.Moid, { Tid: tid, TrAuthKey: 'k' })).result).toBe(
       'cancelled',
     );
+    expect((await eventsOf(form.paymentId)).at(-1)).toMatchObject({
+      type: 'net_cancel',
+      payload: { outcome: 'cancelled' },
+    });
     const res = await postNotify(
       notifyForm({ paymentId: form.paymentId, priceKrw: pack.priceKrw, tid }),
     );
     expect(res.body).toBe('OK');
     expect(await paymentRow(form.paymentId)).toMatchObject({ status: 'cancelled' });
     expect((await ledgerOf(user.id)).filter((entry) => entry.type === 'DEPOSIT')).toHaveLength(0);
+  });
+
+  it('leaves a net cancel with no clear answer cancelled, and never credits its approval notice', async () => {
+    for (const noAnswer of [
+      () => {
+        throw new SmartroUnreachableError('timed out');
+      },
+      // NaverPay: the previous cancel is not finished — it may still go through.
+      () => ({
+        ResultCode: 'NP24',
+        ResultMsg: '취소처리가 완료되지 않아, 반드시 취소 재시도가 필요',
+      }),
+    ]) {
+      pg.reset();
+      const form = await prepared();
+      const tid = testTid();
+      approveWith(form, tid, { overrides: { SignValue: 'forged' } });
+      pg.onCancel = noAnswer;
+      const res = await postReturn(form.form.Moid, { Tid: tid, TrAuthKey: 'k' });
+      expect(redirectOf(res).result).toBe('pending');
+      // The card may be cancelled: the payment stays `cancelled`, not reopened — with the reason
+      // the payer and the admin list read.
+      expect(await paymentRow(form.paymentId)).toMatchObject({
+        status: 'cancelled',
+        providerRef: tid,
+        resultMessage: '가맹점 승인 처리 실패로 인한 자동 취소',
+      });
+      expect((await eventsOf(form.paymentId)).at(-1)).toMatchObject({
+        type: 'net_cancel',
+        payload: { outcome: 'unknown' },
+      });
+
+      // The approval's 재통보 is acknowledged — a re-send cannot settle it — and credits nothing.
+      const notice = await postNotify(
+        notifyForm({ paymentId: form.paymentId, priceKrw: pack.priceKrw, tid }),
+      );
+      expect(notice.statusCode).toBe(200);
+      expect(notice.body).toBe('OK');
+      expect(await paymentRow(form.paymentId)).toMatchObject({ status: 'cancelled' });
+    }
+    expect(await ledgerOf(user.id)).toHaveLength(1);
+    expect((await balanceOf(user.id)).availableP).toBe(SIGNUP_BONUS_P);
+  });
+
+  it('confirms a net cancel with no clear answer only on a cancel 재통보 whose code says so', async () => {
+    const form = await prepared();
+    const tid = testTid();
+    approveWith(form, tid, { overrides: { SignValue: 'forged' } });
+    pg.onCancel = () => {
+      throw new SmartroUnreachableError('timed out');
+    };
+    expect(redirectOf(await postReturn(form.form.Moid, { Tid: tid, TrAuthKey: 'k' })).result).toBe(
+      'pending',
+    );
+    const netCancels = async () =>
+      (await eventsOf(form.paymentId)).filter((event) => event.type === 'net_cancel');
+    expect(await netCancels()).toHaveLength(1);
+
+    // A cancel that failed proves nothing about the card: recorded, the net cancel still open.
+    const failedCancel = await postNotify(
+      notifyForm({
+        paymentId: form.paymentId,
+        priceKrw: pack.priceKrw,
+        tid,
+        resultCode: '2002',
+        resultMsg: '취소 실패',
+        stateCd: '2',
+      }),
+    );
+    expect(failedCancel.body).toBe('OK');
+    expect((await eventsOf(form.paymentId)).at(-1)).toMatchObject({
+      type: 'notify',
+      resultCode: '2002',
+    });
+    expect(await netCancels()).toHaveLength(1);
+
+    // A full cancel of another Tid is no cancel of this approval: recorded, still open.
+    const stranger = await postNotify(
+      notifyForm({
+        paymentId: form.paymentId,
+        priceKrw: pack.priceKrw,
+        tid: testTid(),
+        resultCode: '2001',
+        stateCd: '1',
+      }),
+    );
+    expect(stranger.body).toBe('OK');
+    expect(await netCancels()).toHaveLength(1);
+
+    // 후취소 성공: confirmed.
+    const cancelled = await postNotify(
+      notifyForm({
+        paymentId: form.paymentId,
+        priceKrw: pack.priceKrw,
+        tid,
+        resultCode: '2001',
+        stateCd: '2',
+      }),
+    );
+    expect(cancelled.body).toBe('OK');
+    expect((await netCancels()).at(-1)).toMatchObject({
+      resultCode: '2001',
+      payload: { outcome: 'cancelled', notice: true },
+    });
+    expect(await paymentRow(form.paymentId)).toMatchObject({ status: 'cancelled' });
+
+    // SmartroPay sends it again: confirmed once is enough.
+    const resent = await postNotify(
+      notifyForm({
+        paymentId: form.paymentId,
+        priceKrw: pack.priceKrw,
+        tid,
+        resultCode: '2001',
+        stateCd: '2',
+      }),
+    );
+    expect(resent.body).toBe('OK');
+    expect(
+      (await netCancels()).filter(
+        (event) => (event.payload as { outcome?: string }).outcome === 'cancelled',
+      ),
+    ).toHaveLength(1);
+    expect(await ledgerOf(user.id)).toHaveLength(1);
+  });
+
+  it('keeps a net cancel its 재통보 confirmed cancelled when the PG then answers it refused', async () => {
+    // Contradictory PG answers: its cancel notice arrives while the cancel call hangs, and the
+    // call then answers "no". The notice is the PG's word that the card is cancelled.
+    const form = await prepared();
+    const tid = testTid();
+    approveWith(form, tid, { overrides: { SignValue: 'forged' } });
+    let release!: (answer: SmartroResponse) => void;
+    let cancelAsked!: () => void;
+    const asked = new Promise<void>((resolve) => (cancelAsked = resolve));
+    pg.onCancel = () => {
+      cancelAsked();
+      return new Promise<SmartroResponse>((resolve) => (release = resolve));
+    };
+    const returning = postReturn(form.form.Moid, { Tid: tid, TrAuthKey: 'k' });
+    await asked;
+    const notice = await postNotify(
+      notifyForm({
+        paymentId: form.paymentId,
+        priceKrw: pack.priceKrw,
+        tid,
+        resultCode: '2001',
+        stateCd: '1',
+      }),
+    );
+    expect(notice.body).toBe('OK');
+    expect((await eventsOf(form.paymentId)).at(-1)).toMatchObject({
+      type: 'net_cancel',
+      payload: { outcome: 'cancelled', notice: true },
+    });
+
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    try {
+      release({ ResultCode: '2002', ResultMsg: '취소 불가' });
+      expect(redirectOf(await returning).result).toBe('cancelled');
+      expect(error).toHaveBeenCalledWith(
+        expect.stringContaining('the 재통보 already confirmed the card cancelled'),
+      );
+    } finally {
+      error.mockRestore();
+    }
+    // Not reopened; the refusal is recorded all the same.
+    expect(await paymentRow(form.paymentId)).toMatchObject({ status: 'cancelled' });
+    expect((await eventsOf(form.paymentId)).at(-1)).toMatchObject({
+      type: 'net_cancel',
+      resultCode: '2002',
+      payload: { outcome: 'refused' },
+    });
+
+    // The approval 재통보 is acknowledged and credits nothing.
+    const late = await postNotify(
+      notifyForm({ paymentId: form.paymentId, priceKrw: pack.priceKrw, tid }),
+    );
+    expect(late.statusCode).toBe(200);
+    expect(late.body).toBe('OK');
+    expect(await paymentRow(form.paymentId)).toMatchObject({ status: 'cancelled' });
+    expect(await ledgerOf(user.id)).toHaveLength(1);
+    expect((await balanceOf(user.id)).availableP).toBe(SIGNUP_BONUS_P);
+  });
+
+  it('asks a 재통보 whose credit a net cancel reserved from under it to come again', async () => {
+    // The notice reads the payment `pending` (claimed); before its credit, the ReturnUrl's net
+    // cancel reserves it `cancelled` and has not heard from the PG yet.
+    const claim = testTid();
+    const payment = await reserveSmartroPayment(t.db, user.id, { claimedBy: claim });
+    const tid = testTid();
+    const notice = notifyForm({ paymentId: payment.id, priceKrw: payment.priceKrw, tid });
+    const wallet = t.app.get(WalletService);
+    const credit = wallet.creditPayment.bind(wallet);
+    const spy = vi.spyOn(wallet, 'creditPayment').mockImplementationOnce(async (input) => {
+      await t.db
+        .update(schema.payments)
+        .set({ status: 'cancelled' })
+        .where(eq(schema.payments.id, payment.id));
+      return credit(input);
+    });
+    try {
+      const res = await postNotify(notice);
+      expect(res.statusCode).toBeGreaterThanOrEqual(500);
+      expect(res.body).not.toContain('OK');
+      expect(spy).toHaveBeenCalledTimes(1);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await paymentRow(payment.id)).toMatchObject({ status: 'cancelled' });
+    expect(await ledgerOf(user.id)).toHaveLength(1);
+
+    // The cancel then confirms: the re-sent notice is acknowledged, crediting nothing.
+    await t.db.insert(schema.paymentEvents).values({
+      paymentId: payment.id,
+      type: 'net_cancel',
+      resultCode: '2001',
+      payload: { outcome: 'cancelled', ResultCode: '2001' },
+    });
+    const again = await postNotify(notice);
+    expect(again.statusCode).toBe(200);
+    expect(again.body).toBe('OK');
+    expect(await paymentRow(payment.id)).toMatchObject({ status: 'cancelled' });
+    expect(await ledgerOf(user.id)).toHaveLength(1);
   });
 
   it('never net-cancels an approval whose credit failed only after the payment succeeded', async () => {
@@ -664,6 +942,54 @@ describe.skipIf(!hasTestInfra)('SmartroPay (integration)', () => {
       'approval_inquiry',
     ]);
     expect((await balanceOf(user.id)).availableP).toBe(SIGNUP_BONUS_P + 10_000n);
+  });
+
+  it("keeps the payment pending when the approval gets no answer and the inquiry's is no success", async () => {
+    // The approval is slow at the card company; the inquiry, asked meanwhile, finds nothing
+    // yet (or fails on its own). Neither is the approval's word: the card may be charged.
+    for (const [resultCode, resultMsg] of [
+      ['6017', '승인이력 없음'],
+      ['6021', '거래조회 오류'],
+      ['9999', '미지정 오류'],
+      // Even a refusal-looking code: only the approval's own answer may fail a payment.
+      ['3011', '카드번호 오류'],
+    ] as const) {
+      pg.reset();
+      const form = await prepared();
+      const tid = testTid();
+      pg.onApprove = () => {
+        throw new SmartroUnreachableError('timed out');
+      };
+      pg.onInquire = () =>
+        approvalAnswer({
+          paymentId: form.paymentId,
+          priceKrw: pack.priceKrw,
+          tid,
+          resultCode,
+          resultMsg,
+        });
+      const res = await postReturn(form.form.Moid, { Tid: tid, TrAuthKey: 'k' });
+      expect(redirectOf(res)).toEqual({ payment: form.paymentId, result: 'pending' });
+      expect(await paymentRow(form.paymentId)).toMatchObject({
+        status: 'pending',
+        providerRef: tid,
+        resultMessage: null,
+      });
+      const events = await eventsOf(form.paymentId);
+      expect(events.map((event) => [event.type, event.resultCode])).toEqual([
+        ['return', null],
+        ['approval', null],
+        ['approval_inquiry', resultCode],
+      ]);
+
+      // The approval went through after all: its 재통보 credits it.
+      const notified = await postNotify(
+        notifyForm({ paymentId: form.paymentId, priceKrw: pack.priceKrw, tid }),
+      );
+      expect(notified.body).toBe('OK');
+      expect(await paymentRow(form.paymentId)).toMatchObject({ status: 'succeeded' });
+    }
+    expectLedgerChain(await ledgerOf(user.id), SIGNUP_BONUS_P + 40_000n);
   });
 
   it('keeps the payment pending when neither the approval nor the inquiry answers', async () => {
@@ -1042,5 +1368,116 @@ describe.skipIf(!hasTestInfra)('SmartroPay (integration)', () => {
     expect(events.at(-1)).toMatchObject({ type: 'notify', resultCode: '2001' });
     expect(events.at(-1)!.payload).toMatchObject({ StateCd: '1' });
     expect(events.at(-1)!.payload).not.toHaveProperty('BuyerName');
+  });
+
+  it('closes a claimed payment its cancel 재통보 reports cancelled, so a late approval notice credits nothing', async () => {
+    // The approval's answer was lost (the payment is claimed, `pending`) and the card was
+    // cancelled in the merchant admin. A full cancel carries the approval's Tid — not the
+    // authentication Tid the claim recorded; the Moid names the payment.
+    const claim = testTid();
+    const payment = await reserveSmartroPayment(t.db, user.id, { claimedBy: claim });
+    const approvalTid = testTid();
+    const cancel = (
+      resultCode: string,
+      extra: { resultMsg?: string; payMethod?: string; tid?: string; amt?: string } = {},
+    ) =>
+      notifyForm({
+        paymentId: payment.id,
+        priceKrw: payment.priceKrw,
+        tid: approvalTid,
+        otid: approvalTid,
+        resultCode,
+        stateCd: '1',
+        ...extra,
+      });
+
+    // A cancel that failed, or a card's 2015 (해당거래 취소실패): recorded, nothing moves.
+    for (const resultCode of ['2002', '2015']) {
+      expect((await postNotify(cancel(resultCode, { resultMsg: '취소 실패' }))).body).toBe('OK');
+      expect(await paymentRow(payment.id)).toMatchObject({ status: 'pending', providerRef: claim });
+    }
+    // A partial cancel went through — its own Tid with the approval's as Otid, or part of the
+    // amount — but the rest of the card stays charged: recorded, nothing moves.
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    try {
+      for (const partial of [{ tid: testTid() }, { amt: '1000' }]) {
+        expect((await postNotify(cancel('2001', partial))).body).toBe('OK');
+        expect(await paymentRow(payment.id)).toMatchObject({ status: 'pending' });
+      }
+      expect(error).toHaveBeenCalledWith(expect.stringContaining('reports a partial cancel'));
+    } finally {
+      error.mockRestore();
+    }
+    expect((await eventsOf(payment.id)).map((event) => event.type)).toEqual([
+      'notify',
+      'notify',
+      'notify',
+      'notify',
+    ]);
+
+    expect((await postNotify(cancel('2001'))).body).toBe('OK');
+    expect(await paymentRow(payment.id)).toMatchObject({
+      status: 'cancelled',
+      providerRef: claim,
+      resultMessage: '결제대행사 취소 통보에 따른 취소',
+    });
+    expect((await eventsOf(payment.id)).at(-1)).toMatchObject({
+      type: 'net_cancel',
+      resultCode: '2001',
+      payload: { outcome: 'cancelled', notice: true },
+    });
+
+    // SmartroPay re-sends the approval's notice: acknowledged, never credited.
+    const late = await postNotify(
+      notifyForm({ paymentId: payment.id, priceKrw: payment.priceKrw, tid: approvalTid }),
+    );
+    expect(late.statusCode).toBe(200);
+    expect(late.body).toBe('OK');
+    expect(await paymentRow(payment.id)).toMatchObject({ status: 'cancelled' });
+
+    // A claimed payment we had failed (an approval notice would credit it): the same. With no
+    // method on the payment, the notice's own PayMethod reads the code — 2015 is SmilePay's
+    // "already cancelled".
+    const failed = await reserveSmartroPayment(t.db, user.id, { claimedBy: testTid() });
+    await t.db
+      .update(schema.payments)
+      .set({ status: 'failed' })
+      .where(eq(schema.payments.id, failed.id));
+    const smile = notifyForm({
+      paymentId: failed.id,
+      priceKrw: failed.priceKrw,
+      tid: testTid(),
+      resultCode: '2015',
+      stateCd: '2',
+      payMethod: 'SMILEPAY',
+    });
+    expect((await postNotify(smile)).body).toBe('OK');
+    expect(await paymentRow(failed.id)).toMatchObject({ status: 'cancelled' });
+    expect(
+      (
+        await postNotify(
+          notifyForm({ paymentId: failed.id, priceKrw: failed.priceKrw, tid: testTid() }),
+        )
+      ).body,
+    ).toBe('OK');
+    expect(await paymentRow(failed.id)).toMatchObject({ status: 'cancelled' });
+
+    // Never claimed, so never approved: nothing to cancel — recorded only.
+    const unclaimed = await reserveSmartroPayment(t.db, user.id);
+    const stray = await postNotify(
+      notifyForm({
+        paymentId: unclaimed.id,
+        priceKrw: unclaimed.priceKrw,
+        tid: testTid(),
+        resultCode: '2001',
+        stateCd: '1',
+      }),
+    );
+    expect(stray.body).toBe('OK');
+    expect(await paymentRow(unclaimed.id)).toMatchObject({ status: 'pending', providerRef: null });
+    expect((await eventsOf(unclaimed.id)).map((event) => event.type)).toEqual(['notify']);
+
+    expect(await ledgerOf(user.id)).toHaveLength(1);
+    expect((await balanceOf(user.id)).availableP).toBe(SIGNUP_BONUS_P);
   });
 });

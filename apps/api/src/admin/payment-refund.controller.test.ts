@@ -36,13 +36,16 @@ import { hasTestInfra } from '../test/setup-env.js';
 import {
   FORM_HEADERS,
   FakeSmartroClient,
+  TEST_NOTIFY_IP,
   TEST_SMARTRO,
   approvalAnswer,
   formBody,
+  notifyForm,
   reserveSmartroPayment,
+  testSignValue,
   testTid,
 } from '../test/smartro.js';
-import { sleep } from '../test/wait.js';
+import { sleep, waitForLockWaiter } from '../test/wait.js';
 import { SmartroUnreachableError } from '../payments/smartro/smartro-client.js';
 
 const jsonHeaders = { origin: 'http://localhost:3000', 'content-type': 'application/json' };
@@ -84,11 +87,20 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
       payload: { reason },
     });
 
-  /** A SmartroPay charge of `member`, approved through the ReturnUrl like a real one. */
-  async function smartroCharge(): Promise<{ id: string; tid: string }> {
+  /**
+   * A SmartroPay charge of `member`, approved through the ReturnUrl like a real one — by card,
+   * or by the easy-pay `payMethod` the payer picked in the window (with its success code).
+   */
+  async function smartroCharge(
+    payMethod: { payMethod: string; resultCode: string } = {
+      payMethod: 'CARD',
+      resultCode: '3001',
+    },
+  ): Promise<{ id: string; tid: string }> {
     const payment = await reserveSmartroPayment(t.db, member.id, { packageId: pack.id });
     const tid = testTid();
-    pg.onApprove = () => approvalAnswer({ paymentId: payment.id, priceKrw: payment.priceKrw, tid });
+    pg.onApprove = () =>
+      approvalAnswer({ paymentId: payment.id, priceKrw: payment.priceKrw, tid, ...payMethod });
     const res = await t.app.inject({
       method: 'POST',
       url: `/api/v1/payments/smartro/return?m=${paymentIdToMoid(payment.id)}`,
@@ -137,6 +149,33 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
       .select()
       .from(schema.adminActions)
       .where(eq(schema.adminActions.type, 'payment_refund'));
+  }
+
+  async function eventsOf(paymentId: string) {
+    return t.db
+      .select()
+      .from(schema.paymentEvents)
+      .where(eq(schema.paymentEvents.paymentId, paymentId))
+      .orderBy(asc(schema.paymentEvents.id));
+  }
+
+  /** SmartroPay's server posting a 재통보, from its STG address. */
+  const postNotify = (fields: Record<string, string>) =>
+    t.app.inject({
+      method: 'POST',
+      url: '/api/v1/payments/smartro/notify',
+      headers: FORM_HEADERS,
+      payload: formBody(fields),
+      remoteAddress: TEST_NOTIFY_IP,
+    });
+
+  /** A refund whose cancel got no answer: `refunding`, the P clawed back (502). */
+  async function stuckRefunding(id: string): Promise<void> {
+    pg.onCancel = () => {
+      throw new SmartroUnreachableError('timed out');
+    };
+    expect((await refund(id)).statusCode).toBe(502);
+    expect(await paymentRow(id)).toMatchObject({ status: 'refunding' });
   }
 
   it('refunds an unused SmartroPay charge: P out, the whole card amount cancelled', async () => {
@@ -439,6 +478,7 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
     ];
     pg.onCancel = () => answers[pg.cancels.length - 1]!();
     const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
     try {
       // light-my-request dispatches lazily: `.then` is what sends the request.
       const first = refund(id).then((res) => res);
@@ -470,19 +510,626 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
       expect(pg.cancels).toHaveLength(2);
       expect(await refundActions()).toHaveLength(2);
 
-      // The first attempt's answer lands after all: the payment is already refunded, so it
-      // changes nothing and says so for a person to check.
+      // The first attempt's answer lands after all: the payment is already refunded — the
+      // same end — so it changes nothing, and no alarm goes off over it.
       release();
       expect((await first).statusCode).toBe(200);
-      expect(error).toHaveBeenCalledWith(
-        expect.stringContaining(`cancelled ${tid} but the payment was no longer refunding`),
+      expect(log).toHaveBeenCalledWith(
+        expect.stringContaining(`cancelled ${tid}; it was refunded already`),
       );
+      expect(error).not.toHaveBeenCalledWith(expect.stringContaining('no longer refunding'));
     } finally {
       error.mockRestore();
+      log.mockRestore();
     }
     expect(await paymentRow(id)).toMatchObject({ status: 'refunded' });
     const ledger = await ledgerOf(member.id);
     expect(ledger.filter((entry) => entry.type === 'PAYMENT_CANCEL')).toHaveLength(1);
     expectLedgerChain(ledger, SIGNUP_BONUS_P);
+  });
+  // --- a retry never puts the P back by itself (PAY-1) --------------------------------
+
+  it('finishes a retried NaverPay refund on NaverPay\'s own "already cancelled" (NP17)', async () => {
+    const { id } = await smartroCharge({ payMethod: 'NAVER', resultCode: 'NP00' });
+    expect(await paymentRow(id)).toMatchObject({ status: 'succeeded', method: 'NAVER' });
+    await stuckRefunding(id);
+
+    // The first cancel reached NaverPay; the retry hears its code, not SmartroPay's 2013.
+    pg.onCancel = () => ({ ResultCode: 'NP17', ResultMsg: '이미 전체 취소된 결제' });
+    const retry = await refund(id, '재시도');
+    expect(retry.statusCode).toBe(200);
+    expect(retry.json<{ data: AdminPayment }>().data).toMatchObject({ status: 'refunded' });
+    const ledger = await ledgerOf(member.id);
+    expect(ledger.map((entry) => entry.type)).toEqual(['BONUS', 'DEPOSIT', 'PAYMENT_CANCEL']);
+    expectLedgerChain(ledger, SIGNUP_BONUS_P);
+  });
+
+  it('keeps a refused retry refunding with the P still out, for an admin to settle', async () => {
+    const { id } = await smartroCharge();
+    await stuckRefunding(id);
+
+    // The first attempt may have cancelled the card: this "no" must not give the P back.
+    pg.onCancel = () => ({ ResultCode: '2002', ResultMsg: '취소 실패' });
+    const retry = await refund(id, '재시도');
+    expect(retry.statusCode).toBe(409);
+    expect(retry.json()).toMatchObject({
+      error: {
+        code: 'PAYMENT_GATEWAY_REFUSED',
+        details: [
+          { path: ['gateway'], message: '2002 취소 실패' },
+          { path: ['payment'], message: 'settle_required' },
+        ],
+      },
+    });
+    expect(await paymentRow(id)).toMatchObject({ status: 'refunding', refundedAt: null });
+    expect((await balanceOf(member.id)).availableP).toBe(SIGNUP_BONUS_P);
+    const ledger = await ledgerOf(member.id);
+    expect(ledger.map((entry) => entry.type)).toEqual(['BONUS', 'DEPOSIT', 'PAYMENT_CANCEL']);
+    expectLedgerChain(ledger, SIGNUP_BONUS_P);
+    expect((await eventsOf(id)).at(-1)).toMatchObject({
+      type: 'refund_cancel',
+      resultCode: '2002',
+    });
+    // Its answer is recorded, so the next retry need not wait out the lease.
+    pg.onCancel = () => ({ ResultCode: '2013', ResultMsg: '기취소 거래' });
+    expect((await refund(id, '다시')).statusCode).toBe(200);
+    expect(await paymentRow(id)).toMatchObject({ status: 'refunded' });
+  });
+
+  it('still restores on a first attempt a card refuses, 2015 included (기취소 only for SmilePay)', async () => {
+    const { id } = await smartroCharge();
+    pg.onCancel = () => ({ ResultCode: '2015', ResultMsg: '해당거래 취소실패' });
+    const res = await refund(id);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({
+      error: { code: 'PAYMENT_GATEWAY_REFUSED', details: [{ message: '2015 해당거래 취소실패' }] },
+    });
+    expect(await paymentRow(id)).toMatchObject({ status: 'succeeded' });
+    expectLedgerChain(await ledgerOf(member.id), SIGNUP_BONUS_P + 10_000n);
+  });
+
+  it('keeps an answer without a ResultCode refunding; a numeric 2013 then finishes it', async () => {
+    const { id } = await smartroCharge();
+    pg.onCancel = () => ({ ResultMsg: '시스템 오류' });
+    const first = await refund(id);
+    expect(first.statusCode).toBe(502);
+    expect(first.json()).toMatchObject({ error: { code: 'PAYMENT_GATEWAY_ERROR' } });
+    expect(await paymentRow(id)).toMatchObject({ status: 'refunding' });
+    expect((await balanceOf(member.id)).availableP).toBe(SIGNUP_BONUS_P);
+    expect((await eventsOf(id)).at(-1)).toMatchObject({
+      type: 'refund_cancel',
+      resultCode: null,
+      resultMessage: '시스템 오류',
+    });
+    expect(
+      (await ledgerOf(member.id)).filter((entry) => entry.type === 'PAYMENT_CANCEL_REVERSAL'),
+    ).toHaveLength(0);
+
+    // JSON may carry the code as a number.
+    pg.onCancel = () => ({ ResultCode: 2013 });
+    const retry = await refund(id, '재시도');
+    expect(retry.statusCode).toBe(200);
+    expect(await paymentRow(id)).toMatchObject({ status: 'refunded' });
+    const ledger = await ledgerOf(member.id);
+    expect(ledger.filter((entry) => entry.type === 'PAYMENT_CANCEL')).toHaveLength(1);
+    expectLedgerChain(ledger, SIGNUP_BONUS_P);
+  });
+
+  it('finishes a refunding refund when the 재통보 reports its cancel (StateCd 1)', async () => {
+    const { id, tid } = await smartroCharge();
+    await stuckRefunding(id);
+
+    const res = await t.app.inject({
+      method: 'POST',
+      url: '/api/v1/payments/smartro/notify',
+      headers: FORM_HEADERS,
+      payload: formBody(
+        notifyForm({ paymentId: id, priceKrw: 9_700, tid, resultCode: '2001', stateCd: '1' }),
+      ),
+      remoteAddress: TEST_NOTIFY_IP,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe('OK');
+    const row = await paymentRow(id);
+    expect(row).toMatchObject({ status: 'refunded' });
+    expect(row.refundedAt).toBeInstanceOf(Date);
+    // The P was clawed back when the refund began: nothing more moves.
+    const ledger = await ledgerOf(member.id);
+    expect(ledger.map((entry) => entry.type)).toEqual(['BONUS', 'DEPOSIT', 'PAYMENT_CANCEL']);
+    expectLedgerChain(ledger, SIGNUP_BONUS_P);
+
+    // A cancel notice for another Tid finishes nothing.
+    const other = await smartroCharge();
+    await stuckRefunding(other.id);
+    await t.app.inject({
+      method: 'POST',
+      url: '/api/v1/payments/smartro/notify',
+      headers: FORM_HEADERS,
+      payload: formBody(
+        notifyForm({
+          paymentId: other.id,
+          priceKrw: 9_700,
+          tid: testTid(),
+          resultCode: '2001',
+          stateCd: '1',
+        }),
+      ),
+      remoteAddress: TEST_NOTIFY_IP,
+    });
+    expect(await paymentRow(other.id)).toMatchObject({ status: 'refunding' });
+  });
+
+  it('finishes a refused retry the 재통보 already reported cancelled', async () => {
+    const { id, tid } = await smartroCharge();
+    await stuckRefunding(id);
+    // A cancel notice recorded without finishing the refund (one that arrived before this
+    // service finished refunds on it): the PG's word that the card is cancelled.
+    await t.db.insert(schema.paymentEvents).values({
+      paymentId: id,
+      type: 'notify',
+      resultCode: '2001',
+      payload: { Tid: tid, StateCd: '1', ResultCode: '2001' },
+    });
+    pg.onCancel = () => ({ ResultCode: '2002', ResultMsg: '취소 실패' });
+    const retry = await refund(id, '재시도');
+    expect(retry.statusCode).toBe(200);
+    expect(await paymentRow(id)).toMatchObject({ status: 'refunded' });
+    expectLedgerChain(await ledgerOf(member.id), SIGNUP_BONUS_P);
+  });
+
+  // --- a cancel 재통보 counts only when its code says cancelled -------------------------
+
+  it('finishes a first attempt the PG refuses once its 재통보 said the card was cancelled', async () => {
+    const { id, tid } = await smartroCharge();
+    // Cancelled in the merchant admin while `succeeded`: the notice is recorded, nothing moves.
+    const notice = await postNotify(
+      notifyForm({ paymentId: id, priceKrw: 9_700, tid, resultCode: '2001', stateCd: '1' }),
+    );
+    expect(notice.body).toBe('OK');
+    expect(await paymentRow(id)).toMatchObject({ status: 'succeeded' });
+
+    // The admin refunds it; the PG answers in a code we do not know as "already cancelled".
+    // Its own notice already said so: done, and the P is not put back.
+    pg.onCancel = () => ({ ResultCode: '2002', ResultMsg: '취소 불가 거래' });
+    const res = await refund(id);
+    expect(res.statusCode).toBe(200);
+    expect(res.json<{ data: AdminPayment }>().data).toMatchObject({ status: 'refunded' });
+    expect((await eventsOf(id)).at(-1)).toMatchObject({
+      type: 'refund_cancel',
+      resultCode: '2002',
+    });
+    const ledger = await ledgerOf(member.id);
+    expect(ledger.map((entry) => entry.type)).toEqual(['BONUS', 'DEPOSIT', 'PAYMENT_CANCEL']);
+    expectLedgerChain(ledger, SIGNUP_BONUS_P);
+  });
+
+  it('takes nothing from a cancel 재통보 whose code is no cancel (2002, a card 2015)', async () => {
+    const { id, tid } = await smartroCharge();
+    await stuckRefunding(id);
+
+    for (const [resultCode, resultMsg] of [
+      ['2002', '취소 실패'],
+      // 기취소 for SmilePay only; for a card, 해당거래 취소실패.
+      ['2015', '해당거래 취소실패'],
+    ] as const) {
+      const res = await postNotify(
+        notifyForm({ paymentId: id, priceKrw: 9_700, tid, resultCode, resultMsg, stateCd: '2' }),
+      );
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toBe('OK');
+      expect(await paymentRow(id)).toMatchObject({ status: 'refunding', refundedAt: null });
+      // Recorded all the same: it is SmartroPay's.
+      expect((await eventsOf(id)).at(-1)).toMatchObject({ type: 'notify', resultCode });
+    }
+
+    // Nor does it count for a retry the PG refuses: still `refunding`, for a settle.
+    pg.onCancel = () => ({ ResultCode: '2002', ResultMsg: '취소 실패' });
+    const retry = await refund(id, '재시도');
+    expect(retry.statusCode).toBe(409);
+    expect(retry.json()).toMatchObject({
+      error: {
+        code: 'PAYMENT_GATEWAY_REFUSED',
+        details: [{ path: ['gateway'] }, { path: ['payment'], message: 'settle_required' }],
+      },
+    });
+    expect(await paymentRow(id)).toMatchObject({ status: 'refunding' });
+    const ledger = await ledgerOf(member.id);
+    expect(ledger.map((entry) => entry.type)).toEqual(['BONUS', 'DEPOSIT', 'PAYMENT_CANCEL']);
+    expectLedgerChain(ledger, SIGNUP_BONUS_P);
+  });
+
+  it('finishes on a full 후취소 재통보 (StateCd 2), never on a partial one', async () => {
+    const { id, tid } = await smartroCharge();
+    await stuckRefunding(id);
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    try {
+      // A partial cancel made in the merchant admin: its own Tid with the approval's as Otid
+      // ("부분취소의 경우"), or part of the amount under the approval's Tid. The rest of the card
+      // stays charged: nothing is finished on it.
+      for (const partial of [
+        { tid: testTid(), otid: tid },
+        { tid, amt: '1000' },
+      ]) {
+        const res = await postNotify(
+          notifyForm({
+            paymentId: id,
+            priceKrw: 9_700,
+            resultCode: '2001',
+            stateCd: '2',
+            ...partial,
+          }),
+        );
+        expect(res.body).toBe('OK');
+        expect(await paymentRow(id)).toMatchObject({ status: 'refunding', refundedAt: null });
+      }
+      expect(error).toHaveBeenCalledWith(expect.stringContaining('reports a partial cancel'));
+    } finally {
+      error.mockRestore();
+    }
+    // Nor does a partial one count for a retry the PG refuses: still `refunding`, for a settle.
+    pg.onCancel = () => ({ ResultCode: '2032', ResultMsg: '취소금액 오류' });
+    const retry = await refund(id, '재시도');
+    expect(retry.statusCode).toBe(409);
+    expect(retry.json()).toMatchObject({
+      error: { details: [{ path: ['gateway'] }, { message: 'settle_required' }] },
+    });
+    expect(await paymentRow(id)).toMatchObject({ status: 'refunding' });
+
+    // The full cancel names the approval itself (Tid, and Otid when it carries one): done.
+    const res = await postNotify(
+      notifyForm({
+        paymentId: id,
+        priceKrw: 9_700,
+        tid,
+        otid: tid,
+        resultCode: '2001',
+        stateCd: '2',
+      }),
+    );
+    expect(res.body).toBe('OK');
+    const row = await paymentRow(id);
+    expect(row).toMatchObject({ status: 'refunded', providerRef: tid });
+    expect(row.refundedAt).toBeInstanceOf(Date);
+    const ledger = await ledgerOf(member.id);
+    expect(ledger.map((entry) => entry.type)).toEqual(['BONUS', 'DEPOSIT', 'PAYMENT_CANCEL']);
+    expectLedgerChain(ledger, SIGNUP_BONUS_P);
+  });
+
+  it("never finishes a refund on a recorded partial cancel's notice, even the PG refusing", async () => {
+    // An operator cancelled 1,000원 of a charge in the merchant admin while it was `succeeded`:
+    // recorded, nothing moved. A refund then asks for the whole amount, which the PG refuses.
+    const { id, tid } = await smartroCharge();
+    await t.db.insert(schema.paymentEvents).values({
+      paymentId: id,
+      type: 'notify',
+      resultCode: '2001',
+      payload: { Tid: testTid(), Otid: tid, StateCd: '2', ResultCode: '2001', Amt: '1000' },
+    });
+    pg.onCancel = () => ({ ResultCode: '2031', ResultMsg: '전체금액취소 불가' });
+    const res = await refund(id);
+    // Not `refunded`: 8,700원 of the card is still charged. The P goes back as for any refusal.
+    expect(res.statusCode).toBe(409);
+    expect(await paymentRow(id)).toMatchObject({ status: 'succeeded' });
+    expectLedgerChain(await ledgerOf(member.id), SIGNUP_BONUS_P + 10_000n);
+
+    // A retry of a stuck refund does not finish on it either.
+    pg.onCancel = () => {
+      throw new SmartroUnreachableError('timed out');
+    };
+    expect((await refund(id)).statusCode).toBe(502);
+    pg.onCancel = () => ({ ResultCode: '2031', ResultMsg: '전체금액취소 불가' });
+    expect((await refund(id, '재시도')).json()).toMatchObject({
+      error: { details: [{ path: ['gateway'] }, { message: 'settle_required' }] },
+    });
+    expect(await paymentRow(id)).toMatchObject({ status: 'refunding' });
+  });
+
+  it('finishes an unanswered cancel, first attempt or retry, once a 재통보 reported it cancelled', async () => {
+    // Cancelled in the merchant admin while `succeeded`; the admin's refund then gets no answer.
+    const first = await smartroCharge();
+    expect(
+      (
+        await postNotify(
+          notifyForm({
+            paymentId: first.id,
+            priceKrw: 9_700,
+            tid: first.tid,
+            resultCode: '2001',
+            stateCd: '1',
+          }),
+        )
+      ).body,
+    ).toBe('OK');
+    pg.onCancel = () => {
+      throw new SmartroUnreachableError('timed out');
+    };
+    const res = await refund(first.id);
+    expect(res.statusCode).toBe(200);
+    expect(res.json<{ data: AdminPayment }>().data).toMatchObject({ status: 'refunded' });
+    expect((await ledgerOf(member.id)).map((entry) => entry.type)).toEqual([
+      'BONUS',
+      'DEPOSIT',
+      'PAYMENT_CANCEL',
+    ]);
+
+    // A retry whose answer carries no ResultCode, with a notice recorded meanwhile.
+    const second = await smartroCharge();
+    await stuckRefunding(second.id);
+    await t.db.insert(schema.paymentEvents).values({
+      paymentId: second.id,
+      type: 'notify',
+      resultCode: '2001',
+      payload: { Tid: second.tid, StateCd: '1', ResultCode: '2001', Amt: '9700' },
+    });
+    pg.onCancel = () => ({ ResultMsg: '시스템 오류' });
+    const retry = await refund(second.id, '재시도');
+    expect(retry.statusCode).toBe(200);
+    expect(await paymentRow(second.id)).toMatchObject({ status: 'refunded' });
+    expectLedgerChain(await ledgerOf(member.id), SIGNUP_BONUS_P);
+  });
+
+  it('reads a recorded 구통보 (TID, OTID) and a code kept only in its column', async () => {
+    const { id, tid } = await smartroCharge();
+    await stuckRefunding(id);
+    // 구통보 names, and a payload without its ResultCode: the row's result_code reads it.
+    await t.db.insert(schema.paymentEvents).values({
+      paymentId: id,
+      type: 'notify',
+      resultCode: '2001',
+      payload: { TID: tid, OTID: tid, StateCd: '1', Amt: '9700' },
+    });
+    pg.onCancel = () => ({ ResultCode: '2002', ResultMsg: '취소 실패' });
+    expect((await refund(id, '재시도')).statusCode).toBe(200);
+    expect(await paymentRow(id)).toMatchObject({ status: 'refunded' });
+  });
+
+  it('takes a 구통보 cancel notice by its TID, and its OTID as the mark of a partial cancel', async () => {
+    const { id, tid } = await smartroCharge();
+    await stuckRefunding(id);
+    const oldNotice = (ownTid: string, originalTid: string) => ({
+      PayMethod: 'CARD',
+      MID: TEST_SMARTRO.mid,
+      Amt: '9700',
+      GoodsName: '포인트 10,000P',
+      TID: ownTid,
+      OTID: originalTid,
+      OID: paymentIdToMoid(id),
+      AuthDate: '260928103000',
+      ResultCode: '2001',
+      ResultMsg: '취소 성공',
+      StateCd: '2',
+      SignValue: testSignValue(ownTid, '2001'),
+    });
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    try {
+      expect((await postNotify(oldNotice(testTid(), tid))).body).toBe('OK');
+    } finally {
+      error.mockRestore();
+    }
+    expect(await paymentRow(id)).toMatchObject({ status: 'refunding' });
+    expect((await eventsOf(id)).at(-1)!.payload).toMatchObject({ OTID: tid });
+
+    expect((await postNotify(oldNotice(tid, tid))).body).toBe('OK');
+    expect(await paymentRow(id)).toMatchObject({ status: 'refunded' });
+  });
+
+  it("reads a notice's code by the payment's method, not the notice's PayMethod", async () => {
+    // A card payment: 2015 is 해당거래 취소실패 for a card, whatever PayMethod the notice names.
+    const { id, tid } = await smartroCharge();
+    await stuckRefunding(id);
+    const res = await postNotify(
+      notifyForm({
+        paymentId: id,
+        priceKrw: 9_700,
+        tid,
+        resultCode: '2015',
+        stateCd: '2',
+        payMethod: 'SMILEPAY',
+      }),
+    );
+    expect(res.body).toBe('OK');
+    expect(await paymentRow(id)).toMatchObject({ status: 'refunding', method: 'CARD' });
+  });
+
+  it('never restores a first attempt a retry took over: the retry decides', async () => {
+    const { id, tid } = await smartroCharge();
+    let refuseFirst: () => void = () => undefined;
+    let answerRetry: () => void = () => undefined;
+    const firstGate = new Promise<void>((resolve) => (refuseFirst = resolve));
+    const retryGate = new Promise<void>((resolve) => (answerRetry = resolve));
+    const answers = [
+      async () => {
+        await firstGate;
+        return { ResultCode: '2002', ResultMsg: '취소 실패' };
+      },
+      async () => {
+        await retryGate;
+        return { ResultCode: '2001', ResultMsg: '취소 성공' };
+      },
+    ];
+    pg.onCancel = () => answers[pg.cancels.length - 1]!();
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    try {
+      const first = refund(id).then((res) => res);
+      await vi.waitFor(() => {
+        expect(pg.cancels).toHaveLength(1);
+      });
+      // The first attempt outlives its lease (a slow PG): a retry takes the payment over, and
+      // its cancel is on the card when the first attempt's refusal finally lands.
+      await t.db
+        .update(schema.payments)
+        .set({ updatedAt: sql`now() - interval '70 seconds'` })
+        .where(eq(schema.payments.id, id));
+      const retry = refund(id, '재시도').then((res) => res);
+      await vi.waitFor(() => {
+        expect(pg.cancels).toHaveLength(2);
+      });
+
+      refuseFirst();
+      const late = await first;
+      // Not this attempt's any more: nothing put back, left to the retry (or a settle).
+      expect(late.statusCode).toBe(409);
+      expect(late.json()).toMatchObject({
+        error: {
+          code: 'PAYMENT_GATEWAY_REFUSED',
+          details: [
+            { path: ['gateway'], message: '2002 취소 실패' },
+            { message: 'settle_required' },
+          ],
+        },
+      });
+      expect(await paymentRow(id)).toMatchObject({ status: 'refunding' });
+      expect(error).toHaveBeenCalledWith(
+        expect.stringContaining('after a retry took the payment over'),
+      );
+
+      answerRetry();
+      expect((await retry).statusCode).toBe(200);
+    } finally {
+      error.mockRestore();
+    }
+    expect(await paymentRow(id)).toMatchObject({ status: 'refunded', providerRef: tid });
+    const ledger = await ledgerOf(member.id);
+    expect(ledger.map((entry) => entry.type)).toEqual(['BONUS', 'DEPOSIT', 'PAYMENT_CANCEL']);
+    expectLedgerChain(ledger, SIGNUP_BONUS_P);
+  });
+
+  it('finishes instead of restoring when a 재통보 lands while the refusal waits on the balance', async () => {
+    // The PG refuses the cancel; meanwhile a slow writer of the account (an order, say) holds
+    // its balance row, so the restore waits on it — and SmartroPay's notice of the cancel
+    // arrives in that window. The P must not go back to a card the PG says is cancelled.
+    for (const arrival of ['recorded', 'applied'] as const) {
+      const { id, tid } = await smartroCharge();
+      const holder = await t.db.$client.connect();
+      let open = false;
+      let pending: ReturnType<typeof refund> | undefined;
+      try {
+        pg.onCancel = async () => {
+          await holder.query('BEGIN');
+          open = true;
+          await holder.query(
+            `SELECT user_id FROM balances WHERE user_id = '${member.id}' FOR UPDATE`,
+          );
+          return { ResultCode: '2002', ResultMsg: '취소 실패' };
+        };
+        pending = refund(id).then((res) => res);
+        await waitForLockWaiter(holder, 'the restore on the balance row');
+        if (arrival === 'recorded') {
+          // Its event committed; its own transaction has yet to reach the payment row.
+          await t.db.insert(schema.paymentEvents).values({
+            paymentId: id,
+            type: 'notify',
+            resultCode: '2001',
+            payload: { Tid: tid, StateCd: '1', ResultCode: '2001', Amt: '9700' },
+          });
+        } else {
+          // Handled in full: the refund is finished before the restore gets the balance.
+          const notice = await postNotify(
+            notifyForm({ paymentId: id, priceKrw: 9_700, tid, resultCode: '2001', stateCd: '1' }),
+          );
+          expect(notice.body).toBe('OK');
+        }
+        await holder.query('COMMIT');
+        open = false;
+        const res = await pending;
+        expect(res.statusCode).toBe(200);
+        expect(res.json<{ data: AdminPayment }>().data).toMatchObject({ status: 'refunded' });
+      } finally {
+        if (open) await holder.query('ROLLBACK');
+        holder.release();
+        await pending?.catch(() => undefined);
+      }
+    }
+    const ledger = await ledgerOf(member.id);
+    expect(ledger.filter((entry) => entry.type === 'PAYMENT_CANCEL_REVERSAL')).toHaveLength(0);
+    expectLedgerChain(ledger, SIGNUP_BONUS_P);
+  });
+
+  it('raises no alarm when the 재통보 of its own cancel finishes the refund first', async () => {
+    const { id, tid } = await smartroCharge();
+    // The PG notifies the cancel before it answers the call.
+    pg.onCancel = async () => {
+      const notice = await postNotify(
+        notifyForm({ paymentId: id, priceKrw: 9_700, tid, resultCode: '2001', stateCd: '1' }),
+      );
+      expect(notice.body).toBe('OK');
+      return { ResultCode: '2001', ResultMsg: '취소 성공' };
+    };
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    try {
+      const res = await refund(id);
+      expect(res.statusCode).toBe(200);
+      expect(res.json<{ data: AdminPayment }>().data).toMatchObject({ status: 'refunded' });
+      expect(error).not.toHaveBeenCalled();
+
+      // The same when its answer is a refusal after all: the notice is the PG's word.
+      const other = await smartroCharge();
+      pg.onCancel = async () => {
+        await postNotify(
+          notifyForm({
+            paymentId: other.id,
+            priceKrw: 9_700,
+            tid: other.tid,
+            resultCode: '2001',
+            stateCd: '1',
+          }),
+        );
+        return { ResultCode: '2002', ResultMsg: '취소 실패' };
+      };
+      const refused = await refund(other.id);
+      expect(refused.statusCode).toBe(200);
+      expect(await paymentRow(other.id)).toMatchObject({ status: 'refunded' });
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      error.mockRestore();
+    }
+    expectLedgerChain(await ledgerOf(member.id), SIGNUP_BONUS_P);
+  });
+
+  // --- the policy's edges (T3) ---------------------------------------------------------
+
+  it('refunds just inside the window, and counts from created_at when approved_at is null', async () => {
+    const inside = await smartroCharge();
+    await t.db
+      .update(schema.payments)
+      .set({ approvedAt: sql`now() - interval '6 days 23 hours'` })
+      .where(eq(schema.payments.id, inside.id));
+    expect((await refund(inside.id)).statusCode).toBe(200);
+    expect(await paymentRow(inside.id)).toMatchObject({ status: 'refunded' });
+
+    // A row credited before approved_at existed: its reservation's own time decides.
+    const old = await smartroCharge();
+    await t.db
+      .update(schema.payments)
+      .set({ approvedAt: null, createdAt: sql`now() - interval '8 days'` })
+      .where(eq(schema.payments.id, old.id));
+    expect((await refund(old.id)).json()).toMatchObject({
+      error: { code: 'REFUND_NOT_ALLOWED', details: [{ message: 'window_closed' }] },
+    });
+    const recent = await smartroCharge();
+    await t.db
+      .update(schema.payments)
+      .set({ approvedAt: null })
+      .where(eq(schema.payments.id, recent.id));
+    expect((await refund(recent.id)).statusCode).toBe(200);
+    expect(await paymentRow(recent.id)).toMatchObject({ status: 'refunded' });
+  });
+
+  it("refunds when exactly the payment's P is still available", async () => {
+    const { id } = await smartroCharge();
+    // Spend the whole sign-up bonus: 10,000P left against a 10,000P payment — none of it used.
+    const spent = await t.app.inject({
+      method: 'POST',
+      url: `/api/v1/admin/users/${member.id}/balance-adjust`,
+      headers: { ...jsonHeaders, cookie: admin.cookie },
+      payload: { amountP: (-SIGNUP_BONUS_P).toString(), memo: 'spent the bonus' },
+    });
+    expect(spent.statusCode).toBe(200);
+    expect((await balanceOf(member.id)).availableP).toBe(10_000n);
+
+    const res = await refund(id);
+    expect(res.statusCode).toBe(200);
+    expect((await balanceOf(member.id)).availableP).toBe(0n);
+    expectLedgerChain(await ledgerOf(member.id), 0n);
   });
 });
