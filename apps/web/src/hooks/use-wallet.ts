@@ -1,8 +1,14 @@
 'use client';
 
-import { skipToken, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import {
+  type InfiniteData,
+  skipToken,
+  useInfiniteQuery,
+  useMutation,
+  useQueryClient,
+} from '@tanstack/react-query';
 import { useQuery } from '@tanstack/react-query';
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import {
   api,
   isApiError,
@@ -18,7 +24,13 @@ import {
 } from '@/lib/api';
 import { useSession } from '@/lib/use-session';
 import { IdempotencyKeys } from '@/lib/idempotency';
-import { isFlowUnavailable, paymentPollInterval } from '@/lib/smartro-payments';
+import {
+  type PaymentsPoll,
+  endedFetches,
+  isFlowUnavailable,
+  paymentPollInterval,
+  paymentsPoll,
+} from '@/lib/smartro-payments';
 import { ME_QUERY_KEY } from './use-me';
 
 /** PLAN 11.5 key rules. Ledger and payments hang off their own roots. */
@@ -72,7 +84,38 @@ export function useLedger() {
   });
 }
 
+/** What the two polls read of a query: its data and how many of its fetches have ended. */
+interface PolledQuery<T> {
+  state: { data?: T | undefined; dataUpdateCount: number; errorUpdateCount: number };
+}
+
+/**
+ * `refetchInterval` of 결제 내역: `poll` over every loaded row, on every loaded page, counted by
+ * the list's `endedFetches` (a failed fetch spends the budget too). Apart from `usePayments` so
+ * a test can hand it a query's state.
+ */
+export function paymentsRefetchInterval(poll: PaymentsPoll) {
+  return (query: PolledQuery<InfiniteData<Page<Payment>>>): number | false =>
+    poll(query.state.data?.pages.flatMap((page) => page.items) ?? [], endedFetches(query.state));
+}
+
+/**
+ * `refetchInterval` of the result notice's payment (`useMyPayment`): `paymentPollInterval` by the
+ * query's `endedFetches`, so a payment whose re-reads keep failing stops like one still pending.
+ */
+export function myPaymentRefetchInterval(query: PolledQuery<Payment>): number | false {
+  return paymentPollInterval(query.state.data, endedFetches(query.state));
+}
+
+/**
+ * 결제 내역: the account's own charges, newest first, 20 per page. Re-read every few seconds, for
+ * a bounded while, as long as a loaded row is still moving on the server side (`paymentsPoll`):
+ * a refund's finish (환불 처리 중 → 환불됨) publishes no event, nor does a settle that moves no
+ * P. The poll keeps its memory in state, one per observer: which rows it waits on, and since
+ * which fetch.
+ */
 export function usePayments() {
+  const [poll] = useState(paymentsPoll);
   return useInfiniteQuery({
     queryKey: PAYMENTS_QUERY_KEY,
     queryFn: async ({ pageParam }: { pageParam: string | undefined }) => {
@@ -84,6 +127,7 @@ export function usePayments() {
     },
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last: Page<Payment>) => last.nextCursor ?? undefined,
+    refetchInterval: paymentsRefetchInterval(poll),
   });
 }
 
@@ -126,7 +170,7 @@ export function useMyPayment(id: string | undefined) {
         ? skipToken
         : async (): Promise<Payment> =>
             unwrap(await api.GET('/api/v1/me/payments/{id}', { params: { path: { id } } })).data,
-    refetchInterval: (query) => paymentPollInterval(query.state.data, query.state.dataUpdateCount),
+    refetchInterval: myPaymentRefetchInterval,
   });
 }
 

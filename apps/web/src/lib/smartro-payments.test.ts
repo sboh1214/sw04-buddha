@@ -2,10 +2,14 @@ import {
   CARD_MIN_PRICE_KRW,
   PAYMENT_REFUND_WINDOW_DAYS,
   PAYMENT_RETURN_RESULTS,
+  PAYMENT_SETTLE_OUTCOMES,
   PAYMENT_STATUSES,
   REFUND_REASON_MAX_LENGTH,
+  SETTLE_TID_MAX_LENGTH,
+  type PaymentSettleOutcome,
   type PaymentStatus,
   formatKrw,
+  settlePaymentBodySchema,
 } from '@buddha/shared';
 import type { InfiniteData } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
@@ -15,11 +19,18 @@ import { PAYMENT_STATUS_LABEL, PAYMENT_STATUS_PALETTE } from './market-admin';
 import { safeNextPath } from './next-path';
 import {
   type AdminPaymentPage,
+  MERCHANT_ADMIN_URL,
   PAYMENT_POLL_INTERVAL_MS,
   PAYMENT_POLL_LIMIT,
+  SETTLE_OUTCOME_VIEW,
   checkoutErrorTitle,
+  endedFetches,
   isBelowCardMinimum,
   isFlowUnavailable,
+  isPaymentInFlight,
+  merchantAdminSites,
+  merchantOrderId,
+  offersSettle,
   parseWalletSearch,
   paymentFailureReason,
   paymentMethodLabel,
@@ -27,12 +38,18 @@ import {
   paymentPollInterval,
   paymentResultNotice,
   paymentStatusView,
+  paymentsPoll,
   refundAction,
   refundDeadline,
   refundErrorView,
   refundFormSchema,
   refundKeepsDialog,
   replacePaymentRow,
+  settleErrorView,
+  settleFormSchema,
+  settleKeepsDialog,
+  settleOutcomesFor,
+  toSettleBody,
   walletHref,
   walletLoginPath,
 } from './smartro-payments';
@@ -68,8 +85,18 @@ function payment(overrides: Partial<Payment> = {}): Payment {
   };
 }
 
-function adminPayment(id: string, status: PaymentStatus = 'succeeded'): AdminPayment {
-  return { ...payment({ id, status }), userId: 'user-1', nickname: '닉네임' };
+function adminPayment(
+  id: string,
+  status: PaymentStatus = 'succeeded',
+  overrides: Partial<AdminPayment> = {},
+): AdminPayment {
+  return {
+    ...payment({ id, status }),
+    userId: 'user-1',
+    nickname: '닉네임',
+    needsReview: false,
+    ...overrides,
+  };
 }
 
 describe('parseWalletSearch', () => {
@@ -198,6 +225,90 @@ describe('paymentPollInterval', () => {
       expect(paymentPollInterval({ status }, 1), status).toBe(false);
     }
     expect(paymentPollInterval(undefined, 0)).toBe(false);
+  });
+});
+
+describe('endedFetches', () => {
+  it('counts a failed fetch like an answered one, so a poll that keeps failing runs out', () => {
+    expect(endedFetches({ dataUpdateCount: 0, errorUpdateCount: 0 })).toBe(0);
+    expect(endedFetches({ dataUpdateCount: 1, errorUpdateCount: 0 })).toBe(1);
+    // A pending payment re-read once, then refused every time (a 401 is never retried).
+    const failing = (errors: number) =>
+      paymentPollInterval(
+        { status: 'pending' },
+        endedFetches({ dataUpdateCount: 1, errorUpdateCount: errors }),
+      );
+    expect(failing(PAYMENT_POLL_LIMIT - 2)).toBe(PAYMENT_POLL_INTERVAL_MS);
+    expect(failing(PAYMENT_POLL_LIMIT - 1)).toBe(false);
+  });
+});
+
+describe('결제 내역 poll', () => {
+  const REFUNDING = adminPayment('00000000-0000-4000-8000-0000000000a1', 'refunding');
+  const CLAIMED = adminPayment('00000000-0000-4000-8000-0000000000a2', 'pending');
+  const UNCLAIMED = { ...CLAIMED, id: '00000000-0000-4000-8000-0000000000a3', providerRef: null };
+  const DONE = adminPayment('00000000-0000-4000-8000-0000000000a4', 'succeeded');
+
+  it('waits on a refund under way and a claimed pending payment, nothing else', () => {
+    expect(isPaymentInFlight(REFUNDING)).toBe(true);
+    expect(isPaymentInFlight(CLAIMED)).toBe(true);
+    // 미완료: only the payer's return from the window moves it, and that reloads the wallet.
+    expect(isPaymentInFlight(UNCLAIMED)).toBe(false);
+    for (const status of PAYMENT_STATUSES.filter((s) => s !== 'pending' && s !== 'refunding')) {
+      expect(isPaymentInFlight({ status, providerRef: 'StdTid' }), status).toBe(false);
+    }
+  });
+
+  it('re-reads the list every few seconds while a row is in flight, for a bounded while', () => {
+    const poll = paymentsPoll();
+    // The first answer is fetch 1: the budget runs from there.
+    expect(poll([DONE, REFUNDING], 1)).toBe(PAYMENT_POLL_INTERVAL_MS);
+    // Asked again for the same answer (query-core re-computes it), nothing is spent.
+    expect(poll([DONE, REFUNDING], 1)).toBe(PAYMENT_POLL_INTERVAL_MS);
+    expect(poll([DONE, REFUNDING], PAYMENT_POLL_LIMIT)).toBe(PAYMENT_POLL_INTERVAL_MS);
+    expect(poll([DONE, REFUNDING], PAYMENT_POLL_LIMIT + 1)).toBe(false);
+    // The refund finished: nothing left to wait on.
+    expect(poll([DONE, { ...REFUNDING, status: 'refunded' }], PAYMENT_POLL_LIMIT + 2)).toBe(false);
+  });
+
+  it('never polls a list with nothing in flight, or an empty one', () => {
+    const poll = paymentsPoll();
+    expect(poll([], 0)).toBe(false);
+    expect(poll([DONE, UNCLAIMED], 1)).toBe(false);
+    expect(poll([DONE, UNCLAIMED], 2)).toBe(false);
+  });
+
+  it("gives each new set of in-flight rows its own budget, whatever the list's count", () => {
+    const poll = paymentsPoll();
+    // A wallet left open: trades restarted the list many times before anything was in flight,
+    // and a payment stuck 처리 중 spent its own two minutes.
+    expect(poll([CLAIMED, DONE], 40)).toBe(PAYMENT_POLL_INTERVAL_MS);
+    expect(poll([CLAIMED, DONE], 40 + PAYMENT_POLL_LIMIT)).toBe(false);
+    expect(poll([CLAIMED, DONE], 100)).toBe(false);
+    // Then an admin refund claws DONE back (user:balance restarts the list): a new set.
+    const clawedBack = { ...DONE, status: 'refunding' as const };
+    expect(poll([CLAIMED, clawedBack], 101)).toBe(PAYMENT_POLL_INTERVAL_MS);
+    expect(poll([CLAIMED, clawedBack], 100 + PAYMENT_POLL_LIMIT)).toBe(PAYMENT_POLL_INTERVAL_MS);
+    expect(poll([CLAIMED, clawedBack], 101 + PAYMENT_POLL_LIMIT)).toBe(false);
+    // A row leaving the set (the stuck one settled) is a new set too, and so is a new page.
+    expect(poll([{ ...CLAIMED, status: 'succeeded' }, clawedBack], 130)).toBe(
+      PAYMENT_POLL_INTERVAL_MS,
+    );
+  });
+
+  it('starts over when the count runs backwards (the cache was reset under the page)', () => {
+    const poll = paymentsPoll();
+    expect(poll([REFUNDING], 50)).toBe(PAYMENT_POLL_INTERVAL_MS);
+    expect(poll([REFUNDING], 50 + PAYMENT_POLL_LIMIT)).toBe(false);
+    expect(poll([REFUNDING], 1)).toBe(PAYMENT_POLL_INTERVAL_MS);
+  });
+
+  it('keeps one memory per poll: two lists do not spend each other', () => {
+    const one = paymentsPoll();
+    const other = paymentsPoll();
+    expect(one([REFUNDING], 1 + PAYMENT_POLL_LIMIT)).toBe(PAYMENT_POLL_INTERVAL_MS);
+    expect(one([REFUNDING], 1 + 2 * PAYMENT_POLL_LIMIT)).toBe(false);
+    expect(other([REFUNDING], 1 + 2 * PAYMENT_POLL_LIMIT)).toBe(PAYMENT_POLL_INTERVAL_MS);
   });
 });
 
@@ -366,6 +477,41 @@ describe('refundErrorView', () => {
     ).toEqual({ title: copy.errRefundGatewayRefused });
   });
 
+  it('says a refusal left for 수동 정리 kept the P out and the payment 환불 처리 중', () => {
+    const gateway = { path: ['gateway'], message: '2002 취소 불가' };
+    const settleRequired = { path: ['payment'], message: 'settle_required' };
+    expect(
+      refundErrorView(apiError(409, 'PAYMENT_GATEWAY_REFUSED', [gateway, settleRequired])),
+    ).toEqual({
+      title: copy.errRefundSettleRequired,
+      description: `${copy.errRefundSettleRequiredHint} ${copy.refundGatewayAnswer} 2002 취소 불가`,
+    });
+    // The PG gave no words (an empty gateway detail): the instruction alone.
+    expect(
+      refundErrorView(
+        apiError(409, 'PAYMENT_GATEWAY_REFUSED', [
+          { path: ['gateway'], message: '' },
+          settleRequired,
+        ]),
+      ),
+    ).toEqual({
+      title: copy.errRefundSettleRequired,
+      description: copy.errRefundSettleRequiredHint,
+    });
+    // Read by path, not position.
+    expect(
+      refundErrorView(apiError(409, 'PAYMENT_GATEWAY_REFUSED', [settleRequired, gateway])).title,
+    ).toBe(copy.errRefundSettleRequired);
+    // Without it, the plain refusal (the P restored, or the row moved): no settle promised.
+    expect(refundErrorView(apiError(409, 'PAYMENT_GATEWAY_REFUSED', [gateway])).title).toBe(
+      copy.errRefundGatewayRefused,
+    );
+    expect(copy.errRefundSettleRequired).toContain(copy.paymentStatusRefunding);
+    expect(copy.errRefundSettleRequiredHint).toContain(copy.adminPaymentSettle);
+    // The refused refund just touched the row: a settle before two minutes answers in_progress.
+    expect(copy.errRefundSettleRequiredHint).toContain('2분');
+  });
+
   it('maps the silent PG, an attempt in flight, a wrong id and a blank reason', () => {
     expect(refundErrorView(apiError(502, 'PAYMENT_GATEWAY_ERROR')).title).toBe(
       copy.errRefundGatewayError,
@@ -437,5 +583,270 @@ describe('replacePaymentRow', () => {
       cache,
     );
     expect(replacePaymentRow(undefined, first)).toBeUndefined();
+  });
+});
+
+describe('settleOutcomesFor', () => {
+  const ID = '00000000-0000-4000-8000-0000000000b1';
+  const row = (status: PaymentStatus, overrides: Partial<AdminPayment> = {}) =>
+    adminPayment(ID, status, overrides);
+
+  /**
+   * payment-settle.service `transitionOf`, row by row — every status, claimed or not, flagged or
+   * not. For `cancelled` the API reads the net cancel's outcome, which the list sees only as
+   * `needsReview` (no confirmed net cancel).
+   */
+  const TABLE: readonly [PaymentStatus, boolean, boolean, readonly PaymentSettleOutcome[]][] = [
+    // status, claimed, needsReview, outcomes
+    ['pending', true, true, ['credit', 'cancelled', 'failed']],
+    ['pending', true, false, ['credit', 'cancelled', 'failed']],
+    ['pending', false, false, ['failed']],
+    ['failed', true, true, ['credit', 'cancelled', 'failed']],
+    ['failed', true, false, ['credit', 'cancelled', 'failed']],
+    ['failed', false, false, []],
+    ['cancelled', true, true, ['credit', 'cancelled']],
+    ['cancelled', true, false, []],
+    ['cancelled', false, true, []],
+    ['refunding', true, true, ['refunded', 'restore']],
+    ['refunding', true, false, ['refunded', 'restore']],
+    ['succeeded', true, false, []],
+    ['refunded', true, false, []],
+  ];
+
+  it("mirrors the API's transition table", () => {
+    for (const [status, claimed, needsReview, outcomes] of TABLE) {
+      const payment = row(status, {
+        providerRef: claimed ? 'StdTid0123456789' : null,
+        needsReview,
+      });
+      expect(settleOutcomesFor(payment), `${status} claimed=${String(claimed)}`).toEqual(outcomes);
+    }
+    // Every status is in the table, and every outcome offered is one the API knows.
+    expect(new Set(TABLE.map(([status]) => status))).toEqual(new Set(PAYMENT_STATUSES));
+    for (const [, , , outcomes] of TABLE) {
+      for (const outcome of outcomes) expect(PAYMENT_SETTLE_OUTCOMES).toContain(outcome);
+    }
+  });
+
+  it('offers nothing on a mock payment, whatever its state (the API refuses `provider`)', () => {
+    for (const status of PAYMENT_STATUSES) {
+      const mock = row(status, { provider: 'mock', providerRef: 'mock_1', needsReview: true });
+      expect(settleOutcomesFor(mock), status).toEqual([]);
+      expect(offersSettle(mock), status).toBe(false);
+    }
+  });
+});
+
+describe('offersSettle', () => {
+  const ID = '00000000-0000-4000-8000-0000000000b2';
+
+  it('offers 수동 정리 on a flagged row with something to settle', () => {
+    expect(offersSettle(adminPayment(ID, 'pending', { needsReview: true }))).toBe(true);
+    expect(offersSettle(adminPayment(ID, 'failed', { needsReview: true }))).toBe(true);
+    expect(offersSettle(adminPayment(ID, 'cancelled', { needsReview: true }))).toBe(true);
+    // Not flagged: a claimed payment the API may still settle by itself.
+    expect(offersSettle(adminPayment(ID, 'pending'))).toBe(false);
+    expect(offersSettle(adminPayment(ID, 'failed'))).toBe(false);
+    expect(offersSettle(adminPayment(ID, 'succeeded'))).toBe(false);
+  });
+
+  it('offers it on every refunding row, beside the retry (a refused one needs it at once)', () => {
+    const refunding = adminPayment(ID, 'refunding');
+    expect(offersSettle(refunding)).toBe(true);
+    expect(refundAction(refunding)).toBe('retry');
+    expect(offersSettle({ ...refunding, needsReview: true })).toBe(true);
+  });
+});
+
+describe('the settle dialog', () => {
+  it('describes every outcome in plain words', () => {
+    for (const outcome of PAYMENT_SETTLE_OUTCOMES) {
+      expect(SETTLE_OUTCOME_VIEW[outcome].label, outcome).not.toBe('');
+      expect(SETTLE_OUTCOME_VIEW[outcome].description, outcome).not.toBe('');
+    }
+    expect(SETTLE_OUTCOME_VIEW.credit.description).toContain('승인이 확인되어 P를 충전합니다');
+    expect(SETTLE_OUTCOME_VIEW.cancelled.description).toContain(
+      '카드 결제가 취소된 것을 확인했습니다',
+    );
+    expect(SETTLE_OUTCOME_VIEW.failed.description).toContain('승인되지 않은 결제로 닫습니다');
+    expect(SETTLE_OUTCOME_VIEW.refunded.description).toContain(
+      '카드 취소가 확인되어 환불을 완료합니다',
+    );
+    expect(SETTLE_OUTCOME_VIEW.restore.description).toContain(
+      '카드가 취소되지 않아 회수한 P를 돌려줍니다',
+    );
+  });
+
+  it("points to the deployment's merchant admin, or both while that is unknown", () => {
+    const both = [
+      { mode: 'STG', url: 'https://newbiz.smilebiz.co.kr' },
+      { mode: 'REAL', url: 'https://www.smilebiz.co.kr' },
+    ];
+    expect(merchantAdminSites(undefined)).toEqual(both);
+    expect(merchantAdminSites({ provider: 'mock' })).toEqual(both);
+    const smartro = (mode: 'STG' | 'REAL') =>
+      ({ provider: 'smartro', mode, scriptUrl: { pc: 'p', mobile: 'm' } }) as const;
+    expect(merchantAdminSites(smartro('STG'))).toEqual([
+      { mode: 'STG', url: MERCHANT_ADMIN_URL.STG },
+    ]);
+    expect(merchantAdminSites(smartro('REAL'))).toEqual([
+      { mode: 'REAL', url: MERCHANT_ADMIN_URL.REAL },
+    ]);
+  });
+
+  it('shows the order number the merchant admin searches by, and never throws', () => {
+    expect(merchantOrderId(PAYMENT_ID)).toBe(PAYMENT_ID.replaceAll('-', ''));
+    expect(merchantOrderId('not-a-uuid')).toBeNull();
+  });
+});
+
+describe('settleFormSchema · toSettleBody', () => {
+  const parse = (values: { outcome?: PaymentSettleOutcome; tid?: string; reason?: string }) =>
+    settleFormSchema.safeParse({ tid: '', reason: '확인함', ...values });
+  const messages = (values: Parameters<typeof parse>[0]) => {
+    const result = parse(values);
+    return result.success ? [] : result.error.issues.map((issue) => issue.message);
+  };
+
+  it('requires an outcome and a reason, trimmed, within the API limit', () => {
+    expect(messages({})).toEqual([copy.errSettleOutcome]);
+    expect(messages({ outcome: 'failed', reason: '   ' })).toEqual([copy.errSettleReason]);
+    expect(
+      messages({ outcome: 'failed', reason: 'x'.repeat(REFUND_REASON_MAX_LENGTH + 1) }),
+    ).toEqual([copy.errSettleReason]);
+    expect(messages({ outcome: 'failed', reason: 'x'.repeat(REFUND_REASON_MAX_LENGTH) })).toEqual(
+      [],
+    );
+  });
+
+  it("checks a credit's Tid only when one is typed, by the API's own shape", () => {
+    expect(messages({ outcome: 'credit' })).toEqual([]);
+    expect(messages({ outcome: 'credit', tid: '  StdTid01  ' })).toEqual([]);
+    expect(messages({ outcome: 'credit', tid: 'Std Tid' })).toEqual([copy.errSettleTid]);
+    expect(messages({ outcome: 'credit', tid: '결제번호' })).toEqual([copy.errSettleTid]);
+    expect(messages({ outcome: 'credit', tid: 'T'.repeat(SETTLE_TID_MAX_LENGTH + 1) })).toEqual([
+      copy.errSettleTid,
+    ]);
+    expect(messages({ outcome: 'credit', tid: 'T'.repeat(SETTLE_TID_MAX_LENGTH) })).toEqual([]);
+    // Left behind by switching to another outcome: not sent, so not checked.
+    expect(messages({ outcome: 'cancelled', tid: 'Std Tid' })).toEqual([]);
+  });
+
+  it('sends the Tid with a credit only, and only when typed — never an empty one', () => {
+    const body = (values: Parameters<typeof parse>[0]) => {
+      const result = parse(values);
+      if (!result.success) throw new Error('refused');
+      return toSettleBody(result.data);
+    };
+    expect(body({ outcome: 'credit', tid: '  StdTid01 ', reason: ' 승인 확인 ' })).toEqual({
+      outcome: 'credit',
+      reason: '승인 확인',
+      tid: 'StdTid01',
+    });
+    const blank = body({ outcome: 'credit', tid: '   ' });
+    expect(blank).toEqual({ outcome: 'credit', reason: '확인함' });
+    expect('tid' in blank).toBe(false);
+    for (const outcome of PAYMENT_SETTLE_OUTCOMES.filter((o) => o !== 'credit')) {
+      const other = body({ outcome, tid: 'StdTid01' });
+      expect(other, outcome).toEqual({ outcome, reason: '확인함' });
+    }
+    // Every body the form builds is one the API accepts.
+    for (const outcome of PAYMENT_SETTLE_OUTCOMES) {
+      for (const tid of ['', 'StdTid01']) {
+        expect(settlePaymentBodySchema.safeParse(body({ outcome, tid })).success).toBe(true);
+      }
+    }
+  });
+});
+
+describe('settleErrorView', () => {
+  const refused = (message: string) =>
+    apiError(409, 'REFUND_NOT_ALLOWED', [{ path: ['payment'], message }]);
+
+  it('tells every REFUND_NOT_ALLOWED detail of the settle route apart', () => {
+    expect(settleErrorView(refused('status'))).toEqual({
+      title: copy.errSettleStatus,
+      description: copy.errSettleStatusHint,
+    });
+    expect(settleErrorView(refused('provider'))).toEqual({ title: copy.errSettleProvider });
+    expect(settleErrorView(refused('in_progress'))).toEqual({ title: copy.errSettleInProgress });
+    expect(settleErrorView(refused('approval_mismatch'))).toEqual({
+      title: copy.errSettleApprovalMismatch,
+      description: copy.errSettleApprovalMismatchHint,
+    });
+    expect(settleErrorView(refused('partial_cancel'))).toEqual({
+      title: copy.errSettlePartialCancel,
+      description: copy.errSettlePartialCancelHint,
+    });
+    // A detail the web does not know yet, or none: not settleable like this now.
+    expect(settleErrorView(refused('something_new')).title).toBe(copy.errSettleStatus);
+    expect(settleErrorView(apiError(409, 'REFUND_NOT_ALLOWED')).title).toBe(copy.errSettleStatus);
+  });
+
+  it('says what to do: the remedies the API names', () => {
+    expect(copy.errSettleInProgress).toBe(
+      '방금 처리 중인 결제입니다. 2분 뒤에 다시 시도해 주세요.',
+    );
+    // A card the PG says is cancelled: 취소 확인 or 환불 완료, never a credit or a restore.
+    expect(copy.errSettleStatusHint).toContain(copy.adminPaymentSettleCancelled);
+    expect(copy.errSettleStatusHint).toContain(copy.adminPaymentSettleRefunded);
+    // The approval is not this payment's: cancel the card, then 취소 확인.
+    expect(copy.errSettleApprovalMismatchHint).toContain(copy.adminPaymentSettleCancelled);
+    // A partial cancel: settle it, then square the balance by hand.
+    expect(copy.errSettlePartialCancelHint).toContain(copy.adminAdjust);
+  });
+
+  it('puts a refused Tid or reason under its field', () => {
+    expect(
+      settleErrorView(
+        apiError(400, 'VALIDATION_ERROR', [
+          {
+            path: ['tid'],
+            message: 'required: no successful approval of this payment is on record',
+          },
+        ]),
+      ),
+    ).toEqual({ title: copy.errSettleTidRequired, field: 'tid' });
+    expect(
+      settleErrorView(apiError(400, 'VALIDATION_ERROR', [{ path: ['reason'], message: 'x' }])),
+    ).toEqual({ title: copy.errSettleReason, field: 'reason' });
+    expect(copy.errSettleTidRequired).toContain(copy.adminPaymentSettleTid);
+    // Asked for whenever no SUCCESSFUL approval is on record — also after an approval that
+    // answered a PG error code, which the row shows as its reason.
+    expect(copy.errSettleTidRequired).toContain('성공한 승인 응답이 없어');
+  });
+
+  it('maps a wrong id, and falls back to the generic message for everything else', () => {
+    expect(settleErrorView(apiError(404, 'NOT_FOUND')).title).toBe(copy.errRefundNotFound);
+    expect(settleErrorView(apiError(400, 'VALIDATION_ERROR')).title).toBe(copy.errUnknown);
+    expect(
+      settleErrorView(apiError(400, 'VALIDATION_ERROR', [{ path: ['outcome'], message: 'x' }])),
+    ).toEqual({ title: copy.errUnknown });
+    expect(settleErrorView(apiError(500, 'INTERNAL')).title).toBe(copy.errUnknown);
+    expect(settleErrorView(new TypeError('Failed to fetch')).title).toBe(copy.errUnknown);
+  });
+});
+
+describe('settleKeepsDialog', () => {
+  const refused = (message: string) =>
+    apiError(409, 'REFUND_NOT_ALLOWED', [{ path: ['payment'], message }]);
+
+  it('keeps the dialog for what the admin answers in it', () => {
+    expect(settleKeepsDialog(new TypeError('Failed to fetch'))).toBe(true);
+    expect(
+      settleKeepsDialog(apiError(400, 'VALIDATION_ERROR', [{ path: ['tid'], message: 'x' }])),
+    ).toBe(true);
+    for (const reason of ['in_progress', 'approval_mismatch', 'partial_cancel']) {
+      expect(settleKeepsDialog(refused(reason)), reason).toBe(true);
+    }
+  });
+
+  it('closes it over the refreshed list for every other answer', () => {
+    for (const reason of ['status', 'provider', 'something_new']) {
+      expect(settleKeepsDialog(refused(reason)), reason).toBe(false);
+    }
+    expect(settleKeepsDialog(apiError(409, 'REFUND_NOT_ALLOWED'))).toBe(false);
+    expect(settleKeepsDialog(apiError(404, 'NOT_FOUND'))).toBe(false);
+    expect(settleKeepsDialog(apiError(500, 'INTERNAL'))).toBe(false);
   });
 });

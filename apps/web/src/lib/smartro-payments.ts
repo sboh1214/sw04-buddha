@@ -1,23 +1,36 @@
 import {
   CARD_MIN_PRICE_KRW,
   PAYMENT_REFUND_WINDOW_DAYS,
+  PAYMENT_SETTLE_OUTCOMES,
   REFUND_REASON_MAX_LENGTH,
+  SETTLE_TID_MAX_LENGTH,
   type PaymentReturnResult,
   type PaymentStatus,
+  paymentIdToMoid,
   paymentReturnResultSchema,
   uuidSchema,
 } from '@buddha/shared';
 import type { InfiniteData } from '@tanstack/react-query';
 import * as z from 'zod';
 import { copy } from '@/copy';
-import { type AdminPayment, type ApiError, type Payment, isApiError, validationField } from './api';
+import {
+  type AdminPayment,
+  type ApiError,
+  type Payment,
+  type PaymentProviderInfo,
+  type PaymentSettleOutcome,
+  type SettlePaymentBody,
+  isApiError,
+  validationField,
+} from './api';
 import { PAYMENT_STATUS_LABEL, PAYMENT_STATUS_PALETTE } from './market-admin';
 
 /**
  * Pure decisions behind the payment screens (ADR-0042): the wallet's return from the
  * SmartroPay window (`/wallet?payment=&result=&package=`), the user's 결제 내역, and the admin
- * refund. No `'use client'` directive, so the server page parses its `searchParams` here; the
- * components only render what these answer, and this app's node-only test runner executes it.
+ * refund and 수동 정리. No `'use client'` directive, so the server page parses its
+ * `searchParams` here; the components only render what these answer, and this app's node-only
+ * test runner executes it.
  */
 
 // ---- the wallet URL -----------------------------------------------------------------
@@ -159,7 +172,7 @@ export const PAYMENT_POLL_LIMIT = 24;
  * `refetchInterval` of the notice's payment: every 5 s while it is still `pending` — the
  * approval's answer was lost, or the 재통보 has not come yet — for two minutes, after which
  * the notice keeps saying so and 결제 내역 carries the rest (a person settles what is left).
- * `fetches` is the query's `dataUpdateCount`.
+ * `fetches` is `endedFetches` of the query's state: a failed fetch spends the budget too.
  */
 export function paymentPollInterval(
   payment: Pick<Payment, 'status'> | undefined,
@@ -168,6 +181,17 @@ export function paymentPollInterval(
   return payment?.status === 'pending' && fetches < PAYMENT_POLL_LIMIT
     ? PAYMENT_POLL_INTERVAL_MS
     : false;
+}
+
+/**
+ * Every fetch of a query that has ended, answered or failed — the count the two polls budget by.
+ * query-core adds nothing to `dataUpdateCount` for a failed fetch, so a budget of that alone
+ * would never run out while the fetches keep failing: a 401 once the session expired (never
+ * retried) or an outage would re-request every PAYMENT_POLL_INTERVAL_MS for as long as the tab
+ * has focus.
+ */
+export function endedFetches(state: { dataUpdateCount: number; errorUpdateCount: number }): number {
+  return state.dataUpdateCount + state.errorUpdateCount;
 }
 
 // ---- 결제 내역 --------------------------------------------------------------------------
@@ -230,6 +254,63 @@ export function paymentStatusView(payment: Pick<Payment, 'status' | 'providerRef
   return {
     label: PAYMENT_STATUS_LABEL[payment.status],
     palette: PAYMENT_STATUS_PALETTE[payment.status],
+  };
+}
+
+/**
+ * A row of 결제 내역 about to change with nothing for the payer to do: a refund whose card
+ * cancel is under way (`refunding`, 환불 처리 중), or a claimed `pending` payment (처리 중) that
+ * the 재통보 — or an admin's 수동 정리 — still settles. An unclaimed `pending` one (미완료) only
+ * moves when the payer comes back from the window, and that return reloads the wallet anyway;
+ * polling for it would re-read the list on every visit of a member who once closed a window.
+ */
+export function isPaymentInFlight(payment: Pick<Payment, 'status' | 'providerRef'>): boolean {
+  return (
+    payment.status === 'refunding' || (payment.status === 'pending' && payment.providerRef !== null)
+  );
+}
+
+/** One call of the 결제 내역 poll: the loaded rows and the list's `endedFetches`. */
+export type PaymentsPoll = (
+  payments: readonly Pick<Payment, 'id' | 'status' | 'providerRef'>[],
+  fetches: number,
+) => number | false;
+
+/**
+ * `refetchInterval` of 결제 내역 (DESIGN §6.2): while a loaded row is in flight
+ * (`isPaymentInFlight`), the list is re-read every PAYMENT_POLL_INTERVAL_MS for at most
+ * PAYMENT_POLL_LIMIT fetches — `paymentPollInterval`'s two minutes — so 환불 처리 중 turns into
+ * 환불됨 on screen without a focus or a remount. The realtime `user:balance` restart cannot do it:
+ * only the refund's claw-back moves P, and its finish publishes nothing (nor does a settle that
+ * moves no P: 환불 완료, 취소 확인, 실패로 닫기).
+ *
+ * The budget belongs to the rows it waits on, not to the query, and a failed fetch spends it
+ * like an answered one (`endedFetches`): the rows it waits on are then the last ones the list
+ * loaded, still in the cache, so a list that keeps failing stops after its two minutes as well.
+ * `fetches` also counts every refetch a trade's `user:balance` asks for, so a count kept since
+ * the list first loaded would be spent long before a refund starts on a wallet left open. So
+ * each new set of in-flight rows (a row joined or left, or changed status) starts a fresh count,
+ * a set that stays as it is stops after its two minutes (a payment still 처리 중 then waits for a
+ * person), and a count smaller than where the set began — the cache was reset under the page —
+ * starts over. Hence a function with memory, one per list observer (`usePayments` keeps it in
+ * state).
+ */
+export function paymentsPoll(): PaymentsPoll {
+  let waitingOn = '';
+  let from = 0;
+  return (payments, fetches) => {
+    const inFlight = payments
+      .filter(isPaymentInFlight)
+      .map((payment) => `${payment.id}:${payment.status}`)
+      .sort()
+      .join(',');
+    if (inFlight !== waitingOn || fetches < from) {
+      waitingOn = inFlight;
+      from = fetches;
+    }
+    return inFlight !== '' && fetches - from < PAYMENT_POLL_LIMIT
+      ? PAYMENT_POLL_INTERVAL_MS
+      : false;
   };
 }
 
@@ -308,18 +389,35 @@ export const refundFormSchema = z.object({
 });
 export type RefundFormValues = z.infer<typeof refundFormSchema>;
 
+/** A `details` entry's message, trimmed, when it is a non-blank string. */
+function messageOf(entry: unknown): string | undefined {
+  if (typeof entry !== 'object' || entry === null) return undefined;
+  const message = (entry as { message?: unknown }).message;
+  return typeof message === 'string' && message.trim() !== '' ? message.trim() : undefined;
+}
+
 /** The `message` of the first `details` entry: how the refund answers say which case it is. */
 function detailMessage(error: ApiError): string | undefined {
   if (!Array.isArray(error.details)) return undefined;
-  const first: unknown = error.details[0];
-  if (typeof first !== 'object' || first === null) return undefined;
-  const message = (first as { message?: unknown }).message;
-  return typeof message === 'string' && message.trim() !== '' ? message.trim() : undefined;
+  return messageOf(error.details[0]);
+}
+
+/**
+ * The `message` of the first `details` entry whose path starts with `key` — a PG refusal carries
+ * two (`gateway`: the PG's words, `payment`: `settle_required`), so position alone cannot say.
+ */
+function detailAt(error: ApiError, key: string): string | undefined {
+  if (!Array.isArray(error.details)) return undefined;
+  for (const entry of error.details as unknown[]) {
+    const path = (entry as { path?: unknown } | null)?.path;
+    if (Array.isArray(path) && path[0] === key) return messageOf(entry);
+  }
+  return undefined;
 }
 
 export interface RefundErrorView {
   title: string;
-  /** The PG's own words, for a refusal it gave (`<ResultCode> <ResultMsg>`). */
+  /** What to do next, and the PG's own words for a refusal it gave (`<ResultCode> <ResultMsg>`). */
   description?: string;
 }
 
@@ -329,9 +427,14 @@ export interface RefundErrorView {
  * - INSUFFICIENT_BALANCE: the user has spent some of the P (owner decision 5: unused only).
  * - REFUND_NOT_ALLOWED: `window_closed`, `status` (already refunded, or never succeeded) or
  *   `provider` (nothing at the PG to cancel).
- * - PAYMENT_GATEWAY_REFUSED: the PG said no, and its answer is shown as it came. The P taken
- *   back is restored only if the payment was still 환불 처리 중 by then (the same code answers
- *   when it was not, with nothing restored), so the copy claims neither and points to the list.
+ * - PAYMENT_GATEWAY_REFUSED: the PG said no, and its answer (the `gateway` detail) is shown as
+ *   it came. With a second detail, `payment: settle_required` — a refused retry, a first attempt
+ *   a retry took over, a partial cancel on record — nothing was put back and the payment stays
+ *   환불 처리 중 until an admin checks the card in the merchant admin and settles it (수동 정리),
+ *   and the copy says exactly that. Without it the P taken back is restored only if the payment
+ *   was still 환불 처리 중 by then (the same code answers when it was not, with nothing
+ *   restored), so the copy claims neither and points to the list. (A refusal the PG's own cancel
+ *   재통보 contradicts answers 200 `refunded`: the success it is.)
  * - PAYMENT_GATEWAY_ERROR: no answer; the payment stays 환불 처리 중 for a retry.
  * - DUPLICATE_REQUEST: an earlier attempt on this payment is still waiting for the PG.
  */
@@ -344,13 +447,20 @@ export function refundErrorView(error: unknown): RefundErrorView {
     return { title: copy.errRefundStatus };
   }
   if (isApiError(error, 'PAYMENT_GATEWAY_REFUSED')) {
-    const answer = detailMessage(error);
-    return answer === undefined
+    const answer = detailAt(error, 'gateway');
+    const said = answer === undefined ? undefined : `${copy.refundGatewayAnswer} ${answer}`;
+    if (detailAt(error, 'payment') === 'settle_required') {
+      return {
+        title: copy.errRefundSettleRequired,
+        description:
+          said === undefined
+            ? copy.errRefundSettleRequiredHint
+            : `${copy.errRefundSettleRequiredHint} ${said}`,
+      };
+    }
+    return said === undefined
       ? { title: copy.errRefundGatewayRefused }
-      : {
-          title: copy.errRefundGatewayRefused,
-          description: `${copy.refundGatewayAnswer} ${answer}`,
-        };
+      : { title: copy.errRefundGatewayRefused, description: said };
   }
   if (isApiError(error, 'PAYMENT_GATEWAY_ERROR')) return { title: copy.errRefundGatewayError };
   if (isApiError(error, 'DUPLICATE_REQUEST')) return { title: copy.errRefundInProgress };
@@ -396,4 +506,223 @@ export function replacePaymentRow(
     return { ...page, items: page.items.map((row) => (row.id === fresh.id ? fresh : row)) };
   });
   return changed ? { ...data, pages } : data;
+}
+
+// ---- the admin 수동 정리 (settle) ------------------------------------------------------
+
+/**
+ * The outcomes `POST /admin/payments/:id/settle` takes from a payment as the list shows it, in
+ * the order the dialog offers them — the API's own table (payment-settle.service
+ * `transitionOf`), which refuses every other pair with REFUND_NOT_ALLOWED `status`:
+ * - `pending`: `failed` always (never approved, or the window was abandoned); `credit` and
+ *   `cancelled` too once it is claimed (`providerRef` set: an approval was asked for).
+ * - `failed`: claimed only — `credit`, `cancelled`, or `failed` again (checked: it stays failed
+ *   and drops its flag). An unclaimed one was never approved; there is nothing to settle.
+ * - `cancelled`: claimed, while its net cancel is not confirmed — `credit` (the card was not
+ *   cancelled after all) or `cancelled` (it was). The list cannot see the net cancel's outcome;
+ *   for this status `needsReview` says exactly "no confirmed net cancel", which is what it has.
+ * - `refunding`: `refunded` (the card cancel went through) or `restore` (it did not).
+ * Only a SmartroPay payment is settled (the API refuses the rest with `provider`), so a mock row
+ * gets none.
+ */
+export function settleOutcomesFor(
+  payment: Pick<AdminPayment, 'provider' | 'status' | 'providerRef' | 'needsReview'>,
+): readonly PaymentSettleOutcome[] {
+  if (payment.provider !== 'smartro') return [];
+  const claimed = payment.providerRef !== null;
+  switch (payment.status) {
+    case 'pending':
+      return claimed ? ['credit', 'cancelled', 'failed'] : ['failed'];
+    case 'failed':
+      return claimed ? ['credit', 'cancelled', 'failed'] : [];
+    case 'cancelled':
+      return claimed && payment.needsReview ? ['credit', 'cancelled'] : [];
+    case 'refunding':
+      return ['refunded', 'restore'];
+    default:
+      return [];
+  }
+}
+
+/**
+ * Whether a row offers 수동 정리 — beside its refund button, never instead of it: a row the API
+ * flagged (`needsReview`: it could not settle it by itself), or any `refunding` one. A refund the
+ * PG refused on a retry answers `settle_required` at once, while the flag waits for the row to
+ * be two minutes old; until then the API itself answers `in_progress`, which the dialog says.
+ * Either way only with an outcome to offer (`settleOutcomesFor`) — never on a mock row.
+ */
+export function offersSettle(
+  payment: Pick<AdminPayment, 'provider' | 'status' | 'providerRef' | 'needsReview'>,
+): boolean {
+  if (settleOutcomesFor(payment).length === 0) return false;
+  return payment.needsReview || payment.status === 'refunding';
+}
+
+/** What each outcome is called in the dialog, and what choosing it does, in plain Korean. */
+export const SETTLE_OUTCOME_VIEW: Readonly<
+  Record<PaymentSettleOutcome, { label: string; description: string }>
+> = {
+  credit: { label: copy.adminPaymentSettleCredit, description: copy.adminPaymentSettleCreditHint },
+  cancelled: {
+    label: copy.adminPaymentSettleCancelled,
+    description: copy.adminPaymentSettleCancelledHint,
+  },
+  failed: { label: copy.adminPaymentSettleFailed, description: copy.adminPaymentSettleFailedHint },
+  refunded: {
+    label: copy.adminPaymentSettleRefunded,
+    description: copy.adminPaymentSettleRefundedHint,
+  },
+  restore: {
+    label: copy.adminPaymentSettleRestore,
+    description: copy.adminPaymentSettleRestoreHint,
+  },
+};
+
+export type MerchantAdminMode = 'STG' | 'REAL';
+
+/** SmartroPay's merchant admin (스마일비즈), where the operator looks the card up first. */
+export const MERCHANT_ADMIN_URL: Readonly<Record<MerchantAdminMode, string>> = {
+  STG: 'https://newbiz.smilebiz.co.kr',
+  REAL: 'https://www.smilebiz.co.kr',
+};
+
+/**
+ * The merchant admin(s) the settle dialog points to: the one of the deployment's SmartroPay mode
+ * (`GET /payments/provider`), or both while that is unknown — not loaded, failed, or the mock
+ * (whose rows are never settled, but the dialog must not guess).
+ */
+export function merchantAdminSites(
+  info: PaymentProviderInfo | undefined,
+): readonly { mode: MerchantAdminMode; url: string }[] {
+  if (info?.provider === 'smartro')
+    return [{ mode: info.mode, url: MERCHANT_ADMIN_URL[info.mode] }];
+  return (['STG', 'REAL'] as const).map((mode) => ({ mode, url: MERCHANT_ADMIN_URL[mode] }));
+}
+
+/**
+ * The payment's SmartroPay order number (Moid: its id without hyphens), which the merchant
+ * admin searches by. Null for an id that is not a uuid — never from this API, but the dialog
+ * must not throw on one.
+ */
+export function merchantOrderId(paymentId: string): string | null {
+  try {
+    return paymentIdToMoid(paymentId);
+  } catch {
+    return null;
+  }
+}
+
+/** The approval Tid the API takes: printable ASCII, no spaces (`settlePaymentBodySchema`). */
+const TID_SHAPE = /^[\x21-\x7e]+$/;
+
+/**
+ * The settle dialog's fields: the outcome (required — a radio, absent until chosen; the
+ * `.optional().pipe` of `resolveMarketFormSchema`), the reason (required, as the API bounds it)
+ * and the approval Tid. The Tid is read for `credit` only, and blank is allowed there: the API
+ * needs it only when no SUCCESSFUL approval is on record (none came, or it answered a PG error
+ * code), and says so naming `tid`. A Tid typed for `credit` and left behind by switching to
+ * another outcome is not checked — it is not sent.
+ */
+export const settleFormSchema = z
+  .object({
+    outcome: z
+      .enum(PAYMENT_SETTLE_OUTCOMES, copy.errSettleOutcome)
+      .optional()
+      .pipe(z.enum(PAYMENT_SETTLE_OUTCOMES, copy.errSettleOutcome)),
+    tid: z.string().trim(),
+    reason: z
+      .string()
+      .trim()
+      .min(1, copy.errSettleReason)
+      .max(REFUND_REASON_MAX_LENGTH, copy.errSettleReason),
+  })
+  .superRefine((values, ctx) => {
+    if (values.outcome !== 'credit' || values.tid === '') return;
+    if (values.tid.length > SETTLE_TID_MAX_LENGTH || !TID_SHAPE.test(values.tid)) {
+      ctx.addIssue({ code: 'custom', path: ['tid'], message: copy.errSettleTid });
+    }
+  });
+/** What the inputs hold: `outcome` is absent until a radio is chosen. */
+export type SettleFormValues = z.input<typeof settleFormSchema>;
+/** What the schema hands the submit handler: an outcome, always; trimmed strings. */
+export type SettleFormOutput = z.output<typeof settleFormSchema>;
+
+/**
+ * The body for values `settleFormSchema` accepted. `tid` rides only on a credit, and only when
+ * typed — never an empty string (the API refuses one), and never filled in from `providerRef`:
+ * that is the authentication's Tid, which may differ from the approval's (the manual, STEP 4),
+ * and storing the wrong one would make a later refund cancel nothing.
+ */
+export function toSettleBody(values: SettleFormOutput): SettlePaymentBody {
+  return {
+    outcome: values.outcome,
+    reason: values.reason,
+    ...(values.outcome === 'credit' && values.tid !== '' ? { tid: values.tid } : {}),
+  };
+}
+
+export interface SettleErrorView {
+  title: string;
+  /** What to do about it, where the title alone does not say. */
+  description?: string;
+  /** The dialog field the refusal is about; shown under it instead of a toast. */
+  field?: 'tid' | 'reason';
+}
+
+/**
+ * What a refused settle says, by code and — for REFUND_NOT_ALLOWED — by the detail the API names
+ * (payment-settle.service; `details[0].message`):
+ * - `status`: the outcome is not one the payment's status allows (it moved since the list was
+ *   read), or a cancel 재통보 on record says the card IS cancelled, which refuses `credit` and
+ *   `restore` — the two are not told apart on the wire, so the hint names the second's remedy.
+ * - `provider`: not a SmartroPay payment. `in_progress`: touched in the last two minutes.
+ * - `approval_mismatch` (credit): no approval on record matches the payment's amount, MID and
+ *   order, or the Tid typed differs from the recorded one or is another payment's already.
+ * - `partial_cancel` (credit, restore): the PG reported a partial cancel; settle it `cancelled`
+ *   or `refunded` and square the balance with 잔고 조정.
+ * - VALIDATION_ERROR on `tid` (a credit with no successful approval on record needs one) or
+ *   `reason` goes under its field. NOT_FOUND: the payment is gone.
+ */
+export function settleErrorView(error: unknown): SettleErrorView {
+  if (isApiError(error, 'REFUND_NOT_ALLOWED')) {
+    switch (detailMessage(error)) {
+      case 'provider':
+        return { title: copy.errSettleProvider };
+      case 'in_progress':
+        return { title: copy.errSettleInProgress };
+      case 'approval_mismatch':
+        return {
+          title: copy.errSettleApprovalMismatch,
+          description: copy.errSettleApprovalMismatchHint,
+        };
+      case 'partial_cancel':
+        return { title: copy.errSettlePartialCancel, description: copy.errSettlePartialCancelHint };
+      default:
+        // `status`, or a case the web does not know yet: not settleable like this now.
+        return { title: copy.errSettleStatus, description: copy.errSettleStatusHint };
+    }
+  }
+  if (isApiError(error, 'NOT_FOUND')) return { title: copy.errRefundNotFound };
+  if (isApiError(error, 'VALIDATION_ERROR')) {
+    const field = validationField(error);
+    if (field === 'tid') return { title: copy.errSettleTidRequired, field: 'tid' };
+    if (field === 'reason') return { title: copy.errSettleReason, field: 'reason' };
+  }
+  return { title: copy.errUnknown };
+}
+
+/**
+ * Whether the settle dialog stays open after a refusal — `refundKeepsDialog`'s rule, plus the
+ * refusals the admin answers in the dialog itself: a field (`tid`, `reason`), a Tid or an
+ * outcome to change (`approval_mismatch`: re-check the Tid, or cancel the card and choose 취소
+ * 확인; `partial_cancel`: choose 취소 확인 or 환불 완료), and `in_progress`, which asks for the
+ * same request two minutes later. Everything else is a decision about the payment as it now is:
+ * the list is refreshed and shows it.
+ */
+export function settleKeepsDialog(error: unknown): boolean {
+  if (!isApiError(error)) return true;
+  if (isApiError(error, 'VALIDATION_ERROR')) return true;
+  if (!isApiError(error, 'REFUND_NOT_ALLOWED')) return false;
+  const reason = detailMessage(error);
+  return reason === 'in_progress' || reason === 'approval_mismatch' || reason === 'partial_cancel';
 }

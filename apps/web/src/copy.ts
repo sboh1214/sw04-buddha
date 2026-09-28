@@ -771,6 +771,76 @@ export const copy = {
     '결제대행사의 응답을 받지 못했습니다. 결제는 「환불 처리 중」으로 남아 있으니 잠시 뒤 다시 시도해 주세요.',
   errRefundInProgress: '이전 환불 요청이 아직 처리 중입니다. 1분쯤 뒤에 다시 시도해 주세요.',
   errRefundNotFound: '결제를 찾을 수 없습니다.',
+  // 거절된 재시도(또는 재시도가 넘겨받은 첫 시도, 부분 취소가 기록된 결제)는 P를 되돌리지 않고
+  // 「환불 처리 중」으로 남는다(`settle_required`). 카드가 실제로 취소됐는지는 가맹점 관리자만 안다.
+  errRefundSettleRequired:
+    '결제대행사가 카드 취소를 거절했습니다. 회수한 P는 돌려주지 않았고, 결제는 「환불 처리 중」으로 남아 있습니다.',
+  // 거절된 환불이 방금 결제를 건드렸으니 수동 정리는 2분 동안 `in_progress`로 거절된다.
+  errRefundSettleRequiredHint:
+    '가맹점 관리자에서 카드가 취소되었는지 확인하고, 2분쯤 지난 뒤 「수동 정리」로 정리해 주세요.',
+
+  // --- 관리자 수동 정리 (ADR-0042) ---
+  // 승인 응답·재통보·망취소·환불 취소의 결과를 API가 스스로 알 수 없어 「확인 필요」로 표시된
+  // 스마트로페이 결제를, 관리자가 가맹점 관리자(스마일비즈)에서 카드 거래를 확인한 뒤 정리한다.
+  adminPaymentNeedsReview: '확인 필요',
+  adminPaymentSettle: '수동 정리',
+  adminPaymentSettleTitle: '결제를 수동 정리합니다',
+  adminPaymentSettleBody:
+    '먼저 스마트로페이 가맹점 관리자(스마일비즈)에서 이 결제의 카드 거래를 주문번호로 찾아 승인·취소 여부를 확인해 주세요. 그다음 확인한 결과를 고릅니다. 정리한 결과는 감사 기록에 남고 되돌릴 수 없습니다.',
+  adminPaymentSettleSites: '가맹점 관리자',
+  adminPaymentSettleSiteStg: '테스트(STG)',
+  adminPaymentSettleSiteReal: '운영(REAL)',
+  // 가맹점 관리자 링크는 새 탭에서 열린다. 링크 이름에 붙여 미리 알린다.
+  adminPaymentSettleSiteNewTab: '(새 창)',
+  adminPaymentSettleMoid: '주문번호',
+  adminPaymentSettleOutcome: '확인한 결과',
+  adminPaymentSettleCredit: '승인 확인 · P 충전',
+  adminPaymentSettleCreditHint: '승인이 확인되어 P를 충전합니다. 결제는 완료로 바뀝니다.',
+  adminPaymentSettleCancelled: '취소 확인',
+  adminPaymentSettleCancelledHint:
+    '카드 결제가 취소된 것을 확인했습니다. P는 충전하지 않고 결제를 취소됨으로 둡니다.',
+  adminPaymentSettleFailed: '실패로 닫기',
+  adminPaymentSettleFailedHint: '승인되지 않은 결제로 닫습니다. P는 충전하지 않습니다.',
+  adminPaymentSettleRefunded: '환불 완료',
+  adminPaymentSettleRefundedHint:
+    '카드 취소가 확인되어 환불을 완료합니다. 회수한 P는 돌려주지 않습니다.',
+  adminPaymentSettleRestore: 'P 복원',
+  adminPaymentSettleRestoreHint:
+    '카드가 취소되지 않아 회수한 P를 돌려줍니다. 결제는 완료로 돌아갑니다.',
+  adminPaymentSettleTid: '승인 거래번호(TID)',
+  adminPaymentSettleTidHint:
+    '가맹점 관리자에서 확인한 승인 거래번호(TID) — 결제 기록에 승인 응답이 없을 때 필요',
+  adminPaymentSettleReason: '정리 사유',
+  adminPaymentSettleReasonHint:
+    '감사 기록에 남습니다. 가맹점 관리자에서 확인한 내용을 적어 주세요.',
+  adminPaymentSettleNone:
+    '지금 상태에서는 정리할 결과가 없습니다. 목록에서 현재 상태를 확인해 주세요.',
+  adminPaymentSettleNext: '다음',
+  adminPaymentSettleBack: '뒤로',
+  adminPaymentSettleConfirmBody: '아래 내용으로 정리합니다. 정리한 결과는 되돌릴 수 없습니다.',
+  adminPaymentSettleSubmit: '정리하기',
+  adminPaymentSettled: '수동 정리했습니다.',
+  errSettleOutcome: '확인한 결과를 골라 주세요.',
+  errSettleTid: '승인 거래번호(TID)는 공백 없이 영문·숫자·기호 64자 이내로 입력해 주세요.',
+  // API는 성공한 승인이 기록돼 있지 않으면 tid를 요구한다: 승인 응답이 없었던 결제뿐 아니라 승인이
+  // PG 오류 코드(9999, W999 …)로 답해 「확인 필요」가 된 실패 결제도(그 응답은 행에 사유로 보인다).
+  errSettleTidRequired:
+    '결제 기록에 성공한 승인 응답이 없어 승인 거래번호(TID)가 필요합니다. 가맹점 관리자에서 확인한 TID를 입력해 주세요.',
+  errSettleReason: '정리 사유를 1~500자로 입력해 주세요.',
+  // `status`는 상태가 그 결과를 허용하지 않을 때와, 결제대행사의 취소 재통보가 이 카드의 취소를
+  // 알려 와 충전·P 복원을 거절할 때 모두 온다. 둘을 가르는 값이 없어 두 경우를 함께 안내한다.
+  errSettleStatus:
+    '지금 상태에서는 이 결과로 정리할 수 없습니다. 목록에서 현재 상태를 확인해 주세요.',
+  errSettleStatusHint:
+    '결제대행사의 취소 재통보가 카드 취소를 알려 온 결제는 P를 충전하거나 돌려줄 수 없으니 「취소 확인」 또는 「환불 완료」로 정리해 주세요.',
+  errSettleProvider: '스마트로페이 결제만 수동 정리할 수 있습니다.',
+  errSettleInProgress: '방금 처리 중인 결제입니다. 2분 뒤에 다시 시도해 주세요.',
+  errSettleApprovalMismatch: '기록된 승인과 맞지 않아 P를 충전할 수 없습니다.',
+  errSettleApprovalMismatchHint:
+    '기록된 승인의 금액·가맹점 번호(MID)·주문번호가 이 결제와 다르거나, 입력한 TID가 기록된 승인과 다르거나 이미 다른 결제의 것입니다. TID를 다시 확인하고, 이 결제의 승인이 아니라면 가맹점 관리자에서 카드 결제를 취소한 뒤 「취소 확인」으로 정리해 주세요.',
+  errSettlePartialCancel: '부분 취소가 기록된 결제라 P를 충전하거나 돌려줄 수 없습니다.',
+  errSettlePartialCancelHint:
+    '결제대행사가 이 카드의 부분 취소를 알려 왔습니다. 「취소 확인」 또는 「환불 완료」로 정리한 뒤, 회원의 잔고는 「사용자」 화면의 「잔고 조정」으로 맞춰 주세요.',
 
   // --- generic ---
   errUnknown: '문제가 발생했습니다. 잠시 후 다시 시도해 주세요.',

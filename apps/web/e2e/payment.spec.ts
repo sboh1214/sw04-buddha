@@ -18,7 +18,8 @@ import {
  * The SmartroPay window itself needs STG credentials and is verified there, not here; what
  * these tests cover is everything around it that the mock exercises the same way: the wallet
  * the callbacks redirect to, the user's 결제 내역, and the refund path (claw-back → provider
- * cancel → ledger row), which the mock provider's cancel always approves.
+ * cancel → ledger row), which the mock provider's cancel always approves. 수동 정리 (settle) is
+ * SmartroPay-only: here it is only checked to stay off the mock's rows.
  */
 
 /** The P a `formatP` string shows ('12,345P' → 12345n). Balances here are never negative. */
@@ -102,6 +103,10 @@ test.describe('결제 결과 · 환불', () => {
       await adminPage.goto('/admin/payments');
       const row = adminPage.getByTestId(`admin-payment-${payment.id}`);
       await expect(row.getByTestId('admin-payment-status')).toHaveText(copy.paymentStatusSucceeded);
+      // 수동 정리 is for SmartroPay payments the API could not settle; a mock row never offers
+      // it (the API refuses it as `provider`) and is never flagged 확인 필요.
+      await expect(row.getByTestId(`admin-payment-settle-${payment.id}`)).toHaveCount(0);
+      await expect(row.getByTestId('admin-payment-needs-review')).toHaveCount(0);
       await row.getByTestId(`admin-payment-refund-${payment.id}`).click();
       // The reason is required: an empty one is refused under the field, nothing is sent.
       await adminPage.getByTestId('payment-refund-confirm').click();
@@ -110,8 +115,9 @@ test.describe('결제 결과 · 환불', () => {
       await adminPage.getByTestId('payment-refund-confirm').click();
       await expect(adminPage.getByText(copy.adminPaymentRefunded)).toBeVisible();
       await expect(row.getByTestId('admin-payment-status')).toHaveText(copy.paymentStatusRefunded);
-      // A refunded payment offers no second refund.
+      // A refunded payment offers no second refund, and still nothing to settle.
       await expect(row.getByTestId(`admin-payment-refund-${payment.id}`)).toHaveCount(0);
+      await expect(row.getByTestId(`admin-payment-settle-${payment.id}`)).toHaveCount(0);
     } finally {
       await adminContext.close();
     }

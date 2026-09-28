@@ -49,6 +49,12 @@ export type Order = components['schemas']['Order'];
 export type AdminPayment = components['schemas']['AdminPayment'];
 /** `POST /admin/payments/{id}/refund`: why the admin refunds (required, audited). */
 export type RefundPaymentBody = components['schemas']['RefundPaymentBody'];
+/**
+ * `POST /admin/payments/{id}/settle` (수동 정리): the outcome the merchant admin showed, why
+ * (required, audited), and — for a credit only — the approval's Tid.
+ */
+export type SettlePaymentBody = components['schemas']['SettlePaymentBody'];
+export type PaymentSettleOutcome = SettlePaymentBody['outcome'];
 export type AuditFailure = components['schemas']['AuditFailure'];
 export type CreateMarketBody = components['schemas']['CreateMarketBody'];
 export type UpdateMarketBody = components['schemas']['UpdateMarketBody'];
