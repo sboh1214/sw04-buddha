@@ -263,6 +263,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/payments/{id}/settle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Settle by hand a SmartroPay payment the API could not settle (needsReview), after checking the card in the merchant admin */
+        post: operations["adminSettlePayment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/users": {
         parameters: {
             query?: never;
@@ -805,6 +822,7 @@ export type components = {
             /** Format: uuid */
             id: string;
             method: string | null;
+            needsReview: boolean;
             nickname: string;
             /** Format: uuid */
             packageId: string | null;
@@ -1298,6 +1316,12 @@ export type components = {
         };
         SetPasswordBody: {
             newPassword: components["schemas"]["Password"];
+        };
+        SettlePaymentBody: {
+            /** @enum {string} */
+            outcome: "credit" | "cancelled" | "failed" | "restore" | "refunded";
+            reason: string;
+            tid?: string;
         };
         SmartroPrepareResult: {
             approvalUrl: string;
@@ -2745,6 +2769,87 @@ export interface operations {
             };
             /** @description PAYMENT_GATEWAY_ERROR */
             502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminSettlePayment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SettlePaymentBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminPayment"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description REFUND_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };

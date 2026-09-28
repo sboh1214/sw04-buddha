@@ -94,12 +94,12 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | `DISPUTE_WINDOW_CLOSED` | 409 | 이의 접수 창이 닫혔다(정산이 확정되었거나 `resolving` 이 아니다). |
 | `RULES_REQUIRED` | 422 | 정산 규칙(`rules`)이 비어 있어 개장하거나 그대로 저장할 수 없다. |
 | `CONTACT_REQUIRED` | 409 | 실명과 휴대전화 번호를 아직 등록하지 않은 계정이다. `PUT /api/v1/me/contact` 로 등록한 뒤 다시 시도한다. |
-| `REFUND_NOT_ALLOWED` | 409 | 환불 정책 밖의 결제다. `details[0].message` 가 까닭을 말한다 — `window_closed`(승인 후 7일이 지났다), `status`(환불할 수 있는 상태가 아니다), `provider`(그 결제 수단은 취소를 지원하지 않는다). 이미 쓴 P 가 있으면 `INSUFFICIENT_BALANCE` 로 답한다. |
-| `PAYMENT_GATEWAY_REFUSED` | 409 | PG 가 요청을 거절했다. `details[0].message` 에 PG 의 `<ResultCode> <ResultMsg>` 가 붙는다. 환불이면 회수했던 P 를 되돌려 놓았다. |
-| `PAYMENT_GATEWAY_ERROR` | 502 | PG 에 닿지 못했거나 결과를 알 수 없다(502). 다른 5xx 처럼 본문에 내부 사정을 담지 않는다. 환불이면 `refunding` 으로 남으니 다시 시도한다. |
+| `REFUND_NOT_ALLOWED` | 409 | 환불 정책 밖의 결제다. `details[0].message` 가 까닭을 말한다 — `window_closed`(승인 후 7일이 지났다), `status`(환불할 수 있는 상태가 아니다), `provider`(그 결제 수단은 취소를 지원하지 않는다). 이미 쓴 P 가 있으면 `INSUFFICIENT_BALANCE` 로 답한다. 관리자 수동 정리(`POST /api/v1/admin/payments/{id}/settle`)도 이 코드로 답한다 — `provider`(SmartroPay 결제가 아니다), `status`(그 상태에서 고를 수 없는 결과다, 또는 취소 재통보가 카드가 취소됐다고 알려 와 `credit`·`restore` 할 수 없다), `in_progress`(2분 안에 바뀌어 콜백이나 환불이 아직 처리 중일 수 있다), `approval_mismatch`(`credit`: 기록된 승인의 `Mid`·금액·`Moid` 가 결제와 맞지 않거나 — 그 승인은 그래서 망취소됐으니 카드를 가맹점 관리자에서 취소하고 `cancelled` 로 정리한다 — 준 `tid` 가 기록된 승인의 것이 아니거나, 그 `Tid` 를 다른 결제가 이미 들고 있다 — 기록된 승인이 여럿이면 결제와 맞는 것을 쓰고, 맞는 것이 하나도 없을 때만 이렇게 답한다), `partial_cancel`(`credit`·`restore`: 그 카드의 부분취소 재통보가 기록돼 있다 — 카드의 일부만 청구된 상태라 수동 정리의 어떤 결과도 맞지 않으니 `cancelled`·`refunded` 로 정리하고 잔고를 손으로 맞춘다). 기록된 승인이 없는데 `credit` 에 `tid` 를 주지 않으면 `VALIDATION_ERROR`(`details[0].path` 가 `["tid"]`)로 답한다. |
+| `PAYMENT_GATEWAY_REFUSED` | 409 | PG 가 요청을 거절했다. `details[0].message` 에 PG 의 `<ResultCode> <ResultMsg>` 가 붙는다. 환불이면 회수했던 P 를 되돌려 놓았다. 단 환불 **재시도**가 거절되면 첫 시도가 이미 카드를 취소했을 수 있어 P 를 되돌리지 않고 `refunding` 으로 둔다 — 첫 시도라도 PG 의 답을 기다리는 사이 재시도가 결제를 넘겨받았으면 마찬가지다. 이때 `details[1].message` 가 `settle_required` 이고, 관리자가 가맹점 관리자에서 확인한 뒤 수동 정리(`restore` 또는 `refunded`)한다. 거절됐어도 그 결제의 전체 취소 재통보가 와 있으면 오류가 아니라 `refunded` 로 마친 결제로 답한다. |
+| `PAYMENT_GATEWAY_ERROR` | 502 | PG 에 닿지 못했거나 결과를 알 수 없다(502). 다른 5xx 처럼 본문에 내부 사정을 담지 않는다. 환불이면 `refunding` 으로 남으니 다시 시도하거나, 가맹점 관리자에서 확인한 뒤 수동 정리한다. |
 | `INTERNAL` | 500 | 그 밖의 서버 오류. 본문에 내부 사정을 담지 않는다. |
 
-## 오퍼레이션 (47개)
+## 오퍼레이션 (48개)
 
 태그별로 묶었고, 태그 안의 순서는 OpenAPI 문서의 경로 순서 그대로다.
 
@@ -146,6 +146,7 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | POST | `/api/v1/admin/users/{id}/balance-adjust` | Credit or debit P with a mandatory reason (ADMIN_ADJUST) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `INSUFFICIENT_BALANCE`, `RATE_LIMITED` |
 | GET | `/api/v1/admin/payments` | Charges, newest first | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
 | POST | `/api/v1/admin/payments/{id}/refund` | Refund an unused charge within 7 days of its approval: claw back all its P, then cancel the whole KRW at the provider (retry a refunding one) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `INSUFFICIENT_BALANCE`, `DUPLICATE_REQUEST`, `REFUND_NOT_ALLOWED`, `PAYMENT_GATEWAY_REFUSED`, `RATE_LIMITED`, `PAYMENT_GATEWAY_ERROR` |
+| POST | `/api/v1/admin/payments/{id}/settle` | Settle by hand a SmartroPay payment the API could not settle (needsReview), after checking the card in the merchant admin | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `REFUND_NOT_ALLOWED`, `RATE_LIMITED` |
 | GET | `/api/v1/admin/audit-failures` | Ledger/balance mismatches found by the ledger.audit job | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
 | GET | `/api/v1/admin/markets` | Every market, drafts included, newest first | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
 | POST | `/api/v1/admin/markets` | Create a draft market (LMSR initialised from initialProbBp and liquidityB) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
@@ -190,12 +191,12 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | POST | `/api/v1/markets/{id}/disputes` | Object to the proposed result while the market is resolving and its dispute window is open (one per user per market) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `DISPUTE_WINDOW_CLOSED`, `DUPLICATE_REQUEST`, `RATE_LIMITED` |
 | GET | `/api/v1/me/disputes` | My disputes, newest first; `marketId` narrows the list to one market | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `RATE_LIMITED` |
 
-## 스키마 (65개)
+## 스키마 (66개)
 
 요청·응답 본문의 실제 모양은 `apps/api/openapi.json` 의 `components.schemas` 에 있다. 이름만
 적어 두니 거기서 찾아 읽는다. 이름은 zod 스키마의 `.meta({ id })` 에서 온다.
 
-`AdminBalanceAdjustResult`, `AdminDispute`, `AdminMarket`, `AdminPayment`, `AdminUser`, `AdminUserQuery`, `AuditFailure`, `Balance`, `BalanceAdjustBody`, `Category`, `ChargeBody`, `ChargePackage`, `ChargeResult`, `Contact`, `ContactBody`, `Coupon`, `CouponCode`, `CreateChargePackageBody`, `CreateCouponBody`, `CreateDisputeBody`, `CreateMarketBody`, `CursorQuery`, `Dispute`, `ErrorCode`, `ErrorEnvelope`, `Fill`, `LeaderboardEntry`, `LedgerEntry`, `LinkedAccount`, `Market`, `MarketEvent`, `MarketListItem`, `MarketStats`, `MarketSummary`, `Me`, `Nickname`, `OkResult`, `Order`, `PAmount`, `PageMeta`, `Password`, `Payment`, `PaymentProviderInfo`, `Position`, `PriceSeries`, `PriceTick`, `QuoteBody`, `QuoteResult`, `RedeemCouponBody`, `RedeemCouponResult`, `RefundPaymentBody`, `RegisterBody`, `RegisterResult`, `ResolveMarketBody`, `ReviewDisputeBody`, `SetPasswordBody`, `SmartroPrepareResult`, `TradeBody`, `TradeResult`, `UpdateChargePackageBody`, `UpdateCouponBody`, `UpdateMarketBody`, `UpdateMeBody`, `UserRole`, `VoidMarketBody`
+`AdminBalanceAdjustResult`, `AdminDispute`, `AdminMarket`, `AdminPayment`, `AdminUser`, `AdminUserQuery`, `AuditFailure`, `Balance`, `BalanceAdjustBody`, `Category`, `ChargeBody`, `ChargePackage`, `ChargeResult`, `Contact`, `ContactBody`, `Coupon`, `CouponCode`, `CreateChargePackageBody`, `CreateCouponBody`, `CreateDisputeBody`, `CreateMarketBody`, `CursorQuery`, `Dispute`, `ErrorCode`, `ErrorEnvelope`, `Fill`, `LeaderboardEntry`, `LedgerEntry`, `LinkedAccount`, `Market`, `MarketEvent`, `MarketListItem`, `MarketStats`, `MarketSummary`, `Me`, `Nickname`, `OkResult`, `Order`, `PAmount`, `PageMeta`, `Password`, `Payment`, `PaymentProviderInfo`, `Position`, `PriceSeries`, `PriceTick`, `QuoteBody`, `QuoteResult`, `RedeemCouponBody`, `RedeemCouponResult`, `RefundPaymentBody`, `RegisterBody`, `RegisterResult`, `ResolveMarketBody`, `ReviewDisputeBody`, `SetPasswordBody`, `SettlePaymentBody`, `SmartroPrepareResult`, `TradeBody`, `TradeResult`, `UpdateChargePackageBody`, `UpdateCouponBody`, `UpdateMarketBody`, `UpdateMeBody`, `UserRole`, `VoidMarketBody`
 
 ## 헬스체크 (문서 밖)
 
@@ -255,9 +256,20 @@ API 는 이 목록 밖의 코드를 내지 않는다.
   `cancelled` 중 하나이고, Moid 를 알아볼 수 없으면 `payment` 없이 `result=failed` 다.
 - **승인은 한 번만** — ReturnUrl 은 `pending` 이고 아직 아무도 잡지 않은 결제에 `provider_ref` 를
   먼저 적는 요청만 승인을 요청한다. 두 번째 제출(뒤로 가기)은 승인을 다시 부르지 않고 지금 상태를
-  답한다. 승인 응답이 오지 않으면 결과 조회를 한 번 하고, 그래도 모르면 `pending` 으로 두어
-  재통보나 관리자가 정리하게 한다. 승인됐는데 `SignValue`·`Mid`·`Moid`·금액이 맞지 않거나 적립이
-  실패하면 곧바로 망취소하고 `cancelled` 로 답한다(취소마저 실패하면 `pending`). 단, 그 승인이
+  답한다. 승인 응답이 오지 않으면 결과 조회를 한 번 하되, 조회는 **성공 코드일 때만** 그 결과로
+  처리한다 — 조회의 다른 코드(`6017` 승인이력 없음, `6021` 거래조회 오류, `9999` 등)는 늦게 오는
+  승인을 아직 못 찾은 것일 수 있어 아무것도 증명하지 않는다. 그래서 모르면 `pending` 으로 두어
+  재통보가, 오지 않으면 관리자가 수동 정리(`POST /api/v1/admin/payments/{id}/settle`)로 정리하게
+  한다(승인 응답이 없어 기록된 승인도 없으면 가맹점 관리자에 보이는 승인 `Tid` 를 `tid` 로 준다).
+  승인 응답이 성공 코드가 아니면 결제는 `failed` 다 — 그 코드가 거절이 아니라 PG 쪽 오류(`9999`·
+  `W999`·`W027`~`W030`·`NP98` 등 시스템·연결 오류)면 카드가 청구됐을 수 있으니 관리자 목록이
+  `needsReview` 로 표시한다. 승인됐는데 `SignValue`·`Mid`·`Moid`·금액이 맞지 않거나 적립이 실패하면 곧바로 망취소하고
+  `cancelled` 로 답한다. 망취소의 결과는 `net_cancel` 이벤트의 `payload.outcome`
+  (`cancelled`·`refused`·`unknown`)에 남는다: PG 가 분명히 거절하면(승인이 살아 있다) 그 기록과
+  한 트랜잭션에서 결제를 `pending` 으로 되돌려 재통보가 적립할 수 있게 하고(단 그사이 취소 통보가
+  취소를 확인했으면 되돌리지 않고 `cancelled` 로 두고 그렇게 답한다), 답이 없거나 취소가 아직
+  끝나지 않았다는 코드면 카드가 이미 취소됐을 수 있으므로 `cancelled` 로 둔다(관리자가 가맹점
+  관리자에서 확인하고 수동 정리한다). 둘 다 `pending` 으로 답한다. 단, 그 승인이
   우리의 **다른** 결제의 것이면(`Moid` 가 다른 결제를 가리키거나 그 `Tid` 를 다른 결제가 이미
   들고 있으면) 취소하지 않고 이 결제를 `failed` 로 닫는다 — 그 승인은 그 결제의 흐름이 맡는다.
   적립이 실패했어도 다시 읽은 결제가 더는 `pending` 이 아니면(커밋 뒤에 난 오류, 또는 그사이
@@ -272,8 +284,30 @@ API 는 이 목록 밖의 코드를 내지 않는다.
   적립하되, **우리 ReturnUrl 이 잡은 결제(`provider_ref` 가 있는 결제)만** 적립한다: 인증/승인
   분리에서 PG 는 우리 서버가 승인을 요청할 때만 승인하고, 그 요청은 언제나 잡기가 커밋된 뒤에 나간다.
   잡히지 않은 결제의 승인 통보는 진짜일 수 없으므로 기록만 하고 `OK` 로 답한다(다시 보내도 바뀔 것이
-  없다). 취소 통보(`StateCd=1|2`)는 기록만 하고 P 를 회수하지 않는다(가맹점 관리자에서 한 취소 —
-  ADR-0042 의 열린 질문).
+  없다). 망취소된(`cancelled`) 결제의 승인 통보는 망취소가 확인됐거나 결과를 모르면 적립하지 않고
+  `OK`, 망취소가 아직 끝나지 않았으면(기록 전) 5xx 로 답해 다시 받는다 — 적립하려던 순간에 망취소가
+  결제를 잡은 경우도 같다. 취소 통보(`StateCd=1|2`)는 **전체 취소**일 때만 카드가 취소됐다는 PG
+  의 말로 받는다: `ResultCode` 가 그 결제수단에서 취소 완료(`2001`·`2013` 등)를 뜻하고, `Otid`
+  (구통보 `OTID`)가 없거나 자기 `Tid` 와 같고, `Amt` 가 없거나 승인 금액과 같아야 한다(승인
+  금액은 결제 금액이고, 망취소된 결제는 망취소가 취소를 요청한 금액이다 — 다른 금액의 승인이라
+  망취소했을 수 있다). 다른 코드(취소 실패 등)는 기록만 하고 아무것도 바꾸지 않는다. 다른 거래를
+  `Otid` 로 가리키거나(매뉴얼: 부분취소의 경우 원거래 TID 를 넣는다) 금액이 다른 통보는
+  **부분취소**다 — 이 서비스는 전체 취소만 하므로(가맹점 관리자에서 한 부분취소) 기록하고 오류 로그만
+  남기며 아무것도 바꾸지 않는다. 전체 취소 통보는, 승인 `Tid` 를 저장한 결제(적립된
+  `succeeded`·`refunding`, 망취소된 `cancelled`)라면 그 `Tid`(구통보 `TID`)가 결제의
+  `provider_ref`(승인 `Tid`)일 때만 그 결제의 것으로 본다: `refunding` 환불을 `refunded` 로
+  마치고(P 는 이미 회수했다), `cancelled` 결제의 확인되지 않은 망취소를 확인된 것으로 기록한다.
+  우리 ReturnUrl 이 잡았지만 아직 적립하지 않은 결제(`pending`·`failed`)는 `provider_ref` 가 인증
+  `Tid` 라 승인 `Tid` 와 다를 수 있으므로 `Moid` 만으로 찾아(잡힌 결제의 승인은 하나다)
+  `cancelled` 로 닫고 확인된 망취소로 기록해, 뒤늦게 다시 오는 승인 통보가 취소된 카드에 P 를
+  적립하지 못하게 한다(잡히지 않은 결제는 기록만 한다). `succeeded` 결제의 취소 통보(가맹점
+  관리자에서 한 취소)는 기록만 하고 P 를 회수하지 않는다(ADR-0042 의 열린 질문) — 그 결제를 관리자가
+  환불하면 PG 가 취소를 거절하거나 답하지 않아도 이 통보가 있으니 P 를 되돌리지 않고 `refunded` 로
+  마친다. 수동 정리도 이런 통보가 있는 결제는 `credit`·`restore` 하지 않고, 부분취소 통보가
+  있는 결제도 하지 않는다(`partial_cancel` — 관리자가 `cancelled`·`refunded` 로 정리하고 잔고를
+  손으로 맞춘다). 적립된 결제에 그 `provider_ref` 가 아닌 승인 `Tid` 로 온 승인 통보나 전체 취소
+  통보는 아무것도 바꾸지 않고 오류 로그만 남긴다 — 수동 정리 `credit` 에 준 `tid` 가 잘못됐다는
+  표시다.
 - PG 와의 교환은 `payment_events` 에 남는다(MerchantKey·CancelPwd·HashData·EncData 와 구매자
   개인정보는 빼고). return·stop 은 결제를 실제로 잡거나 닫을 때만 남기고, 알려진 SmartroPay 필드만
   적는다 — 공개 경로라 이미 끝난 결제에 같은 폼을 다시 보내도 아무것도 쌓이지 않는다. 레이트 리밋은
