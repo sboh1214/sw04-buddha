@@ -36,7 +36,7 @@ const ATTEMPT_LEASE_MS = 60_000;
  * picks its copy by this message.
  */
 export type RefusalReason =
-  'window_closed' | 'status' | 'provider' | 'in_progress' | 'approval_mismatch';
+  'window_closed' | 'status' | 'provider' | 'in_progress' | 'approval_mismatch' | 'partial_cancel';
 
 export function refundNotAllowed(reason: RefusalReason, message?: string): AppError {
   const messages: Record<RefusalReason, string> = {
@@ -45,6 +45,7 @@ export function refundNotAllowed(reason: RefusalReason, message?: string): AppEr
     provider: message ?? 'The provider of this payment cannot cancel it',
     in_progress: message ?? 'A request may still be working on this payment; try again shortly',
     approval_mismatch: message ?? 'The approval on record does not match this payment',
+    partial_cancel: message ?? 'A partial cancel of this card is on record',
   };
   return new AppError('REFUND_NOT_ALLOWED', {
     message: messages[reason],

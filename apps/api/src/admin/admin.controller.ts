@@ -264,8 +264,10 @@ export class AdminController {
   // REFUND_NOT_ALLOWED: details[0].message is `provider` (not a SmartroPay payment), `status`
   // (the outcome is not allowed from the payment's status, or a cancel 재통보 reports the card
   // cancelled), `in_progress` (touched within the last 2 minutes: a callback or a refund may
-  // still be working on it) or `approval_mismatch` (a credit: the approval on record does not
-  // match the payment, or its Tid — or the one given — is another's). VALIDATION_ERROR with
+  // still be working on it), `approval_mismatch` (a credit: no approval on record matches the
+  // payment, or its Tid — or the one given — is another's) or `partial_cancel` (a credit or a
+  // restore: a partial cancel 재통보 is on record; settle it cancelled or refunded and adjust the
+  // balance by hand). VALIDATION_ERROR with
   // details path `tid`: a credit with no approval on record needs the approval's Tid.
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR', 'REFUND_NOT_ALLOWED')
   settlePayment(

@@ -6,10 +6,11 @@
  * flags exactly those (`needsReview`). Each state is reached through the real flows with the
  * fake PG, and aged by moving `updated_at` back (SETTLE_MIN_AGE_MS). Skips when TEST_* are unset.
  */
+import { Logger } from '@nestjs/common';
 import { schema } from '@buddha/db';
 import { SIGNUP_BONUS_P, paymentIdToMoid, type AdminPayment } from '@buddha/shared';
 import { asc, eq, sql } from 'drizzle-orm';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
 import {
   createTestApp,
@@ -33,6 +34,8 @@ import {
 } from '../test/smartro.js';
 import { recordPaymentEvent } from '../payments/payment-events.js';
 import { SmartroUnreachableError } from '../payments/smartro/smartro-client.js';
+import { APPROVAL_UNKNOWN_CODES, isApprovalUnknown } from '../payments/smartro/smartro-protocol.js';
+import { AdminService } from './admin.service.js';
 
 const jsonHeaders = { origin: 'http://localhost:3000', 'content-type': 'application/json' };
 const REASON = '가맹점 관리자에서 승인 내역 확인';
@@ -500,6 +503,130 @@ describe.skipIf(!hasTestInfra)('admin payment settle (integration)', () => {
     expectLedgerChain(await ledgerOf(member.id), SIGNUP_BONUS_P + 10_000n);
   });
 
+  it('credits the approval on record that matches the payment, our own verified answer first', async () => {
+    /** A claimed pending payment every answer of which was lost, aged. */
+    const claimed = async () => {
+      const payment = await reserveSmartroPayment(t.db, member.id, {
+        packageId: pack.id,
+        claimedBy: testTid(),
+      });
+      await age(payment.id);
+      return payment;
+    };
+    const answer = (paymentId: string, tid: string, overrides?: Record<string, unknown>) =>
+      approvalAnswer({ paymentId, priceKrw: 9_700, tid, ...(overrides && { overrides }) });
+    /** An approval 재통보 as recorded (callbackEvent's fields). */
+    const notice = (paymentId: string, tid: string, fields: Record<string, string> = {}) => ({
+      Tid: tid,
+      Otid: tid,
+      Moid: paymentIdToMoid(paymentId),
+      Mid: 'buddhatest',
+      ResultCode: '3001',
+      PayMethod: 'CARD',
+      Amt: '9700',
+      StateCd: '0',
+      ...fields,
+    });
+    const creditedRef = async (paymentId: string) => {
+      const res = await settle(paymentId, 'credit');
+      expect(res.statusCode).toBe(200);
+      return res.json<{ data: AdminPayment }>().data.providerRef;
+    };
+
+    // A later notice that does not match (no Mid; another amount) hides no matching answer.
+    for (const shadow of [{ Mid: '' }, { Amt: '9,700' }] as Record<string, string>[]) {
+      const tid = testTid();
+      const shadowed = await claimed();
+      await recordPaymentEvent(t.db, {
+        paymentId: shadowed.id,
+        type: 'approval',
+        resultCode: '3001',
+        payload: answer(shadowed.id, tid),
+      });
+      await recordPaymentEvent(t.db, {
+        paymentId: shadowed.id,
+        type: 'notify',
+        resultCode: '3001',
+        payload: notice(shadowed.id, tid, shadow),
+      });
+      expect(await creditedRef(shadowed.id)).toBe(tid);
+    }
+
+    // Every answer lost, two notices: the newer one (no Mid) hides not the older, matching one.
+    const noticesTid = testTid();
+    const notices = await claimed();
+    for (const fields of [{}, { Mid: '' }] as Record<string, string>[]) {
+      await recordPaymentEvent(t.db, {
+        paymentId: notices.id,
+        type: 'notify',
+        resultCode: '3001',
+        payload: notice(notices.id, noticesTid, fields),
+      });
+    }
+    expect(await creditedRef(notices.id)).toBe(noticesTid);
+
+    // Our own verified answer before a (newer) matching notice.
+    const ownTid = testTid();
+    const own = await claimed();
+    await recordPaymentEvent(t.db, {
+      paymentId: own.id,
+      type: 'approval_inquiry',
+      resultCode: '3001',
+      payload: answer(own.id, ownTid),
+    });
+    await recordPaymentEvent(t.db, {
+      paymentId: own.id,
+      type: 'notify',
+      resultCode: '3001',
+      payload: notice(own.id, testTid()),
+    });
+    expect(await creditedRef(own.id)).toBe(ownTid);
+
+    // A verified notice before an answer of ours whose SignValue does not verify (newer).
+    const noticeTid = testTid();
+    const unverified = await claimed();
+    await recordPaymentEvent(t.db, {
+      paymentId: unverified.id,
+      type: 'notify',
+      resultCode: '3001',
+      payload: notice(unverified.id, noticeTid),
+    });
+    await recordPaymentEvent(t.db, {
+      paymentId: unverified.id,
+      type: 'approval',
+      resultCode: '3001',
+      payload: answer(unverified.id, testTid(), { SignValue: 'forged' }),
+    });
+    expect(await creditedRef(unverified.id)).toBe(noticeTid);
+
+    // Records, none of them matching: approval_mismatch, naming the one a credit would trust.
+    const mismatchedTid = testTid();
+    const mismatched = await claimed();
+    await recordPaymentEvent(t.db, {
+      paymentId: mismatched.id,
+      type: 'approval',
+      resultCode: '3001',
+      payload: answer(mismatched.id, mismatchedTid, { Amt: '5000' }),
+    });
+    await recordPaymentEvent(t.db, {
+      paymentId: mismatched.id,
+      type: 'notify',
+      resultCode: '3001',
+      payload: notice(mismatched.id, mismatchedTid, { Mid: 'someoneels' }),
+    });
+    const refused = await settle(mismatched.id, 'credit');
+    expect(refused.json()).toMatchObject({
+      error: { details: [{ message: 'approval_mismatch' }] },
+    });
+    expect(refused.json<{ error: { message: string } }>().error.message).toContain(
+      `(${mismatchedTid}) does not match this payment: Amt`,
+    );
+
+    const deposits = (await ledgerOf(member.id)).filter((entry) => entry.type === 'DEPOSIT');
+    expect(deposits).toHaveLength(5);
+    expectLedgerChain(await ledgerOf(member.id), SIGNUP_BONUS_P + 50_000n);
+  });
+
   it("refunds a settled credit whose card the merchant admin cancelled: the approval's Tid", async () => {
     // The approval's Tid differs from the authentication's the claim holds; the admin read it
     // in the merchant admin.
@@ -666,17 +793,6 @@ describe.skipIf(!hasTestInfra)('admin payment settle (integration)', () => {
     expect(refused.json<{ error: { message: string } }>().error.message).toContain('cancel 재통보');
     expect((await settle(id, 'cancelled')).statusCode).toBe(200);
 
-    // A partial cancel does not count: it is left to the admin.
-    const partial = await unanswered();
-    await age(partial.id);
-    await t.db.insert(schema.paymentEvents).values({
-      paymentId: partial.id,
-      type: 'notify',
-      resultCode: '2001',
-      payload: { Tid: testTid(), Otid: testTid(), StateCd: '1', ResultCode: '2001' },
-    });
-    expect((await settleCredit(partial.id, testTid())).statusCode).toBe(200);
-
     const stuck = await refundUnanswered();
     await age(stuck.id);
     await t.db.insert(schema.paymentEvents).values({
@@ -690,11 +806,87 @@ describe.skipIf(!hasTestInfra)('admin payment settle (integration)', () => {
     });
     expect((await settle(stuck.id, 'refunded')).statusCode).toBe(200);
     const ledger = await ledgerOf(member.id);
+    expect(ledger.map((entry) => entry.type)).toEqual(['BONUS', 'DEPOSIT', 'PAYMENT_CANCEL']);
+    expectLedgerChain(ledger, SIGNUP_BONUS_P);
+  });
+
+  it('refuses a credit or a restore once a partial cancel 재통보 is on record (partial_cancel)', async () => {
+    // Part of the card's amount is cancelled, the rest still charged: neither the whole P nor
+    // none of it is owed. The admin settles the row cancelled or refunded and adjusts the
+    // balance by hand.
+    const partialNotice = (paymentId: string, payload: Record<string, string>) =>
+      t.db.insert(schema.paymentEvents).values({
+        paymentId,
+        type: 'notify',
+        resultCode: '2001',
+        payload: { StateCd: '1', ResultCode: '2001', ...payload },
+      });
+    const partialCancel = {
+      error: {
+        code: 'REFUND_NOT_ALLOWED',
+        details: [{ path: ['payment'], message: 'partial_cancel' }],
+      },
+    };
+
+    // A claimed pending payment: its own Tid with the approval's as Otid, or part of the amount.
+    const shapes: Record<string, string>[] = [
+      { Tid: testTid(), Otid: testTid() },
+      { Tid: testTid(), Amt: '1000' },
+    ];
+    for (const shape of shapes) {
+      const { id } = await unanswered();
+      await age(id);
+      await partialNotice(id, shape);
+      const audited = (await settleActions()).length;
+      const refused = await settleCredit(id, testTid());
+      expect(refused.statusCode).toBe(409);
+      expect(refused.json()).toMatchObject(partialCancel);
+      // Nothing written: no credit, no audit row.
+      expect(await settleActions()).toHaveLength(audited);
+      expect(await paymentRow(id)).toMatchObject({ status: 'pending' });
+      expect((await settle(id, 'cancelled')).statusCode).toBe(200);
+    }
+
+    // A net cancel with no clear answer, then a partial cancel of its approval.
+    const net = await cancelUnknown();
+    await age(net.id);
+    await partialNotice(net.id, { Tid: testTid(), Otid: net.tid, Amt: '9700' });
+    expect((await settle(net.id, 'credit')).json()).toMatchObject(partialCancel);
+    expect((await settle(net.id, 'cancelled')).statusCode).toBe(200);
+
+    // A stuck refund: its P is not put back while part of the card is cancelled.
+    const stuck = await refundUnanswered();
+    await age(stuck.id);
+    await partialNotice(stuck.id, { Tid: testTid(), Otid: stuck.tid, Amt: '1000' });
+    expect((await settle(stuck.id, 'restore')).json()).toMatchObject(partialCancel);
+    expect((await settle(stuck.id, 'refunded')).statusCode).toBe(200);
+
+    // A full cancel on record answers `status` first, whatever partial one is there too.
+    const both = await unanswered();
+    await age(both.id);
+    await partialNotice(both.id, { Tid: testTid(), Otid: testTid() });
+    await partialNotice(both.id, { Tid: testTid(), Amt: '9700' });
+    expect((await settleCredit(both.id, testTid())).json()).toMatchObject({
+      error: { details: [{ message: 'status' }] },
+    });
+
+    // A cancel that failed is no partial cancel: the credit goes through.
+    const failedCancel = await unanswered();
+    await age(failedCancel.id);
+    await t.db.insert(schema.paymentEvents).values({
+      paymentId: failedCancel.id,
+      type: 'notify',
+      resultCode: '2002',
+      payload: { Tid: testTid(), Otid: testTid(), StateCd: '1', ResultCode: '2002' },
+    });
+    expect((await settleCredit(failedCancel.id, testTid())).statusCode).toBe(200);
+
+    const ledger = await ledgerOf(member.id);
     expect(ledger.map((entry) => entry.type)).toEqual([
       'BONUS',
       'DEPOSIT',
-      'DEPOSIT',
       'PAYMENT_CANCEL',
+      'DEPOSIT',
     ]);
     expectLedgerChain(ledger, SIGNUP_BONUS_P + 10_000n);
   });
@@ -783,6 +975,89 @@ describe.skipIf(!hasTestInfra)('admin payment settle (integration)', () => {
     expect((await listed(refused.id)).needsReview).toBe(false);
 
     expectLedgerChain(await ledgerOf(member.id), SIGNUP_BONUS_P + 10_000n);
+  });
+
+  it("flags a claimed payment its approval failed with the PG's own failure, and settles it", async () => {
+    // The approval answers 9999 (시스템에러 - 잠시 후 재거래): the payment fails, as any
+    // non-success does (DESIGN §5.4), but the card may be charged — flagged until checked.
+    const payment = await reserveSmartroPayment(t.db, member.id, { packageId: pack.id });
+    const authTid = testTid();
+    pg.onApprove = () =>
+      approvalAnswer({
+        paymentId: payment.id,
+        priceKrw: payment.priceKrw,
+        tid: authTid,
+        resultCode: '9999',
+        resultMsg: '시스템에러 - 잠시 후 재거래',
+      });
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    try {
+      expect(
+        String((await postReturn(payment.id, { Tid: authTid, TrAuthKey: 'k' })).headers.location),
+      ).toContain('result=failed');
+    } finally {
+      error.mockRestore();
+    }
+    expect((await listed(payment.id)).needsReview).toBe(false); // someone may still be on it
+    await age(payment.id);
+    expect((await listed(payment.id)).needsReview).toBe(true);
+
+    // The merchant admin shows the approval: credited under its Tid (none on record — 9999 is
+    // no approval — so the admin gives it).
+    const approvalTid = testTid();
+    const res = await settleCredit(payment.id, approvalTid);
+    expect(res.statusCode).toBe(200);
+    expect(res.json<{ data: AdminPayment }>().data).toMatchObject({
+      status: 'succeeded',
+      providerRef: approvalTid,
+      needsReview: false,
+    });
+    expectLedgerChain(await ledgerOf(member.id), SIGNUP_BONUS_P + 10_000n);
+  });
+
+  it('flags exactly the approval codes isApprovalUnknown names (the SQL and the TS agree)', async () => {
+    // needsReview's SQL and isApprovalUnknown read one list, APPROVAL_UNKNOWN_CODES; each code of
+    // it, and declines around it, as the admin list computes it for a claimed failed payment.
+    const codes = [
+      ...APPROVAL_UNKNOWN_CODES,
+      '3011',
+      '3057',
+      '3095',
+      '3002',
+      'KP01',
+      'NP01',
+      'NP38',
+      'PP01',
+      'W036',
+      '6017',
+      '9999 ',
+      'w999',
+    ];
+    const payments: { id: string; code: string }[] = [];
+    for (const code of codes) {
+      const payment = await reserveSmartroPayment(t.db, member.id, { claimedBy: testTid() });
+      await recordPaymentEvent(t.db, {
+        paymentId: payment.id,
+        type: 'approval',
+        resultCode: code,
+        payload: { ResultCode: code },
+      });
+      await t.db
+        .update(schema.payments)
+        .set({ status: 'failed', updatedAt: sql`now() - interval '3 minutes'` })
+        .where(eq(schema.payments.id, payment.id));
+      payments.push({ id: payment.id, code });
+    }
+    const admins = t.app.get(AdminService);
+    // One at a time: the test pool is small.
+    const flagged: { code: string; needsReview: boolean }[] = [];
+    for (const { id, code } of payments) {
+      flagged.push({ code, needsReview: (await admins.getPayment(id)).needsReview });
+    }
+    expect(flagged).toEqual(
+      payments.map(({ code }) => ({ code, needsReview: isApprovalUnknown(code) })),
+    );
+    expect(flagged.filter((row) => row.needsReview)).toHaveLength(APPROVAL_UNKNOWN_CODES.length);
   });
 
   it('waits out anything that may still be working on the payment (in_progress)', async () => {

@@ -122,6 +122,45 @@ export async function netCancelOutcome(
 }
 
 /**
+ * The KRW the payment's latest net cancel asked the PG to cancel (`payload.cancelAmt`): the
+ * amount its approval was for, which is not the price when the net cancel was for an approval
+ * of another amount. Undefined when no net cancel recorded one (a confirmation by a notice or a
+ * settle, or an event written before the amount was recorded).
+ */
+export async function netCancelAmount(db: Db | Tx, paymentId: string): Promise<number | undefined> {
+  const payload = schema.paymentEvents.payload;
+  const [row] = await db
+    .select({ payload })
+    .from(schema.paymentEvents)
+    .where(
+      and(
+        eq(schema.paymentEvents.paymentId, paymentId),
+        eq(schema.paymentEvents.type, 'net_cancel'),
+        sql`${payload}->>'cancelAmt' is not null`,
+      ),
+    )
+    .orderBy(desc(schema.paymentEvents.id))
+    .limit(1);
+  const amount = (row?.payload as Record<string, unknown> | null | undefined)?.cancelAmt;
+  if (typeof amount === 'number')
+    return Number.isSafeInteger(amount) && amount > 0 ? amount : undefined;
+  return typeof amount === 'string' ? (parseKrw(amount) ?? undefined) : undefined;
+}
+
+/**
+ * The amount of the approval a full cancel of `payment` cancels: its price — except for a
+ * net-cancelled (`cancelled`) payment, whose approval may have been for another amount (that is
+ * why it was net-cancelled): what its net cancel asked to cancel (netCancelAmount), else the price.
+ */
+export async function approvedAmountOf(
+  db: Db | Tx,
+  payment: { id: string; status: PaymentStatus; priceKrw: number },
+): Promise<number> {
+  if (payment.status !== 'cancelled') return payment.priceKrw;
+  return (await netCancelAmount(db, payment.id)) ?? payment.priceKrw;
+}
+
+/**
  * What a 재통보 says about a cancel, as it carried it (신통보 names, else the 구통보 TID/OTID).
  * `tid` is the notice's own Tid, which its SignValue covers; `otid` the original transaction's.
  */
@@ -139,10 +178,11 @@ export interface CancelNotice {
  * - `full`: the whole approval was cancelled — StateCd 1 (전취소) or 2 (후취소), a ResultCode
  *   classifyCancel reads as `cancelled` for the payment's method (`payments.method`, else the
  *   notice's own PayMethod), and the shape of a full cancel: no Otid other than its own Tid, and
- *   no Amt other than the payment's.
+ *   no Amt other than the approval's (`priceKrw`: approvedAmountOf — the payment's price, or what
+ *   a net cancel of an approval for another amount asked to cancel).
  * - `partial`: a cancel that went through for PART of the amount. The manual sets Otid "부분취소의
  *   경우" to the original Tid (retryModule) — a partial cancel has a Tid of its own (cancelModule:
- *   PTid) — and its Amt is not the whole price. This service only ever cancels in full (owner
+ *   PTid) — and its Amt is not the whole amount. This service only ever cancels in full (owner
  *   decision 5), so one made in the merchant admin moves nothing: a person reconciles it.
  * - `none`: an approval, or a cancel that failed (a card's 2015 included): it proves nothing.
  */
@@ -211,13 +251,26 @@ export interface NoticeTarget {
   priceKrw: number;
 }
 
+/** What the recorded cancel 재통보 of a payment say about its card (recordedCancelNotices). */
+export interface RecordedCancelNotices {
+  /** A full cancel of the payment's approval (hasCancelNotice). */
+  full: boolean;
+  /** A partial cancel: part of the card's amount is cancelled, the rest still charged. */
+  partial: boolean;
+}
+
 /**
- * Whether SmartroPay's 재통보 has told us `payment`'s approval was cancelled in full: a `notify`
- * event (recorded only once its sender and SignValue verified) that cancelNoticeKind reads as
- * `full` and that cancelsApprovalOf it, judged as the payment is now (`status`). A partial
- * cancel never counts.
+ * What SmartroPay's cancel 재통보 have told us about `payment`'s card: `notify` events (recorded
+ * only once their sender and SignValue verified) read by cancelNoticeKind against the approval's
+ * amount (approvedAmountOf), judged as the payment is now (`status`).
+ * - `full`: one is a full cancel that cancelsApprovalOf it.
+ * - `partial`: one is a partial cancel. Any the payment's Moid brought counts: a partial cancel
+ *   carries a Tid of its own, and a payment has one approval (its claim's) to cancel part of.
  */
-export async function hasCancelNotice(db: Db | Tx, payment: NoticeTarget): Promise<boolean> {
+export async function recordedCancelNotices(
+  db: Db | Tx,
+  payment: NoticeTarget,
+): Promise<RecordedCancelNotices> {
   const payload = schema.paymentEvents.payload;
   const rows = await db
     .select({ resultCode: schema.paymentEvents.resultCode, payload })
@@ -229,8 +282,22 @@ export async function hasCancelNotice(db: Db | Tx, payment: NoticeTarget): Promi
         sql`${payload}->>'StateCd' in ('1', '2')`,
       ),
     );
-  return rows.some((row) => {
+  const found: RecordedCancelNotices = { full: false, partial: false };
+  if (rows.length === 0) return found;
+  const approval = { method: payment.method, priceKrw: await approvedAmountOf(db, payment) };
+  for (const row of rows) {
     const notice = recordedNotice(row.payload, row.resultCode);
-    return cancelNoticeKind(notice, payment) === 'full' && cancelsApprovalOf(payment, notice.tid);
-  });
+    const kind = cancelNoticeKind(notice, approval);
+    if (kind === 'full' && cancelsApprovalOf(payment, notice.tid)) found.full = true;
+    else if (kind === 'partial') found.partial = true;
+  }
+  return found;
+}
+
+/**
+ * Whether SmartroPay's 재통보 has told us `payment`'s approval was cancelled in full
+ * (recordedCancelNotices `full`). A partial cancel never counts.
+ */
+export async function hasCancelNotice(db: Db | Tx, payment: NoticeTarget): Promise<boolean> {
+  return (await recordedCancelNotices(db, payment)).full;
 }

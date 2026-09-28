@@ -7,6 +7,7 @@
 import { createDecipheriv } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
+  APPROVAL_UNKNOWN_CODES,
   cancelHashData,
   classifyCancel,
   ediDate,
@@ -15,6 +16,7 @@ import {
   goodsName,
   isAllowedNotifyAddress,
   isApprovalSuccess,
+  isApprovalUnknown,
   mallUserId,
   signValue,
   smartroScriptUrls,
@@ -151,6 +153,36 @@ describe('result codes', () => {
     for (const code of ['4100', '4110', '3041', '2001', '', undefined]) {
       expect({ code, ok: isApprovalSuccess(code) }).toEqual({ code, ok: false });
     }
+  });
+
+  it("tells an approval answer that is the PG's own failure from a decline", () => {
+    // The 통합코드 table's system, connection and internal errors: the card may be charged.
+    for (const code of [
+      '9999',
+      'W999',
+      'W027',
+      'W028',
+      'W029',
+      'W030',
+      'W299',
+      'NP98',
+      'NP99',
+      'LP99',
+      'PI19',
+      'PI51',
+      '6001',
+      '1032',
+      '1101',
+      '9998',
+    ]) {
+      expect({ code, unknown: isApprovalUnknown(code) }).toEqual({ code, unknown: true });
+    }
+    // Declines (the card company or the easy-pay said no), a success, nothing at all.
+    for (const code of ['3011', '3002', '3095', 'KP01', 'NP01', 'PP01', '3001', '', undefined]) {
+      expect({ code, unknown: isApprovalUnknown(code) }).toEqual({ code, unknown: false });
+    }
+    // No code is both.
+    expect(APPROVAL_UNKNOWN_CODES.filter((code) => isApprovalSuccess(code))).toEqual([]);
   });
 
   it('classifies a cancel answer by its code and the payment method', () => {

@@ -26,6 +26,7 @@ import { PaymentProviderRegistry } from '../payment-provider.registry.js';
 import {
   PROVIDER_REF_UNIQUE,
   type CancelNotice,
+  approvedAmountOf,
   cancelNoticeKind,
   cancelsApprovalOf,
   markRefunded,
@@ -47,6 +48,7 @@ import {
   goodsName,
   isAllowedNotifyAddress,
   isApprovalSuccess,
+  isApprovalUnknown,
   mallUserId,
   parseKrw,
   smartroCallbackUrl,
@@ -81,6 +83,20 @@ type CancelNoticeVerdict =
   | 'unclaimed'
   | 'other-approval'
   | 'settled';
+
+/**
+ * A cancel 재통보 judged under the payment row's lock: the verdict, and the payment as it was
+ * then (its status and reference) with the approval amount the notice was read against.
+ */
+interface JudgedCancelNotice {
+  verdict: CancelNoticeVerdict | 'no-cancel';
+  status?: PaymentStatus;
+  providerRef?: string | null;
+  amount: number;
+}
+
+/** The handle `db.transaction` hands its callback; @buddha/db exports no alias for it. */
+type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 
 /** What SmartroPay needs in its body to stop re-sending a 재통보. */
 export const NOTIFY_OK = 'OK';
@@ -544,11 +560,19 @@ export class SmartroPayService {
     authTid: string,
   ): Promise<string> {
     if (!isApprovalSuccess(approval.resultCode)) {
+      // Any other answer fails the payment (DESIGN §5.4 step 6) — also the PG's own failure,
+      // which is no decline: the card may be charged all the same. That one the admin list
+      // flags (`needsReview`), and this says so.
       const failed = await this.markFailed(
         payment.id,
         resultMessageOf(approval.resultMessage),
         'claimed',
       );
+      if (failed && isApprovalUnknown(approval.resultCode)) {
+        this.logger.error(
+          `payment ${payment.id}: the approval answered ${approval.resultCode}, the PG's own failure rather than a decline; failed, but the card may be charged — check it in the merchant admin and settle it (POST /admin/payments/${payment.id}/settle: credit, cancelled or failed)`,
+        );
+      }
       return failed ? this.walletUrl(payment.id, 'failed') : this.currentResult(payment.id);
     }
 
@@ -689,6 +713,8 @@ export class SmartroPayService {
       return this.currentResult(payment.id);
     }
     const provider = this.providers.get('smartro');
+    // The whole of what the PG approved — for an approval of another amount, not the price.
+    const cancelAmt = parseKrw(approval.amt) ?? payment.priceKrw;
     // A throw is "no answer" too: the card may or may not be cancelled.
     const unknown: CancelOutcome = { status: 'unknown' };
     const outcome: CancelOutcome = provider
@@ -696,22 +722,23 @@ export class SmartroPayService {
           .cancel({
             paymentId: payment.id,
             providerRef: tid,
-            priceKrw: parseKrw(approval.amt) ?? payment.priceKrw,
+            priceKrw: cancelAmt,
             reason: NET_CANCEL_REASON,
             // The approval's own: the payment has no method until it is credited.
             method: approval.payMethod ?? null,
           })
           .catch(() => unknown)
       : unknown;
-    // The PG's answer may not name the outcome: that is ours.
-    const { outcome: _theirs, ...answer } = outcome.payload ?? {};
+    // The PG's answer may not name the outcome or the amount asked for: those are ours.
+    const { outcome: _theirs, cancelAmt: _theirAmount, ...answer } = outcome.payload ?? {};
     const event: PaymentEventInput = {
       paymentId: payment.id,
       type: 'net_cancel',
       resultCode: outcome.resultCode,
       resultMessage: outcome.resultMessage,
-      // First, so the 64-key bound on a stored payload can never drop it.
-      payload: { outcome: outcome.status, ...answer },
+      // First, so the 64-key bound on a stored payload can never drop them. `cancelAmt` is what
+      // a full cancel 재통보 of this approval carries as its amount (approvedAmountOf).
+      payload: { outcome: outcome.status, cancelAmt, ...answer },
     };
 
     if (outcome.status === 'refused') {
@@ -868,7 +895,21 @@ export class SmartroPayService {
       // Net-cancelled (or being net-cancelled): what the net cancel came to decides.
       if (payment.status === 'cancelled') return this.noticeForCancelled(payment.id, tid);
       // Already settled — credited, refunded — the notice changes nothing.
-      if (payment.status !== 'pending' && payment.status !== 'failed') return NOTIFY_OK;
+      if (payment.status !== 'pending' && payment.status !== 'failed') {
+        // Every credit stores its approval's Tid, and a payment has one approval: a credited
+        // one whose approval notice names another Tid holds a wrong one — a settle credit given
+        // a Tid other than the approval's — and a refund would cancel that, not this card.
+        if (
+          (payment.status === 'succeeded' || payment.status === 'refunding') &&
+          payment.providerRef !== null &&
+          payment.providerRef !== tid
+        ) {
+          this.logger.error(
+            `재통보 approval ${tid} for payment ${payment.id}, which is ${payment.status} under ${payment.providerRef}: the approval Tid on record differs — check the settle's tid (payment_settle) against the merchant admin; a refund cancels ${payment.providerRef}, not ${tid}. Nothing changed`,
+          );
+        }
+        return NOTIFY_OK;
+      }
       // Never claimed by our ReturnUrl, so never approved: under 인증/승인 분리 the PG approves
       // only when WE call urlCallApproval, and that call always follows a committed claim
       // (`provider_ref` set). An approval notice for an unclaimed payment is not genuine,
@@ -968,56 +1009,22 @@ export class SmartroPayService {
       resultMessage: field(fields, 'ResultMsg'),
       payload: { outcome: 'cancelled', notice: true },
     };
-    const verdict = await this.db.transaction(
-      async (tx): Promise<CancelNoticeVerdict | 'no-cancel'> => {
-        const [locked] = await tx
-          .select()
-          .from(schema.payments)
-          .where(eq(schema.payments.id, payment.id))
-          .limit(1)
-          .for('update');
-        if (!locked) return 'settled';
-        const kind = cancelNoticeKind(cancel, locked);
-        if (kind === 'none') return 'no-cancel';
-        if (kind === 'partial') return 'partial';
-        const at = await clockTimestamp(tx);
-        const ours = cancelsApprovalOf(locked, tid);
-        switch (locked.status) {
-          case 'refunding':
-            if (!ours) return 'other-approval';
-            return (await markRefunded(tx, locked.id, at)) ? 'refunded' : 'settled';
-          case 'cancelled':
-            // Before the naming check: a notice re-sent for a payment a notice or a settle
-            // closed (its `provider_ref` the authentication's Tid) has nothing left to do.
-            if ((await netCancelOutcome(tx, locked.id)) === 'cancelled') return 'settled';
-            if (!ours) return 'other-approval';
-            await recordPaymentEvent(tx, confirmation);
-            return 'confirmed';
-          case 'pending':
-          case 'failed': {
-            if (!ours) return 'unclaimed';
-            const rows = await tx
-              .update(schema.payments)
-              .set({ status: 'cancelled', resultMessage: NOTICE_CANCEL_REASON, updatedAt: at })
-              .where(
-                and(
-                  eq(schema.payments.id, locked.id),
-                  inArray(schema.payments.status, ['pending', 'failed']),
-                  isNotNull(schema.payments.providerRef),
-                ),
-              )
-              .returning({ id: schema.payments.id });
-            if (rows.length === 0) return 'settled';
-            await recordPaymentEvent(tx, confirmation);
-            return 'cancelled';
-          }
-          case 'succeeded':
-            return ours ? 'external' : 'other-approval';
-          default:
-            return 'settled';
-        }
-      },
-    );
+    const judged = await this.db.transaction(async (tx): Promise<JudgedCancelNotice> => {
+      const [locked] = await tx
+        .select()
+        .from(schema.payments)
+        .where(eq(schema.payments.id, payment.id))
+        .limit(1)
+        .for('update');
+      if (!locked) return { verdict: 'settled', amount: payment.priceKrw };
+      // Against the approval's amount: a net-cancelled payment's approval may have been for
+      // another amount than its price (that is why it was net-cancelled), and a full cancel of
+      // it carries that amount.
+      const amount = await approvedAmountOf(tx, locked);
+      const verdict = await this.cancelNoticeVerdict(tx, locked, cancel, amount, confirmation);
+      return { verdict, status: locked.status, providerRef: locked.providerRef, amount };
+    });
+    const { verdict, amount } = judged;
 
     const where = `재통보 StateCd ${state}, ${tid}`;
     switch (verdict) {
@@ -1048,7 +1055,7 @@ export class SmartroPayService {
         // Only ever made by hand in the merchant admin: full cancels are all this service does
         // (owner decision 5), so no state here describes a card that is partly cancelled.
         this.logger.error(
-          `payment ${payment.id}: the PG reports a partial cancel (${where}, Otid ${cancel.otid ?? 'none'}, Amt ${cancel.amt ?? 'none'} of ${String(payment.priceKrw)}); nothing changed — this service cancels in full only: check the card in the merchant admin and reconcile the payment and its P by hand`,
+          `payment ${payment.id}: the PG reports a partial cancel (${where}, Otid ${cancel.otid ?? 'none'}, Amt ${cancel.amt ?? 'none'} of ${String(amount)}); nothing changed — this service cancels in full only: check the card in the merchant admin and reconcile the payment and its P by hand (a settle credit or restore is refused: partial_cancel — settle it cancelled or refunded, then adjust the balance: POST /admin/users/:id/balance-adjust)`,
         );
         break;
       case 'unclaimed':
@@ -1057,14 +1064,88 @@ export class SmartroPayService {
         );
         break;
       case 'other-approval':
-        this.logger.warn(
-          `cancel 재통보 for payment ${payment.id} names another approval than ${String(payment.providerRef)} (${where}); recorded, nothing changed`,
-        );
+        this.otherApprovalCancelled(payment.id, judged, where);
         break;
       case 'settled':
         break;
     }
     return NOTIFY_OK;
+  }
+
+  /** settleCancelNotice's decision on the payment as locked (`amount`: approvedAmountOf). */
+  private async cancelNoticeVerdict(
+    tx: Tx,
+    locked: PaymentRow,
+    cancel: CancelNotice,
+    amount: number,
+    confirmation: PaymentEventInput,
+  ): Promise<CancelNoticeVerdict | 'no-cancel'> {
+    const kind = cancelNoticeKind(cancel, { method: locked.method, priceKrw: amount });
+    if (kind === 'none') return 'no-cancel';
+    if (kind === 'partial') return 'partial';
+    const at = await clockTimestamp(tx);
+    const ours = cancelsApprovalOf(locked, cancel.tid);
+    switch (locked.status) {
+      case 'refunding':
+        if (!ours) return 'other-approval';
+        return (await markRefunded(tx, locked.id, at)) ? 'refunded' : 'settled';
+      case 'cancelled':
+        // Before the naming check: a notice re-sent for a payment a notice or a settle
+        // closed (its `provider_ref` the authentication's Tid) has nothing left to do.
+        if ((await netCancelOutcome(tx, locked.id)) === 'cancelled') return 'settled';
+        if (!ours) return 'other-approval';
+        await recordPaymentEvent(tx, confirmation);
+        return 'confirmed';
+      case 'pending':
+      case 'failed': {
+        if (!ours) return 'unclaimed';
+        const rows = await tx
+          .update(schema.payments)
+          .set({ status: 'cancelled', resultMessage: NOTICE_CANCEL_REASON, updatedAt: at })
+          .where(
+            and(
+              eq(schema.payments.id, locked.id),
+              inArray(schema.payments.status, ['pending', 'failed']),
+              isNotNull(schema.payments.providerRef),
+            ),
+          )
+          .returning({ id: schema.payments.id });
+        if (rows.length === 0) return 'settled';
+        await recordPaymentEvent(tx, confirmation);
+        return 'cancelled';
+      }
+      case 'succeeded':
+        return ours ? 'external' : 'other-approval';
+      default:
+        return 'settled';
+    }
+  }
+
+  /**
+   * A full cancel 재통보 that names another Tid than the payment's `provider_ref`. A payment has
+   * one approval, and every credit stores that approval's Tid — so on a credited payment
+   * (`succeeded`, `refunding`) this is the mark of a Tid on record that is not the approval's (a
+   * settle credit given the wrong `tid`): the card may be cancelled while its P stays, or the
+   * refund cancels a Tid the PG does not know. That shouts; a `cancelled` one only warns (a net
+   * cancel stores the approval's own Tid from its answer).
+   */
+  private otherApprovalCancelled(paymentId: string, judged: JudgedCancelNotice, where: string) {
+    const ref = String(judged.providerRef ?? null);
+    const head = `cancel 재통보 for payment ${paymentId} names another approval than ${ref} (${where}); recorded, nothing changed`;
+    switch (judged.status) {
+      case 'succeeded':
+        this.logger.error(
+          `${head} — the payment is succeeded under ${ref}: if the merchant admin shows its card cancelled, the Tid on record is not its approval's (check the settle's tid), its P was not clawed back and a refund would cancel ${ref}: correct the balance by hand (POST /admin/users/:id/balance-adjust)`,
+        );
+        return;
+      case 'refunding':
+        this.logger.error(
+          `${head} — the payment is refunding, its cancel asked of ${ref}: if the merchant admin shows its card cancelled, the Tid on record is not its approval's (check the settle's tid): settle it refunded (POST /admin/payments/${paymentId}/settle)`,
+        );
+        return;
+      default:
+        this.logger.warn(head);
+    }
   }
 
   /**

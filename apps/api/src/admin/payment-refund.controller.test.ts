@@ -954,16 +954,31 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
       await vi.waitFor(() => {
         expect(pg.cancels).toHaveLength(1);
       });
+      // The first attempt's stamp: the claw-back's clock, written with its audit row.
+      const firstStamp = (await paymentRow(id)).updatedAt;
+      expect((await refundActions())[0]!.createdAt).toEqual(firstStamp);
       // The first attempt outlives its lease (a slow PG): a retry takes the payment over, and
       // its cancel is on the card when the first attempt's refusal finally lands.
       await t.db
         .update(schema.payments)
         .set({ updatedAt: sql`now() - interval '70 seconds'` })
         .where(eq(schema.payments.id, id));
+      const aged = (await paymentRow(id)).updatedAt;
       const retry = refund(id, '재시도').then((res) => res);
       await vi.waitFor(() => {
         expect(pg.cancels).toHaveLength(2);
       });
+      // What the first attempt's restore will find is the RETRY's lease — its own stamp, written
+      // with its audit row — not the aging above: that is what keeps the P out. (A takeRetry that
+      // stamped nothing would leave the aged value, which differs from the first stamp too, and
+      // pass the rest of this test.)
+      const retryAction = (await refundActions()).find(
+        (action) => (action.payload as { retry?: boolean }).retry === true,
+      );
+      const leased = (await paymentRow(id)).updatedAt;
+      expect(leased).toEqual(retryAction!.createdAt);
+      expect(leased.getTime()).toBeGreaterThan(aged.getTime());
+      expect(leased.getTime()).toBeGreaterThan(firstStamp.getTime());
 
       refuseFirst();
       const late = await first;

@@ -92,6 +92,50 @@ export function isApprovalSuccess(resultCode: string | null | undefined): boolea
   return typeof resultCode === 'string' && APPROVAL_SUCCESS.has(resultCode);
 }
 
+/**
+ * Approval answers that are no decline: the PG's own side failed, or its link to the card
+ * company or easy-pay did, so the answer does not say whether the card was charged (the 통합코드
+ * table's own words). The approval still fails the payment (DESIGN §5.4 step 6, an owner
+ * decision); the admin list flags such a claimed `failed` payment (`needsReview`) so a person
+ * checks the card in the merchant admin. Only the methods a CARD window reaches (the card and
+ * the easy-pays ShowEasyPay leaves visible) and the payment server's own error codes:
+ * - undefined or system errors, retry later: 9999 (미지정 오류 / 시스템에러 - 잠시 후 재거래;
+ *   토스페이: 정의되지 않은 코드… PG사로 문의), W999 (시스템에러 잠시후 재 거래);
+ * - the payment server's internal failures: W027–W030 (내부 처리 오류, DB Insert/Update/Select);
+ * - a connection failing: W299 ({변수} 연결오류), NP98 / NP99 (잠시 후 재거래, 네이버페이 연결
+ *   오류 / 오류), SmilePay 9998 (연결 실패), 1101 (응답 지연으로인한 실패), 1032 (서비스
+ *   지연처리 발생);
+ * - an error on the approver's side: LP99 (PG, 은행 및 기타 오류), PI19 (승인 중계기관 오류),
+ *   PI51 (서버에서 에러가 발생), 티머니페이 6001 (처리중 에러가 발생).
+ * Kept apart from classifyCancel's UNKNOWN_CODES, which answer a cancel, not an approval — but
+ * every generic one of those (NP98, NP99, LP99, 9999, SmilePay's 1101 and 9998) is here too.
+ */
+export const APPROVAL_UNKNOWN_CODES: readonly string[] = [
+  '9999',
+  'W999',
+  'W027',
+  'W028',
+  'W029',
+  'W030',
+  'W299',
+  'NP98',
+  'NP99',
+  'LP99',
+  'PI19',
+  'PI51',
+  '6001',
+  '1032',
+  '1101',
+  '9998',
+];
+
+const APPROVAL_UNKNOWN: ReadonlySet<string> = new Set(APPROVAL_UNKNOWN_CODES);
+
+/** Whether an approval's ResultCode is no decline but the PG's failure (APPROVAL_UNKNOWN_CODES). */
+export function isApprovalUnknown(resultCode: string | null | undefined): boolean {
+  return typeof resultCode === 'string' && APPROVAL_UNKNOWN.has(resultCode);
+}
+
 /** A KRW amount as SmartroPay writes it (digits only, above zero), or null. */
 export function parseKrw(value: string | undefined): number | null {
   if (value === undefined || !/^\d{1,12}$/.test(value)) return null;

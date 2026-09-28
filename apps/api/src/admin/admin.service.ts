@@ -16,7 +16,10 @@ import { keysetPredicate } from '../common/keyset.js';
 import { clockTimestamp } from '../infra/db/clock.js';
 import { DB } from '../infra/db/db.provider.js';
 import { SETTLE_MIN_AGE_MS } from '../payments/payment-transitions.js';
-import { APPROVAL_SUCCESS_CODES } from '../payments/smartro/smartro-protocol.js';
+import {
+  APPROVAL_SUCCESS_CODES,
+  APPROVAL_UNKNOWN_CODES,
+} from '../payments/smartro/smartro-protocol.js';
 import { toLedgerEntry, toBalance, type Page } from '../wallet/wallet.service.js';
 
 const userColumns = {
@@ -54,8 +57,16 @@ function toAdminUser(row: UserRow): AdminUser {
 /** SETTLE_MIN_AGE_MS as an SQL interval literal (a constant, never user input). */
 const SETTLE_MIN_AGE = sql.raw(`interval '${String(SETTLE_MIN_AGE_MS / 1000)} seconds'`);
 
-/** The approval success codes, as SQL literals (constants, never user input). */
-const APPROVAL_SUCCESS = sql.raw(APPROVAL_SUCCESS_CODES.map((code) => `'${code}'`).join(', '));
+/** A list of result codes as SQL literals (constants, never user input). */
+function codeList(codes: readonly string[]) {
+  return sql.raw(codes.map((code) => `'${code}'`).join(', '));
+}
+
+/** The approval success codes (isApprovalSuccess), as SQL. */
+const APPROVAL_SUCCESS = codeList(APPROVAL_SUCCESS_CODES);
+
+/** The approval answers that are the PG's own failure, no decline (isApprovalUnknown), as SQL. */
+const APPROVAL_UNKNOWN = codeList(APPROVAL_UNKNOWN_CODES);
 
 /**
  * `AdminPayment.needsReview`, computed where the rows are (ADR-0042): a SmartroPay payment the
@@ -68,8 +79,10 @@ const APPROVAL_SUCCESS = sql.raw(APPROVAL_SUCCESS_CODES.map((code) => `'${code}'
  * - `refunding`, untouched for SETTLE_MIN_AGE_MS — the refund's cancel got no clear answer;
  * - `failed` and claimed, untouched for SETTLE_MIN_AGE_MS, with a sign the card may be charged
  *   after all that no settle has checked since: its approval got no answer (an `approval` event
- *   without a ResultCode — the payment failed on something else's word), or an approval
- *   재통보 (StateCd 0, a success code) left it uncredited (its Mid or amount did not match).
+ *   without a ResultCode — the payment failed on something else's word) or answered the PG's own
+ *   failure rather than a decline (isApprovalUnknown: 9999, W999, … — it still fails the payment,
+ *   DESIGN §5.4), or an approval 재통보 (StateCd 0, a success code) left it uncredited (its Mid or
+ *   amount did not match).
  * Only SmartroPay rows: the settle refuses the rest (a mock refund is simply retried).
  */
 const needsReview = sql<boolean>`(${schema.payments.provider} = 'smartro' and (
@@ -87,7 +100,8 @@ const needsReview = sql<boolean>`(${schema.payments.provider} = 'smartro' and (
     and exists (
       select 1 from ${schema.paymentEvents} hint
       where hint.payment_id = ${schema.payments.id}
-        and ((hint.type = 'approval' and hint.result_code is null)
+        and ((hint.type = 'approval'
+            and (hint.result_code is null or hint.result_code in (${APPROVAL_UNKNOWN})))
           or (hint.type = 'notify' and hint.payload->>'StateCd' = '0'
             and hint.result_code in (${APPROVAL_SUCCESS})))
         and not exists (

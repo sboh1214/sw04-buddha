@@ -512,6 +512,116 @@ describe.skipIf(!hasTestInfra)('SmartroPay (integration)', () => {
     expect(pg.cancels).toHaveLength(0);
   });
 
+  it("fails an approval that answers the PG's own failure too, and says the card may be charged", async () => {
+    // DESIGN §5.4 step 6 (owner decision): any non-success fails. 9999 is no decline, though —
+    // the admin list flags the payment (payment-settle's suite), and this shouts.
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    try {
+      const form = await prepared();
+      const tid = testTid();
+      approveWith(form, tid, { resultCode: '9999', resultMsg: '시스템에러 - 잠시 후 재거래' });
+      const res = await postReturn(form.form.Moid, { Tid: tid, TrAuthKey: 'k' });
+      expect(redirectOf(res)).toEqual({ payment: form.paymentId, result: 'failed' });
+      expect(await paymentRow(form.paymentId)).toMatchObject({
+        status: 'failed',
+        providerRef: tid,
+        resultMessage: '시스템에러 - 잠시 후 재거래',
+      });
+      expect(error).toHaveBeenCalledWith(
+        expect.stringContaining("answered 9999, the PG's own failure rather than a decline"),
+      );
+
+      // A decline says nothing more.
+      error.mockClear();
+      const declined = await prepared();
+      const declinedTid = testTid();
+      approveWith(declined, declinedTid, { resultCode: '3011', resultMsg: '카드번호 오류' });
+      expect(
+        redirectOf(await postReturn(declined.form.Moid, { Tid: declinedTid, TrAuthKey: 'k' }))
+          .result,
+      ).toBe('failed');
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      error.mockRestore();
+    }
+    expect(await ledgerOf(user.id)).toHaveLength(1);
+    expect(pg.cancels).toHaveLength(0);
+  });
+
+  it('confirms a net cancel of an approval for another amount on its full cancel 재통보', async () => {
+    // Approved for 5,000원 on a 9,700원 payment: net-cancelled for the 5,000 it approved, with
+    // no clear answer. The PG's full cancel notice then carries 5,000 — the approval's amount,
+    // which the net cancel recorded — so it confirms the cancel rather than reading as partial.
+    const form = await prepared();
+    const tid = testTid();
+    approveWith(form, tid, { overrides: { Amt: '5000' } });
+    pg.onCancel = () => {
+      throw new SmartroUnreachableError('timed out');
+    };
+    expect(redirectOf(await postReturn(form.form.Moid, { Tid: tid, TrAuthKey: 'k' })).result).toBe(
+      'pending',
+    );
+    expect(pg.cancels.map((cancel) => cancel.CancelAmt)).toEqual(['5000']);
+    expect((await eventsOf(form.paymentId)).at(-1)).toMatchObject({
+      type: 'net_cancel',
+      payload: { outcome: 'unknown', cancelAmt: 5000 },
+    });
+
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    try {
+      const notice = await postNotify(
+        notifyForm({
+          paymentId: form.paymentId,
+          priceKrw: pack.priceKrw,
+          tid,
+          amt: '5000',
+          resultCode: '2001',
+          stateCd: '1',
+        }),
+      );
+      expect(notice.body).toBe('OK');
+      expect(error).not.toHaveBeenCalledWith(expect.stringContaining('partial cancel'));
+    } finally {
+      error.mockRestore();
+    }
+    expect((await eventsOf(form.paymentId)).at(-1)).toMatchObject({
+      type: 'net_cancel',
+      payload: { outcome: 'cancelled', notice: true },
+    });
+    expect(await paymentRow(form.paymentId)).toMatchObject({ status: 'cancelled' });
+
+    // Of a payment net-cancelled at its price, the same amount is a partial cancel still.
+    const other = await prepared();
+    const otherTid = testTid();
+    approveWith(other, otherTid, { overrides: { SignValue: 'forged' } });
+    pg.onCancel = () => {
+      throw new SmartroUnreachableError('timed out');
+    };
+    await postReturn(other.form.Moid, { Tid: otherTid, TrAuthKey: 'k' });
+    expect((await eventsOf(other.paymentId)).at(-1)).toMatchObject({
+      type: 'net_cancel',
+      payload: { outcome: 'unknown', cancelAmt: pack.priceKrw },
+    });
+    const partial = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    try {
+      await postNotify(
+        notifyForm({
+          paymentId: other.paymentId,
+          priceKrw: pack.priceKrw,
+          tid: otherTid,
+          amt: '5000',
+          resultCode: '2001',
+          stateCd: '1',
+        }),
+      );
+      expect(partial).toHaveBeenCalledWith(expect.stringContaining('reports a partial cancel'));
+    } finally {
+      partial.mockRestore();
+    }
+    expect((await eventsOf(other.paymentId)).at(-1)).toMatchObject({ type: 'notify' });
+    expect(await ledgerOf(user.id)).toHaveLength(1);
+  });
+
   it('net-cancels an approval whose SignValue, Mid or Moid does not verify', async () => {
     for (const overrides of [
       { SignValue: testSignValue('forged-tid-0000000000000000000', '3001') },
@@ -1368,6 +1478,77 @@ describe.skipIf(!hasTestInfra)('SmartroPay (integration)', () => {
     expect(events.at(-1)).toMatchObject({ type: 'notify', resultCode: '2001' });
     expect(events.at(-1)!.payload).toMatchObject({ StateCd: '1' });
     expect(events.at(-1)!.payload).not.toHaveProperty('BuyerName');
+  });
+
+  it('shouts when a credited payment hears of an approval under another Tid than its own', async () => {
+    // A settle credit given the wrong Tid (the operator's typo): the payment holds A, while the
+    // PG's approval — and so every 재통보 of it — names B. Nothing moves; the log says so.
+    const form = await prepared();
+    const recordedTid = testTid();
+    approveWith(form, recordedTid);
+    expect(
+      redirectOf(await postReturn(form.form.Moid, { Tid: recordedTid, TrAuthKey: 'k' })).result,
+    ).toBe('succeeded');
+    const realTid = testTid();
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    try {
+      // The approval 재통보 of B.
+      const approval = await postNotify(
+        notifyForm({ paymentId: form.paymentId, priceKrw: pack.priceKrw, tid: realTid }),
+      );
+      expect(approval.body).toBe('OK');
+      expect(error).toHaveBeenCalledWith(
+        expect.stringContaining('the approval Tid on record differs'),
+      );
+      // Its own Tid again (a re-sent notice) is no alarm.
+      error.mockClear();
+      await postNotify(
+        notifyForm({ paymentId: form.paymentId, priceKrw: pack.priceKrw, tid: recordedTid }),
+      );
+      expect(error).not.toHaveBeenCalled();
+
+      // B cancelled in the merchant admin: a full cancel of "another approval" — on a credited
+      // payment, an error that names the fix, not a warning.
+      const cancelOfB = notifyForm({
+        paymentId: form.paymentId,
+        priceKrw: pack.priceKrw,
+        tid: realTid,
+        resultCode: '2001',
+        stateCd: '1',
+      });
+      expect((await postNotify(cancelOfB)).body).toBe('OK');
+      expect(error).toHaveBeenCalledWith(
+        expect.stringMatching(/names another approval than .*succeeded.*balance-adjust/),
+      );
+
+      // Refunding (its cancel of A got no answer): the fix is a settle.
+      error.mockClear();
+      await t.db
+        .update(schema.payments)
+        .set({ status: 'refunding' })
+        .where(eq(schema.payments.id, form.paymentId));
+      expect((await postNotify(cancelOfB)).body).toBe('OK');
+      expect(error).toHaveBeenCalledWith(
+        expect.stringMatching(/names another approval than .*refunding.*settle it refunded/),
+      );
+      error.mockClear();
+      await postNotify(
+        notifyForm({ paymentId: form.paymentId, priceKrw: pack.priceKrw, tid: realTid }),
+      );
+      expect(error).toHaveBeenCalledWith(
+        expect.stringContaining('the approval Tid on record differs'),
+      );
+      expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('names another approval'));
+    } finally {
+      error.mockRestore();
+      warn.mockRestore();
+    }
+    expect(await paymentRow(form.paymentId)).toMatchObject({
+      status: 'refunding',
+      providerRef: recordedTid,
+    });
+    expect((await balanceOf(user.id)).availableP).toBe(SIGNUP_BONUS_P + 10_000n);
   });
 
   it('closes a claimed payment its cancel 재통보 reports cancelled, so a late approval notice credits nothing', async () => {

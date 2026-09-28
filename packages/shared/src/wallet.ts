@@ -115,8 +115,9 @@ export const adminPaymentSchema = paymentSchema
      * check in the merchant admin and settle by hand (`POST /admin/payments/:id/settle`): a
      * claimed `pending` one, or a `refunding` one, untouched for 2 minutes (no request is still
      * working on it); a `cancelled` one whose net cancel the PG never confirmed; or a claimed
-     * `failed` one the card may be charged for (its approval got no answer, or an approval
-     * 재통보 could not be credited) that no settle has checked since.
+     * `failed` one the card may be charged for (its approval got no answer or answered the PG's
+     * own failure rather than a decline — 9999, W999 and the like — or an approval 재통보 could
+     * not be credited) that no settle has checked since.
      */
     needsReview: z.boolean(),
   })
