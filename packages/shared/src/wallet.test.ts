@@ -91,6 +91,7 @@ describe('response schemas', () => {
         approvedAt: createdAt,
         refundedAt: null,
         resultMessage: null,
+        cancelConfirmed: null,
         createdAt,
       }),
     ).toMatchObject({ priceKrw: 4900, status: 'succeeded', approvedAt: createdAt });
@@ -109,6 +110,7 @@ describe('response schemas', () => {
         approvedAt: createdAt,
         refundedAt: null,
         resultMessage: null,
+        cancelConfirmed: null,
         createdAt,
       }).packageId,
     ).toBeNull();
@@ -126,12 +128,24 @@ describe('response schemas', () => {
       approvedAt: createdAt,
       refundedAt: '2026-09-05T01:02:03.000Z',
       resultMessage: '취소 성공',
+      cancelConfirmed: null,
       createdAt,
     };
     expect(paymentSchema.parse(refunded)).toEqual(refunded);
     // The new fields are required (nullable, never absent), like every other DTO field.
     const { refundedAt: _dropped, ...withoutRefundedAt } = refunded;
     expect(paymentSchema.safeParse(withoutRefundedAt).success).toBe(false);
+    const { cancelConfirmed: _unsaid, ...withoutCancelConfirmed } = refunded;
+    expect(paymentSchema.safeParse(withoutCancelConfirmed).success).toBe(false);
+
+    // A cancelled one says whether its card's cancel is confirmed: a boolean, or null.
+    const cancelled = { ...refunded, status: 'cancelled', refundedAt: null };
+    for (const cancelConfirmed of [true, false]) {
+      expect(paymentSchema.parse({ ...cancelled, cancelConfirmed }).cancelConfirmed).toBe(
+        cancelConfirmed,
+      );
+    }
+    expect(paymentSchema.safeParse({ ...cancelled, cancelConfirmed: 'no' }).success).toBe(false);
 
     // The admin row adds the account and whether an admin must settle it by hand.
     const adminRow = { ...refunded, status: 'refunding', userId: 'u1', nickname: '예측가' };

@@ -16,10 +16,23 @@ type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
  */
 
 /**
- * No request can still be working on a payment untouched for this long, by the database clock:
- * a ReturnUrl's approval and inquiry (25 s each, SMARTRO_TIMEOUT_MS) and a net cancel (25 s),
- * or a refund attempt (its 60 s lease). An admin may settle it by hand only after that, and the
- * admin list flags it for review only after that (`needsReview`).
+ * How long a payment must be untouched, by the database clock, before an admin may settle it by
+ * hand and before the admin list flags it for review (`needsReview`). From its latest
+ * `updated_at` stamp, a request still working on it takes, realistically, a PG call or two of up
+ * to 25 s each (SMARTRO_TIMEOUT_MS: a ReturnUrl's approval and inquiry, a refund attempt's
+ * cancel) and short pool and lock waits — well inside this.
+ *
+ * NOT the theoretical worst case. With every pool wait (5 s) and row-lock wait (30 s,
+ * statement_timeout) run to its limit, a ReturnUrl comes to about 125 s — approval and inquiry,
+ * their two event inserts, the credit's pool wait and its two lock waits (creditWithin locks the
+ * balance, then updates the payment row) — and a failed credit's way to its net cancel's
+ * reservation to about 140-170 s; an event insert can wait on the payment row too (its foreign
+ * key takes KEY SHARE, which a FOR UPDATE blocks). A refund attempt: Redis, the cancel, two pool
+ * waits and the restore's two lock waits, about 97 s. What keeps a settle and a late request from
+ * both applying is the status guard under the payment row's lock, not this age: a credit moves
+ * only `status IN (from)`, a net cancel reserves only `pending`, a refund finishes or restores
+ * only `refunding` (a restore only under its own stamp) — whichever comes second finds the row
+ * moved and leaves it.
  */
 export const SETTLE_MIN_AGE_MS = 2 * 60 * 1000;
 

@@ -14,13 +14,14 @@ import {
   type UserBalanceEvent,
 } from '@buddha/shared';
 import { ChargePackageService } from './charge-package.service.js';
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, getTableColumns, inArray, sql } from 'drizzle-orm';
 import { assertExpectedAccount } from '../auth/expected-account.js';
 import { AppError } from '../common/errors/app-error.js';
 import { keysetPredicate } from '../common/keyset.js';
 import { PG_UNIQUE_VIOLATION, isPgError } from '../common/errors/pg-error.js';
 import { clockTimestamp } from '../infra/db/clock.js';
 import { DB } from '../infra/db/db.provider.js';
+import { netCancelConfirmed } from '../payments/payment-events.js';
 import { PAYMENT_PROVIDER, type PaymentProvider } from '../payments/payment-provider.js';
 import { MarketPublisher } from '../realtime/market-publisher.js';
 
@@ -54,7 +55,23 @@ export function toLedgerEntry(row: LedgerRow): LedgerEntry {
   };
 }
 
-export function toPayment(row: PaymentRow): Payment {
+/**
+ * `Payment.cancelConfirmed`, computed where the rows are: for a `cancelled` payment, whether the
+ * card's cancel is confirmed (netCancelConfirmed); null for any other status. A net cancel that
+ * got no clear answer — or is still waiting for one — leaves it false: the card may still be
+ * charged, and an admin settles it (the admin list's `needsReview`).
+ */
+const cancelConfirmed = sql<
+  boolean | null
+>`case when ${schema.payments.status} = 'cancelled' then ${netCancelConfirmed} end`;
+
+/** A payment row with what `Payment` adds to it, as `paymentColumns` selects it. */
+export type PaymentView = PaymentRow & { cancelConfirmed: boolean | null };
+
+/** Every column of `payments`, and `cancelConfirmed`: a select that toPayment can answer from. */
+export const paymentColumns = { ...getTableColumns(schema.payments), cancelConfirmed };
+
+export function toPayment(row: PaymentView): Payment {
   return {
     id: row.id,
     amountP: serializePAmount(row.amountP),
@@ -67,6 +84,7 @@ export function toPayment(row: PaymentRow): Payment {
     approvedAt: row.approvedAt?.toISOString() ?? null,
     refundedAt: row.refundedAt?.toISOString() ?? null,
     resultMessage: row.resultMessage,
+    cancelConfirmed: row.cancelConfirmed,
     createdAt: row.createdAt.toISOString(),
   };
 }
@@ -114,7 +132,7 @@ export interface CreditInput {
   /**
    * The statuses this credit may move to `succeeded`. `['pending']` for a charge that is still
    * ours to settle; SmartroPay's 재통보 also passes `failed`, because the PG's approval outranks
-   * a failure we recorded on our side (DESIGN §5.5). Anything else is left alone.
+   * a failure we recorded on our side (ADR-0042 「재통보」). Anything else is left alone.
    */
   from: readonly PaymentStatus[];
   /** `payments.provider_ref`: the provider's transaction id (SmartroPay: the approval's Tid). */
@@ -438,7 +456,8 @@ export class WalletService {
 
     return {
       result: {
-        payment: toPayment(payment),
+        // Just credited: `succeeded`, so there is no cancel to confirm.
+        payment: toPayment({ ...payment, cancelConfirmed: null }),
         balance: toBalance(balance),
         ledgerEntry: toLedgerEntry(entry),
       },
@@ -460,7 +479,7 @@ export class WalletService {
   /** One of the caller's own payments (`GET /me/payments/:id`); anyone else's is a 404. */
   async getPayment(userId: string, paymentId: string): Promise<Payment> {
     const [row] = await this.db
-      .select()
+      .select(paymentColumns)
       .from(schema.payments)
       .where(and(eq(schema.payments.id, paymentId), eq(schema.payments.userId, userId)))
       .limit(1);
@@ -523,7 +542,8 @@ export class WalletService {
     // Rebuilt from the rows the first request wrote — never from the catalogue, which an admin
     // may have re-priced since (ADR-0026); the payment carries the terms actually bought.
     return {
-      payment: toPayment(earlier),
+      // Credited once (its DEPOSIT is above): never `cancelled`, so no cancel to confirm.
+      payment: toPayment({ ...earlier, cancelConfirmed: null }),
       balance: await this.getBalance(earlier.userId),
       ledgerEntry: toLedgerEntry(entry),
     };
@@ -602,7 +622,7 @@ export class WalletService {
   ): Promise<Page<Payment>> {
     const keyset = decodeKeyset(cursor, 'uuid');
     const rows = await this.db
-      .select()
+      .select(paymentColumns)
       .from(schema.payments)
       .where(
         and(

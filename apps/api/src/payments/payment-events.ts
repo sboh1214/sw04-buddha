@@ -1,12 +1,14 @@
 import { schema, type Db } from '@buddha/db';
 import { type PaymentEventType } from '@buddha/shared';
+import { sql } from 'drizzle-orm';
 
 /** The handle `db.transaction` hands its callback; @buddha/db exports no alias for it. */
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 
 /**
- * Keys never stored (DESIGN §3): the merchant key and cancel password are ours; HashData,
- * EncData and EncryptData are derived from the merchant key. Matched case-insensitively.
+ * Keys never stored (ADR-0042 「payment_events」): the merchant key and cancel password are ours;
+ * HashData, EncData and EncryptData are derived from the merchant key. Matched
+ * case-insensitively.
  */
 const SECRET_KEYS: ReadonlySet<string> = new Set([
   'merchantkey',
@@ -92,3 +94,15 @@ export function resultMessageOf(value: string | undefined | null): string | null
   const cleaned = clean(value, MAX_VALUE_LENGTH).trim();
   return cleaned.length === 0 ? null : cleaned;
 }
+
+/**
+ * Whether the `payments` row a query reads has a net cancel the PG confirmed: a `net_cancel`
+ * event whose outcome is `cancelled` — the PG's own answer, its cancel 재통보, or an admin's
+ * settle after checking the merchant admin. As SQL over `schema.payments`, for a list; one
+ * payment's is netCancelOutcome (payment-transitions), which asks the same question.
+ */
+export const netCancelConfirmed = sql<boolean>`exists (
+  select 1 from ${schema.paymentEvents}
+  where ${schema.paymentEvents.paymentId} = ${schema.payments.id}
+    and ${schema.paymentEvents.type} = 'net_cancel'
+    and ${schema.paymentEvents.payload}->>'outcome' = 'cancelled')`;

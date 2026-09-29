@@ -1,5 +1,5 @@
 /**
- * `POST /admin/payments/:id/settle` (ADR-0042, DESIGN addendum §D) against the docker `test`
+ * `POST /admin/payments/:id/settle` (ADR-0042 추기 「관리자 수동 정리」) against the docker `test`
  * profile: an admin settles by hand the SmartroPay payments the API could not settle by itself
  * — a claimed `pending` one whose approval answer never came, a `cancelled` one whose net cancel
  * got no clear answer, a `refunding` one whose cancel got no clear answer — and the admin list
@@ -8,7 +8,7 @@
  */
 import { Logger } from '@nestjs/common';
 import { schema } from '@buddha/db';
-import { SIGNUP_BONUS_P, paymentIdToMoid, type AdminPayment } from '@buddha/shared';
+import { SIGNUP_BONUS_P, paymentIdToMoid, type AdminPayment, type Payment } from '@buddha/shared';
 import { asc, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
@@ -299,9 +299,10 @@ describe.skipIf(!hasTestInfra)('admin payment settle (integration)', () => {
       await age(id);
       const res = await settle(id, 'failed');
       expect(res.statusCode).toBe(200);
+      // Nothing was on record: the settle's reason is what the payer reads.
       expect(res.json<{ data: AdminPayment }>().data).toMatchObject({
         status: 'failed',
-        resultMessage: '관리자 수동 정리',
+        resultMessage: '관리자 확인 결과 미승인',
       });
     }
     // Credit or cancel an unclaimed one: nothing was ever approved, so there is no card to judge.
@@ -355,6 +356,104 @@ describe.skipIf(!hasTestInfra)('admin payment settle (integration)', () => {
     });
 
     expectLedgerChain(await ledgerOf(member.id), SIGNUP_BONUS_P + 10_000n);
+  });
+
+  it('keeps the reason the payer reads when a settle confirms the status, and writes its own when it moves it', async () => {
+    /** The payment as the payer's wallet reads it. */
+    const mine = async (id: string) => {
+      const res = await t.app.inject({
+        method: 'GET',
+        url: `/api/v1/me/payments/${id}`,
+        headers: { cookie: member.cookie },
+      });
+      expect(res.statusCode).toBe(200);
+      return res.json<{ data: Payment }>().data;
+    };
+    const updatedAt = async (id: string) => (await paymentRow(id)).updatedAt.getTime();
+
+    // A net cancel that got no answer: still being checked, as far as the payer can tell.
+    const netCancel = await cancelUnknown();
+    await age(netCancel.id);
+    expect(await mine(netCancel.id)).toMatchObject({
+      status: 'cancelled',
+      cancelConfirmed: false,
+      resultMessage: '가맹점 승인 처리 실패로 인한 자동 취소',
+    });
+    const aged = await updatedAt(netCancel.id);
+    const confirmed = await settle(netCancel.id, 'cancelled');
+    expect(confirmed.statusCode).toBe(200);
+    // Confirmed: the net cancel's reason is still why it ended, for the admin and the payer.
+    expect(confirmed.json<{ data: AdminPayment }>().data).toMatchObject({
+      status: 'cancelled',
+      cancelConfirmed: true,
+      resultMessage: '가맹점 승인 처리 실패로 인한 자동 취소',
+      needsReview: false,
+    });
+    expect(await mine(netCancel.id)).toMatchObject({
+      status: 'cancelled',
+      cancelConfirmed: true,
+      resultMessage: '가맹점 승인 처리 실패로 인한 자동 취소',
+    });
+    // Touched all the same, so nothing settles it again within SETTLE_MIN_AGE_MS.
+    expect(await updatedAt(netCancel.id)).toBeGreaterThan(aged);
+
+    // An approval that answered the PG's own failure (9999): failed with the PG's words.
+    const pgFailed = async () => {
+      const payment = await reserveSmartroPayment(t.db, member.id, { packageId: pack.id });
+      const tid = testTid();
+      pg.onApprove = () =>
+        approvalAnswer({
+          paymentId: payment.id,
+          priceKrw: payment.priceKrw,
+          tid,
+          resultCode: '9999',
+          resultMsg: '시스템에러 - 잠시 후 재거래',
+        });
+      const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+      try {
+        await postReturn(payment.id, { Tid: tid, TrAuthKey: 'k' });
+      } finally {
+        error.mockRestore();
+      }
+      pg.reset();
+      await age(payment.id);
+      expect(await paymentRow(payment.id)).toMatchObject({
+        status: 'failed',
+        resultMessage: '시스템에러 - 잠시 후 재거래',
+      });
+      return payment.id;
+    };
+    // Checked, never charged: failed as it was, with the PG's reason.
+    const checked = await pgFailed();
+    const failed = await settle(checked, 'failed');
+    expect(failed.statusCode).toBe(200);
+    expect(failed.json<{ data: AdminPayment }>().data).toMatchObject({
+      status: 'failed',
+      resultMessage: '시스템에러 - 잠시 후 재거래',
+      needsReview: false,
+    });
+    expect((await mine(checked)).resultMessage).toBe('시스템에러 - 잠시 후 재거래');
+    // Charged, and cancelled in the merchant admin: the PG's failure (which says to retry) is
+    // not why the card was cancelled — the settle's reason is, for the payer and the admin list.
+    const charged = await pgFailed();
+    expect((await settle(charged, 'cancelled')).json<{ data: AdminPayment }>().data).toMatchObject({
+      status: 'cancelled',
+      cancelConfirmed: true,
+      resultMessage: '관리자 확인 후 결제 취소',
+    });
+    expect((await mine(charged)).resultMessage).toBe('관리자 확인 후 결제 취소');
+
+    // A claimed pending payment has no reason on record: the same.
+    const pending = await unanswered();
+    await age(pending.id);
+    expect(
+      (await settle(pending.id, 'cancelled')).json<{ data: AdminPayment }>().data,
+    ).toMatchObject({
+      status: 'cancelled',
+      cancelConfirmed: true,
+      resultMessage: '관리자 확인 후 결제 취소',
+    });
+    expect(await ledgerOf(member.id)).toHaveLength(1);
   });
 
   it("takes the PG's cancel 재통보 as the confirmation a net cancel never got", async () => {
@@ -1068,13 +1167,14 @@ describe.skipIf(!hasTestInfra)('admin payment settle (integration)', () => {
       payload: { outcome: 'cancelled', manual: true },
     });
 
-    // Checked in the merchant admin: never charged. It stays failed, and is no longer flagged.
+    // Checked in the merchant admin: never charged. It stays failed, and is no longer flagged —
+    // with the reason it had (none here), not the admin's label.
     const checked = await failedUnanswered();
     const confirmed = await settle(checked.id, 'failed');
     expect(confirmed.statusCode).toBe(200);
     expect(confirmed.json<{ data: AdminPayment }>().data).toMatchObject({
       status: 'failed',
-      resultMessage: '관리자 수동 정리',
+      resultMessage: null,
     });
     await age(checked.id);
     expect((await listed(checked.id)).needsReview).toBe(false);
@@ -1115,7 +1215,8 @@ describe.skipIf(!hasTestInfra)('admin payment settle (integration)', () => {
 
   it("flags a claimed payment its approval failed with the PG's own failure, and settles it", async () => {
     // The approval answers 9999 (시스템에러 - 잠시 후 재거래): the payment fails, as any
-    // non-success does (DESIGN §5.4), but the card may be charged — flagged until checked.
+    // non-success does (ADR-0042 「ReturnUrl」 step 5), but the card may be charged — flagged
+    // until checked.
     const payment = await reserveSmartroPayment(t.db, member.id, { packageId: pack.id });
     const authTid = testTid();
     pg.onApprove = () =>

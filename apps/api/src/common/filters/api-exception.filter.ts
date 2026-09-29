@@ -51,8 +51,9 @@ export function codeForStatus(status: number): ErrorCode {
  * What a refused (4xx) request's debug line says about its error: the error itself, except for
  * a SyntaxError — a body that did not parse, and V8 quotes part of that body in the message
  * (`Unexpected token 'x', "x{"realNam"... is not valid JSON`, or all of a short one). That can
- * be a real name or a phone number (PUT /me/contact, sign-up), which no log may hold (DESIGN
- * §5.7), so of a SyntaxError only its name, the status and the envelope code are logged.
+ * be a real name or a phone number (PUT /me/contact, sign-up), which no log may hold (ADR-0042
+ * 「payment_events」, ADR-0043), so of a SyntaxError only its name, the status and the envelope
+ * code are logged.
  */
 export function refusalLogFields(
   exception: unknown,

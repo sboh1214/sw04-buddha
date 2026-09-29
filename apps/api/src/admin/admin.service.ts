@@ -15,12 +15,13 @@ import { AppError } from '../common/errors/app-error.js';
 import { keysetPredicate } from '../common/keyset.js';
 import { clockTimestamp } from '../infra/db/clock.js';
 import { DB } from '../infra/db/db.provider.js';
+import { netCancelConfirmed } from '../payments/payment-events.js';
 import { SETTLE_MIN_AGE_MS } from '../payments/payment-transitions.js';
 import {
   APPROVAL_SUCCESS_CODES,
   APPROVAL_UNKNOWN_CODES,
 } from '../payments/smartro/smartro-protocol.js';
-import { toLedgerEntry, toBalance, type Page } from '../wallet/wallet.service.js';
+import { paymentColumns, toLedgerEntry, toBalance, type Page } from '../wallet/wallet.service.js';
 
 const userColumns = {
   id: schema.user.id,
@@ -74,25 +75,23 @@ const APPROVAL_UNKNOWN = codeList(APPROVAL_UNKNOWN_CODES);
  * the merchant admin and settle by hand (payment-settle.service):
  * - `pending` and claimed (`provider_ref` set: an approval was asked for), untouched for
  *   SETTLE_MIN_AGE_MS — the approval's answer never came and neither did the 재통보;
- * - `cancelled` without a net cancel the PG confirmed (`net_cancel` with outcome `cancelled`) —
- *   the cancel got no clear answer, or its process died before recording one;
+ * - `cancelled` without a net cancel the PG confirmed (netCancelConfirmed; the payer's
+ *   `Payment.cancelConfirmed` is false) — the cancel got no clear answer, or its process died
+ *   before recording one;
  * - `refunding`, untouched for SETTLE_MIN_AGE_MS — the refund's cancel got no clear answer;
  * - `failed` and claimed, untouched for SETTLE_MIN_AGE_MS, with a sign the card may be charged
  *   after all that no settle has checked since: its approval got no answer (an `approval` event
  *   without a ResultCode — the payment failed on something else's word) or answered the PG's own
  *   failure rather than a decline (isApprovalUnknown: 9999, W999, … — it still fails the payment,
- *   DESIGN §5.4), or an approval 재통보 (StateCd 0, a success code) left it uncredited (its Mid or
- *   amount did not match, or a cancel 재통보 of the card on record held it back).
+ *   ADR-0042 「ReturnUrl」 step 5), or an approval 재통보 (StateCd 0, a success code) left it
+ *   uncredited (its Mid or amount did not match, or a cancel 재통보 of the card on record held it
+ *   back).
  * Only SmartroPay rows: the settle refuses the rest (a mock refund is simply retried).
  */
 const needsReview = sql<boolean>`(${schema.payments.provider} = 'smartro' and (
   (${schema.payments.status} = 'pending' and ${schema.payments.providerRef} is not null
     and ${schema.payments.updatedAt} < now() - ${SETTLE_MIN_AGE})
-  or (${schema.payments.status} = 'cancelled' and not exists (
-    select 1 from ${schema.paymentEvents}
-    where ${schema.paymentEvents.paymentId} = ${schema.payments.id}
-      and ${schema.paymentEvents.type} = 'net_cancel'
-      and ${schema.paymentEvents.payload}->>'outcome' = 'cancelled'))
+  or (${schema.payments.status} = 'cancelled' and not ${netCancelConfirmed})
   or (${schema.payments.status} = 'refunding'
     and ${schema.payments.updatedAt} < now() - ${SETTLE_MIN_AGE})
   or (${schema.payments.status} = 'failed' and ${schema.payments.providerRef} is not null
@@ -125,12 +124,14 @@ const adminPaymentColumns = {
   approvedAt: schema.payments.approvedAt,
   refundedAt: schema.payments.refundedAt,
   resultMessage: schema.payments.resultMessage,
+  cancelConfirmed: paymentColumns.cancelConfirmed,
   createdAt: schema.payments.createdAt,
   needsReview,
 };
 
 type AdminPaymentRow = Omit<typeof schema.payments.$inferSelect, 'idempotencyKey' | 'updatedAt'> & {
   nickname: string;
+  cancelConfirmed: boolean | null;
   needsReview: boolean;
 };
 
@@ -149,6 +150,7 @@ function toAdminPayment(row: AdminPaymentRow): AdminPayment {
     approvedAt: row.approvedAt?.toISOString() ?? null,
     refundedAt: row.refundedAt?.toISOString() ?? null,
     resultMessage: row.resultMessage,
+    cancelConfirmed: row.cancelConfirmed,
     createdAt: row.createdAt.toISOString(),
     needsReview: row.needsReview,
   };

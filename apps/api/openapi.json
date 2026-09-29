@@ -5100,6 +5100,10 @@
             "nullable": true,
             "type": "string"
           },
+          "cancelConfirmed": {
+            "nullable": true,
+            "type": "boolean"
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time",
@@ -5118,6 +5122,7 @@
           "approvedAt",
           "refundedAt",
           "resultMessage",
+          "cancelConfirmed",
           "createdAt"
         ],
         "additionalProperties": false
@@ -5742,6 +5747,10 @@
             "nullable": true,
             "type": "string"
           },
+          "cancelConfirmed": {
+            "nullable": true,
+            "type": "boolean"
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time",
@@ -5769,6 +5778,7 @@
           "approvedAt",
           "refundedAt",
           "resultMessage",
+          "cancelConfirmed",
           "createdAt",
           "userId",
           "nickname",

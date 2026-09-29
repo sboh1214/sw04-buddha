@@ -32,8 +32,20 @@ export const paymentSchema = z
     approvedAt: z.iso.datetime().nullable(),
     /** When an admin refund was confirmed by the PG (status `refunded`). */
     refundedAt: z.iso.datetime().nullable(),
-    /** The PG's last ResultMsg, shown to the payer when a payment failed. */
+    /**
+     * Why a payment that did not go through ended — the PG's last ResultMsg (a card refusal), or
+     * the reason a cancel was made — shown to the payer under a `failed` or `cancelled` one.
+     */
     resultMessage: z.string().nullable(),
+    /**
+     * `cancelled` only (null for every other status): whether the card's cancel is confirmed —
+     * by the PG's answer to the cancel, its cancel 재통보, or an admin who checked the merchant
+     * admin. False while a cancel of an approval we could not credit got no clear answer, or has
+     * not been answered yet: the card may still be charged, and an admin may yet settle the
+     * payment either way, so it is not over for the payer (every redirect back to the wallet
+     * says `pending` for it).
+     */
+    cancelConfirmed: z.boolean().nullable(),
     createdAt: z.iso.datetime(),
   })
   .meta({ id: 'Payment' });

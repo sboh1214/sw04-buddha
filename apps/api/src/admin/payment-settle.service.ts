@@ -37,8 +37,24 @@ import { refundNotAllowed } from './payment-refund.service.js';
 /** The handle `db.transaction` hands its callback; @buddha/db exports no alias for it. */
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 
-/** `payments.result_message` of a payment an admin settled to credited, cancelled or failed. */
+/**
+ * `payments.result_message` of a payment an admin credited. A credit always writes it, over
+ * whatever reason the payment had (the net cancel's, the PG's refusal): a succeeded payment's
+ * reason is shown to no one, so this only marks the row as credited by hand.
+ */
 export const MANUAL_SETTLE_MESSAGE = '관리자 수동 정리';
+
+/**
+ * `payments.result_message` of a payment a settle MOVED to `cancelled` (from `pending` or
+ * `failed`) or to `failed` (from `pending`): the reason the payer reads under it, and the admin
+ * list's sign that it was closed by hand. A reason on record explained the state the payment left
+ * — the PG's error on its approval, which even tells the payer to retry — not this one. A settle
+ * that confirms the status the payment has writes none (setStatus).
+ */
+export const SETTLE_REASON = {
+  cancelled: '관리자 확인 후 결제 취소',
+  failed: '관리자 확인 결과 미승인',
+} as const satisfies Record<'cancelled' | 'failed', string>;
 
 /** `payments.method` is varchar(16). */
 const METHOD_MAX = 16;
@@ -96,6 +112,13 @@ type Transition =
  * | `cancelled` | net cancel missing or `unknown`            | `cancelled` | net_cancel (confirmed)    |
  * | `refunding` | —                                          | `refunded`  | `refunded` (P stays out)  |
  * | `refunding` | —                                          | `restore`   | `succeeded`, REVERSAL     |
+ *
+ * A settle that confirms the status the payment has (`cancelled` → `cancelled`, `failed` →
+ * `failed`) keeps its status and `result_message` — the reason the payer reads (the net
+ * cancel's, the PG's refusal) is still the reason — and records only that: `updated_at` and the
+ * audit row, plus the manual `net_cancel` for `cancelled` (a `failed` → `failed` settle writes
+ * no `payment_events` row). One that moves it to `cancelled` or `failed` writes the settle's own
+ * reason (SETTLE_REASON), and a credit writes MANUAL_SETTLE_MESSAGE.
  *
  * A claimed `failed` payment is settled too: our side failed it, and the card may be charged all
  * the same (an approval 재통보 that could not be credited). `failed` again says it was checked,
@@ -311,7 +334,7 @@ export class PaymentSettleService {
       }
       case 'fail':
         // Never approved: the window was abandoned, or the approval was refused. (From `failed`:
-        // checked, and it stays so.)
+        // checked, and it stays so — the audit row is what clears its `needsReview`.)
         await this.setStatus(tx, payment, 'failed', at);
         return {};
       case 'refunded':
@@ -511,16 +534,24 @@ export class PaymentSettleService {
     return { verified: [...answers, ...notices], unverified };
   }
 
-  /** `pending`/`failed`/`cancelled` → `status`, guarded by the status the row was locked in. */
+  /**
+   * `pending`/`failed`/`cancelled` → `status`, guarded by the status the row was locked in, with
+   * the settle's reason (SETTLE_REASON). A payment already in `status` is only touched
+   * (`updated_at`): the settle confirms it, and the reason on record is still why it ended.
+   */
   private async setStatus(
     tx: Tx,
     payment: PaymentRow,
     status: Extract<PaymentStatus, 'cancelled' | 'failed'>,
     at: Date,
   ): Promise<void> {
+    const change =
+      payment.status === status
+        ? { updatedAt: at }
+        : { status, resultMessage: SETTLE_REASON[status], updatedAt: at };
     const rows = await tx
       .update(schema.payments)
-      .set({ status, resultMessage: MANUAL_SETTLE_MESSAGE, updatedAt: at })
+      .set(change)
       .where(and(eq(schema.payments.id, payment.id), eq(schema.payments.status, payment.status)))
       .returning({ id: schema.payments.id });
     if (rows.length === 0) throw this.moved();

@@ -95,7 +95,7 @@ export function isApprovalSuccess(resultCode: string | null | undefined): boolea
 /**
  * Approval answers that are no decline: the PG's own side failed, or its link to the card
  * company or easy-pay did, so the answer does not say whether the card was charged (the 통합코드
- * table's own words). The approval still fails the payment (DESIGN §5.4 step 6, an owner
+ * table's own words). The approval still fails the payment (ADR-0042 「ReturnUrl」 step 5, an owner
  * decision); the admin list flags such a claimed `failed` payment (`needsReview`) so a person
  * checks the card in the merchant admin. Only the methods a CARD window reaches (the card and
  * the easy-pays ShowEasyPay leaves visible) and the payment server's own error codes:

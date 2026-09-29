@@ -184,6 +184,7 @@ function callbackEvent(
 /**
  * The browser's `result` for a payment already past `pending` (a double submit, the back
  * button). A refunded charge did succeed; its refund is a later, separate event the wallet shows.
+ * Read through resultOf: a `cancelled` payment whose cancel is not confirmed is `pending`.
  */
 const RESULT_BY_STATUS: Readonly<Record<PaymentStatus, PaymentReturnResult>> = {
   pending: 'pending',
@@ -236,7 +237,7 @@ function readApproval(answer: SmartroResponse): Approval | undefined {
 /**
  * What a failure may say in a log line. Never the error's own message when it came from the
  * driver: drizzle puts the bound parameters there (a TrAuthKey on the return path), and nothing
- * the PG sent may reach a log beyond its result code (DESIGN §5.7).
+ * the PG sent may reach a log beyond its result code (ADR-0042 「payment_events」).
  */
 export function describeFailure(error: unknown): string {
   if (error instanceof AppError) return `${error.code}: ${error.message}`;
@@ -459,7 +460,7 @@ export class SmartroPayService {
 
   private async settleReturn(payment: PaymentRow, fields: CallbackFields): Promise<string> {
     if (payment.status !== 'pending') {
-      return this.walletUrl(payment.id, RESULT_BY_STATUS[payment.status]);
+      return this.walletUrl(payment.id, await this.resultOf(payment.id, payment.status));
     }
     // Another request holds the approval (the Tid 중복 FAQ: a second submit of the same form).
     if (payment.providerRef !== null) return this.walletUrl(payment.id, 'pending');
@@ -502,8 +503,8 @@ export class SmartroPayService {
 
   /**
    * `provider_ref = Tid` while the payment is `pending` and unclaimed: the one statement that
-   * decides which of two concurrent submits approves, committed with the `return` event (DESIGN
-   * §5.4 step 4) so a claimed payment always shows what claimed it. It holds the payment row
+   * decides which of two concurrent submits approves, committed with the `return` event (ADR-0042
+   * 「ReturnUrl」 step 3) so a claimed payment always shows what claimed it. It holds the payment row
    * alone (no balance lock), so it cannot take part in a deadlock with a credit or a refund.
    */
   private async claim(
@@ -543,8 +544,9 @@ export class SmartroPayService {
    * approval's only for an approved transaction ("승인 후 1시간 이내의 거래"), and its other
    * codes include the inquiry's own failures (6017 승인이력 없음, 6021 거래조회 오류, W036,
    * 9999): asked while a slow approval is still on its way, it says "nothing found" about a card
-   * about to be charged. So any other answer is no answer either (DESIGN §5.4 step 5: still
-   * unknown → keep `pending`), never a failure — a failed payment's charge nobody would look for.
+   * about to be charged. So any other answer is no answer either (ADR-0042 「ReturnUrl」 step 4:
+   * still unknown → keep `pending`), never a failure — a failed payment's charge nobody would
+   * look for.
    */
   private async approveOrInquire(
     paymentId: string,
@@ -594,9 +596,9 @@ export class SmartroPayService {
     authTid: string,
   ): Promise<string> {
     if (!isApprovalSuccess(approval.resultCode)) {
-      // Any other answer fails the payment (DESIGN §5.4 step 6) — also the PG's own failure,
-      // which is no decline: the card may be charged all the same. That one the admin list
-      // flags (`needsReview`), and this says so.
+      // Any other answer fails the payment (ADR-0042 「ReturnUrl」 step 5) — also the PG's own
+      // failure, which is no decline: the card may be charged all the same. That one the admin
+      // list flags (`needsReview`), and this says so.
       const failed = await this.markFailed(
         payment.id,
         resultMessageOf(approval.resultMessage),
@@ -641,7 +643,7 @@ export class SmartroPayService {
         this.logger.error(
           `payment ${payment.id}: the credit of ${tid} failed (${describeFailure(error)}) but the payment is ${current}; not cancelled`,
         );
-        return this.walletUrl(payment.id, RESULT_BY_STATUS[current]);
+        return this.walletUrl(payment.id, await this.resultOf(payment.id, current));
       }
       this.logger.error(
         `payment ${payment.id}: approved (${tid}) but the credit failed (${describeFailure(error)}); net-cancelling`,
@@ -652,10 +654,8 @@ export class SmartroPayService {
       // Credited here, or by the 재통보 that arrived while the approval ran.
       return this.walletUrl(payment.id, 'succeeded');
     }
-    if (
-      credit.status === 'cancelled' &&
-      (await netCancelOutcome(this.db, payment.id)) === 'cancelled'
-    ) {
+    const result = credit.status ? await this.resultOf(payment.id, credit.status) : 'pending';
+    if (credit.status === 'cancelled' && result === 'cancelled') {
       // A cancel 재통보 closed it while the approval ran: the PG's word that this card is
       // cancelled. Nothing is owed and nothing is left to settle.
       this.logger.warn(
@@ -666,10 +666,10 @@ export class SmartroPayService {
         `payment ${payment.id}: approved (${tid}) but it was ${credit.status ?? 'gone'} before the credit; check the card in the merchant admin and settle it (POST /admin/payments/${payment.id}/settle)`,
       );
     }
-    return this.walletUrl(payment.id, credit.status ? RESULT_BY_STATUS[credit.status] : 'pending');
+    return this.walletUrl(payment.id, result);
   }
 
-  /** Every check an approval must pass before its P is credited (DESIGN §5.4 step 7). */
+  /** Every check an approval must pass before its P is credited (ADR-0042 「ReturnUrl」 step 6). */
   private verifyApproval(
     smartro: SmartroConfig,
     payment: PaymentRow,
@@ -1309,6 +1309,20 @@ export class SmartroPayService {
   /** The browser's result for the payment as it stands now (someone else moved it). */
   private async currentResult(paymentId: string): Promise<string> {
     const status = await this.currentStatus(paymentId);
-    return this.walletUrl(paymentId, status ? RESULT_BY_STATUS[status] : 'failed');
+    return this.walletUrl(paymentId, status ? await this.resultOf(paymentId, status) : 'failed');
+  }
+
+  /**
+   * The browser's `result` for a payment already past `pending` (RESULT_BY_STATUS) — except a
+   * `cancelled` one whose cancel nobody has confirmed (netCancelOutcome is not `cancelled`: the
+   * net cancel got no clear answer, or has not had one yet). Its card may still be charged and an
+   * admin may yet credit it, so every redirect says `pending` for it, as the ReturnUrl that left
+   * it so did (`Payment.cancelConfirmed` false) — a re-posted form or a late StopUrl too.
+   */
+  private async resultOf(paymentId: string, status: PaymentStatus): Promise<PaymentReturnResult> {
+    if (status === 'cancelled' && (await netCancelOutcome(this.db, paymentId)) !== 'cancelled') {
+      return 'pending';
+    }
+    return RESULT_BY_STATUS[status];
   }
 }

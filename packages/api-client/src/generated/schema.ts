@@ -817,6 +817,7 @@ export type components = {
             amountP: components["schemas"]["PAmount"];
             /** Format: date-time */
             approvedAt: string | null;
+            cancelConfirmed: boolean | null;
             /** Format: date-time */
             createdAt: string;
             /** Format: uuid */
@@ -1193,6 +1194,7 @@ export type components = {
             amountP: components["schemas"]["PAmount"];
             /** Format: date-time */
             approvedAt: string | null;
+            cancelConfirmed: boolean | null;
             /** Format: date-time */
             createdAt: string;
             /** Format: uuid */

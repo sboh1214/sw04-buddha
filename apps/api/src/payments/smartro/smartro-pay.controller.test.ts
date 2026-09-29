@@ -1,5 +1,5 @@
 /**
- * SmartroPay 일반연동 end to end (ADR-0042, DESIGN §5.2-5.5) against the docker `test` profile,
+ * SmartroPay 일반연동 end to end (ADR-0042 「라우트」–「재통보」) against the docker `test` profile,
  * with a fake PG in place of the HTTP client: prepare → the payment window's ReturnUrl →
  * approval → credit, and the StopUrl and 재통보 around it. Skips when TEST_* are unset (fails
  * under CI=true, see the harness).
@@ -127,6 +127,17 @@ describe.skipIf(!hasTestInfra)('SmartroPay (integration)', () => {
   async function paymentRow(id: string) {
     const [row] = await t.db.select().from(schema.payments).where(eq(schema.payments.id, id));
     return row!;
+  }
+
+  /** The payment as the payer's wallet reads it (GET /me/payments/:id). */
+  async function myPayment(id: string): Promise<Payment> {
+    const res = await t.app.inject({
+      method: 'GET',
+      url: `/api/v1/me/payments/${id}`,
+      headers: { cookie: user.cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    return res.json<{ data: Payment }>().data;
   }
 
   async function balanceOf(userId: string) {
@@ -372,6 +383,8 @@ describe.skipIf(!hasTestInfra)('SmartroPay (integration)', () => {
       method: 'CARD',
       providerRef: approvedTid,
       refundedAt: null,
+      // No cancel to confirm: a `cancelled` payment's alone.
+      cancelConfirmed: null,
     });
 
     // A second submit of the same form (the back button) answers without approving again.
@@ -514,8 +527,8 @@ describe.skipIf(!hasTestInfra)('SmartroPay (integration)', () => {
   });
 
   it("fails an approval that answers the PG's own failure too, and says the card may be charged", async () => {
-    // DESIGN §5.4 step 6 (owner decision): any non-success fails. 9999 is no decline, though —
-    // the admin list flags the payment (payment-settle's suite), and this shouts.
+    // ADR-0042 「ReturnUrl」 step 5 (owner decision): any non-success fails. 9999 is no decline,
+    // though — the admin list flags the payment (payment-settle's suite), and this shouts.
     const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
     try {
       const form = await prepared();
@@ -806,7 +819,7 @@ describe.skipIf(!hasTestInfra)('SmartroPay (integration)', () => {
     approveWith(form, tid, { overrides: { Amt: '97' } });
     const res = await postReturn(form.form.Moid, { Tid: tid, TrAuthKey: 'k' });
     expect(redirectOf(res).result).toBe('cancelled');
-    // The whole cancel request as SmartroPay decrypts it (DESIGN §1): HashData, VAT, password.
+    // The whole cancel request as SmartroPay decrypts it (the manual): HashData, VAT, password.
     expect(pg.cancels).toEqual([
       {
         Tid: tid,
@@ -910,6 +923,12 @@ describe.skipIf(!hasTestInfra)('SmartroPay (integration)', () => {
       type: 'net_cancel',
       payload: { outcome: 'cancelled' },
     });
+    // The payer reads it as over: the card's cancel is confirmed.
+    expect(await myPayment(form.paymentId)).toMatchObject({
+      status: 'cancelled',
+      cancelConfirmed: true,
+      resultMessage: '가맹점 승인 처리 실패로 인한 자동 취소',
+    });
     const res = await postNotify(
       notifyForm({ paymentId: form.paymentId, priceKrw: pack.priceKrw, tid }),
     );
@@ -947,6 +966,11 @@ describe.skipIf(!hasTestInfra)('SmartroPay (integration)', () => {
         type: 'net_cancel',
         payload: { outcome: 'unknown' },
       });
+      // Not over for the payer: the card may still be charged (the redirect said `pending`).
+      expect(await myPayment(form.paymentId)).toMatchObject({
+        status: 'cancelled',
+        cancelConfirmed: false,
+      });
 
       // The approval's 재통보 is acknowledged — a re-send cannot settle it — and credits nothing.
       const notice = await postNotify(
@@ -973,6 +997,16 @@ describe.skipIf(!hasTestInfra)('SmartroPay (integration)', () => {
     const netCancels = async () =>
       (await eventsOf(form.paymentId)).filter((event) => event.type === 'net_cancel');
     expect(await netCancels()).toHaveLength(1);
+    expect((await myPayment(form.paymentId)).cancelConfirmed).toBe(false);
+    // Every later redirect says so as well — the form posted again (the back button, a double
+    // submit), a late StopUrl — never `cancelled` while the card may still be charged.
+    const again = () => postReturn(form.form.Moid, { Tid: tid, TrAuthKey: 'k' });
+    expect(redirectOf(await again()).result).toBe('pending');
+    const stop = await t.app.inject({
+      method: 'GET',
+      url: `/api/v1/payments/smartro/stop?m=${form.form.Moid}`,
+    });
+    expect(redirectOf(stop).result).toBe('pending');
 
     // A cancel that failed proves nothing about the card: recorded, the net cancel still open.
     const failedCancel = await postNotify(
@@ -1021,6 +1055,12 @@ describe.skipIf(!hasTestInfra)('SmartroPay (integration)', () => {
       payload: { outcome: 'cancelled', notice: true },
     });
     expect(await paymentRow(form.paymentId)).toMatchObject({ status: 'cancelled' });
+    // Over for the payer now, with the net cancel's reason still the reason.
+    expect(await myPayment(form.paymentId)).toMatchObject({
+      cancelConfirmed: true,
+      resultMessage: '가맹점 승인 처리 실패로 인한 자동 취소',
+    });
+    expect(redirectOf(await again()).result).toBe('cancelled');
 
     // SmartroPay sends it again: confirmed once is enough.
     const resent = await postNotify(
@@ -1264,7 +1304,7 @@ describe.skipIf(!hasTestInfra)('SmartroPay (integration)', () => {
     expect(await paymentRow(form.paymentId)).toMatchObject({ status: 'pending', providerRef: tid });
     expect(await ledgerOf(user.id)).toHaveLength(1);
 
-    // The 재통보 settles it later (DESIGN §5.5).
+    // The 재통보 settles it later (ADR-0042 「재통보」).
     const notified = await postNotify(
       notifyForm({ paymentId: form.paymentId, priceKrw: pack.priceKrw, tid }),
     );
@@ -1916,6 +1956,8 @@ describe.skipIf(!hasTestInfra)('SmartroPay (integration)', () => {
       resultCode: '2001',
       payload: { outcome: 'cancelled', notice: true },
     });
+    // The PG's own word: over for the payer too.
+    expect((await myPayment(payment.id)).cancelConfirmed).toBe(true);
 
     // SmartroPay re-sends the approval's notice: acknowledged, never credited.
     const late = await postNotify(

@@ -1,5 +1,5 @@
 /**
- * `POST /admin/payments/:id/refund` (ADR-0042, DESIGN §5.6) against the docker `test` profile:
+ * `POST /admin/payments/:id/refund` (ADR-0042 「관리자 환불」) against the docker `test` profile:
  * claw the P back, cancel at the PG, compensate on a refusal, stay `refunding` on silence.
  *
  * The app runs PAYMENT_PROVIDER=mock with SmartroPay still configured — the state after a
