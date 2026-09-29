@@ -1,5 +1,5 @@
 /**
- * The decisions of one SmartroPay window (ADR-0042, DESIGN §6.2): what each signal from the SDK,
+ * The decisions of one SmartroPay window (ADR-0042): what each signal from the SDK,
  * its layer and the browser means for the buy buttons. Pure, so they run in this app's node-only
  * test runner; `SmartroCheckout` feeds it the signals and carries out what it answers (the two
  * clocks, the approval post, the layer's close), and `ChargeForm` keeps the phase it reports.

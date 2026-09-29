@@ -2,7 +2,7 @@ import { copy } from '../src/copy';
 import { E2E_CONTACT, E2E_PASSWORD, expect, freshEmail, openSetPassword, test } from './helpers';
 
 /**
- * 실명·휴대전화 수집과 온보딩 게이트 (ADR-0043, DESIGN §6.3).
+ * 실명·휴대전화 수집과 온보딩 게이트 (ADR-0043).
  *
  * An account without a contact cannot be made from here through a social provider, and no
  * route clears one — but the email sign-up passes through exactly that state: the verification

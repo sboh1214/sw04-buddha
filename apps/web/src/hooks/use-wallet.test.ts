@@ -159,7 +159,7 @@ describe('smartroKeyIntent', () => {
   });
 
   it('gives every answered click a fresh key, and replays only an unanswered or 5xx one', () => {
-    // useSmartroPrepare settles on every answer (DESIGN §6.2): a 200 opened its window, a 4xx
+    // useSmartroPrepare settles on every answer (ADR-0042): a 200 opened its window, a 4xx
     // refused it; the next click is a new reservation. No answer, or a 5xx, may have reserved:
     // the replay gets the SAME payment's form back instead of a second reservation.
     const keys = new IdempotencyKeys('user-a', memoryStorage());
@@ -215,6 +215,7 @@ describe('paymentsRefetchInterval', () => {
     approvedAt: '2026-09-20T03:00:00.000Z',
     refundedAt: null,
     resultMessage: null,
+    cancelConfirmed: null,
     createdAt: '2026-09-20T02:59:00.000Z',
   });
   const older = row('00000000-0000-4000-8000-0000000000c1', 'succeeded');
@@ -314,5 +315,13 @@ describe('myPaymentRefetchInterval', () => {
         state: { data: undefined, dataUpdateCount: 0, errorUpdateCount: 1 },
       }),
     ).toBe(false);
+  });
+
+  it('re-reads a cancelled payment whose cancel is not confirmed yet, and stops once it is', () => {
+    const state = (data: Payment) => ({ state: { data, dataUpdateCount: 1, errorUpdateCount: 0 } });
+    const cancelled = (cancelConfirmed: boolean) =>
+      ({ status: 'cancelled', cancelConfirmed }) as Payment;
+    expect(myPaymentRefetchInterval(state(cancelled(false)))).toBe(PAYMENT_POLL_INTERVAL_MS);
+    expect(myPaymentRefetchInterval(state(cancelled(true)))).toBe(false);
   });
 });

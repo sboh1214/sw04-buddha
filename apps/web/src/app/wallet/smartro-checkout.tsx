@@ -33,7 +33,7 @@ interface SmartroCheckoutProps {
 }
 
 /**
- * The SmartroPay 일반연동 window for ONE prepared payment (ADR-0042, DESIGN §6.2). The caller
+ * The SmartroPay 일반연동 window for ONE prepared payment (ADR-0042). The caller
  * mounts it once `/payments/smartro/prepare` has answered and keys it by the payment id, so a
  * new purchase is always a new instance: its `tranMgr` holds that payment's signed request,
  * and its `approvalForm` posts to THAT payment's ReturnUrl — an older window's callback can

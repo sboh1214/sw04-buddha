@@ -7,13 +7,13 @@ import { usePayments } from '@/hooks/use-wallet';
 import { type Payment } from '@/lib/api';
 import { formatKst } from '@/lib/datetime';
 import {
-  paymentFailureReason,
+  paymentHistoryReason,
   paymentMethodLabel,
   paymentStatusView,
 } from '@/lib/smartro-payments';
 
 /**
- * 결제 내역 (DESIGN §6.2): the account's own charges, newest first, 20 per page with 더 보기 —
+ * 결제 내역 (ADR-0042): the account's own charges, newest first, 20 per page with 더 보기 —
  * the KRW side of the story the ledger tells in P. A refund shows here as the payment's
  * status and in the ledger as its own 결제 취소(환불) row.
  */
@@ -72,7 +72,7 @@ export function PaymentHistory() {
 function PaymentRow({ payment }: { payment: Payment }) {
   const status = paymentStatusView(payment);
   const method = paymentMethodLabel(payment.method);
-  const reason = paymentFailureReason(payment);
+  const reason = paymentHistoryReason(payment);
   return (
     <HStack
       justify="space-between"

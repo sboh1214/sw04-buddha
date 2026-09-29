@@ -17,7 +17,7 @@ export const metadata: Metadata = { title: `${copy.walletTitle} | ${copy.appName
  * PLAN 11.3 `/wallet`: balance, charging and the ledger. The notice at the top is fixed copy
  * (PLAN Appendix A) and must stay above the charge form — P never converts back to cash.
  *
- * The query (DESIGN §6.2, all optional, each ignored unless well formed):
+ * The query (ADR-0042, all optional, each ignored unless well formed):
  * - `payment` + `result`: where the SmartroPay callbacks send the browser back, with how the
  *   payment window ended (ADR-0042). `result` alone still gets its notice — a return the API
  *   could not tie to a payment of ours carries no id.

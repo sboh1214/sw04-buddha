@@ -26,6 +26,7 @@ import {
   checkoutErrorTitle,
   endedFetches,
   isBelowCardMinimum,
+  isCancelUnconfirmed,
   isFlowUnavailable,
   isPaymentInFlight,
   merchantAdminSites,
@@ -33,6 +34,7 @@ import {
   offersSettle,
   parseWalletSearch,
   paymentFailureReason,
+  paymentHistoryReason,
   paymentMethodLabel,
   paymentOutcome,
   paymentPollInterval,
@@ -80,6 +82,7 @@ function payment(overrides: Partial<Payment> = {}): Payment {
     approvedAt: APPROVED_AT,
     refundedAt: null,
     resultMessage: null,
+    cancelConfirmed: null,
     createdAt: '2026-09-20T02:59:00.000Z',
     ...overrides,
   };
@@ -157,21 +160,41 @@ describe('paymentOutcome', () => {
   });
 
   it("is the payment's current status once it is, in the redirect's words", () => {
+    const now = (status: PaymentStatus) => ({ status, cancelConfirmed: null });
     // A lost approval answer the 재통보 has since credited: the notice follows the payment.
-    expect(paymentOutcome('pending', { status: 'succeeded' })).toBe('succeeded');
-    expect(paymentOutcome('failed', { status: 'succeeded' })).toBe('succeeded');
-    expect(paymentOutcome('succeeded', { status: 'pending' })).toBe('pending');
-    expect(paymentOutcome('pending', { status: 'cancelled' })).toBe('cancelled');
+    expect(paymentOutcome('pending', now('succeeded'))).toBe('succeeded');
+    expect(paymentOutcome('failed', now('succeeded'))).toBe('succeeded');
+    expect(paymentOutcome('succeeded', now('pending'))).toBe('pending');
+    const confirmed = { status: 'cancelled' as const, cancelConfirmed: true };
+    expect(paymentOutcome('pending', confirmed)).toBe('cancelled');
     // A refund of it since: it still went through (the API maps the two the same way).
-    expect(paymentOutcome('succeeded', { status: 'refunding' })).toBe('succeeded');
-    expect(paymentOutcome('succeeded', { status: 'refunded' })).toBe('succeeded');
+    expect(paymentOutcome('succeeded', now('refunding'))).toBe('succeeded');
+    expect(paymentOutcome('succeeded', now('refunded'))).toBe('succeeded');
+  });
+
+  it('keeps a cancel nobody has confirmed pending: the card may still be charged', () => {
+    // A net cancel that got no clear answer: the ReturnUrl said `pending`, and the payment,
+    // `cancelled` all the same, does not overrule it — an admin may yet credit it.
+    const unconfirmed = { status: 'cancelled' as const, cancelConfirmed: false };
+    expect(paymentOutcome('pending', unconfirmed)).toBe('pending');
+    // Whatever the URL said (a second submit answers the status as it stands).
+    expect(paymentOutcome('cancelled', unconfirmed)).toBe('pending');
+    // Confirmed since (the cancel 재통보, or an admin's 취소 확인): now it is over.
+    expect(paymentOutcome('pending', { ...unconfirmed, cancelConfirmed: true })).toBe('cancelled');
+    // Or credited after all (the admin's 승인 확인).
+    expect(paymentOutcome('pending', { status: 'succeeded', cancelConfirmed: null })).toBe(
+      'succeeded',
+    );
   });
 
   it("keeps 'stopped' for a failed payment: only the URL knows the payer stopped it", () => {
-    expect(paymentOutcome('stopped', { status: 'failed' })).toBe('stopped');
-    expect(paymentOutcome('failed', { status: 'failed' })).toBe('failed');
+    const failed = { status: 'failed' as const, cancelConfirmed: null };
+    expect(paymentOutcome('stopped', failed)).toBe('stopped');
+    expect(paymentOutcome('failed', failed)).toBe('failed');
     // A stop the 재통보 overruled is a success after all.
-    expect(paymentOutcome('stopped', { status: 'succeeded' })).toBe('succeeded');
+    expect(paymentOutcome('stopped', { status: 'succeeded', cancelConfirmed: null })).toBe(
+      'succeeded',
+    );
   });
 });
 
@@ -193,13 +216,27 @@ describe('paymentResultNotice', () => {
     expect(paymentResultNotice('cancelled', undefined).message).toBe(copy.paymentResultCancelled);
   });
 
-  it("shows the PG's reason under a failure or an automatic cancel, and nowhere else", () => {
+  it('shows the reason under a failure or a confirmed cancel, and nowhere else', () => {
     const refused = payment({ status: 'failed', resultMessage: '  한도 초과  ', approvedAt: null });
     expect(paymentResultNotice('failed', refused).reason).toBe('한도 초과');
-    const cancelled = payment({ status: 'cancelled', resultMessage: '금액 불일치' });
+    const cancelled = payment({
+      status: 'cancelled',
+      resultMessage: '가맹점 승인 처리 실패로 인한 자동 취소',
+      cancelConfirmed: true,
+    });
     expect(paymentResultNotice('succeeded', cancelled)).toMatchObject({
       outcome: 'cancelled',
-      reason: '금액 불일치',
+      status: 'warning',
+      message: copy.paymentResultCancelled,
+      reason: '가맹점 승인 처리 실패로 인한 자동 취소',
+    });
+    // A cancel nobody has confirmed: still being checked, and no reason for an end it has not
+    // reached.
+    expect(paymentResultNotice('pending', { ...cancelled, cancelConfirmed: false })).toEqual({
+      outcome: 'pending',
+      status: 'warning',
+      message: copy.paymentResultPending,
+      reason: null,
     });
     // A success's ResultMsg is the PG's "승인" — nothing to explain.
     expect(paymentResultNotice('succeeded', payment({ resultMessage: '승인' })).reason).toBeNull();
@@ -212,19 +249,30 @@ describe('paymentResultNotice', () => {
 
 describe('paymentPollInterval', () => {
   it('re-reads a pending payment every few seconds, for a bounded while', () => {
-    expect(paymentPollInterval({ status: 'pending' }, 1)).toBe(PAYMENT_POLL_INTERVAL_MS);
-    expect(paymentPollInterval({ status: 'pending' }, PAYMENT_POLL_LIMIT - 1)).toBe(
+    expect(paymentPollInterval({ status: 'pending', cancelConfirmed: null }, 1)).toBe(
       PAYMENT_POLL_INTERVAL_MS,
     );
-    expect(paymentPollInterval({ status: 'pending' }, PAYMENT_POLL_LIMIT)).toBe(false);
+    expect(
+      paymentPollInterval({ status: 'pending', cancelConfirmed: null }, PAYMENT_POLL_LIMIT - 1),
+    ).toBe(PAYMENT_POLL_INTERVAL_MS);
+    expect(
+      paymentPollInterval({ status: 'pending', cancelConfirmed: null }, PAYMENT_POLL_LIMIT),
+    ).toBe(false);
     expect(PAYMENT_POLL_INTERVAL_MS * PAYMENT_POLL_LIMIT).toBe(2 * 60 * 1000);
   });
 
   it('stops once the payment has settled, and never starts without one', () => {
     for (const status of PAYMENT_STATUSES.filter((s) => s !== 'pending')) {
-      expect(paymentPollInterval({ status }, 1), status).toBe(false);
+      expect(paymentPollInterval({ status, cancelConfirmed: null }, 1), status).toBe(false);
     }
+    expect(paymentPollInterval({ status: 'cancelled', cancelConfirmed: true }, 1)).toBe(false);
     expect(paymentPollInterval(undefined, 0)).toBe(false);
+  });
+
+  it('waits on a cancel nobody has confirmed as on a pending payment, for as long', () => {
+    const unconfirmed = { status: 'cancelled' as const, cancelConfirmed: false };
+    expect(paymentPollInterval(unconfirmed, 1)).toBe(PAYMENT_POLL_INTERVAL_MS);
+    expect(paymentPollInterval(unconfirmed, PAYMENT_POLL_LIMIT)).toBe(false);
   });
 });
 
@@ -235,7 +283,7 @@ describe('endedFetches', () => {
     // A pending payment re-read once, then refused every time (a 401 is never retried).
     const failing = (errors: number) =>
       paymentPollInterval(
-        { status: 'pending' },
+        { status: 'pending', cancelConfirmed: null },
         endedFetches({ dataUpdateCount: 1, errorUpdateCount: errors }),
       );
     expect(failing(PAYMENT_POLL_LIMIT - 2)).toBe(PAYMENT_POLL_INTERVAL_MS);
@@ -248,15 +296,30 @@ describe('결제 내역 poll', () => {
   const CLAIMED = adminPayment('00000000-0000-4000-8000-0000000000a2', 'pending');
   const UNCLAIMED = { ...CLAIMED, id: '00000000-0000-4000-8000-0000000000a3', providerRef: null };
   const DONE = adminPayment('00000000-0000-4000-8000-0000000000a4', 'succeeded');
+  const UNCONFIRMED = adminPayment('00000000-0000-4000-8000-0000000000a5', 'cancelled', {
+    cancelConfirmed: false,
+  });
 
-  it('waits on a refund under way and a claimed pending payment, nothing else', () => {
+  it('waits on a refund under way, a claimed pending payment and an unconfirmed cancel only', () => {
     expect(isPaymentInFlight(REFUNDING)).toBe(true);
     expect(isPaymentInFlight(CLAIMED)).toBe(true);
+    // 처리 중 too: a net cancel with no clear answer, which the 재통보 or an admin settles.
+    expect(isPaymentInFlight(UNCONFIRMED)).toBe(true);
     // 미완료: only the payer's return from the window moves it, and that reloads the wallet.
     expect(isPaymentInFlight(UNCLAIMED)).toBe(false);
     for (const status of PAYMENT_STATUSES.filter((s) => s !== 'pending' && s !== 'refunding')) {
-      expect(isPaymentInFlight({ status, providerRef: 'StdTid' }), status).toBe(false);
+      expect(
+        isPaymentInFlight({ status, providerRef: 'StdTid', cancelConfirmed: null }),
+        status,
+      ).toBe(false);
     }
+    expect(isPaymentInFlight({ ...UNCONFIRMED, cancelConfirmed: true })).toBe(false);
+  });
+
+  it('gives an unconfirmed cancel a set of its own: its confirmation ends the wait', () => {
+    const poll = paymentsPoll();
+    expect(poll([DONE, UNCONFIRMED], 1)).toBe(PAYMENT_POLL_INTERVAL_MS);
+    expect(poll([DONE, { ...UNCONFIRMED, cancelConfirmed: true }], 2)).toBe(false);
   });
 
   it('re-reads the list every few seconds while a row is in flight, for a bounded while', () => {
@@ -327,16 +390,43 @@ describe('결제 내역 rows', () => {
   });
 
   it('calls an unclaimed pending payment unfinished, and every other status by its label', () => {
-    expect(paymentStatusView({ status: 'pending', providerRef: null })).toEqual({
+    expect(
+      paymentStatusView({ status: 'pending', providerRef: null, cancelConfirmed: null }),
+    ).toEqual({
       label: copy.paymentStatusUnfinished,
       palette: 'gray',
     });
     for (const status of PAYMENT_STATUSES) {
-      expect(paymentStatusView({ status, providerRef: 'tid' }), status).toEqual({
+      const cancelConfirmed = status === 'cancelled' ? true : null;
+      expect(paymentStatusView({ status, providerRef: 'tid', cancelConfirmed }), status).toEqual({
         label: PAYMENT_STATUS_LABEL[status],
         palette: PAYMENT_STATUS_PALETTE[status],
       });
     }
+  });
+
+  it('shows a cancel nobody has confirmed as 처리 중, without its reason', () => {
+    const unconfirmed = payment({
+      status: 'cancelled',
+      cancelConfirmed: false,
+      resultMessage: '가맹점 승인 처리 실패로 인한 자동 취소',
+    });
+    expect(isCancelUnconfirmed(unconfirmed)).toBe(true);
+    expect(paymentStatusView(unconfirmed)).toEqual({
+      label: PAYMENT_STATUS_LABEL.pending,
+      palette: PAYMENT_STATUS_PALETTE.pending,
+    });
+    expect(paymentHistoryReason(unconfirmed)).toBeNull();
+    // The admin list still reads it (with 확인 필요 beside it).
+    expect(paymentFailureReason(unconfirmed)).toBe('가맹점 승인 처리 실패로 인한 자동 취소');
+    // Confirmed: 취소됨, with its reason.
+    const confirmed = { ...unconfirmed, cancelConfirmed: true };
+    expect(isCancelUnconfirmed(confirmed)).toBe(false);
+    expect(paymentStatusView(confirmed).label).toBe(PAYMENT_STATUS_LABEL.cancelled);
+    expect(paymentHistoryReason(confirmed)).toBe('가맹점 승인 처리 실패로 인한 자동 취소');
+    expect(paymentHistoryReason(payment({ status: 'failed', resultMessage: '한도 초과' }))).toBe(
+      '한도 초과',
+    );
   });
 
   it("keeps the PG's reason for failed and cancelled payments only", () => {

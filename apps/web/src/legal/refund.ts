@@ -3,7 +3,7 @@ import { type LegalDocument, bullets, numbered, paragraph } from './document';
 
 /**
  * 환불정책 (ADR-0042/0044). States the owner's refund rule (2026-09-28 §5) exactly as the API's
- * admin refund enforces it (DESIGN §5.6):
+ * admin refund enforces it (ADR-0042 「관리자 환불」):
  *
  * - within `PAYMENT_REFUND_WINDOW_DAYS` × 24 h of the approval, AND
  * - the account's AVAILABLE balance is at least that payment's P ("unused" — P reserved by open

@@ -13,7 +13,7 @@ import {
 } from './helpers';
 
 /**
- * 결제 결과 안내와 관리자 환불 (ADR-0042, DESIGN §6.2) on the provider the suite runs with — the
+ * 결제 결과 안내와 관리자 환불 (ADR-0042) on the provider the suite runs with — the
  * mock, which settles a charge at once (PAYMENT_PROVIDER defaults to mock; CI never sets it).
  * The SmartroPay window itself needs STG credentials and is verified there, not here; what
  * these tests cover is everything around it that the mock exercises the same way: the wallet

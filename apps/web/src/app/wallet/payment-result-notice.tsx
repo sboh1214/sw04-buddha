@@ -11,7 +11,7 @@ import { paymentResultNotice } from '@/lib/smartro-payments';
 
 /**
  * The outcome of the payment window, where the API's ReturnUrl / StopUrl sent the browser:
- * `/wallet?payment=<id>&result=<r>` (DESIGN §6.2; the `/settings?error=` precedent). The URL
+ * `/wallet?payment=<id>&result=<r>` (ADR-0042; the `/settings?error=` precedent). The URL
  * says how it ended when the API redirected; the payment itself (`GET /me/payments/:id`) says
  * how it stands now and, for a failure, the PG's reason — `paymentResultNotice` weighs the two.
  *

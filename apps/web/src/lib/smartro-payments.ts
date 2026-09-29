@@ -115,18 +115,33 @@ const OUTCOME_BY_STATUS: Readonly<Record<PaymentStatus, PaymentReturnResult>> = 
 };
 
 /**
+ * A `cancelled` payment whose card cancel nobody has confirmed (`cancelConfirmed` false): the
+ * cancel of an approval we could not credit got no clear answer, or has not had one yet. The
+ * card may still be charged, and an admin may yet settle it either way (credit it, or confirm
+ * the cancel) — so to the payer it is still being checked, as the ReturnUrl's `pending` said:
+ * the notice, the badge and both polls treat it as `pending`.
+ */
+export function isCancelUnconfirmed(payment: Pick<Payment, 'status' | 'cancelConfirmed'>): boolean {
+  return payment.status === 'cancelled' && payment.cancelConfirmed === false;
+}
+
+/**
  * What the notice says happened. The URL is what the API knew when it redirected; the
  * payment, once loaded, is what it knows now, and that wins: a `pending` return that the
  * 재통보 has since credited is a success, and a `failed` one it credited too. The one thing
  * only the URL knows is that a `failed` payment was the payer's own 결제 취소 (StopUrl), so
- * `stopped` survives a `failed` row. Without a loaded payment — no id in the URL, someone
- * else's id (404), a failed fetch — the URL's word is all there is.
+ * `stopped` survives a `failed` row. A `cancelled` payment whose cancel is not confirmed is
+ * still `pending` (isCancelUnconfirmed). Without a loaded payment — no id in the URL, someone
+ * else's id (404), a failed fetch — the URL's word is all there is; the API redirects with
+ * `cancelled` only once the cancel is confirmed (an unconfirmed one says `pending`), so that word
+ * never claims a cancel the card may not have had.
  */
 export function paymentOutcome(
   result: PaymentReturnResult,
-  payment: Pick<Payment, 'status'> | undefined,
+  payment: Pick<Payment, 'status' | 'cancelConfirmed'> | undefined,
 ): PaymentReturnResult {
   if (payment === undefined) return result;
+  if (isCancelUnconfirmed(payment)) return 'pending';
   const current = OUTCOME_BY_STATUS[payment.status];
   return current === 'failed' && result === 'stopped' ? 'stopped' : current;
 }
@@ -150,13 +165,14 @@ const NOTICE: Readonly<Record<PaymentReturnResult, { status: NoticeStatus; messa
 };
 
 /**
- * The Alert `/wallet` shows after the payment window (DESIGN §6.2). The reason is the last
- * ResultMsg the PG gave (`Payment.resultMessage`, e.g. a card refusal) and is shown for the
- * two outcomes that need explaining; a success's message is the PG's "승인" and says nothing.
+ * The Alert `/wallet` shows after the payment window (ADR-0042). The reason is why the
+ * payment ended (`Payment.resultMessage`: the PG's refusal, or why it was cancelled) and is
+ * shown for the two outcomes that need explaining; a success's message is the PG's "승인" and
+ * says nothing, and a payment still being checked has not ended.
  */
 export function paymentResultNotice(
   result: PaymentReturnResult,
-  payment: Pick<Payment, 'status' | 'resultMessage'> | undefined,
+  payment: Pick<Payment, 'status' | 'resultMessage' | 'cancelConfirmed'> | undefined,
 ): PaymentResultNotice {
   const outcome = paymentOutcome(result, payment);
   const said = payment?.resultMessage?.trim() ?? '';
@@ -170,17 +186,18 @@ export const PAYMENT_POLL_LIMIT = 24;
 
 /**
  * `refetchInterval` of the notice's payment: every 5 s while it is still `pending` — the
- * approval's answer was lost, or the 재통보 has not come yet — for two minutes, after which
- * the notice keeps saying so and 결제 내역 carries the rest (a person settles what is left).
- * `fetches` is `endedFetches` of the query's state: a failed fetch spends the budget too.
+ * approval's answer was lost, or the 재통보 has not come yet; or a `cancelled` one whose cancel
+ * is not confirmed yet (isCancelUnconfirmed) — for two minutes, after which the notice keeps
+ * saying so and 결제 내역 carries the rest (a person settles what is left). `fetches` is
+ * `endedFetches` of the query's state: a failed fetch spends the budget too.
  */
 export function paymentPollInterval(
-  payment: Pick<Payment, 'status'> | undefined,
+  payment: Pick<Payment, 'status' | 'cancelConfirmed'> | undefined,
   fetches: number,
 ): number | false {
-  return payment?.status === 'pending' && fetches < PAYMENT_POLL_LIMIT
-    ? PAYMENT_POLL_INTERVAL_MS
-    : false;
+  const open =
+    payment !== undefined && (payment.status === 'pending' || isCancelUnconfirmed(payment));
+  return open && fetches < PAYMENT_POLL_LIMIT ? PAYMENT_POLL_INTERVAL_MS : false;
 }
 
 /**
@@ -197,9 +214,10 @@ export function endedFetches(state: { dataUpdateCount: number; errorUpdateCount:
 // ---- 결제 내역 --------------------------------------------------------------------------
 
 /**
- * The PG's last word on a payment that did not go through (`failed`, or `cancelled` after an
- * approval we could not credit) — a card refusal, a window error — for the rows of both
- * lists. Anything else's `resultMessage` is the PG's "승인" and says nothing worth a line.
+ * Why a payment that did not go through ended (`failed`, or `cancelled` after an approval we
+ * could not credit) — a card refusal, a window error, the reason of a cancel — for the rows of
+ * both lists. Anything else's `resultMessage` is the PG's "승인" and says nothing worth a line.
+ * The admin list shows it for every such row; the payer's goes through paymentHistoryReason.
  */
 export function paymentFailureReason(
   payment: Pick<Payment, 'status' | 'resultMessage'>,
@@ -207,6 +225,17 @@ export function paymentFailureReason(
   if (payment.status !== 'failed' && payment.status !== 'cancelled') return null;
   const said = payment.resultMessage?.trim() ?? '';
   return said === '' ? null : said;
+}
+
+/**
+ * The reason line of a row of the payer's 결제 내역: paymentFailureReason, except for a payment
+ * still being checked (isCancelUnconfirmed) — shown 처리 중, it has not ended, and the reason of
+ * a cancel that may not have happened would say it had.
+ */
+export function paymentHistoryReason(
+  payment: Pick<Payment, 'status' | 'resultMessage' | 'cancelConfirmed'>,
+): string | null {
+  return isCancelUnconfirmed(payment) ? null : paymentFailureReason(payment);
 }
 
 /**
@@ -239,17 +268,24 @@ export function paymentMethodLabel(method: string | null): string | null {
 
 /**
  * The status badge of the user's own list. The admin list shows the six statuses as they are;
- * here one of them is split: a `pending` payment nothing has claimed (no `providerRef`) is a
- * window that was opened and never completed — closed, abandoned, or still open in another
+ * here two of them read otherwise. A `pending` payment nothing has claimed (no `providerRef`) is
+ * a window that was opened and never completed — closed, abandoned, or still open in another
  * tab — and "처리 중" would claim the service is working on something it has not received.
  * Once the window hands back an authentication the payment is claimed, and "처리 중" is true.
+ * And a `cancelled` one whose cancel is not confirmed (isCancelUnconfirmed) is 처리 중 too: the
+ * card may still be charged, and "취소됨" would say it is not.
  */
-export function paymentStatusView(payment: Pick<Payment, 'status' | 'providerRef'>): {
+export function paymentStatusView(
+  payment: Pick<Payment, 'status' | 'providerRef' | 'cancelConfirmed'>,
+): {
   label: string;
   palette: string;
 } {
   if (payment.status === 'pending' && payment.providerRef === null) {
     return { label: copy.paymentStatusUnfinished, palette: 'gray' };
+  }
+  if (isCancelUnconfirmed(payment)) {
+    return { label: PAYMENT_STATUS_LABEL.pending, palette: PAYMENT_STATUS_PALETTE.pending };
   }
   return {
     label: PAYMENT_STATUS_LABEL[payment.status],
@@ -259,25 +295,30 @@ export function paymentStatusView(payment: Pick<Payment, 'status' | 'providerRef
 
 /**
  * A row of 결제 내역 about to change with nothing for the payer to do: a refund whose card
- * cancel is under way (`refunding`, 환불 처리 중), or a claimed `pending` payment (처리 중) that
- * the 재통보 — or an admin's 수동 정리 — still settles. An unclaimed `pending` one (미완료) only
- * moves when the payer comes back from the window, and that return reloads the wallet anyway;
+ * cancel is under way (`refunding`, 환불 처리 중), or a claimed `pending` payment — or a
+ * `cancelled` one whose cancel is not confirmed (isCancelUnconfirmed) — shown 처리 중, that the
+ * 재통보 or an admin's 수동 정리 still settles. An unclaimed `pending` one (미완료) only moves
+ * when the payer comes back from the window, and that return reloads the wallet anyway;
  * polling for it would re-read the list on every visit of a member who once closed a window.
  */
-export function isPaymentInFlight(payment: Pick<Payment, 'status' | 'providerRef'>): boolean {
+export function isPaymentInFlight(
+  payment: Pick<Payment, 'status' | 'providerRef' | 'cancelConfirmed'>,
+): boolean {
   return (
-    payment.status === 'refunding' || (payment.status === 'pending' && payment.providerRef !== null)
+    payment.status === 'refunding' ||
+    (payment.status === 'pending' && payment.providerRef !== null) ||
+    isCancelUnconfirmed(payment)
   );
 }
 
 /** One call of the 결제 내역 poll: the loaded rows and the list's `endedFetches`. */
 export type PaymentsPoll = (
-  payments: readonly Pick<Payment, 'id' | 'status' | 'providerRef'>[],
+  payments: readonly Pick<Payment, 'id' | 'status' | 'providerRef' | 'cancelConfirmed'>[],
   fetches: number,
 ) => number | false;
 
 /**
- * `refetchInterval` of 결제 내역 (DESIGN §6.2): while a loaded row is in flight
+ * `refetchInterval` of 결제 내역 (ADR-0042): while a loaded row is in flight
  * (`isPaymentInFlight`), the list is re-read every PAYMENT_POLL_INTERVAL_MS for at most
  * PAYMENT_POLL_LIMIT fetches — `paymentPollInterval`'s two minutes — so 환불 처리 중 turns into
  * 환불됨 on screen without a focus or a remount. The realtime `user:balance` restart cannot do it:
@@ -357,11 +398,13 @@ export function refundDeadline(payment: Pick<Payment, 'approvedAt' | 'createdAt'
 export type RefundAction = 'refund' | 'retry';
 
 /**
- * Which refund button a row offers (DESIGN §5.6/§6.2), or none:
+ * Which refund button a row offers (ADR-0042 「관리자 환불」), or none:
  * - `refund`: `succeeded`, still inside the window. Whether the user has spent the P is the
  *   one condition the list cannot see (it has no balances); the API answers that one.
- * - `retry`: `refunding` — an earlier attempt took the P back but never heard the PG's answer.
- *   The window does not apply: the claw-back already happened inside it.
+ * - `retry`: `refunding` — the P was clawed back and the card cancel is not confirmed: the PG's
+ *   answer never came, or a refused retry, a taken-over first attempt or a partial cancel on
+ *   record left it for 수동 정리 (`settle_required`). The window does not apply: the claw-back
+ *   already happened inside it.
  * - Neither for a row with no `providerRef` (nothing at the PG to cancel; the API refuses it
  *   with `provider`), or for anything else.
  *

@@ -54,7 +54,7 @@ import {
 
 /**
  * PLAN 12 결제 목록: every charge, newest first, 20 per page with 더 보기 (A-M2-5), with the
- * admin refund of ADR-0042 (owner decision 5, DESIGN §5.6) on the rows that allow one, and 수동
+ * admin refund of ADR-0042 (owner decision 5, 「관리자 환불」) on the rows that allow one, and 수동
  * 정리 on the SmartroPay rows the API could not settle by itself (`needsReview`, 확인 필요).
  */
 export function AdminPayments() {
@@ -221,7 +221,7 @@ function refusalToast(view: RefundErrorView) {
 }
 
 /**
- * The refund confirmation with its required reason (DESIGN §6.2). The disputes' review dialog
+ * The refund confirmation with its required reason (ADR-0042). The disputes' review dialog
  * shape: `alertdialog`, pinned while the request runs — Cancel, Esc and the backdrop all wait,
  * since a refund takes P from a member and money back through the PG and the admin must see
  * how it ended. The reason is a form (zodResolver), refused under the field when blank.

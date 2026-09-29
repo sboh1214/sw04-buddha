@@ -621,9 +621,10 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // the same kind as the ledger's, and on the same accepted event, so it costs a request
         // only where 결제 내역 is on screen. Unseeded as well, hence `restartQueries` again.
         // Only as far as the P goes: a refund's claw-back is the one step that moves a balance,
-        // so the list lands on 환불 처리 중, and its finish (환불 완료) — like a settle — publishes
-        // nothing; the list's own bounded poll while a row is still moving (`paymentsPoll`,
-        // use-wallet.ts) carries that row the rest of the way.
+        // so the list lands on 환불 처리 중, and its finish (환불 완료) — like a settle that moves
+        // no P (환불 완료, 취소 확인, 실패로 닫기; a settle `credit` or `restore` does publish) —
+        // publishes nothing; the list's own bounded poll while a row is still moving
+        // (`paymentsPoll`, use-wallet.ts) carries that row the rest of the way.
         for (const queryKey of BALANCE_HISTORY_KEYS) void restartQueries(queryClient, queryKey);
         const patch = applyBalanceEvent(queryClient.getQueryData<Me>(ME_QUERY_KEY), parsed.data);
         // Kills an in-flight `GET /me` that would otherwise resolve after this write carrying

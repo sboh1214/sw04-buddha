@@ -157,8 +157,9 @@ export function usePaymentProvider() {
 
 /**
  * The payment the wallet's result notice is about (`/wallet?payment=<id>`). Re-read every few
- * seconds while it is still `pending` (`paymentPollInterval`), so a return whose approval
- * answer was lost turns into its real outcome on screen once the 재통보 settles it. Someone
+ * seconds while it is still `pending`, or `cancelled` with its cancel unconfirmed
+ * (`paymentPollInterval`), so a return whose approval answer was lost turns into its real
+ * outcome on screen once the 재통보 or an admin settles it. Someone
  * else's id is a 404 and stays one (4xx are not retried); the notice then says what the URL
  * said.
  */
@@ -337,7 +338,7 @@ export function smartroKeyIntent(packageId: string): string {
  * get the signed form that opens the SmartroPay window for it. The body is the immediate
  * charge's, for the same reasons (the terms on screen, the account on screen).
  *
- * Keys: a fresh one per click, settled on ANY answer (DESIGN §6.2). An answered prepare is
+ * Keys: a fresh one per click, settled on ANY answer (ADR-0042). An answered prepare is
  * finished business — the window it opens is where the purchase happens, and the next click is
  * a new window for a new reservation; re-sending a spent key would only earn DUPLICATE_REQUEST
  * once that window's payment is claimed. `settle` still keeps a key a 5xx answered, as it keeps

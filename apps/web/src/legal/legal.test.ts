@@ -182,7 +182,8 @@ describe('legal document contents (owner decisions 2026-09-28)', () => {
 
   it('refund: both conditions judged when the refund is processed, with the processing time', () => {
     const refund = text(REFUND);
-    // The admin refund checks the window on the DB clock at processing time (DESIGN §5.6).
+    // The admin refund checks the window on the DB clock at processing time
+    // (ADR-0042 「관리자 환불」).
     expect(refund).toContain('회사가 환불을 처리하는 시점을 기준으로 판단');
     expect(refund).toContain('결제가 승인된 시각부터 계산');
     expect(refund).toContain('여유를 두고 요청해 주세요');
@@ -191,7 +192,8 @@ describe('legal document contents (owner decisions 2026-09-28)', () => {
 
   it("refund: payment errors and a minor's payment", () => {
     const refund = text(REFUND);
-    // An unknown outcome or a failed net cancel stays pending (DESIGN §5.4), so not "always".
+    // An unknown outcome or a failed net cancel is left for the 재통보 or an admin (ADR-0042
+    // 「ReturnUrl」 step 4, 「망취소」), so not "always".
     expect(refund).toContain('원칙적으로 자동으로 취소됩니다');
     expect(refund).toContain('P를 충전하거나 결제를 취소하여 바로잡습니다');
     expect(refund).toContain('「민법」 제5조');

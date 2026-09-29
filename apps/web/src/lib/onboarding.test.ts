@@ -11,7 +11,7 @@ import {
 const CONTACT = { realName: '홍길동', phone: '01012345678' };
 
 describe('isOnboardingExempt', () => {
-  it('lists exactly the routes DESIGN §6.3 names, plus /api', () => {
+  it('lists exactly the routes ADR-0043 names, plus /api', () => {
     expect([...ONBOARDING_EXEMPT_PATHS].sort()).toEqual(
       [
         '/api',

@@ -720,12 +720,20 @@ export const copy = {
   chargeBelowCardMinimum: '1,000원 미만 상품은 결제 창에서 결제할 수 없습니다.',
   chargePackageSelected: '선택한 상품',
   paymentResultSucceeded: '결제가 완료되어 P가 충전되었습니다.',
-  paymentResultFailed: '결제가 완료되지 않았습니다. 청구된 금액은 없습니다.',
+  // 실패는 대개 청구가 없지만, 승인이 PG 오류 코드(9999 등)로 답한 결제는 카드가 청구됐을 수 있어
+  // 관리자가 확인한다(「확인 필요」). 그래서 청구가 없다고 단정하지 않고, 보이면 알려 달라고 한다.
+  // 결제창은 카드 말고도 간편결제·계좌이체·휴대폰을 보이고 실패한 결제에는 수단이 없으므로 수단을
+  // 가리지 않고, 몇 주 뒤의 명세서가 아니라 곧바로 오는 승인 알림·이용 내역을 가리킨다.
+  paymentResultFailed:
+    '결제가 완료되지 않았습니다. 카드나 결제 수단의 승인·이용 내역에 이 결제가 보이면 고객센터로 알려 주세요.',
   paymentResultStopped: '결제를 취소했습니다. 청구된 금액은 없습니다.',
   paymentResultPending:
     '결제 결과를 확인하고 있습니다. 확인되면 이 화면과 결제 내역에 반영되며, 오래 걸리면 고객센터로 문의해 주세요.',
+  // 취소가 확인된 결제에만 보인다(확인 전의 `cancelled`는 「확인 중」 안내를 쓴다). 우리 망취소뿐
+  // 아니라 결제대행사의 취소 통보, 관리자의 수동 정리로 닫힌 결제도 있어 누가 취소했는지는 말하지
+  // 않는다 — 그 까닭은 아래 「사유」 줄이 말한다(망취소·취소 통보·수동 정리가 저마다의 사유를 적는다).
   paymentResultCancelled:
-    '결제는 승인되었지만 P를 충전하지 못해 결제를 자동으로 취소했습니다. 카드사에 따라 취소가 반영되기까지 며칠이 걸릴 수 있습니다.',
+    '결제가 승인된 뒤 취소되어 P는 충전되지 않았습니다. 카드사에 따라 취소가 반영되기까지 며칠이 걸릴 수 있습니다.',
   paymentResultReason: '사유:',
   paymentHistoryTitle: '결제 내역',
   paymentHistoryEmpty: '아직 결제 내역이 없습니다.',
@@ -752,8 +760,10 @@ export const copy = {
   adminPaymentRefundBody:
     '결제 금액 전액을 결제대행사에서 취소하고, 이 결제로 충전된 P를 모두 회수합니다. 승인 후 7일 이내이고 회원이 그 P를 전혀 쓰지 않았을 때(사용 가능 잔고가 그 P 이상)만 환불됩니다.',
   adminPaymentRefundRetryTitle: '환불을 다시 시도합니다',
+  // 「환불 처리 중」은 취소의 답이 없었던 결제만이 아니다: 거절된 재시도, 재시도가 넘겨받은 첫 시도,
+  // 부분 취소가 기록된 결제도 남는다(`settle_required`). 그래서 답이 없었다고 말하지 않는다.
   adminPaymentRefundRetryBody:
-    '이전 환불 요청에서 P는 이미 회수했지만 결제대행사의 취소 결과를 받지 못했습니다. 결제대행사에 취소를 다시 요청합니다.',
+    '이전 환불 요청에서 P는 이미 회수했고, 카드 취소는 아직 확인되지 않았습니다. 결제대행사에 취소를 다시 요청합니다(거절되면 가맹점 관리자에서 확인한 뒤 「수동 정리」로 정리합니다).',
   adminPaymentRefundReason: '환불 사유',
   adminPaymentRefundReasonHint: '감사 기록에 남고, 결제대행사에 취소 사유로도 전달됩니다.',
   adminPaymentRefundSubmit: '환불하기',
@@ -808,8 +818,10 @@ export const copy = {
   adminPaymentSettleRestoreHint:
     '카드가 취소되지 않아 회수한 P를 돌려줍니다. 결제는 완료로 돌아갑니다.',
   adminPaymentSettleTid: '승인 거래번호(TID)',
+  // errSettleTidRequired와 같은 조건: 성공한 승인이 기록돼 있지 않을 때다. 승인이 PG 오류 코드로
+  // 답한 실패 결제(「확인 필요」의 흔한 경우)에는 응답이 기록돼 있어도 필요하다.
   adminPaymentSettleTidHint:
-    '가맹점 관리자에서 확인한 승인 거래번호(TID) — 결제 기록에 승인 응답이 없을 때 필요',
+    '가맹점 관리자에서 확인한 승인 거래번호(TID) — 결제 기록에 성공한 승인 응답이 없을 때(응답이 없었거나 PG 오류 코드로 답한 경우) 필요',
   adminPaymentSettleReason: '정리 사유',
   adminPaymentSettleReasonHint:
     '감사 기록에 남습니다. 가맹점 관리자에서 확인한 내용을 적어 주세요.',
@@ -837,7 +849,7 @@ export const copy = {
   errSettleInProgress: '방금 처리 중인 결제입니다. 2분 뒤에 다시 시도해 주세요.',
   errSettleApprovalMismatch: '기록된 승인과 맞지 않아 P를 충전할 수 없습니다.',
   errSettleApprovalMismatchHint:
-    '기록된 승인의 금액·가맹점 번호(MID)·주문번호가 이 결제와 다르거나, 입력한 TID가 기록된 승인과 다르거나 이미 다른 결제의 것입니다. TID를 다시 확인하고, 이 결제의 승인이 아니라면 가맹점 관리자에서 카드 결제를 취소한 뒤 「취소 확인」으로 정리해 주세요.',
+    '기록된 승인의 금액·가맹점 번호(MID)·주문번호가 이 결제와 다르거나, 기록된 승인끼리 서로 어긋나거나, 입력한 TID가 기록된 승인과 다르거나 이미 다른 결제의 것입니다. TID를 다시 확인하고, 이 결제의 승인이 아니라면 가맹점 관리자에서 카드 결제를 취소한 뒤 「취소 확인」으로 정리해 주세요.',
   errSettlePartialCancel: '부분 취소가 기록된 결제라 P를 충전하거나 돌려줄 수 없습니다.',
   errSettlePartialCancelHint:
     '결제대행사가 이 카드의 부분 취소를 알려 왔습니다. 「취소 확인」 또는 「환불 완료」로 정리한 뒤, 회원의 잔고는 「사용자」 화면의 「잔고 조정」으로 맞춰 주세요.',

@@ -38,7 +38,7 @@ export function chargeTiers(amounts: readonly bigint[]): ChargeTier[] {
 
 /**
  * Where a package's 충전하기 leads: the wallet with that package preselected (`?package=<id>`,
- * which `/wallet` reads — DESIGN §6.2). An anonymous visitor is sent on to the login page by the
+ * which `/wallet` reads — ADR-0042). An anonymous visitor is sent on to the login page by the
  * wallet itself. A `UrlObject` rather than a template string, so typed routes check `/wallet`
  * without an `as Route` cast.
  */
