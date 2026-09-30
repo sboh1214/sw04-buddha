@@ -334,9 +334,23 @@ export function smartroKeyIntent(packageId: string): string {
 }
 
 /**
+ * A reserved payment, and the account it was reserved for: the `expectedAccountId` the prepare
+ * sent, which its 2xx proves (`assertExpectedAccount` compared it with the cookie before
+ * reserving). `SmartroPrepareResult` itself names no owner, and the window it opens is approved
+ * at a ReturnUrl that reads no cookie — so this is the only place the caller can learn whose
+ * payment a window would take (`checkoutBelongsTo`, lib/smartro-checkout.ts).
+ */
+export interface SmartroReservation {
+  prepared: SmartroPrepareResult;
+  account: string;
+}
+
+/**
  * `POST /payments/smartro/prepare` (ADR-0042): reserve a `pending` payment for the package and
  * get the signed form that opens the SmartroPay window for it. The body is the immediate
- * charge's, for the same reasons (the terms on screen, the account on screen).
+ * charge's, for the same reasons (the terms on screen, the account on screen). The answer comes
+ * back with the account that sent it (`SmartroReservation`): the server checks that account only
+ * while the request is here, and the tab may belong to somebody else by the time it answers.
  *
  * Keys: a fresh one per click, settled on ANY answer (ADR-0042). An answered prepare is
  * finished business — the window it opens is where the purchase happens, and the next click is
@@ -363,7 +377,7 @@ export function useSmartroPrepare() {
     return handle.current.keys;
   };
   const mutation = useMutation({
-    mutationFn: async (pack: ChargePackage): Promise<SmartroPrepareResult> => {
+    mutationFn: async (pack: ChargePackage): Promise<SmartroReservation> => {
       // Unreachable while the buttons honour `ready`.
       if (!accountId) throw new Error('payment window requested before the session was known');
       const keys = keysFor(accountId);
@@ -378,7 +392,8 @@ export function useSmartroPrepare() {
         },
       });
       keys.settle(intent, result.response.status);
-      return unwrap(result).data;
+      // The very string the body carried, not a later reading of the session.
+      return { prepared: unwrap(result).data, account: accountId };
     },
     // The reservation is a row of 결제 내역 from now on (미완료 until the window hands it back).
     // Not awaited: the window should not wait for a list refetch.

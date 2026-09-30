@@ -54,6 +54,9 @@ interface SmartroCheckoutProps {
  * - Leaving the wallet by a client-side navigation while the PC layer is up closes the layer:
  *   the SDK put it in `<body>`, outside React, and an approval finished over the next page
  *   would call back into a window with nowhere left to post it.
+ * - So does the tab becoming another account's: the caller unmounts a window whose payment is
+ *   not the signed-in account's (`checkoutOnAccount`), since the ReturnUrl would credit the
+ *   account that opened it whoever is paying — the same unmount, the same close.
  *
  * What each of those signals means is `checkoutStep`'s to decide (lib/smartro-checkout.ts,
  * unit-tested); this component only listens for them, keeps the window's state, reports the

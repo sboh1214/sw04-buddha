@@ -720,6 +720,10 @@ export const copy = {
   // 같아야 한다(smartro-payments.test.ts가 확인한다).
   chargeApproving: '결제를 승인하고 있습니다. 잠시만 기다려 주세요.',
   chargeWindowFailed: '결제 창을 열지 못했습니다. 페이지를 새로고침한 뒤 다시 시도해 주세요.',
+  // 다른 탭에서 다른 계정으로 로그인하거나 로그아웃해, 이전 계정의 결제 창(불러오는 중·열림)을
+  // 닫았을 때. 승인 요청을 보내기 전에 닫으므로 청구는 없다(checkoutOnAccount의 'stop').
+  chargeWindowAccountChanged:
+    '로그인한 계정이 바뀌어 이전 계정의 결제 창을 닫았습니다. 청구된 금액은 없습니다.',
   chargeContactRequired: '결제하려면 실명과 휴대전화 번호를 먼저 등록해 주세요.',
   chargeBelowCardMinimum: '1,000원 미만 상품은 결제 창에서 결제할 수 없습니다.',
   chargePackageSelected: '선택한 상품',

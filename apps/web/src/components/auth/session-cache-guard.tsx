@@ -28,8 +28,10 @@ export function sessionIdentityChanged(
  * started it unmounts, and react-query only pushes fresh options into a pending mutation from
  * an effect, so a callback that closes over `useSession()`'s answer keeps naming the account
  * that started the work however long the tab has since belonged to somebody else
- * (`tradeAnswerScope`, use-trade.ts; `disputeAnswerScope`, use-disputes.ts — the two readers).
- * The query cache cannot stand in for it either: the
+ * (`tradeAnswerScope`, use-trade.ts; `disputeAnswerScope`, use-disputes.ts; and the payment
+ * window's `openWindow`, app/wallet/charge-form.tsx, which reads it through `reservationToOpen`
+ * once a prepare answers, so a late answer never opens a window on another account's wallet —
+ * the three readers). The query cache cannot stand in for it either: the
  * account is knowable there only while `['me']` holds an answer, and `resetQueries` below is
  * precisely what empties it.
  *
@@ -102,7 +104,9 @@ export function claimCacheOwnership(
  * showing the old ledger. A reset puts every query back to its initial state and refetches
  * the active ones: skeleton, then the right account. Two windows side by side never fire
  * `visibilitychange`, so a sign-in there is seen only on the next interaction — the same
- * limit better-auth's own session has.
+ * limit better-auth's own session has. So is its focus refetch's rate limit: a tab brought back
+ * within 5 s of its last one (`FOCUS_REFETCH_RATE_LIMIT_SECONDS`) does not refetch, and a quick
+ * sign-in in another tab waits for the next refetch too.
  */
 export function SessionCacheGuard() {
   const queryClient = useQueryClient();

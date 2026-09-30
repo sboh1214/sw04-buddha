@@ -1,8 +1,9 @@
 /**
  * The decisions of one SmartroPay window (ADR-0042): what each signal from the SDK,
- * its layer and the browser means for the buy buttons. Pure, so they run in this app's node-only
- * test runner; `SmartroCheckout` feeds it the signals and carries out what it answers (the two
- * clocks, the approval post, the layer's close), and `ChargeForm` keeps the phase it reports.
+ * its layer and the browser means for the buy buttons, and which account's screen the window
+ * may stay on. Pure, so they run in this app's node-only test runner; `SmartroCheckout` feeds it
+ * the signals and carries out what it answers (the two clocks, the approval post, the layer's
+ * close), and `ChargeForm` keeps the phase it reports.
  */
 
 /**
@@ -153,6 +154,96 @@ export function checkoutStep(state: CheckoutState, event: CheckoutEvent): Checko
       return state.phase === 'open' && !state.layerGone
         ? { state: { ...state, phase: 'closed' }, effect: 'close-layer' }
         : { state };
+  }
+}
+
+/**
+ * Whether a payment window may be on this tab's screen: only while the tab still belongs to the
+ * account the payment was reserved for — the rule `expectedAccountId` enforces on every body that
+ * acts for an account (A-M2-11, Q-M3-5), carried past the one moment the server can check it.
+ *
+ * `sent` is not a guess. It is what the prepare sent as `expectedAccountId`, and the server
+ * compared that with the cookie before it reserved anything (`assertExpectedAccount`), so a 2xx
+ * PROVES the payment is that account's — `tradeAnswerScope`'s proof (use-trade.ts). Nothing checks
+ * it again afterwards: the window approves at the public ReturnUrl, which finds the payment by its
+ * Moid and credits the payment's own account whoever the cookie names by then (a phone's
+ * cross-site post carries no cookie at all). So a window still open, or opened by a late answer,
+ * after another tab signed this one in as somebody else would take a card payment on B's wallet
+ * and credit A, and B would come back to a 결제 완료 notice that B's balance does not bear out.
+ *
+ * `account` is who the tab belongs to now: `cacheOwnerAccount()` right after the prepare
+ * answered (`reservationToOpen` — a render closure freezes on the account that clicked),
+ * `useSession()`'s identity while a window is on screen. Both follow better-auth's session atom,
+ * so a switch counts from the moment the tab notices it, not from the sign-in in the other tab
+ * (ADR-0042's 2026-09-30 addendum: side-by-side windows, the 5 s focus-refetch limit).
+ * `undefined` means nobody has said yet — before better-auth's first answer, or a tree without
+ * the guard — and is `tradeAnswerScope`'s permissive fallback: nothing of anybody else's is on
+ * screen to confuse, and refusing would strand an ordinary payer. A sign-out (`null`) is not the
+ * account that opened the window.
+ */
+export function checkoutBelongsTo(a: {
+  sent: string;
+  account: string | null | undefined;
+}): boolean {
+  return a.account === undefined || a.account === a.sent;
+}
+
+/**
+ * The window a prepare's answer may open: the reservation, while the tab still belongs to the
+ * account it was reserved for (`checkoutBelongsTo`); `null` once it does not — the reservation
+ * stays unclaimed, nothing charged, and the caller says the session changed.
+ *
+ * Nothing cancels the POST, so another tab may sign this one in as somebody else while it runs.
+ * Hence the owner is read through `readOwner` only AFTER the answer (`ChargeForm` passes
+ * `cacheOwnerAccount`, which outlives the render that clicked): a value read at the click, or
+ * the clicking render's own session, would always name the account that clicked. A refused or
+ * failed prepare rejects as it came, and asks nobody.
+ */
+export async function reservationToOpen<R extends { account: string }>(
+  reserve: Promise<R>,
+  readOwner: () => string | null | undefined,
+): Promise<R | null> {
+  const reservation = await reserve;
+  return checkoutBelongsTo({ sent: reservation.account, account: readOwner() })
+    ? reservation
+    : null;
+}
+
+/**
+ * What the tab's account does to the window on screen (`ChargeForm`):
+ * - `keep`: there is none, or it is still this account's (`checkoutBelongsTo`).
+ * - `stop`: another account's, still `loading` or `open`. Taking it off the screen unmounts it,
+ *   which is `checkoutStep`'s `unmounted`: a load ends `closed` and opens nothing, an open layer
+ *   is closed, and a callback already on its way finds no `approvalForm` to post. Nothing is
+ *   approved — the reservation stays unclaimed, nothing charged — and the payer is told why the
+ *   window went.
+ * - `depart`: another account's and past stopping, its page on the way out — `approving` has
+ *   posted to the ReturnUrl, `leaving` is being submitted to tmpay. Dropped silently, but the buy
+ *   buttons stay disabled until the page goes or `SMARTRO_APPROVAL_TIMEOUT_MS` passes: given back
+ *   at once, they would let the new account reserve and open a window that the old navigation,
+ *   landing a moment later, tears down (its payment left 미완료, nothing charged).
+ * - `drop`: another account's and already over (`closed`, `failed`). Dropped silently: nothing
+ *   was left to stop.
+ * Every one but `keep` empties the window — never merely hides it, or a switch back would
+ * remount the same window under its old key and open it unasked.
+ */
+export type CheckoutOnAccount = 'keep' | 'stop' | 'depart' | 'drop';
+
+export function checkoutOnAccount(
+  checkout: { account: string; phase: CheckoutPhase } | null,
+  account: string | null | undefined,
+): CheckoutOnAccount {
+  if (checkout === null || checkoutBelongsTo({ sent: checkout.account, account })) return 'keep';
+  switch (checkout.phase) {
+    case 'loading':
+    case 'open':
+      return 'stop';
+    case 'approving':
+    case 'leaving':
+      return 'depart';
+    case 'closed':
+    case 'failed':
+      return 'drop';
   }
 }
 

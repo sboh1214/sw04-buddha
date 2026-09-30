@@ -3,6 +3,7 @@
 import { Alert, Badge, Button, Card, HStack, Skeleton, Stack, Text } from '@chakra-ui/react';
 import { discountPercent, formatKrw, formatP, parsePAmount } from '@buddha/shared';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { cacheOwnerAccount } from '@/components/auth/session-cache-guard';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import {
@@ -22,10 +23,14 @@ import {
 import {
   ACTIVE_CHECKOUT_PHASES,
   type CheckoutPhase,
+  SMARTRO_APPROVAL_TIMEOUT_MS,
+  checkoutOnAccount,
+  reservationToOpen,
   withCheckoutPhase,
 } from '@/lib/smartro-checkout';
 import { isSmartroMobile, smartroScriptUrl } from '@/lib/smartro-sdk';
 import { checkoutErrorTitle, isBelowCardMinimum } from '@/lib/smartro-payments';
+import { useSession } from '@/lib/use-session';
 import { SmartroCheckout } from './smartro-checkout';
 
 /**
@@ -53,6 +58,8 @@ function chargeErrorTitle(error: unknown): string {
 interface Checkout {
   packageId: string;
   prepared: SmartroPrepareResult;
+  /** Whose payment it is: the account the prepare sent, which its 2xx proved. */
+  account: string;
   scriptUrl: string;
   mobile: boolean;
   phase: CheckoutPhase;
@@ -70,6 +77,27 @@ interface Checkout {
  *   the outcome. Every button waits while a window is on its way or open.
  * Until the provider is known every button waits too — it decides what a click does.
  *
+ * A window is the account's that opened it, and stays on screen only while the tab is still
+ * that account's (`checkoutBelongsTo`): the ReturnUrl approves by Moid, whoever the cookie then
+ * names, so a window left over a wallet another tab has since signed in as somebody else would
+ * take a card payment on B's screen and credit it to A. A prepare that answers after the switch
+ * opens nothing (`reservationToOpen`), and a window already there is taken off the screen when
+ * the switch is noticed (`checkoutOnAccount`) — closed before anything is approved when it is
+ * still loading or open; when its page is already on the way out (an approval posted, a phone
+ * sent to tmpay), the buttons wait for that navigation rather than come back under it.
+ *
+ * "Noticed" is better-auth's session atom changing, and until it does this tab still reads as
+ * the account that opened the window — so the window stays up, and an approval made in it
+ * credits that account, the one the screen still shows. The atom lags in three ways
+ * (`SessionCacheGuard`'s limits): side-by-side windows never fire `visibilitychange`, so there
+ * the switch waits for the next session refetch; a tab brought back within 5 s of its last
+ * focus refetch skips the refetch that return would make (better-auth rate-limits it,
+ * `FOCUS_REFETCH_RATE_LIMIT_SECONDS`), so a quick sign-in elsewhere and a quick return go unseen
+ * until the next one; and this tab's own requests under the new cookie — the 결제 내역 refetch a
+ * prepare's answer starts, say — reach the query cache but never the atom, so that list can show
+ * the other account's rows beside this one's balance. A phone already sent to tmpay has no page
+ * left here to close.
+ *
  * `highlightPackageId` is `/wallet?package=`, the package the public `/charge` page sent the
  * visitor to buy: that card is marked and scrolled to, and buying stays a click of its own.
  */
@@ -79,8 +107,41 @@ export function ChargeForm({ highlightPackageId }: { highlightPackageId?: string
   const charge = useCharge();
   const prepare = useSmartroPrepare();
   const [checkout, setCheckout] = useState<Checkout | null>(null);
+  // The payment id of the last window a switch of account stopped: its toast is an effect's.
+  const [stopped, setStopped] = useState<string | null>(null);
+  // The payment id of a window a switch of account dropped while its page was on the way out
+  // (`checkoutOnAccount`'s `depart`): the buttons wait for that navigation, or for its clock.
+  const [departing, setDeparting] = useState<string | null>(null);
+  const { data: session, isPending: sessionPending } = useSession();
+  // Who the tab belongs to now, as `SessionCacheGuard` reads it; undefined while better-auth
+  // is still asking.
+  const account = sessionPending ? undefined : (session?.user.id ?? null);
   const highlighted = useRef<HTMLDivElement>(null);
   const scrolled = useRef(false);
+
+  // Another account's window leaves the screen as soon as this render knows the tab is not the
+  // opener's any more. Adjusted during render (the realtime provider's precedent) rather than in
+  // an effect: the window unmounts in the same commit — a late prepare answer never mounts at
+  // all — and `set-state-in-effect` is an error here. Emptied rather than hidden: a switch back
+  // would remount the same payment's window under its old key and open it unasked.
+  const onAccount = checkoutOnAccount(checkout, account);
+  if (checkout !== null && onAccount !== 'keep') {
+    setCheckout(null);
+    if (onAccount === 'stop') setStopped(checkout.prepared.paymentId);
+    if (onAccount === 'depart') setDeparting(checkout.prepared.paymentId);
+  }
+
+  useEffect(() => {
+    if (stopped !== null) toaster.create({ type: 'info', title: copy.chargeWindowAccountChanged });
+  }, [stopped]);
+
+  // The approval clock's length (`SMARTRO_APPROVAL_TIMEOUT_MS`): a page still here by then had
+  // its navigation refused or stopped, and nothing else would give the buttons back.
+  useEffect(() => {
+    if (departing === null) return;
+    const clock = setTimeout(() => setDeparting(null), SMARTRO_APPROVAL_TIMEOUT_MS);
+    return () => clearTimeout(clock);
+  }, [departing]);
 
   const flow = provider.data?.provider;
   const smartro = flow === 'smartro';
@@ -91,7 +152,9 @@ export function ChargeForm({ highlightPackageId }: { highlightPackageId?: string
   let workingOn: string | undefined;
   if (smartro) workingOn = prepare.isPending ? prepare.variables?.id : openCheckout?.packageId;
   else workingOn = charge.isPending ? charge.variables?.id : undefined;
-  const working = smartro ? prepare.isPending || openCheckout !== null : charge.isPending;
+  const working = smartro
+    ? prepare.isPending || openCheckout !== null || departing !== null
+    : charge.isPending;
 
   // Once, when the cards first render: bring the package the visitor came for into view.
   useEffect(() => {
@@ -121,12 +184,20 @@ export function ChargeForm({ highlightPackageId }: { highlightPackageId?: string
 
   async function openWindow(pack: ChargePackage) {
     try {
-      const prepared = await prepare.mutateAsync(pack);
+      // The owner is read from the guard once the answer lands, not from this render's
+      // session, which is frozen on the account that clicked.
+      const reservation = await reservationToOpen(prepare.mutateAsync(pack), cacheOwnerAccount);
+      if (reservation === null) {
+        toaster.create({ type: 'error', title: copy.sessionChanged });
+        return;
+      }
+      const { prepared, account: sent } = reservation;
       // Read at click time, in the browser: the SDK decides PC or phone by this same string.
       const userAgent = window.navigator.userAgent;
       setCheckout({
         packageId: pack.id,
         prepared,
+        account: sent,
         scriptUrl: smartroScriptUrl(prepared.scriptUrl, userAgent),
         mobile: isSmartroMobile(userAgent),
         phase: 'loading',
