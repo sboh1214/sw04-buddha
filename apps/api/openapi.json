@@ -4834,10 +4834,16 @@
         "properties": {
           "newPassword": {
             "$ref": "#/components/schemas/Password"
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
           }
         },
         "required": [
-          "newPassword"
+          "newPassword",
+          "expectedAccountId"
         ]
       },
       "Password": {
@@ -4884,11 +4890,17 @@
             "type": "string",
             "maxLength": 20,
             "pattern": "^[0-9 -]+$"
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
           }
         },
         "required": [
           "realName",
-          "phone"
+          "phone",
+          "expectedAccountId"
         ]
       },
       "ChargePackage": {

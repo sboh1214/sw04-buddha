@@ -44,9 +44,25 @@ export const phoneSchema = z
   .transform((value) => value.replace(/[ -]/g, ''))
   .pipe(z.string().regex(PHONE_PATTERN, 'must be a Korean mobile number (01X)'));
 
-/** `PUT /me/contact` (and the email sign-up step): both fields, every time. */
+/** The two fields, both every time: what the forms take and what `user_contacts` stores. */
+export const contactFieldsSchema = z.object({ realName: realNameSchema, phone: phoneSchema });
+export type ContactFields = z.infer<typeof contactFieldsSchema>;
+
+/**
+ * `PUT /me/contact` (and the email sign-up step): the two fields, and the account the screen is
+ * showing (`expectedAccountId`, as on the charge, coupon and trade bodies). The cookie decides
+ * whose contact is written, and a tab whose session was switched elsewhere (another tab signed
+ * in as somebody else; sign-ins are not broadcast) keeps showing the old account until it
+ * refetches — the sign-up step's second request can even leave after the switch — so the server
+ * refuses (403 FORBIDDEN naming the field) rather than overwrite another account's real name and
+ * number with these.
+ */
 export const contactBodySchema = z
-  .object({ realName: realNameSchema, phone: phoneSchema })
+  .object({
+    ...contactFieldsSchema.shape,
+    /** The signed-in user id the screen is showing (better-auth `user.id`, text). */
+    expectedAccountId: z.string().min(1).max(255),
+  })
   .meta({ id: 'ContactBody' });
 export type ContactBody = z.infer<typeof contactBodySchema>;
 

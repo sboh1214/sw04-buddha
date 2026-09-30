@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   REAL_NAME_MAX_LENGTH,
   contactBodySchema,
+  contactFieldsSchema,
   contactSchema,
   phoneSchema,
   realNameSchema,
@@ -93,12 +94,37 @@ describe('phoneSchema', () => {
 
 describe('contact bodies and DTOs', () => {
   it('validates and normalises PUT /me/contact', () => {
-    expect(contactBodySchema.parse({ realName: ' 홍길동 ', phone: '010-1234-5678' })).toEqual({
+    expect(
+      contactBodySchema.parse({
+        realName: ' 홍길동 ',
+        phone: '010-1234-5678',
+        expectedAccountId: 'user-1',
+      }),
+    ).toEqual({ realName: '홍길동', phone: '01012345678', expectedAccountId: 'user-1' });
+    const account = { expectedAccountId: 'user-1' };
+    expect(contactBodySchema.safeParse({ realName: '홍길동', ...account }).success).toBe(false);
+    expect(contactBodySchema.safeParse({ phone: '01012345678', ...account }).success).toBe(false);
+  });
+
+  it('requires the account the screen is showing on PUT /me/contact', () => {
+    // A stale tab must not be able to write whoever the cookie now belongs to.
+    const fields = { realName: '홍길동', phone: '01012345678' };
+    expect(contactBodySchema.safeParse(fields).success).toBe(false);
+    expect(contactBodySchema.safeParse({ ...fields, expectedAccountId: '' }).success).toBe(false);
+    expect(
+      contactBodySchema.safeParse({ ...fields, expectedAccountId: 'u'.repeat(256) }).success,
+    ).toBe(false);
+    expect(contactBodySchema.safeParse({ ...fields, expectedAccountId: undefined }).success).toBe(
+      false,
+    );
+  });
+
+  it('takes the two fields alone as the forms do, normalised the same way', () => {
+    expect(contactFieldsSchema.parse({ realName: ' 홍길동 ', phone: '010-1234-5678' })).toEqual({
       realName: '홍길동',
       phone: '01012345678',
     });
-    expect(contactBodySchema.safeParse({ realName: '홍길동' }).success).toBe(false);
-    expect(contactBodySchema.safeParse({ phone: '01012345678' }).success).toBe(false);
+    expect(contactFieldsSchema.safeParse({ realName: '홍길동' }).success).toBe(false);
   });
 
   it('describes a stored contact with digits-only phone', () => {

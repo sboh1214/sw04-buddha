@@ -10,7 +10,7 @@ import { ContactInputs } from '@/components/auth/contact-inputs';
 import { PasswordInput } from '@/components/ui/password-input';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
-import { ContactStepError, useSetPasswordAndContact } from '@/hooks/use-contact';
+import { passwordStepFailure, useSetPasswordAndContact } from '@/hooks/use-contact';
 import { useMe } from '@/hooks/use-me';
 import { CREDENTIAL_PROVIDER_ID } from '@/lib/auth-client';
 import { contactFormShape } from '@/lib/contact-form';
@@ -87,8 +87,10 @@ export function SetPasswordForm() {
 
   // Mounted once `me` is known, so the schema — with or without the contact fields — is fixed
   // from the form's first render (the gate may have sent the account through /onboarding
-  // already, in which case only the password is asked for).
-  return <SetPasswordFields needsContact={me.contact === null} />;
+  // already, in which case only the password is asked for). Keyed on the account, so a session
+  // switched under this screen (SessionCacheGuard) mounts a fresh form for the new one instead
+  // of keeping the previous account's schema and typed values.
+  return <SetPasswordFields key={me.id} needsContact={me.contact === null} />;
 }
 
 function SetPasswordFields({ needsContact }: { needsContact: boolean }) {
@@ -106,23 +108,43 @@ function SetPasswordFields({ needsContact }: { needsContact: boolean }) {
   });
 
   const onSubmit = handleSubmit(async (values) => {
+    // The account both requests name, read once here (`PasswordStepVariables.accountId`).
+    // Unreachable while the button honours `ready`.
+    const accountId = finish.accountId;
+    if (accountId === undefined) return;
     try {
       await finish.mutateAsync({
         newPassword: values.newPassword,
         contact: needsContact ? { realName: values.realName, phone: values.phone } : null,
+        accountId,
       });
       toaster.create({ type: 'success', title: copy.passwordSet });
       router.push('/');
       router.refresh();
     } catch (error) {
-      if (error instanceof ContactStepError) {
-        // The password is saved, so this screen now answers "already set"; /onboarding is
-        // where the contact can still be given (and the gate would send them there anyway).
-        toaster.create({ type: 'error', title: copy.setPasswordContactFailed });
-        router.push('/onboarding');
-        return;
+      switch (passwordStepFailure(error)) {
+        case 'contact-failed':
+          // The password is saved, so this screen now answers "already set"; /onboarding is
+          // where the contact can still be given (and the gate would send them there anyway).
+          toaster.create({ type: 'error', title: copy.setPasswordContactFailed });
+          router.push('/onboarding');
+          return;
+        case 'contact-session-changed':
+          // Also half done, but the cookie is somebody else's now: /onboarding would be THAT
+          // account's. Home, under whoever is really signed in; the account whose password was
+          // just set meets the onboarding gate on its next sign-in.
+          toaster.create({ type: 'error', title: copy.setPasswordContactSessionChanged });
+          router.push('/');
+          router.refresh();
+          return;
+        case 'session-changed':
+          // Nothing was written. The session refetch the hook started lets SessionCacheGuard
+          // swap this screen for the account that is really signed in.
+          toaster.create({ type: 'error', title: copy.sessionChanged });
+          return;
+        case 'failed':
+          toaster.create({ type: 'error', title: copy.errUnknown });
       }
-      toaster.create({ type: 'error', title: copy.errUnknown });
     }
   });
 
@@ -161,7 +183,7 @@ function SetPasswordFields({ needsContact }: { needsContact: boolean }) {
             />
           </Stack>
         )}
-        <Button type="submit" size="lg" loading={isSubmitting}>
+        <Button type="submit" size="lg" loading={isSubmitting} disabled={!finish.ready}>
           {copy.setPasswordSubmit}
         </Button>
       </Stack>

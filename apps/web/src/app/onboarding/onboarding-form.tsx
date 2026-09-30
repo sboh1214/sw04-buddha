@@ -13,7 +13,12 @@ import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { useUpdateContact } from '@/hooks/use-contact';
 import { useMe } from '@/hooks/use-me';
-import { contactFormSchema, contactFieldError, type ContactFormValues } from '@/lib/contact-form';
+import {
+  contactFormSchema,
+  contactFieldError,
+  contactSaveFailureMessage,
+  type ContactFormValues,
+} from '@/lib/contact-form';
 import { onboardingPath } from '@/lib/onboarding';
 import { profileView } from '@/lib/query-client';
 
@@ -90,8 +95,11 @@ function OnboardingFields() {
   });
 
   const onSubmit = handleSubmit(async (contact) => {
+    // The account the screen shows rides along (`expectedAccountId`, A-PG-24). Unreachable
+    // while the button honours `ready`.
+    if (update.accountId === undefined) return;
     try {
-      await update.mutateAsync(contact);
+      await update.mutateAsync({ ...contact, expectedAccountId: update.accountId });
       toaster.create({ type: 'success', title: copy.contactSaved });
     } catch (error) {
       const fieldError = contactFieldError(error);
@@ -99,7 +107,7 @@ function OnboardingFields() {
         setError(fieldError.field, { message: fieldError.message });
         return;
       }
-      toaster.create({ type: 'error', title: copy.errUnknown });
+      toaster.create({ type: 'error', title: contactSaveFailureMessage(error) });
     }
   });
 
@@ -111,7 +119,13 @@ function OnboardingFields() {
           phone={register('phone')}
           errors={{ realName: errors.realName?.message, phone: errors.phone?.message }}
         />
-        <Button type="submit" size="lg" loading={isSubmitting} data-testid="onboarding-submit">
+        <Button
+          type="submit"
+          size="lg"
+          loading={isSubmitting}
+          disabled={!update.ready}
+          data-testid="onboarding-submit"
+        >
           {copy.onboardingSubmit}
         </Button>
       </Stack>

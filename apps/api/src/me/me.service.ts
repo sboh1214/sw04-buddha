@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { schema, type Db } from '@buddha/db';
-import { type Contact, type ContactBody, type Me, serializePAmount } from '@buddha/shared';
+import { type Contact, type ContactFields, type Me, serializePAmount } from '@buddha/shared';
 import { asc, eq, sql } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
 import { findPgError, isPgError, PG_UNIQUE_VIOLATION } from '../common/errors/pg-error.js';
@@ -102,12 +102,13 @@ export class MeService {
 
   /**
    * ADR-0043: one row per account, created by the first call and replaced by every later one
-   * (both fields, every time — `contactBodySchema` has no optional member). `updated_at` comes
-   * from the database clock, like `created_at` does on the insert.
+   * (both fields, every time — `contactFieldsSchema` has no optional member). `updated_at` comes
+   * from the database clock, like `created_at` does on the insert. The caller has checked the
+   * body's `expectedAccountId` against `userId` (MeController); only the two fields come here.
    *
    * The values never reach a log line: see `contactWriteFailure`.
    */
-  async updateContact(userId: string, contact: ContactBody): Promise<Contact> {
+  async updateContact(userId: string, contact: ContactFields): Promise<Contact> {
     let row: Contact | undefined;
     try {
       [row] = await this.db

@@ -901,6 +901,7 @@ export type components = {
             realName: string;
         };
         ContactBody: {
+            expectedAccountId: string;
             phone: string;
             realName: string;
         };
@@ -1317,6 +1318,7 @@ export type components = {
             status: "accepted" | "rejected";
         };
         SetPasswordBody: {
+            expectedAccountId: string;
             newPassword: components["schemas"]["Password"];
         };
         SettlePaymentBody: {

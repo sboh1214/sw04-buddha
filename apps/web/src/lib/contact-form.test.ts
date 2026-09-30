@@ -1,4 +1,4 @@
-import { contactBodySchema } from '@buddha/shared';
+import { contactFieldsSchema } from '@buddha/shared';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
@@ -6,6 +6,7 @@ import {
   contactFormSchema,
   contactFormValues,
   contactFieldError,
+  contactSaveFailureMessage,
   formatPhone,
 } from './contact-form';
 import { ApiError } from './api';
@@ -57,7 +58,7 @@ describe('contactFormSchema', () => {
     }
   });
 
-  it('accepts and refuses exactly what the API body schema does (the rule is shared)', () => {
+  it('accepts and refuses exactly what the API takes for the two fields (the rule is shared)', () => {
     const candidate = fc.oneof(
       fc.string({ maxLength: 40 }),
       fc.constantFrom(
@@ -75,7 +76,7 @@ describe('contactFormSchema', () => {
     fc.assert(
       fc.property(candidate, candidate, (realName, phone) => {
         const form = contactFormSchema.safeParse({ realName, phone });
-        const api = contactBodySchema.safeParse({ realName, phone });
+        const api = contactFieldsSchema.safeParse({ realName, phone });
         expect(form.success).toBe(api.success);
         if (form.success && api.success) expect(form.data).toEqual(api.data);
       }),
@@ -139,6 +140,8 @@ describe('contactFieldError', () => {
 
   it('leaves everything else to a toast', () => {
     expect(contactFieldError(refusal(['nickname']))).toBeUndefined();
+    // No input shows the account the body names: a server that wanted one is a toast.
+    expect(contactFieldError(refusal(['expectedAccountId']))).toBeUndefined();
     expect(
       contactFieldError(new ApiError(400, { code: 'VALIDATION_ERROR', message: 'x' })),
     ).toBeUndefined();
@@ -147,5 +150,29 @@ describe('contactFieldError', () => {
       contactFieldError(new ApiError(500, { code: 'INTERNAL', message: 'x' })),
     ).toBeUndefined();
     expect(contactFieldError(new Error('network'))).toBeUndefined();
+  });
+});
+
+describe('contactSaveFailureMessage', () => {
+  const forbidden = (path?: string[]) =>
+    new ApiError(403, {
+      code: 'FORBIDDEN',
+      message: 'x',
+      ...(path ? { details: [{ path, message: 'session belongs to another account' }] } : {}),
+    });
+
+  it('says the account changed when the server refused the body as another account', () => {
+    // A-PG-24: nothing was written, and pressing again would be refused the same way until the
+    // screen follows the session — so "try again" is the one thing not to say.
+    expect(contactSaveFailureMessage(forbidden(['expectedAccountId']))).toBe(copy.sessionChanged);
+  });
+
+  it('keeps the generic failure for everything else, the CSRF 403 included', () => {
+    expect(contactSaveFailureMessage(forbidden())).toBe(copy.errUnknown);
+    expect(contactSaveFailureMessage(new ApiError(401, undefined))).toBe(copy.errUnknown);
+    expect(contactSaveFailureMessage(new ApiError(500, { code: 'INTERNAL', message: 'x' }))).toBe(
+      copy.errUnknown,
+    );
+    expect(contactSaveFailureMessage(new TypeError('Failed to fetch'))).toBe(copy.errUnknown);
   });
 });

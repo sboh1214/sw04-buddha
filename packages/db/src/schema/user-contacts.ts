@@ -6,7 +6,8 @@ import { createdAt, updatedAt } from './columns.js';
  * Real name and mobile number of an account (ADR-0043), at most one row per user. The PG needs
  * both for the payment window (BuyerName / BuyerTel); an account without a row is sent to
  * `/onboarding`. Unverified for now (본인인증 comes later): shapes are checked by
- * `contactBodySchema` in @buddha/shared, which stores the phone as digits only.
+ * `contactFieldsSchema` in @buddha/shared (the two stored fields; `contactBodySchema` adds the
+ * request's `expectedAccountId`), which stores the phone as digits only.
  *
  * CASCADE like `profiles`: personal data goes with the account, and nothing else references it.
  */

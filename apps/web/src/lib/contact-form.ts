@@ -1,14 +1,15 @@
 import { phoneSchema, realNameSchema } from '@buddha/shared';
 import * as z from 'zod';
 import { copy } from '@/copy';
-import { isApiError, validationField } from './api';
+import { isApiError, isForAnotherAccount, validationField } from './api';
 
 /**
  * The real-name and mobile-number fields (ADR-0043) as the three forms that ask for them —
  * /onboarding, the sign-up's /set-password step and the settings card — validate them.
  *
  * The RULE is the API's own: `realNameSchema` and `phoneSchema` from @buddha/shared are the
- * schemas `PUT /me/contact` parses its body with, so a form can neither accept a value the
+ * schemas `PUT /me/contact` parses its two fields with (`contactFieldsSchema`; the body adds
+ * `expectedAccountId`, which the hook fills in, never the form), so a form can neither accept a value the
  * server refuses nor refuse one it accepts (PLAN 11.5: the policy is not re-implemented, only
  * the message is localised — the nickname and coupon fields do the same). The shared schemas'
  * own messages are English and are never shown.
@@ -78,4 +79,15 @@ export function contactFieldError(
   if (field === 'realName') return { field, message: copy.errRealNameFormat };
   if (field === 'phone') return { field, message: copy.errPhoneFormat };
   return undefined;
+}
+
+/**
+ * The toast for a contact save that failed with no field to pin it to (`contactFieldError`
+ * answered `undefined`). The 403 naming `expectedAccountId` means the cookie now belongs to
+ * another account (A-PG-24): nothing was written, the hook has asked the session to refetch,
+ * and the generic "try again" would be wrong — the same press would be refused again until the
+ * screen shows the account that is really signed in.
+ */
+export function contactSaveFailureMessage(error: unknown): string {
+  return isForAnotherAccount(error) ? copy.sessionChanged : copy.errUnknown;
 }

@@ -14,6 +14,7 @@ import {
   contactFormSchema,
   contactFormValues,
   contactFieldError,
+  contactSaveFailureMessage,
   type ContactFormValues,
 } from '@/lib/contact-form';
 import { ProfileUnavailable } from './profile-unavailable';
@@ -60,8 +61,11 @@ function ContactFields({ contact }: { contact: Contact | null }) {
   });
 
   const onSubmit = handleSubmit(async (form) => {
+    // The account the card shows rides along (`expectedAccountId`, A-PG-24). Unreachable while
+    // the button honours `ready`.
+    if (update.accountId === undefined) return;
     try {
-      const saved = await update.mutateAsync(form);
+      const saved = await update.mutateAsync({ ...form, expectedAccountId: update.accountId });
       // Explicitly not keepDirtyValues: react-hook-form merges the form's resetOptions into a
       // manual reset too, which would keep the typed '010 9876 5432' instead of the saved number.
       reset(contactFormValues(saved), { keepDirtyValues: false });
@@ -72,7 +76,7 @@ function ContactFields({ contact }: { contact: Contact | null }) {
         setError(fieldError.field, { message: fieldError.message });
         return;
       }
-      toaster.create({ type: 'error', title: copy.errUnknown });
+      toaster.create({ type: 'error', title: contactSaveFailureMessage(error) });
     }
   });
 
@@ -88,7 +92,7 @@ function ContactFields({ contact }: { contact: Contact | null }) {
           <Button
             type="submit"
             loading={update.isPending}
-            disabled={!isDirty}
+            disabled={!isDirty || !update.ready}
             data-testid="contact-save"
           >
             {copy.save}

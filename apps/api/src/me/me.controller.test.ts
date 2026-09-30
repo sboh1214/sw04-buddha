@@ -167,7 +167,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/me (integration)', () => {
 
     it('creates the row and returns the Contact; GET /me reflects it', async () => {
       const res = await putContact(
-        { realName: '홍길동', phone: '01012345678' },
+        { realName: '홍길동', phone: '01012345678', expectedAccountId: user.id },
         { cookie: user.cookie },
       );
       expect(res.statusCode).toBe(200);
@@ -186,7 +186,10 @@ describe.skipIf(!hasTestInfra)('/api/v1/me (integration)', () => {
     });
 
     it('replaces an existing row in place: same created_at, updated_at from the database clock', async () => {
-      await putContact({ realName: '홍길동', phone: '01012345678' }, { cookie: user.cookie });
+      await putContact(
+        { realName: '홍길동', phone: '01012345678', expectedAccountId: user.id },
+        { cookie: user.cookie },
+      );
       // Backdated so "refreshed" is visible whatever the clock resolution.
       const past = new Date('2020-01-01T00:00:00.000Z');
       await t.db
@@ -195,7 +198,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/me (integration)', () => {
         .where(eq(schema.userContacts.userId, user.id));
 
       const res = await putContact(
-        { realName: 'Jane Doe', phone: '01198765432' },
+        { realName: 'Jane Doe', phone: '01198765432', expectedAccountId: user.id },
         { cookie: user.cookie },
       );
       expect(res.statusCode).toBe(200);
@@ -222,7 +225,10 @@ describe.skipIf(!hasTestInfra)('/api/v1/me (integration)', () => {
         [' 010 1234 5678 ', '홍길동'],
         ['016-123-4567', '남궁 민수'],
       ] as const) {
-        const res = await putContact({ realName, phone }, { cookie: user.cookie });
+        const res = await putContact(
+          { realName, phone, expectedAccountId: user.id },
+          { cookie: user.cookie },
+        );
         expect({ phone, status: res.statusCode }).toEqual({ phone, status: 200 });
         const expected = { realName: realName.trim(), phone: phone.replace(/[ -]/g, '') };
         expect(res.json<{ data: unknown }>().data).toEqual(expected);
@@ -231,7 +237,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/me (integration)', () => {
     });
 
     it('refuses an invalid name or phone with 400 VALIDATION_ERROR naming the field, and writes nothing', async () => {
-      const valid = { realName: '홍길동', phone: '01012345678' };
+      const valid = { realName: '홍길동', phone: '01012345678', expectedAccountId: user.id };
       const cases: [Record<string, unknown>, string][] = [
         [{ ...valid, realName: '홍' }, 'realName'],
         [{ ...valid, realName: '홍길동1' }, 'realName'],
@@ -243,8 +249,10 @@ describe.skipIf(!hasTestInfra)('/api/v1/me (integration)', () => {
         [{ ...valid, phone: '0101234567890' }, 'phone'],
         [{ ...valid, phone: '+821012345678' }, 'phone'],
         [{ ...valid, phone: 1012345678 }, 'phone'],
-        [{ realName: '홍길동' }, 'phone'],
-        [{ phone: '01012345678' }, 'realName'],
+        [{ realName: '홍길동', expectedAccountId: user.id }, 'phone'],
+        [{ phone: '01012345678', expectedAccountId: user.id }, 'realName'],
+        [{ realName: '홍길동', phone: '01012345678' }, 'expectedAccountId'],
+        [{ ...valid, expectedAccountId: '' }, 'expectedAccountId'],
       ];
       for (const [payload, field] of cases) {
         const res = await putContact(payload, { cookie: user.cookie });
@@ -262,7 +270,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/me (integration)', () => {
     });
 
     it('answers 401 without a session and 403 for a foreign Origin, writing nothing', async () => {
-      const body = { realName: '홍길동', phone: '01012345678' };
+      const body = { realName: '홍길동', phone: '01012345678', expectedAccountId: user.id };
       const anonymous = await putContact(body);
       expect(anonymous.statusCode).toBe(401);
       expect(errorEnvelopeSchema.parse(anonymous.json()).error.code).toBe('UNAUTHENTICATED');
@@ -277,11 +285,14 @@ describe.skipIf(!hasTestInfra)('/api/v1/me (integration)', () => {
 
     it('keeps each account to its own row: another member sees neither the values nor the row', async () => {
       const other = await signUpTestUser(t);
-      await putContact({ realName: '홍길동', phone: '01012345678' }, { cookie: user.cookie });
+      await putContact(
+        { realName: '홍길동', phone: '01012345678', expectedAccountId: user.id },
+        { cookie: user.cookie },
+      );
       expect((await getMe(other.cookie)).contact).toBeNull();
 
       const res = await putContact(
-        { realName: '김철수', phone: '01087654321' },
+        { realName: '김철수', phone: '01087654321', expectedAccountId: other.id },
         { cookie: other.cookie },
       );
       expect(res.statusCode).toBe(200);
@@ -303,6 +314,38 @@ describe.skipIf(!hasTestInfra)('/api/v1/me (integration)', () => {
           { userId: other.id, realName: '김철수' },
         ]),
       );
+    });
+
+    it('refuses a body naming another account than the cookie (403 naming expectedAccountId), writing nothing', async () => {
+      // A tab still showing `user` after another tab signed in as `other`: the cookie is the
+      // other's, the body names the account on screen. Its values must not replace the other's.
+      const other = await signUpTestUser(t);
+      await putContact(
+        { realName: '김철수', phone: '01087654321', expectedAccountId: other.id },
+        { cookie: other.cookie },
+      );
+      const [before] = await t.db
+        .select()
+        .from(schema.userContacts)
+        .where(eq(schema.userContacts.userId, other.id));
+
+      const res = await putContact(
+        { realName: '홍길동', phone: '01012345678', expectedAccountId: user.id },
+        { cookie: other.cookie },
+      );
+      expect(res.statusCode).toBe(403);
+      const { error } = errorEnvelopeSchema.parse(res.json());
+      expect(error.code).toBe('FORBIDDEN');
+      expect(error.details).toEqual([
+        { path: ['expectedAccountId'], message: 'session belongs to another account' },
+      ]);
+      // Neither account's row moved: the other's is as it was, and the shown one has none.
+      expect(await contactRows()).toEqual([before]);
+      expect((await getMe(user.cookie)).contact).toBeNull();
+      expect((await getMe(other.cookie)).contact).toEqual({
+        realName: '김철수',
+        phone: '01087654321',
+      });
     });
   });
 });

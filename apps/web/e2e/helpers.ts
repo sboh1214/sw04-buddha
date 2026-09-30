@@ -103,8 +103,12 @@ export const test = base.extend<{ admin: APIRequestContext }>({
     // The seed admin is an account like any other, so the onboarding gate (ADR-0043) would send
     // a spec's browser sign-in as the admin (`signIn(…, adminAccount…)`) to /onboarding instead
     // of `/`. Every spec that does that also asks for this fixture, so the admin gets a contact
-    // here — an upsert, so a re-run against a persistent database changes nothing.
-    const contact = await context.put('/api/v1/me/contact', { data: ADMIN_CONTACT });
+    // here — an upsert, so a re-run against a persistent database changes nothing. The body
+    // names the account it is for (`expectedAccountId`, A-PG-24): the sign-in's own answer.
+    const { user } = (await signedIn.json()) as { user: { id: string } };
+    const contact = await context.put('/api/v1/me/contact', {
+      data: { ...ADMIN_CONTACT, expectedAccountId: user.id },
+    });
     if (!contact.ok()) {
       throw new Error(
         `saving the seed admin's contact failed (${String(contact.status())}): ${await contact.text()}`,
