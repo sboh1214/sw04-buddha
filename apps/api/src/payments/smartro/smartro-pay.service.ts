@@ -19,7 +19,12 @@ import { AppError } from '../../common/errors/app-error.js';
 import { findPgError, isPgError, PG_UNIQUE_VIOLATION } from '../../common/errors/pg-error.js';
 import { clockTimestamp } from '../../infra/db/clock.js';
 import { DB } from '../../infra/db/db.provider.js';
-import { type CreditOutcome, type PaymentRow, WalletService } from '../../wallet/wallet.service.js';
+import {
+  type CreditInput,
+  type CreditOutcome,
+  type PaymentRow,
+  WalletService,
+} from '../../wallet/wallet.service.js';
 import { type PaymentEventInput, recordPaymentEvent, resultMessageOf } from '../payment-events.js';
 import { type CancelOutcome } from '../payment-provider.js';
 import { PaymentProviderRegistry } from '../payment-provider.registry.js';
@@ -116,6 +121,31 @@ function partialCancelFix(
     default:
       return `no settle applies to a ${String(payment.status)} payment — adjust the balance only (${adjust})`;
   }
+}
+
+/** Which recorded cancel 재통보 held a credit back (cancelNoticeHold), once it has. */
+interface HeldBy {
+  by: 'full' | 'partial' | undefined;
+}
+
+/**
+ * The `holdBack` of every credit of a SmartroPay approval — the ReturnUrl's and the approval
+ * 재통보's (ADR-0042): no credit while a cancel 재통보 of the card is on record
+ * (recordedCancelNotices), judged under the payment row's lock, which that notice's own
+ * transaction takes too. A full one's own judgement closes the payment (a person settles one it
+ * left open); a partial one means the whole P is not owed, and nothing here says how much is.
+ * `held.by` says which one held the credit back.
+ */
+function cancelNoticeHold(): { held: HeldBy; holdBack: NonNullable<CreditInput['holdBack']> } {
+  const held: HeldBy = { by: undefined };
+  return {
+    held,
+    holdBack: async (tx, locked) => {
+      const notices = await recordedCancelNotices(tx, locked);
+      held.by = notices.full ? 'full' : notices.partial ? 'partial' : undefined;
+      return held.by !== undefined;
+    },
+  };
 }
 
 /**
@@ -622,6 +652,10 @@ export class SmartroPayService {
       return this.netCancel(payment, tid, approval);
     }
 
+    // Held back like the approval 재통보's credit (cancelNoticeHold): a cancel 재통보 of the card
+    // may arrive while the approval runs — the PG approved at our call, and its answer (or the
+    // inquiry's) takes seconds to come back — and a partial one leaves the payment `pending`.
+    const { held, holdBack } = cancelNoticeHold();
     let credit: CreditOutcome;
     try {
       credit = await this.wallet.creditPayment({
@@ -632,6 +666,7 @@ export class SmartroPayService {
         providerRef: tid,
         method: approval.payMethod?.slice(0, METHOD_MAX) ?? null,
         resultMessage: resultMessageOf(approval.resultMessage),
+        holdBack,
       });
     } catch (error) {
       // Read again before cancelling: the credit may have committed and failed only after
@@ -653,6 +688,24 @@ export class SmartroPayService {
     if (credit.credited || credit.status === 'succeeded') {
       // Credited here, or by the 재통보 that arrived while the approval ran.
       return this.walletUrl(payment.id, 'succeeded');
+    }
+    if (credit.heldBack) {
+      // Never net-cancelled: the card is cancelled already, in full or in part, and this service
+      // cancels only in full. The payment stays claimed as it was, for that notice or a person.
+      if (held.by === 'full') {
+        // That notice is recorded before it is judged (under the lock this credit held), so its
+        // judgement follows and closes the payment `cancelled`.
+        this.logger.warn(
+          `payment ${payment.id}: approved (${tid}) but a full cancel 재통보 of the card is on record; not credited — that notice closes it cancelled unless it already ran and did not; if it stays ${String(credit.status)}, check the card in the merchant admin and settle it (POST /admin/payments/${payment.id}/settle)`,
+        );
+      } else {
+        this.logger.error(
+          `payment ${payment.id}: approved (${tid}) but a partial cancel 재통보 of the card is on record; not credited — check the card in the merchant admin, settle it cancelled (POST /admin/payments/${payment.id}/settle; a settle credit is refused: partial_cancel), then adjust the balance by hand (POST /admin/users/:id/balance-adjust)`,
+        );
+      }
+      // As it stands now: `pending` while it is open — or `cancelled` once the full notice's
+      // judgement has closed it.
+      return this.currentResult(payment.id);
     }
     const result = credit.status ? await this.resultOf(payment.id, credit.status) : 'pending';
     if (credit.status === 'cancelled' && result === 'cancelled') {
@@ -964,11 +1017,8 @@ export class SmartroPayService {
       }
       // `failed` too (a claimed one): the PG's approval is authoritative over a failure recorded
       // on our side (an admin who settled it failed, the merchant admin not showing it yet).
-      // Unless a cancel 재통보 of the card is on record (judged under the payment row's lock,
-      // which that notice's own transaction takes too): a full one's own judgement closes the
-      // payment (a person settles one it left open), and a partial one means the whole P is not
-      // owed — nothing here says how much is.
-      const held: { by: 'full' | 'partial' | undefined } = { by: undefined };
+      // Unless a cancel 재통보 of the card is on record (cancelNoticeHold).
+      const { held, holdBack } = cancelNoticeHold();
       let credit: CreditOutcome;
       try {
         credit = await this.wallet.creditPayment({
@@ -979,11 +1029,7 @@ export class SmartroPayService {
           providerRef: tid,
           method: field(fields, 'PayMethod')?.slice(0, METHOD_MAX) ?? null,
           resultMessage: resultMessageOf(field(fields, 'ResultMsg')),
-          holdBack: async (tx, locked) => {
-            const notices = await recordedCancelNotices(tx, locked);
-            held.by = notices.full ? 'full' : notices.partial ? 'partial' : undefined;
-            return held.by !== undefined;
-          },
+          holdBack,
         });
       } catch (error) {
         if (!isPgError(error, PG_UNIQUE_VIOLATION, PROVIDER_REF_UNIQUE)) throw error;

@@ -144,8 +144,9 @@ export interface CreditInput {
   /**
    * Asked with the payment as locked — its row's lock taken after the balance row's, before
    * anything moves — while it is still in `from`: true holds the credit back (nothing written,
-   * `heldBack`). SmartroPay's approval 재통보 holds back a card a cancel 재통보 is on record for,
-   * judged under the lock that notice's own transaction takes.
+   * `heldBack`). SmartroPay's approvals (the ReturnUrl's and the 재통보's: cancelNoticeHold) hold
+   * back a card a cancel 재통보 is on record for, judged under the lock that notice's own
+   * transaction takes.
    */
   holdBack?: (tx: Tx, payment: PaymentRow) => Promise<boolean>;
 }

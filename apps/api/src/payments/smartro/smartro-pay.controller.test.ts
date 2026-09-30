@@ -1675,6 +1675,120 @@ describe.skipIf(!hasTestInfra)('SmartroPay (integration)', () => {
     expectLedgerChain(await ledgerOf(user.id), SIGNUP_BONUS_P + 10_000n);
   });
 
+  it('credits no ReturnUrl approval once a cancel 재통보 of the card arrived while it ran', async () => {
+    // The PG approves at our call, and a cancel made in the merchant admin before its answer
+    // comes back sends its notice first. The ReturnUrl's credit holds back as the approval
+    // 재통보's does — and never net-cancels: the card is cancelled already, in part or in full.
+    /** The ReturnUrl of a fresh payment, whose approval answers success after `meanwhile`. */
+    async function returnWhile(
+      meanwhile: (paymentId: string, approvedTid: string) => Promise<void>,
+    ) {
+      const form = await prepared();
+      const authTid = testTid();
+      const approvedTid = testTid();
+      pg.onApprove = async () => {
+        await meanwhile(form.paymentId, approvedTid);
+        return approvalAnswer({
+          paymentId: form.paymentId,
+          priceKrw: pack.priceKrw,
+          tid: approvedTid,
+        });
+      };
+      const res = await postReturn(form.form.Moid, { Tid: authTid, TrAuthKey: 'auth-key-held' });
+      return { id: form.paymentId, authTid, approvedTid, result: redirectOf(res).result };
+    }
+    const cancelNotice = (
+      paymentId: string,
+      approvedTid: string,
+      extra: { tid?: string; amt?: string; resultCode?: string } = {},
+    ) =>
+      notifyForm({
+        paymentId,
+        priceKrw: pack.priceKrw,
+        tid: approvedTid,
+        otid: approvedTid,
+        resultCode: '2001',
+        stateCd: '2',
+        ...extra,
+      });
+
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    try {
+      // A partial cancel — its own Tid with the approval's as Otid, or part of the amount: the
+      // notice changes nothing, and the approval that answers next is not credited either. The
+      // payment stays claimed `pending` (the admin list flags it) and the log says how to fix it.
+      for (const partial of [{ tid: testTid() }, { amt: '1000' }]) {
+        error.mockClear();
+        const held = await returnWhile(async (paymentId, approvedTid) => {
+          const notice = await postNotify(cancelNotice(paymentId, approvedTid, partial));
+          expect(notice.body).toBe('OK');
+        });
+        expect(held.result).toBe('pending');
+        expect(error).toHaveBeenCalledWith(
+          `payment ${held.id}: approved (${held.approvedTid}) but a partial cancel 재통보 of the card is on record; not credited — check the card in the merchant admin, settle it cancelled (POST /admin/payments/${held.id}/settle; a settle credit is refused: partial_cancel), then adjust the balance by hand (POST /admin/users/:id/balance-adjust)`,
+        );
+        expect(await paymentRow(held.id)).toMatchObject({
+          status: 'pending',
+          providerRef: held.authTid,
+        });
+        expect((await eventsOf(held.id)).map((event) => event.type)).toEqual([
+          'return',
+          'notify',
+          'approval',
+        ]);
+        expect((await myPayment(held.id)).status).toBe('pending');
+      }
+
+      // A full cancel whose notice is recorded but not yet judged (its judgement follows, under
+      // the lock the credit held): held back too — and that judgement closes the payment.
+      warn.mockClear();
+      const racing = await returnWhile(async (paymentId, approvedTid) => {
+        await t.db.insert(schema.paymentEvents).values({
+          paymentId,
+          type: 'notify',
+          resultCode: '2001',
+          payload: { StateCd: '1', ResultCode: '2001', Tid: approvedTid, Amt: '9700' },
+        });
+      });
+      expect(racing.result).toBe('pending');
+      expect(warn).toHaveBeenCalledWith(
+        `payment ${racing.id}: approved (${racing.approvedTid}) but a full cancel 재통보 of the card is on record; not credited — that notice closes it cancelled unless it already ran and did not; if it stays pending, check the card in the merchant admin and settle it (POST /admin/payments/${racing.id}/settle)`,
+      );
+      expect(await paymentRow(racing.id)).toMatchObject({ status: 'pending' });
+      expect((await postNotify(cancelNotice(racing.id, racing.approvedTid))).body).toBe('OK');
+      expect(await paymentRow(racing.id)).toMatchObject({ status: 'cancelled' });
+      expect((await myPayment(racing.id)).cancelConfirmed).toBe(true);
+
+      // A full cancel judged before the answer came back: the payment is closed, and says so.
+      const closed = await returnWhile(async (paymentId, approvedTid) => {
+        expect((await postNotify(cancelNotice(paymentId, approvedTid))).body).toBe('OK');
+      });
+      expect(closed.result).toBe('cancelled');
+      expect(await paymentRow(closed.id)).toMatchObject({ status: 'cancelled' });
+    } finally {
+      error.mockRestore();
+      warn.mockRestore();
+    }
+    // Nothing credited, nothing net-cancelled, no inquiry asked.
+    expect(pg.cancels).toEqual([]);
+    expect(pg.inquiries).toEqual([]);
+    expect(await ledgerOf(user.id)).toHaveLength(1);
+    expect((await balanceOf(user.id)).availableP).toBe(SIGNUP_BONUS_P);
+
+    // A cancel that failed is no cancel: the approval is credited.
+    const credited = await returnWhile(async (paymentId, approvedTid) => {
+      const failed = cancelNotice(paymentId, approvedTid, { resultCode: '2002' });
+      expect((await postNotify(failed)).body).toBe('OK');
+    });
+    expect(credited.result).toBe('succeeded');
+    expect(await paymentRow(credited.id)).toMatchObject({
+      status: 'succeeded',
+      providerRef: credited.approvedTid,
+    });
+    expectLedgerChain(await ledgerOf(user.id), SIGNUP_BONUS_P + 10_000n);
+  });
+
   it('credits a payment we had failed when the PG says it was approved', async () => {
     const payment = await reserveSmartroPayment(t.db, user.id, { claimedBy: testTid() });
     await t.db
