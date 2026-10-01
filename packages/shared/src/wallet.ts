@@ -129,7 +129,11 @@ export const adminPaymentSchema = paymentSchema
      * working on it); a `cancelled` one whose net cancel the PG never confirmed; or a claimed
      * `failed` one the card may be charged for (its approval got no answer or answered the PG's
      * own failure rather than a decline — 9999, W999 and the like — or an approval 재통보 could
-     * not be credited) that no settle has checked since.
+     * not be credited, unless another payment's own approval call made that approval and is
+     * flagged for it instead; or its approval answered a success that names another payment,
+     * whose Tid no other SmartroPay payment holds: another payment's window approved through this
+     * one's ReturnUrl — its `resultMessage` names that Moid and Tid) that no settle has checked
+     * since.
      */
     needsReview: z.boolean(),
   })

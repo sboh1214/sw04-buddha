@@ -40,6 +40,7 @@ import {
   TEST_SMARTRO,
   TEST_WEB_ORIGIN,
   approvalAnswer,
+  crossPostReason,
   formBody,
   notifyForm,
   reserveSmartroPayment,
@@ -48,9 +49,11 @@ import {
 } from '../../test/smartro.js';
 import { sleep } from '../../test/wait.js';
 import { WalletService } from '../../wallet/wallet.service.js';
+import { recordPaymentEvent } from '../payment-events.js';
 import { PAYMENTS_CONFIG, type PaymentsConfig } from '../payments-config.js';
 import { type SmartroResponse, SmartroUnreachableError } from './smartro-client.js';
 import { SMARTRO_NOTIFY_IPS } from './smartro-protocol.js';
+import { SmartroPayService } from './smartro-pay.service.js';
 
 const sha256Base64 = (text: string) => createHash('sha256').update(text).digest('base64');
 
@@ -1336,7 +1339,9 @@ describe.skipIf(!hasTestInfra)('SmartroPay (integration)', () => {
     expect(redirectOf(res)).toEqual({ payment: b.paymentId, result: 'failed' });
     expect(pg.cancels).toHaveLength(0);
     expect(await paymentRow(a.paymentId)).toMatchObject({ status: 'succeeded', providerRef: aTid });
-    expect(await paymentRow(b.paymentId)).toMatchObject({ status: 'failed' });
+    // No reason: nothing is owed, and none may point at A's credited approval as a charge to
+    // look up and cancel (the reason of an approval that only NAMES another payment).
+    expect(await paymentRow(b.paymentId)).toMatchObject({ status: 'failed', resultMessage: null });
 
     // A's approval Tid itself replayed on C: the claim collides with A's reference, so C fails
     // before anything is asked of the PG — and that close is what C's event records.
@@ -1348,6 +1353,578 @@ describe.skipIf(!hasTestInfra)('SmartroPay (integration)', () => {
     expect(await paymentRow(c.paymentId)).toMatchObject({ status: 'failed', providerRef: null });
     expect((await eventsOf(c.paymentId)).map((event) => event.type)).toEqual(['return']);
 
+    expect(pg.cancels).toHaveLength(0);
+    expect((await balanceOf(user.id)).availableP).toBe(SIGNUP_BONUS_P + 10_000n);
+  });
+
+  it("fails a payment whose approval is another payment's window's, and closes that unclaimed one", async () => {
+    // The authentication of A's window posted to B's ReturnUrl (the ReturnUrl is public: a
+    // crafted POST). Our approval call carries only Tid and TrAuthKey, so the PG approves A's
+    // window — A's Moid — through B's claim. It is not B's to credit, and not cancelled (it names
+    // another payment of ours): B fails, and the admin list flags it (payment-settle's suite).
+    // A, never claimed, can never take that approval — its own ReturnUrl collides with B's
+    // claim — so it is closed, and no window of it is approved again.
+    const variants: { label: string; sameTid: boolean; overrides: { Amt?: string } }[] = [
+      { label: 'the approval keeps the Tid', sameTid: true, overrides: {} },
+      { label: 'the approval has a Tid of its own', sameTid: false, overrides: {} },
+      // B's own window with A's Moid typed in (EncryptData does not cover Moid): B's price.
+      { label: 'for another amount', sameTid: true, overrides: { Amt: '5000' } },
+    ];
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    try {
+      for (const [index, { label, sameTid, overrides }] of variants.entries()) {
+        pg.reset();
+        error.mockClear();
+        const aKey = `smartro-cross-post-${String(index)}`;
+        const a = await prepared(aKey);
+        const b = await prepared();
+        const authTid = testTid();
+        const tid = sameTid ? authTid : testTid();
+        pg.onApprove = () =>
+          approvalAnswer({ paymentId: a.paymentId, priceKrw: pack.priceKrw, tid, overrides });
+        const res = await postReturn(b.form.Moid, { Tid: authTid, TrAuthKey: 'ka' });
+        expect({ label, redirect: redirectOf(res) }).toEqual({
+          label,
+          redirect: { payment: b.paymentId, result: 'failed' },
+        });
+        expect(pg.approvals).toHaveLength(1);
+        expect(pg.cancels).toHaveLength(0);
+        // Its reason says where the merchant admin files the charge: A's Moid and the approval's
+        // Tid — not B's 주문번호, which the settle dialog shows, nor the authentication's Tid.
+        expect(await paymentRow(b.paymentId)).toMatchObject({
+          status: 'failed',
+          providerRef: authTid,
+          resultMessage: crossPostReason(a.form.Moid, tid, Number(overrides.Amt ?? pack.priceKrw)),
+        });
+        expect(await paymentRow(a.paymentId)).toMatchObject({
+          status: 'failed',
+          providerRef: null,
+          resultMessage: null,
+        });
+        expect(await eventsOf(a.paymentId)).toHaveLength(0);
+        const logged = error.mock.calls.map(([message]) => String(message));
+        const advice = logged.find((message) =>
+          message.includes(
+            `approval ${tid} names payment ${a.paymentId} (unclaimed, now failed), which does not hold it`,
+          ),
+        );
+        expect(advice, label).toBeTypeOf('string');
+        // A closed unclaimed can take nothing: cancel the card, or honour it on that account.
+        expect(advice).toContain(`under Moid ${a.form.Moid}, not ${b.paymentId}'s`);
+        expect(advice).toContain('No flow of ours credits it');
+        expect(advice).toContain(`cancel ${tid} there and settle ${b.paymentId} cancelled`);
+        expect(advice).toContain(
+          `to honour it, adjust the balance of that account by hand (POST /admin/users/${user.id}/balance-adjust) by the P a charge of ${overrides.Amt ?? String(pack.priceKrw)} KRW buys, and settle ${b.paymentId} failed`,
+        );
+        expect(advice).not.toContain('pending — wait');
+
+        // A's own ReturnUrl and StopUrl afterwards: failed, and nothing is asked of the PG.
+        expect(
+          redirectOf(await postReturn(a.form.Moid, { Tid: authTid, TrAuthKey: 'ka' })),
+        ).toEqual({ payment: a.paymentId, result: 'failed' });
+        const stop = await t.app.inject({
+          method: 'GET',
+          url: `/api/v1/payments/smartro/stop?m=${a.form.Moid}`,
+        });
+        expect(redirectOf(stop)).toEqual({ payment: a.paymentId, result: 'failed' });
+        // A's key opens no new window of it either.
+        expect((await prepare(aKey)).json()).toMatchObject({
+          error: { code: 'DUPLICATE_REQUEST' },
+        });
+        // A's approval 재통보: acknowledged, credited to neither.
+        const notified = await postNotify(
+          notifyForm({ paymentId: a.paymentId, priceKrw: pack.priceKrw, tid }),
+        );
+        expect(notified.body).toBe('OK');
+        expect(pg.approvals).toHaveLength(1);
+        expect(await paymentRow(a.paymentId)).toMatchObject({
+          status: 'failed',
+          providerRef: null,
+        });
+        expect(await paymentRow(b.paymentId)).toMatchObject({
+          status: 'failed',
+          providerRef: authTid,
+        });
+      }
+    } finally {
+      error.mockRestore();
+    }
+    expect(await ledgerOf(user.id)).toHaveLength(1);
+    expect((await balanceOf(user.id)).availableP).toBe(SIGNUP_BONUS_P);
+  });
+
+  it("leaves the payment an approval names as it is unless it is the payer's own, pending and unclaimed", async () => {
+    // Stopped before: failed and unclaimed already — it keeps its stop. Nothing can credit the
+    // approval there, and a cancel 재통보 of it only records on it: cancel it, or honour it.
+    const stopped = await prepared();
+    await t.app.inject({
+      method: 'POST',
+      url: `/api/v1/payments/smartro/stop?m=${stopped.form.Moid}`,
+      headers: FORM_HEADERS,
+      payload: formBody({ ResultCode: 'W002', ResultMsg: '사용자 결제 중단' }),
+    });
+    // Claimed by a window of its own (a re-signed form): its own flow is approving that one. A
+    // cancel 재통보 of the approval would close it cancelled (Moid only, A-PG-22), and its
+    // approval 재통보 may credit it: wait while it is pending.
+    const claimed = await prepared();
+    const claimedTid = testTid();
+    await t.db
+      .update(schema.payments)
+      .set({ providerRef: claimedTid })
+      .where(eq(schema.payments.id, claimed.paymentId));
+    // Another account's, pending and unclaimed: a payer typed its Moid into their own window
+    // (EncryptData does not cover Moid). Its owner's window stays open — never closed from here
+    // — and nothing is honoured on that account.
+    const owner = await signUpTestUser(t);
+    await createTestContact(t.db, owner.id, { realName: '김철수', phone: '01087654321' });
+    const othersKey = 'smartro-cross-post-others';
+    const othersRes = await prepare(othersKey, chargeBody(pack, owner.id), owner);
+    expect(othersRes.statusCode).toBe(200);
+    const others = othersRes.json<{ data: SmartroPrepareResult }>().data;
+
+    const honour = `to honour it, adjust the balance of that account by hand (POST /admin/users/${user.id}/balance-adjust)`;
+    const neverHonoured = `${others.paymentId} is another account's, so it is never honoured on that account`;
+    const cases = [
+      {
+        named: stopped,
+        state: 'failed, unclaimed',
+        says: ['No flow of ours credits it', honour],
+        never: ['pending — wait', neverHonoured],
+      },
+      {
+        named: claimed,
+        state: `pending, claimed: ${claimedTid}`,
+        says: [
+          'pending — wait',
+          `claimed and failed — settle ${claimed.paymentId} first, whether or not the admin list flags it yet`,
+          'cancelled with its own net cancel unconfirmed — settle',
+          honour,
+        ],
+        never: ['No flow of ours credits it', neverHonoured],
+      },
+      {
+        named: others,
+        state: "pending, unclaimed, another account's",
+        says: ['pending — wait', neverHonoured],
+        never: ['No flow of ours credits it', 'to honour it'],
+      },
+    ];
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    try {
+      for (const { named, state, says, never } of cases) {
+        error.mockClear();
+        const b = await prepared();
+        const authTid = testTid();
+        pg.onApprove = () =>
+          approvalAnswer({ paymentId: named.paymentId, priceKrw: pack.priceKrw, tid: authTid });
+        expect(redirectOf(await postReturn(b.form.Moid, { Tid: authTid, TrAuthKey: 'k' }))).toEqual(
+          { payment: b.paymentId, result: 'failed' },
+        );
+        expect(await paymentRow(b.paymentId)).toMatchObject({
+          status: 'failed',
+          providerRef: authTid,
+          resultMessage: crossPostReason(named.form.Moid, authTid, pack.priceKrw),
+        });
+        const logged = error.mock.calls.map(([message]) => String(message));
+        const advice = logged.find((message) =>
+          message.includes(
+            `approval ${authTid} names payment ${named.paymentId} (${state}), which does not hold it`,
+          ),
+        );
+        expect(advice, state).toBeTypeOf('string');
+        for (const text of says)
+          expect({ state, text, has: advice!.includes(text) }).toMatchObject({ has: true });
+        for (const text of never)
+          expect({ state, text, has: advice!.includes(text) }).toMatchObject({ has: false });
+      }
+    } finally {
+      error.mockRestore();
+    }
+    expect(pg.cancels).toHaveLength(0);
+    expect(await paymentRow(stopped.paymentId)).toMatchObject({
+      status: 'failed',
+      providerRef: null,
+      resultMessage: '사용자 결제 중단',
+    });
+    expect((await eventsOf(stopped.paymentId)).map((event) => event.type)).toEqual(['stop']);
+    expect(await paymentRow(claimed.paymentId)).toMatchObject({
+      status: 'pending',
+      providerRef: claimedTid,
+    });
+    expect(await paymentRow(others.paymentId)).toMatchObject({
+      status: 'pending',
+      providerRef: null,
+      resultMessage: null,
+    });
+    expect(await eventsOf(others.paymentId)).toHaveLength(0);
+    // Its owner's key still re-signs the same open payment.
+    const again = await prepare(othersKey, chargeBody(pack, owner.id), owner);
+    expect(again.statusCode).toBe(200);
+    expect(again.json<{ data: SmartroPrepareResult }>().data.paymentId).toBe(others.paymentId);
+    expect((await balanceOf(user.id)).availableP).toBe(SIGNUP_BONUS_P);
+    expect((await balanceOf(owner.id)).availableP).toBe(SIGNUP_BONUS_P);
+  });
+
+  it("reads the named payment again when its close does not happen, and B's answer waits on neither", async () => {
+    // Between the read of A and its close: A's own ReturnUrl claims it (the close finds it
+    // claimed), or the close throws — or A cannot be read again after. B fails all the same, and
+    // the log tells A as it stands. A still pending, claimed or not, is to be waited for: a cancel
+    // 재통보 recorded on it would hold back its own credit once its window claims it (A-PG-22).
+    // markFailed is private: reached by name, since the fake PG cannot time a race.
+    const service = t.app.get<SmartroPayService>(SmartroPayService) as unknown as {
+      markFailed: (paymentId: string, ...rest: unknown[]) => Promise<boolean>;
+      db: { select: (...args: unknown[]) => unknown };
+    };
+    const markFailed = service.markFailed.bind(service);
+    const raceTid = testTid();
+    const spies: { mockRestore: () => void }[] = [];
+    const cases = [
+      {
+        label: 'its own claim wins',
+        close: async (paymentId: string, ...rest: unknown[]) => {
+          await t.db
+            .update(schema.payments)
+            .set({ providerRef: raceTid })
+            .where(eq(schema.payments.id, paymentId));
+          return markFailed(paymentId, ...rest);
+        },
+        state: `pending, claimed: ${raceTid}`,
+        after: { status: 'pending', providerRef: raceTid },
+      },
+      {
+        label: 'the close throws',
+        close: () => Promise.reject(new Error('connection terminated unexpectedly')),
+        state: 'pending, unclaimed; closing it failed: Error', // describeFailure: the name only
+        after: { status: 'pending', providerRef: null },
+      },
+      {
+        label: 'the read after it throws',
+        // The close changes nothing, and the next read — closeNamedPayment's — fails.
+        close: () => {
+          spies.push(
+            vi.spyOn(service.db, 'select').mockImplementationOnce(() => {
+              throw new Error('connection terminated unexpectedly');
+            }),
+          );
+          return Promise.resolve(false);
+        },
+        state: 'pending, unclaimed; reading it again failed: Error',
+        after: { status: 'pending', providerRef: null },
+      },
+    ];
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    try {
+      for (const { label, close, state, after } of cases) {
+        error.mockClear();
+        const a = await prepared();
+        const b = await prepared();
+        const authTid = testTid();
+        pg.onApprove = () =>
+          approvalAnswer({ paymentId: a.paymentId, priceKrw: pack.priceKrw, tid: authTid });
+        const spy = vi
+          .spyOn(service, 'markFailed')
+          .mockImplementation((paymentId, ...rest) =>
+            paymentId === a.paymentId ? close(paymentId, ...rest) : markFailed(paymentId, ...rest),
+          );
+        try {
+          expect({
+            label,
+            redirect: redirectOf(await postReturn(b.form.Moid, { Tid: authTid, TrAuthKey: 'k' })),
+          }).toEqual({ label, redirect: { payment: b.paymentId, result: 'failed' } });
+        } finally {
+          spy.mockRestore();
+          for (const restore of spies.splice(0)) restore.mockRestore();
+        }
+        expect(await paymentRow(b.paymentId)).toMatchObject({
+          status: 'failed',
+          providerRef: authTid,
+        });
+        expect(await paymentRow(a.paymentId)).toMatchObject(after);
+        const logged = error.mock.calls.map(([message]) => String(message));
+        const advice = logged.find((message) =>
+          message.includes(
+            `approval ${authTid} names payment ${a.paymentId} (${state}), which does not hold it`,
+          ),
+        );
+        expect(advice, label).toBeTypeOf('string');
+        expect({ label, wait: advice!.includes('pending — wait') }).toEqual({ label, wait: true });
+        expect({ label, free: advice!.includes('No flow of ours credits it') }).toEqual({
+          label,
+          free: false,
+        });
+      }
+    } finally {
+      error.mockRestore();
+    }
+    expect(pg.cancels).toHaveLength(0);
+    expect((await balanceOf(user.id)).availableP).toBe(SIGNUP_BONUS_P);
+  });
+
+  it('shouts when an approval finds its payment credited meanwhile under another Tid', async () => {
+    // A's Moid with two approvals: a window of A approved through another payment's ReturnUrl,
+    // whose 재통보 credits A first (A claimed by a window of its own), then A's own approval
+    // answers. A is credited once; the second charge has no P — and no flag (a credited payment
+    // is never needsReview), so the log says it. Under the same Tid it is one approval: silent.
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    try {
+      for (const sameTid of [false, true]) {
+        error.mockClear();
+        const a = await prepared();
+        const ownTid = testTid();
+        const otherTid = sameTid ? ownTid : testTid();
+        pg.onApprove = async () => {
+          const notified = await postNotify(
+            notifyForm({ paymentId: a.paymentId, priceKrw: pack.priceKrw, tid: otherTid }),
+          );
+          expect(notified.body).toBe('OK');
+          return approvalAnswer({ paymentId: a.paymentId, priceKrw: pack.priceKrw, tid: ownTid });
+        };
+        const res = await postReturn(a.form.Moid, { Tid: ownTid, TrAuthKey: 'k' });
+        expect(redirectOf(res)).toEqual({ payment: a.paymentId, result: 'succeeded' });
+        expect(await paymentRow(a.paymentId)).toMatchObject({
+          status: 'succeeded',
+          providerRef: otherTid,
+        });
+        const shouted = error.mock.calls
+          .map(([message]) => String(message))
+          .filter((message) => message.includes('credited meanwhile'));
+        expect({ sameTid, shouted }).toEqual({
+          sameTid,
+          shouted: sameTid
+            ? []
+            : [
+                expect.stringContaining(
+                  `approval ${ownTid} for payment ${a.paymentId}, which was credited meanwhile under ${otherTid}: its Moid has two approvals, and ${ownTid} is charged with no P`,
+                ),
+              ],
+        });
+      }
+
+      // The 재통보's credit, refused the same way: the ReturnUrl credited A between the
+      // 재통보's read and its credit (the wallet's credit wrapped to run that one first).
+      error.mockClear();
+      const wallet = t.app.get(WalletService);
+      const credit = wallet.creditPayment.bind(wallet);
+      const a = await prepared();
+      const ownTid = testTid();
+      const noticeTid = testTid();
+      await t.db
+        .update(schema.payments)
+        .set({ providerRef: ownTid })
+        .where(eq(schema.payments.id, a.paymentId));
+      const spy = vi.spyOn(wallet, 'creditPayment').mockImplementationOnce(async (input) => {
+        await credit({ ...input, providerRef: ownTid });
+        return credit(input);
+      });
+      try {
+        const notified = await postNotify(
+          notifyForm({ paymentId: a.paymentId, priceKrw: pack.priceKrw, tid: noticeTid }),
+        );
+        expect(notified.body).toBe('OK');
+      } finally {
+        spy.mockRestore();
+      }
+      expect(await paymentRow(a.paymentId)).toMatchObject({
+        status: 'succeeded',
+        providerRef: ownTid,
+      });
+      expect(error).toHaveBeenCalledWith(
+        expect.stringContaining(
+          `재통보 approval ${noticeTid} for payment ${a.paymentId}, which was credited meanwhile under ${ownTid}`,
+        ),
+      );
+
+      // Its read of the Tid fails: the answer is still `succeeded`, and the log says what it
+      // could not read. The read is the service's next `select` after the approval answered
+      // (the credit runs in a transaction of its own).
+      error.mockClear();
+      const service = t.app.get<SmartroPayService>(SmartroPayService) as unknown as {
+        db: { select: (...args: unknown[]) => unknown };
+      };
+      const b = await prepared();
+      const bTid = testTid();
+      let select: { mockRestore: () => void } | undefined;
+      pg.onApprove = async () => {
+        await postNotify(
+          notifyForm({ paymentId: b.paymentId, priceKrw: pack.priceKrw, tid: testTid() }),
+        );
+        select = vi.spyOn(service.db, 'select').mockImplementationOnce(() => {
+          throw new Error('connection terminated unexpectedly');
+        });
+        return approvalAnswer({ paymentId: b.paymentId, priceKrw: pack.priceKrw, tid: bTid });
+      };
+      try {
+        const res = await postReturn(b.form.Moid, { Tid: bTid, TrAuthKey: 'k' });
+        expect(redirectOf(res)).toEqual({ payment: b.paymentId, result: 'succeeded' });
+      } finally {
+        select?.mockRestore();
+      }
+      expect(error).toHaveBeenCalledWith(
+        expect.stringContaining(
+          `approval ${bTid} for payment ${b.paymentId}, which was credited meanwhile: reading its Tid failed (Error)`,
+        ),
+      );
+    } finally {
+      error.mockRestore();
+    }
+    expect(pg.cancels).toHaveLength(0);
+    expect((await balanceOf(user.id)).availableP).toBe(SIGNUP_BONUS_P + 40_000n);
+  });
+
+  it('names the payment whose ReturnUrl made an approval when a 재통보 of it cannot be credited', async () => {
+    // A window of A's, posted to B's ReturnUrl: whatever the 재통보 of that approval (A's Moid)
+    // finds on A, the log points at B — the payment to settle — not at A.
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    const logged = () => error.mock.calls.map(([message]) => String(message));
+    try {
+      // Neither the approval nor the inquiry answered B: B is pending, claimed with A's
+      // authentication's Tid, and no reason names A. A is unclaimed.
+      const a1 = await prepared();
+      const b1 = await prepared();
+      const t1 = testTid();
+      expect(redirectOf(await postReturn(b1.form.Moid, { Tid: t1, TrAuthKey: 'k' }))).toEqual({
+        payment: b1.paymentId,
+        result: 'pending',
+      });
+      error.mockClear();
+      const notified = await postNotify(
+        notifyForm({ paymentId: a1.paymentId, priceKrw: pack.priceKrw, tid: t1 }),
+      );
+      expect(notified.body).toBe('OK');
+      const unclaimed = logged().find((message) =>
+        message.includes(
+          `재통보 approval ${t1} for payment ${a1.paymentId}, which no ReturnUrl claimed; not credited`,
+        ),
+      );
+      expect(unclaimed).toContain(`payment ${b1.paymentId} holds it as its claim`);
+      expect(unclaimed).toContain(`no answer reached it, so its reason does not name ${t1}`);
+      expect(unclaimed).toContain(`settle ${b1.paymentId} cancelled`);
+      expect(unclaimed).toContain(
+        `/admin/users/${user.id}/balance-adjust: the P a charge of ${String(pack.priceKrw)} KRW buys`,
+      );
+      expect(unclaimed).toContain(`never settle ${b1.paymentId} credit`);
+
+      // A claimed by a window of its own, and B's approval of A's other window keeps the Tid
+      // B holds: its 재통보 hits B's claim (the unique index). Settle B, not A.
+      const a2 = await prepared();
+      await t.db
+        .update(schema.payments)
+        .set({ providerRef: testTid() })
+        .where(eq(schema.payments.id, a2.paymentId));
+      const b2 = await prepared();
+      const t2 = testTid();
+      pg.onApprove = () =>
+        approvalAnswer({ paymentId: a2.paymentId, priceKrw: pack.priceKrw, tid: t2 });
+      await postReturn(b2.form.Moid, { Tid: t2, TrAuthKey: 'k' });
+      error.mockClear();
+      await postNotify(notifyForm({ paymentId: a2.paymentId, priceKrw: pack.priceKrw, tid: t2 }));
+      const recorded = logged().find((message) =>
+        message.includes(
+          `재통보 approval ${t2} for payment ${a2.paymentId} is already recorded on another payment (${b2.paymentId})`,
+        ),
+      );
+      expect(recorded).toContain(
+        `${b2.paymentId}'s approval answered ${t2} naming this payment's Moid`,
+      );
+      expect(recorded).toContain(`settle ${b2.paymentId}, not this one`);
+      expect(await paymentRow(a2.paymentId)).toMatchObject({ status: 'pending' });
+
+      // A credited under its own approval; another window of it, posted to B's ReturnUrl, was
+      // approved under a Tid of its own: its 재통보 finds A credited under another Tid.
+      const a3 = await prepared();
+      const own = testTid();
+      pg.onApprove = () =>
+        approvalAnswer({ paymentId: a3.paymentId, priceKrw: pack.priceKrw, tid: own });
+      await postReturn(a3.form.Moid, { Tid: own, TrAuthKey: 'k' });
+      const b3 = await prepared();
+      const t3 = testTid();
+      pg.onApprove = () =>
+        approvalAnswer({ paymentId: a3.paymentId, priceKrw: pack.priceKrw, tid: t3 });
+      await postReturn(b3.form.Moid, { Tid: testTid(), TrAuthKey: 'k' });
+      error.mockClear();
+      await postNotify(notifyForm({ paymentId: a3.paymentId, priceKrw: pack.priceKrw, tid: t3 }));
+      expect(logged()).toContainEqual(
+        expect.stringContaining(
+          `which is succeeded under ${own}: the approval Tid on record differs — payment ${b3.paymentId} recorded ${t3}: its ReturnUrl made it`,
+        ),
+      );
+    } finally {
+      error.mockRestore();
+    }
+    expect(pg.cancels).toHaveLength(0);
+  });
+
+  it('credits no approval 재통보 to a payment whose claim approved another window, and says when one settled it first', async () => {
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    const logged = () => error.mock.calls.map(([message]) => String(message));
+    const wallet = t.app.get(WalletService);
+    const credit = wallet.creditPayment.bind(wallet);
+    try {
+      // The 재통보 reads B while it is pending, and B fails — its one approval having approved
+      // A's window — before the credit: the credit's lock sees the spent claim and holds back.
+      const a = await prepared();
+      const b = await prepared();
+      const tid = testTid();
+      await t.db
+        .update(schema.payments)
+        .set({ providerRef: tid })
+        .where(eq(schema.payments.id, b.paymentId));
+      await recordPaymentEvent(t.db, {
+        paymentId: b.paymentId,
+        type: 'approval',
+        resultCode: '3001',
+        payload: approvalAnswer({ paymentId: a.paymentId, priceKrw: pack.priceKrw, tid }),
+      });
+      const spy = vi.spyOn(wallet, 'creditPayment').mockImplementationOnce(async (input) => {
+        await t.db
+          .update(schema.payments)
+          .set({ status: 'failed' })
+          .where(eq(schema.payments.id, b.paymentId));
+        return credit(input);
+      });
+      const noticeTid = testTid();
+      try {
+        const notified = await postNotify(
+          notifyForm({ paymentId: b.paymentId, priceKrw: pack.priceKrw, tid: noticeTid }),
+        );
+        expect(notified.body).toBe('OK');
+      } finally {
+        spy.mockRestore();
+      }
+      expect(await paymentRow(b.paymentId)).toMatchObject({ status: 'failed', providerRef: tid });
+      expect(logged()).toContainEqual(
+        expect.stringContaining(
+          `재통보 approval ${noticeTid} for payment ${b.paymentId}, whose one approval approved another payment's window (${tid} of Moid ${a.form.Moid}`,
+        ),
+      );
+
+      // A 재통보 of B's own Moid credits B while its approval call is in flight, and that call
+      // then approves A's window: B cannot fail any more, so nothing flags that approval — the
+      // log says so.
+      error.mockClear();
+      const a2 = await prepared();
+      const b2 = await prepared();
+      const t2 = testTid();
+      pg.onApprove = async () => {
+        await postNotify(
+          notifyForm({ paymentId: b2.paymentId, priceKrw: pack.priceKrw, tid: testTid() }),
+        );
+        return approvalAnswer({ paymentId: a2.paymentId, priceKrw: pack.priceKrw, tid: t2 });
+      };
+      expect(
+        redirectOf(await postReturn(b2.form.Moid, { Tid: testTid(), TrAuthKey: 'k' })),
+      ).toEqual({ payment: b2.paymentId, result: 'succeeded' });
+      expect(logged()).toContainEqual(
+        expect.stringContaining(
+          `approval ${t2} names payment ${a2.paymentId} (unclaimed, now failed), which does not hold it; not cancelled — but ${b2.paymentId} was succeeded before it could fail`,
+        ),
+      );
+      expect(logged()).toContainEqual(
+        expect.stringContaining(`so nothing flags ${t2}: it is charged with no P`),
+      );
+    } finally {
+      error.mockRestore();
+    }
     expect(pg.cancels).toHaveLength(0);
     expect((await balanceOf(user.id)).availableP).toBe(SIGNUP_BONUS_P + 10_000n);
   });

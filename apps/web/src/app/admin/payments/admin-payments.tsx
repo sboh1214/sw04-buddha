@@ -386,6 +386,9 @@ function SettleDialog({ payment, onClose }: { payment: AdminPayment; onClose: ()
   const selected = useWatch({ control, name: 'outcome' });
   const loading = settle.isPending;
   const moid = merchantOrderId(payment.id);
+  // As on the row. It may name where the merchant admin files the card instead of `moid`: an
+  // approval of another payment's window, under that payment's 주문번호 and its own TID.
+  const reason = paymentFailureReason(payment);
   const sites = merchantAdminSites(provider.data);
   // The radio the outcome's focus lands on (`setFocus`, and the resolver's own refusal): the
   // chosen one, or the first while none of those offered is chosen.
@@ -517,6 +520,15 @@ function SettleDialog({ payment, onClose }: { payment: AdminPayment; onClose: ()
                       <Text as="span" fontFamily="mono" data-testid="payment-settle-moid">
                         {moid}
                       </Text>
+                    </Text>
+                  )}
+                  {reason !== null && (
+                    <Text
+                      fontSize="sm"
+                      wordBreak="break-word"
+                      data-testid="payment-settle-result-reason"
+                    >
+                      {copy.paymentResultReason} {reason}
                     </Text>
                   )}
                 </Stack>

@@ -2,6 +2,7 @@ import { HttpException, HttpStatus, Inject, Injectable, Logger } from '@nestjs/c
 import { schema, type Db } from '@buddha/db';
 import {
   CARD_MIN_PRICE_KRW,
+  formatKrw,
   isNoEmailAddress,
   moidToPaymentId,
   paymentIdToMoid,
@@ -13,7 +14,7 @@ import {
   type PaymentStatus,
   type SmartroPrepareResult,
 } from '@buddha/shared';
-import { and, eq, inArray, isNotNull, isNull, ne, or } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
 import { assertExpectedAccount } from '../../auth/expected-account.js';
 import { AppError } from '../../common/errors/app-error.js';
 import { findPgError, isPgError, PG_UNIQUE_VIOLATION } from '../../common/errors/pg-error.js';
@@ -31,9 +32,12 @@ import { PaymentProviderRegistry } from '../payment-provider.registry.js';
 import {
   PROVIDER_REF_UNIQUE,
   type CancelNotice,
+  type CrossPostedApproval,
+  approvalsMadeElsewhere,
   approvedAmountOf,
   cancelNoticeKind,
   cancelsApprovalOf,
+  crossPostedApprovalOf,
   markRefunded,
   netCancelOutcome,
   recordedCancelNotices,
@@ -49,6 +53,7 @@ import {
 } from './smartro-client.js';
 import { stringField } from './smartro-payment.provider.js';
 import {
+  APPROVAL_SUCCESS_CODES,
   ediDate,
   encryptData,
   goodsName,
@@ -77,6 +82,27 @@ const NET_CANCEL_REASON = '가맹점 승인 처리 실패로 인한 자동 취�
 const NOTICE_CANCEL_REASON = '결제대행사 취소 통보에 따른 취소';
 
 /**
+ * `payments.result_message` of a payment whose approval was another payment's window (netCancel,
+ * the payment it only names): the Moid and the Tid the merchant admin files that charge under,
+ * and what it charged (the approval's Amt — the other payment's price, or this one's when that
+ * Moid was typed into this payment's own window). The settle dialog shows this payment's own
+ * 주문번호, under which the merchant admin finds nothing; the admin row's reason line (and the
+ * payer's) says where to look instead. Worded to stay true once settled: honoured, the P comes
+ * from a balance adjustment, never from this payment.
+ */
+function crossPostReason(moid: string, tid: string, amount: number | null): string | null {
+  const charged = amount === null ? '' : `승인 금액 ${formatKrw(amount)}, `;
+  return resultMessageOf(
+    `다른 주문번호(${moid})의 결제창이 이 결제로 승인됨 — ${charged}승인 거래번호(TID) ${tid}, 이 결제로는 충전하지 않음(관리자 확인)`,
+  );
+}
+
+/** An approval's Amt as a log says it: what the card was charged, when the answer told. */
+function chargedText(amount: number | null): string {
+  return amount === null ? 'an amount its answer did not give' : `${String(amount)} KRW`;
+}
+
+/**
  * What a cancel 재통보 that went through did (settleCancelNotice): finished a refund, confirmed a
  * net cancel, closed a payment not yet credited — or nothing, and why.
  */
@@ -88,6 +114,7 @@ type CancelNoticeVerdict =
   | 'partial'
   | 'unclaimed'
   | 'other-approval'
+  | 'cross-post'
   | 'settled';
 
 /**
@@ -123,9 +150,14 @@ function partialCancelFix(
   }
 }
 
-/** Which recorded cancel 재통보 held a credit back (cancelNoticeHold), once it has. */
+/**
+ * What held a credit back, once something has: a recorded cancel 재통보 (cancelNoticeHold), or —
+ * the approval 재통보's only (approvalNoticeHold) — the approval that spent the payment's claim on
+ * another payment's window (`crossPost`).
+ */
 interface HeldBy {
-  by: 'full' | 'partial' | undefined;
+  by: 'full' | 'partial' | 'cross-post' | undefined;
+  crossPost?: CrossPostedApproval;
 }
 
 /**
@@ -149,6 +181,29 @@ function cancelNoticeHold(): { held: HeldBy; holdBack: NonNullable<CreditInput['
 }
 
 /**
+ * The approval 재통보's `holdBack`: cancelNoticeHold's — and first, none for a payment whose one
+ * approval call approved another payment's window (crossPostedApprovalOf), judged under the
+ * same lock: no approval of its own Moid is its own, and a credit would end its flag while that
+ * window's charge is owed. Before the cancel notices: a cancel 재통보 of its Moid closes no such
+ * payment (cancelNoticeVerdict), so it is no reason the log may give.
+ */
+function approvalNoticeHold(): { held: HeldBy; holdBack: NonNullable<CreditInput['holdBack']> } {
+  const inner = cancelNoticeHold();
+  return {
+    held: inner.held,
+    holdBack: async (tx, locked) => {
+      const crossPost = await crossPostedApprovalOf(tx, locked);
+      if (crossPost) {
+        inner.held.by = 'cross-post';
+        inner.held.crossPost = crossPost;
+        return true;
+      }
+      return inner.holdBack(tx, locked);
+    },
+  };
+}
+
+/**
  * A cancel 재통보 judged under the payment row's lock: the verdict, and the payment as it was
  * then (its status and reference) with the approval amount the notice was read against.
  */
@@ -157,6 +212,46 @@ interface JudgedCancelNotice {
   status?: PaymentStatus;
   providerRef?: string | null;
   amount: number;
+  /** The approval that spent the payment's claim on another payment's window, if one did. */
+  crossPost?: CrossPostedApproval;
+}
+
+/**
+ * Another payment of ours an approval belongs to (otherPaymentOf): one that holds its Tid as
+ * `provider_ref` (`holdsTid`), else the one its Moid names.
+ */
+interface OtherPayment extends Pick<
+  PaymentRow,
+  'id' | 'userId' | 'provider' | 'status' | 'providerRef'
+> {
+  holdsTid: boolean;
+}
+
+/**
+ * The payment an approval only names, as closeNamedPayment left it: how it stands for the log
+ * (`state`, with what went wrong closing or reading it), and what picks the advice
+ * (crossPostAdvice): its status and claim; whether its own claim was spent on yet another
+ * payment's window (`spent`: then nothing of its Moid credits or closes it); and, `cancelled`,
+ * whether its own net cancel is still unconfirmed (`unconfirmed`: open to a settle).
+ */
+interface NamedPayment {
+  state: string;
+  status: PaymentStatus;
+  providerRef: string | null;
+  spent: boolean;
+  unconfirmed: boolean;
+}
+
+/**
+ * Another SmartroPay payment whose own ReturnUrl made an approval, for a log to name
+ * (madeThrough): one holding its Tid as its claim (`holds`), else one whose approval call's
+ * answer recorded it — with the Moid that answer named (`moid`: none when no answer reached it).
+ */
+interface MadeThrough {
+  id: string;
+  userId: string;
+  holds: boolean;
+  moid: string | undefined;
 }
 
 /** The handle `db.transaction` hands its callback; @buddha/db exports no alias for it. */
@@ -687,6 +782,7 @@ export class SmartroPayService {
     }
     if (credit.credited || credit.status === 'succeeded') {
       // Credited here, or by the 재통보 that arrived while the approval ran.
+      if (!credit.credited) await this.creditedUnderAnotherTid(payment, tid, 'approval');
       return this.walletUrl(payment.id, 'succeeded');
     }
     if (credit.heldBack) {
@@ -754,17 +850,60 @@ export class SmartroPayService {
    *   for an admin to check in the merchant admin and settle (`needsReview`).
    *
    * Never an approval that belongs to ANOTHER payment of ours: its Moid names one, or its Tid
-   * is already one's reference. A payer who replays an earlier payment's Tid and TrAuthKey here
-   * gets that approval back from the inquiry, and cancelling it would cancel a card whose P was
-   * credited. That payment's own flow owns the approval; this one, which nothing approved, fails.
+   * is already one's reference. This payment, which nothing approved, fails (claimed) and is
+   * never credited with it (a settle credit is refused: approval_mismatch, the Moid).
+   * - The other payment HOLDS the Tid (a payer who replays an earlier payment's Tid and
+   *   TrAuthKey here gets that approval back from the inquiry): its own flow has the approval,
+   *   and cancelling it would cancel a card whose P was credited. Nothing more is owed.
+   * - It only NAMES it (Moid): the authentication of that payment's window was posted to this
+   *   payment's ReturnUrl — under 인증/승인 분리 our call approves whatever Tid and TrAuthKey it
+   *   is given. While the named payment is unclaimed, no flow of ours can ever credit that
+   *   approval: its own ReturnUrl with the same Tid collides with this claim ('foreign-tid'),
+   *   its approval 재통보 credits claimed payments only, and the settle takes no unclaimed one.
+   *   So the card is charged with no P, and the admin list flags THIS payment, which holds the
+   *   claim and the answer (`needsReview`: a successful approval on a failed payment whose Tid
+   *   no other payment holds), for a person to cancel the card in the merchant admin or honour
+   *   it by hand. Its reason (crossPostReason) names the Moid, the Tid and the amount the
+   *   merchant admin files that charge under: the admin row shows it, and the settle dialog's
+   *   주문번호 is this payment's own. Nothing of this payment's own Moid ends that flag after: its
+   *   claim is spent (crossPostedApprovalOf), so an approval 재통보 of its Moid is not credited,
+   *   a cancel 재통보 of it does not close it, and a settle does not credit it — such an approval
+   *   was made elsewhere and is settled there. The named payment, while `pending`, unclaimed and the same account's, is
+   *   closed `failed` with it (closeNamedPayment), so its own ReturnUrl and its idempotency key
+   *   approve no window of it again. That is all it stops: a window of it already
+   *   authenticated, cross-posted the same way to a third payment's ReturnUrl, is approved there
+   *   too — and flags that payment, never credits it. Another account's is left open: a payer
+   *   can type any Moid into a window of their own (EncryptData does not cover it). A named
+   *   payment claimed already (a window of its own, or its own claim won the race with that
+   *   close) may get two approvals under its Moid. The log's advice turns on how the named one
+   *   stands (crossPostAdvice), and ADR-0042's 2026-10-01 addendum lists what is left open.
    */
   private async netCancel(payment: PaymentRow, tid: string, approval: Approval): Promise<string> {
     const owner = await this.otherPaymentOf(payment.id, approval.moid, tid);
-    if (owner !== undefined) {
-      this.logger.error(
-        `payment ${payment.id}: approval ${tid} belongs to payment ${owner}; not cancelled, this payment fails — check both by hand`,
-      );
+    if (owner?.holdsTid) {
       const failed = await this.markFailed(payment.id, null, 'claimed');
+      this.logger.error(
+        `payment ${payment.id}: approval ${tid} belongs to payment ${owner.id}, which holds it; not cancelled, this payment fails`,
+      );
+      return failed ? this.walletUrl(payment.id, 'failed') : this.currentResult(payment.id);
+    }
+    if (owner !== undefined) {
+      const amount = parseKrw(approval.amt);
+      const failed = await this.markFailed(
+        payment.id,
+        crossPostReason(paymentIdToMoid(owner.id), tid, amount),
+        'claimed',
+      );
+      // Not failed: settled meanwhile (a 재통보 of its own Moid credited or closed it while this
+      // approval ran) — then nothing flags this approval, and the log says so.
+      const meanwhile = failed
+        ? undefined
+        : await this.currentStatus(payment.id).then(
+            (status) => status ?? 'gone',
+            () => 'unreadable',
+          );
+      const named = await this.closeNamedPayment(owner, payment.userId);
+      this.logger.error(this.crossPostAdvice(payment, owner, named, tid, amount, meanwhile));
       return failed ? this.walletUrl(payment.id, 'failed') : this.currentResult(payment.id);
     }
     // Reserve before the PG is asked: `cancelled` first, so a 재통보 credit racing this cancel
@@ -986,26 +1125,43 @@ export class SmartroPayService {
         // Every credit stores its approval's Tid, and a payment has one approval: a credited
         // one whose approval notice names another Tid holds a wrong one — a settle credit given
         // a Tid other than the approval's — and a refund would cancel that, not this card.
+        // Or the Moid had a second approval, made through another payment's ReturnUrl (netCancel):
+        // a window of it authenticated and posted there — a charge with no P, which that payment
+        // is flagged for.
         if (
           (payment.status === 'succeeded' || payment.status === 'refunding') &&
           payment.providerRef !== null &&
           payment.providerRef !== tid
         ) {
+          const made = await this.madeThrough(tid, payment.id);
+          const reading = made
+            ? `payment ${made.id} ${made.holds ? 'holds' : 'recorded'} ${tid}: its ReturnUrl made it, approving a window of this payment's posted there — a second charge under this Moid (Amt ${field(fields, 'Amt') ?? 'not given'}), with no P, which the admin list flags on ${made.id} while no other SmartroPay payment holds ${tid}: settle it there (cancel ${tid} in the merchant admin and settle ${made.id} cancelled, or honour it), not here`
+            : `either a settle's tid (payment_settle) is not the approval's — then a refund cancels ${payment.providerRef}, not ${tid} — or this Moid had a second approval made elsewhere (a window of it posted to another payment's ReturnUrl: look in the admin list for a payment whose reason names this Moid and ${tid}, and settle that one), and ${tid} is charged with no P: check both in the merchant admin`;
           this.logger.error(
-            `재통보 approval ${tid} for payment ${payment.id}, which is ${payment.status} under ${payment.providerRef}: the approval Tid on record differs — check the settle's tid (payment_settle) against the merchant admin; a refund cancels ${payment.providerRef}, not ${tid}. Nothing changed`,
+            `재통보 approval ${tid} for payment ${payment.id}, which is ${payment.status} under ${payment.providerRef}: the approval Tid on record differs — ${reading}. Nothing changed`,
           );
         }
         return NOTIFY_OK;
       }
-      // Never claimed by our ReturnUrl, so never approved: under 인증/승인 분리 the PG approves
-      // only when WE call urlCallApproval, and that call always follows a committed claim
-      // (`provider_ref` set). An approval notice for an unclaimed payment is not genuine,
-      // whatever it says — and no re-send can change that, so it is acknowledged. Its `notify`
-      // event above is the record.
+      // Never claimed by our ReturnUrl, so never approved through its own: under 인증/승인 분리
+      // the PG approves only when WE call urlCallApproval, and that call always follows a
+      // committed claim (`provider_ref` set). An approval notice for an unclaimed payment is
+      // forged — or for an approval our call made through ANOTHER payment's ReturnUrl, which
+      // the admin list flags on that payment (netCancel). Either way no re-send changes
+      // anything, so it is acknowledged. Its `notify` event above is the record.
       if (payment.providerRef === null) {
+        const made = await this.madeThrough(tid, payment.id);
         this.logger.error(
-          `재통보 approval ${tid} for payment ${payment.id}, which no ReturnUrl claimed; not credited — check it by hand`,
+          `재통보 approval ${tid} for payment ${payment.id}, which no ReturnUrl claimed; not credited — ${made ? this.madeThroughAdvice(made, payment, tid, parseKrw(field(fields, 'Amt'))) : "check it by hand (if another payment's ReturnUrl made it, the admin list flags that payment, whose reason names this payment's Moid)"}`,
         );
+        return NOTIFY_OK;
+      }
+      // Its claim spent on another payment's window (crossPostedApprovalOf): this approval of its
+      // Moid was made elsewhere. Judged again under the credit's lock (approvalNoticeHold), for a
+      // claim spent while this notice was on its way.
+      const spent = await crossPostedApprovalOf(this.db, payment);
+      if (spent) {
+        await this.logSpentClaimNotice(payment, tid, spent);
         return NOTIFY_OK;
       }
       const mid = field(fields, 'Mid', 'MID');
@@ -1017,8 +1173,9 @@ export class SmartroPayService {
       }
       // `failed` too (a claimed one): the PG's approval is authoritative over a failure recorded
       // on our side (an admin who settled it failed, the merchant admin not showing it yet).
-      // Unless a cancel 재통보 of the card is on record (cancelNoticeHold).
-      const { held, holdBack } = cancelNoticeHold();
+      // Unless a cancel 재통보 of the card is on record, or its claim went to another payment's
+      // window (approvalNoticeHold).
+      const { held, holdBack } = approvalNoticeHold();
       let credit: CreditOutcome;
       try {
         credit = await this.wallet.creditPayment({
@@ -1035,14 +1192,26 @@ export class SmartroPayService {
         if (!isPgError(error, PG_UNIQUE_VIOLATION, PROVIDER_REF_UNIQUE)) throw error;
         // The Tid is already another payment's reference: crediting it here would count one
         // PG transaction twice. No re-send can change that, so OK rather than a 5xx the PG
-        // would repeat until its retries run out.
+        // would repeat until its retries run out. That payment's ReturnUrl may have made it — a
+        // window of this one posted there (netCancel) — and then it is settled there, while this
+        // payment's own approval is another, still to be checked.
+        const made = await this.madeThrough(tid, payment.id);
+        const own = paymentIdToMoid(payment.id);
+        const holder = made?.holds ? made.id : 'that payment';
+        const settleThis = `check both in the merchant admin, then settle this one cancelled or failed (POST /admin/payments/${payment.id}/settle; a settle credit is refused: approval_mismatch)`;
+        const reading =
+          made?.holds && made.moid === own
+            ? `${holder}'s approval answered ${tid} naming this payment's Moid: its ReturnUrl made it, approving a window of this payment's posted there (the admin list flags ${holder}, and its reason names it) — settle ${holder}, not this one, and check this payment's own approval separately in the merchant admin`
+            : `if ${holder}'s ReturnUrl made it (a window of this payment's posted there: its reason names this Moid, or no answer reached it), settle ${holder}, not this one, and check this payment's own approval separately; otherwise ${settleThis}`;
         this.logger.error(
-          `재통보 approval ${tid} for payment ${payment.id} is already recorded on another payment; not credited — check both in the merchant admin, then settle this one cancelled or failed (POST /admin/payments/${payment.id}/settle; a settle credit is refused: approval_mismatch)`,
+          `재통보 approval ${tid} for payment ${payment.id} is already recorded on another payment${made?.holds ? ` (${made.id})` : ''}; not credited — ${reading}`,
         );
         return NOTIFY_OK;
       }
       if (credit.credited) {
         this.logger.log(`payment ${payment.id} credited by the 재통보 (${tid})`);
+      } else if (credit.heldBack && held.by === 'cross-post' && held.crossPost) {
+        await this.logSpentClaimNotice(payment, tid, held.crossPost);
       } else if (credit.heldBack && held.by === 'full') {
         // That notice is recorded before it is judged (under this same lock), so its judgement
         // normally follows and closes the payment. It may also have run already and closed
@@ -1059,6 +1228,9 @@ export class SmartroPayService {
         // A net cancel reserved the payment between our read and the credit: the same rule as
         // for a payment found `cancelled` above, on the status as it is now.
         return this.noticeForCancelled(payment.id, tid);
+      } else if (credit.status === 'succeeded') {
+        // The ReturnUrl credited it between our read and the credit.
+        await this.creditedUnderAnotherTid(payment, tid, '재통보 approval');
       }
       return NOTIFY_OK;
     }
@@ -1086,7 +1258,10 @@ export class SmartroPayService {
    * - `pending` or `failed` that our ReturnUrl claimed: `cancelled`, confirmed the same way — the
    *   approval's answer was lost and the card was cancelled in the merchant admin — so no
    *   approval 재통보 re-sent afterwards can credit P for a cancelled card (it credits `failed`
-   *   too). An unclaimed one was never approved (see the approval branch): recorded only.
+   *   too). An unclaimed one was never approved (see the approval branch): recorded only. So is
+   *   a `failed` one whose claim approved another payment's window (crossPostedApprovalOf, a
+   *   partial cancel too): no approval of its Moid is its own, and closed, it would no longer be
+   *   flagged for the charge it holds.
    * - `succeeded`: cancelled outside this service; nothing moves, and this shouts. An admin
    *   refund of it then finishes on this notice (hasCancelNotice), whatever its cancel hears.
    */
@@ -1124,8 +1299,15 @@ export class SmartroPayService {
       // refused that cancel and the payment is `pending` again), and a full cancel of it
       // carries that amount.
       const amount = await approvedAmountOf(tx, locked);
-      const verdict = await this.cancelNoticeVerdict(tx, locked, cancel, amount, confirmation);
-      return { verdict, status: locked.status, providerRef: locked.providerRef, amount };
+      const crossPost = await crossPostedApprovalOf(tx, locked);
+      const verdict = await this.cancelNoticeVerdict(
+        tx,
+        locked,
+        cancel,
+        { amount, crossPost },
+        confirmation,
+      );
+      return { verdict, status: locked.status, providerRef: locked.providerRef, amount, crossPost };
     });
     const { verdict, amount } = judged;
 
@@ -1169,22 +1351,36 @@ export class SmartroPayService {
       case 'other-approval':
         this.otherApprovalCancelled(payment.id, judged, where);
         break;
+      case 'cross-post': {
+        const spent = judged.crossPost;
+        const made = await this.madeThrough(cancel.otid ?? tid, payment.id);
+        this.logger.error(
+          `cancel 재통보 for payment ${payment.id} (${where}), whose one approval approved another payment's window (${spent?.tid ?? 'its claim'} of Moid ${spent?.moid ?? 'unknown'}): it cancels no approval of this payment's own but one of its Moid made elsewhere — ${made ? `through payment ${made.id}'s ReturnUrl, which the admin list flags for it: settle that one (cancelled)` : "through another payment's ReturnUrl (look in the admin list for one whose reason names this Moid) or by the payer's own call"}; recorded, nothing changed — this does not cancel ${spent?.tid ?? 'its approval'}, which ${payment.id} answers for (the admin list flags it until a settle checks it)`,
+        );
+        break;
+      }
       case 'settled':
         break;
     }
     return NOTIFY_OK;
   }
 
-  /** settleCancelNotice's decision on the payment as locked (`amount`: approvedAmountOf). */
+  /**
+   * settleCancelNotice's decision on the payment as locked (`amount`: approvedAmountOf;
+   * `crossPost`: crossPostedApprovalOf).
+   */
   private async cancelNoticeVerdict(
     tx: Tx,
     locked: PaymentRow,
     cancel: CancelNotice,
-    amount: number,
+    approval: { amount: number; crossPost: CrossPostedApproval | undefined },
     confirmation: PaymentEventInput,
   ): Promise<CancelNoticeVerdict | 'no-cancel'> {
-    const kind = cancelNoticeKind(cancel, { method: locked.method, priceKrw: amount });
+    const kind = cancelNoticeKind(cancel, { method: locked.method, priceKrw: approval.amount });
     if (kind === 'none') return 'no-cancel';
+    // Its claim approved another payment's window: whatever this cancels, it is not an approval
+    // of this payment's own (crossPostedApprovalOf).
+    if (approval.crossPost) return 'cross-post';
     if (kind === 'partial') return 'partial';
     const at = await clockTimestamp(tx);
     const ours = cancelsApprovalOf(locked, cancel.tid);
@@ -1288,17 +1484,24 @@ export class SmartroPayService {
   }
 
   /**
-   * Another payment than `paymentId` that `moid` names or whose reference `tid` already is:
-   * the payment an approval belongs to when it is not this one.
+   * The payment an approval belongs to when it is not `paymentId`: another SmartroPay payment
+   * whose reference `tid` already is (`holdsTid`), else another payment `moid` names (netCancel).
    */
   private async otherPaymentOf(
     paymentId: string,
     moid: string | undefined,
     tid: string,
-  ): Promise<string | undefined> {
+  ): Promise<OtherPayment | undefined> {
     const namedId = moid === undefined ? null : moidToPaymentId(moid);
-    const [row] = await this.db
-      .select({ id: schema.payments.id })
+    // At most two rows: the unique index lets one payment hold the Tid, and a Moid names one.
+    const rows = await this.db
+      .select({
+        id: schema.payments.id,
+        userId: schema.payments.userId,
+        provider: schema.payments.provider,
+        status: schema.payments.status,
+        providerRef: schema.payments.providerRef,
+      })
       .from(schema.payments)
       .where(
         and(
@@ -1309,14 +1512,280 @@ export class SmartroPayService {
           ),
         ),
       )
-      .limit(1);
-    return row?.id;
+      .limit(2);
+    const holder = rows.find((row) => row.provider === 'smartro' && row.providerRef === tid);
+    if (holder) return { ...holder, holdsTid: true };
+    const [named] = rows;
+    return named && { ...named, holdsTid: false };
+  }
+
+  /**
+   * netCancel's payment an approval only NAMES: closed `failed` while it is a `pending`
+   * SmartroPay payment of the payer's own account that no ReturnUrl claimed — no reason, no
+   * event; the error log is the link to the payment that made the approval. Another account's
+   * is left as it is: a payer can type any Moid into a window of their own (EncryptData does
+   * not cover it), and the close would end its owner's open window. Otherwise, or when that
+   * close lost the race to its own claim, it is read again for the log's advice
+   * (crossPostAdvice) — with, claimed and `failed`, whether its own claim approved yet another
+   * payment's window (crossPostedApprovalOf), and, `cancelled`, whether its own net cancel is
+   * confirmed. Never throws: the request's own answer does not wait on this; what it cannot
+   * read picks the more careful advice.
+   */
+  private async closeNamedPayment(owner: OtherPayment, userId: string): Promise<NamedPayment> {
+    const nothingOpen = { spent: false, unconfirmed: false };
+    if (owner.provider !== 'smartro') {
+      const { status, providerRef } = owner;
+      return { state: `${owner.provider}, ${status}`, status, providerRef, ...nothingOpen };
+    }
+    const sameAccount = owner.userId === userId;
+    let trouble = '';
+    if (owner.status === 'pending' && owner.providerRef === null && sameAccount) {
+      try {
+        if (await this.markFailed(owner.id, null, 'unclaimed')) {
+          const state = 'unclaimed, now failed';
+          return { state, status: 'failed', providerRef: null, ...nothingOpen };
+        }
+      } catch (error) {
+        trouble = `; closing it failed: ${describeFailure(error)}`;
+      }
+    }
+    let { status, providerRef } = owner;
+    try {
+      const [row] = await this.db
+        .select({ status: schema.payments.status, providerRef: schema.payments.providerRef })
+        .from(schema.payments)
+        .where(eq(schema.payments.id, owner.id))
+        .limit(1);
+      if (row) ({ status, providerRef } = row);
+    } catch (error) {
+      trouble += `; reading it again failed: ${describeFailure(error)}`;
+    }
+    let spent = false;
+    let unconfirmed = false;
+    let detail = '';
+    try {
+      if (status === 'failed' && providerRef !== null) {
+        const crossPost = await crossPostedApprovalOf(this.db, {
+          id: owner.id,
+          status,
+          providerRef,
+        });
+        spent = crossPost !== undefined;
+        if (crossPost)
+          detail = `, its own claim spent on ${crossPost.tid} of Moid ${crossPost.moid}`;
+      } else if (status === 'cancelled') {
+        unconfirmed = (await netCancelOutcome(this.db, owner.id)) !== 'cancelled';
+        detail = unconfirmed ? ', its net cancel unconfirmed' : ', its net cancel confirmed';
+      }
+    } catch (error) {
+      // Unread: a cancelled one is taken as open to a settle (settle it first), a claimed failed
+      // one as able to take the approval (settle it first, never honour).
+      unconfirmed = status === 'cancelled';
+      trouble += `; reading its approvals failed: ${describeFailure(error)}`;
+    }
+    const claim = providerRef === null ? 'unclaimed' : `claimed: ${providerRef}`;
+    const account = sameAccount ? '' : ", another account's";
+    const state = `${status}, ${claim}${detail}${account}${trouble}`;
+    return { state, status, providerRef, spent, unconfirmed };
+  }
+
+  /**
+   * netCancel's error log for an approval that only NAMES another payment: where the merchant
+   * admin files it and what it charged, and what an admin may do about it by how the named
+   * payment stands — the flag on this payment (`needsReview`) is the reminder, this is the how.
+   * - Another provider's payment, a SmartroPay one closed unclaimed (a claim needs `pending`),
+   *   or a claimed `failed` one whose own claim approved yet another payment's window (`spent`:
+   *   its approval 재통보 is not credited, a cancel 재통보 does not close it): nothing of ours
+   *   credits the approval, and a cancel 재통보 of it changes nothing (callbackPayment finds no
+   *   other provider's payment, and the others only record it) — cancel it, or honour it on the
+   *   same account.
+   * - A `cancelled` one whose own net cancel is unconfirmed: open to a settle, whose credit takes
+   *   its own approval only (approvalsOnRecord passes over a 재통보 of this one) — settle it
+   *   first, then cancel or honour.
+   * - Anything else may yet take it: a `pending` one's or a claimed `failed` one's approval
+   *   재통보 credits it with that Tid (which ends this payment's flag), and while it is claimed
+   *   and `pending` or `failed` a cancel 재통보 of the Tid is matched to it by Moid alone
+   *   (A-PG-22) — also one recorded before its own window claimed it (recordedCancelNotices) —
+   *   and holds back or closes its own payment; a settled one only records it
+   *   (cancelsApprovalOf wants its own Tid). So the advice is by how it stands when an admin
+   *   acts, and only while this payment is flagged: wait while it is `pending`; a claimed
+   *   `failed` one is settled first — checked in the merchant admin, whether or not the list
+   *   flags it yet (it does 2 minutes after its last change: its own approval's failure may be
+   *   younger) — then only a cancel, never an honour the 재통보 could double; for one settled,
+   *   or closed unclaimed meanwhile, a cancel or an honour.
+   * Never an honour on another account: whose card it was, a payer typing another account's
+   * Moid into their own window, is not this account's to be paid. An honour is the P the
+   * approval's Amt buys: the other payment's price, or this one's for a Moid typed into this
+   * payment's own window. `meanwhile`: this payment's status when it could not fail — settled
+   * meanwhile by a 재통보 of its own Moid — so nothing flags the approval.
+   */
+  private crossPostAdvice(
+    payment: PaymentRow,
+    owner: OtherPayment,
+    named: NamedPayment,
+    tid: string,
+    amount: number | null,
+    meanwhile: string | undefined,
+  ): string {
+    const b = payment.id;
+    const a = owner.id;
+    const names = `payment ${b}: approval ${tid} names payment ${a} (${named.state}), which does not hold it; not cancelled`;
+    const filed = `The merchant admin files it under Moid ${paymentIdToMoid(a)}, not ${b}'s (its reason says so), charged ${chargedText(amount)}`;
+    if (meanwhile !== undefined) {
+      return `${names} — but ${b} was ${meanwhile} before it could fail (a 재통보 of its own Moid settled it meanwhile), so nothing flags ${tid}: it is charged with no P. ${filed}: check both approvals of that Moid there, and once ${a} is settled, cancel ${tid} there or honour it by hand`;
+    }
+    const head = `${names}, this payment fails and the admin list flags it while no SmartroPay payment holds ${tid}. ${filed}`;
+    const cancelIt = `cancel ${tid} there and settle ${b} cancelled (POST /admin/payments/${b}/settle; a settle credit is refused: approval_mismatch)`;
+    const honour =
+      owner.userId === payment.userId
+        ? ` — or, to honour it, adjust the balance of that account by hand (POST /admin/users/${payment.userId}/balance-adjust) by the P a charge of ${chargedText(amount)} buys, and settle ${b} failed`
+        : ` — ${a} is another account's, so it is never honoured on that account`;
+    if (
+      owner.provider !== 'smartro' ||
+      (named.providerRef === null && named.status !== 'pending') ||
+      named.spent
+    ) {
+      const spent = named.spent
+        ? ` (${a}'s own claim approved yet another payment's window, so no 재통보 of its Moid credits or closes it)`
+        : '';
+      return `${head}. No flow of ours credits it${spent} — the card is charged with no P: ${cancelIt}${honour}`;
+    }
+    if (named.status === 'cancelled' && named.unconfirmed) {
+      return `${head}. ${a} is cancelled with its own net cancel unconfirmed (the admin list flags it), and a settle of it may still credit it: settle ${a} first (check its own approval in the merchant admin) — then ${cancelIt}${honour} (a 재통보 of ${tid} changes nothing on ${a}, whatever it logs there)`;
+    }
+    return `${head}. While ${a} is pending, or claimed and failed, its approval 재통보 may yet credit ${a} with ${tid} (that ends the flag), and while ${a} is claimed and pending or failed a cancel 재통보 of ${tid} is matched to it by Moid alone (A-PG-22) — also one recorded before its own window claims it — and holds back or closes ${a} whatever its own approval did. So act only while ${b} is flagged, by how ${a} stands then (check both approvals of that Moid in the merchant admin): pending — wait; claimed and failed — settle ${a} first, whether or not the admin list flags it yet (it does 2 minutes after its last change, and its own approval may be charged: check it in the merchant admin), and only then ${cancelIt}, and never honour it by hand, which the 재통보 may still double; cancelled with its own net cancel unconfirmed — settle ${a} first, then ${cancelIt}${honour}; unclaimed and failed, succeeded, refunding, refunded or cancelled and confirmed — ${cancelIt}${honour} (a cancel 재통보 of ${tid} changes nothing on such a ${a}, whatever it logs there)`;
+  }
+
+  /**
+   * Another SmartroPay payment whose own ReturnUrl made approval `tid` (a window of `exceptId`'s
+   * posted there, netCancel), for a log to name: one that holds `tid` as its claim, else one
+   * whose approval call's answer (or the inquiry's) recorded it as a success — with the Moid that
+   * answer named (none when no answer reached it). Undefined when there is none, and when reading
+   * fails: a log line is all it is for, and it then gives the reading without the name.
+   */
+  private async madeThrough(tid: string, exceptId: string): Promise<MadeThrough | undefined> {
+    const payload = schema.paymentEvents.payload;
+    const answered = and(
+      inArray(schema.paymentEvents.type, ['approval', 'approval_inquiry']),
+      inArray(schema.paymentEvents.resultCode, [...APPROVAL_SUCCESS_CODES]),
+    );
+    try {
+      const [holder] = await this.db
+        .select({ id: schema.payments.id, userId: schema.payments.userId })
+        .from(schema.payments)
+        .where(
+          and(
+            eq(schema.payments.provider, 'smartro'),
+            eq(schema.payments.providerRef, tid),
+            ne(schema.payments.id, exceptId),
+          ),
+        )
+        .limit(1);
+      if (holder) {
+        // Its answer for `tid`; one that named no Tid was for the claim's.
+        const [answer] = await this.db
+          .select({ moid: sql<string | null>`${payload}->>'Moid'` })
+          .from(schema.paymentEvents)
+          .where(
+            and(
+              eq(schema.paymentEvents.paymentId, holder.id),
+              answered,
+              sql`coalesce(${payload}->>'Tid', ${tid}) = ${tid}`,
+            ),
+          )
+          .orderBy(asc(schema.paymentEvents.id))
+          .limit(1);
+        return { ...holder, holds: true, moid: answer?.moid ?? undefined };
+      }
+      const [answer] = await this.db
+        .select({
+          id: schema.payments.id,
+          userId: schema.payments.userId,
+          moid: sql<string | null>`${payload}->>'Moid'`,
+        })
+        .from(schema.paymentEvents)
+        .innerJoin(schema.payments, eq(schema.payments.id, schema.paymentEvents.paymentId))
+        .where(
+          and(
+            ne(schema.paymentEvents.paymentId, exceptId),
+            eq(schema.payments.provider, 'smartro'),
+            answered,
+            sql`${payload}->>'Tid' = ${tid}`,
+          ),
+        )
+        .orderBy(asc(schema.paymentEvents.id))
+        .limit(1);
+      if (!answer) return undefined;
+      const { moid, ...made } = answer;
+      return { ...made, holds: false, moid: moid ?? undefined };
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * What to do about an approval 재통보 for a payment no ReturnUrl claimed that another payment's
+   * ReturnUrl made (`made`, madeThrough): a window of this payment's posted there. That payment
+   * holds the claim — and, answered, the reason naming this Moid — so the charge is settled
+   * through it: cancelled, or honoured on the same account. Never a credit of it (this charge is
+   * this payment's Moid's — a credit with a typed tid would pay it to that payment), nor a
+   * `failed` settle alone (the card stays charged with no P).
+   */
+  private madeThroughAdvice(
+    made: MadeThrough,
+    payment: PaymentRow,
+    tid: string,
+    amount: number | null,
+  ): string {
+    const honour =
+      made.userId === payment.userId
+        ? ` — or honour it by hand on that account (POST /admin/users/${payment.userId}/balance-adjust: the P a charge of ${chargedText(amount)} buys) and settle ${made.id} failed`
+        : '';
+    const reason =
+      made.moid === undefined
+        ? `no answer reached it, so its reason does not name ${tid}`
+        : 'its reason names it';
+    return `payment ${made.id} ${made.holds ? 'holds it as its claim' : 'recorded it as its approval'}: its ReturnUrl made this approval, of a window of this payment's posted there (${reason}), and the admin list flags ${made.id} while it stays unsettled — settle that one, not this: cancel ${tid} in the merchant admin (under this payment's Moid) and settle ${made.id} cancelled${honour}; never settle ${made.id} credit (the charge is this Moid's) or failed alone (the card stays charged with no P)`;
+  }
+
+  /**
+   * An approval 재통보 of a payment whose one approval approved another payment's window
+   * (`spent`, crossPostedApprovalOf): not credited, for no approval of its Moid is its own. It
+   * was made through yet another payment's ReturnUrl (madeThrough), which the admin list flags
+   * for it, or by the payer's own call. Credited, it would end this payment's flag while `spent`
+   * is charged with no P. Whether the admin list flags THIS payment for it is said too:
+   * needsReview's third hint skips a 재통보 of an approval another payment's own call made
+   * (approvalsMadeElsewhere) and counts any other — also after a settle checked this payment for
+   * `spent`, when the flag is back under a reason that still names `spent`: the log is where the
+   * admin finds the Tid it is for.
+   */
+  private async logSpentClaimNotice(
+    payment: PaymentRow,
+    tid: string,
+    spent: CrossPostedApproval,
+  ): Promise<void> {
+    const made = await this.madeThrough(tid, payment.id);
+    const where = made
+      ? `through payment ${made.id}'s ReturnUrl, which the admin list flags for it: settle it there`
+      : "through another payment's ReturnUrl (look in the admin list for one whose reason names this payment's Moid and this Tid) or by the payer's own call";
+    let flag: string;
+    try {
+      flag = (await approvalsMadeElsewhere(this.db, payment.id, [tid])).has(tid)
+        ? `The admin list does not flag ${payment.id} for ${tid}`
+        : `The admin list flags ${payment.id} for ${tid} — also when a settle checked ${payment.id} already: that flag is for ${tid}, filed under this payment's Moid in the merchant admin, not for ${spent.tid}, which its reason names (never settle ${spent.tid} a second time); once ${tid} is cancelled there, settled where it was made or honoured by hand, settle ${payment.id} failed`;
+    } catch (error) {
+      flag = `Whether the admin list flags ${payment.id} for ${tid} could not be read (${describeFailure(error)}): if it is flagged again after a settle, the flag is for ${tid}, not for ${spent.tid}`;
+    }
+    this.logger.error(
+      `재통보 approval ${tid} for payment ${payment.id}, whose one approval approved another payment's window (${spent.tid} of Moid ${spent.moid}, which the admin list flags it for until a settle checks it); not credited — no approval of its own Moid is its own: this one was made ${where}. Credited here, it would end ${payment.id}'s flag while ${spent.tid} is charged with no P. ${flag}`,
+    );
   }
 
   /**
    * `pending` → `failed`, with `event` recorded in the same transaction when given — and only
    * when the row did change. `unclaimed`: only while no approval holds it (the window came back
-   * empty, a stop). `claimed`: the approval this request made was refused.
+   * empty, a stop, or its authentication was approved through another payment's ReturnUrl —
+   * netCancel). `claimed`: the approval this request made was refused, or is another payment's.
    */
   private async markFailed(
     paymentId: string,
@@ -1340,6 +1809,37 @@ export class SmartroPayService {
       if (event) await recordPaymentEvent(tx, event);
       return true;
     });
+  }
+
+  /**
+   * After a credit of approval `tid` was refused because the payment was credited meanwhile
+   * (by the ReturnUrl or the approval 재통보, whichever came second). Under `tid` itself that
+   * is this same approval, and nothing is owed. Under another Tid the payment's Moid had two
+   * approvals — a window of it approved through another payment's ReturnUrl (netCancel) whose
+   * 재통보 credited it first, say — and `tid` is charged with no P, which nothing flags
+   * (needsReview skips a credited payment: no settle takes one, so nothing would clear it). So
+   * this shouts. Never throws: the answer does not wait on it.
+   */
+  private async creditedUnderAnotherTid(
+    payment: PaymentRow,
+    tid: string,
+    what: string,
+  ): Promise<void> {
+    try {
+      const [row] = await this.db
+        .select({ providerRef: schema.payments.providerRef })
+        .from(schema.payments)
+        .where(eq(schema.payments.id, payment.id))
+        .limit(1);
+      if (!row || row.providerRef === null || row.providerRef === tid) return;
+      this.logger.error(
+        `${what} ${tid} for payment ${payment.id}, which was credited meanwhile under ${row.providerRef}: its Moid has two approvals, and ${tid} is charged with no P — check both in the merchant admin, then cancel ${tid} there (a cancel 재통보 of it changes nothing on this payment) or honour it by hand (POST /admin/users/${payment.userId}/balance-adjust)`,
+      );
+    } catch (error) {
+      this.logger.error(
+        `${what} ${tid} for payment ${payment.id}, which was credited meanwhile: reading its Tid failed (${describeFailure(error)}) — check that it is ${tid} in the merchant admin`,
+      );
+    }
   }
 
   /** The payment's status as it stands now, or undefined when the row is gone. */

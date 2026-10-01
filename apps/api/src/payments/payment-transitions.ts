@@ -1,6 +1,11 @@
 import { schema, type Db } from '@buddha/db';
-import { type PaymentStatus, type UserBalanceEvent } from '@buddha/shared';
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import {
+  moidToPaymentId,
+  paymentIdToMoid,
+  type PaymentStatus,
+  type UserBalanceEvent,
+} from '@buddha/shared';
+import { and, asc, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
 import { balanceEvent } from '../wallet/wallet.service.js';
 import { APPROVAL_SUCCESS_CODES, classifyCancel, parseKrw } from './smartro/smartro-protocol.js';
@@ -374,4 +379,96 @@ export async function recordedCancelNotices(
  */
 export async function hasCancelNotice(db: Db | Tx, payment: NoticeTarget): Promise<boolean> {
   return (await recordedCancelNotices(db, payment)).full;
+}
+
+/** The `payment_events` types that answer our own approval call: the approval's, the inquiry's. */
+const APPROVAL_ANSWERS = ['approval', 'approval_inquiry'] as const;
+
+/** The approval that spent a payment's claim on another payment's window (crossPostedApprovalOf). */
+export interface CrossPostedApproval {
+  /** Its Tid (the claim's, when the answer named none): what the merchant admin files it under. */
+  tid: string;
+  /** The Moid it named: the other payment's. */
+  moid: string;
+}
+
+/**
+ * The approval that spent a claimed `failed` payment's claim on ANOTHER payment's window
+ * (netCancel's named branch, ADR-0042 2026-10-01 추기): a success answer to its approval call (or
+ * to the inquiry) whose Moid names another payment of ours, and whose Tid no other SmartroPay
+ * payment holds — what the admin list flags the payment for (`needsReview`: its fourth hint, or
+ * the first when the inquiry answered). A payment makes one approval call, ever (its claim's),
+ * and that one approved the other window: no approval of its own Moid came through its own
+ * ReturnUrl. So one its approval 재통보 brings was made through another payment's ReturnUrl —
+ * whose answer flags THAT payment for it — or by the payer's own call, and its cancel 재통보
+ * cancels such an approval, not one of its own: neither credits it nor closes it (settleNotify,
+ * cancelNoticeVerdict), and no settle credits it — any of them would end its flag while the
+ * approval it holds is still charged with no P. Undefined for any other payment, also for one
+ * whose answer names a payment that holds its Tid: a replay, whose approval that payment's flow
+ * has, and nothing is owed.
+ */
+export async function crossPostedApprovalOf(
+  db: Db | Tx,
+  payment: { id: string; status: PaymentStatus; providerRef: string | null },
+): Promise<CrossPostedApproval | undefined> {
+  if (payment.status !== 'failed' || payment.providerRef === null) return undefined;
+  const payload = schema.paymentEvents.payload;
+  const rows = await db
+    .select({
+      tid: sql<string | null>`${payload}->>'Tid'`,
+      moid: sql<string | null>`${payload}->>'Moid'`,
+    })
+    .from(schema.paymentEvents)
+    .where(
+      and(
+        eq(schema.paymentEvents.paymentId, payment.id),
+        inArray(schema.paymentEvents.type, [...APPROVAL_ANSWERS]),
+        inArray(schema.paymentEvents.resultCode, [...APPROVAL_SUCCESS_CODES]),
+        sql`not exists (
+          select 1 from ${schema.payments} holder
+          where holder.provider = 'smartro' and holder.id <> ${payment.id}
+            and holder.provider_ref = ${payload}->>'Tid')`,
+      ),
+    )
+    .orderBy(asc(schema.paymentEvents.id));
+  const own = paymentIdToMoid(payment.id);
+  for (const { tid, moid } of rows) {
+    if (moid === null || moid === own || moidToPaymentId(moid) === null) continue;
+    return { tid: tid !== null && tid.length > 0 ? tid : payment.providerRef, moid };
+  }
+  return undefined;
+}
+
+/**
+ * Of `tids`, those another payment's own approval call made — a success answer (the approval's
+ * or the inquiry's) recorded on a payment other than `paymentId` — that no SmartroPay payment but
+ * that one holds: a window of `paymentId`'s posted to that payment's ReturnUrl (netCancel). Such
+ * an approval is settled through that payment, which the admin list flags for it (cancelled in
+ * the merchant admin, or honoured by hand) — so an approval 재통보 of it that `paymentId`'s Moid
+ * brought is no approval of `paymentId`'s for a settle credit to take (approvalsOnRecord).
+ */
+export async function approvalsMadeElsewhere(
+  db: Db | Tx,
+  paymentId: string,
+  tids: readonly string[],
+): Promise<Set<string>> {
+  if (tids.length === 0) return new Set();
+  const payload = schema.paymentEvents.payload;
+  const tid = sql<string>`${payload}->>'Tid'`;
+  const rows = await db
+    .select({ tid })
+    .from(schema.paymentEvents)
+    .where(
+      and(
+        ne(schema.paymentEvents.paymentId, paymentId),
+        inArray(schema.paymentEvents.type, [...APPROVAL_ANSWERS]),
+        inArray(schema.paymentEvents.resultCode, [...APPROVAL_SUCCESS_CODES]),
+        inArray(tid, [...tids]),
+        sql`not exists (
+          select 1 from ${schema.payments} holder
+          where holder.provider = 'smartro' and holder.id <> ${schema.paymentEvents.paymentId}
+            and holder.provider_ref = ${tid})`,
+      ),
+    );
+  return new Set(rows.map((row) => row.tid));
 }

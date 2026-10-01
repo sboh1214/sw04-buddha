@@ -2,7 +2,7 @@
 // stand-in for the PG's HTTP API, and builders for what the PG sends back.
 import { createDecipheriv, createHash, randomUUID } from 'node:crypto';
 import { schema, type Db } from '@buddha/db';
-import { paymentIdToMoid } from '@buddha/shared';
+import { formatKrw, paymentIdToMoid } from '@buddha/shared';
 import { type SmartroConfig } from '../payments/payments-config.js';
 import {
   SmartroUnreachableError,
@@ -145,6 +145,14 @@ export function notifyForm(input: NotifyFormInput): Record<string, string> {
     FnName: '삼성',
     SignValue: input.signValue ?? testSignValue(input.tid, resultCode),
   };
+}
+
+/**
+ * The reason netCancel gives a payment whose approval was another payment's window (its
+ * crossPostReason): where the merchant admin files the charge, and what it charged.
+ */
+export function crossPostReason(moid: string, tid: string, amountKrw: number): string {
+  return `다른 주문번호(${moid})의 결제창이 이 결제로 승인됨 — 승인 금액 ${formatKrw(amountKrw)}, 승인 거래번호(TID) ${tid}, 이 결제로는 충전하지 않음(관리자 확인)`;
 }
 
 /** A form-urlencoded request body. */

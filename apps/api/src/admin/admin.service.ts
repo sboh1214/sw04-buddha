@@ -85,7 +85,23 @@ const APPROVAL_UNKNOWN = codeList(APPROVAL_UNKNOWN_CODES);
  *   failure rather than a decline (isApprovalUnknown: 9999, W999, … — it still fails the payment,
  *   ADR-0042 「ReturnUrl」 step 5), or an approval 재통보 (StateCd 0, a success code) left it
  *   uncredited (its Mid or amount did not match, or a cancel 재통보 of the card on record held it
- *   back).
+ *   back) — never one of an approval another payment's own call made (approvalsMadeElsewhere's
+ *   test: a success answer on that payment records its Tid, which no SmartroPay payment but that
+ *   one holds): that payment answers for it (the next hint flags it until a settle there).
+ *   Counted here too, such a late 재통보 would flag again a payment whose claim approved another
+ *   window (crossPostedApprovalOf) after a settle honoured that window's charge — under the same
+ *   reason, so it would read as that charge still owed, to be honoured twice. So a settled
+ *   payment flagged again by this hint is for the 재통보's Tid its error log names, not the one
+ *   its reason names (the payer's own approval call, A-PG-22, say). Or its approval answered a
+ *   SUCCESS for another payment of ours that does not hold that Tid — the authentication of that
+ *   payment's window posted to this one's ReturnUrl: the card is charged, and no flow of ours
+ *   credits it (netCancel; the payment's `result_message` names the Moid, Tid and amount the
+ *   merchant admin files it under; nothing of its own Moid takes it out of `failed` after —
+ *   crossPostedApprovalOf). A success whose Tid another
+ *   SmartroPay payment holds is skipped: a replay whose approval answered that payment's
+ *   approval again — that payment's flow has it, and nothing is owed. The inquiry's answer
+ *   (`approval_inquiry`) needs no hint of its own: it is asked only after the approval got no
+ *   answer, which flags the payment already — also when it brings back such a replayed approval.
  * Only SmartroPay rows: the settle refuses the rest (a mock refund is simply retried).
  */
 const needsReview = sql<boolean>`(${schema.payments.provider} = 'smartro' and (
@@ -102,7 +118,23 @@ const needsReview = sql<boolean>`(${schema.payments.provider} = 'smartro' and (
         and ((hint.type = 'approval'
             and (hint.result_code is null or hint.result_code in (${APPROVAL_UNKNOWN})))
           or (hint.type = 'notify' and hint.payload->>'StateCd' = '0'
-            and hint.result_code in (${APPROVAL_SUCCESS})))
+            and hint.result_code in (${APPROVAL_SUCCESS})
+            and not exists (
+              select 1 from ${schema.paymentEvents} made
+              where made.payment_id <> ${schema.payments.id}
+                and made.type in ('approval', 'approval_inquiry')
+                and made.result_code in (${APPROVAL_SUCCESS})
+                and made.payload->>'Tid' = coalesce(
+                  nullif(hint.payload->>'Tid', ''), nullif(hint.payload->>'TID', ''))
+                and not exists (
+                  select 1 from ${schema.payments} keeper
+                  where keeper.provider = 'smartro' and keeper.id <> made.payment_id
+                    and keeper.provider_ref = made.payload->>'Tid')))
+          or (hint.type = 'approval' and hint.result_code in (${APPROVAL_SUCCESS})
+            and not exists (
+              select 1 from ${schema.payments} holder
+              where holder.provider = 'smartro' and holder.id <> ${schema.payments.id}
+                and holder.provider_ref = hint.payload->>'Tid')))
         and not exists (
           select 1 from ${schema.adminActions} checked
           where checked.type = 'payment_settle' and checked.target_type = 'payment'

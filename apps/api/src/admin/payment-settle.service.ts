@@ -18,6 +18,8 @@ import { recordPaymentEvent } from '../payments/payment-events.js';
 import {
   PROVIDER_REF_UNIQUE,
   SETTLE_MIN_AGE_MS,
+  approvalsMadeElsewhere,
+  crossPostedApprovalOf,
   markRefunded,
   netCancelOutcome,
   recordedCancelNotices,
@@ -121,14 +123,26 @@ type Transition =
  * reason (SETTLE_REASON), and a credit writes MANUAL_SETTLE_MESSAGE.
  *
  * A claimed `failed` payment is settled too: our side failed it, and the card may be charged all
- * the same (an approval 재통보 that could not be credited). `failed` again says it was checked,
- * which clears its `needsReview`.
+ * the same (an approval 재통보 that could not be credited, or an approval our call made that
+ * names another payment — netCancel: cancel it in the merchant admin and settle `cancelled`, or
+ * adjust that account's balance by hand and settle `failed`, as its error log says by how that
+ * payment stands; a `credit` is refused, `approval_mismatch` — also once a 재통보 of its own Moid
+ * is on record: its one approval went to that other window, so no approval of its Moid is its
+ * own, crossPostedApprovalOf). That approval is filed in the merchant admin under the OTHER
+ * payment's Moid and the approval's Tid — not this payment's 주문번호, which the settle dialog
+ * shows — and the payment's `result_message` names both, with the amount (the admin row's
+ * reason line, and the settle dialog's). `failed` again says it was checked, which clears its
+ * `needsReview` — and keeps that reason, so a later flag of such a payment is for an approval
+ * 재통보 of its own Moid that arrived after (its error log names that Tid; one another payment's
+ * call made flags that payment instead), never for the approval its reason names, which that
+ * settle answered.
  *
  * A CREDIT STORES THE APPROVAL'S TID. The refund cancels `provider_ref`, and the authentication's
  * Tid a claim recorded may differ from the approval's (the manual, STEP 4). So a credit takes the
  * Tid, PayMethod — and the word — of the approval on record that matches the payment's Mid,
  * amount and Moid (approvalsOnRecord, our own verified answers first; one whose SignValue does
- * not verify only while no verified record contradicts it). With records and none of them
+ * not verify only while no verified record contradicts it; never a 재통보 of an approval another
+ * payment's own call made, which is settled through that payment). With records and none of them
  * matching, the approval was net-cancelled for it, and the credit is refused
  * (`approval_mismatch`: cancel the card in the merchant admin and settle it `cancelled`). With
  * no successful approval on record (every answer was lost, or it was the PG's own error) the
@@ -285,6 +299,16 @@ export class PaymentSettleService {
       case 'credit': {
         // Claimed (transitionOf).
         if (payment.providerRef === null) throw this.moved();
+        // Its one approval call approved another payment's window: no approval of its own Moid
+        // is its own (crossPostedApprovalOf) — one its 재통보 brought was made elsewhere, and is
+        // settled there. A credit would end its flag with that window's charge still owed.
+        const spent = await crossPostedApprovalOf(tx, payment);
+        if (spent) {
+          throw refundNotAllowed(
+            'approval_mismatch',
+            `This payment's approval approved another payment's window (${spent.tid}, Moid ${spent.moid}): no approval of its own Moid is its own`,
+          );
+        }
         // Its notify event commits before the notice waits on this lock: the PG's own word that
         // the card is cancelled, which no settle overrides (the notice then closes it).
         const notices = await recordedCancelNotices(tx, payment);
@@ -478,6 +502,10 @@ export class PaymentSettleService {
    * 3. an answer of ours that does not verify (an approval net-cancelled for that alone), which
    *    still names the Tid the merchant admin shows — `unverified`, taken only while no verified
    *    record contradicts it (creditedApproval).
+   * Never a 재통보 of an approval another payment's own call made (approvalsMadeElsewhere): a
+   * window of this payment's posted to that payment's ReturnUrl, settled through that payment
+   * (flagged for it) — taken here, its charge would be paid twice once honoured there, or credit
+   * a card cancelled there.
    */
   private async approvalsOnRecord(tx: Tx, payment: PaymentRow): Promise<ApprovalsOnRecord> {
     const rows = await tx
@@ -531,7 +559,13 @@ export class PaymentSettleService {
         verifySignValue(sign, tid, code, smartro.merchantKey);
       (verified ? answers : unverified).push(approval);
     }
-    return { verified: [...answers, ...notices], unverified };
+    const elsewhere = await approvalsMadeElsewhere(
+      tx,
+      payment.id,
+      notices.map((notice) => notice.tid),
+    );
+    const own = notices.filter((notice) => !elsewhere.has(notice.tid));
+    return { verified: [...answers, ...own], unverified };
   }
 
   /**
