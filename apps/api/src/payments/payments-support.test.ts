@@ -33,7 +33,7 @@ describe('paymentsConfigFromEnv', () => {
       smartro: null,
       webOrigin: 'https://buddha.sboh.dev',
     });
-    // One key short is still no SmartroPay (env.ts refuses that pairing under smartro).
+    // One key short is still no SmartroPay (env.ts refuses that pairing under either provider).
     expect(
       paymentsConfigFromEnv({ ...base, ...credentials, SMARTRO_CANCEL_PASSWORD: undefined })
         .smartro,

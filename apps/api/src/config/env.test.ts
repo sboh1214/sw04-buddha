@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import { paymentsConfigFromEnv } from '../payments/payments-config.js';
 import { encryptCancelPayload } from '../payments/smartro/smartro-protocol.js';
-import { envSchema, parseTrustProxy, uncountedPeers, webOrigins } from './env.js';
+import {
+  SMARTRO_REQUIRED_KEYS,
+  envSchema,
+  parseTrustProxy,
+  uncountedPeers,
+  webOrigins,
+} from './env.js';
 
 /**
  * The env schema is pure (no DB, no Redis), so this suite runs with the docker test profile
@@ -301,6 +308,23 @@ describe('payments (ADR-0042)', () => {
     expect(parsed).toMatchObject({ ...smartro, SMARTRO_MODE: 'REAL' });
   });
 
+  it('keeps SmartroPay registered under the mock with all three, and none without any', () => {
+    const withKeys = envSchema.parse({ ...base, ...smartro, PAYMENT_PROVIDER: 'mock' });
+    expect(withKeys).toMatchObject({ ...smartro, PAYMENT_PROVIDER: 'mock' });
+    expect(paymentsConfigFromEnv(withKeys)).toMatchObject({
+      provider: 'mock',
+      smartro: { mid: smartro.SMARTRO_MID },
+    });
+    // All three empty — the .env.example lines, compose's `${SMARTRO_MID:-}` — is "off".
+    const off = envSchema.parse({
+      ...base,
+      SMARTRO_MID: '',
+      SMARTRO_MERCHANT_KEY: ' ',
+      SMARTRO_CANCEL_PASSWORD: '',
+    });
+    expect(paymentsConfigFromEnv(off).smartro).toBeNull();
+  });
+
   it('refuses an unknown provider or mode', () => {
     for (const [key, value] of [
       ['PAYMENT_PROVIDER', 'toss'],
@@ -323,6 +347,71 @@ describe('payments (ADR-0042)', () => {
       }
     },
   );
+
+  it('refuses part of the credentials whichever provider is active, naming each missing key', () => {
+    // SmartroPay is registered with all three or not at all (paymentsConfigFromEnv): a leftover
+    // MID under the mock would boot, then 404 every 재통보 and refuse every SmartroPay refund.
+    const messages = {
+      mock: 'SMARTRO_MID, SMARTRO_MERCHANT_KEY and SMARTRO_CANCEL_PASSWORD must be set together (or all empty)',
+      smartro: 'required when PAYMENT_PROVIDER=smartro',
+    } as const;
+    const [mid, merchantKey, cancelPassword] = SMARTRO_REQUIRED_KEYS;
+    for (const blanked of [
+      [mid],
+      [merchantKey],
+      [cancelPassword],
+      [mid, merchantKey],
+      [mid, cancelPassword],
+      [merchantKey, cancelPassword],
+    ]) {
+      for (const provider of ['mock', 'smartro'] as const) {
+        // Unset, empty and blank are all "missing" (optionalString).
+        for (const empty of [undefined, '', '  ']) {
+          const label = `${provider} without ${blanked.join(', ')} (${JSON.stringify(empty)})`;
+          const result = envSchema.safeParse({
+            ...base,
+            ...smartro,
+            PAYMENT_PROVIDER: provider,
+            ...Object.fromEntries(blanked.map((key) => [key, empty])),
+          });
+          expect(result.success, label).toBe(false);
+          if (!result.success) {
+            expect(
+              result.error.issues.map((issue) => [issue.path, issue.message]),
+              label,
+            ).toEqual(blanked.map((key) => [[key], messages[provider]]));
+          }
+        }
+      }
+    }
+    // None at all is "not configured": fine under the mock, three issues under smartro.
+    const none = { SMARTRO_MID: '', SMARTRO_MERCHANT_KEY: '', SMARTRO_CANCEL_PASSWORD: '' };
+    expect(envSchema.safeParse({ ...base, ...none, PAYMENT_PROVIDER: 'mock' }).success).toBe(true);
+    const required = envSchema.safeParse({ ...base, ...none, PAYMENT_PROVIDER: 'smartro' });
+    expect(required.success).toBe(false);
+    if (!required.success) {
+      expect(required.error.issues.map((issue) => [issue.path, issue.message])).toEqual(
+        SMARTRO_REQUIRED_KEYS.map((key) => [[key], messages.smartro]),
+      );
+    }
+  });
+
+  it('reports a bad shape and a missing partner each once, on their own keys', () => {
+    // A set key is checked for its shape, a missing one for being missing — never both.
+    const result = envSchema.safeParse({
+      ...base,
+      SMARTRO_MID: 'x'.repeat(11),
+      SMARTRO_MERCHANT_KEY: 'k'.repeat(31),
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.map((issue) => issue.path)).toEqual([
+        ['SMARTRO_MID'],
+        ['SMARTRO_MERCHANT_KEY'],
+        ['SMARTRO_CANCEL_PASSWORD'],
+      ]);
+    }
+  });
 
   it('checks the credential shapes whenever they are set', () => {
     // The key's first 32 characters are the AES-256 key of the cancel payload: 32 of them, and

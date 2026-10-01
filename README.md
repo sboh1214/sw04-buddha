@@ -205,7 +205,7 @@ SMARTRO_MERCHANT_KEY=<발급받은 상점키>           # 32자 이상, 앞 32�
 SMARTRO_CANCEL_PASSWORD=<가맹점 관리자의 취소 비밀번호>
 ```
 
-셋 중 하나라도 비면 API가 기동을 거절한다. mock으로 돌아가려면 `PAYMENT_PROVIDER=mock`이다 — 키를 남겨 두면 이미 진행 중인 스마트로페이 결제의 콜백과 환불은 계속 동작한다(`SMARTRO_MODE`·`SMARTRO_MID`를 바꾸는 것은 다르다 — 아래 STG 운영 기간). 웹 CSP는 STG·REAL의 SDK 호스트를 모두 허용하므로 모드를 바꿔도 웹을 다시 빌드하지 않는다. `SMARTRO_APPROVAL_BASE_URL`은 로컬 가짜 PG를 가리키는 승인·취소 호스트이고(재통보의 발신 IP 검사도 끈다) 운영에서는 API가 거부한다.
+셋 중 하나라도 비면 API가 기동을 거절한다. 셋은 프로바이더와 상관없이 함께 넣거나 함께 비운다 — `mock`에서도 일부만 있으면 기동하지 않는다(스마트로페이는 셋이 다 있을 때만 등록되므로, 일부만 남은 키로 뜨면 재통보가 404가 되고 스마트로페이 결제의 환불이 거절된다). mock으로 돌아가려면 `PAYMENT_PROVIDER=mock`이다 — 키 셋을 남겨 두면 이미 진행 중인 스마트로페이 결제의 콜백과 환불은 계속 동작한다(`SMARTRO_MODE`·`SMARTRO_MID`를 바꾸는 것은 다르다 — 아래 STG 운영 기간). 웹 CSP는 STG·REAL의 SDK 호스트를 모두 허용하므로 모드를 바꿔도 웹을 다시 빌드하지 않는다. `SMARTRO_APPROVAL_BASE_URL`은 로컬 가짜 PG를 가리키는 승인·취소 호스트이고(재통보의 발신 IP 검사도 끈다) 운영에서는 API가 거부한다.
 
 **URL 셋.** 경로는 전부 `/api/v1/payments/smartro/` 아래이고 로그인 없이 열려 있다(PG가 부르는 계약이라 [docs/API.md](docs/API.md)에는 손으로 쓴 절로 있다).
 

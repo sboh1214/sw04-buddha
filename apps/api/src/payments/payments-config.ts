@@ -43,6 +43,7 @@ export interface PaymentsConfig {
   /**
    * SmartroPay when its three credentials are set, whatever PAYMENT_PROVIDER says: the
    * callbacks and refunds of SmartroPay payments keep working after a switch back to `mock`.
+   * `null` when none is set — config/env.ts refuses a partial set under either provider.
    */
   smartro: SmartroConfig | null;
   /**
@@ -65,7 +66,8 @@ type PaymentsEnv = Pick<
 >;
 
 /**
- * Builds PaymentsConfig from the validated env (config/env.ts already enforced the pairings).
+ * Builds PaymentsConfig from the validated env (config/env.ts already enforced the pairings:
+ * the three SmartroPay credentials are all set or all absent, whichever provider is active).
  * Throws — the boot fails — when SmartroPay is configured on a web origin too long for its
  * ReturnUrl: found on the first prepare instead, every charge would reserve a payment and 500.
  */

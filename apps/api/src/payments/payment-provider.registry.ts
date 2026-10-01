@@ -11,7 +11,8 @@ import { SmartroPaymentProvider } from './smartro/smartro-payment.provider.js';
  * The CONFIGURED one (PAYMENT_PROVIDER) decides which charge flow is open; everything that acts
  * on an existing payment — a refund, a net cancel — looks the payment's own provider up here,
  * so a mock payment stays refundable after the switch to SmartroPay and the other way round.
- * SmartroPay is registered whenever its credentials are set.
+ * SmartroPay is registered whenever its credentials are set — all three, since config/env.ts
+ * refuses only some of them whichever provider is active.
  */
 @Injectable()
 export class PaymentProviderRegistry {

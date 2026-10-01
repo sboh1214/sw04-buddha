@@ -54,7 +54,9 @@ const mailbox = z.string().refine(
 );
 
 /**
- * The SmartroPay credentials `PAYMENT_PROVIDER=smartro` cannot run without. The merchant key
+ * The SmartroPay credentials: all three or none, whichever provider is active, and all three
+ * with `PAYMENT_PROVIDER=smartro`. SmartroPay is registered only with all three
+ * (paymentsConfigFromEnv), so a partial set would boot and silently drop it. The merchant key
  * signs every request (EncryptData, HashData) and its first 32 characters are the AES-256 key of
  * the cancel payload, hence the minimum length — and those 32 must be ASCII, one byte each, or
  * every cancel (a refund, a net cancel) would throw (encryptCancelPayload; both ask
@@ -200,7 +202,10 @@ export const envSchema = z
     PAYMENT_PROVIDER: optionalString.pipe(paymentProviderSchema.default('mock')),
     /** SmartroPay environment: `STG` (test hosts) or `REAL`. Picks the SDK and approval hosts. */
     SMARTRO_MODE: optionalString.pipe(smartroModeSchema.default('STG')),
-    /** Merchant id (≤ 10 characters). Required with PAYMENT_PROVIDER=smartro. */
+    /**
+     * Merchant id (≤ 10 characters). The three credentials are set together or all left empty;
+     * PAYMENT_PROVIDER=smartro requires them.
+     */
     SMARTRO_MID: optionalString,
     /**
      * Merchant key (≥ 32 characters, the first 32 ASCII): signs requests, keys the cancel
@@ -350,15 +355,22 @@ export const envSchema = z
         });
       }
     }
-    if (env.PAYMENT_PROVIDER === 'smartro') {
-      for (const key of SMARTRO_REQUIRED_KEYS) {
-        if (!env[key]) {
-          ctx.addIssue({
-            code: 'custom',
-            path: [key],
-            message: 'required when PAYMENT_PROVIDER=smartro',
-          });
-        }
+    // All three or none, whichever provider is active (like the SMTP and OAuth pairs). Nothing
+    // uses a partial set: SmartroPay is registered with all three or not at all, so under `mock`
+    // a leftover MID with a secret blanked would boot and then 404 every 재통보 and refuse every
+    // SmartroPay refund. One issue per missing key, and only for a missing one: the shape checks
+    // above are for the keys that are set, so no key gets two.
+    const missing = SMARTRO_REQUIRED_KEYS.filter((key) => !env[key]);
+    const smartroRequired = env.PAYMENT_PROVIDER === 'smartro';
+    if (missing.length > 0 && (smartroRequired || missing.length < SMARTRO_REQUIRED_KEYS.length)) {
+      for (const key of missing) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [key],
+          message: smartroRequired
+            ? 'required when PAYMENT_PROVIDER=smartro'
+            : 'SMARTRO_MID, SMARTRO_MERCHANT_KEY and SMARTRO_CANCEL_PASSWORD must be set together (or all empty)',
+        });
       }
     }
     // Only for a value `z.url()` accepted: a bad one already has its issue (the superRefine still

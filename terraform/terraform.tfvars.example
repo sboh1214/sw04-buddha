@@ -25,7 +25,9 @@ seed_admin_password = ""
 # naver_client_secret  = ""
 
 # --- Optional SmartroPay card payments (ADR-0042) -------------------------------------------------
-# Leave commented to keep the mock provider (no money moves). To switch: fill in all five, run
+# Leave commented to keep the mock provider (no money moves). The three merchant values go in
+# together or not at all, also under "mock" (plan and the api refuse only some of them, e.g. on a
+# rollback to "mock": keep all three or clear all three). To switch: fill in all five, run
 # `terraform apply`, then redeploy (`gh workflow run deploy.yml --ref main -f image_tag=<current sha>`;
 # a terraform-only push does not deploy). Visible ASCII only, no $ " ' # (dotenv/compose safety).
 # Register the notify URL https://buddha.sboh.dev/api/v1/payments/smartro/notify in the merchant
