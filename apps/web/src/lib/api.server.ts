@@ -2,9 +2,11 @@ import { createApiClient } from '@buddha/api-client';
 import { cache } from 'react';
 import {
   type Category,
+  type ChargePackage,
   type LeaderboardEntry,
   type Market,
   type MarketListItem,
+  type PaymentProviderInfo,
   type PriceSeries,
   isApiError,
   unwrap,
@@ -121,4 +123,22 @@ export async function fetchCategoriesServer(): Promise<Category[]> {
 /** The global ranking (`GET /leaderboard`, public; PLAN M6 선택). */
 export async function fetchLeaderboardServer(): Promise<LeaderboardEntry[]> {
   return unwrap(await serverApi.GET('/api/v1/leaderboard')).data;
+}
+
+/**
+ * The charge catalogue (`GET /charge-packages`, public — ADR-0026) for the `/charge` guide page
+ * (ADR-0044), in the API's display order. Rejects on failure; the page turns that into its own
+ * error notice rather than a 500.
+ */
+export async function fetchChargePackagesServer(): Promise<ChargePackage[]> {
+  return unwrap(await serverApi.GET('/api/v1/charge-packages')).data;
+}
+
+/**
+ * Which charge flow the deployment offers (`GET /payments/provider`, public — ADR-0042), for the
+ * same page: under SmartroPay a package below the card minimum cannot be bought, and the guide
+ * must not offer it. Rejects on failure; the page decides what an unknown provider means.
+ */
+export async function fetchPaymentProviderServer(): Promise<PaymentProviderInfo> {
+  return unwrap(await serverApi.GET('/api/v1/payments/provider')).data;
 }

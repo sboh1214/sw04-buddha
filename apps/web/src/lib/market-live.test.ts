@@ -147,6 +147,7 @@ const me: Me = {
   profile: { nickname: '테스터', role: 'user', createdAt: '2026-08-01T00:00:00.000Z' },
   balance: { availableP: '100000', lockedP: '0' },
   linkedAccounts: [],
+  contact: null,
 };
 
 /** The infinite-list shape: the last page ends the list, and the first page has no cursor. */

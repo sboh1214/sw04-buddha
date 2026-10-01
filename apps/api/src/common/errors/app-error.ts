@@ -16,6 +16,12 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<ErrorCode, number>> = {
   RATE_LIMITED: HttpStatus.TOO_MANY_REQUESTS,
   DISPUTE_WINDOW_CLOSED: HttpStatus.CONFLICT,
   RULES_REQUIRED: HttpStatus.UNPROCESSABLE_ENTITY,
+  CONTACT_REQUIRED: HttpStatus.CONFLICT,
+  REFUND_NOT_ALLOWED: HttpStatus.CONFLICT,
+  PAYMENT_GATEWAY_REFUSED: HttpStatus.CONFLICT,
+  // The PG could not be reached or its answer is unknown: an upstream failure, sealed like
+  // every other 5xx by ApiExceptionFilter.
+  PAYMENT_GATEWAY_ERROR: HttpStatus.BAD_GATEWAY,
   INTERNAL: HttpStatus.INTERNAL_SERVER_ERROR,
 };
 

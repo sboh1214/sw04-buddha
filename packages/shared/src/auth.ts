@@ -26,9 +26,20 @@ export const registerResultSchema = z
   .meta({ id: 'RegisterResult' });
 export type RegisterResult = z.infer<typeof registerResultSchema>;
 
-/** First password of an account that has none (after verification, or a social-only user). */
+/**
+ * First password of an account that has none (after verification, or a social-only user), and
+ * the account the screen is showing (`expectedAccountId`, as on the charge, coupon and trade
+ * bodies). The cookie decides whose password is set, and a tab whose session was switched
+ * elsewhere (another tab signed in as somebody else; sign-ins are not broadcast) keeps showing
+ * the old account until it refetches — so the server refuses (403 FORBIDDEN naming the field)
+ * rather than give that account a password typed on another's screen.
+ */
 export const setPasswordBodySchema = z
-  .object({ newPassword: passwordSchema })
+  .object({
+    newPassword: passwordSchema,
+    /** The signed-in user id the screen is showing (better-auth `user.id`, text). */
+    expectedAccountId: z.string().min(1).max(255),
+  })
   .meta({ id: 'SetPasswordBody' });
 export type SetPasswordBody = z.infer<typeof setPasswordBodySchema>;
 

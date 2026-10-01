@@ -29,6 +29,20 @@ function policyOf(rules: HeaderRule[]): string {
   return value;
 }
 
+/** The policy as directive → source list, so a host is pinned to the directive it belongs to. */
+function directivesOf(policy: string): Map<string, string[]> {
+  const directives = new Map<string, string[]>();
+  for (const directive of policy.split(';')) {
+    const [name, ...sources] = directive.trim().split(/\s+/);
+    if (name) directives.set(name, sources);
+  }
+  return directives;
+}
+
+/** The SmartroPay hosts (ADR-0042): the PC build and layer, and the mobile build and page. */
+const SMARTRO_PC = ['https://tpay.smartropay.co.kr', 'https://pay.smartropay.co.kr'];
+const SMARTRO_MOBILE = ['https://tmpay.smartropay.co.kr', 'https://mpay.smartropay.co.kr'];
+
 describe('security headers', () => {
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -83,6 +97,52 @@ describe('security headers', () => {
     expect(policy).toContain("base-uri 'self'");
     expect(policy).toContain("form-action 'self'");
     expect(policy).toContain("frame-ancestors 'none'");
+  });
+
+  it('lets the SmartroPay window in by exact host, each host only where the SDK needs it', async () => {
+    // ADR-0042: the SDK script (both builds: the page loads the one matching the device), the
+    // PC layer's iframe (PC hosts only — a phone leaves the page instead of framing it), and
+    // the SDK's own form posts (into that iframe on a PC, the whole page on a phone). STG and
+    // REAL both, because the mode is the API's runtime setting and this policy is build-time.
+    for (const env of ['development', 'production']) {
+      const directives = directivesOf(policyOf(await rulesFor(env)));
+      expect(directives.get('script-src'), env).toEqual([
+        "'self'",
+        "'unsafe-inline'",
+        ...(env === 'production' ? [] : ["'unsafe-eval'"]),
+        ...SMARTRO_PC,
+        ...SMARTRO_MOBILE,
+      ]);
+      expect(directives.get('frame-src'), env).toEqual(SMARTRO_PC);
+      expect(directives.get('form-action'), env).toEqual([
+        "'self'",
+        ...SMARTRO_PC,
+        ...SMARTRO_MOBILE,
+      ]);
+    }
+  });
+
+  it('loosens nothing else for the payment window', async () => {
+    // The SDK's only XHR is a report of a mode mismatch, which may stay blocked; it loads no
+    // images; its stop and our approval post to this origin. So these stay exactly as before,
+    // and no wildcard or bare scheme is listed for the PG anywhere.
+    const policy = policyOf(await rulesFor('production', 'https://api.example.com'));
+    const directives = directivesOf(policy);
+    expect(directives.get('default-src')).toEqual(["'self'"]);
+    expect(directives.get('connect-src')).toEqual([
+      "'self'",
+      'https://api.example.com',
+      'wss://api.example.com',
+    ]);
+    expect(directives.get('frame-ancestors')).toEqual(["'none'"]);
+    expect(directives.get('object-src')).toEqual(["'none'"]);
+    expect(directives.has('child-src')).toBe(false);
+    expect(policy).not.toMatch(/\*/);
+    // script-src and form-action name all four hosts, frame-src the two PC ones — and no other
+    // directive names any.
+    expect(policy.match(/smartropay/g)).toHaveLength(
+      3 * SMARTRO_PC.length + 2 * SMARTRO_MOBILE.length,
+    );
   });
 
   it("drops 'unsafe-eval' in production", async () => {

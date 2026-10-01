@@ -205,6 +205,8 @@ export const copy = {
   ledgerTypeVoidRefund: '무효 환불',
   ledgerTypeAdminAdjust: '관리자 조정',
   ledgerTypeBonus: '보너스',
+  ledgerTypePaymentCancel: '결제 취소(환불)',
+  ledgerTypePaymentCancelReversal: '결제 취소 복원',
 
   // --- admin (M2 minimum, PLAN 12) ---
   adminTitle: '관리자',
@@ -366,6 +368,9 @@ export const copy = {
   paymentStatusPending: '처리 중',
   paymentStatusSucceeded: '완료',
   paymentStatusFailed: '실패',
+  paymentStatusCancelled: '취소됨',
+  paymentStatusRefunding: '환불 처리 중',
+  paymentStatusRefunded: '환불됨',
   adminNoAuditFailures: '감사 실패가 없습니다.',
   auditKindLedgerMismatch: '원장·잔고 불일치',
 
@@ -642,6 +647,228 @@ export const copy = {
   leaderboardEmpty: '아직 확정된 손익이 있는 계정이 없습니다.',
   errLeaderboardLoad: '순위를 불러오지 못했습니다.',
   leaderboardLink: '전체 순위 보기',
+
+  // --- 사업자 정보 푸터 · 약관 3종 · 충전 안내 (ADR-0044) ---
+  // `{{key}}` is a business fact from src/legal/business-info.ts, substituted by `fillTemplate`
+  // at render time (owner decision: the facts live in ONE config). legal.test.ts resolves every
+  // string here that carries one.
+  legalTermsTitle: '이용약관',
+  legalPrivacyTitle: '개인정보처리방침',
+  legalRefundTitle: '환불정책',
+  legalAddendum: '부칙',
+  footerNavLabel: '약관 및 정책',
+  footerBusinessInfoLabel: '사업자 정보',
+  footerCompany: '상호: {{companyName}}',
+  footerCeo: '대표자: {{ceoName}}',
+  footerBusinessNumber: '사업자등록번호: {{businessNumber}}',
+  footerMailOrderNumber: '통신판매업 신고번호: {{mailOrderNumber}}',
+  footerAddress: '주소: {{address}}',
+  footerPhone: '고객센터: {{phone}}',
+  footerEmail: '이메일: {{email}}',
+  footerPrivacyOfficer: '개인정보 보호책임자: {{privacyOfficer}}',
+  footerHosting: '호스팅 서비스 제공자: {{hostingProvider}}',
+  footerCopyright: '© {{serviceName}}',
+  chargeGuideTitle: '충전 안내',
+  chargeGuideIntro:
+    'P는 {{serviceName}}의 예측 시장에서 예·아니오 계약을 사고파는 데 쓰는 서비스 전용 포인트입니다. 아래 상품 가운데 하나를 골라 충전할 수 있습니다.',
+  chargeGuideDelivery:
+    '결제는 {{pgName}}의 결제 창에서 카드로 진행되며, 가격에는 부가가치세가 포함되어 있습니다. 결제가 승인되면 P가 바로 지갑에 충전됩니다. 충전하려면 로그인이 필요합니다.',
+  chargeGuidePrice: '결제 금액',
+  chargeGuideNoticeTitle: '충전 전에 확인해 주세요',
+  chargeGuideRefundSummary:
+    '결제가 승인된 때부터 {{refundWindowDays}}일 이내이고 그 결제로 충전된 P를 전혀 쓰지 않았다면 결제 금액 전액을 환불받을 수 있습니다. 쿠폰·정산 등 결제 없이 받은 P는 환불되지 않습니다.',
+  chargeGuideRefundLink: '환불정책 자세히 보기',
+  chargeGuideLoadError: '충전 상품을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.',
+
+  // --- 실명·휴대전화와 온보딩 (ADR-0043) ---
+  // 결제 창의 구매자 정보(BuyerName/BuyerTel)로 쓰인다. 본인인증은 아직 없어서 형식만 확인하고
+  // 입력한 그대로 저장한다. 규칙은 @buddha/shared의 realNameSchema·phoneSchema(lib/contact-form.ts)다.
+  realName: '실명',
+  realNameHint: '2~30자의 문자(한글·영문 등). 띄어쓰기와 가운뎃점(·)을 쓸 수 있습니다.',
+  phone: '휴대전화 번호',
+  phonePlaceholder: '010-1234-5678',
+  phoneHint: '하이픈(-)은 넣어도 되고 빼도 됩니다.',
+  contactVerificationNotice:
+    '본인인증은 추후 도입 예정입니다. 지금은 입력한 실명과 번호를 그대로 저장합니다.',
+  contactPrivacyLink: '개인정보처리방침 보기',
+  errRealNameRequired: '실명을 입력해 주세요.',
+  errRealNameFormat:
+    '실명은 2~30자의 문자(한글·영문 등)로 입력해 주세요. 숫자와 기호는 쓸 수 없고, 띄어쓰기와 가운뎃점(·)은 글자 사이에만 쓸 수 있습니다.',
+  errPhoneRequired: '휴대전화 번호를 입력해 주세요.',
+  errPhoneFormat:
+    '010·011·016~019로 시작하는 휴대전화 번호 10~11자리를 입력해 주세요. (예: 010-1234-5678)',
+  onboardingTitle: '실명·연락처 입력',
+  onboardingSignedOut: '로그인이 풀렸습니다. 다시 로그인하면 이어서 입력할 수 있습니다.',
+  onboardingSubtitle:
+    '결제에 필요한 실명과 휴대전화 번호를 입력해 주세요. 입력을 마치면 서비스를 계속 이용할 수 있습니다.',
+  onboardingSubmit: '저장하고 계속하기',
+  contactSaved: '실명과 휴대전화 번호를 저장했습니다.',
+  settingsContact: '실명·연락처',
+  settingsContactHint: '결제할 때 구매자 정보로 전달됩니다.',
+  setPasswordContactHeading: '결제에 쓰일 실명과 휴대전화 번호도 입력해 주세요.',
+  // 비밀번호는 이미 저장된 뒤라 이 화면에서 다시 시도할 수 없다(설정 완료 안내로 바뀐다).
+  setPasswordContactFailed:
+    '비밀번호는 저장했지만 실명·연락처를 저장하지 못했습니다. 다음 화면에서 다시 입력해 주세요.',
+  // 비밀번호는 저장한 뒤, 다른 탭이 다른 계정으로 로그인해 연락처 요청이 거절됐을 때(A-PG-24).
+  // 지금 쿠키의 계정에 /onboarding을 권하면 안 되므로, 원래 계정으로 다시 로그인하라고만 한다.
+  setPasswordContactSessionChanged:
+    '비밀번호는 저장했지만, 그사이 로그인한 계정이 바뀌어 실명·연락처는 저장하지 않았습니다. 원래 계정으로 다시 로그인하면 이어서 입력할 수 있습니다.',
+
+  // --- 스마트로페이 결제 창 · 결제 결과 · 결제 내역 · 관리자 환불 (ADR-0042) ---
+  // 결제 창(PC 레이어, 모바일 페이지 이동)에서 돌아온 지갑의 안내와, 관리자의 청약철회 환불.
+  // 기한 7일과 최소 1,000원은 @buddha/shared의 PAYMENT_REFUND_WINDOW_DAYS·CARD_MIN_PRICE_KRW와
+  // 같아야 한다(smartro-payments.test.ts가 확인한다).
+  chargeApproving: '결제를 승인하고 있습니다. 잠시만 기다려 주세요.',
+  chargeWindowFailed: '결제 창을 열지 못했습니다. 페이지를 새로고침한 뒤 다시 시도해 주세요.',
+  // 다른 탭에서 다른 계정으로 로그인하거나 로그아웃해, 이전 계정의 결제 창(불러오는 중·열림)을
+  // 닫았을 때. 승인 요청을 보내기 전에 닫으므로 청구는 없다(checkoutOnAccount의 'stop').
+  chargeWindowAccountChanged:
+    '로그인한 계정이 바뀌어 이전 계정의 결제 창을 닫았습니다. 청구된 금액은 없습니다.',
+  chargeContactRequired: '결제하려면 실명과 휴대전화 번호를 먼저 등록해 주세요.',
+  chargeBelowCardMinimum: '1,000원 미만 상품은 결제 창에서 결제할 수 없습니다.',
+  chargePackageSelected: '선택한 상품',
+  paymentResultSucceeded: '결제가 완료되어 P가 충전되었습니다.',
+  // 실패는 대개 청구가 없지만, 승인이 PG 오류 코드(9999 등)로 답한 결제는 카드가 청구됐을 수 있어
+  // 관리자가 확인한다(「확인 필요」). 그래서 청구가 없다고 단정하지 않고, 보이면 알려 달라고 한다.
+  // 결제창은 카드 말고도 간편결제·계좌이체·휴대폰을 보이고 실패한 결제에는 수단이 없으므로 수단을
+  // 가리지 않고, 몇 주 뒤의 명세서가 아니라 곧바로 오는 승인 알림·이용 내역을 가리킨다.
+  paymentResultFailed:
+    '결제가 완료되지 않았습니다. 카드나 결제 수단의 승인·이용 내역에 이 결제가 보이면 고객센터로 알려 주세요.',
+  paymentResultStopped: '결제를 취소했습니다. 청구된 금액은 없습니다.',
+  paymentResultPending:
+    '결제 결과를 확인하고 있습니다. 확인되면 이 화면과 결제 내역에 반영되며, 오래 걸리면 고객센터로 문의해 주세요.',
+  // 취소가 확인된 결제에만 보인다(확인 전의 `cancelled`는 「확인 중」 안내를 쓴다). 우리 망취소뿐
+  // 아니라 결제대행사의 취소 통보, 관리자의 수동 정리로 닫힌 결제도 있어 누가 취소했는지는 말하지
+  // 않는다 — 그 까닭은 아래 「사유」 줄이 말한다(망취소·취소 통보·수동 정리가 저마다의 사유를 적는다).
+  paymentResultCancelled:
+    '결제가 승인된 뒤 취소되어 P는 충전되지 않았습니다. 카드사에 따라 취소가 반영되기까지 며칠이 걸릴 수 있습니다.',
+  paymentResultReason: '사유:',
+  paymentHistoryTitle: '결제 내역',
+  paymentHistoryEmpty: '아직 결제 내역이 없습니다.',
+  paymentStatusUnfinished: '미완료',
+  paymentApprovedAt: '승인',
+  paymentRefundedAt: '환불',
+  paymentMethodCard: '카드',
+  paymentMethodBank: '계좌이체',
+  paymentMethodCellphone: '휴대폰',
+  paymentMethodKakao: '카카오페이',
+  paymentMethodNaver: '네이버페이',
+  paymentMethodPayco: '페이코',
+  paymentMethodSamsung: '삼성페이',
+  paymentMethodApple: '애플페이',
+  paymentMethodToss: '토스페이',
+  paymentMethodLpay: 'L.PAY',
+  paymentMethodPinpay: '핀페이',
+  paymentMethodSmile: '스마일페이',
+  paymentMethodTmoney: '티머니페이',
+  adminPaymentRefund: '환불',
+  adminPaymentRefundRetry: '환불 재시도',
+  adminPaymentRefundDeadline: '환불 기한',
+  adminPaymentRefundTitle: '결제를 환불합니다',
+  adminPaymentRefundBody:
+    '결제 금액 전액을 결제대행사에서 취소하고, 이 결제로 충전된 P를 모두 회수합니다. 승인 후 7일 이내이고 회원이 그 P를 전혀 쓰지 않았을 때(사용 가능 잔고가 그 P 이상)만 환불됩니다.',
+  adminPaymentRefundRetryTitle: '환불을 다시 시도합니다',
+  // 「환불 처리 중」은 취소의 답이 없었던 결제만이 아니다: 거절된 재시도, 재시도가 넘겨받은 첫 시도,
+  // 부분 취소가 기록된 결제도 남는다(`settle_required`). 그래서 답이 없었다고 말하지 않는다.
+  adminPaymentRefundRetryBody:
+    '이전 환불 요청에서 P는 이미 회수했고, 카드 취소는 아직 확인되지 않았습니다. 결제대행사에 취소를 다시 요청합니다(거절되면 가맹점 관리자에서 확인한 뒤 「수동 정리」로 정리합니다).',
+  adminPaymentRefundReason: '환불 사유',
+  adminPaymentRefundReasonHint: '감사 기록에 남고, 결제대행사에 취소 사유로도 전달됩니다.',
+  adminPaymentRefundSubmit: '환불하기',
+  adminPaymentRefunded: '환불했습니다. 결제를 취소하고 P를 회수했습니다.',
+  refundGatewayAnswer: '결제대행사 응답:',
+  errRefundReason: '환불 사유를 1~500자로 입력해 주세요.',
+  errRefundPUsed: '이미 사용한 P가 있어 환불할 수 없습니다.',
+  errRefundWindowClosed: '승인 후 7일이 지나 환불할 수 없습니다.',
+  errRefundStatus: '환불할 수 있는 상태의 결제가 아닙니다. 목록에서 현재 상태를 확인해 주세요.',
+  errRefundProvider: '이 결제는 결제대행사에서 취소할 수 없습니다.',
+  // 거절 뒤 회수했던 P를 되돌렸는지는 그때 결제가 어떤 상태였는지에 달려 있다(이미 「환불 처리 중」이
+  // 아니었다면 되돌리지 않는다). 그래서 단정하지 않고 목록의 현재 상태를 보게 한다.
+  errRefundGatewayRefused: '결제대행사가 취소를 거절했습니다. 목록에서 현재 상태를 확인해 주세요.',
+  errRefundGatewayError:
+    '결제대행사의 응답을 받지 못했습니다. 결제는 「환불 처리 중」으로 남아 있으니 잠시 뒤 다시 시도해 주세요.',
+  errRefundInProgress: '이전 환불 요청이 아직 처리 중입니다. 1분쯤 뒤에 다시 시도해 주세요.',
+  errRefundNotFound: '결제를 찾을 수 없습니다.',
+  // 거절된 재시도(또는 재시도가 넘겨받은 첫 시도, 부분 취소가 기록된 결제)는 P를 되돌리지 않고
+  // 「환불 처리 중」으로 남는다(`settle_required`). 카드가 실제로 취소됐는지는 가맹점 관리자만 안다.
+  errRefundSettleRequired:
+    '결제대행사가 카드 취소를 거절했습니다. 회수한 P는 돌려주지 않았고, 결제는 「환불 처리 중」으로 남아 있습니다.',
+  // 거절된 환불이 방금 결제를 건드렸으니 수동 정리는 2분 동안 `in_progress`로 거절된다.
+  errRefundSettleRequiredHint:
+    '가맹점 관리자에서 카드가 취소되었는지 확인하고, 2분쯤 지난 뒤 「수동 정리」로 정리해 주세요.',
+
+  // --- 관리자 수동 정리 (ADR-0042) ---
+  // 승인 응답·재통보·망취소·환불 취소의 결과를 API가 스스로 알 수 없어 「확인 필요」로 표시된
+  // 스마트로페이 결제를, 관리자가 가맹점 관리자(스마일비즈)에서 카드 거래를 확인한 뒤 정리한다.
+  adminPaymentNeedsReview: '확인 필요',
+  adminPaymentSettle: '수동 정리',
+  adminPaymentSettleTitle: '결제를 수동 정리합니다',
+  // 다른 결제의 결제창이 이 결제로 승인된 경우(API의 netCancel) 그 카드 거래는 이 결제의 주문번호가
+  // 아니라 사유에 적힌 다른 주문번호·TID로 찾아야 한다. 그 다른 결제가 아직 그 승인을 가질 수 있으면
+  // (처리 중, 또는 자기 승인이 실패해 곧 「확인 필요」가 될 결제) 그 카드 취소의 재통보가 주문번호만으로
+  // 그 결제에 짝지어지므로, API 오류 로그가 하는 말을 화면에서도 한다: 그 결제부터 정리한다.
+  // 그런 결제는 `failed`로 정리한 뒤에도 사유가 그대로라, 그 뒤 이 결제의 주문번호로 온 승인 통보(결제자가
+  // 스스로 부른 승인 등 — 다른 결제의 승인 호출이 만든 것은 그 결제가 표시된다)가 다시 표시하면 처음
+  // 표시와 똑같아 보인다. 화면에는 정리 이력이 없으므로 여기서 사유의 거래를 두 번 인정하지 말라고 하고,
+  // 그 통보의 거래번호는 API 오류 로그가 적는다.
+  adminPaymentSettleBody:
+    '먼저 스마트로페이 가맹점 관리자(스마일비즈)에서 이 결제의 카드 거래를 주문번호로 찾아 승인·취소 여부를 확인해 주세요. 사유에 다른 주문번호나 승인 거래번호(TID)가 적혀 있으면 그것으로 찾고, 카드를 취소하기 전에 그 주문번호의 결제부터 확인합니다: 처리 중이거나 바뀐 지 2분이 안 됐으면 기다리고, 「확인 필요」로 표시되면 그 결제를 먼저 정리합니다. 사유에 다른 주문번호가 적힌 결제를 정리했는데 다시 표시되면, 사유의 거래가 아니라 그 뒤 이 결제의 주문번호로 온 승인 통보 때문이니 서버 오류 로그에 적힌 그 TID로 찾고 사유의 거래는 다시 인정하지 않습니다. 그다음 확인한 결과를 고릅니다. 정리한 결과는 감사 기록에 남고 되돌릴 수 없습니다.',
+  adminPaymentSettleSites: '가맹점 관리자',
+  adminPaymentSettleSiteStg: '테스트(STG)',
+  adminPaymentSettleSiteReal: '운영(REAL)',
+  // 가맹점 관리자 링크는 새 탭에서 열린다. 링크 이름에 붙여 미리 알린다.
+  adminPaymentSettleSiteNewTab: '(새 창)',
+  adminPaymentSettleMoid: '주문번호',
+  adminPaymentSettleOutcome: '확인한 결과',
+  adminPaymentSettleCredit: '승인 확인 · P 충전',
+  adminPaymentSettleCreditHint: '승인이 확인되어 P를 충전합니다. 결제는 완료로 바뀝니다.',
+  adminPaymentSettleCancelled: '취소 확인',
+  adminPaymentSettleCancelledHint:
+    '카드 결제가 취소된 것을 확인했습니다. P는 충전하지 않고 결제를 취소됨으로 둡니다.',
+  adminPaymentSettleFailed: '실패로 닫기',
+  adminPaymentSettleFailedHint: '승인되지 않은 결제로 닫습니다. P는 충전하지 않습니다.',
+  adminPaymentSettleRefunded: '환불 완료',
+  adminPaymentSettleRefundedHint:
+    '카드 취소가 확인되어 환불을 완료합니다. 회수한 P는 돌려주지 않습니다.',
+  adminPaymentSettleRestore: 'P 복원',
+  adminPaymentSettleRestoreHint:
+    '카드가 취소되지 않아 회수한 P를 돌려줍니다. 결제는 완료로 돌아갑니다.',
+  adminPaymentSettleTid: '승인 거래번호(TID)',
+  // errSettleTidRequired와 같은 조건: 성공한 승인이 기록돼 있지 않을 때다. 승인이 PG 오류 코드로
+  // 답한 실패 결제(「확인 필요」의 흔한 경우)에는 응답이 기록돼 있어도 필요하다.
+  adminPaymentSettleTidHint:
+    '가맹점 관리자에서 확인한 승인 거래번호(TID) — 결제 기록에 성공한 승인 응답이 없을 때(응답이 없었거나 PG 오류 코드로 답한 경우) 필요',
+  adminPaymentSettleReason: '정리 사유',
+  adminPaymentSettleReasonHint:
+    '감사 기록에 남습니다. 가맹점 관리자에서 확인한 내용을 적어 주세요.',
+  adminPaymentSettleNone:
+    '지금 상태에서는 정리할 결과가 없습니다. 목록에서 현재 상태를 확인해 주세요.',
+  adminPaymentSettleNext: '다음',
+  adminPaymentSettleBack: '뒤로',
+  adminPaymentSettleConfirmBody: '아래 내용으로 정리합니다. 정리한 결과는 되돌릴 수 없습니다.',
+  adminPaymentSettleSubmit: '정리하기',
+  adminPaymentSettled: '수동 정리했습니다.',
+  errSettleOutcome: '확인한 결과를 골라 주세요.',
+  errSettleTid: '승인 거래번호(TID)는 공백 없이 영문·숫자·기호 64자 이내로 입력해 주세요.',
+  // API는 성공한 승인이 기록돼 있지 않으면 tid를 요구한다: 승인 응답이 없었던 결제뿐 아니라 승인이
+  // PG 오류 코드(9999, W999 …)로 답해 「확인 필요」가 된 실패 결제도(그 응답은 행에 사유로 보인다).
+  errSettleTidRequired:
+    '결제 기록에 성공한 승인 응답이 없어 승인 거래번호(TID)가 필요합니다. 가맹점 관리자에서 확인한 TID를 입력해 주세요.',
+  errSettleReason: '정리 사유를 1~500자로 입력해 주세요.',
+  // `status`는 상태가 그 결과를 허용하지 않을 때와, 결제대행사의 취소 재통보가 이 카드의 취소를
+  // 알려 와 충전·P 복원을 거절할 때 모두 온다. 둘을 가르는 값이 없어 두 경우를 함께 안내한다.
+  errSettleStatus:
+    '지금 상태에서는 이 결과로 정리할 수 없습니다. 목록에서 현재 상태를 확인해 주세요.',
+  errSettleStatusHint:
+    '결제대행사의 취소 재통보가 카드 취소를 알려 온 결제는 P를 충전하거나 돌려줄 수 없으니 「취소 확인」 또는 「환불 완료」로 정리해 주세요.',
+  errSettleProvider: '스마트로페이 결제만 수동 정리할 수 있습니다.',
+  errSettleInProgress: '방금 처리 중인 결제입니다. 2분 뒤에 다시 시도해 주세요.',
+  errSettleApprovalMismatch: '기록된 승인과 맞지 않아 P를 충전할 수 없습니다.',
+  errSettleApprovalMismatchHint:
+    '기록된 승인의 금액·가맹점 번호(MID)·주문번호가 이 결제와 다르거나, 기록된 승인끼리 서로 어긋나거나, 입력한 TID가 기록된 승인과 다르거나 이미 다른 결제의 것입니다. TID를 다시 확인하고, 이 결제의 승인이 아니라면 가맹점 관리자에서 카드 결제를 취소한 뒤 「취소 확인」으로 정리해 주세요.',
+  errSettlePartialCancel: '부분 취소가 기록된 결제라 P를 충전하거나 돌려줄 수 없습니다.',
+  errSettlePartialCancelHint:
+    '결제대행사가 이 카드의 부분 취소를 알려 왔습니다. 「취소 확인」 또는 「환불 완료」로 정리한 뒤, 회원의 잔고는 「사용자」 화면의 「잔고 조정」으로 맞춰 주세요.',
 
   // --- generic ---
   errUnknown: '문제가 발생했습니다. 잠시 후 다시 시도해 주세요.',

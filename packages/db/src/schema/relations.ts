@@ -17,10 +17,12 @@ import { ledgerEntries } from './ledger.js';
 import { marketEvents } from './market-events.js';
 import { markets } from './markets.js';
 import { orders } from './orders.js';
+import { paymentEvents } from './payment-events.js';
 import { payments } from './payments.js';
 import { positions } from './positions.js';
 import { priceTicks } from './price-ticks.js';
 import { profiles } from './profiles.js';
+import { userContacts } from './user-contacts.js';
 
 export const profilesRelations = relations(profiles, ({ one }) => ({
   user: one(user, { fields: [profiles.userId], references: [user.id] }),
@@ -36,12 +38,21 @@ export const ledgerEntriesRelations = relations(ledgerEntries, ({ one }) => ({
   user: one(user, { fields: [ledgerEntries.userId], references: [user.id] }),
 }));
 
-export const paymentsRelations = relations(payments, ({ one }) => ({
+export const paymentsRelations = relations(payments, ({ one, many }) => ({
   user: one(user, { fields: [payments.userId], references: [user.id] }),
   package: one(chargePackages, {
     fields: [payments.packageId],
     references: [chargePackages.id],
   }),
+  events: many(paymentEvents),
+}));
+
+export const paymentEventsRelations = relations(paymentEvents, ({ one }) => ({
+  payment: one(payments, { fields: [paymentEvents.paymentId], references: [payments.id] }),
+}));
+
+export const userContactsRelations = relations(userContacts, ({ one }) => ({
+  user: one(user, { fields: [userContacts.userId], references: [user.id] }),
 }));
 
 export const chargePackagesRelations = relations(chargePackages, ({ many }) => ({
@@ -130,6 +141,7 @@ export const userRelations = relations(user, ({ one, many }) => ({
   accounts: many(account),
   profile: one(profiles, { fields: [user.id], references: [profiles.userId] }),
   balance: one(balances, { fields: [user.id], references: [balances.userId] }),
+  contact: one(userContacts, { fields: [user.id], references: [userContacts.userId] }),
   ledgerEntries: many(ledgerEntries),
   payments: many(payments),
   orders: many(orders),

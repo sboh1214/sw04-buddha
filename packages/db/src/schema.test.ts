@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   DEFAULT_LIQUIDITY_B,
   SIGNUP_BONUS_P,
@@ -14,9 +15,12 @@ import {
   ledgerEntries,
   markets,
   orders,
+  paymentEvents,
+  payments,
   positions,
   profiles,
   user,
+  userContacts,
 } from './schema/index.js';
 import { createCategory, createMarket, createPosition, createUser } from './test/factories.js';
 import { connectTestDb, hasTestDb, type TestDb } from './test/harness.js';
@@ -249,6 +253,88 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     );
   });
 
+  describe('SmartroPay (migrations 0014, 0015)', () => {
+    const payment = (userId: string, overrides: Partial<typeof payments.$inferInsert> = {}) => ({
+      userId,
+      amountP: 10_000n,
+      priceKrw: 9_700,
+      provider: 'smartro',
+      idempotencyKey: `key-${randomUUID()}`,
+      ...overrides,
+    });
+
+    it('stores the new statuses and leaves the PG columns null until they are known', async () => {
+      const { user: u } = await createUser(t.db);
+      const [row] = await t.db.insert(payments).values(payment(u.id)).returning();
+      expect(row).toMatchObject({
+        status: 'pending',
+        method: null,
+        approvedAt: null,
+        refundedAt: null,
+        resultMessage: null,
+      });
+      // 0014's values are usable once the migration run has committed.
+      for (const status of ['cancelled', 'refunding', 'refunded'] as const) {
+        const [updated] = await t.db
+          .update(payments)
+          .set({ status })
+          .where(eq(payments.id, row!.id))
+          .returning();
+        expect(updated!.status).toBe(status);
+      }
+    });
+
+    it('lets a PG transaction id name one payment only, and any number have none', async () => {
+      const { user: u } = await createUser(t.db);
+      // Pending rows have no reference yet: the index is partial, so they never collide.
+      await t.db.insert(payments).values([payment(u.id), payment(u.id)]);
+      await t.db.insert(payments).values(payment(u.id, { providerRef: 'T0001' }));
+      // The same Tid under another provider is another transaction.
+      await t.db.insert(payments).values(payment(u.id, { provider: 'mock', providerRef: 'T0001' }));
+      await expect(
+        t.db.insert(payments).values(payment(u.id, { providerRef: 'T0001' })),
+      ).rejects.toSatisfy(
+        (e) =>
+          sqlState(e) === '23505' && sqlConstraint(e) === 'payments_provider_provider_ref_unique',
+      );
+    });
+
+    it('records payment events with an empty payload by default and keeps their payment', async () => {
+      const { user: u } = await createUser(t.db);
+      const [row] = await t.db.insert(payments).values(payment(u.id)).returning();
+      const [event] = await t.db
+        .insert(paymentEvents)
+        .values({ paymentId: row!.id, type: 'return' })
+        .returning();
+      expect(event).toMatchObject({ type: 'return', resultCode: null, payload: {} });
+      // ON DELETE RESTRICT: a payment with a PG history cannot disappear under it (23503).
+      await expect(t.db.delete(payments).where(eq(payments.id, row!.id))).rejects.toSatisfy(
+        (e) => sqlState(e) === '23503',
+      );
+    });
+
+    it('keeps one contact per account', async () => {
+      const { user: u } = await createUser(t.db);
+      await t.db
+        .insert(userContacts)
+        .values({ userId: u.id, realName: '홍길동', phone: '01012345678' });
+      await expect(
+        t.db
+          .insert(userContacts)
+          .values({ userId: u.id, realName: '김철수', phone: '01099998888' }),
+      ).rejects.toSatisfy((e) => sqlState(e) === '23505');
+      const [upserted] = await t.db
+        .insert(userContacts)
+        .values({ userId: u.id, realName: '김철수', phone: '01099998888' })
+        .onConflictDoUpdate({
+          target: userContacts.userId,
+          set: { realName: '김철수', phone: '01099998888' },
+        })
+        .returning();
+      expect(upserted).toMatchObject({ realName: '김철수', phone: '01099998888' });
+    });
+  });
+
   it('$onUpdate refreshes updated_at through the ORM', async () => {
     const { profile } = await createUser(t.db);
     await new Promise((r) => setTimeout(r, 5));
@@ -312,19 +398,48 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       ).rejects.toSatisfy((e) => sqlState(e) === '42501');
     });
 
-    it('cannot UPDATE/DELETE market_events or admin_actions, can on other tables', async () => {
+    it('cannot UPDATE/DELETE market_events, admin_actions or payment_events, can on other tables', async () => {
       const { rows } = await t.db.execute<{ table: string; privilege: string }>(sql`
         SELECT table_name AS "table", privilege_type AS privilege
         FROM information_schema.role_table_grants
         WHERE grantee = 'buddha_app' AND table_schema = 'public'
-          AND table_name IN ('ledger_entries', 'market_events', 'admin_actions', 'balances')
+          AND table_name IN ('ledger_entries', 'market_events', 'admin_actions', 'payment_events',
+            'balances', 'payments', 'user_contacts')
         ORDER BY 1, 2`);
       const grants = Object.groupBy(rows, (r) => r.table);
       const privs = (table: string) => grants[table]?.map((r) => r.privilege).sort() ?? [];
       expect(privs('ledger_entries')).toEqual(['INSERT', 'SELECT']);
       expect(privs('market_events')).toEqual(['INSERT', 'SELECT']);
       expect(privs('admin_actions')).toEqual(['INSERT', 'SELECT']);
+      // Migration 0015: the PG exchange log is append-only too.
+      expect(privs('payment_events')).toEqual(['INSERT', 'SELECT']);
       expect(privs('balances')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
+      expect(privs('payments')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
+      expect(privs('user_contacts')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
+    });
+
+    it('cannot UPDATE or DELETE a payment event', async () => {
+      const { user: u } = await createUser(t.db);
+      const [row] = await t.db
+        .insert(payments)
+        .values({
+          userId: u.id,
+          amountP: 10_000n,
+          priceKrw: 9_700,
+          provider: 'smartro',
+          idempotencyKey: 'append-only',
+        })
+        .returning();
+      const [event] = await t.db
+        .insert(paymentEvents)
+        .values({ paymentId: row!.id, type: 'notify', resultCode: '3001' })
+        .returning();
+      await expect(
+        t.db.update(paymentEvents).set({ resultCode: 'x' }).where(eq(paymentEvents.id, event!.id)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '42501');
+      await expect(
+        t.db.delete(paymentEvents).where(eq(paymentEvents.id, event!.id)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '42501');
     });
 
     it('cannot create tables', async () => {

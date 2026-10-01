@@ -33,9 +33,18 @@ export const E2E_PASSWORD = 'passw0rd-e2e';
 /** Mailpit HTTP API (docker compose). Override with MAILPIT_URL. */
 const MAILPIT_URL = process.env.MAILPIT_URL ?? 'http://127.0.0.1:8025';
 
+/**
+ * The real name and mobile number every sign-up here gives on /set-password (ADR-0043). The
+ * phone is typed the way people type it; the API stores the digits.
+ */
+export const E2E_CONTACT = { realName: '테스트회원', phone: '010-1234-5678' } as const;
+
 /** `.env.example`'s defaults, so a developer who never exported them still runs the suite. */
 const ADMIN_EMAIL = process.env.SEED_ADMIN_EMAIL ?? 'admin@buddha.local';
 const ADMIN_PASSWORD = process.env.SEED_ADMIN_PASSWORD ?? 'admin1234!';
+
+/** What the `admin` fixture gives the seed admin, which `pnpm db:seed` creates without one. */
+const ADMIN_CONTACT = { realName: '테스트관리자', phone: '01000000000' } as const;
 
 /** The repo's placeholder for a figure that does not exist yet (trade-panel.tsx). */
 export const DASH = '—';
@@ -91,6 +100,20 @@ export const test = base.extend<{ admin: APIRequestContext }>({
           'run `pnpm db:seed` with SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD set',
       );
     }
+    // The seed admin is an account like any other, so the onboarding gate (ADR-0043) would send
+    // a spec's browser sign-in as the admin (`signIn(…, adminAccount…)`) to /onboarding instead
+    // of `/`. Every spec that does that also asks for this fixture, so the admin gets a contact
+    // here — an upsert, so a re-run against a persistent database changes nothing. The body
+    // names the account it is for (`expectedAccountId`, A-PG-24): the sign-in's own answer.
+    const { user } = (await signedIn.json()) as { user: { id: string } };
+    const contact = await context.put('/api/v1/me/contact', {
+      data: { ...ADMIN_CONTACT, expectedAccountId: user.id },
+    });
+    if (!contact.ok()) {
+      throw new Error(
+        `saving the seed admin's contact failed (${String(contact.status())}): ${await contact.text()}`,
+      );
+    }
     await provide(context);
     await context.dispose();
   },
@@ -132,11 +155,12 @@ export async function verificationLink(email: string): Promise<string> {
 }
 
 /**
- * Sign-up (ADR-0024): the form takes the email only, the link in the mail signs the user in
- * and lands on /set-password, where the first password is chosen. The account arrives with
- * the sign-up bonus already credited (migration 0004), which the balance chip shows.
+ * The first half of a sign-up (ADR-0024): the form takes the email only, and the link in the
+ * mail signs the user in and lands on /set-password. The account is signed in from here on
+ * but has neither a password nor a real name and phone yet — which is also the state the
+ * onboarding gate exists for (ADR-0043), so onboarding.spec.ts starts from this.
  */
-export async function signUp(page: Page, email: string): Promise<void> {
+export async function openSetPassword(page: Page, email: string): Promise<void> {
   await page.goto('/signup');
   await page.getByLabel(copy.email).fill(email);
   await page.getByRole('button', { name: copy.signupWithEmail }).click();
@@ -144,13 +168,28 @@ export async function signUp(page: Page, email: string): Promise<void> {
 
   await page.goto(await verificationLink(email));
   await expect(page).toHaveURL('/set-password');
+}
+
+/**
+ * Sign-up (ADR-0024, ADR-0043): /set-password takes the first password AND the real name and
+ * mobile number, so the account never meets the onboarding gate. It arrives with the sign-up
+ * bonus already credited (migration 0004), which the balance chip shows.
+ */
+export async function signUp(page: Page, email: string): Promise<void> {
+  await openSetPassword(page, email);
   await page.getByTestId('new-password').fill(E2E_PASSWORD);
   await page.getByTestId('new-password-confirm').fill(E2E_PASSWORD);
+  await page.getByTestId('contact-real-name').fill(E2E_CONTACT.realName);
+  await page.getByTestId('contact-phone').fill(E2E_CONTACT.phone);
   await page.getByRole('button', { name: copy.setPasswordSubmit }).click();
   await expect(page).toHaveURL('/');
 }
 
-/** Signs an existing account in through the login form; lands on `/` with no `next`. */
+/**
+ * Signs an existing account in through the login form; lands on `/` with no `next`. The account
+ * must have a real name and phone — every `signUp` account does, and the seed admin gets them
+ * from the `admin` fixture — or the onboarding gate (ADR-0043) sends it to /onboarding instead.
+ */
 export async function signIn(page: Page, email: string, password: string): Promise<void> {
   await page.goto('/login');
   await page.getByLabel(copy.email).fill(email);

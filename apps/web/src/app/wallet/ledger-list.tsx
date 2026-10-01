@@ -17,6 +17,8 @@ const TYPE_LABEL: Record<LedgerEntryType, string> = {
   MARKET_VOID_REFUND: copy.ledgerTypeVoidRefund,
   ADMIN_ADJUST: copy.ledgerTypeAdminAdjust,
   BONUS: copy.ledgerTypeBonus,
+  PAYMENT_CANCEL: copy.ledgerTypePaymentCancel,
+  PAYMENT_CANCEL_REVERSAL: copy.ledgerTypePaymentCancelReversal,
 };
 
 export function LedgerList() {

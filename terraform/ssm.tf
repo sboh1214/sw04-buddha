@@ -35,7 +35,7 @@ resource "aws_ssm_parameter" "env" {
   name        = local.ssm_env_parameter
   description = "Complete production .env for the tf-buddha compose stack; read by deploy/deploy.sh"
   type        = "SecureString"
-  # Standard tier: free, 4 KB limit (the rendered file is ~1.6 KB).
+  # Standard tier: free, 4 KB limit (the rendered file is ~2.7 KB with every optional key set).
   tier = "Standard"
 
   value = templatefile("${path.module}/templates/env.tftpl", {
@@ -59,6 +59,13 @@ resource "aws_ssm_parameter" "env" {
     postgres_password    = random_password.postgres_superuser.result
     seed_admin_email     = var.seed_admin_email
     seed_admin_password  = var.seed_admin_password
+
+    # SmartroPay (ADR-0042): the defaults keep the mock provider until terraform.tfvars sets them.
+    payment_provider        = var.payment_provider
+    smartro_mode            = var.smartro_mode
+    smartro_mid             = var.smartro_mid
+    smartro_merchant_key    = var.smartro_merchant_key
+    smartro_cancel_password = var.smartro_cancel_password
   })
 
   tags = {

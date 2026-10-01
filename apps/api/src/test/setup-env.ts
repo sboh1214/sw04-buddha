@@ -27,3 +27,7 @@ process.env.WEB_ORIGIN ??= 'http://localhost:3000';
 // Unreachable on purpose: tests replace MAILER with the in-memory mailer.
 process.env.SMTP_HOST = '127.0.0.1';
 process.env.SMTP_PORT = '9';
+// The immediate mock charge, whatever a developer's .env says (PAYMENT_PROVIDER=smartro there
+// would turn every charge suite into 404s): SmartroPay suites switch it on per app, with a fake
+// PG, through `createTestApp({ smartro })`.
+process.env.PAYMENT_PROVIDER = 'mock';

@@ -308,6 +308,92 @@
         ]
       }
     },
+    "/api/v1/me/contact": {
+      "put": {
+        "operationId": "updateMyContact",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContactBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Contact"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Set real name and mobile number",
+        "tags": [
+          "me"
+        ]
+      }
+    },
     "/api/v1/charge-packages": {
       "get": {
         "operationId": "listChargePackages",
@@ -347,6 +433,47 @@
           }
         },
         "summary": "Charge packages on sale, cheapest discount first",
+        "tags": [
+          "wallet"
+        ]
+      }
+    },
+    "/api/v1/payments/provider": {
+      "get": {
+        "operationId": "getPaymentProvider",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/PaymentProviderInfo"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The configured payment provider: mock (immediate charge) or smartro (payment window, with its SDK URLs)",
         "tags": [
           "wallet"
         ]
@@ -466,6 +593,125 @@
           }
         ],
         "summary": "Buy one charge package (mock provider: succeeds immediately). P is never convertible back to cash.",
+        "tags": [
+          "wallet"
+        ]
+      }
+    },
+    "/api/v1/payments/smartro/prepare": {
+      "post": {
+        "operationId": "prepareSmartroPayment",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Client-generated key for this purchase (PLAN 5.4). Re-sent while the payment is still pending and unapproved, it returns a freshly signed form for the SAME payment. DUPLICATE_REQUEST (409) answers a key re-used with a different body, or one whose payment has already been approved or closed (the key is spent).",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_-]+$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChargeBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/SmartroPrepareResult"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "PRICE_MOVED | DUPLICATE_REQUEST | CONTACT_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Reserve a pending SmartroPay payment for one charge package and sign the payment-window form (provider smartro only)",
         "tags": [
           "wallet"
         ]
@@ -764,6 +1010,93 @@
           }
         ],
         "summary": "Charges, newest first",
+        "tags": [
+          "wallet"
+        ]
+      }
+    },
+    "/api/v1/me/payments/{id}": {
+      "get": {
+        "operationId": "getMyPayment",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Payment"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "One of the caller charges (the wallet reads it for the result of a payment window)",
         "tags": [
           "wallet"
         ]
@@ -1732,6 +2065,250 @@
           }
         ],
         "summary": "Charges, newest first",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/payments/{id}/refund": {
+      "post": {
+        "operationId": "adminRefundPayment",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefundPaymentBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AdminPayment"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "INSUFFICIENT_BALANCE | DUPLICATE_REQUEST | REFUND_NOT_ALLOWED | PAYMENT_GATEWAY_REFUSED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "PAYMENT_GATEWAY_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Refund an unused charge within 7 days of its approval: claw back all its P, then cancel the whole KRW at the provider (retry a refunding one)",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/payments/{id}/settle": {
+      "post": {
+        "operationId": "adminSettlePayment",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettlePaymentBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AdminPayment"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "REFUND_NOT_ALLOWED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Settle by hand a SmartroPay payment the API could not settle (needsReview), after checking the card in the merchant admin",
         "tags": [
           "admin"
         ]
@@ -4078,6 +4655,10 @@
           "RATE_LIMITED",
           "DISPUTE_WINDOW_CLOSED",
           "RULES_REQUIRED",
+          "CONTACT_REQUIRED",
+          "REFUND_NOT_ALLOWED",
+          "PAYMENT_GATEWAY_REFUSED",
+          "PAYMENT_GATEWAY_ERROR",
           "INTERNAL"
         ]
       },
@@ -4166,6 +4747,14 @@
             "items": {
               "$ref": "#/components/schemas/LinkedAccount"
             }
+          },
+          "contact": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Contact"
+              }
+            ]
           }
         },
         "required": [
@@ -4174,7 +4763,8 @@
           "emailVerified",
           "profile",
           "balance",
-          "linkedAccounts"
+          "linkedAccounts",
+          "contact"
         ],
         "additionalProperties": false
       },
@@ -4222,15 +4812,38 @@
         ],
         "additionalProperties": false
       },
+      "Contact": {
+        "type": "object",
+        "properties": {
+          "realName": {
+            "type": "string"
+          },
+          "phone": {
+            "type": "string",
+            "pattern": "^01[016789]\\d{7,8}$"
+          }
+        },
+        "required": [
+          "realName",
+          "phone"
+        ],
+        "additionalProperties": false
+      },
       "SetPasswordBody": {
         "type": "object",
         "properties": {
           "newPassword": {
             "$ref": "#/components/schemas/Password"
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
           }
         },
         "required": [
-          "newPassword"
+          "newPassword",
+          "expectedAccountId"
         ]
       },
       "Password": {
@@ -4262,6 +4875,32 @@
         },
         "required": [
           "nickname"
+        ]
+      },
+      "ContactBody": {
+        "type": "object",
+        "properties": {
+          "realName": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 30,
+            "pattern": "^\\p{L}[\\p{L}\\p{M} ·]*[\\p{L}\\p{M}]$"
+          },
+          "phone": {
+            "type": "string",
+            "maxLength": 20,
+            "pattern": "^[0-9 -]+$"
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          }
+        },
+        "required": [
+          "realName",
+          "phone",
+          "expectedAccountId"
         ]
       },
       "ChargePackage": {
@@ -4298,6 +4937,65 @@
           "isActive"
         ],
         "additionalProperties": false
+      },
+      "PaymentProviderInfo": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "provider": {
+                "type": "string",
+                "enum": [
+                  "mock"
+                ]
+              }
+            },
+            "required": [
+              "provider"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "provider": {
+                "type": "string",
+                "enum": [
+                  "smartro"
+                ]
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "STG",
+                  "REAL"
+                ]
+              },
+              "scriptUrl": {
+                "type": "object",
+                "properties": {
+                  "pc": {
+                    "type": "string"
+                  },
+                  "mobile": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "pc",
+                  "mobile"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "provider",
+              "mode",
+              "scriptUrl"
+            ],
+            "additionalProperties": false
+          }
+        ]
       },
       "ChargeBody": {
         "type": "object",
@@ -4388,8 +5086,35 @@
             "enum": [
               "pending",
               "succeeded",
-              "failed"
+              "failed",
+              "cancelled",
+              "refunding",
+              "refunded"
             ]
+          },
+          "method": {
+            "nullable": true,
+            "type": "string"
+          },
+          "approvedAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "refundedAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "resultMessage": {
+            "nullable": true,
+            "type": "string"
+          },
+          "cancelConfirmed": {
+            "nullable": true,
+            "type": "boolean"
           },
           "createdAt": {
             "type": "string",
@@ -4405,6 +5130,11 @@
           "provider",
           "providerRef",
           "status",
+          "method",
+          "approvedAt",
+          "refundedAt",
+          "resultMessage",
+          "cancelConfirmed",
           "createdAt"
         ],
         "additionalProperties": false
@@ -4441,7 +5171,9 @@
               "SETTLEMENT_PAYOUT",
               "MARKET_VOID_REFUND",
               "ADMIN_ADJUST",
-              "BONUS"
+              "BONUS",
+              "PAYMENT_CANCEL",
+              "PAYMENT_CANCEL_REVERSAL"
             ]
           },
           "amountP": {
@@ -4484,6 +5216,126 @@
           "refId",
           "memo",
           "createdAt"
+        ],
+        "additionalProperties": false
+      },
+      "SmartroPrepareResult": {
+        "type": "object",
+        "properties": {
+          "paymentId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "STG",
+              "REAL"
+            ]
+          },
+          "scriptUrl": {
+            "type": "object",
+            "properties": {
+              "pc": {
+                "type": "string"
+              },
+              "mobile": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "pc",
+              "mobile"
+            ],
+            "additionalProperties": false
+          },
+          "approvalUrl": {
+            "type": "string"
+          },
+          "form": {
+            "type": "object",
+            "properties": {
+              "PayMethod": {
+                "type": "string"
+              },
+              "GoodsCnt": {
+                "type": "string"
+              },
+              "GoodsName": {
+                "type": "string"
+              },
+              "Amt": {
+                "type": "string"
+              },
+              "Moid": {
+                "type": "string"
+              },
+              "Mid": {
+                "type": "string"
+              },
+              "ReturnUrl": {
+                "type": "string"
+              },
+              "StopUrl": {
+                "type": "string"
+              },
+              "BuyerName": {
+                "type": "string"
+              },
+              "BuyerTel": {
+                "type": "string"
+              },
+              "BuyerEmail": {
+                "type": "string"
+              },
+              "EdiDate": {
+                "type": "string"
+              },
+              "EncryptData": {
+                "type": "string"
+              },
+              "TaxAmt": {
+                "type": "string"
+              },
+              "TaxFreeAmt": {
+                "type": "string"
+              },
+              "VatAmt": {
+                "type": "string"
+              },
+              "MallUserId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "PayMethod",
+              "GoodsCnt",
+              "GoodsName",
+              "Amt",
+              "Moid",
+              "Mid",
+              "ReturnUrl",
+              "StopUrl",
+              "BuyerName",
+              "BuyerTel",
+              "BuyerEmail",
+              "EdiDate",
+              "EncryptData",
+              "TaxAmt",
+              "TaxFreeAmt",
+              "VatAmt",
+              "MallUserId"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "paymentId",
+          "mode",
+          "scriptUrl",
+          "approvalUrl",
+          "form"
         ],
         "additionalProperties": false
       },
@@ -4881,8 +5733,35 @@
             "enum": [
               "pending",
               "succeeded",
-              "failed"
+              "failed",
+              "cancelled",
+              "refunding",
+              "refunded"
             ]
+          },
+          "method": {
+            "nullable": true,
+            "type": "string"
+          },
+          "approvedAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "refundedAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "resultMessage": {
+            "nullable": true,
+            "type": "string"
+          },
+          "cancelConfirmed": {
+            "nullable": true,
+            "type": "boolean"
           },
           "createdAt": {
             "type": "string",
@@ -4894,6 +5773,9 @@
           },
           "nickname": {
             "type": "string"
+          },
+          "needsReview": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -4904,11 +5786,60 @@
           "provider",
           "providerRef",
           "status",
+          "method",
+          "approvedAt",
+          "refundedAt",
+          "resultMessage",
+          "cancelConfirmed",
           "createdAt",
           "userId",
-          "nickname"
+          "nickname",
+          "needsReview"
         ],
         "additionalProperties": false
+      },
+      "RefundPaymentBody": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "reason"
+        ]
+      },
+      "SettlePaymentBody": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "credit",
+              "cancelled",
+              "failed",
+              "restore",
+              "refunded"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "tid": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[\\x21-\\x7e]+$"
+          }
+        },
+        "required": [
+          "outcome",
+          "reason"
+        ]
       },
       "AuditFailure": {
         "type": "object",

@@ -26,7 +26,7 @@
 
 - **모든 리소스 이름과 `Name` 태그는 `tf-buddha-`로 시작한다** (`local.name_prefix`). inno-frame의 `tf-<project>-<env>`에서 의도적으로 이탈한 것이고, 환경(`prod`)은 `default_tags`의 `Environment` 태그로만 남긴다. 같은 계정의 `tf-inno-frame-prod-*`와 접두사로 구분된다.
 - **HCL 주석은 영문으로 WHY를 적고, README/AGENTS.md는 한국어 산문 + 영문 식별자.** 관심사별로 파일 하나. IAM 정책은 전부 `data "aws_iam_policy_document"`, SG 규칙은 분리형 `aws_vpc_security_group_ingress_rule` / `_egress_rule`, 태그는 provider `default_tags`.
-- **시크릿은 `random_password` → `aws_ssm_parameter.env`(SecureString 하나) → `deploy.sh`가 `.env`로 렌더.** `.tf`·`.tfvars.example`·user-data·git 어디에도 값이 없다. 사용자 입력 시크릿(OAuth 키, seed 관리자 비밀번호)은 sensitive `var.*`로 `terraform.tfvars`에서만 온다. 전부 로컬 tfstate에 평문으로 들어가므로 README의 오프머신 백업 절차를 따른다.
+- **시크릿은 `random_password` → `aws_ssm_parameter.env`(SecureString 하나) → `deploy.sh`가 `.env`로 렌더.** `.tf`·`.tfvars.example`·user-data·git 어디에도 값이 없다. 사용자 입력 시크릿(OAuth 키, SmartroPay 상점키·취소 비밀번호, seed 관리자 비밀번호)은 sensitive `var.*`로 `terraform.tfvars`에서만 온다. 전부 로컬 tfstate에 평문으로 들어가므로 README의 오프머신 백업 절차를 따른다.
 - **`aws_instance.app`은 `ignore_changes = [ami, user_data]`.** 월간 AMI 갱신이 유일한 호스트를 재생성하지 못하게 하는 장치. 호스트 교체는 언제나 `terraform apply -replace=aws_instance.app` + 워크플로 재실행이다. 첫 부팅 뒤에 바뀔 수 있는 호스트 설정은 user-data가 아니라 `deploy/host-setup.sh`(배포마다 실행, 멱등)에 둔다.
 - **데이터는 `/data`(별도 EBS, `prevent_destroy`)에만 있다.** 라벨 `buddha-data`로 마운트하고 docker.service에 `RequiresMountsFor=/data`를 걸어 두었다. compose에 named volume은 없다 — 전부 `/data` bind mount라 DLM 스냅샷 하나가 postgres·redis·Caddy 인증서·배포 디렉터리를 함께 담는다.
 - **Cloudflare A 레코드는 DNS-only(회색 구름)다.** Caddy가 호스트에서 HTTP-01로 인증서를 직접 받는다(Let's Encrypt → ZeroSSL 폴백, `deploy/Caddyfile`에 `acme_ca` 없음). DNS는 Terraform이 관리하지 않으므로(사용자 결정) `terraform output dns_records`의 값을 대시보드에 그대로 넣고, EIP를 재생성했을 때는 A 레코드를 손으로 고친다.
@@ -53,6 +53,7 @@
 - **금지**: compose에서 Docker Hub(`docker.io`) 이미지를 직접 pull. 익명 pull 한도로 배포가 무작위로 실패한다. 인프라 이미지는 `public.ecr.aws/docker/library/*`(같은 digest)로.
 - **금지**: `templates/user-data.sh.tftpl`을 고치고 `terraform apply -replace=aws_instance.app`을 생략. `user_data`가 `ignore_changes`라 plan이 `No changes`를 답하고 변경은 어디에도 반영되지 않는다.
 - **금지**: OIDC 신뢰 정책에 inno-frame 형식 `repo:sboh1214/sw04-buddha:ref:refs/heads/main` 복사. 이 저장소의 sub claim은 immutable 형식이라 그 문자열은 영원히 매치되지 않고, 워크플로는 `Not authorized to perform sts:AssumeRoleWithWebIdentity`로 죽는다.
+- **금지**: `templates/env.tftpl`에 `SMARTRO_APPROVAL_BASE_URL`을 넣는 것. 로컬 가짜 PG용 승인·취소 호스트이고, api가 `NODE_ENV=production`에서 기동을 거절한다(ADR-0042). 스마트로페이는 `payment_provider`·`smartro_*` 변수로만 켠다(README「SmartroPay 켜기·키 교체」).
 - **금지**: `/tf-buddha/env`를 콘솔에서 편집. `aws_ssm_parameter.env`는 템플릿 렌더 결과라 다음 apply가 덮어쓴다. `terraform.tfvars` 또는 `templates/env.tftpl`을 고친다.
 - **금지**: `aws_ebs_volume.data`의 `prevent_destroy` 제거를 커밋. 스냅샷 복구 절차(README)에서 **일시적으로** 주석 처리하고 즉시 복원한다.
 - **금지**: root 자격증명으로 apply. `aws sts get-caller-identity --profile inno-frame`이 `user/terraform-iam`이어야 한다.

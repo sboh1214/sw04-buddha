@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   ADJUST_MAX_ABS_P,
+  adminPaymentSchema,
   adminUserQuerySchema,
   auditFailureSchema,
   balanceAdjustBodySchema,
@@ -86,9 +87,14 @@ describe('response schemas', () => {
         provider: 'mock',
         providerRef: 'mock_1',
         status: 'succeeded',
+        method: null,
+        approvedAt: createdAt,
+        refundedAt: null,
+        resultMessage: null,
+        cancelConfirmed: null,
         createdAt,
       }),
-    ).toMatchObject({ priceKrw: 4900, status: 'succeeded' });
+    ).toMatchObject({ priceKrw: 4900, status: 'succeeded', approvedAt: createdAt });
 
     // A payment whose package was later deleted keeps its own amounts.
     expect(
@@ -100,9 +106,55 @@ describe('response schemas', () => {
         provider: 'mock',
         providerRef: null,
         status: 'succeeded',
+        method: null,
+        approvedAt: createdAt,
+        refundedAt: null,
+        resultMessage: null,
+        cancelConfirmed: null,
         createdAt,
       }).packageId,
     ).toBeNull();
+
+    // A refunded SmartroPay card payment carries the PG's method, both instants and its message.
+    const refunded = {
+      id: '3f1a5b6c-1111-4222-8333-444455556666',
+      amountP: '10000',
+      priceKrw: 9700,
+      packageId: null,
+      provider: 'smartro',
+      providerRef: 'tid_0001',
+      status: 'refunded',
+      method: 'CARD',
+      approvedAt: createdAt,
+      refundedAt: '2026-09-05T01:02:03.000Z',
+      resultMessage: '취소 성공',
+      cancelConfirmed: null,
+      createdAt,
+    };
+    expect(paymentSchema.parse(refunded)).toEqual(refunded);
+    // The new fields are required (nullable, never absent), like every other DTO field.
+    const { refundedAt: _dropped, ...withoutRefundedAt } = refunded;
+    expect(paymentSchema.safeParse(withoutRefundedAt).success).toBe(false);
+    const { cancelConfirmed: _unsaid, ...withoutCancelConfirmed } = refunded;
+    expect(paymentSchema.safeParse(withoutCancelConfirmed).success).toBe(false);
+
+    // A cancelled one says whether its card's cancel is confirmed: a boolean, or null.
+    const cancelled = { ...refunded, status: 'cancelled', refundedAt: null };
+    for (const cancelConfirmed of [true, false]) {
+      expect(paymentSchema.parse({ ...cancelled, cancelConfirmed }).cancelConfirmed).toBe(
+        cancelConfirmed,
+      );
+    }
+    expect(paymentSchema.safeParse({ ...cancelled, cancelConfirmed: 'no' }).success).toBe(false);
+
+    // The admin row adds the account and whether an admin must settle it by hand.
+    const adminRow = { ...refunded, status: 'refunding', userId: 'u1', nickname: '예측가' };
+    expect(adminPaymentSchema.parse({ ...adminRow, needsReview: true })).toMatchObject({
+      status: 'refunding',
+      needsReview: true,
+    });
+    expect(adminPaymentSchema.safeParse(adminRow).success).toBe(false);
+    expect(adminPaymentSchema.safeParse({ ...adminRow, needsReview: 'yes' }).success).toBe(false);
 
     expect(
       auditFailureSchema.parse({

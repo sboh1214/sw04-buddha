@@ -68,7 +68,7 @@ flowchart LR
 | `versions.tf`                  | Terraform / provider 버전 (`aws ~> 6.0`, `random ~> 3.6`)                                                                                                                                                                                                                                          |
 | `providers.tf`                 | `aws`(`var.profile`, `default_tags`); us-east-1 alias 없음                                                                                                                                                                                                                                         |
 | `locals.tf`                    | `name_prefix = "tf-buddha"`, `common_tags`, `images`, `ecr_registry`, `app_url`, `ssm_env_parameter`, `github_oidc_subject`                                                                                                                                                                        |
-| `variables.tf`                 | 모든 입력 변수 (영문 description). `seed_admin_*`는 validation이 빈 값을 거절한다 — 비어 있으면 seed가 관리자 생성을 조용히 건너뛴다                                                                                                                                                               |
+| `variables.tf`                 | 모든 입력 변수 (영문 description). `seed_admin_*`는 validation이 빈 값을 거절한다 — 비어 있으면 seed가 관리자 생성을 조용히 건너뛴다. `payment_provider`·`smartro_*`(ADR-0042)는 값의 모양과 짝(`smartro`면 가맹점 값 셋)을 validation이 확인한다                                                  |
 | `outputs.tf`                   | `instance_id`, `public_ip`, `app_url`, `ecr_*`, `github_actions_deploy_role_arn`, `github_oidc_subject`, `ssm_env_parameter_name`, `data_volume_id`, `ses_identity_arn`, `ssm_session_command`. sensitive 출력 없음 + `dns_records`(Cloudflare에 손으로 넣을 A · DKIM CNAME ×3 · MX · SPF · DMARC) |
 | `vpc.tf`                       | `aws_vpc.main`, IGW, 퍼블릭 서브넷 1개, 라우트 테이블. NAT·프라이빗 서브넷·VPC endpoint 없음                                                                                                                                                                                                       |
 | `security-groups.tf`           | `aws_security_group.app` + 분리형 ingress 80/443, egress all. **22번 포트 없음**                                                                                                                                                                                                                   |
@@ -104,7 +104,7 @@ flowchart LR
 
 한 번만 한다. 순서가 중요하다 — DNS 레코드와 SSM 파라미터가 첫 배포 **전에** 있어야 Caddy가 인증서를 받고 `deploy.sh`가 `.env`를 렌더한다. DNS는 Terraform이 만들지 않는다(사용자 결정): apply가 끝나면 `terraform output dns_records`가 등록할 레코드를 그대로 찍어 주고, 그것을 Cloudflare에 손으로 넣는다.
 
-1. **사용자 준비.** `brew install --cask session-manager-plugin`. Cloudflare 대시보드에서 `sboh.dev` 존에 기존 `buddha` 레코드나 proxied 와일드카드(`*.sboh.dev`)가 없는지 확인한다 — 있으면 ACME HTTP-01이 Cloudflare 엣지에 막힌다. `acme_email`, `seed_admin_email`, `seed_admin_password`(영숫자 8–128자)를 정한다. (선택) OAuth 콘솔에 콜백 `https://buddha.sboh.dev/api/auth/callback/{google,kakao,naver}`를 등록한다.
+1. **사용자 준비.** `brew install --cask session-manager-plugin`. Cloudflare 대시보드에서 `sboh.dev` 존에 기존 `buddha` 레코드나 proxied 와일드카드(`*.sboh.dev`)가 없는지 확인한다 — 있으면 ACME HTTP-01이 Cloudflare 엣지에 막힌다. `acme_email`, `seed_admin_email`, `seed_admin_password`(영숫자 8–128자)를 정한다. (선택) OAuth 콘솔에 콜백 `https://buddha.sboh.dev/api/auth/callback/{google,kakao,naver}`를 등록한다. SmartroPay 가맹점 값은 없어도 된다 — 없으면 결제는 mock으로 뜨고, 나중에 [SmartroPay 켜기·키 교체](#smartropay-켜기키-교체)로 켠다.
 
 2. **코드.** 브랜치 `feat/deploy-aws`에서 `terraform/`, `Dockerfile`, `deploy/`, `.github/workflows/deploy.yml`, 문서를 작성하고 `pnpm format`을 돌린다(CI의 `format:check`가 YAML/MD를 검사한다).
 
@@ -255,6 +255,33 @@ gh workflow run deploy.yml --ref main -f image_tag=<현재 sha>
 
 SES SMTP 자격증명은 `terraform apply -replace=aws_iam_access_key.ses_smtp` 뒤 배포.
 
+### SmartroPay 켜기·키 교체
+
+SmartroPay(ADR-0042)의 값은 `random_password`가 아니라 **사용자가 준 값**이다 — OAuth 키처럼 `terraform.tfvars`의 변수 다섯 개에서 온다. 기본값(`payment_provider = "mock"`, `smartro_mode = "STG"`, 나머지 빈 값)이면 api는 mock으로 뜨고 스마트로페이는 설정되지 않은 것으로 본다. 그래서 배포 순서 위험이 없다: 이 변수가 생기기 전에 렌더된 `.env`로 배포해도 `deploy/compose.yaml`의 `${PAYMENT_PROVIDER:-mock}` 같은 기본값이 mock을 준다.
+
+```hcl
+# terraform.tfvars (gitignored)
+payment_provider        = "smartro"
+smartro_mode            = "STG"            # 운영 MID를 받으면 "REAL"
+smartro_mid             = "<MID>"          # 10자 이하
+smartro_merchant_key    = "<상점키>"       # 32자 이상
+smartro_cancel_password = "<가맹점 관리자의 취소 비밀번호>"
+```
+
+```bash
+terraform apply                                                   # /tf-buddha/env 갱신(plan에 값은 (sensitive value))
+gh workflow run deploy.yml --ref main -f image_tag=<현재 sha>     # .env 재렌더 + 컨테이너 재생성
+```
+
+- 값은 dotenv 줄로 들어가 compose가 보간하므로 validation이 `$ " ' #`·공백·비ASCII를 거절한다(상점키 앞 32자는 취소 요청의 AES 키이기도 하다). `payment_provider = "smartro"`인데 가맹점 값 셋 중 하나라도 비면 plan이 거절한다 — api도 그 조합으로는 기동하지 않는다. 가맹점 값 셋은 `payment_provider`와 상관없이 함께 넣거나 함께 비운다: `"mock"`에서도 일부만 있으면 plan이 거절하고 api도 기동하지 않는다(스마트로페이는 셋이 다 있을 때만 등록되므로, 그대로 뜨면 재통보가 404가 되고 스마트로페이 결제의 환불이 거절된다).
+- terraform만 바뀐 push는 배포를 돌리지 않으므로(`paths-ignore: terraform/**`) 워크플로를 손으로 돌린다. 키 교체도 같은 두 단계다.
+- 되돌리기는 `payment_provider = "mock"`으로 같은 두 단계다. 가맹점 값 셋을 남겨 두면 이미 진행 중인 스마트로페이 결제의 콜백과 환불은 계속 동작한다(QUESTIONS A-PG-1) — 셋을 다 남기거나 다 비운다. 하나만 비우면(취소 비밀번호는 mock에서 안 쓰는 것처럼 보여도) plan이 거절한다. SSM `/tf-buddha/env`를 손으로 고쳐 한 줄을 빠뜨린 것은 plan을 거치지 않으므로 배포의 api 기동이 거절한다(`deploy.sh`가 SSM에서 `.env`를 다시 렌더한다). **`smartro_mode`·`smartro_mid`를 바꾸는 것은 다르다**: 취소는 결제가 만들어진 MID·모드가 아니라 지금 설정된 값으로 가므로, 바꾸기 전의 결제는 앱에서 환불할 수 없고 예전 모드의 가맹점 관리자에서만 취소된다.
+- **STG 운영 기간은 짧게.** `smartro_mode = "STG"`인 동안의 승인은 전부 테스트다 — 운영자 계정으로만 결제한다(STG에서 적립된 P는 실제 돈이 뒷받침하지 않는다). 카카오페이 카드의 테스트 결제는 당일 취소하지 않으면 청구된다. REAL로 바꾸기 **전에** STG의 `succeeded` 결제를 앱에서 환불하고 「확인 필요」 행을 모두 수동 정리한다 — 앱이 환불할 수 없는 결제(P를 썼거나 7일이 지난 것)는 아직 STG인 동안 STG 가맹점 관리자에서 취소한다. 확인 목록과 전환 절차는 `docs/QUESTIONS.md` Q-PG-9.
+- **결과를 모르는 결제.** API가 스스로 결론을 내지 못한 결제는 `/admin/payments`에 「확인 필요」 배지가 붙는다 — 승인의 답·재통보가 오지 않은 잡힌 결제와 환불 중에 남은 결제는 2분 뒤, 답이 분명하지 않은 망취소는 곧바로, PG 오류 코드로 답했거나 적립되지 않은 승인 재통보가 있는 실패 결제는 2분 뒤다. 가맹점 관리자에서 확인한 뒤 그 행의 「수동 정리」(`POST /api/v1/admin/payments/:id/settle`, 마지막 변경 2분 뒤부터)로 닫는다 — 잔고 조정으로 충전하지 않는다(ADR-0042 추기, QUESTIONS A-PG-3).
+- 가맹점 관리자(STG `https://newbiz.smilebiz.co.kr`, REAL `https://www.smilebiz.co.kr`)에서 재통보 URL `https://buddha.sboh.dev/api/v1/payments/smartro/notify`를 지불수단별로 넣고 **신통보**를 고른다. api는 그 모드의 스마트로페이 서버 IP에서 온 재통보만 받는다. ReturnUrl·StopUrl은 결제마다 실려 가므로 등록하지 않는다.
+- 스마트로페이가 가맹점 서버 IP를 물으면 EIP `13.124.223.103`(`terraform output -raw public_ip`)이다 — SG의 egress가 열려 있고 컨테이너의 승인·취소 호출은 이 주소로 나간다. EIP를 다시 만들면 스마트로페이에도 다시 알려야 한다.
+- `SMARTRO_APPROVAL_BASE_URL`은 `templates/env.tftpl`에 넣지 않는다. 로컬 가짜 PG용이고 api가 production에서 기동을 거절한다.
+
 ### 수동 pg_dump
 
 DLM 스냅샷은 볼륨 단위다. 논리 백업이 필요할 때(마이그레이션 전, 복구 리허설):
@@ -339,7 +366,7 @@ Caddy가 호스트에서 직접 받는다. `deploy/Caddyfile`에는 일부러 `a
 - **DNS는 Terraform 밖에 있다.** 레코드는 사용자가 Cloudflare 대시보드에 넣었고 plan은 그것을 보지 못한다. EIP가 바뀌면(EIP 리소스를 지우고 다시 만들 때만; `-replace=aws_instance.app`는 EIP를 유지한다) A 레코드를 손으로 고쳐야 한다. `terraform output dns_records`가 언제나 현재 값을 보여 준다.
 - **DKIM 토큰.** `dns_records` 출력의 CNAME 세 개는 `aws_sesv2_email_identity.app.dkim_signing_attributes[0].tokens`에서 온다. identity를 destroy/recreate하면 SES가 새 토큰 세 개를 발급해 Cloudflare의 CNAME을 전부 다시 넣어야 하고, 전파되는 동안 DKIM 서명이 깨진다. identity는 만들고 잊는다. `dkim_signing_attributes`를 명시하는 것도 같은 이유로 금지(키 길이를 적는 순간 새 토큰).
 - **EIP association.** `aws_eip_association.app`이 EIP를 인스턴스에 묶는다. 콘솔에서 인스턴스를 바꾸거나 EIP를 옮기면 다음 plan이 association을 다시 만든다(짧은 단절). `associate_public_ip_address = true`의 임시 공인 IP는 EIP가 붙는 순간 반납되므로 이중 청구는 없다.
-- **`/tf-buddha/env`를 콘솔에서 편집하지 않는다.** `aws_ssm_parameter.env`의 값은 `templates/env.tftpl` 렌더 결과라 다음 apply가 덮어쓴다. 값을 바꾸려면 `terraform.tfvars`(OAuth 키, seed 관리자, `log_level`) 또는 템플릿을 고친다. 콘솔에서 바꾼 값은 `deploy.sh`가 다음 배포에 한 번 쓰고 apply 때 사라진다.
+- **`/tf-buddha/env`를 콘솔에서 편집하지 않는다.** `aws_ssm_parameter.env`의 값은 `templates/env.tftpl` 렌더 결과라 다음 apply가 덮어쓴다. 값을 바꾸려면 `terraform.tfvars`(OAuth 키, SmartroPay 가맹점 값, seed 관리자, `log_level`) 또는 템플릿을 고친다. 콘솔에서 바꾼 값은 `deploy.sh`가 다음 배포에 한 번 쓰고 apply 때 사라진다.
 
 ## GitHub Actions 연결
 

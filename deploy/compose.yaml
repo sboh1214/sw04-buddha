@@ -114,6 +114,15 @@ services:
       KAKAO_CLIENT_SECRET: ${KAKAO_CLIENT_SECRET}
       NAVER_CLIENT_ID: ${NAVER_CLIENT_ID}
       NAVER_CLIENT_SECRET: ${NAVER_CLIENT_SECRET}
+      # SmartroPay (ADR-0042). The defaults keep an .env rendered before these keys existed on the
+      # mock provider without "variable is not set" warnings; the api reads an empty value as unset.
+      # SMARTRO_APPROVAL_BASE_URL is deliberately absent: it points approvals and cancels at a local
+      # fake PG, and the api refuses it in production.
+      PAYMENT_PROVIDER: ${PAYMENT_PROVIDER:-mock}
+      SMARTRO_MODE: ${SMARTRO_MODE:-STG}
+      SMARTRO_MID: ${SMARTRO_MID:-}
+      SMARTRO_MERCHANT_KEY: ${SMARTRO_MERCHANT_KEY:-}
+      SMARTRO_CANCEL_PASSWORD: ${SMARTRO_CANCEL_PASSWORD:-}
       NODE_OPTIONS: --max-old-space-size=256
     depends_on:
       postgres:

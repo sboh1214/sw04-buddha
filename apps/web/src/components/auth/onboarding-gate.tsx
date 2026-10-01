@@ -1,0 +1,44 @@
+'use client';
+
+import { Container, Skeleton } from '@chakra-ui/react';
+import type { Route } from 'next';
+import { usePathname, useRouter } from 'next/navigation';
+import { useEffect, type ReactNode } from 'react';
+import { useMe } from '@/hooks/use-me';
+import { gatedPagePath, needsOnboarding, onboardingPath } from '@/lib/onboarding';
+
+/**
+ * The onboarding gate (ADR-0043), wrapped around every page by the root layout: a signed-in
+ * account with no real name and mobile number is sent to `/onboarding?next=<this page>`, from
+ * everywhere but the exempt routes (lib/onboarding.ts, where the decision lives and is tested).
+ * /admin is gated like the rest — it renders inside this same `<main>`.
+ *
+ * Client-side because the answer is `GET /me`'s `contact`, which the page already fetches for
+ * the nav's balance chip; see lib/onboarding.ts for why not `proxy.ts`.
+ *
+ * Flash: until the session and `/me` have answered, the page renders as usual — hiding every
+ * page from every member for that long would cost far more than it saves the few who are
+ * redirected. Once the answer says "no contact", the page is replaced by a placeholder the size
+ * of the onboarding card in the same render that schedules the redirect, so the gated page is
+ * visible for at most the session and `/me` round trips of a hard load (and never on a client-side
+ * navigation, where `['me']` is already known). `replace`, so Back does not return to a page
+ * that would only redirect again.
+ */
+export function OnboardingGate({ children }: { children: ReactNode }) {
+  const pathname = usePathname();
+  const router = useRouter();
+  const { data: me, isLoggedIn } = useMe();
+  const redirect = needsOnboarding(pathname, isLoggedIn && me ? me.contact : undefined);
+
+  useEffect(() => {
+    if (!redirect) return;
+    router.replace(onboardingPath(gatedPagePath(pathname, window.location)) as Route);
+  }, [redirect, pathname, router]);
+
+  if (!redirect) return children;
+  return (
+    <Container maxW="sm" py={{ base: '8', md: '16' }} data-testid="onboarding-gate">
+      <Skeleton height="64" />
+    </Container>
+  );
+}

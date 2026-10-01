@@ -1,6 +1,7 @@
 import * as z from 'zod';
 import { pAmountSchema } from './api/p-amount.js';
 import { NICKNAME_MAX_LENGTH, NICKNAME_MIN_LENGTH } from './constants.js';
+import { contactSchema } from './contact.js';
 import { roleSchema } from './enums.js';
 
 /**
@@ -44,6 +45,11 @@ export const meSchema = z
     }),
     balance: z.object({ availableP: pAmountSchema, lockedP: pAmountSchema }),
     linkedAccounts: z.array(linkedAccountSchema),
+    /**
+     * Real name and mobile number (ADR-0043); null until the member provides them, which is
+     * what sends a signed-in account to `/onboarding`.
+     */
+    contact: contactSchema.nullable(),
   })
   .meta({ id: 'Me' });
 export type Me = z.infer<typeof meSchema>;

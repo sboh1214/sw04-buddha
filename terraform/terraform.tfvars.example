@@ -24,6 +24,26 @@ seed_admin_password = ""
 # naver_client_id      = ""
 # naver_client_secret  = ""
 
+# --- Optional SmartroPay card payments (ADR-0042) -------------------------------------------------
+# Leave commented to keep the mock provider (no money moves). The three merchant values go in
+# together or not at all, also under "mock" (plan and the api refuse only some of them, e.g. on a
+# rollback to "mock": keep all three or clear all three). To switch: fill in all five, run
+# `terraform apply`, then redeploy (`gh workflow run deploy.yml --ref main -f image_tag=<current sha>`;
+# a terraform-only push does not deploy). Visible ASCII only, no $ " ' # (dotenv/compose safety).
+# Register the notify URL https://buddha.sboh.dev/api/v1/payments/smartro/notify in the merchant
+# admin first (STG https://newbiz.smilebiz.co.kr, REAL https://www.smilebiz.co.kr; 신통보).
+# While smartro_mode is STG every approval is a test: pay from operator accounts only and keep the
+# window short. Before switching to REAL (or changing the MID), refund every STG payment in the
+# admin and settle every one marked for review: a cancel goes out with the mode/MID set now, so a
+# payment left from before can only be cancelled in its own merchant admin. Payments marked
+# "확인 필요" in /admin/payments are closed with its settle action ("수동 정리"). See
+# terraform/README.md "SmartroPay 켜기·키 교체" and docs/QUESTIONS.md Q-PG-9.
+# payment_provider        = "smartro"
+# smartro_mode            = "STG"   # "REAL" with the live MID, once STG checks out
+# smartro_mid             = ""      # at most 10 characters
+# smartro_merchant_key    = ""      # at least 32 characters
+# smartro_cancel_password = ""      # the one set in the merchant admin
+
 # --- Only if you need to change the defaults -------------------------------------------------------
 # profile       = "inno-frame"   # AWS CLI profile that maps to the terraform-iam user (never root)
 # instance_type = "t4g.small"    # t4g.medium if 2 GiB proves too small

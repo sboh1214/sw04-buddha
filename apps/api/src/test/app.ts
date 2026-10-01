@@ -6,14 +6,20 @@ import { Test } from '@nestjs/testing';
 import { schema, type Db } from '@buddha/db';
 import { connectTestDb, type TestDb } from '@buddha/db/test';
 import { type Redis } from 'ioredis';
-import { DEFAULT_RATE_LIMITS, type RateLimits } from '@buddha/shared';
+import {
+  DEFAULT_RATE_LIMITS,
+  type PaymentProvider as PaymentProviderName,
+  type RateLimits,
+} from '@buddha/shared';
 import { AppModule } from '../app.module.js';
 import { AUTH, type Auth } from '../auth/auth.js';
-import { uncountedPeers } from '../config/env.js';
+import { parseTrustProxy, uncountedPeers } from '../config/env.js';
 import { DB } from '../infra/db/db.provider.js';
 import { MAX_PARAM_LENGTH } from '../infra/http/fastify-options.js';
 import { registerSecurityHeaders } from '../infra/http/security-headers.js';
 import { MAILER } from '../mail/mail.provider.js';
+import { PAYMENTS_CONFIG, type PaymentsConfig } from '../payments/payments-config.js';
+import { SMARTRO_CLIENT, type SmartroClient } from '../payments/smartro/smartro-client.js';
 import { REDIS } from '../infra/redis/redis.provider.js';
 import { installAddressLimit } from '../rate-limit/address-limit.js';
 import { RATE_LIMITS } from '../rate-limit/rate-limit.limits.js';
@@ -21,6 +27,7 @@ import { RATE_LIMIT_KEY_PREFIX } from '../rate-limit/redis-throttler.storage.js'
 import { UNCOUNTED_PEERS } from '../rate-limit/uncounted-peers.js';
 import { RealtimeIoAdapter } from '../realtime/realtime-io.adapter.js';
 import { createMemoryMailer, type MemoryMailer } from './memory-mailer.js';
+import { TEST_SMARTRO, TEST_WEB_ORIGIN } from './smartro.js';
 
 export interface TestApp {
   app: NestFastifyApplication;
@@ -57,6 +64,23 @@ export interface CreateTestAppOptions {
    * presents it with `remoteAddress`.
    */
   uncountedPeers?: string;
+  /**
+   * SmartroPay for this app only (ADR-0042): the test credentials (`TEST_SMARTRO`, STG) and a
+   * fake PG in place of the HTTP client — `FakeSmartroClient` from test/smartro.ts, which a
+   * suite scripts per test. `provider` is PAYMENT_PROVIDER, `smartro` unless given: `mock` keeps
+   * the immediate charge open while SmartroPay stays configured for its callbacks and refunds,
+   * which is how a switch back to the mock behaves. Left out, the payments configuration comes
+   * from the environment like in production (setup-env pins PAYMENT_PROVIDER=mock, whatever a
+   * developer's .env says) and any call to a PG fails loudly.
+   */
+  smartro?: { client: SmartroClient; provider?: PaymentProviderName };
+  /**
+   * TRUST_PROXY for this app only, parsed as main.ts parses it (config/env.ts): which peers'
+   * X-Forwarded-For Fastify believes for `request.ip`. Production trusts Caddy alone
+   * (`172.28.0.10/32`); a suite about what `request.ip` becomes behind it names that here and
+   * presents the proxy with `remoteAddress`. Left out, nothing is trusted (the socket peer).
+   */
+  trustProxy?: string;
 }
 
 /**
@@ -67,16 +91,29 @@ export interface CreateTestAppOptions {
 export async function createTestApp(options: CreateTestAppOptions = {}): Promise<TestApp> {
   const harness: TestDb = await connectTestDb();
   const mailer = createMemoryMailer();
-  const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+  const builder = Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(MAILER)
     .useValue(mailer)
     .overrideProvider(RATE_LIMITS)
     .useValue({ ...DEFAULT_RATE_LIMITS, ...options.rateLimits })
     .overrideProvider(UNCOUNTED_PEERS)
     .useValue(uncountedPeers({ RATE_LIMIT_UNCOUNTED_PEERS: options.uncountedPeers }))
-    .compile();
+    // Always: even a developer .env with SmartroPay credentials must not reach the real PG.
+    .overrideProvider(SMARTRO_CLIENT)
+    .useValue(options.smartro?.client ?? unreachableSmartroClient);
+  if (options.smartro) {
+    builder.overrideProvider(PAYMENTS_CONFIG).useValue({
+      provider: options.smartro.provider ?? 'smartro',
+      smartro: TEST_SMARTRO,
+      webOrigin: TEST_WEB_ORIGIN,
+    } satisfies PaymentsConfig);
+  }
+  const moduleRef = await builder.compile();
   const app = moduleRef.createNestApplication<NestFastifyApplication>(
-    new FastifyAdapter({ routerOptions: { maxParamLength: MAX_PARAM_LENGTH } }),
+    new FastifyAdapter({
+      trustProxy: parseTrustProxy(options.trustProxy ?? 'false'),
+      routerOptions: { maxParamLength: MAX_PARAM_LENGTH },
+    }),
     { bodyParser: false, logger: false },
   );
   // Exactly as in main.ts, and for the same reason the adapter below is: a bound the suites do
@@ -112,6 +149,13 @@ export async function createTestApp(options: CreateTestAppOptions = {}): Promise
     },
   };
 }
+
+/** Without `smartro`, nothing may reach a PG: a call is a bug in the suite, and says so. */
+const unreachableSmartroClient: SmartroClient = {
+  approve: () => Promise.reject(new Error('no SmartroPay in this test app')),
+  inquire: () => Promise.reject(new Error('no SmartroPay in this test app')),
+  cancel: () => Promise.reject(new Error('no SmartroPay in this test app')),
+};
 
 /**
  * Drops every rate-limit bucket, as part of the per-test reset.
@@ -211,6 +255,31 @@ export async function createTestPackage(
     .returning();
   if (!row) throw new Error('failed to insert a charge package');
   return { id: row.id, amountP: row.amountP, priceKrw: row.priceKrw };
+}
+
+/** A real name and mobile number as `user_contacts` stores them (ADR-0043). */
+export interface TestContact {
+  realName: string;
+  /** Digits only. */
+  phone: string;
+}
+
+/**
+ * Registers (or replaces) the account's real name and mobile number directly in
+ * `user_contacts`, as `PUT /me/contact` would: SmartroPay's window needs them (BuyerName,
+ * BuyerTel), and the onboarding gate lets an account through once they exist.
+ */
+export async function createTestContact(
+  db: Db,
+  userId: string,
+  input: Partial<TestContact> = {},
+): Promise<TestContact> {
+  const contact = { realName: input.realName ?? '홍길동', phone: input.phone ?? '01012345678' };
+  await db
+    .insert(schema.userContacts)
+    .values({ userId, ...contact })
+    .onConflictDoUpdate({ target: schema.userContacts.userId, set: contact });
+  return contact;
 }
 
 export interface TestUser {

@@ -199,3 +199,96 @@ variable "naver_client_secret" {
   sensitive   = true
   default     = ""
 }
+
+# SmartroPay card payments (ADR-0042). payment_provider stays "mock" (no money moves) until the
+# merchant values exist; everything below is optional and the rendered env carries empty values
+# until then, which the api reads as "not configured". The three merchant values are set together
+# or all left empty, whatever payment_provider is (the api refuses only some of them), and travel
+# through a dotenv line that docker compose interpolates, so $ " ' # and whitespace are refused (as
+# for seed_admin_password). Switching is apply + redeploy (README "SmartroPay 켜기·키 교체").
+# Notify URL to register in the merchant admin ("결제 데이터 통보", 신통보 parameters):
+#   https://<domain_name>/api/v1/payments/smartro/notify
+
+variable "payment_provider" {
+  description = "Provider for new charges (PAYMENT_PROVIDER): mock (immediate, no money moves) or smartro (SmartroPay payment window). smartro requires smartro_mid, smartro_merchant_key and smartro_cancel_password; under mock they are all set (SmartroPay payments keep their callbacks and refunds) or all empty."
+  type        = string
+  default     = "mock"
+
+  validation {
+    condition     = contains(["mock", "smartro"], var.payment_provider)
+    error_message = "payment_provider must be \"mock\" or \"smartro\"."
+  }
+
+  # Cross-variable (Terraform >= 1.9): the api refuses to start with smartro and a missing key, so
+  # the plan should refuse first rather than the deploy's health check.
+  validation {
+    condition = var.payment_provider != "smartro" || (
+      length(var.smartro_mid) > 0 && length(var.smartro_merchant_key) > 0 && length(var.smartro_cancel_password) > 0
+    )
+    error_message = "payment_provider = \"smartro\" requires smartro_mid, smartro_merchant_key and smartro_cancel_password."
+  }
+
+  # The api also refuses only some of the three under "mock": it registers SmartroPay with all three
+  # or not at all, so a partial set would boot and then 404 every 재통보 and refuse every SmartroPay
+  # refund. A rollback to "mock" keeps all three or clears all three. Under "smartro" the rule above
+  # says it, so one mistake gets one message.
+  validation {
+    condition = var.payment_provider == "smartro" || length(distinct([
+      var.smartro_mid == "", var.smartro_merchant_key == "", var.smartro_cancel_password == "",
+    ])) == 1
+    error_message = "smartro_mid, smartro_merchant_key and smartro_cancel_password must be set together (or all empty) under payment_provider = \"mock\" too: the api refuses to start with only some of them."
+  }
+}
+
+variable "smartro_mode" {
+  description = "SmartroPay environment (SMARTRO_MODE): STG (test hosts, test MID) or REAL. Must match the MID."
+  type        = string
+  default     = "STG"
+
+  validation {
+    condition     = contains(["STG", "REAL"], var.smartro_mode)
+    error_message = "smartro_mode must be \"STG\" or \"REAL\"."
+  }
+}
+
+variable "smartro_mid" {
+  description = "SmartroPay merchant id (SMARTRO_MID), at most 10 characters. Set with the other two merchant values, or all three empty (SmartroPay not configured)."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = can(regex("^[[:graph:]]{0,10}$", var.smartro_mid)) && !can(regex("[$\"'#]", var.smartro_mid))
+    error_message = "smartro_mid must be at most 10 visible ASCII characters without $ \" ' # (dotenv/compose interpolation safety)."
+  }
+}
+
+variable "smartro_merchant_key" {
+  description = "SmartroPay merchant key (SMARTRO_MERCHANT_KEY): at least 32 characters, the first 32 of which key the cancel request's AES-256. Set with the other two merchant values, or all three empty (SmartroPay not configured)."
+  type        = string
+  sensitive   = true
+  default     = ""
+
+  validation {
+    condition = var.smartro_merchant_key == "" || (
+      length(var.smartro_merchant_key) >= 32 &&
+      can(regex("^[[:graph:]]+$", var.smartro_merchant_key)) &&
+      !can(regex("[$\"'#]", var.smartro_merchant_key))
+    )
+    error_message = "smartro_merchant_key must be empty or at least 32 visible ASCII characters without $ \" ' # (dotenv/compose interpolation safety)."
+  }
+}
+
+variable "smartro_cancel_password" {
+  description = "SmartroPay cancel password set in the merchant admin (SMARTRO_CANCEL_PASSWORD); sent, encrypted, with every cancel. Set with the other two merchant values, or all three empty (SmartroPay not configured)."
+  type        = string
+  sensitive   = true
+  default     = ""
+
+  validation {
+    condition = var.smartro_cancel_password == "" || (
+      can(regex("^[[:graph:]]+$", var.smartro_cancel_password)) &&
+      !can(regex("[$\"'#]", var.smartro_cancel_password))
+    )
+    error_message = "smartro_cancel_password must be visible ASCII characters without $ \" ' # (dotenv/compose interpolation safety)."
+  }
+}

@@ -12,10 +12,14 @@ import {
 } from 'drizzle-orm/pg-core';
 import { user } from './auth.js';
 import { chargePackages } from './charge-packages.js';
-import { createdAt, updatedAt } from './columns.js';
+import { createdAt, timestampTz, updatedAt } from './columns.js';
 import { paymentStatusEnum } from './enums.js';
 
-/** Charges (P bought with KRW). MVP: provider 'mock' succeeds immediately (PLAN 1.2, M2). */
+/**
+ * Charges (P bought with KRW). Provider 'mock' succeeds immediately (PLAN 1.2, M2); 'smartro'
+ * goes through the SmartroPay payment window and its callbacks (ADR-0042), which record every
+ * exchange in `payment_events`.
+ */
 export const payments = pgTable(
   'payments',
   {
@@ -32,10 +36,22 @@ export const payments = pgTable(
      * keeps its own amount/price snapshot, so history survives (ADR-0026).
      */
     packageId: uuid().references(() => chargePackages.id, { onDelete: 'set null' }),
-    /** PAYMENT_PROVIDERS in @buddha/shared ('mock' for now); a real PG adds its own value. */
+    /** PAYMENT_PROVIDERS in @buddha/shared ('mock', 'smartro'). */
     provider: varchar({ length: 32 }).notNull(),
+    /** The provider's transaction id (SmartroPay: the Tid the approval returned). */
     providerRef: text(),
     status: paymentStatusEnum().notNull().default('pending'),
+    /** The PG's PayMethod of the approval (CARD, KAKAO, …); null for mock and unapproved rows. */
+    method: varchar({ length: 16 }),
+    /**
+     * When the charge was credited: the DB clock read after the balance lock in the credit
+     * transaction. The admin refund window (PAYMENT_REFUND_WINDOW_DAYS) counts from here.
+     */
+    approvedAt: timestampTz(),
+    /** When the PG confirmed the cancel of an admin refund (status `refunded`). */
+    refundedAt: timestampTz(),
+    /** The PG's last ResultMsg, shown to the payer when a payment failed. */
+    resultMessage: text(),
     /**
      * The client's `Idempotency-Key` (PLAN 5.4), unique per account: a retry of a request
      * whose answer never arrived finds this row instead of buying again. The row is inserted
@@ -66,6 +82,14 @@ export const payments = pgTable(
     index('payments_created_at_id_idx').on(desc(t.createdAt), desc(t.id)),
     // Per account, so one user's key can never collide with or probe another's.
     uniqueIndex('payments_user_id_idempotency_key_unique').on(t.userId, t.idempotencyKey),
+    /**
+     * One payment per PG transaction: a callback or 재통보 is matched to its row by Moid, and a
+     * Tid that somehow arrived for a second payment must fail loudly instead of crediting twice.
+     * Partial because a `pending` row has no reference until the approval is claimed.
+     */
+    uniqueIndex('payments_provider_provider_ref_unique')
+      .on(t.provider, t.providerRef)
+      .where(sql`${t.providerRef} is not null`),
     check('payments_amount_p_check', sql`${t.amountP} > 0`),
     check('payments_price_krw_check', sql`${t.priceKrw} > 0`),
   ],

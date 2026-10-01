@@ -44,7 +44,8 @@ async function verificationLink(email: string): Promise<string> {
 
 /**
  * Sign-up (ADR-0024): the form takes the email only, the link in the mail signs the user in
- * and lands on /set-password, where the first password is chosen.
+ * and lands on /set-password, where the first password is chosen — together with the real
+ * name and mobile number (ADR-0043), so the account never meets the onboarding gate.
  */
 async function signUp(page: Page, email: string) {
   await page.goto('/signup');
@@ -56,6 +57,9 @@ async function signUp(page: Page, email: string) {
   await expect(page).toHaveURL('/set-password');
   await page.getByTestId('new-password').fill(password);
   await page.getByTestId('new-password-confirm').fill(password);
+  // ADR-0043: the same step takes the real name and mobile number (helpers.ts E2E_CONTACT).
+  await page.getByTestId('contact-real-name').fill('테스트회원');
+  await page.getByTestId('contact-phone').fill('010-1234-5678');
   await page.getByRole('button', { name: copy.setPasswordSubmit }).click();
   await expect(page).toHaveURL('/');
 }
@@ -107,7 +111,8 @@ test.describe('signup -> login -> settings', () => {
     await page.goto('/settings');
     await expect(page.getByTestId('nickname-input')).toHaveValue(/^예측가_/);
     await page.getByTestId('nickname-input').fill(taken);
-    await page.getByRole('button', { name: copy.save }).click();
+    // Scoped: the contact card has its own '저장' button.
+    await page.getByTestId('settings-profile').getByRole('button', { name: copy.save }).click();
     await expect(page.getByText(copy.errNicknameTaken)).toBeVisible();
   });
 

@@ -208,16 +208,16 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
   });
 
   it('POST /api/v1/me/password sets the first password, and refuses to replace it', async () => {
+    const user = await userRow(email);
     const res = await t.app.inject({
       method: 'POST',
       url: '/api/v1/me/password',
       headers: { ...browserHeaders, cookie },
-      payload: { newPassword: password },
+      payload: { newPassword: password, expectedAccountId: user!.id },
     });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ data: { ok: true } });
 
-    const user = await userRow(email);
     const account = await credentialAccount(user!.id);
     expect(account?.password).toBeTypeOf('string');
 
@@ -226,7 +226,7 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
       method: 'POST',
       url: '/api/v1/me/password',
       headers: { ...browserHeaders, cookie },
-      payload: { newPassword: 'another-password' },
+      payload: { newPassword: 'another-password', expectedAccountId: user!.id },
     });
     expect(again.statusCode).toBe(400);
     expect(again.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR' } });
@@ -235,7 +235,7 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
       method: 'POST',
       url: '/api/v1/me/password',
       headers: browserHeaders,
-      payload: { newPassword: password },
+      payload: { newPassword: password, expectedAccountId: user!.id },
     });
     expect(anonymous.statusCode).toBe(401);
   });
@@ -526,5 +526,52 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
     });
     expect(signIn.statusCode).toBe(200);
     expect(sessionCookieOf(signIn.headers['set-cookie'])).toBeDefined();
+  });
+
+  it('POST /api/v1/me/password sets only the password of the account the screen shows (403 otherwise)', async () => {
+    // A tab still showing A after another tab signed in as B: the cookie is B's, the body A's.
+    // Both are verified and have no password yet, so nothing but the check stands in the way.
+    const shown = 'it-auth-shown@test.local';
+    const current = 'it-auth-current@test.local';
+    const cookies = new Map<string, string>();
+    for (const address of [shown, current]) {
+      await register({ email: address });
+      const verify = await t.app.inject({
+        method: 'GET',
+        url: pathOf(verificationLinkFor(t.mailer, address)),
+      });
+      expect(verify.statusCode).toBe(302);
+      cookies.set(address, sessionCookieOf(verify.headers['set-cookie'])!.split(';')[0]!);
+    }
+    const a = (await userRow(shown))!;
+    const b = (await userRow(current))!;
+    const setPassword = (payload: Record<string, unknown>) =>
+      t.app.inject({
+        method: 'POST',
+        url: '/api/v1/me/password',
+        headers: { ...browserHeaders, cookie: cookies.get(current)! },
+        payload,
+      });
+
+    const refused = await setPassword({ newPassword: password, expectedAccountId: a.id });
+    expect(refused.statusCode).toBe(403);
+    expect(refused.json()).toMatchObject({
+      error: {
+        code: 'FORBIDDEN',
+        details: [{ path: ['expectedAccountId'], message: 'session belongs to another account' }],
+      },
+    });
+    const missing = await setPassword({ newPassword: password });
+    expect(missing.statusCode).toBe(400);
+    expect(missing.json()).toMatchObject({
+      error: { code: 'VALIDATION_ERROR', details: [{ path: ['expectedAccountId'] }] },
+    });
+    expect(await credentialAccount(a.id)).toBeUndefined();
+    expect(await credentialAccount(b.id)).toBeUndefined();
+
+    const own = await setPassword({ newPassword: password, expectedAccountId: b.id });
+    expect(own.statusCode).toBe(200);
+    expect((await credentialAccount(b.id))?.password).toBeTypeOf('string');
+    expect(await credentialAccount(a.id)).toBeUndefined();
   });
 });

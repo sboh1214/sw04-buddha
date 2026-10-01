@@ -30,10 +30,18 @@ describe('meSchema', () => {
         createdAt: '2026-09-03T00:00:00.000Z',
       },
     ],
+    contact: null,
   };
 
   it('parses a complete /me payload', () => {
     expect(meSchema.parse(sample)).toEqual(sample);
+  });
+
+  it('carries the contact once provided, and requires the key either way', () => {
+    const withContact = { ...sample, contact: { realName: '홍길동', phone: '01012345678' } };
+    expect(meSchema.parse(withContact)).toEqual(withContact);
+    const { contact: _dropped, ...withoutContact } = sample;
+    expect(meSchema.safeParse(withoutContact).success).toBe(false);
   });
 
   it('rejects a non-string balance', () => {

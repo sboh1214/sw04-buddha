@@ -4,6 +4,7 @@ import { redirect } from 'next/navigation';
 import { copy } from '@/copy';
 import { getServerSession } from '@/lib/session.server';
 import { AccountSection } from './account-section';
+import { ContactSection } from './contact-section';
 import { LinkedAccounts } from './linked-accounts';
 import { NicknameForm } from './nickname-form';
 import { PasswordForm } from './password-form';
@@ -33,6 +34,7 @@ export default async function SettingsPage({
         {error !== undefined && <SettingsNotice code={error} />}
         <NicknameForm />
         <AccountSection />
+        <ContactSection />
         <LinkedAccounts />
         <PasswordForm />
         <ThemeSection />

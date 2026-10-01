@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { copy } from '@/copy';
-import { api, unwrap, type Me } from '@/lib/api';
+import { api, isForAnotherAccount, unwrap, type Me } from '@/lib/api';
 import { authClient, authErrorMessage } from '@/lib/auth-client';
 import { useSession } from '@/lib/use-session';
 
@@ -33,19 +33,41 @@ export function useMe() {
 }
 
 /**
- * `POST /api/v1/me/password`: the first password of an account that has none (after the
- * sign-up verification, or for a social-only user). Refreshes the linked-account list, which
+ * `POST /api/v1/me/password`: the first password of an account that has none, set from the
+ * settings screen (a social-only user). The sign-up's /set-password step uses
+ * `useSetPasswordAndContact` (use-contact.ts) instead. Refreshes the linked-account list, which
  * decides whether the settings screen offers "set" or "change".
+ *
+ * The body names the account the screen shows (`expectedAccountId`, A-PG-24), read from the
+ * session as `useCharge` reads it: the cookie decides whose password is set, and a settings tab
+ * left open beside a window that signed in as somebody else would otherwise give THAT account a
+ * first password typed here — one whoever typed it knows. The server refuses the mismatch
+ * before better-auth is asked; the refusal refetches the session so SessionCacheGuard shows
+ * the account that is really signed in. `ready` is false until the session is known, and the
+ * form keeps its submit disabled until then.
  */
 export function useSetPassword() {
   const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: async (newPassword: string) =>
-      unwrap(await api.POST('/api/v1/me/password', { body: { newPassword } })).data,
+  const { data: session, refetch: refetchSession } = useSession();
+  const accountId = session?.user.id;
+  const mutation = useMutation({
+    mutationFn: async (newPassword: string) => {
+      // Unreachable while the form honours `ready`.
+      if (!accountId) throw new Error('password set before the session was known');
+      return unwrap(
+        await api.POST('/api/v1/me/password', {
+          body: { newPassword, expectedAccountId: accountId },
+        }),
+      ).data;
+    },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY });
     },
+    onError: (error: Error) => {
+      if (isForAnotherAccount(error)) void refetchSession();
+    },
   });
+  return { ...mutation, ready: accountId !== undefined };
 }
 
 /** `PATCH /api/v1/me` (nickname). Replaces the `['me']` cache with the server's response. */

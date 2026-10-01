@@ -8,6 +8,7 @@ import { PasswordInput } from '@/components/ui/password-input';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { useLinkedAccounts, useSetPassword } from '@/hooks/use-me';
+import { isForAnotherAccount } from '@/lib/api';
 import {
   AUTH_ERROR,
   CREDENTIAL_PROVIDER_ID,
@@ -166,8 +167,13 @@ function SetPasswordFields() {
       await setPassword.mutateAsync(newPassword);
       toaster.create({ type: 'success', title: copy.passwordSet });
       reset();
-    } catch {
-      toaster.create({ type: 'error', title: copy.errUnknown });
+    } catch (error) {
+      // The cookie is another account's (A-PG-24): no password was set, and the hook has asked
+      // the session to refetch so the screen follows the account that is really signed in.
+      toaster.create({
+        type: 'error',
+        title: isForAnotherAccount(error) ? copy.sessionChanged : copy.errUnknown,
+      });
     }
   });
 
@@ -196,7 +202,12 @@ function SetPasswordFields() {
           />
           <Field.ErrorText>{errors.newPasswordConfirm?.message}</Field.ErrorText>
         </Field.Root>
-        <Button type="submit" alignSelf="flex-start" loading={isSubmitting}>
+        <Button
+          type="submit"
+          alignSelf="flex-start"
+          loading={isSubmitting}
+          disabled={!setPassword.ready}
+        >
           {copy.setPasswordSubmit}
         </Button>
       </Stack>

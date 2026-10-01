@@ -246,6 +246,40 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/payments/{id}/refund": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Refund an unused charge within 7 days of its approval: claw back all its P, then cancel the whole KRW at the provider (retry a refunding one) */
+        post: operations["adminRefundPayment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/payments/{id}/settle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Settle by hand a SmartroPay payment the API could not settle (needsReview), after checking the card in the merchant admin */
+        post: operations["adminSettlePayment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/users": {
         parameters: {
             query?: never;
@@ -468,6 +502,23 @@ export type paths = {
         patch: operations["updateMe"];
         trace?: never;
     };
+    "/api/v1/me/contact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set real name and mobile number */
+        put: operations["updateMyContact"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me/disputes": {
         parameters: {
             query?: never;
@@ -553,6 +604,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/me/payments/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One of the caller charges (the wallet reads it for the result of a payment window) */
+        get: operations["getMyPayment"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me/positions": {
         parameters: {
             query?: never;
@@ -581,6 +649,40 @@ export type paths = {
         put?: never;
         /** Buy one charge package (mock provider: succeeds immediately). P is never convertible back to cash. */
         post: operations["charge"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/payments/provider": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The configured payment provider: mock (immediate charge) or smartro (payment window, with its SDK URLs) */
+        get: operations["getPaymentProvider"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/payments/smartro/prepare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reserve a pending SmartroPay payment for one charge package and sign the payment-window form (provider smartro only) */
+        post: operations["prepareSmartroPayment"];
         delete?: never;
         options?: never;
         head?: never;
@@ -714,17 +816,25 @@ export type components = {
         AdminPayment: {
             amountP: components["schemas"]["PAmount"];
             /** Format: date-time */
+            approvedAt: string | null;
+            cancelConfirmed: boolean | null;
+            /** Format: date-time */
             createdAt: string;
             /** Format: uuid */
             id: string;
+            method: string | null;
+            needsReview: boolean;
             nickname: string;
             /** Format: uuid */
             packageId: string | null;
             priceKrw: number;
             provider: string;
             providerRef: string | null;
+            /** Format: date-time */
+            refundedAt: string | null;
+            resultMessage: string | null;
             /** @enum {string} */
-            status: "pending" | "succeeded" | "failed";
+            status: "pending" | "succeeded" | "failed" | "cancelled" | "refunding" | "refunded";
             userId: string;
         };
         AdminUser: {
@@ -785,6 +895,15 @@ export type components = {
             balance: components["schemas"]["Balance"];
             ledgerEntry: components["schemas"]["LedgerEntry"];
             payment: components["schemas"]["Payment"];
+        };
+        Contact: {
+            phone: string;
+            realName: string;
+        };
+        ContactBody: {
+            expectedAccountId: string;
+            phone: string;
+            realName: string;
         };
         Coupon: {
             amountP: components["schemas"]["PAmount"];
@@ -863,7 +982,7 @@ export type components = {
             status: "open" | "accepted" | "rejected";
         };
         /** @enum {string} */
-        ErrorCode: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "VALIDATION_ERROR" | "MARKET_NOT_OPEN" | "MARKET_CLOSED" | "INSUFFICIENT_BALANCE" | "INSUFFICIENT_POSITION" | "PRICE_MOVED" | "DUPLICATE_REQUEST" | "RATE_LIMITED" | "DISPUTE_WINDOW_CLOSED" | "RULES_REQUIRED" | "INTERNAL";
+        ErrorCode: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "VALIDATION_ERROR" | "MARKET_NOT_OPEN" | "MARKET_CLOSED" | "INSUFFICIENT_BALANCE" | "INSUFFICIENT_POSITION" | "PRICE_MOVED" | "DUPLICATE_REQUEST" | "RATE_LIMITED" | "DISPUTE_WINDOW_CLOSED" | "RULES_REQUIRED" | "CONTACT_REQUIRED" | "REFUND_NOT_ALLOWED" | "PAYMENT_GATEWAY_REFUSED" | "PAYMENT_GATEWAY_ERROR" | "INTERNAL";
         ErrorEnvelope: {
             error: {
                 code: components["schemas"]["ErrorCode"];
@@ -899,7 +1018,7 @@ export type components = {
             /** @enum {string|null} */
             refType: "payment" | "fill" | "market" | "admin_action" | "coupon" | null;
             /** @enum {string} */
-            type: "DEPOSIT" | "TRADE_BUY" | "TRADE_SELL" | "FEE" | "SETTLEMENT_PAYOUT" | "MARKET_VOID_REFUND" | "ADMIN_ADJUST" | "BONUS";
+            type: "DEPOSIT" | "TRADE_BUY" | "TRADE_SELL" | "FEE" | "SETTLEMENT_PAYOUT" | "MARKET_VOID_REFUND" | "ADMIN_ADJUST" | "BONUS" | "PAYMENT_CANCEL" | "PAYMENT_CANCEL_REVERSAL";
         };
         LinkedAccount: {
             accountId: string;
@@ -1024,6 +1143,7 @@ export type components = {
                 availableP: components["schemas"]["PAmount"];
                 lockedP: components["schemas"]["PAmount"];
             };
+            contact: components["schemas"]["Contact"] | null;
             /** Format: email */
             email: string;
             emailVerified: boolean;
@@ -1074,16 +1194,36 @@ export type components = {
         Payment: {
             amountP: components["schemas"]["PAmount"];
             /** Format: date-time */
+            approvedAt: string | null;
+            cancelConfirmed: boolean | null;
+            /** Format: date-time */
             createdAt: string;
             /** Format: uuid */
             id: string;
+            method: string | null;
             /** Format: uuid */
             packageId: string | null;
             priceKrw: number;
             provider: string;
             providerRef: string | null;
+            /** Format: date-time */
+            refundedAt: string | null;
+            resultMessage: string | null;
             /** @enum {string} */
-            status: "pending" | "succeeded" | "failed";
+            status: "pending" | "succeeded" | "failed" | "cancelled" | "refunding" | "refunded";
+        };
+        PaymentProviderInfo: {
+            /** @enum {string} */
+            provider: "mock";
+        } | {
+            /** @enum {string} */
+            mode: "STG" | "REAL";
+            /** @enum {string} */
+            provider: "smartro";
+            scriptUrl: {
+                mobile: string;
+                pc: string;
+            };
         };
         Position: {
             costBasisP: components["schemas"]["PAmount"];
@@ -1154,6 +1294,9 @@ export type components = {
             code: string;
             ledgerEntry: components["schemas"]["LedgerEntry"];
         };
+        RefundPaymentBody: {
+            reason: string;
+        };
         RegisterBody: {
             /** Format: email */
             email: string;
@@ -1175,7 +1318,44 @@ export type components = {
             status: "accepted" | "rejected";
         };
         SetPasswordBody: {
+            expectedAccountId: string;
             newPassword: components["schemas"]["Password"];
+        };
+        SettlePaymentBody: {
+            /** @enum {string} */
+            outcome: "credit" | "cancelled" | "failed" | "restore" | "refunded";
+            reason: string;
+            tid?: string;
+        };
+        SmartroPrepareResult: {
+            approvalUrl: string;
+            form: {
+                Amt: string;
+                BuyerEmail: string;
+                BuyerName: string;
+                BuyerTel: string;
+                EdiDate: string;
+                EncryptData: string;
+                GoodsCnt: string;
+                GoodsName: string;
+                MallUserId: string;
+                Mid: string;
+                Moid: string;
+                PayMethod: string;
+                ReturnUrl: string;
+                StopUrl: string;
+                TaxAmt: string;
+                TaxFreeAmt: string;
+                VatAmt: string;
+            };
+            /** @enum {string} */
+            mode: "STG" | "REAL";
+            /** Format: uuid */
+            paymentId: string;
+            scriptUrl: {
+                mobile: string;
+                pc: string;
+            };
         };
         TradeBody: {
             expectedAccountId: string;
@@ -2512,6 +2692,177 @@ export interface operations {
             };
         };
     };
+    adminRefundPayment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RefundPaymentBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminPayment"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description INSUFFICIENT_BALANCE | DUPLICATE_REQUEST | REFUND_NOT_ALLOWED | PAYMENT_GATEWAY_REFUSED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description PAYMENT_GATEWAY_ERROR */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminSettlePayment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SettlePaymentBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminPayment"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description REFUND_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     adminListUsers: {
         parameters: {
             query?: {
@@ -3269,6 +3620,67 @@ export interface operations {
             };
         };
     };
+    updateMyContact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContactBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["Contact"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     listMyDisputes: {
         parameters: {
             query?: {
@@ -3542,6 +3954,65 @@ export interface operations {
             };
         };
     };
+    getMyPayment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["Payment"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     getMyPositions: {
         parameters: {
             query?: {
@@ -3655,6 +4126,118 @@ export interface operations {
                 };
             };
             /** @description PRICE_MOVED | DUPLICATE_REQUEST */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getPaymentProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["PaymentProviderInfo"];
+                    };
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    prepareSmartroPayment: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Client-generated key for this purchase (PLAN 5.4). Re-sent while the payment is still pending and unapproved, it returns a freshly signed form for the SAME payment. DUPLICATE_REQUEST (409) answers a key re-used with a different body, or one whose payment has already been approved or closed (the key is spent). */
+                "Idempotency-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChargeBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["SmartroPrepareResult"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description PRICE_MOVED | DUPLICATE_REQUEST | CONTACT_REQUIRED */
             409: {
                 headers: {
                     [name: string]: unknown;

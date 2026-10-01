@@ -15,7 +15,13 @@ import { AppError } from '../common/errors/app-error.js';
 import { keysetPredicate } from '../common/keyset.js';
 import { clockTimestamp } from '../infra/db/clock.js';
 import { DB } from '../infra/db/db.provider.js';
-import { toLedgerEntry, toBalance, type Page } from '../wallet/wallet.service.js';
+import { netCancelConfirmed } from '../payments/payment-events.js';
+import { SETTLE_MIN_AGE_MS } from '../payments/payment-transitions.js';
+import {
+  APPROVAL_SUCCESS_CODES,
+  APPROVAL_UNKNOWN_CODES,
+} from '../payments/smartro/smartro-protocol.js';
+import { paymentColumns, toLedgerEntry, toBalance, type Page } from '../wallet/wallet.service.js';
 
 const userColumns = {
   id: schema.user.id,
@@ -46,6 +52,139 @@ function toAdminUser(row: UserRow): AdminUser {
     role: row.role,
     balance: toBalance(row),
     createdAt: row.createdAt.toISOString(),
+  };
+}
+
+/** SETTLE_MIN_AGE_MS as an SQL interval literal (a constant, never user input). */
+const SETTLE_MIN_AGE = sql.raw(`interval '${String(SETTLE_MIN_AGE_MS / 1000)} seconds'`);
+
+/** A list of result codes as SQL literals (constants, never user input). */
+function codeList(codes: readonly string[]) {
+  return sql.raw(codes.map((code) => `'${code}'`).join(', '));
+}
+
+/** The approval success codes (isApprovalSuccess), as SQL. */
+const APPROVAL_SUCCESS = codeList(APPROVAL_SUCCESS_CODES);
+
+/** The approval answers that are the PG's own failure, no decline (isApprovalUnknown), as SQL. */
+const APPROVAL_UNKNOWN = codeList(APPROVAL_UNKNOWN_CODES);
+
+/**
+ * `AdminPayment.needsReview`, computed where the rows are (ADR-0042): a SmartroPay payment the
+ * API could not settle by itself and no request is still working on — for an admin to check in
+ * the merchant admin and settle by hand (payment-settle.service):
+ * - `pending` and claimed (`provider_ref` set: an approval was asked for), untouched for
+ *   SETTLE_MIN_AGE_MS — the approval's answer never came and neither did the 재통보;
+ * - `cancelled` without a net cancel the PG confirmed (netCancelConfirmed; the payer's
+ *   `Payment.cancelConfirmed` is false) — the cancel got no clear answer, or its process died
+ *   before recording one;
+ * - `refunding`, untouched for SETTLE_MIN_AGE_MS — the refund's cancel got no clear answer;
+ * - `failed` and claimed, untouched for SETTLE_MIN_AGE_MS, with a sign the card may be charged
+ *   after all that no settle has checked since: its approval got no answer (an `approval` event
+ *   without a ResultCode — the payment failed on something else's word) or answered the PG's own
+ *   failure rather than a decline (isApprovalUnknown: 9999, W999, … — it still fails the payment,
+ *   ADR-0042 「ReturnUrl」 step 5), or an approval 재통보 (StateCd 0, a success code) left it
+ *   uncredited (its Mid or amount did not match, or a cancel 재통보 of the card on record held it
+ *   back) — never one of an approval another payment's own call made (approvalsMadeElsewhere's
+ *   test: a success answer on that payment records its Tid, which no SmartroPay payment but that
+ *   one holds): that payment answers for it (the next hint flags it until a settle there).
+ *   Counted here too, such a late 재통보 would flag again a payment whose claim approved another
+ *   window (crossPostedApprovalOf) after a settle honoured that window's charge — under the same
+ *   reason, so it would read as that charge still owed, to be honoured twice. So a settled
+ *   payment flagged again by this hint is for the 재통보's Tid its error log names, not the one
+ *   its reason names (the payer's own approval call, A-PG-22, say). Or its approval answered a
+ *   SUCCESS for another payment of ours that does not hold that Tid — the authentication of that
+ *   payment's window posted to this one's ReturnUrl: the card is charged, and no flow of ours
+ *   credits it (netCancel; the payment's `result_message` names the Moid, Tid and amount the
+ *   merchant admin files it under; nothing of its own Moid takes it out of `failed` after —
+ *   crossPostedApprovalOf). A success whose Tid another
+ *   SmartroPay payment holds is skipped: a replay whose approval answered that payment's
+ *   approval again — that payment's flow has it, and nothing is owed. The inquiry's answer
+ *   (`approval_inquiry`) needs no hint of its own: it is asked only after the approval got no
+ *   answer, which flags the payment already — also when it brings back such a replayed approval.
+ * Only SmartroPay rows: the settle refuses the rest (a mock refund is simply retried).
+ */
+const needsReview = sql<boolean>`(${schema.payments.provider} = 'smartro' and (
+  (${schema.payments.status} = 'pending' and ${schema.payments.providerRef} is not null
+    and ${schema.payments.updatedAt} < now() - ${SETTLE_MIN_AGE})
+  or (${schema.payments.status} = 'cancelled' and not ${netCancelConfirmed})
+  or (${schema.payments.status} = 'refunding'
+    and ${schema.payments.updatedAt} < now() - ${SETTLE_MIN_AGE})
+  or (${schema.payments.status} = 'failed' and ${schema.payments.providerRef} is not null
+    and ${schema.payments.updatedAt} < now() - ${SETTLE_MIN_AGE}
+    and exists (
+      select 1 from ${schema.paymentEvents} hint
+      where hint.payment_id = ${schema.payments.id}
+        and ((hint.type = 'approval'
+            and (hint.result_code is null or hint.result_code in (${APPROVAL_UNKNOWN})))
+          or (hint.type = 'notify' and hint.payload->>'StateCd' = '0'
+            and hint.result_code in (${APPROVAL_SUCCESS})
+            and not exists (
+              select 1 from ${schema.paymentEvents} made
+              where made.payment_id <> ${schema.payments.id}
+                and made.type in ('approval', 'approval_inquiry')
+                and made.result_code in (${APPROVAL_SUCCESS})
+                and made.payload->>'Tid' = coalesce(
+                  nullif(hint.payload->>'Tid', ''), nullif(hint.payload->>'TID', ''))
+                and not exists (
+                  select 1 from ${schema.payments} keeper
+                  where keeper.provider = 'smartro' and keeper.id <> made.payment_id
+                    and keeper.provider_ref = made.payload->>'Tid')))
+          or (hint.type = 'approval' and hint.result_code in (${APPROVAL_SUCCESS})
+            and not exists (
+              select 1 from ${schema.payments} holder
+              where holder.provider = 'smartro' and holder.id <> ${schema.payments.id}
+                and holder.provider_ref = hint.payload->>'Tid')))
+        and not exists (
+          select 1 from ${schema.adminActions} checked
+          where checked.type = 'payment_settle' and checked.target_type = 'payment'
+            and checked.target_id = ${schema.payments.id}::text
+            and checked.created_at >= hint.created_at)))
+))`;
+
+const adminPaymentColumns = {
+  id: schema.payments.id,
+  userId: schema.payments.userId,
+  nickname: schema.profiles.nickname,
+  amountP: schema.payments.amountP,
+  priceKrw: schema.payments.priceKrw,
+  packageId: schema.payments.packageId,
+  provider: schema.payments.provider,
+  providerRef: schema.payments.providerRef,
+  status: schema.payments.status,
+  method: schema.payments.method,
+  approvedAt: schema.payments.approvedAt,
+  refundedAt: schema.payments.refundedAt,
+  resultMessage: schema.payments.resultMessage,
+  cancelConfirmed: paymentColumns.cancelConfirmed,
+  createdAt: schema.payments.createdAt,
+  needsReview,
+};
+
+type AdminPaymentRow = Omit<typeof schema.payments.$inferSelect, 'idempotencyKey' | 'updatedAt'> & {
+  nickname: string;
+  cancelConfirmed: boolean | null;
+  needsReview: boolean;
+};
+
+function toAdminPayment(row: AdminPaymentRow): AdminPayment {
+  return {
+    id: row.id,
+    userId: row.userId,
+    nickname: row.nickname,
+    amountP: serializePAmount(row.amountP),
+    priceKrw: row.priceKrw,
+    packageId: row.packageId,
+    provider: row.provider,
+    providerRef: row.providerRef,
+    status: row.status,
+    method: row.method,
+    approvedAt: row.approvedAt?.toISOString() ?? null,
+    refundedAt: row.refundedAt?.toISOString() ?? null,
+    resultMessage: row.resultMessage,
+    cancelConfirmed: row.cancelConfirmed,
+    createdAt: row.createdAt.toISOString(),
+    needsReview: row.needsReview,
   };
 }
 
@@ -191,18 +330,7 @@ export class AdminService {
   async listPayments(cursor: string | undefined, limit: number): Promise<Page<AdminPayment>> {
     const keyset = decodeKeyset(cursor, 'uuid');
     const rows = await this.db
-      .select({
-        id: schema.payments.id,
-        userId: schema.payments.userId,
-        nickname: schema.profiles.nickname,
-        amountP: schema.payments.amountP,
-        priceKrw: schema.payments.priceKrw,
-        packageId: schema.payments.packageId,
-        provider: schema.payments.provider,
-        providerRef: schema.payments.providerRef,
-        status: schema.payments.status,
-        createdAt: schema.payments.createdAt,
-      })
+      .select(adminPaymentColumns)
       .from(schema.payments)
       .innerJoin(schema.profiles, eq(schema.profiles.userId, schema.payments.userId))
       .where(
@@ -217,20 +345,21 @@ export class AdminService {
     const kept = hasMore ? rows.slice(0, limit) : rows;
     const last = kept.at(-1);
     return {
-      items: kept.map((row) => ({
-        id: row.id,
-        userId: row.userId,
-        nickname: row.nickname,
-        amountP: serializePAmount(row.amountP),
-        priceKrw: row.priceKrw,
-        packageId: row.packageId,
-        provider: row.provider,
-        providerRef: row.providerRef,
-        status: row.status,
-        createdAt: row.createdAt.toISOString(),
-      })),
+      items: kept.map(toAdminPayment),
       nextCursor: hasMore && last ? encodeKeyset({ createdAt: last.createdAt, id: last.id }) : null,
     };
+  }
+
+  /** One payment as the admin list shows it (the refund answers with it). */
+  async getPayment(paymentId: string): Promise<AdminPayment> {
+    const [row] = await this.db
+      .select(adminPaymentColumns)
+      .from(schema.payments)
+      .innerJoin(schema.profiles, eq(schema.profiles.userId, schema.payments.userId))
+      .where(eq(schema.payments.id, paymentId))
+      .limit(1);
+    if (!row) throw new AppError('NOT_FOUND', { message: 'Payment not found' });
+    return toAdminPayment(row);
   }
 
   async listAuditFailures(cursor: string | undefined, limit: number): Promise<Page<AuditFailure>> {
