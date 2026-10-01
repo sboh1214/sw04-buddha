@@ -272,16 +272,29 @@ export function cancelHashData(
   return sha256Base64(tid + merchantKey + cancelAmt + partialCancelCode);
 }
 
+/** How many leading characters of the merchant key make the cancel payload's AES-256 key. */
+export const SMARTRO_CANCEL_KEY_LENGTH = 32;
+
+/**
+ * The cancel payload's AES-256 key: the merchant key's first SMARTRO_CANCEL_KEY_LENGTH
+ * characters as UTF-8 bytes — or `null` when they are not that many bytes (a shorter key, or a
+ * non-ASCII character among them, half a surrogate pair included). config/env.ts refuses such a
+ * key at startup with this same function, so the two cannot drift apart.
+ */
+export function cancelPayloadKey(merchantKey: string): Buffer | null {
+  const key = Buffer.from(merchantKey.substring(0, SMARTRO_CANCEL_KEY_LENGTH), 'utf8');
+  return key.length === SMARTRO_CANCEL_KEY_LENGTH ? key : null;
+}
+
 /**
  * The cancel request's `EncData`: the parameter JSON under AES-256-CBC with PKCS#7 padding,
- * keyed by the first 32 characters of the merchant key as UTF-8 bytes, a zero IV, base64 out.
- * A merchant key whose first 32 characters are not 32 bytes (a non-ASCII key) throws rather
- * than encrypting under a key SmartroPay does not hold.
+ * keyed by cancelPayloadKey (the first 32 characters of the merchant key as UTF-8 bytes), a zero
+ * IV, base64 out. A merchant key whose first 32 characters are not 32 bytes (a non-ASCII key)
+ * throws rather than encrypting under a key SmartroPay does not hold.
  */
 export function encryptCancelPayload(json: string, merchantKey: string): string {
-  const key = Buffer.from(merchantKey.substring(0, 32), 'utf8');
-  if (key.length !== 32)
-    throw new RangeError('the merchant key must start with 32 ASCII characters');
+  const key = cancelPayloadKey(merchantKey);
+  if (key === null) throw new RangeError('the merchant key must start with 32 ASCII characters');
   const cipher = createCipheriv('aes-256-cbc', key, Buffer.alloc(16, 0));
   return Buffer.concat([cipher.update(json, 'utf8'), cipher.final()]).toString('base64');
 }

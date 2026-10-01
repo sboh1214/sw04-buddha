@@ -201,7 +201,7 @@ PLAN 부록 C의 다이어그램은 M4 이전 그림이라 위와 다르다(브�
 PAYMENT_PROVIDER=smartro
 SMARTRO_MODE=STG
 SMARTRO_MID=<발급받은 MID>                      # 10자 이하
-SMARTRO_MERCHANT_KEY=<발급받은 상점키>           # 32자 이상
+SMARTRO_MERCHANT_KEY=<발급받은 상점키>           # 32자 이상, 앞 32자는 ASCII(취소 AES 키)
 SMARTRO_CANCEL_PASSWORD=<가맹점 관리자의 취소 비밀번호>
 ```
 

@@ -231,10 +231,11 @@ export class AdminController {
   // `window_closed`, `status` or `provider`. PAYMENT_GATEWAY_REFUSED: the PG said no and the P
   // was restored — or, on a retry, a first attempt a retry took over, or a payment a partial
   // cancel 재통보 is on record for (details[1].message `settle_required`), nothing was restored
-  // and the payment stays `refunding` for the settle below. A refusal after a full-cancel
-  // 재통보 answers 200 `refunded`. PAYMENT_GATEWAY_ERROR: no answer;
-  // the payment stays `refunding` for a retry. DUPLICATE_REQUEST (details[0].message
-  // `in progress`): a retry while the last attempt is still waiting on the PG.
+  // and the payment stays `refunding` for the settle below. PAYMENT_GATEWAY_ERROR: no answer;
+  // the payment stays `refunding` for a retry. A refusal or no answer after a full-cancel 재통보
+  // — or once the 재통보 or another attempt finished the refund meanwhile — answers 200
+  // `refunded`. DUPLICATE_REQUEST (details[0].message `in progress`): a retry while the last
+  // attempt is still waiting on the PG.
   @ApiErrors(
     'UNAUTHENTICATED',
     'FORBIDDEN',

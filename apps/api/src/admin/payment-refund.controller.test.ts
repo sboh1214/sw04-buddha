@@ -1267,6 +1267,199 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
     expectLedgerChain(await ledgerOf(member.id), SIGNUP_BONUS_P);
   });
 
+  it('finishes a refused retry or an unanswered cancel when a 재통보 lands as its answer is recorded', async () => {
+    // The answer leaves the payment `refunding` (a refused retry, or no answer at all) and the
+    // unlocked notice check has read nothing yet — then SmartroPay's notice of the cancel lands
+    // while the answer waits on the payment row. The refund is done: no error, no alarm.
+    const paths = [
+      {
+        name: 'refused retry',
+        retry: true,
+        answer: () => ({ ResultCode: '2002', ResultMsg: '취소 실패' }),
+      },
+      {
+        name: 'unanswered first attempt',
+        retry: false,
+        answer: (): never => {
+          throw new SmartroUnreachableError('timed out');
+        },
+      },
+      { name: 'unanswered retry', retry: true, answer: () => ({ ResultMsg: '시스템 오류' }) },
+    ];
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    try {
+      for (const path of paths) {
+        for (const arrival of ['recorded', 'applied'] as const) {
+          const what = `${path.name}, notice ${arrival}`;
+          const { id, tid } = await smartroCharge();
+          if (path.retry) await stuckRefunding(id);
+          error.mockClear();
+          const holder = await t.db.$client.connect();
+          let open = false;
+          let pending: ReturnType<typeof refund> | undefined;
+          try {
+            pg.onCancel = async () => {
+              await holder.query('BEGIN');
+              open = true;
+              await holder.query(`SELECT id FROM payments WHERE id = '${id}' FOR UPDATE`);
+              return path.answer();
+            };
+            pending = refund(id, path.retry ? '재시도' : REASON).then((res) => res);
+            // The unlocked check has read no notice; the answer now waits on the payment row.
+            await waitForLockWaiter(holder, `${what}: its answer on the payment row`);
+            // The notice lands in the holder's own transaction — another connection's insert
+            // would wait on the row too: its event, and with `applied` also its effect
+            // (settleCancelNotice's markRefunded).
+            await holder.query(
+              `INSERT INTO payment_events (payment_id, type, result_code, payload)
+               VALUES ('${id}', 'notify', '2001', '${JSON.stringify({ Tid: tid, StateCd: '1', ResultCode: '2001', Amt: '9700' })}')`,
+            );
+            if (arrival === 'applied') {
+              await holder.query(
+                `UPDATE payments SET status = 'refunded', refunded_at = now(), updated_at = now()
+                  WHERE id = '${id}'`,
+              );
+            }
+            await holder.query('COMMIT');
+            open = false;
+            const res = await pending;
+            expect(res.statusCode, what).toBe(200);
+            expect(res.json<{ data: AdminPayment }>().data, what).toMatchObject({
+              status: 'refunded',
+            });
+          } finally {
+            if (open) await holder.query('ROLLBACK');
+            holder.release();
+            await pending?.catch(() => undefined);
+          }
+          expect(error, what).not.toHaveBeenCalled();
+          const row = await paymentRow(id);
+          expect(row, what).toMatchObject({ status: 'refunded' });
+          expect(row.refundedAt, what).toBeInstanceOf(Date);
+          expect((await eventsOf(id)).at(-1), what).toMatchObject({ type: 'refund_cancel' });
+        }
+      }
+    } finally {
+      error.mockRestore();
+    }
+    const ledger = await ledgerOf(member.id);
+    expect(ledger.filter((entry) => entry.type === 'PAYMENT_CANCEL_REVERSAL')).toHaveLength(0);
+    expectLedgerChain(ledger, SIGNUP_BONUS_P);
+  });
+
+  it('answers an unanswered attempt a retry took over and finished as refunded', async () => {
+    // The first attempt outlives its lease; a retry takes over and the PG cancels the card. The
+    // first attempt's call then times out: the refund is done, so that is no error either.
+    const { id } = await smartroCharge();
+    let silenceFirst: () => void = () => undefined;
+    const firstGate = new Promise<void>((resolve) => (silenceFirst = resolve));
+    const answers = [
+      async () => {
+        await firstGate;
+        throw new SmartroUnreachableError('timed out');
+      },
+      () => Promise.resolve({ ResultCode: '2001', ResultMsg: '취소 성공' }),
+    ];
+    pg.onCancel = () => answers[pg.cancels.length - 1]!();
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    try {
+      const first = refund(id).then((res) => res);
+      await vi.waitFor(() => {
+        expect(pg.cancels).toHaveLength(1);
+      });
+      await t.db
+        .update(schema.payments)
+        .set({ updatedAt: sql`now() - interval '70 seconds'` })
+        .where(eq(schema.payments.id, id));
+      expect((await refund(id, '재시도')).statusCode).toBe(200);
+      expect(await paymentRow(id)).toMatchObject({ status: 'refunded' });
+
+      silenceFirst();
+      const late = await first;
+      expect(late.statusCode).toBe(200);
+      expect(late.json<{ data: AdminPayment }>().data).toMatchObject({ status: 'refunded' });
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      error.mockRestore();
+    }
+    expect((await eventsOf(id)).at(-1)).toMatchObject({ type: 'refund_cancel', resultCode: null });
+    const ledger = await ledgerOf(member.id);
+    expect(ledger.map((entry) => entry.type)).toEqual(['BONUS', 'DEPOSIT', 'PAYMENT_CANCEL']);
+    expectLedgerChain(ledger, SIGNUP_BONUS_P);
+  });
+
+  it('claims no refunding left when the payment moved elsewhere while its cancel was in flight', async () => {
+    // Defensive: only a settle restore moves a `refunding` payment anywhere but `refunded`, and
+    // its 2-minute guard (SETTLE_MIN_AGE_MS) keeps it away from an attempt in flight. Simulated
+    // here by moving the row straight to `succeeded` while the PG holds the cancel: the answer
+    // is recorded, nothing is restored, and the error claims no `refunding` to retry or settle.
+    const paths = [
+      {
+        name: 'refused retry',
+        retry: true,
+        answer: () => ({ ResultCode: '2002', ResultMsg: '취소 실패' }),
+        status: 409,
+        body: {
+          error: {
+            code: 'PAYMENT_GATEWAY_REFUSED',
+            message: 'The payment gateway refused the retried cancel',
+            details: [{ path: ['gateway'], message: '2002 취소 실패' }],
+          },
+        },
+      },
+      {
+        name: 'unanswered first attempt',
+        retry: false,
+        answer: (): never => {
+          throw new SmartroUnreachableError('timed out');
+        },
+        status: 502,
+        body: { error: { code: 'PAYMENT_GATEWAY_ERROR', message: 'Internal server error' } },
+      },
+      {
+        name: 'unanswered retry',
+        retry: true,
+        answer: () => ({ ResultMsg: '시스템 오류' }),
+        status: 502,
+        body: { error: { code: 'PAYMENT_GATEWAY_ERROR', message: 'Internal server error' } },
+      },
+    ];
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    try {
+      for (const path of paths) {
+        const { id } = await smartroCharge();
+        if (path.retry) await stuckRefunding(id);
+        error.mockClear();
+        pg.onCancel = async () => {
+          await t.db
+            .update(schema.payments)
+            .set({ status: 'succeeded', updatedAt: sql`now()` })
+            .where(eq(schema.payments.id, id));
+          return path.answer();
+        };
+        const res = await refund(id, path.retry ? '재시도' : REASON);
+        expect(res.statusCode, path.name).toBe(path.status);
+        expect(res.json(), path.name).toEqual(path.body);
+        expect(error, path.name).toHaveBeenCalledTimes(1);
+        expect(error, path.name).toHaveBeenCalledWith(
+          expect.stringMatching(/the payment was succeeded, no longer refunding/),
+        );
+        expect(await paymentRow(id), path.name).toMatchObject({
+          status: 'succeeded',
+          refundedAt: null,
+        });
+        expect((await eventsOf(id)).at(-1), path.name).toMatchObject({ type: 'refund_cancel' });
+      }
+    } finally {
+      error.mockRestore();
+    }
+    // Nothing put back by the refund: each charge's claw-back stands, with no reversal.
+    const ledger = await ledgerOf(member.id);
+    expect(ledger.filter((entry) => entry.type === 'PAYMENT_CANCEL')).toHaveLength(paths.length);
+    expect(ledger.filter((entry) => entry.type === 'PAYMENT_CANCEL_REVERSAL')).toHaveLength(0);
+    expectLedgerChain(ledger, SIGNUP_BONUS_P);
+  });
+
   // --- the policy's edges (T3) ---------------------------------------------------------
 
   it('refunds just inside the window, and counts from created_at when approved_at is null', async () => {

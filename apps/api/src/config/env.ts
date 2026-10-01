@@ -7,6 +7,10 @@ import {
 } from '@buddha/shared';
 import { config as loadDotenv } from 'dotenv';
 import * as z from 'zod';
+import {
+  SMARTRO_CANCEL_KEY_LENGTH,
+  cancelPayloadKey,
+} from '../payments/smartro/smartro-protocol.js';
 
 /**
  * .env candidates, first match wins per key: apps/api/.env (local override), then the
@@ -52,7 +56,9 @@ const mailbox = z.string().refine(
 /**
  * The SmartroPay credentials `PAYMENT_PROVIDER=smartro` cannot run without. The merchant key
  * signs every request (EncryptData, HashData) and its first 32 characters are the AES-256 key of
- * the cancel payload, hence the minimum length.
+ * the cancel payload, hence the minimum length — and those 32 must be ASCII, one byte each, or
+ * every cancel (a refund, a net cancel) would throw (encryptCancelPayload; both ask
+ * cancelPayloadKey).
  */
 export const SMARTRO_REQUIRED_KEYS = [
   'SMARTRO_MID',
@@ -60,7 +66,7 @@ export const SMARTRO_REQUIRED_KEYS = [
   'SMARTRO_CANCEL_PASSWORD',
 ] as const;
 export const SMARTRO_MID_MAX_LENGTH = 10;
-export const SMARTRO_MERCHANT_KEY_MIN_LENGTH = 32;
+export const SMARTRO_MERCHANT_KEY_MIN_LENGTH = SMARTRO_CANCEL_KEY_LENGTH;
 
 export const OAUTH_PROVIDERS = ['google', 'kakao', 'naver'] as const;
 export type OAuthProvider = (typeof OAUTH_PROVIDERS)[number];
@@ -196,7 +202,10 @@ export const envSchema = z
     SMARTRO_MODE: optionalString.pipe(smartroModeSchema.default('STG')),
     /** Merchant id (≤ 10 characters). Required with PAYMENT_PROVIDER=smartro. */
     SMARTRO_MID: optionalString,
-    /** Merchant key (≥ 32 characters): signs requests, keys the cancel payload. Secret. */
+    /**
+     * Merchant key (≥ 32 characters, the first 32 ASCII): signs requests, keys the cancel
+     * payload. Secret.
+     */
     SMARTRO_MERCHANT_KEY: optionalString,
     /** Cancel password set in the merchant admin; sent (encrypted) with every cancel. Secret. */
     SMARTRO_CANCEL_PASSWORD: optionalString,
@@ -322,15 +331,24 @@ export const envSchema = z
         message: `must be at most ${String(SMARTRO_MID_MAX_LENGTH)} characters`,
       });
     }
-    if (
-      env.SMARTRO_MERCHANT_KEY !== undefined &&
-      env.SMARTRO_MERCHANT_KEY.length < SMARTRO_MERCHANT_KEY_MIN_LENGTH
-    ) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['SMARTRO_MERCHANT_KEY'],
-        message: `must be at least ${String(SMARTRO_MERCHANT_KEY_MIN_LENGTH)} characters`,
-      });
+    const merchantKey = env.SMARTRO_MERCHANT_KEY;
+    if (merchantKey !== undefined) {
+      // One issue per value: a key too short is only that.
+      if (merchantKey.length < SMARTRO_MERCHANT_KEY_MIN_LENGTH) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['SMARTRO_MERCHANT_KEY'],
+          message: `must be at least ${String(SMARTRO_MERCHANT_KEY_MIN_LENGTH)} characters`,
+        });
+      } else if (cancelPayloadKey(merchantKey) === null) {
+        // The very key encryptCancelPayload would take (cancelPayloadKey): the first characters
+        // as UTF-8 must be as many bytes. A non-ASCII one (or half a surrogate pair) makes more.
+        ctx.addIssue({
+          code: 'custom',
+          path: ['SMARTRO_MERCHANT_KEY'],
+          message: `its first ${String(SMARTRO_MERCHANT_KEY_MIN_LENGTH)} characters must be ASCII (the AES-256 key of the cancel payload)`,
+        });
+      }
     }
     if (env.PAYMENT_PROVIDER === 'smartro') {
       for (const key of SMARTRO_REQUIRED_KEYS) {

@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 import {
   APPROVAL_UNKNOWN_CODES,
   cancelHashData,
+  cancelPayloadKey,
   classifyCancel,
   ediDate,
   encryptCancelPayload,
@@ -81,6 +82,11 @@ describe('the cancel payload (EncData)', () => {
 
   it('refuses a key whose first 32 characters are not 32 bytes', () => {
     expect(() => encryptCancelPayload(json, '가'.repeat(32))).toThrow(RangeError);
+    // The same judgement config/env.ts makes at startup.
+    expect(cancelPayloadKey(KEY)).toEqual(Buffer.from(KEY.slice(0, 32)));
+    expect(cancelPayloadKey('가'.repeat(32))).toBeNull();
+    expect(cancelPayloadKey('k'.repeat(31) + '😀')).toBeNull();
+    expect(cancelPayloadKey('k'.repeat(31))).toBeNull();
   });
 });
 

@@ -71,7 +71,9 @@ export function refundNotAllowed(reason: RefusalReason, message?: string): AppEr
  * a retry skips the claw-back and asks the PG again (2013 "already cancelled" finishes it).
  * Whatever the answer, a verified 재통보 of a full cancel of the approval (hasCancelNotice) is
  * the PG's word that the card is cancelled, and finishes the refund instead of putting the P
- * back — checked again under the payment row's lock before any P goes back. A verified 재통보 of
+ * back or leaving it `refunding` — checked again under the payment row's lock when the answer is
+ * recorded, so a notice landing meanwhile still counts, and a payment the notice (or another
+ * attempt) finished meanwhile answers as refunded rather than as an error. A verified 재통보 of
  * a PARTIAL cancel (made in the merchant admin) keeps a refused refund `refunding` instead: part
  * of the card is still charged, so an admin settles it and sets the P by hand.
  *
@@ -79,7 +81,7 @@ export function refundNotAllowed(reason: RefusalReason, message?: string): AppEr
  * the answer was lost, so a refusal now may only mean "not again" in a code we do not know as
  * "already cancelled". A refused retry leaves the payment `refunding` for an admin to check in
  * the merchant admin and settle by hand (`POST /admin/payments/:id/settle`, restore or
- * refunded) — unless the 재통보 has already told us the card was cancelled, which finishes it.
+ * refunded) — unless the 재통보 has told us the card was cancelled, which finishes it.
  *
  * ONE ATTEMPT AT A TIME. An attempt starts by stamping the payment's `updated_at` (the claw-back,
  * or a retry's lease) and ends by recording its `refund_cancel` event. A retry while the last
@@ -144,11 +146,12 @@ export class PaymentRefundService {
       // cancelled in the merchant admin while the payment was `succeeded` (settleNotify
       // records that notice and moves nothing), whose cancel now comes back in a code we do not
       // know as "already cancelled". Whatever this answer says, the refund is done; putting
-      // the P back would leave the payer both.
+      // the P back would leave the payer both. (Unlocked: one landing after this read is caught
+      // under the payment row's lock below, by restore, holdRefused and leaveRefunding alike.)
       await this.finish(payment, outcome, provider);
     } else if (outcome.status === 'refused') {
       if (retry) await this.holdRefused(payment, outcome, provider);
-      await this.restore(payment, outcome, provider, stamp);
+      else await this.restore(payment, outcome, provider, stamp);
     } else {
       await this.leaveRefunding(payment, outcome, provider);
     }
@@ -488,59 +491,141 @@ export class PaymentRefundService {
   }
 
   /**
+   * Records the answer of an attempt that puts no P back (a refused retry, or no answer) and
+   * decides what is left of the refund — under the payment row's lock, as restore does, so a
+   * cancel 재통보 landing after refund()'s unlocked check still counts. Only the payment row is
+   * locked (no balance moves), as takeRetry and the notice's own settleCancelNotice do:
+   * - no longer `refunding` (the 재통보 finished it, another attempt did, or anything else moved
+   *   it): `moved`, nothing changes. "Anything else" is defensive: the one other way out of
+   *   `refunding` is a restore — a first attempt's, which a retry's takeover stops (its stamp),
+   *   or a settle's, which its SETTLE_MIN_AGE_MS guard keeps away from an attempt in flight;
+   * - a full cancel 재통보 on record (its own transaction may be waiting on this lock): the PG's
+   *   word that the card IS cancelled, so the refund finishes (`finished`);
+   * - otherwise it stays `refunding`, with whether a PARTIAL cancel 재통보 is on record.
+   */
+  private async recordHeld(
+    payment: PaymentRow,
+    outcome: CancelOutcome,
+  ): Promise<
+    | { kind: 'finished' }
+    | { kind: 'moved'; status: PaymentStatus | undefined }
+    | { kind: 'refunding'; partial: boolean }
+  > {
+    return this.db.transaction(async (tx) => {
+      const [locked] = await tx
+        .select()
+        .from(schema.payments)
+        .where(eq(schema.payments.id, payment.id))
+        .limit(1)
+        .for('update');
+      await recordPaymentEvent(tx, {
+        paymentId: payment.id,
+        type: 'refund_cancel',
+        resultCode: outcome.resultCode,
+        resultMessage: outcome.resultMessage,
+        payload: outcome.payload,
+      });
+      if (locked?.status !== 'refunding') return { kind: 'moved', status: locked?.status };
+      const notices = await recordedCancelNotices(tx, locked);
+      if (notices.full) {
+        if (!(await markRefunded(tx, locked.id, await clockTimestamp(tx)))) {
+          throw this.movedUnderLock();
+        }
+        return { kind: 'finished' };
+      }
+      return { kind: 'refunding', partial: notices.partial };
+    });
+  }
+
+  /**
    * A retry the PG refused: the first attempt may have cancelled the card, so nothing is put
    * back and the payment stays `refunding` — an admin checks the card in the merchant admin and
    * settles it (restore, or refunded). Answers PAYMENT_GATEWAY_REFUSED with the PG's words and a
-   * second detail, `settle_required`.
+   * second detail, `settle_required`. Decided by recordHeld: a full cancel 재통보 on record, or a
+   * payment refunded meanwhile, answers normally instead; one moved anywhere else answers
+   * PAYMENT_GATEWAY_REFUSED without `settle_required` (there is no `refunding` left to settle).
    */
   private async holdRefused(
     payment: PaymentRow,
     outcome: CancelOutcome,
     provider: PaymentProvider,
-  ): Promise<never> {
-    await recordPaymentEvent(this.db, {
-      paymentId: payment.id,
-      type: 'refund_cancel',
-      resultCode: outcome.resultCode,
-      resultMessage: outcome.resultMessage,
-      payload: outcome.payload,
-    });
+  ): Promise<void> {
+    const decision = await this.recordHeld(payment, outcome);
+    const code = outcome.resultCode ?? 'no code';
+    const gateway = {
+      path: ['gateway'],
+      message: `${outcome.resultCode ?? ''} ${outcome.resultMessage ?? ''}`.trim(),
+    };
+    if (decision.kind === 'finished') {
+      this.logger.log(
+        `refund of payment ${payment.id}: ${provider.name} refused the retried cancel (${code}), but its 재통보 had reported the card cancelled; refunded`,
+      );
+      return;
+    }
+    if (decision.kind === 'moved') {
+      if (decision.status === 'refunded') {
+        this.logger.log(
+          `refund of payment ${payment.id}: ${provider.name} refused the retried cancel (${code}), but the payment was refunded meanwhile (its 재통보, or another attempt)`,
+        );
+        return;
+      }
+      this.logger.error(
+        `refund of payment ${payment.id}: ${provider.name} refused the retried cancel (${code}) of ${String(payment.providerRef)} but the payment was ${decision.status ?? 'gone'}, no longer refunding; nothing restored — check it in the admin payments list and the card in the merchant admin`,
+      );
+      throw new AppError('PAYMENT_GATEWAY_REFUSED', {
+        message: 'The payment gateway refused the retried cancel',
+        details: [gateway],
+      });
+    }
     // A partial cancel 재통보 on record leaves one settle: a restore is refused (partial_cancel).
-    const { partial } = await recordedCancelNotices(this.db, { ...payment, status: 'refunding' });
-    const fix = partial
+    const fix = decision.partial
       ? `a partial cancel 재통보 of the card is on record — settle it refunded (POST /admin/payments/${payment.id}/settle; a settle restore is refused: partial_cancel), then adjust the balance by hand (POST /admin/users/:id/balance-adjust)`
       : `then settle it (POST /admin/payments/${payment.id}/settle: refunded or restore)`;
     this.logger.error(
-      `refund of payment ${payment.id}: ${provider.name} refused the retried cancel (${outcome.resultCode ?? 'no code'}) of ${String(payment.providerRef)}; left refunding — check the card in the merchant admin; ${fix}`,
+      `refund of payment ${payment.id}: ${provider.name} refused the retried cancel (${code}) of ${String(payment.providerRef)}; left refunding — check the card in the merchant admin; ${fix}`,
     );
     throw new AppError('PAYMENT_GATEWAY_REFUSED', {
       message:
         'The payment gateway refused the retried cancel; the payment stays refunding until it is settled by hand',
-      details: [
-        {
-          path: ['gateway'],
-          message: `${outcome.resultCode ?? ''} ${outcome.resultMessage ?? ''}`.trim(),
-        },
-        { path: ['payment'], message: 'settle_required' },
-      ],
+      details: [gateway, { path: ['payment'], message: 'settle_required' }],
     });
   }
 
-  /** No answer: the card may or may not be cancelled, so the payment stays `refunding`. */
+  /**
+   * No answer: the card may or may not be cancelled, so the payment stays `refunding` for a
+   * retry (PAYMENT_GATEWAY_ERROR). Decided by recordHeld: a full cancel 재통보 on record, or a
+   * payment refunded meanwhile (its 재통보, or a retry that took the attempt over), answers
+   * normally instead.
+   */
   private async leaveRefunding(
     payment: PaymentRow,
     outcome: CancelOutcome,
     provider: PaymentProvider,
-  ): Promise<never> {
-    await recordPaymentEvent(this.db, {
-      paymentId: payment.id,
-      type: 'refund_cancel',
-      resultCode: outcome.resultCode,
-      resultMessage: outcome.resultMessage,
-      payload: outcome.payload,
-    });
+  ): Promise<void> {
+    const decision = await this.recordHeld(payment, outcome);
+    const code = outcome.resultCode ?? 'no code';
+    if (decision.kind === 'finished') {
+      this.logger.log(
+        `refund of payment ${payment.id}: ${provider.name} gave no answer to the cancel (${code}), but its 재통보 had reported the card cancelled; refunded`,
+      );
+      return;
+    }
+    if (decision.kind === 'moved') {
+      if (decision.status === 'refunded') {
+        this.logger.log(
+          `refund of payment ${payment.id}: ${provider.name} gave no answer to the cancel (${code}), but the payment was refunded meanwhile (its 재통보, or another attempt)`,
+        );
+        return;
+      }
+      this.logger.error(
+        `refund of payment ${payment.id}: ${provider.name} gave no answer to the cancel (${code}) and the payment was ${decision.status ?? 'gone'}, no longer refunding — check it in the admin payments list and the card in the merchant admin`,
+      );
+      throw new AppError('PAYMENT_GATEWAY_ERROR', {
+        message: 'The payment gateway did not answer the cancel',
+      });
+    }
     this.logger.error(
-      `refund of payment ${payment.id}: ${provider.name} gave no answer to the cancel (${outcome.resultCode ?? 'no code'}); left refunding — retry it, or check the card in the merchant admin and settle it (POST /admin/payments/${payment.id}/settle)`,
+      `refund of payment ${payment.id}: ${provider.name} gave no answer to the cancel (${code}); left refunding — retry it, or check the card in the merchant admin and settle it (POST /admin/payments/${payment.id}/settle)`,
     );
     throw new AppError('PAYMENT_GATEWAY_ERROR', {
       message: 'The payment gateway did not answer the cancel; retry the refund',

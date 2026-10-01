@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { encryptCancelPayload } from '../payments/smartro/smartro-protocol.js';
 import { envSchema, parseTrustProxy, uncountedPeers, webOrigins } from './env.js';
 
 /**
@@ -324,10 +325,23 @@ describe('payments (ADR-0042)', () => {
   );
 
   it('checks the credential shapes whenever they are set', () => {
-    // The key's first 32 characters are the AES-256 key of the cancel payload.
-    for (const [key, value] of [
-      ['SMARTRO_MERCHANT_KEY', 'k'.repeat(31)],
-      ['SMARTRO_MID', 'x'.repeat(11)],
+    // The key's first 32 characters are the AES-256 key of the cancel payload: 32 of them, and
+    // 32 bytes as UTF-8 (encryptCancelPayload) — ASCII.
+    const short = 'must be at least 32 characters';
+    const notAscii =
+      'its first 32 characters must be ASCII (the AES-256 key of the cancel payload)';
+    for (const [key, value, message] of [
+      ['SMARTRO_MERCHANT_KEY', 'k'.repeat(31), short],
+      // A short key is told it is short, not also that it is not ASCII.
+      ['SMARTRO_MERCHANT_KEY', '가'.repeat(31), short],
+      ['SMARTRO_MERCHANT_KEY', '가'.repeat(32), notAscii],
+      ['SMARTRO_MERCHANT_KEY', 'k'.repeat(31) + '가' + 'k'.repeat(10), notAscii],
+      // A zero-width space pasted in: trim() leaves it.
+      ['SMARTRO_MERCHANT_KEY', 'k'.repeat(10) + '\u200b' + 'k'.repeat(30), notAscii],
+      // An emoji is two UTF-16 units: whole inside the first 32, or cut in half at the edge.
+      ['SMARTRO_MERCHANT_KEY', 'k'.repeat(10) + '😀' + 'k'.repeat(30), notAscii],
+      ['SMARTRO_MERCHANT_KEY', 'k'.repeat(31) + '😀', notAscii],
+      ['SMARTRO_MID', 'x'.repeat(11), 'must be at most 10 characters'],
     ] as const) {
       for (const provider of ['mock', 'smartro'] as const) {
         const result = envSchema.safeParse({
@@ -337,12 +351,25 @@ describe('payments (ADR-0042)', () => {
           [key]: value,
         });
         expect(result.success, `${provider} ${key}`).toBe(false);
-        if (!result.success) expect(result.error.issues.map((i) => i.path)).toEqual([[key]]);
+        if (!result.success) {
+          expect(
+            result.error.issues.map((issue) => [issue.path, issue.message]),
+            `${provider} ${key}`,
+          ).toEqual([[[key], message]]);
+        }
+      }
+      // Refused at startup exactly when a cancel could not be encrypted with it.
+      if (key === 'SMARTRO_MERCHANT_KEY') {
+        expect(() => encryptCancelPayload('{}', value)).toThrow(RangeError);
       }
     }
-    expect(
-      envSchema.safeParse({ ...base, ...smartro, SMARTRO_MERCHANT_KEY: 'k'.repeat(32) }).success,
-    ).toBe(true);
+    // Only the first 32 key the AES: the signatures hash the whole key as UTF-8, whatever it is.
+    for (const value of ['k'.repeat(32), 'k'.repeat(32) + '가😀']) {
+      expect(
+        envSchema.safeParse({ ...base, ...smartro, SMARTRO_MERCHANT_KEY: value }).success,
+      ).toBe(true);
+      expect(() => encryptCancelPayload('{}', value)).not.toThrow();
+    }
   });
 
   it('takes an approval host override for a local fake PG, but never in production', () => {

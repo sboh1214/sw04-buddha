@@ -20,7 +20,10 @@ export interface SmartroConfig {
   mode: SmartroMode;
   /** Merchant id, ≤ 10 characters. */
   mid: string;
-  /** ≥ 32 characters: signs requests and results, and its first 32 key the cancel payload. */
+  /**
+   * ≥ 32 characters, the first 32 ASCII: signs requests and results, and its first 32 key the
+   * cancel payload (cancelPayloadKey).
+   */
   merchantKey: string;
   cancelPassword: string;
   /** Where approval, inquiry and cancel go: the mode's host unless overridden (never in production). */
