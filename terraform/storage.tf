@@ -83,11 +83,18 @@ resource "aws_dlm_lifecycle_policy" "data" {
         count = var.snapshot_retention_count
       }
 
-      copy_tags = true
+      # Not copy_tags: it copies the volume's own Name (tf-buddha-data) next to the Name below, and
+      # DLM refused every run with "Duplicate tag key 'Name' specified." — the policy sat in ERROR
+      # from its first run on 2026-09-11 and took no snapshot at all (ADR-0040 추기). The snapshot
+      # gets the project tags and its own Name instead, which the restore procedure filters on
+      # (README "스냅샷에서 데이터 복구"). DLM validates the tags only when the policy runs, never at
+      # apply, and says nothing when it fails: after changing this block, check the next day
+      # (README "스냅샷 확인").
+      copy_tags = false
 
-      tags_to_add = {
+      tags_to_add = merge(local.common_tags, {
         Name = "${local.name_prefix}-data-snapshot"
-      }
+      })
     }
   }
 

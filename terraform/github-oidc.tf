@@ -1,7 +1,30 @@
 # The GitHub OIDC provider is an account-wide singleton (IAM rejects a second provider with the
-# same URL) and the resource is owned by the inno-frame Terraform state. This root only reads it.
-data "aws_iam_openid_connect_provider" "github" {
-  url = "https://token.actions.githubusercontent.com"
+# same URL) and every GitHub Actions role in the account trusts it, not only this root's (README
+# "GitHub Actions 연결" lists the check). It used to be owned by the inno-frame state and only read
+# here; inno-frame's `terraform destroy` (2026-09-22) deleted it, and the next deploy failed with
+# "The web identity token provided could not be validated" (ADR-0040 추기). This root owns it now.
+# Other roots read it with a data source only, never a resource and never an import: a second
+# owning state would delete it for everyone on its own destroy.
+# No thumbprint_list: AWS validates GitHub's tokens against its own trusted CAs. IAM fills the
+# thumbprint in when it creates the provider; Terraform only reads it back.
+resource "aws_iam_openid_connect_provider" "github" {
+  url            = "https://token.actions.githubusercontent.com"
+  client_id_list = ["sts.amazonaws.com"]
+
+  # Overrides default_tags' Project = buddha: a cleanup of buddha's resources must not sweep up a
+  # shared one. TerraformRoot names the owning state. No Name tag: IAM identifies the provider by
+  # its URL, so it is the one exception to the tf-buddha- prefix.
+  tags = {
+    Project       = "shared"
+    TerraformRoot = "sw04-buddha/terraform"
+  }
+
+  # Deleting it breaks every GitHub Actions deploy in the account at once. Taking this root down
+  # leaves it in place (`terraform state rm` first, README "중지 / 시작"); deleting the provider
+  # itself is a manual act once no other role trusts it (as for the /data volume).
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 data "aws_iam_policy_document" "github_oidc_trust" {
@@ -10,7 +33,7 @@ data "aws_iam_policy_document" "github_oidc_trust" {
 
     principals {
       type        = "Federated"
-      identifiers = [data.aws_iam_openid_connect_provider.github.arn]
+      identifiers = [aws_iam_openid_connect_provider.github.arn]
     }
 
     condition {
