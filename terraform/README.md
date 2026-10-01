@@ -1,6 +1,6 @@
 # buddha Infrastructure (Terraform, `tf-buddha`)
 
-buddha의 AWS 운영 인프라를 Terraform으로 관리한다. Terraform이 만든 모든 리소스는 이름과 `Name` 태그가 **`tf-buddha-`** 로 시작한다(`locals.name_prefix = "tf-buddha"`, 예: `tf-buddha-vpc`, `tf-buddha-app`, `tf-buddha-github-deploy`). 같은 계정(`210146911118`, `ap-northeast-2`)에 있는 `tf-inno-frame-prod-*`와 접두사로 구분되며, 환경 이름은 태그(`Environment = prod`)로만 남긴다.
+buddha의 AWS 운영 인프라를 Terraform으로 관리한다. Terraform이 만든 모든 리소스는 이름과 `Name` 태그가 **`tf-buddha-`** 로 시작한다(`locals.name_prefix = "tf-buddha"`, 예: `tf-buddha-vpc`, `tf-buddha-app`, `tf-buddha-github-deploy`). 같은 계정(`210146911118`, `ap-northeast-2`)의 다른 프로젝트(inno-frame의 `tf-inno-frame-prod-*` — 2026-09-22 destroy됨, sai-web)와 접두사로 구분되며, 환경 이름은 태그(`Environment = prod`)로만 남긴다. 예외는 계정 공용 GitHub OIDC provider 하나다(URL로 식별, [GitHub Actions 연결](#github-actions-연결)).
 
 목표는 **내부 팀원 3명의 시험 사용**이다. 그래서 PLAN §13이 스케치한 Fargate + RDS + Valkey + ALB(월 $100+)가 아니라 **EC2 `t4g.small` 한 대 + Docker Compose + Caddy**로 월 **≈ $22**에 맞췄다(ADR-0040). 외부 공개나 가용성 요구가 생기면 그때 승격한다 — 이 README의 끝에 그 경로가 있다.
 
@@ -75,7 +75,7 @@ flowchart LR
 | `ec2.tf`                       | AL2023 arm64 AMI(SSM public parameter), `aws_instance.app`(IMDSv2, standard credits, `ignore_changes = [ami, user_data]`), `aws_eip.app`, `aws_eip_association.app`                                                                                                                                |
 | `storage.tf`                   | `aws_ebs_volume.data`(`prevent_destroy`, `snapshot_id = var.data_volume_snapshot_id`), `aws_volume_attachment.data`(`/dev/sdf`, `stop_instance_before_detaching`), DLM 역할 + `aws_dlm_lifecycle_policy.data`(18:00 UTC ×7)                                                                        |
 | `iam.tf`                       | 인스턴스 역할 `tf-buddha-app` + instance profile: `AmazonSSMManagedInstanceCore`, ECR pull, `ssm:GetParameter`(env 파라미터), `kms:Decrypt`(`kms:ViaService = ssm.<region>.amazonaws.com` 조건)                                                                                                    |
-| `github-oidc.tf`               | `data.aws_iam_openid_connect_provider.github`(provider 리소스는 inno-frame state 소유), `aws_iam_role.github_actions_deploy`(`tf-buddha-github-deploy`): ECR push/describe, `ec2:DescribeInstances`, `ssm:SendCommand`(인스턴스 ARN 고정)                                                          |
+| `github-oidc.tf`               | `aws_iam_openid_connect_provider.github`(계정 공용, `prevent_destroy` — 2026-10-02부터 이 root 소유), `aws_iam_role.github_actions_deploy`(`tf-buddha-github-deploy`): ECR push/describe, `ec2:DescribeInstances`, `ssm:SendCommand`(인스턴스 ARN 고정)                                            |
 | `ecr.tf`                       | `aws_ecr_repository.app` for_each `api/worker/web` + lifecycle(태그된 이미지 10개, untagged 7일)                                                                                                                                                                                                   |
 | `ses.tf`                       | `aws_sesv2_email_identity.app`(`buddha.sboh.dev`, `dkim_signing_attributes` 미지정), MAIL FROM `mail.buddha.sboh.dev`, SMTP 전용 IAM user `tf-buddha-ses-smtp` + access key                                                                                                                        |
 | `ssm.tf`                       | `random_password` ×4(`better_auth_secret`, `postgres_superuser`, `db_app`, `db_migrate`), `aws_ssm_parameter.env`(`/tf-buddha/env`, SecureString, Standard 티어)                                                                                                                                   |
@@ -128,10 +128,16 @@ flowchart LR
    cp terraform.tfvars.example terraform.tfvars && $EDITOR terraform.tfvars   # gitignored
    terraform init
    terraform validate
+   aws iam list-open-id-connect-providers --profile inno-frame   # GitHub OIDC provider(계정에 하나뿐)가 이미 있는가
+   # 목록에 token.actions.githubusercontent.com이 있을 때만, 아래 조건을 확인한 뒤. 새 계정이면 건너뛴다 — apply가 만든다:
+   # terraform import aws_iam_openid_connect_provider.github \
+   #   "arn:aws:iam::$(aws sts get-caller-identity --profile inno-frame --query Account --output text):oidc-provider/token.actions.githubusercontent.com"
    terraform plan -out=bootstrap.tfplan
    ```
 
-   plan을 읽는다: 리소스 39개, 이름이 전부 `tf-buddha-`, SG에 22번 포트 없음, `aws_ssm_parameter.env`의 값은 `(sensitive value)`, Cloudflare 리소스는 없음. 그다음:
+   import는 그 provider를 **다른 Terraform state가 소유하지 않을 때만** 한다(`aws iam list-open-id-connect-provider-tags --profile inno-frame --open-id-connect-provider-arn <arn>`의 `TerraformRoot` 태그, 없으면 그 provider를 만든 프로젝트에 묻는다). 다른 root가 `resource`로 들고 있으면 그 root에서 먼저 `terraform state rm`을 하고 data source로 바꾼다 — 두 state가 소유하면 어느 쪽의 `terraform destroy`든 계정 전체의 provider를 지운다(2026-09-22, ADR-0040 추기).
+
+   plan을 읽는다: 리소스 40개(provider를 import했으면 39개 add + provider in-place 변경 1개 — 태그. 그 변경이 `client_id_list`에서 값을 빼면 다른 프로젝트의 audience가 사라지므로 apply하지 않는다), 이름이 전부 `tf-buddha-`(GitHub OIDC provider만 예외 — URL로 식별되고 `Name` 태그가 없다), SG에 22번 포트 없음, `aws_ssm_parameter.env`의 값은 `(sensitive value)`, Cloudflare 리소스는 없음. 그다음:
 
    ```bash
    terraform apply bootstrap.tfplan
@@ -193,6 +199,8 @@ aws sesv2 get-email-identity --email-identity buddha.sboh.dev --profile inno-fra
 11. **브라우저 기능 확인**(`.dev`는 HSTS preload 도메인이라 https만 열린다). seed 관리자로 로그인 → `/admin/markets`에서 시장 생성. 테스터 계정으로 가입 → 인증 메일 수신(헤더에서 SPF/DKIM/DMARC `PASS`) → 링크 클릭 → `/set-password`.
 
 12. **tfstate 백업.** `terraform/terraform.tfstate`에는 모든 시크릿이 들어 있다. 아래 [상태 파일](#상태-파일)의 절차대로 `gpg -c`로 암호화해 이 머신 밖에 둔다.
+
+13. **다음 날 스냅샷 확인.** 첫 03:00 KST(18:00 UTC) 실행 뒤 [스냅샷 확인](#스냅샷-확인)의 명령으로 DLM 정책이 `ENABLED`이고 스냅샷이 1개 생겼는지 본다. DLM은 정책 내용을 apply 때가 아니라 실행 때 검증하므로 apply 성공은 증거가 아니다.
 
 ## 일상 운영 절차
 
@@ -335,7 +343,17 @@ aws ec2 stop-instances  --profile inno-frame --instance-ids "$(terraform output 
 aws ec2 start-instances --profile inno-frame --instance-ids "$(terraform output -raw instance_id)"
 ```
 
-멈춰 있는 동안 EC2 시간 요금은 없지만 EBS(≈ $2.4) + 스냅샷 + **EIP(≈ $3.65, 실행 중인 인스턴스에 붙어 있지 않아도 청구)** + ECR ≈ **월 $6.5**가 남는다. 시작하면 `/data`가 라벨로 마운트되고 컨테이너가 스스로 올라온다. EIP가 그대로라 DNS는 손대지 않는다. 몇 달 이상 쓰지 않을 거면 `terraform destroy`가 답이다 — 단 `aws_ebs_volume.data`의 `prevent_destroy`가 막으므로, 그때는 마지막 스냅샷 id를 적어 두고 그 줄을 지운다.
+멈춰 있는 동안 EC2 시간 요금은 없지만 EBS(≈ $2.4) + 스냅샷 + **EIP(≈ $3.65, 실행 중인 인스턴스에 붙어 있지 않아도 청구)** + ECR ≈ **월 $6.5**가 남는다. 시작하면 `/data`가 라벨로 마운트되고 컨테이너가 스스로 올라온다. EIP가 그대로라 DNS는 손대지 않는다.
+
+몇 달 이상 쓰지 않을 거면 `terraform destroy`가 답이다. 단 `prevent_destroy`가 둘(`aws_ebs_volume.data`, `aws_iam_openid_connect_provider.github`)이라 그대로 돌리면 plan 단계에서 통째로 거절된다(아무것도 지워지지 않는다). 순서:
+
+```bash
+terraform state rm aws_iam_openid_connect_provider.github   # provider는 계정에 남긴다 — 이 root만 관리를 놓는다
+# storage.tf의 aws_ebs_volume.data에서 prevent_destroy 줄만 지우고(마지막 스냅샷 id를 적어 둔 뒤):
+terraform destroy
+```
+
+GitHub OIDC provider는 이 root가 관리할 뿐 계정 공용이다 — 다른 프로젝트의 배포 역할(지금은 sai-web의 `sai-production-github-deploy`)이 같은 provider를 신뢰하므로, 이 root를 내리면서 지우면 2026-09-22의 사고를 반대 방향으로 되풀이한다. 그 `prevent_destroy` 줄은 지우지 않는다. 다시 올릴 때는 [최초 부트스트랩](#최초-부트스트랩) 4단계의 import로 provider를 다시 가져온다. DLM 스냅샷은 정책이 지워져도 남는다.
 
 ### 월간 커널 업데이트
 
@@ -348,6 +366,29 @@ aws ssm send-command --profile inno-frame --document-name AWS-RunShellScript \
 ```
 
 `needs-restarting -r`는 재부팅이 필요할 때만 1을 답한다. 재부팅 ≈ 1분, 컨테이너는 스스로 올라온다.
+
+### 스냅샷 확인
+
+DLM이 실패해도 아무 알림이 없다(이 stack에는 SNS 같은 알림 대상이 없다). 2026-09-11부터 3주 동안 정책이 `Duplicate tag key 'Name' specified.`로 `ERROR`였고 `/data`의 스냅샷은 0개였는데 아무도 몰랐다(ADR-0040 추기). DLM은 정책 내용을 apply 때가 아니라 실행 때 검증하므로 apply가 성공해도 돈다는 보장이 없다. 그래서 사람이 본다 — DLM 정책을 바꾼 apply의 다음 날, 그리고 매달 커널 업데이트 때 함께:
+
+```bash
+aws dlm get-lifecycle-policies --profile inno-frame --query 'Policies[].{id:PolicyId,state:State}'    # ENABLED여야 한다
+aws dlm get-lifecycle-policy --profile inno-frame --policy-id <id> --query Policy.StatusMessage         # ERROR면 이유
+aws ec2 describe-snapshots --profile inno-frame --owner-ids self \
+  --filters Name=tag:Name,Values=tf-buddha-data-snapshot --query 'length(Snapshots)'                    # 첫날 1, 7일째부터 7
+```
+
+손으로 뜬 스냅샷(아래)은 DLM이 지우지 않으므로 그만큼 더 나온다. `terraform plan`에 `aws_dlm_lifecycle_policy.data`의 `state = "ERROR" -> "ENABLED"`가 뜨는 것도 같은 신호다([주시해야 할 drift](#주시해야-할-drift)).
+
+**수동 스냅샷.** 마이그레이션이 든 배포, 오래 밀린 배포의 재실행, 복구 리허설 전에 하나 뜬다. `Name` 태그를 붙여야 [스냅샷에서 데이터 복구](#스냅샷에서-데이터-복구)의 필터에 걸린다.
+
+```bash
+aws ec2 create-snapshot --profile inno-frame --volume-id "$(terraform output -raw data_volume_id)" \
+  --description pre-deploy-<sha> \
+  --tag-specifications 'ResourceType=snapshot,Tags=[{Key=Name,Value=tf-buddha-data-snapshot}]'
+```
+
+스냅샷은 크래시 일관성이다(postgres는 복원 때 WAL을 재생한다). `pending`에서 `completed`가 될 때까지 기다릴 필요는 없다 — 시작 시점의 블록이 담긴다.
 
 ### TLS 인증서 (ACME)
 
@@ -366,6 +407,7 @@ Caddy가 호스트에서 직접 받는다. `deploy/Caddyfile`에는 일부러 `a
 - **DNS는 Terraform 밖에 있다.** 레코드는 사용자가 Cloudflare 대시보드에 넣었고 plan은 그것을 보지 못한다. EIP가 바뀌면(EIP 리소스를 지우고 다시 만들 때만; `-replace=aws_instance.app`는 EIP를 유지한다) A 레코드를 손으로 고쳐야 한다. `terraform output dns_records`가 언제나 현재 값을 보여 준다.
 - **DKIM 토큰.** `dns_records` 출력의 CNAME 세 개는 `aws_sesv2_email_identity.app.dkim_signing_attributes[0].tokens`에서 온다. identity를 destroy/recreate하면 SES가 새 토큰 세 개를 발급해 Cloudflare의 CNAME을 전부 다시 넣어야 하고, 전파되는 동안 DKIM 서명이 깨진다. identity는 만들고 잊는다. `dkim_signing_attributes`를 명시하는 것도 같은 이유로 금지(키 길이를 적는 순간 새 토큰).
 - **EIP association.** `aws_eip_association.app`이 EIP를 인스턴스에 묶는다. 콘솔에서 인스턴스를 바꾸거나 EIP를 옮기면 다음 plan이 association을 다시 만든다(짧은 단절). `associate_public_ip_address = true`의 임시 공인 IP는 EIP가 붙는 순간 반납되므로 이중 청구는 없다.
+- **DLM 정책 `state = "ERROR" -> "ENABLED"`.** plan에 `aws_dlm_lifecycle_policy.data`의 이 한 줄이 뜨면 DLM이 실행마다 실패하고 있고 스냅샷이 생기지 않는다(2026-09-11~10-02가 그랬다). apply는 상태만 `ENABLED`로 돌릴 뿐 다음 실행에서 다시 `ERROR`가 되므로 이유부터 읽는다: [스냅샷 확인](#스냅샷-확인)의 `get-lifecycle-policy … StatusMessage`.
 - **`/tf-buddha/env`를 콘솔에서 편집하지 않는다.** `aws_ssm_parameter.env`의 값은 `templates/env.tftpl` 렌더 결과라 다음 apply가 덮어쓴다. 값을 바꾸려면 `terraform.tfvars`(OAuth 키, SmartroPay 가맹점 값, seed 관리자, `log_level`) 또는 템플릿을 고친다. 콘솔에서 바꾼 값은 `deploy.sh`가 다음 배포에 한 번 쓰고 apply 때 사라진다.
 
 ## GitHub Actions 연결
@@ -391,7 +433,23 @@ gh api repos/sboh1214/sw04-buddha/actions/oidc/customization/sub   # 저장소�
 terraform output -raw github_oidc_subject                            # 신뢰 정책에 들어간 값
 ```
 
-`aws_iam_openid_connect_provider`는 **data source**다 — 리소스는 inno-frame의 state가 소유하고, IAM은 같은 URL의 provider를 둘 두지 못한다. inno-frame을 destroy하면 이 역할의 신뢰 정책이 고아가 된다.
+`aws_iam_openid_connect_provider.github`는 **이 root가 소유한다**(2026-10-02부터). IAM은 같은 URL의 provider를 계정에 하나만 두고, 계정의 모든 GitHub Actions 역할이 그 하나를 신뢰한다 — 지금은 이 root의 `tf-buddha-github-deploy`와 sai-web(`infra/production/github-actions.tf`, ARN으로 읽는 data source)의 `sai-production-github-deploy`다. 처음에는 inno-frame의 state가 소유하고 여기서는 data source로 읽었는데, 2026-09-22 inno-frame의 `terraform destroy`가 그것을 지워 다음 배포(run 36879826645, 2026-10-01)가 `Could not assume role with OIDC: The web identity token provided could not be validated`로 실패했다(ADR-0040 추기). 그래서:
+
+- 계정의 다른 프로젝트는 이 provider를 **data source로만** 읽는다(sai-web처럼 `arn`이나 `url`로). `resource`로 만들면 `EntityAlreadyExists`로 실패하고, `import`하면 두 state가 같은 provider를 소유해 그쪽의 `terraform destroy`가 계정 전체의 배포를 다시 끊는다. inno-frame을 다시 올리면 그쪽 `github-oidc.tf`를 data source로 바꾼다. 태그 `Project = shared`, `TerraformRoot = sw04-buddha/terraform`이 소유자를 말한다.
+- 이 provider를 신뢰하는 역할:
+
+  ```bash
+  aws iam list-roles --profile inno-frame \
+    --query "Roles[?contains(to_string(AssumeRolePolicyDocument), 'oidc-provider/token.actions')].RoleName"
+  ```
+
+- `prevent_destroy = true`라 이 provider를 지우는 plan은(이 root의 `terraform destroy`를 포함해) 통째로 오류로 거절된다. 두 경우를 나눈다.
+  - **이 root만 내릴 때**: `terraform state rm aws_iam_openid_connect_provider.github` 뒤에 destroy한다([중지 / 시작](#중지--시작)). provider는 계정에 남는다.
+  - **provider 자체를 없앨 때**: 위 명령이 `tf-buddha-github-deploy` 말고는 아무 역할도 답하지 않을 때만 그 줄을 일시적으로 지운다.
+- **배포가 `The web identity token provided could not be validated`로 실패하면** provider가 있는지부터 본다: `aws iam list-open-id-connect-providers --profile inno-frame`. 비어 있으면 `terraform plan`이 provider를 `+ create`로(역할의 신뢰 정책은 in-place 갱신으로) 보여 준다. 그다음:
+  1. `terraform apply`.
+  2. 재배포가 마이그레이션을 싣거나 오래 밀렸으면 [수동 스냅샷](#스냅샷-확인)을 하나 뜬다.
+  3. IAM 전파를 30초쯤 기다린 뒤 배포를 손으로 다시 돌린다: `gh run rerun <실패한 run id> --failed` 또는 `gh workflow run deploy.yml --ref main`. `terraform/**`·`docs/**`·`**.md`만 바꾼 PR의 머지는 배포를 돌리지 않는다(`deploy.yml`의 `paths-ignore`) — 고친 PR을 머지해도 운영은 마지막 성공 배포 그대로다.
 
 ## IAM 메모
 
