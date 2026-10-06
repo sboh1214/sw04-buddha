@@ -4,12 +4,13 @@
 
 이 문서는 **실행과 길찾기**만 다룬다. 나머지는 각자의 자리가 있다.
 
-| 문서                                   | 내용                                                        |
-| -------------------------------------- | ----------------------------------------------------------- |
-| [docs/PLAN.md](docs/PLAN.md)           | 설계·범위·마일스톤의 단일 진실 원천                         |
-| [docs/API.md](docs/API.md)             | HTTP·실시간 API 계약 (OpenAPI에서 생성, 손으로 고치지 않음) |
-| [docs/DECISIONS.md](docs/DECISIONS.md) | ADR 로그 — 왜 그렇게 됐는지                                 |
-| [docs/QUESTIONS.md](docs/QUESTIONS.md) | 미해결 질문과 그동안의 가정                                 |
+| 문서                                                                       | 내용                                                                                                     |
+| -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| [GitHub 이슈·마일스톤](https://github.com/sboh1214/sw04-buddha/milestones) | 2026-09-28부터 하이브리드 기획(Trade + Forecast)의 SSOT — 기획 의도·범위·수용 기준. 오너 결정은 ADR-0045 |
+| [docs/PLAN.md](docs/PLAN.md)                                               | M0~M6의 설계·범위·마일스톤. 2026-09-28 이후에는 각 이슈의 PR이 조항을 고치거나 ADR로 대체한다(ADR-0045)  |
+| [docs/API.md](docs/API.md)                                                 | HTTP·실시간 API 계약 (OpenAPI에서 생성, 손으로 고치지 않음)                                              |
+| [docs/DECISIONS.md](docs/DECISIONS.md)                                     | ADR 로그 — 왜 그렇게 됐는지                                                                              |
+| [docs/QUESTIONS.md](docs/QUESTIONS.md)                                     | 미해결 질문과 그동안의 가정                                                                              |
 
 ## 요구 사항
 
