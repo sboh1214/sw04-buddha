@@ -1433,7 +1433,7 @@ PG 심사는 결제창(ADR-0042)만 보지 않는다. 사이트에 **사업자 �
 
 ### 맥락
 
-**출발점.** PLAN v0.1(P 예측시장 MVP) 기준으로 M0~M6과 배포(ADR-0040), Kalshi형 홈(ADR-0041), 스마트로페이 PG 연동(ADR-0042·0043·0044, PR #105)까지 main에 들어왔다. PLAN은 첫 커밋(45a9217) 이후 개정되지 않았고, 구현과 달라진 PLAN 줄이 `docs/QUESTIONS.md`「정리 (M6) — PLAN 드리프트」에 45행 쌓여 있다.
+**출발점.** PLAN v0.1(P 예측시장 MVP) 기준으로 M0~M6과 배포(ADR-0040), Kalshi형 홈(ADR-0041), 스마트로페이 PG 연동(ADR-0042·0043·0044, PR #105)까지 main에 들어왔다. PLAN은 이 ADR 전까지 첫 커밋(45a9217) 이후 개정되지 않았고, 구현과 달라진 PLAN 줄이 `docs/QUESTIONS.md`「정리 (M6) — PLAN 드리프트」에 45행 쌓여 있다.
 
 **기획 문서 두 개.** M0~M6 구현 뒤에 들어온 두 기획 문서는 서비스를 거래(Trade)와 예측(Forecast)이 같은 질문에 붙는 하이브리드로 다시 정의한다 — 서비스는 Prediction Market, Forecasting Platform, Prediction Reputation Network 세 경험의 결합이고(GD Master §2), Coin과 Forecast Score는 분리된다(GD Master §6, §19 "Coin for Play, Score for Reputation", HB 표지 "Trade + Forecast — 두 가지 참여, 분리된 성과").
 
