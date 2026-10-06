@@ -3,7 +3,7 @@
 - 문서 버전: v0.1 (2026-09-02)
 - 상태: 확정 결정 기반 초안. §17 "열린 질문"은 사용자 확인 후 반영.
 - 대상 독자: Claude Code (구현 에이전트), 프로젝트 오너
-
+> **2026-09-28 — 하이브리드 기획 도입(ADR-0045).** 2026-09-28부터 하이브리드 기획(Trade + Forecast)의 SSOT는 GitHub 이슈(마일스톤 M7~M12, 후속)다. PLAN 조항은 각 이슈의 PR이 개정하거나 ADR로 대체한다. 이슈와 마일스톤: https://github.com/sboh1214/sw04-buddha/milestones · 결정 기록: `docs/DECISIONS.md` ADR-0045. §0의 SSOT 문장과 §0.1-1은 M0\~M6에만 적용된다.
 ---
 
 ## 0. Claude Code 작업 지침
