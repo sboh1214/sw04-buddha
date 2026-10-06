@@ -140,7 +140,6 @@ export function toMarket(row: MarketRow, category: CategoryRef): Market {
     rules: row.rules,
     resolutionSource: row.resolutionSource,
     resolvedAt: row.resolvedAt?.toISOString() ?? null,
-    disputeUntil: row.disputeUntil?.toISOString() ?? null,
     settledAt: row.settledAt?.toISOString() ?? null,
     voidedAt: row.voidedAt?.toISOString() ?? null,
   };

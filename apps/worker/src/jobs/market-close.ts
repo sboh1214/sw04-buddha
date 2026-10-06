@@ -92,7 +92,6 @@ export async function closeMarket(
       marketId,
       status: 'closed',
       resolvedResult: null,
-      disputeUntil: null,
       statusEventId: String(result.statusEventId),
       ts: result.closedAt.toISOString(),
     };

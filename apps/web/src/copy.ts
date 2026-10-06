@@ -10,7 +10,6 @@ export const copy = {
   expectedProfit: '예상 수익',
   settlementRules: '정산 기준',
   settled: '정산 완료',
-  dispute: '이의 제기',
   lightMode: '라이트 모드',
   darkMode: '다크 모드',
   comingSoon: '준비 중입니다.',
@@ -258,11 +257,15 @@ export const copy = {
   adminMarketStatusAll: '전체',
   marketStatusDraft: '초안',
   marketStatusOpen: '진행 중',
-  marketStatusClosed: '마감',
-  marketStatusResolving: '정산 중',
+  // 상태 배지·홈 상태 필터의 라벨 (O-5, ADR-0046). 카운트다운의 marketCloseAt '마감'·marketClosed
+  // '마감됨'과는 다른 자리다.
+  marketStatusClosed: '거래 마감',
+  marketStatusResolved: '판정 완료',
   marketStatusSettled: '정산 완료',
   marketStatusVoided: '무효',
   adminMarketClosingSoon: '마감 임박',
+  // 관리자 목록·상세의 보조 배지: closed는 판정을, resolved는 워커의 정산을 기다린다.
+  adminMarketAwaitingResolution: '판정 대기',
   adminMarketAwaitingSettlement: '정산 대기',
   adminNoMarkets: '시장이 없습니다.',
   adminMarketNotFound: '시장을 찾을 수 없습니다.',
@@ -316,8 +319,7 @@ export const copy = {
   marketVolume: '거래량',
   marketOpenAt: '연 시각',
   marketResolvedResult: '결과',
-  marketResolvedAt: '결과 확정',
-  marketDisputeUntil: '이의 마감',
+  marketResolvedAt: '판정 시각',
   marketSettledAt: '정산 시각',
   marketVoidedAt: '무효 시각',
   marketCreatedAt: '생성',
@@ -328,9 +330,11 @@ export const copy = {
   eventCreated: '생성',
   eventOpened: '열림',
   eventClosed: '마감',
+  // 이의 단계(M5)의 과거 이벤트. 더 이상 쓰지 않지만 옛 시장의 이벤트 로그에 남아 있다.
   eventResolveProposed: '결과 제안',
   eventResultChanged: '결과 변경',
-  eventFinalized: '확정',
+  eventResolved: '판정',
+  eventFinalized: '정산 완료',
   eventVoided: '무효',
   eventRulesEdited: '정산 기준 수정',
   eventSystem: '시스템',
@@ -426,7 +430,7 @@ export const copy = {
   // 상태별 안내 (PLAN 11.3). 색과 배지는 MARKET_STATUS_LABEL/PALETTE가 맡고, 이 문구는
   // 그 아래에서 "지금 무엇을 할 수 있는지"를 말한다.
   marketClosedNotice: '마감된 시장입니다. 더 이상 예측할 수 없습니다.',
-  marketResolvingNotice: '결과를 확인하는 중입니다. 이의 기간이 끝나면 정산됩니다.',
+  marketResolvedNotice: '결과가 판정되었습니다. 정산을 진행하고 있습니다.',
   marketSettledNotice: '정산이 끝난 시장입니다.',
   marketVoidedNotice: '무효 처리된 시장입니다. 매수에 쓴 P는 모두 환불했습니다.',
 
@@ -434,7 +438,6 @@ export const copy = {
   rulesSectionTitle: '정산 기준',
   rulesSource: '출처',
   rulesCloseAt: '마감',
-  rulesSettlement: '정산 예정',
   rulesNone: '따로 지정된 출처가 없습니다.',
 
   // 확률 추이 차트
@@ -555,86 +558,40 @@ export const copy = {
   errTradeNotFound: '시장을 찾을 수 없습니다.',
   errTradeQuote: '견적을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.',
 
-  // --- settlement · disputes (M5, PLAN 5.5 · 11.3 · 12) ---
-  // 관리자 정산 제안·결과 변경 대화상자. "이의 기간 후 자동 확정"이 PLAN §12가 요구하는 확인 문구다.
+  // --- 판정 · 정산 (PLAN 5.5 · 11.3 · 12, ADR-0046) ---
+  // 관리자 판정 대화상자. 판정은 즉시 확정되고 바로 정산이 시작된다(이의 단계 없음).
+  // 확인 버튼 라벨 '정산' → '판정' 변경은 #14 소관이다.
   adminMarketResolve: '정산',
-  adminMarketResolveTitle: '결과를 제안합니다',
+  adminMarketResolveTitle: '결과를 판정합니다',
   adminMarketResolveBody:
-    '선택한 결과로 정산을 제안합니다. 이의 기간(24시간)이 끝나면 자동으로 확정되고 맞힌 계약에 100P씩 지급됩니다.',
+    '선택한 결과로 판정합니다. 판정은 즉시 확정되고 바로 정산이 시작됩니다. 판정한 뒤에는 결과를 바꾸거나 무효로 할 수 없습니다.',
   adminMarketResolveResult: '결과',
   adminMarketResolveNote: '메모',
   adminMarketResolveEvidence: '근거 URL',
   adminMarketResolveEvidencePlaceholder: 'https://',
-  adminMarketResolved: '정산을 제안했습니다.',
-  adminMarketResolvedUntil: '이의 마감',
-  adminMarketChangeResult: '결과 변경',
-  adminMarketChangeResultTitle: '결과를 변경합니다',
-  adminMarketChangeResultBody:
-    '결과를 바꾸면 이의 기간이 처음부터 다시 시작됩니다. 이미 접수된 이의는 그대로 남습니다. 계속할까요?',
-  adminMarketResultChanged: '결과를 변경했습니다.',
+  adminMarketResolved: '판정했습니다. 정산을 시작합니다.',
   errMarketResultRequired: '결과를 선택해 주세요.',
-  errMarketResultUnchanged: '현재 결과와 같습니다. 다른 결과를 선택해 주세요.',
   errMarketResolveNote: '메모는 1,000자 이하로 입력해 주세요.',
   errMarketResolveEvidence: 'http 또는 https로 시작하는 500자 이하의 URL을 입력해 주세요.',
-  // 이의 기간이 끝나 확정을 기다리는 시장의 결과는 바꿀 수 없다(무효만 가능).
-  errMarketDisputeWindowOver: '이의 기간이 끝나 확정을 기다리는 중입니다. 결과를 바꿀 수 없습니다.',
-  adminMarketDisputes: '이의',
-  adminMarketDisputesOpen: '접수',
-  adminMarketDisputesAccepted: '수용',
-  adminMarketDisputesRejected: '기각',
-  adminMarketDisputesLink: '이의 목록 보기',
-  // 관리자 이의 목록 (PLAN 12): 시장별 그룹, 수용·기각 + 메모. 수용해도 결과는 자동으로 바뀌지 않는다.
-  adminDisputes: '이의',
-  adminDisputesTitle: '이의 목록',
-  adminNoDisputes: '이의가 없습니다.',
-  adminDisputeStatusFilter: '상태',
-  adminDisputeStatusAll: '전체',
-  adminDisputeMarketFilter: '시장',
-  adminDisputeAllMarkets: '전체 시장',
-  adminDisputeFiledBy: '제기자',
-  adminDisputeFiledAt: '접수 시각',
-  adminDisputeReviewedAt: '처리 시각',
-  adminDisputeAccept: '수용',
-  adminDisputeReject: '기각',
-  adminDisputeAcceptTitle: '이의를 수용합니다',
-  adminDisputeAcceptBody:
-    '이의를 수용으로 표시합니다. 결과를 실제로 바꾸려면 시장 상세에서 「결과 변경」을 따로 눌러야 합니다. 메모는 제기자에게 보입니다.',
-  adminDisputeRejectTitle: '이의를 기각합니다',
-  adminDisputeRejectBody: '이의를 기각으로 표시합니다. 메모는 제기자에게 보입니다.',
-  adminDisputeReviewNote: '처리 메모 (제기자에게 보입니다)',
-  adminDisputeReviewed: '이의를 처리했습니다.',
-  disputeStatusOpen: '접수',
-  disputeStatusAccepted: '수용',
-  disputeStatusRejected: '기각',
-  // 사용자 이의 제기 (PLAN 11.3): resolving 상태에서만, 시장당 한 번.
-  disputeTitle: '이의 제기',
-  disputeOpen: '이의 제기',
-  disputeIntro: '제안된 결과가 정산 기준과 다르다고 생각하면 이의 마감 전에 알려 주세요.',
-  disputeReason: '사유',
-  disputeReasonHint: '어떤 근거로 결과가 잘못되었는지 적어 주세요.',
-  disputeEvidence: '근거 URL (선택)',
-  disputeSubmit: '이의 제기',
-  disputeFiled: '이의를 접수했습니다. 관리자가 확인한 뒤 결과가 바뀔 수 있습니다.',
-  disputeFiledState: '이의 접수됨',
-  disputeFiledAt: '접수 시각',
-  disputeAlreadyFiled: '이미 이의를 제기했습니다.',
-  disputeWindowClosed: '이의 기간이 끝났습니다.',
-  disputeNotResolving: '지금은 이의를 제기할 수 없습니다.',
-  disputeLoginToFile: '로그인하면 이의를 제기할 수 있습니다.',
-  disputeWindowUntil: '이의 마감',
-  disputeAdminNote: '관리자 메모',
-  disputeStatus: '처리 상태',
-  errDisputeReason: '사유를 1~2,000자로 입력해 주세요.',
-  errDisputeEvidence: 'http 또는 https로 시작하는 500자 이하의 URL을 입력해 주세요.',
+  // 관리자 시장 상세의 정산 단계 (ADR-0046): 판정한 시장의 단계별 진행. 읽기 전용이다.
+  adminSettlementSteps: '정산 단계',
+  adminSettlementStepColumn: '단계',
+  adminSettlementStepStatus: '상태',
+  adminSettlementStepAttempts: '시도',
+  adminSettlementStepCompletedAt: '완료 시각',
+  adminSettlementStepLastError: '마지막 오류',
+  settlementStepCoin: '포지션 정산',
+  settlementStepStatusPending: '대기',
+  settlementStepStatusDone: '완료',
+  settlementStepStatusFailed: '실패',
   // 정산 완료 안내: 지급은 이미 잔고에 반영됐고 내 손익은 아래 내 포지션이 말한다.
   marketSettledPayout:
     '맞힌 계약은 100P씩 지급되었고, 내 손익은 아래 내 포지션에서 볼 수 있습니다.',
-  // 관리자 이벤트 로그의 정산 행: 확정 요약(worker market-finalize)과 무효가 버린 제안(A-M3-23).
+  // 관리자 이벤트 로그의 정산 행: 정산 요약(worker market-finalize)과 과거 무효가 버린 제안(A-M3-23).
   eventSettledAccounts: '정산 계정 수',
   eventPaidAccounts: '지급 계정 수',
   eventPaidTotal: '지급 합계',
   eventDiscardedResult: '취소된 제안 결과',
-  adminDisputeNotFound: '이의를 찾을 수 없습니다.',
 
   // --- leaderboard (M6 선택) ---
   // 순위는 실현 손익 기준이고, 아직 아무것도 실현하지 않은 계정은 목록에 없다.

@@ -28,10 +28,10 @@ export function sessionIdentityChanged(
  * started it unmounts, and react-query only pushes fresh options into a pending mutation from
  * an effect, so a callback that closes over `useSession()`'s answer keeps naming the account
  * that started the work however long the tab has since belonged to somebody else
- * (`tradeAnswerScope`, use-trade.ts; `disputeAnswerScope`, use-disputes.ts; and the payment
- * window's `openWindow`, app/wallet/charge-form.tsx, which reads it through `reservationToOpen`
- * once a prepare answers, so a late answer never opens a window on another account's wallet —
- * the three readers). The query cache cannot stand in for it either: the
+ * (`tradeAnswerScope`, use-trade.ts; and the payment window's `openWindow`,
+ * app/wallet/charge-form.tsx, which reads it through `reservationToOpen` once a prepare
+ * answers, so a late answer never opens a window on another account's wallet — the two
+ * readers). The query cache cannot stand in for it either: the
  * account is knowable there only while `['me']` holds an answer, and `resetQueries` below is
  * precisely what empties it.
  *

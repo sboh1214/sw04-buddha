@@ -221,7 +221,7 @@ function refusalToast(view: RefundErrorView) {
 }
 
 /**
- * The refund confirmation with its required reason (ADR-0042). The disputes' review dialog
+ * The refund confirmation with its required reason (ADR-0042). The admin confirmation dialog
  * shape: `alertdialog`, pinned while the request runs — Cancel, Esc and the backdrop all wait,
  * since a refund takes P from a member and money back through the PG and the admin must see
  * how it ended. The reason is a form (zodResolver), refused under the field when blank.

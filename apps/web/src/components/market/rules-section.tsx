@@ -24,14 +24,6 @@ export interface RulesSectionProps {
   /** `Market` satisfies this; so does the synthetic row the admin preview builds. */
   market: { rules: string; resolutionSource: string | null; closeAt: string };
   /**
-   * 정산 예정 — the instant a result becomes final. Omitted by default: PLAN §17 Q8 is still
-   * open and the conservative default is to promise no schedule (A-M3). The detail screen
-   * passes `disputeDeadlineShown(market)` (lib/dispute.ts) — the deadline only while the market
-   * is resolving, where the instant is still ahead. Never the raw `disputeUntil`: it outlives
-   * the settle, and this label says 예정.
-   */
-  settlementAt?: string | null;
-  /**
    * Defaults to `market-rules`. The admin form's 정산 기준 textarea already owns that id, so
    * the preview beside it must pass its own.
    */
@@ -40,7 +32,6 @@ export interface RulesSectionProps {
 
 export function RulesSection({
   market,
-  settlementAt,
   'data-testid': testId = 'market-rules',
 }: RulesSectionProps) {
   return (
@@ -62,9 +53,6 @@ export function RulesSection({
               {market.resolutionSource || copy.rulesNone}
             </Item>
             <Item label={copy.rulesCloseAt}>{formatKst(market.closeAt)}</Item>
-            {settlementAt ? (
-              <Item label={copy.rulesSettlement}>{formatKst(settlementAt)}</Item>
-            ) : null}
           </DataList.Root>
         </Stack>
       </Card.Body>

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   DEFAULT_LIQUIDITY_B,
+  MARKET_STATUSES,
   SIGNUP_BONUS_P,
   initState,
   maxLossP,
@@ -13,6 +14,7 @@ import {
   auditFailures,
   balances,
   ledgerEntries,
+  marketSettlementSteps,
   markets,
   orders,
   paymentEvents,
@@ -22,7 +24,13 @@ import {
   user,
   userContacts,
 } from './schema/index.js';
-import { createCategory, createMarket, createPosition, createUser } from './test/factories.js';
+import {
+  createCategory,
+  createMarket,
+  createPosition,
+  createSettlementStep,
+  createUser,
+} from './test/factories.js';
 import { connectTestDb, hasTestDb, type TestDb } from './test/harness.js';
 
 /**
@@ -135,6 +143,95 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     });
     expect(withCategory?.category.slug).toBe('economy');
     expect(withCategory?.creator.profile?.role).toBe('admin');
+  });
+
+  describe('judgement and settlement steps (migration 0016, ADR-0046)', () => {
+    it('labels market_status like MARKET_STATUSES, in order, with no dispute stage', async () => {
+      const { rows } = await t.db.execute<{ label: string }>(sql`
+        SELECT e.enumlabel AS label FROM pg_enum e JOIN pg_type ty ON ty.oid = e.enumtypid
+        WHERE ty.typname = 'market_status' ORDER BY e.enumsortorder`);
+      expect(rows.map((r) => r.label)).toEqual([...MARKET_STATUSES]);
+    });
+
+    it('has dropped disputes, its type and markets.dispute_until (O-8)', async () => {
+      const { rows } = await t.db.execute<{
+        disputes: string | null;
+        disputeStatus: number;
+        disputeUntil: number;
+      }>(sql`
+        SELECT to_regclass('public.disputes')::text AS "disputes",
+          (SELECT count(*)::int FROM pg_type WHERE typname = 'dispute_status') AS "disputeStatus",
+          (SELECT count(*)::int FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'markets'
+              AND column_name = 'dispute_until') AS "disputeUntil"`);
+      expect(rows[0]).toEqual({ disputes: null, disputeStatus: 0, disputeUntil: 0 });
+    });
+
+    it('createMarket writes the steps a judged or settled market has, and no others', async () => {
+      const settledAt = new Date('2026-10-01T03:00:00.000Z');
+      const resolved = await createMarket(t.db, { status: 'resolved', resolvedResult: 'YES' });
+      const settled = await createMarket(t.db, {
+        status: 'settled',
+        resolvedResult: 'NO',
+        settledAt,
+      });
+      const bare = await createMarket(t.db, { status: 'resolved', settlementSteps: false });
+      const open = await createMarket(t.db);
+      const rows = await t.db.select().from(marketSettlementSteps);
+      const of = (marketId: string) => rows.filter((r) => r.marketId === marketId);
+      expect(of(resolved.id)).toEqual([
+        expect.objectContaining({
+          step: 'coin',
+          status: 'pending',
+          attempts: 0,
+          completedAt: null,
+          lastError: null,
+        }),
+      ]);
+      expect(of(settled.id)).toEqual([
+        expect.objectContaining({
+          step: 'coin',
+          status: 'done',
+          attempts: 1,
+          completedAt: settledAt,
+        }),
+      ]);
+      expect(of(bare.id)).toEqual([]);
+      expect(of(open.id)).toEqual([]);
+    });
+
+    it('keeps one row per (market, step) and ties done to completed_at', async () => {
+      const market = await createMarket(t.db, { status: 'resolved', settlementSteps: false });
+      await createSettlementStep(t.db, { marketId: market.id });
+      await expect(createSettlementStep(t.db, { marketId: market.id })).rejects.toSatisfy(
+        (e) => sqlState(e) === '23505',
+      );
+      const other = await createMarket(t.db, { status: 'resolved', settlementSteps: false });
+      // done without a completion instant, or a completion instant on a step not done: 23514.
+      await expect(
+        createSettlementStep(t.db, { marketId: other.id, status: 'done' }),
+      ).rejects.toSatisfy((e) => sqlState(e) === '23514');
+      await expect(
+        createSettlementStep(t.db, {
+          marketId: other.id,
+          status: 'failed',
+          completedAt: new Date(),
+        }),
+      ).rejects.toSatisfy((e) => sqlState(e) === '23514');
+      await expect(
+        createSettlementStep(t.db, { marketId: other.id, attempts: -1 }),
+      ).rejects.toSatisfy((e) => sqlState(e) === '23514');
+      // The worker updates the row in place: not append-only.
+      await t.db
+        .update(marketSettlementSteps)
+        .set({ status: 'failed', attempts: 1, lastError: 'boom' })
+        .where(eq(marketSettlementSteps.marketId, market.id));
+      const [row] = await t.db
+        .select()
+        .from(marketSettlementSteps)
+        .where(eq(marketSettlementSteps.marketId, market.id));
+      expect(row).toMatchObject({ status: 'failed', attempts: 1, lastError: 'boom' });
+    });
   });
 
   it('rejects out-of-range prices via CHECK', async () => {
@@ -404,7 +501,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         FROM information_schema.role_table_grants
         WHERE grantee = 'buddha_app' AND table_schema = 'public'
           AND table_name IN ('ledger_entries', 'market_events', 'admin_actions', 'payment_events',
-            'balances', 'payments', 'user_contacts')
+            'balances', 'payments', 'user_contacts', 'market_settlement_steps')
         ORDER BY 1, 2`);
       const grants = Object.groupBy(rows, (r) => r.table);
       const privs = (table: string) => grants[table]?.map((r) => r.privilege).sort() ?? [];
@@ -416,6 +513,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(privs('balances')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
       expect(privs('payments')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
       expect(privs('user_contacts')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
+      // Migration 0016: the worker updates a step's row in place.
+      expect(privs('market_settlement_steps')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
     });
 
     it('cannot UPDATE or DELETE a payment event', async () => {

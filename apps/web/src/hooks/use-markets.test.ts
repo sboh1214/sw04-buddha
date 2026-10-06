@@ -72,7 +72,6 @@ const detail: Market = {
   rules: '한국은행 발표 기준.',
   resolutionSource: null,
   resolvedAt: null,
-  disputeUntil: null,
   settledAt: null,
   voidedAt: null,
 };

@@ -78,11 +78,11 @@ export type MarketTickPatch = Pick<
  * `statusSupersedes` (@buddha/shared realtime.ts) is what every writer of a market ROW compares
  * on since M5: `market:status` carries `statusEventId` — the `market_events.id` of the
  * transition, drawn under the market row lock — and every market DTO carries the same key, so a
- * REST snapshot seeds the comparison the way `tradeCount` does for a tick. That is what lets
- * `result_changed` repeat `resolving` with a new result and a fresh deadline and still be taken
- * as NEWER, which the rank order below could never say; and it is also what keeps the deliberate
- * repeat an admin edit publishes (A-M4-36) a drop — same id, not newer — so only the REST answer
- * that repeat triggers carries the edit.
+ * REST snapshot seeds the comparison the way `tradeCount` does for a tick. That is what keeps
+ * the deliberate repeat an admin edit publishes (A-M4-36) a drop — same id, not newer — so only
+ * the REST answer that repeat triggers carries the edit; and it is what leaves `settled` on screen
+ * when the API's `resolved` and the worker's `settled`, published moments apart (ADR-0046),
+ * arrive in the other order.
  *
  * `statusRank` — position in `MARKET_STATUSES` — is re-exported for the one reader that holds NO
  * key: a position row (`liveMarketStatus`, use-portfolio.ts). `Position.marketStatus` is a join
@@ -94,11 +94,6 @@ export { statusRank } from '@buddha/shared';
 /** Only a list row carries a sparkline; the detail and the admin row do not. */
 function hasSparkline(row: object): row is { sparkline: number[] } {
   return 'sparkline' in row && Array.isArray(row.sparkline);
-}
-
-/** Only the detail carries a dispute deadline; a card never gains one from an event. */
-function hasDisputeUntil(row: object): row is { disputeUntil: string | null } {
-  return 'disputeUntil' in row;
 }
 
 /**
@@ -185,10 +180,10 @@ export function tickRestartsMarket(
 
 /**
  * `market:status` — ordered by `statusEventId` through `statusSupersedes`, rank as the fallback
- * for a side with no key. The result is REPLACED, not merged, so a void clears the result an
- * earlier resolve proposed and a `result_changed` swaps it; the dispute deadline follows it, and
- * only on a row that already has that field. The key is written with the status, so the next
- * event and the next REST answer are both compared against the transition this one delivered.
+ * for a side with no key. The result is REPLACED, not merged, so the 판정 writes it and a later
+ * event never keeps a result its own transition did not carry. The key is written with the
+ * status, so the next event and the next REST answer are both compared against the transition
+ * this one delivered.
  *
  * `undefined` for an event that is not NEWER covers two senders: a late or duplicate
  * transition, and the deliberate repeat an admin edit publishes (A-M4-36) — the same id the row
@@ -202,14 +197,12 @@ export function applyStatus<T extends LiveMarket>(
 ): T | undefined {
   if (held === undefined || held.id !== event.marketId) return undefined;
   if (!statusSupersedes(event, held)) return undefined;
-  const next = {
+  return {
     ...held,
     status: event.status,
     resolvedResult: event.resolvedResult ?? null,
     statusEventId: event.statusEventId,
   };
-  if (!hasDisputeUntil(held)) return next;
-  return { ...next, disputeUntil: event.disputeUntil ?? null };
 }
 
 /**
@@ -266,10 +259,10 @@ export function joinMarket<T extends LiveMarket>(held: T | undefined, incoming: 
       next = { ...next, sparkline: withLatestSample(next.sparkline, held.pYesBp) };
     }
   }
-  // The status GROUP moves together: the result and the deadline were written by the same
-  // transition as the status and its key, so a snapshot older than what is held must not drag
-  // any one of them back alone — a `result_changed` kept by status but joined with the previous
-  // result would badge 정산 중 over the wrong answer.
+  // The status GROUP moves together: the result was written by the same transition as the
+  // status and its key, so a snapshot older than what is held must not drag either back alone —
+  // a `settled` kept by status but joined with a pre-판정 snapshot's null result would badge
+  // 정산 완료 over no answer at all.
   if (statusSupersedes(held, incoming)) {
     next = {
       ...next,
@@ -277,7 +270,6 @@ export function joinMarket<T extends LiveMarket>(held: T | undefined, incoming: 
       resolvedResult: held.resolvedResult,
       statusEventId: held.statusEventId,
     };
-    if (hasDisputeUntil(held)) next = { ...next, disputeUntil: held.disputeUntil };
   }
   return next;
 }

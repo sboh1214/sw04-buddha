@@ -4,10 +4,9 @@
  * The individual suites already prove that each admin write leaves the RIGHT `admin_actions`
  * row — `admin.controller.test.ts` for the balance adjustment, `charge-package.controller.test`
  * and `coupon.controller.test` for the catalogue, `admin-markets.controller.test` and
- * `admin-markets-resolve.controller.test` for the market transitions,
- * `disputes.controller.test` for a review. What none of them can prove is COMPLETENESS: they
- * assert about routes that exist, so an admin write added tomorrow with no audit row would
- * break nothing.
+ * `admin-markets-resolve.controller.test` for the market transitions. What none of them can
+ * prove is COMPLETENESS: they assert about routes that exist, so an admin write added tomorrow
+ * with no audit row would break nothing.
  *
  * This closes that. It discovers every admin route from the module graph — not from a list
  * maintained here — and requires each state-changing one to name the `ADMIN_ACTION_TYPES` value
@@ -50,7 +49,6 @@ const AUDITED: Readonly<Record<string, AdminActionType>> = {
   'POST /admin/markets/:id/close': 'market_close',
   'POST /admin/markets/:id/resolve': 'market_resolve',
   'POST /admin/markets/:id/void': 'market_void',
-  'PATCH /admin/disputes/:id': 'dispute_review',
   'POST /admin/payments/:id/refund': 'payment_refund',
   'POST /admin/payments/:id/settle': 'payment_settle',
 };

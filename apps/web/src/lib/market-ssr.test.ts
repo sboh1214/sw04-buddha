@@ -32,7 +32,6 @@ const market: Market = {
   rules: 'rules text',
   resolutionSource: null,
   resolvedAt: null,
-  disputeUntil: null,
   settledAt: null,
   voidedAt: null,
 };
@@ -141,6 +140,22 @@ describe('filtersFromSearchParams', () => {
     expect(filtersFromSearchParams({ status: 'settled', sort: 'closing' })).toEqual({
       status: 'settled',
       sort: 'closing',
+    });
+    // 판정 완료 is a filter of its own (ADR-0046, PUBLIC_MARKET_STATUSES).
+    expect(filtersFromSearchParams({ status: 'resolved' })).toEqual({
+      ...DEFAULT_MARKET_FILTERS,
+      status: 'resolved',
+    });
+  });
+
+  it('sends a bookmarked ?status=resolving back to the default list', () => {
+    // The dispute stage and its status are gone (ADR-0046: renamed to `resolved` in place).
+    // A link saved before that still names the old value, which is now just an unknown status:
+    // the home page opens on its default list rather than answering 500.
+    expect(filtersFromSearchParams({ status: 'resolving' })).toEqual(DEFAULT_MARKET_FILTERS);
+    expect(filtersFromSearchParams({ status: 'resolving', sort: 'newest' })).toEqual({
+      ...DEFAULT_MARKET_FILTERS,
+      sort: 'newest',
     });
   });
 

@@ -101,11 +101,17 @@ export const MARKET_MECHANISMS = ['lmsr', 'clob'] as const;
 export type MarketMechanismKind = (typeof MARKET_MECHANISMS)[number];
 export const marketMechanismSchema = z.enum(MARKET_MECHANISMS);
 
+/**
+ * Market lifecycle (GD 01-01 §8, O-5~O-7, ADR-0046): `closed` → `resolved` is the admin's
+ * judgement, final at once (no dispute stage); `resolved` → `settled` is the worker finishing
+ * every SETTLEMENT_STEPS step. The Postgres label `resolved` is M5's dispute-stage label renamed
+ * in place (migration 0016), so the enum keeps this order.
+ */
 export const MARKET_STATUSES = [
   'draft',
   'open',
   'closed',
-  'resolving',
+  'resolved',
   'settled',
   'voided',
 ] as const;
@@ -126,11 +132,15 @@ export const MARKET_EVENT_TYPES = [
   'created',
   'opened',
   'closed',
+  /** Legacy (M5 dispute flow, before ADR-0046): no longer written, kept to read old rows. */
   'resolve_proposed',
+  /** Legacy (M5 dispute flow, before ADR-0046): no longer written, kept to read old rows. */
   'result_changed',
   'finalized',
   'voided',
   'rules_edited',
+  /** closed → resolved: the admin's judgement, payload `{result, note, evidenceUrl}`. */
+  'resolved',
 ] as const;
 export type MarketEventType = (typeof MARKET_EVENT_TYPES)[number];
 export const marketEventTypeSchema = z.enum(MARKET_EVENT_TYPES);
@@ -175,10 +185,27 @@ export const PRICE_TICK_TRIGGERS = ['trade', 'open', 'resolve'] as const;
 export type PriceTickTrigger = (typeof PRICE_TICK_TRIGGERS)[number];
 export const priceTickTriggerSchema = z.enum(PRICE_TICK_TRIGGERS);
 
-// ---- disputes (PLAN 5.5) ------------------------------------------------------------
-export const DISPUTE_STATUSES = ['open', 'accepted', 'rejected'] as const;
-export type DisputeStatus = (typeof DISPUTE_STATUSES)[number];
-export const disputeStatusSchema = z.enum(DISPUTE_STATUSES);
+// ---- settlement steps (O-6, ADR-0046) -----------------------------------------------
+/**
+ * market_settlement_steps.step (varchar, not a Postgres enum): the steps that must ALL finish
+ * before a `resolved` market becomes `settled` (O-6), run in this order. `coin` pays out the
+ * positions. #29 appends `score` (Forecast scoring) — a varchar column, so adding a step needs
+ * no enum migration.
+ */
+export const SETTLEMENT_STEPS = ['coin'] as const;
+export type SettlementStep = (typeof SETTLEMENT_STEPS)[number];
+export const settlementStepSchema = z.enum(SETTLEMENT_STEPS).meta({ id: 'SettlementStep' });
+
+/**
+ * market_settlement_steps.status (varchar). `pending` from the judgement until the step runs;
+ * `done` once it committed (`completed_at` set); `failed` when its last attempt rolled back
+ * (`last_error` says why) — the per-minute scan retries a failed step without a cap.
+ */
+export const SETTLEMENT_STEP_STATUSES = ['pending', 'done', 'failed'] as const;
+export type SettlementStepStatus = (typeof SETTLEMENT_STEP_STATUSES)[number];
+export const settlementStepStatusSchema = z
+  .enum(SETTLEMENT_STEP_STATUSES)
+  .meta({ id: 'SettlementStepStatus' });
 
 // ---- admin / audit (varchar columns, PLAN 6.2) --------------------------------------
 export const ADMIN_ACTION_TYPES = [
@@ -194,7 +221,6 @@ export const ADMIN_ACTION_TYPES = [
   'market_close',
   'market_resolve',
   'market_void',
-  'dispute_review',
   'payment_refund',
   'payment_settle',
 ] as const;

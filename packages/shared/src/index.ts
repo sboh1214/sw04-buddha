@@ -6,7 +6,6 @@ export * from './api/uuid.js';
 export * from './auth.js';
 export * from './charge-package.js';
 export * from './coupon.js';
-export * from './dispute.js';
 export * from './api/errors.js';
 export * from './api/idempotency.js';
 export * from './api/p-amount.js';

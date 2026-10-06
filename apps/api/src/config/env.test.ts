@@ -256,25 +256,6 @@ describe('AUTH_COOKIE_DOMAIN', () => {
   });
 });
 
-describe('TEST_DISPUTE_WINDOW_SECONDS', () => {
-  it('defaults to PLAN 5.5 (24 hours) and coerces a whole number of seconds', () => {
-    expect(envSchema.parse(base).TEST_DISPUTE_WINDOW_SECONDS).toBe(86_400);
-    expect(
-      envSchema.parse({ ...base, TEST_DISPUTE_WINDOW_SECONDS: '5' }).TEST_DISPUTE_WINDOW_SECONDS,
-    ).toBe(5);
-  });
-
-  it('refuses zero, a fraction and text: a window of 0 would finalize before anyone could dispute', () => {
-    for (const bad of ['0', '-1', '1.5', 'day']) {
-      const result = envSchema.safeParse({ ...base, TEST_DISPUTE_WINDOW_SECONDS: bad });
-      expect(result.success, bad).toBe(false);
-      if (!result.success) {
-        expect(result.error.issues[0]?.path).toEqual(['TEST_DISPUTE_WINDOW_SECONDS']);
-      }
-    }
-  });
-});
-
 describe('payments (ADR-0042)', () => {
   const smartro = {
     PAYMENT_PROVIDER: 'smartro',

@@ -76,7 +76,6 @@ const market = {
   rules: '종가 기준',
   resolutionSource: 'KRX',
   resolvedAt: null,
-  disputeUntil: null,
   settledAt: null,
   voidedAt: null,
 };
@@ -195,13 +194,31 @@ describe('read DTOs', () => {
       updatedAt: at,
       netCollectedP: '520',
       openInterest: { yes: 10, no: 0 },
-      disputeCounts: { open: 1, accepted: 0, rejected: 0 },
+      settlementSteps: [
+        {
+          step: 'coin',
+          status: 'failed',
+          attempts: 2,
+          completedAt: null,
+          lastError: 'Balance not found for account u-1',
+          updatedAt: at,
+        },
+      ],
       events: [event],
     };
     expect(adminMarketSchema.parse(admin)).toEqual(admin);
     expect(marketSchema.parse(admin)).not.toHaveProperty('qYes');
     expect(adminMarketSchema.safeParse(market).success).toBe(false);
     expect(adminMarketSchema.safeParse({ ...admin, initialProbBp: 0 }).success).toBe(false);
+    // The dispute stage is gone (ADR-0046): no deadline on the public shape, no counts on the
+    // admin one, and a step must be one of SETTLEMENT_STEPS.
+    expect(marketSchema.parse({ ...market, disputeUntil: at })).not.toHaveProperty('disputeUntil');
+    expect(adminMarketSchema.parse(admin)).not.toHaveProperty('disputeCounts');
+    const [step] = admin.settlementSteps;
+    expect(
+      adminMarketSchema.safeParse({ ...admin, settlementSteps: [{ ...step, step: 'score' }] })
+        .success,
+    ).toBe(false);
   });
 
   it('bound prices and basis points', () => {

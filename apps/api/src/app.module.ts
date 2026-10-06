@@ -4,7 +4,6 @@ import { AdminModule } from './admin/admin.module.js';
 import { AuthModule } from './auth/auth.module.js';
 import { CommonModule } from './common/common.module.js';
 import { envFilePaths, envSchema } from './config/env.js';
-import { DisputesModule } from './disputes/disputes.module.js';
 import { HealthController } from './health/health.controller.js';
 import { DbModule } from './infra/db/db.module.js';
 import { RedisModule } from './infra/redis/redis.module.js';
@@ -42,7 +41,6 @@ import { WalletModule } from './wallet/wallet.module.js';
     MarketsModule,
     TradesModule,
     LeaderboardModule,
-    DisputesModule,
   ],
   controllers: [HealthController],
 })

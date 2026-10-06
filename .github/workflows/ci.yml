@@ -78,10 +78,6 @@ jobs:
       TEST_DATABASE_MIGRATE_URL: postgres://buddha_migrate:buddha@localhost:5432/buddha
       TEST_REDIS_URL: redis://localhost:6379
       NEXT_PUBLIC_API_URL: http://localhost:4000
-      # Short on purpose (PLAN M5 AC 2): the settlement e2e waits for the worker's finalize job,
-      # which the API delays by exactly this. The vitest suites read the value from the app's
-      # own config rather than assuming 24h, so they pass under either.
-      TEST_DISPUTE_WINDOW_SECONDS: '8'
       # The worker's liveness probe the e2e leg waits on (apps/worker/src/health.ts).
       WORKER_HOST: localhost
       WORKER_HEALTH_PORT: '4100'

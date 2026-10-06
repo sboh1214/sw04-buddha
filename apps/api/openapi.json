@@ -2466,7 +2466,7 @@
               "enum": [
                 "open",
                 "closed",
-                "resolving",
+                "resolved",
                 "settled",
                 "voided"
               ]
@@ -2976,7 +2976,7 @@
                 "draft",
                 "open",
                 "closed",
-                "resolving",
+                "resolved",
                 "settled",
                 "voided"
               ]
@@ -3683,7 +3683,7 @@
             "session": []
           }
         ],
-        "summary": "closed → resolving: propose the result and start the dispute window; on a resolving market change the proposed result (the window restarts, the pending finalize is replaced)",
+        "summary": "closed → resolved: record the final result; settlement starts immediately",
         "tags": [
           "admin"
         ]
@@ -3790,7 +3790,7 @@
             "session": []
           }
         ],
-        "summary": "Void an open, closed or resolving market: every unsettled position is refunded its cost basis (MARKET_VOID_REFUND) and closed out",
+        "summary": "Void an open or closed market: every unsettled position is refunded its cost basis (MARKET_VOID_REFUND) and closed out",
         "tags": [
           "admin"
         ]
@@ -4136,463 +4136,6 @@
           "leaderboard"
         ]
       }
-    },
-    "/api/v1/markets/{id}/disputes": {
-      "post": {
-        "operationId": "fileDispute",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateDisputeBody"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "data": {
-                      "$ref": "#/components/schemas/Dispute"
-                    }
-                  },
-                  "required": [
-                    "data"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "VALIDATION_ERROR",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "UNAUTHENTICATED",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "FORBIDDEN",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "NOT_FOUND",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "DISPUTE_WINDOW_CLOSED | DUPLICATE_REQUEST",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "RATE_LIMITED",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "summary": "Object to the proposed result while the market is resolving and its dispute window is open (one per user per market)",
-        "tags": [
-          "disputes"
-        ]
-      }
-    },
-    "/api/v1/me/disputes": {
-      "get": {
-        "operationId": "listMyDisputes",
-        "parameters": [
-          {
-            "name": "cursor",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 200
-            }
-          },
-          {
-            "name": "limit",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "default": 20,
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 100
-            }
-          },
-          {
-            "name": "marketId",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "data": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/Dispute"
-                      }
-                    },
-                    "meta": {
-                      "$ref": "#/components/schemas/PageMeta"
-                    }
-                  },
-                  "required": [
-                    "data",
-                    "meta"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "VALIDATION_ERROR",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "UNAUTHENTICATED",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "RATE_LIMITED",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "summary": "My disputes, newest first; `marketId` narrows the list to one market",
-        "tags": [
-          "disputes"
-        ]
-      }
-    },
-    "/api/v1/admin/disputes": {
-      "get": {
-        "operationId": "adminListDisputes",
-        "parameters": [
-          {
-            "name": "cursor",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 200
-            }
-          },
-          {
-            "name": "limit",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "default": 20,
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 100
-            }
-          },
-          {
-            "name": "status",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "enum": [
-                "open",
-                "accepted",
-                "rejected"
-              ]
-            }
-          },
-          {
-            "name": "marketId",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "data": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/AdminDispute"
-                      }
-                    },
-                    "meta": {
-                      "$ref": "#/components/schemas/PageMeta"
-                    }
-                  },
-                  "required": [
-                    "data",
-                    "meta"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "VALIDATION_ERROR",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "UNAUTHENTICATED",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "FORBIDDEN",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "RATE_LIMITED",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "summary": "Every dispute, newest first; `status` and `marketId` narrow the list",
-        "tags": [
-          "admin"
-        ]
-      }
-    },
-    "/api/v1/admin/disputes/{id}": {
-      "patch": {
-        "operationId": "adminReviewDispute",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ReviewDisputeBody"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "data": {
-                      "$ref": "#/components/schemas/AdminDispute"
-                    }
-                  },
-                  "required": [
-                    "data"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "VALIDATION_ERROR",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "UNAUTHENTICATED",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "FORBIDDEN",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "NOT_FOUND",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "RATE_LIMITED",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "summary": "Accept or reject a dispute with a note (revisable; accepting does not change the market result — use POST /admin/markets/:id/resolve for that)",
-        "tags": [
-          "admin"
-        ]
-      }
     }
   },
   "info": {
@@ -4653,7 +4196,6 @@
           "PRICE_MOVED",
           "DUPLICATE_REQUEST",
           "RATE_LIMITED",
-          "DISPUTE_WINDOW_CLOSED",
           "RULES_REQUIRED",
           "CONTACT_REQUIRED",
           "REFUND_NOT_ALLOWED",
@@ -5907,7 +5449,7 @@
               "draft",
               "open",
               "closed",
-              "resolving",
+              "resolved",
               "settled",
               "voided"
             ]
@@ -6034,7 +5576,7 @@
               "draft",
               "open",
               "closed",
-              "resolving",
+              "resolved",
               "settled",
               "voided"
             ]
@@ -6107,12 +5649,6 @@
             "format": "date-time",
             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
           },
-          "disputeUntil": {
-            "nullable": true,
-            "type": "string",
-            "format": "date-time",
-            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
-          },
           "settledAt": {
             "nullable": true,
             "type": "string",
@@ -6147,7 +5683,6 @@
           "rules",
           "resolutionSource",
           "resolvedAt",
-          "disputeUntil",
           "settledAt",
           "voidedAt"
         ],
@@ -6449,7 +5984,7 @@
               "draft",
               "open",
               "closed",
-              "resolving",
+              "resolved",
               "settled",
               "voided"
             ]
@@ -6566,7 +6101,7 @@
               "draft",
               "open",
               "closed",
-              "resolving",
+              "resolved",
               "settled",
               "voided"
             ]
@@ -6639,12 +6174,6 @@
             "format": "date-time",
             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
           },
-          "disputeUntil": {
-            "nullable": true,
-            "type": "string",
-            "format": "date-time",
-            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
-          },
           "settledAt": {
             "nullable": true,
             "type": "string",
@@ -6705,31 +6234,11 @@
             ],
             "additionalProperties": false
           },
-          "disputeCounts": {
-            "type": "object",
-            "properties": {
-              "open": {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 9007199254740991
-              },
-              "accepted": {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 9007199254740991
-              },
-              "rejected": {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 9007199254740991
-              }
-            },
-            "required": [
-              "open",
-              "accepted",
-              "rejected"
-            ],
-            "additionalProperties": false
+          "settlementSteps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminSettlementStep"
+            }
           },
           "events": {
             "type": "array",
@@ -6759,7 +6268,6 @@
           "rules",
           "resolutionSource",
           "resolvedAt",
-          "disputeUntil",
           "settledAt",
           "voidedAt",
           "liquidityB",
@@ -6771,10 +6279,64 @@
           "updatedAt",
           "netCollectedP",
           "openInterest",
-          "disputeCounts",
+          "settlementSteps",
           "events"
         ],
         "additionalProperties": false
+      },
+      "AdminSettlementStep": {
+        "type": "object",
+        "properties": {
+          "step": {
+            "$ref": "#/components/schemas/SettlementStep"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SettlementStepStatus"
+          },
+          "attempts": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "completedAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "lastError": {
+            "nullable": true,
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          }
+        },
+        "required": [
+          "step",
+          "status",
+          "attempts",
+          "completedAt",
+          "lastError",
+          "updatedAt"
+        ],
+        "additionalProperties": false
+      },
+      "SettlementStep": {
+        "type": "string",
+        "enum": [
+          "coin"
+        ]
+      },
+      "SettlementStepStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "done",
+          "failed"
+        ]
       },
       "MarketEvent": {
         "type": "object",
@@ -6792,7 +6354,8 @@
               "result_changed",
               "finalized",
               "voided",
-              "rules_edited"
+              "rules_edited",
+              "resolved"
             ]
           },
           "actorId": {
@@ -7194,7 +6757,7 @@
               "draft",
               "open",
               "closed",
-              "resolving",
+              "resolved",
               "settled",
               "voided"
             ]
@@ -7324,233 +6887,6 @@
           "realizedPnlP"
         ],
         "additionalProperties": false
-      },
-      "CreateDisputeBody": {
-        "type": "object",
-        "properties": {
-          "reason": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 2000
-          },
-          "evidenceUrl": {
-            "nullable": true,
-            "type": "string",
-            "maxLength": 500,
-            "format": "uri"
-          }
-        },
-        "required": [
-          "reason"
-        ]
-      },
-      "Dispute": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid",
-            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-          },
-          "marketId": {
-            "type": "string",
-            "format": "uuid",
-            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-          },
-          "marketSlug": {
-            "type": "string"
-          },
-          "marketTitle": {
-            "type": "string"
-          },
-          "marketStatus": {
-            "type": "string",
-            "enum": [
-              "draft",
-              "open",
-              "closed",
-              "resolving",
-              "settled",
-              "voided"
-            ]
-          },
-          "resolvedResult": {
-            "nullable": true,
-            "type": "string",
-            "enum": [
-              "YES",
-              "NO"
-            ]
-          },
-          "reason": {
-            "type": "string"
-          },
-          "evidenceUrl": {
-            "nullable": true,
-            "type": "string"
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "open",
-              "accepted",
-              "rejected"
-            ]
-          },
-          "adminNote": {
-            "nullable": true,
-            "type": "string"
-          },
-          "reviewedAt": {
-            "nullable": true,
-            "type": "string",
-            "format": "date-time",
-            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time",
-            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
-          }
-        },
-        "required": [
-          "id",
-          "marketId",
-          "marketSlug",
-          "marketTitle",
-          "marketStatus",
-          "resolvedResult",
-          "reason",
-          "evidenceUrl",
-          "status",
-          "adminNote",
-          "reviewedAt",
-          "createdAt"
-        ],
-        "additionalProperties": false
-      },
-      "AdminDispute": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid",
-            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-          },
-          "marketId": {
-            "type": "string",
-            "format": "uuid",
-            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-          },
-          "marketSlug": {
-            "type": "string"
-          },
-          "marketTitle": {
-            "type": "string"
-          },
-          "marketStatus": {
-            "type": "string",
-            "enum": [
-              "draft",
-              "open",
-              "closed",
-              "resolving",
-              "settled",
-              "voided"
-            ]
-          },
-          "resolvedResult": {
-            "nullable": true,
-            "type": "string",
-            "enum": [
-              "YES",
-              "NO"
-            ]
-          },
-          "reason": {
-            "type": "string"
-          },
-          "evidenceUrl": {
-            "nullable": true,
-            "type": "string"
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "open",
-              "accepted",
-              "rejected"
-            ]
-          },
-          "adminNote": {
-            "nullable": true,
-            "type": "string"
-          },
-          "reviewedAt": {
-            "nullable": true,
-            "type": "string",
-            "format": "date-time",
-            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time",
-            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
-          },
-          "userId": {
-            "type": "string"
-          },
-          "nickname": {
-            "type": "string"
-          },
-          "reviewedBy": {
-            "nullable": true,
-            "type": "string"
-          },
-          "statusEventId": {
-            "nullable": true,
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "marketId",
-          "marketSlug",
-          "marketTitle",
-          "marketStatus",
-          "resolvedResult",
-          "reason",
-          "evidenceUrl",
-          "status",
-          "adminNote",
-          "reviewedAt",
-          "createdAt",
-          "userId",
-          "nickname",
-          "reviewedBy",
-          "statusEventId"
-        ],
-        "additionalProperties": false
-      },
-      "ReviewDisputeBody": {
-        "type": "object",
-        "properties": {
-          "status": {
-            "type": "string",
-            "enum": [
-              "accepted",
-              "rejected"
-            ]
-          },
-          "adminNote": {
-            "nullable": true,
-            "type": "string",
-            "maxLength": 1000
-          }
-        },
-        "required": [
-          "status"
-        ]
       }
     }
   }

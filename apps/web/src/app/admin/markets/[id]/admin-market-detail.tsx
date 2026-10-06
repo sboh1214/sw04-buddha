@@ -16,16 +16,16 @@ import {
   RadioGroup,
   Skeleton,
   Stack,
+  Table,
   Text,
   Textarea,
 } from '@chakra-ui/react';
 import { type MarketEventType, OUTCOMES, formatP, parsePAmount } from '@buddha/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation } from '@tanstack/react-query';
-import type { Route } from 'next';
 import NextLink from 'next/link';
 import { type ReactNode, useMemo, useState } from 'react';
-import { Controller, useForm, useWatch } from 'react-hook-form';
+import { Controller, useForm } from 'react-hook-form';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { listView } from '@/lib/query-client';
@@ -35,7 +35,6 @@ import {
   useApplyMarket,
   useMarketFills,
 } from '@/hooks/use-admin-markets';
-import { disputeCountsLabel } from '@/lib/admin-disputes';
 import {
   type AdminMarket,
   type Category,
@@ -49,7 +48,6 @@ import {
   MARKET_EVENT_LABEL,
   MARKET_STATUS_LABEL,
   MARKET_STATUS_PALETTE,
-  canChangeResult,
   canEditLiquidity,
   canResolve,
   canVoid,
@@ -57,12 +55,14 @@ import {
   formatBp,
   formatQuantity,
   formatYesPrice,
+  isAwaitingResolution,
   isAwaitingSettlement,
   isClosingSoon,
   isEditable,
   marketIdParam,
   marketEventRows,
   marketFormError,
+  settlementStepViews,
   transitionErrorMessage,
 } from '@/lib/market-admin';
 import {
@@ -153,8 +153,13 @@ export function AdminMarketDetail({ id }: { id: string }) {
               {copy.adminMarketClosingSoon}
             </Badge>
           )}
+          {isAwaitingResolution(data.status) && (
+            <Badge colorPalette="brand" variant="solid" data-testid="market-detail-awaiting">
+              {copy.adminMarketAwaitingResolution}
+            </Badge>
+          )}
           {isAwaitingSettlement(data.status) && (
-            <Badge colorPalette="brand" variant="solid">
+            <Badge colorPalette="brand" variant="solid" data-testid="market-detail-awaiting">
               {copy.adminMarketAwaitingSettlement}
             </Badge>
           )}
@@ -186,29 +191,10 @@ export function AdminMarketDetail({ id }: { id: string }) {
             {data.resolvedAt && (
               <Item label={copy.marketResolvedAt}>{formatKst(data.resolvedAt)}</Item>
             )}
-            {data.disputeUntil && (
-              <Item label={copy.marketDisputeUntil}>{formatKst(data.disputeUntil)}</Item>
-            )}
             {data.settledAt && (
               <Item label={copy.marketSettledAt}>{formatKst(data.settledAt)}</Item>
             )}
             {data.voidedAt && <Item label={copy.marketVoidedAt}>{formatKst(data.voidedAt)}</Item>}
-            <Item label={copy.adminMarketDisputes}>
-              <HStack gap="3" flexWrap="wrap">
-                <Text as="span" data-testid="market-dispute-counts">
-                  {disputeCountsLabel(data.disputeCounts)}
-                </Text>
-                {/* `as Route`: the typed routes know `/admin/disputes`, not the query on it. */}
-                <ChakraLink asChild fontSize="sm" colorPalette="brand" color="colorPalette.fg">
-                  <NextLink
-                    href={`/admin/disputes?marketId=${data.id}` as Route}
-                    data-testid="market-disputes-link"
-                  >
-                    {copy.adminMarketDisputesLink}
-                  </NextLink>
-                </ChakraLink>
-              </HStack>
-            </Item>
             <Item label={copy.marketCreatedAt}>{formatKst(data.createdAt)}</Item>
             <Item label={copy.marketUpdatedAt}>{formatKst(data.updatedAt)}</Item>
             <Item label={copy.marketCreatedBy}>
@@ -219,6 +205,8 @@ export function AdminMarketDetail({ id }: { id: string }) {
           </DataList.Root>
         </Card.Body>
       </Card.Root>
+
+      <SettlementStepsPanel market={data} />
 
       {/* Keyed by status, not updatedAt: a transition is the admin's own act and changes which
           fields may be edited, so the form restarts from the server's values then. updatedAt
@@ -260,17 +248,17 @@ function Item({ label, children }: { label: string; children: ReactNode }) {
 }
 
 /**
- * 열기 / 마감 / 정산 / 결과 변경 / 무효 (PLAN 12, design 3.4, 5.5). Each is a Dialog except
- * 열기, whose only refusal — blank rules — is reversible from the form below and is named in
- * its toast. The void reason is a form like every other (zodResolver), reset when the dialog
- * closes either way, so a cancelled dialog does not reopen with the old text and its error
- * lit. The resolve form lives in its own component, mounted only while its dialog is open:
- * its defaults depend on which variant opened it (the change variant preselects the result
- * on file), and a fresh mount is what makes those defaults right every time.
+ * 열기 / 마감 / 판정 / 무효 (PLAN 12, design 3.4, ADR-0046). Each is a Dialog except 열기, whose
+ * only refusal — blank rules — is reversible from the form below and is named in its toast.
+ * The void reason is a form like every other (zodResolver), reset when the dialog closes either
+ * way, so a cancelled dialog does not reopen with the old text and its error lit. The 판정 form
+ * lives in its own component, mounted only while its dialog is open, so every opening starts
+ * from an empty form. A judged market offers none of these: the 판정 is final and cannot be
+ * voided (#26 decides what may undo one).
  */
 function TransitionButtons({ market }: { market: AdminMarket }) {
   const apply = useApplyMarket(market.id);
-  const [confirm, setConfirm] = useState<'close' | 'void' | 'resolve' | 'change' | null>(null);
+  const [confirm, setConfirm] = useState<'close' | 'void' | 'resolve' | null>(null);
   const {
     register,
     handleSubmit,
@@ -362,18 +350,6 @@ function TransitionButtons({ market }: { market: AdminMarket }) {
           {copy.adminMarketResolve}
         </Button>
       )}
-      {/* `Date.now()` in render, as `isClosingSoon` above: this branch renders on the client
-          only (the admin query never runs on the server), so there is no hydration to mismatch. */}
-      {canChangeResult(market) && (
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => setConfirm('change')}
-          data-testid="market-change-result"
-        >
-          {copy.adminMarketChangeResult}
-        </Button>
-      )}
       {canVoid(market.status) && (
         <Button
           size="sm"
@@ -386,9 +362,7 @@ function TransitionButtons({ market }: { market: AdminMarket }) {
         </Button>
       )}
 
-      {(confirm === 'resolve' || confirm === 'change') && (
-        <ResolveDialog market={market} variant={confirm} onClose={closeDialog} />
-      )}
+      {confirm === 'resolve' && <ResolveDialog market={market} onClose={closeDialog} />}
 
       <ConfirmDialog
         testId="market-close"
@@ -426,27 +400,15 @@ function TransitionButtons({ market }: { market: AdminMarket }) {
 }
 
 /**
- * 정산 / 결과 변경 (PLAN 12 정산 화면, design 5.5): result by radio, note, evidence URL, and
- * the confirmation PLAN 12 asks for — "이의 기간 후 자동 확정됩니다" — with the exact instant
- * in the toast once the API has fixed it. The change variant preselects the result on file
- * and keeps its button dead until a DIFFERENT one is chosen: the API would refuse the same
- * result naming `result`, and a dead button says so before the round trip. A stale screen —
- * another admin changed it first — still meets that refusal, and `transitionErrorMessage`
- * names it. The answer is applied like every other transition (`useApplyMarket`), so the
- * status, the result and the window on the card above are the server's the moment the toast
- * shows, whatever the refetch does.
+ * 판정 (PLAN 12 정산 화면, ADR-0046): result by radio, note, evidence URL, and the confirmation
+ * that says what the click does — the result is final at once, settlement starts right away,
+ * and neither a change nor a void is possible afterwards. A stale screen (another admin judged
+ * it first) meets the API's `status` refusal, which `transitionErrorMessage` names. The answer
+ * is applied like every other transition (`useApplyMarket`), so the status, the result and the
+ * 정산 단계 rows above are the server's the moment the toast shows, whatever the refetch does.
  */
-function ResolveDialog({
-  market,
-  variant,
-  onClose,
-}: {
-  market: AdminMarket;
-  variant: 'resolve' | 'change';
-  onClose: () => void;
-}) {
+function ResolveDialog({ market, onClose }: { market: AdminMarket; onClose: () => void }) {
   const apply = useApplyMarket(market.id);
-  const changing = variant === 'change';
   const {
     control,
     register,
@@ -454,16 +416,8 @@ function ResolveDialog({
     formState: { errors },
   } = useForm<ResolveMarketFormValues, unknown, ResolveMarketFormOutput>({
     resolver: zodResolver(resolveMarketFormSchema),
-    defaultValues: {
-      ...(changing && market.resolvedResult !== null ? { result: market.resolvedResult } : {}),
-      note: '',
-      evidenceUrl: '',
-    },
+    defaultValues: { note: '', evidenceUrl: '' },
   });
-  // `useWatch`, not `watch()`: the latter is a function React Compiler cannot memoise safely
-  // (react-hooks/incompatible-library), and this is the one value the dialog re-renders on.
-  const selected = useWatch({ control, name: 'result' });
-  const unchanged = changing && selected === market.resolvedResult;
 
   const resolve = useMutation({
     mutationFn: async (values: ResolveMarketFormOutput) =>
@@ -474,14 +428,7 @@ function ResolveDialog({
         }),
       ).data,
     onSuccess: async (resolved) => {
-      toaster.create({
-        type: 'success',
-        title: changing ? copy.adminMarketResultChanged : copy.adminMarketResolved,
-        // The window as the server fixed it — the body text only promises "24시간".
-        ...(resolved.disputeUntil
-          ? { description: `${copy.adminMarketResolvedUntil} ${formatKst(resolved.disputeUntil)}` }
-          : {}),
-      });
+      toaster.create({ type: 'success', title: copy.adminMarketResolved });
       onClose();
       await apply(resolved);
     },
@@ -495,14 +442,13 @@ function ResolveDialog({
       testId="market-resolve"
       open
       onClose={onClose}
-      title={changing ? copy.adminMarketChangeResultTitle : copy.adminMarketResolveTitle}
-      confirmLabel={changing ? copy.adminMarketChangeResult : copy.adminMarketResolve}
+      title={copy.adminMarketResolveTitle}
+      confirmLabel={copy.adminMarketResolve}
       loading={resolve.isPending}
-      confirmDisabled={unchanged}
       onConfirm={() => void submit()}
     >
       <Stack gap="3">
-        <Text>{changing ? copy.adminMarketChangeResultBody : copy.adminMarketResolveBody}</Text>
+        <Text>{copy.adminMarketResolveBody}</Text>
         <Field.Root invalid={!!errors.result} required>
           <Controller
             name="result"
@@ -725,6 +671,81 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
   );
 }
 
+/**
+ * 정산 단계 (ADR-0046, D7): what the worker has done with a judged market, read-only. One row
+ * per settlement step, in the order the worker runs them; nothing at all before the 판정 or for
+ * a voided market (the API answers an empty list then, and an empty table would only say so).
+ *
+ * A failed step is the one state that needs the admin, so it is the one drawn as a SOLID badge
+ * (`no`, measured AA in theme/contrast.test.ts) — and it is never colour alone: the badge says
+ * 실패 and the row carries the error. The worker retries it on its per-minute scan without a
+ * cap; the 정산 대기 badge above stays until every step is 완료.
+ *
+ * In a ScrollArea so the five columns scroll sideways inside the card at 375px rather than
+ * widening the page; the error cell wraps rather than stretching the table.
+ */
+function SettlementStepsPanel({ market }: { market: AdminMarket }) {
+  const steps = settlementStepViews(market.settlementSteps);
+  if (steps.length === 0) return null;
+  return (
+    <Card.Root data-testid="market-settlement-steps">
+      <Card.Header>
+        <Text fontWeight="semibold">{copy.adminSettlementSteps}</Text>
+      </Card.Header>
+      <Card.Body>
+        <Table.ScrollArea>
+          <Table.Root size="sm">
+            <Table.Header>
+              <Table.Row>
+                <Table.ColumnHeader>{copy.adminSettlementStepColumn}</Table.ColumnHeader>
+                <Table.ColumnHeader>{copy.adminSettlementStepStatus}</Table.ColumnHeader>
+                <Table.ColumnHeader textAlign="end">
+                  {copy.adminSettlementStepAttempts}
+                </Table.ColumnHeader>
+                <Table.ColumnHeader>{copy.adminSettlementStepCompletedAt}</Table.ColumnHeader>
+                <Table.ColumnHeader>{copy.adminSettlementStepLastError}</Table.ColumnHeader>
+              </Table.Row>
+            </Table.Header>
+            <Table.Body>
+              {steps.map((row) => (
+                <Table.Row
+                  key={row.step}
+                  data-testid={`market-settlement-step-${row.step}`}
+                  data-status={row.failed ? 'failed' : undefined}
+                >
+                  <Table.Cell whiteSpace="nowrap">{row.label}</Table.Cell>
+                  <Table.Cell>
+                    <Badge
+                      colorPalette={row.palette}
+                      variant={row.failed ? 'solid' : 'subtle'}
+                      data-testid={`market-settlement-step-${row.step}-status`}
+                    >
+                      {row.statusLabel}
+                    </Badge>
+                  </Table.Cell>
+                  <Table.Cell textAlign="end" fontVariantNumeric="tabular-nums">
+                    {row.attempts}
+                  </Table.Cell>
+                  <Table.Cell whiteSpace="nowrap">{row.completedAt}</Table.Cell>
+                  <Table.Cell
+                    minW="48"
+                    fontFamily="mono"
+                    fontSize="xs"
+                    whiteSpace="pre-wrap"
+                    wordBreak="break-word"
+                  >
+                    {row.lastError}
+                  </Table.Cell>
+                </Table.Row>
+              ))}
+            </Table.Body>
+          </Table.Root>
+        </Table.ScrollArea>
+      </Card.Body>
+    </Card.Root>
+  );
+}
+
 function LmsrPanel({ market }: { market: AdminMarket }) {
   return (
     <Card.Root>
@@ -892,8 +913,6 @@ interface ConfirmDialogProps {
   confirmLabel: string;
   loading: boolean;
   onConfirm: () => void;
-  /** The confirm alone, dead before the request: the change variant's "same result" gate. */
-  confirmDisabled?: boolean;
   destructive?: boolean;
   children: ReactNode;
 }
@@ -912,7 +931,6 @@ function ConfirmDialog({
   confirmLabel,
   loading,
   onConfirm,
-  confirmDisabled = false,
   destructive = false,
   children,
 }: ConfirmDialogProps) {
@@ -950,7 +968,6 @@ function ConfirmDialog({
                 size="sm"
                 colorPalette={destructive ? 'no' : undefined}
                 loading={loading}
-                disabled={confirmDisabled}
                 onClick={onConfirm}
                 data-testid={`${testId}-confirm`}
               >

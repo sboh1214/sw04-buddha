@@ -13,7 +13,6 @@ export const ERROR_CODES = [
   'PRICE_MOVED',
   'DUPLICATE_REQUEST',
   'RATE_LIMITED',
-  'DISPUTE_WINDOW_CLOSED',
   'RULES_REQUIRED',
   // No brackets or quotes in the comments of this list: scripts/generate-api-doc.mjs reads it
   // with a regex. The detail shapes of the codes below are in its ERROR_NOTES.

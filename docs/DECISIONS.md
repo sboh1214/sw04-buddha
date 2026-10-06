@@ -844,7 +844,7 @@ PLAN §5.3은 거래 본문에 슬리피지 가드를 필수로 요구하고, PL
 ## ADR-0033 — 마감 · 정산 · 이의 (M5)
 
 - 날짜: 2026-09-09
-- 상태: 채택
+- 상태: 채택, 일부 대체됨(ADR-0046: 판정·이의·확정 — `statusEventId` 순서 키, 공유 트랜잭션 헬퍼, `market.close`는 유효)
 
 ### 맥락
 
@@ -1981,3 +1981,107 @@ flowchart TB
 | 결정 주인 없음 | 관리자 계정의 거래 허용        | `apps/api/src/trades/trades.controller.ts`는 `SessionGuard`만 걸어 관리자도 거래할 수 있다. #25 6-나·#36 5-가는 예측·리더보드만 다룬다                                                                                                                  | #73 착수 전 확인. #92가 답을 쓴다(한도 적용 / 면제 / 거래 금지)                                                |
 
 결정 이슈의 선택지 중 새 구현이 필요한데 담당 이슈가 없는 것은 이 표에 싣지 않는다. 그 결정 이슈의 ADR PR이 기존 이슈에 배정하거나 새 이슈로 만든다: #36 5-나 A(관리자 '순위 제외'), #37 항목 2·9·10(닉네임 정책·공개 설정 화면·소급 안내), #45 6-가 B·9-가·11-라·11-가 B·3-다(인기순·프로필 신고·재심·운영자 역할·보존 정리 잡), #52 항목 1 C·D·7-나(웹 푸시·요약 알림), #57 4-D·8-가 M3~M6, #60 3-라·3-마(신규·마감 창 API)·항목 4(`scheduled` 공개)·6-다(저유동성 카드 표시), #71 4-D·5-나 B/C·1-나 B, #73 1-마·5-다 C(가입 지급 시점 변경. #70은 가입 즉시 지급을 유지한다), #79 1-가 B/C·2-나 C/D·6-가 B.
+
+---
+
+## ADR-0046 — 판정 즉시 확정·정산 단계·이의 폐지 (#19)
+
+- 날짜: 2026-10-06
+- 상태: 채택
+
+이슈 번호 표기는 ADR-0045와 같다(`#N` = `https://github.com/sboh1214/sw04-buddha/issues/N`). 이 ADR은 #19가 기록하고, ADR-0033의 판정·이의·확정 부분을 대체한다.
+
+### 맥락
+
+**기획의 생애주기에는 이의 단계가 없다.** GD 01-01 §8은 시장 생애주기를 `Draft → Scheduled → Open → Closed → Resolved → Settled`(분기 `Cancelled`)로 정의한다. 거래가 끝나도 결과는 아직 없을 수 있어 시장은 Closed에서 결과를 기다리고("Closed ≠ Resolved"), 사전에 정한 판정 기준과 판정 출처로 결과가 정해지면 Resolved, 그 결과로 Coin 정산과 Forecast 처리가 끝나면 Settled다. 최종 결과는 사용자 의견이나 시장 확률이 아니라 판정 기준과 출처가 정한다(GD 01-01 §3.5).
+
+**판정과 정산은 다른 일이다.** HB 06 Resolution의 Buddha 적용은 "판정(무슨 일이 일어났는가)과 정산(얼마를 지급하는가)을 구분하고, 정산과 점수 계산의 완료 상태를 각각 추적"하는 것이고, HB §5는 "하나의 판정 → 두 정산 경로"(Coin 정산, Forecast 채점)를 Buddha 고유 필수로 둔다. HB 06 표의 이의 제기 행은 증거 제출·검토 주체·기한 설계를 과제로만 남겼고 미결정 질문 M-01(판정 권한·이의 기한·취소·재판정 규칙)도 답이 없다.
+
+**지금 코드(ADR-0033).** 관리자가 결과를 "제안"하면 시장은 `resolving`이 되고 24시간(`TEST_DISPUTE_WINDOW_SECONDS`) 동안 이의를 받으며, 관리자는 그 사이 결과를 바꿀 수 있다(기간 재시작). `dispute_until`이 지나면 워커의 `finalizeMarket`이 결과 확정과 Coin 지급을 한 트랜잭션에서 끝낸다 — 두 정산 경로를 나눌 자리가 없다. 이의는 `disputes` 테이블, 사용자·관리자 API 넷, 상세의 이의 섹션과 `/admin/disputes`, 오류 코드 `DISPUTE_WINDOW_CLOSED`, 레이트 리밋 버킷 `dispute`로 이루어져 있다.
+
+**오너 결정(2026-09-28, ADR-0045).** O-5: 상태는 GD 이름으로 바꾼다 — 이 ADR은 `resolving` 제거와 `resolved` 도입만 맡는다(`voided → cancelled`는 #20, `scheduled`는 #21). O-6: Coin 정산과 Forecast 채점이 **모두** 끝나야 `settled`이고 그 사이가 `resolved`이며, 단계별 완료 시각은 따로 기록해도 된다. O-7: 이의 단계를 없애고 관리자가 판정하면 곧바로 `resolved`다. O-8: 기존 이의 기능은 테이블까지 지운다. Forecast 채점은 아직 없다(#29). 판정 뒤 결과 정정과 취소 시장의 Forecast 처리는 #26이 정한다.
+
+**착수 전 확인(2026-10-06).** #19 본문 「착수 전 확인할 것」의 네 질문에 오너가 아래 D1-D8로 답했다.
+
+### 결정
+
+**1. 오너 결정 D1-D8 (2026-10-06).**
+
+| #   | 주제                  | 결정                                                                                                                                                                                                                              |
+| --- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| D1  | 정산 단계 완료 기록   | 이슈가 제안한 `markets.coin_settled_at` 열이 아니라 **테이블** `market_settlement_steps`(착수 전 확인 1의 (b)). 시도 횟수와 실패 이유를 함께 남기고, #29는 열이 아니라 값(`score`) 하나를 더한다.                                 |
+| D2  | `resolved`에서의 무효 | 불허한다(`VALIDATION_ERROR`, `details.path ['status']`). #26이 정하기 전까지 잘못된 판정은 계정별 관리자 잔고 조정(`ADMIN_ADJUST`)으로 보상한다. 이를 위한 새 코드는 없고 문서에만 적는다.                                        |
+| D3  | 배포 방식             | 한 번에 배포한다. 마이그레이션과 컨테이너 교체 사이 이전 코드가 새 스키마를 만나는 수십 초의 장애를 받아들인다(착수 전 확인 3의 (a)).                                                                                             |
+| D4  | 홈 상태 필터          | `resolved`를 '판정 완료' 한 항목으로 둔다(착수 전 확인 4의 (a)). `PUBLIC_MARKET_STATUSES`가 이미 그렇다.                                                                                                                          |
+| D5  | 단계 행 생성          | API가 판정 트랜잭션 안에서 `SETTLEMENT_STEPS`마다 `pending` 행 하나를 넣는다.                                                                                                                                                     |
+| D6  | 단계 실패             | 워커의 정산 트랜잭션은 되돌아가고, 워커가 **별도 트랜잭션**에서 시도를 기록하고(`attempts + 1`, `status = 'failed'`, `last_error` = 메시지 앞 `SETTLEMENT_STEP_ERROR_MAX`자) 오류를 다시 던진다. 재시도는 무제한이다(매 분 스캔). |
+| D7  | 관리자 노출           | `AdminMarket.settlementSteps`(관리자 DTO만, 공개 `Market`에는 없다)를 관리자 시장 상세에 읽기 전용으로 보여 준다.                                                                                                                 |
+| D8  | 이의 데이터           | 운영 데이터 확인과 백업 없이 `disputes`를 DROP한다(오너: 내부 시험 데이터).                                                                                                                                                       |
+
+**2. 상태 머신.** `draft → open → closed → resolved → settled`, 분기 `voided`(`open`·`closed`에서만, #20이 `cancelled`로 개명). `resolving`은 코드·DB·API·화면·문서에서 사라진다(과거 기록 제외, 결과 참고).
+
+```mermaid
+stateDiagram-v2
+    state "draft 초안" as draft
+    state "open 진행 중" as open
+    state "closed 거래 마감" as closed
+    state "resolved 판정 완료" as resolved
+    state "settled 정산 완료" as settled
+    state "voided 무효, 개명 예정 cancelled" as voided
+    [*] --> draft
+    draft --> open : 관리자 열기
+    open --> closed : close_at 도달 또는 관리자 마감
+    closed --> resolved : 관리자 판정 result note evidenceUrl
+    resolved --> settled : 워커, 정산 단계 모두 완료
+    open --> voided : 관리자 무효
+    closed --> voided : 관리자 무효
+    settled --> [*]
+    voided --> [*]
+```
+
+- **resolved**: 결과가 확정되었고 정산 단계가 진행 중이다. 거래 불가(`assertTradable`이 `open` 외를 `MARKET_NOT_OPEN`으로 거절), 수정 불가, 무효 불가(D2).
+- **settled**: `SETTLEMENT_STEPS`가 모두 `done`이다. 불변. 이 ADR의 단계는 `coin` 하나다.
+- Postgres enum은 `RENAME VALUE 'resolving' TO 'resolved'`로 바꿔 순서(closed와 settled 사이)가 `MARKET_STATUSES`와 계속 같다.
+
+**3. 판정 `POST /api/v1/admin/markets/:id/resolve`** (요청 `{result, note?, evidenceUrl?}`는 그대로). 한 트랜잭션: `lockMarket` → 행 `FOR UPDATE` → `status`가 `closed`가 아니면 `VALIDATION_ERROR`(`['status']`; 같은 결과로 다시 부르든 다른 결과든, `open`·`draft`·`resolved`·`settled`·`voided` 모두) → DB 시계 `now` → `market_events(type='resolved', actor_id=관리자, payload {result, note, evidenceUrl})`를 먼저 넣고 그 id를 `status_event_id`로 → `UPDATE markets SET status='resolved', resolved_result, resolved_at=now, status_event_id, updated_at=now` → 단계 행(D5, `pending`, attempts 0) → `admin_actions(market_resolve, payload {result, note, evidenceUrl, before, after})`(`changed`·`previousResult`·`disputeUntil`은 없앴다). COMMIT 뒤 best effort로 `market:status`(`resolved`)를 발행하고 `MarketJobs.scheduleFinalize(marketId, resolvedAt, now)`로 지연 0의 `market.finalize` 잡을 넣는다 — 잡 id `market.finalize.<시장 id>.<판정 ms>`(`marketFinalizeJobId(marketId, resolvedAt)`). 등록이 실패해도 매 분 스캔이 1분 안에 줍는다. 응답은 `200 AdminMarket`(`status: 'resolved'`, `settlementSteps`에 `coin` 행 `pending`). 결과 변경 경로와 `MarketJobs.cancelFinalize`, `resolve()`의 `TEST_DISPUTE_WINDOW_SECONDS` 의존은 지웠다. 잡 id에 시각을 남긴 것은 ADR-0033의 규칙(시각을 바꾼 재등록은 새 id — `removeOnFail`로 남은 실패 잡이 같은 id를 막는다)을 지키기 위해서이고, #26이 재판정을 허용해도 id가 겹치지 않는다.
+
+**4. 무효 `POST /api/v1/admin/markets/:id/void`.** `VOIDABLE_STATUSES = {open, closed}`. `resolving` 분기(`discardedResult`·`discardedDisputeUntil`, finalize 잡 취소)를 지웠다. 과거 `voided` payload의 `discardedResult`는 웹이 계속 읽는다.
+
+**5. 정산 단계 `market_settlement_steps`(D1).** PK `(market_id, step)`, `market_id` → `markets.id`(ON DELETE RESTRICT), `step varchar(20)`(`SETTLEMENT_STEPS = ['coin']`), `status varchar(20) default 'pending'`(`SETTLEMENT_STEP_STATUSES = ['pending','done','failed']`), `attempts int default 0 CHECK (>= 0)`, `completed_at timestamptz(3) NULL`, `last_error text NULL`, `created_at`·`updated_at`, CHECK `(status = 'done') = (completed_at IS NOT NULL)`. 단계·상태는 Postgres enum이 아니라 varchar + zod(`market_events.type`의 관례)라 #29가 단계를 더할 때 enum 마이그레이션(55P04 제약 포함)이 없다. append-only가 아니다(워커가 갱신한다): `buddha_app`에 SELECT/INSERT/UPDATE/DELETE. 판정 전 시장과 무효 시장(정산이 아니라 환불)에는 행이 없다. 인덱스는 PK뿐이다 — 스캔은 `markets.status='resolved'`로 거르고 단계 행은 시장 하나씩 읽는다.
+
+열 대신 테이블을 고른 이유(D1): 이슈의 제안(단계마다 `markets`의 완료 시각 열)은 조회가 단순하지만 "왜 아직 `resolved`인가"를 워커 로그 없이 답할 수 없고, 단계가 늘 때마다 `markets`에 열이 붙는다. 테이블은 HB 06의 "완료 상태를 각각 추적"을 시도 횟수와 마지막 오류까지 담고, #29의 일을 `SETTLEMENT_STEPS`에 값 하나를 더하는 것으로 줄인다.
+
+**6. 워커 `finalizeMarket(db, marketId, publish)`.**
+
+1. 한 트랜잭션: `lockMarket`, 시장 행 `FOR UPDATE`. `status !== 'resolved'`면 `{outcome: 'skipped', reason: 'not_resolved'}`(건너뛰는 이유는 이것 하나다, `not_due`는 없앴다). `resolved`인데 `resolved_result`가 NULL이면 throw(API가 한 UPDATE에서 둘을 쓰는 불변식).
+2. 시장의 단계 행을 `FOR UPDATE`로 읽고, `SETTLEMENT_STEPS` 순서로 `done`이 아닌 단계를 실행한 뒤 `done`·`completed_at = now`·`attempts + 1`로 표시한다(`last_error`는 그대로). **행이 없는 단계는 `pending`으로 본다**(방어적. 완료 행은 upsert로 쓴다, A-#19-5).
+3. `coin` 단계의 본문은 ADR-0033의 지급 코드 **그대로**다: 포지션 `(user_id, outcome)` 순 잠금, 계정별 잔고 잠금 뒤 DB 시계, `SETTLEMENT_PAYOUT`(memo `정산 지급: <제목>`), `settle()`. 원장 불변식과 `ledger.audit` 결과는 이 ADR 전후가 같다.
+4. 모든 단계가 `done`이면 `market_events(type='finalized', payload {result, settledAccounts, paidAccounts, paidP, positions})`, `status='settled'`, `settled_at = now`, `status_event_id`. 아니면 `resolved`에 머문다 — 단계가 하나인 지금은 일어나지 않지만 "모든 단계가 끝나야 `settled`"라는 조건은 이 한 곳에 둔다(O-6).
+5. COMMIT 뒤 `market:status`(`settled`), `user:balance`, `user:position`을 지금처럼 발행한다.
+6. 트랜잭션이 throw하면 새 트랜잭션에서(`lockMarket` 먼저) 실행 중이던 단계(아직 단계를 시작하기 전이면 첫 미완료 단계)에 `status='failed'`, `attempts + 1`, `last_error = message.slice(0, SETTLEMENT_STEP_ERROR_MAX)`, `updated_at`을 쓴다(`status <> 'done'` 조건). 기록은 best effort이고(실패하면 로그), 원래 오류를 다시 던져 BullMQ 잡이 실패하고 스캔이 그것을 센다(D6).
+
+멱등성은 상태 확인(`settled`면 건너뜀), `done` 단계 건너뛰기, `positions.settled = false` 필터의 세 겹이다. `finalizeDueMarkets`는 `status='resolved'`를 `resolved_at, id` 순으로 최대 `MARKET_SCAN_BATCH_MAX`(500)건 처리하고 시장별 격리(`runScan`, A-M5-15)를 유지한다. 잡 이름 `market.finalize`와 스케줄러 id `market-finalize-scan`은 **바꾸지 않았다** — Redis에 영속된 스케줄러와 배포 시점의 지연 잡이 핸들러 없는 이름이 되어 매 분 `UnrecoverableError`로 실패하기 때문이다. 이 ADR에서는 모든 단계가 시장 락 아래 한 트랜잭션에서 돈다. 단계별 트랜잭션 분리는 #29가 정한다.
+
+**7. 실시간·DTO.** `market:status`는 `{type, marketId, status, resolvedResult, statusEventId, ts}`다(`disputeUntil` 삭제). API가 `resolved`를, 워커가 `settled`를 발행하고 둘 다 `statusEventId`로 순서가 정해져 도착 순서가 바뀌어도 웹은 `settled`를 남긴다(ADR-0033의 순서 키는 유효). 공개 `Market.disputeUntil`, `AdminMarket.disputeCounts`를 지우고 `AdminMarket.settlementSteps: AdminSettlementStep[]`(`{step, status, attempts, completedAt, lastError, updatedAt}`, `SETTLEMENT_STEPS` 순서, 판정 전·무효 시장은 빈 배열)를 더했다(D7). `PUBLIC_MARKET_STATUSES`는 `open, closed, resolved, settled, voided`(D4). `MARKET_EVENT_TYPES`에 `resolved`를 더하고 `resolve_proposed`·`result_changed`는 과거 행을 읽기 위한 legacy로 남겼다.
+
+**8. 화면.** 상태 라벨 `closed` '마감' → '거래 마감'(O-5 용어. 카운트다운의 '마감'은 다른 키다), `resolved` '판정 완료'(팔레트 orange), `settled` '정산 완료'. 공개 상세의 `resolved` 안내는 '결과가 판정되었습니다. 정산을 진행하고 있습니다.'와 결과 행이고, 이의 섹션·'이의 마감'·'정산 예정' 행은 없다(`RulesSection`의 `settlementAt` prop 삭제 — 일정 표시는 #22). 관리자 목록·상세는 `closed`에 '판정 대기', `resolved`에 '정산 대기' 배지를 단다(`resolved`가 오래 남으면 정산 실패의 신호다). 판정 대화상자는 '결과를 판정합니다'와 "판정은 즉시 확정되고 바로 정산이 시작됩니다. 판정한 뒤에는 결과를 바꾸거나 무효로 할 수 없습니다."이고 결과 변경 버튼은 없다. 관리자 시장 상세의 '정산 단계' 표(D7)는 단계(`coin` → '포지션 정산')·상태(대기/완료/실패)·시도·완료 시각·마지막 오류를 읽기 전용으로 보인다. 화면의 재화 단위 'P'(#13)와 확인 버튼 '정산' → '판정'(#14)은 이 ADR 밖이다.
+
+**9. PLAN 개정(O-22).** §1.3 표 '시장 생성/정산' 행, §5.2 상태 머신, §5.5(제목 "마감 · 판정 · 정산"), §6.2(`markets.status`, `dispute_until` 삭제, `market_settlement_steps` 추가, `disputes` 삭제, `market_events.type`·`admin_actions.type`), §6.3, §7.2·§7.3 라우트 표, §7.4, §8 `market:status`, §9 `market.finalize` 행과 실패 기록, §11.3, §11.4, §12, §15 env 예시, 부록 A를 고쳤다. §13 M5는 과거 기록이라 본문을 두고 한 줄만 덧붙였다. PLAN이 11줄 짧아져 `docs/QUESTIONS.md`「정리 (M6) — PLAN 드리프트」의 줄 번호를 다시 매기고 이의 기간 행을 지웠다.
+
+### 결과
+
+**1. 지운 것(O-8).** DB: `disputes` 테이블과 `dispute_status` 타입, `markets.dispute_until`(팩토리 `createDispute`·`disputeUntil` 옵션 포함). shared: `dispute.ts`(+test), `DISPUTE_STATUSES`, `DISPUTE_WINDOW_SECONDS_DEFAULT`·`DISPUTE_REASON_MAX`·`DISPUTE_EVIDENCE_URL_MAX`·`DISPUTE_ADMIN_NOTE_MAX`, 오류 코드 `DISPUTE_WINDOW_CLOSED`, 레이트 리밋 버킷 `dispute`, admin action 타입 `dispute_review`. API: `apps/api/src/disputes/` 전체와 라우트 넷(`POST /api/v1/markets/:id/disputes`, `GET /api/v1/me/disputes`, `GET /api/v1/admin/disputes`, `PATCH /api/v1/admin/disputes/:id` — 이제 404), `DISPUTE_WINDOW_CLOSED → 409` 매핑, `toAdminMarket()`의 이의 집계, `MarketJobs.cancelFinalize`, env `TEST_DISPUTE_WINDOW_SECONDS`(`.env.example`·`env.ts`·`auth.module.ts`·`turbo.json`·CI). 운영 `.env`에 남은 값은 `envSchema`가 모르는 키로 버린다. 웹: 상세의 이의 섹션, `/admin/disputes`와 내비 항목, `lib/dispute.ts`·`lib/admin-disputes.ts`, `hooks/use-disputes.ts`·`hooks/use-admin-disputes.ts`, `DISPUTES_KEY`와 `PRIVATE_QUERY_ROOTS`의 `'disputes'`, 이의 문구. e2e는 이의 기간을 기다리지 않는다(워커 프로브가 없을 때의 건너뜀만 남는다). OpenAPI·api-client·`docs/API.md`는 `pnpm api:openapi`로 다시 만들었다.
+
+**2. 마이그레이션 0016과 운영 데이터.** `0016_resolved_status_settlement_steps.sql`은 `drizzle-kit generate` 뒤 손으로 고쳤다(0008의 선례). drizzle-kit은 enum 값 삭제를 "열을 text로 → 타입 재생성 → 캐스트"로 만들어 `resolving` 행에서 캐스트 오류가 나고 테이블과 상태 인덱스를 다시 쓴다. 대신 `RENAME VALUE`는 메타데이터만 바꾸고 행을 그 자리에서 `resolved`로 만든다. 값 **추가**가 아니므로 같은 트랜잭션의 백필에서 그 값을 써도 된다(55P04 대상이 아니다). 순서는 `RENAME VALUE` → `DROP COLUMN dispute_until` → `CREATE TABLE market_settlement_steps` → 백필(`settled` 시장은 `coin` `done`, `completed_at = COALESCE(settled_at, updated_at)`, attempts 1; `resolved`(옛 `resolving`) 시장은 `coin` `pending`; `voided`는 없음) → `DROP TABLE disputes` → `DROP TYPE dispute_status`이고 마이그레이터가 한 트랜잭션에서 돌린다.
+
+- `disputes` 행은 보관 없이 사라진다(D8). 이의 마감 시각은 과거 `resolve_proposed`·`result_changed` 이벤트 payload(`disputeUntil`)에 남는다. append-only 기록(`market_events`의 두 legacy 타입, `admin_actions`의 `dispute_review` 행)은 건드리지 않았다.
+- 배포 시점에 `resolving`이던 시장은 `resolved`가 되고 **배포 뒤 첫 스캔(1분 안)에 정산된다** — 남아 있던 이의 기간은 그 자리에서 끝난다(O-7). 이전 코드가 걸어 둔 지연 잡 `market.finalize.<id>.<ms>`는 새 핸들러가 받고 이미 `settled`면 건너뛴다.
+- 배포 창(D3): `deploy/deploy.sh`가 `migrate`를 먼저 돌리고 컨테이너를 바꾸는 수십 초 동안 이전 API·워커가 `markets`를 읽는 모든 경로(drizzle의 `select()`는 열을 이름으로 나열한다)가 없는 열 `dispute_until` 때문에 500·잡 실패가 된다. 쓰기는 트랜잭션 안에서 실패해 데이터는 상하지 않고 새 컨테이너가 뜨면 풀린다. 그때 열려 있던 이전 번들의 탭은 모르는 상태 `resolved`의 이벤트를 `safeParse`에서 버리고 이어지는 `settled`는 받는다(새로고침하면 정상).
+
+**3. 잠정 규칙과 QUESTIONS.** 채점이 없는 동안 `settled` = Coin 정산 완료(A-#19-1, O-6 잠정). `resolved`는 무효할 수 없고 잘못된 판정은 #26 전까지 `ADMIN_ADJUST`로 보상한다(A-#19-2). 정산 실패 기록·관리자 노출·빈 단계 행·배포·홈 필터·과거 기록은 A-#19-3\~8. 이의 폐지로 무의미해진 Q-M5-1·2·5·6·8·9를 해결(폐지)로 닫고, A-M5-2·5·6·7·10·11·13·14·16·18·20·21·22·23을 대체됨(#19)으로, A-M5-3은 finalize 부분만 일부 대체로 표시했다. Q-M5-3(#24)·Q-M5-10(#22)·Q-M4-5(#22, #26 항목 6)는 열어 두었다.
+
+**4. #29 인계(채점 단계).** #29는 `SETTLEMENT_STEPS`에 `'score'`를 덧붙인다. 판정이 `SETTLEMENT_STEPS`를 순회해 행을 만들고(D5) 워커가 같은 목록을 순서대로 돌므로 그것만으로 새 판정에는 두 행이 생기고, "모든 단계가 `done`이어야 `settled`"라는 판정은 `finalizeMarket` 한 곳(결정 6의 4)에 이미 있다. 그 순간 `resolved`인 시장은 행이 없는 `score`를 `pending`으로 보고 실행한다(A-#19-5). 채점 단계의 실행 방식(같은 잡 안인지 별도 잡인지, 별도 트랜잭션인지)과 `coin`과의 순서, `forecast_scores` 스키마는 #29가 정한다. #29 본문의 제안(채점을 먼저 별도 트랜잭션으로, Coin 정산과 `settled` 전이를 뒤에 한 트랜잭션으로)이면 포지션 `settled=true`와 시장 `settled`가 함께 커밋되어 `positionListStatusFor`(웹)의 전제가 유지된다. 반대로 `coin`을 먼저 끝내 "Coin은 끝났는데 `resolved`"인 구간이 생기면 `positionListStatusFor`, 포트폴리오의 정산 이력, 시장 상세 안내를 다시 봐야 한다.
+
+**5. 다른 이슈에 넘긴 것.** #20(`voided → cancelled`, `/void → /cancel`)과 #21(`scheduled`)은 같은 enum과 상태 머신을 이어서 고친다. #22의 일정 패널이 지운 '정산 예정' 자리를 대신한다. #24는 새 `resolved` 이벤트 payload `{result, note, evidenceUrl}`와 legacy `resolve_proposed`·`result_changed`를 함께 읽어 판정 기록을 공개한다(Q-M5-3). #26은 판정 뒤 정정(재판정)·취소 시장 처리·판정 지연 안내를 정한다 — 그때 D2의 무효 불허와 `ADMIN_ADJUST` 보상을 다시 본다. #53은 `settled` 전이를 알림의 계기로 쓴다.
+
+**6. ADR-0033.** 상태 줄에 '일부 대체됨(ADR-0046)'을 이어 썼다(덮어쓰지 않는다, ADR-0045 결과 2). `statusEventId` 순서 키, 공유 트랜잭션 헬퍼(`lockMarket`·`clockTimestamp`), `market.close`(지연 잡 + 매 분 스캔), 워커의 발행 연결과 `/health`, 스캔 격리는 그대로 유효하다. 판정(제안·결과 변경), 이의, 무효의 `resolving` 분기, 이의 마감 기준의 확정은 이 ADR이 대체한다. ADR-0033 본문은 고치지 않았다.

@@ -58,11 +58,11 @@ const HANDLERS: Partial<Record<string, Handler>> = {
   [JOB_NAMES.marketFinalize]: async (job, { db, publish, logger }) => {
     const { marketId } = parseMarketJob(job);
     if (marketId) {
-      const result = await finalizeMarket(db, marketId, publish);
+      const result = await finalizeMarket(db, marketId, publish, logger);
       logger.info(toLoggable(result), 'market finalize');
       return toLoggable(result);
     }
-    const { settled, skipped, failed, failures } = await finalizeDueMarkets(db, publish);
+    const { settled, skipped, failed, failures } = await finalizeDueMarkets(db, publish, logger);
     return reportScan({ settled, skipped, failed }, failures, 'market finalize', settled, logger);
   },
   [JOB_NAMES.ledgerAudit]: async (_job, { auditDb, logger }) => {
@@ -85,7 +85,7 @@ const HANDLERS: Partial<Record<string, Handler>> = {
  * format of this project uses.
  */
 function toLoggable(result: Awaited<ReturnType<typeof finalizeMarket>>): JobResult {
-  if (result.outcome === 'skipped') return result;
+  if (result.outcome !== 'settled') return result;
   const { paidP, settledAt, ...rest } = result;
   return { ...rest, paidP: paidP.toString(), settledAt: settledAt.toISOString() };
 }

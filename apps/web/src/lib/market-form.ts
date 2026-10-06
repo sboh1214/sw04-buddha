@@ -179,17 +179,16 @@ export const voidMarketFormSchema = z.object({
 export type VoidMarketFormValues = z.infer<typeof voidMarketFormSchema>;
 
 /**
- * The 정산 / 결과 변경 dialog (PLAN 12 정산 화면, design 5.5): the result is the one required
- * field, chosen by radio, so an untouched form holds no `result` at all rather than a
- * sentinel. The field's INPUT therefore admits `undefined` and its OUTPUT does not — the
+ * The 판정 dialog (PLAN 12 정산 화면, ADR-0046): the result is the one required field, chosen
+ * by radio, so an untouched form holds no `result` at all rather than a sentinel. The field's
+ * INPUT therefore admits `undefined` and its OUTPUT does not — the
  * `.optional().pipe(...)` is what lets `zodResolver` type the form's values one way and the
  * submitted values the other (`ResolveMarketFormValues` / `ResolveMarketFormOutput`), so the
  * dialog says 결과를 선택해 주세요 for a blank and the submit handler still receives a result
  * it need not re-check. Note and evidence are the strings the inputs hold; blanks become null
  * on the wire (`toResolveMarketBody`), and the API bounds both the same way
- * (`resolveMarketBodySchema`). Whether the chosen result differs from the current one is the
- * dialog's business, not the schema's: the change variant disables its button for the result
- * on screen, and the API refuses a stale one naming `result` (`transitionErrorMessage`).
+ * (`resolveMarketBodySchema`). There is no "same result" rule: a market is judged once, and the
+ * API refuses a second 판정 naming `status` (`transitionErrorMessage`).
  */
 export const resolveMarketFormSchema = z.object({
   result: z

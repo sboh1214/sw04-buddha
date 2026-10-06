@@ -71,7 +71,6 @@ const detail: Market = {
   rules: '한국은행 발표 기준.',
   resolutionSource: null,
   resolvedAt: null,
-  disputeUntil: null,
   settledAt: null,
   voidedAt: null,
 };
@@ -93,7 +92,6 @@ const statusEvent = (patch: Partial<MarketStatusEvent> = {}): MarketStatusEvent 
   marketId: ID,
   status: 'closed',
   resolvedResult: null,
-  disputeUntil: null,
   // One transition after the `opened` the fixtures hold, so the default event is newer.
   statusEventId: '3',
   ts: '2026-09-07T00:00:00.000Z',
@@ -198,51 +196,79 @@ describe('applyTick', () => {
 });
 
 describe('applyStatus', () => {
-  /** The market after the admin proposed 예: `resolve_proposed` is event 4 of this market. */
-  const resolving: Market = {
+  /** The market after the admin judged 예: the `resolved` event is event 4 of this market. */
+  const resolved: Market = {
     ...detail,
-    status: 'resolving',
+    status: 'resolved',
     resolvedResult: 'YES',
-    disputeUntil: '2026-10-02T00:00:00.000Z',
     statusEventId: '4',
   };
 
-  it('replaces the result and the deadline, so a void clears both', () => {
-    const next = applyStatus(resolving, statusEvent({ status: 'voided', statusEventId: '5' }));
+  it('walks closed → resolved → settled, each event carrying the result its transition wrote', () => {
+    // ADR-0046: the 판정 is final at once (`resolved`, published by the API) and the worker's
+    // settlement follows moments later (`settled`). Every row on screen holds exactly the
+    // status group the latest transition delivered — nothing else (the detail has no dispute
+    // deadline to carry any more).
+    const closed = applyStatus(detail, statusEvent({ status: 'closed', statusEventId: '3' }));
+    expect(closed).toEqual({ ...detail, status: 'closed', statusEventId: '3' });
+    const judged = applyStatus(
+      closed,
+      statusEvent({ status: 'resolved', resolvedResult: 'YES', statusEventId: '4' }),
+    );
+    expect(judged).toEqual(resolved);
+    const settled = applyStatus(
+      judged,
+      statusEvent({ status: 'settled', resolvedResult: 'YES', statusEventId: '5' }),
+    );
+    expect(settled).toEqual({ ...resolved, status: 'settled', statusEventId: '5' });
+    expect(settled).not.toHaveProperty('disputeUntil');
+  });
+
+  it('keeps settled when the judgement arrives after it', () => {
+    // The API publishes `resolved` and the worker `settled` from two processes, moments apart,
+    // so the socket may deliver them in either order. The key decides: `resolved` (4) is not
+    // newer than `settled` (5), and the screen stays on 정산 완료.
+    const settled: Market = { ...resolved, status: 'settled', statusEventId: '5' };
+    expect(
+      applyStatus(
+        settled,
+        statusEvent({ status: 'resolved', resolvedResult: 'YES', statusEventId: '4' }),
+      ),
+    ).toBeUndefined();
+  });
+
+  it('replaces the result, so a void clears the one a row held', () => {
+    // Only `open` and `closed` can be voided now (ADR-0046), and neither holds a result — but
+    // the reducer replaces rather than merges, so an event never inherits a result its own
+    // transition did not carry.
+    const next = applyStatus(resolved, statusEvent({ status: 'voided', statusEventId: '5' }));
     expect(next?.status).toBe('voided');
     expect(next?.resolvedResult).toBeNull();
-    expect(next?.disputeUntil).toBeNull();
     expect(next?.statusEventId).toBe('5');
   });
 
-  it('takes a result change — the same status under a newer key — with its result and deadline', () => {
-    // THE DAY the rank order stopped holding (A-M3-19): `result_changed` repeats `resolving`,
-    // and rank alone could only drop it — leaving 결과 예 on screen after the admin said 아니오,
-    // with an 이의 마감 that had already been restarted server-side. The event id says it is a
-    // LATER transition, so the whole status group is replaced.
-    const changed = statusEvent({
-      status: 'resolving',
+  it('takes the same status under a newer key as a later transition', () => {
+    // THE DAY the rank order stopped holding (A-M3-19): M5's legacy `result_changed` repeated a
+    // status with a new result, and rank alone could only drop it. The event id says it is a
+    // LATER transition, so the whole status group is replaced — a rule the reducer keeps for
+    // any transition that repeats a status.
+    const repeated = statusEvent({ status: 'resolved', resolvedResult: 'NO', statusEventId: '5' });
+    expect(applyStatus(resolved, repeated)).toEqual({
+      ...resolved,
       resolvedResult: 'NO',
-      disputeUntil: '2026-10-03T00:00:00.000Z',
-      statusEventId: '5',
-    });
-    expect(applyStatus(resolving, changed)).toEqual({
-      ...resolving,
-      resolvedResult: 'NO',
-      disputeUntil: '2026-10-03T00:00:00.000Z',
       statusEventId: '5',
     });
   });
 
   it('drops an equal or lower key even when the status itself ranks higher', () => {
     // Equal is a duplicate and lower is late, whatever the status says: a `settled` under key 4
-    // cannot be newer than the `resolving` key 4 wrote, and a status is not a counter. The
+    // cannot be newer than the `resolved` key 4 wrote, and a status is not a counter. The
     // out-of-band cases — another market, an empty cache — write nothing either.
     expect(
-      applyStatus(resolving, statusEvent({ status: 'settled', statusEventId: '4' })),
+      applyStatus(resolved, statusEvent({ status: 'settled', statusEventId: '4' })),
     ).toBeUndefined();
     expect(
-      applyStatus(resolving, statusEvent({ status: 'settled', statusEventId: '3' })),
+      applyStatus(resolved, statusEvent({ status: 'settled', statusEventId: '3' })),
     ).toBeUndefined();
     expect(applyStatus(detail, statusEvent({ marketId: OTHER_ID }))).toBeUndefined();
     expect(applyStatus(undefined, statusEvent())).toBeUndefined();
@@ -280,19 +306,27 @@ describe('applyStatus', () => {
     expect(applyStatus(detail, statusEvent({ status: 'closed' }))?.status).toBe('closed');
   });
 
-  it('never gives a card a dispute deadline it has no field for', () => {
-    const proposed = statusEvent({
-      status: 'resolving',
-      resolvedResult: 'YES',
-      disputeUntil: '2026-10-02T00:00:00.000Z',
-      statusEventId: '4',
-    });
-    expect(applyStatus(card, proposed)).toEqual({
+  it('moves a card by the same status group, and nothing else', () => {
+    const judged = statusEvent({ status: 'resolved', resolvedResult: 'YES', statusEventId: '4' });
+    expect(applyStatus(card, judged)).toEqual({
       ...card,
-      status: 'resolving',
+      status: 'resolved',
       resolvedResult: 'YES',
       statusEventId: '4',
     });
+  });
+
+  it('ignores a disputeUntil an old publisher still sends', () => {
+    // During the deploy window an API or worker built before ADR-0046 may still publish the
+    // field; `marketStatusEventSchema` strips it on parse, and the reducer never reads it, so
+    // the row gains no field the DTO no longer has.
+    const legacy = {
+      ...statusEvent({ status: 'settled', resolvedResult: 'NO', statusEventId: '5' }),
+      disputeUntil: '2026-10-02T00:00:00.000Z',
+    } as MarketStatusEvent;
+    const next = applyStatus(detail, legacy);
+    expect(next?.status).toBe('settled');
+    expect(next).not.toHaveProperty('disputeUntil');
   });
 });
 
@@ -344,36 +378,30 @@ describe('joinMarket', () => {
     expect(joinMarket(detail, closed).status).toBe('closed');
   });
 
-  it('keeps the higher key with its result and deadline, whatever the status says', () => {
-    // THE RACE the key exists for: the admin changes 예 to 아니오 (`result_changed`, key 5) and a
-    // `GET /markets/:id` that left BEFORE it lands after the socket applied it. Both snapshots
-    // say `resolving`, so rank sees a tie and the late answer would restore 예 with the old
-    // deadline; the key says which `resolving` is later. The group moves as one: a row that kept
-    // the newer key with the older result would be a transition that never happened.
-    const proposed: Market = {
+  it('keeps the higher key with its result, whatever the status says', () => {
+    // THE RACE the key exists for: the socket delivered the worker's `settled` (key 5), and a
+    // `GET /markets/:id` that left before the 판정 lands after it — `closed`, no result. The group
+    // moves as one: a row that kept `settled` with the snapshot's null result would badge
+    // 정산 완료 over no answer at all.
+    const closed: Market = { ...detail, status: 'closed', statusEventId: '3' };
+    const settled: Market = {
       ...detail,
-      status: 'resolving',
-      resolvedResult: 'YES',
-      disputeUntil: '2026-10-02T00:00:00.000Z',
-      statusEventId: '4',
-    };
-    const changed: Market = {
-      ...proposed,
+      status: 'settled',
       resolvedResult: 'NO',
-      disputeUntil: '2026-10-03T00:00:00.000Z',
       statusEventId: '5',
     };
-    for (const joined of [joinMarket(changed, proposed), joinMarket(proposed, changed)]) {
+    for (const joined of [joinMarket(settled, closed), joinMarket(closed, settled)]) {
+      expect(joined.status).toBe('settled');
       expect(joined.statusEventId).toBe('5');
       expect(joined.resolvedResult).toBe('NO');
-      expect(joined.disputeUntil).toBe('2026-10-03T00:00:00.000Z');
     }
     // And the key, not the status, decides. Synthetic — `settled` is terminal, so no market ever
     // produces this pair — but it pins that the status is never consulted while both sides carry
     // a key: a lower key is an earlier commit, and the row follows the commit.
-    const staleSettled: Market = { ...proposed, status: 'settled', statusEventId: '4' };
-    expect(joinMarket(changed, staleSettled).status).toBe('resolving');
-    expect(joinMarket(staleSettled, changed).status).toBe('resolving');
+    const resolved: Market = { ...settled, status: 'resolved', statusEventId: '6' };
+    const staleSettled: Market = { ...settled, statusEventId: '4' };
+    expect(joinMarket(resolved, staleSettled).status).toBe('resolved');
+    expect(joinMarket(staleSettled, resolved).status).toBe('resolved');
   });
 
   it('falls back to rank for a snapshot with no key, so a factory row still joins', () => {

@@ -120,14 +120,11 @@ export default async function MarketPage({
             now={detailWindowEnd(series)}
             initialOutcome={initialOutcome}
           >
-            {/* PLAN 11.1's Kalshi principle: 정산 기준 is never collapsed on the detail.
-                `disputeUntil` is null until a result is proposed and STAYS set through the
-                settle (only the void clears it, A-M3-23), so 정산 예정 is drawn behind
-                `disputeDeadlineShown` — exactly while the market is resolving, which is where
-                the instant is still ahead (PLAN 17 Q8 stays closed until then). The row fetched
-                here is the FALLBACK, not the source: the section follows the live cache so an
-                admin's edit to the rules or the close time cannot leave this panel describing a
-                market the countdown above has already moved past. */}
+            {/* PLAN 11.1's Kalshi principle: 정산 기준 is never collapsed on the detail. It
+                promises no 판정 schedule (#22's '일정' panel will). The row fetched here is the
+                FALLBACK, not the source: the section follows the live cache so an admin's edit
+                to the rules or the close time cannot leave this panel describing a market the
+                countdown above has already moved past. */}
             <LiveRulesSection fallback={market} />
           </MarketDetail>
         </HydrationBoundary>

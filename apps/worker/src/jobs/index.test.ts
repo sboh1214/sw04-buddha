@@ -30,7 +30,6 @@ import { type Publish } from '../realtime.js';
 import { createProcessor } from './index.js';
 
 const MINUTE_MS = 60_000;
-const DAY_MS = 24 * 60 * 60 * 1000;
 const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 interface JobStub {
@@ -78,16 +77,23 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
     return row!;
   }
 
-  /** A resolving market whose dispute window closed a minute ago. */
-  async function dueResolving() {
-    const disputeUntil = new Date(Date.now() - MINUTE_MS);
+  /** A market judged YES a minute ago, with the pending step row the judgement writes. */
+  async function judged() {
+    const resolvedAt = new Date(Date.now() - MINUTE_MS);
     return createMarket(t.db, {
-      status: 'resolving',
-      closeAt: new Date(disputeUntil.getTime() - DAY_MS - MINUTE_MS),
+      status: 'resolved',
+      closeAt: new Date(resolvedAt.getTime() - MINUTE_MS),
       resolvedResult: 'YES',
-      resolvedAt: new Date(disputeUntil.getTime() - DAY_MS),
-      disputeUntil,
+      resolvedAt,
     });
+  }
+
+  async function stepOf(marketId: string) {
+    const [row] = await t.db
+      .select()
+      .from(schema.marketSettlementSteps)
+      .where(eq(schema.marketSettlementSteps.marketId, marketId));
+    return row!;
   }
 
   it('market.close without a market id is the scan: closes what is due and returns the counts', async () => {
@@ -160,7 +166,7 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
   });
 
   it('market.finalize with a market id returns a JSON-safe result: paidP a decimal string, settledAt ISO', async () => {
-    const market = await dueResolving();
+    const market = await judged();
     const alice = (await createUser(t.db, { balanceP: 10_000n })).user.id;
     await createPosition(t.db, { userId: alice, marketId: market.id, outcome: 'YES', qty: 3 });
 
@@ -192,18 +198,18 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
 
     // A second run is the skip, and the skip is JSON as it stands.
     const again = await run({ name: JOB_NAMES.marketFinalize, data: { marketId: market.id } });
-    expect(again).toEqual({ outcome: 'skipped', marketId: market.id, reason: 'not_resolving' });
+    expect(again).toEqual({ outcome: 'skipped', marketId: market.id, reason: 'not_resolved' });
     expect(() => JSON.stringify(again)).not.toThrow();
   });
 
   it('market.finalize scan with a failing market: JSON-safe counts, and one error line per failure', async () => {
     // A winning holder without a balance row poisons the market (market-finalize.ts throws,
     // the transaction rolls back); the scan reports it instead of failing the job.
-    const poisoned = await dueResolving();
+    const poisoned = await judged();
     const alice = (await createUser(t.db, { balanceP: 10_000n })).user.id;
     await createPosition(t.db, { userId: alice, marketId: poisoned.id, outcome: 'YES', qty: 2 });
     await t.db.delete(schema.balances).where(eq(schema.balances.userId, alice));
-    const healthy = await dueResolving();
+    const healthy = await judged();
 
     const result = await run({ name: JOB_NAMES.marketFinalize, data: {} });
     // toEqual, not toMatchObject: the thrown value itself must NOT be in what BullMQ stores.
@@ -216,8 +222,12 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
       ],
     });
     expect(() => JSON.stringify(result)).not.toThrow();
-    expect((await marketRow(poisoned.id)).status).toBe('resolving');
+    expect((await marketRow(poisoned.id)).status).toBe('resolved');
     expect((await marketRow(healthy.id)).status).toBe('settled');
+    // The handler hands its logger down, and the failure record went in without needing it:
+    // the step says why, and the only error line is the scan's own (below).
+    expect(await stepOf(poisoned.id)).toMatchObject({ status: 'failed', attempts: 1 });
+    expect(await stepOf(healthy.id)).toMatchObject({ status: 'done', attempts: 1 });
 
     const errors = logs.filter((line) => line.level === 50);
     expect(errors).toHaveLength(1);

@@ -41,22 +41,6 @@ export const LEADERBOARD_KEY = ['leaderboard'] as const;
  */
 export const POSITIONS_KEY = ['positions'] as const;
 export const ORDERS_KEY = ['orders'] as const;
-/**
- * The account's own disputes (M5). Session-scoped like the two above, and a ROOT of its own
- * rather than a segment under `['me']`: filing one invalidates every list of the account's
- * disputes and nothing else, and a prefix invalidation under `['me']` would also restart the
- * profile and the balance behind the nav chip for a write that moved neither.
- */
-export const DISPUTES_KEY = ['disputes'] as const;
-
-/**
- * The one dispute the account may hold on one market — `GET /me/disputes?marketId=` answers at
- * most one row (UNIQUE `(market_id, user_id)`), so the entry holds `Dispute | null`. Keyed on
- * the canonical lower-cased uuid for the reason `marketKey` is (A-M3-29): the answer the file
- * mutation seeds carries the row's own id, and it must land on the entry the section reads.
- */
-export const myDisputesKey = (marketId: string) =>
-  [...DISPUTES_KEY, 'mine', marketId.toLowerCase()] as const;
 
 /**
  * The public list's filter set, which IS its cache key. Normalised once, on the server
@@ -129,7 +113,6 @@ export const PRIVATE_QUERY_ROOTS: ReadonlySet<string> = new Set([
   'me',
   'positions',
   'orders',
-  'disputes',
   'ledger',
   'payments',
   'charge-packages',

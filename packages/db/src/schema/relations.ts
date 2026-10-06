@@ -11,10 +11,10 @@ import { balances } from './balances.js';
 import { categories } from './categories.js';
 import { chargePackages } from './charge-packages.js';
 import { couponRedemptions, coupons } from './coupons.js';
-import { disputes } from './disputes.js';
 import { fills } from './fills.js';
 import { ledgerEntries } from './ledger.js';
 import { marketEvents } from './market-events.js';
+import { marketSettlementSteps } from './market-settlement-steps.js';
 import { markets } from './markets.js';
 import { orders } from './orders.js';
 import { paymentEvents } from './payment-events.js';
@@ -88,8 +88,8 @@ export const marketsRelations = relations(markets, ({ one, many }) => ({
   fills: many(fills),
   positions: many(positions),
   priceTicks: many(priceTicks),
-  disputes: many(disputes),
   events: many(marketEvents),
+  settlementSteps: many(marketSettlementSteps),
 }));
 
 export const ordersRelations = relations(orders, ({ one, many }) => ({
@@ -122,10 +122,8 @@ export const priceTicksRelations = relations(priceTicks, ({ one }) => ({
   market: one(markets, { fields: [priceTicks.marketId], references: [markets.id] }),
 }));
 
-export const disputesRelations = relations(disputes, ({ one }) => ({
-  market: one(markets, { fields: [disputes.marketId], references: [markets.id] }),
-  user: one(user, { fields: [disputes.userId], references: [user.id] }),
-  profile: one(profiles, { fields: [disputes.userId], references: [profiles.userId] }),
+export const marketSettlementStepsRelations = relations(marketSettlementSteps, ({ one }) => ({
+  market: one(markets, { fields: [marketSettlementSteps.marketId], references: [markets.id] }),
 }));
 
 export const marketEventsRelations = relations(marketEvents, ({ one }) => ({
@@ -146,7 +144,6 @@ export const userRelations = relations(user, ({ one, many }) => ({
   payments: many(payments),
   orders: many(orders),
   positions: many(positions),
-  disputes: many(disputes),
   createdMarkets: many(markets),
   adminActions: many(adminActions),
 }));

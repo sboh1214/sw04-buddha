@@ -1,11 +1,13 @@
 import {
   AUDIT_FAILURE_KINDS,
+  type AdminSettlementStep,
   type AuditFailureKind,
-  type DisputeStatus,
   MINUS_SIGN,
   type MarketEventType,
   type MarketStatus,
   type PaymentStatus,
+  type SettlementStep,
+  type SettlementStepStatus,
   formatP,
   outcomeSchema,
   pAmountSchema,
@@ -18,27 +20,30 @@ import { type ApiError, isApiError, validationField } from './api';
 import { formatKst } from './datetime';
 
 /**
- * Pure helpers behind the market screens: status and event labels, the two list badges (PLAN
- * 12), and the number formats the public cards, the detail header and the trade panel share
- * with the admin screens. No domain maths lives here — probabilities and P come from the API
- * and @buddha/shared (PLAN 11.5).
+ * Pure helpers behind the market screens: status and event labels, the list badges (PLAN 12),
+ * the admin's settlement-step rows (ADR-0046), and the number formats the public cards, the
+ * detail header and the trade panel share with the admin screens. No domain maths lives here —
+ * probabilities and P come from the API and @buddha/shared (PLAN 11.5).
  */
 
 export const MARKET_STATUS_LABEL: Record<MarketStatus, string> = {
   draft: copy.marketStatusDraft,
   open: copy.marketStatusOpen,
   closed: copy.marketStatusClosed,
-  resolving: copy.marketStatusResolving,
+  resolved: copy.marketStatusResolved,
   settled: copy.marketStatusSettled,
   voided: copy.marketStatusVoided,
 };
 
-/** Chakra colorPalette per status: brand while live, gray when it is over, `no` for voided. */
+/**
+ * Chakra colorPalette per status: brand while live, orange while it waits on the admin (판정) or
+ * the worker (정산), gray when it is over, `no` for voided.
+ */
 export const MARKET_STATUS_PALETTE: Record<MarketStatus, 'brand' | 'gray' | 'orange' | 'no'> = {
   draft: 'gray',
   open: 'brand',
   closed: 'orange',
-  resolving: 'orange',
+  resolved: 'orange',
   settled: 'gray',
   voided: 'no',
 };
@@ -47,11 +52,38 @@ export const MARKET_EVENT_LABEL: Record<MarketEventType, string> = {
   created: copy.eventCreated,
   opened: copy.eventOpened,
   closed: copy.eventClosed,
+  // The M5 dispute flow's two events (legacy, ADR-0046): no longer written, but market_events is
+  // append-only and a market judged before the change still shows them in its log.
   resolve_proposed: copy.eventResolveProposed,
   result_changed: copy.eventResultChanged,
   finalized: copy.eventFinalized,
   voided: copy.eventVoided,
   rules_edited: copy.eventRulesEdited,
+  resolved: copy.eventResolved,
+};
+
+export const SETTLEMENT_STEP_LABEL: Record<SettlementStep, string> = {
+  coin: copy.settlementStepCoin,
+};
+
+export const SETTLEMENT_STEP_STATUS_LABEL: Record<SettlementStepStatus, string> = {
+  pending: copy.settlementStepStatusPending,
+  done: copy.settlementStepStatusDone,
+  failed: copy.settlementStepStatusFailed,
+};
+
+/**
+ * Orange while the step waits for the worker (the same "needs attention" the 정산 대기 badge
+ * carries), gray once done, `no` once its last attempt rolled back. Never colour alone: every
+ * badge shows `SETTLEMENT_STEP_STATUS_LABEL` beside it (PLAN 11.2).
+ */
+export const SETTLEMENT_STEP_STATUS_PALETTE: Record<
+  SettlementStepStatus,
+  'gray' | 'orange' | 'no'
+> = {
+  pending: 'orange',
+  done: 'gray',
+  failed: 'no',
 };
 
 export const PAYMENT_STATUS_LABEL: Record<PaymentStatus, string> = {
@@ -93,7 +125,7 @@ export const CLOSING_SOON_MS = 24 * 60 * 60 * 1000;
 /**
  * 마감 임박 (PLAN 12): an open market whose close time is within the next 24 hours. A close
  * time already in the past is not "soon" — the market is waiting for the close job, and the
- * 정산 대기 badge takes over once it is closed.
+ * 판정 대기 badge takes over once it is closed.
  */
 export function isClosingSoon(
   market: { status: MarketStatus; closeAt: string },
@@ -105,9 +137,18 @@ export function isClosingSoon(
   return closeAt > now && closeAt - now <= CLOSING_SOON_MS;
 }
 
-/** 정산 대기 (PLAN 12): closed and waiting for a result, or resolving with one proposed. */
+/** 판정 대기 (ADR-0046): trading has stopped and the market waits for the admin's 판정. */
+export function isAwaitingResolution(status: MarketStatus): boolean {
+  return status === 'closed';
+}
+
+/**
+ * 정산 대기 (ADR-0046): judged, and the worker's settlement steps have not all finished. The
+ * worker runs them right after the 판정, so this lasts seconds; a market that keeps the badge is
+ * the operational signal that a step is failing (the detail's 정산 단계 panel says which).
+ */
 export function isAwaitingSettlement(status: MarketStatus): boolean {
-  return status === 'closed' || status === 'resolving';
+  return status === 'resolved';
 }
 
 /** Which form fields a status admits (design 3.4): draft everything, open the text fields. */
@@ -119,48 +160,61 @@ export function canEditLiquidity(status: MarketStatus): boolean {
   return status === 'draft';
 }
 
+/**
+ * 무효 (PLAN 5.2, ADR-0046): before the 판정 only. A judged market cannot be voided — that would
+ * overturn the judgement, which is #26's to decide — and the API refuses it naming `status`.
+ */
 export function canVoid(status: MarketStatus): boolean {
-  return status === 'open' || status === 'closed' || status === 'resolving';
+  return status === 'open' || status === 'closed';
 }
 
-/** 정산 (PLAN 12, design 5.5): a result is proposed on a closed market only. */
+/**
+ * 판정 (PLAN 12, ADR-0046): a closed market only, once. The result is final at once; there is no
+ * way to change it afterwards (#26 decides re-judgement).
+ */
 export function canResolve(status: MarketStatus): boolean {
   return status === 'closed';
 }
 
-/**
- * 결과 변경 (design 5.5): only while resolving AND the dispute window is still open. Once
- * `disputeUntil` has passed the worker's finalize is due or running and the API refuses the
- * change naming `status` (`errMarketDisputeWindowOver`) — an admin who still wants another
- * outcome must void — so the button goes away rather than offering a refusal. `now` is
- * injected like `isClosingSoon`'s: the screen anchors it, a test pins it. A `resolving` row
- * with no window (a factory row) offers nothing: there is no instant to compare against.
- */
-export function canChangeResult(
-  market: { status: MarketStatus; disputeUntil: string | null },
-  now: number = Date.now(),
-): boolean {
-  if (market.status !== 'resolving' || market.disputeUntil === null) return false;
-  const until = new Date(market.disputeUntil).getTime();
-  return !Number.isNaN(until) && until > now;
+/** One row of the admin's 정산 단계 panel, every cell already in words. */
+export interface SettlementStepView {
+  step: SettlementStep;
+  label: string;
+  statusLabel: string;
+  palette: (typeof SETTLEMENT_STEP_STATUS_PALETTE)[SettlementStepStatus];
+  /** The one state that needs the admin: drawn as a solid badge, not a subtle one. */
+  failed: boolean;
+  attempts: string;
+  /** KST, or '—' while the step has not finished. */
+  completedAt: string;
+  /** The last failed attempt's message (kept after a later success), or '—'. */
+  lastError: string;
 }
 
-export const DISPUTE_STATUS_LABEL: Record<DisputeStatus, string> = {
-  open: copy.disputeStatusOpen,
-  accepted: copy.disputeStatusAccepted,
-  rejected: copy.disputeStatusRejected,
-};
-
 /**
- * Orange while it waits for the admin (the same "needs attention" the awaiting-settlement
- * markets carry), brand once accepted, gray once rejected. Never colour alone: every badge
- * shows `DISPUTE_STATUS_LABEL` beside it (PLAN 11.2).
+ * `AdminMarket.settlementSteps` (ADR-0046) as the 정산 단계 panel reads it. The API already
+ * answers in SETTLEMENT_STEPS order — the order the worker runs them in — so the rows keep it.
+ * `lastError` stays on a step that later succeeded: it is the record of why the earlier attempt
+ * failed, and the 완료 badge beside it says that the failure is over.
  */
-export const DISPUTE_STATUS_PALETTE: Record<DisputeStatus, 'brand' | 'gray' | 'orange'> = {
-  open: 'orange',
-  accepted: 'brand',
-  rejected: 'gray',
-};
+export function settlementStepViews(
+  steps: readonly Pick<
+    AdminSettlementStep,
+    'step' | 'status' | 'attempts' | 'completedAt' | 'lastError'
+  >[],
+): SettlementStepView[] {
+  return steps.map((row) => ({
+    step: row.step,
+    label: SETTLEMENT_STEP_LABEL[row.step],
+    statusLabel: SETTLEMENT_STEP_STATUS_LABEL[row.status],
+    palette: SETTLEMENT_STEP_STATUS_PALETTE[row.status],
+    failed: row.status === 'failed',
+    attempts: String(row.attempts),
+    // `formatKst` answers '' for an instant it cannot read; a blank cell would say less than '—'.
+    completedAt: (row.completedAt === null ? '' : formatKst(row.completedAt)) || '—',
+    lastError: row.lastError || '—',
+  }));
+}
 
 /** PLAN 11.2: never colour alone — "예 63%". */
 export function formatYesPrice(lastPrice: number): string {
@@ -282,8 +336,8 @@ const kstInstant = z.string().refine((iso) => formatKst(iso) !== '');
 /**
  * The payloads `market-admin.service` (and the worker's `market-finalize`) write for each
  * event, as the web reads them. `.nullish()` where the writer may omit or null a field: the
- * resolve detail nulls a blank note, and a void of a `closed` market — never proposed —
- * carries no discarded proposal at all.
+ * 판정 detail nulls a blank note, and a void of a `closed` market — never judged — carries no
+ * discarded result at all (only a void inside M5's dispute window ever wrote one, A-M3-23).
  */
 const VOIDED_PAYLOAD = z.object({
   reason: z.string(),
@@ -297,16 +351,23 @@ const CLOSED_PAYLOAD = z.object({ closedAt: kstInstant });
 const RESOLVE_DETAIL = {
   note: z.string().nullish(),
   evidenceUrl: z.string().nullish(),
-  disputeUntil: kstInstant,
 };
-const RESOLVE_PROPOSED_PAYLOAD = z.object({ result: outcomeSchema, ...RESOLVE_DETAIL });
+/** The 판정 (ADR-0046): `{result, note, evidenceUrl}`. */
+const RESOLVED_PAYLOAD = z.object({ result: outcomeSchema, ...RESOLVE_DETAIL });
+/**
+ * M5's two legacy events (no longer written, still in old logs). Both carried the dispute
+ * window's end; it is optional here and never shown — the window no longer means anything, and
+ * a row reading 이의 마감 would describe a stage the product does not have.
+ */
+const LEGACY_RESOLVE_DETAIL = { ...RESOLVE_DETAIL, disputeUntil: kstInstant.optional() };
+const RESOLVE_PROPOSED_PAYLOAD = z.object({ result: outcomeSchema, ...LEGACY_RESOLVE_DETAIL });
 const RESULT_CHANGED_PAYLOAD = z.object({
   before: outcomeSchema,
   after: outcomeSchema,
-  ...RESOLVE_DETAIL,
+  ...LEGACY_RESOLVE_DETAIL,
 });
 // The counts and the total are what the worker writes today; optional so an older row (or a
-// leaner writer) still reads as "확정 · 결과 예" rather than falling back to JSON.
+// leaner writer) still reads as "정산 완료 · 결과 예" rather than falling back to JSON.
 const FINALIZED_PAYLOAD = z.object({
   result: outcomeSchema,
   settledAccounts: z.number().int().nonnegative().optional(),
@@ -319,28 +380,26 @@ function outcomeLabel(outcome: 'YES' | 'NO'): string {
   return outcome === 'YES' ? copy.yes : copy.no;
 }
 
-/** The note / evidence / window rows the two resolve events share; blanks are left out. */
+/** The note / evidence rows the resolve events share; blanks are left out. */
 function resolveDetailRows(detail: {
   note?: string | null;
   evidenceUrl?: string | null;
-  disputeUntil: string;
 }): EventRow[] {
   return [
     ...(detail.note ? [{ label: copy.adminMarketResolveNote, value: detail.note }] : []),
     ...(detail.evidenceUrl
       ? [{ label: copy.adminMarketResolveEvidence, value: detail.evidenceUrl }]
       : []),
-    { label: copy.marketDisputeUntil, value: formatKst(detail.disputeUntil) },
   ];
 }
 
 /**
  * An event's payload as label/value rows in Korean, for the shapes the API and the worker
  * write (design 3.4's 이벤트 로그, 5.5): the void summary, the rules diff, the open and close
- * instants, the proposed / changed result with its window, the finalize summary. The payload
- * is `unknown` on the wire (jsonb), so each shape is checked before it is read; `created`
- * (the whole create body) and anything that does not match are `undefined`, and the screen
- * shows those as `compactJson` instead of a half-read row.
+ * instants, the 판정 with its note and evidence (and M5's legacy proposed / changed result),
+ * the finalize summary. The payload is `unknown` on the wire (jsonb), so each shape is checked
+ * before it is read; `created` (the whole create body) and anything that does not match are
+ * `undefined`, and the screen shows those as `compactJson` instead of a half-read row.
  */
 export function marketEventRows(type: MarketEventType, payload: unknown): EventRow[] | undefined {
   switch (type) {
@@ -351,10 +410,19 @@ export function marketEventRows(type: MarketEventType, payload: unknown): EventR
         { label: copy.eventVoidReason, value: parsed.data.reason },
         { label: copy.eventRefundedAccounts, value: String(parsed.data.refundedAccounts) },
         { label: copy.eventRefundedTotal, value: formatP(parsePAmount(parsed.data.refundedP)) },
-        // A void from `resolving` discards the proposal (A-M3-23); the row says which one.
+        // A void inside M5's dispute window discarded the proposal (A-M3-23); the row says
+        // which one. Only old rows carry it: a judged market can no longer be voided (ADR-0046).
         ...(parsed.data.discardedResult
           ? [{ label: copy.eventDiscardedResult, value: outcomeLabel(parsed.data.discardedResult) }]
           : []),
+      ];
+    }
+    case 'resolved': {
+      const parsed = RESOLVED_PAYLOAD.safeParse(payload);
+      if (!parsed.success) return undefined;
+      return [
+        { label: copy.marketResolvedResult, value: outcomeLabel(parsed.data.result) },
+        ...resolveDetailRows(parsed.data),
       ];
     }
     case 'resolve_proposed': {
@@ -421,18 +489,10 @@ export function marketEventRows(type: MarketEventType, payload: unknown): EventR
  * The toast for a refused transition (design 3.4/3.6, 5.5): RULES_REQUIRED on open,
  * MARKET_NOT_OPEN on close, VALIDATION_ERROR naming `status` for any other state-machine
  * violation — the two "refresh the screen" messages, since the state on screen is what is
- * stale. NOT_FOUND is the market itself (every admin write answers 404 for an unknown id):
- * not a "try again". A NOT_FOUND naming `categoryId` never reaches here — the form callers
- * hand it to `marketFormError` first.
- *
- * Two refusals of the resolve route are named apart from the rest. `result` is the change
- * that changes nothing (the dialog disables the button for the result on screen, so this is
- * the stale case: another admin changed it first). `status` with the dispute-window issue is
- * not a stale screen at all — the market IS resolving, and its window has passed, so the
- * worker's finalize is due and only a void remains; told by the issue text (as `isSlugTaken`
- * reads the slug refusal) rather than by the status on screen, because a screen showing
- * `resolving` for a market the worker has since settled gets `market is settled` from the
- * same route, and that one is the ordinary "refresh" case.
+ * stale (a second 판정, or a void, of a market another admin has already judged lands here).
+ * NOT_FOUND is the market itself (every admin write answers 404 for an unknown id): not a "try
+ * again". A NOT_FOUND naming `categoryId` never reaches here — the form callers hand it to
+ * `marketFormError` first.
  */
 export function transitionErrorMessage(error: unknown): string {
   if (isApiError(error, 'RULES_REQUIRED')) return copy.errMarketRulesRequired;
@@ -440,10 +500,7 @@ export function transitionErrorMessage(error: unknown): string {
   if (isApiError(error, 'NOT_FOUND')) return copy.adminMarketNotFound;
   if (isApiError(error, 'VALIDATION_ERROR')) {
     const field = validationField(error);
-    if (field === 'status') {
-      return isDisputeWindowOver(error) ? copy.errMarketDisputeWindowOver : copy.errMarketStatus;
-    }
-    if (field === 'result') return copy.errMarketResultUnchanged;
+    if (field === 'status') return copy.errMarketStatus;
     if (field === 'closeAt') return copy.errMarketCloseAt;
     if (field === 'reason') return copy.errMarketVoidReason;
     if (field === 'note') return copy.errMarketResolveNote;
@@ -451,12 +508,6 @@ export function transitionErrorMessage(error: unknown): string {
     return copy.errMarketInvalid;
   }
   return copy.errUnknown;
-}
-
-/** The resolve route's `status` refusal for a window that has passed (market-admin.service.ts). */
-function isDisputeWindowOver(error: ApiError): boolean {
-  if (/dispute window/i.test(error.message)) return true;
-  return /dispute window/i.test(firstIssueMessage(error) ?? '');
 }
 
 export type MarketFormField =

@@ -34,8 +34,11 @@ describe('jobs (PLAN 9)', () => {
     const id = marketCloseJobId(marketId, closeAt);
     expect(id).toBe(`market.close.${marketId}.${String(closeAt.getTime())}`);
     expect(id).not.toContain(':'); // BullMQ: "Custom Id cannot contain :"
-    expect(marketFinalizeJobId(marketId, closeAt)).toBe(
-      `market.finalize.${marketId}.${String(closeAt.getTime())}`,
+    // The finalize job runs right after the judgement; its id carries the judgement's instant
+    // (`resolved_at`, ADR-0046).
+    const resolvedAt = new Date('2026-10-02T09:30:00.123Z');
+    expect(marketFinalizeJobId(marketId, resolvedAt)).toBe(
+      `market.finalize.${marketId}.${String(resolvedAt.getTime())}`,
     );
     // A moved instant is a different job, so the stale one can be removed and the new one added.
     expect(marketCloseJobId(marketId, new Date(closeAt.getTime() + 1))).not.toBe(id);
