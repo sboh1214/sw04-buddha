@@ -4,9 +4,11 @@
  * the loop reaches every candidate after it. (A close cannot be poisoned on the test
  * database — nothing a `closeMarket` transaction reads can be broken from the app role — so
  * the close scan's catch is covered here; the finalize scan has its own integration case.)
+ * `messageOf`, the message a failure carries (and the step's `last_error`), is checked here too.
  */
+import { DrizzleQueryError } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
-import { runScan } from './scan.js';
+import { messageOf, runScan } from './scan.js';
 
 describe('runScan', () => {
   it('records a rejection and keeps going, in candidate order', async () => {
@@ -56,5 +58,27 @@ describe('runScan', () => {
       failed: 0,
       failures: [],
     });
+  });
+});
+
+describe('messageOf', () => {
+  it('leads with the SQLSTATE and driver message of a failed query; a plain Error is unchanged', () => {
+    // node-postgres's DatabaseError as drizzle-orm 0.45 keeps it, in DrizzleQueryError's `cause`.
+    const driver = Object.assign(new Error('deadlock detected'), { code: '40P01' });
+    const failed = new DrizzleQueryError('update "positions" set "qty" = $1', [0], driver);
+    expect(messageOf(failed)).toBe(
+      '40P01 deadlock detected — Failed query: update "positions" set "qty" = $1\nparams: 0',
+    );
+    // Thrown as itself, the driver error's message is not repeated.
+    expect(messageOf(driver)).toBe('40P01 deadlock detected');
+    expect(messageOf(new Error('Balance not found for account x'))).toBe(
+      'Balance not found for account x',
+    );
+    // A cause without a SQLSTATE adds nothing, and a cyclic chain still ends.
+    expect(messageOf(new Error('outer', { cause: new Error('inner') }))).toBe('outer');
+    const loop = new Error('loop');
+    loop.cause = loop;
+    expect(messageOf(loop)).toBe('loop');
+    expect(messageOf(42)).toBe('42');
   });
 });

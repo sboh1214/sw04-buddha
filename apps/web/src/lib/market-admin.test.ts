@@ -40,6 +40,8 @@ import {
   marketIdParam,
   marketEventRows,
   marketFormError,
+  SETTLEMENT_POLL_INTERVAL_MS,
+  settlementPollInterval,
   settlementStepViews,
   transitionErrorMessage,
 } from './market-admin';
@@ -153,6 +155,17 @@ describe('status predicates', () => {
     expect(MARKET_STATUSES.filter(isAwaitingSettlement)).toEqual(['resolved']);
     expect(copy.adminMarketAwaitingResolution).toBe('판정 대기');
     expect(copy.adminMarketAwaitingSettlement).toBe('정산 대기');
+  });
+
+  it('re-reads the admin detail only while the market waits for its settlement', () => {
+    // The panel has no realtime source: polling is how it sees the worker finish or fail a
+    // step, and it must stop once the market is settled (or before anything was judged).
+    for (const status of MARKET_STATUSES) {
+      expect(settlementPollInterval({ status })).toBe(
+        status === 'resolved' ? SETTLEMENT_POLL_INTERVAL_MS : false,
+      );
+    }
+    expect(settlementPollInterval(undefined)).toBe(false);
   });
 
   it('allows edits while draft or open, liquidity while draft, void before the 판정 only', () => {

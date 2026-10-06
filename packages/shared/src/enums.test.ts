@@ -88,7 +88,6 @@ describe('enums', () => {
       'settled',
       'voided',
     ]);
-    expect(enums.marketStatusSchema.safeParse('resolving').success).toBe(false);
     expect(enums.marketEventTypeSchema.parse('resolved')).toBe('resolved');
     // The M5 events stay readable: market_events is append-only and old rows carry them.
     expect(enums.marketEventTypeSchema.parse('resolve_proposed')).toBe('resolve_proposed');

@@ -151,6 +151,26 @@ export function isAwaitingSettlement(status: MarketStatus): boolean {
   return status === 'resolved';
 }
 
+/** How often the admin detail re-reads a judged market until it is settled (ADR-0046). */
+export const SETTLEMENT_POLL_INTERVAL_MS = 5_000;
+
+/**
+ * `refetchInterval` of the admin detail: every 5 s while the market is `resolved`. Nothing else
+ * tells this screen that the worker finished or failed a step — the admin query joins no
+ * realtime room, and a failed attempt publishes nothing at all — so without it the 정산 단계
+ * panel keeps the `pending` row the 판정 answered with until a reload. Not budgeted like the
+ * payment polls (smartro-payments.ts): a failing step is retried by the worker's per-minute scan,
+ * and this panel is where an operator watches those attempts. query-core pauses the interval
+ * while the tab is hidden, and it stops by itself at `settled`.
+ */
+export function settlementPollInterval(
+  market: { status: MarketStatus } | undefined,
+): number | false {
+  return market !== undefined && isAwaitingSettlement(market.status)
+    ? SETTLEMENT_POLL_INTERVAL_MS
+    : false;
+}
+
 /** Which form fields a status admits (design 3.4): draft everything, open the text fields. */
 export function isEditable(status: MarketStatus): boolean {
   return status === 'draft' || status === 'open';

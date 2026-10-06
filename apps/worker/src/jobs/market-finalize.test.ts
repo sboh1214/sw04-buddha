@@ -8,7 +8,7 @@
  * so the ledger explains the position and the audit (PLAN 5.6) can be run on the result.
  */
 import { randomUUID } from 'node:crypto';
-import { schema } from '@buddha/db';
+import { closeDb, createDb, schema, type Db } from '@buddha/db';
 import {
   connectTestDb,
   createMarket,
@@ -16,16 +16,22 @@ import {
   createSettlementStep,
   createUser,
   hasTestDb,
+  testDbUrls,
   type TestDb,
 } from '@buddha/db/test';
-import { marketChannel, userChannel, type Outcome } from '@buddha/shared';
-import { and, asc, eq, sql } from 'drizzle-orm';
+import {
+  SETTLEMENT_STEP_ERROR_MAX,
+  marketChannel,
+  userChannel,
+  type Outcome,
+} from '@buddha/shared';
+import { DrizzleQueryError, and, asc, eq, sql } from 'drizzle-orm';
 import { Redis } from 'ioredis';
 import { pino, type Logger } from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createPublisher, createPublisherRedis, type Publish } from '../realtime.js';
 import { runLedgerAudit } from './ledger-audit.js';
-import { finalizeDueMarkets, finalizeMarket } from './market-finalize.js';
+import { finalizeDueMarkets, finalizeMarket, type FinalizeResult } from './market-finalize.js';
 
 // hasTestDb() loads the root .env first, so TEST_REDIS_URL is visible after it.
 const hasTestInfra = hasTestDb() && Boolean(process.env.TEST_REDIS_URL);
@@ -218,6 +224,55 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
       of: (channel: string) => received.get(channel)!,
       quit: () => subscriber.quit(),
     };
+  }
+
+  /**
+   * `t.db` with a seam between the two transactions of a failing `finalizeMarket`: the first
+   * runs the settlement and, only once it has rejected, the second records the attempt
+   * (`recordStepFailure`). `beforeRecord` runs right before the second opens — the rollback has
+   * released the market lock, so another writer gets in exactly there, and a rejection from it
+   * is the record's own transaction failing. `inserts` counts the INSERTs the record issues, so
+   * "records nothing" is told apart from "the upsert's guard kept the row". The rest is `t.db`.
+   */
+  function seamed(beforeRecord: () => Promise<void>) {
+    const seam = { db: t.db, inserts: 0 };
+    let opened = 0;
+    const transaction: Db['transaction'] = async (run, config) => {
+      opened += 1;
+      if (opened === 1) return t.db.transaction(run, config);
+      await beforeRecord();
+      return t.db.transaction(
+        (tx) =>
+          run(
+            new Proxy(tx, {
+              get(target, prop, receiver) {
+                if (prop === 'insert') seam.inserts += 1;
+                return Reflect.get(target, prop, receiver) as unknown;
+              },
+            }),
+          ),
+        config,
+      );
+    };
+    seam.db = new Proxy(t.db, {
+      get: (target, prop, receiver) =>
+        prop === 'transaction' ? transaction : (Reflect.get(target, prop, receiver) as unknown),
+    });
+    return seam;
+  }
+
+  /**
+   * A winning holder whose balance row is gone: the coin step throws `Balance not found` while
+   * it runs (see the rollback test below), so the record goes on `coin`. Returns the account.
+   */
+  async function poisonedWinner(marketId: string) {
+    const userId = (await createUser(t.db, { balanceP: 10_000n })).user.id;
+    await hold({ userId, marketId, outcome: 'YES', qty: 10, costBasisP: 500n });
+    const [balance] = await t.db
+      .delete(schema.balances)
+      .where(eq(schema.balances.userId, userId))
+      .returning();
+    return { userId, balance: balance! };
   }
 
   it('pays the winning holders, closes out every row and settles the market (M5 AC 3)', async () => {
@@ -757,6 +812,180 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
     // No market, nowhere to record: no row (the FK would refuse one), no logged record failure.
     expect(await stepsOf(marketId)).toEqual([]);
     expect(logs).toEqual([]);
+  });
+
+  it('records a database error by its SQLSTATE and driver message, not by the SQL that failed', async () => {
+    // drizzle-orm throws every failed query as DrizzleQueryError ("Failed query: <sql>\nparams:
+    // …") and keeps the driver error in `cause`: the step must say why, not what ran. A BEFORE
+    // UPDATE trigger stands in for a lost deadlock on the coin step's position UPDATE. It is
+    // DDL, so it goes through the owner role, and it is dropped whatever happens — `reset()`
+    // truncates, it would not.
+    const market = await resolved('YES');
+    const alice = (await createUser(t.db, { balanceP: 10_000n })).user.id;
+    await hold({ userId: alice, marketId: market.id, outcome: 'YES', qty: 10, costBasisP: 500n });
+    const owner = createDb(testDbUrls()!.migrateUrl, {
+      max: 1,
+      applicationName: 'buddha-test-owner',
+    });
+    try {
+      await owner.execute(
+        sql.raw(`CREATE FUNCTION finalize_test_deadlock() RETURNS trigger LANGUAGE plpgsql AS $$
+          BEGIN RAISE EXCEPTION 'deadlock detected' USING ERRCODE = 'deadlock_detected'; END $$`),
+      );
+      await owner.execute(
+        sql.raw(`CREATE TRIGGER finalize_test_deadlock BEFORE UPDATE ON positions
+          FOR EACH ROW EXECUTE FUNCTION finalize_test_deadlock()`),
+      );
+
+      const err = await finalizeMarket(t.db, market.id, publish, logger).catch((e: unknown) => e);
+      // The job still fails with the ORIGINAL error: the wrapper, the driver error inside it.
+      expect(err).toBeInstanceOf(DrizzleQueryError);
+      const { message, cause } = err as DrizzleQueryError;
+      expect(message).toMatch(/^Failed query: update "positions"/);
+      expect(cause).toMatchObject({ code: '40P01', message: 'deadlock detected' });
+      const [step] = await stepsOf(market.id);
+      expect(step).toMatchObject({
+        step: 'coin',
+        status: 'failed',
+        attempts: 1,
+        completedAt: null,
+      });
+      expect(step!.lastError).toBe(
+        `40P01 deadlock detected — ${message}`.slice(0, SETTLEMENT_STEP_ERROR_MAX),
+      );
+
+      // The scan reports it the same way (scan.ts `messageOf`) and the attempt is counted.
+      const scan = await finalizeDueMarkets(t.db, publish, logger);
+      expect(scan).toMatchObject({ settled: 0, failed: 1, failures: [{ marketId: market.id }] });
+      expect(scan.failures[0]!.message).toMatch(
+        /^40P01 deadlock detected — Failed query: update "positions"/,
+      );
+      expect(await stepsOf(market.id)).toEqual([
+        expect.objectContaining({ status: 'failed', attempts: 2 }),
+      ]);
+    } finally {
+      await owner.execute(sql.raw('DROP TRIGGER IF EXISTS finalize_test_deadlock ON positions'));
+      await owner.execute(sql.raw('DROP FUNCTION IF EXISTS finalize_test_deadlock()'));
+      await closeDb(owner);
+    }
+    expect((await marketRow(market.id)).status).toBe('resolved');
+    expect(await positionOf(alice, market.id, 'YES')).toMatchObject({ settled: false, version: 1 });
+    expect(logs).toEqual([]);
+  });
+
+  it('records nothing when another run settled the market between the rollback and the record', async () => {
+    // The rollback releases the market lock and the record takes it again, so the job's retry or
+    // the scan can settle the market in between (here: the account repaired, then a run). The
+    // record re-reads the status under the lock and finds `settled`: it issues no INSERT, and the
+    // done row stays exactly as that run finished it.
+    const market = await resolved('YES');
+    const alice = await poisonedWinner(market.id);
+    const other: { result?: FinalizeResult } = {};
+    const seam = seamed(async () => {
+      await t.db.insert(schema.balances).values(alice.balance);
+      other.result = await finalizeMarket(t.db, market.id, publish, logger);
+    });
+
+    await expect(finalizeMarket(seam.db, market.id, publish, logger)).rejects.toThrow(
+      `Balance not found for account ${alice.userId}`,
+    );
+    const settled = other.result;
+    expect(settled).toMatchObject({ outcome: 'settled', paidAccounts: 1, paidP: 1_000n });
+    if (settled?.outcome !== 'settled') return;
+    expect(seam.inserts).toBe(0);
+    expect(await stepsOf(market.id)).toEqual([
+      expect.objectContaining({
+        step: 'coin',
+        status: 'done',
+        attempts: 1,
+        completedAt: settled.settledAt,
+        lastError: null,
+        updatedAt: settled.settledAt,
+      }),
+    ]);
+    expect(await marketRow(market.id)).toMatchObject({
+      status: 'settled',
+      settledAt: settled.settledAt,
+    });
+    expect((await balanceOf(alice.userId)).availableP).toBe(10_500n);
+    expect(logs).toEqual([]);
+  });
+
+  it("keeps a done step done: the record's upsert does not overwrite it (setWhere guard)", async () => {
+    // The market is still `resolved`, so the status re-check lets the record through and only the
+    // upsert's `status <> 'done'` condition stands between it and the row — a row that disagrees
+    // with its market, written by hand in the seam (with one step, the API never leaves one).
+    const market = await resolved('YES');
+    const alice = await poisonedWinner(market.id);
+    const written: (typeof schema.marketSettlementSteps.$inferSelect)[] = [];
+    const seam = seamed(async () => {
+      written.push(
+        ...(await t.db
+          .update(schema.marketSettlementSteps)
+          .set({ status: 'done', attempts: 1, completedAt: new Date(Date.now() - MINUTE_MS) })
+          .where(eq(schema.marketSettlementSteps.marketId, market.id))
+          .returning()),
+      );
+    });
+
+    await expect(finalizeMarket(seam.db, market.id, publish, logger)).rejects.toThrow(
+      `Balance not found for account ${alice.userId}`,
+    );
+    // The record did run its upsert on `coin`; the condition kept the row.
+    expect(seam.inserts).toBe(1);
+    expect(written).toHaveLength(1);
+    expect(await stepsOf(market.id)).toEqual(written);
+    expect((await marketRow(market.id)).status).toBe('resolved');
+    expect(logs).toEqual([]);
+  });
+
+  it('records nothing for a failure before any step when no step is left undone', async () => {
+    // With no step running, the record goes on the first step that is not `done`; when every
+    // step is done there is none, and the done row is left alone without an upsert at all.
+    const market = await createMarket(t.db, {
+      status: 'resolved',
+      resolvedResult: null,
+      settlementSteps: false,
+    });
+    const done = await createSettlementStep(t.db, {
+      marketId: market.id,
+      status: 'done',
+      attempts: 1,
+      completedAt: new Date(Date.now() - MINUTE_MS),
+    });
+    const seam = seamed(() => Promise.resolve());
+
+    await expect(finalizeMarket(seam.db, market.id, publish, logger)).rejects.toThrow(
+      `Market ${market.id} is resolved without a result`,
+    );
+    expect(seam.inserts).toBe(0);
+    expect(await stepsOf(market.id)).toEqual([done]);
+    expect(logs).toEqual([]);
+  });
+
+  it('rethrows the original error when the record itself fails, and logs that once', async () => {
+    // Best effort: the record's own transaction failing (here it cannot even open) must not
+    // replace the settlement's error — that one is what the job and the scan report.
+    const market = await resolved('YES');
+    const alice = await poisonedWinner(market.id);
+    const stepsBefore = await stepsOf(market.id);
+    const seam = seamed(() => Promise.reject(new Error('Connection terminated unexpectedly')));
+
+    await expect(finalizeMarket(seam.db, market.id, publish, logger)).rejects.toThrow(
+      `Balance not found for account ${alice.userId}`,
+    );
+    expect(logs).toEqual([
+      expect.objectContaining({
+        level: 50,
+        msg: 'settlement step failure not recorded',
+        marketId: market.id,
+        step: 'coin',
+        cause: `Balance not found for account ${alice.userId}`,
+        err: expect.objectContaining({ message: 'Connection terminated unexpectedly' }) as unknown,
+      }),
+    ]);
+    expect(await stepsOf(market.id)).toEqual(stepsBefore);
+    expect((await marketRow(market.id)).status).toBe('resolved');
   });
 
   it('a holder of both outcomes: one payout row for the winning row, the balance event carries its id', async () => {

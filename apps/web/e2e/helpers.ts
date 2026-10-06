@@ -293,22 +293,6 @@ export async function closeMarket(
 }
 
 /**
- * 판정 through the admin API (`POST /admin/markets/:id/resolve`, ADR-0046): the result is final
- * at once, the market goes to `resolved`, and the API queues `market.finalize` with no delay, so
- * the worker settles it moments later. For a spec that needs a judged market as a means; the
- * settlement spec goes through the admin dialog instead, because the dialog IS what it verifies.
- */
-export async function resolveMarket(
-  admin: APIRequestContext,
-  marketId: string,
-  result: 'YES' | 'NO',
-): Promise<AdminMarket> {
-  return unwrap<AdminMarket>(
-    await admin.post(`/api/v1/admin/markets/${marketId}/resolve`, { data: { result } }),
-  );
-}
-
-/**
  * How long a spec waits for a judged market to read 정산 완료 (ADR-0046). There is no window to
  * wait out any more: the 판정 queues `market.finalize` with no delay and the worker settles in
  * well under a second, so this is room for a cold worker and a loaded CI box — not for the
@@ -319,8 +303,8 @@ export const SETTLEMENT_WAIT_MS = 30_000;
 /**
  * True when the worker's health listener is switched off (`WORKER_HEALTH_PORT=0`, worker env.ts),
  * which is when playwright.config.ts lists no worker to wait for. A spec that needs the
- * `market.finalize` job then has nothing to tell it a worker is up, so it skips rather than sit
- * out a window that may never end. Read from `process.env` here, not in the config: the config
+ * `market.finalize` job then has nothing to tell it a worker is up, so it skips rather than wait
+ * for a job nobody may be running. Read from `process.env` here, not in the config: the config
  * loaded the root `.env` into the runner, and Playwright passes that environment to its workers.
  */
 export function workerProbeDisabled(): boolean {

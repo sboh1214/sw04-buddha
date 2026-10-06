@@ -31,13 +31,13 @@ export interface HealthServer {
 
 /**
  * `GET /health` for whoever has to wait for the worker: Playwright's `webServer` and the CI
- * job poll it before the settlement e2e starts (PLAN M5 AC 7 — a test that proposes a result
- * and waits for the payout needs a worker that is actually consuming the queue, not one still
- * connecting). What `isReady()` MEANS is main.ts's to own — the queues attached and Postgres
- * answered once (`waitForDb`, db-ready.ts) — so this module stays the one thing its own
- * docblock claims. 503 `{ status: 'starting' }` until `isReady()`, then 200 `{ status: 'ok' }`;
- * anything else is 404. node:http, not a framework: one route, no dependency, no middleware
- * that could keep the event loop alive after shutdown.
+ * job poll it before the settlement e2e starts (PLAN M5 AC 7 — a test that judges a market
+ * (판정, final at once, ADR-0046) and waits for the payout needs a worker that is actually
+ * consuming the queue, not one still connecting). What `isReady()` MEANS is main.ts's to own —
+ * the queues attached and Postgres answered once (`waitForDb`, db-ready.ts) — so this module
+ * stays the one thing its own docblock claims. 503 `{ status: 'starting' }` until `isReady()`,
+ * then 200 `{ status: 'ok' }`; anything else is 404. node:http, not a framework: one route, no
+ * dependency, no middleware that could keep the event loop alive after shutdown.
  *
  * Returns null without listening when `port` is 0 — a deployment that probes the process some
  * other way should not get a socket it never asked for (and `listen(0)` would pick a random

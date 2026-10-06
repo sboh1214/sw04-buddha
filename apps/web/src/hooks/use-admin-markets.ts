@@ -2,7 +2,7 @@
 
 import { type QueryClient, useQuery, useQueryClient } from '@tanstack/react-query';
 import { type Category, api, unwrap, type AdminMarket, type Fill } from '@/lib/api';
-import { marketIdParam } from '@/lib/market-admin';
+import { marketIdParam, settlementPollInterval } from '@/lib/market-admin';
 import { CATEGORIES_QUERY_KEY, MARKET_FILLS_KEY, marketFillsKey } from '@/lib/market-keys';
 
 /**
@@ -56,8 +56,15 @@ export function adminMarketQueryOptions(routeId: string) {
   };
 }
 
+/**
+ * The admin detail, re-read every few seconds while the market is `resolved` so the 정산 단계
+ * panel and the 정산 대기 badge follow the worker (`settlementPollInterval`, ADR-0046).
+ */
 export function useAdminMarket(routeId: string) {
-  return useQuery(adminMarketQueryOptions(routeId));
+  return useQuery({
+    ...adminMarketQueryOptions(routeId),
+    refetchInterval: (query) => settlementPollInterval(query.state.data),
+  });
 }
 
 /**

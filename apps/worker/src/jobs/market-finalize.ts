@@ -227,11 +227,12 @@ async function completeStep(
 
 /**
  * The failure half of ADR-0046 (D6): the settlement transaction rolled back, so the attempt is
- * written in a transaction of its own — `failed`, `attempts` + 1, the message cut to
- * SETTLEMENT_STEP_ERROR_MAX — on the step that was running, or, when the throw came before any
- * step started (the "no result" invariant, a lock or connection error), on the first step that
- * is not `done`. That is what lets an operator see why a market stays `resolved` without the
- * worker's logs; the per-minute scan retries it with no cap.
+ * written in a transaction of its own — `failed`, `attempts` + 1, `messageOf(err)` cut to
+ * SETTLEMENT_STEP_ERROR_MAX (a database error's SQLSTATE and driver message first, so the cut
+ * keeps the reason, not just the failed SQL) — on the step that was running, or, when the throw
+ * came before any step started (the "no result" invariant, a lock or connection error), on the
+ * first step that is not `done`. That is what lets an operator see why a market stays
+ * `resolved` without the worker's logs; the per-minute scan retries it with no cap.
  *
  * Under the market lock like every writer of market state, and only for a market that is still
  * `resolved`: an unknown id has nowhere to record, and a market another run settled since the
