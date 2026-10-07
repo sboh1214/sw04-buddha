@@ -28,7 +28,6 @@ const statusEvent: MarketStatusEvent = {
   marketId: MARKET_ID,
   status: 'closed',
   resolvedResult: null,
-  disputeUntil: null,
   statusEventId: '7',
   ts: '2026-09-09T00:00:00.000Z',
 };

@@ -13,13 +13,12 @@ export const metadata: Metadata = { title: `${copy.adminTitle} | ${copy.appName}
 /**
  * PLAN 12: everything under /admin is admin-only. The check runs on the server so a member
  * never receives the page at all; the API enforces the same rule on every call (AdminGuard).
- * M3 adds markets, payments and audit failures; M5 the dispute list (settlement itself lives
- * on the market detail as a transition).
+ * M3 adds markets, payments and audit failures. 판정 and its settlement steps live on the market
+ * detail (ADR-0046); M5's dispute list went with the dispute stage.
  */
 /** Next 16 types `href`, so the list is declared as routes rather than plain strings. */
 const NAV: { href: Route; label: string }[] = [
   { href: '/admin/markets', label: copy.adminMarkets },
-  { href: '/admin/disputes', label: copy.adminDisputes },
   { href: '/admin/users', label: copy.adminUsers },
   { href: '/admin/charge-packages', label: copy.adminPackages },
   { href: '/admin/coupons', label: copy.adminCoupons },

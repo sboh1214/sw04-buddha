@@ -1,10 +1,6 @@
 import { BlockList, isIP } from 'node:net';
 import path from 'node:path';
-import {
-  DISPUTE_WINDOW_SECONDS_DEFAULT,
-  paymentProviderSchema,
-  smartroModeSchema,
-} from '@buddha/shared';
+import { paymentProviderSchema, smartroModeSchema } from '@buddha/shared';
 import { config as loadDotenv } from 'dotenv';
 import * as z from 'zod';
 import {
@@ -220,20 +216,6 @@ export const envSchema = z
      * refuses it: pointed elsewhere, the approval and the cancel would go to whoever answers there.
      */
     SMARTRO_APPROVAL_BASE_URL: optionalString.pipe(z.url({ protocol: /^https?$/ }).optional()),
-
-    // --- settlement (PLAN 5.5, M5) ---
-    /**
-     * Seconds between a proposed result and its automatic finalization:
-     * `dispute_until = resolved_at + this` (PLAN 5.5: 24 hours). Named TEST_* by PLAN M5 AC 2
-     * because the only reason to change it is an e2e that cannot wait a day; production leaves
-     * it at the default. Whole seconds, at least one — the worker's finalize job is delayed by
-     * exactly this, and the web's 이의 제기 button reads the resulting `disputeUntil`.
-     */
-    TEST_DISPUTE_WINDOW_SECONDS: z.coerce
-      .number()
-      .int()
-      .min(1)
-      .default(DISPUTE_WINDOW_SECONDS_DEFAULT),
   })
   .superRefine((env, ctx) => {
     // Same reason as WEB_ORIGIN below: a bad entry must fail at `loadEnv()` under its own name.

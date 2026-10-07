@@ -1,20 +1,16 @@
-import type { APIRequestContext } from '@playwright/test';
-import type { AdminDispute, AdminMarket } from '@buddha/shared';
 import { copy } from '../src/copy';
 import {
-  DISPUTE_WINDOW_WAIT_MAX_MS,
+  SETTLEMENT_WAIT_MS,
   adminAccount,
   buyThroughPanel,
   chargeOnce,
   closeMarket,
   createOpenMarket,
-  disputeWindowMs,
   documentSurvived,
   ensureChargePackage,
   expect,
   freshEmail,
   markDocument,
-  resolveMarket,
   signIn,
   signUp,
   subscribed,
@@ -23,17 +19,19 @@ import {
 } from './helpers';
 
 /**
- * 마감 · 정산 · 이의 (PLAN 13 M5): AC 7 — 관리자 정산 제안 → 이의 기간 → 워커 확정 → 잔고·포트폴리오
- * ·원장 — and the dispute round trip PLAN 5.5 describes (제기 → 관리자 기각 + 메모 → 제기자에게
- * 보임).
+ * 마감 · 판정 · 정산 (PLAN 13 M5 AC 7, ADR-0046): 관리자 판정 → 워커 정산 → 보유자 탭이 소켓으로
+ * 정산 완료를 받는다 → 포트폴리오 정산 이력 · 리더보드 · 원장 정산 지급.
  *
- * Both tests wait out a REAL dispute window: the worker's `market.finalize` job is scheduled at
- * `disputeUntil`, and nothing in the product can shorten it. The API's window is
- * `TEST_DISPUTE_WINDOW_SECONDS` (default a day), so each test reads the window off the market it
- * resolved and SKIPS — naming the variable — rather than time out on a stack that was not
- * configured for it. CI runs the API with `TEST_DISPUTE_WINDOW_SECONDS=8`. The same goes for
- * the worker itself: with its probe disabled (`WORKER_HEALTH_PORT=0`) the config waits for no
- * worker, so both tests skip up front rather than wait for a job nobody may be running.
+ * There is no dispute window to wait out any more: the 판정 is final at once, the API queues the
+ * worker's `market.finalize` with no delay, and the market reads `settled` moments later. That
+ * makes `resolved` a state of a few seconds at most, so this spec waits for the FINAL `settled`
+ * alone and never asserts the badge in between — a 판정 완료 the worker has already moved past
+ * would be a flaky assertion, not a finding. The intermediate state is pinned by the API's and
+ * the worker's integration tests.
+ *
+ * The worker itself is still a prerequisite: with its probe disabled (`WORKER_HEALTH_PORT=0`) the
+ * config waits for no worker, so the test skips up front rather than wait for a job nobody may
+ * be running.
  *
  * Every market is created per run (helpers.ts), and the reader's tab is subscribed before it is
  * navigated, so a transition published while the page loads cannot be lost in the connect gap.
@@ -41,33 +39,6 @@ import {
 
 /** U+2212, the sign `formatP` writes a loss with (PLAN 11.1-6). A literal: e2e imports no values from shared. */
 const MINUS_SIGN = '−';
-
-/** The evidence a dispute carries; a real URL, because the form asks the API's own rule. */
-const EVIDENCE_URL = 'https://example.com/e2e-evidence';
-
-/** `GET /admin/markets/:id` — the row with `resolvedAt`/`disputeUntil`, after the dialog resolved it. */
-async function adminMarket(admin: APIRequestContext, marketId: string): Promise<AdminMarket> {
-  const response = await admin.get(`/api/v1/admin/markets/${marketId}`);
-  const body = await response.text();
-  if (!response.ok()) throw new Error(`${response.url()} -> ${String(response.status())} ${body}`);
-  return (JSON.parse(body) as { data: AdminMarket }).data;
-}
-
-/** `GET /admin/disputes?marketId=` — the one dispute the spec filed, by its id. */
-async function disputesOf(admin: APIRequestContext, marketId: string): Promise<AdminDispute[]> {
-  const response = await admin.get(`/api/v1/admin/disputes?marketId=${marketId}`);
-  const body = await response.text();
-  if (!response.ok()) throw new Error(`${response.url()} -> ${String(response.status())} ${body}`);
-  return (JSON.parse(body) as { data: AdminDispute[] }).data;
-}
-
-/** Skips the test, naming the env var, when the stack's window is longer than a spec may wait. */
-function skipUnlessShortWindow(windowMs: number): void {
-  test.skip(
-    windowMs > DISPUTE_WINDOW_WAIT_MAX_MS,
-    `the dispute window is ${String(Math.round(windowMs / 1000))}s: set TEST_DISPUTE_WINDOW_SECONDS=8 for the API`,
-  );
-}
 
 /** Skips the test before it makes a market, when no worker probe exists for the config to wait on. */
 function skipWithoutWorkerProbe(): void {
@@ -78,7 +49,7 @@ function skipWithoutWorkerProbe(): void {
 }
 
 test.describe('정산', () => {
-  test('AC 7: 정산 제안 → 이의 기간 → 자동 확정 → 상세 배지 · 포트폴리오 실현 손익 · 원장 정산 지급', async ({
+  test('AC 7: 관리자 판정 → 즉시 정산 → 상세 배지 · 포트폴리오 실현 손익 · 원장 정산 지급', async ({
     browser,
     admin,
     page,
@@ -97,7 +68,7 @@ test.describe('정산', () => {
     await buyThroughPanel(page, 'YES', '5000');
     await markDocument(page);
 
-    // A second tab of the SAME account parked on 지갑 before anything is resolved. The payout's
+    // A second tab of the SAME account parked on 지갑 before anything is judged. The payout's
     // `user:balance` moves the balance chip there through the socket, but a `LedgerEntry` cannot
     // be built from that event — it carries the id of the row and none of its columns — so the
     // 정산 지급 row is only ever a refetch. Parked here rather than visited at the end, because
@@ -112,48 +83,64 @@ test.describe('정산', () => {
     const badge = page.getByTestId('market-status-badge');
     await expect(badge).toHaveText(copy.marketStatusClosed);
 
-    // --- 정산 제안 through the ADMIN UI (PLAN 12: 결과 선택 → 확인 모달): a second browser
-    // signed in as the seed admin, so the holder's tab is untouched.
+    // --- 판정 through the ADMIN UI (PLAN 12: 결과 선택 → 확인 모달): a second browser signed in
+    // as the seed admin, so the holder's tab is untouched. The closed market carries 판정 대기.
     const adminContext = await browser.newContext();
     try {
       const adminPage = await adminContext.newPage();
       await signIn(adminPage, adminAccount.email, adminAccount.password);
       await adminPage.goto(`/admin/markets/${market.id}`);
+      await expect(adminPage.getByTestId('market-detail-awaiting')).toHaveText(
+        copy.adminMarketAwaitingResolution,
+      );
+      // No settlement step exists before the 판정, so the panel is not drawn at all.
+      await expect(adminPage.getByTestId('market-settlement-steps')).toHaveCount(0);
       await adminPage.getByTestId('market-resolve').click();
+      await expect(adminPage.getByText(copy.adminMarketResolveBody)).toBeVisible();
       await adminPage.getByTestId('market-resolve-yes').click();
       await adminPage.getByTestId('market-resolve-confirm').click();
       await expect(adminPage.getByText(copy.adminMarketResolved)).toBeVisible();
+      // The answer already carries the coin step; a judged market offers neither a second
+      // 판정 nor a void (ADR-0046).
+      await expect(adminPage.getByTestId('market-settlement-steps')).toBeVisible();
+      await expect(adminPage.getByTestId('market-resolve')).toHaveCount(0);
+      await expect(adminPage.getByTestId('market-void')).toHaveCount(0);
+
+      // --- the holder's tab: 정산 완료 once the worker has settled — through the socket, on the
+      // document that was there before the admin pressed anything. Only the final state: the
+      // 판정 완료 in between lasts as long as the worker takes (see the file comment).
+      await expect(badge).toHaveText(copy.marketStatusSettled, { timeout: SETTLEMENT_WAIT_MS });
+      expect(await documentSurvived(page), page.url()).toBe(true);
+      await expect(page.getByTestId('market-status-notice-detail')).toHaveText(
+        copy.marketSettledPayout,
+      );
+
+      // --- the admin's 정산 단계, read again: the one step is 완료 and nothing is waiting.
+      await adminPage.reload();
+      await expect(adminPage.getByTestId('market-detail-status')).toHaveText(
+        copy.marketStatusSettled,
+      );
+      await expect(adminPage.getByTestId('market-detail-awaiting')).toHaveCount(0);
+      await expect(adminPage.getByTestId('market-settlement-step-coin-status')).toHaveText(
+        copy.settlementStepStatusDone,
+      );
     } finally {
       await adminContext.close();
     }
 
-    // The window the API is configured with, read off the market the dialog just resolved.
-    const windowMs = disputeWindowMs(await adminMarket(admin, market.id));
-    skipUnlessShortWindow(windowMs);
-
-    // --- the holder's tab: 정산 중 now, 정산 완료 once the worker has finalized — through the
-    // socket, on the document that was there before the admin pressed anything.
-    await expect(badge).toHaveText(copy.marketStatusResolving);
-    await expect(page.getByTestId('market-detail-result')).toHaveText(copy.yes);
-    await expect(badge).toHaveText(copy.marketStatusSettled, { timeout: windowMs + 15_000 });
-    expect(await documentSurvived(page), page.url()).toBe(true);
-    await expect(page.getByTestId('market-status-notice-detail')).toHaveText(
-      copy.marketSettledPayout,
-    );
-
-    // 확정된 시장은 결과만 남기고 이의 마감·정산 예정을 지운다. `dispute_until`은 행에도 DTO에도
-    // 그대로 남아 있고(확정은 제안을 버리는 것이 아니라 완성한다) 관리자 상세가 감사 행으로 읽는다
-    // — 잠근 것은 열이 아니라 공개 화면이다. 확정은 종료 상태라 이의 기간과 경주하지 않는다.
+    // 정산된 시장은 결과만 남긴다. 이의 단계가 없으므로(ADR-0046) 이의 섹션도, 이의 마감·정산 예정
+    // 행도 없다. 문구 키는 함께 지워졌으므로 화면에 남은 글자를 직접 확인한다.
     const notice = page.getByTestId('market-status-notice');
     await expect(notice.getByTestId('market-detail-result')).toHaveText(copy.yes);
-    await expect(notice).not.toContainText(copy.marketDisputeUntil);
-    await expect(page.getByTestId('market-rules')).not.toContainText(copy.rulesSettlement);
+    await expect(page.getByTestId('dispute-section')).toHaveCount(0);
+    await expect(notice).not.toContainText('이의');
+    await expect(page.getByTestId('market-rules')).not.toContainText('정산 예정');
 
     // --- 포트폴리오: the holding moved to 정산 이력 with a positive 실현 손익 — 예 won, and a
     // winning contract pays 100P against a cost of well under that.
     await page.goto('/portfolio');
     const settledRow = page.getByTestId(`portfolio-settled-${market.id}-YES`);
-    await expect(settledRow).toBeVisible({ timeout: windowMs + 15_000 });
+    await expect(settledRow).toBeVisible({ timeout: SETTLEMENT_WAIT_MS });
     await expect(settledRow).toContainText(copy.positionRealizedPnl);
     const realized = new RegExp(`${copy.positionRealizedPnl}\\s*([${MINUS_SIGN}\\d,]+)P`).exec(
       (await settledRow.textContent()) ?? '',
@@ -217,86 +204,9 @@ test.describe('정산', () => {
     // there — no navigation, no reload. The balance chip moved on the event itself; this row is
     // the refetch the event triggers, because nothing in a `user:balance` can draw a ledger row.
     await expect(wallet.getByText(copy.ledgerTypeSettlement).first()).toBeVisible({
-      timeout: windowMs + 15_000,
+      timeout: SETTLEMENT_WAIT_MS,
     });
     expect(await documentSurvived(wallet), wallet.url()).toBe(true);
     await wallet.close();
-  });
-});
-
-test.describe('이의', () => {
-  test('제기 → 접수됨 → 관리자 기각 + 메모 → 제기자 상세에 보인다', async ({
-    browser,
-    admin,
-    page,
-  }) => {
-    skipWithoutWorkerProbe();
-    const market = await createOpenMarket(admin);
-
-    // A signed-in reader on the detail BEFORE the result is proposed: the section is absent for
-    // a closed market, appears on the `market:status` the resolve publishes, and the whole
-    // window budget is left for the dialog — which is why this test resolves via the API.
-    await signUp(page, freshEmail());
-    const joined = subscribed(page, market.id);
-    await page.goto(`/markets/${market.slug}`);
-    await joined;
-    await closeMarket(admin, market.id);
-    await expect(page.getByTestId('dispute-section')).toHaveCount(0);
-
-    const resolved = await resolveMarket(admin, market.id, 'YES');
-    const windowMs = disputeWindowMs(resolved);
-    // Filing goes through a dialog, which the shortest window CI could set must leave room for.
-    test.skip(
-      windowMs < 5_000,
-      `the dispute window is ${String(windowMs)}ms: too short to file through the dialog`,
-    );
-
-    // --- 이의 제기: the button, the dialog, the toast, then the filed block in its place.
-    await page.getByTestId('dispute-open').click();
-    const dialog = page.getByRole('dialog');
-    await expect(dialog).toBeVisible();
-    await dialog.getByTestId('dispute-reason').fill('정산 기준의 출처와 다른 결과입니다.');
-    await dialog.getByTestId('dispute-evidence').fill(EVIDENCE_URL);
-    await dialog.getByTestId('dispute-submit').click();
-    await expect(page.getByText(copy.disputeFiled)).toBeVisible();
-    const filed = page.getByTestId('dispute-filed');
-    await expect(filed).toBeVisible();
-    await expect(filed.getByTestId('dispute-status')).toHaveText(copy.disputeStatusOpen);
-    await expect(filed.getByTestId('dispute-filed-evidence')).toHaveAttribute('href', EVIDENCE_URL);
-    await expect(page.getByTestId('dispute-open')).toHaveCount(0);
-
-    // One per account per market: a fresh load reads the row back and offers no second button.
-    // This holds after the worker has finalized as well — a finished market keeps the card for
-    // the account that filed (design 5.3).
-    await page.reload();
-    await expect(page.getByTestId('dispute-filed')).toBeVisible();
-    await expect(page.getByTestId('dispute-open')).toHaveCount(0);
-
-    // --- 관리자: the dispute is listed under its market, and 기각 with a note is a two-step
-    // review that changes NO result (PLAN 12).
-    const [dispute] = await disputesOf(admin, market.id);
-    if (dispute === undefined) throw new Error('the filed dispute is missing from the admin list');
-    const note = `근거 URL이 정산 기준의 출처가 아닙니다 ${market.tag}`;
-    const adminContext = await browser.newContext();
-    try {
-      const adminPage = await adminContext.newPage();
-      await signIn(adminPage, adminAccount.email, adminAccount.password);
-      await adminPage.goto(`/admin/disputes?marketId=${market.id}`);
-      await expect(adminPage.getByTestId(`admin-dispute-${dispute.id}`)).toBeVisible();
-      await adminPage.getByTestId(`admin-dispute-reject-${dispute.id}`).click();
-      await adminPage.getByTestId('dispute-review-note').fill(note);
-      await adminPage.getByTestId('dispute-review-confirm').click();
-      await expect(adminPage.getByText(copy.adminDisputeReviewed)).toBeVisible();
-    } finally {
-      await adminContext.close();
-    }
-
-    // --- 제기자: the review reaches the detail on its next fetch — no event carries a dispute
-    // (PLAN 8), so a reload is the honest way to ask again.
-    await page.reload();
-    const reviewed = page.getByTestId('dispute-filed');
-    await expect(reviewed).toBeVisible();
-    await expect(reviewed.getByTestId('dispute-status')).toHaveText(copy.disputeStatusRejected);
-    await expect(reviewed.getByTestId('dispute-admin-note')).toHaveText(note);
   });
 });

@@ -5,7 +5,6 @@
  */
 import {
   COUNTERPARTY_TYPES,
-  DISPUTE_STATUSES,
   LEDGER_ENTRY_TYPES,
   MARKET_MECHANISMS,
   MARKET_STATUSES,
@@ -34,4 +33,3 @@ export const orderStatusEnum = pgEnum('order_status', ORDER_STATUSES);
 export const timeInForceEnum = pgEnum('time_in_force', TIME_IN_FORCES);
 export const counterpartyTypeEnum = pgEnum('counterparty_type', COUNTERPARTY_TYPES);
 export const priceTickTriggerEnum = pgEnum('price_tick_trigger', PRICE_TICK_TRIGGERS);
-export const disputeStatusEnum = pgEnum('dispute_status', DISPUTE_STATUSES);

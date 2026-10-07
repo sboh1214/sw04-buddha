@@ -1,9 +1,8 @@
 'use client';
 
 import { type QueryClient, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ADMIN_DISPUTES_KEY } from '@/lib/admin-disputes';
 import { type Category, api, unwrap, type AdminMarket, type Fill } from '@/lib/api';
-import { marketIdParam } from '@/lib/market-admin';
+import { marketIdParam, settlementPollInterval } from '@/lib/market-admin';
 import { CATEGORIES_QUERY_KEY, MARKET_FILLS_KEY, marketFillsKey } from '@/lib/market-keys';
 
 /**
@@ -57,8 +56,15 @@ export function adminMarketQueryOptions(routeId: string) {
   };
 }
 
+/**
+ * The admin detail, re-read every few seconds while the market is `resolved` so the 정산 단계
+ * panel and the 정산 대기 badge follow the worker (`settlementPollInterval`, ADR-0046).
+ */
 export function useAdminMarket(routeId: string) {
-  return useQuery(adminMarketQueryOptions(routeId));
+  return useQuery({
+    ...adminMarketQueryOptions(routeId),
+    refetchInterval: (query) => settlementPollInterval(query.state.data),
+  });
 }
 
 /**
@@ -75,36 +81,16 @@ export function useMarketFills(id: string, enabled: boolean) {
 }
 
 /**
- * After any admin write: the detail, the fills, every filtered list page — and the 이의 목록,
- * whose rows carry a copy of the market.
+ * After any admin write: the detail, the fills and every filtered list page.
  *
- * The last one is the mirror of `applyReviewedDispute` (use-admin-disputes.ts), which already
- * invalidates `adminMarketKey` because the detail's 이의 counts moved with the review; only the
- * way back was missing. An `AdminDispute` embeds `marketStatus`, `resolvedResult` and
- * `statusEventId` (A-M5-20), and the 이의 목록 joins no market room, so nothing else could
- * correct it: a 결과 변경 writes a new result while the status stays `resolving`, and a 무효 from
- * `resolving` writes `voided` with the result cleared while its open objections stay (Q-M5-6).
- * The admin's own path runs straight through this — the 수용 dialog tells them to change a result
- * on the market detail, and the detail links back to the 이의 목록 — so the list they return to
- * kept showing the result they had just replaced, for as long as its 30초 staleTime had left.
- *
- * In this SHARED helper rather than at the resolve site, because 무효 is the worse of the two
- * variants and does not go through that dialog. The other writes cannot leave a dispute row
- * behind at all (a market with an objection is already `resolving`), and marking a key for them
- * costs nothing.
- *
- * Not 남발 (PLAN 11.5): `refetchType` stays at its default `'active'`, and every caller of
- * `useApplyMarket` is on `/admin/markets/[id]`, where no 이의 목록 is mounted — so this issues
- * ZERO requests and only marks. The request is the next mount's, and it is the one this cache
- * cannot end up right without: an `AdminMarket` cannot BUILD an `AdminDispute`, so there is
- * nothing to seed with (the realtime handler's rule, first kind).
+ * Not 남발 (PLAN 11.5): `refetchType` stays at its default `'active'`, so a list page that is
+ * not mounted is only marked, and its next mount is the request.
  */
 function invalidateMarket(queryClient: QueryClient, id: string) {
   return Promise.all([
     queryClient.invalidateQueries({ queryKey: adminMarketKey(id) }),
     queryClient.invalidateQueries({ queryKey: marketFillsKey(id) }),
     queryClient.invalidateQueries({ queryKey: ADMIN_MARKETS_KEY }),
-    queryClient.invalidateQueries({ queryKey: ADMIN_DISPUTES_KEY }),
   ]);
 }
 

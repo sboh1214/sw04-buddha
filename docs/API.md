@@ -89,9 +89,8 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | `INSUFFICIENT_BALANCE` | 409 | 잔고가 모자란다. |
 | `INSUFFICIENT_POSITION` | 409 | 팔려는 수량만큼 보유하고 있지 않다. |
 | `PRICE_MOVED` | 409 | 다시 계산한 금액이 `maxCostP`(매수) 또는 `minProceedsP`(매도)를 벗어났다. |
-| `DUPLICATE_REQUEST` | 409 | 이미 쓴 멱등 키를 다른 조건으로 다시 썼거나(키는 소모된다), 한 번만 할 수 있는 일을 두 번 했다(쿠폰 재사용, 같은 시장에 이의 2회). 환불 재시도는 앞선 시도가 아직 PG 의 답을 기다리는 동안 이것으로 답한다(`details[0].message` 가 `in progress`). |
+| `DUPLICATE_REQUEST` | 409 | 이미 쓴 멱등 키를 다른 조건으로 다시 썼거나(키는 소모된다), 한 번만 할 수 있는 일을 두 번 했다(쿠폰 재사용). 환불 재시도는 앞선 시도가 아직 PG 의 답을 기다리는 동안 이것으로 답한다(`details[0].message` 가 `in progress`). |
 | `RATE_LIMITED` | 429 | 레이트 리밋 초과. `details.retryAfterSeconds` 와 `Retry-After` 헤더에 대기 초. |
-| `DISPUTE_WINDOW_CLOSED` | 409 | 이의 접수 창이 닫혔다(정산이 확정되었거나 `resolving` 이 아니다). |
 | `RULES_REQUIRED` | 422 | 정산 규칙(`rules`)이 비어 있어 개장하거나 그대로 저장할 수 없다. |
 | `CONTACT_REQUIRED` | 409 | 실명과 휴대전화 번호를 아직 등록하지 않은 계정이다. `PUT /api/v1/me/contact` 로 등록한 뒤 다시 시도한다. |
 | `REFUND_NOT_ALLOWED` | 409 | 환불 정책 밖의 결제다. `details[0].message` 가 까닭을 말한다 — `window_closed`(승인 후 7일이 지났다), `status`(환불할 수 있는 상태가 아니다), `provider`(그 결제 수단은 취소를 지원하지 않는다). 이미 쓴 P 가 있으면 `INSUFFICIENT_BALANCE` 로 답한다. 관리자 수동 정리(`POST /api/v1/admin/payments/{id}/settle`)도 이 코드로 답한다 — `provider`(SmartroPay 결제가 아니다), `status`(그 상태에서 고를 수 없는 결과다, 또는 취소 재통보가 카드가 취소됐다고 알려 와 `credit`·`restore` 할 수 없다), `in_progress`(2분 안에 바뀌어 콜백이나 환불이 아직 처리 중일 수 있다), `approval_mismatch`(`credit`: 기록된 승인의 `Mid`·금액·`Moid` 가 결제와 맞지 않거나 — 그 승인은 그래서 망취소됐으니 카드를 가맹점 관리자에서 취소하고 `cancelled` 로 정리한다 — 준 `tid` 가 기록된 승인의 것이 아니거나, 그 `Tid` 를 다른 결제가 이미 들고 있다 — 기록된 승인이 여럿이면 결제와 맞는 것을 쓰고, 맞는 것이 하나도 없을 때만 이렇게 답한다. 단 `SignValue` 가 맞지 않는 우리 승인 응답은 서명이 맞는 기록(우리 승인 응답이나 재통보)이 그와 어긋나지 않을 때만 쓴다 — 서명이 맞는 기록이 다른 `Tid`·`Mid`·금액·`Moid` 를 말하면 이렇게 답한다), `partial_cancel`(`credit`·`restore`: 그 카드의 부분취소 재통보가 기록돼 있다 — 카드의 일부만 청구된 상태라 수동 정리의 어떤 결과도 맞지 않으니 `cancelled`·`refunded` 로 정리하고 잔고를 손으로 맞춘다). 기록된 성공 승인이 없는데(승인 응답이 없었거나 PG 오류 코드였으면) `credit` 에 `tid` 를 주지 않으면 `VALIDATION_ERROR`(`details[0].path` 가 `["tid"]`)로 답한다. |
@@ -99,7 +98,7 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | `PAYMENT_GATEWAY_ERROR` | 502 | PG 에 닿지 못했거나 결과를 알 수 없다(502). 다른 5xx 처럼 본문에 내부 사정을 담지 않는다. 환불이면 `refunding` 으로 남으니 다시 시도하거나, 가맹점 관리자에서 확인한 뒤 수동 정리한다. 단 그 결제의 전체 취소 재통보가 기록돼 있거나 그사이 재통보·다른 시도가 환불을 끝냈으면 오류가 아니라 `refunded` 로 마친 결제로 답한다. |
 | `INTERNAL` | 500 | 그 밖의 서버 오류. 본문에 내부 사정을 담지 않는다. |
 
-## 오퍼레이션 (48개)
+## 오퍼레이션 (44개)
 
 태그별로 묶었고, 태그 안의 순서는 OpenAPI 문서의 경로 순서 그대로다.
 
@@ -154,10 +153,8 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | PATCH | `/api/v1/admin/markets/{id}` | Edit a draft (any field) or an open market (text, close time, category; liquidityB/initialProbBp/slug refused naming the field, blank rules refused with RULES_REQUIRED); other statuses refuse naming status | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RULES_REQUIRED`, `RATE_LIMITED` |
 | POST | `/api/v1/admin/markets/{id}/open` | draft → open; refused without rules (RULES_REQUIRED) or with a past closeAt | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RULES_REQUIRED`, `RATE_LIMITED` |
 | POST | `/api/v1/admin/markets/{id}/close` | open → closed | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `MARKET_NOT_OPEN`, `RATE_LIMITED` |
-| POST | `/api/v1/admin/markets/{id}/resolve` | closed → resolving: propose the result and start the dispute window; on a resolving market change the proposed result (the window restarts, the pending finalize is replaced) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
-| POST | `/api/v1/admin/markets/{id}/void` | Void an open, closed or resolving market: every unsettled position is refunded its cost basis (MARKET_VOID_REFUND) and closed out | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
-| GET | `/api/v1/admin/disputes` | Every dispute, newest first; `status` and `marketId` narrow the list | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
-| PATCH | `/api/v1/admin/disputes/{id}` | Accept or reject a dispute with a note (revisable; accepting does not change the market result — use POST /admin/markets/:id/resolve for that) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
+| POST | `/api/v1/admin/markets/{id}/resolve` | closed → resolved: record the final result; settlement starts immediately | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
+| POST | `/api/v1/admin/markets/{id}/void` | Void an open or closed market: every unsettled position is refunded its cost basis (MARKET_VOID_REFUND) and closed out | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
 
 ### `markets` — 시장·시세
 
@@ -184,19 +181,12 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | --- | --- | --- | --- | --- |
 | GET | `/api/v1/leaderboard` | Top 20 accounts by realized profit and loss, ties broken deterministically | — | `RATE_LIMITED` |
 
-### `disputes` — 이의
-
-| 메서드 | 경로 | 설명 | 인증 | 오류 |
-| --- | --- | --- | --- | --- |
-| POST | `/api/v1/markets/{id}/disputes` | Object to the proposed result while the market is resolving and its dispute window is open (one per user per market) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `DISPUTE_WINDOW_CLOSED`, `DUPLICATE_REQUEST`, `RATE_LIMITED` |
-| GET | `/api/v1/me/disputes` | My disputes, newest first; `marketId` narrows the list to one market | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `RATE_LIMITED` |
-
-## 스키마 (66개)
+## 스키마 (65개)
 
 요청·응답 본문의 실제 모양은 `apps/api/openapi.json` 의 `components.schemas` 에 있다. 이름만
 적어 두니 거기서 찾아 읽는다. 이름은 zod 스키마의 `.meta({ id })` 에서 온다.
 
-`AdminBalanceAdjustResult`, `AdminDispute`, `AdminMarket`, `AdminPayment`, `AdminUser`, `AdminUserQuery`, `AuditFailure`, `Balance`, `BalanceAdjustBody`, `Category`, `ChargeBody`, `ChargePackage`, `ChargeResult`, `Contact`, `ContactBody`, `Coupon`, `CouponCode`, `CreateChargePackageBody`, `CreateCouponBody`, `CreateDisputeBody`, `CreateMarketBody`, `CursorQuery`, `Dispute`, `ErrorCode`, `ErrorEnvelope`, `Fill`, `LeaderboardEntry`, `LedgerEntry`, `LinkedAccount`, `Market`, `MarketEvent`, `MarketListItem`, `MarketStats`, `MarketSummary`, `Me`, `Nickname`, `OkResult`, `Order`, `PAmount`, `PageMeta`, `Password`, `Payment`, `PaymentProviderInfo`, `Position`, `PriceSeries`, `PriceTick`, `QuoteBody`, `QuoteResult`, `RedeemCouponBody`, `RedeemCouponResult`, `RefundPaymentBody`, `RegisterBody`, `RegisterResult`, `ResolveMarketBody`, `ReviewDisputeBody`, `SetPasswordBody`, `SettlePaymentBody`, `SmartroPrepareResult`, `TradeBody`, `TradeResult`, `UpdateChargePackageBody`, `UpdateCouponBody`, `UpdateMarketBody`, `UpdateMeBody`, `UserRole`, `VoidMarketBody`
+`AdminBalanceAdjustResult`, `AdminMarket`, `AdminPayment`, `AdminSettlementStep`, `AdminUser`, `AdminUserQuery`, `AuditFailure`, `Balance`, `BalanceAdjustBody`, `Category`, `ChargeBody`, `ChargePackage`, `ChargeResult`, `Contact`, `ContactBody`, `Coupon`, `CouponCode`, `CreateChargePackageBody`, `CreateCouponBody`, `CreateMarketBody`, `CursorQuery`, `ErrorCode`, `ErrorEnvelope`, `Fill`, `LeaderboardEntry`, `LedgerEntry`, `LinkedAccount`, `Market`, `MarketEvent`, `MarketListItem`, `MarketStats`, `MarketSummary`, `Me`, `Nickname`, `OkResult`, `Order`, `PAmount`, `PageMeta`, `Password`, `Payment`, `PaymentProviderInfo`, `Position`, `PriceSeries`, `PriceTick`, `QuoteBody`, `QuoteResult`, `RedeemCouponBody`, `RedeemCouponResult`, `RefundPaymentBody`, `RegisterBody`, `RegisterResult`, `ResolveMarketBody`, `SetPasswordBody`, `SettlePaymentBody`, `SettlementStep`, `SettlementStepStatus`, `SmartroPrepareResult`, `TradeBody`, `TradeResult`, `UpdateChargePackageBody`, `UpdateCouponBody`, `UpdateMarketBody`, `UpdateMeBody`, `UserRole`, `VoidMarketBody`
 
 ## 헬스체크 (문서 밖)
 
@@ -422,7 +412,6 @@ PLAN 7.5 의 표는 `packages/shared/src/rate-limit.ts` 한 곳에 있고, 아�
 | `trade` | 로그인 계정 (라우트별) | 20 | `POST /api/v1/trades` |
 | `charge` | 로그인 계정 (라우트별) | 10 | `POST /api/v1/payments/charge`, `POST /api/v1/payments/smartro/prepare` |
 | `coupon` | 로그인 계정 (라우트별) | 10 | `POST /api/v1/coupons/redeem` |
-| `dispute` | 로그인 계정 (라우트별) | 10 | `POST /api/v1/markets/{id}/disputes` |
 | `email` | 본문이 지목한 이메일 주소 (라우트별) | 5 | 메일을 보내는 경로 — `POST /api/v1/auth/register` 와 `/api/auth/*` 의 `/change-email`, `/send-verification-email`, `/request-password-reset`, `/forget-password`. 시도 자체를 센다(시도가 곧 피해다). `/change-email` 만은 **로그인한 요청만** 센다(세션 없는 요청은 401 이고 아무에게도 메일이 가지 않으므로): 먼저 **요청한 계정**의 버킷을, 그다음 `newEmail` 의 버킷을 — 인증된 계정의 확인 메일은 본문의 주소가 아니라 계정이 이미 가진 주소로 가고, 계정을 먼저 세야 한 계정이 1분에 다섯 주소까지만 지목할 수 있기 때문이다. `GET /verify-email` 도 링크가 메일을 보내는 종류(이메일 변경의 **확인** 링크: 누를 때마다 새 주소에 다시 보낸다)이면 그 수신 주소로 센다 — 토큰은 1시간짜리 무상태 JWT 라 누른다고 소모되지 않기 때문이다. 서명이 유효한 토큰만 세고, 변경을 적용하는 **검증** 링크는 메일을 보내지 않으므로 세지 않는다. |
 | `signIn` | 본문이 지목한 이메일 주소 (라우트별) | 10 | `/api/auth/sign-in/email`. 시도를 세되 **성공한 로그인이 버킷을 지운다** — 비밀번호가 맞은 로그인은 공격이 아니고, 그것까지 남기면 공유 계정이 쓰이는 것만으로 스스로 잠긴다. `/api/auth/*` 전체는 이와 별도로 `default`(주소) 버킷에도 들어간다. |
 
@@ -475,7 +464,7 @@ PLAN 7.5 의 표는 `packages/shared/src/rate-limit.ts` 한 곳에 있고, 아�
 | --- | --- | --- | --- |
 | `market:tick` | `market:<id>` | 체결(또는 틱을 남기는 전이) 후의 가격·통계 | `tradeCount` |
 | `market:trade` | `market:<id>` | 익명 체결 1건 | `fillId` |
-| `market:status` | `market:<id>` | 상태 전이(개장·마감·정산 제안·결과 변경·확정·무효). 설명만 고친 편집도 같은 상태로 다시 발행된다 | `statusEventId` |
+| `market:status` | `market:<id>` | 상태 전이(개장·마감·판정·정산 완료·무효). 설명만 고친 편집도 같은 상태로 다시 발행된다 | `statusEventId` |
 | `user:balance` | `user:<id>` | 거래·환불·지급 후의 잔고 | `ledgerEntryId` |
 | `user:position` | `user:<id>` | 변경된 포지션 1행 | `version` |
 

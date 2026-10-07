@@ -98,9 +98,9 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
       // One DB clock instant, read after the market lock, on the row and the event alike.
       expect(row.updatedAt).toEqual(result.closedAt);
       expect(result.closedAt.getTime()).toBeGreaterThanOrEqual(market.closeAt.getTime());
-      // A close proposes nothing.
+      // A close judges nothing.
       expect(row.resolvedResult).toBeNull();
-      expect(row.disputeUntil).toBeNull();
+      expect(row.resolvedAt).toBeNull();
 
       await waitForMessages(received, 1, 'market:status of the close');
       await sleep(100);
@@ -110,7 +110,6 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
         marketId: market.id,
         status: 'closed',
         resolvedResult: null,
-        disputeUntil: null,
         statusEventId: String(event!.id),
         ts: result.closedAt.toISOString(),
       });
@@ -142,7 +141,7 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
     }
   });
 
-  it.each(['draft', 'closed', 'resolving', 'settled', 'voided'] as const)(
+  it.each(['draft', 'closed', 'resolved', 'settled', 'voided'] as const)(
     'skips a %s market even when its close time has passed',
     async (status) => {
       const market = await createMarket(t.db, {

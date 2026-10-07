@@ -704,7 +704,7 @@ describe.skipIf(!hasTestInfra)('trades (integration)', () => {
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ error: { code: 'MARKET_NOT_OPEN' } });
 
-    for (const status of ['resolving', 'settled', 'voided'] as const) {
+    for (const status of ['resolved', 'settled', 'voided'] as const) {
       const other = await createMarket(t.db, { status });
       const refused = await buy(other.id, 10);
       expect({ status, code: refused.statusCode }).toEqual({ status, code: 409 });

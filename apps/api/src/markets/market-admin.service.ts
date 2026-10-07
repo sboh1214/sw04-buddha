@@ -1,5 +1,4 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { randomBytes } from 'node:crypto';
 import { schema, type Db } from '@buddha/db';
 import {
@@ -11,9 +10,11 @@ import {
   priceOf,
   serializePAmount,
   serializeQuantity,
+  SETTLEMENT_STEPS,
   slugify,
   voidRefund,
   type AdminMarket,
+  type AdminSettlementStep,
   type CreateMarketBody,
   type MarketEventType,
   type MarketStatus,
@@ -27,7 +28,6 @@ import { and, asc, desc, eq, sql } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
 import { keysetPredicate } from '../common/keyset.js';
 import { PG_UNIQUE_VIOLATION, isPgError } from '../common/errors/pg-error.js';
-import { type Env } from '../config/env.js';
 import { clockTimestamp } from '../infra/db/clock.js';
 import { DB } from '../infra/db/db.provider.js';
 import { MarketJobs } from '../jobs/market-jobs.service.js';
@@ -51,16 +51,18 @@ type Executor = Db | Tx;
 type PositionRow = typeof schema.positions.$inferSelect;
 type BalanceRow = typeof schema.balances.$inferSelect;
 type MarketEventRow = typeof schema.marketEvents.$inferSelect;
+type SettlementStepRow = typeof schema.marketSettlementSteps.$inferSelect;
 
 /** UNIQUE (slug) on markets (migration 0000). */
 export const MARKET_SLUG_UNIQUE = 'markets_slug_unique';
 
-/** PLAN 5.2: only a market that took (or could have taken) orders can be voided. */
-const VOIDABLE_STATUSES: ReadonlySet<MarketStatus> = new Set<MarketStatus>([
-  'open',
-  'closed',
-  'resolving',
-]);
+/**
+ * PLAN 5.2: only a market that took (or could have taken) orders can be voided — and only
+ * before its judgement. Voiding a `resolved` market would overturn a final result, which is
+ * #26's decision (item 4); until then it is refused (ADR-0046, D2) and a wrong judgement is
+ * compensated per account with ADMIN_ADJUST.
+ */
+const VOIDABLE_STATUSES: ReadonlySet<MarketStatus> = new Set<MarketStatus>(['open', 'closed']);
 
 /** Events the admin detail shows, newest first. */
 const ADMIN_EVENTS_LIMIT = 100;
@@ -169,6 +171,30 @@ function toMarketEvent(row: MarketEventRow): AdminMarket['events'][number] {
   };
 }
 
+/**
+ * The `market_settlement_steps` rows of one market in SETTLEMENT_STEPS order (the order the
+ * worker runs them in). A row whose step is not in SETTLEMENT_STEPS — one written by a later
+ * release this build does not know — is left out rather than failing the whole detail.
+ */
+function toSettlementSteps(rows: SettlementStepRow[]): AdminSettlementStep[] {
+  const byStep = new Map(rows.map((row) => [row.step, row]));
+  const steps: AdminSettlementStep[] = [];
+  for (const step of SETTLEMENT_STEPS) {
+    const row = byStep.get(step);
+    if (!row) continue;
+    steps.push({
+      step,
+      // varchar column; the DTO narrows it to SETTLEMENT_STEP_STATUSES.
+      status: row.status as AdminSettlementStep['status'],
+      attempts: row.attempts,
+      completedAt: row.completedAt?.toISOString() ?? null,
+      lastError: row.lastError,
+      updatedAt: row.updatedAt.toISOString(),
+    });
+  }
+  return steps;
+}
+
 /** One closed-out position and, when P moved, the balance after it (published after commit). */
 interface VoidRefund {
   position: PositionRow;
@@ -178,19 +204,20 @@ interface VoidRefund {
 }
 
 /**
- * Admin market CRUD and transitions (PLAN 5.2, 5.5, 7.3, 12; M3 design 3.4, M5 design 3.3).
- * Every write is one transaction with its `admin_actions` row and, for a transition, its
- * `market_events` row; open, close, resolve and void take the market's advisory lock first
- * (`lockMarket`) so nothing interleaves with a trade on the same market. Realtime events are
- * published, and the worker's delayed jobs registered or cancelled, only after COMMIT, best
- * effort (MarketPublisher, MarketJobs).
+ * Admin market CRUD and transitions (PLAN 5.2, 5.5, 7.3, 12; M3 design 3.4, M5 design 3.3,
+ * ADR-0046). Every write is one transaction with its `admin_actions` row and, for a
+ * transition, its `market_events` row; open, close, resolve and void take the market's
+ * advisory lock first (`lockMarket`) so nothing interleaves with a trade on the same market.
+ * Realtime events are published, and the worker's jobs registered or cancelled, only after
+ * COMMIT, best effort (MarketPublisher, MarketJobs).
  *
  * Every transition inserts its event row FIRST and stores that row's id in
  * `markets.status_event_id` in the same UPDATE (`recordEvent`): the id is drawn while the
  * transaction holds the row FOR UPDATE, so it is the market's commit order, and it is the key
  * `market:status` and the market DTOs are ordered by (A-M3-19, Q-M3-8 (3)) — the status rank
- * stopped being a total order the day `result_changed` repeated `resolving`. A `rules_edited`
- * event is not a transition and leaves the key alone.
+ * stopped being a total order the day M5's (since removed) `result_changed` repeated a status,
+ * and an edit still republishes an unchanged one (A-M4-36). A `rules_edited` event is not a
+ * transition and leaves the key alone.
  */
 @Injectable()
 export class MarketAdminService {
@@ -198,7 +225,6 @@ export class MarketAdminService {
     @Inject(DB) private readonly db: Db,
     private readonly publisher: MarketPublisher,
     private readonly jobs: MarketJobs,
-    private readonly config: ConfigService<Env, true>,
   ) {}
 
   /**
@@ -514,130 +540,102 @@ export class MarketAdminService {
   }
 
   /**
-   * Propose or change the result (PLAN 5.5, 7.3; M5 design 3.3). From `closed`: the result
-   * is proposed, the market becomes `resolving` and the dispute window opens —
-   * `disputeUntil = now + TEST_DISPUTE_WINDOW_SECONDS` (PLAN M5 AC 2) — and the delayed
-   * `market.finalize` job is registered for that instant. From `resolving`: the result is
-   * CHANGED (the window restarts from this instant, the old finalize job is cancelled and a
-   * new one registered), which is what an admin does after accepting a dispute; the same
-   * result again is refused naming `result`, and a window that has already passed is refused
-   * naming `status` — the worker's finalize is due or running, and PLAN 5.5 lets it proceed
-   * ("이의가 있어도 finalize는 자동 진행된다"); an admin who still wants a different outcome
-   * must void. Any other status is refused naming `status`.
+   * The judgement (PLAN 5.5, 7.3; ADR-0046): closed → resolved, final at once. Any other
+   * status — `resolved` included, whatever the result sent — is refused naming `status`; there
+   * is no way to change a judgement (#26 decides re-judgement).
    *
-   * `resolving` is entered again by a change, so the status rank cannot order the two
-   * `market:status` events; the event id written to `status_event_id` can (class doc).
+   * One transaction writes the `resolved` event (its id is the new `status_event_id`), the
+   * market row (`resolved_result`, `resolved_at`), one `pending` `market_settlement_steps` row
+   * per SETTLEMENT_STEPS step — the worker's to-do list, so the step table never lags the
+   * status — and the `admin_actions` row. After COMMIT the `market.finalize` job is registered
+   * with no delay: the worker settles the market at once, and its per-minute scan picks up any
+   * `resolved` market whose job never made it to Redis.
+   *
    * No price tick is written: the chart ends at the last trade, and a settlement is not a
    * price (PRICE_TICK_TRIGGERS 'resolve' stays unused — Q-M5).
    */
   async resolve(adminId: string, id: string, body: ResolveMarketBody): Promise<AdminMarket> {
-    const window = this.config.get('TEST_DISPUTE_WINDOW_SECONDS', { infer: true });
-    const { market, now, disputeUntil, previousDisputeUntil } = await this.db.transaction(
-      async (tx) => {
-        await lockMarket(tx, id);
-        const current = await this.lockedRow(tx, id);
-        if (current.status !== 'closed' && current.status !== 'resolving') {
-          throw wrongStatus(current.status);
-        }
-        // After the market lock (clock.ts): the deadline is compared and written on the clock
-        // the worker's finalize will re-check it on.
-        const now = await clockTimestamp(tx);
-        const changing = current.status === 'resolving';
-        if (changing) {
-          if (current.resolvedResult === body.result) {
-            throw fieldError('result', 'Result is unchanged', 'result is unchanged');
-          }
-          if (current.disputeUntil !== null && current.disputeUntil.getTime() <= now.getTime()) {
-            throw fieldError(
-              'status',
-              'Dispute window has closed; finalize is pending',
-              'dispute window has closed',
-            );
-          }
-        }
-        const disputeUntil = new Date(now.getTime() + window * 1_000);
-        const detail = {
-          note: body.note ?? null,
-          evidenceUrl: body.evidenceUrl ?? null,
-          disputeUntil: disputeUntil.toISOString(),
-        };
-        const eventId = await this.recordEvent(tx, {
+    const { market, now } = await this.db.transaction(async (tx) => {
+      await lockMarket(tx, id);
+      const current = await this.lockedRow(tx, id);
+      if (current.status !== 'closed') throw wrongStatus(current.status);
+      // After the market lock (clock.ts): the judgement sorts after whatever committed on this
+      // market while the transaction queued, and the job id carries this instant.
+      const now = await clockTimestamp(tx);
+      const detail = {
+        result: body.result,
+        note: body.note ?? null,
+        evidenceUrl: body.evidenceUrl ?? null,
+      };
+      const eventId = await this.recordEvent(tx, {
+        marketId: id,
+        type: 'resolved',
+        actorId: adminId,
+        payload: detail,
+        createdAt: now,
+      });
+      const [row] = await tx
+        .update(schema.markets)
+        .set({
+          status: 'resolved',
+          resolvedResult: body.result,
+          resolvedAt: now,
+          statusEventId: eventId,
+          updatedAt: now,
+        })
+        .where(eq(schema.markets.id, id))
+        .returning();
+      if (!row) throw new AppError('INTERNAL', { message: 'Market update failed' });
+      // A closed market has never been judged, so no step row exists yet: a plain insert, and
+      // the primary key (market_id, step) turns any surprise into a rollback, not a duplicate.
+      await tx.insert(schema.marketSettlementSteps).values(
+        SETTLEMENT_STEPS.map((step) => ({
           marketId: id,
-          type: changing ? 'result_changed' : 'resolve_proposed',
-          actorId: adminId,
-          payload: changing
-            ? { before: current.resolvedResult, after: body.result, ...detail }
-            : { result: body.result, ...detail },
+          step,
+          status: 'pending',
+          attempts: 0,
           createdAt: now,
-        });
-        const [row] = await tx
-          .update(schema.markets)
-          .set({
-            status: 'resolving',
-            resolvedResult: body.result,
-            resolvedAt: now,
-            disputeUntil,
-            statusEventId: eventId,
-            updatedAt: now,
-          })
-          .where(eq(schema.markets.id, id))
-          .returning();
-        if (!row) throw new AppError('INTERNAL', { message: 'Market update failed' });
-        await tx.insert(schema.adminActions).values({
-          adminId,
-          type: 'market_resolve',
-          targetType: 'market',
-          targetId: current.id,
-          payload: {
-            changed: changing,
-            result: body.result,
-            previousResult: current.resolvedResult,
-            ...detail,
-            before: snapshot(current),
-            after: snapshot(row),
-          },
-          createdAt: now,
-        });
-        return {
-          market: await this.toAdminMarket(tx, row),
-          now,
-          disputeUntil,
-          previousDisputeUntil: changing ? current.disputeUntil : null,
-        };
-      },
-    );
-    // The finalize job is keyed by market and deadline, so a change is a cancel of the old
-    // registration plus a new one; the two ids differ, so their order does not matter.
+          updatedAt: now,
+        })),
+      );
+      await tx.insert(schema.adminActions).values({
+        adminId,
+        type: 'market_resolve',
+        targetType: 'market',
+        targetId: current.id,
+        payload: { ...detail, before: snapshot(current), after: snapshot(row) },
+        createdAt: now,
+      });
+      return { market: await this.toAdminMarket(tx, row), now };
+    });
+    // `resolved_at` was written as `now`, so the job is due at once; its id carries the
+    // judgement instant (marketFinalizeJobId).
     await Promise.all([
       this.publishStatus(market),
-      previousDisputeUntil ? this.jobs.cancelFinalize(market.id, previousDisputeUntil) : undefined,
-      this.jobs.scheduleFinalize(market.id, disputeUntil, now),
+      this.jobs.scheduleFinalize(market.id, now, now),
     ]);
     return market;
   }
 
   /**
-   * Void (PLAN 5.5): every unsettled position gets its cost basis back as a
-   * MARKET_VOID_REFUND ledger entry and is closed out (qty 0, settled), the market becomes
-   * `voided`. One transaction, all rows or nothing (MVP scale). The status check runs under
-   * the market lock so an M5 finalize cannot interleave, and the positions are locked in
-   * (user_id, outcome) order — the same order finalize will use — so two settlements touching
-   * one user's balance cannot deadlock. The refund is not bounded by `reserve_p`: it returns
+   * Void (PLAN 5.5): an open or closed market only — a judged one is final (VOIDABLE_STATUSES,
+   * ADR-0046). Every unsettled position gets its cost basis back as a MARKET_VOID_REFUND
+   * ledger entry and is closed out (qty 0, settled), the market becomes `voided`. One
+   * transaction, all rows or nothing (MVP scale). The status check runs under the market lock
+   * so an M5 finalize cannot interleave, and the positions are locked in (user_id, outcome)
+   * order — the same order finalize will use — so two settlements touching one user's
+   * balance cannot deadlock. The refund is not bounded by `reserve_p`: it returns
    * what was paid, and earlier sells may already have realised part of it (ADR-0027).
    *
    * Instants come from the database clock after the locks, as in a trade: the void's own
    * after the market lock, each refund's after that account's balance lock (see clock.ts).
    *
-   * A void from `resolving` discards the proposal (A-M3-23): `resolved_result`,
-   * `resolved_at` and `dispute_until` are cleared — a voided market has no result, and the
-   * web renders a null result on a voided row as "—" — and the `voided` event records what
-   * was discarded, so the audit trail still says which result the holders were refunded
-   * instead of. Open disputes on the market are left as they are (the admin may still
-   * review them). The pending job of the previous status — the close job of an open market,
-   * the finalize job of a resolving one — is cancelled after COMMIT.
+   * A voidable market has never been judged, so it carries no result and no settlement step
+   * to discard; `voided` events written before ADR-0046 may still carry a `discardedResult`,
+   * which the web reads. The close job of an open market is cancelled after COMMIT.
    */
   async void(adminId: string, id: string, body: VoidMarketBody): Promise<AdminMarket> {
-    const { market, refunds, pending } = await this.db.transaction(async (tx) => {
+    const { market, refunds, pendingClose } = await this.db.transaction(async (tx) => {
       await lockMarket(tx, id);
       const current = await this.lockedRow(tx, id);
       if (!VOIDABLE_STATUSES.has(current.status)) throw wrongStatus(current.status);
@@ -727,14 +725,6 @@ export class MarketAdminService {
         reason: body.reason,
         refundedAccounts: refundedAccounts.size,
         refundedP: serializePAmount(refundedP),
-        // Only when there was a proposal: a void from open or closed has nothing to discard,
-        // and the web's event rows treat the pair as optional.
-        ...(current.resolvedResult !== null
-          ? {
-              discardedResult: current.resolvedResult,
-              discardedDisputeUntil: current.disputeUntil?.toISOString() ?? null,
-            }
-          : {}),
       };
       const eventId = await this.recordEvent(tx, {
         marketId: id,
@@ -745,15 +735,7 @@ export class MarketAdminService {
       });
       const [row] = await tx
         .update(schema.markets)
-        .set({
-          status: 'voided',
-          voidedAt: now,
-          resolvedResult: null,
-          resolvedAt: null,
-          disputeUntil: null,
-          statusEventId: eventId,
-          updatedAt: now,
-        })
+        .set({ status: 'voided', voidedAt: now, statusEventId: eventId, updatedAt: now })
         .where(eq(schema.markets.id, id))
         .returning();
       if (!row) throw new AppError('INTERNAL', { message: 'Market update failed' });
@@ -765,14 +747,9 @@ export class MarketAdminService {
         payload: { ...summary, before: snapshot(current), after: snapshot(row) },
         createdAt: now,
       });
-      // What the previous status had registered with the worker, to cancel after COMMIT.
-      const pending: { close?: Date; finalize?: Date } =
-        current.status === 'open'
-          ? { close: current.closeAt }
-          : current.status === 'resolving' && current.disputeUntil !== null
-            ? { finalize: current.disputeUntil }
-            : {};
-      return { market: await this.toAdminMarket(tx, row), refunds, pending };
+      // The close job an open market had registered with the worker, to cancel after COMMIT.
+      const pendingClose = current.status === 'open' ? current.closeAt : undefined;
+      return { market: await this.toAdminMarket(tx, row), refunds, pendingClose };
     });
 
     const ts = market.voidedAt ?? market.updatedAt;
@@ -821,8 +798,7 @@ export class MarketAdminService {
     await Promise.all([
       this.publishStatus(market),
       ...events.map(([userId, event]) => this.publisher.publishUser(userId, event)),
-      pending.close ? this.jobs.cancelClose(market.id, pending.close) : undefined,
-      pending.finalize ? this.jobs.cancelFinalize(market.id, pending.finalize) : undefined,
+      pendingClose ? this.jobs.cancelClose(market.id, pendingClose) : undefined,
     ]);
     return market;
   }
@@ -962,18 +938,13 @@ export class MarketAdminService {
       else openInterest.no = Number(line.qty);
     }
 
-    // PLAN 12: the detail says how many objections the proposal drew and links to the list;
-    // one grouped count over disputes_market_id_status_idx rather than three lookups.
-    const disputeLines = await executor
-      .select({ status: schema.disputes.status, n: sql<string>`count(*)` })
-      .from(schema.disputes)
-      .where(eq(schema.disputes.marketId, row.id))
-      .groupBy(schema.disputes.status);
-    const disputeCounts = { open: 0, accepted: 0, rejected: 0 };
-    for (const line of disputeLines) {
-      // count() over bigint arrives as a string of digits, like the sums above.
-      disputeCounts[line.status] = Number(line.n);
-    }
+    // ADR-0046: where the worker stands on a judged market, one row per step (none before the
+    // judgement or for a voided market). Ordered here rather than in SQL: SETTLEMENT_STEPS is
+    // the order the worker runs them in, which no column of the table records.
+    const stepRows = await executor
+      .select()
+      .from(schema.marketSettlementSteps)
+      .where(eq(schema.marketSettlementSteps.marketId, row.id));
 
     // By id, not by created_at: every market_events row is inserted while its writer holds
     // that market's row FOR UPDATE, so the bigserial is drawn in lock order and the newest
@@ -997,7 +968,7 @@ export class MarketAdminService {
       // sum() over bigint is numeric, which pg hands over as a string of digits.
       netCollectedP: serializePAmount(BigInt(collected?.net ?? '0')),
       openInterest,
-      disputeCounts,
+      settlementSteps: toSettlementSteps(stepRows),
       events: events.map(toMarketEvent),
     };
   }
@@ -1020,10 +991,9 @@ export class MarketAdminService {
    *
    * The key is `statusEventId`, the transition's `market_events.id` (A-M3-19, Q-M3-8 (3)): an
    * edit repeats the UNCHANGED key, so `statusSupersedes` drops it as not newer, while a
-   * `result_changed` — the same `resolving` with a higher id — is applied. The status rank,
-   * which ordered this event until M5, could not tell the two `resolving`s apart. A subscriber
-   * still pays up to two extra requests per edit — the handler restarts the row AND its ticks
-   * series — bounded by editors rather than traders and only for a MOUNTED observer.
+   * transition carries a higher one and is applied. A subscriber still pays up to two extra
+   * requests per edit — the handler restarts the row AND its ticks series — bounded by editors
+   * rather than traders and only for a MOUNTED observer.
    */
   private async publishStatus(market: AdminMarket): Promise<void> {
     await this.publisher.publishMarket(market.id, {
@@ -1031,7 +1001,6 @@ export class MarketAdminService {
       marketId: market.id,
       status: market.status,
       resolvedResult: market.resolvedResult,
-      disputeUntil: market.disputeUntil,
       statusEventId: market.statusEventId,
       ts: market.updatedAt,
     });

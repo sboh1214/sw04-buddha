@@ -31,8 +31,9 @@ import {
  * order — and the market DTOs carry the same key (`MarketSummary.statusEventId`) so a REST
  * snapshot seeds the comparison (A-M3-19, Q-M3-8 (3), M5). Until M5 the event carried no key
  * and a client kept the higher status rank in `MARKET_STATUSES` order, which was a total order
- * only while no transition repeated a status; M5's `result_changed` repeats `resolving` with a
- * new result and deadline, which is the day that rule stopped holding. The rank stays as the
+ * only while no transition repeated a status; M5's `result_changed` repeated its dispute-stage
+ * status with a new result and deadline (removed with the dispute stage, ADR-0046), and an admin edit still
+ * republishes an unchanged status (A-M4-36), so the key stays the rule. The rank stays as the
  * FALLBACK for a row with no key (`statusSupersedes`): a row written outside the transition
  * paths — a test factory — has none, and rank is still the one order such a row can join.
  *
@@ -89,8 +90,8 @@ export function statusRank(status: MarketStatus): number {
  *
  * With a key on both sides it is `supersedes` on `statusEventId`, which is strict: a repeat of
  * the same status (an admin edit republishes it unchanged, A-M4-36) and a late or duplicate
- * delivery both answer false, while `result_changed` — the same `resolving` with a NEWER event
- * id — answers true. Without a key on either side it falls back to the status rank, the order
+ * delivery both answer false, while the same status with a NEWER event id (M5's legacy
+ * `result_changed`) answers true. Without a key on either side it falls back to the status rank, the order
  * every row can join; that path is only ever taken for rows a test factory wrote, but it keeps
  * the function total rather than throwing on a null.
  */
@@ -133,8 +134,7 @@ export const marketTradeEventSchema = z
 export type MarketTradeEvent = z.infer<typeof marketTradeEventSchema>;
 
 /**
- * Room `market:<id>`: a status transition (open, close, resolve, result change, finalize,
- * void), or the same status republished so subscribers refetch a descriptive edit (A-M4-36,
+ * Room `market:<id>`: a status transition (open, close, resolve, finalize, void), or the same status republished so subscribers refetch a descriptive edit (A-M4-36,
  * `MarketAdminService` `update`). `statusEventId` is the transition's `market_events.id` — the
  * key `statusSupersedes` orders by — and the repeat carries the UNCHANGED one, which is what
  * makes it safe: a client drops it as not newer, and only the REST snapshot it triggers
@@ -147,7 +147,6 @@ export const marketStatusEventSchema = z
     marketId: z.uuid(),
     status: marketStatusSchema,
     resolvedResult: outcomeSchema.nullish(),
-    disputeUntil: z.iso.datetime().nullish(),
     statusEventId: serialIdSchema.nullable(),
     ts: tsSchema,
   })

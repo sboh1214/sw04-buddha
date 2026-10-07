@@ -83,9 +83,8 @@ function usePaymentActionCache() {
 /**
  * `POST /admin/payments/:id/refund` (ADR-0042 「관리자 환불」): take the P back, cancel the whole
  * KRW at the PG, or retry a `refunding` one. The toast and the dialog are the caller's, per
- * `mutate` call (the `useReviewDispute` split); the cache writes happen here, once
- * (`usePaymentActionCache`). A refusal the PG's cancel 재통보 contradicts answers 200 with the
- * row `refunded`: a success like any other.
+ * `mutate` call; the cache writes happen here, once (`usePaymentActionCache`). A refusal the
+ * PG's cancel 재통보 contradicts answers 200 with the row `refunded`: a success like any other.
  */
 export function useRefundPayment() {
   const cache = usePaymentActionCache();

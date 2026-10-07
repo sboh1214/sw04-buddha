@@ -52,7 +52,7 @@
 | 수수료 | MVP 무수수료. %수수료·테이커 수수료가 가능하도록 스키마 반영 |
 | 결제 | 미구현. 충전 화면에서 금액 선택 → 즉시 성공 처리 (어댑터 인터페이스 뒤에 Mock) |
 | 시장 메커니즘 | LMSR AMM. CLOB 전환 가능하도록 `orders/fills` 스키마 설계 |
-| 시장 생성/정산 | 관리자 전용. 이의 접수 폼(처리 수동). 이의 기간 24시간 |
+| 시장 생성/정산 | 관리자 전용. 관리자 판정 즉시 확정, 곧바로 정산 (ADR-0046) |
 | 카테고리 | 경제·문화·엔터테인먼트·테크·날씨. 스포츠·선거 제외 |
 | 인증 | better-auth. 이메일+비밀번호, 구글/카카오/네이버. 한 계정에 여러 로그인 수단 연결 |
 | 인프라 | 로컬 docker-compose. Redis 처음부터 사용 |
@@ -191,16 +191,15 @@ strict-peer-dependencies=false
 상태 머신:
 ```
 draft ──(admin open)──▶ open ──(close_at 도달 / admin close)──▶ closed
-closed ──(admin resolve: result 제안)──▶ resolving
-resolving ──(dispute_until 경과, worker finalize)──▶ settled
-resolving ──(admin change result)──▶ resolving (dispute_until 리셋 24h)
-open | closed | resolving ──(admin void)──▶ voided
+closed ──(admin resolve: result 판정, 즉시 확정)──▶ resolved
+resolved ──(worker finalize: 정산 단계 모두 완료)──▶ settled
+open | closed ──(admin void)──▶ voided
 ```
 - `open`에서만 거래 가능.
-- `closed`는 거래 불가, 결과 대기.
-- `resolving`은 결과가 제안된 상태. `dispute_until = resolved_at + 24h`. 사용자는 이의 제기 가능.
-- `settled`는 지급 완료. 불변.
-- `voided`는 전 포지션의 `cost_basis`를 환불. 불변.
+- `closed`는 거래 불가, 판정 대기.
+- `resolved`는 관리자가 결과를 판정한 상태. 결과는 판정 즉시 확정되고 바꿀 수 없다(재판정 여부는 #26). 정산 단계가 진행 중이다. 거래·수정·무효 불가.
+- `settled`는 정산 단계(`SETTLEMENT_STEPS`)가 모두 끝난 상태. 불변. 지금 단계는 포지션 정산(`coin`) 하나이고, Forecast 채점(`score`)은 #29가 더한다(O-6).
+- `voided`는 전 포지션의 `cost_basis`를 환불. 불변. `open`·`closed`에서만 갈 수 있다.
 - 모든 전이는 `market_events`에 기록한다.
 
 ### 5.3 LMSR 가격 엔진 (`packages/shared/src/lmsr.ts`)
@@ -263,12 +262,11 @@ NO는 대칭.
 - 매도: 해제되는 원가 `released = round(cost_basis_p · Δ / qty)`; `qty −= Δ`; `cost_basis_p −= released`; `realized_pnl_p += proceeds − released`
 - 정산: 승리 결과 `payout = qty · 100`; `realized_pnl_p += payout − cost_basis_p`; 패배 결과 `realized_pnl_p −= cost_basis_p`; 이후 `qty = 0, cost_basis_p = 0, settled = true`
 
-### 5.5 마감 · 정산 · 이의
+### 5.5 마감 · 판정 · 정산
 - **마감**: 시장 생성 시 `close_at`에 맞춘 BullMQ delayed job `market.close` 등록. 안전망으로 워커가 매 분 `status='open' AND close_at <= now()`를 스캔한다. 마감 시 `status='closed'`, `market_events` 기록, WS `status` 이벤트.
-- **결과 제안(관리자)**: `POST /admin/markets/:id/resolve {result, note, evidence_url}` → `status='resolving'`, `resolved_result`, `resolved_at`, `dispute_until = now()+24h`. delayed job `market.finalize` 등록(dispute_until). 관리자가 결과를 바꾸면 기존 job 취소 후 재등록.
-- **이의(사용자)**: `resolving` 상태에서만 `POST /markets/:id/disputes {reason, evidence_url}`. 사용자당 시장당 1건. 관리자 화면에서 열람·처리(accepted/rejected + 메모). 이의가 있어도 finalize는 자동 진행된다 — 관리자가 결과를 바꾸려면 dispute_until 전에 바꿔야 한다. (이의 접수 시 관리자에게 알림은 MVP에서 콘솔/DB 플래그만.)
-- **확정(워커)**: `market.finalize` → 시장 advisory lock → `status='resolving' AND dispute_until <= now()` 재검증 → 모든 미정산 포지션 순회하며 §5.4 정산 회계 + `ledger_entries(SETTLEMENT_PAYOUT)` + `balances` 갱신 → `status='settled'`. 배치는 사용자 100명 단위로 커밋해도 되지만, **각 사용자의 원장+잔고+포지션은 같은 트랜잭션**에 있어야 한다. 재실행 안전(멱등): `positions.settled=true`인 행은 건너뛴다.
-- **무효(관리자)**: `POST /admin/markets/:id/void {reason}` → 모든 포지션에 `cost_basis_p` 환불(`MARKET_VOID_REFUND`), `status='voided'`.
+- **판정(관리자)**: `POST /admin/markets/:id/resolve {result, note, evidence_url}` → `closed`에서만. 한 트랜잭션에서 시장 advisory lock → `market_events(resolved)`, `status='resolved'`, `resolved_result`, `resolved_at`, 정산 단계마다 `market_settlement_steps` 행(`pending`), `admin_actions(market_resolve)`. 결과는 즉시 확정된다 — 바꾸는 경로가 없고, `closed`가 아닌 시장(이미 판정한 시장 포함)은 `VALIDATION_ERROR`. COMMIT 뒤 `market.finalize` job을 지연 없이 등록(실패해도 매 분 스캔이 줍는다).
+- **정산(워커)**: `market.finalize` → 시장 advisory lock → `status='resolved'` 재검증 → `SETTLEMENT_STEPS` 순서대로 `done`이 아닌 단계를 실행하고 `completed_at`을 기록 → 모든 단계가 `done`이면 `finalized` 이벤트와 `status='settled'`. 포지션 정산 단계(`coin`)는 모든 미정산 포지션 순회하며 §5.4 정산 회계 + `ledger_entries(SETTLEMENT_PAYOUT)` + `balances` 갱신. 지금은 모든 단계가 시장당 한 트랜잭션이고, **각 사용자의 원장+잔고+포지션은 같은 트랜잭션**에 있어야 한다. 재실행 안전(멱등): `done`인 단계와 `positions.settled=true`인 행은 건너뛴다. 단계가 실패하면 트랜잭션을 되돌리고 별도 트랜잭션에 실패(`status='failed'`, `attempts`, `last_error`)를 남긴다. 시장은 `resolved`로 남고 매 분 스캔(`status='resolved'`)이 횟수 제한 없이 다시 시도한다.
+- **무효(관리자)**: `POST /admin/markets/:id/void {reason}` → `open`·`closed`에서만. 모든 포지션에 `cost_basis_p` 환불(`MARKET_VOID_REFUND`), `status='voided'`. 판정한 시장(`resolved`·`settled`)은 무효할 수 없다 — 잘못된 판정은 #26 결정 전까지 계정별 관리자 조정(`ADMIN_ADJUST`)으로 보상한다.
 
 ### 5.6 원장 (Ledger)
 `ledger_entries`는 append-only. UPDATE/DELETE 금지 (DB 권한으로도 막는다: 앱 롤에 해당 테이블 UPDATE/DELETE 권한 미부여).
@@ -353,7 +351,7 @@ markets
   category_id    int → categories.id
   image_url      text
   mechanism      enum('lmsr','clob') default 'lmsr'
-  status         enum('draft','open','closed','resolving','settled','voided')
+  status         enum('draft','open','closed','resolved','settled','voided')
   visibility     enum('public','group') default 'public'   -- 그룹 대비
   group_id       uuid NULL                                  -- 그룹 대비 (FK는 그룹 테이블 생성 시)
   -- LMSR 상태
@@ -375,7 +373,6 @@ markets
   close_at       timestamptz NOT NULL
   resolved_result enum('YES','NO') NULL
   resolved_at    timestamptz NULL
-  dispute_until  timestamptz NULL
   settled_at     timestamptz NULL
   voided_at      timestamptz NULL
   created_by     text → user.id
@@ -435,23 +432,20 @@ price_ticks
   trigger        enum('trade','open','resolve')
   INDEX (market_id, ts)                         -- 월 단위 파티셔닝은 M6에서 검토
 
-disputes
-  id             uuid PK
-  market_id      uuid → markets.id
-  user_id        text → user.id
-  reason         text NOT NULL
-  evidence_url   text
-  status         enum('open','accepted','rejected') default 'open'
-  admin_note     text
-  reviewed_by    text NULL
-  reviewed_at    timestamptz NULL
-  created_at
-  UNIQUE (market_id, user_id)
+market_settlement_steps              -- 판정된 시장의 정산 단계 (ADR-0046). append-only 아님
+  market_id      uuid NOT NULL → markets.id
+  step           varchar(20) NOT NULL           -- SETTLEMENT_STEPS: 'coin' (#29가 'score' 추가)
+  status         varchar(20) default 'pending'  -- 'pending'|'done'|'failed'
+  attempts       int NOT NULL default 0         -- CHECK (attempts >= 0)
+  completed_at   timestamptz NULL               -- status='done'일 때만 채움 (CHECK)
+  last_error     text NULL                      -- 마지막 실패 메시지 앞 1,000자
+  created_at, updated_at
+  PK (market_id, step)
 
 market_events                        -- append-only 감사 로그
   id             bigserial PK
   market_id      uuid → markets.id
-  type           varchar(40)                    -- 'created','opened','closed','resolve_proposed','result_changed','finalized','voided','rules_edited'
+  type           varchar(40)                    -- 'created','opened','closed','resolved','finalized','voided','rules_edited' (legacy: 'resolve_proposed','result_changed'는 과거 행만)
   actor_id       text NULL
   payload        jsonb
   created_at
@@ -460,7 +454,7 @@ market_events                        -- append-only 감사 로그
 admin_actions
   id             uuid PK
   admin_id       text → user.id
-  type           varchar(40)                    -- 'balance_adjust','market_*','dispute_review'
+  type           varchar(40)                    -- 'balance_adjust','market_*'
   target_type    varchar(32)
   target_id      text
   payload        jsonb
@@ -476,7 +470,7 @@ audit_failures
 ### 6.3 그룹 기능 대비 (지금 반영)
 - `markets.visibility`, `markets.group_id`는 지금 추가한다 (FK 없이). 그룹 테이블(`groups`, `group_members`)은 만들지 않는다.
 - 랭킹은 `positions.realized_pnl_p`, `fills`, `ledger_entries`에서 사용자별로 집계 가능하도록 인덱스를 둔다. 별도 집계 테이블은 그룹 마일스톤에서.
-- `profiles.nickname`은 지금부터 필수 (랭킹·이의·향후 댓글에 필요).
+- `profiles.nickname`은 지금부터 필수 (랭킹·향후 댓글에 필요).
 
 ### 6.4 DB 권한
 - 앱 롤 `buddha_app`: `ledger_entries`, `market_events`, `admin_actions`에 INSERT/SELECT만.
@@ -514,8 +508,6 @@ audit_failures
 | GET | `/me/ledger` | 원장 (cursor) |
 | POST | `/payments/charge` | `{amountP}` → mock 즉시 성공. `PaymentProvider` 인터페이스 경유 |
 | GET | `/me/payments` | |
-| POST | `/markets/:id/disputes` | `resolving` 상태에서만 |
-| GET | `/me/disputes` | |
 
 ### 7.3 관리자 (`role='admin'`)
 | Method | Path | 설명 |
@@ -524,17 +516,15 @@ audit_failures
 | PATCH | `/admin/markets/:id` | draft/open 상태에서 수정. `rules` 변경은 `market_events(rules_edited)` 기록. open 상태에서는 title·rules·close_at 수정 시 경고 후 허용, `liquidity_b`·`initial_prob`는 draft에서만 |
 | POST | `/admin/markets/:id/open` | rules 비어 있으면 거부 |
 | POST | `/admin/markets/:id/close` | 즉시 마감 |
-| POST | `/admin/markets/:id/resolve` | `{result, note, evidenceUrl}` |
-| POST | `/admin/markets/:id/void` | `{reason}` |
-| GET | `/admin/disputes` | `?status=` |
-| PATCH | `/admin/disputes/:id` | `{status, adminNote}` |
+| POST | `/admin/markets/:id/resolve` | `{result, note, evidenceUrl}`. `closed`에서만. 판정 즉시 확정 (§5.5) |
+| POST | `/admin/markets/:id/void` | `{reason}`. `open`·`closed`에서만 |
 | GET | `/admin/users` | 검색 |
 | POST | `/admin/users/:id/balance-adjust` | `{amountP(±), memo}` → ADMIN_ADJUST |
 | GET | `/admin/payments` | |
 | GET | `/admin/audit-failures` | |
 
 ### 7.4 에러 코드
-`UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `VALIDATION_ERROR`, `MARKET_NOT_OPEN`, `MARKET_CLOSED`, `INSUFFICIENT_BALANCE`, `INSUFFICIENT_POSITION`, `PRICE_MOVED`, `DUPLICATE_REQUEST`(멱등키 충돌·다른 페이로드), `RATE_LIMITED`, `DISPUTE_WINDOW_CLOSED`, `RULES_REQUIRED`, `INTERNAL`.
+`UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `VALIDATION_ERROR`, `MARKET_NOT_OPEN`, `MARKET_CLOSED`, `INSUFFICIENT_BALANCE`, `INSUFFICIENT_POSITION`, `PRICE_MOVED`, `DUPLICATE_REQUEST`(멱등키 충돌·다른 페이로드), `RATE_LIMITED`, `RULES_REQUIRED`, `INTERNAL`.
 
 ### 7.5 레이트 리밋
 `@nestjs/throttler` + Redis 스토리지. 기본 100req/분/IP. `/trades` 20req/분/사용자. `/payments/charge` 10req/분/사용자.
@@ -552,7 +542,7 @@ audit_failures
 |---|---|---|
 | `market:tick` | market | `{marketId, pYesBp, lastPrice, volumeP, tradeCount, ts}` |
 | `market:trade` | market | `{marketId, outcome, side, qty, priceAvgBp, ts}` (익명) |
-| `market:status` | market | `{marketId, status, resolvedResult?, disputeUntil?}` |
+| `market:status` | market | `{marketId, status, resolvedResult, statusEventId, ts}` (API가 `resolved`, 워커가 `settled`) |
 | `user:balance` | user | `{availableP, lockedP}` |
 | `user:position` | user | `{marketId, outcome, qty, costBasisP, realizedPnlP}` |
 
@@ -571,11 +561,11 @@ audit_failures
 | 큐 | 잡 | 트리거 | 동작 |
 |---|---|---|---|
 | `markets` | `market.close` | 생성 시 delayed(close_at) + 매 분 스캔 | open→closed |
-| `markets` | `market.finalize` | resolve 시 delayed(dispute_until) + 매 분 스캔 | resolving→settled (§5.5) |
+| `markets` | `market.finalize` | 판정 시 즉시 + 매 분 스캔 | resolved→settled (§5.5) |
 | `audit` | `ledger.audit` | 매일 04:00 KST | 원장-잔고 불변식 검증 |
 | `stats` | `market.trader_count` | 거래 후 debounce 10s | `trader_count` 재계산 |
 
-- 모든 잡은 멱등. 재시도 3회, 지수 백오프. 실패는 `audit_failures` 또는 BullMQ failed set에 남긴다.
+- 모든 잡은 멱등. 재시도 3회, 지수 백오프. 실패는 `audit_failures` 또는 BullMQ failed set에 남긴다. 정산 단계의 실패는 `market_settlement_steps`에도 남는다(§5.5).
 - 워커는 `packages/db`와 `packages/shared`를 사용하고 API 앱에 의존하지 않는다. 정산 회계 함수는 `packages/shared/src/accounting.ts`에 두고 API와 워커가 공유한다.
 
 ---
@@ -637,12 +627,11 @@ audit_failures
 | 경로 | 화면 | 핵심 요소 |
 |---|---|---|
 | `/` | 홈 | 카테고리 탭(전체/경제/문화/엔터/테크/날씨), 정렬(거래량/마감임박/신규), 마켓 카드 그리드, 검색 |
-| `/markets/[slug]` | 시장 상세 | 상단: 질문·카테고리·마감 카운트다운·거래량. 확률 큰 숫자 + 타임라인 차트(1D/1W/전체). **정산 기준 섹션(rules, 출처)**. 매수/매도 패널. 내 포지션. 최근 체결. `resolving`이면 결과·이의 마감시각·이의 제기 버튼. `settled`면 결과·내 손익 |
+| `/markets/[slug]` | 시장 상세 | 상단: 질문·카테고리·마감 카운트다운·거래량. 확률 큰 숫자 + 타임라인 차트(1D/1W/전체). **정산 기준 섹션(rules, 출처)**. 매수/매도 패널. 내 포지션. 최근 체결. `resolved`면 결과와 정산 진행 안내. `settled`면 결과·내 손익 |
 | `/portfolio` | 포트폴리오 | 잔고 요약, 보유 포지션(현재가 기준 평가손익), 정산 완료 이력, 주문 이력 |
 | `/wallet` | 지갑 | 잔고, 충전(프리셋 금액 §17 Q3 + 직접 입력), 원장 내역. 상단 고정 안내: "P는 현금으로 환전·출금할 수 없습니다" |
 | `/login`, `/signup` | 인증 | 이메일/비번, 소셜 3종 버튼 |
 | `/settings` | 설정 | 닉네임, 연결된 로그인 수단(연결/해제), 비밀번호 변경, 테마 |
-| `/disputes/[marketId]` | 이의 제기 | 사유·근거 URL 폼 (상세 화면에서 모달로 대체 가능) |
 | `/about` | 안내 | 서비스 설명, "P는 환전 불가" 고지, 이용약관·개인정보(플레이스홀더 §17 Q6) |
 | `/admin/*` | 관리자 | §12 |
 
@@ -651,8 +640,8 @@ audit_failures
 - `ProbabilityDisplay`: 숫자 롤링(`@number-flow/react` 또는 framer-motion), 방향 화살표 + `+2%p` 배지(5초 후 사라짐).
 - `ProbabilityChart`: 라인차트, 시간 범위 토글, 호버 툴팁(시각·확률).
 - `TradePanel`: 탭(매수/매도) × 결과(예/아니오). 입력 모드 토글(P 금액 / 계약 수). 실시간 견적(`POST /quotes` 디바운스 300ms). 요약(계약 수·평균가·맞히면 지급·예상 수익·가격 변동 후 확률). 확인 버튼 → 성공 토스트 + 잔고/포지션 갱신. 잔고 부족 시 "충전하기" 링크.
-- `RulesSection`: 정산 기준·출처·마감·정산 예정. 상세 화면에서 접히지 않음.
-- `PositionRow`, `LedgerRow`, `DisputeForm`, `CountdownBadge`, `EmptyState`, `AuthButtons`.
+- `RulesSection`: 정산 기준·출처·마감. 상세 화면에서 접히지 않음.
+- `PositionRow`, `LedgerRow`, `CountdownBadge`, `EmptyState`, `AuthButtons`.
 - 레이아웃: 상단 네비(로고, 검색, 카테고리, 잔고 칩, 프로필 메뉴). 모바일 하단 탭(홈/포트폴리오/지갑/설정).
 
 ### 11.5 데이터 계층
@@ -667,11 +656,10 @@ audit_failures
 
 `AdminGuard` 통과 시만 접근. 별도 레이아웃(사이드바).
 
-- **시장 목록**: 상태 필터, 마감 임박, 정산 대기 배지.
+- **시장 목록**: 상태 필터, 마감 임박, 판정 대기(`closed`)·정산 대기(`resolved`) 배지.
 - **시장 생성/수정 폼**: 질문, 설명(마크다운), **정산 기준(필수, 마크다운)**, 출처, 카테고리, 이미지 URL, 마감 시각(KST 입력, UTC 저장), 초기 확률(슬라이더 1~99%), 유동성 b(도움말: 최대 손실 표시), 미리보기(카드·상세 미리보기).
-- **시장 상세(관리)**: 상태 전이 버튼(열기/마감/정산/무효), LMSR 상태(q_yes, q_no, 누적 운영 손익), 이벤트 로그, 체결 목록.
-- **정산 화면**: 결과 선택(예/아니오), 메모, 근거 URL → 확인 모달("24시간 이의 기간 후 자동 확정됩니다").
-- **이의 목록**: 시장별 그룹, 사유·근거, 처리(수용/기각 + 메모). 수용해도 자동으로 결과가 바뀌지는 않는다 — 관리자가 시장 상세에서 결과를 변경해야 한다 (명시적 두 단계).
+- **시장 상세(관리)**: 상태 전이 버튼(열기/마감/정산/무효), LMSR 상태(q_yes, q_no, 누적 운영 손익), 판정 뒤 정산 단계(단계·상태·시도·완료 시각·마지막 오류, 읽기 전용), 이벤트 로그, 체결 목록.
+- **정산 화면**: 결과 선택(예/아니오), 메모, 근거 URL → 확인 모달("판정은 즉시 확정되고 바로 정산이 시작됩니다. 판정한 뒤에는 결과를 바꾸거나 무효로 할 수 없습니다."). `closed`에서만 열린다.
 - **사용자**: 검색, 잔고, 포지션, 잔고 조정(사유 필수 → ADMIN_ADJUST).
 - **결제 목록**, **감사 실패 목록**.
 
@@ -779,6 +767,8 @@ AC:
 - [ ] 결과 변경 후 dispute_until이 새로 +24h, 기존 finalize 잡 취소됨.
 - [ ] Playwright e2e: 매수 → 관리자 정산 → (5초) → 포트폴리오에 실현 손익 표시 → 지갑 원장에 지급 내역.
 
+(2026-09-28 #19로 이의 단계 폐지)
+
 ### M6 — 하드닝 · 문서
 작업:
 - 레이트 리밋(§7.5), 요청 로깅(pino), 에러 핸들링 통일, 헬스체크 상세.
@@ -834,7 +824,6 @@ NAVER_CLIENT_ID= / NAVER_CLIENT_SECRET=
 SMTP_HOST=localhost SMTP_PORT=1025
 SEED_ADMIN_EMAIL=admin@buddha.local
 SEED_ADMIN_PASSWORD=admin1234!
-TEST_DISPUTE_WINDOW_SECONDS=86400
 API_PORT=4000
 NEXT_PUBLIC_API_URL=http://localhost:4000   # web rewrite 대상
 ```
@@ -881,7 +870,7 @@ api:openapi    apps/api에서 OpenAPI JSON 추출 → packages/api-client 생성
 ---
 
 ## 부록 A — 사용자 노출 문구 원칙 (`copy.ts`)
-- "예측하기" / "예" / "아니오" / "확률" / "맞히면 100P" / "예상 수익" / "정산 기준" / "정산 완료" / "이의 제기"
+- "예측하기" / "예" / "아니오" / "확률" / "맞히면 100P" / "예상 수익" / "정산 기준" / "판정 완료" / "정산 완료"
 - 금지: 베팅, 배당, 배당률, 승률, 판돈, 당첨
 - 지갑·충전 화면 고정 문구: "충전한 P는 서비스 내에서만 사용할 수 있으며, 현금으로 환전하거나 출금할 수 없습니다."
 

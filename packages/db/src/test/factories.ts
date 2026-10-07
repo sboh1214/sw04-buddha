@@ -13,18 +13,20 @@ import {
   maxLossP,
   priceOf,
   serializeQuantity,
-  type DisputeStatus,
+  SETTLEMENT_STEPS,
   type MarketStatus,
   type Outcome,
   type Role,
+  type SettlementStep,
+  type SettlementStepStatus,
 } from '@buddha/shared';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../client.js';
 import {
   balances,
   categories,
-  disputes,
   ledgerEntries,
+  marketSettlementSteps,
   markets,
   positions,
   profiles,
@@ -146,16 +148,22 @@ export interface CreateMarketInput {
   tradeCount?: number;
   closeAt?: Date;
   /**
-   * Resolution columns (M5), stored as given and null by default: a test that needs a market
-   * mid-settlement sets `status: 'resolving'` with a result and a `disputeUntil` in the past or
-   * the future. The factory writes no market event, so `statusEventId` stays null unless given —
-   * the rank fallback of `statusSupersedes` is what such a row orders by.
+   * Resolution columns, stored as given and null by default: a test that needs a market
+   * mid-settlement sets `status: 'resolved'` with a result. The factory writes no market event,
+   * so `statusEventId` stays null unless given — the rank fallback of `statusSupersedes` is what
+   * such a row orders by.
    */
   resolvedResult?: Outcome | null;
   resolvedAt?: Date | null;
-  disputeUntil?: Date | null;
   settledAt?: Date | null;
   statusEventId?: number | null;
+  /**
+   * `market_settlement_steps` rows (ADR-0046) as the real paths leave them: for `resolved`, one
+   * `pending` row per SETTLEMENT_STEPS step (the judgement writes them); for `settled`, one `done`
+   * row each, completed at `settledAt` (or now). Default true; `false` writes none — the state a
+   * test of the worker's missing-row fallback starts from. Other statuses never get rows.
+   */
+  settlementSteps?: boolean;
 }
 
 /**
@@ -206,44 +214,53 @@ export async function createMarket(db: Db, input: CreateMarketInput = {}) {
       closeAt: input.closeAt ?? new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),
       resolvedResult: input.resolvedResult ?? null,
       resolvedAt: input.resolvedAt ?? null,
-      disputeUntil: input.disputeUntil ?? null,
       settledAt: input.settledAt ?? null,
       statusEventId: input.statusEventId ?? null,
       createdBy,
     })
     .returning();
-  return row!;
+  const market = row!;
+  if (input.settlementSteps !== false && (status === 'resolved' || status === 'settled')) {
+    for (const step of SETTLEMENT_STEPS) {
+      await createSettlementStep(db, {
+        marketId: market.id,
+        step,
+        ...(status === 'settled'
+          ? { status: 'done', attempts: 1, completedAt: input.settledAt ?? now }
+          : {}),
+      });
+    }
+  }
+  return market;
 }
 
-export interface CreateDisputeInput {
+export interface CreateSettlementStepInput {
   marketId: string;
-  userId: string;
-  reason?: string;
-  evidenceUrl?: string | null;
-  /** Default 'open'. */
-  status?: DisputeStatus;
-  adminNote?: string | null;
-  reviewedBy?: string | null;
-  reviewedAt?: Date | null;
+  /** Default 'coin'. */
+  step?: SettlementStep;
+  /** Default 'pending'. `done` needs `completedAt` (a CHECK ties the two). */
+  status?: SettlementStepStatus;
+  /** Default 0. */
+  attempts?: number;
+  completedAt?: Date | null;
+  lastError?: string | null;
 }
 
 /**
- * Inserts a `disputes` row and nothing else (no admin action, no market change): the state a
- * review or a list test starts from. The UNIQUE (market_id, user_id) applies, so a second row
- * for one pair throws exactly as the API's filing path would refuse it.
+ * Inserts one `market_settlement_steps` row and nothing else (ADR-0046): a test that needs a
+ * step in a given state — failed with an error, done — writes it here. The primary key
+ * (market_id, step) applies, so a second row for one pair throws.
  */
-export async function createDispute(db: Db, input: CreateDisputeInput) {
+export async function createSettlementStep(db: Db, input: CreateSettlementStepInput) {
   const [row] = await db
-    .insert(disputes)
+    .insert(marketSettlementSteps)
     .values({
       marketId: input.marketId,
-      userId: input.userId,
-      reason: input.reason ?? '출처가 다릅니다.',
-      evidenceUrl: input.evidenceUrl ?? null,
-      status: input.status ?? 'open',
-      adminNote: input.adminNote ?? null,
-      reviewedBy: input.reviewedBy ?? null,
-      reviewedAt: input.reviewedAt ?? null,
+      step: input.step ?? 'coin',
+      status: input.status ?? 'pending',
+      attempts: input.attempts ?? 0,
+      completedAt: input.completedAt ?? null,
+      lastError: input.lastError ?? null,
     })
     .returning();
   return row!;

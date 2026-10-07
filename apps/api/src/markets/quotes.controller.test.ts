@@ -254,7 +254,7 @@ describe.skipIf(!hasTestInfra)('quotes (integration)', () => {
     const notOpen = await quote(body(closed.id));
     expect(notOpen.statusCode).toBe(409);
     expect(notOpen.json()).toMatchObject({ error: { code: 'MARKET_NOT_OPEN' } });
-    for (const status of ['resolving', 'settled', 'voided'] as const) {
+    for (const status of ['resolved', 'settled', 'voided'] as const) {
       const other = await market({ status });
       const refused = await quote(body(other.id));
       expect({ status, code: refused.statusCode }).toEqual({ status, code: 409 });

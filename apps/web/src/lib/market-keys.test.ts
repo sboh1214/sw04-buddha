@@ -12,12 +12,12 @@ import { type QuoteBody } from './api';
 import {
   CATEGORIES_QUERY_KEY,
   DEFAULT_MARKET_FILTERS,
-  DISPUTES_KEY,
   MARKETS_KEY,
   MARKET_FILLS_KEY,
   MARKET_KEY,
   ORDERS_KEY,
   POSITIONS_KEY,
+  PRIVATE_QUERY_ROOTS,
   QUOTE_KEY,
   TICKS_KEY,
   type MarketFilters,
@@ -26,7 +26,6 @@ import {
   marketFillsKey,
   marketKey,
   marketsKey,
-  myDisputesKey,
   quoteMarketKey,
   quoteQueryKey,
   ticksKey,
@@ -63,17 +62,6 @@ describe('the market key builders', () => {
   it('hangs the fills and the quotes off their own roots', () => {
     expect(marketFillsKey(ID)).toEqual([...MARKET_FILLS_KEY, ID]);
     expect(quoteMarketKey(ID)).toEqual([...QUOTE_KEY, ID]);
-  });
-
-  it('keys the own dispute under the disputes root, on the canonical uuid', () => {
-    // The file mutation seeds the row the API answered — which carries the row's own
-    // lower-case id — so an upper-case segment must land on the same entry (A-M3-29). The root
-    // is what one invalidation after filing sweeps, and it must never reach `['me']`.
-    expect(myDisputesKey(ID.toUpperCase())).toEqual([...DISPUTES_KEY, 'mine', ID]);
-    expect(hashKey(myDisputesKey(ID.toUpperCase()))).toBe(hashKey(myDisputesKey(ID)));
-    expect(partialMatchKey(myDisputesKey(ID), DISPUTES_KEY)).toBe(true);
-    expect(partialMatchKey(myDisputesKey(ID), ME_QUERY_KEY)).toBe(false);
-    expect(partialMatchKey(myDisputesKey(ID), MARKET_KEY)).toBe(false);
   });
 });
 
@@ -175,10 +163,17 @@ describe('isPrivateQueryKey', () => {
       ['ADMIN_MARKETS_KEY', ADMIN_MARKETS_KEY],
       ['POSITIONS_KEY', POSITIONS_KEY],
       ['ORDERS_KEY', ORDERS_KEY],
-      ['DISPUTES_KEY', DISPUTES_KEY],
-      ['myDisputesKey', myDisputesKey(ID)],
     ];
     for (const [name, key] of sessionKeys) expect(isPrivateQueryKey(key), name).toBe(true);
+  });
+
+  it('registers exactly the roots the app still keys personal data under', () => {
+    // The account's own disputes went with the dispute stage (ADR-0046); a root nothing keys
+    // under any more is a stale entry, not a lock.
+    expect([...PRIVATE_QUERY_ROOTS].sort()).toEqual(
+      ['admin', 'charge-packages', 'ledger', 'me', 'orders', 'payments', 'positions'].sort(),
+    );
+    expect(PRIVATE_QUERY_ROOTS.has('disputes')).toBe(false);
   });
 
   it('leaves every public market key dehydratable', () => {
@@ -215,7 +210,6 @@ describe('dehydratePublic', () => {
       queryClient.setQueryData(ACCOUNTS_QUERY_KEY, []);
       queryClient.setQueryData(POSITIONS_KEY, []);
       queryClient.setQueryData(ORDERS_KEY, []);
-      queryClient.setQueryData(myDisputesKey(ID), null);
       queryClient.setQueryData(LEDGER_QUERY_KEY, []);
       queryClient.setQueryData(PAYMENTS_QUERY_KEY, []);
       queryClient.setQueryData(CHARGE_PACKAGES_QUERY_KEY, []);

@@ -365,7 +365,7 @@ describe('liveMarketStatus', () => {
     // saying 진행 중 — with nothing scheduled to correct it. Ranked by the same order
     // `applyStatus` and `joinMarket` compare on, so no reading here walks a badge backwards.
     expect(liveMarketStatus('closed', 'open')).toBe('closed');
-    expect(liveMarketStatus('resolving', 'closed')).toBe('resolving');
+    expect(liveMarketStatus('resolved', 'closed')).toBe('resolved');
     // Equal is not newer: an event that has already been applied writes nothing either.
     expect(liveMarketStatus('closed', 'closed')).toBe('closed');
     // And an absent entry — the market this tab holds no cache row for — is not a status.
@@ -380,7 +380,7 @@ describe('liveMarketStatus', () => {
     // badge an open holding 무효 while 평가 금액 and 총 평가 금액 still value it at the last
     // traded price — the fiction `positionValueP` and 정산 이력 are documented never to print.
     expect(liveMarketStatus('open', 'settled')).toBe('open');
-    expect(liveMarketStatus('resolving', 'voided')).toBe('resolving');
+    expect(liveMarketStatus('resolved', 'voided')).toBe('resolved');
     // The refusal is about MEMBERSHIP, not about the word: a row already in the settled list
     // takes a terminal status from the live row like any other same-list transition.
     expect(liveMarketStatus('settled', 'voided')).toBe('voided');
@@ -396,10 +396,10 @@ describe('liveMarketStatus', () => {
     );
     expect(table).toEqual([
       // held 'draft'  — nothing is newer only for itself; settled/voided change the list.
-      ['draft', 'open', 'closed', 'resolving', 'draft', 'draft'],
-      ['open', 'open', 'closed', 'resolving', 'open', 'open'],
-      ['closed', 'closed', 'closed', 'resolving', 'closed', 'closed'],
-      ['resolving', 'resolving', 'resolving', 'resolving', 'resolving', 'resolving'],
+      ['draft', 'open', 'closed', 'resolved', 'draft', 'draft'],
+      ['open', 'open', 'closed', 'resolved', 'open', 'open'],
+      ['closed', 'closed', 'closed', 'resolved', 'closed', 'closed'],
+      ['resolved', 'resolved', 'resolved', 'resolved', 'resolved', 'resolved'],
       // held 'settled' — already in 정산 이력, so a terminal live status is same-list.
       ['settled', 'settled', 'settled', 'settled', 'settled', 'voided'],
       ['voided', 'voided', 'voided', 'voided', 'voided', 'voided'],
@@ -419,7 +419,7 @@ describe('positionListStatusFor', () => {
     // Trading has stopped in these two and nothing has been paid out yet: the rows are still
     // open holdings, and asking for the settled list would empty the card the other way.
     expect(positionListStatusFor('closed')).toBe('open');
-    expect(positionListStatusFor('resolving')).toBe('open');
+    expect(positionListStatusFor('resolved')).toBe('open');
     expect(positionListStatusFor('open')).toBe('open');
     // A draft never reaches the detail route (the API 404s it), but the prop is typed over
     // every status, so it must still answer with the list that exists.
@@ -434,7 +434,7 @@ describe('positionListStatusFor', () => {
       ['draft', 'open'],
       ['open', 'open'],
       ['closed', 'open'],
-      ['resolving', 'open'],
+      ['resolved', 'open'],
       ['settled', 'settled'],
       ['voided', 'settled'],
     ]);

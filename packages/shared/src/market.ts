@@ -36,6 +36,8 @@ import {
   orderTypeSchema,
   outcomeSchema,
   priceTickTriggerSchema,
+  settlementStepSchema,
+  settlementStepStatusSchema,
 } from './enums.js';
 import { balanceSchema } from './wallet.js';
 
@@ -109,7 +111,7 @@ const marketSummaryFields = {
    * — the ordering key of `market:status` (A-M3-19, Q-M3-8 (3)). Drawn while the writer holds
    * the market row FOR UPDATE, so it is the market's commit order: a client compares a snapshot
    * against an event with `statusSupersedes` (realtime.ts) instead of ranking statuses, which
-   * stopped being a total order once M5's `result_changed` repeated `resolving`. Null only for a
+   * stopped being a total order once M5's `result_changed` repeated a status. Null only for a
    * row written outside the transition paths (a test factory); the rank order is the fallback.
    */
   statusEventId: z.string().nullable(),
@@ -150,7 +152,6 @@ export const marketSchema = z
     rules: z.string(),
     resolutionSource: z.string().nullable(),
     resolvedAt: z.iso.datetime().nullable(),
-    disputeUntil: z.iso.datetime().nullable(),
     settledAt: z.iso.datetime().nullable(),
     voidedAt: z.iso.datetime().nullable(),
   })
@@ -161,7 +162,7 @@ export type Market = z.infer<typeof marketSchema>;
 export const PUBLIC_MARKET_STATUSES = [
   'open',
   'closed',
-  'resolving',
+  'resolved',
   'settled',
   'voided',
 ] as const satisfies readonly Exclude<MarketStatus, 'draft'>[];
@@ -581,6 +582,21 @@ export const marketEventSchema = z
 export type MarketEvent = z.infer<typeof marketEventSchema>;
 
 // ---- admin --------------------------------------------------------------------------
+/** One row of `market_settlement_steps` (ADR-0046), admin-only. */
+export const adminSettlementStepSchema = z
+  .object({
+    step: settlementStepSchema,
+    status: settlementStepStatusSchema,
+    /** Attempts that ran to a commit or a rollback; 0 while the step has never run. */
+    attempts: countSchema,
+    completedAt: z.iso.datetime().nullable(),
+    /** Message of the last failed attempt (≤ SETTLEMENT_STEP_ERROR_MAX); kept after a success. */
+    lastError: z.string().nullable(),
+    updatedAt: z.iso.datetime(),
+  })
+  .meta({ id: 'AdminSettlementStep' });
+export type AdminSettlementStep = z.infer<typeof adminSettlementStepSchema>;
+
 /** Detail for `/admin/markets/:id`: the public shape plus LMSR state and exposure. */
 export const adminMarketSchema = marketSchema
   .extend({
@@ -598,8 +614,12 @@ export const adminMarketSchema = marketSchema
     netCollectedP: pAmountSchema,
     /** Σ positions.qty per outcome where settled = false. */
     openInterest: z.object({ yes: countSchema, no: countSchema }),
-    /** Disputes filed on this market, per status (PLAN 12: the detail links to the list). */
-    disputeCounts: z.object({ open: countSchema, accepted: countSchema, rejected: countSchema }),
+    /**
+     * The settlement steps of a judged market (ADR-0046), in SETTLEMENT_STEPS order: one row per
+     * step from the judgement on, empty before it and for a voided market. A `resolved` market
+     * whose step stays `failed` is what the admin's '정산 대기' badge points at.
+     */
+    settlementSteps: z.array(adminSettlementStepSchema),
     /** Newest first, at most 100. */
     events: z.array(marketEventSchema),
   })
@@ -665,11 +685,11 @@ export const voidMarketBodySchema = z
 export type VoidMarketBody = z.infer<typeof voidMarketBodySchema>;
 
 /**
- * `POST /admin/markets/:id/resolve` (PLAN 5.5, 7.3): propose a result on a closed market, or
- * change the proposed one while the market is still resolving (the dispute window restarts).
- * The note and the evidence are kept on the `market_events` payload and the admin action, not
- * on the market row — they are the audit trail of one proposal, and a changed result carries its
- * own.
+ * `POST /admin/markets/:id/resolve` (PLAN 5.5, 7.3; ADR-0046): judge a closed market. The
+ * result is final at once — the market becomes `resolved` and settlement starts; there is no
+ * way to change it (#26 decides re-judgement). The note and the evidence are kept on the
+ * `market_events` payload and the admin action, not on the market row: they are the audit
+ * trail of the judgement.
  */
 export const resolveMarketBodySchema = z
   .object({

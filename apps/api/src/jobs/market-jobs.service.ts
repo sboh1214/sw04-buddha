@@ -77,17 +77,18 @@ function bounded<T>(promise: Promise<T>, what: string): Promise<T> {
 }
 
 /**
- * PLAN 9's producer side (M5): the delayed `market.close` and `market.finalize` jobs the
- * worker consumes, registered by MarketAdminService AFTER its transaction commits and
- * cancelled the same way when the instant they were registered for stops being true (a
- * PATCHed `closeAt`, a changed result, a manual close, a void).
+ * PLAN 9's producer side (M5, ADR-0046): the `market.close` and `market.finalize` jobs the
+ * worker consumes, registered by MarketAdminService AFTER its transaction commits. A close job
+ * is delayed to `closeAt` and cancelled the same way when that instant stops being true (a
+ * PATCHed `closeAt`, a manual close, a void); a finalize job is due at once after the
+ * judgement and never cancelled.
  *
  * Best effort by design, like MarketPublisher: the transition has COMMITted when this runs,
  * so a failure here is logged and swallowed, never turned into an error response — and never
  * lost either, because the worker's per-minute scan (PLAN 5.5 "안전망") closes and finalizes
- * whatever is due whether or not its delayed job exists. That scan is also why a cancel that
- * finds nothing (the job already ran, or was never added) needs no retry: the job it would
- * have removed re-verifies status and instant under the market lock and is a no-op.
+ * whatever is due whether or not its job exists. That scan is also why a cancel that finds
+ * nothing (the job already ran, or was never added) needs no retry: the job it would have
+ * removed re-verifies status and instant under the market lock and is a no-op.
  *
  * The delay is computed from the instant the transaction read on the database clock, not
  * from `Date.now()`: the two clocks may disagree, and `closeAt - now` on the clock that wrote
@@ -135,19 +136,20 @@ export class MarketJobs implements OnApplicationShutdown {
     return this.cancel(marketCloseJobId(marketId, closeAt));
   }
 
-  /** `market.finalize` for one market at `disputeUntil`. */
-  scheduleFinalize(marketId: string, disputeUntil: Date, now: Date): Promise<void> {
+  /**
+   * `market.finalize` for one market judged at `resolvedAt` (ADR-0046): due at once — the
+   * delay is `resolvedAt - now`, which is 0 when the judgement passes its own instant — under
+   * an id fixed by market and judgement instant. Nothing cancels it: a judgement is final, and
+   * a duplicate run finds the market `settled` under the lock and skips.
+   */
+  scheduleFinalize(marketId: string, resolvedAt: Date, now: Date): Promise<void> {
     return this.schedule(
       JOB_NAMES.marketFinalize,
-      marketFinalizeJobId(marketId, disputeUntil),
+      marketFinalizeJobId(marketId, resolvedAt),
       marketId,
-      disputeUntil,
+      resolvedAt,
       now,
     );
-  }
-
-  cancelFinalize(marketId: string, disputeUntil: Date): Promise<void> {
-    return this.cancel(marketFinalizeJobId(marketId, disputeUntil));
   }
 
   private async schedule(

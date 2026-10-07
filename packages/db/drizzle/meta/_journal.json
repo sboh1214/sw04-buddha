@@ -113,6 +113,13 @@
       "when": 1790525381542,
       "tag": "0015_smartro_payments_events_contacts",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1791275338094,
+      "tag": "0016_resolved_status_settlement_steps",
+      "breakpoints": true
     }
   ]
 }

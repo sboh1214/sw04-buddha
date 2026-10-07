@@ -57,8 +57,6 @@ export const RATE_LIMIT_BUCKETS = {
   charge: { scope: 'user', limit: 10 },
   /** `/coupons/redeem`: a coupon code is a short secret and this is the only route that tests one. */
   coupon: { scope: 'user', limit: 10 },
-  /** `/markets/:id/disputes` (Q-M5-1: one per market, but not one per second). */
-  dispute: { scope: 'user', limit: 10 },
   /** Routes that mail an address the caller chose, counted per address (A-M2-10). */
   email: { scope: 'email', limit: 5 },
   /**

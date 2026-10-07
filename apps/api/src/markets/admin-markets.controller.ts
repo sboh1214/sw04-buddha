@@ -141,13 +141,11 @@ export class AdminMarketsController {
   @HttpCode(200)
   @ApiOperation({
     operationId: 'adminResolveMarket',
-    summary:
-      'closed → resolving: propose the result and start the dispute window; on a resolving ' +
-      'market change the proposed result (the window restarts, the pending finalize is replaced)',
+    summary: 'closed → resolved: record the final result; settlement starts immediately',
   })
   @ApiData(adminMarketSchema)
-  // VALIDATION_ERROR names `status` (not closed/resolving, or the dispute window already
-  // passed — the worker's finalize is pending) or `result` (the same result again).
+  // VALIDATION_ERROR names `status` for anything but a closed market — a resolved one
+  // included: a judgement is final, so neither the same result again nor another is accepted.
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
   adminResolveMarket(
     @CurrentUser() admin: SessionUser,
@@ -162,11 +160,11 @@ export class AdminMarketsController {
   @ApiOperation({
     operationId: 'adminVoidMarket',
     summary:
-      'Void an open, closed or resolving market: every unsettled position is refunded its ' +
+      'Void an open or closed market: every unsettled position is refunded its ' +
       'cost basis (MARKET_VOID_REFUND) and closed out',
   })
   @ApiData(adminMarketSchema)
-  // VALIDATION_ERROR names `status` for a draft, settled or already voided market.
+  // VALIDATION_ERROR names `status` for a draft, resolved, settled or already voided market.
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
   adminVoidMarket(
     @CurrentUser() admin: SessionUser,

@@ -53,7 +53,6 @@ const AUTH_ENV_KEYS = [
   'SMARTRO_MERCHANT_KEY',
   'SMARTRO_CANCEL_PASSWORD',
   'SMARTRO_APPROVAL_BASE_URL',
-  'TEST_DISPUTE_WINDOW_SECONDS',
 ] as const satisfies readonly (keyof Env)[];
 
 /**

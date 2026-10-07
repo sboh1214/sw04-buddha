@@ -5,7 +5,7 @@ describe('enums', () => {
   it('exposes tuple + schema pairs that agree', () => {
     expect(enums.roleSchema.parse('admin')).toBe('admin');
     expect(enums.outcomeSchema.parse('YES')).toBe('YES');
-    expect(enums.marketStatusSchema.parse('resolving')).toBe('resolving');
+    expect(enums.marketStatusSchema.parse('resolved')).toBe('resolved');
     expect(enums.ledgerEntryTypeSchema.options).toEqual([...enums.LEDGER_ENTRY_TYPES]);
     expect(enums.orderStatusSchema.options).toEqual([...enums.ORDER_STATUSES]);
     expect(() => enums.outcomeSchema.parse('MAYBE')).toThrow();
@@ -41,8 +41,8 @@ describe('enums', () => {
     for (const [earlier, later] of [
       ['draft', 'open'],
       ['open', 'closed'],
-      ['closed', 'resolving'],
-      ['resolving', 'settled'],
+      ['closed', 'resolved'],
+      ['resolved', 'settled'],
       ['settled', 'voided'],
     ] as const) {
       expect(rank(earlier)).toBeLessThan(rank(later));
@@ -79,6 +79,35 @@ describe('enums', () => {
     for (const type of enums.ADMIN_ACTION_TYPES) expect(type.length).toBeLessThanOrEqual(40);
   });
 
+  it('names the market statuses after the plan, with no dispute stage (O-5, O-7, ADR-0046)', () => {
+    expect(enums.MARKET_STATUSES).toEqual([
+      'draft',
+      'open',
+      'closed',
+      'resolved',
+      'settled',
+      'voided',
+    ]);
+    expect(enums.marketEventTypeSchema.parse('resolved')).toBe('resolved');
+    // The M5 events stay readable: market_events is append-only and old rows carry them.
+    expect(enums.marketEventTypeSchema.parse('resolve_proposed')).toBe('resolve_proposed');
+    expect(enums.marketEventTypeSchema.parse('result_changed')).toBe('result_changed');
+    expect(enums.ADMIN_ACTION_TYPES).not.toContain('dispute_review');
+    for (const type of enums.MARKET_EVENT_TYPES) expect(type.length).toBeLessThanOrEqual(40);
+  });
+
+  it('lists the settlement steps and their statuses (O-6, ADR-0046)', () => {
+    // Coin settlement is the only step until #29 appends Forecast scoring.
+    expect(enums.SETTLEMENT_STEPS).toEqual(['coin']);
+    expect(enums.settlementStepSchema.parse('coin')).toBe('coin');
+    expect(enums.settlementStepSchema.safeParse('score').success).toBe(false);
+    expect(enums.SETTLEMENT_STEP_STATUSES).toEqual(['pending', 'done', 'failed']);
+    // market_settlement_steps.step and .status are varchar(20).
+    for (const value of [...enums.SETTLEMENT_STEPS, ...enums.SETTLEMENT_STEP_STATUSES]) {
+      expect(value.length).toBeLessThanOrEqual(20);
+    }
+  });
+
   it('keeps the remaining enum schemas parseable', () => {
     expect(enums.paymentStatusSchema.parse('succeeded')).toBe('succeeded');
     expect(enums.marketMechanismSchema.parse('lmsr')).toBe('lmsr');
@@ -89,7 +118,6 @@ describe('enums', () => {
     expect(enums.timeInForceSchema.parse('ioc')).toBe('ioc');
     expect(enums.counterpartyTypeSchema.parse('amm')).toBe('amm');
     expect(enums.priceTickTriggerSchema.parse('trade')).toBe('trade');
-    expect(enums.disputeStatusSchema.parse('open')).toBe('open');
     expect(enums.adminActionTypeSchema.parse('balance_adjust')).toBe('balance_adjust');
     expect(enums.auditFailureKindSchema.parse('ledger_balance_mismatch')).toBe(
       'ledger_balance_mismatch',

@@ -68,7 +68,6 @@ const market: Market = {
   openAt: '2026-09-01T00:00:00.000Z',
   resolvedResult: null,
   resolvedAt: null,
-  disputeUntil: null,
   settledAt: null,
   voidedAt: null,
   statusEventId: '2',

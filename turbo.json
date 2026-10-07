@@ -30,7 +30,6 @@
         "TEST_DATABASE_URL",
         "TEST_DATABASE_MIGRATE_URL",
         "TEST_REDIS_URL",
-        "TEST_DISPUTE_WINDOW_SECONDS",
         "BETTER_AUTH_SECRET",
         "BETTER_AUTH_URL",
         "WEB_ORIGIN",

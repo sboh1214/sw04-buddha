@@ -58,11 +58,12 @@ export const DEFAULT_JOB_OPTIONS = {
 } as const satisfies JobsOptions;
 
 /**
- * The per-minute safety-net scans of PLAN 5.5: the delayed job the API registers per market
- * is the fast path, and a market whose job was lost (Redis restarted, the API's best-effort
- * add failed after COMMIT) is still closed or settled within a minute. Both run the same
- * per-market transaction as the delayed job, so a scan and a delayed job for one market are
- * one close, never two (market-close.ts, market-finalize.ts).
+ * The per-minute safety-net scans of PLAN 5.5: the job the API registers per market (delayed
+ * to `close_at`, or immediate after the judgement — ADR-0046) is the fast path, and a market
+ * whose job was lost (Redis restarted, the API's best-effort add failed after COMMIT) is still
+ * closed or settled within a minute. Both run the same per-market transaction as that job, so a
+ * scan and the job for one market are one close or settlement, never two (market-close.ts,
+ * market-finalize.ts).
  */
 const EVERY_MINUTE = { pattern: '* * * * *', tz: 'Asia/Seoul' } as const;
 

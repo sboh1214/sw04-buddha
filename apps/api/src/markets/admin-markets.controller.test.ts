@@ -188,7 +188,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       createdBy: admin.id,
       netCollectedP: '0',
       openInterest: { yes: 0, no: 0 },
-      disputeCounts: { open: 0, accepted: 0, rejected: 0 },
+      settlementSteps: [],
       description: null,
       imageUrl: null,
     });
@@ -1021,21 +1021,33 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     expect((await get(`/api/v1/admin/markets/${row.id.toUpperCase()}`)).statusCode).toBe(200);
   });
 
-  it('voids open and resolving markets without positions, and refuses draft/settled/voided', async () => {
-    for (const status of ['open', 'resolving'] as const) {
+  it('voids open and closed markets without positions, and refuses draft/resolved/settled/voided', async () => {
+    for (const status of ['open', 'closed'] as const) {
       const row = await market({ status });
       const res = await voidMarket(row.id);
       expect({ status, code: res.statusCode }).toEqual({ status, code: 200 });
       expect(detail(res)).toMatchObject({ status: 'voided' });
       expect(detail(res).events[0]!.payload).toMatchObject({ refundedAccounts: 0, refundedP: '0' });
     }
-    for (const status of ['draft', 'settled', 'voided'] as const) {
-      const row = await market({ status });
+    // `resolved` included (ADR-0046, D2): a judged market is final until #26 decides how a
+    // judgement is overturned, so its result and positions stay where the judgement put them.
+    for (const status of ['draft', 'resolved', 'settled', 'voided'] as const) {
+      const row = await market({
+        status,
+        ...(status === 'resolved' || status === 'settled' ? { resolvedResult: 'YES' } : {}),
+      });
       const res = await voidMarket(row.id);
       expect({ status, code: res.statusCode }).toEqual({ status, code: 400 });
-      expect(errorOf(res).code).toBe('VALIDATION_ERROR');
+      expect(errorOf(res)).toMatchObject({
+        code: 'VALIDATION_ERROR',
+        message: `Market is ${status}`,
+      });
       expect(detailPath(res)).toEqual(['status']);
-      expect((await marketRow(row.id)).status).toBe(status);
+      expect(await marketRow(row.id)).toMatchObject({
+        status,
+        resolvedResult: row.resolvedResult,
+        voidedAt: row.voidedAt,
+      });
       expect(await actionsFor(row.id)).toHaveLength(0);
     }
     const noReason = await post(`/api/v1/admin/markets/${(await market()).id}/void`, {

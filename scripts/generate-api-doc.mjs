@@ -391,7 +391,7 @@ const REALTIME_EVENTS = {
   'market:trade': { room: '`market:<id>`', note: '익명 체결 1건', key: '`fillId`' },
   'market:status': {
     room: '`market:<id>`',
-    note: '상태 전이(개장·마감·정산 제안·결과 변경·확정·무효). 설명만 고친 편집도 같은 상태로 다시 발행된다',
+    note: '상태 전이(개장·마감·판정·정산 완료·무효). 설명만 고친 편집도 같은 상태로 다시 발행된다',
     key: '`statusEventId`',
   },
   'user:balance': { room: '`user:<id>`', note: '거래·환불·지급 후의 잔고', key: '`ledgerEntryId`' },
@@ -421,7 +421,6 @@ const TAG_LABELS = {
   admin: '관리자',
   markets: '시장·시세',
   trades: '거래·포지션',
-  disputes: '이의',
 };
 
 /**
@@ -440,9 +439,8 @@ const ERROR_NOTES = {
   INSUFFICIENT_POSITION: '팔려는 수량만큼 보유하고 있지 않다.',
   PRICE_MOVED: '다시 계산한 금액이 `maxCostP`(매수) 또는 `minProceedsP`(매도)를 벗어났다.',
   DUPLICATE_REQUEST:
-    '이미 쓴 멱등 키를 다른 조건으로 다시 썼거나(키는 소모된다), 한 번만 할 수 있는 일을 두 번 했다(쿠폰 재사용, 같은 시장에 이의 2회). 환불 재시도는 앞선 시도가 아직 PG 의 답을 기다리는 동안 이것으로 답한다(`details[0].message` 가 `in progress`).',
+    '이미 쓴 멱등 키를 다른 조건으로 다시 썼거나(키는 소모된다), 한 번만 할 수 있는 일을 두 번 했다(쿠폰 재사용). 환불 재시도는 앞선 시도가 아직 PG 의 답을 기다리는 동안 이것으로 답한다(`details[0].message` 가 `in progress`).',
   RATE_LIMITED: '레이트 리밋 초과. `details.retryAfterSeconds` 와 `Retry-After` 헤더에 대기 초.',
-  DISPUTE_WINDOW_CLOSED: '이의 접수 창이 닫혔다(정산이 확정되었거나 `resolving` 이 아니다).',
   RULES_REQUIRED: '정산 규칙(`rules`)이 비어 있어 개장하거나 그대로 저장할 수 없다.',
   CONTACT_REQUIRED:
     '실명과 휴대전화 번호를 아직 등록하지 않은 계정이다. `PUT /api/v1/me/contact` 로 등록한 뒤 다시 시도한다.',
@@ -462,7 +460,6 @@ const RATE_LIMIT_ROUTES = {
   trade: '`POST /api/v1/trades`',
   charge: '`POST /api/v1/payments/charge`, `POST /api/v1/payments/smartro/prepare`',
   coupon: '`POST /api/v1/coupons/redeem`',
-  dispute: '`POST /api/v1/markets/{id}/disputes`',
   email:
     '메일을 보내는 경로 — `POST /api/v1/auth/register` 와 `/api/auth/*` 의 `/change-email`, `/send-verification-email`, `/request-password-reset`, `/forget-password`. 시도 자체를 센다(시도가 곧 피해다). `/change-email` 만은 **로그인한 요청만** 센다(세션 없는 요청은 401 이고 아무에게도 메일이 가지 않으므로): 먼저 **요청한 계정**의 버킷을, 그다음 `newEmail` 의 버킷을 — 인증된 계정의 확인 메일은 본문의 주소가 아니라 계정이 이미 가진 주소로 가고, 계정을 먼저 세야 한 계정이 1분에 다섯 주소까지만 지목할 수 있기 때문이다. `GET /verify-email` 도 링크가 메일을 보내는 종류(이메일 변경의 **확인** 링크: 누를 때마다 새 주소에 다시 보낸다)이면 그 수신 주소로 센다 — 토큰은 1시간짜리 무상태 JWT 라 누른다고 소모되지 않기 때문이다. 서명이 유효한 토큰만 세고, 변경을 적용하는 **검증** 링크는 메일을 보내지 않으므로 세지 않는다.',
   signIn:

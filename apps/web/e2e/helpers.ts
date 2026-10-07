@@ -281,9 +281,9 @@ export async function createOpenMarket(admin: APIRequestContext): Promise<TestMa
 }
 
 /**
- * 마감 through the admin API (`POST /admin/markets/:id/close`): trading stops, and the market is
- * one 정산 away from a dispute window. The API, not the UI, because closing is a means here —
- * the settlement spec measures what comes after it.
+ * 마감 through the admin API (`POST /admin/markets/:id/close`): trading stops, and the market
+ * waits for the admin's 판정. The API, not the UI, because closing is a means here — the
+ * settlement spec measures what comes after it.
  */
 export async function closeMarket(
   admin: APIRequestContext,
@@ -293,43 +293,18 @@ export async function closeMarket(
 }
 
 /**
- * 정산 제안 through the admin API (`POST /admin/markets/:id/resolve`, M5): the market goes to
- * `resolving` with `disputeUntil` one window ahead of `resolvedAt`, and the worker finalizes it
- * when that window ends. The dispute spec uses this rather than the admin dialog so the whole
- * window budget is spent on the reader's side; the settlement spec goes through the dialog,
- * because the dialog IS what it verifies.
+ * How long a spec waits for a judged market to read 정산 완료 (ADR-0046). There is no window to
+ * wait out any more: the 판정 queues `market.finalize` with no delay and the worker settles in
+ * well under a second, so this is room for a cold worker and a loaded CI box — not for the
+ * per-minute safety-net scan, which only matters when the job could not be queued at all.
  */
-export async function resolveMarket(
-  admin: APIRequestContext,
-  marketId: string,
-  result: 'YES' | 'NO',
-): Promise<AdminMarket> {
-  return unwrap<AdminMarket>(
-    await admin.post(`/api/v1/admin/markets/${marketId}/resolve`, { data: { result } }),
-  );
-}
-
-/**
- * The dispute window the API is running with, read off a RESOLVING market: `disputeUntil -
- * resolvedAt`, which `MarketAdminService.resolve` sets to `TEST_DISPUTE_WINDOW_SECONDS`. The
- * specs read it rather than assume it — the default is a day, and a spec that waited for it
- * would time out with nothing to say; `test.skip` on this number names the env var instead.
- */
-export function disputeWindowMs(market: Pick<AdminMarket, 'resolvedAt' | 'disputeUntil'>): number {
-  if (market.resolvedAt === null || market.disputeUntil === null) {
-    throw new Error('the market carries no dispute window: is it resolving?');
-  }
-  return Date.parse(market.disputeUntil) - Date.parse(market.resolvedAt);
-}
-
-/** Longest window a settlement spec will wait out; past this it skips and says which env var. */
-export const DISPUTE_WINDOW_WAIT_MAX_MS = 60_000;
+export const SETTLEMENT_WAIT_MS = 30_000;
 
 /**
  * True when the worker's health listener is switched off (`WORKER_HEALTH_PORT=0`, worker env.ts),
  * which is when playwright.config.ts lists no worker to wait for. A spec that needs the
- * `market.finalize` job then has nothing to tell it a worker is up, so it skips rather than sit
- * out a window that may never end. Read from `process.env` here, not in the config: the config
+ * `market.finalize` job then has nothing to tell it a worker is up, so it skips rather than wait
+ * for a job nobody may be running. Read from `process.env` here, not in the config: the config
  * loaded the root `.env` into the runner, and Playwright passes that environment to its workers.
  */
 export function workerProbeDisabled(): boolean {

@@ -63,7 +63,7 @@ export function meBelongsTo(queryClient: QueryClient, account: string): boolean 
  *
  * A `GET /me` already in flight (a window-focus refetch, a realtime resnapshot) is cancelled
  * first, as realtime-provider.tsx does before it patches `['me']`: it may have left before the
- * PUT committed, and resolving after this write it would put `contact: null` back. The cancel
+ * PUT committed, and answering after this write it would put `contact: null` back. The cancel
  * reverts the entry to what it held before that request; if that is nothing (a first fetch),
  * there is nothing to patch and the request is re-issued — the PUT has committed, so its
  * answer carries the contact.

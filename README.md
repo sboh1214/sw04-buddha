@@ -52,7 +52,7 @@ pnpm dev                         # web(3000) · api(4000) · worker + 공유 패
 | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `/`                                                                                                | 홈(Kalshi 형, ADR-0041) — 헤더 2단(시장·랭킹·커뮤니티 / 전체·카테고리)·세부 분류 사이드바·정렬·시장 카드 그리드(카드마다 예/아니오 두 줄과 24시간 스파크라인)                         |
 | `/community`                                                                                       | 커뮤니티 — 자리만 있는 화면(준비 중)                                                                                                                                                  |
-| `/markets/[slug]`                                                                                  | 시장 상세 — 확률 차트·정산 기준·최근 체결·내 포지션·매수/매도 패널. `resolving`이면 제안된 결과와 이의 제기 폼, `settled`면 결과와 실현 손익                                          |
+| `/markets/[slug]`                                                                                  | 시장 상세 — 확률 차트·정산 기준·최근 체결·내 포지션·매수/매도 패널. `resolved`면 판정된 결과와 정산 진행 안내, `settled`면 결과와 실현 손익                                           |
 | `/portfolio`                                                                                       | 잔고·보유 포지션·정산 이력·주문 이력                                                                                                                                                  |
 | `/wallet`                                                                                          | 충전 상품·쿠폰·원장(정산 지급은 `SETTLEMENT_PAYOUT` 행)·결제 내역. 스마트로페이 결제창에서 돌아오면 결과 안내(`?payment=<id>&result=<r>`)                                             |
 | `/charge`                                                                                          | 충전 안내 — 판매 중인 충전 상품(그림·P·가격·할인)과 환불 요약. 로그인 없이 공개(PG 심사용, ADR-0044). 구매는 `/wallet?package=<id>`로                                                 |
@@ -60,7 +60,7 @@ pnpm dev                         # web(3000) · api(4000) · worker + 공유 패
 | `/signup` `/login` `/set-password` `/reset-password` `/settings`                                   | 인증과 계정. 이메일 가입은 `/set-password` 단계에서 실명·휴대전화도 받고, `/settings`에서 고친다(ADR-0043)                                                                            |
 | `/onboarding`                                                                                      | 실명·휴대전화 입력(ADR-0043). 로그인했는데 아직 입력하지 않은 계정(소셜 로그인·기존 계정·시드 관리자)은 인증·약관·`/charge`를 뺀 어느 화면에서든(관리자 화면 포함) 여기로 온다        |
 | `/terms` `/privacy` `/refund`                                                                      | 이용약관·개인정보처리방침·환불정책(공개, ADR-0044). 사업자 정보는 `apps/web/src/legal/business-info.ts` 한 곳에 있고(지금은 `미정`), 모든 화면 아래의 푸터가 이 셋과 `/charge`를 건다 |
-| `/admin/markets` `/admin/markets/[id]` `/admin/disputes`                                           | 시장 생성·수정·열기·마감·정산 제안·결과 변경·무효, 이의 수용/기각                                                                                                                     |
+| `/admin/markets` `/admin/markets/[id]`                                                             | 시장 생성·수정·열기·마감·판정(즉시 확정, 곧바로 정산)·무효(`open`·`closed`에서만), 판정 뒤 정산 단계(읽기 전용, ADR-0046)                                                             |
 | `/admin/users` `/admin/charge-packages` `/admin/coupons` `/admin/payments` `/admin/audit-failures` | 계정·상품·쿠폰·결제(환불 — 승인 후 7일·미사용·전액 — 와 「확인 필요」 행의 수동 정리, ADR-0042)·원장 감사 실패                                                                        |
 
 ## 문제 해결
@@ -172,7 +172,7 @@ pnpm turbo run build --filter=web --force
 - **브라우저가 API로 가는 길은 두 개다.** REST와 문서는 Next의 서버 사이드 rewrite(`/api/:path*`)를 타서 같은 오리진으로 남고, Socket.IO만 `NEXT_PUBLIC_API_URL`(기본 `http://localhost:4000`)에 **직접** 붙는다. Next rewrite가 WebSocket 업그레이드를 프록시하지 않기 때문이다(Q-M0-2, ADR-0017). `WEB_ORIGIN`이 그 핸드셰이크의 CORS와 Origin 검사를 함께 결정한다.
 - **서버 사이드 호출은 rewrite를 타지 않는다.** `apps/web/src/lib/api.server.ts`(공개 읽기 전용)와 `session.server.ts`는 API 오리진을 직접 부른다. 상대 경로는 서버 컴포넌트가 fetch할 수 없고, 세션 쿠키는 의도적으로 전달하지 않는다.
 - **Redis는 세 가지 일을 겸한다.** 실시간 pub/sub(API 게이트웨이와 워커가 함께 쓴다), BullMQ 큐와 지연 잡, 레이트 리밋·멱등성 키. 워커는 API와 직접 말하지 않고 Postgres와 Redis만 통해 붙는다(PLAN §9).
-- **워커가 발행하면 게이트웨이가 중계한다.** `market.close`·`market.finalize`(API가 마감·이의 마감 시각에 맞춰 예약하는 지연 잡 + 매 분 안전망 스캔)와 `ledger.audit`(매일 04:00 KST). 잡 결과는 Redis로 나가고, `/ws` 게이트웨이가 그것을 브라우저의 방으로 밀어 준다. 이벤트 목록·룸·순서 키는 [docs/API.md](docs/API.md)의 실시간 절.
+- **워커가 발행하면 게이트웨이가 중계한다.** `market.close`·`market.finalize`(API가 마감 시각에 맞춰 예약하는 지연 잡과 판정 직후 바로 넣는 잡 + 매 분 안전망 스캔)와 `ledger.audit`(매일 04:00 KST). 잡 결과는 Redis로 나가고, `/ws` 게이트웨이가 그것을 브라우저의 방으로 밀어 준다. 이벤트 목록·룸·순서 키는 [docs/API.md](docs/API.md)의 실시간 절.
 - **메일은 API만 보낸다.** 워커에는 메일러가 없다.
 
 PLAN 부록 C의 다이어그램은 M4 이전 그림이라 위와 다르다(브라우저가 rewrite로만 API에 닿고, Mailpit이 없다).
@@ -262,7 +262,7 @@ pnpm --filter web test:e2e
 
 - 다른 웹 오리진은 `E2E_BASE_URL`로 가리킨다. 가입 흐름은 `MAILPIT_URL`(기본 `http://127.0.0.1:8025`)의 메일함을 폴링한다.
 - 스펙은 매번 자기 계정과 자기 시장을 새로 만들므로 같은 데이터베이스에서 반복 실행해도 된다.
-- 정산 스펙(`settlement.spec.ts`)은 워커가 떠 있어야 하고(`pnpm dev`가 띄운다. 없으면 Playwright가 `WORKER_HEALTH_PORT`(기본 4100)의 `/health`를 확인해 직접 띄우고, `0`이면 확인할 포트가 없어 이 스펙만 건너뛴다), API가 `TEST_DISPUTE_WINDOW_SECONDS=8`처럼 짧은 이의 기간으로 떠 있어야 한다 — 기본 24시간이면 이유를 남기고 건너뛴다(CI는 8초로 돈다).
+- 정산 스펙(`settlement.spec.ts`)은 워커가 떠 있어야 한다(`pnpm dev`가 띄운다. 없으면 Playwright가 `WORKER_HEALTH_PORT`(기본 4100)의 `/health`를 확인해 직접 띄우고, `0`이면 확인할 포트가 없어 이 스펙만 건너뛴다). 관리자가 판정하면 워커가 곧바로 정산하므로 기다리는 기간은 없다(ADR-0046).
 
 ## 구조
 

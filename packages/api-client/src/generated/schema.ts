@@ -91,40 +91,6 @@ export type paths = {
         patch: operations["adminUpdateCoupon"];
         trace?: never;
     };
-    "/api/v1/admin/disputes": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Every dispute, newest first; `status` and `marketId` narrow the list */
-        get: operations["adminListDisputes"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/admin/disputes/{id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /** Accept or reject a dispute with a note (revisable; accepting does not change the market result — use POST /admin/markets/:id/resolve for that) */
-        patch: operations["adminReviewDispute"];
-        trace?: never;
-    };
     "/api/v1/admin/markets": {
         parameters: {
             query?: never;
@@ -204,7 +170,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** closed → resolving: propose the result and start the dispute window; on a resolving market change the proposed result (the window restarts, the pending finalize is replaced) */
+        /** closed → resolved: record the final result; settlement starts immediately */
         post: operations["adminResolveMarket"];
         delete?: never;
         options?: never;
@@ -221,7 +187,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Void an open, closed or resolving market: every unsettled position is refunded its cost basis (MARKET_VOID_REFUND) and closed out */
+        /** Void an open or closed market: every unsettled position is refunded its cost basis (MARKET_VOID_REFUND) and closed out */
         post: operations["adminVoidMarket"];
         delete?: never;
         options?: never;
@@ -416,23 +382,6 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/markets/{id}/disputes": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Object to the proposed result while the market is resolving and its dispute window is open (one per user per market) */
-        post: operations["fileDispute"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/markets/{id}/fills": {
         parameters: {
             query?: never;
@@ -512,23 +461,6 @@ export type paths = {
         get?: never;
         /** Set real name and mobile number */
         put: operations["updateMyContact"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/me/disputes": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** My disputes, newest first; `marketId` narrows the list to one market */
-        get: operations["listMyDisputes"];
-        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -731,31 +663,6 @@ export type components = {
             ledgerEntry: components["schemas"]["LedgerEntry"];
             user: components["schemas"]["AdminUser"];
         };
-        AdminDispute: {
-            adminNote: string | null;
-            /** Format: date-time */
-            createdAt: string;
-            evidenceUrl: string | null;
-            /** Format: uuid */
-            id: string;
-            /** Format: uuid */
-            marketId: string;
-            marketSlug: string;
-            /** @enum {string} */
-            marketStatus: "draft" | "open" | "closed" | "resolving" | "settled" | "voided";
-            marketTitle: string;
-            nickname: string;
-            reason: string;
-            /** @enum {string|null} */
-            resolvedResult: "YES" | "NO" | null;
-            /** Format: date-time */
-            reviewedAt: string | null;
-            reviewedBy: string | null;
-            /** @enum {string} */
-            status: "open" | "accepted" | "rejected";
-            statusEventId: string | null;
-            userId: string;
-        };
         AdminMarket: {
             category: {
                 nameKo: string;
@@ -767,13 +674,6 @@ export type components = {
             createdAt: string;
             createdBy: string;
             description: string | null;
-            disputeCounts: {
-                accepted: number;
-                open: number;
-                rejected: number;
-            };
-            /** Format: date-time */
-            disputeUntil: string | null;
             events: components["schemas"]["MarketEvent"][];
             /** Format: uuid */
             id: string;
@@ -800,9 +700,10 @@ export type components = {
             rules: string;
             /** Format: date-time */
             settledAt: string | null;
+            settlementSteps: components["schemas"]["AdminSettlementStep"][];
             slug: string;
             /** @enum {string} */
-            status: "draft" | "open" | "closed" | "resolving" | "settled" | "voided";
+            status: "draft" | "open" | "closed" | "resolved" | "settled" | "voided";
             statusEventId: string | null;
             title: string;
             tradeCount: number;
@@ -836,6 +737,16 @@ export type components = {
             /** @enum {string} */
             status: "pending" | "succeeded" | "failed" | "cancelled" | "refunding" | "refunded";
             userId: string;
+        };
+        AdminSettlementStep: {
+            attempts: number;
+            /** Format: date-time */
+            completedAt: string | null;
+            lastError: string | null;
+            status: components["schemas"]["SettlementStepStatus"];
+            step: components["schemas"]["SettlementStep"];
+            /** Format: date-time */
+            updatedAt: string;
         };
         AdminUser: {
             balance: components["schemas"]["Balance"];
@@ -936,11 +847,6 @@ export type components = {
             maxRedemptions?: number | null;
             memo?: string | null;
         };
-        CreateDisputeBody: {
-            /** Format: uri */
-            evidenceUrl?: string | null;
-            reason: string;
-        };
         CreateMarketBody: {
             categoryId: number;
             /** Format: date-time */
@@ -960,29 +866,8 @@ export type components = {
             /** @default 20 */
             limit: number;
         };
-        Dispute: {
-            adminNote: string | null;
-            /** Format: date-time */
-            createdAt: string;
-            evidenceUrl: string | null;
-            /** Format: uuid */
-            id: string;
-            /** Format: uuid */
-            marketId: string;
-            marketSlug: string;
-            /** @enum {string} */
-            marketStatus: "draft" | "open" | "closed" | "resolving" | "settled" | "voided";
-            marketTitle: string;
-            reason: string;
-            /** @enum {string|null} */
-            resolvedResult: "YES" | "NO" | null;
-            /** Format: date-time */
-            reviewedAt: string | null;
-            /** @enum {string} */
-            status: "open" | "accepted" | "rejected";
-        };
         /** @enum {string} */
-        ErrorCode: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "VALIDATION_ERROR" | "MARKET_NOT_OPEN" | "MARKET_CLOSED" | "INSUFFICIENT_BALANCE" | "INSUFFICIENT_POSITION" | "PRICE_MOVED" | "DUPLICATE_REQUEST" | "RATE_LIMITED" | "DISPUTE_WINDOW_CLOSED" | "RULES_REQUIRED" | "CONTACT_REQUIRED" | "REFUND_NOT_ALLOWED" | "PAYMENT_GATEWAY_REFUSED" | "PAYMENT_GATEWAY_ERROR" | "INTERNAL";
+        ErrorCode: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "VALIDATION_ERROR" | "MARKET_NOT_OPEN" | "MARKET_CLOSED" | "INSUFFICIENT_BALANCE" | "INSUFFICIENT_POSITION" | "PRICE_MOVED" | "DUPLICATE_REQUEST" | "RATE_LIMITED" | "RULES_REQUIRED" | "CONTACT_REQUIRED" | "REFUND_NOT_ALLOWED" | "PAYMENT_GATEWAY_REFUSED" | "PAYMENT_GATEWAY_ERROR" | "INTERNAL";
         ErrorEnvelope: {
             error: {
                 code: components["schemas"]["ErrorCode"];
@@ -1037,8 +922,6 @@ export type components = {
             /** Format: date-time */
             createdAt: string;
             description: string | null;
-            /** Format: date-time */
-            disputeUntil: string | null;
             /** Format: uuid */
             id: string;
             imageUrl: string | null;
@@ -1056,7 +939,7 @@ export type components = {
             settledAt: string | null;
             slug: string;
             /** @enum {string} */
-            status: "draft" | "open" | "closed" | "resolving" | "settled" | "voided";
+            status: "draft" | "open" | "closed" | "resolved" | "settled" | "voided";
             statusEventId: string | null;
             title: string;
             tradeCount: number;
@@ -1072,7 +955,7 @@ export type components = {
             id: string;
             payload: unknown;
             /** @enum {string} */
-            type: "created" | "opened" | "closed" | "resolve_proposed" | "result_changed" | "finalized" | "voided" | "rules_edited";
+            type: "created" | "opened" | "closed" | "resolve_proposed" | "result_changed" | "finalized" | "voided" | "rules_edited" | "resolved";
         };
         MarketListItem: {
             category: {
@@ -1095,7 +978,7 @@ export type components = {
             slug: string;
             sparkline: number[];
             /** @enum {string} */
-            status: "draft" | "open" | "closed" | "resolving" | "settled" | "voided";
+            status: "draft" | "open" | "closed" | "resolved" | "settled" | "voided";
             statusEventId: string | null;
             title: string;
             tradeCount: number;
@@ -1131,7 +1014,7 @@ export type components = {
             resolvedResult: "YES" | "NO" | null;
             slug: string;
             /** @enum {string} */
-            status: "draft" | "open" | "closed" | "resolving" | "settled" | "voided";
+            status: "draft" | "open" | "closed" | "resolved" | "settled" | "voided";
             statusEventId: string | null;
             title: string;
             tradeCount: number;
@@ -1232,7 +1115,7 @@ export type components = {
             marketLastPrice: number;
             marketSlug: string;
             /** @enum {string} */
-            marketStatus: "draft" | "open" | "closed" | "resolving" | "settled" | "voided";
+            marketStatus: "draft" | "open" | "closed" | "resolved" | "settled" | "voided";
             marketTitle: string;
             /** @enum {string} */
             outcome: "YES" | "NO";
@@ -1312,15 +1195,14 @@ export type components = {
             /** @enum {string} */
             result: "YES" | "NO";
         };
-        ReviewDisputeBody: {
-            adminNote?: string | null;
-            /** @enum {string} */
-            status: "accepted" | "rejected";
-        };
         SetPasswordBody: {
             expectedAccountId: string;
             newPassword: components["schemas"]["Password"];
         };
+        /** @enum {string} */
+        SettlementStep: "coin";
+        /** @enum {string} */
+        SettlementStepStatus: "pending" | "done" | "failed";
         SettlePaymentBody: {
             /** @enum {string} */
             outcome: "credit" | "cancelled" | "failed" | "restore" | "refunded";
@@ -1916,147 +1798,12 @@ export interface operations {
             };
         };
     };
-    adminListDisputes: {
-        parameters: {
-            query?: {
-                cursor?: string;
-                limit?: number;
-                marketId?: string;
-                status?: "open" | "accepted" | "rejected";
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        data: components["schemas"]["AdminDispute"][];
-                        meta: components["schemas"]["PageMeta"];
-                    };
-                };
-            };
-            /** @description VALIDATION_ERROR */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description UNAUTHENTICATED */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description FORBIDDEN */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description RATE_LIMITED */
-            429: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    adminReviewDispute: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ReviewDisputeBody"];
-            };
-        };
-        responses: {
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        data: components["schemas"]["AdminDispute"];
-                    };
-                };
-            };
-            /** @description VALIDATION_ERROR */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description UNAUTHENTICATED */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description FORBIDDEN */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description NOT_FOUND */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description RATE_LIMITED */
-            429: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
     adminListMarkets: {
         parameters: {
             query?: {
                 cursor?: string;
                 limit?: number;
-                status?: "draft" | "open" | "closed" | "resolving" | "settled" | "voided";
+                status?: "draft" | "open" | "closed" | "resolved" | "settled" | "voided";
             };
             header?: never;
             path?: never;
@@ -3227,7 +2974,7 @@ export interface operations {
                 limit?: number;
                 q?: string;
                 sort?: "volume" | "closing" | "newest";
-                status?: "open" | "closed" | "resolving" | "settled" | "voided";
+                status?: "open" | "closed" | "resolved" | "settled" | "voided";
             };
             header?: never;
             path?: never;
@@ -3248,87 +2995,6 @@ export interface operations {
             };
             /** @description VALIDATION_ERROR */
             400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description RATE_LIMITED */
-            429: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    fileDispute: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CreateDisputeBody"];
-            };
-        };
-        responses: {
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        data: components["schemas"]["Dispute"];
-                    };
-                };
-            };
-            /** @description VALIDATION_ERROR */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description UNAUTHENTICATED */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description FORBIDDEN */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description NOT_FOUND */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description DISPUTE_WINDOW_CLOSED | DUPLICATE_REQUEST */
-            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -3663,59 +3329,6 @@ export interface operations {
             };
             /** @description FORBIDDEN */
             403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description RATE_LIMITED */
-            429: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    listMyDisputes: {
-        parameters: {
-            query?: {
-                cursor?: string;
-                limit?: number;
-                marketId?: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        data: components["schemas"]["Dispute"][];
-                        meta: components["schemas"]["PageMeta"];
-                    };
-                };
-            };
-            /** @description VALIDATION_ERROR */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description UNAUTHENTICATED */
-            401: {
                 headers: {
                     [name: string]: unknown;
                 };

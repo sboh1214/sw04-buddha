@@ -19,7 +19,7 @@ export const LEADERBOARD_LIMIT = 20;
  * thing a visitor needs is who and how much; an id would turn a ranking into a handle for
  * correlating a person's positions, and PLAN 7.1 already keeps `fills` anonymous for the same
  * reason. The nickname is public by design — PLAN 6.3 made it mandatory precisely so rankings
- * and disputes could name someone without exposing an account.
+ * (and, then, disputes — removed by ADR-0046) could name someone without exposing an account.
  *
  * `realizedPnlP` is a SIGNED decimal string, like every other P amount: it is a sum of bigints
  * and a JSON number cannot hold one. Never `Number()` it — `use-portfolio.test.ts` already pins

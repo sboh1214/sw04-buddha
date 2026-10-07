@@ -51,9 +51,8 @@ const trade = {
 const status = {
   type: 'market:status',
   marketId,
-  status: 'resolving',
+  status: 'resolved',
   resolvedResult: 'YES',
-  disputeUntil: ts,
   statusEventId: '12',
   ts,
 };
@@ -117,9 +116,10 @@ describe('realtime events (PLAN 8)', () => {
   it('lets a status event omit or null the resolution fields, but never its ordering key', () => {
     const opened = { type: 'market:status', marketId, status: 'open', statusEventId: '3', ts };
     expect(realtimeEventSchema.parse(opened)).toEqual(opened);
-    expect(
-      realtimeEventSchema.parse({ ...opened, resolvedResult: null, disputeUntil: null }),
-    ).toEqual({ ...opened, resolvedResult: null, disputeUntil: null });
+    expect(realtimeEventSchema.parse({ ...opened, resolvedResult: null })).toEqual({
+      ...opened,
+      resolvedResult: null,
+    });
     expect(realtimeEventSchema.safeParse({ ...opened, status: 'paused' }).success).toBe(false);
     // The key may be null (a row with no transition event) but a publisher must say so.
     expect(realtimeEventSchema.parse({ ...opened, statusEventId: null }).type).toBe(
@@ -173,18 +173,18 @@ describe('ordering keys', () => {
   });
 
   it('orders market:status by the transition event id, and by rank only without one', () => {
-    const resolvingYes = { status: 'resolving', statusEventId: '10' } as const;
-    // M5's result_changed: the same status with a newer event id is a later transition — the
-    // case rank order could not express, and the reason the key exists (A-M3-19).
-    expect(statusSupersedes({ status: 'resolving', statusEventId: '11' }, resolvingYes)).toBe(true);
+    const resolvedYes = { status: 'resolved', statusEventId: '10' } as const;
+    // The same status with a newer event id is a later transition (M5's legacy result_changed)
+    // — the case rank order could not express, and the reason the key exists (A-M3-19).
+    expect(statusSupersedes({ status: 'resolved', statusEventId: '11' }, resolvedYes)).toBe(true);
     // The admin edit's repeat (A-M4-36) and a duplicate carry the SAME id: dropped.
-    expect(statusSupersedes({ status: 'resolving', statusEventId: '10' }, resolvingYes)).toBe(
-      false,
-    );
+    expect(statusSupersedes({ status: 'resolved', statusEventId: '10' }, resolvedYes)).toBe(false);
     // A late event with a lower id loses even when its status ranks higher: the key, not the
-    // rank, is the order once both sides have one.
-    expect(statusSupersedes({ status: 'settled', statusEventId: '9' }, resolvingYes)).toBe(false);
-    expect(statusSupersedes({ status: 'settled', statusEventId: '12' }, resolvingYes)).toBe(true);
+    // rank, is the order once both sides have one. The API publishes `resolved` and the worker
+    // `settled` moments apart, so they can arrive in either order; `settled` must stay.
+    expect(statusSupersedes({ status: 'settled', statusEventId: '9' }, resolvedYes)).toBe(false);
+    expect(statusSupersedes({ status: 'settled', statusEventId: '12' }, resolvedYes)).toBe(true);
+    expect(statusSupersedes(resolvedYes, { status: 'settled', statusEventId: '12' })).toBe(false);
     // Rank is the fallback for a row without a key (a test factory's), on either side.
     expect(
       statusSupersedes(

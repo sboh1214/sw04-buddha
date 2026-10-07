@@ -69,7 +69,6 @@ export const markets = pgTable(
     closeAt: timestampTz().notNull(),
     resolvedResult: outcomeEnum(),
     resolvedAt: timestampTz(),
-    disputeUntil: timestampTz(),
     settledAt: timestampTz(),
     voidedAt: timestampTz(),
     /**

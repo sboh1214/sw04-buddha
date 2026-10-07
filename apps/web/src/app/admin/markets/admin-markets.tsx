@@ -34,6 +34,7 @@ import {
   MARKET_STATUS_LABEL,
   MARKET_STATUS_PALETTE,
   formatYesPrice,
+  isAwaitingResolution,
   isAwaitingSettlement,
   isClosingSoon,
   marketFormError,
@@ -84,7 +85,7 @@ export function AdminMarkets() {
 
       {/* A Field, not a Text beside the select: only the label's `htmlFor` gives the select an
           accessible name. Horizontal and shrink-wrapped, so it reads as the one-line filter it
-          was (the dispute list's is the same). */}
+          was. */}
       <Field.Root orientation="horizontal" w="auto" gap="2">
         <Field.Label flex="0 0 auto">{copy.adminMarketStatusFilter}</Field.Label>
         <NativeSelect.Root maxW="48" size="sm">
@@ -139,6 +140,14 @@ export function AdminMarkets() {
                   {isClosingSoon(market) && (
                     <Badge colorPalette="orange" variant="solid">
                       {copy.adminMarketClosingSoon}
+                    </Badge>
+                  )}
+                  {/* The two "waits on someone" badges (ADR-0046): closed waits for the admin's
+                      판정, resolved for the worker's settlement — a resolved row that keeps its
+                      badge is a failing step, which the detail's 정산 단계 panel names. */}
+                  {isAwaitingResolution(market.status) && (
+                    <Badge colorPalette="brand" variant="solid">
+                      {copy.adminMarketAwaitingResolution}
                     </Badge>
                   )}
                   {isAwaitingSettlement(market.status) && (

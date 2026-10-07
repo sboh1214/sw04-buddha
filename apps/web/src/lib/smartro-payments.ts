@@ -533,9 +533,8 @@ export interface AdminPaymentPage {
 
 /**
  * The refunded row, as the API answered it, written over its copy in every cached page — the
- * seed that keeps the list honest if the refetch after it fails (`replaceDisputeRow`'s
- * reasoning). Untouched pages, and the whole cache when no page holds the row, keep their
- * identity.
+ * seed that keeps the list honest if the refetch after it fails. Untouched pages, and the
+ * whole cache when no page holds the row, keep their identity.
  */
 export function replacePaymentRow(
   data: InfiniteData<AdminPaymentPage> | undefined,

@@ -14,8 +14,7 @@ import { QuoteService } from './quote.service.js';
  * Markets (PLAN 5.2, 7.1, 7.3, M3): public reads, quotes and the admin CRUD / transitions.
  * Guards are instantiated by the module that declares the controller, so DbModule and
  * RedisModule are imported for AdminGuard (role lookup through the Redis cache). JobsModule
- * is the M5 producer the transitions hand their delayed close/finalize jobs to; the dispute
- * window (TEST_DISPUTE_WINDOW_SECONDS) comes from the global ConfigModule.
+ * is the M5 producer the transitions hand their close/finalize jobs to.
  */
 @Module({
   imports: [DbModule, RedisModule, AuthModule, RealtimeModule, JobsModule],

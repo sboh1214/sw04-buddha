@@ -16,7 +16,6 @@ import { type MarketStatus, type Outcome, formatP, parsePAmount } from '@buddha/
 import NextLink from 'next/link';
 import { type ReactNode } from 'react';
 import { CountdownBadge } from '@/components/market/countdown-badge';
-import { DisputeSection } from '@/components/market/dispute-section';
 import { MyPosition } from '@/components/market/my-position';
 import { ProbabilityChart } from '@/components/market/probability-chart';
 import { ProbabilityDisplay } from '@/components/market/probability-display';
@@ -26,8 +25,6 @@ import { useMarketSocket } from '@/hooks/use-market-socket';
 import { useCategories, useMarket, useMarketTicks } from '@/hooks/use-markets';
 import { type Market } from '@/lib/api';
 import { CATEGORY_TRAIL_SEPARATOR, categoryBreadcrumb } from '@/lib/category-label';
-import { formatKst } from '@/lib/datetime';
-import { disputeDeadlineShown } from '@/lib/dispute';
 import { MARKET_STATUS_LABEL, MARKET_STATUS_PALETTE } from '@/lib/market-admin';
 import { type RecentMove, recentMove } from '@/lib/ticks';
 import { TradePanel } from './trade-panel';
@@ -69,7 +66,9 @@ const STATUS_NOTICE: Partial<
   >
 > = {
   closed: { tone: 'warning', message: copy.marketClosedNotice },
-  resolving: { tone: 'info', message: copy.marketResolvingNotice },
+  // Judged, and the worker's settlement is running (ADR-0046): usually a few seconds before a
+  // `market:status` moves it on to settled.
+  resolved: { tone: 'info', message: copy.marketResolvedNotice },
   // The second line says where the P went: the payout is already in the balance (the worker's
   // finalize wrote it, PLAN 5.5), and 내 손익 is the 내 포지션 card below, not this notice.
   settled: { tone: 'success', message: copy.marketSettledNotice, detail: copy.marketSettledPayout },
@@ -156,12 +155,6 @@ export function MarketDetail({ marketId, now, initialOutcome, children }: Market
             )}
             <MarketHeader market={data} now={now} move={recentMove(series.data?.points)} />
             <StatusNotice market={data} />
-            {/* Under the notice that names the result and the deadline, and above the chart:
-                for a resolving market the objection is the next thing to read. It renders
-                nothing for any other status unless this account filed one (design 5.3), and
-                the deadline it measures against is the same server instant the countdown and
-                the trade panel use, so the three cannot disagree on what "now" is. */}
-            <DisputeSection market={data} now={now} />
             {/* `currentBp` and `currentTradeCount` come from ONE read of the row, so the
                 chart can never draw one trade's probability under another's claim. */}
             <ProbabilityChart
@@ -280,23 +273,19 @@ function MarketHeader({
 }
 
 /**
- * 상태별 안내 (PLAN 11.3), plus the two read-only facts a decided market carries: the 결과 and
- * — while it is resolving — the 이의 마감 instant. The dispute FORM is `DisputeSection`, rendered
- * right under this notice; a settled market adds the line that says the payout has landed.
+ * 상태별 안내 (PLAN 11.3), plus the one read-only fact a decided market carries: the 결과. A
+ * settled market adds the line that says the payout has landed. There is no deadline to show
+ * any more — the judgement is final at once (ADR-0046) — and the 판정 record itself (note,
+ * evidence, instant) is #24's.
  *
  * `role="status"` rather than `role="alert"`: a market closing while someone reads it is worth
  * announcing, but it is not an emergency that should interrupt them mid-sentence.
  *
- * "while it is resolving" is `disputeDeadlineShown`, not `disputeUntil !== null` — a clause that
- * was vacuously true until M5 started writing the column. The settle KEEPS it and only the void
- * clears it (A-M3-23), so the raw test drew a spent deadline inside the 정산이 끝났습니다 alert for
- * good. The 결과 row is deliberately NOT gated: it is the market's answer and PLAN 11.3 asks for
- * it on a settled screen, which is why the emptiness test below reads the deadline rather than
- * the column — a settled market keeps this DataList for 결과 alone.
+ * The 결과 row is deliberately NOT gated on the status: it is the market's answer and PLAN 11.3
+ * asks for it on a settled screen as much as on a resolved one.
  */
 function StatusNotice({ market }: { market: Market }) {
   const notice = STATUS_NOTICE[market.status];
-  const deadline = disputeDeadlineShown(market);
   if (notice === undefined) return null;
   return (
     <Alert.Root status={notice.tone} role="status" data-testid="market-status-notice">
@@ -308,22 +297,14 @@ function StatusNotice({ market }: { market: Market }) {
             {notice.detail}
           </Alert.Description>
         )}
-        {market.resolvedResult === null && deadline === null ? null : (
+        {market.resolvedResult !== null && (
           <DataList.Root orientation="horizontal" size="sm">
-            {market.resolvedResult !== null && (
-              <DataList.Item>
-                <DataList.ItemLabel>{copy.marketResolvedResult}</DataList.ItemLabel>
-                <DataList.ItemValue data-testid="market-detail-result">
-                  {market.resolvedResult === 'YES' ? copy.yes : copy.no}
-                </DataList.ItemValue>
-              </DataList.Item>
-            )}
-            {deadline !== null && (
-              <DataList.Item>
-                <DataList.ItemLabel>{copy.marketDisputeUntil}</DataList.ItemLabel>
-                <DataList.ItemValue>{formatKst(deadline)}</DataList.ItemValue>
-              </DataList.Item>
-            )}
+            <DataList.Item>
+              <DataList.ItemLabel>{copy.marketResolvedResult}</DataList.ItemLabel>
+              <DataList.ItemValue data-testid="market-detail-result">
+                {market.resolvedResult === 'YES' ? copy.yes : copy.no}
+              </DataList.ItemValue>
+            </DataList.Item>
           </DataList.Root>
         )}
       </Alert.Content>

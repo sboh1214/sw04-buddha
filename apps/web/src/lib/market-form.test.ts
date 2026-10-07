@@ -261,7 +261,6 @@ const market: AdminMarket = {
   openAt: null,
   resolvedResult: null,
   resolvedAt: null,
-  disputeUntil: null,
   settledAt: null,
   voidedAt: null,
   createdAt: '2026-09-01T00:00:00.000Z',
@@ -274,7 +273,7 @@ const market: AdminMarket = {
   createdBy: 'admin',
   netCollectedP: '0',
   openInterest: { yes: 0, no: 0 },
-  disputeCounts: { open: 0, accepted: 0, rejected: 0 },
+  settlementSteps: [],
   statusEventId: '1',
   events: [],
 };
