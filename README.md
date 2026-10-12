@@ -4,13 +4,14 @@
 
 이 문서는 **실행과 길찾기**만 다룬다. 나머지는 각자의 자리가 있다.
 
-| 문서                                                                       | 내용                                                                                                     |
-| -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| [GitHub 이슈·마일스톤](https://github.com/sboh1214/sw04-buddha/milestones) | 2026-09-28부터 하이브리드 기획(Trade + Forecast)의 SSOT — 기획 의도·범위·수용 기준. 오너 결정은 ADR-0045 |
-| [docs/PLAN.md](docs/PLAN.md)                                               | M0~M6의 설계·범위·마일스톤. 2026-09-28 이후에는 각 이슈의 PR이 조항을 고치거나 ADR로 대체한다(ADR-0045)  |
-| [docs/API.md](docs/API.md)                                                 | HTTP·실시간 API 계약 (OpenAPI에서 생성, 손으로 고치지 않음)                                              |
-| [docs/DECISIONS.md](docs/DECISIONS.md)                                     | ADR 로그 — 왜 그렇게 됐는지                                                                              |
-| [docs/QUESTIONS.md](docs/QUESTIONS.md)                                     | 미해결 질문과 그동안의 가정                                                                              |
+| 문서                                                                       | 내용                                                                                                                                                               |
+| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [docs/plan/](docs/plan/)                                                   | 기획서 v0.2(거래 중심) 원문 — 제품·정책·화면 설계의 기준(SSOT). Notion에서 내보낸 8개 파일(2026-10-06)을 고치지 않고 두며, Notion을 고치면 다시 내보낸다(ADR-0047) |
+| [GitHub 이슈·마일스톤](https://github.com/sboh1214/sw04-buddha/milestones) | 작업 명세 — 기획 근거·목표·범위·수용 기준·의존 관계. 기획에 없는 결정은 '오너 결정 필요'로 남는다(ADR-0047)                                                        |
+| [docs/PLAN.md](docs/PLAN.md)                                               | M0\~M6의 설계·범위·마일스톤 기록. 지금 기준은 `docs/plan/`이고 새 기준에 맞춰 고치지 않는다(ADR-0047)                                                              |
+| [docs/API.md](docs/API.md)                                                 | HTTP·실시간 API 계약 (OpenAPI에서 생성, 손으로 고치지 않음)                                                                                                        |
+| [docs/DECISIONS.md](docs/DECISIONS.md)                                     | ADR 로그 — 왜 그렇게 됐는지. 오너 결정 D1\~D26, 초기 출시 범위, 설계 제안 값의 승인 담당은 ADR-0047                                                                |
+| [docs/QUESTIONS.md](docs/QUESTIONS.md)                                     | M0\~M6과 #19까지의 질문·가정 기록. 새 오너 질문은 각 이슈의 '오너 결정 필요'와 결정 이슈에 둔다                                                                    |
 
 ## 요구 사항
 
@@ -273,7 +274,7 @@ docker/     docker-compose.yml, postgres 롤 초기화 SQL (로컬 개발 스택
 deploy/     운영 compose.yaml · Caddyfile · deploy.sh · host-setup.sh (api 이미지에 동봉)
 terraform/  AWS 인프라 (tf-buddha-*), README.md 에 운영 절차
 scripts/    generate-api-doc.mjs (pnpm api:openapi 의 마지막 단계)
-docs/       PLAN.md · API.md · DECISIONS.md · QUESTIONS.md
+docs/       plan/(기획서 v0.2 원문) · PLAN.md · API.md · DECISIONS.md · QUESTIONS.md
 ```
 
 패키지 의존 규칙은 PLAN §4.1을 따른다: 앱은 `packages/*`만 import하고, `shared`는 어떤 프레임워크에도 의존하지 않는다.
