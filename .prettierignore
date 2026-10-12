@@ -10,6 +10,8 @@ pnpm-workspace.yaml
 **/*.tsbuildinfo
 # owner-authored plan: never reformat
 docs/PLAN.md
+# exported product plan (Notion v0.2, SSOT per ADR-0047): keep the exported bytes
+docs/plan/
 # generated artifacts
 packages/db/drizzle/
 packages/api-client/src/generated/
