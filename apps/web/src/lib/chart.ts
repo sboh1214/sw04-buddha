@@ -226,7 +226,7 @@ export function chartDomain(points: readonly ChartPoint[]): ChartDomain {
 /**
  * x is time-scaled, never index-scaled: `listTicks` anchors its downsample stride at the newest
  * row (A-M3-25), so the points it returns are not evenly spaced in time and index spacing would
- * misrepresent the history for free. A market with one `open` tick, or a burst of trades inside
+ * misrepresent the history for free. A market with a single fill, or a burst of fills inside
  * one millisecond, has no span at all — every x is then 0 and step-after's trailing `H1000`
  * draws a full-width flat hold, which is the honest picture of one price held across the window.
  */

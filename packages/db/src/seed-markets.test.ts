@@ -33,4 +33,12 @@ describe('seed market copy (#125)', () => {
       for (const pattern of PUBLICATION_MISSING_NO) expect(rules, slug).not.toMatch(pattern);
     }
   });
+
+  it('states the NO side of every rule, apart from the delay clause (N03 §2)', () => {
+    for (const { slug, rules } of SEED_MARKETS) {
+      expect(rules.replace(SEED_RULE_NO_DELAY_NO, ''), slug).toMatch(
+        /'아니오'(입니다|로 정산합니다)/,
+      );
+    }
+  });
 });

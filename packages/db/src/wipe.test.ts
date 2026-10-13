@@ -29,6 +29,8 @@ describe('the wipe statement (#125, #149)', () => {
   });
 
   it('is what the #149 reset runs: deploy/reset-db.sh calls wipe-cli, which runs this constant', () => {
+    // The script lives outside this package, so packages/db/turbo.json names it as an input of
+    // `test`: a change to it alone must not replay a cached pass.
     const script = readFileSync(new URL('../../../deploy/reset-db.sh', import.meta.url), 'utf8');
     expect(script).toContain('node packages/db/dist/wipe-cli.js --yes');
     const cli = readFileSync(new URL('./wipe-cli.ts', import.meta.url), 'utf8');

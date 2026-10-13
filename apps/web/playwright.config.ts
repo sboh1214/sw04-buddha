@@ -4,7 +4,7 @@ import { config as loadEnv } from 'dotenv';
 
 /**
  * E2E (PLAN 14): chromium at 375px (mobile) and 1280px (desktop), both projects running every
- * spec — the trade panel and the detail layout differ by viewport, not by spec.
+ * spec — the detail layout and the bottom tab bar differ by viewport, not by spec.
  *
  * The suite needs a whole stack: Postgres, Redis and Mailpit (`pnpm infra:up`), a migrated and
  * SEEDED database (`pnpm db:migrate && pnpm db:seed` — the specs create their own markets, but
