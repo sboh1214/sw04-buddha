@@ -13,8 +13,9 @@ import { cursorQuerySchema } from './api/pagination.js';
  *   creates them before anyone could grant (packages/db seed.ts), and they enter their contact at
  *   their first sign-in like every account.
  * - A revoke that would leave fewer than MIN_ADMINS admins is refused, the revoker's own
- *   included. It applies from the next request: the role cache is overwritten and every session
- *   of the account is deleted, so it is signed out everywhere.
+ *   included. It applies from the next request: every session of the account is deleted, so it
+ *   is signed out everywhere, and AdminGuard takes an admin answer from Postgres only — never
+ *   from the role cache, whatever it still holds.
  */
 
 /** The fewest admins a revoke may leave (owner decision 2026-10-13, #171). */

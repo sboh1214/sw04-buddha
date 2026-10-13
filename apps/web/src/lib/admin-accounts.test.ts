@@ -16,9 +16,11 @@ import {
   adminRoleChangeTarget,
   adminRoleReasonFormSchema,
   formatAdminGrant,
+  grantSearchRows,
   isAdminRoleChangeRefusal,
+  type GrantCandidatePage,
 } from './admin-accounts';
-import { ApiError } from './api';
+import { ApiError, type AdminUser } from './api';
 import { formatKst } from './datetime';
 
 const apiError = (status: number, code: string, details?: unknown) =>
@@ -183,5 +185,40 @@ describe('the record', () => {
     expect(adminRoleChangeTarget({ target: { id: 'u', email: null, nickname: null } })).toBe(
       copy.adminAccountsTargetGone,
     );
+  });
+});
+
+describe('the grant search', () => {
+  const account = (nickname: string) => ({ id: nickname, nickname }) as unknown as AdminUser;
+  const page = (term: string, items: AdminUser[], nextCursor: string | null = null) =>
+    ({ term, items, nextCursor }) satisfies GrantCandidatePage;
+  const kim = account('kim');
+  const kimchi = account('kimchi');
+  const lee = account('lee');
+
+  it("offers the submitted term's accounts, every page of them", () => {
+    expect(
+      grantSearchRows('kim', [page('kim', [kim], 'next'), page('kim', [kimchi])], false),
+    ).toEqual({ rows: [kim, kimchi], stale: false });
+    expect(grantSearchRows('kim', [page('kim', [])], false)).toEqual({ rows: [], stale: false });
+  });
+
+  it('offers nothing of the previous term while the submitted one loads', () => {
+    // keepPreviousData: the query of `lee` shows the pages of `kim` as its placeholder.
+    expect(grantSearchRows('lee', [page('kim', [kim])], true)).toEqual({
+      rows: [kim],
+      stale: true,
+    });
+    // A page of another term is stale even when the flag says otherwise.
+    expect(grantSearchRows('lee', [page('kim', [kim])], false).stale).toBe(true);
+    expect(grantSearchRows('lee', [page('lee', [lee]), page('kim', [kim])], false).stale).toBe(
+      true,
+    );
+    // The placeholder flag alone is enough too.
+    expect(grantSearchRows('lee', [page('lee', [lee])], true).stale).toBe(true);
+  });
+
+  it('has nothing to offer before any answer', () => {
+    expect(grantSearchRows('kim', undefined, false)).toEqual({ rows: [], stale: false });
   });
 });

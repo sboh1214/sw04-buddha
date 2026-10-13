@@ -11,6 +11,7 @@ import {
   isApiError,
   type AdminAccount,
   type AdminRoleChange,
+  type AdminUser,
   validationField,
   validationMessage,
 } from './api';
@@ -64,6 +65,33 @@ export const ADMIN_ROLE_CHANGE_PALETTE: Readonly<Record<AdminRoleChangeType, str
 /** Whose role changed: its nickname now, or 삭제된 계정 once the account is gone. */
 export function adminRoleChangeTarget(change: Pick<AdminRoleChange, 'target'>): string {
   return change.target.nickname ?? copy.adminAccountsTargetGone;
+}
+
+/** One page of the grant search (`useAdminGrantCandidates`), with the term it answers. */
+export interface GrantCandidatePage {
+  term: string;
+  items: AdminUser[];
+  nextCursor: string | null;
+}
+
+/**
+ * The grant search's accounts, and whether they are another search's (`stale`). While a newly
+ * submitted term loads, react-query keeps the previous term's pages on screen
+ * (`keepPreviousData`, flagged `isPlaceholderData`), and a 부여 on one of them would aim at an
+ * account the submitted search did not find. So stale rows are shown dimmed, with no 부여 and no
+ * 더 보기, until the submitted term's own pages arrive. Each page carries its term as well: a page
+ * of another term is stale even without the flag.
+ */
+export function grantSearchRows(
+  term: string,
+  pages: readonly GrantCandidatePage[] | undefined,
+  isPlaceholderData: boolean,
+): { rows: AdminUser[]; stale: boolean } {
+  const shown = pages ?? [];
+  return {
+    rows: shown.flatMap((page) => page.items),
+    stale: isPlaceholderData || shown.some((page) => page.term !== term),
+  };
 }
 
 /** The grant and revoke dialogs' one field: a reason of 1–500 characters (`AdminGrantBody`). */

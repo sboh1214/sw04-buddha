@@ -7,13 +7,13 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query';
+import { type GrantCandidatePage } from '@/lib/admin-accounts';
 import {
   api,
   isApiError,
   type AdminAccount,
   type AdminGrantBody,
   type AdminRoleChange,
-  type AdminUser,
   unwrap,
 } from '@/lib/api';
 
@@ -66,21 +66,26 @@ export function useAdminRoleChanges() {
 /**
  * The accounts a grant can be aimed at: the 사용자 search (`GET /admin/users?q=`, email or
  * nickname), asked only once a term is given. Each row carries its role, so an admin already is
- * marked rather than offered.
+ * marked rather than offered. Each page carries its term: the previous term's pages stay on
+ * screen while a new one loads (`keepPreviousData`), and `grantSearchRows` offers no 부여 on them.
  */
 export function useAdminGrantCandidates(term: string) {
   return useInfiniteQuery({
     queryKey: [...CANDIDATES_KEY, term],
-    queryFn: async ({ pageParam }: { pageParam: string | undefined }): Promise<Page<AdminUser>> => {
+    queryFn: async ({
+      pageParam,
+    }: {
+      pageParam: string | undefined;
+    }): Promise<GrantCandidatePage> => {
       const { data, meta } = unwrap(
         await api.GET('/api/v1/admin/users', {
           params: { query: { q: term, ...(pageParam ? { cursor: pageParam } : {}) } },
         }),
       );
-      return { items: data, nextCursor: meta.nextCursor };
+      return { term, items: data, nextCursor: meta.nextCursor };
     },
     initialPageParam: undefined as string | undefined,
-    getNextPageParam: (last: Page<AdminUser>) => last.nextCursor ?? undefined,
+    getNextPageParam: (last: GrantCandidatePage) => last.nextCursor ?? undefined,
     placeholderData: keepPreviousData,
     enabled: term !== '',
   });

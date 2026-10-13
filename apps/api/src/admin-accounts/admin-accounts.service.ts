@@ -56,12 +56,13 @@ export function roleChangeNotAllowed(reason: AdminRoleChangeRefusal): AppError {
  * both. The only writer of `profiles.role` outside the seed's bootstrap and the test fixtures.
  *
  * A grant or revoke runs under the exclusive admin-roles lock (`lockAdminRoles`), checks that the
- * actor is STILL an admin — AdminGuard read a cached role before the lock, and another admin may
- * have revoked this one meanwhile — and writes its `admin_grant` / `admin_revoke` row in the same
+ * actor is STILL an admin — AdminGuard read the role before the lock, and another admin may have
+ * revoked this one meanwhile — and writes its `admin_grant` / `admin_revoke` row in the same
  * transaction as the role. A revoke also deletes every session of the account (better-auth reads
- * sessions from Postgres on each request, with no cookie cache), so it is signed out everywhere;
- * after the commit the role cache gets the new role, so the change applies from the next request
- * (owner decision 2026-10-13).
+ * sessions from Postgres on each request, with no cookie cache), so it is signed out everywhere.
+ * The change applies from the next request (owner decision 2026-10-13): AdminGuard answers
+ * `admin` only from Postgres, so a revoke needs nothing of Redis, and after a grant's commit the
+ * role cache gets the new role over a cached `user`.
  */
 @Injectable()
 export class AdminAccountsService {
@@ -271,8 +272,9 @@ export class AdminAccountsService {
 
   /**
    * The committed role into the cache (AdminGuard.cacheRole). A failure is logged, not thrown:
-   * the change is committed, a revoke's sessions are gone already, and the guard falls back to
-   * Postgres while Redis does not answer.
+   * the change is committed and a revoke's sessions are gone already. It fails closed either way —
+   * after a revoke the cache may still say `admin`, which AdminGuard never answers from (it reads
+   * Postgres), and after a grant a cached `user` may refuse the new admin until it expires (60 s).
    */
   private async cacheRole(userId: string, role: Role): Promise<void> {
     try {

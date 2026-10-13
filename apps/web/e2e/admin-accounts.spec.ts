@@ -123,6 +123,32 @@ test.describe('관리자 권한 부여·회수 (#171)', () => {
       await expect(dialog).toBeHidden();
       await expect(adminRow(page, pendingEmail)).toHaveCount(0);
 
+      // A new search's matches replace the last one's only when they arrive. Until then the
+      // last term's matches stay dimmed with 부여 off: none of them can be granted by mistake.
+      const search = page.getByTestId('admin-grant');
+      const memberSearch = (url: URL) =>
+        url.pathname === '/api/v1/admin/users' && url.searchParams.get('q') === memberEmail;
+      let answer!: () => void;
+      const held = new Promise<void>((resolve) => {
+        answer = resolve;
+      });
+      await page.route(memberSearch, async (route) => {
+        await held;
+        await route.continue();
+      });
+      await search.getByTestId('admin-grant-search').fill(memberEmail);
+      await search.getByTestId('admin-grant-search-submit').click();
+      await expect(search.getByTestId('admin-grant-results')).toHaveAttribute('aria-busy', 'true');
+      await expect(
+        search
+          .getByTestId('admin-grant-candidate')
+          .filter({ has: page.getByText(pendingEmail, { exact: true }) })
+          .getByTestId('admin-grant-open'),
+      ).toBeDisabled();
+      answer();
+      await expect(search.getByTestId('admin-grant-results')).toHaveAttribute('aria-busy', 'false');
+      await page.unroute(memberSearch);
+
       // Granted, with the reason in the record beside the admin who did it.
       const grantReason = `e2e 운영 교대 ${memberEmail}`;
       await openGrant(page, memberEmail);

@@ -24,6 +24,12 @@ const KNOWN_ROLES: ReadonlySet<string> = new Set<Role>(ROLES);
  * Allows only `profiles.role = 'admin'`. Must run after SessionGuard (use
  * `@UseGuards(SessionGuard, AdminGuard)`; Nest evaluates guards in order).
  * Redis is a cache only: on any Redis error the role is read from Postgres.
+ *
+ * The cache only ever refuses (#171): a cached `user` is answered from Redis, a cached `admin`
+ * never is — every admin answer is a Postgres read made by that request, after SessionGuard
+ * found its session. So no cache entry, however stale, can let a revoked account in: not when a
+ * revoke's cache write fails after its commit, not on a session signed in after the revoke.
+ * The cost is one primary-key read per admin request, beside SessionGuard's own session read.
  */
 @Injectable()
 export class AdminGuard implements CanActivate {
@@ -43,13 +49,16 @@ export class AdminGuard implements CanActivate {
     return true;
   }
 
-  /** Cached role lookup; `undefined` when the user has no profile row. */
+  /**
+   * The role, from the cache only when it refuses; `undefined` when the user has no profile row.
+   */
   async roleOf(userId: string): Promise<Role | undefined> {
     const key = roleCacheKey(userId);
     let cacheDown = false;
+    let cached: string | null = null;
     try {
-      const cached = await this.redis.get(key);
-      if (cached !== null && KNOWN_ROLES.has(cached)) return cached as Role;
+      cached = await this.redis.get(key);
+      if (cached !== null && cached !== 'admin' && KNOWN_ROLES.has(cached)) return cached as Role;
     } catch (error) {
       cacheDown = true;
       this.logger.warn(`role cache read failed: ${String(error)}`);
@@ -64,9 +73,9 @@ export class AdminGuard implements CanActivate {
 
     // A read that failed (a Redis that stopped answering: the client's command timeout) is
     // not followed by a write that would fail the same way — one bound per request, not two.
-    // NX: a role change that committed while this read was in flight writes its role with
-    // `cacheRole`, and this older answer must not replace it.
-    if (!cacheDown) {
+    // Only an empty key is filled, and with NX: a role change that committed while this read was
+    // in flight writes its role with `cacheRole`, and this older answer must not replace it.
+    if (!cacheDown && cached === null) {
       try {
         await this.redis.set(key, row.role, 'EX', ROLE_CACHE_TTL_SECONDS, 'NX');
       } catch (error) {
@@ -78,9 +87,11 @@ export class AdminGuard implements CanActivate {
 
   /**
    * Writes the role a committed change set (#171: a grant or revoke), over whatever the cache
-   * holds, so the change applies from the next request. A write rather than a delete: a request
-   * that read the old role from Postgres before the change committed would otherwise put it
-   * back for 60 s (`roleOf` only fills an empty key).
+   * holds. A write rather than a delete: a request that read the old role from Postgres before
+   * the change committed would otherwise put it back for 60 s (`roleOf` only fills an empty
+   * key), and a granted account would be refused that long. Only the grant needs it to apply
+   * from the next request — a revoke does without it, since a cached `admin` is never answered
+   * (the write spares the revoked account's next requests a Postgres read).
    */
   async cacheRole(userId: string, role: Role): Promise<void> {
     await this.redis.set(roleCacheKey(userId), role, 'EX', ROLE_CACHE_TTL_SECONDS);

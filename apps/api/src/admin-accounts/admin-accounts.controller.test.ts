@@ -1,21 +1,26 @@
 /**
  * Admin accounts (#171) against the docker `test` profile: granting with the email and contact
  * conditions, revoking with the two-admin floor (the revoker's own included), the sessions a
- * revoke deletes and the admin access it ends from the next request, the records written with
- * each change (or not at all) in the order they were made, the list and the history. Skips when
- * TEST_* are unset.
+ * revoke deletes and the admin access it ends from the next request (a failed role-cache write
+ * after it too), the records written with each change (or not at all) in the order they were
+ * made, the list and the history. Skips when TEST_* are unset.
  */
 import { randomUUID } from 'node:crypto';
 import { schema } from '@buddha/db';
 import { type AdminAccount, type AdminRoleChange } from '@buddha/shared';
 import { asc, eq, inArray } from 'drizzle-orm';
+import { type Redis } from 'ioredis';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AdminGuard } from '../auth/admin.guard.js';
+import { AdminGuard, ROLE_CACHE_TTL_SECONDS, roleCacheKey } from '../auth/admin.guard.js';
+import { REDIS } from '../infra/redis/redis.provider.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
+import { discoverRoutes, isAdminPath } from '../test/routes.js';
 import { hasTestInfra } from '../test/setup-env.js';
 
 const jsonHeaders = { origin: 'http://localhost:3000', 'content-type': 'application/json' };
 const BASE = '/api/v1/admin/admins';
+/** Every admin route (admin-access.test.ts walks the same list). */
+const adminRoutes = discoverRoutes().filter((route) => isAdminPath(route.path));
 
 type ErrorBody = {
   error: { code: string; details?: { path: (string | number)[]; message: string }[] };
@@ -222,7 +227,7 @@ describe.skipIf(!hasTestInfra)('admin accounts (integration)', () => {
     const c = await candidate();
     await grant({ userId: c.id, reason: '셋째 관리자' });
     const elsewhere = await signIn(c);
-    // Both sessions work, and C's role is cached as admin.
+    // Both sessions work.
     for (const cookie of [c.cookie, elsewhere])
       expect((await get(BASE, cookie)).statusCode).toBe(200);
     expect(await sessionsOf(c.id)).toHaveLength(2);
@@ -249,7 +254,7 @@ describe.skipIf(!hasTestInfra)('admin accounts (integration)', () => {
     }
     // Nobody else was signed out.
     expect((await sessionsOf(a.id)).length + (await sessionsOf(b.id)).length).toBe(othersBefore);
-    // A fresh sign-in is a member's session: the cache holds the new role, not the cached admin.
+    // A fresh sign-in is a member's session.
     const again = await signIn(c);
     const refused = await get(BASE, again);
     expect(refused.statusCode).toBe(403);
@@ -303,17 +308,71 @@ describe.skipIf(!hasTestInfra)('admin accounts (integration)', () => {
     expect(await records()).toEqual([]);
   });
 
-  it('refuses an actor whose role went away behind the cache', async () => {
-    // A's role is cached as admin; then it is taken away without the cache hearing of it (as
-    // another API instance's revoke whose cache write failed would leave it). The guard lets the
-    // request through, the check under the lock does not.
-    expect((await get(BASE)).statusCode).toBe(200);
+  it('keeps a revoked account out when the role-cache write after the commit fails', async () => {
+    const c = await candidate();
+    await grant({ userId: c.id, reason: '셋째 관리자' });
+    expect((await get(BASE, c.cookie)).statusCode).toBe(200);
+    const redis = t.app.get<Redis>(REDIS);
+    const key = roleCacheKey(c.id);
+    expect(await redis.get(key)).toBe('admin');
+
+    // Redis refuses the revoke's write of C's role after the commit, so the cache keeps saying
+    // `admin` for up to 60 s.
+    const set = redis.set.bind(redis) as (...args: unknown[]) => Promise<unknown>;
+    const failing = vi
+      .spyOn(redis, 'set')
+      .mockImplementation(((...args: unknown[]) =>
+        args[0] === key
+          ? Promise.reject(new Error('injected cache failure'))
+          : set(...args)) as never);
+    try {
+      expect((await revoke(c.id, { reason: '담당 종료' })).statusCode).toBe(200);
+      expect(failing).toHaveBeenCalledWith(key, 'user', 'EX', ROLE_CACHE_TTL_SECONDS);
+    } finally {
+      failing.mockRestore();
+    }
+    expect(await roleOf(c.id)).toBe('user');
+    expect(await redis.get(key)).toBe('admin');
+
+    // The old cookie is signed out, and a fresh sign-in is a member's session on every admin
+    // route — this screen and every other one, writes included: the guard never answers a
+    // cached admin, it reads Postgres.
+    expect((await get(BASE, c.cookie)).statusCode).toBe(401);
+    const again = await signIn(c);
+    expect(adminRoutes.length).toBeGreaterThanOrEqual(15);
+    const answers = [];
+    for (const route of adminRoutes) {
+      const safe = route.method === 'GET' || route.method === 'HEAD';
+      const res = await t.app.inject({
+        method: route.method as 'GET',
+        // A uuid for every parameter: the guards answer before any pipe.
+        url: `/api/v1${route.path.replaceAll(/:\w+/g, '00000000-0000-4000-8000-000000000000')}`,
+        headers: safe ? { cookie: again } : { ...jsonHeaders, cookie: again },
+        ...(safe ? {} : { payload: {} }),
+      });
+      const code = res.json<{ error?: { code: string } }>().error?.code;
+      answers.push({ route: route.key, status: res.statusCode, code });
+    }
+    expect(answers).toEqual(
+      adminRoutes.map((route) => ({ route: route.key, status: 403, code: 'FORBIDDEN' })),
+    );
+    // The stale entry was there all along, and stays until it expires.
+    expect(await redis.get(key)).toBe('admin');
+    expect((await get('/api/v1/me', again)).statusCode).toBe(200);
+  });
+
+  it('refuses an actor revoked between the guard and the lock', async () => {
+    // AdminGuard read A's role as admin, then another admin's revoke committed before A's grant
+    // took the lock. The guard let the request through; the check under the lock does not.
     await t.db
       .update(schema.profiles)
       .set({ role: 'user' })
       .where(eq(schema.profiles.userId, a.id));
     const c = await candidate();
+    const read = vi.spyOn(AdminGuard.prototype, 'roleOf').mockResolvedValueOnce('admin');
     const res = await grant({ userId: c.id, reason: '시험' });
+    expect(read).toHaveBeenCalledWith(a.id);
+    read.mockRestore();
     expect(res.statusCode).toBe(403);
     expect(errorOf(res).code).toBe('FORBIDDEN');
     expect(await records()).toEqual([]);

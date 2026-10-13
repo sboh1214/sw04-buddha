@@ -37,6 +37,7 @@ import {
   adminRoleChangeTarget,
   adminRoleReasonFormSchema,
   formatAdminGrant,
+  grantSearchRows,
 } from '@/lib/admin-accounts';
 import { type AdminAccount, type AdminRoleChange, type AdminUser } from '@/lib/api';
 import { formatKst } from '@/lib/datetime';
@@ -165,14 +166,19 @@ function AdminRow({
 /**
  * The grant: the 사용자 search (email or nickname), each match with its role — an admin is
  * badged, everyone else offered 부여. Whether the account may become one (verified email, real
- * name and phone) is the server's to say, and the dialog shows its answer.
+ * name and phone) is the server's to say, and the dialog shows its answer. While a new term
+ * loads, the previous term's matches stay dimmed with no 부여 (`grantSearchRows`).
  */
 function GrantSearch() {
   const [query, setQuery] = useState('');
   const [term, setTerm] = useState('');
   const candidates = useAdminGrantCandidates(term);
   const [pending, setPending] = useState<PendingRoleChange | null>(null);
-  const rows = candidates.data?.pages.flatMap((page) => page.items) ?? [];
+  const { rows, stale } = grantSearchRows(
+    term,
+    candidates.data?.pages,
+    candidates.isPlaceholderData,
+  );
 
   return (
     <Stack gap="3" data-testid="admin-grant">
@@ -208,17 +214,27 @@ function GrantSearch() {
       ) : candidates.isError ? (
         <ErrorAlert />
       ) : rows.length === 0 ? (
-        <Text color="fg.muted">{copy.adminNoUsers}</Text>
+        stale ? (
+          <Skeleton height="16" />
+        ) : (
+          <Text color="fg.muted">{copy.adminNoUsers}</Text>
+        )
       ) : (
-        <Stack gap="2">
+        <Stack
+          gap="2"
+          aria-busy={stale}
+          opacity={stale ? 0.5 : undefined}
+          data-testid="admin-grant-results"
+        >
           {rows.map((user) => (
             <CandidateRow
               key={user.id}
               user={user}
+              disabled={stale}
               onGrant={() => setPending({ kind: 'grant', account: user, self: false })}
             />
           ))}
-          {candidates.hasNextPage && (
+          {!stale && candidates.hasNextPage && (
             <Button
               alignSelf="center"
               size="sm"
@@ -238,7 +254,16 @@ function GrantSearch() {
   );
 }
 
-function CandidateRow({ user, onGrant }: { user: AdminUser; onGrant: () => void }) {
+function CandidateRow({
+  user,
+  disabled,
+  onGrant,
+}: {
+  user: AdminUser;
+  /** Another search's match, on screen while the submitted term loads. */
+  disabled: boolean;
+  onGrant: () => void;
+}) {
   return (
     <HStack
       borderWidth="1px"
@@ -264,7 +289,13 @@ function CandidateRow({ user, onGrant }: { user: AdminUser; onGrant: () => void 
         </Text>
       </Stack>
       {user.role !== 'admin' && (
-        <Button size="xs" variant="outline" onClick={onGrant} data-testid="admin-grant-open">
+        <Button
+          size="xs"
+          variant="outline"
+          disabled={disabled}
+          onClick={onGrant}
+          data-testid="admin-grant-open"
+        >
           {copy.adminAccountsGrant}
         </Button>
       )}
