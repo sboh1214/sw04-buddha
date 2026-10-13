@@ -12,6 +12,7 @@
 | [docs/API.md](docs/API.md)                                                 | HTTP·실시간 API 계약 (OpenAPI에서 생성, 손으로 고치지 않음)                                                                                                        |
 | [docs/DECISIONS.md](docs/DECISIONS.md)                                     | ADR 로그 — 왜 그렇게 됐는지. 오너 결정 D1\~D26, 초기 출시 범위, 설계 제안 값의 승인 담당은 ADR-0047                                                                |
 | [docs/QUESTIONS.md](docs/QUESTIONS.md)                                     | M0\~M6과 #19까지의 질문·가정 기록. 새 오너 질문은 각 이슈의 '오너 결정 필요'와 결정 이슈에 둔다                                                                    |
+| [docs/RESET.md](docs/RESET.md)                                             | 운영 DB 초기화 절차 — 무엇을 지우고 남기는지, `deploy/reset-db.sh` 실행과 확인(#149가 쓴다, ADR-0048)                                                              |
 
 ## 요구 사항
 
@@ -32,7 +33,7 @@ pnpm install
 
 docker compose up -d --wait      # postgres(5432) · redis(6379) · mailpit(1025/8025)
 pnpm db:migrate                  # drizzle 마이그레이션 (스키마 + 롤 권한 + 프로필 트리거)
-pnpm db:seed                     # 카테고리 5개(+세부 21개) + 충전 상품 5개 + 관리자 + 시장 14개
+pnpm db:seed                     # 카테고리 5개(+세부 21개) + 판매 중지 충전 상품 5개 + 관리자 + 초안 시장 14개
 pnpm dev                         # web(3000) · api(4000) · worker + 공유 패키지 watch
 ```
 
@@ -44,25 +45,25 @@ pnpm dev                         # web(3000) · api(4000) · worker + 공유 패
 - API 레디니스 <http://localhost:3000/api/health>(web rewrite 경유) 또는 <http://localhost:4000/api/health>. 워커는 <http://localhost:4100/health>.
 - Mailpit UI <http://localhost:8025> — 가입 인증·비밀번호 재설정·이메일 변경 메일이 전부 여기로 온다. 이메일 가입은 **주소만** 입력하고, 메일의 인증 링크를 누르면 로그인된 뒤 `/set-password`에서 첫 비밀번호를 정한다(인증 전에는 비밀번호가 없어 로그인할 수 없다). 운영 메일은 AWS SES(`.env.example`의 `SMTP_*` 주석).
 - 관리자 로그인은 `.env`의 `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD`(기본 `admin@buddha.local` / `admin1234!`). 이 두 값이 없으면 `pnpm db:seed`가 관리자와 시드 시장을 통째로 건너뛴다. 시드는 관리자에게 실명·휴대전화를 넣지 않으므로 관리자도 **첫 로그인에서 `/onboarding`을 만나** 한 번 입력한다 — 로컬에서도 운영에서도 같다(`/admin`도 게이트 예외가 아니다, ADR-0043). e2e는 `admin` 픽스처가 로그인 직후 `PUT /api/v1/me/contact`로 관리자 연락처를 넣는다.
-- 가입하면 10,000P가 자동 지급된다(`SIGNUP_BONUS_P`). 추가 지급은 관리자의 쿠폰으로 한다. 충전은 관리자가 만든 상품 단위다(시드: 4,900원→5,000P부터 90,000원→100,000P까지 2~10% 할인). 결제 프로바이더는 기본이 **mock**(누르면 돈이 움직이지 않고 바로 충전)이고, 실제 카드 결제창은 `PAYMENT_PROVIDER=smartro`일 때만 열린다 — 아래 [SmartroPay(스마트로페이) 결제](#smartropay스마트로페이-결제).
+- 가입하면 10,000P가 자동 지급된다(`SIGNUP_BONUS_P`). 추가 지급은 관리자의 쿠폰으로 한다. 충전은 관리자가 만든 상품 단위다(시드: 4,900원→5,000P부터 90,000원→100,000P까지 2~10% 할인. 판매 중지 상태로 넣으므로 관리자가 판매를 켜야 보인다). 결제 프로바이더는 기본이 **mock**(누르면 돈이 움직이지 않고 바로 충전)이고, 실제 카드 결제창은 `PAYMENT_PROVIDER=smartro`일 때만 열린다 — 아래 [SmartroPay(스마트로페이) 결제](#smartropay스마트로페이-결제).
 - 소셜 로그인(Google/Kakao/Naver)은 `.env`에 그 프로바이더의 키 **쌍**을 넣을 때만 켜진다(Q-M1-1).
 
-화면은 다음과 같다. 모바일 폭에서는 하단 탭(홈·포트폴리오·지갑·설정)이 붙고, 시장 상세에서만 그 자리를 거래 바가 대신한다.
+화면은 다음과 같다. 모바일 폭에서는 하단 탭(홈·포트폴리오·지갑·설정)이 붙는다. 사용자가 거래하는 경로는 지금 없다 — 직접 AMM 거래를 지웠고 CLOB 주문·체결은 아직 없다(ADR-0048). 체결이 없는 시장의 가격은 어디서나 '체결 없음'이다.
 
-| 경로                                                                                               | 화면                                                                                                                                                                                  |
-| -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/`                                                                                                | 홈(Kalshi 형, ADR-0041) — 헤더 2단(시장·랭킹·커뮤니티 / 전체·카테고리)·세부 분류 사이드바·정렬·시장 카드 그리드(카드마다 예/아니오 두 줄과 24시간 스파크라인)                         |
-| `/community`                                                                                       | 커뮤니티 — 자리만 있는 화면(준비 중)                                                                                                                                                  |
-| `/markets/[slug]`                                                                                  | 시장 상세 — 확률 차트·정산 기준·최근 체결·내 포지션·매수/매도 패널. `resolved`면 판정된 결과와 정산 진행 안내, `settled`면 결과와 실현 손익                                           |
-| `/portfolio`                                                                                       | 잔고·보유 포지션·정산 이력·주문 이력                                                                                                                                                  |
-| `/wallet`                                                                                          | 충전 상품·쿠폰·원장(정산 지급은 `SETTLEMENT_PAYOUT` 행)·결제 내역. 스마트로페이 결제창에서 돌아오면 결과 안내(`?payment=<id>&result=<r>`)                                             |
-| `/charge`                                                                                          | 충전 안내 — 판매 중인 충전 상품(그림·P·가격·할인)과 환불 요약. 로그인 없이 공개(PG 심사용, ADR-0044). 구매는 `/wallet?package=<id>`로                                                 |
-| `/leaderboard`                                                                                     | 실현 손익 상위 20 (공개, `LEADERBOARD_LIMIT`)                                                                                                                                         |
-| `/signup` `/login` `/set-password` `/reset-password` `/settings`                                   | 인증과 계정. 이메일 가입은 `/set-password` 단계에서 실명·휴대전화도 받고, `/settings`에서 고친다(ADR-0043)                                                                            |
-| `/onboarding`                                                                                      | 실명·휴대전화 입력(ADR-0043). 로그인했는데 아직 입력하지 않은 계정(소셜 로그인·기존 계정·시드 관리자)은 인증·약관·`/charge`를 뺀 어느 화면에서든(관리자 화면 포함) 여기로 온다        |
-| `/terms` `/privacy` `/refund`                                                                      | 이용약관·개인정보처리방침·환불정책(공개, ADR-0044). 사업자 정보는 `apps/web/src/legal/business-info.ts` 한 곳에 있고(지금은 `미정`), 모든 화면 아래의 푸터가 이 셋과 `/charge`를 건다 |
-| `/admin/markets` `/admin/markets/[id]`                                                             | 시장 생성·수정·열기·마감·판정(즉시 확정, 곧바로 정산)·무효(`open`·`closed`에서만), 판정 뒤 정산 단계(읽기 전용, ADR-0046)                                                             |
-| `/admin/users` `/admin/charge-packages` `/admin/coupons` `/admin/payments` `/admin/audit-failures` | 계정·상품·쿠폰·결제(환불 — 승인 후 7일·미사용·전액 — 와 「확인 필요」 행의 수동 정리, ADR-0042)·원장 감사 실패                                                                        |
+| 경로                                                                                               | 화면                                                                                                                                                                                         |
+| -------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/`                                                                                                | 홈(Kalshi 형, ADR-0041) — 헤더 2단(시장·랭킹·커뮤니티 / 전체·카테고리)·세부 분류 사이드바·정렬·시장 카드 그리드(카드마다 예/아니오 두 줄과 24시간 스파크라인, 체결 전에는 '체결 없음' 한 줄) |
+| `/community`                                                                                       | 커뮤니티 — 자리만 있는 화면(준비 중)                                                                                                                                                         |
+| `/markets/[slug]`                                                                                  | 시장 상세 — 확률 차트·정산 기준·최근 체결·내 포지션·주문 영역(열린 시장은 '거래 준비 중'). `resolved`면 판정된 결과와 정산 진행 안내, `settled`면 결과와 실현 손익                           |
+| `/portfolio`                                                                                       | 잔고·보유 포지션·정산 이력·주문 이력                                                                                                                                                         |
+| `/wallet`                                                                                          | 충전 상품·쿠폰·원장(정산 지급은 `SETTLEMENT_PAYOUT` 행)·결제 내역. 스마트로페이 결제창에서 돌아오면 결과 안내(`?payment=<id>&result=<r>`)                                                    |
+| `/charge`                                                                                          | 충전 안내 — 판매 중인 충전 상품(그림·P·가격·할인)과 환불 요약. 로그인 없이 공개(PG 심사용, ADR-0044). 구매는 `/wallet?package=<id>`로                                                        |
+| `/leaderboard`                                                                                     | 실현 손익 상위 20 (공개, `LEADERBOARD_LIMIT`)                                                                                                                                                |
+| `/signup` `/login` `/set-password` `/reset-password` `/settings`                                   | 인증과 계정. 이메일 가입은 `/set-password` 단계에서 실명·휴대전화도 받고, `/settings`에서 고친다(ADR-0043)                                                                                   |
+| `/onboarding`                                                                                      | 실명·휴대전화 입력(ADR-0043). 로그인했는데 아직 입력하지 않은 계정(소셜 로그인·기존 계정·시드 관리자)은 인증·약관·`/charge`를 뺀 어느 화면에서든(관리자 화면 포함) 여기로 온다               |
+| `/terms` `/privacy` `/refund`                                                                      | 이용약관·개인정보처리방침·환불정책(공개, ADR-0044). 사업자 정보는 `apps/web/src/legal/business-info.ts` 한 곳에 있고(지금은 `미정`), 모든 화면 아래의 푸터가 이 셋과 `/charge`를 건다        |
+| `/admin/markets` `/admin/markets/[id]`                                                             | 시장 생성(초안)·수정·열기·마감·판정(즉시 확정, 곧바로 정산), 거래 현황, 판정 뒤 정산 단계(읽기 전용, ADR-0046). 무효 처리는 없다(ADR-0048)                                                   |
+| `/admin/users` `/admin/charge-packages` `/admin/coupons` `/admin/payments` `/admin/audit-failures` | 계정·상품·쿠폰·결제(환불 — 승인 후 7일·미사용·전액 — 와 「확인 필요」 행의 수동 정리, ADR-0042)·원장 감사 실패                                                                               |
 
 ## 문제 해결
 
@@ -132,9 +133,9 @@ pnpm turbo run build --filter=web --force
 
 정말 열어야 한다면 웹 포트만으로는 부족하다. M4부터 브라우저가 실시간 소켓 때문에 API에 직접 붙으므로(아래 [아키텍처](#아키텍처)) 그 기기에서 API도 닿아야 한다: `pnpm --filter web exec next dev --port 3000 -H 0.0.0.0` + `next.config.ts`의 `allowedDevOrigins`, `API_HOST=0.0.0.0`, 그리고 빌드 시점에 번들로 들어가는 `NEXT_PUBLIC_API_URL`과 핸드셰이크를 통과시킬 `WEB_ORIGIN`이 실제 주소와 맞아야 한다.
 
-### 시드 시장이 거래를 거절한다 (`MARKET_CLOSED`)
+### 시드 시장을 열 수 없다 (`VALIDATION_ERROR`, `closeAt`)
 
-시드 시장은 `rules`가 정한 절대 마감 시각(KST)을 갖는다. 그 시각이 지난 시장은 워커의 `market.close` 잡이 실제로 닫을 때까지(매 분 스캔이므로 1분 안) `MARKET_CLOSED`로 거래를 거절한다. 워커가 떠 있어야 정상으로 돌아온다.
+시드 시장은 검수 전 초안(`draft`)이고 `rules`가 정한 절대 마감 시각(KST)을 갖는다. 그 시각이 지난 초안은 관리자 열기가 `closeAt`을 지목한 400(`VALIDATION_ERROR`)으로 거절된다. 관리자 시장 상세의 수정에서 마감 시각을 미래로 옮긴 뒤 연다. `pnpm db:seed`는 실행마다 마감이 지났거나 14일 안에 마감되는 시드 시장을 경고한다 — 근본 해법은 새 slug로 시드 문안을 바꾸는 것이다.
 
 ## 아키텍처
 
@@ -190,8 +191,9 @@ PLAN 부록 C의 다이어그램은 M4 이전 그림이라 위와 다르다(브�
 운영은 **AWS EC2 `t4g.small` 한 대**(`ap-northeast-2`)에 Docker Compose로 올라간다 — Caddy가 `https://buddha.sboh.dev` 하나의 오리진에서 `/api/*`·`/socket.io/*`를 api로, 나머지를 web으로 넘기고, Postgres·Redis는 같은 호스트의 별도 EBS(`/data`, 일일 스냅샷)에 산다. 내부 테스터 3명용 최소 비용 구성(월 ≈ $22)이고, 그렇게 정한 이유와 재검토 조건은 [ADR-0040](docs/DECISIONS.md)에 있다. 앱 코드는 로컬과 같다 — 위 아키텍처 그림에서 브라우저가 API에 닿는 두 길(Next rewrite, `NEXT_PUBLIC_API_URL` 직접 연결)이 운영에서는 둘 다 Caddy를 지난다는 점만 다르다.
 
 - **인프라**는 [terraform/](terraform/README.md)(리소스는 전부 `tf-buddha-` 접두사, 부트스트랩·롤백·복구·시크릿 교체 절차가 그 README에 있다).
-- **호스트에서 도는 것**은 [deploy/](deploy/)(`compose.yaml` · `Caddyfile` · `deploy.sh` · `host-setup.sh`) — api 이미지에 동봉되어 배포마다 `/data/buddha`에 풀린다. 이미지는 루트 `Dockerfile`의 세 타깃(`api` / `worker` / `web`)이다.
+- **호스트에서 도는 것**은 [deploy/](deploy/)(`compose.yaml` · `Caddyfile` · `deploy.sh` · `host-setup.sh` · `reset-db.sh`) — api 이미지에 동봉되어 배포마다 `/data/buddha`에 풀린다. 이미지는 루트 `Dockerfile`의 세 타깃(`api` / `worker` / `web`)이다.
 - **배포**는 `main`에 push하면 [.github/workflows/deploy.yml](.github/workflows/deploy.yml)이 arm64 이미지를 ECR에 밀고 SSM으로 호스트에서 `migrate && seed` → 컨테이너 교체 → `/api/health` 스모크까지 한다. 롤백은 `gh workflow run deploy.yml --ref main -f image_tag=<sha>`. SSH는 없고 셸은 `aws ssm start-session`이다.
+- **운영 DB 초기화**는 [docs/RESET.md](docs/RESET.md). #125의 배포가 마이그레이션 0017로 계정까지 한 번 비우고 시드로 다시 채웠다. #149의 출시 전 재초기화는 호스트에서 `deploy/reset-db.sh`로 같은 문장을 다시 돌리고 Redis도 비운다.
 
 ## SmartroPay(스마트로페이) 결제
 
@@ -271,10 +273,10 @@ pnpm --filter web test:e2e
 apps/       web (Next.js) · api (NestJS + Fastify) · worker (BullMQ) · mobile (Expo 스캐폴드)
 packages/   shared (순수 도메인 로직) · db (Drizzle) · api-client (OpenAPI 클라이언트) · config-ts · config-eslint
 docker/     docker-compose.yml, postgres 롤 초기화 SQL (로컬 개발 스택)
-deploy/     운영 compose.yaml · Caddyfile · deploy.sh · host-setup.sh (api 이미지에 동봉)
+deploy/     운영 compose.yaml · Caddyfile · deploy.sh · host-setup.sh · reset-db.sh (api 이미지에 동봉)
 terraform/  AWS 인프라 (tf-buddha-*), README.md 에 운영 절차
 scripts/    generate-api-doc.mjs (pnpm api:openapi 의 마지막 단계)
-docs/       plan/(기획서 v0.2 원문) · PLAN.md · API.md · DECISIONS.md · QUESTIONS.md
+docs/       plan/(기획서 v0.2 원문) · PLAN.md · API.md · DECISIONS.md · QUESTIONS.md · RESET.md(운영 DB 초기화)
 ```
 
 패키지 의존 규칙은 PLAN §4.1을 따른다: 앱은 `packages/*`만 import하고, `shared`는 어떤 프레임워크에도 의존하지 않는다.

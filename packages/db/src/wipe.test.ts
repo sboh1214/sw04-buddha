@@ -28,6 +28,13 @@ describe('the wipe statement (#125, #149)', () => {
     expect(withoutLeadingComments(first ?? '')).toBe(WIPE_PUBLIC_TABLES_SQL);
   });
 
+  it('is what the #149 reset runs: deploy/reset-db.sh calls wipe-cli, which runs this constant', () => {
+    const script = readFileSync(new URL('../../../deploy/reset-db.sh', import.meta.url), 'utf8');
+    expect(script).toContain('node packages/db/dist/wipe-cli.js --yes');
+    const cli = readFileSync(new URL('./wipe-cli.ts', import.meta.url), 'utf8');
+    expect(cli).toContain('sql.raw(WIPE_PUBLIC_TABLES_SQL)');
+  });
+
   it('names no table: the list is read from pg_tables when it runs', () => {
     expect(WIPE_PUBLIC_TABLES_SQL).toContain('FROM pg_tables');
     expect(WIPE_PUBLIC_TABLES_SQL).toContain("WHERE schemaname = 'public'");
