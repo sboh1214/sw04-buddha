@@ -148,7 +148,7 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | POST | `/api/v1/admin/markets/{id}/resolve` | closed → resolved: record the final result; settlement starts immediately | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
 | GET | `/api/v1/admin/release-settings` | Every registered release setting with its status and value, in registry order; `status=undecided` lists the ones with no value | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
 | GET | `/api/v1/admin/release-settings/changes` | Release setting changes, newest first: before and after, reason, admin and time (of one key with `key`) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
-| PATCH | `/api/v1/admin/release-settings/{key}` | Set the status and value of a release setting with a reason (recorded); `undecided` takes no value, the others require one that fits the item | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
+| PATCH | `/api/v1/admin/release-settings/{key}` | Set the status and value of a release setting with a reason (recorded); `undecided` takes no value, the others require one that fits the item, and a change to the current status and value is refused | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
 
 ### `markets` — 시장·시세
 

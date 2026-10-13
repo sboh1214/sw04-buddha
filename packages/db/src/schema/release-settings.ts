@@ -15,7 +15,8 @@ import { releaseSettingStatusEnum } from './enums.js';
  * an UPDATE that does not move `updated_at` forward — so a record an earlier write used cannot be
  * replayed. buddha_app cannot DELETE a row either — going back to `undecided` is a change like
  * any other — so the record is the whole history. Only the API's ReleaseSettingsService writes
- * here, the record in the same transaction; no seed or migration sets a value. Read the value
+ * here, the record in the same transaction; no seed or migration sets a value, so every item
+ * starts `undecided` after a dev setup or a reset (owner decision 2026-10-13~14). Read the value
  * through `storedReleaseSettingValue` / `getReleaseSetting` (release-settings.ts), never the bare
  * column.
  */

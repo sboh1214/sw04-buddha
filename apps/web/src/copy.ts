@@ -393,8 +393,10 @@ export const copy = {
     '바꾼 값은 바꾼 뒤 시작하는 일에만 적용됩니다. 이미 진행 중인 일은 시작할 때 읽은 값을 그대로 씁니다.',
   adminReleaseSettingSubmit: '저장',
   adminReleaseSettingSaved: '출시 설정을 바꿨습니다.',
+  // 지금 상태·값과 같은 변경은 거절한다(오너 결정 #170). 저장 버튼 옆과 서버 거절의 알림.
+  adminReleaseSettingUnchanged: '바뀐 내용이 없습니다.',
   adminReleaseSettingChanges: '변경 기록',
-  adminReleaseSettingNoChanges: '변경 기록이 없습니다.',
+  adminReleaseSettingChangesEmpty: '변경 기록이 없습니다.',
   adminReleaseSettingChangeActor: '작업자',
   adminReleaseSettingChangeReason: '사유',
   adminReleaseSettingUnregistered: '등록되지 않은 항목',

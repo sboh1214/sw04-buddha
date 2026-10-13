@@ -6,6 +6,7 @@ import {
   RELEASE_SETTING_STATUS_LABELS,
   defineReleaseSetting,
   defineReleaseSettings,
+  isReleaseSettingUnchanged,
   parseReleaseSettingChange,
   readReleaseSetting,
   releaseSettingChangeBodySchema,
@@ -103,6 +104,48 @@ describe('parseReleaseSettingChange', () => {
     expect(
       parseReleaseSettingChange(window, { status: 'proposal', value: { from: 1, to: 2 } }),
     ).toEqual({ success: true, state: { status: 'proposal', value: { from: 1, to: 2 } } });
+  });
+});
+
+describe('isReleaseSettingUnchanged (owner decision: a change to the current state is refused)', () => {
+  it('reads no row as undecided with no value', () => {
+    expect(isReleaseSettingUnchanged(undefined, { status: 'undecided', value: null })).toBe(true);
+    expect(isReleaseSettingUnchanged(undefined, { status: 'test', value: 24 })).toBe(false);
+    const undecided = { status: 'undecided', value: null } as const;
+    expect(isReleaseSettingUnchanged(undecided, { status: 'undecided', value: null })).toBe(true);
+  });
+
+  it('is a change when either the status or the value differs', () => {
+    const current = { status: 'test', value: 24 } as const;
+    expect(isReleaseSettingUnchanged(current, { status: 'test', value: 24 })).toBe(true);
+    expect(isReleaseSettingUnchanged(current, { status: 'approved', value: 24 })).toBe(false);
+    expect(isReleaseSettingUnchanged(current, { status: 'test', value: 25 })).toBe(false);
+    expect(isReleaseSettingUnchanged(current, { status: 'undecided', value: null })).toBe(false);
+    // A string that reads as the number is another value.
+    expect(isReleaseSettingUnchanged(current, { status: 'test', value: '24' })).toBe(false);
+  });
+
+  it('compares values as jsonb does: deep, members in any order, undefined members absent', () => {
+    const current = { status: 'proposal', value: { from: 1, to: [2, { at: 'x' }] } } as const;
+    for (const value of [
+      { to: [2, { at: 'x' }], from: 1 },
+      { from: 1, to: [2, { at: 'x' }], note: undefined },
+    ]) {
+      expect(isReleaseSettingUnchanged(current, { status: 'proposal', value })).toBe(true);
+    }
+    for (const value of [
+      { from: 1, to: [{ at: 'x' }, 2] },
+      { from: 1, to: [2, { at: 'y' }] },
+      { from: 1, to: [2, { at: 'x' }], note: null },
+      { from: 1 },
+      [1, [2, { at: 'x' }]],
+    ]) {
+      expect(isReleaseSettingUnchanged(current, { status: 'proposal', value })).toBe(false);
+    }
+    const list = { status: 'test', value: [1, 2] } as const;
+    expect(isReleaseSettingUnchanged(list, { status: 'test', value: [1, 2] })).toBe(true);
+    expect(isReleaseSettingUnchanged(list, { status: 'test', value: [1, 2, 3] })).toBe(false);
+    expect(isReleaseSettingUnchanged(list, { status: 'test', value: { 0: 1, 1: 2 } })).toBe(false);
   });
 });
 

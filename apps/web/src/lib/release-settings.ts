@@ -1,7 +1,9 @@
 import {
   RELEASE_SETTING_REASON_MAX_LENGTH,
   RELEASE_SETTING_STATUS_LABELS,
+  RELEASE_SETTING_UNCHANGED_MESSAGE,
   type ReleaseSettingStatus,
+  isReleaseSettingUnchanged,
   releaseSettingStatusSchema,
 } from '@buddha/shared';
 import * as z from 'zod';
@@ -12,6 +14,7 @@ import {
   type ReleaseSettingChangeBody,
   type ReleaseSettingState,
   validationField,
+  validationMessage,
 } from './api';
 import { compactJson } from './market-admin';
 
@@ -176,32 +179,62 @@ export function toReleaseSettingChangeBody(
 }
 
 /**
+ * Whether the dialog, as filled, would leave the item as it stands: the same status and the value
+ * it would send (none while 미정) — a change the API refuses (owner decision 2026-10-13~14, #170),
+ * so 저장 is off and the dialog says 바뀐 내용이 없습니다. A value that cannot be read yet is not
+ * "unchanged": sending it reports why under the field. The server compares what the item's
+ * schema makes of the value, against the item as it is by then, so it may still refuse a change
+ * this calls one (`releaseSettingChangeRefusal`).
+ */
+export function releaseSettingFormUnchanged(
+  values: Pick<ReleaseSettingFormValues, 'status' | 'value'>,
+  item: Pick<ReleaseSetting, 'status' | 'value' | 'valueSchema'>,
+): boolean {
+  const current = { status: item.status, value: item.value };
+  if (values.status === 'undecided') {
+    return isReleaseSettingUnchanged(current, { status: values.status, value: null });
+  }
+  const parsed = parseReleaseSettingValueText(values.value, item.valueSchema);
+  return (
+    parsed.ok && isReleaseSettingUnchanged(current, { status: values.status, value: parsed.value })
+  );
+}
+
+/**
  * What the dialog does with a refused change.
  * - `field`: the reason or the value was refused; the message goes under that field and the
  *   dialog stays for the fix.
- * - `toast`: anything else. `keepDialog` only when the request never came back (nothing was
- *   decided, so the admin may send it again); an answer from the API closes it, and the list is
- *   refreshed to what the server now holds.
+ * - `toast`: anything else, with its `tone` — `info` for a change the API found unchanged
+ *   (another admin made it first, or the item's schema made the value the stored one: the item
+ *   already is what the admin asked for), `error` otherwise. `keepDialog` only when the request
+ *   never came back (nothing was decided, so the admin may send it again); an answer from the API
+ *   closes it, and the list is refreshed to what the server now holds.
  */
 export type ReleaseSettingChangeRefusal =
-  { field: 'reason' | 'value'; message: string } | { toast: string; keepDialog: boolean };
+  | { field: 'reason' | 'value'; message: string }
+  | { toast: string; tone: 'error' | 'info'; keepDialog: boolean };
 
 export function releaseSettingChangeRefusal(error: unknown): ReleaseSettingChangeRefusal {
-  if (!isApiError(error)) return { toast: copy.errUnknown, keepDialog: true };
+  if (!isApiError(error)) return { toast: copy.errUnknown, tone: 'error', keepDialog: true };
   if (isApiError(error, 'VALIDATION_ERROR')) {
     const field = validationField(error);
     if (field === 'reason') return { field, message: copy.errReleaseSettingReason };
     if (field === 'value') return { field, message: copy.errReleaseSettingValueInvalid };
-    return { toast: copy.errUnknown, keepDialog: true };
+    if (validationMessage(error) === RELEASE_SETTING_UNCHANGED_MESSAGE) {
+      return { toast: copy.adminReleaseSettingUnchanged, tone: 'info', keepDialog: false };
+    }
+    return { toast: copy.errUnknown, tone: 'error', keepDialog: true };
   }
   if (isApiError(error, 'NOT_FOUND')) {
-    return { toast: copy.errReleaseSettingNotFound, keepDialog: false };
+    return { toast: copy.errReleaseSettingNotFound, tone: 'error', keepDialog: false };
   }
   if (isApiError(error, 'UNAUTHENTICATED')) {
-    return { toast: copy.errUnauthenticated, keepDialog: false };
+    return { toast: copy.errUnauthenticated, tone: 'error', keepDialog: false };
   }
-  if (isApiError(error, 'FORBIDDEN')) return { toast: copy.adminOnly, keepDialog: false };
-  return { toast: copy.errUnknown, keepDialog: false };
+  if (isApiError(error, 'FORBIDDEN')) {
+    return { toast: copy.adminOnly, tone: 'error', keepDialog: false };
+  }
+  return { toast: copy.errUnknown, tone: 'error', keepDialog: false };
 }
 
 /**

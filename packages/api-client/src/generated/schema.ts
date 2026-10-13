@@ -242,7 +242,7 @@ export type paths = {
         delete?: never;
         options?: never;
         head?: never;
-        /** Set the status and value of a release setting with a reason (recorded); `undecided` takes no value, the others require one that fits the item */
+        /** Set the status and value of a release setting with a reason (recorded); `undecided` takes no value, the others require one that fits the item, and a change to the current status and value is refused */
         patch: operations["adminChangeReleaseSetting"];
         trace?: never;
     };

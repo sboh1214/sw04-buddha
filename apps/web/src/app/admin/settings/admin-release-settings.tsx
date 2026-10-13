@@ -24,7 +24,7 @@ import {
   releaseSettingStatusSchema,
 } from '@buddha/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import { Controller, useForm, useWatch } from 'react-hook-form';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
@@ -45,6 +45,7 @@ import {
   releaseSettingChangeRefusal,
   releaseSettingFormDefaults,
   releaseSettingFormSchema,
+  releaseSettingFormUnchanged,
   releaseSettingSchemaHint,
   releaseSettingStatusLabel,
   releaseSettingValueInput,
@@ -211,10 +212,12 @@ function SettingRow({ item, onEdit }: { item: ReleaseSetting; onEdit: () => void
 
 /**
  * The change: status by radio, the value (typed as the item's shape asks, hidden while 미정 —
- * which drops it), and the required reason that goes into the record. Pinned while the request
- * runs, as the admin confirmation dialogs are: the admin must see how the change ended. A refused
- * reason or value is shown under its field and the dialog stays; any other answer closes it over
- * a refreshed list (`releaseSettingChangeRefusal`).
+ * which drops it), and the required reason that goes into the record. 저장 is off while the
+ * status and value are the item's own (`releaseSettingFormUnchanged`, owner decision: such a
+ * change is refused), with 바뀐 내용이 없습니다 beside it. Pinned while the request runs, as the
+ * admin confirmation dialogs are: the admin must see how the change ended. A refused reason or
+ * value is shown under its field and the dialog stays; any other answer closes it over a
+ * refreshed list (`releaseSettingChangeRefusal`).
  */
 function ChangeDialog({ item, onClose }: { item: ReleaseSetting; onClose: () => void }) {
   const change = useChangeReleaseSetting();
@@ -231,6 +234,9 @@ function ChangeDialog({ item, onClose }: { item: ReleaseSetting; onClose: () => 
     defaultValues: releaseSettingFormDefaults(item),
   });
   const status = useWatch({ control, name: 'status' });
+  const valueText = useWatch({ control, name: 'value' });
+  const unchanged = releaseSettingFormUnchanged({ status, value: valueText }, item);
+  const unchangedId = useId();
   const loading = change.isPending;
 
   const submit = handleSubmit((values) => {
@@ -247,7 +253,7 @@ function ChangeDialog({ item, onClose }: { item: ReleaseSetting; onClose: () => 
             setError(refusal.field, { message: refusal.message });
             return;
           }
-          toaster.create({ type: 'error', title: refusal.toast });
+          toaster.create({ type: refusal.tone, title: refusal.toast });
           if (!refusal.keepDialog) onClose();
         },
       },
@@ -383,7 +389,18 @@ function ChangeDialog({ item, onClose }: { item: ReleaseSetting; onClose: () => 
                 </Field.Root>
               </Stack>
             </Dialog.Body>
-            <Dialog.Footer>
+            <Dialog.Footer flexWrap="wrap">
+              {unchanged && (
+                <Text
+                  fontSize="sm"
+                  color="fg.muted"
+                  me="auto"
+                  id={unchangedId}
+                  data-testid="release-setting-unchanged"
+                >
+                  {copy.adminReleaseSettingUnchanged}
+                </Text>
+              )}
               <Button
                 variant="outline"
                 size="sm"
@@ -396,6 +413,8 @@ function ChangeDialog({ item, onClose }: { item: ReleaseSetting; onClose: () => 
               <Button
                 size="sm"
                 loading={loading}
+                disabled={unchanged}
+                aria-describedby={unchanged ? unchangedId : undefined}
                 onClick={() => void submit()}
                 data-testid="release-setting-submit"
               >
@@ -430,7 +449,7 @@ function ChangeLog() {
         </Alert.Root>
       ) : rows.length === 0 ? (
         <Text color="fg.muted" data-testid="release-setting-changes-empty">
-          {copy.adminReleaseSettingNoChanges}
+          {copy.adminReleaseSettingChangesEmpty}
         </Text>
       ) : (
         <Stack gap="2">

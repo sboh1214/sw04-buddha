@@ -73,11 +73,12 @@ export class AdminReleaseSettingsController {
   @ApiOperation({
     operationId: 'adminChangeReleaseSetting',
     summary:
-      'Set the status and value of a release setting with a reason (recorded); `undecided` takes no value, the others require one that fits the item',
+      'Set the status and value of a release setting with a reason (recorded); `undecided` takes no value, the others require one that fits the item, and a change to the current status and value is refused',
   })
   @ApiData(releaseSettingSchema)
   // NOT_FOUND: no registered item has this key. VALIDATION_ERROR: also a value that breaks the
-  // status rule or the item's schema (details under `value`).
+  // status rule or the item's schema (details under `value`), and a change that keeps the
+  // current status and value (path `[]`, RELEASE_SETTING_UNCHANGED_MESSAGE).
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
   change(
     @CurrentUser() admin: SessionUser,

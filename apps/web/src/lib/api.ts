@@ -108,6 +108,19 @@ export function validationField(error: ApiError): string | undefined {
 }
 
 /**
+ * The first issue's `message`, when `details` is a `ValidationIssue[]`: how the API tells apart
+ * refusals that share a code and a field — a taken market slug (`already exists`), a release
+ * setting change to the current state (RELEASE_SETTING_UNCHANGED_MESSAGE). Undefined otherwise.
+ */
+export function validationMessage(error: ApiError): string | undefined {
+  if (!Array.isArray(error.details)) return undefined;
+  const first: unknown = error.details[0];
+  if (typeof first !== 'object' || first === null || !('message' in first)) return undefined;
+  const message: unknown = (first as { message?: unknown }).message;
+  return typeof message === 'string' ? message : undefined;
+}
+
+/**
  * The 403 that means "the cookie belongs to somebody else than the account on screen": the
  * server refused to charge, to redeem for, or to write the contact or first password of an
  * account the user is not looking at (PLAN 5.3 shape — `chargeBodySchema`,

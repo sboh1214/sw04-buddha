@@ -3,7 +3,9 @@ import { getReleaseSetting, schema, storedReleaseSettingValue, type Db } from '@
 import {
   decodeKeyset,
   encodeKeyset,
+  isReleaseSettingUnchanged,
   parseReleaseSettingChange,
+  RELEASE_SETTING_UNCHANGED_MESSAGE,
   releaseSettingChangePayloadSchema,
   releaseSettingValueJsonSchema,
   type ReleaseSetting,
@@ -84,8 +86,10 @@ export class ReleaseSettingsService {
 
   /**
    * The reading server code uses: `undecided` with no value, or the value typed by the
-   * definition's schema with its status (`test` and `proposal` included — the caller decides
-   * whether such a value may drive its work). Only a definition registered in the registry is
+   * definition's schema with its status — `test` and `proposal` included, in every environment:
+   * the server only reports the status, and #149's launch check reviews every item that is not
+   * approved (owner decision 2026-10-13~14; no deploy-tier switch). What an `undecided` item means
+   * for the work is the registering issue's call. Only a definition registered in the registry is
    * read. A value applies to work started after it changed (owner decision 2026-10-13): read it
    * once when the work begins — inside that work's transaction (`executor`) when it has one —
    * and keep it for the work's whole life rather than reading it again later. The worker reads
@@ -119,8 +123,10 @@ export class ReleaseSettingsService {
   /**
    * Changes one item: the status/value rule and the item's schema first (VALIDATION_ERROR naming
    * `value`), then, under a lock on the key, the row and its `release_setting_change` record with
-   * the state before and after, the reason, the admin and one instant. Nothing is written when
-   * any part fails.
+   * the state before and after, the reason, the admin and one instant. A change that keeps the
+   * status and value as they are is refused under that lock (VALIDATION_ERROR, path `[]`,
+   * RELEASE_SETTING_UNCHANGED_MESSAGE; owner decision 2026-10-13~14), so a change another admin
+   * made first counts. Nothing is written when any part fails.
    */
   async change(
     adminId: string,
@@ -154,6 +160,12 @@ export class ReleaseSettingsService {
         .from(schema.releaseSettings)
         .where(eq(schema.releaseSettings.key, key))
         .limit(1);
+      if (isReleaseSettingUnchanged(current, after)) {
+        throw new AppError('VALIDATION_ERROR', {
+          message: 'The status and value are already the current ones',
+          details: [{ path: [], message: RELEASE_SETTING_UNCHANGED_MESSAGE }],
+        });
+      }
       // Strictly after the change this one waited for: the clock has millisecond precision, so
       // a change right behind another can read that change's instant again (or an earlier one,
       // should the clock step back). One key's records then sort in the order they were made —

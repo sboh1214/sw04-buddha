@@ -2,8 +2,9 @@
 -- registers, and the index the change log reads admin_actions through. Hand-edited after
 -- `drizzle-kit generate` at the end only (marked below); the snapshot is as generated.
 --
--- No row is written here: a registered key without a row is `undecided`, and values arrive only
--- through an admin's change (owner decision 2026-10-13), never through a migration or the seed.
+-- No row is written here: a registered key without a row is `undecided`. Values arrive only
+-- through an admin's change on the admin screen, never through a migration or the seed, so every
+-- item starts `undecided` after a dev setup or a reset (owner decision 2026-10-13~14, #170).
 CREATE TYPE "public"."release_setting_status" AS ENUM('undecided', 'proposal', 'test', 'approved');--> statement-breakpoint
 CREATE TABLE "release_settings" (
 	"key" varchar(64) PRIMARY KEY NOT NULL,

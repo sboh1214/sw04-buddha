@@ -2,6 +2,7 @@ import {
   RELEASE_SETTING_REASON_MAX_LENGTH,
   RELEASE_SETTING_STATUSES,
   RELEASE_SETTING_STATUS_LABELS,
+  RELEASE_SETTING_UNCHANGED_MESSAGE,
 } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
@@ -16,6 +17,7 @@ import {
   releaseSettingChangeRefusal,
   releaseSettingFormDefaults,
   releaseSettingFormSchema,
+  releaseSettingFormUnchanged,
   releaseSettingSchemaHint,
   releaseSettingStatusLabel,
   releaseSettingValueInput,
@@ -231,6 +233,46 @@ describe('toReleaseSettingChangeBody', () => {
   });
 });
 
+describe('releaseSettingFormUnchanged (owner decision: a change to the current state is refused)', () => {
+  it('is unchanged while the dialog holds the item as it stands', () => {
+    for (const current of [
+      item(),
+      item({ status: 'test', value: 24 }),
+      item({ status: 'approved', value: '24', valueSchema: STRING }),
+      item({ status: 'proposal', value: { hours: 24 }, valueSchema: OBJECT }),
+    ]) {
+      const { status, value } = releaseSettingFormDefaults(current);
+      expect(releaseSettingFormUnchanged({ status, value }, current)).toBe(true);
+    }
+  });
+
+  it('reads the value as it would be sent: spacing and member order do not make a change', () => {
+    const number = item({ status: 'test', value: 24 });
+    expect(releaseSettingFormUnchanged({ status: 'test', value: ' 24 ' }, number)).toBe(true);
+    const object = item({ status: 'proposal', value: { hours: 24, days: 1 }, valueSchema: OBJECT });
+    expect(
+      releaseSettingFormUnchanged({ status: 'proposal', value: '{"days":1,"hours":24}' }, object),
+    ).toBe(true);
+    // A string item takes the text as written, so a space is a change (the server may trim it).
+    const text = item({ status: 'test', value: 'a', valueSchema: STRING });
+    expect(releaseSettingFormUnchanged({ status: 'test', value: 'a ' }, text)).toBe(false);
+  });
+
+  it('is a change when the status or the value differs, or the value cannot be read yet', () => {
+    const number = item({ status: 'test', value: 24 });
+    expect(releaseSettingFormUnchanged({ status: 'approved', value: '24' }, number)).toBe(false);
+    expect(releaseSettingFormUnchanged({ status: 'test', value: '25' }, number)).toBe(false);
+    expect(releaseSettingFormUnchanged({ status: 'test', value: '"24"' }, number)).toBe(false);
+    expect(releaseSettingFormUnchanged({ status: 'undecided', value: '24' }, number)).toBe(false);
+    for (const value of ['', '{', 'null']) {
+      expect(releaseSettingFormUnchanged({ status: 'test', value }, number)).toBe(false);
+    }
+    // 미정 drops whatever the hidden value field holds.
+    expect(releaseSettingFormUnchanged({ status: 'undecided', value: '7' }, item())).toBe(true);
+    expect(releaseSettingFormUnchanged({ status: 'test', value: '7' }, item())).toBe(false);
+  });
+});
+
 describe('releaseSettingChangeRefusal', () => {
   it('puts a refused reason or value under its field', () => {
     expect(
@@ -248,24 +290,45 @@ describe('releaseSettingChangeRefusal', () => {
   it('closes on an answer about the item or the account, and stays when nothing came back', () => {
     expect(releaseSettingChangeRefusal(apiError(404, 'NOT_FOUND'))).toEqual({
       toast: copy.errReleaseSettingNotFound,
+      tone: 'error',
       keepDialog: false,
     });
     expect(releaseSettingChangeRefusal(apiError(403, 'FORBIDDEN'))).toEqual({
       toast: copy.adminOnly,
+      tone: 'error',
       keepDialog: false,
     });
     expect(releaseSettingChangeRefusal(apiError(401, 'UNAUTHENTICATED'))).toEqual({
       toast: copy.errUnauthenticated,
+      tone: 'error',
       keepDialog: false,
     });
     expect(releaseSettingChangeRefusal(apiError(500, 'INTERNAL'))).toEqual({
       toast: copy.errUnknown,
+      tone: 'error',
       keepDialog: false,
     });
     expect(releaseSettingChangeRefusal(new TypeError('Failed to fetch'))).toEqual({
       toast: copy.errUnknown,
+      tone: 'error',
       keepDialog: true,
     });
+  });
+
+  it('says 바뀐 내용이 없습니다 and closes when the API finds the change unchanged', () => {
+    const unchanged = apiError(400, 'VALIDATION_ERROR', [
+      { path: [], message: RELEASE_SETTING_UNCHANGED_MESSAGE },
+    ]);
+    expect(copy.adminReleaseSettingUnchanged).toBe('바뀐 내용이 없습니다.');
+    expect(releaseSettingChangeRefusal(unchanged)).toEqual({
+      toast: copy.adminReleaseSettingUnchanged,
+      tone: 'info',
+      keepDialog: false,
+    });
+    // Another refusal of the whole body is not that one.
+    expect(
+      releaseSettingChangeRefusal(apiError(400, 'VALIDATION_ERROR', [{ path: [], message: 'x' }])),
+    ).toEqual({ toast: copy.errUnknown, tone: 'error', keepDialog: true });
   });
 });
 

@@ -12,10 +12,12 @@ import { releaseSettingStatusSchema, type ReleaseSettingStatus } from './enums.j
  * - WHAT an item is (key, name, unit, meaning, value shape) is code: a definition in
  *   RELEASE_SETTINGS below, registered by the issue that uses the value.
  * - Its VALUE and STATUS live in Postgres (`release_settings`), changed by an admin with a reason
- *   (owner decision 2026-10-13: changeable while running, every change recorded). A missing row
- *   is `undecided` with no value. Each change appends an `admin_actions` row
- *   (`release_setting_change`) in the same transaction, and the database refuses a write without
- *   a matching record that no earlier write used (migration 0020).
+ *   (owner decision 2026-10-13: changeable while running, every change recorded) and only so: no
+ *   migration or seed writes a value, and every item starts `undecided` after a dev setup or a
+ *   reset (owner decision 2026-10-13~14). A missing row is `undecided` with no value. Each change
+ *   appends an `admin_actions` row (`release_setting_change`) in the same transaction, and the
+ *   database refuses a write without a matching record that no earlier write used (migration
+ *   0020). A change that keeps the status and value as they are is refused.
  * - A value applies to work that starts after it changed (owner decision): a consumer reads it
  *   once when its work begins and keeps that reading for the work's whole life.
  */
@@ -171,6 +173,55 @@ export function readReleaseSetting<T extends ReleaseSettingValue>(
   }
   return { key, status: stored.status, value: parsed.data };
 }
+
+/**
+ * Whether two JSON values are one value, as jsonb compares them: deep, with object members in any
+ * order (jsonb does not keep it) and a member that is `undefined` the same as an absent one (JSON
+ * drops it).
+ */
+export function sameReleaseSettingJson(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return (
+      Array.isArray(a) &&
+      Array.isArray(b) &&
+      a.length === b.length &&
+      a.every((item, index) => sameReleaseSettingJson(item, b[index]))
+    );
+  }
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
+  const left = a as Record<string, unknown>;
+  const right = b as Record<string, unknown>;
+  const present = (record: Record<string, unknown>) =>
+    Object.keys(record).filter((member) => record[member] !== undefined);
+  const members = present(left);
+  return (
+    members.length === present(right).length &&
+    members.every((member) => sameReleaseSettingJson(left[member], right[member]))
+  );
+}
+
+/**
+ * Whether a change would leave an item as it stands (`current`, undefined for no row: `undecided`
+ * with no value): the same status and the same value (`sameReleaseSettingJson`). Such a change is
+ * refused — nothing written, nothing recorded (owner decision 2026-10-13~14, #170).
+ */
+export function isReleaseSettingUnchanged(
+  current: ReleaseSettingState | undefined,
+  next: ReleaseSettingState,
+): boolean {
+  return (
+    (current?.status ?? 'undecided') === next.status &&
+    sameReleaseSettingJson(current?.value ?? null, next.value ?? null)
+  );
+}
+
+/**
+ * The `message` of the VALIDATION_ERROR issue that refuses an unchanged change. Its path is the
+ * whole body (`[]`): status and value together, neither one field. The admin screen tells this
+ * refusal apart by the message.
+ */
+export const RELEASE_SETTING_UNCHANGED_MESSAGE = 'is the current status and value';
 
 /** `parseReleaseSettingChange`: the state to store, or why the change is refused. */
 export type ReleaseSettingChangeResult =

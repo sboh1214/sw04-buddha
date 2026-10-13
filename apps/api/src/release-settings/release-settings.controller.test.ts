@@ -1,13 +1,14 @@
 /**
  * Release settings (#170) against the docker `test` profile, with a registry of test items
  * injected through `createTestApp({ releaseSettings })` — the shipped one is empty. Covers
- * register → list → get → change → change log, the reason and value rules, the undecided filter,
- * the admin-only surface and that a change and its record commit together. Skips when TEST_* are
- * unset.
+ * register → list → get → change → change log, the reason and value rules, the refusal of a change
+ * to the current state, the undecided filter, the admin-only surface and that a change and its
+ * record commit together. Skips when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
 import {
   RELEASE_SETTINGS,
+  RELEASE_SETTING_UNCHANGED_MESSAGE,
   defineReleaseSetting,
   defineReleaseSettings,
   type ReleaseSetting,
@@ -259,6 +260,54 @@ describe.skipIf(!hasTestInfra)('release settings (integration)', () => {
     }
     expect(await settingRows()).toEqual([]);
     expect(await records()).toEqual([]);
+  });
+
+  it('refuses a change to the current status and value, writing and recording nothing', async () => {
+    const unchanged = { path: [], message: RELEASE_SETTING_UNCHANGED_MESSAGE };
+    async function expectUnchanged(key: string, body: Record<string, unknown>) {
+      const res = await patch(key, { ...body, reason: '같은 값' });
+      expect({ body, status: res.statusCode }).toEqual({ body, status: 400 });
+      expect(errorOf(res)).toMatchObject({ code: 'VALIDATION_ERROR', details: [unchanged] });
+    }
+
+    // No row is undecided with no value: going "back" to undecided changes nothing.
+    await expectUnchanged(hours.key, { status: 'undecided' });
+    await expectUnchanged(hours.key, { status: 'undecided', value: null });
+    expect(await settingRows()).toEqual([]);
+    expect(await records()).toEqual([]);
+
+    await patch(hours.key, { status: 'test', value: 24, reason: '시험' });
+    await patch(window.key, { status: 'proposal', value: { from: 1, to: 3 }, reason: '제안' });
+    await patch(code.key, { status: 'test', value: '24', reason: '문자열' });
+    const before = { rows: await settingRows(), records: await records() };
+
+    await expectUnchanged(hours.key, { status: 'test', value: 24 });
+    // The same object with its members in another order (jsonb does not keep the order).
+    await expectUnchanged(window.key, { status: 'proposal', value: { to: 3, from: 1 } });
+    await expectUnchanged(code.key, { status: 'test', value: '24' });
+    expect(await settingRows()).toEqual(before.rows);
+    expect(await records()).toEqual(before.records);
+
+    // A new status with the same value, or a new value of the same type, is a change.
+    expect(
+      (await patch(hours.key, { status: 'approved', value: 24, reason: '승인' })).statusCode,
+    ).toBe(200);
+    expect(
+      (await patch(code.key, { status: 'test', value: '25', reason: '바꿈' })).statusCode,
+    ).toBe(200);
+    expect(await records()).toHaveLength(before.records.length + 2);
+  });
+
+  it('refuses the second of two identical concurrent changes: it found the first done', async () => {
+    const body = { status: 'test', value: 10, reason: '동시' };
+    const answers = await Promise.all([patch(hours.key, body), patch(hours.key, body)]);
+    expect(answers.map((res) => res.statusCode).sort()).toEqual([200, 400]);
+    const refused = answers.find((res) => res.statusCode === 400)!;
+    expect(errorOf(refused).details).toEqual([
+      { path: [], message: RELEASE_SETTING_UNCHANGED_MESSAGE },
+    ]);
+    expect(await records()).toHaveLength(1);
+    expect(await settingRows()).toMatchObject([{ status: 'test', value: 10 }]);
   });
 
   it('answers 404 for a key no item has and 400 for a malformed one', async () => {
