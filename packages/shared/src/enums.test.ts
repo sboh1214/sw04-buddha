@@ -52,7 +52,8 @@ describe('enums', () => {
 
   it('only ever appends to the Postgres-backed payment and ledger enums (ADR-0042)', () => {
     // `ALTER TYPE ... ADD VALUE` appends; reordering a tuple would reorder nothing in the
-    // database and make drizzle-kit emit a BEFORE/AFTER migration nobody meant to write.
+    // database and make drizzle-kit emit a BEFORE/AFTER migration nobody meant to write. The
+    // one removal so far (MARKET_VOID_REFUND) recreated the type on an emptied table (0017).
     expect(enums.PAYMENT_STATUSES.slice(0, 3)).toEqual(['pending', 'succeeded', 'failed']);
     expect(enums.PAYMENT_STATUSES.slice(3)).toEqual(['cancelled', 'refunding', 'refunded']);
     expect(enums.LEDGER_ENTRY_TYPES.slice(-2)).toEqual([
@@ -63,6 +64,16 @@ describe('enums', () => {
     expect(enums.ledgerEntryTypeSchema.parse('PAYMENT_CANCEL_REVERSAL')).toBe(
       'PAYMENT_CANCEL_REVERSAL',
     );
+  });
+
+  it('has no value only the direct AMM wrote (#125)', () => {
+    // The void cost refund, the opening tick and the AMM counterparty are gone, and their
+    // Postgres types were recreated without them on an emptied database (migration 0017).
+    expect(enums.ledgerEntryTypeSchema.safeParse('MARKET_VOID_REFUND').success).toBe(false);
+    expect(enums.priceTickTriggerSchema.safeParse('open').success).toBe(false);
+    expect(enums.counterpartyTypeSchema.safeParse('amm').success).toBe(false);
+    expect(enums.adminActionTypeSchema.safeParse('market_void').success).toBe(false);
+    expect(enums).not.toHaveProperty('MARKET_MECHANISMS');
   });
 
   it('names the payment providers, payment event types and the refund admin action', () => {
@@ -110,13 +121,12 @@ describe('enums', () => {
 
   it('keeps the remaining enum schemas parseable', () => {
     expect(enums.paymentStatusSchema.parse('succeeded')).toBe('succeeded');
-    expect(enums.marketMechanismSchema.parse('lmsr')).toBe('lmsr');
     expect(enums.marketVisibilitySchema.parse('public')).toBe('public');
     expect(enums.marketEventTypeSchema.parse('rules_edited')).toBe('rules_edited');
     expect(enums.orderSideSchema.parse('buy')).toBe('buy');
     expect(enums.orderTypeSchema.parse('market')).toBe('market');
     expect(enums.timeInForceSchema.parse('ioc')).toBe('ioc');
-    expect(enums.counterpartyTypeSchema.parse('amm')).toBe('amm');
+    expect(enums.counterpartyTypeSchema.parse('order')).toBe('order');
     expect(enums.priceTickTriggerSchema.parse('trade')).toBe('trade');
     expect(enums.adminActionTypeSchema.parse('balance_adjust')).toBe('balance_adjust');
     expect(enums.auditFailureKindSchema.parse('ledger_balance_mismatch')).toBe(

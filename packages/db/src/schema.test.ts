@@ -1,18 +1,17 @@
 import { randomUUID } from 'node:crypto';
 import {
-  DEFAULT_LIQUIDITY_B,
+  COUNTERPARTY_TYPES,
+  LEDGER_ENTRY_TYPES,
   MARKET_STATUSES,
+  PRICE_TICK_TRIGGERS,
   SIGNUP_BONUS_P,
-  initState,
-  maxLossP,
-  priceOf,
-  serializeQuantity,
 } from '@buddha/shared';
 import { and, eq, lt, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   auditFailures,
   balances,
+  fills,
   ledgerEntries,
   marketSettlementSteps,
   markets,
@@ -127,22 +126,85 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     );
   });
 
-  it('createMarket initialises LMSR state and relations resolve', async () => {
+  it('createMarket writes a market with no price before its first fill, and relations resolve', async () => {
     const category = await createCategory(t.db, { slug: 'economy', nameKo: '경제' });
-    const market = await createMarket(t.db, { categoryId: category.id, initialProbBp: 7000 });
+    const market = await createMarket(t.db, { categoryId: category.id });
     expect(market.status).toBe('open');
-    expect(market.lastPrice).toBe(70);
-    expect(market.qNo).toBe('0.0000000000');
-    expect(Number(market.qYes)).toBeCloseTo(1000 * Math.log(0.7 / 0.3), 6);
-    // ADR-0027: the reserve is the true worst case, not PLAN 5.3's ln 2 figure (69,315P here).
-    expect(market.reserveP).toBe(maxLossP(0.7, 1000));
-    expect(market.reserveP).toBe(120_398n);
+    // N02 §5: no fill, no price — the direct AMM's initial probability is gone (#125).
+    expect(market.lastPrice).toBeNull();
+    expect(market.volumeP).toBe(0n);
+    expect(market.tradeCount).toBe(0);
+    expect(market).not.toHaveProperty('qYes');
+    expect(market).not.toHaveProperty('mechanism');
     const withCategory = await t.db.query.markets.findFirst({
       where: eq(markets.id, market.id),
       with: { category: true, creator: { with: { profile: true } } },
     });
     expect(withCategory?.category.slug).toBe('economy');
     expect(withCategory?.creator.profile?.role).toBe('admin');
+  });
+
+  describe('the direct AMM is gone (migration 0017, #125)', () => {
+    it('has dropped its market columns, the slippage guards and market_mechanism', async () => {
+      const { rows } = await t.db.execute<{ table: string; column: string }>(sql`
+        SELECT table_name AS "table", column_name AS "column" FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND (table_name, column_name) IN (('markets', 'liquidity_b'), ('markets', 'q_yes'),
+            ('markets', 'q_no'), ('markets', 'initial_prob_bp'), ('markets', 'reserve_p'),
+            ('markets', 'mechanism'), ('orders', 'max_cost_p'), ('orders', 'min_proceeds_p'))`);
+      expect(rows).toEqual([]);
+      const types = await t.db.execute<{ n: number }>(
+        sql`SELECT count(*)::int AS n FROM pg_type WHERE typname = 'market_mechanism'`,
+      );
+      expect(types.rows[0]?.n).toBe(0);
+    });
+
+    it('labels the recreated enums exactly like their shared tuples', async () => {
+      async function labels(type: string): Promise<string[]> {
+        const { rows } = await t.db.execute<{ label: string }>(sql`
+          SELECT e.enumlabel AS label FROM pg_enum e JOIN pg_type ty ON ty.oid = e.enumtypid
+          WHERE ty.typname = ${type} ORDER BY e.enumsortorder`);
+        return rows.map((r) => r.label);
+      }
+      expect(await labels('ledger_entry_type')).toEqual([...LEDGER_ENTRY_TYPES]);
+      expect(await labels('price_tick_trigger')).toEqual([...PRICE_TICK_TRIGGERS]);
+      expect(await labels('counterparty_type')).toEqual([...COUNTERPARTY_TYPES]);
+    });
+
+    it('requires a fill to name the order it matched', async () => {
+      const { user: u } = await createUser(t.db);
+      const market = await createMarket(t.db);
+      const [taker, maker] = await t.db
+        .insert(orders)
+        .values(
+          ['taker-key', 'maker-key'].map((idempotencyKey) => ({
+            userId: u.id,
+            marketId: market.id,
+            outcome: 'YES' as const,
+            side: 'buy' as const,
+            type: 'market' as const,
+            qty: 1,
+            status: 'open' as const,
+            idempotencyKey,
+          })),
+        )
+        .returning();
+      const fill = {
+        marketId: market.id,
+        orderId: taker!.id,
+        counterpartyType: 'order' as const,
+        outcome: 'YES' as const,
+        side: 'buy' as const,
+        qty: 1,
+        amountP: 52n,
+        priceAvgBp: 5200,
+      };
+      await expect(t.db.insert(fills).values(fill)).rejects.toSatisfy(
+        (e) => sqlState(e) === '23514',
+      );
+      await t.db.insert(fills).values({ ...fill, counterpartyOrderId: maker!.id });
+      expect(await t.db.select().from(fills)).toHaveLength(1);
+    });
   });
 
   describe('judgement and settlement steps (migration 0016, ADR-0046)', () => {
@@ -234,55 +296,37 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     });
   });
 
-  it('rejects out-of-range prices via CHECK', async () => {
+  it('rejects out-of-range prices via CHECK but takes no price at all', async () => {
     const market = await createMarket(t.db);
-    await expect(
-      t.db.update(markets).set({ lastPrice: 100 }).where(eq(markets.id, market.id)),
-    ).rejects.toSatisfy((e) => sqlState(e) === '23514');
-    await expect(
-      t.db.update(markets).set({ initialProbBp: 10_000 }).where(eq(markets.id, market.id)),
-    ).rejects.toSatisfy((e) => sqlState(e) === '23514');
+    for (const lastPrice of [0, 100]) {
+      await expect(
+        t.db.update(markets).set({ lastPrice }).where(eq(markets.id, market.id)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '23514');
+    }
+    const [priced] = await t.db
+      .update(markets)
+      .set({ lastPrice: 52 })
+      .where(eq(markets.id, market.id))
+      .returning();
+    expect(priced!.lastPrice).toBe(52);
+    const [cleared] = await t.db
+      .update(markets)
+      .set({ lastPrice: null })
+      .where(eq(markets.id, market.id))
+      .returning();
+    expect(cleared!.lastPrice).toBeNull();
   });
 
-  it('createMarket factory rejects initialProbBp outside 1..9999 before writing', async () => {
-    await expect(createMarket(t.db, { initialProbBp: 10_000 })).rejects.toThrow(RangeError);
-  });
-
-  it('createMarket stores maxLossP and the shared LMSR init for p0 != 0.5 (ADR-0027)', async () => {
-    const b = DEFAULT_LIQUIDITY_B;
-    const market = await createMarket(t.db, { initialProbBp: 1000 });
-    const init = initState(0.1, b);
-    expect(market.reserveP).toBe(maxLossP(0.1, b));
-    expect(market.reserveP).toBe(230_259n);
-    expect(market.reserveP).not.toBe(BigInt(Math.ceil(100 * b * Math.LN2)));
-    // The numeric(24,10) columns round-trip the serialised quantities byte for byte.
-    expect(market.qYes).toBe(serializeQuantity(init.qYes));
-    expect(market.qNo).toBe(serializeQuantity(init.qNo));
-    expect(market.liquidityB).toBe(b.toFixed(6));
-    expect(market.lastPrice).toBe(priceOf(init));
-    expect(market.lastPrice).toBe(10);
-    expect(market.volumeP).toBe(0n);
-    expect(market.tradeCount).toBe(0);
-  });
-
-  it('createMarket accepts an explicit LMSR state and statistics overrides', async () => {
-    const state = { qYes: 1234.5, qNo: -50.25, b: 500 };
-    const market = await createMarket(t.db, {
-      liquidityB: state.b,
-      initialProbBp: 5000,
-      qYes: state.qYes,
-      qNo: state.qNo,
-      volumeP: 12_345n,
-      tradeCount: 7,
-    });
-    expect(market.qYes).toBe(serializeQuantity(state.qYes));
-    expect(market.qNo).toBe(serializeQuantity(state.qNo));
-    expect(market.lastPrice).toBe(priceOf(state));
-    // The reserve is a property of (p0, b), not of where the price curve currently sits.
-    expect(market.reserveP).toBe(maxLossP(0.5, state.b));
+  it('createMarket accepts a last price and statistics overrides', async () => {
+    const market = await createMarket(t.db, { lastPrice: 37, volumeP: 12_345n, tradeCount: 7 });
+    expect(market.lastPrice).toBe(37);
     expect(market.volumeP).toBe(12_345n);
     expect(market.tradeCount).toBe(7);
-    await expect(createMarket(t.db, { qYes: 1 })).rejects.toThrow(RangeError);
+    for (const lastPrice of [0, 100, 52.5]) {
+      await expect(createMarket(t.db, { lastPrice }), String(lastPrice)).rejects.toThrow(
+        RangeError,
+      );
+    }
   });
 
   it('createPosition inserts a holdings row and nothing else', async () => {

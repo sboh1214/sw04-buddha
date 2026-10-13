@@ -1,15 +1,10 @@
 import * as z from 'zod';
 import { cursorQuerySchema } from './api/pagination.js';
-import { pAmountInputSchema, pAmountSchema, serializePAmount } from './api/p-amount.js';
+import { pAmountSchema } from './api/p-amount.js';
 import { uuidParamSchema } from './api/path-param.js';
-import { uuidSchema } from './api/uuid.js';
 import {
   BP_MAX,
-  INITIAL_PROB_BP_MAX,
   INT4_MAX,
-  INITIAL_PROB_BP_MIN,
-  LIQUIDITY_B_MAX,
-  LIQUIDITY_B_MIN,
   MARKET_IMAGE_URL_MAX,
   MARKET_RESOLVE_EVIDENCE_URL_MAX,
   MARKET_RESOLVE_NOTE_MAX,
@@ -18,14 +13,10 @@ import {
   MARKET_SOURCE_MAX,
   MARKET_TEXT_MAX,
   MARKET_TITLE_MAX,
-  MARKET_VOID_REASON_MAX,
-  MAX_P_AMOUNT,
-  ORDER_QTY_MAX,
   PRICE_MAX,
   PRICE_MIN,
   SPARKLINE_MAX_POINTS,
   TICKS_MAX_POINTS,
-  TRADE_MIN_SHARES,
 } from './constants.js';
 import {
   type MarketStatus,
@@ -39,10 +30,9 @@ import {
   settlementStepSchema,
   settlementStepStatusSchema,
 } from './enums.js';
-import { balanceSchema } from './wallet.js';
 
 /**
- * Market, quote, trade, order, position and tick DTOs (PLAN 7.1–7.3; M3 design 1.5).
+ * Market, order, position and tick DTOs (PLAN 7.1–7.3; M3 design 1.5).
  *
  * Composition rules (zod 4): field maps are declared once and every DTO is built from them;
  * an object-level `.refine` always comes last and `.meta({ id })` after it; a refined object
@@ -56,17 +46,7 @@ import { balanceSchema } from './wallet.js';
 // ---- small reusable pieces ----------------------------------------------------------
 const priceSchema = z.number().int().min(PRICE_MIN).max(PRICE_MAX);
 const bpSchema = z.number().int().min(0).max(BP_MAX);
-const sharesSchema = z.number().int().min(TRADE_MIN_SHARES).max(ORDER_QTY_MAX);
 const countSchema = z.number().int().min(0);
-/** better-auth `user.id` (text), also used for `expectedAccountId` like the wallet bodies. */
-const accountIdSchema = z.string().min(1).max(255);
-
-/** Request-side P amount bounded by MAX_P_AMOUNT (yields a bigint). */
-const boundedPAmount = (min: bigint) =>
-  pAmountInputSchema.refine(
-    (value) => value >= min && value <= MAX_P_AMOUNT,
-    `must be between ${min.toString()} and ${MAX_P_AMOUNT.toString()}`,
-  );
 
 // ---- categories ---------------------------------------------------------------------
 /**
@@ -96,10 +76,11 @@ const marketSummaryFields = {
   category: z.object({ slug: z.string(), nameKo: z.string() }),
   imageUrl: z.string().nullable(),
   status: marketStatusSchema,
-  /** Display YES price 1..99 (PLAN 5.3). */
-  lastPrice: priceSchema,
-  /** YES probability in basis points 0..10000. */
-  pYesBp: bpSchema,
+  /**
+   * YES price 1..99 of the last fill (PLAN 5.3); null until the market's first fill, which a
+   * client shows as '체결 없음' (N02 §5). #121 and #64 define the market's price fields.
+   */
+  lastPrice: priceSchema.nullable(),
   volumeP: pAmountSchema,
   tradeCount: countSchema,
   traderCount: countSchema,
@@ -128,10 +109,10 @@ export type MarketSummary = z.infer<typeof marketSummarySchema>;
  * `AdminMarket` are not made to carry a chart they never draw.
  *
  * Oldest to newest, at most SPARKLINE_MAX_POINTS hourly samples ending at the response
- * instant, in the same basis points as `pYesBp`. Shorter when the market's first tick falls
- * inside the window — leading unknowns are trimmed, never zero-filled (0 bp is a real
+ * instant, in the basis points of `PriceTick.pYesBp`. Shorter when the market's first tick
+ * falls inside the window — leading unknowns are trimmed, never zero-filled (0 bp is a real
  * probability) — and because the grid is fixed, the length says where the series starts:
- * bucket index = SPARKLINE_MAX_POINTS - length. Empty only for a market with no ticks at all.
+ * bucket index = SPARKLINE_MAX_POINTS - length. Empty for a market with no fill yet.
  */
 export const marketListItemSchema = z
   .object({
@@ -142,7 +123,7 @@ export const marketListItemSchema = z
 export type MarketListItem = z.infer<typeof marketListItemSchema>;
 
 /**
- * Public detail (PLAN 7.1): no LMSR state, liquidity, reserve or author — those are
+ * Public detail (PLAN 7.1): no author, exposure or settlement steps — those are
  * `adminMarketSchema` only.
  */
 export const marketSchema = z
@@ -190,168 +171,7 @@ export const marketListQuerySchema = cursorQuerySchema.extend({
 });
 export type MarketListQuery = z.infer<typeof marketListQuerySchema>;
 
-// ---- quotes -------------------------------------------------------------------------
-export const QUOTE_MODES = ['shares', 'spend'] as const;
-export type QuoteMode = (typeof QUOTE_MODES)[number];
-export const quoteModeSchema = z.enum(QUOTE_MODES);
-
-const INTEGER_STRING = /^(0|[1-9]\d*)$/;
-
-/**
- * The digits of MAX_P_AMOUNT (10^15): no valid `value` is longer in either mode, and the
- * bound runs before the range refine turns the string into a BigInt — `POST /quotes` is
- * public, and parsing a body-sized run of digits costs real CPU on the request thread.
- */
-export const QUOTE_VALUE_MAX_LENGTH = MAX_P_AMOUNT.toString().length;
-
-/**
- * `POST /quotes` (PLAN 7.1). `value` is an integer string: contracts in mode 'shares'
- * (1..ORDER_QTY_MAX), P to spend in mode 'spend' (≥ 1). A spend quote only makes sense for
- * a buy — "sell for at most N P" has no answer — so spend + sell is refused naming `mode`.
- */
-export const quoteBodySchema = z
-  .object({
-    marketId: uuidSchema,
-    outcome: outcomeSchema,
-    side: orderSideSchema,
-    mode: quoteModeSchema,
-    value: z
-      .string()
-      .max(QUOTE_VALUE_MAX_LENGTH, `must be at most ${String(QUOTE_VALUE_MAX_LENGTH)} digits`)
-      .regex(INTEGER_STRING, 'must be a non-negative integer string'),
-  })
-  .refine((body) => !(body.mode === 'spend' && body.side === 'sell'), {
-    message: 'spend quotes are only available for buys',
-    path: ['mode'],
-  })
-  .refine(
-    (body) => {
-      // A failed field check is a non-aborting issue in zod 4, so this refine still runs on
-      // the raw string: skip it then, or BigInt('1.5') would throw out of safeParse and an
-      // over-long string would be parsed after all.
-      if (body.value.length > QUOTE_VALUE_MAX_LENGTH || !INTEGER_STRING.test(body.value)) {
-        return true;
-      }
-      return body.mode === 'spend'
-        ? BigInt(body.value) >= 1n && BigInt(body.value) <= MAX_P_AMOUNT
-        : Number(body.value) >= TRADE_MIN_SHARES && Number(body.value) <= ORDER_QTY_MAX;
-    },
-    { message: 'value is out of range for the mode', path: ['value'] },
-  )
-  .meta({ id: 'QuoteBody' });
-export type QuoteBody = z.infer<typeof quoteBodySchema>;
-
-/** The parsed body's numeric value: contracts for mode 'shares', P for mode 'spend'. */
-export function quoteValue(body: QuoteBody): { shares: number } | { spendP: bigint } {
-  return body.mode === 'shares' ? { shares: Number(body.value) } : { spendP: BigInt(body.value) };
-}
-
-/**
- * Prices are basis-point integers (`priceAvgBp`, not PLAN 7.1's float `priceAvg`; ADR-0027).
- * A spend below one contract answers shares 0, amountP '0', both prices = priceBeforeBp.
- */
-export const quoteResultSchema = z
-  .object({
-    shares: countSchema,
-    amountP: pAmountSchema,
-    priceAvgBp: bpSchema,
-    priceBeforeBp: bpSchema,
-    priceAfterBp: bpSchema,
-    /** shares · 100 for a buy; '0' for a sell. */
-    maxPayoutP: pAmountSchema,
-    /**
-     * The market's trade count this price was computed from — the revision a client compares
-     * against the market row to ask "has the market moved under this quote?".
-     *
-     * A timestamp cannot answer that. A cached market seeded during SSR carries the SERVER's
-     * `dataUpdatedAt`, while a quote answered later carries the BROWSER's, so on a device whose
-     * clock runs behind the server every fresh quote looks older than the market it was priced
-     * from — the summary dims and the panel re-quotes on its throttle until the skew is spent.
-     * Both sides of this comparison come from one counter instead.
-     */
-    tradeCount: countSchema,
-  })
-  .meta({ id: 'QuoteResult' });
-export type QuoteResult = z.infer<typeof quoteResultSchema>;
-
-// ---- trades -------------------------------------------------------------------------
-const tradeFields = {
-  /** Lower-cased on the way in: the replay compares it with the stored order's (uuid.ts). */
-  marketId: uuidSchema,
-  outcome: outcomeSchema,
-  side: orderSideSchema,
-  shares: sharesSchema,
-  /** Buy only: refuse when the recomputed cost is above this (PRICE_MOVED). */
-  maxCostP: boundedPAmount(1n).optional(),
-  /** Sell only: refuse when the recomputed proceeds are below this (PRICE_MOVED). */
-  minProceedsP: boundedPAmount(0n).optional(),
-};
-
-/**
- * `POST /trades` (PLAN 5.4, 7.2). The slippage guard is mandatory (PLAN 5.3): a buy must
- * carry `maxCostP`, a sell must carry `minProceedsP`, and neither may carry the other's.
- * `expectedAccountId` is the account the screen shows, as on charge and coupon bodies.
- */
-export const tradeBodySchema = z
-  .object({ ...tradeFields, expectedAccountId: accountIdSchema })
-  .refine((body) => body.side !== 'buy' || body.maxCostP !== undefined, {
-    message: 'maxCostP is required for a buy',
-    path: ['maxCostP'],
-  })
-  .refine((body) => body.side !== 'sell' || body.minProceedsP !== undefined, {
-    message: 'minProceedsP is required for a sell',
-    path: ['minProceedsP'],
-  })
-  .refine((body) => body.side !== 'buy' || body.minProceedsP === undefined, {
-    message: 'minProceedsP is not allowed on a buy',
-    path: ['minProceedsP'],
-  })
-  .refine((body) => body.side !== 'sell' || body.maxCostP === undefined, {
-    message: 'maxCostP is not allowed on a sell',
-    path: ['maxCostP'],
-  })
-  .meta({ id: 'TradeBody' });
-export type TradeBody = z.infer<typeof tradeBodySchema>;
-
-/**
- * What an `Idempotency-Key` is compared against on replay: the terms as wire strings, so a
- * stored order row and a fresh body compare with `===` field by field.
- */
-export const tradeTermsSchema = z
-  .object({
-    marketId: uuidSchema,
-    outcome: outcomeSchema,
-    side: orderSideSchema,
-    shares: sharesSchema,
-    maxCostP: pAmountSchema.nullable(),
-    minProceedsP: pAmountSchema.nullable(),
-  })
-  .meta({ id: 'TradeTerms' });
-export type TradeTerms = z.infer<typeof tradeTermsSchema>;
-
-export function tradeTerms(body: TradeBody): TradeTerms {
-  return {
-    marketId: body.marketId,
-    outcome: body.outcome,
-    side: body.side,
-    shares: body.shares,
-    maxCostP: body.maxCostP === undefined ? null : serializePAmount(body.maxCostP),
-    minProceedsP: body.minProceedsP === undefined ? null : serializePAmount(body.minProceedsP),
-  };
-}
-
-/** True when two sets of terms are the same trade (a same-key replay is allowed). */
-export function sameTradeTerms(a: TradeTerms, b: TradeTerms): boolean {
-  return (
-    a.marketId === b.marketId &&
-    a.outcome === b.outcome &&
-    a.side === b.side &&
-    a.shares === b.shares &&
-    a.maxCostP === b.maxCostP &&
-    a.minProceedsP === b.minProceedsP
-  );
-}
-
+// ---- orders, fills, positions ------------------------------------------------------
 /** The caller's own order (`GET /me/orders`). */
 export const orderSchema = z
   .object({
@@ -368,8 +188,6 @@ export const orderSchema = z
     /** From the fill; null while nothing filled. */
     amountP: pAmountSchema.nullable(),
     priceAvgBp: bpSchema.nullable(),
-    maxCostP: pAmountSchema.nullable(),
-    minProceedsP: pAmountSchema.nullable(),
     createdAt: z.iso.datetime(),
   })
   .meta({ id: 'Order' });
@@ -395,7 +213,8 @@ export const positionSchema = z
     marketSlug: z.string(),
     marketTitle: z.string(),
     marketStatus: marketStatusSchema,
-    marketLastPrice: priceSchema,
+    /** The market's `lastPrice`: null until its first fill. */
+    marketLastPrice: priceSchema.nullable(),
     resolvedResult: outcomeSchema.nullable(),
     outcome: outcomeSchema,
     qty: countSchema,
@@ -418,48 +237,13 @@ export const positionStatusSchema = z.enum(POSITION_STATUSES);
 export const positionsQuerySchema = z.object({ status: positionStatusSchema.optional() });
 export type PositionsQuery = z.infer<typeof positionsQuerySchema>;
 
-/** Market stats every trade answer and tick carries. */
-export const marketStatsSchema = z
-  .object({
-    id: z.uuid(),
-    lastPrice: priceSchema,
-    pYesBp: bpSchema,
-    volumeP: pAmountSchema,
-    tradeCount: countSchema,
-    /**
-     * Moves with the same trade, so it belongs to the same patch. A trade by an account that
-     * held nothing in this market raises it, and a client that patched every OTHER
-     * trade-derived field kept showing the old participant count for as long as the market
-     * stayed busy — each patch restarted the query's own staleness clock, so the refetch that
-     * would have corrected it never came due.
-     */
-    traderCount: countSchema,
-  })
-  .meta({ id: 'MarketStats' });
-export type MarketStats = z.infer<typeof marketStatsSchema>;
-
-/**
- * `POST /trades` answer. On an `Idempotency-Key` replay the order/fill half is the first
- * answer; balance, position and market are current (same split as the charge replay).
- */
-export const tradeResultSchema = z
-  .object({
-    order: orderSchema,
-    fill: fillSchema,
-    balance: balanceSchema,
-    position: positionSchema,
-    market: marketStatsSchema,
-  })
-  .meta({ id: 'TradeResult' });
-export type TradeResult = z.infer<typeof tradeResultSchema>;
-
 // ---- ticks --------------------------------------------------------------------------
 /**
  * One point of a price series. At `resolution=raw` it is a stored tick and `ts` is the tick's
  * own instant. At a bucketed resolution it is a SAMPLE: `ts` is a boundary on the absolute
  * grid and `pYesBp`/`trigger` come from the last tick at or before it — the probability in
- * force then, exact because the series is a step function (the LMSR state holds between
- * trades). Render it with a step curve, never straight interpolation.
+ * force then, exact because the series is a step function (the price holds between fills).
+ * Render it with a step curve, never straight interpolation.
  */
 export const priceTickSchema = z
   .object({
@@ -543,9 +327,9 @@ export const priceSeriesSchema = z
      * history, so nothing merges live events into it — but a client that treated this as an
      * as-of watermark there would over-report and drop events it should have taken.
      *
-     * `to` cannot say it. A trade stamps its tick with `clock_timestamp()` read INSIDE its
-     * transaction, before its writes (trade.service.ts), so the instant is fixed several
-     * statements before the row commits — and this route's own clock read takes no lock, so it
+     * `to` cannot say it. A fill's tick is stamped with `clock_timestamp()` read INSIDE its
+     * transaction, before its writes, so the instant is fixed several statements before the
+     * row commits — and this route's own clock read takes no lock, so it
      * can pass that instant while the sampling snapshot still cannot see the row. The answer
      * then truthfully names a `to` LATER than a tick it truthfully omits, and no window can
      * tell the two apart. A client merging live `market:tick` events, which carry this same
@@ -597,17 +381,9 @@ export const adminSettlementStepSchema = z
   .meta({ id: 'AdminSettlementStep' });
 export type AdminSettlementStep = z.infer<typeof adminSettlementStepSchema>;
 
-/** Detail for `/admin/markets/:id`: the public shape plus LMSR state and exposure. */
+/** Detail for `/admin/markets/:id`: the public shape plus author, exposure and settlement. */
 export const adminMarketSchema = marketSchema
   .extend({
-    /** numeric(18,6) as a decimal string. */
-    liquidityB: z.string(),
-    /** numeric(24,10) as decimal strings. */
-    qYes: z.string(),
-    qNo: z.string(),
-    initialProbBp: z.number().int().min(INITIAL_PROB_BP_MIN).max(INITIAL_PROB_BP_MAX),
-    /** maxLossP(p0, b) (ADR-0027). */
-    reserveP: pAmountSchema,
     createdBy: z.string(),
     updatedAt: z.iso.datetime(),
     /** Σ buy amounts − Σ sell amounts over the market's fills. */
@@ -637,9 +413,6 @@ export const marketSlugSchema = z
   .regex(MARKET_SLUG_PATTERN, 'only a-z, 0-9, Korean syllables and -, 3..80 characters')
   .refine((slug) => !uuidParamSchema.safeParse(slug).success, 'slug must not look like a uuid');
 
-/** ≤ 6 decimals: numeric(18,6) would silently round anything finer. */
-const atMostSixDecimals = (value: number) => Number(value.toFixed(6)) === value;
-
 const marketFields = {
   title: z.string().trim().min(1).max(MARKET_TITLE_MAX),
   description: z.string().max(MARKET_TEXT_MAX).nullish(),
@@ -653,12 +426,6 @@ const marketFields = {
     .max(MARKET_IMAGE_URL_MAX)
     .nullish(),
   closeAt: z.iso.datetime(),
-  initialProbBp: z.number().int().min(INITIAL_PROB_BP_MIN).max(INITIAL_PROB_BP_MAX),
-  liquidityB: z
-    .number()
-    .min(LIQUIDITY_B_MIN)
-    .max(LIQUIDITY_B_MAX)
-    .refine(atMostSixDecimals, 'at most 6 decimal places'),
   /** Omitted: the server derives one from the title (`slugify` + a random tag). */
   slug: marketSlugSchema.optional(),
 };
@@ -677,12 +444,6 @@ export const updateMarketBodySchema = z
   )
   .meta({ id: 'UpdateMarketBody' });
 export type UpdateMarketBody = z.infer<typeof updateMarketBodySchema>;
-
-/** `POST /admin/markets/:id/void`. */
-export const voidMarketBodySchema = z
-  .object({ reason: z.string().trim().min(1).max(MARKET_VOID_REASON_MAX) })
-  .meta({ id: 'VoidMarketBody' });
-export type VoidMarketBody = z.infer<typeof voidMarketBodySchema>;
 
 /**
  * `POST /admin/markets/:id/resolve` (PLAN 5.5, 7.3; ADR-0046): judge a closed market. The

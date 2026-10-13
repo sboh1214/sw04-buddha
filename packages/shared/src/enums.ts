@@ -5,7 +5,8 @@
  * - UI option lists.
  *
  * Adding a value here does NOT alter the database by itself: run `pnpm db:generate` so
- * drizzle-kit emits the matching `ALTER TYPE ... ADD VALUE` migration.
+ * drizzle-kit emits the matching `ALTER TYPE ... ADD VALUE` migration. Removing one means
+ * recreating the Postgres type, which only an emptied table makes safe (migration 0017).
  */
 import * as z from 'zod';
 
@@ -21,7 +22,6 @@ export const LEDGER_ENTRY_TYPES = [
   'TRADE_SELL',
   'FEE',
   'SETTLEMENT_PAYOUT',
-  'MARKET_VOID_REFUND',
   'ADMIN_ADJUST',
   'BONUS',
   /** An admin refund claws back a charge's P (−amount_p, ref payment) before the PG cancel. */
@@ -95,12 +95,6 @@ export type PaymentEventType = (typeof PAYMENT_EVENT_TYPES)[number];
 export const paymentEventTypeSchema = z.enum(PAYMENT_EVENT_TYPES);
 
 // ---- markets (PLAN 5.2) -------------------------------------------------------------
-/** PLAN 16: the engine behind a market; `MarketMechanism` in mechanism.ts is the interface. */
-/** PLAN 16: which engine prices a market. `MarketMechanism` (mechanism.ts) is the interface. */
-export const MARKET_MECHANISMS = ['lmsr', 'clob'] as const;
-export type MarketMechanismKind = (typeof MARKET_MECHANISMS)[number];
-export const marketMechanismSchema = z.enum(MARKET_MECHANISMS);
-
 /**
  * Market lifecycle (GD 01-01 §8, O-5~O-7, ADR-0046): `closed` → `resolved` is the admin's
  * judgement, final at once (no dispute stage); `resolved` → `settled` is the worker finishing
@@ -168,20 +162,21 @@ export const TIME_IN_FORCES = ['ioc', 'gtc'] as const;
 export type TimeInForce = (typeof TIME_IN_FORCES)[number];
 export const timeInForceSchema = z.enum(TIME_IN_FORCES);
 
-export const COUNTERPARTY_TYPES = ['amm', 'order'] as const;
+/** fills.counterparty_type: the resting order a fill matched (#119 shapes the CLOB fills). */
+export const COUNTERPARTY_TYPES = ['order'] as const;
 export type CounterpartyType = (typeof COUNTERPARTY_TYPES)[number];
 export const counterpartyTypeSchema = z.enum(COUNTERPARTY_TYPES);
 
 // ---- price ticks --------------------------------------------------------------------
 /**
- * `'resolve'` is RESERVED and nothing writes it: the seed, the trade transaction and the admin
- * open transition write `'trade'` and `'open'` only, and the worker writes no tick at all
+ * `'trade'` is a fill's tick. Nothing is written when a market opens (#125): before its first
+ * fill a market has no price to chart (N02 §5). `'resolve'` is RESERVED and nothing writes it
  * (M6 review, A-M6-6). It is kept rather than removed because Q-M5-4 — whether a settled market
  * should get a 100%/0% tick so the chart ends on the result — is an open owner question whose
  * answer would need exactly this value, and dropping it would cost a Postgres enum migration
  * to add back.
  */
-export const PRICE_TICK_TRIGGERS = ['trade', 'open', 'resolve'] as const;
+export const PRICE_TICK_TRIGGERS = ['trade', 'resolve'] as const;
 export type PriceTickTrigger = (typeof PRICE_TICK_TRIGGERS)[number];
 export const priceTickTriggerSchema = z.enum(PRICE_TICK_TRIGGERS);
 
@@ -220,7 +215,6 @@ export const ADMIN_ACTION_TYPES = [
   'market_open',
   'market_close',
   'market_resolve',
-  'market_void',
   'payment_refund',
   'payment_settle',
 ] as const;

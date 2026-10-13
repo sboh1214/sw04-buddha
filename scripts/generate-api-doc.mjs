@@ -434,10 +434,9 @@ const ERROR_NOTES = {
   NOT_FOUND: '대상이 없다. 공개에 보이지 않는 초안(draft) 시장도 여기로 답한다.',
   VALIDATION_ERROR: '요청이 스키마에 맞지 않는다. `details` 에 `{ path, message }` 배열이 붙는다.',
   MARKET_NOT_OPEN: '시장이 `open` 이 아니라 그 동작을 할 수 없다.',
-  MARKET_CLOSED: '`open` 이지만 마감 시각(`close_at`)이 지났다.',
   INSUFFICIENT_BALANCE: '잔고가 모자란다.',
-  INSUFFICIENT_POSITION: '팔려는 수량만큼 보유하고 있지 않다.',
-  PRICE_MOVED: '다시 계산한 금액이 `maxCostP`(매수) 또는 `minProceedsP`(매도)를 벗어났다.',
+  PRICE_MOVED:
+    '화면이 보여 준 충전 상품의 조건(`expectedAmountP`·`expectedPriceKrw`)이 지금 판매하는 조건과 다르다.',
   DUPLICATE_REQUEST:
     '이미 쓴 멱등 키를 다른 조건으로 다시 썼거나(키는 소모된다), 한 번만 할 수 있는 일을 두 번 했다(쿠폰 재사용). 환불 재시도는 앞선 시도가 아직 PG 의 답을 기다리는 동안 이것으로 답한다(`details[0].message` 가 `in progress`).',
   RATE_LIMITED: '레이트 리밋 초과. `details.retryAfterSeconds` 와 `Retry-After` 헤더에 대기 초.',
@@ -457,7 +456,6 @@ const ERROR_NOTES = {
 const RATE_LIMIT_ROUTES = {
   default:
     '모든 HTTP 라우트. 아래 버킷을 지목한 라우트도 여기에 함께 들어간다(주소 하나당 API 전체 합산).',
-  trade: '`POST /api/v1/trades`',
   charge: '`POST /api/v1/payments/charge`, `POST /api/v1/payments/smartro/prepare`',
   coupon: '`POST /api/v1/coupons/redeem`',
   email:

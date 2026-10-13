@@ -2,18 +2,14 @@ import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import {
   INT4_MAX,
-  LIQUIDITY_B_MAX,
   MARKET_SLUG_PATTERN,
   MARKET_SLUG_STEM_MAX,
-  MAX_P_AMOUNT,
-  ORDER_QTY_MAX,
   SPARKLINE_MAX_POINTS,
   TICKS_MAX_POINTS,
 } from './constants.js';
 import {
   MARKET_SORTS,
   PUBLIC_MARKET_STATUSES,
-  QUOTE_VALUE_MAX_LENGTH,
   adminMarketListQuerySchema,
   adminMarketSchema,
   categorySchema,
@@ -30,19 +26,10 @@ import {
   positionsQuerySchema,
   priceSeriesSchema,
   priceTickSchema,
-  quoteBodySchema,
-  quoteResultSchema,
-  quoteValue,
   resolveMarketBodySchema,
-  sameTradeTerms,
   slugify,
   ticksQuerySchema,
-  tradeBodySchema,
-  tradeResultSchema,
-  tradeTerms,
-  tradeTermsSchema,
   updateMarketBodySchema,
-  voidMarketBodySchema,
 } from './market.js';
 
 const marketId = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
@@ -60,7 +47,6 @@ const summary = {
   imageUrl: null,
   status: 'open',
   lastPrice: 52,
-  pYesBp: 5250,
   volumeP: '12345',
   tradeCount: 3,
   traderCount: 2,
@@ -93,8 +79,6 @@ const order = {
   status: 'filled',
   amountP: '520',
   priceAvgBp: 5200,
-  maxCostP: '600',
-  minProceedsP: null,
   createdAt: at,
 };
 const fill = {
@@ -153,43 +137,25 @@ describe('read DTOs', () => {
       trigger: 'trade',
     });
     expect(marketEventSchema.parse(event)).toEqual(event);
-    expect(
-      tradeResultSchema.parse({
-        order,
-        fill,
-        balance: { availableP: '9480', lockedP: '0' },
-        position,
-        market: {
-          id: marketId,
-          lastPrice: 52,
-          pYesBp: 5250,
-          volumeP: '520',
-          tradeCount: 1,
-          traderCount: 1,
-        },
-      }).market.tradeCount,
-    ).toBe(1);
-    expect(
-      quoteResultSchema.parse({
-        shares: 0,
-        amountP: '0',
-        priceAvgBp: 5000,
-        priceBeforeBp: 5000,
-        priceAfterBp: 5000,
-        maxPayoutP: '0',
-        tradeCount: 0,
-      }).shares,
-    ).toBe(0);
   });
 
-  it('keep the LMSR internals out of the public shape but in the admin one', () => {
+  it('show a market with no fill yet as a null price, never a made-up one (N02 §5)', () => {
+    // No AMM state any more (#125): before its first fill a market has no price to show.
+    const untraded = { ...summary, lastPrice: null, volumeP: '0', tradeCount: 0, traderCount: 0 };
+    expect(marketSummarySchema.parse(untraded).lastPrice).toBeNull();
+    expect(marketSchema.parse({ ...market, lastPrice: null }).lastPrice).toBeNull();
+    expect(positionSchema.parse({ ...position, marketLastPrice: null }).marketLastPrice).toBeNull();
+    // The field stays required, so a mapper that forgot it fails instead of reading as untraded.
+    const { lastPrice: _price, ...withoutPrice } = summary;
+    expect(marketSummarySchema.safeParse(withoutPrice).success).toBe(false);
+    // The AMM probability and the slippage guards are gone from the shapes.
+    expect(marketSummarySchema.parse({ ...summary, pYesBp: 5250 })).not.toHaveProperty('pYesBp');
+    expect(orderSchema.parse({ ...order, maxCostP: '600' })).not.toHaveProperty('maxCostP');
+  });
+
+  it('keep the author and exposure out of the public shape but in the admin one', () => {
     const admin = {
       ...market,
-      liquidityB: '1000.000000',
-      qYes: '0.0000000000',
-      qNo: '0.0000000000',
-      initialProbBp: 5000,
-      reserveP: '69315',
       createdBy: 'admin-1',
       updatedAt: at,
       netCollectedP: '520',
@@ -207,9 +173,12 @@ describe('read DTOs', () => {
       events: [event],
     };
     expect(adminMarketSchema.parse(admin)).toEqual(admin);
-    expect(marketSchema.parse(admin)).not.toHaveProperty('qYes');
+    expect(marketSchema.parse(admin)).not.toHaveProperty('netCollectedP');
     expect(adminMarketSchema.safeParse(market).success).toBe(false);
-    expect(adminMarketSchema.safeParse({ ...admin, initialProbBp: 0 }).success).toBe(false);
+    // No LMSR state on the admin shape either (#125).
+    expect(
+      adminMarketSchema.parse({ ...admin, qYes: '0.0000000000', reserveP: '69315' }),
+    ).not.toHaveProperty('reserveP');
     // The dispute stage is gone (ADR-0046): no deadline on the public shape, no counts on the
     // admin one, and a step must be one of SETTLEMENT_STEPS.
     expect(marketSchema.parse({ ...market, disputeUntil: at })).not.toHaveProperty('disputeUntil');
@@ -224,7 +193,6 @@ describe('read DTOs', () => {
   it('bound prices and basis points', () => {
     expect(marketSummarySchema.safeParse({ ...summary, lastPrice: 0 }).success).toBe(false);
     expect(marketSummarySchema.safeParse({ ...summary, lastPrice: 100 }).success).toBe(false);
-    expect(marketSummarySchema.safeParse({ ...summary, pYesBp: 10_001 }).success).toBe(false);
     expect(marketSummarySchema.safeParse({ ...summary, volumeP: '1.5' }).success).toBe(false);
     expect(fillSchema.safeParse({ ...fill, userId: 'u' }).success).toBe(true); // stripped
     expect(fillSchema.parse({ ...fill, userId: 'u' })).not.toHaveProperty('userId');
@@ -362,179 +330,6 @@ describe('marketListQuerySchema', () => {
   });
 });
 
-// ---- quotes --------------------------------------------------------------------------
-describe('quoteBodySchema', () => {
-  const base = { marketId, outcome: 'YES', side: 'buy' };
-
-  it('accepts shares and spend modes and exposes the numeric value', () => {
-    const shares = quoteBodySchema.parse({ ...base, mode: 'shares', value: '10' });
-    expect(quoteValue(shares)).toEqual({ shares: 10 });
-    const spend = quoteBodySchema.parse({ ...base, mode: 'spend', value: '1000' });
-    expect(quoteValue(spend)).toEqual({ spendP: 1000n });
-    expect(
-      quoteBodySchema.parse({ ...base, mode: 'shares', value: String(ORDER_QTY_MAX) }).value,
-    ).toBe(String(ORDER_QTY_MAX));
-    expect(
-      quoteBodySchema.parse({ ...base, mode: 'spend', value: MAX_P_AMOUNT.toString() }).value,
-    ).toBe(MAX_P_AMOUNT.toString());
-    expect(quoteBodySchema.parse({ ...base, side: 'sell', mode: 'shares', value: '3' }).side).toBe(
-      'sell',
-    );
-  });
-
-  it('refuses a spend quote on a sell, naming mode', () => {
-    const result = quoteBodySchema.safeParse({
-      ...base,
-      side: 'sell',
-      mode: 'spend',
-      value: '1000',
-    });
-    expect(result.success).toBe(false);
-    expect(issuePaths(result)).toEqual(['mode']);
-  });
-
-  it('bounds value to the digits of MAX_P_AMOUNT before the range refine parses it', () => {
-    // The route is public: a body-sized run of digits must be refused for its length, never
-    // handed to BigInt(). The longest valid value is MAX_P_AMOUNT itself.
-    expect(QUOTE_VALUE_MAX_LENGTH).toBe(MAX_P_AMOUNT.toString().length);
-    for (const value of [`1${MAX_P_AMOUNT.toString()}`, '7'.repeat(200_000)]) {
-      const result = quoteBodySchema.safeParse({ ...base, mode: 'spend', value });
-      expect(result.success).toBe(false);
-      expect(issuePaths(result)).toEqual(['value']);
-      expect(result.error?.issues[0]?.code).toBe('too_big');
-    }
-  });
-
-  it('refuses a value outside the mode range, naming value', () => {
-    for (const body of [
-      { mode: 'shares', value: '0' },
-      { mode: 'shares', value: String(ORDER_QTY_MAX + 1) },
-      { mode: 'spend', value: '0' },
-      { mode: 'spend', value: (MAX_P_AMOUNT + 1n).toString() },
-    ]) {
-      const result = quoteBodySchema.safeParse({ ...base, ...body });
-      expect(result.success, JSON.stringify(body)).toBe(false);
-      expect(issuePaths(result)).toEqual(['value']);
-    }
-    for (const value of ['', '-1', '1.5', '01', '1e3', 10]) {
-      expect(
-        quoteBodySchema.safeParse({ ...base, mode: 'shares', value }).success,
-        String(value),
-      ).toBe(false);
-    }
-    // A malformed string must be a single zod issue on `value` — never a BigInt SyntaxError
-    // escaping safeParse (which the API would turn into a 500).
-    for (const value of ['', '-1', '1.5', '01', '1e3', 'abc']) {
-      const result = quoteBodySchema.safeParse({ ...base, mode: 'spend', value });
-      expect(result.success, value).toBe(false);
-      expect(issuePaths(result), value).toEqual(['value']);
-    }
-    expect(quoteBodySchema.safeParse({ ...base, mode: 'amount', value: '1' }).success).toBe(false);
-    expect(
-      quoteBodySchema.safeParse({ ...base, marketId: 'x', mode: 'shares', value: '1' }).success,
-    ).toBe(false);
-  });
-});
-
-// ---- trades --------------------------------------------------------------------------
-describe('tradeBodySchema', () => {
-  const buy = {
-    marketId,
-    outcome: 'YES',
-    side: 'buy',
-    shares: 10,
-    maxCostP: '600',
-    expectedAccountId: 'u1',
-  };
-  const sell = {
-    marketId,
-    outcome: 'NO',
-    side: 'sell',
-    shares: 3,
-    minProceedsP: '0',
-    expectedAccountId: 'u1',
-  };
-
-  it('parses a guarded buy and a guarded sell, yielding bigint guards', () => {
-    expect(tradeBodySchema.parse(buy)).toEqual({ ...buy, maxCostP: 600n });
-    expect(tradeBodySchema.parse(sell)).toEqual({ ...sell, minProceedsP: 0n });
-  });
-
-  it('requires the guard that matches the side and forbids the other', () => {
-    const noGuard = tradeBodySchema.safeParse({ ...buy, maxCostP: undefined });
-    expect(noGuard.success).toBe(false);
-    expect(issuePaths(noGuard)).toEqual(['maxCostP']);
-    const sellNoGuard = tradeBodySchema.safeParse({ ...sell, minProceedsP: undefined });
-    expect(issuePaths(sellNoGuard)).toEqual(['minProceedsP']);
-    const buyWithProceeds = tradeBodySchema.safeParse({ ...buy, minProceedsP: '1' });
-    expect(issuePaths(buyWithProceeds)).toEqual(['minProceedsP']);
-    const sellWithCost = tradeBodySchema.safeParse({ ...sell, maxCostP: '1' });
-    expect(issuePaths(sellWithCost)).toEqual(['maxCostP']);
-  });
-
-  it('bounds the guards, the shares and the account', () => {
-    expect(tradeBodySchema.safeParse({ ...buy, maxCostP: '0' }).success).toBe(false);
-    expect(
-      tradeBodySchema.safeParse({ ...buy, maxCostP: (MAX_P_AMOUNT + 1n).toString() }).success,
-    ).toBe(false);
-    expect(tradeBodySchema.safeParse({ ...sell, minProceedsP: '-1' }).success).toBe(false);
-    expect(tradeBodySchema.safeParse({ ...buy, shares: 0 }).success).toBe(false);
-    expect(tradeBodySchema.safeParse({ ...buy, shares: 1.5 }).success).toBe(false);
-    expect(tradeBodySchema.safeParse({ ...buy, shares: ORDER_QTY_MAX + 1 }).success).toBe(false);
-    expect(tradeBodySchema.safeParse({ ...buy, shares: '10' }).success).toBe(false);
-    expect(tradeBodySchema.safeParse({ ...buy, expectedAccountId: '' }).success).toBe(false);
-    expect(tradeBodySchema.safeParse({ ...buy, expectedAccountId: undefined }).success).toBe(false);
-  });
-
-  it('turns a parsed body into wire-string terms for the idempotency comparison', () => {
-    const terms = tradeTerms(tradeBodySchema.parse(buy));
-    expect(terms).toEqual({
-      marketId,
-      outcome: 'YES',
-      side: 'buy',
-      shares: 10,
-      maxCostP: '600',
-      minProceedsP: null,
-    });
-    expect(tradeTermsSchema.parse(terms)).toEqual(terms);
-    const sellTerms = tradeTerms(tradeBodySchema.parse(sell));
-    expect(sellTerms).toEqual({
-      marketId,
-      outcome: 'NO',
-      side: 'sell',
-      shares: 3,
-      maxCostP: null,
-      minProceedsP: '0',
-    });
-    expect(
-      sameTradeTerms(terms, tradeTerms(tradeBodySchema.parse({ ...buy, expectedAccountId: 'u2' }))),
-    ).toBe(true);
-    expect(sameTradeTerms(terms, { ...terms, shares: 11 })).toBe(false);
-    expect(sameTradeTerms(terms, { ...terms, maxCostP: '601' })).toBe(false);
-    expect(sameTradeTerms(terms, { ...terms, outcome: 'NO' })).toBe(false);
-    expect(sameTradeTerms(terms, { ...terms, side: 'sell' })).toBe(false);
-    expect(sameTradeTerms(terms, { ...terms, minProceedsP: '0' })).toBe(false);
-    expect(
-      sameTradeTerms(terms, { ...terms, marketId: '3f2504e0-4f89-41d3-9a0c-0305e82c3302' }),
-    ).toBe(false);
-  });
-
-  it('lower-cases the market id, so a replay compares like the stored order (api/uuid.ts)', () => {
-    // Postgres returns a uuid lower-case; a body kept as sent would name another lock key,
-    // another channel and — on the same-key retry — another trade (409).
-    const shouted = { ...buy, marketId: marketId.toUpperCase() };
-    expect(tradeBodySchema.parse(shouted).marketId).toBe(marketId);
-    expect(
-      sameTradeTerms(
-        tradeTerms(tradeBodySchema.parse(shouted)),
-        tradeTerms(tradeBodySchema.parse(buy)),
-      ),
-    ).toBe(true);
-    const terms = tradeTerms(tradeBodySchema.parse(buy));
-    expect(tradeTermsSchema.parse({ ...terms, marketId: marketId.toUpperCase() })).toEqual(terms);
-  });
-});
-
 // ---- admin bodies --------------------------------------------------------------------
 describe('createMarketBodySchema', () => {
   const body = {
@@ -542,8 +337,6 @@ describe('createMarketBodySchema', () => {
     rules: '',
     categoryId: 1,
     closeAt: at,
-    initialProbBp: 5000,
-    liquidityB: 1000,
   };
 
   it('accepts the minimal draft and trims the title', () => {
@@ -556,11 +349,14 @@ describe('createMarketBodySchema', () => {
       description: 'd',
       resolutionSource: 'KRX ',
       imageUrl: 'https://cdn.example.com/a.png',
-      liquidityB: 1234.123456,
       slug: 'kospi-3000',
     });
     expect(full.resolutionSource).toBe('KRX');
     expect(full.slug).toBe('kospi-3000');
+    // No initial probability or liquidity any more (#125): a market is created without them.
+    expect(
+      createMarketBodySchema.parse({ ...body, initialProbBp: 5000, liquidityB: 1000 }),
+    ).toEqual({ ...body, title: '2026년 안에 코스피 3000?' });
   });
 
   it('accepts the largest category id a serial column can hold', () => {
@@ -580,11 +376,6 @@ describe('createMarketBodySchema', () => {
       // int4: without the cap this reaches Postgres as an out-of-range parameter (500).
       { categoryId: INT4_MAX + 1 },
       { closeAt: 'tomorrow' },
-      { initialProbBp: 0 },
-      { initialProbBp: 10_000 },
-      { liquidityB: 0.5 },
-      { liquidityB: LIQUIDITY_B_MAX + 1 },
-      { liquidityB: 1000.1234567 },
       { imageUrl: 'javascript:alert(1)' },
       { imageUrl: 'ftp://example.com/a.png' },
       { imageUrl: 'not a url' },
@@ -618,10 +409,10 @@ describe('createMarketBodySchema', () => {
 describe('updateMarketBodySchema', () => {
   it('accepts any single field but not an empty patch', () => {
     expect(updateMarketBodySchema.parse({ rules: '새 규칙' })).toEqual({ rules: '새 규칙' });
-    expect(updateMarketBodySchema.parse({ liquidityB: 500, initialProbBp: 3000 })).toEqual({
-      liquidityB: 500,
-      initialProbBp: 3000,
-    });
+    // The AMM inputs are stripped, so a patch of only them is an empty patch.
+    expect(updateMarketBodySchema.safeParse({ liquidityB: 500, initialProbBp: 3000 }).success).toBe(
+      false,
+    );
     expect(updateMarketBodySchema.parse({ description: null, imageUrl: null })).toEqual({
       description: null,
       imageUrl: null,
@@ -631,15 +422,6 @@ describe('updateMarketBodySchema', () => {
     expect(updateMarketBodySchema.safeParse({ title: undefined }).success).toBe(false);
     expect(updateMarketBodySchema.safeParse({ slug: marketId }).success).toBe(false);
     expect(updateMarketBodySchema.safeParse({ closeAt: 'soon' }).success).toBe(false);
-  });
-});
-
-describe('voidMarketBodySchema', () => {
-  it('requires a reason of 1..500 characters', () => {
-    expect(voidMarketBodySchema.parse({ reason: ' 규칙 오류 ' })).toEqual({ reason: '규칙 오류' });
-    expect(voidMarketBodySchema.safeParse({ reason: '  ' }).success).toBe(false);
-    expect(voidMarketBodySchema.safeParse({ reason: 'x'.repeat(501) }).success).toBe(false);
-    expect(voidMarketBodySchema.safeParse({}).success).toBe(false);
   });
 });
 

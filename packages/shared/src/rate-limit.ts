@@ -1,12 +1,13 @@
 /**
- * PLAN 7.5's table, in one place (M6).
+ * PLAN 7.5's table, in one place (M6). Its `/trades` row went with the direct AMM trade (#125);
+ * the CLOB brings its own order limit (#119).
  *
  * A limit is part of the contract, so it lives in `shared` beside the error codes rather than
- * in the API's environment: PLAN 7.5 states the numbers, the M6 acceptance criterion counts one
- * of them, and `docs/API.md` renders this table for a client author to read. The web does not
- * read it at runtime — a 429 carries its own `details.retryAfterSeconds` and `Retry-After` —
- * but a client that wanted to pace itself has one place to look. A deployment that needs
- * different numbers overrides the API's `RATE_LIMITS` provider.
+ * in the API's environment: PLAN 7.5 states the numbers and `docs/API.md` renders this table
+ * for a client author to read. The web does not read it at runtime — a 429 carries its own
+ * `details.retryAfterSeconds` and `Retry-After` — but a client that wanted to pace itself has
+ * one place to look. A deployment that needs different numbers overrides the API's
+ * `RATE_LIMITS` provider.
  */
 
 /** Every limit below is per this many seconds. PLAN 7.5 states them per minute. */
@@ -51,8 +52,6 @@ export interface RateLimitBucketSpec {
 export const RATE_LIMIT_BUCKETS = {
   /** PLAN 7.5 default. */
   default: { scope: 'ip', limit: 100 },
-  /** PLAN 7.5 `/trades`. The M6 acceptance criterion counts to this. */
-  trade: { scope: 'user', limit: 20 },
   /** PLAN 7.5 `/payments/charge`. */
   charge: { scope: 'user', limit: 10 },
   /** `/coupons/redeem`: a coupon code is a short secret and this is the only route that tests one. */

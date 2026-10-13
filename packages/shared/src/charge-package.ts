@@ -38,8 +38,7 @@ export type ChargePackage = z.infer<typeof chargePackageSchema>;
  * The body echoes the terms the card showed. An admin may re-price a live package (ADR-0026)
  * while a catalogue that is already on screen keeps rendering the old offer, and the server
  * must not quietly substitute the new one — so the client states what it accepted and a
- * mismatch is refused. Same shape as the PLAN 5.3 slippage guard, which makes a trade carry
- * `maxCostP` / `minProceedsP` and answers `PRICE_MOVED` when the server disagrees.
+ * mismatch is refused with `PRICE_MOVED`.
  *
  * It also names the account the screen is showing. The cookie decides who is charged, and a
  * tab whose session was switched elsewhere (another tab signed in as somebody else; sign-ins

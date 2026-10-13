@@ -1,8 +1,9 @@
 import { PAYOUT_PER_CONTRACT_P, POSITION_QTY_MAX } from './constants.js';
 
 /**
- * Position accounting (PLAN 5.4). Shared by the API (trades, void) and the worker
- * (finalize, PLAN 9). Pure: every function returns a new state and never mutates its input.
+ * Position accounting (PLAN 5.4): buys, sells and settlement of one position row, whoever the
+ * counterparty is. The worker's finalize settles with it (PLAN 9). Pure: every function returns
+ * a new state and never mutates its input.
  *
  * All money is `bigint`; the only division (the cost released by a partial sell) rounds
  * half-up in bigint arithmetic so the API and the worker can never disagree by a P.
@@ -50,8 +51,8 @@ export function applyBuy(position: PositionState, qty: number, costP: bigint): P
 
 /**
  * released = roundHalfUp(costBasis · Δ / qty); qty −= Δ; costBasis −= released;
- * realized += proceeds − released. RangeError when Δ > qty (the caller answers
- * INSUFFICIENT_POSITION before getting here).
+ * realized += proceeds − released. RangeError when Δ > qty (the caller refuses such a sell
+ * before getting here).
  */
 export function applySell(position: PositionState, qty: number, proceedsP: bigint): PositionState {
   assertPosition(position);
@@ -81,20 +82,5 @@ export function settle(position: PositionState, won: boolean): PositionState & {
     costBasisP: 0n,
     realizedPnlP: position.realizedPnlP + payoutP - position.costBasisP,
     payoutP,
-  };
-}
-
-/**
- * Void (PLAN 5.5): the cost basis is refunded, the row is closed out and realised PnL from
- * earlier sells stays as it is — so a void's total refund is not bounded by the reserve
- * (ADR-0027).
- */
-export function voidRefund(position: PositionState): PositionState & { refundP: bigint } {
-  assertPosition(position);
-  return {
-    qty: 0,
-    costBasisP: 0n,
-    realizedPnlP: position.realizedPnlP,
-    refundP: position.costBasisP,
   };
 }

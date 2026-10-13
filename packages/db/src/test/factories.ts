@@ -5,14 +5,9 @@
  */
 import { randomUUID } from 'node:crypto';
 import {
-  DEFAULT_LIQUIDITY_B,
-  INITIAL_PROB_BP_MAX,
-  INITIAL_PROB_BP_MIN,
+  PRICE_MAX,
+  PRICE_MIN,
   SIGNUP_BONUS_P,
-  initState,
-  maxLossP,
-  priceOf,
-  serializeQuantity,
   SETTLEMENT_STEPS,
   type MarketStatus,
   type Outcome,
@@ -132,17 +127,11 @@ export interface CreateMarketInput {
   rules?: string;
   resolutionSource?: string;
   status?: MarketStatus;
-  /** Initial YES probability in basis points, 1..9999 (default 5000). */
-  initialProbBp?: number;
-  /** LMSR liquidity parameter (default DEFAULT_LIQUIDITY_B). */
-  liquidityB?: number;
   /**
-   * LMSR quantities to store instead of `initState(p0, b)`: a test that needs a market at a
-   * specific point of its price curve sets both. `lastPrice` follows whatever state is stored;
-   * `reserveP` always comes from (p0, b), as it does for a real market.
+   * YES price of the last fill, 1..99. Default null: a market nobody traded has no price
+   * (N02 §5). A test that needs a traded market sets it with the statistics below.
    */
-  qYes?: number;
-  qNo?: number;
+  lastPrice?: number | null;
   /** Statistics overrides (list sorting tests). Default 0 like a market nobody traded. */
   volumeP?: bigint;
   tradeCount?: number;
@@ -167,29 +156,20 @@ export interface CreateMarketInput {
 }
 
 /**
- * Inserts a market with LMSR state initialised by @buddha/shared exactly as the admin create
- * path does (PLAN 5.3, ADR-0027): `initState(p0, b)` for the quantities, `priceOf` for the
- * displayed price and `maxLossP(p0, b)` for the reserve. Writes no tick and no event.
+ * Inserts a market as the admin create path leaves it, in the given status: no price until a
+ * fill (`lastPrice` null) and statistics at 0 unless given. Writes no tick and no event.
  */
 export async function createMarket(db: Db, input: CreateMarketInput = {}) {
+  const lastPrice = input.lastPrice ?? null;
+  const inRange = (price: number) =>
+    Number.isInteger(price) && price >= PRICE_MIN && price <= PRICE_MAX;
+  if (lastPrice !== null && !inRange(lastPrice)) {
+    throw new RangeError(`lastPrice must be an integer 1..99 or null, got ${String(lastPrice)}`);
+  }
   const t = tag();
   const createdBy = input.createdBy ?? (await createUser(db, { role: 'admin' })).user.id;
   const categoryId = input.categoryId ?? (await createCategory(db)).id;
   const status = input.status ?? 'open';
-  const initialProbBp = input.initialProbBp ?? 5000;
-  if (initialProbBp < INITIAL_PROB_BP_MIN || initialProbBp > INITIAL_PROB_BP_MAX) {
-    throw new RangeError(`initialProbBp must be 1..9999, got ${String(initialProbBp)}`);
-  }
-  if ((input.qYes === undefined) !== (input.qNo === undefined)) {
-    throw new RangeError('qYes and qNo must be given together');
-  }
-  const b = input.liquidityB ?? DEFAULT_LIQUIDITY_B;
-  const p0 = initialProbBp / 10_000;
-  const init = initState(p0, b);
-  const state =
-    input.qYes !== undefined && input.qNo !== undefined
-      ? { qYes: input.qYes, qNo: input.qNo, b }
-      : init;
   const now = new Date();
 
   const [row] = await db
@@ -198,16 +178,12 @@ export async function createMarket(db: Db, input: CreateMarketInput = {}) {
       slug: input.slug ?? `market-${t}`,
       title: input.title ?? `테스트 시장 ${t}`,
       description: input.description ?? null,
-      rules: input.rules ?? '테스트용 정산 기준. 발표가 없으면 아니오로 정산한다.',
+      rules:
+        input.rules ?? '테스트용 정산 기준. 기한까지 사건이 일어나지 않으면 아니오로 정산한다.',
       resolutionSource: input.resolutionSource ?? 'https://example.com/source',
       categoryId,
       status,
-      liquidityB: b.toFixed(6),
-      qYes: serializeQuantity(state.qYes),
-      qNo: serializeQuantity(state.qNo),
-      initialProbBp,
-      reserveP: maxLossP(p0, b),
-      lastPrice: priceOf(state),
+      lastPrice,
       volumeP: input.volumeP ?? 0n,
       tradeCount: input.tradeCount ?? 0,
       openAt: status === 'draft' ? null : now,
@@ -283,7 +259,7 @@ export interface CreatePositionInput {
  * Inserts a `positions` row and nothing else: no ledger entry, no balance change, no market
  * statistics. That makes it right for tests of reads and settlement inputs (a holder exists),
  * and wrong for anything that audits the books (PLAN 5.6) — a test that needs a position the
- * ledger can explain trades through `POST /trades` instead.
+ * ledger can explain writes the ledger entry and balance change that bought it as well.
  */
 export async function createPosition(db: Db, input: CreatePositionInput) {
   const [row] = await db

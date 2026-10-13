@@ -1,6 +1,6 @@
 /**
- * Numeric domain bounds (PLAN 0.2, 5.3, 6.2). The DB CHECK constraints in packages/db and
- * the zod DTOs use the same values.
+ * Numeric domain bounds (PLAN 0.2, 6.2). The DB CHECK constraints in packages/db and the zod
+ * DTOs use the same values.
  */
 
 /** Displayed YES price in P per contract: integer 1..99 (PLAN 5.3 displayPrice). */
@@ -12,13 +12,6 @@ export const PAYOUT_PER_CONTRACT_P = 100n;
 
 /** Basis points: probability 0..1 is stored as 0..10000 (price_ticks.p_yes_bp). */
 export const BP_MAX = 10_000;
-
-/** markets.initial_prob_bp accepts 1..9999 (never exactly 0 or 1). */
-export const INITIAL_PROB_BP_MIN = 1;
-export const INITIAL_PROB_BP_MAX = 9_999;
-
-/** Default LMSR liquidity parameter (PLAN 5.3 guide). */
-export const DEFAULT_LIQUIDITY_B = 1000;
 
 /**
  * Granted to every new account by the "user" trigger, in the same transaction as the row
@@ -47,14 +40,7 @@ export function isNoEmailAddress(email: string): boolean {
   return email.toLowerCase().endsWith('@' + NO_EMAIL_DOMAIN);
 }
 
-// ---- markets / trading (PLAN 5.3, 5.4, 7.1; M3 design 1.5) -------------------------
-/**
- * Contracts per order: 1..1,000,000. At the 100P ceiling one order moves at most 100M P,
- * which keeps every LMSR sum and every ledger amount far from the int4/int8 limits.
- */
-export const TRADE_MIN_SHARES = 1;
-export const ORDER_QTY_MAX = 1_000_000;
-
+// ---- markets (PLAN 5.4, 7.1; M3 design 1.5) -----------------------------------------
 /**
  * Largest value a Postgres `integer`/`serial` column holds. A request field compared with
  * one — `positions.qty`, `categories.id` — must be bounded by it at the boundary: the driver
@@ -66,19 +52,14 @@ export const INT4_MAX = 2_147_483_647;
 /** positions.qty is int4; `applyBuy` refuses to grow a position past it. */
 export const POSITION_QTY_MAX = INT4_MAX;
 
-/** Bound on request-side P fields (maxCostP, minProceedsP, quote spend): 10^15. */
+/** Bound on request-side P fields (`P_AMOUNT_INPUT_MAX_LENGTH` is its length): 10^15. */
 export const MAX_P_AMOUNT = 10n ** 15n;
-
-/** LMSR liquidity parameter accepted from the admin form (PLAN 5.3 guide: 500..3000). */
-export const LIQUIDITY_B_MIN = 1;
-export const LIQUIDITY_B_MAX = 1_000_000;
 
 export const MARKET_TITLE_MAX = 120;
 /** description / rules. */
 export const MARKET_TEXT_MAX = 5_000;
 export const MARKET_SOURCE_MAX = 500;
 export const MARKET_IMAGE_URL_MAX = 500;
-export const MARKET_VOID_REASON_MAX = 500;
 
 /**
  * markets.slug: lower-case ASCII, digits, Hangul syllables and '-'; NFC-normalised before
@@ -107,10 +88,9 @@ export const TICKS_SCAN_MAX = 10_000;
  * `GET /markets` card sparkline (PLAN 11.4): the YES probability sampled on a fixed hourly
  * grid over the last SPARKLINE_WINDOW_HOURS, each sample the newest tick at or before that
  * instant (an as-of read, so an hour without a trade carries the previous value forward
- * instead of dropping out). A market opened through the admin transition — or through the
- * seed — carries the `open` tick that transition writes, so its card draws a flat line rather
- * than an empty one; only a market that has no tick at all answers with an empty array. The
- * grid is fixed, so the work is SPARKLINE_MAX_POINTS index seeks per market whatever the
+ * instead of dropping out). Ticks come from fills only — nothing is written when a market
+ * opens — so a market with no fill yet answers with an empty array (N02 §5). The grid is
+ * fixed, so the work is SPARKLINE_MAX_POINTS index seeks per market whatever the
  * market's tick volume — the same kind of bound TICKS_SCAN_MAX gives the chart route (A-M3-20).
  */
 export const SPARKLINE_WINDOW_HOURS = 24;

@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { ALL_CATEGORY_SLUGS, CATEGORY_SLUGS, SIGNUP_BONUS_P, maxLossP } from '@buddha/shared';
+import { ALL_CATEGORY_SLUGS, CATEGORY_SLUGS, SIGNUP_BONUS_P } from '@buddha/shared';
 import { and, asc, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -19,6 +19,7 @@ import {
   profiles,
   user,
 } from './schema/index.js';
+import { SEED_RULE_NO_DELAY_NO } from './seed-markets.js';
 import { connectTestDb, hasTestDb, testDbUrls, type TestDb } from './test/harness.js';
 
 /**
@@ -90,9 +91,9 @@ ${result.stderr}`);
 }
 
 /**
- * M3 design 2 / PLAN 13 M3: 12 open markets, 2-3 per top-level category — plus the two the
- * second level added (주택, 일자리), so 14. Keyed by the LEAF each market is filed under; the
- * parent is checked separately below, through the row's `parent_id`.
+ * M3 design 2 / PLAN 13 M3: 12 markets, 2-3 per top-level category — plus the two the second
+ * level added (주택, 일자리), so 14, all drafts since #125. Keyed by the LEAF each market is
+ * filed under; the parent is checked separately below, through the row's `parent_id`.
  */
 const EXPECTED_MARKETS: Record<string, string[]> = {
   rates: ['bok-october-rate-cut-2026'],
@@ -241,6 +242,15 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
     expect(await wallet()).toEqual(first);
   });
 
+  it('inserts the charge packages off sale (D9, #112)', async () => {
+    // Paid charging is not offered at launch: the ladder is there for an admin to put on sale,
+    // and the catalogue shows nothing until one does.
+    runSeed();
+    const seeded = await t.db.select().from(chargePackages);
+    expect(seeded).toHaveLength(5);
+    for (const pack of seeded) expect(pack.isActive).toBe(false);
+  });
+
   it('leaves a catalogue an admin emptied on purpose alone', async () => {
     // Deletion is a real DELETE (A-M2-8), so an admin who takes every package off sale leaves
     // the table as empty as a fresh database. Their actions are logged, and that log is what
@@ -283,11 +293,10 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
           rules: markets.rules,
           category: categories.slug,
           status: markets.status,
-          mechanism: markets.mechanism,
-          initialProbBp: markets.initialProbBp,
-          liquidityB: markets.liquidityB,
-          reserveP: markets.reserveP,
           lastPrice: markets.lastPrice,
+          volumeP: markets.volumeP,
+          tradeCount: markets.tradeCount,
+          statusEventId: markets.statusEventId,
           openAt: markets.openAt,
           closeAt: markets.closeAt,
           createdAt: markets.createdAt,
@@ -301,12 +310,10 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
       return { rows, ticks, events };
     }
 
-    it('creates the 14 open markets with their open tick and created/opened events', async () => {
-      // Both ends read from the database, like the instants they bound: a runner-clock window
-      // would be the very comparison this seed stopped making (ADR-0027, A-M3-30).
-      const before = await dbNow();
+    it('creates the 14 markets as drafts with a created event, and no price or tick', async () => {
+      // Drafts for a reviewer to check and open (N03 §2, #125), and no price before a fill
+      // (N02 §5): the direct AMM's initial probability and opening tick are gone.
       runSeed();
-      const after = await dbNow();
       const { id: adminId } = await adminState();
       const { rows, ticks, events } = await marketState();
 
@@ -330,52 +337,47 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
         expect(parentOf.get(leaf), leaf).toBe(parent);
       }
       for (const row of rows) {
-        expect(row.status).toBe('open');
-        expect(row.mechanism).toBe('lmsr');
-        expect(row.createdBy).toBe(adminId);
+        expect(row).toMatchObject({
+          status: 'draft',
+          openAt: null,
+          lastPrice: null,
+          volumeP: 0n,
+          tradeCount: 0,
+          createdBy: adminId,
+        });
         expect(row.rules.length).toBeGreaterThan(20);
-        // ADR-0027: the reserve is the true worst case for (p0, b), not 100·b·ln 2.
-        expect(row.reserveP).toBe(maxLossP(row.initialProbBp / 10_000, Number(row.liquidityB)));
-        expect(row.lastPrice).toBe(Math.round(row.initialProbBp / 100));
-        expect(row.openAt!.getTime()).toBeGreaterThanOrEqual(before);
-        expect(row.openAt!.getTime()).toBeLessThanOrEqual(after);
-        // Read after the seed lock, so it cannot precede the transaction's own `now()`.
-        expect(row.openAt!.getTime()).toBeGreaterThanOrEqual(row.createdAt.getTime());
+        // N03 §4: a late publication never makes it NO on its own.
+        expect(row.rules).toContain(SEED_RULE_NO_DELAY_NO);
         // Absolute, not seed time + N days: the rules name fixed cutoffs.
         expect(row.closeAt.toISOString()).toBe(EXPECTED_CLOSE_AT[row.slug]);
 
-        const tick = ticks.filter((tickRow) => tickRow.marketId === row.id);
-        expect(tick).toHaveLength(1);
-        expect(tick[0]).toMatchObject({ trigger: 'open', pYesBp: row.initialProbBp });
-        expect(tick[0]!.ts.getTime()).toBe(row.openAt!.getTime());
-
         const history = events.filter((event) => event.marketId === row.id);
-        expect(history.map((event) => event.type)).toEqual(['created', 'opened']);
-        for (const event of history) {
-          expect(event.actorId).toBe(adminId);
-          expect(event.payload).toEqual({ source: 'seed' });
-        }
+        expect(history).toEqual([
+          expect.objectContaining({
+            type: 'created',
+            actorId: adminId,
+            payload: { source: 'seed' },
+          }),
+        ]);
+        // The status key points at the event that put the row in `draft`.
+        expect(row.statusEventId).toBe(history[0]!.id);
       }
-      expect(ticks).toHaveLength(SEED_MARKET_COUNT);
-      expect(events).toHaveLength(SEED_MARKET_COUNT * 2);
+      expect(ticks).toEqual([]);
+      expect(events).toHaveLength(SEED_MARKET_COUNT);
     });
 
     it('takes the market instants from the database, not from the runner (ADR-0027)', async () => {
       // The one case that can tell the two clocks apart: the child runs an hour ahead of the
-      // database. `open_at` and the open tick must not move — a runner-clock value would land
-      // an hour in the future, sorting the opening tick after every trade made in that hour
-      // and drawing the initial probability as a reset partway along the chart.
+      // database. The rows and their events must not move — a runner-clock value would land an
+      // hour in the future and sort them after whatever the API writes in that hour.
       const shift = 60 * 60 * 1000;
       runSeed({ clockShiftMs: shift });
       const after = await dbNow();
-      const { rows, ticks } = await marketState();
+      const { rows, events } = await marketState();
 
       expect(rows).toHaveLength(SEED_MARKET_COUNT);
-      for (const row of rows) {
-        expect(row.openAt!.getTime()).toBeLessThanOrEqual(after);
-        expect(row.openAt!.getTime()).toBeGreaterThanOrEqual(row.createdAt.getTime());
-      }
-      for (const tick of ticks) expect(tick.ts.getTime()).toBeLessThanOrEqual(after);
+      for (const row of rows) expect(row.createdAt.getTime()).toBeLessThanOrEqual(after);
+      for (const event of events) expect(event.createdAt.getTime()).toBeLessThanOrEqual(after);
 
       // And the shim really was in the child: better-auth's own columns follow the runner on
       // every real sign-up, so the seeded admin keeps that clock deliberately (A-M3-30).
@@ -391,11 +393,17 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
       // was seeded long before — and the seed never rewrites an existing row. That half used
       // to pass in silence: the warning was guarded on having just inserted the market.
       const slug = 'cpi-september-2026-above-2pct';
+      // An admin opened this one (the trading gap allows it, #125) before its cutoff passed.
+      const opened = 'seoul-october-2026-rain-above-50mm';
       runSeed();
       await t.db
         .update(markets)
         .set({ closeAt: sql`clock_timestamp() - interval '1 minute'` })
         .where(eq(markets.slug, slug));
+      await t.db
+        .update(markets)
+        .set({ status: 'open', closeAt: sql`clock_timestamp() - interval '1 minute'` })
+        .where(eq(markets.slug, opened));
 
       const { stdout, stderr } = runSeedIo();
       expect(stdout).toContain('markets: 0 inserted, 14 already existed');
@@ -407,13 +415,24 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
       const mine = stderr.split(NEWLINE).filter((line) => line.includes(slug));
       expect(mine).toHaveLength(1);
       expect(mine[0]).toContain('is already past');
-      expect(mine[0]).toContain('마감');
-      // And it is still open, untouched — the seed reports, it does not rewrite.
-      const [row] = await t.db
-        .select({ status: markets.status })
+      // A draft cannot be opened past its cutoff: the admin has to move it first.
+      expect(mine[0]).toContain('cannot be opened');
+      expect(mine[0]).toContain('수정');
+      // An open one is the worker's to close.
+      const openLine = stderr.split(NEWLINE).filter((line) => line.includes(opened));
+      expect(openLine).toHaveLength(1);
+      expect(openLine[0]).toContain('market.close');
+      expect(openLine[0]).toContain('마감');
+      // And both are untouched — the seed reports, it does not rewrite.
+      const statuses = await t.db
+        .select({ slug: markets.slug, status: markets.status })
         .from(markets)
-        .where(eq(markets.slug, slug));
-      expect(row!.status).toBe('open');
+        .where(sql`${markets.slug} in (${slug}, ${opened})`)
+        .orderBy(asc(markets.slug));
+      expect(statuses).toEqual([
+        { slug, status: 'draft' },
+        { slug: opened, status: 'open' },
+      ]);
     });
 
     it('goes quiet once the close time is pushed forward (the Q-M3-4 copy refresh)', async () => {
@@ -518,9 +537,8 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
     expect(await t.db.select().from(chargePackages)).toHaveLength(5);
     expect(await t.db.select().from(user).where(eq(user.email, ADMIN_EMAIL))).toHaveLength(1);
     expect(await adminState()).toMatchObject({ role: 'admin' });
-    // Each market is a check-then-insert under the same lock: 14, not 28, and one tick each.
+    // Each market is a check-then-insert under the same lock: 14, not 28, one event each.
     expect(await t.db.select().from(markets)).toHaveLength(SEED_MARKET_COUNT);
-    expect(await t.db.select().from(priceTicks)).toHaveLength(SEED_MARKET_COUNT);
-    expect(await t.db.select().from(marketEvents)).toHaveLength(SEED_MARKET_COUNT * 2);
+    expect(await t.db.select().from(marketEvents)).toHaveLength(SEED_MARKET_COUNT);
   }, 60_000);
 });
