@@ -2623,8 +2623,8 @@ ADR-0046의 상태 줄에 '일부 대체됨(ADR-0047: …)'을 이어 쓴다. �
   - 요청 본문도 같다. 관리자 잔고 조정·충전 상품·쿠폰은 `amountCoin`, 충전은 `expectedAmountCoin`이고, 오류 `details`의 경로는 `['amountCoin']`이다.
   - 영어 오류 메시지와 OpenAPI 요약·설명의 재화 P도 Coin이다(예: 환불 거절의 `Coin already used`).
 - **JSONB 저장 키(새로 쓰는 행).**
-  - `admin_actions.payload`: `amountCoin`(잔고 조정, 결제 환불, 충전 상품·쿠폰 스냅샷).
-  - `market_events.payload`: `volumeCoin`(관리자 시장 스냅샷), `paidCoin`(`finalized`).
+  - `admin_actions.payload`: `amountCoin`(잔고 조정, 결제 환불, 충전 상품·쿠폰 스냅샷), `volumeCoin`(시장 생성·수정·열기·마감·판정의 before/after 스냅샷).
+  - `market_events.payload`: `paidCoin`(`finalized`).
   - `audit_failures.payload`: `availableCoin`·`lockedCoin`·`ledgerSumCoin`·`differenceCoin`.
   - 워커 정산 잡의 결과(`paidCoin`)와 원장 감사 CLI 로그도 같다.
 - **웹 전용 이름.**
@@ -2662,7 +2662,7 @@ ADR-0046의 상태 줄에 '일부 대체됨(ADR-0047: …)'을 이어 쓴다. �
 - **JSONB 키는 앞으로 쓰는 행만 바뀐다.**
   - 이미 쓴 `admin_actions`·`market_events`·`audit_failures` 행은 옛 키(`amountP`·`volumeP`·`paidP`·`availableP` 등)를 그대로 갖고, 백필하지 않는다.
   - 옛 키를 읽는 코드도 없다. 웹 관리자의 정산 이벤트 파서는 `paidCoin`만 읽으므로, #192 배포 전에 쓰인 `finalized` 행은 지급 합계 없이 보인다.
-  - payload를 그대로 보여 주는 관리자 화면(시장 이벤트, 감사 실패)에는 옛 키가 그대로 보인다.
+  - 옛 키가 보이는 관리자 화면은 payload를 그대로 보여 주는 감사 실패뿐이다. 시장 이벤트 화면이 그대로 보여 주는 payload(`created` 등)에는 P 기준 키가 없었고, `admin_actions`의 `amountP`·`volumeP`를 보여 주는 화면은 없다.
 - **API는 옛 필드 이름을 받지 않는다.** zod는 모르는 키를 버리므로, 옛 이름만 보낸 본문은 새 필드가 없어 400(`VALIDATION_ERROR`)이다. 응답과 실시간 이벤트도 새 이름만 싣는다.
 
 **5. 생성물과 시험.**
