@@ -33,8 +33,10 @@ import { MarketSparkline } from './market-sparkline';
  * over the question and its countdown — then one row per outcome, 예 and 아니오, each a label
  * over a hairline bar, the "맞히면 투입 대비 1.59x" figure and a pill with the percentage, and a
  * footer with the 거래량 on the left and the sparkline on the right. The whole card is a link
- * to the detail. A market with no fill yet has no price, so the two rows give way to one line,
- * 체결 없음 (N02 §5): no initial setting is drawn as a price.
+ * to the detail. A market with no fill yet has no price (N02 §5): the two rows stay, with no bar,
+ * no multiple and '—' in each pill, and 체결 없음 once beside them (owner decision #125,
+ * ADR-0048). No initial setting is drawn as a price, and the tile keeps its shape at the first
+ * fill.
  *
  * The two rows take `row.first` and `row.second` — Kalshi's green and blue — and not the `yes`
  * and `no` palettes the detail screen paints. The pair is what Kalshi draws on every tile, and
@@ -96,6 +98,9 @@ const SHELL = {
   borderWidth: '1px',
   borderColor: 'border.subtle',
 } satisfies BoxProps;
+
+/** What a pill paints before the first fill (N02 §5): no number, not a 0 or a 50. */
+const EMPTY = '—';
 
 /**
  * Kalshi's outcome pill (36px, `rounded-x50`, the green outline). The outline is `brand.border`,
@@ -271,19 +276,30 @@ export function MarketCard({
         Kalshi's row grid, copied cell for cell: the label over its bar in the first column, an
         empty second column, and the multiple with the pill in the third. Three columns rather
         than two so the empty cell keeps the pills of every row on one right edge whatever the
-        multiple's width. With no fill there is no price for either row to show.
+        multiple's width. With no fill the second column says 체결 없음 once, across both rows
+        and beside the two '—' pills; it is last in the DOM so a reader hears 예, 아니오, then
+        체결 없음.
       */}
-      {market.lastPrice === null ? (
-        <Text as="span" textStyle="bodyMd" color="fg.muted" data-testid="market-card-no-fills">
-          {copy.noFills}
-        </Text>
-      ) : (
-        <Grid templateColumns="1fr auto auto" columnGap="1" rowGap="6px" w="100%">
-          {outcomeRows(market.lastPrice).map((row) => (
-            <OutcomeRowCells key={row.key} row={row} />
-          ))}
-        </Grid>
-      )}
+      <Grid templateColumns="1fr auto auto" columnGap="1" rowGap="6px" w="100%">
+        {outcomeRows(market.lastPrice).map((row) => (
+          <OutcomeRowCells key={row.key} row={row} />
+        ))}
+        {market.lastPrice === null && (
+          <Text
+            as="span"
+            gridColumn="2"
+            gridRow="1 / span 2"
+            alignSelf="center"
+            px="1"
+            whiteSpace="nowrap"
+            textStyle="emphasisSm"
+            color="fg.muted"
+            data-testid="market-card-no-fills"
+          >
+            {copy.noFills}
+          </Text>
+        )}
+      </Grid>
 
       <Flex justify="space-between" align="center" minH="28px">
         <Text as="span" textStyle="bodyXs" color="fg">
@@ -323,13 +339,19 @@ export function MarketCard({
 }
 
 /**
- * One outcome row's three grid cells (a fragment, so the parent `Grid` places them). The reading
- * "예 63%" is announced ONCE per row, by the bar: a labelled `progressbar` with that string. The
- * pill is a `<span>`, and `aria-label` on a generic element is prohibited by ARIA 1.2 and dropped
- * by browsers, so the pill is the one hidden — it paints the same number the bar already names.
+ * One outcome row's grid cells (a fragment, so the parent `Grid` places them). The reading "예 63%"
+ * is announced ONCE per row, by the bar: a labelled `progressbar` with that string. The pill is a
+ * `<span>`, and `aria-label` on a generic element is prohibited by ARIA 1.2 and dropped by
+ * browsers, so the pill is the one hidden — it paints the same number the bar already names.
+ *
+ * With no reading there is no bar to label and no multiple: the row is its label and a '—' pill,
+ * and the card's one 체결 없음 says why. The row then has no empty middle cell either — the
+ * 체결 없음 holds that column for both rows by explicit placement, and an auto-placed empty cell
+ * would skip past it and push the pill onto the next row.
  */
 function OutcomeRowCells({ row }: { row: OutcomeRow }) {
-  const percentText = `${String(row.percent)}%`;
+  const { reading } = row;
+  const percentText = reading === null ? EMPTY : `${String(reading.percent)}%`;
   const testId = row.key === 'yes' ? 'market-card-probability' : 'market-card-probability-no';
   return (
     <>
@@ -337,42 +359,49 @@ function OutcomeRowCells({ row }: { row: OutcomeRow }) {
         <Text as="span" textStyle="bodyMd" truncate>
           {row.label}
         </Text>
-        <Box
-          role="progressbar"
-          aria-valuenow={row.percent}
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-label={row.accessibleName}
-          h="2px"
-          w="100%"
-          borderRadius="pill"
-          overflow="hidden"
-        >
+        {reading === null ? (
+          // The bar's 2px, kept so the label sits where it will once there is a price.
+          <Box h="2px" />
+        ) : (
           <Box
-            h="100%"
-            w={percentText}
-            // Kalshi's floor: a 1% market still shows a sliver of colour, not an empty track.
-            minW="4px"
-            bg={row.accent}
+            role="progressbar"
+            aria-valuenow={reading.percent}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-label={reading.accessibleName}
+            h="2px"
+            w="100%"
             borderRadius="pill"
-            // The bar eases to a new price on a socket tick; a visitor who asked for no motion
-            // sees it jump.
-            transition="width 0.3s"
-            _motionReduce={{ transition: 'none' }}
-          />
-        </Box>
+            overflow="hidden"
+          >
+            <Box
+              h="100%"
+              w={percentText}
+              // Kalshi's floor: a 1% market still shows a sliver of colour, not an empty track.
+              minW="4px"
+              bg={row.accent}
+              borderRadius="pill"
+              // The bar eases to a new price on a socket tick; a visitor who asked for no motion
+              // sees it jump.
+              transition="width 0.3s"
+              _motionReduce={{ transition: 'none' }}
+            />
+          </Box>
+        )}
       </Stack>
-      <Box />
+      {reading !== null && <Box />}
       <HStack gap="6px">
-        <Text as="span" textStyle="emphasisSm" color="fg.muted" minW="18px" textAlign="right">
-          {/*
-            The figure alone is "1.59x", which says nothing to a listener; the sr-only prefix
-            makes it "맞히면 투입 대비 1.59x" — the sentence PLAN 11.1-2 wants everywhere, in the
-            vocabulary Appendix A allows.
-          */}
-          <VisuallyHidden>{copy.payoutMultiple} </VisuallyHidden>
-          {row.multiple}
-        </Text>
+        {reading !== null && (
+          <Text as="span" textStyle="emphasisSm" color="fg.muted" minW="18px" textAlign="right">
+            {/*
+              The figure alone is "1.59x", which says nothing to a listener; the sr-only prefix
+              makes it "맞히면 투입 대비 1.59x" — the sentence PLAN 11.1-2 wants everywhere, in the
+              vocabulary Appendix A allows.
+            */}
+            <VisuallyHidden>{copy.payoutMultiple} </VisuallyHidden>
+            {reading.multiple}
+          </Text>
+        )}
         <Box as="span" aria-hidden="true" {...PILL} data-testid={testId}>
           {percentText}
         </Box>

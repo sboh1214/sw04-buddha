@@ -19,6 +19,7 @@
 - **마이그레이션 0017**(`packages/db/drizzle/0017_remove_direct_amm.sql`)의 첫 문장이 이 문장 그대로다. #125 배포 때 한 번 돈다.
 - **재초기화**는 `packages/db/src/wipe-cli.ts`(빌드 결과 `packages/db/dist/wipe-cli.js`, api 이미지에 들어 있다)로 같은 문장을 다시 돌린다. 운영 호스트에서는 `deploy/reset-db.sh`가 부른다.
 - `packages/db/src/wipe.test.ts`가 둘이 같은 문장인지, 스크립트가 그 CLI를 부르는지 고정한다. 시험 하네스의 `reset()`도 같은 문장으로 매 DB 시험 전에 비운다.
+- `packages/db/src/reset-db.test.ts`가 `deploy/reset-db.sh`를 가짜 `docker`로 실제로 돌려 단계 순서와 덤프 처리(아래 3·9단계, 실패하면 남김)를 고정한다.
 
 ## 운영 호스트에서 (#149)
 
@@ -26,7 +27,7 @@
 
 - 배포된 이미지가 #125 이후의 것이어야 한다(`wipe-cli.js`가 있다). 스크립트가 아무것도 멈추기 전에 확인한다.
 - 테스터에게 미리 알린다: 전원 로그아웃되고, 계정·잔고·기록이 모두 사라지며, 다시 가입해야 한다.
-- (선택) 워크스테이션의 `terraform/`에서 EBS 수동 스냅샷을 뜬다. 스크립트도 시작할 때 `pg_dump`를 남긴다.
+- (선택) 워크스테이션의 `terraform/`에서 EBS 수동 스냅샷을 뜬다. 스크립트도 시작할 때 `pg_dump`를 뜨지만 초기화가 끝까지 성공하면 지우므로, 성공한 뒤의 확인에서 문제가 보였을 때 되돌릴 길은 이 스냅샷뿐이다.
 
 ```bash
 aws ec2 create-snapshot --profile inno-frame --volume-id "$(terraform output -raw data_volume_id)" \
@@ -43,12 +44,13 @@ sudo bash /data/buddha/reset-db.sh --yes
 
 1. `/data`가 마운트되어 있는지 확인하고 `deploy.sh`와 같은 락(`/data/buddha/.deploy.lock`)을 잡는다. 배포와 겹치지 않는다.
 2. postgres·redis가 떠 있게 하고, 배포된 api 이미지에 `wipe-cli.js`가 있는지 확인한다. 없으면 여기서 끝나고 사이트는 그대로다.
-3. `pg_dump`를 `/data/buddha-pre-reset-<시각>.dump`(소유자만 읽기)로 남긴다.
+3. `pg_dump`를 `/data/buddha-pre-reset-<시각>.dump`(소유자만 읽기)로 뜬다. 덤프가 끝나지 못하면(실패·중단) 그 파일을 지우고 아무것도 바꾸지 않은 채 끝난다.
 4. api·worker를 멈춘다. web·caddy는 그대로라 그동안 화면은 오류를 낸다(보통 1분 안).
 5. 비운다: `docker compose run --rm --no-deps migrate node packages/db/dist/wipe-cli.js --yes`(`DATABASE_MIGRATE_URL` = `buddha_migrate`).
 6. Redis를 비운다: `docker compose exec -T redis redis-cli FLUSHALL`.
 7. `docker compose run --rm migrate`: 남은 마이그레이션(보통 없다)과 시드.
 8. `docker compose up -d --wait`로 api·worker를 다시 띄운다.
+9. 여기까지 모두 성공했으면 3단계의 덤프를 지운다(오너 결정, ADR-0048). 앞서 실패한 실행이 남긴 덤프가 `/data`에 있으면 그 이름을 알리고 지우지 않는다.
 
 **확인.**
 
@@ -56,9 +58,9 @@ sudo bash /data/buddha/reset-db.sh --yes
 - 시드 관리자로 로그인 → `/onboarding`(실명·휴대전화) → `/admin/markets`에 초안 14개가 있다. 시드가 마감이 지났거나 14일 안에 마감되는 초안을 경고하면 관리자가 마감 시각을 고치거나 시드 문안을 새로 만든다.
 - 테스터 계정으로 가입하면 가입 지급이 원장에 한 줄 생긴다.
 
-**실패하면.** 스크립트는 첫 오류에서 멈추고, 4단계 뒤라면 api·worker가 멈춘 채로 남는다. 5단계(비우기)가 끝나기 전이면 데이터는 그대로이니 `sudo docker compose -f /data/buddha/compose.yaml up -d`로 되돌린다. 그 뒤라면 원인을 고친 뒤 스크립트를 다시 돌린다 — 다시 돌려도 안전하다(빈 DB를 덤프하고 다시 비운 뒤 시드한다). 초기화 전 상태로 되돌리려면 3단계의 덤프를 [terraform/README.md](../terraform/README.md#수동-pg_dump) 「수동 pg_dump」의 실제 복구 절차로 넣고, Redis는 비운 채로 둔다(워커의 매 분 스캔이 마감·정산을 다시 잡는다).
+**실패하면.** 스크립트는 첫 오류(또는 SSM 세션이 끊기는 등의 중단)에서 멈추고, 3단계의 덤프를 지우지 않은 채 그 경로를 알린다. 4단계 뒤라면 api·worker가 멈춘 채로 남는다. 5단계(비우기)가 끝나기 전이면 데이터는 그대로이니 `sudo docker compose -f /data/buddha/compose.yaml up -d`로 되돌린다. 그 뒤라면 원인을 고친 뒤 스크립트를 다시 돌린다 — 다시 돌려도 안전하다(빈 DB를 덤프하고 다시 비운 뒤 시드한다). 다시 돈 실행이 성공하면 지우는 것은 그 실행이 뜬 덤프뿐이고, 실패한 실행의 덤프는 남는다(스크립트가 끝에 이름을 알린다). 초기화 전 상태로 되돌리려면 실패한 실행의 덤프를 [terraform/README.md](../terraform/README.md#수동-pg_dump) 「수동 pg_dump」의 실제 복구 절차로 넣고, Redis는 비운 채로 둔다(워커의 매 분 스캔이 마감·정산을 다시 잡는다).
 
-**덤프 정리.** 덤프에는 테스터의 이메일·실명·휴대전화가 들어 있다. 확인이 끝나면 지운다(`sudo rm /data/buddha-pre-reset-<시각>.dump`). `/data`에 있는 동안은 일일 스냅샷(7개)에도 들어간다.
+**덤프 정리.** 덤프에는 테스터의 이메일·실명·휴대전화가 들어 있다. 성공한 실행은 자기 덤프를 스스로 지운다. 실패한 실행이 남긴 덤프는 복구나 재실행의 성공을 확인한 뒤 손으로 지운다(`sudo rm /data/buddha-pre-reset-<시각>.dump`). `/data`에 있는 동안은 일일 스냅샷(7개)에도 들어간다.
 
 ## #125 배포 때의 한 번 (마이그레이션 0017)
 

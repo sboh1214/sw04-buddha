@@ -311,7 +311,7 @@ sudo docker compose -f /data/buddha/compose.yaml exec -T postgres \
 
 ### 운영 DB 초기화
 
-계정까지 모든 데이터와 Redis를 비우고 시드로 다시 채운다(#149의 출시 전 재초기화, ADR-0048). 세션 안에서 `sudo bash /data/buddha/reset-db.sh --yes` — 덤프를 남기고 api·worker를 멈춘 뒤 비우고 시드해 다시 띄운다. 무엇이 지워지고 남는지, 확인과 실패 시 처리는 [docs/RESET.md](../docs/RESET.md).
+계정까지 모든 데이터와 Redis를 비우고 시드로 다시 채운다(#149의 출시 전 재초기화, ADR-0048). 세션 안에서 `sudo bash /data/buddha/reset-db.sh --yes` — 덤프를 뜨고 api·worker를 멈춘 뒤 비우고 시드해 다시 띄운다. 끝까지 성공하면 덤프를 지우고, 실패하면 복구용으로 남긴다. 무엇이 지워지고 남는지, 확인과 실패 시 처리는 [docs/RESET.md](../docs/RESET.md).
 
 ### 인스턴스 교체
 

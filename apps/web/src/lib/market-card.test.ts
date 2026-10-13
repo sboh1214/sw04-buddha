@@ -2,7 +2,15 @@ import { PRICE_MAX, PRICE_MIN } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
 import { formatNoPrice, formatYesPrice } from './market-admin';
-import { noPrice, outcomeRows, payoutMultiple } from './market-card';
+import { type OutcomeReading, noPrice, outcomeRows, payoutMultiple } from './market-card';
+
+/** The two readings of a market that HAS a fill; a missing one here is a failure, not a value. */
+function readings(lastPrice: number): [OutcomeReading, OutcomeReading] {
+  const [yes, no] = outcomeRows(lastPrice);
+  if (yes.reading === null || no.reading === null)
+    throw new Error(`no reading at ${String(lastPrice)}`);
+  return [yes.reading, no.reading];
+}
 
 describe('payoutMultiple', () => {
   it('is 100 over the price with two decimals and an x', () => {
@@ -50,7 +58,7 @@ describe('outcomeRows', () => {
   });
 
   it('shows lastPrice on the 예 row and its complement on the 아니오 row', () => {
-    const [yes, no] = outcomeRows(63);
+    const [yes, no] = readings(63);
     expect(yes.percent).toBe(63);
     expect(no.percent).toBe(37);
     expect(yes.multiple).toBe('1.59x');
@@ -59,7 +67,7 @@ describe('outcomeRows', () => {
 
   it('names each row by the words the badge used to show', () => {
     // "예 63%" / "아니오 37%": the reading in words, never the colour alone (PLAN 11.2).
-    const [yes, no] = outcomeRows(63);
+    const [yes, no] = readings(63);
     expect(yes.accessibleName).toBe(formatYesPrice(63));
     expect(no.accessibleName).toBe(formatNoPrice(63));
     expect(yes.accessibleName).toBe(`${copy.yes} 63%`);
@@ -68,7 +76,7 @@ describe('outcomeRows', () => {
 
   it('sums the two percents to 100 across the whole range', () => {
     for (let price = PRICE_MIN; price <= PRICE_MAX; price += 1) {
-      const [yes, no] = outcomeRows(price);
+      const [yes, no] = readings(price);
       expect(yes.percent + no.percent).toBe(100);
       // Both sides stay inside the range the API allows, so neither multiple ever clamps.
       expect(yes.percent).toBeGreaterThanOrEqual(PRICE_MIN);
@@ -79,16 +87,27 @@ describe('outcomeRows', () => {
   });
 
   it('handles the two ends: a 1% market and a 99% market', () => {
-    const [yesLow, noLow] = outcomeRows(PRICE_MIN);
+    const [yesLow, noLow] = readings(PRICE_MIN);
     expect(yesLow.percent).toBe(1);
     expect(noLow.percent).toBe(99);
     expect(yesLow.multiple).toBe('100.00x');
     expect(noLow.multiple).toBe('1.01x');
 
-    const [yesHigh, noHigh] = outcomeRows(PRICE_MAX);
+    const [yesHigh, noHigh] = readings(PRICE_MAX);
     expect(yesHigh.percent).toBe(99);
     expect(noHigh.percent).toBe(1);
     expect(yesHigh.multiple).toBe('1.01x');
     expect(noHigh.multiple).toBe('100.00x');
+  });
+
+  it('keeps both rows before the first fill, with no reading at all (N02 §5)', () => {
+    // Owner decision #125 (ADR-0048): the 예 and 아니오 rows stay, labelled and coloured as ever,
+    // and nothing stands in for the price — no percent, no multiple, no 50% opening setting.
+    const [yes, no] = outcomeRows(null);
+    expect([yes.key, no.key]).toEqual(['yes', 'no']);
+    expect([yes.label, no.label]).toEqual([copy.yes, copy.no]);
+    expect([yes.accent, no.accent]).toEqual(['row.first', 'row.second']);
+    expect(yes.reading).toBeNull();
+    expect(no.reading).toBeNull();
   });
 });

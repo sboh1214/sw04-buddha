@@ -10,10 +10,18 @@
 # ran once when #125 deployed, run by packages/db/dist/wipe-cli.js as buddha_migrate inside the
 # deployed api image. Redis is flushed whole: the delayed close/finalize jobs of the deleted
 # markets would otherwise fail as "not found", and the worker re-installs its repeatable jobs when
-# it starts. Safe to re-run after a failure: a second run dumps, wipes and seeds again.
+# it starts.
+#
+# The dump lives exactly as long as it can be needed (owner decision, ADR-0048): deleted once every
+# step has succeeded, kept — and its path printed — when any step fails or the run is interrupted,
+# for the restore in docs/RESET.md. Safe to re-run after a failure: a second run dumps, wipes and
+# seeds again, and deletes only its own dump; the failed run's stays until it is removed by hand.
 set -euo pipefail
 
 ROOT=/data/buddha
+# Where the pre-reset dump goes: the data volume, beside ROOT, as terraform/README.md's manual
+# pg_dump does.
+DUMPS=/data
 
 if [ "${1:-}" != "--yes" ]; then
   echo "reset-db.sh: this deletes every account and all data on this host; pass --yes to run it" >&2
@@ -37,14 +45,22 @@ if ! docker compose run --rm --no-deps migrate test -f packages/db/dist/wipe-cli
   exit 1
 fi
 
-# The dump holds the testers' emails, names and phone numbers: owner-only, and delete it once the
-# reset is confirmed (docs/RESET.md). It sits on /data, so the daily snapshots carry it meanwhile.
+# The dump holds the testers' emails, names and phone numbers: owner-only. It sits on /data, so
+# the daily snapshots carry it while it exists.
 umask 077
-DUMP="/data/buddha-pre-reset-$(date +%Y%m%d-%H%M%S).dump"
-docker compose exec -T postgres pg_dump -U postgres -Fc buddha >"$DUMP"
+DUMP="$DUMPS/buddha-pre-reset-$(date +%Y%m%d-%H%M%S).dump"
+# A dump that did not finish restores nothing, and nothing has been touched yet: any way out of
+# this step, a failure or an interruption, drops it.
+trap 'rm -f "$DUMP"' EXIT
+if ! docker compose exec -T postgres pg_dump -U postgres -Fc buddha >"$DUMP"; then
+  echo "reset-db.sh: pg_dump failed; nothing was changed" >&2
+  exit 1
+fi
 echo "reset-db.sh: dump written to $DUMP"
 
-trap 'echo "reset-db.sh: failed; api and worker may be stopped. Fix the cause and re-run, or start them with: docker compose -f $ROOT/compose.yaml up -d" >&2' ERR
+# From here on the dump is the way back. EXIT rather than ERR: an interrupted run (Ctrl-C, a
+# dropped SSM session) keeps it too.
+trap 'echo "reset-db.sh: failed; the pre-reset dump is kept at $DUMP for the restore in docs/RESET.md. api and worker may be stopped: fix the cause and re-run, or start them with: docker compose -f $ROOT/compose.yaml up -d" >&2' EXIT
 
 docker compose stop api worker
 docker compose run --rm --no-deps migrate node packages/db/dist/wipe-cli.js --yes
@@ -53,6 +69,12 @@ docker compose exec -T redis redis-cli FLUSHALL
 docker compose run --rm migrate
 docker compose up -d --wait --wait-timeout 300
 
-trap - ERR
+# Every step succeeded: the data the dump held is gone on purpose, so the dump goes too.
+trap - EXIT
+rm -f "$DUMP"
 docker compose ps
-echo "reset-db.sh: done. Check the site, then delete $DUMP"
+echo "reset-db.sh: done; deleted the pre-reset dump $DUMP. Check the site (docs/RESET.md)."
+# A failed run's dump outlives the re-run that finished its job; name it, never delete it here.
+for kept in "$DUMPS"/buddha-pre-reset-*.dump; do
+  if [ -e "$kept" ]; then echo "reset-db.sh: an earlier run's dump is still on disk: $kept"; fi
+done

@@ -1,4 +1,4 @@
-import { type Page } from '@playwright/test';
+import { type Locator, type Page } from '@playwright/test';
 import { copy } from '../src/copy';
 import {
   REALTIME_BUDGET_MS,
@@ -67,6 +67,13 @@ async function boxOf(page: Page, testId: string) {
   return box;
 }
 
+/** A box inside a card that is in normal flow (not `position: fixed`, unlike `boxOf`'s). */
+async function boxIn(scope: Locator, testId: string) {
+  const box = await scope.getByTestId(testId).boundingBox();
+  if (box === null) throw new Error(`${testId} has no bounding box`);
+  return box;
+}
+
 test.describe('시장 상세', () => {
   test('AC 2: 첫 응답 HTML에 질문·가격·정산 기준이 들어 있다', async ({ admin, request }) => {
     const market = await createOpenMarket(admin);
@@ -114,8 +121,8 @@ test.describe('시장 상세', () => {
     expect(html).toContain('data-testid="probability-chart"');
     expect(html).toContain('data-testid="probability-chart-empty"');
 
-    // 주문 영역: 거래 준비 중 where the direct-AMM trade panel was (owner decision #125 (a)),
-    // and nothing of that panel left to quote or trade with.
+    // 주문 영역 of an open market: 거래 준비 중 where the direct-AMM trade panel was (owner
+    // decision #125 (a)), and nothing of that panel left to quote or trade with.
     expect(html).toContain('data-testid="order-area-notice"');
     expect(html).toContain(copy.tradePreparing);
     expect(html).not.toContain('data-testid="trade-');
@@ -158,8 +165,24 @@ test.describe('시장 상세', () => {
       const cardB = homeB.getByTestId(`market-card-${market.id}`);
       const cardC = homeC.getByTestId(`market-card-${market.id}`);
       await expect(statusB).toHaveText(copy.marketStatusOpen);
-      // An open card names no status — its countdown is its state — and has no fill to price.
+      // Open, so the order area is there, saying 거래 준비 중 and nothing else.
+      await expect(detailB.getByTestId('order-area-notice')).toHaveText(copy.tradePreparing);
+      // An open card names no status — its countdown is its state — and has no fill to price:
+      // its 예 and 아니오 rows stay, '—' in each pill, with 체결 없음 beside them (ADR-0048).
       await expect(cardB.getByTestId('market-card-no-fills')).toHaveText(copy.noFills);
+      await expect(cardB.getByTestId('market-card-probability')).toHaveText('—');
+      await expect(cardB.getByTestId('market-card-probability-no')).toHaveText('—');
+      await expect(cardB.getByRole('progressbar')).toHaveCount(0);
+      // Laid out as the rows of a priced card: one pill per row on one right edge, and 체결 없음
+      // to the left of them rather than pushing a pill onto a row of its own.
+      const [yesPill, noPill, noFills] = await Promise.all([
+        boxIn(cardB, 'market-card-probability'),
+        boxIn(cardB, 'market-card-probability-no'),
+        boxIn(cardB, 'market-card-no-fills'),
+      ]);
+      expect(noPill.y).toBeGreaterThanOrEqual(yesPill.y + yesPill.height);
+      expect(noPill.x).toBeCloseTo(yesPill.x, 0);
+      expect(noFills.x + noFills.width).toBeLessThanOrEqual(yesPill.x);
       await expect(cardB).not.toContainText(copy.marketStatusClosed);
       await expect(cardC).not.toContainText(copy.marketStatusClosed);
 
@@ -177,6 +200,12 @@ test.describe('시장 상세', () => {
       await expect(statusB).toHaveText(copy.marketStatusClosed, { timeout: REALTIME_BUDGET_MS });
       await expect(cardB).toContainText(copy.marketStatusClosed, { timeout: REALTIME_BUDGET_MS });
       await expect(cardC).toContainText(copy.marketStatusClosed, { timeout: REALTIME_BUDGET_MS });
+
+      // A market that is not open has no order area at all: the status notice says what it is.
+      await expect(detailB.getByTestId('market-status-notice')).toContainText(
+        copy.marketClosedNotice,
+      );
+      await expect(detailB.getByTestId('order-area')).toHaveCount(0);
 
       for (const reader of [detailB, homeB, homeC]) {
         expect(await documentSurvived(reader), reader.url()).toBe(true);

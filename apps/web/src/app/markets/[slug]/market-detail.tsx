@@ -47,8 +47,9 @@ import { type RecentMove, recentMove } from '@/lib/ticks';
  * this file.
  *
  * The grid's right column is the order area. There is no way to trade until the CLOB order
- * panel lands (#119, #66; D13), so it holds the 거래 준비 중 notice (owner decision #125 (a))
- * where the direct-AMM trade panel used to be.
+ * panel lands (#119, #66; D13), so an open market's holds the 거래 준비 중 notice (owner decision
+ * #125 (a)) where the direct-AMM trade panel used to be. Any other status leaves the column
+ * empty: the status notice on the left already says what the market is (ADR-0048).
  */
 
 /**
@@ -170,18 +171,21 @@ export function MarketDetail({ marketId, now, children }: MarketDetailProps) {
         <RecentFills marketId={marketId} />
       </Stack>
 
-      {data === undefined ? null : <OrderArea status={data.status} />}
+      {/* Read off the live row, so a `market:status` that closes the market takes the area
+          away with it. From `md` up the right track stays either way: the left column keeps its
+          width and nothing on it reflows when the market closes under a reader. */}
+      {data?.status === 'open' ? <OrderArea /> : null}
     </Grid>
   );
 }
 
 /**
- * 주문 영역, while there is no order panel: 거래 준비 중 on an open market (owner decision #125
- * (a)). A market that is not open says so, as the trade panel's own notice did before it went.
- * Sticky under the two-row header from `md` up, where it is the right column; below that it is
- * an ordinary block at the end of the page, and the tab bar keeps the bottom of the viewport.
+ * 주문 영역 of an open market, while there is no order panel: one line, 거래 준비 중, with no
+ * reason or date beside it (owner decisions #125, ADR-0048). Sticky under the two-row header from
+ * `md` up, where it is the right column; below that it is an ordinary block at the end of the
+ * page, and the tab bar keeps the bottom of the viewport.
  */
-function OrderArea({ status }: { status: MarketStatus }) {
+function OrderArea() {
   return (
     <Box
       position={{ base: 'static', md: 'sticky' }}
@@ -195,7 +199,7 @@ function OrderArea({ status }: { status: MarketStatus }) {
             <Alert.Indicator />
             <Alert.Content>
               <Alert.Description data-testid="order-area-notice">
-                {status === 'open' ? copy.tradePreparing : copy.errMarketNotOpen}
+                {copy.tradePreparing}
               </Alert.Description>
             </Alert.Content>
           </Alert.Root>
