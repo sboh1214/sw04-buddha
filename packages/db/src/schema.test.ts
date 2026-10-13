@@ -597,11 +597,12 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     /**
      * The change the API makes: its admin_actions record and the row, in one transaction, at
      * `record.at` for the record and `rowAt` for the row (both a fresh instant by default).
+     * `record.payloadKey` replaces the key the payload names (the one the change log shows).
      */
     async function change(
       adminId: string,
       after: State,
-      record: { adminId?: string; after?: State; at?: Date } = {},
+      record: { adminId?: string; after?: State; at?: Date; payloadKey?: string } = {},
       rowAt?: Date,
     ) {
       const at = rowAt ?? nextInstant();
@@ -612,7 +613,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
           targetType: 'release_setting',
           targetId: key,
           payload: {
-            key,
+            key: record.payloadKey ?? key,
             before: { status: 'undecided', value: null },
             after: record.after ?? after,
             reason: '시험',
@@ -666,12 +667,14 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
           .set({ value: 72, updatedAt: nextInstant() })
           .where(eq(releaseSettings.key, key)),
       ).rejects.toSatisfy((e) => sqlState(e) === '23000');
-      // A record of another value, another actor or another instant.
+      // A record of another value, another actor or another instant, or one that targets this
+      // key but names another in its payload (the key the change log would show).
       for (const record of [
         { after: { status: 'test', value: 24 } as State },
         { after: { status: 'approved', value: 72 } as State },
         { adminId: other.id },
         { at: nextInstant() },
+        { payloadKey: 'test.other_hours' },
       ]) {
         await expect(change(admin.id, { status: 'test', value: 72 }, record)).rejects.toSatisfy(
           (e) => sqlState(e) === '23000',
@@ -711,6 +714,41 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         { status: 'approved', value: 72, updatedAt: second },
       ]);
       expect(await t.db.select().from(adminActions)).toHaveLength(2);
+    });
+
+    it('refuses an UPDATE that renames a key, even with the record of the new one', async () => {
+      const { user: admin } = await createUser(t.db, { role: 'admin' });
+      await change(admin.id, { status: 'test', value: 48 });
+      // Everything the record check looks at matches the renamed row; only the key moved.
+      const renamed = 'test.other_hours';
+      const at = nextInstant();
+      const after: State = { status: 'approved', value: 72 };
+      await expect(
+        t.db.transaction(async (tx) => {
+          await tx.insert(adminActions).values({
+            adminId: admin.id,
+            type: 'release_setting_change',
+            targetType: 'release_setting',
+            targetId: renamed,
+            payload: {
+              key: renamed,
+              before: { status: 'undecided', value: null },
+              after,
+              reason: '시험',
+            },
+            createdAt: at,
+          });
+          await tx
+            .update(releaseSettings)
+            .set({ key: renamed, ...after, updatedAt: at, updatedBy: admin.id })
+            .where(eq(releaseSettings.key, key));
+        }),
+      ).rejects.toSatisfy((e) => sqlState(e) === '23000');
+      // The key keeps its row (it does not fall back to undecided), and no record was added.
+      expect(await t.db.select().from(releaseSettings)).toMatchObject([
+        { key, status: 'test', value: 48 },
+      ]);
+      expect(await t.db.select().from(adminActions)).toHaveLength(1);
     });
 
     it('ties the value to the status: none while undecided, never JSON null', async () => {
