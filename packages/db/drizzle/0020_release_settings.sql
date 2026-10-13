@@ -23,12 +23,20 @@ REVOKE DELETE ON TABLE "release_settings" FROM buddha_app;--> statement-breakpoi
 -- Hand-edited: a value cannot change without its record. Checked at COMMIT (deferred), so the
 -- order of the two INSERTs inside the transaction does not matter; a transaction that writes
 -- release_settings without the matching admin_actions row (type, key, actor, instant and the new
--- status and value as payload `after`) fails as a whole. admin_actions is append-only (0001), so
--- the row it finds cannot be edited afterwards. Runs as the invoker: buddha_app may SELECT
--- admin_actions. TRUNCATE (wipe.ts, owner only) fires no row trigger.
+-- status and value as payload `after`) fails as a whole. An UPDATE must also move updated_at
+-- forward: every record a write already used is no later than the row's instant, so none can be
+-- replayed to put an earlier state back unrecorded (the API makes each instant of a key later
+-- than the last). admin_actions is append-only (0001), so the row it finds cannot be edited
+-- afterwards. Runs as the invoker: buddha_app may SELECT admin_actions. TRUNCATE (wipe.ts, owner
+-- only) fires no row trigger.
 CREATE FUNCTION release_settings_require_change_record() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
+  IF TG_OP = 'UPDATE' AND NEW.updated_at <= OLD.updated_at THEN
+    RAISE EXCEPTION 'release setting % was written at %, not after its last change at %',
+      NEW.key, NEW.updated_at, OLD.updated_at
+      USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
   IF NOT EXISTS (
     SELECT 1
       FROM admin_actions a

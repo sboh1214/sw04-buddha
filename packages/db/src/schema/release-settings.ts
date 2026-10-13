@@ -11,10 +11,13 @@ import { releaseSettingStatusEnum } from './enums.js';
  *
  * Changed only together with its record: a deferred constraint trigger (migration 0020) refuses,
  * at COMMIT, an INSERT or UPDATE without an `admin_actions` row of type `release_setting_change`
- * in the same transaction naming this key, `updated_by`, `updated_at` and the new status and value
- * (payload `after`). buddha_app cannot DELETE a row either — going back to `undecided` is a change
- * like any other — so the record is the whole history. Only the API's ReleaseSettingsService
- * writes here; no seed or migration sets a value.
+ * naming this key, `updated_by`, `updated_at` and the new status and value (payload `after`), and
+ * an UPDATE that does not move `updated_at` forward — so a record an earlier write used cannot be
+ * replayed. buddha_app cannot DELETE a row either — going back to `undecided` is a change like
+ * any other — so the record is the whole history. Only the API's ReleaseSettingsService writes
+ * here, the record in the same transaction; no seed or migration sets a value. Read the value
+ * through `storedReleaseSettingValue` / `getReleaseSetting` (release-settings.ts), never the bare
+ * column.
  */
 export const releaseSettings = pgTable(
   'release_settings',
@@ -24,7 +27,10 @@ export const releaseSettings = pgTable(
     /** The definition's schema output; SQL NULL exactly while `undecided` (never JSON null). */
     value: jsonb().$type<unknown>(),
     status: releaseSettingStatusEnum().notNull(),
-    /** The change's instant: equal to its admin_actions `created_at`. Written explicitly. */
+    /**
+     * The change's instant: equal to its admin_actions `created_at`, and later than the previous
+     * one of the key. Written explicitly.
+     */
     updatedAt: timestampTz().notNull(),
     updatedBy: text()
       .notNull()

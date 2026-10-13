@@ -13,7 +13,7 @@
 | 값과 상태                            | DB. `release_settings` 표(키마다 한 행, 행이 없으면 미정)                              | 관리자. `/admin/settings` 화면이나 `PATCH /api/v1/admin/release-settings/:key` |
 | 변경 기록                            | DB. `admin_actions`의 `release_setting_change` 행(전후 상태·값, 사유, 작업자, 시각)    | 값을 바꿀 때 같은 트랜잭션에서 저절로 남는다                                   |
 
-- 레지스트리는 지금 비어 있다. #170은 장치만 만들고, 실제 항목은 아래 '예상 항목'의 담당 이슈가 등록한다. 비어 있음을 고정한 시험(`packages/shared/src/release-settings.test.ts`의 `ships empty`)은 첫 항목을 등록하는 이슈가 고친다.
+- 레지스트리는 지금 비어 있다. #170은 장치만 만들고, 실제 항목은 아래 '예상 항목'의 담당 이슈가 등록한다. 비어 있음을 고정한 곳(아래 '항목 등록하기' 4의 네 곳)은 첫 항목을 등록하는 이슈가 모두 고친다.
 - 서버는 등록된 항목을 이 레지스트리와 `release_settings`에서만 읽는다. 같은 값을 코드 여러 곳에 따로 적지 않는다. 지금 상수로 있는 값을 항목으로 옮기는 이슈는 옛 상수를 지운다. 예를 들어 시작 지급액은 지금 `SIGNUP_BONUS_COIN`(`packages/shared/src/constants.ts`)과 가입 트리거 `create_profile_for_user()`의 `bonus_coin`(마이그레이션 0019) 두 곳에 있다(#70).
 
 ## 항목 등록하기
@@ -21,7 +21,11 @@
 1. `packages/shared/src/release-settings.ts`에 `defineReleaseSetting({ key, label, unit, description, schema })`로 정의를 상수로 두고, `RELEASE_SETTINGS`의 목록에 넣는다. 목록의 순서가 관리자 화면의 순서다.
 2. 값을 쓰는 서버 코드는 그 정의 객체로 읽는다(아래 '값 읽기').
 3. 마이그레이션과 시드는 값을 쓰지 않는다. 새 항목은 미정으로 시작하고, 값은 관리자가 화면에서 사유와 함께 넣는다. 기획의 설계 제안 값(예: 이의 기간 24시간)도 같다. 관리자가 상태 '설계 제안'으로 넣고 사유에 근거를 적는다.
-4. 시험: API 시험은 `createTestApp({ releaseSettings: defineReleaseSettings([...]) })`로 시험용 항목을 주입한다(`apps/api/src/release-settings/release-settings.controller.test.ts`가 예다). 출시 레지스트리에 등록한 항목은 위의 `ships empty` 시험을 고쳐 고정한다.
+4. 시험: API 시험은 `createTestApp({ releaseSettings: defineReleaseSettings([...]) })`로 시험용 항목을 주입한다(`apps/api/src/release-settings/release-settings.controller.test.ts`가 예다). 출시 레지스트리가 비어 있음은 아래 네 곳이 고정한다. 첫 항목을 등록하는 이슈는 네 곳을 모두 고쳐 등록한 항목을 고정한다. 하나라도 빠지면 시험이 실패하거나 README가 틀린다.
+   - shared: `packages/shared/src/release-settings.test.ts`의 `ships empty`(등록된 키가 없다).
+   - API: `apps/api/src/release-settings/release-settings.controller.test.ts`의 `ReleaseSettingsService with the shipped registry`(출시 레지스트리로는 DB에 닿지 않고 빈 목록).
+   - e2e: `apps/web/e2e/release-settings.spec.ts`의 첫 시험(관리자 API의 빈 목록, '등록된 항목이 없습니다.', '전체 0개 · 미정 0개', 변경 버튼 없음).
+   - README: 화면 표의 `/admin/settings` 줄('레지스트리가 비어 있어 지금은 …').
 
 **필드.**
 
@@ -51,9 +55,10 @@
 
 ## 값 읽기
 
-- **API 서버.** `ReleaseSettingsModule`을 가져와 `ReleaseSettingsService.get(정의, tx?)`로 읽는다. 결과는 `{ status, value }`다. 미정이면 `value`가 `null`이고, 나머지는 정의의 스키마로 타입이 붙은 값이다. 레지스트리에 등록한 바로 그 정의 객체로만 읽을 수 있다.
+- **API 서버.** `ReleaseSettingsModule`을 가져와 `ReleaseSettingsService.get(정의, tx?)`로 읽는다. 결과는 `{ status, value }`다. 미정이면 `value`가 `null`이고, 나머지는 정의의 스키마로 타입이 붙은 값이다. 레지스트리에 등록한 바로 그 정의 객체로만 읽을 수 있다(`readReleaseSetting`이 검사한다).
 - **상태에 따른 처리.** `get()`은 상태를 함께 돌려줄 뿐 설계 제안·시험값을 거절하지 않는다. 항목이 미정이거나 승인되지 않았을 때 그 일을 어떻게 할지(시작하지 않는다, 기능을 끈다 등)는 항목을 등록하는 이슈가 정한다.
-- **워커.** 워커에는 Nest 주입이 없다. `@buddha/db`로 `release_settings` 행을 읽고 `readReleaseSetting(정의, 행)`(`@buddha/shared`)에 넘긴다. 값은 `value::text`로 읽어 `JSON.parse`한다. drizzle의 jsonb 읽기가 문자열 값을 한 번 더 `JSON.parse`하기 때문이다(`ReleaseSettingsService`도 그렇게 읽는다).
+- **워커.** 워커에는 Nest 주입이 없다. `getReleaseSetting(tx, RELEASE_SETTINGS, 정의)`(`@buddha/db`)로 읽는다. `ReleaseSettingsService.get`이 쓰는 바로 그 함수라 결과와 등록 검사가 같다. 읽을 수 없으면(등록되지 않은 정의, 정의에 맞지 않는 저장 값) 오류를 던지고 그 일은 실패한다.
+- **표를 직접 읽지 않는다.** `release_settings`의 값은 `value::text`로 읽어 한 번만 `JSON.parse`해야 한다. drizzle의 jsonb 읽기가 문자열 값을 한 번 더 `JSON.parse`해 `"24"`를 24로 바꾸기 때문이다. 위의 두 길이 그렇게 읽는다. 다른 열과 함께 골라야 하면 값 열 대신 `storedReleaseSettingValue`(`@buddha/db`)를 고른다.
 - **웹.** 값을 읽는 API는 관리자 전용이다. 사용자 화면이 값을 보여야 하면 그 항목의 담당 이슈가 경로를 정한다.
 
 ## 바꾼 값이 적용되는 때
@@ -68,7 +73,7 @@
 
 - **바꿀 수 있는 사람.** 관리자(`profiles.role = admin`, `AdminGuard`). 관리자 권한의 부여·회수는 #171이다. 값 변경에 다른 관리자의 승인이 필요한지는 #133이 정한다. 그 전까지는 관리자 한 명이 사유를 남기고 바꾼다.
 - **사유는 필수다.** 1\~500자(`RELEASE_SETTING_REASON_MAX_LENGTH`). 사유가 없으면 거절한다(`VALIDATION_ERROR`). 미정은 값을 받지 않고, 나머지 상태는 정의의 스키마에 맞는 값이 있어야 한다.
-- **기록.** 변경마다 같은 트랜잭션에서 `admin_actions`에 `release_setting_change` 한 행(대상 `release_setting`/키, payload `{ key, before: { status, value }, after: { status, value }, reason }`, 작업자, 시각)을 남긴다. 그 행 없이 `release_settings`를 쓰면 DB가 커밋 때 거절한다(마이그레이션 0020의 지연 제약 트리거). `admin_actions`는 앱 계정이 고치거나 지울 수 없고, `release_settings`의 행도 지울 수 없다. 미정으로 되돌리는 것도 기록이 남는 변경이다.
+- **기록.** 변경마다 같은 트랜잭션에서 `admin_actions`에 `release_setting_change` 한 행(대상 `release_setting`/키, payload `{ key, before: { status, value }, after: { status, value }, reason }`, 작업자, 시각)을 남긴다. 그 행 없이 `release_settings`를 쓰면 DB가 커밋 때 거절한다(마이그레이션 0020의 지연 제약 트리거). 고치는 쓰기는 변경 시각이 앞으로 가야 해서, 앞선 변경의 기록을 다시 대어 옛 상태로 되돌려 쓸 수도 없다. 한 키의 변경 시각은 늘 앞선 변경보다 늦다(시계가 같은 밀리초를 읽으면 앞선 변경의 1ms 뒤). 그래서 기록의 순서가 변경의 순서다. `admin_actions`는 앱 계정이 고치거나 지울 수 없고, `release_settings`의 행도 지울 수 없다. 미정으로 되돌리는 것도 기록이 남는 변경이다.
 - **기록을 보는 사람.** 관리자만(N04 §6). 관리자 화면의 '변경 기록'(작업자·시각·전후 값·사유)과 `GET /api/v1/admin/release-settings/changes`(`?key=`로 한 항목만). 관리자가 아닌 계정은 목록·변경·기록 모두 403이다.
 - 레지스트리에서 빠진 키의 기록도 남는다. 화면에는 '등록되지 않은 항목'으로 보인다.
 

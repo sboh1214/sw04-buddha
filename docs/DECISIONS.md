@@ -3121,16 +3121,16 @@ ADR-0046의 상태 줄에 '일부 대체됨(ADR-0047: …)'을 이어 쓴다. �
 - 정의: `packages/shared/src/release-settings.ts`(`@buddha/shared`). 항목마다 `key`·`label`(이름)·`unit`(단위, 없으면 null)·`description`(뜻)·`schema`(값의 zod 스키마)를 `defineReleaseSetting`으로 두고 `RELEASE_SETTINGS`에 넣는다. `defineReleaseSettings`가 빈 이름·뜻·단위, 키 형식(소문자 낱말을 `_`·`.`로 이음, 64자 이하), 중복 키를 거절한다. 출시 레지스트리는 비어 있다. 항목은 그 값을 쓰는 이슈가 등록한다(docs/SETTINGS.md의 예상 항목).
 - 상태: 미정(`undecided`, 값 없음)·설계 제안(`proposal`)·시험값(`test`, 결정 1-2)·승인됨(`approved`). 이름은 `RELEASE_SETTING_STATUS_LABELS` 하나다. 설계 제안과 시험값은 승인된 값으로 표시하지 않는다(NR 설계 상태, N01 §10).
 - 저장(마이그레이션 0020): `release_settings`(키 기본 키, 값 jsonb, 상태 enum `release_setting_status`, 변경 시각, 변경자 → `user` restrict). 미정이면 값이 없고 나머지는 값이 있다(CHECK, JSON null 금지). 행이 없는 등록 항목은 미정이다. 마이그레이션과 시드는 값을 쓰지 않는다.
-- 기록: 변경마다 같은 트랜잭션에서 `admin_actions`에 새 작업 유형 `release_setting_change`(대상 `release_setting`/키, payload `{ key, before: { status, value }, after: { status, value }, reason }`)를 남긴다. 지연 제약 트리거가 커밋 때 같은 시각·작업자·키·새 상태와 값의 기록이 없는 `release_settings` 쓰기를 거절한다. 앱 계정은 `release_settings`의 DELETE 권한이 없다. 미정으로 되돌리는 것도 기록이 남는 변경이다. 변경 기록 목록을 위해 `admin_actions (type, created_at desc, id desc)` 색인을 더했다.
+- 기록: 변경마다 같은 트랜잭션에서 `admin_actions`에 새 작업 유형 `release_setting_change`(대상 `release_setting`/키, payload `{ key, before: { status, value }, after: { status, value }, reason }`)를 남긴다. 지연 제약 트리거가 커밋 때 같은 시각·작업자·키·새 상태와 값의 기록이 없는 `release_settings` 쓰기와, 변경 시각을 앞으로 옮기지 않는 고치기(UPDATE)를 거절한다. 그래서 앞선 변경의 기록을 다시 대어 옛 상태로 되돌려 쓸 수 없다. 앱 계정은 `release_settings`의 DELETE 권한이 없다. 미정으로 되돌리는 것도 기록이 남는 변경이다. 변경 기록 목록을 위해 `admin_actions (type, created_at desc, id desc)` 색인을 더했다.
 
-**3. 읽기와 적용 시점(결정 1-3).** 서버 코드는 `ReleaseSettingsService.get(정의, tx?)`로만 읽는다. 레지스트리에 등록한 그 정의 객체만 받고, `{ status, value }`를 돌려준다(미정이면 값 없음, 나머지는 스키마로 다시 검사한 값). 저장된 값이 정의에 맞지 않으면 쓰지 않고 오류를 낸다. 바꾼 값이 바꾼 뒤 시작하는 일에만 적용되도록 소비자는 일을 시작할 때 값을 한 번 읽고 그 일에 고정한다. 한 요청보다 오래 가는 일은 읽은 값이나 그 결과를 일의 행에 저장한다. 소비자 구현은 항목을 등록하는 이슈의 몫이다. 워커는 행을 `@buddha/db`로 읽어 `readReleaseSetting`에 넘긴다. 미정·설계 제안·시험값일 때 그 일을 어떻게 할지는 `get()`이 정하지 않는다. 항목을 등록하는 이슈가 정한다.
+**3. 읽기와 적용 시점(결정 1-3).** 서버 코드는 `ReleaseSettingsService.get(정의, tx?)`로만 읽는다. 레지스트리에 등록한 그 정의 객체만 받고, `{ status, value }`를 돌려준다(미정이면 값 없음, 나머지는 스키마로 다시 검사한 값). 저장된 값이 정의에 맞지 않으면 쓰지 않고 오류를 낸다. 바꾼 값이 바꾼 뒤 시작하는 일에만 적용되도록 소비자는 일을 시작할 때 값을 한 번 읽고 그 일에 고정한다. 한 요청보다 오래 가는 일은 읽은 값이나 그 결과를 일의 행에 저장한다. 소비자 구현은 항목을 등록하는 이슈의 몫이다. 워커는 `getReleaseSetting(tx, RELEASE_SETTINGS, 정의)`(`@buddha/db`)로 읽는다. `get()`도 같은 함수를 쓰고, 등록 검사는 그 안의 `readReleaseSetting`(`@buddha/shared`)이 한다. 미정·설계 제안·시험값일 때 그 일을 어떻게 할지는 `get()`이 정하지 않는다. 항목을 등록하는 이슈가 정한다.
 
 **4. 관리자 API.** `SessionGuard` + `AdminGuard`(N04 §6, 기록 포함). 주소는 사용자 설정(`/my/settings`)과 구분해 `release-settings`다.
 
 - `GET /api/v1/admin/release-settings`: 등록된 항목 전부를 레지스트리 순서로(페이지 없음). `?status=undecided`는 미정 항목만(다른 상태 하나도 같은 방식).
-- `PATCH /api/v1/admin/release-settings/:key`: `{ status, value?, reason }`. 사유는 1\~500자 필수다. 미정은 값을 받지 않고 나머지 상태는 정의의 스키마에 맞는 값이 있어야 한다(`VALIDATION_ERROR`, 경로 `['reason']`·`['value', …]`). 등록되지 않은 키는 404다. 키마다 트랜잭션 범위 권고 잠금을 잡고 전 상태를 읽은 뒤 기록과 행을 한 시각(`clockTimestamp`)으로 쓴다.
+- `PATCH /api/v1/admin/release-settings/:key`: `{ status, value?, reason }`. 사유는 1\~500자 필수다. 미정은 값을 받지 않고 나머지 상태는 정의의 스키마에 맞는 값이 있어야 한다(`VALIDATION_ERROR`, 경로 `['reason']`·`['value', …]`). 등록되지 않은 키는 404다. 키마다 트랜잭션 범위 권고 잠금을 잡고 전 상태를 읽은 뒤 기록과 행을 한 시각으로 쓴다. 시각은 `clockTimestamp`이되 그 키의 앞선 변경 시각보다 늦어야 해서, 시계가 같은 밀리초를 읽으면 앞선 시각의 1ms 뒤다. 그래서 한 키의 기록은 만든 순서대로 놓인다.
 - `GET /api/v1/admin/release-settings/changes`: 변경 기록, 최신 순 키셋 페이지(`?key=`로 한 항목만). 작업자 닉네임과 지금의 항목 이름(등록에서 빠진 키는 null)이 붙는다.
-- jsonb 문자열 값은 `::text`로 읽어 한 번만 `JSON.parse`한다. drizzle의 jsonb 읽기가 문자열을 한 번 더 파싱해 `"24"` 같은 값을 숫자로 바꾸기 때문이다.
+- jsonb 문자열 값은 `::text`로 읽어 한 번만 `JSON.parse`한다(`@buddha/db`의 `storedReleaseSettingValue`). drizzle의 jsonb 읽기가 문자열을 한 번 더 파싱해 `"24"` 같은 값을 숫자로 바꾸기 때문이다.
 
 **5. 관리자 화면 `/admin/settings`.** 관리자 메뉴에 '출시 설정'을 더했다(감사 앞). 메뉴 줄은 좁은 폭에서 옆으로 넘치지 않고 줄을 바꾼다.
 
@@ -3143,9 +3143,9 @@ ADR-0046의 상태 줄에 '일부 대체됨(ADR-0047: …)'을 이어 쓴다. �
 
 **6. 시험.**
 
-- shared `release-settings.test.ts`: 출시 레지스트리가 비어 있음, 상태 라벨, 등록 순서와 중복·형식 거절, 상태·값 규칙, 값 검사 경로, 저장 값 읽기, 사유, 변경 기록 키, JSON Schema.
-- db `schema.test.ts`(0020): enum, 기록과 함께인 쓰기, 기록이 없거나 다른 쓰기의 커밋 거절, 상태·값 CHECK, DELETE 불가.
-- api `release-settings.controller.test.ts`(시험 항목 주입 `createTestApp({ releaseSettings })`): 등록 순서 목록과 미정, 사유와 함께 변경(행·기록·답 일치), 등록된 정의로만 타입 있는 읽기, JSON처럼 읽히는 문자열 값, 사유 없는 변경 거절, 상태·값 규칙과 스키마 거절, 404·400, 미정·상태 필터, 기록의 최신 순 페이지·작업자·키 필터, 같은 키의 동시 변경, 변경과 기록의 원자성, 읽기와 쓰기 모두 회원은 403·로그인하지 않은 호출은 401. 출시 레지스트리로는 DB에 닿지 않고 빈 목록. `admin-audit.test.ts`에 `PATCH /admin/release-settings/:key` → `release_setting_change`.
+- shared `release-settings.test.ts`: 출시 레지스트리가 비어 있음, 상태 라벨, 등록 순서와 중복·형식 거절, 상태·값 규칙, 값 검사 경로, 저장 값 읽기와 등록된 정의로만 읽기, 사유, 변경 기록 키, JSON Schema.
+- db `schema.test.ts`(0020): enum, 기록과 함께인 쓰기, 기록이 없거나 다른 쓰기의 커밋 거절, 시각을 앞으로 옮기지 않는 고치기(앞선 기록의 재사용)의 거절, 상태·값 CHECK, DELETE 불가.
+- api `release-settings.controller.test.ts`(시험 항목 주입 `createTestApp({ releaseSettings })`): 등록 순서 목록과 미정, 사유와 함께 변경(행·기록·답 일치), 등록된 정의로만 타입 있는 읽기, JSON처럼 읽히는 문자열 값, 사유 없는 변경 거절, 상태·값 규칙과 스키마 거절, 404·400, 미정·상태 필터, 기록의 최신 순 페이지·작업자·키 필터, 같은 키의 동시 변경(뒤 변경의 시각이 더 늦음), 시계보다 앞선 저장 시각 뒤의 변경은 그 1ms 뒤, 변경과 기록의 원자성, 읽기와 쓰기 모두 회원은 403·로그인하지 않은 호출은 401. 출시 레지스트리로는 DB에 닿지 않고 빈 목록. `admin-audit.test.ts`에 `PATCH /admin/release-settings/:key` → `release_setting_change`.
 - web `release-settings.test.ts`: 상태 라벨·배지(승인됨만 브랜드, 네 색이 다름, 미정 채움)·범례, 값 표시, 값 입력의 종류와 왕복, 빈 값·JSON null·읽을 수 없는 JSON 거절, 사유 규칙과 문구의 500, 미정이 아닌 상태의 값 필수(사유 거절과 함께 보고), 요청 본문, 거절 처리, 미정만 보기와 빈 상태 두 문구, 목록 캐시 교체.
 - e2e `release-settings.spec.ts`: 출시 빌드 그대로. 관리자 메뉴로 열면 '등록된 항목이 없습니다.'와 '전체 0개 · 미정 0개', 범례, 미정만 보기를 켜도 같은 문구, 변경 버튼 없음, 변경 기록 영역. 관리자 API는 빈 목록이고 등록되지 않은 키의 변경은 404다. 로그인하지 않으면 로그인(`next=/admin/settings`)으로, 회원은 `/`로 가고, 회원의 목록·미정 목록·기록·변경 요청은 403이다. 항목을 등록하려면 코드가 필요해 화면의 변경·기록 흐름은 API 시험이 고정한다.
 

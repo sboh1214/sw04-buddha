@@ -587,13 +587,24 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     const key = 'test.period_hours';
     type State = { status: 'undecided' | 'proposal' | 'test' | 'approved'; value: unknown };
 
-    /** The change the API makes: its admin_actions record and the row, in one transaction. */
+    /** Instants 1 ms apart at least, like the API's: an UPDATE must move `updated_at` forward. */
+    let last = 0;
+    function nextInstant(): Date {
+      last = Math.max(Date.now(), last + 1);
+      return new Date(last);
+    }
+
+    /**
+     * The change the API makes: its admin_actions record and the row, in one transaction, at
+     * `record.at` for the record and `rowAt` for the row (both a fresh instant by default).
+     */
     async function change(
       adminId: string,
       after: State,
       record: { adminId?: string; after?: State; at?: Date } = {},
+      rowAt?: Date,
     ) {
-      const at = new Date();
+      const at = rowAt ?? nextInstant();
       await t.db.transaction(async (tx) => {
         await tx.insert(adminActions).values({
           adminId: record.adminId ?? adminId,
@@ -637,23 +648,30 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     it('refuses, at commit, a write whose record is missing or tells another story', async () => {
       const { user: admin } = await createUser(t.db, { role: 'admin' });
       const { user: other } = await createUser(t.db, { role: 'admin' });
-      const at = new Date();
-      // No record at all: a bare INSERT, and a bare UPDATE of a row that has one.
+      // No record at all: a bare INSERT, and a bare UPDATE (moving the instant on) of a row that
+      // has one.
       await expect(
-        t.db
-          .insert(releaseSettings)
-          .values({ key, status: 'test', value: 48, updatedAt: at, updatedBy: admin.id }),
+        t.db.insert(releaseSettings).values({
+          key,
+          status: 'test',
+          value: 48,
+          updatedAt: nextInstant(),
+          updatedBy: admin.id,
+        }),
       ).rejects.toSatisfy((e) => sqlState(e) === '23000');
       await change(admin.id, { status: 'test', value: 48 });
       await expect(
-        t.db.update(releaseSettings).set({ value: 72 }).where(eq(releaseSettings.key, key)),
+        t.db
+          .update(releaseSettings)
+          .set({ value: 72, updatedAt: nextInstant() })
+          .where(eq(releaseSettings.key, key)),
       ).rejects.toSatisfy((e) => sqlState(e) === '23000');
       // A record of another value, another actor or another instant.
       for (const record of [
         { after: { status: 'test', value: 24 } as State },
         { after: { status: 'approved', value: 72 } as State },
         { adminId: other.id },
-        { at: new Date(at.getTime() - 1) },
+        { at: nextInstant() },
       ]) {
         await expect(change(admin.id, { status: 'test', value: 72 }, record)).rejects.toSatisfy(
           (e) => sqlState(e) === '23000',
@@ -664,6 +682,35 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         { status: 'test', value: 48 },
       ]);
       expect(await t.db.select().from(adminActions)).toHaveLength(1);
+    });
+
+    it('refuses an UPDATE that does not move the instant forward: no record is replayed', async () => {
+      const { user: admin } = await createUser(t.db, { role: 'admin' });
+      const first = nextInstant();
+      await change(admin.id, { status: 'test', value: 48 }, {}, first);
+      const second = nextInstant();
+      await change(admin.id, { status: 'approved', value: 72 }, {}, second);
+      // The first change's record still matches its old state, actor and instant; putting that
+      // state back under it — or rewriting the current one at its own instant — is refused.
+      for (const [state, at] of [
+        [{ status: 'test', value: 48 }, first],
+        [{ status: 'approved', value: 72 }, second],
+      ] as const) {
+        await expect(
+          t.db
+            .update(releaseSettings)
+            .set({ ...state, updatedAt: at, updatedBy: admin.id })
+            .where(eq(releaseSettings.key, key)),
+        ).rejects.toSatisfy((e) => sqlState(e) === '23000');
+      }
+      // A fresh change with its own record, written at an earlier instant than the row's: refused.
+      await expect(
+        change(admin.id, { status: 'proposal', value: 24 }, {}, new Date(first.getTime() - 1)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '23000');
+      expect(await t.db.select().from(releaseSettings)).toMatchObject([
+        { status: 'approved', value: 72, updatedAt: second },
+      ]);
+      expect(await t.db.select().from(adminActions)).toHaveLength(2);
     });
 
     it('ties the value to the status: none while undecided, never JSON null', async () => {

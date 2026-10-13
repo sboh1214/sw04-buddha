@@ -14,8 +14,8 @@ import { releaseSettingStatusSchema, type ReleaseSettingStatus } from './enums.j
  * - Its VALUE and STATUS live in Postgres (`release_settings`), changed by an admin with a reason
  *   (owner decision 2026-10-13: changeable while running, every change recorded). A missing row
  *   is `undecided` with no value. Each change appends an `admin_actions` row
- *   (`release_setting_change`) in the same transaction, and the database refuses a write that
- *   lacks one (migration 0020).
+ *   (`release_setting_change`) in the same transaction, and the database refuses a write without
+ *   a matching record that no earlier write used (migration 0020).
  * - A value applies to work that starts after it changed (owner decision): a consumer reads it
  *   once when its work begins and keeps that reading for the work's whole life.
  */
@@ -103,7 +103,7 @@ export function defineReleaseSetting<T extends ReleaseSettingValue>(
 
 /**
  * Builds a registry, refusing a malformed definition or a key used twice. The server reads an item
- * only through the very definition object registered here (`ReleaseSettingsService.get`), so a
+ * only through the very definition object registered here (`readReleaseSetting` checks it), so a
  * value cannot be read under a definition that is not in the registry.
  */
 export function defineReleaseSettings(
@@ -123,7 +123,8 @@ export function defineReleaseSettings(
 /**
  * The shipped registry. Empty on purpose: #170 builds the mechanism, and each value is registered
  * by the issue that uses it (#70, #74, #119, #152·#175, #140·#184, …) — define it with
- * `defineReleaseSetting` and list it here. Tests inject their own registry
+ * `defineReleaseSetting` and list it here, then update every test that pins the emptiness
+ * (docs/SETTINGS.md, 항목 등록하기). Tests inject their own registry
  * (`createTestApp({ releaseSettings })` in apps/api).
  */
 export const RELEASE_SETTINGS: ReleaseSettingsRegistry = defineReleaseSettings([]);
@@ -140,15 +141,22 @@ export type ReleaseSettingReading<T extends ReleaseSettingValue = ReleaseSetting
   | { key: string; status: Exclude<ReleaseSettingStatus, 'undecided'>; value: T };
 
 /**
- * The reading of `definition` from its stored row (`undefined`: no row, so `undecided`). Throws
- * when the row breaks the status/value rule or its value no longer fits the schema — a stale
- * value after a definition changed is a fault to surface, not a value to use.
+ * The reading of `definition` from its stored row (`undefined`: no row, so `undecided`). Every
+ * server read ends here — `ReleaseSettingsService.get` in apps/api and `getReleaseSetting` of
+ * @buddha/db (the worker) — so it throws when `definition` is not the very object `registry`
+ * holds under its key (an unlisted item, or a copy of a listed one), when the row breaks the
+ * status/value rule, or when its value no longer fits the schema: a stale value after a
+ * definition changed is a fault to surface, not a value to use.
  */
 export function readReleaseSetting<T extends ReleaseSettingValue>(
+  registry: ReleaseSettingsRegistry,
   definition: ReleaseSettingDefinition<T>,
   stored: ReleaseSettingState | undefined,
 ): ReleaseSettingReading<T> {
   const { key } = definition;
+  if (registry.get(key) !== definition) {
+    throw new Error(`release setting '${key}' is not registered`);
+  }
   if (stored === undefined || stored.status === 'undecided') {
     if (stored !== undefined && stored.value !== null) {
       throw new Error(`release setting '${key}' is undecided but holds a value`);

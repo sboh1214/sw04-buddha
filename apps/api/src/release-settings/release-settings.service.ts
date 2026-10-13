@@ -1,10 +1,9 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { schema, type Db } from '@buddha/db';
+import { getReleaseSetting, schema, storedReleaseSettingValue, type Db } from '@buddha/db';
 import {
   decodeKeyset,
   encodeKeyset,
   parseReleaseSettingChange,
-  readReleaseSetting,
   releaseSettingChangePayloadSchema,
   releaseSettingValueJsonSchema,
   type ReleaseSetting,
@@ -30,20 +29,11 @@ type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 /** admin_actions.target_type of a release setting's record. */
 const TARGET_TYPE = 'release_setting';
 
-/**
- * `release_settings.value` read as JSON text and parsed here. node-postgres already parses jsonb,
- * and drizzle's jsonb reader then `JSON.parse`s any STRING it is handed once more — so a stored
- * string that is itself JSON text (`"24"`, `"null"`) would come back as 24 or null. Object values
- * are not affected; a top-level string value is, and an item may well hold one.
- */
-const storedValue = sql<unknown>`${schema.releaseSettings.value}::text`.mapWith(
-  (text: string): unknown => JSON.parse(text),
-);
-
 const settingColumns = {
   key: schema.releaseSettings.key,
   status: schema.releaseSettings.status,
-  value: storedValue,
+  // Not the bare column: drizzle would parse a JSON-looking string value a second time.
+  value: storedReleaseSettingValue,
   updatedAt: schema.releaseSettings.updatedAt,
   updatedBy: schema.releaseSettings.updatedBy,
   nickname: schema.profiles.nickname,
@@ -82,8 +72,8 @@ function toReleaseSetting(
 /**
  * Release settings (#170): the registry (what each item is) merged with `release_settings` (its
  * status and value); a registered key with no row is `undecided`. The only writer of that table —
- * every change appends its `release_setting_change` record in the same transaction, which
- * migration 0020's constraint trigger also demands.
+ * every change appends its `release_setting_change` record in the same transaction, at an instant
+ * later than the key's previous one, which migration 0020's constraint trigger also demands.
  */
 @Injectable()
 export class ReleaseSettingsService {
@@ -98,24 +88,16 @@ export class ReleaseSettingsService {
    * whether such a value may drive its work). Only a definition registered in the registry is
    * read. A value applies to work started after it changed (owner decision 2026-10-13): read it
    * once when the work begins — inside that work's transaction (`executor`) when it has one —
-   * and keep it for the work's whole life rather than reading it again later.
+   * and keep it for the work's whole life rather than reading it again later. The worker reads
+   * through the same `getReleaseSetting` (@buddha/db) with RELEASE_SETTINGS; any failure is
+   * INTERNAL here, with the reason as its cause.
    */
   async get<T extends ReleaseSettingValue>(
     definition: ReleaseSettingDefinition<T>,
     executor: Db | Tx = this.db,
   ): Promise<ReleaseSettingReading<T>> {
-    if (this.registry.get(definition.key) !== definition) {
-      throw new AppError('INTERNAL', {
-        message: `Release setting '${definition.key}' is not registered`,
-      });
-    }
-    const [row] = await executor
-      .select({ status: schema.releaseSettings.status, value: storedValue })
-      .from(schema.releaseSettings)
-      .where(eq(schema.releaseSettings.key, definition.key))
-      .limit(1);
     try {
-      return readReleaseSetting(definition, row);
+      return await getReleaseSetting(executor, this.registry, definition);
     } catch (error) {
       throw new AppError('INTERNAL', {
         message: `Release setting '${definition.key}' cannot be read`,
@@ -159,17 +141,28 @@ export class ReleaseSettingsService {
     await this.db.transaction(async (tx) => {
       // Two first changes of one key would both find no row and collide on the primary key;
       // two later ones would each record a `before` the other overwrote. Transaction-scoped,
-      // like `lockMarket`, and taken before the clock so the instant sorts after the change it
-      // waited for.
+      // like `lockMarket`, and taken before the clock is read.
       await tx.execute(
         sql`SELECT pg_advisory_xact_lock(hashtext(${`${TARGET_TYPE}:${key}`}::text))`,
       );
       const [current] = await tx
-        .select({ status: schema.releaseSettings.status, value: storedValue })
+        .select({
+          status: schema.releaseSettings.status,
+          value: storedReleaseSettingValue,
+          updatedAt: schema.releaseSettings.updatedAt,
+        })
         .from(schema.releaseSettings)
         .where(eq(schema.releaseSettings.key, key))
         .limit(1);
-      const changedAt = await clockTimestamp(tx);
+      // Strictly after the change this one waited for: the clock has millisecond precision, so
+      // a change right behind another can read that change's instant again (or an earlier one,
+      // should the clock step back). One key's records then sort in the order they were made —
+      // the change log and each `before` → `after` chain — and migration 0020 refuses an UPDATE
+      // that does not move `updated_at` forward.
+      const clock = await clockTimestamp(tx);
+      const changedAt = new Date(
+        Math.max(clock.getTime(), (current?.updatedAt.getTime() ?? -Infinity) + 1),
+      );
       const payload: ReleaseSettingChangePayload = {
         key,
         before: { status: current?.status ?? 'undecided', value: current?.value ?? null },

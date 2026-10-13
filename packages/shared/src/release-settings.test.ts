@@ -107,14 +107,18 @@ describe('parseReleaseSettingChange', () => {
 });
 
 describe('readReleaseSetting', () => {
+  const registry = defineReleaseSettings([hours, window]);
+
   it('reads no row, or an undecided one, as undecided with no value', () => {
     const undecided = { key: 'test.period_hours', status: 'undecided', value: null };
-    expect(readReleaseSetting(hours, undefined)).toEqual(undecided);
-    expect(readReleaseSetting(hours, { status: 'undecided', value: null })).toEqual(undecided);
+    expect(readReleaseSetting(registry, hours, undefined)).toEqual(undecided);
+    expect(readReleaseSetting(registry, hours, { status: 'undecided', value: null })).toEqual(
+      undecided,
+    );
   });
 
   it('types and returns a stored value with its status', () => {
-    const reading = readReleaseSetting(hours, { status: 'test', value: 48 });
+    const reading = readReleaseSetting(registry, hours, { status: 'test', value: 48 });
     expect(reading).toEqual({ key: 'test.period_hours', status: 'test', value: 48 });
     if (reading.status !== 'undecided') {
       // Compile-time: the value is the schema's output type.
@@ -124,12 +128,28 @@ describe('readReleaseSetting', () => {
   });
 
   it('refuses a stored row that breaks the rule or no longer fits the schema', () => {
-    expect(() => readReleaseSetting(hours, { status: 'undecided', value: 24 })).toThrow(
+    expect(() => readReleaseSetting(registry, hours, { status: 'undecided', value: 24 })).toThrow(
       /undecided but holds a value/,
     );
-    expect(() => readReleaseSetting(hours, { status: 'approved', value: 'x' })).toThrow(
+    expect(() => readReleaseSetting(registry, hours, { status: 'approved', value: 'x' })).toThrow(
       /does not fit its schema/,
     );
+  });
+
+  it('reads only the very definition the registry holds', () => {
+    const stored = { status: 'test', value: 48 } as const;
+    // Another key, a copy of a registered definition, and the shipped (empty) registry.
+    const unlisted = defineReleaseSetting({ ...hours, key: 'test.unlisted' });
+    for (const [inRegistry, definition] of [
+      [registry, unlisted],
+      [registry, { ...hours }],
+      [RELEASE_SETTINGS, hours],
+    ] as const) {
+      expect(() => readReleaseSetting(inRegistry, definition, stored)).toThrow(/is not registered/);
+      expect(() => readReleaseSetting(inRegistry, definition, undefined)).toThrow(
+        /is not registered/,
+      );
+    }
   });
 });
 

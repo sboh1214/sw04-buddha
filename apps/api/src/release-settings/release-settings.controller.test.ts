@@ -284,8 +284,9 @@ describe.skipIf(!hasTestInfra)('release settings (integration)', () => {
   it('pages the change records newest first, with the actor, and by key', async () => {
     await patch(hours.key, { status: 'proposal', value: 24, reason: '첫 제안' });
     await patch(window.key, { status: 'test', value: { from: 0, to: 1 }, reason: '시험값' });
-    await patch(hours.key, { status: 'approved', value: 24, reason: '승인' });
-    // A record of a key the registry no longer holds keeps its place, with no label.
+    const approved = await patch(hours.key, { status: 'approved', value: 24, reason: '승인' });
+    // A record of a key the registry no longer holds keeps its place, with no label — written
+    // 1 ms after the last change, so the order below does not hang on the clock's resolution.
     await t.db.insert(schema.adminActions).values({
       adminId: admin.id,
       type: 'release_setting_change',
@@ -297,6 +298,7 @@ describe.skipIf(!hasTestInfra)('release settings (integration)', () => {
         after: { status: 'test', value: true },
         reason: '없어진 항목',
       },
+      createdAt: new Date(Date.parse(data<ReleaseSetting>(approved).updatedAt!) + 1),
     });
     // Another type in the same log is not a release setting change.
     await t.db
@@ -348,14 +350,51 @@ describe.skipIf(!hasTestInfra)('release settings (integration)', () => {
       patch(hours.key, { status: 'test', value: 20, reason: 'B' }),
     ]);
     expect([a.statusCode, b.statusCode]).toEqual([200, 200]);
-    const payloads = (await records()).map((r) => r.payload as { before: unknown; after: unknown });
-    expect(payloads).toHaveLength(2);
+    const rows = await records();
+    // Strictly later, even within one millisecond of the first: the order is the commit order.
+    expect(rows).toHaveLength(2);
+    expect(rows[1]!.createdAt.getTime()).toBeGreaterThan(rows[0]!.createdAt.getTime());
+    const payloads = rows.map((r) => r.payload as { before: unknown; after: unknown });
     // The second to commit saw the first's value as its `before`; the row holds the second.
     expect(payloads[0]!.before).toEqual({ status: 'undecided', value: null });
     expect(payloads[1]!.before).toEqual(payloads[0]!.after);
     expect((await settingRows())[0]).toMatchObject({
       value: (payloads[1]!.after as { value: number }).value,
     });
+  });
+
+  it('makes each change of a key later than the last, even when the clock has not passed it', async () => {
+    // A change stored a minute ahead of the database clock: the next one is recorded 1 ms after
+    // it rather than at the clock's earlier instant (migration 0020 would refuse that UPDATE).
+    const ahead = new Date(Date.now() + 60_000);
+    const stored = { status: 'test', value: 10 } as const;
+    await t.db.transaction(async (tx) => {
+      await tx.insert(schema.adminActions).values({
+        adminId: admin.id,
+        type: 'release_setting_change',
+        targetType: 'release_setting',
+        targetId: hours.key,
+        payload: {
+          key: hours.key,
+          before: { status: 'undecided', value: null },
+          after: stored,
+          reason: '앞선 시각',
+        },
+        createdAt: ahead,
+      });
+      await tx
+        .insert(schema.releaseSettings)
+        .values({ key: hours.key, ...stored, updatedAt: ahead, updatedBy: admin.id });
+    });
+
+    const res = await patch(hours.key, { status: 'test', value: 20, reason: '다음 변경' });
+    expect(res.statusCode).toBe(200);
+    const next = ahead.getTime() + 1;
+    expect(Date.parse(data<ReleaseSetting>(res).updatedAt!)).toBe(next);
+    const [, record] = await records();
+    expect(record!.createdAt.getTime()).toBe(next);
+    expect(record!.payload).toMatchObject({ before: stored, after: { status: 'test', value: 20 } });
+    expect((await settingRows())[0]!.updatedAt.getTime()).toBe(next);
   });
 
   it('commits a change and its record together or not at all', async () => {
