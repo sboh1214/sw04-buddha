@@ -11,10 +11,13 @@ import { releaseSettingStatusEnum } from './enums.js';
  *
  * Changed only together with its record: a deferred constraint trigger (migration 0020) refuses,
  * at COMMIT, an INSERT or UPDATE without an `admin_actions` row of type `release_setting_change`
- * naming this key (as target and as payload `key`), `updated_by`, `updated_at`, the new status
- * and value (payload `after`) and the state it replaced (payload `before`: the old row's, or
- * undecided with no value for a first write), an UPDATE that changes `key`, and an UPDATE that
- * does not move `updated_at` forward — so a record an earlier write used cannot be replayed.
+ * naming this key (as target and as payload `key`, a string), `updated_by`, `updated_at`, the
+ * new status and value (payload `after`), the state it replaced (payload `before`: the old
+ * row's, or undecided with no value for a first write) and a reason the API's reason schema
+ * takes (payload `reason`: a string of 1 to 500 characters once trimmed), an UPDATE that
+ * changes `key`, and an UPDATE that does not move `updated_at` forward — so a record an earlier
+ * write used cannot be replayed, and every record a write used reads as
+ * releaseSettingChangePayloadSchema expects.
  * buddha_app cannot DELETE a row either — going back to `undecided` is a change like any other —
  * so the record is the whole history. Only the API's ReleaseSettingsService writes here, the
  * record in the same transaction; no seed or migration sets a value, so every item starts

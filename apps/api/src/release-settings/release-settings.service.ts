@@ -181,6 +181,8 @@ export class ReleaseSettingsService {
         // 0020 refuses, at commit, a record whose `before` is anything else.
         before: { status: current?.status ?? 'undecided', value: current?.value ?? null },
         after,
+        // Trimmed, 1 to 500 characters: migration 0020 refuses, at commit, a record whose reason
+        // the body schema would not take.
         reason: body.reason,
       };
 

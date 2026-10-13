@@ -7,6 +7,8 @@ import {
   RELEASE_SETTING_STATUSES,
   SIGNUP_BONUS_COIN,
   nicknameSchema,
+  releaseSettingChangeBodySchema,
+  releaseSettingChangePayloadSchema,
 } from '@buddha/shared';
 import { and, eq, lt, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -600,7 +602,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
      * `record.at` for the record and `rowAt` for the row (both a fresh instant by default). The
      * record's `before` is the state the row holds when the change starts — undecided with no
      * value when there is no row — unless `record.before` replaces it; `record.payloadKey`
-     * replaces the key the payload names (the one the change log shows).
+     * replaces the key the payload names (the one the change log shows), and `record.reason` the
+     * reason (left out of the payload when undefined).
      */
     async function change(
       adminId: string,
@@ -611,6 +614,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         before?: unknown;
         at?: Date;
         payloadKey?: string;
+        reason?: unknown;
       } = {},
       rowAt?: Date,
     ) {
@@ -633,7 +637,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
             key: record.payloadKey ?? key,
             before: 'before' in record ? record.before : before,
             after: record.after ?? after,
-            reason: '시험',
+            reason: 'reason' in record ? record.reason : '시험',
           },
           createdAt: record.at ?? at,
         });
@@ -773,6 +777,97 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       ).rejects.toSatisfy((e) => sqlState(e) === '23000');
       await change(admin.id, { status: 'test', value: 24 });
       expect(await t.db.select().from(adminActions)).toHaveLength(4);
+    });
+
+    it('refuses, at commit, a record whose reason the API would not take', async () => {
+      const { user: admin } = await createUser(t.db, { role: 'admin' });
+      // The API's reason: a string of 1 to 500 characters once trimmed, trimmed as JavaScript
+      // does and counted in code points as zod does. Left out, not a string, blank — in any white
+      // space JavaScript trims — or longer is refused, at a first write and at an UPDATE alike.
+      const refused: unknown[] = [
+        undefined,
+        null,
+        42,
+        true,
+        ['시험'],
+        { text: '시험' },
+        '',
+        '   ',
+        '\t\n\u000b\f\r\u00a0\u1680\u2000\u200a\u2028\u2029\u202f\u205f\u3000\ufeff',
+        'x'.repeat(501),
+        ` ${'x'.repeat(501)} `,
+        '😀'.repeat(501),
+      ];
+      for (const reason of refused) {
+        expect(releaseSettingChangeBodySchema.shape.reason.safeParse(reason).success).toBe(false);
+        await expect(change(admin.id, { status: 'test', value: 48 }, { reason })).rejects.toSatisfy(
+          (e) => sqlState(e) === '23000',
+        );
+      }
+      expect(await t.db.select().from(releaseSettings)).toEqual([]);
+      expect(await t.db.select().from(adminActions)).toEqual([]);
+
+      await change(admin.id, { status: 'test', value: 48 });
+      for (const reason of refused) {
+        await expect(change(admin.id, { status: 'test', value: 72 }, { reason })).rejects.toSatisfy(
+          (e) => sqlState(e) === '23000',
+        );
+      }
+      expect(await t.db.select().from(releaseSettings)).toMatchObject([
+        { status: 'test', value: 48 },
+      ]);
+      expect(await t.db.select().from(adminActions)).toHaveLength(1);
+
+      // What the API takes passes, white space around it aside, and every record reads as the
+      // change log expects. A character past U+FFFF is one (two UTF-16 units, four bytes).
+      const accepted = ['x', 'x'.repeat(500), `\u3000 ${'x'.repeat(500)}\n\t`, '😀'.repeat(500)];
+      for (const [i, reason] of accepted.entries()) {
+        expect(releaseSettingChangeBodySchema.shape.reason.safeParse(reason).success).toBe(true);
+        await change(admin.id, { status: 'proposal', value: i }, { reason });
+      }
+      const records = await t.db
+        .select({ payload: adminActions.payload })
+        .from(adminActions)
+        .orderBy(adminActions.createdAt);
+      expect(records).toHaveLength(1 + accepted.length);
+      for (const { payload } of records) {
+        expect(releaseSettingChangePayloadSchema.safeParse(payload).success).toBe(true);
+      }
+    });
+
+    it('refuses, at commit, a record whose payload key is not the key as a string', async () => {
+      const { user: admin } = await createUser(t.db, { role: 'admin' });
+      // A key that spells a JSON literal (the key pattern allows `true`) is met by its string
+      // only: the change log reads the payload key as a string.
+      const literal = 'true';
+      const write = (payloadKey: unknown) =>
+        t.db.transaction(async (tx) => {
+          const at = nextInstant();
+          const after: State = { status: 'test', value: 48 };
+          await tx.insert(adminActions).values({
+            adminId: admin.id,
+            type: 'release_setting_change',
+            targetType: 'release_setting',
+            targetId: literal,
+            payload: {
+              key: payloadKey,
+              before: { status: 'undecided', value: null },
+              after,
+              reason: '시험',
+            },
+            createdAt: at,
+          });
+          await tx
+            .insert(releaseSettings)
+            .values({ key: literal, ...after, updatedAt: at, updatedBy: admin.id });
+        });
+      await expect(write(true)).rejects.toSatisfy((e) => sqlState(e) === '23000');
+      expect(await t.db.select().from(adminActions)).toEqual([]);
+      await write(literal);
+      expect(await t.db.select().from(releaseSettings)).toMatchObject([
+        { key: literal, status: 'test', value: 48 },
+      ]);
+      expect(await t.db.select().from(adminActions)).toHaveLength(1);
     });
 
     it('refuses an UPDATE that does not move the instant forward: no record is replayed', async () => {

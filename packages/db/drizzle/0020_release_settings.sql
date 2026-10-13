@@ -25,20 +25,28 @@ REVOKE DELETE ON TABLE "release_settings" FROM buddha_app;--> statement-breakpoi
 -- order of the two INSERTs inside the transaction does not matter; a transaction that writes
 -- release_settings without the matching admin_actions row (type, the key both as target and as
 -- the payload `key` the change log shows, actor, instant, the new status and value as payload
--- `after` and the state it replaced as payload `before`: the old row's status and value for an
--- UPDATE, the implicit undecided state with no value for an INSERT, as the API records them)
--- fails as a whole, so the change log cannot misreport a transition. An UPDATE must keep the
--- key: renaming a row would, like the DELETE revoked above, leave its registered key undecided
--- and split its history. It must also move updated_at forward: every record a write already
--- used is no later than the row's instant, so none can be replayed to put an earlier state back
--- unrecorded (the API makes each instant of a key later than the last). admin_actions is
--- append-only (0001), so the row it finds cannot be edited afterwards. Runs as the invoker:
--- buddha_app may SELECT admin_actions. TRUNCATE (wipe.ts, owner only) fires no row trigger.
+-- `after`, the state it replaced as payload `before` — the old row's status and value for an
+-- UPDATE, the implicit undecided state with no value for an INSERT, as the API records them —
+-- and a payload `reason` the API's reason schema takes: a string of 1 to
+-- RELEASE_SETTING_REASON_MAX_LENGTH (500) characters once trimmed, trimmed as JavaScript does
+-- and counted in code points as zod does) fails as a whole. So the change log cannot misreport a transition, and every record a
+-- write used reads as releaseSettingChangePayloadSchema (@buddha/shared) expects: the change log
+-- fails on a record it cannot read. An UPDATE must keep the key: renaming a row would, like the
+-- DELETE revoked above, leave its registered key undecided and split its history. It must also
+-- move updated_at forward: every record a write already used is no later than the row's
+-- instant, so none can be replayed to put an earlier state back unrecorded (the API makes each
+-- instant of a key later than the last). admin_actions is append-only (0001), so the row it
+-- finds cannot be edited afterwards. Runs as the invoker: buddha_app may SELECT admin_actions.
+-- TRUNCATE (wipe.ts, owner only) fires no row trigger.
 CREATE FUNCTION release_settings_require_change_record() RETURNS trigger
 LANGUAGE plpgsql AS $$
 DECLARE
   -- A key with no row is undecided; the record of its first write says so.
   replaced jsonb := '{"status": "undecided", "value": null}'::jsonb;
+  -- What JavaScript's String.prototype.trim strips (its white space and line terminators), as
+  -- the API's reason schema trims (z.string().trim()) before it counts.
+  js_trimmed constant text := E'\t\n\u000b\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005'
+    || E'\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff';
 BEGIN
   IF TG_OP = 'UPDATE' THEN
     replaced := jsonb_build_object('status', OLD.status::text, 'value', OLD.value);
@@ -56,14 +64,21 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1
       FROM admin_actions a
+           CROSS JOIN LATERAL (
+             SELECT btrim(a.payload ->> 'reason', js_trimmed) AS trimmed
+           ) reason
      WHERE a.type = 'release_setting_change'
        AND a.created_at = NEW.updated_at
        AND a.target_type = 'release_setting'
        AND a.target_id = NEW.key
-       AND a.payload ->> 'key' = NEW.key
+       -- As JSON: a string, so a key that spells a JSON literal (`true`) is not met by one.
+       AND a.payload -> 'key' = to_jsonb(NEW.key::text)
        AND a.admin_id = NEW.updated_by
        AND a.payload -> 'after' = jsonb_build_object('status', NEW.status::text, 'value', NEW.value)
        AND a.payload -> 'before' = replaced
+       AND jsonb_typeof(a.payload -> 'reason') = 'string'
+       -- char_length counts code points, as zod's min and max do on a string.
+       AND char_length(reason.trimmed) BETWEEN 1 AND 500
   ) THEN
     RAISE EXCEPTION 'release setting % was written without its release_setting_change record', NEW.key
       USING ERRCODE = 'integrity_constraint_violation';
