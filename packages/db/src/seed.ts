@@ -216,14 +216,6 @@ async function pickNickname(tx: Pick<Db, 'select'>, ownUserId: string): Promise<
   throw new Error('[db:seed] could not find a free admin nickname');
 }
 
-/** better-auth lower-cases the email on sign-up and sign-in; match it here. */
-function normaliseAdmin(input: AdminInput, variable: string): AdminInput {
-  if (input.password.length < 8 || input.password.length > 128) {
-    throw new Error(`[db:seed] ${variable} must be 8-128 characters (better-auth defaults)`);
-  }
-  return { email: input.email.trim().toLowerCase(), password: input.password };
-}
-
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 
 /**
@@ -349,8 +341,9 @@ async function seedOneAdmin(tx: Tx, input: AdminInput, at: Date): Promise<string
 
 /**
  * The bootstrap admins (PLAN 10.5, #171): only while NO account holds the admin role, the first
- * from SEED_ADMIN_* and, when given, a second from SEED_SECOND_ADMIN_* (both or neither, checked
- * before anything is seeded) — the two-person rule needs two distinct admins in every
+ * from SEED_ADMIN_* and, when given, a second from SEED_SECOND_ADMIN_* (each pair both or neither,
+ * the second only with the first and a different email, all checked before anything is seeded,
+ * `adminPair`) — the two-person rule needs two distinct admins in every
  * environment (owner decision 2026-10-13). Once any admin exists the seed creates and promotes
  * nobody: admins come and go on the admin screen (`POST /admin/admins`, `…/revoke`), and a
  * revoked account is never promoted again.
@@ -369,9 +362,6 @@ async function seedAdmins(
   first: AdminInput,
   second: AdminInput | undefined,
 ): Promise<string | undefined> {
-  if (second && second.email === first.email) {
-    throw new Error('[db:seed] SEED_SECOND_ADMIN_EMAIL must differ from SEED_ADMIN_EMAIL');
-  }
   return db.transaction(async (tx) => {
     await lockSeed(tx);
     // After the seed lock, like every taker of both: the admin screen's grants and revokes hold
@@ -546,38 +536,56 @@ if (!url) {
   console.error('[db:seed] DATABASE_URL is not set (copy .env.example to .env)');
   process.exit(1);
 }
-const adminEmail = process.env.SEED_ADMIN_EMAIL;
-const adminPassword = process.env.SEED_ADMIN_PASSWORD;
-const secondEmail = process.env.SEED_SECOND_ADMIN_EMAIL ?? '';
-const secondPassword = process.env.SEED_SECOND_ADMIN_PASSWORD ?? '';
-// The second admin's pair is both or neither, whitespace alone counting as empty — terraform's
-// validation reads seed_second_admin_* the same way, and this catches a local .env or any other
-// direct run. One without the other is a second admin someone meant to configure: seeding one
-// admin then would leave the environment with no two-person approval (#171), so nothing is seeded.
-const hasSecond = secondEmail.trim() !== '';
-if (hasSecond !== (secondPassword.trim() !== '')) {
-  const missing = hasSecond ? 'SEED_SECOND_ADMIN_PASSWORD' : 'SEED_SECOND_ADMIN_EMAIL';
-  console.error(
-    `[db:seed] ${missing} is empty: set both SEED_SECOND_ADMIN_EMAIL and SEED_SECOND_ADMIN_PASSWORD, or neither (#171)`,
-  );
+/** A configuration the seed refuses: said once on stderr, before anything is seeded. */
+function configError(message: string): never {
+  console.error(`[db:seed] ${message}`);
   process.exit(1);
+}
+
+/**
+ * One SEED_*ADMIN_* pair: both values or neither, whitespace alone counting as empty — terraform's
+ * validation reads seed_*admin_* the same way, and this catches a local .env or any other direct
+ * run. One without the other is an admin someone meant to configure: seeding without it would
+ * leave the environment with fewer admins than meant (none, or no two-person approval, #171), so
+ * nothing is seeded. The password length is checked here too, and the email lower-cased the way
+ * better-auth does on sign-up and sign-in.
+ */
+function adminPair(emailVariable: string, passwordVariable: string): AdminInput | undefined {
+  const email = process.env[emailVariable] ?? '';
+  const password = process.env[passwordVariable] ?? '';
+  const hasEmail = email.trim() !== '';
+  if (hasEmail !== (password.trim() !== '')) {
+    configError(
+      `${hasEmail ? passwordVariable : emailVariable} is empty: set both ${emailVariable} and ${passwordVariable}, or neither (#171)`,
+    );
+  }
+  if (!hasEmail) return undefined;
+  if (password.length < 8 || password.length > 128) {
+    configError(`${passwordVariable} must be 8-128 characters (better-auth defaults)`);
+  }
+  return { email: email.trim().toLowerCase(), password };
+}
+
+// Every admin setting is checked before the pool opens: a refused configuration seeds nothing.
+const firstAdmin = adminPair('SEED_ADMIN_EMAIL', 'SEED_ADMIN_PASSWORD');
+const secondAdmin = adminPair('SEED_SECOND_ADMIN_EMAIL', 'SEED_SECOND_ADMIN_PASSWORD');
+// The second is the second of two: with no first, seedAdmins would not run, and the seed would
+// end with no admin at all and the configured second skipped.
+if (secondAdmin && !firstAdmin) {
+  configError(
+    'SEED_SECOND_ADMIN_* is set but SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD are not: set the first admin too, or neither (#171)',
+  );
+}
+if (secondAdmin && secondAdmin.email === firstAdmin?.email) {
+  configError('SEED_SECOND_ADMIN_EMAIL must differ from SEED_ADMIN_EMAIL');
 }
 
 const db = createDb(url, { max: 1, applicationName: 'buddha-seed' });
 try {
   await seedCategories(db);
   await seedChargePackages(db);
-  if (adminEmail && adminPassword) {
-    const adminId = await seedAdmins(
-      db,
-      normaliseAdmin({ email: adminEmail, password: adminPassword }, 'SEED_ADMIN_PASSWORD'),
-      hasSecond
-        ? normaliseAdmin(
-            { email: secondEmail, password: secondPassword },
-            'SEED_SECOND_ADMIN_PASSWORD',
-          )
-        : undefined,
-    );
+  if (firstAdmin) {
+    const adminId = await seedAdmins(db, firstAdmin, secondAdmin);
     if (adminId) {
       await seedMarkets(db, adminId);
     } else {

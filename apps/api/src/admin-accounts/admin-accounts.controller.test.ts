@@ -1,17 +1,19 @@
 /**
  * Admin accounts (#171) against the docker `test` profile: granting with the email and contact
  * conditions, revoking with the two-admin floor (the revoker's own included), the sessions a
- * revoke deletes and the admin access it ends from the next request (a failed role-cache write
- * after it too), the records written with each change (or not at all) in the order they were
- * made, the list and the history. Skips when TEST_* are unset.
+ * revoke deletes (a sign-in in flight's too) and the admin access it ends from the next request
+ * (with the cache still saying admin), a grant after a revoke, the records written with each
+ * change (or not at all) in the order they were made, the list and the history. Skips when
+ * TEST_* are unset.
  */
 import { randomUUID } from 'node:crypto';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { schema } from '@buddha/db';
 import { type AdminAccount, type AdminRoleChange } from '@buddha/shared';
-import { asc, eq, inArray } from 'drizzle-orm';
+import { asc, eq, inArray, sql } from 'drizzle-orm';
 import { type Redis } from 'ioredis';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AdminGuard, ROLE_CACHE_TTL_SECONDS, roleCacheKey } from '../auth/admin.guard.js';
+import { AdminGuard, roleCacheKey } from '../auth/admin.guard.js';
 import { REDIS } from '../infra/redis/redis.provider.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
 import { discoverRoutes, isAdminPath } from '../test/routes.js';
@@ -112,6 +114,30 @@ describe.skipIf(!hasTestInfra)('admin accounts (integration)', () => {
   }
   async function sessionsOf(userId: string) {
     return t.db.select().from(schema.session).where(eq(schema.session.userId, userId));
+  }
+  /** Polls `check` every 20 ms until it holds; throws after 5 s. */
+  async function until(check: () => Promise<boolean>, what: string) {
+    for (let attempt = 0; attempt < 250; attempt++) {
+      if (await check()) return;
+      await sleep(20);
+    }
+    throw new Error(`timed out waiting for ${what}`);
+  }
+  /**
+   * Whether another backend of this database comes to wait on a lock while running a statement
+   * that matches `pattern` (ILIKE): true once one does, false when `done()` holds first.
+   */
+  async function waitsOnLock(pattern: string, done: () => boolean): Promise<boolean> {
+    for (let attempt = 0; attempt < 250; attempt++) {
+      const { rows } = await t.db.execute<{ waiting: number }>(sql`
+        SELECT count(*)::int AS waiting FROM pg_stat_activity
+        WHERE datname = current_database() AND pid <> pg_backend_pid()
+          AND wait_event_type = 'Lock' AND query ILIKE ${pattern}`);
+      if ((rows[0]?.waiting ?? 0) > 0) return true;
+      if (done()) return false;
+      await sleep(20);
+    }
+    throw new Error(`neither a lock wait on ${pattern} nor the end came`);
   }
   async function nicknameOf(userId: string) {
     const [row] = await t.db
@@ -308,7 +334,7 @@ describe.skipIf(!hasTestInfra)('admin accounts (integration)', () => {
     expect(await records()).toEqual([]);
   });
 
-  it('keeps a revoked account out when the role-cache write after the commit fails', async () => {
+  it('keeps a revoked account out while the role cache still says admin', async () => {
     const c = await candidate();
     await grant({ userId: c.id, reason: '셋째 관리자' });
     expect((await get(BASE, c.cookie)).statusCode).toBe(200);
@@ -316,21 +342,8 @@ describe.skipIf(!hasTestInfra)('admin accounts (integration)', () => {
     const key = roleCacheKey(c.id);
     expect(await redis.get(key)).toBe('admin');
 
-    // Redis refuses the revoke's write of C's role after the commit, so the cache keeps saying
-    // `admin` for up to 60 s.
-    const set = redis.set.bind(redis) as (...args: unknown[]) => Promise<unknown>;
-    const failing = vi
-      .spyOn(redis, 'set')
-      .mockImplementation(((...args: unknown[]) =>
-        args[0] === key
-          ? Promise.reject(new Error('injected cache failure'))
-          : set(...args)) as never);
-    try {
-      expect((await revoke(c.id, { reason: '담당 종료' })).statusCode).toBe(200);
-      expect(failing).toHaveBeenCalledWith(key, 'user', 'EX', ROLE_CACHE_TTL_SECONDS);
-    } finally {
-      failing.mockRestore();
-    }
+    // The revoke writes nothing to the cache, so it keeps saying `admin` for up to 60 s.
+    expect((await revoke(c.id, { reason: '담당 종료' })).statusCode).toBe(200);
     expect(await roleOf(c.id)).toBe('user');
     expect(await redis.get(key)).toBe('admin');
 
@@ -359,6 +372,147 @@ describe.skipIf(!hasTestInfra)('admin accounts (integration)', () => {
     // The stale entry was there all along, and stays until it expires.
     expect(await redis.get(key)).toBe('admin');
     expect((await get('/api/v1/me', again)).statusCode).toBe(200);
+  });
+
+  it('lets a grant that commits after a revoke stand, however late the revoke touches the cache', async () => {
+    const c = await candidate();
+    await grant({ userId: c.id, reason: '셋째 관리자' });
+    const redis = t.app.get<Redis>(REDIS);
+    const key = roleCacheKey(c.id);
+    // Any write of C's key other than a grant's `admin`, or a delete of it — whatever the revoke
+    // does to the cache after its commit — is held until the grant below has committed and
+    // cached, as a slow Redis round trip would hold it.
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    const set = redis.set.bind(redis) as (...args: unknown[]) => Promise<unknown>;
+    const del = redis.del.bind(redis) as (...args: unknown[]) => Promise<unknown>;
+    const setSpy = vi
+      .spyOn(redis, 'set')
+      .mockImplementation(((...args: unknown[]) =>
+        args[0] === key && args[1] !== 'admin'
+          ? released.then(() => set(...args))
+          : set(...args)) as never);
+    const delSpy = vi
+      .spyOn(redis, 'del')
+      .mockImplementation(((...args: unknown[]) =>
+        args.includes(key) ? released.then(() => del(...args)) : del(...args)) as never);
+    try {
+      const revoking = revoke(c.id, { reason: '담당 종료' });
+      await until(async () => (await roleOf(c.id)) === 'user', "the revoke's commit");
+      // B grants C again: the latest committed change, cached after the revoke committed.
+      expect((await grant({ userId: c.id, reason: '다시 부여' }, b.cookie)).statusCode).toBe(201);
+      release();
+      expect((await revoking).statusCode).toBe(200);
+    } finally {
+      setSpy.mockRestore();
+      delSpy.mockRestore();
+    }
+    expect(await roleOf(c.id)).toBe('admin');
+    // C signs in again (the revoke ended its sessions) and is an admin from the first request.
+    const again = await signIn(c);
+    expect((await get(BASE, again)).statusCode).toBe(200);
+  });
+
+  it('ends a session a sign-in was still committing when the revoke began', async () => {
+    const c = await candidate();
+    await grant({ userId: c.id, reason: '셋째 관리자' });
+    // A sign-in's session insert, not committed yet: its foreign key check holds FOR KEY SHARE
+    // on C's user row until it commits.
+    let inserted!: () => void;
+    const insertedOnce = new Promise<void>((resolve) => (inserted = resolve));
+    let commit!: () => void;
+    const committing = new Promise<void>((resolve) => (commit = resolve));
+    const signingIn = t.db.transaction(async (tx) => {
+      await tx.insert(schema.session).values({
+        id: randomUUID(),
+        token: randomUUID(),
+        userId: c.id,
+        expiresAt: new Date(Date.now() + 3_600_000),
+        updatedAt: new Date(),
+      });
+      inserted();
+      await committing;
+    });
+    await insertedOnce;
+
+    let revoked = false;
+    const revoking = revoke(c.id, { reason: '담당 종료' }).then((res) => {
+      revoked = true;
+      return res;
+    });
+    // The revoke's FOR UPDATE on that row waits for the sign-in rather than deleting the
+    // sessions it can see now and committing past the one being made.
+    const waited = await waitsOnLock('%for update%', () => revoked);
+    commit();
+    await signingIn;
+    const res = await revoking;
+    expect(waited).toBe(true);
+    expect(res.statusCode).toBe(200);
+    expect(await roleOf(c.id)).toBe('user');
+    expect(await sessionsOf(c.id)).toEqual([]);
+  });
+
+  it('makes a sign-in during a revoke wait, then start a member session', async () => {
+    const c = await candidate();
+    await grant({ userId: c.id, reason: '셋째 관리자' });
+    // The revoke stops right before its session delete, with every lock it took held.
+    let reached!: () => void;
+    const atDelete = new Promise<void>((resolve) => (reached = resolve));
+    let resume!: () => void;
+    const resumed = new Promise<void>((resolve) => (resume = resolve));
+    const original = t.db.transaction.bind(t.db);
+    const pausing = vi.spyOn(t.db, 'transaction').mockImplementationOnce(((
+      work: (tx: unknown) => Promise<unknown>,
+      config?: unknown,
+    ) =>
+      original(
+        (tx) =>
+          work(
+            new Proxy(tx, {
+              get(target, property) {
+                if (property === 'delete') {
+                  return (table: typeof schema.session) => ({
+                    where: async (condition: Parameters<typeof eq>[0]) => {
+                      reached();
+                      await resumed;
+                      return target.delete(table).where(condition as never);
+                    },
+                  });
+                }
+                const value: unknown = Reflect.get(target, property);
+                if (typeof value !== 'function') return value;
+                const bound: unknown = value.bind(target);
+                return bound;
+              },
+            }),
+          ),
+        config as never,
+      )) as never);
+    let revoking: ReturnType<typeof revoke> | undefined;
+    try {
+      revoking = revoke(c.id, { reason: '담당 종료' });
+      await atDelete;
+    } finally {
+      pausing.mockRestore();
+    }
+
+    let signedIn = false;
+    const signingIn = signIn(c).then((cookie) => {
+      signedIn = true;
+      return cookie;
+    });
+    // C's session insert waits on the revoke's lock of C's user row.
+    const waited = await waitsOnLock('%"session"%', () => signedIn);
+    resume();
+    expect((await revoking).statusCode).toBe(200);
+    const cookie = await signingIn;
+    expect(waited).toBe(true);
+    // Made after the revoke, the session survives it — as a member's.
+    expect(await sessionsOf(c.id)).toHaveLength(1);
+    const refused = await get(BASE, cookie);
+    expect(refused.statusCode).toBe(403);
+    expect(errorOf(refused).code).toBe('FORBIDDEN');
+    expect((await get('/api/v1/me', cookie)).statusCode).toBe(200);
   });
 
   it('refuses an actor revoked between the guard and the lock', async () => {

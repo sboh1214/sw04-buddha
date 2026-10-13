@@ -42,7 +42,7 @@ describe.skipIf(!hasTestInfra)('AdminGuard role cache (integration, PLAN 10.5)',
   });
 
   it('answers admin only from Postgres: a cached admin is never taken, nor filled over', async () => {
-    // As a revoke whose cache write failed after the commit leaves it (#171).
+    // As a revoke leaves it: it writes nothing to the cache (#171).
     const user = await signUpTestUser(t);
     await redis.set(roleCacheKey(user.id), 'admin', 'EX', ROLE_CACHE_TTL_SECONDS);
     expect(await guard.roleOf(user.id)).toBe('user');

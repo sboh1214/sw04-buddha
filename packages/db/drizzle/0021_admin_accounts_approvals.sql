@@ -52,4 +52,21 @@ END;
 $$;--> statement-breakpoint
 CREATE TRIGGER approval_requests_keep_record
   BEFORE UPDATE ON "approval_requests"
-  FOR EACH ROW EXECUTE FUNCTION approval_requests_keep_record();
+  FOR EACH ROW EXECUTE FUNCTION approval_requests_keep_record();--> statement-breakpoint
+-- Hand-edited: a request starts pending, with no decision. The CHECKs would accept a row inserted
+-- decided already (by another account, with a reason and an instant), and buddha_app may INSERT:
+-- a decision must come as the one UPDATE the trigger above allows, after the request exists.
+CREATE FUNCTION approval_requests_start_pending() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.status <> 'pending' OR NEW.decided_by IS NOT NULL OR NEW.decision_reason IS NOT NULL
+     OR NEW.decided_at IS NOT NULL THEN
+    RAISE EXCEPTION 'approval request % must be inserted pending, with no decision', NEW.id
+      USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  RETURN NEW;
+END;
+$$;--> statement-breakpoint
+CREATE TRIGGER approval_requests_start_pending
+  BEFORE INSERT ON "approval_requests"
+  FOR EACH ROW EXECUTE FUNCTION approval_requests_start_pending();

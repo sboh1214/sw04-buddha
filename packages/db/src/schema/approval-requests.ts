@@ -9,9 +9,9 @@ import { approvalStatusEnum } from './enums.js';
  * waits for another admin's decision. `kind` names the work (APPROVAL_KIND_PATTERN) and the
  * consumer that registers it owns `target_*` and `payload`.
  *
- * The request columns never change after the INSERT, and a decision is written once: a trigger
- * (migration 0021) refuses any UPDATE of a decided row and any change of a request column, the
- * CHECKs below tie the decision columns to the status and refuse a decision by the requester —
+ * The request columns never change after the INSERT, and a decision is written once: triggers
+ * (migration 0021) refuse an INSERT that is not pending with no decision, any UPDATE of a decided
+ * row and any change of a request column, the CHECKs below tie the decision columns to the status and refuse a decision by the requester —
  * whatever the writer, in every environment. buddha_app cannot DELETE a row, so the table is the
  * record of who requested, who decided, when and why. Only the API's ApprovalService writes it.
  */

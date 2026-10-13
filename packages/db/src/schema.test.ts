@@ -56,6 +56,12 @@ function sqlConstraint(error: unknown): string | undefined {
   return e?.cause?.constraint ?? e?.constraint;
 }
 
+/** The Postgres message (a trigger's RAISE), wrapped or bare like `sqlState`. */
+function errorMessage(error: unknown): string {
+  const e = error as { message?: string; cause?: { message?: string } } | null;
+  return e?.cause?.message ?? e?.message ?? '';
+}
+
 describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () => {
   let t: TestDb;
   beforeAll(async () => {
@@ -1025,7 +1031,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
             sqlConstraint(e) === 'approval_requests_decider_not_requester_check',
         );
       }
-      // Not even inserted decided.
+      // Not even inserted decided (the INSERT trigger refuses any decided row first).
       await expect(
         t.db.insert(approvalRequests).values({
           kind: 'test_kind',
@@ -1034,7 +1040,42 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
           requestedAt: new Date(),
           ...decision(requester.id),
         }),
-      ).rejects.toSatisfy((e) => sqlState(e) === '23514');
+      ).rejects.toSatisfy((e) => sqlState(e) === '23000');
+    });
+
+    it('inserts a request pending with no decision only, whoever writes it', async () => {
+      // A decided row by another account satisfies every CHECK: inserting one would skip the
+      // pending phase, and with it ApprovalService's check that the decider is an admin now.
+      const { user: requester } = await createUser(t.db, { role: 'admin' });
+      const { user: decider } = await createUser(t.db, { role: 'admin' });
+      const base = {
+        kind: 'test_kind',
+        requestedBy: requester.id,
+        requestReason: '요청 사유',
+        requestedAt: new Date(),
+      };
+      for (const values of [
+        { ...base, ...decision(decider.id, 'approved') },
+        { ...base, ...decision(decider.id, 'rejected') },
+        // Pending with a decision column set: refused before the CHECK would be.
+        { ...base, decidedBy: decider.id },
+        { ...base, decisionReason: '결정 사유' },
+        { ...base, decidedAt: new Date() },
+      ]) {
+        await expect(
+          t.db.insert(approvalRequests).values(values),
+          JSON.stringify(Object.keys(values)),
+        ).rejects.toSatisfy(
+          (e) =>
+            sqlState(e) === '23000' &&
+            errorMessage(e).includes('must be inserted pending, with no decision'),
+        );
+      }
+      expect(await t.db.select().from(approvalRequests)).toEqual([]);
+      // Pending, given explicitly or by the default, is a request.
+      await t.db.insert(approvalRequests).values({ ...base, status: 'pending' });
+      await t.db.insert(approvalRequests).values(base);
+      expect(await t.db.select().from(approvalRequests)).toHaveLength(2);
     });
 
     it('ties the decision columns to the status and requires non-blank reasons', async () => {

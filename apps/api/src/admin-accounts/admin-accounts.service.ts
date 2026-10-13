@@ -9,7 +9,6 @@ import {
   type AdminRoleChange,
   type AdminRoleChangeRefusal,
   type AdminRoleChangeType,
-  type Role,
 } from '@buddha/shared';
 import { and, asc, desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
@@ -61,8 +60,8 @@ export function roleChangeNotAllowed(reason: AdminRoleChangeRefusal): AppError {
  * transaction as the role. A revoke also deletes every session of the account (better-auth reads
  * sessions from Postgres on each request, with no cookie cache), so it is signed out everywhere.
  * The change applies from the next request (owner decision 2026-10-13): AdminGuard answers
- * `admin` only from Postgres, so a revoke needs nothing of Redis, and after a grant's commit the
- * role cache gets the new role over a cached `user`.
+ * `admin` only from Postgres, so a revoke needs nothing of Redis — and writes nothing to it —
+ * and after a grant's commit the role cache gets `admin` over a cached `user`.
  */
 @Injectable()
 export class AdminAccountsService {
@@ -149,15 +148,28 @@ export class AdminAccountsService {
       if (target.contact === null) throw roleChangeNotAllowed('contact_required');
       return this.writeRole(tx, actorId, userId, 'admin_grant', reason);
     });
-    await this.cacheRole(userId, 'admin');
+    await this.cacheAdmin(userId);
     return this.change(recordId);
   }
 
   /**
    * Takes the admin role from `userId` — the actor's own included — unless fewer than MIN_ADMINS
    * admins would remain (ROLE_CHANGE_NOT_ALLOWED `min_admins`), and deletes every session of the
-   * account in the same transaction. A self-revoke answers before the actor's cookie stops
-   * working: its session is gone once this commits.
+   * account in the same transaction: every session that exists when the revoke commits is ended.
+   * A self-revoke answers before the actor's cookie stops working: its session is gone once this
+   * commits.
+   *
+   * The account's `user` row is locked FOR UPDATE first. A session insert checks its foreign key
+   * with FOR KEY SHARE on that row, which conflicts: a sign-in in flight either committed its
+   * session before the lock was granted — the delete below, a later statement with its own
+   * snapshot, then sees it and removes it — or waits and creates it only after this commits, when
+   * the account is a member. Without the lock a session committed between the delete's snapshot
+   * and this commit would survive the revoke.
+   *
+   * Nothing is written to the role cache: AdminGuard never answers a cached `admin`, so a revoke
+   * applies without Redis, and a write after the commit could land after a later grant's — a
+   * `user` refusing the new admin for 60 s, or a delete letting a request that read `user` before
+   * that grant fill the key with it.
    */
   async revoke(actorId: string, userId: string, reason: string): Promise<AdminRoleChange> {
     const recordId = await this.db.transaction(async (tx) => {
@@ -165,9 +177,11 @@ export class AdminAccountsService {
       await this.assertAdmin(tx, actorId);
       const [target] = await tx
         .select({ role: schema.profiles.role })
-        .from(schema.profiles)
-        .where(eq(schema.profiles.userId, userId))
-        .limit(1);
+        .from(schema.user)
+        .innerJoin(schema.profiles, eq(schema.profiles.userId, schema.user.id))
+        .where(eq(schema.user.id, userId))
+        .limit(1)
+        .for('update', { of: schema.user });
       if (!target) throw new AppError('NOT_FOUND', { message: 'User not found' });
       if (target.role !== 'admin') throw roleChangeNotAllowed('not_admin');
       // Every role change holds the lock, so this count cannot move before the commit.
@@ -180,7 +194,6 @@ export class AdminAccountsService {
       await tx.delete(schema.session).where(eq(schema.session.userId, userId));
       return id;
     });
-    await this.cacheRole(userId, 'user');
     return this.change(recordId);
   }
 
@@ -271,16 +284,16 @@ export class AdminAccountsService {
   }
 
   /**
-   * The committed role into the cache (AdminGuard.cacheRole). A failure is logged, not thrown:
-   * the change is committed and a revoke's sessions are gone already. It fails closed either way —
-   * after a revoke the cache may still say `admin`, which AdminGuard never answers from (it reads
-   * Postgres), and after a grant a cached `user` may refuse the new admin until it expires (60 s).
+   * A committed grant into the role cache (AdminGuard.cacheRole), over a cached `user`. A failure
+   * is logged, not thrown: the grant is committed. It fails closed — a cached `user` may refuse
+   * the new admin until it expires (60 s). A late write is harmless: a cached `admin` is never
+   * answered, so it cannot outlast a later revoke.
    */
-  private async cacheRole(userId: string, role: Role): Promise<void> {
+  private async cacheAdmin(userId: string): Promise<void> {
     try {
-      await this.guard.cacheRole(userId, role);
+      await this.guard.cacheRole(userId, 'admin');
     } catch (error) {
-      this.logger.warn(`role cache write after a ${role} change failed: ${String(error)}`);
+      this.logger.warn(`role cache write after a grant failed: ${String(error)}`);
     }
   }
 

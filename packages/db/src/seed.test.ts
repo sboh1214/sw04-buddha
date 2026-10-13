@@ -46,6 +46,8 @@ interface SeedOptions {
   admin?: boolean;
   /** SEED_SECOND_ADMIN_* as well (default), like CI and the e2e runner. */
   second?: boolean;
+  /** SEED_ADMIN_* exactly as given, in place of `admin`'s. */
+  firstEnv?: { email: string; password: string };
   /** SEED_SECOND_ADMIN_* exactly as given, in place of `second`. */
   secondEnv?: { email: string; password: string };
   clockShiftMs?: number;
@@ -63,8 +65,8 @@ function seedSpawnOptions(options: SeedOptions = {}) {
   // what a deploy without that admin configured looks like to the seed (`if (email && ...)`).
   const admin = options.admin ?? true;
   const second = admin && (options.second ?? true);
-  env.SEED_ADMIN_EMAIL = admin ? ADMIN_EMAIL : '';
-  env.SEED_ADMIN_PASSWORD = admin ? ADMIN_PASSWORD : '';
+  env.SEED_ADMIN_EMAIL = options.firstEnv?.email ?? (admin ? ADMIN_EMAIL : '');
+  env.SEED_ADMIN_PASSWORD = options.firstEnv?.password ?? (admin ? ADMIN_PASSWORD : '');
   env.SEED_SECOND_ADMIN_EMAIL = options.secondEnv?.email ?? (second ? SECOND_EMAIL : '');
   env.SEED_SECOND_ADMIN_PASSWORD = options.secondEnv?.password ?? (second ? SECOND_PASSWORD : '');
   return {
@@ -291,6 +293,49 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
       expect(result.stderr).toContain(
         'set both SEED_SECOND_ADMIN_EMAIL and SEED_SECOND_ADMIN_PASSWORD, or neither',
       );
+    }
+    expect(await t.db.select().from(user)).toEqual([]);
+    expect(await t.db.select().from(categories)).toEqual([]);
+    expect(await t.db.select().from(chargePackages)).toEqual([]);
+  });
+
+  it('fails before seeding anything on any other admin setting it cannot seed as given (#171)', async () => {
+    const cases: [SeedOptions, string][] = [
+      // The first pair is both or neither as well: one alone is an admin someone meant.
+      [
+        { firstEnv: { email: ADMIN_EMAIL, password: '' }, second: false },
+        'SEED_ADMIN_PASSWORD is empty: set both SEED_ADMIN_EMAIL and SEED_ADMIN_PASSWORD, or neither',
+      ],
+      [
+        { firstEnv: { email: ' ', password: ADMIN_PASSWORD } },
+        'SEED_ADMIN_EMAIL is empty: set both SEED_ADMIN_EMAIL and SEED_ADMIN_PASSWORD, or neither',
+      ],
+      [
+        { firstEnv: { email: ADMIN_EMAIL, password: '\t' } },
+        'SEED_ADMIN_PASSWORD is empty: set both SEED_ADMIN_EMAIL and SEED_ADMIN_PASSWORD, or neither',
+      ],
+      // A complete second with no first: no admin would be seeded, the second skipped.
+      [
+        {
+          firstEnv: { email: '', password: '' },
+          secondEnv: { email: SECOND_EMAIL, password: SECOND_PASSWORD },
+        },
+        'SEED_SECOND_ADMIN_* is set but SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD are not',
+      ],
+      // The same account twice, as better-auth compares addresses.
+      [
+        { secondEnv: { email: ` ${ADMIN_EMAIL.toUpperCase()}`, password: SECOND_PASSWORD } },
+        'SEED_SECOND_ADMIN_EMAIL must differ from SEED_ADMIN_EMAIL',
+      ],
+      [
+        { secondEnv: { email: SECOND_EMAIL, password: 'short' } },
+        'SEED_SECOND_ADMIN_PASSWORD must be 8-128 characters',
+      ],
+    ];
+    for (const [options, message] of cases) {
+      const result = spawnSync(process.execPath, seedArgs(), seedSpawnOptions(options));
+      expect({ options, status: result.status }).toEqual({ options, status: 1 });
+      expect(result.stderr, JSON.stringify(options)).toContain(message);
     }
     expect(await t.db.select().from(user)).toEqual([]);
     expect(await t.db.select().from(categories)).toEqual([]);

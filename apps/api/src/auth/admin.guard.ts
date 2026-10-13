@@ -27,9 +27,10 @@ const KNOWN_ROLES: ReadonlySet<string> = new Set<Role>(ROLES);
  *
  * The cache only ever refuses (#171): a cached `user` is answered from Redis, a cached `admin`
  * never is — every admin answer is a Postgres read made by that request, after SessionGuard
- * found its session. So no cache entry, however stale, can let a revoked account in: not when a
- * revoke's cache write fails after its commit, not on a session signed in after the revoke.
- * The cost is one primary-key read per admin request, beside SessionGuard's own session read.
+ * found its session. So no cache entry, however stale, can let a revoked account in: not the
+ * `admin` a revoke leaves in the cache (it writes nothing there), not on a session signed in
+ * after the revoke. The cost is one primary-key read per admin request, beside SessionGuard's
+ * own session read.
  */
 @Injectable()
 export class AdminGuard implements CanActivate {
@@ -86,12 +87,12 @@ export class AdminGuard implements CanActivate {
   }
 
   /**
-   * Writes the role a committed change set (#171: a grant or revoke), over whatever the cache
-   * holds. A write rather than a delete: a request that read the old role from Postgres before
-   * the change committed would otherwise put it back for 60 s (`roleOf` only fills an empty
-   * key), and a granted account would be refused that long. Only the grant needs it to apply
-   * from the next request — a revoke does without it, since a cached `admin` is never answered
-   * (the write spares the revoked account's next requests a Postgres read).
+   * Writes the role a committed grant set (#171), over whatever the cache holds. A write rather
+   * than a delete: a request that read `user` from Postgres before the grant committed would
+   * otherwise put it back for 60 s (`roleOf` only fills an empty key), and the new admin would be
+   * refused that long. A revoke calls nothing here: a cached `admin` is never answered, and a
+   * revoke's write landing after a later grant's would refuse that admin (a `user`) or let such
+   * a stale `user` back in (a delete).
    */
   async cacheRole(userId: string, role: Role): Promise<void> {
     await this.redis.set(roleCacheKey(userId), role, 'EX', ROLE_CACHE_TTL_SECONDS);
