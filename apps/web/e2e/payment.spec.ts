@@ -45,7 +45,7 @@ async function packageOnSale(admin: APIRequestContext): Promise<ChargePackage> {
   return dataOf<ChargePackage>(
     await admin.post('/api/v1/admin/charge-packages', {
       // priceKrw must not exceed the face value (charge-package.ts `priceWithinFaceValue`).
-      data: { amountP: '10000', priceKrw: 9900, sortOrder: 0, isActive: true },
+      data: { amountCoin: '10000', priceKrw: 9900, sortOrder: 0, isActive: true },
     }),
   );
 }
@@ -124,7 +124,7 @@ test.describe('유료 충전 닫힘 (ADR-0049)', () => {
     // --- a member, straight at the API with a package on sale and a live coupon.
     const pack = await packageOnSale(admin);
     const coupon = await dataOf<Coupon>(
-      await admin.post('/api/v1/admin/coupons', { data: { amountP: '500', memo: 'e2e 닫힘' } }),
+      await admin.post('/api/v1/admin/coupons', { data: { amountCoin: '500', memo: 'e2e 닫힘' } }),
     );
     await signUp(page, freshEmail());
     const before = await meOf(page);
@@ -135,7 +135,7 @@ test.describe('유료 충전 닫힘 (ADR-0049)', () => {
         headers: { 'Idempotency-Key': crypto.randomUUID() },
         data: {
           packageId: pack.id,
-          expectedAmountP: pack.amountP,
+          expectedAmountCoin: pack.amountCoin,
           expectedPriceKrw: pack.priceKrw,
           expectedAccountId: before.id,
         },

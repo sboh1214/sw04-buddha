@@ -13,12 +13,12 @@ import {
   Text,
 } from '@chakra-ui/react';
 import {
-  CHARGE_PACKAGE_MAX_P,
-  CHARGE_PACKAGE_MIN_P,
+  CHARGE_PACKAGE_MAX_COIN,
+  CHARGE_PACKAGE_MIN_COIN,
   discountPercent,
   formatKrw,
-  formatP,
-  parsePAmount,
+  formatCoin,
+  parseCoinAmount,
 } from '@buddha/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -37,10 +37,10 @@ const DIGITS = /^\d+$/;
 /** Same rules as the API: a positive integer amount within bounds, price never above it. */
 const schema = z
   .object({
-    amountP: boundedInteger(
+    amountCoin: boundedInteger(
       DIGITS,
       copy.errPackagePrice,
-      (amount) => amount >= CHARGE_PACKAGE_MIN_P && amount <= CHARGE_PACKAGE_MAX_P,
+      (amount) => amount >= CHARGE_PACKAGE_MIN_COIN && amount <= CHARGE_PACKAGE_MAX_COIN,
       copy.errPackagePrice,
     ),
     priceKrw: integerField(DIGITS, copy.errPackagePrice),
@@ -50,9 +50,9 @@ const schema = z
   // has to prove both halves are digits itself before converting (see lib/form-schema).
   .refine(
     (value) =>
-      !DIGITS.test(value.amountP) ||
+      !DIGITS.test(value.amountCoin) ||
       !DIGITS.test(value.priceKrw) ||
-      BigInt(value.priceKrw) <= BigInt(value.amountP),
+      BigInt(value.priceKrw) <= BigInt(value.amountCoin),
     { message: copy.errPackagePrice, path: ['priceKrw'] },
   );
 type FormValues = z.infer<typeof schema>;
@@ -76,7 +76,7 @@ export function AdminChargePackages() {
       unwrap(
         await api.POST('/api/v1/admin/charge-packages', {
           body: {
-            amountP: values.amountP,
+            amountCoin: values.amountCoin,
             priceKrw: Number(values.priceKrw),
             sortOrder: Number(values.sortOrder),
             isActive: true,
@@ -85,7 +85,7 @@ export function AdminChargePackages() {
       ).data,
     onSuccess: async () => {
       toaster.create({ type: 'success', title: copy.adminPackageSaved });
-      reset({ amountP: '', priceKrw: '', sortOrder: '0' });
+      reset({ amountCoin: '', priceKrw: '', sortOrder: '0' });
       await invalidate();
     },
     onError: (error) =>
@@ -128,7 +128,7 @@ export function AdminChargePackages() {
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { amountP: '', priceKrw: '', sortOrder: '0' },
+    defaultValues: { amountCoin: '', priceKrw: '', sortOrder: '0' },
   });
 
   // Only on success (see the coupon screen): a refused price must not erase what was typed.
@@ -146,14 +146,14 @@ export function AdminChargePackages() {
           <form onSubmit={(e) => void submit(e)} noValidate>
             <Stack gap="3">
               <HStack gap="2" align="start" flexWrap="wrap">
-                <Field.Root invalid={!!errors.amountP} required maxW="40">
+                <Field.Root invalid={!!errors.amountCoin} required maxW="40">
                   <Field.Label>{copy.adminPackageAmount}</Field.Label>
                   <Input
                     inputMode="numeric"
                     data-testid="package-amount"
-                    {...register('amountP')}
+                    {...register('amountCoin')}
                   />
-                  <Field.ErrorText>{errors.amountP?.message}</Field.ErrorText>
+                  <Field.ErrorText>{errors.amountCoin?.message}</Field.ErrorText>
                 </Field.Root>
                 <Field.Root invalid={!!errors.priceKrw} required maxW="40">
                   <Field.Label>{copy.adminPackagePrice}</Field.Label>
@@ -200,7 +200,7 @@ export function AdminChargePackages() {
       ) : (
         <Stack gap="2">
           {packages.data.map((pack) => {
-            const amountP = parsePAmount(pack.amountP);
+            const amountCoin = parseCoinAmount(pack.amountCoin);
             return (
               <HStack
                 key={pack.id}
@@ -213,10 +213,10 @@ export function AdminChargePackages() {
                 data-testid={`admin-package-${pack.id}`}
               >
                 <HStack gap="3" flexWrap="wrap">
-                  <Text fontWeight="semibold">{formatP(amountP)}</Text>
+                  <Text fontWeight="semibold">{formatCoin(amountCoin)}</Text>
                   <Text color="fg.muted">{formatKrw(pack.priceKrw)}</Text>
                   <Badge colorPalette="yes" variant="subtle">
-                    {discountPercent(amountP, pack.priceKrw)}% {copy.chargeDiscount}
+                    {discountPercent(amountCoin, pack.priceKrw)}% {copy.chargeDiscount}
                   </Badge>
                   <Badge colorPalette={pack.isActive ? 'brand' : 'gray'} variant="subtle">
                     {pack.isActive ? copy.adminPackageActive : copy.adminPackageInactive}

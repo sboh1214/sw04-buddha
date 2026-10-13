@@ -46,7 +46,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 function payment(overrides: Partial<Payment> = {}): Payment {
   return {
     id: PAYMENT_ID,
-    amountP: '10000',
+    amountCoin: '10000',
     priceKrw: 9900,
     packageId: PACKAGE_ID,
     provider: 'mock',
@@ -313,12 +313,14 @@ describe('refundFormSchema', () => {
 });
 
 describe('refundErrorView', () => {
-  it('says the P was already used for INSUFFICIENT_BALANCE', () => {
+  it('says the Coin was already used for INSUFFICIENT_BALANCE', () => {
     expect(
       refundErrorView(
-        apiError(409, 'INSUFFICIENT_BALANCE', [{ path: ['amountP'], message: 'P already used' }]),
+        apiError(409, 'INSUFFICIENT_BALANCE', [
+          { path: ['amountCoin'], message: 'Coin already used' },
+        ]),
       ),
-    ).toEqual({ title: copy.errRefundPUsed });
+    ).toEqual({ title: copy.errRefundCoinUsed });
   });
 
   it('tells the three REFUND_NOT_ALLOWED cases apart by their detail', () => {

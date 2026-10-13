@@ -1,13 +1,13 @@
 import {
   MARKET_STATUSES,
-  MAX_P_AMOUNT,
+  MAX_COIN_AMOUNT,
   MINUS_SIGN,
   POSITION_QTY_MAX,
   PRICE_MAX,
   PRICE_MIN,
-  formatP,
-  parsePAmount,
-  serializePAmount,
+  formatCoin,
+  parseCoinAmount,
+  serializeCoinAmount,
 } from '@buddha/shared';
 import { QueryClient } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
@@ -16,21 +16,21 @@ import { ORDERS_KEY, POSITIONS_KEY } from '@/lib/market-keys';
 import { applyPositionEvent } from '@/lib/market-live';
 import {
   type OrdersPage,
-  averageCostP,
+  averageCostCoin,
   combinedListState,
   listState,
   liveMarketStatus,
-  markPriceP,
+  markPriceCoin,
   priceIsStale,
   markToLiveMarket,
   ordersInfiniteQueryOptions,
   portfolioTotals,
   positionListStatusFor,
-  positionValueP,
+  positionValueCoin,
   positionsKey,
   positionsQueryOptions,
   realizedPnlAcross,
-  unrealizedPnlP,
+  unrealizedPnlCoin,
 } from './use-portfolio';
 
 /** Whatever better-auth hands back; only "is it there" is read. */
@@ -46,8 +46,8 @@ function position(overrides: Partial<Position> = {}): Position {
     resolvedResult: null,
     outcome: 'YES',
     qty: 100,
-    costBasisP: '5000',
-    realizedPnlP: '0',
+    costBasisCoin: '5000',
+    realizedPnlCoin: '0',
     settled: false,
     version: 1,
     updatedAt: '2026-09-07T00:00:00.000Z',
@@ -67,7 +67,7 @@ function order(id: string): Order {
     qty: 10,
     filledQty: 10,
     status: 'filled',
-    amountP: '630',
+    amountCoin: '630',
     priceAvgBp: 6300,
     createdAt: '2026-09-07T00:00:00.000Z',
   };
@@ -79,58 +79,58 @@ function priced(value: bigint | undefined): bigint {
   return value;
 }
 
-describe('markPriceP / positionValueP / unrealizedPnlP', () => {
+describe('markPriceCoin / positionValueCoin / unrealizedPnlCoin', () => {
   it('values a YES holding at the market price and a NO holding at its complement', () => {
     // The bug this pins is silent: `qty × marketLastPrice` for a NO row produces a plausible
     // number that is wrong by 100 − 2·price per contract, and the screen has nothing to
     // compare it against. `marketLastPrice` is the YES price, so the NO side is 100 − 63 = 37
     // — the same complement `formatNoPrice` prints under "아니오 37%".
-    const yes = position({ outcome: 'YES', marketLastPrice: 63, costBasisP: '5000' });
-    const no = position({ outcome: 'NO', marketLastPrice: 63, costBasisP: '5000' });
+    const yes = position({ outcome: 'YES', marketLastPrice: 63, costBasisCoin: '5000' });
+    const no = position({ outcome: 'NO', marketLastPrice: 63, costBasisCoin: '5000' });
 
-    expect(markPriceP(yes)).toBe(63n);
-    expect(markPriceP(no)).toBe(37n);
-    expect(positionValueP(yes)).toBe(6300n);
-    expect(positionValueP(no)).toBe(3700n);
-    expect(unrealizedPnlP(yes)).toBe(1300n);
-    expect(unrealizedPnlP(no)).toBe(-1300n);
-    // Both sides of the same market add up to the 100P a winning contract pays.
-    expect(priced(markPriceP(yes)) + priced(markPriceP(no))).toBe(100n);
+    expect(markPriceCoin(yes)).toBe(63n);
+    expect(markPriceCoin(no)).toBe(37n);
+    expect(positionValueCoin(yes)).toBe(6300n);
+    expect(positionValueCoin(no)).toBe(3700n);
+    expect(unrealizedPnlCoin(yes)).toBe(1300n);
+    expect(unrealizedPnlCoin(no)).toBe(-1300n);
+    // Both sides of the same market add up to the 100 Coin a winning contract pays.
+    expect(priced(markPriceCoin(yes)) + priced(markPriceCoin(no))).toBe(100n);
   });
 
   it('holds at both ends of the displayed price range', () => {
-    // `priceOf` clamps to 1..99, so the two sides of a market at the floor are 1P and 99P.
+    // `priceOf` clamps to 1..99, so the two sides of a market at the floor are 1 Coin and 99 Coin.
     const yesAtFloor = position({ outcome: 'YES', marketLastPrice: PRICE_MIN, qty: 10 });
     const noAtFloor = position({ outcome: 'NO', marketLastPrice: PRICE_MIN, qty: 10 });
 
-    expect(positionValueP(yesAtFloor)).toBe(10n);
-    expect(positionValueP(noAtFloor)).toBe(990n);
-    expect(markPriceP(position({ outcome: 'YES', marketLastPrice: PRICE_MAX }))).toBe(99n);
-    expect(markPriceP(position({ outcome: 'NO', marketLastPrice: PRICE_MAX }))).toBe(1n);
+    expect(positionValueCoin(yesAtFloor)).toBe(10n);
+    expect(positionValueCoin(noAtFloor)).toBe(990n);
+    expect(markPriceCoin(position({ outcome: 'YES', marketLastPrice: PRICE_MAX }))).toBe(99n);
+    expect(markPriceCoin(position({ outcome: 'NO', marketLastPrice: PRICE_MAX }))).toBe(1n);
   });
 
   it('values a fully sold row at zero and keeps its cost off the books', () => {
     // `applySell` leaves the row at qty 0 with costBasis 0 so its realised PnL stays visible;
     // it must not still be marked to market.
-    const sold = position({ qty: 0, costBasisP: '0', realizedPnlP: '1200' });
+    const sold = position({ qty: 0, costBasisCoin: '0', realizedPnlCoin: '1200' });
 
-    expect(positionValueP(sold)).toBe(0n);
-    expect(unrealizedPnlP(sold)).toBe(0n);
-    expect(averageCostP(sold)).toBeUndefined();
+    expect(positionValueCoin(sold)).toBe(0n);
+    expect(unrealizedPnlCoin(sold)).toBe(0n);
+    expect(averageCostCoin(sold)).toBeUndefined();
   });
 
   it('renders a loss with the typographic minus sign, not an ASCII hyphen', () => {
-    const losing = position({ outcome: 'YES', marketLastPrice: 30, costBasisP: '5000' });
+    const losing = position({ outcome: 'YES', marketLastPrice: 30, costBasisCoin: '5000' });
 
-    expect(unrealizedPnlP(losing)).toBe(-2000n);
-    expect(formatP(priced(unrealizedPnlP(losing)))).toBe(`${MINUS_SIGN}2,000P`);
-    expect(formatP(priced(unrealizedPnlP(losing))).startsWith('-')).toBe(false);
+    expect(unrealizedPnlCoin(losing)).toBe(-2000n);
+    expect(formatCoin(priced(unrealizedPnlCoin(losing)))).toBe(`${MINUS_SIGN}2,000P`);
+    expect(formatCoin(priced(unrealizedPnlCoin(losing))).startsWith('-')).toBe(false);
   });
 
   it('applies the same formula to a settled row, which is why the screen must not show it', () => {
     // Settlement never writes a price, so `marketLastPrice` on a settled market is the last
-    // price something TRADED at — 71 here, for a market that resolved YES and paid 100P. The
-    // arithmetic answers anyway; it is the 정산 이력 section's job to render `realizedPnlP`
+    // price something TRADED at — 71 here, for a market that resolved YES and paid 100 Coin. The
+    // arithmetic answers anyway; it is the 정산 이력 section's job to render `realizedPnlCoin`
     // instead, and `portfolioTotals` is therefore given one list at a time.
     const settled = position({
       marketStatus: 'settled',
@@ -138,15 +138,16 @@ describe('markPriceP / positionValueP / unrealizedPnlP', () => {
       settled: true,
       qty: 40,
       marketLastPrice: 71,
-      costBasisP: '2000',
-      realizedPnlP: '2000',
+      costBasisCoin: '2000',
+      realizedPnlCoin: '2000',
     });
 
-    expect(positionValueP(settled)).toBe(2840n);
-    expect(unrealizedPnlP(settled)).toBe(840n);
-    // The row really made 2,000P — 40 winners paid 4,000P against a 2,000P basis — and 840P is
-    // the last trade's opinion, not a result. Only `realizedPnlP` is a settled row's answer.
-    expect(parsePAmount(settled.realizedPnlP)).toBe(2000n);
+    expect(positionValueCoin(settled)).toBe(2840n);
+    expect(unrealizedPnlCoin(settled)).toBe(840n);
+    // The row really made 2,000 Coin — 40 winners paid 4,000 Coin against a 2,000 Coin basis —
+    // and 840 Coin is the last trade's opinion, not a result. Only `realizedPnlCoin` is a settled
+    // row's answer.
+    expect(parseCoinAmount(settled.realizedPnlCoin)).toBe(2000n);
   });
 
   it('stays exact at the domain bounds, where a double has already rounded', () => {
@@ -154,11 +155,11 @@ describe('markPriceP / positionValueP / unrealizedPnlP', () => {
       outcome: 'YES',
       qty: POSITION_QTY_MAX,
       marketLastPrice: PRICE_MAX,
-      costBasisP: serializePAmount(MAX_P_AMOUNT),
+      costBasisCoin: serializeCoinAmount(MAX_COIN_AMOUNT),
     });
 
-    expect(positionValueP(bound)).toBe(212_600_881_053n);
-    expect(unrealizedPnlP(bound)).toBe(212_600_881_053n - MAX_P_AMOUNT);
+    expect(positionValueCoin(bound)).toBe(212_600_881_053n);
+    expect(unrealizedPnlCoin(bound)).toBe(212_600_881_053n - MAX_COIN_AMOUNT);
   });
 });
 
@@ -166,104 +167,107 @@ describe('a market with no fill (체결 없음)', () => {
   it('has no price to mark a holding to, so every valued figure is undefined', () => {
     // N02 §5: before the first fill there is no price — the screen shows 체결 없음 and a dash,
     // never a number derived from an initial setting.
-    const unpriced = position({ marketLastPrice: null, costBasisP: '5000' });
-    expect(markPriceP(unpriced)).toBeUndefined();
-    expect(positionValueP(unpriced)).toBeUndefined();
-    expect(unrealizedPnlP(unpriced)).toBeUndefined();
+    const unpriced = position({ marketLastPrice: null, costBasisCoin: '5000' });
+    expect(markPriceCoin(unpriced)).toBeUndefined();
+    expect(positionValueCoin(unpriced)).toBeUndefined();
+    expect(unrealizedPnlCoin(unpriced)).toBeUndefined();
   });
 
   it('is left out of the valued totals but keeps its realised PnL', () => {
     // Counting its cost without a value would print a loss nobody has.
     const rows = [
-      position({ outcome: 'YES', qty: 10, marketLastPrice: 60, costBasisP: '400' }),
-      position({ marketLastPrice: null, costBasisP: '5000', realizedPnlP: '30' }),
+      position({ outcome: 'YES', qty: 10, marketLastPrice: 60, costBasisCoin: '400' }),
+      position({ marketLastPrice: null, costBasisCoin: '5000', realizedPnlCoin: '30' }),
     ];
     expect(portfolioTotals(rows)).toEqual({
-      valueP: 600n,
-      costBasisP: 400n,
-      unrealizedPnlP: 200n,
-      realizedPnlP: 30n,
+      valueCoin: 600n,
+      costBasisCoin: 400n,
+      unrealizedPnlCoin: 200n,
+      realizedPnlCoin: 30n,
     });
   });
 });
 
-describe('averageCostP', () => {
+describe('averageCostCoin', () => {
   it('rounds half-up in bigint, the way applySell releases cost', () => {
     // 100 / 3 = 33.33 → 33; 101 / 2 = 50.5 → 51. Both round the same way the API does, so the
-    // 평단 on screen and the cost a sell releases can never drift apart by a P.
-    expect(averageCostP(position({ qty: 3, costBasisP: '100' }))).toBe(33n);
-    expect(averageCostP(position({ qty: 2, costBasisP: '101' }))).toBe(51n);
-    expect(averageCostP(position({ qty: 100, costBasisP: '5000' }))).toBe(50n);
+    // 평단 on screen and the cost a sell releases can never drift apart by a Coin.
+    expect(averageCostCoin(position({ qty: 3, costBasisCoin: '100' }))).toBe(33n);
+    expect(averageCostCoin(position({ qty: 2, costBasisCoin: '101' }))).toBe(51n);
+    expect(averageCostCoin(position({ qty: 100, costBasisCoin: '5000' }))).toBe(50n);
   });
 });
 
 describe('portfolioTotals', () => {
   it('sums nothing to zero, including a list that has not loaded', () => {
     expect(portfolioTotals([])).toEqual({
-      valueP: 0n,
-      costBasisP: 0n,
-      unrealizedPnlP: 0n,
-      realizedPnlP: 0n,
+      valueCoin: 0n,
+      costBasisCoin: 0n,
+      unrealizedPnlCoin: 0n,
+      realizedPnlCoin: 0n,
     });
     expect(portfolioTotals()).toEqual(portfolioTotals([]));
   });
 
   it('sums a mixed list of winners, losers and closed rows', () => {
     const rows = [
-      position({ outcome: 'YES', qty: 10, marketLastPrice: 60, costBasisP: '400' }),
+      position({ outcome: 'YES', qty: 10, marketLastPrice: 60, costBasisCoin: '400' }),
       position({
         outcome: 'NO',
         qty: 20,
         marketLastPrice: 60,
-        costBasisP: '900',
-        realizedPnlP: '50',
+        costBasisCoin: '900',
+        realizedPnlCoin: '50',
       }),
-      position({ qty: 0, marketLastPrice: 60, costBasisP: '0', realizedPnlP: '-250' }),
+      position({ qty: 0, marketLastPrice: 60, costBasisCoin: '0', realizedPnlCoin: '-250' }),
     ];
 
     // 10 × 60 = 600, 20 × (100 − 60) = 800, 0.
     expect(portfolioTotals(rows)).toEqual({
-      valueP: 1400n,
-      costBasisP: 1300n,
-      unrealizedPnlP: 100n,
-      realizedPnlP: -200n,
+      valueCoin: 1400n,
+      costBasisCoin: 1300n,
+      unrealizedPnlCoin: 100n,
+      realizedPnlCoin: -200n,
     });
     // The total is the sum of the per-row figures, so a row and the summary cannot disagree.
-    expect(portfolioTotals(rows).unrealizedPnlP).toBe(
-      rows.reduce((sum, row) => sum + priced(unrealizedPnlP(row)), 0n),
+    expect(portfolioTotals(rows).unrealizedPnlCoin).toBe(
+      rows.reduce((sum, row) => sum + priced(unrealizedPnlCoin(row)), 0n),
     );
   });
 
   it('carries a total past 2^53, where a number implementation silently rounds', () => {
-    // Ten positions at the MAX_P_AMOUNT bound cost 10^16 P. Against one holding at the qty and
-    // price ceilings the unrealised total is −9,999,787,399,118,947 — odd, and above 2^53,
+    // Ten positions at the MAX_COIN_AMOUNT bound cost 10^16 Coin. Against one holding at the qty
+    // and price ceilings the unrealised total is −9,999,787,399,118,947 — odd, and above 2^53,
     // where doubles step by 2. This is the whole reason the module never touches Number.
-    const sold = position({ qty: 0, costBasisP: serializePAmount(MAX_P_AMOUNT) });
+    const sold = position({ qty: 0, costBasisCoin: serializeCoinAmount(MAX_COIN_AMOUNT) });
     const rows = [
       position({
         outcome: 'YES',
         qty: POSITION_QTY_MAX,
         marketLastPrice: PRICE_MAX,
-        costBasisP: serializePAmount(MAX_P_AMOUNT),
+        costBasisCoin: serializeCoinAmount(MAX_COIN_AMOUNT),
       }),
       ...Array.from({ length: 9 }, () => sold),
     ];
 
     const totals = portfolioTotals(rows);
 
-    expect(totals.costBasisP).toBe(10n * MAX_P_AMOUNT);
-    expect(totals.valueP).toBe(212_600_881_053n);
-    expect(totals.unrealizedPnlP).toBe(-9_999_787_399_118_947n);
-    expect(BigInt(Number(totals.unrealizedPnlP))).not.toBe(totals.unrealizedPnlP);
+    expect(totals.costBasisCoin).toBe(10n * MAX_COIN_AMOUNT);
+    expect(totals.valueCoin).toBe(212_600_881_053n);
+    expect(totals.unrealizedPnlCoin).toBe(-9_999_787_399_118_947n);
+    expect(BigInt(Number(totals.unrealizedPnlCoin))).not.toBe(totals.unrealizedPnlCoin);
   });
 });
 
 describe('realizedPnlAcross', () => {
   it('counts a profit taken in a market that is still open', () => {
     // THE BUG: selling books the realised PnL onto the row and LEAVES it in the open list, so
-    // 총 실현 손익 read from the settled list alone answered 0P to an account that had just
-    // taken 100P out of a market that has not finished — and would keep saying 0P until it did.
-    const open = portfolioTotals([position({ qty: 0, costBasisP: '0', realizedPnlP: '10000' })]);
+    // 총 실현 손익 read from the settled list alone answered 0 Coin to an account that had just
+    // taken 100 Coin out of a market that has not finished — and would keep saying 0 Coin until
+    // it did.
+    const open = portfolioTotals([
+      position({ qty: 0, costBasisCoin: '0', realizedPnlCoin: '10000' }),
+    ]);
     const settled = portfolioTotals([]);
     expect(realizedPnlAcross(open, settled)).toBe(10_000n);
   });
@@ -271,20 +275,20 @@ describe('realizedPnlAcross', () => {
   it('sums the two lists, which a row is never in at once', () => {
     // A row MOVES to the settled list when the market finishes, carrying the same accumulated
     // figure with it, so adding the lists cannot count one row twice.
-    const open = portfolioTotals([position({ realizedPnlP: '700' })]);
+    const open = portfolioTotals([position({ realizedPnlCoin: '700' })]);
     const settled = portfolioTotals([
-      position({ settled: true, realizedPnlP: '-250' }),
-      position({ settled: true, outcome: 'NO', realizedPnlP: '4000' }),
+      position({ settled: true, realizedPnlCoin: '-250' }),
+      position({ settled: true, outcome: 'NO', realizedPnlCoin: '4000' }),
     ]);
     expect(realizedPnlAcross(open, settled)).toBe(4_450n);
     expect(realizedPnlAcross()).toBe(0n);
   });
 
   it('carries a total past 2^53, where a number implementation silently rounds', () => {
-    const huge = serializePAmount(MAX_P_AMOUNT);
-    const open = portfolioTotals([position({ realizedPnlP: huge })]);
-    const settled = portfolioTotals([position({ settled: true, realizedPnlP: huge })]);
-    expect(realizedPnlAcross(open, settled)).toBe(MAX_P_AMOUNT * 2n);
+    const huge = serializeCoinAmount(MAX_COIN_AMOUNT);
+    const open = portfolioTotals([position({ realizedPnlCoin: huge })]);
+    const settled = portfolioTotals([position({ settled: true, realizedPnlCoin: huge })]);
+    expect(realizedPnlAcross(open, settled)).toBe(MAX_COIN_AMOUNT * 2n);
   });
 });
 
@@ -312,7 +316,7 @@ describe('markToLiveMarket', () => {
     // somebody else's trade — that arrives as a `market:tick` on the market cache instead.
     const row = position({ marketLastPrice: 50 });
     expect(markToLiveMarket(row, { lastPrice: 63 }).marketLastPrice).toBe(63);
-    expect(unrealizedPnlP(markToLiveMarket(row, { lastPrice: 63 }))).toBe(63n * 100n - 5_000n);
+    expect(unrealizedPnlCoin(markToLiveMarket(row, { lastPrice: 63 }))).toBe(63n * 100n - 5_000n);
   });
 
   it('marks the STATUS too, which no user event ever moves', () => {
@@ -361,27 +365,27 @@ describe('총 실현 손익 across the two lists', () => {
     // settling event's `settled: true` was written back into `['positions', 'open']` — the list the row had just
     // LEFT — and the patch kind stayed `replace`, so nothing was scheduled to correct it. The
     // write refreshed `dataUpdatedAt` too, putting the poisoned list inside `staleTime`.
-    const openRow = position({ realizedPnlP: '250', qty: 10, costBasisP: '5000' });
+    const openRow = position({ realizedPnlCoin: '250', qty: 10, costBasisCoin: '5000' });
     const event = {
       type: 'user:position' as const,
       marketId: openRow.marketId,
       outcome: openRow.outcome,
       qty: 0,
-      costBasisP: '0',
-      realizedPnlP: '250',
+      costBasisCoin: '0',
+      realizedPnlCoin: '250',
       settled: true,
       version: openRow.version + 1,
       ts: '2026-09-07T01:00:00.000Z',
     };
     // 정산 이력, once fetched, holds this row: that is where a settlement puts it.
     const settledList: Position[] = [
-      { ...openRow, qty: 0, costBasisP: '0', settled: true, version: event.version },
+      { ...openRow, qty: 0, costBasisCoin: '0', settled: true, version: event.version },
     ];
 
     // The arithmetic that made it visible, kept as the counterfactual this guard exists for:
-    // one 250P row read as 500P, on the 총 실현 손익 line of /portfolio.
+    // one 250 Coin row read as 500 Coin, on the 총 실현 손익 line of /portfolio.
     const poisonedOpen: Position[] = [
-      { ...openRow, qty: 0, costBasisP: '0', settled: true, version: event.version },
+      { ...openRow, qty: 0, costBasisCoin: '0', settled: true, version: event.version },
     ];
     expect(realizedPnlAcross(portfolioTotals(poisonedOpen), portfolioTotals(settledList))).toBe(
       500n,
@@ -415,7 +419,7 @@ describe('liveMarketStatus', () => {
     // A settlement or a void moves the row to 정산 이력 (`positions.settled`), and both publish
     // their own `user:position`, which restarts BOTH lists. Taking the status here instead would
     // badge an open holding 무효 while 평가 금액 and 총 평가 금액 still value it at the last
-    // traded price — the fiction `positionValueP` and 정산 이력 are documented never to print.
+    // traded price — the fiction `positionValueCoin` and 정산 이력 are documented never to print.
     expect(liveMarketStatus('open', 'settled')).toBe('open');
     expect(liveMarketStatus('resolved', 'voided')).toBe('resolved');
     // The refusal is about MEMBERSHIP, not about the word: a row already in the settled list

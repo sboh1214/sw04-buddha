@@ -15,8 +15,8 @@ import {
   PAID_COIN_SALES_ENABLED,
   discountPercent,
   formatKrw,
-  formatP,
-  parsePAmount,
+  formatCoin,
+  parseCoinAmount,
 } from '@buddha/shared';
 import type { Metadata } from 'next';
 import NextLink from 'next/link';
@@ -113,15 +113,15 @@ export default async function ChargeGuidePage() {
 }
 
 function PackageGrid({ packages }: { packages: ChargePackage[] }) {
-  const amounts = packages.map((pack) => parsePAmount(pack.amountP));
+  const amounts = packages.map((pack) => parseCoinAmount(pack.amountCoin));
   const tiers = chargeTiers(amounts);
 
   return (
     <SimpleGrid as="ul" columns={{ base: 1, sm: 2, lg: 3, xl: 4 }} gap="4">
       {packages.map((pack, index) => {
-        const amountP = amounts[index] ?? 0n;
-        const discount = discountPercent(amountP, pack.priceKrw);
-        const label = formatP(amountP);
+        const amountCoin = amounts[index] ?? 0n;
+        const discount = discountPercent(amountCoin, pack.priceKrw);
+        const label = formatCoin(amountCoin);
         return (
           <Card.Root
             as="li"

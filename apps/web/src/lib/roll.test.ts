@@ -1,4 +1,4 @@
-import { MINUS_SIGN, formatP } from '@buddha/shared';
+import { MINUS_SIGN, formatCoin } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
 import { ROLL_DIGITS, type RollCell, rollCells } from './roll';
 
@@ -25,10 +25,10 @@ describe('rollCells', () => {
   });
 
   it('passes every non-digit through untouched', () => {
-    // The composed labels formatP and formatYesPrice produce must survive intact: the 예 word,
+    // The composed labels formatCoin and formatYesPrice produce must survive intact: the 예 word,
     // the space, the thousands comma, the percent sign and the U+2212 minus are not digits and
     // never roll, but they still have to be rendered.
-    const text = formatP(-1200n);
+    const text = formatCoin(-1200n);
     expect(text).toBe(`${MINUS_SIGN}1,200P`);
     const cells = rollCells(text);
     expect(cells.map((cell) => cell.char).join('')).toBe(text);

@@ -1,7 +1,7 @@
 'use client';
 
 import { Alert, Button, Card, HStack, Skeleton, Stack, Text } from '@chakra-ui/react';
-import { MINUS_SIGN, formatP, parsePAmount, type LedgerEntryType } from '@buddha/shared';
+import { MINUS_SIGN, formatCoin, parseCoinAmount, type LedgerEntryType } from '@buddha/shared';
 import { copy } from '@/copy';
 import { useLedger } from '@/hooks/use-wallet';
 import { type LedgerEntry } from '@/lib/api';
@@ -73,7 +73,7 @@ export function LedgerList() {
 }
 
 function LedgerRow({ entry }: { entry: LedgerEntry }) {
-  const amount = parsePAmount(entry.amountP);
+  const amount = parseCoinAmount(entry.amountCoin);
   const credit = amount >= 0n;
   return (
     <HStack justify="space-between" pt="3" _first={{ pt: 0 }} align="start">
@@ -97,10 +97,10 @@ function LedgerRow({ entry }: { entry: LedgerEntry }) {
           data-testid="ledger-amount"
         >
           {credit ? '+' : MINUS_SIGN}
-          {formatP(credit ? amount : -amount)}
+          {formatCoin(credit ? amount : -amount)}
         </Text>
         <Text fontSize="xs" color="fg.muted">
-          {copy.ledgerBalanceAfter} {formatP(parsePAmount(entry.balanceAfterP))}
+          {copy.ledgerBalanceAfter} {formatCoin(parseCoinAmount(entry.balanceAfterCoin))}
         </Text>
       </Stack>
     </HStack>

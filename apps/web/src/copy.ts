@@ -662,11 +662,11 @@ export const copy = {
   adminPaymentRefunded: '환불했습니다. 결제를 취소하고 P를 회수했습니다.',
   refundGatewayAnswer: '결제대행사 응답:',
   errRefundReason: '환불 사유를 1~500자로 입력해 주세요.',
-  errRefundPUsed: '이미 사용한 P가 있어 환불할 수 없습니다.',
+  errRefundCoinUsed: '이미 사용한 P가 있어 환불할 수 없습니다.',
   errRefundWindowClosed: '승인 후 7일이 지나 환불할 수 없습니다.',
   errRefundStatus: '환불할 수 있는 상태의 결제가 아닙니다. 목록에서 현재 상태를 확인해 주세요.',
   errRefundProvider: '이 결제는 결제대행사에서 취소할 수 없습니다.',
-  // 거절 뒤 회수했던 P를 되돌렸는지는 그때 결제가 어떤 상태였는지에 달려 있다(이미 「환불 처리 중」이
+  // 거절 뒤 회수했던 Coin을 되돌렸는지는 그때 결제가 어떤 상태였는지에 달려 있다(이미 「환불 처리 중」이
   // 아니었다면 되돌리지 않는다). 그래서 단정하지 않고 목록의 현재 상태를 보게 한다.
   errRefundGatewayRefused: '결제대행사가 취소를 거절했습니다. 목록에서 현재 상태를 확인해 주세요.',
   errRefundGatewayError:

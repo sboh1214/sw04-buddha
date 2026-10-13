@@ -12,7 +12,7 @@ import {
   Stack,
   Text,
 } from '@chakra-ui/react';
-import { ADJUST_MAX_ABS_P, formatP, parsePAmount } from '@buddha/shared';
+import { ADJUST_MAX_ABS_COIN, formatCoin, parseCoinAmount } from '@buddha/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
 import {
   keepPreviousData,
@@ -112,10 +112,10 @@ export function AdminUsers() {
 }
 
 const adjustSchema = z.object({
-  amountP: boundedInteger(
+  amountCoin: boundedInteger(
     /^-?\d+$/,
     copy.errAdjustRange,
-    (amount) => amount !== 0n && amount >= -ADJUST_MAX_ABS_P && amount <= ADJUST_MAX_ABS_P,
+    (amount) => amount !== 0n && amount >= -ADJUST_MAX_ABS_COIN && amount <= ADJUST_MAX_ABS_COIN,
     copy.errAdjustRange,
   ),
   memo: z.string().trim().min(1, copy.errAdjustMemo).max(200),
@@ -131,7 +131,7 @@ function UserCard({ user }: { user: AdminUser }) {
     formState: { errors, isSubmitting },
   } = useForm<AdjustValues>({
     resolver: zodResolver(adjustSchema),
-    defaultValues: { amountP: '', memo: '' },
+    defaultValues: { amountCoin: '', memo: '' },
   });
 
   const adjust = useMutation({
@@ -139,12 +139,12 @@ function UserCard({ user }: { user: AdminUser }) {
       unwrap(
         await api.POST('/api/v1/admin/users/{id}/balance-adjust', {
           params: { path: { id: user.id } },
-          body: { amountP: values.amountP, memo: values.memo },
+          body: { amountCoin: values.amountCoin, memo: values.memo },
         }),
       ).data,
     onSuccess: async () => {
       toaster.create({ type: 'success', title: copy.adminAdjustDone });
-      reset({ amountP: '', memo: '' });
+      reset({ amountCoin: '', memo: '' });
       // An admin may adjust their own balance, so the nav chip and the wallet ledger are
       // refreshed alongside the list they are looking at.
       await Promise.all([
@@ -184,7 +184,7 @@ function UserCard({ user }: { user: AdminUser }) {
               </Text>
             </Stack>
             <Text fontSize="lg" fontWeight="bold" data-testid="admin-user-balance">
-              {formatP(parsePAmount(user.balance.availableP))}
+              {formatCoin(parseCoinAmount(user.balance.availableCoin))}
             </Text>
           </HStack>
 
@@ -194,15 +194,15 @@ function UserCard({ user }: { user: AdminUser }) {
                 {copy.adminAdjust}
               </Text>
               <HStack gap="2" align="start" flexWrap="wrap">
-                <Field.Root invalid={!!errors.amountP} required maxW="40">
+                <Field.Root invalid={!!errors.amountCoin} required maxW="40">
                   <Field.Label>{copy.adminAdjustAmount}</Field.Label>
                   <Input
                     inputMode="numeric"
                     autoComplete="off"
                     data-testid="adjust-amount"
-                    {...register('amountP')}
+                    {...register('amountCoin')}
                   />
-                  <Field.ErrorText>{errors.amountP?.message}</Field.ErrorText>
+                  <Field.ErrorText>{errors.amountCoin?.message}</Field.ErrorText>
                 </Field.Root>
                 <Field.Root invalid={!!errors.memo} required flex="1" minW="48">
                   <Field.Label>{copy.adminAdjustMemo}</Field.Label>

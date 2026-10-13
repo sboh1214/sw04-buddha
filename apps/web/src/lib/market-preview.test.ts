@@ -25,7 +25,7 @@ const traded: MarketSummary = {
   imageUrl: null,
   status: 'open',
   lastPrice: 70,
-  volumeP: '1250000',
+  volumeCoin: '1250000',
   tradeCount: 42,
   traderCount: 11,
   closeAt: '2026-12-01T00:00:00.000Z',
@@ -42,7 +42,7 @@ describe('toPreviewMarket', () => {
     // 거래량 0 and no participants beside a public card showing 70%.
     const preview = toPreviewMarket(body, categories, traded);
     expect(preview.lastPrice).toBe(70);
-    expect(preview.volumeP).toBe('1250000');
+    expect(preview.volumeCoin).toBe('1250000');
     expect(preview.tradeCount).toBe(42);
     expect(preview.traderCount).toBe(11);
     expect(preview.openAt).toBe('2026-09-01T00:00:00.000Z');
@@ -62,7 +62,7 @@ describe('toPreviewMarket', () => {
     const preview = toPreviewMarket(body, categories, { ...traded, status: 'draft' });
     expect(preview.lastPrice).toBeNull();
     expect(preview.tradeCount).toBe(0);
-    expect(preview.volumeP).toBe('0');
+    expect(preview.volumeCoin).toBe('0');
     expect(preview.openAt).toBeNull();
   });
 

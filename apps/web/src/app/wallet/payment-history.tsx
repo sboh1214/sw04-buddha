@@ -1,7 +1,7 @@
 'use client';
 
 import { Alert, Badge, Button, Card, HStack, Skeleton, Stack, Text } from '@chakra-ui/react';
-import { formatKrw, formatP, parsePAmount } from '@buddha/shared';
+import { formatKrw, formatCoin, parseCoinAmount } from '@buddha/shared';
 import { copy } from '@/copy';
 import { usePayments } from '@/hooks/use-wallet';
 import { type Payment } from '@/lib/api';
@@ -10,7 +10,7 @@ import { paymentHistoryReason, paymentMethodLabel, paymentStatusView } from '@/l
 
 /**
  * 결제 내역 (ADR-0042): the account's own charges, newest first, 20 per page with 더 보기 —
- * the KRW side of the story the ledger tells in P. A refund shows here as the payment's
+ * the KRW side of the story the ledger tells in Coin. A refund shows here as the payment's
  * status and in the ledger as its own 결제 취소(환불) row. Not drawn while paid Coin is closed
  * (PAID_COIN_SALES_ENABLED, ADR-0049; app/wallet/page.tsx).
  */
@@ -81,7 +81,7 @@ function PaymentRow({ payment }: { payment: Payment }) {
     >
       <Stack gap="0.5" minW="0">
         <HStack gap="2" flexWrap="wrap">
-          <Text fontWeight="medium">{formatP(parsePAmount(payment.amountP))}</Text>
+          <Text fontWeight="medium">{formatCoin(parseCoinAmount(payment.amountCoin))}</Text>
           <Badge colorPalette={status.palette} variant="subtle" data-testid="payment-status">
             {status.label}
           </Badge>

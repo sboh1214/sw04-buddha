@@ -16,7 +16,7 @@ function compareBigint(a: bigint, b: bigint): number {
 }
 
 /**
- * The picture tier of each package, in the order given: its rank among the DISTINCT P amounts
+ * The picture tier of each package, in the order given: its rank among the DISTINCT Coin amounts
  * on sale, spread over the four tiers so the smallest package always gets the single coin and
  * the largest always the three stacks, whatever the admin put in the catalogue (ADR-0026 lets
  * them define any number of packages at any amounts). Relative rather than fixed thresholds on

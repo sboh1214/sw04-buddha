@@ -14,7 +14,7 @@ import {
   Text,
   VisuallyHidden,
 } from '@chakra-ui/react';
-import { formatP, parsePAmount } from '@buddha/shared';
+import { formatCoin, parseCoinAmount } from '@buddha/shared';
 import type { Route } from 'next';
 import NextLink from 'next/link';
 import { useState } from 'react';
@@ -303,7 +303,7 @@ export function MarketCard({
 
       <Flex justify="space-between" align="center" minH="28px">
         <Text as="span" textStyle="bodyXs" color="fg">
-          {copy.marketVolume} {formatP(parsePAmount(market.volumeP))}
+          {copy.marketVolume} {formatCoin(parseCoinAmount(market.volumeCoin))}
         </Text>
         {sparkline === undefined ? null : <MarketSparkline points={sparkline} />}
       </Flex>

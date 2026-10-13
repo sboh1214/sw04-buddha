@@ -1,11 +1,11 @@
 'use client';
 
 import {
-  PAYOUT_PER_CONTRACT_P,
+  PAYOUT_PER_CONTRACT_COIN,
   POSITION_STATUSES,
   type MarketStatus,
   type PositionStatus,
-  parsePAmount,
+  parseCoinAmount,
 } from '@buddha/shared';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { type Order, type Position, api, unwrap } from '@/lib/api';
@@ -28,8 +28,8 @@ import { statusRank } from '@/lib/market-live';
  * would render an error where it means to render "sign in".
  *
  * Every amount is a `bigint` parsed from the wire's decimal strings. Not for tidiness: the
- * totals sum many Postgres bigints, and ten positions at the MAX_P_AMOUNT bound already carry
- * past 2^53, where a double can no longer hold an odd number of P.
+ * totals sum many Postgres bigints, and ten positions at the MAX_COIN_AMOUNT bound already carry
+ * past 2^53, where a double can no longer hold an odd number of Coin.
  */
 
 /**
@@ -155,58 +155,58 @@ export function useOrders() {
 /** The fields the arithmetic below reads. A `Position` satisfies every one of them. */
 export type PositionMath = Pick<
   Position,
-  'outcome' | 'marketLastPrice' | 'qty' | 'costBasisP' | 'realizedPnlP'
+  'outcome' | 'marketLastPrice' | 'qty' | 'costBasisCoin' | 'realizedPnlCoin'
 >;
 
 /**
- * 현재가: what one contract of this position is worth right now, in P.
+ * 현재가: what one contract of this position is worth right now, in Coin.
  *
- * `marketLastPrice` is the market's last YES fill price (1..99 P per contract), so the NO side
- * is its complement against the `PAYOUT_PER_CONTRACT_P` a winning contract pays — the same
+ * `marketLastPrice` is the market's last YES fill price (1..99 Coin per contract), so the NO side
+ * is its complement against the `PAYOUT_PER_CONTRACT_COIN` a winning contract pays — the same
  * complement `formatNoPrice` shows, so the number under "아니오 37%" and the value of a NO
  * position can never disagree. Valuing a NO position at the YES price is the one mistake this
  * function exists to make impossible, and it is silent: it produces a plausible number that is
  * wrong by 100 − 2·price per contract.
  *
  * `undefined` for a market with no fill (체결 없음, N02 §5): there is no price to mark to, and
- * the row shows a dash the way `averageCostP` answers for nothing held. A holding comes from a
+ * the row shows a dash the way `averageCostCoin` answers for nothing held. A holding comes from a
  * fill, so this is the type's case more than a live one.
  */
-export function markPriceP(
+export function markPriceCoin(
   position: Pick<PositionMath, 'outcome' | 'marketLastPrice'>,
 ): bigint | undefined {
   if (position.marketLastPrice === null) return undefined;
-  const yesPriceP = BigInt(position.marketLastPrice);
-  return position.outcome === 'YES' ? yesPriceP : PAYOUT_PER_CONTRACT_P - yesPriceP;
+  const yesPriceCoin = BigInt(position.marketLastPrice);
+  return position.outcome === 'YES' ? yesPriceCoin : PAYOUT_PER_CONTRACT_COIN - yesPriceCoin;
 }
 
 /**
- * Mark-to-market value: `qty × markPriceP`. Zero for a row that has been fully sold — the API
+ * Mark-to-market value: `qty × markPriceCoin`. Zero for a row that has been fully sold — the API
  * keeps it at qty 0 so its realised PnL stays visible (`applySell`).
  *
  * Meaningful only while the market still trades. Settlement never writes a price, so a settled
  * market's `lastPrice` is the last price something TRADED at, not the 100/0 it resolved to:
- * the 정산 이력 section renders `realizedPnlP` and never this. That is also why
+ * the 정산 이력 section renders `realizedPnlCoin` and never this. That is also why
  * `portfolioTotals` is given one list at a time — `usePositions('open')` for 총 평가 금액 and
  * 총 평가손익, `usePositions('settled')` for 총 실현 손익.
  */
-export function positionValueP(
+export function positionValueCoin(
   position: Pick<PositionMath, 'outcome' | 'marketLastPrice' | 'qty'>,
 ): bigint | undefined {
-  const mark = markPriceP(position);
+  const mark = markPriceCoin(position);
   return mark === undefined ? undefined : BigInt(position.qty) * mark;
 }
 
 /**
  * 평가손익: what the holding is worth now minus what it cost. Negative is ordinary, and
- * `formatP` renders it with `MINUS_SIGN` (PLAN 11.1 principle 6) rather than an ASCII hyphen.
- * `undefined` with no price to mark to, like `positionValueP`.
+ * `formatCoin` renders it with `MINUS_SIGN` (PLAN 11.1 principle 6) rather than an ASCII hyphen.
+ * `undefined` with no price to mark to, like `positionValueCoin`.
  */
-export function unrealizedPnlP(
-  position: Pick<PositionMath, 'outcome' | 'marketLastPrice' | 'qty' | 'costBasisP'>,
+export function unrealizedPnlCoin(
+  position: Pick<PositionMath, 'outcome' | 'marketLastPrice' | 'qty' | 'costBasisCoin'>,
 ): bigint | undefined {
-  const value = positionValueP(position);
-  return value === undefined ? undefined : value - parsePAmount(position.costBasisP);
+  const value = positionValueCoin(position);
+  return value === undefined ? undefined : value - parseCoinAmount(position.costBasisCoin);
 }
 
 /**
@@ -214,49 +214,54 @@ export function unrealizedPnlP(
  * cost, so the average on screen and the cost the API releases never round apart. `undefined`
  * when nothing is held — that row shows a dash, not a division by zero.
  */
-export function averageCostP(
-  position: Pick<PositionMath, 'qty' | 'costBasisP'>,
+export function averageCostCoin(
+  position: Pick<PositionMath, 'qty' | 'costBasisCoin'>,
 ): bigint | undefined {
   if (position.qty === 0) return undefined;
   const held = BigInt(position.qty);
-  return (parsePAmount(position.costBasisP) + held / 2n) / held;
+  return (parseCoinAmount(position.costBasisCoin) + held / 2n) / held;
 }
 
 export interface PortfolioTotals {
-  /** Σ `positionValueP` — copy.portfolioValue. */
-  valueP: bigint;
-  /** Σ `costBasisP`, the figure the two PnL lines are read against. */
-  costBasisP: bigint;
-  /** `valueP − costBasisP` — copy.portfolioUnrealizedPnl. */
-  unrealizedPnlP: bigint;
-  /** Σ `realizedPnlP` — copy.portfolioRealizedPnl. */
-  realizedPnlP: bigint;
+  /** Σ `positionValueCoin` — copy.portfolioValue. */
+  valueCoin: bigint;
+  /** Σ `costBasisCoin`, the figure the two PnL lines are read against. */
+  costBasisCoin: bigint;
+  /** `valueCoin − costBasisCoin` — copy.portfolioUnrealizedPnl. */
+  unrealizedPnlCoin: bigint;
+  /** Σ `realizedPnlCoin` — copy.portfolioRealizedPnl. */
+  realizedPnlCoin: bigint;
 }
 
 /**
  * The summary figures, summed in bigint over one list.
  *
- * Deliberately independent of the balance: `availableP`/`lockedP` come from `useMe()` and
- * adding them here would double-count, because the P a position cost has already left the
+ * Deliberately independent of the balance: `availableCoin`/`lockedCoin` come from `useMe()` and
+ * adding them here would double-count, because the Coin a position cost has already left the
  * balance. `undefined` sums to zeros so the summary can render while the list is still
  * loading instead of branching at every call site.
  *
- * A row with no price to mark to (`markPriceP` is `undefined`) is left out of the value and
+ * A row with no price to mark to (`markPriceCoin` is `undefined`) is left out of the value and
  * of the cost the two PnL lines are read against: counting its cost alone would print a loss
  * nobody has. Its realised PnL still counts — that needs no price.
  */
 export function portfolioTotals(positions: readonly PositionMath[] = []): PortfolioTotals {
-  let valueP = 0n;
-  let costBasisP = 0n;
-  let realizedPnlP = 0n;
+  let valueCoin = 0n;
+  let costBasisCoin = 0n;
+  let realizedPnlCoin = 0n;
   for (const position of positions) {
-    realizedPnlP += parsePAmount(position.realizedPnlP);
-    const value = positionValueP(position);
+    realizedPnlCoin += parseCoinAmount(position.realizedPnlCoin);
+    const value = positionValueCoin(position);
     if (value === undefined) continue;
-    valueP += value;
-    costBasisP += parsePAmount(position.costBasisP);
+    valueCoin += value;
+    costBasisCoin += parseCoinAmount(position.costBasisCoin);
   }
-  return { valueP, costBasisP, unrealizedPnlP: valueP - costBasisP, realizedPnlP };
+  return {
+    valueCoin,
+    costBasisCoin,
+    unrealizedPnlCoin: valueCoin - costBasisCoin,
+    realizedPnlCoin,
+  };
 }
 
 /**
@@ -265,16 +270,16 @@ export function portfolioTotals(positions: readonly PositionMath[] = []): Portfo
  * Realised PnL is booked the moment contracts are SOLD, and `applySell` writes it onto the
  * position row while leaving the row where it is: a market that is still open keeps its row in
  * `usePositions('open')`. Reading the settled list alone therefore told an account that had
- * just taken a 100P profit that it had realised nothing at all — and it stayed 0P until the
+ * just taken a 100 Coin profit that it had realised nothing at all — and it stayed 0 Coin until the
  * market itself finished, which may never happen. A row MOVES between the two lists when the
  * market settles or is voided (`positions.settled`, `positionListStatusFor`), carrying its
- * accumulated `realizedPnlP` with it, so it is never in both and this cannot double count.
+ * accumulated `realizedPnlCoin` with it, so it is never in both and this cannot double count.
  *
  * "Never in both" is an invariant the SOCKET has to keep too, and it did not. A settlement
  * publishes `user:position` with `settled: true`, and `applyPositionEvent` used to write that
  * flag back into `['positions', 'open']` — the list the row had just LEFT — so a market-detail tab, which
  * mounts only the open list, kept the holding in 보유 포지션 while /portfolio fetched the same
- * row into 정산 이력, and this sum printed 500P for one 250P row. The write refreshed
+ * row into 정산 이력, and this sum printed 500 Coin for one 250 Coin row. The write refreshed
  * `dataUpdatedAt` as well, so the poisoned list sat inside `staleTime` and the next mount did not
  * correct it. The reducer now answers `refetch` when the flag MOVES (market-live.ts), which is
  * what makes the sentence above true rather than merely intended.
@@ -284,7 +289,7 @@ export function portfolioTotals(positions: readonly PositionMath[] = []): Portfo
  * it resolved to, and marking those rows to it would be fiction.
  */
 export function realizedPnlAcross(...totals: readonly PortfolioTotals[]): bigint {
-  return totals.reduce((sum, total) => sum + total.realizedPnlP, 0n);
+  return totals.reduce((sum, total) => sum + total.realizedPnlCoin, 0n);
 }
 
 /**
@@ -306,7 +311,7 @@ export function realizedPnlAcross(...totals: readonly PortfolioTotals[]): bigint
  * wrote the flag in place, this sentence was a promise nothing kept, and the refusal below was
  * resting on it. Taking it anyway would draw an open holding badged
  * 정산 완료 while 평가 금액 and 총 평가 금액 still value the row at the last traded price, which is
- * the fiction `positionValueP` and 정산 이력 are both documented never to print. It is the same
+ * the fiction `positionValueCoin` and 정산 이력 are both documented never to print. It is the same
  * rule `wroteAnOrder` (market-live.ts) states from the other side: a terminal transition is the
  * REST answer's business, not an event's.
  */

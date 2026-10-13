@@ -40,7 +40,7 @@ export interface LiveMarket {
   status: MarketStatus;
   /** The last fill's price, 1..99, or `null` before the first fill (N02 §5's 체결 없음). */
   lastPrice: number | null;
-  volumeP: string;
+  volumeCoin: string;
   tradeCount: number;
   traderCount: number;
   resolvedResult: Outcome | null;
@@ -67,7 +67,7 @@ export type MarketPages = InfiniteData<MarketPage, string | undefined>;
  */
 export type MarketTickPatch = Pick<
   MarketTickEvent,
-  'marketId' | 'lastPrice' | 'volumeP' | 'tradeCount' | 'traderCount'
+  'marketId' | 'lastPrice' | 'volumeCoin' | 'tradeCount' | 'traderCount'
 >;
 
 /**
@@ -121,7 +121,7 @@ export function applyTick<T extends LiveMarket>(
   const next = {
     ...held,
     lastPrice: event.lastPrice,
-    volumeP: event.volumeP,
+    volumeCoin: event.volumeCoin,
     tradeCount: event.tradeCount,
     traderCount: event.traderCount,
   };
@@ -244,7 +244,7 @@ export function joinMarket<T extends LiveMarket>(held: T | undefined, incoming: 
     next = {
       ...next,
       lastPrice: held.lastPrice,
-      volumeP: held.volumeP,
+      volumeCoin: held.volumeCoin,
       tradeCount: held.tradeCount,
       // In the ORDERED group, not the descriptive one: it moves with the same trade, so a
       // snapshot older than what is held must not drag it back with the price.
@@ -383,8 +383,8 @@ export function applyPositionEvent(
   positions[index] = {
     ...current,
     qty: event.qty,
-    costBasisP: event.costBasisP,
-    realizedPnlP: event.realizedPnlP,
+    costBasisCoin: event.costBasisCoin,
+    realizedPnlCoin: event.realizedPnlCoin,
     settled: event.settled,
     version: event.version,
     // The publisher's `ts` is the transaction's own instant, so it is the instant this row
@@ -398,7 +398,7 @@ export function applyPositionEvent(
  * Whether this event announces an order row that 주문 이력 does not hold yet.
  *
  * A fill writes one (the order and its fill commit together), and no `user:` event carries an
- * `Order`'s id, status, filledQty, amountP or priceAvgBp — so the list cannot be built from the
+ * `Order`'s id, status, filledQty, amountCoin or priceAvgBp — so the list cannot be built from the
  * event and has to be asked for. A settlement writes NO order row at all (it moves positions and
  * balances only), so a refetch there could answer nothing the list does not already hold.
  *
@@ -443,8 +443,8 @@ export function joinPositions(held: Position[] | undefined, incoming: Position[]
     return {
       ...row,
       qty: current.qty,
-      costBasisP: current.costBasisP,
-      realizedPnlP: current.realizedPnlP,
+      costBasisCoin: current.costBasisCoin,
+      realizedPnlCoin: current.realizedPnlCoin,
       settled: current.settled,
       version: current.version,
       updatedAt: current.updatedAt,
@@ -475,12 +475,12 @@ export function applyBalanceEvent(held: Me | undefined, event: UserBalanceEvent)
   if (held === undefined) return { kind: 'refetch' };
   return {
     kind: 'replace',
-    me: { ...held, balance: { availableP: event.availableP, lockedP: event.lockedP } },
+    me: { ...held, balance: { availableCoin: event.availableCoin, lockedCoin: event.lockedCoin } },
   };
 }
 
 /**
- * REST `Balance` is `{ availableP, lockedP }` with no `ledgerEntryId` (wallet.ts), so unlike
+ * REST `Balance` is `{ availableCoin, lockedCoin }` with no `ledgerEntryId` (wallet.ts), so unlike
  * tradeCount and version the key cannot be seeded from a snapshot — Q-M3-8(2), still open.
  * This therefore orders `user:balance` events AGAINST EACH OTHER only, per tab: a duplicate or
  * a late delivery is dropped, while a `GET /me` answer is a queryFn result and always wins the

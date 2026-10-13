@@ -38,11 +38,11 @@ describe('isStaleCatalogue', () => {
   });
 
   it('leaves the cards alone when the catalogue is not the problem', () => {
-    // A declined payment is a VALIDATION_ERROR too, but on `amountP` — refetching would be
+    // A declined payment is a VALIDATION_ERROR too, but on `amountCoin` — refetching would be
     // pointless, and a refetch that fails swaps the whole card list for the error alert.
     expect(
       isStaleCatalogue(
-        apiError(400, 'VALIDATION_ERROR', [{ path: ['amountP'], message: 'payment refused' }]),
+        apiError(400, 'VALIDATION_ERROR', [{ path: ['amountCoin'], message: 'payment refused' }]),
       ),
     ).toBe(false);
     expect(isStaleCatalogue(apiError(400, 'VALIDATION_ERROR'))).toBe(false);
@@ -151,7 +151,7 @@ describe('BALANCE_HISTORY_KEYS', () => {
 describe('paymentsRefetchInterval', () => {
   const row = (id: string, status: Payment['status']): Payment => ({
     id,
-    amountP: '10000',
+    amountCoin: '10000',
     priceKrw: 9900,
     packageId: null,
     provider: 'mock',

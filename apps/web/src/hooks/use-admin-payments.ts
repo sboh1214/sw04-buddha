@@ -74,7 +74,7 @@ function useRefundCache() {
 }
 
 /**
- * `POST /admin/payments/:id/refund` (ADR-0042 「관리자 환불」): take the P back, cancel the whole
+ * `POST /admin/payments/:id/refund` (ADR-0042 「관리자 환불」): take the Coin back, cancel the whole
  * KRW at the PG, or retry a `refunding` one. The toast and the dialog are the caller's, per
  * `mutate` call; the cache writes happen here, once (`useRefundCache`). A refusal after another
  * attempt refunded the payment answers 200 with the row `refunded`: a success like any other.

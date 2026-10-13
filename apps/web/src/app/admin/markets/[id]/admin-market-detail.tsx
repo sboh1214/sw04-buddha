@@ -20,7 +20,7 @@ import {
   Text,
   Textarea,
 } from '@chakra-ui/react';
-import { type MarketEventType, OUTCOMES, formatP, parsePAmount } from '@buddha/shared';
+import { type MarketEventType, OUTCOMES, formatCoin, parseCoinAmount } from '@buddha/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation } from '@tanstack/react-query';
 import NextLink from 'next/link';
@@ -694,13 +694,13 @@ function TradeStatsPanel({ market }: { market: AdminMarket }) {
         <DataList.Root orientation="horizontal" size="sm" data-testid="market-trade-stats">
           <Item label={copy.tradeStatsLastPrice}>{formatYesPrice(market.lastPrice)}</Item>
           <Item label={copy.tradeStatsNetCollected}>
-            {formatP(parsePAmount(market.netCollectedP))}
+            {formatCoin(parseCoinAmount(market.netCollectedCoin))}
           </Item>
           <Item label={copy.tradeStatsOpenInterestYes}>{String(market.openInterest.yes)}</Item>
           <Item label={copy.tradeStatsOpenInterestNo}>{String(market.openInterest.no)}</Item>
           <Item label={copy.marketTradeCount}>{String(market.tradeCount)}</Item>
           <Item label={copy.marketTraderCount}>{String(market.traderCount)}</Item>
-          <Item label={copy.marketVolume}>{formatP(parsePAmount(market.volumeP))}</Item>
+          <Item label={copy.marketVolume}>{formatCoin(parseCoinAmount(market.volumeCoin))}</Item>
         </DataList.Root>
       </Card.Body>
     </Card.Root>
@@ -826,7 +826,7 @@ function RecentFills({ market }: { market: AdminMarket }) {
                 <Text>
                   {copy.fillQty} {String(fill.qty)}
                 </Text>
-                <Text>{formatP(parsePAmount(fill.amountP))}</Text>
+                <Text>{formatCoin(parseCoinAmount(fill.amountCoin))}</Text>
                 <Text color="fg.muted">
                   {copy.fillAvgPrice} {formatBp(fill.priceAvgBp)}
                 </Text>

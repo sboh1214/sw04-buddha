@@ -14,7 +14,7 @@ function readings(lastPrice: number): [OutcomeReading, OutcomeReading] {
 
 describe('payoutMultiple', () => {
   it('is 100 over the price with two decimals and an x', () => {
-    // Kalshi's figure: what 1P on this side comes back as if it wins.
+    // Kalshi's figure: what 1 Coin on this side comes back as if it wins.
     expect(payoutMultiple(50)).toBe('2.00x');
     expect(payoutMultiple(63)).toBe('1.59x');
     expect(payoutMultiple(37)).toBe('2.70x');
@@ -22,7 +22,8 @@ describe('payoutMultiple', () => {
   });
 
   it('answers the two ends of the range the API allows', () => {
-    // 1P for a 100P contract is the largest figure the card can ever print; 99P the smallest.
+    // 1 Coin for a 100 Coin contract is the largest figure the card can ever print; 99 Coin the
+    // smallest.
     expect(payoutMultiple(PRICE_MIN)).toBe('100.00x');
     expect(payoutMultiple(PRICE_MAX)).toBe('1.01x');
   });

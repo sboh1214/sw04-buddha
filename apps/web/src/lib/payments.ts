@@ -156,7 +156,7 @@ export type PaymentsPoll = (
  * (`isPaymentInFlight`), the list is re-read every PAYMENT_POLL_INTERVAL_MS for at most
  * PAYMENT_POLL_LIMIT fetches — two minutes — so 환불 처리 중 turns into 환불됨 on screen without a
  * focus or a remount. The realtime `user:balance` restart cannot do it: only the refund's
- * claw-back moves P, and its finish publishes nothing.
+ * claw-back moves Coin, and its finish publishes nothing.
  *
  * The budget belongs to the rows it waits on, not to the query, and a failed fetch spends it
  * like an answered one (`endedFetches`): the rows it waits on are then the last ones the list
@@ -205,9 +205,9 @@ export type RefundAction = 'refund' | 'retry';
 
 /**
  * Which refund button a row offers (ADR-0042 「관리자 환불」), or none:
- * - `refund`: `succeeded`, still inside the window. Whether the user has spent the P is the
+ * - `refund`: `succeeded`, still inside the window. Whether the user has spent the Coin is the
  *   one condition the list cannot see (it has no balances); the API answers that one.
- * - `retry`: `refunding` — the P was clawed back and the card cancel is not confirmed: the PG's
+ * - `retry`: `refunding` — the Coin was clawed back and the card cancel is not confirmed: the PG's
  *   answer never came, or a retry it refused left it for a person to check. The window does not
  *   apply: the claw-back already happened inside it.
  * - Neither for a row with no `providerRef` (nothing at the PG to cancel; the API refuses it
@@ -269,11 +269,11 @@ export interface RefundErrorView {
 /**
  * The toast for a refused refund, by code and — where one code covers several cases — by the
  * detail the API names (payment-refund.service):
- * - INSUFFICIENT_BALANCE: the user has spent some of the P (owner decision 5: unused only).
+ * - INSUFFICIENT_BALANCE: the user has spent some of the Coin (owner decision 5: unused only).
  * - REFUND_NOT_ALLOWED: `window_closed`, `status` (already refunded, or never succeeded) or
  *   `provider` (nothing at the PG to cancel).
  * - PAYMENT_GATEWAY_REFUSED: the PG said no, and its answer (the `gateway` detail) is shown as
- *   it came. The P taken back is restored only by a first attempt that still held the payment
+ *   it came. The Coin taken back is restored only by a first attempt that still held the payment
  *   (환불 처리 중, not taken over by a retry); a refused retry leaves it 환불 처리 중 for a person to
  *   check. So the copy claims neither and points to the list. (A refusal after another attempt
  *   refunded the payment answers 200 `refunded`: the success it is.)
@@ -282,7 +282,7 @@ export interface RefundErrorView {
  * - NOT_FOUND: the route is closed (isUnavailable).
  */
 export function refundErrorView(error: unknown): RefundErrorView {
-  if (isApiError(error, 'INSUFFICIENT_BALANCE')) return { title: copy.errRefundPUsed };
+  if (isApiError(error, 'INSUFFICIENT_BALANCE')) return { title: copy.errRefundCoinUsed };
   if (isApiError(error, 'REFUND_NOT_ALLOWED')) {
     const reason = detailMessage(error);
     if (reason === 'window_closed') return { title: copy.errRefundWindowClosed };

@@ -1,7 +1,7 @@
 'use client';
 
 import { Alert, Skeleton, Stack, Table, Text } from '@chakra-ui/react';
-import { formatP, parsePAmount } from '@buddha/shared';
+import { formatCoin, parseCoinAmount } from '@buddha/shared';
 import { EmptyState } from '@/components/ui/empty-state';
 import { copy } from '@/copy';
 import { useLeaderboard } from '@/hooks/use-leaderboard';
@@ -11,8 +11,8 @@ import { listSection } from '@/lib/query-client';
  * PLAN M6's optional global ranking. A table, not cards: three short columns whose whole point
  * is that they line up, and a reader compares down a column rather than across a row.
  *
- * The amounts are formatted through `formatP` from the decimal STRING the API sent — never
- * `Number(...)`, which is the one thing PLAN 0.2 forbids about a P amount and which
+ * The amounts are formatted through `formatCoin` from the decimal STRING the API sent — never
+ * `Number(...)`, which is the one thing PLAN 0.2 forbids about a Coin amount and which
  * `use-portfolio.test.ts` already demonstrates losing precision.
  */
 export function Leaderboard() {
@@ -56,7 +56,7 @@ export function Leaderboard() {
                 <Table.Cell>{entry.rank}</Table.Cell>
                 <Table.Cell>{entry.nickname}</Table.Cell>
                 <Table.Cell textAlign="end" fontVariantNumeric="tabular-nums">
-                  {formatP(parsePAmount(entry.realizedPnlP))}
+                  {formatCoin(parseCoinAmount(entry.realizedPnlCoin))}
                 </Table.Cell>
               </Table.Row>
             ))}

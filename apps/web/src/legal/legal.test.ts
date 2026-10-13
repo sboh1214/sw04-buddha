@@ -219,7 +219,7 @@ describe('legal document contents (owner decisions 2026-09-28)', () => {
     expect(terms).toContain('실명과 휴대전화 번호');
     expect(terms).toContain('스마트로(주)');
     expect(terms).toContain(`${LEGAL_CASH_NOTICE} 결제 없이 받은 P도 같습니다.`);
-    expect(terms).toContain(`P의 유효기간: ${BUSINESS_INFO.pointExpiry}`);
+    expect(terms).toContain(`P의 유효기간: ${BUSINESS_INFO.coinExpiry}`);
     expect(terms).toContain('환불정책');
     expect(terms).toContain('회사가 환불을 처리하는 시점을 기준으로 판단');
   });

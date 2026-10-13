@@ -9,7 +9,7 @@ import { formatKst } from '@/lib/datetime';
  *
  * Never collapsed, and there is no prop to collapse it — that is the whole principle, and a
  * `Collapsible` here would be one screen refactor away from hiding the section a visitor is
- * asked to trust before spending P.
+ * asked to trust before spending Coin.
  *
  * No directive, so the section renders inside the server's HTML: AC 2 reads a rules snippet
  * out of view-source, before any hydration. The rules are plain text on a `pre-wrap` block —

@@ -33,7 +33,7 @@ const noContact: Me = {
   email: 'a@example.com',
   emailVerified: true,
   profile: { nickname: '테스터', role: 'user', createdAt: '2026-08-01T00:00:00.000Z' },
-  balance: { availableP: '0', lockedP: '0' },
+  balance: { availableCoin: '0', lockedCoin: '0' },
   linkedAccounts: [],
   contact: null,
 };

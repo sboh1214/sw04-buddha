@@ -51,7 +51,7 @@ const summary: MarketSummary = {
   imageUrl: null,
   status: 'open',
   lastPrice: 50,
-  volumeP: '120000',
+  volumeCoin: '120000',
   tradeCount: 10,
   traderCount: 4,
   closeAt: '2026-10-01T00:00:00.000Z',
@@ -79,7 +79,7 @@ const tick = (patch: Partial<MarketTickEvent> = {}): MarketTickEvent => ({
   type: 'market:tick',
   marketId: ID,
   lastPrice: 63,
-  volumeP: '130000',
+  volumeCoin: '130000',
   tradeCount: 11,
   traderCount: 5,
   ts: '2026-09-07T00:00:00.000Z',
@@ -247,7 +247,7 @@ describe('the live list', () => {
     // started), and a local re-sort can only order the keyset prefix this tab happens to hold,
     // which is neither the server's order nor a correct global one.
     const queryClient = getQueryClient();
-    const leader = { ...card, id: THIRD_ID, slug: 'leader', volumeP: '900000', lastPrice: 40 };
+    const leader = { ...card, id: THIRD_ID, slug: 'leader', volumeCoin: '900000', lastPrice: 40 };
     const key = marketsKey(DEFAULT_MARKET_FILTERS);
     queryClient.setQueryData<MarketPages>(key, pagesOf([leader, card]));
 
@@ -259,12 +259,12 @@ describe('the live list', () => {
     try {
       // The trailing card's volume overtakes the leader's.
       queryClient.setQueriesData<MarketPages>({ queryKey: MARKETS_KEY }, (held) =>
-        applyToPages(held, (row) => applyTick(row, tick({ volumeP: '999999' }))),
+        applyToPages(held, (row) => applyTick(row, tick({ volumeCoin: '999999' }))),
       );
 
       const items = observer.getCurrentResult().data?.pages[0]?.items;
       // The number moved…
-      expect(items?.[1]?.volumeP).toBe('999999');
+      expect(items?.[1]?.volumeCoin).toBe('999999');
       // …and the position did not.
       expect(items?.map((row) => row.id)).toEqual([THIRD_ID, ID]);
       // No request, and no invalidation waiting to become one.

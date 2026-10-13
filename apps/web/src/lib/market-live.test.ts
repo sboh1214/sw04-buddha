@@ -48,7 +48,7 @@ const summary: MarketSummary = {
   imageUrl: null,
   status: 'open',
   lastPrice: 50,
-  volumeP: '120000',
+  volumeCoin: '120000',
   tradeCount: 10,
   traderCount: 4,
   closeAt: '2026-10-01T00:00:00.000Z',
@@ -77,7 +77,7 @@ const tick = (patch: Partial<MarketTickEvent> = {}): MarketTickEvent => ({
   type: 'market:tick',
   marketId: ID,
   lastPrice: 63,
-  volumeP: '130000',
+  volumeCoin: '130000',
   tradeCount: 11,
   traderCount: 5,
   ts: '2026-09-07T00:00:00.000Z',
@@ -104,8 +104,8 @@ const position: Position = {
   resolvedResult: null,
   outcome: 'YES',
   qty: 10,
-  costBasisP: '5000',
-  realizedPnlP: '0',
+  costBasisCoin: '5000',
+  realizedPnlCoin: '0',
   settled: false,
   version: 3,
   updatedAt: '2026-09-06T00:00:00.000Z',
@@ -118,8 +118,8 @@ const positionEvent = (patch: Partial<UserPositionEvent> = {}): UserPositionEven
   marketId: ID,
   outcome: 'YES',
   qty: 14,
-  costBasisP: '7000',
-  realizedPnlP: '0',
+  costBasisCoin: '7000',
+  realizedPnlCoin: '0',
   settled: false,
   version: 4,
   ts: '2026-09-07T00:00:00.000Z',
@@ -128,8 +128,8 @@ const positionEvent = (patch: Partial<UserPositionEvent> = {}): UserPositionEven
 
 const balanceEvent = (patch: Partial<UserBalanceEvent> = {}): UserBalanceEvent => ({
   type: 'user:balance',
-  availableP: '90000',
-  lockedP: '0',
+  availableCoin: '90000',
+  lockedCoin: '0',
   ledgerEntryId: '9',
   ts: '2026-09-07T00:00:00.000Z',
   ...patch,
@@ -140,7 +140,7 @@ const me: Me = {
   email: 'a@example.com',
   emailVerified: true,
   profile: { nickname: '테스터', role: 'user', createdAt: '2026-08-01T00:00:00.000Z' },
-  balance: { availableP: '100000', lockedP: '0' },
+  balance: { availableCoin: '100000', lockedCoin: '0' },
   linkedAccounts: [],
   contact: null,
 };
@@ -159,7 +159,7 @@ describe('applyTick', () => {
     expect(applyTick(detail, tick())).toEqual({
       ...detail,
       lastPrice: 63,
-      volumeP: '130000',
+      volumeCoin: '130000',
       tradeCount: 11,
       // Moves with the same trade, so the patch carries it: a first-time buyer raises it, and
       // leaving it behind kept the header's 참여자 stale for as long as the market stayed busy.
@@ -357,7 +357,7 @@ describe('joinMarket', () => {
   const live: Market = {
     ...detail,
     lastPrice: 63,
-    volumeP: '130000',
+    volumeCoin: '130000',
     tradeCount: 11,
     traderCount: 7,
   };
@@ -366,7 +366,7 @@ describe('joinMarket', () => {
   it('keeps the live stats under an older snapshot while taking its descriptive fields', () => {
     const joined = joinMarket(live, stale);
     expect(joined.lastPrice).toBe(63);
-    expect(joined.volumeP).toBe('130000');
+    expect(joined.volumeCoin).toBe('130000');
     expect(joined.tradeCount).toBe(11);
     expect(joined.title).toBe(stale.title);
     // `traderCount` rides with the price, NOT with the descriptive fields: a trade moves it, so
@@ -439,7 +439,7 @@ describe('joinMarket', () => {
       .record({
         status: fc.constantFrom(...MARKET_STATUSES),
         lastPrice: fc.option(fc.integer({ min: PRICE_MIN, max: PRICE_MAX })),
-        volumeP: fc.integer({ min: 0, max: 1_000_000 }).map(String),
+        volumeCoin: fc.integer({ min: 0, max: 1_000_000 }).map(String),
         tradeCount: fc.integer({ min: 0, max: 1000 }),
         resolvedResult: fc.constantFrom<Outcome | null>('YES', 'NO', null),
         // Keyed on both sides: the status is then never consulted, so it is drawn freely above
@@ -519,7 +519,7 @@ describe('applyPositionEvent', () => {
         {
           ...position,
           qty: 14,
-          costBasisP: '7000',
+          costBasisCoin: '7000',
           version: 4,
           updatedAt: '2026-09-07T00:00:00.000Z',
         },
@@ -558,7 +558,7 @@ describe('applyPositionEvent', () => {
     // `realizedPnlAcross` states in writing — "a row MOVES between the two lists … so it is
     // never in both and this cannot double count" — and the double count was the visible half:
     // the finished row stayed in `['positions', 'open']` carrying its realised PnL while 정산
-    // 이력 fetched the same row, and 총 실현 손익 printed 500P for one 250P row. The write also
+    // 이력 fetched the same row, and 총 실현 손익 printed 500 Coin for one 250 Coin row. The write also
     // refreshed `dataUpdatedAt`, so the poisoned list sat inside `staleTime` and the next mount
     // did not correct it.
     expect(applyPositionEvent(held, positionEvent({ settled: true, version: 5 }))).toEqual({
@@ -621,7 +621,7 @@ describe('applyPositionEvent', () => {
 describe('wroteAnOrder', () => {
   it('asks for 주문 이력 on a trade and never on a settlement, which writes no order row', () => {
     // 주문 이력 has no reducer and no event of its own — an `Order` carries an id, status,
-    // filledQty, amountP and priceAvgBp that no `user:` event does — so a trade's row can only
+    // filledQty, amountCoin and priceAvgBp that no `user:` event does — so a trade's row can only
     // be asked for. A settlement moves positions and balances and inserts NO order, so the same
     // request could answer only what the list holds:
     // one private refetch per holder per settled market, for nothing.
@@ -636,13 +636,13 @@ describe('wroteAnOrder', () => {
 
 describe('joinPositions', () => {
   /** The row as a REST answer that left BEFORE the trade carries it: one version behind. */
-  const stale: Position = { ...position, qty: 10, costBasisP: '5000', version: 3 };
+  const stale: Position = { ...position, qty: 10, costBasisCoin: '5000', version: 3 };
   /** The same row after a `user:position` event applied the trade. */
   const live: Position = {
     ...position,
     qty: 14,
-    costBasisP: '7000',
-    realizedPnlP: '120',
+    costBasisCoin: '7000',
+    realizedPnlCoin: '120',
     version: 4,
     updatedAt: '2026-09-07T00:00:00.000Z',
   };
@@ -656,8 +656,8 @@ describe('joinPositions', () => {
       {
         ...renamed,
         qty: 14,
-        costBasisP: '7000',
-        realizedPnlP: '120',
+        costBasisCoin: '7000',
+        realizedPnlCoin: '120',
         settled: false,
         version: 4,
         updatedAt: '2026-09-07T00:00:00.000Z',
@@ -695,9 +695,11 @@ describe('joinPositions', () => {
 
 describe('applyBalanceEvent', () => {
   it('patches the balance and leaves the rest of the profile alone', () => {
-    expect(applyBalanceEvent(me, balanceEvent({ availableP: '80000', lockedP: '1200' }))).toEqual({
+    expect(
+      applyBalanceEvent(me, balanceEvent({ availableCoin: '80000', lockedCoin: '1200' })),
+    ).toEqual({
       kind: 'replace',
-      me: { ...me, balance: { availableP: '80000', lockedP: '1200' } },
+      me: { ...me, balance: { availableCoin: '80000', lockedCoin: '1200' } },
     });
   });
 

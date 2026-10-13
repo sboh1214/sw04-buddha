@@ -28,7 +28,7 @@ import { formatContracts, formatPricePerContract } from '@/lib/market-admin';
  *
  * Every row states its side and its outcome in words beside the colour (PLAN 11.2), and both
  * numbers come from the shared formatters: a contract count is never a bare integer and a price
- * is P per contract, not basis points.
+ * is Coin per contract, not basis points.
  */
 
 export interface RecentFillsProps {
@@ -62,7 +62,7 @@ export function RecentFills({
       </Card.Header>
       <Card.Body>
         {/* A refetch that FAILED keeps the rows it last answered, and on this list that silence
-            costs a row: `market:trade` carries no `amountP`, so it is deliberately never merged
+            costs a row: `market:trade` carries no `amountCoin`, so it is deliberately never merged
             into the cache and the refetch is the only path a new fill arrives by. The rows stay
             — the same reading `market-list.tsx` takes — with the same notice and a way back. */}
         {view === 'stale' && (

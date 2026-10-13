@@ -112,7 +112,7 @@ export function useChargePackages() {
  * or deleted (404 NOT_FOUND naming `packageId`).
  *
  * Deliberately not every failure. A payment the provider declines is also a VALIDATION_ERROR
- * but names `amountP`. The 404 for an account with no balance row names nothing: the
+ * but names `amountCoin`. The 404 for an account with no balance row names nothing: the
  * catalogue it would refetch still lists the package, so the next click would only repeat
  * the same failure. Refetching has a cost when it fails, too: the query flips to
  * `status: 'error'`, which swaps ChargeForm's cards for the generic error alert.
@@ -193,7 +193,7 @@ export function useCharge() {
         params: { header: { 'Idempotency-Key': keys.take(pack.id) } },
         body: {
           packageId: pack.id,
-          expectedAmountP: pack.amountP,
+          expectedAmountCoin: pack.amountCoin,
           expectedPriceKrw: pack.priceKrw,
           expectedAccountId: accountId,
         },

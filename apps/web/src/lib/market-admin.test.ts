@@ -311,7 +311,11 @@ describe('marketEventRows', () => {
     // #125 (N03 §6): a void refunds nothing, so a row saying 환불 합계 would describe a payment
     // that does not exist. A `voided` payload, if one ever turns up, falls back to raw JSON.
     expect(
-      marketEventRows('voided', { reason: '중복 시장', refundedAccounts: 3, refundedP: '12500' }),
+      marketEventRows('voided', {
+        reason: '중복 시장',
+        refundedAccounts: 3,
+        refundedCoin: '12500',
+      }),
     ).toBeUndefined();
   });
 
@@ -413,7 +417,7 @@ describe('marketEventRows', () => {
         result: 'YES',
         settledAccounts: 3,
         paidAccounts: 2,
-        paidP: '20000',
+        paidCoin: '20000',
         positions: 4,
       }),
     ).toEqual([
@@ -441,7 +445,7 @@ describe('marketEventRows', () => {
       marketEventRows('result_changed', { after: 'NO', disputeUntil: closeAt }),
     ).toBeUndefined();
     expect(marketEventRows('finalized', { result: 'MAYBE' })).toBeUndefined();
-    expect(marketEventRows('finalized', { result: 'YES', paidP: 'abc' })).toBeUndefined();
+    expect(marketEventRows('finalized', { result: 'YES', paidCoin: 'abc' })).toBeUndefined();
     expect(marketEventRows('finalized', null)).toBeUndefined();
   });
 

@@ -3,7 +3,7 @@ import * as z from 'zod';
 
 /**
  * Building blocks for the admin forms, whose amounts are integer strings that get converted
- * with `BigInt()` (P is a bigint end to end — see `parsePAmount` in @buddha/shared).
+ * with `BigInt()` (Coin is a bigint end to end — see `parseCoinAmount` in @buddha/shared).
  *
  * The conversion has to be gated. zod 4 keeps running a schema's later checks after an
  * earlier one has already failed, because it wants to report every issue at once, so a plain
