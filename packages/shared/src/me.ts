@@ -6,9 +6,9 @@ import { roleSchema } from './enums.js';
 
 /**
  * Nickname charset (PLAN 17 Q4 default + `_`): Hangul syllables, ASCII letters, digits and
- * underscore. The underscore is required because the auto nickname is `예측가_XXXX`
- * (PLAN 10.4). Recorded as QUESTIONS A-M1 assumption. Uniqueness is case-sensitive (Postgres
- * UNIQUE on profiles.nickname).
+ * underscore. The underscore is required because the auto nickname is `user_XXXX` (PLAN
+ * 10.4; prefix from ADR-0052). Recorded as QUESTIONS A-M1 assumption. Uniqueness is
+ * case-sensitive (Postgres UNIQUE on profiles.nickname).
  */
 export const NICKNAME_PATTERN = /^[A-Za-z0-9가-힣_]+$/;
 

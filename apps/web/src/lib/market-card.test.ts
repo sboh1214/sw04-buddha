@@ -48,7 +48,7 @@ describe('noPrice', () => {
 });
 
 describe('outcomeRows', () => {
-  it('orders 예 before 아니오 and colours them first/second', () => {
+  it('orders YES before NO and colours them first/second', () => {
     const [yes, no] = outcomeRows(63);
     expect(yes.key).toBe('yes');
     expect(no.key).toBe('no');
@@ -58,7 +58,7 @@ describe('outcomeRows', () => {
     expect(no.accent).toBe('row.second');
   });
 
-  it('shows lastPrice on the 예 row and its complement on the 아니오 row', () => {
+  it('shows lastPrice on the YES row and its complement on the NO row', () => {
     const [yes, no] = readings(63);
     expect(yes.percent).toBe(63);
     expect(no.percent).toBe(37);
@@ -67,7 +67,7 @@ describe('outcomeRows', () => {
   });
 
   it('names each row by the words the badge used to show', () => {
-    // "예 63%" / "아니오 37%": the reading in words, never the colour alone (PLAN 11.2).
+    // "YES 63%" / "NO 37%": the reading in words, never the colour alone (PLAN 11.2).
     const [yes, no] = readings(63);
     expect(yes.accessibleName).toBe(formatYesPrice(63));
     expect(no.accessibleName).toBe(formatNoPrice(63));
@@ -102,7 +102,7 @@ describe('outcomeRows', () => {
   });
 
   it('keeps both rows before the first fill, with no reading at all (N02 §5)', () => {
-    // Owner decision #125 (ADR-0048): the 예 and 아니오 rows stay, labelled and coloured as ever,
+    // Owner decision #125 (ADR-0048): the YES and NO rows stay, labelled and coloured as ever,
     // and nothing stands in for the price — no percent, no multiple, no 50% opening setting.
     const [yes, no] = outcomeRows(null);
     expect([yes.key, no.key]).toEqual(['yes', 'no']);

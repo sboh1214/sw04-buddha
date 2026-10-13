@@ -66,7 +66,7 @@ export async function createUser(db: Db, input: CreateUserInput = {}) {
       .returning();
     const [profile] = await tx
       .update(profiles)
-      .set({ nickname: input.nickname ?? `예측가_${t}`, role: input.role ?? 'user' })
+      .set({ nickname: input.nickname ?? `user_${t}`, role: input.role ?? 'user' })
       .where(eq(profiles.userId, id))
       .returning();
     let [balance] = await tx.select().from(balances).where(eq(balances.userId, id));
@@ -178,8 +178,7 @@ export async function createMarket(db: Db, input: CreateMarketInput = {}) {
       slug: input.slug ?? `market-${t}`,
       title: input.title ?? `테스트 시장 ${t}`,
       description: input.description ?? null,
-      rules:
-        input.rules ?? '테스트용 정산 기준. 기한까지 사건이 일어나지 않으면 아니오로 정산한다.',
+      rules: input.rules ?? '테스트용 규칙. 기한까지 사건이 일어나지 않으면 NO로 판정한다.',
       resolutionSource: input.resolutionSource ?? 'https://example.com/source',
       categoryId,
       status,

@@ -4,7 +4,7 @@ import { formatNoPrice, formatYesPrice } from './market-admin';
 
 /**
  * The arithmetic behind the card's two outcome rows (ADR-0041's Kalshi tile, PLAN 11.1-1): the
- * percentage each row shows, the "맞히면 투입 대비 N.NNx" figure beside it, and the words a screen
+ * percentage each row shows, the "정답 시 투입 대비 N.NNx" figure beside it, and the words a screen
  * reader hears for it. Pure functions of `lastPrice`, so a node test pins the numbers and the
  * component only lays them out — the same split `lib/sparkline.ts` makes for the trace. A market
  * with no fill has no `lastPrice`, so its two rows keep their labels and carry no reading: the
@@ -17,7 +17,7 @@ import { formatNoPrice, formatYesPrice } from './market-admin';
  * a quote: what a contract actually costs is what the order book offers, never this.
  */
 
-/** One of the tile's two rows: 예 first, 아니오 second, as `outcomeRows` orders them. */
+/** One of the tile's two rows: YES first, NO second, as `outcomeRows` orders them. */
 export interface OutcomeRow {
   key: 'yes' | 'no';
   /** The visible label, `copy.yes` / `copy.no`: the words that carry the meaning (PLAN 11.2). */
@@ -34,12 +34,12 @@ export interface OutcomeRow {
 
 /** A row's numbers, all three from the same `lastPrice`. */
 export interface OutcomeReading {
-  /** The whole-percent reading the pill shows: `lastPrice` for 예, its complement for 아니오. */
+  /** The whole-percent reading the pill shows: `lastPrice` for YES, its complement for NO. */
   percent: number;
   /** `payoutMultiple(percent)` — `1.59x`. */
   multiple: string;
   /**
-   * `formatYesPrice` / `formatNoPrice` — "예 63%" / "아니오 37%": the bar's `aria-label`, so the
+   * `formatYesPrice` / `formatNoPrice` — "YES 63%" / "NO 37%": the bar's `aria-label`, so the
    * row is read by its reading and not by the bare "63%" the pill paints.
    */
   accessibleName: string;
@@ -65,15 +65,15 @@ export function payoutMultiple(price: number): string {
 }
 
 /**
- * The 아니오 side of a reading, the complement of the same `lastPrice`, for the reason
- * `formatNoPrice` gives: 예 and 아니오 on one card always add up to 100.
+ * The NO side of a reading, the complement of the same `lastPrice`, for the reason
+ * `formatNoPrice` gives: YES and NO on one card always add up to 100.
  */
 export function noPrice(lastPrice: number): number {
   return 100 - lastPrice;
 }
 
 /**
- * The two rows in the order the tile draws them: 예 (green, first) then 아니오 (blue, second).
+ * The two rows in the order the tile draws them: YES (green, first) then NO (blue, second).
  * `null` — no fill yet — gives the same two rows with no reading, never a made-up one.
  */
 export function outcomeRows(lastPrice: number | null): [OutcomeRow, OutcomeRow] {

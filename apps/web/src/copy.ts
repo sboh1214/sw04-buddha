@@ -1,14 +1,15 @@
-/** User-facing copy (Korean). Keep every UI string here; see PLAN.md Appendix A. */
+/**
+ * User-facing copy (Korean). Keep every UI string here. Terms follow docs/TERMS.md (#14,
+ * ADR-0052): trading is 거래·매수·매도, the price is 시장가격, deciding a result is 판정 and paying
+ * Coin out is 정산, and 예측 only names the genre (예측시장).
+ */
 export const copy = {
   appName: 'buddha',
-  appDescription: '예/아니오로 미래를 예측하는 가상 Coin 예측 시장',
-  predict: '예측하기',
-  yes: '예',
-  no: '아니오',
-  probability: '확률',
-  expectedProfit: '예상 수익',
-  settlementRules: '정산 기준',
-  settled: '정산 완료',
+  appDescription: '가상 Coin으로 YES/NO 계약을 매수·매도하는 예측시장',
+  tradeCta: '거래하기',
+  // 계약의 이름(N02 §1·§4, 오너 결정 #14): 의견이나 투표의 선택이 아니라 거래할 계약이다.
+  yes: 'YES',
+  no: 'NO',
   lightMode: '라이트 모드',
   darkMode: '다크 모드',
   comingSoon: '준비 중입니다.',
@@ -57,7 +58,7 @@ export const copy = {
 
   // --- login ---
   loginTitle: '로그인',
-  loginSubtitle: '예측을 시작하려면 로그인하세요.',
+  loginSubtitle: '거래를 시작하려면 로그인하세요.',
   loginWithEmail: '이메일로 로그인',
   loginFailed: '이메일 또는 비밀번호가 올바르지 않습니다.',
   emailNotVerified:
@@ -199,8 +200,8 @@ export const copy = {
   ledgerEmpty: '아직 내역이 없습니다.',
   ledgerBalanceAfter: '거래 후 잔고',
   ledgerTypeDeposit: '충전',
-  ledgerTypeTradeBuy: '예측 매수',
-  ledgerTypeTradeSell: '예측 매도',
+  ledgerTypeTradeBuy: '매수',
+  ledgerTypeTradeSell: '매도',
   ledgerTypeFee: '수수료',
   ledgerTypeSettlement: '정산 지급',
   ledgerTypeAdminAdjust: '관리자 조정',
@@ -275,7 +276,8 @@ export const copy = {
   adminBackToMarkets: '시장 목록으로',
   adminMarketTitle: '질문',
   adminMarketDescription: '설명',
-  adminMarketRules: '정산 기준',
+  // 시장 규칙 영역의 이름(N02 §4, N03 §8, 오너 결정 #14). 출처는 adminMarketSource다.
+  adminMarketRules: '규칙',
   adminMarketRulesHint: '비워 두면 초안으로만 저장됩니다. 시장을 열려면 채워야 합니다.',
   adminMarketSource: '출처',
   adminMarketCategory: '카테고리',
@@ -291,19 +293,19 @@ export const copy = {
   adminMarketEditLocked: '이 상태에서는 수정할 수 없습니다.',
   adminMarketEditOpenTitle: '열린 시장을 수정합니다',
   adminMarketEditOpenBody:
-    '이미 예측이 진행 중인 시장입니다. 정산 기준이나 마감 시각을 바꾸면 참여자에게 영향을 줍니다. 계속할까요?',
+    '이미 거래가 진행 중인 시장입니다. 규칙이나 마감 시각을 바꾸면 참여자에게 영향을 줍니다. 계속할까요?',
   adminMarketOpen: '열기',
   adminMarketOpened: '시장을 열었습니다.',
   adminMarketClose: '마감',
   adminMarketCloseTitle: '시장을 마감합니다',
-  adminMarketCloseBody: '마감하면 더 이상 예측할 수 없습니다. 계속할까요?',
+  adminMarketCloseBody: '마감하면 더 이상 거래할 수 없습니다. 계속할까요?',
   adminMarketClosed: '시장을 마감했습니다.',
   // 관리자 상세의 거래 현황: 체결·포지션에서 나온 값만 보인다(직접 AMM 상태는 #125에서 지웠다).
   adminMarketTradeStats: '거래 현황',
   tradeStatsLastPrice: '현재가',
   tradeStatsNetCollected: '순 수취 코인',
-  tradeStatsOpenInterestYes: '미결제 예',
-  tradeStatsOpenInterestNo: '미결제 아니오',
+  tradeStatsOpenInterestYes: '미결제 YES',
+  tradeStatsOpenInterestNo: '미결제 NO',
   marketTradeCount: '거래 수',
   marketTraderCount: '참여자 수',
   marketVolume: '거래량',
@@ -326,7 +328,7 @@ export const copy = {
   eventResolved: '판정',
   eventFinalized: '정산 완료',
   eventVoided: '무효',
-  eventRulesEdited: '정산 기준 수정',
+  eventRulesEdited: '규칙 수정',
   eventSystem: '시스템',
   eventRulesBefore: '이전',
   eventRulesAfter: '이후',
@@ -347,8 +349,8 @@ export const copy = {
   errMarketSlug: '슬러그는 영문 소문자·숫자·한글·하이픈 3~80자로 입력하거나 비워 두세요.',
   errMarketSlugTaken: '이미 사용 중인 슬러그입니다.',
   errMarketInvalid: '입력값을 확인해 주세요.',
-  errMarketRulesRequired: '정산 기준을 채워야 시장을 열 수 있습니다.',
-  errMarketRulesOpen: '열린 시장의 정산 기준은 비울 수 없습니다.',
+  errMarketRulesRequired: '규칙을 채워야 시장을 열 수 있습니다.',
+  errMarketRulesOpen: '열린 시장의 규칙은 비울 수 없습니다.',
   errMarketNotOpen: '진행 중인 시장이 아닙니다. 화면을 새로 고쳐 주세요.',
   errMarketStatus: '지금 상태에서는 할 수 없는 작업입니다. 화면을 새로 고쳐 주세요.',
 
@@ -365,8 +367,8 @@ export const copy = {
 
   // --- markets (M4) ---
   // 홈 (PLAN 11.3, ADR-0041 Kalshi 형): 헤더 2단의 상위 카테고리 · 왼쪽 세부 분류 · 정렬 · 검색.
-  // 카테고리 목록은 API가 주고 '전체'만 붙인다.
-  homeTitle: '예측 시장',
+  // 카테고리 목록은 API가 주고 '전체'만 붙인다. 장르 표기는 붙여 쓴다(N01 §1, 오너 결정 #14).
+  homeTitle: '예측시장',
   marketsAll: '전체',
   // 세부 분류 사이드바의 첫 줄 — 상위 카테고리 하나의 전체 시장(Kalshi의 "All markets").
   marketsAllInCategory: '전체 시장',
@@ -379,14 +381,13 @@ export const copy = {
   marketStatusFilter: '상태',
   searchLabel: '시장 검색',
   // Kalshi의 "Trade on anything". 라벨은 searchLabel이 따로 지므로 자리 표시자는 초대장이어도 된다.
-  searchPlaceholder: '무엇이든 예측해 보세요',
+  searchPlaceholder: '무엇이든 거래해 보세요',
   searchSubmit: '검색',
   marketsEmpty: '아직 열린 시장이 없습니다.',
   marketsSearchEmpty: '검색 결과가 없습니다.',
-  // 카드의 두 줄(예/아니오) 오른쪽 배수 "2.14x" 앞에 스크린리더에만 읽히는 설명. '배당'은 금지어(부록 A).
-  payoutMultiple: '맞히면 투입 대비',
-  // 카드 오른쪽 아래 24시간 추이 — 시각적으로는 선 하나, 이름은 여기서 붙인다.
-  marketSparkline: '24시간 확률 추이',
+  // 카드의 두 줄(YES/NO) 오른쪽 배수 "2.14x" 앞에 스크린리더에만 읽히는 설명. '배당'은 금지어(D21),
+  // '맞히면'이 아니라 기획의 '정답 시'(N02 §6, 오너 결정 #14). 배수 자체는 #61이 지운다.
+  payoutMultiple: '정답 시 투입 대비',
 
   // 카드와 상세 헤더의 짧은 라벨. 숫자·시각은 언제나 호출 쪽에서 붙인다.
   marketCloseAt: '마감',
@@ -414,20 +415,21 @@ export const copy = {
 
   // 상태별 안내 (PLAN 11.3). 색과 배지는 MARKET_STATUS_LABEL/PALETTE가 맡고, 이 문구는
   // 그 아래에서 "지금 무엇을 할 수 있는지"를 말한다.
-  marketClosedNotice: '마감된 시장입니다. 더 이상 예측할 수 없습니다.',
+  marketClosedNotice: '마감된 시장입니다. 더 이상 거래할 수 없습니다.',
   marketResolvedNotice: '결과가 판정되었습니다. 정산을 진행하고 있습니다.',
   marketSettledNotice: '정산이 끝난 시장입니다.',
   // 원금 환불을 약속하지 않는다(N03 §6). 무효 지급 방식은 #126이 정한다.
   marketVoidedNotice: '무효 처리된 시장입니다.',
 
-  // 정산 기준 섹션 (PLAN 11.1의 Kalshi 원칙: 상세에서 접지 않는다)
-  rulesSectionTitle: '정산 기준',
+  // 규칙 섹션 (PLAN 11.1의 Kalshi 원칙: 상세에서 접지 않는다). 이름은 기획의 '규칙'·'출처'
+  // (N02 §4, N03 §8, 오너 결정 #14).
+  rulesSectionTitle: '규칙',
   rulesSource: '출처',
   rulesCloseAt: '마감',
   rulesNone: '따로 지정된 출처가 없습니다.',
 
-  // 확률 추이 차트
-  chartLabel: '확률 추이',
+  // 시장가격 추이 차트. 값의 이름은 '확률'이 아니라 시장가격이다(N02 §5). 표기 단위 %는 #60.
+  chartLabel: '시장가격 추이',
   chartRangeLabel: '기간 선택',
   chartRangeDay: '1일',
   chartRangeWeek: '1주',
@@ -439,10 +441,10 @@ export const copy = {
   chartSummaryHigh: '최고',
   chartSummaryLow: '최저',
   chartSummaryCurrent: '현재',
-  chartTableCaption: '시각별 확률',
+  chartTableCaption: '시각별 시장가격',
   chartTime: '시각',
-  chartValue: '확률',
-  probabilityChange: '확률 변화',
+  chartValue: '시장가격',
+  probabilityChange: '시장가격 변화',
 
   // 포지션 한 줄 (상세의 내 포지션과 포트폴리오 목록이 같이 쓴다)
   positionQty: '보유 수량',
@@ -494,9 +496,9 @@ export const copy = {
   // 헤더가 가리키는 자리는 있어야 하므로 화면은 있고, 기능은 아직 없다.
   communityTitle: '커뮤니티',
   communityComingSoon:
-    '커뮤니티는 준비 중입니다. 예측을 두고 이야기 나눌 자리가 곧 열립니다. 그때까지는 시장과 랭킹을 둘러봐 주세요.',
+    '커뮤니티는 준비 중입니다. 시장을 두고 이야기 나눌 자리가 곧 열립니다. 그때까지는 시장과 랭킹을 둘러봐 주세요.',
 
-  // 관리자 시장 폼의 미리보기 (Q-M3-6): 실제 카드·정산 기준 컴포넌트를 그대로 그린다.
+  // 관리자 시장 폼의 미리보기 (Q-M3-6): 실제 카드·규칙 컴포넌트를 그대로 그린다.
   adminMarketPreview: '미리보기',
   adminMarketPreviewCard: '카드 미리보기',
   adminMarketPreviewDetail: '상세 미리보기',
@@ -512,8 +514,8 @@ export const copy = {
 
   // --- 판정 · 정산 (PLAN 5.5 · 11.3 · 12, ADR-0046) ---
   // 관리자 판정 대화상자. 판정은 즉시 확정되고 바로 정산이 시작된다(이의 단계 없음).
-  // 확인 버튼 라벨 '정산' → '판정' 변경은 #14 소관이다.
-  adminMarketResolve: '정산',
+  // 결과를 정하는 일은 '판정', Coin 지급은 '정산'이다(N03 §5·§7, #14).
+  adminMarketResolve: '판정',
   adminMarketResolveTitle: '결과를 판정합니다',
   adminMarketResolveBody:
     '선택한 결과로 판정합니다. 판정은 즉시 확정되고 바로 정산이 시작됩니다. 판정한 뒤에는 결과를 바꾸거나 무효로 할 수 없습니다.',
@@ -536,9 +538,10 @@ export const copy = {
   settlementStepStatusPending: '대기',
   settlementStepStatusDone: '완료',
   settlementStepStatusFailed: '실패',
-  // 정산 완료 안내: 지급은 이미 잔고에 반영됐고 내 손익은 아래 내 포지션이 말한다.
+  // 정산 완료 안내: 지급은 이미 잔고에 반영됐고 내 손익은 아래 내 포지션이 말한다. '맞힌'이 아니라
+  // 기획의 '정답'(N02 §6, 오너 결정 #14).
   marketSettledPayout:
-    '맞힌 계약은 100 Coin씩 지급되었고, 내 손익은 아래 내 포지션에서 볼 수 있습니다.',
+    '정답인 계약은 100 Coin씩 지급되었고, 내 손익은 아래 내 포지션에서 볼 수 있습니다.',
   // 관리자 이벤트 로그의 정산 행: 정산 요약(worker market-finalize).
   eventSettledAccounts: '정산 계정 수',
   eventPaidAccounts: '지급 계정 수',

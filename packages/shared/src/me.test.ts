@@ -3,7 +3,7 @@ import { meSchema, nicknameSchema, updateMeBodySchema } from './me.js';
 
 describe('nicknameSchema', () => {
   it('accepts Hangul, letters, digits and underscore within 2..20 chars', () => {
-    for (const ok of ['예측가_A7K2', '홍길동', 'user01', 'ab', '가'.repeat(20)]) {
+    for (const ok of ['user_A7K2', '홍길동', 'user01', 'ab', '가'.repeat(20)]) {
       expect(nicknameSchema.safeParse(ok).success).toBe(true);
     }
   });
@@ -20,7 +20,7 @@ describe('meSchema', () => {
     id: 'u1',
     email: 'user@example.com',
     emailVerified: false,
-    profile: { nickname: '예측가_Q7Z9', role: 'user', createdAt: '2026-09-03T00:00:00.000Z' },
+    profile: { nickname: 'user_Q7Z9', role: 'user', createdAt: '2026-09-03T00:00:00.000Z' },
     balance: { availableCoin: '0', lockedCoin: '0' },
     linkedAccounts: [
       {

@@ -20,7 +20,7 @@ import { type Market } from '@/lib/api';
  * must be in view-source. It renders INSIDE the page's `HydrationBoundary`, which is not a
  * detail: the boundary hydrates a not-yet-present query synchronously during render, so the
  * server pass reads the seeded row and writes the question into the HTML. Placed OUTSIDE it,
- * this component would render before the seed existed and — measured — take 확률, the status
+ * this component would render before the seed existed and — measured — take 시장가격, the status
  * badge and the chart path out of the first paint with it.
  *
  * `generateMetadata` is a residue this cannot reach: the document `<title>` and the description

@@ -226,7 +226,7 @@ export function settlementStepViews(
 }
 
 /**
- * PLAN 11.2: never colour alone — "예 63%". `null` is a market with no fill yet, which reads
+ * PLAN 11.2: never colour alone — "YES 63%". `null` is a market with no fill yet, which reads
  * 체결 없음 rather than any number (N02 §5): no initial setting is shown as a price.
  */
 export function formatYesPrice(lastPrice: number | null): string {
@@ -234,8 +234,8 @@ export function formatYesPrice(lastPrice: number | null): string {
 }
 
 /**
- * The other side of the same reading — "아니오 37%" for a 63% market. The complement is taken
- * from the same `lastPrice` (the whole percent the API sends), so 예 and 아니오 on the same card
+ * The other side of the same reading — "NO 37%" for a 63% market. The complement is taken
+ * from the same `lastPrice` (the whole percent the API sends), so YES and NO on the same card
  * always add up to 100.
  */
 export function formatNoPrice(lastPrice: number): string {
@@ -362,7 +362,7 @@ const RESULT_CHANGED_PAYLOAD = z.object({
   ...LEGACY_RESOLVE_DETAIL,
 });
 // The counts and the total are what the worker writes today; optional so an older row (or a
-// leaner writer) still reads as "정산 완료 · 결과 예" rather than falling back to JSON.
+// leaner writer) still reads as "정산 완료 · 결과 YES" rather than falling back to JSON.
 const FINALIZED_PAYLOAD = z.object({
   result: outcomeSchema,
   settledAccounts: z.number().int().nonnegative().optional(),
@@ -370,7 +370,7 @@ const FINALIZED_PAYLOAD = z.object({
   paidCoin: coinAmountSchema.optional(),
 });
 
-/** "예" / "아니오" for a result row: never the wire's YES/NO on an admin screen. */
+/** `copy.yes` / `copy.no` for a result row: the screen's label, never the raw wire value. */
 function outcomeLabel(outcome: 'YES' | 'NO'): string {
   return outcome === 'YES' ? copy.yes : copy.no;
 }

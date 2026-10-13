@@ -258,7 +258,7 @@ describe('formats', () => {
     expect(formatQuantity('abc')).toBe('abc');
   });
 
-  it('reads the 아니오 side as the complement of the same price', () => {
+  it('reads the NO side as the complement of the same price', () => {
     // The two labels on one card must add up to 100, so both come from lastPrice.
     expect(formatNoPrice(63)).toBe(`${copy.no} 37%`);
     expect(formatNoPrice(1)).toBe(`${copy.no} 99%`);

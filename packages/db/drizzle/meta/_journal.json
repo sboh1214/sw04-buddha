@@ -134,6 +134,13 @@
       "when": 1791869370569,
       "tag": "0018_coin_identifiers",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1791884192427,
+      "tag": "0019_auto_nickname_prefix",
+      "breakpoints": true
     }
   ]
 }

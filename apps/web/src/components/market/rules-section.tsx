@@ -4,7 +4,7 @@ import { copy } from '@/copy';
 import { formatKst } from '@/lib/datetime';
 
 /**
- * 정산 기준 (PLAN 11.4 RulesSection, PLAN 11.1's Kalshi principle): what counts as 예, where
+ * 규칙 (PLAN 11.4 RulesSection, PLAN 11.1's Kalshi principle): what counts as YES, where
  * the answer comes from, and when it is decided.
  *
  * Never collapsed, and there is no prop to collapse it — that is the whole principle, and a
@@ -24,7 +24,7 @@ export interface RulesSectionProps {
   /** `Market` satisfies this; so does the synthetic row the admin preview builds. */
   market: { rules: string; resolutionSource: string | null; closeAt: string };
   /**
-   * Defaults to `market-rules`. The admin form's 정산 기준 textarea already owns that id, so
+   * Defaults to `market-rules`. The admin form's 규칙 textarea already owns that id, so
    * the preview beside it must pass its own.
    */
   'data-testid'?: string;

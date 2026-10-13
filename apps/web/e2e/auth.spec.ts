@@ -92,9 +92,9 @@ test.describe('signup -> login -> settings', () => {
     await page.getByRole('button', { name: copy.loginWithEmail }).click();
     await expect(page).toHaveURL('/settings');
 
-    // --- /me rendered: email, auto-generated nickname (예측가_XXXX), credential linked
+    // --- /me rendered: email, auto-generated nickname (user_XXXX), credential linked
     await expect(page.getByTestId('account-email')).toContainText(email);
-    await expect(page.getByTestId('nickname-input')).toHaveValue(/^예측가_/);
+    await expect(page.getByTestId('nickname-input')).toHaveValue(/^user_/);
     await expect(page.getByTestId('unlink-credential')).toBeDisabled();
   });
 
@@ -103,13 +103,13 @@ test.describe('signup -> login -> settings', () => {
     await signUp(page, freshEmail());
     await page.goto('/settings');
     // Wait for the seeded value: the input exists before `GET /me` resolves.
-    await expect(page.getByTestId('nickname-input')).toHaveValue(/^예측가_/);
+    await expect(page.getByTestId('nickname-input')).toHaveValue(/^user_/);
     const taken = await page.getByTestId('nickname-input').inputValue();
     await logOut(page);
 
     await signUp(page, freshEmail());
     await page.goto('/settings');
-    await expect(page.getByTestId('nickname-input')).toHaveValue(/^예측가_/);
+    await expect(page.getByTestId('nickname-input')).toHaveValue(/^user_/);
     await page.getByTestId('nickname-input').fill(taken);
     // Scoped: the contact card has its own '저장' button.
     await page.getByTestId('settings-profile').getByRole('button', { name: copy.save }).click();

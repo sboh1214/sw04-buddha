@@ -30,7 +30,7 @@ export function filterQuery(filters: MarketFilters): Record<string, string> {
 
 /**
  * The `h2` over the grid: the leaf's name when `?category=` names a leaf, the top-level name when
- * it names a top-level category, and the plain 예측 시장 otherwise — including for a slug the tree
+ * it names a top-level category, and the plain 예측시장 otherwise — including for a slug the tree
  * does not know (a retired category, a link typed by hand), where the list still filters on it
  * and reports its own empty state, but there is no name to put in a heading.
  */

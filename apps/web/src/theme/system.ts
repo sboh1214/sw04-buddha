@@ -47,7 +47,7 @@ const fontStack = [
 // to the 400 step and darkens the label instead — teal 11.28/9.24, red 7.59/6.31, brand
 // 10.16/8.37 on `#0a0c0f` — which is the shape Chakra's own orange palette already uses, and for
 // brand it is literally Kalshi's Sign-up button (#28cc95 under a black label). The fill never
-// has to carry the meaning either way: 예/아니오/매수 are written inside these buttons (PLAN 11.2).
+// has to carry the meaning either way: YES/NO/매수 are written inside these buttons (PLAN 11.2).
 //
 // The rest of the page follows Kalshi's surfaces (ADR-0041, measured off kalshi.com): the dark
 // page is #0a0c0f rather than pure black, borders are alpha strokes rather than gray steps so
@@ -187,7 +187,7 @@ const config = defineConfig({
         },
         // The card's two outcome rows (Kalshi `--green-x10` and `--blue-x10`, with the green's
         // `x20` 12% tint for a hovered pill). Row accents, not the yes/no palettes: the pair is
-        // what Kalshi draws on every tile, and the rows are labelled 예/아니오 in words (PLAN
+        // what Kalshi draws on every tile, and the rows are labelled YES/NO in words (PLAN
         // 11.2), so the colour carries no meaning the label does not. Neither bar is measured
         // for 1.4.11 (light `first` is 2.32:1 on white): the bar's length repeats the number in
         // the pill beside it, so it is redundant with text, which is the one case 1.4.11 exempts.

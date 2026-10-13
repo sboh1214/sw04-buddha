@@ -30,8 +30,8 @@ import { MarketSparkline } from './market-sparkline';
 /**
  * One market in the home grid (PLAN 11.4 MarketCard, PLAN 11.1's Polymarket note), drawn as
  * Kalshi's tile (ADR-0041, measured off kalshi.com): a header — the category's icon and name
- * over the question and its countdown — then one row per outcome, 예 and 아니오, each a label
- * over a hairline bar, the "맞히면 투입 대비 1.59x" figure and a pill with the percentage, and a
+ * over the question and its countdown — then one row per outcome, YES and NO, each a label
+ * over a hairline bar, the "정답 시 투입 대비 1.59x" figure and a pill with the percentage, and a
  * footer with the 거래량 on the left and the sparkline on the right. The whole card is a link
  * to the detail. A market with no fill yet has no price (N02 §5): the two rows stay, with no bar,
  * no multiple and '—' in each pill, and 체결 없음 once beside them (owner decision #125,
@@ -40,8 +40,8 @@ import { MarketSparkline } from './market-sparkline';
  *
  * The two rows take `row.first` and `row.second` — Kalshi's green and blue — and not the `yes`
  * and `no` palettes the detail screen paints. The pair is what Kalshi draws on every tile, and
- * it can be borrowed without borrowing a meaning: each row is labelled 예 or 아니오 in words, the
- * pill is named "예 63%" (PLAN 11.2, colour never alone), and the bar's length repeats the number
+ * it can be borrowed without borrowing a meaning: each row is labelled YES or NO in words, the
+ * pill is named "YES 63%" (PLAN 11.2, colour never alone), and the bar's length repeats the number
  * beside it, so the colour is decoration on a reading the text already gives. theme/system.ts
  * says the same at the token, and why neither bar is measured for WCAG 1.4.11.
  *
@@ -277,7 +277,7 @@ export function MarketCard({
         empty second column, and the multiple with the pill in the third. Three columns rather
         than two so the empty cell keeps the pills of every row on one right edge whatever the
         multiple's width. With no fill the second column says 체결 없음 once, across both rows
-        and beside the two '—' pills; it is last in the DOM so a reader hears 예, 아니오, then
+        and beside the two '—' pills; it is last in the DOM so a reader hears YES, NO, then
         체결 없음.
       */}
       <Grid templateColumns="1fr auto auto" columnGap="1" rowGap="6px" w="100%">
@@ -347,10 +347,11 @@ export function MarketCard({
 }
 
 /**
- * One outcome row's grid cells (a fragment, so the parent `Grid` places them). The reading "예 63%"
- * is announced ONCE per row, by the bar: a labelled `progressbar` with that string. The pill is a
- * `<span>`, and `aria-label` on a generic element is prohibited by ARIA 1.2 and dropped by
- * browsers, so the pill is the one hidden — it paints the same number the bar already names.
+ * One outcome row's grid cells (a fragment, so the parent `Grid` places them). The reading
+ * "YES 63%" is announced ONCE per row, by the bar: a labelled `progressbar` with that string.
+ * The pill is a `<span>`, and `aria-label` on a generic element is prohibited by ARIA 1.2 and
+ * dropped by browsers, so the pill is the one hidden — it paints the same number the bar
+ * already names.
  *
  * With no reading there is no bar to label and no multiple: the row is its label and a '—' pill,
  * and the card's one 체결 없음 says why. The row then has no empty middle cell either — the
@@ -403,8 +404,8 @@ function OutcomeRowCells({ row }: { row: OutcomeRow }) {
           <Text as="span" textStyle="emphasisSm" color="fg.muted" minW="18px" textAlign="right">
             {/*
               The figure alone is "1.59x", which says nothing to a listener; the sr-only prefix
-              makes it "맞히면 투입 대비 1.59x" — the sentence PLAN 11.1-2 wants everywhere, in the
-              vocabulary Appendix A allows.
+              makes it "정답 시 투입 대비 1.59x" — the sentence PLAN 11.1-2 wants everywhere, in the
+              plan's words (docs/TERMS.md).
             */}
             <VisuallyHidden>{copy.payoutMultiple} </VisuallyHidden>
             {reading.multiple}

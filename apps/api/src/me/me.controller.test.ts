@@ -39,7 +39,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/me (integration)', () => {
     expect(me.email).toBe(user.email);
     expect(me.emailVerified).toBe(true); // signUpTestUser follows the verification link
     expect(me.profile.role).toBe('user');
-    expect(me.profile.nickname).toMatch(/^예측가_[A-Z2-9]{4}$/);
+    expect(me.profile.nickname).toMatch(/^user_[A-Z2-9]{4}$/);
     expect(me.balance).toEqual({ availableCoin: SIGNUP_BONUS_COIN.toString(), lockedCoin: '0' });
     expect(me.linkedAccounts).toHaveLength(1);
     const [credential] = me.linkedAccounts;
@@ -82,15 +82,15 @@ describe.skipIf(!hasTestInfra)('/api/v1/me (integration)', () => {
       method: 'PATCH',
       url: '/api/v1/me',
       headers: { cookie: user.cookie },
-      payload: { nickname: '예측왕_kim1' },
+      payload: { nickname: '거래왕_kim1' },
     });
     expect(res.statusCode).toBe(200);
-    expect(meSchema.parse(res.json<{ data: unknown }>().data).profile.nickname).toBe('예측왕_kim1');
+    expect(meSchema.parse(res.json<{ data: unknown }>().data).profile.nickname).toBe('거래왕_kim1');
     const [row] = await t.db
       .select({ nickname: schema.profiles.nickname })
       .from(schema.profiles)
       .where(eq(schema.profiles.userId, user.id));
-    expect(row?.nickname).toBe('예측왕_kim1');
+    expect(row?.nickname).toBe('거래왕_kim1');
   });
 
   it('PATCH /me with a taken nickname -> 400 VALIDATION_ERROR with the field in details (AC 4)', async () => {

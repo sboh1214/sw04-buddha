@@ -84,7 +84,7 @@ describe('markPriceCoin / positionValueCoin / unrealizedPnlCoin', () => {
     // The bug this pins is silent: `qty × marketLastPrice` for a NO row produces a plausible
     // number that is wrong by 100 − 2·price per contract, and the screen has nothing to
     // compare it against. `marketLastPrice` is the YES price, so the NO side is 100 − 63 = 37
-    // — the same complement `formatNoPrice` prints under "아니오 37%".
+    // — the same complement `formatNoPrice` prints under "NO 37%".
     const yes = position({ outcome: 'YES', marketLastPrice: 63, costBasisCoin: '5000' });
     const no = position({ outcome: 'NO', marketLastPrice: 63, costBasisCoin: '5000' });
 

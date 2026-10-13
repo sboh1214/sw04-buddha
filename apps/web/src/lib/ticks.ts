@@ -89,7 +89,7 @@ export interface CachedTick extends PriceTick {
   tradeCount?: number;
   /**
    * The probability this point MOVED FROM, in basis points — present only on a point the socket
-   * drew, and the reason 확률 변화 can report a trade at all.
+   * drew, and the reason 시장가격 변화 can report a trade at all.
    *
    * The badge used to read the last STEP of the series (`points.at(-1)` minus `points.at(-2)`),
    * which is the same thing only while every trade gets its own point. It does not: `pushPoint`
@@ -227,7 +227,7 @@ export function appendTickToSeries(
  * `lastMs === -Infinity`, whose floor equals no real bucket, so its first point appends.
  *
  * It is also where a live point's `movedFromBp` is stamped, because the replacement is exactly
- * what destroys the evidence the 확률 변화 badge needs — see the branch's own comment.
+ * what destroys the evidence the 시장가격 변화 badge needs — see the branch's own comment.
  */
 function pushPoint(held: CachedSeries, point: CachedTick, pointMs: number): CachedSeries {
   const kept: CachedTick[] = [];
@@ -243,7 +243,7 @@ function pushPoint(held: CachedSeries, point: CachedTick, pointMs: number): Cach
   // The probability this point moved FROM, recorded here because here is the only place that
   // knows it: `previous` is the reading the point supersedes in BOTH branches — the point being
   // replaced when they share a bucket, the last kept point when they do not — and one line down
-  // the replaced one is gone. `recentDelta` (market-detail.tsx) reads it so 확률 변화 reports
+  // the replaced one is gone. `recentDelta` (market-detail.tsx) reads it so 시장가격 변화 reports
   // the trade rather than the bucket; see `CachedTick.movedFromBp` for what that was worth.
   //
   // Only a point that does not already carry one is tagged. `joinSeries` re-pushes a live point
@@ -353,7 +353,7 @@ export function joinSeries(held: CachedSeries | undefined, incoming: CachedSerie
 }
 
 /**
- * The move the 확률 변화 badge reports, in percentage points, or `null` when there is nothing
+ * The move the 시장가격 변화 badge reports, in percentage points, or `null` when there is nothing
  * to report.
  *
  * It is a property of the SERIES, not a difference between two renders, and that is the whole

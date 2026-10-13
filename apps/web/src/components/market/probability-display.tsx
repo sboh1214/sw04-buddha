@@ -7,8 +7,8 @@ import { copy } from '@/copy';
 import { deltaLabel, deltaMoveKey, formatYesPrice } from '@/lib/market-admin';
 
 /**
- * The detail screen's big reading (PLAN 11.4 ProbabilityDisplay): the last fill's price, "예 63%",
- * plus a short-lived 확률 변화 badge — or 체결 없음 before the first fill (N02 §5), where no initial
+ * The detail screen's big reading (PLAN 11.4 ProbabilityDisplay): the last fill's price, "YES 63%",
+ * plus a short-lived 시장가격 변화 badge — or 체결 없음 before the first fill (N02 §5), where no initial
  * setting stands in for a price.
  *
  * Rolling lives here and nowhere else. A card renders `formatYesPrice` as plain text: AC 1 asks
@@ -20,7 +20,7 @@ import { deltaLabel, deltaMoveKey, formatYesPrice } from '@/lib/market-admin';
  * the five-second life of the delta badge — and even that is a timer callback, never a
  * `setState` in the body of an effect (`react-hooks/set-state-in-effect` is an error here).
  *
- * The number itself stays on `fg` (~21:1). The semantic colour rides on the 예 label the format
+ * The number itself stays on `fg` (~21:1). The semantic colour rides on the YES label the format
  * carries and on the badge, and the badge writes its direction out as `+2%p` / `−2%p`, so
  * nothing means anything by colour alone (PLAN 11.2, AC 6).
  */
@@ -88,7 +88,7 @@ export function ProbabilityDisplay({
         fontSize={VALUE_FONT_SIZE[size]}
         fontWeight="bold"
         // Locked to the roll cells' own line box (rolling-number.tsx), so the digit stacks and
-        // the 예 label share one baseline whatever Pretendard's metrics do at this size.
+        // the YES label share one baseline whatever Pretendard's metrics do at this size.
         lineHeight="1.15"
       >
         {/* 체결 없음 is words, not a number: nothing to roll. */}

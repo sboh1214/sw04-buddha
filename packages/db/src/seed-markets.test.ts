@@ -6,11 +6,12 @@ import { SEED_MARKETS, SEED_RULE_NO_DELAY_NO } from './seed-markets.js';
  * The phrasings the seed rules used before #125 to turn a late or missing publication into a
  * NO — "…까지 (공식) 발표가 없으면 '아니오'", "결과가 발표되지 않으면", "그마저 없으면 '아니오'",
  * "자료가 공개되지 않으면 '아니오'". N03 §4 forbids that; a NO for an event that did not happen
- * by its deadline (N03 §2) is phrased around the event and stays.
+ * by its deadline (N03 §2) is phrased around the event and stays. The label is NO since #14, and
+ * the old '아니오' is matched too.
  */
 const PUBLICATION_MISSING_NO = [
-  /(발표|공표|공개|고시)[가이]? 없으면[^.]*'아니오'/,
-  /(발표|공표|공개|고시)되지 않으면[^.]*'아니오'/,
+  /(발표|공표|공개|고시)[가이]? 없으면[^.]*(NO|'아니오')/,
+  /(발표|공표|공개|고시)되지 않으면[^.]*(NO|'아니오')/,
   /그마저 없으면/,
 ];
 
@@ -36,9 +37,16 @@ describe('seed market copy (#125)', () => {
 
   it('states the NO side of every rule, apart from the delay clause (N03 §2)', () => {
     for (const { slug, rules } of SEED_MARKETS) {
-      expect(rules.replace(SEED_RULE_NO_DELAY_NO, ''), slug).toMatch(
-        /'아니오'(입니다|로 정산합니다)/,
-      );
+      expect(rules.replace(SEED_RULE_NO_DELAY_NO, ''), slug).toMatch(/NO(입니다|로 판정합니다)/);
+    }
+  });
+
+  it("uses the plan's terms: no 예측 as an action, YES/NO, and 판정 for the result (#14)", () => {
+    for (const { slug, title, description, rules } of SEED_MARKETS) {
+      for (const text of [title, description, rules]) expect(text, slug).not.toMatch(/예측/);
+      // '예'·'아니오' were the old labels; 정산 is the Coin payout (N03 §5·§7), never the verdict.
+      expect(rules, slug).not.toMatch(/'예'|아니오|정산/);
+      expect(rules, slug).toMatch(/YES로 판정합니다/);
     }
   });
 });

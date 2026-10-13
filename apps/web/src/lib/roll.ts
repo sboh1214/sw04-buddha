@@ -8,8 +8,8 @@
  * browser emit identical markup and a page load does not roll every number up from zero.
  *
  * The text arrives already formatted (`formatCoin`, `formatYesPrice`); nothing is formatted here,
- * so the composed labels those helpers produce — '예 63%', '−1,200 Coin' — survive intact and the
- * 예/아니오 word always travels with its number (PLAN 11.2).
+ * so the composed labels those helpers produce — 'YES 63%', '−1,200 Coin' — survive intact and the
+ * YES/NO word always travels with its number (PLAN 11.2).
  */
 
 export const ROLL_DIGITS = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'] as const;
@@ -29,7 +29,7 @@ export interface RollCell {
  * Splits an already-formatted string into roll cells.
  *
  * Keys are anchored to the END of the string, not the start. A formatted value changes length
- * on ordinary one-point moves — '예 9%' -> '예 63%', '9,900 Coin' -> '10,000 Coin' — and keying
+ * on ordinary one-point moves — 'YES 9%' -> 'YES 63%', '9,900 Coin' -> '10,000 Coin' — and keying
  * from the left makes React reuse the cell that held a '9' for a '6', animating the wrong glyphs
  * on the common case. Anchored from the right, the units digit, the '%' and the thousands digits
  * keep their identity; a new leading digit simply mounts, which correctly does not animate.
@@ -41,7 +41,7 @@ export function rollCells(text: string): RollCell[] {
   const chars = Array.from(text);
   return chars.map((char, index) => {
     // Only the ASCII digits roll: the column holds those ten glyphs and nothing else, so any
-    // other character — 예, a space, '%', a comma, the U+2212 minus — is rendered as itself.
+    // other character — a letter, a space, '%', a comma, the U+2212 minus — is rendered as itself.
     const digit = (ROLL_DIGITS as readonly string[]).indexOf(char);
     return {
       key: `r${String(chars.length - 1 - index)}`,

@@ -71,7 +71,7 @@ export default async function HomePage({
       initialPageParam: undefined as string | undefined,
     }),
     // `undefined` rather than a rejection: the categories are a convenience — the headline
-    // falls back to 예측 시장, the sidebar renders nothing, and the list still works without
+    // falls back to 예측시장, the sidebar renders nothing, and the list still works without
     // them. The prefetch above swallows its failure the same way.
     fetchCategoriesServer().catch(() => undefined),
   ]);

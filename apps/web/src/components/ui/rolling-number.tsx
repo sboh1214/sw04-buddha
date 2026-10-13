@@ -14,7 +14,7 @@ import { ROLL_DIGITS, rollCells } from '@/lib/roll';
  * for `@media (prefers-reduced-motion: reduce)` — turns the whole thing off in one prop, with
  * no `matchMedia` and no effect to race the first paint.
  *
- * Cell keys are anchored to the end of the string by `rollCells`, so '예 9%' -> '예 63%' keeps
+ * Cell keys are anchored to the end of the string by `rollCells`, so 'YES 9%' -> 'YES 63%' keeps
  * the units digit and the '%' rather than animating the wrong glyphs (see `lib/roll.ts`). The
  * width is stable across a roll for free: `tabular-nums` is set on body (theme/system.ts), so
  * every digit has the same advance and a 9 -> 10 moves nothing around the number.
@@ -52,7 +52,7 @@ export function RollingNumber({ text, label, 'data-testid': testId }: RollingNum
         display="inline-flex"
         userSelect="none"
         // A flex item collapses the leading and trailing space of its own text, which would
-        // eat the gap in '예 63%'. `pre` keeps it, and stops the number wrapping mid-value.
+        // eat the gap in 'YES 63%'. `pre` keeps it, and stops the number wrapping mid-value.
         whiteSpace="pre"
       >
         {rollCells(text).map((cell) =>
