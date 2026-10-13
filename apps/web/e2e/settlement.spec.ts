@@ -18,9 +18,9 @@ import {
  * 소켓으로 정산 완료를 받는다.
  *
  * Nobody holds the market: there is no way to trade until the CLOB lands (#119; D13), so the
- * holder's half of AC 7 — 포트폴리오 정산 이력, 리더보드, 원장 정산 지급 — comes back with the
- * order panel and its screen tests (#189). What stays is the lifecycle every market goes
- * through, holders or not.
+ * holder's half of AC 7 — 포트폴리오 정산 이력, 원장 정산 지급 — comes back with the order
+ * panel and its screen tests (#189). What stays is the lifecycle every market goes through,
+ * holders or not.
  *
  * There is no dispute window to wait out any more: the 판정 is final at once, the API queues the
  * worker's `market.finalize` with no delay, and the market reads `settled` moments later. That

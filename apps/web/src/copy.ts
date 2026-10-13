@@ -484,9 +484,8 @@ export const copy = {
   portfolioSignedOut: '로그인이 풀렸습니다. 다시 로그인하면 이어서 볼 수 있습니다.',
 
   // 상단 네비와 모바일 하단 탭. 홈/지갑/설정 라벨은 M1 블록에 이미 있다.
-  // 헤더 1단(ADR-0041): 시장 · 랭킹 · 커뮤니티. 2단은 시장의 상위 카테고리다.
+  // 헤더 1단(ADR-0041·ADR-0053): 시장 · 커뮤니티. 2단은 시장의 상위 카테고리다.
   navMarkets: '시장',
-  navRanking: '랭킹',
   navCommunity: '커뮤니티',
   navPrimary: '주 메뉴',
   navPortfolio: '포트폴리오',
@@ -496,7 +495,7 @@ export const copy = {
   // 헤더가 가리키는 자리는 있어야 하므로 화면은 있고, 기능은 아직 없다.
   communityTitle: '커뮤니티',
   communityComingSoon:
-    '커뮤니티는 준비 중입니다. 시장을 두고 이야기 나눌 자리가 곧 열립니다. 그때까지는 시장과 랭킹을 둘러봐 주세요.',
+    '커뮤니티는 준비 중입니다. 시장을 두고 이야기 나눌 자리가 곧 열립니다. 그때까지는 시장을 둘러봐 주세요.',
 
   // 관리자 시장 폼의 미리보기 (Q-M3-6): 실제 카드·규칙 컴포넌트를 그대로 그린다.
   adminMarketPreview: '미리보기',
@@ -546,18 +545,6 @@ export const copy = {
   eventSettledAccounts: '정산 계정 수',
   eventPaidAccounts: '지급 계정 수',
   eventPaidTotal: '지급 합계',
-
-  // --- leaderboard (M6 선택) ---
-  // 순위는 실현 손익 기준이고, 아직 아무것도 실현하지 않은 계정은 목록에 없다.
-  leaderboardTitle: '실현 손익 순위',
-  leaderboardIntro:
-    '정산과 매도로 확정된 손익의 합계 기준 상위 20명입니다. 아직 확정된 손익이 없는 계정은 표시되지 않습니다.',
-  leaderboardRank: '순위',
-  leaderboardNickname: '닉네임',
-  leaderboardRealizedPnl: '실현 손익',
-  leaderboardEmpty: '아직 확정된 손익이 있는 계정이 없습니다.',
-  errLeaderboardLoad: '순위를 불러오지 못했습니다.',
-  leaderboardLink: '전체 순위 보기',
 
   // --- 사업자 정보 푸터 · 약관 3종 · 충전 안내 (ADR-0044) ---
   // `{{key}}` is a business fact from src/legal/business-info.ts, substituted by `fillTemplate`

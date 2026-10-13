@@ -8,8 +8,8 @@ import { type CategoryNode, locateCategory } from './category-tree';
  * up as `aria-current="page"` on a link, never as a colour alone (PLAN 11.2).
  */
 
-/** Row 1 of the header: 시장 · 랭킹 · 커뮤니티. */
-export type PrimaryNavKey = 'markets' | 'ranking' | 'community';
+/** Row 1 of the header: 시장 · 커뮤니티. */
+export type PrimaryNavKey = 'markets' | 'community';
 
 /**
  * The header's height in CSS px: Kalshi's measured 107 (12 + 40 + 12 for row 1, 30 + 12 for
@@ -34,15 +34,13 @@ export const CATEGORY_ITEM_OPACITY = 0.6;
 /**
  * Whether a row-1 item is the page being shown. 시장 owns the home list AND every market detail —
  * `/markets/<slug>` is a market, and a visitor who opened one is still "in the markets" the way
- * Kalshi keeps its Markets item lit on an event page. 랭킹 and 커뮤니티 match their own route and
- * its subtree, so a future `/leaderboard/weekly` keeps 랭킹 marked, but not `/leaderboardish`.
+ * Kalshi keeps its Markets item lit on an event page. 커뮤니티 matches its own route and its
+ * subtree, so a future `/community/<post>` keeps it marked, but not `/communityx`.
  */
 export function isPrimaryCurrent(pathname: string, key: PrimaryNavKey): boolean {
   switch (key) {
     case 'markets':
       return pathname === '/' || pathname.startsWith('/markets/');
-    case 'ranking':
-      return pathname === '/leaderboard' || pathname.startsWith('/leaderboard/');
     case 'community':
       return pathname === '/community' || pathname.startsWith('/community/');
   }

@@ -235,12 +235,6 @@ export function Portfolio() {
             </DataList.Root>
           </Stack>
         )}
-        {/* The one way into the global ranking (PLAN M6 선택). It lives here rather than in the
-            navigation because realized P&L is a portfolio figure and this screen is where a
-            reader has just seen their own; the mobile tab bar stays at PLAN 11.4's four tabs. */}
-        <ChakraLink asChild fontSize="sm" mt="3" display="inline-block">
-          <NextLink href="/leaderboard">{copy.leaderboardLink}</NextLink>
-        </ChakraLink>
       </Section>
 
       <Section title={copy.portfolioPositions} testId="portfolio-positions">

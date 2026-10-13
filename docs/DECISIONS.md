@@ -1056,7 +1056,7 @@ PLAN §4의 저장소 구조는 `docs/API.md`("생성된 OpenAPI 요약")를 M3 
 ## ADR-0038 — 글로벌 리더보드: 매 조회 집계, 닉네임만, 고정 20행 (PLAN M6 선택)
 
 - 날짜: 2026-09-10
-- 상태: 채택, 일부 대체됨(ADR-0050: 집계 열 `realized_pnl_p`와 `pAmountSchema`·`parsePAmount`+`formatP`는 `realized_pnl_coin`과 `coinAmountSchema`·`parseCoinAmount`+`formatCoin`이다 — 집계·노출 결정은 유효)
+- 상태: 채택, 일부 대체됨(ADR-0050: 집계 열 `realized_pnl_p`와 `pAmountSchema`·`parsePAmount`+`formatP`는 `realized_pnl_coin`과 `coinAmountSchema`·`parseCoinAmount`+`formatCoin`이다 — 집계·노출 결정은 유효), 대체됨(ADR-0053)
 
 ### 맥락
 
@@ -2912,3 +2912,68 @@ ADR-0046의 상태 줄에 '일부 대체됨(ADR-0047: …)'을 이어 쓴다. �
 - 유료 충전이 닫힌 동안 그리지 않는 충전 안내(`chargeGuideIntro`)는 #13이 단위만 바꾼 것처럼 용어만 바꾼다('예측시장'·'YES·NO').
 - 헤더 검색 안내는 '시장을 찾아보세요'다.
 - 사이트 설명은 기획 요약(NR)을 따른 '가상 Coin으로 YES/NO 계약을 호가창에서 거래하는 예측시장'이다.
+
+---
+
+## ADR-0053 — 실현 손익 순위 화면·공개 API·진입점 제거 (#42, 오너 결정 2026-10-13)
+
+- 날짜: 2026-10-13
+- 상태: 채택
+
+이슈 번호와 기획 인용 표기는 ADR-0047과 같다(`#N`, NR·N00\~N06). 이 ADR은 #42가 기록한다. ADR-0038(글로벌 리더보드)을 통째로 대체한다(ADR-0047 결과 1 표의 ADR-0038 행, O-17). 다른 사용자의 손익을 줄 세워 보이던 화면과 그 데이터를 내주던 공개 API, 그리로 가던 메뉴·링크·안내 문구를 없앤다. 사용자 본인의 손익은 그대로다.
+
+### 맥락
+
+**기획.**
+
+- N02 §2 "랭킹 메뉴는 점수 정책 결정 전 노출하지 않는다."
+- N04 §4 "현재 화면에는 임의의 점수·순위를 만들어 넣지 않고 관련 메뉴를 숨긴다." 같은 절 "본 문서는 평가 방식을 선택하지 않는다."
+- N00 §3-08 "순위·실력 등급은 평가 정책 결정 전 숨긴다." N00 §2 "P&L을 예측 실력으로 단정하지 않는다."
+- N04 §2 "초기에는 잔액·주문·미정산 보유 수량·개별 체결·손익은 본인 전용이다." N04 §3 "손익은 거래 회계 정보이며 스코어가 아니다."
+- N00 §5는 스코어링·순위·실력 배지를 별도 검토로 둔다(#110). ADR-0047의 O-17은 '대체'로 판정했다: 손익 순위 화면·공개 API·진입점을 없애고, 손익은 본인 전용이다.
+
+**옛 코드(ADR-0038).**
+
+- 공개 `GET /api/v1/leaderboard`(`apps/api/src/leaderboard/`)가 모든 계정의 `positions.realized_pnl_coin` 합계를 닉네임과 함께 상위 20명(`LEADERBOARD_LIMIT`)까지 내줬다. 합계 0은 빼고 손실은 남겼다. 와이어 형식은 공유 `leaderboardEntrySchema`·`LeaderboardEntry`(`packages/shared/src/leaderboard.ts`)였다.
+- 웹 `/leaderboard`가 그 표를 서버에서 미리 읽어(`LEADERBOARD_KEY`, `fetchLeaderboardServer`) 그리고, 클라이언트는 `hooks/use-leaderboard.ts`로 다시 읽었다.
+- 진입점은 셋이었다. 헤더 1단의 '랭킹'(ADR-0041), 포트폴리오 잔고 요약 아래의 '전체 순위 보기'(ADR-0038), 커뮤니티 준비 중 문구의 '그때까지는 시장과 랭킹을 둘러봐 주세요.'다.
+- 순위 전용 테이블·인덱스·마이그레이션은 없었다. 매 조회 집계였다.
+
+이 화면은 본인 전용인 다른 사용자의 손익을 공개했고(N04 §2), 손익을 실력처럼 줄 세웠다(N00 §2). #42 본문의 '오너 결정 필요' 항목에 오너가 2026-10-13 답했다(결정 1).
+
+### 결정
+
+**1. 오너 결정 (2026-10-13).**
+
+| #   | 주제                                              | 결정                                                           |
+| --- | ------------------------------------------------- | -------------------------------------------------------------- |
+| 1   | 없앤 순위 화면 주소(`/leaderboard`)로 들어온 요청 | 없는 페이지(404)로 응답한다((a)). 시장 탐색으로 보내지 않는다. |
+| 2   | 개인정보처리방침의 '순위 화면의 닉네임 표시' 구절 | #137의 개정 때까지 둔다((a)).                                  |
+| —   | 관리자 전용 사용자별 손익 순위를 둘지             | 이 ADR은 정하지 않는다(#110).                                  |
+
+**2. API.** `apps/api/src/leaderboard/`(컨트롤러·서비스·모듈·통합 시험)를 지우고 `AppModule`에서 뺐다. `GET /api/v1/leaderboard`는 등록되지 않은 다른 경로처럼 404다. 공유 `LEADERBOARD_LIMIT`·`leaderboardEntrySchema`·`LeaderboardEntry`와 `index.ts`의 재수출을 지웠다. `pnpm api:openapi`로 `apps/api/openapi.json`(경로, 태그 `leaderboard`, 스키마 `LeaderboardEntry`), `packages/api-client`의 생성 타입, `docs/API.md`(오퍼레이션 39 → 38, 스키마 57 → 56)를 다시 만들었다. `scripts/generate-api-doc.mjs`에는 리더보드 항목이 없어 그대로다. 손익 필드를 싣는 응답은 이제 세션 계정 자신의 `GET /me/positions`뿐이고, 공개 오퍼레이션(시장·체결·틱·카테고리 등)에는 손익이 없다.
+
+**3. 웹.**
+
+- `app/leaderboard/`(페이지와 표)를 지웠다. `app/not-found.tsx`가 없어 `/leaderboard`는 Next의 기본 404를 루트 레이아웃 안에 그린다(결정 1-1). 리디렉트는 두지 않는다(D23과 같은 방향).
+- `hooks/use-leaderboard.ts`, `lib/api.ts`의 `LeaderboardEntry`, `lib/api.server.ts`의 `fetchLeaderboardServer`, `lib/market-keys.ts`의 `LEADERBOARD_KEY`를 지웠다.
+- 진입점: 헤더 1단의 '랭킹'(`nav.tsx`의 `PRIMARY` 항목, `lib/nav.ts`의 `PrimaryNavKey`·`isPrimaryCurrent`의 `ranking`)과 포트폴리오의 '전체 순위 보기' 링크를 지웠다. 커뮤니티 준비 중 문구는 랭킹 안내만 빼 '…그때까지는 시장을 둘러봐 주세요.'다. 헤더 1단은 이제 '시장 · 커뮤니티'이고, 세 영역(시장 탐색·커뮤니티·MY)으로의 재구성은 #16이다.
+- copy의 순위 전용 키 `navRanking`, `leaderboardTitle`·`leaderboardIntro`·`leaderboardRank`·`leaderboardNickname`·`leaderboardRealizedPnl`·`leaderboardEmpty`·`errLeaderboardLoad`·`leaderboardLink`를 지웠다.
+
+**4. 본인 손익은 남긴다.** `positions.realized_pnl_coin`, `GET /me/positions`의 손익 필드, 포트폴리오 잔고 요약의 총 평가 금액·총 평가손익·총 실현 손익, 보유·정산 이력의 손익, 시장 상세의 내 포지션 손익은 그대로다(N04 §2·§3). MY에서의 표시는 #67·#124가 맡는다.
+
+**5. 시험.** `leaderboard.controller.test.ts`를 지웠다. `nav.test.ts`는 `ranking` 키의 시험을 빼고 `/leaderboard` 예시를 `/community`로 바꿨다. `onboarding.test.ts`의 '게이트 예외가 아닌 화면' 목록에서 `/leaderboard`를 뺐다. e2e의 리더보드 단계는 #125가 이미 지웠고(ADR-0048 결과), `settlement.spec.ts` 머리 주석에서 #189가 다시 둘 확인 목록의 리더보드를 뺐다.
+
+**6. 문서.** `README.md` 경로 표에서 `/leaderboard` 행을 지우고 홈 행의 헤더 설명을 '시장·커뮤니티 / 전체·카테고리'로 고쳤다. `docs/TERMS.md`는 순위를 다루지 않아 그대로다.
+
+### 결과
+
+**1. 상태 줄.** ADR-0038 상태 줄에 '대체됨(ADR-0053)'을 이어 썼다(ADR 전체, ADR-0047 결과 1). 본문은 고치지 않았다. 그 줄의 '일부 대체됨(ADR-0050: …)'은 이름 변경의 기록으로 남는다. ADR-0041의 헤더 1단 '시장·랭킹·커뮤니티'는 #16이 헤더 구성과 함께 상태 줄에 적는다(ADR-0047 결과 1의 ADR-0041 행). 랭킹 항목은 이 ADR로 이미 없다. ADR-0048 결과의 'AC 7의 포트폴리오·리더보드·원장 정산 지급 확인'을 #189가 다시 둔다는 문장과 ADR-0050 결과의 '리더보드는 #42가 지운다'는 일을 넘긴 것이라 상태 줄에 적지 않는다. 리더보드 확인은 돌아오지 않는다.
+
+**2. 남긴 것.**
+
+- 개인정보처리방침(`apps/web/src/legal/privacy.ts`)의 '순위 화면의 닉네임 표시' 구절(결정 1-2, #137).
+- 기록: `docs/PLAN.md`(v0.1)와 `docs/QUESTIONS.md`의 랭킹 언급, 이 ADR 전 ADR의 본문.
+- `profiles.nickname`과 닉네임 규칙(다른 화면이 쓴다).
+
+**3. 다른 이슈에 넘긴 것.** #110(스코어링·순위·실력 배지를 다시 들일지, 관리자 전용 사용자별 손익 순위), #113(점수·순위 낱말과 경로가 되돌아오는지의 자동 검사), #53(점수·순위 알림 제외), #137(개인정보처리방침 개정), #16(헤더·MY 재구성), #67·#124(MY의 본인 손익 표시).

@@ -61,7 +61,6 @@ describe('isOnboardingExempt', () => {
       '/wallet',
       '/settings',
       '/portfolio',
-      '/leaderboard',
       '/community',
       '/markets/btc-100k',
       '/admin/users',
