@@ -421,6 +421,16 @@
               }
             }
           },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "429": {
             "description": "RATE_LIMITED",
             "content": {
@@ -432,7 +442,7 @@
             }
           }
         },
-        "summary": "Charge packages on sale, cheapest discount first",
+        "summary": "Charge packages on sale, cheapest discount first. Closed while paid Coin is off: 404 (ADR-0049)",
         "tags": [
           "wallet"
         ]
@@ -462,6 +472,16 @@
               }
             }
           },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "429": {
             "description": "RATE_LIMITED",
             "content": {
@@ -473,7 +493,7 @@
             }
           }
         },
-        "summary": "The configured payment provider: mock (immediate charge) or smartro (payment window, with its SDK URLs)",
+        "summary": "The configured payment provider (mock: immediate charge). Closed while paid Coin is off: 404 (ADR-0049)",
         "tags": [
           "wallet"
         ]
@@ -592,126 +612,7 @@
             "session": []
           }
         ],
-        "summary": "Buy one charge package (mock provider: succeeds immediately). P is never convertible back to cash.",
-        "tags": [
-          "wallet"
-        ]
-      }
-    },
-    "/api/v1/payments/smartro/prepare": {
-      "post": {
-        "operationId": "prepareSmartroPayment",
-        "parameters": [
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "description": "Client-generated key for this purchase (PLAN 5.4). Re-sent while the payment is still pending and unapproved, it returns a freshly signed form for the SAME payment. DUPLICATE_REQUEST (409) answers a key re-used with a different body, or one whose payment has already been approved or closed (the key is spent).",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128,
-              "pattern": "^[A-Za-z0-9_-]+$"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ChargeBody"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "data": {
-                      "$ref": "#/components/schemas/SmartroPrepareResult"
-                    }
-                  },
-                  "required": [
-                    "data"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "VALIDATION_ERROR",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "UNAUTHENTICATED",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "FORBIDDEN",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "NOT_FOUND",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "PRICE_MOVED | DUPLICATE_REQUEST | CONTACT_REQUIRED",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "RATE_LIMITED",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "summary": "Reserve a pending SmartroPay payment for one charge package and sign the payment-window form (provider smartro only)",
+        "summary": "Buy one charge package (mock provider: succeeds immediately). P is never convertible back to cash. Closed while paid Coin is off: 404 (ADR-0049)",
         "tags": [
           "wallet"
         ]
@@ -817,7 +718,7 @@
             "session": []
           }
         ],
-        "summary": "Redeem a coupon code for P",
+        "summary": "Redeem a coupon code for P. Closed while paid Coin is off: 404 (ADR-0049)",
         "tags": [
           "wallet"
         ]
@@ -1096,7 +997,7 @@
             "session": []
           }
         ],
-        "summary": "One of the caller charges (the wallet reads it for the result of a payment window)",
+        "summary": "One of the caller charges",
         "tags": [
           "wallet"
         ]
@@ -2191,124 +2092,7 @@
             "session": []
           }
         ],
-        "summary": "Refund an unused charge within 7 days of its approval: claw back all its P, then cancel the whole KRW at the provider (retry a refunding one)",
-        "tags": [
-          "admin"
-        ]
-      }
-    },
-    "/api/v1/admin/payments/{id}/settle": {
-      "post": {
-        "operationId": "adminSettlePayment",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SettlePaymentBody"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "data": {
-                      "$ref": "#/components/schemas/AdminPayment"
-                    }
-                  },
-                  "required": [
-                    "data"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "VALIDATION_ERROR",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "UNAUTHENTICATED",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "FORBIDDEN",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "NOT_FOUND",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "REFUND_NOT_ALLOWED",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "RATE_LIMITED",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "summary": "Settle by hand a SmartroPay payment the API could not settle (needsReview), after checking the card in the merchant admin",
+        "summary": "Refund an unused charge within 7 days of its approval: claw back all its P, then cancel the whole KRW at the provider (retry a refunding one). Closed while paid Coin is off: 404 (ADR-0049)",
         "tags": [
           "admin"
         ]
@@ -4172,63 +3956,19 @@
         "additionalProperties": false
       },
       "PaymentProviderInfo": {
-        "oneOf": [
-          {
-            "type": "object",
-            "properties": {
-              "provider": {
-                "type": "string",
-                "enum": [
-                  "mock"
-                ]
-              }
-            },
-            "required": [
-              "provider"
-            ],
-            "additionalProperties": false
-          },
-          {
-            "type": "object",
-            "properties": {
-              "provider": {
-                "type": "string",
-                "enum": [
-                  "smartro"
-                ]
-              },
-              "mode": {
-                "type": "string",
-                "enum": [
-                  "STG",
-                  "REAL"
-                ]
-              },
-              "scriptUrl": {
-                "type": "object",
-                "properties": {
-                  "pc": {
-                    "type": "string"
-                  },
-                  "mobile": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "pc",
-                  "mobile"
-                ],
-                "additionalProperties": false
-              }
-            },
-            "required": [
-              "provider",
-              "mode",
-              "scriptUrl"
-            ],
-            "additionalProperties": false
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "mock"
+            ]
           }
-        ]
+        },
+        "required": [
+          "provider"
+        ],
+        "additionalProperties": false
       },
       "ChargeBody": {
         "type": "object",
@@ -4448,126 +4188,6 @@
           "refId",
           "memo",
           "createdAt"
-        ],
-        "additionalProperties": false
-      },
-      "SmartroPrepareResult": {
-        "type": "object",
-        "properties": {
-          "paymentId": {
-            "type": "string",
-            "format": "uuid",
-            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-          },
-          "mode": {
-            "type": "string",
-            "enum": [
-              "STG",
-              "REAL"
-            ]
-          },
-          "scriptUrl": {
-            "type": "object",
-            "properties": {
-              "pc": {
-                "type": "string"
-              },
-              "mobile": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "pc",
-              "mobile"
-            ],
-            "additionalProperties": false
-          },
-          "approvalUrl": {
-            "type": "string"
-          },
-          "form": {
-            "type": "object",
-            "properties": {
-              "PayMethod": {
-                "type": "string"
-              },
-              "GoodsCnt": {
-                "type": "string"
-              },
-              "GoodsName": {
-                "type": "string"
-              },
-              "Amt": {
-                "type": "string"
-              },
-              "Moid": {
-                "type": "string"
-              },
-              "Mid": {
-                "type": "string"
-              },
-              "ReturnUrl": {
-                "type": "string"
-              },
-              "StopUrl": {
-                "type": "string"
-              },
-              "BuyerName": {
-                "type": "string"
-              },
-              "BuyerTel": {
-                "type": "string"
-              },
-              "BuyerEmail": {
-                "type": "string"
-              },
-              "EdiDate": {
-                "type": "string"
-              },
-              "EncryptData": {
-                "type": "string"
-              },
-              "TaxAmt": {
-                "type": "string"
-              },
-              "TaxFreeAmt": {
-                "type": "string"
-              },
-              "VatAmt": {
-                "type": "string"
-              },
-              "MallUserId": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "PayMethod",
-              "GoodsCnt",
-              "GoodsName",
-              "Amt",
-              "Moid",
-              "Mid",
-              "ReturnUrl",
-              "StopUrl",
-              "BuyerName",
-              "BuyerTel",
-              "BuyerEmail",
-              "EdiDate",
-              "EncryptData",
-              "TaxAmt",
-              "TaxFreeAmt",
-              "VatAmt",
-              "MallUserId"
-            ],
-            "additionalProperties": false
-          }
-        },
-        "required": [
-          "paymentId",
-          "mode",
-          "scriptUrl",
-          "approvalUrl",
-          "form"
         ],
         "additionalProperties": false
       },
@@ -5005,9 +4625,6 @@
           },
           "nickname": {
             "type": "string"
-          },
-          "needsReview": {
-            "type": "boolean"
           }
         },
         "required": [
@@ -5025,8 +4642,7 @@
           "cancelConfirmed",
           "createdAt",
           "userId",
-          "nickname",
-          "needsReview"
+          "nickname"
         ],
         "additionalProperties": false
       },
@@ -5040,36 +4656,6 @@
           }
         },
         "required": [
-          "reason"
-        ]
-      },
-      "SettlePaymentBody": {
-        "type": "object",
-        "properties": {
-          "outcome": {
-            "type": "string",
-            "enum": [
-              "credit",
-              "cancelled",
-              "failed",
-              "restore",
-              "refunded"
-            ]
-          },
-          "reason": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 500
-          },
-          "tid": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 64,
-            "pattern": "^[\\x21-\\x7e]+$"
-          }
-        },
-        "required": [
-          "outcome",
           "reason"
         ]
       },

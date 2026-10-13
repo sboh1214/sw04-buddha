@@ -21,9 +21,9 @@ export const paymentSchema = z
     priceKrw: z.number().int(),
     /** The package bought, or null once an admin removed it (the amounts above stay). */
     packageId: z.uuid().nullable(),
-    /** PAYMENT_PROVIDERS ('mock' or 'smartro'); kept a plain string like the column. */
+    /** PAYMENT_PROVIDERS; kept a plain string like the column. */
     provider: z.string(),
-    /** The provider's transaction id (SmartroPay: the Tid of the approval). */
+    /** The provider's transaction id (a PG's approval id). */
     providerRef: z.string().nullable(),
     status: paymentStatusSchema,
     /** The PG's PayMethod of the approval (CARD, KAKAO, …); null for mock and unapproved rows. */
@@ -39,11 +39,9 @@ export const paymentSchema = z
     resultMessage: z.string().nullable(),
     /**
      * `cancelled` only (null for every other status): whether the card's cancel is confirmed —
-     * by the PG's answer to the cancel, its cancel 재통보, or an admin who checked the merchant
-     * admin. False while a cancel of an approval we could not credit got no clear answer, or has
-     * not been answered yet: the card may still be charged, and an admin may yet settle the
-     * payment either way, so it is not over for the payer (every redirect back to the wallet
-     * says `pending` for it).
+     * a `net_cancel` event the PG confirmed. False while a cancel of an approval we could not
+     * credit got no clear answer, or has not been answered yet: the card may still be charged,
+     * so it is not over for the payer.
      */
     cancelConfirmed: z.boolean().nullable(),
     createdAt: z.iso.datetime(),
@@ -119,24 +117,7 @@ export type AdminUserQuery = z.infer<typeof adminUserQuerySchema>;
 
 /** `GET /admin/payments`: every charge, with the account it belongs to. */
 export const adminPaymentSchema = paymentSchema
-  .extend({
-    userId: z.string(),
-    nickname: z.string(),
-    /**
-     * A SmartroPay payment whose outcome the API could not settle by itself, for an admin to
-     * check in the merchant admin and settle by hand (`POST /admin/payments/:id/settle`): a
-     * claimed `pending` one, or a `refunding` one, untouched for 2 minutes (no request is still
-     * working on it); a `cancelled` one whose net cancel the PG never confirmed; or a claimed
-     * `failed` one the card may be charged for (its approval got no answer or answered the PG's
-     * own failure rather than a decline — 9999, W999 and the like — or an approval 재통보 could
-     * not be credited, unless another payment's own approval call made that approval and is
-     * flagged for it instead; or its approval answered a success that names another payment,
-     * whose Tid no other SmartroPay payment holds: another payment's window approved through this
-     * one's ReturnUrl — its `resultMessage` names that Moid and Tid) that no settle has checked
-     * since.
-     */
-    needsReview: z.boolean(),
-  })
+  .extend({ userId: z.string(), nickname: z.string() })
   .meta({ id: 'AdminPayment' });
 export type AdminPayment = z.infer<typeof adminPaymentSchema>;
 

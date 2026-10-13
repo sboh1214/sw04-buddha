@@ -1,6 +1,8 @@
 /**
- * Admin CRUD for the charge catalogue (ADR-0026). Runs against the docker `test` profile;
- * skips when TEST_* are unset.
+ * Admin CRUD for the charge catalogue (ADR-0026). It reads the public catalogue and charges to
+ * check what the CRUD did — preserved code, closed in production while paid Coin is off
+ * (ADR-0049; paid-coin-sales.test.ts) — so this app opens them. Runs against the docker `test`
+ * profile; skips when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
 import { SIGNUP_BONUS_P, discountPercent, type ChargePackage } from '@buddha/shared';
@@ -27,7 +29,7 @@ describe.skipIf(!hasTestInfra)('admin charge packages (integration)', () => {
   let member: TestUser;
 
   beforeAll(async () => {
-    t = await createTestApp();
+    t = await createTestApp({ paidCoinSales: true });
   });
   afterAll(async () => {
     await t?.close(); // undefined when beforeAll timed out waiting for the file lock

@@ -14,7 +14,7 @@ import {
   type UserBalanceEvent,
 } from '@buddha/shared';
 import { ChargePackageService } from './charge-package.service.js';
-import { and, desc, eq, getTableColumns, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, getTableColumns, sql } from 'drizzle-orm';
 import { assertExpectedAccount } from '../auth/expected-account.js';
 import { AppError } from '../common/errors/app-error.js';
 import { keysetPredicate } from '../common/keyset.js';
@@ -59,7 +59,7 @@ export function toLedgerEntry(row: LedgerRow): LedgerEntry {
  * `Payment.cancelConfirmed`, computed where the rows are: for a `cancelled` payment, whether the
  * card's cancel is confirmed (netCancelConfirmed); null for any other status. A net cancel that
  * got no clear answer — or is still waiting for one — leaves it false: the card may still be
- * charged, and an admin settles it (the admin list's `needsReview`).
+ * charged. Only a PG with a payment window net-cancels; the mock never does.
  */
 const cancelConfirmed = sql<
   boolean | null
@@ -129,43 +129,28 @@ export interface CreditInput {
   paymentId: string;
   userId: string;
   amountP: bigint;
-  /**
-   * The statuses this credit may move to `succeeded`. `['pending']` for a charge that is still
-   * ours to settle; SmartroPay's 재통보 also passes `failed`, because the PG's approval outranks
-   * a failure we recorded on our side (ADR-0042 「재통보」). Anything else is left alone.
-   */
-  from: readonly PaymentStatus[];
-  /** `payments.provider_ref`: the provider's transaction id (SmartroPay: the approval's Tid). */
+  /** `payments.provider_ref`: the provider's transaction id. */
   providerRef: string;
   /** The PG's PayMethod of the approval (CARD, KAKAO, …); null for the mock. */
   method: string | null;
-  /** The PG's ResultMsg; null for the mock. */
+  /** The PG's result message; null for the mock. */
   resultMessage: string | null;
-  /**
-   * Asked with the payment as locked — its row's lock taken after the balance row's, before
-   * anything moves — while it is still in `from`: true holds the credit back (nothing written,
-   * `heldBack`). SmartroPay's approvals (the ReturnUrl's and the 재통보's: cancelNoticeHold) hold
-   * back a card a cancel 재통보 is on record for, judged under the lock that notice's own
-   * transaction takes.
-   */
-  holdBack?: (tx: Tx, payment: PaymentRow) => Promise<boolean>;
 }
 
 /**
  * `credited`: this call moved the payment to `succeeded` and credited the P. Otherwise the
- * payment was not in `from` any more — another request settled it first — and `status` is what
- * it is now (undefined: the row is gone); or `holdBack` held it back (`heldBack`).
+ * payment was not `pending` any more — another request settled it first — and `status` is what
+ * it is now (undefined: the row is gone).
  */
 export type CreditOutcome =
-  | { credited: true; result: ChargeResult }
-  | { credited: false; status: PaymentStatus | undefined; heldBack?: true };
+  { credited: true; result: ChargeResult } | { credited: false; status: PaymentStatus | undefined };
 
 /**
  * `creditWithin`'s answer inside the transaction: the credit and the `user:balance` event to
  * publish after COMMIT, or — nothing credited — the status the payment has now.
  */
 export type CreditTxOutcome =
-  { result: ChargeResult; event: UserBalanceEvent } | { status?: PaymentStatus; heldBack?: true };
+  { result: ChargeResult; event: UserBalanceEvent } | { status?: PaymentStatus };
 
 /**
  * Charging and reading the wallet (PLAN 5.1, 5.6, M2).
@@ -198,8 +183,8 @@ export class WalletService {
    * index and never reaches the provider a second time.
    *
    * The immediate flow exists only while the configured provider can settle in one call (the
-   * mock). Under SmartroPay it is a 404: the charge goes through `/payments/smartro/prepare`
-   * and the payment window instead (ADR-0042).
+   * mock); under a provider with a payment window it is a 404 (ADR-0042). Paid Coin being off
+   * closes it before this runs (PaidCoinSalesGuard, ADR-0049).
    */
   async charge(userId: string, body: ChargeBody, idempotencyKey: string): Promise<ChargeResult> {
     const provider = this.provider;
@@ -252,7 +237,6 @@ export class WalletService {
       paymentId,
       userId,
       amountP,
-      from: ['pending'],
       providerRef: outcome.providerRef,
       method: null,
       resultMessage: null,
@@ -269,8 +253,8 @@ export class WalletService {
   }
 
   /**
-   * The package checks both charge flows run, in order: it exists (404 naming `packageId`), it
-   * is on sale, and it still sells the terms the client showed (PRICE_MOVED).
+   * The package checks the charge runs, in order: it exists (404 naming `packageId`), it is on
+   * sale, and it still sells the terms the client showed (PRICE_MOVED).
    */
   async quote(body: ChargeBody): Promise<Quote> {
     const chargePackage = await this.packages.get(body.packageId);
@@ -328,43 +312,31 @@ export class WalletService {
   /**
    * Credits a payment the provider has accepted, in ONE transaction: the payment moves to
    * `succeeded` (with the provider's reference, method and message, and `approved_at`), the
-   * balance grows by its P, and a DEPOSIT ledger row records it. Shared by the mock charge and
-   * every SmartroPay path (return, 재통보), so there is one place that can credit a payment.
+   * balance grows by its P, and a DEPOSIT ledger row records it — the one place that can credit
+   * a payment.
    *
-   * NEVER TWICE: the payment UPDATE is guarded by `status IN (from)`, so of two callers racing
-   * on one payment (a ReturnUrl double submit, a 재통보 arriving mid-approval) exactly one
-   * matches the row; the other gets `credited: false` and the status the winner left.
+   * NEVER TWICE: the payment UPDATE is guarded by `status = 'pending'`, so of two callers racing
+   * on one payment exactly one matches the row; the other gets `credited: false` and the status
+   * the winner left.
    *
    * LOCK ORDER — the balance row first, then the payment row, in every transaction that takes
    * both (this one, the admin refund's claw-back and its compensation): two orders would let a
-   * credit and a refund of one account deadlock. The single-statement payment UPDATEs of the
-   * callbacks (claim, fail, cancel) hold no balance lock, so they cannot join a cycle. The
-   * clock is read after the balance lock: another writer of this account may have committed
-   * while this transaction waited, and the ledger row written below must sort after it —
-   * `now()` is the transaction start and would sort before work its own balance_after_p
-   * includes (clock.ts, A-M3-14).
+   * credit and a refund of one account deadlock. The clock is read after the balance lock:
+   * another writer of this account may have committed while this transaction waited, and the
+   * ledger row written below must sort after it — `now()` is the transaction start and would
+   * sort before work its own balance_after_p includes (clock.ts, A-M3-14).
    *
-   * `user:balance` is published after COMMIT (PLAN 8): a credit that arrives by callback has no
-   * HTTP answer to carry the new balance to the screen.
+   * `user:balance` is published after COMMIT (PLAN 8), like every other balance change.
    */
   async creditPayment(input: CreditInput): Promise<CreditOutcome> {
     const outcome = await this.db.transaction((tx) => this.creditWithin(tx, input));
-    if (!('result' in outcome)) {
-      return outcome.heldBack
-        ? { credited: false, status: outcome.status, heldBack: true }
-        : { credited: false, status: outcome.status };
-    }
+    if (!('result' in outcome)) return { credited: false, status: outcome.status };
     await this.publisher.publishUser(input.userId, outcome.event);
     return { credited: true, result: outcome.result };
   }
 
-  /**
-   * creditPayment's transaction, run inside the caller's: for a caller that must commit more
-   * with the credit (the admin settle writes its audit row in it). The caller publishes the
-   * returned `event` after COMMIT, and — the lock order above — locks the balance row before
-   * anything else it locks, the payment row included.
-   */
-  async creditWithin(tx: Tx, input: CreditInput): Promise<CreditTxOutcome> {
+  /** creditPayment's transaction; the caller publishes the returned `event` after COMMIT. */
+  private async creditWithin(tx: Tx, input: CreditInput): Promise<CreditTxOutcome> {
     // The lock is what the balance UPDATE below would take anyway; the result is discarded,
     // and a vanished row still falls through to the check that UPDATE has.
     await tx
@@ -373,19 +345,6 @@ export class WalletService {
       .where(eq(schema.balances.userId, input.userId))
       .limit(1)
       .for('update');
-    if (input.holdBack) {
-      const [locked] = await tx
-        .select()
-        .from(schema.payments)
-        .where(
-          and(eq(schema.payments.id, input.paymentId), eq(schema.payments.userId, input.userId)),
-        )
-        .limit(1)
-        .for('update');
-      if (locked && input.from.includes(locked.status) && (await input.holdBack(tx, locked))) {
-        return { status: locked.status, heldBack: true };
-      }
-    }
     const creditedAt = await clockTimestamp(tx);
 
     // Approved at the instant it is credited: the same clock as the ledger row, so the admin
@@ -404,7 +363,7 @@ export class WalletService {
         and(
           eq(schema.payments.id, input.paymentId),
           eq(schema.payments.userId, input.userId),
-          inArray(schema.payments.status, [...input.from]),
+          eq(schema.payments.status, 'pending'),
         ),
       )
       .returning();
@@ -434,7 +393,7 @@ export class WalletService {
     if (!balance) {
       // Loud, with the provider's reference: the row that would carry it rolls back here.
       this.logger.error(
-        `payment ${input.paymentId} accepted (${input.providerRef}) but not credited: balance row vanished; payment left ${input.from.join('/')}`,
+        `payment ${input.paymentId} accepted (${input.providerRef}) but not credited: balance row vanished; payment left pending`,
       );
       throw new AppError('INTERNAL', {
         message: 'Balance row vanished after the provider accepted',

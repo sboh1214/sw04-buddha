@@ -91,8 +91,7 @@ function httpExceptionMessage(exception: HttpException): string {
  * That is a map of the internals handed to whoever asked. The message is not lost: `hidden`
  * below carries it into the log line, next to the request that produced it.
  *
- * Handlers marked @RawResponse() (health, the SmartroPay callbacks) keep the HttpException body
- * verbatim.
+ * Handlers marked @RawResponse() (health) keep the HttpException body verbatim.
  */
 @Catch()
 export class ApiExceptionFilter implements ExceptionFilter {
@@ -109,17 +108,15 @@ export class ApiExceptionFilter implements ExceptionFilter {
     if (raw && exception instanceof HttpException) {
       // A @RawResponse() handler owns its own body, and an HttpException is how it ANSWERS with
       // an error status on purpose: `/api/health`'s 503 is a report (the probe found a
-      // dependency down and said so), a SmartroPay 재통보 from an address that is not
-      // SmartroPay's gets a 403 and one whose SignValue does not verify a 400. Logging those at
-      // `error` as "unhandled failure" would fill the stream with the loudest line for routine
-      // answers, and describe them wrongly — the handler has already logged what it found.
+      // dependency down and said so). Logging that at `error` as "unhandled failure" would fill
+      // the stream with the loudest line for a routine answer, and describe it wrongly — the
+      // handler has already logged what it found.
       request.log.warn(
         { status, route: request.routeOptions.url },
         'raw-response route answered with an error status',
       );
     } else if (raw && status >= 500) {
-      // Anything else a raw route throws is a real failure (a 재통보 we could not process —
-      // SmartroPay retries it because the body is not `OK`), logged like any other 5xx.
+      // Anything else a raw route throws is a real failure, logged like any other 5xx.
       request.log.error(
         { err: exception, hidden, route: request.routeOptions.url },
         `raw-response route failed: ${hidden ?? INTERNAL_MESSAGE}`,

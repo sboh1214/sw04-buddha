@@ -1,6 +1,8 @@
 /**
  * Wallet integration tests (PLAN M2 AC 1-2, PLAN 5.1/5.6, ADR-0026) against the docker `test`
- * profile. Skips when TEST_* are unset (fails under CI=true, see the harness).
+ * profile. The charge, its catalogue and the provider info are preserved code, closed in
+ * production while paid Coin is off (ADR-0049; paid-coin-sales.test.ts), so this app opens them.
+ * Skips when TEST_* are unset (fails under CI=true, see the harness).
  */
 import { schema } from '@buddha/db';
 import {
@@ -43,7 +45,7 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     // account, which is above PLAN 7.5's own 10/min/user ceiling for the same route. The
     // shipped limit is pinned by rate-limit.controller.test.ts; this suite is about the
     // transaction, so it raises the ceiling out of the way instead of thinning the AC.
-    t = await createTestApp({ rateLimits: { charge: 500 } });
+    t = await createTestApp({ paidCoinSales: true, rateLimits: { charge: 500 } });
   });
   afterAll(async () => {
     await t?.close(); // undefined when beforeAll timed out waiting for the file lock
@@ -625,20 +627,26 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     expect(anonymous.statusCode).toBe(401);
   });
 
-  it('offers the immediate mock charge and keeps the SmartroPay window closed', async () => {
+  it('offers the immediate mock charge, and no SmartroPay window any more', async () => {
     // GET /payments/provider is public: the web picks the flow before anyone signs in.
     const info = await t.app.inject({ method: 'GET', url: '/api/v1/payments/provider' });
     expect(info.statusCode).toBe(200);
     expect(info.json()).toEqual({ data: { provider: 'mock' } });
 
-    const prepare = await t.app.inject({
-      method: 'POST',
-      url: '/api/v1/payments/smartro/prepare',
-      headers: chargeHeaders(user.cookie),
-      payload: chargeBody(pack, user.id),
-    });
-    expect(prepare.statusCode).toBe(404);
-    expect(prepare.json()).toMatchObject({ error: { code: 'NOT_FOUND' } });
+    // The SmartroPay integration is gone (ADR-0049): its routes are no routes at all.
+    for (const [method, url] of [
+      ['POST', '/api/v1/payments/smartro/prepare'],
+      ['POST', '/api/v1/payments/smartro/return?m=0'],
+      ['POST', '/api/v1/payments/smartro/notify'],
+    ] as const) {
+      const res = await t.app.inject({
+        method,
+        url,
+        headers: chargeHeaders(user.cookie),
+        payload: chargeBody(pack, user.id),
+      });
+      expect({ url, status: res.statusCode }).toEqual({ url, status: 404 });
+    }
     expect(await paymentsOf(user.id)).toHaveLength(0);
   });
 

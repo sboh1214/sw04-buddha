@@ -77,7 +77,9 @@ describe('enums', () => {
   });
 
   it('names the payment providers, payment event types and the refund admin action', () => {
-    expect(enums.paymentProviderSchema.options).toEqual(['mock', 'smartro']);
+    // SmartroPay is gone (ADR-0049); `mock` is the one provider until the next PG.
+    expect(enums.paymentProviderSchema.options).toEqual(['mock']);
+    expect(enums.paymentProviderSchema.safeParse('smartro').success).toBe(false);
     expect(enums.paymentProviderSchema.safeParse('toss').success).toBe(false);
     // payment_events.type is varchar(32).
     for (const type of enums.PAYMENT_EVENT_TYPES) {
@@ -86,7 +88,8 @@ describe('enums', () => {
     }
     // admin_actions.type is varchar(40).
     expect(enums.adminActionTypeSchema.parse('payment_refund')).toBe('payment_refund');
-    expect(enums.adminActionTypeSchema.parse('payment_settle')).toBe('payment_settle');
+    // The manual settle went with SmartroPay (ADR-0049).
+    expect(enums.adminActionTypeSchema.safeParse('payment_settle').success).toBe(false);
     for (const type of enums.ADMIN_ACTION_TYPES) expect(type.length).toBeLessThanOrEqual(40);
   });
 

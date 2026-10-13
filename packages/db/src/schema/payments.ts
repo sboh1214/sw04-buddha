@@ -16,9 +16,9 @@ import { createdAt, timestampTz, updatedAt } from './columns.js';
 import { paymentStatusEnum } from './enums.js';
 
 /**
- * Charges (P bought with KRW). Provider 'mock' succeeds immediately (PLAN 1.2, M2); 'smartro'
- * goes through the SmartroPay payment window and its callbacks (ADR-0042), which record every
- * exchange in `payment_events`.
+ * Charges (P bought with KRW). Provider 'mock' succeeds immediately (PLAN 1.2, M2); a PG with a
+ * payment window records every exchange in `payment_events` (ADR-0042). The SmartroPay
+ * integration that first did is gone, and the table stays for the next PG (ADR-0049).
  */
 export const payments = pgTable(
   'payments',
@@ -36,9 +36,9 @@ export const payments = pgTable(
      * keeps its own amount/price snapshot, so history survives (ADR-0026).
      */
     packageId: uuid().references(() => chargePackages.id, { onDelete: 'set null' }),
-    /** PAYMENT_PROVIDERS in @buddha/shared ('mock', 'smartro'). */
+    /** PAYMENT_PROVIDERS in @buddha/shared. */
     provider: varchar({ length: 32 }).notNull(),
-    /** The provider's transaction id (SmartroPay: the Tid the approval returned). */
+    /** The provider's transaction id (a PG's approval id). */
     providerRef: text(),
     status: paymentStatusEnum().notNull().default('pending'),
     /** The PG's PayMethod of the approval (CARD, KAKAO, …); null for mock and unapproved rows. */
@@ -83,9 +83,9 @@ export const payments = pgTable(
     // Per account, so one user's key can never collide with or probe another's.
     uniqueIndex('payments_user_id_idempotency_key_unique').on(t.userId, t.idempotencyKey),
     /**
-     * One payment per PG transaction: a callback or 재통보 is matched to its row by Moid, and a
-     * Tid that somehow arrived for a second payment must fail loudly instead of crediting twice.
-     * Partial because a `pending` row has no reference until the approval is claimed.
+     * One payment per PG transaction: a transaction id that somehow arrived for a second payment
+     * must fail loudly instead of crediting twice. Partial because a `pending` row has no
+     * reference until the approval is claimed.
      */
     uniqueIndex('payments_provider_provider_ref_unique')
       .on(t.provider, t.providerRef)

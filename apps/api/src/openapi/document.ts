@@ -50,13 +50,13 @@ export function createOpenApiDocument(app: INestApplication): OpenAPIObject {
       SESSION_SECURITY_SCHEME,
     )
     /**
-     * 429 on EVERY operation, not only the four with a named `@RateLimit` bucket (register,
-     * charge, prepareSmartroPayment, redeemCoupon): the address bucket is a Fastify hook
+     * 429 on EVERY operation, not only the three with a named `@RateLimit` bucket (register,
+     * charge, redeemCoupon): the address bucket is a Fastify hook
      * ahead of parsing that counts every request (address-limit.ts, PLAN 7.5's default row),
      * so `GET /markets` can be refused exactly as `POST /payments/charge` can. The first
      * document listed 429 only where a handler wrote `@ApiErrors('RATE_LIMITED')`, and a
      * generated client had no such response for 37 of 42 operations (PR #8 review). The
-     * explicit entries stay — on those four, where `RATE_LIMITED` reads next to the `@RateLimit`
+     * explicit entries stay — on those three, where `RATE_LIMITED` reads next to the `@RateLimit`
      * that makes it likely, and on `updateMyContact` — and a method-level response of the same
      * status replaces this one byte for byte (`ApiErrors` emits the same shape), so the document
      * is unchanged there. `/api/health` is `@ApiExcludeController()` and exempt in the hook's

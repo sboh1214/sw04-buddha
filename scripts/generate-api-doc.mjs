@@ -63,7 +63,7 @@ const BANNER = `<!-- 이 파일은 scripts/generate-api-doc.mjs 가 생성합니
   \`@ApiErrors\` 데코레이터와 zod 스키마. 모든 오퍼레이션에 공통인 \`RATE_LIMITED\`(429) 하나만은
   \`apps/api/src/openapi/document.ts\` 의 \`addGlobalResponse\` 가 붙인다(주소 버킷은 모든 라우트에
   걸리므로). 고친 뒤 \`pnpm api:openapi\` 를 실행한다.
-- 문서의 문장(개요·인증·헬스체크·SmartroPay 콜백·better-auth·레이트 리밋·실시간 절):
+- 문서의 문장(개요·인증·헬스체크·better-auth·레이트 리밋·실시간 절):
   \`scripts/generate-api-doc.mjs\`
   맨 위의 템플릿 상수.`;
 
@@ -76,8 +76,7 @@ const OVERVIEW = `## 개요
 
 - **기본 경로** — 이 문서에 실린 모든 오퍼레이션은 \`/api/v1\` 아래에 있다(전역 prefix \`api\` +
   URI 버저닝, 기본 버전 1). 버전 접두어가 없는 두 표면은 OpenAPI 문서 밖이라 아래에 손으로 적었다:
-  헬스체크(\`/api/health\`, \`/api/health/live\`)와 \`/api/auth/*\`(better-auth). SmartroPay 가 부르는
-  콜백 셋(\`/api/v1/payments/smartro/{return,stop,notify}\`)도 PG 의 계약이라 문서 밖이다(아래 절).
+  헬스체크(\`/api/health\`, \`/api/health/live\`)와 \`/api/auth/*\`(better-auth).
   문서에 \`servers\` 가 없으므로 경로는 API 오리진 기준 상대 경로다. 브라우저는 Next.js
   rewrite(\`/api/:path*\` → \`NEXT_PUBLIC_API_URL\`)를 거쳐 같은 오리진으로 호출한다.
 - **성공 봉투** — 단일 리소스는 \`{ "data": ... }\`, 커서 목록은
@@ -97,8 +96,7 @@ const OVERVIEW = `## 개요
   P 금액은 부호 1자 + \`MAX_P_AMOUNT\`(10^15)의 16자리 = 17자까지만 받는다(그보다 긴 문자열은
   파싱하기 전에 거절한다: 백만 자리 \`BigInt()\` 는 요청 스레드에서 실제로 CPU 를 쓴다).
 - **본문 형식** — 요청·응답 모두 \`application/json\` 이다.
-  \`application/x-www-form-urlencoded\` 파서는 꺼져 있다(HTML 폼이 바로 CSRF 의 모양이다). 폼을
-  받는 곳은 문서 밖의 SmartroPay 콜백 셋뿐이고, 그 핸들러들만 원문 바이트를 직접 읽는다.
+  \`application/x-www-form-urlencoded\` 파서는 꺼져 있다(HTML 폼이 바로 CSRF 의 모양이다).
 - **operationId** — 오퍼레이션마다 \`@ApiOperation({ operationId })\` 로 명시한다. 명시하지 않은
   오퍼레이션만 컨트롤러의 메서드 이름을 쓴다(\`openapi/document.ts\` 의 \`operationIdFactory\`).`;
 
@@ -149,130 +147,6 @@ const HEALTH_SECTION = `## 헬스체크 (문서 밖)
 - \`GET /api/health/live\` 는 \`{ "status": "ok", "uptimeSeconds": 1234 }\` 만 답한다. 200 말고 다른
   답이 없는 것이 요점이다: 레디니스에 라이브니스 프로브를 물리면 Redis 가 한 번 흔들렸다는 이유로
   컨테이너가 재시작되고, 그 인스턴스가 들고 있던 소켓이 전부 끊긴다.`;
-
-/**
- * SmartroPay 콜백. Read from apps/api/src/payments/smartro/smartro-callback.controller.ts,
- * smartro-pay.service.ts, callback-form.ts, smartro-protocol.ts (SMARTRO_NOTIFY_IPS),
- * payments/payments-config.ts (notifyIps) and packages/shared/src/payment-gateway.ts
- * (PAYMENT_RETURN_RESULTS).
- */
-const PAYMENT_CALLBACK_SECTION = `## SmartroPay 콜백 (문서 밖)
-
-스마트로페이 결제창과 스마트로페이 서버가 부르는 경로 셋이다(ADR-0042). 클라이언트가 아니라 PG 의
-계약이라 \`@ApiExcludeController()\` 로 OpenAPI 문서에서 뺐고, PLAN 7 봉투로 감싸지 않는다.
-**공개 라우트**다 — 모바일 결제창의 ReturnUrl POST 는 스마트로페이 사이트에서 쿠키 없이 다른 출처로
-오고, 재통보는 서버 간 호출이다. 그래서 세션이 아니라 Moid(결제 id 에서 하이픈을 뺀 소문자 16진수
-32자리 — ReturnUrl·StopUrl 에는 쿼리 \`m\` 으로 우리가 넣어 둔다)로만 결제를 찾는다.
-
-| 메서드 | 경로 | 뜻 |
-| --- | --- | --- |
-| POST | \`/api/v1/payments/smartro/return?m=<moid>\` | ReturnUrl. \`Tid\`·\`TrAuthKey\` 로 승인을 요청하고, 검증을 통과하면 P 를 적립한다 |
-| GET·POST | \`/api/v1/payments/smartro/stop?m=<moid>\` | StopUrl. 아직 어떤 승인도 잡지 않은 \`pending\` 결제를 \`failed\` 로 닫는다 |
-| POST | \`/api/v1/payments/smartro/notify\` | 재통보(신통보 파라미터). 가맹점 관리자(smilebiz)에 운영자가 등록하는 URL |
-
-- **본문** — \`application/x-www-form-urlencoded\`(UTF-8). 전역 폼 파서는 계속 꺼져 있고, 이 세
-  핸들러만 파서가 남겨 둔 원문(\`rawBody\`)을 직접 디코딩한다. 다른 라우트에 보낸 폼은 여전히 400 이다.
-- **return·stop 의 답** — 언제나 \`303 See Other\` 로 웹의 \`/wallet?payment=<id>&result=<r>\`(웹
-  오리진은 \`BETTER_AUTH_URL\` 의 오리진). \`r\` 은 \`succeeded\`·\`failed\`·\`stopped\`·\`pending\`·
-  \`cancelled\` 중 하나이고, Moid 를 알아볼 수 없으면 \`payment\` 없이 \`result=failed\` 다.
-- **승인은 한 번만** — ReturnUrl 은 \`pending\` 이고 아직 아무도 잡지 않은 결제에 \`provider_ref\` 를
-  먼저 적는 요청만 승인을 요청한다. 두 번째 제출(뒤로 가기)은 승인을 다시 부르지 않고 지금 상태를
-  답한다. 승인 응답이 오지 않으면 결과 조회를 한 번 하되, 조회는 **성공 코드일 때만** 그 결과로
-  처리한다 — 조회의 다른 코드(\`6017\` 승인이력 없음, \`6021\` 거래조회 오류, \`9999\` 등)는 늦게 오는
-  승인을 아직 못 찾은 것일 수 있어 아무것도 증명하지 않는다. 그래서 모르면 \`pending\` 으로 두어
-  재통보가, 오지 않으면 관리자가 수동 정리(\`POST /api/v1/admin/payments/{id}/settle\`)로 정리하게
-  한다. 기록된 성공 승인이 없으면(승인 응답이 없었거나 PG 오류 코드였으면) 가맹점 관리자에 보이는 승인
-  \`Tid\` 를 \`tid\` 로 준다. 승인 응답이 성공 코드가 아니면 결제는 \`failed\` 다 — 그 코드가 거절이
-  아니라 PG 쪽 오류(\`9999\`·\`W999\`·\`W027\`~\`W030\`·\`W038\`·\`W051\`·\`NP98\` 등 시스템·저장·연결
-  오류)면 카드가 청구됐을 수 있으니 관리자 목록이 \`needsReview\` 로 표시한다(\`3002\` VAN실패·\`3095\`
-  카드사 실패 응답은 카드 쪽이 답한 거절이라 표시하지 않는다). 그런 결제를 \`credit\` 으로 정리할 때도
-  기록된 성공 승인이 없으므로 \`tid\` 를 준다. 승인됐는데 \`SignValue\`·\`Mid\`·\`Moid\`·금액이 맞지
-  않거나 적립이 실패하면 곧바로 망취소하고 \`cancelled\` 로 답한다. 망취소의 결과는 \`net_cancel\` 이벤트의 \`payload.outcome\`
-  (\`cancelled\`·\`refused\`·\`unknown\`)에 남는다: PG 가 분명히 거절하면(승인이 살아 있다) 그 기록과
-  한 트랜잭션에서 결제를 \`pending\` 으로 되돌려 재통보가 적립할 수 있게 하고(단 그사이 취소 통보가
-  취소를 확인했으면 되돌리지 않고 \`cancelled\` 로 두고 그렇게 답한다), 답이 없거나 취소가 아직
-  끝나지 않았다는 코드면 카드가 이미 취소됐을 수 있으므로 \`cancelled\` 로 둔다(관리자가 가맹점
-  관리자에서 확인하고 수동 정리한다). 둘 다 \`pending\` 으로 답한다. 답을 모른 채 \`cancelled\` 로
-  둔 결제는 회원이 읽는 결제(\`GET /api/v1/me/payments\`·\`/{id}\`)의 \`cancelConfirmed\` 가
-  \`false\` 이고, 카드 취소가 확인되면(PG 의 답, 취소 재통보, 관리자의 수동 정리) \`true\` 가 된다 —
-  웹은 그때까지 이 결제를 확인 중으로 보여 준다(\`cancelled\` 가 아닌 결제는 \`null\`). 그동안 같은
-  폼을 다시 보내거나 StopUrl 이 와도 \`pending\` 으로 답한다 — \`result=cancelled\` 는 취소가 확인된
-  결제에만 쓴다. 단, 그 승인이 우리의 **다른** 결제의 것이면(\`Moid\` 가 다른 결제를 가리키거나 그
-  \`Tid\` 를 다른 스마트로페이 결제가 이미 들고 있으면) 취소하지 않고 이 결제를 \`failed\` 로 닫는다.
-  그 \`Tid\` 를 다른 스마트로페이 결제가 들고 있으면 그 승인은 그 결제의 흐름이 맡는다. \`Moid\` 로만
-  가리키면(다른 결제의 결제창 인증을 이 ReturnUrl 로 보낸 경우) 다른 스마트로페이 결제가 그 \`Tid\` 를
-  들기 전까지 관리자 목록이 이 결제를 \`needsReview\` 로 표시하고, 그 사유(\`resultMessage\`)에 가리킨
-  결제의 \`Moid\`, 승인 금액과 승인 \`Tid\` 를 적는다 — 가맹점 관리자는 그 승인을 이 결제의
-  주문번호가 아니라 그것으로 찾는다. 관리자는 가맹점 관리자에서 취소하고 \`cancelled\` 로, 또는 같은
-  계정이면 그 금액만큼 잔고를 조정하고 \`failed\` 로 정리한다(\`credit\` 은 \`approval_mismatch\` 로
-  거절된다. 가리킨 결제가 아직 그 승인을 가질 수 있으면 — \`pending\`, 잡힌 \`failed\`, 망취소가
-  확인되지 않은 \`cancelled\` — 오류 로그가 그 결제의 상태에 따라 할 일을 적고, 수동 정리 대화상자도
-  카드를 취소하기 전에 그 결제부터 정리하라고 안내한다). 이 결제의 잡기는 그 승인에 쓰였으므로, 이
-  결제의 \`Moid\` 로 뒤에 오는 승인 통보는 적립하지 않고 취소 통보는 이 결제를 닫지 않으며 수동 정리도
-  \`credit\` 하지 않는다 — 그런 승인은 다른 곳(또 다른 결제의 ReturnUrl)에서 만들어졌고 거기서
-  정리한다(아래 notify). 가리킨 스마트로페이 결제가 같은 계정의 아직 잡히지 않은 \`pending\` 이면 그
-  결제도 \`failed\` 로 닫는다 — 잡히지 않은 결제는 그 승인을 적립할 수 없다.
-  적립이 실패했어도 다시 읽은 결제가 더는 \`pending\` 이 아니면(커밋 뒤에 난 오류, 또는 그사이
-  재통보가 적립) 취소하지 않고 지금 상태로 답한다. 승인을 기다리는 사이 그 카드의 취소 통보가
-  기록됐으면(가맹점 관리자에서 한 취소) ReturnUrl 도 적립하지 않고 망취소도 하지 않는다 — 결제
-  행의 잠금 아래에서 기록된 취소 통보를 읽는, 승인 통보의 적립과 같은 규칙이다(아래 notify).
-  부분취소면 결제를 잡힌 \`pending\` 으로 두고 오류 로그를 남기며(관리자가 \`cancelled\` 로
-  수동 정리하고 잔고를 맞춘다) \`pending\` 으로 답하고, 전체 취소면 그 통보의 처리가 결제를
-  \`cancelled\` 로 닫으니 지금 상태로 답한다.
-- **notify 의 답** — 처리했거나 무시해도 되는 통보는 \`200 text/plain\` \`OK\`. 보낸 주소가 그
-  모드의 스마트로페이 서버가 아니면 \`403\`(STG \`211.193.35.11\`, REAL 재통보 서버
-  \`211.193.35.216\`·\`211.193.35.217\` 와 결제 서버 \`211.193.35.20\`; 주소는 Caddy 가 적은
-  \`X-Forwarded-For\` 를 \`TRUST_PROXY\` 로 믿어 읽는다. \`SMARTRO_APPROVAL_BASE_URL\` 로 로컬 가짜 PG
-  를 쓸 때만 이 검사를 끈다 — 운영에서는 그 변수가 거부된다), \`SignValue\` 가 맞지 않으면 \`400\`, 우리
-  쪽 처리가 실패하면 5xx(셋 다 본문에 \`OK\` 가 없으므로 스마트로페이가 다시 보낸다). 승인
-  통보(\`StateCd=0\`)는 아직 적립하지 않은 결제(\`pending\`, 또는 우리가 \`failed\` 로 적은 결제)를
-  적립하되, **우리 ReturnUrl 이 잡은 결제(\`provider_ref\` 가 있는 결제)만** 적립한다: 인증/승인
-  분리에서 PG 는 우리 서버가 승인을 요청할 때만 승인하고, 그 요청은 언제나 잡기가 커밋된 뒤에 나간다.
-  잡히지 않은 결제의 승인 통보는 기록만 하고 \`OK\` 로 답한다(다시 보내도 바뀔 것이 없다 — 위조이거나,
-  그 결제창의 인증을 다른 결제의 ReturnUrl 로 보내 우리 호출이 승인한 것이고 그때는 승인을 요청한
-  그 다른 결제가 표시되며 오류 로그가 그 결제를 적는다). 잡힌 \`failed\` 결제라도 그 잡기의 승인이
-  다른 결제의 결제창이었으면(위 ReturnUrl) 그 \`Moid\` 의 승인 통보는 적립하지 않고 기록과 오류 로그만
-  남기며 \`OK\` 로 답한다 — 그 결제의 \`Moid\` 에 제 승인은 없다. 망취소된(\`cancelled\`) 결제의 승인 통보는 망취소가 확인됐거나 결과를 모르면 적립하지 않고
-  \`OK\`, 망취소가 아직 끝나지 않았으면(기록 전) 5xx 로 답해 다시 받는다 — 적립하려던 순간에 망취소가
-  결제를 잡은 경우도 같다. 취소 통보(\`StateCd=1|2\`)는 **전체 취소**일 때만 카드가 취소됐다는 PG
-  의 말로 받는다: \`ResultCode\` 가 그 결제수단에서 취소 완료(\`2001\`·\`2013\` 등)를 뜻하고, \`Otid\`
-  (구통보 \`OTID\`)가 없거나 자기 \`Tid\` 와 같고, \`Amt\` 가 없거나 승인 금액과 같아야 한다(승인
-  금액은 결제 금액이다 — 적립된 \`succeeded\`·\`refunding\`·\`refunded\` 결제는 결제 금액의 승인만
-  적립했으니 늘 그렇다. 단 적립되지 않은 결제(\`pending\`·\`failed\`·\`cancelled\`)가 망취소를
-  시도했으면(PG 가 망취소를 거절해 \`pending\` 으로 돌아간 결제도) 망취소가 취소를 요청한 금액이고 —
-  다른 금액의 승인이라 망취소했을 수 있다 — 망취소가 PG 의 답을 기다리는 중이라 그 금액이 아직
-  기록되지 않은 \`cancelled\` 결제는 기록된 성공 승인 응답의 금액이다). 다른 코드(취소 실패 등)는
-  기록만 하고 아무것도 바꾸지 않는다. 다른 거래를
-  \`Otid\` 로 가리키거나(매뉴얼: 부분취소의 경우 원거래 TID 를 넣는다) 금액이 다른 통보는
-  **부분취소**다 — 이 서비스는 전체 취소만 하므로(가맹점 관리자에서 한 부분취소) 기록하고 오류 로그만
-  남기며 아무것도 바꾸지 않는다(로그는 결제 상태에 맞는 정리 방법을 적는다: \`pending\`·\`failed\`·
-  \`cancelled\` 는 \`cancelled\` 로, \`refunding\` 은 \`refunded\` 로 수동 정리한 뒤 잔고 조정, 적립된
-  \`succeeded\`·\`refunded\` 는 수동 정리 없이 잔고 조정 \`POST /api/v1/admin/users/{id}/balance-adjust\`
-  만). 부분취소 통보가 기록된 결제는 뒤이어 오는 승인 통보도(ReturnUrl 의 승인도 — 위) 적립하지 않고(기록하고 오류 로그를 남기고
-  \`OK\` — 관리자가 \`cancelled\` 로 정리하고 잔고를 맞춘다), 전체 취소 통보가 기록됐는데 결제가
-  아직 닫히지 않았을 때 오는 승인 통보도 적립하지 않는다(보통은 그 통보의 처리가 곧 결제를 닫는다 — 그 처리가 이미
-  끝났는데 결제가 \`pending\`·\`failed\` 로 남았다면 관리자 목록이 표시하니 가맹점 관리자에서 확인하고
-  수동 정리한다). 전체 취소 통보는, 승인
-  \`Tid\` 를 저장한 결제(적립된 \`succeeded\`·\`refunding\`, 망취소된 \`cancelled\`)라면 그 \`Tid\`(구통보 \`TID\`)가 결제의
-  \`provider_ref\`(승인 \`Tid\`)일 때만 그 결제의 것으로 본다: \`refunding\` 환불을 \`refunded\` 로
-  마치고(P 는 이미 회수했다), \`cancelled\` 결제의 확인되지 않은 망취소를 확인된 것으로 기록한다.
-  우리 ReturnUrl 이 잡았지만 아직 적립하지 않은 결제(\`pending\`·\`failed\`)는 \`provider_ref\` 가 인증
-  \`Tid\` 라 승인 \`Tid\` 와 다를 수 있으므로 \`Moid\` 만으로 찾아(잡힌 결제의 승인은 하나다)
-  \`cancelled\` 로 닫고 확인된 망취소로 기록해, 뒤늦게 다시 오는 승인 통보가 취소된 카드에 P 를
-  적립하지 못하게 한다(잡히지 않은 결제와, 잡기의 승인이 다른 결제의 결제창이었던 \`failed\` 결제는
-  기록만 한다). \`succeeded\` 결제의 취소 통보(가맹점
-  관리자에서 한 취소)는 기록만 하고 P 를 회수하지 않는다(ADR-0042 의 열린 질문) — 그 결제를 관리자가
-  환불하면 PG 가 취소를 거절하거나 답하지 않아도 이 통보가 있으니 P 를 되돌리지 않고 \`refunded\` 로
-  마친다. 수동 정리도 이런 통보가 있는 결제는 \`credit\`·\`restore\` 하지 않고, 부분취소 통보가
-  있는 결제도 하지 않는다(\`partial_cancel\` — 관리자가 \`cancelled\`·\`refunded\` 로 정리하고 잔고를
-  손으로 맞춘다). 수동 정리의 \`credit\` 은 다른 결제의 승인 호출이 만든 승인(그 결제의 응답에 기록된
-  \`Tid\`)의 통보를 이 결제의 승인으로 받지 않는다. 적립된 결제에 그 \`provider_ref\` 가 아닌 승인 \`Tid\` 로 온 승인 통보나 전체 취소
-  통보는 아무것도 바꾸지 않고 오류 로그만 남긴다 — 수동 정리 \`credit\` 에 준 \`tid\` 가 잘못됐다는
-  표시다.
-- PG 와의 교환은 \`payment_events\` 에 남는다(MerchantKey·CancelPwd·HashData·EncData 와 구매자
-  개인정보는 빼고). return·stop 은 결제를 실제로 잡거나 닫을 때만 남기고, 알려진 SmartroPay 필드만
-  적는다 — 공개 경로라 이미 끝난 결제에 같은 폼을 다시 보내도 아무것도 쌓이지 않는다. 레이트 리밋은
-  다른 라우트처럼 주소 버킷만 걸린다.`;
 
 /**
  * /api/auth/*. Read from apps/api/src/auth/auth.ts, auth/auth.module.ts, the better-auth 1.7.2
@@ -448,11 +322,11 @@ const ERROR_NOTES = {
   CONTACT_REQUIRED:
     '실명과 휴대전화 번호를 아직 등록하지 않은 계정이다. `PUT /api/v1/me/contact` 로 등록한 뒤 다시 시도한다.',
   REFUND_NOT_ALLOWED:
-    '환불 정책 밖의 결제다. `details[0].message` 가 까닭을 말한다 — `window_closed`(승인 후 7일이 지났다), `status`(환불할 수 있는 상태가 아니다), `provider`(그 결제 수단은 취소를 지원하지 않는다). 이미 쓴 P 가 있으면 `INSUFFICIENT_BALANCE` 로 답한다. 관리자 수동 정리(`POST /api/v1/admin/payments/{id}/settle`)도 이 코드로 답한다 — `provider`(SmartroPay 결제가 아니다), `status`(그 상태에서 고를 수 없는 결과다, 또는 취소 재통보가 카드가 취소됐다고 알려 와 `credit`·`restore` 할 수 없다), `in_progress`(2분 안에 바뀌어 콜백이나 환불이 아직 처리 중일 수 있다), `approval_mismatch`(`credit`: 기록된 승인의 `Mid`·금액·`Moid` 가 결제와 맞지 않거나 — 그 승인은 그래서 망취소됐으니 카드를 가맹점 관리자에서 취소하고 `cancelled` 로 정리한다 — 준 `tid` 가 기록된 승인의 것이 아니거나, 그 `Tid` 를 다른 결제가 이미 들고 있다 — 기록된 승인이 여럿이면 결제와 맞는 것을 쓰고, 맞는 것이 하나도 없을 때만 이렇게 답한다. 단 `SignValue` 가 맞지 않는 우리 승인 응답은 서명이 맞는 기록(우리 승인 응답이나 재통보)이 그와 어긋나지 않을 때만 쓴다 — 서명이 맞는 기록이 다른 `Tid`·`Mid`·금액·`Moid` 를 말하면 이렇게 답한다), `partial_cancel`(`credit`·`restore`: 그 카드의 부분취소 재통보가 기록돼 있다 — 카드의 일부만 청구된 상태라 수동 정리의 어떤 결과도 맞지 않으니 `cancelled`·`refunded` 로 정리하고 잔고를 손으로 맞춘다). 기록된 성공 승인이 없는데(승인 응답이 없었거나 PG 오류 코드였으면) `credit` 에 `tid` 를 주지 않으면 `VALIDATION_ERROR`(`details[0].path` 가 `["tid"]`)로 답한다.',
+    '환불 정책 밖의 결제다. `details[0].message` 가 까닭을 말한다 — `window_closed`(승인 후 7일이 지났다), `status`(환불할 수 있는 상태가 아니다), `provider`(그 결제 수단은 취소를 지원하지 않는다). 이미 쓴 P 가 있으면 `INSUFFICIENT_BALANCE` 로 답한다.',
   PAYMENT_GATEWAY_REFUSED:
-    'PG 가 요청을 거절했다. `details[0].message` 에 PG 의 `<ResultCode> <ResultMsg>` 가 붙는다. 환불이면 회수했던 P 를 되돌려 놓았다. 단 환불 **재시도**가 거절되면 첫 시도가 이미 카드를 취소했을 수 있어 P 를 되돌리지 않고 `refunding` 으로 둔다 — 첫 시도라도 PG 의 답을 기다리는 사이 재시도가 결제를 넘겨받았으면 마찬가지다. 이때 `details[1].message` 가 `settle_required` 이고, 관리자가 가맹점 관리자에서 확인한 뒤 수동 정리(`restore` 또는 `refunded`)한다. 그 카드의 **부분취소** 재통보가 기록돼 있을 때도(가맹점 관리자에서 일부만 취소했다) 거절된 환불은 첫 시도든 재시도든 P 를 되돌리지 않고 `refunding` 으로 두며 `settle_required` 로 답한다 — 카드의 나머지는 청구된 채라, 관리자가 `refunded` 로 수동 정리하고(`restore` 는 `partial_cancel` 로 거절된다) 잔고를 손으로 맞춘다. 거절됐어도 그 결제의 전체 취소 재통보가 와 있거나 그사이 재통보·다른 시도가 환불을 끝냈으면 오류가 아니라 `refunded` 로 마친 결제로 답한다.',
+    'PG 가 요청을 거절했다. `details[0].message` 에 PG 의 `<결과 코드> <메시지>` 가 붙는다. 환불이면 회수했던 P 를 되돌려 놓았다. 단 환불 **재시도**가 거절되면 첫 시도가 이미 카드를 취소했을 수 있어 P 를 되돌리지 않고 `refunding` 으로 둔다 — 첫 시도라도 PG 의 답을 기다리는 사이 재시도가 결제를 넘겨받았으면 마찬가지다(그 재시도가 정한다). 거절됐어도 그사이 다른 시도가 환불을 끝냈으면 오류가 아니라 `refunded` 로 마친 결제로 답한다.',
   PAYMENT_GATEWAY_ERROR:
-    'PG 에 닿지 못했거나 결과를 알 수 없다(502). 다른 5xx 처럼 본문에 내부 사정을 담지 않는다. 환불이면 `refunding` 으로 남으니 다시 시도하거나, 가맹점 관리자에서 확인한 뒤 수동 정리한다. 단 그 결제의 전체 취소 재통보가 기록돼 있거나 그사이 재통보·다른 시도가 환불을 끝냈으면 오류가 아니라 `refunded` 로 마친 결제로 답한다.',
+    'PG 에 닿지 못했거나 결과를 알 수 없다(502). 다른 5xx 처럼 본문에 내부 사정을 담지 않는다. 환불이면 `refunding` 으로 남으니 다시 시도한다. 단 그사이 다른 시도가 환불을 끝냈으면 오류가 아니라 `refunded` 로 마친 결제로 답한다.',
   INTERNAL: '그 밖의 서버 오류. 본문에 내부 사정을 담지 않는다.',
 };
 
@@ -460,7 +334,7 @@ const ERROR_NOTES = {
 const RATE_LIMIT_ROUTES = {
   default:
     '모든 HTTP 라우트. 아래 버킷을 지목한 라우트도 여기에 함께 들어간다(주소 하나당 API 전체 합산).',
-  charge: '`POST /api/v1/payments/charge`, `POST /api/v1/payments/smartro/prepare`',
+  charge: '`POST /api/v1/payments/charge`',
   coupon: '`POST /api/v1/coupons/redeem`',
   email:
     '메일을 보내는 경로 — `POST /api/v1/auth/register` 와 `/api/auth/*` 의 `/change-email`, `/send-verification-email`, `/request-password-reset`, `/forget-password`. 시도 자체를 센다(시도가 곧 피해다). `/change-email` 만은 **로그인한 요청만** 센다(세션 없는 요청은 401 이고 아무에게도 메일이 가지 않으므로): 먼저 **요청한 계정**의 버킷을, 그다음 `newEmail` 의 버킷을 — 인증된 계정의 확인 메일은 본문의 주소가 아니라 계정이 이미 가진 주소로 가고, 계정을 먼저 세야 한 계정이 1분에 다섯 주소까지만 지목할 수 있기 때문이다. `GET /verify-email` 도 링크가 메일을 보내는 종류(이메일 변경의 **확인** 링크: 누를 때마다 새 주소에 다시 보낸다)이면 그 수신 주소로 센다 — 토큰은 1시간짜리 무상태 JWT 라 누른다고 소모되지 않기 때문이다. 서명이 유효한 토큰만 세고, 변경을 적용하는 **검증** 링크는 메일을 보내지 않으므로 세지 않는다.',
@@ -782,7 +656,7 @@ blocks.push(
   schemaNames.map((name) => `\`${name}\``).join(', '),
 );
 
-blocks.push(HEALTH_SECTION, PAYMENT_CALLBACK_SECTION, BETTER_AUTH_SECTION);
+blocks.push(HEALTH_SECTION, BETTER_AUTH_SECTION);
 
 blocks.push(
   '## 레이트 리밋',

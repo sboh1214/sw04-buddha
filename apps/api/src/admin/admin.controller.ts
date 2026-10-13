@@ -26,7 +26,6 @@ import {
   balanceAdjustBodySchema,
   cursorQuerySchema,
   refundPaymentBodySchema,
-  settlePaymentBodySchema,
   uuidParamSchema,
   type AdminBalanceAdjustResult,
   type AdminPayment,
@@ -40,7 +39,6 @@ import {
   type CreateCouponBody,
   type CursorQuery,
   type RefundPaymentBody,
-  type SettlePaymentBody,
   type UpdateChargePackageBody,
   type UpdateCouponBody,
 } from '@buddha/shared';
@@ -52,11 +50,11 @@ import { ApiPage } from '../common/interceptors/response-envelope.interceptor.js
 import { ApiData, ApiErrors, ApiPageOf } from '../common/openapi/api-response.decorators.js';
 import { CURSOR_QUERY_PARAMS } from '../common/openapi/cursor-query.js';
 import { SESSION_SECURITY_SCHEME } from '../openapi/document.js';
+import { PaidCoinSalesGuard } from '../payments/paid-coin-sales.guard.js';
 import { ChargePackageService } from '../wallet/charge-package.service.js';
 import { CouponService } from '../wallet/coupon.service.js';
 import { AdminService } from './admin.service.js';
 import { PaymentRefundService } from './payment-refund.service.js';
-import { PaymentSettleService } from './payment-settle.service.js';
 
 /**
  * PLAN 7.3 / 12. Guards run in order, so SessionGuard fills `request.auth` before AdminGuard
@@ -72,7 +70,6 @@ export class AdminController {
     private readonly packages: ChargePackageService,
     private readonly coupons: CouponService,
     private readonly refunds: PaymentRefundService,
-    private readonly settlements: PaymentSettleService,
   ) {}
 
   // --- charge packages (ADR-0026): the catalogue users buy from -----------------------
@@ -221,21 +218,23 @@ export class AdminController {
 
   @Post('payments/:id/refund')
   @HttpCode(200)
+  // Closed with the rest of paid Coin while it is off (ADR-0049): an existing payment is not
+  // refunded either. Method-level, so it runs after the admin check and a non-admin still gets
+  // 401/403; the admin then gets a 404 before the payment is read.
+  @UseGuards(PaidCoinSalesGuard)
   @ApiOperation({
     operationId: 'adminRefundPayment',
     summary:
-      'Refund an unused charge within 7 days of its approval: claw back all its P, then cancel the whole KRW at the provider (retry a refunding one)',
+      'Refund an unused charge within 7 days of its approval: claw back all its P, then cancel the whole KRW at the provider (retry a refunding one). Closed while paid Coin is off: 404 (ADR-0049)',
   })
   @ApiData(adminPaymentSchema)
   // INSUFFICIENT_BALANCE: part of the P was used. REFUND_NOT_ALLOWED: details[0].message is
   // `window_closed`, `status` or `provider`. PAYMENT_GATEWAY_REFUSED: the PG said no and the P
-  // was restored — or, on a retry, a first attempt a retry took over, or a payment a partial
-  // cancel 재통보 is on record for (details[1].message `settle_required`), nothing was restored
-  // and the payment stays `refunding` for the settle below. PAYMENT_GATEWAY_ERROR: no answer;
-  // the payment stays `refunding` for a retry. A refusal or no answer after a full-cancel 재통보
-  // — or once the 재통보 or another attempt finished the refund meanwhile — answers 200
-  // `refunded`. DUPLICATE_REQUEST (details[0].message `in progress`): a retry while the last
-  // attempt is still waiting on the PG.
+  // was restored — or, on a retry or a first attempt a retry took over, nothing was restored and
+  // the payment stays `refunding` (the card may be cancelled already). PAYMENT_GATEWAY_ERROR: no
+  // answer; the payment stays `refunding` for a retry. One another attempt finished meanwhile
+  // answers 200 `refunded`. DUPLICATE_REQUEST (details[0].message `in progress`): a retry while
+  // the last attempt is still waiting on the PG. NOT_FOUND: no such payment, or paid Coin is off.
   @ApiErrors(
     'UNAUTHENTICATED',
     'FORBIDDEN',
@@ -253,33 +252,6 @@ export class AdminController {
     @Body({ schema: refundPaymentBodySchema }) body: RefundPaymentBody,
   ): Promise<AdminPayment> {
     return this.refunds.refund(admin.id, id, body.reason);
-  }
-
-  @Post('payments/:id/settle')
-  @HttpCode(200)
-  @ApiOperation({
-    operationId: 'adminSettlePayment',
-    summary:
-      'Settle by hand a SmartroPay payment the API could not settle (needsReview), after checking the card in the merchant admin',
-  })
-  @ApiData(adminPaymentSchema)
-  // REFUND_NOT_ALLOWED: details[0].message is `provider` (not a SmartroPay payment), `status`
-  // (the outcome is not allowed from the payment's status, or a cancel 재통보 reports the card
-  // cancelled), `in_progress` (touched within the last 2 minutes: a callback or a refund may
-  // still be working on it), `approval_mismatch` (a credit: no approval on record matches the
-  // payment, or its Tid — or the one given — is another's; an approval answer whose SignValue
-  // does not verify is not taken against a verified record that disagrees) or `partial_cancel`
-  // (a credit or a restore: a partial cancel 재통보 is on record; settle it cancelled or refunded
-  // and adjust the balance by hand). VALIDATION_ERROR with details path `tid`: a credit with no
-  // successful approval on record (none answered, or it answered a PG error) needs the
-  // approval's Tid.
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR', 'REFUND_NOT_ALLOWED')
-  settlePayment(
-    @CurrentUser() admin: SessionUser,
-    @Param('id', { schema: uuidParamSchema }) id: string,
-    @Body({ schema: settlePaymentBodySchema }) body: SettlePaymentBody,
-  ): Promise<AdminPayment> {
-    return this.settlements.settle(admin.id, id, body);
   }
 
   @Get('audit-failures')

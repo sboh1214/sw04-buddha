@@ -1,6 +1,8 @@
 /**
  * Coupons (ADR-0026): redemption limits, one use per account, and the admin side that issues
- * them. Runs against the docker `test` profile; skips when TEST_* are unset.
+ * them. Redemption is preserved code, closed in production while paid Coin is off (ADR-0049;
+ * paid-coin-sales.test.ts), so this app opens it. Runs against the docker `test` profile; skips
+ * when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
 import { SIGNUP_BONUS_P, type Coupon } from '@buddha/shared';
@@ -22,7 +24,7 @@ describe.skipIf(!hasTestInfra)('coupons (integration)', () => {
   beforeAll(async () => {
     // Redemption is capped at 10/min/user (PLAN 7.5 is silent; ADR-0034 adds it). This suite
     // walks a user through more redemptions than that in one window.
-    t = await createTestApp({ rateLimits: { coupon: 500 } });
+    t = await createTestApp({ paidCoinSales: true, rateLimits: { coupon: 500 } });
   });
   afterAll(async () => {
     await t?.close(); // undefined when beforeAll timed out waiting for the file lock
