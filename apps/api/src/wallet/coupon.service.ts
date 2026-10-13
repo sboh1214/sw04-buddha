@@ -118,8 +118,8 @@ export class CouponService {
         .set({ redeemedCount: coupon.redeemedCount + 1, updatedAt: new Date() })
         .where(eq(schema.coupons.id, coupon.id))
         .returning();
-      // The balance row first, then the clock: another writer of this account (a trade, a
-      // void refund, another wallet write) may have committed while this transaction waited
+      // The balance row first, then the clock: another writer of this account (a
+      // settlement payout, another wallet write) may have committed while this transaction waited
       // on that row, and the ledger row written below must sort after it — `now()` is the
       // transaction start and would sort before work its own balance_after_p includes
       // (clock.ts, A-M3-14). The lock is what the UPDATE below would take anyway, so no

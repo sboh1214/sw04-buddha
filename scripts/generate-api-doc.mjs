@@ -385,16 +385,20 @@ const REALTIME_NOTES = `연결은 Socket.IO 네임스페이스 하나다. 핸드
 const REALTIME_EVENTS = {
   'market:tick': {
     room: '`market:<id>`',
-    note: '체결(또는 틱을 남기는 전이) 후의 가격·통계',
+    note: '체결 후의 가격·통계. 지금은 체결 경로가 없어 발행되지 않는다',
     key: '`tradeCount`',
   },
-  'market:trade': { room: '`market:<id>`', note: '익명 체결 1건', key: '`fillId`' },
+  'market:trade': {
+    room: '`market:<id>`',
+    note: '익명 체결 1건. 지금은 체결 경로가 없어 발행되지 않는다',
+    key: '`fillId`',
+  },
   'market:status': {
     room: '`market:<id>`',
-    note: '상태 전이(개장·마감·판정·정산 완료·무효). 설명만 고친 편집도 같은 상태로 다시 발행된다',
+    note: '상태 전이(개장·마감·판정·정산 완료). 설명만 고친 편집도 같은 상태로 다시 발행된다',
     key: '`statusEventId`',
   },
-  'user:balance': { room: '`user:<id>`', note: '거래·환불·지급 후의 잔고', key: '`ledgerEntryId`' },
+  'user:balance': { room: '`user:<id>`', note: '충전·환불·지급 후의 잔고', key: '`ledgerEntryId`' },
   'user:position': { room: '`user:<id>`', note: '변경된 포지션 1행', key: '`version`' },
 };
 

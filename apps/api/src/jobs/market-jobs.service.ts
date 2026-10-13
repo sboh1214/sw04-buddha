@@ -18,9 +18,9 @@ export const MARKETS_QUEUE: QueueName = 'markets';
  * Per-job options (PLAN 9: idempotent, 3 attempts, exponential backoff). `removeOnComplete:
  * true` rather than a count: every job carries a custom id (`marketCloseJobId`), and BullMQ
  * refuses to add a job whose id still exists in any set — a completed one kept for inspection
- * would silently block the next registration of the same market and instant (a void followed
- * by a re-open at the same `closeAt`). Failed jobs are kept, bounded, so an operator can read
- * why the worker gave up; the per-minute scan is what actually settles such a market.
+ * would silently block the next registration of the same market and instant. Failed jobs are
+ * kept, bounded, so an operator can read why the worker gave up; the per-minute scan is what
+ * actually settles such a market.
  */
 export const MARKET_JOB_OPTIONS = {
   attempts: 3,
@@ -80,7 +80,7 @@ function bounded<T>(promise: Promise<T>, what: string): Promise<T> {
  * PLAN 9's producer side (M5, ADR-0046): the `market.close` and `market.finalize` jobs the
  * worker consumes, registered by MarketAdminService AFTER its transaction commits. A close job
  * is delayed to `closeAt` and cancelled the same way when that instant stops being true (a
- * PATCHed `closeAt`, a manual close, a void); a finalize job is due at once after the
+ * PATCHed `closeAt`, a manual close); a finalize job is due at once after the
  * judgement and never cancelled.
  *
  * Best effort by design, like MarketPublisher: the transition has COMMITted when this runs,
@@ -159,14 +159,14 @@ export class MarketJobs implements OnApplicationShutdown {
     at: Date,
     now: Date,
   ): Promise<void> {
-    // An instant already past (a seed market, a close time the admin let expire) is due
-    // now, not "negative delay" — BullMQ would treat that as no delay anyway, but stating it
-    // keeps the logged delay meaningful.
+    // An instant already past (a close time that expired before this ran) is due now, not
+    // "negative delay" — BullMQ would treat that as no delay anyway, but stating it keeps the
+    // logged delay meaningful.
     const delay = Math.max(0, at.getTime() - now.getTime());
     try {
       // A second add under an id that still exists (the same market and instant registered
-      // twice — an open, a void, a re-open) is answered by BullMQ with the EXISTING job, not
-      // an error, so the double registration is harmless and needs no check here.
+      // twice) is answered by BullMQ with the EXISTING job, not an error, so the double
+      // registration is harmless and needs no check here.
       await bounded(this.queue.add(name, { marketId }, { jobId, delay }), `add ${jobId}`);
     } catch (error) {
       this.logger.warn(

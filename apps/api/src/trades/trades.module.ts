@@ -1,14 +1,16 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module.js';
 import { DbModule } from '../infra/db/db.module.js';
-import { RealtimeModule } from '../realtime/realtime.module.js';
 import { TradeService } from './trade.service.js';
-import { MeTradesController, TradesController } from './trades.controller.js';
+import { MeTradesController } from './trades.controller.js';
 
-/** Trading (PLAN 5.4, 7.2, M3): `POST /trades`, `GET /me/positions`, `GET /me/orders`. */
+/**
+ * The caller's positions and orders (PLAN 7.2, M3): `GET /me/positions`, `GET /me/orders`. The
+ * direct AMM `POST /trades` is gone (#125); order entry comes with the CLOB (#119).
+ */
 @Module({
-  imports: [DbModule, AuthModule, RealtimeModule],
-  controllers: [TradesController, MeTradesController],
+  imports: [DbModule, AuthModule],
+  controllers: [MeTradesController],
   providers: [TradeService],
   exports: [TradeService],
 })

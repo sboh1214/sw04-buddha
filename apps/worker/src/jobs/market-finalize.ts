@@ -76,17 +76,16 @@ interface CoinStep {
  * The `coin` settlement step (PLAN 5.5 정산): every unsettled position of the market is closed
  * out with the shared `settle()` accounting (PLAN 5.4 — the winning outcome is paid qty × 100P,
  * both outcomes end at qty 0, cost 0, `settled`), and each payout is one SETTLEMENT_PAYOUT
- * ledger row written with its balance change. It mirrors the void path (market-admin.service.ts
- * `void`) statement for statement so the two close-outs cannot drift:
+ * ledger row written with its balance change:
  *
- *  - positions FOR UPDATE in (user_id, outcome) order — the same order the void takes, so a
- *    void and a finalize touching one account's balance cannot deadlock (they cannot run at
- *    once on one market anyway, but the order is what makes that mechanical);
+ *  - positions FOR UPDATE in (user_id, outcome) order — one fixed order, so two close-outs
+ *    touching one account's balance cannot deadlock (they cannot run at once on one market
+ *    anyway, but the order is what makes that mechanical);
  *  - the market's own instant read after those locks (tx-helpers.ts), and each payout's
- *    instant read after that ACCOUNT's balance lock: a trade of this account on another
- *    market may have committed while this transaction waited, and the payout's ledger row
- *    must sort after it or `/me/ledger`'s `balance_after_p` chain reads inverted (ADR-0027
- *    addendum, A-M3-14);
+ *    instant read after that ACCOUNT's balance lock: another write of this account (a charge,
+ *    a payout on another market) may have committed while this transaction waited, and the
+ *    payout's ledger row must sort after it or `/me/ledger`'s `balance_after_p` chain reads
+ *    inverted (ADR-0027 addendum, A-M3-14);
  *  - the ledger row and the balance UPDATE in the same transaction (PLAN 0.2), the balance
  *    UPDATE conditional on nothing — a payout only adds.
  *
@@ -468,8 +467,8 @@ export async function finalizeMarket(
   }
   const events: [string, UserRealtimeEvent][] = [];
   for (const [userId, { balance, ledgerEntryId }] of balances) {
-    // Stamped with the account's own payout instant (its `updated_at`), not the market's: a
-    // trade of this account elsewhere may sit between the two. The ledger id is what a client
+    // Stamped with the account's own payout instant (its `updated_at`), not the market's:
+    // another write of this account may sit between the two. The ledger id is what a client
     // orders by (realtime.ts); the instant is for display.
     events.push([
       userId,

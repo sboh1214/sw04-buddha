@@ -53,7 +53,6 @@
 | --- | --- | --- |
 | `Idempotency-Key` | `POST /api/v1/payments/charge` | Client-generated key for this purchase (PLAN 5.4). Re-sending it returns the first outcome instead of charging again. DUPLICATE_REQUEST (409) answers a key whose first request is still running (details name Idempotency-Key: keep the key and retry) and a key re-used with a different body (no details: the key is spent). |
 | `Idempotency-Key` | `POST /api/v1/payments/smartro/prepare` | Client-generated key for this purchase (PLAN 5.4). Re-sent while the payment is still pending and unapproved, it returns a freshly signed form for the SAME payment. DUPLICATE_REQUEST (409) answers a key re-used with a different body, or one whose payment has already been approved or closed (the key is spent). |
-| `Idempotency-Key` | `POST /api/v1/trades` | Client-generated key for this trade (PLAN 5.4). Re-sending it returns the first outcome (order and fill verbatim; balance, position and market current) instead of trading again. DUPLICATE_REQUEST (409, no details) answers a key re-used with different terms: the key is spent. |
 
 ## 인증
 
@@ -85,10 +84,8 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | `NOT_FOUND` | 404 | 대상이 없다. 공개에 보이지 않는 초안(draft) 시장도 여기로 답한다. |
 | `VALIDATION_ERROR` | 400 | 요청이 스키마에 맞지 않는다. `details` 에 `{ path, message }` 배열이 붙는다. |
 | `MARKET_NOT_OPEN` | 409 | 시장이 `open` 이 아니라 그 동작을 할 수 없다. |
-| `MARKET_CLOSED` | 409 | `open` 이지만 마감 시각(`close_at`)이 지났다. |
 | `INSUFFICIENT_BALANCE` | 409 | 잔고가 모자란다. |
-| `INSUFFICIENT_POSITION` | 409 | 팔려는 수량만큼 보유하고 있지 않다. |
-| `PRICE_MOVED` | 409 | 다시 계산한 금액이 `maxCostP`(매수) 또는 `minProceedsP`(매도)를 벗어났다. |
+| `PRICE_MOVED` | 409 | 화면이 보여 준 충전 상품의 조건(`expectedAmountP`·`expectedPriceKrw`)이 지금 판매하는 조건과 다르다. |
 | `DUPLICATE_REQUEST` | 409 | 이미 쓴 멱등 키를 다른 조건으로 다시 썼거나(키는 소모된다), 한 번만 할 수 있는 일을 두 번 했다(쿠폰 재사용). 환불 재시도는 앞선 시도가 아직 PG 의 답을 기다리는 동안 이것으로 답한다(`details[0].message` 가 `in progress`). |
 | `RATE_LIMITED` | 429 | 레이트 리밋 초과. `details.retryAfterSeconds` 와 `Retry-After` 헤더에 대기 초. |
 | `RULES_REQUIRED` | 422 | 정산 규칙(`rules`)이 비어 있어 개장하거나 그대로 저장할 수 없다. |
@@ -98,7 +95,7 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | `PAYMENT_GATEWAY_ERROR` | 502 | PG 에 닿지 못했거나 결과를 알 수 없다(502). 다른 5xx 처럼 본문에 내부 사정을 담지 않는다. 환불이면 `refunding` 으로 남으니 다시 시도하거나, 가맹점 관리자에서 확인한 뒤 수동 정리한다. 단 그 결제의 전체 취소 재통보가 기록돼 있거나 그사이 재통보·다른 시도가 환불을 끝냈으면 오류가 아니라 `refunded` 로 마친 결제로 답한다. |
 | `INTERNAL` | 500 | 그 밖의 서버 오류. 본문에 내부 사정을 담지 않는다. |
 
-## 오퍼레이션 (44개)
+## 오퍼레이션 (41개)
 
 태그별로 묶었고, 태그 안의 순서는 OpenAPI 문서의 경로 순서 그대로다.
 
@@ -148,13 +145,12 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | POST | `/api/v1/admin/payments/{id}/settle` | Settle by hand a SmartroPay payment the API could not settle (needsReview), after checking the card in the merchant admin | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `REFUND_NOT_ALLOWED`, `RATE_LIMITED` |
 | GET | `/api/v1/admin/audit-failures` | Ledger/balance mismatches found by the ledger.audit job | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
 | GET | `/api/v1/admin/markets` | Every market, drafts included, newest first | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
-| POST | `/api/v1/admin/markets` | Create a draft market (LMSR initialised from initialProbBp and liquidityB) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
-| GET | `/api/v1/admin/markets/{id}` | One market with its LMSR state, exposure and event log | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
-| PATCH | `/api/v1/admin/markets/{id}` | Edit a draft (any field) or an open market (text, close time, category; liquidityB/initialProbBp/slug refused naming the field, blank rules refused with RULES_REQUIRED); other statuses refuse naming status | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RULES_REQUIRED`, `RATE_LIMITED` |
+| POST | `/api/v1/admin/markets` | Create a draft market (no price until its first fill) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
+| GET | `/api/v1/admin/markets/{id}` | One market with its exposure, settlement steps and event log | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
+| PATCH | `/api/v1/admin/markets/{id}` | Edit a draft (any field) or an open market (text, close time, category; slug refused naming the field, blank rules refused with RULES_REQUIRED); other statuses refuse naming status | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RULES_REQUIRED`, `RATE_LIMITED` |
 | POST | `/api/v1/admin/markets/{id}/open` | draft → open; refused without rules (RULES_REQUIRED) or with a past closeAt | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RULES_REQUIRED`, `RATE_LIMITED` |
 | POST | `/api/v1/admin/markets/{id}/close` | open → closed | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `MARKET_NOT_OPEN`, `RATE_LIMITED` |
 | POST | `/api/v1/admin/markets/{id}/resolve` | closed → resolved: record the final result; settlement starts immediately | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
-| POST | `/api/v1/admin/markets/{id}/void` | Void an open or closed market: every unsettled position is refunded its cost basis (MARKET_VOID_REFUND) and closed out | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
 
 ### `markets` — 시장·시세
 
@@ -165,13 +161,11 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | GET | `/api/v1/markets/{id}/fills` | Newest 20 fills, anonymous | — | `VALIDATION_ERROR`, `NOT_FOUND`, `RATE_LIMITED` |
 | GET | `/api/v1/markets/{id}/ticks` | Price series, ascending, at most 500 points. `raw` returns stored ticks, downsampled from the newest 10000 of the range (`truncated` says when older ones were left out). `1m`/`1h` sample the probability in force on an absolute grid, coarsening the stride until the window fits; `bucketSeconds` reports the stride served, and the point at `from` carries the last value at or before it, so the left edge is never empty. | — | `VALIDATION_ERROR`, `NOT_FOUND`, `RATE_LIMITED` |
 | GET | `/api/v1/categories` | Active categories in display order: top-level rows (parentId null) first, then their sub-categories | — | `RATE_LIMITED` |
-| POST | `/api/v1/quotes` | Price a buy or sell (mode shares) or the contracts a budget buys (mode spend, buy only) | — | `VALIDATION_ERROR`, `NOT_FOUND`, `MARKET_NOT_OPEN`, `MARKET_CLOSED`, `RATE_LIMITED` |
 
 ### `trades` — 거래·포지션
 
 | 메서드 | 경로 | 설명 | 인증 | 오류 |
 | --- | --- | --- | --- | --- |
-| POST | `/api/v1/trades` | Buy or sell contracts against the AMM at the current LMSR price. A buy carries maxCostP and a sell minProceedsP (PRICE_MOVED when the recomputed amount is past it). | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `MARKET_NOT_OPEN`, `MARKET_CLOSED`, `INSUFFICIENT_BALANCE`, `INSUFFICIENT_POSITION`, `PRICE_MOVED`, `DUPLICATE_REQUEST`, `RATE_LIMITED` |
 | GET | `/api/v1/me/positions` | Every position of the account, most recently changed first. status=open keeps the unsettled rows (qty may be 0 after a full sell), status=settled the settled ones; omitted lists all. No cursor: bounded by the markets one account has touched. | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `RATE_LIMITED` |
 | GET | `/api/v1/me/orders` | Orders of the account with their fill, newest first | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `RATE_LIMITED` |
 
@@ -181,12 +175,12 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | --- | --- | --- | --- | --- |
 | GET | `/api/v1/leaderboard` | Top 20 accounts by realized profit and loss, ties broken deterministically | — | `RATE_LIMITED` |
 
-## 스키마 (65개)
+## 스키마 (59개)
 
 요청·응답 본문의 실제 모양은 `apps/api/openapi.json` 의 `components.schemas` 에 있다. 이름만
 적어 두니 거기서 찾아 읽는다. 이름은 zod 스키마의 `.meta({ id })` 에서 온다.
 
-`AdminBalanceAdjustResult`, `AdminMarket`, `AdminPayment`, `AdminSettlementStep`, `AdminUser`, `AdminUserQuery`, `AuditFailure`, `Balance`, `BalanceAdjustBody`, `Category`, `ChargeBody`, `ChargePackage`, `ChargeResult`, `Contact`, `ContactBody`, `Coupon`, `CouponCode`, `CreateChargePackageBody`, `CreateCouponBody`, `CreateMarketBody`, `CursorQuery`, `ErrorCode`, `ErrorEnvelope`, `Fill`, `LeaderboardEntry`, `LedgerEntry`, `LinkedAccount`, `Market`, `MarketEvent`, `MarketListItem`, `MarketStats`, `MarketSummary`, `Me`, `Nickname`, `OkResult`, `Order`, `PAmount`, `PageMeta`, `Password`, `Payment`, `PaymentProviderInfo`, `Position`, `PriceSeries`, `PriceTick`, `QuoteBody`, `QuoteResult`, `RedeemCouponBody`, `RedeemCouponResult`, `RefundPaymentBody`, `RegisterBody`, `RegisterResult`, `ResolveMarketBody`, `SetPasswordBody`, `SettlePaymentBody`, `SettlementStep`, `SettlementStepStatus`, `SmartroPrepareResult`, `TradeBody`, `TradeResult`, `UpdateChargePackageBody`, `UpdateCouponBody`, `UpdateMarketBody`, `UpdateMeBody`, `UserRole`, `VoidMarketBody`
+`AdminBalanceAdjustResult`, `AdminMarket`, `AdminPayment`, `AdminSettlementStep`, `AdminUser`, `AdminUserQuery`, `AuditFailure`, `Balance`, `BalanceAdjustBody`, `Category`, `ChargeBody`, `ChargePackage`, `ChargeResult`, `Contact`, `ContactBody`, `Coupon`, `CouponCode`, `CreateChargePackageBody`, `CreateCouponBody`, `CreateMarketBody`, `CursorQuery`, `ErrorCode`, `ErrorEnvelope`, `Fill`, `LeaderboardEntry`, `LedgerEntry`, `LinkedAccount`, `Market`, `MarketEvent`, `MarketListItem`, `MarketSummary`, `Me`, `Nickname`, `OkResult`, `Order`, `PAmount`, `PageMeta`, `Password`, `Payment`, `PaymentProviderInfo`, `Position`, `PriceSeries`, `PriceTick`, `RedeemCouponBody`, `RedeemCouponResult`, `RefundPaymentBody`, `RegisterBody`, `RegisterResult`, `ResolveMarketBody`, `SetPasswordBody`, `SettlePaymentBody`, `SettlementStep`, `SettlementStepStatus`, `SmartroPrepareResult`, `UpdateChargePackageBody`, `UpdateCouponBody`, `UpdateMarketBody`, `UpdateMeBody`, `UserRole`
 
 ## 헬스체크 (문서 밖)
 
@@ -409,7 +403,6 @@ PLAN 7.5 의 표는 `packages/shared/src/rate-limit.ts` 한 곳에 있고, 아�
 | 버킷 | 기준 | 한도(/60초) | 적용 라우트 |
 | --- | --- | --- | --- |
 | `default` | 클라이언트 주소 (API 전체에 하나) | 100 | 모든 HTTP 라우트. 아래 버킷을 지목한 라우트도 여기에 함께 들어간다(주소 하나당 API 전체 합산). |
-| `trade` | 로그인 계정 (라우트별) | 20 | `POST /api/v1/trades` |
 | `charge` | 로그인 계정 (라우트별) | 10 | `POST /api/v1/payments/charge`, `POST /api/v1/payments/smartro/prepare` |
 | `coupon` | 로그인 계정 (라우트별) | 10 | `POST /api/v1/coupons/redeem` |
 | `email` | 본문이 지목한 이메일 주소 (라우트별) | 5 | 메일을 보내는 경로 — `POST /api/v1/auth/register` 와 `/api/auth/*` 의 `/change-email`, `/send-verification-email`, `/request-password-reset`, `/forget-password`. 시도 자체를 센다(시도가 곧 피해다). `/change-email` 만은 **로그인한 요청만** 센다(세션 없는 요청은 401 이고 아무에게도 메일이 가지 않으므로): 먼저 **요청한 계정**의 버킷을, 그다음 `newEmail` 의 버킷을 — 인증된 계정의 확인 메일은 본문의 주소가 아니라 계정이 이미 가진 주소로 가고, 계정을 먼저 세야 한 계정이 1분에 다섯 주소까지만 지목할 수 있기 때문이다. `GET /verify-email` 도 링크가 메일을 보내는 종류(이메일 변경의 **확인** 링크: 누를 때마다 새 주소에 다시 보낸다)이면 그 수신 주소로 센다 — 토큰은 1시간짜리 무상태 JWT 라 누른다고 소모되지 않기 때문이다. 서명이 유효한 토큰만 세고, 변경을 적용하는 **검증** 링크는 메일을 보내지 않으므로 세지 않는다. |
@@ -462,10 +455,10 @@ PLAN 7.5 의 표는 `packages/shared/src/rate-limit.ts` 한 곳에 있고, 아�
 
 | 이벤트 | 룸 | 뜻 | 순서 키 |
 | --- | --- | --- | --- |
-| `market:tick` | `market:<id>` | 체결(또는 틱을 남기는 전이) 후의 가격·통계 | `tradeCount` |
-| `market:trade` | `market:<id>` | 익명 체결 1건 | `fillId` |
-| `market:status` | `market:<id>` | 상태 전이(개장·마감·판정·정산 완료·무효). 설명만 고친 편집도 같은 상태로 다시 발행된다 | `statusEventId` |
-| `user:balance` | `user:<id>` | 거래·환불·지급 후의 잔고 | `ledgerEntryId` |
+| `market:tick` | `market:<id>` | 체결 후의 가격·통계. 지금은 체결 경로가 없어 발행되지 않는다 | `tradeCount` |
+| `market:trade` | `market:<id>` | 익명 체결 1건. 지금은 체결 경로가 없어 발행되지 않는다 | `fillId` |
+| `market:status` | `market:<id>` | 상태 전이(개장·마감·판정·정산 완료). 설명만 고친 편집도 같은 상태로 다시 발행된다 | `statusEventId` |
+| `user:balance` | `user:<id>` | 충전·환불·지급 후의 잔고 | `ledgerEntryId` |
 | `user:position` | `user:<id>` | 변경된 포지션 1행 | `version` |
 
 이벤트는 커밋 순서대로 도착하지 않을 수 있고(인스턴스 두 대, 늦게 흘러나온 Redis 큐),

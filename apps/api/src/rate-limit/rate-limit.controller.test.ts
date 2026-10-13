@@ -2,23 +2,26 @@
  * Rate limiting (PLAN 7.5; M6 AC 1) against the docker `test` profile. Skips when TEST_* are
  * unset (fails under CI=true, see the harness).
  *
- * Every NAMED bucket runs at PLAN's own number, so the acceptance figure
- * ("`/trades` 21번째 요청/분 → RATE_LIMITED") is measured against the value a deployment ships
- * with rather than one convenient for a test. Only the unnamed default is lowered, and only
- * because reaching 100 would cost a hundred injections; a separate test pins that the shipped
- * table still says 100.
+ * Every NAMED bucket runs at PLAN's own number, so a refusal is measured against the value a
+ * deployment ships with rather than one convenient for a test. The M6 acceptance figure counted
+ * `/trades`, which went with the direct AMM trade (#125); the per-account bucket is measured on
+ * `/payments/charge`, PLAN 7.5's other per-account row. Only the unnamed default is lowered, and
+ * only because reaching 100 would cost a hundred injections; a separate test pins that the
+ * shipped table still says 100.
  */
 import { createHash } from 'node:crypto';
-import { createMarket } from '@buddha/db/test';
 import { DEFAULT_RATE_LIMITS, RATE_LIMIT_BUCKETS, RATE_LIMIT_WINDOW_SECONDS } from '@buddha/shared';
 import { type Redis } from 'ioredis';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { REDIS } from '../infra/redis/redis.provider.js';
 import {
+  chargeBody,
   chargeHeaders,
   createTestApp,
+  createTestPackage,
   signUpTestUser,
   type TestApp,
+  type TestPackage,
   type TestUser,
   verificationLinkFor,
 } from '../test/app.js';
@@ -70,42 +73,34 @@ describe.skipIf(!hasTestInfra)('rate limits (integration)', () => {
   it('states PLAN 7.5 verbatim', () => {
     expect(RATE_LIMIT_WINDOW_SECONDS).toBe(60);
     expect(DEFAULT_RATE_LIMITS.default).toBe(100);
-    expect(DEFAULT_RATE_LIMITS.trade).toBe(20);
     expect(DEFAULT_RATE_LIMITS.charge).toBe(10);
     expect(RATE_LIMIT_BUCKETS.default.scope).toBe('ip');
-    expect(RATE_LIMIT_BUCKETS.trade.scope).toBe('user');
+    expect(RATE_LIMIT_BUCKETS.charge.scope).toBe('user');
     expect(RATE_LIMIT_BUCKETS.email.scope).toBe('email');
   });
 
-  describe('POST /trades — 20 a minute per account (AC 1)', () => {
+  describe('POST /payments/charge — 10 a minute per account', () => {
     let user: TestUser;
     let other: TestUser;
-    let marketId: string;
+    let pack: TestPackage;
 
     beforeEach(async () => {
       user = await signUpTestUser(t);
       other = await signUpTestUser(t);
-      marketId = (await createMarket(t.db)).id;
+      pack = await createTestPackage(t.db);
     });
 
-    /** One 1-contract buy; the sign-up bonus covers far more than 21 of them. */
+    /** One mock charge (setup-env pins PAYMENT_PROVIDER=mock): each succeeds at once. */
     const buy = (as: TestUser) =>
       t.app.inject({
         method: 'POST',
-        url: '/api/v1/trades',
+        url: '/api/v1/payments/charge',
         headers: chargeHeaders(as.cookie),
-        payload: {
-          marketId,
-          outcome: 'YES',
-          side: 'buy',
-          shares: 1,
-          maxCostP: '100',
-          expectedAccountId: as.id,
-        },
+        payload: chargeBody(pack, as.id),
       });
 
-    it('refuses the 21st request of the window with RATE_LIMITED', async () => {
-      for (let i = 0; i < DEFAULT_RATE_LIMITS.trade; i += 1) {
+    it('refuses the 11th request of the window with RATE_LIMITED', async () => {
+      for (let i = 0; i < DEFAULT_RATE_LIMITS.charge; i += 1) {
         const allowed = await buy(user);
         // The index travels with the assertion so a failure names which request broke.
         expect([i, allowed.statusCode]).toEqual([i, 200]);
@@ -128,28 +123,28 @@ describe.skipIf(!hasTestInfra)('rate limits (integration)', () => {
       // `-route`: the library suffixes every throttler name but `default`, and the only
       // throttler left in rate-limit.module.ts is `route` — the address bucket writes its
       // unsuffixed headers from the hook (address-limit.ts).
-      expect(first.headers['x-ratelimit-limit-route']).toBe(String(DEFAULT_RATE_LIMITS.trade));
+      expect(first.headers['x-ratelimit-limit-route']).toBe(String(DEFAULT_RATE_LIMITS.charge));
       expect(first.headers['x-ratelimit-remaining-route']).toBe(
-        String(DEFAULT_RATE_LIMITS.trade - 1),
+        String(DEFAULT_RATE_LIMITS.charge - 1),
       );
 
-      for (let i = 1; i < DEFAULT_RATE_LIMITS.trade; i += 1) await buy(user);
+      for (let i = 1; i < DEFAULT_RATE_LIMITS.charge; i += 1) await buy(user);
       expect((await buy(user)).statusCode).toBe(429);
       // Same address, same route, a different account: an untouched bucket.
       const elsewhere = await buy(other);
       expect(elsewhere.statusCode).toBe(200);
       expect(elsewhere.headers['x-ratelimit-remaining-route']).toBe(
-        String(DEFAULT_RATE_LIMITS.trade - 1),
+        String(DEFAULT_RATE_LIMITS.charge - 1),
       );
     });
 
     it('keeps no identifier in Redis: the key is namespaced and the tracker hashed', async () => {
       await buy(user);
       // Everything under the prefix: the two sign-ups of `beforeEach` left an `email` bucket
-      // each, and they are just as much a bucket as the trade's.
+      // each, and they are just as much a bucket as the charge's.
       const keys = await redis.keys(`${RATE_LIMIT_KEY_PREFIX}:*`);
-      expect(keys.filter((key) => key.includes('TradesController'))).toEqual([
-        expect.stringMatching(/^rl:route:TradesController\.trade:[0-9a-f]{32}$/),
+      expect(keys.filter((key) => key.includes('PaymentsController'))).toEqual([
+        expect.stringMatching(/^rl:route:PaymentsController\.charge:[0-9a-f]{32}$/),
       ]);
       for (const key of keys) {
         expect(key).not.toContain(user.id);
@@ -526,7 +521,7 @@ describe.skipIf(!hasTestInfra)('rate limits (integration)', () => {
       const malformed = () =>
         t.app.inject({
           method: 'POST',
-          url: '/api/v1/quotes',
+          url: '/api/v1/auth/register',
           headers: { 'content-type': 'application/json' },
           payload: '{',
           remoteAddress: '203.0.113.10',

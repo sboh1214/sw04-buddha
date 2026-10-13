@@ -1,33 +1,24 @@
 /**
  * Admin market CRUD and transitions (PLAN 5.2, 5.5, 12; M3 design 3.4) against the docker
- * `test` profile: create/update per status, open/close/void with their audit rows, the void
- * refund, list/detail, and the guard surface (401/403/CSRF). Skips when TEST_* are unset.
+ * `test` profile: create/update per status, open/close with their audit rows, list/detail, and
+ * the guard surface (401/403/CSRF). Skips when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
 import { createCategory, createMarket, createPosition, createUser } from '@buddha/db/test';
 import {
   INT4_MAX,
-  SIGNUP_BONUS_P,
-  initState,
   marketChannel,
-  maxLossP,
-  priceOf,
-  probabilityBp,
-  serializeQuantity,
-  userChannel,
   type AdminMarket,
   type Market,
   type MarketSummary,
   type PriceSeries,
-  type Outcome,
 } from '@buddha/shared';
 import { randomUUID } from 'node:crypto';
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { asc, eq } from 'drizzle-orm';
 import { Redis } from 'ioredis';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
-import { expectLedgerChain } from '../test/ledger.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { sleep, waitForLockWaiter, waitForMessages } from '../test/wait.js';
 
@@ -35,6 +26,8 @@ const jsonHeaders = { origin: 'http://localhost:3000', 'content-type': 'applicat
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** U+0000: Postgres refuses it in text and jsonb, so the pipe must refuse it first. */
 const NUL = String.fromCharCode(0);
+/** What the direct AMM kept on a market and the admin detail showed (#125 removed them). */
+const AMM_FIELDS = ['liquidityB', 'qYes', 'qNo', 'initialProbBp', 'reserveP', 'pYesBp'] as const;
 
 type ListPage = { data: MarketSummary[]; meta: { nextCursor: string | null } };
 type ErrorBody = {
@@ -70,11 +63,9 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
 
   const createBody = (overrides: Record<string, unknown> = {}) => ({
     title: '기준금리 3% 이하로 인하?',
-    rules: '한국은행 발표 기준. 발표가 없으면 아니오.',
+    rules: '한국은행 발표 기준. 기한까지 3% 이하로 내리지 않으면 아니오.',
     categoryId: category.id,
     closeAt: future(),
-    initialProbBp: 5_000,
-    liquidityB: 1_000,
     ...overrides,
   });
 
@@ -89,8 +80,6 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     post('/api/v1/admin/markets', createBody(overrides));
   const open = (id: string) => post(`/api/v1/admin/markets/${id}/open`);
   const close = (id: string) => post(`/api/v1/admin/markets/${id}/close`);
-  const voidMarket = (id: string, reason = '데이터 소스 폐쇄') =>
-    post(`/api/v1/admin/markets/${id}/void`, { reason });
 
   /** A market row written by the factory (no events, no tick) owned by the test admin. */
   const market = (input: Parameters<typeof createMarket>[1] = {}) =>
@@ -112,13 +101,6 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     const [row] = await t.db.select().from(schema.markets).where(eq(schema.markets.id, id));
     return row!;
   }
-  async function balanceOf(userId: string) {
-    const [row] = await t.db
-      .select()
-      .from(schema.balances)
-      .where(eq(schema.balances.userId, userId));
-    return row!;
-  }
   async function eventsFor(marketId: string) {
     return t.db
       .select()
@@ -126,62 +108,18 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       .where(eq(schema.marketEvents.marketId, marketId))
       .orderBy(asc(schema.marketEvents.id));
   }
-  async function ledgerOf(userId: string) {
-    return t.db
-      .select()
-      .from(schema.ledgerEntries)
-      .where(eq(schema.ledgerEntries.userId, userId))
-      .orderBy(asc(schema.ledgerEntries.id));
-  }
-
-  /**
-   * A holder the ledger can explain: the position row, the balance debited by its cost and a
-   * TRADE_BUY entry — what `POST /trades` writes, minus the market statistics (the trades
-   * suite owns that route; this one must not depend on it).
-   */
-  async function hold(input: {
-    userId: string;
-    marketId: string;
-    outcome: Outcome;
-    qty: number;
-    costBasisP: bigint;
-    realizedPnlP?: bigint;
-  }) {
-    await createPosition(t.db, input);
-    if (input.costBasisP === 0n) return;
-    const [balance] = await t.db
-      .update(schema.balances)
-      .set({ availableP: sql`${schema.balances.availableP} - ${input.costBasisP}` })
-      .where(eq(schema.balances.userId, input.userId))
-      .returning();
-    await t.db.insert(schema.ledgerEntries).values({
-      userId: input.userId,
-      type: 'TRADE_BUY',
-      amountP: -input.costBasisP,
-      balanceAfterP: balance!.availableP,
-      refType: 'fill',
-      refId: '0',
-    });
-  }
-
   // --- create ---------------------------------------------------------------------------
-  it('creates a draft with LMSR state from (p0, b), reserve = maxLossP and an audit trail', async () => {
-    const res = await create({ initialProbBp: 3_000, liquidityB: 1_500.5, slug: 'rate-cut-2026' });
+  it('creates a draft with no price and an audit trail', async () => {
+    const res = await create({ slug: 'rate-cut-2026' });
     expect(res.statusCode).toBe(201);
     const created = detail(res);
-    const state = initState(0.3, 1_500.5);
     expect(created).toMatchObject({
       slug: 'rate-cut-2026',
       title: '기준금리 3% 이하로 인하?',
       status: 'draft',
       category: { slug: 'economy', nameKo: '경제' },
-      liquidityB: '1500.500000',
-      qYes: serializeQuantity(state.qYes),
-      qNo: serializeQuantity(state.qNo),
-      initialProbBp: 3_000,
-      reserveP: maxLossP(0.3, 1_500.5).toString(),
-      lastPrice: priceOf(state),
-      pYesBp: probabilityBp(state),
+      // No fill yet, so no price (N02 §5): nothing stands in for one.
+      lastPrice: null,
       volumeP: '0',
       tradeCount: 0,
       openAt: null,
@@ -192,8 +130,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       description: null,
       imageUrl: null,
     });
-    // Not the PLAN 5.3 guide value 100·b·ln2: p0 ≠ 0.5 (ADR-0027).
-    expect(BigInt(created.reserveP)).toBeGreaterThan(BigInt(Math.ceil(100 * 1_500.5 * Math.LN2)));
+    for (const field of AMM_FIELDS) expect(created).not.toHaveProperty(field);
     expect(created.events.map((event) => event.type)).toEqual(['created']);
     expect(created.events[0]).toMatchObject({
       actorId: admin.id,
@@ -211,11 +148,8 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     });
     // jsonb payloads are JSON-safe: P amounts crossed as strings, never bigint.
     const after = (action!.payload as { after: Record<string, unknown> }).after;
-    expect(after).toMatchObject({
-      slug: 'rate-cut-2026',
-      status: 'draft',
-      reserveP: created.reserveP,
-    });
+    expect(after).toMatchObject({ slug: 'rate-cut-2026', status: 'draft', lastPrice: null });
+    for (const field of AMM_FIELDS) expect(after).not.toHaveProperty(field);
     expect(typeof after.volumeP).toBe('string');
 
     // Drafts are the admin's alone.
@@ -294,10 +228,6 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
 
     for (const bad of [
       { title: '' },
-      { initialProbBp: 0 },
-      { initialProbBp: 10_000 },
-      { liquidityB: 0.5 },
-      { liquidityB: 1.1234567 },
       { imageUrl: 'javascript:alert(1)' },
       { closeAt: 'tomorrow' },
     ]) {
@@ -318,23 +248,16 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
   });
 
   // --- update ---------------------------------------------------------------------------
-  it('re-initialises a draft on a new initialProbBp, and logs a rules edit', async () => {
-    const draft = detail(await create({ initialProbBp: 5_000, liquidityB: 1_000 }));
+  it('edits a draft, logs a rules edit, and lets its slug and category change', async () => {
+    const draft = detail(await create());
     const res = await patch(`/api/v1/admin/markets/${draft.id}`, {
-      initialProbBp: 7_000,
       rules: '새 규칙: 한국은행 홈페이지 공지 기준.',
       description: '설명 추가',
     });
     expect(res.statusCode).toBe(200);
     const updated = detail(res);
-    const state = initState(0.7, 1_000);
     expect(updated).toMatchObject({
-      initialProbBp: 7_000,
-      qYes: serializeQuantity(state.qYes),
-      qNo: '0.0000000000',
-      lastPrice: 70,
-      pYesBp: 7_000,
-      reserveP: maxLossP(0.7, 1_000).toString(),
+      lastPrice: null,
       rules: '새 규칙: 한국은행 홈페이지 공지 기준.',
       description: '설명 추가',
     });
@@ -347,36 +270,41 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     const actions = await actionsFor(draft.id);
     expect(actions.map((action) => action.type)).toEqual(['market_create', 'market_update']);
     expect(actions[1]!.payload).toMatchObject({
-      before: { initialProbBp: 5_000, lastPrice: 50 },
-      after: { initialProbBp: 7_000, lastPrice: 70 },
+      before: { rules: draft.rules, description: null },
+      after: { rules: '새 규칙: 한국은행 홈페이지 공지 기준.', description: '설명 추가' },
     });
 
-    // A liquidity change alone re-runs the same init; the same rules are no rules edit.
-    const again = detail(
-      await patch(`/api/v1/admin/markets/${draft.id}`, {
-        liquidityB: 2_000,
-        rules: '새 규칙: 한국은행 홈페이지 공지 기준. ',
-      }),
-    );
-    expect(again).toMatchObject({
-      liquidityB: '2000.000000',
-      qYes: serializeQuantity(initState(0.7, 2_000).qYes),
-      reserveP: maxLossP(0.7, 2_000).toString(),
+    // The same rules up to surrounding space are no rules edit.
+    const again = await patch(`/api/v1/admin/markets/${draft.id}`, {
+      rules: '새 규칙: 한국은행 홈페이지 공지 기준. ',
     });
-    expect(again.events.filter((event) => event.type === 'rules_edited')).toHaveLength(1);
+    expect(again.statusCode).toBe(200);
+    expect(detail(again).events.filter((event) => event.type === 'rules_edited')).toHaveLength(1);
 
     // Slug and category can change while draft; a taken slug is refused naming it.
+    const other = await createCategory(t.db, { slug: 'society', nameKo: '사회' });
+    const moved = await patch(`/api/v1/admin/markets/${draft.id}`, {
+      slug: 'rate-cut-2027',
+      categoryId: other.id,
+    });
+    expect(detail(moved)).toMatchObject({
+      slug: 'rate-cut-2027',
+      category: { slug: 'society', nameKo: '사회' },
+    });
     await market({ slug: 'other-slug' });
     const collision = await patch(`/api/v1/admin/markets/${draft.id}`, { slug: 'other-slug' });
     expect(collision.statusCode).toBe(400);
     expect(detailPath(collision)).toEqual(['slug']);
-    const empty = await patch(`/api/v1/admin/markets/${draft.id}`, {});
-    expect(empty.statusCode).toBe(400);
+    // A body of nothing but the removed AMM inputs is a body of nothing: they are not fields.
+    for (const empty of [{}, { initialProbBp: 7_000, liquidityB: 2_000 }]) {
+      const res = await patch(`/api/v1/admin/markets/${draft.id}`, empty);
+      expect({ empty, status: res.statusCode }).toEqual({ empty, status: 400 });
+    }
     const missing = await patch(`/api/v1/admin/markets/${randomUUID()}`, { title: 'x' });
     expect(missing.statusCode).toBe(404);
   });
 
-  it('lets an open market change its text, close time and category, but not its curve', async () => {
+  it('lets an open market change its text, close time and category, but not its slug', async () => {
     const row = await market({ status: 'open' });
     const ok = await patch(`/api/v1/admin/markets/${row.id}`, {
       title: '제목 수정',
@@ -392,19 +320,16 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       status: 'open',
     });
 
-    for (const [field, value] of [
-      ['liquidityB', 2_000],
-      ['initialProbBp', 6_000],
-      ['slug', 'new-slug'],
-    ] as const) {
-      const res = await patch(`/api/v1/admin/markets/${row.id}`, { [field]: value });
-      expect({ field, status: res.statusCode }).toEqual({ field, status: 400 });
-      expect(errorOf(res).code).toBe('VALIDATION_ERROR');
-      expect(detailPath(res)).toEqual([field]);
-    }
+    const renamed = await patch(`/api/v1/admin/markets/${row.id}`, { slug: 'new-slug' });
+    expect(renamed.statusCode).toBe(400);
+    expect(errorOf(renamed)).toMatchObject({
+      code: 'VALIDATION_ERROR',
+      message: 'slug cannot change while the market is open',
+    });
+    expect(detailPath(renamed)).toEqual(['slug']);
     // Refused before anything is written: one audit row, the successful edit's.
     expect((await actionsFor(row.id)).map((action) => action.type)).toEqual(['market_update']);
-    expect((await marketRow(row.id)).liquidityB).toBe(row.liquidityB);
+    expect((await marketRow(row.id)).slug).toBe(row.slug);
 
     const closed = await market({ status: 'closed' });
     const refused = await patch(`/api/v1/admin/markets/${closed.id}`, { title: '늦은 수정' });
@@ -497,11 +422,6 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     const openEvent = (await eventsFor(draft.id)).find((event) => event.type === 'opened')!;
     expect(openEvent.createdAt.toISOString()).toBe(opened.openAt);
     expect((await marketRow(draft.id)).updatedAt.toISOString()).toBe(opened.openAt);
-    const [tick] = await t.db
-      .select()
-      .from(schema.priceTicks)
-      .where(eq(schema.priceTicks.marketId, draft.id));
-    expect(tick!.ts.toISOString()).toBe(opened.openAt);
     const openAction = (await actionsFor(draft.id)).find((row) => row.type === 'market_open')!;
     expect(openAction.createdAt.toISOString()).toBe(opened.openAt);
 
@@ -511,10 +431,6 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       closeEvent.createdAt.toISOString(),
     );
     expect(closeEvent.createdAt.toISOString()).toBe(closed.updatedAt);
-
-    const voided = detail(await voidMarket(draft.id));
-    const voidEvent = (await eventsFor(draft.id)).find((event) => event.type === 'voided')!;
-    expect(voidEvent.createdAt.toISOString()).toBe(voided.voidedAt);
   });
 
   it('keeps a transition above an edit that commits while it waits on the market lock', async () => {
@@ -552,8 +468,8 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
   });
 
   // --- open / close ---------------------------------------------------------------------
-  it('opens a draft: open_at, the "open" tick, the "opened" event, an audit row and a publish', async () => {
-    const draft = detail(await create({ initialProbBp: 4_000 }));
+  it('opens a draft: open_at, the "opened" event, an audit row and a publish, and no tick', async () => {
+    const draft = detail(await create());
     const subscriber = new Redis(process.env.TEST_REDIS_URL!, { maxRetriesPerRequest: 1 });
     const received: string[] = [];
     subscriber.on('message', (_channel, message) => received.push(message));
@@ -566,13 +482,12 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       expect(opened.openAt).not.toBeNull();
       expect(opened.events.map((event) => event.type)).toEqual(['opened', 'created']);
 
+      // Opening is not a price: the chart starts at the first fill (N02 §5).
       const ticks = await t.db
         .select()
         .from(schema.priceTicks)
         .where(eq(schema.priceTicks.marketId, draft.id));
-      expect(ticks).toHaveLength(1);
-      expect(ticks[0]).toMatchObject({ trigger: 'open', pYesBp: 4_000 });
-      expect(ticks[0]!.ts.toISOString()).toBe(opened.openAt);
+      expect(ticks).toHaveLength(0);
 
       const actions = await actionsFor(draft.id);
       expect(actions.map((action) => action.type)).toEqual(['market_create', 'market_open']);
@@ -581,17 +496,18 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
         after: { status: 'open', openAt: opened.openAt },
       });
 
-      // Visible to the public now, with the same tick on the chart.
+      // Visible to the public now, still without a price or a chart point.
       const pub = await t.app.inject({ method: 'GET', url: `/api/v1/markets/${draft.id}` });
       expect(pub.statusCode).toBe(200);
-      expect(data<Market>(pub)).toMatchObject({ status: 'open', pYesBp: 4_000 });
+      expect(data<Market>(pub)).toMatchObject({ status: 'open', lastPrice: null, tradeCount: 0 });
+      expect(data<Market>(pub)).not.toHaveProperty('pYesBp');
       const chart = await t.app.inject({ method: 'GET', url: `/api/v1/markets/${draft.id}/ticks` });
       // `data` is a PriceSeries object since M4, not a bare array (ADR-0029).
       expect(data<PriceSeries>(chart)).toMatchObject({
         resolution: 'raw',
         bucketSeconds: 0,
         truncated: false,
-        points: [{ ts: opened.openAt, pYesBp: 4_000, trigger: 'open' }],
+        points: [],
       });
 
       // PLAN 8: `market:status` published after commit on the market's channel.
@@ -646,10 +562,10 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     expect((await open('not-a-uuid')).statusCode).toBe(400);
   });
 
-  it('closes a market whose close time has already passed (the seed remedy)', async () => {
-    // What an operator does with a market the absolute cutoffs left open (A-M3-31): the seed
-    // writes it open because M3 has no close job, and this button is the way out. `close`
-    // does not check the close time — only `open` and the edits do — so it must work here.
+  it('closes a market whose close time has already passed', async () => {
+    // An open market past its close time whose close job has not run (A-M3-31): this button is
+    // the operator's way out. `close` does not check the close time — only `open` and the edits
+    // do — so it must work here.
     const row = await market({ status: 'open', closeAt: new Date(Date.now() - 60_000) });
     const res = await close(row.id);
     expect(res.statusCode).toBe(200);
@@ -707,12 +623,11 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
   it.each([
     ['open', 'draft', open],
     ['close', 'open', close],
-    ['void', 'open', (id: string) => voidMarket(id)],
   ] as const)(
     '%s waits for the market advisory lock before touching the row (PLAN 0.2)',
     async (_name, status, transition) => {
-      // A session-level lock on the same key from another connection stands in for a trade
-      // (or another transition) holding the transaction-level one. The row `FOR UPDATE`
+      // A session-level lock on the same key from another connection stands in for another
+      // writer (a transition, a worker job) holding the transaction-level one. The row `FOR UPDATE`
       // alone would not show this: the fixture row is unlocked, so a transition that skipped
       // `lockMarket` would go straight through.
       const row = await market({ status });
@@ -738,324 +653,6 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       }
     },
   );
-
-  // --- void -----------------------------------------------------------------------------
-  it('voids a market: every unsettled holder gets its cost basis back, ledger-explained', async () => {
-    const row = await market({ status: 'closed', title: '무효될 시장' });
-    const alice = (await createUser(t.db)).user.id;
-    const bob = (await createUser(t.db)).user.id;
-    const carol = (await createUser(t.db)).user.id;
-    // alice holds both outcomes; bob sold out (qty 0) but keeps realised PnL and no cost;
-    // carol's position is already settled and must be left alone.
-    await hold({ userId: alice, marketId: row.id, outcome: 'YES', qty: 10, costBasisP: 520n });
-    await hold({ userId: alice, marketId: row.id, outcome: 'NO', qty: 4, costBasisP: 190n });
-    await hold({
-      userId: bob,
-      marketId: row.id,
-      outcome: 'YES',
-      qty: 0,
-      costBasisP: 0n,
-      realizedPnlP: 35n,
-    });
-    await createPosition(t.db, {
-      userId: carol,
-      marketId: row.id,
-      outcome: 'NO',
-      qty: 3,
-      costBasisP: 150n,
-      settled: true,
-    });
-    // A holder in another market is untouched.
-    const other = await market({ status: 'open' });
-    await hold({ userId: bob, marketId: other.id, outcome: 'NO', qty: 2, costBasisP: 90n });
-
-    // PLAN 8: the market's channel hears the status change, and alice's own channel her
-    // refunded balance and both closed-out rows.
-    const subscriber = new Redis(process.env.TEST_REDIS_URL!, { maxRetriesPerRequest: 1 });
-    const received: string[] = [];
-    const statuses: string[] = [];
-    subscriber.on('message', (channel: string, message: string) => {
-      (channel === marketChannel(row.id) ? statuses : received).push(message);
-    });
-    await subscriber.subscribe(marketChannel(row.id), userChannel(alice));
-    let voided!: AdminMarket;
-    try {
-      const res = await voidMarket(row.id, '데이터 소스 폐쇄');
-      expect(res.statusCode).toBe(200);
-      voided = detail(res);
-
-      await waitForMessages(statuses, 1, 'market:status of the void');
-      await waitForMessages(received, 3, 'user events of the void');
-      await sleep(100);
-      expect(statuses).toHaveLength(1);
-      expect(JSON.parse(statuses[0]!)).toMatchObject({
-        type: 'market:status',
-        marketId: row.id,
-        status: 'voided',
-        statusEventId: voided.events[0]!.id,
-        ts: voided.voidedAt,
-      });
-      const events = received.map((message) => JSON.parse(message) as Record<string, unknown>);
-      // The balance event carries alice's last refund instant (stamped after her balance
-      // lock), the position events the void's own; see the ordering test below.
-      const lastRefund = (await ledgerOf(alice))
-        .filter((entry) => entry.type === 'MARKET_VOID_REFUND')
-        .at(-1)!;
-      expect(events).toEqual([
-        {
-          type: 'user:balance',
-          availableP: SIGNUP_BONUS_P.toString(),
-          lockedP: '0',
-          ledgerEntryId: lastRefund.id.toString(),
-          ts: lastRefund.createdAt.toISOString(),
-        },
-        {
-          type: 'user:position',
-          marketId: row.id,
-          outcome: 'YES',
-          qty: 0,
-          costBasisP: '0',
-          realizedPnlP: '0',
-          settled: true,
-          version: 2,
-          ts: voided.voidedAt,
-        },
-        {
-          type: 'user:position',
-          marketId: row.id,
-          outcome: 'NO',
-          qty: 0,
-          costBasisP: '0',
-          realizedPnlP: '0',
-          settled: true,
-          version: 2,
-          ts: voided.voidedAt,
-        },
-      ]);
-    } finally {
-      await subscriber.quit();
-    }
-    expect(voided.status).toBe('voided');
-    expect(voided.voidedAt).not.toBeNull();
-    expect(voided.openInterest).toEqual({ yes: 0, no: 0 });
-    expect(voided.events.map((event) => event.type)).toEqual(['voided']);
-    expect(voided.events[0]!.payload).toEqual({
-      reason: '데이터 소스 폐쇄',
-      refundedAccounts: 1,
-      refundedP: '710',
-    });
-
-    // alice: bonus − 520 − 190 + 520 + 190 = bonus, and the ledger says so entry by entry.
-    expect((await balanceOf(alice)).availableP).toBe(SIGNUP_BONUS_P);
-    const aliceLedger = await ledgerOf(alice);
-    expect(aliceLedger.map((entry) => entry.type)).toEqual([
-      'BONUS',
-      'TRADE_BUY',
-      'TRADE_BUY',
-      'MARKET_VOID_REFUND',
-      'MARKET_VOID_REFUND',
-    ]);
-    const refunds = aliceLedger.filter((entry) => entry.type === 'MARKET_VOID_REFUND');
-    // Deterministic (user_id, outcome) order; `outcome` is a Postgres enum, so YES (declared
-    // first) sorts before NO.
-    expect(refunds.map((entry) => entry.amountP)).toEqual([520n, 190n]);
-    for (const entry of refunds) {
-      expect(entry).toMatchObject({
-        refType: 'market',
-        refId: row.id,
-        memo: '무효 환불: 무효될 시장',
-      });
-    }
-    expect(aliceLedger.reduce((sum, entry) => sum + entry.amountP, 0n)).toBe(
-      (await balanceOf(alice)).availableP,
-    );
-    expect(refunds.at(-1)!.balanceAfterP).toBe(SIGNUP_BONUS_P);
-    // Each refund is stamped after its balance lock: no earlier than the void itself, in
-    // refund order, and the balance row carries the last one.
-    expect(refunds[0]!.createdAt.getTime()).toBeGreaterThanOrEqual(Date.parse(voided.voidedAt!));
-    expect(refunds[1]!.createdAt.getTime()).toBeGreaterThanOrEqual(refunds[0]!.createdAt.getTime());
-    expect((await balanceOf(alice)).updatedAt.getTime()).toBe(refunds[1]!.createdAt.getTime());
-    expectLedgerChain(aliceLedger, (await balanceOf(alice)).availableP);
-
-    // bob: nothing to refund, no ledger row, but the row is closed out; his other market stands.
-    expect((await balanceOf(bob)).availableP).toBe(SIGNUP_BONUS_P - 90n);
-    expect((await ledgerOf(bob)).map((entry) => entry.type)).toEqual(['BONUS', 'TRADE_BUY']);
-
-    const positions = await t.db
-      .select()
-      .from(schema.positions)
-      .where(eq(schema.positions.marketId, row.id))
-      .orderBy(asc(schema.positions.userId), asc(schema.positions.outcome));
-    expect(positions).toHaveLength(4);
-    for (const position of positions.filter((p) => p.userId !== carol)) {
-      expect(position).toMatchObject({ qty: 0, costBasisP: 0n, settled: true });
-    }
-    // Already settled before the void: not refunded, not rewritten.
-    expect(positions.find((p) => p.userId === carol)).toMatchObject({
-      qty: 3,
-      costBasisP: 150n,
-      settled: true,
-    });
-    expect((await ledgerOf(carol)).map((entry) => entry.type)).toEqual(['BONUS']);
-    expect(positions.find((p) => p.userId === bob)!.realizedPnlP).toBe(35n);
-    expect(positions.find((p) => p.userId === alice && p.outcome === 'YES')!.realizedPnlP).toBe(0n);
-    const [untouched] = await t.db
-      .select()
-      .from(schema.positions)
-      .where(and(eq(schema.positions.marketId, other.id), eq(schema.positions.userId, bob)));
-    expect(untouched).toMatchObject({ qty: 2, costBasisP: 90n, settled: false });
-
-    const [action] = await actionsFor(row.id);
-    expect(action).toMatchObject({ type: 'market_void', adminId: admin.id });
-    expect(action!.payload).toMatchObject({
-      reason: '데이터 소스 폐쇄',
-      refundedAccounts: 1,
-      refundedP: '710',
-      before: { status: 'closed' },
-      after: { status: 'voided', voidedAt: voided.voidedAt },
-    });
-
-    // Once voided, a second void (or a close) is a status error.
-    const again = await voidMarket(row.id);
-    expect(again.statusCode).toBe(400);
-    expect(detailPath(again)).toEqual(['status']);
-    expect((await ledgerOf(alice)).filter((e) => e.type === 'MARKET_VOID_REFUND')).toHaveLength(2);
-  });
-
-  it('stamps each refund after its balance lock, so the ledger keeps commit order', async () => {
-    // The void's transaction begins (its `now()` is fixed) and waits on the market lock;
-    // while it waits alice buys elsewhere and that TRADE_BUY commits. Her refund runs after
-    // it and includes it in balance_after_p, so it must sort after it in `/me/ledger` too —
-    // the column default (transaction start) would put it before.
-    const row = await market({ status: 'closed' });
-    const elsewhere = await market({ status: 'open' });
-    const alice = (await createUser(t.db)).user.id;
-    await hold({ userId: alice, marketId: row.id, outcome: 'YES', qty: 10, costBasisP: 520n });
-
-    const subscriber = new Redis(process.env.TEST_REDIS_URL!, { maxRetriesPerRequest: 1 });
-    const received: string[] = [];
-    subscriber.on('message', (_channel: string, message: string) => received.push(message));
-    await subscriber.subscribe(userChannel(alice));
-    const holder = await t.db.$client.connect();
-    let pending: ReturnType<typeof voidMarket> | undefined;
-    let released = false;
-    let voided!: AdminMarket;
-    let releasedMs!: number;
-    try {
-      await holder.query('SELECT pg_advisory_lock(hashtext($1))', [row.id]);
-      pending = voidMarket(row.id).then((res) => res);
-      await waitForLockWaiter(holder, 'the void on the market lock');
-      expect((await marketRow(row.id)).status).toBe('closed');
-      await hold({ userId: alice, marketId: elsewhere.id, outcome: 'NO', qty: 2, costBasisP: 90n });
-      // The database clock just before the release, in the expression the services use.
-      const { rows } = await holder.query<{ ms: string }>(
-        'SELECT (extract(epoch FROM clock_timestamp()) * 1000)::bigint::text AS ms',
-      );
-      releasedMs = Number(rows[0]!.ms);
-      await holder.query('SELECT pg_advisory_unlock(hashtext($1))', [row.id]);
-      released = true;
-      const res = await pending;
-      expect(res.statusCode).toBe(200);
-      voided = detail(res);
-      await waitForMessages(received, 2, 'user events of the void');
-    } finally {
-      if (!released) await holder.query('SELECT pg_advisory_unlock_all()');
-      holder.release();
-      await pending?.catch(() => undefined);
-      await subscriber.quit();
-    }
-
-    const ledger = await ledgerOf(alice);
-    expect(ledger.map((entry) => entry.type)).toEqual([
-      'BONUS',
-      'TRADE_BUY',
-      'TRADE_BUY',
-      'MARKET_VOID_REFUND',
-    ]);
-    const trade = ledger[2]!;
-    const refund = ledger[3]!;
-    expect(refund.balanceAfterP).toBe(SIGNUP_BONUS_P - 90n);
-    expect(refund.createdAt.getTime()).toBeGreaterThanOrEqual(trade.createdAt.getTime());
-    expectLedgerChain(ledger, (await balanceOf(alice)).availableP);
-    // The void itself is stamped after the market lock, the refund after the balance lock.
-    expect(Date.parse(voided.voidedAt!)).toBeGreaterThanOrEqual(releasedMs);
-    expect(refund.createdAt.getTime()).toBeGreaterThanOrEqual(Date.parse(voided.voidedAt!));
-    expect((await balanceOf(alice)).updatedAt.getTime()).toBe(refund.createdAt.getTime());
-    expect(received.map((message) => JSON.parse(message) as Record<string, unknown>)).toEqual([
-      {
-        type: 'user:balance',
-        availableP: (SIGNUP_BONUS_P - 90n).toString(),
-        lockedP: '0',
-        ledgerEntryId: refund.id.toString(),
-        ts: refund.createdAt.toISOString(),
-      },
-      {
-        type: 'user:position',
-        marketId: row.id,
-        outcome: 'YES',
-        qty: 0,
-        costBasisP: '0',
-        realizedPnlP: '0',
-        settled: true,
-        version: 2,
-        ts: voided.voidedAt,
-      },
-    ]);
-  });
-
-  it('takes an upper-case path id and records the canonical one in the audit and ledger rows', async () => {
-    // The path parameter is lower-cased at the boundary (api/uuid.ts) and the rows that keep
-    // an id as text — admin_actions.target_id, the refund's ledger ref_id — are written from
-    // the locked row, so neither can hold a spelling that no lookup would match.
-    const row = await market({ status: 'closed' });
-    const alice = (await createUser(t.db)).user.id;
-    await hold({ userId: alice, marketId: row.id, outcome: 'YES', qty: 10, costBasisP: 520n });
-
-    const res = await voidMarket(row.id.toUpperCase());
-    expect(res.statusCode).toBe(200);
-    expect(detail(res).id).toBe(row.id);
-    const refund = (await ledgerOf(alice)).find((entry) => entry.type === 'MARKET_VOID_REFUND');
-    expect(refund).toMatchObject({ refId: row.id });
-    const [action] = await actionsFor(row.id);
-    expect(action).toMatchObject({ type: 'market_void', targetId: row.id });
-    expect((await get(`/api/v1/admin/markets/${row.id.toUpperCase()}`)).statusCode).toBe(200);
-  });
-
-  it('voids open and closed markets without positions, and refuses draft/resolved/settled/voided', async () => {
-    for (const status of ['open', 'closed'] as const) {
-      const row = await market({ status });
-      const res = await voidMarket(row.id);
-      expect({ status, code: res.statusCode }).toEqual({ status, code: 200 });
-      expect(detail(res)).toMatchObject({ status: 'voided' });
-      expect(detail(res).events[0]!.payload).toMatchObject({ refundedAccounts: 0, refundedP: '0' });
-    }
-    // `resolved` included (ADR-0046, D2): a judged market is final until #26 decides how a
-    // judgement is overturned, so its result and positions stay where the judgement put them.
-    for (const status of ['draft', 'resolved', 'settled', 'voided'] as const) {
-      const row = await market({
-        status,
-        ...(status === 'resolved' || status === 'settled' ? { resolvedResult: 'YES' } : {}),
-      });
-      const res = await voidMarket(row.id);
-      expect({ status, code: res.statusCode }).toEqual({ status, code: 400 });
-      expect(errorOf(res)).toMatchObject({
-        code: 'VALIDATION_ERROR',
-        message: `Market is ${status}`,
-      });
-      expect(detailPath(res)).toEqual(['status']);
-      expect(await marketRow(row.id)).toMatchObject({
-        status,
-        resolvedResult: row.resolvedResult,
-        voidedAt: row.voidedAt,
-      });
-      expect(await actionsFor(row.id)).toHaveLength(0);
-    }
-    const noReason = await post(`/api/v1/admin/markets/${(await market()).id}/void`, {
-      reason: ' ',
-    });
-    expect(noReason.statusCode).toBe(400);
-    expect((await voidMarket(randomUUID())).statusCode).toBe(404);
-  });
 
   // --- list / detail --------------------------------------------------------------------
   it('lists every status including drafts, newest first, with a keyset cursor', async () => {
@@ -1100,11 +697,24 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     expect((await get('/api/v1/admin/markets?status=nope')).statusCode).toBe(400);
   });
 
-  it('shows the LMSR state, net collected P, open interest and the event log on the detail', async () => {
-    const row = await market({ status: 'open', qYes: 250, qNo: 30 });
+  it('shows net collected P, open interest and the event log on the detail', async () => {
+    const row = await market({ status: 'open', lastPrice: 55, tradeCount: 2 });
     const trader = (await createUser(t.db)).user.id;
-    await hold({ userId: trader, marketId: row.id, outcome: 'YES', qty: 12, costBasisP: 600n });
-    await hold({ userId: trader, marketId: row.id, outcome: 'NO', qty: 5, costBasisP: 200n });
+    await createPosition(t.db, {
+      userId: trader,
+      marketId: row.id,
+      outcome: 'YES',
+      qty: 12,
+      costBasisP: 600n,
+    });
+    await createPosition(t.db, {
+      userId: trader,
+      marketId: row.id,
+      outcome: 'NO',
+      qty: 5,
+      costBasisP: 200n,
+    });
+    // Settled rows are not open interest.
     await createPosition(t.db, {
       userId: (await createUser(t.db)).user.id,
       marketId: row.id,
@@ -1113,25 +723,34 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       costBasisP: 300n,
       settled: true,
     });
-    const [order] = await t.db
-      .insert(schema.orders)
-      .values({
-        userId: trader,
-        marketId: row.id,
-        outcome: 'YES',
-        side: 'buy',
-        type: 'market',
-        qty: 12,
-        filledQty: 12,
-        status: 'filled',
-        idempotencyKey: randomUUID(),
-      })
-      .returning();
+    // Two fills of the trader's order against one resting order of another account
+    // (`fills_counterparty_check` wants it named).
+    const order = async (userId: string, type: 'market' | 'limit') => {
+      const [inserted] = await t.db
+        .insert(schema.orders)
+        .values({
+          userId,
+          marketId: row.id,
+          outcome: 'YES',
+          side: 'buy',
+          type,
+          limitPrice: type === 'limit' ? 50 : null,
+          qty: 12,
+          filledQty: type === 'market' ? 12 : 0,
+          status: type === 'market' ? 'filled' : 'open',
+          idempotencyKey: randomUUID(),
+        })
+        .returning();
+      return inserted!;
+    };
+    const resting = await order((await createUser(t.db)).user.id, 'limit');
+    const taker = await order(trader, 'market');
     await t.db.insert(schema.fills).values([
       {
         marketId: row.id,
-        orderId: order!.id,
-        counterpartyType: 'amm',
+        orderId: taker.id,
+        counterpartyType: 'order',
+        counterpartyOrderId: resting.id,
         outcome: 'YES',
         side: 'buy',
         qty: 12,
@@ -1140,8 +759,9 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       },
       {
         marketId: row.id,
-        orderId: order!.id,
-        counterpartyType: 'amm',
+        orderId: taker.id,
+        counterpartyType: 'order',
+        counterpartyOrderId: resting.id,
         outcome: 'YES',
         side: 'sell',
         qty: 2,
@@ -1159,16 +779,14 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     const shown = detail(res);
     expect(shown).toMatchObject({
       id: row.id,
-      qYes: '250.0000000000',
-      qNo: '30.0000000000',
-      liquidityB: '1000.000000',
-      initialProbBp: 5_000,
-      reserveP: maxLossP(0.5, 1_000).toString(),
+      lastPrice: 55,
+      tradeCount: 2,
       createdBy: admin.id,
       netCollectedP: '490',
       openInterest: { yes: 12, no: 5 },
-      pYesBp: probabilityBp({ qYes: 250, qNo: 30, b: 1_000 }),
+      settlementSteps: [],
     });
+    for (const field of AMM_FIELDS) expect(shown).not.toHaveProperty(field);
     expect(shown.events.map((event) => [event.type, event.actorId])).toEqual([
       ['opened', null],
       ['created', admin.id],
@@ -1189,7 +807,6 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       ['PATCH', `/api/v1/admin/markets/${row.id}`, { title: 'x' }],
       ['POST', `/api/v1/admin/markets/${row.id}/open`, undefined],
       ['POST', `/api/v1/admin/markets/${row.id}/close`, undefined],
-      ['POST', `/api/v1/admin/markets/${row.id}/void`, { reason: 'x' }],
     ] as const) {
       const asMember = await t.app.inject({
         method,

@@ -58,10 +58,11 @@ export function rateLimitScope(reflector: Reflector, context: ExecutionContext):
  * of server components come from it with no header at all.
  *
  * The per-account and per-recipient buckets are unaffected: they are what actually protects
- * `/trades`, `/payments/charge` and sign-up, and they work identically behind the rewrite. The
- * one place the address still stands in for them — the route throttler's fallback for a
- * request it can attribute to neither an account nor an address in the body — is a request
- * the route is about to refuse anyway (401, 403 or 400), and it is counted as it always was.
+ * `/payments/charge`, `/coupons/redeem` and sign-up, and they work identically behind the
+ * rewrite. The one place the address still stands in for them — the route throttler's
+ * fallback for a request it can attribute to neither an account nor an address in the body —
+ * is a request the route is about to refuse anyway (401, 403 or 400), and it is counted as it
+ * always was.
  */
 export function isCountableAddress(ip: string | undefined, uncounted?: BlockList): boolean {
   if (ip === undefined || ip.length === 0) return false;
@@ -95,14 +96,14 @@ function emailFromBody(body: unknown): string | undefined {
  * reuses that. Two reasons it has to be this way round: a global guard runs before every
  * controller guard, so `request.auth` is not there yet; and counting before SessionGuard is
  * what makes the limit cover the request rather than trail it. The cache is why it costs
- * nothing — the session is read once per request either way, and only the four routes that
- * name a `user` bucket read it at all, so no public route pays for this.
+ * nothing — the session is read once per request either way, and only the routes that name a
+ * `user` bucket read it at all, so no public route pays for this.
  *
  * A request that SessionGuard is about to refuse for a foreign `Origin` is counted by address
  * instead. Otherwise a page on a sibling host of this site — the very attack A-M2-13 added the
  * Origin check for, and the one case where SameSite=Lax still sends the cookie on a POST —
- * could spend a victim's `/trades` budget twenty times a minute without ever reaching a
- * handler, and lock them out of trading from a page they merely visited.
+ * could spend a victim's `/payments/charge` budget ten times a minute without ever reaching a
+ * handler, and lock them out of charging from a page they merely visited.
  */
 export async function rateLimitTracker(
   auth: Auth,

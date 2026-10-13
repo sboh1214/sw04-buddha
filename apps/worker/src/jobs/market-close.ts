@@ -57,10 +57,9 @@ export async function closeMarket(
     if (current.status !== 'open') {
       return { outcome: 'skipped', marketId, reason: 'not_open' };
     }
-    // The database clock after the lock (tx-helpers.ts): a trade or a PATCH may have
+    // The database clock after the lock (tx-helpers.ts): an admin edit or transition may have
     // committed while this transaction queued, and the close must be judged and stamped
-    // after it. The same clock the trade path uses for its own close check (`assertTradable`
-    // on `clock_timestamp()`), so a trade and the close never disagree on which came first.
+    // after it.
     const now = await clockTimestamp(tx);
     if (current.closeAt > now) {
       return { outcome: 'skipped', marketId, reason: 'not_due' };

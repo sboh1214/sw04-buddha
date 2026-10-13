@@ -18,14 +18,12 @@ import {
   resolveMarketBodySchema,
   updateMarketBodySchema,
   uuidParamSchema,
-  voidMarketBodySchema,
   type AdminMarket,
   type AdminMarketListQuery,
   type CreateMarketBody,
   type MarketSummary,
   type ResolveMarketBody,
   type UpdateMarketBody,
-  type VoidMarketBody,
 } from '@buddha/shared';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { type SessionUser } from '../auth/auth.js';
@@ -67,7 +65,7 @@ export class AdminMarketsController {
   @Get(':id')
   @ApiOperation({
     operationId: 'adminGetMarket',
-    summary: 'One market with its LMSR state, exposure and event log',
+    summary: 'One market with its exposure, settlement steps and event log',
   })
   @ApiData(adminMarketSchema)
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
@@ -78,7 +76,7 @@ export class AdminMarketsController {
   @Post()
   @ApiOperation({
     operationId: 'adminCreateMarket',
-    summary: 'Create a draft market (LMSR initialised from initialProbBp and liquidityB)',
+    summary: 'Create a draft market (no price until its first fill)',
   })
   @ApiData(adminMarketSchema, 201)
   // NOT_FOUND names `categoryId`; VALIDATION_ERROR names `slug` (taken), `categoryId`
@@ -95,9 +93,9 @@ export class AdminMarketsController {
   @ApiOperation({
     operationId: 'adminUpdateMarket',
     summary:
-      'Edit a draft (any field) or an open market (text, close time, category; ' +
-      'liquidityB/initialProbBp/slug refused naming the field, blank rules refused with ' +
-      'RULES_REQUIRED); other statuses refuse naming status',
+      'Edit a draft (any field) or an open market (text, close time, category; slug ' +
+      'refused naming the field, blank rules refused with RULES_REQUIRED); other statuses ' +
+      'refuse naming status',
   })
   @ApiData(adminMarketSchema)
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR', 'RULES_REQUIRED')
@@ -153,24 +151,5 @@ export class AdminMarketsController {
     @Body({ schema: resolveMarketBodySchema }) body: ResolveMarketBody,
   ): Promise<AdminMarket> {
     return this.markets.resolve(admin.id, id, body);
-  }
-
-  @Post(':id/void')
-  @HttpCode(200)
-  @ApiOperation({
-    operationId: 'adminVoidMarket',
-    summary:
-      'Void an open or closed market: every unsettled position is refunded its ' +
-      'cost basis (MARKET_VOID_REFUND) and closed out',
-  })
-  @ApiData(adminMarketSchema)
-  // VALIDATION_ERROR names `status` for a draft, resolved, settled or already voided market.
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
-  adminVoidMarket(
-    @CurrentUser() admin: SessionUser,
-    @Param('id', { schema: uuidParamSchema }) id: string,
-    @Body({ schema: voidMarketBodySchema }) body: VoidMarketBody,
-  ): Promise<AdminMarket> {
-    return this.markets.void(admin.id, id, body);
   }
 }

@@ -8,7 +8,7 @@ import { AUTH, type Auth, type SessionData } from './auth.js';
 
 /**
  * Fastify request after SessionGuard ran — or after the rate-limit guard resolved the session
- * first, which it does for the routes counted per account (`@RateLimit('trade')` and friends,
+ * first, which it does for the routes counted per account (`@RateLimit('charge')` and friends,
  * rate-limit.tracker.ts).
  *
  * That second writer is why `@CurrentUser()` still refuses a request with no `auth` rather than
@@ -74,7 +74,7 @@ export class SessionGuard implements CanActivate {
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
     this.refuseForeignOrigin(request);
     // Reused when the global rate-limit guard already resolved it: a route in a per-account
-    // bucket (`@RateLimit('trade')` and friends) is counted per account, which means the session
+    // bucket (`@RateLimit('charge')` and friends) is counted per account, which means the session
     // was read before this guard ran (rate-limit.tracker.ts). Reading it twice would double the
     // session query on exactly the routes PLAN 7.5 singles out.
     const session =

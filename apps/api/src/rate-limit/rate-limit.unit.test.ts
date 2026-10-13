@@ -147,7 +147,7 @@ describe('RedisThrottlerStorage', () => {
 
   it('ALLOWS the request when the store is unreachable', async () => {
     // Fail open. A limiter that refuses while Redis is down converts a Redis blip into a total
-    // outage of a service whose reads and trades do not need Redis at all.
+    // outage of a service whose reads and writes do not need Redis at all.
     const storage = new RedisThrottlerStorage(fakeRedis({ error: new Error('ECONNREFUSED') }));
     expect(await storage.increment('k', 60_000, 5, 60_000, 'default')).toEqual({
       totalHits: 0,
