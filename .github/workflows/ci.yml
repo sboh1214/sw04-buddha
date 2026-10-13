@@ -158,10 +158,11 @@ jobs:
         run: pnpm --filter web exec playwright install --with-deps chromium
 
       # The e2e flow needs the categories, and its market fixture is created through the admin API
-      # as the seeded admin (SEED_ADMIN_* above). No spec charges: paid Coin is closed (ADR-0049), and
-      # the payment spec puts a package on sale itself (the seed's are off sale, #125) to show the
-      # charge is refused anyway. db:seed declares DATABASE_URL and the four SEED_*ADMIN_* keys in
-      # turbo.json's passThroughEnv.
+      # as the seeded admin (SEED_ADMIN_* above); the admin-accounts spec also signs in as the
+      # second one (SEED_SECOND_ADMIN_*, #171) and needs exactly these two admins. No spec charges:
+      # paid Coin is closed (ADR-0049), and the payment spec puts a package on sale itself (the
+      # seed's are off sale, #125) to show the charge is refused anyway. db:seed declares
+      # DATABASE_URL and the four SEED_*ADMIN_* keys in turbo.json's passThroughEnv.
       - name: Seed the database
         run: pnpm db:seed
 

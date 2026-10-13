@@ -56,6 +56,12 @@ export type ReleaseSettingChange = components['schemas']['ReleaseSettingChange']
 export type ReleaseSettingChangeBody = components['schemas']['ReleaseSettingChangeBody'];
 /** A status and value, before or after a change: `value` is null exactly while `undecided`. */
 export type ReleaseSettingState = components['schemas']['ReleaseSettingState'];
+/** An account that holds the admin role now, with its latest grant (#171). */
+export type AdminAccount = components['schemas']['AdminAccount'];
+/** One admin grant or revoke as recorded: account, admin, reason and time (#171). */
+export type AdminRoleChange = components['schemas']['AdminRoleChange'];
+/** `POST /admin/admins`: the account to make an admin and why (required, recorded). */
+export type AdminGrantBody = components['schemas']['AdminGrantBody'];
 export type ErrorEnvelope = components['schemas']['ErrorEnvelope'];
 
 /** A non-2xx API response, carrying the `{ error: { code, message, details? } }` envelope. */

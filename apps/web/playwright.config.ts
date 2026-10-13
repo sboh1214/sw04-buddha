@@ -8,10 +8,10 @@ import { config as loadEnv } from 'dotenv';
  *
  * The suite needs a whole stack: Postgres, Redis and Mailpit (`pnpm infra:up`), a migrated and
  * SEEDED database (`pnpm db:migrate && pnpm db:seed` — the specs create their own markets, but
- * the first admin and the category rows have no route that could make them), the API on :4000,
- * the web server on :3000 and, since M5, the worker. The `webServer` blocks below start the
- * three processes when nothing is listening; the containers and the migrations remain a
- * prerequisite.
+ * the two bootstrap admins (#171) and the category rows have no route that could make them), the
+ * API on :4000, the web server on :3000 and, since M5, the worker. The `webServer` blocks below
+ * start the three processes when nothing is listening; the containers and the migrations remain
+ * a prerequisite.
  *
  * The repo's root `.env` is read here the way the worker (env.ts) and Next (next.config.ts)
  * read it, so a probe below is aimed at the port the process it waits for actually took —
