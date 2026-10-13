@@ -301,8 +301,16 @@ export function MarketCard({
         )}
       </Grid>
 
-      <Flex justify="space-between" align="center" minH="28px">
-        <Text as="span" textStyle="bodyXs" color="fg">
+      <Flex justify="space-between" align="center" gap="2" minH="28px">
+        {/* One line: `formatCoin` puts an ordinary space before 'Coin' (ADR-0051), and the
+            label, the number and the unit read as one figure beside the sparkline. */}
+        <Text
+          as="span"
+          textStyle="bodyXs"
+          color="fg"
+          whiteSpace="nowrap"
+          data-testid="market-card-volume"
+        >
           {copy.marketVolume} {formatCoin(parseCoinAmount(market.volumeCoin))}
         </Text>
         {sparkline === undefined ? null : <MarketSparkline points={sparkline} />}

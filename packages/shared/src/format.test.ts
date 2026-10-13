@@ -1,21 +1,27 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import { MINUS_SIGN, formatCoin, formatKrw } from './format.js';
+import { COIN_UNIT, MINUS_SIGN, formatCoin, formatKrw } from './format.js';
 
 describe('formatCoin', () => {
-  it('groups thousands and appends P', () => {
-    expect(formatCoin(0)).toBe('0P');
-    expect(formatCoin(999)).toBe('999P');
-    expect(formatCoin(1000)).toBe('1,000P');
-    expect(formatCoin(12345)).toBe('12,345P');
-    expect(formatCoin(12345n)).toBe('12,345P');
-    expect(formatCoin(1_000_000_000n)).toBe('1,000,000,000P');
+  it('groups thousands, then one ordinary space and Coin', () => {
+    expect(formatCoin(0)).toBe('0 Coin');
+    expect(formatCoin(999)).toBe('999 Coin');
+    expect(formatCoin(1000)).toBe('1,000 Coin');
+    expect(formatCoin(12345)).toBe('12,345 Coin');
+    expect(formatCoin(12345n)).toBe('12,345 Coin');
+    expect(formatCoin(1_000_000_000n)).toBe('1,000,000,000 Coin');
+  });
+
+  it('writes the unit after one ordinary space (U+0020), not a no-break one', () => {
+    expect(COIN_UNIT).toBe('Coin');
+    expect(formatCoin(12345n)).toBe(`12,345\u0020${COIN_UNIT}`);
+    expect(formatCoin(12345n)).not.toContain('\u00a0');
   });
 
   it('renders negatives with U+2212 MINUS SIGN, never hyphen-minus', () => {
-    expect(formatCoin(-1200)).toBe('−1,200P');
-    expect(formatCoin(-1200n)).toBe(`${MINUS_SIGN}1,200P`);
-    expect(formatCoin(-1)).toBe('−1P');
+    expect(formatCoin(-1200)).toBe('−1,200 Coin');
+    expect(formatCoin(-1200n)).toBe(`${MINUS_SIGN}1,200 Coin`);
+    expect(formatCoin(-1)).toBe('−1 Coin');
     expect(formatCoin(-1200)).not.toContain('-');
   });
 
@@ -31,17 +37,17 @@ describe('formatCoin', () => {
     expect(() => formatCoin(1e21)).toThrow(RangeError);
     expect(() => formatCoin(Number.POSITIVE_INFINITY)).toThrow(RangeError);
     // Safe boundaries stay accepted; bigint input is unbounded.
-    expect(formatCoin(Number.MAX_SAFE_INTEGER)).toBe('9,007,199,254,740,991P');
-    expect(formatCoin(Number.MIN_SAFE_INTEGER)).toBe('−9,007,199,254,740,991P');
-    expect(formatCoin(2n ** 53n)).toBe('9,007,199,254,740,992P');
+    expect(formatCoin(Number.MAX_SAFE_INTEGER)).toBe('9,007,199,254,740,991 Coin');
+    expect(formatCoin(Number.MIN_SAFE_INTEGER)).toBe('−9,007,199,254,740,991 Coin');
+    expect(formatCoin(2n ** 53n)).toBe('9,007,199,254,740,992 Coin');
   });
 
   it('round-trips: stripping separators and sign yields the absolute value', () => {
     fc.assert(
       fc.property(fc.bigInt({ min: -(10n ** 30n), max: 10n ** 30n }), (v) => {
         const out = formatCoin(v);
-        expect(out.endsWith('P')).toBe(true);
-        const body = out.slice(0, -1);
+        expect(out.endsWith(' Coin')).toBe(true);
+        const body = out.slice(0, -' Coin'.length);
         const negative = body.startsWith(MINUS_SIGN);
         const unsigned = negative ? body.slice(1) : body;
         expect(BigInt(unsigned.replaceAll(',', ''))).toBe(v < 0n ? -v : v);

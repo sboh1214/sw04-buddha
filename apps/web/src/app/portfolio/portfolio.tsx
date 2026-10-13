@@ -13,11 +13,12 @@ import {
   Stack,
   Text,
 } from '@chakra-ui/react';
-import { type OrderStatus, formatCoin, parseCoinAmount } from '@buddha/shared';
+import { type OrderStatus, parseCoinAmount } from '@buddha/shared';
 import { useQueries } from '@tanstack/react-query';
 import type { Route } from 'next';
 import NextLink from 'next/link';
 import { type ReactNode } from 'react';
+import { CoinText } from '@/components/ui/coin-text';
 import { EmptyState } from '@/components/ui/empty-state';
 import { copy } from '@/copy';
 import { listSection, listView, profileView } from '@/lib/query-client';
@@ -198,19 +199,24 @@ export function Portfolio() {
               <Text fontSize="sm" color="fg.muted">
                 {copy.walletBalance}
               </Text>
-              <Text fontSize="3xl" fontWeight="bold" data-testid="portfolio-available">
-                {formatCoin(parseCoinAmount(me.data.balance.availableCoin))}
-              </Text>
+              <CoinText
+                as="p"
+                fontSize="3xl"
+                fontWeight="bold"
+                amount={parseCoinAmount(me.data.balance.availableCoin)}
+                data-testid="portfolio-available"
+              />
               <HStack gap="2" color="fg.muted" fontSize="sm">
                 <Text>{copy.walletLocked}</Text>
-                <Text data-testid="portfolio-locked">
-                  {formatCoin(parseCoinAmount(me.data.balance.lockedCoin))}
-                </Text>
+                <CoinText
+                  amount={parseCoinAmount(me.data.balance.lockedCoin)}
+                  data-testid="portfolio-locked"
+                />
               </HStack>
             </Stack>
             <DataList.Root orientation="horizontal" size="sm">
               <Total label={copy.portfolioValue} state={listState(open)} testId="portfolio-value">
-                {formatCoin(openTotals.valueCoin)}
+                <CoinText amount={openTotals.valueCoin} />
               </Total>
               <Total
                 label={copy.portfolioUnrealizedPnl}
@@ -391,12 +397,14 @@ function OpenPositionRow({ position }: { position: Position }) {
         <Item label={copy.positionQty}>{formatContracts(position.qty)}</Item>
         {/* A row sold out of keeps its realised PnL visible at qty 0, and then has no average. */}
         <Item label={copy.positionAvgPrice}>
-          {average === undefined ? EMPTY : formatCoin(average)}
+          {average === undefined ? EMPTY : <CoinText amount={average} />}
         </Item>
         <Item label={copy.positionCurrentPrice}>
-          {mark === undefined ? copy.noFills : formatCoin(mark)}
+          {mark === undefined ? copy.noFills : <CoinText amount={mark} />}
         </Item>
-        <Item label={copy.positionValue}>{value === undefined ? EMPTY : formatCoin(value)}</Item>
+        <Item label={copy.positionValue}>
+          {value === undefined ? EMPTY : <CoinText amount={value} />}
+        </Item>
         <Item label={copy.positionPnl}>
           {unrealized === undefined ? EMPTY : <Signed amount={unrealized} />}
         </Item>
@@ -481,7 +489,11 @@ function OrderRow({ order }: { order: Order }) {
           {order.priceAvgBp === null ? EMPTY : formatPricePerContract(order.priceAvgBp)}
         </Item>
         <Item label={copy.orderAmount}>
-          {order.amountCoin === null ? EMPTY : formatCoin(parseCoinAmount(order.amountCoin))}
+          {order.amountCoin === null ? (
+            EMPTY
+          ) : (
+            <CoinText amount={parseCoinAmount(order.amountCoin)} />
+          )}
         </Item>
         <Item label={copy.orderCreatedAt}>{formatKst(order.createdAt)}</Item>
       </DataList.Root>
@@ -576,11 +588,9 @@ function Total({
  * rather than claiming a direction.
  */
 function Signed({ amount }: { amount: bigint }) {
-  if (amount === 0n) return <>{formatCoin(amount)}</>;
+  if (amount === 0n) return <CoinText amount={amount} />;
   return (
-    <Text as="span" colorPalette={amount > 0n ? 'yes' : 'no'} color="colorPalette.fg">
-      {formatCoin(amount)}
-    </Text>
+    <CoinText amount={amount} colorPalette={amount > 0n ? 'yes' : 'no'} color="colorPalette.fg" />
   );
 }
 

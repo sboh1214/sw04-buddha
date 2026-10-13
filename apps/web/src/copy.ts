@@ -1,12 +1,11 @@
 /** User-facing copy (Korean). Keep every UI string here; see PLAN.md Appendix A. */
 export const copy = {
   appName: 'buddha',
-  appDescription: '예/아니오로 미래를 예측하는 포인트 예측 시장',
+  appDescription: '예/아니오로 미래를 예측하는 가상 Coin 예측 시장',
   predict: '예측하기',
   yes: '예',
   no: '아니오',
   probability: '확률',
-  payoutIfCorrect: '맞히면 100P',
   expectedProfit: '예상 수익',
   settlementRules: '정산 기준',
   settled: '정산 완료',
@@ -15,7 +14,7 @@ export const copy = {
   comingSoon: '준비 중입니다.',
   // 지갑의 고정 안내(N01 §2). 유료 충전을 닫아(ADR-0049) 충전은 말하지 않는다. 약관·환불정책
   // 본문은 이 문장이 아니라 legal/cash-notice.ts의 원래 문장을 인용한다(#137에서 개정).
-  walletNotice: 'P의 현금 환전·출금은 제공하지 않습니다.',
+  walletNotice: 'Coin의 현금 환전·출금은 제공하지 않습니다.',
 
   // --- navigation / auth buttons (M1) ---
   navHome: '홈',
@@ -168,7 +167,7 @@ export const copy = {
   walletBalance: '사용 가능 잔고',
   walletLocked: '주문 예약',
   charge: '충전',
-  chargeTitle: 'P 충전',
+  chargeTitle: '코인 충전',
   chargeHint: '금액이 클수록 할인율이 높습니다.',
   chargeDiscount: '할인',
   chargeSubmit: '충전하기',
@@ -193,7 +192,7 @@ export const copy = {
   errCouponCode: '쿠폰 코드를 입력해 주세요.',
   errCouponInvalid: '사용할 수 없는 쿠폰입니다.',
   errCouponAlreadyUsed: '이미 사용한 쿠폰입니다.',
-  errCouponAmount: '1P 이상 1,000,000P 이하의 정수로 입력해 주세요.',
+  errCouponAmount: '1 Coin 이상 1,000,000 Coin 이하의 정수로 입력해 주세요.',
   errAdminCouponCode: '영문·숫자·하이픈 4~32자로 입력하거나 비워 두세요.',
   loadMore: '더 보기',
   ledgerTitle: '이용 내역',
@@ -216,7 +215,7 @@ export const copy = {
   adminSearch: '검색',
   adminNoUsers: '검색 결과가 없습니다.',
   adminPackages: '충전 상품',
-  adminPackageAmount: 'P 금액',
+  adminPackageAmount: '코인 금액',
   adminPackagePrice: '가격(원)',
   adminPackageOrder: '정렬',
   adminPackageAdd: '상품 추가',
@@ -226,10 +225,10 @@ export const copy = {
   adminPackageInactive: '판매 중지',
   adminPackageDeleted: '상품을 삭제했습니다.',
   adminPackageSaved: '상품을 저장했습니다.',
-  errPackagePrice: '가격은 P 금액을 넘을 수 없습니다.',
+  errPackagePrice: '가격은 코인 금액을 넘을 수 없습니다.',
   adminCoupons: '쿠폰',
   adminCouponCode: '코드 (비우면 자동 생성)',
-  adminCouponAmount: '지급 P',
+  adminCouponAmount: '지급 코인',
   adminCouponMax: '사용 횟수 제한',
   adminCouponExpires: '만료 (KST)',
   adminCouponMemo: '메모',
@@ -244,7 +243,7 @@ export const copy = {
   adminAdjustMemo: '사유',
   adminAdjustSubmit: '조정 적용',
   adminAdjustDone: '잔고를 조정했습니다.',
-  errAdjustRange: '0이 아닌 금액을 1,000,000P 이내로 입력해 주세요.',
+  errAdjustRange: '0이 아닌 금액을 1,000,000 Coin 이내로 입력해 주세요.',
   errAdjustMemo: '사유를 입력해 주세요.',
   errAdjustNegative: '잔고가 음수가 되는 조정은 할 수 없습니다.',
   adminOnly: '관리자만 접근할 수 있습니다.',
@@ -302,7 +301,7 @@ export const copy = {
   // 관리자 상세의 거래 현황: 체결·포지션에서 나온 값만 보인다(직접 AMM 상태는 #125에서 지웠다).
   adminMarketTradeStats: '거래 현황',
   tradeStatsLastPrice: '현재가',
-  tradeStatsNetCollected: '순 수취 P',
+  tradeStatsNetCollected: '순 수취 코인',
   tradeStatsOpenInterestYes: '미결제 예',
   tradeStatsOpenInterestNo: '미결제 아니오',
   marketTradeCount: '거래 수',
@@ -539,7 +538,7 @@ export const copy = {
   settlementStepStatusFailed: '실패',
   // 정산 완료 안내: 지급은 이미 잔고에 반영됐고 내 손익은 아래 내 포지션이 말한다.
   marketSettledPayout:
-    '맞힌 계약은 100P씩 지급되었고, 내 손익은 아래 내 포지션에서 볼 수 있습니다.',
+    '맞힌 계약은 100 Coin씩 지급되었고, 내 손익은 아래 내 포지션에서 볼 수 있습니다.',
   // 관리자 이벤트 로그의 정산 행: 정산 요약(worker market-finalize).
   eventSettledAccounts: '정산 계정 수',
   eventPaidAccounts: '지급 계정 수',
@@ -579,13 +578,13 @@ export const copy = {
   footerCopyright: '© {{serviceName}}',
   chargeGuideTitle: '충전 안내',
   chargeGuideIntro:
-    'P는 {{serviceName}}의 예측 시장에서 예·아니오 계약을 사고파는 데 쓰는 서비스 전용 포인트입니다. 아래 상품 가운데 하나를 골라 충전할 수 있습니다.',
+    'Coin은 {{serviceName}}의 예측 시장에서 예·아니오 계약을 사고파는 데 쓰는 서비스 전용 재화입니다. 아래 상품 가운데 하나를 골라 충전할 수 있습니다.',
   chargeGuideDelivery:
-    '결제는 {{pgName}}의 결제 창에서 카드로 진행되며, 가격에는 부가가치세가 포함되어 있습니다. 결제가 승인되면 P가 바로 지갑에 충전됩니다. 충전하려면 로그인이 필요합니다.',
+    '결제는 {{pgName}}의 결제 창에서 카드로 진행되며, 가격에는 부가가치세가 포함되어 있습니다. 결제가 승인되면 Coin이 바로 지갑에 충전됩니다. 충전하려면 로그인이 필요합니다.',
   chargeGuidePrice: '결제 금액',
   chargeGuideNoticeTitle: '충전 전에 확인해 주세요',
   chargeGuideRefundSummary:
-    '결제가 승인된 때부터 {{refundWindowDays}}일 이내이고 그 결제로 충전된 P를 전혀 쓰지 않았다면 결제 금액 전액을 환불받을 수 있습니다. 쿠폰·정산 등 결제 없이 받은 P는 환불되지 않습니다.',
+    '결제가 승인된 때부터 {{refundWindowDays}}일 이내이고 그 결제로 충전된 Coin을 전혀 쓰지 않았다면 결제 금액 전액을 환불받을 수 있습니다. 쿠폰·정산 등 결제 없이 받은 Coin은 환불되지 않습니다.',
   chargeGuideRefundLink: '환불정책 자세히 보기',
   chargeGuideLoadError: '충전 상품을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.',
 
@@ -650,19 +649,19 @@ export const copy = {
   adminPaymentRefundDeadline: '환불 기한',
   adminPaymentRefundTitle: '결제를 환불합니다',
   adminPaymentRefundBody:
-    '결제 금액 전액을 결제대행사에서 취소하고, 이 결제로 충전된 P를 모두 회수합니다. 승인 후 7일 이내이고 회원이 그 P를 전혀 쓰지 않았을 때(사용 가능 잔고가 그 P 이상)만 환불됩니다.',
+    '결제 금액 전액을 결제대행사에서 취소하고, 이 결제로 충전된 Coin을 모두 회수합니다. 승인 후 7일 이내이고 회원이 그 Coin을 전혀 쓰지 않았을 때(사용 가능 잔고가 그 Coin 이상)만 환불됩니다.',
   adminPaymentRefundRetryTitle: '환불을 다시 시도합니다',
   // 「환불 처리 중」은 취소의 답이 없었던 결제만이 아니다: 거절된 재시도도 남는다. 그래서 답이
   // 없었다고 말하지 않는다.
   adminPaymentRefundRetryBody:
-    '이전 환불 요청에서 P는 이미 회수했고, 카드 취소는 아직 확인되지 않았습니다. 결제대행사에 취소를 다시 요청합니다.',
+    '이전 환불 요청에서 Coin은 이미 회수했고, 카드 취소는 아직 확인되지 않았습니다. 결제대행사에 취소를 다시 요청합니다.',
   adminPaymentRefundReason: '환불 사유',
   adminPaymentRefundReasonHint: '감사 기록에 남고, 결제대행사에 취소 사유로도 전달됩니다.',
   adminPaymentRefundSubmit: '환불하기',
-  adminPaymentRefunded: '환불했습니다. 결제를 취소하고 P를 회수했습니다.',
+  adminPaymentRefunded: '환불했습니다. 결제를 취소하고 Coin을 회수했습니다.',
   refundGatewayAnswer: '결제대행사 응답:',
   errRefundReason: '환불 사유를 1~500자로 입력해 주세요.',
-  errRefundCoinUsed: '이미 사용한 P가 있어 환불할 수 없습니다.',
+  errRefundCoinUsed: '이미 사용한 Coin이 있어 환불할 수 없습니다.',
   errRefundWindowClosed: '승인 후 7일이 지나 환불할 수 없습니다.',
   errRefundStatus: '환불할 수 있는 상태의 결제가 아닙니다. 목록에서 현재 상태를 확인해 주세요.',
   errRefundProvider: '이 결제는 결제대행사에서 취소할 수 없습니다.',

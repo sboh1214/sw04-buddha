@@ -1,4 +1,5 @@
 import { Box } from '@chakra-ui/react';
+import { COIN_UNIT } from '@buddha/shared';
 import type { ChargeTier } from '@/lib/charge-guide';
 
 /**
@@ -153,7 +154,8 @@ export function PackageIllustration({ tier }: { tier: ChargeTier }) {
         {scene.stacks.map((stack) => (
           <CoinStack key={stack.cx} {...stack} rx={scene.stackRx} />
         ))}
-        {/* The upright coin, face on, with the P mark. */}
+        {/* The upright coin, face on, with the unit written on it — the four letters at half the
+            radius sit inside the inner ring (about 1.1r wide in a 1.48r ring). */}
         <circle
           cx={coin.cx}
           cy={coin.cy}
@@ -177,11 +179,11 @@ export function PackageIllustration({ tier }: { tier: ChargeTier }) {
           y={coin.cy}
           textAnchor="middle"
           dominantBaseline="central"
-          fontSize={coin.r * 0.95}
+          fontSize={coin.r * 0.5}
           fontWeight={700}
           fill="currentColor"
         >
-          P
+          {COIN_UNIT}
         </text>
         {scene.glints.map((g) => (
           <path

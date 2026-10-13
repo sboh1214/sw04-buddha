@@ -277,7 +277,7 @@ function MarketHeader({
       />
 
       <HStack gap="4" flexWrap="wrap" fontSize="sm" color="fg.muted">
-        <Text data-testid="market-detail-volume">
+        <Text whiteSpace="nowrap" data-testid="market-detail-volume">
           {copy.marketVolume} {formatCoin(parseCoinAmount(market.volumeCoin))}
         </Text>
         {/* Grouped by `formatCoin` everywhere else; a plain count is written out as it is, and

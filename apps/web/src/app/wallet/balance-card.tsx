@@ -1,8 +1,9 @@
 'use client';
 
 import { Alert, Button, Card, HStack, Skeleton, Stack, Text } from '@chakra-ui/react';
-import { formatCoin, parseCoinAmount } from '@buddha/shared';
+import { parseCoinAmount } from '@buddha/shared';
 import NextLink from 'next/link';
+import { CoinText } from '@/components/ui/coin-text';
 import { EmptyState } from '@/components/ui/empty-state';
 import { copy } from '@/copy';
 import { useMe } from '@/hooks/use-me';
@@ -49,14 +50,19 @@ export function BalanceCard() {
             <Text fontSize="sm" color="fg.muted">
               {copy.walletBalance}
             </Text>
-            <Text fontSize="3xl" fontWeight="bold" data-testid="wallet-available">
-              {formatCoin(parseCoinAmount(me.balance.availableCoin))}
-            </Text>
+            <CoinText
+              as="p"
+              fontSize="3xl"
+              fontWeight="bold"
+              amount={parseCoinAmount(me.balance.availableCoin)}
+              data-testid="wallet-available"
+            />
             <HStack gap="2" color="fg.muted" fontSize="sm">
               <Text>{copy.walletLocked}</Text>
-              <Text data-testid="wallet-locked">
-                {formatCoin(parseCoinAmount(me.balance.lockedCoin))}
-              </Text>
+              <CoinText
+                amount={parseCoinAmount(me.balance.lockedCoin)}
+                data-testid="wallet-locked"
+              />
             </HStack>
           </Stack>
         )}

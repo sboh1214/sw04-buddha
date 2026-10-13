@@ -1,20 +1,11 @@
 'use client';
 
-import {
-  Alert,
-  Badge,
-  Button,
-  Card,
-  DataList,
-  Heading,
-  Skeleton,
-  Stack,
-  Text,
-} from '@chakra-ui/react';
-import { type MarketStatus, formatCoin, parseCoinAmount } from '@buddha/shared';
+import { Alert, Badge, Button, Card, DataList, Heading, Skeleton, Stack } from '@chakra-ui/react';
+import { type MarketStatus, parseCoinAmount } from '@buddha/shared';
 import NextLink from 'next/link';
 import { usePathname } from 'next/navigation';
 import { type ReactNode } from 'react';
+import { CoinText } from '@/components/ui/coin-text';
 import { EmptyState } from '@/components/ui/empty-state';
 import { copy } from '@/copy';
 import {
@@ -202,10 +193,10 @@ function PositionRows({ position }: { position: Position }) {
         {/* A row the account has sold out of stays in the list so its realised PnL keeps
             showing; it holds nothing, so there is no average to divide out. */}
         <Item label={copy.positionAvgPrice}>
-          {average === undefined ? EMPTY : formatCoin(average)}
+          {average === undefined ? EMPTY : <CoinText amount={average} />}
         </Item>
         <Item label={copy.positionCurrentPrice}>
-          {mark === undefined ? copy.noFills : formatCoin(mark)}
+          {mark === undefined ? copy.noFills : <CoinText amount={mark} />}
         </Item>
         <Item label={copy.positionPnl}>
           {unrealized === undefined ? EMPTY : <Signed amount={unrealized} />}
@@ -257,11 +248,9 @@ function SettledPositionRows({ position }: { position: Position }) {
  * nicety: at 0 it stays on the ordinary foreground rather than claiming a direction.
  */
 function Signed({ amount }: { amount: bigint }) {
-  if (amount === 0n) return <>{formatCoin(amount)}</>;
+  if (amount === 0n) return <CoinText amount={amount} />;
   return (
-    <Text as="span" colorPalette={amount > 0n ? 'yes' : 'no'} color="colorPalette.fg">
-      {formatCoin(amount)}
-    </Text>
+    <CoinText amount={amount} colorPalette={amount > 0n ? 'yes' : 'no'} color="colorPalette.fg" />
   );
 }
 

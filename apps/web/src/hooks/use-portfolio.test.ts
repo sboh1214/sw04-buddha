@@ -123,7 +123,7 @@ describe('markPriceCoin / positionValueCoin / unrealizedPnlCoin', () => {
     const losing = position({ outcome: 'YES', marketLastPrice: 30, costBasisCoin: '5000' });
 
     expect(unrealizedPnlCoin(losing)).toBe(-2000n);
-    expect(formatCoin(priced(unrealizedPnlCoin(losing)))).toBe(`${MINUS_SIGN}2,000P`);
+    expect(formatCoin(priced(unrealizedPnlCoin(losing)))).toBe(`${MINUS_SIGN}2,000 Coin`);
     expect(formatCoin(priced(unrealizedPnlCoin(losing))).startsWith('-')).toBe(false);
   });
 
