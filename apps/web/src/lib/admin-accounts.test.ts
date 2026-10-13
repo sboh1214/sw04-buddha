@@ -18,6 +18,7 @@ import {
   formatAdminGrant,
   grantSearchRows,
   isAdminRoleChangeRefusal,
+  revokesSelf,
   type GrantCandidatePage,
 } from './admin-accounts';
 import { ApiError, type AdminUser } from './api';
@@ -220,5 +221,27 @@ describe('the grant search', () => {
 
   it('has nothing to offer before any answer', () => {
     expect(grantSearchRows('kim', undefined, false)).toEqual({ rows: [], stale: false });
+  });
+});
+
+describe('a revoke of my own role', () => {
+  const me = { user: { id: 'me' } };
+
+  it('is not known while the session loads, even if the admin list came first', () => {
+    // During hydration `useSession` answers pending with no data; a cached answer stays pending
+    // until it settles too.
+    expect(revokesSelf('me', { isPending: true, data: null })).toBeUndefined();
+    expect(revokesSelf('other', { isPending: true, data: null })).toBeUndefined();
+    expect(revokesSelf('me', { isPending: true, data: me })).toBeUndefined();
+  });
+
+  it('is not known without a signed-in account', () => {
+    expect(revokesSelf('me', { isPending: false, data: null })).toBeUndefined();
+    expect(revokesSelf('me', { isPending: false, data: undefined })).toBeUndefined();
+  });
+
+  it("is mine for the signed-in account and another admin's otherwise, once the session is in", () => {
+    expect(revokesSelf('me', { isPending: false, data: me })).toBe(true);
+    expect(revokesSelf('other', { isPending: false, data: me })).toBe(false);
   });
 });

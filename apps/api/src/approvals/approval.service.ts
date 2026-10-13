@@ -9,7 +9,7 @@ import {
 } from '@buddha/shared';
 import { eq } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
-import { clockTimestamp } from '../infra/db/clock.js';
+import { clockTimestamp, strictlyAfter } from '../infra/db/clock.js';
 import { DB } from '../infra/db/db.provider.js';
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
@@ -142,7 +142,7 @@ export class ApprovalService {
    * between the check and the commit: FORBIDDEN unless the decider holds the admin role NOW,
    * NOT_FOUND for no such request, APPROVAL_NOT_ALLOWED `requester` when the decider requested it
    * and `decided` when it is not pending any more (the row is locked, so of two decisions at once
-   * the second finds the first).
+   * the second finds the first). The decision is timed strictly after its request.
    */
   private async decide(
     deciderId: string,
@@ -171,7 +171,8 @@ export class ApprovalService {
       if (request.requestedBy === deciderId) throw approvalNotAllowed('requester');
       if (request.status !== 'pending') throw approvalNotAllowed('decided');
 
-      const decidedAt = await clockTimestamp(tx);
+      // Strictly after the request, even should the clock have stepped back since it was made.
+      const decidedAt = strictlyAfter(await clockTimestamp(tx), request.requestedAt);
       const [row] = await tx
         .update(schema.approvalRequests)
         .set({ status, decidedBy: deciderId, decisionReason, decidedAt })

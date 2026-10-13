@@ -94,6 +94,25 @@ export function grantSearchRows(
   };
 }
 
+/** As much of `useSession` as `revokesSelf` reads. */
+export interface SessionIdentity {
+  isPending: boolean;
+  data: { user: { id: string } } | null | undefined;
+}
+
+/**
+ * Whether revoking `accountId` revokes the signed-in admin's own role, or `undefined` while that
+ * is not known: the session is still loading, or holds no account. The admin list can arrive
+ * before the session, and a revoke taken then for another admin's would skip the sign-out of a
+ * self-revoke — the server has deleted every session of the account, and the tab would stay on a
+ * stale admin screen with its cookie, session and cache. So 회수 stays off until this is known,
+ * and the dialog decides it again when submitted, from the session as it is then.
+ */
+export function revokesSelf(accountId: string, session: SessionIdentity): boolean | undefined {
+  const selfId = session.isPending ? undefined : session.data?.user.id;
+  return selfId === undefined ? undefined : selfId === accountId;
+}
+
 /** The grant and revoke dialogs' one field: a reason of 1–500 characters (`AdminGrantBody`). */
 export const adminRoleReasonFormSchema = z.object({
   reason: z

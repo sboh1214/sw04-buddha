@@ -234,10 +234,29 @@ test.describe('관리자 권한 부여·회수 (#171)', () => {
     ).toEqual([adminAccount.email, secondAdminAccount.email].sort());
 
     await signIn(page, adminAccount.email, adminAccount.password);
+    // The list can arrive before the session: 회수 stays off until the tab knows who is signed
+    // in, or a revoke of one's own role taken for another admin's would skip the sign-out.
+    let releaseSession: () => void = () => undefined;
+    const sessionHeld = new Promise<void>((resolve) => {
+      releaseSession = resolve;
+    });
+    const isSessionRead = (url: URL) => url.pathname === '/api/auth/get-session';
+    await page.route(isSessionRead, async (route) => {
+      await sessionHeld;
+      await route.continue().catch(() => undefined); // the tab may have dropped it meanwhile
+    });
     await page.goto('/admin/admins');
     await expect(page.getByTestId('admin-accounts-count')).toHaveText(
       `${copy.adminTitle} 2${copy.adminAccountsCountUnit}`,
     );
+    const revokeButtons = page
+      .getByTestId('admin-accounts-list')
+      .getByTestId('admin-account-revoke');
+    await expect(revokeButtons).toHaveCount(2);
+    for (const button of await revokeButtons.all()) await expect(button).toBeDisabled();
+    releaseSession();
+    await page.unroute(isSessionRead);
+    for (const button of await revokeButtons.all()) await expect(button).toBeEnabled();
     await expect(page.getByTestId('admin-accounts')).toContainText(copy.adminAccountsRevokeRule);
     const dialog = page.getByTestId('admin-role-dialog');
 

@@ -46,6 +46,8 @@ interface SeedOptions {
   admin?: boolean;
   /** SEED_SECOND_ADMIN_* as well (default), like CI and the e2e runner. */
   second?: boolean;
+  /** SEED_SECOND_ADMIN_* exactly as given, in place of `second`. */
+  secondEnv?: { email: string; password: string };
   clockShiftMs?: number;
 }
 
@@ -63,8 +65,8 @@ function seedSpawnOptions(options: SeedOptions = {}) {
   const second = admin && (options.second ?? true);
   env.SEED_ADMIN_EMAIL = admin ? ADMIN_EMAIL : '';
   env.SEED_ADMIN_PASSWORD = admin ? ADMIN_PASSWORD : '';
-  env.SEED_SECOND_ADMIN_EMAIL = second ? SECOND_EMAIL : '';
-  env.SEED_SECOND_ADMIN_PASSWORD = second ? SECOND_PASSWORD : '';
+  env.SEED_SECOND_ADMIN_EMAIL = options.secondEnv?.email ?? (second ? SECOND_EMAIL : '');
+  env.SEED_SECOND_ADMIN_PASSWORD = options.secondEnv?.password ?? (second ? SECOND_PASSWORD : '');
   return {
     cwd: packageRoot,
     encoding: 'utf8' as const,
@@ -273,6 +275,26 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
     expect(await adminState()).toMatchObject({ role: 'admin' });
     expect(await t.db.select().from(user).where(eq(user.email, SECOND_EMAIL))).toEqual([]);
     expect(await roleRecords()).toHaveLength(1);
+  });
+
+  it('fails before seeding anything when only one of SEED_SECOND_ADMIN_* is set (#171)', async () => {
+    // Someone meant a second admin: seeding one only would leave no two-person approval, and
+    // say so in a log line at best. Whitespace alone is empty, as terraform's validation has it.
+    for (const secondEnv of [
+      { email: SECOND_EMAIL, password: '' },
+      { email: '', password: SECOND_PASSWORD },
+      { email: '  ', password: SECOND_PASSWORD },
+      { email: SECOND_EMAIL, password: ' \t ' },
+    ]) {
+      const result = spawnSync(process.execPath, seedArgs(), seedSpawnOptions({ secondEnv }));
+      expect(result.status, JSON.stringify(secondEnv)).toBe(1);
+      expect(result.stderr).toContain(
+        'set both SEED_SECOND_ADMIN_EMAIL and SEED_SECOND_ADMIN_PASSWORD, or neither',
+      );
+    }
+    expect(await t.db.select().from(user)).toEqual([]);
+    expect(await t.db.select().from(categories)).toEqual([]);
+    expect(await t.db.select().from(chargePackages)).toEqual([]);
   });
 
   it('creates and promotes nobody once an admin exists', async () => {

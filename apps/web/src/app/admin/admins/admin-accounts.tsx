@@ -38,6 +38,7 @@ import {
   adminRoleReasonFormSchema,
   formatAdminGrant,
   grantSearchRows,
+  revokesSelf,
 } from '@/lib/admin-accounts';
 import { type AdminAccount, type AdminRoleChange, type AdminUser } from '@/lib/api';
 import { formatKst } from '@/lib/datetime';
@@ -60,18 +61,18 @@ export function AdminAccounts() {
   );
 }
 
-/** A grant or a revoke waiting for its reason. */
+/**
+ * A grant or a revoke waiting for its reason. Whether a revoke is of one's own role is not kept
+ * here: the dialog reads it from the session when submitted (`revokesSelf`).
+ */
 interface PendingRoleChange {
   kind: 'grant' | 'revoke';
   account: Pick<AdminAccount, 'id' | 'nickname' | 'email'>;
-  /** The signed-in admin's own account (a revoke only). */
-  self: boolean;
 }
 
 function AdminList() {
   const admins = useAdmins();
-  const { data: session } = useSession();
-  const selfId = session?.user.id;
+  const session = useSession();
   const [pending, setPending] = useState<PendingRoleChange | null>(null);
 
   return (
@@ -102,13 +103,15 @@ function AdminList() {
       ) : (
         <Stack gap="2" data-testid="admin-accounts-list">
           {admins.data.map((account) => {
-            const self = account.id === selfId;
+            // Unknown until the session is in, which may come after the list: 회수 waits for it.
+            const self = revokesSelf(account.id, session);
             return (
               <AdminRow
                 key={account.id}
                 account={account}
-                self={self}
-                onRevoke={() => setPending({ kind: 'revoke', account, self })}
+                self={self === true}
+                canRevoke={self !== undefined}
+                onRevoke={() => setPending({ kind: 'revoke', account })}
               />
             );
           })}
@@ -120,14 +123,19 @@ function AdminList() {
   );
 }
 
-/** One admin: nickname (나 for the signed-in one), email, the grant on record, and 회수. */
+/**
+ * One admin: nickname (나 for the signed-in one), email, the grant on record, and 회수 — off
+ * until the session says whether the account is the signed-in one.
+ */
 function AdminRow({
   account,
   self,
+  canRevoke,
   onRevoke,
 }: {
   account: AdminAccount;
   self: boolean;
+  canRevoke: boolean;
   onRevoke: () => void;
 }) {
   return (
@@ -150,6 +158,7 @@ function AdminRow({
           size="xs"
           variant="outline"
           colorPalette="red"
+          disabled={!canRevoke}
           onClick={onRevoke}
           data-testid="admin-account-revoke"
         >
@@ -231,7 +240,7 @@ function GrantSearch() {
               key={user.id}
               user={user}
               disabled={stale}
-              onGrant={() => setPending({ kind: 'grant', account: user, self: false })}
+              onGrant={() => setPending({ kind: 'grant', account: user })}
             />
           ))}
           {!stale && candidates.hasNextPage && (
@@ -309,12 +318,15 @@ function CandidateRow({
  * contact, fewer than two admins left, …) is explained inside the dialog, which stays; any other
  * answer is a toast that closes it (`adminRoleChangeRefusal`). A revoke of one's own role ends
  * as 로그아웃 does (`useSignOut`): the server has deleted every session of the account already, and
- * signing out drops the cookie, tells the other tabs, empties the cache and goes home.
+ * signing out drops the cookie, tells the other tabs, empties the cache and goes home. Whether it
+ * is one's own is read from the session of the render the submit runs in, not kept from when the
+ * dialog opened (`revokesSelf`); a revoke is not sent while that is unknown.
  */
 function RoleChangeDialog({ change, onClose }: { change: PendingRoleChange; onClose: () => void }) {
   const grant = useGrantAdmin();
   const revoke = useRevokeAdmin();
   const signOut = useSignOut();
+  const session = useSession();
   const [refusal, setRefusal] = useState<string | null>(null);
   const {
     register,
@@ -327,6 +339,7 @@ function RoleChangeDialog({ change, onClose }: { change: PendingRoleChange; onCl
   });
   const loading = grant.isPending || revoke.isPending;
   const isGrant = change.kind === 'grant';
+  const self = isGrant ? false : revokesSelf(change.account.id, session);
 
   const onError = (error: unknown) => {
     const outcome = adminRoleChangeRefusal(error);
@@ -358,11 +371,12 @@ function RoleChangeDialog({ change, onClose }: { change: PendingRoleChange; onCl
       );
       return;
     }
+    if (self === undefined) return;
     revoke.mutate(
-      { userId, reason, self: change.self },
+      { userId, reason, self },
       {
         onSuccess: () => {
-          if (change.self) {
+          if (self) {
             void signOut();
             return;
           }
@@ -405,7 +419,7 @@ function RoleChangeDialog({ change, onClose }: { change: PendingRoleChange; onCl
                 <Text fontSize="sm" color="fg.muted">
                   {isGrant ? copy.adminAccountsGrantNotice : copy.adminAccountsRevokeNotice}
                 </Text>
-                {change.self && (
+                {self === true && (
                   <Alert.Root status="warning">
                     <Alert.Indicator />
                     <Alert.Content>
@@ -446,6 +460,7 @@ function RoleChangeDialog({ change, onClose }: { change: PendingRoleChange; onCl
                 size="sm"
                 colorPalette={isGrant ? undefined : 'red'}
                 loading={loading}
+                disabled={self === undefined}
                 onClick={() => void submit()}
                 data-testid="admin-role-submit"
               >

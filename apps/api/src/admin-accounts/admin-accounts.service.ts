@@ -16,7 +16,7 @@ import { alias } from 'drizzle-orm/pg-core';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { AppError } from '../common/errors/app-error.js';
 import { keysetPredicate } from '../common/keyset.js';
-import { clockTimestamp } from '../infra/db/clock.js';
+import { clockTimestamp, strictlyAfter } from '../infra/db/clock.js';
 import { DB } from '../infra/db/db.provider.js';
 import { type Page } from '../wallet/wallet.service.js';
 
@@ -250,7 +250,7 @@ export class AdminAccountsService {
       .where(IS_ROLE_CHANGE)
       .orderBy(desc(schema.adminActions.createdAt))
       .limit(1);
-    const at = new Date(Math.max(clock.getTime(), (last?.createdAt.getTime() ?? -Infinity) + 1));
+    const at = strictlyAfter(clock, last?.createdAt);
     const [record] = await tx
       .insert(schema.adminActions)
       .values({

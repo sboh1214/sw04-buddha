@@ -2,19 +2,35 @@
  * The two-person rule (#171) against the docker `test` profile, with a test kind — no consumer
  * uses it yet. The requester's own decision is refused, another admin's is taken, a decider who
  * is not an admin now is refused, a request is decided once, and the requester, the decider, both
- * instants and both reasons are kept. Skips when TEST_* are unset.
+ * instants and both reasons are kept — the decision strictly after the request, even when the
+ * clock steps back in between. Skips when TEST_* are unset.
  */
 import { randomUUID } from 'node:crypto';
 import { type Db, schema } from '@buddha/db';
 import { createUser } from '@buddha/db/test';
 import { eq } from 'drizzle-orm';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppError } from '../common/errors/app-error.js';
+import type * as Clock from '../infra/db/clock.js';
 import { createTestApp, type TestApp } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { ApprovalService } from './approval.service.js';
 
 const KIND = 'test_kind';
+
+/**
+ * The database clock as the services read it (`clockTimestamp`), moved by `clock.shiftMs`: a
+ * negative shift between a request and its decision is a clock that stepped back in between.
+ */
+const clock = vi.hoisted(() => ({ shiftMs: 0 }));
+vi.mock('../infra/db/clock.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof Clock>();
+  return {
+    ...actual,
+    clockTimestamp: async (tx: Clock.StatementExecutor) =>
+      new Date((await actual.clockTimestamp(tx)).getTime() + clock.shiftMs),
+  };
+});
 
 describe.skipIf(!hasTestInfra)('ApprovalService (integration)', () => {
   let t: TestApp;
@@ -37,6 +53,9 @@ describe.skipIf(!hasTestInfra)('ApprovalService (integration)', () => {
     other = (await createUser(t.db, { role: 'admin' })).user.id;
     third = (await createUser(t.db, { role: 'admin' })).user.id;
     member = (await createUser(t.db)).user.id;
+  });
+  afterEach(() => {
+    clock.shiftMs = 0;
   });
 
   const open = (by = requester) =>
@@ -104,8 +123,21 @@ describe.skipIf(!hasTestInfra)('ApprovalService (integration)', () => {
       decidedBy: other,
       decisionReason: '확인했다',
     });
-    expect(decided.decidedAt!.getTime()).toBeGreaterThanOrEqual(request.requestedAt.getTime());
+    expect(decided.decidedAt!.getTime()).toBeGreaterThan(request.requestedAt.getTime());
     expect(await approvals.get(request.id)).toEqual(decided);
+  });
+
+  it('decides strictly after the request even when the clock steps back, approve and reject alike', async () => {
+    // The clock reads a minute earlier at the decision than at the request: the decision is
+    // recorded 1 ms after the request rather than before it, so the chronology holds.
+    for (const decide of ['approve', 'reject'] as const) {
+      clock.shiftMs = 0;
+      const request = await open();
+      clock.shiftMs = -60_000;
+      const decided = await approvals[decide](other, request.id, '시계가 거꾸로');
+      expect(decided.decidedAt!.getTime()).toBe(request.requestedAt.getTime() + 1);
+      expect(await approvals.get(request.id)).toEqual(decided);
+    }
   });
 
   it("takes another admin's rejection the same way", async () => {

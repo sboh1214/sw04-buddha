@@ -349,10 +349,11 @@ async function seedOneAdmin(tx: Tx, input: AdminInput, at: Date): Promise<string
 
 /**
  * The bootstrap admins (PLAN 10.5, #171): only while NO account holds the admin role, the first
- * from SEED_ADMIN_* and, when given, a second from SEED_SECOND_ADMIN_* — the two-person rule
- * needs two distinct admins in every environment (owner decision 2026-10-13). Once any admin
- * exists the seed creates and promotes nobody: admins come and go on the admin screen
- * (`POST /admin/admins`, `…/revoke`), and a revoked account is never promoted again.
+ * from SEED_ADMIN_* and, when given, a second from SEED_SECOND_ADMIN_* (both or neither, checked
+ * before anything is seeded) — the two-person rule needs two distinct admins in every
+ * environment (owner decision 2026-10-13). Once any admin exists the seed creates and promotes
+ * nobody: admins come and go on the admin screen (`POST /admin/admins`, `…/revoke`), and a
+ * revoked account is never promoted again.
  *
  * The one exception to the grant rule of the admin screen (a verified email AND a real name and
  * mobile number, ADR-0043): nobody exists yet who could grant, so the seed promotes accounts it
@@ -547,8 +548,20 @@ if (!url) {
 }
 const adminEmail = process.env.SEED_ADMIN_EMAIL;
 const adminPassword = process.env.SEED_ADMIN_PASSWORD;
-const secondEmail = process.env.SEED_SECOND_ADMIN_EMAIL;
-const secondPassword = process.env.SEED_SECOND_ADMIN_PASSWORD;
+const secondEmail = process.env.SEED_SECOND_ADMIN_EMAIL ?? '';
+const secondPassword = process.env.SEED_SECOND_ADMIN_PASSWORD ?? '';
+// The second admin's pair is both or neither, whitespace alone counting as empty — terraform's
+// validation reads seed_second_admin_* the same way, and this catches a local .env or any other
+// direct run. One without the other is a second admin someone meant to configure: seeding one
+// admin then would leave the environment with no two-person approval (#171), so nothing is seeded.
+const hasSecond = secondEmail.trim() !== '';
+if (hasSecond !== (secondPassword.trim() !== '')) {
+  const missing = hasSecond ? 'SEED_SECOND_ADMIN_PASSWORD' : 'SEED_SECOND_ADMIN_EMAIL';
+  console.error(
+    `[db:seed] ${missing} is empty: set both SEED_SECOND_ADMIN_EMAIL and SEED_SECOND_ADMIN_PASSWORD, or neither (#171)`,
+  );
+  process.exit(1);
+}
 
 const db = createDb(url, { max: 1, applicationName: 'buddha-seed' });
 try {
@@ -558,7 +571,7 @@ try {
     const adminId = await seedAdmins(
       db,
       normaliseAdmin({ email: adminEmail, password: adminPassword }, 'SEED_ADMIN_PASSWORD'),
-      secondEmail && secondPassword
+      hasSecond
         ? normaliseAdmin(
             { email: secondEmail, password: secondPassword },
             'SEED_SECOND_ADMIN_PASSWORD',
