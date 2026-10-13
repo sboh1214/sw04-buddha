@@ -14,6 +14,11 @@ import { createOpenMarket, expect, freshEmail, signUp, test } from './helpers';
  * admin can make (`ADJUST_MAX_ABS_COIN`) — so the chip is measured with a long amount rather than
  * whatever the sign-up bonus happens to be. The account is a fresh one: the seed admin's balance
  * is read by other specs running alongside this one.
+ *
+ * A card's volume cannot be raised that way: a new market has no fill and the API has no order
+ * path to make one, and the home page renders its cards on the server, so `page.route` cannot
+ * rewrite the figure either. The card is measured as it renders ('0 Coin') and then with a
+ * nine-digit figure written into the same element, which keeps the card's own styles.
  */
 
 /** `{ data }` out of the success envelope, with the body in the message on a failure. */
@@ -122,12 +127,26 @@ test.describe('금액 표기 · 375px', () => {
 
     const card = page.getByTestId(`market-card-${market.id}`);
     const volume = card.getByTestId('market-card-volume');
+    // One line, left of the sparkline, and the sparkline still inside the card.
+    const expectVolumeFits = async (name: string) => {
+      const layout = await expectOneLineOnScreen(page, volume, name);
+      const sparkline = await card.getByTestId('market-card-sparkline').boundingBox();
+      const box = await card.boundingBox();
+      if (sparkline === null || box === null) throw new Error('the card has no bounding box');
+      expect(layout.right, `${name}: beside the sparkline`).toBeLessThanOrEqual(sparkline.x);
+      expect(sparkline.x + sparkline.width, `${name}: sparkline`).toBeLessThanOrEqual(
+        box.x + box.width,
+      );
+    };
     // No fill yet, so nothing has traded: the volume is 0, written the same way as any other.
     await expect(volume).toHaveText(`${copy.marketVolume} 0 Coin`);
-    const volumeLayout = await expectOneLineOnScreen(page, volume, 'card volume');
-    const sparkline = await card.getByTestId('market-card-sparkline').boundingBox();
-    if (sparkline === null) throw new Error('market-card-sparkline has no bounding box');
-    expect(volumeLayout.right).toBeLessThanOrEqual(sparkline.x);
+    await expectVolumeFits('card volume');
+    const longVolume = `${copy.marketVolume} 123,456,789 Coin`;
+    await volume.evaluate((element, text) => {
+      element.textContent = text;
+    }, longVolume);
+    await expect(volume).toHaveText(longVolume);
+    await expectVolumeFits('long card volume');
 
     // --- the wallet's balance, the largest type an amount is set in.
     await page.goto('/wallet');
