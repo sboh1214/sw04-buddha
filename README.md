@@ -14,6 +14,7 @@
 | [docs/QUESTIONS.md](docs/QUESTIONS.md)                                     | M0\~M6과 #19까지의 질문·가정 기록. 새 오너 질문은 각 이슈의 '오너 결정 필요'와 결정 이슈에 둔다                                                                    |
 | [docs/RESET.md](docs/RESET.md)                                             | 운영 DB 초기화 절차 — 무엇을 지우고 남기는지, `deploy/reset-db.sh` 실행과 확인(#149가 쓴다, ADR-0048)                                                              |
 | [docs/TERMS.md](docs/TERMS.md)                                             | 화면 용어 대응표 — 쓰지 않는 표현과 그 자리의 기획 용어(#14, ADR-0052). 같은 목록이 `@buddha/shared`의 `REPLACED_TERMS`다                                          |
+| [docs/SETTINGS.md](docs/SETTINGS.md)                                       | 출시 설정 등록 규칙 — 항목 정의를 두는 곳, 상태(미정·설계 제안·시험값·승인됨), 바꾼 뒤 시작하는 일에만 적용, 변경 기록, 예상 항목과 담당 이슈(#170, ADR-0055)      |
 
 ## 요구 사항
 
@@ -67,6 +68,7 @@ pnpm dev                         # web(3000) · api(4000) · worker + 공유 패
 | `/terms` `/privacy` `/refund`                                                                      | 이용약관·개인정보처리방침·환불정책(공개, ADR-0044). 사업자 정보는 `apps/web/src/legal/business-info.ts` 한 곳에 있고(지금은 `미정`), 모든 화면 아래의 푸터가 이 셋을 건다(충전 안내 링크는 유료 충전이 닫힌 동안 없다)                                     |
 | `/admin/markets` `/admin/markets/[id]`                                                             | 시장 생성(초안)·수정·열기·마감·판정(즉시 확정, 곧바로 정산), 거래 현황, 판정 뒤 정산 단계(읽기 전용, ADR-0046). 무효 처리는 없다(ADR-0048)                                                                                                                 |
 | `/admin/users` `/admin/charge-packages` `/admin/coupons` `/admin/payments` `/admin/audit-failures` | 계정(잔고 조정)·충전 상품·쿠폰·결제·원장 감사 실패. 유료 충전이 닫힌 동안 충전 상품·쿠폰·결제는 메뉴에 없고 주소로만 열린다 — 상품·쿠폰 관리는 되고, 결제는 목록만 본다(환불은 API가 막는다, ADR-0049)                                                     |
+| `/admin/settings`                                                                                  | 출시 설정 — 항목마다 이름·단위·뜻·값·상태, 미정만 보기, 사유 필수 변경, 변경 기록(작업자·시각·전후 값·사유). 레지스트리가 비어 있어 지금은 '등록된 항목이 없습니다.'다. 항목 등록은 [docs/SETTINGS.md](docs/SETTINGS.md)(#170, ADR-0055)                   |
 
 ## 문제 해결
 
@@ -196,7 +198,7 @@ PLAN 부록 C의 다이어그램은 M4 이전 그림이라 위와 다르다(브�
 - **인프라**는 [terraform/](terraform/README.md)(리소스는 전부 `tf-buddha-` 접두사, 부트스트랩·롤백·복구·시크릿 교체 절차가 그 README에 있다).
 - **호스트에서 도는 것**은 [deploy/](deploy/)(`compose.yaml` · `Caddyfile` · `deploy.sh` · `host-setup.sh` · `reset-db.sh`) — api 이미지에 동봉되어 배포마다 `/data/buddha`에 풀린다. 이미지는 루트 `Dockerfile`의 세 타깃(`api` / `worker` / `web`)이다.
 - **배포**는 `main`에 push하면 [.github/workflows/deploy.yml](.github/workflows/deploy.yml)이 arm64 이미지를 ECR에 밀고 SSM으로 호스트에서 `migrate && seed` → 컨테이너 교체 → `/api/health` 스모크까지 한다. 롤백은 `gh workflow run deploy.yml --ref main -f image_tag=<sha>`. SSH는 없고 셸은 `aws ssm start-session`이다.
-- **운영 DB 초기화**는 [docs/RESET.md](docs/RESET.md). #125의 배포가 마이그레이션 0017로 계정까지 한 번 비우고 시드로 다시 채웠다. 다시 비울 때는 호스트에서 `deploy/reset-db.sh`가 같은 문장을 돌리고 Redis도 비운다(계정까지 모두). #149의 출시 전 재초기화가 이 절차를 쓰고, 다시 할지와 남길 데이터는 #133이 정한다 — 무엇이든 남기기로 하면 그 전에 이 절차를 좁힌다.
+- **운영 DB 초기화**는 [docs/RESET.md](docs/RESET.md). #125의 배포가 마이그레이션 0017로 계정까지 한 번 비우고 시드로 다시 채웠다. 다시 비울 때는 호스트에서 `deploy/reset-db.sh`가 같은 문장을 돌리고 Redis도 비운다(계정까지 모두). #149의 출시 전 재초기화가 이 절차를 쓰고, 다시 할지와 남길 데이터는 #133이 정한다 — 무엇이든 남기기로 하면 그 전에 이 절차를 좁힌다. 지금은 출시 설정의 값과 변경 기록(`release_settings`, `admin_actions`)도 함께 비운다.
 
 ## 유료 충전·결제·쿠폰(닫힘)
 
@@ -252,7 +254,7 @@ docker/     docker-compose.yml, postgres 롤 초기화 SQL (로컬 개발 스택
 deploy/     운영 compose.yaml · Caddyfile · deploy.sh · host-setup.sh · reset-db.sh (api 이미지에 동봉)
 terraform/  AWS 인프라 (tf-buddha-*), README.md 에 운영 절차
 scripts/    generate-api-doc.mjs (pnpm api:openapi 의 마지막 단계)
-docs/       plan/(기획서 v0.2 원문) · PLAN.md · API.md · DECISIONS.md · QUESTIONS.md · RESET.md(운영 DB 초기화) · TERMS.md(용어 대응표)
+docs/       plan/(기획서 v0.2 원문) · PLAN.md · API.md · DECISIONS.md · QUESTIONS.md · RESET.md(운영 DB 초기화) · TERMS.md(용어 대응표) · SETTINGS.md(출시 설정 등록 규칙)
 ```
 
 패키지 의존 규칙은 PLAN §4.1을 따른다: 앱은 `packages/*`만 import하고, `shared`는 어떤 프레임워크에도 의존하지 않는다.

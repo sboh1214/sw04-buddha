@@ -48,6 +48,14 @@ export type CreateMarketBody = components['schemas']['CreateMarketBody'];
 export type UpdateMarketBody = components['schemas']['UpdateMarketBody'];
 /** `POST /admin/markets/{id}/resolve`: judge a closed market — final at once (ADR-0046). */
 export type ResolveMarketBody = components['schemas']['ResolveMarketBody'];
+/** A release setting (#170): what the item is, its status and value, and who changed it last. */
+export type ReleaseSetting = components['schemas']['ReleaseSetting'];
+/** One `GET /admin/release-settings/changes` entry: before and after, reason, admin and time. */
+export type ReleaseSettingChange = components['schemas']['ReleaseSettingChange'];
+/** `PATCH /admin/release-settings/{key}`: the new status and value, and why (required, audited). */
+export type ReleaseSettingChangeBody = components['schemas']['ReleaseSettingChangeBody'];
+/** A status and value, before or after a change: `value` is null exactly while `undecided`. */
+export type ReleaseSettingState = components['schemas']['ReleaseSettingState'];
 export type ErrorEnvelope = components['schemas']['ErrorEnvelope'];
 
 /** A non-2xx API response, carrying the `{ error: { code, message, details? } }` envelope. */

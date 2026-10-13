@@ -361,6 +361,51 @@ export const copy = {
   adminNoAuditFailures: '감사 실패가 없습니다.',
   auditKindLedgerMismatch: '원장·잔고 불일치',
 
+  // --- admin: release settings (#170, ADR-0055, docs/SETTINGS.md) ---
+  // 상태 이름(미정·설계 제안·시험값·승인됨)은 @buddha/shared의 RELEASE_SETTING_STATUS_LABELS다.
+  // 바꾼 값의 적용 시점은 오너 결정(2026-10-13): 바꾼 뒤 시작하는 일에만.
+  adminReleaseSettings: '출시 설정',
+  adminReleaseSettingsIntro:
+    '시뮬레이션이나 운영 승인으로 정하는 값입니다. 값을 바꾸면 사유·작업자·시각·전후 값이 변경 기록에 남고, 바꾼 값은 바꾼 뒤 시작하는 일에만 적용됩니다.',
+  adminReleaseSettingUndecidedHint: '값이 아직 정해지지 않았습니다.',
+  adminReleaseSettingProposalHint: '기획의 설계 제안 값입니다. 승인된 값이 아닙니다.',
+  adminReleaseSettingTestHint:
+    '출시 값이 정해지기 전 내부 시험에 쓰는 값입니다. 출시 값이 아닙니다.',
+  adminReleaseSettingApprovedHint: '출시 값으로 승인된 값입니다.',
+  adminReleaseSettingsUndecidedOnly: '미정만 보기',
+  adminReleaseSettingsTotal: '전체',
+  adminReleaseSettingsCountUnit: '개',
+  adminReleaseSettingsEmpty: '등록된 항목이 없습니다.',
+  adminReleaseSettingsNoUndecided: '미정인 항목이 없습니다.',
+  adminReleaseSettingValue: '값',
+  adminReleaseSettingUnit: '단위',
+  adminReleaseSettingLastChange: '마지막 변경',
+  adminReleaseSettingEdit: '변경',
+  adminReleaseSettingEditTitle: '출시 설정을 바꿉니다',
+  adminReleaseSettingStatus: '상태',
+  adminReleaseSettingValueTextHint: '입력한 글자 그대로 저장됩니다.',
+  adminReleaseSettingValueJsonHint: '숫자·참거짓·목록은 JSON으로 입력합니다. 예: 24, true, [1, 2]',
+  adminReleaseSettingValueFormat: '입력 형식',
+  adminReleaseSettingValueUndecided: '미정으로 두면 값을 지웁니다.',
+  adminReleaseSettingReason: '변경 사유',
+  adminReleaseSettingReasonHint: '변경 기록에 작업자·시각·전후 값과 함께 남습니다.',
+  adminReleaseSettingApplyNotice:
+    '바꾼 값은 바꾼 뒤 시작하는 일에만 적용됩니다. 이미 진행 중인 일은 시작할 때 읽은 값을 그대로 씁니다.',
+  adminReleaseSettingSubmit: '저장',
+  adminReleaseSettingSaved: '출시 설정을 바꿨습니다.',
+  adminReleaseSettingChanges: '변경 기록',
+  adminReleaseSettingNoChanges: '변경 기록이 없습니다.',
+  adminReleaseSettingChangeActor: '작업자',
+  adminReleaseSettingChangeReason: '사유',
+  adminReleaseSettingUnregistered: '등록되지 않은 항목',
+  // RELEASE_SETTING_REASON_MAX_LENGTH와 같아야 한다(release-settings.test.ts가 확인한다).
+  errReleaseSettingReason: '변경 사유를 1~500자로 입력해 주세요.',
+  errReleaseSettingValueRequired:
+    '값을 입력해 주세요. 값을 두지 않으려면 상태를 미정으로 고릅니다.',
+  errReleaseSettingValueFormat: 'JSON으로 읽을 수 없는 값입니다.',
+  errReleaseSettingValueInvalid: '이 항목의 형식에 맞지 않는 값입니다.',
+  errReleaseSettingNotFound: '등록되지 않은 항목입니다. 화면을 새로 고쳐 주세요.',
+
   // --- markets (M4) ---
   // 홈 (PLAN 11.3, ADR-0041 Kalshi 형): 헤더 2단의 상위 카테고리 · 왼쪽 세부 분류 · 정렬 · 검색.
   // 카테고리 목록은 API가 주고 '전체'만 붙인다. 장르 표기는 붙여 쓴다(N01 §1, 오너 결정 #14).

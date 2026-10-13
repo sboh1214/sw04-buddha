@@ -8,8 +8,9 @@
 --                   pg_database_owner, PG15+) and may create the "drizzle" schema that
 --                   holds drizzle.__drizzle_migrations.
 --   buddha_app      DML only. No CREATE anywhere. Per-table restrictions
---                   (ledger_entries, market_events, admin_actions: INSERT/SELECT only)
---                   are applied later by a migration with REVOKE, see bottom.
+--                   (ledger_entries, market_events, admin_actions, payment_events:
+--                   INSERT/SELECT only; release_settings: no DELETE) are applied later by
+--                   migrations with REVOKE (0001, 0015, 0020), see bottom.
 
 CREATE ROLE buddha_migrate LOGIN PASSWORD 'buddha';
 CREATE ROLE buddha_app LOGIN PASSWORD 'buddha';
@@ -41,4 +42,5 @@ GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO buddha_app;
 -- Later (M2+), the migration that creates the append-only tables adds, in the same
 -- migration file, as buddha_migrate (table owner):
 --   REVOKE UPDATE, DELETE ON TABLE ledger_entries, market_events, admin_actions FROM buddha_app;
+-- and so do 0015 (payment_events: UPDATE, DELETE) and 0020 (release_settings: DELETE).
 -- Default privileges are applied at CREATE time, so a REVOKE afterwards sticks.
