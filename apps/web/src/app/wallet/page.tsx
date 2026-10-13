@@ -1,8 +1,9 @@
 import { Alert, Container, Heading, Stack } from '@chakra-ui/react';
 import { PAID_COIN_SALES_ENABLED } from '@buddha/shared';
-import type { Metadata } from 'next';
+import type { Metadata, Route } from 'next';
 import { redirect } from 'next/navigation';
 import { copy } from '@/copy';
+import { walletLoginPath, walletPackageId } from '@/lib/charge-guide';
 import { getServerSession } from '@/lib/session.server';
 import { BalanceCard } from './balance-card';
 import { ChargeForm } from './charge-form';
@@ -19,9 +20,21 @@ export const metadata: Metadata = { title: `${copy.walletTitle} | ${copy.appName
  * Charging, coupons and 결제 내역 are drawn only while paid Coin is on sale
  * (PAID_COIN_SALES_ENABLED, ADR-0049) — closed in the initial product (N06), where the API
  * refuses their routes as well. The components stay, so reopening is that one value.
+ *
+ * `?package=` is the package the public `/charge` page's 충전하기 sent the visitor to buy
+ * (ADR-0044): its card is marked, and an anonymous visit keeps it through the login (`next`).
+ * Read only while charging is drawn — a closed wallet ignores it and logs in to plain `/wallet`.
  */
-export default async function WalletPage() {
-  if (!(await getServerSession())) redirect('/login?next=/wallet');
+export default async function WalletPage({
+  searchParams,
+}: {
+  // Every searchParams value is an array when the parameter repeats; the types must say so.
+  searchParams: Promise<{ package?: string | string[] }>;
+}) {
+  const packageId = PAID_COIN_SALES_ENABLED
+    ? walletPackageId((await searchParams).package)
+    : undefined;
+  if (!(await getServerSession())) redirect(walletLoginPath(packageId) as Route);
   return (
     <Container maxW="2xl" py={{ base: '6', md: '10' }}>
       <Stack gap="6">
@@ -37,7 +50,7 @@ export default async function WalletPage() {
         <BalanceCard />
         {PAID_COIN_SALES_ENABLED && (
           <>
-            <ChargeForm />
+            <ChargeForm highlightPackageId={packageId} />
             <CouponForm />
             <PaymentHistory />
           </>

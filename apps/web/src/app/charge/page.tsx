@@ -26,7 +26,7 @@ import { copy } from '@/copy';
 import { fillBusinessInfo } from '@/legal/business-info';
 import type { ChargePackage } from '@/lib/api';
 import { fetchChargePackagesServer } from '@/lib/api.server';
-import { chargeTiers } from '@/lib/charge-guide';
+import { chargeTiers, walletPackageHref } from '@/lib/charge-guide';
 import { PackageIllustration } from './package-illustration';
 
 /**
@@ -46,8 +46,9 @@ export const metadata: Metadata = { title: `${copy.chargeGuideTitle} | ${copy.ap
  * (`GET /charge-packages`), and the page reads it on the server so the products are in the
  * first HTML a reviewer's crawler sees.
  *
- * Buying still happens on `/wallet`: each card links there, and the wallet sends an anonymous
- * visitor to the login page first. This page never starts a payment itself.
+ * Buying still happens on `/wallet`: each card links there with `?package=<id>`, which the
+ * wallet preselects, and the wallet sends an anonymous visitor to the login page first. This
+ * page never starts a payment itself.
  *
  * A failed read is the page's own notice, not a 500 — there is no `app/error.tsx`, and Next's
  * default error screen is untranslated.
@@ -155,7 +156,7 @@ function PackageGrid({ packages }: { packages: ChargePackage[] }) {
             <Card.Footer>
               <Button asChild width="full">
                 <NextLink
-                  href="/wallet"
+                  href={walletPackageHref(pack.id)}
                   // Four identical "충전하기" links are one name four times to a screen reader.
                   aria-label={`${label} ${copy.chargeSubmit}`}
                   data-testid={`charge-guide-buy-${pack.id}`}

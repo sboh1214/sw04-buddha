@@ -1398,7 +1398,7 @@ PLAN은 결제를 끝까지 mock으로 두었다 — §1.2(:42) "충전 버튼 �
 ## ADR-0044 — 사업자 정보 푸터 · 약관 3종 · 공개 충전 안내 `/charge` (오너 결정 2026-09-28)
 
 - 날짜: 2026-09-28
-- 상태: 채택 (오너 결정 2026-09-28; 문서 본문은 법률 검토 전 — Q-M2-3, Q-PG-1), 일부 대체됨(ADR-0049: 공개 `/charge`는 유료 충전이 닫힌 동안 없는 페이지(404)이고 푸터의 '충전 안내' 링크도 없다. `/charge`의 `/wallet?package=` 연결과 카드 최소 금액 처리(2026-09-29 추기)는 지웠다 — 사업자 정보 푸터와 약관 3종은 유효, 본문은 #137)
+- 상태: 채택 (오너 결정 2026-09-28; 문서 본문은 법률 검토 전 — Q-M2-3, Q-PG-1), 일부 대체됨(ADR-0049: 공개 `/charge`는 유료 충전이 닫힌 동안 없는 페이지(404)이고 푸터의 '충전 안내' 링크도 없다. `/charge`의 카드 최소 금액 처리(2026-09-29 추기)는 지웠다 — `/wallet?package=` 연결과 미리 고르기는 판매가 열린 동안만 돌고, 사업자 정보 푸터와 약관 3종은 유효, 본문은 #137)
 
 ### 맥락
 
@@ -2489,7 +2489,7 @@ ADR-0046의 상태 줄에 '일부 대체됨(ADR-0047: …)'을 이어 쓴다. �
 - API: `apps/api/src/payments/smartro/`(프로토콜·클라이언트·프로바이더·서비스 — 결제창 준비 `POST /payments/smartro/prepare`, OpenAPI 밖의 공개 콜백 return·stop·notify와 재통보 발신 IP 검사, 망취소), 관리자 수동 정리 `POST /admin/payments/:id/settle`(`PaymentSettleService`)와 「확인 필요」(`AdminPayment.needsReview`), 관리자 작업 유형 `payment_settle`, 환불 거절 사유 `in_progress`·`approval_mismatch`·`partial_cancel`과 `PAYMENT_GATEWAY_REFUSED`의 `settle_required`, 시험 하네스의 가짜 PG(`src/test/smartro.ts`)와 스마트로페이·수동 정리 시험을 지웠다. 세 경로가 함께 쓰던 `payment-transitions.ts`는 지우고 환불이 쓰는 전이(`markRefunded`·`restoreClawBack`)만 환불 서비스로 옮겼다. better-auth 본문 파서의 `rawBody`(콜백 폼 본문용)는 스마트로페이 전처럼 껐다.
 - env: `PAYMENT_PROVIDER`는 `mock`만 받고 `smartro`면 기동을 거절한다. `SMARTRO_MODE`·`SMARTRO_MID`·`SMARTRO_MERCHANT_KEY`·`SMARTRO_CANCEL_PASSWORD`·`SMARTRO_APPROVAL_BASE_URL`은 읽지 않으므로 이 ADR 전에 렌더된 `.env`에 남은 값은 무시된다.
 - shared: `PAYMENT_PROVIDERS`의 `smartro`, `SMARTRO_MODES`, 결제창 폼·준비 결과·복귀 결과·수동 정리의 스키마와 상수, `CARD_MIN_PRICE_KRW`, `vatSplit`, `paymentIdToMoid`·`moidToPaymentId`를 지웠다. `PaymentProviderInfo`는 `{ provider: 'mock' }`이다.
-- 웹: SDK 로더와 결제창(`lib/smartro-sdk`·`lib/smartro-checkout`·`wallet/smartro-checkout.tsx`), 결제창 복귀 안내(`/wallet?payment=&result=`, `payment-result-notice.tsx`), `/charge` → `/wallet?package=` 연결과 미리 고르기, `/charge`의 카드 최소 금액 처리(`chargeGuideOffers`), 관리자 수동 정리 대화상자와 「확인 필요」 표시, CSP의 스마트로페이 호스트(`script-src`·`form-action`은 `'self'`만, `frame-src` 없음), 결제창만 읽던 세션 캐시 소유자 확인(`cacheOwnerAccount` 등)을 지웠다. `lib/smartro-payments.ts`는 결제 내역·관리자 환불 판단과 차단 응답 판정만 남은 `lib/payments.ts`가 됐다.
+- 웹: SDK 로더와 결제창(`lib/smartro-sdk`·`lib/smartro-checkout`·`wallet/smartro-checkout.tsx`), 결제창 복귀 안내(`/wallet?payment=&result=`, `payment-result-notice.tsx`), `/charge`의 카드 최소 금액 처리(`chargeGuideOffers`), 관리자 수동 정리 대화상자와 「확인 필요」 표시, CSP의 스마트로페이 호스트(`script-src`·`form-action`은 `'self'`만, `frame-src` 없음), 결제창만 읽던 세션 캐시 소유자 확인(`cacheOwnerAccount` 등)을 지웠다. `lib/smartro-payments.ts`는 결제 내역·관리자 환불 판단과 차단 응답 판정만 남은 `lib/payments.ts`가 됐다. `/charge` → `/wallet?package=` 연결과 지갑의 미리 고르기(ADR-0044)는 mock 충전에도 쓰이는 흐름이라 남기고, 지갑 URL에서 `package`만 읽는 판단을 `lib/charge-guide.ts`로 옮겼다.
 - 운영: `deploy/compose.yaml`은 api에 `PAYMENT_PROVIDER: mock`을 글자 그대로 주고 `SMARTRO_*`를 넘기지 않는다. terraform의 `payment_provider`·`smartro_*` 변수와 `ssm.tf`의 전달, `templates/env.tftpl`의 줄, `terraform.tfvars.example`의 절, `README.md`·`terraform/README.md`의 스마트로페이 절을 지웠다.
 - 남는 결제 공통 구조: `PaymentProvider` 인터페이스(`charge?`·`cancel`)와 `PaymentProviderRegistry`(지금은 mock 하나), `PAYMENT_PROVIDER` env, `payments`의 열과 상태(`refunding`·`refunded` 포함), `payment_events`와 그 유형, 원장 유형 `DEPOSIT`·`PAYMENT_CANCEL`·`PAYMENT_CANCEL_REVERSAL`, 관리자 환불(`PaymentRefundService`)과 그 정책(ADR-0042: 승인 후 7일·미사용·전액), `GET /me/payments`·`/me/payments/:id`, `user_contacts`(D8). DB 변경과 마이그레이션은 없다. `payments.provider`·`admin_actions.type`은 varchar라 지운 값이 스키마에 없고, 마이그레이션 0015는 이름에 smartro가 있지만 그 열·`payment_events`·`user_contacts`·`(provider, provider_ref)` 유일 인덱스는 PG에 매이지 않은 구조다.
 
@@ -2509,7 +2509,7 @@ ADR-0046의 상태 줄에 '일부 대체됨(ADR-0047: …)'을 이어 쓴다. �
 - **API에서 열어 둔 것.** 관리자 충전 상품 CRUD와 쿠폰 목록·생성·수정(결정 1-4), 관리자 결제 목록, 본인 결제 내역 `GET /me/payments`·`/me/payments/:id`(본인의 읽기). 막힌 라우트는 OpenAPI·api-client·`docs/API.md`에 남고, 요약이 'Closed while paid Coin is off: 404 (ADR-0049)'라고 적는다. 보존한 웹 코드의 타입이 그 경로에 기댄다.
 - **레이트 리밋.** 전역 레이트 리밋 가드는 모든 컨트롤러 가드보다 먼저 돌므로, 막힌 충전·쿠폰 요청도 계정 버킷(`charge`·`coupon`, 세션을 읽는다)과 주소별 한도를 쓴 뒤 404를 받는다. 잔고·결제 작업은 없다. ADR-0034의 두 버킷은 라우트와 함께 남는다.
 - **웹.** 같은 상수로 진입점을 그리지 않는다. 그리지 않는 컴포넌트와 페이지 파일은 남는다.
-  - `/wallet`(`app/wallet/page.tsx`)은 고지·잔고·원장만 그리고 `ChargeForm`·`CouponForm`·`PaymentHistory`를 그리지 않는다.
+  - `/wallet`(`app/wallet/page.tsx`)은 고지·잔고·원장만 그리고 `ChargeForm`·`CouponForm`·`PaymentHistory`를 그리지 않는다. `?package=`도 읽지 않아, 로그인하지 않은 방문자는 그 값 없이 `/login?next=/wallet`로 간다.
   - `/charge`(`app/charge/page.tsx`)는 무엇을 읽기 전에 `notFound()`다. 404 화면은 숨긴 것의 이름을 말하지 않는다.
   - 푸터(`components/layout/footer.tsx`)는 '충전 안내' 링크만 뺀다. 약관 세 링크와 사업자 정보는 그대로다.
   - 관리자 메뉴(`app/admin/layout.tsx`)에서 충전 상품·쿠폰·결제를 뺀다. 세 페이지는 주소로 열리고(결정 1-4), `/admin/payments`는 환불 버튼을 그리지 않는다(결정 1-3).
@@ -2524,7 +2524,7 @@ ADR-0046의 상태 줄에 '일부 대체됨(ADR-0047: …)'을 이어 쓴다. �
 2. 닫힌 상태를 고정한 시험을 고친다: `packages/shared/src/constants.test.ts`, `apps/api/src/payments/paid-coin-sales.test.ts`(첫 시험 'ships closed'. 나머지는 기본 앱으로 닫힌 상태를 보므로 `createTestApp({ paidCoinSales: false })`로 바꾸면 가드 시험으로 남는다), e2e `apps/web/e2e/payment.spec.ts`(출시 상태의 닫힘을 끝까지 본다). 웹 단위 시험(`onboarding.test.ts`)은 상수를 읽으므로 그대로다.
 3. main에 머지한다(자동 배포). API와 웹이 같은 커밋으로 함께 바뀐다. env·terraform·DB는 바꿀 것이 없다.
 
-그러면 API의 다섯 라우트가 열리고 지갑의 충전·쿠폰·결제 내역, `/charge`와 푸터 링크, 관리자 메뉴의 세 항목과 환불 버튼, `/charge`의 온보딩 예외가 돌아온다. 되살릴 웹 코드는 없다. 결정 2가 지운 것(결제창, `?package=` 미리 고르기, 카드 최소 금액 처리)은 돌아오지 않는다. 그대로 열면 충전은 **mock**이다 — 돈이 움직이지 않고 바로 적립된다. 실제 판매에는 다음 PG의 연동(프로바이더·env·CSP·결제창)이 먼저이고, 스마트로페이 코드는 #112가 머지되기 전 main의 이력에 있다.
+그러면 API의 다섯 라우트가 열리고 지갑의 충전·쿠폰·결제 내역, `/charge`와 푸터 링크, 관리자 메뉴의 세 항목과 환불 버튼, `/charge`의 온보딩 예외, `/charge` → `/wallet?package=`의 미리 고르기(로그인 `next` 포함)가 돌아온다. 되살릴 웹 코드는 없다. 결정 2가 지운 것(결제창, 결제창 복귀 안내, 카드 최소 금액 처리)은 돌아오지 않는다. 그대로 열면 충전은 **mock**이다 — 돈이 움직이지 않고 바로 적립된다. 실제 판매에는 다음 PG의 연동(프로바이더·env·CSP·결제창)이 먼저이고, 스마트로페이 코드는 #112가 머지되기 전 main의 이력에 있다.
 
 **5. 시험.**
 
@@ -2555,11 +2555,11 @@ ADR-0046의 상태 줄에 '일부 대체됨(ADR-0047: …)'을 이어 쓴다. �
 
 **5. 이 PR이 정하지 않고 지금 상태로 둔 것.** 구현 중에 나왔고 PR에서 오너에게 묻는다.
 
-- `CONTACT_REQUIRED`는 보내는 API가 없지만 오류 코드·`ERROR_NOTES`·409 대응과 웹 문구를 남겼다. 연락처 수집(D8)이 남고 다음 PG가 쓸 수 있어서다.
+- `CONTACT_REQUIRED`는 보내는 API가 없지만 오류 코드·`ERROR_NOTES`·409 대응을 남겼다. 연락처 수집(D8)이 남고 다음 PG가 쓸 수 있어서다. 웹 문구(`chargeContactRequired`)는 그것을 읽던 결제창과 함께 지웠다.
 - `payment_events` 유형 가운데 결제창 흐름의 `return`·`approval`·`approval_inquiry`·`stop`·`notify`·`net_cancel`과 그것을 읽는 `Payment.cancelConfirmed`는 쓰는 곳이 없지만 공통 구조로 남겼다. 지금 쓰이는 것은 `refund_cancel`뿐이다.
 - 관리자 환불의 차단은 관리자 확인 뒤에 돌아 비관리자는 404가 아니라 401·403을 받는다(결정 3). 회원 라우트는 누구에게나 404다.
 - 막힌 충전·쿠폰 요청도 레이트 리밋을 쓴다(결정 3).
-- 닫힌 동안 열리지 않는 `/charge`는 상품마다 `?package=` 없이 `/wallet`로 링크하고, 결제 안내 문구(`chargeGuideDelivery`)는 여전히 `{{pgName}}`의 결제창을 말한다.
+- 닫힌 동안 열리지 않는 `/charge`의 결제 안내 문구(`chargeGuideDelivery`)는 여전히 `{{pgName}}`의 결제창을 말한다.
 - `paymentMethodLabel`은 스마트로페이의 PayMethod 코드(CARD·KAKAO 등)를 한국어로 옮기는 표를 일반 라벨로 남겼다. 모르는 코드는 그대로 보인다.
 - 관리자 환불의 404는 차단과 없는 결제를 구별하지 않고, 둘 다 '이용할 수 없습니다.'다.
 - 원장 라벨 '충전'·'결제 취소(환불)'는 남겼다. 닫힌 동안 그런 행이 생기지 않는다(#73·#116).

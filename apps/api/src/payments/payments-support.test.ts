@@ -40,7 +40,7 @@ describe('sanitizePayload', () => {
     });
   });
 
-  it('bounds what a public callback can make us store', () => {
+  it('bounds what a PG answer can make us store', () => {
     const many = Object.fromEntries(Array.from({ length: 200 }, (_, i) => [`k${String(i)}`, 'v']));
     expect(Object.keys(sanitizePayload(many))).toHaveLength(64);
     const payload = sanitizePayload({

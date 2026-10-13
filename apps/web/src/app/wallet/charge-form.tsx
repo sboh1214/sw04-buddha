@@ -2,6 +2,7 @@
 
 import { Alert, Badge, Button, Card, HStack, Skeleton, Stack, Text } from '@chakra-ui/react';
 import { discountPercent, formatKrw, formatP, parsePAmount } from '@buddha/shared';
+import { useEffect, useRef } from 'react';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import {
@@ -38,10 +39,23 @@ function chargeErrorTitle(error: unknown): string {
  * is no free-form amount: each card shows the P granted, the KRW price and the discount. One
  * click charges at once (`useCharge`, the mock provider of ADR-0042) and a toast confirms it.
  * Not drawn while paid Coin is closed (PAID_COIN_SALES_ENABLED, ADR-0049; app/wallet/page.tsx).
+ *
+ * `highlightPackageId` is `/wallet?package=`, the package the public `/charge` page sent the
+ * visitor to buy (ADR-0044): that card is marked and scrolled to, and buying stays a click of
+ * its own.
  */
-export function ChargeForm() {
+export function ChargeForm({ highlightPackageId }: { highlightPackageId?: string }) {
   const packages = useChargePackages();
   const charge = useCharge();
+  const highlighted = useRef<HTMLDivElement>(null);
+  const scrolled = useRef(false);
+
+  // Once, when the cards first render: bring the package the visitor came for into view.
+  useEffect(() => {
+    if (scrolled.current || highlighted.current === null) return;
+    scrolled.current = true;
+    highlighted.current.scrollIntoView({ block: 'center' });
+  }, [packages.data]);
 
   async function buy(pack: ChargePackage) {
     try {
@@ -87,15 +101,19 @@ export function ChargeForm() {
               const amountP = parsePAmount(pack.amountP);
               const discount = discountPercent(amountP, pack.priceKrw);
               const busy = charge.isPending && charge.variables?.id === pack.id;
+              const chosen = pack.id === highlightPackageId;
               return (
                 <HStack
                   key={pack.id}
+                  ref={chosen ? highlighted : undefined}
                   justify="space-between"
                   borderWidth="1px"
                   borderRadius="l2"
                   p="3"
                   gap="3"
+                  {...(chosen ? { borderColor: 'brand.border', bg: 'brand.subtle' } : {})}
                   data-testid={`charge-package-${pack.id}`}
+                  data-selected={chosen ? 'true' : undefined}
                 >
                   <Stack gap="0.5">
                     <HStack gap="2" flexWrap="wrap">
@@ -105,6 +123,11 @@ export function ChargeForm() {
                       {discount > 0 && (
                         <Badge colorPalette="yes" variant="subtle">
                           {discount}% {copy.chargeDiscount}
+                        </Badge>
+                      )}
+                      {chosen && (
+                        <Badge colorPalette="brand" variant="outline">
+                          {copy.chargePackageSelected}
                         </Badge>
                       )}
                     </HStack>

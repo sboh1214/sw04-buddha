@@ -1,10 +1,11 @@
 import * as z from 'zod';
 
 /**
- * Real name and mobile number of an account (ADR-0043). The PG needs both for the payment
- * window (BuyerName / BuyerTel); email sign-up collects them on the set-password step and every
- * other account is sent to `/onboarding` until it provides them. Not verified yet (본인인증
- * comes later), so these are what the member typed, checked for shape only.
+ * Real name and mobile number of an account (ADR-0043), collected as a PG's buyer details — no
+ * PG reads them since SmartroPay went (ADR-0049, D8 keeps the collection). Email sign-up
+ * collects them on the set-password step and every other account is sent to `/onboarding`
+ * until it provides them. Not verified yet (본인인증 comes later), so these are what the
+ * member typed, checked for shape only.
  */
 
 /** user_contacts.real_name is varchar(30). */

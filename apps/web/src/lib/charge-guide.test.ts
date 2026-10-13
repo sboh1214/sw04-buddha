@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { CHARGE_TIER_COUNT, chargeTiers } from './charge-guide';
+import {
+  CHARGE_TIER_COUNT,
+  chargeTiers,
+  walletLoginPath,
+  walletPackageHref,
+  walletPackageId,
+} from './charge-guide';
+import { safeNextPath } from './next-path';
+
+const PACKAGE_ID = '0190c7a4-0000-7000-8000-000000000001';
 
 describe('chargeTiers', () => {
   it('spans the smallest to the largest package over the four pictures', () => {
@@ -28,5 +37,41 @@ describe('chargeTiers', () => {
     expect(chargeTiers([10_000n])).toEqual([0]);
     expect(chargeTiers([10_000n, 10_000n])).toEqual([0, 0]);
     expect(chargeTiers([])).toEqual([]);
+  });
+});
+
+describe('walletPackageHref', () => {
+  it('opens the wallet with the package preselected', () => {
+    expect(walletPackageHref(PACKAGE_ID)).toEqual({
+      pathname: '/wallet',
+      query: { package: PACKAGE_ID },
+    });
+  });
+});
+
+describe('walletPackageId', () => {
+  it('reads one well-formed id, lower-cased as the API answers it', () => {
+    expect(walletPackageId(PACKAGE_ID)).toBe(PACKAGE_ID);
+    expect(walletPackageId(PACKAGE_ID.toUpperCase())).toBe(PACKAGE_ID);
+  });
+
+  it('drops what no link of ours carries: junk, an empty value, a repeated parameter', () => {
+    expect(walletPackageId(undefined)).toBeUndefined();
+    expect(walletPackageId('')).toBeUndefined();
+    expect(walletPackageId('../admin')).toBeUndefined();
+    expect(walletPackageId([PACKAGE_ID, PACKAGE_ID])).toBeUndefined();
+  });
+});
+
+describe('walletLoginPath', () => {
+  it('keeps the plain wallet redirect exactly as it was', () => {
+    expect(walletLoginPath(undefined)).toBe('/login?next=/wallet');
+  });
+
+  it('carries the /charge package through the login, and the login page accepts it', () => {
+    const next = new URL(walletLoginPath(PACKAGE_ID), 'https://x.invalid').searchParams.get('next');
+    expect(next).toBe(`/wallet?package=${PACKAGE_ID}`);
+    // What LoginPage does with it: same-origin, so it is where the sign-in lands.
+    expect(safeNextPath(next)).toBe(`/wallet?package=${PACKAGE_ID}`);
   });
 });

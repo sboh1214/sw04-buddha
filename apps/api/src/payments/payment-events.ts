@@ -25,7 +25,7 @@ const SECRET_KEYS: ReadonlySet<string> = new Set([
  */
 const PERSONAL_KEY = /^(buyer|receiver|delivery|parent)/i;
 
-/** Bounds on what a public callback can make us store. */
+/** Bounds on what a PG answer can make us store. */
 const MAX_KEYS = 64;
 const MAX_KEY_LENGTH = 64;
 const MAX_VALUE_LENGTH = 500;

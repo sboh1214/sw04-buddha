@@ -1,6 +1,9 @@
+import { uuidSchema } from '@buddha/shared';
+import type { UrlObject } from 'url';
+
 /**
- * Pure helpers for the public `/charge` page (ADR-0044), kept out of the page so they can be
- * tested without a DOM (vitest runs in node here).
+ * Pure helpers for the public `/charge` page (ADR-0044) and the wallet link it leads to, kept
+ * out of the pages so they can be tested without a DOM (vitest runs in node here).
  */
 
 /** How many package pictures there are (`package-illustration.tsx`), smallest first. */
@@ -30,4 +33,38 @@ export function chargeTiers(amounts: readonly bigint[]): ChargeTier[] {
     const rank = distinct.indexOf(amount);
     return Math.round((rank * (CHARGE_TIER_COUNT - 1)) / last) as ChargeTier;
   });
+}
+
+// ---- the wallet link ------------------------------------------------------------------
+
+/**
+ * Where a package's 충전하기 leads: the wallet with that package preselected (`?package=<id>`,
+ * read back by walletPackageId). An anonymous visitor is sent on to the login page by the
+ * wallet itself. A `UrlObject` rather than a template string, so typed routes check `/wallet`
+ * without an `as Route` cast.
+ */
+export function walletPackageHref(packageId: string): UrlObject {
+  return { pathname: '/wallet', query: { package: packageId } };
+}
+
+/**
+ * The package `/wallet?package=` names: a uuid, lower-cased as the API answers it. Anything
+ * else is ignored — junk, or a repeated parameter (an array), which no link of ours builds and
+ * which is not read by position.
+ */
+export function walletPackageId(value: string | string[] | undefined): string | undefined {
+  const parsed = uuidSchema.safeParse(typeof value === 'string' ? value : undefined);
+  return parsed.success ? parsed.data : undefined;
+}
+
+/**
+ * Where an anonymous `/wallet` visit goes: the login page, told to come back to the same
+ * package, so the one chosen on `/charge` is still the chosen one after signing in. Only the
+ * parsed id travels, so nothing a crafted link adds rides into `next`; the login page re-checks
+ * it with `safeNextPath`.
+ */
+export function walletLoginPath(packageId: string | undefined): string {
+  return packageId === undefined
+    ? '/login?next=/wallet'
+    : `/login?next=${encodeURIComponent(`/wallet?package=${packageId}`)}`;
 }

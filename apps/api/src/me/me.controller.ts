@@ -76,10 +76,10 @@ export class MeController {
   }
 
   /**
-   * ADR-0043: real name and mobile number, which the PG's payment window needs (BuyerName /
-   * BuyerTel). Stored as given, shape-checked only (본인인증 comes later); `phone` comes back
-   * as digits. An account without them is sent to `/onboarding` by the web, and `GET /me`
-   * reports them as `contact`.
+   * ADR-0043: real name and mobile number, collected as a PG's buyer details; no PG reads them
+   * since SmartroPay went (ADR-0049, the purpose copy is #58). Stored as given, shape-checked
+   * only (본인인증 comes later); `phone` comes back as digits. An account without them is sent
+   * to `/onboarding` by the web, and `GET /me` reports them as `contact`.
    *
    * Counted like `PATCH /me`: the per-address bucket every route has (address-limit.ts), no
    * named one — a write of the caller's own row, repeated, costs nothing anyone else pays for.

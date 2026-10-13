@@ -180,6 +180,8 @@ export const copy = {
   chargeInProgress: '충전이 아직 처리 중입니다. 잠시 후 다시 눌러 결과를 확인해 주세요.',
   sessionChanged: '로그인한 계정이 바뀌었습니다. 화면을 확인한 뒤 다시 시도해 주세요.',
   chargeNoPackages: '판매 중인 충전 상품이 없습니다.',
+  // 공개 /charge에서 고르고 온 상품(`/wallet?package=`, ADR-0044).
+  chargePackageSelected: '선택한 상품',
 
   // --- coupons (M2) ---
   couponTitle: '쿠폰 등록',
