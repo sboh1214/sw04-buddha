@@ -45,7 +45,7 @@ export class MarketPublisher {
 
   private async publish(channel: string, event: MarketRealtimeEvent | UserRealtimeEvent) {
     try {
-      // P amounts are already decimal strings in every event schema (never bigint), so a
+      // Coin amounts are already decimal strings in every event schema (never bigint), so a
       // plain JSON.stringify is safe.
       await this.redis.publish(channel, JSON.stringify(event));
     } catch (error) {

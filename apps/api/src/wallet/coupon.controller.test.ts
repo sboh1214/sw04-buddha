@@ -5,7 +5,7 @@
  * when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
-import { SIGNUP_BONUS_P, type Coupon } from '@buddha/shared';
+import { SIGNUP_BONUS_COIN, type Coupon } from '@buddha/shared';
 import { asc, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
@@ -73,12 +73,12 @@ describe.skipIf(!hasTestInfra)('coupons (integration)', () => {
     return row;
   }
 
-  it('issues a coupon and credits P as a BONUS entry when it is redeemed', async () => {
-    const created = await issue({ code: 'welcome-2026', amountP: '5000', memo: '런칭 이벤트' });
+  it('issues a coupon and credits Coin as a BONUS entry when it is redeemed', async () => {
+    const created = await issue({ code: 'welcome-2026', amountCoin: '5000', memo: '런칭 이벤트' });
     expect(created.statusCode).toBe(201);
     expect(created.json<{ data: Coupon }>().data).toMatchObject({
       code: 'WELCOME-2026',
-      amountP: '5000',
+      amountCoin: '5000',
       redeemedCount: 0,
       isActive: true,
     });
@@ -86,24 +86,24 @@ describe.skipIf(!hasTestInfra)('coupons (integration)', () => {
     // Codes are case-insensitive for the user typing them in.
     const res = await redeem('welcome-2026');
     expect(res.statusCode).toBe(200);
-    const expected = SIGNUP_BONUS_P + 5_000n;
+    const expected = SIGNUP_BONUS_COIN + 5_000n;
     expect(res.json()).toMatchObject({
       data: {
         code: 'WELCOME-2026',
-        amountP: '5000',
-        balance: { availableP: expected.toString() },
+        amountCoin: '5000',
+        balance: { availableCoin: expected.toString() },
         ledgerEntry: {
           type: 'BONUS',
-          amountP: '5000',
+          amountCoin: '5000',
           refType: 'coupon',
           memo: '쿠폰 WELCOME-2026',
         },
       },
     });
-    expect(await balanceOf(member.id)).toMatchObject({ availableP: expected });
+    expect(await balanceOf(member.id)).toMatchObject({ availableCoin: expected });
 
     const [redemption] = await t.db.select().from(schema.couponRedemptions);
-    expect(redemption).toMatchObject({ userId: member.id, amountP: 5_000n });
+    expect(redemption).toMatchObject({ userId: member.id, amountCoin: 5_000n });
     const [coupon] = await t.db.select().from(schema.coupons);
     expect(coupon?.redeemedCount).toBe(1);
   });
@@ -111,9 +111,9 @@ describe.skipIf(!hasTestInfra)('coupons (integration)', () => {
   it('stamps the BONUS after the balance lock, not at transaction start (A-M3-14)', async () => {
     // The redemption transaction begins (coupon row, redemption row, coupon update) and only
     // then reaches this account's balance row, which this connection holds. Whatever
-    // committed against the account meanwhile is already in its balance_after_p, so the
+    // committed against the account meanwhile is already in its balance_after_coin, so the
     // BONUS row must sort after it — the column default `now()` is the transaction start.
-    expect((await issue({ code: 'LOCK-WAIT', amountP: '3000' })).statusCode).toBe(201);
+    expect((await issue({ code: 'LOCK-WAIT', amountCoin: '3000' })).statusCode).toBe(201);
     const holder = await t.db.$client.connect();
     let pending: ReturnType<typeof redeem> | undefined;
     let released = false;
@@ -140,33 +140,33 @@ describe.skipIf(!hasTestInfra)('coupons (integration)', () => {
     const bonus = ledger.find((entry) => entry.refType === 'coupon')!;
     expect(bonus.createdAt.getTime()).toBeGreaterThanOrEqual(releasedMs);
     expect((await balanceOf(member.id))!.updatedAt.getTime()).toBe(bonus.createdAt.getTime());
-    expectLedgerChain(ledger, SIGNUP_BONUS_P + 3_000n);
+    expectLedgerChain(ledger, SIGNUP_BONUS_COIN + 3_000n);
   });
 
   it('refuses a second redemption by the same account', async () => {
-    await issue({ code: 'ONCE-ONLY', amountP: '1000' });
+    await issue({ code: 'ONCE-ONLY', amountCoin: '1000' });
     expect((await redeem('ONCE-ONLY')).statusCode).toBe(200);
 
     const again = await redeem('ONCE-ONLY');
     expect(again.statusCode).toBe(409);
     expect(again.json()).toMatchObject({ error: { code: 'DUPLICATE_REQUEST' } });
-    expect(await balanceOf(member.id)).toMatchObject({ availableP: SIGNUP_BONUS_P + 1_000n });
+    expect(await balanceOf(member.id)).toMatchObject({ availableCoin: SIGNUP_BONUS_COIN + 1_000n });
   });
 
   it('stops at the redemption cap, and a disabled or expired coupon is simply invalid', async () => {
-    await issue({ code: 'CAP-ONE', amountP: '1000', maxRedemptions: 1 });
+    await issue({ code: 'CAP-ONE', amountCoin: '1000', maxRedemptions: 1 });
     expect((await redeem('CAP-ONE')).statusCode).toBe(200);
 
     const other = await signUpTestUser(t);
     const capped = await redeem('CAP-ONE', other);
     expect(capped.statusCode).toBe(400);
     expect(capped.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR' } });
-    expect(await balanceOf(other.id)).toMatchObject({ availableP: SIGNUP_BONUS_P });
+    expect(await balanceOf(other.id)).toMatchObject({ availableCoin: SIGNUP_BONUS_COIN });
 
-    await issue({ code: 'EXPIRED', amountP: '1000', expiresAt: '2020-01-01T00:00:00.000Z' });
+    await issue({ code: 'EXPIRED', amountCoin: '1000', expiresAt: '2020-01-01T00:00:00.000Z' });
     expect((await redeem('EXPIRED', other)).statusCode).toBe(400);
 
-    const disabled = await issue({ code: 'DISABLED', amountP: '1000' });
+    const disabled = await issue({ code: 'DISABLED', amountCoin: '1000' });
     await t.app.inject({
       method: 'PATCH',
       url: `/api/v1/admin/coupons/${disabled.json<{ data: Coupon }>().data.id}`,
@@ -177,11 +177,11 @@ describe.skipIf(!hasTestInfra)('coupons (integration)', () => {
 
     // An unknown code answers exactly like a disabled one: no way to map the catalogue.
     expect((await redeem('NO-SUCH-CODE', other)).statusCode).toBe(400);
-    expect(await balanceOf(other.id)).toMatchObject({ availableP: SIGNUP_BONUS_P });
+    expect(await balanceOf(other.id)).toMatchObject({ availableCoin: SIGNUP_BONUS_COIN });
   });
 
   it('refuses to lower the cap below what has already been redeemed', async () => {
-    const created = await issue({ code: 'CAP-THREE', amountP: '1000', maxRedemptions: 3 });
+    const created = await issue({ code: 'CAP-THREE', amountCoin: '1000', maxRedemptions: 3 });
     const coupon = created.json<{ data: Coupon }>().data;
     expect((await redeem('CAP-THREE')).statusCode).toBe(200);
     const other = await signUpTestUser(t);
@@ -210,12 +210,12 @@ describe.skipIf(!hasTestInfra)('coupons (integration)', () => {
   });
 
   it('generates a code when none is given and refuses a duplicate one', async () => {
-    const generated = await issue({ amountP: '2000' });
+    const generated = await issue({ amountCoin: '2000' });
     expect(generated.statusCode).toBe(201);
     const code = generated.json<{ data: Coupon }>().data.code;
     expect(code).toMatch(/^[23456789A-HJ-NP-Z]{10}$/);
 
-    const duplicate = await issue({ code, amountP: '2000' });
+    const duplicate = await issue({ code, amountCoin: '2000' });
     expect(duplicate.statusCode).toBe(400);
     expect(duplicate.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR' } });
   });
@@ -225,7 +225,7 @@ describe.skipIf(!hasTestInfra)('coupons (integration)', () => {
     // refetches; its redemption would spend the coupon — one use per account, capped — on
     // whoever the cookie now belongs to, and that cannot be given back. Same check as the
     // charge: refused before the redemption transaction, nothing spent.
-    const issued = await issue({ code: 'ONE-SHOT', amountP: '1000', maxRedemptions: 1 });
+    const issued = await issue({ code: 'ONE-SHOT', amountCoin: '1000', maxRedemptions: 1 });
     expect(issued.statusCode).toBe(201);
     const other = await signUpTestUser(t);
 
@@ -247,14 +247,14 @@ describe.skipIf(!hasTestInfra)('coupons (integration)', () => {
     expect(await t.db.select().from(schema.couponRedemptions)).toHaveLength(0);
     // Nothing credited on either side: only the two sign-up bonuses in the ledger.
     expect(await t.db.select().from(schema.ledgerEntries)).toHaveLength(3); // admin, member, other
-    expect(await balanceOf(member.id)).toMatchObject({ availableP: SIGNUP_BONUS_P });
-    expect(await balanceOf(other.id)).toMatchObject({ availableP: SIGNUP_BONUS_P });
+    expect(await balanceOf(member.id)).toMatchObject({ availableCoin: SIGNUP_BONUS_COIN });
+    expect(await balanceOf(other.id)).toMatchObject({ availableCoin: SIGNUP_BONUS_COIN });
     // The account on screen can still use it.
     expect((await redeem('ONE-SHOT', other)).statusCode).toBe(200);
   });
 
   it('is issued by admins only, and redemption needs a session', async () => {
-    const asMember = await issue({ amountP: '1000' }, member.cookie);
+    const asMember = await issue({ amountCoin: '1000' }, member.cookie);
     expect(asMember.statusCode).toBe(403);
 
     const anonymous = await t.app.inject({
@@ -271,7 +271,7 @@ describe.skipIf(!hasTestInfra)('coupons (integration)', () => {
       method: 'POST',
       url: '/api/v1/admin/coupons',
       headers: { ...jsonHeaders, cookie: admin.cookie },
-      payload: { code: 'AUDIT1', amountP: '5000', maxRedemptions: 3 },
+      payload: { code: 'AUDIT1', amountCoin: '5000', maxRedemptions: 3 },
     });
     expect(created.statusCode).toBe(201);
     const coupon = created.json<{ data: Coupon }>().data;
@@ -291,7 +291,7 @@ describe.skipIf(!hasTestInfra)('coupons (integration)', () => {
     expect(actions.map((row) => row.type)).toEqual(['coupon_create', 'coupon_update']);
     expect(actions.every((row) => row.adminId === admin.id)).toBe(true);
     expect(actions.every((row) => row.targetType === 'coupon')).toBe(true);
-    expect(actions[0]?.payload).toMatchObject({ code: 'AUDIT1', amountP: '5000' });
+    expect(actions[0]?.payload).toMatchObject({ code: 'AUDIT1', amountCoin: '5000' });
     expect(actions[1]?.payload).toMatchObject({
       before: { isActive: true },
       after: { isActive: false },
@@ -299,8 +299,8 @@ describe.skipIf(!hasTestInfra)('coupons (integration)', () => {
   });
 
   it('lists coupons for the admin, newest first', async () => {
-    await issue({ code: 'FIRST-ONE', amountP: '1000' });
-    await issue({ code: 'SECOND-ONE', amountP: '2000' });
+    await issue({ code: 'FIRST-ONE', amountCoin: '1000' });
+    await issue({ code: 'SECOND-ONE', amountCoin: '2000' });
     const res = await t.app.inject({
       method: 'GET',
       url: '/api/v1/admin/coupons?limit=1',

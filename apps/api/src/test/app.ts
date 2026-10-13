@@ -179,7 +179,7 @@ export function tokenFromLink(link: string): string {
 /** A package as `createTestPackage` returns it: enough to build a charge body. */
 export interface TestPackage {
   id: string;
-  amountP: bigint;
+  amountCoin: bigint;
   priceKrw: number;
 }
 
@@ -192,7 +192,7 @@ export interface TestPackage {
 export function chargeBody(pack: TestPackage, accountId: string): Record<string, unknown> {
   return {
     packageId: pack.id,
-    expectedAmountP: pack.amountP.toString(),
+    expectedAmountCoin: pack.amountCoin.toString(),
     expectedPriceKrw: pack.priceKrw,
     expectedAccountId: accountId,
   };
@@ -216,21 +216,21 @@ export function chargeHeaders(
 
 export async function createTestPackage(
   db: Db,
-  input: { amountP?: bigint; priceKrw?: number; isActive?: boolean; sortOrder?: number } = {},
+  input: { amountCoin?: bigint; priceKrw?: number; isActive?: boolean; sortOrder?: number } = {},
 ): Promise<TestPackage> {
-  const amountP = input.amountP ?? 10_000n;
+  const amountCoin = input.amountCoin ?? 10_000n;
   const priceKrw = input.priceKrw ?? 9_700;
   const [row] = await db
     .insert(schema.chargePackages)
     .values({
-      amountP,
+      amountCoin,
       priceKrw,
       isActive: input.isActive ?? true,
       sortOrder: input.sortOrder ?? 0,
     })
     .returning();
   if (!row) throw new Error('failed to insert a charge package');
-  return { id: row.id, amountP: row.amountP, priceKrw: row.priceKrw };
+  return { id: row.id, amountCoin: row.amountCoin, priceKrw: row.priceKrw };
 }
 
 export interface TestUser {

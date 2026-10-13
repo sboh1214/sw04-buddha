@@ -1,6 +1,6 @@
 import { clockTimestamp, schema } from '@buddha/db';
 import {
-  SIGNUP_BONUS_P,
+  SIGNUP_BONUS_COIN,
   contactSchema,
   errorEnvelopeSchema,
   meSchema,
@@ -40,7 +40,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/me (integration)', () => {
     expect(me.emailVerified).toBe(true); // signUpTestUser follows the verification link
     expect(me.profile.role).toBe('user');
     expect(me.profile.nickname).toMatch(/^예측가_[A-Z2-9]{4}$/);
-    expect(me.balance).toEqual({ availableP: SIGNUP_BONUS_P.toString(), lockedP: '0' });
+    expect(me.balance).toEqual({ availableCoin: SIGNUP_BONUS_COIN.toString(), lockedCoin: '0' });
     expect(me.linkedAccounts).toHaveLength(1);
     const [credential] = me.linkedAccounts;
     expect(credential).toMatchObject({ providerId: 'credential', accountId: user.id });

@@ -3,7 +3,7 @@ import { schema, type Db } from '@buddha/db';
 import {
   decodeKeyset,
   encodeKeyset,
-  serializePAmount,
+  serializeCoinAmount,
   type AdminBalanceAdjustResult,
   type AdminPayment,
   type AdminUser,
@@ -22,8 +22,8 @@ const userColumns = {
   email: schema.user.email,
   nickname: schema.profiles.nickname,
   role: schema.profiles.role,
-  availableP: schema.balances.availableP,
-  lockedP: schema.balances.lockedP,
+  availableCoin: schema.balances.availableCoin,
+  lockedCoin: schema.balances.lockedCoin,
   createdAt: schema.profiles.createdAt,
 };
 
@@ -33,8 +33,8 @@ interface UserRow {
   email: string;
   nickname: string;
   role: Role;
-  availableP: bigint;
-  lockedP: bigint;
+  availableCoin: bigint;
+  lockedCoin: bigint;
   createdAt: Date;
 }
 
@@ -53,7 +53,7 @@ const adminPaymentColumns = {
   id: schema.payments.id,
   userId: schema.payments.userId,
   nickname: schema.profiles.nickname,
-  amountP: schema.payments.amountP,
+  amountCoin: schema.payments.amountCoin,
   priceKrw: schema.payments.priceKrw,
   packageId: schema.payments.packageId,
   provider: schema.payments.provider,
@@ -77,7 +77,7 @@ function toAdminPayment(row: AdminPaymentRow): AdminPayment {
     id: row.id,
     userId: row.userId,
     nickname: row.nickname,
-    amountP: serializePAmount(row.amountP),
+    amountCoin: serializeCoinAmount(row.amountCoin),
     priceKrw: row.priceKrw,
     packageId: row.packageId,
     provider: row.provider,
@@ -156,7 +156,7 @@ export class AdminService {
   async adjustBalance(
     adminId: string,
     userId: string,
-    amountP: bigint,
+    amountCoin: bigint,
     memo: string,
   ): Promise<AdminBalanceAdjustResult> {
     await this.getUser(userId); // 404 before writing anything
@@ -165,7 +165,7 @@ export class AdminService {
       // The balance row first, then the clock: another writer of this account (a
       // settlement payout, a charge) may have committed while this transaction waited on that row,
       // and the rows written below must sort after it — `now()` is the transaction start and
-      // would sort before work their own balance_after_p includes (clock.ts, A-M3-14). The
+      // would sort before work their own balance_after_coin includes (clock.ts, A-M3-14). The
       // lock is what the UPDATE below would take anyway, so no writer's lock order changes;
       // the result is discarded, and a vanished row still falls through to the guard's own
       // zero-row branch (INSUFFICIENT_BALANCE).
@@ -184,7 +184,7 @@ export class AdminService {
           type: 'balance_adjust',
           targetType: 'user',
           targetId: userId,
-          payload: { amountP: serializePAmount(amountP), memo },
+          payload: { amountCoin: serializeCoinAmount(amountCoin), memo },
           createdAt: adjustedAt,
         })
         .returning();
@@ -193,21 +193,21 @@ export class AdminService {
       const [balance] = await tx
         .update(schema.balances)
         .set({
-          availableP: sql`${schema.balances.availableP} + ${amountP}`,
+          availableCoin: sql`${schema.balances.availableCoin} + ${amountCoin}`,
           // Explicit on purpose: the column's `$onUpdate` would write the API host's clock.
           updatedAt: adjustedAt,
         })
         .where(
           and(
             eq(schema.balances.userId, userId),
-            sql`${schema.balances.availableP} + ${amountP} >= 0`,
+            sql`${schema.balances.availableCoin} + ${amountCoin} >= 0`,
           ),
         )
         .returning();
       if (!balance) {
         throw new AppError('INSUFFICIENT_BALANCE', {
           message: 'The adjustment would make the balance negative',
-          details: [{ path: ['amountP'], message: 'balance would go negative' }],
+          details: [{ path: ['amountCoin'], message: 'balance would go negative' }],
         });
       }
 
@@ -216,8 +216,8 @@ export class AdminService {
         .values({
           userId,
           type: 'ADMIN_ADJUST',
-          amountP,
-          balanceAfterP: balance.availableP,
+          amountCoin,
+          balanceAfterCoin: balance.availableCoin,
           refType: 'admin_action',
           refId: action.id,
           memo,

@@ -68,7 +68,7 @@ const BANNER = `<!-- 이 파일은 scripts/generate-api-doc.mjs 가 생성합니
   맨 위의 템플릿 상수.`;
 
 /**
- * 개요. Read from packages/shared/src/api/{envelope,pagination,p-amount}.ts, the document's own
+ * 개요. Read from packages/shared/src/api/{envelope,pagination,coin-amount}.ts, the document's own
  * `info.description`, apps/api/src/main.ts's prefix/versioning (mirrored in openapi-export.ts),
  * apps/api/src/openapi/document.ts (operationIdFactory) and apps/web/next.config.ts (the rewrite).
  */
@@ -93,7 +93,7 @@ const OVERVIEW = `## 개요
   전부 \`timestamp(3)\` 이다.
 - **P 금액** — 10진 정수 문자열이다(\`"12500"\`, \`"-300"\`). JSON number 는 IEEE double 이라
   Postgres bigint 를 정확히 담지 못해서, P 는 요청·응답 양방향 모두 문자열로 오간다. 요청 본문의
-  P 금액은 부호 1자 + \`MAX_P_AMOUNT\`(10^15)의 16자리 = 17자까지만 받는다(그보다 긴 문자열은
+  P 금액은 부호 1자 + \`MAX_COIN_AMOUNT\`(10^15)의 16자리 = 17자까지만 받는다(그보다 긴 문자열은
   파싱하기 전에 거절한다: 백만 자리 \`BigInt()\` 는 요청 스레드에서 실제로 CPU 를 쓴다).
 - **본문 형식** — 요청·응답 모두 \`application/json\` 이다.
   \`application/x-www-form-urlencoded\` 파서는 꺼져 있다(HTML 폼이 바로 CSRF 의 모양이다).
@@ -314,7 +314,7 @@ const ERROR_NOTES = {
   MARKET_NOT_OPEN: '시장이 `open` 이 아니라 그 동작을 할 수 없다.',
   INSUFFICIENT_BALANCE: '잔고가 모자란다.',
   PRICE_MOVED:
-    '화면이 보여 준 충전 상품의 조건(`expectedAmountP`·`expectedPriceKrw`)이 지금 판매하는 조건과 다르다.',
+    '화면이 보여 준 충전 상품의 조건(`expectedAmountCoin`·`expectedPriceKrw`)이 지금 판매하는 조건과 다르다.',
   DUPLICATE_REQUEST:
     '이미 쓴 멱등 키를 다른 조건으로 다시 썼거나(키는 소모된다), 한 번만 할 수 있는 일을 두 번 했다(쿠폰 재사용). 환불 재시도는 앞선 시도가 아직 PG 의 답을 기다리는 동안 이것으로 답한다(`details[0].message` 가 `in progress`).',
   RATE_LIMITED: '레이트 리밋 초과. `details.retryAfterSeconds` 와 `Retry-After` 헤더에 대기 초.',

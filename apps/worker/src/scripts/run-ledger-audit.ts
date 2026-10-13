@@ -27,7 +27,7 @@ try {
   console.log(JSON.stringify(summary));
   for (const mismatch of result.mismatches) {
     console.error(
-      `mismatch user=${mismatch.userId} balance=${(mismatch.availableP + mismatch.lockedP).toString()} ledger=${mismatch.ledgerSumP.toString()} diff=${mismatch.differenceP.toString()}`,
+      `mismatch user=${mismatch.userId} balance=${(mismatch.availableCoin + mismatch.lockedCoin).toString()} ledger=${mismatch.ledgerSumCoin.toString()} diff=${mismatch.differenceCoin.toString()}`,
     );
   }
   // A mismatch is a real accounting failure: exit non-zero so a cron/CI caller notices.

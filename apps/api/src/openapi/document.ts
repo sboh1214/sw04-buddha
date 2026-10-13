@@ -34,7 +34,7 @@ export function createOpenApiDocument(app: INestApplication): OpenAPIObject {
     .setTitle('buddha API')
     .setDescription(
       'REST API. Success: `{ data, meta? }`. Failure: `{ error: { code, message, details? } }`. ' +
-        'P amounts are decimal strings (bigint). Timestamps are ISO 8601 UTC.',
+        'Coin amounts are decimal strings (bigint). Timestamps are ISO 8601 UTC.',
     )
     .setVersion('1')
     .addCookieAuth(

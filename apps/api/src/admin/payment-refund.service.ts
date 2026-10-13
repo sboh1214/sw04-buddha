@@ -2,7 +2,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { schema, type Db } from '@buddha/db';
 import {
   PAYMENT_REFUND_WINDOW_DAYS,
-  serializePAmount,
+  serializeCoinAmount,
   type AdminPayment,
   type PaymentStatus,
   type UserBalanceEvent,
@@ -46,7 +46,7 @@ export function refundNotAllowed(reason: RefusalReason): AppError {
 }
 
 /**
- * `refunding` → `refunded`: the card is cancelled and the P was already clawed back, so no
+ * `refunding` → `refunded`: the card is cancelled and the Coin was already clawed back, so no
  * balance moves. False when the payment was no longer `refunding`.
  */
 async function markRefunded(tx: Tx, paymentId: string, at: Date): Promise<boolean> {
@@ -59,9 +59,9 @@ async function markRefunded(tx: Tx, paymentId: string, at: Date): Promise<boolea
 }
 
 /**
- * `refunding` → `succeeded`: the card was NOT cancelled, so the P the claw-back took goes back
+ * `refunding` → `succeeded`: the card was NOT cancelled, so the Coin the claw-back took goes back
  * with a PAYMENT_CANCEL_REVERSAL row. Undefined (nothing restored) when the payment was no
- * longer `refunding`, so the P comes back at most once. The caller holds the balance row's lock
+ * longer `refunding`, so the Coin comes back at most once. The caller holds the balance row's lock
  * (taken before the payment's) and read `at` after it.
  */
 async function restoreClawBack(
@@ -79,7 +79,7 @@ async function restoreClawBack(
   const [balance] = await tx
     .update(schema.balances)
     .set({
-      availableP: sql`${schema.balances.availableP} + ${restored.amountP}`,
+      availableCoin: sql`${schema.balances.availableCoin} + ${restored.amountCoin}`,
       // Explicit on purpose: the column's `$onUpdate` would write the API host's clock.
       updatedAt: at,
     })
@@ -91,8 +91,8 @@ async function restoreClawBack(
     .values({
       userId: restored.userId,
       type: 'PAYMENT_CANCEL_REVERSAL',
-      amountP: restored.amountP,
-      balanceAfterP: balance.availableP,
+      amountCoin: restored.amountCoin,
+      balanceAfterCoin: balance.availableCoin,
       refType: 'payment',
       refId: restored.id,
       createdAt: at,
@@ -105,17 +105,17 @@ async function restoreClawBack(
 /**
  * `POST /admin/payments/:id/refund` (ADR-0042, owner decision 5): a full cancel of an unused
  * charge within PAYMENT_REFUND_WINDOW_DAYS of its approval — the whole KRW paid goes back to the
- * card and the whole P comes back out of the balance. The owner accepted that this is the one
- * place P turns back into KRW (청약철회), against PLAN 0.2. Closed while paid Coin is off
+ * card and the whole Coin comes back out of the balance. The owner accepted that this is the one
+ * place Coin turns back into KRW (청약철회), against PLAN 0.2. Closed while paid Coin is off
  * (PaidCoinSalesGuard on the route, ADR-0049).
  *
- * CLAW BACK FIRST, THEN CANCEL AT THE PG, COMPENSATE ON REFUSAL. The P is taken in one
- * transaction (the payment becomes `refunding`) before the PG is asked, so the P cannot be spent
- * while the card is being cancelled; a PG that refuses gets the P put back with its own ledger
+ * CLAW BACK FIRST, THEN CANCEL AT THE PG, COMPENSATE ON REFUSAL. The Coin is taken in one
+ * transaction (the payment becomes `refunding`) before the PG is asked, so the Coin cannot be spent
+ * while the card is being cancelled; a PG that refuses gets the Coin put back with its own ledger
  * row, and a PG that does not answer leaves the payment `refunding` for the admin to retry —
  * a retry skips the claw-back and asks the PG again (its "already cancelled" finishes it).
  *
- * A RETRY NEVER PUTS THE P BACK BY ITSELF. Its first attempt may have cancelled the card before
+ * A RETRY NEVER PUTS THE COIN BACK BY ITSELF. Its first attempt may have cancelled the card before
  * the answer was lost, so a refusal now may only mean "not again" in a code we do not know as
  * "already cancelled". A refused retry leaves the payment `refunding`, for a person to check the
  * card with the PG.
@@ -123,8 +123,8 @@ async function restoreClawBack(
  * ONE ATTEMPT AT A TIME. An attempt starts by stamping the payment's `updated_at` (the claw-back,
  * or a retry's lease) and ends by recording its `refund_cancel` event. A retry while the last
  * attempt is still waiting on the PG is refused (DUPLICATE_REQUEST): two cancels of one card side
- * by side could end with the card cancelled by one and the P put back by the other's refusal.
- * The stamp is also the attempt's claim at the moment of change: a first attempt puts the P back
+ * by side could end with the card cancelled by one and the Coin put back by the other's refusal.
+ * The stamp is also the attempt's claim at the moment of change: a first attempt puts the Coin back
  * only while the payment still carries ITS stamp. One that waited so long (a slow PG, a busy
  * balance row) that a retry took the payment over leaves it to that retry.
  *
@@ -145,7 +145,7 @@ export class PaymentRefundService {
   async refund(adminId: string, paymentId: string, reason: string): Promise<AdminPayment> {
     const payment = await this.load(paymentId);
     const provider = this.providers.get(payment.provider);
-    // A retry: an earlier attempt clawed the P back and may have reached the card.
+    // A retry: an earlier attempt clawed the Coin back and may have reached the card.
     const retry = payment.status === 'refunding';
     // This attempt's stamp on the payment (`updated_at`): see ONE ATTEMPT AT A TIME.
     let stamp: Date;
@@ -168,7 +168,7 @@ export class PaymentRefundService {
         method: payment.method,
       });
     } catch (error) {
-      // Whatever broke, the P is already out: treat it like silence, so the payment stays
+      // Whatever broke, the Coin is already out: treat it like silence, so the payment stays
       // `refunding` and a retry can finish it. The error's own text is not logged — a driver or
       // client error can carry the request it failed on.
       outcome = {
@@ -198,7 +198,7 @@ export class PaymentRefundService {
   }
 
   /**
-   * tx1: the whole P out of the balance (only if it is all still available — "unused"), a
+   * tx1: the whole Coin out of the balance (only if it is all still available — "unused"), a
    * PAYMENT_CANCEL ledger row, the payment `refunding`, and the audit row, together. The window
    * and the status are judged again under the locks, against the database clock.
    */
@@ -220,7 +220,7 @@ export class PaymentRefundService {
       // claw back twice. That request carries the refund on.
       if (locked?.status !== 'succeeded') throw refundNotAllowed('status');
       const at = await clockTimestamp(tx);
-      // `approved_at` is when the P arrived; rows credited before it existed fall back to the
+      // `approved_at` is when the Coin arrived; rows credited before it existed fall back to the
       // reservation's own time (migration 0015 backfilled the succeeded ones anyway).
       const since = locked.approvedAt ?? locked.createdAt;
       if (at.getTime() - since.getTime() > PAYMENT_REFUND_WINDOW_DAYS * DAY_MS) {
@@ -230,23 +230,23 @@ export class PaymentRefundService {
       const [balance] = await tx
         .update(schema.balances)
         .set({
-          availableP: sql`${schema.balances.availableP} - ${locked.amountP}`,
+          availableCoin: sql`${schema.balances.availableCoin} - ${locked.amountCoin}`,
           // Explicit on purpose: the column's `$onUpdate` would write the API host's clock.
           updatedAt: at,
         })
         .where(
           and(
             eq(schema.balances.userId, locked.userId),
-            sql`${schema.balances.availableP} >= ${locked.amountP}`,
+            sql`${schema.balances.availableCoin} >= ${locked.amountCoin}`,
           ),
         )
         .returning();
       if (!balance) {
-        // Some of this charge's P has been spent (or is locked in an order): the owner's
+        // Some of this charge's Coin has been spent (or is locked in an order): the owner's
         // policy refunds unused charges only.
         throw new AppError('INSUFFICIENT_BALANCE', {
-          message: 'Part of the P this payment bought has already been used',
-          details: [{ path: ['amountP'], message: 'P already used' }],
+          message: 'Part of the Coin this payment bought has already been used',
+          details: [{ path: ['amountCoin'], message: 'Coin already used' }],
         });
       }
 
@@ -258,7 +258,7 @@ export class PaymentRefundService {
           targetType: 'payment',
           targetId: locked.id,
           payload: {
-            amountP: serializePAmount(locked.amountP),
+            amountCoin: serializeCoinAmount(locked.amountCoin),
             priceKrw: locked.priceKrw,
             provider: locked.provider,
             memo: reason,
@@ -273,8 +273,8 @@ export class PaymentRefundService {
         .values({
           userId: locked.userId,
           type: 'PAYMENT_CANCEL',
-          amountP: -locked.amountP,
-          balanceAfterP: balance.availableP,
+          amountCoin: -locked.amountCoin,
+          balanceAfterCoin: balance.availableCoin,
           refType: 'payment',
           refId: locked.id,
           createdAt: at,
@@ -293,7 +293,7 @@ export class PaymentRefundService {
   }
 
   /**
-   * A retry of a `refunding` payment (the P is already out, so it only asks the PG again): takes
+   * A retry of a `refunding` payment (the Coin is already out, so it only asks the PG again): takes
    * the attempt lease — refused while the last attempt is still waiting on the PG — and records
    * who retried and why (the reason is the CancelMsg the PG gets) in the same transaction. Only
    * the payment row is locked, so no lock order with the balance arises.
@@ -337,7 +337,7 @@ export class PaymentRefundService {
         targetType: 'payment',
         targetId: locked.id,
         payload: {
-          amountP: serializePAmount(locked.amountP),
+          amountCoin: serializeCoinAmount(locked.amountCoin),
           priceKrw: locked.priceKrw,
           provider: locked.provider,
           memo: reason,
@@ -350,7 +350,7 @@ export class PaymentRefundService {
   }
 
   /**
-   * tx2, the card is cancelled (or "already cancelled" on a retry): `refunded`. The P is already
+   * tx2, the card is cancelled (or "already cancelled" on a retry): `refunded`. The Coin is already
    * out.
    */
   private async finish(
@@ -378,7 +378,7 @@ export class PaymentRefundService {
       );
       return;
     }
-    // Anything else — at worst a refusal that put the P back — only a person can square with a
+    // Anything else — at worst a refusal that put the Coin back — only a person can square with a
     // cancelled card: a payment `succeeded` again is refunded once more.
     this.logger.error(
       `refund of payment ${payment.id}: ${provider.name} cancelled ${String(payment.providerRef)} but the payment was ${now.status ?? 'gone'}, no longer refunding; check it in the admin payments list and refund it again if it is succeeded`,
@@ -386,7 +386,7 @@ export class PaymentRefundService {
   }
 
   /**
-   * tx2, the PG refused a first attempt: the P goes back with a PAYMENT_CANCEL_REVERSAL row and
+   * tx2, the PG refused a first attempt: the Coin goes back with a PAYMENT_CANCEL_REVERSAL row and
    * the payment is `succeeded` again (answers PAYMENT_GATEWAY_REFUSED with the PG's words) —
    * decided under the payment row's lock, after the balance row's, on the payment as it is now:
    * - no longer `refunding` — another attempt finished it, or anything else moved it — nothing
@@ -444,10 +444,10 @@ export class PaymentRefundService {
       case 'restored':
         await this.publisher.publishUser(payment.userId, decision.event);
         this.logger.warn(
-          `refund of payment ${payment.id} refused by ${provider.name} (${code}); P restored`,
+          `refund of payment ${payment.id} refused by ${provider.name} (${code}); Coin restored`,
         );
         throw new AppError('PAYMENT_GATEWAY_REFUSED', {
-          message: 'The payment gateway refused the cancel; the P was restored',
+          message: 'The payment gateway refused the cancel; the Coin was restored',
           details: [gateway],
         });
       case 'moved':
@@ -492,7 +492,7 @@ export class PaymentRefundService {
   }
 
   /**
-   * Records the answer of an attempt that puts no P back (a refused retry, or no answer) and
+   * Records the answer of an attempt that puts no Coin back (a refused retry, or no answer) and
    * reads what is left of the refund — under the payment row's lock, so it judges the payment as
    * another attempt may just have left it. Only the payment row is locked (no balance moves), as
    * takeRetry does. No longer `refunding` (another attempt finished it, or anything else moved

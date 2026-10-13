@@ -7,13 +7,13 @@ export interface LedgerMismatch {
   /** No `balances` row at all — an accounting failure of its own: every wallet call 404s. */
   balanceMissing: boolean;
   /** 0n when `balanceMissing`. */
-  availableP: bigint;
+  availableCoin: bigint;
   /** 0n when `balanceMissing`. */
-  lockedP: bigint;
-  ledgerSumP: bigint;
-  /** balance − ledger sum, an absent balance read as 0: positive means the balance holds P
+  lockedCoin: bigint;
+  ledgerSumCoin: bigint;
+  /** balance − ledger sum, an absent balance read as 0: positive means the balance holds Coin
    *  the ledger never granted. */
-  differenceP: bigint;
+  differenceCoin: bigint;
 }
 
 export interface LedgerAuditResult {
@@ -60,7 +60,7 @@ export interface LedgerAuditOptions {
 /**
  * Verifies the PLAN 5.6 invariant for every account:
  *
- *   balances.available_p + balances.locked_p == SUM(ledger_entries.amount_p)
+ *   balances.available_coin + balances.locked_coin == SUM(ledger_entries.amount_coin)
  *
  * The check runs entirely in Postgres (one grouped query), so it stays a single pass over
  * the ledger index no matter how many accounts exist, and it never mutates money — a
@@ -87,13 +87,13 @@ export async function runLedgerAudit(
   const { rows } = await db.execute<{
     user_id: string;
     balance_missing: boolean;
-    available_p: string;
-    locked_p: string;
-    ledger_sum_p: string;
+    available_coin: string;
+    locked_coin: string;
+    ledger_sum_coin: string;
     checked: string;
   }>(sql`
     with ledger as (
-      select user_id, sum(amount_p) as ledger_sum_p
+      select user_id, sum(amount_coin) as ledger_sum_coin
       from ledger_entries
       group by user_id
     ),
@@ -101,9 +101,9 @@ export async function runLedgerAudit(
       select
         u.id as user_id,
         (b.user_id is null) as balance_missing,
-        coalesce(b.available_p, 0) as available_p,
-        coalesce(b.locked_p, 0) as locked_p,
-        coalesce(g.ledger_sum_p, 0) as ledger_sum_p
+        coalesce(b.available_coin, 0) as available_coin,
+        coalesce(b.locked_coin, 0) as locked_coin,
+        coalesce(g.ledger_sum_coin, 0) as ledger_sum_coin
       from "user" u
       left join balances b on b.user_id = u.id
       left join ledger g on g.user_id = u.id
@@ -111,9 +111,9 @@ export async function runLedgerAudit(
     select
       user_id,
       balance_missing,
-      available_p,
-      locked_p,
-      ledger_sum_p,
+      available_coin,
+      locked_coin,
+      ledger_sum_coin,
       (select count(*) from accounts) as checked
     from accounts
     -- balance_missing needs its own disjunct. With no balance row AND no ledger entries the
@@ -122,7 +122,7 @@ export async function runLedgerAudit(
     -- 0001) and the trigger writes a BONUS entry with every account -- but accounts predating
     -- the 0004 bonus have no ledger rows at all, and one of those losing its balance is
     -- exactly the silent case this job exists to catch.
-    where balance_missing or available_p + locked_p <> ledger_sum_p
+    where balance_missing or available_coin + locked_coin <> ledger_sum_coin
     order by user_id
   `);
 
@@ -137,16 +137,16 @@ export async function runLedgerAudit(
   const mismatches = rows.map((row) => {
     // `coalesce(..., 0)` above keeps these non-null: `BigInt(null)` throws, which would turn a
     // detected orphan into a crashed job.
-    const availableP = BigInt(row.available_p);
-    const lockedP = BigInt(row.locked_p);
-    const ledgerSumP = BigInt(row.ledger_sum_p);
+    const availableCoin = BigInt(row.available_coin);
+    const lockedCoin = BigInt(row.locked_coin);
+    const ledgerSumCoin = BigInt(row.ledger_sum_coin);
     return {
       userId: row.user_id,
       balanceMissing: row.balance_missing,
-      availableP,
-      lockedP,
-      ledgerSumP,
-      differenceP: availableP + lockedP - ledgerSumP,
+      availableCoin,
+      lockedCoin,
+      ledgerSumCoin,
+      differenceCoin: availableCoin + lockedCoin - ledgerSumCoin,
     };
   });
 
@@ -158,10 +158,10 @@ export async function runLedgerAudit(
       payload: {
         userId: mismatch.userId,
         balanceMissing: mismatch.balanceMissing,
-        availableP: mismatch.availableP.toString(),
-        lockedP: mismatch.lockedP.toString(),
-        ledgerSumP: mismatch.ledgerSumP.toString(),
-        differenceP: mismatch.differenceP.toString(),
+        availableCoin: mismatch.availableCoin.toString(),
+        lockedCoin: mismatch.lockedCoin.toString(),
+        ledgerSumCoin: mismatch.ledgerSumCoin.toString(),
+        differenceCoin: mismatch.differenceCoin.toString(),
       },
     }));
     // Chunked (see AUDIT_FAILURE_INSERT_CHUNK) but one transaction, so every row of a run

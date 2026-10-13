@@ -94,7 +94,7 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     outcome: Outcome;
     side: 'buy' | 'sell';
     qty: number;
-    amountP: bigint;
+    amountCoin: bigint;
     createdAt: Date;
   }) {
     const [order] = await t.db
@@ -122,8 +122,8 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
         outcome: input.outcome,
         side: input.side,
         qty: input.qty,
-        amountP: input.amountP,
-        priceAvgBp: Math.round((Number(input.amountP) * 100) / input.qty),
+        amountCoin: input.amountCoin,
+        priceAvgBp: Math.round((Number(input.amountCoin) * 100) / input.qty),
         createdAt: input.createdAt,
       })
       .returning();
@@ -147,7 +147,7 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
       status: 'open',
       // Never traded: no price, which a client shows as '체결 없음' (N02 §5).
       lastPrice: null,
-      volumeP: '0',
+      volumeCoin: '0',
       tradeCount: 0,
       traderCount: 0,
       resolvedResult: null,
@@ -155,7 +155,7 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
       sparkline: [],
     });
     // Nothing of the direct AMM (#125), and nothing the public must not see (PLAN 7.1).
-    for (const field of ['pYesBp', 'qYes', 'liquidityB', 'reserveP', 'createdBy']) {
+    for (const field of ['pYesBp', 'qYes', 'liquidityB', 'reserveCoin', 'createdBy']) {
       expect(page.data[0]).not.toHaveProperty(field);
     }
 
@@ -245,7 +245,7 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     const base = Date.now() + DAY_MS;
     for (let i = 0; i < 26; i += 1) {
       await market({
-        volumeP: BigInt(Math.floor(i / 2) * 1_000),
+        volumeCoin: BigInt(Math.floor(i / 2) * 1_000),
         closeAt: new Date(base + Math.floor(i / 3) * 60 * 60 * 1000),
       });
     }
@@ -257,7 +257,9 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     const byId = (a: { id: string }, b: { id: string }) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
     const expected = {
       volume: [...open]
-        .sort((a, b) => (a.volumeP === b.volumeP ? byId(b, a) : a.volumeP > b.volumeP ? -1 : 1))
+        .sort((a, b) =>
+          a.volumeCoin === b.volumeCoin ? byId(b, a) : a.volumeCoin > b.volumeCoin ? -1 : 1,
+        )
         .map((row) => row.id),
       closing: [...open]
         .sort((a, b) => a.closeAt.getTime() - b.closeAt.getTime() || byId(a, b))
@@ -309,7 +311,7 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
       voidedAt: null,
     });
     // PLAN 7.1: no author on the public detail; and nothing of the direct AMM (#125).
-    for (const field of ['createdBy', 'pYesBp', 'qYes', 'qNo', 'liquidityB', 'reserveP']) {
+    for (const field of ['createdBy', 'pYesBp', 'qYes', 'qNo', 'liquidityB', 'reserveCoin']) {
       expect(detail).not.toHaveProperty(field);
     }
     expect(detail.lastPrice).toBeNull();
@@ -414,7 +416,7 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
         outcome: i % 2 === 0 ? 'YES' : 'NO',
         side: i % 3 === 0 ? 'sell' : 'buy',
         qty: i + 1,
-        amountP: BigInt((i + 1) * 50),
+        amountCoin: BigInt((i + 1) * 50),
         createdAt: new Date(base + i * 1_000),
       });
       written.push({ id: fill.id, qty: fill.qty });
@@ -432,10 +434,10 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
         .map((fill) => fill.id.toString()),
     );
     expect(fills[0]).toMatchObject({ qty: FILLS_RECENT_LIMIT + 5, priceAvgBp: 5000 });
-    expect(fills[0]!.amountP).toBe(String((FILLS_RECENT_LIMIT + 5) * 50));
+    expect(fills[0]!.amountCoin).toBe(String((FILLS_RECENT_LIMIT + 5) * 50));
     for (const fill of fills) {
       expect(Object.keys(fill).sort()).toEqual(
-        ['amountP', 'createdAt', 'id', 'outcome', 'priceAvgBp', 'qty', 'side'].sort(),
+        ['amountCoin', 'createdAt', 'id', 'outcome', 'priceAvgBp', 'qty', 'side'].sort(),
       );
     }
   });

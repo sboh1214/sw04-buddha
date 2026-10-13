@@ -4,7 +4,7 @@ import {
   SETTLEMENT_STEP_ERROR_MAX,
   SETTLEMENT_STEPS,
   marketChannel,
-  serializePAmount,
+  serializeCoinAmount,
   settle,
   userChannel,
   type MarketStatusEvent,
@@ -37,7 +37,7 @@ export type FinalizeResult =
       settledAccounts: number;
       /** Accounts that received a SETTLEMENT_PAYOUT (held the winning outcome with qty > 0). */
       paidAccounts: number;
-      paidP: bigint;
+      paidCoin: bigint;
     }
   /**
    * The run committed its steps but some step of SETTLEMENT_STEPS is still not `done`, so the
@@ -68,13 +68,13 @@ interface CoinStep {
   positions: number;
   settledAccounts: number;
   paidAccounts: number;
-  paidP: bigint;
+  paidCoin: bigint;
   settlements: Settlement[];
 }
 
 /**
  * The `coin` settlement step (PLAN 5.5 정산): every unsettled position of the market is closed
- * out with the shared `settle()` accounting (PLAN 5.4 — the winning outcome is paid qty × 100P,
+ * out with the shared `settle()` accounting (PLAN 5.4 — the winning outcome is paid qty × 100 Coin,
  * both outcomes end at qty 0, cost 0, `settled`), and each payout is one SETTLEMENT_PAYOUT
  * ledger row written with its balance change:
  *
@@ -84,7 +84,7 @@ interface CoinStep {
  *  - the market's own instant read after those locks (tx-helpers.ts), and each payout's
  *    instant read after that ACCOUNT's balance lock: another write of this account (a charge,
  *    a payout on another market) may have committed while this transaction waited, and the
- *    payout's ledger row must sort after it or `/me/ledger`'s `balance_after_p` chain reads
+ *    payout's ledger row must sort after it or `/me/ledger`'s `balance_after_coin` chain reads
  *    inverted (ADR-0027 addendum, A-M3-14);
  *  - the ledger row and the balance UPDATE in the same transaction (PLAN 0.2), the balance
  *    UPDATE conditional on nothing — a payout only adds.
@@ -113,13 +113,13 @@ async function runCoinStep(
   const settlements: Settlement[] = [];
   const settledAccounts = new Set<string>();
   const paidAccounts = new Set<string>();
-  let paidP = 0n;
+  let paidCoin = 0n;
   for (const position of holders) {
     const after = settle(position, position.outcome === result);
     settledAccounts.add(position.userId);
     let balance: BalanceRow | undefined;
     let ledgerEntryId: number | undefined;
-    if (after.payoutP > 0n) {
+    if (after.payoutCoin > 0n) {
       const [locked] = await tx
         .select({ userId: schema.balances.userId })
         .from(schema.balances)
@@ -136,7 +136,7 @@ async function runCoinStep(
       [balance] = await tx
         .update(schema.balances)
         .set({
-          availableP: sql`${schema.balances.availableP} + ${after.payoutP}`,
+          availableCoin: sql`${schema.balances.availableCoin} + ${after.payoutCoin}`,
           updatedAt: paidAt,
         })
         .where(eq(schema.balances.userId, position.userId))
@@ -147,8 +147,8 @@ async function runCoinStep(
         .values({
           userId: position.userId,
           type: 'SETTLEMENT_PAYOUT',
-          amountP: after.payoutP,
-          balanceAfterP: balance.availableP,
+          amountCoin: after.payoutCoin,
+          balanceAfterCoin: balance.availableCoin,
           refType: 'market',
           refId: marketId,
           memo: `정산 지급: ${market.title}`,
@@ -158,7 +158,7 @@ async function runCoinStep(
       if (!entry) throw new Error('Ledger insert failed');
       ledgerEntryId = entry.id;
       paidAccounts.add(position.userId);
-      paidP += after.payoutP;
+      paidCoin += after.payoutCoin;
     }
     // `version` bumps by itself (`$onUpdate` on the column): this UPDATE goes through the
     // ORM, and the returned row carries the new value the `user:position` event needs.
@@ -166,8 +166,8 @@ async function runCoinStep(
       .update(schema.positions)
       .set({
         qty: after.qty,
-        costBasisP: after.costBasisP,
-        realizedPnlP: after.realizedPnlP,
+        costBasisCoin: after.costBasisCoin,
+        realizedPnlCoin: after.realizedPnlCoin,
         settled: true,
         updatedAt: now,
       })
@@ -188,7 +188,7 @@ async function runCoinStep(
     positions: holders.length,
     settledAccounts: settledAccounts.size,
     paidAccounts: paidAccounts.size,
-    paidP,
+    paidCoin,
     settlements,
   };
 }
@@ -369,7 +369,7 @@ export async function finalizeMarket(
         positions: 0,
         settledAccounts: 0,
         paidAccounts: 0,
-        paidP: 0n,
+        paidCoin: 0n,
         settlements: [],
       };
       // The instant of the last step this run finished: the `settled` transition shares it,
@@ -413,7 +413,7 @@ export async function finalizeMarket(
             result,
             settledAccounts: coin.settledAccounts,
             paidAccounts: coin.paidAccounts,
-            paidP: serializePAmount(coin.paidP),
+            paidCoin: serializeCoinAmount(coin.paidCoin),
             positions: coin.positions,
           },
           createdAt: now,
@@ -435,7 +435,7 @@ export async function finalizeMarket(
         positions: coin.positions,
         settledAccounts: coin.settledAccounts,
         paidAccounts: coin.paidAccounts,
-        paidP: coin.paidP,
+        paidCoin: coin.paidCoin,
         result,
         settlements: coin.settlements,
       } as const;
@@ -474,8 +474,8 @@ export async function finalizeMarket(
       userId,
       {
         type: 'user:balance',
-        availableP: serializePAmount(balance.availableP),
-        lockedP: serializePAmount(balance.lockedP),
+        availableCoin: serializeCoinAmount(balance.availableCoin),
+        lockedCoin: serializeCoinAmount(balance.lockedCoin),
         ledgerEntryId: String(ledgerEntryId),
         ts: balance.updatedAt.toISOString(),
       },
@@ -489,8 +489,8 @@ export async function finalizeMarket(
         marketId: position.marketId,
         outcome: position.outcome,
         qty: position.qty,
-        costBasisP: serializePAmount(position.costBasisP),
-        realizedPnlP: serializePAmount(position.realizedPnlP),
+        costBasisCoin: serializeCoinAmount(position.costBasisCoin),
+        realizedPnlCoin: serializeCoinAmount(position.realizedPnlCoin),
         settled: position.settled,
         version: position.version,
         ts,

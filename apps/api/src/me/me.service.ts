@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { schema, type Db } from '@buddha/db';
-import { type Contact, type ContactFields, type Me, serializePAmount } from '@buddha/shared';
+import { type Contact, type ContactFields, type Me, serializeCoinAmount } from '@buddha/shared';
 import { asc, eq, sql } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
 import { findPgError, isPgError, PG_UNIQUE_VIOLATION } from '../common/errors/pg-error.js';
@@ -23,8 +23,8 @@ export class MeService {
           nickname: schema.profiles.nickname,
           role: schema.profiles.role,
           createdAt: schema.profiles.createdAt,
-          availableP: schema.balances.availableP,
-          lockedP: schema.balances.lockedP,
+          availableCoin: schema.balances.availableCoin,
+          lockedCoin: schema.balances.lockedCoin,
           realName: schema.userContacts.realName,
           phone: schema.userContacts.phone,
         })
@@ -62,8 +62,8 @@ export class MeService {
         createdAt: row.createdAt.toISOString(),
       },
       balance: {
-        availableP: serializePAmount(row.availableP),
-        lockedP: serializePAmount(row.lockedP),
+        availableCoin: serializeCoinAmount(row.availableCoin),
+        lockedCoin: serializeCoinAmount(row.lockedCoin),
       },
       linkedAccounts: accounts.map((a) => ({
         id: a.id,

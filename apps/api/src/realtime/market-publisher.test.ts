@@ -127,15 +127,15 @@ describe.skipIf(!hasTestInfra)('MarketPublisher (integration)', () => {
       type: 'market:tick',
       marketId: MARKET_ID,
       lastPrice: 52,
-      volumeP: '5125',
+      volumeCoin: '5125',
       tradeCount: 1,
       traderCount: 3,
       ts,
     });
     await publisher.publishUser('user-1', {
       type: 'user:balance',
-      availableP: '4875',
-      lockedP: '0',
+      availableCoin: '4875',
+      lockedCoin: '0',
       ledgerEntryId: '2',
       ts,
     });
@@ -172,8 +172,8 @@ describe.skipIf(!hasTestInfra)('MarketPublisher (integration)', () => {
     await expect(
       publisher.publishUser('user-2', {
         type: 'user:balance',
-        availableP: '1',
-        lockedP: '0',
+        availableCoin: '1',
+        lockedCoin: '0',
         ledgerEntryId: '1',
         ts: new Date().toISOString(),
       }),
@@ -201,8 +201,8 @@ describe.skipIf(!hasTestInfra)('MarketPublisher (integration)', () => {
       await expect(
         publisher.publishUser('user-3', {
           type: 'user:balance',
-          availableP: '1',
-          lockedP: '0',
+          availableCoin: '1',
+          lockedCoin: '0',
           ledgerEntryId: '1',
           ts: new Date().toISOString(),
         }),
@@ -233,8 +233,8 @@ describe.skipIf(!hasTestInfra)('MarketPublisher (integration)', () => {
       const ts = new Date().toISOString();
       const balance = {
         type: 'user:balance' as const,
-        availableP: '1',
-        lockedP: '0',
+        availableCoin: '1',
+        lockedCoin: '0',
         ledgerEntryId: '1',
         ts,
       };
@@ -252,7 +252,7 @@ describe.skipIf(!hasTestInfra)('MarketPublisher (integration)', () => {
           type: 'market:tick',
           marketId: MARKET_ID,
           lastPrice: 52,
-          volumeP: '5125',
+          volumeCoin: '5125',
           tradeCount: 1,
           traderCount: 3,
           ts,
@@ -296,7 +296,7 @@ describe.skipIf(!hasTestInfra)('MarketPublisher (integration)', () => {
           type: 'market:tick',
           marketId: MARKET_ID,
           lastPrice: 52,
-          volumeP: '5125',
+          volumeCoin: '5125',
           tradeCount: 1,
           traderCount: 3,
           ts,

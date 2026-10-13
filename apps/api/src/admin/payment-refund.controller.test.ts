@@ -1,6 +1,6 @@
 /**
  * `POST /admin/payments/:id/refund` (ADR-0042 「관리자 환불」) against the docker `test` profile:
- * claw the P back, cancel at the PG, compensate on a refusal, stay `refunding` on silence.
+ * claw the Coin back, cancel at the PG, compensate on a refusal, stay `refunding` on silence.
  *
  * Paid Coin is opened for this app (`paidCoinSales: true`): the refund is preserved code, closed
  * in production while sales are off (ADR-0049; paid-coin-sales.test.ts proves that). Payments
@@ -11,7 +11,7 @@ import { randomUUID } from 'node:crypto';
 import { Logger } from '@nestjs/common';
 import { schema } from '@buddha/db';
 import {
-  SIGNUP_BONUS_P,
+  SIGNUP_BONUS_COIN,
   userChannel,
   type AdminPayment,
   type ChargeResult,
@@ -49,7 +49,7 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
   let t: TestApp;
   let admin: TestUser;
   let member: TestUser;
-  /** 10,000P for 9,700원. */
+  /** 10,000 Coin for 9,700원. */
   let pack: TestPackage;
   /** Every cancel the provider was asked for, in order. */
   let cancels: CancelRequest[];
@@ -94,7 +94,7 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
       payload: { reason },
     });
 
-  /** A charge of `member` through the immediate flow: 10,000P credited. */
+  /** A charge of `member` through the immediate flow: 10,000 Coin credited. */
   async function charge(): Promise<{ id: string; providerRef: string }> {
     const res = await t.app.inject({
       method: 'POST',
@@ -113,7 +113,7 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
       .insert(schema.payments)
       .values({
         userId: member.id,
-        amountP: pack.amountP,
+        amountCoin: pack.amountCoin,
         priceKrw: pack.priceKrw,
         packageId: pack.id,
         provider: 'mock',
@@ -169,16 +169,16 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
     throw new GatewayUnreachableError('timed out');
   };
 
-  /** A refund whose cancel got no answer: `refunding`, the P clawed back (502). */
+  /** A refund whose cancel got no answer: `refunding`, the Coin clawed back (502). */
   async function stuckRefunding(id: string): Promise<void> {
     onCancel = unreachable;
     expect((await refund(id)).statusCode).toBe(502);
     expect(await paymentRow(id)).toMatchObject({ status: 'refunding' });
   }
 
-  it('refunds an unused charge: P out, the whole amount cancelled at its provider', async () => {
+  it('refunds an unused charge: Coin out, the whole amount cancelled at its provider', async () => {
     const { id, providerRef } = await charge();
-    expect((await balanceOf(member.id)).availableP).toBe(SIGNUP_BONUS_P + 10_000n);
+    expect((await balanceOf(member.id)).availableCoin).toBe(SIGNUP_BONUS_COIN + 10_000n);
 
     const subscriber = new Redis(process.env.TEST_REDIS_URL!, { maxRetriesPerRequest: 1 });
     const received: string[] = [];
@@ -201,7 +201,7 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
       provider: 'mock',
       providerRef,
       status: 'refunded',
-      amountP: '10000',
+      amountCoin: '10000',
       priceKrw: 9_700,
     });
     expect(body.refundedAt).toEqual(expect.any(String));
@@ -212,13 +212,13 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
     ]);
 
     const ledger = await ledgerOf(member.id);
-    expect(ledger.map((entry) => [entry.type, entry.amountP])).toEqual([
-      ['BONUS', SIGNUP_BONUS_P],
+    expect(ledger.map((entry) => [entry.type, entry.amountCoin])).toEqual([
+      ['BONUS', SIGNUP_BONUS_COIN],
       ['DEPOSIT', 10_000n],
       ['PAYMENT_CANCEL', -10_000n],
     ]);
     expect(ledger[2]).toMatchObject({ refType: 'payment', refId: id });
-    expectLedgerChain(ledger, SIGNUP_BONUS_P);
+    expectLedgerChain(ledger, SIGNUP_BONUS_COIN);
 
     // Audited in the claw-back's own transaction (admin-audit.test's rule).
     const actions = await refundActions();
@@ -227,7 +227,7 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
       adminId: admin.id,
       targetType: 'payment',
       targetId: id,
-      payload: { amountP: '10000', priceKrw: 9_700, provider: 'mock', memo: REASON },
+      payload: { amountCoin: '10000', priceKrw: 9_700, provider: 'mock', memo: REASON },
     });
     expect(actions[0]!.createdAt.getTime()).toBe(ledger[2]!.createdAt.getTime());
 
@@ -237,8 +237,8 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
     expect(received.map((message) => JSON.parse(message) as unknown)).toEqual([
       {
         type: 'user:balance',
-        availableP: SIGNUP_BONUS_P.toString(),
-        lockedP: '0',
+        availableCoin: SIGNUP_BONUS_COIN.toString(),
+        lockedCoin: '0',
         ledgerEntryId: ledger[2]!.id.toString(),
         ts: ledger[2]!.createdAt.toISOString(),
       },
@@ -265,10 +265,10 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
     expect(replay.statusCode).toBe(200);
     const replayed = replay.json<{ data: ChargeResult }>().data;
     expect(replayed.ledgerEntry).toEqual(charged.ledgerEntry);
-    expect(replayed.ledgerEntry).toMatchObject({ type: 'DEPOSIT', amountP: '10000' });
+    expect(replayed.ledgerEntry).toMatchObject({ type: 'DEPOSIT', amountCoin: '10000' });
     // The payment and the balance as they are now; the replay bought nothing.
     expect(replayed.payment).toMatchObject({ id: charged.payment.id, status: 'refunded' });
-    expect(replayed.balance.availableP).toBe(SIGNUP_BONUS_P.toString());
+    expect(replayed.balance.availableCoin).toBe(SIGNUP_BONUS_COIN.toString());
     expect((await ledgerOf(member.id)).map((entry) => entry.type)).toEqual([
       'BONUS',
       'DEPOSIT',
@@ -276,14 +276,14 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
     ]);
   });
 
-  it('refuses once part of the P is used (INSUFFICIENT_BALANCE), changing nothing', async () => {
+  it('refuses once part of the Coin is used (INSUFFICIENT_BALANCE), changing nothing', async () => {
     const { id } = await charge();
-    // Spend the bonus and 1P of the charge: 9,999P left against a 10,000P payment.
+    // Spend the bonus and 1 Coin of the charge: 9,999 Coin left against a 10,000 Coin payment.
     const spent = await t.app.inject({
       method: 'POST',
       url: `/api/v1/admin/users/${member.id}/balance-adjust`,
       headers: { ...jsonHeaders, cookie: admin.cookie },
-      payload: { amountP: (-(SIGNUP_BONUS_P + 1n)).toString(), memo: 'spent' },
+      payload: { amountCoin: (-(SIGNUP_BONUS_COIN + 1n)).toString(), memo: 'spent' },
     });
     expect(spent.statusCode).toBe(200);
 
@@ -291,7 +291,7 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ error: { code: 'INSUFFICIENT_BALANCE' } });
     expect(await paymentRow(id)).toMatchObject({ status: 'succeeded', refundedAt: null });
-    expect((await balanceOf(member.id)).availableP).toBe(9_999n);
+    expect((await balanceOf(member.id)).availableCoin).toBe(9_999n);
     expect(await refundActions()).toHaveLength(0);
     expect(cancels).toHaveLength(0);
   });
@@ -341,7 +341,7 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
     expect(await paymentRow(id)).toMatchObject({ status: 'succeeded' });
   });
 
-  it('puts the P back when the PG refuses the cancel (PAYMENT_CANCEL_REVERSAL)', async () => {
+  it('puts the Coin back when the PG refuses the cancel (PAYMENT_CANCEL_REVERSAL)', async () => {
     const { id } = await charge();
     onCancel = () => refused('2002', '취소 불가 거래');
     const res = await refund(id);
@@ -354,14 +354,14 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
     });
     expect(await paymentRow(id)).toMatchObject({ status: 'succeeded', refundedAt: null });
     const ledger = await ledgerOf(member.id);
-    expect(ledger.map((entry) => [entry.type, entry.amountP])).toEqual([
-      ['BONUS', SIGNUP_BONUS_P],
+    expect(ledger.map((entry) => [entry.type, entry.amountCoin])).toEqual([
+      ['BONUS', SIGNUP_BONUS_COIN],
       ['DEPOSIT', 10_000n],
       ['PAYMENT_CANCEL', -10_000n],
       ['PAYMENT_CANCEL_REVERSAL', 10_000n],
     ]);
-    expectLedgerChain(ledger, SIGNUP_BONUS_P + 10_000n);
-    // The attempt stays audited: the P did leave the balance, if only for a moment.
+    expectLedgerChain(ledger, SIGNUP_BONUS_COIN + 10_000n);
+    // The attempt stays audited: the Coin did leave the balance, if only for a moment.
     expect(await refundActions()).toHaveLength(1);
     expect((await eventsOf(id)).at(-1)).toMatchObject({
       type: 'refund_cancel',
@@ -380,7 +380,7 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
       error: { code: 'PAYMENT_GATEWAY_ERROR', message: 'Internal server error' },
     });
     expect(await paymentRow(id)).toMatchObject({ status: 'refunding' });
-    expect((await balanceOf(member.id)).availableP).toBe(SIGNUP_BONUS_P);
+    expect((await balanceOf(member.id)).availableCoin).toBe(SIGNUP_BONUS_COIN);
     // What broke is recorded by its name only: an error's text can carry the request.
     expect((await eventsOf(id)).at(-1)).toMatchObject({
       type: 'refund_cancel',
@@ -398,7 +398,7 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
     expect(cancels[1]).toMatchObject({ reason: '재시도' });
     const ledger = await ledgerOf(member.id);
     expect(ledger.filter((entry) => entry.type === 'PAYMENT_CANCEL')).toHaveLength(1);
-    expectLedgerChain(ledger, SIGNUP_BONUS_P);
+    expectLedgerChain(ledger, SIGNUP_BONUS_COIN);
     // The retry is audited too: who finalised it, and the reason the PG got.
     const actions = await refundActions();
     expect(actions).toHaveLength(2);
@@ -426,7 +426,7 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
     expect(await paymentRow(id)).toMatchObject({ status: 'refunded' });
     const ledger = await ledgerOf(member.id);
     expect(ledger.filter((entry) => entry.type === 'PAYMENT_CANCEL')).toHaveLength(1);
-    expectLedgerChain(ledger, SIGNUP_BONUS_P);
+    expectLedgerChain(ledger, SIGNUP_BONUS_COIN);
     expect(await refundActions()).toHaveLength(1);
     expect(cancels).toHaveLength(1);
   });
@@ -494,16 +494,16 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
     expect(await paymentRow(id)).toMatchObject({ status: 'refunded' });
     const ledger = await ledgerOf(member.id);
     expect(ledger.filter((entry) => entry.type === 'PAYMENT_CANCEL')).toHaveLength(1);
-    expectLedgerChain(ledger, SIGNUP_BONUS_P);
+    expectLedgerChain(ledger, SIGNUP_BONUS_COIN);
   });
 
-  // --- a retry never puts the P back by itself (PAY-1) --------------------------------
+  // --- a retry never puts the Coin back by itself (PAY-1) -----------------------------
 
-  it('keeps a refused retry refunding with the P still out', async () => {
+  it('keeps a refused retry refunding with the Coin still out', async () => {
     const { id } = await charge();
     await stuckRefunding(id);
 
-    // The first attempt may have cancelled the card: this "no" must not give the P back.
+    // The first attempt may have cancelled the card: this "no" must not give the Coin back.
     onCancel = () => refused('2002', '취소 실패');
     const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
     let retry: Awaited<ReturnType<typeof refund>>;
@@ -523,10 +523,10 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
       },
     });
     expect(await paymentRow(id)).toMatchObject({ status: 'refunding', refundedAt: null });
-    expect((await balanceOf(member.id)).availableP).toBe(SIGNUP_BONUS_P);
+    expect((await balanceOf(member.id)).availableCoin).toBe(SIGNUP_BONUS_COIN);
     const ledger = await ledgerOf(member.id);
     expect(ledger.map((entry) => entry.type)).toEqual(['BONUS', 'DEPOSIT', 'PAYMENT_CANCEL']);
-    expectLedgerChain(ledger, SIGNUP_BONUS_P);
+    expectLedgerChain(ledger, SIGNUP_BONUS_COIN);
     expect((await eventsOf(id)).at(-1)).toMatchObject({
       type: 'refund_cancel',
       resultCode: '2002',
@@ -544,7 +544,7 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
     expect(first.statusCode).toBe(502);
     expect(first.json()).toMatchObject({ error: { code: 'PAYMENT_GATEWAY_ERROR' } });
     expect(await paymentRow(id)).toMatchObject({ status: 'refunding' });
-    expect((await balanceOf(member.id)).availableP).toBe(SIGNUP_BONUS_P);
+    expect((await balanceOf(member.id)).availableCoin).toBe(SIGNUP_BONUS_COIN);
     expect((await eventsOf(id)).at(-1)).toMatchObject({
       type: 'refund_cancel',
       resultCode: null,
@@ -560,7 +560,7 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
     expect(await paymentRow(id)).toMatchObject({ status: 'refunded' });
     const ledger = await ledgerOf(member.id);
     expect(ledger.filter((entry) => entry.type === 'PAYMENT_CANCEL')).toHaveLength(1);
-    expectLedgerChain(ledger, SIGNUP_BONUS_P);
+    expectLedgerChain(ledger, SIGNUP_BONUS_COIN);
   });
 
   it('never restores a first attempt a retry took over: the retry decides', async () => {
@@ -601,9 +601,9 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
         expect(cancels).toHaveLength(2);
       });
       // What the first attempt's restore will find is the RETRY's lease — its own stamp, written
-      // with its audit row — not the aging above: that is what keeps the P out. (A takeRetry that
-      // stamped nothing would leave the aged value, which differs from the first stamp too, and
-      // pass the rest of this test.)
+      // with its audit row — not the aging above: that is what keeps the Coin out. (A takeRetry
+      // that stamped nothing would leave the aged value, which differs from the first stamp too,
+      // and pass the rest of this test.)
       const retryAction = (await refundActions()).find(
         (action) => (action.payload as { retry?: boolean }).retry === true,
       );
@@ -635,7 +635,7 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
     expect(await paymentRow(id)).toMatchObject({ status: 'refunded', providerRef });
     const ledger = await ledgerOf(member.id);
     expect(ledger.map((entry) => entry.type)).toEqual(['BONUS', 'DEPOSIT', 'PAYMENT_CANCEL']);
-    expectLedgerChain(ledger, SIGNUP_BONUS_P);
+    expectLedgerChain(ledger, SIGNUP_BONUS_COIN);
   });
 
   it('answers an unanswered attempt a retry took over and finished as refunded', async () => {
@@ -676,7 +676,7 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
     expect((await eventsOf(id)).at(-1)).toMatchObject({ type: 'refund_cancel', resultCode: null });
     const ledger = await ledgerOf(member.id);
     expect(ledger.map((entry) => entry.type)).toEqual(['BONUS', 'DEPOSIT', 'PAYMENT_CANCEL']);
-    expectLedgerChain(ledger, SIGNUP_BONUS_P);
+    expectLedgerChain(ledger, SIGNUP_BONUS_COIN);
   });
 
   it('claims no refunding left when the payment moved elsewhere while its cancel was in flight', async () => {
@@ -751,7 +751,7 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
     const ledger = await ledgerOf(member.id);
     expect(ledger.filter((entry) => entry.type === 'PAYMENT_CANCEL')).toHaveLength(paths.length);
     expect(ledger.filter((entry) => entry.type === 'PAYMENT_CANCEL_REVERSAL')).toHaveLength(0);
-    expectLedgerChain(ledger, SIGNUP_BONUS_P);
+    expectLedgerChain(ledger, SIGNUP_BONUS_COIN);
   });
 
   // --- the policy's edges (T3) ---------------------------------------------------------
@@ -783,21 +783,22 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
     expect(await paymentRow(recent.id)).toMatchObject({ status: 'refunded' });
   });
 
-  it("refunds when exactly the payment's P is still available", async () => {
+  it("refunds when exactly the payment's Coin is still available", async () => {
     const { id } = await charge();
-    // Spend the whole sign-up bonus: 10,000P left against a 10,000P payment — none of it used.
+    // Spend the whole sign-up bonus: 10,000 Coin left against a 10,000 Coin payment — none of it
+    // used.
     const spent = await t.app.inject({
       method: 'POST',
       url: `/api/v1/admin/users/${member.id}/balance-adjust`,
       headers: { ...jsonHeaders, cookie: admin.cookie },
-      payload: { amountP: (-SIGNUP_BONUS_P).toString(), memo: 'spent the bonus' },
+      payload: { amountCoin: (-SIGNUP_BONUS_COIN).toString(), memo: 'spent the bonus' },
     });
     expect(spent.statusCode).toBe(200);
-    expect((await balanceOf(member.id)).availableP).toBe(10_000n);
+    expect((await balanceOf(member.id)).availableCoin).toBe(10_000n);
 
     const res = await refund(id);
     expect(res.statusCode).toBe(200);
-    expect((await balanceOf(member.id)).availableP).toBe(0n);
+    expect((await balanceOf(member.id)).availableCoin).toBe(0n);
     expectLedgerChain(await ledgerOf(member.id), 0n);
   });
 });

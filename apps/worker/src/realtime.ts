@@ -97,7 +97,7 @@ export function createPublisherRedis(
 export function createPublisher(redis: Redis, logger: Logger): Publish {
   return async (channel, event) => {
     try {
-      // P amounts are already decimal strings in every event schema (never bigint), so a
+      // Coin amounts are already decimal strings in every event schema (never bigint), so a
       // plain JSON.stringify is safe.
       await redis.publish(channel, JSON.stringify(event));
     } catch (err) {

@@ -3,7 +3,7 @@ import { schema, type Db } from '@buddha/db';
 import {
   decodeKeyset,
   encodeKeyset,
-  serializePAmount,
+  serializeCoinAmount,
   type Order,
   type Position,
   type PositionStatus,
@@ -26,7 +26,7 @@ type MarketRef = Pick<
 
 export function toOrder(
   row: OrderRow,
-  fill: Pick<FillRow, 'amountP' | 'priceAvgBp'> | null,
+  fill: Pick<FillRow, 'amountCoin' | 'priceAvgBp'> | null,
   market: Pick<MarketRow, 'slug' | 'title'>,
 ): Order {
   return {
@@ -40,7 +40,7 @@ export function toOrder(
     qty: row.qty,
     filledQty: row.filledQty,
     status: row.status,
-    amountP: fill ? serializePAmount(fill.amountP) : null,
+    amountCoin: fill ? serializeCoinAmount(fill.amountCoin) : null,
     priceAvgBp: fill ? fill.priceAvgBp : null,
     createdAt: row.createdAt.toISOString(),
   };
@@ -56,8 +56,8 @@ export function toPosition(row: PositionRow, market: MarketRef): Position {
     resolvedResult: market.resolvedResult,
     outcome: row.outcome,
     qty: row.qty,
-    costBasisP: serializePAmount(row.costBasisP),
-    realizedPnlP: serializePAmount(row.realizedPnlP),
+    costBasisCoin: serializeCoinAmount(row.costBasisCoin),
+    realizedPnlCoin: serializeCoinAmount(row.realizedPnlCoin),
     settled: row.settled,
     version: row.version,
     updatedAt: row.updatedAt.toISOString(),
@@ -119,7 +119,7 @@ export class TradeService {
         order: schema.orders,
         // Read as one fill per order, the shape the direct AMM wrote; the CLOB, whose orders
         // fill in parts, reshapes this read (#119). Null while nothing filled.
-        fill: { amountP: schema.fills.amountP, priceAvgBp: schema.fills.priceAvgBp },
+        fill: { amountCoin: schema.fills.amountCoin, priceAvgBp: schema.fills.priceAvgBp },
         market: { slug: schema.markets.slug, title: schema.markets.title },
       })
       .from(schema.orders)

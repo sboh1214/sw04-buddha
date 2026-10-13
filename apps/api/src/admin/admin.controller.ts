@@ -124,7 +124,7 @@ export class AdminController {
     await this.packages.remove(admin.id, id);
   }
 
-  // --- coupons (ADR-0026): P grants an admin hands out ---------------------------------
+  // --- coupons (ADR-0026): Coin grants an admin hands out ------------------------------
   @Get('coupons')
   @ApiOperation({ operationId: 'adminListCoupons', summary: 'Coupons, newest first' })
   @ApiQuery(CURSOR_QUERY_PARAMS[0])
@@ -185,7 +185,7 @@ export class AdminController {
   @HttpCode(200)
   @ApiOperation({
     operationId: 'adminAdjustBalance',
-    summary: 'Credit or debit P with a mandatory reason (ADMIN_ADJUST)',
+    summary: 'Credit or debit Coin with a mandatory reason (ADMIN_ADJUST)',
   })
   @ApiData(adminBalanceAdjustResultSchema)
   @ApiErrors(
@@ -200,7 +200,7 @@ export class AdminController {
     @Param('id') userId: string,
     @Body({ schema: balanceAdjustBodySchema }) body: BalanceAdjustBody,
   ): Promise<AdminBalanceAdjustResult> {
-    return this.admin.adjustBalance(admin.id, userId, body.amountP, body.memo);
+    return this.admin.adjustBalance(admin.id, userId, body.amountCoin, body.memo);
   }
 
   @Get('payments')
@@ -225,11 +225,11 @@ export class AdminController {
   @ApiOperation({
     operationId: 'adminRefundPayment',
     summary:
-      'Refund an unused charge within 7 days of its approval: claw back all its P, then cancel the whole KRW at the provider (retry a refunding one). Closed while paid Coin is off: 404 (ADR-0049)',
+      'Refund an unused charge within 7 days of its approval: claw back all its Coin, then cancel the whole KRW at the provider (retry a refunding one). Closed while paid Coin is off: 404 (ADR-0049)',
   })
   @ApiData(adminPaymentSchema)
-  // INSUFFICIENT_BALANCE: part of the P was used. REFUND_NOT_ALLOWED: details[0].message is
-  // `window_closed`, `status` or `provider`. PAYMENT_GATEWAY_REFUSED: the PG said no and the P
+  // INSUFFICIENT_BALANCE: part of the Coin was used. REFUND_NOT_ALLOWED: details[0].message is
+  // `window_closed`, `status` or `provider`. PAYMENT_GATEWAY_REFUSED: the PG said no and the Coin
   // was restored — or, on a retry or a first attempt a retry took over, nothing was restored and
   // the payment stays `refunding` (the card may be cancelled already). PAYMENT_GATEWAY_ERROR: no
   // answer; the payment stays `refunding` for a retry. One another attempt finished meanwhile

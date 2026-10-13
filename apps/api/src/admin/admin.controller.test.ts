@@ -3,7 +3,7 @@
  * profile. Skips when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
-import { SIGNUP_BONUS_P, type AdminBalanceAdjustResult, type AdminUser } from '@buddha/shared';
+import { SIGNUP_BONUS_COIN, type AdminBalanceAdjustResult, type AdminUser } from '@buddha/shared';
 import { asc, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
@@ -55,9 +55,9 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
       payload,
     });
 
-  /** Buys a package worth `amountP` (ADR-0026: users can only buy what an admin listed). */
-  const chargeMember = async (amountP: bigint) => {
-    const pack = await createTestPackage(t.db, { amountP, priceKrw: Number(amountP) });
+  /** Buys a package worth `amountCoin` (ADR-0026: users can only buy what an admin listed). */
+  const chargeMember = async (amountCoin: bigint) => {
+    const pack = await createTestPackage(t.db, { amountCoin, priceKrw: Number(amountCoin) });
     return t.app.inject({
       method: 'POST',
       url: '/api/v1/payments/charge',
@@ -74,23 +74,23 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
     return row;
   }
 
-  it('debits 3,000P from a charged balance and records ADMIN_ADJUST with the reason (AC 3)', async () => {
+  it('debits 3,000 Coin from a charged balance and records ADMIN_ADJUST with the reason (AC 3)', async () => {
     await chargeMember(10_000n);
-    const afterAdjust = SIGNUP_BONUS_P + 10_000n - 3_000n;
+    const afterAdjust = SIGNUP_BONUS_COIN + 10_000n - 3_000n;
 
-    const res = await adjust({ amountP: '-3000', memo: '중복 충전 회수' });
+    const res = await adjust({ amountCoin: '-3000', memo: '중복 충전 회수' });
     expect(res.statusCode).toBe(200);
     const { data } = res.json<{ data: AdminBalanceAdjustResult }>();
-    expect(data.user.balance).toEqual({ availableP: afterAdjust.toString(), lockedP: '0' });
+    expect(data.user.balance).toEqual({ availableCoin: afterAdjust.toString(), lockedCoin: '0' });
     expect(data.ledgerEntry).toMatchObject({
       type: 'ADMIN_ADJUST',
-      amountP: '-3000',
-      balanceAfterP: afterAdjust.toString(),
+      amountCoin: '-3000',
+      balanceAfterCoin: afterAdjust.toString(),
       refType: 'admin_action',
       memo: '중복 충전 회수',
     });
 
-    expect(await balanceOf(member.id)).toMatchObject({ availableP: afterAdjust });
+    expect(await balanceOf(member.id)).toMatchObject({ availableCoin: afterAdjust });
     const [action] = await t.db
       .select()
       .from(schema.adminActions)
@@ -101,13 +101,13 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
 
   it('refuses an adjustment that would make the balance negative, changing nothing (AC 4)', async () => {
     await chargeMember(10_000n);
-    const balance = SIGNUP_BONUS_P + 10_000n;
+    const balance = SIGNUP_BONUS_COIN + 10_000n;
 
-    const res = await adjust({ amountP: (-balance - 1n).toString(), memo: '과다 회수' });
+    const res = await adjust({ amountCoin: (-balance - 1n).toString(), memo: '과다 회수' });
     expect(res.statusCode).toBe(409); // HTTP_STATUS_BY_CODE: INSUFFICIENT_BALANCE -> CONFLICT
     expect(res.json()).toMatchObject({ error: { code: 'INSUFFICIENT_BALANCE' } });
 
-    expect(await balanceOf(member.id)).toMatchObject({ availableP: balance });
+    expect(await balanceOf(member.id)).toMatchObject({ availableCoin: balance });
     const entries = await t.db
       .select()
       .from(schema.ledgerEntries)
@@ -127,7 +127,7 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
   it('stamps the adjustment after the balance lock, not at transaction start (A-M3-14)', async () => {
     // The adjustment transaction begins and then waits on the balance row this connection
     // holds. Whatever committed against the account meanwhile is already in its
-    // balance_after_p, so its ledger and audit rows must sort after it.
+    // balance_after_coin, so its ledger and audit rows must sort after it.
     const holder = await t.db.$client.connect();
     let pending: ReturnType<typeof adjust> | undefined;
     let released = false;
@@ -135,7 +135,7 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
     try {
       await holder.query('BEGIN');
       await holder.query(`SELECT user_id FROM balances WHERE user_id = '${member.id}' FOR UPDATE`);
-      pending = adjust({ amountP: '2500', memo: '보상 지급' });
+      pending = adjust({ amountCoin: '2500', memo: '보상 지급' });
       await waitForLockWaiter(holder, 'the adjustment on the balance row');
       const { rows } = await holder.query<{ ms: string }>(
         'SELECT (extract(epoch FROM clock_timestamp()) * 1000)::bigint::text AS ms',
@@ -164,29 +164,29 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
       .from(schema.adminActions)
       .where(eq(schema.adminActions.targetId, member.id));
     expect(action!.createdAt.getTime()).toBe(adjusted.createdAt.getTime());
-    expectLedgerChain(ledger, SIGNUP_BONUS_P + 2_500n);
+    expectLedgerChain(ledger, SIGNUP_BONUS_COIN + 2_500n);
   });
 
-  it('credits P as well, and requires a memo and a non-zero amount', async () => {
-    const credited = await adjust({ amountP: '2500', memo: '보상 지급' });
+  it('credits Coin as well, and requires a memo and a non-zero amount', async () => {
+    const credited = await adjust({ amountCoin: '2500', memo: '보상 지급' });
     expect(credited.statusCode).toBe(200);
-    expect(await balanceOf(member.id)).toMatchObject({ availableP: SIGNUP_BONUS_P + 2_500n });
+    expect(await balanceOf(member.id)).toMatchObject({ availableCoin: SIGNUP_BONUS_COIN + 2_500n });
 
     for (const payload of [
-      { amountP: '1000' },
-      { amountP: '1000', memo: '   ' },
-      { amountP: '0', memo: '영원' },
+      { amountCoin: '1000' },
+      { amountCoin: '1000', memo: '   ' },
+      { amountCoin: '0', memo: '영원' },
     ]) {
       const res = await adjust(payload);
       expect(res.statusCode, JSON.stringify(payload)).toBe(400);
       expect(res.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR' } });
     }
-    expect(await balanceOf(member.id)).toMatchObject({ availableP: SIGNUP_BONUS_P + 2_500n });
+    expect(await balanceOf(member.id)).toMatchObject({ availableCoin: SIGNUP_BONUS_COIN + 2_500n });
   });
 
   it('404s for an unknown user without writing an audit row', async () => {
     const res = await adjust(
-      { amountP: '1000', memo: '없는 사용자' },
+      { amountCoin: '1000', memo: '없는 사용자' },
       admin.cookie,
       'no-such-user',
     );
@@ -195,7 +195,7 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
   });
 
   it('is closed to members and to anonymous callers', async () => {
-    const asMember = await adjust({ amountP: '1000', memo: '권한 없음' }, member.cookie);
+    const asMember = await adjust({ amountCoin: '1000', memo: '권한 없음' }, member.cookie);
     expect(asMember.statusCode).toBe(403);
     expect(asMember.json()).toMatchObject({ error: { code: 'FORBIDDEN' } });
 
@@ -246,7 +246,7 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
     });
     expect(payments.statusCode).toBe(200);
     expect(payments.json()).toMatchObject({
-      data: [{ userId: member.id, amountP: '7000', status: 'succeeded' }],
+      data: [{ userId: member.id, amountCoin: '7000', status: 'succeeded' }],
     });
 
     await t.db
@@ -365,7 +365,9 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
             body.type === 'form' ? 'application/x-www-form-urlencoded' : 'application/json',
         },
         payload:
-          body.type === 'form' ? 'amountP=-3000&memo=csrf' : { amountP: '-3000', memo: 'csrf' },
+          body.type === 'form'
+            ? 'amountCoin=-3000&memo=csrf'
+            : { amountCoin: '-3000', memo: 'csrf' },
       });
 
     for (const origin of ['https://evil.example', 'null']) {
@@ -375,7 +377,7 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
         expect(res.json()).toMatchObject({ error: { code: 'FORBIDDEN' } });
       }
     }
-    expect(await balanceOf(member.id)).toMatchObject({ availableP: SIGNUP_BONUS_P });
+    expect(await balanceOf(member.id)).toMatchObject({ availableCoin: SIGNUP_BONUS_COIN });
     expect(await t.db.select().from(schema.adminActions)).toHaveLength(0);
 
     // A form from our own origin is refused for its shape, not its origin.
@@ -386,7 +388,7 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
     // no browser sent it, so it cannot be a forgery.
     expect((await post('http://localhost:3000', { type: 'json' })).statusCode).toBe(200);
     expect((await post(undefined, { type: 'json' })).statusCode).toBe(200);
-    expect(await balanceOf(member.id)).toMatchObject({ availableP: SIGNUP_BONUS_P - 6_000n });
+    expect(await balanceOf(member.id)).toMatchObject({ availableCoin: SIGNUP_BONUS_COIN - 6_000n });
 
     // Reads are never checked: without CORS headers nothing cross-origin can read them anyway.
     const read = await t.app.inject({

@@ -5,7 +5,7 @@ import {
   decodeKeyset,
   encodeKeyset,
   marketSlugSchema,
-  serializePAmount,
+  serializeCoinAmount,
   SETTLEMENT_STEPS,
   slugify,
   type AdminMarket,
@@ -94,7 +94,7 @@ function assertFutureCloseAt(closeAt: Date, now: Date): void {
 }
 
 /**
- * What an `admin_actions` payload records about a market (jsonb: P as strings, dates as ISO,
+ * What an `admin_actions` payload records about a market (jsonb: Coin as strings, dates as ISO,
  * never bigint).
  */
 function snapshot(row: MarketRow): Record<string, unknown> {
@@ -108,7 +108,7 @@ function snapshot(row: MarketRow): Record<string, unknown> {
     imageUrl: row.imageUrl,
     status: row.status,
     lastPrice: row.lastPrice,
-    volumeP: serializePAmount(row.volumeP),
+    volumeCoin: serializeCoinAmount(row.volumeCoin),
     tradeCount: row.tradeCount,
     traderCount: row.traderCount,
     openAt: row.openAt?.toISOString() ?? null,
@@ -658,7 +658,7 @@ export class MarketAdminService {
     // Σ buy amounts − Σ sell amounts over the market's fills.
     const [collected] = await executor
       .select({
-        net: sql<string>`coalesce(sum(case when ${schema.fills.side} = 'buy' then ${schema.fills.amountP} else -${schema.fills.amountP} end), 0)`,
+        net: sql<string>`coalesce(sum(case when ${schema.fills.side} = 'buy' then ${schema.fills.amountCoin} else -${schema.fills.amountCoin} end), 0)`,
       })
       .from(schema.fills)
       .where(eq(schema.fills.marketId, row.id));
@@ -700,7 +700,7 @@ export class MarketAdminService {
       createdBy: row.createdBy,
       updatedAt: row.updatedAt.toISOString(),
       // sum() over bigint is numeric, which pg hands over as a string of digits.
-      netCollectedP: serializePAmount(BigInt(collected?.net ?? '0')),
+      netCollectedCoin: serializeCoinAmount(BigInt(collected?.net ?? '0')),
       openInterest,
       settlementSteps: toSettlementSteps(stepRows),
       events: events.map(toMarketEvent),

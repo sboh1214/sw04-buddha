@@ -204,7 +204,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Refund an unused charge within 7 days of its approval: claw back all its P, then cancel the whole KRW at the provider (retry a refunding one). Closed while paid Coin is off: 404 (ADR-0049) */
+        /** Refund an unused charge within 7 days of its approval: claw back all its Coin, then cancel the whole KRW at the provider (retry a refunding one). Closed while paid Coin is off: 404 (ADR-0049) */
         post: operations["adminRefundPayment"];
         delete?: never;
         options?: never;
@@ -238,7 +238,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Credit or debit P with a mandatory reason (ADMIN_ADJUST) */
+        /** Credit or debit Coin with a mandatory reason (ADMIN_ADJUST) */
         post: operations["adminAdjustBalance"];
         delete?: never;
         options?: never;
@@ -306,7 +306,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Redeem a coupon code for P. Closed while paid Coin is off: 404 (ADR-0049) */
+        /** Redeem a coupon code for Coin. Closed while paid Coin is off: 404 (ADR-0049) */
         post: operations["redeemCoupon"];
         delete?: never;
         options?: never;
@@ -545,7 +545,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Buy one charge package (mock provider: succeeds immediately). P is never convertible back to cash. Closed while paid Coin is off: 404 (ADR-0049) */
+        /** Buy one charge package (mock provider: succeeds immediately). Coin is never convertible back to cash. Closed while paid Coin is off: 404 (ADR-0049) */
         post: operations["charge"];
         delete?: never;
         options?: never;
@@ -594,7 +594,7 @@ export type components = {
             id: string;
             imageUrl: string | null;
             lastPrice: number | null;
-            netCollectedP: components["schemas"]["PAmount"];
+            netCollectedCoin: components["schemas"]["CoinAmount"];
             /** Format: date-time */
             openAt: string | null;
             openInterest: {
@@ -621,10 +621,10 @@ export type components = {
             updatedAt: string;
             /** Format: date-time */
             voidedAt: string | null;
-            volumeP: components["schemas"]["PAmount"];
+            volumeCoin: components["schemas"]["CoinAmount"];
         };
         AdminPayment: {
-            amountP: components["schemas"]["PAmount"];
+            amountCoin: components["schemas"]["CoinAmount"];
             /** Format: date-time */
             approvedAt: string | null;
             cancelConfirmed: boolean | null;
@@ -681,11 +681,11 @@ export type components = {
             payload: unknown;
         };
         Balance: {
-            availableP: components["schemas"]["PAmount"];
-            lockedP: components["schemas"]["PAmount"];
+            availableCoin: components["schemas"]["CoinAmount"];
+            lockedCoin: components["schemas"]["CoinAmount"];
         };
         BalanceAdjustBody: {
-            amountP: components["schemas"]["PAmount"];
+            amountCoin: components["schemas"]["CoinAmount"];
             memo: string;
         };
         Category: {
@@ -697,13 +697,13 @@ export type components = {
         };
         ChargeBody: {
             expectedAccountId: string;
-            expectedAmountP: components["schemas"]["PAmount"];
+            expectedAmountCoin: components["schemas"]["CoinAmount"];
             expectedPriceKrw: number;
             /** Format: uuid */
             packageId: string;
         };
         ChargePackage: {
-            amountP: components["schemas"]["PAmount"];
+            amountCoin: components["schemas"]["CoinAmount"];
             /** Format: uuid */
             id: string;
             isActive: boolean;
@@ -715,6 +715,8 @@ export type components = {
             ledgerEntry: components["schemas"]["LedgerEntry"];
             payment: components["schemas"]["Payment"];
         };
+        /** @description Integer amount of Coin as a decimal string (bigint). */
+        CoinAmount: string;
         Contact: {
             phone: string;
             realName: string;
@@ -725,7 +727,7 @@ export type components = {
             realName: string;
         };
         Coupon: {
-            amountP: components["schemas"]["PAmount"];
+            amountCoin: components["schemas"]["CoinAmount"];
             code: string;
             /** Format: date-time */
             createdAt: string;
@@ -740,7 +742,7 @@ export type components = {
         };
         CouponCode: string;
         CreateChargePackageBody: {
-            amountP: components["schemas"]["PAmount"];
+            amountCoin: components["schemas"]["CoinAmount"];
             /** @default true */
             isActive: boolean;
             priceKrw: number;
@@ -748,7 +750,7 @@ export type components = {
             sortOrder: number;
         };
         CreateCouponBody: {
-            amountP: components["schemas"]["PAmount"];
+            amountCoin: components["schemas"]["CoinAmount"];
             code?: components["schemas"]["CouponCode"];
             /** Format: date-time */
             expiresAt?: string | null;
@@ -782,7 +784,7 @@ export type components = {
             };
         };
         Fill: {
-            amountP: components["schemas"]["PAmount"];
+            amountCoin: components["schemas"]["CoinAmount"];
             /** Format: date-time */
             createdAt: string;
             id: string;
@@ -796,11 +798,11 @@ export type components = {
         LeaderboardEntry: {
             nickname: components["schemas"]["Nickname"];
             rank: number;
-            realizedPnlP: components["schemas"]["PAmount"];
+            realizedPnlCoin: components["schemas"]["CoinAmount"];
         };
         LedgerEntry: {
-            amountP: components["schemas"]["PAmount"];
-            balanceAfterP: components["schemas"]["PAmount"];
+            amountCoin: components["schemas"]["CoinAmount"];
+            balanceAfterCoin: components["schemas"]["CoinAmount"];
             /** Format: date-time */
             createdAt: string;
             id: string;
@@ -851,7 +853,7 @@ export type components = {
             traderCount: number;
             /** Format: date-time */
             voidedAt: string | null;
-            volumeP: components["schemas"]["PAmount"];
+            volumeCoin: components["schemas"]["CoinAmount"];
         };
         MarketEvent: {
             actorId: string | null;
@@ -887,7 +889,7 @@ export type components = {
             title: string;
             tradeCount: number;
             traderCount: number;
-            volumeP: components["schemas"]["PAmount"];
+            volumeCoin: components["schemas"]["CoinAmount"];
         };
         MarketSummary: {
             category: {
@@ -913,12 +915,12 @@ export type components = {
             title: string;
             tradeCount: number;
             traderCount: number;
-            volumeP: components["schemas"]["PAmount"];
+            volumeCoin: components["schemas"]["CoinAmount"];
         };
         Me: {
             balance: {
-                availableP: components["schemas"]["PAmount"];
-                lockedP: components["schemas"]["PAmount"];
+                availableCoin: components["schemas"]["CoinAmount"];
+                lockedCoin: components["schemas"]["CoinAmount"];
             };
             contact: components["schemas"]["Contact"] | null;
             /** Format: email */
@@ -939,7 +941,7 @@ export type components = {
             ok: true;
         };
         Order: {
-            amountP: components["schemas"]["PAmount"] | null;
+            amountCoin: components["schemas"]["CoinAmount"] | null;
             /** Format: date-time */
             createdAt: string;
             filledQty: number;
@@ -963,11 +965,9 @@ export type components = {
         PageMeta: {
             nextCursor: string | null;
         };
-        /** @description Integer amount of P as a decimal string (bigint). */
-        PAmount: string;
         Password: string;
         Payment: {
-            amountP: components["schemas"]["PAmount"];
+            amountCoin: components["schemas"]["CoinAmount"];
             /** Format: date-time */
             approvedAt: string | null;
             cancelConfirmed: boolean | null;
@@ -992,7 +992,7 @@ export type components = {
             provider: "mock";
         };
         Position: {
-            costBasisP: components["schemas"]["PAmount"];
+            costBasisCoin: components["schemas"]["CoinAmount"];
             /** Format: uuid */
             marketId: string;
             marketLastPrice: number | null;
@@ -1003,7 +1003,7 @@ export type components = {
             /** @enum {string} */
             outcome: "YES" | "NO";
             qty: number;
-            realizedPnlP: components["schemas"]["PAmount"];
+            realizedPnlCoin: components["schemas"]["CoinAmount"];
             /** @enum {string|null} */
             resolvedResult: "YES" | "NO" | null;
             settled: boolean;
@@ -1035,7 +1035,7 @@ export type components = {
             expectedAccountId: string;
         };
         RedeemCouponResult: {
-            amountP: components["schemas"]["PAmount"];
+            amountCoin: components["schemas"]["CoinAmount"];
             balance: components["schemas"]["Balance"];
             code: string;
             ledgerEntry: components["schemas"]["LedgerEntry"];
@@ -1067,7 +1067,7 @@ export type components = {
         /** @enum {string} */
         SettlementStepStatus: "pending" | "done" | "failed";
         UpdateChargePackageBody: {
-            amountP?: components["schemas"]["PAmount"];
+            amountCoin?: components["schemas"]["CoinAmount"];
             isActive?: boolean;
             priceKrw?: number;
             sortOrder?: number;

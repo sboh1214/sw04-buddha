@@ -55,7 +55,7 @@ function tickEvent(marketId: string, tradeCount = 1): MarketTickEvent {
     marketId,
     lastPrice: 52,
     traderCount: 3,
-    volumeP: '5125',
+    volumeCoin: '5125',
     tradeCount,
     ts: new Date().toISOString(),
   };
@@ -64,8 +64,8 @@ function tickEvent(marketId: string, tradeCount = 1): MarketTickEvent {
 function balanceEvent(ledgerEntryId = '2'): UserBalanceEvent {
   return {
     type: 'user:balance',
-    availableP: '4875',
-    lockedP: '0',
+    availableCoin: '4875',
+    lockedCoin: '0',
     ledgerEntryId,
     ts: new Date().toISOString(),
   };

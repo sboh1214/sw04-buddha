@@ -43,14 +43,14 @@ describe.skipIf(!hasTestInfra)('positions and orders (integration)', () => {
     marketId: string;
     outcome: Outcome;
     qty: number;
-    costBasisP?: bigint;
-    realizedPnlP?: bigint;
+    costBasisCoin?: bigint;
+    realizedPnlCoin?: bigint;
     settled?: boolean;
     updatedAt: Date;
   }) {
     await t.db.insert(schema.positions).values({
-      costBasisP: 0n,
-      realizedPnlP: 0n,
+      costBasisCoin: 0n,
+      realizedPnlCoin: 0n,
       settled: false,
       ...input,
     });
@@ -89,7 +89,7 @@ describe.skipIf(!hasTestInfra)('positions and orders (integration)', () => {
     side: OrderSide;
     qty: number;
     createdAt: Date;
-    fill?: { amountP: bigint; priceAvgBp: number; counterpartyOrderId: string };
+    fill?: { amountCoin: bigint; priceAvgBp: number; counterpartyOrderId: string };
   }) {
     const { fill } = input;
     const [order] = await t.db
@@ -119,7 +119,7 @@ describe.skipIf(!hasTestInfra)('positions and orders (integration)', () => {
         outcome: 'YES',
         side: input.side,
         qty: input.qty,
-        amountP: fill.amountP,
+        amountCoin: fill.amountCoin,
         priceAvgBp: fill.priceAvgBp,
         createdAt: input.createdAt,
       });
@@ -140,7 +140,7 @@ describe.skipIf(!hasTestInfra)('positions and orders (integration)', () => {
       marketId: market.id,
       outcome: 'YES',
       qty: 0,
-      realizedPnlP: -40n,
+      realizedPnlCoin: -40n,
       updatedAt: at(1),
     });
     await insertPosition({
@@ -148,7 +148,7 @@ describe.skipIf(!hasTestInfra)('positions and orders (integration)', () => {
       marketId: traded.id,
       outcome: 'NO',
       qty: 5,
-      costBasisP: 190n,
+      costBasisCoin: 190n,
       updatedAt: at(2),
     });
     await insertPosition({
@@ -156,7 +156,7 @@ describe.skipIf(!hasTestInfra)('positions and orders (integration)', () => {
       marketId: settledMarket.id,
       outcome: 'YES',
       qty: 0,
-      realizedPnlP: 700n,
+      realizedPnlCoin: 700n,
       settled: true,
       updatedAt: at(3),
     });
@@ -185,7 +185,7 @@ describe.skipIf(!hasTestInfra)('positions and orders (integration)', () => {
       [traded.id, 'NO', 5],
       [market.id, 'YES', 0],
     ]);
-    expect(open[0]).toMatchObject({ marketLastPrice: 62, costBasisP: '190', settled: false });
+    expect(open[0]).toMatchObject({ marketLastPrice: 62, costBasisCoin: '190', settled: false });
     // Never traded: no price to mark the row to, not a made-up one.
     expect(open[1]).toMatchObject({
       marketSlug: market.slug,
@@ -193,8 +193,8 @@ describe.skipIf(!hasTestInfra)('positions and orders (integration)', () => {
       marketStatus: 'open',
       marketLastPrice: null,
       resolvedResult: null,
-      costBasisP: '0',
-      realizedPnlP: '-40',
+      costBasisCoin: '0',
+      realizedPnlCoin: '-40',
       settled: false,
     });
 
@@ -206,7 +206,7 @@ describe.skipIf(!hasTestInfra)('positions and orders (integration)', () => {
       marketLastPrice: 80,
       resolvedResult: 'YES',
       qty: 0,
-      realizedPnlP: '700',
+      realizedPnlCoin: '700',
       settled: true,
     });
 
@@ -240,7 +240,7 @@ describe.skipIf(!hasTestInfra)('positions and orders (integration)', () => {
       side: 'buy',
       qty: 10,
       createdAt: at(2),
-      fill: { amountP: 500n, priceAvgBp: 5_000, counterpartyOrderId: maker.id },
+      fill: { amountCoin: 500n, priceAvgBp: 5_000, counterpartyOrderId: maker.id },
     });
     await insertOrder({
       userId: user.id,
@@ -248,7 +248,7 @@ describe.skipIf(!hasTestInfra)('positions and orders (integration)', () => {
       side: 'buy',
       qty: 20,
       createdAt: at(3),
-      fill: { amountP: 1_200n, priceAvgBp: 6_000, counterpartyOrderId: makerElsewhere.id },
+      fill: { amountCoin: 1_200n, priceAvgBp: 6_000, counterpartyOrderId: makerElsewhere.id },
     });
     await insertOrder({
       userId: user.id,
@@ -256,7 +256,7 @@ describe.skipIf(!hasTestInfra)('positions and orders (integration)', () => {
       side: 'sell',
       qty: 4,
       createdAt: at(4),
-      fill: { amountP: 180n, priceAvgBp: 4_500, counterpartyOrderId: maker.id },
+      fill: { amountCoin: 180n, priceAvgBp: 4_500, counterpartyOrderId: maker.id },
     });
     // Somebody else's order never shows.
     const other = await signUpTestUser(t);
@@ -266,7 +266,7 @@ describe.skipIf(!hasTestInfra)('positions and orders (integration)', () => {
       side: 'buy',
       qty: 7,
       createdAt: at(5),
-      fill: { amountP: 350n, priceAvgBp: 5_000, counterpartyOrderId: maker.id },
+      fill: { amountCoin: 350n, priceAvgBp: 5_000, counterpartyOrderId: maker.id },
     });
 
     const fetchPage = async (query: string) => {
@@ -296,14 +296,14 @@ describe.skipIf(!hasTestInfra)('positions and orders (integration)', () => {
       qty: 4,
       filledQty: 4,
       status: 'filled',
-      amountP: '180',
+      amountCoin: '180',
       priceAvgBp: 4_500,
       createdAt: at(4).toISOString(),
     });
-    // Nothing else: the direct AMM's slippage bounds (`maxCostP`, `minProceedsP`) are gone.
+    // Nothing else: the direct AMM's slippage bounds (max cost, min proceeds) are gone.
     expect(Object.keys(sellOrder!).sort()).toEqual(
       [
-        'amountP',
+        'amountCoin',
         'createdAt',
         'filledQty',
         'id',
@@ -318,7 +318,11 @@ describe.skipIf(!hasTestInfra)('positions and orders (integration)', () => {
         'type',
       ].sort(),
     );
-    expect(buyOrder).toMatchObject({ marketSlug: second.slug, amountP: '1200', priceAvgBp: 6_000 });
+    expect(buyOrder).toMatchObject({
+      marketSlug: second.slug,
+      amountCoin: '1200',
+      priceAvgBp: 6_000,
+    });
 
     const rest = await fetchPage(`?limit=2&cursor=${encodeURIComponent(first.meta.nextCursor!)}`);
     expect(rest.data.map((order) => order.id)).toEqual([firstBuy.id, resting.id]);
@@ -327,7 +331,7 @@ describe.skipIf(!hasTestInfra)('positions and orders (integration)', () => {
       type: 'limit',
       filledQty: 0,
       status: 'open',
-      amountP: null,
+      amountCoin: null,
       priceAvgBp: null,
     });
     expect(rest.meta.nextCursor).toBeNull();
