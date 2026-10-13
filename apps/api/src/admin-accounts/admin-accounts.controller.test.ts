@@ -2,7 +2,8 @@
  * Admin accounts (#171) against the docker `test` profile: granting with the email and contact
  * conditions, revoking with the two-admin floor (the revoker's own included), the sessions a
  * revoke deletes and the admin access it ends from the next request, the records written with
- * each change (or not at all), the list and the history. Skips when TEST_* are unset.
+ * each change (or not at all) in the order they were made, the list and the history. Skips when
+ * TEST_* are unset.
  */
 import { randomUUID } from 'node:crypto';
 import { schema } from '@buddha/db';
@@ -376,6 +377,38 @@ describe.skipIf(!hasTestInfra)('admin accounts (integration)', () => {
     expect(await roleOf(c.id)).toBe('admin');
     expect(await roleOf(d.id)).toBe('user');
     expect(await sessionsOf(c.id)).toHaveLength(1);
+  });
+
+  it('makes each role change later than the last, even when the clock has not passed it', async () => {
+    // B's grant recorded a minute ahead of the database clock: the changes after it are recorded
+    // 1 ms after the last one rather than at the clock's earlier instant, so the history keeps
+    // them in the order they were made (two changes inside one millisecond tie the same way).
+    const ahead = new Date(Date.now() + 60_000);
+    await t.db.insert(schema.adminActions).values({
+      adminId: a.id,
+      type: 'admin_grant',
+      targetType: 'user',
+      targetId: b.id,
+      payload: { reason: '앞선 시각' },
+      createdAt: ahead,
+    });
+    const c = await candidate();
+    expect((await grant({ userId: c.id, reason: '셋째 관리자' })).statusCode).toBe(201);
+    expect((await revoke(c.id, { reason: '담당 종료' }, b.cookie)).statusCode).toBe(200);
+
+    expect(
+      (await records()).map((row) => [row.type, row.targetId, row.createdAt.getTime()]),
+    ).toEqual([
+      ['admin_grant', b.id, ahead.getTime()],
+      ['admin_grant', c.id, ahead.getTime() + 1],
+      ['admin_revoke', c.id, ahead.getTime() + 2],
+    ]);
+    const history = (await get(`${BASE}/changes`)).json<ChangePage>().data;
+    expect(history.map((change) => [change.type, change.target.id])).toEqual([
+      ['admin_revoke', c.id],
+      ['admin_grant', c.id],
+      ['admin_grant', b.id],
+    ]);
   });
 
   it('pages the history newest first, with the account, the admin and the reason, and by account', async () => {

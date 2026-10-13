@@ -228,7 +228,13 @@ export class AdminAccountsService {
     if (actor?.role !== 'admin') throw new AppError('FORBIDDEN', { message: 'Admin only' });
   }
 
-  /** The record and the role, at one instant read after the lock. Returns the record's id. */
+  /**
+   * The record and the role, at one instant read after the lock and strictly after the last
+   * role change: the clock has millisecond precision, so a change right behind another (the
+   * exclusive lock puts them in a row) can read that change's instant again, or an earlier one
+   * should the clock step back. The history and each account's grant → revoke chain then sort in
+   * the order they were made, as the seed's two grants do. Returns the record's id.
+   */
   private async writeRole(
     tx: Tx,
     actorId: string,
@@ -236,7 +242,14 @@ export class AdminAccountsService {
     type: AdminRoleChangeType,
     reason: string,
   ): Promise<string> {
-    const at = await clockTimestamp(tx);
+    const clock = await clockTimestamp(tx);
+    const [last] = await tx
+      .select({ createdAt: schema.adminActions.createdAt })
+      .from(schema.adminActions)
+      .where(IS_ROLE_CHANGE)
+      .orderBy(desc(schema.adminActions.createdAt))
+      .limit(1);
+    const at = new Date(Math.max(clock.getTime(), (last?.createdAt.getTime() ?? -Infinity) + 1));
     const [record] = await tx
       .insert(schema.adminActions)
       .values({
