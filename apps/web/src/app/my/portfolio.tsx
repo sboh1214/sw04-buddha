@@ -93,12 +93,11 @@ const ORDER_STATUS_PALETTE: Record<OrderStatus, 'brand' | 'gray' | 'orange' | 'n
 
 /**
  * Whether the session ended while this screen stayed mounted — another tab signed out, the
- * session expired, or the reader signed out from here and the navigation has not landed yet. The
- * MY layout's gate is server-side and runs only on navigation into MY, so nothing else moves them
- * off it. Without this, the screen blamed a profile load that never failed AND every list
- * reported an empty account: `listView` answers `ready` for a reset, disabled query holding no
- * rows. One page-level fact, gated once per screen, rather than the same session patched into
- * every ladder.
+ * session expired, or the reader signed out from here and the navigation has not landed yet. MY's
+ * session gate is server-side and runs only on navigation, so nothing else moves them off it.
+ * Without this, the screen blamed a profile load that never failed AND every list reported an
+ * empty account: `listView` answers `ready` for a reset, disabled query holding no rows. One
+ * page-level fact, gated once per screen, rather than the same session patched into every ladder.
  */
 export function useSessionEnded(): boolean {
   const me = useMe();
@@ -465,7 +464,7 @@ export function OrdersBody({
       ) : section.body === 'empty' && !orders.hasNextPage ? (
         <EmptyState
           message={
-            kind === 'pending' ? copy.portfolioPendingOrdersEmpty : copy.portfolioOrdersEmpty
+            kind === 'pending' ? copy.portfolioPendingOrdersEmpty : copy.portfolioOrderHistoryEmpty
           }
         />
       ) : (

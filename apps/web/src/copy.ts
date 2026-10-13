@@ -470,8 +470,10 @@ export const copy = {
   portfolioSettled: '정산 이력',
   portfolioSettledEmpty: '아직 정산된 포지션이 없습니다.',
   portfolioOrders: '주문 이력',
-  portfolioOrdersEmpty: '아직 주문 내역이 없습니다.',
+  // 옛 주문 이력이 둘로 나뉘었다(대기·부분 체결은 대기 주문, 나머지는 거래·정산 이력). 빈 목록 문구도
+  // 제 쪽만 말한다: 대기 주문만 있는 계정에 '주문 내역이 없다'고 하지 않는다.
   portfolioPendingOrdersEmpty: '대기 중인 주문이 없습니다.',
+  portfolioOrderHistoryEmpty: '끝난 주문이 없습니다.',
   /**
    * Shown when the session ends while a private screen is still mounted — never a load failure,
    * because nothing failed to load. The reader is told what actually happened and given the way

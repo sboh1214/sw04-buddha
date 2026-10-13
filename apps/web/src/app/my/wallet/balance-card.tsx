@@ -12,9 +12,9 @@ import { profileView } from '@/lib/query-client';
 /** Balance summary (PLAN 11.3). `locked_coin` is always 0 in the MVP but shown for honesty. */
 export function BalanceCard() {
   const { data: me, isPending, isFetching, isLoggedIn, refetch } = useMe();
-  // The same four states MY's other screens read, and for the same reason: the MY layout's gate
-  // is server-side and runs only on navigation into MY, so a session that ends under it left this
-  // card blaming a profile load that never failed, with a 다시 시도 that can only 401.
+  // The same four states MY's other screens read, and for the same reason: MY's session gate is
+  // server-side and runs only on navigation, so a session that ends under a mounted card left it
+  // blaming a profile load that never failed, with a 다시 시도 that can only 401.
   const view = profileView({ isLoggedIn, isPending, isFetching, hasProfile: me !== undefined });
 
   return (

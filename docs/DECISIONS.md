@@ -770,7 +770,7 @@ PLAN §11.4의 카드는 스파크라인을 요구한다. 카드마다 `/ticks`�
 ## ADR-0031 — 웹 SSR·실시간 캐시
 
 - 날짜: 2026-09-07
-- 상태: 채택, 일부 대체됨(ADR-0054: 서버에서 세션만 확인해 리다이렉트한 뒤 클라이언트가 읽는 개인 화면 `/portfolio` — 지금은 MY 레이아웃(`app/my/layout.tsx`)이 `/my`와 그 아래 모든 탭에서 그렇게 한다. 개인 데이터를 SSR하지 않는 결정은 유효)
+- 상태: 채택, 일부 대체됨(ADR-0054: 서버에서 세션만 확인해 리다이렉트한 뒤 클라이언트가 읽는 개인 화면 `/portfolio` — 지금은 MY의 세션 게이트(`requireMySession`, `lib/my.server.ts`)가 MY 레이아웃과 `/my` · 그 아래 모든 탭의 페이지에서 그렇게 한다. 개인 데이터를 SSR하지 않는 결정은 유효)
 
 ### 맥락
 
@@ -1400,7 +1400,7 @@ PLAN은 결제를 끝까지 mock으로 두었다 — §1.2(:42) "충전 버튼 �
 ## ADR-0044 — 사업자 정보 푸터 · 약관 3종 · 공개 충전 안내 `/charge` (오너 결정 2026-09-28)
 
 - 날짜: 2026-09-28
-- 상태: 채택 (오너 결정 2026-09-28; 문서 본문은 법률 검토 전 — Q-M2-3, Q-PG-1), 일부 대체됨(ADR-0049: 공개 `/charge`는 유료 충전이 닫힌 동안 없는 페이지(404)이고 푸터의 '충전 안내' 링크도 없다. `/charge`의 카드 최소 금액 처리(2026-09-29 추기)는 지웠다 — `/wallet?package=` 연결과 미리 고르기는 판매가 열린 동안만 돌고, 사업자 정보 푸터와 약관 3종은 유효, 본문은 #137), 일부 대체됨(ADR-0050: `BUSINESS_INFO.pointExpiry`와 약관의 `{{pointExpiry}}`는 키 이름이 `coinExpiry`다 — 약관 본문은 그대로), 일부 대체됨(ADR-0054: 충전 안내 카드가 가는 `/wallet?package=<id>`와 로그인하지 않은 방문자를 로그인으로 보내는 지갑 — 지금은 `/my/wallet?package=<id>`(`walletPackageHref`)이고, MY 레이아웃이 같은 상품을 `next`에 실어 로그인으로 보낸다(`myLoginPath`). 미리 고르기와 그것이 판매가 열린 동안만 도는 것은 유효)
+- 상태: 채택 (오너 결정 2026-09-28; 문서 본문은 법률 검토 전 — Q-M2-3, Q-PG-1), 일부 대체됨(ADR-0049: 공개 `/charge`는 유료 충전이 닫힌 동안 없는 페이지(404)이고 푸터의 '충전 안내' 링크도 없다. `/charge`의 카드 최소 금액 처리(2026-09-29 추기)는 지웠다 — `/wallet?package=` 연결과 미리 고르기는 판매가 열린 동안만 돌고, 사업자 정보 푸터와 약관 3종은 유효, 본문은 #137), 일부 대체됨(ADR-0050: `BUSINESS_INFO.pointExpiry`와 약관의 `{{pointExpiry}}`는 키 이름이 `coinExpiry`다 — 약관 본문은 그대로), 일부 대체됨(ADR-0054: 충전 안내 카드가 가는 `/wallet?package=<id>`와 로그인하지 않은 방문자를 로그인으로 보내는 지갑 — 지금은 `/my/wallet?package=<id>`(`walletPackageHref`)이고, MY의 세션 게이트가 같은 상품을 `next`에 실어 로그인으로 보낸다(`requireMySession` · `myLoginPath`). 미리 고르기와 그것이 판매가 열린 동안만 도는 것은 유효)
 
 ### 맥락
 
@@ -2454,7 +2454,7 @@ ADR-0046의 상태 줄에 '일부 대체됨(ADR-0047: …)'을 이어 쓴다. �
 ## ADR-0049 — 유료 충전·결제·쿠폰 차단과 스마트로페이 연동 삭제 (#112, 오너 결정 2026-10-13)
 
 - 날짜: 2026-10-13
-- 상태: 채택, 일부 대체됨(ADR-0054: 지갑의 주소 `/wallet`(`app/wallet/page.tsx`)과 로그인 `next=/wallet`, 그대로 `/wallet`로 간다고 한 헤더 잔액 칩과 하단 탭의 지갑, 되돌리면 돌아오는 `/charge` → `/wallet?package=` — 지금은 `/my/wallet`(`app/my/wallet/page.tsx`)이고, 로그인으로 보내는 일은 MY 레이아웃(`myLoginPath`)이 하며 판매가 열린 동안만 `?package=`를 싣는다. 잔액 칩은 `/my/wallet`로 가고 하단 탭에는 지갑이 없다. 닫힌 지갑이 그리는 것, 차단 방식과 되돌리는 방법은 유효)
+- 상태: 채택, 일부 대체됨(ADR-0054: 지갑의 주소 `/wallet`(`app/wallet/page.tsx`)과 로그인 `next=/wallet`, 그대로 `/wallet`로 간다고 한 헤더 잔액 칩과 하단 탭의 지갑, 되돌리면 돌아오는 `/charge` → `/wallet?package=` — 지금은 `/my/wallet`(`app/my/wallet/page.tsx`)이고, 로그인으로 보내는 일은 MY의 세션 게이트(`requireMySession` · `myLoginPath`)가 하며 판매가 열린 동안만 `?package=`를 싣는다. 잔액 칩은 `/my/wallet`로 가고 하단 탭에는 지갑이 없다. 닫힌 지갑이 그리는 것, 차단 방식과 되돌리는 방법은 유효)
 
 이슈 번호와 기획 인용 표기는 ADR-0047과 같다(`#N`, NR·N00\~N06). 이 ADR은 #112가 기록하고, ADR-0042의 스마트로페이 연동, ADR-0025·0026의 충전·충전 상품 공개·쿠폰 사용과 그 화면, ADR-0043의 결제창 연락처 강제와 `/charge` 예외, ADR-0044의 공개 충전 안내를 대체한다. D1\~D26은 ADR-0047의 오너 결정이다. 이 ADR의 오너 결정은 결정 1 표의 번호로 '결정 1-3'처럼 적는다.
 
@@ -3030,10 +3030,11 @@ ADR-0046의 상태 줄에 '일부 대체됨(ADR-0047: …)'을 이어 쓴다. �
 
 **2. MY (`app/my/`).**
 
-- 공통 레이아웃(`app/my/layout.tsx`)이 세션 게이트 · 제목 · 관리자 진입과 로그아웃(`AccountActions`, test id `my-admin` · `my-logout`) · 탭 내비(`MyTabs`, `my-tabs` · `my-tab-<key>`)를 한 번에 갖는다. 세션이 없으면 서버가 로그인으로 보내고, `next`는 요청한 MY 주소다(`myLoginPath`, `lib/my.ts`). 그 주소는 `proxy.ts`가 `/my/*`에도 찍는 `x-pathname`·`x-search` 헤더에서 읽고, MY 밖이거나 안전하지 않은 경로면 `/my`로 둔다. 쿼리는 버리되, 유료 충전이 열린 동안의 `/my/wallet?package=<id>`만 파싱한 id로 다시 싣는다(ADR-0044·0049).
+- 공통 레이아웃(`app/my/layout.tsx`)이 제목 · 관리자 진입과 로그아웃(`AccountActions`, test id `my-admin` · `my-logout`) · 탭 내비(`MyTabs`, `my-tabs` · `my-tab-<key>`)를 한 번에 갖는다.
+- 세션 게이트는 `requireMySession`(`lib/my.server.ts`)이고 MY 레이아웃과 MY의 모든 페이지가 부른다. 레이아웃은 하드 로드나 MY 밖에서 들어올 때만 서버에서 다시 그려지므로, 탭 사이 이동마다 게이트가 돌려면 페이지가 불러야 한다. 옛 `/portfolio` · `/wallet` · `/settings`도 페이지마다 확인했다. React `cache`로 한 요청에서 세션 확인은 한 번이다. 세션이 없으면 서버가 로그인으로 보내고, `next`는 요청한 MY 주소다(`myLoginPath`, `lib/my.ts`). 그 주소는 `proxy.ts`가 `/my/*`에도 찍는 `x-pathname`·`x-search` 헤더에서 읽고, MY 밖이거나 안전하지 않은 경로면 `/my`로 둔다. 쿼리는 버리되, 유료 충전이 열린 동안의 `/my/wallet?package=<id>`만 파싱한 id로 다시 싣는다(ADR-0044·0049). MY 화면을 연 채 세션이 끝나면 다음 이동까지는 화면마다의 상태다(목록 · 잔고는 `useSessionEnded` · `profileView`의 다시 로그인 안내, 설정의 카드는 스켈레톤, 옮기기 전과 같다).
 - 탭 목록 · 주소 · 현재 탭 판정은 `lib/my.ts`의 `MY_TABS` · `isMyTabCurrent`다(단위 시험). 요약은 탭의 현재 표시가 없다.
 - 요약(`/my`, `summary.tsx`): 옛 포트폴리오의 잔고 요약 카드, 보유 계약 · 대기 주문 · 거래·정산 이력 · 지갑(잔고와 최근 원장)의 미리보기(탭마다 앞 3줄, `MY_PREVIEW_ROWS`)와 '전체 보기', 내 글 · 관심 시장 · 알림은 '준비 중'(결정 1-7). 설정은 미리볼 줄이 없어 카드가 없다.
-- 옛 화면은 다시 그리지 않고 옮겼다(`portfolio.tsx`). 보유 포지션 → 보유 계약(`/my/positions`), 주문 이력 중 `open`·`partially_filled` → 대기 주문(`/my/orders`, `isPendingOrder`), 나머지 주문 이력과 정산 이력 → 거래·정산 이력(`/my/history`), 지갑 → `/my/wallet`(유료 충전 차단과 `?package=` 처리 그대로), 설정 → `/my/settings`(`?error=` 처리 그대로). 내 글 · 관심 시장 · 알림 탭은 '준비 중' 빈 상태다.
+- 옛 화면은 다시 그리지 않고 옮겼다(`portfolio.tsx`). 보유 포지션 → 보유 계약(`/my/positions`), 주문 이력 중 `open`·`partially_filled` → 대기 주문(`/my/orders`, `isPendingOrder`), 나머지 주문 이력과 정산 이력 → 거래·정산 이력(`/my/history`, 빈 목록 문구는 두 쪽이 제 쪽만 말한다: '대기 중인 주문이 없습니다.' · '끝난 주문이 없습니다.'), 지갑 → `/my/wallet`(유료 충전 차단과 `?package=` 처리 그대로), 설정 → `/my/settings`(`?error=` 처리 그대로). 내 글 · 관심 시장 · 알림 탭은 '준비 중' 빈 상태다.
 - 옛 주소 `/portfolio` · `/wallet` · `/settings`는 지웠고 리디렉트하지 않는다(D23). `app/not-found.tsx`가 없어 Next의 기본 404를 루트 레이아웃 안에 그린다.
 - 서비스가 만드는 링크는 새 주소다. 설정 화면의 인증 메일 · 이메일 변경 메일 `callbackURL`, 소셜 연결 `callbackURL` · `errorCallbackURL`(`MY_SETTINGS_PATH`), 로그인 `next`, 잔고 칩, `/charge`의 상품 링크(`walletPackageHref` → `/my/wallet?package=`), 세션이 끝난 화면의 다시 로그인 링크. 로그아웃 동작은 `hooks/use-sign-out.ts` 하나로 모았다.
 
@@ -3047,7 +3048,7 @@ ADR-0046의 상태 줄에 '일부 대체됨(ADR-0047: …)'을 이어 쓴다. �
 - 헤더 2단은 시장 탐색(`/`와 `/markets/[slug]`)에서만 그린다(`showsCategoryRow`, 결정 1-11). 헤더 아래에 붙는 요소(홈 사이드바, 상세의 주문 영역)는 모두 그 경로에 있으므로 `HEADER_HEIGHT_PX`(107)는 그대로이고, 2단이 없는 경로의 헤더는 1단과 아래 선(65px)이다. 두 경로는 모두 `force-dynamic`이라 2단의 현재 표시는 서버 HTML에 들어간다. `/community` 같은 정적 화면은 정적으로 남는다.
 - copy: `navExplore`('시장 탐색') · `navMy`('MY')를 더하고, `navMarkets`('시장') · `navHome` · `navPortfolio` · `navWallet` · `navSettings` · `profileMenu`를 지웠다.
 
-**4. 시험.** 단위: `nav.test.ts`(세 영역 목록과 MY의 로그인 조건, MY 현재 판정, 2단 표시 경로), `my.test.ts`(탭 목록 · 현재 탭 · `myLoginPath` · 대기 주문), `onboarding.test.ts` · `charge-guide.test.ts` 등의 표본 경로. e2e: `my.spec.ts`(비로그인 MY 주소 전부가 로그인으로, 옛 주소 셋은 404, 요약과 여덟 탭, MY 안 로그아웃 · 관리자 진입), `nav.spec.ts`(두 폭이 같은 영역 목록, 비로그인 두 영역 · 로그인 세 영역, MY 탭에서 MY 현재 표시, 잔고 칩 → 지갑, 2단은 시장 탐색에서만), `helpers.ts`의 `logOut`(MY의 로그아웃, `auth.spec.ts` · `nav.spec.ts`가 쓴다), `coin.spec.ts`의 헤더 1단 측정에서 프로필 버튼을 뺐고, `auth` · `onboarding` · `coin` · `payment` spec의 주소를 새 주소로 바꿨다.
+**4. 시험.** 단위: `nav.test.ts`(세 영역 목록과 MY의 로그인 조건, MY 현재 판정, 2단 표시 경로), `my.test.ts`(탭 목록 · 현재 탭 · `myLoginPath` · 대기 주문), `onboarding.test.ts` · `charge-guide.test.ts` 등의 표본 경로. e2e: `my.spec.ts`(비로그인 MY 주소 전부가 로그인으로, MY를 연 채 세션이 끝나면 다음 탭 이동이 로그인으로, 옛 주소 셋은 404, 요약과 여덟 탭, MY 안 로그아웃 · 관리자 진입), `nav.spec.ts`(두 폭이 같은 영역 목록, 비로그인 두 영역 · 로그인 세 영역, MY 탭에서 MY 현재 표시, 잔고 칩 → 지갑, 2단은 시장 탐색에서만), `helpers.ts`의 `logOut`(MY의 로그아웃, `auth.spec.ts` · `nav.spec.ts`가 쓴다), `coin.spec.ts`의 헤더 1단 측정에서 프로필 버튼을 뺐고, `auth` · `onboarding` · `coin` · `payment` spec의 주소를 새 주소로 바꿨다.
 
 **5. 문서.** `README.md`의 최상위 영역 · 헤더 · 하단 탭 설명과 경로 표(`/my/*` 행을 탭 순서로, 옛 `/portfolio` · `/wallet` · `/settings` 행 삭제). `docs/TERMS.md`의 화면 예시에서 '거래하기' 버튼의 자리(포트폴리오 → MY 보유 계약).
 

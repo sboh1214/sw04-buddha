@@ -18,7 +18,7 @@ export type PrimaryNavKey = 'markets' | 'community' | 'my';
  * The areas in order, as the desktop header's row 1 and the mobile tab bar both list them — one
  * list, so the two cannot drift apart (#16: every width reaches the same three areas). MY is
  * listed only for a signed-in reader (owner decision 2026-10-13); a visitor who types a MY
- * address is sent to the login page by the MY layout. 시장 탐색 stays at `/`. Next 16 types
+ * address is sent to the login page by MY's session gate. 시장 탐색 stays at `/`. Next 16 types
  * `href`, so the list is declared as routes rather than plain strings.
  */
 const PRIMARY_NAV: readonly {

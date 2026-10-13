@@ -47,8 +47,8 @@ export const metadata: Metadata = { title: `${copy.chargeGuideTitle} | ${copy.ap
  * first HTML a reviewer's crawler sees.
  *
  * Buying still happens in MY's 지갑 (`/my/wallet`): each card links there with `?package=<id>`,
- * which the wallet preselects, and the MY layout sends an anonymous visitor to the login page
- * first. This page never starts a payment itself.
+ * which the wallet preselects, and MY's session gate sends an anonymous visitor to the login
+ * page first. This page never starts a payment itself.
  *
  * A failed read is the page's own notice, not a 500 — there is no `app/error.tsx`, and Next's
  * default error screen is untranslated.

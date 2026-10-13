@@ -56,8 +56,8 @@ export function isMyTabCurrent(pathname: string, href: string): boolean {
 }
 
 /**
- * Where the MY layout sends a visitor with no session: the login page, told to come back to the
- * MY page they asked for. `pathname` and `search` come from the headers `proxy.ts` stamps; a
+ * Where MY's session gate (`requireMySession`, my.server.ts) sends a visitor with no session: the
+ * login page, told to come back to the MY page they asked for. `pathname` and `search` come from the headers `proxy.ts` stamps; a
  * path that is not under `/my` (or not a safe same-origin path) falls back to the summary, so a
  * client-supplied value cannot steer the redirect anywhere else.
  *

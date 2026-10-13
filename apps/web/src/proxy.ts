@@ -6,13 +6,14 @@ import { NextResponse, type NextRequest } from 'next/server';
  * It exists for one reason: a server layout cannot see the URL, so `/admin/layout.tsx` and
  * `/my/layout.tsx` could only send an unauthenticated visitor to a fixed `?next=`, which lost
  * the page they asked for (M2 had one admin route; M3 added four; MY has nine, #16). The proxy
- * stamps the path and the query string it already has on the request, and each layout builds
- * the login destination from them (`adminLoginPath` in `lib/next-path.ts`, which refuses
- * anything but an /admin path; `myLoginPath` in `lib/my.ts`, which refuses anything but a /my
- * path and reads nothing from the query but the wallet's `?package=`).
+ * stamps the path and the query string it already has on the request, and each gate builds the
+ * login destination from them (`adminLoginPath` in `lib/next-path.ts`, which refuses anything
+ * but an /admin path; MY's `requireMySession`, run by the MY layout and every MY page, through
+ * `myLoginPath` in `lib/my.ts`, which refuses anything but a /my path and reads nothing from the
+ * query but the wallet's `?package=`).
  *
  * `set`, never `append`: a client-supplied `x-pathname` or `x-search` is overwritten here, so the
- * headers the layouts read are always this server's. Nothing else is added — in particular no
+ * headers the gates read are always this server's. Nothing else is added — in particular no
  * header the API trusts (`X-Forwarded-For`; TRUST_PROXY is false, A-M0-13).
  *
  * M6 did the rate-limit review this file was waiting for and DECIDED NOT TO WIDEN THE MATCHER for

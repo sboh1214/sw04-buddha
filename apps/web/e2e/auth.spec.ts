@@ -77,7 +77,7 @@ test.describe('signup -> login -> settings', () => {
 
     // --- protected route redirects to login with `next`
     await page.goto('/my/settings');
-    // The MY layout redirects with the path percent-encoded (`myLoginPath`); how much of a
+    // MY's session gate redirects with the path percent-encoded (`myLoginPath`); how much of a
     // server redirect's query string stays encoded is the framework's business, so accept both.
     await expect(page).toHaveURL(/\/login\?next=(%2F|\/)my(%2F|\/)settings/);
 

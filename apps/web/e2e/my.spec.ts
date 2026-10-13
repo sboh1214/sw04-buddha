@@ -82,6 +82,23 @@ test.describe('MY', () => {
     await expect(page.getByRole('link', { name: copy.login })).toBeVisible();
   });
 
+  test('MY를 연 채 세션이 끝나면 다음 탭으로 옮길 때 로그인으로 간다', async ({ page }) => {
+    await signUp(page, freshEmail());
+    await page.goto('/my/wallet');
+    await expect(page.getByTestId('wallet-balance')).toBeVisible();
+
+    // Another tab's logout or an expiry, as this tab sees it: the cookie is gone while the client
+    // still holds the session it had. The MY layout is shared by the tabs and is not re-rendered
+    // on a navigation between them, so this is the page's own gate (`requireMySession`).
+    await page.context().clearCookies();
+    await page
+      .getByTestId('my-tabs')
+      .getByRole('link', { name: copy.mySettings, exact: true })
+      .click();
+    await page.waitForURL(/\/login\?/);
+    expect(new URL(page.url()).searchParams.get('next')).toBe('/my/settings');
+  });
+
   test('관리자에게는 MY 안에 관리자 진입이 있다', async ({ page, admin }) => {
     // The fixture gives the seed admin its contact, so the onboarding gate lets it through.
     void admin;

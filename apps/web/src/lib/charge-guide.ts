@@ -39,8 +39,8 @@ export function chargeTiers(amounts: readonly bigint[]): ChargeTier[] {
 
 /**
  * Where a package's 충전하기 leads: MY's 지갑 with that package preselected (`?package=<id>`,
- * read back by walletPackageId). An anonymous visitor is sent on to the login page by the MY
- * layout, which keeps the package (`myLoginPath`, lib/my.ts). A `UrlObject` rather than a
+ * read back by walletPackageId). An anonymous visitor is sent on to the login page by MY's
+ * session gate, which keeps the package (`myLoginPath`, lib/my.ts). A `UrlObject` rather than a
  * template string, so typed routes check `/my/wallet` without an `as Route` cast.
  */
 export function walletPackageHref(packageId: string): UrlObject {
