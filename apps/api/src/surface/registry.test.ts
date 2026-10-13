@@ -425,13 +425,155 @@ const SOCKET_MODULE =
 /** A handler's declared return type that sends nothing back. */
 const NO_REPLY = new Set(['void', 'Promise<void>']);
 
+/** The Nest decorators the reader needs, whatever name a file imports them under. */
+const NEST_DECORATORS = new Set(['SubscribeMessage', 'Ack']);
+
 /**
- * Every send in a source, with its event as written: an emit call, a `send` or `write` call in a
- * socket file (`message`), and a `@SubscribeMessage` handler that may return something — Nest
- * sends a returned value back, as the ack or as the `{ event, data }` it names — as `reply to`
- * its message. A handler is no reply only when it declares `void` or `Promise<void>`.
+ * The calls that add a listener. Socket.IO hands a listener the client's acknowledgement callback,
+ * when the client asked for one, as its last argument.
  */
-function emitsOf(fileName: string, text: string): { event: string }[] {
+const LISTENS = new Set(['on', 'once', 'addListener', 'prependListener', 'prependOnceListener']);
+
+/**
+ * What a decorator is, read through the file's imports: `@OnMessage('x')` after
+ * `import { SubscribeMessage as OnMessage }`, `@ws.SubscribeMessage('x')` after
+ * `import * as ws from '@nestjs/websockets'`. A spelling this cannot follow (a local constant, a
+ * composed decorator) is caught by the handlers Nest maps: see 'reads every message handler'.
+ */
+function nestDecorators(file: ts.SourceFile): (decorator: ts.Decorator) => string | undefined {
+  const aliases = new Map<string, string>();
+  const namespaces = new Set<string>();
+  for (const statement of file.statements) {
+    if (!ts.isImportDeclaration(statement) || statement.importClause === undefined) continue;
+    const { name, namedBindings } = statement.importClause;
+    const nest =
+      ts.isStringLiteral(statement.moduleSpecifier) &&
+      statement.moduleSpecifier.text === '@nestjs/websockets';
+    if (nest && name) namespaces.add(name.text);
+    if (nest && namedBindings && ts.isNamespaceImport(namedBindings)) {
+      namespaces.add(namedBindings.name.text);
+    }
+    if (namedBindings && ts.isNamedImports(namedBindings)) {
+      for (const element of namedBindings.elements) {
+        const imported = (element.propertyName ?? element.name).text;
+        if (NEST_DECORATORS.has(imported)) aliases.set(element.name.text, imported);
+      }
+    }
+  }
+  return (decorator) => {
+    if (!ts.isCallExpression(decorator.expression)) return undefined;
+    const callee = decorator.expression.expression;
+    if (ts.isIdentifier(callee)) {
+      return (
+        aliases.get(callee.text) ?? (NEST_DECORATORS.has(callee.text) ? callee.text : undefined)
+      );
+    }
+    return ts.isPropertyAccessExpression(callee) &&
+      ts.isIdentifier(callee.expression) &&
+      namespaces.has(callee.expression.text) &&
+      NEST_DECORATORS.has(callee.name.text)
+      ? callee.name.text
+      : undefined;
+  };
+}
+
+/** Whether `id` reads the binding it names: not a property's name, not a new declaration. */
+function readsBinding(id: ts.Identifier): boolean {
+  const parent = id.parent;
+  const named =
+    ts.isPropertyAccessExpression(parent) ||
+    ts.isPropertyAssignment(parent) ||
+    ts.isPropertyDeclaration(parent) ||
+    ts.isMethodDeclaration(parent) ||
+    ts.isVariableDeclaration(parent) ||
+    ts.isParameter(parent) ||
+    ts.isFunctionDeclaration(parent) ||
+    ts.isBindingElement(parent);
+  return (
+    !(named && parent.name === id) && !(ts.isBindingElement(parent) && parent.propertyName === id)
+  );
+}
+
+/** Every place `body` reads the binding `name`, and whether it is a call of it. */
+function readsOf(body: ts.Node, name: string): { called: boolean }[] {
+  const found: { called: boolean }[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isIdentifier(node) && node.text === name && readsBinding(node)) {
+      found.push({ called: ts.isCallExpression(node.parent) && node.parent.expression === node });
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(body);
+  return found;
+}
+
+type FunctionWithBody = ts.FunctionLikeDeclaration & { body: ts.Node };
+
+const hasBody = (node: ts.Node | undefined): node is FunctionWithBody =>
+  node !== undefined &&
+  (ts.isArrowFunction(node) ||
+    ts.isFunctionExpression(node) ||
+    ts.isFunctionDeclaration(node) ||
+    ts.isMethodDeclaration(node)) &&
+  node.body !== undefined;
+
+/**
+ * The function a listener argument names, when the file has it: a function written in place,
+ * `this.member` (a method or a function-valued property of the enclosing class), or a function
+ * the file declares by that name.
+ */
+function listenerOf(file: ts.SourceFile, argument: ts.Expression): FunctionWithBody | undefined {
+  if (hasBody(argument)) return argument;
+  if (
+    ts.isPropertyAccessExpression(argument) &&
+    argument.expression.kind === ts.SyntaxKind.ThisKeyword
+  ) {
+    let owner: ts.Node | undefined = argument.parent;
+    while (owner !== undefined && !ts.isClassLike(owner)) owner = owner.parent;
+    const member = (owner as ts.ClassLikeDeclaration | undefined)?.members.find(
+      (m) => m.name?.getText(file) === argument.name.text,
+    );
+    if (hasBody(member)) return member;
+    return member && ts.isPropertyDeclaration(member) && hasBody(member.initializer)
+      ? member.initializer
+      : undefined;
+  }
+  if (!ts.isIdentifier(argument)) return undefined;
+  const find = (node: ts.Node): FunctionWithBody | undefined => {
+    if (ts.isFunctionDeclaration(node) && node.name?.text === argument.text && hasBody(node)) {
+      return node;
+    }
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.name.text === argument.text &&
+      hasBody(node.initializer)
+    ) {
+      return node.initializer;
+    }
+    return ts.forEachChild(node, find);
+  };
+  return find(file);
+}
+
+/** What a source's socket code does: where it sends, and the message handlers it declares. */
+interface SocketCode {
+  /** Every send, with its event as written. */
+  sends: { event: string }[];
+  /** Every `@SubscribeMessage` handler, `Class.method`, with the positions of its `@Ack()`s. */
+  handlers: { name: string; acks: number[] }[];
+}
+
+/**
+ * Every send in a source, with its event as written: an emit call; in a socket file, a `send` or
+ * `write` call (`message`) and a call of the acknowledgement callback a listener is handed as its
+ * last argument (`ack to` its event); a `@SubscribeMessage` handler that may return something —
+ * Nest sends a returned value back, as the ack or as the `{ event, data }` it names — as
+ * `reply to` its message, and each read of its `@Ack()` parameter — a call, or handing it on —
+ * as `ack to` its message. A handler is no reply only when it declares `void` or `Promise<void>`.
+ * The decorators are read under whatever name the file imports them.
+ */
+function socketCodeOf(fileName: string, text: string): SocketCode {
   const file = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true);
   const socketFile = file.statements.some(
     (statement) =>
@@ -439,29 +581,65 @@ function emitsOf(fileName: string, text: string): { event: string }[] {
       ts.isStringLiteral(statement.moduleSpecifier) &&
       SOCKET_MODULE.test(statement.moduleSpecifier.text),
   );
-  const found: { event: string }[] = [];
+  const decoratorOf = nestDecorators(file);
+  const code: SocketCode = { sends: [], handlers: [] };
   const visit = (node: ts.Node): void => {
     if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
       const name = node.expression.name.text;
-      if (EMITS.has(name)) found.push({ event: node.arguments[0]?.getText(file) ?? '' });
-      else if (socketFile && SOCKET_SENDS.has(name)) found.push({ event: 'message' });
+      const event = node.arguments[0]?.getText(file) ?? '';
+      if (EMITS.has(name)) code.sends.push({ event });
+      else if (socketFile && SOCKET_SENDS.has(name)) code.sends.push({ event: 'message' });
+      else if (socketFile && LISTENS.has(name) && node.arguments.length > 1) {
+        const listener = listenerOf(file, node.arguments.at(-1)!);
+        const ack = listener?.parameters.at(-1)?.name;
+        if (listener && ack && ts.isIdentifier(ack)) {
+          // Calls only: a listener's last argument is the ack only when the client asked for
+          // one, and is otherwise data (a Redis listener's message), which is read but not called.
+          for (const read of readsOf(listener.body, ack.text)) {
+            if (read.called) code.sends.push({ event: `ack to ${event}` });
+          }
+        }
+      }
     }
     if (ts.isMethodDeclaration(node)) {
       const subscribed = (ts.getDecorators(node) ?? []).find(
-        (decorator) =>
-          ts.isCallExpression(decorator.expression) &&
-          decorator.expression.expression.getText(file) === 'SubscribeMessage',
+        (decorator) => decoratorOf(decorator) === 'SubscribeMessage',
       );
-      if (subscribed && !NO_REPLY.has(node.type?.getText(file).replaceAll(/\s/g, '') ?? '')) {
-        const call = subscribed.expression as ts.CallExpression;
-        found.push({ event: `reply to ${call.arguments[0]?.getText(file) ?? ''}` });
+      if (subscribed) {
+        const message = (subscribed.expression as ts.CallExpression).arguments[0]?.getText(file);
+        const owner = ts.isClassLike(node.parent) ? node.parent.name?.text : undefined;
+        const acks = node.parameters.flatMap((parameter, index) =>
+          (ts.getDecorators(parameter) ?? []).some((decorator) => decoratorOf(decorator) === 'Ack')
+            ? [index]
+            : [],
+        );
+        code.handlers.push({ name: `${owner ?? '(anonymous)'}.${node.name.getText(file)}`, acks });
+        if (!NO_REPLY.has(node.type?.getText(file).replaceAll(/\s/g, '') ?? '')) {
+          code.sends.push({ event: `reply to ${message ?? ''}` });
+        }
+        for (const index of acks) {
+          // Every read: a call sends, and a callback handed on is called elsewhere. One that
+          // cannot be followed (destructured) counts once.
+          const ack = node.parameters[index]!.name;
+          const reads =
+            ts.isIdentifier(ack) && node.body !== undefined ? readsOf(node.body, ack.text) : [{}];
+          code.sends.push(...reads.map(() => ({ event: `ack to ${message ?? ''}` })));
+        }
       }
     }
     ts.forEachChild(node, visit);
   };
   visit(file);
-  return found;
+  return code;
 }
+
+const emitsOf = (fileName: string, text: string) => socketCodeOf(fileName, text).sends;
+
+/** The API's sources, each with what its socket code does. */
+const SOCKET_CODE = sources().map((file) => ({
+  file: path.relative(SRC, file).split(path.sep).join('/'),
+  ...socketCodeOf(file, readFileSync(file, 'utf8')),
+}));
 
 describe('the realtime surface (static)', () => {
   it('registers every gateway by namespace, with the messages it takes', () => {
@@ -518,16 +696,84 @@ describe('the realtime surface (static)', () => {
     ]);
   });
 
+  it('reads the decorators under any name they are imported by, and every acknowledgement', () => {
+    const aliased = [
+      "import { Ack as Reply, SubscribeMessage as OnMessage } from '@nestjs/websockets';",
+      "import * as ws from '@nestjs/websockets';",
+      'class Planted {',
+      "  @OnMessage('lookup') lookup() { return secret; }",
+      "  @ws.SubscribeMessage('find') find(): WsResponse<string> { return reply; }",
+      "  @OnMessage('silent') silent(): void { log(); }",
+      // An acknowledgement the handler calls itself, under any name, or hands on.
+      "  @OnMessage('save') save(@MessageBody() body: Body, @Reply() done: Done): void {",
+      '    done(secret);',
+      '    if (body.twice) done(secret);',
+      '  }',
+      "  @OnMessage('relay') relay(@ws.Ack() ack: Done): void { this.service.answer(ack); }",
+      "  @OnMessage('unused') unused(@Reply() ack: Done): void { const x = { ack: 1 }; x.ack; }",
+      '}',
+    ].join('\n');
+    const code = socketCodeOf('planted.ts', aliased);
+    expect(code.sends.map(({ event }) => event)).toEqual([
+      "reply to 'lookup'",
+      "reply to 'find'",
+      "ack to 'save'",
+      "ack to 'save'",
+      "ack to 'relay'",
+    ]);
+    expect(code.handlers).toEqual([
+      { name: 'Planted.lookup', acks: [] },
+      { name: 'Planted.find', acks: [] },
+      { name: 'Planted.silent', acks: [] },
+      { name: 'Planted.save', acks: [1] },
+      { name: 'Planted.relay', acks: [0] },
+      { name: 'Planted.unused', acks: [0] },
+    ]);
+    // A Socket.IO listener is handed the client's acknowledgement last: in place, as
+    // `this.member`, or by a name the file declares. A listener that never calls its last
+    // argument (a Redis message) sends nothing.
+    const listeners = [
+      "import { type Socket } from 'socket.io';",
+      'function onFind(query: string, reply: Done) { reply(secret); }',
+      'class Planted {',
+      '  private readonly onAsk = (body: Body, answer: Done): void => { answer(secret); };',
+      '  private onPing(done: Done) { done(); }',
+      '  wire(client: Socket) {',
+      "    client.on('lookup', (body: Body, ack: Done) => { ack(secret); });",
+      "    client.once('ask', this.onAsk);",
+      "    client.on('ping', this.onPing);",
+      "    client.on('find', onFind);",
+      "    subscriber.on('pmessage', (pattern: string, channel: string, message: string) => {",
+      '      parse(message);',
+      '    });',
+      "    client.on('disconnect', () => {});",
+      '  }',
+      '}',
+    ].join('\n');
+    expect(emitsOf('planted.ts', listeners).map(({ event }) => event)).toEqual([
+      "ack to 'lookup'",
+      "ack to 'ask'",
+      "ack to 'ping'",
+      "ack to 'find'",
+    ]);
+  });
+
+  it('reads every message handler Nest maps, with its @Ack() parameters', () => {
+    // What the module graph maps against what the reader above recognised: a decorator spelled
+    // in a way it cannot follow (a local constant, a decorator composed of it) fails here rather
+    // than leaving the handler's replies and acknowledgements uncounted.
+    const mapped = discoverGateways().flatMap((gateway) => gateway.handlers);
+    expect(mapped.map(({ name }) => name)).toContain('MarketGateway.handleSubscribe');
+    const read = SOCKET_CODE.flatMap(({ handlers }) => handlers);
+    const byName = (handlers: { name: string; acks: number[] }[]) =>
+      [...handlers].sort((a, b) => a.name.localeCompare(b.name));
+    expect(byName(read)).toEqual(byName(mapped));
+  });
+
   it('sends on a socket only where REALTIME_EMITS says, each with a reason', () => {
-    const found = sources()
-      .flatMap((file) =>
-        emitsOf(file, readFileSync(file, 'utf8')).map(({ event }) => ({
-          file: path.relative(SRC, file).split(path.sep).join('/'),
-          event,
-        })),
-      )
-      .map(({ file, event }) => `${file} ${event}`)
-      .sort();
+    const found = SOCKET_CODE.flatMap(({ file, sends }) =>
+      sends.map(({ event }) => `${file} ${event}`),
+    ).sort();
     expect(found).toContain('realtime/market.gateway.ts event.type');
     expect(found).toEqual(REALTIME_EMITS.map(({ file, event }) => `${file} ${event}`).sort());
     for (const emit of REALTIME_EMITS) expect(emit.reason.trim(), emit.event).not.toBe('');

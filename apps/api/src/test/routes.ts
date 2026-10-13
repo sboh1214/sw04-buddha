@@ -19,7 +19,9 @@ import {
   GATEWAY_OPTIONS,
   MESSAGE_MAPPING_METADATA,
   MESSAGE_METADATA,
+  PARAM_ARGS_METADATA,
 } from '@nestjs/websockets/constants.js';
+import { WsParamtype } from '@nestjs/websockets/enums/ws-paramtype.enum.js';
 import { type Db } from '@buddha/db';
 import { AppModule } from '../app.module.js';
 import { type Auth, createAuth } from '../auth/auth.js';
@@ -129,7 +131,24 @@ export interface DiscoveredGateway {
   namespace: string;
   /** The messages a client may send it (`@SubscribeMessage`), sorted. */
   messages: string[];
+  /**
+   * Its message handlers, `Class.method`, each with the positions of its `@Ack()` parameters
+   * (the client's acknowledgement callback, which the handler calls itself), sorted.
+   */
+  handlers: { name: string; acks: number[] }[];
   gateway: abstract new (...args: never[]) => unknown;
+}
+
+/** The positions of a handler's `@Ack()` parameters, from the arguments Nest resolves for it. */
+function acksOf(gateway: DiscoveredGateway['gateway'], method: string): number[] {
+  const args = (Reflect.getMetadata(PARAM_ARGS_METADATA, gateway, method) ?? {}) as Record<
+    string,
+    { index: number }
+  >;
+  return Object.entries(args)
+    .filter(([key]) => key.split(':')[0] === String(WsParamtype.ACK))
+    .map(([, arg]) => arg.index)
+    .sort((a, b) => a - b);
 }
 
 /**
@@ -151,17 +170,21 @@ export function discoverGateways(): DiscoveredGateway[] {
       const options = Reflect.getMetadata(GATEWAY_OPTIONS, gateway) as
         { namespace?: string | RegExp } | undefined;
       const prototype = gateway.prototype as Record<string, unknown>;
-      const messages = Object.getOwnPropertyNames(prototype)
-        .map((name) => prototype[name])
-        .filter(
-          (handler): handler is object =>
-            typeof handler === 'function' &&
-            Reflect.getMetadata(MESSAGE_MAPPING_METADATA, handler) === true,
-        )
-        .map((handler) => String(Reflect.getMetadata(MESSAGE_METADATA, handler)));
+      const methods = Object.getOwnPropertyNames(prototype).filter((name) => {
+        const handler = prototype[name];
+        return (
+          typeof handler === 'function' &&
+          Reflect.getMetadata(MESSAGE_MAPPING_METADATA, handler) === true
+        );
+      });
       return {
         namespace: options?.namespace === undefined ? '/' : String(options.namespace),
-        messages: messages.sort(),
+        messages: methods
+          .map((method) => String(Reflect.getMetadata(MESSAGE_METADATA, prototype[method]!)))
+          .sort(),
+        handlers: methods
+          .map((method) => ({ name: `${gateway.name}.${method}`, acks: acksOf(gateway, method) }))
+          .sort((a, b) => a.name.localeCompare(b.name)),
         gateway,
       };
     });

@@ -267,9 +267,12 @@ export const REALTIME_GATEWAYS: Readonly<Record<string, RegisteredGateway>> = {
 };
 
 /**
- * Every place the API emits on a socket: the file under `src/`, the event as the call writes it,
- * and what goes out. registry.test.ts reads the sources and fails on an emit not listed here, so
- * an event cannot reach a room around the channel families the gateway parses with.
+ * Every place the API sends on a socket: the file under `src/`, the event as the call writes it,
+ * and what goes out. A send is an emit, a `send` or `write`, a message handler's returned value
+ * (`reply to '<message>'`) or a call of a client's acknowledgement callback — a handler's
+ * `@Ack()` parameter, a listener's last argument (`ack to '<message>'`). registry.test.ts reads
+ * the sources and fails on a send not listed here, so an event cannot reach a room around the
+ * channel families the gateway parses with, nor an answer reach a client unreviewed.
  */
 export const REALTIME_EMITS: readonly {
   readonly file: string;
