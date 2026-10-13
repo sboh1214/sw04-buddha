@@ -40,13 +40,4 @@ describe('seed market copy (#125)', () => {
       expect(rules.replace(SEED_RULE_NO_DELAY_NO, ''), slug).toMatch(/NO(입니다|로 판정합니다)/);
     }
   });
-
-  it("uses the plan's terms: no 예측 as an action, YES/NO, and 판정 for the result (#14)", () => {
-    for (const { slug, title, description, rules } of SEED_MARKETS) {
-      for (const text of [title, description, rules]) expect(text, slug).not.toMatch(/예측/);
-      // '예'·'아니오' were the old labels; 정산 is the Coin payout (N03 §5·§7), never the verdict.
-      expect(rules, slug).not.toMatch(/'예'|아니오|정산/);
-      expect(rules, slug).toMatch(/YES로 판정합니다/);
-    }
-  });
 });

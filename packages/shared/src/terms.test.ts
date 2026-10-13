@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { REPLACED_TERMS, type ReplacedTerm, type TermMatch } from './terms.js';
 
+// The doc lives outside this package, so packages/shared/turbo.json names it as an input of
+// `test`: a change to the table alone must not replay a cached pass.
 const TERMS_DOC = new URL('../../../docs/TERMS.md', import.meta.url);
 
 /** The doc's words for `TermMatch`. */

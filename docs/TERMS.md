@@ -7,7 +7,7 @@
 ## 범위
 
 - **바꾼 것.** 사람이 읽는 문구와 기본값이다. 웹 화면 문구(`apps/web/src/copy.ts`, 스크린 리더만 읽는 이름 포함), 사이트 설명, 사람이 읽는 오류 메시지, 시드 시장의 설명과 규칙(`packages/db/src/seed-markets.ts`), 가입 트리거의 자동 닉네임, `README.md`의 첫 문단과 경로 표다.
-- **바꾸지 않는 것.** 저장 데이터·API 필드·원장 유형의 이름(`TRADE_BUY`·`SETTLEMENT_PAYOUT` 등), 웹 내부 식별자(`ProbabilityChart`, 테스트 id `probability-chart`, copy 키 이름), 시장 상태 라벨(#173), 주문 상태(#177·#123), 가격 표기 단위 %·%p(#60).
+- **바꾸지 않는 것.** 저장 데이터·API 필드·원장 유형의 이름(`TRADE_BUY`·`SETTLEMENT_PAYOUT` 등), 웹 내부 식별자(`ProbabilityChart`, 테스트 id `probability-chart`, copy 키 이름), 시장 상태 라벨(#173), 주문 상태(#177·#123), 가격 표기 단위 %·%p(#60). copy 키는 `predict`만 `tradeCta`('거래하기')로 이름을 바꿨고, 쓰이지 않던 키 다섯은 지웠다(ADR-0052 결정 3).
 - **아직 옛 표현이 남은 곳.** 검사는 이곳을 빼거나 따로 다룬다.
   - 이용약관·개인정보처리방침·환불정책 본문(`apps/web/src/legal/`의 `terms.ts`·`privacy.ts`·`refund.ts`): #137이 개정한다.
   - 유료 충전이 닫힌 동안 그리지 않는 충전 안내 `copy.chargeGuideIntro`('예측 시장에서 예·아니오 계약을'): 충전 문구는 #14 밖(#112)이고 판매를 다시 열 때 #111이 고친다.
