@@ -345,7 +345,8 @@ function ChangeDialog({ item, onClose }: { item: ReleaseSetting; onClose: () => 
                     {copy.adminReleaseSettingValueUndecided}
                   </Text>
                 ) : (
-                  <Field.Root invalid={!!errors.value} required>
+                  // A string item's blank field is a value (""), which its schema takes or refuses.
+                  <Field.Root invalid={!!errors.value} required={input.kind === 'json'}>
                     <Field.Label>{valueLabel}</Field.Label>
                     {input.multiline ? (
                       <Textarea

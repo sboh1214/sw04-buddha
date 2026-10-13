@@ -153,10 +153,6 @@ describe('value input', () => {
       ok: false,
       message: copy.errReleaseSettingValueRequired,
     });
-    expect(parseReleaseSettingValueText('', STRING)).toEqual({
-      ok: false,
-      message: copy.errReleaseSettingValueRequired,
-    });
     expect(parseReleaseSettingValueText('null', INTEGER)).toEqual({
       ok: false,
       message: copy.errReleaseSettingValueRequired,
@@ -167,6 +163,26 @@ describe('value input', () => {
     });
     // A string item takes text that merely looks like JSON as text.
     expect(parseReleaseSettingValueText('24', STRING)).toEqual({ ok: true, value: '24' });
+  });
+
+  it('takes a string item exactly as typed, blank included: its schema takes or refuses it', () => {
+    for (const text of ['', '  ', 'null', ' a ']) {
+      expect(parseReleaseSettingValueText(text, STRING)).toEqual({ ok: true, value: text });
+    }
+    // A stored empty string reads as itself, and the dialog can keep it.
+    expect(releaseSettingValueText('', STRING)).toBe('');
+    const empty = item({ status: 'test', value: '', valueSchema: STRING });
+    const values = { ...releaseSettingFormDefaults(empty), reason: '승인' };
+    expect(
+      releaseSettingFormSchema(STRING).safeParse({ ...values, status: 'approved' }).success,
+    ).toBe(true);
+    expect(toReleaseSettingChangeBody({ ...values, status: 'approved' }, STRING)).toEqual({
+      status: 'approved',
+      value: '',
+      reason: '승인',
+    });
+    expect(releaseSettingFormUnchanged(values, empty)).toBe(true);
+    expect(releaseSettingFormUnchanged({ status: 'test', value: ' ' }, empty)).toBe(false);
   });
 
   it('shows the value shape without the $schema line', () => {

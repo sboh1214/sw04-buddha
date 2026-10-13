@@ -99,7 +99,7 @@ export function releaseSettingValueInput(valueSchema: ValueSchema): {
   };
 }
 
-/** The value field's starting text for a stored value; blank while there is none. */
+/** The value field's starting text for a stored value; blank while there is none (or it is ""). */
 export function releaseSettingValueText(value: unknown, valueSchema: ValueSchema): string {
   if (value === null || value === undefined) return '';
   const input = releaseSettingValueInput(valueSchema);
@@ -108,15 +108,17 @@ export function releaseSettingValueText(value: unknown, valueSchema: ValueSchema
 }
 
 /**
- * The value an admin typed, or why it cannot be one. Blank is no value, and so is JSON `null`
- * (null is how the API says "none"); whether the value fits the item is the server's to say.
+ * The value an admin typed, or why it cannot be one. A string item takes the text exactly as
+ * typed, blank included: an empty string is a value its schema may take or refuse. For any other
+ * item blank is no value, and so is JSON `null` (null is how the API says "none"); whether the
+ * value fits the item is the server's to say.
  */
 export function parseReleaseSettingValueText(
   text: string,
   valueSchema: ValueSchema,
 ): { ok: true; value: unknown } | { ok: false; message: string } {
-  if (text.trim() === '') return { ok: false, message: copy.errReleaseSettingValueRequired };
   if (releaseSettingValueInput(valueSchema).kind === 'text') return { ok: true, value: text };
+  if (text.trim() === '') return { ok: false, message: copy.errReleaseSettingValueRequired };
   let value: unknown;
   try {
     value = JSON.parse(text);
@@ -137,8 +139,9 @@ export interface ReleaseSettingFormValues {
 
 /**
  * The change form's rules (`ReleaseSettingChangeBody`): a reason of 1–500 characters, and a value
- * unless the status is 미정 — which drops whatever the value field holds. The value check is on
- * the object, so it runs (and reports) beside a refused reason rather than after it.
+ * unless the status is 미정 — which drops whatever the value field holds (a string item's field
+ * always reads as one, `parseReleaseSettingValueText`). The value check is on the object, so it
+ * runs (and reports) beside a refused reason rather than after it.
  */
 export function releaseSettingFormSchema(valueSchema: ValueSchema) {
   return z
