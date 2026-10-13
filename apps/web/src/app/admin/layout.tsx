@@ -21,7 +21,7 @@ export const metadata: Metadata = { title: `${copy.adminTitle} | ${copy.appName}
  * Next 16 types `href`, so the list is declared as routes rather than plain strings. 충전 상품,
  * 쿠폰 and 결제 are listed only while paid Coin is on sale (PAID_COIN_SALES_ENABLED, ADR-0049):
  * hidden from the menu, their pages still open by address, and the API keeps the package and
- * coupon admin open (owner decision 2026-10-13) while it closes the refund. 관리자 계정 is #171's
+ * coupon admin open (owner decision 2026-10-13) while it closes the refund. 운영자 계정 is #171's
  * (ADR-0056), 출시 설정 #170's (ADR-0055). The row wraps rather than scrolling sideways at phone
  * width.
  */

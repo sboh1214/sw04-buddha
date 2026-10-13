@@ -14,7 +14,7 @@ import {
 } from './helpers';
 
 /**
- * 관리자 계정 (#171, ADR-0056): an admin grants the role on the screen to an account that has a
+ * 운영자 계정 (#171, ADR-0056): an admin grants the role on the screen to an account that has a
  * verified email and a real name and phone, and revokes it with a reason; the revoked account
  * is signed out at once and is a member again. A revoke that would leave fewer than two admins
  * is refused, one's own included. A member never reaches the screen or its API.

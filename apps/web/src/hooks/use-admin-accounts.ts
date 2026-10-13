@@ -18,7 +18,7 @@ import {
 } from '@/lib/api';
 
 /**
- * 관리자 계정 (#171). Under the `admin` root (`PRIVATE_QUERY_ROOTS`); the list, the record and
+ * 운영자 계정 (#171). Under the `admin` root (`PRIVATE_QUERY_ROOTS`); the list, the record and
  * the grant search share this prefix, so one invalidation refreshes all three.
  */
 export const ADMIN_ACCOUNTS_KEY = ['admin', 'admins'] as const;

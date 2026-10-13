@@ -17,7 +17,7 @@ import {
 import { formatKst } from './datetime';
 
 /**
- * Pure helpers behind 관리자 계정 (`/admin/admins`, #171, ADR-0056): how a grant reads in the
+ * Pure helpers behind 운영자 계정 (`/admin/admins`, #171, ADR-0056): how a grant reads in the
  * list and in the record, the reason form, and what the screen says when the API refuses a
  * grant or a revoke. The rules themselves are the server's (AdminAccountsService); the screen
  * explains them and shows the refusal it gets back.

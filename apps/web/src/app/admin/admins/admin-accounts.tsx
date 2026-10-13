@@ -43,7 +43,7 @@ import { formatKst } from '@/lib/datetime';
 import { useSession } from '@/lib/use-session';
 
 /**
- * 관리자 계정 (#171, ADR-0056): who holds the admin role, a grant to an account found by email or
+ * 운영자 계정 (#171, ADR-0056): who holds the admin role, a grant to an account found by email or
  * nickname, a revoke, both with a required reason, and the record of both (who, whom, when,
  * why). One admin role and no other admin's approval for either (owner decision 2026-10-13);
  * the rules the server enforces — the grant conditions, at least two admins left, a revoked

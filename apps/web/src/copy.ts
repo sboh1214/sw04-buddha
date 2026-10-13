@@ -413,7 +413,7 @@ export const copy = {
   // 부여 조건, 2명 하한, 회수 때의 로그아웃은 오너 결정(2026-10-13 #171)이다. '2명'은
   // MIN_ADMINS와 같아야 하고, 사유 500자는 ADMIN_ROLE_REASON_MAX_LENGTH와 같아야 한다
   // (admin-accounts.test.ts가 확인한다).
-  adminAccounts: '관리자 계정',
+  adminAccounts: '운영자 계정',
   adminAccountsIntro:
     '관리자 권한은 하나이며, 관리자가 사유를 남기고 부여·회수합니다. 부여·회수할 때마다 작업자·대상 계정·시각·사유가 권한 변경 기록에 남습니다.',
   adminAccountsGrantRule: '이메일 인증과 실명·휴대전화 입력을 마친 계정에만 부여할 수 있습니다.',
