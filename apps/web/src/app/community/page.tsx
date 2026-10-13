@@ -6,13 +6,12 @@ import { copy } from '@/copy';
 export const metadata: Metadata = { title: `${copy.communityTitle} | ${copy.appName}` };
 
 /**
- * `/community`: the destination of the header's 커뮤니티 item, and nothing more.
+ * `/community`: 커뮤니티, one of the three top-level areas (N02 §2, #16) — the header's row 1 and
+ * the mobile tab bar both lead here, signed in or not — and nothing more yet.
  *
- * ADR-0041 put 커뮤니티 in the header's first row because it is on Kalshi's row, and a nav
- * item has to lead somewhere — a link to a 404 is worse than no link. The feature
- * itself (comments, sharing, any social surface) is out of the MVP's scope by PLAN §2, so this
- * is a PLACEHOLDER and deliberately not a stub of the feature: no data, no query, no client
- * component, no route segment under it. When 커뮤니티 is actually planned, this file is
+ * A nav item has to lead somewhere — a link to a 404 is worse than no link. What the area holds
+ * is #46's, so this is a PLACEHOLDER and deliberately not a stub of the feature: no data, no
+ * query, no client component, no route segment under it. When #46 builds the area, this file is
  * replaced, not extended.
  *
  * Static on purpose — nothing here reads a cookie, a search param or the API, so Next

@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { copy } from '../src/copy';
+import { logOut } from './helpers';
 
 /**
  * M1 flow (PLAN 13 M1 AC 1): email signup -> logout -> login -> /my/settings shows the profile
@@ -62,12 +63,6 @@ async function signUp(page: Page, email: string) {
   await page.getByTestId('contact-phone').fill('010-1234-5678');
   await page.getByRole('button', { name: copy.setPasswordSubmit }).click();
   await expect(page).toHaveURL('/');
-}
-
-async function logOut(page: Page) {
-  await page.getByRole('button', { name: copy.profileMenu }).click();
-  await page.getByRole('menuitem', { name: copy.logout }).click();
-  await expect(page.getByRole('link', { name: copy.login })).toBeVisible();
 }
 
 test.describe('signup -> login -> settings', () => {

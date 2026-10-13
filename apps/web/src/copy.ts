@@ -18,12 +18,8 @@ export const copy = {
   walletNotice: 'Coin의 현금 환전·출금은 제공하지 않습니다.',
 
   // --- navigation / auth buttons (M1) ---
-  navHome: '홈',
-  navSettings: '설정',
-  navWallet: '지갑',
   navAdmin: '관리자',
   balance: '잔고',
-  profileMenu: '프로필 메뉴',
   login: '로그인',
   signup: '가입하기',
   logout: '로그아웃',
@@ -483,12 +479,12 @@ export const copy = {
    */
   portfolioSignedOut: '로그인이 풀렸습니다. 다시 로그인하면 이어서 볼 수 있습니다.',
 
-  // 상단 네비와 모바일 하단 탭. 홈/지갑/설정 라벨은 M1 블록에 이미 있다.
-  // 헤더 1단(ADR-0041·ADR-0053): 시장 · 커뮤니티. 2단은 시장의 상위 카테고리다.
-  navMarkets: '시장',
+  // 최상위 세 영역(N02 §2, #16): 데스크톱 헤더 1단과 모바일 하단 탭이 같은 이름으로 보인다.
+  // MY는 로그인 뒤에만 보인다. 헤더 2단(전체·상위 카테고리)은 시장 탐색에서만 보인다.
+  navExplore: '시장 탐색',
   navCommunity: '커뮤니티',
+  navMy: 'MY',
   navPrimary: '주 메뉴',
-  navPortfolio: '포트폴리오',
   navMenu: '메뉴',
 
   // --- MY (#16, 오너 결정 2026-10-13) ---

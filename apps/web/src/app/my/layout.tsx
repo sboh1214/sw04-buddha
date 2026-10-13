@@ -24,7 +24,8 @@ export const metadata: Metadata = { title: `${copy.myTitle} | ${copy.appName}` }
  * signed-out rung (`profileView`), as it was before the move. Reading `cookies()` through
  * `getServerSession()` is also what marks every MY route dynamic.
  *
- * The profile menu's 관리자 and 로그아웃 live here (`AccountActions`), in one place for every tab.
+ * 관리자 and 로그아웃 live here (`AccountActions`), in one place for every tab: the header has no
+ * profile menu (owner decision 2026-10-13).
  */
 export default async function MyLayout({ children }: { children: React.ReactNode }) {
   if (!(await getServerSession())) {

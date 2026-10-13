@@ -24,39 +24,45 @@ import { useCategories } from '@/hooks/use-markets';
 import { type CategoryNode, groupCategories } from '@/lib/category-tree';
 import {
   CATEGORY_ITEM_OPACITY,
-  type PrimaryNavKey,
   currentSearchTerm,
   currentTopLevelSlug,
   isAllCategoriesCurrent,
   isPrimaryCurrent,
+  primaryNavItems,
+  showsCategoryRow,
 } from '@/lib/nav';
+import { useSession } from '@/lib/use-session';
 
 /**
- * Top navigation (PLAN 11.4, ADR-0041 Kalshi 형): two rows in one sticky header.
+ * Top navigation (PLAN 11.4, ADR-0041 Kalshi 형, #16): one sticky header, two rows on 시장 탐색.
  *
- * Row 1: 로고 · 시장/커뮤니티 · 검색 · 색상 모드 · 잔고 칩 · 프로필 메뉴. The balance chip and the
- * profile menu are `AuthButtons`, unchanged since M1 — the chip stays live because the socket's
- * `user:balance` writes `['me']`.
+ * Row 1: 로고 · 시장 탐색/커뮤니티/MY · 검색 · 색상 모드 · 잔고 칩 (or 로그인/가입하기). The three
+ * areas are N02 §2's top level, and the tab bar lists the same three below md (bottom-tabs.tsx).
+ * The chip is `AuthButtons`; there is no profile menu — 관리자 and 로그아웃 are in MY (owner
+ * decision 2026-10-13).
  *
  * Row 2: 전체 and the top-level market categories, on every breakpoint (it scrolls sideways where
- * it does not fit). It is Kalshi's category strip and the home screen's coarse filter in one:
- * the home screen's own sidebar then lists the leaves of whichever top-level category is chosen.
+ * it does not fit), on 시장 탐색 only (`showsCategoryRow`, owner decision 2026-10-13). It is
+ * Kalshi's category strip and the home screen's coarse filter in one: the home screen's own
+ * sidebar then lists the leaves of whichever top-level category is chosen.
  *
  * The whole header is a client component: the search box holds the open/closed state of its
- * mobile form, row 1 reads `usePathname` and row 2 reads `useCategories()` and the URL's
- * `?category=`. It still renders into the server HTML like every other client component, so
- * nothing about the SSR first paint changes.
+ * mobile form, both rows read `usePathname` and row 2 reads `useCategories()` and the URL's
+ * `?category=`. It still renders into the server HTML like every other client component, and the
+ * pathname is known on the server, so a route without row 2 is served without it.
  *
  * Kalshi's measurements (from kalshi.com, 2026-09-11): a 1320px container with 24px side
  * padding; row 1 is 40px tall with 12px above and below; row 2 is 30px tall, and the header is
- * 107px with its bottom rule — the number `HEADER_HEIGHT_PX` (lib/nav.ts) records for the home
- * screen's sticky sidebar.
+ * 107px with its bottom rule — the number `HEADER_HEIGHT_PX` (lib/nav.ts) records for what sticks
+ * under it on 시장 탐색. Without row 2 it is row 1 and the rule.
  */
 export function Nav() {
-  // The mobile row already carries the logo, the balance chip and the profile menu, so search
-  // collapses to an icon that opens the same form under it — the one search box the app has
-  // since ADR-0041, and it works from every route.
+  // The mobile row already carries the logo and the balance chip, so search collapses to an
+  // icon that opens the same form under it — the one search box the app has since ADR-0041. It
+  // finds markets only (N02 §2) and works from every route (owner decision 2026-10-13: it stays
+  // in the header).
   const [searchOpen, setSearchOpen] = useState(false);
+  const pathname = usePathname();
 
   return (
     <Box as="header" borderBottomWidth="1px" bg="bg" position="sticky" top="0" zIndex="sticky">
@@ -125,26 +131,22 @@ export function Nav() {
             </WithSearchTerm>
           </Box>
         )}
-        <CategoryNav />
+        {showsCategoryRow(pathname) && <CategoryNav />}
       </Container>
     </Box>
   );
 }
 
 /**
- * Row 1's two destinations. Next 16 types `href`, so the list is declared as routes rather
- * than plain strings (the idiom at bottom-tabs.tsx); `/community` is `app/community/page.tsx`.
- */
-const PRIMARY: { key: PrimaryNavKey; href: Route; label: string }[] = [
-  { key: 'markets', href: '/', label: copy.navMarkets },
-  { key: 'community', href: '/community', label: copy.navCommunity },
-];
-
-/**
- * 시장 · 커뮤니티 as Kalshi's pill items, md and up (below md the bottom tab bar is the
- * primary navigation, PLAN 11.4). The current item is `aria-current="page"` as well as the
- * `surface.hover` wash, so it is never signalled by the fill alone (PLAN 11.2); which item is
- * current is `isPrimaryCurrent` (lib/nav.ts), where it is tested.
+ * 시장 탐색 · 커뮤니티 · MY as Kalshi's pill items, md and up (below md the bottom tab bar lists
+ * the same areas, PLAN 11.4). The list and which item is current come from lib/nav.ts
+ * (`primaryNavItems`, `isPrimaryCurrent`), where they are tested. The current item is
+ * `aria-current="page"` as well as the `surface.hover` wash, so it is never signalled by the
+ * fill alone (PLAN 11.2).
+ *
+ * MY joins once the session says someone is signed in (owner decision 2026-10-13). `useSession`
+ * holds `isPending` through hydration (lib/use-session.ts), so the server HTML and the hydrating
+ * render both list two items and MY appears after them, last, so neither of them moves.
  *
  * `usePathname` is safe in the root layout — it is `useSearchParams` that forces a static page
  * into a Suspense boundary (see `CategoryNav`).
@@ -154,10 +156,11 @@ const PRIMARY: { key: PrimaryNavKey; href: Route; label: string }[] = [
  */
 function PrimaryLinks() {
   const pathname = usePathname();
+  const { data: session } = useSession();
 
   return (
     <HStack as="nav" aria-label={copy.navPrimary} hideBelow="md" gap="1">
-      {PRIMARY.map((item) => {
+      {primaryNavItems(session != null).map((item) => {
         const current = isPrimaryCurrent(pathname, item.key);
         return (
           <ChakraLink
@@ -192,8 +195,9 @@ function PrimaryLinks() {
  *
  * It posts a fresh `/?q=…` rather than amending the filters already in the URL: this header is on
  * every route, so its search is a way INTO the list, not a refinement of a list the visitor may
- * not even be looking at. It is also the ONLY search box since ADR-0041 — the home screen's own
- * form went with the Kalshi layout, and Kalshi has no search within a category either.
+ * not even be looking at. It searches markets and nothing else — no user search (N02 §2·§3). It
+ * is also the ONLY search box since ADR-0041 — the home screen's own form went with the Kalshi
+ * layout, and Kalshi has no search within a category either.
  *
  * `prefetch={false}`: this header is on every route, and the home page is `force-dynamic`, so the
  * default action prefetch would ask the server for it from every page the visitor opens.
@@ -304,18 +308,19 @@ function SearchTermReader({ children }: { children: (term: string | undefined) =
 }
 
 /**
- * Row 2 (PLAN 11.4, ADR-0041): 전체 and the top-level categories, on every breakpoint.
+ * Row 2 (PLAN 11.4, ADR-0041): 전체 and the top-level categories, on every breakpoint, on
+ * 시장 탐색 only (`Nav`).
  *
  * The row has to know the URL's `?category=` to mark the current item, and the only honest
- * source for that is `useSearchParams` — the same param the home page normalises. But this
- * header renders on every route from the root layout, and a `useSearchParams` read during the
- * static prerender of `/login`, `/signup`, … bails the render out to the nearest Suspense
- * boundary (`next build` fails when there is none). So the read lives in `CurrentCategoryRow`
- * behind its own `<Suspense>`, and the fallback is the SAME row with nothing marked current.
- * A static page therefore prerenders the full row — the links, the skeleton, 전체 — and when the
- * boundary resolves in the browser it re-renders to an identical row (off `/` nothing is
- * current anyway), so nothing flashes and no static page turns dynamic. On `/`, which is
- * `force-dynamic`, the params are known at request time and the real row goes into the HTML.
+ * source for that is `useSearchParams` — the same param the home page normalises. Both routes
+ * that draw the row (`/` and `/markets/[slug]`) are `force-dynamic`, so the params are known at
+ * request time and the real row goes into the HTML. The read still lives in `CurrentCategoryRow`
+ * behind its own `<Suspense>`, with the SAME row and nothing marked current as the fallback: a
+ * `useSearchParams` read in the root layout during a static prerender bails the render out to the
+ * nearest Suspense boundary (`next build` fails when there is none), and the boundary keeps a
+ * page that draws the row buildable however it is rendered — a prerendered row is the full row
+ * (the links, the skeleton, 전체), and when the boundary resolves in the browser it re-renders to
+ * an identical one (off `/` nothing is current anyway), so nothing flashes.
  *
  * The categories query and the grouping are read ONCE here and handed to both branches of the
  * boundary, so the fallback and the real row cannot disagree about what they list.

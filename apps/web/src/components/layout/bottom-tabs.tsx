@@ -1,46 +1,35 @@
 'use client';
 
 import { HStack, Link as ChakraLink } from '@chakra-ui/react';
-import type { Route } from 'next';
 import NextLink from 'next/link';
 import { usePathname } from 'next/navigation';
 import { copy } from '@/copy';
+import { isPrimaryCurrent, primaryNavItems } from '@/lib/nav';
+import { useSession } from '@/lib/use-session';
 
 /**
- * The mobile bottom tab bar (PLAN 11.4 레이아웃): 홈 · 포트폴리오 · 지갑 · 설정, below `md` only.
+ * The mobile bottom tab bar (PLAN 11.4 레이아웃, #16), below `md` only: the same three areas as
+ * the desktop header's row 1 — 시장 탐색 · 커뮤니티 · MY — from the same list (`primaryNavItems`,
+ * lib/nav.ts), so every width reaches the same places. Which tab is current is
+ * `isPrimaryCurrent`, the header's own rule: 시장 탐색 stays lit on a market detail and MY on
+ * every MY tab.
  *
  * Fixed to the bottom of the viewport, so the document needs that much extra scroll length or
  * every page's last row would sit under it — the site footer, the last row of every page, pays it
  * as extra bottom padding (footer.tsx).
  *
- * The four destinations are shown to signed-out visitors too. Three of them are in MY, whose
- * layout is session-gated on the server and answers with `redirect('/login?next=…')`, which is
- * the same thing a tap on a hidden tab could not do; hiding them would also make the bar's shape
- * depend on a `GET /me` that has not resolved during the first paint.
- */
-/** Next 16 types `href`, so the list is declared as routes rather than plain strings. */
-const TABS: { key: string; href: Route; label: string }[] = [
-  { key: 'home', href: '/', label: copy.navHome },
-  { key: 'portfolio', href: '/my', label: copy.navPortfolio },
-  { key: 'wallet', href: '/my/wallet', label: copy.navWallet },
-  { key: 'settings', href: '/my/settings', label: copy.navSettings },
-];
-
-/**
- * Whether a tab is the page being shown. `/` matches only itself — every route starts with it —
- * while the others also match their own subtree, so a future `/my/wallet/…` keeps 지갑 marked.
- */
-export function isCurrentTab(pathname: string, href: string): boolean {
-  if (href === '/') return pathname === '/';
-  return pathname === href || pathname.startsWith(`${href}/`);
-}
-
-/**
+ * A visitor with no session sees the two public areas; MY joins once the session says someone is
+ * signed in (owner decision 2026-10-13). `useSession` holds `isPending` through hydration
+ * (lib/use-session.ts), so the server HTML and the hydrating render both draw two tabs and a
+ * signed-in reader's third arrives after — the bar's height never changes, only the width of its
+ * cells.
+ *
  * On every route, the market detail included: its 주문 영역 is an ordinary block (#125), so
  * nothing else claims this place.
  */
 export function BottomTabs() {
   const pathname = usePathname();
+  const { data: session } = useSession();
 
   return (
     <HStack
@@ -58,14 +47,14 @@ export function BottomTabs() {
       pb="env(safe-area-inset-bottom)"
       data-testid="bottom-tabs"
     >
-      {TABS.map((tab) => {
-        const current = isCurrentTab(pathname, tab.href);
+      {primaryNavItems(session != null).map((tab) => {
+        const current = isPrimaryCurrent(pathname, tab.key);
         return (
           <ChakraLink
             key={tab.key}
             asChild
-            // The whole cell is the target, not just the two or three characters of the label
-            // (WCAG 2.5.5): four equal columns, each a full-height link.
+            // The whole cell is the target, not just the few characters of the label (WCAG
+            // 2.5.5): equal columns, each a full-height link.
             flex="1"
             justifyContent="center"
             py="3"
