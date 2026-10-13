@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  CHARGE_PACKAGE_MAX_P,
-  CHARGE_PACKAGE_MIN_P,
+  CHARGE_PACKAGE_MAX_COIN,
+  CHARGE_PACKAGE_MIN_COIN,
   chargeBodySchema,
   chargePackageSchema,
   createChargePackageBodySchema,
@@ -13,7 +13,7 @@ const packageId = '3f1a5b6c-1111-4222-8333-444455556666';
 
 describe('discountPercent', () => {
   it('derives the discount from the price and the face value', () => {
-    // The seeded ladder: bigger packages are cheaper per P (owner decision 2026-09-04).
+    // The seeded ladder: bigger packages are cheaper per Coin (owner decision 2026-09-04).
     expect(discountPercent(5_000n, 4_900)).toBe(2);
     expect(discountPercent(10_000n, 9_700)).toBe(3);
     expect(discountPercent(30_000n, 28_500)).toBe(5);
@@ -28,16 +28,16 @@ describe('discountPercent', () => {
 });
 
 describe('chargeBodySchema', () => {
-  const terms = { packageId, expectedAmountP: '10000', expectedPriceKrw: 9_700 };
+  const terms = { packageId, expectedAmountCoin: '10000', expectedPriceKrw: 9_700 };
 
   it('takes a package id, the terms the card showed and the account on screen', () => {
     expect(chargeBodySchema.parse({ ...terms, expectedAccountId: 'user-1' })).toEqual({
       packageId,
-      expectedAmountP: 10_000n,
+      expectedAmountCoin: 10_000n,
       expectedPriceKrw: 9_700,
       expectedAccountId: 'user-1',
     });
-    expect(chargeBodySchema.safeParse({ amountP: '10000' }).success).toBe(false);
+    expect(chargeBodySchema.safeParse({ amountCoin: '10000' }).success).toBe(false);
     expect(chargeBodySchema.safeParse({ packageId: 'not-a-uuid' }).success).toBe(false);
     // Lower-cased on the way in: the replay compares it with the payment row's (api/uuid.ts).
     expect(
@@ -58,8 +58,11 @@ describe('chargeBodySchema', () => {
         .success,
     ).toBe(false);
     expect(
-      chargeBodySchema.safeParse({ ...terms, expectedAmountP: undefined, expectedAccountId: 'u' })
-        .success,
+      chargeBodySchema.safeParse({
+        ...terms,
+        expectedAmountCoin: undefined,
+        expectedAccountId: 'u',
+      }).success,
     ).toBe(false);
   });
 
@@ -75,7 +78,7 @@ describe('chargePackageSchema', () => {
     expect(
       chargePackageSchema.parse({
         id: packageId,
-        amountP: '5000',
+        amountCoin: '5000',
         priceKrw: 4900,
         sortOrder: 10,
         isActive: true,
@@ -86,8 +89,8 @@ describe('chargePackageSchema', () => {
 
 describe('createChargePackageBodySchema', () => {
   it('defaults the order and availability, and yields a bigint amount', () => {
-    expect(createChargePackageBodySchema.parse({ amountP: '5000', priceKrw: 4900 })).toEqual({
-      amountP: 5_000n,
+    expect(createChargePackageBodySchema.parse({ amountCoin: '5000', priceKrw: 4900 })).toEqual({
+      amountCoin: 5_000n,
       priceKrw: 4900,
       sortOrder: 0,
       isActive: true,
@@ -96,12 +99,12 @@ describe('createChargePackageBodySchema', () => {
 
   it('refuses a price above face value and amounts outside the bounds', () => {
     for (const body of [
-      { amountP: '5000', priceKrw: 5001 },
-      { amountP: (CHARGE_PACKAGE_MIN_P - 1n).toString(), priceKrw: 500 },
-      { amountP: (CHARGE_PACKAGE_MAX_P + 1n).toString(), priceKrw: 1000 },
-      { amountP: '5000', priceKrw: 0 },
-      { amountP: '5000', priceKrw: -100 },
-      { amountP: '5000' },
+      { amountCoin: '5000', priceKrw: 5001 },
+      { amountCoin: (CHARGE_PACKAGE_MIN_COIN - 1n).toString(), priceKrw: 500 },
+      { amountCoin: (CHARGE_PACKAGE_MAX_COIN + 1n).toString(), priceKrw: 1000 },
+      { amountCoin: '5000', priceKrw: 0 },
+      { amountCoin: '5000', priceKrw: -100 },
+      { amountCoin: '5000' },
     ]) {
       expect(createChargePackageBodySchema.safeParse(body).success, JSON.stringify(body)).toBe(
         false,
@@ -120,7 +123,7 @@ describe('face-value refinement', () => {
     // VALIDATION_ERROR into a 500.
     for (const priceKrw of [1.5, '1.5', -0.5]) {
       for (const schema of [createChargePackageBodySchema, updateChargePackageBodySchema]) {
-        const result = schema.safeParse({ amountP: '5000', priceKrw });
+        const result = schema.safeParse({ amountCoin: '5000', priceKrw });
         expect(result.success, String(priceKrw)).toBe(false);
         expect(result.error?.issues.map((issue) => [issue.path, issue.code])).toEqual([
           [['priceKrw'], 'invalid_type'],
@@ -129,7 +132,7 @@ describe('face-value refinement', () => {
     }
     // The Standard Schema entry point is what the API's validation pipe calls.
     const standard = await createChargePackageBodySchema['~standard'].validate({
-      amountP: '5000',
+      amountCoin: '5000',
       priceKrw: 1.5,
     });
     expect(standard.issues?.map((issue) => issue.path)).toEqual([['priceKrw']]);
@@ -138,7 +141,7 @@ describe('face-value refinement', () => {
   it('still runs after a range failure, where the price is an integer and BigInt is safe', () => {
     // `.max()` failing is not aborting, so the refinement does run — on an integer.
     const result = createChargePackageBodySchema.safeParse({
-      amountP: '5000',
+      amountCoin: '5000',
       priceKrw: 2_000_000,
     });
     expect(result.success).toBe(false);
@@ -155,7 +158,7 @@ describe('updateChargePackageBodySchema', () => {
 
   it('still refuses a price above the amount when both are given', () => {
     expect(
-      updateChargePackageBodySchema.safeParse({ amountP: '5000', priceKrw: 6000 }).success,
+      updateChargePackageBodySchema.safeParse({ amountCoin: '5000', priceKrw: 6000 }).success,
     ).toBe(false);
   });
 });

@@ -1,6 +1,6 @@
 import * as z from 'zod';
 import { cursorQuerySchema } from './api/pagination.js';
-import { pAmountSchema } from './api/p-amount.js';
+import { coinAmountSchema } from './api/coin-amount.js';
 import { uuidParamSchema } from './api/path-param.js';
 import {
   BP_MAX,
@@ -81,7 +81,7 @@ const marketSummaryFields = {
    * client shows as '체결 없음' (N02 §5). #121 and #64 define the market's price fields.
    */
   lastPrice: priceSchema.nullable(),
-  volumeP: pAmountSchema,
+  volumeCoin: coinAmountSchema,
   tradeCount: countSchema,
   traderCount: countSchema,
   closeAt: z.iso.datetime(),
@@ -186,7 +186,7 @@ export const orderSchema = z
     filledQty: countSchema,
     status: orderStatusSchema,
     /** From the fill; null while nothing filled. */
-    amountP: pAmountSchema.nullable(),
+    amountCoin: coinAmountSchema.nullable(),
     priceAvgBp: bpSchema.nullable(),
     createdAt: z.iso.datetime(),
   })
@@ -200,7 +200,7 @@ export const fillSchema = z
     outcome: outcomeSchema,
     side: orderSideSchema,
     qty: countSchema,
-    amountP: pAmountSchema,
+    amountCoin: coinAmountSchema,
     priceAvgBp: bpSchema,
     createdAt: z.iso.datetime(),
   })
@@ -218,8 +218,8 @@ export const positionSchema = z
     resolvedResult: outcomeSchema.nullable(),
     outcome: outcomeSchema,
     qty: countSchema,
-    costBasisP: pAmountSchema,
-    realizedPnlP: pAmountSchema,
+    costBasisCoin: coinAmountSchema,
+    realizedPnlCoin: coinAmountSchema,
     settled: z.boolean(),
     /** The row's write count (1 on first buy); `user:position` events carry the same key. */
     version: z.number().int().min(1),
@@ -387,7 +387,7 @@ export const adminMarketSchema = marketSchema
     createdBy: z.string(),
     updatedAt: z.iso.datetime(),
     /** Σ buy amounts − Σ sell amounts over the market's fills. */
-    netCollectedP: pAmountSchema,
+    netCollectedCoin: coinAmountSchema,
     /** Σ positions.qty per outcome where settled = false. */
     openInterest: z.object({ yes: countSchema, no: countSchema }),
     /**

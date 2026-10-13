@@ -47,7 +47,7 @@ const summary = {
   imageUrl: null,
   status: 'open',
   lastPrice: 52,
-  volumeP: '12345',
+  volumeCoin: '12345',
   tradeCount: 3,
   traderCount: 2,
   closeAt: at,
@@ -77,7 +77,7 @@ const order = {
   qty: 10,
   filledQty: 10,
   status: 'filled',
-  amountP: '520',
+  amountCoin: '520',
   priceAvgBp: 5200,
   createdAt: at,
 };
@@ -86,7 +86,7 @@ const fill = {
   outcome: 'YES',
   side: 'buy',
   qty: 10,
-  amountP: '520',
+  amountCoin: '520',
   priceAvgBp: 5200,
   createdAt: at,
 };
@@ -99,8 +99,8 @@ const position = {
   resolvedResult: null,
   outcome: 'YES',
   qty: 10,
-  costBasisP: '520',
-  realizedPnlP: '0',
+  costBasisCoin: '520',
+  realizedPnlCoin: '0',
   settled: false,
   version: 1,
   updatedAt: at,
@@ -141,7 +141,13 @@ describe('read DTOs', () => {
 
   it('show a market with no fill yet as a null price, never a made-up one (N02 §5)', () => {
     // No AMM state any more (#125): before its first fill a market has no price to show.
-    const untraded = { ...summary, lastPrice: null, volumeP: '0', tradeCount: 0, traderCount: 0 };
+    const untraded = {
+      ...summary,
+      lastPrice: null,
+      volumeCoin: '0',
+      tradeCount: 0,
+      traderCount: 0,
+    };
     expect(marketSummarySchema.parse(untraded).lastPrice).toBeNull();
     expect(marketSchema.parse({ ...market, lastPrice: null }).lastPrice).toBeNull();
     expect(positionSchema.parse({ ...position, marketLastPrice: null }).marketLastPrice).toBeNull();
@@ -150,7 +156,7 @@ describe('read DTOs', () => {
     expect(marketSummarySchema.safeParse(withoutPrice).success).toBe(false);
     // The AMM probability and the slippage guards are gone from the shapes.
     expect(marketSummarySchema.parse({ ...summary, pYesBp: 5250 })).not.toHaveProperty('pYesBp');
-    expect(orderSchema.parse({ ...order, maxCostP: '600' })).not.toHaveProperty('maxCostP');
+    expect(orderSchema.parse({ ...order, maxCostCoin: '600' })).not.toHaveProperty('maxCostCoin');
   });
 
   it('keep the author and exposure out of the public shape but in the admin one', () => {
@@ -158,7 +164,7 @@ describe('read DTOs', () => {
       ...market,
       createdBy: 'admin-1',
       updatedAt: at,
-      netCollectedP: '520',
+      netCollectedCoin: '520',
       openInterest: { yes: 10, no: 0 },
       settlementSteps: [
         {
@@ -173,12 +179,12 @@ describe('read DTOs', () => {
       events: [event],
     };
     expect(adminMarketSchema.parse(admin)).toEqual(admin);
-    expect(marketSchema.parse(admin)).not.toHaveProperty('netCollectedP');
+    expect(marketSchema.parse(admin)).not.toHaveProperty('netCollectedCoin');
     expect(adminMarketSchema.safeParse(market).success).toBe(false);
     // No LMSR state on the admin shape either (#125).
     expect(
-      adminMarketSchema.parse({ ...admin, qYes: '0.0000000000', reserveP: '69315' }),
-    ).not.toHaveProperty('reserveP');
+      adminMarketSchema.parse({ ...admin, qYes: '0.0000000000', reserveCoin: '69315' }),
+    ).not.toHaveProperty('reserveCoin');
     // The dispute stage is gone (ADR-0046): no deadline on the public shape, no counts on the
     // admin one, and a step must be one of SETTLEMENT_STEPS.
     expect(marketSchema.parse({ ...market, disputeUntil: at })).not.toHaveProperty('disputeUntil');
@@ -193,7 +199,7 @@ describe('read DTOs', () => {
   it('bound prices and basis points', () => {
     expect(marketSummarySchema.safeParse({ ...summary, lastPrice: 0 }).success).toBe(false);
     expect(marketSummarySchema.safeParse({ ...summary, lastPrice: 100 }).success).toBe(false);
-    expect(marketSummarySchema.safeParse({ ...summary, volumeP: '1.5' }).success).toBe(false);
+    expect(marketSummarySchema.safeParse({ ...summary, volumeCoin: '1.5' }).success).toBe(false);
     expect(fillSchema.safeParse({ ...fill, userId: 'u' }).success).toBe(true); // stripped
     expect(fillSchema.parse({ ...fill, userId: 'u' })).not.toHaveProperty('userId');
   });

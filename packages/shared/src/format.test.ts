@@ -1,45 +1,45 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import { MINUS_SIGN, formatKrw, formatP } from './format.js';
+import { MINUS_SIGN, formatCoin, formatKrw } from './format.js';
 
-describe('formatP', () => {
+describe('formatCoin', () => {
   it('groups thousands and appends P', () => {
-    expect(formatP(0)).toBe('0P');
-    expect(formatP(999)).toBe('999P');
-    expect(formatP(1000)).toBe('1,000P');
-    expect(formatP(12345)).toBe('12,345P');
-    expect(formatP(12345n)).toBe('12,345P');
-    expect(formatP(1_000_000_000n)).toBe('1,000,000,000P');
+    expect(formatCoin(0)).toBe('0P');
+    expect(formatCoin(999)).toBe('999P');
+    expect(formatCoin(1000)).toBe('1,000P');
+    expect(formatCoin(12345)).toBe('12,345P');
+    expect(formatCoin(12345n)).toBe('12,345P');
+    expect(formatCoin(1_000_000_000n)).toBe('1,000,000,000P');
   });
 
   it('renders negatives with U+2212 MINUS SIGN, never hyphen-minus', () => {
-    expect(formatP(-1200)).toBe('−1,200P');
-    expect(formatP(-1200n)).toBe(`${MINUS_SIGN}1,200P`);
-    expect(formatP(-1)).toBe('−1P');
-    expect(formatP(-1200)).not.toContain('-');
+    expect(formatCoin(-1200)).toBe('−1,200P');
+    expect(formatCoin(-1200n)).toBe(`${MINUS_SIGN}1,200P`);
+    expect(formatCoin(-1)).toBe('−1P');
+    expect(formatCoin(-1200)).not.toContain('-');
   });
 
   it('rejects non-integer numbers', () => {
-    expect(() => formatP(1.5)).toThrow(RangeError);
-    expect(() => formatP(Number.NaN)).toThrow(RangeError);
+    expect(() => formatCoin(1.5)).toThrow(RangeError);
+    expect(() => formatCoin(Number.NaN)).toThrow(RangeError);
   });
 
   it('rejects numbers outside the safe-integer range (already rounded by the double)', () => {
     // 2 ** 53: a 9007199254740993 literal would already parse to this value.
-    expect(() => formatP(2 ** 53)).toThrow(RangeError);
-    expect(() => formatP(-(2 ** 53))).toThrow(RangeError);
-    expect(() => formatP(1e21)).toThrow(RangeError);
-    expect(() => formatP(Number.POSITIVE_INFINITY)).toThrow(RangeError);
+    expect(() => formatCoin(2 ** 53)).toThrow(RangeError);
+    expect(() => formatCoin(-(2 ** 53))).toThrow(RangeError);
+    expect(() => formatCoin(1e21)).toThrow(RangeError);
+    expect(() => formatCoin(Number.POSITIVE_INFINITY)).toThrow(RangeError);
     // Safe boundaries stay accepted; bigint input is unbounded.
-    expect(formatP(Number.MAX_SAFE_INTEGER)).toBe('9,007,199,254,740,991P');
-    expect(formatP(Number.MIN_SAFE_INTEGER)).toBe('−9,007,199,254,740,991P');
-    expect(formatP(2n ** 53n)).toBe('9,007,199,254,740,992P');
+    expect(formatCoin(Number.MAX_SAFE_INTEGER)).toBe('9,007,199,254,740,991P');
+    expect(formatCoin(Number.MIN_SAFE_INTEGER)).toBe('−9,007,199,254,740,991P');
+    expect(formatCoin(2n ** 53n)).toBe('9,007,199,254,740,992P');
   });
 
   it('round-trips: stripping separators and sign yields the absolute value', () => {
     fc.assert(
       fc.property(fc.bigInt({ min: -(10n ** 30n), max: 10n ** 30n }), (v) => {
-        const out = formatP(v);
+        const out = formatCoin(v);
         expect(out.endsWith('P')).toBe(true);
         const body = out.slice(0, -1);
         const negative = body.startsWith(MINUS_SIGN);
@@ -58,7 +58,7 @@ describe('formatP', () => {
   it('agrees with bigint input for every safe integer', () => {
     fc.assert(
       fc.property(fc.maxSafeInteger(), (n) => {
-        expect(formatP(n)).toBe(formatP(BigInt(n)));
+        expect(formatCoin(n)).toBe(formatCoin(BigInt(n)));
       }),
     );
   });

@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import {
   PRICE_MAX,
   PRICE_MIN,
-  SIGNUP_BONUS_P,
+  SIGNUP_BONUS_COIN,
   SETTLEMENT_STEPS,
   type MarketStatus,
   type Outcome,
@@ -38,11 +38,11 @@ export interface CreateUserInput {
   nickname?: string;
   role?: Role;
   /**
-   * Balance the user should end up with. Every account is created with SIGNUP_BONUS_P by the
+   * Balance the user should end up with. Every account is created with SIGNUP_BONUS_COIN by the
    * trigger (migration 0004); asking for something else writes the difference as an
    * ADMIN_ADJUST entry, so the PLAN 5.6 invariant keeps holding. Omit to keep the bonus.
    */
-  balanceP?: bigint;
+  balanceCoin?: bigint;
 }
 
 /**
@@ -53,7 +53,7 @@ export interface CreateUserInput {
 export async function createUser(db: Db, input: CreateUserInput = {}) {
   const id = input.id ?? randomUUID();
   const t = tag();
-  const balanceP = input.balanceP ?? SIGNUP_BONUS_P;
+  const balanceCoin = input.balanceCoin ?? SIGNUP_BONUS_COIN;
   return db.transaction(async (tx) => {
     const [userRow] = await tx
       .insert(user)
@@ -73,18 +73,18 @@ export async function createUser(db: Db, input: CreateUserInput = {}) {
     if (!userRow || !profile || !balance) {
       throw new Error('user trigger did not create profiles/balances (migration 0002 missing?)');
     }
-    if (balanceP !== balance.availableP) {
-      const delta = balanceP - balance.availableP;
+    if (balanceCoin !== balance.availableCoin) {
+      const delta = balanceCoin - balance.availableCoin;
       [balance] = await tx
         .update(balances)
-        .set({ availableP: balanceP })
+        .set({ availableCoin: balanceCoin })
         .where(eq(balances.userId, id))
         .returning();
       await tx.insert(ledgerEntries).values({
         userId: id,
         type: 'ADMIN_ADJUST',
-        amountP: delta,
-        balanceAfterP: balanceP,
+        amountCoin: delta,
+        balanceAfterCoin: balanceCoin,
         memo: 'test factory: initial balance',
       });
     }
@@ -133,7 +133,7 @@ export interface CreateMarketInput {
    */
   lastPrice?: number | null;
   /** Statistics overrides (list sorting tests). Default 0 like a market nobody traded. */
-  volumeP?: bigint;
+  volumeCoin?: bigint;
   tradeCount?: number;
   closeAt?: Date;
   /**
@@ -184,7 +184,7 @@ export async function createMarket(db: Db, input: CreateMarketInput = {}) {
       categoryId,
       status,
       lastPrice,
-      volumeP: input.volumeP ?? 0n,
+      volumeCoin: input.volumeCoin ?? 0n,
       tradeCount: input.tradeCount ?? 0,
       openAt: status === 'draft' ? null : now,
       closeAt: input.closeAt ?? new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),
@@ -248,9 +248,9 @@ export interface CreatePositionInput {
   outcome: Outcome;
   qty: number;
   /** Default 0. */
-  costBasisP?: bigint;
+  costBasisCoin?: bigint;
   /** Default 0. */
-  realizedPnlP?: bigint;
+  realizedPnlCoin?: bigint;
   /** Default false. */
   settled?: boolean;
 }
@@ -269,8 +269,8 @@ export async function createPosition(db: Db, input: CreatePositionInput) {
       marketId: input.marketId,
       outcome: input.outcome,
       qty: input.qty,
-      costBasisP: input.costBasisP ?? 0n,
-      realizedPnlP: input.realizedPnlP ?? 0n,
+      costBasisCoin: input.costBasisCoin ?? 0n,
+      realizedPnlCoin: input.realizedPnlCoin ?? 0n,
       settled: input.settled ?? false,
     })
     .returning();

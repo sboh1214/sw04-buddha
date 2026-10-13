@@ -1,23 +1,23 @@
 import * as z from 'zod';
 import { cursorQuerySchema } from './api/pagination.js';
-import { pAmountInputSchema, pAmountSchema } from './api/p-amount.js';
+import { coinAmountInputSchema, coinAmountSchema } from './api/coin-amount.js';
 import { ledgerEntryTypeSchema, ledgerRefTypeSchema, paymentStatusSchema } from './enums.js';
 
 /** Admin adjustments are bounded in either direction (PLAN 7.3). */
-export const ADJUST_MAX_ABS_P = 1_000_000n;
+export const ADJUST_MAX_ABS_COIN = 1_000_000n;
 export const ADJUST_MEMO_MAX_LENGTH = 200;
 
 export const balanceSchema = z
-  .object({ availableP: pAmountSchema, lockedP: pAmountSchema })
+  .object({ availableCoin: coinAmountSchema, lockedCoin: coinAmountSchema })
   .meta({ id: 'Balance' });
 export type Balance = z.infer<typeof balanceSchema>;
 
 export const paymentSchema = z
   .object({
     id: z.uuid(),
-    /** P credited. */
-    amountP: pAmountSchema,
-    /** KRW actually paid: below amountP whenever the package carried a discount. */
+    /** Coin credited. */
+    amountCoin: coinAmountSchema,
+    /** KRW actually paid: below amountCoin whenever the package carried a discount. */
     priceKrw: z.number().int(),
     /** The package bought, or null once an admin removed it (the amounts above stay). */
     packageId: z.uuid().nullable(),
@@ -55,9 +55,9 @@ export const ledgerEntrySchema = z
     id: z.string(),
     type: ledgerEntryTypeSchema,
     /** Signed: `+` credits the account, `−` debits it (PLAN 5.6). */
-    amountP: pAmountSchema,
-    /** available_p right after this entry was written. */
-    balanceAfterP: pAmountSchema,
+    amountCoin: coinAmountSchema,
+    /** available_coin right after this entry was written. */
+    balanceAfterCoin: coinAmountSchema,
     refType: ledgerRefTypeSchema.nullable(),
     refId: z.string().nullable(),
     memo: z.string().nullable(),
@@ -69,7 +69,7 @@ export type LedgerEntry = z.infer<typeof ledgerEntrySchema>;
 /**
  * What `POST /payments/charge` answers with: the payment and the balance it produced.
  *
- * No `package`: the payment row is the immutable record of the purchase (id, P granted, KRW
+ * No `package`: the payment row is the immutable record of the purchase (id, Coin granted, KRW
  * paid — ADR-0026), while the catalogue row it points at may be re-priced or deleted by an
  * admin at any time. Echoing that row would be redundant on a fresh answer and wrong on a
  * replayed one (same `Idempotency-Key`, PLAN 5.4), which must be the first outcome, not the
@@ -88,9 +88,9 @@ export type ChargeResult = z.infer<typeof chargeResultSchema>;
 /** `POST /admin/users/:id/balance-adjust` (PLAN 7.3): signed amount, reason required. */
 export const balanceAdjustBodySchema = z
   .object({
-    amountP: pAmountInputSchema.refine(
-      (value) => value !== 0n && value >= -ADJUST_MAX_ABS_P && value <= ADJUST_MAX_ABS_P,
-      `must be a non-zero amount within ±${ADJUST_MAX_ABS_P.toString()}`,
+    amountCoin: coinAmountInputSchema.refine(
+      (value) => value !== 0n && value >= -ADJUST_MAX_ABS_COIN && value <= ADJUST_MAX_ABS_COIN,
+      `must be a non-zero amount within ±${ADJUST_MAX_ABS_COIN.toString()}`,
     ),
     memo: z.string().trim().min(1).max(ADJUST_MEMO_MAX_LENGTH),
   })

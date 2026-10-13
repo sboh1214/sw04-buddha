@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  COUPON_MAX_P,
+  COUPON_MAX_COIN,
   couponCodeSchema,
   couponSchema,
   createCouponBodySchema,
@@ -28,11 +28,11 @@ describe('couponCodeSchema', () => {
 
 describe('createCouponBodySchema', () => {
   it('takes an amount and optional limits; the code may be omitted', () => {
-    expect(createCouponBodySchema.parse({ amountP: '5000' })).toEqual({ amountP: 5_000n });
+    expect(createCouponBodySchema.parse({ amountCoin: '5000' })).toEqual({ amountCoin: 5_000n });
     expect(
       createCouponBodySchema.parse({
         code: 'welcome',
-        amountP: '5000',
+        amountCoin: '5000',
         maxRedemptions: 100,
         expiresAt: '2026-12-31T14:59:59.000Z',
         memo: '  런칭 이벤트  ',
@@ -42,11 +42,11 @@ describe('createCouponBodySchema', () => {
 
   it('refuses a non-positive amount, an amount above the cap and a zero cap', () => {
     for (const body of [
-      { amountP: '0' },
-      { amountP: '-100' },
-      { amountP: (COUPON_MAX_P + 1n).toString() },
-      { amountP: '1000', maxRedemptions: 0 },
-      { amountP: '1000', expiresAt: 'tomorrow' },
+      { amountCoin: '0' },
+      { amountCoin: '-100' },
+      { amountCoin: (COUPON_MAX_COIN + 1n).toString() },
+      { amountCoin: '1000', maxRedemptions: 0 },
+      { amountCoin: '1000', expiresAt: 'tomorrow' },
     ]) {
       expect(createCouponBodySchema.safeParse(body).success, JSON.stringify(body)).toBe(false);
     }
@@ -67,7 +67,7 @@ describe('couponSchema', () => {
       couponSchema.parse({
         id: '3f1a5b6c-1111-4222-8333-444455556666',
         code: 'WELCOME',
-        amountP: '5000',
+        amountCoin: '5000',
         maxRedemptions: null,
         redeemedCount: 3,
         expiresAt: null,

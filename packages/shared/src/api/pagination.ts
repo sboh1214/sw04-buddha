@@ -82,7 +82,7 @@ export function decodeKeyset(
 
 /**
  * Keyset cursor for a sort whose first key is not `created_at`: `GET /markets?sort=volume`
- * orders by `(volume_p DESC, id DESC)`, and `volume_p` is a bigint that `encodeKeyset`
+ * orders by `(volume_coin DESC, id DESC)`, and `volume_coin` is a bigint that `encodeKeyset`
  * cannot carry. Encoded as `<sortValue>_<id>`; the value half is digits only.
  */
 export interface SortCursor {
@@ -99,7 +99,7 @@ export function encodeSortCursor(sortValue: string, id: string): string {
 const INT8_MAX = 9_223_372_036_854_775_807n;
 
 const SORT_VALUE_SHAPES = {
-  /** A non-negative bigint column (volume_p): digits only, within int8. */
+  /** A non-negative bigint column (volume_coin): digits only, within int8. */
   int: (value: string) => /^\d+$/.test(value) && BigInt(value) <= INT8_MAX,
   /** Epoch milliseconds for a timestamp(3) column, with the same range as `decodeKeyset`. */
   millis: (value: string) =>

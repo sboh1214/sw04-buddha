@@ -43,7 +43,7 @@ export const markets = pgTable(
      * (N02 §5) — and the CHECK below passes a NULL, as every SQL CHECK does.
      */
     lastPrice: smallint(),
-    volumeP: bigint({ mode: 'bigint' })
+    volumeCoin: bigint({ mode: 'bigint' })
       .notNull()
       .default(sql`0`),
     tradeCount: integer().notNull().default(0),
@@ -78,16 +78,16 @@ export const markets = pgTable(
     index('markets_category_id_status_idx').on(t.categoryId, t.status),
     /**
      * The home page's DEFAULT sort: `GET /markets?status=open&sort=volume`, ordered
-     * `(volume_p DESC, id DESC)` under a status filter (A-M3-10).
+     * `(volume_coin DESC, id DESC)` under a status filter (A-M3-10).
      *
      * `markets_status_close_at_idx` is not a substitute and the planner says so: it can serve
      * the `status` predicate but never removes the Sort, because `(status, close_at)` cannot
-     * supply `volume_p` ordering — and at 2M rows it stops choosing it at all (40% of the table
+     * supply `volume_coin` ordering — and at 2M rows it stops choosing it at all (40% of the table
      * is `open`, too many for a bitmap scan). Measured at 2M: 758 ms -> 0.23 ms first page,
      * 355 ms -> 0.13 ms deep. With the index but the OLD OR-form cursor predicate the deep page
      * was 2053 ms — worse than no index — which is why this and `keysetPredicate` are one change.
      */
-    index('markets_status_volume_p_id_idx').on(t.status, desc(t.volumeP), desc(t.id)),
+    index('markets_status_volume_coin_id_idx').on(t.status, desc(t.volumeCoin), desc(t.id)),
     /**
      * `GET /admin/markets`, whose `status` filter is OPTIONAL, ordered `(created_at DESC,
      * id DESC)`.
@@ -103,7 +103,7 @@ export const markets = pgTable(
      */
     index('markets_created_at_id_idx').on(desc(t.createdAt), desc(t.id)),
     check('markets_last_price_check', sql`${t.lastPrice} >= 1 AND ${t.lastPrice} <= 99`),
-    check('markets_volume_p_check', sql`${t.volumeP} >= 0`),
+    check('markets_volume_coin_check', sql`${t.volumeCoin} >= 0`),
     check('markets_trade_count_check', sql`${t.tradeCount} >= 0`),
     check('markets_trader_count_check', sql`${t.traderCount} >= 0`),
     check(

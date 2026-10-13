@@ -32,7 +32,7 @@ const tick = {
   type: 'market:tick',
   marketId,
   lastPrice: 52,
-  volumeP: '520',
+  volumeCoin: '520',
   tradeCount: 1,
   traderCount: 1,
   ts,
@@ -55,14 +55,20 @@ const status = {
   statusEventId: '12',
   ts,
 };
-const balance = { type: 'user:balance', availableP: '9480', lockedP: '0', ledgerEntryId: '42', ts };
+const balance = {
+  type: 'user:balance',
+  availableCoin: '9480',
+  lockedCoin: '0',
+  ledgerEntryId: '42',
+  ts,
+};
 const position = {
   type: 'user:position',
   marketId,
   outcome: 'YES',
   qty: 10,
-  costBasisP: '520',
-  realizedPnlP: '0',
+  costBasisCoin: '520',
+  realizedPnlCoin: '0',
   settled: false,
   version: 1,
   ts,
@@ -91,10 +97,12 @@ describe('realtime events (PLAN 8)', () => {
     expect(realtimeEventSchema.safeParse({}).success).toBe(false);
   });
 
-  it('carries P amounts as strings and requires a timestamp', () => {
-    expect(realtimeEventSchema.safeParse({ ...tick, volumeP: 520 }).success).toBe(false);
-    expect(realtimeEventSchema.safeParse({ ...balance, availableP: 9480 }).success).toBe(false);
-    expect(realtimeEventSchema.safeParse({ ...position, costBasisP: '1.5' }).success).toBe(false);
+  it('carries Coin amounts as strings and requires a timestamp', () => {
+    expect(realtimeEventSchema.safeParse({ ...tick, volumeCoin: 520 }).success).toBe(false);
+    expect(realtimeEventSchema.safeParse({ ...balance, availableCoin: 9480 }).success).toBe(false);
+    expect(realtimeEventSchema.safeParse({ ...position, costBasisCoin: '1.5' }).success).toBe(
+      false,
+    );
     for (const event of [tick, trade, status, balance, position]) {
       expect(realtimeEventSchema.safeParse({ ...event, ts: undefined }).success).toBe(false);
       expect(realtimeEventSchema.safeParse({ ...event, ts: '2026-09-05 09:00' }).success).toBe(
@@ -262,7 +270,9 @@ describe('per-family event unions', () => {
     expect([...REALTIME_EVENT_TYPES].sort()).toEqual([...claimed].sort());
     expect(marketRealtimeEventSchema.safeParse({ ...tick, lastPrice: 100 }).success).toBe(false);
     expect(marketRealtimeEventSchema.safeParse({ ...trade, fillId: '0' }).success).toBe(false);
-    expect(userRealtimeEventSchema.safeParse({ ...balance, availableP: 9480 }).success).toBe(false);
+    expect(userRealtimeEventSchema.safeParse({ ...balance, availableCoin: 9480 }).success).toBe(
+      false,
+    );
     expect(userRealtimeEventSchema.safeParse({}).success).toBe(false);
   });
 });

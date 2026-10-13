@@ -4,7 +4,7 @@ import {
   LEDGER_ENTRY_TYPES,
   MARKET_STATUSES,
   PRICE_TICK_TRIGGERS,
-  SIGNUP_BONUS_P,
+  SIGNUP_BONUS_COIN,
 } from '@buddha/shared';
 import { and, eq, lt, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -70,15 +70,15 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     expect(profile?.nickname).toMatch(/^예측가_[23456789A-HJ-NP-Z]{4}$/);
     expect(profile?.role).toBe('user');
     // Migration 0004: the sign-up bonus lands in the same transaction, with its ledger entry.
-    expect(balance?.availableP).toBe(SIGNUP_BONUS_P);
-    expect(balance?.lockedP).toBe(0n);
+    expect(balance?.availableCoin).toBe(SIGNUP_BONUS_COIN);
+    expect(balance?.lockedCoin).toBe(0n);
     const bonus = await t.db.query.ledgerEntries.findFirst({
       where: eq(ledgerEntries.userId, 'u-trigger'),
     });
     expect(bonus).toMatchObject({
       type: 'BONUS',
-      amountP: SIGNUP_BONUS_P,
-      balanceAfterP: SIGNUP_BONUS_P,
+      amountCoin: SIGNUP_BONUS_COIN,
+      balanceAfterCoin: SIGNUP_BONUS_COIN,
       memo: '가입 보너스',
     });
   });
@@ -91,15 +91,15 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     } = await createUser(t.db, {
       nickname: '팩토리유저',
       role: 'admin',
-      balanceP: 10_000n,
+      balanceCoin: 10_000n,
     });
     expect(profile.userId).toBe(u.id);
     expect(profile.nickname).toBe('팩토리유저');
     expect(profile.role).toBe('admin');
-    expect(balance.availableP).toBe(10_000n);
-    expect(balance.lockedP).toBe(0n);
+    expect(balance.availableCoin).toBe(10_000n);
+    expect(balance.lockedCoin).toBe(0n);
     const [sum] = await t.db
-      .select({ total: sql<string>`coalesce(sum(${ledgerEntries.amountP}), 0)` })
+      .select({ total: sql<string>`coalesce(sum(${ledgerEntries.amountCoin}), 0)` })
       .from(ledgerEntries)
       .where(eq(ledgerEntries.userId, u.id));
     expect(BigInt(sum!.total)).toBe(10_000n);
@@ -107,15 +107,15 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
 
   it('round-trips bigint amounts beyond 2^53 exactly', async () => {
     const big = 2n ** 53n + 1n;
-    const { user: u } = await createUser(t.db, { balanceP: big });
+    const { user: u } = await createUser(t.db, { balanceCoin: big });
     const row = await t.db.query.balances.findFirst({ where: eq(balances.userId, u.id) });
-    expect(row?.availableP).toBe(big);
+    expect(row?.availableCoin).toBe(big);
   });
 
   it('rejects negative balances via CHECK', async () => {
     const { user: u } = await createUser(t.db);
     await expect(
-      t.db.update(balances).set({ availableP: -1n }).where(eq(balances.userId, u.id)),
+      t.db.update(balances).set({ availableCoin: -1n }).where(eq(balances.userId, u.id)),
     ).rejects.toSatisfy((e) => sqlState(e) === '23514');
   });
 
@@ -132,7 +132,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     expect(market.status).toBe('open');
     // N02 §5: no fill, no price — the direct AMM's initial probability is gone (#125).
     expect(market.lastPrice).toBeNull();
-    expect(market.volumeP).toBe(0n);
+    expect(market.volumeCoin).toBe(0n);
     expect(market.tradeCount).toBe(0);
     expect(market).not.toHaveProperty('qYes');
     expect(market).not.toHaveProperty('mechanism');
@@ -196,7 +196,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         outcome: 'YES' as const,
         side: 'buy' as const,
         qty: 1,
-        amountP: 52n,
+        amountCoin: 52n,
         priceAvgBp: 5200,
       };
       await expect(t.db.insert(fills).values(fill)).rejects.toSatisfy(
@@ -204,6 +204,57 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       );
       await t.db.insert(fills).values({ ...fill, counterpartyOrderId: maker!.id });
       expect(await t.db.select().from(fills)).toHaveLength(1);
+    });
+  });
+
+  describe('Coin names (migration 0018, #192)', () => {
+    /** Columns (`table.column`), constraints and indexes of schema `public`. */
+    async function names(): Promise<string[]> {
+      const { rows } = await t.db.execute<{ name: string }>(sql`
+        SELECT table_name || '.' || column_name AS name FROM information_schema.columns
+          WHERE table_schema = 'public'
+        UNION ALL SELECT conname FROM pg_constraint WHERE connamespace = 'public'::regnamespace
+        UNION ALL SELECT indexname FROM pg_indexes WHERE schemaname = 'public'`);
+      return rows.map((r) => r.name);
+    }
+
+    it('leaves no column, constraint or index named after P', async () => {
+      // `p_yes_bp` is a probability in basis points, not an amount, and keeps its name.
+      const pNamed = (await names()).filter((name) =>
+        /(^|[._])p(_|$)/.test(name.replaceAll('p_yes_bp', '')),
+      );
+      expect(pNamed).toEqual([]);
+    });
+
+    it('renamed every amount column with its CHECK constraints and index', async () => {
+      const coinNamed = (await names()).filter((name) => /_coin(_|$)/.test(name)).sort();
+      expect(coinNamed).toEqual(
+        [
+          'balances.available_coin',
+          'balances.locked_coin',
+          'balances_available_coin_check',
+          'balances_locked_coin_check',
+          'charge_packages.amount_coin',
+          'charge_packages_amount_coin_check',
+          'coupon_redemptions.amount_coin',
+          'coupons.amount_coin',
+          'coupons_amount_coin_check',
+          'fills.amount_coin',
+          'fills.fee_coin',
+          'fills_amount_coin_check',
+          'fills_fee_coin_check',
+          'ledger_entries.amount_coin',
+          'ledger_entries.balance_after_coin',
+          'markets.volume_coin',
+          'markets_status_volume_coin_id_idx',
+          'markets_volume_coin_check',
+          'payments.amount_coin',
+          'payments_amount_coin_check',
+          'positions.cost_basis_coin',
+          'positions.realized_pnl_coin',
+          'positions_cost_basis_coin_check',
+        ].sort(),
+      );
     });
   });
 
@@ -318,9 +369,9 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
   });
 
   it('createMarket accepts a last price and statistics overrides', async () => {
-    const market = await createMarket(t.db, { lastPrice: 37, volumeP: 12_345n, tradeCount: 7 });
+    const market = await createMarket(t.db, { lastPrice: 37, volumeCoin: 12_345n, tradeCount: 7 });
     expect(market.lastPrice).toBe(37);
-    expect(market.volumeP).toBe(12_345n);
+    expect(market.volumeCoin).toBe(12_345n);
     expect(market.tradeCount).toBe(7);
     for (const lastPrice of [0, 100, 52.5]) {
       await expect(createMarket(t.db, { lastPrice }), String(lastPrice)).rejects.toThrow(
@@ -337,9 +388,14 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       marketId: market.id,
       outcome: 'YES',
       qty: 10,
-      costBasisP: 550n,
+      costBasisCoin: 550n,
     });
-    expect(row).toMatchObject({ qty: 10, costBasisP: 550n, realizedPnlP: 0n, settled: false });
+    expect(row).toMatchObject({
+      qty: 10,
+      costBasisCoin: 550n,
+      realizedPnlCoin: 0n,
+      settled: false,
+    });
     expect(await t.db.select().from(positions)).toHaveLength(1);
     const entries = await t.db.select().from(ledgerEntries).where(eq(ledgerEntries.userId, u.id));
     expect(entries.map((entry) => entry.type)).toEqual(['BONUS']);
@@ -355,7 +411,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       marketId: market.id,
       outcome: 'YES',
       qty: 10,
-      costBasisP: 550n,
+      costBasisCoin: 550n,
     });
     expect(row.version).toBe(1);
     const where = and(
@@ -397,7 +453,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
   describe('PG payment columns and events (migrations 0014, 0015)', () => {
     const payment = (userId: string, overrides: Partial<typeof payments.$inferInsert> = {}) => ({
       userId,
-      amountP: 10_000n,
+      amountCoin: 10_000n,
       priceKrw: 9_700,
       provider: 'mock',
       idempotencyKey: `key-${randomUUID()}`,
@@ -523,13 +579,13 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
 
   describe('buddha_app privileges (PLAN 6.4)', () => {
     it('can INSERT and SELECT ledger_entries but not UPDATE or DELETE', async () => {
-      const { user: u } = await createUser(t.db, { balanceP: 500n });
+      const { user: u } = await createUser(t.db, { balanceCoin: 500n });
       const rows = await t.db
         .select()
         .from(ledgerEntries)
         .where(eq(ledgerEntries.userId, u.id))
         .orderBy(ledgerEntries.id);
-      // The trigger's sign-up BONUS, then the factory's correction down to 500P.
+      // The trigger's sign-up BONUS, then the factory's correction down to 500 Coin.
       expect(rows.map((row) => row.type)).toEqual(['BONUS', 'ADMIN_ADJUST']);
       await expect(
         t.db.update(ledgerEntries).set({ memo: 'x' }).where(eq(ledgerEntries.id, rows[0]!.id)),
@@ -567,7 +623,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         .insert(payments)
         .values({
           userId: u.id,
-          amountP: 10_000n,
+          amountCoin: 10_000n,
           priceKrw: 9_700,
           provider: 'mock',
           idempotencyKey: 'append-only',

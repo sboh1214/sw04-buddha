@@ -121,7 +121,7 @@ async function seedCategories(db: Db): Promise<void> {
 }
 
 /**
- * Starting charge packages (owner decision 2026-09-04): 4,900원 for 5,000P, and the discount
+ * Starting charge packages (owner decision 2026-09-04): 4,900원 for 5,000 Coin, and the discount
  * grows with the size of the package. Inserted off sale (`is_active = false`): paid charging is
  * not offered at launch (D9, #112), so the ladder waits for an admin to put a package on sale.
  *
@@ -133,11 +133,11 @@ async function seedCategories(db: Db): Promise<void> {
  * (`docker compose down -v`).
  */
 const CHARGE_PACKAGES = [
-  { amountP: 5_000n, priceKrw: 4_900, sortOrder: 10 }, // 2%
-  { amountP: 10_000n, priceKrw: 9_700, sortOrder: 20 }, // 3%
-  { amountP: 30_000n, priceKrw: 28_500, sortOrder: 30 }, // 5%
-  { amountP: 50_000n, priceKrw: 46_500, sortOrder: 40 }, // 7%
-  { amountP: 100_000n, priceKrw: 90_000, sortOrder: 50 }, // 10%
+  { amountCoin: 5_000n, priceKrw: 4_900, sortOrder: 10 }, // 2%
+  { amountCoin: 10_000n, priceKrw: 9_700, sortOrder: 20 }, // 3%
+  { amountCoin: 30_000n, priceKrw: 28_500, sortOrder: 30 }, // 5%
+  { amountCoin: 50_000n, priceKrw: 46_500, sortOrder: 40 }, // 7%
+  { amountCoin: 100_000n, priceKrw: 90_000, sortOrder: 50 }, // 10%
 ] as const;
 
 /**
@@ -220,7 +220,7 @@ async function pickNickname(tx: Pick<Db, 'select'>, ownUserId: string): Promise<
  * row plus a credential `account` row (providerId 'credential', accountId = user id, scrypt
  * hash from better-auth/crypto). The "user" AFTER INSERT trigger (migrations 0002 and 0004)
  * creates the profile (auto nickname) and the balance, sign-up bonus included: the operator
- * account starts with SIGNUP_BONUS_P like every account (Q-M2-2). The seed then renames the
+ * account starts with SIGNUP_BONUS_COIN like every account (Q-M2-2). The seed then renames the
  * profile to 관리자 and promotes it.
  *
  * Re-running never resets an existing password; it only guarantees that the user exists, is

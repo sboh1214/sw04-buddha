@@ -127,6 +127,13 @@
       "when": 1791856786908,
       "tag": "0017_remove_direct_amm",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1791869370569,
+      "tag": "0018_coin_identifiers",
+      "breakpoints": true
     }
   ]
 }

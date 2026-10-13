@@ -3,7 +3,7 @@
  * that drizzle-kit (drizzle.config.ts -> schema) and the ORM (createDb -> schema) see the
  * same objects.
  *
- * Conventions (PLAN 0.2): P amounts are `bigint({ mode: 'bigint' })`, prices are
+ * Conventions (PLAN 0.2): Coin amounts are `bigint({ mode: 'bigint' })`, prices are
  * `smallint`, quantities are `integer`, timestamps are the `timestampTz()` helper from
  * columns.ts — never a bare `timestamp()`, whose microseconds a JS Date cannot hold — ids are
  * `uuid().defaultRandom()` or `bigserial` for append-only logs. Column names: TS camelCase -> DB snake_case via

@@ -1,29 +1,29 @@
 import * as z from 'zod';
-import { pAmountInputSchema, pAmountSchema } from './api/p-amount.js';
+import { coinAmountInputSchema, coinAmountSchema } from './api/coin-amount.js';
 import { uuidSchema } from './api/uuid.js';
 
 /**
- * A charge package: the only way a user buys P (owner decision 2026-09-04). The KRW price is
+ * A charge package: the only way a user buys Coin (owner decision 2026-09-04). The KRW price is
  * the source of truth and is at most the face value, so the discount is derived, never
- * stored — 4,900원 for 5,000P is a 2% discount. Bigger packages carry bigger discounts, and
+ * stored — 4,900원 for 5,000 Coin is a 2% discount. Bigger packages carry bigger discounts, and
  * admins add, edit and remove packages at runtime.
  */
-export const CHARGE_PACKAGE_MIN_P = 1_000n;
-export const CHARGE_PACKAGE_MAX_P = 1_000_000n;
+export const CHARGE_PACKAGE_MIN_COIN = 1_000n;
+export const CHARGE_PACKAGE_MAX_COIN = 1_000_000n;
 export const CHARGE_PACKAGE_MAX_KRW = 1_000_000;
 
 /** `1 - price/amount`, rounded to whole percent for display (0 when the price is face value). */
-export function discountPercent(amountP: bigint, priceKrw: number): number {
-  if (amountP <= 0n) return 0;
-  const discounted = Number(amountP) - priceKrw;
-  return Math.round((discounted / Number(amountP)) * 100);
+export function discountPercent(amountCoin: bigint, priceKrw: number): number {
+  if (amountCoin <= 0n) return 0;
+  const discounted = Number(amountCoin) - priceKrw;
+  return Math.round((discounted / Number(amountCoin)) * 100);
 }
 
 export const chargePackageSchema = z
   .object({
     id: z.uuid(),
-    /** P credited on purchase. */
-    amountP: pAmountSchema,
+    /** Coin credited on purchase. */
+    amountCoin: coinAmountSchema,
     /** What the user actually pays, in KRW. */
     priceKrw: z.number().int().positive(),
     sortOrder: z.number().int(),
@@ -50,8 +50,8 @@ export const chargeBodySchema = z
   .object({
     /** Lower-cased on the way in: the replay compares it with the payment row's (api/uuid.ts). */
     packageId: uuidSchema,
-    /** P the card promised. */
-    expectedAmountP: pAmountInputSchema,
+    /** Coin the card promised. */
+    expectedAmountCoin: coinAmountInputSchema,
     /** KRW the card asked for. */
     expectedPriceKrw: chargePackageSchema.shape.priceKrw,
     /** The signed-in user id the wallet screen is showing (better-auth `user.id`, text). */
@@ -61,20 +61,20 @@ export const chargeBodySchema = z
 export type ChargeBody = z.infer<typeof chargeBodySchema>;
 
 const packageFields = {
-  amountP: pAmountInputSchema.refine(
-    (value) => value >= CHARGE_PACKAGE_MIN_P && value <= CHARGE_PACKAGE_MAX_P,
-    `must be between ${CHARGE_PACKAGE_MIN_P.toString()} and ${CHARGE_PACKAGE_MAX_P.toString()}`,
+  amountCoin: coinAmountInputSchema.refine(
+    (value) => value >= CHARGE_PACKAGE_MIN_COIN && value <= CHARGE_PACKAGE_MAX_COIN,
+    `must be between ${CHARGE_PACKAGE_MIN_COIN.toString()} and ${CHARGE_PACKAGE_MAX_COIN.toString()}`,
   ),
   priceKrw: z.coerce.number().int().positive().max(CHARGE_PACKAGE_MAX_KRW),
   sortOrder: z.coerce.number().int().min(0).max(10_000),
   isActive: z.boolean(),
 };
 
-/** The price may never exceed the face value: P is sold at a discount or at par, never above. */
-const priceWithinFaceValue = <T extends { amountP: bigint; priceKrw: number }>(value: T) =>
-  BigInt(value.priceKrw) <= value.amountP;
+/** The price may never exceed the face value: Coin is sold at a discount or at par, never above. */
+const priceWithinFaceValue = <T extends { amountCoin: bigint; priceKrw: number }>(value: T) =>
+  BigInt(value.priceKrw) <= value.amountCoin;
 const priceRefinement = {
-  message: 'priceKrw must not exceed amountP',
+  message: 'priceKrw must not exceed amountCoin',
   path: ['priceKrw'],
 };
 
@@ -91,7 +91,7 @@ export type CreateChargePackageBody = z.infer<typeof createChargePackageBodySche
 /** PATCH: every field optional, but a price/amount pair still has to stay within face value. */
 export const updateChargePackageBodySchema = z
   .object({
-    amountP: packageFields.amountP.optional(),
+    amountCoin: packageFields.amountCoin.optional(),
     priceKrw: packageFields.priceKrw.optional(),
     sortOrder: packageFields.sortOrder.optional(),
     isActive: packageFields.isActive.optional(),
@@ -104,9 +104,9 @@ export const updateChargePackageBodySchema = z
   // row for a patch that changes just one of them.
   .refine(
     (value) =>
-      value.amountP === undefined ||
+      value.amountCoin === undefined ||
       value.priceKrw === undefined ||
-      BigInt(value.priceKrw) <= value.amountP,
+      BigInt(value.priceKrw) <= value.amountCoin,
     priceRefinement,
   )
   .meta({ id: 'UpdateChargePackageBody' });

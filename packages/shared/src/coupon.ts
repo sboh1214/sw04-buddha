@@ -1,5 +1,5 @@
 import * as z from 'zod';
-import { pAmountInputSchema, pAmountSchema } from './api/p-amount.js';
+import { coinAmountInputSchema, coinAmountSchema } from './api/coin-amount.js';
 import {
   COUPON_CODE_MAX_LENGTH,
   COUPON_CODE_MIN_LENGTH,
@@ -7,12 +7,12 @@ import {
 } from './constants.js';
 
 /**
- * Coupons let an admin hand out P without touching a balance directly (owner decision
+ * Coupons let an admin hand out Coin without touching a balance directly (owner decision
  * 2026-09-04): they carry an amount, an optional expiry and an optional redemption cap, and
  * each account may redeem a given code once. Redeeming writes a BONUS ledger entry.
  */
-export const COUPON_MIN_P = 1n;
-export const COUPON_MAX_P = 1_000_000n;
+export const COUPON_MIN_COIN = 1n;
+export const COUPON_MAX_COIN = 1_000_000n;
 export const COUPON_MEMO_MAX_LENGTH = 200;
 
 /** Codes are stored and compared upper-case; the client may type them in any case. */
@@ -44,7 +44,7 @@ export const couponSchema = z
   .object({
     id: z.uuid(),
     code: z.string(),
-    amountP: pAmountSchema,
+    amountCoin: coinAmountSchema,
     /** null = unlimited. */
     maxRedemptions: z.number().int().positive().nullable(),
     redeemedCount: z.number().int(),
@@ -60,9 +60,9 @@ export const createCouponBodySchema = z
   .object({
     /** Omitted: the server generates a readable random code. */
     code: couponCodeSchema.optional(),
-    amountP: pAmountInputSchema.refine(
-      (value) => value >= COUPON_MIN_P && value <= COUPON_MAX_P,
-      `must be between ${COUPON_MIN_P.toString()} and ${COUPON_MAX_P.toString()}`,
+    amountCoin: coinAmountInputSchema.refine(
+      (value) => value >= COUPON_MIN_COIN && value <= COUPON_MAX_COIN,
+      `must be between ${COUPON_MIN_COIN.toString()} and ${COUPON_MAX_COIN.toString()}`,
     ),
     maxRedemptions: z.coerce.number().int().positive().max(1_000_000).nullish(),
     expiresAt: z.iso.datetime().nullish(),

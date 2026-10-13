@@ -38,7 +38,7 @@ export async function lockMarket(tx: StatementExecutor, marketId: string): Promi
  * transaction start and stands still while the transaction waits on a lock. Read it AFTER the
  * last lock a transaction queues on: the rows it then writes (ledger `created_at`,
  * `updated_at`, ticks, realtime `ts`) sort after whatever committed while it waited, so the
- * ledger's `(created_at, id)` order agrees with its `balance_after_p` chain and a client that
+ * ledger's `(created_at, id)` order agrees with its `balance_after_coin` chain and a client that
  * keeps the newest event by `ts` keeps the newest balance (ADR-0027, A-M3-21).
  *
  * Returned at the millisecond precision every timestamptz column is declared with — as epoch

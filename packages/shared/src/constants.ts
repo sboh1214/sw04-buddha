@@ -3,12 +3,12 @@
  * DTOs use the same values.
  */
 
-/** Displayed YES price in P per contract: integer 1..99 (PLAN 5.3 displayPrice). */
+/** Displayed YES price in Coin per contract: integer 1..99 (PLAN 5.3 displayPrice). */
 export const PRICE_MIN = 1;
 export const PRICE_MAX = 99;
 
-/** A winning contract pays out this many P (PLAN 5.4: payout = qty * 100). */
-export const PAYOUT_PER_CONTRACT_P = 100n;
+/** A winning contract pays out this many Coin (PLAN 5.4: payout = qty * 100). */
+export const PAYOUT_PER_CONTRACT_COIN = 100n;
 
 /** Basis points: probability 0..1 is stored as 0..10000 (price_ticks.p_yes_bp). */
 export const BP_MAX = 10_000;
@@ -18,7 +18,7 @@ export const BP_MAX = 10_000;
  * itself (PLAN 17 Q2, owner decision 2026-09-04). Changing it needs a migration, because the
  * amount lives in the trigger function as well — see packages/db/drizzle.
  */
-export const SIGNUP_BONUS_P = 10_000n;
+export const SIGNUP_BONUS_COIN = 10_000n;
 
 /**
  * Whether paid Coin is on sale: the charge and its catalogue, the payment provider info, coupon
@@ -63,8 +63,8 @@ export const INT4_MAX = 2_147_483_647;
 /** positions.qty is int4; `applyBuy` refuses to grow a position past it. */
 export const POSITION_QTY_MAX = INT4_MAX;
 
-/** Bound on request-side P fields (`P_AMOUNT_INPUT_MAX_LENGTH` is its length): 10^15. */
-export const MAX_P_AMOUNT = 10n ** 15n;
+/** Bound on request-side Coin fields (`COIN_AMOUNT_INPUT_MAX_LENGTH` is its length): 10^15. */
+export const MAX_COIN_AMOUNT = 10n ** 15n;
 
 export const MARKET_TITLE_MAX = 120;
 /** description / rules. */

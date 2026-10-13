@@ -15,7 +15,7 @@ import { user } from './auth.js';
 import { createdAt, timestampTz, updatedAt } from './columns.js';
 
 /**
- * Admin-issued P grants (owner decision 2026-09-04, ADR-0026). A coupon carries an amount, an
+ * Admin-issued Coin grants (owner decision 2026-09-04, ADR-0026). A coupon carries an amount, an
  * optional expiry and an optional cap; `redeemed_count` is maintained inside the redemption
  * transaction, which takes the row lock, so a capped coupon can never overshoot.
  */
@@ -25,7 +25,7 @@ export const coupons = pgTable(
     id: uuid().primaryKey().defaultRandom(),
     /** Stored upper-case; the API upper-cases whatever the user types. */
     code: varchar({ length: 32 }).notNull().unique(),
-    amountP: bigint({ mode: 'bigint' }).notNull(),
+    amountCoin: bigint({ mode: 'bigint' }).notNull(),
     /** null = unlimited redemptions. */
     maxRedemptions: integer(),
     redeemedCount: integer().notNull().default(0),
@@ -48,7 +48,7 @@ export const coupons = pgTable(
      * both.
      */
     index('coupons_created_at_id_idx').on(desc(t.createdAt), desc(t.id)),
-    check('coupons_amount_p_check', sql`${t.amountP} > 0`),
+    check('coupons_amount_coin_check', sql`${t.amountCoin} > 0`),
     check(
       'coupons_max_redemptions_check',
       sql`${t.maxRedemptions} is null or ${t.maxRedemptions} > 0`,
@@ -73,7 +73,7 @@ export const couponRedemptions = pgTable(
       .notNull()
       .references(() => user.id, { onDelete: 'restrict' }),
     /** Snapshot of the coupon amount at redemption time. */
-    amountP: bigint({ mode: 'bigint' }).notNull(),
+    amountCoin: bigint({ mode: 'bigint' }).notNull(),
     createdAt: createdAt(),
   },
   (t) => [

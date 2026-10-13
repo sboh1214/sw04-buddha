@@ -24,10 +24,12 @@ export const LEDGER_ENTRY_TYPES = [
   'SETTLEMENT_PAYOUT',
   'ADMIN_ADJUST',
   'BONUS',
-  /** An admin refund claws back a charge's P (−amount_p, ref payment) before the PG cancel. */
+  /**
+   * An admin refund claws back a charge's Coin (−amount_coin, ref payment) before the PG cancel.
+   */
   'PAYMENT_CANCEL',
   /**
-   * Puts that P back (+amount_p, ref payment) when the PG refused the cancel. Written only
+   * Puts that Coin back (+amount_coin, ref payment) when the PG refused the cancel. Written only
    * after a PAYMENT_CANCEL of the same payment, so the ledger shows both halves.
    */
   'PAYMENT_CANCEL_REVERSAL',
@@ -46,9 +48,9 @@ export const ledgerRefTypeSchema = z.enum(LEDGER_REF_TYPES);
  * - `pending`: reserved, waiting for the PG (or an approval in flight / outcome unknown)
  * - `succeeded`: approved and credited
  * - `failed`: refused, stopped by the payer, or never approved — no money moved
- * - `cancelled`: approved by the PG but net-cancelled by us before any P was credited
- * - `refunding`: admin refund in progress — P already clawed back, PG cancel not yet confirmed
- * - `refunded`: admin refund done — card cancelled, P clawed back
+ * - `cancelled`: approved by the PG but net-cancelled by us before any Coin was credited
+ * - `refunding`: admin refund in progress — Coin already clawed back, PG cancel not yet confirmed
+ * - `refunded`: admin refund done — card cancelled, Coin clawed back
  */
 export const PAYMENT_STATUSES = [
   'pending',

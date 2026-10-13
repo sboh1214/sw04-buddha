@@ -21,7 +21,7 @@ describe('meSchema', () => {
     email: 'user@example.com',
     emailVerified: false,
     profile: { nickname: '예측가_Q7Z9', role: 'user', createdAt: '2026-09-03T00:00:00.000Z' },
-    balance: { availableP: '0', lockedP: '0' },
+    balance: { availableCoin: '0', lockedCoin: '0' },
     linkedAccounts: [
       {
         id: 'acc1',
@@ -46,7 +46,7 @@ describe('meSchema', () => {
 
   it('rejects a non-string balance', () => {
     expect(
-      meSchema.safeParse({ ...sample, balance: { availableP: 0, lockedP: '0' } }).success,
+      meSchema.safeParse({ ...sample, balance: { availableCoin: 0, lockedCoin: '0' } }).success,
     ).toBe(false);
   });
 
