@@ -48,12 +48,9 @@ import {
   MARKET_EVENT_LABEL,
   MARKET_STATUS_LABEL,
   MARKET_STATUS_PALETTE,
-  canEditLiquidity,
   canResolve,
-  canVoid,
   compactJson,
   formatBp,
-  formatQuantity,
   formatYesPrice,
   isAwaitingResolution,
   isAwaitingSettlement,
@@ -71,13 +68,11 @@ import {
   type MarketFormValues,
   type ResolveMarketFormOutput,
   type ResolveMarketFormValues,
-  type VoidMarketFormValues,
   marketFormSchema,
   marketToFormValues,
   resolveMarketFormSchema,
   toResolveMarketBody,
   toUpdateMarketBody,
-  voidMarketFormSchema,
 } from '@/lib/market-form';
 import { MarketFormFields } from '../market-form-fields';
 
@@ -215,7 +210,7 @@ export function AdminMarketDetail({ id }: { id: string }) {
           EditMarketForm takes fresh server values only for fields that hold no edits. */}
       <EditMarketCard key={data.status} market={data} />
 
-      <LmsrPanel market={data} />
+      <TradeStatsPanel market={data} />
       <EventLog market={data} />
       <RecentFills market={data} />
     </Stack>
@@ -248,29 +243,19 @@ function Item({ label, children }: { label: string; children: ReactNode }) {
 }
 
 /**
- * 열기 / 마감 / 판정 / 무효 (PLAN 12, design 3.4, ADR-0046). Each is a Dialog except 열기, whose
- * only refusal — blank rules — is reversible from the form below and is named in its toast.
- * The void reason is a form like every other (zodResolver), reset when the dialog closes either
- * way, so a cancelled dialog does not reopen with the old text and its error lit. The 판정 form
- * lives in its own component, mounted only while its dialog is open, so every opening starts
- * from an empty form. A judged market offers none of these: the 판정 is final and cannot be
- * voided (#26 decides what may undo one).
+ * 열기 / 마감 / 판정 (PLAN 12, design 3.4, ADR-0046). Each is a Dialog except 열기, whose only
+ * refusal — blank rules — is reversible from the form below and is named in its toast. 열기
+ * stays while there is no way to trade (owner decision #125 (a)): the market is listed, and its
+ * detail says 거래 준비 중 in place of the order panel. There is no 무효: the admin void and its
+ * cost refund went with #125 (N03 §6); VOID as a 판정 is #152's. The 판정 form lives in its own
+ * component, mounted only while its dialog is open, so every opening starts from an empty form.
+ * A judged market offers none of these: the 판정 is final (#26 decides what may undo one).
  */
 function TransitionButtons({ market }: { market: AdminMarket }) {
   const apply = useApplyMarket(market.id);
-  const [confirm, setConfirm] = useState<'close' | 'void' | 'resolve' | null>(null);
-  const {
-    register,
-    handleSubmit,
-    reset,
-    formState: { errors },
-  } = useForm<VoidMarketFormValues>({
-    resolver: zodResolver(voidMarketFormSchema),
-    defaultValues: { reason: '' },
-  });
+  const [confirm, setConfirm] = useState<'close' | 'resolve' | null>(null);
   const closeDialog = () => {
     setConfirm(null);
-    reset();
   };
 
   const onError = (error: unknown) =>
@@ -304,25 +289,6 @@ function TransitionButtons({ market }: { market: AdminMarket }) {
     onError,
   });
 
-  const voidMarket = useMutation({
-    mutationFn: async (body: VoidMarketFormValues) =>
-      unwrap(
-        await api.POST('/api/v1/admin/markets/{id}/void', {
-          params: { path: { id: market.id } },
-          body,
-        }),
-      ).data,
-    onSuccess: async (voided) => {
-      toaster.create({ type: 'success', title: copy.adminMarketVoided });
-      closeDialog();
-      await apply(voided);
-    },
-    onError,
-  });
-
-  // The schema's trimmed output is what goes on the wire (the API trims and bounds the same).
-  const submitVoid = handleSubmit((values) => voidMarket.mutate(values));
-
   return (
     <HStack gap="2" flexWrap="wrap">
       {market.status === 'draft' && (
@@ -350,17 +316,6 @@ function TransitionButtons({ market }: { market: AdminMarket }) {
           {copy.adminMarketResolve}
         </Button>
       )}
-      {canVoid(market.status) && (
-        <Button
-          size="sm"
-          variant="outline"
-          colorPalette="no"
-          onClick={() => setConfirm('void')}
-          data-testid="market-void"
-        >
-          {copy.adminMarketVoid}
-        </Button>
-      )}
 
       {confirm === 'resolve' && <ResolveDialog market={market} onClose={closeDialog} />}
 
@@ -374,26 +329,6 @@ function TransitionButtons({ market }: { market: AdminMarket }) {
         onConfirm={() => close.mutate()}
       >
         <Text>{copy.adminMarketCloseBody}</Text>
-      </ConfirmDialog>
-
-      <ConfirmDialog
-        testId="market-void"
-        open={confirm === 'void'}
-        onClose={closeDialog}
-        title={copy.adminMarketVoidTitle}
-        confirmLabel={copy.adminMarketVoid}
-        loading={voidMarket.isPending}
-        onConfirm={() => void submitVoid()}
-        destructive
-      >
-        <Stack gap="3">
-          <Text>{copy.adminMarketVoidBody}</Text>
-          <Field.Root invalid={!!errors.reason} required>
-            <Field.Label>{copy.adminMarketVoidReason}</Field.Label>
-            <Textarea rows={3} data-testid="market-void-reason" {...register('reason')} />
-            <Field.ErrorText>{errors.reason?.message}</Field.ErrorText>
-          </Field.Root>
-        </Stack>
       </ConfirmDialog>
     </HStack>
   );
@@ -455,8 +390,8 @@ function ResolveDialog({ market, onClose }: { market: AdminMarket; onClose: () =
             control={control}
             render={({ field }) => (
               // The group's accessible name is its own Label part: zag emits `role="radiogroup"`
-              // with `aria-labelledby` pointing at that id (the SegmentGroup precedent in the
-              // trade panel), so a `Field.Label` here would leave the group unnamed.
+              // with `aria-labelledby` pointing at that id, so a `Field.Label` here would leave
+              // the group unnamed.
               <RadioGroup.Root
                 name={field.name}
                 value={field.value ?? null}
@@ -569,7 +504,7 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
   const [pending, setPending] = useState<UpdateMarketBody | null>(null);
 
   // `values` follows the server: react-hook-form deep-compares it with what it last applied,
-  // so a refetch that moved only LMSR state or updatedAt (every trade) changes nothing, and
+  // so a refetch that moved only trade stats or updatedAt changes nothing, and
   // one that changed a form field resets under FOLLOW_SERVER_RESET — fields the admin has
   // edited keep their input. A save resets explicitly (onSuccess), from the row the API
   // answered with. The resolver reads the schema memoised on the newest `original`.
@@ -615,7 +550,7 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
   });
 
   const submit = handleSubmit(async (values) => {
-    const body = toUpdateMarketBody(values, original, market.status);
+    const body = toUpdateMarketBody(values, original);
     if (Object.keys(body).length === 0) {
       toaster.create({ type: 'info', title: copy.adminMarketNoChanges });
       return;
@@ -635,10 +570,8 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
             form={form}
             categories={categories}
             disabled={!editable}
-            lmsrDisabled={!canEditLiquidity(market.status)}
-            // The row itself, so the 미리보기 shows the price this market TRADES at rather than
-            // re-deriving the one it opened at from an `initialProbBp` the API will not let the
-            // form change any more.
+            // The row itself, so the 미리보기 of a market past draft shows the price and volume it
+            // TRADES at rather than an untraded card.
             base={market}
           />
           <Button
@@ -746,23 +679,25 @@ function SettlementStepsPanel({ market }: { market: AdminMarket }) {
   );
 }
 
-function LmsrPanel({ market }: { market: AdminMarket }) {
+/**
+ * 거래 현황: what fills and positions say about this market. The direct AMM's own state (q, b,
+ * 준비금) and its probability went with #125; 순 수취 and 미결제 stay because they are read off the
+ * fills and the positions, not the curve. 현재가 is 체결 없음 until the first fill (N02 §5).
+ */
+function TradeStatsPanel({ market }: { market: AdminMarket }) {
   return (
     <Card.Root>
       <Card.Header>
-        <Text fontWeight="semibold">{copy.adminMarketLmsr}</Text>
+        <Text fontWeight="semibold">{copy.adminMarketTradeStats}</Text>
       </Card.Header>
       <Card.Body>
-        <DataList.Root orientation="horizontal" size="sm" data-testid="market-lmsr">
-          <Item label={copy.lmsrQYes}>{formatQuantity(market.qYes)}</Item>
-          <Item label={copy.lmsrQNo}>{formatQuantity(market.qNo)}</Item>
-          <Item label={copy.adminMarketLiquidity}>{formatQuantity(market.liquidityB)}</Item>
-          <Item label={copy.lmsrReserve}>{formatP(parsePAmount(market.reserveP))}</Item>
-          <Item label={copy.lmsrPrice}>{formatYesPrice(market.lastPrice)}</Item>
-          <Item label={copy.probability}>{formatBp(market.pYesBp)}</Item>
-          <Item label={copy.lmsrNetCollected}>{formatP(parsePAmount(market.netCollectedP))}</Item>
-          <Item label={copy.lmsrOpenInterestYes}>{String(market.openInterest.yes)}</Item>
-          <Item label={copy.lmsrOpenInterestNo}>{String(market.openInterest.no)}</Item>
+        <DataList.Root orientation="horizontal" size="sm" data-testid="market-trade-stats">
+          <Item label={copy.tradeStatsLastPrice}>{formatYesPrice(market.lastPrice)}</Item>
+          <Item label={copy.tradeStatsNetCollected}>
+            {formatP(parsePAmount(market.netCollectedP))}
+          </Item>
+          <Item label={copy.tradeStatsOpenInterestYes}>{String(market.openInterest.yes)}</Item>
+          <Item label={copy.tradeStatsOpenInterestNo}>{String(market.openInterest.no)}</Item>
           <Item label={copy.marketTradeCount}>{String(market.tradeCount)}</Item>
           <Item label={copy.marketTraderCount}>{String(market.traderCount)}</Item>
           <Item label={copy.marketVolume}>{formatP(parsePAmount(market.volumeP))}</Item>
@@ -805,8 +740,8 @@ function EventLog({ market }: { market: AdminMarket }) {
 }
 
 /**
- * The known payloads (void summary, rules diff, open/close instants) as Korean rows; the
- * create body and anything unexpected stay one JSON line (`marketEventRows`).
+ * The known payloads (rules diff, open/close instants, 판정, 정산) as Korean rows; the create
+ * body and anything unexpected stay one JSON line (`marketEventRows`).
  */
 function EventPayload({ type, payload }: { type: MarketEventType; payload: unknown }) {
   if (payload === null || payload === undefined) return null;
@@ -913,13 +848,12 @@ interface ConfirmDialogProps {
   confirmLabel: string;
   loading: boolean;
   onConfirm: () => void;
-  destructive?: boolean;
   children: ReactNode;
 }
 
 /**
  * The one confirmation shape the transitions and the open-market edit share. Mounted only
- * while open (four of these live on the page; a closed one must not answer a test id), and
+ * while open (three of these live on the page; a closed one must not answer a test id), and
  * pinned while the mutation runs: Cancel, Esc and the backdrop all wait, since dismissing it
  * mid-flight would leave the request running against a screen that no longer shows it.
  */
@@ -931,7 +865,6 @@ function ConfirmDialog({
   confirmLabel,
   loading,
   onConfirm,
-  destructive = false,
   children,
 }: ConfirmDialogProps) {
   return (
@@ -966,7 +899,6 @@ function ConfirmDialog({
               </Button>
               <Button
                 size="sm"
-                colorPalette={destructive ? 'no' : undefined}
                 loading={loading}
                 onClick={onConfirm}
                 data-testid={`${testId}-confirm`}

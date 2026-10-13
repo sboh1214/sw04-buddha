@@ -37,7 +37,7 @@ function useHydrated(): boolean {
  *
  * Fixed here rather than by wrapping each consumer in `<ClientOnly>` because the branch is
  * not in one component but in every one that asks who is signed in — `AuthButtons`,
- * `MyPosition`, the trade panel's CTA, `useMe` and everything built on it — and a consumer
+ * `MyPosition`, `useMe` and everything built on it — and a consumer
  * added later would reintroduce the bug with nothing to catch it. The cost is one extra
  * render of the pending state, which every consumer already draws.
  */

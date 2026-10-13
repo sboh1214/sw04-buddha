@@ -35,9 +35,8 @@ import {
  * Top navigation (PLAN 11.4, ADR-0041 Kalshi 형): two rows in one sticky header.
  *
  * Row 1: 로고 · 시장/랭킹/커뮤니티 · 검색 · 색상 모드 · 잔고 칩 · 프로필 메뉴. The balance chip and the
- * profile menu are `AuthButtons`, unchanged since M1 — the chip is what AC 3 watches after a
- * trade, and it stays live because `use-trade` writes `['me']` from the trade answer and the
- * socket's `user:balance` writes it again.
+ * profile menu are `AuthButtons`, unchanged since M1 — the chip stays live because the socket's
+ * `user:balance` writes `['me']`.
  *
  * Row 2: 전체 and the top-level market categories, on every breakpoint (it scrolls sideways where
  * it does not fit). It is Kalshi's category strip and the home screen's coarse filter in one:
@@ -207,9 +206,9 @@ function PrimaryLinks() {
  * finds a "검색" button in the form. `InputGroup` places a start element with
  * `pointerEvents: none` (right for a decorative glyph, wrong for a button), so that is overridden.
  *
- * `testId` is required, not defaulted, for the reason the trade panel takes a prefix: at <md the
- * desktop form is still mounted behind `display: none`, so while the mobile form is open both are
- * in the DOM and a shared id would make every Playwright selector ambiguous.
+ * `testId` is required, not defaulted: at <md the desktop form is still mounted behind
+ * `display: none`, so while the mobile form is open both are in the DOM and a shared id would
+ * make every Playwright selector ambiguous.
  *
  * The field is uncontrolled and KEYED on the term the URL carries (`initialTerm`, read by
  * `WithSearchTerm`), which is the whole of the reconciliation it needs — the same rule the home

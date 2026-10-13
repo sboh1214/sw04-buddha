@@ -130,35 +130,4 @@ describe('IdempotencyKeys', () => {
     const key = new IdempotencyKeys('user-a', storage).take('pack-1');
     expect(storage.getItem('buddha:charge-key:user-a:pack-1')).toBe(key);
   });
-
-  it('files a trade key under its own namespace', () => {
-    const storage = fakeStorage();
-    const key = new IdempotencyKeys('user-a', storage, 'trade-key').take('market-1');
-    expect(storage.getItem('buddha:trade-key:user-a:market-1')).toBe(key);
-  });
-
-  it('keeps the two namespaces blind to each other', () => {
-    // Nothing stops a package id and a market id from being the same string, and the flows
-    // settle by different rules: a trade spends its key on every answered status, while a
-    // charge keeps its key on the in-progress 409. Sharing a name would let one flow settle
-    // away the key the other is still waiting to replay.
-    const storage = fakeStorage();
-    const charge = new IdempotencyKeys('user-a', storage);
-    const trade = new IdempotencyKeys('user-a', storage, 'trade-key');
-    const chargeKey = charge.take('same-id');
-    expect(trade.take('same-id')).not.toBe(chargeKey);
-    trade.settle('same-id', 200);
-    expect(charge.take('same-id')).toBe(chargeKey);
-  });
-
-  it('applies the same keep-on-5xx, spend-on-decision rule inside a trade namespace', () => {
-    const keys = new IdempotencyKeys('user-a', fakeStorage(), 'trade-key');
-    const first = keys.take('market-1');
-    // A 500 may have inserted the order before it failed: the retry must replay, not trade again.
-    keys.settle('market-1', 500);
-    expect(keys.take('market-1')).toBe(first);
-    // The trade 409 is "same key, other terms" — answered, so the next press is a new trade.
-    keys.settle('market-1', 409);
-    expect(keys.take('market-1')).not.toBe(first);
-  });
 });

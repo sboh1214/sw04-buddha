@@ -1,5 +1,4 @@
 import {
-  BP_MAX,
   MARKET_STATUSES,
   type MarketStatusEvent,
   type MarketTickEvent,
@@ -49,7 +48,6 @@ const summary: MarketSummary = {
   imageUrl: null,
   status: 'open',
   lastPrice: 50,
-  pYesBp: 5000,
   volumeP: '120000',
   tradeCount: 10,
   traderCount: 4,
@@ -78,7 +76,6 @@ const detail: Market = {
 const tick = (patch: Partial<MarketTickEvent> = {}): MarketTickEvent => ({
   type: 'market:tick',
   marketId: ID,
-  pYesBp: 6300,
   lastPrice: 63,
   volumeP: '130000',
   tradeCount: 11,
@@ -161,7 +158,6 @@ describe('applyTick', () => {
   it('patches the volatile fields and leaves everything a REST answer owns alone', () => {
     expect(applyTick(detail, tick())).toEqual({
       ...detail,
-      pYesBp: 6300,
       lastPrice: 63,
       volumeP: '130000',
       tradeCount: 11,
@@ -192,6 +188,15 @@ describe('applyTick', () => {
     expect(applyTick({ ...card, sparkline: [] }, tick())?.sparkline).toEqual([6300]);
     const full = { ...card, sparkline: Array.from({ length: SPARKLINE_MAX_POINTS }, () => 5000) };
     expect(applyTick(full, tick())?.sparkline).toHaveLength(SPARKLINE_MAX_POINTS);
+  });
+
+  it('samples the fill price in the sparkline basis points, and nothing without one', () => {
+    // The samples are tick basis points and a fill's price is a whole percent.
+    expect(applyTick(card, tick({ lastPrice: 41 }))?.sparkline).toEqual([4800, 4900, 4100]);
+    // No fill price (체결 없음): the line stays as fetched rather than ending on a made-up level.
+    const next = applyTick(card, tick({ lastPrice: null }));
+    expect(next?.lastPrice).toBeNull();
+    expect(next?.sparkline).toEqual(card.sparkline);
   });
 });
 
@@ -238,8 +243,8 @@ describe('applyStatus', () => {
   });
 
   it('replaces the result, so a void clears the one a row held', () => {
-    // Only `open` and `closed` can be voided now (ADR-0046), and neither holds a result — but
-    // the reducer replaces rather than merges, so an event never inherits a result its own
+    // Nothing voids a market since #125 (VOID comes back as a 판정 with #152) — but the reducer
+    // replaces rather than merges, so an event never inherits a result its own
     // transition did not carry.
     const next = applyStatus(resolved, statusEvent({ status: 'voided', statusEventId: '5' }));
     expect(next?.status).toBe('voided');
@@ -336,7 +341,7 @@ describe('applyToPages', () => {
   it('patches the page that holds the market and keeps the others by reference', () => {
     const held = pagesOf([card], [otherCard]);
     const next = applyToPages(held, (row) => applyTick(row, tick()));
-    expect(next?.pages[0]?.items[0]?.pYesBp).toBe(6300);
+    expect(next?.pages[0]?.items[0]?.lastPrice).toBe(63);
     expect(next?.pages[1]).toBe(held.pages[1]);
     expect(next?.pageParams).toEqual(held.pageParams);
   });
@@ -351,7 +356,6 @@ describe('applyToPages', () => {
 describe('joinMarket', () => {
   const live: Market = {
     ...detail,
-    pYesBp: 6300,
     lastPrice: 63,
     volumeP: '130000',
     tradeCount: 11,
@@ -361,7 +365,6 @@ describe('joinMarket', () => {
 
   it('keeps the live stats under an older snapshot while taking its descriptive fields', () => {
     const joined = joinMarket(live, stale);
-    expect(joined.pYesBp).toBe(6300);
     expect(joined.lastPrice).toBe(63);
     expect(joined.volumeP).toBe('130000');
     expect(joined.tradeCount).toBe(11);
@@ -418,12 +421,11 @@ describe('joinMarket', () => {
     expect(joinMarket({ ...detail, id: OTHER_ID }, detail)).toBe(detail);
   });
 
-  it('moves the newest sparkline sample with the probability it kept', () => {
+  it('moves the newest sparkline sample with the price it kept', () => {
     // The grid comes from the newer fetch, its last sample from the price we are keeping:
-    // a card whose badge says 63% must not draw a line that ends at 50%.
+    // a card whose pill says 63% must not draw a line that ends at 50%.
     const liveCard: MarketListItem = {
       ...card,
-      pYesBp: 6300,
       lastPrice: 63,
       tradeCount: 11,
       sparkline: [4800, 4900, 6300],
@@ -436,8 +438,7 @@ describe('joinMarket', () => {
     const liveArb: fc.Arbitrary<Market> = fc
       .record({
         status: fc.constantFrom(...MARKET_STATUSES),
-        lastPrice: fc.integer({ min: PRICE_MIN, max: PRICE_MAX }),
-        pYesBp: fc.integer({ min: 0, max: BP_MAX }),
+        lastPrice: fc.option(fc.integer({ min: PRICE_MIN, max: PRICE_MAX })),
         volumeP: fc.integer({ min: 0, max: 1_000_000 }).map(String),
         tradeCount: fc.integer({ min: 0, max: 1000 }),
         resolvedResult: fc.constantFrom<Outcome | null>('YES', 'NO', null),
@@ -493,10 +494,10 @@ describe('joinMarketPages', () => {
   });
 
   it('keeps a held row over the stale copy of it, and passes an unknown row through', () => {
-    const held = pagesOf([{ ...card, pYesBp: 6300, lastPrice: 63, tradeCount: 11 }]);
+    const held = pagesOf([{ ...card, lastPrice: 63, tradeCount: 11 }]);
     const incoming = pagesOf([card, otherCard]);
     const joined = joinMarketPages(held, incoming);
-    expect(joined.pages[0]?.items[0]?.pYesBp).toBe(6300);
+    expect(joined.pages[0]?.items[0]?.lastPrice).toBe(63);
     expect(joined.pages[0]?.items[0]?.tradeCount).toBe(11);
     expect(joined.pages[0]?.items[1]).toBe(otherCard);
   });
@@ -547,17 +548,16 @@ describe('applyPositionEvent', () => {
     // The caller only asks about a query the cache already HOLDS, so an empty list is not an
     // absent screen — it is one whose FIRST `GET /me/positions` is in flight, and that request
     // left before the trade this event announces. Answering `none` let the pre-trade answer
-    // land and stand: 보유 없음 on a market the account had just bought into, in every tab but
-    // the one that traded.
+    // land and stand: 보유 없음 on a market the account had just bought into.
     expect(applyPositionEvent(undefined, positionEvent())).toEqual({ kind: 'refetch' });
   });
 
   it('asks rather than writing a settled row back into the list it just left', () => {
-    // THE HAZARD: `settled` is the flag `GET /me/positions?status=` filters on, so a void or a
-    // settlement MOVES the row to the other list. Writing it back in place broke the invariant
+    // THE HAZARD: `settled` is the flag `GET /me/positions?status=` filters on, so a settlement
+    // MOVES the row to the other list. Writing it back in place broke the invariant
     // `realizedPnlAcross` states in writing — "a row MOVES between the two lists … so it is
     // never in both and this cannot double count" — and the double count was the visible half:
-    // the voided row stayed in `['positions', 'open']` carrying its realised PnL while 정산
+    // the finished row stayed in `['positions', 'open']` carrying its realised PnL while 정산
     // 이력 fetched the same row, and 총 실현 손익 printed 500P for one 250P row. The write also
     // refreshed `dataUpdatedAt`, so the poisoned list sat inside `staleTime` and the next mount
     // did not correct it.
@@ -610,8 +610,8 @@ describe('applyPositionEvent', () => {
   });
 
   it('orders before it asks, so a late settlement event costs no request', () => {
-    // The membership test sits AFTER the version check: a duplicate delivery of the same void
-    // would otherwise buy a private refetch per copy, in every signed-in tab.
+    // The membership test sits AFTER the version check: a duplicate delivery of the same
+    // settlement would otherwise buy a private refetch per copy, in every signed-in tab.
     expect(applyPositionEvent(held, positionEvent({ settled: true, version: 3 }))).toEqual({
       kind: 'none',
     });
@@ -622,8 +622,8 @@ describe('wroteAnOrder', () => {
   it('asks for 주문 이력 on a trade and never on a settlement, which writes no order row', () => {
     // 주문 이력 has no reducer and no event of its own — an `Order` carries an id, status,
     // filledQty, amountP and priceAvgBp that no `user:` event does — so a trade's row can only
-    // be asked for. A void or a settlement moves positions and balances and inserts NO order
-    // (market-admin.service.ts), so the same request could answer only what the list holds:
+    // be asked for. A settlement moves positions and balances and inserts NO order, so the same
+    // request could answer only what the list holds:
     // one private refetch per holder per settled market, for nothing.
     expect(wroteAnOrder(positionEvent())).toBe(true);
     expect(wroteAnOrder(positionEvent({ settled: true }))).toBe(false);
@@ -649,7 +649,7 @@ describe('joinPositions', () => {
 
   it('keeps the newer held row under a late answer while taking its descriptive fields', () => {
     // THE RACE: a mount or a focus refetch left before another tab's trade and lands after the
-    // event. Without the join the 매도 ceiling and 평가손익 fall back to the pre-trade row and
+    // event. Without the join 내 포지션 and 평가손익 fall back to the pre-trade row and
     // nothing is scheduled to correct them.
     const renamed = { ...stale, marketTitle: '기준금리 인하? (수정)', marketLastPrice: 63 };
     expect(joinPositions([live], [renamed])).toEqual([
@@ -688,7 +688,7 @@ describe('joinPositions', () => {
     const once = joinPositions([live], [stale]);
     expect(joinPositions(once, [stale])).toEqual(once);
     // Both interleavings end on the same row, which is what makes the join safe for a cache
-    // three writers share (REST, socket, trade answer).
+    // more than one writer shares (REST, socket).
     expect(joinPositions(joinPositions([stale], [live]), [stale])).toEqual(once);
   });
 });

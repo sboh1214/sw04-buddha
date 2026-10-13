@@ -97,11 +97,11 @@ export function usePositions(status: PositionStatus) {
  * Which of the two lists a given market's rows are in, from the market's own status.
  *
  * `GET /me/positions?status=` filters on `positions.settled`, and the only thing that ever
- * flips that flag is the market finishing: the void writes `settled: true` on every holder row
- * inside the same transaction that writes `status: 'voided'` (market-admin.service.ts), and
- * M5's settlement will write the pair together the same way. So the market's status is an
+ * flips that flag is the market finishing: the worker's settlement writes `settled: true` on
+ * every holder row together with the market's terminal status. So the market's status is an
  * exact reading of which list its positions moved to, and a screen that only ever asks for
- * `'open'` tells a holder who was refunded that they never participated.
+ * `'open'` tells a holder who was paid out that they never participated. `voided` is terminal
+ * the same way, though nothing voids a market since #125 (#152 and #126 bring VOID back).
  *
  * `closed` and `resolved` are deliberately NOT terminal: trading has stopped, but nothing has
  * been paid out, so those rows are still open holdings marked to the market's last price. The
@@ -161,14 +161,21 @@ export type PositionMath = Pick<
 /**
  * 현재가: what one contract of this position is worth right now, in P.
  *
- * `marketLastPrice` is the market's YES price (1..99 P per contract, `priceOf`), so the NO
- * side is its complement against the `PAYOUT_PER_CONTRACT_P` a winning contract pays — the
- * same complement `formatNoPrice` shows, so the number under "아니오 37%" and the value of a
- * NO position can never disagree. Valuing a NO position at the YES price is the one mistake
- * this function exists to make impossible, and it is silent: it produces a plausible number
- * that is wrong by 100 − 2·price per contract.
+ * `marketLastPrice` is the market's last YES fill price (1..99 P per contract), so the NO side
+ * is its complement against the `PAYOUT_PER_CONTRACT_P` a winning contract pays — the same
+ * complement `formatNoPrice` shows, so the number under "아니오 37%" and the value of a NO
+ * position can never disagree. Valuing a NO position at the YES price is the one mistake this
+ * function exists to make impossible, and it is silent: it produces a plausible number that is
+ * wrong by 100 − 2·price per contract.
+ *
+ * `undefined` for a market with no fill (체결 없음, N02 §5): there is no price to mark to, and
+ * the row shows a dash the way `averageCostP` answers for nothing held. A holding comes from a
+ * fill, so this is the type's case more than a live one.
  */
-export function markPriceP(position: Pick<PositionMath, 'outcome' | 'marketLastPrice'>): bigint {
+export function markPriceP(
+  position: Pick<PositionMath, 'outcome' | 'marketLastPrice'>,
+): bigint | undefined {
+  if (position.marketLastPrice === null) return undefined;
   const yesPriceP = BigInt(position.marketLastPrice);
   return position.outcome === 'YES' ? yesPriceP : PAYOUT_PER_CONTRACT_P - yesPriceP;
 }
@@ -185,18 +192,21 @@ export function markPriceP(position: Pick<PositionMath, 'outcome' | 'marketLastP
  */
 export function positionValueP(
   position: Pick<PositionMath, 'outcome' | 'marketLastPrice' | 'qty'>,
-): bigint {
-  return BigInt(position.qty) * markPriceP(position);
+): bigint | undefined {
+  const mark = markPriceP(position);
+  return mark === undefined ? undefined : BigInt(position.qty) * mark;
 }
 
 /**
  * 평가손익: what the holding is worth now minus what it cost. Negative is ordinary, and
  * `formatP` renders it with `MINUS_SIGN` (PLAN 11.1 principle 6) rather than an ASCII hyphen.
+ * `undefined` with no price to mark to, like `positionValueP`.
  */
 export function unrealizedPnlP(
   position: Pick<PositionMath, 'outcome' | 'marketLastPrice' | 'qty' | 'costBasisP'>,
-): bigint {
-  return positionValueP(position) - parsePAmount(position.costBasisP);
+): bigint | undefined {
+  const value = positionValueP(position);
+  return value === undefined ? undefined : value - parsePAmount(position.costBasisP);
 }
 
 /**
@@ -230,15 +240,21 @@ export interface PortfolioTotals {
  * adding them here would double-count, because the P a position cost has already left the
  * balance. `undefined` sums to zeros so the summary can render while the list is still
  * loading instead of branching at every call site.
+ *
+ * A row with no price to mark to (`markPriceP` is `undefined`) is left out of the value and
+ * of the cost the two PnL lines are read against: counting its cost alone would print a loss
+ * nobody has. Its realised PnL still counts — that needs no price.
  */
 export function portfolioTotals(positions: readonly PositionMath[] = []): PortfolioTotals {
   let valueP = 0n;
   let costBasisP = 0n;
   let realizedPnlP = 0n;
   for (const position of positions) {
-    valueP += positionValueP(position);
-    costBasisP += parsePAmount(position.costBasisP);
     realizedPnlP += parsePAmount(position.realizedPnlP);
+    const value = positionValueP(position);
+    if (value === undefined) continue;
+    valueP += value;
+    costBasisP += parsePAmount(position.costBasisP);
   }
   return { valueP, costBasisP, unrealizedPnlP: valueP - costBasisP, realizedPnlP };
 }
@@ -254,9 +270,9 @@ export function portfolioTotals(positions: readonly PositionMath[] = []): Portfo
  * market settles or is voided (`positions.settled`, `positionListStatusFor`), carrying its
  * accumulated `realizedPnlP` with it, so it is never in both and this cannot double count.
  *
- * "Never in both" is an invariant the SOCKET has to keep too, and it did not. A void publishes
- * `user:position` with `settled: true`, and `applyPositionEvent` used to write that flag back
- * into `['positions', 'open']` — the list the row had just LEFT — so a market-detail tab, which
+ * "Never in both" is an invariant the SOCKET has to keep too, and it did not. A settlement
+ * publishes `user:position` with `settled: true`, and `applyPositionEvent` used to write that
+ * flag back into `['positions', 'open']` — the list the row had just LEFT — so a market-detail tab, which
  * mounts only the open list, kept the holding in 보유 포지션 while /portfolio fetched the same
  * row into 정산 이력, and this sum printed 500P for one 250P row. The write refreshed
  * `dataUpdatedAt` as well, so the poisoned list sat inside `staleTime` and the next mount did not
@@ -284,13 +300,12 @@ export function realizedPnlAcross(...totals: readonly PortfolioTotals[]): bigint
  * walk a badge backwards.
  *
  * A status that would move the row to the OTHER list is refused outright. Membership is the
- * server's `positions.settled` flag (`positionListStatusFor`), and a void or a settlement
- * publishes its own `user:position` that `applyPositionEvent` answers with `refetch` PRECISELY
+ * server's `positions.settled` flag (`positionListStatusFor`), and a settlement publishes its own `user:position` that `applyPositionEvent` answers with `refetch` PRECISELY
  * because the flag moved — so both lists are re-asked and the terminal case is already delivered,
  * with no help needed here. That is a recent guarantee rather than an old one: while the reducer
  * wrote the flag in place, this sentence was a promise nothing kept, and the refusal below was
  * resting on it. Taking it anyway would draw an open holding badged
- * 무효 while 평가 금액 and 총 평가 금액 still value the row at the last traded price, which is
+ * 정산 완료 while 평가 금액 and 총 평가 금액 still value the row at the last traded price, which is
  * the fiction `positionValueP` and 정산 이력 are both documented never to print. It is the same
  * rule `wroteAnOrder` (market-live.ts) states from the other side: a terminal transition is the
  * REST answer's business, not an event's.
@@ -357,9 +372,10 @@ export function liveMarketStatus(held: MarketStatus, live: MarketStatus | undefi
  */
 export function markToLiveMarket(
   position: Position,
-  live: { lastPrice?: number; status?: MarketStatus },
+  live: { lastPrice?: number | null; status?: MarketStatus },
 ): Position {
-  const marketLastPrice = live.lastPrice ?? position.marketLastPrice;
+  // `undefined` is "no live row"; `null` is the live row saying 체결 없음, which it means.
+  const marketLastPrice = live.lastPrice === undefined ? position.marketLastPrice : live.lastPrice;
   const marketStatus = liveMarketStatus(position.marketStatus, live.status);
   if (marketLastPrice === position.marketLastPrice && marketStatus === position.marketStatus) {
     return position;

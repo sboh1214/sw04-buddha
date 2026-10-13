@@ -1,9 +1,8 @@
 import { BP_MAX } from '@buddha/shared';
 
 /**
- * SVG geometry for the probability chart (PLAN 11.4). Presentation only: probabilities arrive
- * as `pYesBp` (0..10000) already derived server-side by `probabilityBp` and are never
- * recomputed here (PLAN 11.5).
+ * SVG geometry for the probability chart (PLAN 11.4). Presentation only: prices arrive as the
+ * stored ticks' `pYesBp` (0..10000) and are never recomputed here (PLAN 11.5).
  *
  * Everything is laid out in a fixed 1000x300 user-space box that the browser stretches
  * (`preserveAspectRatio="none"` + `vector-effect="non-scaling-stroke"`), so nothing measures
@@ -145,7 +144,7 @@ export function toChartPoints(ticks: readonly ChartTick[]): ChartPoint[] {
  * Appends the live probability at `nowMs`, so the last fill's price visibly holds until now
  * instead of the line stopping at the newest tick.
  *
- * An empty series stays empty: the caller renders 아직 확률 기록이 없습니다 on length 0, and a
+ * An empty series stays empty: the caller renders 체결 없음 on length 0 (N02 §5), and a
  * synthesised point would replace that empty state with a line drawn from nothing. An instant
  * at or before the newest point is dropped for the same reason a clock is never trusted here —
  * the server's window end can lag a tick that has just arrived over the socket, and a segment
@@ -244,8 +243,8 @@ function yFraction(bp: number, domain: ChartDomain): number {
 /**
  * The outline, the fill and the overlay positions for one series.
  *
- * Step-after, not linear: an LMSR quote does not move between fills, so a diagonal would draw
- * a price that was never quoted. The path is `M0,y0` — the first point always sits on the left
+ * Step-after, not linear: a price does not move between fills, so a diagonal would draw a price
+ * nobody traded at. The path is `M0,y0` — the first point always sits on the left
  * edge — then `H<x> V<y>` per later point, then `H<w>` to hold the newest level to the right
  * edge, which is the same segment `extendToNow` makes explicit when a live probability is known.
  */

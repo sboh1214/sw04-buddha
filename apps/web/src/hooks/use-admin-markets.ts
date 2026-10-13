@@ -32,7 +32,7 @@ export function useCategories() {
 }
 
 /**
- * One market with its LMSR state, exposure and event log (`GET /admin/markets/:id`), keyed
+ * One market with its trade stats, exposure and event log (`GET /admin/markets/:id`), keyed
  * on the CANONICAL id rather than the route segment as typed.
  *
  * A uuid is accepted in either case and the API answers with the row's own lower-case id, so

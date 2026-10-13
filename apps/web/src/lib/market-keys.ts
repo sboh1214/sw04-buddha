@@ -4,7 +4,6 @@ import { type QueryClient, defaultShouldDehydrateQuery, dehydrate } from '@tanst
 // back from here — an erased import keeps that a type-level cycle instead of a runtime one, and
 // keeps a server component that only wanted a cache key from loading the browser API client.
 import type { MarketSort, PublicMarketStatus } from '@buddha/shared';
-import type { QuoteBody } from './api';
 import type { TickRange } from './ticks';
 
 /**
@@ -26,7 +25,6 @@ import type { TickRange } from './ticks';
 export const MARKETS_KEY = ['markets'] as const;
 export const MARKET_KEY = ['market'] as const;
 export const TICKS_KEY = ['ticks'] as const;
-export const QUOTE_KEY = ['quote'] as const;
 export const MARKET_FILLS_KEY = ['market-fills'] as const;
 /** `_QUERY_KEY` rather than `_KEY` because the admin screens already import it under that name. */
 export const CATEGORIES_QUERY_KEY = ['categories'] as const;
@@ -37,7 +35,7 @@ export const CATEGORIES_QUERY_KEY = ['categories'] as const;
 export const LEADERBOARD_KEY = ['leaderboard'] as const;
 /**
  * Session-scoped, so never SSR'd (`PRIVATE_QUERY_ROOTS` below). They are declared here anyway
- * because the market screens invalidate them: a trade moves the trader's positions and orders.
+ * because the realtime provider refreshes them beside the market keys (`user:position`).
  */
 export const POSITIONS_KEY = ['positions'] as const;
 export const ORDERS_KEY = ['orders'] as const;
@@ -71,10 +69,10 @@ export const marketsKey = (filters: MarketFilters) => [...MARKETS_KEY, filters] 
  *
  * `uuidSchema` lower-cases every request-supplied uuid, so the API answers with the row's own
  * lower-case id. A screen keyed on the URL segment as typed would hold a row whose `market.id`
- * names a different key, and every write that goes through that id — a `market:tick`, a
- * `TradeResult`, an invalidation — would land on a key nothing on the screen reads. The slug
- * is worse still: the ticks, fills and trade routes all speak uuids, so a slug-keyed entry
- * would never be written to by the live path at all.
+ * names a different key, and every write that goes through that id — a `market:tick`, an
+ * invalidation — would land on a key nothing on the screen reads. The slug is worse still: the
+ * ticks and fills routes both speak uuids, so a slug-keyed entry would never be written to by
+ * the live path at all.
  */
 export const marketKey = (marketId: string) => [...MARKET_KEY, marketId.toLowerCase()] as const;
 
@@ -86,21 +84,6 @@ export const ticksKey = (marketId: string, range: TickRange) =>
   [...TICKS_KEY, marketId, range] as const;
 
 export const marketFillsKey = (marketId: string) => [...MARKET_FILLS_KEY, marketId] as const;
-
-/** Every quote for one market — the prefix a committed trade invalidates. */
-export const quoteMarketKey = (marketId: string) => [...QUOTE_KEY, marketId] as const;
-
-/**
- * Every input of a quote is in its key, and that IS the race fix: a response for an intent the
- * trader has already typed past is written into its own entry and never read, because the panel
- * only ever reads the key it currently asks for. A panel with no valid body parks on one idle
- * key instead of minting an entry per keystroke.
- */
-export function quoteQueryKey(body: QuoteBody | undefined) {
-  return body === undefined
-    ? ([...QUOTE_KEY, 'idle'] as const)
-    : ([...quoteMarketKey(body.marketId), body.side, body.outcome, body.mode, body.value] as const);
-}
 
 /**
  * Key roots that need the session cookie. They are never fetched on the server (`api.server.ts`

@@ -33,8 +33,6 @@ export type Market = components['schemas']['Market'];
 export type MarketSummary = components['schemas']['MarketSummary'];
 /** A list row: `MarketSummary` plus the card's `sparkline` — only `GET /markets` returns it. */
 export type MarketListItem = components['schemas']['MarketListItem'];
-/** The five fields a trade answer and a `market:tick` both carry, so both patch a cached market. */
-export type MarketStats = components['schemas']['MarketStats'];
 export type AdminMarket = components['schemas']['AdminMarket'];
 /** One row of `AdminMarket.settlementSteps` (ADR-0046): a judged market's settlement step. */
 export type AdminSettlementStep = components['schemas']['AdminSettlementStep'];
@@ -62,10 +60,6 @@ export type CreateMarketBody = components['schemas']['CreateMarketBody'];
 export type UpdateMarketBody = components['schemas']['UpdateMarketBody'];
 /** `POST /admin/markets/{id}/resolve`: judge a closed market — final at once (ADR-0046). */
 export type ResolveMarketBody = components['schemas']['ResolveMarketBody'];
-export type QuoteBody = components['schemas']['QuoteBody'];
-export type QuoteResult = components['schemas']['QuoteResult'];
-export type TradeBody = components['schemas']['TradeBody'];
-export type TradeResult = components['schemas']['TradeResult'];
 export type ErrorEnvelope = components['schemas']['ErrorEnvelope'];
 
 /** A non-2xx API response, carrying the `{ error: { code, message, details? } }` envelope. */
@@ -107,7 +101,7 @@ export function isApiError(error: unknown, code?: ErrorCode): error is ApiError 
  * PLAN 7): every VALIDATION_ERROR, and the few other codes that name a body field the same
  * way (the charge route's 404 for an unknown `packageId`, INSUFFICIENT_BALANCE on `amountP`,
  * the in-progress DUPLICATE_REQUEST on the `Idempotency-Key` header, and the FORBIDDEN on
- * `expectedAccountId` when the cookie belongs to another account — the charge, coupon, trade,
+ * `expectedAccountId` when the cookie belongs to another account — the charge, coupon,
  * payment-window, contact and password bodies alike).
  * Returns the first field name found, e.g. 'nickname'; undefined when no field is named.
  */
@@ -119,18 +113,17 @@ export function validationField(error: ApiError): string | undefined {
 
 /**
  * The 403 that means "the cookie belongs to somebody else than the account on screen": the
- * server refused to charge, to redeem for, to trade as, to open a payment window for, or to
- * write the contact or first password of an account the user is not looking at (PLAN 5.3 shape
- * — `chargeBodySchema` (the payment window's prepare too), `redeemCouponBodySchema`,
- * `tradeBodySchema`, `contactBodySchema` and `setPasswordBodySchema` all carry
- * `expectedAccountId`; A-PG-24 for the last two). Only this FORBIDDEN names the field; the CSRF
- * refusal names none.
+ * server refused to charge, to redeem for, to open a payment window for, or to write the
+ * contact or first password of an account the user is not looking at (PLAN 5.3 shape —
+ * `chargeBodySchema` (the payment window's prepare too), `redeemCouponBodySchema`,
+ * `contactBodySchema` and `setPasswordBodySchema` all carry `expectedAccountId`; A-PG-24 for the
+ * last two). Only this FORBIDDEN names the field; the CSRF refusal names none.
  *
  * It lives beside `validationField`, which it is built on, rather than in the wallet hook it
- * started in: the keyed flows that send `expectedAccountId` (charge, coupon, trade) must keep
- * their idempotency key on this answer (the server judged the cookie, not the key), and the
- * trade and contact hooks must not import a wallet hook — and a whole `'use client'` module — to
- * ask a pure question about an ApiError.
+ * started in: the keyed flows that send `expectedAccountId` (charge, coupon) must keep their
+ * idempotency key on this answer (the server judged the cookie, not the key), and the contact
+ * hook must not import a wallet hook — and a whole `'use client'` module — to ask a pure
+ * question about an ApiError.
  */
 export function isForAnotherAccount(error: unknown): boolean {
   return isApiError(error, 'FORBIDDEN') && validationField(error) === 'expectedAccountId';

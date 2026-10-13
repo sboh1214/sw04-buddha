@@ -10,12 +10,11 @@ import { copy } from '../src/copy';
 
 /**
  * Fixtures every M4 spec shares (PLAN 14): the Mailpit sign-up flow auth.spec.ts introduced,
- * plus an admin API context that CREATES the market a spec trades on.
+ * plus an admin API context that CREATES the market a spec runs against.
  *
- * The market is created per run, never taken from `pnpm db:seed`. A seeded market carries an
- * absolute KST close time and keeps `status: 'open'` after it (A-M3-31) while the API refuses
- * every trade with MARKET_CLOSED, so a spec pinned to the seed's calendar passes today and
- * rots on a date nobody will connect to the failure. The two things a spec still needs from
+ * The market is created per run, never taken from `pnpm db:seed`. The seed's markets are drafts
+ * waiting for review (#125) with absolute KST close times, so a spec pinned to them would pass
+ * today and rot on a date nobody will connect to the failure. The two things a spec still needs from
  * the seed are the ones no public or admin route can make: the first admin (PLAN 10.5) and the
  * category rows. Both are named in the error a helper throws, so a missing seed reads as
  * "run pnpm db:seed" rather than as a 401 or a 404 in the middle of a flow.
@@ -46,34 +45,11 @@ const ADMIN_PASSWORD = process.env.SEED_ADMIN_PASSWORD ?? 'admin1234!';
 /** What the `admin` fixture gives the seed admin, which `pnpm db:seed` creates without one. */
 const ADMIN_CONTACT = { realName: '테스트관리자', phone: '01000000000' } as const;
 
-/** The repo's placeholder for a figure that does not exist yet (trade-panel.tsx). */
-export const DASH = '—';
-
-/** PLAN 13 M4 AC 1: 브라우저 A에서 매수 → 브라우저 B의 카드·상세 확률이 1초 내 갱신. */
+/** PLAN 13 M4 AC 1: 한 브라우저의 변화가 다른 브라우저의 카드·상세에 1초 내 반영된다. */
 export const REALTIME_BUDGET_MS = 1_000;
-
-/**
- * A quote costs the 300ms debounce (PLAN 11.4) plus a `POST /quotes` round trip, so AC 3's
- * "300ms 내 견적" cannot be measured as a wall-clock budget from the keystroke; this is the
- * generous bound that still fails a panel which never prices at all.
- */
-export const QUOTE_TIMEOUT_MS = 8_000;
 
 /** How long a socket may take to open and ask for its rooms before a spec gives up on it. */
 const REALTIME_READY_MS = 10_000;
-
-/**
- * A market whose price moves visibly on a few thousand P. The reading that matters is the
- * WHOLE percent both the detail's 확률 and a card's 예 NN% badge show, so the buy has to move
- * the probability by points, not by fractions of one.
- *
- * LMSR from q_yes = q_no = 0: 5,000P buys q where 100·b·ln((e^(q/b) + 1) / 2) = 5,000, and the
- * price lands at e^(q/b) / (e^(q/b) + 1). At b = 200 that is ~90 contracts and 50% → 61%,
- * which nothing rounds away. b = 10,000 — the first guess here — buys ~100 contracts and moves
- * the price by a quarter of a point, so the badge still reads 50% and AC 1 could never pass.
- */
-const LIQUIDITY_B = 200;
-const INITIAL_PROB_BP = 5_000;
 
 /** Far enough out that no spec races the close, close enough to stay obviously synthetic. */
 const CLOSE_IN_MS = 24 * 60 * 60 * 1_000;
@@ -210,10 +186,6 @@ export interface TestMarket {
   slug: string;
   title: string;
   rules: string;
-  /** Display YES price 1..99, as `예 NN%` renders it in the HTML AC 2 reads. */
-  lastPrice: number;
-  /** YES probability in basis points, as `NN.NN%` renders it beside the big number. */
-  pYesBp: number;
   /**
    * The random part of the title and the slug. Unique per run, so `/?q=<tag>` is a home page
    * holding exactly this market's card and nothing else — which is what makes AC 1's card
@@ -233,8 +205,9 @@ async function unwrap<T>(response: APIResponse): Promise<T> {
 
 /**
  * Creates a draft through `POST /admin/markets` and opens it, so the spec owns a market that is
- * `open`, has an `open` price tick (and therefore a chart and a sparkline), and closes a day
- * from now whatever the calendar says.
+ * `open` and closes a day from now whatever the calendar says. It has no fill — there is no way
+ * to trade until the CLOB lands (#119) — so its price reads 체결 없음 and its chart is empty
+ * (N02 §5): opening writes no price tick.
  */
 export async function createOpenMarket(admin: APIRequestContext): Promise<TestMarket> {
   const categories = await unwrap<Category[]>(await admin.get('/api/v1/categories'));
@@ -260,8 +233,6 @@ export async function createOpenMarket(admin: APIRequestContext): Promise<TestMa
         categoryId: category.id,
         imageUrl: null,
         closeAt: new Date(Date.now() + CLOSE_IN_MS).toISOString(),
-        initialProbBp: INITIAL_PROB_BP,
-        liquidityB: LIQUIDITY_B,
         slug: `e2e-${tag}`,
       },
     }),
@@ -269,15 +240,7 @@ export async function createOpenMarket(admin: APIRequestContext): Promise<TestMa
   const open = await unwrap<AdminMarket>(
     await admin.post(`/api/v1/admin/markets/${draft.id}/open`),
   );
-  return {
-    id: open.id,
-    slug: open.slug,
-    title,
-    rules,
-    lastPrice: open.lastPrice,
-    pYesBp: open.pYesBp,
-    tag,
-  };
+  return { id: open.id, slug: open.slug, title, rules, tag };
 }
 
 /**
@@ -331,8 +294,9 @@ export function documentSurvived(page: Page): Promise<boolean> {
 }
 
 /**
- * Makes sure the charge catalogue has something to buy. The seed fills it, but an admin who
- * emptied it leaves it empty on purpose (seed.ts), and AC 7 needs a 충전 step either way.
+ * Makes sure the charge catalogue has something to buy. The seed's packages are off sale
+ * (seed.ts, #125) and an admin may empty it on purpose, while payment.spec.ts needs a 충전 step
+ * either way.
  */
 export async function ensureChargePackage(admin: APIRequestContext): Promise<void> {
   const packages = await unwrap<ChargePackage[]>(await admin.get('/api/v1/charge-packages'));
@@ -354,56 +318,11 @@ export async function chargeOnce(page: Page): Promise<void> {
   await expect(page.getByText(copy.chargeDone)).toBeVisible();
 }
 
-// ---- the trade panel ----------------------------------------------------------------
-
-/** The inline card at `md` and up; the bottom sheet the fixed 예/아니오 bar opens below it. */
-export type TradeTestIdPrefix = 'trade' | 'trade-sheet';
-
-/**
- * Opens the panel for one outcome and answers the testid prefix to address it with.
- *
- * The prefix is not cosmetic: below `md` the inline card stays mounted behind `display: none`
- * while the sheet is open, so both id sets are in the DOM at once and a bare `trade-value`
- * matches two fields (trade-panel.tsx `TradePanelViewProps`). Which one is live is decided by
- * the viewport, not by the project name, so this reads the fixed 예/아니오 bar's own visibility
- * — a spec that overrides `viewport` gets the right half with no extra argument.
- */
-export async function openTradeForm(page: Page, outcome: 'YES' | 'NO'): Promise<TradeTestIdPrefix> {
-  const bar = page.getByTestId('trade-bar');
-  await bar.waitFor({ state: 'attached' });
-  if (await bar.isVisible()) {
-    await page.getByTestId(outcome === 'YES' ? 'trade-bar-yes' : 'trade-bar-no').click();
-    await expect(page.getByTestId('trade-sheet')).toBeVisible();
-    return 'trade-sheet';
-  }
-  await page.getByTestId(outcome === 'YES' ? 'trade-outcome-yes' : 'trade-outcome-no').click();
-  return 'trade';
-}
-
-/**
- * 금액 입력 → 견적 → 확인, the whole of AC 3 in one call for the specs that only need the
- * trade to have happened. trade.spec.ts spells the same steps out, because there the
- * intermediate states ARE the acceptance criterion.
- */
-export async function buyThroughPanel(
-  page: Page,
-  outcome: 'YES' | 'NO',
-  amountP: string,
-): Promise<void> {
-  const prefix = await openTradeForm(page, outcome);
-  await page.getByTestId(`${prefix}-value`).fill(amountP);
-  await expect(page.getByTestId(`${prefix}-summary-shares`)).not.toHaveText(DASH, {
-    timeout: QUOTE_TIMEOUT_MS,
-  });
-  await page.getByTestId(`${prefix}-submit`).click();
-  await expect(page.getByText(copy.tradeBought)).toBeVisible();
-}
-
 // ---- realtime -----------------------------------------------------------------------
 
 /**
- * Resolves once this tab has asked the gateway for `marketId`'s room, so a spec that publishes
- * a tick straight afterwards cannot lose it in the connect gap (A-M4: the t0→t1 window between
+ * Resolves once this tab has asked the gateway for `marketId`'s room, so a spec that causes an
+ * event straight afterwards cannot lose it in the connect gap (A-M4: the t0→t1 window between
  * the SSR snapshot and the first `subscribe` is accepted, and it is exactly what would make an
  * AC 1 assertion flaky).
  *

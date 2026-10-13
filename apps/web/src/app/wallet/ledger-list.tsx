@@ -14,7 +14,6 @@ const TYPE_LABEL: Record<LedgerEntryType, string> = {
   TRADE_SELL: copy.ledgerTypeTradeSell,
   FEE: copy.ledgerTypeFee,
   SETTLEMENT_PAYOUT: copy.ledgerTypeSettlement,
-  MARKET_VOID_REFUND: copy.ledgerTypeVoidRefund,
   ADMIN_ADJUST: copy.ledgerTypeAdminAdjust,
   BONUS: copy.ledgerTypeBonus,
   PAYMENT_CANCEL: copy.ledgerTypePaymentCancel,

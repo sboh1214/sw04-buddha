@@ -4,16 +4,12 @@ import { Badge, HStack, Text, VisuallyHidden } from '@chakra-ui/react';
 import { useEffect, useState } from 'react';
 import { RollingNumber } from '@/components/ui/rolling-number';
 import { copy } from '@/copy';
-import {
-  deltaLabel,
-  deltaMoveKey,
-  formatPricePerContract,
-  formatYesPrice,
-} from '@/lib/market-admin';
+import { deltaLabel, deltaMoveKey, formatYesPrice } from '@/lib/market-admin';
 
 /**
- * The detail screen's big probability (PLAN 11.4 ProbabilityDisplay): "예 63% · 63.00P" plus a
- * short-lived 확률 변화 badge.
+ * The detail screen's big reading (PLAN 11.4 ProbabilityDisplay): the last fill's price, "예 63%",
+ * plus a short-lived 확률 변화 badge — or 체결 없음 before the first fill (N02 §5), where no initial
+ * setting stands in for a price.
  *
  * Rolling lives here and nowhere else. A card renders `formatYesPrice` as plain text: AC 1 asks
  * a card to UPDATE within a second, not to animate, PLAN 11.1-1 says a card shows "63%" only,
@@ -45,15 +41,8 @@ const VALUE_FONT_SIZE = {
 } as const;
 
 export interface ProbabilityDisplayProps {
-  /** `Market.lastPrice`, 1..99 — the whole percent the API rounds. Never recomputed here. */
-  lastPrice: number;
-  /**
-   * `Market.pYesBp`. Rendered as the SECOND half of PLAN 11.1-1's "63% · 63P" — what one
-   * contract costs, not the same percentage a second time: the big reading is already the
-   * probability, and repeating it at two precisions says nothing while hiding the price the
-   * 매수 panel is about to charge. Omit it on a card, where principle 1 wants the percentage alone.
-   */
-  pYesBp?: number;
+  /** `Market.lastPrice`, 1..99, or `null` before the first fill. Never recomputed here. */
+  lastPrice: number | null;
   /** Percentage points moved, or `null` for "no move to report" — the badge then stays away. */
   deltaPoints?: number | null;
   /**
@@ -69,7 +58,6 @@ export interface ProbabilityDisplayProps {
 
 export function ProbabilityDisplay({
   lastPrice,
-  pYesBp,
   deltaPoints = null,
   moveId,
   size = 'lg',
@@ -79,7 +67,7 @@ export function ProbabilityDisplay({
   // What "this move" is: the string a dismissal is remembered against, so the NEXT move revives
   // the badge. `moveId` is monotone and therefore cannot repeat — see `recentMove`, and
   // `deltaMoveKey` for why the value-based fallback below is not enough on its own.
-  const move = moveId ?? deltaMoveKey(pYesBp, lastPrice, label);
+  const move = moveId ?? deltaMoveKey(lastPrice, label);
   const [dismissed, setDismissed] = useState<string | null>(null);
 
   useEffect(() => {
@@ -103,13 +91,15 @@ export function ProbabilityDisplay({
         // the 예 label share one baseline whatever Pretendard's metrics do at this size.
         lineHeight="1.15"
       >
-        <RollingNumber text={formatYesPrice(lastPrice)} data-testid="market-probability-value" />
+        {/* 체결 없음 is words, not a number: nothing to roll. */}
+        {lastPrice === null ? (
+          <Text as="span" color="fg.muted" data-testid="market-probability-value">
+            {formatYesPrice(lastPrice)}
+          </Text>
+        ) : (
+          <RollingNumber text={formatYesPrice(lastPrice)} data-testid="market-probability-value" />
+        )}
       </Text>
-      {pYesBp === undefined ? null : (
-        <Text as="span" fontSize="sm" color="fg.muted" data-testid="market-probability-price">
-          {formatPricePerContract(pYesBp)}
-        </Text>
-      )}
       {label === '' || dismissed === move ? null : (
         <Badge
           colorPalette={up ? 'yes' : 'no'}

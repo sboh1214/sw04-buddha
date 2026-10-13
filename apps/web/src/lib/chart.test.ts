@@ -299,8 +299,8 @@ describe('withLiveEdge', () => {
   });
 
   it('leaves an empty series empty, so the empty state still renders', () => {
-    // The same rule `extendToNow` states: a synthesised point would replace 아직 확률 기록이
-    // 없습니다 with a line drawn from nothing.
+    // The same rule `extendToNow` states: a synthesised point would replace 체결 없음 with a
+    // line drawn from nothing.
     expect(withLiveEdge([], 6300)).toEqual([]);
   });
 

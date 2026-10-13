@@ -77,7 +77,7 @@ export function useMarkets(filters: MarketFilters) {
  * One market (`GET /markets/:idOrSlug`), keyed AND requested by the canonical lower-cased uuid —
  * never by the slug the URL carried (A-M3-29). The server component resolves the slug to the row
  * and passes `market.id`, so the entry this screen reads is the entry a `market:tick` (which
- * names its market by uuid), a `TradeResult.market.id` and the ticks/fills routes all write.
+ * names its market by uuid) and the ticks/fills routes all write.
  *
  * The path parameter is lower-cased along with the key: a uuid is accepted in either case and the
  * API answers with the row's own lower-case id, so sending it as typed would leave the request

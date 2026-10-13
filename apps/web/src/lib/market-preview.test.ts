@@ -14,11 +14,9 @@ const body: CreateMarketBody = {
   imageUrl: null,
   categoryId: 1,
   closeAt: '2026-12-01T00:00:00.000Z',
-  initialProbBp: 5_000,
-  liquidityB: 1_000,
 };
 
-/** An OPEN market that has traded away from the probability it opened at. */
+/** An OPEN market that has traded. */
 const traded: MarketSummary = {
   id: '3f2504e0-4f89-11d3-9a0c-0305e82c3301',
   slug: 'first-snow',
@@ -27,7 +25,6 @@ const traded: MarketSummary = {
   imageUrl: null,
   status: 'open',
   lastPrice: 70,
-  pYesBp: 7_000,
   volumeP: '1250000',
   tradeCount: 42,
   traderCount: 11,
@@ -40,14 +37,11 @@ const traded: MarketSummary = {
 
 describe('toPreviewMarket', () => {
   it('previews an already-traded market at the price it TRADES at', () => {
-    // THE HAZARD: this same component draws 시장 만들기 and the detail screen's 수정 card, and
-    // its placeholders were written for the first. `initialProbBp` is the price the market
-    // OPENED at and the API refuses to change it once open — so the card presented to the admin
-    // as the real one showed 50% while the public card showed 70%, with 거래량 0 and no
-    // participants, and the edit was approved against that.
+    // This same component draws 시장 만들기 and the detail screen's 수정 card, and its
+    // placeholders were written for the first: on a traded market they would preview 체결 없음,
+    // 거래량 0 and no participants beside a public card showing 70%.
     const preview = toPreviewMarket(body, categories, traded);
     expect(preview.lastPrice).toBe(70);
-    expect(preview.pYesBp).toBe(7_000);
     expect(preview.volumeP).toBe('1250000');
     expect(preview.tradeCount).toBe(42);
     expect(preview.traderCount).toBe(11);
@@ -62,13 +56,11 @@ describe('toPreviewMarket', () => {
     expect(preview.lastPrice).toBe(70);
   });
 
-  it('keeps the derived placeholders for a DRAFT, which has no history to show', () => {
-    // `canEditLiquidity` is the condition, and not by coincidence: it is the same `status ===
-    // 'draft'` that freezes the curve. A draft has never traded and never reaches a visitor's
-    // grid, so every placeholder is true for it — and the initial probability is genuinely the
-    // price it would open at.
+  it('keeps the placeholders for a DRAFT, which has no history to show', () => {
+    // A draft has never traded and never reaches a visitor's grid, so every placeholder is true
+    // for it: no fill yet, so no price — the card reads 체결 없음 (N02 §5).
     const preview = toPreviewMarket(body, categories, { ...traded, status: 'draft' });
-    expect(preview.lastPrice).toBe(50);
+    expect(preview.lastPrice).toBeNull();
     expect(preview.tradeCount).toBe(0);
     expect(preview.volumeP).toBe('0');
     expect(preview.openAt).toBeNull();
@@ -83,7 +75,8 @@ describe('toPreviewMarket', () => {
 
   it('keeps them on 시장 만들기, where there is no market at all', () => {
     const preview = toPreviewMarket(body, categories);
-    expect(preview.lastPrice).toBe(50);
+    // No initial probability exists to show as a price (#125): the card reads 체결 없음.
+    expect(preview.lastPrice).toBeNull();
     expect(preview.status).toBe('open');
     expect(preview.tradeCount).toBe(0);
   });

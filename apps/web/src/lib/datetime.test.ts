@@ -132,7 +132,7 @@ describe('tickingNow', () => {
   /** The server answered ten seconds before this market closes. */
   const CLOSE = Date.parse('2026-09-08T12:00:00.000Z');
   const anchor = CLOSE - 10_000;
-  /** What the panel and the badge both ask: has the close passed yet? */
+  /** What the badge, and an order panel's close gate, ask: has the close passed yet? */
   const closed = (now: number) => now >= CLOSE;
 
   it('advances the server anchor by the browser duration, so a wrong clock cannot move the close', () => {
@@ -169,8 +169,8 @@ describe('tickingNow', () => {
   });
 
   it('hands back the wall clock when there is no anchor to add to', () => {
-    // A card on the home grid renders the badge with no `now`: nothing to anchor to, no panel
-    // beside it to disagree with, and display-only. That is today's behaviour, kept.
+    // A card on the home grid renders the badge with no `now`: nothing to anchor to, and
+    // display-only. That is today's behaviour, kept.
     expect(tickingNow(undefined, 5_000, 1_234_567)).toBe(1_234_567);
   });
 
@@ -192,7 +192,7 @@ describe('the elapsed a ticking clock is given', () => {
     const anchor = CLOSE - 30_000; // the detail says: 30 seconds left
     const documentAge = 300_000; // the visitor browsed for five minutes first
     expect(tickingNow(anchor, documentAge, 0)).toBeGreaterThan(CLOSE); // what bare gave: closed
-    // Measured from THIS reader's own origin, a panel that just mounted reads the anchor.
+    // Measured from THIS reader's own origin, a reader that just mounted reads the anchor.
     expect(tickingNow(anchor, 0, 0)).toBe(anchor);
     expect(tickingNow(anchor, 0, 0)).toBeLessThan(CLOSE); // open, which is the truth
   });

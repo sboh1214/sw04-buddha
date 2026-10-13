@@ -15,7 +15,7 @@ export type PrimaryNavKey = 'markets' | 'ranking' | 'community';
  * The header's height in CSS px: Kalshi's measured 107 (12 + 40 + 12 for row 1, 30 + 12 for
  * row 2, the 1px rule), which `nav.tsx` is built to. One number in one place because three
  * things depend on it — the header's own layout, the home screen's sticky sidebar and the
- * detail screen's sticky trade panel, both of which have to stop exactly under it — and a
+ * detail screen's sticky 주문 영역, both of which have to stop exactly under it — and a
  * drift between them shows as a column sliding under the header. It is the same on every
  * breakpoint (row 1 keeps its 40px without the primary links) and grows only while the mobile
  * search form is open, when nothing is sticky beneath it.

@@ -31,14 +31,14 @@ describe('sessionIdentityChanged', () => {
 describe('the published cache owner', () => {
   it('answers undefined until better-auth has answered in this tab', () => {
     // Read before anything is published — the state a tree without the guard stays in, and the
-    // one `tradeAnswerScope` (use-trade.ts) falls back to the cached `Me` in.
+    // one `checkoutBelongsTo` (smartro-checkout.ts) lets a window through in.
     expect(cacheOwnerAccount()).toBeUndefined();
   });
 
   it('carries the account and the sign-out that follows it', () => {
     // The reading an in-flight mutation needs after its own component has unmounted: react
     // stops updating a pending mutation's options then, and the query cache is emptied by the
-    // reset, so neither can say who the tab belongs to (`tradeAnswerScope`, use-trade.ts).
+    // reset, so neither can say who the tab belongs to (`reservationToOpen`, smartro-checkout.ts).
     rememberCacheOwner('user-1');
     expect(cacheOwnerAccount()).toBe('user-1');
     rememberCacheOwner('user-2');
@@ -52,8 +52,8 @@ describe('the published cache owner', () => {
 describe('claimCacheOwnership', () => {
   it('publishes the owner before it empties the caches', () => {
     // The ORDER is the fix. `resetQueries` blanks `['me']` as it goes, so an owner read after it
-    // could only come from a cache that no longer names anybody — the window an in-flight trade
-    // answer used to be waved through in (`tradeAnswerScope`, use-trade.ts).
+    // could only come from a cache that no longer names anybody — the window a late prepare
+    // answer would open another account's payment window in (`reservationToOpen`).
     rememberCacheOwner('user-1');
     // Recorded rather than asserted inside the callback, so the case also fails if the reset
     // never runs at all instead of silently asserting nothing.

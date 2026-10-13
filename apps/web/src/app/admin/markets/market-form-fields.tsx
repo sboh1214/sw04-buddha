@@ -1,20 +1,11 @@
 'use client';
 
-import {
-  Field,
-  HStack,
-  Input,
-  NativeSelect,
-  Slider,
-  Stack,
-  Text,
-  Textarea,
-} from '@chakra-ui/react';
-import { Controller, type UseFormReturn } from 'react-hook-form';
+import { Field, HStack, Input, NativeSelect, Stack, Textarea } from '@chakra-ui/react';
+import { type UseFormReturn } from 'react-hook-form';
 import { copy } from '@/copy';
 import { type Category, type MarketSummary } from '@/lib/api';
 import { groupCategories } from '@/lib/category-tree';
-import { type MarketFormValues, maxLossHelp } from '@/lib/market-form';
+import { type MarketFormValues } from '@/lib/market-form';
 import { MarketPreview } from './market-preview';
 
 interface MarketFormFieldsProps {
@@ -22,13 +13,11 @@ interface MarketFormFieldsProps {
   categories: Category[];
   /** Every input; false unless the market is draft or open (design 3.4). */
   disabled?: boolean;
-  /** Probability and liquidity, which only a draft may change. */
-  lmsrDisabled?: boolean;
   /** The slug is chosen at creation only. */
   showSlug?: boolean;
   /**
    * The market being edited, passed straight to the 미리보기 so an already-traded market previews
-   * at its LIVE price rather than the one it opened at. Absent on 시장 만들기.
+   * at its LIVE price and volume rather than as an untraded draft. Absent on 시장 만들기.
    */
   base?: MarketSummary;
 }
@@ -44,21 +33,17 @@ export function MarketFormFields({
   form,
   categories,
   disabled = false,
-  lmsrDisabled = false,
   showSlug = false,
   base,
 }: MarketFormFieldsProps) {
   const {
     register,
-    control,
     watch,
     formState: { errors },
   } = form;
-  // The whole values object rather than the two fields the max-loss line needs: `watch()`
-  // re-renders this component on every keystroke, which is what makes the preview below track
-  // typing. Nothing else changes — the help line still reads the same two fields.
+  // The whole values object: `watch()` re-renders this component on every keystroke, which is
+  // what makes the preview below track typing.
   const values = watch();
-  const maxLoss = maxLossHelp(values.probabilityPct, values.liquidityB);
   // The flat `GET /categories` list as the two-level tree the select draws (ADR-0041). Grouped
   // here on every render rather than memoised: it is a few dozen rows, and `watch()` above
   // already re-renders this component per keystroke for the preview's sake.
@@ -162,60 +147,6 @@ export function MarketFormFields({
           <Field.Label>{copy.adminMarketCloseAt}</Field.Label>
           <Input type="datetime-local" data-testid="market-close-at" {...register('closeAt')} />
           <Field.ErrorText>{errors.closeAt?.message}</Field.ErrorText>
-        </Field.Root>
-      </HStack>
-
-      <HStack gap="4" align="start" flexWrap="wrap">
-        <Field.Root
-          invalid={!!errors.probabilityPct}
-          disabled={disabled || lmsrDisabled}
-          flex="1"
-          minW="56"
-        >
-          <Controller
-            control={control}
-            name="probabilityPct"
-            render={({ field }) => (
-              <Slider.Root
-                min={1}
-                max={99}
-                step={1}
-                value={[field.value]}
-                onValueChange={(details) => field.onChange(details.value[0] ?? field.value)}
-                onBlur={field.onBlur}
-                disabled={disabled || lmsrDisabled}
-                width="full"
-                data-testid="market-probability"
-              >
-                <HStack justify="space-between">
-                  <Slider.Label>{copy.adminMarketInitialProb}</Slider.Label>
-                  <Text fontVariantNumeric="tabular-nums" data-testid="market-probability-value">
-                    {copy.yes} {String(field.value)}%
-                  </Text>
-                </HStack>
-                <Slider.Control>
-                  <Slider.Track>
-                    <Slider.Range />
-                  </Slider.Track>
-                  <Slider.Thumbs />
-                </Slider.Control>
-              </Slider.Root>
-            )}
-          />
-          <Field.ErrorText>{errors.probabilityPct?.message}</Field.ErrorText>
-        </Field.Root>
-        <Field.Root
-          invalid={!!errors.liquidityB}
-          required
-          disabled={disabled || lmsrDisabled}
-          maxW="48"
-        >
-          <Field.Label>{copy.adminMarketLiquidity}</Field.Label>
-          <Input inputMode="decimal" data-testid="market-liquidity" {...register('liquidityB')} />
-          {maxLoss !== undefined && (
-            <Field.HelperText data-testid="market-max-loss">{maxLoss}</Field.HelperText>
-          )}
-          <Field.ErrorText>{errors.liquidityB?.message}</Field.ErrorText>
         </Field.Root>
       </HStack>
 

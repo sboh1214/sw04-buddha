@@ -8,7 +8,6 @@ import {
   LEDGER_QUERY_KEY,
   PAYMENTS_QUERY_KEY,
 } from '@/hooks/use-wallet';
-import { type QuoteBody } from './api';
 import {
   CATEGORIES_QUERY_KEY,
   DEFAULT_MARKET_FILTERS,
@@ -18,7 +17,6 @@ import {
   ORDERS_KEY,
   POSITIONS_KEY,
   PRIVATE_QUERY_ROOTS,
-  QUOTE_KEY,
   TICKS_KEY,
   type MarketFilters,
   dehydratePublic,
@@ -26,27 +24,16 @@ import {
   marketFillsKey,
   marketKey,
   marketsKey,
-  quoteMarketKey,
-  quoteQueryKey,
   ticksKey,
 } from './market-keys';
 
 const ID = '3f2504e0-4f89-11d3-9a0c-0305e82c3301';
-const OTHER_ID = '5c1f8a02-1d3e-4b7a-9c88-0b2f6d4e1a99';
-
-const quoteBody: QuoteBody = {
-  marketId: ID,
-  outcome: 'YES',
-  side: 'buy',
-  mode: 'spend',
-  value: '1000',
-};
 
 describe('the market key builders', () => {
   it('keys the detail on the canonical lower-cased uuid, never the segment as typed', () => {
     // A-M3-29: the API answers with the row's own lower-case id, so a screen keyed on an
     // upper-case URL segment would hold a row whose `market.id` names a different key — and
-    // every live write (a `market:tick`, a `TradeResult`, an invalidation) goes through that id.
+    // every live write (a `market:tick`, an invalidation) goes through that id.
     expect(marketKey(ID.toUpperCase())).toEqual([...MARKET_KEY, ID]);
     expect(hashKey(marketKey(ID.toUpperCase()))).toBe(hashKey(marketKey(ID)));
   });
@@ -59,9 +46,8 @@ describe('the market key builders', () => {
     expect(partialMatchKey(ticksKey(ID, '1D'), TICKS_KEY)).toBe(true);
   });
 
-  it('hangs the fills and the quotes off their own roots', () => {
+  it('hangs the fills off their own root', () => {
     expect(marketFillsKey(ID)).toEqual([...MARKET_FILLS_KEY, ID]);
-    expect(quoteMarketKey(ID)).toEqual([...QUOTE_KEY, ID]);
   });
 });
 
@@ -114,8 +100,8 @@ describe('key prefix isolation', () => {
 
   it('gives the positions join both lists and nothing else', () => {
     // The third `setQueryDefaults` registration joins `Position[]` by row version. It has to
-    // reach `['positions', 'open']` and `['positions', 'settled']` — the socket, the trade
-    // answer and every REST fetch all write those two — and it must reach neither `['orders']`
+    // reach `['positions', 'open']` and `['positions', 'settled']` — the socket and every REST
+    // fetch write those two — and it must reach neither `['orders']`
     // (a paged `{ items, nextCursor }`) nor any market key, whose values are a different shape
     // entirely.
     expect(partialMatchKey(positionsKey('open'), POSITIONS_KEY)).toBe(true);
@@ -123,28 +109,6 @@ describe('key prefix isolation', () => {
     expect(partialMatchKey(ORDERS_KEY, POSITIONS_KEY)).toBe(false);
     expect(partialMatchKey(marketKey(ID), POSITIONS_KEY)).toBe(false);
     expect(partialMatchKey(positionsKey('open'), MARKETS_KEY)).toBe(false);
-  });
-});
-
-describe('quoteQueryKey', () => {
-  it('parks on one idle key while there is no valid body', () => {
-    expect(quoteQueryKey(undefined)).toEqual([...QUOTE_KEY, 'idle']);
-  });
-
-  it('carries every input of the quote, so a superseded answer lands on its own entry', () => {
-    expect(quoteQueryKey(quoteBody)).toEqual([...QUOTE_KEY, ID, 'buy', 'YES', 'spend', '1000']);
-    // The race fix: one more keystroke is a different key, so the older response is written
-    // where the panel no longer reads.
-    const asked = hashKey(quoteQueryKey(quoteBody));
-    expect(asked).not.toBe(hashKey(quoteQueryKey({ ...quoteBody, value: '10000' })));
-    expect(asked).not.toBe(hashKey(quoteQueryKey({ ...quoteBody, outcome: 'NO' })));
-  });
-
-  it('sits under the market prefix a committed trade invalidates', () => {
-    expect(partialMatchKey(quoteQueryKey(quoteBody), quoteMarketKey(ID))).toBe(true);
-    expect(partialMatchKey(quoteQueryKey(quoteBody), quoteMarketKey(OTHER_ID))).toBe(false);
-    // The idle key must not be swept away with another market's quotes.
-    expect(partialMatchKey(quoteQueryKey(undefined), quoteMarketKey(ID))).toBe(false);
   });
 });
 
@@ -181,14 +145,12 @@ describe('isPrivateQueryKey', () => {
       MARKETS_KEY,
       MARKET_KEY,
       TICKS_KEY,
-      QUOTE_KEY,
       MARKET_FILLS_KEY,
       CATEGORIES_QUERY_KEY,
       marketsKey(DEFAULT_MARKET_FILTERS),
       marketKey(ID),
       ticksKey(ID, '1D'),
       marketFillsKey(ID),
-      quoteMarketKey(ID),
     ];
     for (const key of publicKeys) expect(isPrivateQueryKey(key), hashKey(key)).toBe(false);
   });

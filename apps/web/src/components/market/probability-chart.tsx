@@ -84,16 +84,19 @@ export interface ProbabilityChartProps {
   marketId: string;
   /** The market question; the chart's accessible name is built from it. */
   label: string;
-  /** Live probability in bp, from the market cache the socket writes to. */
-  currentBp: number;
+  /**
+   * The live last-fill price in bp, from the market cache the socket writes to, or `null` before
+   * the first fill — when the series is empty too and there is no level to hold.
+   */
+  currentBp: number | null;
   /**
    * The trade count of the SAME row `currentBp` was read from — the two must come from one
-   * read, or the chart could draw one trade's probability under another's claim.
+   * read, or the chart could draw one trade's price under another's claim.
    *
-   * It is what decides whether that probability may overrule the series' own right edge: the
-   * row is kept newest by `joinMarket`, the answer carries its own count, and a series can be a
-   * trade behind for reasons no refetch closes — a range still on its first fetch when the tick
-   * arrived, or this tab's own trade, which patches the row and never the series.
+   * It is what decides whether that price may overrule the series' own right edge: the row is
+   * kept newest by `joinMarket`, the answer carries its own count, and a series can be a trade
+   * behind for reasons no refetch closes — a range still on its first fetch when the tick
+   * arrived, for one.
    */
   currentTradeCount: number;
   /** The range the toggle opens on. Defaults to the one the server seeds into the cache. */
@@ -121,14 +124,17 @@ export function ProbabilityChart({
   const plotted =
     held === undefined
       ? []
-      : extendToNow(toChartPoints(held.points), Date.parse(held.to), currentBp);
+      : currentBp === null
+        ? toChartPoints(held.points)
+        : extendToNow(toChartPoints(held.points), Date.parse(held.to), currentBp);
   // `extendToNow` alone cannot reach a series that is a trade behind: it draws PAST the right
   // edge, and every bucketed answer pins a point at its own window end, so the test it makes is
   // a tie. Only when the row names a trade the series does not does the newest level replace
   // that edge — an ordering, decided by the counter both sides carry.
-  const points = rowSupersedesSeries(held, currentTradeCount)
-    ? withLiveEdge(plotted, currentBp)
-    : plotted;
+  const points =
+    currentBp !== null && rowSupersedesSeries(held, currentTradeCount)
+      ? withLiveEdge(plotted, currentBp)
+      : plotted;
   const geometry = chartGeometry(points);
   // Resolved against the series ON SCREEN NOW, never the one the index was taken from: the
   // window rolls, so the same range answers fewer points as old changes slide off the left edge
@@ -188,8 +194,12 @@ export function ProbabilityChart({
             </Alert.Root>
           )}
 
+          {/* Only fills are drawn (N02 §5): no open-time setting is plotted, so a market with
+              no fill has no line at all. */}
           {points.length === 0 ? (
-            <Text color="fg.muted">{copy.chartEmpty}</Text>
+            <Text color="fg.muted" data-testid="probability-chart-empty">
+              {copy.noFills}
+            </Text>
           ) : (
             <Box
               position="relative"

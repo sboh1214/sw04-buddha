@@ -254,7 +254,7 @@ describe('checkoutBelongsTo', () => {
     expect(checkoutBelongsTo({ sent: 'user-a', account: null })).toBe(false);
   });
 
-  it("lets the window through while nobody has said whose tab this is (tradeAnswerScope's fallback)", () => {
+  it('lets the window through while nobody has said whose tab this is', () => {
     expect(checkoutBelongsTo({ sent: 'user-a', account: undefined })).toBe(true);
   });
 });

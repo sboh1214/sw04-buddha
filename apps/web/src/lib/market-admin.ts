@@ -21,9 +21,9 @@ import { formatKst } from './datetime';
 
 /**
  * Pure helpers behind the market screens: status and event labels, the list badges (PLAN 12),
- * the admin's settlement-step rows (ADR-0046), and the number formats the public cards, the
- * detail header and the trade panel share with the admin screens. No domain maths lives here —
- * probabilities and P come from the API and @buddha/shared (PLAN 11.5).
+ * the admin's settlement-step rows (ADR-0046), and the number formats the public cards and the
+ * detail header share with the admin screens. No domain maths lives here — prices and P come
+ * from the API and @buddha/shared (PLAN 11.5).
  */
 
 export const MARKET_STATUS_LABEL: Record<MarketStatus, string> = {
@@ -176,18 +176,6 @@ export function isEditable(status: MarketStatus): boolean {
   return status === 'draft' || status === 'open';
 }
 
-export function canEditLiquidity(status: MarketStatus): boolean {
-  return status === 'draft';
-}
-
-/**
- * 무효 (PLAN 5.2, ADR-0046): before the 판정 only. A judged market cannot be voided — that would
- * overturn the judgement, which is #26's to decide — and the API refuses it naming `status`.
- */
-export function canVoid(status: MarketStatus): boolean {
-  return status === 'open' || status === 'closed';
-}
-
 /**
  * 판정 (PLAN 12, ADR-0046): a closed market only, once. The result is final at once; there is no
  * way to change it afterwards (#26 decides re-judgement).
@@ -236,15 +224,18 @@ export function settlementStepViews(
   }));
 }
 
-/** PLAN 11.2: never colour alone — "예 63%". */
-export function formatYesPrice(lastPrice: number): string {
-  return `${copy.yes} ${String(lastPrice)}%`;
+/**
+ * PLAN 11.2: never colour alone — "예 63%". `null` is a market with no fill yet, which reads
+ * 체결 없음 rather than any number (N02 §5): no initial setting is shown as a price.
+ */
+export function formatYesPrice(lastPrice: number | null): string {
+  return lastPrice === null ? copy.noFills : `${copy.yes} ${String(lastPrice)}%`;
 }
 
 /**
  * The other side of the same reading — "아니오 37%" for a 63% market. The complement is taken
- * from `lastPrice` (the whole percent the API rounds), not from `pYesBp`, so 예 and 아니오 on
- * the same card always add up to 100.
+ * from the same `lastPrice` (the whole percent the API sends), so 예 and 아니오 on the same card
+ * always add up to 100.
  */
 export function formatNoPrice(lastPrice: number): string {
   return `${copy.no} ${String(100 - lastPrice)}%`;
@@ -277,31 +268,21 @@ export function deltaLabel(deltaPoints: number | null): string {
 }
 
 /**
- * The identity of ONE probability move, which is what `ProbabilityDisplay` remembers a dismissal
- * against so the NEXT move revives its five-second badge (PLAN 11.4).
+ * The value-based identity of ONE price move — what `ProbabilityDisplay` remembers a dismissal
+ * against when its caller passes no `moveId`, so the NEXT move revives the five-second badge
+ * (PLAN 11.4).
  *
- * THE HAZARD it closes: the identity used to be `lastPrice:label`, and `lastPrice` is the WHOLE
- * percent. A move too small to change it — 5 to 49 basis points, which `deltaLabel` still shows
- * as +0.1%p and up — therefore produced the same string as the move before it, the effect never
- * restarted, and a badge already dismissed never came back. Measured: three consecutive +0.1%p
- * trades inside one percent lit it once and stayed dark for the other two, on the screen PLAN
- * 11.4 asks to announce every move.
- *
- * Basis points cannot collide the same way. Two CONSECUTIVE moves share an identity only by
- * ending on the same probability, and a move that ends where it began has a zero delta, which
- * `deltaLabel` already hides. (Non-consecutive repeats are harmless: only the last dismissal is
- * remembered.)
- *
- * `lastPrice` stays the fallback for a caller with no `pYesBp` — a card omits it (PLAN 11.1-1),
- * and today the badge has a single call site that passes both, so the fallback is a contract
- * rather than a live path. Derived from values alone, so a server render and the first client
- * render produce the same string.
+ * Only a fallback, and a weak one: `lastPrice` is the WHOLE percent, so a move too small to
+ * change it — which `deltaLabel` still shows as +0.1%p and up — produces the same string as the
+ * move before it and a badge already dismissed never comes back. The one call site passes the
+ * monotone `moveId` (`recentMove`, lib/ticks.ts) for exactly that reason. Derived from values
+ * alone, so a server render and the first client render produce the same string.
  */
-export function deltaMoveKey(pYesBp: number | undefined, lastPrice: number, label: string): string {
-  return `${String(pYesBp ?? lastPrice)}:${label}`;
+export function deltaMoveKey(lastPrice: number | null, label: string): string {
+  return `${lastPrice === null ? '' : String(lastPrice)}:${label}`;
 }
 
-/** A `numeric(24,10)` quantity string from the API, trimmed to four decimals for reading. */
+/** A quantity, possibly a decimal string, trimmed to four decimals and grouped for reading. */
 export function formatQuantity(q: string): string {
   const n = Number(q);
   return Number.isFinite(n)
@@ -309,13 +290,9 @@ export function formatQuantity(q: string): string {
     : q;
 }
 
-/**
- * A contract count as the quote summary and the position rows read it: "1,234계약". The number
- * goes through `formatQuantity` so a fractional quote (the quote returns shares, not an
- * integer) groups and truncates exactly like the quantities the API sends as strings.
- */
+/** A contract count as the position, order and fill rows read it: "1,234계약". */
 export function formatContracts(n: number): string {
-  return `${formatQuantity(String(n))}${copy.tradeUnitContracts}`;
+  return `${formatQuantity(String(n))}${copy.unitContracts}`;
 }
 
 /**
@@ -356,15 +333,8 @@ const kstInstant = z.string().refine((iso) => formatKst(iso) !== '');
 /**
  * The payloads `market-admin.service` (and the worker's `market-finalize`) write for each
  * event, as the web reads them. `.nullish()` where the writer may omit or null a field: the
- * 판정 detail nulls a blank note, and a void of a `closed` market — never judged — carries no
- * discarded result at all (only a void inside M5's dispute window ever wrote one, A-M3-23).
+ * 판정 detail nulls a blank note.
  */
-const VOIDED_PAYLOAD = z.object({
-  reason: z.string(),
-  refundedAccounts: z.number().int().nonnegative(),
-  refundedP: pAmountSchema,
-  discardedResult: outcomeSchema.nullish(),
-});
 const RULES_EDITED_PAYLOAD = z.object({ before: z.string(), after: z.string() });
 const OPENED_PAYLOAD = z.object({ openAt: kstInstant, closeAt: kstInstant });
 const CLOSED_PAYLOAD = z.object({ closedAt: kstInstant });
@@ -415,28 +385,15 @@ function resolveDetailRows(detail: {
 
 /**
  * An event's payload as label/value rows in Korean, for the shapes the API and the worker
- * write (design 3.4's 이벤트 로그, 5.5): the void summary, the rules diff, the open and close
- * instants, the 판정 with its note and evidence (and M5's legacy proposed / changed result),
- * the finalize summary. The payload is `unknown` on the wire (jsonb), so each shape is checked
- * before it is read; `created` (the whole create body) and anything that does not match are
- * `undefined`, and the screen shows those as `compactJson` instead of a half-read row.
+ * write (design 3.4's 이벤트 로그, 5.5): the rules diff, the open and close instants, the 판정
+ * with its note and evidence (and M5's legacy proposed / changed result), the finalize summary.
+ * The payload is `unknown` on the wire (jsonb), so each shape is checked before it is read;
+ * `created` (the whole create body), `voided` (nothing writes one since the admin void went,
+ * #125) and anything that does not match are `undefined`, and the screen shows those as
+ * `compactJson` instead of a half-read row.
  */
 export function marketEventRows(type: MarketEventType, payload: unknown): EventRow[] | undefined {
   switch (type) {
-    case 'voided': {
-      const parsed = VOIDED_PAYLOAD.safeParse(payload);
-      if (!parsed.success) return undefined;
-      return [
-        { label: copy.eventVoidReason, value: parsed.data.reason },
-        { label: copy.eventRefundedAccounts, value: String(parsed.data.refundedAccounts) },
-        { label: copy.eventRefundedTotal, value: formatP(parsePAmount(parsed.data.refundedP)) },
-        // A void inside M5's dispute window discarded the proposal (A-M3-23); the row says
-        // which one. Only old rows carry it: a judged market can no longer be voided (ADR-0046).
-        ...(parsed.data.discardedResult
-          ? [{ label: copy.eventDiscardedResult, value: outcomeLabel(parsed.data.discardedResult) }]
-          : []),
-      ];
-    }
     case 'resolved': {
       const parsed = RESOLVED_PAYLOAD.safeParse(payload);
       if (!parsed.success) return undefined;
@@ -509,7 +466,7 @@ export function marketEventRows(type: MarketEventType, payload: unknown): EventR
  * The toast for a refused transition (design 3.4/3.6, 5.5): RULES_REQUIRED on open,
  * MARKET_NOT_OPEN on close, VALIDATION_ERROR naming `status` for any other state-machine
  * violation — the two "refresh the screen" messages, since the state on screen is what is
- * stale (a second 판정, or a void, of a market another admin has already judged lands here).
+ * stale (a second 판정 of a market another admin has already judged lands here).
  * NOT_FOUND is the market itself (every admin write answers 404 for an unknown id): not a "try
  * again". A NOT_FOUND naming `categoryId` never reaches here — the form callers hand it to
  * `marketFormError` first.
@@ -522,7 +479,6 @@ export function transitionErrorMessage(error: unknown): string {
     const field = validationField(error);
     if (field === 'status') return copy.errMarketStatus;
     if (field === 'closeAt') return copy.errMarketCloseAt;
-    if (field === 'reason') return copy.errMarketVoidReason;
     if (field === 'note') return copy.errMarketResolveNote;
     if (field === 'evidenceUrl') return copy.errMarketResolveEvidence;
     return copy.errMarketInvalid;
@@ -538,8 +494,6 @@ export type MarketFormField =
   | 'categoryId'
   | 'imageUrl'
   | 'closeAt'
-  | 'probabilityPct'
-  | 'liquidityB'
   | 'slug';
 
 const API_FIELD_TO_FORM: Record<string, MarketFormField> = {
@@ -550,8 +504,6 @@ const API_FIELD_TO_FORM: Record<string, MarketFormField> = {
   categoryId: 'categoryId',
   imageUrl: 'imageUrl',
   closeAt: 'closeAt',
-  initialProbBp: 'probabilityPct',
-  liquidityB: 'liquidityB',
   slug: 'slug',
 };
 
@@ -596,10 +548,6 @@ function fieldMessage(field: MarketFormField, error: ApiError): string {
       return copy.errMarketSource;
     case 'imageUrl':
       return copy.errMarketImageUrl;
-    case 'liquidityB':
-      return copy.errMarketLiquidity;
-    case 'probabilityPct':
-      return copy.errMarketInvalid;
   }
 }
 

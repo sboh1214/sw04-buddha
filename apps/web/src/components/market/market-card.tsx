@@ -33,7 +33,8 @@ import { MarketSparkline } from './market-sparkline';
  * over the question and its countdown — then one row per outcome, 예 and 아니오, each a label
  * over a hairline bar, the "맞히면 투입 대비 1.59x" figure and a pill with the percentage, and a
  * footer with the 거래량 on the left and the sparkline on the right. The whole card is a link
- * to the detail.
+ * to the detail. A market with no fill yet has no price, so the two rows give way to one line,
+ * 체결 없음 (N02 §5): no initial setting is drawn as a price.
  *
  * The two rows take `row.first` and `row.second` — Kalshi's green and blue — and not the `yes`
  * and `no` palettes the detail screen paints. The pair is what Kalshi draws on every tile, and
@@ -56,15 +57,14 @@ import { MarketSparkline } from './market-sparkline';
  * `LinkBox`/`LinkOverlay` rather than an anchor wrapped round the card: the accessible name of
  * the link is then the question alone, while the whole card stays clickable. An anchor around
  * everything would announce the category, the price, the volume and the countdown as one name.
- * The tile also holds links of its own INSIDE the box — the category header goes to that leaf's
- * list, each pill to the detail with THAT outcome preselected in the trade panel
- * (`?outcome=YES|NO`, the way Kalshi's pill opens the trade for the outcome it names; it is
- * what makes the pill a destination of its own and not a third tab stop to the same URL) —
- * and they work because Chakra's `LinkBox` raises every nested
- * `a[href]` that is not the overlay to `position: relative; z-index: 1`, above the overlay's
- * `::before` that covers the card. A click on a pill hits the pill; a click anywhere else hits
- * the overlay. `interactive` below drops every one of those links for the admin 미리보기 — a
- * card that is not a link must not RENDER one, however thoroughly its clicks are cancelled.
+ * The tile also holds one link of its own INSIDE the box — the category header goes to that
+ * leaf's list — and it works because Chakra's `LinkBox` raises every nested `a[href]` that is
+ * not the overlay to `position: relative; z-index: 1`, above the overlay's `::before` that covers
+ * the card. The pills are NOT links: they used to open the detail's trade panel on their outcome
+ * (`?outcome=`), and with no panel to open (#125) a pill link would be a third tab stop to the
+ * same URL. A click on a pill falls through to the overlay. `interactive` below drops every link
+ * for the admin 미리보기 — a card that is not a link must not RENDER one, however thoroughly its
+ * clicks are cancelled.
  *
  * The question is clamped to one line (`lineClamp="1"`): Kalshi truncates, and it is what keeps
  * every tile in a row the same height so the rows and the footers line up across the grid. The
@@ -98,10 +98,9 @@ const SHELL = {
 } satisfies BoxProps;
 
 /**
- * Kalshi's outcome pill (36px, `rounded-x50`, the green outline): the one style for the link a
- * visitor clicks and the `<span>` the 미리보기 shows, so the preview is a picture of the real pill.
- * The outline is `brand.border`, not `row.first`: a component boundary owes WCAG 1.4.11 its 3:1,
- * which light `row.first` does not pay and light `brand.border` (600) does (theme/system.ts).
+ * Kalshi's outcome pill (36px, `rounded-x50`, the green outline). The outline is `brand.border`,
+ * not `row.first`: a component boundary owes WCAG 1.4.11 its 3:1, which light `row.first` does
+ * not pay and light `brand.border` (600) does (theme/system.ts).
  */
 const PILL = {
   display: 'inline-flex',
@@ -120,8 +119,9 @@ const PILL = {
 export interface MarketCardProps {
   market: MarketSummary;
   /**
-   * `MarketListItem.sparkline` — oldest-first hourly pYesBp. Absent for a draft preview, and
-   * `[]` for a market with no tick at all; both render as an empty box of the same height.
+   * `MarketListItem.sparkline` — oldest-first hourly price ticks in basis points. Absent for a
+   * draft preview, and `[]` for a market with no fill at all; both render as an empty box of the
+   * same height.
    */
   sparkline?: number[];
   /**
@@ -168,7 +168,7 @@ export function MarketCard({
   /**
    * One element, two parents: the overlay anchor is the ONLY difference between the real card's
    * title and the 미리보기's, and two copies of this `Heading` would drift the moment either was
-   * restyled. The category header and the pills below follow the same rule.
+   * restyled. The category header below follows the same rule.
    */
   const title = (
     // `title` on the heading is what the 미리보기 shows on hover; in the real card the overlay's
@@ -271,13 +271,19 @@ export function MarketCard({
         Kalshi's row grid, copied cell for cell: the label over its bar in the first column, an
         empty second column, and the multiple with the pill in the third. Three columns rather
         than two so the empty cell keeps the pills of every row on one right edge whatever the
-        multiple's width.
+        multiple's width. With no fill there is no price for either row to show.
       */}
-      <Grid templateColumns="1fr auto auto" columnGap="1" rowGap="6px" w="100%">
-        {outcomeRows(market.lastPrice).map((row) => (
-          <OutcomeRowCells key={row.key} row={row} href={href} interactive={interactive} />
-        ))}
-      </Grid>
+      {market.lastPrice === null ? (
+        <Text as="span" textStyle="bodyMd" color="fg.muted" data-testid="market-card-no-fills">
+          {copy.noFills}
+        </Text>
+      ) : (
+        <Grid templateColumns="1fr auto auto" columnGap="1" rowGap="6px" w="100%">
+          {outcomeRows(market.lastPrice).map((row) => (
+            <OutcomeRowCells key={row.key} row={row} />
+          ))}
+        </Grid>
+      )}
 
       <Flex justify="space-between" align="center" minH="28px">
         <Text as="span" textStyle="bodyXs" color="fg">
@@ -317,33 +323,12 @@ export function MarketCard({
 }
 
 /**
- * One outcome row's three grid cells (a fragment, so the parent `Grid` places them). The
- * reading "예 63%" is announced ONCE per row, and which element carries it depends on which one
- * is a real object in the accessibility tree:
- *
- * - Interactive, the pill is a link, and a link's `aria-label` is its name — so the pill says
- *   "예 63%" and the bar is `aria-hidden`. The bar cannot be the carrier here without a second
- *   reading, and the pill cannot be hidden: a focusable element inside `aria-hidden` is a
- *   violation in its own right.
- * - In the 미리보기 the pill is a `<span>`, and `aria-label` on a generic element is prohibited
- *   by ARIA 1.2 and dropped by browsers, so a name there would be silently lost. The bar — a
- *   labelled `progressbar` with the same string — is the carrier instead, and the span is the
- *   one hidden.
- *
- * The bar keeps its `role="progressbar"` and value attributes in both modes rather than growing
- * them only in the preview: `aria-hidden` removes it from the tree entirely, so the role costs
- * nothing when hidden, and one markup for the bar is one less thing for the two modes to drift
- * on.
+ * One outcome row's three grid cells (a fragment, so the parent `Grid` places them). The reading
+ * "예 63%" is announced ONCE per row, by the bar: a labelled `progressbar` with that string. The
+ * pill is a `<span>`, and `aria-label` on a generic element is prohibited by ARIA 1.2 and dropped
+ * by browsers, so the pill is the one hidden — it paints the same number the bar already names.
  */
-function OutcomeRowCells({
-  row,
-  href,
-  interactive,
-}: {
-  row: OutcomeRow;
-  href: Route;
-  interactive: boolean;
-}) {
+function OutcomeRowCells({ row }: { row: OutcomeRow }) {
   const percentText = `${String(row.percent)}%`;
   const testId = row.key === 'yes' ? 'market-card-probability' : 'market-card-probability-no';
   return (
@@ -358,7 +343,6 @@ function OutcomeRowCells({
           aria-valuemin={0}
           aria-valuemax={100}
           aria-label={row.accessibleName}
-          aria-hidden={interactive ? 'true' : undefined}
           h="2px"
           w="100%"
           borderRadius="pill"
@@ -389,27 +373,9 @@ function OutcomeRowCells({
           <VisuallyHidden>{copy.payoutMultiple} </VisuallyHidden>
           {row.multiple}
         </Text>
-        {interactive ? (
-          // The hover tint only where the pill goes somewhere, for the reason the shell gives.
-          <Box
-            asChild
-            {...PILL}
-            transition="background-color 0.15s"
-            _hover={{ bg: 'row.firstTint' }}
-          >
-            <NextLink
-              href={{ pathname: href, query: { outcome: row.outcome } }}
-              aria-label={row.accessibleName}
-              data-testid={testId}
-            >
-              {percentText}
-            </NextLink>
-          </Box>
-        ) : (
-          <Box as="span" aria-hidden="true" {...PILL} data-testid={testId}>
-            {percentText}
-          </Box>
-        )}
+        <Box as="span" aria-hidden="true" {...PILL} data-testid={testId}>
+          {percentText}
+        </Box>
       </HStack>
     </>
   );
