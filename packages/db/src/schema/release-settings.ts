@@ -11,13 +11,14 @@ import { releaseSettingStatusEnum } from './enums.js';
  *
  * Changed only together with its record: a deferred constraint trigger (migration 0020) refuses,
  * at COMMIT, an INSERT or UPDATE without an `admin_actions` row of type `release_setting_change`
- * naming this key (as target and as payload `key`), `updated_by`, `updated_at` and the new status
- * and value (payload `after`), an UPDATE that changes `key`, and an UPDATE that does not move
- * `updated_at` forward — so a record an earlier write used cannot be replayed. buddha_app cannot
- * DELETE a row either — going back to `undecided` is a change like any other — so the record is
- * the whole history. Only the API's ReleaseSettingsService writes here, the record in the same
- * transaction; no seed or migration sets a value, so every item starts `undecided` after a dev
- * setup or a reset (owner decision 2026-10-13~14). Read the value through
+ * naming this key (as target and as payload `key`), `updated_by`, `updated_at`, the new status
+ * and value (payload `after`) and the state it replaced (payload `before`: the old row's, or
+ * undecided with no value for a first write), an UPDATE that changes `key`, and an UPDATE that
+ * does not move `updated_at` forward — so a record an earlier write used cannot be replayed.
+ * buddha_app cannot DELETE a row either — going back to `undecided` is a change like any other —
+ * so the record is the whole history. Only the API's ReleaseSettingsService writes here, the
+ * record in the same transaction; no seed or migration sets a value, so every item starts
+ * `undecided` after a dev setup or a reset (owner decision 2026-10-13~14). Read the value through
  * `storedReleaseSettingValue` / `getReleaseSetting` (release-settings.ts), never the bare column.
  */
 export const releaseSettings = pgTable(

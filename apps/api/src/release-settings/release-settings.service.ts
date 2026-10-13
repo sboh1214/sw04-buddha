@@ -177,6 +177,8 @@ export class ReleaseSettingsService {
       );
       const payload: ReleaseSettingChangePayload = {
         key,
+        // The row this change replaces, or undecided with no value when there is none: migration
+        // 0020 refuses, at commit, a record whose `before` is anything else.
         before: { status: current?.status ?? 'undecided', value: current?.value ?? null },
         after,
         reason: body.reason,

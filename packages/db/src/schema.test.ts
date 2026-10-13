@@ -27,6 +27,7 @@ import {
   user,
   userContacts,
 } from './schema/index.js';
+import { storedReleaseSettingValue } from './release-settings.js';
 import {
   createCategory,
   createMarket,
@@ -596,17 +597,33 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
 
     /**
      * The change the API makes: its admin_actions record and the row, in one transaction, at
-     * `record.at` for the record and `rowAt` for the row (both a fresh instant by default).
-     * `record.payloadKey` replaces the key the payload names (the one the change log shows).
+     * `record.at` for the record and `rowAt` for the row (both a fresh instant by default). The
+     * record's `before` is the state the row holds when the change starts — undecided with no
+     * value when there is no row — unless `record.before` replaces it; `record.payloadKey`
+     * replaces the key the payload names (the one the change log shows).
      */
     async function change(
       adminId: string,
       after: State,
-      record: { adminId?: string; after?: State; at?: Date; payloadKey?: string } = {},
+      record: {
+        adminId?: string;
+        after?: State;
+        before?: unknown;
+        at?: Date;
+        payloadKey?: string;
+      } = {},
       rowAt?: Date,
     ) {
       const at = rowAt ?? nextInstant();
       await t.db.transaction(async (tx) => {
+        const [current] = await tx
+          .select({ status: releaseSettings.status, value: storedReleaseSettingValue })
+          .from(releaseSettings)
+          .where(eq(releaseSettings.key, key));
+        const before: State = {
+          status: current?.status ?? 'undecided',
+          value: current?.value ?? null,
+        };
         await tx.insert(adminActions).values({
           adminId: record.adminId ?? adminId,
           type: 'release_setting_change',
@@ -614,7 +631,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
           targetId: key,
           payload: {
             key: record.payloadKey ?? key,
-            before: { status: 'undecided', value: null },
+            before: 'before' in record ? record.before : before,
             after: record.after ?? after,
             reason: '시험',
           },
@@ -641,9 +658,24 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       await change(admin.id, { status: 'test', value: 48 });
       await change(admin.id, { status: 'approved', value: { from: 1, to: 2 } });
       await change(admin.id, { status: 'undecided', value: null });
+      // From a stored undecided row (its record's `before` is undecided with no value), and from
+      // a string that is JSON text (the record keeps the string, not what it spells).
+      await change(admin.id, { status: 'proposal', value: '"24"' });
+      await change(admin.id, { status: 'test', value: 24 });
       const rows = await t.db.select().from(releaseSettings);
-      expect(rows).toMatchObject([{ key, status: 'undecided', value: null, updatedBy: admin.id }]);
-      expect(await t.db.select().from(adminActions)).toHaveLength(3);
+      expect(rows).toMatchObject([{ key, status: 'test', value: 24, updatedBy: admin.id }]);
+      // Each record's `before` is the previous one's `after`.
+      const records = await t.db
+        .select({ payload: adminActions.payload })
+        .from(adminActions)
+        .orderBy(adminActions.createdAt);
+      expect(records.map((r) => (r.payload as { before: unknown }).before)).toEqual([
+        { status: 'undecided', value: null },
+        { status: 'test', value: 48 },
+        { status: 'approved', value: { from: 1, to: 2 } },
+        { status: 'undecided', value: null },
+        { status: 'proposal', value: '"24"' },
+      ]);
     });
 
     it('refuses, at commit, a write whose record is missing or tells another story', async () => {
@@ -687,17 +719,74 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(await t.db.select().from(adminActions)).toHaveLength(1);
     });
 
+    it('refuses, at commit, a record whose `before` is not the state the write replaced', async () => {
+      const { user: admin } = await createUser(t.db, { role: 'admin' });
+      // A first write (INSERT) replaces the implicit undecided state: any other `before` — a
+      // decided one, undecided with a value, a value left out, no `before` at all — is refused.
+      for (const before of [
+        { status: 'test', value: 48 },
+        { status: 'undecided', value: 48 },
+        { status: 'undecided' },
+        undefined,
+      ]) {
+        await expect(change(admin.id, { status: 'test', value: 48 }, { before })).rejects.toSatisfy(
+          (e) => sqlState(e) === '23000',
+        );
+      }
+      expect(await t.db.select().from(releaseSettings)).toEqual([]);
+      expect(await t.db.select().from(adminActions)).toEqual([]);
+
+      await change(admin.id, { status: 'test', value: 48 });
+      // An UPDATE replaces the old row's status and value: the undecided state a first write
+      // records, another status, another value or none are all refused.
+      for (const before of [
+        { status: 'undecided', value: null },
+        { status: 'approved', value: 48 },
+        { status: 'test', value: 24 },
+        { status: 'test', value: '48' },
+        { status: 'test' },
+        undefined,
+      ]) {
+        await expect(
+          change(admin.id, { status: 'approved', value: 72 }, { before }),
+        ).rejects.toSatisfy((e) => sqlState(e) === '23000');
+      }
+      // Each refused transaction rolled back whole: the first change and its record only.
+      expect(await t.db.select().from(releaseSettings)).toMatchObject([
+        { status: 'test', value: 48 },
+      ]);
+      expect(await t.db.select().from(adminActions)).toHaveLength(1);
+
+      // The true `before` passes, compared as JSON (key order aside).
+      await change(admin.id, { status: 'approved', value: { from: 1, to: 2.5 } });
+      await change(
+        admin.id,
+        { status: 'undecided', value: null },
+        { before: { value: { to: 2.5, from: 1 }, status: 'approved' } },
+      );
+      expect(await t.db.select().from(releaseSettings)).toMatchObject([
+        { status: 'undecided', value: null },
+      ]);
+      // From a stored undecided row too, only the undecided state with no value passes.
+      await expect(
+        change(admin.id, { status: 'test', value: 24 }, { before: { status: 'undecided' } }),
+      ).rejects.toSatisfy((e) => sqlState(e) === '23000');
+      await change(admin.id, { status: 'test', value: 24 });
+      expect(await t.db.select().from(adminActions)).toHaveLength(4);
+    });
+
     it('refuses an UPDATE that does not move the instant forward: no record is replayed', async () => {
       const { user: admin } = await createUser(t.db, { role: 'admin' });
       const first = nextInstant();
       await change(admin.id, { status: 'test', value: 48 }, {}, first);
       const second = nextInstant();
-      await change(admin.id, { status: 'approved', value: 72 }, {}, second);
-      // The first change's record still matches its old state, actor and instant; putting that
-      // state back under it — or rewriting the current one at its own instant — is refused.
+      await change(admin.id, { status: 'undecided', value: null }, {}, second);
+      // Back on an undecided row, the first change's record matches putting its state back in
+      // all but the instant — the state it replaced, its new state, actor and key — and is
+      // refused; so is rewriting the current state at its own instant.
       for (const [state, at] of [
         [{ status: 'test', value: 48 }, first],
-        [{ status: 'approved', value: 72 }, second],
+        [{ status: 'undecided', value: null }, second],
       ] as const) {
         await expect(
           t.db
@@ -711,7 +800,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         change(admin.id, { status: 'proposal', value: 24 }, {}, new Date(first.getTime() - 1)),
       ).rejects.toSatisfy((e) => sqlState(e) === '23000');
       expect(await t.db.select().from(releaseSettings)).toMatchObject([
-        { status: 'approved', value: 72, updatedAt: second },
+        { status: 'undecided', value: null, updatedAt: second },
       ]);
       expect(await t.db.select().from(adminActions)).toHaveLength(2);
     });
@@ -732,7 +821,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
             targetId: renamed,
             payload: {
               key: renamed,
-              before: { status: 'undecided', value: null },
+              before: { status: 'test', value: 48 },
               after,
               reason: '시험',
             },

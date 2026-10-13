@@ -24,17 +24,25 @@ REVOKE DELETE ON TABLE "release_settings" FROM buddha_app;--> statement-breakpoi
 -- Hand-edited: a value cannot change without its record. Checked at COMMIT (deferred), so the
 -- order of the two INSERTs inside the transaction does not matter; a transaction that writes
 -- release_settings without the matching admin_actions row (type, the key both as target and as
--- the payload `key` the change log shows, actor, instant and the new status and value as payload
--- `after`) fails as a whole. An UPDATE must keep the key: renaming a row would, like the DELETE
--- revoked above, leave its registered key undecided and split its history. It must also move
--- updated_at forward: every record a write already used is no later than the row's instant, so
--- none can be replayed to put an earlier state back unrecorded (the API makes each instant of a
--- key later than the last). admin_actions is append-only (0001), so the row it finds cannot be
--- edited afterwards. Runs as the invoker: buddha_app may SELECT admin_actions. TRUNCATE
--- (wipe.ts, owner only) fires no row trigger.
+-- the payload `key` the change log shows, actor, instant, the new status and value as payload
+-- `after` and the state it replaced as payload `before`: the old row's status and value for an
+-- UPDATE, the implicit undecided state with no value for an INSERT, as the API records them)
+-- fails as a whole, so the change log cannot misreport a transition. An UPDATE must keep the
+-- key: renaming a row would, like the DELETE revoked above, leave its registered key undecided
+-- and split its history. It must also move updated_at forward: every record a write already
+-- used is no later than the row's instant, so none can be replayed to put an earlier state back
+-- unrecorded (the API makes each instant of a key later than the last). admin_actions is
+-- append-only (0001), so the row it finds cannot be edited afterwards. Runs as the invoker:
+-- buddha_app may SELECT admin_actions. TRUNCATE (wipe.ts, owner only) fires no row trigger.
 CREATE FUNCTION release_settings_require_change_record() RETURNS trigger
 LANGUAGE plpgsql AS $$
+DECLARE
+  -- A key with no row is undecided; the record of its first write says so.
+  replaced jsonb := '{"status": "undecided", "value": null}'::jsonb;
 BEGIN
+  IF TG_OP = 'UPDATE' THEN
+    replaced := jsonb_build_object('status', OLD.status::text, 'value', OLD.value);
+  END IF;
   IF TG_OP = 'UPDATE' AND NEW.key <> OLD.key THEN
     RAISE EXCEPTION 'release setting % cannot be renamed to %: a key is never changed or removed',
       OLD.key, NEW.key
@@ -55,6 +63,7 @@ BEGIN
        AND a.payload ->> 'key' = NEW.key
        AND a.admin_id = NEW.updated_by
        AND a.payload -> 'after' = jsonb_build_object('status', NEW.status::text, 'value', NEW.value)
+       AND a.payload -> 'before' = replaced
   ) THEN
     RAISE EXCEPTION 'release setting % was written without its release_setting_change record', NEW.key
       USING ERRCODE = 'integrity_constraint_violation';
