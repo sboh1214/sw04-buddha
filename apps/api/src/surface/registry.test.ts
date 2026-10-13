@@ -1,6 +1,8 @@
 /**
- * #113: the public and owner-only surface is registered (registry.ts), and nothing public names
- * an excluded feature or carries private data. Static, like admin-audit.test.ts: the routes come
+ * #113: the public and owner-only surface is registered (registry.ts), nothing public names an
+ * excluded feature or carries private data, and no route's path, owner-only and admin ones
+ * included, names a transfer, an activity reward or a cash-out. Static, like admin-audit.test.ts:
+ * the routes come
  * from the module graph and the shapes from the committed OpenAPI document (apps/api/openapi.json,
  * which CI regenerates and diffs against the code), so it needs no Postgres and no Redis. What a
  * route actually answers is private-data.test.ts's.
@@ -11,6 +13,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import {
+  EVERY_ROUTE_PATH_FEATURES,
   PAID_COIN_SALES_ENABLED,
   findExcludedIdentifier,
   findPrivateField,
@@ -73,9 +76,9 @@ function checksPaid(route: { key: string }): boolean {
 }
 
 /**
- * `name: feature` for each excluded feature the names carry, paid purchase only when `paid`, and
- * for each name that keeps a probability or a belief (N02 §10: someone's input, or the Community
- * Forecast's).
+ * `name: feature` for each excluded feature public names carry, paid purchase only when `paid`,
+ * and for each name that keeps a probability or a belief (N02 §10: someone's input, or the
+ * Community Forecast's).
  */
 function excludedIn(names: Iterable<string>, paid: boolean): string[] {
   return [...new Set(names)].flatMap((name) => [
@@ -85,6 +88,16 @@ function excludedIn(names: Iterable<string>, paid: boolean): string[] {
     ...(namesPersonalProbability(name) ? [`${name}: personal probability`] : []),
   ]);
 }
+
+/**
+ * The transfer, activity reward or cash-out a path names: what every route is held to, owner-only
+ * and admin ones too (owner decision 2026-10-14 #113). The rest of an owner-only or admin route —
+ * a score of one's own, a probability, its fields — is not looked at by name.
+ */
+const excludedInAnyPath = (routePath: string): string[] =>
+  findExcludedIdentifier(routePath, 'api', { features: EVERY_ROUTE_PATH_FEATURES }).map(
+    (hit) => hit.feature,
+  );
 
 describe('public and owner-only routes (static)', () => {
   it('finds the public, owner-only and admin surface at all', () => {
@@ -138,14 +151,36 @@ describe('public and owner-only routes (static)', () => {
     expect(routes.filter((route) => route.url.startsWith('/api/auth/'))).toEqual([]);
   });
 
-  it('names no excluded feature or probability in any route path (rewards, transfers, cash-out)', () => {
-    // Every class: a transfer or a cash-out would be an owner-only route, and an activity
-    // reward could be an admin one. Paid purchase only in public (D9).
+  it('names no excluded feature or probability in a public route path', () => {
+    // Paid purchase only where the route is not kept paid code (D9).
     expect(
-      routes.flatMap((route) =>
+      byClass('public').flatMap((route) =>
         excludedIn([route.path], checksPaid(route)).map((hit) => `${route.key} ${hit}`),
       ),
     ).toEqual([]);
+  });
+
+  it('names no transfer, activity reward or cash-out in any route path, owner-only and admin too', () => {
+    // A transfer or a cash-out would be an owner-only route, an activity reward could be an
+    // admin one (owner decision 2026-10-14 #113).
+    expect(
+      routes.flatMap((route) =>
+        excludedInAnyPath(route.path).map((feature) => `${route.key}: ${feature}`),
+      ),
+    ).toEqual([]);
+  });
+
+  it('holds an owner-only or admin path to transfers, rewards and cash-out only', () => {
+    expect(excludedInAnyPath('/me/coins/send')).toEqual(['coin-transfer']);
+    expect(excludedInAnyPath('/admin/rewards')).toEqual(['activity-reward']);
+    expect(excludedInAnyPath('/me/withdrawals')).toEqual(['cash-out']);
+    // A score or a probability of one's own is the public API's to refuse, not this check's.
+    expect(excludedInAnyPath('/me/score')).toEqual([]);
+    expect(excludedInAnyPath('/me/probability')).toEqual([]);
+    expect(excludedIn(['/me/score', '/me/probability'], true)).toEqual([
+      '/me/score: scoring',
+      '/me/probability: personal probability',
+    ]);
   });
 });
 
@@ -240,18 +275,20 @@ describe('the public API document (static)', () => {
     ).toEqual(documented(OWNER_ROUTES));
   });
 
-  it('names no excluded feature or probability in a path, parameter, schema or field', () => {
-    // Every operation for the features left out everywhere (a personal score in /me is as
-    // excluded as a public one); paid purchase in public operations only, kept paid code aside.
-    const found = operations.flatMap(({ key, url, operation }) => {
-      const names = [
-        url,
-        ...(operation.parameters ?? []).map((parameter) => parameter.name),
-        ...referencedSchemas(operation),
-        ...fieldNames(operation),
-      ];
-      return excludedIn(names, checksPaid({ key })).map((hit) => `${key} ${hit}`);
-    });
+  it('names no excluded feature or probability in a public path, parameter, schema or field', () => {
+    // Public operations only (owner decision 2026-10-14 #113): an owner-only or admin one is
+    // held to its path alone, above. Paid purchase where the route is not kept paid code (D9).
+    const found = operations
+      .filter(({ key }) => key in PUBLIC_ROUTES)
+      .flatMap(({ key, url, operation }) => {
+        const names = [
+          url,
+          ...(operation.parameters ?? []).map((parameter) => parameter.name),
+          ...referencedSchemas(operation),
+          ...fieldNames(operation),
+        ];
+        return excludedIn(names, checksPaid({ key })).map((hit) => `${key} ${hit}`);
+      });
     expect(found).toEqual([]);
   });
 

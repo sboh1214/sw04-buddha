@@ -74,7 +74,9 @@ describe('REALTIME_EVENT_REGISTRY (#113)', () => {
     expect(market.filter((type) => user.includes(type))).toEqual([]);
   });
 
-  it('carries no private data and no excluded feature in a market-channel event', () => {
+  it('carries no private data, excluded feature or probability in a market-channel event', () => {
+    // The public API's name checks (owner decision 2026-10-14 #113): a user-channel event is
+    // the owner's own, like an owner-only answer.
     const names = marketRealtimeEventSchema.options.flatMap((member) =>
       fieldNames(z.toJSONSchema(member)),
     );
@@ -82,13 +84,6 @@ describe('REALTIME_EVENT_REGISTRY (#113)', () => {
     expect(names).toEqual(expect.arrayContaining(['marketId', 'fillId', 'statusEventId']));
     expect(names.flatMap((name) => findPrivateField(name))).toEqual([]);
     expect(names.flatMap((name) => findExcludedIdentifier(name, 'api'))).toEqual([]);
-  });
-
-  it('keeps no probability or belief in any event, on either channel (N02 §10)', () => {
-    const names = realtimeEventSchema.options.flatMap((member) =>
-      fieldNames(z.toJSONSchema(member)),
-    );
-    expect(names).toEqual(expect.arrayContaining(['marketId', 'availableCoin', 'costBasisCoin']));
     expect(names.filter(namesPersonalProbability)).toEqual([]);
   });
 

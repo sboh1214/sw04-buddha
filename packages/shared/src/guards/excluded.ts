@@ -12,18 +12,20 @@ import { REPLACED_TERMS } from '../terms.js';
  *
  * A feature is looked for on the surfaces it names:
  * - `screen`: text a person reads — the web's copy, string and JSX text, mail, the seed markets'
- *   copy, notification text — matched with `words`;
+ *   copy, notification text — matched with `words`; the admin screens only for the gambling
+ *   words (ADMIN_SCREEN_FEATURES);
  * - `route`: screen addresses and menu links, matched with `tokens`;
- * - `api`: the paths, parameters, schema and field names of every route and documented
- *   operation (public, owner-only and admin), the fields of real answers (public ones, and the
- *   owner's own) and of market-channel events, and notification type names, matched with
- *   `tokens`;
+ * - `api`: the public API — the paths, parameters, schema and field names of the public routes
+ *   and documented public operations, the fields of real public answers and of market-channel
+ *   events — and notification type names, matched with `tokens`; the path of every route,
+ *   owner-only and admin ones too, only for EVERY_ROUTE_PATH_FEATURES;
  * - `storage`: table, column, constraint and enum names and the stored value lists, matched
  *   with `tokens`.
  *
  * Paid purchase is looked for on screens, screen addresses and public, not kept, routes only:
  * the payment and coupon code and tables stay (D9, ADR-0049; registry.test.ts). The term rows of
  * #14, the genre-only 예측 (D22) and the gambling words (D21) are looked for in screen text only.
+ * The API and screen scopes are owner decision 2026-10-14 #113.
  *
  * A word that also has an allowed meaning is cleared by TEXT_ALLOWANCES, never by loosening the
  * word: '상승률' is not '승률', '우선순위' is not a ranking.
@@ -121,6 +123,8 @@ export const EXCLUDED_FEATURES: readonly ExcludedFeature[] = [
     tokens: ['forecast', 'belief', 'credence', 'slider'],
   },
   {
+    // Not the contest words 상금·참가비·우승: the challenges (#81) revisit them (owner decision
+    // 2026-10-14 #113).
     id: 'scoring',
     name: '점수·평판·카테고리 등급·순위·실력 배지',
     basis: 'N04 §4, N00 §3-08, N02 §2',
@@ -230,21 +234,42 @@ export const EXCLUDED_FEATURES: readonly ExcludedFeature[] = [
   },
 ];
 
+/**
+ * The features looked for in the path of every API route, owner-only and admin ones too: a
+ * transfer or a cash-out would be a route a member calls for their own account, and an activity
+ * reward one an admin runs. The rest of the API's name checks look at the public API only
+ * (owner decision 2026-10-14 #113).
+ */
+export const EVERY_ROUTE_PATH_FEATURES: readonly ExcludedFeatureId[] = [
+  'activity-reward',
+  'coin-transfer',
+  'cash-out',
+];
+
+/**
+ * The features looked for in the admin screens' text: the gambling words only. Members never see
+ * those screens; mail and every member screen are held to the whole list (owner decision
+ * 2026-10-14 #113).
+ */
+export const ADMIN_SCREEN_FEATURES: readonly ExcludedFeatureId[] = ['gambling'];
+
 // ---- screen text ----------------------------------------------------------------------
 
 /**
  * Where screen text is shown, as far as allowances care: everywhere, or the service guide page
- * (#136), the one place that may say what the product does not offer (owner decision 2026-10-13
- * #113). Which sources make up that page is the screen check's to say.
+ * (#136), the one place that may say what the product does not offer (owner decisions 2026-10-13
+ * and 2026-10-14 #113). Which sources make up that page is the screen check's to say.
  */
 export const ALLOWANCE_SCOPES = ['everywhere', 'service-guide'] as const;
 export type AllowanceScope = (typeof ALLOWANCE_SCOPES)[number];
 
 /**
- * A sentence that says something is not offered or cannot be done: '…을 제공하지 않습니다',
- * '…할 수 없습니다'. The service guide (#136) may widen it when it words its own sentences.
+ * A sentence that says something is not offered, cannot be done, is not there or is not what it
+ * is called: '…을 제공하지 않습니다', '…할 수 없습니다', '…기능은 없습니다', '…은 확률이 아닙니다'.
+ * The service guide (#136) may widen it when it words its own sentences.
  */
-export const NEGATIVE_NOTICE = /(?:제공|지원|지급)하지\s*않|할\s*수\s*없/;
+export const NEGATIVE_NOTICE =
+  /(?:제공|지원|지급)하지\s*않|할\s*수\s*없|없(?:습니다|어요)|아닙니다|아니에요/;
 
 const CASH_OUT_WORD = String.raw`(?:현금\s*)?(?:환전|출금|인출|현금화)`;
 
@@ -329,12 +354,20 @@ export const TEXT_ALLOWANCES: readonly TextAllowance[] = [
     reason: '현금 환전·출금을 제공하지 않는다는 안내(N01 §2, 오너 결정 2026-10-13 #113)',
   },
   {
-    features: ['probability-input', 'scoring', 'paid-purchase', 'activity-reward', 'coin-transfer'],
+    features: [
+      'probability-input',
+      'scoring',
+      'paid-purchase',
+      'activity-reward',
+      'coin-transfer',
+      'replaced-term',
+      'prediction-word',
+    ],
     within: 'sentence',
     pattern: NEGATIVE_NOTICE,
     scope: 'service-guide',
     reason:
-      "'점수·순위를 제공하지 않습니다' 같은 부정 안내는 서비스 안내(#136)에서만(오너 결정 2026-10-13 #113)",
+      "'점수·순위를 제공하지 않습니다', '시장가격은 확률이 아닙니다' 같은 부정 안내는 서비스 안내(#136)에서만(오너 결정 2026-10-13·2026-10-14 #113). 도박 어휘는 여기서도 쓰지 않는다",
   },
 ];
 
@@ -501,9 +534,10 @@ export function findExcludedIdentifier(
 /**
  * Words that make a name a probability or a belief (N02 §10, N04 §4·§5): no table tied to one
  * user or to one order has such a name or such a column, so no buy input or fill price is kept as
- * that person's probability; no API path, parameter or field, answer key, realtime event field or
- * screen address has one either — there a probability is someone's input or the Community
- * Forecast's (N02 §1, N00 §5), and the market price is not called one (docs/TERMS.md).
+ * that person's probability; nothing of the public API — a public route's path, a public
+ * operation's parameter, schema or field, a public answer's key, a market-channel event's field —
+ * has one either: there a probability is someone's input or the Community Forecast's (N02 §1,
+ * N00 §5), and the market price is not called one (docs/TERMS.md).
  */
 export const PERSONAL_PROBABILITY_WORDS: readonly string[] = [
   'prob',

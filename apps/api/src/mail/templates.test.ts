@@ -39,7 +39,7 @@ describe('mail templates', () => {
     expect(mail.html).toContain('&lt;b&gt;&amp;c=&quot;d&quot;');
   });
 
-  it('names nothing the plan leaves out, gambling words included (#113, D21)', () => {
+  it('names nothing the plan leaves out, not only the gambling words (#113, owner decision 2026-10-14)', () => {
     const all = [
       verificationEmail({ url }),
       passwordResetEmail({ url }),

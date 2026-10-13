@@ -1,12 +1,13 @@
-import { readdirSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 
 /**
- * Reading what a source file under `src/` can put on a screen, for the checks that keep a word
- * off every screen: the old currency unit (coin-unit.test.ts, #13) and the excluded features
- * (excluded-features.test.ts, #113). Test support, not screen code: the walk skips this folder.
+ * Reading what a source file under `src/` can put on a screen, and what it imports (whose screen
+ * it is), for the checks that keep a word off every screen: the old currency unit
+ * (coin-unit.test.ts, #13) and the excluded features (excluded-features.test.ts, #113). Test
+ * support, not screen code: the walk skips this folder.
  */
 
 const TEST_SUPPORT = path.dirname(fileURLToPath(import.meta.url));
@@ -155,6 +156,51 @@ export function copyRefsOf(fileName: string, source: string): CopyRef[] {
   };
   visit(file);
   return found;
+}
+
+const MODULE_FILES = ['', '.ts', '.tsx', '/index.ts', '/index.tsx'];
+
+/**
+ * The sources under `src/` a file imports, re-exports from or loads with `import()`, resolved to
+ * their files (`@/` is `src/`). Packages and files that are not there are left out.
+ */
+export function localImportsOf(fileName: string, source: string): string[] {
+  const file = parse(fileName, source);
+  const specifiers: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (
+      (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+      node.moduleSpecifier !== undefined &&
+      ts.isStringLiteral(node.moduleSpecifier)
+    ) {
+      specifiers.push(node.moduleSpecifier.text);
+    } else if (
+      ts.isCallExpression(node) &&
+      node.expression.kind === ts.SyntaxKind.ImportKeyword &&
+      node.arguments[0] !== undefined &&
+      ts.isStringLiteral(node.arguments[0])
+    ) {
+      specifiers.push(node.arguments[0].text);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return [
+    ...new Set(
+      specifiers.flatMap((specifier) => {
+        const base = specifier.startsWith('@/')
+          ? path.join(SRC, specifier.slice(2))
+          : specifier.startsWith('.')
+            ? path.resolve(path.dirname(fileName), specifier)
+            : undefined;
+        if (base === undefined) return [];
+        const found = MODULE_FILES.map((suffix) => base + suffix).find(
+          (candidate) => existsSync(candidate) && statSync(candidate).isFile(),
+        );
+        return found === undefined ? [] : [found];
+      }),
+    ),
+  ];
 }
 
 /** Every use of the identifiers `names` outside import declarations. */

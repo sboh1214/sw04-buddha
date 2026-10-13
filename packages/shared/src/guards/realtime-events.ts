@@ -8,8 +8,8 @@ import { type RealtimeEventType } from '../realtime.js';
  *
  * guards/realtime-events.test.ts holds the rest: the channel named here is the family the gateway
  * parses the event with (`marketRealtimeEventSchema`, `userRealtimeEventSchema`), a market-channel
- * schema has no field of PRIVATE_DATA and no excluded feature's name, and no user-channel event
- * parses as a market-channel one. The gateway's own suite and the API's private-data suite
+ * schema has no field of PRIVATE_DATA and no excluded feature's or probability's name, and no
+ * user-channel event parses as a market-channel one. The gateway's own suite and the API's private-data suite
  * (apps/api/src/surface) publish them for real. docs/GUARDS.md has the steps for a new type.
  */
 export interface RealtimeEventEntry {

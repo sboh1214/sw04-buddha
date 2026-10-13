@@ -8,8 +8,9 @@
  *   field naming an excluded feature or keeping a probability;
  * - every registered owner-only route is called as B, aimed at A wherever it takes an id or an
  *   account, and no answer may hold A's values; the same request as A shows them, so the check
- *   is not blind (N04 §7 "다른 사용자가 비공개 자산·주문을 조회할 수 없어야 한다"), and names no
- *   excluded feature or probability either;
+ *   is not blind (N04 §7 "다른 사용자가 비공개 자산·주문을 조회할 수 없어야 한다"). What A's own
+ *   answer names is not looked at: the excluded-feature names are the public API's (owner
+ *   decision 2026-10-14 #113);
  * - the market room is listened to, anonymously and as B, while A's own events are published and
  *   smuggled onto the market channel and the API publishes a real market event.
  *
@@ -139,26 +140,16 @@ function keysOf(body: string): Set<string> {
 }
 
 /**
- * The fields of an answer that name an excluded feature or keep a probability (N02 §10). Paid
- * purchase only when `paid`: kept paid code may name it outside public answers (D9).
+ * The fields of a public answer or event that carry private data, name an excluded feature or
+ * keep a probability (N02 §10). Kept paid code answers 404 while sales are closed, so paid
+ * purchase is looked for too.
  */
-function excludedFields(body: string, paid: boolean): string[] {
+function forbiddenFields(body: string): string[] {
   return [...keysOf(body)].flatMap((key) => [
-    ...findExcludedIdentifier(key, 'api')
-      .filter((hit) => paid || hit.feature !== 'paid-purchase')
-      .map((hit) => `${key}: ${hit.feature}`),
+    ...findPrivateField(key).map((hit) => `${key}: ${hit.item}`),
+    ...findExcludedIdentifier(key, 'api').map((hit) => `${key}: ${hit.feature}`),
     ...(namesPersonalProbability(key) ? [`${key}: personal probability`] : []),
   ]);
-}
-
-/** The fields of an answer that carry private data, name an excluded feature or a probability. */
-function forbiddenFields(body: string): string[] {
-  return [
-    ...[...keysOf(body)].flatMap((key) =>
-      findPrivateField(key).map((hit) => `${key}: ${hit.item}`),
-    ),
-    ...excludedFields(body, true),
-  ];
 }
 
 // ---- the cases ---------------------------------------------------------------------------
@@ -574,7 +565,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         .then((rows) => rows.map((row) => row.hash));
     const passwordBefore = await password();
     const answers: { route: string; status: number; leaks: string[] }[] = [];
-    const shown: { route: string; status: number; missing: string[]; excluded: string[] }[] = [];
+    const shown: { route: string; status: number; missing: string[] }[] = [];
     for (const key of Object.keys(OWNER_ROUTES)) {
       const ownerCase = OWNER_CASES[key];
       if (!ownerCase) continue; // the case above names it
@@ -589,17 +580,13 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
           route: key,
           status: own.statusCode,
           missing: ownerCase.own.filter((label) => !held.includes(label)),
-          // A's own answer may hold A's private data, never a score, a reward or a probability.
-          excluded: excludedFields(own.body, false),
         });
       }
     }
     expect(answers).toEqual(
       answers.map(({ route }) => ({ route, status: OWNER_CASES[route]!.status, leaks: [] })),
     );
-    expect(shown).toEqual(
-      shown.map(({ route }) => ({ route, status: 200, missing: [], excluded: [] })),
-    );
+    expect(shown).toEqual(shown.map(({ route }) => ({ route, status: 200, missing: [] })));
 
     // B's refused writes changed nothing of A's.
     const [contact] = await t.db

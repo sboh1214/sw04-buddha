@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { REPLACED_TERMS } from '../terms.js';
 import {
+  ADMIN_SCREEN_FEATURES,
+  EVERY_ROUTE_PATH_FEATURES,
   EXCLUDED_FEATURES,
   EXCLUDED_FEATURE_IDS,
   type ExcludedFeatureId,
@@ -40,6 +42,18 @@ describe('EXCLUDED_FEATURES (#113)', () => {
   it('looks for paid purchase on screens and public responses only, never in storage (D9)', () => {
     const paid = EXCLUDED_FEATURES.find((feature) => feature.id === 'paid-purchase');
     expect(paid?.surfaces).toEqual(['screen', 'route', 'api']);
+  });
+
+  it('looks for transfers, rewards and cash-out in every route path, and only gambling words on admin screens (owner decision 2026-10-14)', () => {
+    expect([...EVERY_ROUTE_PATH_FEATURES].sort()).toEqual([
+      'activity-reward',
+      'cash-out',
+      'coin-transfer',
+    ]);
+    expect(ADMIN_SCREEN_FEATURES).toEqual(['gambling']);
+    for (const id of EVERY_ROUTE_PATH_FEATURES) {
+      expect(EXCLUDED_FEATURES.find((feature) => feature.id === id)?.surfaces, id).toContain('api');
+    }
   });
 
   it('looks for the term rows, 예측 and the gambling words in screen text only', () => {
@@ -170,6 +184,8 @@ describe('findExcludedText', () => {
     '회원 2명',
     '10원칙',
     '잘못 입력한 내용의 보상은 운영 정책을 따릅니다.',
+    // Contest words: the challenges (#81) revisit them (owner decision 2026-10-14 #113).
+    '우승 상금과 참가비',
     'underscore',
     'market-status-badge',
   ])('lets %s through', (text) => {
@@ -220,8 +236,34 @@ describe('findExcludedText', () => {
     );
     // Not a notice: the guide may not name the feature as something on offer.
     expect(features('점수를 확인하세요.', 'service-guide')).toEqual(['scoring']);
-    // Words are never cleared by a notice.
+    // Gambling words are never cleared by a notice.
     expect(features('베팅은 할 수 없습니다.', 'service-guide')).toEqual(['gambling']);
+  });
+
+  it.each<[string, ExcludedFeatureId[]]>([
+    ['확률 입력이나 투표 기능은 없습니다.', ['probability-input', 'replaced-term']],
+    ['시장가격은 확률이 아닙니다.', ['replaced-term']],
+    ['이 서비스의 거래는 예측이나 투표가 아닙니다.', ['replaced-term', 'prediction-word']],
+    [
+      '내 예측을 남기는 기능은 제공하지 않습니다.',
+      ['probability-input', 'replaced-term', 'prediction-word'],
+    ],
+  ])(
+    'allows the #14 terms and 예측 in a negative notice on the service guide only: %s',
+    (notice, named) => {
+      // Owner decision 2026-10-14 #113.
+      expect(features(notice).sort()).toEqual([...named].sort());
+      expect(features(notice, 'service-guide')).toEqual([]);
+    },
+  );
+
+  it('clears the #14 terms and 예측 on the service guide in a negative sentence only', () => {
+    expect(features('확률이 오르면 투표하세요.', 'service-guide')).toEqual(['replaced-term']);
+    expect(features('예측을 남기세요.', 'service-guide')).toEqual(['prediction-word']);
+    // One sentence's notice does not clear the next.
+    expect(findExcludedText('확률이 아닙니다. 투표하기', { scope: 'service-guide' })).toEqual([
+      { feature: 'replaced-term', match: '투표', index: 10 },
+    ]);
   });
 });
 

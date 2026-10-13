@@ -7,9 +7,11 @@
  *
  * The routes come from the module graph, not from here: registry.test.ts fails on a public or
  * owner-only route missing below, on a line whose route is gone or changed class, on a field of
- * a documented public answer that PRIVATE_DATA names, and on a path or field naming an excluded
- * feature (EXCLUDED_FEATURES); private-data.test.ts calls every line for real with another
- * account's private data in the database. A route added tomorrow is refused until it is written
+ * a documented public answer that PRIVATE_DATA names, on a public path or field naming an
+ * excluded feature (EXCLUDED_FEATURES), and on any route's path, owner-only and admin ones too,
+ * naming a transfer, an activity reward or a cash-out (EVERY_ROUTE_PATH_FEATURES);
+ * private-data.test.ts calls every line for real with another account's private data in the
+ * database. A route added tomorrow is refused until it is written
  * here with a reason, and the reason is what a reviewer reads. docs/GUARDS.md has the steps.
  *
  * Keys are `METHOD /path` as the controllers write them, without `/api` and the version.
