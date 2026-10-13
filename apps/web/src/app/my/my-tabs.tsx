@@ -5,7 +5,7 @@ import NextLink from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useRef } from 'react';
 import { copy } from '@/copy';
-import { MY_TABS, isMyTabCurrent } from '@/lib/my';
+import { MY_TABS, isMyTabCurrent, tabStripScrollDelta } from '@/lib/my';
 
 /**
  * MY's tab bar (#16): the eight tabs on every breakpoint, as the header's pill items are drawn
@@ -16,18 +16,19 @@ import { MY_TABS, isMyTabCurrent } from '@/lib/my';
  * It scrolls sideways where the eight do not fit, with no visible scrollbar, and the 4px of
  * padding pulled back with a matching negative margin gives the focus ring room inside the
  * scroll container the way the header's category row does. On a phone the later tabs start out
- * of view, so the current one is scrolled into the strip whenever the page changes.
+ * of view, so the current one is scrolled into the strip whenever the page changes — the strip
+ * only, never the window (`tabStripScrollDelta`, lib/my.ts).
  */
 export function MyTabs() {
   const pathname = usePathname();
   const navRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    // `nearest` on both axes: the strip moves sideways only as far as it must, and the page
-    // itself does not move when the strip is already on screen.
-    navRef.current
-      ?.querySelector('[aria-current="page"]')
-      ?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    const strip = navRef.current;
+    const tab = strip?.querySelector('[aria-current="page"]');
+    if (!strip || !tab) return;
+    const delta = tabStripScrollDelta(strip.getBoundingClientRect(), tab.getBoundingClientRect());
+    if (delta !== 0) strip.scrollBy({ left: delta });
   }, [pathname]);
 
   return (

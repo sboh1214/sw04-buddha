@@ -304,8 +304,8 @@ const positionRowKey = (row: Pick<Position, 'marketId' | 'outcome'>): string =>
 /**
  * What a `user:position` event may do to the cached list. `refetch` is the answer for a row
  * the cache does not hold: the event carries no marketSlug, marketTitle, marketStatus or
- * marketLastPrice, so a full row cannot be built — asking the API beats inventing one that the
- * portfolio would then render.
+ * marketLastPrice, so a full row cannot be built — asking the API beats inventing one that MY
+ * would then render.
  */
 export type PositionPatch =
   { kind: 'none' } | { kind: 'replace'; positions: Position[] } | { kind: 'refetch' };
@@ -388,7 +388,7 @@ export function applyPositionEvent(
     settled: event.settled,
     version: event.version,
     // The publisher's `ts` is the transaction's own instant, so it is the instant this row
-    // changed — the same thing `updatedAt` shows on the portfolio.
+    // changed — what `updatedAt` means on a `GET /me/positions` row.
     updatedAt: event.ts,
   };
   return { kind: 'replace', positions };

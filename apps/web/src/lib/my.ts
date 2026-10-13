@@ -57,6 +57,22 @@ export function isMyTabCurrent(pathname: string, href: string): boolean {
 }
 
 /**
+ * How far MY's tab strip scrolls sideways to show the current tab whole, in px (negative is
+ * leftward), from the two boxes' viewport edges; 0 when it is already in view. The strip alone
+ * scrolls by it: `scrollIntoView` also moves the window, so a restored scroll (a reload, Back)
+ * that left the strip above the viewport pulled the page up to it. A tab wider than the strip
+ * keeps its start in view.
+ */
+export function tabStripScrollDelta(
+  strip: { left: number; right: number },
+  tab: { left: number; right: number },
+): number {
+  if (tab.left < strip.left) return tab.left - strip.left;
+  if (tab.right > strip.right) return Math.min(tab.right - strip.right, tab.left - strip.left);
+  return 0;
+}
+
+/**
  * Where MY's session gate (`requireMySession`, my.server.ts) sends a visitor with no session: the
  * login page, told to come back to the MY page they asked for. `pathname` and `search` come from the headers `proxy.ts` stamps; a
  * path that is not under `/my` (or not a safe same-origin path) falls back to the summary, so a

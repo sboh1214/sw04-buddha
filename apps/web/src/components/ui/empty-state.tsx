@@ -2,7 +2,7 @@ import { Stack, Text } from '@chakra-ui/react';
 
 /**
  * The one muted "아직 없습니다" block every M4 list uses (PLAN 11.4): the home grid, 최근 체결,
- * 내 포지션 and each of the three portfolio sections.
+ * 내 포지션 and each of MY's lists (보유 계약, 대기 주문, 주문 이력, 정산 이력).
  *
  * Deliberately not Chakra's `EmptyState.Root`/`Indicator`/`Title`/`Description`. The repo
  * already says this in one muted line (`ledger-list.tsx`), an icon would be the only new thing

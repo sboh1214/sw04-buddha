@@ -1,7 +1,14 @@
 import { ORDER_STATUSES, type OrderStatus } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
-import { MY_TABS, isMyTabCurrent, isPendingOrder, myLoginPath, orderHistoryEmpty } from './my';
+import {
+  MY_TABS,
+  isMyTabCurrent,
+  isPendingOrder,
+  myLoginPath,
+  orderHistoryEmpty,
+  tabStripScrollDelta,
+} from './my';
 import { safeNextPath } from './next-path';
 
 const PACKAGE_ID = '0190c7a4-0000-7000-8000-000000000001';
@@ -48,6 +55,25 @@ describe('isMyTabCurrent', () => {
 
   it('marks no tab on the summary', () => {
     for (const tab of MY_TABS) expect(isMyTabCurrent('/my', tab.href), tab.href).toBe(false);
+  });
+});
+
+describe('tabStripScrollDelta', () => {
+  const strip = { left: 16, right: 359 };
+
+  it('leaves a tab already in the strip where it is', () => {
+    expect(tabStripScrollDelta(strip, { left: 16, right: 80 })).toBe(0);
+    expect(tabStripScrollDelta(strip, { left: 300, right: 359 })).toBe(0);
+  });
+
+  it('scrolls only as far as the tab is cut off, on either side', () => {
+    expect(tabStripScrollDelta(strip, { left: 400, right: 470 })).toBe(111);
+    expect(tabStripScrollDelta(strip, { left: -50, right: 20 })).toBe(-66);
+  });
+
+  it('keeps the start of a tab wider than the strip in view', () => {
+    expect(tabStripScrollDelta(strip, { left: 100, right: 500 })).toBe(84);
+    expect(tabStripScrollDelta(strip, { left: -100, right: 500 })).toBe(-116);
   });
 });
 

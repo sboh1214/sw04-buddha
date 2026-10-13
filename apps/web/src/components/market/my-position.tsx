@@ -30,9 +30,10 @@ import { sessionListSection } from '@/lib/query-client';
  * the YES price, and valuing it at the YES price is a silent error that produces a plausible
  * number wrong by 100 − 2·price per contract.
  *
- * The list itself is `usePositions` — the same query the portfolio screen reads, so the two
- * screens hold one copy of the rows rather than two. It waits for the session on its own, so a signed-out visitor never provokes
- * the 401 that the retry rule refuses to retry; they get the sign-in prompt instead.
+ * The list itself is `usePositions` — the same query MY's 보유 계약 reads, so the two screens
+ * hold one copy of the rows rather than two. It waits for the session on its own, so a
+ * signed-out visitor never provokes the 401 that the retry rule refuses to retry; they get the
+ * sign-in prompt instead.
  *
  * WHICH of the two lists it reads follows the market's own status through
  * `positionListStatusFor`: a finished market moved its holders' rows to the settled list, so

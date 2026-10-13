@@ -83,6 +83,21 @@ test.describe('MY', () => {
     }
     await expect(page.getByTestId('account-email')).toBeVisible();
 
+    // Opened by its address, the last tab is scrolled into the strip, which a phone starts at the
+    // first tab; a click proves nothing here, since Playwright scrolls what it clicks.
+    await page.goto('/my/settings');
+    await expect
+      .poll(() =>
+        tabs.evaluate((strip) => {
+          const tab = strip.querySelector('[aria-current="page"]');
+          if (tab === null) return null;
+          const s = strip.getBoundingClientRect();
+          const t = tab.getBoundingClientRect();
+          return t.left >= s.left - 1 && t.right <= s.right + 1;
+        }),
+      )
+      .toBe(true);
+
     await tabs.getByRole('link', { name: copy.myHistory, exact: true }).click();
     const history = page.getByTestId('my-order-history');
     await expect(history).toContainText(copy.portfolioOrdersEmpty);
