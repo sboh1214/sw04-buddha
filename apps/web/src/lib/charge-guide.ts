@@ -1,7 +1,3 @@
-import type { UrlObject } from 'url';
-import { type PaymentProviderInfo } from './api';
-import { isBelowCardMinimum } from './smartro-payments';
-
 /**
  * Pure helpers for the public `/charge` page (ADR-0044), kept out of the page so they can be
  * tested without a DOM (vitest runs in node here).
@@ -34,30 +30,4 @@ export function chargeTiers(amounts: readonly bigint[]): ChargeTier[] {
     const rank = distinct.indexOf(amount);
     return Math.round((rank * (CHARGE_TIER_COUNT - 1)) / last) as ChargeTier;
   });
-}
-
-/**
- * Where a package's 충전하기 leads: the wallet with that package preselected (`?package=<id>`,
- * which `/wallet` reads — ADR-0042). An anonymous visitor is sent on to the login page by the
- * wallet itself. A `UrlObject` rather than a template string, so typed routes check `/wallet`
- * without an `as Route` cast.
- */
-export function walletPackageHref(packageId: string): UrlObject {
-  return { pathname: '/wallet', query: { package: packageId } };
-}
-
-/**
- * Whether the page offers 충전하기 for a package, given the provider it read (`null`: the read
- * failed). The SmartroPay window takes cards from 1,000원 (`isBelowCardMinimum`), so there a
- * cheaper package is listed with its price and picture but not put on sale — what the wallet
- * does with the same package. Only a deployment known to take SmartroPay holds one back: the
- * immediate mock charge has no such floor, and a provider the page could not read leaves the
- * page as it was — every package offered — since the wallet decides again with the provider it
- * reads, and would say so there.
- */
-export function chargeGuideOffers(
-  provider: PaymentProviderInfo['provider'] | null,
-  priceKrw: number,
-): boolean {
-  return provider !== 'smartro' || !isBelowCardMinimum(priceKrw);
 }

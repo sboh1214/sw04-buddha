@@ -1,15 +1,22 @@
 import { Box, Container, HStack, Link as ChakraLink, Stack, Text } from '@chakra-ui/react';
+import { PAID_COIN_SALES_ENABLED } from '@buddha/shared';
 import type { Route } from 'next';
 import NextLink from 'next/link';
 import { copy } from '@/copy';
 import { FOOTER_BUSINESS_LINES, fillBusinessInfo } from '@/legal/business-info';
 
-/** The four links (ADR-0044). 개인정보처리방침 is set in bold, as Korean sites mark it. */
+/**
+ * The policy links (ADR-0044). 개인정보처리방침 is set in bold, as Korean sites mark it. The
+ * fourth, 충전 안내, only while paid Coin is on sale (PAID_COIN_SALES_ENABLED, ADR-0049): `/charge`
+ * is not found otherwise.
+ */
 const LINKS: { key: string; href: Route; label: string; strong?: boolean }[] = [
   { key: 'terms', href: '/terms', label: copy.legalTermsTitle },
   { key: 'privacy', href: '/privacy', label: copy.legalPrivacyTitle, strong: true },
   { key: 'refund', href: '/refund', label: copy.legalRefundTitle },
-  { key: 'charge', href: '/charge', label: copy.chargeGuideTitle },
+  ...(PAID_COIN_SALES_ENABLED
+    ? [{ key: 'charge', href: '/charge' as Route, label: copy.chargeGuideTitle }]
+    : []),
 ];
 
 /**

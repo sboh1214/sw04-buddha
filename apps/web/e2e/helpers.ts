@@ -5,7 +5,7 @@ import {
   type APIResponse,
   type Page,
 } from '@playwright/test';
-import type { AdminMarket, Category, ChargePackage } from '@buddha/shared';
+import type { AdminMarket, Category } from '@buddha/shared';
 import { copy } from '../src/copy';
 
 /**
@@ -291,31 +291,6 @@ export function documentSurvived(page: Page): Promise<boolean> {
     (key) => (window as unknown as Record<string, boolean | undefined>)[key] === true,
     NO_RELOAD_MARKER,
   );
-}
-
-/**
- * Makes sure the charge catalogue has something to buy. The seed's packages are off sale
- * (seed.ts, #125) and an admin may empty it on purpose, while payment.spec.ts needs a 충전 step
- * either way.
- */
-export async function ensureChargePackage(admin: APIRequestContext): Promise<void> {
-  const packages = await unwrap<ChargePackage[]>(await admin.get('/api/v1/charge-packages'));
-  if (packages.length > 0) return;
-  await unwrap(
-    await admin.post('/api/v1/admin/charge-packages', {
-      // priceKrw must not exceed the face value (charge-package.ts `priceWithinFaceValue`).
-      data: { amountP: '10000', priceKrw: 9900, sortOrder: 0, isActive: true },
-    }),
-  );
-}
-
-/** Buys the first package on /wallet and waits for the confirmation toast. */
-export async function chargeOnce(page: Page): Promise<void> {
-  await page.goto('/wallet');
-  const buy = page.locator('[data-testid^="charge-buy-"]').first();
-  await expect(buy).toBeVisible();
-  await buy.click();
-  await expect(page.getByText(copy.chargeDone)).toBeVisible();
 }
 
 // ---- realtime -----------------------------------------------------------------------

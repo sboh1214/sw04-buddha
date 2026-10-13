@@ -1,4 +1,5 @@
 import { copy } from '@/copy';
+import { LEGAL_CASH_NOTICE } from './cash-notice';
 import { type LegalDocument, bullets, numbered, paragraph } from './document';
 
 /**
@@ -15,7 +16,7 @@ import { type LegalDocument, bullets, numbered, paragraph } from './document';
  *   is taken back; otherwise no refund. No partial refunds, no other channel than the card.
  *
  * P obtained without paying (쿠폰 BONUS, 정산 지급, 관리자 조정) is never refundable, and P never
- * converts to cash (PLAN Appendix A — the wallet notice is quoted verbatim). The 기타 section
+ * converts to cash (PLAN Appendix A — `LEGAL_CASH_NOTICE` is quoted verbatim). The 기타 section
  * points at the statutory right to cancel a minor's payment made without a guardian's consent
  * (민법 제5조) — a statute, not a case this rule adds — and defers to statute wherever statute
  * gives the member more.
@@ -27,7 +28,7 @@ export const REFUND: LegalDocument = {
     paragraph(
       '이 환불정책은 회사(상호: {{companyName}}, 이하 "회사")가 운영하는 {{serviceName}}에서 P를 충전한 결제의 청약철회와 환불 기준을 정합니다.',
     ),
-    paragraph(copy.walletNotice),
+    paragraph(LEGAL_CASH_NOTICE),
   ],
   sections: [
     {

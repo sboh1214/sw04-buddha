@@ -14,8 +14,14 @@ import {
 const FORBIDDEN_WORDS = ['베팅', '배당', '배당률', '승률', '판돈', '당첨'];
 
 describe('copy', () => {
-  it('has the wallet notice', () => {
+  it('has the wallet notice: no cash exchange or withdrawal, and nothing about charging', () => {
+    // N01 §2 in the plan's own words ('제공하지 않는다'); paid Coin is closed (ADR-0049).
     expect(copy.walletNotice).toContain('환전');
+    expect(copy.walletNotice).toContain('출금');
+    expect(copy.walletNotice).toContain('제공하지 않습니다');
+    for (const word of ['충전', '결제', '쿠폰', '구매']) {
+      expect(copy.walletNotice).not.toContain(word);
+    }
   });
 
   it('promises no refund for a voided market (N03 §6: a void is not a cost refund, #125)', () => {

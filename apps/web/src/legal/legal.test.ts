@@ -18,6 +18,7 @@ import {
   sectionHeading,
   table,
 } from './document';
+import { LEGAL_CASH_NOTICE } from './cash-notice';
 import { PRIVACY } from './privacy';
 import { REFUND } from './refund';
 import { TERMS } from './terms';
@@ -162,6 +163,17 @@ describe.each(DOCUMENTS)('legal document: %s', (name, doc) => {
   });
 });
 
+describe('LEGAL_CASH_NOTICE', () => {
+  it('keeps the sentence the documents were written with, apart from the wallet notice', () => {
+    // The 이용약관 and the 환불정책 change only with their own revision (#137); the wallet's
+    // notice no longer speaks of charging (#112, ADR-0049).
+    expect(LEGAL_CASH_NOTICE).toBe(
+      '충전한 P는 서비스 내에서만 사용할 수 있으며, 현금으로 환전하거나 출금할 수 없습니다.',
+    );
+    expect(copy.walletNotice).not.toBe(LEGAL_CASH_NOTICE);
+  });
+});
+
 describe('legal document contents (owner decisions 2026-09-28)', () => {
   const text = (doc: LegalDocument) => legalDocumentStrings(resolveLegalDocument(doc)).join('\n');
 
@@ -175,8 +187,9 @@ describe('legal document contents (owner decisions 2026-09-28)', () => {
     expect(refund).toContain('부분 환불은 하지 않습니다');
     expect(refund).toContain('쿠폰');
     expect(refund).toContain('정산');
-    // The fixed wallet notice, verbatim (PLAN Appendix A).
-    expect(refund).toContain(copy.walletNotice);
+    // The no-cash sentence, verbatim (PLAN Appendix A) — the one the document was written with,
+    // whatever the wallet now says (#112: the documents change only with #137).
+    expect(refund).toContain(LEGAL_CASH_NOTICE);
     expect(refund).toContain('원래 결제 수단');
   });
 
@@ -205,7 +218,7 @@ describe('legal document contents (owner decisions 2026-09-28)', () => {
     expect(terms).toContain('만 14세 이상');
     expect(terms).toContain('실명과 휴대전화 번호');
     expect(terms).toContain('스마트로(주)');
-    expect(terms).toContain(copy.walletNotice);
+    expect(terms).toContain(`${LEGAL_CASH_NOTICE} 결제 없이 받은 P도 같습니다.`);
     expect(terms).toContain(`P의 유효기간: ${BUSINESS_INFO.pointExpiry}`);
     expect(terms).toContain('환불정책');
     expect(terms).toContain('회사가 환불을 처리하는 시점을 기준으로 판단');

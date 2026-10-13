@@ -9,6 +9,7 @@ import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { isCouponRejection, useRedeemCoupon } from '@/hooks/use-wallet';
 import { isApiError, isForAnotherAccount } from '@/lib/api';
+import { isUnavailable } from '@/lib/payments';
 
 /** The same code rules the API enforces; the message is the only thing localised here. */
 const schema = z.object({ code: couponCodeSchema.catch('') }).refine((v) => v.code.length > 0, {
@@ -17,7 +18,10 @@ const schema = z.object({ code: couponCodeSchema.catch('') }).refine((v) => v.co
 });
 type FormValues = z.infer<typeof schema>;
 
-/** Redeeming an admin-issued coupon (ADR-0026): P arrives as a BONUS ledger entry. */
+/**
+ * Redeeming an admin-issued coupon (ADR-0026): P arrives as a BONUS ledger entry. Not drawn
+ * while paid Coin is closed (PAID_COIN_SALES_ENABLED, ADR-0049; app/wallet/page.tsx).
+ */
 export function CouponForm() {
   const redeem = useRedeemCoupon();
   const {
@@ -49,6 +53,9 @@ export function CouponForm() {
         setError('code', { message: copy.errCouponAlreadyUsed });
       } else if (isCouponRejection(error)) {
         setError('code', { message: copy.errCouponInvalid });
+      } else if (isUnavailable(error)) {
+        // The route is closed (ADR-0049): said without naming the feature.
+        toaster.create({ type: 'error', title: copy.unavailable });
       } else {
         toaster.create({ type: 'error', title: copy.errUnknown });
       }

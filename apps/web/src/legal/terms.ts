@@ -1,4 +1,5 @@
 import { copy } from '@/copy';
+import { LEGAL_CASH_NOTICE } from './cash-notice';
 import { type LegalDocument, numbered, paragraph } from './document';
 
 /**
@@ -115,7 +116,7 @@ export const TERMS: LegalDocument = {
       blocks: [
         numbered(
           'P는 서비스 안에서 계약을 사고파는 데에만 쓸 수 있습니다.',
-          `${copy.walletNotice} 결제 없이 받은 P도 같습니다.`,
+          `${LEGAL_CASH_NOTICE} 결제 없이 받은 P도 같습니다.`,
           '회원은 P를 다른 사람에게 넘기거나 빌려줄 수 없고, P나 계정을 서비스 밖에서 돈이나 재화와 거래할 수 없습니다.',
           'P의 유효기간: {{pointExpiry}}',
           '쿠폰으로 받는 P의 양과 사용 조건은 쿠폰마다 회사가 정하여 알립니다.',

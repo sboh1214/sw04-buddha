@@ -6,16 +6,13 @@ import { copy } from '@/copy';
 import { usePayments } from '@/hooks/use-wallet';
 import { type Payment } from '@/lib/api';
 import { formatKst } from '@/lib/datetime';
-import {
-  paymentHistoryReason,
-  paymentMethodLabel,
-  paymentStatusView,
-} from '@/lib/smartro-payments';
+import { paymentHistoryReason, paymentMethodLabel, paymentStatusView } from '@/lib/payments';
 
 /**
  * 결제 내역 (ADR-0042): the account's own charges, newest first, 20 per page with 더 보기 —
  * the KRW side of the story the ledger tells in P. A refund shows here as the payment's
- * status and in the ledger as its own 결제 취소(환불) row.
+ * status and in the ledger as its own 결제 취소(환불) row. Not drawn while paid Coin is closed
+ * (PAID_COIN_SALES_ENABLED, ADR-0049; app/wallet/page.tsx).
  */
 export function PaymentHistory() {
   const { data, isPending, isError, fetchNextPage, hasNextPage, isFetchingNextPage, refetch } =
@@ -89,7 +86,7 @@ function PaymentRow({ payment }: { payment: Payment }) {
             {status.label}
           </Badge>
         </HStack>
-        {/* When the money moved, not when the window opened: the approval once there is one. */}
+        {/* When the money moved, not when the payment was made: the approval once there is one. */}
         <Text fontSize="xs" color="fg.muted">
           {payment.approvedAt === null
             ? formatKst(payment.createdAt)

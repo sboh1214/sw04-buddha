@@ -1,51 +1,33 @@
 import { Alert, Container, Heading, Stack } from '@chakra-ui/react';
-import type { Metadata, Route } from 'next';
+import { PAID_COIN_SALES_ENABLED } from '@buddha/shared';
+import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { copy } from '@/copy';
 import { getServerSession } from '@/lib/session.server';
-import { parseWalletSearch, walletLoginPath } from '@/lib/smartro-payments';
 import { BalanceCard } from './balance-card';
 import { ChargeForm } from './charge-form';
 import { CouponForm } from './coupon-form';
 import { LedgerList } from './ledger-list';
 import { PaymentHistory } from './payment-history';
-import { PaymentResultNotice } from './payment-result-notice';
 
 export const metadata: Metadata = { title: `${copy.walletTitle} | ${copy.appName}` };
 
 /**
- * PLAN 11.3 `/wallet`: balance, charging and the ledger. The notice at the top is fixed copy
- * (PLAN Appendix A) and must stay above the charge form — P never converts back to cash.
+ * PLAN 11.3 `/wallet`: the balance and the ledger. The notice at the top is fixed copy (PLAN
+ * Appendix A, N01 §2): P never converts back to cash.
  *
- * The query (ADR-0042, all optional, each ignored unless well formed):
- * - `payment` + `result`: where the SmartroPay callbacks send the browser back, with how the
- *   payment window ended (ADR-0042). `result` alone still gets its notice — a return the API
- *   could not tie to a payment of ours carries no id.
- * - `package`: the package the public `/charge` page's 충전하기 sent the visitor to buy.
- * An anonymous visit keeps all three through the login (`next`), so the package chosen on
- * `/charge` is still the chosen one after signing in.
+ * Charging, coupons and 결제 내역 are drawn only while paid Coin is on sale
+ * (PAID_COIN_SALES_ENABLED, ADR-0049) — closed in the initial product (N06), where the API
+ * refuses their routes as well. The components stay, so reopening is that one value.
  */
-export default async function WalletPage({
-  searchParams,
-}: {
-  // Every searchParams value is an array when the parameter repeats; the types must say so.
-  searchParams: Promise<{
-    payment?: string | string[];
-    result?: string | string[];
-    package?: string | string[];
-  }>;
-}) {
-  const search = parseWalletSearch(await searchParams);
-  if (!(await getServerSession())) redirect(walletLoginPath(search) as Route);
+export default async function WalletPage() {
+  if (!(await getServerSession())) redirect('/login?next=/wallet');
   return (
     <Container maxW="2xl" py={{ base: '6', md: '10' }}>
       <Stack gap="6">
         <Heading as="h2" size="2xl">
           {copy.walletTitle}
         </Heading>
-        {search.result !== undefined && (
-          <PaymentResultNotice paymentId={search.paymentId} result={search.result} />
-        )}
         <Alert.Root status="info" data-testid="wallet-notice">
           <Alert.Indicator />
           <Alert.Content>
@@ -53,9 +35,13 @@ export default async function WalletPage({
           </Alert.Content>
         </Alert.Root>
         <BalanceCard />
-        <ChargeForm highlightPackageId={search.packageId} />
-        <CouponForm />
-        <PaymentHistory />
+        {PAID_COIN_SALES_ENABLED && (
+          <>
+            <ChargeForm />
+            <CouponForm />
+            <PaymentHistory />
+          </>
+        )}
         <LedgerList />
       </Stack>
     </Container>

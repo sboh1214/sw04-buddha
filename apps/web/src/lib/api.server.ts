@@ -6,7 +6,6 @@ import {
   type LeaderboardEntry,
   type Market,
   type MarketListItem,
-  type PaymentProviderInfo,
   type PriceSeries,
   isApiError,
   unwrap,
@@ -132,13 +131,4 @@ export async function fetchLeaderboardServer(): Promise<LeaderboardEntry[]> {
  */
 export async function fetchChargePackagesServer(): Promise<ChargePackage[]> {
   return unwrap(await serverApi.GET('/api/v1/charge-packages')).data;
-}
-
-/**
- * Which charge flow the deployment offers (`GET /payments/provider`, public — ADR-0042), for the
- * same page: under SmartroPay a package below the card minimum cannot be bought, and the guide
- * must not offer it. Rejects on failure; the page decides what an unknown provider means.
- */
-export async function fetchPaymentProviderServer(): Promise<PaymentProviderInfo> {
-  return unwrap(await serverApi.GET('/api/v1/payments/provider')).data;
 }
