@@ -578,7 +578,7 @@ export const copy = {
   footerCopyright: '© {{serviceName}}',
   chargeGuideTitle: '충전 안내',
   chargeGuideIntro:
-    'Coin은 {{serviceName}}의 예측 시장에서 예·아니오 계약을 사고파는 데 쓰는 서비스 전용 재화입니다. 아래 상품 가운데 하나를 골라 충전할 수 있습니다.',
+    'Coin은 {{serviceName}}의 예측 시장에서 예·아니오 계약을 사고파는 데 쓰는 서비스 전용 Coin입니다. 아래 상품 가운데 하나를 골라 충전할 수 있습니다.',
   chargeGuideDelivery:
     '결제는 {{pgName}}의 결제 창에서 카드로 진행되며, 가격에는 부가가치세가 포함되어 있습니다. 결제가 승인되면 Coin이 바로 지갑에 충전됩니다. 충전하려면 로그인이 필요합니다.',
   chargeGuidePrice: '결제 금액',
