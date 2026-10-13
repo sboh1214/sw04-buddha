@@ -7,6 +7,7 @@ import {
   isPendingOrder,
   myLoginPath,
   orderHistoryEmpty,
+  showMoreOrders,
   tabStripScrollDelta,
 } from './my';
 import { safeNextPath } from './next-path';
@@ -125,6 +126,21 @@ describe('isPendingOrder', () => {
   it('puts open and partially filled orders under 대기 주문 and every other state in 이력', () => {
     const pending = ORDER_STATUSES.filter((status) => isPendingOrder(status));
     expect(pending).toEqual(['open', 'partially_filled']);
+  });
+});
+
+describe('showMoreOrders', () => {
+  it('keeps 더 보기 on the full tab while there is a next page', () => {
+    expect(showMoreOrders(true, 0, undefined)).toBe(true);
+    expect(showMoreOrders(true, 25, undefined)).toBe(true);
+    expect(showMoreOrders(false, 0, undefined)).toBe(false);
+  });
+
+  it('keeps 더 보기 on a preview until it has its rows, not only while it has none', () => {
+    expect(showMoreOrders(true, 0, 3)).toBe(true);
+    expect(showMoreOrders(true, 2, 3)).toBe(true);
+    expect(showMoreOrders(true, 3, 3)).toBe(false);
+    expect(showMoreOrders(false, 2, 3)).toBe(false);
   });
 });
 

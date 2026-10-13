@@ -113,6 +113,21 @@ export function isPendingOrder(status: OrderStatus): boolean {
 }
 
 /**
+ * Whether one side of the split order list offers 더 보기. `GET /me/orders` has no state filter,
+ * so a page can hold fewer of a side's rows than it wants: the full tab keeps the button while
+ * there is a next page, and a /my preview (`limit`, MY_PREVIEW_ROWS) keeps it until it has that
+ * many rows — not only while it has none, which left a preview short of its rows with no way to
+ * load the rest.
+ */
+export function showMoreOrders(
+  hasNextPage: boolean,
+  rows: number,
+  limit: number | undefined,
+): boolean {
+  return hasNextPage && (limit === undefined || rows < limit);
+}
+
+/**
  * Why 거래·정산 이력's 주문 이력 has no row (owner decision 2026-10-13), read off every order the
  * account has — so only once the list has no further page. `none`: it has never ordered (아직 주문
  * 내역이 없습니다). `pendingOnly`: every order it has is still 대기, so none has finished (끝난 주문이

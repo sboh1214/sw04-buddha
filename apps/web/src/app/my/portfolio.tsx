@@ -49,7 +49,7 @@ import {
   formatContracts,
   formatPricePerContract,
 } from '@/lib/market-admin';
-import { MY_ORDERS_PATH, isPendingOrder, orderHistoryEmpty } from '@/lib/my';
+import { MY_ORDERS_PATH, isPendingOrder, orderHistoryEmpty, showMoreOrders } from '@/lib/my';
 
 /**
  * The old `/portfolio`'s four sections, moved into MY (#16) without being redrawn: 잔고 요약 on
@@ -408,7 +408,8 @@ export function SettledBody({ settled, limit }: { settled: SettledList; limit?: 
  *
  * Both read the ONE `GET /me/orders` list and split it here, because the route has no state
  * filter: a page can hold none of one side's rows while older pages still do. So an empty side
- * says it is empty only once the list has no further page, and offers 더 보기 until then — which
+ * says it is empty only once the list has no further page, and offers 더 보기 until then (a /my
+ * preview until it has its rows, `showMoreOrders`) — which
  * is also the only moment 거래·정산 이력 can tell an account that never ordered from one whose
  * every order is still 대기 (`orderHistoryEmpty`). The split itself moves to the server with the
  * tabs' own issues (#123, #124).
@@ -432,7 +433,7 @@ export function OrdersBody({
   const rows = all.filter((order) => isPendingOrder(order.status) === (kind === 'pending'));
   const section = listSection(orders, rows.length);
   const testId = kind === 'pending' ? 'my-orders' : 'my-order-history';
-  const more = orders.hasNextPage && (limit === undefined || rows.length === 0) && (
+  const more = showMoreOrders(orders.hasNextPage, rows.length, limit) && (
     <Button
       alignSelf="center"
       size="sm"
