@@ -561,6 +561,8 @@ ADR-0023 이후 남은 두 가지를 오너가 결정했다(PLAN §17 Q6/Q7). �
 
 ## ADR-0025 — 지갑: 충전·원장·관리자 조정과 원장 감사 (M2)
 
+- 상태: 채택, 일부 대체됨(ADR-0049: mock 충전 `POST /payments/charge`는 유료 충전이 닫힌 동안 무엇을 하기 전에 404이고 `/wallet`은 충전 카드를 그리지 않는다 — 코드는 남고 `PAID_COIN_SALES_ENABLED`로 다시 연다. 원장·관리자 조정·원장 감사는 유효)
+
 ### 맥락
 
 PLAN §5.1/5.6과 M2는 P의 유입(mock 충전, 관리자 조정)과 원장 불변식을 요구한다. 스키마(`payments`, `ledger_entries`, `balances`, `admin_actions`, `audit_failures`)는 M1에서 이미 만들었으므로 M2는 그 위의 트랜잭션·API·화면·감사 잡이다.
@@ -592,6 +594,8 @@ PLAN §5.1/5.6과 M2는 P의 유입(mock 충전, 관리자 조정)과 원장 불
 - (2026-09-05 추기, PR #3 리뷰 8차) `ChargeResult`에서 `package`를 뺐다. 결제 행이 구매의 불변 기록(지급 P·결제 금액·상품 id)이고 상품 행은 관리자가 고치거나 지울 수 있으므로, 상품 행을 되돌려 주면 새 응답에서는 중복이고 같은 멱등키의 재구성 응답에서는 첫 결과와 어긋난다(A-M2-11).
 
 ## ADR-0026 — 충전 상품(할인), 쿠폰, 가입 보너스 (오너 결정 2026-09-04)
+
+- 상태: 채택, 일부 대체됨(ADR-0049: 공개 `GET /charge-packages`와 쿠폰 사용 `POST /coupons/redeem`은 유료 충전이 닫힌 동안 404이고, 지갑의 충전 상품·쿠폰 카드와 관리자 메뉴의 충전 상품·쿠폰은 그리지 않는다 — 테이블, 관리자 상품·쿠폰 API와 그 화면(주소로 연다), 가입 보너스는 유효)
 
 ### 맥락
 
@@ -1216,7 +1220,7 @@ PLAN §11.1은 "Polymarket의 카드 기반 탐색 + Kalshi의 정산 기준 노
 ## ADR-0042 — 스마트로페이(SmartroPay) 일반연동: 결제창·콜백 셋·망취소·관리자 환불 (오너 결정 2026-09-28)
 
 - 날짜: 2026-09-28
-- 상태: 채택 (오너 결정 2026-09-28, PLAN §0.2의 청약철회 예외 포함)
+- 상태: 채택 (오너 결정 2026-09-28, PLAN §0.2의 청약철회 예외 포함), 일부 대체됨(ADR-0049: 스마트로페이 연동 — `PAYMENT_PROVIDER=smartro`·`SMARTRO_*`, 결제창 준비·콜백 셋·망취소, 관리자 수동 정리와 「확인 필요」, 웹의 SDK·결제창·결과 안내·CSP 호스트, terraform 변수 — 을 지웠고, 공개 `GET /payments/provider`와 관리자 환불은 유료 충전이 닫힌 동안 404다. 프로바이더 레지스트리(mock 하나), `payments`의 상태와 열, `payment_events`, 환불 정책과 그 코드는 유효)
 
 ### 맥락
 
@@ -1356,7 +1360,7 @@ PLAN은 결제를 끝까지 mock으로 두었다 — §1.2(:42) "충전 버튼 �
 ## ADR-0043 — 실명·휴대전화 수집과 온보딩 게이트 (오너 결정 2026-09-28)
 
 - 날짜: 2026-09-28
-- 상태: 채택 (오너 결정 2026-09-28)
+- 상태: 채택 (오너 결정 2026-09-28), 일부 대체됨(ADR-0049: 실명·휴대전화를 결제창의 BuyerName·BuyerTel로 보내는 일과 결제창 준비의 연락처 강제(`CONTACT_REQUIRED`)는 스마트로페이와 함께 없어졌고, `/charge`는 유료 충전이 열린 동안만 온보딩 예외다 — 수집·`user_contacts`·웹 게이트는 유효(D8), 수집 목적 안내의 결제 문구는 #58)
 
 ### 맥락
 
@@ -1394,7 +1398,7 @@ PLAN은 결제를 끝까지 mock으로 두었다 — §1.2(:42) "충전 버튼 �
 ## ADR-0044 — 사업자 정보 푸터 · 약관 3종 · 공개 충전 안내 `/charge` (오너 결정 2026-09-28)
 
 - 날짜: 2026-09-28
-- 상태: 채택 (오너 결정 2026-09-28; 문서 본문은 법률 검토 전 — Q-M2-3, Q-PG-1)
+- 상태: 채택 (오너 결정 2026-09-28; 문서 본문은 법률 검토 전 — Q-M2-3, Q-PG-1), 일부 대체됨(ADR-0049: 공개 `/charge`는 유료 충전이 닫힌 동안 없는 페이지(404)이고 푸터의 '충전 안내' 링크도 없다. `/charge`의 `/wallet?package=` 연결과 카드 최소 금액 처리(2026-09-29 추기)는 지웠다 — 사업자 정보 푸터와 약관 3종은 유효, 본문은 #137)
 
 ### 맥락
 
@@ -2442,3 +2446,120 @@ ADR-0046의 상태 줄에 '일부 대체됨(ADR-0047: …)'을 이어 쓴다. �
 이 PR이 정하지 않고 넘긴 것은 하나다.
 
 - 시드 초안의 규칙 세부. 이 PR은 정하지 않는다. #125 본문이 사건 기한과 발표 지연의 경계, NO 조건의 기한을 #172로 넘겼고(결정 1), 초안은 다른 검수자가 규칙을 확인한 뒤 연다(N03 §2, #78). 검수에서 볼 점: 회사 자신의 발표를 사건으로 본 두 시장(`korea-telco-6g-trial-2026`·`samsung-trifold-korea-launch-2026`), 늦은 출처의 장기 지연·대체 출처·VOID 기준이 없음(N03 §4), 마감이 이미 지났거나 14일 안인 두 시장(`cpi-september-2026-above-2pct`·`bok-october-rate-cut-2026`), 멜론 시장(`melon-last-week-2026-domestic-no1`)의 '국내 소속사' 문구.
+
+---
+
+## ADR-0049 — 유료 충전·결제·쿠폰 차단과 스마트로페이 연동 삭제 (#112, 오너 결정 2026-10-13)
+
+- 날짜: 2026-10-13
+- 상태: 채택
+
+이슈 번호와 기획 인용 표기는 ADR-0047과 같다(`#N`, NR·N00\~N06). 이 ADR은 #112가 기록하고, ADR-0042의 스마트로페이 연동, ADR-0025·0026의 충전·충전 상품 공개·쿠폰 사용과 그 화면, ADR-0043의 결제창 연락처 강제와 `/charge` 예외, ADR-0044의 공개 충전 안내를 대체한다. D1\~D26은 ADR-0047의 오너 결정이다. 이 ADR의 오너 결정은 결정 1 표의 번호로 '결정 1-3'처럼 적는다.
+
+### 맥락
+
+**기획.** 초기 제품은 결제·유료 충전을 제공하지 않고, 유료 구매 버튼·가격표·구매 보너스·결제 유도 알림을 초기 화면에서 뺀다(N06). 현금 구매는 향후 계획이고 현금 환전·출금은 제공하지 않는 방향이며(N01 §2), Coin은 무료 시작 코인과 제한적 재지급으로 들어온다(N06). 유료 코인 판매는 별도 검토이고(N00 §5) 초기 거래 출시의 필수 의존성이 아니다(NR 설계 상태).
+
+**옛 코드.**
+
+- ADR-0025: mock 즉시 충전 `POST /payments/charge`와 `/wallet`의 충전 카드.
+- ADR-0026: 원화 가격 충전 상품(공개 `GET /charge-packages`, 관리자 CRUD), 쿠폰 사용 `POST /coupons/redeem`과 지갑의 쿠폰 카드.
+- ADR-0042: 스마트로페이 일반연동. `PAYMENT_PROVIDER=mock|smartro`와 `SMARTRO_*`, 결제창 준비 `POST /payments/smartro/prepare`, 공개 콜백 return·stop·notify, 망취소, 관리자 환불과 수동 정리(「확인 필요」), 공개 `GET /payments/provider`, 웹의 SDK·결제창·결과 안내와 CSP 호스트, 운영 terraform 변수.
+- ADR-0043: 결제창 준비만 연락처를 강제했고(`CONTACT_REQUIRED`), `/charge`는 온보딩 예외였다.
+- ADR-0044: 로그인 없이 보는 `/charge`(PG 심사용)와 푸터의 '충전 안내' 링크.
+- ADR-0032의 잔고 부족 '충전하기'는 #125가 매수/매도 패널과 함께 지웠다(ADR-0048).
+
+**ADR-0047.** D9는 유료 충전·결제·쿠폰 코드를 보존하고 초기에는 화면·API만 비노출·차단한다고 정했고(O-23 행은 보존할 코드에 스마트로페이를 넣는다), 다시 열지는 #111이 묻는다. D4는 배포 환경에 실결제 데이터가 없다고, D8은 실명 입력(ADR-0043)을 유지한다고 정했다. 결과 1의 표가 위 부분을 #112에 넘겼다. #112 본문의 '오너 결정 필요'에 오너가 2026-10-13 답했다(결정 1).
+
+### 결정
+
+**1. 오너 결정 (2026-10-13).**
+
+| #   | 주제                                                          | 결정                                                                                                                                                                                                                  |
+| --- | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | 스마트로페이 연동 코드                                        | 다른 PG사를 쓸 예정이므로 스마트로페이 연동 코드는 삭제한다. mock 충전·충전 상품·쿠폰·결제 공통 구조는 보존하고 화면·API에서 차단한다. #112 본문의 질문 밖에서 오너가 새로 정했고, D9의 스마트로페이 보존을 대체한다. |
+| 2   | 차단 시점                                                     | PG 심사와 상관없이 지금, 이 이슈에서 막는다((a)).                                                                                                                                                                     |
+| 3   | 이미 만들어진 결제의 처리 경로(결제 결과 통보·환불·수동 정리) | 신규 결제와 함께 막는다((b)). 통보와 수동 정리는 결정 1-1로 코드째 없어지고, 환불은 결정 3이 막는다.                                                                                                                  |
+| 4   | 관리자 충전 상품·쿠폰 관리                                    | 메뉴만 숨기고 서버 기능은 둔다((a)).                                                                                                                                                                                  |
+| 5   | 차단된 요청과 오래 열어 둔 화면의 안내                        | 기능 이름 없이 '이용할 수 없다'만 알린다((a)).                                                                                                                                                                        |
+| 6   | 실명·휴대전화 수집 목적(결제) 안내                            | 그대로 두고 #58의 온보딩 개편 때 고친다((b)).                                                                                                                                                                         |
+
+**2. 스마트로페이 삭제(결정 1-1).**
+
+- API: `apps/api/src/payments/smartro/`(프로토콜·클라이언트·프로바이더·서비스 — 결제창 준비 `POST /payments/smartro/prepare`, OpenAPI 밖의 공개 콜백 return·stop·notify와 재통보 발신 IP 검사, 망취소), 관리자 수동 정리 `POST /admin/payments/:id/settle`(`PaymentSettleService`)와 「확인 필요」(`AdminPayment.needsReview`), 관리자 작업 유형 `payment_settle`, 환불 거절 사유 `in_progress`·`approval_mismatch`·`partial_cancel`과 `PAYMENT_GATEWAY_REFUSED`의 `settle_required`, 시험 하네스의 가짜 PG(`src/test/smartro.ts`)와 스마트로페이·수동 정리 시험을 지웠다. 세 경로가 함께 쓰던 `payment-transitions.ts`는 지우고 환불이 쓰는 전이(`markRefunded`·`restoreClawBack`)만 환불 서비스로 옮겼다. better-auth 본문 파서의 `rawBody`(콜백 폼 본문용)는 스마트로페이 전처럼 껐다.
+- env: `PAYMENT_PROVIDER`는 `mock`만 받고 `smartro`면 기동을 거절한다. `SMARTRO_MODE`·`SMARTRO_MID`·`SMARTRO_MERCHANT_KEY`·`SMARTRO_CANCEL_PASSWORD`·`SMARTRO_APPROVAL_BASE_URL`은 읽지 않으므로 이 ADR 전에 렌더된 `.env`에 남은 값은 무시된다.
+- shared: `PAYMENT_PROVIDERS`의 `smartro`, `SMARTRO_MODES`, 결제창 폼·준비 결과·복귀 결과·수동 정리의 스키마와 상수, `CARD_MIN_PRICE_KRW`, `vatSplit`, `paymentIdToMoid`·`moidToPaymentId`를 지웠다. `PaymentProviderInfo`는 `{ provider: 'mock' }`이다.
+- 웹: SDK 로더와 결제창(`lib/smartro-sdk`·`lib/smartro-checkout`·`wallet/smartro-checkout.tsx`), 결제창 복귀 안내(`/wallet?payment=&result=`, `payment-result-notice.tsx`), `/charge` → `/wallet?package=` 연결과 미리 고르기, `/charge`의 카드 최소 금액 처리(`chargeGuideOffers`), 관리자 수동 정리 대화상자와 「확인 필요」 표시, CSP의 스마트로페이 호스트(`script-src`·`form-action`은 `'self'`만, `frame-src` 없음), 결제창만 읽던 세션 캐시 소유자 확인(`cacheOwnerAccount` 등)을 지웠다. `lib/smartro-payments.ts`는 결제 내역·관리자 환불 판단과 차단 응답 판정만 남은 `lib/payments.ts`가 됐다.
+- 운영: `deploy/compose.yaml`은 api에 `PAYMENT_PROVIDER: mock`을 글자 그대로 주고 `SMARTRO_*`를 넘기지 않는다. terraform의 `payment_provider`·`smartro_*` 변수와 `ssm.tf`의 전달, `templates/env.tftpl`의 줄, `terraform.tfvars.example`의 절, `README.md`·`terraform/README.md`의 스마트로페이 절을 지웠다.
+- 남는 결제 공통 구조: `PaymentProvider` 인터페이스(`charge?`·`cancel`)와 `PaymentProviderRegistry`(지금은 mock 하나), `PAYMENT_PROVIDER` env, `payments`의 열과 상태(`refunding`·`refunded` 포함), `payment_events`와 그 유형, 원장 유형 `DEPOSIT`·`PAYMENT_CANCEL`·`PAYMENT_CANCEL_REVERSAL`, 관리자 환불(`PaymentRefundService`)과 그 정책(ADR-0042: 승인 후 7일·미사용·전액), `GET /me/payments`·`/me/payments/:id`, `user_contacts`(D8). DB 변경과 마이그레이션은 없다. `payments.provider`·`admin_actions.type`은 varchar라 지운 값이 스키마에 없고, 마이그레이션 0015는 이름에 smartro가 있지만 그 열·`payment_events`·`user_contacts`·`(provider, provider_ref)` 유일 인덱스는 PG에 매이지 않은 구조다.
+
+**3. 차단 방식(결정 1-2·1-3·1-4·1-5).**
+
+- **스위치 하나.** `packages/shared/src/constants.ts`의 `PAID_COIN_SALES_ENABLED`(값 `false`)다. 컴파일 시점 상수라 API와 웹이 같은 빌드에서 같은 값을 읽고, 운영 env나 DB 값 하나로 판매가 열리는 경로가 없다. 명시적 `true`가 아니면 닫힌다. 타입을 `boolean`으로 둬 닫힌 동안에도 양쪽의 보존 코드가 타입 검사에서 도달할 수 없는 코드로 좁혀지지 않는다.
+- **API.** `PaidCoinSalesGuard`(`apps/api/src/payments/paid-coin-sales.guard.ts`)가 주입 토큰 `PAID_COIN_SALES`(`payments.module.ts`가 상수로 채운다)를 읽고, 꺼져 있으면 핸들러가 무엇을 읽거나 쓰기 전에 `404 NOT_FOUND`, 메시지 `Not available`, `details` 없음으로 답한다. 404는 없는 흐름에 답해 오던 코드이고 기능 이름을 말하지 않는다(결정 1-5). 막는 라우트는 아래 다섯이다.
+
+| 라우트                                   | 인증   | 막힌 답                                                                                              |
+| ---------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------- |
+| `GET /api/v1/charge-packages`            | 공개   | 누구에게나 404                                                                                       |
+| `GET /api/v1/payments/provider`          | 공개   | 누구에게나 404                                                                                       |
+| `POST /api/v1/payments/charge`           | 세션   | 가드가 `SessionGuard`보다 앞이라 로그인 여부와 상관없이 404                                          |
+| `POST /api/v1/coupons/redeem`            | 세션   | 같다                                                                                                 |
+| `POST /api/v1/admin/payments/:id/refund` | 관리자 | 메서드 단위라 관리자 확인 뒤에 돈다. 비로그인 401, 회원 403, 관리자는 결제를 읽기 전에 404(결정 1-3) |
+
+- **API에서 열어 둔 것.** 관리자 충전 상품 CRUD와 쿠폰 목록·생성·수정(결정 1-4), 관리자 결제 목록, 본인 결제 내역 `GET /me/payments`·`/me/payments/:id`(본인의 읽기). 막힌 라우트는 OpenAPI·api-client·`docs/API.md`에 남고, 요약이 'Closed while paid Coin is off: 404 (ADR-0049)'라고 적는다. 보존한 웹 코드의 타입이 그 경로에 기댄다.
+- **레이트 리밋.** 전역 레이트 리밋 가드는 모든 컨트롤러 가드보다 먼저 돌므로, 막힌 충전·쿠폰 요청도 계정 버킷(`charge`·`coupon`, 세션을 읽는다)과 주소별 한도를 쓴 뒤 404를 받는다. 잔고·결제 작업은 없다. ADR-0034의 두 버킷은 라우트와 함께 남는다.
+- **웹.** 같은 상수로 진입점을 그리지 않는다. 그리지 않는 컴포넌트와 페이지 파일은 남는다.
+  - `/wallet`(`app/wallet/page.tsx`)은 고지·잔고·원장만 그리고 `ChargeForm`·`CouponForm`·`PaymentHistory`를 그리지 않는다.
+  - `/charge`(`app/charge/page.tsx`)는 무엇을 읽기 전에 `notFound()`다. 404 화면은 숨긴 것의 이름을 말하지 않는다.
+  - 푸터(`components/layout/footer.tsx`)는 '충전 안내' 링크만 뺀다. 약관 세 링크와 사업자 정보는 그대로다.
+  - 관리자 메뉴(`app/admin/layout.tsx`)에서 충전 상품·쿠폰·결제를 뺀다. 세 페이지는 주소로 열리고(결정 1-4), `/admin/payments`는 환불 버튼을 그리지 않는다(결정 1-3).
+  - 온보딩 예외(`lib/onboarding.ts`)에서 `/charge`를 뺀다.
+  - 헤더 잔액 칩과 하단 탭의 지갑은 그대로 `/wallet`로 가고, 그 화면에는 충전이 없다.
+- **문구(결정 1-5).** 막힌 응답을 만난 보존 화면은 '이용할 수 없습니다.'(`copy.unavailable`)만 보인다. `lib/payments.ts`의 `isUnavailable()`이 필드를 지목하지 않은 404를 그렇게 읽는다. 지갑 고지는 충전을 말하지 않는 'P의 현금 환전·출금은 제공하지 않습니다.'다(N01 §2의 표현, 단위는 #13). 이용약관·환불정책 본문은 옛 고지 문장을 끼워 쓰므로 #137까지 그 문장을 `LEGAL_CASH_NOTICE`(`apps/web/src/legal/cash-notice.ts`)로 고정하고, `legal.test.ts`가 확인한다.
+- **수집 목적 안내(결정 1-6).** `/onboarding`·`/set-password`·설정의 실명·휴대전화 안내(`onboardingSubtitle`·`setPasswordContactHeading`·`settingsContactHint`)가 결제를 목적으로 적는 문구는 그대로 둔다. #58이 고친다.
+
+**4. 되돌리는 방법.** 다시 열지는 #111이 정한다.
+
+1. `packages/shared/src/constants.ts`의 `PAID_COIN_SALES_ENABLED`를 `true`로 바꾼다.
+2. 닫힌 상태를 고정한 시험을 고친다: `packages/shared/src/constants.test.ts`, `apps/api/src/payments/paid-coin-sales.test.ts`(첫 시험 'ships closed'. 나머지는 기본 앱으로 닫힌 상태를 보므로 `createTestApp({ paidCoinSales: false })`로 바꾸면 가드 시험으로 남는다), e2e `apps/web/e2e/payment.spec.ts`(출시 상태의 닫힘을 끝까지 본다). 웹 단위 시험(`onboarding.test.ts`)은 상수를 읽으므로 그대로다.
+3. main에 머지한다(자동 배포). API와 웹이 같은 커밋으로 함께 바뀐다. env·terraform·DB는 바꿀 것이 없다.
+
+그러면 API의 다섯 라우트가 열리고 지갑의 충전·쿠폰·결제 내역, `/charge`와 푸터 링크, 관리자 메뉴의 세 항목과 환불 버튼, `/charge`의 온보딩 예외가 돌아온다. 되살릴 웹 코드는 없다. 결정 2가 지운 것(결제창, `?package=` 미리 고르기, 카드 최소 금액 처리)은 돌아오지 않는다. 그대로 열면 충전은 **mock**이다 — 돈이 움직이지 않고 바로 적립된다. 실제 판매에는 다음 PG의 연동(프로바이더·env·CSP·결제창)이 먼저이고, 스마트로페이 코드는 #112가 머지되기 전 main의 이력에 있다.
+
+**5. 시험.**
+
+- 보존 코드의 시험(mock 충전·충전 상품·쿠폰·환불, 관리자 잔고 조정과 M6 계정 버킷의 충전)은 `createTestApp({ paidCoinSales: true })`로 판매를 켠 앱에서 계속 돈다. 옵션이 없으면 하네스는 출시 값(상수)을 쓴다.
+- `apps/api/src/payments/paid-coin-sales.test.ts`(새, DB): 출시 상태의 앱이 다섯 라우트를 위 표대로 거절하고(비로그인·로그인 모두), 잔고·원장·결제·쿠폰 사용 행이 바뀌지 않으며, 열어 둔 관리자·본인 읽기 라우트가 열려 있음을 고정한다.
+- e2e `payment.spec.ts`는 닫힌 상태를 본다: 푸터·지갑에 진입점이 없고 `/charge`는 로그인 전후 모두 404다. 관리자 메뉴에 세 항목이 없고 `/admin/payments`는 환불 버튼 없이 열린다. 판매 중인 상품과 살아 있는 쿠폰이 있어도 API가 거절하고 잔고가 그대로다. `helpers.ts`의 `chargeOnce`·`ensureChargePackage`는 지웠다.
+- 스마트로페이·수동 정리 시험은 코드와 함께 지웠다. `env.test.ts`가 `PAYMENT_PROVIDER=smartro`의 기동 거절과 남은 `SMARTRO_*`의 무시를, `security-headers.test.ts`가 CSP에 스마트로페이 호스트가 없음을 고정한다.
+
+### 결과
+
+**1. 상태 줄.** ADR-0025·0026(상태 줄이 없어 새로 두었다, ADR-0047 결과 1)·0042·0043·0044의 상태 줄에 '일부 대체됨(ADR-0049: …)'을 이어 썼다. 본문은 고치지 않았다. ADR-0032의 '충전하기'는 #125가 패널과 함께 지웠고 ADR-0048이 그 상태 줄에 적었으므로 고치지 않았다. ADR-0034의 `charge`·`coupon` 버킷은 라우트와 함께 남는다(결정 3). 결정 1-1은 D9와 ADR-0047 O-23 행의 스마트로페이 보존을 대체하지만, ADR-0047의 본문과 상태 줄은 고치지 않았다.
+
+**2. 배포.**
+
+- 스키마 변경과 마이그레이션이 없다. #125의 0017이 결제 행까지 비웠고(ADR-0048), 배포 환경에는 실결제가 없다(D4).
+- API는 `PAYMENT_PROVIDER=smartro`로는 기동하지 않는다. `deploy/compose.yaml`이 api에 `mock`을 글자 그대로 주므로, SSM `/tf-buddha/env`에 `PAYMENT_PROVIDER`·`SMARTRO_*` 줄이 남아 있어도 배포는 그 값을 읽지 않는다. terraform apply와 배포의 순서는 상관없다.
+- 오너가 할 일(terraform은 손으로 apply한다): `terraform/terraform.tfvars`에서 `payment_provider`·`smartro_mode`·`smartro_mid`·`smartro_merchant_key`·`smartro_cancel_password`를 지운다. 남기면 plan이 선언되지 않은 변수라고 경고한다. 그다음 `terraform apply`가 `/tf-buddha/env`에서 그 줄을 지우고, 다음 배포가 그 `.env`를 렌더한다. tfstate와 그 오프머신 백업에는 넣었던 값이 남는다. 스마트로페이 가맹점 관리자에 재통보 URL을 등록했다면 지운다. 그 경로는 이제 없다.
+- 배포 때 열려 있던 이전 번들의 탭은 충전·쿠폰·결제창 요청이 404가 되고, 새로고침하면 닫힌 화면을 만난다.
+
+**3. 남는 것.** 결정 2의 결제 공통 구조, 충전 상품·쿠폰 테이블과 관리자 기능, 시드의 판매 중지 충전 상품 5개(ADR-0048 결정 1-3), 원장 유형 `DEPOSIT`·`BONUS`(쿠폰)·`PAYMENT_CANCEL`·`PAYMENT_CANCEL_REVERSAL`과 그 원장 라벨. 보존한 구매·쿠폰 원장 유형의 자리는 #73이 정하고 #116이 반영한다.
+
+**4. 고치지 않은 것과 다른 이슈.**
+
+- 약관·개인정보처리방침·환불정책 본문(#137): 충전·청약철회 조항, 결제대행사 스마트로(주)·스마트로페이(`BUSINESS_INFO.pgName`·`pgServiceName`)와 그 위탁, 지갑 고지의 옛 문장(`LEGAL_CASH_NOTICE`). `privacy.ts` 주석의 스마트로페이 카드 번호 마스킹 언급도 같은 범위다.
+- 수집 목적 안내의 결제 문구(#58, 결정 1-6).
+- 재화 표기 P → Coin과 `README.md` 3행의 재화 설명(#13), 보존한 결제·쿠폰 코드의 내부 이름(#192), 지갑을 MY로 옮기는 일(#16)과 MY 지갑 탭(#69), 새 주문 패널의 잔고 부족 안내(#66), 결제 유도 알림 금지(#53), 구매 유도 표현의 회귀 검사(#113), 다시 열지(#111).
+- `docs/PLAN.md`와 `docs/QUESTIONS.md`의 PG 절(`Q-PG-*`·`A-PG-*`)은 스마트로페이 기록으로 두고 고치지 않는다(ADR-0047 결과 2).
+
+**5. 이 PR이 정하지 않고 지금 상태로 둔 것.** 구현 중에 나왔고 PR에서 오너에게 묻는다.
+
+- `CONTACT_REQUIRED`는 보내는 API가 없지만 오류 코드·`ERROR_NOTES`·409 대응과 웹 문구를 남겼다. 연락처 수집(D8)이 남고 다음 PG가 쓸 수 있어서다.
+- `payment_events` 유형 가운데 결제창 흐름의 `return`·`approval`·`approval_inquiry`·`stop`·`notify`·`net_cancel`과 그것을 읽는 `Payment.cancelConfirmed`는 쓰는 곳이 없지만 공통 구조로 남겼다. 지금 쓰이는 것은 `refund_cancel`뿐이다.
+- 관리자 환불의 차단은 관리자 확인 뒤에 돌아 비관리자는 404가 아니라 401·403을 받는다(결정 3). 회원 라우트는 누구에게나 404다.
+- 막힌 충전·쿠폰 요청도 레이트 리밋을 쓴다(결정 3).
+- 닫힌 동안 열리지 않는 `/charge`는 상품마다 `?package=` 없이 `/wallet`로 링크하고, 결제 안내 문구(`chargeGuideDelivery`)는 여전히 `{{pgName}}`의 결제창을 말한다.
+- `paymentMethodLabel`은 스마트로페이의 PayMethod 코드(CARD·KAKAO 등)를 한국어로 옮기는 표를 일반 라벨로 남겼다. 모르는 코드는 그대로 보인다.
+- 관리자 환불의 404는 차단과 없는 결제를 구별하지 않고, 둘 다 '이용할 수 없습니다.'다.
+- 원장 라벨 '충전'·'결제 취소(환불)'는 남겼다. 닫힌 동안 그런 행이 생기지 않는다(#73·#116).

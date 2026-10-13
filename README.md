@@ -45,25 +45,25 @@ pnpm dev                         # web(3000) · api(4000) · worker + 공유 패
 - API 레디니스 <http://localhost:3000/api/health>(web rewrite 경유) 또는 <http://localhost:4000/api/health>. 워커는 <http://localhost:4100/health>.
 - Mailpit UI <http://localhost:8025> — 가입 인증·비밀번호 재설정·이메일 변경 메일이 전부 여기로 온다. 이메일 가입은 **주소만** 입력하고, 메일의 인증 링크를 누르면 로그인된 뒤 `/set-password`에서 첫 비밀번호를 정한다(인증 전에는 비밀번호가 없어 로그인할 수 없다). 운영 메일은 AWS SES(`.env.example`의 `SMTP_*` 주석).
 - 관리자 로그인은 `.env`의 `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD`(기본 `admin@buddha.local` / `admin1234!`). 이 두 값이 없으면 `pnpm db:seed`가 관리자와 시드 시장을 통째로 건너뛴다. 시드는 관리자에게 실명·휴대전화를 넣지 않으므로 관리자도 **첫 로그인에서 `/onboarding`을 만나** 한 번 입력한다 — 로컬에서도 운영에서도 같다(`/admin`도 게이트 예외가 아니다, ADR-0043). e2e는 `admin` 픽스처가 로그인 직후 `PUT /api/v1/me/contact`로 관리자 연락처를 넣는다.
-- 가입하면 10,000P가 자동 지급된다(`SIGNUP_BONUS_P`). 추가 지급은 관리자의 쿠폰으로 한다. 충전은 관리자가 만든 상품 단위다(시드: 4,900원→5,000P부터 90,000원→100,000P까지 2~10% 할인. 판매 중지 상태로 넣으므로 관리자가 판매를 켜야 보인다). 결제 프로바이더는 기본이 **mock**(누르면 돈이 움직이지 않고 바로 충전)이고, 실제 카드 결제창은 `PAYMENT_PROVIDER=smartro`일 때만 열린다 — 아래 [SmartroPay(스마트로페이) 결제](#smartropay스마트로페이-결제).
+- 가입하면 10,000P가 자동 지급된다(`SIGNUP_BONUS_P`). 유료 충전·결제·쿠폰은 초기 제품에서 닫혀 있다(ADR-0049) — 아래 [유료 충전·결제·쿠폰(닫힘)](#유료-충전결제쿠폰닫힘).
 - 소셜 로그인(Google/Kakao/Naver)은 `.env`에 그 프로바이더의 키 **쌍**을 넣을 때만 켜진다(Q-M1-1).
 
 화면은 다음과 같다. 모바일 폭에서는 하단 탭(홈·포트폴리오·지갑·설정)이 붙는다. 사용자가 거래하는 경로는 지금 없다 — 직접 AMM 거래를 지웠고 CLOB 주문·체결은 아직 없다(ADR-0048). 체결이 없는 시장의 가격은 어디서나 '체결 없음'이다.
 
-| 경로                                                                                               | 화면                                                                                                                                                                                         |
-| -------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/`                                                                                                | 홈(Kalshi 형, ADR-0041) — 헤더 2단(시장·랭킹·커뮤니티 / 전체·카테고리)·세부 분류 사이드바·정렬·시장 카드 그리드(카드마다 예/아니오 두 줄과 24시간 스파크라인, 체결 전에는 '—'와 '체결 없음') |
-| `/community`                                                                                       | 커뮤니티 — 자리만 있는 화면(준비 중)                                                                                                                                                         |
-| `/markets/[slug]`                                                                                  | 시장 상세 — 확률 차트·정산 기준·최근 체결·내 포지션·주문 영역(열린 시장에만, '거래 준비 중'). `resolved`면 판정된 결과와 정산 진행 안내, `settled`면 결과와 실현 손익                        |
-| `/portfolio`                                                                                       | 잔고·보유 포지션·정산 이력·주문 이력                                                                                                                                                         |
-| `/wallet`                                                                                          | 충전 상품·쿠폰·원장(정산 지급은 `SETTLEMENT_PAYOUT` 행)·결제 내역. 스마트로페이 결제창에서 돌아오면 결과 안내(`?payment=<id>&result=<r>`)                                                    |
-| `/charge`                                                                                          | 충전 안내 — 판매 중인 충전 상품(그림·P·가격·할인)과 환불 요약. 로그인 없이 공개(PG 심사용, ADR-0044). 구매는 `/wallet?package=<id>`로                                                        |
-| `/leaderboard`                                                                                     | 실현 손익 상위 20 (공개, `LEADERBOARD_LIMIT`)                                                                                                                                                |
-| `/signup` `/login` `/set-password` `/reset-password` `/settings`                                   | 인증과 계정. 이메일 가입은 `/set-password` 단계에서 실명·휴대전화도 받고, `/settings`에서 고친다(ADR-0043)                                                                                   |
-| `/onboarding`                                                                                      | 실명·휴대전화 입력(ADR-0043). 로그인했는데 아직 입력하지 않은 계정(소셜 로그인·기존 계정·시드 관리자)은 인증·약관·`/charge`를 뺀 어느 화면에서든(관리자 화면 포함) 여기로 온다               |
-| `/terms` `/privacy` `/refund`                                                                      | 이용약관·개인정보처리방침·환불정책(공개, ADR-0044). 사업자 정보는 `apps/web/src/legal/business-info.ts` 한 곳에 있고(지금은 `미정`), 모든 화면 아래의 푸터가 이 셋과 `/charge`를 건다        |
-| `/admin/markets` `/admin/markets/[id]`                                                             | 시장 생성(초안)·수정·열기·마감·판정(즉시 확정, 곧바로 정산), 거래 현황, 판정 뒤 정산 단계(읽기 전용, ADR-0046). 무효 처리는 없다(ADR-0048)                                                   |
-| `/admin/users` `/admin/charge-packages` `/admin/coupons` `/admin/payments` `/admin/audit-failures` | 계정·상품·쿠폰·결제(환불 — 승인 후 7일·미사용·전액 — 와 「확인 필요」 행의 수동 정리, ADR-0042)·원장 감사 실패                                                                               |
+| 경로                                                                                               | 화면                                                                                                                                                                                                                   |
+| -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/`                                                                                                | 홈(Kalshi 형, ADR-0041) — 헤더 2단(시장·랭킹·커뮤니티 / 전체·카테고리)·세부 분류 사이드바·정렬·시장 카드 그리드(카드마다 예/아니오 두 줄과 24시간 스파크라인, 체결 전에는 '—'와 '체결 없음')                           |
+| `/community`                                                                                       | 커뮤니티 — 자리만 있는 화면(준비 중)                                                                                                                                                                                   |
+| `/markets/[slug]`                                                                                  | 시장 상세 — 확률 차트·정산 기준·최근 체결·내 포지션·주문 영역(열린 시장에만, '거래 준비 중'). `resolved`면 판정된 결과와 정산 진행 안내, `settled`면 결과와 실현 손익                                                  |
+| `/portfolio`                                                                                       | 잔고·보유 포지션·정산 이력·주문 이력                                                                                                                                                                                   |
+| `/wallet`                                                                                          | 현금 환전·출금이 없다는 고지·잔고·원장(정산 지급은 `SETTLEMENT_PAYOUT` 행). 충전·쿠폰·결제 내역은 유료 충전이 닫힌 동안 그리지 않는다(ADR-0049)                                                                        |
+| `/charge`                                                                                          | 없는 페이지(404). 공개 충전 안내(ADR-0044)는 유료 충전이 닫힌 동안 열리지 않는다(ADR-0049)                                                                                                                             |
+| `/leaderboard`                                                                                     | 실현 손익 상위 20 (공개, `LEADERBOARD_LIMIT`)                                                                                                                                                                          |
+| `/signup` `/login` `/set-password` `/reset-password` `/settings`                                   | 인증과 계정. 이메일 가입은 `/set-password` 단계에서 실명·휴대전화도 받고, `/settings`에서 고친다(ADR-0043)                                                                                                             |
+| `/onboarding`                                                                                      | 실명·휴대전화 입력(ADR-0043). 로그인했는데 아직 입력하지 않은 계정(소셜 로그인·기존 계정·시드 관리자)은 인증·약관을 뺀 어느 화면에서든(관리자 화면 포함) 여기로 온다                                                   |
+| `/terms` `/privacy` `/refund`                                                                      | 이용약관·개인정보처리방침·환불정책(공개, ADR-0044). 사업자 정보는 `apps/web/src/legal/business-info.ts` 한 곳에 있고(지금은 `미정`), 모든 화면 아래의 푸터가 이 셋을 건다(충전 안내 링크는 유료 충전이 닫힌 동안 없다) |
+| `/admin/markets` `/admin/markets/[id]`                                                             | 시장 생성(초안)·수정·열기·마감·판정(즉시 확정, 곧바로 정산), 거래 현황, 판정 뒤 정산 단계(읽기 전용, ADR-0046). 무효 처리는 없다(ADR-0048)                                                                             |
+| `/admin/users` `/admin/charge-packages` `/admin/coupons` `/admin/payments` `/admin/audit-failures` | 계정(잔고 조정)·충전 상품·쿠폰·결제·원장 감사 실패. 유료 충전이 닫힌 동안 충전 상품·쿠폰·결제는 메뉴에 없고 주소로만 열린다 — 상품·쿠폰 관리는 되고, 결제는 목록만 본다(환불은 API가 막는다, ADR-0049)                 |
 
 ## 문제 해결
 
@@ -195,42 +195,15 @@ PLAN 부록 C의 다이어그램은 M4 이전 그림이라 위와 다르다(브�
 - **배포**는 `main`에 push하면 [.github/workflows/deploy.yml](.github/workflows/deploy.yml)이 arm64 이미지를 ECR에 밀고 SSM으로 호스트에서 `migrate && seed` → 컨테이너 교체 → `/api/health` 스모크까지 한다. 롤백은 `gh workflow run deploy.yml --ref main -f image_tag=<sha>`. SSH는 없고 셸은 `aws ssm start-session`이다.
 - **운영 DB 초기화**는 [docs/RESET.md](docs/RESET.md). #125의 배포가 마이그레이션 0017로 계정까지 한 번 비우고 시드로 다시 채웠다. 다시 비울 때는 호스트에서 `deploy/reset-db.sh`가 같은 문장을 돌리고 Redis도 비운다(계정까지 모두). #149의 출시 전 재초기화가 이 절차를 쓰고, 다시 할지와 남길 데이터는 #133이 정한다 — 무엇이든 남기기로 하면 그 전에 이 절차를 좁힌다.
 
-## SmartroPay(스마트로페이) 결제
+## 유료 충전·결제·쿠폰(닫힘)
 
-충전의 기본 프로바이더는 **mock**이다 — 상품을 누르면 돈이 움직이지 않고 바로 충전되며, 로컬·CI·e2e가 전부 이것으로 돈다. 실제 카드 결제창은 `PAYMENT_PROVIDER=smartro`일 때만 열린다(스마트로페이 일반연동: PC는 레이어 팝업, 모바일은 전체 페이지 이동 — [ADR-0042](docs/DECISIONS.md)). 카드만 요청하고 결제창의 간편결제는 그대로 보이며, 상품 가격은 부가세 포함이다. 결제하려는 계정에는 실명·휴대전화가 있어야 하고(`/onboarding`, ADR-0043) 카드 결제는 1,000원 이상이다.
+초기 제품은 유료 충전·결제·쿠폰을 쓰지 않는다(N06, D9, [ADR-0049](docs/DECISIONS.md)). 코드와 테이블은 남아 있고, 스위치는 `packages/shared/src/constants.ts`의 `PAID_COIN_SALES_ENABLED`(지금 `false`) 하나다 — env나 DB 값이 아니라 API와 웹이 같은 빌드에서 읽는 상수다.
 
-**로컬에서 STG로 켜기.** 스마트로페이가 발급한 STG MID·상점키(MerchantKey)와 STG 가맹점 관리자에서 정한 취소 비밀번호를 `.env`에 넣고 API를 다시 띄운다.
-
-```bash
-PAYMENT_PROVIDER=smartro
-SMARTRO_MODE=STG
-SMARTRO_MID=<발급받은 MID>                      # 10자 이하
-SMARTRO_MERCHANT_KEY=<발급받은 상점키>           # 32자 이상, 앞 32자는 ASCII(취소 AES 키)
-SMARTRO_CANCEL_PASSWORD=<가맹점 관리자의 취소 비밀번호>
-```
-
-셋 중 하나라도 비면 API가 기동을 거절한다. 셋은 프로바이더와 상관없이 함께 넣거나 함께 비운다 — `mock`에서도 일부만 있으면 기동하지 않는다(스마트로페이는 셋이 다 있을 때만 등록되므로, 일부만 남은 키로 뜨면 재통보가 404가 되고 스마트로페이 결제의 환불이 거절된다). mock으로 돌아가려면 `PAYMENT_PROVIDER=mock`이다 — 키 셋을 남겨 두면 이미 진행 중인 스마트로페이 결제의 콜백과 환불은 계속 동작한다(`SMARTRO_MODE`·`SMARTRO_MID`를 바꾸는 것은 다르다 — 아래 STG 운영 기간). 웹 CSP는 STG·REAL의 SDK 호스트를 모두 허용하므로 모드를 바꿔도 웹을 다시 빌드하지 않는다. `SMARTRO_APPROVAL_BASE_URL`은 로컬 가짜 PG를 가리키는 승인·취소 호스트이고(재통보의 발신 IP 검사도 끈다) 운영에서는 API가 거부한다.
-
-**URL 셋.** 경로는 전부 `/api/v1/payments/smartro/` 아래이고 로그인 없이 열려 있다(PG가 부르는 계약이라 [docs/API.md](docs/API.md)에는 손으로 쓴 절로 있다).
-
-| URL                                                                            | 등록                               | 하는 일                                                                                                |
-| ------------------------------------------------------------------------------ | ---------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| ReturnUrl `<BETTER_AUTH_URL의 오리진>/api/v1/payments/smartro/return?m=<moid>` | 없음 — 결제마다 결제창에 실려 간다 | 승인 요청·검증·적립, 적립할 수 없는 승인은 망취소. 브라우저는 `/wallet?payment=<id>&result=<r>`로 간다 |
-| StopUrl `<BETTER_AUTH_URL의 오리진>/api/v1/payments/smartro/stop?m=<moid>`     | 없음 — 결제마다 실려 간다          | 결제창을 닫은 결제를 `failed`로 닫는다                                                                 |
-| 재통보 `https://buddha.sboh.dev/api/v1/payments/smartro/notify`                | **가맹점 관리자에 등록**           | 결과를 받지 못한 결제를 스마트로페이 서버가 다시 알린다(`OK`로 답해야 멈춘다)                          |
-
-- ReturnUrl·StopUrl은 `BETTER_AUTH_URL`의 오리진으로 만들어진다(로컬은 `http://localhost:3000` — Next rewrite가 `/api/*`를 API로 넘긴다). 오리진이 길어 100자를 넘으면 API가 기동하지 않는다.
-- **STG에서는 아직 한 번도 돌려 보지 않았다**(MID 발급 전 — 지금까지는 매뉴얼과 SDK 소스로 만든 가짜 PG로만 확인했다, ADR-0042; 확인 목록은 QUESTIONS Q-PG-9). 로컬에서도 돌 것으로 보지만 두 가지를 알아 둔다. 웹은 localhost에만 바인드하므로([다른 기기에서 웹이 안 열린다](#다른-기기에서-웹이-안-열린다), ADR-0015) 모바일 흐름은 휴대전화가 아니라 **개발 머신 브라우저의 기기 에뮬레이션**(모바일 UA)으로만 확인할 수 있다 — 결과를 ReturnUrl로 보내는 것이 그 브라우저라 localhost에 닿아야 한다. 그리고 스마트로페이의 https 페이지가 http인 로컬 ReturnUrl로 폼을 보내므로 브라우저가 안전하지 않은 양식 제출 경고를 띄울 수 있다.
-- **재통보 URL 등록.** STG `https://newbiz.smilebiz.co.kr` / REAL `https://www.smilebiz.co.kr` 가맹점 관리자 → 가맹점 > 가맹점정보 > 기본정보 하단의 "결제 데이터 통보"에 **지불수단별로**(카드, 그리고 결제창에서 고를 수 있는 간편결제) 위 URL을 넣고 **신통보**를 고른다. API는 그 모드의 스마트로페이 서버 IP(STG `211.193.35.11`, REAL `211.193.35.216`·`211.193.35.217`·`211.193.35.20`)에서 온 재통보만 받으므로 로컬 개발 환경에는 오지 않는다.
-- **서버 IP.** 스마트로페이가 가맹점 서버 IP를 물으면 운영 EIP **`13.124.223.103`** 이다(승인·취소 호출이 나가는 주소, ADR-0040).
-
-**운영 전환.** 코드는 바꾸지 않는다. `terraform/terraform.tfvars`에 `payment_provider = "smartro"`와 `smartro_mode`·`smartro_mid`·`smartro_merchant_key`·`smartro_cancel_password`를 넣고 `terraform apply`(SSM `/tf-buddha/env` 갱신) → `gh workflow run deploy.yml --ref main -f image_tag=<현재 sha>`(`.env` 재렌더, 컨테이너 재생성). terraform만 바뀐 push는 배포를 돌리지 않는다. 되돌리기는 `payment_provider = "mock"`으로 같은 두 단계다. 값의 제약과 절차는 [terraform/README.md](terraform/README.md#smartropay-켜기키-교체). REAL은 STG에서 결제·취소·재통보를 확인한 뒤 REAL MID로 같은 절차다(QUESTIONS Q-PG-7).
-
-**STG 운영 기간과 REAL 전환.** 운영이 `smartro_mode = "STG"`로 도는 동안의 승인은 전부 테스트다 — 운영자 계정으로만 결제하고 그 기간을 짧게 둔다(STG에서 적립된 P는 mock P처럼 실제 돈이 뒷받침하지 않는다). 카카오페이 카드의 테스트 결제는 당일 취소하지 않으면 실제로 청구된다(매뉴얼). 취소는 결제가 만들어진 MID·모드가 아니라 **지금 설정된** MID·모드로 가므로, REAL로 바꾸기 **전에** STG의 `succeeded` 결제를 앱에서 환불하고 「확인 필요」 행을 모두 수동 정리한다. 앱이 환불할 수 없는 결제(P를 썼거나 7일이 지난 것)는 아직 STG인 동안 STG 가맹점 관리자에서 취소한다 — 바꾼 뒤 남은 STG 결제는 STG 가맹점 관리자에서만 취소된다. 수동 정리의 P 충전도 믿을 수 없다: 기록된 STG 승인이 있는 행은 그 승인이 새 MID와 맞지 않아 거절되고(`approval_mismatch`), 기록된 성공 승인이 없는 행(승인의 답을 잃은 잡힌 `pending`, 승인이 PG 오류 코드로 답한 잡힌 `failed`)은 `tid`를 주면 충전되지만 그 STG Tid는 REAL에서 환불(카드 취소)되지 않는다 — 그러니 전환 전에 모두 정리한다. 확인 목록과 절차는 QUESTIONS Q-PG-9 (아).
-
-**결과를 모르는 결제 — 수동 정리.** API가 스스로 결론을 내지 못한 스마트로페이 결제는 `/admin/payments`에 **「확인 필요」** 배지가 붙는다 — 승인의 답과 재통보가 모두 오지 않은 잡힌 결제와 환불 취소의 답이 분명하지 않아 환불 중에 남은 결제는 2분 뒤, 답이 분명하지 않은 망취소는 곧바로, PG 오류 코드로 답했거나 적립되지 않은 승인 재통보가 있는 실패 결제는 2분 뒤다. 가맹점 관리자에서 주문번호로 카드 거래를 확인한 뒤 그 행의 **「수동 정리」**(`POST /api/v1/admin/payments/:id/settle`, 마지막 변경 2분 뒤부터)로 닫는다 — 승인이면 P 충전(성공한 승인 기록이 없으면 — 승인의 답이 없었거나 PG 오류 코드였으면 — 가맹점 관리자의 승인 TID를 함께), 취소면 취소 확인, 승인이 없으면 실패, 환불 중이면 환불 완료 또는 P 복원. 결과를 모르는 결제를 잔고 조정으로 충전하지 않는다 — 결제 행이 그대로 남아 뒤늦은 재통보가 한 번 더 충전한다. 규칙은 ADR-0042 추기와 QUESTIONS A-PG-3.
-
-**환불**은 관리자 `/admin/payments`에서만 한다 — 승인 후 7일 안이고 그 결제의 P를 쓰지 않았을 때(사용 가능 잔고 ≥ 그 결제의 P), 결제 금액 전액을 카드 취소로 돌려주고 그 P 전부를 회수한다(오너 결정, ADR-0042). 회원은 고객센터로 요청한다(환불정책 `/refund`). PG가 **재시도**를 거절하면 P를 돌려주지 않고 「환불 처리 중」에 남긴다 — 첫 시도가 카드를 이미 취소했을 수 있어서다(부분 취소 통보가 있거나 재시도가 넘겨받은 첫 시도도 같다). 그 행은 수동 정리로 닫는다 — 부분 취소 통보가 있으면 환불 완료로 닫고 잔고 조정으로 맞춘다(QUESTIONS Q-PG-12).
+- **API.** 공개 `GET /api/v1/charge-packages`·`GET /api/v1/payments/provider`, `POST /api/v1/payments/charge`, `POST /api/v1/coupons/redeem`, 관리자 `POST /api/v1/admin/payments/:id/refund`가 무엇을 읽거나 쓰기 전에 `404 NOT_FOUND`(`Not available`, 기능 이름 없음)로 답한다(`PaidCoinSalesGuard`). 관리자 충전 상품·쿠폰 관리와 결제 목록, 본인 결제 내역 `GET /api/v1/me/payments`는 열려 있다.
+- **웹.** 지갑의 충전·쿠폰·결제 내역, 공개 `/charge`(404)와 푸터의 충전 안내 링크, 관리자 메뉴의 충전 상품·쿠폰·결제, `/admin/payments`의 환불 버튼을 그리지 않는다. 컴포넌트 파일은 남아 있다. 막힌 응답을 만나는 화면은 '이용할 수 없습니다.'만 보인다.
+- **결제 프로바이더는 mock 하나다**(`PAYMENT_PROVIDER=mock`, 돈이 움직이지 않고 바로 충전). 스마트로페이 연동(ADR-0042)은 다른 PG를 쓰기로 해 지웠고, `PAYMENT_PROVIDER=smartro`면 API가 기동하지 않는다. 운영 compose는 api에 `mock`을 그대로 준다.
+- **시험.** 보존한 충전·쿠폰·환불의 API 시험은 `createTestApp({ paidCoinSales: true })`로 판매를 켠 앱에서 돌고, `apps/api/src/payments/paid-coin-sales.test.ts`와 e2e `payment.spec.ts`가 닫힌 상태를 고정한다.
+- **다시 열기**(#111이 정한다). 상수를 `true`로 바꾸고, 닫힌 상태를 고정한 시험(`packages/shared/src/constants.test.ts`, 위 두 시험)을 고친 뒤 main에 머지한다(자동 배포). env·terraform·DB는 바꿀 것이 없다. 그대로 열면 충전은 mock이므로 실제 판매에는 다음 PG 연동이 먼저다.
 
 ## 스크립트
 
