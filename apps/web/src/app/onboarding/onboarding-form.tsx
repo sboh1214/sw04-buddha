@@ -5,9 +5,10 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import type { Route } from 'next';
 import NextLink from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useEffect } from 'react';
+import { type ReactNode, useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { ContactInputs } from '@/components/auth/contact-inputs';
+import { SignOutButton } from '@/components/auth/sign-out-button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
@@ -42,9 +43,11 @@ export function OnboardingForm({ next }: { next: string }) {
     if (hasContact) router.replace(next as Route);
   }, [hasContact, next, router]);
 
-  if (view === 'pending' || hasContact) return <Skeleton height="64" />;
+  // On its way to `next` (the effect above), so not held here.
+  if (hasContact) return <Skeleton height="64" />;
 
   // Back through the login screen to this same round trip, as the page's own redirect sends it.
+  // No 로그아웃 here: there is no session left to end.
   if (view === 'signedOut') {
     return (
       <EmptyState
@@ -61,10 +64,13 @@ export function OnboardingForm({ next }: { next: string }) {
     );
   }
 
-  // Signed in, and `/me` settled without a profile. This is the one screen the gate leaves such
-  // an account, so it must offer a way out of the error.
-  if (!me) {
-    return (
+  let step: ReactNode;
+  if (view === 'pending') {
+    step = <Skeleton height="64" />;
+  } else if (view === 'failed') {
+    // Signed in, and `/me` settled without a profile. This is the one screen the gate leaves such
+    // an account, so it must offer a way out of the error.
+    step = (
       <Stack gap="3" align="flex-start" data-testid="onboarding-unavailable">
         <Alert.Root status="error" role="alert">
           <Alert.Indicator />
@@ -77,9 +83,19 @@ export function OnboardingForm({ next }: { next: string }) {
         </Button>
       </Stack>
     );
+  } else {
+    step = <OnboardingFields />;
   }
 
-  return <OnboardingFields />;
+  // 로그아웃 under every rung of an account held here (owner decision 2026-10-13, #16): the header
+  // has no profile menu and MY is gated, so without it an account that does not want to give its
+  // contact — or cannot, while `/me` fails — could not sign out at all.
+  return (
+    <Stack gap="4">
+      {step}
+      <SignOutButton alignSelf="center" data-testid="onboarding-logout" />
+    </Stack>
+  );
 }
 
 function OnboardingFields() {

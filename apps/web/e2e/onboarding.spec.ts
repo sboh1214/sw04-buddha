@@ -116,6 +116,41 @@ test.describe('실명·연락처 (ADR-0043)', () => {
     await expect(page).toHaveURL('/');
   });
 
+  test('게이트에 묶인 계정은 /set-password와 /onboarding에서 로그아웃할 수 있다', async ({
+    page,
+  }) => {
+    // 로그아웃 is in MY, which the gate keeps such an account out of, and the header has no
+    // profile menu (owner decision 2026-10-13, #16). Both land where MY's 로그아웃 does.
+    await openSetPassword(page, freshEmail());
+    await page.getByTestId('set-password-logout').click();
+    await expect(page).toHaveURL('/');
+    await expect(page.getByRole('link', { name: copy.login })).toBeVisible();
+    await page.goto('/set-password');
+    await page.waitForURL(/\/login\?/);
+
+    await openSetPassword(page, freshEmail());
+    await page.goto('/my');
+    await expect(page).toHaveURL('/onboarding?next=%2Fmy');
+    await expect(page.getByTestId('onboarding-form')).toBeVisible();
+    await page.getByTestId('onboarding-logout').click();
+    await expect(page).toHaveURL('/');
+    await expect(page.getByRole('link', { name: copy.login })).toBeVisible();
+    await page.goto('/onboarding');
+    await page.waitForURL(/\/login\?/);
+  });
+
+  test('프로필을 불러오지 못한 /onboarding에도 로그아웃이 있다', async ({ page }) => {
+    await openSetPassword(page, freshEmail());
+    // `GET /me` failing is the rung with no form; the gate cannot say "no contact" either, so the
+    // screen is opened directly.
+    await page.route('**/api/v1/me', (route) => route.abort());
+    await page.goto('/onboarding');
+    await expect(page.getByTestId('onboarding-unavailable')).toBeVisible();
+    await page.getByTestId('onboarding-logout').click();
+    await expect(page).toHaveURL('/');
+    await expect(page.getByRole('link', { name: copy.login })).toBeVisible();
+  });
+
   test('로그인하지 않은 방문자의 /onboarding은 로그인 화면으로, next를 그대로 싣고 간다', async ({
     page,
   }) => {

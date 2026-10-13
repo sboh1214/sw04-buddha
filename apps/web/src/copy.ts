@@ -471,9 +471,15 @@ export const copy = {
   portfolioSettledEmpty: '아직 정산된 포지션이 없습니다.',
   portfolioOrders: '주문 이력',
   // 옛 주문 이력이 둘로 나뉘었다(대기·부분 체결은 대기 주문, 나머지는 거래·정산 이력). 빈 목록 문구도
-  // 제 쪽만 말한다: 대기 주문만 있는 계정에 '주문 내역이 없다'고 하지 않는다.
+  // 제 쪽만 말하고, 거래·정산 이력 쪽은 상황별 둘이다(오너 결정 2026-10-13): 주문이 아예 없으면 '아직 주문
+  // 내역이 없습니다.', 대기 주문만 있으면 '끝난 주문이 없습니다.'와 '대기 중인 주문은 [대기 주문]에서 볼 수
+  // 있습니다.'(가운데는 대기 주문 탭으로 가는 링크, myOrders). 대기 주문만 있는 계정에 '주문 내역이 없다'고
+  // 하지 않는다.
   portfolioPendingOrdersEmpty: '대기 중인 주문이 없습니다.',
+  portfolioOrdersEmpty: '아직 주문 내역이 없습니다.',
   portfolioOrderHistoryEmpty: '끝난 주문이 없습니다.',
+  portfolioPendingOrdersHintBefore: '대기 중인 주문은',
+  portfolioPendingOrdersHintAfter: '에서 볼 수 있습니다.',
   /**
    * Shown when the session ends while a private screen is still mounted — never a load failure,
    * because nothing failed to load. The reader is told what actually happened and given the way

@@ -1,7 +1,7 @@
-import { ORDER_STATUSES } from '@buddha/shared';
+import { ORDER_STATUSES, type OrderStatus } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
-import { MY_TABS, isMyTabCurrent, isPendingOrder, myLoginPath } from './my';
+import { MY_TABS, isMyTabCurrent, isPendingOrder, myLoginPath, orderHistoryEmpty } from './my';
 import { safeNextPath } from './next-path';
 
 const PACKAGE_ID = '0190c7a4-0000-7000-8000-000000000001';
@@ -99,5 +99,31 @@ describe('isPendingOrder', () => {
   it('puts open and partially filled orders under 대기 주문 and every other state in 이력', () => {
     const pending = ORDER_STATUSES.filter((status) => isPendingOrder(status));
     expect(pending).toEqual(['open', 'partially_filled']);
+  });
+});
+
+describe('orderHistoryEmpty', () => {
+  const order = (status: OrderStatus) => ({ status });
+
+  it('says an account that never ordered has no orders', () => {
+    expect(orderHistoryEmpty([])).toBe('none');
+  });
+
+  it('says none has finished when every order is still 대기 — never that there are none', () => {
+    expect(orderHistoryEmpty([order('open')])).toBe('pendingOnly');
+    expect(orderHistoryEmpty([order('open'), order('partially_filled')])).toBe('pendingOnly');
+  });
+
+  it('has nothing to say while a finished order is there to show', () => {
+    for (const status of ORDER_STATUSES.filter((s) => !isPendingOrder(s))) {
+      expect(orderHistoryEmpty([order('open'), order(status)]), status).toBeNull();
+    }
+  });
+
+  it("reads as the owner's two wordings, the second with 대기 주문 as its link", () => {
+    expect(copy.portfolioOrdersEmpty).toBe('아직 주문 내역이 없습니다.');
+    expect(
+      `${copy.portfolioOrderHistoryEmpty} ${copy.portfolioPendingOrdersHintBefore} ${copy.myOrders}${copy.portfolioPendingOrdersHintAfter}`,
+    ).toBe('끝난 주문이 없습니다. 대기 중인 주문은 대기 주문에서 볼 수 있습니다.');
   });
 });

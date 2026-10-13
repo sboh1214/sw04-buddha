@@ -7,8 +7,9 @@ import { copy } from '@/copy';
 import { signOut } from '@/lib/auth-client';
 
 /**
- * 로그아웃, as one action for every control that offers it: sign out, empty the tab's cache and
- * go home. A failure is a toast and nothing else.
+ * 로그아웃, as one action for every control that offers it (`SignOutButton`: MY, /onboarding,
+ * /set-password): sign out, empty the tab's cache and go home. A failure is a toast and nothing
+ * else.
  */
 export function useSignOut(): () => Promise<void> {
   const router = useRouter();

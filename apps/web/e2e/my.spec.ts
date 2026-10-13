@@ -65,6 +65,12 @@ test.describe('MY', () => {
     for (const key of ['posts', 'watchlist', 'notifications']) {
       await expect(page.getByTestId(`my-preview-${key}-coming-soon`)).toHaveText(copy.comingSoon);
     }
+    // A fresh account has never ordered, and 거래·정산 이력's 주문 이력 says that rather than that
+    // none has finished (owner decision 2026-10-13); 대기 주문 keeps its own line.
+    await expect(page.getByTestId('my-preview-history')).toContainText(copy.portfolioOrdersEmpty);
+    await expect(page.getByTestId('my-preview-orders')).toContainText(
+      copy.portfolioPendingOrdersEmpty,
+    );
     // A member has no way into /admin.
     await expect(page.getByTestId('my-admin')).toHaveCount(0);
 
@@ -76,6 +82,11 @@ test.describe('MY', () => {
       await expect(page.getByTestId(`my-tab-${tab.key}`)).toHaveAttribute('aria-current', 'page');
     }
     await expect(page.getByTestId('account-email')).toBeVisible();
+
+    await tabs.getByRole('link', { name: copy.myHistory, exact: true }).click();
+    const history = page.getByTestId('my-order-history');
+    await expect(history).toContainText(copy.portfolioOrdersEmpty);
+    await expect(history).not.toContainText(copy.portfolioOrderHistoryEmpty);
 
     await page.getByTestId('my-logout').click();
     await expect(page).toHaveURL('/');

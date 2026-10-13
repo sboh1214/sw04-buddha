@@ -11,6 +11,7 @@ import { safeNextPath } from './next-path';
  */
 
 export const MY_PATH = '/my';
+export const MY_ORDERS_PATH = '/my/orders';
 export const MY_WALLET_PATH = '/my/wallet';
 export const MY_SETTINGS_PATH = '/my/settings';
 
@@ -31,7 +32,7 @@ export type MyTabKey =
  */
 export const MY_TABS: readonly { key: MyTabKey; href: Route; label: string }[] = [
   { key: 'positions', href: '/my/positions', label: copy.myPositions },
-  { key: 'orders', href: '/my/orders', label: copy.myOrders },
+  { key: 'orders', href: MY_ORDERS_PATH, label: copy.myOrders },
   { key: 'history', href: '/my/history', label: copy.myHistory },
   { key: 'wallet', href: MY_WALLET_PATH, label: copy.myWallet },
   { key: 'posts', href: '/my/posts', label: copy.myPosts },
@@ -93,4 +94,18 @@ export function myLoginPath(
  */
 export function isPendingOrder(status: OrderStatus): boolean {
   return status === 'open' || status === 'partially_filled';
+}
+
+/**
+ * Why 거래·정산 이력's 주문 이력 has no row (owner decision 2026-10-13), read off every order the
+ * account has — so only once the list has no further page. `none`: it has never ordered (아직 주문
+ * 내역이 없습니다). `pendingOnly`: every order it has is still 대기, so none has finished (끝난 주문이
+ * 없습니다) and 대기 주문 is where they are; "no orders" would be false about it. `null` while a
+ * finished order is there to show.
+ */
+export function orderHistoryEmpty(
+  orders: readonly { status: OrderStatus }[],
+): 'none' | 'pendingOnly' | null {
+  if (orders.some((order) => !isPendingOrder(order.status))) return null;
+  return orders.length === 0 ? 'none' : 'pendingOnly';
 }

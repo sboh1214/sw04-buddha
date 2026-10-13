@@ -156,7 +156,7 @@ describe('listSection', () => {
     ).toEqual({ stale: true, body: 'rows' });
   });
 
-  it('keeps saying 끝난 주문이 없습니다 UNDER the notice, never instead of it', () => {
+  it('keeps saying 아직 주문 내역이 없습니다 UNDER the notice, never instead of it', () => {
     // The empty variant is the one that states something FALSE rather than merely stale: an
     // account with no prior orders trades in another tab, the orders refetch fails, and the
     // section asserts there is no order history about an order the balance and the holding on

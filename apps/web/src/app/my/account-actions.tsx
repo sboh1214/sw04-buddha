@@ -2,9 +2,9 @@
 
 import { Button, HStack } from '@chakra-ui/react';
 import NextLink from 'next/link';
+import { SignOutButton } from '@/components/auth/sign-out-button';
 import { copy } from '@/copy';
 import { useMe } from '@/hooks/use-me';
-import { useSignOut } from '@/hooks/use-sign-out';
 
 /**
  * 관리자 (administrators only) and 로그아웃, in one place inside MY for every tab (owner decision
@@ -17,7 +17,6 @@ import { useSignOut } from '@/hooks/use-sign-out';
  */
 export function AccountActions() {
   const { data: me } = useMe();
-  const handleSignOut = useSignOut();
 
   return (
     <HStack gap="2" data-testid="my-account-actions">
@@ -26,14 +25,7 @@ export function AccountActions() {
           <NextLink href="/admin/users">{copy.navAdmin}</NextLink>
         </Button>
       )}
-      <Button
-        size="sm"
-        variant="ghost"
-        onClick={() => void handleSignOut()}
-        data-testid="my-logout"
-      >
-        {copy.logout}
-      </Button>
+      <SignOutButton data-testid="my-logout" />
     </HStack>
   );
 }

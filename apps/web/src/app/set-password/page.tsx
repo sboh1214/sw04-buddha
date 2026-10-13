@@ -2,6 +2,7 @@ import { Alert, Stack } from '@chakra-ui/react';
 import type { Metadata, Route } from 'next';
 import { redirect } from 'next/navigation';
 import { AuthCard } from '@/components/auth/auth-card';
+import { SignOutButton } from '@/components/auth/sign-out-button';
 import { copy } from '@/copy';
 import { verifyLinkErrorCode } from '@/lib/auth-client';
 import { getServerSession } from '@/lib/session.server';
@@ -21,6 +22,9 @@ export const metadata: Metadata = { title: `${copy.setPasswordTitle} | ${copy.ap
  *   expired-link notice next to the "register again" and "reset your password" hints.
  * - session present: they verified earlier in this browser and the form below works, so the
  *   note says the link is stale without sending them after a new one.
+ *
+ * 로그아웃 sits under the form in every state (owner decision 2026-10-13, #16): an account that has
+ * not given its contact yet is kept out of MY, where the other 로그아웃 is, by the onboarding gate.
  */
 export default async function SetPasswordPage({
   searchParams,
@@ -45,6 +49,7 @@ export default async function SetPasswordPage({
           </Alert.Root>
         )}
         <SetPasswordForm />
+        <SignOutButton alignSelf="center" data-testid="set-password-logout" />
       </Stack>
     </AuthCard>
   );

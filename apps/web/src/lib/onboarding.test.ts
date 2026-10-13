@@ -94,6 +94,17 @@ describe('needsOnboarding', () => {
     expect(needsOnboarding('/my/wallet', CONTACT)).toBe(false);
     expect(needsOnboarding('/admin/users', CONTACT)).toBe(false);
   });
+
+  it('leaves a held account the two screens with 로그아웃, and lets it go once signed out', () => {
+    // MY holds the other 로그아웃 and is gated, so these two carry one (owner decision
+    // 2026-10-13, #16).
+    expect(needsOnboarding('/my', null)).toBe(true);
+    for (const path of ['/onboarding', '/set-password']) {
+      expect(needsOnboarding(path, null), path).toBe(false);
+    }
+    // `useSignOut` lands on home, where a signed-out tab asks no `GET /me`: the contact is unknown.
+    expect(needsOnboarding('/', undefined)).toBe(false);
+  });
 });
 
 describe('onboardingNext', () => {

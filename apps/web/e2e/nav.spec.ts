@@ -72,7 +72,10 @@ test.describe('최상위 메뉴', () => {
     await expect(shown.locator('[aria-current="page"]')).toHaveCount(1);
     await goToArea(page, copy.navCommunity, '/community');
 
-    // The balance chip is the header's way into 지갑; nothing else of the account is up there.
+    // The balance chip is the header's way into 지갑; nothing else of the account is up there. It
+    // shows the available Coin alone, under the label 잔고 (owner decisions 2026-10-13).
+    await expect(page.getByTestId('balance-chip')).toContainText(copy.balance);
+    await expect(page.getByTestId('balance-chip')).toContainText('10,000 Coin');
     await page.getByTestId('balance-chip').click();
     await expect(page).toHaveURL('/my/wallet');
     await expect(page.locator('header [role="menu"], header [aria-haspopup="menu"]')).toHaveCount(

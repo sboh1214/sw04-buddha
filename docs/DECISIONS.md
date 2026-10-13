@@ -3006,7 +3006,7 @@ ADR-0046의 상태 줄에 '일부 대체됨(ADR-0047: …)'을 이어 쓴다. �
 - 모바일 하단 탭: 홈 · 포트폴리오 · 지갑 · 설정. 모바일에서 커뮤니티로 가는 길이 없었다.
 - 개인 화면은 따로 선 세 경로였다. `/portfolio`(잔고 요약 · 보유 포지션 · 정산 이력 · 주문 이력을 한 화면에), `/wallet`, `/settings`. 각자 서버에서 세션을 보고 자기 주소로 `/login?next=`를 만들었다.
 
-#16 본문의 '오너 결정 필요' 항목에 오너가 2026-10-13 답했다(결정 1).
+#16 본문의 '오너 결정 필요' 항목에 오너가 2026-10-13 답했다(결정 1). 구현 중에 물은 것에는 오너가 같은 날 답했다(결과 4).
 
 ### 결정
 
@@ -3030,25 +3030,25 @@ ADR-0046의 상태 줄에 '일부 대체됨(ADR-0047: …)'을 이어 쓴다. �
 
 **2. MY (`app/my/`).**
 
-- 공통 레이아웃(`app/my/layout.tsx`)이 제목 · 관리자 진입과 로그아웃(`AccountActions`, test id `my-admin` · `my-logout`) · 탭 내비(`MyTabs`, `my-tabs` · `my-tab-<key>`)를 한 번에 갖는다.
+- 공통 레이아웃(`app/my/layout.tsx`)이 제목 · 관리자 진입과 로그아웃(`AccountActions`, test id `my-admin` · `my-logout`) · 탭 내비(`MyTabs`, `my-tabs` · `my-tab-<key>`)를 한 번에 갖는다. 온보딩 게이트에 묶인 계정을 위한 로그아웃은 `/onboarding` · `/set-password`에도 있다(결과 4).
 - 세션 게이트는 `requireMySession`(`lib/my.server.ts`)이고 MY 레이아웃과 MY의 모든 페이지가 부른다. 레이아웃은 하드 로드나 MY 밖에서 들어올 때만 서버에서 다시 그려지므로, 탭 사이 이동마다 게이트가 돌려면 페이지가 불러야 한다. 옛 `/portfolio` · `/wallet` · `/settings`도 페이지마다 확인했다. React `cache`로 한 요청에서 세션 확인은 한 번이다. 세션이 없으면 서버가 로그인으로 보내고, `next`는 요청한 MY 주소다(`myLoginPath`, `lib/my.ts`). 그 주소는 `proxy.ts`가 `/my/*`에도 찍는 `x-pathname`·`x-search` 헤더에서 읽고, MY 밖이거나 안전하지 않은 경로면 `/my`로 둔다. 쿼리는 버리되, 유료 충전이 열린 동안의 `/my/wallet?package=<id>`만 파싱한 id로 다시 싣는다(ADR-0044·0049). MY 화면을 연 채 세션이 끝나면 다음 이동까지는 화면마다의 상태다(목록 · 잔고는 `useSessionEnded` · `profileView`의 다시 로그인 안내, 설정의 카드는 스켈레톤, 옮기기 전과 같다).
 - 탭 목록 · 주소 · 현재 탭 판정은 `lib/my.ts`의 `MY_TABS` · `isMyTabCurrent`다(단위 시험). 요약은 탭의 현재 표시가 없다.
-- 요약(`/my`, `summary.tsx`): 옛 포트폴리오의 잔고 요약 카드, 보유 계약 · 대기 주문 · 거래·정산 이력 · 지갑(잔고와 최근 원장)의 미리보기(탭마다 앞 3줄, `MY_PREVIEW_ROWS`)와 '전체 보기', 내 글 · 관심 시장 · 알림은 '준비 중'(결정 1-7). 설정은 미리볼 줄이 없어 카드가 없다.
-- 옛 화면은 다시 그리지 않고 옮겼다(`portfolio.tsx`). 보유 포지션 → 보유 계약(`/my/positions`), 주문 이력 중 `open`·`partially_filled` → 대기 주문(`/my/orders`, `isPendingOrder`), 나머지 주문 이력과 정산 이력 → 거래·정산 이력(`/my/history`, 빈 목록 문구는 두 쪽이 제 쪽만 말한다: '대기 중인 주문이 없습니다.' · '끝난 주문이 없습니다.'), 지갑 → `/my/wallet`(유료 충전 차단과 `?package=` 처리 그대로), 설정 → `/my/settings`(`?error=` 처리 그대로). 내 글 · 관심 시장 · 알림 탭은 '준비 중' 빈 상태다.
+- 요약(`/my`, `summary.tsx`): 옛 포트폴리오의 잔고 요약 카드, 보유 계약 · 대기 주문 · 거래·정산 이력 · 지갑(잔고와 최근 원장, 결과 4)의 미리보기(탭마다 앞 3줄, `MY_PREVIEW_ROWS`)와 '전체 보기', 내 글 · 관심 시장 · 알림은 '준비 중'(결정 1-7). 설정은 미리볼 줄이 없어 카드가 없다. 줄 수와 설정 카드를 두지 않은 것은 구현의 선택이다(결과 5).
+- 옛 화면은 다시 그리지 않고 옮겼다(`portfolio.tsx`). 보유 포지션 → 보유 계약(`/my/positions`), 주문 이력 중 `open`·`partially_filled` → 대기 주문(`/my/orders`, `isPendingOrder`), 나머지 주문 이력과 정산 이력 → 거래·정산 이력(`/my/history`; 빈 목록 문구는 두 쪽이 제 쪽만 말한다 — 대기 주문은 '대기 중인 주문이 없습니다.', 거래·정산 이력의 주문 이력은 결과 4의 상황별 두 문구), 지갑 → `/my/wallet`(유료 충전 차단과 `?package=` 처리 그대로), 설정 → `/my/settings`(`?error=` 처리 그대로). 내 글 · 관심 시장 · 알림 탭은 '준비 중' 빈 상태다.
 - 옛 주소 `/portfolio` · `/wallet` · `/settings`는 지웠고 리디렉트하지 않는다(D23). `app/not-found.tsx`가 없어 Next의 기본 404를 루트 레이아웃 안에 그린다.
-- 서비스가 만드는 링크는 새 주소다. 설정 화면의 인증 메일 · 이메일 변경 메일 `callbackURL`, 소셜 연결 `callbackURL` · `errorCallbackURL`(`MY_SETTINGS_PATH`), 로그인 `next`, 잔고 칩, `/charge`의 상품 링크(`walletPackageHref` → `/my/wallet?package=`), 세션이 끝난 화면의 다시 로그인 링크. 로그아웃 동작은 `hooks/use-sign-out.ts` 하나로 모았다.
+- 서비스가 만드는 링크는 새 주소다. 설정 화면의 인증 메일 · 이메일 변경 메일 `callbackURL`, 소셜 연결 `callbackURL` · `errorCallbackURL`(`MY_SETTINGS_PATH`), 로그인 `next`, 잔고 칩, `/charge`의 상품 링크(`walletPackageHref` → `/my/wallet?package=`), 세션이 끝난 화면의 다시 로그인 링크. 로그아웃 동작은 `hooks/use-sign-out.ts` 하나로, 버튼은 `components/auth/sign-out-button.tsx`의 `SignOutButton` 하나로 모았다(MY · `/onboarding` · `/set-password`).
 
 **3. 최상위 메뉴.**
 
 - 세 영역의 목록은 `lib/nav.ts`의 `primaryNavItems(signedIn)` 하나다: 시장 탐색(`/`) · 커뮤니티(`/community`) · MY(`/my`, 로그인했을 때만). 데스크톱 헤더 1단(`nav.tsx`의 `PrimaryLinks`, md 이상, `nav-primary-<key>`)과 모바일 하단 탭(`bottom-tabs.tsx`, md 미만, `bottom-tab-<key>`)이 같은 목록을 그려 두 폭이 어긋날 수 없다. 현재 영역도 둘 다 `isPrimaryCurrent`로 판정한다. 시장 탐색은 홈과 `/markets/<slug>`, 커뮤니티와 MY는 자기 경로와 그 아래(`/my/*` 전부)다. 하단 탭의 옛 `isCurrentTab`은 지웠다.
 - MY 항목은 세션을 보고 붙는다(결정 1-5). `useSession`이 하이드레이션까지 `isPending`이므로 서버 HTML과 하이드레이션 렌더에는 두 영역이 있고, 로그인한 사람에게는 그 뒤 MY가 끝에 붙는다. 비로그인 사용자도 하단 탭을 보며 두 공개 영역에 갈 수 있다. 하단 탭은 시장 상세에서도 보인다(#125).
 - 프로필 메뉴(아바타 · 닉네임 버튼과 관리자 · 설정 · 로그아웃)를 지웠다(결정 1-10). 헤더 오른쪽은 검색 · 테마 · 잔고 칩(로그인 전에는 로그인 · 가입하기)이다.
-- 잔고 칩은 가용 Coin만 보이고 `/my/wallet`로 간다(결정 1-6). 라벨 '잔고'는 바꾸지 않았다.
+- 잔고 칩은 가용 Coin만 보이고 `/my/wallet`로 간다(결정 1-6). 라벨은 '잔고' 그대로다(결과 4).
 - 검색 입력은 헤더에 그대로 있고 `/?q=`로 시장만 찾는다(결정 1-3). 사용자 검색은 없다(N02 §3).
 - 헤더 2단은 시장 탐색(`/`와 `/markets/[slug]`)에서만 그린다(`showsCategoryRow`, 결정 1-11). 헤더 아래에 붙는 요소(홈 사이드바, 상세의 주문 영역)는 모두 그 경로에 있으므로 `HEADER_HEIGHT_PX`(107)는 그대로이고, 2단이 없는 경로의 헤더는 1단과 아래 선(65px)이다. 두 경로는 모두 `force-dynamic`이라 2단의 현재 표시는 서버 HTML에 들어간다. `/community` 같은 정적 화면은 정적으로 남는다.
 - copy: `navExplore`('시장 탐색') · `navMy`('MY')를 더하고, `navMarkets`('시장') · `navHome` · `navPortfolio` · `navWallet` · `navSettings` · `profileMenu`를 지웠다.
 
-**4. 시험.** 단위: `nav.test.ts`(세 영역 목록과 MY의 로그인 조건, MY 현재 판정, 2단 표시 경로), `my.test.ts`(탭 목록 · 현재 탭 · `myLoginPath` · 대기 주문), `onboarding.test.ts` · `charge-guide.test.ts` 등의 표본 경로. e2e: `my.spec.ts`(비로그인 MY 주소 전부가 로그인으로, MY를 연 채 세션이 끝나면 다음 탭 이동이 로그인으로, 옛 주소 셋은 404, 요약과 여덟 탭, MY 안 로그아웃 · 관리자 진입), `nav.spec.ts`(두 폭이 같은 영역 목록, 비로그인 두 영역 · 로그인 세 영역, MY 탭에서 MY 현재 표시, 잔고 칩 → 지갑, 2단은 시장 탐색에서만), `helpers.ts`의 `logOut`(MY의 로그아웃, `auth.spec.ts` · `nav.spec.ts`가 쓴다), `coin.spec.ts`의 헤더 1단 측정에서 프로필 버튼을 뺐고, `auth` · `onboarding` · `coin` · `payment` spec의 주소를 새 주소로 바꿨다.
+**4. 시험.** 단위: `nav.test.ts`(세 영역 목록과 MY의 로그인 조건, MY 현재 판정, 2단 표시 경로), `my.test.ts`(탭 목록 · 현재 탭 · `myLoginPath` · 대기 주문 · 주문 이력의 빈 목록 판정 `orderHistoryEmpty`와 오너의 두 문구), `onboarding.test.ts`(게이트에 묶인 계정이 로그아웃이 있는 두 화면에 가고, 로그아웃 뒤의 홈은 게이트에 걸리지 않는다) · `charge-guide.test.ts` 등의 표본 경로. e2e: `my.spec.ts`(비로그인 MY 주소 전부가 로그인으로, MY를 연 채 세션이 끝나면 다음 탭 이동이 로그인으로, 옛 주소 셋은 404, 요약과 여덟 탭, 주문이 한 번도 없는 계정의 '아직 주문 내역이 없습니다.'(요약과 탭), MY 안 로그아웃 · 관리자 진입), `onboarding.spec.ts`(게이트에 묶인 계정이 `/set-password` · `/onboarding`에서 로그아웃해 `/`에 닿고 세션이 끝난다, `GET /me`가 실패한 `/onboarding`에도 로그아웃이 있다), `nav.spec.ts`(두 폭이 같은 영역 목록, 비로그인 두 영역 · 로그인 세 영역, MY 탭에서 MY 현재 표시, 잔고 칩의 '잔고'와 가용 Coin, 잔고 칩 → 지갑, 2단은 시장 탐색에서만), `helpers.ts`의 `logOut`(MY의 로그아웃, `auth.spec.ts` · `nav.spec.ts`가 쓴다), `coin.spec.ts`의 헤더 1단 측정에서 프로필 버튼을 뺐고, `auth` · `onboarding` · `coin` · `payment` spec의 주소를 새 주소로 바꿨다.
 
 **5. 문서.** `README.md`의 최상위 영역 · 헤더 · 하단 탭 설명과 경로 표(`/my/*` 행을 탭 순서로, 옛 `/portfolio` · `/wallet` · `/settings` 행 삭제). `docs/TERMS.md`의 화면 예시에서 '거래하기' 버튼의 자리(포트폴리오 → MY 보유 계약).
 
@@ -3065,6 +3065,20 @@ ADR-0046의 상태 줄에 '일부 대체됨(ADR-0047: …)'을 이어 쓴다. �
 
 - 기록: 옛 주소 `/portfolio` · `/wallet` · `/settings`를 적은 이 ADR 전 ADR의 본문(상태 줄은 결과 1), `docs/PLAN.md`(v0.1)와 `docs/QUESTIONS.md`.
 - API 시험(`auth.test.ts`, `rate-limit.controller.test.ts`)이 `callbackURL` 표본으로 쓰는 `'/settings'`. 받은 값을 되돌려 주는지만 보므로 웹 주소와 무관하다.
-- 알려진 한계: 배포 전에 설정 화면에서 보낸 메일의 링크와 진행 중이던 소셜 연결은 `callbackURL=/settings`를 싣고 있어 배포 뒤 없는 페이지에 닿는다(D23). 예외를 둘지는 PR에서 오너에게 묻는다.
+- 배포 전에 보낸 메일 · 소셜 연결이 싣고 있는 `/settings`는 404다(결과 5).
 
 **3. 다른 이슈에 넘긴 것.** MY 탭의 내용: 보유 계약(#67), 대기 주문(#123), 거래·정산 이력(#124), 지갑(#69), 내 글(#51), 관심 시장(#89), 알림함(#53), 알림 수신 설정(#56). 커뮤니티 영역의 내용(#46), 시장 탐색 홈의 분류 · 정렬(#63), 검색 화면과 결과(#15), 공개 프로필(#41), 전역 알림 표시(#52), 내 제안 상태의 위치(#77).
+
+**4. 구현 중 오너 결정 (2026-10-13).** PR을 만드는 중에 물은 것에 오너가 답했다.
+
+- 온보딩 게이트에 묶인 계정의 로그아웃: `/onboarding`과 `/set-password` 화면에 '로그아웃' 버튼을 둔다. 헤더는 그대로다(프로필 메뉴 없음, 결정 1-10). MY의 로그아웃은 게이트 뒤에 있어(MY의 주소는 게이트 예외가 아니다, 결과 1) 실명·휴대전화를 입력하지 않은 계정에게는 로그아웃할 길이 없었다. 두 화면은 MY와 같은 `SignOutButton`(`useSignOut`)을 써서 MY의 로그아웃과 같은 곳(`/`)에 닿는다(test id `onboarding-logout` · `set-password-logout`). `/onboarding`은 묶인 계정이 있을 수 있는 모든 단계(불러오는 중 · 프로필을 불러오지 못함 · 입력 폼)에, `/set-password`는 모든 상태(불러오는 중 · 프로필을 불러오지 못함 · 이미 설정됨 · 입력 폼)에 둔다. `/onboarding`의 로그아웃된 단계(다시 로그인 안내)와 연락처가 있어 `next`로 넘어가는 중에는 두지 않는다. 앞은 끝낼 세션이 없고, 뒤는 묶인 계정이 아니다.
+- 헤더 잔고 칩의 라벨: '잔고' 그대로다. 가용 Coin만 보인다(결정 1-6).
+- MY 요약의 지갑 미리보기: 지금처럼 잔고(사용 가능 · 잠금)와 최근 이용 내역(원장 줄)을 둘 다 보인다.
+- 거래·정산 이력 › 주문 이력이 비었을 때: 상황별 두 문구다. 주문이 아예 없으면 '아직 주문 내역이 없습니다.'(`portfolioOrdersEmpty`), 대기 주문만 있으면 '끝난 주문이 없습니다. 대기 중인 주문은 대기 주문에서 볼 수 있습니다.'이고 '대기 주문'은 대기 주문 탭(`/my/orders`)으로 가는 링크다. 어느 쪽인지는 `lib/my.ts`의 `orderHistoryEmpty`가 계정의 모든 주문을 보고 정한다. 그래서 목록에 다음 페이지가 없을 때만 문구를 보이고, 그 전에는 지금처럼 '더 보기'만 있다. 요약의 미리보기도 같은 목록 본문(`OrdersBody`)이라 같다. 대기 주문 쪽의 '대기 중인 주문이 없습니다.'는 그대로다.
+
+**5. 구현에서 정한 것 (오너 결정이 아니다).** 이슈 · 오너 결정 · 기획이 정하지 않아 이 PR이 고른 것이다. 담당 이슈나 오너가 바꿀 수 있다.
+
+- 요약의 미리보기 길이: 탭마다 앞 3줄(`MY_PREVIEW_ROWS`).
+- 요약에 설정의 미리보기 카드를 두지 않는다. 미리볼 줄이 없다.
+- 보유 계약 · 대기 주문의 카드 제목은 탭 이름('보유 계약' · '대기 주문')이다. 빈 목록 문구('아직 보유한 포지션이 없습니다.' · '대기 중인 주문이 없습니다.')와 목록 구성은 두 탭의 담당 이슈(#67 · #123)가 정한다.
+- 배포 전에 설정 화면에서 보낸 메일(인증 · 이메일 변경)의 링크와 진행 중이던 소셜 연결은 `callbackURL=/settings`(오류는 `/settings?error=`)를 싣고 있어, 이 PR의 배포 뒤에는 없는 페이지(404)에 닿는다. D23이 옛 주소의 이동 처리를 금하므로 예외를 두지 않고 받아들인다. #125의 배포가 계정까지 모두 지웠으므로(ADR-0048 결정 7) 그 전에 보낸 링크의 계정은 이미 없다.
