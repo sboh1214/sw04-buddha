@@ -1,0 +1,349 @@
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import path from 'node:path';
+import {
+  type AllowanceScope,
+  EXCLUDED_FEATURE_IDS,
+  type ExcludedFeatureId,
+  PAID_COIN_SALES_ENABLED,
+  findExcludedIdentifier,
+  findExcludedText,
+} from '@buddha/shared';
+import { describe, expect, it } from 'vitest';
+import { type CopyKey, copy } from './copy';
+import {
+  LEGAL_BODIES,
+  SRC,
+  type SourcePlace,
+  copyRefsOf,
+  literalsOf,
+  screenSources,
+  usesOf,
+} from './test/screen-text';
+
+/**
+ * What the plan leaves out must not come back to a screen (#113): no screen text, screen address
+ * or menu link names an excluded feature of EXCLUDED_FEATURES (@buddha/shared). The text is the
+ * copy, key by key, and every string literal, template literal and JSX text under `src/`
+ * (test/screen-text.ts); the addresses are the route folders under `app/`, and the menus and
+ * links are every internal path a source writes down (`'/my/wallet'`, the header's and MY's
+ * lists, the admin menu, the footer, redirects). Word allowances common to all text live with
+ * the list; the ones below are this app's: which code may still name paid Coin, which copy names
+ * a feature on purpose, and where the service guide will be.
+ */
+
+const at = (...parts: string[]) => path.join(SRC, ...parts);
+const APP = at('app');
+const COPY = at('copy.ts');
+
+function under(file: string, root: string): boolean {
+  return file === root || file.startsWith(`${root}${path.sep}`);
+}
+
+/**
+ * Code kept for paid Coin while it is closed (D9, ADR-0049): it may name 충전·결제·쿠폰, draw a
+ * price and link to the paid pages, because nothing in it reaches a member's screen while
+ * PAID_COIN_SALES_ENABLED is false — a page that answers not found, a component drawn only in
+ * the branch the switch opens, an admin page the menu no longer lists. Code outside these may
+ * name paid Coin only in that branch itself (test/screen-text.ts, `gated`). A folder covers
+ * everything under it. Everything else here is still checked.
+ */
+const PRESERVED_PAID_SOURCES: readonly { path: string; reason: string }[] = [
+  { path: at('app', 'charge'), reason: 'the public /charge page: not found while closed' },
+  {
+    path: at('app', 'my', 'wallet', 'charge-form.tsx'),
+    reason: "the wallet's charge card: my/wallet/page.tsx draws it only while sales are on",
+  },
+  {
+    path: at('app', 'my', 'wallet', 'coupon-form.tsx'),
+    reason: "the wallet's coupon form: likewise",
+  },
+  {
+    path: at('app', 'my', 'wallet', 'payment-history.tsx'),
+    reason: "the wallet's 결제 내역: likewise",
+  },
+  {
+    path: at('app', 'admin', 'charge-packages'),
+    reason: 'admin 충전 상품: off the admin menu, open by address (owner decision 2026-10-13 #112)',
+  },
+  { path: at('app', 'admin', 'coupons'), reason: 'admin 쿠폰: likewise' },
+  { path: at('app', 'admin', 'payments'), reason: 'admin 결제: likewise' },
+  { path: at('lib', 'charge-guide.ts'), reason: "/charge's helpers and its link to the wallet" },
+  { path: at('lib', 'payments.ts'), reason: "결제 내역's labels and the admin refund's rules" },
+];
+
+/** Functions that draw a price in won, i.e. a price table (N06). */
+const PRICE_FORMATTERS = ['formatKrw'] as const;
+
+/**
+ * The service guide (#136) is the one page that may say what the product does not offer —
+ * '점수·순위를 제공하지 않습니다' (owner decision 2026-10-13 #113); the no-cash notice may stand
+ * anywhere. The guide's sources go under this route group, which leaves its address to #136 (a
+ * route group is not part of the URL). Nothing is there yet, so today every such sentence fails
+ * wherever it is written.
+ */
+const SERVICE_GUIDE_ROOT = at('app', '(service-guide)');
+
+/**
+ * Copy a member's screen shows that names an excluded feature on purpose, key by key: the
+ * feature, the words it may use, and why. No other copy may.
+ */
+const COPY_ALLOWANCES: readonly {
+  key: CopyKey;
+  feature: ExcludedFeatureId;
+  words: readonly string[];
+  reason: string;
+}[] = [
+  ...(
+    ['ledgerTypeDeposit', 'ledgerTypePaymentCancel', 'ledgerTypePaymentCancelReversal'] as const
+  ).map((key) => ({
+    key,
+    feature: 'paid-purchase' as const,
+    words: ['충전', '결제'],
+    reason:
+      "The wallet's 이용 내역 names the kept ledger types (D9, ADR-0049): rows from before sales " +
+      'closed, not an offer. None is written while they are closed.',
+  })),
+  ...(['onboardingSubtitle', 'settingsContactHint', 'setPasswordContactHeading'] as const).map(
+    (key) => ({
+      key,
+      feature: 'paid-purchase' as const,
+      words: ['결제', '구매'],
+      reason:
+        'Why the real name and phone are asked for still says 결제: owner decision 2026-10-13 ' +
+        '(#112) keeps the wording until #58 rewrites the onboarding.',
+    }),
+  ),
+];
+
+function isPreservedPaid(file: string): boolean {
+  return PRESERVED_PAID_SOURCES.some((source) => under(file, source.path));
+}
+
+function scopeOf(file: string): AllowanceScope {
+  return under(file, SERVICE_GUIDE_ROOT) ? 'service-guide' : 'everywhere';
+}
+
+/** The features to look for in code that paid Coin's switch hides, or not. */
+function featuresFor(paidHidden: boolean): ExcludedFeatureId[] {
+  return EXCLUDED_FEATURE_IDS.filter((id) => !(paidHidden && id === 'paid-purchase'));
+}
+
+function describeHits(where: string, text: string, hits: { feature: string; match: string }[]) {
+  return hits.map((hit) => `${where}: ${hit.feature} '${hit.match}' in ${JSON.stringify(text)}`);
+}
+
+const SOURCES = screenSources();
+const SOURCE_TEXT = new Map(SOURCES.map((file) => [file, readFileSync(file, 'utf8')]));
+const source = (file: string) => SOURCE_TEXT.get(file) ?? '';
+
+/** Where each copy key is read, file by file. */
+const COPY_REFS = new Map<string, (SourcePlace & { file: string })[]>();
+for (const file of SOURCES) {
+  for (const ref of copyRefsOf(file, source(file))) {
+    const refs = COPY_REFS.get(ref.key) ?? [];
+    refs.push({ ...ref, file });
+    COPY_REFS.set(ref.key, refs);
+  }
+}
+
+/**
+ * The excluded features a copy value names, past the allowances. A key read nowhere is checked
+ * like one on every screen; a key read only by hidden paid code, or only by the service guide,
+ * gets that code's allowance.
+ */
+function copyHits(key: string, value: string) {
+  const refs = COPY_REFS.get(key) ?? [];
+  const paidHidden = refs.length > 0 && refs.every((ref) => ref.gated || isPreservedPaid(ref.file));
+  const scope =
+    refs.length > 0 && refs.every((ref) => scopeOf(ref.file) === 'service-guide')
+      ? 'service-guide'
+      : 'everywhere';
+  return findExcludedText(value, { features: featuresFor(paidHidden), scope }).filter(
+    (hit) =>
+      !COPY_ALLOWANCES.some(
+        (allowance) =>
+          allowance.key === key &&
+          allowance.feature === hit.feature &&
+          allowance.words.includes(hit.match),
+      ),
+  );
+}
+
+/** The excluded features a literal of `file` names. */
+function literalHits(file: string, text: string, gated: boolean) {
+  return findExcludedText(text, {
+    features: featuresFor(gated || isPreservedPaid(file)),
+    scope: scopeOf(file),
+  });
+}
+
+/** An internal screen address a literal writes down (not an API path), without its query. */
+function internalPath(text: string): string | undefined {
+  if (!/^\/(?!\/)/.test(text) || text.startsWith('/api/')) return undefined;
+  return text.split(/[?#]/)[0];
+}
+
+/** Every route folder under `app/`. */
+function routeFolders(dir: string = APP): string[] {
+  return readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .flatMap((entry) => {
+      const full = path.join(dir, entry.name);
+      return [full, ...routeFolders(full)];
+    });
+}
+
+describe('excluded features on screens (#113)', () => {
+  it('reads screen text the way it renders, and sees what the sales switch hides', () => {
+    const planted = [
+      'const a = <Text>{copy.walletTitle} 출석 체크</Text>;',
+      'const b = PAID_COIN_SALES_ENABLED ? <Text>충전하기</Text> : null;',
+      'const c = PAID_COIN_SALES_ENABLED && copy.chargeSubmit;',
+      'if (PAID_COIN_SALES_ENABLED) { label = `${n}원`; }',
+      "const e = PAID_COIN_SALES_ENABLED ? null : '충전하기';",
+      '// 점수 in a comment is not screen text',
+    ].join('\n');
+    const literals = literalsOf('planted.tsx', planted).map(({ line, text, gated }) => ({
+      line,
+      text,
+      gated,
+    }));
+    expect(literals).toEqual([
+      { line: 1, text: '0 출석 체크', gated: false },
+      { line: 2, text: '충전하기', gated: true },
+      { line: 4, text: '0원', gated: true },
+      { line: 5, text: '충전하기', gated: false },
+    ]);
+    expect(copyRefsOf('planted.tsx', planted).map(({ key, gated }) => ({ key, gated }))).toEqual([
+      { key: 'walletTitle', gated: false },
+      { key: 'chargeSubmit', gated: true },
+    ]);
+    const visible = (text: string) => literalHits(at('app', 'x.tsx'), text, false);
+    expect(visible('0 출석 체크').map((hit) => hit.feature)).toEqual(['activity-reward']);
+    expect(visible('충전하기').map((hit) => hit.feature)).toEqual(['paid-purchase']);
+    expect(literalHits(at('app', 'x.tsx'), '충전하기', true)).toEqual([]);
+    expect(literalHits(at('app', 'charge', 'x.tsx'), '충전하기', false)).toEqual([]);
+    // Hidden paid code is still held to everything else.
+    expect(literalHits(at('app', 'charge', 'x.tsx'), '베팅', false)).toHaveLength(1);
+  });
+
+  it('allows a negative notice on the service guide only (owner decision 2026-10-13 #113)', () => {
+    const notice = '점수·순위를 제공하지 않습니다.';
+    expect(literalHits(at('app', 'my', 'page.tsx'), notice, false)).toHaveLength(2);
+    expect(literalHits(path.join(SERVICE_GUIDE_ROOT, 'guide', 'page.tsx'), notice, false)).toEqual(
+      [],
+    );
+    // The no-cash notice stands anywhere.
+    expect(literalHits(at('app', 'my', 'page.tsx'), copy.walletNotice, false)).toEqual([]);
+  });
+
+  it('keeps paid Coin closed, which the allowances for its kept code rely on', () => {
+    // Opening sales (#111) puts a price list and a charge button on members' screens, which N06
+    // leaves out of the initial product; whoever opens them revisits this check with the plan.
+    expect(PAID_COIN_SALES_ENABLED).toBe(false);
+    for (const { path: kept } of PRESERVED_PAID_SOURCES) expect(existsSync(kept), kept).toBe(true);
+  });
+
+  it('is not in any copy value', () => {
+    expect(COPY_REFS.get('walletNotice')?.length).toBeGreaterThan(0);
+    const hits = Object.entries(copy).flatMap(([key, value]) =>
+      describeHits(`copy.${key}`, value, copyHits(key, value)),
+    );
+    expect(hits).toEqual([]);
+  });
+
+  it('allows copy only where an allowance is still needed', () => {
+    for (const allowance of COPY_ALLOWANCES) {
+      const value = copy[allowance.key];
+      const named = findExcludedText(value, { features: [allowance.feature] });
+      expect(named.length, `copy.${allowance.key} no longer needs its allowance`).toBeGreaterThan(
+        0,
+      );
+    }
+  });
+
+  it('is not in any string or JSX text under src/ outside the copy and the legal bodies', () => {
+    // The walk reached the screens and legal/'s screen code, and skipped the legal bodies and
+    // the test support.
+    expect(SOURCES).toContain(at('components', 'layout', 'nav.tsx'));
+    expect(SOURCES).toContain(at('legal', 'business-info.ts'));
+    expect(SOURCES.filter((file) => LEGAL_BODIES.includes(file))).toEqual([]);
+    expect(SOURCES.filter((file) => under(file, at('test')))).toEqual([]);
+    const hits = SOURCES.filter((file) => file !== COPY).flatMap((file) =>
+      literalsOf(file, source(file)).flatMap((literal) =>
+        describeHits(
+          `${path.relative(SRC, file)}:${String(literal.line)}`,
+          literal.text,
+          literalHits(file, literal.text, literal.gated),
+        ),
+      ),
+    );
+    expect(hits).toEqual([]);
+  });
+
+  it('draws no price in won outside the kept paid code (N06: no price table)', () => {
+    const uses = SOURCES.filter((file) => !isPreservedPaid(file)).flatMap((file) =>
+      usesOf(file, source(file), PRICE_FORMATTERS)
+        .filter((use) => !use.gated)
+        .map((use) => `${path.relative(SRC, file)}:${String(use.line)}: ${use.name}`),
+    );
+    expect(uses).toEqual([]);
+  });
+
+  it('holds the legal bodies to the gambling words until #137 revises them', () => {
+    // The rest — the old '예측', 'P 충전', the 순위 nickname clause — stays until #137.
+    const hits = LEGAL_BODIES.flatMap((file) =>
+      literalsOf(file, readFileSync(file, 'utf8')).flatMap((literal) =>
+        describeHits(
+          `${path.relative(SRC, file)}:${String(literal.line)}`,
+          literal.text,
+          findExcludedText(literal.text, { features: ['gambling'] }),
+        ),
+      ),
+    );
+    expect(hits).toEqual([]);
+  });
+});
+
+describe('excluded features in screen addresses and menus (#113)', () => {
+  it('has no route folder that names one', () => {
+    const folders = routeFolders();
+    expect(folders).toContain(at('app', 'my', 'wallet'));
+    const hits = folders.flatMap((folder) =>
+      findExcludedIdentifier(path.basename(folder), 'route', {
+        features: featuresFor(isPreservedPaid(folder)),
+      }).map((hit) => `${path.relative(APP, folder)}: ${hit.feature} '${hit.word}'`),
+    );
+    expect(hits).toEqual([]);
+  });
+
+  it('links to none: no internal path in a menu, a link or a redirect names one', () => {
+    const paths = SOURCES.flatMap((file) =>
+      literalsOf(file, source(file)).flatMap((literal) => {
+        const pathname = internalPath(literal.text);
+        return pathname === undefined ? [] : [{ file, pathname, literal }];
+      }),
+    );
+    // The walk found the menus: the header's areas, MY's tabs, the admin menu, the footer.
+    for (const menuPath of ['/community', '/my/wallet', '/admin/markets', '/terms']) {
+      expect(paths.map((p) => p.pathname)).toContain(menuPath);
+    }
+    const hits = paths.flatMap(({ file, pathname, literal }) =>
+      findExcludedIdentifier(pathname, 'route', {
+        features: featuresFor(literal.gated || isPreservedPaid(file)),
+      }).map(
+        (hit) =>
+          `${path.relative(SRC, file)}:${String(literal.line)}: ${hit.feature} '${hit.word}' in ${pathname}`,
+      ),
+    );
+    expect(hits).toEqual([]);
+  });
+
+  it('reads a screen address, not an API path or a protocol-relative URL', () => {
+    expect(internalPath('/my/wallet?package=0')).toBe('/my/wallet');
+    expect(internalPath('/login#top')).toBe('/login');
+    expect(internalPath('/api/v1/me')).toBeUndefined();
+    expect(internalPath('//evil.example')).toBeUndefined();
+    expect(internalPath('market-status-badge')).toBeUndefined();
+  });
+});

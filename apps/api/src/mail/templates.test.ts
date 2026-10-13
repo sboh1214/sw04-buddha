@@ -1,3 +1,4 @@
+import { findExcludedText } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
 import {
   changeEmailConfirmationEmail,
@@ -6,9 +7,6 @@ import {
 } from './templates.js';
 
 const url = 'http://localhost:3000/api/auth/verify-email?token=abc&callbackURL=%2F';
-
-/** PLAN Appendix A: gambling vocabulary must never appear in user-facing text. */
-const FORBIDDEN_WORDS = ['베팅', '배당', '배당률', '승률', '판돈', '당첨'];
 
 describe('mail templates', () => {
   it('verification email is Korean, carries the link in text and html', () => {
@@ -41,15 +39,15 @@ describe('mail templates', () => {
     expect(mail.html).toContain('&lt;b&gt;&amp;c=&quot;d&quot;');
   });
 
-  it('contains no forbidden vocabulary', () => {
+  it('names nothing the plan leaves out, gambling words included (#113, D21)', () => {
     const all = [
       verificationEmail({ url }),
       passwordResetEmail({ url }),
       changeEmailConfirmationEmail({ url, newEmail: 'x@y.z' }),
     ];
     for (const mail of all) {
-      for (const word of FORBIDDEN_WORDS) {
-        expect(mail.subject + mail.text + mail.html).not.toContain(word);
+      for (const text of [mail.subject, mail.text, mail.html]) {
+        expect(findExcludedText(text), text).toEqual([]);
       }
     }
   });

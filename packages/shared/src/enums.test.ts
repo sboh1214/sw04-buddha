@@ -111,7 +111,7 @@ describe('enums', () => {
   });
 
   it('lists the settlement steps and their statuses (O-6, ADR-0046)', () => {
-    // Coin settlement is the only step until #29 appends Forecast scoring.
+    // Coin settlement is the only step: Forecast scoring left with Forecast (N02 §1, N04 §4).
     expect(enums.SETTLEMENT_STEPS).toEqual(['coin']);
     expect(enums.settlementStepSchema.parse('coin')).toBe('coin');
     expect(enums.settlementStepSchema.safeParse('score').success).toBe(false);

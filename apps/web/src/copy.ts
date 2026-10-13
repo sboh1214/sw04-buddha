@@ -163,7 +163,6 @@ export const copy = {
   walletTitle: '지갑',
   walletBalance: '사용 가능 잔고',
   walletLocked: '주문 예약',
-  charge: '충전',
   chargeTitle: '코인 충전',
   chargeHint: '금액이 클수록 할인율이 높습니다.',
   chargeDiscount: '할인',

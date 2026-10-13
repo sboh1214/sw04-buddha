@@ -1,7 +1,8 @@
 /**
  * Korean copy for transactional emails (PLAN 0.1-6: UI strings in Korean, code in English).
  * Templates are pure functions of their inputs so they can be unit-tested without SMTP.
- * Keep the wording aligned with PLAN Appendix A: no betting vocabulary anywhere.
+ * The wording names nothing the plan leaves out — gambling words (D21) included — which
+ * templates.test.ts checks against EXCLUDED_FEATURES (@buddha/shared, #113).
  */
 export interface EmailContent {
   subject: string;

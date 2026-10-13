@@ -188,8 +188,8 @@ export const priceTickTriggerSchema = z.enum(PRICE_TICK_TRIGGERS);
 /**
  * market_settlement_steps.step (varchar, not a Postgres enum): the steps that must ALL finish
  * before a `resolved` market becomes `settled` (O-6), run in this order. `coin` pays out the
- * positions. #29 appends `score` (Forecast scoring) — a varchar column, so adding a step needs
- * no enum migration.
+ * positions. A step added later is appended here — a varchar column, so it needs no enum
+ * migration.
  */
 export const SETTLEMENT_STEPS = ['coin'] as const;
 export type SettlementStep = (typeof SETTLEMENT_STEPS)[number];

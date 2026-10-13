@@ -105,8 +105,8 @@ export function usePositions(status: PositionStatus) {
  *
  * `closed` and `resolved` are deliberately NOT terminal: trading has stopped, but nothing has
  * been paid out, so those rows are still open holdings marked to the market's last price. The
- * worker pays out and writes `settled` in one transaction (ADR-0046); if #29 lets the Coin step
- * finish before the market is `settled`, this function has to change with it.
+ * worker pays out and writes `settled` in one transaction (ADR-0046); if a step added later lets
+ * the Coin step finish before the market is `settled`, this function has to change with it.
  */
 export function positionListStatusFor(marketStatus: MarketStatus): PositionStatus {
   return marketStatus === 'settled' || marketStatus === 'voided' ? 'settled' : 'open';

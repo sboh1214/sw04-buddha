@@ -42,7 +42,7 @@ export type FinalizeResult =
   /**
    * The run committed its steps but some step of SETTLEMENT_STEPS is still not `done`, so the
    * market stays `resolved`. Unreachable while every step runs in one transaction (the loop in
-   * `finalizeMarket` finishes them all); the variant is the place #29 lands in.
+   * `finalizeMarket` finishes them all); the variant is where a step run on its own would land.
    */
   | { outcome: 'resolved'; marketId: string; pendingSteps: SettlementStep[] }
   | { outcome: 'skipped'; marketId: string; reason: FinalizeSkipReason };
@@ -300,9 +300,9 @@ async function recordStepFailure(
  * resolved → settled for one market (ADR-0046; PLAN 5.5 정산): the admin's judgement made the
  * result final and wrote one `pending` row per SETTLEMENT_STEPS step; this runs every step that
  * is not `done` yet and, once all of them are, settles the market (O-6: settled means every
- * step finished — `coin` today, #29 appends `score`). One transaction, all rows or nothing:
- * PLAN 5.5 allows committing per hundred accounts, but at MVP scale a single transaction is the
- * simpler invariant, and whether #29's step gets a transaction of its own is #29's call.
+ * step finished — `coin`, the only one). One transaction, all rows or nothing: PLAN 5.5 allows
+ * committing per hundred accounts, but at MVP scale a single transaction is the simpler
+ * invariant, and whether a step added later gets a transaction of its own is that step's call.
  *
  *  - market advisory lock, then the row FOR UPDATE, then the status re-check under the lock:
  *    only `resolved` is settled, so a duplicate job, the scan after the immediate job, or a run
@@ -310,7 +310,7 @@ async function recordStepFailure(
  *  - the step rows FOR UPDATE, then each step not `done` in SETTLEMENT_STEPS order, each
  *    marked `done` in the same transaction (`completeStep`). A missing row counts as pending;
  *  - the `settled` transition only when every step is `done` — the one place that condition
- *    lives, so #29 widens it here and nowhere else.
+ *    lives, so a step added later widens it here and nowhere else.
  *
  * Idempotent (M5 AC 3): a second run finds `status = 'settled'` and skips before touching a
  * position or a step, and the coin step's `settled = false` filter pays a row at most once
@@ -364,7 +364,7 @@ export async function finalizeMarket(
         .for('update');
       const done = new Set(stepRows.filter((row) => row.status === 'done').map((row) => row.step));
       // This run's coin step; all zero when the step was done before this run (only possible
-      // once #29 lets a step finish in a run of its own — the payload then counts this run).
+      // once a step added later finishes in a run of its own — the payload then counts this run).
       let coin: CoinStep = {
         positions: 0,
         settledAccounts: 0,
@@ -379,7 +379,7 @@ export async function finalizeMarket(
         if (done.has(step)) continue;
         progress.running = step;
         let stepAt: Date;
-        // One case per SETTLEMENT_STEPS entry; #29 adds `score`.
+        // One case per SETTLEMENT_STEPS entry.
         switch (step) {
           case 'coin': {
             const ran = await runCoinStep(tx, current, result);
@@ -396,7 +396,7 @@ export async function finalizeMarket(
 
       const pendingSteps = SETTLEMENT_STEPS.filter((step) => !done.has(step));
       if (pendingSteps.length > 0) {
-        // #29: what a run that leaves the market `resolved` publishes is that issue's call.
+        // What a run that leaves the market `resolved` publishes is that later step's call.
         return { outcome: 'resolved', marketId, pendingSteps } as const;
       }
       // Every step was done before this run (a row written by hand): nothing locked after the
