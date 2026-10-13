@@ -6,7 +6,7 @@
 -- 1. The wipe comes first: every table in schema `public` is truncated, RESTART IDENTITY
 --    CASCADE. `drizzle.__drizzle_migrations` is another schema and survives. The list is read
 --    from pg_tables, so no table is missed. The statement is WIPE_PUBLIC_TABLES_SQL
---    (src/wipe.ts), which the #149 reset runs again; wipe.test.ts keeps the two identical.
+--    (src/wipe.ts), which deploy/reset-db.sh runs again; wipe.test.ts keeps the two identical.
 --    TRUNCATE is the owner's privilege, and migrations run as buddha_migrate, the owner.
 -- 2. With every table empty, drizzle-kit's own enum rebuild (column to text, DROP TYPE, CREATE
 --    TYPE, cast back) has no row to fail the cast: MARKET_VOID_REFUND, the 'open' tick trigger

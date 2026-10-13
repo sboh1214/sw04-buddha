@@ -15,11 +15,11 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 /**
- * deploy/reset-db.sh (#149's reset, docs/RESET.md), run for real by bash against stand-ins for
- * `docker`, `findmnt` and `flock`, with its two host paths pointed into a temp directory. What it
- * pins is the owner's rule for the pre-reset dump (ADR-0048): deleted once every step has
- * succeeded, kept — and named — when any step after it fails. The script lives outside this
- * package; packages/db/turbo.json names it as an input of `test`.
+ * deploy/reset-db.sh (docs/RESET.md), run for real by bash against stand-ins for `docker`,
+ * `findmnt` and `flock`, with its two host paths pointed into a temp directory. What it pins is
+ * the owner's rule for the pre-reset dump (ADR-0048): deleted once every step has succeeded,
+ * kept — and named — when any step after it fails. The script lives outside this package;
+ * packages/db/turbo.json names it as an input of `test`.
  */
 
 const SCRIPT = readFileSync(new URL('../../../deploy/reset-db.sh', import.meta.url), 'utf8');
@@ -109,7 +109,9 @@ function dumpFiles(): string[] {
     .map((name) => join(dumps, name));
 }
 
-describe('deploy/reset-db.sh (#149, ADR-0048)', () => {
+// The script only ever runs on the Linux host, and this harness is POSIX (a ':'-joined PATH for
+// bash, file modes): skipped on a Windows checkout.
+describe.skipIf(process.platform === 'win32')('deploy/reset-db.sh (ADR-0048)', () => {
   it('runs every step in order and deletes its dump once the last one has succeeded', () => {
     const result = run(['--yes']);
     expect(result.status, result.stderr).toBe(0);

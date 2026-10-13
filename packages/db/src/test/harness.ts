@@ -78,7 +78,7 @@ export interface TestDb {
   db: Db;
   /**
    * Truncates every table in schema `public` (RESTART IDENTITY) with the statement migration
-   * 0017 and the #149 reset run (wipe.ts). Call in beforeEach.
+   * 0017 and deploy/reset-db.sh run (wipe.ts). Call in beforeEach.
    */
   reset(): Promise<void>;
   /** Releases the file lock and closes both connections. Call in afterAll. */

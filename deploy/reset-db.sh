@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Wipe the deployed database and Redis, then refill them with the seed: the reset #149 runs before
-# the first market opens, by the procedure in docs/RESET.md. Run as root on the host, from an SSM
-# session (`sudo bash /data/buddha/reset-db.sh --yes`). Every account, session, market, order,
-# fill, ledger entry and payment row goes; the only way back is the dump this script takes first.
+# Wipe the deployed database and Redis, then refill them with the seed, by the procedure in
+# docs/RESET.md. Run as root on the host, from an SSM session:
+# `sudo bash /data/buddha/reset-db.sh --yes`. Every account, session, market, order, fill, ledger
+# entry and payment row goes — the scope the owner chose for #125 (ADR-0048) — and the only way
+# back is the dump this script takes first. #149's pre-launch reset uses this procedure in the
+# scope #133 decides; if that keeps any data, narrow the wipe before running it.
 #
 #   reset-db.sh --yes     # dump, stop api + worker, wipe Postgres and Redis, migrate + seed, start
 #

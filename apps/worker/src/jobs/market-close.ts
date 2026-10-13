@@ -31,8 +31,10 @@ export interface CloseScanResult {
  * `closeAt` PATCHed later leaves the old delayed job in the queue (jobs.ts), and here it finds
  * `closeAt > now` and skips; a job that fires after the admin closed by hand finds `closed`
  * and skips; two workers racing on one market serialise on `lockMarket` and the second sees
- * the first's status. Never 'not_found' — markets are never deleted (every FK is RESTRICT), so
- * an unknown id is a broken producer and the job fails loudly rather than being retried into
+ * the first's status. Never 'not_found': no path deletes one market (every FK is RESTRICT); only
+ * the whole-database wipe does (migration 0017, deploy/reset-db.sh). An unknown id is therefore
+ * a job left over from before such a wipe — expected, it runs out of attempts (docs/RESET.md) —
+ * or a broken producer, and either way the job fails loudly rather than being retried into
  * silence.
  *
  * The event row is inserted FIRST so the market UPDATE can carry its id as `statusEventId`,

@@ -22,13 +22,14 @@ function withoutLeadingComments(statement: string): string {
 
 describe('the wipe statement (#125, #149)', () => {
   it('is the first statement of migration 0017, verbatim', () => {
-    // The #149 reset re-runs WIPE_PUBLIC_TABLES_SQL; it must be the very statement the deploy of
-    // #125 ran once, and it must run before 0017 drops the enum values a row could still hold.
+    // deploy/reset-db.sh re-runs WIPE_PUBLIC_TABLES_SQL; it must be the very statement the
+    // deploy of #125 ran once, and it must run before 0017 drops the enum values a row could
+    // still hold.
     const [first] = migrationSql('0017_remove_direct_amm').split(STATEMENT_BREAKPOINT);
     expect(withoutLeadingComments(first ?? '')).toBe(WIPE_PUBLIC_TABLES_SQL);
   });
 
-  it('is what the #149 reset runs: deploy/reset-db.sh calls wipe-cli, which runs this constant', () => {
+  it('is what the reset script runs: deploy/reset-db.sh calls wipe-cli, which runs this constant', () => {
     // The script lives outside this package, so packages/db/turbo.json names it as an input of
     // `test`: a change to it alone must not replay a cached pass.
     const script = readFileSync(new URL('../../../deploy/reset-db.sh', import.meta.url), 'utf8');
@@ -88,7 +89,7 @@ describe.skipIf(!hasTestDb())('the wipe statement (integration, docker test prof
     const migrations = await appliedMigrations();
     expect(migrations).toBeGreaterThan(0);
 
-    // As the migrate role, exactly as migration 0017 and the #149 reset run it.
+    // As the migrate role, exactly as migration 0017 and deploy/reset-db.sh run it.
     await migrate.query(WIPE_PUBLIC_TABLES_SQL);
 
     const after = await rowCounts();

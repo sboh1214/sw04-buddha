@@ -193,7 +193,7 @@ PLAN 부록 C의 다이어그램은 M4 이전 그림이라 위와 다르다(브�
 - **인프라**는 [terraform/](terraform/README.md)(리소스는 전부 `tf-buddha-` 접두사, 부트스트랩·롤백·복구·시크릿 교체 절차가 그 README에 있다).
 - **호스트에서 도는 것**은 [deploy/](deploy/)(`compose.yaml` · `Caddyfile` · `deploy.sh` · `host-setup.sh` · `reset-db.sh`) — api 이미지에 동봉되어 배포마다 `/data/buddha`에 풀린다. 이미지는 루트 `Dockerfile`의 세 타깃(`api` / `worker` / `web`)이다.
 - **배포**는 `main`에 push하면 [.github/workflows/deploy.yml](.github/workflows/deploy.yml)이 arm64 이미지를 ECR에 밀고 SSM으로 호스트에서 `migrate && seed` → 컨테이너 교체 → `/api/health` 스모크까지 한다. 롤백은 `gh workflow run deploy.yml --ref main -f image_tag=<sha>`. SSH는 없고 셸은 `aws ssm start-session`이다.
-- **운영 DB 초기화**는 [docs/RESET.md](docs/RESET.md). #125의 배포가 마이그레이션 0017로 계정까지 한 번 비우고 시드로 다시 채웠다. #149의 출시 전 재초기화는 호스트에서 `deploy/reset-db.sh`로 같은 문장을 다시 돌리고 Redis도 비운다.
+- **운영 DB 초기화**는 [docs/RESET.md](docs/RESET.md). #125의 배포가 마이그레이션 0017로 계정까지 한 번 비우고 시드로 다시 채웠다. 다시 비울 때는 호스트에서 `deploy/reset-db.sh`가 같은 문장을 돌리고 Redis도 비운다(계정까지 모두). #149의 출시 전 재초기화가 이 절차를 쓰고, 다시 할지와 남길 데이터는 #133이 정한다 — 무엇이든 남기기로 하면 그 전에 이 절차를 좁힌다.
 
 ## SmartroPay(스마트로페이) 결제
 
