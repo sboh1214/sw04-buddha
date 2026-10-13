@@ -1,13 +1,19 @@
 // Route discovery from the module graph, for the static suites that check a rule over EVERY
 // route — not over a list someone has to remember to extend (admin-audit.test.ts,
-// admin-access.test.ts).
-import { RequestMethod } from '@nestjs/common';
+// admin-access.test.ts, surface/registry.test.ts).
+import { RequestMethod, VERSION_NEUTRAL } from '@nestjs/common';
 // From `constants.js`, not the package root: the root re-exports these names as TYPES only, so
 // importing them from there compiles and then reads `Reflect.getMetadata(undefined, …)` at
 // runtime — which answers `undefined` for every handler and turns a suite into a test that
 // discovers nothing and passes. Each suite keeps a "finds the admin surface at all" case because
 // that is exactly what happened while writing the first one.
-import { METHOD_METADATA, MODULE_METADATA, PATH_METADATA } from '@nestjs/common/constants.js';
+import {
+  GUARDS_METADATA,
+  METHOD_METADATA,
+  MODULE_METADATA,
+  PATH_METADATA,
+  VERSION_METADATA,
+} from '@nestjs/common/constants.js';
 import { AppModule } from '../app.module.js';
 
 export interface DiscoveredRoute {
@@ -16,6 +22,11 @@ export interface DiscoveredRoute {
   path: string;
   /** `METHOD /path`. */
   key: string;
+  /**
+   * Where the app serves it, parameters as written: `/api/v1/markets/:id`, or `/api/health` for
+   * a VERSION_NEUTRAL controller (main.ts: prefix `api`, URI versioning, default version 1).
+   */
+  url: string;
   controller: abstract new (...args: never[]) => unknown;
   handler: (...args: unknown[]) => unknown;
 }
@@ -59,6 +70,20 @@ const METHOD_NAMES: Readonly<Record<number, string>> = {
   [RequestMethod.HEAD]: 'HEAD',
 };
 
+/** main.ts `enableVersioning({ defaultVersion: '1' })`. */
+const DEFAULT_VERSION = '1';
+
+/** `/api/v1`, or `/api` for a route that answers on every version. */
+function prefixOf(controller: object, handler: object): string {
+  const version: unknown =
+    Reflect.getMetadata(VERSION_METADATA, handler) ??
+    Reflect.getMetadata(VERSION_METADATA, controller) ??
+    DEFAULT_VERSION;
+  if (version === VERSION_NEUTRAL) return '/api';
+  const first: unknown = Array.isArray(version) ? version[0] : version;
+  return `/api/v${String(first)}`;
+}
+
 /** Every route of every controller reachable from AppModule. */
 export function discoverRoutes(): DiscoveredRoute[] {
   const routes: DiscoveredRoute[] = [];
@@ -78,6 +103,7 @@ export function discoverRoutes(): DiscoveredRoute[] {
         method,
         path,
         key: `${method} ${path}`,
+        url: `${prefixOf(controller, handler)}${path}`,
         controller: controller as DiscoveredRoute['controller'],
         handler: handler as DiscoveredRoute['handler'],
       });
@@ -89,4 +115,12 @@ export function discoverRoutes(): DiscoveredRoute[] {
 /** The admin surface: `/admin` and everything under it. */
 export function isAdminPath(path: string): boolean {
   return path === '/admin' || path.startsWith('/admin/');
+}
+
+/** Class guards, then the handler's: the order Nest runs them in. */
+export function guardsOf(route: DiscoveredRoute): unknown[] {
+  return [
+    ...((Reflect.getMetadata(GUARDS_METADATA, route.controller) as unknown[] | undefined) ?? []),
+    ...((Reflect.getMetadata(GUARDS_METADATA, route.handler) as unknown[] | undefined) ?? []),
+  ];
 }

@@ -8,14 +8,13 @@
  * Two halves: a static walk of the guard metadata (no Postgres, no Redis: runs everywhere), and
  * the same surface requested for real as a member (403) and with no session (401).
  */
-import { GUARDS_METADATA } from '@nestjs/common/constants.js';
 import { schema } from '@buddha/db';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { SessionGuard } from '../auth/session.guard.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
-import { discoverRoutes, isAdminPath, type DiscoveredRoute } from '../test/routes.js';
+import { discoverRoutes, guardsOf, isAdminPath, type DiscoveredRoute } from '../test/routes.js';
 import { hasTestInfra } from '../test/setup-env.js';
 
 const routes = discoverRoutes();
@@ -27,14 +26,6 @@ const OPERATION_RECORDS = [
   'GET /admin/release-settings/changes',
   'GET /admin/admins/changes',
 ];
-
-/** Class guards, then the handler's: the order Nest runs them in. */
-function guardsOf(route: DiscoveredRoute): unknown[] {
-  return [
-    ...((Reflect.getMetadata(GUARDS_METADATA, route.controller) as unknown[] | undefined) ?? []),
-    ...((Reflect.getMetadata(GUARDS_METADATA, route.handler) as unknown[] | undefined) ?? []),
-  ];
-}
 
 describe('admin access (static)', () => {
   it('finds the admin surface and the operation records at all', () => {
@@ -83,7 +74,7 @@ describe.skipIf(!hasTestInfra)('admin access (integration)', () => {
 
   /** `/api/v1/admin/...` with a uuid for every parameter: the guards answer before any pipe. */
   function urlOf(route: DiscoveredRoute): string {
-    return `/api/v1${route.path.replaceAll(/:\w+/g, '00000000-0000-4000-8000-000000000000')}`;
+    return route.url.replaceAll(/:\w+/g, '00000000-0000-4000-8000-000000000000');
   }
   function call(route: DiscoveredRoute, cookie?: string) {
     const safe = route.method === 'GET' || route.method === 'HEAD';
