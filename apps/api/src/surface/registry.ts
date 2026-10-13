@@ -1,3 +1,6 @@
+import { errorEnvelopeSchema, realtimeEventSchema } from '@buddha/shared';
+import type * as z from 'zod';
+
 /**
  * The API's public and owner-only routes, registered (#113). A public route is one with no
  * SessionGuard: anyone reaches it, signed in or not. An owner-only route has SessionGuard and
@@ -18,9 +21,9 @@
  *
  * better-auth's routes under /api/auth are registered the same way (AUTH_ROUTES), found from
  * the auth instance, and so is the realtime surface: every Socket.IO gateway by namespace
- * (REALTIME_GATEWAYS) and every place the API sends on a socket (REALTIME_EMITS), both found by
- * registry.test.ts from the module graph and the sources; the event types themselves are
- * REALTIME_EVENT_REGISTRY's (@buddha/shared).
+ * (REALTIME_GATEWAYS) and every place the API sends on a socket with the schema of what it
+ * sends (REALTIME_EMITS), both found by registry.test.ts from the module graph and the sources;
+ * the event types themselves are REALTIME_EVENT_REGISTRY's (@buddha/shared).
  */
 
 export interface RegisteredRoute {
@@ -266,38 +269,66 @@ export const REALTIME_GATEWAYS: Readonly<Record<string, RegisteredGateway>> = {
   },
 };
 
+export interface RegisteredEmit {
+  /** The file under `src/`. */
+  readonly file: string;
+  /** The event as the call writes it. */
+  readonly event: string;
+  /**
+   * What goes out: the zod schema of the payload, or `null` for a bare signal. registry.test.ts
+   * reads what the call sends — the arguments after the event, an acknowledgement's arguments, a
+   * reply's returned value — and fails on a property name, at any level, of its type or of an
+   * object literal written in it, that the schema does not have, and on one (the schema's too)
+   * that PRIVATE_DATA names or that names an excluded feature or a probability. A send whose
+   * payload cannot be read where it is sent (an acknowledgement handed on) fails.
+   */
+  readonly payload: z.ZodType | null;
+  /**
+   * The payload is a realtime event that goes only into the room of the channel family whose
+   * schema parsed it (REALTIME_EVENT_REGISTRY): realtime-events.test.ts holds a market-channel
+   * event to the public names, and a user-channel one is the owner's own. Only that its names
+   * are the schema's is checked here.
+   */
+  readonly roomEvent?: true;
+  /** What goes out to whom, and why. */
+  readonly reason: string;
+}
+
 /**
  * Every place the API sends on a socket: the file under `src/`, the event as the call writes it,
- * and what goes out. A send is an emit, a `send` or `write`, a message handler's returned value
- * (`reply to '<message>'`) or a call of a client's acknowledgement callback — a handler's
- * `@Ack()` parameter, a listener's last argument (`ack to '<message>'`). registry.test.ts reads
- * the sources and fails on a send not listed here, so an event cannot reach a room around the
- * channel families the gateway parses with, nor an answer reach a client unreviewed.
+ * what goes out (its schema) and why. A send is an emit, a `send` or `write`, a message handler's
+ * returned value (`reply to '<message>'`) or a call of a client's acknowledgement callback — a
+ * handler's `@Ack()` parameter, a listener's last argument (`ack to '<message>'`).
+ * registry.test.ts reads the sources and fails on a send not listed here and on a payload its
+ * schema does not declare, so an event cannot reach a room around the channel families the
+ * gateway parses with, nor an answer reach a client unreviewed or carry what the line does not say.
  */
-export const REALTIME_EMITS: readonly {
-  readonly file: string;
-  readonly event: string;
-  readonly reason: string;
-}[] = [
+export const REALTIME_EMITS: readonly RegisteredEmit[] = [
   {
     file: 'realtime/market.gateway.ts',
     event: 'event.type',
+    payload: realtimeEventSchema,
+    roomEvent: true,
     reason:
       '방의 이벤트: 채널의 계열 스키마(시장 방은 marketRealtimeEventSchema, 본인 방은 userRealtimeEventSchema)로 파싱한 것만 그 방에 보낸다. 유형은 REALTIME_EVENT_REGISTRY의 것이다.',
   },
   {
     file: 'realtime/market.gateway.ts',
     event: 'RESYNC_EVENT',
+    payload: null,
     reason: '구독이 끊겼다 다시 이어졌을 때 연결된 모든 소켓에 다시 읽으라는 신호. 본문이 없다.',
   },
   {
     file: 'realtime/market.gateway.ts',
     event: 'REALTIME_EXCEPTION_EVENT',
-    reason: '메시지 속도 제한의 거절 봉투(RATE_LIMITED): 그 소켓에만',
+    payload: errorEnvelopeSchema,
+    reason:
+      '메시지 속도 제한의 거절 봉투(RATE_LIMITED, PLAN 7.4): 그 소켓에만, details는 다시 보낼 수 있을 때까지의 초',
   },
   {
     file: 'realtime/realtime-exception.filter.ts',
     event: 'REALTIME_EXCEPTION_EVENT',
+    payload: errorEnvelopeSchema,
     reason: '핸들러가 거절한 메시지의 오류 봉투(PLAN 7.4): 그 소켓에만',
   },
 ];

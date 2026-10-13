@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
   ADMIN_SCREEN_FEATURES,
@@ -14,12 +15,14 @@ import { describe, expect, it } from 'vitest';
 import { type CopyKey, copy } from './copy';
 import {
   LEGAL_BODIES,
+  SCRIPT,
   SRC,
   type SourcePlace,
   copyRefsOf,
   literalsOf,
   localImportsOf,
   screenSources,
+  scriptKindOf,
   usesOf,
 } from './test/screen-text';
 
@@ -232,16 +235,27 @@ function internalPath(text: string): string | undefined {
 }
 
 /**
- * What this app serves besides pages, registered (#113, owner decision 2026-10-13 (a)): a route
- * handler (a `route.ts` under `app/`), a metadata route (`favicon.ico`, `sitemap`, `robots`,
- * `manifest`, an Open Graph or Twitter image, an icon under `app/`, generated or static), a
- * Pages Router API route (`pages/api/`) or a server action (a `'use server'` file or function)
- * answers a request with whatever it returns, outside the API's registry and its private-data
- * checks. None exists — reads and writes go to the API — so one added fails below until it is
- * written here with what it answers and why it may (keyed by the file under `src/`).
- * docs/GUARDS.md has the rule.
+ * What this app serves besides pages, registered (#113, owner decision 2026-10-13 (a)): Next's
+ * proxy (`proxy.ts`, or `middleware.ts`, beside `app/`), which runs before the routes it matches
+ * and may answer by itself, a route handler (a `route.ts` under `app/`), a metadata route
+ * (`favicon.ico`, `sitemap`, `robots`, `manifest`, an Open Graph or Twitter image, an icon under
+ * `app/`, generated or static), a Pages Router API route (`pages/api/`) or a server action (a
+ * `'use server'` file or function) answers a request with whatever it returns, outside the API's
+ * registry and its private-data checks. Reads and writes go to the API, so only the proxy is here;
+ * one added fails below until it is written here with what it answers and why it may. Keyed by the
+ * file under `src/`, and a route handler by its file and each HTTP method it exports
+ * (`app/feed/route.ts GET`): each is a handler of its own. docs/GUARDS.md has the rule.
  */
-const WEB_SERVER_ENDPOINTS: Readonly<Record<string, string>> = {};
+const WEB_SERVER_ENDPOINTS: Readonly<Record<string, string>> = {
+  'proxy.ts':
+    'Next 프록시(middleware의 후속): /admin·/my 요청에만 맞춰, 관리자·MY 게이트가 로그인 뒤 돌아올 주소를 만들도록 요청의 경로와 쿼리를 x-pathname·x-search 헤더에 덮어써 넘긴다(NextResponse.next). 스스로 답하지 않는다.',
+};
+
+/** Next's proxy (the successor to `middleware`): a script of that name beside `app/`. */
+const PROXY = /^(?:proxy|middleware)\.[cm]?[jt]sx?$/;
+
+/** The HTTP methods a route handler exports a function for. */
+const HTTP_METHODS = new Set(['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE']);
 
 /**
  * Next's metadata files, by name whatever the extension: each answers a request of its own —
@@ -250,15 +264,6 @@ const WEB_SERVER_ENDPOINTS: Readonly<Record<string, string>> = {};
  */
 const METADATA_ROUTE =
   /^(?:favicon|sitemap|robots|manifest|opengraph-image|twitter-image|icon|apple-icon)\d*\./;
-
-/** A script Next may run: TypeScript or JavaScript, ES module or CommonJS. */
-const SCRIPT = /\.[cm]?[jt]sx?$/;
-
-/** How to parse a script: with JSX or not, as TypeScript or JavaScript. */
-function scriptKindOf(file: string): ts.ScriptKind {
-  if (/\.[jt]sx$/.test(file)) return file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.JSX;
-  return /\.[cm]?js$/.test(file) ? ts.ScriptKind.JS : ts.ScriptKind.TS;
-}
 
 /** Whether a directive prologue — the string statements a body opens with — says 'use server'. */
 function saysUseServer(statements: readonly ts.Statement[]): boolean {
@@ -282,9 +287,69 @@ function declaresServerAction(file: string, text: string): boolean {
   return saysUseServer(tree.statements) || ts.forEachChild(tree, visit) === true;
 }
 
+/** Whether `node` carries the `export` modifier. */
+const exported = (node: ts.Node) =>
+  ts.canHaveModifiers(node) &&
+  (ts.getModifiers(node) ?? []).some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword);
+
+/** Whether `node` is `exports` or `module.exports`. */
+const isCommonJsExports = (node: ts.Expression) =>
+  (ts.isIdentifier(node) && node.text === 'exports') ||
+  (ts.isPropertyAccessExpression(node) &&
+    ts.isIdentifier(node.expression) &&
+    node.expression.text === 'module' &&
+    node.name.text === 'exports');
+
+/**
+ * The HTTP methods a route handler exports, in the order it writes them: `export function GET`,
+ * `export const PUT = …` (destructured too), `export { handler as POST }`, a re-export by name,
+ * and CommonJS (`exports.GET =`, `module.exports = { GET }`). `export * from` stands for whatever
+ * the other module exports and is read as `*`.
+ */
+function routeMethodsOf(file: string, text: string): string[] {
+  const tree = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, scriptKindOf(file));
+  const names: string[] = [];
+  const bindings = (name: ts.BindingName): string[] =>
+    ts.isIdentifier(name)
+      ? [name.text]
+      : name.elements.flatMap((element) =>
+          ts.isOmittedExpression(element) ? [] : bindings(element.name),
+        );
+  const visit = (node: ts.Node): void => {
+    if (ts.isFunctionDeclaration(node) && exported(node) && node.name) {
+      names.push(node.name.text);
+    } else if (ts.isVariableStatement(node) && exported(node)) {
+      names.push(...node.declarationList.declarations.flatMap((d) => bindings(d.name)));
+    } else if (ts.isExportDeclaration(node)) {
+      if (node.exportClause === undefined) names.push('*');
+      else if (ts.isNamedExports(node.exportClause)) {
+        names.push(...node.exportClause.elements.map((element) => element.name.text));
+      }
+    } else if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind === ts.SyntaxKind.EqualsToken
+    ) {
+      const target = node.left;
+      if (ts.isPropertyAccessExpression(target) && isCommonJsExports(target.expression)) {
+        names.push(target.name.text);
+      } else if (isCommonJsExports(target) && ts.isObjectLiteralExpression(node.right)) {
+        names.push(
+          ...node.right.properties.flatMap((property) =>
+            property.name && ts.isIdentifier(property.name) ? [property.name.text] : [],
+          ),
+        );
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(tree);
+  return [...new Set(names.filter((name) => name === '*' || HTTP_METHODS.has(name)))];
+}
+
 /** Why a file is a server endpoint, or undefined when it is not one. */
 function serverEndpointOf(file: string, text: string): string | undefined {
   const name = path.basename(file);
+  if (path.dirname(file) === SRC && PROXY.test(name)) return 'proxy';
   if (under(file, APP) && /^route\./.test(name) && SCRIPT.test(name)) return 'route handler';
   if (under(file, APP) && METADATA_ROUTE.test(name)) return 'metadata route';
   if (under(file, at('pages', 'api'))) return 'API route';
@@ -293,9 +358,21 @@ function serverEndpointOf(file: string, text: string): string | undefined {
 }
 
 /**
- * Every file that could answer a request, whatever its extension (the screen walk reads only
- * `.ts`/`.tsx`): everything under `app/` and `pages/`, and every script under `src/`, where a
- * server action's directive may stand. Tests and the test support are not served.
+ * What a file registers as, keyed as WEB_SERVER_ENDPOINTS is: nothing when it serves nothing, the
+ * file under `src/` for one endpoint, the file and each method for a route handler.
+ */
+function endpointKeysOf(file: string, text: string): string[] {
+  const kind = serverEndpointOf(file, text);
+  if (kind === undefined) return [];
+  const key = path.relative(SRC, file).split(path.sep).join('/');
+  const methods = kind === 'route handler' ? routeMethodsOf(file, text) : [];
+  return methods.length === 0 ? [key] : methods.map((method) => `${key} ${method}`);
+}
+
+/**
+ * Every file that could answer a request, whatever its extension (the screen walk reads scripts
+ * only): everything under `app/` and `pages/`, and every script under `src/`, where a server
+ * action's directive may stand. Tests and the test support are not served.
  */
 function servedFiles(dir: string = SRC): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -348,6 +425,27 @@ describe('excluded features on screens (#113)', () => {
     expect(literalHits(at('app', 'charge', 'x.tsx'), '충전하기', false)).toEqual([]);
     // Hidden paid code is still held to everything else.
     expect(literalHits(at('app', 'charge', 'x.tsx'), '베팅', false)).toHaveLength(1);
+  });
+
+  it('reads JavaScript screen sources as well: JSX text in .jsx, imports of .js and .jsx', () => {
+    const page = 'export default function Page() { return <p>출석 체크</p>; }';
+    expect(literalsOf(at('app', 'x', 'page.jsx'), page).map(({ text }) => text)).toEqual([
+      '출석 체크',
+    ]);
+    const dir = mkdtempSync(path.join(tmpdir(), 'screen-imports-'));
+    try {
+      for (const name of ['card.jsx', 'format.js', 'page.jsx']) {
+        writeFileSync(path.join(dir, name), '');
+      }
+      expect(
+        localImportsOf(
+          path.join(dir, 'page.jsx'),
+          "import Card from './card';\nimport { format } from './format';",
+        ),
+      ).toEqual([path.join(dir, 'card.jsx'), path.join(dir, 'format.js')]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('allows a negative notice on the service guide only (owner decisions 2026-10-13, 2026-10-14 #113)', () => {
@@ -537,6 +635,54 @@ describe('excluded features in screen addresses and menus (#113)', () => {
 });
 
 describe('what the web serves besides pages (#113)', () => {
+  it('knows Next’s proxy beside app/: it runs before the routes it matches and may answer itself', () => {
+    for (const name of ['proxy.ts', 'proxy.js', 'proxy.mjs', 'middleware.ts', 'middleware.js']) {
+      expect(serverEndpointOf(at(name), ''), name).toBe('proxy');
+    }
+    // Only there: a file of that name anywhere else is no entry point.
+    expect(serverEndpointOf(at('lib', 'proxy.ts'), '')).toBeUndefined();
+    expect(serverEndpointOf(at('app', 'middleware.ts'), '')).toBeUndefined();
+    expect(serverEndpointOf(at('proxy.md'), '')).toBeUndefined();
+  });
+
+  it('reads each HTTP method a route handler exports, however it exports it', () => {
+    const route = at('app', 'feed', 'route.ts');
+    const methods = (text: string) => routeMethodsOf(route, text);
+    expect(methods('export async function GET() {}\nexport function POST() {}')).toEqual([
+      'GET',
+      'POST',
+    ]);
+    expect(
+      methods(
+        'export const PUT = async () => Response.json({});\nexport const { PATCH, DELETE } = h;',
+      ),
+    ).toEqual(['PUT', 'PATCH', 'DELETE']);
+    expect(
+      methods('const h = () => new Response();\nexport { h as GET, h as HEAD, h as OPTIONS };'),
+    ).toEqual(['GET', 'HEAD', 'OPTIONS']);
+    expect(methods("export { GET, handler as POST } from './handlers';")).toEqual(['GET', 'POST']);
+    // A re-export of everything cannot be read: it stands for whatever that module exports.
+    expect(methods("export * from './handlers';")).toEqual(['*']);
+    expect(
+      routeMethodsOf(
+        at('app', 'feed', 'route.js'),
+        'exports.GET = async () => {};\nmodule.exports.POST = h;\nmodule.exports = { PUT, DELETE: h };',
+      ),
+    ).toEqual(['GET', 'POST', 'PUT', 'DELETE']);
+    // Not a method: another export, a local, another case.
+    expect(
+      methods("export const dynamic = 'force-static';\nconst GET = 1;\nexport function get() {}"),
+    ).toEqual([]);
+    // Each method is its own registry entry; a file that exports none is one entry.
+    expect(endpointKeysOf(route, 'export function GET() {}\nexport function POST() {}')).toEqual([
+      'app/feed/route.ts GET',
+      'app/feed/route.ts POST',
+    ]);
+    expect(endpointKeysOf(route, '')).toEqual(['app/feed/route.ts']);
+    expect(endpointKeysOf(at('proxy.ts'), 'export function proxy() {}')).toEqual(['proxy.ts']);
+    expect(endpointKeysOf(at('app', 'x', 'page.tsx'), '')).toEqual([]);
+  });
+
   it('knows a route handler, a metadata route, an API route and a server action', () => {
     expect(serverEndpointOf(at('app', 'feed', 'route.ts'), '')).toBe('route handler');
     expect(serverEndpointOf(at('app', 'feed', 'route.js'), '')).toBe('route handler');
@@ -623,16 +769,15 @@ describe('what the web serves besides pages (#113)', () => {
     // The walk reached past the screen sources: every file under app/, whatever it is.
     expect(files).toEqual(expect.arrayContaining(SOURCES.filter((file) => under(file, APP))));
     expect(files.filter((file) => under(file, at('test')) || /\.test\./.test(file))).toEqual([]);
-    const found = files.flatMap((file) => {
-      const kind = serverEndpointOf(file, SCRIPT.test(file) ? readFileSync(file, 'utf8') : '');
-      return kind === undefined ? [] : [`${path.relative(SRC, file)} (${kind})`];
-    });
+    const found = files.flatMap((file) =>
+      endpointKeysOf(file, SCRIPT.test(file) ? readFileSync(file, 'utf8') : ''),
+    );
     expect(files.length).toBeGreaterThan(100);
+    // The walk found the proxy.
+    expect(found).toContain('proxy.ts');
     expect({
-      unregistered: found.filter((entry) => !(entry.split(' ')[0]! in WEB_SERVER_ENDPOINTS)),
-      stale: Object.keys(WEB_SERVER_ENDPOINTS).filter(
-        (file) => !found.some((entry) => entry.startsWith(`${file} `)),
-      ),
+      unregistered: found.filter((key) => !(key in WEB_SERVER_ENDPOINTS)),
+      stale: Object.keys(WEB_SERVER_ENDPOINTS).filter((key) => !found.includes(key)),
     }).toEqual({ unregistered: [], stale: [] });
     for (const [file, reason] of Object.entries(WEB_SERVER_ENDPOINTS)) {
       expect(reason.trim(), file).not.toBe('');

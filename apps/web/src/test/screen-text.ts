@@ -28,15 +28,32 @@ export const LEGAL_BODIES: readonly string[] = [
   'cash-notice.ts',
 ].map((name) => path.join(SRC, 'legal', name));
 
-/** Every .ts/.tsx under `dir` that can render text: not a legal body, not a test or its support. */
+/**
+ * A script: TypeScript or JavaScript, with JSX or not, ES module or CommonJS. Next takes `.js` and
+ * `.jsx` pages as well as `.ts` and `.tsx` (`pageExtensions`), and any of them can be imported.
+ */
+export const SCRIPT = /\.[cm]?[jt]sx?$/;
+
+/** A test or a declaration file: never rendered. */
+const NOT_RENDERED = /\.(test|spec|d)\.[cm]?[jt]sx?$/;
+
+/** How to parse a script: with JSX or not, as TypeScript or JavaScript. */
+export function scriptKindOf(file: string): ts.ScriptKind {
+  if (file.endsWith('.tsx')) return ts.ScriptKind.TSX;
+  if (file.endsWith('.jsx')) return ts.ScriptKind.JSX;
+  return /\.[cm]?js$/.test(file) ? ts.ScriptKind.JS : ts.ScriptKind.TS;
+}
+
+/**
+ * Every script under `dir` that can render text, TypeScript or JavaScript: not a legal body, not
+ * a test, a declaration file or the test support.
+ */
 export function screenSources(dir: string = SRC): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) return full === TEST_SUPPORT ? [] : screenSources(full);
     const screen =
-      /\.tsx?$/.test(entry.name) &&
-      !/\.(test|d)\.tsx?$/.test(entry.name) &&
-      !LEGAL_BODIES.includes(full);
+      SCRIPT.test(entry.name) && !NOT_RENDERED.test(entry.name) && !LEGAL_BODIES.includes(full);
     return screen ? [full] : [];
   });
 }
@@ -89,7 +106,7 @@ function parse(fileName: string, source: string): ts.SourceFile {
     source,
     ts.ScriptTarget.Latest,
     true,
-    fileName.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+    scriptKindOf(fileName),
   );
 }
 
@@ -158,7 +175,11 @@ export function copyRefsOf(fileName: string, source: string): CopyRef[] {
   return found;
 }
 
-const MODULE_FILES = ['', '.ts', '.tsx', '/index.ts', '/index.tsx'];
+const MODULE_FILES = [
+  '',
+  ...['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'],
+  ...['.ts', '.tsx', '.js', '.jsx'].map((extension) => `/index${extension}`),
+];
 
 /**
  * The sources under `src/` a file imports, re-exports from or loads with `import()`, resolved to

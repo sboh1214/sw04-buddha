@@ -19,6 +19,9 @@ describe('PRIVATE_DATA (#113)', () => {
         expect(run.length, item.id).toBeGreaterThan(0);
         for (const word of run) expect(word, item.id).toMatch(/^[a-z]+$/);
       }
+      for (const word of [...(item.owned?.words ?? []), ...(item.owned?.whose ?? [])]) {
+        expect(word, item.id).toMatch(/^[a-z]+$/);
+      }
       if (item.pending !== undefined) expect(item.pending.trim(), item.id).not.toBe('');
     }
   });
@@ -55,6 +58,14 @@ describe('findPrivateField', () => {
     ['realizedPnlCoin', 'pnl'],
     ['unrealizedProfit', 'pnl'],
     ['myFills', 'fills'],
+    ['userFills', 'fills'],
+    ['accountFills', 'fills'],
+    ['fillsByUser', 'fills'],
+    ['fills_by_account', 'fills'],
+    ['traderFills', 'fills'],
+    ['ownFills', 'fills'],
+    ['memberTradeHistory', 'fills'],
+    ['userTrades', 'fills'],
     ['userId', 'counterparty'],
     ['accountId', 'counterparty'],
     ['counterpartyType', 'counterparty'],
@@ -89,6 +100,13 @@ describe('findPrivateField', () => {
     'volumeCoin',
     'tradeCount',
     'traderCount',
+    'participantCount',
+    'fills',
+    'recentFills',
+    'fillCount',
+    'lastFill',
+    'marketFills',
+    'trades',
     'outcome',
     'side',
     'qty',
@@ -110,6 +128,7 @@ describe('findPrivateField', () => {
 
   it('reports the item and the words that matched', () => {
     expect(findPrivateField('userRealName')).toEqual([{ item: 'real-name', words: 'real name' }]);
+    expect(findPrivateField('fillsByUser')).toEqual([{ item: 'fills', words: 'user fills' }]);
     expect(findPrivateField('myBalance')).toEqual([
       { item: 'balance', words: 'balance' },
       { item: 'fills', words: 'my' },

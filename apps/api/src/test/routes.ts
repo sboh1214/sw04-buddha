@@ -2,6 +2,8 @@
 // for the static suites that check a rule over EVERY route or gateway — not over a list someone
 // has to remember to extend (admin-audit.test.ts, admin-access.test.ts, surface/registry.test.ts).
 import { RequestMethod, VERSION_NEUTRAL } from '@nestjs/common';
+import { RouteParamtypes } from '@nestjs/common/enums/route-paramtypes.enum.js';
+import { MetadataScanner } from '@nestjs/core';
 // From `constants.js`, not the package root: the root re-exports these names as TYPES only, so
 // importing them from there compiles and then reads `Reflect.getMetadata(undefined, …)` at
 // runtime — which answers `undefined` for every handler and turns a suite into a test that
@@ -12,6 +14,7 @@ import {
   METHOD_METADATA,
   MODULE_METADATA,
   PATH_METADATA,
+  ROUTE_ARGS_METADATA,
   VERSION_METADATA,
 } from '@nestjs/common/constants.js';
 import {
@@ -39,6 +42,8 @@ export interface DiscoveredRoute {
    */
   url: string;
   controller: abstract new (...args: never[]) => unknown;
+  /** The handler's method name, its own or inherited. */
+  name: string;
   handler: (...args: unknown[]) => unknown;
 }
 
@@ -98,15 +103,36 @@ function prefixOf(controller: object, handler: object): string {
   return `/api/v${String(first)}`;
 }
 
-/** Every route of every controller reachable from AppModule. */
-export function discoverRoutes(): DiscoveredRoute[] {
+const scanner = new MetadataScanner();
+
+/**
+ * The methods Nest looks at for handlers: the class's own and every one it inherits, nearest
+ * first, less accessors and the constructor — Nest's own MetadataScanner, so a handler a
+ * controller or a gateway inherits is found as Nest maps it.
+ */
+function methodsOf(type: { prototype: object }): string[] {
+  return scanner.getAllMethodNames(type.prototype);
+}
+
+/** The class that declares `method` along the prototype chain: `Base.ping` for an inherited one. */
+function declaringClassOf(type: { prototype: object; name: string }, method: string): string {
+  for (let prototype: object | null = type.prototype; prototype;) {
+    if (Object.hasOwn(prototype, method)) {
+      return (prototype as { constructor: { name: string } }).constructor.name;
+    }
+    prototype = Reflect.getPrototypeOf(prototype);
+  }
+  return type.name;
+}
+
+/** Every route of every controller reachable from `root` (AppModule). */
+export function discoverRoutes(root: unknown = AppModule): DiscoveredRoute[] {
   const routes: DiscoveredRoute[] = [];
-  for (const controller of membersOf('controllers', AppModule)) {
+  for (const controller of membersOf('controllers', root)) {
     if (typeof controller !== 'function') continue;
     const base = (Reflect.getMetadata(PATH_METADATA, controller) as string | undefined) ?? '';
     const prototype = (controller as { prototype: object }).prototype;
-    for (const name of Object.getOwnPropertyNames(prototype)) {
-      if (name === 'constructor') continue;
+    for (const name of methodsOf(controller)) {
       const handler = (prototype as Record<string, unknown>)[name];
       if (typeof handler !== 'function') continue;
       const suffix = Reflect.getMetadata(PATH_METADATA, handler) as string | undefined;
@@ -119,11 +145,40 @@ export function discoverRoutes(): DiscoveredRoute[] {
         key: `${method} ${path}`,
         url: `${prefixOf(controller, handler)}${path}`,
         controller: controller as DiscoveredRoute['controller'],
+        name,
         handler: handler as DiscoveredRoute['handler'],
       });
     }
   }
   return routes;
+}
+
+/** A `@Query()` parameter as Nest keeps it: a key it reads, or a schema of the whole query. */
+interface QueryArg {
+  data?: unknown;
+  schema?: unknown;
+}
+
+/** The keys of a schema of the query: a zod object's shape. */
+function schemaKeys(schema: unknown): string[] | undefined {
+  const shape = (schema as { shape?: unknown } | null)?.shape;
+  return shape !== null && typeof shape === 'object' ? Object.keys(shape) : undefined;
+}
+
+/**
+ * The query keys a route reads: each `@Query('key')`, and the keys of a `@Query({ schema })`
+ * object. `*` when a `@Query()` takes the whole query with no object schema, so its keys cannot
+ * be listed.
+ */
+export function queryKeysOf(route: DiscoveredRoute): string[] {
+  const args = (Reflect.getMetadata(ROUTE_ARGS_METADATA, route.controller, route.name) ??
+    {}) as Record<string, QueryArg>;
+  const keys = Object.entries(args)
+    .filter(([key]) => key.split(':')[0] === String(RouteParamtypes.QUERY))
+    .flatMap(([, arg]) =>
+      typeof arg.data === 'string' ? [arg.data] : (schemaKeys(arg.schema) ?? ['*']),
+    );
+  return [...new Set(keys)].sort();
 }
 
 export interface DiscoveredGateway {
@@ -132,8 +187,9 @@ export interface DiscoveredGateway {
   /** The messages a client may send it (`@SubscribeMessage`), sorted. */
   messages: string[];
   /**
-   * Its message handlers, `Class.method`, each with the positions of its `@Ack()` parameters
-   * (the client's acknowledgement callback, which the handler calls itself), sorted.
+   * Its message handlers, `Class.method` of the class that declares them (an inherited one is
+   * the base class's), each with the positions of its `@Ack()` parameters (the client's
+   * acknowledgement callback, which the handler calls itself), sorted.
    */
   handlers: { name: string; acks: number[] }[];
   gateway: abstract new (...args: never[]) => unknown;
@@ -152,11 +208,11 @@ function acksOf(gateway: DiscoveredGateway['gateway'], method: string): number[]
 }
 
 /**
- * Every `@WebSocketGateway` provider reachable from AppModule, once each. A provider given as
- * `{ provide, useClass }` is read through its class.
+ * Every `@WebSocketGateway` provider reachable from `root` (AppModule), once each, with its own
+ * and inherited handlers. A provider given as `{ provide, useClass }` is read through its class.
  */
-export function discoverGateways(): DiscoveredGateway[] {
-  const classes = membersOf('providers', AppModule).map((provider) =>
+export function discoverGateways(root: unknown = AppModule): DiscoveredGateway[] {
+  const classes = membersOf('providers', root).map((provider) =>
     typeof provider === 'object' && provider !== null && 'useClass' in provider
       ? provider.useClass
       : provider,
@@ -170,7 +226,7 @@ export function discoverGateways(): DiscoveredGateway[] {
       const options = Reflect.getMetadata(GATEWAY_OPTIONS, gateway) as
         { namespace?: string | RegExp } | undefined;
       const prototype = gateway.prototype as Record<string, unknown>;
-      const methods = Object.getOwnPropertyNames(prototype).filter((name) => {
+      const methods = methodsOf(gateway).filter((name) => {
         const handler = prototype[name];
         return (
           typeof handler === 'function' &&
@@ -183,7 +239,10 @@ export function discoverGateways(): DiscoveredGateway[] {
           .map((method) => String(Reflect.getMetadata(MESSAGE_METADATA, prototype[method]!)))
           .sort(),
         handlers: methods
-          .map((method) => ({ name: `${gateway.name}.${method}`, acks: acksOf(gateway, method) }))
+          .map((method) => ({
+            name: `${declaringClassOf(gateway, method)}.${method}`,
+            acks: acksOf(gateway, method),
+          }))
           .sort((a, b) => a.name.localeCompare(b.name)),
         gateway,
       };

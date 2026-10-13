@@ -14,7 +14,8 @@ import { identifierWords } from './excluded.js';
  *
  * A name is matched by its words (identifierWords): an item's field `['real', 'name']` matches
  * `realName`, `real_name` and `buyerRealName`, never `nameKo`. A public fill or price is not
- * private: what makes one a person's is an account beside it or a name that says whose it is.
+ * private: what makes one a person's is an account beside it or a name that says whose it is
+ * (`owned`: `userFills`, `fillsByAccount`, while `recentFills` stays public).
  */
 
 export const PRIVATE_DATA_IDS = [
@@ -42,9 +43,42 @@ export interface PrivateData {
   readonly basis: string;
   /** Field names that carry it, each as a run of identifier words, lower case. */
   readonly fields: readonly (readonly string[])[];
+  /**
+   * What is public on its own and private once a name says whose it is: a name holding one of
+   * `words` and one of `whose` anywhere, in either order (`userFills`, `fillsByAccount`,
+   * `memberTradeHistory`). Lower case.
+   */
+  readonly owned?: { readonly words: readonly string[]; readonly whose: readonly string[] };
   /** Why it is listed before anything stores it; absent once it exists. */
   readonly pending?: string;
 }
+
+/** Words that say whose something is: a user's, an account's, one's own. */
+const WHOSE: readonly string[] = [
+  'user',
+  'users',
+  'account',
+  'accounts',
+  'member',
+  'members',
+  'trader',
+  'traders',
+  'participant',
+  'participants',
+  'customer',
+  'customers',
+  'player',
+  'players',
+  'holder',
+  'holders',
+  'owner',
+  'owners',
+  'own',
+  'person',
+  'personal',
+  'profile',
+  'profiles',
+];
 
 export const PRIVATE_DATA: readonly PrivateData[] = [
   {
@@ -77,8 +111,10 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
     name: '특정 사용자에게 묶인 체결 내역',
     basis: 'N04 §2, N01 §5',
     // Recent fills are public and anonymous; the account beside one is `counterparty`, and a
-    // name that says the fills are somebody's (`myFills`) is this.
+    // name that says the fills are somebody's (`myFills`, `userFills`, `fillsByAccount`) is
+    // this. A trade is a fill (`market:trade`).
     fields: [['my'], ['mine']],
+    owned: { words: ['fill', 'fills', 'trade', 'trades'], whose: WHOSE },
   },
   {
     id: 'counterparty',
@@ -207,12 +243,23 @@ function containsRun(words: readonly string[], run: readonly string[]): boolean 
   return false;
 }
 
+/** The words of `owned` a name holds, whose first: `user fills`. */
+function ownedIn(words: readonly string[], owned: PrivateData['owned']): string | undefined {
+  const whose = words.find((word) => owned?.whose.includes(word));
+  const thing = words.find((word) => owned?.words.includes(word));
+  return whose === undefined || thing === undefined ? undefined : `${whose} ${thing}`;
+}
+
 /** The private data a field name carries. Empty when it is clean. */
 export function findPrivateField(name: string): PrivateFieldHit[] {
   const words = identifierWords(name);
-  return PRIVATE_DATA.flatMap((item) =>
-    item.fields
-      .filter((run) => containsRun(words, run))
-      .map((run) => ({ item: item.id, words: run.join(' ') })),
-  );
+  return PRIVATE_DATA.flatMap((item) => {
+    const owned = ownedIn(words, item.owned);
+    return [
+      ...item.fields
+        .filter((run) => containsRun(words, run))
+        .map((run) => ({ item: item.id, words: run.join(' ') })),
+      ...(owned === undefined ? [] : [{ item: item.id, words: owned }]),
+    ];
+  });
 }

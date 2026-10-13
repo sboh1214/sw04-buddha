@@ -231,7 +231,8 @@ export const EXCLUDED_FEATURES: readonly ExcludedFeature[] = [
     basis: 'N01 §2, N00 §5, N06 초기 제품과의 경계',
     surfaces: ALL_SURFACES,
     words: [/환전/, /출금/, /인출/, /현금화/],
-    tokens: ['withdraw', 'cashout', 'cash', 'exchange', 'convert'],
+    // `convert` inflects to converted and converting, not to the noun: `conversion` is its own.
+    tokens: ['withdraw', 'cashout', 'cash', 'exchange', 'convert', 'conversion'],
   },
   {
     id: 'replaced-term',

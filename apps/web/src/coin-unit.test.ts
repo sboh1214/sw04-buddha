@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { copy } from './copy';
@@ -104,6 +105,40 @@ describe('the old currency unit (#13)', () => {
       '// 100P in a comment is not screen text',
     ].join('\n');
     expect(literalsOf('clean.tsx', clean).filter(({ text }) => hasOldUnit(text))).toEqual([]);
+  });
+
+  it('reads JavaScript screen sources too, JSX included (Next takes .js and .jsx pages)', () => {
+    expect(
+      literalsOf('page.jsx', 'export default function Page() { return <p>{amount}P</p>; }')
+        .filter(({ text }) => hasOldUnit(text))
+        .map(({ text }) => text),
+    ).toEqual(['0P']);
+    expect(literalsOf('format.cjs', "exports.unit = '1,000P';").map(({ text }) => text)).toEqual([
+      '1,000P',
+    ]);
+    const dir = mkdtempSync(path.join(tmpdir(), 'screen-sources-'));
+    try {
+      for (const name of [
+        'page.jsx',
+        'card.js',
+        'format.mjs',
+        'legacy.cjs',
+        'view.tsx',
+        'helpers.ts',
+        'page.test.jsx',
+        'types.d.ts',
+        'notes.md',
+      ]) {
+        writeFileSync(path.join(dir, name), '');
+      }
+      expect(
+        screenSources(dir)
+          .map((file) => path.basename(file))
+          .sort(),
+      ).toEqual(['card.js', 'format.mjs', 'helpers.ts', 'legacy.cjs', 'page.jsx', 'view.tsx']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('is not in any copy value', () => {

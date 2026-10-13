@@ -7,8 +7,9 @@
  *   as A itself, and no answer may hold one of A's values or a field PRIVATE_DATA names, nor a
  *   field naming an excluded feature or keeping a probability;
  * - every registered owner-only route is called as B, aimed at A wherever it takes an id or an
- *   account, and no answer may hold A's values; the same request as A shows them, so the check
- *   is not blind (N04 §7 "다른 사용자가 비공개 자산·주문을 조회할 수 없어야 한다"). What A's own
+ *   account — in its path, its query (a page cursor made from A's row) or its body — and no
+ *   answer may hold A's values; the same request as A shows them, so the check is not blind
+ *   (N04 §7 "다른 사용자가 비공개 자산·주문을 조회할 수 없어야 한다"). What A's own
  *   answer names is not looked at: the excluded-feature names are the public API's (owner
  *   decision 2026-10-14 #113);
  * - every better-auth route that answers with an account's data (AUTH_ROUTES `answersAccount`)
@@ -17,16 +18,18 @@
  *   smuggled onto the market channel and the API publishes a real market event.
  *
  * The routes come from the registry, which registry.test.ts holds to the module graph; this file
- * only knows how to call them. A route whose parameters or body it does not know fails the run
- * until a case is written here.
+ * only knows how to call them. A route whose parameters, query keys or body it does not know
+ * fails the run until a case is written here.
  */
 import { randomInt, randomUUID } from 'node:crypto';
 import { schema } from '@buddha/db';
 import { createMarket, createUser } from '@buddha/db/test';
 import {
+  PAGE_LIMIT_MAX,
   REALTIME_EVENT_REGISTRY,
   REALTIME_EXCEPTION_EVENT,
   REALTIME_NAMESPACE,
+  encodeKeyset,
   findExcludedIdentifier,
   findPrivateField,
   marketChannel,
@@ -41,7 +44,12 @@ import { AdminGuard } from '../auth/admin.guard.js';
 import { AUTH, AUTH_BASE_PATH } from '../auth/auth.js';
 import { MarketPublisher } from '../realtime/market-publisher.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
-import { discoverAuthRoutes, discoverRoutes, type DiscoveredRoute } from '../test/routes.js';
+import {
+  discoverAuthRoutes,
+  discoverRoutes,
+  queryKeysOf,
+  type DiscoveredRoute,
+} from '../test/routes.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { sleep } from '../test/wait.js';
 import { AUTH_ROUTES, OWNER_ROUTES, PUBLIC_ROUTES } from './registry.js';
@@ -71,8 +79,18 @@ interface Fixture {
   paymentId: string;
   /** A's password login: the `account` row better-auth keeps. */
   accountId: string;
+  /** Page cursors made from A's rows: a page from there holds A's newest row and the older ones. */
+  cursors: { ledger: string; orders: string; payments: string };
   sentinels: readonly Sentinel[];
 }
+
+/** The cursor of a page that starts just after `row`, so the page holds it: A's row, by its id. */
+function cursorAfter(row: { createdAt: Date; id: string | number }): string {
+  return encodeKeyset({ createdAt: new Date(row.createdAt.getTime() + 1), id: String(row.id) });
+}
+
+/** The largest page, so A's page holds every row A has. */
+const LIMIT = () => String(PAGE_LIMIT_MAX);
 
 /** Letters only, so the value passes the real-name rule as typed by a person would. */
 function letters(count: number): string {
@@ -173,6 +191,11 @@ const PUBLIC_BODIES: Readonly<Record<string, (fixture: Fixture) => unknown>> = {
 interface OwnerCase {
   /** Path parameters by name, naming A's records. */
   params?: Readonly<Record<string, (fixture: Fixture) => string>>;
+  /**
+   * Query parameters by name, one for every key the route reads (queryKeysOf): A's records or A
+   * wherever a key can name one — a page cursor made from A's row, A's id.
+   */
+  query?: Readonly<Record<string, (fixture: Fixture) => string>>;
   /** What B sends: A's account wherever the body names one. */
   body?: (fixture: Fixture) => unknown;
   /** B's answer. */
@@ -202,18 +225,31 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
     }),
     status: 403,
   },
-  'GET /me/ledger': { status: 200, own: ['ledger memo'] },
-  'GET /me/payments': { status: 200, own: ['payment id'] },
+  'GET /me/ledger': {
+    query: { cursor: (fixture) => fixture.cursors.ledger, limit: LIMIT },
+    status: 200,
+    own: ['ledger memo'],
+  },
+  'GET /me/payments': {
+    query: { cursor: (fixture) => fixture.cursors.payments, limit: LIMIT },
+    status: 200,
+    own: ['payment id'],
+  },
   'GET /me/payments/:id': {
     params: { id: (fixture) => fixture.paymentId },
     status: 404,
     own: ['payment id'],
   },
   'GET /me/positions': {
+    query: { status: () => 'open' },
     status: 200,
     own: ['position qty', 'cost basis', 'realized pnl'],
   },
-  'GET /me/orders': { status: 200, own: ['filled order id', 'open order id'] },
+  'GET /me/orders': {
+    query: { cursor: (fixture) => fixture.cursors.orders, limit: LIMIT },
+    status: 200,
+    own: ['filled order id', 'open order id'],
+  },
   'POST /payments/charge': {
     body: (fixture) => ({
       packageId: randomUUID(),
@@ -360,6 +396,10 @@ describe('private data cases (static)', () => {
         ...paramsOf(route)
           .filter((name) => !(name in (ownerCase.params ?? {})))
           .map((name) => `${key} :${name}`),
+        // Every query key the route reads, so a key that may name A is called with A's.
+        ...queryKeysOf(route)
+          .filter((name) => !(name in (ownerCase.query ?? {})))
+          .map((name) => `${key} ?${name}`),
         ...(SAFE_METHODS.has(route.method) || ownerCase.body ? [] : [`${key} body`]),
       ];
     });
@@ -417,13 +457,16 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       .update(schema.balances)
       .set({ availableCoin: AMOUNTS.available, lockedCoin: AMOUNTS.locked })
       .where(eq(schema.balances.userId, a.id));
-    await t.db.insert(schema.ledgerEntries).values({
-      userId: a.id,
-      type: 'ADMIN_ADJUST',
-      amountCoin: AMOUNTS.available - before!.availableCoin,
-      balanceAfterCoin: AMOUNTS.available,
-      memo,
-    });
+    const [entry] = await t.db
+      .insert(schema.ledgerEntries)
+      .values({
+        userId: a.id,
+        type: 'ADMIN_ADJUST',
+        amountCoin: AMOUNTS.available - before!.availableCoin,
+        balanceAfterCoin: AMOUNTS.available,
+        memo,
+      })
+      .returning();
 
     const market = await createMarket(t.db, {
       createdBy: admin.id,
@@ -533,6 +576,12 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       market,
       paymentId: payment!.id,
       accountId: account!.id,
+      cursors: {
+        ledger: cursorAfter(entry!),
+        // The later of A's two orders, so the page holds both.
+        orders: cursorAfter(open.createdAt >= filled.createdAt ? open : filled),
+        payments: cursorAfter(payment!),
+      },
       sentinels: [
         text('user id', a.id),
         text('email', a.email),
@@ -564,15 +613,21 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
 
   function call(
     route: DiscoveredRoute,
-    input: { params?: Record<string, string>; body?: unknown; cookie?: string },
+    input: {
+      params?: Record<string, string>;
+      query?: Record<string, string>;
+      body?: unknown;
+      cookie?: string;
+    },
   ) {
-    const url = route.url.replaceAll(/:(\w+)/g, (_, name: string) => {
+    const query = new URLSearchParams(input.query ?? {}).toString();
+    const url = `${route.url.replaceAll(/:(\w+)/g, (_, name: string) => {
       const value = input.params?.[name];
       if (value === undefined) {
         throw new Error(`no value for :${name} of ${route.key}: add it to this file's cases`);
       }
       return encodeURIComponent(value);
-    });
+    })}${query === '' ? '' : `?${query}`}`;
     const safe = SAFE_METHODS.has(route.method);
     if (!safe && input.body === undefined) {
       throw new Error(`no body for ${route.key}: add it to this file's cases`);
@@ -719,10 +774,16 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       if (!ownerCase) continue; // the case above names it
       const route = routeOf(key);
       const params = valuesOf(ownerCase.params, f);
-      const res = await call(route, { params, body: ownerCase.body?.(f), cookie: f.b.cookie });
+      const query = valuesOf(ownerCase.query, f);
+      const res = await call(route, {
+        params,
+        query,
+        body: ownerCase.body?.(f),
+        cookie: f.b.cookie,
+      });
       answers.push({ route: key, status: res.statusCode, leaks: leaked(res.body) });
       if (ownerCase.own) {
-        const own = await call(route, { params, cookie: f.a.cookie });
+        const own = await call(route, { params, query, cookie: f.a.cookie });
         const held = leaked(own.body);
         shown.push({
           route: key,
@@ -773,22 +834,33 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
 
   /**
    * Subscribes and waits until the gateway has applied it: `marketIds: []` is refused, and the
-   * gateway handles one socket's messages in order (market.gateway.test.ts `roundTrip`).
+   * gateway handles one socket's messages in order (market.gateway.test.ts `roundTrip`). The
+   * refusal it waited for is returned: a direct send (REALTIME_EMITS), read like any answer.
    */
-  async function subscribe(socket: ClientSocket, marketId: string): Promise<void> {
+  async function subscribe(socket: ClientSocket, marketId: string): Promise<unknown> {
     socket.emit('subscribe', { marketIds: [marketId] });
-    const refused = new Promise<void>((resolve) => {
-      socket.once(REALTIME_EXCEPTION_EVENT, () => resolve());
+    const refused = new Promise<unknown>((resolve) => {
+      socket.once(REALTIME_EXCEPTION_EVENT, (payload: unknown) => resolve(payload));
     });
     socket.emit('subscribe', { marketIds: [] });
-    await refused;
+    return refused;
   }
 
   it('keeps the market room public: none of A’s events, values or fields reach it', async () => {
     const watchers = { anonymous: await openSocket(), B: await openSocket(f.b.cookie) };
     const received: { watcher: string; event: string; payload: unknown }[] = [];
     for (const [watcher, socket] of Object.entries(watchers)) {
-      await subscribe(socket, f.market.id);
+      const refusal = JSON.stringify(await subscribe(socket, f.market.id));
+      // The refusal envelope a socket is sent directly carries nothing of A's either.
+      expect({
+        watcher,
+        refusal,
+        leaks: [...leaked(refusal), ...forbiddenFields(refusal)],
+      }).toEqual({
+        watcher,
+        refusal: expect.stringContaining('VALIDATION_ERROR') as string,
+        leaks: [],
+      });
       socket.onAny((event: string, payload: unknown) => {
         received.push({ watcher, event, payload });
       });
