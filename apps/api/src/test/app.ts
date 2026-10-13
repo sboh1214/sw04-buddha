@@ -6,7 +6,13 @@ import { Test } from '@nestjs/testing';
 import { schema, type Db } from '@buddha/db';
 import { connectTestDb, type TestDb } from '@buddha/db/test';
 import { type Redis } from 'ioredis';
-import { DEFAULT_RATE_LIMITS, PAID_COIN_SALES_ENABLED, type RateLimits } from '@buddha/shared';
+import {
+  DEFAULT_RATE_LIMITS,
+  PAID_COIN_SALES_ENABLED,
+  RELEASE_SETTINGS,
+  type RateLimits,
+  type ReleaseSettingsRegistry,
+} from '@buddha/shared';
 import { AppModule } from '../app.module.js';
 import { AUTH, type Auth } from '../auth/auth.js';
 import { parseTrustProxy, uncountedPeers } from '../config/env.js';
@@ -21,6 +27,7 @@ import { RATE_LIMITS } from '../rate-limit/rate-limit.limits.js';
 import { RATE_LIMIT_KEY_PREFIX } from '../rate-limit/redis-throttler.storage.js';
 import { UNCOUNTED_PEERS } from '../rate-limit/uncounted-peers.js';
 import { RealtimeIoAdapter } from '../realtime/realtime-io.adapter.js';
+import { RELEASE_SETTINGS_REGISTRY } from '../release-settings/release-settings.registry.js';
 import { createMemoryMailer, type MemoryMailer } from './memory-mailer.js';
 
 export interface TestApp {
@@ -72,6 +79,12 @@ export interface CreateTestAppOptions {
    * presents the proxy with `remoteAddress`. Left out, nothing is trusted (the socket peer).
    */
   trustProxy?: string;
+  /**
+   * The release-settings registry for this app only (RELEASE_SETTINGS_REGISTRY, #170): items of
+   * the suite's own (`defineReleaseSettings`) to register, list, read and change. Left out, the
+   * app runs what production ships (RELEASE_SETTINGS).
+   */
+  releaseSettings?: ReleaseSettingsRegistry;
 }
 
 /**
@@ -90,7 +103,9 @@ export async function createTestApp(options: CreateTestAppOptions = {}): Promise
     .overrideProvider(UNCOUNTED_PEERS)
     .useValue(uncountedPeers({ RATE_LIMIT_UNCOUNTED_PEERS: options.uncountedPeers }))
     .overrideProvider(PAID_COIN_SALES)
-    .useValue(options.paidCoinSales ?? PAID_COIN_SALES_ENABLED);
+    .useValue(options.paidCoinSales ?? PAID_COIN_SALES_ENABLED)
+    .overrideProvider(RELEASE_SETTINGS_REGISTRY)
+    .useValue(options.releaseSettings ?? RELEASE_SETTINGS);
   const moduleRef = await builder.compile();
   const app = moduleRef.createNestApplication<NestFastifyApplication>(
     new FastifyAdapter({

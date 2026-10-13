@@ -22,6 +22,7 @@ import { payments } from './payments.js';
 import { positions } from './positions.js';
 import { priceTicks } from './price-ticks.js';
 import { profiles } from './profiles.js';
+import { releaseSettings } from './release-settings.js';
 import { userContacts } from './user-contacts.js';
 
 export const profilesRelations = relations(profiles, ({ one }) => ({
@@ -134,6 +135,10 @@ export const adminActionsRelations = relations(adminActions, ({ one }) => ({
   admin: one(user, { fields: [adminActions.adminId], references: [user.id] }),
 }));
 
+export const releaseSettingsRelations = relations(releaseSettings, ({ one }) => ({
+  updatedBy: one(user, { fields: [releaseSettings.updatedBy], references: [user.id] }),
+}));
+
 export const userRelations = relations(user, ({ one, many }) => ({
   sessions: many(session),
   accounts: many(account),
@@ -146,6 +151,7 @@ export const userRelations = relations(user, ({ one, many }) => ({
   positions: many(positions),
   createdMarkets: many(markets),
   adminActions: many(adminActions),
+  releaseSettingUpdates: many(releaseSettings),
 }));
 
 export const sessionRelations = relations(session, ({ one }) => ({

@@ -212,6 +212,57 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/release-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every registered release setting with its status and value, in registry order; `status=undecided` lists the ones with no value */
+        get: operations["adminListReleaseSettings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/release-settings/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Set the status and value of a release setting with a reason (recorded); `undecided` takes no value, the others require one that fits the item */
+        patch: operations["adminChangeReleaseSetting"];
+        trace?: never;
+    };
+    "/api/v1/admin/release-settings/changes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Release setting changes, newest first: before and after, reason, admin and time (of one key with `key`) */
+        get: operations["adminListReleaseSettingChanges"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/users": {
         parameters: {
             query?: never;
@@ -1029,6 +1080,47 @@ export type components = {
             /** @enum {string} */
             status: "sent";
         };
+        ReleaseSetting: {
+            description: string;
+            key: string;
+            label: string;
+            status: components["schemas"]["ReleaseSettingStatus"];
+            unit: string | null;
+            /** Format: date-time */
+            updatedAt: string | null;
+            updatedBy: components["schemas"]["ReleaseSettingActor"] | null;
+            value: unknown;
+            valueSchema: {
+                [key: string]: unknown;
+            };
+        };
+        ReleaseSettingActor: {
+            id: string;
+            nickname: string;
+        };
+        ReleaseSettingChange: {
+            actor: components["schemas"]["ReleaseSettingActor"];
+            after: components["schemas"]["ReleaseSettingState"];
+            before: components["schemas"]["ReleaseSettingState"];
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: uuid */
+            id: string;
+            key: string;
+            label: string | null;
+            reason: string;
+        };
+        ReleaseSettingChangeBody: {
+            reason: string;
+            status: components["schemas"]["ReleaseSettingStatus"];
+            value?: unknown;
+        };
+        ReleaseSettingState: {
+            status: components["schemas"]["ReleaseSettingStatus"];
+            value: unknown;
+        };
+        /** @enum {string} */
+        ReleaseSettingStatus: "undecided" | "proposal" | "test" | "approved";
         ResolveMarketBody: {
             /** Format: uri */
             evidenceUrl?: string | null;
@@ -2229,6 +2321,199 @@ export interface operations {
             };
             /** @description PAYMENT_GATEWAY_ERROR */
             502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminListReleaseSettings: {
+        parameters: {
+            query?: {
+                status?: components["schemas"]["ReleaseSettingStatus"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ReleaseSetting"][];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminChangeReleaseSetting: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReleaseSettingChangeBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ReleaseSetting"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminListReleaseSettingChanges: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                key?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ReleaseSettingChange"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };

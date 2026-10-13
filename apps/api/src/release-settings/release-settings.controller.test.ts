@@ -1,0 +1,419 @@
+/**
+ * Release settings (#170) against the docker `test` profile, with a registry of test items
+ * injected through `createTestApp({ releaseSettings })` — the shipped one is empty. Covers
+ * register → list → get → change → change log, the reason and value rules, the undecided filter,
+ * the admin-only surface and that a change and its record commit together. Skips when TEST_* are
+ * unset.
+ */
+import { schema } from '@buddha/db';
+import {
+  RELEASE_SETTINGS,
+  defineReleaseSetting,
+  defineReleaseSettings,
+  type ReleaseSetting,
+  type ReleaseSettingChange,
+} from '@buddha/shared';
+import { asc, eq } from 'drizzle-orm';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import * as z from 'zod';
+import { AdminGuard } from '../auth/admin.guard.js';
+import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
+import { hasTestInfra } from '../test/setup-env.js';
+import { ReleaseSettingsService } from './release-settings.service.js';
+
+const jsonHeaders = { origin: 'http://localhost:3000', 'content-type': 'application/json' };
+const BASE = '/api/v1/admin/release-settings';
+
+const hours = defineReleaseSetting({
+  key: 'test.period_hours',
+  label: '시험 기간',
+  unit: '시간',
+  description: '시험용 항목: 정수 시간',
+  schema: z.number().int().min(1).max(720),
+});
+const window = defineReleaseSetting({
+  key: 'test.window',
+  label: '시험 구간',
+  unit: null,
+  description: '시험용 항목: 객체 값',
+  schema: z.object({ from: z.number().int(), to: z.number().int() }).strict(),
+});
+/** A string value: one that reads as JSON text (`"24"`) must come back as that string. */
+const code = defineReleaseSetting({
+  key: 'test.code',
+  label: '시험 코드',
+  unit: null,
+  description: '시험용 항목: 문자열 값',
+  schema: z.string().min(1).max(20),
+});
+/**
+ * Broken on purpose: its schema answers JSON null, which the type of a definition forbids and the
+ * CHECK of release_settings refuses — the write that fails AFTER the record was inserted.
+ */
+const broken = defineReleaseSetting({
+  key: 'test.broken',
+  label: '깨진 항목',
+  unit: null,
+  description: '시험용 항목: 기록 뒤 쓰기가 실패한다',
+  schema: z.number().transform(() => null) as unknown as z.ZodType<number>,
+});
+
+type ErrorBody = {
+  error: { code: string; details?: { path: (string | number)[]; message: string }[] };
+};
+type ChangePage = { data: ReleaseSettingChange[]; meta: { nextCursor: string | null } };
+
+describe.skipIf(!hasTestInfra)('release settings (integration)', () => {
+  let t: TestApp;
+  let admin: TestUser;
+  let member: TestUser;
+  let adminNickname: string;
+
+  beforeAll(async () => {
+    t = await createTestApp({
+      releaseSettings: defineReleaseSettings([hours, window, code, broken]),
+    });
+  });
+  afterAll(async () => {
+    await t?.close(); // undefined when beforeAll timed out waiting for the file lock
+  });
+  beforeEach(async () => {
+    await t.reset();
+    admin = await signUpTestUser(t);
+    member = await signUpTestUser(t);
+    const [profile] = await t.db
+      .update(schema.profiles)
+      .set({ role: 'admin' })
+      .where(eq(schema.profiles.userId, admin.id))
+      .returning();
+    adminNickname = profile!.nickname;
+    // The guard caches roles for 60 s (PLAN 10.5); the promotion above happened behind it.
+    await t.app.get(AdminGuard).invalidate(admin.id);
+  });
+
+  const get = (url: string, cookie = admin.cookie) =>
+    t.app.inject({ method: 'GET', url, headers: { cookie } });
+  const patch = (key: string, payload: Record<string, unknown>, cookie = admin.cookie) =>
+    t.app.inject({
+      method: 'PATCH',
+      url: `${BASE}/${key}`,
+      headers: { ...jsonHeaders, cookie },
+      payload,
+    });
+
+  const data = <T>(res: { json: <U>() => U }) => res.json<{ data: T }>().data;
+  const errorOf = (res: { json: <U>() => U }) => res.json<ErrorBody>().error;
+  const service = () => t.app.get(ReleaseSettingsService);
+
+  async function settingRows() {
+    return t.db.select().from(schema.releaseSettings).orderBy(asc(schema.releaseSettings.key));
+  }
+  async function records() {
+    return t.db
+      .select()
+      .from(schema.adminActions)
+      .orderBy(asc(schema.adminActions.createdAt), asc(schema.adminActions.id));
+  }
+
+  it('lists every registered item, in registry order, as undecided before any change', async () => {
+    const res = await get(BASE);
+    expect(res.statusCode).toBe(200);
+    const items = data<ReleaseSetting[]>(res);
+    expect(items.map((item) => [item.key, item.status, item.value])).toEqual([
+      [hours.key, 'undecided', null],
+      [window.key, 'undecided', null],
+      [code.key, 'undecided', null],
+      [broken.key, 'undecided', null],
+    ]);
+    const { valueSchema, ...first } = items[0]!;
+    expect(first).toEqual({
+      key: 'test.period_hours',
+      label: '시험 기간',
+      unit: '시간',
+      description: '시험용 항목: 정수 시간',
+      status: 'undecided',
+      value: null,
+      updatedAt: null,
+      updatedBy: null,
+    });
+    // What the admin screen can tell the value's shape from.
+    expect(valueSchema).toMatchObject({ type: 'integer', minimum: 1, maximum: 720 });
+    expect(items[1]).toMatchObject({ unit: null, valueSchema: { type: 'object' } });
+  });
+
+  it('changes an item with a reason: the row, its record and the answer agree', async () => {
+    const res = await patch(hours.key, { status: 'test', value: 48, reason: '  내부 시험  ' });
+    expect(res.statusCode).toBe(200);
+    const item = data<ReleaseSetting>(res);
+    expect(item).toMatchObject({
+      key: hours.key,
+      status: 'test',
+      value: 48,
+      updatedBy: { id: admin.id, nickname: adminNickname },
+    });
+
+    const [row] = await settingRows();
+    expect(row).toMatchObject({ key: hours.key, status: 'test', value: 48, updatedBy: admin.id });
+    expect(item.updatedAt).toBe(row!.updatedAt.toISOString());
+    const [record] = await records();
+    expect(record).toMatchObject({
+      adminId: admin.id,
+      type: 'release_setting_change',
+      targetType: 'release_setting',
+      targetId: hours.key,
+      payload: {
+        key: hours.key,
+        before: { status: 'undecided', value: null },
+        after: { status: 'test', value: 48 },
+        reason: '내부 시험',
+      },
+    });
+    // One instant for both: the record says when the value it describes took effect.
+    expect(record!.createdAt.getTime()).toBe(row!.updatedAt.getTime());
+
+    // The next change records the previous state as its `before`, and back to undecided too.
+    await patch(hours.key, { status: 'approved', value: 72, reason: '승인' });
+    const back = await patch(hours.key, { status: 'undecided', reason: '재검토' });
+    expect(data<ReleaseSetting>(back)).toMatchObject({ status: 'undecided', value: null });
+    expect((await records()).map((r) => r.payload)).toEqual([
+      expect.anything(),
+      expect.objectContaining({
+        before: { status: 'test', value: 48 },
+        after: { status: 'approved', value: 72 },
+      }),
+      expect.objectContaining({
+        before: { status: 'approved', value: 72 },
+        after: { status: 'undecided', value: null },
+      }),
+    ]);
+    expect(await settingRows()).toMatchObject([{ status: 'undecided', value: null }]);
+  });
+
+  it('hands server code a typed reading of registered items only', async () => {
+    expect(await service().get(hours)).toEqual({
+      key: hours.key,
+      status: 'undecided',
+      value: null,
+    });
+    await patch(window.key, { status: 'proposal', value: { from: 1, to: 3 }, reason: '설계 제안' });
+    const reading = await service().get(window);
+    expect(reading).toEqual({ key: window.key, status: 'proposal', value: { from: 1, to: 3 } });
+    if (reading.status !== 'undecided') {
+      const to: number = reading.value.to; // typed by the definition's schema
+      expect(to).toBe(3);
+    }
+    // Inside a caller's transaction as well.
+    await t.db.transaction(async (tx) => {
+      expect((await service().get(window, tx)).status).toBe('proposal');
+    });
+
+    // A definition the registry does not hold — another key, or a copy of a registered one.
+    const unregistered = defineReleaseSetting({ ...hours, key: 'test.unregistered' });
+    for (const definition of [unregistered, { ...hours }]) {
+      await expect(service().get(definition)).rejects.toMatchObject({ code: 'INTERNAL' });
+    }
+  });
+
+  it('keeps a string value that reads as JSON text a string, everywhere it is read', async () => {
+    for (const value of ['24', 'null', '"x"', '{}']) {
+      const res = await patch(code.key, { status: 'test', value, reason: '문자열' });
+      expect(data<ReleaseSetting>(res).value).toBe(value);
+      expect(await service().get(code)).toEqual({ key: code.key, status: 'test', value });
+      const listed = data<ReleaseSetting[]>(await get(`${BASE}?status=test`));
+      expect(listed.map((item) => item.value)).toEqual([value]);
+      const [latest] = (await get(`${BASE}/changes?limit=1`)).json<ChangePage>().data;
+      expect(latest!.after).toEqual({ status: 'test', value });
+    }
+    // Each change recorded the previous string as its `before`, unchanged.
+    const [latest] = (await get(`${BASE}/changes?limit=1`)).json<ChangePage>().data;
+    expect(latest!.before).toEqual({ status: 'test', value: '"x"' });
+  });
+
+  it('refuses a change without a reason, writing nothing', async () => {
+    for (const reason of [undefined, '', '   ', 'x'.repeat(501), 7]) {
+      const res = await patch(hours.key, { status: 'test', value: 24, reason });
+      expect({ reason, status: res.statusCode }).toEqual({ reason, status: 400 });
+      expect(errorOf(res)).toMatchObject({ code: 'VALIDATION_ERROR' });
+      expect(errorOf(res).details?.[0]?.path).toEqual(['reason']);
+    }
+    expect(await settingRows()).toEqual([]);
+    expect(await records()).toEqual([]);
+  });
+
+  it('checks the value against the status rule and the item, writing nothing', async () => {
+    for (const [key, body, path] of [
+      [hours.key, { status: 'test', value: 0 }, ['value']],
+      [hours.key, { status: 'test', value: 1.5 }, ['value']],
+      [hours.key, { status: 'test', value: '24' }, ['value']],
+      [hours.key, { status: 'approved' }, ['value']],
+      [hours.key, { status: 'approved', value: null }, ['value']],
+      [hours.key, { status: 'undecided', value: 24 }, ['value']],
+      [window.key, { status: 'test', value: { from: 1, to: 'x' } }, ['value', 'to']],
+      [window.key, { status: 'test', value: { from: 1, to: 2, extra: 3 } }, ['value']],
+      [hours.key, { status: 'final', value: 24 }, ['status']],
+    ] as const) {
+      const res = await patch(key, { ...body, reason: '시험' });
+      expect({ body, status: res.statusCode }).toEqual({ body, status: 400 });
+      expect(errorOf(res).code).toBe('VALIDATION_ERROR');
+      expect(errorOf(res).details?.[0]?.path).toEqual(path);
+    }
+    expect(await settingRows()).toEqual([]);
+    expect(await records()).toEqual([]);
+  });
+
+  it('answers 404 for a key no item has and 400 for a malformed one', async () => {
+    const unknown = await patch('test.unknown', { status: 'test', value: 1, reason: '시험' });
+    expect(unknown.statusCode).toBe(404);
+    expect(errorOf(unknown).code).toBe('NOT_FOUND');
+    const malformed = await patch('Test-Key', { status: 'test', value: 1, reason: '시험' });
+    expect(malformed.statusCode).toBe(400);
+    expect(errorOf(malformed).code).toBe('VALIDATION_ERROR');
+    expect(await records()).toEqual([]);
+  });
+
+  it('lists only the undecided items, or those of any one status', async () => {
+    await patch(hours.key, { status: 'test', value: 24, reason: '시험' });
+    const keys = async (query: string) =>
+      data<ReleaseSetting[]>(await get(`${BASE}${query}`)).map((item) => item.key);
+    expect(await keys('?status=undecided')).toEqual([window.key, code.key, broken.key]);
+    expect(await keys('?status=test')).toEqual([hours.key]);
+    expect(await keys('?status=approved')).toEqual([]);
+    expect((await get(`${BASE}?status=final`)).statusCode).toBe(400);
+  });
+
+  it('pages the change records newest first, with the actor, and by key', async () => {
+    await patch(hours.key, { status: 'proposal', value: 24, reason: '첫 제안' });
+    await patch(window.key, { status: 'test', value: { from: 0, to: 1 }, reason: '시험값' });
+    await patch(hours.key, { status: 'approved', value: 24, reason: '승인' });
+    // A record of a key the registry no longer holds keeps its place, with no label.
+    await t.db.insert(schema.adminActions).values({
+      adminId: admin.id,
+      type: 'release_setting_change',
+      targetType: 'release_setting',
+      targetId: 'test.retired',
+      payload: {
+        key: 'test.retired',
+        before: { status: 'undecided', value: null },
+        after: { status: 'test', value: true },
+        reason: '없어진 항목',
+      },
+    });
+    // Another type in the same log is not a release setting change.
+    await t.db
+      .insert(schema.adminActions)
+      .values({ adminId: admin.id, type: 'market_open', targetType: 'market', targetId: 'x' });
+
+    const first = await get(`${BASE}/changes?limit=2`);
+    expect(first.statusCode).toBe(200);
+    const page1 = first.json<ChangePage>();
+    expect(page1.data.map((c) => [c.key, c.reason])).toEqual([
+      ['test.retired', '없어진 항목'],
+      [hours.key, '승인'],
+    ]);
+    expect(page1.data[0]).toMatchObject({ label: null, after: { status: 'test', value: true } });
+    const { id, createdAt, ...latest } = page1.data[1]!;
+    expect(latest).toEqual({
+      key: hours.key,
+      label: '시험 기간',
+      before: { status: 'proposal', value: 24 },
+      after: { status: 'approved', value: 24 },
+      reason: '승인',
+      actor: { id: admin.id, nickname: adminNickname },
+    });
+    const [record] = await t.db
+      .select()
+      .from(schema.adminActions)
+      .where(eq(schema.adminActions.id, id));
+    expect(record!.createdAt.toISOString()).toBe(createdAt);
+    expect(page1.meta.nextCursor).not.toBeNull();
+
+    const second = await get(
+      `${BASE}/changes?limit=2&cursor=${encodeURIComponent(page1.meta.nextCursor!)}`,
+    );
+    const page2 = second.json<ChangePage>();
+    expect(page2.data.map((c) => [c.key, c.reason])).toEqual([
+      [window.key, '시험값'],
+      [hours.key, '첫 제안'],
+    ]);
+    expect(page2.meta.nextCursor).toBeNull();
+
+    const byKey = await get(`${BASE}/changes?key=${hours.key}`);
+    expect(byKey.json<ChangePage>().data.map((c) => c.reason)).toEqual(['승인', '첫 제안']);
+    expect((await get(`${BASE}/changes?key=Not-A-Key`)).statusCode).toBe(400);
+  });
+
+  it('serialises concurrent changes of one key: both commit, each recording the other', async () => {
+    const [a, b] = await Promise.all([
+      patch(hours.key, { status: 'test', value: 10, reason: 'A' }),
+      patch(hours.key, { status: 'test', value: 20, reason: 'B' }),
+    ]);
+    expect([a.statusCode, b.statusCode]).toEqual([200, 200]);
+    const payloads = (await records()).map((r) => r.payload as { before: unknown; after: unknown });
+    expect(payloads).toHaveLength(2);
+    // The second to commit saw the first's value as its `before`; the row holds the second.
+    expect(payloads[0]!.before).toEqual({ status: 'undecided', value: null });
+    expect(payloads[1]!.before).toEqual(payloads[0]!.after);
+    expect((await settingRows())[0]).toMatchObject({
+      value: (payloads[1]!.after as { value: number }).value,
+    });
+  });
+
+  it('commits a change and its record together or not at all', async () => {
+    // The record is inserted first, then the row write fails (the CHECK refuses JSON null):
+    // the whole transaction rolls back and no record is left describing a change that never was.
+    const res = await patch(broken.key, { status: 'test', value: 1, reason: '시험' });
+    expect(res.statusCode).toBe(500);
+    expect(errorOf(res).code).toBe('INTERNAL');
+    expect(await settingRows()).toEqual([]);
+    expect(await records()).toEqual([]);
+  });
+
+  it('is closed to members and anonymous callers, on reads and writes alike', async () => {
+    await patch(hours.key, { status: 'test', value: 24, reason: '시험' });
+    for (const [method, url, payload] of [
+      ['GET', BASE, undefined],
+      ['GET', `${BASE}?status=undecided`, undefined],
+      ['GET', `${BASE}/changes`, undefined],
+      ['PATCH', `${BASE}/${hours.key}`, { status: 'approved', value: 72, reason: '시험' }],
+    ] as const) {
+      const asMember = await t.app.inject({
+        method,
+        url,
+        headers: { ...jsonHeaders, cookie: member.cookie },
+        payload,
+      });
+      expect({ method, url, status: asMember.statusCode }).toEqual({ method, url, status: 403 });
+      expect(errorOf(asMember).code).toBe('FORBIDDEN');
+
+      const anonymous = await t.app.inject({ method, url, headers: jsonHeaders, payload });
+      expect({ method, url, status: anonymous.statusCode }).toEqual({ method, url, status: 401 });
+      expect(errorOf(anonymous).code).toBe('UNAUTHENTICATED');
+    }
+    // A cookie-authenticated change from a foreign Origin (CSRF) is refused as well.
+    const foreign = await t.app.inject({
+      method: 'PATCH',
+      url: `${BASE}/${hours.key}`,
+      headers: { ...jsonHeaders, origin: 'https://evil.example', cookie: admin.cookie },
+      payload: { status: 'approved', value: 72, reason: '시험' },
+    });
+    expect(foreign.statusCode).toBe(403);
+    expect(await settingRows()).toMatchObject([{ status: 'test', value: 24 }]);
+    expect(await records()).toHaveLength(1);
+  });
+});
+
+describe('ReleaseSettingsService with the shipped registry', () => {
+  it('lists nothing without touching the database: no item is registered yet', async () => {
+    const db = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error('the database was used');
+        },
+      },
+    );
+    const settings = new ReleaseSettingsService(db as never, RELEASE_SETTINGS);
+    expect(await settings.list()).toEqual([]);
+    expect(await settings.list('undecided')).toEqual([]);
+  });
+});

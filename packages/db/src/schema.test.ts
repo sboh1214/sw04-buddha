@@ -4,12 +4,14 @@ import {
   LEDGER_ENTRY_TYPES,
   MARKET_STATUSES,
   PRICE_TICK_TRIGGERS,
+  RELEASE_SETTING_STATUSES,
   SIGNUP_BONUS_COIN,
   nicknameSchema,
 } from '@buddha/shared';
 import { and, eq, lt, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  adminActions,
   auditFailures,
   balances,
   fills,
@@ -21,6 +23,7 @@ import {
   payments,
   positions,
   profiles,
+  releaseSettings,
   user,
   userContacts,
 } from './schema/index.js';
@@ -580,6 +583,120 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     });
   });
 
+  describe('release settings (migration 0020, #170)', () => {
+    const key = 'test.period_hours';
+    type State = { status: 'undecided' | 'proposal' | 'test' | 'approved'; value: unknown };
+
+    /** The change the API makes: its admin_actions record and the row, in one transaction. */
+    async function change(
+      adminId: string,
+      after: State,
+      record: { adminId?: string; after?: State; at?: Date } = {},
+    ) {
+      const at = new Date();
+      await t.db.transaction(async (tx) => {
+        await tx.insert(adminActions).values({
+          adminId: record.adminId ?? adminId,
+          type: 'release_setting_change',
+          targetType: 'release_setting',
+          targetId: key,
+          payload: {
+            key,
+            before: { status: 'undecided', value: null },
+            after: record.after ?? after,
+            reason: '시험',
+          },
+          createdAt: record.at ?? at,
+        });
+        await tx
+          .insert(releaseSettings)
+          .values({ key, ...after, updatedAt: at, updatedBy: adminId })
+          .onConflictDoUpdate({
+            target: releaseSettings.key,
+            set: { ...after, updatedAt: at, updatedBy: adminId },
+          });
+      });
+    }
+
+    it('labels release_setting_status like RELEASE_SETTING_STATUSES', async () => {
+      const { rows } = await t.db.execute<{ label: string }>(sql`
+        SELECT unnest(enum_range(NULL::release_setting_status))::text AS label`);
+      expect(rows.map((row) => row.label)).toEqual([...RELEASE_SETTING_STATUSES]);
+    });
+
+    it('stores a change made with its record, and every later one', async () => {
+      const { user: admin } = await createUser(t.db, { role: 'admin' });
+      await change(admin.id, { status: 'test', value: 48 });
+      await change(admin.id, { status: 'approved', value: { from: 1, to: 2 } });
+      await change(admin.id, { status: 'undecided', value: null });
+      const rows = await t.db.select().from(releaseSettings);
+      expect(rows).toMatchObject([{ key, status: 'undecided', value: null, updatedBy: admin.id }]);
+      expect(await t.db.select().from(adminActions)).toHaveLength(3);
+    });
+
+    it('refuses, at commit, a write whose record is missing or tells another story', async () => {
+      const { user: admin } = await createUser(t.db, { role: 'admin' });
+      const { user: other } = await createUser(t.db, { role: 'admin' });
+      const at = new Date();
+      // No record at all: a bare INSERT, and a bare UPDATE of a row that has one.
+      await expect(
+        t.db
+          .insert(releaseSettings)
+          .values({ key, status: 'test', value: 48, updatedAt: at, updatedBy: admin.id }),
+      ).rejects.toSatisfy((e) => sqlState(e) === '23000');
+      await change(admin.id, { status: 'test', value: 48 });
+      await expect(
+        t.db.update(releaseSettings).set({ value: 72 }).where(eq(releaseSettings.key, key)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '23000');
+      // A record of another value, another actor or another instant.
+      for (const record of [
+        { after: { status: 'test', value: 24 } as State },
+        { after: { status: 'approved', value: 72 } as State },
+        { adminId: other.id },
+        { at: new Date(at.getTime() - 1) },
+      ]) {
+        await expect(change(admin.id, { status: 'test', value: 72 }, record)).rejects.toSatisfy(
+          (e) => sqlState(e) === '23000',
+        );
+      }
+      // Each refused transaction rolled back whole: the first change and its record only.
+      expect(await t.db.select().from(releaseSettings)).toMatchObject([
+        { status: 'test', value: 48 },
+      ]);
+      expect(await t.db.select().from(adminActions)).toHaveLength(1);
+    });
+
+    it('ties the value to the status: none while undecided, never JSON null', async () => {
+      const { user: admin } = await createUser(t.db, { role: 'admin' });
+      for (const state of [
+        { status: 'undecided', value: 24 },
+        { status: 'approved', value: null },
+        { status: 'proposal', value: sql`'null'::jsonb` },
+      ] as const) {
+        await expect(
+          t.db.insert(releaseSettings).values({
+            key,
+            status: state.status,
+            value: state.value,
+            updatedAt: new Date(),
+            updatedBy: admin.id,
+          }),
+        ).rejects.toSatisfy(
+          (e) =>
+            sqlState(e) === '23514' && sqlConstraint(e) === 'release_settings_value_status_check',
+        );
+      }
+    });
+
+    it('cannot DELETE a setting', async () => {
+      const { user: admin } = await createUser(t.db, { role: 'admin' });
+      await change(admin.id, { status: 'test', value: 48 });
+      await expect(
+        t.db.delete(releaseSettings).where(eq(releaseSettings.key, key)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '42501');
+    });
+  });
+
   describe('buddha_app privileges (PLAN 6.4)', () => {
     it('can INSERT and SELECT ledger_entries but not UPDATE or DELETE', async () => {
       const { user: u } = await createUser(t.db, { balanceCoin: 500n });
@@ -604,7 +721,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         FROM information_schema.role_table_grants
         WHERE grantee = 'buddha_app' AND table_schema = 'public'
           AND table_name IN ('ledger_entries', 'market_events', 'admin_actions', 'payment_events',
-            'balances', 'payments', 'user_contacts', 'market_settlement_steps')
+            'balances', 'payments', 'user_contacts', 'market_settlement_steps', 'release_settings')
         ORDER BY 1, 2`);
       const grants = Object.groupBy(rows, (r) => r.table);
       const privs = (table: string) => grants[table]?.map((r) => r.privilege).sort() ?? [];
@@ -618,6 +735,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(privs('user_contacts')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
       // Migration 0016: the worker updates a step's row in place.
       expect(privs('market_settlement_steps')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
+      // Migration 0020: a release setting is changed, never removed.
+      expect(privs('release_settings')).toEqual(['INSERT', 'SELECT', 'UPDATE']);
     });
 
     it('cannot UPDATE or DELETE a payment event', async () => {

@@ -14,6 +14,7 @@ import {
   OUTCOMES,
   PAYMENT_STATUSES,
   PRICE_TICK_TRIGGERS,
+  RELEASE_SETTING_STATUSES,
   ROLES,
   TIME_IN_FORCES,
 } from '@buddha/shared';
@@ -31,3 +32,4 @@ export const orderStatusEnum = pgEnum('order_status', ORDER_STATUSES);
 export const timeInForceEnum = pgEnum('time_in_force', TIME_IN_FORCES);
 export const counterpartyTypeEnum = pgEnum('counterparty_type', COUNTERPARTY_TYPES);
 export const priceTickTriggerEnum = pgEnum('price_tick_trigger', PRICE_TICK_TRIGGERS);
+export const releaseSettingStatusEnum = pgEnum('release_setting_status', RELEASE_SETTING_STATUSES);

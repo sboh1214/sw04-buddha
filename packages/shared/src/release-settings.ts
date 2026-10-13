@@ -1,0 +1,306 @@
+import * as z from 'zod';
+import { type ValidationIssue } from './api/errors.js';
+import { cursorQuerySchema } from './api/pagination.js';
+import { releaseSettingStatusSchema, type ReleaseSettingStatus } from './enums.js';
+
+/**
+ * Release settings (출시 설정, #170): the values a simulation or an operating approval settles —
+ * starting grant, re-grant cadence, objection period, price-protection width, retention and the
+ * like (N01 §10, NR 설계 상태). One place holds them, and the server reads a registered item from
+ * there only.
+ *
+ * - WHAT an item is (key, name, unit, meaning, value shape) is code: a definition in
+ *   RELEASE_SETTINGS below, registered by the issue that uses the value.
+ * - Its VALUE and STATUS live in Postgres (`release_settings`), changed by an admin with a reason
+ *   (owner decision 2026-10-13: changeable while running, every change recorded). A missing row
+ *   is `undecided` with no value. Each change appends an `admin_actions` row
+ *   (`release_setting_change`) in the same transaction, and the database refuses a write that
+ *   lacks one (migration 0020).
+ * - A value applies to work that starts after it changed (owner decision): a consumer reads it
+ *   once when its work begins and keeps that reading for the work's whole life.
+ */
+
+/** Statuses as the admin screen names them. `proposal` and `test` never read as settled. */
+export const RELEASE_SETTING_STATUS_LABELS: Readonly<Record<ReleaseSettingStatus, string>> = {
+  undecided: '미정',
+  proposal: '설계 제안',
+  test: '시험값',
+  approved: '승인됨',
+};
+
+/**
+ * Lower-case words joined by `_`, grouped by `.` (`grant.initial_coin`). Stored in
+ * `release_settings.key` and `admin_actions.target_id`, so a key is never renamed once shipped:
+ * its stored value and history would stay behind under the old one.
+ */
+export const RELEASE_SETTING_KEY_PATTERN = /^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$/;
+/** release_settings.key is varchar(64). */
+export const RELEASE_SETTING_KEY_MAX_LENGTH = 64;
+
+/** `ReleaseSettingChangeBody.reason`: stored in admin_actions, like a refund's reason. */
+export const RELEASE_SETTING_REASON_MAX_LENGTH = 500;
+
+export const releaseSettingKeySchema = z
+  .string()
+  .max(RELEASE_SETTING_KEY_MAX_LENGTH)
+  .regex(RELEASE_SETTING_KEY_PATTERN, 'must be lower-case words joined by _ and .');
+
+/**
+ * A JSON value, as `release_settings.value` (jsonb) holds it. Object members may be `undefined`
+ * so a value schema can have optional keys; JSON drops them.
+ */
+export type ReleaseSettingJson =
+  | string
+  | number
+  | boolean
+  | null
+  | ReleaseSettingJson[]
+  | { [key: string]: ReleaseSettingJson | undefined };
+
+/** What a value schema may produce: any JSON but a bare `null`, which means "no value". */
+export type ReleaseSettingValue = Exclude<ReleaseSettingJson, null>;
+
+/**
+ * One release setting. Every text is what the admin screen shows (Korean).
+ *
+ * `schema` validates a value an admin enters and is applied again to the stored value on every
+ * read, so it must accept its own output (no transform that changes the type) and its output must
+ * be JSON — Coin amounts as decimal strings or numbers, never bigint.
+ */
+export interface ReleaseSettingDefinition<T extends ReleaseSettingValue = ReleaseSettingValue> {
+  readonly key: string;
+  /** 이름: what the item is called (`시작 지급액`). */
+  readonly label: string;
+  /** 단위 (`Coin`, `시간`), or null for a value that has none (a flag, a list). */
+  readonly unit: string | null;
+  /** 뜻: what the value controls and which issue owns it. */
+  readonly description: string;
+  readonly schema: z.ZodType<T>;
+}
+
+/** Definitions by key, in the order the admin screen lists them. */
+export type ReleaseSettingsRegistry = ReadonlyMap<string, ReleaseSettingDefinition>;
+
+function assertDefinition(definition: ReleaseSettingDefinition): void {
+  const { key, label, unit, description } = definition;
+  if (!releaseSettingKeySchema.safeParse(key).success) {
+    throw new Error(
+      `release setting key '${key}' must match ${String(RELEASE_SETTING_KEY_PATTERN)}`,
+    );
+  }
+  if (label.trim() === '' || description.trim() === '' || unit?.trim() === '') {
+    throw new Error(`release setting '${key}' needs a label, a description and a non-blank unit`);
+  }
+}
+
+/** Checks one definition and returns it as given; the type of its value follows `schema`. */
+export function defineReleaseSetting<T extends ReleaseSettingValue>(
+  definition: ReleaseSettingDefinition<T>,
+): ReleaseSettingDefinition<T> {
+  assertDefinition(definition);
+  return definition;
+}
+
+/**
+ * Builds a registry, refusing a malformed definition or a key used twice. The server reads an item
+ * only through the very definition object registered here (`ReleaseSettingsService.get`), so a
+ * value cannot be read under a definition that is not in the registry.
+ */
+export function defineReleaseSettings(
+  definitions: readonly ReleaseSettingDefinition[],
+): ReleaseSettingsRegistry {
+  const registry = new Map<string, ReleaseSettingDefinition>();
+  for (const definition of definitions) {
+    assertDefinition(definition);
+    if (registry.has(definition.key)) {
+      throw new Error(`release setting '${definition.key}' is registered twice`);
+    }
+    registry.set(definition.key, definition);
+  }
+  return registry;
+}
+
+/**
+ * The shipped registry. Empty on purpose: #170 builds the mechanism, and each value is registered
+ * by the issue that uses it (#70, #74, #119, #152·#175, #140·#184, …) — define it with
+ * `defineReleaseSetting` and list it here. Tests inject their own registry
+ * (`createTestApp({ releaseSettings })` in apps/api).
+ */
+export const RELEASE_SETTINGS: ReleaseSettingsRegistry = defineReleaseSettings([]);
+
+/** A stored status and value: `value` is null exactly when `status` is `undecided`. */
+export interface ReleaseSettingState {
+  status: ReleaseSettingStatus;
+  value: unknown;
+}
+
+/** What server code gets for an item: no value while undecided, a typed one otherwise. */
+export type ReleaseSettingReading<T extends ReleaseSettingValue = ReleaseSettingValue> =
+  | { key: string; status: 'undecided'; value: null }
+  | { key: string; status: Exclude<ReleaseSettingStatus, 'undecided'>; value: T };
+
+/**
+ * The reading of `definition` from its stored row (`undefined`: no row, so `undecided`). Throws
+ * when the row breaks the status/value rule or its value no longer fits the schema — a stale
+ * value after a definition changed is a fault to surface, not a value to use.
+ */
+export function readReleaseSetting<T extends ReleaseSettingValue>(
+  definition: ReleaseSettingDefinition<T>,
+  stored: ReleaseSettingState | undefined,
+): ReleaseSettingReading<T> {
+  const { key } = definition;
+  if (stored === undefined || stored.status === 'undecided') {
+    if (stored !== undefined && stored.value !== null) {
+      throw new Error(`release setting '${key}' is undecided but holds a value`);
+    }
+    return { key, status: 'undecided', value: null };
+  }
+  const parsed = definition.schema.safeParse(stored.value);
+  if (!parsed.success) {
+    throw new Error(`release setting '${key}': the stored value does not fit its schema`, {
+      cause: parsed.error,
+    });
+  }
+  return { key, status: stored.status, value: parsed.data };
+}
+
+/** `parseReleaseSettingChange`: the state to store, or why the change is refused. */
+export type ReleaseSettingChangeResult =
+  | { success: true; state: { status: ReleaseSettingStatus; value: ReleaseSettingValue | null } }
+  | { success: false; issues: ValidationIssue[] };
+
+/**
+ * Checks a change against the item: `undecided` takes no value (omitted or null), every other
+ * status requires one, and a value must fit the item's schema. Issues are paths into the request
+ * body (`['value', …]`), as the validation pipe reports them.
+ */
+export function parseReleaseSettingChange(
+  definition: ReleaseSettingDefinition,
+  change: { status: ReleaseSettingStatus; value?: unknown },
+): ReleaseSettingChangeResult {
+  const { status, value } = change;
+  const absent = value === undefined || value === null;
+  if (status === 'undecided') {
+    return absent
+      ? { success: true, state: { status, value: null } }
+      : {
+          success: false,
+          issues: [{ path: ['value'], message: 'must be omitted while the status is undecided' }],
+        };
+  }
+  if (absent) {
+    return {
+      success: false,
+      issues: [{ path: ['value'], message: 'is required unless the status is undecided' }],
+    };
+  }
+  const parsed = definition.schema.safeParse(value);
+  if (!parsed.success) {
+    return {
+      success: false,
+      issues: parsed.error.issues.map((issue) => ({
+        path: [
+          'value',
+          ...issue.path.map((segment) => (typeof segment === 'number' ? segment : String(segment))),
+        ],
+        message: issue.message,
+      })),
+    };
+  }
+  return { success: true, state: { status, value: parsed.data } };
+}
+
+/**
+ * The JSON Schema of the value an admin enters for `definition` (its input side), so the admin
+ * screen can say what shape is expected without knowing the item. Parts JSON Schema cannot say
+ * (a refine, a transform) become `{}`; the server still checks them.
+ */
+export function releaseSettingValueJsonSchema(
+  definition: ReleaseSettingDefinition,
+): Record<string, unknown> {
+  return z.toJSONSchema(definition.schema, { io: 'input', unrepresentable: 'any' });
+}
+
+// ---- DTOs ---------------------------------------------------------------------------
+
+/** Who changed an item: the admin's account id and nickname. */
+export const releaseSettingActorSchema = z
+  .object({ id: z.string(), nickname: z.string() })
+  .meta({ id: 'ReleaseSettingActor' });
+export type ReleaseSettingActor = z.infer<typeof releaseSettingActorSchema>;
+
+/** A status and value, before or after a change: `value` is null exactly while `undecided`. */
+export const releaseSettingStateSchema = z
+  .object({ status: releaseSettingStatusSchema, value: z.unknown().nullable() })
+  .meta({ id: 'ReleaseSettingState' });
+
+/** `GET /admin/release-settings` item and `PATCH /admin/release-settings/:key` answer. */
+export const releaseSettingSchema = z
+  .object({
+    key: z.string(),
+    label: z.string(),
+    unit: z.string().nullable(),
+    description: z.string(),
+    /** JSON Schema of the value to enter (`releaseSettingValueJsonSchema`). */
+    valueSchema: z.record(z.string(), z.unknown()),
+    status: releaseSettingStatusSchema,
+    /** The stored value; null exactly while `undecided`. */
+    value: z.unknown().nullable(),
+    /** The last change; null for an item never changed (no row: `undecided`). */
+    updatedAt: z.iso.datetime().nullable(),
+    updatedBy: releaseSettingActorSchema.nullable(),
+  })
+  .meta({ id: 'ReleaseSetting' });
+export type ReleaseSetting = z.infer<typeof releaseSettingSchema>;
+
+/** `GET /admin/release-settings`: every registered item, or only those with one status. */
+export const releaseSettingListQuerySchema = z.object({
+  status: releaseSettingStatusSchema.optional(),
+});
+export type ReleaseSettingListQuery = z.infer<typeof releaseSettingListQuerySchema>;
+
+/**
+ * `PATCH /admin/release-settings/:key`: the new status and value, and why (required). The value is
+ * omitted (or null) for `undecided` and required otherwise; `parseReleaseSettingChange` checks it
+ * against the item.
+ */
+export const releaseSettingChangeBodySchema = z
+  .object({
+    status: releaseSettingStatusSchema,
+    value: z.unknown().optional(),
+    reason: z.string().trim().min(1).max(RELEASE_SETTING_REASON_MAX_LENGTH),
+  })
+  .meta({ id: 'ReleaseSettingChangeBody' });
+export type ReleaseSettingChangeBody = z.infer<typeof releaseSettingChangeBodySchema>;
+
+/** `admin_actions.payload` of a `release_setting_change` row. */
+export const releaseSettingChangePayloadSchema = z.object({
+  key: z.string(),
+  before: releaseSettingStateSchema,
+  after: releaseSettingStateSchema,
+  reason: z.string(),
+});
+export type ReleaseSettingChangePayload = z.infer<typeof releaseSettingChangePayloadSchema>;
+
+/** One entry of `GET /admin/release-settings/changes`, newest first. */
+export const releaseSettingChangeSchema = z
+  .object({
+    /** The admin_actions row. */
+    id: z.uuid(),
+    key: z.string(),
+    /** The item's name today; null once the key is no longer registered. */
+    label: z.string().nullable(),
+    before: releaseSettingStateSchema,
+    after: releaseSettingStateSchema,
+    reason: z.string(),
+    actor: releaseSettingActorSchema,
+    createdAt: z.iso.datetime(),
+  })
+  .meta({ id: 'ReleaseSettingChange' });
+export type ReleaseSettingChange = z.infer<typeof releaseSettingChangeSchema>;
+
+/** `GET /admin/release-settings/changes`: a cursor page, of one item when `key` is given. */
+export const releaseSettingChangeListQuerySchema = cursorQuerySchema.extend({
+  key: releaseSettingKeySchema.optional(),
+});
+export type ReleaseSettingChangeListQuery = z.infer<typeof releaseSettingChangeListQuerySchema>;
