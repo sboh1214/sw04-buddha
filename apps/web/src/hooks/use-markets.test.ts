@@ -239,7 +239,7 @@ describe('the live list', () => {
 
   it("moves a card's numbers and never its rank, which belongs to the fetch", () => {
     // A DELIBERATE refusal, pinned so it is not "fixed" back. `sort=volume` is keyset-paginated
-    // on `(volume_p DESC, id DESC)` (market.service.ts), so the order is the answer's: a tick
+    // on `(volume_coin DESC, id DESC)` (market.service.ts), so the order is the answer's: a tick
     // that overtakes the row above leaves the two cards in the order the server sent them, the
     // same way a market that closes stays in a `status=open` list until the next answer. The
     // alternatives were measured and are worse — invalidating costs one request per cached page

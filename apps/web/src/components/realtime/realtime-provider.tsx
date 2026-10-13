@@ -488,7 +488,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // not hold it, so those cost nothing.
         //
         // It writes a card's NUMBERS and never its RANK, and that is a decision rather than an
-        // oversight. `sort=volume` is keyset-paginated on `(volume_p DESC, id DESC)`
+        // oversight. `sort=volume` is keyset-paginated on `(volume_coin DESC, id DESC)`
         // (market.service.ts), so the order belongs to the fetch that produced the page — the
         // same rule `joinMarketPages` states from the other side ("the page SHAPE comes from
         // `incoming`"), and the same rule list MEMBERSHIP already follows: a market that closes

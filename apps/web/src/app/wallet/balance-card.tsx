@@ -8,7 +8,7 @@ import { copy } from '@/copy';
 import { useMe } from '@/hooks/use-me';
 import { profileView } from '@/lib/query-client';
 
-/** Balance summary (PLAN 11.3). `locked_p` is always 0 in the MVP but shown for honesty. */
+/** Balance summary (PLAN 11.3). `locked_coin` is always 0 in the MVP but shown for honesty. */
 export function BalanceCard() {
   const { data: me, isPending, isFetching, isLoggedIn, refetch } = useMe();
   // The same four states /portfolio reads, and for the same reason: this screen's gate is
