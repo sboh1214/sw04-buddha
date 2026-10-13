@@ -10,7 +10,7 @@
  * a documented public answer that PRIVATE_DATA names, and on a path or field naming an excluded
  * feature (EXCLUDED_FEATURES); private-data.test.ts calls every line for real with another
  * account's private data in the database. A route added tomorrow is refused until it is written
- * here with a reason, and the reason is what a reviewer reads.
+ * here with a reason, and the reason is what a reviewer reads. docs/GUARDS.md has the steps.
  *
  * Keys are `METHOD /path` as the controllers write them, without `/api` and the version.
  */

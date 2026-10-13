@@ -15,6 +15,7 @@
 | [docs/RESET.md](docs/RESET.md)                                             | 운영 DB 초기화 절차 — 무엇을 지우고 남기는지, `deploy/reset-db.sh` 실행과 확인(#149가 쓴다, ADR-0048)                                                              |
 | [docs/TERMS.md](docs/TERMS.md)                                             | 화면 용어 대응표 — 쓰지 않는 표현과 그 자리의 기획 용어(#14, ADR-0052). 같은 목록이 `@buddha/shared`의 `REPLACED_TERMS`다                                          |
 | [docs/SETTINGS.md](docs/SETTINGS.md)                                       | 출시 설정 등록 규칙 — 항목 정의를 두는 곳, 상태(미정·설계 제안·시험값·승인됨), 바꾼 뒤 시작하는 일에만 적용, 변경 기록, 예상 항목과 담당 이슈(#170, ADR-0055)      |
+| [docs/GUARDS.md](docs/GUARDS.md)                                           | 회귀 가드 등록 규칙 — 제외 기능 목록과 공개 금지 항목, 검사가 보는 곳과 허용, 공개·본인 전용 API·실시간 이벤트·알림 유형의 등록(#113, ADR-0057)                    |
 
 ## 요구 사항
 
@@ -265,7 +266,7 @@ docker/     docker-compose.yml, postgres 롤 초기화 SQL (로컬 개발 스택
 deploy/     운영 compose.yaml · Caddyfile · deploy.sh · host-setup.sh · reset-db.sh (api 이미지에 동봉)
 terraform/  AWS 인프라 (tf-buddha-*), README.md 에 운영 절차
 scripts/    generate-api-doc.mjs (pnpm api:openapi 의 마지막 단계)
-docs/       plan/(기획서 v0.2 원문) · PLAN.md · API.md · DECISIONS.md · QUESTIONS.md · RESET.md(운영 DB 초기화) · TERMS.md(용어 대응표) · SETTINGS.md(출시 설정 등록 규칙)
+docs/       plan/(기획서 v0.2 원문) · PLAN.md · API.md · DECISIONS.md · QUESTIONS.md · RESET.md(운영 DB 초기화) · TERMS.md(용어 대응표) · SETTINGS.md(출시 설정 등록 규칙) · GUARDS.md(회귀 가드 등록 규칙)
 ```
 
 패키지 의존 규칙은 PLAN §4.1을 따른다: 앱은 `packages/*`만 import하고, `shared`는 어떤 프레임워크에도 의존하지 않는다.

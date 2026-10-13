@@ -10,7 +10,7 @@ import { type RealtimeEventType } from '../realtime.js';
  * parses the event with (`marketRealtimeEventSchema`, `userRealtimeEventSchema`), a market-channel
  * schema has no field of PRIVATE_DATA and no excluded feature's name, and no user-channel event
  * parses as a market-channel one. The gateway's own suite and the API's private-data suite
- * (apps/api/src/surface) publish them for real.
+ * (apps/api/src/surface) publish them for real. docs/GUARDS.md has the steps for a new type.
  */
 export interface RealtimeEventEntry {
   readonly channel: 'market' | 'user';

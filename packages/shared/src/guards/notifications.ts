@@ -11,6 +11,7 @@ import {
  * every text a person reads in it. N05 §4 leaves score, ranking, Forecast-edit and paid-Coin
  * purchase notifications out of the initial product, and guards/notifications.test.ts fails on a
  * type that names any excluded feature (EXCLUDED_FEATURES), as a name or in its text.
+ * docs/GUARDS.md has the registration rule.
  */
 export interface NotificationTypeEntry {
   /** The type as the API and its stored rows name it. */

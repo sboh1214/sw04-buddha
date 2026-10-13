@@ -4,13 +4,14 @@ import { REPLACED_TERMS } from '../terms.js';
  * What the plan leaves out of the initial product, in one list (#113): the regression checks
  * that keep each of these from coming back read it from here and from nowhere else — the screen
  * text, screen address and menu checks of the web (apps/web/src/excluded-features.test.ts), the
- * mail templates' check (apps/api/src/mail/templates.test.ts) and the storage name check
+ * mail templates' check (apps/api/src/mail/templates.test.ts), the seed markets' copy check
+ * (packages/db/src/seed-markets.test.ts) and the storage name check
  * (packages/db/src/storage-names.test.ts); the `api` surface is the public API's. Nothing reads
- * it at run time.
+ * it at run time. docs/GUARDS.md says where each check lives and how a later issue registers.
  *
  * A feature is looked for on the surfaces it names:
- * - `screen`: text a person reads — the web's copy, string and JSX text, mail — matched with
- *   `words`;
+ * - `screen`: text a person reads — the web's copy, string and JSX text, mail, the seed markets'
+ *   copy — matched with `words`;
  * - `route`: screen addresses and menu links, matched with `tokens`;
  * - `api`: public API paths and response field names, matched with `tokens`;
  * - `storage`: table, column, constraint and enum names and the stored value lists, matched
