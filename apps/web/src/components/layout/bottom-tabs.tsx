@@ -13,22 +13,22 @@ import { copy } from '@/copy';
  * every page's last row would sit under it — the site footer, the last row of every page, pays it
  * as extra bottom padding (footer.tsx).
  *
- * The four destinations are shown to signed-out visitors too. Three of them are session-gated on
- * the server and answer with `redirect('/login?next=…')`, which is the same thing a tap on a
- * hidden tab could not do; hiding them would also make the bar's shape depend on a `GET /me` that
- * has not resolved during the first paint.
+ * The four destinations are shown to signed-out visitors too. Three of them are in MY, whose
+ * layout is session-gated on the server and answers with `redirect('/login?next=…')`, which is
+ * the same thing a tap on a hidden tab could not do; hiding them would also make the bar's shape
+ * depend on a `GET /me` that has not resolved during the first paint.
  */
 /** Next 16 types `href`, so the list is declared as routes rather than plain strings. */
 const TABS: { key: string; href: Route; label: string }[] = [
   { key: 'home', href: '/', label: copy.navHome },
-  { key: 'portfolio', href: '/portfolio', label: copy.navPortfolio },
-  { key: 'wallet', href: '/wallet', label: copy.navWallet },
-  { key: 'settings', href: '/settings', label: copy.navSettings },
+  { key: 'portfolio', href: '/my', label: copy.navPortfolio },
+  { key: 'wallet', href: '/my/wallet', label: copy.navWallet },
+  { key: 'settings', href: '/my/settings', label: copy.navSettings },
 ];
 
 /**
  * Whether a tab is the page being shown. `/` matches only itself — every route starts with it —
- * while the others also match their own subtree, so a future `/wallet/…` keeps 지갑 marked.
+ * while the others also match their own subtree, so a future `/my/wallet/…` keeps 지갑 marked.
  */
 export function isCurrentTab(pathname: string, href: string): boolean {
   if (href === '/') return pathname === '/';

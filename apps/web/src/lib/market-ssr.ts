@@ -56,7 +56,7 @@ export function detailWindowEnd(series: PriceSeries | null): number | undefined 
 
 /**
  * The home page's raw `searchParams`. Every value is `string | string[]` because a repeated
- * param arrives as an array (the idiom at settings/page.tsx:20-24).
+ * param arrives as an array (the idiom at my/settings/page.tsx).
  */
 export interface MarketSearchParams {
   status?: string | string[];

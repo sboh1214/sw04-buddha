@@ -149,7 +149,7 @@ test.describe('금액 표기 · 375px', () => {
     await expectVolumeFits('long card volume');
 
     // --- the wallet's balance, the largest type an amount is set in.
-    await page.goto('/wallet');
+    await page.goto('/my/wallet');
     const available = page.getByTestId('wallet-available');
     await expect(available).toHaveText('1,000,000 Coin');
     await expectOneLineOnScreen(page, available, 'wallet balance');

@@ -49,7 +49,7 @@ describe('copy', () => {
 
 describe('safeNextPath', () => {
   it('keeps same-origin paths', () => {
-    expect(safeNextPath('/settings')).toBe('/settings');
+    expect(safeNextPath('/my/settings')).toBe('/my/settings');
     expect(safeNextPath('/markets/abc?x=1')).toBe('/markets/abc?x=1');
   });
 
@@ -65,7 +65,7 @@ describe('safeNextPath', () => {
     expect(safeNextPath('/\t/evil.com')).toBe('/');
     expect(safeNextPath('/\n/evil.com')).toBe('/');
     expect(safeNextPath('/\r\n//evil.com')).toBe('/');
-    expect(safeNextPath('/settings\\..')).toBe('/');
+    expect(safeNextPath('/my/settings\\..')).toBe('/');
   });
 
   it('rejects a repeated ?next= (Next hands the page an array, not a string)', () => {

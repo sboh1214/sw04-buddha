@@ -40,7 +40,7 @@ export function sessionIdentityChanged(
  * refetch could file B's rows under A's key).
  *
  * `resetQueries`, not `clear`: clearing removes the queries but leaves mounted observers
- * holding the detached data with nothing to re-render them, so an open /wallet would keep
+ * holding the detached data with nothing to re-render them, so an open /my/wallet would keep
  * showing the old ledger. A reset puts every query back to its initial state and refetches
  * the active ones: skeleton, then the right account. Two windows side by side never fire
  * `visibilitychange`, so a sign-in there is seen only on the next interaction — the same

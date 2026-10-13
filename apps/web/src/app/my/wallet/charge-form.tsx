@@ -38,9 +38,10 @@ function chargeErrorTitle(error: unknown): string {
  * PLAN 11.3 charging. Users buy one of the packages an admin configured (ADR-0026), so there
  * is no free-form amount: each card shows the Coin granted, the KRW price and the discount. One
  * click charges at once (`useCharge`, the mock provider of ADR-0042) and a toast confirms it.
- * Not drawn while paid Coin is closed (PAID_COIN_SALES_ENABLED, ADR-0049; app/wallet/page.tsx).
+ * Not drawn while paid Coin is closed (PAID_COIN_SALES_ENABLED, ADR-0049;
+ * app/my/wallet/page.tsx).
  *
- * `highlightPackageId` is `/wallet?package=`, the package the public `/charge` page sent the
+ * `highlightPackageId` is `/my/wallet?package=`, the package the public `/charge` page sent the
  * visitor to buy (ADR-0044): that card is marked and scrolled to, and buying stays a click of
  * its own.
  */

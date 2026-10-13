@@ -12,6 +12,7 @@ import {
   authErrorMessage,
   type SocialProvider,
 } from '@/lib/auth-client';
+import { MY_SETTINGS_PATH } from '@/lib/my';
 import { SettingsSection } from './section';
 
 const PROVIDER_LABEL: Record<string, string> = {
@@ -27,7 +28,7 @@ const PROVIDER_LABEL: Record<string, string> = {
  * carries the list, so both caches are invalidated after link/unlink.
  * The 해제 button is disabled when only one method remains; the server enforces the same
  * rule (better-auth refuses to unlink the last account unless `allowUnlinkingAll`).
- * A failed provider round-trip comes back as `/settings?error=<code>` (settings-notice.tsx).
+ * A failed provider round-trip comes back as `/my/settings?error=<code>` (settings-notice.tsx).
  */
 export function LinkedAccounts() {
   const queryClient = useQueryClient();
@@ -43,8 +44,8 @@ export function LinkedAccounts() {
     mutationFn: async (provider: SocialProvider) => {
       const { error } = await authClient.linkSocial({
         provider,
-        callbackURL: '/settings',
-        errorCallbackURL: '/settings?error=link',
+        callbackURL: MY_SETTINGS_PATH,
+        errorCallbackURL: `${MY_SETTINGS_PATH}?error=link`,
       });
       if (error) throw new Error(authErrorMessage(error, copy.socialUnavailable));
       // Success = the browser is navigating to the provider; nothing else to do here.

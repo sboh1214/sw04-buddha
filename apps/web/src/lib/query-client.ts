@@ -49,7 +49,7 @@ function makeQueryClient() {
   // The same duty for the account's own rows, and for the same reason: `applyPositionEvent`
   // orders `user:position` events by `version`, but a `GET /me/positions` answer went in raw,
   // so a fetch that left before another tab's trade landed after the event and rolled the row
-  // back — a stale 내 포지션 on the detail and stale 평가손익 on /portfolio, with nothing
+  // back — a stale 내 포지션 on the detail and stale 평가손익 in MY, with nothing
   // scheduled to correct either. `['positions']` covers `['positions', 'open']` and
   // `['positions', 'settled']` by prefix and never reaches `['orders']`.
   client.setQueryDefaults(POSITIONS_KEY, {

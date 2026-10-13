@@ -2,13 +2,11 @@
 
 import { Avatar, Badge, Button, HStack, Menu, Portal, Skeleton, Text } from '@chakra-ui/react';
 import { formatCoin, parseCoinAmount } from '@buddha/shared';
-import { useQueryClient } from '@tanstack/react-query';
 import NextLink from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
-import { toaster } from '@/components/ui/toaster';
+import { usePathname } from 'next/navigation';
 import { copy } from '@/copy';
 import { useMe } from '@/hooks/use-me';
-import { signOut } from '@/lib/auth-client';
+import { useSignOut } from '@/hooks/use-sign-out';
 
 /**
  * Right side of the top nav (PLAN 11.4 AuthButtons): logged out -> 로그인 / 가입하기;
@@ -23,8 +21,7 @@ import { signOut } from '@/lib/auth-client';
 export function AuthButtons() {
   const { data: me, isPending, isLoggedIn } = useMe();
   const pathname = usePathname();
-  const router = useRouter();
-  const queryClient = useQueryClient();
+  const handleSignOut = useSignOut();
 
   if (isPending) {
     // 40px tall: the height of the pair it stands in for, so the header does not move when
@@ -57,33 +54,6 @@ export function AuthButtons() {
     );
   }
 
-  async function handleSignOut() {
-    // better-auth reports every failure as `{ error }` now that `fetchOrNetworkError` covers
-    // the transport too; the catch stays as belt-and-braces. The session signal that clears
-    // `useSession` fires on success only (client/proxy.mjs), so navigating home regardless
-    // would just look like a logout.
-    let failed: boolean;
-    try {
-      failed = (await signOut()).error != null;
-    } catch {
-      failed = true;
-    }
-    if (failed) {
-      toaster.create({ type: 'error', title: copy.logoutFailed });
-      return;
-    }
-    // Everything, not just `['me']`. The browser QueryClient is a singleton for the tab's
-    // lifetime (lib/query-client.ts) and none of the keys carry a user id, so a ledger,
-    // payment list or admin memo left behind here would be served — fresh, for the 30s
-    // staleTime, so not even refetched — to whoever logs in next on this browser. This
-    // covers the tab that clicked; every other tab learns of the sign-out from better-auth
-    // (a localStorage broadcast) and is emptied by SessionCacheGuard when its session
-    // identity changes.
-    queryClient.clear();
-    router.push('/');
-    router.refresh();
-  }
-
   return (
     <HStack gap="3">
       <Badge
@@ -94,7 +64,7 @@ export function AuthButtons() {
         borderRadius="pill"
         data-testid="balance-chip"
       >
-        <NextLink href="/wallet">
+        <NextLink href="/my/wallet">
           <Text as="span" color="fg.muted" fontWeight="normal" me="1">
             {copy.balance}
           </Text>
@@ -115,16 +85,16 @@ export function AuthButtons() {
         <Portal>
           <Menu.Positioner>
             <Menu.Content minW="40">
-              {/* The only way into /admin from the UI (PLAN 12). The layout there turns
-                  members away on the server and the API's AdminGuard decides for real, so
-                  this link is convenience, not the boundary. */}
+              {/* A way into /admin (PLAN 12), as MY's account actions also offer. The layout
+                  there turns members away on the server and the API's AdminGuard decides for
+                  real, so this link is convenience, not the boundary. */}
               {me?.profile.role === 'admin' && (
                 <Menu.Item value="admin" asChild data-testid="nav-admin">
                   <NextLink href="/admin/users">{copy.navAdmin}</NextLink>
                 </Menu.Item>
               )}
               <Menu.Item value="settings" asChild>
-                <NextLink href="/settings">{copy.navSettings}</NextLink>
+                <NextLink href="/my/settings">{copy.navSettings}</NextLink>
               </Menu.Item>
               <Menu.Separator />
               <Menu.Item value="logout" onSelect={() => void handleSignOut()}>

@@ -428,14 +428,14 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     // than being its tail. On the home grid a reload IS the recovery: `page.tsx` prefetches ONE
     // page and this app persists no query cache, so a reloaded tab is back to
     // PAGE_LIMIT_DEFAULT 20 rows, all live, and it takes ten presses of 더 보기 to pass 200
-    // again. On /portfolio it is not: `GET /me/positions` is uncursored by design, so every load
+    // again. In MY it is not: `GET /me/positions` is uncursored by design, so every load
     // selects the same first 200 markets and the same holdings stay dark.
     //
     // Two "fixes" are refused here on purpose. Capping the registry client-side buys ZERO live
     // rooms — the gateway joins ids until the cap wherever the boundary falls, so the same 200
     // live and the same rows die — while deleting the only signal that a screen is over the cap,
     // which is this warning. And 더 보기 is not bounded at `REALTIME_ROOMS_MAX`: that mirrors a
-    // limit only the server holds, does nothing for /portfolio, and hides rows — which A-M3-31
+    // limit only the server holds, does nothing for MY's holdings, and hides rows — which A-M3-31
     // already refused for a market whose close time has passed. A stale card is a smaller lie
     // than a market that is not on the page at all.
     socket.on(REALTIME_EXCEPTION_EVENT, (raw: unknown) => {
@@ -545,7 +545,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // distinction has bitten, and the worst of them. `applyStatus` writes NOTHING into a
         // cache with no row, and a bare invalidation on a query that has answered nothing hands
         // back the request already running: the one that read the market BEFORE the transition.
-        // /portfolio's `['market', id]` entries are unseeded (`useQueries`), so that pre-close
+        // MY's `['market', id]` entries are unseeded (`useQueries`), so that pre-close
         // snapshot landed as fresh and the row went on saying `open`. What that costs on screen
         // is the MISSING 마감 badge, not a wrong one: `OpenPositionRow` draws a status badge only
         // when `marketStatus !== 'open'`, so the holding is listed with no sign that the market
@@ -596,24 +596,24 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // 원장 is the other half of this event, and it was the one balance writer that moved the
         // chip and left the history behind: `useCharge`, `useRedeemCoupon` and the admin
         // adjustment all refresh `['me']` and `['ledger']` together ("the nav chip and the ledger
-        // must never disagree", use-wallet.ts). A tab parked on /wallet showed the post-payout
+        // must never disagree", use-wallet.ts). A tab parked on /my/wallet showed the post-payout
         // balance above a newest row still asserting the pre-payout 잔고 후, with 정산 지급 absent
         // — self-contradicting rather than merely behind, which is what makes it worth a request.
         //
         // Both kinds of the RULE above, and the first one literally: the event carries the ID of
         // the row it cannot draw (a `LedgerEntry` is type, amount, 잔고 후, memo and instant; a
-        // `UserBalanceEvent` is two figures, that id and a `ts`), and a /wallet on its first fetch
-        // could not take it either. Not 남발: the accept gate is `ledger_entries.id`, the
+        // `UserBalanceEvent` is two figures, that id and a `ts`), and a /my/wallet on its first
+        // fetch could not take it either. Not 남발: the accept gate is `ledger_entries.id`, the
         // account's own commit order, so an ACCEPTED event always names a row this tab has never
         // held and a late or duplicate delivery spends nothing.
         //
         // Above the `patch.kind` branch because that branch RETURNS, and the tab it returns for —
-        // one whose `GET /me` is in flight — is on /wallet precisely the tab whose FIRST
+        // one whose `GET /me` is in flight — is on /my/wallet precisely the tab whose FIRST
         // `GET /me/ledger` is in flight too. `restartQueries` for that same reason: `['ledger']`
         // is never seeded and never SSR'd, so a bare invalidation would hand back the request
         // that left before the payout committed.
         //
-        // 결제 내역 sits beside 원장 on /wallet (while paid Coin is on sale, ADR-0049) and
+        // 결제 내역 sits beside 원장 on /my/wallet (while paid Coin is on sale, ADR-0049) and
         // contradicts it the same way when left behind: an admin refund claws the Coin back (a
         // 결제 취소(환불) row) while the payment still says 완료. The event names no payment, so
         // the list is asked again — the same kind as the ledger's, and on the same accepted event,
@@ -675,7 +675,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // 주문 이력 has no reducer and no event of its own: an `Order` carries its id, status,
         // filledQty, amountCoin, priceAvgBp and the market's slug and title, none of which any
         // `user:` event does, so a row cannot be built and has to be asked for — the same answer
-        // `market:trade` gives 체결 내역. Without it /portfolio moved its balance and its holding
+        // `market:trade` gives 체결 내역. Without it MY moved its balance and its holding
         // on this event and left the order list a row short until a focus or a reconnect.
         //
         // A SETTLING event is excluded because a settlement writes no order row at all, so the request could only answer what the list already holds. `refetchType`

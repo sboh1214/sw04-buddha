@@ -3,9 +3,9 @@ import { copy } from '@/copy';
 import { authNoticeFor } from '@/lib/auth-client';
 
 /**
- * better-auth sends the browser back to `/settings?error=<code>` when a 연결 (linkSocial)
+ * better-auth sends the browser back to `/my/settings?error=<code>` when a 연결 (linkSocial)
  * round-trip fails or when a verification / change-email link is invalid or expired
- * (`callbackURL` of those mails is /settings).
+ * (`callbackURL` of those mails is /my/settings).
  */
 export function SettingsNotice({ code }: { code: string | string[] }) {
   const message = authNoticeFor(code, copy.linkFailed);

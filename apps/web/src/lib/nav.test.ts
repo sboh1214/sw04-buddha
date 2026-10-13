@@ -28,7 +28,7 @@ describe('isPrimaryCurrent', () => {
     expect(isPrimaryCurrent('/', 'markets')).toBe(true);
     expect(isPrimaryCurrent('/markets/btc-100k', 'markets')).toBe(true);
     expect(isPrimaryCurrent('/community', 'markets')).toBe(false);
-    expect(isPrimaryCurrent('/settings', 'markets')).toBe(false);
+    expect(isPrimaryCurrent('/my/settings', 'markets')).toBe(false);
     expect(isPrimaryCurrent('/marketsx', 'markets')).toBe(false);
   });
 
@@ -40,7 +40,7 @@ describe('isPrimaryCurrent', () => {
   });
 
   it('never lights two items for one path', () => {
-    for (const pathname of ['/', '/markets/x', '/community', '/wallet', '/login']) {
+    for (const pathname of ['/', '/markets/x', '/community', '/my/wallet', '/login']) {
       const lit = (['markets', 'community'] as const).filter((key) =>
         isPrimaryCurrent(pathname, key),
       );

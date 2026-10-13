@@ -137,9 +137,9 @@ export function applyTick<T extends LiveMarket>(
  * claimed: `realtime-provider.tsx` states the rule and enumerates all of them. This is the
  * strictest of them, because a tick arrives many times a second while the others are rare.
  *
- * THE HAZARD: /portfolio opens one UNSEEDED `['market', id]` per held market (`useQueries`,
- * portfolio.tsx) and `useMarketSocket` has already joined every one of those rooms, so a tick can
- * arrive while the opening GET is on the wire. `applyTick` above answers `undefined` for a cache
+ * THE HAZARD: MY opens one UNSEEDED `['market', id]` per held market (`useQueries`,
+ * app/my/portfolio.tsx) and `useMarketSocket` has already joined every one of those rooms, so a
+ * tick can arrive while the opening GET is on the wire. `applyTick` above answers `undefined` for a cache
  * with no row — it will not invent one — and the request, whose snapshot predates the trade, then
  * lands with the old price and STANDS: `staleTime` is 30s, the next tick on a quiet market may be
  * an hour away, and `markToLiveMarket` (use-portfolio.ts) gives that row precedence, so 현재가 ·
@@ -340,7 +340,7 @@ export function applyPositionEvent(
 ): PositionPatch {
   // An UNSETTLED event says nothing about the settled list, and skipping it here is what stops a
   // storm. `refetch` is this reducer's answer for a row the cache does not hold, and on
-  // /portfolio — where both lists are mounted — the settled list holds no unsettled row BY
+  // MY's summary — where both lists are mounted — the settled list holds no unsettled row BY
   // DEFINITION, so every ordinary trade reported an expected absence as a gap and the handler
   // restarted the whole `['positions']` root. Measured: five of the account's own trades cost ten
   // requests, and the open list had already been patched in place for each of them.
@@ -549,7 +549,7 @@ export class Throttle {
  * the gateway refuses an over-long message whole — it joins no room at all and answers on
  * `exception`. A client that wants the bigger number therefore has to send the smaller one
  * repeatedly, which the home grid needs after five 더 보기 (PAGE_LIMIT_DEFAULT 20) and
- * /portfolio needs for an account holding more than 100 markets, `GET /me/positions` having
+ * MY needs for an account holding more than 100 markets, `GET /me/positions` having
  * no pagination. Pure and here rather than inside the room registry so the boundary is
  * testable without a socket.
  *

@@ -33,7 +33,7 @@ export function OnboardingForm({ next }: { next: string }) {
   const router = useRouter();
   const { data: me, isPending, isFetching, isLoggedIn, refetch } = useMe();
   const hasContact = me?.contact != null;
-  // The four states wallet and /portfolio read (`profileView`), for the same reason: the page's
+  // The four states MY's screens read (`profileView`), for the same reason: the page's
   // session check is server-side and runs only on navigation, so a session that ends under this
   // form (it expired, another tab signed out) left it offering a retry that can only 401.
   const view = profileView({ isLoggedIn, isPending, isFetching, hasProfile: me !== undefined });

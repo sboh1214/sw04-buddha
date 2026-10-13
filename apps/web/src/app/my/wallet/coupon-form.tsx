@@ -25,7 +25,7 @@ type FormValues = z.infer<typeof schema>;
 
 /**
  * Redeeming an admin-issued coupon (ADR-0026): Coin arrives as a BONUS ledger entry. Not drawn
- * while paid Coin is closed (PAID_COIN_SALES_ENABLED, ADR-0049; app/wallet/page.tsx).
+ * while paid Coin is closed (PAID_COIN_SALES_ENABLED, ADR-0049; app/my/wallet/page.tsx).
  */
 export function CouponForm() {
   const redeem = useRedeemCoupon();

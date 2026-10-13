@@ -18,7 +18,7 @@ describe('adminLoginPath', () => {
   });
 
   it('falls back to the user list when the header is missing or not an admin path', () => {
-    for (const value of [null, undefined, '', '/', '/settings', '/wallet', 'admin/markets']) {
+    for (const value of [null, undefined, '', '/', '/my/settings', '/my/wallet', 'admin/markets']) {
       expect(next(adminLoginPath(value)), JSON.stringify(value)).toBe(ADMIN_LOGIN_FALLBACK);
     }
   });
