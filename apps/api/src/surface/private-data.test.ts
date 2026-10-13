@@ -11,6 +11,8 @@
  *   is not blind (N04 §7 "다른 사용자가 비공개 자산·주문을 조회할 수 없어야 한다"). What A's own
  *   answer names is not looked at: the excluded-feature names are the public API's (owner
  *   decision 2026-10-14 #113);
+ * - every better-auth route that answers with an account's data (AUTH_ROUTES `answersAccount`)
+ *   is called anonymously and as B, aimed at A, and neither answer may hold A's values;
  * - the market room is listened to, anonymously and as B, while A's own events are published and
  *   smuggled onto the market channel and the API publishes a real market event.
  *
@@ -36,12 +38,13 @@ import { Redis } from 'ioredis';
 import { io, type Socket as ClientSocket } from 'socket.io-client';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
+import { AUTH, AUTH_BASE_PATH } from '../auth/auth.js';
 import { MarketPublisher } from '../realtime/market-publisher.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
-import { discoverRoutes, type DiscoveredRoute } from '../test/routes.js';
+import { discoverAuthRoutes, discoverRoutes, type DiscoveredRoute } from '../test/routes.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { sleep } from '../test/wait.js';
-import { OWNER_ROUTES, PUBLIC_ROUTES } from './registry.js';
+import { AUTH_ROUTES, OWNER_ROUTES, PUBLIC_ROUTES } from './registry.js';
 
 /** setup-env.ts fixes WEB_ORIGIN to this. */
 const ORIGIN = 'http://localhost:3000';
@@ -66,6 +69,8 @@ interface Fixture {
   /** Open; A holds a position in it, has two orders in it and one fill. */
   market: MarketRow;
   paymentId: string;
+  /** A's password login: the `account` row better-auth keeps. */
+  accountId: string;
   sentinels: readonly Sentinel[];
 }
 
@@ -226,6 +231,90 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
 
 const SAFE_METHODS = new Set(['GET', 'HEAD']);
 
+/** A request to a better-auth route. */
+interface AuthRequest {
+  query?: Readonly<Record<string, string>>;
+  body?: unknown;
+}
+
+interface AuthCase {
+  /** What an anonymous caller and B send: A's account wherever it takes one. */
+  request?: (fixture: Fixture) => AuthRequest;
+  /** Their answers. */
+  status: { anonymous: number; B: number };
+  /**
+   * What A sends to see its own data (the same request when left out), and the labels of A's
+   * values it shows: proof they were there to leak. Left out where that would change A, or where
+   * nothing of A's could show (A has no provider account).
+   */
+  own?: { request?: (fixture: Fixture) => AuthRequest; labels: readonly string[] };
+}
+
+/** A's login account and A, as better-auth's account-token routes take them. */
+const aimedAtA = (fixture: Fixture) => ({ accountId: fixture.accountId, userId: fixture.a.id });
+
+const WRONG_PASSWORD = 'not-the-password-1';
+
+/** The better-auth routes that answer with an account's data (AUTH_ROUTES `answersAccount`). */
+const AUTH_CASES: Readonly<Record<string, AuthCase>> = {
+  'POST /sign-in/social': {
+    // Only a provider's genuine ID token for A could sign in as A. A provider no environment
+    // configures keeps the answer the same whatever a developer's .env holds.
+    request: () => ({ body: { provider: 'github', idToken: { token: 'forged-id-token' } } }),
+    status: { anonymous: 404, B: 404 },
+  },
+  'GET /get-session': {
+    status: { anonymous: 200, B: 200 },
+    own: { labels: ['user id', 'email'] },
+  },
+  'POST /get-session': {
+    // Refused while the deferred session refresh is off (AUTH_ROUTES).
+    status: { anonymous: 405, B: 405 },
+  },
+  'POST /sign-in/email': {
+    request: (fixture) => ({ body: { email: fixture.a.email, password: WRONG_PASSWORD } }),
+    status: { anonymous: 401, B: 401 },
+    own: {
+      request: (fixture) => ({ body: { email: fixture.a.email, password: fixture.a.password } }),
+      labels: ['user id', 'email'],
+    },
+  },
+  'GET /verify-email': {
+    request: () => ({ query: { token: 'forged-token' } }),
+    status: { anonymous: 401, B: 401 },
+  },
+  'POST /change-password': {
+    request: () => ({
+      body: { currentPassword: WRONG_PASSWORD, newPassword: 'another-password-1' },
+    }),
+    status: { anonymous: 401, B: 400 },
+  },
+  'POST /update-session': {
+    request: (fixture) => ({ body: { userId: fixture.a.id } }),
+    status: { anonymous: 401, B: 400 },
+  },
+  'GET /list-sessions': {
+    status: { anonymous: 401, B: 200 },
+    own: { labels: ['user id'] },
+  },
+  'GET /list-accounts': {
+    status: { anonymous: 401, B: 200 },
+    own: { labels: ['user id', 'account id'] },
+  },
+  'POST /refresh-token': {
+    request: (fixture) => ({ body: aimedAtA(fixture) }),
+    status: { anonymous: 401, B: 400 },
+  },
+  'POST /get-access-token': {
+    request: (fixture) => ({ body: aimedAtA(fixture) }),
+    status: { anonymous: 401, B: 400 },
+  },
+  'GET /account-info': {
+    request: (fixture) => ({ query: aimedAtA(fixture) }),
+    status: { anonymous: 401, B: 400 },
+  },
+};
+
 /** The parameter names of a route: `id` of `/me/payments/:id`. */
 const paramsOf = (route: DiscoveredRoute) => [...route.url.matchAll(/:(\w+)/g)].map((m) => m[1]!);
 
@@ -252,6 +341,15 @@ describe('private data cases (static)', () => {
       ];
     });
     expect(missing).toEqual([]);
+  });
+
+  it('has a case for every better-auth route that answers with an account’s data', () => {
+    expect(Object.keys(AUTH_CASES).sort()).toEqual(
+      Object.entries(AUTH_ROUTES)
+        .filter(([, entry]) => entry.answersAccount === true)
+        .map(([key]) => key)
+        .sort(),
+    );
   });
 
   it('has a cross-account case for every registered owner-only route', () => {
@@ -417,6 +515,10 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       .select({ token: schema.session.token })
       .from(schema.session)
       .where(eq(schema.session.userId, a.id));
+    const [account] = await t.db
+      .select({ id: schema.account.id })
+      .from(schema.account)
+      .where(eq(schema.account.userId, a.id));
 
     const text = (label: string, value: string): Sentinel => ({ label, value, kind: 'text' });
     const amount = (label: string, value: bigint | number): Sentinel => ({
@@ -430,6 +532,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       admin,
       market,
       paymentId: payment!.id,
+      accountId: account!.id,
       sentinels: [
         text('user id', a.id),
         text('email', a.email),
@@ -438,6 +541,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         text('phone', phone),
         text('password', a.password),
         text('session token', session!.token),
+        text('account id', account!.id),
         text('ledger memo', memo),
         text('filled order id', filled.id),
         text('open order id', open.id),
@@ -535,23 +639,67 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     ]);
   });
 
-  it('answers better-auth’s session reads with the caller’s own session only', async () => {
-    // /api/auth/* is outside Nest (OUTSIDE_NEST_ROUTES); these are the calls that read a
-    // session and answer about an account.
-    const read = (url: string, cookie?: string) =>
-      t.app.inject({ method: 'GET', url, headers: cookie ? { cookie } : {} });
-    const anonymous = await read('/api/auth/get-session');
-    expect(anonymous.statusCode).toBe(200);
-    expect(leaked(anonymous.body)).toEqual([]);
-    for (const url of ['/api/auth/get-session', '/api/auth/list-sessions']) {
-      const asB = await read(url, f.b.cookie);
-      expect({ url, status: asB.statusCode, leaks: leaked(asB.body) }).toEqual({
-        url,
-        status: 200,
-        leaks: [],
-      });
+  // ---- better-auth ------------------------------------------------------------------------
+
+  it('serves the better-auth routes AUTH_ROUTES registers, as the app is configured here', () => {
+    // registry.test.ts lists them from an instance built like the app's; this is the app's own.
+    expect(
+      discoverAuthRoutes(t.app.get(AUTH))
+        .map((route) => route.key)
+        .sort(),
+    ).toEqual(Object.keys(AUTH_ROUTES).sort());
+  });
+
+  /** A better-auth route, called the way the browser does: same origin, JSON. */
+  function callAuth(key: string, request: AuthRequest, cookie?: string) {
+    const [method, path] = key.split(' ') as [string, string];
+    const query = new URLSearchParams(request.query ?? {}).toString();
+    const safe = SAFE_METHODS.has(method);
+    return t.app.inject({
+      method: method as 'GET',
+      url: `${AUTH_BASE_PATH}${path}${query === '' ? '' : `?${query}`}`,
+      headers: {
+        origin: ORIGIN,
+        ...(safe ? {} : { 'content-type': 'application/json' }),
+        ...(cookie ? { cookie } : {}),
+      },
+      ...(safe ? {} : { payload: JSON.stringify(request.body ?? {}) }),
+    });
+  }
+
+  it('never answers anyone but A with A’s data on a better-auth route, and A’s data is there', async () => {
+    const answers: { route: string; caller: string; status: number; leaks: string[] }[] = [];
+    const shown: { route: string; status: number; missing: string[] }[] = [];
+    for (const [key, authCase] of Object.entries(AUTH_CASES)) {
+      const request = authCase.request?.(f) ?? {};
+      for (const [caller, cookie] of [
+        ['anonymous', undefined],
+        ['B', f.b.cookie],
+      ] as const) {
+        const res = await callAuth(key, request, cookie);
+        answers.push({ route: key, caller, status: res.statusCode, leaks: leaked(res.body) });
+      }
+      if (authCase.own) {
+        const own = await callAuth(key, authCase.own.request?.(f) ?? request, f.a.cookie);
+        const held = leaked(own.body);
+        shown.push({
+          route: key,
+          status: own.statusCode,
+          missing: authCase.own.labels.filter((label) => !held.includes(label)),
+        });
+      }
     }
-    expect((await read('/api/auth/get-session', f.b.cookie)).body).toContain(f.b.email);
+    expect(answers).toEqual(
+      answers.map(({ route, caller }) => ({
+        route,
+        caller,
+        status: AUTH_CASES[route]!.status[caller as 'anonymous' | 'B'],
+        leaks: [],
+      })),
+    );
+    expect(shown).toEqual(shown.map(({ route }) => ({ route, status: 200, missing: [] })));
+    // B's session read answered with B: the request reached a session at all.
+    expect((await callAuth('GET /get-session', {}, f.b.cookie)).body).toContain(f.b.email);
   });
 
   // ---- owner-only routes ------------------------------------------------------------------

@@ -16,8 +16,9 @@
  *
  * Keys are `METHOD /path` as the controllers write them, without `/api` and the version.
  *
- * The realtime surface is registered the same way: every Socket.IO gateway by namespace
- * (REALTIME_GATEWAYS) and every place the API emits on a socket (REALTIME_EMITS), both found by
+ * better-auth's routes under /api/auth are registered the same way (AUTH_ROUTES), found from
+ * the auth instance, and so is the realtime surface: every Socket.IO gateway by namespace
+ * (REALTIME_GATEWAYS) and every place the API sends on a socket (REALTIME_EMITS), both found by
  * registry.test.ts from the module graph and the sources; the event types themselves are
  * REALTIME_EVENT_REGISTRY's (@buddha/shared).
  */
@@ -111,18 +112,139 @@ export const OWNER_ROUTES: Readonly<Record<string, RegisteredRoute>> = {
   },
 };
 
+export interface RegisteredAuthRoute {
+  /** What it does and for whom, and why anyone may call it. */
+  readonly reason: string;
+  /**
+   * It answers with an account's data — a user, a session, a linked account, a provider token —
+   * so private-data.test.ts calls it anonymously and as B aimed at A (`AUTH_CASES`).
+   */
+  readonly answersAccount?: true;
+}
+
 /**
- * Public surface the module walk cannot see: it is served outside the Nest controllers, so it
- * is named here with what it answers. The realtime rooms are below and in
- * REALTIME_EVENT_REGISTRY (@buddha/shared).
+ * better-auth's routes (PLAN 10.1), relative to /api/auth: served by middie ahead of Nest routing,
+ * so the module walk cannot see them, and open to anyone — each checks the session itself.
+ * registry.test.ts lists what the auth instance serves (every endpoint of `auth.api` with a path,
+ * plugins' included, less `disabledPaths`) and fails on one missing here or a line it no longer
+ * serves (owner decision 2026-10-13 #113 (a)): a plugin (the SMS OTP of #183, say) or an upgrade
+ * that adds an endpoint is refused until it is written here. Keys are `METHOD /path`.
+ * `/sign-up/email` is disabled (ADR-0024): RegistrationService calls it on the server only.
  */
-export const OUTSIDE_NEST_ROUTES: readonly { readonly path: string; readonly reason: string }[] = [
-  {
-    path: '/api/auth/*',
+export const AUTH_ROUTES: Readonly<Record<string, RegisteredAuthRoute>> = {
+  'POST /sign-in/social': {
     reason:
-      'better-auth(PLAN 10.1)가 Nest 라우팅 앞에서 처리한다: 로그인·로그아웃·가입 확인·비밀번호 재설정·소셜 로그인과 연결·이메일 변경. 세션을 읽는 호출(get-session·list-sessions)은 그 세션 계정의 것만 돌려주고, /sign-up/email은 막혀 있다(ADR-0024).',
+      '소셜 로그인 시작(PLAN 10.2): 제공자의 로그인 주소를 돌려준다. 제공자의 ID 토큰을 주면 그 계정으로 로그인하고 사용자를 돌려준다.',
+    answersAccount: true,
   },
-];
+  'GET /callback/:id': {
+    reason: 'OAuth 제공자의 콜백(PLAN 10.2): 세션 쿠키를 굽고 웹으로 돌려보낸다(리디렉트).',
+  },
+  'POST /callback/:id': {
+    reason: '같은 콜백을 form_post로 받는 제공자용(PLAN 10.2).',
+  },
+  'GET /get-session': {
+    reason: '세션 읽기: 요청한 세션의 계정과 세션만 돌려준다. 세션이 없으면 null.',
+    answersAccount: true,
+  },
+  'POST /get-session': {
+    reason:
+      '세션 읽기(POST): 세션 갱신 미루기(session.deferSessionRefresh)를 켜지 않아서 405로 거절한다. 켜면 GET과 같다.',
+    answersAccount: true,
+  },
+  'POST /sign-out': {
+    reason: '로그아웃: 요청한 세션을 끝낸다.',
+  },
+  'POST /sign-in/email': {
+    reason:
+      '이메일 로그인(PLAN 10.2): 맞는 주소와 비밀번호에만 그 계정의 세션과 사용자를 돌려준다. 이메일 인증 전이면 403.',
+    answersAccount: true,
+  },
+  'POST /reset-password': {
+    reason: '비밀번호 재설정 완료: 메일의 토큰으로 새 비밀번호를 정한다.',
+  },
+  'POST /verify-password': {
+    reason: '세션 계정의 비밀번호가 맞는지만 답한다.',
+  },
+  'GET /verify-email': {
+    reason:
+      '메일 링크의 확인(ADR-0023·ADR-0024): 서명된 토큰이 가리키는 주소를 인증하거나 바꾼다. 이메일 변경 확인에서는 그 계정의 사용자를 돌려준다.',
+    answersAccount: true,
+  },
+  'POST /send-verification-email': {
+    reason: '인증 메일 다시 보내기(ADR-0023): 주소마다 횟수 제한.',
+  },
+  'POST /change-email': {
+    reason: '세션 계정의 이메일 변경 시작(PLAN 17 Q5): 확인 메일만 보낸다.',
+  },
+  'POST /change-password': {
+    reason:
+      '세션 계정의 비밀번호 변경: 지금 비밀번호가 맞아야 하고, 세션 계정의 사용자를 돌려준다.',
+    answersAccount: true,
+  },
+  'POST /update-session': {
+    reason:
+      '세션의 추가 필드 고치기: 추가 필드를 두지 않아서 거절한다. 고치면 세션 계정의 그 세션을 돌려준다.',
+    answersAccount: true,
+  },
+  'POST /update-user': {
+    reason: '세션 계정의 이름·이미지 고치기(better-auth 사용자 필드). 상태만 돌려준다.',
+  },
+  'POST /delete-user': {
+    reason: '계정 삭제: better-auth의 계정 삭제(user.deleteUser)를 켜지 않아서 거절한다.',
+  },
+  'POST /request-password-reset': {
+    reason: '비밀번호 재설정 메일(PLAN 10.2): 주소가 있는지 알리지 않고 같은 답을 한다.',
+  },
+  'GET /reset-password/:token': {
+    reason: '재설정 메일 링크: 토큰을 확인하고 웹의 재설정 화면으로 돌려보낸다(리디렉트).',
+  },
+  'GET /list-sessions': {
+    reason: '세션 계정의 활성 세션 목록.',
+    answersAccount: true,
+  },
+  'POST /revoke-session': {
+    reason: '세션 계정의 세션 하나 끝내기: 다른 계정의 세션 토큰이면 아무것도 하지 않는다.',
+  },
+  'POST /revoke-sessions': {
+    reason: '세션 계정의 모든 세션 끝내기.',
+  },
+  'POST /revoke-other-sessions': {
+    reason: '세션 계정의 다른 세션 끝내기.',
+  },
+  'POST /link-social': {
+    reason: '세션 계정에 소셜 로그인 연결(PLAN 10.3): 제공자의 로그인 주소를 돌려준다.',
+  },
+  'GET /list-accounts': {
+    reason: '세션 계정의 로그인 수단 목록(PLAN 10.3).',
+    answersAccount: true,
+  },
+  'GET /delete-user/callback': {
+    reason: '계정 삭제 메일 링크: 계정 삭제를 켜지 않아서 거절한다.',
+  },
+  'POST /unlink-account': {
+    reason:
+      '세션 계정의 로그인 수단 하나 끊기(PLAN 10.3, 마지막 하나는 거절): 다른 계정의 것이면 찾지 못한다.',
+  },
+  'POST /refresh-token': {
+    reason: '세션 계정에 연결된 제공자 토큰 갱신: 세션 계정의 것만 찾는다.',
+    answersAccount: true,
+  },
+  'POST /get-access-token': {
+    reason: '세션 계정에 연결된 제공자의 접근 토큰: 세션 계정의 것만 찾는다.',
+    answersAccount: true,
+  },
+  'GET /account-info': {
+    reason: '세션 계정에 연결된 제공자의 계정 정보: 세션 계정의 것만 찾는다.',
+    answersAccount: true,
+  },
+  'GET /ok': {
+    reason: 'better-auth의 생존 확인: { ok: true }.',
+  },
+  'GET /error': {
+    reason: 'better-auth의 오류 페이지: 쿼리의 오류 코드를 보인다.',
+  },
+};
 
 export interface RegisteredGateway {
   /** What a client may do on it and what it is sent, and why that may be open to anyone. */

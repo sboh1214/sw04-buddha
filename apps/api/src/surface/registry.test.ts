@@ -7,8 +7,8 @@
  * which CI regenerates and diffs against the code), so it needs no Postgres and no Redis. What a
  * route actually answers is private-data.test.ts's.
  *
- * Owner decision (2026-10-13 #113 (a)): a public route, gateway or socket emit nobody registered
- * is found here and fails the run; review is not the only gate.
+ * Owner decision (2026-10-13 #113 (a)): a public route, a better-auth route, a gateway or a
+ * socket send nobody registered is found here and fails the run; review is not the only gate.
  */
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
@@ -25,13 +25,15 @@ import { AdminGuard } from '../auth/admin.guard.js';
 import { SessionGuard } from '../auth/session.guard.js';
 import { PaidCoinSalesGuard } from '../payments/paid-coin-sales.guard.js';
 import {
+  disabledAuthPaths,
+  discoverAuthRoutes,
   discoverGateways,
   discoverRoutes,
   guardsOf,
   type DiscoveredRoute,
 } from '../test/routes.js';
 import {
-  OUTSIDE_NEST_ROUTES,
+  AUTH_ROUTES,
   OWNER_ROUTES,
   PUBLIC_ROUTES,
   REALTIME_EMITS,
@@ -54,9 +56,10 @@ function classOf(route: DiscoveredRoute): RouteClass {
 
 const routes = discoverRoutes();
 const byClass = (wanted: RouteClass) => routes.filter((route) => classOf(route) === wanted);
+const authRoutes = discoverAuthRoutes();
 
 /** What is missing from a registry, and what it holds that the app no longer serves as such. */
-function drift(found: DiscoveredRoute[], registry: Readonly<Record<string, RegisteredRoute>>) {
+function drift(found: readonly { key: string }[], registry: Readonly<Record<string, unknown>>) {
   const keys = found.map((route) => route.key);
   return {
     unregistered: keys.filter((key) => !(key in registry)).sort(),
@@ -78,11 +81,11 @@ function checksPaid(route: { key: string }): boolean {
 /**
  * `name: feature` for each excluded feature public names carry, paid purchase only when `paid`,
  * and for each name that keeps a probability or a belief (N02 §10: someone's input, or the
- * Community Forecast's).
+ * Community Forecast's). `path` when the names are paths, which a path token (`bonus`) names too.
  */
-function excludedIn(names: Iterable<string>, paid: boolean): string[] {
+function excludedIn(names: Iterable<string>, paid: boolean, path = false): string[] {
   return [...new Set(names)].flatMap((name) => [
-    ...findExcludedIdentifier(name, 'api')
+    ...findExcludedIdentifier(name, 'api', { path })
       .filter((hit) => paid || hit.feature !== 'paid-purchase')
       .map((hit) => `${name}: ${hit.feature}`),
     ...(namesPersonalProbability(name) ? [`${name}: personal probability`] : []),
@@ -95,9 +98,10 @@ function excludedIn(names: Iterable<string>, paid: boolean): string[] {
  * a score of one's own, a probability, its fields — is not looked at by name.
  */
 const excludedInAnyPath = (routePath: string): string[] =>
-  findExcludedIdentifier(routePath, 'api', { features: EVERY_ROUTE_PATH_FEATURES }).map(
-    (hit) => hit.feature,
-  );
+  findExcludedIdentifier(routePath, 'api', {
+    features: EVERY_ROUTE_PATH_FEATURES,
+    path: true,
+  }).map((hit) => hit.feature);
 
 describe('public and owner-only routes (static)', () => {
   it('finds the public, owner-only and admin surface at all', () => {
@@ -120,10 +124,13 @@ describe('public and owner-only routes (static)', () => {
   });
 
   it('gives every registered route a reason', () => {
-    for (const [key, entry] of Object.entries({ ...PUBLIC_ROUTES, ...OWNER_ROUTES })) {
+    for (const [key, entry] of Object.entries({
+      ...PUBLIC_ROUTES,
+      ...OWNER_ROUTES,
+      ...AUTH_ROUTES,
+    })) {
       expect(entry.reason.trim(), key).not.toBe('');
     }
-    for (const outside of OUTSIDE_NEST_ROUTES) expect(outside.reason.trim()).not.toBe('');
   });
 
   it('closes every kept paid route first, while paid Coin is off (D9, ADR-0049)', () => {
@@ -146,16 +153,28 @@ describe('public and owner-only routes (static)', () => {
     ).toEqual([]);
   });
 
-  it('leaves /api/auth/* to better-auth, named with a reason', () => {
-    expect(OUTSIDE_NEST_ROUTES.map((outside) => outside.path)).toContain('/api/auth/*');
+  it('registers every route better-auth serves under /api/auth, and none it does not', () => {
+    // A guard on the discovery, as for the module walk.
+    expect(authRoutes.map((route) => route.key)).toEqual(
+      expect.arrayContaining(['GET /get-session', 'POST /sign-in/email', 'GET /list-sessions']),
+    );
+    expect(drift(authRoutes, AUTH_ROUTES)).toEqual({ unregistered: [], stale: [] });
+    // Sign-up is RegistrationService's on the server only (ADR-0024); Nest serves nothing there.
+    expect(disabledAuthPaths()).toContain('/sign-up/email');
+    expect(authRoutes.map((route) => route.path)).not.toContain('/sign-up/email');
     expect(routes.filter((route) => route.url.startsWith('/api/auth/'))).toEqual([]);
   });
 
   it('names no excluded feature or probability in a public route path', () => {
-    // Paid purchase only where the route is not kept paid code (D9).
+    // Paid purchase only where the route is not kept paid code (D9). better-auth's routes are
+    // open to anyone as well.
+    const paths = [
+      ...byClass('public').map((route) => ({ ...route, paid: checksPaid(route) })),
+      ...authRoutes.map((route) => ({ ...route, key: `auth ${route.key}`, paid: true })),
+    ];
     expect(
-      byClass('public').flatMap((route) =>
-        excludedIn([route.path], checksPaid(route)).map((hit) => `${route.key} ${hit}`),
+      paths.flatMap((route) =>
+        excludedIn([route.path], route.paid, true).map((hit) => `${route.key} ${hit}`),
       ),
     ).toEqual([]);
   });
@@ -164,7 +183,7 @@ describe('public and owner-only routes (static)', () => {
     // A transfer or a cash-out would be an owner-only route, an activity reward could be an
     // admin one (owner decision 2026-10-14 #113).
     expect(
-      routes.flatMap((route) =>
+      [...routes, ...authRoutes].flatMap((route) =>
         excludedInAnyPath(route.path).map((feature) => `${route.key}: ${feature}`),
       ),
     ).toEqual([]);
@@ -173,7 +192,9 @@ describe('public and owner-only routes (static)', () => {
   it('holds an owner-only or admin path to transfers, rewards and cash-out only', () => {
     expect(excludedInAnyPath('/me/coins/send')).toEqual(['coin-transfer']);
     expect(excludedInAnyPath('/admin/rewards')).toEqual(['activity-reward']);
+    expect(excludedInAnyPath('/admin/daily-bonuses')).toContain('activity-reward');
     expect(excludedInAnyPath('/me/withdrawals')).toEqual(['cash-out']);
+    expect(excludedInAnyPath('/me/exchange')).toEqual(['cash-out']);
     // A score or a probability of one's own is the public API's to refuse, not this check's.
     expect(excludedInAnyPath('/me/score')).toEqual([]);
     expect(excludedInAnyPath('/me/probability')).toEqual([]);
@@ -231,6 +252,28 @@ function referencedSchemas(node: unknown, seen = new Set<string>()): Set<string>
   return seen;
 }
 
+/** Every string an `enum` or a `const` allows in a part of the document and its components. */
+function enumValues(node: unknown): string[] {
+  const own = (value: unknown): string[] => {
+    if (Array.isArray(value)) return value.flatMap(own);
+    if (value === null || typeof value !== 'object') return [];
+    const record = value as Record<string, unknown>;
+    const allowed = [
+      ...(Array.isArray(record.enum) ? (record.enum as unknown[]) : []),
+      ...('const' in record ? [record.const] : []),
+    ].filter((item): item is string => typeof item === 'string');
+    return [...allowed, ...Object.values(record).flatMap(own)];
+  };
+  return [...own(node), ...[...referencedSchemas(node)].flatMap((name) => own(schemas[name]))];
+}
+
+/**
+ * The error codes every operation's error envelope allows. They name paid purchase
+ * (PAYMENT_GATEWAY_*: the kept payment code's, D9, ADR-0049), so only for that feature they are
+ * not looked at.
+ */
+const ERROR_CODES = new Set(enumValues(schemas.ErrorCode));
+
 /** Every property name in a part of the document and in the components it refers to. */
 function fieldNames(node: unknown): string[] {
   const own = (value: unknown): string[] => {
@@ -282,13 +325,37 @@ describe('the public API document (static)', () => {
       .filter(({ key }) => key in PUBLIC_ROUTES)
       .flatMap(({ key, url, operation }) => {
         const names = [
-          url,
           ...(operation.parameters ?? []).map((parameter) => parameter.name),
           ...referencedSchemas(operation),
           ...fieldNames(operation),
         ];
-        return excludedIn(names, checksPaid({ key })).map((hit) => `${key} ${hit}`);
+        return [
+          ...excludedIn([url], checksPaid({ key }), true),
+          ...excludedIn(names, checksPaid({ key })),
+        ].map((hit) => `${key} ${hit}`);
       });
+    expect(found).toEqual([]);
+  });
+
+  it('allows no excluded feature or probability as a value of a public answer or request', () => {
+    // A status, a sort, a type a public operation takes or gives (owner decision 2026-10-14
+    // #113: the public API). Paid purchase is looked for past the error codes.
+    expect([...ERROR_CODES]).toEqual(
+      expect.arrayContaining(['NOT_FOUND', 'PAYMENT_GATEWAY_ERROR']),
+    );
+    const values = operations
+      .filter(({ key }) => key in PUBLIC_ROUTES)
+      .flatMap(({ key, operation }) =>
+        [...new Set(enumValues(operation))].map((value) => ({ key, value })),
+      );
+    expect(values.map(({ value }) => value)).toEqual(
+      expect.arrayContaining(['open', 'newest', 'YES', 'trade']),
+    );
+    const found = values.flatMap(({ key, value }) =>
+      excludedIn([value], checksPaid({ key }) && !ERROR_CODES.has(value)).map(
+        (hit) => `${key} ${hit}`,
+      ),
+    );
     expect(found).toEqual([]);
   });
 
@@ -346,17 +413,49 @@ function sources(dir: string = SRC): string[] {
 /** The Socket.IO calls that send an event: `emit` and its variants (`to(room).emit` included). */
 const EMITS = new Set(['emit', 'emitWithAck', 'serverSideEmit']);
 
-/** Every emit call in a source, with its event as written. */
+/**
+ * The Socket.IO calls that send a `message` event: `send` and `write` on a socket, a namespace, a
+ * server or a room. Looked for only in a file that imports a socket package, so a Fastify
+ * `reply.send` is not one.
+ */
+const SOCKET_SENDS = new Set(['send', 'write']);
+const SOCKET_MODULE =
+  /^(?:socket\.io|@socket\.io\/|@nestjs\/websockets$|@nestjs\/platform-socket\.io$)/;
+
+/** A handler's declared return type that sends nothing back. */
+const NO_REPLY = new Set(['void', 'Promise<void>']);
+
+/**
+ * Every send in a source, with its event as written: an emit call, a `send` or `write` call in a
+ * socket file (`message`), and a `@SubscribeMessage` handler that may return something — Nest
+ * sends a returned value back, as the ack or as the `{ event, data }` it names — as `reply to`
+ * its message. A handler is no reply only when it declares `void` or `Promise<void>`.
+ */
 function emitsOf(fileName: string, text: string): { event: string }[] {
   const file = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true);
+  const socketFile = file.statements.some(
+    (statement) =>
+      ts.isImportDeclaration(statement) &&
+      ts.isStringLiteral(statement.moduleSpecifier) &&
+      SOCKET_MODULE.test(statement.moduleSpecifier.text),
+  );
   const found: { event: string }[] = [];
   const visit = (node: ts.Node): void => {
-    if (
-      ts.isCallExpression(node) &&
-      ts.isPropertyAccessExpression(node.expression) &&
-      EMITS.has(node.expression.name.text)
-    ) {
-      found.push({ event: node.arguments[0]?.getText(file) ?? '' });
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+      const name = node.expression.name.text;
+      if (EMITS.has(name)) found.push({ event: node.arguments[0]?.getText(file) ?? '' });
+      else if (socketFile && SOCKET_SENDS.has(name)) found.push({ event: 'message' });
+    }
+    if (ts.isMethodDeclaration(node)) {
+      const subscribed = (ts.getDecorators(node) ?? []).find(
+        (decorator) =>
+          ts.isCallExpression(decorator.expression) &&
+          decorator.expression.expression.getText(file) === 'SubscribeMessage',
+      );
+      if (subscribed && !NO_REPLY.has(node.type?.getText(file).replaceAll(/\s/g, '') ?? '')) {
+        const call = subscribed.expression as ts.CallExpression;
+        found.push({ event: `reply to ${call.arguments[0]?.getText(file) ?? ''}` });
+      }
     }
     ts.forEachChild(node, visit);
   };
@@ -385,7 +484,7 @@ describe('the realtime surface (static)', () => {
     }
   });
 
-  it('knows an emit call when it reads one', () => {
+  it('knows a send when it reads one', () => {
     const planted = [
       'client.emit(REALTIME_EXCEPTION_EVENT, envelope);',
       'this.server.to(room).emit("user:secret", data);',
@@ -400,9 +499,26 @@ describe('the realtime surface (static)', () => {
       'event.type',
       "'ping'",
     ]);
+    // In a socket file, `send` and `write` send a `message`, and a handler may reply.
+    const gateway = [
+      "import { SubscribeMessage } from '@nestjs/websockets';",
+      "import { type Socket } from 'socket.io';",
+      'class Planted {',
+      "  @SubscribeMessage('subscribe') handleSubscribe(): void { client.send(secret); }",
+      "  @SubscribeMessage('watch') async watch(): Promise<void> { this.server.write(data); }",
+      "  @SubscribeMessage('ping') ping() { return { event: 'pong', data: secret }; }",
+      "  @SubscribeMessage('ask') ask(): WsResponse<string> { return reply; }",
+      '}',
+    ].join('\n');
+    expect(emitsOf('planted.ts', gateway).map(({ event }) => event)).toEqual([
+      'message',
+      'message',
+      "reply to 'ping'",
+      "reply to 'ask'",
+    ]);
   });
 
-  it('emits on a socket only where REALTIME_EMITS says, each with a reason', () => {
+  it('sends on a socket only where REALTIME_EMITS says, each with a reason', () => {
     const found = sources()
       .flatMap((file) =>
         emitsOf(file, readFileSync(file, 'utf8')).map(({ event }) => ({

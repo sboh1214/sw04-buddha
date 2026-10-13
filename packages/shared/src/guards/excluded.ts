@@ -6,9 +6,9 @@ import { REPLACED_TERMS } from '../terms.js';
  * text, screen address and menu checks of the web (apps/web/src/excluded-features.test.ts), the
  * mail templates' check (apps/api/src/mail/templates.test.ts), the seed markets' copy check
  * (packages/db/src/seed-markets.test.ts), the storage name check
- * (packages/db/src/storage-names.test.ts) and the API's (apps/api/src/surface/registry.test.ts,
- * private-data.test.ts). Nothing reads it at run time. docs/GUARDS.md says where each check
- * lives and how a later issue registers.
+ * (packages/db/src/storage-names.test.ts), the API's (apps/api/src/surface/registry.test.ts,
+ * private-data.test.ts) and the queue and job names' (excluded.test.ts). Nothing reads it at run
+ * time. docs/GUARDS.md says where each check lives and how a later issue registers.
  *
  * A feature is looked for on the surfaces it names:
  * - `screen`: text a person reads — the web's copy, string and JSX text, mail, the seed markets'
@@ -19,6 +19,8 @@ import { REPLACED_TERMS } from '../terms.js';
  *   and documented public operations, the fields of real public answers and of market-channel
  *   events — and notification type names, matched with `tokens`; the path of every route,
  *   owner-only and admin ones too, only for EVERY_ROUTE_PATH_FEATURES;
+ * - a path — a screen address, a menu link, an API route path — and a queue or job name are
+ *   matched with `pathTokens` as well;
  * - `storage`: table, column, constraint and enum names and the stored value lists, matched
  *   with `tokens`.
  *
@@ -66,6 +68,12 @@ export interface ExcludedFeature {
    * `/me/check-in`, `checked_in`) or the two as one word (`DAILY_CHECKIN`).
    */
   readonly tokens: readonly string[];
+  /**
+   * Identifier words that name it in a path — a screen address, a menu link, an API route path —
+   * or a queue or job name, and nowhere else: `bonus` is the starting Coin as well, which the
+   * ledger stores and an owner's answer carries, while no path has a reason to name one.
+   */
+  readonly pathTokens?: readonly string[];
 }
 
 const ALL_SURFACES: readonly ExclusionSurface[] = EXCLUSION_SURFACES;
@@ -158,8 +166,9 @@ export const EXCLUDED_FEATURES: readonly ExcludedFeature[] = [
       /쿠폰/,
       /가격표/,
       /할인/,
-      // A price in won; not 원칙, 원래, 원금, 원본, 원인 or 원하다 after a number.
-      /\d\s*원(?![칙래금본인하])/,
+      // A price in won, with or without a unit numeral ('9,900원', '1만 원', '5천원'); not
+      // 원칙, 원래, 원금, 원본, 원인 or 원하다 after a number.
+      /\d\s*(?:[십백천만억]+\s*)?원(?![칙래금본인하])/,
       /₩/,
     ],
     tokens: ['charge', 'purchase', 'payment', 'checkout', 'pricing', 'coupon', 'discount', 'krw'],
@@ -179,10 +188,14 @@ export const EXCLUDED_FEATURES: readonly ExcludedFeature[] = [
       // makes them a reward ('거래량 보너스', '좋아요 10개마다 Coin 지급', '매일 접속하면').
       // 글 is a post as its own word, not inside 게시글 (named) or 글자·글꼴·글씨.
       /(?:거래량|거래\s*횟수|주문\s*횟수|활동량?|행동량|접속|(?<![가-힣])글(?![자꼴씨])|게시글|답글|댓글|좋아요)[^.?!\n]{0,16}?(?:보상|보너스|지급)/,
+      // A bonus for coming back or for trading: '매일 보너스', '로그인 보너스', '7일 연속 거래 시
+      // 보너스', '첫 거래 보너스'. Not the sign-up's '가입 보너스', and not 지급 (정산 지급).
+      /(?:매일|일일|로그인|연속|거래)[^.?!\n]{0,12}?보너스/,
     ],
-    // `bonus` alone is the sign-up BONUS; storage-names.test.ts holds bonus-named stored values
-    // to a list of their own.
-    tokens: ['reward', 'attendance', 'check in', 'streak'],
+    // `bonus` alone is the sign-up BONUS: a path token only, and storage-names.test.ts holds
+    // bonus-named stored names to a list of their own.
+    tokens: ['reward', 'attendance', 'check in', 'streak', 'daily bonus', 'login bonus'],
+    pathTokens: ['bonus'],
   },
   {
     id: 'coin-transfer',
@@ -193,12 +206,24 @@ export const EXCLUDED_FEATURES: readonly ExcludedFeature[] = [
       /송금/,
       /이체/,
       /선물하기/,
-      // Coin as the thing sent: 'Coin 보내기', 'Coin을 다른 회원에게 보내기'. A mail or a code is
-      // sent as well, so 보내다 alone is not one.
-      /(?:Coin|코인)\s*(?:을|를)?\s*(?:[^.?!\n]{0,12}?에게\s*)?보내/,
+      // Coin as the thing sent: 'Coin 보내기', 'Coin 전송', 'Coin을 다른 회원에게 보내기'. A
+      // mail or a code is sent as well, so 보내다 alone is not one.
+      /(?:Coin|코인)\s*(?:을|를)?\s*(?:[^.?!\n]{0,12}?에게\s*)?(?:보내|전송)/,
     ],
-    // `send` alone is also a mail's or a verification code's; with Coin it is a transfer.
-    tokens: ['transfer', 'gift', 'remit', 'remittance', 'send coin', 'coin send'],
+    // `send` alone is also a mail's or a verification code's, and `give` and `tip` are everyday
+    // words (a tip is a hint); with Coin they are a transfer.
+    tokens: [
+      'transfer',
+      'gift',
+      'remit',
+      'remittance',
+      'send coin',
+      'coin send',
+      'give coin',
+      'coin give',
+      'tip coin',
+      'coin tip',
+    ],
   },
   {
     id: 'cash-out',
@@ -206,7 +231,7 @@ export const EXCLUDED_FEATURES: readonly ExcludedFeature[] = [
     basis: 'N01 §2, N00 §5, N06 초기 제품과의 경계',
     surfaces: ALL_SURFACES,
     words: [/환전/, /출금/, /인출/, /현금화/],
-    tokens: ['withdraw', 'cashout', 'cash'],
+    tokens: ['withdraw', 'cashout', 'cash', 'exchange', 'convert'],
   },
   {
     id: 'replaced-term',
@@ -265,24 +290,38 @@ export type AllowanceScope = (typeof ALLOWANCE_SCOPES)[number];
 
 /**
  * A sentence that says something is not offered, cannot be done, is not there or is not what it
- * is called: '…을 제공하지 않습니다', '…할 수 없습니다', '…기능은 없습니다', '…은 확률이 아닙니다'.
- * The service guide (#136) may widen it when it words its own sentences.
+ * is called: '…을 제공하지 않습니다', '…은 제공되지 않습니다', '…할 수 없습니다', '…은 불가합니다',
+ * '…기능은 없습니다', '…은 확률이 아닙니다'. The service guide (#136) may widen it when it words its
+ * own sentences.
  */
 export const NEGATIVE_NOTICE =
-  /(?:제공|지원|지급)하지\s*않|할\s*수\s*없|없(?:습니다|어요)|아닙니다|아니에요/;
+  /(?:제공|지원|지급)(?:하|되)지\s*않|되지\s*않(?:습니다|아요)|할\s*수\s*없|불가(?:능)?(?:합니다|해요)|없(?:습니다|어요)|아닙니다|아니에요/;
 
 const CASH_OUT_WORD = String.raw`(?:현금\s*)?(?:환전|출금|인출|현금화)`;
 
+/** The cash-out words themselves, joined by '·', '및', '하거나' and the like. */
+const CASH_OUT_WORDS = `${CASH_OUT_WORD}(?:\\s*(?:[·,/]|및|또는|와|과|이나|나|하거나|하고)?\\s*${CASH_OUT_WORD})*`;
+
 /**
- * The no-cash notice: the cash-out words themselves, joined by '·', '및', '하거나' and the like,
- * then a particle and NEGATIVE_NOTICE's verbs — 'Coin의 현금 환전·출금은 제공하지 않습니다',
- * '현금으로 환전하거나 출금할 수 없습니다'. The verb belongs to the cash-out word: in '출금 신청은
- * 취소할 수 없습니다' it does not, and the sentence offers a withdrawal.
+ * What the no-cash notice says of them: not offered, cannot be done, does not happen, not
+ * possible — at the end of the sentence, so '출금 불가 기간' is no notice.
+ */
+const NOT_OFFERED =
+  String.raw`(?:제공|지원|지급)(?:하|되)지\s*않|(?:할|하실)\s*수\s*없|되지\s*않(?:습니다|아요|음)|` +
+  String.raw`불가(?:능)?(?:합니다|해요|함)?(?=\s*(?:[.!?。\n]|$))`;
+
+/**
+ * The no-cash notice: the cash-out words, then a particle and NOT_OFFERED — 'Coin의 현금
+ * 환전·출금은 제공하지 않습니다', '현금으로 환전하거나 출금할 수 없습니다', 'Coin은 현금으로 환전되지
+ * 않습니다', '환전 및 출금이 불가합니다' — or the feature that is not there ('현금 출금 기능은
+ * 없습니다'). The negative belongs to the cash-out word: in '출금 신청은 취소할 수 없습니다' or '출금
+ * 내역이 없습니다' it does not, and the sentence offers a withdrawal.
  */
 export const CASH_OUT_NOTICE = new RegExp(
-  `${CASH_OUT_WORD}(?:\\s*(?:[·,/]|및|또는|와|과|이나|나|하거나|하고)?\\s*${CASH_OUT_WORD})*` +
-    String.raw`(?:\s*(?:기능|서비스))?(?:\s*(?:은|는|을|를|도|이|가))?\s*` +
-    String.raw`(?:(?:제공|지원|지급)하지\s*않|(?:할|하실)\s*수\s*없)`,
+  `${CASH_OUT_WORDS}(?:` +
+    String.raw`(?:\s*(?:기능|서비스))?(?:\s*(?:은|는|을|를|도|이|가))?\s*(?:` +
+    NOT_OFFERED +
+    String.raw`)|\s*(?:기능|서비스)\s*(?:은|는|이|가|도)?\s*없(?:습니다|어요))`,
 );
 
 export interface TextAllowance {
@@ -360,6 +399,7 @@ export const TEXT_ALLOWANCES: readonly TextAllowance[] = [
       'paid-purchase',
       'activity-reward',
       'coin-transfer',
+      'cash-out',
       'replaced-term',
       'prediction-word',
     ],
@@ -484,24 +524,41 @@ export interface ExcludedIdentifierHit {
 }
 
 /**
- * Each feature with its tokens' inflections: `forms` maps a word to the token it is a form of
- * (a two-word token's joined forms included), `pairs` holds a two-word token's forms word by
- * word.
+ * A list of tokens with their inflections: `forms` maps a word to the token it is a form of (a
+ * two-word token's joined forms included), `pairs` holds a two-word token's forms word by word.
  */
+function formsOf(tokens: readonly string[]) {
+  return {
+    forms: new Map(
+      tokens.flatMap((token) =>
+        tokenForms(token.replace(' ', '')).map((form) => [form, token] as const),
+      ),
+    ),
+    pairs: tokens.flatMap((token) => {
+      const [first, second] = token.split(' ');
+      return second === undefined
+        ? []
+        : [{ token, first: new Set(tokenForms(first!)), second: new Set(tokenForms(second)) }];
+    }),
+  };
+}
+
+/** Each feature's tokens, and its tokens with its path tokens. */
 const FEATURE_FORMS = EXCLUDED_FEATURES.map((feature) => ({
   feature,
-  forms: new Map(
-    feature.tokens.flatMap((token) =>
-      tokenForms(token.replace(' ', '')).map((form) => [form, token] as const),
-    ),
-  ),
-  pairs: feature.tokens.flatMap((token) => {
-    const [first, second] = token.split(' ');
-    return second === undefined
-      ? []
-      : [{ token, first: new Set(tokenForms(first!)), second: new Set(tokenForms(second)) }];
-  }),
+  names: formsOf(feature.tokens),
+  paths: formsOf([...feature.tokens, ...(feature.pathTokens ?? [])]),
 }));
+
+export interface FindExcludedIdentifierOptions {
+  /** The features to look for; every feature looked for on `surface` when left out. */
+  readonly features?: readonly ExcludedFeatureId[];
+  /**
+   * The name is a path or a queue or job name, so `pathTokens` count too. Always so on the
+   * `route` surface: a screen address or a menu link is one.
+   */
+  readonly path?: boolean;
+}
 
 /**
  * The excluded features an identifier on `surface` names — a route segment, an API path or
@@ -510,15 +567,17 @@ const FEATURE_FORMS = EXCLUDED_FEATURES.map((feature) => ({
 export function findExcludedIdentifier(
   name: string,
   surface: IdentifierSurface,
-  options: { readonly features?: readonly ExcludedFeatureId[] } = {},
+  options: FindExcludedIdentifierOptions = {},
 ): ExcludedIdentifierHit[] {
   const words = identifierWords(name);
+  const path = surface === 'route' || options.path === true;
   return FEATURE_FORMS.filter(
     ({ feature }) =>
       feature.surfaces.includes(surface) &&
       (options.features === undefined || options.features.includes(feature.id)),
-  ).flatMap(({ feature, forms, pairs }) =>
-    words.flatMap((word, index) => {
+  ).flatMap(({ feature, names, paths }) => {
+    const { forms, pairs } = path ? paths : names;
+    return words.flatMap((word, index) => {
       const token = forms.get(word);
       const next = words[index + 1];
       return [
@@ -527,8 +586,8 @@ export function findExcludedIdentifier(
           .filter((pair) => next !== undefined && pair.first.has(word) && pair.second.has(next))
           .map((pair) => ({ feature: feature.id, word: `${word} ${next!}`, token: pair.token })),
       ];
-    }),
-  );
+    });
+  });
 }
 
 /**

@@ -232,21 +232,45 @@ function internalPath(text: string): string | undefined {
 
 /**
  * What this app serves besides pages, registered (#113, owner decision 2026-10-13 (a)): a route
- * handler (a `route.ts` under `app/`), a Pages Router API route (`pages/api/`) or a server
- * action (a `'use server'` file or function) answers a request with whatever it returns, outside
- * the API's registry and its private-data checks. None exists — reads and writes go to the API —
- * so one added fails below until it is written here with what it answers and why it may (keyed
- * by the file under `src/`). docs/GUARDS.md has the rule.
+ * handler (a `route.ts` under `app/`), a metadata route (`sitemap`, `robots`, `manifest`, an
+ * Open Graph or Twitter image, an icon under `app/`, generated or static), a Pages Router API
+ * route (`pages/api/`) or a server action (a `'use server'` file or function) answers a request
+ * with whatever it returns, outside the API's registry and its private-data checks. None exists
+ * — reads and writes go to the API — so one added fails below until it is written here with what
+ * it answers and why it may (keyed by the file under `src/`). docs/GUARDS.md has the rule.
  */
 const WEB_SERVER_ENDPOINTS: Readonly<Record<string, string>> = {};
 
-/** Why a source is a server endpoint, or undefined when it is not one. */
+/** Next's metadata files: each answers a request of its own (`icon1.png`, `sitemap.ts`). */
+const METADATA_ROUTE =
+  /^(?:sitemap|robots|manifest|opengraph-image|twitter-image|icon|apple-icon)\d*\./;
+
+/** A script Next may run: TypeScript or JavaScript, ES module or CommonJS. */
+const SCRIPT = /\.[cm]?[jt]sx?$/;
+
+/** Why a file is a server endpoint, or undefined when it is not one. */
 function serverEndpointOf(file: string, text: string): string | undefined {
-  if (under(file, APP) && /^route\.[jt]sx?$/.test(path.basename(file))) return 'route handler';
+  const name = path.basename(file);
+  if (under(file, APP) && /^route\./.test(name) && SCRIPT.test(name)) return 'route handler';
+  if (under(file, APP) && METADATA_ROUTE.test(name)) return 'metadata route';
   if (under(file, at('pages', 'api'))) return 'API route';
   // A directive stands alone on its line, at the top of a file or of a function body.
   if (/^\s*(['"])use server\1;?\s*$/m.test(text)) return 'server action';
   return undefined;
+}
+
+/**
+ * Every file that could answer a request, whatever its extension (the screen walk reads only
+ * `.ts`/`.tsx`): everything under `app/` and `pages/`, and every script under `src/`, where a
+ * server action's directive may stand. Tests and the test support are not served.
+ */
+function servedFiles(dir: string = SRC): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) return full === at('test') ? [] : servedFiles(full);
+    if (/\.(test|d)\.[cm]?[jt]sx?$/.test(entry.name)) return [];
+    return under(full, APP) || under(full, at('pages')) || SCRIPT.test(entry.name) ? [full] : [];
+  });
 }
 
 /** Every route folder under `app/`. */
@@ -480,8 +504,16 @@ describe('excluded features in screen addresses and menus (#113)', () => {
 });
 
 describe('what the web serves besides pages (#113)', () => {
-  it('knows a route handler, an API route and a server action', () => {
+  it('knows a route handler, a metadata route, an API route and a server action', () => {
     expect(serverEndpointOf(at('app', 'feed', 'route.ts'), '')).toBe('route handler');
+    expect(serverEndpointOf(at('app', 'feed', 'route.js'), '')).toBe('route handler');
+    for (const name of ['sitemap.ts', 'robots.txt', 'manifest.webmanifest', 'icon1.png']) {
+      expect(serverEndpointOf(at('app', name), ''), name).toBe('metadata route');
+    }
+    expect(serverEndpointOf(at('app', 'markets', 'opengraph-image.tsx'), '')).toBe(
+      'metadata route',
+    );
+    expect(serverEndpointOf(at('pages', 'api', 'me.js'), '')).toBe('API route');
     expect(serverEndpointOf(at('pages', 'api', 'me.ts'), '')).toBe('API route');
     expect(serverEndpointOf(at('lib', 'actions.ts'), "'use server';\n")).toBe('server action');
     expect(
@@ -489,14 +521,19 @@ describe('what the web serves besides pages (#113)', () => {
     ).toBe('server action');
     expect(serverEndpointOf(at('app', 'x', 'page.tsx'), "'use client';\n")).toBeUndefined();
     expect(serverEndpointOf(at('lib', 'route.ts'), '')).toBeUndefined();
+    expect(serverEndpointOf(at('app', 'market-icons.tsx'), '')).toBeUndefined();
   });
 
   it('registers every one, with a reason', () => {
-    const found = SOURCES.flatMap((file) => {
-      const kind = serverEndpointOf(file, source(file));
+    const files = servedFiles();
+    // The walk reached past the screen sources: every file under app/, whatever it is.
+    expect(files).toEqual(expect.arrayContaining(SOURCES.filter((file) => under(file, APP))));
+    expect(files.filter((file) => under(file, at('test')) || /\.test\./.test(file))).toEqual([]);
+    const found = files.flatMap((file) => {
+      const kind = serverEndpointOf(file, SCRIPT.test(file) ? readFileSync(file, 'utf8') : '');
       return kind === undefined ? [] : [`${path.relative(SRC, file)} (${kind})`];
     });
-    expect(SOURCES.length).toBeGreaterThan(100);
+    expect(files.length).toBeGreaterThan(100);
     expect({
       unregistered: found.filter((entry) => !(entry.split(' ')[0]! in WEB_SERVER_ENDPOINTS)),
       stale: Object.keys(WEB_SERVER_ENDPOINTS).filter(

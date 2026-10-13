@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { JOB_NAMES, QUEUE_NAMES } from '../jobs.js';
 import { REPLACED_TERMS } from '../terms.js';
 import {
   ADMIN_SCREEN_FEATURES,
@@ -28,8 +29,12 @@ describe('EXCLUDED_FEATURES (#113)', () => {
       expect(feature.basis.trim(), feature.id).not.toBe('');
       expect(feature.words.length, feature.id).toBeGreaterThan(0);
       for (const word of feature.words) expect(word.flags, feature.id).not.toContain('g');
-      for (const token of feature.tokens) {
+      for (const token of [...feature.tokens, ...(feature.pathTokens ?? [])]) {
         expect(token, feature.id).toMatch(/^[a-z]+(?: [a-z]+)?$/);
+      }
+      // A path token needs a path to be found in: a screen address or an API route.
+      if (feature.pathTokens !== undefined) {
+        expect(feature.surfaces, feature.id).toEqual(expect.arrayContaining(['route', 'api']));
       }
       // A feature with tokens is looked for beyond the screen, and only one with tokens is.
       expect(
@@ -115,6 +120,9 @@ describe('findExcludedText', () => {
     ['쿠폰 등록', 'paid-purchase'],
     ['가격표', 'paid-purchase'],
     ['1,000원', 'paid-purchase'],
+    ['1만원', 'paid-purchase'],
+    ['1만 원', 'paid-purchase'],
+    ['5천 원에 100 Coin', 'paid-purchase'],
     ['₩1,000', 'paid-purchase'],
     ['출석 체크', 'activity-reward'],
     ['매일 체크인', 'activity-reward'],
@@ -127,17 +135,27 @@ describe('findExcludedText', () => {
     ['좋아요 10개마다 Coin 지급', 'activity-reward'],
     ['매일 접속하면 Coin 지급', 'activity-reward'],
     ['연속 접속 보너스', 'activity-reward'],
+    ['7일 연속 거래 시 보너스', 'activity-reward'],
+    ['매일 보너스 받기', 'activity-reward'],
+    ['일일 보너스', 'activity-reward'],
+    ['로그인 보너스', 'activity-reward'],
+    ['첫 거래 보너스', 'activity-reward'],
     ['Coin 송금', 'coin-transfer'],
     ['Coin 이체', 'coin-transfer'],
     ['Coin 선물하기', 'coin-transfer'],
     ['Coin 보내기', 'coin-transfer'],
     ['Coin을 다른 회원에게 보내기', 'coin-transfer'],
     ['친구에게 100 코인 보내기', 'coin-transfer'],
+    ['Coin 전송', 'coin-transfer'],
+    ['코인을 전송하세요', 'coin-transfer'],
     ['출금하기', 'cash-out'],
     ['현금 환전 신청', 'cash-out'],
     ['현금화', 'cash-out'],
     ['출금 신청은 취소할 수 없습니다.', 'cash-out'],
     ['출금은 영업일에만 처리하며 주말에는 지원하지 않습니다.', 'cash-out'],
+    ['출금 내역이 없습니다.', 'cash-out'],
+    ['출금되지 않은 금액', 'cash-out'],
+    ['출금 불가 기간에는 신청할 수 없습니다.', 'cash-out'],
     ['예측하기', 'replaced-term'],
     ['투표', 'replaced-term'],
     ['확률 추이', 'replaced-term'],
@@ -170,6 +188,7 @@ describe('findExcludedText', () => {
     '계좌이체',
     '보너스',
     '가입 보너스 10,000 Coin',
+    '첫 가입 보너스',
     '정산 지급',
     '정산하면 이긴 계약마다 100 Coin을 지급합니다.',
     '글자 수는 지급 기준과 무관합니다.',
@@ -179,6 +198,12 @@ describe('findExcludedText', () => {
     '환전이나 출금은 지원하지 않습니다.',
     '현금 환전·출금 기능은 제공하지 않습니다.',
     'Coin은 현금화할 수 없습니다.',
+    '현금 환전·출금은 제공되지 않습니다.',
+    '환전 및 출금이 불가합니다.',
+    'Coin은 현금으로 환전되지 않습니다.',
+    '보유 Coin은 출금이 불가능합니다.',
+    'Coin 출금 불가',
+    '현금 출금 기능은 없습니다.',
     '시장가격은 실제 발생 확률의 보장이 아닙니다.',
     '100 Coin',
     '회원 2명',
@@ -225,6 +250,10 @@ describe('findExcludedText', () => {
     expect(findExcludedText('환전은 수수료 없이 즉시 처리하며 출금할 수 없습니다.')).toEqual([
       { feature: 'cash-out', match: '환전', index: 0 },
     ]);
+    // '없습니다' only for the feature itself: a list of withdrawals is one.
+    expect(features('현금 출금 기능은 없습니다.')).toEqual([]);
+    // '불가' only at the end of the sentence: a blackout period is a withdrawal's.
+    expect(features('출금 불가 기간에는 신청할 수 없습니다.')).toEqual(['cash-out']);
   });
 
   it('allows other negative notices on the service guide only (owner decision #113)', () => {
@@ -234,6 +263,9 @@ describe('findExcludedText', () => {
     expect(features('활동량 보상과 사용자 간 송금은 제공하지 않습니다.', 'service-guide')).toEqual(
       [],
     );
+    expect(features('점수와 순위는 제공되지 않습니다.', 'service-guide')).toEqual([]);
+    // The cash-out words too: the guide's notice is no stricter for them than for the rest.
+    expect(features('출금 내역이 없습니다.', 'service-guide')).toEqual([]);
     // Not a notice: the guide may not name the feature as something on offer.
     expect(features('점수를 확인하세요.', 'service-guide')).toEqual(['scoring']);
     // Gambling words are never cleared by a notice.
@@ -309,6 +341,15 @@ describe('identifiers', () => {
     ['sendCoins', 'api', 'coin-transfer'],
     ['/me/coins/send', 'route', 'coin-transfer'],
     ['probabilitySlider', 'api', 'probability-input'],
+    ['/me/exchange', 'api', 'cash-out'],
+    ['COIN_EXCHANGE', 'storage', 'cash-out'],
+    ['/me/coins/convert', 'route', 'cash-out'],
+    ['/me/daily-bonus', 'route', 'activity-reward'],
+    ['DAILY_BONUS', 'storage', 'activity-reward'],
+    ['daily_bonuses', 'storage', 'activity-reward'],
+    ['loginBonusClaimedAt', 'storage', 'activity-reward'],
+    ['/me/coins/tip', 'route', 'coin-transfer'],
+    ['/me/coins/give', 'api', 'coin-transfer'],
   ])('finds %s on %s (%s)', (name, surface, feature) => {
     expect(findExcludedIdentifier(name, surface).map((hit) => hit.feature)).toContain(feature);
   });
@@ -326,6 +367,17 @@ describe('identifiers', () => {
     ]);
   });
 
+  it('looks for a path token in a path only: a screen address, or an API path when asked', () => {
+    const reward = (name: string, surface: 'route' | 'api' | 'storage', path?: boolean) =>
+      findExcludedIdentifier(name, surface, path ? { path } : {}).map((hit) => hit.feature);
+    expect(reward('/admin/bonuses', 'route')).toEqual(['activity-reward']);
+    expect(reward('/admin/bonuses', 'api', true)).toEqual(['activity-reward']);
+    // The starting Coin's BONUS, as a field or a stored value.
+    expect(reward('/admin/bonuses', 'api')).toEqual([]);
+    expect(reward('BONUS', 'storage')).toEqual([]);
+    expect(reward('signupBonusCoin', 'api')).toEqual([]);
+  });
+
   it('keeps paid purchase out of storage (D9) and the word lists off identifiers', () => {
     expect(findExcludedIdentifier('charge_packages', 'storage')).toEqual([]);
     expect(findExcludedIdentifier('PAYMENT_CANCEL', 'storage')).toEqual([]);
@@ -335,7 +387,6 @@ describe('identifiers', () => {
   it.each([
     'realizedPnlCoin',
     'SETTLEMENT_PAYOUT',
-    'BONUS',
     'scope',
     'upgrade',
     'audit-failures',
@@ -357,6 +408,20 @@ describe('identifiers', () => {
     expect(findExcludedIdentifier('forecast_scores', 'storage', { features: ['scoring'] })).toEqual(
       [{ feature: 'scoring', word: 'scores', token: 'score' }],
     );
+  });
+
+  it('names no transfer, activity reward or cash-out in a queue or a job name', () => {
+    // A daily reward would most likely be a scheduled job crediting a ledger type the storage
+    // check allows (BONUS); its name is held like a path, `bonus` included.
+    const names = [...QUEUE_NAMES, ...Object.keys(JOB_NAMES), ...Object.values(JOB_NAMES)];
+    expect(names).toEqual(expect.arrayContaining(['markets', 'market.close', 'ledgerAudit']));
+    const found = (name: string) =>
+      findExcludedIdentifier(name, 'api', { features: EVERY_ROUTE_PATH_FEATURES, path: true });
+    expect(names.flatMap((name) => found(name).map((hit) => `${name}: ${hit.feature}`))).toEqual(
+      [],
+    );
+    expect(found('ledger.daily_bonus').map((hit) => hit.feature)).toContain('activity-reward');
+    expect(found('attendanceBonus').map((hit) => hit.feature)).toContain('activity-reward');
   });
 
   it('knows a personal probability by its words (N02 §10, N04 §5)', () => {

@@ -15,7 +15,15 @@ import {
   tokenForms,
 } from '@buddha/shared';
 import { is } from 'drizzle-orm';
-import { PgTable, getTableConfig, isPgEnum } from 'drizzle-orm/pg-core';
+import {
+  PgTable,
+  getTableConfig,
+  integer,
+  isPgEnum,
+  pgTable,
+  text,
+  uuid,
+} from 'drizzle-orm/pg-core';
 import { describe, expect, it } from 'vitest';
 import * as schema from './schema/index.js';
 
@@ -24,9 +32,10 @@ import * as schema from './schema/index.js';
  * constraint, index or enum, and no value a varchar column holds from a fixed list, names an
  * excluded feature of EXCLUDED_FEATURES (@buddha/shared) — a Forecast or a belief, a score, rank
  * or badge, an activity reward, a transfer between users, a cash withdrawal. An activity reward
- * or a transfer would most likely arrive as a ledger entry type, which is an enum value here:
- * named for a reward, a check-in or a transfer it fails on the tokens, and named for a bonus
- * (LIKE_BONUS, TRADE_VOLUME_BONUS) it fails unless BONUS_VALUES lists it.
+ * or a transfer would most likely arrive as a ledger entry type, which is an enum value here, or
+ * as a table or column of its own: named for a reward, a check-in or a transfer it fails on the
+ * tokens, and named for a bonus (LIKE_BONUS, TRADE_VOLUME_BONUS, daily_bonuses,
+ * bonusClaimedAt) it fails unless BONUS_NAMES lists it.
  *
  * Read from the Drizzle schema objects, the same ones drizzle-kit generates the migrations from,
  * so no database is needed.
@@ -62,14 +71,15 @@ const VARCHAR_VALUES: Readonly<Record<string, readonly string[]>> = {
 };
 
 /**
- * The stored values that may name a bonus, with why. 'bonus' cannot be a token of the activity
- * reward: the starting Coin is the product's own (N01 §2), and so a bonus-named value is held to
- * this list instead. A new one is added here with its reason, which a reviewer reads.
+ * The stored names that may name a bonus — a table, column, constraint, enum or stored value,
+ * keyed as storageNames() places them — with why. 'bonus' is a path token of the activity reward
+ * only: the starting Coin is the product's own (N01 §2), and so a bonus-named stored name is held
+ * to this list instead. A new one is added here with its reason, which a reviewer reads.
  */
-const BONUS_VALUES: Readonly<Record<string, string>> = {
-  BONUS:
-    'ledger_entry_type: the starting Coin every verified account gets once (N01 §2, ' +
-    'SIGNUP_BONUS_COIN) and the kept coupon redemption (D9, ADR-0049)',
+const BONUS_NAMES: Readonly<Record<string, string>> = {
+  'ledger_entry_type value BONUS':
+    'the starting Coin every verified account gets once (N01 §2, SIGNUP_BONUS_COIN) and the ' +
+    'kept coupon redemption (D9, ADR-0049)',
 };
 const BONUS_FORMS = tokenForms('bonus');
 
@@ -104,18 +114,41 @@ function storageNames(): { where: string; name: string }[] {
   return names;
 }
 
-/**
- * The tables whose rows belong to one person: the user row itself and every table that points at
- * it or at one of their orders (a fill is the order's).
- */
-function personalTables() {
-  return TABLES.filter(
-    (table) =>
-      table.name === 'user' ||
-      table.foreignKeys.some((fk) =>
-        ['user', 'orders'].includes(getTableConfig(fk.reference().foreignTable).name),
-      ),
+/** A column that holds an account, constrained or not: `userId`, `user_id`, `accountId`. */
+function holdsAccount(column: string): boolean {
+  const words = identifierWords(column);
+  return words.some(
+    (word, index) => (word === 'user' || word === 'account') && words[index + 1] === 'id',
   );
+}
+
+/**
+ * The tables whose rows may belong to one person: the user row itself, every table with an
+ * account column (a foreign key or not), and every table that points at one of those, directly or
+ * through another (a fill is its order's, a payment event its payment's, and so on down).
+ */
+function personalTables(tables: typeof TABLES = TABLES) {
+  const personal = new Set(
+    tables.filter(
+      (table) => table.name === 'user' || table.columns.some((column) => holdsAccount(column.name)),
+    ),
+  );
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const table of tables) {
+      if (personal.has(table)) continue;
+      const points = table.foreignKeys.some((fk) =>
+        [...personal].some(
+          (owner) => owner.name === getTableConfig(fk.reference().foreignTable).name,
+        ),
+      );
+      if (points) {
+        personal.add(table);
+        grew = true;
+      }
+    }
+  }
+  return [...personal];
 }
 
 describe('excluded features in stored data (#113)', () => {
@@ -147,16 +180,12 @@ describe('excluded features in stored data (#113)', () => {
     expect(hits).toEqual([]);
   });
 
-  it('names a bonus in a stored value only where BONUS_VALUES says why', () => {
-    const values = storageNames().filter(({ where }) => where.endsWith(' value'));
-    expect(values.map(({ name }) => name)).toEqual(
-      expect.arrayContaining(Object.keys(BONUS_VALUES)),
-    );
-    const hits = values
+  it('names a bonus in a stored name only where BONUS_NAMES says why', () => {
+    const named = storageNames()
       .filter(({ name }) => identifierWords(name).some((word) => BONUS_FORMS.includes(word)))
-      .filter(({ name }) => !(name in BONUS_VALUES))
       .map(({ where, name }) => `${where} ${name}`);
-    expect(hits).toEqual([]);
+    // Every line is still needed, and nothing else names a bonus.
+    expect(named.sort()).toEqual(Object.keys(BONUS_NAMES).sort());
   });
 
   it('passes with the payment and coupon structures kept for paid Coin (D9)', () => {
@@ -177,11 +206,43 @@ describe('excluded features in stored data (#113)', () => {
     expect(findExcludedIdentifier('charge_packages', 'storage')).toEqual([]);
   });
 
+  it('knows a table of one person through another table, or by an unconstrained account', () => {
+    const planted = [
+      ...TABLES,
+      getTableConfig(
+        pgTable('fill_marks', {
+          fillId: uuid('fill_id').references(() => schema.fills.id),
+          probabilityBp: integer('probability_bp'),
+        }),
+      ),
+      getTableConfig(
+        pgTable('watch_notes', { ownerUserId: text('owner_user_id'), note: text('note') }),
+      ),
+    ];
+    expect(
+      personalTables(planted)
+        .map((table) => table.name)
+        .filter((name) => ['fill_marks', 'watch_notes'].includes(name))
+        .sort(),
+    ).toEqual(['fill_marks', 'watch_notes']);
+    expect(personalTables().map((table) => table.name)).not.toContain('categories');
+  });
+
   it('keeps no buy input or fill price as a personal probability (N02 §10, N04 §5)', () => {
     const tables = personalTables();
     expect(tables.map((table) => table.name)).toEqual(
-      expect.arrayContaining(['user', 'profiles', 'balances', 'orders', 'fills', 'positions']),
+      expect.arrayContaining([
+        'user',
+        'profiles',
+        'balances',
+        'orders',
+        'fills',
+        'positions',
+        'payment_events',
+      ]),
     );
+    expect(holdsAccount('userId') && holdsAccount('account_id')).toBe(true);
+    expect(holdsAccount('userAgent') || holdsAccount('accountIdentifier')).toBe(false);
     const hits = tables.flatMap((table) => [
       ...(namesPersonalProbability(table.name) ? [table.name] : []),
       ...table.columns

@@ -55,7 +55,7 @@ const SCREEN_FIELDS = ['title', 'description', 'rules', 'resolutionSource'] as c
  * Coin, which is what paid purchase's won-price word looks for (N06: no price table).
  */
 const isWonAmount = (hit: ExcludedTextHit) =>
-  hit.feature === 'paid-purchase' && /^\d\s*원$/.test(hit.match);
+  hit.feature === 'paid-purchase' && /^\d\s*(?:[십백천만억]+\s*)?원$/.test(hit.match);
 
 describe('seed market copy and the excluded features (#113)', () => {
   // ADR-0052 left this check to #113: the seed's text is screen text once a market opens.
@@ -79,5 +79,7 @@ describe('seed market copy and the excluded features (#113)', () => {
       (hit) => !isWonAmount(hit),
     );
     expect(hits.map((hit) => hit.match)).toEqual(['충전', '할인', '₩']);
+    // A won amount with a unit numeral is one too.
+    expect(findExcludedText('3만 원 이상').filter(isWonAmount)).toHaveLength(1);
   });
 });

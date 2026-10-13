@@ -1,6 +1,6 @@
-// Route and gateway discovery from the module graph, for the static suites that check a rule
-// over EVERY route or gateway — not over a list someone has to remember to extend
-// (admin-audit.test.ts, admin-access.test.ts, surface/registry.test.ts).
+// Route and gateway discovery from the module graph, and better-auth's routes from its instance,
+// for the static suites that check a rule over EVERY route or gateway — not over a list someone
+// has to remember to extend (admin-audit.test.ts, admin-access.test.ts, surface/registry.test.ts).
 import { RequestMethod, VERSION_NEUTRAL } from '@nestjs/common';
 // From `constants.js`, not the package root: the root re-exports these names as TYPES only, so
 // importing them from there compiles and then reads `Reflect.getMetadata(undefined, …)` at
@@ -20,7 +20,10 @@ import {
   MESSAGE_MAPPING_METADATA,
   MESSAGE_METADATA,
 } from '@nestjs/websockets/constants.js';
+import { type Db } from '@buddha/db';
 import { AppModule } from '../app.module.js';
+import { type Auth, createAuth } from '../auth/auth.js';
+import { envSchema } from '../config/env.js';
 
 export interface DiscoveredRoute {
   method: string;
@@ -175,4 +178,73 @@ export function guardsOf(route: DiscoveredRoute): unknown[] {
     ...((Reflect.getMetadata(GUARDS_METADATA, route.controller) as unknown[] | undefined) ?? []),
     ...((Reflect.getMetadata(GUARDS_METADATA, route.handler) as unknown[] | undefined) ?? []),
   ];
+}
+
+export interface DiscoveredAuthRoute {
+  method: string;
+  /** `/get-session`, relative to better-auth's base path (AUTH_BASE_PATH, `/api/auth`). */
+  path: string;
+  /** `METHOD /path`. */
+  key: string;
+}
+
+/** An endpoint of `auth.api`, as far as its routing goes. */
+interface AuthEndpoint {
+  path?: string;
+  options?: { method?: string | readonly string[]; metadata?: { SERVER_ONLY?: boolean } };
+}
+
+/**
+ * An auth instance built the way AuthInstanceModule builds it (createAuth), with every option the
+ * environment can switch on — every OAuth provider — and nothing behind it: listing its routes
+ * calls nothing.
+ */
+function staticAuth(): Auth {
+  const unused = 'routes-only';
+  const env = envSchema.parse({
+    NODE_ENV: 'test',
+    DATABASE_URL: 'postgres://unused@localhost/unused',
+    REDIS_URL: 'redis://localhost:6379',
+    BETTER_AUTH_SECRET: 'routes-only-secret-0123456789abcdef0123456789',
+    GOOGLE_CLIENT_ID: unused,
+    GOOGLE_CLIENT_SECRET: unused,
+    KAKAO_CLIENT_ID: unused,
+    KAKAO_CLIENT_SECRET: unused,
+    NAVER_CLIENT_ID: unused,
+    NAVER_CLIENT_SECRET: unused,
+  });
+  return createAuth({
+    env,
+    db: {} as Db,
+    mailer: { send: () => Promise.resolve(), verify: () => Promise.resolve(), close: () => {} },
+  });
+}
+
+/**
+ * Every route better-auth serves under /api/auth: each endpoint of `auth.api` with a path,
+ * plugins' included, once per method, less the server-only ones (better-call's router skips
+ * them) and `disabledPaths` (404 over HTTP). The instance defaults to one built like the app's.
+ */
+export function discoverAuthRoutes(auth: Pick<Auth, 'api' | 'options'> = staticAuth()) {
+  const disabled = new Set<string>(auth.options.disabledPaths ?? []);
+  return Object.values(auth.api as Record<string, AuthEndpoint>)
+    .filter(
+      (endpoint) =>
+        endpoint.path !== undefined &&
+        endpoint.options?.metadata?.SERVER_ONLY !== true &&
+        !disabled.has(endpoint.path),
+    )
+    .flatMap((endpoint): DiscoveredAuthRoute[] => {
+      const methods = endpoint.options?.method ?? 'GET';
+      return (typeof methods === 'string' ? [methods] : [...methods]).map((method) => ({
+        method,
+        path: endpoint.path!,
+        key: `${method} ${endpoint.path!}`,
+      }));
+    });
+}
+
+/** The paths better-auth serves only to the server's own calls (`disabledPaths`). */
+export function disabledAuthPaths(auth: Pick<Auth, 'options'> = staticAuth()): string[] {
+  return [...(auth.options.disabledPaths ?? [])];
 }
