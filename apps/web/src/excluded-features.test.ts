@@ -7,6 +7,7 @@ import {
   PAID_COIN_SALES_ENABLED,
   findExcludedIdentifier,
   findExcludedText,
+  namesPersonalProbability,
 } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
 import { type CopyKey, copy } from './copy';
@@ -183,6 +184,30 @@ function internalPath(text: string): string | undefined {
   return text.split(/[?#]/)[0];
 }
 
+/** `name: personal probability` when a screen address keeps one (N02 §10). */
+function probabilityIn(where: string, name: string): string[] {
+  return namesPersonalProbability(name) ? [`${where}: personal probability`] : [];
+}
+
+/**
+ * What this app serves besides pages, registered (#113, owner decision 2026-10-13 (a)): a route
+ * handler (a `route.ts` under `app/`), a Pages Router API route (`pages/api/`) or a server
+ * action (a `'use server'` file or function) answers a request with whatever it returns, outside
+ * the API's registry and its private-data checks. None exists — reads and writes go to the API —
+ * so one added fails below until it is written here with what it answers and why it may (keyed
+ * by the file under `src/`). docs/GUARDS.md has the rule.
+ */
+const WEB_SERVER_ENDPOINTS: Readonly<Record<string, string>> = {};
+
+/** Why a source is a server endpoint, or undefined when it is not one. */
+function serverEndpointOf(file: string, text: string): string | undefined {
+  if (under(file, APP) && /^route\.[jt]sx?$/.test(path.basename(file))) return 'route handler';
+  if (under(file, at('pages', 'api'))) return 'API route';
+  // A directive stands alone on its line, at the top of a file or of a function body.
+  if (/^\s*(['"])use server\1;?\s*$/m.test(text)) return 'server action';
+  return undefined;
+}
+
 /** Every route folder under `app/`. */
 function routeFolders(dir: string = APP): string[] {
   return readdirSync(dir, { withFileTypes: true })
@@ -309,11 +334,12 @@ describe('excluded features in screen addresses and menus (#113)', () => {
   it('has no route folder that names one', () => {
     const folders = routeFolders();
     expect(folders).toContain(at('app', 'my', 'wallet'));
-    const hits = folders.flatMap((folder) =>
-      findExcludedIdentifier(path.basename(folder), 'route', {
+    const hits = folders.flatMap((folder) => [
+      ...findExcludedIdentifier(path.basename(folder), 'route', {
         features: featuresFor(isPreservedPaid(folder)),
       }).map((hit) => `${path.relative(APP, folder)}: ${hit.feature} '${hit.word}'`),
-    );
+      ...probabilityIn(path.relative(APP, folder), path.basename(folder)),
+    ]);
     expect(hits).toEqual([]);
   });
 
@@ -328,14 +354,15 @@ describe('excluded features in screen addresses and menus (#113)', () => {
     for (const menuPath of ['/community', '/my/wallet', '/admin/markets', '/terms']) {
       expect(paths.map((p) => p.pathname)).toContain(menuPath);
     }
-    const hits = paths.flatMap(({ file, pathname, literal }) =>
-      findExcludedIdentifier(pathname, 'route', {
-        features: featuresFor(literal.gated || isPreservedPaid(file)),
-      }).map(
-        (hit) =>
-          `${path.relative(SRC, file)}:${String(literal.line)}: ${hit.feature} '${hit.word}' in ${pathname}`,
-      ),
-    );
+    const hits = paths.flatMap(({ file, pathname, literal }) => {
+      const where = `${path.relative(SRC, file)}:${String(literal.line)}`;
+      return [
+        ...findExcludedIdentifier(pathname, 'route', {
+          features: featuresFor(literal.gated || isPreservedPaid(file)),
+        }).map((hit) => `${where}: ${hit.feature} '${hit.word}' in ${pathname}`),
+        ...probabilityIn(`${where} ${pathname}`, pathname),
+      ];
+    });
     expect(hits).toEqual([]);
   });
 
@@ -345,5 +372,36 @@ describe('excluded features in screen addresses and menus (#113)', () => {
     expect(internalPath('/api/v1/me')).toBeUndefined();
     expect(internalPath('//evil.example')).toBeUndefined();
     expect(internalPath('market-status-badge')).toBeUndefined();
+    expect(probabilityIn('x', '/my/probability')).toEqual(['x: personal probability']);
+  });
+});
+
+describe('what the web serves besides pages (#113)', () => {
+  it('knows a route handler, an API route and a server action', () => {
+    expect(serverEndpointOf(at('app', 'feed', 'route.ts'), '')).toBe('route handler');
+    expect(serverEndpointOf(at('pages', 'api', 'me.ts'), '')).toBe('API route');
+    expect(serverEndpointOf(at('lib', 'actions.ts'), "'use server';\n")).toBe('server action');
+    expect(
+      serverEndpointOf(at('app', 'x', 'page.tsx'), 'async function save() {\n  "use server"\n}'),
+    ).toBe('server action');
+    expect(serverEndpointOf(at('app', 'x', 'page.tsx'), "'use client';\n")).toBeUndefined();
+    expect(serverEndpointOf(at('lib', 'route.ts'), '')).toBeUndefined();
+  });
+
+  it('registers every one, with a reason', () => {
+    const found = SOURCES.flatMap((file) => {
+      const kind = serverEndpointOf(file, source(file));
+      return kind === undefined ? [] : [`${path.relative(SRC, file)} (${kind})`];
+    });
+    expect(SOURCES.length).toBeGreaterThan(100);
+    expect({
+      unregistered: found.filter((entry) => !(entry.split(' ')[0]! in WEB_SERVER_ENDPOINTS)),
+      stale: Object.keys(WEB_SERVER_ENDPOINTS).filter(
+        (file) => !found.some((entry) => entry.startsWith(`${file} `)),
+      ),
+    }).toEqual({ unregistered: [], stale: [] });
+    for (const [file, reason] of Object.entries(WEB_SERVER_ENDPOINTS)) {
+      expect(reason.trim(), file).not.toBe('');
+    }
   });
 });

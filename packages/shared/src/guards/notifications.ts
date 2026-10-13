@@ -28,7 +28,7 @@ export type NotificationHit = ExcludedIdentifierHit | ExcludedTextHit;
 
 /**
  * The excluded features a notification type names. Its name is an API value, so it is held to
- * the public API's tokens (paid purchase included, N05 §4); its text is screen text.
+ * the API's tokens (paid purchase included, N05 §4); its text is screen text.
  */
 export function findExcludedNotification(entry: NotificationTypeEntry): NotificationHit[] {
   return [

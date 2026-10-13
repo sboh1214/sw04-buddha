@@ -13,6 +13,11 @@
  * here with a reason, and the reason is what a reviewer reads. docs/GUARDS.md has the steps.
  *
  * Keys are `METHOD /path` as the controllers write them, without `/api` and the version.
+ *
+ * The realtime surface is registered the same way: every Socket.IO gateway by namespace
+ * (REALTIME_GATEWAYS) and every place the API emits on a socket (REALTIME_EMITS), both found by
+ * registry.test.ts from the module graph and the sources; the event types themselves are
+ * REALTIME_EVENT_REGISTRY's (@buddha/shared).
  */
 
 export interface RegisteredRoute {
@@ -106,13 +111,66 @@ export const OWNER_ROUTES: Readonly<Record<string, RegisteredRoute>> = {
 
 /**
  * Public surface the module walk cannot see: it is served outside the Nest controllers, so it
- * is named here with what it answers. The realtime rooms are in REALTIME_EVENT_REGISTRY
- * (@buddha/shared).
+ * is named here with what it answers. The realtime rooms are below and in
+ * REALTIME_EVENT_REGISTRY (@buddha/shared).
  */
 export const OUTSIDE_NEST_ROUTES: readonly { readonly path: string; readonly reason: string }[] = [
   {
     path: '/api/auth/*',
     reason:
       'better-auth(PLAN 10.1)가 Nest 라우팅 앞에서 처리한다: 로그인·로그아웃·가입 확인·비밀번호 재설정·소셜 로그인과 연결·이메일 변경. 세션을 읽는 호출(get-session·list-sessions)은 그 세션 계정의 것만 돌려주고, /sign-up/email은 막혀 있다(ADR-0024).',
+  },
+];
+
+export interface RegisteredGateway {
+  /** What a client may do on it and what it is sent, and why that may be open to anyone. */
+  readonly reason: string;
+  /** The messages a client may send it (`@SubscribeMessage`), sorted. */
+  readonly messages: readonly string[];
+}
+
+/**
+ * The Socket.IO gateways, by namespace (#113, owner decision 2026-10-13 (a)). A socket is open to
+ * anyone, signed in or not, so a gateway is public surface the HTTP registry does not see: a new
+ * one, a new namespace or a new message fails registry.test.ts until it is written here.
+ */
+export const REALTIME_GATEWAYS: Readonly<Record<string, RegisteredGateway>> = {
+  '/ws': {
+    reason:
+      '실시간 방(PLAN 8, ADR-0017): 누구나 subscribe·unsubscribe로 시장 방 market:<id>를 듣고(소켓마다 상한), 핸드셰이크에 세션이 있으면 본인 방 user:<id>에 들어간다. 방에 오는 이벤트는 REALTIME_EVENT_REGISTRY의 유형뿐이다(REALTIME_EMITS).',
+    messages: ['subscribe', 'unsubscribe'],
+  },
+};
+
+/**
+ * Every place the API emits on a socket: the file under `src/`, the event as the call writes it,
+ * and what goes out. registry.test.ts reads the sources and fails on an emit not listed here, so
+ * an event cannot reach a room around the channel families the gateway parses with.
+ */
+export const REALTIME_EMITS: readonly {
+  readonly file: string;
+  readonly event: string;
+  readonly reason: string;
+}[] = [
+  {
+    file: 'realtime/market.gateway.ts',
+    event: 'event.type',
+    reason:
+      '방의 이벤트: 채널의 계열 스키마(시장 방은 marketRealtimeEventSchema, 본인 방은 userRealtimeEventSchema)로 파싱한 것만 그 방에 보낸다. 유형은 REALTIME_EVENT_REGISTRY의 것이다.',
+  },
+  {
+    file: 'realtime/market.gateway.ts',
+    event: 'RESYNC_EVENT',
+    reason: '구독이 끊겼다 다시 이어졌을 때 연결된 모든 소켓에 다시 읽으라는 신호. 본문이 없다.',
+  },
+  {
+    file: 'realtime/market.gateway.ts',
+    event: 'REALTIME_EXCEPTION_EVENT',
+    reason: '메시지 속도 제한의 거절 봉투(RATE_LIMITED): 그 소켓에만',
+  },
+  {
+    file: 'realtime/realtime-exception.filter.ts',
+    event: 'REALTIME_EXCEPTION_EVENT',
+    reason: '핸들러가 거절한 메시지의 오류 봉투(PLAN 7.4): 그 소켓에만',
   },
 ];

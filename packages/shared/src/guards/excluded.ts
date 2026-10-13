@@ -5,21 +5,25 @@ import { REPLACED_TERMS } from '../terms.js';
  * that keep each of these from coming back read it from here and from nowhere else — the screen
  * text, screen address and menu checks of the web (apps/web/src/excluded-features.test.ts), the
  * mail templates' check (apps/api/src/mail/templates.test.ts), the seed markets' copy check
- * (packages/db/src/seed-markets.test.ts) and the storage name check
- * (packages/db/src/storage-names.test.ts); the `api` surface is the public API's. Nothing reads
- * it at run time. docs/GUARDS.md says where each check lives and how a later issue registers.
+ * (packages/db/src/seed-markets.test.ts), the storage name check
+ * (packages/db/src/storage-names.test.ts) and the API's (apps/api/src/surface/registry.test.ts,
+ * private-data.test.ts). Nothing reads it at run time. docs/GUARDS.md says where each check
+ * lives and how a later issue registers.
  *
  * A feature is looked for on the surfaces it names:
  * - `screen`: text a person reads — the web's copy, string and JSX text, mail, the seed markets'
- *   copy — matched with `words`;
+ *   copy, notification text — matched with `words`;
  * - `route`: screen addresses and menu links, matched with `tokens`;
- * - `api`: public API paths and response field names, matched with `tokens`;
+ * - `api`: the paths, parameters, schema and field names of every route and documented
+ *   operation (public, owner-only and admin), the fields of real answers (public ones, and the
+ *   owner's own) and of market-channel events, and notification type names, matched with
+ *   `tokens`;
  * - `storage`: table, column, constraint and enum names and the stored value lists, matched
  *   with `tokens`.
  *
- * Paid purchase is looked for on screens, screen addresses and public responses only: the
- * payment and coupon code and tables stay (D9, ADR-0049). The term rows of #14, the genre-only
- * 예측 (D22) and the gambling words (D21) are looked for in screen text only.
+ * Paid purchase is looked for on screens, screen addresses and public, not kept, routes only:
+ * the payment and coupon code and tables stay (D9, ADR-0049; registry.test.ts). The term rows of
+ * #14, the genre-only 예측 (D22) and the gambling words (D21) are looked for in screen text only.
  *
  * A word that also has an allowed meaning is cleared by TEXT_ALLOWANCES, never by loosening the
  * word: '상승률' is not '승률', '우선순위' is not a ranking.
@@ -55,7 +59,9 @@ export interface ExcludedFeature {
   readonly words: readonly RegExp[];
   /**
    * Identifier words that name it, lower case. A word of an identifier matches a token or one
-   * of its inflections (`rankings`, `scoring`, `withdrawal`; identifierWords, tokenForms).
+   * of its inflections (`rankings`, `scoring`, `withdrawal`; identifierWords, tokenForms). A
+   * two-word token names it only together: `check in` matches two words in a row (`checkIn`,
+   * `/me/check-in`, `checked_in`) or the two as one word (`DAILY_CHECKIN`).
    */
   readonly tokens: readonly string[];
 }
@@ -112,7 +118,7 @@ export const EXCLUDED_FEATURES: readonly ExcludedFeature[] = [
       /(?:내|커뮤니티)\s*예측/,
       /예측\s*(?:입력|수정|이력|제출)/,
     ],
-    tokens: ['forecast', 'belief', 'credence'],
+    tokens: ['forecast', 'belief', 'credence', 'slider'],
   },
   {
     id: 'scoring',
@@ -161,21 +167,34 @@ export const EXCLUDED_FEATURES: readonly ExcludedFeature[] = [
     surfaces: ALL_SURFACES,
     words: [
       /출석/,
+      /체크인/,
       /리워드/,
       /적립/,
-      // 보상 alone is also the compensation N01 §9 records; an activity in front of it makes it
-      // a reward.
-      /(?:거래량|거래\s*횟수|주문\s*횟수|활동량?|행동량|글|답글|댓글|좋아요)\s*(?:수\s*)?(?:에\s*따른\s*)?보상/,
+      // 보상 alone is also the compensation N01 §9 records, and 보너스·지급 are the sign-up
+      // Coin's and the payout's words; an activity shortly before them in the same sentence
+      // makes them a reward ('거래량 보너스', '좋아요 10개마다 Coin 지급', '매일 접속하면').
+      // 글 is a post as its own word, not inside 게시글 (named) or 글자·글꼴·글씨.
+      /(?:거래량|거래\s*횟수|주문\s*횟수|활동량?|행동량|접속|(?<![가-힣])글(?![자꼴씨])|게시글|답글|댓글|좋아요)[^.?!\n]{0,16}?(?:보상|보너스|지급)/,
     ],
-    tokens: ['reward', 'attendance'],
+    // `bonus` alone is the sign-up BONUS; storage-names.test.ts holds bonus-named stored values
+    // to a list of their own.
+    tokens: ['reward', 'attendance', 'check in', 'streak'],
   },
   {
     id: 'coin-transfer',
     name: '사용자 간 Coin 송금',
     basis: 'N01 §2',
     surfaces: ALL_SURFACES,
-    words: [/송금/, /이체/, /선물하기/],
-    tokens: ['transfer', 'gift', 'remit', 'remittance'],
+    words: [
+      /송금/,
+      /이체/,
+      /선물하기/,
+      // Coin as the thing sent: 'Coin 보내기', 'Coin을 다른 회원에게 보내기'. A mail or a code is
+      // sent as well, so 보내다 alone is not one.
+      /(?:Coin|코인)\s*(?:을|를)?\s*(?:[^.?!\n]{0,12}?에게\s*)?보내/,
+    ],
+    // `send` alone is also a mail's or a verification code's; with Coin it is a transfer.
+    tokens: ['transfer', 'gift', 'remit', 'remittance', 'send coin', 'coin send'],
   },
   {
     id: 'cash-out',
@@ -226,6 +245,20 @@ export type AllowanceScope = (typeof ALLOWANCE_SCOPES)[number];
  * '…할 수 없습니다'. The service guide (#136) may widen it when it words its own sentences.
  */
 export const NEGATIVE_NOTICE = /(?:제공|지원|지급)하지\s*않|할\s*수\s*없/;
+
+const CASH_OUT_WORD = String.raw`(?:현금\s*)?(?:환전|출금|인출|현금화)`;
+
+/**
+ * The no-cash notice: the cash-out words themselves, joined by '·', '및', '하거나' and the like,
+ * then a particle and NEGATIVE_NOTICE's verbs — 'Coin의 현금 환전·출금은 제공하지 않습니다',
+ * '현금으로 환전하거나 출금할 수 없습니다'. The verb belongs to the cash-out word: in '출금 신청은
+ * 취소할 수 없습니다' it does not, and the sentence offers a withdrawal.
+ */
+export const CASH_OUT_NOTICE = new RegExp(
+  `${CASH_OUT_WORD}(?:\\s*(?:[·,/]|및|또는|와|과|이나|나|하거나|하고)?\\s*${CASH_OUT_WORD})*` +
+    String.raw`(?:\s*(?:기능|서비스))?(?:\s*(?:은|는|을|를|도|이|가))?\s*` +
+    String.raw`(?:(?:제공|지원|지급)하지\s*않|(?:할|하실)\s*수\s*없)`,
+);
 
 export interface TextAllowance {
   /** The features whose hits it clears. */
@@ -290,8 +323,8 @@ export const TEXT_ALLOWANCES: readonly TextAllowance[] = [
   },
   {
     features: ['cash-out'],
-    within: 'sentence',
-    pattern: NEGATIVE_NOTICE,
+    within: 'phrase',
+    pattern: CASH_OUT_NOTICE,
     scope: 'everywhere',
     reason: '현금 환전·출금을 제공하지 않는다는 안내(N01 §2, 오너 결정 2026-10-13 #113)',
   },
@@ -412,17 +445,29 @@ export function tokenForms(token: string): readonly string[] {
 
 export interface ExcludedIdentifierHit {
   readonly feature: ExcludedFeatureId;
-  /** The identifier's word that matched. */
+  /** The identifier's word that matched, or its two words in a row (`check in`). */
   readonly word: string;
   readonly token: string;
 }
 
-/** Each feature with its tokens' inflections, form → token. */
+/**
+ * Each feature with its tokens' inflections: `forms` maps a word to the token it is a form of
+ * (a two-word token's joined forms included), `pairs` holds a two-word token's forms word by
+ * word.
+ */
 const FEATURE_FORMS = EXCLUDED_FEATURES.map((feature) => ({
   feature,
   forms: new Map(
-    feature.tokens.flatMap((token) => tokenForms(token).map((form) => [form, token] as const)),
+    feature.tokens.flatMap((token) =>
+      tokenForms(token.replace(' ', '')).map((form) => [form, token] as const),
+    ),
   ),
+  pairs: feature.tokens.flatMap((token) => {
+    const [first, second] = token.split(' ');
+    return second === undefined
+      ? []
+      : [{ token, first: new Set(tokenForms(first!)), second: new Set(tokenForms(second)) }];
+  }),
 }));
 
 /**
@@ -439,18 +484,26 @@ export function findExcludedIdentifier(
     ({ feature }) =>
       feature.surfaces.includes(surface) &&
       (options.features === undefined || options.features.includes(feature.id)),
-  ).flatMap(({ feature, forms }) =>
-    words.flatMap((word) => {
+  ).flatMap(({ feature, forms, pairs }) =>
+    words.flatMap((word, index) => {
       const token = forms.get(word);
-      return token === undefined ? [] : [{ feature: feature.id, word, token }];
+      const next = words[index + 1];
+      return [
+        ...(token === undefined ? [] : [{ feature: feature.id, word, token }]),
+        ...pairs
+          .filter((pair) => next !== undefined && pair.first.has(word) && pair.second.has(next))
+          .map((pair) => ({ feature: feature.id, word: `${word} ${next!}`, token: pair.token })),
+      ];
     }),
   );
 }
 
 /**
- * Words that make a name a probability or a belief: a table tied to one user or to one order
- * must have no such column, so no buy input or fill price is kept as that person's probability
- * (N02 §10, N04 §4·§5).
+ * Words that make a name a probability or a belief (N02 §10, N04 §4·§5): no table tied to one
+ * user or to one order has such a name or such a column, so no buy input or fill price is kept as
+ * that person's probability; no API path, parameter or field, answer key, realtime event field or
+ * screen address has one either — there a probability is someone's input or the Community
+ * Forecast's (N02 §1, N00 §5), and the market price is not called one (docs/TERMS.md).
  */
 export const PERSONAL_PROBABILITY_WORDS: readonly string[] = [
   'prob',

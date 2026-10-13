@@ -26,7 +26,9 @@ describe('EXCLUDED_FEATURES (#113)', () => {
       expect(feature.basis.trim(), feature.id).not.toBe('');
       expect(feature.words.length, feature.id).toBeGreaterThan(0);
       for (const word of feature.words) expect(word.flags, feature.id).not.toContain('g');
-      for (const token of feature.tokens) expect(token, feature.id).toMatch(/^[a-z]+$/);
+      for (const token of feature.tokens) {
+        expect(token, feature.id).toMatch(/^[a-z]+(?: [a-z]+)?$/);
+      }
       // A feature with tokens is looked for beyond the screen, and only one with tokens is.
       expect(
         feature.surfaces.some((surface) => surface !== 'screen'),
@@ -101,15 +103,27 @@ describe('findExcludedText', () => {
     ['1,000원', 'paid-purchase'],
     ['₩1,000', 'paid-purchase'],
     ['출석 체크', 'activity-reward'],
+    ['매일 체크인', 'activity-reward'],
     ['거래량 보상', 'activity-reward'],
     ['좋아요 수에 따른 보상', 'activity-reward'],
     ['리워드 받기', 'activity-reward'],
+    ['거래량 보너스 100 Coin', 'activity-reward'],
+    ['글 작성 보너스', 'activity-reward'],
+    ['게시글을 쓰면 보너스', 'activity-reward'],
+    ['좋아요 10개마다 Coin 지급', 'activity-reward'],
+    ['매일 접속하면 Coin 지급', 'activity-reward'],
+    ['연속 접속 보너스', 'activity-reward'],
     ['Coin 송금', 'coin-transfer'],
     ['Coin 이체', 'coin-transfer'],
     ['Coin 선물하기', 'coin-transfer'],
+    ['Coin 보내기', 'coin-transfer'],
+    ['Coin을 다른 회원에게 보내기', 'coin-transfer'],
+    ['친구에게 100 코인 보내기', 'coin-transfer'],
     ['출금하기', 'cash-out'],
     ['현금 환전 신청', 'cash-out'],
     ['현금화', 'cash-out'],
+    ['출금 신청은 취소할 수 없습니다.', 'cash-out'],
+    ['출금은 영업일에만 처리하며 주말에는 지원하지 않습니다.', 'cash-out'],
     ['예측하기', 'replaced-term'],
     ['투표', 'replaced-term'],
     ['확률 추이', 'replaced-term'],
@@ -141,9 +155,16 @@ describe('findExcludedText', () => {
     'KOSPI 상승률',
     '계좌이체',
     '보너스',
+    '가입 보너스 10,000 Coin',
     '정산 지급',
+    '정산하면 이긴 계약마다 100 Coin을 지급합니다.',
+    '글자 수는 지급 기준과 무관합니다.',
+    '인증 메일을 다시 보내기',
     'Coin의 현금 환전·출금은 제공하지 않습니다.',
     '현금으로 환전하거나 출금할 수 없습니다.',
+    '환전이나 출금은 지원하지 않습니다.',
+    '현금 환전·출금 기능은 제공하지 않습니다.',
+    'Coin은 현금화할 수 없습니다.',
     '시장가격은 실제 발생 확률의 보장이 아닙니다.',
     '100 Coin',
     '회원 2명',
@@ -182,6 +203,11 @@ describe('findExcludedText', () => {
     // One sentence's notice does not clear the next sentence.
     expect(findExcludedText('출금은 제공하지 않습니다. 출금하기')).toEqual([
       { feature: 'cash-out', match: '출금', index: 15 },
+    ]);
+    // The negative has to be the cash-out word's own, not another clause's.
+    expect(features('출금 신청은 취소할 수 없습니다.')).toEqual(['cash-out']);
+    expect(findExcludedText('환전은 수수료 없이 즉시 처리하며 출금할 수 없습니다.')).toEqual([
+      { feature: 'cash-out', match: '환전', index: 0 },
     ]);
   });
 
@@ -233,6 +259,14 @@ describe('identifiers', () => {
     ['WITHDRAWAL', 'storage', 'cash-out'],
     ['charge-packages', 'route', 'paid-purchase'],
     ['priceKrw', 'api', 'paid-purchase'],
+    ['DAILY_CHECKIN', 'storage', 'activity-reward'],
+    ['/me/check-in', 'api', 'activity-reward'],
+    ['checkedIn', 'api', 'activity-reward'],
+    ['login_streaks', 'storage', 'activity-reward'],
+    ['COIN_SEND', 'storage', 'coin-transfer'],
+    ['sendCoins', 'api', 'coin-transfer'],
+    ['/me/coins/send', 'route', 'coin-transfer'],
+    ['probabilitySlider', 'api', 'probability-input'],
   ])('finds %s on %s (%s)', (name, surface, feature) => {
     expect(findExcludedIdentifier(name, surface).map((hit) => hit.feature)).toContain(feature);
   });
@@ -240,6 +274,13 @@ describe('identifiers', () => {
   it('reports the word and the token it matched', () => {
     expect(findExcludedIdentifier('/my/rankings', 'route')).toEqual([
       { feature: 'scoring', word: 'rankings', token: 'rank' },
+    ]);
+    // A two-word token: its words in a row, or the two as one.
+    expect(findExcludedIdentifier('/me/check-in', 'api')).toEqual([
+      { feature: 'activity-reward', word: 'check in', token: 'check in' },
+    ]);
+    expect(findExcludedIdentifier('CHECKINS', 'storage')).toEqual([
+      { feature: 'activity-reward', word: 'checkins', token: 'check in' },
     ]);
   });
 
@@ -258,6 +299,12 @@ describe('identifiers', () => {
     'audit-failures',
     'release_setting_change',
     'my/watchlist',
+    '/me/phone/send-code',
+    'resendVerification',
+    'coin_balance',
+    'sign-in',
+    'orders_qty_check',
+    'checkIndex',
   ])('lets %s through', (name) => {
     for (const surface of ['route', 'api', 'storage'] as const) {
       expect(findExcludedIdentifier(name, surface), `${name} on ${surface}`).toEqual([]);
@@ -271,7 +318,15 @@ describe('identifiers', () => {
   });
 
   it('knows a personal probability by its words (N02 §10, N04 §5)', () => {
-    for (const name of ['initial_prob_bp', 'beliefBp', 'forecastProbability', 'CONFIDENCE']) {
+    for (const name of [
+      'initial_prob_bp',
+      'beliefBp',
+      'forecastProbability',
+      'CONFIDENCE',
+      'user_probabilities',
+      'myProbabilityBp',
+      '/my/probability',
+    ]) {
       expect(namesPersonalProbability(name), name).toBe(true);
     }
     for (const name of ['pYesBp', 'priceAvgBp', 'limitPrice', 'probe', 'cost_basis_coin']) {

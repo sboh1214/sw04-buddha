@@ -7,7 +7,7 @@ import {
   userRealtimeEventSchema,
   type UserRealtimeEvent,
 } from '../realtime.js';
-import { findExcludedIdentifier } from './excluded.js';
+import { findExcludedIdentifier, namesPersonalProbability } from './excluded.js';
 import { findPrivateField } from './private-data.js';
 import { REALTIME_EVENT_REGISTRY } from './realtime-events.js';
 
@@ -82,6 +82,14 @@ describe('REALTIME_EVENT_REGISTRY (#113)', () => {
     expect(names).toEqual(expect.arrayContaining(['marketId', 'fillId', 'statusEventId']));
     expect(names.flatMap((name) => findPrivateField(name))).toEqual([]);
     expect(names.flatMap((name) => findExcludedIdentifier(name, 'api'))).toEqual([]);
+  });
+
+  it('keeps no probability or belief in any event, on either channel (N02 §10)', () => {
+    const names = realtimeEventSchema.options.flatMap((member) =>
+      fieldNames(z.toJSONSchema(member)),
+    );
+    expect(names).toEqual(expect.arrayContaining(['marketId', 'availableCoin', 'costBasisCoin']));
+    expect(names.filter(namesPersonalProbability)).toEqual([]);
   });
 
   it('finds the private data the user-channel events carry: the check above is not blind', () => {

@@ -10,7 +10,9 @@ import {
   SETTLEMENT_STEPS,
   SETTLEMENT_STEP_STATUSES,
   findExcludedIdentifier,
+  identifierWords,
   namesPersonalProbability,
+  tokenForms,
 } from '@buddha/shared';
 import { is } from 'drizzle-orm';
 import { PgTable, getTableConfig, isPgEnum } from 'drizzle-orm/pg-core';
@@ -22,7 +24,9 @@ import * as schema from './schema/index.js';
  * constraint, index or enum, and no value a varchar column holds from a fixed list, names an
  * excluded feature of EXCLUDED_FEATURES (@buddha/shared) — a Forecast or a belief, a score, rank
  * or badge, an activity reward, a transfer between users, a cash withdrawal. An activity reward
- * or a transfer would most likely arrive as a ledger entry type, which is an enum value here.
+ * or a transfer would most likely arrive as a ledger entry type, which is an enum value here:
+ * named for a reward, a check-in or a transfer it fails on the tokens, and named for a bonus
+ * (LIKE_BONUS, TRADE_VOLUME_BONUS) it fails unless BONUS_VALUES lists it.
  *
  * Read from the Drizzle schema objects, the same ones drizzle-kit generates the migrations from,
  * so no database is needed.
@@ -56,6 +60,18 @@ const VARCHAR_VALUES: Readonly<Record<string, readonly string[]>> = {
   'categories.slug': ALL_CATEGORY_SLUGS,
   'release_settings.key': [...RELEASE_SETTINGS.keys()],
 };
+
+/**
+ * The stored values that may name a bonus, with why. 'bonus' cannot be a token of the activity
+ * reward: the starting Coin is the product's own (N01 §2), and so a bonus-named value is held to
+ * this list instead. A new one is added here with its reason, which a reviewer reads.
+ */
+const BONUS_VALUES: Readonly<Record<string, string>> = {
+  BONUS:
+    'ledger_entry_type: the starting Coin every verified account gets once (N01 §2, ' +
+    'SIGNUP_BONUS_COIN) and the kept coupon redemption (D9, ADR-0049)',
+};
+const BONUS_FORMS = tokenForms('bonus');
 
 /** Every stored name, with where it is. */
 function storageNames(): { where: string; name: string }[] {
@@ -131,6 +147,18 @@ describe('excluded features in stored data (#113)', () => {
     expect(hits).toEqual([]);
   });
 
+  it('names a bonus in a stored value only where BONUS_VALUES says why', () => {
+    const values = storageNames().filter(({ where }) => where.endsWith(' value'));
+    expect(values.map(({ name }) => name)).toEqual(
+      expect.arrayContaining(Object.keys(BONUS_VALUES)),
+    );
+    const hits = values
+      .filter(({ name }) => identifierWords(name).some((word) => BONUS_FORMS.includes(word)))
+      .filter(({ name }) => !(name in BONUS_VALUES))
+      .map(({ where, name }) => `${where} ${name}`);
+    expect(hits).toEqual([]);
+  });
+
   it('passes with the payment and coupon structures kept for paid Coin (D9)', () => {
     const tables = TABLES.map((table) => table.name);
     expect(tables).toEqual(
@@ -154,11 +182,12 @@ describe('excluded features in stored data (#113)', () => {
     expect(tables.map((table) => table.name)).toEqual(
       expect.arrayContaining(['user', 'profiles', 'balances', 'orders', 'fills', 'positions']),
     );
-    const hits = tables.flatMap((table) =>
-      table.columns
+    const hits = tables.flatMap((table) => [
+      ...(namesPersonalProbability(table.name) ? [table.name] : []),
+      ...table.columns
         .filter((column) => namesPersonalProbability(column.name))
         .map((column) => `${table.name}.${column.name}`),
-    );
+    ]);
     expect(hits).toEqual([]);
   });
 });
