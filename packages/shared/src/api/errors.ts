@@ -25,6 +25,16 @@ export const ERROR_CODES = [
   'PAYMENT_GATEWAY_REFUSED',
   /** The PG could not be reached, or its answer is unknown (502). */
   'PAYMENT_GATEWAY_ERROR',
+  /**
+   * An admin grant or revoke the rules refuse; the first detail names why, one of
+   * ADMIN_GRANT_REFUSALS or ADMIN_REVOKE_REFUSALS in admin-accounts.ts.
+   */
+  'ROLE_CHANGE_NOT_ALLOWED',
+  /**
+   * A decision on a two-person request the rule refuses: the decider requested it, or it is
+   * decided already. The first detail names which, one of APPROVAL_REFUSALS in approvals.ts.
+   */
+  'APPROVAL_NOT_ALLOWED',
   'INTERNAL',
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];

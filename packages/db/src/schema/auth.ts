@@ -8,7 +8,8 @@
  * in relations.ts (drizzle merges duplicate `relations(user, ...)` calls at runtime but not
  * in the query types). Column names are explicit snake_case, so drizzle's `casing` setting
  * does not affect them. better-auth reads/writes these tables through its Drizzle adapter;
- * application code never writes them (PLAN 6.1) except the seed and test factories.
+ * application code never writes them (PLAN 6.1) except the seed, test factories and an admin
+ * revoke, which deletes the account's `session` rows to sign it out everywhere (#171).
  * Re-run the generator only on a better-auth upgrade and diff against this file.
  */
 import { boolean, index, pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';

@@ -35,7 +35,7 @@ pnpm install
 
 docker compose up -d --wait      # postgres(5432) · redis(6379) · mailpit(1025/8025)
 pnpm db:migrate                  # drizzle 마이그레이션 (스키마 + 롤 권한 + 프로필 트리거)
-pnpm db:seed                     # 카테고리 5개(+세부 21개) + 판매 중지 충전 상품 5개 + 관리자 + 초안 시장 14개
+pnpm db:seed                     # 카테고리 5개(+세부 21개) + 판매 중지 충전 상품 5개 + 관리자 둘(관리자가 없을 때만) + 초안 시장 14개
 pnpm dev                         # web(3000) · api(4000) · worker + 공유 패키지 watch
 ```
 
@@ -46,7 +46,7 @@ pnpm dev                         # web(3000) · api(4000) · worker + 공유 패
 - 웹 <http://localhost:3000>
 - API 레디니스 <http://localhost:3000/api/health>(web rewrite 경유) 또는 <http://localhost:4000/api/health>. 워커는 <http://localhost:4100/health>.
 - Mailpit UI <http://localhost:8025> — 가입 인증·비밀번호 재설정·이메일 변경 메일이 전부 여기로 온다. 이메일 가입은 **주소만** 입력하고, 메일의 인증 링크를 누르면 로그인된 뒤 `/set-password`에서 첫 비밀번호를 정한다(인증 전에는 비밀번호가 없어 로그인할 수 없다). 운영 메일은 AWS SES(`.env.example`의 `SMTP_*` 주석).
-- 관리자 로그인은 `.env`의 `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD`(기본 `admin@buddha.local` / `admin1234!`). 이 두 값이 없으면 `pnpm db:seed`가 관리자와 시드 시장을 통째로 건너뛴다. 시드는 관리자에게 실명·휴대전화를 넣지 않으므로 관리자도 **첫 로그인에서 `/onboarding`을 만나** 한 번 입력한다 — 로컬에서도 운영에서도 같다(`/admin`도 게이트 예외가 아니다, ADR-0043). e2e는 `admin` 픽스처가 로그인 직후 `PUT /api/v1/me/contact`로 관리자 연락처를 넣는다.
+- 관리자 로그인은 `.env`의 `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD`(기본 `admin@buddha.local` / `admin1234!`). 이 두 값이 없으면 `pnpm db:seed`가 관리자와 시드 시장을 통째로 건너뛴다. 2인 통제(같은 사람이 요청하고 승인하지 못한다)는 로컬에서도 서로 다른 관리자 둘이 필요하므로 둘째 관리자 `SEED_SECOND_ADMIN_EMAIL` / `SEED_SECOND_ADMIN_PASSWORD`(`.env.example` 기본 `admin2@buddha.local` / `admin5678!`)도 둔다. 시드는 **관리자가 한 명도 없을 때만** 두 관리자를 만들고 부여 기록(사유 '시드')을 남긴다. 그 뒤에는 아무 계정도 만들거나 올리지 않고, 회수된 계정을 되돌리지도 않는다 — 관리자는 관리자 화면에서 사유와 함께 부여·회수한다(`/api/v1/admin/admins`, #171). 이미 관리자가 있는 DB에 둘째를 더하려면 그 화면에서 부여하거나 DB를 비우고 다시 시드한다. 시드 관리자는 화면의 부여 조건(이메일 인증과 실명·휴대전화)의 예외다: 시드가 이메일을 인증해 두고 실명·휴대전화는 넣지 않으므로, 관리자도 **첫 로그인에서 `/onboarding`을 만나** 한 번 입력한다 — 로컬에서도 운영에서도 같다(`/admin`도 게이트 예외가 아니다, ADR-0043). e2e는 `admin` 픽스처가 로그인 직후 `PUT /api/v1/me/contact`로 관리자 연락처를 넣는다.
 - 가입하면 시작 Coin이 자동 지급된다. 금액은 아직 정하지 않았고 시뮬레이션 뒤 출시 설정으로 확정한다(N01 §10, #71·#133). 지금 들어가는 값은 `SIGNUP_BONUS_COIN`과 가입 트리거의 리터럴에 있다. 유료 충전·결제·쿠폰은 초기 제품에서 닫혀 있다(ADR-0049) — 아래 [유료 충전·결제·쿠폰(닫힘)](#유료-충전결제쿠폰닫힘).
 - 소셜 로그인(Google/Kakao/Naver)은 `.env`에 그 프로바이더의 키 **쌍**을 넣을 때만 켜진다(Q-M1-1).
 

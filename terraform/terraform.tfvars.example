@@ -5,12 +5,16 @@
 # --- Let's Encrypt account e-mail (Caddy sends expiry/problem notices here) ------------------------
 acme_email = ""
 
-# --- First admin, created by the seed on the first deploy (packages/db/src/seed.ts) ----------------
-# The password must be 8-128 characters of [A-Za-z0-9] only (it travels through dotenv and compose
-# interpolation). The seed never resets an existing password; changing the e-mail later creates a
-# second admin instead of renaming this one.
+# --- Bootstrap admins, created by the seed on the first deploy (packages/db/src/seed.ts) -----------
+# Created only while no account holds the admin role; after that the seed creates and promotes
+# nobody (#171), so changing an e-mail later changes nothing — admins are granted and revoked on the
+# admin screen. Passwords must be 8-128 characters of [A-Za-z0-9] only (they travel through dotenv
+# and compose interpolation), and the seed never resets an existing one. The second admin is
+# optional but the two-person rule needs two distinct admins: without it, grant one on the screen.
 seed_admin_email    = ""
 seed_admin_password = ""
+# seed_second_admin_email    = ""
+# seed_second_admin_password = ""
 
 # --- Optional OAuth providers (a provider is enabled only when BOTH of its keys are set) ----------
 # Register these redirect URIs in each console first:

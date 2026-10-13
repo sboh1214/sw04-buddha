@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
+  APPROVAL_STATUSES,
   COUNTERPARTY_TYPES,
   LEDGER_ENTRY_TYPES,
   MARKET_STATUSES,
@@ -14,6 +15,7 @@ import { and, eq, lt, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   adminActions,
+  approvalRequests,
   auditFailures,
   balances,
   fills,
@@ -966,6 +968,157 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     });
   });
 
+  describe('approval requests (migration 0021, #171)', () => {
+    async function request(requestedBy: string) {
+      const [row] = await t.db
+        .insert(approvalRequests)
+        .values({
+          kind: 'test_kind',
+          targetType: 'market',
+          targetId: randomUUID(),
+          payload: { note: '시험' },
+          requestedBy,
+          requestReason: '요청 사유',
+          requestedAt: new Date(),
+        })
+        .returning();
+      return row!;
+    }
+    const decision = (decidedBy: string, status: 'approved' | 'rejected' = 'approved') => ({
+      status,
+      decidedBy,
+      decisionReason: '결정 사유',
+      decidedAt: new Date(),
+    });
+
+    it('labels approval_status like APPROVAL_STATUSES', async () => {
+      const { rows } = await t.db.execute<{ label: string }>(sql`
+        SELECT unnest(enum_range(NULL::approval_status))::text AS label`);
+      expect(rows.map((row) => row.label)).toEqual([...APPROVAL_STATUSES]);
+    });
+
+    it('takes one decision by another account, with its decider, reason and instant', async () => {
+      const { user: requester } = await createUser(t.db, { role: 'admin' });
+      const { user: decider } = await createUser(t.db, { role: 'admin' });
+      const row = await request(requester.id);
+      expect(row).toMatchObject({ status: 'pending', decidedBy: null, decidedAt: null });
+      await t.db
+        .update(approvalRequests)
+        .set(decision(decider.id))
+        .where(eq(approvalRequests.id, row.id));
+      const [decided] = await t.db.select().from(approvalRequests);
+      expect(decided).toMatchObject({ status: 'approved', decidedBy: decider.id });
+    });
+
+    it('refuses a decision by the requester, whoever writes it', async () => {
+      const { user: requester } = await createUser(t.db, { role: 'admin' });
+      const row = await request(requester.id);
+      for (const status of ['approved', 'rejected'] as const) {
+        await expect(
+          t.db
+            .update(approvalRequests)
+            .set(decision(requester.id, status))
+            .where(eq(approvalRequests.id, row.id)),
+        ).rejects.toSatisfy(
+          (e) =>
+            sqlState(e) === '23514' &&
+            sqlConstraint(e) === 'approval_requests_decider_not_requester_check',
+        );
+      }
+      // Not even inserted decided.
+      await expect(
+        t.db.insert(approvalRequests).values({
+          kind: 'test_kind',
+          requestedBy: requester.id,
+          requestReason: '요청 사유',
+          requestedAt: new Date(),
+          ...decision(requester.id),
+        }),
+      ).rejects.toSatisfy((e) => sqlState(e) === '23514');
+    });
+
+    it('ties the decision columns to the status and requires non-blank reasons', async () => {
+      const { user: requester } = await createUser(t.db, { role: 'admin' });
+      const { user: decider } = await createUser(t.db, { role: 'admin' });
+      const row = await request(requester.id);
+      for (const set of [
+        { status: 'approved' as const },
+        { decidedBy: decider.id },
+        { ...decision(decider.id), decisionReason: null },
+        { ...decision(decider.id), decidedAt: null },
+        { ...decision(decider.id), status: 'pending' as const },
+      ]) {
+        await expect(
+          t.db.update(approvalRequests).set(set).where(eq(approvalRequests.id, row.id)),
+        ).rejects.toSatisfy(
+          (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'approval_requests_decision_check',
+        );
+      }
+      await expect(
+        t.db
+          .update(approvalRequests)
+          .set({ ...decision(decider.id), decisionReason: '  ' })
+          .where(eq(approvalRequests.id, row.id)),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'approval_requests_reasons_check',
+      );
+      await expect(
+        t.db.insert(approvalRequests).values({
+          kind: 'test_kind',
+          requestedBy: requester.id,
+          requestReason: ' ',
+          requestedAt: new Date(),
+        }),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'approval_requests_reasons_check',
+      );
+    });
+
+    it('never changes what was requested, nor a decided request', async () => {
+      const { user: requester } = await createUser(t.db, { role: 'admin' });
+      const { user: decider } = await createUser(t.db, { role: 'admin' });
+      const { user: other } = await createUser(t.db, { role: 'admin' });
+      const row = await request(requester.id);
+      for (const set of [
+        { kind: 'other_kind' },
+        { targetId: randomUUID() },
+        { payload: { note: '바꿈' } },
+        { requestedBy: other.id },
+        { requestReason: '다른 사유' },
+        { requestedAt: new Date(0) },
+      ]) {
+        await expect(
+          t.db.update(approvalRequests).set(set).where(eq(approvalRequests.id, row.id)),
+        ).rejects.toSatisfy((e) => sqlState(e) === '23000');
+      }
+      await t.db
+        .update(approvalRequests)
+        .set(decision(decider.id, 'rejected'))
+        .where(eq(approvalRequests.id, row.id));
+      // Decided once: another decision, another decider or back to pending are all refused.
+      for (const set of [
+        decision(decider.id, 'approved'),
+        decision(other.id, 'rejected'),
+        { status: 'pending' as const, decidedBy: null, decisionReason: null, decidedAt: null },
+      ]) {
+        await expect(
+          t.db.update(approvalRequests).set(set).where(eq(approvalRequests.id, row.id)),
+        ).rejects.toSatisfy((e) => sqlState(e) === '23000');
+      }
+      expect(await t.db.select().from(approvalRequests)).toMatchObject([
+        { status: 'rejected', decidedBy: decider.id, decisionReason: '결정 사유' },
+      ]);
+    });
+
+    it('cannot DELETE a request', async () => {
+      const { user: requester } = await createUser(t.db, { role: 'admin' });
+      const row = await request(requester.id);
+      await expect(
+        t.db.delete(approvalRequests).where(eq(approvalRequests.id, row.id)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '42501');
+    });
+  });
+
   describe('buddha_app privileges (PLAN 6.4)', () => {
     it('can INSERT and SELECT ledger_entries but not UPDATE or DELETE', async () => {
       const { user: u } = await createUser(t.db, { balanceCoin: 500n });
@@ -990,7 +1143,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         FROM information_schema.role_table_grants
         WHERE grantee = 'buddha_app' AND table_schema = 'public'
           AND table_name IN ('ledger_entries', 'market_events', 'admin_actions', 'payment_events',
-            'balances', 'payments', 'user_contacts', 'market_settlement_steps', 'release_settings')
+            'balances', 'payments', 'user_contacts', 'market_settlement_steps', 'release_settings',
+            'approval_requests')
         ORDER BY 1, 2`);
       const grants = Object.groupBy(rows, (r) => r.table);
       const privs = (table: string) => grants[table]?.map((r) => r.privilege).sort() ?? [];
@@ -1006,6 +1160,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(privs('market_settlement_steps')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
       // Migration 0020: a release setting is changed, never removed.
       expect(privs('release_settings')).toEqual(['INSERT', 'SELECT', 'UPDATE']);
+      // Migration 0021: a two-person request is decided in place, never removed.
+      expect(privs('approval_requests')).toEqual(['INSERT', 'SELECT', 'UPDATE']);
     });
 
     it('cannot UPDATE or DELETE a payment event', async () => {

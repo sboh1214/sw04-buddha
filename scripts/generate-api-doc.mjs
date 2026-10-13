@@ -104,7 +104,9 @@ const OVERVIEW = `## 개요
 const AUTH_NOTES = `- 아래 표의 \`인증\` 칸이 \`🔒\` 인 오퍼레이션은 이 쿠키를 요구한다. \`—\` 는 공개 라우트다.
 - 쿠키가 없거나 만료되었으면 \`401 UNAUTHENTICATED\`.
 - \`/api/v1/admin/*\` 는 쿠키에 더해 \`profiles.role = 'admin'\` 을 요구한다(\`AdminGuard\`, 역할은
-  60초 캐시). 아니면 \`403 FORBIDDEN\`.
+  60초 캐시). 아니면 \`403 FORBIDDEN\`. 운영 기록(원장 감사 실패, 출시 설정 변경 기록, 관리자 권한
+  변경 이력)도 모두 이 아래에 있다. 관리자 권한을 부여·회수하면 캐시에 새 역할을 바로 써서 다음
+  요청부터 적용되고, 회수는 그 계정의 세션을 모두 지운다(#171).
 - 상태를 바꾸는 요청(GET·HEAD·OPTIONS 외)은 \`Origin\` 헤더가 신뢰 목록(\`WEB_ORIGIN\`,
   \`BETTER_AUTH_URL\`)에 없으면 \`403 FORBIDDEN\` 이다(\`SessionGuard\` 의 CSRF 검사). 헤더가 아예
   없는 요청은 브라우저가 보낸 것이 아니므로 통과한다(curl, 서버 간 호출, 테스트).
@@ -327,6 +329,10 @@ const ERROR_NOTES = {
     'PG 가 요청을 거절했다. `details[0].message` 에 PG 의 `<결과 코드> <메시지>` 가 붙는다. 환불이면 회수했던 Coin 을 되돌려 놓았다. 단 환불 **재시도**가 거절되면 첫 시도가 이미 카드를 취소했을 수 있어 Coin 을 되돌리지 않고 `refunding` 으로 둔다 — 첫 시도라도 PG 의 답을 기다리는 사이 재시도가 결제를 넘겨받았으면 마찬가지다(그 재시도가 정한다). 거절됐어도 그사이 다른 시도가 환불을 끝냈으면 오류가 아니라 `refunded` 로 마친 결제로 답한다.',
   PAYMENT_GATEWAY_ERROR:
     'PG 에 닿지 못했거나 결과를 알 수 없다(502). 다른 5xx 처럼 본문에 내부 사정을 담지 않는다. 환불이면 `refunding` 으로 남으니 다시 시도한다. 단 그사이 다른 시도가 환불을 끝냈으면 오류가 아니라 `refunded` 로 마친 결제로 답한다.',
+  ROLE_CHANGE_NOT_ALLOWED:
+    '관리자 권한 부여·회수의 규칙에 맞지 않는다. `details[0].message` 가 까닭을 말한다 — 부여는 `already_admin`(이미 관리자다), `email_not_verified`(이메일 인증을 마치지 않았다), `contact_required`(실명·휴대전화를 등록하지 않았다), 회수는 `not_admin`(관리자가 아니다), `min_admins`(회수하면 관리자가 2명 미만이 된다. 자기 회수도 같다).',
+  APPROVAL_NOT_ALLOWED:
+    '2인 통제 요청의 결정(승인·거절)을 받지 않는다. `details[0].message` 가 까닭을 말한다 — `requester`(요청한 계정은 자기 요청을 결정할 수 없다. 어느 환경에서도 예외가 없다), `decided`(이미 결정된 요청이다). 이 규칙을 쓰는 라우트가 이 코드를 문서화한다.',
   INTERNAL: '그 밖의 서버 오류. 본문에 내부 사정을 담지 않는다.',
 };
 

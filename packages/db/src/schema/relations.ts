@@ -6,6 +6,7 @@
  */
 import { relations } from 'drizzle-orm';
 import { adminActions } from './admin-actions.js';
+import { approvalRequests } from './approval-requests.js';
 import { account, session, user } from './auth.js';
 import { balances } from './balances.js';
 import { categories } from './categories.js';
@@ -139,6 +140,20 @@ export const releaseSettingsRelations = relations(releaseSettings, ({ one }) => 
   updatedBy: one(user, { fields: [releaseSettings.updatedBy], references: [user.id] }),
 }));
 
+// Two references to `user`, so both ends name theirs (as `category_parent` above).
+export const approvalRequestsRelations = relations(approvalRequests, ({ one }) => ({
+  requester: one(user, {
+    fields: [approvalRequests.requestedBy],
+    references: [user.id],
+    relationName: 'approval_requester',
+  }),
+  decider: one(user, {
+    fields: [approvalRequests.decidedBy],
+    references: [user.id],
+    relationName: 'approval_decider',
+  }),
+}));
+
 export const userRelations = relations(user, ({ one, many }) => ({
   sessions: many(session),
   accounts: many(account),
@@ -152,6 +167,8 @@ export const userRelations = relations(user, ({ one, many }) => ({
   createdMarkets: many(markets),
   adminActions: many(adminActions),
   releaseSettingUpdates: many(releaseSettings),
+  approvalRequests: many(approvalRequests, { relationName: 'approval_requester' }),
+  approvalDecisions: many(approvalRequests, { relationName: 'approval_decider' }),
 }));
 
 export const sessionRelations = relations(session, ({ one }) => ({

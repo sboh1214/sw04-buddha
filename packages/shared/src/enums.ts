@@ -226,6 +226,17 @@ export const ADMIN_ACTION_TYPES = [
    * trigger (migration 0020) refuses a release_settings write without this row.
    */
   'release_setting_change',
+  /**
+   * An account received the admin role (#171): target `user` / its id, payload `{reason}`,
+   * written in the transaction that sets `profiles.role`. The seed's bootstrap admins record
+   * themselves as the actor with the reason '시드'.
+   */
+  'admin_grant',
+  /**
+   * An account lost the admin role (#171): target `user` / its id, payload `{reason}`, written in
+   * the transaction that resets `profiles.role` and deletes the account's sessions.
+   */
+  'admin_revoke',
 ] as const;
 export type AdminActionType = (typeof ADMIN_ACTION_TYPES)[number];
 export const adminActionTypeSchema = z.enum(ADMIN_ACTION_TYPES);
@@ -246,6 +257,16 @@ export type ReleaseSettingStatus = (typeof RELEASE_SETTING_STATUSES)[number];
 export const releaseSettingStatusSchema = z
   .enum(RELEASE_SETTING_STATUSES)
   .meta({ id: 'ReleaseSettingStatus' });
+
+// ---- two-person rule (#171) ---------------------------------------------------------
+/**
+ * approval_requests.status (Postgres enum `approval_status`): a request waits as `pending` until
+ * an admin other than its requester decides it, once, as `approved` or `rejected`
+ * (approvals.ts).
+ */
+export const APPROVAL_STATUSES = ['pending', 'approved', 'rejected'] as const;
+export type ApprovalStatus = (typeof APPROVAL_STATUSES)[number];
+export const approvalStatusSchema = z.enum(APPROVAL_STATUSES).meta({ id: 'ApprovalStatus' });
 
 /**
  * Seed categories (PLAN 1.3, 6.2): the five TOP-LEVEL slugs. Never sports or elections

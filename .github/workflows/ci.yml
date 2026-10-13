@@ -95,9 +95,12 @@ jobs:
       MAILPIT_URL: http://127.0.0.1:8025
       E2E_BASE_URL: http://localhost:3000
       # db:seed skips the admin — and with it the seeded markets — unless both are set
-      # (packages/db/src/seed.ts); the e2e signs in as this admin to open its own market.
+      # (packages/db/src/seed.ts); the e2e signs in as this admin to open its own market. The
+      # second bootstrap admin: the two-person rule needs two distinct admins here too (#171).
       SEED_ADMIN_EMAIL: admin@buddha.local
       SEED_ADMIN_PASSWORD: ci-only-admin-password
+      SEED_SECOND_ADMIN_EMAIL: admin2@buddha.local
+      SEED_SECOND_ADMIN_PASSWORD: ci-only-second-admin-password
 
     steps:
       - uses: actions/checkout@v7
@@ -157,8 +160,8 @@ jobs:
       # The e2e flow needs the categories, and its market fixture is created through the admin API
       # as the seeded admin (SEED_ADMIN_* above). No spec charges: paid Coin is closed (ADR-0049), and
       # the payment spec puts a package on sale itself (the seed's are off sale, #125) to show the
-      # charge is refused anyway. db:seed already declares those three keys in passThroughEnv, so
-      # turbo.json needs no change.
+      # charge is refused anyway. db:seed declares DATABASE_URL and the four SEED_*ADMIN_* keys in
+      # turbo.json's passThroughEnv.
       - name: Seed the database
         run: pnpm db:seed
 

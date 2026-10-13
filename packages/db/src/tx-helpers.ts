@@ -34,6 +34,25 @@ export async function lockMarket(tx: StatementExecutor, marketId: string): Promi
 }
 
 /**
+ * Serialises the work that depends on who is an admin (#171), shared by the API and the seed:
+ * a grant or revoke takes it `exclusive` (its "is the actor still an admin", "would fewer than
+ * two remain" and "is there any admin yet" checks then see every earlier change), and a decision
+ * on a two-person request takes it `shared` (the decider's role cannot be revoked between its
+ * check and the decision's commit). Transaction-scoped and waiting, like `lockMarket`; call it
+ * on the transaction handle.
+ */
+export async function lockAdminRoles(
+  tx: StatementExecutor,
+  mode: 'exclusive' | 'shared',
+): Promise<void> {
+  await tx.execute(
+    mode === 'exclusive'
+      ? sql`SELECT pg_advisory_xact_lock(hashtext('buddha:admin_roles'))`
+      : sql`SELECT pg_advisory_xact_lock_shared(hashtext('buddha:admin_roles'))`,
+  );
+}
+
+/**
  * `clock_timestamp()` as the database sees it right now — not `now()`, which is the
  * transaction start and stands still while the transaction waits on a lock. Read it AFTER the
  * last lock a transaction queues on: the rows it then writes (ledger `created_at`,

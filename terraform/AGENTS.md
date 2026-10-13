@@ -34,7 +34,7 @@
 - **GitHub OIDC subject는 immutable 형식**: `repo:sboh1214@30364442/sw04-buddha@1354856480:ref:refs/heads/main` (`local.github_oidc_subject`). 이 저장소의 sub claim 커스터마이즈 결과이고, owner id·repo id가 박혀 있다. `aws_iam_openid_connect_provider.github`는 **이 root가 소유**한다(계정 공용 싱글턴, `prevent_destroy`, 2026-10-02부터). 2026-09-22까지는 inno-frame state가 소유하고 여기서는 data source로 읽었으나, inno-frame의 destroy가 지워 2026-10-01 배포가 끊겼다(ADR-0040 추기). sai-web의 `sai-production-github-deploy`도 같은 provider를 신뢰한다 — 이 root를 내릴 때는 먼저 `terraform state rm`으로 provider를 놓는다(README「중지 / 시작」).
 - **SES identity에 `dkim_signing_attributes`를 적지 않는다.** EasyDKIM 기본값을 쓰고 토큰은 `outputs.tf`의 `dns_records`가 identity 속성에서 읽어 보여 준다. identity를 재생성하면 토큰이 바뀌어 DKIM이 끊긴다.
 - **`ssm:SendCommand`는 `aws_instance.app.arn`에 고정.** 인스턴스를 교체하는 apply가 정책도 다시 쓴다. 콘솔에서 인스턴스를 바꿨으면 apply를 한 번 더.
-- **`seed_admin_email` / `seed_admin_password`는 validation으로 빈 값을 거절한다.** 비어 있으면 seed가 관리자와 시드 시장을 조용히 건너뛰어 관리자 없는 사이트가 된다(`packages/db/src/seed.ts`).
+- **`seed_admin_email` / `seed_admin_password`는 validation으로 빈 값을 거절한다.** 비어 있으면 seed가 관리자와 시드 시장을 조용히 건너뛰어 관리자 없는 사이트가 된다(`packages/db/src/seed.ts`). 둘째 관리자 `seed_second_admin_*`는 선택이고(#171) 둘 다 채우거나 둘 다 비운다. 시드는 관리자가 한 명도 없을 때만 두 관리자를 만들므로, 첫 배포 뒤에 바꾼 값은 아무 계정도 만들지 않는다.
 - `terraform plan`은 첫 배포 뒤 항상 `No changes`여야 한다. drift 후보는 README의 「주시해야 할 drift」. 특히 `aws_dlm_lifecycle_policy.data`의 `state = "ERROR" -> "ENABLED"`는 스냅샷이 실패하고 있다는 뜻이다(README「스냅샷 확인」).
 
 ## 안티 패턴 (이 디렉터리)

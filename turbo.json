@@ -54,7 +54,13 @@
     "db:seed": {
       "dependsOn": ["^build"],
       "cache": false,
-      "passThroughEnv": ["DATABASE_URL", "SEED_ADMIN_EMAIL", "SEED_ADMIN_PASSWORD"]
+      "passThroughEnv": [
+        "DATABASE_URL",
+        "SEED_ADMIN_EMAIL",
+        "SEED_ADMIN_PASSWORD",
+        "SEED_SECOND_ADMIN_EMAIL",
+        "SEED_SECOND_ADMIN_PASSWORD"
+      ]
     },
     "openapi:export": {
       "dependsOn": ["build"],

@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { AdminAccountsModule } from './admin-accounts/admin-accounts.module.js';
 import { AdminModule } from './admin/admin.module.js';
+import { ApprovalsModule } from './approvals/approvals.module.js';
 import { AuthModule } from './auth/auth.module.js';
 import { CommonModule } from './common/common.module.js';
 import { envFilePaths, envSchema } from './config/env.js';
@@ -41,6 +43,8 @@ import { WalletModule } from './wallet/wallet.module.js';
     MarketsModule,
     TradesModule,
     ReleaseSettingsModule,
+    AdminAccountsModule,
+    ApprovalsModule,
   ],
   controllers: [HealthController],
 })

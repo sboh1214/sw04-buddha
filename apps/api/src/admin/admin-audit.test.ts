@@ -4,7 +4,9 @@
  * The individual suites already prove that each admin write leaves the RIGHT `admin_actions`
  * row — `admin.controller.test.ts` for the balance adjustment, `charge-package.controller.test`
  * and `coupon.controller.test` for the catalogue, `admin-markets.controller.test` and
- * `admin-markets-resolve.controller.test` for the market transitions. What none of them can
+ * `admin-markets-resolve.controller.test` for the market transitions,
+ * `release-settings.controller.test` for the release settings and
+ * `admin-accounts.controller.test` for the admin grants and revokes. What none of them can
  * prove is COMPLETENESS: they assert about routes that exist, so an admin write added tomorrow
  * with no audit row would break nothing.
  *
@@ -17,16 +19,9 @@
  * Static, and deliberately: it reads route metadata, so it needs no Postgres, no Redis and no
  * file lock, and it runs in every environment.
  */
-import { RequestMethod } from '@nestjs/common';
-// From `constants.js`, not the package root: the root re-exports these names as TYPES only, so
-// importing them from there compiles and then reads `Reflect.getMetadata(undefined, …)` at
-// runtime — which answers `undefined` for every handler and turns this whole file into a test
-// that discovers nothing and passes. The "finds the admin surface at all" case exists because
-// that is exactly what happened while writing it.
-import { METHOD_METADATA, MODULE_METADATA, PATH_METADATA } from '@nestjs/common/constants.js';
 import { ADMIN_ACTION_TYPES, type AdminActionType } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
-import { AppModule } from '../app.module.js';
+import { discoverRoutes, isAdminPath } from '../test/routes.js';
 
 /**
  * What each state-changing admin route appends to `admin_actions`.
@@ -50,75 +45,11 @@ const AUDITED: Readonly<Record<string, AdminActionType>> = {
   'POST /admin/markets/:id/resolve': 'market_resolve',
   'POST /admin/payments/:id/refund': 'payment_refund',
   'PATCH /admin/release-settings/:key': 'release_setting_change',
+  'POST /admin/admins': 'admin_grant',
+  'POST /admin/admins/:userId/revoke': 'admin_revoke',
 };
 
-interface DiscoveredRoute {
-  method: string;
-  path: string;
-  key: string;
-}
-
-/** Walks a module and everything it imports, collecting controller classes once each. */
-function controllersOf(module: unknown, seen = new Set<unknown>()): unknown[] {
-  // A module is either a CLASS (a function) or a DynamicModule (an object); rejecting one of
-  // the two returns an empty list from the root and makes every assertion below vacuous.
-  // Written as two inline `typeof`s and not through a variable: the variable form is not a
-  // type guard, so `module` stays `unknown` and `Reflect.getMetadata` will not take it.
-  if (module === null || (typeof module !== 'object' && typeof module !== 'function')) return [];
-  if (seen.has(module)) return [];
-  seen.add(module);
-  // A DynamicModule (ConfigModule.forRoot(), ThrottlerModule.forRootAsync()) carries its
-  // metadata as plain properties; a class module carries it as Reflect metadata.
-  const dynamic = module as { module?: unknown; imports?: unknown[]; controllers?: unknown[] };
-  const imports =
-    dynamic.imports ??
-    (Reflect.getMetadata(MODULE_METADATA.IMPORTS, module) as unknown[] | undefined) ??
-    [];
-  const controllers =
-    dynamic.controllers ??
-    (Reflect.getMetadata(MODULE_METADATA.CONTROLLERS, module) as unknown[] | undefined) ??
-    [];
-  const nested = dynamic.module === undefined ? [] : controllersOf(dynamic.module, seen);
-  return [
-    ...controllers,
-    ...nested,
-    ...imports.flatMap((imported) => controllersOf(imported, seen)),
-  ];
-}
-
-const METHOD_NAMES: Readonly<Record<number, string>> = {
-  [RequestMethod.GET]: 'GET',
-  [RequestMethod.POST]: 'POST',
-  [RequestMethod.PUT]: 'PUT',
-  [RequestMethod.DELETE]: 'DELETE',
-  [RequestMethod.PATCH]: 'PATCH',
-  [RequestMethod.ALL]: 'ALL',
-  [RequestMethod.OPTIONS]: 'OPTIONS',
-  [RequestMethod.HEAD]: 'HEAD',
-};
-
-/** Every route of every controller reachable from AppModule, as `METHOD /path`. */
-function discoverRoutes(): DiscoveredRoute[] {
-  const routes: DiscoveredRoute[] = [];
-  for (const controller of controllersOf(AppModule)) {
-    if (typeof controller !== 'function') continue;
-    const base = (Reflect.getMetadata(PATH_METADATA, controller) as string | undefined) ?? '';
-    const prototype = (controller as { prototype: object }).prototype;
-    for (const name of Object.getOwnPropertyNames(prototype)) {
-      if (name === 'constructor') continue;
-      const handler = (prototype as Record<string, unknown>)[name];
-      if (typeof handler !== 'function') continue;
-      const suffix = Reflect.getMetadata(PATH_METADATA, handler) as string | undefined;
-      if (suffix === undefined) continue;
-      const method = METHOD_NAMES[Reflect.getMetadata(METHOD_METADATA, handler) as number] ?? '?';
-      const path = `/${[base, suffix === '/' ? '' : suffix].filter(Boolean).join('/')}`;
-      routes.push({ method, path, key: `${method} ${path}` });
-    }
-  }
-  return routes;
-}
-
-const adminRoutes = discoverRoutes().filter((route) => route.path.startsWith('/admin'));
+const adminRoutes = discoverRoutes().filter((route) => isAdminPath(route.path));
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 describe('admin audit log completeness', () => {

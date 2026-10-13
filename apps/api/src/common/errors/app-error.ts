@@ -19,6 +19,8 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<ErrorCode, number>> = {
   // The PG could not be reached or its answer is unknown: an upstream failure, sealed like
   // every other 5xx by ApiExceptionFilter.
   PAYMENT_GATEWAY_ERROR: HttpStatus.BAD_GATEWAY,
+  ROLE_CHANGE_NOT_ALLOWED: HttpStatus.CONFLICT,
+  APPROVAL_NOT_ALLOWED: HttpStatus.CONFLICT,
   INTERNAL: HttpStatus.INTERNAL_SERVER_ERROR,
 };
 

@@ -148,6 +148,13 @@
       "when": 1791907125518,
       "tag": "0020_release_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1791912849775,
+      "tag": "0021_admin_accounts_approvals",
+      "breakpoints": true
     }
   ]
 }
