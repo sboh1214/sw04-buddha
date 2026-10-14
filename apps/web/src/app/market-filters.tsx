@@ -41,7 +41,7 @@ import { SubcategoryChips } from './subcategory-sidebar';
  * It has to be a prop and not the `['categories']` cache entry, because `Nav` renders above this
  * page and builds that query first, which makes react-query defer its hydration to an effect
  * that never runs on the server (see app/page.tsx). A failed read is not worth an error region
- * here — the headline falls back to 예측 시장 and the list underneath reports its own failure.
+ * here — the headline falls back to 예측시장 and the list underneath reports its own failure.
  */
 
 /** PLAN 11.3's three orders. Local to this file: no other screen sorts a market list. */

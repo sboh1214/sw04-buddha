@@ -150,10 +150,10 @@ describe('response schemas', () => {
     expect(paymentSchema.safeParse({ ...cancelled, cancelConfirmed: 'no' }).success).toBe(false);
 
     // The admin row adds the account.
-    const adminRow = { ...refunded, status: 'refunding', userId: 'u1', nickname: '예측가' };
+    const adminRow = { ...refunded, status: 'refunding', userId: 'u1', nickname: '홍길동' };
     expect(adminPaymentSchema.parse(adminRow)).toMatchObject({
       status: 'refunding',
-      nickname: '예측가',
+      nickname: '홍길동',
     });
     const { nickname: _nickname, ...withoutNickname } = adminRow;
     expect(adminPaymentSchema.safeParse(withoutNickname).success).toBe(false);
@@ -169,7 +169,7 @@ describe('response schemas', () => {
   });
 
   it('takes an optional search term on the admin user query', () => {
-    expect(adminUserQuerySchema.parse({ q: ' 예측가 ' })).toMatchObject({ q: '예측가', limit: 20 });
+    expect(adminUserQuerySchema.parse({ q: ' 홍길동 ' })).toMatchObject({ q: '홍길동', limit: 20 });
     expect(adminUserQuerySchema.safeParse({ q: '' }).success).toBe(false);
   });
 });

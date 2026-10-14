@@ -218,8 +218,8 @@ export async function createOpenMarket(admin: APIRequestContext): Promise<TestMa
 
   // Slug-safe by construction: base36 is [a-z0-9] and MARKET_SLUG_PATTERN allows '-'.
   const tag = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
-  const title = `E2E 확률 시장 ${tag}`;
-  // Deliberately does NOT contain 정산 기준: AC 2 looks for the section heading and for this
+  const title = `E2E 시장 ${tag}`;
+  // Deliberately does NOT contain 규칙: AC 2 looks for the section heading and for this
   // text separately, and a rules body carrying the heading would satisfy both on its own.
   const rules = `이 시장은 자동화 테스트가 만들었습니다. 확인 코드 ${tag}.`;
 

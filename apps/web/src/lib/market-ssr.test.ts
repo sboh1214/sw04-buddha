@@ -90,7 +90,7 @@ describe('seedMarketDetail', () => {
 
   it('seeds the row alone when the ticks read failed, leaving the key for the client', () => {
     const queryClient = new QueryClient();
-    // A failed `GET /markets/:id/ticks` must not take the question and the 정산 기준 down with
+    // A failed `GET /markets/:id/ticks` must not take the question and the 규칙 down with
     // it, so the page renders with `null` here. The ticks key must then stay UNBUILT: seeding
     // the `null` would build a SUCCESSFUL query holding it, and the chart reads `held.points`
     // straight off a settled ticks query instead of fetching and reporting the failure itself.

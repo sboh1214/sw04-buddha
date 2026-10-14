@@ -165,13 +165,13 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
     expect((await credentialAccount(created!.id))?.password).toBeTypeOf('string');
   });
 
-  it('created profile (예측가_XXXX) and the bonus balance in the same transaction (trigger)', async () => {
+  it('created profile (user_XXXX) and the bonus balance in the same transaction (trigger)', async () => {
     const rows = await t.db.execute<{ nickname: string; available_coin: string }>(
       sql`select p.nickname, b.available_coin from profiles p join balances b using (user_id)
           join "user" u on u.id = p.user_id where u.email = ${email}`,
     );
     expect(rows.rows).toHaveLength(1);
-    expect(rows.rows[0]!.nickname).toMatch(/^예측가_[23456789A-HJ-NP-Z]{4}$/);
+    expect(rows.rows[0]!.nickname).toMatch(/^user_[23456789A-HJ-NP-Z]{4}$/);
     // Migration 0004 grants the sign-up bonus in the same transaction (PLAN 17 Q2).
     expect(String(rows.rows[0]!.available_coin)).toBe(SIGNUP_BONUS_COIN.toString());
   });

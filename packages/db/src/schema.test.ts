@@ -5,6 +5,7 @@ import {
   MARKET_STATUSES,
   PRICE_TICK_TRIGGERS,
   SIGNUP_BONUS_COIN,
+  nicknameSchema,
 } from '@buddha/shared';
 import { and, eq, lt, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -67,7 +68,9 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     const balance = await t.db.query.balances.findFirst({
       where: eq(balances.userId, 'u-trigger'),
     });
-    expect(profile?.nickname).toMatch(/^예측가_[23456789A-HJ-NP-Z]{4}$/);
+    // The #14 prefix (ADR-0052); the whole nickname passes the rule users are held to.
+    expect(profile?.nickname).toMatch(/^user_[23456789A-HJ-NP-Z]{4}$/);
+    expect(nicknameSchema.safeParse(profile?.nickname).success).toBe(true);
     expect(profile?.role).toBe('user');
     // Migration 0004: the sign-up bonus lands in the same transaction, with its ledger entry.
     expect(balance?.availableCoin).toBe(SIGNUP_BONUS_COIN);

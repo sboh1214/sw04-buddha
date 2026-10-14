@@ -163,7 +163,7 @@ export type PositionMath = Pick<
  *
  * `marketLastPrice` is the market's last YES fill price (1..99 Coin per contract), so the NO side
  * is its complement against the `PAYOUT_PER_CONTRACT_COIN` a winning contract pays — the same
- * complement `formatNoPrice` shows, so the number under "아니오 37%" and the value of a NO
+ * complement `formatNoPrice` shows, so the number under "NO 37%" and the value of a NO
  * position can never disagree. Valuing a NO position at the YES price is the one mistake this
  * function exists to make impossible, and it is silent: it produces a plausible number that is
  * wrong by 100 − 2·price per contract.

@@ -91,7 +91,7 @@ describe('palette contrast', () => {
   it('reads the label on a solid fill at 4.5:1 in both modes', () => {
     // The button and the badge recipe both resolve `bg: colorPalette.solid` with
     // `color: colorPalette.contrast`, so this pair — not the fill against the page — is what
-    // carries 예/아니오, 매수/매도, 마감 임박 and the admin's 정산 단계 실패 badge (`no`).
+    // carries YES/NO, 매수/매도, 마감 임박 and the admin's 정산 단계 실패 badge (`no`).
     const failures = SOLID_PALETTES.flatMap((palette) =>
       MODES.flatMap((mode) =>
         shortfall(

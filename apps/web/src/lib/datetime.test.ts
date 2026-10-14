@@ -151,7 +151,7 @@ describe('tickingNow', () => {
 
   it('keeps a slow browser from trading past the close, which the old floor did not', () => {
     // A browser a minute BEHIND used to be pinned at the anchor for the whole minute — the panel
-    // went on offering 예/아니오 in a market that had closed, and the server refused each press.
+    // went on offering YES/NO in a market that had closed, and the server refused each press.
     const elapsedMs = 11_000;
     const slowWall = anchor + elapsedMs - 60_000;
     expect(closed(Math.max(anchor, slowWall))).toBe(false); // the old reading: still open

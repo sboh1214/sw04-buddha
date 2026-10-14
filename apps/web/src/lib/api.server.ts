@@ -62,7 +62,7 @@ export const fetchMarketServer = cache(async (idOrSlug: string): Promise<Market 
  * The asymmetry is deliberate: the row IS the page, but the series is one region of it, and that
  * region already owns a complete error rung of its own (`series.isLoadingError` → 다시 시도,
  * probability-chart.tsx). Letting the rejection out would 500 the whole route over a failed
- * sub-resource and take the question and the 정산 기준 — the two things AC 2 reads out of
+ * sub-resource and take the question and the 규칙 — the two things AC 2 reads out of
  * view-source, both of which the page already holds by the time this call runs — down with it,
  * onto Next's own untranslated error screen (there is no `app/error.tsx`). An unseeded ticks key
  * instead lets the chart fetch it on the client and report the failure where it happened, the

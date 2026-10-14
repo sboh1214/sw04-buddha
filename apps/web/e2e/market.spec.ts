@@ -75,7 +75,7 @@ async function boxIn(scope: Locator, testId: string) {
 }
 
 test.describe('시장 상세', () => {
-  test('AC 2: 첫 응답 HTML에 질문·가격·정산 기준이 들어 있다', async ({ admin, request }) => {
+  test('AC 2: 첫 응답 HTML에 질문·가격·규칙이 들어 있다', async ({ admin, request }) => {
     const market = await createOpenMarket(admin);
 
     /*
@@ -93,7 +93,7 @@ test.describe('시장 상세', () => {
     // the heading the way it already reaches the chart label), which is why this assertion
     // is the guard and not a formality: it renders inside the page's HydrationBoundary and
     // falls back to the row the server fetched (`?? fallback`). Move it above the boundary
-    // and the seed is not there yet — measured, that also strips 확률 and the chart out of
+    // and the seed is not there yet — measured, that also strips 시장가격 and the chart out of
     // this same HTML. Delete the fallback and this line goes red.
     expect(html).toContain(market.title);
     expect(html).toContain('data-testid="market-detail-question"');
@@ -109,7 +109,8 @@ test.describe('시장 상세', () => {
     // inside the page's HydrationBoundary and falls back to the row the server fetched
     // (`?? fallback`), so this holds whether or not the seeded query is readable. Delete
     // that fallback and this assertion goes red, which is why it is not optional polish.
-    expect(html).toContain(copy.rulesSectionTitle);
+    // The heading as an element: '규칙' alone is a word other text on the page could carry.
+    expect(html).toMatch(new RegExp(`<h2[^>]*>${copy.rulesSectionTitle}</h2>`));
     expect(html).toContain(market.rules);
 
     /*
@@ -168,7 +169,7 @@ test.describe('시장 상세', () => {
       // Open, so the order area is there, saying 거래 준비 중 and nothing else.
       await expect(detailB.getByTestId('order-area-notice')).toHaveText(copy.tradePreparing);
       // An open card names no status — its countdown is its state — and has no fill to price:
-      // its 예 and 아니오 rows stay, '—' in each pill, with 체결 없음 beside them (ADR-0048).
+      // its YES and NO rows stay, '—' in each pill, with 체결 없음 beside them (ADR-0048).
       await expect(cardB.getByTestId('market-card-no-fills')).toHaveText(copy.noFills);
       await expect(cardB.getByTestId('market-card-probability')).toHaveText('—');
       await expect(cardB.getByTestId('market-card-probability-no')).toHaveText('—');
@@ -245,7 +246,7 @@ test.describe('시장 상세 · 375px', () => {
   test.use({ viewport: { width: 375, height: 812 } });
 
   test('AC 5: 스크롤 없이 가격과 하단 탭이 보인다', async ({ admin, page }) => {
-    // The fixed 예/아니오 bar this used to measure went with the trade panel (#125); the tab bar
+    // The fixed YES/NO bar this used to measure went with the trade panel (#125); the tab bar
     // takes the bottom of the screen on this route like on every other, and the order area is
     // an ordinary block further down saying 거래 준비 중.
     const market = await createOpenMarket(admin);

@@ -64,7 +64,7 @@ export function MarketPreview({ values, categories, base }: MarketPreviewProps) 
           <Text fontSize="sm" color="fg.muted">
             {copy.adminMarketPreviewDetail}
           </Text>
-          {/* `RulesSection` defaults to `market-rules`, which the 정산 기준 textarea above owns. */}
+          {/* `RulesSection` defaults to `market-rules`, which the 규칙 textarea above owns. */}
           <RulesSection
             market={{
               rules: body.rules,

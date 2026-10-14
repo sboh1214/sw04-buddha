@@ -374,7 +374,7 @@ export function applyPositionEvent(
   //
   // `refetch` for the same reason an absent row takes it: the event cannot BUILD the row in its
   // new list. It carries no `resolvedResult` and no `marketStatus` (realtime.ts), so a client
-  // that moved the row itself would draw 정산 이력 with 결과 — for a market that resolved 예.
+  // that moved the row itself would draw 정산 이력 with 결과 — for a market that resolved YES.
   // Membership is the REST answer's, which is the rule `joinPositions` states from the other
   // side ("the LIST comes from `incoming`") and `liveMarketStatus` (use-portfolio.ts) states
   // from the third: a terminal transition is not an event's to apply.

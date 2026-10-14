@@ -10,7 +10,7 @@ import {
   verifyLinkErrorCode,
 } from './lib/auth-client';
 
-// PLAN Appendix A: gambling vocabulary must never appear in user-facing copy.
+// D21 (ADR-0047, docs/TERMS.md): gambling vocabulary must never appear in user-facing copy.
 const FORBIDDEN_WORDS = ['베팅', '배당', '배당률', '승률', '판돈', '당첨'];
 
 describe('copy', () => {

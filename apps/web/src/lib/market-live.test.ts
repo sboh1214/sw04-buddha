@@ -201,7 +201,7 @@ describe('applyTick', () => {
 });
 
 describe('applyStatus', () => {
-  /** The market after the admin judged 예: the `resolved` event is event 4 of this market. */
+  /** The market after the admin judged YES: the `resolved` event is event 4 of this market. */
   const resolved: Market = {
     ...detail,
     status: 'resolved',

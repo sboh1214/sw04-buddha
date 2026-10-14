@@ -169,7 +169,7 @@ describe('the SSR-seeded list', () => {
   it('hands the hook the dehydrated pages without a single request', async () => {
     // The home server component's half: one page fetched with the server client, prefetched as an
     // INFINITE query (so `pageParams` and the query type ride along), then dehydrated into the
-    // HTML. AC 2 is this test plus the page: first paint carries the current 확률.
+    // HTML. AC 2 is this test plus the page: first paint carries the current 시장가격.
     const serverClient = getQueryClient();
     await serverClient.prefetchInfiniteQuery({
       queryKey: marketsKey(DEFAULT_MARKET_FILTERS),

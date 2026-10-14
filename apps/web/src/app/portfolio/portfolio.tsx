@@ -279,7 +279,7 @@ export function Portfolio() {
             message={copy.portfolioPositionsEmpty}
             action={
               <Button asChild size="sm" variant="outline">
-                <NextLink href="/">{copy.predict}</NextLink>
+                <NextLink href="/">{copy.tradeCta}</NextLink>
               </Button>
             }
           />

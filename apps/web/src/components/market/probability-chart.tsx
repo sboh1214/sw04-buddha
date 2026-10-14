@@ -32,7 +32,7 @@ const SUMMARY_LABELS: ChartSummaryLabels = {
 };
 
 /**
- * 확률 추이 (PLAN 11.4 ProbabilityChart): the price series, a 1일/1주/전체 toggle, and a
+ * 시장가격 추이 (PLAN 11.4 ProbabilityChart): the price series, a 1일/1주/전체 toggle, and a
  * readout the pointer and the keyboard both drive.
  *
  * Everything that decides a shape is imported. `lib/chart.ts` owns the geometry and the

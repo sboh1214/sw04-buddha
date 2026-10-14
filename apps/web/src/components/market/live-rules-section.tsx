@@ -5,7 +5,7 @@ import { useMarket } from '@/hooks/use-markets';
 import { type Market } from '@/lib/api';
 
 /**
- * 정산 기준, drawn from the live `['market', id]` row rather than the snapshot the server
+ * 규칙, drawn from the live `['market', id]` row rather than the snapshot the server
  * component happened to fetch.
  *
  * The three fields this section shows are all EDITABLE while a market is open
@@ -19,7 +19,7 @@ import { type Market } from '@/lib/api';
  * inside the page's `HydrationBoundary`, so the server pass reads the seeded row and writes the
  * rules into the HTML exactly as `MarketDetail`'s own header writes the question and the
  * probability — and if the query ever holds nothing, `fallback` is the row the server fetched,
- * so no branch here can leave 정산 기준 out of view-source.
+ * so no branch here can leave 규칙 out of view-source.
  */
 export function LiveRulesSection({ fallback }: { fallback: Market }) {
   const market = useMarket(fallback.id).data ?? fallback;

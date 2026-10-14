@@ -361,7 +361,7 @@ describe('recentDelta', () => {
     // `pushPoint` REPLACES the last point when a tick shares its bucket — so from the second
     // trade onwards `points.at(-2)` is the PREVIOUS bucket's point and the badge measured the
     // whole bucket's movement. It accumulated with every further trade: the three trades below
-    // moved the probability +5, +5 and +5%p, and 확률 변화 announced +10, +15 and +20 — a
+    // moved the probability +5, +5 and +5%p, and 시장가격 변화 announced +10, +15 and +20 — a
     // number that is not the move, on the badge PLAN 11.4 shows for five seconds after a trade.
     let live = series({ bucketSeconds: 300, to: '2026-09-07T01:00:00.000Z' });
     live = appendTickToSeries(live, tick('2026-09-07T01:01:00.000Z', 4700, 42)) ?? live;

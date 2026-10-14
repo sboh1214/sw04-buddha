@@ -25,7 +25,7 @@ describe('rollCells', () => {
   });
 
   it('passes every non-digit through untouched', () => {
-    // The composed labels formatCoin and formatYesPrice produce must survive intact: the 예 word,
+    // The composed labels formatCoin and formatYesPrice produce must survive intact: the YES word,
     // the space, the thousands comma, the percent sign and the U+2212 minus are not digits and
     // never roll, but they still have to be rendered.
     const text = formatCoin(-1200n);
@@ -38,23 +38,23 @@ describe('rollCells', () => {
       ' ',
       ...'Coin',
     ]);
-    expect(rollCells('예 63%').filter((cell) => cell.offsetPct === null).length).toBe(3);
+    expect(rollCells('YES 63%').filter((cell) => cell.offsetPct === null).length).toBe(5);
   });
 
   it('keys from the right, so a longer value animates the same glyphs', () => {
-    // The regression key={i} causes: '예 9%' -> '예 63%' is an ordinary one-point move, and
+    // The regression key={i} causes: 'YES 9%' -> 'YES 63%' is an ordinary one-point move, and
     // keying from the left would hand the cell that held the '9' to the '6' and the cell that
     // held the '%' to the '3', rolling two columns that did not change.
-    const one = rollCells('예 9%');
-    const two = rollCells('예 63%');
+    const one = rollCells('YES 9%');
+    const two = rollCells('YES 63%');
     expect(fromRight(one, 0)?.char).toBe('%');
     expect(fromRight(two, 0)?.char).toBe('%');
     expect(fromRight(one, 1)?.char).toBe('9');
     expect(fromRight(two, 1)?.char).toBe('3');
     // The new tens digit simply mounts at a key nothing held before, which correctly does not
     // animate; every key inside one render is distinct, so React never collapses two cells.
-    expect(fromRight(one, 3)?.char).toBe('예');
-    expect(fromRight(two, 4)?.char).toBe('예');
+    expect(fromRight(one, 3)?.char).toBe('S');
+    expect(fromRight(two, 4)?.char).toBe('S');
     expect(new Set(two.map((cell) => cell.key)).size).toBe(two.length);
   });
 

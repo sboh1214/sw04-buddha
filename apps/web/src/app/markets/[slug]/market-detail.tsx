@@ -86,7 +86,7 @@ export interface MarketDetailProps {
    */
   now?: number;
   /**
-   * 정산 기준, rendered by the SERVER component and passed through. It sits in the left column
+   * 규칙, rendered by the SERVER component and passed through. It sits in the left column
    * for reading order, but it is never rendered by this file, so no branch of the ladder below
    * — and no hydration failure — can take it out of the HTML that AC 2 reads.
    */
@@ -210,7 +210,7 @@ function OrderArea() {
 }
 
 /**
- * 카테고리 · 상태 · 마감 카운트다운 · 확률 · 거래량 · 참여자.
+ * 카테고리 · 상태 · 마감 카운트다운 · 시장가격 · 거래량 · 참여자.
  *
  * The status badge is rendered for every status, including 진행 중, because it is the one
  * reading that says what the server currently thinks this market is — and it is what a

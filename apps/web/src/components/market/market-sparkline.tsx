@@ -6,12 +6,11 @@ import { sparklinePath } from '@/lib/sparkline';
  * component is a pure function of the numbers `GET /markets` already sent, so it renders inside
  * the server's HTML and a home page of twenty cards costs twenty `<path>` elements and no JS.
  *
- * Silent in the accessibility tree by default — `aria-hidden`, no accessible name. The 예 pill
- * above it carries the reading in words ("예 63%") and the detail page draws the same history as
+ * Silent in the accessibility tree by default — `aria-hidden`, no accessible name. The YES pill
+ * above it carries the reading in words ("YES 63%") and the detail page draws the same history as
  * a chart with its own readout, so announcing the shape here would read the same market out
- * twice. A caller that does want the trace named passes `label` (`copy.marketSparkline` is the
- * string) and the box becomes a `role="img"` with that name; the card does not, for the reason
- * just given.
+ * twice. A caller that does want the trace named passes `label` and the box becomes a
+ * `role="img"` with that name; the card does not, for the reason just given.
  *
  * Silent is not the same as decorative: the 24-hour trajectory appears nowhere else on the card,
  * so the trace is a graphical object under WCAG 1.4.11 and its stroke is measured rather than
@@ -47,8 +46,8 @@ export interface MarketSparklineProps {
   /** `MarketListItem.sparkline`: oldest-first hourly pYesBp, at most `SPARKLINE_MAX_POINTS`. */
   points: number[];
   /**
-   * An accessible name for the trace (`copy.marketSparkline`). Absent — the card's case — the
-   * box stays out of the accessibility tree; see the note at the top.
+   * An accessible name for the trace. Absent — the card's case — the box stays out of the
+   * accessibility tree; see the note at the top.
    */
   label?: string;
   'data-testid'?: string;
@@ -60,7 +59,7 @@ export function MarketSparkline({
   'data-testid': testId = 'market-card-sparkline',
 }: MarketSparklineProps) {
   const path = sparklinePath(points, BOX.width, BOX.height);
-  // Named only when there is something to name: a labelled "24시간 확률 추이" over an empty box
+  // Named only when there is something to name: a labelled trace over an empty box
   // (fewer than two samples) would announce a graphic that is not there.
   const named = label !== undefined && path !== null;
   return (

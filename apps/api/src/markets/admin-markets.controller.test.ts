@@ -63,7 +63,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
 
   const createBody = (overrides: Record<string, unknown> = {}) => ({
     title: '기준금리 3% 이하로 인하?',
-    rules: '한국은행 발표 기준. 기한까지 3% 이하로 내리지 않으면 아니오.',
+    rules: '한국은행 발표 기준. 기한까지 3% 이하로 내리지 않으면 NO.',
     categoryId: category.id,
     closeAt: future(),
     ...overrides,

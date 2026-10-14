@@ -5,7 +5,7 @@ import { formatKst } from '@/lib/datetime';
 import { formatBp } from '@/lib/market-admin';
 
 /**
- * The chart primitive behind 확률 추이 and the card sparkline (PLAN 11.4): one `<svg>` built
+ * The chart primitive behind 시장가격 추이 and the card sparkline (PLAN 11.4): one `<svg>` built
  * from `lib/chart.ts` geometry, and nothing else. It carries no directive, so a server
  * component renders it straight into the HTML.
  *
@@ -53,7 +53,7 @@ export interface LineChartProps {
   points: readonly ChartPoint[];
   /**
    * Accessible name. Omit it to mark the chart decorative — a card sparkline sits beside a
-   * written 확률, and announcing the shape as well would read the same market out twice.
+   * written 시장가격, and announcing the shape as well would read the same market out twice.
    */
   label?: string;
   /** `id` of the description the caller renders, normally a `ChartDataTable`. */

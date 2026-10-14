@@ -14,7 +14,7 @@ import { MarketDetail } from './market-detail';
 
 /**
  * 시장 상세 (PLAN 11.3), server-rendered so the first paint already carries the question, the
- * 정산 기준 and the current 확률 — the three things AC 2 reads out of view-source.
+ * 규칙 and the current 시장가격 — the three things AC 2 reads out of view-source.
  *
  * The row is fetched here, once, and SEEDED into a per-request query cache rather than passed
  * down as props: the screen has several readers of `['market', id]` (the heading, the header,
@@ -67,7 +67,7 @@ export default async function MarketPage({ params }: { params: Promise<{ slug: s
   // `market.id` and never the slug the URL carried (A-M3-29).
   //
   // `null` when the ticks read failed, and the page renders anyway: the chart is one region of
-  // this screen and it reports its own failure, while the question and the 정산 기준 below are
+  // this screen and it reports its own failure, while the question and the 규칙 below are
   // already in hand. Only the row may 404 or 500 this route (api.server.ts).
   const series = await fetchTicksServer(market.id, DEFAULT_TICK_RANGE);
   const queryClient = getQueryClient();
@@ -80,11 +80,11 @@ export default async function MarketPage({ params }: { params: Promise<{ slug: s
       <Stack gap="6">
         {/* Every AC 2 string reaches view-source through the SAME door: this boundary. It
             hydrates a not-yet-present query synchronously during render, so the server pass of
-            each client component below already reads the seeded row — the question, the 확률
-            and the 정산 기준 alike — while each still follows the live cache afterwards.
+            each client component below already reads the seeded row — the question, the 시장가격
+            and the 규칙 alike — while each still follows the live cache afterwards.
             The heading is INSIDE it for exactly that reason and must stay: rendered above the
             boundary it would run before the seed existed, and measurement showed that takes
-            확률, the status badge and the chart path out of the first paint with it. Each component carries the server row as its own `fallback` besides, so no
+            시장가격, the status badge and the chart path out of the first paint with it. Each component carries the server row as its own `fallback` besides, so no
             branch can leave an AC 2 string out even if the query is unreadable. */}
         <HydrationBoundary state={dehydratePublic(queryClient)}>
           {/* h2, not h1: `Nav` renders the site name as this document's only h1 on every screen
@@ -97,7 +97,7 @@ export default async function MarketPage({ params }: { params: Promise<{ slug: s
           {/* `now` is the server's own window end, never a clock read in this render body —
               see `detailWindowEnd`. It is absent when the series is. */}
           <MarketDetail marketId={market.id} now={detailWindowEnd(series)}>
-            {/* PLAN 11.1's Kalshi principle: 정산 기준 is never collapsed on the detail. It
+            {/* PLAN 11.1's Kalshi principle: 규칙 is never collapsed on the detail. It
                 promises no 판정 schedule (#22's '일정' panel will). The row fetched here is the
                 FALLBACK, not the source: the section follows the live cache so an admin's edit
                 to the rules or the close time cannot leave this panel describing a market the

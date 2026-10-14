@@ -3,6 +3,7 @@
   "extends": ["//"],
   "tasks": {
     "test": {
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/docs/TERMS.md"],
       "outputs": ["coverage/**"]
     }
   }
