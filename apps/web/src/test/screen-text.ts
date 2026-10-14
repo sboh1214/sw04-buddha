@@ -224,18 +224,44 @@ export function localImportsOf(fileName: string, source: string): string[] {
   ];
 }
 
-/** Every use of the identifiers `names` outside import declarations. */
+/**
+ * Every use of `names` outside import declarations: the name itself (`formatKrw(…)`,
+ * `shared.formatKrw`, `{ formatKrw: won } = shared`), a string key (`shared['formatKrw']`), and
+ * the local name an import gives it (`import { formatKrw as money }`, then `money(…)`, reported as
+ * `formatKrw as money`).
+ */
 export function usesOf(
   fileName: string,
   source: string,
   names: readonly string[],
 ): (SourcePlace & { name: string })[] {
   const file = parse(fileName, source);
+  const aliases = new Map<string, string>();
+  for (const statement of file.statements) {
+    const bindings = ts.isImportDeclaration(statement)
+      ? statement.importClause?.namedBindings
+      : undefined;
+    if (bindings === undefined || !ts.isNamedImports(bindings)) continue;
+    for (const element of bindings.elements) {
+      const imported = (element.propertyName ?? element.name).text;
+      if (names.includes(imported) && element.name.text !== imported) {
+        aliases.set(element.name.text, imported);
+      }
+    }
+  }
   const found: (SourcePlace & { name: string })[] = [];
   const visit = (node: ts.Node): void => {
     if (ts.isImportDeclaration(node)) return;
     if (ts.isIdentifier(node) && names.includes(node.text)) {
       found.push({ ...placeOf(file, node), name: node.text });
+    } else if (ts.isIdentifier(node) && aliases.has(node.text)) {
+      found.push({ ...placeOf(file, node), name: `${aliases.get(node.text)!} as ${node.text}` });
+    } else if (
+      ts.isElementAccessExpression(node) &&
+      ts.isStringLiteralLike(node.argumentExpression) &&
+      names.includes(node.argumentExpression.text)
+    ) {
+      found.push({ ...placeOf(file, node), name: node.argumentExpression.text });
     }
     ts.forEachChild(node, visit);
   };

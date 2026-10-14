@@ -273,6 +273,36 @@ describe('findExcludedText', () => {
   });
 
   it.each<[string, ExcludedFeatureId[]]>([
+    // The negative of a later clause is not the hit's own: the clause ends at a connective
+    // ending, a joining word or a comma.
+    ['점수와 순위를 제공하며 결제는 지원하지 않습니다.', ['scoring']],
+    ['점수를 보여주고 결제는 지원하지 않습니다.', ['scoring']],
+    ['순위를 제공하지만 송금은 할 수 없습니다.', ['scoring']],
+    ['랭킹은 매일 갱신합니다, 충전은 제공하지 않습니다.', ['scoring']],
+    ['배지를 드립니다 그리고 출금은 불가합니다.', ['scoring']],
+    // The cash-out words too: on the guide they are cleared by the same clause rule.
+    ['환전은 즉시 처리하며 결제는 지원하지 않습니다.', ['cash-out']],
+    // A negative before the hit is not its own either.
+    ['결제는 지원하지 않습니다 점수는 매일 쌓입니다.', ['scoring']],
+    // A list joined by commas, or a modifier clause joined by '…고', is split too: the guide
+    // writes '·', '와·과' or '…하거나' instead.
+    ['점수, 순위는 제공하지 않습니다.', ['scoring']],
+    ['점수를 매기고 순위를 보여주는 기능은 없습니다.', ['scoring']],
+  ])('clears a service-guide hit only by a negative in its own clause: %s', (text, named) => {
+    expect(features(text, 'service-guide')).toEqual(named);
+  });
+
+  it.each([
+    '점수를 제공하지 않으며 결제도 지원하지 않습니다.',
+    '점수는 없고 순위도 없습니다.',
+    '시장가격은 확률이 아니고 거래된 가격입니다.',
+    '시장가격은 확률이라고 할 수 없습니다.',
+    '점수를 매기거나 순위를 보여주는 기능은 없습니다.',
+  ])('keeps a negative notice whose every clause is negative: %s', (notice) => {
+    expect(features(notice, 'service-guide')).toEqual([]);
+  });
+
+  it.each<[string, ExcludedFeatureId[]]>([
     ['확률 입력이나 투표 기능은 없습니다.', ['probability-input', 'replaced-term']],
     ['시장가격은 확률이 아닙니다.', ['replaced-term']],
     ['이 서비스의 거래는 예측이나 투표가 아닙니다.', ['replaced-term', 'prediction-word']],

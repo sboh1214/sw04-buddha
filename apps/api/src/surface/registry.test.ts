@@ -20,7 +20,7 @@ import {
   findPrivateField,
   namesPersonalProbability,
 } from '@buddha/shared';
-import { Controller, Get, Module, Post } from '@nestjs/common';
+import { Controller, Get, Module, Post, forwardRef } from '@nestjs/common';
 import { SubscribeMessage, WebSocketGateway } from '@nestjs/websockets';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
@@ -171,6 +171,56 @@ describe('public and owner-only routes (static)', () => {
         handlers: [{ name: 'BaseGateway.ping', acks: [] }],
       },
     ]);
+  });
+
+  it('finds the routes and gateways of a module imported through forwardRef, as Nest does', () => {
+    @Controller('cyclic')
+    class CyclicController {
+      @Get('route')
+      route() {
+        return 'served';
+      }
+    }
+    @WebSocketGateway({ namespace: '/cyclic' })
+    class CyclicGateway {
+      @SubscribeMessage('ping')
+      ping(): void {}
+    }
+    @Module({ controllers: [CyclicController], providers: [CyclicGateway] })
+    class CyclicModule {}
+    @Controller('dynamic-cyclic')
+    class DynamicCyclicController {
+      @Get()
+      list() {
+        return [];
+      }
+    }
+    // `forwardRef(() => Module)` is how a cycle between two modules is written; Nest unwraps it,
+    // in a class module's imports and a DynamicModule's alike.
+    @Module({
+      imports: [
+        forwardRef(() => CyclicModule),
+        {
+          module: class DynamicHost {},
+          imports: [
+            forwardRef(() => ({
+              module: class DynamicCyclic {},
+              controllers: [DynamicCyclicController],
+            })),
+          ],
+        },
+      ],
+    })
+    class HostModule {}
+
+    expect(
+      discoverRoutes(HostModule)
+        .map((route) => route.key)
+        .sort(),
+    ).toEqual(['GET /cyclic/route', 'GET /dynamic-cyclic']);
+    expect(
+      discoverGateways(HostModule).map(({ namespace, messages }) => ({ namespace, messages })),
+    ).toEqual([{ namespace: '/cyclic', messages: ['ping'] }]);
   });
 
   it('registers every public route, and no route that is not one', () => {

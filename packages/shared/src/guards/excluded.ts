@@ -290,13 +290,28 @@ export const ALLOWANCE_SCOPES = ['everywhere', 'service-guide'] as const;
 export type AllowanceScope = (typeof ALLOWANCE_SCOPES)[number];
 
 /**
- * A sentence that says something is not offered, cannot be done, is not there or is not what it
+ * A clause that says something is not offered, cannot be done, is not there or is not what it
  * is called: '…을 제공하지 않습니다', '…은 제공되지 않습니다', '…할 수 없습니다', '…은 불가합니다',
- * '…기능은 없습니다', '…은 확률이 아닙니다'. The service guide (#136) may widen it when it words its
- * own sentences.
+ * '…기능은 없습니다', '…은 확률이 아닙니다', and the joined '…은 없고', '…이 아니며'. It clears a hit
+ * only after it in the same clause (CLAUSE_END). The service guide (#136) may widen it when it
+ * words its own sentences.
  */
 export const NEGATIVE_NOTICE =
-  /(?:제공|지원|지급)(?:하|되)지\s*않|되지\s*않(?:습니다|아요)|할\s*수\s*없|불가(?:능)?(?:합니다|해요)|없(?:습니다|어요)|아닙니다|아니에요/;
+  /(?:제공|지원|지급)(?:하|되)지\s*않|되지\s*않(?:습니다|아요)|할\s*수\s*없|불가(?:능)?(?:합니다|해요)|없(?:습니다|어요|으며|고|지만)|아닙니다|아니에요|아니(?:며|고|지만)/;
+
+/**
+ * Where a clause ends: a sentence end, a semicolon or a comma; a connective ending at the end of
+ * a word ('제공하며', '보여주고', '제공하지만', '있는데', '하면서', '있으나', '하므로', '하니까',
+ * '그리고'), but not a quote's '…라고·다고'; or a joining word ('그러나', '그런데', '반면'). A list
+ * joined by '·', '와·과', '이나' or '하거나' stays in one clause, so '점수·순위를 제공하지
+ * 않습니다' and '점수를 매기거나 순위를 보여주는 기능은 없습니다' are one negative each, while in
+ * '점수를 제공하며 결제는 지원하지 않습니다' the negative is the payment's alone.
+ */
+export const CLAUSE_END = new RegExp(
+  String.raw`[.?!。\n;,]|` +
+    String.raw`(?<=[가-힣])(?:며|(?<![라다자냐])고|지만|[는은]데|면서|으나|므로|니까)(?=\s|$)|` +
+    String.raw`(?<![가-힣])(?:그러나|그런데|반면에?)(?![가-힣])`,
+);
 
 const CASH_OUT_WORD = String.raw`(?:현금\s*)?(?:환전|출금|인출|현금화)`;
 
@@ -330,9 +345,10 @@ export interface TextAllowance {
   readonly features: readonly ExcludedFeatureId[];
   /**
    * `phrase`: a hit inside a match of `pattern` is cleared — the word is part of another one.
-   * `sentence`: every hit in a sentence that matches `pattern` is cleared.
+   * `clause`: a hit is cleared when `pattern` matches after it in its own clause, before the
+   * clause ends (CLAUSE_END) — the negative is the hit's, not another clause's.
    */
-  readonly within: 'phrase' | 'sentence';
+  readonly within: 'phrase' | 'clause';
   readonly pattern: RegExp;
   readonly scope: AllowanceScope;
   readonly reason: string;
@@ -404,7 +420,7 @@ export const TEXT_ALLOWANCES: readonly TextAllowance[] = [
       'replaced-term',
       'prediction-word',
     ],
-    within: 'sentence',
+    within: 'clause',
     pattern: NEGATIVE_NOTICE,
     scope: 'service-guide',
     reason:
@@ -430,25 +446,22 @@ function global(pattern: RegExp): RegExp {
   return new RegExp(pattern.source, `${pattern.flags.replace('g', '')}g`);
 }
 
-const SENTENCE_END = /[.?!。\n]/;
-
-/** The sentence around `index`: from the previous sentence end to the next one. */
-function sentenceAt(text: string, index: number): string {
-  let start = index;
-  while (start > 0 && !SENTENCE_END.test(text.charAt(start - 1))) start--;
-  let end = index;
-  while (end < text.length && !SENTENCE_END.test(text.charAt(end))) end++;
-  return text.slice(start, end);
+/** The rest of the clause after `index`, its ending included ('…않으며', '…없고'). */
+function restOfClause(text: string, index: number): string {
+  const boundary = global(CLAUSE_END);
+  boundary.lastIndex = index;
+  const m = boundary.exec(text);
+  return text.slice(index, m ? m.index + m[0].length : text.length);
 }
 
 function allowed(text: string, hit: ExcludedTextHit, scope: AllowanceScope): boolean {
   return TEXT_ALLOWANCES.some((allowance) => {
     if (allowance.scope !== 'everywhere' && allowance.scope !== scope) return false;
     if (!allowance.features.includes(hit.feature)) return false;
-    if (allowance.within === 'sentence') {
-      return allowance.pattern.test(sentenceAt(text, hit.index));
-    }
     const end = hit.index + hit.match.length;
+    if (allowance.within === 'clause') {
+      return allowance.pattern.test(restOfClause(text, end));
+    }
     return [...text.matchAll(global(allowance.pattern))].some(
       (m) => m.index <= hit.index && m.index + m[0].length >= end,
     );

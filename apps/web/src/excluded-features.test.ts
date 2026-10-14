@@ -1,4 +1,12 @@
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -30,13 +38,13 @@ import {
  * What the plan leaves out must not come back to a screen (#113): no screen text, screen address
  * or menu link names an excluded feature of EXCLUDED_FEATURES (@buddha/shared). The text is the
  * copy, key by key, and every string literal, template literal and JSX text under `src/`
- * (test/screen-text.ts); the addresses are the route folders under `app/`, and the menus and
- * links are every internal path a source writes down (`'/my/wallet'`, the header's and MY's
- * lists, the admin menu, the footer, redirects). The admin screens' text is held to the gambling
- * words only (owner decision 2026-10-14 #113); their addresses and links like any other. Word
- * allowances common to all text live with the list; the ones below are this app's: which code
- * may still name paid Coin, which copy names a feature on purpose, and where the service guide
- * will be.
+ * (test/screen-text.ts); the addresses are the route folders under `app/` and the folders and
+ * page files under `pages/` (routeNames), and the menus and links are every internal path a
+ * source writes down (`'/my/wallet'`, the header's and MY's lists, the admin menu, the footer,
+ * redirects). The admin screens' text is held to the gambling words only (owner decision
+ * 2026-10-14 #113); their addresses and links like any other. Word allowances common to all text
+ * live with the list; the ones below are this app's: which code may still name paid Coin, which
+ * copy names a feature on purpose, and where the service guide will be.
  */
 
 const at = (...parts: string[]) => path.join(SRC, ...parts);
@@ -383,14 +391,34 @@ function servedFiles(dir: string = SRC): string[] {
   });
 }
 
-/** Every route folder under `app/`. */
-function routeFolders(dir: string = APP): string[] {
-  return readdirSync(dir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .flatMap((entry) => {
-      const full = path.join(dir, entry.name);
-      return [full, ...routeFolders(full)];
-    });
+/** The Pages Router's own files, which no address serves: the app and document wrappers, the error page. */
+const PAGES_ROUTER_SPECIAL = /^_(?:app|document|error)$/;
+
+/**
+ * Every name a screen address is made of, with the file or folder it comes from: each route
+ * folder under `app/`, and under `pages/` (Next's Pages Router, served beside `app/`) each folder
+ * and each page file's own name — `pages/rankings.tsx` is served at `/rankings` — less
+ * `pages/api` (an API route: WEB_SERVER_ENDPOINTS), `_app`, `_document`, `_error` and `index`,
+ * which names no segment. Tests are not pages.
+ */
+function routeNames(src: string = SRC): { file: string; name: string }[] {
+  const pagesApi = path.join(src, 'pages', 'api');
+  const walk = (dir: string, pagesRouter: boolean): { file: string; name: string }[] =>
+    existsSync(dir)
+      ? readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+          const file = path.join(dir, entry.name);
+          if (entry.isDirectory()) {
+            return file === pagesApi
+              ? []
+              : [{ file, name: entry.name }, ...walk(file, pagesRouter)];
+          }
+          if (!pagesRouter || !SCRIPT.test(entry.name)) return [];
+          if (/\.(test|d)\.[cm]?[jt]sx?$/.test(entry.name)) return [];
+          const name = entry.name.replace(SCRIPT, '');
+          return name === 'index' || PAGES_ROUTER_SPECIAL.test(name) ? [] : [{ file, name }];
+        })
+      : [];
+  return [...walk(path.join(src, 'app'), false), ...walk(path.join(src, 'pages'), true)];
 }
 
 describe('excluded features on screens (#113)', () => {
@@ -578,6 +606,36 @@ describe('excluded features on screens (#113)', () => {
     expect(uses).toEqual([]);
   });
 
+  it('finds a price formatter however the file names it: an alias, a namespace, a string key', () => {
+    const uses = (text: string) =>
+      usesOf(at('app', 'x.tsx'), text, PRICE_FORMATTERS).map(({ line, name }) => ({ line, name }));
+    expect(
+      uses(
+        [
+          "import { formatKrw as money, formatCoin } from '@buddha/shared';",
+          'const a = <Text>{money(price)}</Text>;',
+          'const b = formatCoin(balance);',
+        ].join('\n'),
+      ),
+    ).toEqual([{ line: 2, name: 'formatKrw as money' }]);
+    expect(
+      uses(
+        [
+          "import * as shared from '@buddha/shared';",
+          'const a = shared.formatKrw(price);',
+          "const b = shared['formatKrw'](price);",
+          'const { formatKrw: won } = shared;',
+        ].join('\n'),
+      ),
+    ).toEqual([
+      { line: 2, name: 'formatKrw' },
+      { line: 3, name: 'formatKrw' },
+      { line: 4, name: 'formatKrw' },
+    ]);
+    // The import itself is no use: a file that imports and never calls it draws no price.
+    expect(uses("import { formatKrw as money } from '@buddha/shared';")).toEqual([]);
+  });
+
   it('holds the legal bodies to the gambling words until #137 revises them', () => {
     // The rest — the old '예측', 'P 충전', the 순위 nickname clause — stays until #137.
     const hits = LEGAL_BODIES.flatMap((file) =>
@@ -594,15 +652,53 @@ describe('excluded features on screens (#113)', () => {
 });
 
 describe('excluded features in screen addresses and menus (#113)', () => {
-  it('has no route folder that names one', () => {
-    const folders = routeFolders();
-    expect(folders).toContain(at('app', 'my', 'wallet'));
-    const hits = folders.flatMap((folder) =>
-      findExcludedIdentifier(path.basename(folder), 'route', {
-        features: featuresFor(isPreservedPaid(folder)),
-      }).map((hit) => `${path.relative(APP, folder)}: ${hit.feature} '${hit.word}'`),
+  it('has no route folder or page that names one', () => {
+    const names = routeNames();
+    expect(names.map(({ file }) => file)).toContain(at('app', 'my', 'wallet'));
+    const hits = names.flatMap(({ file, name }) =>
+      findExcludedIdentifier(name, 'route', {
+        features: featuresFor(isPreservedPaid(file)),
+      }).map((hit) => `${path.relative(SRC, file)}: ${hit.feature} '${hit.word}'`),
     );
     expect(hits).toEqual([]);
+  });
+
+  it('reads the Pages Router as well: its folders and page files are addresses too', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'route-names-'));
+    try {
+      const files = [
+        'app/my/wallet/page.tsx',
+        'pages/rankings.tsx',
+        'pages/leaderboard/index.tsx',
+        'pages/leaderboard/[season].jsx',
+        'pages/index.tsx',
+        'pages/_app.tsx',
+        'pages/_document.tsx',
+        'pages/_error.tsx',
+        'pages/rankings.test.tsx',
+        'pages/api/score.ts',
+      ];
+      for (const file of files) {
+        mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+        writeFileSync(path.join(dir, file), '');
+      }
+      expect(
+        routeNames(dir)
+          .map(({ file, name }) => `${path.relative(dir, file).split(path.sep).join('/')} ${name}`)
+          .sort(),
+      ).toEqual([
+        'app/my my',
+        'app/my/wallet wallet',
+        'pages/leaderboard leaderboard',
+        'pages/leaderboard/[season].jsx [season]',
+        'pages/rankings.tsx rankings',
+      ]);
+      expect(findExcludedIdentifier('rankings', 'route').map((hit) => hit.feature)).toEqual([
+        'scoring',
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('links to none: no internal path in a menu, a link or a redirect names one', () => {

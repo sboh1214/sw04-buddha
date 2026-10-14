@@ -56,6 +56,11 @@ function membersOf(kind: Members, module: unknown, seen = new Set<unknown>()): u
   // Written as two inline `typeof`s and not through a variable: the variable form is not a
   // type guard, so `module` stays `unknown` and `Reflect.getMetadata` will not take it.
   if (module === null || (typeof module !== 'object' && typeof module !== 'function')) return [];
+  // `forwardRef(() => FeatureModule)`, the way a cycle between modules is imported: Nest unwraps
+  // it, and a walk that read the wrapper would find nothing of the module behind it.
+  if ('forwardRef' in module && typeof module.forwardRef === 'function') {
+    return membersOf(kind, (module.forwardRef as () => unknown)(), seen);
+  }
   if (seen.has(module)) return [];
   seen.add(module);
   // A DynamicModule (ConfigModule.forRoot(), ThrottlerModule.forRootAsync()) carries its

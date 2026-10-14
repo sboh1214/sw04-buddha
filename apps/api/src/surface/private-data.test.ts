@@ -61,8 +61,9 @@ type MarketRow = typeof schema.markets.$inferSelect;
 
 /**
  * One of A's values. `text` is looked for anywhere in an answer (ids, addresses, names, keys);
- * `amount` is a number, and matches a JSON value equal to it, so a uuid that happens to hold
- * its digits is not a leak.
+ * `amount` is a whole number, and matches a JSON value equal to it or a number written into a
+ * string or a key (numbersIn: '잔액은 7,654,321 Coin입니다', 'balance=7654321'), so a uuid that
+ * happens to hold its digits is not a leak.
  */
 interface Sentinel {
   readonly label: string;
@@ -97,10 +98,14 @@ function letters(count: number): string {
   return Array.from({ length: count }, () => String.fromCharCode(97 + randomInt(26))).join('');
 }
 
+/**
+ * A's amounts, seven digits each that no other number of a test answer is likely to be: they are
+ * looked for inside text as well (leakedValues).
+ */
 const AMOUNTS = {
   available: 7_654_321n,
-  locked: 1_234_567n,
-  positionQty: 86_421,
+  locked: 4_826_159n,
+  positionQty: 8_642_097,
   costBasis: 2_718_281n,
   realizedPnl: 3_141_593n,
 } as const;
@@ -139,17 +144,39 @@ function parse(body: string): unknown {
   }
 }
 
+/**
+ * A whole number written in text, plain or grouped by thousands, with or without a sign, a unit
+ * or decimal zeros: '7654321', '7,654,321 Coin', '−3,141,593', 'balance=7654321', '7654321.00'.
+ * Not the digits of a longer number ('17,654,321', '0.7654321', '7654321.5') or of a word or an
+ * id ('a7654321', '7654321abc', a uuid's hex): no letter or digit of the Latin alphabet before it,
+ * none after it but a 'Coin'.
+ */
+const NUMBER_IN_TEXT =
+  /(?<![0-9A-Za-z]|\d[.,])(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d+))?(?!\d|[.,]\d|(?!Coin)[A-Za-z])/g;
+
+/** The whole numbers `text` writes, as digits ('7,654,321 Coin' is '7654321'). */
+function numbersIn(text: string): string[] {
+  return [...text.matchAll(NUMBER_IN_TEXT)]
+    .filter((m) => m[2] === undefined || /^0+$/.test(m[2]))
+    .map((m) => m[1]!.replaceAll(',', ''));
+}
+
 /** The labels of the values an answer holds. */
 function leakedValues(body: string, sentinels: readonly Sentinel[]): string[] {
-  const scalars = new Set<string>();
+  const numbers = new Set<string>();
   walk(parse(body), (key, scalar) => {
-    if (key === null && (typeof scalar === 'string' || typeof scalar === 'number')) {
-      scalars.add(String(scalar));
+    if (key !== null) {
+      for (const n of numbersIn(key)) numbers.add(n);
+    } else if (typeof scalar === 'number') {
+      numbers.add(String(scalar));
+    } else if (typeof scalar === 'string') {
+      numbers.add(scalar);
+      for (const n of numbersIn(scalar)) numbers.add(n);
     }
   });
   return sentinels
     .filter((sentinel) =>
-      sentinel.kind === 'text' ? body.includes(sentinel.value) : scalars.has(sentinel.value),
+      sentinel.kind === 'text' ? body.includes(sentinel.value) : numbers.has(sentinel.value),
     )
     .map((sentinel) => sentinel.label);
 }
@@ -363,6 +390,58 @@ function valuesOf(
     Object.entries(params ?? {}).map(([name, value]) => [name, value(fixture)]),
   );
 }
+
+describe('reading an answer for A’s values (static)', () => {
+  const sentinels: readonly Sentinel[] = [
+    { label: 'available balance', value: String(AMOUNTS.available), kind: 'amount' },
+    { label: 'realized pnl', value: String(AMOUNTS.realizedPnl), kind: 'amount' },
+    { label: 'position qty', value: String(AMOUNTS.positionQty), kind: 'amount' },
+  ];
+  const leaks = (answer: unknown) => leakedValues(JSON.stringify(answer), sentinels);
+
+  it('finds an amount as a JSON value, a whole string, or written into a string', () => {
+    expect(leaks({ availableCoin: 7_654_321 })).toEqual(['available balance']);
+    expect(leaks({ availableCoin: '7654321' })).toEqual(['available balance']);
+    // Formatted or explained: thousands separators, the Coin unit, a sign, decimal zeros.
+    for (const message of [
+      '잔액은 7,654,321 Coin입니다',
+      'balance=7654321',
+      '7,654,321Coin',
+      '(7654321)',
+      'id-7654321',
+      '7654321.00',
+    ]) {
+      expect(leaks({ message }), message).toEqual(['available balance']);
+    }
+    for (const message of ['손익 −3,141,593 Coin', 'pnl: -3141593', '+3,141,593']) {
+      expect(leaks({ message }), message).toEqual(['realized pnl']);
+    }
+    expect(leaks({ error: { message: `수량 ${(8_642_097).toLocaleString('en-US')}개` } })).toEqual([
+      'position qty',
+    ]);
+    // A body that is not JSON is read as one string.
+    expect(leakedValues('available: 7,654,321 Coin', sentinels)).toEqual(['available balance']);
+  });
+
+  it('does not take the digits of another number or of an id for an amount', () => {
+    for (const message of [
+      '17654321',
+      '76543210',
+      '7,654,3210',
+      '17,654,321',
+      '0.7654321',
+      '7654321.5',
+      'a7654321b',
+      'v7654321',
+      '7654321abc',
+      '3.141593',
+    ]) {
+      expect(leaks({ message }), message).toEqual([]);
+    }
+    // An id's hex digits, at the start of a group or anywhere in it.
+    expect(leaks({ id: '07654321-4b1a-4c1a-9c1a-7654321abcde' })).toEqual([]);
+  });
+});
 
 describe('private data cases (static)', () => {
   // So a route nobody wrote a case for fails without a database too.
