@@ -33,12 +33,24 @@ export const PROPOSED_CONTRACT_TERMS: ContractTerms = {
 };
 
 /**
+ * The largest payout the market maker prices: below it a contract's cost in doubles is exact to
+ * well under a thousandth of a Coin, so the ladder rounds to the tick reliably.
+ */
+export const CONTRACT_PAYOUT_MAX_COIN = 1_000_000_000;
+
+/**
  * RangeError unless the terms make a grid of whole-Coin prices inside (0, payout): positive
- * integers, a tick that divides the payout and both ends of the price range, and VOID payouts
- * that share out exactly one pair's collateral (완전 담보, N01 §3).
+ * integers, a payout of at most `CONTRACT_PAYOUT_MAX_COIN`, a tick that divides the payout and
+ * both ends of the price range, and VOID payouts that share out exactly one pair's collateral
+ * (완전 담보, N01 §3). Whether VOID payouts may add up to anything else is still open (#173 9항).
  */
 export function assertContractTerms(terms: ContractTerms): void {
   assertWhole('payoutCoin', terms.payoutCoin, 1);
+  if (terms.payoutCoin > CONTRACT_PAYOUT_MAX_COIN) {
+    throw new RangeError(
+      `payoutCoin must be at most ${String(CONTRACT_PAYOUT_MAX_COIN)}, got ${String(terms.payoutCoin)}`,
+    );
+  }
   assertWhole('tickCoin', terms.tickCoin, 1);
   assertWhole('priceMinCoin', terms.priceMinCoin, 1);
   assertWhole('priceMaxCoin', terms.priceMaxCoin, 1);

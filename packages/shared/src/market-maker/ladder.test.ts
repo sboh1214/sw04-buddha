@@ -36,16 +36,34 @@ const settingsArb: fc.Arbitrary<LadderSettings> = fc.record({
   quantity: fc.integer({ min: 1, max: 120 }),
 });
 
-/** Any valid terms: a tick dividing the payout and both range ends, VOID sharing the payout. */
+/**
+ * Any valid terms: a tick dividing the payout and both range ends, VOID sharing the payout.
+ * Three in four have a wide price range, so most ladders are not cut by the range at once.
+ */
+const rangeArb = fc.oneof(
+  {
+    weight: 3,
+    arbitrary: fc.tuple(
+      fc.double({ min: 0, max: 0.05, noNaN: true }),
+      fc.double({ min: 0.95, max: 1, noNaN: true }),
+    ),
+  },
+  {
+    weight: 1,
+    arbitrary: fc.tuple(
+      fc.double({ min: 0, max: 1, noNaN: true }),
+      fc.double({ min: 0, max: 1, noNaN: true }),
+    ),
+  },
+);
 const termsArb: fc.Arbitrary<ContractTerms> = fc
   .record({
     tick: fc.constantFrom(1, 2, 5),
     steps: fc.integer({ min: 4, max: 200 }),
-    lo: fc.double({ min: 0, max: 1, noNaN: true }),
-    hi: fc.double({ min: 0, max: 1, noNaN: true }),
+    range: rangeArb,
     voidShare: fc.double({ min: 0, max: 1, noNaN: true }),
   })
-  .map(({ tick, steps, lo, hi, voidShare }) => {
+  .map(({ tick, steps, range: [lo, hi], voidShare }) => {
     const min = 1 + Math.floor(Math.min(lo, hi) * (steps - 2));
     const max = min + Math.floor(Math.abs(hi - lo) * (steps - 1 - min));
     const payoutCoin = tick * steps;
@@ -61,6 +79,20 @@ const termsArb: fc.Arbitrary<ContractTerms> = fc
   });
 
 const dArb = fc.integer({ min: -3000, max: 3000 });
+
+/**
+ * A ladder case. Half the time d is within four b of balance, where the curve is not saturated
+ * and the levels and quantity caps are what end a ladder; otherwise any d.
+ */
+const caseArb = fc
+  .record({
+    s: settingsArb,
+    terms: termsArb,
+    u: fc.double({ min: -4, max: 4, noNaN: true }),
+    raw: dArb,
+    near: fc.boolean(),
+  })
+  .map(({ s, terms, u, raw, near }) => ({ s, terms, d: near ? Math.round(s.b * u) : raw }));
 
 /** The curve's cost of the bot buying n YES (d → d − n) or n NO (d → d + n), from C itself. */
 const curveCostOfYes = (d: number, n: number, b: number, payout: number) =>
@@ -130,6 +162,30 @@ describe('quoteLadder examples (design proposal: payout 100, tick 1, prices 1–
     expect(high.noBids).toEqual([]);
   });
 
+  it('rounds exactly at a payout of 1e9 Coin', () => {
+    // References from 60-digit decimal arithmetic: Y(−1) = 487505204.86…, Y(−2) = 462577906.91…,
+    // Y(−3) = 437836249.13… for b = 10; Y(4) = 610617317.80… (d = 5); 499875000.0052… (b = 1000).
+    const big: ContractTerms = {
+      payoutCoin: 1e9,
+      tickCoin: 1,
+      priceMinCoin: 1,
+      priceMaxCoin: 1e9 - 1,
+      voidPayoutYesCoin: 5e8,
+      voidPayoutNoCoin: 5e8,
+    };
+    const three = settings({ levels: 3, quantity: 3 });
+    expect(flat(quoteLadder(0, three, big).yesBids)).toEqual([
+      [487505204, 1],
+      [462577906, 1],
+      [437836249, 1],
+    ]);
+    expect(quoteLadder(5, three, big).yesBids[0]).toEqual({ priceCoin: 610617317, qty: 1 });
+    expect(quoteLadder(0, { ...three, b: 1000 }, big).yesBids[0]).toEqual({
+      priceCoin: 499875000,
+      qty: 1,
+    });
+  });
+
   it('stays finite and bounded however far d is beyond b', () => {
     const far = quoteLadder(1e9, settings({ b: 1, quantity: 50 }), T);
     expect(flat(far.yesBids)).toEqual([[99, 50]]);
@@ -141,7 +197,7 @@ describe('quoteLadder examples (design proposal: payout 100, tick 1, prices 1–
 describe('quoteLadder properties', () => {
   it('has distinct falling prices on the tick grid inside the range, within levels and quantity', () => {
     fc.assert(
-      fc.property(dArb, settingsArb, termsArb, (d, s, terms) => {
+      fc.property(caseArb, ({ d, s, terms }) => {
         const ladder = quoteLadder(d, s, terms);
         for (const side of [ladder.yesBids, ladder.noBids]) {
           expect(side.length).toBeLessThanOrEqual(s.levels);
@@ -161,7 +217,7 @@ describe('quoteLadder properties', () => {
 
   it('never pays more than the curve for any prefix that fills', () => {
     fc.assert(
-      fc.property(dArb, settingsArb, termsArb, (d, s, terms) => {
+      fc.property(caseArb, ({ d, s, terms }) => {
         const ladder = quoteLadder(d, s, terms);
         const check = (prices: number[], curve: (n: number) => number) => {
           let paid = 0;
@@ -179,7 +235,7 @@ describe('quoteLadder properties', () => {
 
   it('prices each contract at its curve cost rounded down, less the safety ticks', () => {
     fc.assert(
-      fc.property(dArb, settingsArb, termsArb, (d, s, terms) => {
+      fc.property(caseArb, ({ d, s, terms }) => {
         const { yesBids, noBids } = quoteLadder(d, s, terms);
         const t = terms.tickCoin;
         const each = (prices: number[], unitCost: (k: number) => number) =>
@@ -197,7 +253,7 @@ describe('quoteLadder properties', () => {
 
   it('ends a direction only at the quantity, the levels or the price range', () => {
     fc.assert(
-      fc.property(dArb, settingsArb, termsArb, (d, s, terms) => {
+      fc.property(caseArb, ({ d, s, terms }) => {
         const ladder = quoteLadder(d, s, terms);
         for (const [side, dir] of [
           [ladder.yesBids, d],
@@ -217,7 +273,7 @@ describe('quoteLadder properties', () => {
 
   it('quotes NO as the mirror of YES', () => {
     fc.assert(
-      fc.property(dArb, settingsArb, termsArb, (d, s, terms) => {
+      fc.property(caseArb, ({ d, s, terms }) => {
         expect(quoteLadder(d, s, terms).noBids).toEqual(quoteLadder(-d, s, terms).yesBids);
       }),
       RUNS,
@@ -275,6 +331,24 @@ describe('input validation', () => {
     for (const over of bad) {
       expect(() => quoteLadder(0, settings(over), T), JSON.stringify(over)).toThrow(RangeError);
     }
+  });
+
+  it('rejects a b whose reciprocal or product with the payout overflows', () => {
+    expect(() => assertLadderSettings(settings({ b: 1e-310 }))).toThrow(RangeError);
+    expect(() => quoteLadder(0, settings({ b: 1e-310 }), T)).toThrow(RangeError);
+    expect(() => quoteLadder(0, settings({ b: 1e307 }), T)).toThrow(RangeError);
+  });
+
+  it('draws mostly ladders that are not empty', () => {
+    const cases = fc.sample(caseArb, { numRuns: 2000, seed: 1 });
+    const sides = cases.flatMap(({ d, s, terms }) => {
+      const ladder = quoteLadder(d, s, terms);
+      return [ladder.yesBids, ladder.noBids];
+    });
+    expect(sides.filter((side) => side.length > 0).length / sides.length).toBeGreaterThan(0.5);
+    expect(
+      sides.filter((side, i) => side.length === cases[i >> 1]!.s.levels).length,
+    ).toBeGreaterThan(100);
   });
 
   it('rejects terms the ladder cannot price on', () => {

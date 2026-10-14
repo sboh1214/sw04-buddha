@@ -47,16 +47,22 @@ export interface QuoteLadder {
 }
 
 /**
- * Doubles carry about 1e-13 of error into a unit's cost; a price is rounded down from the cost
- * less this much (relative to the payout), so a cost a hair under a tick is never rounded up
- * to it. It can make a price one tick lower than exact rounding would, never higher.
+ * A unit's cost carries at most about 5e-16 of the payout in double error. A price is rounded
+ * down from the cost less this share of the payout (2000 times that), so a cost a hair under a
+ * tick is never rounded up to it. With the payout at most 1e9 Coin (`assertContractTerms`) the
+ * margin is under a thousandth of a Coin: a price can be one tick lower than exact rounding
+ * would give, only when the cost is that close above a tick, and never higher.
  */
-const ROUNDING_MARGIN = 1e-9;
+const ROUNDING_MARGIN = 1e-12;
 
-/** RangeError unless b is positive and finite and the other settings are whole numbers. */
+/**
+ * RangeError unless b is positive with 1/b finite and the other settings are whole numbers. The
+ * cost function also refuses a b whose product with the payout overflows.
+ */
 export function assertLadderSettings(settings: LadderSettings): void {
-  if (typeof settings.b !== 'number' || !Number.isFinite(settings.b) || settings.b <= 0) {
-    throw new RangeError(`b must be a positive finite number, got ${String(settings.b)}`);
+  const { b } = settings;
+  if (typeof b !== 'number' || !Number.isFinite(b) || b <= 0 || !Number.isFinite(1 / b)) {
+    throw new RangeError(`b must be a positive number with a finite 1/b, got ${String(b)}`);
   }
   assertWhole('safetyTicks', settings.safetyTicks, 0);
   assertWhole('levels', settings.levels, 1);
@@ -82,7 +88,8 @@ function bidLadder(d: number, settings: LadderSettings, terms: ContractTerms): Q
   const levels: { priceCoin: number; qty: number }[] = [];
   for (let k = 1; k <= settings.quantity; k++) {
     const priceCoin = yesBidPriceCoin(d, k, settings, terms);
-    if (priceCoin < terms.priceMinCoin || priceCoin > terms.priceMaxCoin) break;
+    // Written so that a NaN price, which no accepted input yields, would also end the ladder.
+    if (!(priceCoin >= terms.priceMinCoin && priceCoin <= terms.priceMaxCoin)) break;
     const last = levels.at(-1);
     if (last?.priceCoin === priceCoin) {
       last.qty += 1;

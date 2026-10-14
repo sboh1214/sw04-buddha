@@ -44,6 +44,12 @@ describe('probabilityYes and the reference price', () => {
     );
   });
 
+  it('rounds to exactly 1 past d/b ≈ 37 but reaches exactly 0 only past about −745', () => {
+    expect(probabilityYes(37, 1)).toBe(1);
+    expect(probabilityYes(-40, 1)).toBeGreaterThan(0);
+    expect(probabilityYes(-746, 1)).toBe(0);
+  });
+
   it('saturates without overflow when |d| is far beyond b', () => {
     expect(probabilityYes(1e12, 1)).toBe(1);
     expect(probabilityYes(-1e12, 1)).toBe(0);
@@ -125,6 +131,14 @@ describe('input validation', () => {
       expect(() => probabilityYes(0, b), String(b)).toThrow(RangeError);
       expect(() => yesUnitCostCoin(0, b, P), String(b)).toThrow(RangeError);
     }
+    // 1/b or P·b would overflow: the formulas would give NaN or Infinity.
+    for (const b of [1e-310, 5e-324]) {
+      expect(() => lmsrCost(0, 0, b, P), String(b)).toThrow(RangeError);
+      expect(() => probabilityYes(-1, b), String(b)).toThrow(RangeError);
+      expect(() => yesUnitCostCoin(-1, b, P), String(b)).toThrow(RangeError);
+    }
+    expect(() => yesUnitCostCoin(-1e308, 1e307, P)).toThrow(RangeError);
+    expect(() => lmsrCost(0, 0, 1e307, P)).toThrow(RangeError);
     for (const payout of [0, -100, Number.NaN]) {
       expect(() => lmsrCost(0, 0, 1, payout)).toThrow(RangeError);
       expect(() => referencePriceCoin(0, 1, payout)).toThrow(RangeError);
