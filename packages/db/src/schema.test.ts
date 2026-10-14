@@ -4,12 +4,16 @@ import {
   LEDGER_ENTRY_TYPES,
   MARKET_STATUSES,
   PRICE_TICK_TRIGGERS,
+  RELEASE_SETTING_STATUSES,
   SIGNUP_BONUS_COIN,
   nicknameSchema,
+  releaseSettingChangeBodySchema,
+  releaseSettingChangePayloadSchema,
 } from '@buddha/shared';
 import { and, eq, lt, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  adminActions,
   auditFailures,
   balances,
   fills,
@@ -21,9 +25,11 @@ import {
   payments,
   positions,
   profiles,
+  releaseSettings,
   user,
   userContacts,
 } from './schema/index.js';
+import { storedReleaseSettingValue } from './release-settings.js';
 import {
   createCategory,
   createMarket,
@@ -580,6 +586,386 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     });
   });
 
+  describe('release settings (migration 0020, #170)', () => {
+    const key = 'test.period_hours';
+    type State = { status: 'undecided' | 'proposal' | 'test' | 'approved'; value: unknown };
+
+    /** Instants 1 ms apart at least, like the API's: an UPDATE must move `updated_at` forward. */
+    let last = 0;
+    function nextInstant(): Date {
+      last = Math.max(Date.now(), last + 1);
+      return new Date(last);
+    }
+
+    /**
+     * The change the API makes: its admin_actions record and the row, in one transaction, at
+     * `record.at` for the record and `rowAt` for the row (both a fresh instant by default). The
+     * record's `before` is the state the row holds when the change starts — undecided with no
+     * value when there is no row — unless `record.before` replaces it; `record.payloadKey`
+     * replaces the key the payload names (the one the change log shows), and `record.reason` the
+     * reason (left out of the payload when undefined).
+     */
+    async function change(
+      adminId: string,
+      after: State,
+      record: {
+        adminId?: string;
+        after?: State;
+        before?: unknown;
+        at?: Date;
+        payloadKey?: string;
+        reason?: unknown;
+      } = {},
+      rowAt?: Date,
+    ) {
+      const at = rowAt ?? nextInstant();
+      await t.db.transaction(async (tx) => {
+        const [current] = await tx
+          .select({ status: releaseSettings.status, value: storedReleaseSettingValue })
+          .from(releaseSettings)
+          .where(eq(releaseSettings.key, key));
+        const before: State = {
+          status: current?.status ?? 'undecided',
+          value: current?.value ?? null,
+        };
+        await tx.insert(adminActions).values({
+          adminId: record.adminId ?? adminId,
+          type: 'release_setting_change',
+          targetType: 'release_setting',
+          targetId: key,
+          payload: {
+            key: record.payloadKey ?? key,
+            before: 'before' in record ? record.before : before,
+            after: record.after ?? after,
+            reason: 'reason' in record ? record.reason : '시험',
+          },
+          createdAt: record.at ?? at,
+        });
+        await tx
+          .insert(releaseSettings)
+          .values({ key, ...after, updatedAt: at, updatedBy: adminId })
+          .onConflictDoUpdate({
+            target: releaseSettings.key,
+            set: { ...after, updatedAt: at, updatedBy: adminId },
+          });
+      });
+    }
+
+    it('labels release_setting_status like RELEASE_SETTING_STATUSES', async () => {
+      const { rows } = await t.db.execute<{ label: string }>(sql`
+        SELECT unnest(enum_range(NULL::release_setting_status))::text AS label`);
+      expect(rows.map((row) => row.label)).toEqual([...RELEASE_SETTING_STATUSES]);
+    });
+
+    it('stores a change made with its record, and every later one', async () => {
+      const { user: admin } = await createUser(t.db, { role: 'admin' });
+      await change(admin.id, { status: 'test', value: 48 });
+      await change(admin.id, { status: 'approved', value: { from: 1, to: 2 } });
+      await change(admin.id, { status: 'undecided', value: null });
+      // From a stored undecided row (its record's `before` is undecided with no value), and from
+      // a string that is JSON text (the record keeps the string, not what it spells).
+      await change(admin.id, { status: 'proposal', value: '"24"' });
+      await change(admin.id, { status: 'test', value: 24 });
+      const rows = await t.db.select().from(releaseSettings);
+      expect(rows).toMatchObject([{ key, status: 'test', value: 24, updatedBy: admin.id }]);
+      // Each record's `before` is the previous one's `after`.
+      const records = await t.db
+        .select({ payload: adminActions.payload })
+        .from(adminActions)
+        .orderBy(adminActions.createdAt);
+      expect(records.map((r) => (r.payload as { before: unknown }).before)).toEqual([
+        { status: 'undecided', value: null },
+        { status: 'test', value: 48 },
+        { status: 'approved', value: { from: 1, to: 2 } },
+        { status: 'undecided', value: null },
+        { status: 'proposal', value: '"24"' },
+      ]);
+    });
+
+    it('refuses, at commit, a write whose record is missing or tells another story', async () => {
+      const { user: admin } = await createUser(t.db, { role: 'admin' });
+      const { user: other } = await createUser(t.db, { role: 'admin' });
+      // No record at all: a bare INSERT, and a bare UPDATE (moving the instant on) of a row that
+      // has one.
+      await expect(
+        t.db.insert(releaseSettings).values({
+          key,
+          status: 'test',
+          value: 48,
+          updatedAt: nextInstant(),
+          updatedBy: admin.id,
+        }),
+      ).rejects.toSatisfy((e) => sqlState(e) === '23000');
+      await change(admin.id, { status: 'test', value: 48 });
+      await expect(
+        t.db
+          .update(releaseSettings)
+          .set({ value: 72, updatedAt: nextInstant() })
+          .where(eq(releaseSettings.key, key)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '23000');
+      // A record of another value, another actor or another instant, or one that targets this
+      // key but names another in its payload (the key the change log would show).
+      for (const record of [
+        { after: { status: 'test', value: 24 } as State },
+        { after: { status: 'approved', value: 72 } as State },
+        { adminId: other.id },
+        { at: nextInstant() },
+        { payloadKey: 'test.other_hours' },
+      ]) {
+        await expect(change(admin.id, { status: 'test', value: 72 }, record)).rejects.toSatisfy(
+          (e) => sqlState(e) === '23000',
+        );
+      }
+      // Each refused transaction rolled back whole: the first change and its record only.
+      expect(await t.db.select().from(releaseSettings)).toMatchObject([
+        { status: 'test', value: 48 },
+      ]);
+      expect(await t.db.select().from(adminActions)).toHaveLength(1);
+    });
+
+    it('refuses, at commit, a record whose `before` is not the state the write replaced', async () => {
+      const { user: admin } = await createUser(t.db, { role: 'admin' });
+      // A first write (INSERT) replaces the implicit undecided state: any other `before` — a
+      // decided one, undecided with a value, a value left out, no `before` at all — is refused.
+      for (const before of [
+        { status: 'test', value: 48 },
+        { status: 'undecided', value: 48 },
+        { status: 'undecided' },
+        undefined,
+      ]) {
+        await expect(change(admin.id, { status: 'test', value: 48 }, { before })).rejects.toSatisfy(
+          (e) => sqlState(e) === '23000',
+        );
+      }
+      expect(await t.db.select().from(releaseSettings)).toEqual([]);
+      expect(await t.db.select().from(adminActions)).toEqual([]);
+
+      await change(admin.id, { status: 'test', value: 48 });
+      // An UPDATE replaces the old row's status and value: the undecided state a first write
+      // records, another status, another value or none are all refused.
+      for (const before of [
+        { status: 'undecided', value: null },
+        { status: 'approved', value: 48 },
+        { status: 'test', value: 24 },
+        { status: 'test', value: '48' },
+        { status: 'test' },
+        undefined,
+      ]) {
+        await expect(
+          change(admin.id, { status: 'approved', value: 72 }, { before }),
+        ).rejects.toSatisfy((e) => sqlState(e) === '23000');
+      }
+      // Each refused transaction rolled back whole: the first change and its record only.
+      expect(await t.db.select().from(releaseSettings)).toMatchObject([
+        { status: 'test', value: 48 },
+      ]);
+      expect(await t.db.select().from(adminActions)).toHaveLength(1);
+
+      // The true `before` passes, compared as JSON (key order aside).
+      await change(admin.id, { status: 'approved', value: { from: 1, to: 2.5 } });
+      await change(
+        admin.id,
+        { status: 'undecided', value: null },
+        { before: { value: { to: 2.5, from: 1 }, status: 'approved' } },
+      );
+      expect(await t.db.select().from(releaseSettings)).toMatchObject([
+        { status: 'undecided', value: null },
+      ]);
+      // From a stored undecided row too, only the undecided state with no value passes.
+      await expect(
+        change(admin.id, { status: 'test', value: 24 }, { before: { status: 'undecided' } }),
+      ).rejects.toSatisfy((e) => sqlState(e) === '23000');
+      await change(admin.id, { status: 'test', value: 24 });
+      expect(await t.db.select().from(adminActions)).toHaveLength(4);
+    });
+
+    it('refuses, at commit, a record whose reason the API would not take', async () => {
+      const { user: admin } = await createUser(t.db, { role: 'admin' });
+      // The API's reason: a string of 1 to 500 characters once trimmed, trimmed as JavaScript
+      // does and counted in code points as zod does. Left out, not a string, blank — in any white
+      // space JavaScript trims — or longer is refused, at a first write and at an UPDATE alike.
+      const refused: unknown[] = [
+        undefined,
+        null,
+        42,
+        true,
+        ['시험'],
+        { text: '시험' },
+        '',
+        '   ',
+        '\t\n\u000b\f\r\u00a0\u1680\u2000\u200a\u2028\u2029\u202f\u205f\u3000\ufeff',
+        'x'.repeat(501),
+        ` ${'x'.repeat(501)} `,
+        '😀'.repeat(501),
+      ];
+      for (const reason of refused) {
+        expect(releaseSettingChangeBodySchema.shape.reason.safeParse(reason).success).toBe(false);
+        await expect(change(admin.id, { status: 'test', value: 48 }, { reason })).rejects.toSatisfy(
+          (e) => sqlState(e) === '23000',
+        );
+      }
+      expect(await t.db.select().from(releaseSettings)).toEqual([]);
+      expect(await t.db.select().from(adminActions)).toEqual([]);
+
+      await change(admin.id, { status: 'test', value: 48 });
+      for (const reason of refused) {
+        await expect(change(admin.id, { status: 'test', value: 72 }, { reason })).rejects.toSatisfy(
+          (e) => sqlState(e) === '23000',
+        );
+      }
+      expect(await t.db.select().from(releaseSettings)).toMatchObject([
+        { status: 'test', value: 48 },
+      ]);
+      expect(await t.db.select().from(adminActions)).toHaveLength(1);
+
+      // What the API takes passes, white space around it aside, and every record reads as the
+      // change log expects. A character past U+FFFF is one (two UTF-16 units, four bytes).
+      const accepted = ['x', 'x'.repeat(500), `\u3000 ${'x'.repeat(500)}\n\t`, '😀'.repeat(500)];
+      for (const [i, reason] of accepted.entries()) {
+        expect(releaseSettingChangeBodySchema.shape.reason.safeParse(reason).success).toBe(true);
+        await change(admin.id, { status: 'proposal', value: i }, { reason });
+      }
+      const records = await t.db
+        .select({ payload: adminActions.payload })
+        .from(adminActions)
+        .orderBy(adminActions.createdAt);
+      expect(records).toHaveLength(1 + accepted.length);
+      for (const { payload } of records) {
+        expect(releaseSettingChangePayloadSchema.safeParse(payload).success).toBe(true);
+      }
+    });
+
+    it('refuses, at commit, a record whose payload key is not the key as a string', async () => {
+      const { user: admin } = await createUser(t.db, { role: 'admin' });
+      // A key that spells a JSON literal (the key pattern allows `true`) is met by its string
+      // only: the change log reads the payload key as a string.
+      const literal = 'true';
+      const write = (payloadKey: unknown) =>
+        t.db.transaction(async (tx) => {
+          const at = nextInstant();
+          const after: State = { status: 'test', value: 48 };
+          await tx.insert(adminActions).values({
+            adminId: admin.id,
+            type: 'release_setting_change',
+            targetType: 'release_setting',
+            targetId: literal,
+            payload: {
+              key: payloadKey,
+              before: { status: 'undecided', value: null },
+              after,
+              reason: '시험',
+            },
+            createdAt: at,
+          });
+          await tx
+            .insert(releaseSettings)
+            .values({ key: literal, ...after, updatedAt: at, updatedBy: admin.id });
+        });
+      await expect(write(true)).rejects.toSatisfy((e) => sqlState(e) === '23000');
+      expect(await t.db.select().from(adminActions)).toEqual([]);
+      await write(literal);
+      expect(await t.db.select().from(releaseSettings)).toMatchObject([
+        { key: literal, status: 'test', value: 48 },
+      ]);
+      expect(await t.db.select().from(adminActions)).toHaveLength(1);
+    });
+
+    it('refuses an UPDATE that does not move the instant forward: no record is replayed', async () => {
+      const { user: admin } = await createUser(t.db, { role: 'admin' });
+      const first = nextInstant();
+      await change(admin.id, { status: 'test', value: 48 }, {}, first);
+      const second = nextInstant();
+      await change(admin.id, { status: 'undecided', value: null }, {}, second);
+      // Back on an undecided row, the first change's record matches putting its state back in
+      // all but the instant — the state it replaced, its new state, actor and key — and is
+      // refused; so is rewriting the current state at its own instant.
+      for (const [state, at] of [
+        [{ status: 'test', value: 48 }, first],
+        [{ status: 'undecided', value: null }, second],
+      ] as const) {
+        await expect(
+          t.db
+            .update(releaseSettings)
+            .set({ ...state, updatedAt: at, updatedBy: admin.id })
+            .where(eq(releaseSettings.key, key)),
+        ).rejects.toSatisfy((e) => sqlState(e) === '23000');
+      }
+      // A fresh change with its own record, written at an earlier instant than the row's: refused.
+      await expect(
+        change(admin.id, { status: 'proposal', value: 24 }, {}, new Date(first.getTime() - 1)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '23000');
+      expect(await t.db.select().from(releaseSettings)).toMatchObject([
+        { status: 'undecided', value: null, updatedAt: second },
+      ]);
+      expect(await t.db.select().from(adminActions)).toHaveLength(2);
+    });
+
+    it('refuses an UPDATE that renames a key, even with the record of the new one', async () => {
+      const { user: admin } = await createUser(t.db, { role: 'admin' });
+      await change(admin.id, { status: 'test', value: 48 });
+      // Everything the record check looks at matches the renamed row; only the key moved.
+      const renamed = 'test.other_hours';
+      const at = nextInstant();
+      const after: State = { status: 'approved', value: 72 };
+      await expect(
+        t.db.transaction(async (tx) => {
+          await tx.insert(adminActions).values({
+            adminId: admin.id,
+            type: 'release_setting_change',
+            targetType: 'release_setting',
+            targetId: renamed,
+            payload: {
+              key: renamed,
+              before: { status: 'test', value: 48 },
+              after,
+              reason: '시험',
+            },
+            createdAt: at,
+          });
+          await tx
+            .update(releaseSettings)
+            .set({ key: renamed, ...after, updatedAt: at, updatedBy: admin.id })
+            .where(eq(releaseSettings.key, key));
+        }),
+      ).rejects.toSatisfy((e) => sqlState(e) === '23000');
+      // The key keeps its row (it does not fall back to undecided), and no record was added.
+      expect(await t.db.select().from(releaseSettings)).toMatchObject([
+        { key, status: 'test', value: 48 },
+      ]);
+      expect(await t.db.select().from(adminActions)).toHaveLength(1);
+    });
+
+    it('ties the value to the status: none while undecided, never JSON null', async () => {
+      const { user: admin } = await createUser(t.db, { role: 'admin' });
+      for (const state of [
+        { status: 'undecided', value: 24 },
+        { status: 'approved', value: null },
+        { status: 'proposal', value: sql`'null'::jsonb` },
+      ] as const) {
+        await expect(
+          t.db.insert(releaseSettings).values({
+            key,
+            status: state.status,
+            value: state.value,
+            updatedAt: new Date(),
+            updatedBy: admin.id,
+          }),
+        ).rejects.toSatisfy(
+          (e) =>
+            sqlState(e) === '23514' && sqlConstraint(e) === 'release_settings_value_status_check',
+        );
+      }
+    });
+
+    it('cannot DELETE a setting', async () => {
+      const { user: admin } = await createUser(t.db, { role: 'admin' });
+      await change(admin.id, { status: 'test', value: 48 });
+      await expect(
+        t.db.delete(releaseSettings).where(eq(releaseSettings.key, key)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '42501');
+    });
+  });
+
   describe('buddha_app privileges (PLAN 6.4)', () => {
     it('can INSERT and SELECT ledger_entries but not UPDATE or DELETE', async () => {
       const { user: u } = await createUser(t.db, { balanceCoin: 500n });
@@ -604,7 +990,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         FROM information_schema.role_table_grants
         WHERE grantee = 'buddha_app' AND table_schema = 'public'
           AND table_name IN ('ledger_entries', 'market_events', 'admin_actions', 'payment_events',
-            'balances', 'payments', 'user_contacts', 'market_settlement_steps')
+            'balances', 'payments', 'user_contacts', 'market_settlement_steps', 'release_settings')
         ORDER BY 1, 2`);
       const grants = Object.groupBy(rows, (r) => r.table);
       const privs = (table: string) => grants[table]?.map((r) => r.privilege).sort() ?? [];
@@ -618,6 +1004,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(privs('user_contacts')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
       // Migration 0016: the worker updates a step's row in place.
       expect(privs('market_settlement_steps')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
+      // Migration 0020: a release setting is changed, never removed.
+      expect(privs('release_settings')).toEqual(['INSERT', 'SELECT', 'UPDATE']);
     });
 
     it('cannot UPDATE or DELETE a payment event', async () => {

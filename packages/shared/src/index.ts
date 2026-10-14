@@ -20,6 +20,7 @@ export * from './me.js';
 export * from './payment-gateway.js';
 export * from './rate-limit.js';
 export * from './realtime.js';
+export * from './release-settings.js';
 export * from './terms.js';
 export * from './ticks.js';
 export * from './wallet.js';

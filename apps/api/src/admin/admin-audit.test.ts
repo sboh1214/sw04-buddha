@@ -49,6 +49,7 @@ const AUDITED: Readonly<Record<string, AdminActionType>> = {
   'POST /admin/markets/:id/close': 'market_close',
   'POST /admin/markets/:id/resolve': 'market_resolve',
   'POST /admin/payments/:id/refund': 'payment_refund',
+  'PATCH /admin/release-settings/:key': 'release_setting_change',
 };
 
 interface DiscoveredRoute {

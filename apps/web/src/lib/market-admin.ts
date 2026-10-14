@@ -17,7 +17,7 @@ import {
 } from '@buddha/shared';
 import * as z from 'zod';
 import { copy } from '@/copy';
-import { type ApiError, isApiError, validationField } from './api';
+import { type ApiError, isApiError, validationField, validationMessage } from './api';
 import { formatKst } from './datetime';
 
 /**
@@ -558,14 +558,5 @@ function fieldMessage(field: MarketFormField, error: ApiError): string {
 
 function isSlugTaken(error: ApiError): boolean {
   if (/already taken/i.test(error.message)) return true;
-  return firstIssueMessage(error) === 'already exists';
-}
-
-/** The first issue's `message` when `details` is a `ValidationIssue[]` (PLAN 7); else undefined. */
-function firstIssueMessage(error: ApiError): string | undefined {
-  if (!Array.isArray(error.details)) return undefined;
-  const first: unknown = error.details[0];
-  if (typeof first !== 'object' || first === null || !('message' in first)) return undefined;
-  const message: unknown = (first as { message?: unknown }).message;
-  return typeof message === 'string' ? message : undefined;
+  return validationMessage(error) === 'already exists';
 }

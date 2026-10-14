@@ -21,7 +21,8 @@ export const metadata: Metadata = { title: `${copy.adminTitle} | ${copy.appName}
  * Next 16 types `href`, so the list is declared as routes rather than plain strings. 충전 상품,
  * 쿠폰 and 결제 are listed only while paid Coin is on sale (PAID_COIN_SALES_ENABLED, ADR-0049):
  * hidden from the menu, their pages still open by address, and the API keeps the package and
- * coupon admin open (owner decision 2026-10-13) while it closes the refund.
+ * coupon admin open (owner decision 2026-10-13) while it closes the refund. 출시 설정 is #170's
+ * (ADR-0055). The row wraps rather than scrolling sideways at phone width.
  */
 const NAV: { href: Route; label: string }[] = [
   { href: '/admin/markets', label: copy.adminMarkets },
@@ -33,6 +34,7 @@ const NAV: { href: Route; label: string }[] = [
         { href: '/admin/payments' as Route, label: copy.adminPayments },
       ]
     : []),
+  { href: '/admin/settings', label: copy.adminReleaseSettings },
   { href: '/admin/audit-failures', label: copy.adminAuditFailures },
 ];
 
@@ -50,11 +52,11 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   return (
     <Container maxW="4xl" py={{ base: '6', md: '10' }}>
       <Stack gap="6">
-        <HStack justify="space-between" align="baseline">
+        <HStack justify="space-between" align="baseline" flexWrap="wrap" gap="3">
           <Heading as="h2" size="2xl">
             {copy.adminTitle}
           </Heading>
-          <HStack gap="4" data-testid="admin-nav">
+          <HStack gap="4" flexWrap="wrap" data-testid="admin-nav">
             {NAV.map((item) => (
               <ChakraLink
                 key={item.href}

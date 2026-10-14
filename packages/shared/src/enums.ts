@@ -220,6 +220,12 @@ export const ADMIN_ACTION_TYPES = [
   'market_close',
   'market_resolve',
   'payment_refund',
+  /**
+   * A release setting's status and value changed (#170): target `release_setting` / its key,
+   * payload `{key, before: {status, value}, after: {status, value}, reason}`. A constraint
+   * trigger (migration 0020) refuses a release_settings write without this row.
+   */
+  'release_setting_change',
 ] as const;
 export type AdminActionType = (typeof ADMIN_ACTION_TYPES)[number];
 export const adminActionTypeSchema = z.enum(ADMIN_ACTION_TYPES);
@@ -227,6 +233,19 @@ export const adminActionTypeSchema = z.enum(ADMIN_ACTION_TYPES);
 export const AUDIT_FAILURE_KINDS = ['ledger_balance_mismatch'] as const;
 export type AuditFailureKind = (typeof AUDIT_FAILURE_KINDS)[number];
 export const auditFailureKindSchema = z.enum(AUDIT_FAILURE_KINDS);
+
+// ---- release settings (#170) --------------------------------------------------------
+/**
+ * release_settings.status (Postgres enum `release_setting_status`): how far a release setting's
+ * value is settled. `undecided` holds no value; the other three hold one. `proposal` is a design
+ * proposal and `test` a value for internal testing before the release value exists — neither is
+ * shown as settled (N01 §10). Labels: RELEASE_SETTING_STATUS_LABELS (release-settings.ts).
+ */
+export const RELEASE_SETTING_STATUSES = ['undecided', 'proposal', 'test', 'approved'] as const;
+export type ReleaseSettingStatus = (typeof RELEASE_SETTING_STATUSES)[number];
+export const releaseSettingStatusSchema = z
+  .enum(RELEASE_SETTING_STATUSES)
+  .meta({ id: 'ReleaseSettingStatus' });
 
 /**
  * Seed categories (PLAN 1.3, 6.2): the five TOP-LEVEL slugs. Never sports or elections

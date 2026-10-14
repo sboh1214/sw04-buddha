@@ -12,6 +12,7 @@ import { MarketsModule } from './markets/markets.module.js';
 import { MeModule } from './me/me.module.js';
 import { RateLimitModule } from './rate-limit/rate-limit.module.js';
 import { RealtimeModule } from './realtime/realtime.module.js';
+import { ReleaseSettingsModule } from './release-settings/release-settings.module.js';
 import { TradesModule } from './trades/trades.module.js';
 import { WalletModule } from './wallet/wallet.module.js';
 
@@ -39,6 +40,7 @@ import { WalletModule } from './wallet/wallet.module.js';
     JobsModule,
     MarketsModule,
     TradesModule,
+    ReleaseSettingsModule,
   ],
   controllers: [HealthController],
 })

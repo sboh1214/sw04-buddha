@@ -48,6 +48,14 @@ export type CreateMarketBody = components['schemas']['CreateMarketBody'];
 export type UpdateMarketBody = components['schemas']['UpdateMarketBody'];
 /** `POST /admin/markets/{id}/resolve`: judge a closed market — final at once (ADR-0046). */
 export type ResolveMarketBody = components['schemas']['ResolveMarketBody'];
+/** A release setting (#170): what the item is, its status and value, and who changed it last. */
+export type ReleaseSetting = components['schemas']['ReleaseSetting'];
+/** One `GET /admin/release-settings/changes` entry: before and after, reason, admin and time. */
+export type ReleaseSettingChange = components['schemas']['ReleaseSettingChange'];
+/** `PATCH /admin/release-settings/{key}`: the new status and value, and why (required, audited). */
+export type ReleaseSettingChangeBody = components['schemas']['ReleaseSettingChangeBody'];
+/** A status and value, before or after a change: `value` is null exactly while `undecided`. */
+export type ReleaseSettingState = components['schemas']['ReleaseSettingState'];
 export type ErrorEnvelope = components['schemas']['ErrorEnvelope'];
 
 /** A non-2xx API response, carrying the `{ error: { code, message, details? } }` envelope. */
@@ -97,6 +105,19 @@ export function validationField(error: ApiError): string | undefined {
   if (!Array.isArray(error.details)) return undefined;
   const first = (error.details as Partial<ValidationIssue>[])[0]?.path?.[0];
   return typeof first === 'string' ? first : undefined;
+}
+
+/**
+ * The first issue's `message`, when `details` is a `ValidationIssue[]`: how the API tells apart
+ * refusals that share a code and a field — a taken market slug (`already exists`), a release
+ * setting change to the current state (RELEASE_SETTING_UNCHANGED_MESSAGE). Undefined otherwise.
+ */
+export function validationMessage(error: ApiError): string | undefined {
+  if (!Array.isArray(error.details)) return undefined;
+  const first: unknown = error.details[0];
+  if (typeof first !== 'object' || first === null || !('message' in first)) return undefined;
+  const message: unknown = (first as { message?: unknown }).message;
+  return typeof message === 'string' ? message : undefined;
 }
 
 /**

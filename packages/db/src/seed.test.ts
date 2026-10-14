@@ -17,6 +17,7 @@ import {
   markets,
   priceTicks,
   profiles,
+  releaseSettings,
   user,
 } from './schema/index.js';
 import { SEED_RULE_NO_DELAY_NO } from './seed-markets.js';
@@ -249,6 +250,18 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
     const seeded = await t.db.select().from(chargePackages);
     expect(seeded).toHaveLength(5);
     for (const pack of seeded) expect(pack.isActive).toBe(false);
+  });
+
+  it('writes no release setting value: every item starts undecided (#170)', async () => {
+    // Values come only from an admin's change on the admin screen (owner decision 2026-10-13~14),
+    // so after a dev setup or a reset every registered item is 미정 and nothing is recorded.
+    runSeed();
+    expect(await t.db.select().from(releaseSettings)).toEqual([]);
+    const changes = await t.db
+      .select()
+      .from(adminActions)
+      .where(eq(adminActions.type, 'release_setting_change'));
+    expect(changes).toEqual([]);
   });
 
   it('leaves a catalogue an admin emptied on purpose alone', async () => {

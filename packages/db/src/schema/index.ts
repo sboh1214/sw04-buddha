@@ -30,4 +30,5 @@ export * from './positions.js';
 export * from './price-ticks.js';
 export * from './profiles.js';
 export * from './relations.js';
+export * from './release-settings.js';
 export * from './user-contacts.js';
