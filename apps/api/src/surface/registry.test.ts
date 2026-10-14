@@ -10,7 +10,7 @@
  * Owner decision (2026-10-13 #113 (a)): a public route, a better-auth route, a gateway or a
  * socket send nobody registered is found here and fails the run; review is not the only gate.
  */
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import {
   EVERY_ROUTE_PATH_FEATURES,
@@ -28,6 +28,7 @@ import * as z from 'zod';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { SessionGuard } from '../auth/session.guard.js';
 import { PaidCoinSalesGuard } from '../payments/paid-coin-sales.guard.js';
+import { SRC, programOf, sources, srcPath } from '../test/program.js';
 import {
   disabledAuthPaths,
   discoverAuthRoutes,
@@ -507,17 +508,6 @@ describe('the public API document (static)', () => {
 
 // ---- the realtime surface -----------------------------------------------------------------
 
-const SRC = path.resolve(import.meta.dirname, '..');
-
-/** The API's own sources: not a test, not the test support. */
-function sources(dir: string = SRC): string[] {
-  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) return full === path.join(SRC, 'test') ? [] : sources(full);
-    return /\.ts$/.test(entry.name) && !/\.(test|d)\.ts$/.test(entry.name) ? [full] : [];
-  });
-}
-
 /** The Socket.IO calls that send an event: `emit` and its variants (`to(room).emit` included). */
 const EMITS = new Set(['emit', 'emitWithAck', 'serverSideEmit']);
 
@@ -785,33 +775,6 @@ const socketCodeOf = (fileName: string, text: string) =>
 
 const emitsOf = (fileName: string, text: string) => socketCodeOf(fileName, text).sends;
 
-/** The API's compiler options (tsconfig.json), to read the types of what a send carries. */
-const COMPILER_OPTIONS: ts.CompilerOptions = (() => {
-  const configFile = path.resolve(SRC, '../tsconfig.json');
-  const { config } = ts.readConfigFile(configFile, (name) => ts.sys.readFile(name)) as {
-    config: unknown;
-  };
-  const { options } = ts.parseJsonConfigFileContent(config, ts.sys, path.dirname(configFile));
-  return { ...options, noEmit: true };
-})();
-
-/** A program over `roots`, with `planted` files (path → text) held in memory. */
-function programOf(roots: readonly string[], planted: Readonly<Record<string, string>> = {}) {
-  const host = ts.createCompilerHost(COMPILER_OPTIONS, true);
-  const disk = ts.createCompilerHost(COMPILER_OPTIONS, true);
-  host.fileExists = (name) => name in planted || disk.fileExists(name);
-  host.readFile = (name) => planted[name] ?? disk.readFile(name);
-  host.getSourceFile = (name, language, ...rest) =>
-    name in planted
-      ? ts.createSourceFile(name, planted[name]!, language, true)
-      : disk.getSourceFile(name, language, ...rest);
-  return ts.createProgram({
-    rootNames: [...roots, ...Object.keys(planted)],
-    options: COMPILER_OPTIONS,
-    host,
-  });
-}
-
 /** The types of a program, as the payload check reads them. */
 interface Types {
   checker: ts.TypeChecker;
@@ -945,7 +908,7 @@ function payloadProblems(
 const PROGRAM = programOf(sources());
 const TYPES = typesOf(PROGRAM);
 const SOCKET_CODE = sources().map((file) => ({
-  file: path.relative(SRC, file).split(path.sep).join('/'),
+  file: srcPath(file),
   ...readSocketCode(PROGRAM.getSourceFile(file)!),
 }));
 

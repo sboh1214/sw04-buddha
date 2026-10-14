@@ -3,6 +3,11 @@
  * Templates are pure functions of their inputs so they can be unit-tested without SMTP.
  * The wording names nothing the plan leaves out — gambling words (D21) included — which
  * templates.test.ts checks against EXCLUDED_FEATURES (@buddha/shared, #113).
+ *
+ * Every mail the API sends is built here and registered in MAIL_TEMPLATES (docs/GUARDS.md, #113):
+ * templates.test.ts renders each registered template and reads every string in this file, and
+ * fails when an exported template is not registered or when anything outside this file writes the
+ * subject, text or html of a message that reaches `Mailer.send`.
  */
 export interface EmailContent {
   subject: string;
@@ -92,3 +97,13 @@ export function changeEmailConfirmationEmail(input: {
     html: layout(title, paragraphs, input.url, '이메일 변경 승인하기'),
   };
 }
+
+/**
+ * Every mail template, by name. The mail code sends what these build and nothing else; a new mail
+ * is a new line here (with its example inputs in templates.test.ts, which the compiler asks for).
+ */
+export const MAIL_TEMPLATES = {
+  verification: verificationEmail,
+  passwordReset: passwordResetEmail,
+  changeEmailConfirmation: changeEmailConfirmationEmail,
+} as const satisfies Record<string, (input: never) => EmailContent>;
