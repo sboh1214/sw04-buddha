@@ -42,6 +42,52 @@ export const RELEASE_SETTING_KEY_MAX_LENGTH = 64;
 /** `ReleaseSettingChangeBody.reason`: stored in admin_actions, like a refund's reason. */
 export const RELEASE_SETTING_REASON_MAX_LENGTH = 500;
 
+/**
+ * The `message` of the issue that refuses a string jsonb cannot hold. PostgreSQL refuses U+0000
+ * in jsonb (SQLSTATE 22P05) and a UTF-16 surrogate with no partner, which JSON.stringify writes as
+ * a `\udXXX` escape that jsonb's parser refuses (22P02). A change stores its reason and value in
+ * jsonb (`admin_actions.payload`, `release_settings.value`), so either one carrying such a string
+ * would fail the write as INTERNAL rather than be refused as bad input. The NUL message is the
+ * one the API's global validation pipe gives, so a NUL reads the same whichever check finds it.
+ */
+export const JSONB_NUL_MESSAGE = 'must not contain NUL';
+export const JSONB_LONE_SURROGATE_MESSAGE = 'must not contain an unpaired surrogate';
+
+/** Why jsonb cannot hold `text` (`JSONB_NUL_MESSAGE`, `JSONB_LONE_SURROGATE_MESSAGE`), or null. */
+export function jsonbTextProblem(text: string): string | null {
+  if (text.includes('\u0000')) return JSONB_NUL_MESSAGE;
+  // In unicode mode a pair is one code point; only a lone surrogate is of category Cs.
+  if (/\p{Cs}/u.test(text)) return JSONB_LONE_SURROGATE_MESSAGE;
+  return null;
+}
+
+/**
+ * An issue for every string and object key inside the JSON `value` that jsonb cannot hold, with
+ * paths from `path`. A key's issue names its member (`[…, key]`) and says it is the key; a member
+ * that is `undefined` is skipped, as JSON drops it.
+ */
+export function jsonbValueIssues(
+  value: unknown,
+  path: readonly (string | number)[] = [],
+): ValidationIssue[] {
+  if (typeof value === 'string') {
+    const problem = jsonbTextProblem(value);
+    return problem === null ? [] : [{ path: [...path], message: problem }];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((item, index) => jsonbValueIssues(item, [...path, index]));
+  }
+  if (typeof value !== 'object' || value === null) return [];
+  return Object.entries(value).flatMap(([member, item]) => {
+    if (item === undefined) return [];
+    const problem = jsonbTextProblem(member);
+    return [
+      ...(problem === null ? [] : [{ path: [...path, member], message: `key ${problem}` }]),
+      ...jsonbValueIssues(item, [...path, member]),
+    ];
+  });
+}
+
 export const releaseSettingKeySchema = z
   .string()
   .max(RELEASE_SETTING_KEY_MAX_LENGTH)
@@ -67,7 +113,8 @@ export type ReleaseSettingValue = Exclude<ReleaseSettingJson, null>;
  *
  * `schema` validates a value an admin enters and is applied again to the stored value on every
  * read, so it must accept its own output (no transform that changes the type) and its output must
- * be JSON — Coin amounts as decimal strings or numbers, never bigint.
+ * be JSON — Coin amounts as decimal strings or numbers, never bigint. A string or key in its
+ * output that jsonb cannot hold is refused whatever the schema says (`parseReleaseSettingChange`).
  */
 export interface ReleaseSettingDefinition<T extends ReleaseSettingValue = ReleaseSettingValue> {
   readonly key: string;
@@ -230,8 +277,10 @@ export type ReleaseSettingChangeResult =
 
 /**
  * Checks a change against the item: `undecided` takes no value (omitted or null), every other
- * status requires one, and a value must fit the item's schema. Issues are paths into the request
- * body (`['value', …]`), as the validation pipe reports them.
+ * status requires one, and a value must fit the item's schema. What the schema makes of it is
+ * the value stored in jsonb, so a string or object key in it that jsonb cannot hold is refused
+ * too (`jsonbValueIssues`) — a key the schema drops does not count. Issues are paths into the
+ * request body (`['value', …]`), as the validation pipe reports them.
  */
 export function parseReleaseSettingChange(
   definition: ReleaseSettingDefinition,
@@ -266,6 +315,8 @@ export function parseReleaseSettingChange(
       })),
     };
   }
+  const unstorable = jsonbValueIssues(parsed.data, ['value']);
+  if (unstorable.length > 0) return { success: false, issues: unstorable };
   return { success: true, state: { status, value: parsed.data } };
 }
 
@@ -321,13 +372,22 @@ export type ReleaseSettingListQuery = z.infer<typeof releaseSettingListQuerySche
 /**
  * `PATCH /admin/release-settings/:key`: the new status and value, and why (required). The value is
  * omitted (or null) for `undecided` and required otherwise; `parseReleaseSettingChange` checks it
- * against the item.
+ * against the item. The reason is stored in jsonb, so it must be text jsonb can hold
+ * (`jsonbTextProblem`): refused here, before anything is written.
  */
 export const releaseSettingChangeBodySchema = z
   .object({
     status: releaseSettingStatusSchema,
     value: z.unknown().optional(),
-    reason: z.string().trim().min(1).max(RELEASE_SETTING_REASON_MAX_LENGTH),
+    reason: z
+      .string()
+      .trim()
+      .min(1)
+      .max(RELEASE_SETTING_REASON_MAX_LENGTH)
+      .superRefine((reason, ctx) => {
+        const problem = jsonbTextProblem(reason);
+        if (problem !== null) ctx.addIssue({ code: 'custom', message: problem });
+      }),
   })
   .meta({ id: 'ReleaseSettingChangeBody' });
 export type ReleaseSettingChangeBody = z.infer<typeof releaseSettingChangeBodySchema>;

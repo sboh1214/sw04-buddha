@@ -1,12 +1,14 @@
 /**
  * Release settings (#170) against the docker `test` profile, with a registry of test items
  * injected through `createTestApp({ releaseSettings })` — the shipped one is empty. Covers
- * register → list → get → change → change log, the reason and value rules, the refusal of a change
- * to the current state, the undecided filter, the admin-only surface and that a change and its
- * record commit together. Skips when TEST_* are unset.
+ * register → list → get → change → change log, the reason and value rules (text jsonb cannot hold
+ * included), the refusal of a change to the current state, the undecided filter, the admin-only
+ * surface and that a change and its record commit together. Skips when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
 import {
+  JSONB_LONE_SURROGATE_MESSAGE,
+  JSONB_NUL_MESSAGE,
   RELEASE_SETTINGS,
   RELEASE_SETTING_UNCHANGED_MESSAGE,
   defineReleaseSetting,
@@ -18,6 +20,7 @@ import { asc, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import * as z from 'zod';
 import { AdminGuard } from '../auth/admin.guard.js';
+import { NUL_MESSAGE } from '../common/pipes/validation.pipe.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { ReleaseSettingsService } from './release-settings.service.js';
@@ -47,6 +50,14 @@ const code = defineReleaseSetting({
   description: '시험용 항목: 문자열 값',
   schema: z.string().min(1).max(20),
 });
+/** A value with keys of the admin's choosing: names to whole numbers. */
+const limits = defineReleaseSetting({
+  key: 'test.limits',
+  label: '시험 한도',
+  unit: null,
+  description: '시험용 항목: 이름별 정수',
+  schema: z.record(z.string(), z.number().int()),
+});
 /**
  * Broken on purpose: its schema answers JSON null, which the type of a definition forbids and the
  * CHECK of release_settings refuses — the write that fails AFTER the record was inserted.
@@ -58,6 +69,9 @@ const broken = defineReleaseSetting({
   description: '시험용 항목: 기록 뒤 쓰기가 실패한다',
   schema: z.number().transform(() => null) as unknown as z.ZodType<number>,
 });
+
+/** U+0000: PostgreSQL's jsonb cannot hold it. */
+const NUL = String.fromCharCode(0);
 
 type ErrorBody = {
   error: { code: string; details?: { path: (string | number)[]; message: string }[] };
@@ -72,7 +86,7 @@ describe.skipIf(!hasTestInfra)('release settings (integration)', () => {
 
   beforeAll(async () => {
     t = await createTestApp({
-      releaseSettings: defineReleaseSettings([hours, window, code, broken]),
+      releaseSettings: defineReleaseSettings([hours, window, code, limits, broken]),
     });
   });
   afterAll(async () => {
@@ -124,6 +138,7 @@ describe.skipIf(!hasTestInfra)('release settings (integration)', () => {
       [hours.key, 'undecided', null],
       [window.key, 'undecided', null],
       [code.key, 'undecided', null],
+      [limits.key, 'undecided', null],
       [broken.key, 'undecided', null],
     ]);
     const { valueSchema, ...first } = items[0]!;
@@ -241,6 +256,53 @@ describe.skipIf(!hasTestInfra)('release settings (integration)', () => {
     expect(await records()).toEqual([]);
   });
 
+  it('refuses a reason or a value jsonb cannot hold as bad input, writing nothing', async () => {
+    // Codex #201: PostgreSQL's jsonb refuses U+0000 and a lone surrogate, so such text in the
+    // reason or the value (admin_actions.payload, release_settings.value) failed the write as a
+    // 500. It is now a VALIDATION_ERROR naming the field, before anything is written.
+    const lone = JSONB_LONE_SURROGATE_MESSAGE;
+    for (const [key, body, path, message] of [
+      [hours.key, { value: 24, reason: NUL }, ['reason'], JSONB_NUL_MESSAGE],
+      [hours.key, { value: 24, reason: `  사유${NUL}  ` }, ['reason'], JSONB_NUL_MESSAGE],
+      [hours.key, { value: 24, reason: '사유\ud800' }, ['reason'], lone],
+      [hours.key, { value: 24, reason: '\udc00사유' }, ['reason'], lone],
+      [code.key, { value: `a${NUL}`, reason: '시험' }, ['value'], JSONB_NUL_MESSAGE],
+      [code.key, { value: 'a\ud800', reason: '시험' }, ['value'], lone],
+      [
+        limits.key,
+        { value: { [`a${NUL}`]: 1 }, reason: '시험' },
+        ['value', `a${NUL}`],
+        `key ${JSONB_NUL_MESSAGE}`,
+      ],
+      [
+        limits.key,
+        { value: { 'a\udbff': 1 }, reason: '시험' },
+        ['value', 'a\udbff'],
+        `key ${lone}`,
+      ],
+    ] as const) {
+      const res = await patch(key, { status: 'test', ...body });
+      expect({ body, status: res.statusCode }).toEqual({ body, status: 400 });
+      expect(errorOf(res)).toMatchObject({
+        code: 'VALIDATION_ERROR',
+        details: [{ path, message }],
+      });
+    }
+    expect(await settingRows()).toEqual([]);
+    expect(await records()).toEqual([]);
+    // A NUL reads the same whether the body schema or the global pipe's sweep finds it.
+    expect(JSONB_NUL_MESSAGE).toBe(NUL_MESSAGE);
+
+    // Paired surrogates and the other control characters are text jsonb holds: stored as sent.
+    const value = { '😀': 1, 'a\u0001': 2 };
+    const res = await patch(limits.key, { status: 'test', value, reason: '😀\u001f사유' });
+    expect(res.statusCode).toBe(200);
+    expect(data<ReleaseSetting>(res).value).toEqual(value);
+    expect(await records()).toMatchObject([
+      { payload: { after: { status: 'test', value }, reason: '😀\u001f사유' } },
+    ]);
+  });
+
   it('checks the value against the status rule and the item, writing nothing', async () => {
     for (const [key, body, path] of [
       [hours.key, { status: 'test', value: 0 }, ['value']],
@@ -324,7 +386,7 @@ describe.skipIf(!hasTestInfra)('release settings (integration)', () => {
     await patch(hours.key, { status: 'test', value: 24, reason: '시험' });
     const keys = async (query: string) =>
       data<ReleaseSetting[]>(await get(`${BASE}${query}`)).map((item) => item.key);
-    expect(await keys('?status=undecided')).toEqual([window.key, code.key, broken.key]);
+    expect(await keys('?status=undecided')).toEqual([window.key, code.key, limits.key, broken.key]);
     expect(await keys('?status=test')).toEqual([hours.key]);
     expect(await keys('?status=approved')).toEqual([]);
     expect((await get(`${BASE}?status=final`)).statusCode).toBe(400);
