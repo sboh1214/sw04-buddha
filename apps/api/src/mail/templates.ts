@@ -7,7 +7,9 @@
  * Every mail the API sends is built here and registered in MAIL_TEMPLATES (docs/GUARDS.md, #113):
  * templates.test.ts renders each registered template and reads every string in this file, and
  * fails when an exported template is not registered or when anything outside this file writes the
- * subject, text or html of a message that reaches `Mailer.send`.
+ * subject, text or html of a message that reaches `Mailer.send`. So that every word a mail says is
+ * a string of this file, a template takes only mail inputs (a link, an address, a number:
+ * MAIL_INPUTS in the test), never words its caller picks, and this file imports nothing but types.
  */
 export interface EmailContent {
   subject: string;
@@ -99,8 +101,9 @@ export function changeEmailConfirmationEmail(input: {
 }
 
 /**
- * Every mail template, by name. The mail code sends what these build and nothing else; a new mail
- * is a new line here (with its example inputs in templates.test.ts, which the compiler asks for).
+ * Every mail template, by name: functions declared in this file. The mail code sends what these
+ * build and nothing else; a new mail is a new line here (with its example inputs in
+ * templates.test.ts, which the compiler asks for, and any new input in its MAIL_INPUTS).
  */
 export const MAIL_TEMPLATES = {
   verification: verificationEmail,
