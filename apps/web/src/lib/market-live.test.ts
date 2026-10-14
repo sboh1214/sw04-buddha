@@ -574,7 +574,7 @@ describe('applyPositionEvent', () => {
 
   it('says nothing to the settled list about an unsettled event, which is the storm', () => {
     // THE HAZARD: `refetch` is this reducer's answer for a row the cache does not hold, and the
-    // settled list holds no UNSETTLED row by definition — so on /portfolio, where both lists are
+    // settled list holds no UNSETTLED row by definition — so on MY's summary, where both lists are
     // mounted, every ordinary trade reported an expected absence as a gap and the handler
     // restarted the whole `['positions']` root. Measured before the fix: five of the account's
     // own trades cost ten requests, with the open list already patched in place each time.

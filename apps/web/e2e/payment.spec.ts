@@ -72,7 +72,7 @@ test.describe('유료 충전 닫힘 (ADR-0049)', () => {
 
     // --- a member: the wallet is the balance, the notice and the ledger — nothing to buy.
     await signUp(page, freshEmail());
-    await page.goto('/wallet');
+    await page.goto('/my/wallet');
     await expect(page.getByTestId('wallet-notice')).toHaveText(copy.walletNotice);
     await expect(page.getByTestId('wallet-available')).toBeVisible();
     await expect(page.getByTestId('ledger-list')).toBeVisible();

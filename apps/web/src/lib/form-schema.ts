@@ -40,7 +40,7 @@ export const boundedInteger = (
  *
  * The rule is the API's own `couponCodeSchema` rather than a restatement of it: stating it
  * twice is how the form came to accept `WELCOME_2026`, which the server rejects with nothing
- * but a generic toast. Only the message is localised, the same way `wallet/coupon-form.tsx`
+ * but a generic toast. Only the message is localised, the same way `my/wallet/coupon-form.tsx`
  * localises the redeem field.
  */
 export const optionalCouponCode = (message: string) =>

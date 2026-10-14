@@ -326,7 +326,7 @@ function onTick(queryClient: QueryClient, event: MarketTickEvent, restart = new 
 
 describe('a tick that arrives during an unseeded first fetch', () => {
   it('re-asks for the market, because the answer on the wire left before the trade', async () => {
-    // THE HAZARD: /portfolio opens one `['market', id]` per held market (`useQueries`) and joins
+    // THE HAZARD: MY opens one `['market', id]` per held market (`useQueries`) and joins
     // every room, and NOTHING seeds those entries — only the detail page is seeded. `applyTick`
     // answers `undefined` for a cache with no row, so the event was dropped; the first request,
     // whose snapshot predates the trade, then landed with the old price and stood. `staleTime`
@@ -464,7 +464,7 @@ describe('a status event that arrives during an unseeded first fetch', () => {
   it('re-asks, because the answer on the wire read the market before the transition', async () => {
     // THE HAZARD, and the more serious half of the pair the tick handler fixed. `applyStatus`
     // writes nothing into a cache with no row, and a bare invalidation hands back the request
-    // already running — the one that read the market BEFORE the close. /portfolio's
+    // already running — the one that read the market BEFORE the close. MY's
     // `['market', id]` entries are unseeded (`useQueries`), so that pre-close snapshot landed as
     // fresh and the row went on saying `open` — which on screen is the MISSING 마감 badge, since
     // `OpenPositionRow` draws one only when `marketStatus !== 'open'`. A close publishes NO

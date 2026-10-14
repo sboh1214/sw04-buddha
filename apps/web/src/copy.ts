@@ -18,12 +18,8 @@ export const copy = {
   walletNotice: 'Coin의 현금 환전·출금은 제공하지 않습니다.',
 
   // --- navigation / auth buttons (M1) ---
-  navHome: '홈',
-  navSettings: '설정',
-  navWallet: '지갑',
   navAdmin: '관리자',
   balance: '잔고',
-  profileMenu: '프로필 메뉴',
   login: '로그인',
   signup: '가입하기',
   logout: '로그아웃',
@@ -180,7 +176,7 @@ export const copy = {
   chargeInProgress: '충전이 아직 처리 중입니다. 잠시 후 다시 눌러 결과를 확인해 주세요.',
   sessionChanged: '로그인한 계정이 바뀌었습니다. 화면을 확인한 뒤 다시 시도해 주세요.',
   chargeNoPackages: '판매 중인 충전 상품이 없습니다.',
-  // 공개 /charge에서 고르고 온 상품(`/wallet?package=`, ADR-0044).
+  // 공개 /charge에서 고르고 온 상품(`/my/wallet?package=`, ADR-0044).
   chargePackageSelected: '선택한 상품',
 
   // --- coupons (M2) ---
@@ -446,7 +442,7 @@ export const copy = {
   chartValue: '시장가격',
   probabilityChange: '시장가격 변화',
 
-  // 포지션 한 줄 (상세의 내 포지션과 포트폴리오 목록이 같이 쓴다)
+  // 포지션 한 줄 (상세의 내 포지션과 MY 목록이 같이 쓴다)
   positionQty: '보유 수량',
   positionAvgPrice: '평단',
   positionCurrentPrice: '현재가',
@@ -464,18 +460,26 @@ export const copy = {
   orderStatusCancelled: '취소됨',
   orderStatusRejected: '거절됨',
 
-  // 포트폴리오 (PLAN 11.3). 합계는 행 라벨과 헷갈리지 않도록 '총'을 붙인다.
-  portfolioTitle: '포트폴리오',
+  // 옛 포트폴리오(PLAN 11.3)의 잔고 요약·목록. #16이 MY 요약과 보유 계약·대기 주문·거래·정산 이력
+  // 탭으로 옮겼다. 합계는 행 라벨과 헷갈리지 않도록 '총'을 붙인다.
   portfolioBalance: '잔고 요약',
   portfolioValue: '총 평가 금액',
   portfolioUnrealizedPnl: '총 평가손익',
   portfolioRealizedPnl: '총 실현 손익',
-  portfolioPositions: '보유 포지션',
   portfolioPositionsEmpty: '아직 보유한 포지션이 없습니다.',
   portfolioSettled: '정산 이력',
   portfolioSettledEmpty: '아직 정산된 포지션이 없습니다.',
   portfolioOrders: '주문 이력',
+  // 옛 주문 이력이 둘로 나뉘었다(대기·부분 체결은 대기 주문, 나머지는 거래·정산 이력). 빈 목록 문구도
+  // 제 쪽만 말하고, 거래·정산 이력 쪽은 상황별 둘이다(오너 결정 2026-10-13): 주문이 아예 없으면 '아직 주문
+  // 내역이 없습니다.', 대기 주문만 있으면 '끝난 주문이 없습니다.'와 '대기 중인 주문은 [대기 주문]에서 볼 수
+  // 있습니다.'(가운데는 대기 주문 탭으로 가는 링크, myOrders). 대기 주문만 있는 계정에 '주문 내역이 없다'고
+  // 하지 않는다.
+  portfolioPendingOrdersEmpty: '대기 중인 주문이 없습니다.',
   portfolioOrdersEmpty: '아직 주문 내역이 없습니다.',
+  portfolioOrderHistoryEmpty: '끝난 주문이 없습니다.',
+  portfolioPendingOrdersHintBefore: '대기 중인 주문은',
+  portfolioPendingOrdersHintAfter: '에서 볼 수 있습니다.',
   /**
    * Shown when the session ends while a private screen is still mounted — never a load failure,
    * because nothing failed to load. The reader is told what actually happened and given the way
@@ -483,13 +487,27 @@ export const copy = {
    */
   portfolioSignedOut: '로그인이 풀렸습니다. 다시 로그인하면 이어서 볼 수 있습니다.',
 
-  // 상단 네비와 모바일 하단 탭. 홈/지갑/설정 라벨은 M1 블록에 이미 있다.
-  // 헤더 1단(ADR-0041·ADR-0053): 시장 · 커뮤니티. 2단은 시장의 상위 카테고리다.
-  navMarkets: '시장',
+  // 최상위 세 영역(N02 §2, #16): 데스크톱 헤더 1단과 모바일 하단 탭이 같은 이름으로 보인다.
+  // MY는 로그인 뒤에만 보인다. 헤더 2단(전체·상위 카테고리)은 시장 탐색에서만 보인다.
+  navExplore: '시장 탐색',
   navCommunity: '커뮤니티',
+  navMy: 'MY',
   navPrimary: '주 메뉴',
-  navPortfolio: '포트폴리오',
   navMenu: '메뉴',
+
+  // --- MY (#16, 오너 결정 2026-10-13) ---
+  // 첫 화면은 요약(/my), 탭은 N02 §8에 관심 시장을 더하고 알림·설정을 둘로 나눈 여덟이다.
+  myTitle: 'MY',
+  myMenu: 'MY 메뉴',
+  myPositions: '보유 계약',
+  myOrders: '대기 주문',
+  myHistory: '거래·정산 이력',
+  myWallet: '지갑',
+  myPosts: '내 글',
+  myWatchlist: '관심 시장',
+  myNotifications: '알림',
+  mySettings: '설정',
+  myViewAll: '전체 보기',
 
   // --- community (placeholder) ---
   // 헤더가 가리키는 자리는 있어야 하므로 화면은 있고, 기능은 아직 없다.
@@ -504,7 +522,7 @@ export const copy = {
 
   // --- markets / 체결 없음 · 거래 공백 (#125) ---
   // 첫 체결 전의 가격 자리(N02 §5): 초기 설정값을 가격처럼 보이지 않는다. 카드·상세·차트·관리자 목록·
-  // 포트폴리오가 같은 문구를 쓴다.
+  // MY가 같은 문구를 쓴다.
   noFills: '체결 없음',
   // 주문 영역 자리의 안내(오너 결정 #125 (a)): CLOB 주문(#119·#66)이 들어올 때까지 거래할 수 없다.
   tradePreparing: '거래 준비 중',

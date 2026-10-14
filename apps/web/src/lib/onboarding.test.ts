@@ -58,9 +58,9 @@ describe('isOnboardingExempt', () => {
   it('does not exempt a look-alike prefix or any other screen, /admin included', () => {
     for (const path of [
       '/',
-      '/wallet',
-      '/settings',
-      '/portfolio',
+      '/my',
+      '/my/wallet',
+      '/my/settings',
       '/community',
       '/markets/btc-100k',
       '/admin/users',
@@ -79,7 +79,7 @@ describe('isOnboardingExempt', () => {
 describe('needsOnboarding', () => {
   it('redirects a signed-in account without a contact from a gated page', () => {
     expect(needsOnboarding('/', null)).toBe(true);
-    expect(needsOnboarding('/wallet', null)).toBe(true);
+    expect(needsOnboarding('/my/wallet', null)).toBe(true);
     expect(needsOnboarding('/admin/markets', null)).toBe(true);
   });
 
@@ -90,17 +90,28 @@ describe('needsOnboarding', () => {
   });
 
   it('never redirects while the answer is unknown, or once the account has a contact', () => {
-    expect(needsOnboarding('/wallet', undefined)).toBe(false);
-    expect(needsOnboarding('/wallet', CONTACT)).toBe(false);
+    expect(needsOnboarding('/my/wallet', undefined)).toBe(false);
+    expect(needsOnboarding('/my/wallet', CONTACT)).toBe(false);
     expect(needsOnboarding('/admin/users', CONTACT)).toBe(false);
+  });
+
+  it('leaves a held account the two screens with 로그아웃, and lets it go once signed out', () => {
+    // MY holds the other 로그아웃 and is gated, so these two carry one (owner decision
+    // 2026-10-13, #16).
+    expect(needsOnboarding('/my', null)).toBe(true);
+    for (const path of ['/onboarding', '/set-password']) {
+      expect(needsOnboarding(path, null), path).toBe(false);
+    }
+    // `useSignOut` lands on home, where a signed-out tab asks no `GET /me`: the contact is unknown.
+    expect(needsOnboarding('/', undefined)).toBe(false);
   });
 });
 
 describe('onboardingNext', () => {
   it('keeps a same-origin path with its query string', () => {
-    expect(onboardingNext('/wallet')).toBe('/wallet');
-    expect(onboardingNext('/wallet?package=abc&result=failed')).toBe(
-      '/wallet?package=abc&result=failed',
+    expect(onboardingNext('/my/wallet')).toBe('/my/wallet');
+    expect(onboardingNext('/my/wallet?package=abc&result=failed')).toBe(
+      '/my/wallet?package=abc&result=failed',
     );
     expect(onboardingNext('/admin/payments')).toBe('/admin/payments');
   });
@@ -111,7 +122,7 @@ describe('onboardingNext', () => {
       null,
       '',
       'wallet',
-      'https://evil.example/wallet',
+      'https://evil.example/my/wallet',
       '//evil.example',
       '/\\evil.example',
       '/\t/evil.com',
@@ -123,15 +134,15 @@ describe('onboardingNext', () => {
   });
 
   it('refuses a repeated parameter rather than picking one', () => {
-    expect(onboardingNext(['/wallet', '/settings'])).toBe('/');
+    expect(onboardingNext(['/my/wallet', '/my/settings'])).toBe('/');
   });
 
   it('never returns to /onboarding itself, however it is spelled', () => {
     for (const value of [
       '/onboarding',
-      '/onboarding?next=/wallet',
+      '/onboarding?next=/my/wallet',
       '/onboarding/',
-      '/wallet/../onboarding',
+      '/my/../onboarding',
       '/%6Fnboarding',
     ]) {
       expect(onboardingNext(value), value).toBe('/');
@@ -142,9 +153,9 @@ describe('onboardingNext', () => {
 
 describe('onboardingPath', () => {
   it('carries the page being left as an encoded next', () => {
-    expect(onboardingPath('/wallet')).toBe('/onboarding?next=%2Fwallet');
-    expect(onboardingPath('/wallet?package=abc')).toBe(
-      '/onboarding?next=%2Fwallet%3Fpackage%3Dabc',
+    expect(onboardingPath('/my/wallet')).toBe('/onboarding?next=%2Fmy%2Fwallet');
+    expect(onboardingPath('/my/wallet?package=abc')).toBe(
+      '/onboarding?next=%2Fmy%2Fwallet%3Fpackage%3Dabc',
     );
     const next = new URL(onboardingPath('/markets/a?x=1&y=2'), 'https://x.invalid').searchParams;
     expect(next.get('next')).toBe('/markets/a?x=1&y=2');
@@ -154,19 +165,21 @@ describe('onboardingPath', () => {
   it('drops a next that would only say "home" or that is not safe', () => {
     expect(onboardingPath('/')).toBe('/onboarding');
     expect(onboardingPath('//evil.example')).toBe('/onboarding');
-    expect(onboardingPath('/onboarding?next=%2Fwallet')).toBe('/onboarding');
+    expect(onboardingPath('/onboarding?next=%2Fmy%2Fwallet')).toBe('/onboarding');
   });
 });
 
 describe('gatedPagePath', () => {
   it('adds the query string of the page the router reports', () => {
-    expect(gatedPagePath('/wallet', { pathname: '/wallet', search: '?package=abc' })).toBe(
-      '/wallet?package=abc',
+    expect(gatedPagePath('/my/wallet', { pathname: '/my/wallet', search: '?package=abc' })).toBe(
+      '/my/wallet?package=abc',
     );
-    expect(gatedPagePath('/wallet', { pathname: '/wallet', search: '' })).toBe('/wallet');
+    expect(gatedPagePath('/my/wallet', { pathname: '/my/wallet', search: '' })).toBe('/my/wallet');
   });
 
   it('never borrows the query string of a different page', () => {
-    expect(gatedPagePath('/wallet', { pathname: '/settings', search: '?error=x' })).toBe('/wallet');
+    expect(gatedPagePath('/my/wallet', { pathname: '/my/settings', search: '?error=x' })).toBe(
+      '/my/wallet',
+    );
   });
 });

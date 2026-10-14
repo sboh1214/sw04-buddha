@@ -88,7 +88,7 @@ export default async function MarketPage({ params }: { params: Promise<{ slug: s
             branch can leave an AC 2 string out even if the query is unreadable. */}
         <HydrationBoundary state={dehydratePublic(queryClient)}>
           {/* h2, not h1: `Nav` renders the site name as this document's only h1 on every screen
-              (nav.tsx, since M1), and /wallet, /settings and / all title themselves h2 under it.
+              (nav.tsx, since M1), and MY and / both title themselves h2 under it.
               A second h1 here would give the page two, and heading level is not a place for one
               screen to have its own convention (A-M4-31). The row fetched here is the FALLBACK,
               not the source: `title` is editable while a market is open, and the chart's label

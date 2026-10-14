@@ -30,14 +30,15 @@ import { sessionListSection } from '@/lib/query-client';
  * the YES price, and valuing it at the YES price is a silent error that produces a plausible
  * number wrong by 100 − 2·price per contract.
  *
- * The list itself is `usePositions` — the same query the portfolio screen reads, so the two
- * screens hold one copy of the rows rather than two. It waits for the session on its own, so a signed-out visitor never provokes
- * the 401 that the retry rule refuses to retry; they get the sign-in prompt instead.
+ * The list itself is `usePositions` — the same query MY's 보유 계약 reads, so the two screens
+ * hold one copy of the rows rather than two. It waits for the session on its own, so a
+ * signed-out visitor never provokes the 401 that the retry rule refuses to retry; they get the
+ * sign-in prompt instead.
  *
  * WHICH of the two lists it reads follows the market's own status through
  * `positionListStatusFor`: a finished market moved its holders' rows to the settled list, so
  * asking only for `'open'` would answer "아직 이 시장에 참여하지 않았습니다" to an account that
- * did hold and was paid out — while /portfolio, reading the same rows, listed it under 정산
+ * did hold and was paid out — while MY, reading the same rows, listed it under 정산
  * 이력 at the same moment. A finished market therefore shows 결과 · 실현 손익 (PLAN 11.3),
  * field for field the 정산 이력 row, so the two screens cannot say different things.
  */
@@ -66,7 +67,7 @@ export interface MyPositionProps {
    * price in the header above and the valuation in this card drifted apart on a market
    * anyone else was trading — the same reading, from two different prices, one screen apart.
    * `undefined` (the row not loaded) keeps the snapshot the list carried, which is exactly
-   * what /portfolio does for a market it has no cache entry for.
+   * what MY's 보유 계약 does for a market it has no cache entry for.
    */
   lastPrice?: number | null;
   'data-testid'?: string;
@@ -211,7 +212,7 @@ function PositionRows({ position }: { position: Position }) {
 
 /**
  * 결과 · 실현 손익 for a market that has finished (PLAN 11.3) — the same three fields, in the
- * same order, as /portfolio's 정산 이력 row, so one account's row cannot read differently on
+ * same order, as MY's 정산 이력 row, so one account's row cannot read differently on
  * the two screens. It carries no market link or status badge: this IS that market's page, and
  * the header badge and the status notice above have already said what it became.
  *

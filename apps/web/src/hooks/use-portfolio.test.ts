@@ -383,7 +383,7 @@ describe('총 실현 손익 across the two lists', () => {
     ];
 
     // The arithmetic that made it visible, kept as the counterfactual this guard exists for:
-    // one 250 Coin row read as 500 Coin, on the 총 실현 손익 line of /portfolio.
+    // one 250 Coin row read as 500 Coin, on the 총 실현 손익 line of MY's 잔고 요약.
     const poisonedOpen: Position[] = [
       { ...openRow, qty: 0, costBasisCoin: '0', settled: true, version: event.version },
     ];

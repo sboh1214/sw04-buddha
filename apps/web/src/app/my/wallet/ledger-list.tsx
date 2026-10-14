@@ -72,7 +72,7 @@ export function LedgerList() {
   );
 }
 
-function LedgerRow({ entry }: { entry: LedgerEntry }) {
+export function LedgerRow({ entry }: { entry: LedgerEntry }) {
   const amount = parseCoinAmount(entry.amountCoin);
   const credit = amount >= 0n;
   return (

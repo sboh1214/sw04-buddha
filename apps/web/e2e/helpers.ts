@@ -174,6 +174,17 @@ export async function signIn(page: Page, email: string, password: string): Promi
   await expect(page).toHaveURL('/');
 }
 
+/**
+ * Signs the browser out the way a reader does: 로그아웃 is in MY (#16, owner decision 2026-10-13 —
+ * the header has no profile menu), and it lands on `/` with the 로그인 link back in the header.
+ */
+export async function logOut(page: Page): Promise<void> {
+  await page.goto('/my');
+  await page.getByTestId('my-logout').click();
+  await expect(page).toHaveURL('/');
+  await expect(page.getByRole('link', { name: copy.login })).toBeVisible();
+}
+
 /** The seed admin, for a spec that needs a second signed-in browser without a second mailbox. */
 export const adminAccount = { email: ADMIN_EMAIL, password: ADMIN_PASSWORD } as const;
 

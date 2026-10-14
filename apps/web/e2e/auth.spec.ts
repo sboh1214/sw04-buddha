@@ -1,8 +1,9 @@
 import { expect, test, type Page } from '@playwright/test';
 import { copy } from '../src/copy';
+import { logOut } from './helpers';
 
 /**
- * M1 flow (PLAN 13 M1 AC 1): email signup -> logout -> login -> /settings shows the profile
+ * M1 flow (PLAN 13 M1 AC 1): email signup -> logout -> login -> /my/settings shows the profile
  * that `GET /api/v1/me` returned. Each run uses a fresh email so it is re-runnable against a
  * persistent local database. Skeleton: enabled in CI in M4 (PLAN 14).
  */
@@ -64,12 +65,6 @@ async function signUp(page: Page, email: string) {
   await expect(page).toHaveURL('/');
 }
 
-async function logOut(page: Page) {
-  await page.getByRole('button', { name: copy.profileMenu }).click();
-  await page.getByRole('menuitem', { name: copy.logout }).click();
-  await expect(page.getByRole('link', { name: copy.login })).toBeVisible();
-}
-
 test.describe('signup -> login -> settings', () => {
   test('email signup, logout, login, /me visible in settings', async ({ page }) => {
     const email = freshEmail();
@@ -81,16 +76,16 @@ test.describe('signup -> login -> settings', () => {
     await logOut(page);
 
     // --- protected route redirects to login with `next`
-    await page.goto('/settings');
-    // settings/page.tsx redirects with the raw path (`?next=/settings`); a client-side link
-    // would percent-encode it, so accept both spellings.
-    await expect(page).toHaveURL(/\/login\?next=(%2F|\/)settings/);
+    await page.goto('/my/settings');
+    // MY's session gate redirects with the path percent-encoded (`myLoginPath`); how much of a
+    // server redirect's query string stays encoded is the framework's business, so accept both.
+    await expect(page).toHaveURL(/\/login\?next=(%2F|\/)my(%2F|\/)settings/);
 
     // --- login
     await page.getByLabel(copy.email).fill(email);
     await page.getByLabel(copy.password, { exact: true }).fill(password);
     await page.getByRole('button', { name: copy.loginWithEmail }).click();
-    await expect(page).toHaveURL('/settings');
+    await expect(page).toHaveURL('/my/settings');
 
     // --- /me rendered: email, auto-generated nickname (user_XXXX), credential linked
     await expect(page.getByTestId('account-email')).toContainText(email);
@@ -101,14 +96,14 @@ test.describe('signup -> login -> settings', () => {
   test('duplicate nickname -> field error (AC 4)', async ({ page }) => {
     // Two accounts; the second one tries to take the first one's nickname.
     await signUp(page, freshEmail());
-    await page.goto('/settings');
+    await page.goto('/my/settings');
     // Wait for the seeded value: the input exists before `GET /me` resolves.
     await expect(page.getByTestId('nickname-input')).toHaveValue(/^user_/);
     const taken = await page.getByTestId('nickname-input').inputValue();
     await logOut(page);
 
     await signUp(page, freshEmail());
-    await page.goto('/settings');
+    await page.goto('/my/settings');
     await expect(page.getByTestId('nickname-input')).toHaveValue(/^user_/);
     await page.getByTestId('nickname-input').fill(taken);
     // Scoped: the contact card has its own '저장' button.

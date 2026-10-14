@@ -2,11 +2,16 @@ import { describe, expect, it } from 'vitest';
 import { type Category } from './api';
 import { groupCategories } from './category-tree';
 import {
+  type PrimaryNavKey,
   currentSearchTerm,
   currentTopLevelSlug,
   isAllCategoriesCurrent,
   isPrimaryCurrent,
+  primaryNavItems,
+  showsCategoryRow,
 } from './nav';
+
+const KEYS: readonly PrimaryNavKey[] = ['markets', 'community', 'my'];
 
 const category = (id: number, slug: string, parentId: number | null): Category => ({
   id,
@@ -23,12 +28,26 @@ const TREE = groupCategories([
   category(21, 'rain', 2),
 ]);
 
+describe('primaryNavItems', () => {
+  it('lists 시장 탐색 · 커뮤니티 · MY, in that order, for a signed-in reader', () => {
+    expect(primaryNavItems(true).map((item) => [item.key, item.href, item.label])).toEqual([
+      ['markets', '/', '시장 탐색'],
+      ['community', '/community', '커뮤니티'],
+      ['my', '/my', 'MY'],
+    ]);
+  });
+
+  it('leaves MY out for a visitor with no session, and nothing else', () => {
+    expect(primaryNavItems(false).map((item) => item.key)).toEqual(['markets', 'community']);
+  });
+});
+
 describe('isPrimaryCurrent', () => {
-  it('lights 시장 on the home list and on a market detail, nowhere else', () => {
+  it('lights 시장 탐색 on the home list and on a market detail, nowhere else', () => {
     expect(isPrimaryCurrent('/', 'markets')).toBe(true);
     expect(isPrimaryCurrent('/markets/btc-100k', 'markets')).toBe(true);
     expect(isPrimaryCurrent('/community', 'markets')).toBe(false);
-    expect(isPrimaryCurrent('/settings', 'markets')).toBe(false);
+    expect(isPrimaryCurrent('/my/settings', 'markets')).toBe(false);
     expect(isPrimaryCurrent('/marketsx', 'markets')).toBe(false);
   });
 
@@ -39,12 +58,47 @@ describe('isPrimaryCurrent', () => {
     expect(isPrimaryCurrent('/markets/btc-100k', 'community')).toBe(false);
   });
 
-  it('never lights two items for one path', () => {
-    for (const pathname of ['/', '/markets/x', '/community', '/wallet', '/login']) {
-      const lit = (['markets', 'community'] as const).filter((key) =>
-        isPrimaryCurrent(pathname, key),
-      );
+  it('lights MY on the summary and on every tab under it, not on a look-alike prefix', () => {
+    for (const pathname of ['/my', '/my/positions', '/my/wallet', '/my/settings']) {
+      expect(isPrimaryCurrent(pathname, 'my'), pathname).toBe(true);
+    }
+    expect(isPrimaryCurrent('/mysterious', 'my')).toBe(false);
+    expect(isPrimaryCurrent('/', 'my')).toBe(false);
+    expect(isPrimaryCurrent('/admin/users', 'my')).toBe(false);
+  });
+
+  it('never lights two items for one path, and none off the three areas', () => {
+    for (const pathname of ['/', '/markets/x', '/community', '/my', '/my/wallet', '/login']) {
+      const lit = KEYS.filter((key) => isPrimaryCurrent(pathname, key));
       expect(lit.length, pathname).toBeLessThanOrEqual(1);
+    }
+    for (const pathname of ['/login', '/terms', '/onboarding', '/admin/markets']) {
+      expect(
+        KEYS.filter((key) => isPrimaryCurrent(pathname, key)),
+        pathname,
+      ).toEqual([]);
+    }
+  });
+});
+
+describe('showsCategoryRow', () => {
+  it('is on for 시장 탐색: the home list and a market detail', () => {
+    expect(showsCategoryRow('/')).toBe(true);
+    expect(showsCategoryRow('/markets/btc-100k')).toBe(true);
+  });
+
+  it('is off everywhere else', () => {
+    for (const pathname of [
+      '/community',
+      '/my',
+      '/my/wallet',
+      '/login',
+      '/terms',
+      '/onboarding',
+      '/admin/markets',
+      '/marketsx',
+    ]) {
+      expect(showsCategoryRow(pathname), pathname).toBe(false);
     }
   });
 });

@@ -14,8 +14,8 @@ import { ORDERS_KEY, POSITIONS_KEY } from '@/lib/market-keys';
 import { statusRank } from '@/lib/market-live';
 
 /**
- * The portfolio's two private lists and the arithmetic /portfolio renders (PLAN 11.3:
- * 잔고 요약 · 보유 포지션(현재가 기준 평가손익) · 정산 이력 · 주문 이력).
+ * The account's two private lists and the arithmetic MY renders (PLAN 11.3's portfolio, which
+ * #16 moved into MY: 잔고 요약 · 보유 포지션(현재가 기준 평가손익) · 정산 이력 · 주문 이력).
  *
  * The balance summary is deliberately NOT a query of its own: it comes from `useMe()`, which
  * the nav chip already keeps live off `user:balance`. A second query for the same balance
@@ -338,7 +338,7 @@ export function liveMarketStatus(held: MarketStatus, live: MarketStatus | undefi
  * `market:status`, which moves `['market', id]` and nothing else — no `user:position` is
  * published for it — so 보유 포지션 kept announcing a closed market as 진행 중 until an
  * unrelated positions refetch. The detail screen already made this call once, passing the live
- * `status` to `MyPosition` rather than trusting the row's copy; this is /portfolio doing the
+ * `status` to `MyPosition` rather than trusting the row's copy; this is MY doing the
  * same. Refetching the lists on a status event would be the wrong half: two private requests
  * per event per signed-in tab, to move one denormalized enum. WHICH of the two statuses wins is
  * `liveMarketStatus`'s decision, not a `??`: the live row may be the older of the two, and a
@@ -354,7 +354,7 @@ export function liveMarketStatus(held: MarketStatus, live: MarketStatus | undefi
  * counter on `positionSchema` plus the join in `listPositions`), which is A-M4-33 — recorded
  * beside the two other snapshots missing an ordering key rather than bolted on here.
  *
- * The live row is the fresher of the two in the ordinary case: /portfolio joins every held
+ * The live row is the fresher of the two in the ordinary case: MY joins every held
  * market's room, so `market:tick` patches it, while `marketLastPrice` is a join frozen when the
  * list was fetched. For it to be the OLDER one it has to have MISSED a move — `market:tick` goes
  * out `.volatile`, so a congested tab may simply lose one (A-M4-7); a first page load is

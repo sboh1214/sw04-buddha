@@ -102,7 +102,7 @@ export function MarketFilters({
   return (
     <Stack gap="4" data-testid={testId}>
       <HStack justify="space-between" align="center" flexWrap="wrap" gap="3">
-        {/* The nav owns the h1, so the page's own title is an h2 (wallet/settings do the same).
+        {/* The nav owns the h1, so the page's own title is an h2 (MY's layout does the same).
             It names the category the URL picked, or the screen itself when none is. */}
         <Heading as="h2" textStyle="headline">
           {homeHeading(tree, filters)}

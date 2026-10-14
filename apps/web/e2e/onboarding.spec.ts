@@ -39,8 +39,8 @@ test.describe('실명·연락처 (ADR-0043)', () => {
     await page.getByRole('button', { name: copy.setPasswordSubmit }).click();
     await expect(page).toHaveURL('/');
 
-    // /settings shows what was saved — the number as digits on the wire, hyphenated here.
-    await page.goto('/settings');
+    // /my/settings shows what was saved — the number as digits on the wire, hyphenated here.
+    await page.goto('/my/settings');
     const card = page.getByTestId('settings-contact');
     await expect(card.getByTestId('contact-real-name')).toHaveValue(E2E_CONTACT.realName);
     await expect(card.getByTestId('contact-phone')).toHaveValue('010-1234-5678');
@@ -71,8 +71,8 @@ test.describe('실명·연락처 (ADR-0043)', () => {
     await expect(page).toHaveURL('/terms');
 
     // Gated: any other page sends the account to /onboarding, carrying where it was going.
-    await page.goto('/wallet');
-    await expect(page).toHaveURL('/onboarding?next=%2Fwallet');
+    await page.goto('/my/wallet');
+    await expect(page).toHaveURL('/onboarding?next=%2Fmy%2Fwallet');
     await expect(page.getByTestId('onboarding-form')).toBeVisible();
 
     // Required, and checked with the API's own rules before anything is sent.
@@ -83,12 +83,12 @@ test.describe('실명·연락처 (ADR-0043)', () => {
     await page.getByTestId('contact-phone').fill(E2E_CONTACT.phone);
     await page.getByTestId('onboarding-submit').click();
     await expect(page.getByText(copy.errRealNameFormat, { exact: true })).toBeVisible();
-    await expect(page).toHaveURL('/onboarding?next=%2Fwallet');
+    await expect(page).toHaveURL('/onboarding?next=%2Fmy%2Fwallet');
 
     // Saved → back to the page the gate sent it away from.
     await page.getByTestId('contact-real-name').fill(E2E_CONTACT.realName);
     await page.getByTestId('onboarding-submit').click();
-    await expect(page).toHaveURL('/wallet');
+    await expect(page).toHaveURL('/my/wallet');
     await expect(page.getByText(copy.contactSaved)).toBeVisible();
 
     // The gate is satisfied now: other pages open as usual.
@@ -99,8 +99,8 @@ test.describe('실명·연락처 (ADR-0043)', () => {
 
     // /onboarding sends an account that has a contact straight on — to a path on this origin
     // only; anything else is home.
-    await page.goto('/onboarding?next=%2Fsettings');
-    await expect(page).toHaveURL('/settings');
+    await page.goto('/onboarding?next=%2Fmy%2Fsettings');
+    await expect(page).toHaveURL('/my/settings');
     await page.goto(`/onboarding?next=${encodeURIComponent('https://evil.example/')}`);
     await expect(page).toHaveURL('/');
     await page.goto(`/onboarding?next=${encodeURIComponent('//evil.example')}`);
@@ -116,13 +116,48 @@ test.describe('실명·연락처 (ADR-0043)', () => {
     await expect(page).toHaveURL('/');
   });
 
+  test('게이트에 묶인 계정은 /set-password와 /onboarding에서 로그아웃할 수 있다', async ({
+    page,
+  }) => {
+    // 로그아웃 is in MY, which the gate keeps such an account out of, and the header has no
+    // profile menu (owner decision 2026-10-13, #16). Both land where MY's 로그아웃 does.
+    await openSetPassword(page, freshEmail());
+    await page.getByTestId('set-password-logout').click();
+    await expect(page).toHaveURL('/');
+    await expect(page.getByRole('link', { name: copy.login })).toBeVisible();
+    await page.goto('/set-password');
+    await page.waitForURL(/\/login\?/);
+
+    await openSetPassword(page, freshEmail());
+    await page.goto('/my');
+    await expect(page).toHaveURL('/onboarding?next=%2Fmy');
+    await expect(page.getByTestId('onboarding-form')).toBeVisible();
+    await page.getByTestId('onboarding-logout').click();
+    await expect(page).toHaveURL('/');
+    await expect(page.getByRole('link', { name: copy.login })).toBeVisible();
+    await page.goto('/onboarding');
+    await page.waitForURL(/\/login\?/);
+  });
+
+  test('프로필을 불러오지 못한 /onboarding에도 로그아웃이 있다', async ({ page }) => {
+    await openSetPassword(page, freshEmail());
+    // `GET /me` failing is the rung with no form; the gate cannot say "no contact" either, so the
+    // screen is opened directly.
+    await page.route('**/api/v1/me', (route) => route.abort());
+    await page.goto('/onboarding');
+    await expect(page.getByTestId('onboarding-unavailable')).toBeVisible();
+    await page.getByTestId('onboarding-logout').click();
+    await expect(page).toHaveURL('/');
+    await expect(page.getByRole('link', { name: copy.login })).toBeVisible();
+  });
+
   test('로그인하지 않은 방문자의 /onboarding은 로그인 화면으로, next를 그대로 싣고 간다', async ({
     page,
   }) => {
-    await page.goto('/onboarding?next=%2Fwallet');
+    await page.goto('/onboarding?next=%2Fmy%2Fwallet');
     // Compared decoded: how much of a server redirect's query string stays percent-encoded is
     // the framework's business (auth.spec.ts accepts both spellings for the same reason).
     await page.waitForURL(/\/login\?/);
-    expect(new URL(page.url()).searchParams.get('next')).toBe('/onboarding?next=%2Fwallet');
+    expect(new URL(page.url()).searchParams.get('next')).toBe('/onboarding?next=%2Fmy%2Fwallet');
   });
 });

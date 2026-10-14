@@ -12,7 +12,7 @@ import { paymentHistoryReason, paymentMethodLabel, paymentStatusView } from '@/l
  * 결제 내역 (ADR-0042): the account's own charges, newest first, 20 per page with 더 보기 —
  * the KRW side of the story the ledger tells in Coin. A refund shows here as the payment's
  * status and in the ledger as its own 결제 취소(환불) row. Not drawn while paid Coin is closed
- * (PAID_COIN_SALES_ENABLED, ADR-0049; app/wallet/page.tsx).
+ * (PAID_COIN_SALES_ENABLED, ADR-0049; app/my/wallet/page.tsx).
  */
 export function PaymentHistory() {
   const { data, isPending, isError, fetchNextPage, hasNextPage, isFetchingNextPage, refetch } =

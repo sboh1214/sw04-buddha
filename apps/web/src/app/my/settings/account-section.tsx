@@ -10,6 +10,7 @@ import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { useMe } from '@/hooks/use-me';
 import { authClient, authErrorMessage } from '@/lib/auth-client';
+import { MY_SETTINGS_PATH } from '@/lib/my';
 import { ProfileUnavailable } from './profile-unavailable';
 import { SettingsSection } from './section';
 
@@ -17,7 +18,7 @@ const schema = z.object({ newEmail: z.email(copy.errEmailInvalid) });
 type FormValues = z.infer<typeof schema>;
 
 /** Where the links in the verification / change-email mails bring the browser back to. */
-const CALLBACK = '/settings';
+const CALLBACK = MY_SETTINGS_PATH;
 
 /**
  * Email address, its verification state and the change-email form (PLAN 17 Q5 decision):

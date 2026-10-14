@@ -7,8 +7,8 @@ import { createOpenMarket, expect, freshEmail, signUp, test } from './helpers';
  * 금액 표기 (#13, ADR-0051): `formatCoin` writes '12,345 Coin' with an ORDINARY space before the
  * unit, four characters longer than the '12,345P' it replaced. On a narrow screen that could
  * leave 'Coin' on a line of its own or push the amount past the edge, so the spots the issue
- * names are measured at 375px: the header's balance chip (and the row it shares with the wordmark,
- * the search and the profile button), a market card's 거래량 and the wallet's balance.
+ * names are measured at 375px: the header's balance chip (and the row it shares with the wordmark
+ * and the search), a market card's 거래량 and the wallet's balance.
  *
  * The balance is raised to 1,000,000 Coin first — seven digits, the largest single adjustment an
  * admin can make (`ADJUST_MAX_ABS_COIN`) — so the chip is measured with a long amount rather than
@@ -59,12 +59,13 @@ function textLayout(locator: Locator) {
 
 /**
  * The left and right edges of what the header's first row paints, in order: the wordmark, the
- * search icon (below md the search is a 36px button around a 16px glyph), the balance chip and
- * the profile button. The glyph rather than its button, because a long balance may push the
- * button's empty padding up to the wordmark without covering a single letter of it.
+ * search icon (below md the search is a 36px button around a 16px glyph) and the balance chip,
+ * which ends the row now that there is no profile menu (#16). The glyph rather than its button,
+ * because a long balance may push the button's empty padding up to the wordmark without covering
+ * a single letter of it.
  */
 function headerRow(page: Page) {
-  return page.evaluate((profileMenu) => {
+  return page.evaluate(() => {
     const edges = (selector: string) => {
       const element = document.querySelector(selector);
       if (element === null) throw new Error(`${selector} is not on the page`);
@@ -75,9 +76,8 @@ function headerRow(page: Page) {
       edges('header h1'),
       edges('[data-testid="nav-search-toggle"] svg'),
       edges('[data-testid="balance-chip"]'),
-      edges(`header [aria-label="${profileMenu}"]`),
     ];
-  }, copy.profileMenu);
+  });
 }
 
 /** One line, wholly inside the viewport, and the page itself does not scroll sideways. */
@@ -149,7 +149,7 @@ test.describe('금액 표기 · 375px', () => {
     await expectVolumeFits('long card volume');
 
     // --- the wallet's balance, the largest type an amount is set in.
-    await page.goto('/wallet');
+    await page.goto('/my/wallet');
     const available = page.getByTestId('wallet-available');
     await expect(available).toHaveText('1,000,000 Coin');
     await expectOneLineOnScreen(page, available, 'wallet balance');
