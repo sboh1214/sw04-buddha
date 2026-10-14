@@ -189,9 +189,9 @@ const isMailPackage = (name: string) => !name.startsWith('.') && MAIL_PACKAGE.te
 /**
  * The files that may import a mail package, with why. Each is a transport: it sends what the
  * callers of `Mailer.send` hand it, which the trace below follows back to a template, and the
- * check below holds it to that: it hands the mail package each key of the `MailMessage` by name
- * (`subject: message.subject`) beside the sender (`from`) and settings that are no part of a
- * message (`host`), and writes no words of its own.
+ * check below holds it to that: it hands the mail package each key of the `MailMessage` its
+ * `send` was handed, by name (`subject: message.subject`), beside the sender (`from`) and settings
+ * that are no part of a message (`host`), and writes no words of its own nor imports any.
  */
 const MAIL_TRANSPORTS: Readonly<Record<string, string>> = {
   'mail/mailer.ts':
@@ -371,12 +371,19 @@ interface MailCode {
  *   the `const`s, assignments and parameters it reads, is held to the mail's words.
  * - A transport's sends are not traced: they send what the callers of `Mailer.send` handed it.
  *   What a transport hands the mail package as a message (an argument the package types as one)
- *   is each `MailMessage` key under its own name, the sender and settings no message has; every
- *   string the transport writes is held to the mail's words.
+ *   is each `MailMessage` key under its own name, read off what its `Mailer.send` was handed
+ *   (`subject: message.subject`, never off a copy), the sender and settings no message has. What
+ *   it was handed is read for nothing else, every string the transport writes is held to the
+ *   mail's words, and it imports nothing but mail packages and types.
  * - Apart from the sends, outside templates.ts: an object literal that writes a content key of a
- *   mail-shaped value or of a spread of a template's result, a write of a content key onto what a
- *   template built (`m.subject =`, `m['text'] +=`, `Object.assign(m, …)`), under any name or type
- *   it is held by, is a problem, whether or not it is ever sent.
+ *   mail-shaped value or of a spread of a template's result (its spreads followed as a send's), a
+ *   write of a content key onto what a template built (`m.subject =`, `m['text'] +=`,
+ *   `Object.assign(m, …)`), under any name or type it is held by, is a problem, whether or not
+ *   it is ever sent.
+ * - A template's result, and each `const` and parameter a send's trace went through, goes only to
+ *   a send (`Mailer.send`, a parameter the trace went through, a `const` it went through) or is
+ *   read for a key. Anything else (an array, `Object(m)`, a generic, `arguments`) is a problem:
+ *   it could be changed under a name the trace never sees.
  * - A mail package imported anywhere but a transport (MAIL_TRANSPORTS) is a problem.
  */
 function readMailCode(program: ts.Program): MailCode {
@@ -413,6 +420,14 @@ function readMailCode(program: ts.Program): MailCode {
   const read = new Set<ts.Node>();
   /** The object literals a transport hands the mail package, held to their own rule. */
   const transportLiterals = new Set<ts.Node>();
+  /** The `const`s and parameters a send's trace went through: each holds a mail. */
+  const holders = new Set<ts.Symbol>();
+  /** Each call of a template outside templates.ts, which a send's trace must reach. */
+  const templateCalls: ts.CallExpression[] = [];
+  /** The `MailMessage` each `Mailer.send` a transport implements is handed (`message`). */
+  const sendParameters = new Set<ts.Symbol>();
+  /** The reads of those a transport hands the mail package: `message` in `message.subject`. */
+  const picks = new Set<ts.Node>();
   const problem = (node: ts.Node, what: string) => problems.add(`${placeOf(node)}: ${what}`);
   const inTemplates = (node: ts.Node) => node.getSourceFile() === templatesFile;
 
@@ -482,6 +497,37 @@ function readMailCode(program: ts.Program): MailCode {
       if (ts.isPropertyAssignment(holder) || ts.isPropertyDeclaration(holder)) return holder.name;
     }
     return undefined;
+  }
+
+  /** Every place a variable or parameter is used: not its declaration, an import or an export. */
+  function usesOf(symbol: ts.Symbol): ts.Identifier[] {
+    return referencesOf(symbol).filter(
+      ({ parent }) =>
+        !(
+          ((ts.isVariableDeclaration(parent) || ts.isParameter(parent)) &&
+            symbol.declarations?.includes(parent) === true) ||
+          ts.isImportSpecifier(parent) ||
+          ts.isExportSpecifier(parent) ||
+          ts.isImportClause(parent) ||
+          ts.isImportEqualsDeclaration(parent)
+        ),
+    );
+  }
+
+  /**
+   * Each `arguments` a function reads (an arrow function's included, as it reads its parent's):
+   * another way to what a parameter holds.
+   */
+  function argumentsOf(fn: ts.Node): ts.Identifier[] {
+    const found: ts.Identifier[] = [];
+    const visit = (node: ts.Node): void => {
+      if (ts.isIdentifier(node) && node.text === 'arguments') found.push(node);
+      if (node === fn || !ts.isFunctionLike(node) || ts.isArrowFunction(node)) {
+        ts.forEachChild(node, visit);
+      }
+    };
+    visit(fn);
+    return found;
   }
 
   /** Every place a function is named but where it is declared, imported or re-exported. */
@@ -749,11 +795,37 @@ function readMailCode(program: ts.Program): MailCode {
     return keys;
   }
 
+  /** Whether a function is the `send` of an object literal that is a `Mailer` (mail/mailer.ts). */
+  function implementsSend(fn: ts.SignatureDeclaration): boolean {
+    const holder = ts.isMethodDeclaration(fn)
+      ? fn
+      : (ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) &&
+          ts.isPropertyAssignment(fn.parent)
+        ? fn.parent
+        : undefined;
+    if (holder === undefined || !ts.isObjectLiteralExpression(holder.parent)) return false;
+    return (
+      propertyName(holder.name) === 'send' &&
+      checker
+        .getContextualType(holder.parent)
+        ?.getProperty('send')
+        ?.declarations?.some((declaration) => declaration === mailerSend) === true
+    );
+  }
+
+  /** Whether an expression names what a transport's `Mailer.send` was handed, as it was handed. */
+  const isSendParameter = (node: ts.Expression) => {
+    const symbol = ts.isIdentifier(node) ? symbolOf(node) : undefined;
+    return symbol !== undefined && sendParameters.has(symbol);
+  };
+
   /**
    * What a transport hands the mail package as a message: each `MailMessage` key under its own
-   * name (`subject: message.subject`), the sender, and settings that are no key of a message
-   * (`host`), through `const`s, conditionals and spreads. Never a spread of the `MailMessage`
-   * (whatever else its object carries would go too), words of its own or another message key.
+   * name, read off what its `Mailer.send` was handed (`subject: message.subject`), the sender, and
+   * settings that are no key of a message (`host`), through `const`s, conditionals and spreads.
+   * Never a spread of the `MailMessage` (whatever else its object carries would go too), a key
+   * read off a copy (`m.subject` of `{ ...message, ...extra }`), words of its own or another
+   * message key.
    */
   function readTransportMessage(expression: ts.Expression, keys: ReadonlySet<string>): void {
     const value = unwrapped(expression);
@@ -799,16 +871,32 @@ function readMailCode(program: ts.Program): MailCode {
           initializer !== undefined &&
           ts.isPropertyAccessExpression(initializer) &&
           initializer.name.text === name &&
-          isMailMessage(initializer.expression);
-        if (!picked) problem(property, `sends ${name} other than as the MailMessage's ${name}`);
+          isSendParameter(initializer.expression);
+        if (picked) picks.add(initializer.expression);
+        else problem(property, `sends ${name} other than as the MailMessage's ${name}`);
       } else if (name !== SENDER_KEY && keys.has(name)) {
         problem(property, `sends ${name}, which a MailMessage does not say`);
       }
     }
   }
 
-  /** A transport: every string it writes, and what it hands the mail package as a message. */
+  /**
+   * A transport: every string it writes, what it hands the mail package as a message, and that it
+   * imports nothing but mail packages and types (a footer from another file is words of its own).
+   */
   function readTransport(file: ts.SourceFile) {
+    for (const { name, node } of importsOf(file)) {
+      if (!isMailPackage(name) && !typesOnly(node)) {
+        problem(node, `imports ${name}: a transport writes nothing of its own`);
+      }
+    }
+    const implementations = (node: ts.Node): void => {
+      const parameter = ts.isFunctionLike(node) && implementsSend(node) && node.parameters[0];
+      const symbol = parameter ? symbolOf(parameter.name) : undefined;
+      if (symbol) sendParameters.add(symbol);
+      ts.forEachChild(node, implementations);
+    };
+    implementations(file);
     for (const { line, text } of literalsOf(file.fileName, file.text)) {
       for (const hit of findExcludedText(text)) {
         problems.add(
@@ -830,11 +918,15 @@ function readMailCode(program: ts.Program): MailCode {
     visit(file);
   }
 
-  /** The content keys an object literal writes, and the spreads it takes the rest from. */
+  /**
+   * The content keys an object literal writes, and the spreads it takes the rest from: each
+   * followed as a send's is, sent or not (`{ ...message, ...extra }` takes `extra`'s `text`), but
+   * what a transport's `Mailer.send` was handed, which is held to its own rule.
+   */
   function readLiteral(literal: ts.ObjectLiteralExpression, follow: boolean) {
     for (const property of literal.properties) {
       if (ts.isSpreadAssignment(property)) {
-        if (follow) trace(property.expression);
+        if (follow || !isSendParameter(property.expression)) trace(property.expression);
         continue;
       }
       const name = propertyName(property.name);
@@ -894,22 +986,111 @@ function readMailCode(program: ts.Program): MailCode {
       }
     } else if (ts.isIdentifier(expression)) {
       if (expression.text === 'undefined') return;
-      const declaration = namedSymbol(expression)?.declarations?.[0];
+      const symbol = namedSymbol(expression);
+      const declaration = symbol?.declarations?.[0];
       if (
+        symbol &&
         declaration &&
         ts.isVariableDeclaration(declaration) &&
         declaration.initializer &&
         ts.isVariableDeclarationList(declaration.parent) &&
         declaration.parent.flags & ts.NodeFlags.Const
       ) {
+        holders.add(symbol);
         trace(declaration.initializer);
-      } else if (declaration && ts.isParameter(declaration)) {
+      } else if (symbol && declaration && ts.isParameter(declaration)) {
+        holders.add(symbol);
         traceParameter(declaration, expression);
       } else {
         problem(expression, `${expression.text} is a value this cannot follow`);
       }
     } else {
       problem(expression, `${expression.getText()} is a value this cannot follow`);
+    }
+  }
+
+  /**
+   * Whether a mail goes on to be sent from where it stands: up through casts, `await`, the
+   * branches of a conditional and the object literals it is spread into, to the argument of
+   * `Mailer.send` or of a parameter a send's trace went through, or to the initializer of a
+   * `const` it went through. A mail-shaped parameter no send's trace went through (a generic
+   * `<T>(x: T)`, `Object.assign`'s target, an array's `push`) is not a send.
+   */
+  function sentOn(node: ts.Expression): boolean {
+    let child: ts.Node = node;
+    let { parent } = node;
+    while (
+      ts.isParenthesizedExpression(parent) ||
+      ts.isAwaitExpression(parent) ||
+      ts.isAsExpression(parent) ||
+      ts.isSatisfiesExpression(parent) ||
+      ts.isNonNullExpression(parent) ||
+      ts.isTypeAssertionExpression(parent) ||
+      (ts.isConditionalExpression(parent) && parent.condition !== child) ||
+      ts.isSpreadAssignment(parent) ||
+      (ts.isObjectLiteralExpression(parent) && ts.isSpreadAssignment(child))
+    ) {
+      child = parent;
+      parent = parent.parent;
+    }
+    const held = (name: ts.Node) => {
+      const symbol = symbolOf(name);
+      return symbol !== undefined && holders.has(symbol);
+    };
+    if (ts.isVariableDeclaration(parent)) return parent.initializer === child && held(parent.name);
+    if (!ts.isCallExpression(parent)) return false;
+    const index = parent.arguments.findIndex((argument) => argument === child);
+    const declaration = checker.getResolvedSignature(parent)?.declaration;
+    if (index === -1 || declaration === undefined || ts.isJSDocSignature(declaration)) {
+      return false;
+    }
+    if (declaration === mailerSend) return index === 0;
+    const parameter = declaration.parameters[index];
+    return parameter !== undefined && !parameter.dotDotDotToken && held(parameter.name);
+  }
+
+  /**
+   * Where a mail goes besides a send. A template's result, and every `const` and parameter a
+   * send's trace went through, is only sent (`sentOn`) or read for a key (`content.subject`; a
+   * write of one is a problem above). Anything else (an array or a Map, `Object(content)`, a call
+   * no send's trace went through, `arguments`) is a way to change it under no name the trace
+   * knows. What a transport's `Mailer.send` was handed is only read key by key into what it hands
+   * the mail package.
+   */
+  function readEscapes() {
+    for (const call of templateCalls) {
+      if (!sentOn(call)) {
+        problem(call, `${call.expression.getText()}(…) is used other than to send what it builds`);
+      }
+    }
+    const readsKey = (use: ts.Identifier) => {
+      const { parent } = use;
+      if (ts.isPropertyAccessExpression(parent) && parent.expression === use) {
+        return MESSAGE_KEYS.has(parent.name.text);
+      }
+      return (
+        ts.isElementAccessExpression(parent) &&
+        parent.expression === use &&
+        keysOf(parent.argumentExpression)?.every((key) => MESSAGE_KEYS.has(key)) === true
+      );
+    };
+    for (const symbol of holders) {
+      for (const use of usesOf(symbol)) {
+        if (!sentOn(use) && !readsKey(use)) {
+          problem(use, `${use.text} holds a mail and is used other than to send it`);
+        }
+      }
+    }
+    for (const symbol of sendParameters) {
+      for (const use of usesOf(symbol)) {
+        if (!picks.has(use)) problem(use, `${use.text} is used other than handed on key by key`);
+      }
+    }
+    for (const symbol of [...holders, ...sendParameters]) {
+      const parameter = symbol.declarations?.find(ts.isParameter);
+      for (const use of parameter ? argumentsOf(parameter.parent) : []) {
+        problem(use, `arguments reaches ${symbol.name}, which holds a mail`);
+      }
     }
   }
 
@@ -943,7 +1124,10 @@ function readMailCode(program: ts.Program): MailCode {
         problem(node, 'Mailer.send is handed on; what it sends cannot be seen');
       }
       if (file !== templatesFile) {
-        if (ts.isCallExpression(node) && isTemplateCall(node)) node.arguments.forEach(readInput);
+        if (ts.isCallExpression(node) && isTemplateCall(node)) {
+          node.arguments.forEach(readInput);
+          templateCalls.push(node);
+        }
         if (
           ts.isObjectLiteralExpression(node) &&
           !transportLiterals.has(node) &&
@@ -984,6 +1168,7 @@ function readMailCode(program: ts.Program): MailCode {
     };
     visit(file);
   }
+  readEscapes();
   return { templates, inputs, problems: [...problems].sort() };
 }
 
@@ -1310,13 +1495,138 @@ describe('mail goes through the templates, whatever way it is written (#113 revi
       [
         // Words of its own, through a const and a spread of what it was handed.
         'mail/mailer.ts:6: 순위 (scoring) in a transport',
+        'mail/mailer.ts:9: message is used other than handed on key by key',
         'mail/mailer.ts:9: spreads message: a transport hands on each MailMessage key by name',
         "mail/mailer.ts:9: sends text other than as the MailMessage's text",
         // Defaults for every message, and keys of the message the MailMessage does not have.
         "mail/mailer.ts:15: sends text other than as the MailMessage's text",
+        'mail/mailer.ts:22: message is used other than handed on key by key',
         "mail/mailer.ts:22: sends text other than as the MailMessage's text",
+        'mail/mailer.ts:24: message is used other than handed on key by key',
         'mail/mailer.ts:24: sends amp, which a MailMessage does not say',
         'mail/mailer.ts:25: sends headers, which a MailMessage does not say',
+      ].sort(),
+    );
+  });
+
+  it('holds a transport to what its Mailer.send was handed, read key by key', () => {
+    const code = readMailCode(
+      plantedProgram({
+        'mail/mailer.ts': [
+          "import { createTransport } from 'nodemailer';",
+          "import { MAIL_FOOTER } from '../markets/__footer__.js';",
+          'export interface MailMessage { to: string; subject: string; text: string; html?: string }',
+          'export interface Mailer { send(message: MailMessage): Promise<void> }',
+          'export function createMailer(from: string): Mailer {',
+          "  const transporter = createTransport({ host: 'h', port: 25 });",
+          '  return {',
+          '    async send(message) {',
+          '      const extra = { text: `${message.text}${MAIL_FOOTER}` };',
+          '      const m: MailMessage = { ...message, ...extra };',
+          '      await transporter.sendMail({ from, to: m.to, subject: m.subject, text: m.text, html: m.html });',
+          '    },',
+          '  };',
+          '}',
+          'export function createBoxedMailer(from: string): Mailer {',
+          "  const transporter = createTransport({ host: 'h', port: 25 });",
+          '  return {',
+          '    async send(message) {',
+          '      (Object(message) as { text: string }).text += MAIL_FOOTER;',
+          '      (arguments[0] as { html: string }).html = MAIL_FOOTER;',
+          '      await transporter.sendMail({ from, to: message.to, subject: message.subject, text: message.text, html: message.html });',
+          '    },',
+          '  };',
+          '}',
+        ],
+        'markets/__footer__.ts': [
+          "export const MAIL_FOOTER = '\\n\\n이번 주 순위와 베팅 결과 보기';",
+        ],
+      }),
+    );
+    expect(code.problems).toEqual(
+      [
+        // Words from another file, which the transport's own strings do not show.
+        'mail/mailer.ts:2: imports ../markets/__footer__.js: a transport writes nothing of its own',
+        // Its own text spread over a copy, and keys read off the copy.
+        'mail/mailer.ts:9: message is used other than handed on key by key',
+        'mail/mailer.ts:9: writes text outside mail/templates.ts',
+        'mail/mailer.ts:10: extra holds a mail and is used other than to send it',
+        'mail/mailer.ts:10: message is used other than handed on key by key',
+        "mail/mailer.ts:11: sends html other than as the MailMessage's html",
+        "mail/mailer.ts:11: sends subject other than as the MailMessage's subject",
+        "mail/mailer.ts:11: sends text other than as the MailMessage's text",
+        "mail/mailer.ts:11: sends to other than as the MailMessage's to",
+        // What it was handed, changed under no name before it is read key by key.
+        'mail/mailer.ts:19: message is used other than handed on key by key',
+        'mail/mailer.ts:20: arguments reaches message, which holds a mail',
+      ].sort(),
+    );
+  });
+
+  it('knows a template result handed where no send goes', () => {
+    const code = readMailCode(
+      plantedProgram({
+        'markets/__planted__.ts': [
+          "import { type Mailer } from '../mail/mailer.js';",
+          "import { type EmailContent, MAIL_TEMPLATES } from '../mail/templates.js';",
+          'const same = <T>(value: T): T => value;',
+          'export class Planted {',
+          '  constructor(private readonly mailer: Mailer) {}',
+          '  async boxed(to: string) {',
+          "    const content = MAIL_TEMPLATES.verification({ url: 'u' });",
+          '    const box: unknown[] = [content];',
+          "    (box[0] as { subject: string }).subject = '이번 주 순위';",
+          '    await this.mailer.send({ to, ...content });',
+          '  }',
+          '  async mapped(to: string) {',
+          "    const content = MAIL_TEMPLATES.verification({ url: 'u' });",
+          "    Object.assign(new Map<string, unknown>([['m', content]]).get('m') as object, { subject: '베팅 마감' });",
+          '    await this.mailer.send({ to, ...content });',
+          '  }',
+          '  async wrapped(to: string) {',
+          "    const content = MAIL_TEMPLATES.verification({ url: 'u' });",
+          "    (Object(content) as { html: string }).html = '<p>배당</p>';",
+          '    await this.mailer.send({ to, ...content });',
+          '  }',
+          '  async pushed(to: string) {',
+          "    const content = MAIL_TEMPLATES.verification({ url: 'u' });",
+          '    const box: EmailContent[] = [];',
+          '    box.push(same(content));',
+          "    (box[0] as { text: string }).text = '베팅';",
+          '    await this.mailer.send({ to, ...content });',
+          '  }',
+          '  async inline(to: string) {',
+          "    const box = [MAIL_TEMPLATES.verification({ url: 'u' })];",
+          '    await this.mailer.send({ to, ...box[0]! });',
+          '  }',
+          '  async logged(to: string) {',
+          "    const content = MAIL_TEMPLATES.verification({ url: 'u' });",
+          '    console.info(content.subject.length);',
+          '    await this.mailer.send({ to, ...content });',
+          '  }',
+          '  relay(to: string, content: object) {',
+          "    (arguments[1] as { subject: string }).subject = '순위';",
+          '    return this.mailer.send({ to, ...(content as EmailContent) });',
+          '  }',
+          '  async relayed(to: string) {',
+          "    await this.relay(to, MAIL_TEMPLATES.verification({ url: 'u' }));",
+          '  }',
+          '}',
+        ],
+      }),
+    );
+    expect(code.problems).toEqual(
+      [
+        // An untyped container, Object() and a generic hold it under no name the trace knows.
+        'markets/__planted__.ts:8: content holds a mail and is used other than to send it',
+        'markets/__planted__.ts:14: content holds a mail and is used other than to send it',
+        'markets/__planted__.ts:19: content holds a mail and is used other than to send it',
+        'markets/__planted__.ts:25: content holds a mail and is used other than to send it',
+        'markets/__planted__.ts:26: writes text outside mail/templates.ts',
+        'markets/__planted__.ts:30: MAIL_TEMPLATES.verification(…) is used other than to send what it builds',
+        'markets/__planted__.ts:31: box[0] is a value this cannot follow',
+        // A parameter that holds a mail, reached through `arguments`.
+        'markets/__planted__.ts:39: arguments reaches content, which holds a mail',
       ].sort(),
     );
   });
@@ -1375,7 +1685,13 @@ describe('mail goes through the templates, whatever way it is written (#113 revi
         'markets/__planted__.ts:11: writes subject outside mail/templates.ts',
         'markets/__planted__.ts:12: writes html outside mail/templates.ts',
         'markets/__planted__.ts:17: Object.assign(…) writes onto a mail outside mail/templates.ts',
+        // Handed to what sends nothing: a built-in, another name, a function that only writes.
+        'markets/__planted__.ts:17: content holds a mail and is used other than to send it',
+        'markets/__planted__.ts:22: content holds a mail and is used other than to send it',
         'markets/__planted__.ts:23: writes subject outside mail/templates.ts',
+        'markets/__planted__.ts:28: content holds a mail and is used other than to send it',
+        // Copied into a mail that is returned, not sent.
+        'markets/__planted__.ts:33: content holds a mail and is used other than to send it',
         'markets/__planted__.ts:33: writes subject outside mail/templates.ts',
         'markets/__planted__.ts:37: writes text outside mail/templates.ts',
         'markets/__planted__.ts:38: writes html outside mail/templates.ts',
