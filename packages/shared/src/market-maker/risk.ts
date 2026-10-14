@@ -57,7 +57,13 @@ export interface BotOrder {
   readonly qty: number;
 }
 
-export interface LiveBotOrder extends BotOrder {
+/** A live order of the bot as the plan reads it. */
+export interface PlanBotOrder extends BotOrder {
+  /** A cancel was asked for and has not completed: still live (ADR-0058 결정 1의 7). */
+  readonly cancelPending?: boolean;
+}
+
+export interface LiveBotOrder extends PlanBotOrder {
   readonly id: string;
 }
 
@@ -378,8 +384,9 @@ function pendingPath(
 }
 
 /**
- * Trims a quote ladder (#127) to what the bot may post (#128). Each direction is walked along the
- * path its contracts would fill in, best price first:
+ * Trims a quote ladder (#127) to what the bot may post (#128). `liveOrders` are all the bot's live
+ * orders in this market; those whose cancel is pending stay live and the others are what the plan
+ * replaces. Each direction is walked along the path its contracts would fill in, best price first:
  *
  * - Pending cancels stay live (결정 1의 7). They take their place on the path by price (ahead of
  *   a new contract at the same price, being older), count toward 기본 물량 — so the direction
@@ -389,28 +396,33 @@ function pendingPath(
  *   of it push it down the curve and the bot never bids above the curve for its new orders.
  * - A contract raises the risk when filling it after everything ahead on the path would raise
  *   the worst loss on holdings (결정 1의 10). At `reduce` the path holds at most
- *   기본 물량 × ratio such contracts, pending ones counted; at `halt`, or while some result's
- *   reserved loss is past L (결정 2), no new one. Contracts that lower the risk stay (결정 1의 11).
+ *   기본 물량 × ratio such contracts, pending ones counted: those ahead of a new contract by what
+ *   they do, those behind it as raising. At `halt`, or while some result's reserved loss — with
+ *   every live order — is past L (결정 2), no new one. Contracts that lower the risk stay
+ *   (결정 1의 11).
  * - Every new contract is reserved; one that would take a result's reserved loss past L — or
  *   further past a lowered L — is not posted (결정 1의 10, 결정 2).
  * - The Coin goes first to the direction whose best contract lowers the worst loss (or raises it
  *   least; YES on a tie), best price first, so the far levels go first (결정 1의 6).
  *
- * A direction ends at the first new contract it may not post. The live orders not pending a
- * cancel are what this replaces: `reconcileBotQuotes` sets them against the plan, and each order
- * the bot places still passes `checkBotOrder` against everything live at that moment.
+ * A direction ends at the first new contract it may not post. `reconcileBotQuotes` sets the live
+ * orders not pending a cancel against the plan; the ones it cancels stay live until the cancel
+ * completes, and each order the bot places still passes `checkBotOrder` against everything live
+ * at that moment.
  */
 export function planBotQuotes(
   ladder: QuoteLadder,
   book: BotBook,
-  pendingCancelOrders: readonly BotOrder[],
+  liveOrders: readonly PlanBotOrder[],
   quantity: number,
   limits: RiskLimits,
   terms: ContractTerms,
 ): PlannedQuotes {
   assertWhole('quantity', quantity, 1);
+  const pendingCancelOrders = liveOrders.filter((o) => o.cancelPending === true);
   const risk = botRisk(book, pendingCancelOrders, limits, terms);
-  const overLimit = RESULT_SCENARIOS.some((result) => risk.reservedPnl[result] < -limits.maxLoss);
+  // 결정 2: the reserved loss is the book's, with every live order (결정 1의 9).
+  const overLimit = worstLoss(reservedPnl(book, liveOrders, terms)) > limits.maxLoss;
   // 결정 1의 11: 기본 물량 × the ratio at `reduce`, none at `halt`; 결정 2: none past L.
   const raiseBudget = overLimit
     ? 0
@@ -459,7 +471,8 @@ export function planBotQuotes(
       const delta = unitDelta(direction, priceCoin);
       const after = add(pnl, delta);
       const raises = worstLoss(after) > worstLoss(pnl);
-      if (raises && raised >= raiseBudget) break;
+      // The pending contracts still behind may raise the risk when they fill: count them so.
+      if (raises && raised + (waiting.length - next) >= raiseBudget) break;
       if (!withinLimit(reserved, delta, limits.maxLoss)) break;
       if (BigInt(priceCoin) > freeCoin) break;
       planned[direction].push(priceCoin);
@@ -487,7 +500,8 @@ export interface BotQuoteChanges {
 
 /**
  * The orders that do not fit a plan (#128 "줄이거나 취소할 봇 대기 주문") and the ones to add.
- * `liveOrders` are the bot's orders not pending a cancel, in time priority: at a planned price
+ * `liveOrders` are the bot's live orders in time priority; those whose cancel is pending are left
+ * alone (they are on their way out, and the plan already counted them). At a planned price
  * the earlier ones are kept first, the excess is cancelled from the later ones, and what the
  * plan still lacks is placed. Orders at other prices and any sell order are cancelled.
  *
@@ -508,7 +522,7 @@ export function reconcileBotQuotes(
     const outcome = DIRECTION_OUTCOME[direction];
     const wanted = new Map(plan[direction].map((level) => [level.priceCoin, level.qty]));
     for (const order of liveOrders) {
-      if (order.outcome !== outcome) continue;
+      if (order.outcome !== outcome || order.cancelPending === true) continue;
       const left = order.side === 'buy' ? (wanted.get(order.priceCoin) ?? 0) : 0;
       const keep = Math.min(left, order.qty);
       if (keep > 0) wanted.set(order.priceCoin, left - keep);

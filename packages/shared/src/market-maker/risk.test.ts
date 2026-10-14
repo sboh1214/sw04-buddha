@@ -7,6 +7,7 @@ import {
   type BotOrder,
   type ByResult,
   type LiveBotOrder,
+  type PlanBotOrder,
   RESULT_SCENARIOS,
   type RiskLimits,
   assertBotBook,
@@ -122,6 +123,10 @@ function fill(state: BotBook, order: BotOrder, qty: number): BotBook {
   };
   return next;
 }
+
+/** Orders whose cancel is pending: still live (ADR-0058 결정 1의 7). */
+const pend = (orders: readonly BotOrder[]): PlanBotOrder[] =>
+  orders.map((order) => ({ ...order, cancelPending: true }));
 
 const asOrders = (plan: Pick<QuoteLadder, 'yesBids' | 'noBids'>): BotOrder[] => [
   ...plan.yesBids.map((l) => buy('YES', l.priceCoin, l.qty)),
@@ -556,8 +561,13 @@ describe('planBotQuotes (결정 1의 6·7·10·11, 결정 2)', () => {
     const wide = { ...LIMITS, maxLoss: 10_000n };
     expect(total(planBotQuotes(ladder, state, [], 20, wide, T).yesBids)).toBe(10);
     // Four pending YES bids at 40 fill ahead and each raises the NO loss: 10 − 4 new ones.
-    const pending = [buy('YES', 40, 4)];
-    expect(total(planBotQuotes(ladder, state, pending, 20, wide, T).yesBids)).toBe(6);
+    expect(
+      total(planBotQuotes(ladder, state, pend([buy('YES', 40, 4)]), 20, wide, T).yesBids),
+    ).toBe(6);
+    // At 20 they stand behind the new bids (32–29) and may raise it when they fill: also 6.
+    expect(
+      total(planBotQuotes(ladder, state, pend([buy('YES', 20, 4)]), 20, wide, T).yesBids),
+    ).toBe(6);
   });
 
   it('treats a contract that leaves the worst loss where it is as not raising it', () => {
@@ -584,7 +594,7 @@ describe('planBotQuotes (결정 1의 6·7·10·11, 결정 2)', () => {
 
   it('plans only risk-lowering quotes while a reserved loss is past L, whatever the stage', () => {
     // Pending YES bids reserve −500 on NO; L lowered to 300. Holdings are balanced: 0%, normal.
-    const pending = [buy('YES', 50, 10)];
+    const pending = pend([buy('YES', 50, 10)]);
     const past = planBotQuotes(
       ladderAt(book()),
       book(),
@@ -605,7 +615,7 @@ describe('planBotQuotes (결정 1의 6·7·10·11, 결정 2)', () => {
     const unwind = planBotQuotes(
       ladderAt(long),
       long,
-      [buy('YES', 50, 5)],
+      pend([buy('YES', 50, 5)]),
       20,
       {
         ...LIMITS,
@@ -619,16 +629,38 @@ describe('planBotQuotes (결정 1의 6·7·10·11, 결정 2)', () => {
     expectEachLowers(long, 'NO', unwind.noBids);
   });
 
+  it('judges past-L with every live order, as in the bids-only example of 결정 2', () => {
+    // The bot rests its whole L = 10,000 plan (YES −750, NO −750 reserved) at 0% utilization,
+    // then L is lowered to 300. Nothing new may raise the risk, and every live bid is cancelled.
+    const ladder = ladderAt(book());
+    const resting = planBotQuotes(ladder, book(), [], 20, { ...LIMITS, maxLoss: 10_000n }, T);
+    const live = asOrders(resting).map((o, i): LiveBotOrder => ({ id: String(i), ...o }));
+    const lowered = { ...LIMITS, maxLoss: 300n };
+    const plan = planBotQuotes(ladder, book(), live, 20, lowered, T);
+    expect([plan.stage, plan.overLimit]).toEqual(['normal', true]);
+    expect([plan.yesBids, plan.noBids]).toEqual([[], []]);
+    const changes = reconcileBotQuotes(plan, live);
+    expect(changes.place).toEqual([]);
+    expect(changes.cancel).toEqual(live.map((o) => ({ id: o.id, qty: o.qty })));
+    // While those cancels are pending the book is still past L: still nothing new.
+    const waiting = live.map((o) => ({ ...o, cancelPending: true }));
+    expect(planBotQuotes(ladder, book(), waiting, 20, lowered, T).overLimit).toBe(true);
+    // Once they are gone the bot quotes again within the new L.
+    const after = planBotQuotes(ladder, book(), [], 20, lowered, T);
+    expect(after.overLimit).toBe(false);
+    expect(worstLoss(reservedPnl(book(), asOrders(after), T))).toBeLessThanOrEqual(300n);
+  });
+
   it('puts pending cancels on the path by price and posts that many fewer contracts', () => {
     const ladder = ladderAt(book());
     const units = unitsOf(ladder.yesBids);
     const wide = { ...LIMITS, maxLoss: 10_000n };
     // Below the ladder: they fill last, and the new contracts are the ladder's first five.
-    const low = planBotQuotes(ladder, book(), [buy('YES', 10, 15)], 20, wide, T);
+    const low = planBotQuotes(ladder, book(), pend([buy('YES', 10, 15)]), 20, wide, T);
     expect(unitsOf(low.yesBids)).toEqual(units.slice(0, 5));
     expect(low.noBids).toEqual(ladder.noBids);
     // Above it: they fill first, so the new contracts take the curve from the fourth on.
-    const high = planBotQuotes(ladder, book(), [buy('YES', 60, 3)], 20, wide, T);
+    const high = planBotQuotes(ladder, book(), pend([buy('YES', 60, 3)]), 20, wide, T);
     expect(unitsOf(high.yesBids)).toEqual(units.slice(3, 20));
   });
 
@@ -638,7 +670,7 @@ describe('planBotQuotes (결정 1의 6·7·10·11, 결정 2)', () => {
     const ladder = ladderAt(state);
     const curve = unitsOf(ladder.noBids);
     const sell: BotOrder = { outcome: 'YES', side: 'sell', priceCoin: 100 - curve[1]!, qty: 3 };
-    const plan = planBotQuotes(ladder, state, [sell], 20, { ...LIMITS, maxLoss: 10_000n }, T);
+    const plan = planBotQuotes(ladder, state, pend([sell]), 20, { ...LIMITS, maxLoss: 10_000n }, T);
     expect(unitsOf(plan.noBids)).toEqual([curve[0], ...curve.slice(4, 20)]);
   });
 
@@ -649,7 +681,7 @@ describe('planBotQuotes (결정 1의 6·7·10·11, 결정 2)', () => {
     const wide = { quantity: 40, levels: 40 };
     const first = planBotQuotes(ladderAt(halt, wide), halt, [], 40, LIMITS, T);
     expect(total(first.noBids)).toBe(19);
-    const pending = asOrders(first);
+    const pending = pend(asOrders(first));
     const again = planBotQuotes(
       ladderAt(halt, { ...wide, safetyTicks: 3 }),
       halt,
@@ -680,14 +712,31 @@ describe('planBotQuotes (결정 1의 6·7·10·11, 결정 2)', () => {
       fc.property(
         bookArb,
         fc.array(buyArb, { maxLength: 4 }),
+        fc.array(buyArb, { maxLength: 3 }),
         ladderSettingsArb,
         limitsArb,
-        (s, pending, ls, l) => {
+        fc.integer({ min: 1, max: 12_000 }),
+        fc.boolean(),
+        (s, pending, others, ls, anyLimits, utilizationBp, staged) => {
+          // Half the cases put L where the holdings sit at a chosen utilization, so the reduce
+          // and halt stages come up often.
+          const holdings = worstLoss(resultPnl(s, T));
+          const l =
+            staged && holdings > 0n
+              ? {
+                  ...anyLimits,
+                  reduceAtBp: 7_000,
+                  haltAtBp: 9_000,
+                  maxLoss: (holdings * 10_000n) / BigInt(utilizationBp) || 1n,
+                }
+              : anyLimits;
           const ladder = quoteLadder(s.noQty - s.yesQty, ls, T);
-          const plan = planBotQuotes(ladder, s, pending, ls.quantity, l, T);
+          const plan = planBotQuotes(ladder, s, [...pend(pending), ...others], ls.quantity, l, T);
           const before = reservedPnl(s, pending, T);
           expect(plan.stage).toBe(botRisk(s, pending, l, T).stage);
-          expect(plan.overLimit).toBe(worstLoss(before) > l.maxLoss);
+          expect(plan.overLimit).toBe(
+            worstLoss(reservedPnl(s, [...pending, ...others], T)) > l.maxLoss,
+          );
           // Within L, or no result worse than the pending orders alone left it.
           expectWithinOrNoWorse(
             reservedPnl(s, [...pending, ...asOrders(plan)], T),
@@ -715,6 +764,7 @@ describe('planBotQuotes (결정 1의 6·7·10·11, 결정 2)', () => {
             // PnL along the path (pending orders may lock more Coin than the book has here).
             let pnl = resultPnl(s, T);
             let raised = 0;
+            let newRaising = false;
             path.forEach((unit, position) => {
               const d = orderPnlDelta(buy(outcome, unit.price, 1), T);
               const next = { YES: pnl.YES + d.YES, NO: pnl.NO + d.NO, VOID: pnl.VOID + d.VOID };
@@ -723,10 +773,14 @@ describe('planBotQuotes (결정 1의 6·7·10·11, 결정 2)', () => {
                 // Priced at the curve position it fills at, pending cancels ahead included.
                 expect(unit.price).toBe(curve[position]);
                 if (raises) expect(raised).toBeLessThan(budget);
+                if (raises) newRaising = true;
               }
               if (raises) raised += 1;
               pnl = next;
             });
+            // With a new risk-raising contract in, the whole path stays within the budget,
+            // pending contracts behind it included.
+            if (newRaising && budget !== Infinity) expect(raised).toBeLessThanOrEqual(budget);
           }
         },
       ),
@@ -785,6 +839,8 @@ describe('reconcileBotQuotes (#128 줄이거나 취소할 봇 대기 주문)', (
       live('c', buy('YES', 40, 5)), // no longer in the plan
       live('d', buy('NO', 50, 1)),
       live('e', { outcome: 'NO', side: 'sell', priceCoin: 60, qty: 1 }), // the bot only bids
+      // Already being cancelled: neither cancelled again nor kept toward the plan.
+      { ...live('f', buy('YES', 46, 2)), cancelPending: true },
     ];
     expect(reconcileBotQuotes(plan, orders)).toEqual({
       cancel: [
