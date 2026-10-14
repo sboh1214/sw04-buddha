@@ -7,15 +7,17 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query';
-import { type GrantCandidatePage } from '@/lib/admin-accounts';
+import { type GrantCandidatePage, revokedOwnRole } from '@/lib/admin-accounts';
 import {
   api,
   isApiError,
+  isForAnotherAccount,
   type AdminAccount,
   type AdminGrantBody,
   type AdminRoleChange,
   unwrap,
 } from '@/lib/api';
+import { useSession } from '@/lib/use-session';
 
 /**
  * 운영자 계정 (#171). Under the `admin` root (`PRIVATE_QUERY_ROOTS`); the list, the record and
@@ -94,56 +96,82 @@ export function useAdminGrantCandidates(term: string) {
 /**
  * A grant or a revoke changes the admin list, the record and the role every search shows, so
  * an answer re-reads all of them — a refusal too: another admin may have changed the role first.
- * A request that never came back refreshes nothing. Toasts and dialogs are the caller's.
+ * A request that never came back refreshes nothing. The refusal that the cookie is another
+ * account's (`isForAnotherAccount`: another tab signed in, and both bodies name the admin on
+ * screen) refetches the session instead, so SessionCacheGuard empties the cache and the screen
+ * shows the account that is really signed in. Toasts and dialogs are the caller's.
  */
 function useRefreshAdminAccounts() {
   const queryClient = useQueryClient();
-  return () =>
+  const { refetch: refetchSession } = useSession();
+  const refresh = () =>
     Promise.all([
       queryClient.invalidateQueries({ queryKey: ADMIN_ACCOUNTS_KEY }),
       queryClient.invalidateQueries({ queryKey: ADMIN_USERS_KEY }),
     ]);
+  return {
+    refresh,
+    onError: async (error: unknown) => {
+      if (isForAnotherAccount(error)) {
+        void refetchSession();
+        return;
+      }
+      if (isApiError(error)) await refresh();
+    },
+  };
 }
 
-/** `POST /admin/admins`: make an account an admin, with a reason. */
+/**
+ * `POST /admin/admins`: make an account an admin, with a reason, as the admin on screen
+ * (`expectedAccountId`, `screenAccountId` when submitted).
+ */
 export function useGrantAdmin() {
-  const refresh = useRefreshAdminAccounts();
+  const { refresh, onError } = useRefreshAdminAccounts();
   return useMutation({
     mutationFn: async (body: AdminGrantBody) =>
       unwrap(await api.POST('/api/v1/admin/admins', { body })).data,
     onSuccess: () => refresh(),
-    onError: async (error: unknown) => {
-      if (isApiError(error)) await refresh();
-    },
+    onError,
   });
 }
 
 export interface RevokeAdminVariables {
   userId: string;
   reason: string;
+  /** The admin the screen shows (`screenAccountId` when submitted); the server checks it. */
+  expectedAccountId: string;
+}
+
+export interface RevokeAdminResult {
+  change: AdminRoleChange;
   /**
-   * The signed-in admin's own account. Its session is gone once the revoke commits, so nothing
-   * is re-read: the caller signs the tab out instead.
+   * The answer revoked the role of the account that sent it (`revokedOwnRole`): its sessions are
+   * gone, so nothing is re-read and the caller signs the tab out. Taken from the answer, never
+   * from what the screen believed when sending.
    */
   self: boolean;
 }
 
-/** `POST /admin/admins/:userId/revoke`: take the role away, with a reason. */
+/** `POST /admin/admins/:userId/revoke`: take the role away, with a reason, as the admin on screen. */
 export function useRevokeAdmin() {
-  const refresh = useRefreshAdminAccounts();
+  const { refresh, onError } = useRefreshAdminAccounts();
   return useMutation({
-    mutationFn: async ({ userId, reason }: RevokeAdminVariables) =>
-      unwrap(
+    mutationFn: async ({
+      userId,
+      reason,
+      expectedAccountId,
+    }: RevokeAdminVariables): Promise<RevokeAdminResult> => {
+      const change = unwrap(
         await api.POST('/api/v1/admin/admins/{userId}/revoke', {
           params: { path: { userId } },
-          body: { reason },
+          body: { reason, expectedAccountId },
         }),
-      ).data,
-    onSuccess: async (_change: AdminRoleChange, { self }: RevokeAdminVariables) => {
+      ).data;
+      return { change, self: revokedOwnRole(change, expectedAccountId) };
+    },
+    onSuccess: async ({ self }: RevokeAdminResult) => {
       if (!self) await refresh();
     },
-    onError: async (error: unknown) => {
-      if (isApiError(error)) await refresh();
-    },
+    onError,
   });
 }

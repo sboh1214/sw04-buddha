@@ -28,10 +28,16 @@ CREATE INDEX "admin_actions_role_change_created_at_id_idx" ON "admin_actions" US
 -- buddha_app keeps SELECT/INSERT/UPDATE of the default privileges in
 -- docker/postgres/init/01-roles.sql and loses DELETE.
 REVOKE DELETE ON TABLE "approval_requests" FROM buddha_app;--> statement-breakpoint
--- Hand-edited: a request is written once and decided once. The request columns never change, and
--- a decided row does not change at all — not its decision, not back to pending. The CHECKs tie
--- the decision columns to the status and refuse a decision by the requester; this refuses the
--- rest, whoever writes (owner decision 2026-10-13: the rule holds in every environment).
+-- Hand-edited: a request is written once and decided once, by an admin. The request columns never
+-- change, and a decided row does not change at all — not its decision, not back to pending. The
+-- CHECKs tie the decision columns to the status and refuse a decision by the requester; this
+-- refuses the rest, whoever writes (owner decision 2026-10-13: the rule holds in every
+-- environment). buddha_app keeps UPDATE, so a decision written past ApprovalService must still
+-- name an account that holds the admin role as it decides: the decider's profile is read under
+-- the shared admin-roles lock (taken by the statement trigger below, before any row is locked)
+-- and FOR SHARE, so neither a grant or revoke (which hold the lock exclusively) nor a role write
+-- that skips the lock can change it before the decision commits. A null decider is left to the
+-- decision CHECK.
 CREATE FUNCTION approval_requests_keep_record() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
@@ -47,12 +53,35 @@ BEGIN
     RAISE EXCEPTION 'approval request % cannot change what was requested', OLD.id
       USING ERRCODE = 'integrity_constraint_violation';
   END IF;
+  IF NEW.status <> 'pending' AND NEW.decided_by IS NOT NULL THEN
+    PERFORM FROM "profiles" WHERE "user_id" = NEW.decided_by AND "role" = 'admin' FOR SHARE;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'approval request % must be decided by an admin, and % is not one',
+        OLD.id, NEW.decided_by
+        USING ERRCODE = 'integrity_constraint_violation';
+    END IF;
+  END IF;
   RETURN NEW;
 END;
 $$;--> statement-breakpoint
 CREATE TRIGGER approval_requests_keep_record
   BEFORE UPDATE ON "approval_requests"
   FOR EACH ROW EXECUTE FUNCTION approval_requests_keep_record();--> statement-breakpoint
+-- Hand-edited: every UPDATE of a request first takes the admin-roles lock shared — the key of
+-- lockAdminRoles in packages/db tx-helpers.ts — as ApprovalService's decision does. Taken per
+-- statement, before the UPDATE locks any row, so a direct UPDATE takes its locks in the order the
+-- service does (the role lock, then the request row) and cannot deadlock with it; and a grant or
+-- revoke in flight is waited for, so the role check above reads what it committed.
+CREATE FUNCTION approval_requests_lock_admin_roles() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  PERFORM pg_advisory_xact_lock_shared(hashtext('buddha:admin_roles'));
+  RETURN NULL;
+END;
+$$;--> statement-breakpoint
+CREATE TRIGGER approval_requests_lock_admin_roles
+  BEFORE UPDATE ON "approval_requests"
+  FOR EACH STATEMENT EXECUTE FUNCTION approval_requests_lock_admin_roles();--> statement-breakpoint
 -- Hand-edited: a request starts pending, with no decision. The CHECKs would accept a row inserted
 -- decided already (by another account, with a reason and an instant), and buddha_app may INSERT:
 -- a decision must come as the one UPDATE the trigger above allows, after the request exists.

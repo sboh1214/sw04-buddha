@@ -39,6 +39,7 @@ import {
   formatAdminGrant,
   grantSearchRows,
   revokesSelf,
+  screenAccountId,
 } from '@/lib/admin-accounts';
 import { type AdminAccount, type AdminRoleChange, type AdminUser } from '@/lib/api';
 import { formatKst } from '@/lib/datetime';
@@ -62,8 +63,9 @@ export function AdminAccounts() {
 }
 
 /**
- * A grant or a revoke waiting for its reason. Whether a revoke is of one's own role is not kept
- * here: the dialog reads it from the session when submitted (`revokesSelf`).
+ * A grant or a revoke waiting for its reason. Who is signed in is not kept here: the dialog reads
+ * it from the session when submitted (`screenAccountId`), and whether a revoke was one's own comes
+ * from its answer (`revokedOwnRole`).
  */
 interface PendingRoleChange {
   kind: 'grant' | 'revoke';
@@ -316,11 +318,16 @@ function CandidateRow({
  * The grant or the revoke, with its required reason. Pinned while the request runs, as the other
  * admin dialogs are. A refused reason goes under the field; a refusal by the rules (a missing
  * contact, fewer than two admins left, …) is explained inside the dialog, which stays; any other
- * answer is a toast that closes it (`adminRoleChangeRefusal`). A revoke of one's own role ends
- * as 로그아웃 does (`useSignOut`): the server has deleted every session of the account already, and
- * signing out drops the cookie, tells the other tabs, empties the cache and goes home. Whether it
- * is one's own is read from the session of the render the submit runs in, not kept from when the
- * dialog opened (`revokesSelf`); a revoke is not sent while that is unknown.
+ * answer is a toast that closes it (`adminRoleChangeRefusal`).
+ *
+ * Both name the admin the screen shows (`expectedAccountId`), read from the session of the render
+ * the submit runs in (`screenAccountId`) — neither is sent while it is unknown — and the server
+ * refuses them when the cookie is another account's (another tab signed in; the hook then
+ * refetches the session). A revoke that the answer says took the sender's own role
+ * (`revokedOwnRole`) ends as 로그아웃 does (`useSignOut`): the server has deleted every session of
+ * the account already, and signing out drops the cookie, tells the other tabs, empties the cache
+ * and goes home. The warning about one's own revoke follows the session (`revokesSelf`); the
+ * sign-out follows only the answer.
  */
 function RoleChangeDialog({ change, onClose }: { change: PendingRoleChange; onClose: () => void }) {
   const grant = useGrantAdmin();
@@ -339,6 +346,7 @@ function RoleChangeDialog({ change, onClose }: { change: PendingRoleChange; onCl
   });
   const loading = grant.isPending || revoke.isPending;
   const isGrant = change.kind === 'grant';
+  const accountId = screenAccountId(session);
   const self = isGrant ? false : revokesSelf(change.account.id, session);
 
   const onError = (error: unknown) => {
@@ -356,11 +364,12 @@ function RoleChangeDialog({ change, onClose }: { change: PendingRoleChange; onCl
   };
 
   const submit = handleSubmit(({ reason }) => {
+    if (accountId === undefined) return;
     setRefusal(null);
     const userId = change.account.id;
     if (isGrant) {
       grant.mutate(
-        { userId, reason },
+        { userId, reason, expectedAccountId: accountId },
         {
           onSuccess: () => {
             toaster.create({ type: 'success', title: copy.adminAccountsGrantDone });
@@ -371,12 +380,11 @@ function RoleChangeDialog({ change, onClose }: { change: PendingRoleChange; onCl
       );
       return;
     }
-    if (self === undefined) return;
     revoke.mutate(
-      { userId, reason, self },
+      { userId, reason, expectedAccountId: accountId },
       {
-        onSuccess: () => {
-          if (self) {
+        onSuccess: ({ self: revokedSelf }) => {
+          if (revokedSelf) {
             void signOut();
             return;
           }
@@ -460,7 +468,7 @@ function RoleChangeDialog({ change, onClose }: { change: PendingRoleChange; onCl
                 size="sm"
                 colorPalette={isGrant ? undefined : 'red'}
                 loading={loading}
-                disabled={self === undefined}
+                disabled={accountId === undefined}
                 onClick={() => void submit()}
                 data-testid="admin-role-submit"
               >

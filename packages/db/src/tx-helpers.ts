@@ -40,6 +40,10 @@ export async function lockMarket(tx: StatementExecutor, marketId: string): Promi
  * on a two-person request takes it `shared` (the decider's role cannot be revoked between its
  * check and the decision's commit). Transaction-scoped and waiting, like `lockMarket`; call it
  * on the transaction handle.
+ *
+ * Migration 0021's `approval_requests_lock_admin_roles` trigger takes the same key shared, as SQL
+ * (`hashtext('buddha:admin_roles')`), before every UPDATE of a two-person request: the key is
+ * spelled in both places and must not change in one only.
  */
 export async function lockAdminRoles(
   tx: StatementExecutor,

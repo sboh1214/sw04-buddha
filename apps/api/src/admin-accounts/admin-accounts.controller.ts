@@ -16,6 +16,7 @@ import {
 import { AdminGuard } from '../auth/admin.guard.js';
 import { type SessionUser } from '../auth/auth.js';
 import { CurrentUser } from '../auth/current-user.decorator.js';
+import { assertExpectedAccount } from '../auth/expected-account.js';
 import { SessionGuard } from '../auth/session.guard.js';
 import { ApiPage } from '../common/interceptors/response-envelope.interceptor.js';
 import { ApiData, ApiErrors, ApiPageOf } from '../common/openapi/api-response.decorators.js';
@@ -27,6 +28,12 @@ import { AdminAccountsService } from './admin-accounts.service.js';
  * record of both. Guards run in order: SessionGuard fills `request.auth` (401 without a session,
  * 403 for a foreign Origin on a mutation), AdminGuard reads the role (403 for a member) — the
  * records included (N04 §6: every admin may read them, owner decision 2026-10-13).
+ *
+ * A grant and a revoke name the admin the screen shows (`expectedAccountId`,
+ * assertExpectedAccount): a mismatch with the cookie is refused before anything is read or
+ * written, so a change is never recorded under an admin the user is not looking at, and the
+ * answer's actor is the account the screen sent — a revoke is the screen's own exactly when its
+ * answer's actor and target are that account.
  */
 @ApiTags('admin')
 @ApiCookieAuth(SESSION_SECURITY_SCHEME)
@@ -73,7 +80,8 @@ export class AdminAccountsController {
   })
   @ApiData(adminRoleChangeSchema, 201)
   // ROLE_CHANGE_NOT_ALLOWED: details[0].message is `already_admin`, `email_not_verified` or
-  // `contact_required` (ADMIN_GRANT_REFUSALS). FORBIDDEN: also an actor revoked meanwhile.
+  // `contact_required` (ADMIN_GRANT_REFUSALS). FORBIDDEN: also an actor revoked meanwhile, or a
+  // body whose `expectedAccountId` is not the cookie's account (details name the field).
   @ApiErrors(
     'UNAUTHENTICATED',
     'FORBIDDEN',
@@ -85,6 +93,7 @@ export class AdminAccountsController {
     @CurrentUser() admin: SessionUser,
     @Body({ schema: adminGrantBodySchema }) body: AdminGrantBody,
   ): Promise<AdminRoleChange> {
+    assertExpectedAccount(admin.id, body.expectedAccountId);
     return this.accounts.grant(admin.id, body.userId, body.reason);
   }
 
@@ -97,7 +106,8 @@ export class AdminAccountsController {
   })
   @ApiData(adminRoleChangeSchema)
   // ROLE_CHANGE_NOT_ALLOWED: details[0].message is `not_admin` or `min_admins`
-  // (ADMIN_REVOKE_REFUSALS). FORBIDDEN: also an actor revoked meanwhile.
+  // (ADMIN_REVOKE_REFUSALS). FORBIDDEN: also an actor revoked meanwhile, or a body whose
+  // `expectedAccountId` is not the cookie's account (details name the field).
   @ApiErrors(
     'UNAUTHENTICATED',
     'FORBIDDEN',
@@ -110,6 +120,7 @@ export class AdminAccountsController {
     @Param('userId', { schema: adminAccountIdSchema }) userId: string,
     @Body({ schema: adminRevokeBodySchema }) body: AdminRevokeBody,
   ): Promise<AdminRoleChange> {
+    assertExpectedAccount(admin.id, body.expectedAccountId);
     return this.accounts.revoke(admin.id, userId, body.reason);
   }
 }

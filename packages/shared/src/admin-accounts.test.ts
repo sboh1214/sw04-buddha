@@ -21,21 +21,35 @@ describe('admin accounts (#171)', () => {
     for (const type of ADMIN_ROLE_CHANGE_TYPES) expect(ADMIN_ACTION_TYPES).toContain(type);
   });
 
-  it('requires a non-blank reason within the limit, trimmed', () => {
-    expect(adminGrantBodySchema.parse({ userId: 'u1', reason: '  운영 인원  ' })).toEqual({
+  it('requires a non-blank reason within the limit, trimmed, and the account on screen', () => {
+    const me = { expectedAccountId: 'a1' };
+    expect(adminGrantBodySchema.parse({ userId: 'u1', reason: '  운영 인원  ', ...me })).toEqual({
       userId: 'u1',
       reason: '운영 인원',
+      expectedAccountId: 'a1',
     });
     for (const body of [
-      { userId: 'u1' },
-      { userId: 'u1', reason: '   ' },
-      { userId: '', reason: '사유' },
-      { userId: 'u1', reason: 'x'.repeat(ADMIN_ROLE_REASON_MAX_LENGTH + 1) },
+      { userId: 'u1', ...me },
+      { userId: 'u1', reason: '   ', ...me },
+      { userId: '', reason: '사유', ...me },
+      { userId: 'u1', reason: 'x'.repeat(ADMIN_ROLE_REASON_MAX_LENGTH + 1), ...me },
+      { userId: 'u1', reason: '사유' },
+      { userId: 'u1', reason: '사유', expectedAccountId: '' },
     ]) {
       expect(adminGrantBodySchema.safeParse(body).success).toBe(false);
     }
-    expect(adminRevokeBodySchema.safeParse({}).success).toBe(false);
-    expect(adminRevokeBodySchema.parse({ reason: ' 담당 종료 ' })).toEqual({ reason: '담당 종료' });
+    for (const body of [
+      {},
+      me,
+      { reason: '담당 종료' },
+      { reason: '담당 종료', expectedAccountId: '' },
+    ]) {
+      expect(adminRevokeBodySchema.safeParse(body).success).toBe(false);
+    }
+    expect(adminRevokeBodySchema.parse({ reason: ' 담당 종료 ', ...me })).toEqual({
+      reason: '담당 종료',
+      expectedAccountId: 'a1',
+    });
   });
 
   it('pages the history, of one account when asked', () => {

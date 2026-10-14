@@ -71,14 +71,23 @@ describe.skipIf(!hasTestInfra)('admin accounts (integration)', () => {
 
   const get = (url: string, cookie = a.cookie) =>
     t.app.inject({ method: 'GET', url, headers: { cookie } });
-  const grant = (payload: Record<string, unknown>, cookie = a.cookie) =>
-    t.app.inject({ method: 'POST', url: BASE, headers: { ...jsonHeaders, cookie }, payload });
-  const revoke = (userId: string, payload: Record<string, unknown>, cookie = a.cookie) =>
+  /**
+   * A grant or revoke by `actor` (its cookie), naming it as the account on screen
+   * (`expectedAccountId`) unless the payload names another.
+   */
+  const grant = (payload: Record<string, unknown>, actor: TestUser = a) =>
+    t.app.inject({
+      method: 'POST',
+      url: BASE,
+      headers: { ...jsonHeaders, cookie: actor.cookie },
+      payload: { expectedAccountId: actor.id, ...payload },
+    });
+  const revoke = (userId: string, payload: Record<string, unknown>, actor: TestUser = a) =>
     t.app.inject({
       method: 'POST',
       url: `${BASE}/${userId}/revoke`,
-      headers: { ...jsonHeaders, cookie },
-      payload,
+      headers: { ...jsonHeaders, cookie: actor.cookie },
+      payload: { expectedAccountId: actor.id, ...payload },
     });
   async function signIn(user: TestUser): Promise<string> {
     const res = await t.app.inject({
@@ -289,11 +298,8 @@ describe.skipIf(!hasTestInfra)('admin accounts (integration)', () => {
   });
 
   it('refuses a revoke that would leave fewer than two admins, one of its own included', async () => {
-    for (const [target, cookie] of [
-      [b.id, a.cookie],
-      [a.id, a.cookie],
-    ] as const) {
-      const res = await revoke(target, { reason: '시험' }, cookie);
+    for (const target of [b.id, a.id]) {
+      const res = await revoke(target, { reason: '시험' });
       expect(res.statusCode).toBe(409);
       expect(errorOf(res)).toMatchObject({
         code: 'ROLE_CHANGE_NOT_ALLOWED',
@@ -332,6 +338,57 @@ describe.skipIf(!hasTestInfra)('admin accounts (integration)', () => {
     expect((await revoke('no-such-user', { reason: '시험' })).statusCode).toBe(404);
     expect((await revoke(b.id, {})).statusCode).toBe(400);
     expect(await records()).toEqual([]);
+  });
+
+  it('refuses a grant or revoke whose body names another account than the cookie, writing nothing', async () => {
+    // A tab still showing one admin after another tab signed in as somebody else: the cookie is
+    // the other's, the body names the account on screen. Refused before anything is read or
+    // written (403 naming expectedAccountId), as the charge, coupon and contact bodies are.
+    const c = await candidate();
+    await grant({ userId: c.id, reason: '셋째 관리자' });
+    const d = await candidate();
+    const before = await records();
+    const sessionsBefore = await Promise.all([a, b, c].map((user) => sessionsOf(user.id)));
+    const mismatched = [
+      // A grant B's cookie would record under B while the screen shows A.
+      () => grant({ userId: d.id, reason: '시험', expectedAccountId: a.id }, b),
+      // The screen shows A revoking its own role; the cookie is B's: A would lose the role and
+      // the tab, believing it A's own revoke, would sign B out.
+      () => revoke(a.id, { reason: '시험', expectedAccountId: a.id }, b),
+      // The screen shows A revoking B; the cookie is B's: it would be B's own revoke, which the
+      // screen would take for another's and stay on a stale admin screen.
+      () => revoke(b.id, { reason: '시험', expectedAccountId: a.id }, b),
+      // Another admin's revoke under a third account's name.
+      () => revoke(c.id, { reason: '시험', expectedAccountId: d.id }, a),
+    ];
+    for (const send of mismatched) {
+      const res = await send();
+      expect(res.statusCode).toBe(403);
+      const error = errorOf(res);
+      expect(error.code).toBe('FORBIDDEN');
+      expect(error.details).toEqual([
+        { path: ['expectedAccountId'], message: 'session belongs to another account' },
+      ]);
+    }
+    // Without the field, both are malformed.
+    for (const res of [
+      await grant({ userId: d.id, reason: '시험', expectedAccountId: undefined }),
+      await revoke(c.id, { reason: '시험', expectedAccountId: undefined }),
+    ]) {
+      expect(res.statusCode).toBe(400);
+      expect(errorOf(res)).toMatchObject({
+        code: 'VALIDATION_ERROR',
+        details: [{ path: ['expectedAccountId'] }],
+      });
+    }
+    expect(await records()).toEqual(before);
+    expect([
+      await roleOf(a.id),
+      await roleOf(b.id),
+      await roleOf(c.id),
+      await roleOf(d.id),
+    ]).toEqual(['admin', 'admin', 'admin', 'user']);
+    expect(await Promise.all([a, b, c].map((user) => sessionsOf(user.id)))).toEqual(sessionsBefore);
   });
 
   it('keeps a revoked account out while the role cache still says admin', async () => {
@@ -400,7 +457,7 @@ describe.skipIf(!hasTestInfra)('admin accounts (integration)', () => {
       const revoking = revoke(c.id, { reason: '담당 종료' });
       await until(async () => (await roleOf(c.id)) === 'user', "the revoke's commit");
       // B grants C again: the latest committed change, cached after the revoke committed.
-      expect((await grant({ userId: c.id, reason: '다시 부여' }, b.cookie)).statusCode).toBe(201);
+      expect((await grant({ userId: c.id, reason: '다시 부여' }, b)).statusCode).toBe(201);
       release();
       expect((await revoking).statusCode).toBe(200);
     } finally {
@@ -538,8 +595,8 @@ describe.skipIf(!hasTestInfra)('admin accounts (integration)', () => {
     await grant({ userId: c.id, reason: '셋째 관리자' });
     // Each would leave two on its own; together they would leave one.
     const [first, second] = await Promise.all([
-      revoke(b.id, { reason: '경쟁 1' }, a.cookie),
-      revoke(c.id, { reason: '경쟁 2' }, a.cookie),
+      revoke(b.id, { reason: '경쟁 1' }, a),
+      revoke(c.id, { reason: '경쟁 2' }, a),
     ]);
     expect([first.statusCode, second.statusCode].sort()).toEqual([200, 409]);
     const admins = await t.db
@@ -607,7 +664,7 @@ describe.skipIf(!hasTestInfra)('admin accounts (integration)', () => {
     });
     const c = await candidate();
     expect((await grant({ userId: c.id, reason: '셋째 관리자' })).statusCode).toBe(201);
-    expect((await revoke(c.id, { reason: '담당 종료' }, b.cookie)).statusCode).toBe(200);
+    expect((await revoke(c.id, { reason: '담당 종료' }, b)).statusCode).toBe(200);
 
     expect(
       (await records()).map((row) => [row.type, row.targetId, row.createdAt.getTime()]),
@@ -628,7 +685,7 @@ describe.skipIf(!hasTestInfra)('admin accounts (integration)', () => {
     const c = await candidate();
     const d = await candidate();
     await grant({ userId: c.id, reason: '첫째' });
-    await grant({ userId: d.id, reason: '둘째' }, b.cookie);
+    await grant({ userId: d.id, reason: '둘째' }, b);
     await revoke(c.id, { reason: '셋째' });
     // Another kind of record never shows up here.
     await t.db.insert(schema.adminActions).values({

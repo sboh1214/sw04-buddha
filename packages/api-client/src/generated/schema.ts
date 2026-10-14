@@ -678,6 +678,7 @@ export type components = {
             user: components["schemas"]["AdminUser"];
         };
         AdminGrantBody: {
+            expectedAccountId: string;
             reason: string;
             userId: string;
         };
@@ -750,6 +751,7 @@ export type components = {
             userId: string;
         };
         AdminRevokeBody: {
+            expectedAccountId: string;
             reason: string;
         };
         AdminRoleChange: {

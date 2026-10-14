@@ -6794,11 +6794,17 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 500
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
           }
         },
         "required": [
           "userId",
-          "reason"
+          "reason",
+          "expectedAccountId"
         ]
       },
       "AdminRevokeBody": {
@@ -6808,10 +6814,16 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 500
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
           }
         },
         "required": [
-          "reason"
+          "reason",
+          "expectedAccountId"
         ]
       }
     }

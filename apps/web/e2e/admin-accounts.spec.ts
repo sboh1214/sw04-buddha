@@ -218,13 +218,17 @@ test.describe('관리자 권한 부여·회수 (#171)', () => {
     page,
     admin,
   }) => {
+    // A grant or revoke names the admin it is sent as (`expectedAccountId`), as the screen does.
+    const adminId = (await dataOf<{ id: string }>(await admin.get('/api/v1/me'))).id;
     // An interrupted run of the test above may have left its account an admin, and a third
     // admin would let the revokes below through: such leftovers go first.
     for (const leftover of (await dataOf<AdminAccount[]>(await admin.get(ADMINS))).filter(
       (account) => E2E_ACCOUNT.test(account.email),
     )) {
       await dataOf(
-        await admin.post(`${ADMINS}/${leftover.id}/revoke`, { data: { reason: 'e2e 정리' } }),
+        await admin.post(`${ADMINS}/${leftover.id}/revoke`, {
+          data: { reason: 'e2e 정리', expectedAccountId: adminId },
+        }),
       );
     }
     const admins = await dataOf<AdminAccount[]>(await admin.get(ADMINS));
@@ -290,7 +294,7 @@ test.describe('관리자 권한 부여·회수 (#171)', () => {
     const second = admins.find((account) => account.email === secondAdminAccount.email);
     if (second === undefined) throw new Error('the second seeded admin is not listed');
     const refused = await admin.post(`${ADMINS}/${second.id}/revoke`, {
-      data: { reason: 'e2e 하한 확인' },
+      data: { reason: 'e2e 하한 확인', expectedAccountId: adminId },
     });
     expect(refused.status()).toBe(409);
     const { error } = (await refused.json()) as {
@@ -320,12 +324,16 @@ test('관리자가 아닌 계정은 /admin/admins를 열 수 없고, API는 목�
   await expectError(await page.request.get(ADMINS), 403, 'FORBIDDEN');
   await expectError(await page.request.get(CHANGES), 403, 'FORBIDDEN');
   await expectError(
-    await page.request.post(ADMINS, { data: { userId: me.id, reason: 'e2e' } }),
+    await page.request.post(ADMINS, {
+      data: { userId: me.id, reason: 'e2e', expectedAccountId: me.id },
+    }),
     403,
     'FORBIDDEN',
   );
   await expectError(
-    await page.request.post(`${ADMINS}/${me.id}/revoke`, { data: { reason: 'e2e' } }),
+    await page.request.post(`${ADMINS}/${me.id}/revoke`, {
+      data: { reason: 'e2e', expectedAccountId: me.id },
+    }),
     403,
     'FORBIDDEN',
   );

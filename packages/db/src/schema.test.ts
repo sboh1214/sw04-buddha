@@ -40,6 +40,7 @@ import {
   createUser,
 } from './test/factories.js';
 import { connectTestDb, hasTestDb, type TestDb } from './test/harness.js';
+import { lockAdminRoles } from './tx-helpers.js';
 
 /**
  * Postgres SQLSTATE. drizzle-orm 0.45 wraps driver errors in DrizzleQueryError and keeps the
@@ -1149,6 +1150,100 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(await t.db.select().from(approvalRequests)).toMatchObject([
         { status: 'rejected', decidedBy: decider.id, decisionReason: '결정 사유' },
       ]);
+    });
+
+    it('refuses a decision by an account that is not an admin as it decides, whoever writes it', async () => {
+      // buddha_app keeps UPDATE: a write past ApprovalService must not make a member's (or a
+      // revoked admin's) approval look like another admin's.
+      const { user: requester } = await createUser(t.db, { role: 'admin' });
+      const { user: member } = await createUser(t.db);
+      const { user: revoked } = await createUser(t.db, { role: 'admin' });
+      await t.db.update(profiles).set({ role: 'user' }).where(eq(profiles.userId, revoked.id));
+      const row = await request(requester.id);
+      for (const decider of [member.id, revoked.id]) {
+        for (const status of ['approved', 'rejected'] as const) {
+          await expect(
+            t.db
+              .update(approvalRequests)
+              .set(decision(decider, status))
+              .where(eq(approvalRequests.id, row.id)),
+            `${decider} ${status}`,
+          ).rejects.toSatisfy(
+            (e) =>
+              sqlState(e) === '23000' && errorMessage(e).includes('must be decided by an admin'),
+          );
+        }
+      }
+      expect(await t.db.select().from(approvalRequests)).toEqual([row]);
+      // An admin's decision still goes through.
+      const { user: decider } = await createUser(t.db, { role: 'admin' });
+      await t.db
+        .update(approvalRequests)
+        .set(decision(decider.id))
+        .where(eq(approvalRequests.id, row.id));
+      expect(await t.db.select().from(approvalRequests)).toMatchObject([
+        { status: 'approved', decidedBy: decider.id },
+      ]);
+    });
+
+    it('reads the decider under the admin-roles lock, taken before the request row', async () => {
+      const { user: requester } = await createUser(t.db, { role: 'admin' });
+      const { user: decider } = await createUser(t.db, { role: 'admin' });
+      const row = await request(requester.id);
+      // A revoke of the decider in flight: it holds the admin-roles lock exclusively and has
+      // written the role, not committed yet.
+      let revoked!: () => void;
+      const revoking = new Promise<void>((resolve) => (revoked = resolve));
+      let commit!: () => void;
+      const committing = new Promise<void>((resolve) => (commit = resolve));
+      const revoke = t.db.transaction(async (tx) => {
+        await lockAdminRoles(tx, 'exclusive');
+        await tx.update(profiles).set({ role: 'user' }).where(eq(profiles.userId, decider.id));
+        revoked();
+        await committing;
+      });
+      await revoking;
+
+      let settled = false;
+      const deciding = t.db
+        .update(approvalRequests)
+        .set(decision(decider.id))
+        .where(eq(approvalRequests.id, row.id))
+        .then(
+          () => undefined,
+          (error: unknown) => error,
+        )
+        .finally(() => (settled = true));
+      try {
+        // The direct UPDATE waits on the role lock rather than reading the role the revoke has
+        // not committed yet…
+        let waiting = false;
+        for (let attempt = 0; attempt < 250 && !waiting && !settled; attempt++) {
+          const { rows } = await t.db.execute<{ waiting: number }>(sql`
+            SELECT count(*)::int AS waiting FROM pg_stat_activity
+            WHERE datname = current_database() AND pid <> pg_backend_pid()
+              AND wait_event_type = 'Lock' AND wait_event = 'advisory'
+              AND query ILIKE '%approval_requests%'`);
+          waiting = (rows[0]?.waiting ?? 0) > 0;
+          if (!waiting) await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        expect(waiting).toBe(true);
+        // …and holds no lock on the request row meanwhile: the lock comes first, as in
+        // ApprovalService, so a decision through the service is not blocked behind it.
+        await t.db.transaction(async (tx) => {
+          await tx.execute(
+            sql`SELECT id FROM approval_requests WHERE id = ${row.id} FOR UPDATE NOWAIT`,
+          );
+        });
+      } finally {
+        commit();
+        await revoke;
+      }
+      // Once the revoke commits, the decider is a member and the decision is refused.
+      const error = await deciding;
+      expect(sqlState(error)).toBe('23000');
+      expect(errorMessage(error)).toContain('must be decided by an admin');
+      expect(await t.db.select().from(approvalRequests)).toEqual([row]);
     });
 
     it('cannot DELETE a request', async () => {

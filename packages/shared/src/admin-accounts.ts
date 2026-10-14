@@ -72,19 +72,37 @@ export const adminAccountSchema = z
   .meta({ id: 'AdminAccount' });
 export type AdminAccount = z.infer<typeof adminAccountSchema>;
 
+/**
+ * The signed-in admin the screen is showing (better-auth `user.id`), on both bodies as on the
+ * charge, coupon, contact and password bodies. The cookie decides who acts, and a tab whose
+ * session was switched elsewhere (another tab signed in as somebody else; sign-ins are not
+ * broadcast) keeps showing the old account until it refetches. The server refuses a mismatch
+ * (403 FORBIDDEN naming the field) before anything is read or written: a change is recorded
+ * under the admin the user is looking at, and a revoke is one's own exactly when its answer says
+ * so (`actor.id` = `target.id` = this id) — the screen signs out on that answer, never on what
+ * it believed when sending.
+ */
+const expectedAccountIdSchema = z.string().min(1).max(255);
+
 /** `POST /admin/admins`: the account to make an admin and why (required). */
 export const adminGrantBodySchema = z
   .object({
     /** As `GET /admin/users` lists it. */
     userId: adminAccountIdSchema,
     reason: adminRoleReasonSchema,
+    /** The signed-in admin the screen is showing. */
+    expectedAccountId: expectedAccountIdSchema,
   })
   .meta({ id: 'AdminGrantBody' });
 export type AdminGrantBody = z.infer<typeof adminGrantBodySchema>;
 
 /** `POST /admin/admins/:userId/revoke`: why (required). */
 export const adminRevokeBodySchema = z
-  .object({ reason: adminRoleReasonSchema })
+  .object({
+    reason: adminRoleReasonSchema,
+    /** The signed-in admin the screen is showing. */
+    expectedAccountId: expectedAccountIdSchema,
+  })
   .meta({ id: 'AdminRevokeBody' });
 export type AdminRevokeBody = z.infer<typeof adminRevokeBodySchema>;
 

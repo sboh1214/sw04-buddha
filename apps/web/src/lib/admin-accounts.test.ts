@@ -18,10 +18,12 @@ import {
   formatAdminGrant,
   grantSearchRows,
   isAdminRoleChangeRefusal,
+  revokedOwnRole,
   revokesSelf,
+  screenAccountId,
   type GrantCandidatePage,
 } from './admin-accounts';
-import { ApiError, type AdminUser } from './api';
+import { ApiError, type AdminRoleChange, type AdminUser } from './api';
 import { formatKst } from './datetime';
 
 const apiError = (status: number, code: string, details?: unknown) =>
@@ -115,6 +117,14 @@ describe('refusals', () => {
       toast: copy.adminOnly,
       keepDialog: false,
     });
+    // Another tab signed in as somebody else: the server did nothing, and says the account changed.
+    expect(
+      adminRoleChangeRefusal(
+        apiError(403, 'FORBIDDEN', [
+          { path: ['expectedAccountId'], message: 'session belongs to another account' },
+        ]),
+      ),
+    ).toEqual({ toast: copy.sessionChanged, keepDialog: false });
     expect(
       adminRoleChangeRefusal(
         apiError(400, 'VALIDATION_ERROR', [{ path: ['userId'], message: 'x' }]),
@@ -243,5 +253,39 @@ describe('a revoke of my own role', () => {
   it("is mine for the signed-in account and another admin's otherwise, once the session is in", () => {
     expect(revokesSelf('me', { isPending: false, data: me })).toBe(true);
     expect(revokesSelf('other', { isPending: false, data: me })).toBe(false);
+  });
+
+  it('names the signed-in account as the one on screen, once the session is in', () => {
+    expect(screenAccountId({ isPending: true, data: me })).toBeUndefined();
+    expect(screenAccountId({ isPending: false, data: null })).toBeUndefined();
+    expect(screenAccountId({ isPending: false, data: me })).toBe('me');
+  });
+});
+
+describe('a revoke that took my own role', () => {
+  const answer = (
+    actor: string,
+    target: string,
+    type: AdminRoleChange['type'] = 'admin_revoke',
+  ): Pick<AdminRoleChange, 'type' | 'actor' | 'target'> => ({
+    type,
+    actor: { id: actor, nickname: actor },
+    target: { id: target, email: null, nickname: target },
+  });
+
+  it('is decided by the answer: its actor and target are the account the request named', () => {
+    expect(revokedOwnRole(answer('me', 'me'), 'me')).toBe(true);
+    // Another admin's role: no sign-out, however the screen saw it when sending.
+    expect(revokedOwnRole(answer('me', 'other'), 'me')).toBe(false);
+  });
+
+  it('never signs out on an answer about another account', () => {
+    // The tab believed it was `me`; the cookie was `other`'s, which revoked its own role. The
+    // server refuses this (expectedAccountId), and the screen would not sign out on it either:
+    // signing out would end `other`'s session from a tab showing `me`.
+    expect(revokedOwnRole(answer('other', 'other'), 'me')).toBe(false);
+    expect(revokedOwnRole(answer('other', 'me'), 'me')).toBe(false);
+    // A grant is never a revoke of one's own role.
+    expect(revokedOwnRole(answer('me', 'me', 'admin_grant'), 'me')).toBe(false);
   });
 });
