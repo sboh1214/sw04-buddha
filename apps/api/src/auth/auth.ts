@@ -14,11 +14,7 @@ import { type Env, enabledOAuthProviders, webOrigins } from '../config/env.js';
 import { type Mailer } from '../mail/mailer.js';
 import { authRateLimitFor, type AuthRateLimiter } from '../rate-limit/auth-rate-limit.js';
 import { emailTracker } from '../rate-limit/email-tracker.js';
-import {
-  changeEmailConfirmationEmail,
-  passwordResetEmail,
-  verificationEmail,
-} from '../mail/templates.js';
+import { type EmailContent, MAIL_TEMPLATES } from '../mail/templates.js';
 
 /** Injection token for the better-auth instance (see auth.module.ts). */
 export const AUTH = Symbol('AUTH');
@@ -201,7 +197,8 @@ export function createAuth({
     /* replaced below */
   };
 
-  async function send(to: string, content: { subject: string; text: string; html?: string }) {
+  /** Mails a registered template (MAIL_TEMPLATES) to `to`. */
+  async function send(to: string, content: EmailContent) {
     // Synthetic Kakao/Naver addresses cannot receive mail (and would bounce at SES).
     if (isNoEmailAddress(to)) return;
     try {
@@ -258,7 +255,7 @@ export function createAuth({
       requireEmailVerification: true,
       revokeSessionsOnPasswordReset: true,
       sendResetPassword: async ({ user, url }) => {
-        await send(user.email, passwordResetEmail({ url }));
+        await send(user.email, MAIL_TEMPLATES.passwordReset({ url }));
       },
       /**
        * Registering an address that already has an UNVERIFIED account just mails the link
@@ -282,7 +279,7 @@ export function createAuth({
       // report a send failure (ADR-0023).
       autoSignInAfterVerification: true,
       sendVerificationEmail: async ({ user, url }) => {
-        await send(user.email, verificationEmail({ url }));
+        await send(user.email, MAIL_TEMPLATES.verification({ url }));
       },
     },
 
@@ -351,7 +348,7 @@ export function createAuth({
         // the account asking as well as `newEmail` (CHANGE_EMAIL_ACCOUNT_BUCKET).
         updateEmailWithoutVerification: false,
         sendChangeEmailConfirmation: async ({ user, newEmail, url }) => {
-          await send(user.email, changeEmailConfirmationEmail({ url, newEmail }));
+          await send(user.email, MAIL_TEMPLATES.changeEmailConfirmation({ url, newEmail }));
         },
       },
     },

@@ -10,9 +10,6 @@ import {
   verifyLinkErrorCode,
 } from './lib/auth-client';
 
-// D21 (ADR-0047, docs/TERMS.md): gambling vocabulary must never appear in user-facing copy.
-const FORBIDDEN_WORDS = ['베팅', '배당', '배당률', '승률', '판돈', '당첨'];
-
 describe('copy', () => {
   it('has the wallet notice: no cash exchange or withdrawal, and nothing about charging', () => {
     // N01 §2 in the plan's own words ('제공하지 않는다'); paid Coin is closed (ADR-0049).
@@ -26,14 +23,6 @@ describe('copy', () => {
 
   it('promises no refund for a voided market (N03 §6: a void is not a cost refund, #125)', () => {
     expect(copy.marketVoidedNotice).not.toContain('환불');
-  });
-
-  it('contains no forbidden gambling vocabulary', () => {
-    for (const text of Object.values(copy)) {
-      for (const word of FORBIDDEN_WORDS) {
-        expect(text).not.toContain(word);
-      }
-    }
   });
 
   it('has no empty strings (every key renders something)', () => {

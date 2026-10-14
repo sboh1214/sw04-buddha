@@ -14,8 +14,8 @@ import { markets } from './markets.js';
  * a market stays `resolved` is readable without the worker's logs; the per-minute scan retries
  * it with no cap. `last_error` is kept after a later success.
  *
- * `step` and `status` are varchar validated by zod (the `market_events.type` convention), so #29
- * appends the `score` step without an enum migration. Not append-only: the worker updates rows.
+ * `step` and `status` are varchar validated by zod (the `market_events.type` convention), so a
+ * step added later needs no enum migration. Not append-only: the worker updates rows.
  * No row for a voided market or one never judged.
  */
 export const marketSettlementSteps = pgTable(

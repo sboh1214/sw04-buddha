@@ -1,4 +1,4 @@
-import { PAYMENT_REFUND_WINDOW_DAYS } from '@buddha/shared';
+import { PAYMENT_REFUND_WINDOW_DAYS, findExcludedText } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
 import {
@@ -23,9 +23,6 @@ import { PRIVACY } from './privacy';
 import { REFUND } from './refund';
 import { TERMS } from './terms';
 import { UnknownTemplateKeyError, fillTemplate, templateKeys } from './template';
-
-// PLAN Appendix A, the same list copy.test.ts enforces on `copy`.
-const FORBIDDEN_WORDS = ['베팅', '배당', '배당률', '승률', '판돈', '당첨'];
 
 const DOCUMENTS: [string, LegalDocument][] = [
   ['terms', TERMS],
@@ -145,10 +142,11 @@ describe.each(DOCUMENTS)('legal document: %s', (name, doc) => {
     }
   });
 
-  it('has no empty strings and no gambling vocabulary (PLAN Appendix A)', () => {
+  it('has no empty strings and no gambling vocabulary (D21)', () => {
+    // Only the gambling words until #137 revises the bodies (excluded-features.test.ts).
     for (const text of resolved) {
       expect(text.trim(), name).not.toBe('');
-      for (const word of FORBIDDEN_WORDS) expect(text, name).not.toContain(word);
+      expect(findExcludedText(text, { features: ['gambling'] }), `${name}: ${text}`).toEqual([]);
     }
   });
 

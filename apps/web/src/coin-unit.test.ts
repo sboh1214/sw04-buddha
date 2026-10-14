@@ -1,17 +1,17 @@
-import { readFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import { copy } from './copy';
+import { LEGAL_BODIES, SRC, literalsOf, screenSources } from './test/screen-text';
 
 /**
  * The old currency unit must not come back into screen text (#13, ADR-0051). Amounts read
  * '12,345 Coin' (`formatCoin`), labels say '코인' or 'Coin', and the unit 'P' and the word '포인트'
  * are gone from everything a page renders: the copy, and every string literal, template literal
- * and JSX text under `src/`. Two kinds of file are left out on purpose: the legal bodies
- * (`LEGAL_BODIES`), which keep their wording until their own revision (#137), and test files,
- * which are not screen text.
+ * and JSX text under `src/` (test/screen-text.ts reads them). Two kinds of file are left out on
+ * purpose: the legal bodies (`LEGAL_BODIES`), which keep their wording until their own revision
+ * (#137), and tests and their support, which are not screen text.
  *
  * The old unit is
  * - an amount followed by P — '100P', '1,000,000P', '1 P', and `${amount}P` in a template or
@@ -37,84 +37,6 @@ const OLD_UNIT: readonly RegExp[] = [
 
 function hasOldUnit(text: string): boolean {
   return OLD_UNIT.some((pattern) => pattern.test(text));
-}
-
-/** The screen text a source file can render, one entry per literal, with its line. */
-interface Literal {
-  line: number;
-  text: string;
-}
-
-/** An interpolated value, read as a number: `${amount}P` must look like '0P'. */
-const VALUE = '0';
-
-function literalsOf(fileName: string, source: string): Literal[] {
-  const file = ts.createSourceFile(
-    fileName,
-    source,
-    ts.ScriptTarget.Latest,
-    true,
-    fileName.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
-  );
-  const found: Literal[] = [];
-  const add = (node: ts.Node, text: string) => {
-    const { line } = file.getLineAndCharacterOfPosition(node.getStart(file));
-    found.push({ line: line + 1, text });
-  };
-  const visit = (node: ts.Node): void => {
-    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
-      add(node, node.text);
-    } else if (ts.isTemplateExpression(node)) {
-      add(node, node.head.text + node.templateSpans.map((s) => VALUE + s.literal.text).join(''));
-    } else if (ts.isJsxElement(node) || ts.isJsxFragment(node)) {
-      // The children as they render side by side; a nested element breaks the run.
-      const run = node.children
-        .map((child) =>
-          ts.isJsxText(child)
-            ? child.text
-            : ts.isJsxExpression(child)
-              ? child.expression === undefined
-                ? ''
-                : VALUE
-              : '\n',
-        )
-        .join('')
-        .replace(/[ \t]*\n[ \t\n]*/g, '\n');
-      for (const piece of run.split('\n')) {
-        if (piece.trim() !== '') add(node, piece.trim());
-      }
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(file);
-  return found;
-}
-
-const SRC = path.dirname(fileURLToPath(import.meta.url));
-
-/**
- * The legal bodies (#137): 이용약관, 개인정보처리방침, 환불정책 and the no-cash sentence the first and
- * the last quote. The rest of `legal/` — the business details the footer renders, the document
- * view and its helpers — is screen code like any other and is read.
- */
-const LEGAL_BODIES: readonly string[] = [
-  'terms.ts',
-  'privacy.ts',
-  'refund.ts',
-  'cash-notice.ts',
-].map((name) => path.join(SRC, 'legal', name));
-
-/** Every .ts/.tsx under src/ that can render text: not a legal body (#137), not a test. */
-function screenSources(dir: string): string[] {
-  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) return screenSources(full);
-    const screen =
-      /\.tsx?$/.test(entry.name) &&
-      !/\.(test|d)\.tsx?$/.test(entry.name) &&
-      !LEGAL_BODIES.includes(full);
-    return screen ? [full] : [];
-  });
 }
 
 describe('the old currency unit (#13)', () => {
@@ -183,6 +105,40 @@ describe('the old currency unit (#13)', () => {
       '// 100P in a comment is not screen text',
     ].join('\n');
     expect(literalsOf('clean.tsx', clean).filter(({ text }) => hasOldUnit(text))).toEqual([]);
+  });
+
+  it('reads JavaScript screen sources too, JSX included (Next takes .js and .jsx pages)', () => {
+    expect(
+      literalsOf('page.jsx', 'export default function Page() { return <p>{amount}P</p>; }')
+        .filter(({ text }) => hasOldUnit(text))
+        .map(({ text }) => text),
+    ).toEqual(['0P']);
+    expect(literalsOf('format.cjs', "exports.unit = '1,000P';").map(({ text }) => text)).toEqual([
+      '1,000P',
+    ]);
+    const dir = mkdtempSync(path.join(tmpdir(), 'screen-sources-'));
+    try {
+      for (const name of [
+        'page.jsx',
+        'card.js',
+        'format.mjs',
+        'legacy.cjs',
+        'view.tsx',
+        'helpers.ts',
+        'page.test.jsx',
+        'types.d.ts',
+        'notes.md',
+      ]) {
+        writeFileSync(path.join(dir, name), '');
+      }
+      expect(
+        screenSources(dir)
+          .map((file) => path.basename(file))
+          .sort(),
+      ).toEqual(['card.js', 'format.mjs', 'helpers.ts', 'legacy.cjs', 'page.jsx', 'view.tsx']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('is not in any copy value', () => {

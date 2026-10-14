@@ -1,6 +1,11 @@
-import { MARKET_SLUG_PATTERN, SUBCATEGORY_SLUGS } from '@buddha/shared';
+import {
+  type ExcludedTextHit,
+  MARKET_SLUG_PATTERN,
+  SUBCATEGORY_SLUGS,
+  findExcludedText,
+} from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
-import { SEED_MARKETS, SEED_RULE_NO_DELAY_NO } from './seed-markets.js';
+import { SEED_MARKETS, SEED_RULE_NO_DELAY_NO, type SeedMarket } from './seed-markets.js';
 
 /**
  * The phrasings the seed rules used before #125 to turn a late or missing publication into a
@@ -39,5 +44,110 @@ describe('seed market copy (#125)', () => {
     for (const { slug, rules } of SEED_MARKETS) {
       expect(rules.replace(SEED_RULE_NO_DELAY_NO, ''), slug).toMatch(/NO(입니다|로 판정합니다)/);
     }
+  });
+});
+
+/** The seed's text a market's screen shows: the card and the detail with its 규칙 and 출처. */
+const SCREEN_FIELDS = ['title', 'description', 'rules', 'resolutionSource'] as const;
+type ScreenField = (typeof SCREEN_FIELDS)[number];
+
+const KRW_USD = 'krw-usd-yearend-2026-above-1400';
+
+/**
+ * The won amounts a question is about, each for the one market and field that states it: the
+ * KRW/USD close is that market's subject, not a price for Coin, which is what paid purchase's
+ * won-price word looks for (N06: no price table). A won amount anywhere else fails.
+ */
+const WON_AMOUNTS: readonly { slug: string; field: ScreenField; amount: string }[] = [
+  { slug: KRW_USD, field: 'title', amount: '1,400원' },
+  { slug: KRW_USD, field: 'rules', amount: '1,400.0원' },
+  { slug: KRW_USD, field: 'rules', amount: '1,399.9원' },
+];
+
+type ScreenCopy = Pick<SeedMarket, 'slug' | ScreenField>;
+
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** Where a market's field states one of its listed won amounts, as [start, end). */
+function wonAmountSpans(market: ScreenCopy, field: ScreenField): [number, number][] {
+  return WON_AMOUNTS.filter((entry) => entry.slug === market.slug && entry.field === field).flatMap(
+    ({ amount }) =>
+      [
+        ...market[field].matchAll(
+          // The whole amount: not the tail of '11,400원'.
+          new RegExp(`(?<![\\d.,])${escapeRegExp(amount)}`, 'g'),
+        ),
+      ].map((m): [number, number] => [m.index, m.index + m[0].length]),
+  );
+}
+
+/** What a market's field names of the excluded features, past its listed won amounts. */
+function excludedIn(market: ScreenCopy, field: ScreenField): ExcludedTextHit[] {
+  const spans = wonAmountSpans(market, field);
+  return findExcludedText(market[field]).filter(
+    (hit) =>
+      !(
+        hit.feature === 'paid-purchase' &&
+        spans.some(([start, end]) => start <= hit.index && hit.index + hit.match.length <= end)
+      ),
+  );
+}
+
+describe('seed market copy and the excluded features (#113)', () => {
+  // ADR-0052 left this check to #113: the seed's text is screen text once a market opens.
+  it('names nothing the plan leaves out', () => {
+    const hits = SEED_MARKETS.flatMap((market) =>
+      SCREEN_FIELDS.flatMap((field) =>
+        excludedIn(market, field).map(
+          (hit) => `${market.slug} ${field}: ${hit.feature} '${hit.match}'`,
+        ),
+      ),
+    );
+    expect(hits).toEqual([]);
+  });
+
+  it('needs every listed won amount: each still clears a hit where it is listed', () => {
+    for (const entry of WON_AMOUNTS) {
+      const market = SEED_MARKETS.find((m) => m.slug === entry.slug);
+      expect(market, entry.slug).toBeDefined();
+      const spans = wonAmountSpans(market!, entry.field).filter(
+        ([start, end]) => market![entry.field].slice(start, end) === entry.amount,
+      );
+      expect(spans.length, `${entry.slug} ${entry.field} ${entry.amount}`).toBeGreaterThan(0);
+      const cleared = findExcludedText(market![entry.field]).filter((hit) =>
+        spans.some(([start, end]) => start <= hit.index && hit.index + hit.match.length <= end),
+      );
+      expect(cleared.map((hit) => hit.feature)).toContain('paid-purchase');
+    }
+  });
+
+  it('lets the listed won amounts through, and no other won amount or paid-purchase word', () => {
+    const krwUsd = SEED_MARKETS.find((market) => market.slug === KRW_USD)!;
+    const other = SEED_MARKETS.find((market) => market.slug !== KRW_USD)!;
+    const matches = (market: ScreenCopy, field: ScreenField) =>
+      excludedIn(market, field).map((hit) => hit.match);
+    // A Coin price, in another market or in the KRW/USD market's other fields.
+    expect(matches({ ...other, description: 'Coin 가격은 1,000원입니다.' }, 'description')).toEqual(
+      ['0원'],
+    );
+    expect(
+      matches({ ...krwUsd, description: 'Coin 가격은 1,000원입니다.' }, 'description'),
+    ).toEqual(['0원']);
+    // The listed amount does not travel to another market or field.
+    expect(matches({ ...other, title: krwUsd.title }, 'title')).toEqual(['0원']);
+    expect(matches({ ...krwUsd, resolutionSource: krwUsd.title }, 'resolutionSource')).toEqual([
+      '0원',
+    ]);
+    // In its own field, only the listed amount: a second amount there fails, and so do the
+    // paid-purchase words and the won sign.
+    expect(
+      matches(
+        { ...krwUsd, title: `${krwUsd.title} Coin은 1,000원에 충전합니다. ₩100 할인` },
+        'title',
+      ),
+    ).toEqual(['충전', '할인', '0원', '₩']);
+    expect(matches({ ...krwUsd, title: '환율 종가가 11,400원 이상일까?' }, 'title')).toEqual([
+      '0원',
+    ]);
   });
 });

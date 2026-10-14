@@ -49,7 +49,16 @@ export function createMailer(options: MailerOptions): Mailer {
   });
   return {
     async send(message) {
-      await transporter.sendMail({ from: options.from, ...message });
+      // Each key of the MailMessage by name, and nothing of the transport's own: what reaches
+      // SMTP is what a template built and where it goes, never another key a caller's object
+      // carries (attachments, amp, headers). templates.test.ts holds this file to it (#113).
+      await transporter.sendMail({
+        from: options.from,
+        to: message.to,
+        subject: message.subject,
+        text: message.text,
+        html: message.html,
+      });
     },
     async verify() {
       await transporter.verify();
