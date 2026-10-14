@@ -1,7 +1,7 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { OUTCOMES, ORDER_SIDES } from '../enums.js';
-import { type LadderSettings, type QuoteLadder, quoteLadder } from './ladder.js';
+import { type LadderSettings, type QuoteLadder, type QuoteLevel, quoteLadder } from './ladder.js';
 import {
   type BotBook,
   type BotOrder,
@@ -22,7 +22,7 @@ import {
   riskStage,
   worstLoss,
 } from './risk.js';
-import { PROPOSED_CONTRACT_TERMS } from './terms.js';
+import { type ContractTerms, PROPOSED_CONTRACT_TERMS } from './terms.js';
 
 // New checks of the new rules (N01 §10, ADR-0058): nothing from the direct-AMM era is reused.
 const RUNS = { numRuns: 400 };
@@ -76,6 +76,26 @@ const limitsArb: fc.Arbitrary<RiskLimits> = fc
     haltAtBp: Math.max(a, b),
     reduceRatioBp,
   }));
+/**
+ * Terms on which every order of `orderArb` (prices 1–99) is valid: payout 100 or 200, tick 1,
+ * any VOID split. The payouts per result are what a wrong mapping would get wrong.
+ */
+const termsArb: fc.Arbitrary<ContractTerms> = fc
+  .record({
+    payout: fc.constantFrom(100, 200),
+    voidYes: fc.double({ min: 0, max: 1, noNaN: true }),
+  })
+  .map(({ payout, voidYes }) => {
+    const voidPayoutYesCoin = Math.round(voidYes * payout);
+    return {
+      payoutCoin: payout,
+      tickCoin: 1,
+      priceMinCoin: 1,
+      priceMaxCoin: payout - 1,
+      voidPayoutYesCoin,
+      voidPayoutNoCoin: payout - voidPayoutYesCoin,
+    };
+  });
 const ladderSettingsArb: fc.Arbitrary<LadderSettings> = fc.record({
   b: fc.double({ min: 2, max: 500, noNaN: true }),
   safetyTicks: fc.integer({ min: 0, max: 2 }),
@@ -143,6 +163,29 @@ describe('result PnL and worst loss (N01 §7)', () => {
     });
   });
 
+  it('pays each result by its own payout, VOID included (N03 §6, #173)', () => {
+    const voidSplit: ContractTerms = { ...T, voidPayoutYesCoin: 30, voidPayoutNoCoin: 70 };
+    // 10 YES pay 300 on VOID: 9,600 + 300 − 10,000.
+    expect(resultPnl(book({ coin: 9_600n, yesQty: 10 }), voidSplit)).toEqual({
+      YES: 600n,
+      NO: -400n,
+      VOID: -100n,
+    });
+    fc.assert(
+      fc.property(bookArb, termsArb, (s, terms) => {
+        const base = s.coin + s.recovered - s.invested;
+        const yes = BigInt(s.yesQty);
+        const no = BigInt(s.noQty);
+        expect(resultPnl(s, terms)).toEqual({
+          YES: base + yes * BigInt(terms.payoutCoin),
+          NO: base + no * BigInt(terms.payoutCoin),
+          VOID: base + yes * BigInt(terms.voidPayoutYesCoin) + no * BigInt(terms.voidPayoutNoCoin),
+        });
+      }),
+      RUNS,
+    );
+  });
+
   it('moves each result by the order at its own price', () => {
     expect(orderPnlDelta(buy('YES', 40, 2), T)).toEqual({ YES: 120n, NO: -80n, VOID: 20n });
     expect(orderPnlDelta(buy('NO', 70, 1), T)).toEqual({ YES: -70n, NO: 30n, VOID: -20n });
@@ -169,7 +212,8 @@ describe('reservedPnl (결정 1의 9)', () => {
         fc.array(fc.tuple(orderArb, fc.double({ min: 0, max: 1, noNaN: true })), {
           maxLength: 8,
         }),
-        (state, picks) => {
+        termsArb,
+        (state, picks, T) => {
           const orders = picks.map(([o]) => o);
           const floor = reservedPnl(state, orders, T);
           // Any partial fills (sells may exceed holdings here: PnL is linear either way).
@@ -207,6 +251,22 @@ describe('riskStage and botRisk (결정 1의 8·12)', () => {
     expect(riskStage(899n, LIMITS)).toBe('reduce');
     expect(riskStage(900n, LIMITS)).toBe('halt');
     expect(riskStage(5_000n, LIMITS)).toBe('halt');
+  });
+
+  it('follows whatever thresholds the release settings give', () => {
+    const other = { ...LIMITS, reduceAtBp: 5_000, haltAtBp: 6_000 };
+    expect(riskStage(499n, other)).toBe('normal');
+    expect(riskStage(500n, other)).toBe('reduce');
+    expect(riskStage(600n, other)).toBe('halt');
+    fc.assert(
+      fc.property(fc.bigInt({ min: 0n, max: 100_000n }), limitsArb, (loss, l) => {
+        const at = (bp: number) => loss * 10_000n >= BigInt(bp) * l.maxLoss;
+        expect(riskStage(loss, l)).toBe(
+          at(l.haltAtBp) ? 'halt' : at(l.reduceAtBp) ? 'reduce' : 'normal',
+        );
+      }),
+      RUNS,
+    );
   });
 
   it('reports holdings and reserved figures, and ignores orders for the stage', () => {
@@ -259,7 +319,32 @@ describe('checkBotOrder (N01 §7: 새 주문의 자산·한도 검사)', () => {
     const lowered = { ...LIMITS, maxLoss: 300n }; // NO is at −400
     // Buying NO gains on NO; on YES it ends at 600 − 50·5 = 350, within L.
     expect(checkBotOrder(held, [], buy('NO', 50, 5), lowered, T)).toBe('ok');
+    // One NO bid leaves NO at −400 (still past L): it does not lower NO, but does not add to it.
+    expect(checkBotOrder(held, [], buy('NO', 50, 1), lowered, T)).toBe('ok');
     expect(checkBotOrder(held, [], buy('YES', 1, 1), lowered, T)).toBe('loss_limit');
+  });
+
+  it('accepts every order the assets cover that keeps each result within L or no worse', () => {
+    fc.assert(
+      fc.property(
+        bookArb,
+        fc.array(buyArb, { maxLength: 6 }),
+        buyArb,
+        limitsArb,
+        termsArb,
+        (s, live, o, l, T) => {
+          const locked = live.reduce((sum, x) => sum + BigInt(x.priceCoin * x.qty), 0n);
+          fc.pre(BigInt(o.priceCoin * o.qty) <= s.coin - locked);
+          const before = reservedPnl(s, live, T);
+          const delta = orderPnlDelta(o, T);
+          const fits = RESULT_SCENARIOS.every(
+            (r) => delta[r] >= 0n || before[r] + delta[r] >= -l.maxLoss,
+          );
+          expect(checkBotOrder(s, live, o, l, T)).toBe(fits ? 'ok' : 'loss_limit');
+        },
+      ),
+      RUNS,
+    );
   });
 
   it('never lets reserved losses end past L or grow past it', () => {
@@ -269,7 +354,8 @@ describe('checkBotOrder (N01 §7: 새 주문의 자산·한도 검사)', () => {
         fc.array(buyArb, { maxLength: 6 }),
         orderArb,
         limitsArb,
-        (s, live, o, l) => {
+        termsArb,
+        (s, live, o, l, T) => {
           if (checkBotOrder(s, live, o, l, T) !== 'ok') return;
           expectWithinOrNoWorse(
             reservedPnl(s, [...live, o], T),
@@ -302,6 +388,31 @@ describe('maxBotFillQty (결정 1의 13)', () => {
     expect(maxBotFillQty(held, [], buy('NO', 50, 5), 5, { ...LIMITS, maxLoss: 300n }, T)).toBe(5);
   });
 
+  it('cuts fills that start near the limit exactly where a result would pass it', () => {
+    fc.assert(
+      fc.property(
+        bookArb,
+        fc.array(buyArb, { maxLength: 4 }),
+        buyArb,
+        fc.integer({ min: 0, max: 300 }),
+        termsArb,
+        (s, others, o, extra, T) => {
+          const base = reservedPnl(s, others, T);
+          // L just above the worst reserved loss without the order: the order rarely fits whole.
+          const l = { ...LIMITS, maxLoss: worstLoss(base) + BigInt(extra) + 1n };
+          const step = orderPnlDelta({ ...o, qty: 1 }, T);
+          const expected = RESULT_SCENARIOS.reduce((n, r) => {
+            if (step[r] >= 0n) return n;
+            const room = base[r] + l.maxLoss;
+            return Math.min(n, room <= 0n ? 0 : Number(room / -step[r]));
+          }, o.qty);
+          expect(maxBotFillQty(s, others, o, o.qty, l, T)).toBe(expected);
+        },
+      ),
+      RUNS,
+    );
+  });
+
   it('is the largest fill that, with the remainder cancelled, keeps every result in bounds', () => {
     fc.assert(
       fc.property(
@@ -310,7 +421,8 @@ describe('maxBotFillQty (결정 1의 13)', () => {
         orderArb,
         fc.integer({ min: 0, max: 60 }),
         limitsArb,
-        (s, others, o, requested, l) => {
+        termsArb,
+        (s, others, o, requested, l, T) => {
           const n = maxBotFillQty(s, others, o, requested, l, T);
           expect(n).toBeGreaterThanOrEqual(0);
           expect(n).toBeLessThanOrEqual(Math.min(requested, o.qty));
@@ -338,14 +450,34 @@ describe('maxBotFillQty (결정 1의 13)', () => {
   });
 });
 
-describe('planBotQuotes (결정 1의 6·7·10·11)', () => {
+describe('planBotQuotes (결정 1의 6·7·10·11, 결정 2)', () => {
   const settings: LadderSettings = { b: 20, safetyTicks: 0, levels: 20, quantity: 20 };
-  const ladderAt = (state: BotBook) => quoteLadder(state.noQty - state.yesQty, settings, T);
+  const ladderAt = (state: BotBook, over: Partial<LadderSettings> = {}) =>
+    quoteLadder(state.noQty - state.yesQty, { ...settings, ...over }, T);
+  const unitsOf = (levels: readonly QuoteLevel[]) =>
+    levels.flatMap((l) => Array<number>(l.qty).fill(l.priceCoin));
+  const spent = (levels: readonly QuoteLevel[]) =>
+    levels.reduce((s, l) => s + l.priceCoin * l.qty, 0);
+  /** Each contract kept, filled in order from `state`, does not raise the worst loss. */
+  const expectEachLowers = (state: BotBook, outcome: 'YES' | 'NO', kept: readonly QuoteLevel[]) => {
+    let at = state;
+    for (const price of unitsOf(kept)) {
+      const next = fill(at, buy(outcome, price, 1), 1);
+      expect(worstLoss(resultPnl(next, T)) <= worstLoss(resultPnl(at, T))).toBe(true);
+      at = next;
+    }
+  };
 
   it('keeps the whole ladder when the bot is well within L and Coin', () => {
     const ladder = ladderAt(book());
     const plan = planBotQuotes(ladder, book(), [], 20, { ...LIMITS, maxLoss: 10_000n }, T);
-    expect(plan).toEqual({ stage: 'normal', yesBids: ladder.yesBids, noBids: ladder.noBids });
+    expect(plan).toEqual({
+      stage: 'normal',
+      overLimit: false,
+      first: 'yesBids',
+      yesBids: ladder.yesBids,
+      noBids: ladder.noBids,
+    });
   });
 
   it('stops each direction where L would be passed, the far contracts first', () => {
@@ -355,40 +487,58 @@ describe('planBotQuotes (결정 1의 6·7·10·11)', () => {
     expect(total(plan.yesBids)).toBeLessThan(total(ladder.yesBids));
     expect(total(plan.noBids)).toBeLessThan(total(ladder.noBids));
     expect(worstLoss(reservedPnl(book(), asOrders(plan), T))).toBeLessThanOrEqual(300n);
-    const paid = plan.yesBids.reduce((s, l) => s + l.priceCoin * l.qty, 0);
-    const next = ladder.yesBids.flatMap((l) => Array<number>(l.qty).fill(l.priceCoin))[
-      total(plan.yesBids)
-    ]!;
-    expect(paid + next).toBeGreaterThan(300);
+    const next = unitsOf(ladder.yesBids)[total(plan.yesBids)]!;
+    expect(spent(plan.yesBids) + next).toBeGreaterThan(300);
     expect(plan.yesBids[0]?.priceCoin).toBe(ladder.yesBids[0]?.priceCoin);
   });
 
-  it('spends short Coin on the risk-lowering direction first', () => {
+  it('spends short Coin on the risk-lowering direction first: NO bids for a bot long YES', () => {
     // Long 30 YES (bought at 50): NO is the worst result, so NO bids lower the risk.
     const state = book({ coin: 300n, yesQty: 30, invested: 1_800n });
     const ladder = ladderAt(state);
     const plan = planBotQuotes(ladder, state, [], 20, { ...LIMITS, maxLoss: 10_000n }, T);
-    // The NO bids took the Coin until the next one did not fit; the YES bids got the rest.
-    const noUnits = ladder.noBids.flatMap((l) => Array<number>(l.qty).fill(l.priceCoin));
+    expect(plan.first).toBe('noBids');
+    const noUnits = unitsOf(ladder.noBids);
     const kept = total(plan.noBids);
-    const noSpent = noUnits.slice(0, kept).reduce((s, p) => s + p, 0);
     expect(kept).toBeGreaterThan(0);
     expect(kept).toBeLessThan(noUnits.length);
-    expect(noSpent + noUnits[kept]!).toBeGreaterThan(300);
-    const yesSpent = plan.yesBids.reduce((s, l) => s + l.priceCoin * l.qty, 0);
-    expect(yesSpent).toBeLessThanOrEqual(300 - noSpent);
+    expect(spent(plan.noBids) + noUnits[kept]!).toBeGreaterThan(300);
+    expect(spent(plan.yesBids)).toBeLessThanOrEqual(300 - spent(plan.noBids));
   });
 
-  it('halves the risk-raising contracts at reduce and drops them at halt', () => {
-    // Long 15 YES bought at 52 (worst NO −780 of L 1,000 → 78%, reduce).
+  it('and YES bids for a bot long NO, down to the last Coin', () => {
+    // Long 30 NO: YES is the worst result (−1,500), so YES bids lower the risk.
+    const state = book({ coin: 300n, noQty: 30, invested: 1_800n });
+    const ladder = ladderAt(state);
+    const plan = planBotQuotes(ladder, state, [], 20, { ...LIMITS, maxLoss: 10_000n }, T);
+    expect(plan.first).toBe('yesBids');
+    const yesUnits = unitsOf(ladder.yesBids);
+    const kept = total(plan.yesBids);
+    expect(kept).toBeGreaterThan(0);
+    expect(spent(plan.yesBids) + yesUnits[kept]!).toBeGreaterThan(300);
+    expect(spent(plan.noBids)).toBeLessThanOrEqual(300 - spent(plan.yesBids));
+    // A contract priced at exactly the Coin left is still affordable.
+    const exact = book({ coin: BigInt(yesUnits[0]! + yesUnits[1]!), noQty: 30, invested: 1_800n });
+    const tight = planBotQuotes(ladderAt(exact), exact, [], 20, { ...LIMITS, maxLoss: 10_000n }, T);
+    expect(unitsOf(tight.yesBids)).toEqual(yesUnits.slice(0, 2));
+    expect(tight.noBids).toEqual([]);
+  });
+
+  it('cuts the risk-raising contracts to 기본 물량 × ratio at reduce and to none at halt', () => {
+    // Long 15 YES bought at 52: worst NO −780 of L 1,000 → 78%, reduce.
     const reduce = book({ coin: 9_220n, yesQty: 15 });
     expect(botRisk(reduce, [], LIMITS, T).stage).toBe('reduce');
     const ladder = ladderAt(reduce);
-    const plan = planBotQuotes(ladder, reduce, [], 20, { ...LIMITS, maxLoss: 1_000n }, T);
-    // YES bids only add to the NO loss: at most 20 × 50% = 10, and L caps them further.
-    expect(total(plan.yesBids)).toBeLessThanOrEqual(10);
-    // NO bids first unwind the YES (lowering the risk), then may add 10 risk-raising ones.
-    expect(total(plan.noBids)).toBeGreaterThan(10);
+    const plan = (reduceRatioBp: number) =>
+      planBotQuotes(ladder, reduce, [], 20, { ...LIMITS, reduceRatioBp }, T);
+    // YES bids only add to the NO loss: the ratio caps them (at 50% L caps them first, at 8).
+    expect(total(plan(5_000).yesBids)).toBe(8);
+    expect(total(plan(2_500).yesBids)).toBe(5);
+    expect(total(plan(0).yesBids)).toBe(0);
+    // NO bids first unwind the YES (15 lower the risk), then add up to 20 × ratio raising ones.
+    expect(total(plan(0).noBids)).toBe(15);
+    expect(total(plan(5_000).noBids)).toBe(20);
+    expectEachLowers(reduce, 'NO', plan(0).noBids);
 
     // Long 19 YES at 50 (−950 → 95%, halt): only risk-lowering NO bids.
     const halt = book({ coin: 9_050n, yesQty: 19 });
@@ -396,18 +546,136 @@ describe('planBotQuotes (결정 1의 6·7·10·11)', () => {
     expect(halted.stage).toBe('halt');
     expect(halted.yesBids).toEqual([]);
     expect(total(halted.noBids)).toBeGreaterThan(0);
-    expect(total(halted.noBids)).toBeLessThanOrEqual(19);
+    expectEachLowers(halt, 'NO', halted.noBids);
   });
 
-  it('posts fewer contracts while cancels are pending, and counts their risk and Coin', () => {
+  it('counts pending risk-raising cancels against the reduce budget', () => {
+    // Long 150 YES bought at 52: −7,800 of L 10,000 → 78%, reduce; L leaves room for many more.
+    const state = book({ coin: 92_200n, yesQty: 150, invested: 100_000n });
+    const ladder = quoteLadder(-150, { ...settings, b: 200 }, T);
+    const wide = { ...LIMITS, maxLoss: 10_000n };
+    expect(total(planBotQuotes(ladder, state, [], 20, wide, T).yesBids)).toBe(10);
+    // Four pending YES bids at 40 fill ahead and each raises the NO loss: 10 − 4 new ones.
+    const pending = [buy('YES', 40, 4)];
+    expect(total(planBotQuotes(ladder, state, pending, 20, wide, T).yesBids)).toBe(6);
+  });
+
+  it('treats a contract that leaves the worst loss where it is as not raising it', () => {
+    // In profit on every result (+500) with both thresholds at 0%: halt from the start. YES bids
+    // keep the worst loss at 0 until the NO result goes below zero.
+    const profit = book({ coin: 10_500n });
+    const halted = { ...LIMITS, reduceAtBp: 0, haltAtBp: 0 };
+    const plan = planBotQuotes(ladderAt(profit), profit, [], 20, halted, T);
+    expect(plan.stage).toBe('halt');
+    expect(spent(plan.yesBids)).toBeLessThanOrEqual(500);
+    expect(
+      spent(plan.yesBids) + unitsOf(ladderAt(profit).yesBids)[total(plan.yesBids)]!,
+    ).toBeGreaterThan(500);
+  });
+
+  it('lets a bot past a lowered L unwind (결정 2)', () => {
+    const held = book({ coin: 9_600n, yesQty: 10 }); // NO −400, L lowered to 300
+    const plan = planBotQuotes(ladderAt(held), held, [], 20, { ...LIMITS, maxLoss: 300n }, T);
+    expect(plan.overLimit).toBe(true);
+    expect(plan.yesBids).toEqual([]);
+    expect(total(plan.noBids)).toBeGreaterThan(0);
+    expectEachLowers(held, 'NO', plan.noBids);
+  });
+
+  it('plans only risk-lowering quotes while a reserved loss is past L, whatever the stage', () => {
+    // Pending YES bids reserve −500 on NO; L lowered to 300. Holdings are balanced: 0%, normal.
+    const pending = [buy('YES', 50, 10)];
+    const past = planBotQuotes(
+      ladderAt(book()),
+      book(),
+      pending,
+      20,
+      { ...LIMITS, maxLoss: 300n },
+      T,
+    );
+    expect([past.stage, past.overLimit]).toEqual(['normal', true]);
+    // From balance every contract raises the worst loss, so nothing goes out.
+    expect([past.yesBids, past.noBids]).toEqual([[], []]);
+    const within = planBotQuotes(ladderAt(book()), book(), pending, 20, LIMITS, T);
+    expect(within.overLimit).toBe(false);
+    expect(total(within.noBids)).toBeGreaterThan(0);
+
+    // Long 2 YES (NO −100, 10%): NO bids lower the risk and still go out, YES bids do not.
+    const long = book({ coin: 9_900n, yesQty: 2 });
+    const unwind = planBotQuotes(
+      ladderAt(long),
+      long,
+      [buy('YES', 50, 5)],
+      20,
+      {
+        ...LIMITS,
+        maxLoss: 300n,
+      },
+      T,
+    );
+    expect([unwind.stage, unwind.overLimit]).toEqual(['normal', true]);
+    expect(unwind.yesBids).toEqual([]);
+    expect(total(unwind.noBids)).toBeGreaterThan(0);
+    expectEachLowers(long, 'NO', unwind.noBids);
+  });
+
+  it('puts pending cancels on the path by price and posts that many fewer contracts', () => {
     const ladder = ladderAt(book());
-    const pending = [buy('YES', 10, 15)];
-    const plan = planBotQuotes(ladder, book(), pending, 20, { ...LIMITS, maxLoss: 10_000n }, T);
-    expect(total(plan.yesBids)).toBe(5);
-    expect(plan.noBids).toEqual(ladder.noBids);
+    const units = unitsOf(ladder.yesBids);
+    const wide = { ...LIMITS, maxLoss: 10_000n };
+    // Below the ladder: they fill last, and the new contracts are the ladder's first five.
+    const low = planBotQuotes(ladder, book(), [buy('YES', 10, 15)], 20, wide, T);
+    expect(unitsOf(low.yesBids)).toEqual(units.slice(0, 5));
+    expect(low.noBids).toEqual(ladder.noBids);
+    // Above it: they fill first, so the new contracts take the curve from the fourth on.
+    const high = planBotQuotes(ladder, book(), [buy('YES', 60, 3)], 20, wide, T);
+    expect(unitsOf(high.yesBids)).toEqual(units.slice(3, 20));
   });
 
-  it('keeps every planned set within L, the Coin, the quantity and the ladder', () => {
+  it('stands a pending sell where the matching bid would, a tie going to the older order', () => {
+    // Selling YES at x supplies YES buyers like a NO bid at 100 − x does: same direction.
+    const state = book({ coin: 9_850n, yesQty: 3 });
+    const ladder = ladderAt(state);
+    const curve = unitsOf(ladder.noBids);
+    const sell: BotOrder = { outcome: 'YES', side: 'sell', priceCoin: 100 - curve[1]!, qty: 3 };
+    const plan = planBotQuotes(ladder, state, [sell], 20, { ...LIMITS, maxLoss: 10_000n }, T);
+    expect(unitsOf(plan.noBids)).toEqual([curve[0], ...curve.slice(4, 20)]);
+  });
+
+  it('adds nothing at halt while pending cancels already unwind the risk', () => {
+    // Halt (95%): the plan is 19 risk-lowering NO bids. With the safety raised every price
+    // changes, so all 19 are pending a cancel; past them the curve only raises the risk again.
+    const halt = book({ coin: 9_050n, yesQty: 19 });
+    const wide = { quantity: 40, levels: 40 };
+    const first = planBotQuotes(ladderAt(halt, wide), halt, [], 40, LIMITS, T);
+    expect(total(first.noBids)).toBe(19);
+    const pending = asOrders(first);
+    const again = planBotQuotes(
+      ladderAt(halt, { ...wide, safetyTicks: 3 }),
+      halt,
+      pending,
+      40,
+      LIMITS,
+      T,
+    );
+    expect(again.noBids).toEqual([]);
+  });
+
+  it('keeps every plan within L, the Coin, 기본 물량, the curve and the stage', () => {
+    /** Pending and new contracts of one outcome in the order they fill: price, then age. */
+    const pathOf = (
+      outcome: 'YES' | 'NO',
+      pending: readonly BotOrder[],
+      kept: readonly QuoteLevel[],
+    ) =>
+      [
+        ...pending
+          .filter((o) => o.outcome === outcome)
+          .flatMap((o) =>
+            Array.from({ length: o.qty }, () => ({ price: o.priceCoin, isNew: false })),
+          ),
+        ...unitsOf(kept).map((price) => ({ price, isNew: true })),
+      ].sort((a, b) => b.price - a.price || Number(a.isNew) - Number(b.isNew));
     fc.assert(
       fc.property(
         bookArb,
@@ -417,44 +685,48 @@ describe('planBotQuotes (결정 1의 6·7·10·11)', () => {
         (s, pending, ls, l) => {
           const ladder = quoteLadder(s.noQty - s.yesQty, ls, T);
           const plan = planBotQuotes(ladder, s, pending, ls.quantity, l, T);
+          const before = reservedPnl(s, pending, T);
           expect(plan.stage).toBe(botRisk(s, pending, l, T).stage);
+          expect(plan.overLimit).toBe(worstLoss(before) > l.maxLoss);
           // Within L, or no result worse than the pending orders alone left it.
           expectWithinOrNoWorse(
             reservedPnl(s, [...pending, ...asOrders(plan)], T),
-            reservedPnl(s, pending, T),
+            before,
             l.maxLoss,
           );
           // Within the Coin the pending orders leave free.
           const locked = pending.reduce((sum, o) => sum + BigInt(o.priceCoin * o.qty), 0n);
-          const spent = asOrders(plan).reduce((sum, o) => sum + BigInt(o.priceCoin * o.qty), 0n);
-          if (spent > 0n) expect(spent <= s.coin - locked).toBe(true);
+          const newCoin = BigInt(spent(plan.yesBids) + spent(plan.noBids));
+          if (newCoin > 0n) expect(newCoin <= s.coin - locked).toBe(true);
+          const budget =
+            plan.overLimit || plan.stage === 'halt'
+              ? 0
+              : plan.stage === 'reduce'
+                ? Math.floor((ls.quantity * l.reduceRatioBp) / 10_000)
+                : Infinity;
           for (const [side, outcome] of [
             ['yesBids', 'YES'],
             ['noBids', 'NO'],
           ] as const) {
-            const pendingHere = pending
-              .filter((o) => o.outcome === outcome)
-              .reduce((n, o) => n + o.qty, 0);
-            expect(total(plan[side])).toBeLessThanOrEqual(Math.max(0, ls.quantity - pendingHere));
-            // A prefix of the ladder: same prices from the top, the last level maybe shorter.
-            plan[side].forEach((level, i) => {
-              expect(level.priceCoin).toBe(ladder[side][i]!.priceCoin);
-              expect(level.qty).toBeLessThanOrEqual(ladder[side][i]!.qty);
-              if (i < plan[side].length - 1) expect(level.qty).toBe(ladder[side][i]!.qty);
-            });
-            if (plan.stage === 'halt') {
-              // Every contract kept lowers the worst loss on holdings, one after another.
-              let state = s;
-              for (const level of plan[side]) {
-                for (let k = 0; k < level.qty; k++) {
-                  const next = fill(state, buy(outcome, level.priceCoin, 1), 1);
-                  expect(worstLoss(resultPnl(next, T)) <= worstLoss(resultPnl(state, T))).toBe(
-                    true,
-                  );
-                  state = next;
-                }
+            const path = pathOf(outcome, pending, plan[side]);
+            const kept = total(plan[side]);
+            if (kept > 0) expect(path.length).toBeLessThanOrEqual(ls.quantity);
+            const curve = unitsOf(ladder[side]);
+            // PnL along the path (pending orders may lock more Coin than the book has here).
+            let pnl = resultPnl(s, T);
+            let raised = 0;
+            path.forEach((unit, position) => {
+              const d = orderPnlDelta(buy(outcome, unit.price, 1), T);
+              const next = { YES: pnl.YES + d.YES, NO: pnl.NO + d.NO, VOID: pnl.VOID + d.VOID };
+              const raises = worstLoss(next) > worstLoss(pnl);
+              if (unit.isNew) {
+                // Priced at the curve position it fills at, pending cancels ahead included.
+                expect(unit.price).toBe(curve[position]);
+                if (raises) expect(raised).toBeLessThan(budget);
               }
-            }
+              if (raises) raised += 1;
+              pnl = next;
+            });
           }
         },
       ),
@@ -473,6 +745,8 @@ describe('one-way buying against the bot (N01 §10 일방향 연속 매수)', ()
       const ladder = quoteLadder(state.noQty - state.yesQty, settings, T);
       const plan = planBotQuotes(ladder, state, [], settings.quantity, LIMITS, T);
       stages.push(plan.stage);
+      // Every NO bid here raises the loss on YES, so at reduce at most 10 × 50% go out.
+      if (plan.stage === 'reduce') expect(total(plan.noBids)).toBeLessThanOrEqual(5);
       // A YES buyer takes every NO bid (D17): the bot buys NO, the YES price goes up.
       const best = plan.noBids[0];
       if (best === undefined) break;
@@ -498,6 +772,7 @@ describe('reconcileBotQuotes (#128 줄이거나 취소할 봇 대기 주문)', (
 
   it('keeps matching orders in time priority, trims the excess and places what is missing', () => {
     const plan = {
+      first: 'yesBids' as const,
       yesBids: [
         { priceCoin: 48, qty: 3 },
         { priceCoin: 46, qty: 2 },
@@ -519,6 +794,11 @@ describe('reconcileBotQuotes (#128 줄이거나 취소할 봇 대기 주문)', (
       ],
       place: [buy('YES', 46, 2), buy('NO', 50, 3)],
     });
+    // The direction that got the Coin first is placed first (결정 1의 6).
+    expect(reconcileBotQuotes({ ...plan, first: 'noBids' }, orders).place).toEqual([
+      buy('NO', 50, 3),
+      buy('YES', 46, 2),
+    ]);
   });
 
   it('leaves exactly the plan once applied', () => {
@@ -531,6 +811,7 @@ describe('reconcileBotQuotes (#128 줄이거나 취소할 봇 대기 주문)', (
         (yesLevels, orders) => {
           const prices = [...new Set(yesLevels.map(([p]) => p))].sort((a, b) => b - a);
           const plan = {
+            first: 'yesBids' as const,
             yesBids: prices.map((p) => ({
               priceCoin: p,
               qty: yesLevels.find(([q]) => q === p)![1],

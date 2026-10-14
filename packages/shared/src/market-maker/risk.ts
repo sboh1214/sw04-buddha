@@ -307,21 +307,33 @@ export function maxBotFillQty(
   return fill;
 }
 
-/** The ladder trimmed to the stage, L and the Coin (결정 1의 6·11, ADR-0058). */
+/** The two directions of supply: `yesBids` push the YES price down, `noBids` push it up. */
+export type QuoteDirection = 'yesBids' | 'noBids';
+
+/** The ladder trimmed to the stage, L and the Coin (결정 1의 6·11, 결정 2, ADR-0058). */
 export interface PlannedQuotes {
   readonly stage: RiskStage;
+  /**
+   * Some result's reserved loss — holdings and pending cancels — is past L. Then only quotes
+   * that do not raise the worst loss on holdings are planned, whatever the stage (결정 2).
+   */
+  readonly overLimit: boolean;
+  /** The direction the Coin went to first; its orders are placed first (결정 1의 6). */
+  readonly first: QuoteDirection;
   readonly yesBids: readonly QuoteLevel[];
   readonly noBids: readonly QuoteLevel[];
 }
 
-type Direction = 'yesBids' | 'noBids';
-const DIRECTION_OUTCOME: Readonly<Record<Direction, Outcome>> = { yesBids: 'YES', noBids: 'NO' };
+const DIRECTION_OUTCOME: Readonly<Record<QuoteDirection, Outcome>> = {
+  yesBids: 'YES',
+  noBids: 'NO',
+};
 
 /**
  * The direction an order adds supply to: buying YES and selling NO push the YES price down
  * (`yesBids`), buying NO and selling YES push it up (`noBids`).
  */
-function directionOf(order: BotOrder): Direction {
+function directionOf(order: BotOrder): QuoteDirection {
   return (order.outcome === 'YES') === (order.side === 'buy') ? 'yesBids' : 'noBids';
 }
 
@@ -338,23 +350,55 @@ function levelsOf(prices: readonly number[]): QuoteLevel[] {
   return levels;
 }
 
+/** One contract on a direction's fill path: the bid it stands at and what filling it does. */
+interface PathUnit {
+  readonly bidCoin: number;
+  readonly delta: ByResult<bigint>;
+}
+
 /**
- * Trims a quote ladder (#127) to what the bot may post (#128):
+ * Pending cancels as contracts on their direction's path, in the order they would fill: higher
+ * bids first, input (time) order on a tie. A sell stands where a bid of P − price would.
+ */
+function pendingPath(
+  direction: QuoteDirection,
+  pendingCancelOrders: readonly BotOrder[],
+  terms: ContractTerms,
+): PathUnit[] {
+  return pendingCancelOrders
+    .filter((order) => directionOf(order) === direction)
+    .flatMap((order) => {
+      const unit: PathUnit = {
+        bidCoin: order.side === 'buy' ? order.priceCoin : terms.payoutCoin - order.priceCoin,
+        delta: orderPnlDelta({ ...order, qty: 1 }, terms),
+      };
+      return Array.from({ length: order.qty }, () => unit);
+    })
+    .sort((a, b) => b.bidCoin - a.bidCoin);
+}
+
+/**
+ * Trims a quote ladder (#127) to what the bot may post (#128). Each direction is walked along the
+ * path its contracts would fill in, best price first:
  *
- * - Pending cancels stay live (결정 1의 7): their contracts, Coin and reserved loss count, and
- *   each direction posts that many fewer contracts.
- * - A contract raises the risk when filling it after the ones before it in its direction would
- *   raise the worst loss on holdings (결정 1의 10). At `reduce` a direction posts at most
- *   기본 물량 × ratio such contracts, at `halt` none; contracts that lower the risk stay, within
- *   L (결정 1의 11).
- * - Every contract kept is reserved; one that would take a result's reserved loss past L is not
- *   posted (결정 1의 10, 결정 2).
+ * - Pending cancels stay live (결정 1의 7). They take their place on the path by price (ahead of
+ *   a new contract at the same price, being older), count toward 기본 물량 — so the direction
+ *   posts that many fewer — and their Coin and reserved loss are spent.
+ * - A new contract is priced at the curve position it would actually fill at: the n-th contract
+ *   on the path, pending ones included, takes the ladder's n-th price. So pending cancels ahead
+ *   of it push it down the curve and the bot never bids above the curve for its new orders.
+ * - A contract raises the risk when filling it after everything ahead on the path would raise
+ *   the worst loss on holdings (결정 1의 10). At `reduce` the path holds at most
+ *   기본 물량 × ratio such contracts, pending ones counted; at `halt`, or while some result's
+ *   reserved loss is past L (결정 2), no new one. Contracts that lower the risk stay (결정 1의 11).
+ * - Every new contract is reserved; one that would take a result's reserved loss past L — or
+ *   further past a lowered L — is not posted (결정 1의 10, 결정 2).
  * - The Coin goes first to the direction whose best contract lowers the worst loss (or raises it
  *   least; YES on a tie), best price first, so the far levels go first (결정 1의 6).
  *
- * A direction ends at the first contract it may not post. The live orders that are not pending
- * a cancel are what this replaces: `reconcileBotQuotes` sets them against the plan. Each order
- * the bot then places still passes `checkBotOrder` against everything live at that moment.
+ * A direction ends at the first new contract it may not post. The live orders not pending a
+ * cancel are what this replaces: `reconcileBotQuotes` sets them against the plan, and each order
+ * the bot places still passes `checkBotOrder` against everything live at that moment.
  */
 export function planBotQuotes(
   ladder: QuoteLadder,
@@ -366,57 +410,69 @@ export function planBotQuotes(
 ): PlannedQuotes {
   assertWhole('quantity', quantity, 1);
   const risk = botRisk(book, pendingCancelOrders, limits, terms);
+  const overLimit = RESULT_SCENARIOS.some((result) => risk.reservedPnl[result] < -limits.maxLoss);
+  // 결정 1의 11: 기본 물량 × the ratio at `reduce`, none at `halt`; 결정 2: none past L.
+  const raiseBudget = overLimit
+    ? 0
+    : {
+        normal: quantity,
+        reduce: Math.floor((quantity * limits.reduceRatioBp) / Number(BP)),
+        halt: 0,
+      }[risk.stage];
   let reserved = risk.reservedPnl;
   let freeCoin =
     book.coin -
     pendingCancelOrders
       .filter((o) => o.side === 'buy')
       .reduce((sum, o) => sum + BigInt(o.priceCoin) * BigInt(o.qty), 0n);
-  const pending = (direction: Direction) =>
-    pendingCancelOrders
-      .filter((o) => directionOf(o) === direction)
-      .reduce((sum, o) => sum + o.qty, 0);
-  // 결정 1의 11: 기본 물량 × the ratio at `reduce`, none at `halt`.
-  const raiseBudget = {
-    normal: quantity,
-    reduce: Math.floor((quantity * limits.reduceRatioBp) / Number(BP)),
-    halt: 0,
-  }[risk.stage];
 
-  const unitDelta = (direction: Direction, priceCoin: number) =>
+  const unitDelta = (direction: QuoteDirection, priceCoin: number) =>
     orderPnlDelta({ outcome: DIRECTION_OUTCOME[direction], side: 'buy', priceCoin, qty: 1 }, terms);
   /** How much the first contract of a direction moves the worst loss on holdings. */
-  const firstRise = (direction: Direction): bigint => {
+  const firstRise = (direction: QuoteDirection): bigint => {
     const first = ladder[direction][0];
     if (first === undefined) return 0n;
     return worstLoss(add(risk.pnl, unitDelta(direction, first.priceCoin))) - risk.worstLoss;
   };
-  const order: Direction[] =
+  const order: QuoteDirection[] =
     firstRise('noBids') < firstRise('yesBids') ? ['noBids', 'yesBids'] : ['yesBids', 'noBids'];
 
-  const planned: Record<Direction, number[]> = { yesBids: [], noBids: [] };
+  const planned: Record<QuoteDirection, number[]> = { yesBids: [], noBids: [] };
   for (const direction of order) {
-    const cap = Math.max(0, quantity - pending(direction));
-    const raiseCap = Math.max(0, raiseBudget - pending(direction));
+    const curve = unitsOf(ladder[direction]);
+    const waiting = pendingPath(direction, pendingCancelOrders, terms);
     let pnl = risk.pnl;
     let raised = 0;
-    for (const priceCoin of unitsOf(ladder[direction])) {
-      if (planned[direction].length >= cap) break;
+    let next = 0; // the next pending contract on the path
+    for (let position = 0; ; position++) {
+      const priceCoin = curve[position];
+      const ahead = waiting[next];
+      if (ahead !== undefined && (priceCoin === undefined || ahead.bidCoin >= priceCoin)) {
+        const after = add(pnl, ahead.delta);
+        if (worstLoss(after) > worstLoss(pnl)) raised += 1;
+        pnl = after;
+        next += 1;
+        continue;
+      }
+      // Every pending contract counts toward 기본 물량, wherever it stands on the path.
+      if (priceCoin === undefined || planned[direction].length + waiting.length >= quantity) break;
       const delta = unitDelta(direction, priceCoin);
-      const next = add(pnl, delta);
-      const raises = worstLoss(next) > worstLoss(pnl);
-      if (raises && raised >= raiseCap) break;
+      const after = add(pnl, delta);
+      const raises = worstLoss(after) > worstLoss(pnl);
+      if (raises && raised >= raiseBudget) break;
       if (!withinLimit(reserved, delta, limits.maxLoss)) break;
       if (BigInt(priceCoin) > freeCoin) break;
       planned[direction].push(priceCoin);
       if (raises) raised += 1;
-      pnl = next;
+      pnl = after;
       reserved = add(reserved, adverse(delta));
       freeCoin -= BigInt(priceCoin);
     }
   }
   return {
     stage: risk.stage,
+    overLimit,
+    first: order[0]!,
     yesBids: levelsOf(planned.yesBids),
     noBids: levelsOf(planned.noBids),
   };
@@ -433,16 +489,22 @@ export interface BotQuoteChanges {
  * The orders that do not fit a plan (#128 "줄이거나 취소할 봇 대기 주문") and the ones to add.
  * `liveOrders` are the bot's orders not pending a cancel, in time priority: at a planned price
  * the earlier ones are kept first, the excess is cancelled from the later ones, and what the
- * plan still lacks is placed. Orders at other prices and any sell order are cancelled. #129
- * does the cancelling (#178) and the placing.
+ * plan still lacks is placed. Orders at other prices and any sell order are cancelled.
+ *
+ * `place` lists the plan's first direction first, best price first in each, which is the order
+ * the plan gave the Coin out in (결정 1의 6). #129 cancels (#178), then places in that order. A
+ * placement that `checkBotOrder` refuses — the Coin of a cancel not yet done is still locked —
+ * ends its direction there, so no farther level goes in ahead of a nearer one.
  */
 export function reconcileBotQuotes(
-  plan: Pick<PlannedQuotes, 'yesBids' | 'noBids'>,
+  plan: Pick<PlannedQuotes, 'first' | 'yesBids' | 'noBids'>,
   liveOrders: readonly LiveBotOrder[],
 ): BotQuoteChanges {
   const cancel: { id: string; qty: number }[] = [];
   const place: BotOrder[] = [];
-  for (const direction of ['yesBids', 'noBids'] as const) {
+  const directions: QuoteDirection[] =
+    plan.first === 'noBids' ? ['noBids', 'yesBids'] : ['yesBids', 'noBids'];
+  for (const direction of directions) {
     const outcome = DIRECTION_OUTCOME[direction];
     const wanted = new Map(plan[direction].map((level) => [level.priceCoin, level.qty]));
     for (const order of liveOrders) {
