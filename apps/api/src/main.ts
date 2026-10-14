@@ -38,10 +38,7 @@ async function bootstrap(): Promise<void> {
       genReqId: () => randomUUID(),
     }),
     // Keep Nest from registering @fastify/formbody; better-auth (M1) installs
-    // the parsers it needs. Fastify's built-in JSON parser is unaffected. The raw bytes the
-    // SmartroPay callbacks read (`request.rawBody`) come from those parsers too
-    // (auth.module.ts `bodyParser.rawBody`), which is why Nest's own `rawBody` option is not
-    // set here: with `bodyParser: false` it does nothing. test/app.ts boots the same way.
+    // the parsers it needs. Fastify's built-in JSON parser is unaffected.
     //
     // The logger is passed HERE rather than through a later `app.useLogger`: everything Nest
     // says while it builds the container — the route map, a provider that failed to resolve —

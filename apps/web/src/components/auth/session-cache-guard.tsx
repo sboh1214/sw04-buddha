@@ -20,64 +20,6 @@ export function sessionIdentityChanged(
 }
 
 /**
- * The account this tab's caches currently belong to, readable OUTSIDE React — `undefined`
- * until better-auth has answered once.
- *
- * A module-scoped value rather than a hook, because the readers that need it most are the ones
- * React has stopped talking to. An in-flight mutation keeps running after the component that
- * started it unmounts, and react-query only pushes fresh options into a pending mutation from
- * an effect, so a callback that closes over `useSession()`'s answer keeps naming the account
- * that started the work however long the tab has since belonged to somebody else (the payment
- * window's `openWindow`, app/wallet/charge-form.tsx, which reads it through `reservationToOpen`
- * once a prepare answers, so a late answer never opens a window on another account's wallet —
- * the reader). The query cache cannot stand in for it either: the
- * account is knowable there only while `['me']` holds an answer, and `resetQueries` below is
- * precisely what empties it.
- *
- * The guard is the right publisher because it is mounted for the life of the tab, above every
- * screen (components/ui/provider.tsx), and it already computes this exact value to decide
- * whether to reset. Module state is per tab in the browser, which is the scope wanted. It also
- * evaluates during SSR of client components, where the value stays `undefined` for good: it is
- * only ever written from an effect, and effects do not run on the server — so one request can
- * never read another's account.
- */
-let cacheOwner: SessionIdentity | undefined = undefined;
-
-export function rememberCacheOwner(identity: SessionIdentity): void {
-  cacheOwner = identity;
-}
-
-export function cacheOwnerAccount(): SessionIdentity | undefined {
-  return cacheOwner;
-}
-
-/**
- * The two steps a settled session answer takes, in the one order that is safe.
- *
- * Exported because both are decisions, and this app runs vitest under `environment: 'node'`
- * where an effect body is unreachable — the same rule that keeps every seed and join in `lib/`.
- * Left inline, either could be undone by moving one line and the suite would stay green.
- *
- * PUBLISH FIRST. `resetQueries` blanks `['me']` on its way past, so an owner read after it could
- * only come from a cache that no longer names anybody. That is exactly the window
- * `reservationToOpen` (lib/smartro-checkout.ts) has to refuse in: B's `['me']` has not answered
- * yet, and A's still-running prepare would otherwise open A's payment window on B's wallet.
- *
- * PUBLISH ALWAYS, the first answer a tab ever sees included — that one resets nothing, but it is
- * the only answer most tabs get. Published only on a CHANGE, `cacheOwnerAccount()` would stay
- * `undefined` for the whole life of a tab that never switched accounts, and the gate would fall
- * back to the cached `Me` it cannot trust.
- */
-export function claimCacheOwnership(
-  previous: SessionIdentity | undefined,
-  current: SessionIdentity,
-  resetCaches: () => void,
-): void {
-  rememberCacheOwner(current);
-  if (sessionIdentityChanged(previous, current)) resetCaches();
-}
-
-/**
  * Empties the query cache whenever the account behind the session changes.
  *
  * The browser QueryClient lives as long as the tab (lib/query-client.ts) and no key carries a
@@ -119,7 +61,7 @@ export function SessionCacheGuard() {
     if (identity === undefined) return;
     const previous = seen.current;
     seen.current = identity;
-    claimCacheOwnership(previous, identity, () => void queryClient.resetQueries());
+    if (sessionIdentityChanged(previous, identity)) void queryClient.resetQueries();
   }, [identity, queryClient]);
 
   return null;

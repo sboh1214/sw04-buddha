@@ -394,12 +394,12 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     );
   });
 
-  describe('SmartroPay (migrations 0014, 0015)', () => {
+  describe('PG payment columns and events (migrations 0014, 0015)', () => {
     const payment = (userId: string, overrides: Partial<typeof payments.$inferInsert> = {}) => ({
       userId,
       amountP: 10_000n,
       priceKrw: 9_700,
-      provider: 'smartro',
+      provider: 'mock',
       idempotencyKey: `key-${randomUUID()}`,
       ...overrides,
     });
@@ -430,8 +430,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       // Pending rows have no reference yet: the index is partial, so they never collide.
       await t.db.insert(payments).values([payment(u.id), payment(u.id)]);
       await t.db.insert(payments).values(payment(u.id, { providerRef: 'T0001' }));
-      // The same Tid under another provider is another transaction.
-      await t.db.insert(payments).values(payment(u.id, { provider: 'mock', providerRef: 'T0001' }));
+      // The same id under another provider is another transaction.
+      await t.db.insert(payments).values(payment(u.id, { provider: 'acme', providerRef: 'T0001' }));
       await expect(
         t.db.insert(payments).values(payment(u.id, { providerRef: 'T0001' })),
       ).rejects.toSatisfy(
@@ -569,7 +569,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
           userId: u.id,
           amountP: 10_000n,
           priceKrw: 9_700,
-          provider: 'smartro',
+          provider: 'mock',
           idempotencyKey: 'append-only',
         })
         .returning();

@@ -28,7 +28,9 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
   let member: TestUser;
 
   beforeAll(async () => {
-    t = await createTestApp();
+    // `chargeMember` funds the member through the charge: preserved code, closed in production
+    // while paid Coin is off (ADR-0049), open for this app.
+    t = await createTestApp({ paidCoinSales: true });
   });
   afterAll(async () => {
     await t?.close(); // undefined when beforeAll timed out waiting for the file lock

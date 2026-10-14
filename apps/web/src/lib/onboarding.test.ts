@@ -1,3 +1,4 @@
+import { PAID_COIN_SALES_ENABLED } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
 import {
   ONBOARDING_EXEMPT_PATHS,
@@ -15,7 +16,8 @@ describe('isOnboardingExempt', () => {
     expect([...ONBOARDING_EXEMPT_PATHS].sort()).toEqual(
       [
         '/api',
-        '/charge',
+        // The public charge guide, only while paid Coin is on sale (ADR-0049).
+        ...(PAID_COIN_SALES_ENABLED ? ['/charge'] : []),
         '/login',
         '/onboarding',
         '/privacy',
@@ -38,7 +40,6 @@ describe('isOnboardingExempt', () => {
       '/terms',
       '/privacy',
       '/refund',
-      '/charge',
       '/terms/',
       '/reset-password/confirm',
       '/api/auth/callback/kakao',
@@ -47,6 +48,11 @@ describe('isOnboardingExempt', () => {
     ]) {
       expect(isOnboardingExempt(path), path).toBe(true);
     }
+  });
+
+  it('exempts /charge only while paid Coin is on sale: it is not found otherwise', () => {
+    expect(isOnboardingExempt('/charge')).toBe(PAID_COIN_SALES_ENABLED);
+    expect(needsOnboarding('/charge', null)).toBe(!PAID_COIN_SALES_ENABLED);
   });
 
   it('does not exempt a look-alike prefix or any other screen, /admin included', () => {
@@ -82,7 +88,6 @@ describe('needsOnboarding', () => {
     expect(needsOnboarding('/onboarding', null)).toBe(false);
     expect(needsOnboarding('/set-password', null)).toBe(false);
     expect(needsOnboarding('/privacy', null)).toBe(false);
-    expect(needsOnboarding('/charge', null)).toBe(false);
   });
 
   it('never redirects while the answer is unknown, or once the account has a contact', () => {

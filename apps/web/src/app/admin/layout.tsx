@@ -1,4 +1,5 @@
 import { Container, Heading, HStack, Stack, Link as ChakraLink } from '@chakra-ui/react';
+import { PAID_COIN_SALES_ENABLED } from '@buddha/shared';
 import type { Metadata, Route } from 'next';
 import { headers } from 'next/headers';
 import NextLink from 'next/link';
@@ -16,13 +17,22 @@ export const metadata: Metadata = { title: `${copy.adminTitle} | ${copy.appName}
  * M3 adds markets, payments and audit failures. 판정 and its settlement steps live on the market
  * detail (ADR-0046); M5's dispute list went with the dispute stage.
  */
-/** Next 16 types `href`, so the list is declared as routes rather than plain strings. */
+/**
+ * Next 16 types `href`, so the list is declared as routes rather than plain strings. 충전 상품,
+ * 쿠폰 and 결제 are listed only while paid Coin is on sale (PAID_COIN_SALES_ENABLED, ADR-0049):
+ * hidden from the menu, their pages still open by address, and the API keeps the package and
+ * coupon admin open (owner decision 2026-10-13) while it closes the refund.
+ */
 const NAV: { href: Route; label: string }[] = [
   { href: '/admin/markets', label: copy.adminMarkets },
   { href: '/admin/users', label: copy.adminUsers },
-  { href: '/admin/charge-packages', label: copy.adminPackages },
-  { href: '/admin/coupons', label: copy.adminCoupons },
-  { href: '/admin/payments', label: copy.adminPayments },
+  ...(PAID_COIN_SALES_ENABLED
+    ? [
+        { href: '/admin/charge-packages' as Route, label: copy.adminPackages },
+        { href: '/admin/coupons' as Route, label: copy.adminCoupons },
+        { href: '/admin/payments' as Route, label: copy.adminPayments },
+      ]
+    : []),
   { href: '/admin/audit-failures', label: copy.adminAuditFailures },
 ];
 
@@ -44,7 +54,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
           <Heading as="h2" size="2xl">
             {copy.adminTitle}
           </Heading>
-          <HStack gap="4">
+          <HStack gap="4" data-testid="admin-nav">
             {NAV.map((item) => (
               <ChakraLink
                 key={item.href}

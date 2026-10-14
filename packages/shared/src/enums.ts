@@ -62,25 +62,27 @@ export type PaymentStatus = (typeof PAYMENT_STATUSES)[number];
 export const paymentStatusSchema = z.enum(PAYMENT_STATUSES);
 
 /**
- * payments.provider (varchar): `mock` succeeds immediately (PLAN 1.2); `smartro` is the
- * SmartroPay 일반연동 (ADR-0042). The API's PAYMENT_PROVIDER env picks which one takes new
- * charges; a refund follows the provider recorded on the row.
+ * payments.provider (varchar): `mock` succeeds immediately (PLAN 1.2). The SmartroPay
+ * integration (`smartro`, ADR-0042) was removed before any real payment (ADR-0049); the next PG
+ * joins this tuple. The API's PAYMENT_PROVIDER env picks which one takes new charges; a refund
+ * follows the provider recorded on the row.
  */
-export const PAYMENT_PROVIDERS = ['mock', 'smartro'] as const;
+export const PAYMENT_PROVIDERS = ['mock'] as const;
 export type PaymentProvider = (typeof PAYMENT_PROVIDERS)[number];
 export const paymentProviderSchema = z.enum(PAYMENT_PROVIDERS);
 
 /**
  * payment_events.type (varchar(32), append-only): one row per exchange with the PG, so an
- * outcome can be reconstructed without reading logs (ADR-0042).
- * - `return`: the browser came back to ReturnUrl (Tid/TrAuthKey received)
- * - `approval` / `approval_inquiry`: the approval call and its 1-hour result inquiry
- * - `stop`: the payer closed the payment window (StopUrl)
- * - `notify`: SmartroPay's server-to-server 재통보
+ * outcome can be reconstructed without reading logs (ADR-0042). Only `refund_cancel` is written
+ * today; the others are the payment-window flow a redirect PG brings (kept for the next one,
+ * ADR-0049).
+ * - `return`: the browser came back from the payment window
+ * - `approval` / `approval_inquiry`: the approval call and its result inquiry
+ * - `stop`: the payer closed the payment window
+ * - `notify`: the PG's server-to-server notice (재통보)
  * - `net_cancel`: we cancelled an approval we could not credit (망취소); `payload.outcome` is
- *   `cancelled`, `refused` or `unknown`, and `payload.manual` marks a cancel an admin confirmed
- *   by hand (`POST /admin/payments/:id/settle`)
- * - `refund_cancel`: the PG cancel of an admin refund (`payload.manual`: settled by hand)
+ *   `cancelled`, `refused` or `unknown`
+ * - `refund_cancel`: the PG cancel of an admin refund
  */
 export const PAYMENT_EVENT_TYPES = [
   'return',
@@ -216,7 +218,6 @@ export const ADMIN_ACTION_TYPES = [
   'market_close',
   'market_resolve',
   'payment_refund',
-  'payment_settle',
 ] as const;
 export type AdminActionType = (typeof ADMIN_ACTION_TYPES)[number];
 export const adminActionTypeSchema = z.enum(ADMIN_ACTION_TYPES);

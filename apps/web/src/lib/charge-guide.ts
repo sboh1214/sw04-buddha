@@ -1,10 +1,9 @@
+import { uuidSchema } from '@buddha/shared';
 import type { UrlObject } from 'url';
-import { type PaymentProviderInfo } from './api';
-import { isBelowCardMinimum } from './smartro-payments';
 
 /**
- * Pure helpers for the public `/charge` page (ADR-0044), kept out of the page so they can be
- * tested without a DOM (vitest runs in node here).
+ * Pure helpers for the public `/charge` page (ADR-0044) and the wallet link it leads to, kept
+ * out of the pages so they can be tested without a DOM (vitest runs in node here).
  */
 
 /** How many package pictures there are (`package-illustration.tsx`), smallest first. */
@@ -36,9 +35,11 @@ export function chargeTiers(amounts: readonly bigint[]): ChargeTier[] {
   });
 }
 
+// ---- the wallet link ------------------------------------------------------------------
+
 /**
  * Where a package's 충전하기 leads: the wallet with that package preselected (`?package=<id>`,
- * which `/wallet` reads — ADR-0042). An anonymous visitor is sent on to the login page by the
+ * read back by walletPackageId). An anonymous visitor is sent on to the login page by the
  * wallet itself. A `UrlObject` rather than a template string, so typed routes check `/wallet`
  * without an `as Route` cast.
  */
@@ -47,17 +48,23 @@ export function walletPackageHref(packageId: string): UrlObject {
 }
 
 /**
- * Whether the page offers 충전하기 for a package, given the provider it read (`null`: the read
- * failed). The SmartroPay window takes cards from 1,000원 (`isBelowCardMinimum`), so there a
- * cheaper package is listed with its price and picture but not put on sale — what the wallet
- * does with the same package. Only a deployment known to take SmartroPay holds one back: the
- * immediate mock charge has no such floor, and a provider the page could not read leaves the
- * page as it was — every package offered — since the wallet decides again with the provider it
- * reads, and would say so there.
+ * The package `/wallet?package=` names: a uuid, lower-cased as the API answers it. Anything
+ * else is ignored — junk, or a repeated parameter (an array), which no link of ours builds and
+ * which is not read by position.
  */
-export function chargeGuideOffers(
-  provider: PaymentProviderInfo['provider'] | null,
-  priceKrw: number,
-): boolean {
-  return provider !== 'smartro' || !isBelowCardMinimum(priceKrw);
+export function walletPackageId(value: string | string[] | undefined): string | undefined {
+  const parsed = uuidSchema.safeParse(typeof value === 'string' ? value : undefined);
+  return parsed.success ? parsed.data : undefined;
+}
+
+/**
+ * Where an anonymous `/wallet` visit goes: the login page, told to come back to the same
+ * package, so the one chosen on `/charge` is still the chosen one after signing in. Only the
+ * parsed id travels, so nothing a crafted link adds rides into `next`; the login page re-checks
+ * it with `safeNextPath`.
+ */
+export function walletLoginPath(packageId: string | undefined): string {
+  return packageId === undefined
+    ? '/login?next=/wallet'
+    : `/login?next=${encodeURIComponent(`/wallet?package=${packageId}`)}`;
 }

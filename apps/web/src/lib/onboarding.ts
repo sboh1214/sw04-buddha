@@ -1,3 +1,4 @@
+import { PAID_COIN_SALES_ENABLED } from '@buddha/shared';
 import type { Me } from './api';
 import { safeNextPath } from './next-path';
 
@@ -24,7 +25,8 @@ export const ONBOARDING_PATH = '/onboarding';
  * - The auth screens: /login, /signup, /reset-password, and /set-password, where an email
  *   sign-up gives its contact in the first place.
  * - What a visitor must be able to read before handing personal data over: the three legal
- *   documents and the public charge guide (ADR-0044).
+ *   documents, and the public charge guide (ADR-0044) while paid Coin is on sale — `/charge` is
+ *   not found otherwise (PAID_COIN_SALES_ENABLED, ADR-0049).
  * - /api: never a page — the layout the gate lives in does not render for it — but the list is
  *   total so the decision could move into `proxy.ts` without ever answering an API call (the
  *   auth routes included) with a redirect to an HTML form.
@@ -40,7 +42,7 @@ export const ONBOARDING_EXEMPT_PATHS: readonly string[] = [
   '/terms',
   '/privacy',
   '/refund',
-  '/charge',
+  ...(PAID_COIN_SALES_ENABLED ? ['/charge'] : []),
   '/api',
 ];
 

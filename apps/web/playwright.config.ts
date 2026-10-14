@@ -46,7 +46,7 @@ const workerURL = `http://${process.env.WORKER_HOST ?? 'localhost'}:${workerHeal
 /** `nest start` compiles the whole API and `next dev` compiles a route on first request. */
 const SERVER_START_MS = 240_000;
 
-/** 가입(Mailpit) → 충전 → 매수 → 포트폴리오 is one test, and it is the longest one. */
+/** Room for the longest kind of test: a sign-up through Mailpit beside a second browser. */
 const TEST_TIMEOUT_MS = 180_000;
 
 /** Room for a cold-compiled route to answer; the 1s realtime budget is passed per assertion. */

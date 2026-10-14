@@ -11,15 +11,22 @@ import {
   Stack,
   Text,
 } from '@chakra-ui/react';
-import { discountPercent, formatKrw, formatP, parsePAmount } from '@buddha/shared';
+import {
+  PAID_COIN_SALES_ENABLED,
+  discountPercent,
+  formatKrw,
+  formatP,
+  parsePAmount,
+} from '@buddha/shared';
 import type { Metadata } from 'next';
 import NextLink from 'next/link';
+import { notFound } from 'next/navigation';
 import { EmptyState } from '@/components/ui/empty-state';
 import { copy } from '@/copy';
 import { fillBusinessInfo } from '@/legal/business-info';
-import type { ChargePackage, PaymentProviderInfo } from '@/lib/api';
-import { fetchChargePackagesServer, fetchPaymentProviderServer } from '@/lib/api.server';
-import { chargeGuideOffers, chargeTiers, walletPackageHref } from '@/lib/charge-guide';
+import type { ChargePackage } from '@/lib/api';
+import { fetchChargePackagesServer } from '@/lib/api.server';
+import { chargeTiers, walletPackageHref } from '@/lib/charge-guide';
 import { PackageIllustration } from './package-illustration';
 
 /**
@@ -39,21 +46,20 @@ export const metadata: Metadata = { title: `${copy.chargeGuideTitle} | ${copy.ap
  * (`GET /charge-packages`), and the page reads it on the server so the products are in the
  * first HTML a reviewer's crawler sees.
  *
- * Buying still happens on `/wallet`: each card links there with `?package=<id>`, and the wallet
- * sends an anonymous visitor to the login page first. This page never starts a payment itself.
- * Under SmartroPay a package below the card minimum is listed without that link, as the wallet
- * lists it (`chargeGuideOffers`); the provider is public too (`GET /payments/provider`).
+ * Buying still happens on `/wallet`: each card links there with `?package=<id>`, which the
+ * wallet preselects, and the wallet sends an anonymous visitor to the login page first. This
+ * page never starts a payment itself.
  *
  * A failed read is the page's own notice, not a 500 — there is no `app/error.tsx`, and Next's
  * default error screen is untranslated.
+ *
+ * Not found while paid Coin is closed (PAID_COIN_SALES_ENABLED, ADR-0049): the initial product
+ * shows no price list (N06), the footer does not link here, and the catalogue route is closed
+ * as well. Checked before anything is fetched.
  */
 export default async function ChargeGuidePage() {
-  const [packages, provider] = await Promise.all([
-    fetchChargePackagesServer().catch(() => null),
-    fetchPaymentProviderServer()
-      .then((info) => info.provider)
-      .catch(() => null),
-  ]);
+  if (!PAID_COIN_SALES_ENABLED) notFound();
+  const packages = await fetchChargePackagesServer().catch(() => null);
 
   return (
     <Container maxW="1320px" px="6" py={{ base: '6', md: '10' }}>
@@ -81,7 +87,7 @@ export default async function ChargeGuidePage() {
         ) : packages.length === 0 ? (
           <EmptyState message={copy.chargeNoPackages} data-testid="charge-guide-empty" />
         ) : (
-          <PackageGrid packages={packages} provider={provider} />
+          <PackageGrid packages={packages} />
         )}
 
         <Text>{fillBusinessInfo(copy.chargeGuideDelivery)}</Text>
@@ -106,17 +112,7 @@ export default async function ChargeGuidePage() {
   );
 }
 
-function PackageGrid({
-  packages,
-  provider,
-}: {
-  packages: ChargePackage[];
-  /**
-   * The deployment's charge flow, `null` when it could not be read — which leaves every package
-   * offered, as before; the wallet decides again with the provider it reads (`chargeGuideOffers`).
-   */
-  provider: PaymentProviderInfo['provider'] | null;
-}) {
+function PackageGrid({ packages }: { packages: ChargePackage[] }) {
   const amounts = packages.map((pack) => parsePAmount(pack.amountP));
   const tiers = chargeTiers(amounts);
 
@@ -126,8 +122,6 @@ function PackageGrid({
         const amountP = amounts[index] ?? 0n;
         const discount = discountPercent(amountP, pack.priceKrw);
         const label = formatP(amountP);
-        const offered = chargeGuideOffers(provider, pack.priceKrw);
-        const hintId = `charge-guide-hint-${pack.id}`;
         return (
           <Card.Root
             as="li"
@@ -157,37 +151,19 @@ function PackageGrid({
                     {formatKrw(pack.priceKrw)}
                   </Text>
                 </Text>
-                {!offered && (
-                  <Text id={hintId} textStyle="bodySm" color="fg.muted">
-                    {copy.chargeBelowCardMinimum}
-                  </Text>
-                )}
               </Stack>
             </Card.Body>
             <Card.Footer>
-              {offered ? (
-                <Button asChild width="full">
-                  <NextLink
-                    href={walletPackageHref(pack.id)}
-                    // Four identical "충전하기" links are one name four times to a screen reader.
-                    aria-label={`${label} ${copy.chargeSubmit}`}
-                    data-testid={`charge-guide-buy-${pack.id}`}
-                  >
-                    {copy.chargeSubmit}
-                  </NextLink>
-                </Button>
-              ) : (
-                // Shown, not offered — no link to a wallet that would refuse it.
-                <Button
-                  width="full"
-                  disabled
+              <Button asChild width="full">
+                <NextLink
+                  href={walletPackageHref(pack.id)}
+                  // Four identical "충전하기" links are one name four times to a screen reader.
                   aria-label={`${label} ${copy.chargeSubmit}`}
-                  aria-describedby={hintId}
                   data-testid={`charge-guide-buy-${pack.id}`}
                 >
                   {copy.chargeSubmit}
-                </Button>
-              )}
+                </NextLink>
+              </Button>
             </Card.Footer>
           </Card.Root>
         );

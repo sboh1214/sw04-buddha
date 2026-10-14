@@ -25,7 +25,7 @@ const SECRET_KEYS: ReadonlySet<string> = new Set([
  */
 const PERSONAL_KEY = /^(buyer|receiver|delivery|parent)/i;
 
-/** Bounds on what a public callback can make us store. */
+/** Bounds on what a PG answer can make us store. */
 const MAX_KEYS = 64;
 const MAX_KEY_LENGTH = 64;
 const MAX_VALUE_LENGTH = 500;
@@ -88,18 +88,9 @@ export async function recordPaymentEvent(db: Db | Tx, event: PaymentEventInput):
   });
 }
 
-/** A PG message as `payments.result_message` stores it (shown to the payer). */
-export function resultMessageOf(value: string | undefined | null): string | null {
-  if (value === undefined || value === null) return null;
-  const cleaned = clean(value, MAX_VALUE_LENGTH).trim();
-  return cleaned.length === 0 ? null : cleaned;
-}
-
 /**
  * Whether the `payments` row a query reads has a net cancel the PG confirmed: a `net_cancel`
- * event whose outcome is `cancelled` — the PG's own answer, its cancel 재통보, or an admin's
- * settle after checking the merchant admin. As SQL over `schema.payments`, for a list; one
- * payment's is netCancelOutcome (payment-transitions), which asks the same question.
+ * event whose outcome is `cancelled`. As SQL over `schema.payments`, for a list.
  */
 export const netCancelConfirmed = sql<boolean>`exists (
   select 1 from ${schema.paymentEvents}

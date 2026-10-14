@@ -613,15 +613,13 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // is never seeded and never SSR'd, so a bare invalidation would hand back the request
         // that left before the payout committed.
         //
-        // 결제 내역 sits beside 원장 on /wallet and contradicts it the same way when left behind:
-        // an admin refund claws the P back (a 결제 취소(환불) row) while the payment still says
-        // 완료, and a 재통보 credit after the result notice stopped polling adds a 충전 row over
-        // a payment still 처리 중 or 미완료. The event names no payment, so the list is asked again —
-        // the same kind as the ledger's, and on the same accepted event, so it costs a request
-        // only where 결제 내역 is on screen. Unseeded as well, hence `restartQueries` again.
-        // Only as far as the P goes: a refund's claw-back is the one step that moves a balance,
-        // so the list lands on 환불 처리 중, and its finish (환불 완료) — like a settle that moves
-        // no P (환불 완료, 취소 확인, 실패로 닫기; a settle `credit` or `restore` does publish) —
+        // 결제 내역 sits beside 원장 on /wallet (while paid Coin is on sale, ADR-0049) and
+        // contradicts it the same way when left behind: an admin refund claws the P back (a
+        // 결제 취소(환불) row) while the payment still says 완료. The event names no payment, so
+        // the list is asked again — the same kind as the ledger's, and on the same accepted event,
+        // so it costs a request only where 결제 내역 is on screen. Unseeded as well, hence
+        // `restartQueries` again. Only as far as the P goes: a refund's claw-back is the one step
+        // that moves a balance, so the list lands on 환불 처리 중, and its finish (환불 완료)
         // publishes nothing; the list's own bounded poll while a row is still moving
         // (`paymentsPoll`, use-wallet.ts) carries that row the rest of the way.
         for (const queryKey of BALANCE_HISTORY_KEYS) void restartQueries(queryClient, queryKey);

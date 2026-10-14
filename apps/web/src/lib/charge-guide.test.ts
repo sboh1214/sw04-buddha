@@ -1,11 +1,14 @@
-import { CARD_MIN_PRICE_KRW } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
 import {
   CHARGE_TIER_COUNT,
-  chargeGuideOffers,
   chargeTiers,
+  walletLoginPath,
   walletPackageHref,
+  walletPackageId,
 } from './charge-guide';
+import { safeNextPath } from './next-path';
+
+const PACKAGE_ID = '0190c7a4-0000-7000-8000-000000000001';
 
 describe('chargeTiers', () => {
   it('spans the smallest to the largest package over the four pictures', () => {
@@ -39,29 +42,36 @@ describe('chargeTiers', () => {
 
 describe('walletPackageHref', () => {
   it('opens the wallet with the package preselected', () => {
-    expect(walletPackageHref('0190c7a4-0000-7000-8000-000000000001')).toEqual({
+    expect(walletPackageHref(PACKAGE_ID)).toEqual({
       pathname: '/wallet',
-      query: { package: '0190c7a4-0000-7000-8000-000000000001' },
+      query: { package: PACKAGE_ID },
     });
   });
 });
 
-describe('chargeGuideOffers', () => {
-  it('holds back a package the SmartroPay window cannot take, from 1,000원 up it offers', () => {
-    expect(chargeGuideOffers('smartro', CARD_MIN_PRICE_KRW - 1)).toBe(false);
-    expect(chargeGuideOffers('smartro', 0)).toBe(false);
-    expect(chargeGuideOffers('smartro', CARD_MIN_PRICE_KRW)).toBe(true);
-    expect(chargeGuideOffers('smartro', 50_000)).toBe(true);
+describe('walletPackageId', () => {
+  it('reads one well-formed id, lower-cased as the API answers it', () => {
+    expect(walletPackageId(PACKAGE_ID)).toBe(PACKAGE_ID);
+    expect(walletPackageId(PACKAGE_ID.toUpperCase())).toBe(PACKAGE_ID);
   });
 
-  it('offers everything under the mock charge, which has no card minimum', () => {
-    for (const price of [0, CARD_MIN_PRICE_KRW - 1, CARD_MIN_PRICE_KRW, 50_000]) {
-      expect(chargeGuideOffers('mock', price), String(price)).toBe(true);
-    }
+  it('drops what no link of ours carries: junk, an empty value, a repeated parameter', () => {
+    expect(walletPackageId(undefined)).toBeUndefined();
+    expect(walletPackageId('')).toBeUndefined();
+    expect(walletPackageId('../admin')).toBeUndefined();
+    expect(walletPackageId([PACKAGE_ID, PACKAGE_ID])).toBeUndefined();
+  });
+});
+
+describe('walletLoginPath', () => {
+  it('keeps the plain wallet redirect exactly as it was', () => {
+    expect(walletLoginPath(undefined)).toBe('/login?next=/wallet');
   });
 
-  it('leaves the page as it was when the provider could not be read — the wallet decides', () => {
-    expect(chargeGuideOffers(null, CARD_MIN_PRICE_KRW - 1)).toBe(true);
-    expect(chargeGuideOffers(null, CARD_MIN_PRICE_KRW)).toBe(true);
+  it('carries the /charge package through the login, and the login page accepts it', () => {
+    const next = new URL(walletLoginPath(PACKAGE_ID), 'https://x.invalid').searchParams.get('next');
+    expect(next).toBe(`/wallet?package=${PACKAGE_ID}`);
+    // What LoginPage does with it: same-origin, so it is where the sign-in lands.
+    expect(safeNextPath(next)).toBe(`/wallet?package=${PACKAGE_ID}`);
   });
 });

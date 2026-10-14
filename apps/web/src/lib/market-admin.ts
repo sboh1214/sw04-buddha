@@ -159,7 +159,7 @@ export const SETTLEMENT_POLL_INTERVAL_MS = 5_000;
  * tells this screen that the worker finished or failed a step — the admin query joins no
  * realtime room, and a failed attempt publishes nothing at all — so without it the 정산 단계
  * panel keeps the `pending` row the 판정 answered with until a reload. Not budgeted like the
- * payment polls (smartro-payments.ts): a failing step is retried by the worker's per-minute scan,
+ * 결제 내역 poll (payments.ts): a failing step is retried by the worker's per-minute scan,
  * and this panel is where an operator watches those attempts. query-core pauses the interval
  * while the tab is hidden, and it stops by itself at `settled`.
  */

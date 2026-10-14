@@ -5,7 +5,8 @@
  * Every NAMED bucket runs at PLAN's own number, so a refusal is measured against the value a
  * deployment ships with rather than one convenient for a test. The M6 acceptance figure counted
  * `/trades`, which went with the direct AMM trade (#125); the per-account bucket is measured on
- * `/payments/charge`, PLAN 7.5's other per-account row. Only the unnamed default is lowered, and
+ * `/payments/charge`, PLAN 7.5's other per-account row — preserved code, closed in production while
+ * paid Coin is off (ADR-0049), so this app opens it. Only the unnamed default is lowered, and
  * only because reaching 100 would cost a hundred injections; a separate test pins that the
  * shipped table still says 100.
  */
@@ -54,6 +55,7 @@ describe.skipIf(!hasTestInfra)('rate limits (integration)', () => {
     // `uncountedPeers` names two networks a split deployment's web host could live on; the
     // cases below present a peer from each and one from outside them.
     t = await createTestApp({
+      paidCoinSales: true,
       rateLimits: { default: 2 },
       uncountedPeers: '10.0.0.0/8, fd00::/8',
     });

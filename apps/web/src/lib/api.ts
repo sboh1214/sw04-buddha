@@ -24,10 +24,6 @@ export type Balance = components['schemas']['Balance'];
 export type AdminUser = components['schemas']['AdminUser'];
 export type ChargePackage = components['schemas']['ChargePackage'];
 export type ChargeResult = components['schemas']['ChargeResult'];
-/** `GET /payments/provider`: which charge flow the wallet offers (ADR-0042). */
-export type PaymentProviderInfo = components['schemas']['PaymentProviderInfo'];
-/** `POST /payments/smartro/prepare`: the reserved payment and its signed payment-window form. */
-export type SmartroPrepareResult = components['schemas']['SmartroPrepareResult'];
 export type Coupon = components['schemas']['Coupon'];
 export type Market = components['schemas']['Market'];
 export type MarketSummary = components['schemas']['MarketSummary'];
@@ -49,12 +45,6 @@ export type Order = components['schemas']['Order'];
 export type AdminPayment = components['schemas']['AdminPayment'];
 /** `POST /admin/payments/{id}/refund`: why the admin refunds (required, audited). */
 export type RefundPaymentBody = components['schemas']['RefundPaymentBody'];
-/**
- * `POST /admin/payments/{id}/settle` (수동 정리): the outcome the merchant admin showed, why
- * (required, audited), and — for a credit only — the approval's Tid.
- */
-export type SettlePaymentBody = components['schemas']['SettlePaymentBody'];
-export type PaymentSettleOutcome = SettlePaymentBody['outcome'];
 export type AuditFailure = components['schemas']['AuditFailure'];
 export type CreateMarketBody = components['schemas']['CreateMarketBody'];
 export type UpdateMarketBody = components['schemas']['UpdateMarketBody'];
@@ -102,7 +92,7 @@ export function isApiError(error: unknown, code?: ErrorCode): error is ApiError 
  * way (the charge route's 404 for an unknown `packageId`, INSUFFICIENT_BALANCE on `amountP`,
  * the in-progress DUPLICATE_REQUEST on the `Idempotency-Key` header, and the FORBIDDEN on
  * `expectedAccountId` when the cookie belongs to another account — the charge, coupon,
- * payment-window, contact and password bodies alike).
+ * contact and password bodies alike).
  * Returns the first field name found, e.g. 'nickname'; undefined when no field is named.
  */
 export function validationField(error: ApiError): string | undefined {
@@ -113,11 +103,10 @@ export function validationField(error: ApiError): string | undefined {
 
 /**
  * The 403 that means "the cookie belongs to somebody else than the account on screen": the
- * server refused to charge, to redeem for, to open a payment window for, or to write the
- * contact or first password of an account the user is not looking at (PLAN 5.3 shape —
- * `chargeBodySchema` (the payment window's prepare too), `redeemCouponBodySchema`,
- * `contactBodySchema` and `setPasswordBodySchema` all carry `expectedAccountId`; A-PG-24 for the
- * last two). Only this FORBIDDEN names the field; the CSRF refusal names none.
+ * server refused to charge, to redeem for, or to write the contact or first password of an
+ * account the user is not looking at (PLAN 5.3 shape — `chargeBodySchema`,
+ * `redeemCouponBodySchema`, `contactBodySchema` and `setPasswordBodySchema` all carry
+ * `expectedAccountId`; A-PG-24 for the last two). Only this FORBIDDEN names the field; the CSRF refusal names none.
  *
  * It lives beside `validationField`, which it is built on, rather than in the wallet hook it
  * started in: the keyed flows that send `expectedAccountId` (charge, coupon) must keep their

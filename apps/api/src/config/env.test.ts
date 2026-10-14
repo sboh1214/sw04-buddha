@@ -1,13 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { paymentsConfigFromEnv } from '../payments/payments-config.js';
-import { encryptCancelPayload } from '../payments/smartro/smartro-protocol.js';
-import {
-  SMARTRO_REQUIRED_KEYS,
-  envSchema,
-  parseTrustProxy,
-  uncountedPeers,
-  webOrigins,
-} from './env.js';
+import { envSchema, parseTrustProxy, uncountedPeers, webOrigins } from './env.js';
 
 /**
  * The env schema is pure (no DB, no Redis), so this suite runs with the docker test profile
@@ -257,222 +249,32 @@ describe('AUTH_COOKIE_DOMAIN', () => {
 });
 
 describe('payments (ADR-0042)', () => {
-  const smartro = {
-    PAYMENT_PROVIDER: 'smartro',
-    SMARTRO_MID: 't_2409001m',
-    SMARTRO_MERCHANT_KEY: 'k'.repeat(64),
-    SMARTRO_CANCEL_PASSWORD: 'cancel-pw',
-  } as const;
-
-  it('defaults to the mock provider on STG with no SmartroPay credentials', () => {
-    // Production included: nothing has to be set until the owner switches to SmartroPay.
-    const parsed = envSchema.parse(base);
-    expect(parsed.PAYMENT_PROVIDER).toBe('mock');
-    expect(parsed.SMARTRO_MODE).toBe('STG');
-    expect(parsed.SMARTRO_MID).toBeUndefined();
-    expect(parsed.SMARTRO_MERCHANT_KEY).toBeUndefined();
-    expect(parsed.SMARTRO_CANCEL_PASSWORD).toBeUndefined();
-    expect(parsed.SMARTRO_APPROVAL_BASE_URL).toBeUndefined();
-    // Empty values (the .env.example lines) mean unset, as for the OAuth keys.
-    expect(
-      envSchema.parse({ ...base, SMARTRO_MID: '', SMARTRO_APPROVAL_BASE_URL: '' }).SMARTRO_MID,
-    ).toBeUndefined();
-    // So do the provider and mode: compose renders an unset `${PAYMENT_PROVIDER}` as ''.
-    expect(envSchema.parse({ ...base, PAYMENT_PROVIDER: '', SMARTRO_MODE: ' ' })).toMatchObject({
-      PAYMENT_PROVIDER: 'mock',
-      SMARTRO_MODE: 'STG',
-    });
+  it('defaults to the mock provider', () => {
+    // Production included: nothing has to be set.
+    expect(envSchema.parse(base).PAYMENT_PROVIDER).toBe('mock');
+    // compose renders an unset `${PAYMENT_PROVIDER}` as ''.
+    expect(envSchema.parse({ ...base, PAYMENT_PROVIDER: ' ' }).PAYMENT_PROVIDER).toBe('mock');
   });
 
-  it('accepts SmartroPay with all three credentials, in either mode', () => {
-    const parsed = envSchema.parse({ ...base, ...smartro, SMARTRO_MODE: 'REAL' });
-    expect(parsed).toMatchObject({ ...smartro, SMARTRO_MODE: 'REAL' });
-  });
-
-  it('keeps SmartroPay registered under the mock with all three, and none without any', () => {
-    const withKeys = envSchema.parse({ ...base, ...smartro, PAYMENT_PROVIDER: 'mock' });
-    expect(withKeys).toMatchObject({ ...smartro, PAYMENT_PROVIDER: 'mock' });
-    expect(paymentsConfigFromEnv(withKeys)).toMatchObject({
-      provider: 'mock',
-      smartro: { mid: smartro.SMARTRO_MID },
-    });
-    // All three empty — the .env.example lines, compose's `${SMARTRO_MID:-}` — is "off".
-    const off = envSchema.parse({
-      ...base,
-      SMARTRO_MID: '',
-      SMARTRO_MERCHANT_KEY: ' ',
-      SMARTRO_CANCEL_PASSWORD: '',
-    });
-    expect(paymentsConfigFromEnv(off).smartro).toBeNull();
-  });
-
-  it('refuses an unknown provider or mode', () => {
-    for (const [key, value] of [
-      ['PAYMENT_PROVIDER', 'toss'],
-      ['SMARTRO_MODE', 'DEV'],
-      ['SMARTRO_MODE', 'stg'],
-    ] as const) {
-      const result = envSchema.safeParse({ ...base, [key]: value });
-      expect(result.success, `${key}=${value}`).toBe(false);
-      if (!result.success) expect(result.error.issues[0]?.path).toEqual([key]);
-    }
-  });
-
-  it.each(['SMARTRO_MID', 'SMARTRO_MERCHANT_KEY', 'SMARTRO_CANCEL_PASSWORD'] as const)(
-    'requires %s when PAYMENT_PROVIDER=smartro, naming it',
-    (key) => {
-      const result = envSchema.safeParse({ ...base, ...smartro, [key]: '' });
-      expect(result.success).toBe(false);
+  it('refuses a provider nothing registers, SmartroPay included (ADR-0049)', () => {
+    for (const value of ['smartro', 'toss']) {
+      const result = envSchema.safeParse({ ...base, PAYMENT_PROVIDER: value });
+      expect(result.success, value).toBe(false);
       if (!result.success) {
-        expect(result.error.issues.map((issue) => issue.path)).toEqual([[key]]);
+        expect(result.error.issues.map((issue) => issue.path)).toEqual([['PAYMENT_PROVIDER']]);
       }
-    },
-  );
-
-  it('refuses part of the credentials whichever provider is active, naming each missing key', () => {
-    // SmartroPay is registered with all three or not at all (paymentsConfigFromEnv): a leftover
-    // MID under the mock would boot, then 404 every 재통보 and refuse every SmartroPay refund.
-    const messages = {
-      mock: 'SMARTRO_MID, SMARTRO_MERCHANT_KEY and SMARTRO_CANCEL_PASSWORD must be set together (or all empty)',
-      smartro: 'required when PAYMENT_PROVIDER=smartro',
-    } as const;
-    const [mid, merchantKey, cancelPassword] = SMARTRO_REQUIRED_KEYS;
-    for (const blanked of [
-      [mid],
-      [merchantKey],
-      [cancelPassword],
-      [mid, merchantKey],
-      [mid, cancelPassword],
-      [merchantKey, cancelPassword],
-    ]) {
-      for (const provider of ['mock', 'smartro'] as const) {
-        // Unset, empty and blank are all "missing" (optionalString).
-        for (const empty of [undefined, '', '  ']) {
-          const label = `${provider} without ${blanked.join(', ')} (${JSON.stringify(empty)})`;
-          const result = envSchema.safeParse({
-            ...base,
-            ...smartro,
-            PAYMENT_PROVIDER: provider,
-            ...Object.fromEntries(blanked.map((key) => [key, empty])),
-          });
-          expect(result.success, label).toBe(false);
-          if (!result.success) {
-            expect(
-              result.error.issues.map((issue) => [issue.path, issue.message]),
-              label,
-            ).toEqual(blanked.map((key) => [[key], messages[provider]]));
-          }
-        }
-      }
-    }
-    // None at all is "not configured": fine under the mock, three issues under smartro.
-    const none = { SMARTRO_MID: '', SMARTRO_MERCHANT_KEY: '', SMARTRO_CANCEL_PASSWORD: '' };
-    expect(envSchema.safeParse({ ...base, ...none, PAYMENT_PROVIDER: 'mock' }).success).toBe(true);
-    const required = envSchema.safeParse({ ...base, ...none, PAYMENT_PROVIDER: 'smartro' });
-    expect(required.success).toBe(false);
-    if (!required.success) {
-      expect(required.error.issues.map((issue) => [issue.path, issue.message])).toEqual(
-        SMARTRO_REQUIRED_KEYS.map((key) => [[key], messages.smartro]),
-      );
     }
   });
 
-  it('reports a bad shape and a missing partner each once, on their own keys', () => {
-    // A set key is checked for its shape, a missing one for being missing — never both.
-    const result = envSchema.safeParse({
+  it('ignores the SmartroPay keys an .env rendered before ADR-0049 still carries', () => {
+    const parsed = envSchema.parse({
       ...base,
-      SMARTRO_MID: 'x'.repeat(11),
-      SMARTRO_MERCHANT_KEY: 'k'.repeat(31),
+      SMARTRO_MODE: 'STG',
+      SMARTRO_MID: 't_2409001m',
+      SMARTRO_MERCHANT_KEY: 'k'.repeat(64),
+      SMARTRO_CANCEL_PASSWORD: 'cancel-pw',
     });
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues.map((issue) => issue.path)).toEqual([
-        ['SMARTRO_MID'],
-        ['SMARTRO_MERCHANT_KEY'],
-        ['SMARTRO_CANCEL_PASSWORD'],
-      ]);
-    }
-  });
-
-  it('checks the credential shapes whenever they are set', () => {
-    // The key's first 32 characters are the AES-256 key of the cancel payload: 32 of them, and
-    // 32 bytes as UTF-8 (encryptCancelPayload) — ASCII.
-    const short = 'must be at least 32 characters';
-    const notAscii =
-      'its first 32 characters must be ASCII (the AES-256 key of the cancel payload)';
-    for (const [key, value, message] of [
-      ['SMARTRO_MERCHANT_KEY', 'k'.repeat(31), short],
-      // A short key is told it is short, not also that it is not ASCII.
-      ['SMARTRO_MERCHANT_KEY', '가'.repeat(31), short],
-      ['SMARTRO_MERCHANT_KEY', '가'.repeat(32), notAscii],
-      ['SMARTRO_MERCHANT_KEY', 'k'.repeat(31) + '가' + 'k'.repeat(10), notAscii],
-      // A zero-width space pasted in: trim() leaves it.
-      ['SMARTRO_MERCHANT_KEY', 'k'.repeat(10) + '\u200b' + 'k'.repeat(30), notAscii],
-      // An emoji is two UTF-16 units: whole inside the first 32, or cut in half at the edge.
-      ['SMARTRO_MERCHANT_KEY', 'k'.repeat(10) + '😀' + 'k'.repeat(30), notAscii],
-      ['SMARTRO_MERCHANT_KEY', 'k'.repeat(31) + '😀', notAscii],
-      ['SMARTRO_MID', 'x'.repeat(11), 'must be at most 10 characters'],
-    ] as const) {
-      for (const provider of ['mock', 'smartro'] as const) {
-        const result = envSchema.safeParse({
-          ...base,
-          ...smartro,
-          PAYMENT_PROVIDER: provider,
-          [key]: value,
-        });
-        expect(result.success, `${provider} ${key}`).toBe(false);
-        if (!result.success) {
-          expect(
-            result.error.issues.map((issue) => [issue.path, issue.message]),
-            `${provider} ${key}`,
-          ).toEqual([[[key], message]]);
-        }
-      }
-      // Refused at startup exactly when a cancel could not be encrypted with it.
-      if (key === 'SMARTRO_MERCHANT_KEY') {
-        expect(() => encryptCancelPayload('{}', value)).toThrow(RangeError);
-      }
-    }
-    // Only the first 32 key the AES: the signatures hash the whole key as UTF-8, whatever it is.
-    for (const value of ['k'.repeat(32), 'k'.repeat(32) + '가😀']) {
-      expect(
-        envSchema.safeParse({ ...base, ...smartro, SMARTRO_MERCHANT_KEY: value }).success,
-      ).toBe(true);
-      expect(() => encryptCancelPayload('{}', value)).not.toThrow();
-    }
-  });
-
-  it('takes an approval host override for a local fake PG, but never in production', () => {
-    const override = { ...smartro, SMARTRO_APPROVAL_BASE_URL: 'http://localhost:4010' };
-    expect(
-      envSchema.parse({ ...base, ...override, NODE_ENV: 'development' }).SMARTRO_APPROVAL_BASE_URL,
-    ).toBe('http://localhost:4010');
-    expect(envSchema.safeParse({ ...base, ...override, NODE_ENV: 'test' }).success).toBe(true);
-
-    const production = envSchema.safeParse({ ...base, ...override });
-    expect(production.success).toBe(false);
-    if (!production.success) {
-      expect(production.error.issues.map((issue) => issue.path)).toEqual([
-        ['SMARTRO_APPROVAL_BASE_URL'],
-      ]);
-    }
-  });
-
-  it('refuses an approval host override that is not an http(s) URL, with one issue', () => {
-    for (const NODE_ENV of ['development', 'production'] as const) {
-      for (const bad of ['localhost:4010', 'ftp://fake-pg.local', 'not a url']) {
-        const result = envSchema.safeParse({
-          ...base,
-          NODE_ENV,
-          SMARTRO_APPROVAL_BASE_URL: bad,
-        });
-        expect(result.success, `${NODE_ENV} ${bad}`).toBe(false);
-        if (!result.success) {
-          expect(result.error.issues.map((issue) => issue.path)).toEqual([
-            ['SMARTRO_APPROVAL_BASE_URL'],
-          ]);
-        }
-      }
-    }
+    expect(parsed.PAYMENT_PROVIDER).toBe('mock');
+    expect(parsed).not.toHaveProperty('SMARTRO_MID');
   });
 });

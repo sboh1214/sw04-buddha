@@ -1,4 +1,14 @@
-import { Body, Controller, Get, HttpCode, Param, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Inject,
+  Param,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiCookieAuth, ApiHeader, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import {
   IDEMPOTENCY_KEY_HEADER,
@@ -13,7 +23,6 @@ import {
   paymentProviderInfoSchema,
   paymentSchema,
   redeemCouponBodySchema,
-  smartroPrepareResultSchema,
   uuidParamSchema,
   type ChargeBody,
   type ChargePackage,
@@ -23,7 +32,6 @@ import {
   type Payment,
   type PaymentProviderInfo,
   type RedeemCouponBody,
-  type SmartroPrepareResult,
 } from '@buddha/shared';
 import { type SessionUser } from '../auth/auth.js';
 import { CurrentUser } from '../auth/current-user.decorator.js';
@@ -34,7 +42,8 @@ import { ApiData, ApiErrors, ApiPageOf } from '../common/openapi/api-response.de
 import { CURSOR_QUERY_PARAMS } from '../common/openapi/cursor-query.js';
 import { ApiPage } from '../common/interceptors/response-envelope.interceptor.js';
 import { SESSION_SECURITY_SCHEME } from '../openapi/document.js';
-import { SmartroPayService } from '../payments/smartro/smartro-pay.service.js';
+import { PaidCoinSalesGuard } from '../payments/paid-coin-sales.guard.js';
+import { PAYMENTS_CONFIG, type PaymentsConfig } from '../payments/payments-config.js';
 import { RateLimit } from '../rate-limit/rate-limit.decorator.js';
 import { ChargePackageService } from './charge-package.service.js';
 import { CouponService, type RedeemResult } from './coupon.service.js';
@@ -42,19 +51,23 @@ import { WalletService } from './wallet.service.js';
 
 /**
  * The charge catalogue (ADR-0026). Public on purpose: prices and discounts are what a visitor
- * needs to decide whether to sign up, and the list holds no personal data.
+ * needs to decide whether to sign up, and the list holds no personal data. Closed with the rest
+ * of paid Coin while it is off (PaidCoinSalesGuard, ADR-0049).
  */
 @ApiTags('wallet')
 @Controller('charge-packages')
+@UseGuards(PaidCoinSalesGuard)
 export class ChargePackagesController {
   constructor(private readonly packages: ChargePackageService) {}
 
   @Get()
   @ApiOperation({
     operationId: 'listChargePackages',
-    summary: 'Charge packages on sale, cheapest discount first',
+    summary:
+      'Charge packages on sale, cheapest discount first. Closed while paid Coin is off: 404 (ADR-0049)',
   })
   @ApiData(chargePackageSchema.array())
+  @ApiErrors('NOT_FOUND')
   listPackages(): Promise<ChargePackage[]> {
     return this.packages.listActive();
   }
@@ -62,26 +75,28 @@ export class ChargePackagesController {
 
 /**
  * `GET /api/v1/payments/provider` (ADR-0042): which charge flow the web offers. Public like the
- * catalogue — it names a PG and a mode, nothing about anyone.
+ * catalogue — it names a provider, nothing about anyone — and closed with it.
  */
 @ApiTags('wallet')
 @Controller('payments')
+@UseGuards(PaidCoinSalesGuard)
 export class PaymentProviderController {
-  constructor(private readonly smartro: SmartroPayService) {}
+  constructor(@Inject(PAYMENTS_CONFIG) private readonly config: PaymentsConfig) {}
 
   @Get('provider')
   @ApiOperation({
     operationId: 'getPaymentProvider',
     summary:
-      'The configured payment provider: mock (immediate charge) or smartro (payment window, with its SDK URLs)',
+      'The configured payment provider (mock: immediate charge). Closed while paid Coin is off: 404 (ADR-0049)',
   })
   @ApiData(paymentProviderInfoSchema)
+  @ApiErrors('NOT_FOUND')
   getPaymentProvider(): PaymentProviderInfo {
-    return this.smartro.providerInfo();
+    return { provider: this.config.provider };
   }
 }
 
-/** The `Idempotency-Key` header of both charge flows (PLAN 5.4). */
+/** The `Idempotency-Key` header of the charge (PLAN 5.4). */
 const IDEMPOTENCY_KEY_SCHEMA = {
   type: 'string',
   minLength: IDEMPOTENCY_KEY_MIN_LENGTH,
@@ -89,16 +104,16 @@ const IDEMPOTENCY_KEY_SCHEMA = {
   pattern: '^[A-Za-z0-9_-]+$',
 } as const;
 
-/** `POST /api/v1/payments/charge` (PLAN 7.2, M2) and `/payments/smartro/prepare` (ADR-0042). */
+/**
+ * `POST /api/v1/payments/charge` (PLAN 7.2, M2). PaidCoinSalesGuard first: while paid Coin is
+ * off the 404 answers before SessionGuard, signed in or not.
+ */
 @ApiTags('wallet')
 @ApiCookieAuth(SESSION_SECURITY_SCHEME)
 @Controller('payments')
-@UseGuards(SessionGuard)
+@UseGuards(PaidCoinSalesGuard, SessionGuard)
 export class PaymentsController {
-  constructor(
-    private readonly wallet: WalletService,
-    private readonly smartro: SmartroPayService,
-  ) {}
+  constructor(private readonly wallet: WalletService) {}
 
   @Post('charge')
   @HttpCode(200)
@@ -108,7 +123,7 @@ export class PaymentsController {
   @ApiOperation({
     operationId: 'charge',
     summary:
-      'Buy one charge package (mock provider: succeeds immediately). P is never convertible back to cash.',
+      'Buy one charge package (mock provider: succeeds immediately). P is never convertible back to cash. Closed while paid Coin is off: 404 (ADR-0049)',
   })
   @ApiHeader({
     name: IDEMPOTENCY_KEY_HEADER,
@@ -123,7 +138,8 @@ export class PaymentsController {
   @ApiData(chargeResultSchema)
   // FORBIDDEN: a mutation whose Origin is not ours (SessionGuard's CSRF check), or a body whose
   // `expectedAccountId` is not the cookie's account (details name the field). NOT_FOUND also
-  // answers every call while the configured provider is SmartroPay (no immediate charge).
+  // answers every call while paid Coin is off, or while the configured provider has no
+  // immediate charge.
   @ApiErrors(
     'UNAUTHENTICATED',
     'FORBIDDEN',
@@ -140,54 +156,13 @@ export class PaymentsController {
   ): Promise<ChargeResult> {
     return this.wallet.charge(user.id, body, idempotencyKey);
   }
-
-  @Post('smartro/prepare')
-  @HttpCode(200)
-  // Same bucket as the immediate charge: either way this is where an account buys P.
-  @RateLimit('charge')
-  @ApiOperation({
-    operationId: 'prepareSmartroPayment',
-    summary:
-      'Reserve a pending SmartroPay payment for one charge package and sign the payment-window form (provider smartro only)',
-  })
-  @ApiHeader({
-    name: IDEMPOTENCY_KEY_HEADER,
-    required: true,
-    description:
-      'Client-generated key for this purchase (PLAN 5.4). Re-sent while the payment is still ' +
-      'pending and unapproved, it returns a freshly signed form for the SAME payment. ' +
-      'DUPLICATE_REQUEST (409) answers a key re-used with a different body, or one whose ' +
-      'payment has already been approved or closed (the key is spent).',
-    schema: IDEMPOTENCY_KEY_SCHEMA,
-  })
-  @ApiData(smartroPrepareResultSchema)
-  // NOT_FOUND: the configured provider is not SmartroPay, or the package is gone (details name
-  // `packageId`). VALIDATION_ERROR with `packageId`: retired, or below the card minimum
-  // (CARD_MIN_PRICE_KRW). CONTACT_REQUIRED: no real name / mobile number registered yet.
-  @ApiErrors(
-    'UNAUTHENTICATED',
-    'FORBIDDEN',
-    'NOT_FOUND',
-    'VALIDATION_ERROR',
-    'PRICE_MOVED',
-    'DUPLICATE_REQUEST',
-    'CONTACT_REQUIRED',
-    'RATE_LIMITED',
-  )
-  prepareSmartroPayment(
-    @CurrentUser() user: SessionUser,
-    @IdempotencyKey() idempotencyKey: string,
-    @Body({ schema: chargeBodySchema }) body: ChargeBody,
-  ): Promise<SmartroPrepareResult> {
-    return this.smartro.prepare(user.id, body, idempotencyKey);
-  }
 }
 
-/** `POST /api/v1/coupons/redeem` (ADR-0026). */
+/** `POST /api/v1/coupons/redeem` (ADR-0026); closed like the charge while paid Coin is off. */
 @ApiTags('wallet')
 @ApiCookieAuth(SESSION_SECURITY_SCHEME)
 @Controller('coupons')
-@UseGuards(SessionGuard)
+@UseGuards(PaidCoinSalesGuard, SessionGuard)
 export class CouponsController {
   constructor(private readonly coupons: CouponService) {}
 
@@ -196,7 +171,10 @@ export class CouponsController {
   // Not in PLAN 7.5, but a coupon code is a secret short enough to guess and this is the only
   // route that tests one. Per account, like the two PLAN names.
   @RateLimit('coupon')
-  @ApiOperation({ operationId: 'redeemCoupon', summary: 'Redeem a coupon code for P' })
+  @ApiOperation({
+    operationId: 'redeemCoupon',
+    summary: 'Redeem a coupon code for P. Closed while paid Coin is off: 404 (ADR-0049)',
+  })
   @ApiData(
     couponSchema
       .pick({ code: true, amountP: true })
@@ -280,7 +258,7 @@ export class MeWalletController {
   @Get('payments/:id')
   @ApiOperation({
     operationId: 'getMyPayment',
-    summary: 'One of the caller charges (the wallet reads it for the result of a payment window)',
+    summary: 'One of the caller charges',
   })
   @ApiData(paymentSchema)
   @ApiErrors('UNAUTHENTICATED', 'NOT_FOUND', 'VALIDATION_ERROR')

@@ -20,6 +20,17 @@ export const BP_MAX = 10_000;
  */
 export const SIGNUP_BONUS_P = 10_000n;
 
+/**
+ * Whether paid Coin is on sale: the charge and its catalogue, the payment provider info, coupon
+ * redemption and the admin refund of a charge. Closed in the initial product (N06, owner
+ * decision D9, ADR-0049): the code and the tables stay, the API answers each of those routes
+ * 404 before it does anything else, and the web draws none of their entry points. Reopening
+ * (#111) is this value set to `true` and a deploy. Fails closed — anything but an explicit
+ * `true` keeps sales shut. Typed `boolean` so code on either side is not narrowed to
+ * unreachable while it is `false`.
+ */
+export const PAID_COIN_SALES_ENABLED: boolean = false;
+
 /** Coupon codes are upper-case A-Z, 0-9 and '-', so they survive being read aloud. */
 export const COUPON_CODE_MIN_LENGTH = 4;
 export const COUPON_CODE_MAX_LENGTH = 32;

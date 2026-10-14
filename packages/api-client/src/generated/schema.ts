@@ -204,25 +204,8 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Refund an unused charge within 7 days of its approval: claw back all its P, then cancel the whole KRW at the provider (retry a refunding one) */
+        /** Refund an unused charge within 7 days of its approval: claw back all its P, then cancel the whole KRW at the provider (retry a refunding one). Closed while paid Coin is off: 404 (ADR-0049) */
         post: operations["adminRefundPayment"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/admin/payments/{id}/settle": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Settle by hand a SmartroPay payment the API could not settle (needsReview), after checking the card in the merchant admin */
-        post: operations["adminSettlePayment"];
         delete?: never;
         options?: never;
         head?: never;
@@ -304,7 +287,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** Charge packages on sale, cheapest discount first */
+        /** Charge packages on sale, cheapest discount first. Closed while paid Coin is off: 404 (ADR-0049) */
         get: operations["listChargePackages"];
         put?: never;
         post?: never;
@@ -323,7 +306,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Redeem a coupon code for P */
+        /** Redeem a coupon code for P. Closed while paid Coin is off: 404 (ADR-0049) */
         post: operations["redeemCoupon"];
         delete?: never;
         options?: never;
@@ -526,7 +509,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** One of the caller charges (the wallet reads it for the result of a payment window) */
+        /** One of the caller charges */
         get: operations["getMyPayment"];
         put?: never;
         post?: never;
@@ -562,7 +545,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Buy one charge package (mock provider: succeeds immediately). P is never convertible back to cash. */
+        /** Buy one charge package (mock provider: succeeds immediately). P is never convertible back to cash. Closed while paid Coin is off: 404 (ADR-0049) */
         post: operations["charge"];
         delete?: never;
         options?: never;
@@ -577,27 +560,10 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** The configured payment provider: mock (immediate charge) or smartro (payment window, with its SDK URLs) */
+        /** The configured payment provider (mock: immediate charge). Closed while paid Coin is off: 404 (ADR-0049) */
         get: operations["getPaymentProvider"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/payments/smartro/prepare": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Reserve a pending SmartroPay payment for one charge package and sign the payment-window form (provider smartro only) */
-        post: operations["prepareSmartroPayment"];
         delete?: never;
         options?: never;
         head?: never;
@@ -667,7 +633,6 @@ export type components = {
             /** Format: uuid */
             id: string;
             method: string | null;
-            needsReview: boolean;
             nickname: string;
             /** Format: uuid */
             packageId: string | null;
@@ -1025,15 +990,6 @@ export type components = {
         PaymentProviderInfo: {
             /** @enum {string} */
             provider: "mock";
-        } | {
-            /** @enum {string} */
-            mode: "STG" | "REAL";
-            /** @enum {string} */
-            provider: "smartro";
-            scriptUrl: {
-                mobile: string;
-                pc: string;
-            };
         };
         Position: {
             costBasisP: components["schemas"]["PAmount"];
@@ -1110,42 +1066,6 @@ export type components = {
         SettlementStep: "coin";
         /** @enum {string} */
         SettlementStepStatus: "pending" | "done" | "failed";
-        SettlePaymentBody: {
-            /** @enum {string} */
-            outcome: "credit" | "cancelled" | "failed" | "restore" | "refunded";
-            reason: string;
-            tid?: string;
-        };
-        SmartroPrepareResult: {
-            approvalUrl: string;
-            form: {
-                Amt: string;
-                BuyerEmail: string;
-                BuyerName: string;
-                BuyerTel: string;
-                EdiDate: string;
-                EncryptData: string;
-                GoodsCnt: string;
-                GoodsName: string;
-                MallUserId: string;
-                Mid: string;
-                Moid: string;
-                PayMethod: string;
-                ReturnUrl: string;
-                StopUrl: string;
-                TaxAmt: string;
-                TaxFreeAmt: string;
-                VatAmt: string;
-            };
-            /** @enum {string} */
-            mode: "STG" | "REAL";
-            /** Format: uuid */
-            paymentId: string;
-            scriptUrl: {
-                mobile: string;
-                pc: string;
-            };
-        };
         UpdateChargePackageBody: {
             amountP?: components["schemas"]["PAmount"];
             isActive?: boolean;
@@ -2340,87 +2260,6 @@ export interface operations {
             };
         };
     };
-    adminSettlePayment: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SettlePaymentBody"];
-            };
-        };
-        responses: {
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        data: components["schemas"]["AdminPayment"];
-                    };
-                };
-            };
-            /** @description VALIDATION_ERROR */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description UNAUTHENTICATED */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description FORBIDDEN */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description NOT_FOUND */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description REFUND_NOT_ALLOWED */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description RATE_LIMITED */
-            429: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
     adminListUsers: {
         parameters: {
             query?: {
@@ -2655,6 +2494,15 @@ export interface operations {
                     "application/json": {
                         data: components["schemas"]["ChargePackage"][];
                     };
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             /** @description RATE_LIMITED */
@@ -3588,81 +3436,8 @@ export interface operations {
                     };
                 };
             };
-            /** @description RATE_LIMITED */
-            429: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    prepareSmartroPayment: {
-        parameters: {
-            query?: never;
-            header: {
-                /** @description Client-generated key for this purchase (PLAN 5.4). Re-sent while the payment is still pending and unapproved, it returns a freshly signed form for the SAME payment. DUPLICATE_REQUEST (409) answers a key re-used with a different body, or one whose payment has already been approved or closed (the key is spent). */
-                "Idempotency-Key": string;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ChargeBody"];
-            };
-        };
-        responses: {
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        data: components["schemas"]["SmartroPrepareResult"];
-                    };
-                };
-            };
-            /** @description VALIDATION_ERROR */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description UNAUTHENTICATED */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description FORBIDDEN */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
             /** @description NOT_FOUND */
             404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description PRICE_MOVED | DUPLICATE_REQUEST | CONTACT_REQUIRED */
-            409: {
                 headers: {
                     [name: string]: unknown;
                 };

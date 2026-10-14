@@ -1,23 +1,18 @@
 import { QueryClient } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 import { ApiError, type Payment, isForAnotherAccount } from '@/lib/api';
-import { IdempotencyKeys } from '@/lib/idempotency';
 import { restartQueries } from '@/lib/query-client';
-import { PAYMENT_POLL_INTERVAL_MS, PAYMENT_POLL_LIMIT, paymentsPoll } from '@/lib/smartro-payments';
+import { PAYMENT_POLL_INTERVAL_MS, PAYMENT_POLL_LIMIT, paymentsPoll } from '@/lib/payments';
 import { ME_QUERY_KEY } from './use-me';
 import {
   BALANCE_HISTORY_KEYS,
   CHARGE_PACKAGES_QUERY_KEY,
   LEDGER_QUERY_KEY,
   PAYMENTS_QUERY_KEY,
-  PAYMENT_PROVIDER_QUERY_KEY,
   isChargeInProgress,
   isCouponRejection,
   isStaleCatalogue,
-  myPaymentKey,
-  myPaymentRefetchInterval,
   paymentsRefetchInterval,
-  smartroKeyIntent,
 } from './use-wallet';
 
 const apiError = (status: number, code: string, details?: unknown) =>
@@ -135,67 +130,18 @@ describe('isCouponRejection', () => {
   });
 });
 
-describe('smartroKeyIntent', () => {
-  // A plain Map-backed storage, as `idempotency.test.ts` fakes one.
-  function memoryStorage() {
-    const items = new Map<string, string>();
-    return {
-      getItem: (name: string) => items.get(name) ?? null,
-      setItem: (name: string, value: string) => void items.set(name, value),
-      removeItem: (name: string) => void items.delete(name),
-    };
-  }
-
-  it("files a payment-window key apart from the immediate charge's key for the same package", () => {
-    // After a provider switch, a key a mock charge left unanswered must not be replayed as a
-    // SmartroPay reservation (the server would call it another charge's key), nor back.
-    const storage = memoryStorage();
-    const keys = new IdempotencyKeys('user-a', storage);
-    const charge = keys.take('pack-1');
-    const windowKey = keys.take(smartroKeyIntent('pack-1'));
-    expect(smartroKeyIntent('pack-1')).not.toBe('pack-1');
-    expect(windowKey).not.toBe(charge);
-    expect(new IdempotencyKeys('user-a', storage).take(smartroKeyIntent('pack-1'))).toBe(windowKey);
-  });
-
-  it('gives every answered click a fresh key, and replays only an unanswered or 5xx one', () => {
-    // useSmartroPrepare settles on every answer (ADR-0042): a 200 opened its window, a 4xx
-    // refused it; the next click is a new reservation. No answer, or a 5xx, may have reserved:
-    // the replay gets the SAME payment's form back instead of a second reservation.
-    const keys = new IdempotencyKeys('user-a', memoryStorage());
-    const intent = smartroKeyIntent('pack-1');
-    for (const status of [200, 403, 404, 409]) {
-      const key = keys.take(intent);
-      keys.settle(intent, status);
-      expect(keys.take(intent), String(status)).not.toBe(key);
-      keys.settle(intent, 200);
-    }
-    const lost = keys.take(intent);
-    expect(keys.take(intent)).toBe(lost);
-    keys.settle(intent, 503);
-    expect(keys.take(intent)).toBe(lost);
-  });
-});
-
 describe('BALANCE_HISTORY_KEYS', () => {
-  it("reaches 원장, 결제 내역 and the notice's payment, and nothing else of the wallet", async () => {
-    // What the `user:balance` handler restarts: an admin refund or a late 재통보 credit moves a
-    // payment as well as the balance, and 결제 내역 must not go on saying 완료 beside the ledger.
+  it('reaches 원장 and 결제 내역, and nothing else of the wallet', async () => {
+    // What the `user:balance` handler restarts: an admin refund moves a payment as well as the
+    // balance, and 결제 내역 must not go on saying 완료 beside the ledger.
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const page = { pages: [{ items: [], nextCursor: null }], pageParams: [undefined] };
-    const held = [
-      LEDGER_QUERY_KEY,
-      PAYMENTS_QUERY_KEY,
-      myPaymentKey('3f2504e0-4f89-11d3-9a0c-0305e82c3301'),
-      ME_QUERY_KEY,
-      CHARGE_PACKAGES_QUERY_KEY,
-      PAYMENT_PROVIDER_QUERY_KEY,
-    ];
+    const held = [LEDGER_QUERY_KEY, PAYMENTS_QUERY_KEY, ME_QUERY_KEY, CHARGE_PACKAGES_QUERY_KEY];
     for (const key of held) queryClient.setQueryData(key, page);
     try {
       for (const key of BALANCE_HISTORY_KEYS) await restartQueries(queryClient, key);
       const invalidated = held.map((key) => queryClient.getQueryState(key)?.isInvalidated ?? false);
-      expect(invalidated).toEqual([true, true, true, false, false, false]);
+      expect(invalidated).toEqual([true, true, false, false]);
     } finally {
       queryClient.clear();
     }
@@ -208,10 +154,10 @@ describe('paymentsRefetchInterval', () => {
     amountP: '10000',
     priceKrw: 9900,
     packageId: null,
-    provider: 'smartro',
-    providerRef: 'StdTid0123456789',
+    provider: 'mock',
+    providerRef: 'mock_0123456789',
     status,
-    method: 'CARD',
+    method: null,
     approvedAt: '2026-09-20T03:00:00.000Z',
     refundedAt: null,
     resultMessage: null,
@@ -293,35 +239,5 @@ describe('paymentsRefetchInterval', () => {
     } finally {
       queryClient.clear();
     }
-  });
-});
-
-describe('myPaymentRefetchInterval', () => {
-  const pending = { status: 'pending' } as Payment;
-
-  it('re-reads a pending payment, and spends the budget on failed re-reads too', () => {
-    const state = (dataUpdateCount: number, errorUpdateCount: number) => ({
-      state: { data: pending, dataUpdateCount, errorUpdateCount },
-    });
-    expect(myPaymentRefetchInterval(state(1, 0))).toBe(PAYMENT_POLL_INTERVAL_MS);
-    expect(myPaymentRefetchInterval(state(1, PAYMENT_POLL_LIMIT - 2))).toBe(
-      PAYMENT_POLL_INTERVAL_MS,
-    );
-    expect(myPaymentRefetchInterval(state(1, PAYMENT_POLL_LIMIT - 1))).toBe(false);
-    expect(myPaymentRefetchInterval(state(PAYMENT_POLL_LIMIT, 0))).toBe(false);
-    // Someone else's id: a 404 and no data, nothing to wait on.
-    expect(
-      myPaymentRefetchInterval({
-        state: { data: undefined, dataUpdateCount: 0, errorUpdateCount: 1 },
-      }),
-    ).toBe(false);
-  });
-
-  it('re-reads a cancelled payment whose cancel is not confirmed yet, and stops once it is', () => {
-    const state = (data: Payment) => ({ state: { data, dataUpdateCount: 1, errorUpdateCount: 0 } });
-    const cancelled = (cancelConfirmed: boolean) =>
-      ({ status: 'cancelled', cancelConfirmed }) as Payment;
-    expect(myPaymentRefetchInterval(state(cancelled(false)))).toBe(PAYMENT_POLL_INTERVAL_MS);
-    expect(myPaymentRefetchInterval(state(cancelled(true)))).toBe(false);
   });
 });

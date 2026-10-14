@@ -115,13 +115,13 @@ describe('response schemas', () => {
       }).packageId,
     ).toBeNull();
 
-    // A refunded SmartroPay card payment carries the PG's method, both instants and its message.
+    // A refunded card payment carries the PG's method, both instants and its message.
     const refunded = {
       id: '3f1a5b6c-1111-4222-8333-444455556666',
       amountP: '10000',
       priceKrw: 9700,
       packageId: null,
-      provider: 'smartro',
+      provider: 'mock',
       providerRef: 'tid_0001',
       status: 'refunded',
       method: 'CARD',
@@ -147,14 +147,14 @@ describe('response schemas', () => {
     }
     expect(paymentSchema.safeParse({ ...cancelled, cancelConfirmed: 'no' }).success).toBe(false);
 
-    // The admin row adds the account and whether an admin must settle it by hand.
+    // The admin row adds the account.
     const adminRow = { ...refunded, status: 'refunding', userId: 'u1', nickname: '예측가' };
-    expect(adminPaymentSchema.parse({ ...adminRow, needsReview: true })).toMatchObject({
+    expect(adminPaymentSchema.parse(adminRow)).toMatchObject({
       status: 'refunding',
-      needsReview: true,
+      nickname: '예측가',
     });
-    expect(adminPaymentSchema.safeParse(adminRow).success).toBe(false);
-    expect(adminPaymentSchema.safeParse({ ...adminRow, needsReview: 'yes' }).success).toBe(false);
+    const { nickname: _nickname, ...withoutNickname } = adminRow;
+    expect(adminPaymentSchema.safeParse(withoutNickname).success).toBe(false);
 
     expect(
       auditFailureSchema.parse({

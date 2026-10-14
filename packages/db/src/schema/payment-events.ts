@@ -9,8 +9,8 @@ import { payments } from './payments.js';
  * buddha_app holds INSERT/SELECT only (migration 0015). `type`: PAYMENT_EVENT_TYPES in
  * @buddha/shared.
  *
- * `payload` is the PG's answer with the secrets taken out: never the MerchantKey, CancelPwd,
- * HashData or EncData. TrAuthKey may stay — the one-hour result inquiry needs it.
+ * `payload` is the PG's answer with the secrets taken out (merchant keys, passwords, signatures
+ * derived from them) and the payer's personal fields.
  */
 export const paymentEvents = pgTable(
   'payment_events',
