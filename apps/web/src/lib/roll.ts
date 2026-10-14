@@ -7,7 +7,7 @@
  * no ref, no effect and no `requestAnimationFrame` — which is also why the server and the
  * browser emit identical markup and a page load does not roll every number up from zero.
  *
- * The text arrives already formatted (`formatP`, `formatYesPrice`); nothing is formatted here,
+ * The text arrives already formatted (`formatCoin`, `formatYesPrice`); nothing is formatted here,
  * so the composed labels those helpers produce — '예 63%', '−1,200P' — survive intact and the
  * 예/아니오 word always travels with its number (PLAN 11.2).
  */

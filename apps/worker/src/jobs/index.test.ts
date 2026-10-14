@@ -165,9 +165,9 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
     }
   });
 
-  it('market.finalize with a market id returns a JSON-safe result: paidP a decimal string, settledAt ISO', async () => {
+  it('market.finalize with a market id returns a JSON-safe result: paidCoin a decimal string, settledAt ISO', async () => {
     const market = await judged();
-    const alice = (await createUser(t.db, { balanceP: 10_000n })).user.id;
+    const alice = (await createUser(t.db, { balanceCoin: 10_000n })).user.id;
     await createPosition(t.db, { userId: alice, marketId: market.id, outcome: 'YES', qty: 3 });
 
     const result = await run({ name: JOB_NAMES.marketFinalize, data: { marketId: market.id } });
@@ -180,7 +180,7 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
       positions: 1,
       settledAccounts: 1,
       paidAccounts: 1,
-      paidP: '300',
+      paidCoin: '300',
     });
     // The string is the DB instant the row carries, not a re-read.
     const row = await marketRow(market.id);
@@ -194,7 +194,7 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
       userChannel(alice),
     ]);
     // The log line went through the same conversion: pino would have thrown on the bigint.
-    expect(logs.find((line) => line.msg === 'market finalize')).toMatchObject({ paidP: '300' });
+    expect(logs.find((line) => line.msg === 'market finalize')).toMatchObject({ paidCoin: '300' });
 
     // A second run is the skip, and the skip is JSON as it stands.
     const again = await run({ name: JOB_NAMES.marketFinalize, data: { marketId: market.id } });
@@ -206,7 +206,7 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
     // A winning holder without a balance row poisons the market (market-finalize.ts throws,
     // the transaction rolls back); the scan reports it instead of failing the job.
     const poisoned = await judged();
-    const alice = (await createUser(t.db, { balanceP: 10_000n })).user.id;
+    const alice = (await createUser(t.db, { balanceCoin: 10_000n })).user.id;
     await createPosition(t.db, { userId: alice, marketId: poisoned.id, outcome: 'YES', qty: 2 });
     await t.db.delete(schema.balances).where(eq(schema.balances.userId, alice));
     const healthy = await judged();
@@ -241,7 +241,7 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
   });
 
   it('ledger.audit runs on the audit connection and reports the mismatch count', async () => {
-    await createUser(t.db, { balanceP: 10_000n });
+    await createUser(t.db, { balanceCoin: 10_000n });
     await expect(run({ name: JOB_NAMES.ledgerAudit })).resolves.toEqual({
       checked: 1,
       mismatches: 0,

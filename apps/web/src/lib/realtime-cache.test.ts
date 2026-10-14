@@ -58,7 +58,7 @@ const summary: MarketSummary = {
   imageUrl: null,
   status: 'open',
   lastPrice: 50,
-  volumeP: '120000',
+  volumeCoin: '120000',
   tradeCount: 10,
   traderCount: 4,
   closeAt: '2026-10-01T00:00:00.000Z',
@@ -86,7 +86,7 @@ const tick = (patch: Partial<MarketTickEvent> = {}): MarketTickEvent => ({
   type: 'market:tick',
   marketId: ID,
   lastPrice: 63,
-  volumeP: '130000',
+  volumeCoin: '130000',
   tradeCount: 11,
   traderCount: 5,
   ts: '2026-09-07T00:00:00.000Z',
@@ -95,8 +95,8 @@ const tick = (patch: Partial<MarketTickEvent> = {}): MarketTickEvent => ({
 
 const balance: UserBalanceEvent = {
   type: 'user:balance',
-  availableP: '80000',
-  lockedP: '1200',
+  availableCoin: '80000',
+  lockedCoin: '1200',
   ledgerEntryId: '9',
   ts: '2026-09-07T00:00:00.000Z',
 };
@@ -106,7 +106,7 @@ const me: Me = {
   email: 'a@example.com',
   emailVerified: true,
   profile: { nickname: '테스터', role: 'user', createdAt: '2026-08-01T00:00:00.000Z' },
-  balance: { availableP: '100000', lockedP: '0' },
+  balance: { availableCoin: '100000', lockedCoin: '0' },
   linkedAccounts: [],
   contact: null,
 };
@@ -134,8 +134,8 @@ const beforeTrade: Position = {
   resolvedResult: null,
   outcome: 'YES',
   qty: 10,
-  costBasisP: '5000',
-  realizedPnlP: '0',
+  costBasisCoin: '5000',
+  realizedPnlCoin: '0',
   settled: false,
   version: 3,
   updatedAt: '2026-09-06T00:00:00.000Z',
@@ -147,8 +147,8 @@ const traded: UserPositionEvent = {
   marketId: ID,
   outcome: 'YES',
   qty: 14,
-  costBasisP: '7000',
-  realizedPnlP: '0',
+  costBasisCoin: '7000',
+  realizedPnlCoin: '0',
   settled: false,
   version: 4,
   ts: '2026-09-07T00:00:00.000Z',
@@ -189,7 +189,7 @@ describe('the market detail cache', () => {
 
       const data = observer.getCurrentResult().data;
       expect(data?.lastPrice).toBe(63);
-      expect(data?.volumeP).toBe('130000');
+      expect(data?.volumeCoin).toBe('130000');
       expect(data?.tradeCount).toBe(11);
       expect(data?.title).toBe('10월 기준금리 인하?');
       expect(fetches).toBe(2);
@@ -314,7 +314,7 @@ describe('the me cache', () => {
     // first load is `pending` with no data and no observer fetching. Writing nothing there
     // left the balance chip and 잔고 요약 on a skeleton until the next window focus.
     const queryClient = getQueryClient();
-    let answer: Me = { ...me, balance: { availableP: '100000', lockedP: '0' } };
+    let answer: Me = { ...me, balance: { availableCoin: '100000', lockedCoin: '0' } };
     let fetches = 0;
     const observer = new QueryObserver<Me>(queryClient, {
       queryKey: ME_QUERY_KEY,
@@ -341,13 +341,16 @@ describe('the me cache', () => {
       expect(observer.getCurrentResult().isPending).toBe(true);
       expect(observer.getCurrentResult().data).toBeUndefined();
       // What the server answers now reflects the event the socket delivered.
-      answer = { ...me, balance: { availableP: balance.availableP, lockedP: balance.lockedP } };
+      answer = {
+        ...me,
+        balance: { availableCoin: balance.availableCoin, lockedCoin: balance.lockedCoin },
+      };
       await queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY, exact: true });
       await first;
 
       expect(observer.getCurrentResult().data?.balance).toEqual({
-        availableP: '80000',
-        lockedP: '1200',
+        availableCoin: '80000',
+        lockedCoin: '1200',
       });
       expect(observer.getCurrentResult().isPending).toBe(false);
       expect(fetches).toBe(2);
@@ -531,7 +534,7 @@ describe('the positions caches', () => {
 
       const row = observer.getCurrentResult().data?.[0];
       expect(row?.qty).toBe(14);
-      expect(row?.costBasisP).toBe('7000');
+      expect(row?.costBasisCoin).toBe('7000');
       expect(row?.version).toBe(4);
       // …while everything only a REST answer knows still comes from it.
       expect(row?.marketTitle).toBe('10월 기준금리 인하?');

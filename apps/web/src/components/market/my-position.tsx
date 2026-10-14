@@ -11,18 +11,18 @@ import {
   Stack,
   Text,
 } from '@chakra-ui/react';
-import { type MarketStatus, formatP, parsePAmount } from '@buddha/shared';
+import { type MarketStatus, formatCoin, parseCoinAmount } from '@buddha/shared';
 import NextLink from 'next/link';
 import { usePathname } from 'next/navigation';
 import { type ReactNode } from 'react';
 import { EmptyState } from '@/components/ui/empty-state';
 import { copy } from '@/copy';
 import {
-  averageCostP,
-  markPriceP,
+  averageCostCoin,
+  markPriceCoin,
   markToLiveMarket,
   positionListStatusFor,
-  unrealizedPnlP,
+  unrealizedPnlCoin,
   usePositions,
 } from '@/hooks/use-portfolio';
 import { type Position } from '@/lib/api';
@@ -35,7 +35,7 @@ import { sessionListSection } from '@/lib/query-client';
  * finished.
  *
  * Every figure is `use-portfolio.ts`'s arithmetic, in `bigint`. Not one of them is recomputed
- * here, and `markPriceP` in particular is the reason: a NO contract is worth the complement of
+ * here, and `markPriceCoin` in particular is the reason: a NO contract is worth the complement of
  * the YES price, and valuing it at the YES price is a silent error that produces a plausible
  * number wrong by 100 − 2·price per contract.
  *
@@ -187,11 +187,11 @@ export function MyPosition({
 
 function PositionRows({ position }: { position: Position }) {
   const yes = position.outcome === 'YES';
-  const average = averageCostP(position);
+  const average = averageCostCoin(position);
   // Both `undefined` for a market with no fill to mark to (체결 없음, N02 §5).
-  const mark = markPriceP(position);
-  const unrealized = unrealizedPnlP(position);
-  const realized = parsePAmount(position.realizedPnlP);
+  const mark = markPriceCoin(position);
+  const unrealized = unrealizedPnlCoin(position);
+  const realized = parseCoinAmount(position.realizedPnlCoin);
   return (
     <Stack gap="2" data-testid={`market-position-${yes ? 'yes' : 'no'}`}>
       <Badge colorPalette={yes ? 'yes' : 'no'} variant="subtle" alignSelf="flex-start">
@@ -202,10 +202,10 @@ function PositionRows({ position }: { position: Position }) {
         {/* A row the account has sold out of stays in the list so its realised PnL keeps
             showing; it holds nothing, so there is no average to divide out. */}
         <Item label={copy.positionAvgPrice}>
-          {average === undefined ? EMPTY : formatP(average)}
+          {average === undefined ? EMPTY : formatCoin(average)}
         </Item>
         <Item label={copy.positionCurrentPrice}>
-          {mark === undefined ? copy.noFills : formatP(mark)}
+          {mark === undefined ? copy.noFills : formatCoin(mark)}
         </Item>
         <Item label={copy.positionPnl}>
           {unrealized === undefined ? EMPTY : <Signed amount={unrealized} />}
@@ -225,9 +225,9 @@ function PositionRows({ position }: { position: Position }) {
  * the header badge and the status notice above have already said what it became.
  *
  * No 현재가 and no 평가손익. Settlement closes the row out (`settle` leaves qty and cost basis at
- * 0), the P has already landed in the balance, and `marketLastPrice` on a finished market is
+ * 0), the Coin has already landed in the balance, and `marketLastPrice` on a finished market is
  * only the last price something TRADED at — so marking such a row to it would print a plausible
- * number that is not a result. `realizedPnlP` is the whole story.
+ * number that is not a result. `realizedPnlCoin` is the whole story.
  */
 function SettledPositionRows({ position }: { position: Position }) {
   const yes = position.outcome === 'YES';
@@ -244,7 +244,7 @@ function SettledPositionRows({ position }: { position: Position }) {
         </Item>
         <Item label={copy.positionQty}>{formatContracts(position.qty)}</Item>
         <Item label={copy.positionRealizedPnl}>
-          <Signed amount={parsePAmount(position.realizedPnlP)} />
+          <Signed amount={parseCoinAmount(position.realizedPnlCoin)} />
         </Item>
       </DataList.Root>
     </Stack>
@@ -252,15 +252,15 @@ function SettledPositionRows({ position }: { position: Position }) {
 }
 
 /**
- * A gain or a loss. `formatP` already writes a loss with U+2212 (PLAN 11.1-6), so the colour
+ * A gain or a loss. `formatCoin` already writes a loss with U+2212 (PLAN 11.1-6), so the colour
  * only repeats what the sign and the row's label already say — which is the rule, not a
  * nicety: at 0 it stays on the ordinary foreground rather than claiming a direction.
  */
 function Signed({ amount }: { amount: bigint }) {
-  if (amount === 0n) return <>{formatP(amount)}</>;
+  if (amount === 0n) return <>{formatCoin(amount)}</>;
   return (
     <Text as="span" colorPalette={amount > 0n ? 'yes' : 'no'} color="colorPalette.fg">
-      {formatP(amount)}
+      {formatCoin(amount)}
     </Text>
   );
 }

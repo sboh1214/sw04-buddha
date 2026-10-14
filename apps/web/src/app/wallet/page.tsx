@@ -15,7 +15,7 @@ export const metadata: Metadata = { title: `${copy.walletTitle} | ${copy.appName
 
 /**
  * PLAN 11.3 `/wallet`: the balance and the ledger. The notice at the top is fixed copy (PLAN
- * Appendix A, N01 §2): P never converts back to cash.
+ * Appendix A, N01 §2): Coin never converts back to cash.
  *
  * Charging, coupons and 결제 내역 are drawn only while paid Coin is on sale
  * (PAID_COIN_SALES_ENABLED, ADR-0049) — closed in the initial product (N06), where the API

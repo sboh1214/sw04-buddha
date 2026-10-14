@@ -45,7 +45,7 @@ pnpm dev                         # web(3000) · api(4000) · worker + 공유 패
 - API 레디니스 <http://localhost:3000/api/health>(web rewrite 경유) 또는 <http://localhost:4000/api/health>. 워커는 <http://localhost:4100/health>.
 - Mailpit UI <http://localhost:8025> — 가입 인증·비밀번호 재설정·이메일 변경 메일이 전부 여기로 온다. 이메일 가입은 **주소만** 입력하고, 메일의 인증 링크를 누르면 로그인된 뒤 `/set-password`에서 첫 비밀번호를 정한다(인증 전에는 비밀번호가 없어 로그인할 수 없다). 운영 메일은 AWS SES(`.env.example`의 `SMTP_*` 주석).
 - 관리자 로그인은 `.env`의 `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD`(기본 `admin@buddha.local` / `admin1234!`). 이 두 값이 없으면 `pnpm db:seed`가 관리자와 시드 시장을 통째로 건너뛴다. 시드는 관리자에게 실명·휴대전화를 넣지 않으므로 관리자도 **첫 로그인에서 `/onboarding`을 만나** 한 번 입력한다 — 로컬에서도 운영에서도 같다(`/admin`도 게이트 예외가 아니다, ADR-0043). e2e는 `admin` 픽스처가 로그인 직후 `PUT /api/v1/me/contact`로 관리자 연락처를 넣는다.
-- 가입하면 10,000P가 자동 지급된다(`SIGNUP_BONUS_P`). 유료 충전·결제·쿠폰은 초기 제품에서 닫혀 있다(ADR-0049) — 아래 [유료 충전·결제·쿠폰(닫힘)](#유료-충전결제쿠폰닫힘).
+- 가입하면 10,000P가 자동 지급된다(`SIGNUP_BONUS_COIN`). 유료 충전·결제·쿠폰은 초기 제품에서 닫혀 있다(ADR-0049) — 아래 [유료 충전·결제·쿠폰(닫힘)](#유료-충전결제쿠폰닫힘).
 - 소셜 로그인(Google/Kakao/Naver)은 `.env`에 그 프로바이더의 키 **쌍**을 넣을 때만 켜진다(Q-M1-1).
 
 화면은 다음과 같다. 모바일 폭에서는 하단 탭(홈·포트폴리오·지갑·설정)이 붙는다. 사용자가 거래하는 경로는 지금 없다 — 직접 AMM 거래를 지웠고 CLOB 주문·체결은 아직 없다(ADR-0048). 체결이 없는 시장의 가격은 어디서나 '체결 없음'이다.

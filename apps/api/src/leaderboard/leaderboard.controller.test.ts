@@ -33,13 +33,13 @@ describe.skipIf(!hasTestInfra)('leaderboard (integration)', () => {
   };
 
   /** A settled position with a realized result, the shape the ranking sums. */
-  async function realize(user: TestUser, realizedPnlP: bigint): Promise<void> {
+  async function realize(user: TestUser, realizedPnlCoin: bigint): Promise<void> {
     await createPosition(t.db, {
       userId: user.id,
       marketId,
       outcome: 'YES',
       qty: 0,
-      realizedPnlP,
+      realizedPnlCoin,
       settled: true,
     });
   }
@@ -63,8 +63,8 @@ describe.skipIf(!hasTestInfra)('leaderboard (integration)', () => {
     await realize(loser, -900n);
 
     expect(await board()).toEqual([
-      { rank: 1, nickname: await nicknameOf(winner), realizedPnlP: '4200' },
-      { rank: 2, nickname: await nicknameOf(loser), realizedPnlP: '-900' },
+      { rank: 1, nickname: await nicknameOf(winner), realizedPnlCoin: '4200' },
+      { rank: 2, nickname: await nicknameOf(loser), realizedPnlCoin: '-900' },
     ]);
   });
 
@@ -72,24 +72,24 @@ describe.skipIf(!hasTestInfra)('leaderboard (integration)', () => {
     const trader = await signUpTestUser(t);
     const second = await createMarket(t.db);
     // Two halves that only add up correctly in 64-bit arithmetic: as doubles they would land
-    // one P away, which is exactly the class of bug PLAN 0.2 forbids.
+    // one Coin away, which is exactly the class of bug PLAN 0.2 forbids.
     await createPosition(t.db, {
       userId: trader.id,
       marketId,
       outcome: 'YES',
       qty: 0,
-      realizedPnlP: 9_007_199_254_740_993n,
+      realizedPnlCoin: 9_007_199_254_740_993n,
     });
     await createPosition(t.db, {
       userId: trader.id,
       marketId: second.id,
       outcome: 'NO',
       qty: 0,
-      realizedPnlP: 1n,
+      realizedPnlCoin: 1n,
     });
 
     const [top] = await board();
-    expect(top?.realizedPnlP).toBe('9007199254740994');
+    expect(top?.realizedPnlCoin).toBe('9007199254740994');
   });
 
   it('leaves out accounts that have realized nothing', async () => {
@@ -114,7 +114,7 @@ describe.skipIf(!hasTestInfra)('leaderboard (integration)', () => {
       Array.from({ length: LEADERBOARD_LIMIT }, (_, index) => index + 1),
     );
     // Descending, so the two smallest are the ones left out.
-    expect(rows[0]?.realizedPnlP).toBe(String(LEADERBOARD_LIMIT + 2));
+    expect(rows[0]?.realizedPnlCoin).toBe(String(LEADERBOARD_LIMIT + 2));
   });
 
   it('orders ties the same way twice, so SSR and a refetch agree', async () => {

@@ -8,10 +8,10 @@ import {
   type PaymentStatus,
   type SettlementStep,
   type SettlementStepStatus,
-  formatP,
+  formatCoin,
   outcomeSchema,
-  pAmountSchema,
-  parsePAmount,
+  coinAmountSchema,
+  parseCoinAmount,
   uuidParamSchema,
 } from '@buddha/shared';
 import * as z from 'zod';
@@ -22,7 +22,7 @@ import { formatKst } from './datetime';
 /**
  * Pure helpers behind the market screens: status and event labels, the list badges (PLAN 12),
  * the admin's settlement-step rows (ADR-0046), and the number formats the public cards and the
- * detail header share with the admin screens. No domain maths lives here — prices and P come
+ * detail header share with the admin screens. No domain maths lives here — prices and Coin come
  * from the API and @buddha/shared (PLAN 11.5).
  */
 
@@ -246,7 +246,7 @@ export function formatBp(bp: number): string {
   return `${(bp / 100).toFixed(2)}%`;
 }
 
-/** The same basis points as what one contract costs: 6300 → "63.00P" (a winner pays 100P). */
+/** The same basis points as what one contract costs: 6300 → "63.00P" (a winner pays 100 Coin). */
 export function formatPricePerContract(bp: number): string {
   return `${(bp / 100).toFixed(2)}P`;
 }
@@ -362,7 +362,7 @@ const FINALIZED_PAYLOAD = z.object({
   result: outcomeSchema,
   settledAccounts: z.number().int().nonnegative().optional(),
   paidAccounts: z.number().int().nonnegative().optional(),
-  paidP: pAmountSchema.optional(),
+  paidCoin: coinAmountSchema.optional(),
 });
 
 /** "예" / "아니오" for a result row: never the wire's YES/NO on an admin screen. */
@@ -422,7 +422,7 @@ export function marketEventRows(type: MarketEventType, payload: unknown): EventR
     case 'finalized': {
       const parsed = FINALIZED_PAYLOAD.safeParse(payload);
       if (!parsed.success) return undefined;
-      const { result, settledAccounts, paidAccounts, paidP } = parsed.data;
+      const { result, settledAccounts, paidAccounts, paidCoin } = parsed.data;
       return [
         { label: copy.marketResolvedResult, value: outcomeLabel(result) },
         ...(settledAccounts === undefined
@@ -431,9 +431,9 @@ export function marketEventRows(type: MarketEventType, payload: unknown): EventR
         ...(paidAccounts === undefined
           ? []
           : [{ label: copy.eventPaidAccounts, value: String(paidAccounts) }]),
-        ...(paidP === undefined
+        ...(paidCoin === undefined
           ? []
-          : [{ label: copy.eventPaidTotal, value: formatP(parsePAmount(paidP)) }]),
+          : [{ label: copy.eventPaidTotal, value: formatCoin(parseCoinAmount(paidCoin)) }]),
       ];
     }
     case 'rules_edited': {

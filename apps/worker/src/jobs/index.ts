@@ -81,13 +81,13 @@ const HANDLERS: Partial<Record<string, Handler>> = {
 
 /**
  * BullMQ stores a job's return value as JSON, and pino serialises the log object the same
- * way: a bigint in either throws. The P amount goes out as the decimal string every wire
+ * way: a bigint in either throws. The Coin amount goes out as the decimal string every wire
  * format of this project uses.
  */
 function toLoggable(result: Awaited<ReturnType<typeof finalizeMarket>>): JobResult {
   if (result.outcome !== 'settled') return result;
-  const { paidP, settledAt, ...rest } = result;
-  return { ...rest, paidP: paidP.toString(), settledAt: settledAt.toISOString() };
+  const { paidCoin, settledAt, ...rest } = result;
+  return { ...rest, paidCoin: paidCoin.toString(), settledAt: settledAt.toISOString() };
 }
 
 /**

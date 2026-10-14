@@ -8,7 +8,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { schema } from '@buddha/db';
-import { PAID_COIN_SALES_ENABLED, SIGNUP_BONUS_P } from '@buddha/shared';
+import { PAID_COIN_SALES_ENABLED, SIGNUP_BONUS_COIN } from '@buddha/shared';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
@@ -61,11 +61,14 @@ describe.skipIf(!hasTestInfra)('paid Coin closed (integration)', () => {
   /** Everything a closed route could have moved for `member`. */
   async function moneyOf(userId: string) {
     const [balance] = await t.db
-      .select({ availableP: schema.balances.availableP, lockedP: schema.balances.lockedP })
+      .select({
+        availableCoin: schema.balances.availableCoin,
+        lockedCoin: schema.balances.lockedCoin,
+      })
       .from(schema.balances)
       .where(eq(schema.balances.userId, userId));
     const ledger = await t.db
-      .select({ type: schema.ledgerEntries.type, amountP: schema.ledgerEntries.amountP })
+      .select({ type: schema.ledgerEntries.type, amountCoin: schema.ledgerEntries.amountCoin })
       .from(schema.ledgerEntries)
       .where(eq(schema.ledgerEntries.userId, userId));
     const payments = await t.db
@@ -103,7 +106,7 @@ describe.skipIf(!hasTestInfra)('paid Coin closed (integration)', () => {
 
   it('refuses a charge before anything, signed in or not, and credits nothing', async () => {
     const before = await moneyOf(member.id);
-    expect(before.balance).toEqual({ availableP: SIGNUP_BONUS_P, lockedP: 0n });
+    expect(before.balance).toEqual({ availableCoin: SIGNUP_BONUS_COIN, lockedCoin: 0n });
     const charge = vi.spyOn(t.app.get(MockPaymentProvider), 'charge');
 
     const requests = [
@@ -139,7 +142,7 @@ describe.skipIf(!hasTestInfra)('paid Coin closed (integration)', () => {
       method: 'POST',
       url: '/api/v1/admin/coupons',
       headers: { ...jsonHeaders, cookie: admin.cookie },
-      payload: { code: 'WELCOME-2026', amountP: '3000' },
+      payload: { code: 'WELCOME-2026', amountCoin: '3000' },
     });
     expect(issued.statusCode).toBe(201);
     const before = await moneyOf(member.id);
@@ -165,7 +168,7 @@ describe.skipIf(!hasTestInfra)('paid Coin closed (integration)', () => {
       .insert(schema.payments)
       .values({
         userId: member.id,
-        amountP: pack.amountP,
+        amountCoin: pack.amountCoin,
         priceKrw: pack.priceKrw,
         packageId: pack.id,
         provider: 'mock',
@@ -205,7 +208,7 @@ describe.skipIf(!hasTestInfra)('paid Coin closed (integration)', () => {
       method: 'POST',
       url: '/api/v1/admin/charge-packages',
       headers: asAdmin,
-      payload: { amountP: '5000', priceKrw: 4900 },
+      payload: { amountCoin: '5000', priceKrw: 4900 },
     });
     expect(created.statusCode).toBe(201);
     for (const url of [

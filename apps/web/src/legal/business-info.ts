@@ -41,8 +41,8 @@ export const BUSINESS_INFO = {
   privacyOfficer: UNDECIDED,
   /** 개인정보 보호책임자 연락 이메일. */
   privacyOfficerEmail: UNDECIDED,
-  /** P 유효기간 — the whole phrase, e.g. "충전일로부터 5년" (open question, QUESTIONS.md). */
-  pointExpiry: UNDECIDED,
+  /** Coin 유효기간 — the whole phrase, e.g. "충전일로부터 5년" (open question, QUESTIONS.md). */
+  coinExpiry: UNDECIDED,
   /**
    * 환불 요청 처리 기한 — the whole phrase, e.g. "요청을 받은 날부터 영업일 기준 1일 이내". The
    * refund window is judged when the admin processes the refund, so this is how long a member
@@ -79,7 +79,7 @@ export const OWNER_SUPPLIED_KEYS = [
   'email',
   'privacyOfficer',
   'privacyOfficerEmail',
-  'pointExpiry',
+  'coinExpiry',
   'refundProcessingTime',
   'effectiveDate',
 ] as const satisfies readonly BusinessInfoKey[];

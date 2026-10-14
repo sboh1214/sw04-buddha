@@ -1,7 +1,7 @@
 'use client';
 
 import { Avatar, Badge, Button, HStack, Menu, Portal, Skeleton, Text } from '@chakra-ui/react';
-import { formatP, parsePAmount } from '@buddha/shared';
+import { formatCoin, parseCoinAmount } from '@buddha/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import NextLink from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
@@ -98,7 +98,7 @@ export function AuthButtons() {
           <Text as="span" color="fg.muted" fontWeight="normal" me="1">
             {copy.balance}
           </Text>
-          {me ? formatP(parsePAmount(me.balance.availableP)) : copy.loading}
+          {me ? formatCoin(parseCoinAmount(me.balance.availableCoin)) : copy.loading}
         </NextLink>
       </Badge>
       <Menu.Root positioning={{ placement: 'bottom-end' }}>

@@ -38,7 +38,7 @@
   전부 `timestamp(3)` 이다.
 - **P 금액** — 10진 정수 문자열이다(`"12500"`, `"-300"`). JSON number 는 IEEE double 이라
   Postgres bigint 를 정확히 담지 못해서, P 는 요청·응답 양방향 모두 문자열로 오간다. 요청 본문의
-  P 금액은 부호 1자 + `MAX_P_AMOUNT`(10^15)의 16자리 = 17자까지만 받는다(그보다 긴 문자열은
+  P 금액은 부호 1자 + `MAX_COIN_AMOUNT`(10^15)의 16자리 = 17자까지만 받는다(그보다 긴 문자열은
   파싱하기 전에 거절한다: 백만 자리 `BigInt()` 는 요청 스레드에서 실제로 CPU 를 쓴다).
 - **본문 형식** — 요청·응답 모두 `application/json` 이다.
   `application/x-www-form-urlencoded` 파서는 꺼져 있다(HTML 폼이 바로 CSRF 의 모양이다).
@@ -82,7 +82,7 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | `VALIDATION_ERROR` | 400 | 요청이 스키마에 맞지 않는다. `details` 에 `{ path, message }` 배열이 붙는다. |
 | `MARKET_NOT_OPEN` | 409 | 시장이 `open` 이 아니라 그 동작을 할 수 없다. |
 | `INSUFFICIENT_BALANCE` | 409 | 잔고가 모자란다. |
-| `PRICE_MOVED` | 409 | 화면이 보여 준 충전 상품의 조건(`expectedAmountP`·`expectedPriceKrw`)이 지금 판매하는 조건과 다르다. |
+| `PRICE_MOVED` | 409 | 화면이 보여 준 충전 상품의 조건(`expectedAmountCoin`·`expectedPriceKrw`)이 지금 판매하는 조건과 다르다. |
 | `DUPLICATE_REQUEST` | 409 | 이미 쓴 멱등 키를 다른 조건으로 다시 썼거나(키는 소모된다), 한 번만 할 수 있는 일을 두 번 했다(쿠폰 재사용). 환불 재시도는 앞선 시도가 아직 PG 의 답을 기다리는 동안 이것으로 답한다(`details[0].message` 가 `in progress`). |
 | `RATE_LIMITED` | 429 | 레이트 리밋 초과. `details.retryAfterSeconds` 와 `Retry-After` 헤더에 대기 초. |
 | `RULES_REQUIRED` | 422 | 정산 규칙(`rules`)이 비어 있어 개장하거나 그대로 저장할 수 없다. |
@@ -117,8 +117,8 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | --- | --- | --- | --- | --- |
 | GET | `/api/v1/charge-packages` | Charge packages on sale, cheapest discount first. Closed while paid Coin is off: 404 (ADR-0049) | — | `NOT_FOUND`, `RATE_LIMITED` |
 | GET | `/api/v1/payments/provider` | The configured payment provider (mock: immediate charge). Closed while paid Coin is off: 404 (ADR-0049) | — | `NOT_FOUND`, `RATE_LIMITED` |
-| POST | `/api/v1/payments/charge` | Buy one charge package (mock provider: succeeds immediately). P is never convertible back to cash. Closed while paid Coin is off: 404 (ADR-0049) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `PRICE_MOVED`, `DUPLICATE_REQUEST`, `RATE_LIMITED` |
-| POST | `/api/v1/coupons/redeem` | Redeem a coupon code for P. Closed while paid Coin is off: 404 (ADR-0049) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `DUPLICATE_REQUEST`, `RATE_LIMITED` |
+| POST | `/api/v1/payments/charge` | Buy one charge package (mock provider: succeeds immediately). Coin is never convertible back to cash. Closed while paid Coin is off: 404 (ADR-0049) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `PRICE_MOVED`, `DUPLICATE_REQUEST`, `RATE_LIMITED` |
+| POST | `/api/v1/coupons/redeem` | Redeem a coupon code for Coin. Closed while paid Coin is off: 404 (ADR-0049) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `DUPLICATE_REQUEST`, `RATE_LIMITED` |
 | GET | `/api/v1/me/ledger` | Ledger entries, newest first | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `RATE_LIMITED` |
 | GET | `/api/v1/me/payments` | Charges, newest first | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `RATE_LIMITED` |
 | GET | `/api/v1/me/payments/{id}` | One of the caller charges | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `NOT_FOUND`, `RATE_LIMITED` |
@@ -135,9 +135,9 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | POST | `/api/v1/admin/coupons` | Issue a coupon (the code is generated when omitted) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
 | PATCH | `/api/v1/admin/coupons/{id}` | Disable a coupon or change its cap, expiry or memo | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
 | GET | `/api/v1/admin/users` | Search users by email or nickname | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
-| POST | `/api/v1/admin/users/{id}/balance-adjust` | Credit or debit P with a mandatory reason (ADMIN_ADJUST) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `INSUFFICIENT_BALANCE`, `RATE_LIMITED` |
+| POST | `/api/v1/admin/users/{id}/balance-adjust` | Credit or debit Coin with a mandatory reason (ADMIN_ADJUST) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `INSUFFICIENT_BALANCE`, `RATE_LIMITED` |
 | GET | `/api/v1/admin/payments` | Charges, newest first | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
-| POST | `/api/v1/admin/payments/{id}/refund` | Refund an unused charge within 7 days of its approval: claw back all its P, then cancel the whole KRW at the provider (retry a refunding one). Closed while paid Coin is off: 404 (ADR-0049) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `INSUFFICIENT_BALANCE`, `DUPLICATE_REQUEST`, `REFUND_NOT_ALLOWED`, `PAYMENT_GATEWAY_REFUSED`, `RATE_LIMITED`, `PAYMENT_GATEWAY_ERROR` |
+| POST | `/api/v1/admin/payments/{id}/refund` | Refund an unused charge within 7 days of its approval: claw back all its Coin, then cancel the whole KRW at the provider (retry a refunding one). Closed while paid Coin is off: 404 (ADR-0049) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `INSUFFICIENT_BALANCE`, `DUPLICATE_REQUEST`, `REFUND_NOT_ALLOWED`, `PAYMENT_GATEWAY_REFUSED`, `RATE_LIMITED`, `PAYMENT_GATEWAY_ERROR` |
 | GET | `/api/v1/admin/audit-failures` | Ledger/balance mismatches found by the ledger.audit job | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
 | GET | `/api/v1/admin/markets` | Every market, drafts included, newest first | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
 | POST | `/api/v1/admin/markets` | Create a draft market (no price until its first fill) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
@@ -175,7 +175,7 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 요청·응답 본문의 실제 모양은 `apps/api/openapi.json` 의 `components.schemas` 에 있다. 이름만
 적어 두니 거기서 찾아 읽는다. 이름은 zod 스키마의 `.meta({ id })` 에서 온다.
 
-`AdminBalanceAdjustResult`, `AdminMarket`, `AdminPayment`, `AdminSettlementStep`, `AdminUser`, `AdminUserQuery`, `AuditFailure`, `Balance`, `BalanceAdjustBody`, `Category`, `ChargeBody`, `ChargePackage`, `ChargeResult`, `Contact`, `ContactBody`, `Coupon`, `CouponCode`, `CreateChargePackageBody`, `CreateCouponBody`, `CreateMarketBody`, `CursorQuery`, `ErrorCode`, `ErrorEnvelope`, `Fill`, `LeaderboardEntry`, `LedgerEntry`, `LinkedAccount`, `Market`, `MarketEvent`, `MarketListItem`, `MarketSummary`, `Me`, `Nickname`, `OkResult`, `Order`, `PAmount`, `PageMeta`, `Password`, `Payment`, `PaymentProviderInfo`, `Position`, `PriceSeries`, `PriceTick`, `RedeemCouponBody`, `RedeemCouponResult`, `RefundPaymentBody`, `RegisterBody`, `RegisterResult`, `ResolveMarketBody`, `SetPasswordBody`, `SettlementStep`, `SettlementStepStatus`, `UpdateChargePackageBody`, `UpdateCouponBody`, `UpdateMarketBody`, `UpdateMeBody`, `UserRole`
+`AdminBalanceAdjustResult`, `AdminMarket`, `AdminPayment`, `AdminSettlementStep`, `AdminUser`, `AdminUserQuery`, `AuditFailure`, `Balance`, `BalanceAdjustBody`, `Category`, `ChargeBody`, `ChargePackage`, `ChargeResult`, `CoinAmount`, `Contact`, `ContactBody`, `Coupon`, `CouponCode`, `CreateChargePackageBody`, `CreateCouponBody`, `CreateMarketBody`, `CursorQuery`, `ErrorCode`, `ErrorEnvelope`, `Fill`, `LeaderboardEntry`, `LedgerEntry`, `LinkedAccount`, `Market`, `MarketEvent`, `MarketListItem`, `MarketSummary`, `Me`, `Nickname`, `OkResult`, `Order`, `PageMeta`, `Password`, `Payment`, `PaymentProviderInfo`, `Position`, `PriceSeries`, `PriceTick`, `RedeemCouponBody`, `RedeemCouponResult`, `RefundPaymentBody`, `RegisterBody`, `RegisterResult`, `ResolveMarketBody`, `SetPasswordBody`, `SettlementStep`, `SettlementStepStatus`, `UpdateChargePackageBody`, `UpdateCouponBody`, `UpdateMarketBody`, `UpdateMeBody`, `UserRole`
 
 ## 헬스체크 (문서 밖)
 

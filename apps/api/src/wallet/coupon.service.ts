@@ -5,7 +5,7 @@ import {
   COUPON_CODE_PATTERN,
   decodeKeyset,
   encodeKeyset,
-  serializePAmount,
+  serializeCoinAmount,
   type Coupon,
   type CreateCouponBody,
   type LedgerEntry,
@@ -32,7 +32,7 @@ function toCoupon(row: CouponRow): Coupon {
   return {
     id: row.id,
     code: row.code,
-    amountP: serializePAmount(row.amountP),
+    amountCoin: serializeCoinAmount(row.amountCoin),
     maxRedemptions: row.maxRedemptions,
     redeemedCount: row.redeemedCount,
     expiresAt: row.expiresAt?.toISOString() ?? null,
@@ -43,14 +43,14 @@ function toCoupon(row: CouponRow): Coupon {
 }
 
 /**
- * What an `admin_actions` payload records about a coupon; jsonb, so P is a string. `code` is
- * carried so the log reads without joining back to `coupons`. `amountP` is here for the
+ * What an `admin_actions` payload records about a coupon; jsonb, so Coin is a string. `code` is
+ * carried so the log reads without joining back to `coupons`. `amountCoin` is here for the
  * create row only — it is immutable once issued, so an update's before/after never differ.
  */
 function snapshot(row: CouponRow): Record<string, unknown> {
   return {
     code: row.code,
-    amountP: serializePAmount(row.amountP),
+    amountCoin: serializeCoinAmount(row.amountCoin),
     maxRedemptions: row.maxRedemptions,
     expiresAt: row.expiresAt?.toISOString() ?? null,
     isActive: row.isActive,
@@ -73,7 +73,7 @@ export interface RedeemResult {
 }
 
 /**
- * Admin-issued P grants (ADR-0026). Redemption is one transaction that locks the coupon row,
+ * Admin-issued Coin grants (ADR-0026). Redemption is one transaction that locks the coupon row,
  * re-checks every limit under that lock, writes the redemption, the balance and a BONUS
  * ledger entry — so a capped coupon cannot overshoot and nobody can redeem twice.
  */
@@ -100,7 +100,7 @@ export class CouponService {
         await tx.insert(schema.couponRedemptions).values({
           couponId: coupon.id,
           userId,
-          amountP: coupon.amountP,
+          amountCoin: coupon.amountCoin,
         });
       } catch (error) {
         if (isPgError(error, PG_UNIQUE_VIOLATION, COUPON_REDEMPTION_UNIQUE)) {
@@ -121,7 +121,7 @@ export class CouponService {
       // The balance row first, then the clock: another writer of this account (a
       // settlement payout, another wallet write) may have committed while this transaction waited
       // on that row, and the ledger row written below must sort after it — `now()` is the
-      // transaction start and would sort before work its own balance_after_p includes
+      // transaction start and would sort before work its own balance_after_coin includes
       // (clock.ts, A-M3-14). The lock is what the UPDATE below would take anyway, so no
       // writer's lock order changes; the result is discarded, and a vanished row still falls
       // through to the check the UPDATE already had.
@@ -136,7 +136,7 @@ export class CouponService {
       const [balance] = await tx
         .update(schema.balances)
         .set({
-          availableP: sql`${schema.balances.availableP} + ${coupon.amountP}`,
+          availableCoin: sql`${schema.balances.availableCoin} + ${coupon.amountCoin}`,
           // Explicit on purpose: the column's `$onUpdate` would write the API host's clock.
           updatedAt: redeemedAt,
         })
@@ -159,8 +159,8 @@ export class CouponService {
         .values({
           userId,
           type: 'BONUS',
-          amountP: coupon.amountP,
-          balanceAfterP: balance.availableP,
+          amountCoin: coupon.amountCoin,
+          balanceAfterCoin: balance.availableCoin,
           refType: 'coupon',
           refId: redemption?.id ?? coupon.id,
           memo: `쿠폰 ${coupon.code}`,
@@ -191,7 +191,7 @@ export class CouponService {
           .insert(schema.coupons)
           .values({
             code,
-            amountP: input.amountP,
+            amountCoin: input.amountCoin,
             maxRedemptions: input.maxRedemptions ?? null,
             expiresAt: input.expiresAt ? new Date(input.expiresAt) : null,
             memo: input.memo ?? null,

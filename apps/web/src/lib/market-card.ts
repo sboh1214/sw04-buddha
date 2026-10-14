@@ -46,8 +46,9 @@ export interface OutcomeReading {
 }
 
 /**
- * Kalshi's "2.14x": what 1P put on this side comes back as if it wins, `100 / price` with two
- * decimals — a contract pays `PAYOUT_PER_CONTRACT_P` (100P) and costs `price` P (PLAN 5.4).
+ * Kalshi's "2.14x": what 1 Coin put on this side comes back as if it wins, `100 / price` with two
+ * decimals — a contract pays `PAYOUT_PER_CONTRACT_COIN` (100 Coin) and costs `price` Coin
+ * (PLAN 5.4).
  *
  * Out of range is CLAMPED to `PRICE_MIN..PRICE_MAX`, never thrown on. The API guarantees the
  * range (`priceSchema` on every row and every `market:tick`), so a value outside it is a bug

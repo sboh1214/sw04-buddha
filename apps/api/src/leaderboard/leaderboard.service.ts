@@ -20,17 +20,17 @@ export class LeaderboardService {
   async top(): Promise<LeaderboardEntry[]> {
     const { positions, profiles } = schema;
     // `sql<string>`, never `sql<number>`: this is a sum of bigints and PLAN 0.2 forbids a
-    // double anywhere near a P amount. node-postgres hands an int8 back as a string, so the
-    // value crosses the boundary exactly as it left Postgres and `pAmountSchema` accepts it.
-    const total = sql<string>`sum(${positions.realizedPnlP})`;
+    // double anywhere near a Coin amount. node-postgres hands an int8 back as a string, so the
+    // value crosses the boundary exactly as it left Postgres and `coinAmountSchema` accepts it.
+    const total = sql<string>`sum(${positions.realizedPnlCoin})`;
     const rows = await this.db
-      .select({ nickname: profiles.nickname, realizedPnlP: total })
+      .select({ nickname: profiles.nickname, realizedPnlCoin: total })
       .from(positions)
       .innerJoin(profiles, eq(profiles.userId, positions.userId))
       .groupBy(positions.userId, profiles.nickname)
       // Accounts that have realized nothing are left out, not ranked at zero. A position row
       // exists from the first BUY, so without this the board on a young deployment is twenty
-      // accounts tied at 0 P ordered by an opaque id — a ranking that ranks nothing. Losses
+      // accounts tied at 0 Coin ordered by an opaque id — a ranking that ranks nothing. Losses
       // stay in: "상위 20" is by amount, and hiding them would make the board a claim about
       // the product rather than about the accounts.
       .having(ne(total, sql`0`))
@@ -42,7 +42,7 @@ export class LeaderboardService {
     return rows.map((row, index) => ({
       rank: index + 1,
       nickname: row.nickname,
-      realizedPnlP: String(row.realizedPnlP),
+      realizedPnlCoin: String(row.realizedPnlCoin),
     }));
   }
 }

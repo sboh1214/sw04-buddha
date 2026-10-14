@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  ADJUST_MAX_ABS_P,
+  ADJUST_MAX_ABS_COIN,
   adminPaymentSchema,
   adminUserQuerySchema,
   auditFailureSchema,
@@ -11,21 +11,23 @@ import {
 
 describe('balanceAdjustBodySchema', () => {
   it('accepts a signed amount with a reason', () => {
-    expect(balanceAdjustBodySchema.parse({ amountP: '-3000', memo: '중복 충전 회수' })).toEqual({
-      amountP: -3000n,
+    expect(balanceAdjustBodySchema.parse({ amountCoin: '-3000', memo: '중복 충전 회수' })).toEqual({
+      amountCoin: -3000n,
       memo: '중복 충전 회수',
     });
-    expect(balanceAdjustBodySchema.parse({ amountP: '2500', memo: '  보상  ' }).memo).toBe('보상');
+    expect(balanceAdjustBodySchema.parse({ amountCoin: '2500', memo: '  보상  ' }).memo).toBe(
+      '보상',
+    );
   });
 
   it('requires a non-zero amount within the cap and a non-empty reason', () => {
     for (const body of [
-      { amountP: '0', memo: '영원' },
-      { amountP: (ADJUST_MAX_ABS_P + 1n).toString(), memo: '과다' },
-      { amountP: (-ADJUST_MAX_ABS_P - 1n).toString(), memo: '과다' },
-      { amountP: '1000', memo: '   ' },
-      { amountP: '1000' },
-      { amountP: '1000.5', memo: '소수' },
+      { amountCoin: '0', memo: '영원' },
+      { amountCoin: (ADJUST_MAX_ABS_COIN + 1n).toString(), memo: '과다' },
+      { amountCoin: (-ADJUST_MAX_ABS_COIN - 1n).toString(), memo: '과다' },
+      { amountCoin: '1000', memo: '   ' },
+      { amountCoin: '1000' },
+      { amountCoin: '1000.5', memo: '소수' },
     ]) {
       expect(balanceAdjustBodySchema.safeParse(body).success, JSON.stringify(body)).toBe(false);
     }
@@ -40,22 +42,22 @@ describe('response schemas', () => {
       ledgerEntrySchema.parse({
         id: '12',
         type: 'DEPOSIT',
-        amountP: '10000',
-        balanceAfterP: '10000',
+        amountCoin: '10000',
+        balanceAfterCoin: '10000',
         refType: 'payment',
         refId: 'p1',
         memo: null,
         createdAt,
       }),
-    ).toMatchObject({ type: 'DEPOSIT', amountP: '10000' });
+    ).toMatchObject({ type: 'DEPOSIT', amountCoin: '10000' });
 
     // A coupon redemption is a BONUS entry pointing at the redemption row.
     expect(
       ledgerEntrySchema.parse({
         id: '13',
         type: 'BONUS',
-        amountP: '5000',
-        balanceAfterP: '15000',
+        amountCoin: '5000',
+        balanceAfterCoin: '15000',
         refType: 'coupon',
         refId: 'r1',
         memo: '쿠폰 WELCOME',
@@ -67,8 +69,8 @@ describe('response schemas', () => {
       ledgerEntrySchema.safeParse({
         id: '12',
         type: 'UNKNOWN',
-        amountP: '1',
-        balanceAfterP: '1',
+        amountCoin: '1',
+        balanceAfterCoin: '1',
         refType: null,
         refId: null,
         memo: null,
@@ -81,7 +83,7 @@ describe('response schemas', () => {
     expect(
       paymentSchema.parse({
         id: '3f1a5b6c-1111-4222-8333-444455556666',
-        amountP: '5000',
+        amountCoin: '5000',
         priceKrw: 4900,
         packageId: '3f1a5b6c-1111-4222-8333-444455556667',
         provider: 'mock',
@@ -100,7 +102,7 @@ describe('response schemas', () => {
     expect(
       paymentSchema.parse({
         id: '3f1a5b6c-1111-4222-8333-444455556666',
-        amountP: '5000',
+        amountCoin: '5000',
         priceKrw: 4900,
         packageId: null,
         provider: 'mock',
@@ -118,7 +120,7 @@ describe('response schemas', () => {
     // A refunded card payment carries the PG's method, both instants and its message.
     const refunded = {
       id: '3f1a5b6c-1111-4222-8333-444455556666',
-      amountP: '10000',
+      amountCoin: '10000',
       priceKrw: 9700,
       packageId: null,
       provider: 'mock',

@@ -13,7 +13,7 @@ import {
   Text,
   Textarea,
 } from '@chakra-ui/react';
-import { PAID_COIN_SALES_ENABLED, formatKrw, formatP, parsePAmount } from '@buddha/shared';
+import { PAID_COIN_SALES_ENABLED, formatKrw, formatCoin, parseCoinAmount } from '@buddha/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
@@ -106,7 +106,7 @@ function PaymentRow({ payment }: { payment: AdminPayment }) {
       <Stack gap="0.5" minW="0">
         <HStack gap="2" flexWrap="wrap">
           <Text fontWeight="semibold">{payment.nickname}</Text>
-          <Text>{formatP(parsePAmount(payment.amountP))}</Text>
+          <Text>{formatCoin(parseCoinAmount(payment.amountCoin))}</Text>
           <Text color="fg.muted">{formatKrw(payment.priceKrw)}</Text>
           <Badge
             colorPalette={PAYMENT_STATUS_PALETTE[payment.status]}
@@ -179,7 +179,7 @@ function refusalToast(view: RefundErrorView) {
 /**
  * The refund confirmation with its required reason (ADR-0042). The admin confirmation dialog
  * shape: `alertdialog`, pinned while the request runs — Cancel, Esc and the backdrop all wait,
- * since a refund takes P from a member and money back through the PG and the admin must see
+ * since a refund takes Coin from a member and money back through the PG and the admin must see
  * how it ended. The reason is a form (zodResolver), refused under the field when blank.
  *
  * A refusal closes the dialog (the list has been refreshed to the row's new state, with its
@@ -247,7 +247,7 @@ function RefundDialog({
             <Dialog.Body>
               <Stack gap="3">
                 <Text fontWeight="medium">
-                  {payment.nickname} · {formatP(parsePAmount(payment.amountP))} ·{' '}
+                  {payment.nickname} · {formatCoin(parseCoinAmount(payment.amountCoin))} ·{' '}
                   {formatKrw(payment.priceKrw)}
                 </Text>
                 <Text>

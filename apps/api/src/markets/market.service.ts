@@ -10,7 +10,7 @@ import {
   decodeSortCursor,
   encodeKeyset,
   encodeSortCursor,
-  serializePAmount,
+  serializeCoinAmount,
   tickBucketSeconds,
   uuidParamSchema,
   type Category,
@@ -70,7 +70,7 @@ export function toMarketSummary(row: MarketRow, category: CategoryRef): MarketSu
     imageUrl: row.imageUrl,
     status: row.status,
     lastPrice: row.lastPrice,
-    volumeP: serializePAmount(row.volumeP),
+    volumeCoin: serializeCoinAmount(row.volumeCoin),
     tradeCount: row.tradeCount,
     traderCount: row.traderCount,
     closeAt: row.closeAt.toISOString(),
@@ -103,7 +103,7 @@ export function toFill(row: FillRow): Fill {
     outcome: row.outcome,
     side: row.side,
     qty: row.qty,
-    amountP: serializePAmount(row.amountP),
+    amountCoin: serializeCoinAmount(row.amountCoin),
     priceAvgBp: row.priceAvgBp,
     createdAt: row.createdAt.toISOString(),
   };
@@ -125,7 +125,7 @@ export class MarketService {
 
   /**
    * Keyset-paginated per sort (design 1.5): newest = (created_at DESC, id DESC) and closing =
-   * (close_at ASC, id ASC) reuse the `<millis>_<uuid>` keyset; volume = (volume_p DESC,
+   * (close_at ASC, id ASC) reuse the `<millis>_<uuid>` keyset; volume = (volume_coin DESC,
    * id DESC) carries a bigint, so it uses the sort cursor. A cursor that does not decode
    * serves the first page rather than a 500 (see decodeKeyset).
    */
@@ -164,10 +164,10 @@ export class MarketService {
       case 'volume': {
         const keyset = decodeSortCursor(cursor, 'int', 'uuid');
         where = keyset
-          ? sortKeysetPredicate(markets.volumeP, markets.id, keyset, 'bigint', 'uuid')
+          ? sortKeysetPredicate(markets.volumeCoin, markets.id, keyset, 'bigint', 'uuid')
           : undefined;
-        order = [desc(markets.volumeP), desc(markets.id)];
-        nextCursorOf = (row) => encodeSortCursor(serializePAmount(row.volumeP), row.id);
+        order = [desc(markets.volumeCoin), desc(markets.id)];
+        nextCursorOf = (row) => encodeSortCursor(serializeCoinAmount(row.volumeCoin), row.id);
         break;
       }
     }

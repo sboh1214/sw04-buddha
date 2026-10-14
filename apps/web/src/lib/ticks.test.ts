@@ -58,7 +58,7 @@ function tick(ts: string, bp = 5000, tradeCount = 42): MarketTickEvent {
     type: 'market:tick',
     marketId: MARKET_ID,
     lastPrice: bp / 100,
-    volumeP: '12000',
+    volumeCoin: '12000',
     tradeCount,
     traderCount: 5,
     ts,

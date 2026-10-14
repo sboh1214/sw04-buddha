@@ -1,7 +1,12 @@
 'use client';
 
 import { Button, Card, Field, HStack, Input, Text } from '@chakra-ui/react';
-import { COUPON_CODE_MAX_LENGTH, couponCodeSchema, formatP, parsePAmount } from '@buddha/shared';
+import {
+  COUPON_CODE_MAX_LENGTH,
+  couponCodeSchema,
+  formatCoin,
+  parseCoinAmount,
+} from '@buddha/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
 import * as z from 'zod';
@@ -19,7 +24,7 @@ const schema = z.object({ code: couponCodeSchema.catch('') }).refine((v) => v.co
 type FormValues = z.infer<typeof schema>;
 
 /**
- * Redeeming an admin-issued coupon (ADR-0026): P arrives as a BONUS ledger entry. Not drawn
+ * Redeeming an admin-issued coupon (ADR-0026): Coin arrives as a BONUS ledger entry. Not drawn
  * while paid Coin is closed (PAID_COIN_SALES_ENABLED, ADR-0049; app/wallet/page.tsx).
  */
 export function CouponForm() {
@@ -38,7 +43,7 @@ export function CouponForm() {
       toaster.create({
         type: 'success',
         title: copy.couponRedeemed,
-        description: formatP(parsePAmount(result.amountP)),
+        description: formatCoin(parseCoinAmount(result.amountCoin)),
       });
       reset({ code: '' });
     } catch (error) {

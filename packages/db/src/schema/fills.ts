@@ -21,11 +21,11 @@ export const fills = pgTable(
     outcome: outcomeEnum().notNull(),
     side: orderSideEnum().notNull(),
     qty: integer().notNull(),
-    /** Total P paid (buy) or received (sell). */
-    amountP: bigint({ mode: 'bigint' }).notNull(),
-    /** Average price in basis points: amount_p * 100 / qty. */
+    /** Total Coin paid (buy) or received (sell). */
+    amountCoin: bigint({ mode: 'bigint' }).notNull(),
+    /** Average price in basis points: amount_coin * 100 / qty. */
     priceAvgBp: integer().notNull(),
-    feeP: bigint({ mode: 'bigint' })
+    feeCoin: bigint({ mode: 'bigint' })
       .notNull()
       .default(sql`0`),
     createdAt: createdAt(),
@@ -34,9 +34,9 @@ export const fills = pgTable(
     index('fills_market_id_created_at_idx').on(t.marketId, desc(t.createdAt)),
     index('fills_order_id_idx').on(t.orderId),
     check('fills_qty_check', sql`${t.qty} > 0`),
-    check('fills_amount_p_check', sql`${t.amountP} >= 0`),
+    check('fills_amount_coin_check', sql`${t.amountCoin} >= 0`),
     check('fills_price_avg_bp_check', sql`${t.priceAvgBp} BETWEEN 0 AND 10000`),
-    check('fills_fee_p_check', sql`${t.feeP} >= 0`),
+    check('fills_fee_coin_check', sql`${t.feeCoin} >= 0`),
     check(
       'fills_counterparty_check',
       sql`${t.counterpartyType} = 'order' AND ${t.counterpartyOrderId} IS NOT NULL`,

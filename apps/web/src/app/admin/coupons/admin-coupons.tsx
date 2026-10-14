@@ -12,7 +12,7 @@ import {
   Stack,
   Text,
 } from '@chakra-ui/react';
-import { COUPON_MAX_P, COUPON_MIN_P, formatP, parsePAmount } from '@buddha/shared';
+import { COUPON_MAX_COIN, COUPON_MIN_COIN, formatCoin, parseCoinAmount } from '@buddha/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
@@ -27,10 +27,10 @@ const ADMIN_COUPONS_KEY = ['admin', 'coupons'] as const;
 
 const schema = z.object({
   code: optionalCouponCode(copy.errAdminCouponCode),
-  amountP: boundedInteger(
+  amountCoin: boundedInteger(
     /^\d+$/,
     copy.errCouponAmount,
-    (amount) => amount >= COUPON_MIN_P && amount <= COUPON_MAX_P,
+    (amount) => amount >= COUPON_MIN_COIN && amount <= COUPON_MAX_COIN,
     copy.errCouponAmount,
   ),
   maxRedemptions: z.string().trim().regex(/^\d*$/, copy.errCouponAmount),
@@ -65,7 +65,7 @@ export function AdminCoupons() {
         await api.POST('/api/v1/admin/coupons', {
           body: {
             ...(values.code ? { code: values.code } : {}),
-            amountP: values.amountP,
+            amountCoin: values.amountCoin,
             maxRedemptions: values.maxRedemptions ? Number(values.maxRedemptions) : null,
             expiresAt: kstLocalToIso(values.expiresAt),
             memo: values.memo || null,
@@ -74,7 +74,7 @@ export function AdminCoupons() {
       ).data,
     onSuccess: async (coupon) => {
       toaster.create({ type: 'success', title: copy.adminCouponCreated, description: coupon.code });
-      reset({ code: '', amountP: '', maxRedemptions: '', expiresAt: '', memo: '' });
+      reset({ code: '', amountCoin: '', maxRedemptions: '', expiresAt: '', memo: '' });
       await queryClient.invalidateQueries({ queryKey: ADMIN_COUPONS_KEY });
     },
     onError: (error) =>
@@ -105,7 +105,7 @@ export function AdminCoupons() {
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { code: '', amountP: '', maxRedemptions: '', expiresAt: '', memo: '' },
+    defaultValues: { code: '', amountCoin: '', maxRedemptions: '', expiresAt: '', memo: '' },
   });
 
   // Reset lives in onSuccess (as it does on the user screen): a duplicate code or a rejected
@@ -131,10 +131,14 @@ export function AdminCoupons() {
                   <Input autoComplete="off" data-testid="coupon-code-input" {...register('code')} />
                   <Field.ErrorText>{errors.code?.message}</Field.ErrorText>
                 </Field.Root>
-                <Field.Root invalid={!!errors.amountP} required maxW="32">
+                <Field.Root invalid={!!errors.amountCoin} required maxW="32">
                   <Field.Label>{copy.adminCouponAmount}</Field.Label>
-                  <Input inputMode="numeric" data-testid="coupon-amount" {...register('amountP')} />
-                  <Field.ErrorText>{errors.amountP?.message}</Field.ErrorText>
+                  <Input
+                    inputMode="numeric"
+                    data-testid="coupon-amount"
+                    {...register('amountCoin')}
+                  />
+                  <Field.ErrorText>{errors.amountCoin?.message}</Field.ErrorText>
                 </Field.Root>
                 <Field.Root invalid={!!errors.maxRedemptions} maxW="32">
                   <Field.Label>{copy.adminCouponMax}</Field.Label>
@@ -200,7 +204,7 @@ export function AdminCoupons() {
                   <Text fontWeight="semibold" fontFamily="mono">
                     {coupon.code}
                   </Text>
-                  <Text>{formatP(parsePAmount(coupon.amountP))}</Text>
+                  <Text>{formatCoin(parseCoinAmount(coupon.amountCoin))}</Text>
                   <Badge colorPalette={coupon.isActive ? 'brand' : 'gray'} variant="subtle">
                     {coupon.isActive ? copy.adminPackageActive : copy.adminPackageInactive}
                   </Badge>

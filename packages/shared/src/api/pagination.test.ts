@@ -92,7 +92,7 @@ describe('sort cursors', () => {
       value: '1234567890123456789',
       id: uuid,
     });
-    // The value half is what `GET /markets?sort=volume` compares against volume_p.
+    // The value half is what `GET /markets?sort=volume` compares against volume_coin.
     expect(decodeSortCursor(encodeSortCursor('0', uuid), 'int', 'uuid')).toEqual({
       value: '0',
       id: uuid,

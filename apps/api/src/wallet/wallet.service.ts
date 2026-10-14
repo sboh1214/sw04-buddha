@@ -4,7 +4,7 @@ import { schema, type Db } from '@buddha/db';
 import {
   decodeKeyset,
   encodeKeyset,
-  serializePAmount,
+  serializeCoinAmount,
   type Balance,
   type ChargeBody,
   type ChargeResult,
@@ -35,7 +35,7 @@ export const PAYMENT_IDEMPOTENCY_UNIQUE = 'payments_user_id_idempotency_key_uniq
 function paymentRefused(reason?: string): AppError {
   return new AppError('VALIDATION_ERROR', {
     message: reason ?? 'The payment was refused',
-    details: [{ path: ['amountP'], message: 'payment refused' }],
+    details: [{ path: ['amountCoin'], message: 'payment refused' }],
   });
 }
 /** The handle `db.transaction` hands its callback; @buddha/db exports no alias for it. */
@@ -45,8 +45,8 @@ export function toLedgerEntry(row: LedgerRow): LedgerEntry {
   return {
     id: row.id.toString(),
     type: row.type,
-    amountP: serializePAmount(row.amountP),
-    balanceAfterP: serializePAmount(row.balanceAfterP),
+    amountCoin: serializeCoinAmount(row.amountCoin),
+    balanceAfterCoin: serializeCoinAmount(row.balanceAfterCoin),
     // The column is a plain varchar; the DTO narrows it to the known ref types.
     refType: (row.refType ?? null) as LedgerEntry['refType'],
     refId: row.refId,
@@ -74,7 +74,7 @@ export const paymentColumns = { ...getTableColumns(schema.payments), cancelConfi
 export function toPayment(row: PaymentView): Payment {
   return {
     id: row.id,
-    amountP: serializePAmount(row.amountP),
+    amountCoin: serializeCoinAmount(row.amountCoin),
     priceKrw: row.priceKrw,
     packageId: row.packageId,
     provider: row.provider,
@@ -96,13 +96,13 @@ export interface Page<T> {
 
 /** The `user:balance` event of one balance change (PLAN 8), keyed by its ledger row. */
 export function balanceEvent(
-  balance: { availableP: bigint; lockedP: bigint },
+  balance: { availableCoin: bigint; lockedCoin: bigint },
   entry: LedgerRow,
 ): UserBalanceEvent {
   return {
     type: 'user:balance',
-    availableP: serializePAmount(balance.availableP),
-    lockedP: serializePAmount(balance.lockedP),
+    availableCoin: serializeCoinAmount(balance.availableCoin),
+    lockedCoin: serializeCoinAmount(balance.lockedCoin),
     ledgerEntryId: entry.id.toString(),
     ts: entry.createdAt.toISOString(),
   };
@@ -110,7 +110,7 @@ export function balanceEvent(
 
 /** What a package sells for, read and checked against what the client showed (`quote`). */
 export interface Quote {
-  amountP: bigint;
+  amountCoin: bigint;
   priceKrw: number;
 }
 
@@ -128,7 +128,7 @@ export type Reservation = { paymentId: string } | { earlier: PaymentRow };
 export interface CreditInput {
   paymentId: string;
   userId: string;
-  amountP: bigint;
+  amountCoin: bigint;
   /** `payments.provider_ref`: the provider's transaction id. */
   providerRef: string;
   /** The PG's PayMethod of the approval (CARD, KAKAO, …); null for the mock. */
@@ -138,7 +138,7 @@ export interface CreditInput {
 }
 
 /**
- * `credited`: this call moved the payment to `succeeded` and credited the P. Otherwise the
+ * `credited`: this call moved the payment to `succeeded` and credited the Coin. Otherwise the
  * payment was not `pending` any more — another request settled it first — and `status` is what
  * it is now (undefined: the row is gone).
  */
@@ -171,7 +171,7 @@ export class WalletService {
   ) {}
 
   /**
-   * Buys one charge package (ADR-0026): users cannot name their own amount, so the P granted
+   * Buys one charge package (ADR-0026): users cannot name their own amount, so the Coin granted
    * and the KRW charged both come from the row the admin configured, and both are snapshotted
    * onto the payment.
    *
@@ -200,7 +200,7 @@ export class WalletService {
     const earlier = await this.paymentByKey(userId, idempotencyKey);
     if (earlier) return this.replay(earlier, body);
 
-    const { amountP, priceKrw } = await this.quote(body);
+    const { amountCoin, priceKrw } = await this.quote(body);
     // The "user" trigger creates the balance row at sign-up (PLAN 10.4); missing means a broken
     // account. Checked before anything is reserved or charged: found out only after the
     // provider had accepted, the failed credit would leave a `pending` reservation the client
@@ -211,7 +211,7 @@ export class WalletService {
 
     const reservation = await this.reservePayment({
       userId,
-      amountP,
+      amountCoin,
       priceKrw,
       packageId: body.packageId,
       provider: provider.name,
@@ -220,7 +220,7 @@ export class WalletService {
     if ('earlier' in reservation) return this.replay(reservation.earlier, body);
     const { paymentId } = reservation;
 
-    const outcome = await provider.charge({ paymentId, userId, amountP, priceKrw });
+    const outcome = await provider.charge({ paymentId, userId, amountCoin, priceKrw });
 
     if (outcome.status === 'failed') {
       // The reservation becomes the record of the refusal (no ledger entry, no balance
@@ -236,7 +236,7 @@ export class WalletService {
     const credit = await this.creditPayment({
       paymentId,
       userId,
-      amountP,
+      amountCoin,
       providerRef: outcome.providerRef,
       method: null,
       resultMessage: null,
@@ -264,18 +264,18 @@ export class WalletService {
         details: [{ path: ['packageId'], message: 'inactive' }],
       });
     }
-    const amountP = BigInt(chargePackage.amountP);
+    const amountCoin = BigInt(chargePackage.amountCoin);
     const priceKrw = chargePackage.priceKrw;
     // Retired and deleted packages are already refused above and in `packages.get`; amount and
     // price are the other two things an admin may change under a catalogue that is still on
     // screen (and `useChargePackages` has no refetch interval, so "still on screen" has no
     // bound). Sell only the offer the user actually read.
-    if (amountP !== body.expectedAmountP || priceKrw !== body.expectedPriceKrw) {
+    if (amountCoin !== body.expectedAmountCoin || priceKrw !== body.expectedPriceKrw) {
       throw new AppError('PRICE_MOVED', {
         message: 'This charge package has changed; reload and try again',
       });
     }
-    return { amountP, priceKrw };
+    return { amountCoin, priceKrw };
   }
 
   /**
@@ -291,7 +291,7 @@ export class WalletService {
         await tx.insert(schema.payments).values({
           id: paymentId,
           userId: input.userId,
-          amountP: input.amountP,
+          amountCoin: input.amountCoin,
           priceKrw: input.priceKrw,
           packageId: await this.pinnedPackageId(tx, input.packageId),
           provider: input.provider,
@@ -312,7 +312,7 @@ export class WalletService {
   /**
    * Credits a payment the provider has accepted, in ONE transaction: the payment moves to
    * `succeeded` (with the provider's reference, method and message, and `approved_at`), the
-   * balance grows by its P, and a DEPOSIT ledger row records it — the one place that can credit
+   * balance grows by its Coin, and a DEPOSIT ledger row records it — the one place that can credit
    * a payment.
    *
    * NEVER TWICE: the payment UPDATE is guarded by `status = 'pending'`, so of two callers racing
@@ -324,7 +324,7 @@ export class WalletService {
    * credit and a refund of one account deadlock. The clock is read after the balance lock:
    * another writer of this account may have committed while this transaction waited, and the
    * ledger row written below must sort after it — `now()` is the transaction start and would
-   * sort before work its own balance_after_p includes (clock.ts, A-M3-14).
+   * sort before work its own balance_after_coin includes (clock.ts, A-M3-14).
    *
    * `user:balance` is published after COMMIT (PLAN 8), like every other balance change.
    */
@@ -348,7 +348,7 @@ export class WalletService {
     const creditedAt = await clockTimestamp(tx);
 
     // Approved at the instant it is credited: the same clock as the ledger row, so the admin
-    // refund window (PAYMENT_REFUND_WINDOW_DAYS) counts from the moment the P arrived.
+    // refund window (PAYMENT_REFUND_WINDOW_DAYS) counts from the moment the Coin arrived.
     const [payment] = await tx
       .update(schema.payments)
       .set({
@@ -379,7 +379,7 @@ export class WalletService {
     const [balance] = await tx
       .update(schema.balances)
       .set({
-        availableP: sql`${schema.balances.availableP} + ${input.amountP}`,
+        availableCoin: sql`${schema.balances.availableCoin} + ${input.amountCoin}`,
         // Explicit on purpose: the column's `$onUpdate` would write the API host's clock.
         updatedAt: creditedAt,
       })
@@ -389,7 +389,7 @@ export class WalletService {
     // DELETE, not a client error: a 500, which the web answers by keeping its key, so the
     // retry replays the reservation as in progress instead of buying again. The rollback
     // leaves the payment where it was; the provider has accepted, so that row is the only
-    // record that this account is owed P.
+    // record that this account is owed Coin.
     if (!balance) {
       // Loud, with the provider's reference: the row that would carry it rolls back here.
       this.logger.error(
@@ -405,8 +405,8 @@ export class WalletService {
       .values({
         userId: input.userId,
         type: 'DEPOSIT',
-        amountP: input.amountP,
-        balanceAfterP: balance.availableP,
+        amountCoin: input.amountCoin,
+        balanceAfterCoin: balance.availableCoin,
         refType: 'payment',
         refId: payment.id,
         createdAt: creditedAt,
@@ -472,7 +472,7 @@ export class WalletService {
     // admin deleting the package sets it to NULL (ADR-0026). No detail, so the client spends
     // the key: the purchase this key names has happened, and the next click is a new one.
     if (
-      earlier.amountP !== body.expectedAmountP ||
+      earlier.amountCoin !== body.expectedAmountCoin ||
       earlier.priceKrw !== body.expectedPriceKrw ||
       (earlier.packageId !== null && earlier.packageId !== body.packageId)
     ) {
@@ -598,8 +598,11 @@ export class WalletService {
   }
 }
 
-export function toBalance(row: { availableP: bigint; lockedP: bigint }): Balance {
-  return { availableP: serializePAmount(row.availableP), lockedP: serializePAmount(row.lockedP) };
+export function toBalance(row: { availableCoin: bigint; lockedCoin: bigint }): Balance {
+  return {
+    availableCoin: serializeCoinAmount(row.availableCoin),
+    lockedCoin: serializeCoinAmount(row.lockedCoin),
+  };
 }
 
 /** Trims the `limit + 1` probe row and turns the last kept row into the next cursor. */

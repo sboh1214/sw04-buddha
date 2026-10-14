@@ -89,7 +89,7 @@ export function isApiError(error: unknown, code?: ErrorCode): error is ApiError 
 /**
  * The field an error is about, when `details` is a `ValidationIssue[]` (`[{ path, message }]`,
  * PLAN 7): every VALIDATION_ERROR, and the few other codes that name a body field the same
- * way (the charge route's 404 for an unknown `packageId`, INSUFFICIENT_BALANCE on `amountP`,
+ * way (the charge route's 404 for an unknown `packageId`, INSUFFICIENT_BALANCE on `amountCoin`,
  * the in-progress DUPLICATE_REQUEST on the `Idempotency-Key` header, and the FORBIDDEN on
  * `expectedAccountId` when the cookie belongs to another account — the charge, coupon,
  * contact and password bodies alike).

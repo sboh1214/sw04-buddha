@@ -46,7 +46,7 @@ export function toPreviewMarket(
       ? {
           lastPrice: base.lastPrice,
           status: base.status,
-          volumeP: base.volumeP,
+          volumeCoin: base.volumeCoin,
           tradeCount: base.tradeCount,
           traderCount: base.traderCount,
           openAt: base.openAt,
@@ -56,7 +56,7 @@ export function toPreviewMarket(
       : {
           lastPrice: null,
           status: 'open' as const,
-          volumeP: '0',
+          volumeCoin: '0',
           tradeCount: 0,
           traderCount: 0,
           openAt: null,

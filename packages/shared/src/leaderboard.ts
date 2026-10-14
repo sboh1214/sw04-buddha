@@ -1,5 +1,5 @@
 import * as z from 'zod';
-import { pAmountSchema } from './api/p-amount.js';
+import { coinAmountSchema } from './api/coin-amount.js';
 import { nicknameSchema } from './me.js';
 
 /**
@@ -21,16 +21,16 @@ export const LEADERBOARD_LIMIT = 20;
  * reason. The nickname is public by design — PLAN 6.3 made it mandatory precisely so rankings
  * (and, then, disputes — removed by ADR-0046) could name someone without exposing an account.
  *
- * `realizedPnlP` is a SIGNED decimal string, like every other P amount: it is a sum of bigints
- * and a JSON number cannot hold one. Never `Number()` it — `use-portfolio.test.ts` already pins
- * what that costs.
+ * `realizedPnlCoin` is a SIGNED decimal string, like every other Coin amount: it is a sum of
+ * bigints and a JSON number cannot hold one. Never `Number()` it — `use-portfolio.test.ts`
+ * already pins what that costs.
  */
 export const leaderboardEntrySchema = z
   .object({
     /** 1-based, dense: the position in this slice, not a global rank across ties. */
     rank: z.int().min(1),
     nickname: nicknameSchema,
-    realizedPnlP: pAmountSchema,
+    realizedPnlCoin: coinAmountSchema,
   })
   .meta({ id: 'LeaderboardEntry' });
 export type LeaderboardEntry = z.infer<typeof leaderboardEntrySchema>;

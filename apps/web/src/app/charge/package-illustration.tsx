@@ -16,7 +16,7 @@ import type { ChargeTier } from '@/lib/charge-guide';
  * of its top face to the lower arc of the face below, which is the next band's upper edge — plus
  * ONE full face on top; the upright coin and the stacks sit side by side.
  *
- * Decorative: `aria-hidden`, because the P amount and the price beside it carry the meaning.
+ * Decorative: `aria-hidden`, because the Coin amount and the price beside it carry the meaning.
  */
 
 const VIEW_W = 160;

@@ -1,7 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { schema, type Db } from '@buddha/db';
 import {
-  serializePAmount,
+  serializeCoinAmount,
   type ChargePackage,
   type CreateChargePackageBody,
   type UpdateChargePackageBody,
@@ -15,17 +15,17 @@ type PackageRow = typeof schema.chargePackages.$inferSelect;
 export function toChargePackage(row: PackageRow): ChargePackage {
   return {
     id: row.id,
-    amountP: serializePAmount(row.amountP),
+    amountCoin: serializeCoinAmount(row.amountCoin),
     priceKrw: row.priceKrw,
     sortOrder: row.sortOrder,
     isActive: row.isActive,
   };
 }
 
-/** What an `admin_actions` payload records about a package; jsonb, so P is a string. */
+/** What an `admin_actions` payload records about a package; jsonb, so Coin is a string. */
 function snapshot(row: PackageRow): Record<string, unknown> {
   return {
-    amountP: serializePAmount(row.amountP),
+    amountCoin: serializeCoinAmount(row.amountCoin),
     priceKrw: row.priceKrw,
     sortOrder: row.sortOrder,
     isActive: row.isActive,
@@ -35,7 +35,7 @@ function snapshot(row: PackageRow): Record<string, unknown> {
 /**
  * The catalogue users buy from (ADR-0026). Everything here is admin-managed data, so the
  * service only reads and writes rows; the discount is derived by the client from
- * `amountP`/`priceKrw`, and the DB CHECK keeps the price at or below face value.
+ * `amountCoin`/`priceKrw`, and the DB CHECK keeps the price at or below face value.
  */
 @Injectable()
 export class ChargePackageService {
@@ -47,7 +47,7 @@ export class ChargePackageService {
       .select()
       .from(schema.chargePackages)
       .where(eq(schema.chargePackages.isActive, true))
-      .orderBy(asc(schema.chargePackages.sortOrder), asc(schema.chargePackages.amountP));
+      .orderBy(asc(schema.chargePackages.sortOrder), asc(schema.chargePackages.amountCoin));
     return rows.map(toChargePackage);
   }
 
@@ -56,7 +56,7 @@ export class ChargePackageService {
     const rows = await this.db
       .select()
       .from(schema.chargePackages)
-      .orderBy(asc(schema.chargePackages.sortOrder), asc(schema.chargePackages.amountP));
+      .orderBy(asc(schema.chargePackages.sortOrder), asc(schema.chargePackages.amountCoin));
     return rows.map(toChargePackage);
   }
 
@@ -65,7 +65,7 @@ export class ChargePackageService {
       const [row] = await tx
         .insert(schema.chargePackages)
         .values({
-          amountP: input.amountP,
+          amountCoin: input.amountCoin,
           priceKrw: input.priceKrw,
           sortOrder: input.sortOrder,
           isActive: input.isActive,
@@ -104,19 +104,19 @@ export class ChargePackageService {
         .for('update');
       if (!current) throw new AppError('NOT_FOUND', { message: 'Charge package not found' });
 
-      const amountP = input.amountP ?? current.amountP;
+      const amountCoin = input.amountCoin ?? current.amountCoin;
       const priceKrw = input.priceKrw ?? current.priceKrw;
-      if (BigInt(priceKrw) > amountP) {
+      if (BigInt(priceKrw) > amountCoin) {
         throw new AppError('VALIDATION_ERROR', {
-          message: 'priceKrw must not exceed amountP',
-          details: [{ path: ['priceKrw'], message: 'must not exceed amountP' }],
+          message: 'priceKrw must not exceed amountCoin',
+          details: [{ path: ['priceKrw'], message: 'must not exceed amountCoin' }],
         });
       }
 
       const [row] = await tx
         .update(schema.chargePackages)
         .set({
-          amountP,
+          amountCoin,
           priceKrw,
           ...(input.sortOrder === undefined ? {} : { sortOrder: input.sortOrder }),
           ...(input.isActive === undefined ? {} : { isActive: input.isActive }),

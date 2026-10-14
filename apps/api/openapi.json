@@ -612,7 +612,7 @@
             "session": []
           }
         ],
-        "summary": "Buy one charge package (mock provider: succeeds immediately). P is never convertible back to cash. Closed while paid Coin is off: 404 (ADR-0049)",
+        "summary": "Buy one charge package (mock provider: succeeds immediately). Coin is never convertible back to cash. Closed while paid Coin is off: 404 (ADR-0049)",
         "tags": [
           "wallet"
         ]
@@ -718,7 +718,7 @@
             "session": []
           }
         ],
-        "summary": "Redeem a coupon code for P. Closed while paid Coin is off: 404 (ADR-0049)",
+        "summary": "Redeem a coupon code for Coin. Closed while paid Coin is off: 404 (ADR-0049)",
         "tags": [
           "wallet"
         ]
@@ -1859,7 +1859,7 @@
             "session": []
           }
         ],
-        "summary": "Credit or debit P with a mandatory reason (ADMIN_ADJUST)",
+        "summary": "Credit or debit Coin with a mandatory reason (ADMIN_ADJUST)",
         "tags": [
           "admin"
         ]
@@ -2092,7 +2092,7 @@
             "session": []
           }
         ],
-        "summary": "Refund an unused charge within 7 days of its approval: claw back all its P, then cancel the whole KRW at the provider (retry a refunding one). Closed while paid Coin is off: 404 (ADR-0049)",
+        "summary": "Refund an unused charge within 7 days of its approval: claw back all its Coin, then cancel the whole KRW at the provider (retry a refunding one). Closed while paid Coin is off: 404 (ADR-0049)",
         "tags": [
           "admin"
         ]
@@ -3617,7 +3617,7 @@
   },
   "info": {
     "title": "buddha API",
-    "description": "REST API. Success: `{ data, meta? }`. Failure: `{ error: { code, message, details? } }`. P amounts are decimal strings (bigint). Timestamps are ISO 8601 UTC.",
+    "description": "REST API. Success: `{ data, meta? }`. Failure: `{ error: { code, message, details? } }`. Coin amounts are decimal strings (bigint). Timestamps are ISO 8601 UTC.",
     "version": "1",
     "contact": {}
   },
@@ -3746,16 +3746,16 @@
           "balance": {
             "type": "object",
             "properties": {
-              "availableP": {
-                "$ref": "#/components/schemas/PAmount"
+              "availableCoin": {
+                "$ref": "#/components/schemas/CoinAmount"
               },
-              "lockedP": {
-                "$ref": "#/components/schemas/PAmount"
+              "lockedCoin": {
+                "$ref": "#/components/schemas/CoinAmount"
               }
             },
             "required": [
-              "availableP",
-              "lockedP"
+              "availableCoin",
+              "lockedCoin"
             ],
             "additionalProperties": false
           },
@@ -3798,10 +3798,10 @@
           "admin"
         ]
       },
-      "PAmount": {
+      "CoinAmount": {
         "type": "string",
         "pattern": "^-?(0|[1-9]\\d*)$",
-        "description": "Integer amount of P as a decimal string (bigint)."
+        "description": "Integer amount of Coin as a decimal string (bigint)."
       },
       "LinkedAccount": {
         "type": "object",
@@ -3928,8 +3928,8 @@
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
           },
-          "amountP": {
-            "$ref": "#/components/schemas/PAmount"
+          "amountCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
           },
           "priceKrw": {
             "type": "integer",
@@ -3948,7 +3948,7 @@
         },
         "required": [
           "id",
-          "amountP",
+          "amountCoin",
           "priceKrw",
           "sortOrder",
           "isActive"
@@ -3978,11 +3978,11 @@
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
           },
-          "expectedAmountP": {
+          "expectedAmountCoin": {
             "maxLength": 17,
             "allOf": [
               {
-                "$ref": "#/components/schemas/PAmount"
+                "$ref": "#/components/schemas/CoinAmount"
               }
             ]
           },
@@ -4000,7 +4000,7 @@
         },
         "required": [
           "packageId",
-          "expectedAmountP",
+          "expectedAmountCoin",
           "expectedPriceKrw",
           "expectedAccountId"
         ]
@@ -4033,8 +4033,8 @@
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
           },
-          "amountP": {
-            "$ref": "#/components/schemas/PAmount"
+          "amountCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
           },
           "priceKrw": {
             "type": "integer",
@@ -4097,7 +4097,7 @@
         },
         "required": [
           "id",
-          "amountP",
+          "amountCoin",
           "priceKrw",
           "packageId",
           "provider",
@@ -4115,16 +4115,16 @@
       "Balance": {
         "type": "object",
         "properties": {
-          "availableP": {
-            "$ref": "#/components/schemas/PAmount"
+          "availableCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
           },
-          "lockedP": {
-            "$ref": "#/components/schemas/PAmount"
+          "lockedCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
           }
         },
         "required": [
-          "availableP",
-          "lockedP"
+          "availableCoin",
+          "lockedCoin"
         ],
         "additionalProperties": false
       },
@@ -4148,11 +4148,11 @@
               "PAYMENT_CANCEL_REVERSAL"
             ]
           },
-          "amountP": {
-            "$ref": "#/components/schemas/PAmount"
+          "amountCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
           },
-          "balanceAfterP": {
-            "$ref": "#/components/schemas/PAmount"
+          "balanceAfterCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
           },
           "refType": {
             "nullable": true,
@@ -4182,8 +4182,8 @@
         "required": [
           "id",
           "type",
-          "amountP",
-          "balanceAfterP",
+          "amountCoin",
+          "balanceAfterCoin",
           "refType",
           "refId",
           "memo",
@@ -4220,8 +4220,8 @@
           "code": {
             "type": "string"
           },
-          "amountP": {
-            "$ref": "#/components/schemas/PAmount"
+          "amountCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
           },
           "balance": {
             "$ref": "#/components/schemas/Balance"
@@ -4232,7 +4232,7 @@
         },
         "required": [
           "code",
-          "amountP",
+          "amountCoin",
           "balance",
           "ledgerEntry"
         ],
@@ -4270,11 +4270,11 @@
       "CreateChargePackageBody": {
         "type": "object",
         "properties": {
-          "amountP": {
+          "amountCoin": {
             "maxLength": 17,
             "allOf": [
               {
-                "$ref": "#/components/schemas/PAmount"
+                "$ref": "#/components/schemas/CoinAmount"
               }
             ]
           },
@@ -4296,18 +4296,18 @@
           }
         },
         "required": [
-          "amountP",
+          "amountCoin",
           "priceKrw"
         ]
       },
       "UpdateChargePackageBody": {
         "type": "object",
         "properties": {
-          "amountP": {
+          "amountCoin": {
             "maxLength": 17,
             "allOf": [
               {
-                "$ref": "#/components/schemas/PAmount"
+                "$ref": "#/components/schemas/CoinAmount"
               }
             ]
           },
@@ -4338,8 +4338,8 @@
           "code": {
             "type": "string"
           },
-          "amountP": {
-            "$ref": "#/components/schemas/PAmount"
+          "amountCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
           },
           "maxRedemptions": {
             "nullable": true,
@@ -4375,7 +4375,7 @@
         "required": [
           "id",
           "code",
-          "amountP",
+          "amountCoin",
           "maxRedemptions",
           "redeemedCount",
           "expiresAt",
@@ -4395,11 +4395,11 @@
               }
             ]
           },
-          "amountP": {
+          "amountCoin": {
             "maxLength": 17,
             "allOf": [
               {
-                "$ref": "#/components/schemas/PAmount"
+                "$ref": "#/components/schemas/CoinAmount"
               }
             ]
           },
@@ -4423,7 +4423,7 @@
           }
         },
         "required": [
-          "amountP"
+          "amountCoin"
         ]
       },
       "UpdateCouponBody": {
@@ -4516,11 +4516,11 @@
       "BalanceAdjustBody": {
         "type": "object",
         "properties": {
-          "amountP": {
+          "amountCoin": {
             "maxLength": 17,
             "allOf": [
               {
-                "$ref": "#/components/schemas/PAmount"
+                "$ref": "#/components/schemas/CoinAmount"
               }
             ]
           },
@@ -4531,7 +4531,7 @@
           }
         },
         "required": [
-          "amountP",
+          "amountCoin",
           "memo"
         ]
       },
@@ -4559,8 +4559,8 @@
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
           },
-          "amountP": {
-            "$ref": "#/components/schemas/PAmount"
+          "amountCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
           },
           "priceKrw": {
             "type": "integer",
@@ -4629,7 +4629,7 @@
         },
         "required": [
           "id",
-          "amountP",
+          "amountCoin",
           "priceKrw",
           "packageId",
           "provider",
@@ -4736,8 +4736,8 @@
             "minimum": 1,
             "maximum": 99
           },
-          "volumeP": {
-            "$ref": "#/components/schemas/PAmount"
+          "volumeCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
           },
           "tradeCount": {
             "type": "integer",
@@ -4795,7 +4795,7 @@
           "imageUrl",
           "status",
           "lastPrice",
-          "volumeP",
+          "volumeCoin",
           "tradeCount",
           "traderCount",
           "closeAt",
@@ -4858,8 +4858,8 @@
             "minimum": 1,
             "maximum": 99
           },
-          "volumeP": {
-            "$ref": "#/components/schemas/PAmount"
+          "volumeCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
           },
           "tradeCount": {
             "type": "integer",
@@ -4937,7 +4937,7 @@
           "imageUrl",
           "status",
           "lastPrice",
-          "volumeP",
+          "volumeCoin",
           "tradeCount",
           "traderCount",
           "closeAt",
@@ -4979,8 +4979,8 @@
             "minimum": 0,
             "maximum": 9007199254740991
           },
-          "amountP": {
-            "$ref": "#/components/schemas/PAmount"
+          "amountCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
           },
           "priceAvgBp": {
             "type": "integer",
@@ -4998,7 +4998,7 @@
           "outcome",
           "side",
           "qty",
-          "amountP",
+          "amountCoin",
           "priceAvgBp",
           "createdAt"
         ],
@@ -5171,8 +5171,8 @@
             "minimum": 1,
             "maximum": 99
           },
-          "volumeP": {
-            "$ref": "#/components/schemas/PAmount"
+          "volumeCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
           },
           "tradeCount": {
             "type": "integer",
@@ -5221,7 +5221,7 @@
           "imageUrl",
           "status",
           "lastPrice",
-          "volumeP",
+          "volumeCoin",
           "tradeCount",
           "traderCount",
           "closeAt",
@@ -5283,8 +5283,8 @@
             "minimum": 1,
             "maximum": 99
           },
-          "volumeP": {
-            "$ref": "#/components/schemas/PAmount"
+          "volumeCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
           },
           "tradeCount": {
             "type": "integer",
@@ -5361,8 +5361,8 @@
             "format": "date-time",
             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
           },
-          "netCollectedP": {
-            "$ref": "#/components/schemas/PAmount"
+          "netCollectedCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
           },
           "openInterest": {
             "type": "object",
@@ -5405,7 +5405,7 @@
           "imageUrl",
           "status",
           "lastPrice",
-          "volumeP",
+          "volumeCoin",
           "tradeCount",
           "traderCount",
           "closeAt",
@@ -5421,7 +5421,7 @@
           "voidedAt",
           "createdBy",
           "updatedAt",
-          "netCollectedP",
+          "netCollectedCoin",
           "openInterest",
           "settlementSteps",
           "events"
@@ -5697,11 +5697,11 @@
             "minimum": 0,
             "maximum": 9007199254740991
           },
-          "costBasisP": {
-            "$ref": "#/components/schemas/PAmount"
+          "costBasisCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
           },
-          "realizedPnlP": {
-            "$ref": "#/components/schemas/PAmount"
+          "realizedPnlCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
           },
           "settled": {
             "type": "boolean"
@@ -5726,8 +5726,8 @@
           "resolvedResult",
           "outcome",
           "qty",
-          "costBasisP",
-          "realizedPnlP",
+          "costBasisCoin",
+          "realizedPnlCoin",
           "settled",
           "version",
           "updatedAt"
@@ -5794,11 +5794,11 @@
               "rejected"
             ]
           },
-          "amountP": {
+          "amountCoin": {
             "nullable": true,
             "allOf": [
               {
-                "$ref": "#/components/schemas/PAmount"
+                "$ref": "#/components/schemas/CoinAmount"
               }
             ]
           },
@@ -5825,7 +5825,7 @@
           "qty",
           "filledQty",
           "status",
-          "amountP",
+          "amountCoin",
           "priceAvgBp",
           "createdAt"
         ],
@@ -5842,14 +5842,14 @@
           "nickname": {
             "$ref": "#/components/schemas/Nickname"
           },
-          "realizedPnlP": {
-            "$ref": "#/components/schemas/PAmount"
+          "realizedPnlCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
           }
         },
         "required": [
           "rank",
           "nickname",
-          "realizedPnlP"
+          "realizedPnlCoin"
         ],
         "additionalProperties": false
       }

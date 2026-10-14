@@ -1,4 +1,4 @@
-import { PAYOUT_PER_CONTRACT_P, POSITION_QTY_MAX } from './constants.js';
+import { PAYOUT_PER_CONTRACT_COIN, POSITION_QTY_MAX } from './constants.js';
 
 /**
  * Position accounting (PLAN 5.4): buys, sells and settlement of one position row, whoever the
@@ -6,12 +6,12 @@ import { PAYOUT_PER_CONTRACT_P, POSITION_QTY_MAX } from './constants.js';
  * a new state and never mutates its input.
  *
  * All money is `bigint`; the only division (the cost released by a partial sell) rounds
- * half-up in bigint arithmetic so the API and the worker can never disagree by a P.
+ * half-up in bigint arithmetic so the API and the worker can never disagree by one Coin.
  */
 export interface PositionState {
   qty: number;
-  costBasisP: bigint;
-  realizedPnlP: bigint;
+  costBasisCoin: bigint;
+  realizedPnlCoin: bigint;
 }
 
 function assertPosition(position: PositionState): void {
@@ -28,24 +28,24 @@ function assertDelta(qty: number): void {
   }
 }
 
-function assertAmount(name: string, amountP: bigint): void {
-  if (typeof amountP !== 'bigint' || amountP < 0n) {
-    throw new RangeError(`${name} must be a non-negative bigint, got ${String(amountP)}`);
+function assertAmount(name: string, amountCoin: bigint): void {
+  if (typeof amountCoin !== 'bigint' || amountCoin < 0n) {
+    throw new RangeError(`${name} must be a non-negative bigint, got ${String(amountCoin)}`);
   }
 }
 
 /** qty += Δ, costBasis += cost. RangeError when the row would overflow int4. */
-export function applyBuy(position: PositionState, qty: number, costP: bigint): PositionState {
+export function applyBuy(position: PositionState, qty: number, costCoin: bigint): PositionState {
   assertPosition(position);
   assertDelta(qty);
-  assertAmount('costP', costP);
+  assertAmount('costCoin', costCoin);
   if (position.qty + qty > POSITION_QTY_MAX) {
     throw new RangeError(`position would exceed ${String(POSITION_QTY_MAX)} contracts`);
   }
   return {
     qty: position.qty + qty,
-    costBasisP: position.costBasisP + costP,
-    realizedPnlP: position.realizedPnlP,
+    costBasisCoin: position.costBasisCoin + costCoin,
+    realizedPnlCoin: position.realizedPnlCoin,
   };
 }
 
@@ -54,33 +54,40 @@ export function applyBuy(position: PositionState, qty: number, costP: bigint): P
  * realized += proceeds − released. RangeError when Δ > qty (the caller refuses such a sell
  * before getting here).
  */
-export function applySell(position: PositionState, qty: number, proceedsP: bigint): PositionState {
+export function applySell(
+  position: PositionState,
+  qty: number,
+  proceedsCoin: bigint,
+): PositionState {
   assertPosition(position);
   assertDelta(qty);
-  assertAmount('proceedsP', proceedsP);
+  assertAmount('proceedsCoin', proceedsCoin);
   if (qty > position.qty) {
     throw new RangeError(`cannot sell ${String(qty)} of ${String(position.qty)} contracts`);
   }
   const held = BigInt(position.qty);
-  const released = (position.costBasisP * BigInt(qty) + held / 2n) / held;
+  const released = (position.costBasisCoin * BigInt(qty) + held / 2n) / held;
   return {
     qty: position.qty - qty,
-    costBasisP: position.costBasisP - released,
-    realizedPnlP: position.realizedPnlP + proceedsP - released,
+    costBasisCoin: position.costBasisCoin - released,
+    realizedPnlCoin: position.realizedPnlCoin + proceedsCoin - released,
   };
 }
 
 /**
- * Settlement (PLAN 5.4): the winning outcome pays qty · 100P and realises payout − costBasis;
+ * Settlement (PLAN 5.4): the winning outcome pays qty · 100 Coin and realises payout − costBasis;
  * the losing one realises −costBasis. Either way the row ends at qty 0, costBasis 0.
  */
-export function settle(position: PositionState, won: boolean): PositionState & { payoutP: bigint } {
+export function settle(
+  position: PositionState,
+  won: boolean,
+): PositionState & { payoutCoin: bigint } {
   assertPosition(position);
-  const payoutP = won ? BigInt(position.qty) * PAYOUT_PER_CONTRACT_P : 0n;
+  const payoutCoin = won ? BigInt(position.qty) * PAYOUT_PER_CONTRACT_COIN : 0n;
   return {
     qty: 0,
-    costBasisP: 0n,
-    realizedPnlP: position.realizedPnlP + payoutP - position.costBasisP,
-    payoutP,
+    costBasisCoin: 0n,
+    realizedPnlCoin: position.realizedPnlCoin + payoutCoin - position.costBasisCoin,
+    payoutCoin,
   };
 }

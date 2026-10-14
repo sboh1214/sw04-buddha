@@ -14,7 +14,7 @@ const market: Market = {
   imageUrl: null,
   status: 'open',
   lastPrice: 63,
-  volumeP: '1250000',
+  volumeCoin: '1250000',
   tradeCount: 12,
   traderCount: 5,
   closeAt: '2026-12-01T00:00:00.000Z',
@@ -68,7 +68,7 @@ describe('seedMarketDetail', () => {
     const queryClient = new QueryClient();
     seedMarketDetail(queryClient, market, series);
 
-    // Every P is a decimal string and every instant an ISO string: no bigint, no Date, no
+    // Every Coin amount is a decimal string and every instant an ISO string: no bigint, no Date, no
     // undefined. toStrictEqual rather than toEqual because a dropped `undefined` property is
     // exactly what a missing transformer would look like.
     const state = dehydratePublic(queryClient);

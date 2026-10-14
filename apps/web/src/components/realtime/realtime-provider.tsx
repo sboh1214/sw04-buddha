@@ -488,7 +488,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // not hold it, so those cost nothing.
         //
         // It writes a card's NUMBERS and never its RANK, and that is a decision rather than an
-        // oversight. `sort=volume` is keyset-paginated on `(volume_p DESC, id DESC)`
+        // oversight. `sort=volume` is keyset-paginated on `(volume_coin DESC, id DESC)`
         // (market.service.ts), so the order belongs to the fetch that produced the page — the
         // same rule `joinMarketPages` states from the other side ("the page SHAPE comes from
         // `incoming`"), and the same rule list MEMBERSHIP already follows: a market that closes
@@ -580,9 +580,9 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       'market:trade': (raw: unknown) => {
         const parsed = marketTradeEventSchema.safeParse(raw);
         if (!parsed.success) return;
-        // Invalidate, never prepend a synthetic row: the event has no `amountP` while the REST
+        // Invalidate, never prepend a synthetic row: the event has no `amountCoin` while the REST
         // `Fill` does, and `['market-fills', id]` is SHARED with the admin detail, which
-        // renders formatP(parsePAmount(fill.amountP)) and would throw on a null.
+        // renders formatCoin(parseCoinAmount(fill.amountCoin)) and would throw on a null.
         refreshFills(parsed.data.marketId);
       },
 
@@ -614,12 +614,12 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // that left before the payout committed.
         //
         // 결제 내역 sits beside 원장 on /wallet (while paid Coin is on sale, ADR-0049) and
-        // contradicts it the same way when left behind: an admin refund claws the P back (a
+        // contradicts it the same way when left behind: an admin refund claws the Coin back (a
         // 결제 취소(환불) row) while the payment still says 완료. The event names no payment, so
         // the list is asked again — the same kind as the ledger's, and on the same accepted event,
         // so it costs a request only where 결제 내역 is on screen. Unseeded as well, hence
-        // `restartQueries` again. Only as far as the P goes: a refund's claw-back is the one step
-        // that moves a balance, so the list lands on 환불 처리 중, and its finish (환불 완료)
+        // `restartQueries` again. Only as far as the Coin goes: a refund's claw-back is the one
+        // step that moves a balance, so the list lands on 환불 처리 중, and its finish (환불 완료)
         // publishes nothing; the list's own bounded poll while a row is still moving
         // (`paymentsPoll`, use-wallet.ts) carries that row the rest of the way.
         for (const queryKey of BALANCE_HISTORY_KEYS) void restartQueries(queryClient, queryKey);
@@ -673,7 +673,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
           }
         }
         // 주문 이력 has no reducer and no event of its own: an `Order` carries its id, status,
-        // filledQty, amountP, priceAvgBp and the market's slug and title, none of which any
+        // filledQty, amountCoin, priceAvgBp and the market's slug and title, none of which any
         // `user:` event does, so a row cannot be built and has to be asked for — the same answer
         // `market:trade` gives 체결 내역. Without it /portfolio moved its balance and its holding
         // on this event and left the order list a row short until a focus or a reconnect.

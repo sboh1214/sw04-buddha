@@ -27,7 +27,7 @@ describe.skipIf(!hasTestDb())('ledger.audit (integration)', () => {
 
   it('reports no mismatch while every balance matches its ledger', async () => {
     // createUser writes a matching ADMIN_ADJUST entry for the starting balance.
-    await createUser(t.db, { balanceP: 10_000n });
+    await createUser(t.db, { balanceCoin: 10_000n });
     await createUser(t.db);
 
     const result = await runLedgerAudit(t.db);
@@ -38,15 +38,15 @@ describe.skipIf(!hasTestDb())('ledger.audit (integration)', () => {
   });
 
   it('records one audit_failures row per account whose balance was changed behind the ledger', async () => {
-    const { user } = await createUser(t.db, { balanceP: 10_000n });
-    const untouched = await createUser(t.db, { balanceP: 5_000n });
+    const { user } = await createUser(t.db, { balanceCoin: 10_000n });
+    const untouched = await createUser(t.db, { balanceCoin: 5_000n });
 
     // Exactly what the AC asks for: move the balance without a ledger entry. The app role
     // may UPDATE balances (only ledger_entries is append-only), so this is reachable in
     // production through a bug, which is why the job exists.
     await t.db
       .update(schema.balances)
-      .set({ availableP: sql`${schema.balances.availableP} + 1500` })
+      .set({ availableCoin: sql`${schema.balances.availableCoin} + 1500` })
       .where(eq(schema.balances.userId, user.id));
 
     const result = await runLedgerAudit(t.db);
@@ -55,10 +55,10 @@ describe.skipIf(!hasTestDb())('ledger.audit (integration)', () => {
       {
         userId: user.id,
         balanceMissing: false,
-        availableP: 11_500n,
-        lockedP: 0n,
-        ledgerSumP: 10_000n,
-        differenceP: 1_500n,
+        availableCoin: 11_500n,
+        lockedCoin: 0n,
+        ledgerSumCoin: 10_000n,
+        differenceCoin: 1_500n,
       },
     ]);
 
@@ -68,9 +68,9 @@ describe.skipIf(!hasTestDb())('ledger.audit (integration)', () => {
       kind: LEDGER_AUDIT_FAILURE_KIND,
       payload: {
         userId: user.id,
-        availableP: '11500',
-        ledgerSumP: '10000',
-        differenceP: '1500',
+        availableCoin: '11500',
+        ledgerSumCoin: '10000',
+        differenceCoin: '1500',
       },
     });
 
@@ -84,7 +84,7 @@ describe.skipIf(!hasTestDb())('ledger.audit (integration)', () => {
       .select()
       .from(schema.balances)
       .where(eq(schema.balances.userId, untouched.user.id));
-    expect(row?.availableP).toBe(5_000n);
+    expect(row?.availableCoin).toBe(5_000n);
   });
 
   it('reports an account whose balance row is gone instead of losing it', async () => {
@@ -92,8 +92,8 @@ describe.skipIf(!hasTestDb())('ledger.audit (integration)', () => {
     // vanished: no mismatch AND `checked` one short, while the job logged "clean". buddha_app
     // keeps DELETE on balances, and such an account is broken in its own right — every wallet
     // call 404s — so it is exactly what this job exists to surface.
-    const { user } = await createUser(t.db, { balanceP: 10_000n });
-    const untouched = await createUser(t.db, { balanceP: 5_000n });
+    const { user } = await createUser(t.db, { balanceCoin: 10_000n });
+    const untouched = await createUser(t.db, { balanceCoin: 5_000n });
     await t.db.delete(schema.balances).where(eq(schema.balances.userId, user.id));
 
     const result = await runLedgerAudit(t.db);
@@ -102,17 +102,17 @@ describe.skipIf(!hasTestDb())('ledger.audit (integration)', () => {
       {
         userId: user.id,
         balanceMissing: true,
-        availableP: 0n,
-        lockedP: 0n,
-        ledgerSumP: 10_000n,
-        differenceP: -10_000n,
+        availableCoin: 0n,
+        lockedCoin: 0n,
+        ledgerSumCoin: 10_000n,
+        differenceCoin: -10_000n,
       },
     ]);
 
     const [row] = await failures();
     expect(row).toMatchObject({
       kind: LEDGER_AUDIT_FAILURE_KIND,
-      payload: { userId: user.id, balanceMissing: true, ledgerSumP: '10000' },
+      payload: { userId: user.id, balanceMissing: true, ledgerSumCoin: '10000' },
     });
 
     // The healthy account is untouched and not flagged.
@@ -120,7 +120,7 @@ describe.skipIf(!hasTestDb())('ledger.audit (integration)', () => {
       .select()
       .from(schema.balances)
       .where(eq(schema.balances.userId, untouched.user.id));
-    expect(ok?.availableP).toBe(5_000n);
+    expect(ok?.availableCoin).toBe(5_000n);
   });
 
   it('counts an account with no ledger entries and a zero balance as consistent', async () => {
@@ -135,16 +135,18 @@ describe.skipIf(!hasTestDb())('ledger.audit (integration)', () => {
     // the same loop over five accounts instead of thirty-three thousand.
     const ids: string[] = [];
     for (let i = 0; i < 5; i += 1) {
-      const { user } = await createUser(t.db, { balanceP: 1_000n });
+      const { user } = await createUser(t.db, { balanceCoin: 1_000n });
       ids.push(user.id);
     }
-    await t.db.update(schema.balances).set({ availableP: sql`${schema.balances.availableP} + 1` });
+    await t.db
+      .update(schema.balances)
+      .set({ availableCoin: sql`${schema.balances.availableCoin} + 1` });
 
     const result = await runLedgerAudit(t.db, { insertChunkSize: 2 });
     expect(result.checked).toBe(5);
     expect(result.recorded).toBe(5);
     expect(result.mismatches.map((m) => m.userId).sort()).toEqual([...ids].sort());
-    expect(result.mismatches.every((m) => m.differenceP === 1n)).toBe(true);
+    expect(result.mismatches.every((m) => m.differenceCoin === 1n)).toBe(true);
 
     const rows = await failures();
     expect(rows).toHaveLength(5);

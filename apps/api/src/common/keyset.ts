@@ -58,7 +58,7 @@ export function keysetPredicate(
 
 /**
  * The same, for a sort whose first key is not a timestamp: `GET /markets?sort=volume` orders by
- * `(volume_p DESC, id DESC)` and its cursor carries a bigint. Split from `keysetPredicate`
+ * `(volume_coin DESC, id DESC)` and its cursor carries a bigint. Split from `keysetPredicate`
  * rather than made generic over the cast, because the two cursors are decoded by two different
  * validators in packages/shared and mixing them up is exactly the mistake `idShape` exists to
  * prevent.

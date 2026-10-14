@@ -11,7 +11,7 @@ export default defineConfig({
   dialect: 'postgresql',
   schema: './src/schema/index.ts',
   out: './drizzle',
-  // Column names are derived from camelCase property names (amountP -> amount_p).
+  // Column names are derived from camelCase property names (amountCoin -> amount_coin).
   // Must match the `casing` passed to drizzle() in src/client.ts.
   casing: 'snake_case',
   migrations: {

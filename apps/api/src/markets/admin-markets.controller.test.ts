@@ -27,7 +27,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 /** U+0000: Postgres refuses it in text and jsonb, so the pipe must refuse it first. */
 const NUL = String.fromCharCode(0);
 /** What the direct AMM kept on a market and the admin detail showed (#125 removed them). */
-const AMM_FIELDS = ['liquidityB', 'qYes', 'qNo', 'initialProbBp', 'reserveP', 'pYesBp'] as const;
+const AMM_FIELDS = ['liquidityB', 'qYes', 'qNo', 'initialProbBp', 'reserveCoin', 'pYesBp'] as const;
 
 type ListPage = { data: MarketSummary[]; meta: { nextCursor: string | null } };
 type ErrorBody = {
@@ -120,11 +120,11 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       category: { slug: 'economy', nameKo: '경제' },
       // No fill yet, so no price (N02 §5): nothing stands in for one.
       lastPrice: null,
-      volumeP: '0',
+      volumeCoin: '0',
       tradeCount: 0,
       openAt: null,
       createdBy: admin.id,
-      netCollectedP: '0',
+      netCollectedCoin: '0',
       openInterest: { yes: 0, no: 0 },
       settlementSteps: [],
       description: null,
@@ -146,11 +146,11 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       type: 'market_create',
       targetType: 'market',
     });
-    // jsonb payloads are JSON-safe: P amounts crossed as strings, never bigint.
+    // jsonb payloads are JSON-safe: Coin amounts crossed as strings, never bigint.
     const after = (action!.payload as { after: Record<string, unknown> }).after;
     expect(after).toMatchObject({ slug: 'rate-cut-2026', status: 'draft', lastPrice: null });
     for (const field of AMM_FIELDS) expect(after).not.toHaveProperty(field);
-    expect(typeof after.volumeP).toBe('string');
+    expect(typeof after.volumeCoin).toBe('string');
 
     // Drafts are the admin's alone.
     expect((await get(`/api/v1/admin/markets/${created.id}`)).statusCode).toBe(200);
@@ -697,7 +697,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     expect((await get('/api/v1/admin/markets?status=nope')).statusCode).toBe(400);
   });
 
-  it('shows net collected P, open interest and the event log on the detail', async () => {
+  it('shows net collected Coin, open interest and the event log on the detail', async () => {
     const row = await market({ status: 'open', lastPrice: 55, tradeCount: 2 });
     const trader = (await createUser(t.db)).user.id;
     await createPosition(t.db, {
@@ -705,14 +705,14 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       marketId: row.id,
       outcome: 'YES',
       qty: 12,
-      costBasisP: 600n,
+      costBasisCoin: 600n,
     });
     await createPosition(t.db, {
       userId: trader,
       marketId: row.id,
       outcome: 'NO',
       qty: 5,
-      costBasisP: 200n,
+      costBasisCoin: 200n,
     });
     // Settled rows are not open interest.
     await createPosition(t.db, {
@@ -720,7 +720,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       marketId: row.id,
       outcome: 'YES',
       qty: 7,
-      costBasisP: 300n,
+      costBasisCoin: 300n,
       settled: true,
     });
     // Two fills of the trader's order against one resting order of another account
@@ -754,7 +754,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
         outcome: 'YES',
         side: 'buy',
         qty: 12,
-        amountP: 600n,
+        amountCoin: 600n,
         priceAvgBp: 5_000,
       },
       {
@@ -765,7 +765,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
         outcome: 'YES',
         side: 'sell',
         qty: 2,
-        amountP: 110n,
+        amountCoin: 110n,
         priceAvgBp: 5_500,
       },
     ]);
@@ -782,7 +782,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       lastPrice: 55,
       tradeCount: 2,
       createdBy: admin.id,
-      netCollectedP: '490',
+      netCollectedCoin: '490',
       openInterest: { yes: 12, no: 5 },
       settlementSteps: [],
     });

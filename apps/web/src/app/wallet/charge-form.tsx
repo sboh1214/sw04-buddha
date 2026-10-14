@@ -1,7 +1,7 @@
 'use client';
 
 import { Alert, Badge, Button, Card, HStack, Skeleton, Stack, Text } from '@chakra-ui/react';
-import { discountPercent, formatKrw, formatP, parsePAmount } from '@buddha/shared';
+import { discountPercent, formatKrw, formatCoin, parseCoinAmount } from '@buddha/shared';
 import { useEffect, useRef } from 'react';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
@@ -17,7 +17,7 @@ import { isUnavailable } from '@/lib/payments';
 /**
  * Only a stale catalogue may claim the package is gone — re-priced, retired or deleted —
  * which is the same set `useCharge` refetches on, so the message and the cards changing under
- * it always agree. A provider refusal is a VALIDATION_ERROR too but names `amountP`: nothing
+ * it always agree. A provider refusal is a VALIDATION_ERROR too but names `amountCoin`: nothing
  * about the offer changed, so it must not say so. The two DUPLICATE_REQUEST answers (PLAN 5.4)
  * are told apart the way `useCharge` tells them apart: an earlier click is still running (the
  * key was kept, so the next click collects it), or an earlier click already bought this. The
@@ -36,7 +36,7 @@ function chargeErrorTitle(error: unknown): string {
 
 /**
  * PLAN 11.3 charging. Users buy one of the packages an admin configured (ADR-0026), so there
- * is no free-form amount: each card shows the P granted, the KRW price and the discount. One
+ * is no free-form amount: each card shows the Coin granted, the KRW price and the discount. One
  * click charges at once (`useCharge`, the mock provider of ADR-0042) and a toast confirms it.
  * Not drawn while paid Coin is closed (PAID_COIN_SALES_ENABLED, ADR-0049; app/wallet/page.tsx).
  *
@@ -63,7 +63,7 @@ export function ChargeForm({ highlightPackageId }: { highlightPackageId?: string
       toaster.create({
         type: 'success',
         title: copy.chargeDone,
-        description: formatP(parsePAmount(result.balance.availableP)),
+        description: formatCoin(parseCoinAmount(result.balance.availableCoin)),
       });
     } catch (error) {
       toaster.create({ type: 'error', title: chargeErrorTitle(error) });
@@ -98,8 +98,8 @@ export function ChargeForm({ highlightPackageId }: { highlightPackageId?: string
         ) : (
           <Stack gap="3">
             {packages.data.map((pack) => {
-              const amountP = parsePAmount(pack.amountP);
-              const discount = discountPercent(amountP, pack.priceKrw);
+              const amountCoin = parseCoinAmount(pack.amountCoin);
+              const discount = discountPercent(amountCoin, pack.priceKrw);
               const busy = charge.isPending && charge.variables?.id === pack.id;
               const chosen = pack.id === highlightPackageId;
               return (
@@ -118,7 +118,7 @@ export function ChargeForm({ highlightPackageId }: { highlightPackageId?: string
                   <Stack gap="0.5">
                     <HStack gap="2" flexWrap="wrap">
                       <Text fontWeight="semibold" fontSize="lg">
-                        {formatP(amountP)}
+                        {formatCoin(amountCoin)}
                       </Text>
                       {discount > 0 && (
                         <Badge colorPalette="yes" variant="subtle">

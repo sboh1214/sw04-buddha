@@ -13,7 +13,7 @@ import {
   Stack,
   Text,
 } from '@chakra-ui/react';
-import { MARKET_STATUSES, type MarketStatus, formatP, parsePAmount } from '@buddha/shared';
+import { MARKET_STATUSES, type MarketStatus, formatCoin, parseCoinAmount } from '@buddha/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
 import {
   keepPreviousData,
@@ -158,7 +158,7 @@ export function AdminMarkets() {
                 </HStack>
                 <Text fontSize="xs" color="fg.muted">
                   {market.category.nameKo} · {formatYesPrice(market.lastPrice)} ·{' '}
-                  {copy.marketVolume} {formatP(parsePAmount(market.volumeP))} ·{' '}
+                  {copy.marketVolume} {formatCoin(parseCoinAmount(market.volumeCoin))} ·{' '}
                   {copy.adminMarketCloseAtShort} {formatKst(market.closeAt)}
                 </Text>
               </Stack>

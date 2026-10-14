@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { ALL_CATEGORY_SLUGS, CATEGORY_SLUGS, SIGNUP_BONUS_P } from '@buddha/shared';
+import { ALL_CATEGORY_SLUGS, CATEGORY_SLUGS, SIGNUP_BONUS_COIN } from '@buddha/shared';
 import { and, asc, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -232,11 +232,11 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
         .from(ledgerEntries)
         .where(eq(ledgerEntries.userId, id))
         .orderBy(ledgerEntries.id);
-      return { balance, entries: entries.map((entry) => [entry.type, entry.amountP]) };
+      return { balance, entries: entries.map((entry) => [entry.type, entry.amountCoin]) };
     }
     const first = await wallet();
-    expect(first.balance).toMatchObject({ availableP: SIGNUP_BONUS_P, lockedP: 0n });
-    expect(first.entries).toEqual([['BONUS', SIGNUP_BONUS_P]]);
+    expect(first.balance).toMatchObject({ availableCoin: SIGNUP_BONUS_COIN, lockedCoin: 0n });
+    expect(first.entries).toEqual([['BONUS', SIGNUP_BONUS_COIN]]);
     // Re-running touches neither the balance nor the ledger.
     runSeed();
     expect(await wallet()).toEqual(first);
@@ -265,7 +265,7 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
         type: 'charge_package_delete',
         targetType: 'charge_package',
         targetId: pack.id,
-        payload: { amountP: pack.amountP.toString(), priceKrw: pack.priceKrw },
+        payload: { amountCoin: pack.amountCoin.toString(), priceKrw: pack.priceKrw },
       });
     }
     await t.db.delete(chargePackages);
@@ -294,7 +294,7 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
           category: categories.slug,
           status: markets.status,
           lastPrice: markets.lastPrice,
-          volumeP: markets.volumeP,
+          volumeCoin: markets.volumeCoin,
           tradeCount: markets.tradeCount,
           statusEventId: markets.statusEventId,
           openAt: markets.openAt,
@@ -341,7 +341,7 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
           status: 'draft',
           openAt: null,
           lastPrice: null,
-          volumeP: 0n,
+          volumeCoin: 0n,
           tradeCount: 0,
           createdBy: adminId,
         });

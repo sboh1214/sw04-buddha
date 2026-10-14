@@ -5,7 +5,7 @@
  * profile; skips when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
-import { SIGNUP_BONUS_P, discountPercent, type ChargePackage } from '@buddha/shared';
+import { SIGNUP_BONUS_COIN, discountPercent, type ChargePackage } from '@buddha/shared';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
@@ -54,22 +54,22 @@ describe.skipIf(!hasTestInfra)('admin charge packages (integration)', () => {
     });
 
   it('creates a package whose price is below face value (the discount)', async () => {
-    const res = await create({ amountP: '5000', priceKrw: 4900, sortOrder: 10 });
+    const res = await create({ amountCoin: '5000', priceKrw: 4900, sortOrder: 10 });
     expect(res.statusCode).toBe(201);
     const created = res.json<{ data: ChargePackage }>().data;
-    expect(created).toMatchObject({ amountP: '5000', priceKrw: 4900, isActive: true });
-    expect(discountPercent(BigInt(created.amountP), created.priceKrw)).toBe(2);
+    expect(created).toMatchObject({ amountCoin: '5000', priceKrw: 4900, isActive: true });
+    expect(discountPercent(BigInt(created.amountCoin), created.priceKrw)).toBe(2);
   });
 
-  it('refuses a price above face value: P is never sold above 1P = 1원', async () => {
-    const res = await create({ amountP: '5000', priceKrw: 5001 });
+  it('refuses a price above face value: Coin is never sold above 1 Coin = 1원', async () => {
+    const res = await create({ amountCoin: '5000', priceKrw: 5001 });
     expect(res.statusCode).toBe(400);
     expect(res.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR' } });
     expect(await t.db.select().from(schema.chargePackages)).toHaveLength(0);
   });
 
   it('edits a package, including retiring and reviving it', async () => {
-    const pack = await createTestPackage(t.db, { amountP: 10_000n, priceKrw: 9_700 });
+    const pack = await createTestPackage(t.db, { amountCoin: 10_000n, priceKrw: 9_700 });
 
     const patched = await t.app.inject({
       method: 'PATCH',
@@ -81,7 +81,7 @@ describe.skipIf(!hasTestInfra)('admin charge packages (integration)', () => {
     expect(patched.json<{ data: ChargePackage }>().data).toMatchObject({
       priceKrw: 9_000,
       sortOrder: 5,
-      amountP: '10000',
+      amountCoin: '10000',
     });
 
     const retired = await t.app.inject({
@@ -104,7 +104,7 @@ describe.skipIf(!hasTestInfra)('admin charge packages (integration)', () => {
   });
 
   it('refuses a patch that would push the price above the amount', async () => {
-    const pack = await createTestPackage(t.db, { amountP: 10_000n, priceKrw: 9_700 });
+    const pack = await createTestPackage(t.db, { amountCoin: 10_000n, priceKrw: 9_700 });
     const res = await t.app.inject({
       method: 'PATCH',
       url: `/api/v1/admin/charge-packages/${pack.id}`,
@@ -133,7 +133,7 @@ describe.skipIf(!hasTestInfra)('admin charge packages (integration)', () => {
     expect(await t.db.select().from(schema.chargePackages)).toHaveLength(0);
 
     const [payment] = await t.db.select().from(schema.payments);
-    expect(payment).toMatchObject({ amountP: 10_000n, priceKrw: 9_700, packageId: null });
+    expect(payment).toMatchObject({ amountCoin: 10_000n, priceKrw: 9_700, packageId: null });
 
     const missing = await t.app.inject({
       method: 'DELETE',
@@ -146,7 +146,7 @@ describe.skipIf(!hasTestInfra)('admin charge packages (integration)', () => {
   it('records who created, edited and deleted a package in admin_actions', async () => {
     // ADMIN_ACTION_TYPES declares charge_package_create/update/delete; a hard-deleted package
     // leaves the audit payload as the only record of the price it carried.
-    const created = await create({ amountP: '20000', priceKrw: 19_000 });
+    const created = await create({ amountCoin: '20000', priceKrw: 19_000 });
     expect(created.statusCode).toBe(201);
     const pack = created.json<{ data: ChargePackage }>().data;
 
@@ -182,11 +182,11 @@ describe.skipIf(!hasTestInfra)('admin charge packages (integration)', () => {
       after: { priceKrw: 18_000 },
     });
     // The row is gone, so this payload is the only surviving copy of its amount and price.
-    expect(actions[2]?.payload).toMatchObject({ amountP: '20000', priceKrw: 18_000 });
+    expect(actions[2]?.payload).toMatchObject({ amountCoin: '20000', priceKrw: 18_000 });
   });
 
   it('writes no audit row when the patch is refused', async () => {
-    const pack = await createTestPackage(t.db, { amountP: 10_000n, priceKrw: 9_700 });
+    const pack = await createTestPackage(t.db, { amountCoin: 10_000n, priceKrw: 9_700 });
     const refused = await t.app.inject({
       method: 'PATCH',
       url: `/api/v1/admin/charge-packages/${pack.id}`,
@@ -209,7 +209,7 @@ describe.skipIf(!hasTestInfra)('admin charge packages (integration)', () => {
     // now reserved before the provider runs (PLAN 5.4), so a package deleted during the call
     // is the SET NULL case proper; deleting from inside the provider call still exercises the
     // whole path deterministically.
-    const pack = await createTestPackage(t.db, { amountP: 10_000n, priceKrw: 9_700 });
+    const pack = await createTestPackage(t.db, { amountCoin: 10_000n, priceKrw: 9_700 });
     const provider = t.app.get<PaymentProvider>(PAYMENT_PROVIDER);
     const spy = vi.spyOn(provider, 'charge').mockImplementation(async (request) => {
       await t.db.delete(schema.chargePackages).where(eq(schema.chargePackages.id, pack.id));
@@ -229,17 +229,17 @@ describe.skipIf(!hasTestInfra)('admin charge packages (integration)', () => {
       // exactly the state ON DELETE SET NULL would have left a moment later (ADR-0026).
       const [payment] = await t.db.select().from(schema.payments);
       expect(payment).toMatchObject({
-        amountP: 10_000n,
+        amountCoin: 10_000n,
         priceKrw: 9_700,
         packageId: null,
         status: 'succeeded',
       });
-      // And the P actually landed: the FK failure used to roll the whole transaction back.
+      // And the Coin actually landed: the FK failure used to roll the whole transaction back.
       const [balance] = await t.db
         .select()
         .from(schema.balances)
         .where(eq(schema.balances.userId, member.id));
-      expect(balance?.availableP).toBe(SIGNUP_BONUS_P + 10_000n);
+      expect(balance?.availableCoin).toBe(SIGNUP_BONUS_COIN + 10_000n);
     } finally {
       spy.mockRestore();
     }
@@ -251,7 +251,7 @@ describe.skipIf(!hasTestInfra)('admin charge packages (integration)', () => {
     // the payment. Holding the row from another transaction makes the interleaving
     // deterministic: without `FOR UPDATE` the read returns the pre-commit price and writes it
     // straight back, erasing the other admin's change; with it, the read waits and sees 8,000.
-    const pack = await createTestPackage(t.db, { amountP: 10_000n, priceKrw: 9_700 });
+    const pack = await createTestPackage(t.db, { amountCoin: 10_000n, priceKrw: 9_700 });
 
     let release!: () => void;
     const held = new Promise<void>((resolve) => {
@@ -279,11 +279,13 @@ describe.skipIf(!hasTestInfra)('admin charge packages (integration)', () => {
 
     expect((await patched).statusCode).toBe(200);
     const [row] = await t.db.select().from(schema.chargePackages);
-    expect(row).toMatchObject({ priceKrw: 8_000, isActive: false, amountP: 10_000n });
+    expect(row).toMatchObject({ priceKrw: 8_000, isActive: false, amountCoin: 10_000n });
   });
 
   it('is closed to members', async () => {
-    expect((await create({ amountP: '5000', priceKrw: 4900 }, member.cookie)).statusCode).toBe(403);
+    expect((await create({ amountCoin: '5000', priceKrw: 4900 }, member.cookie)).statusCode).toBe(
+      403,
+    );
     const list = await t.app.inject({
       method: 'GET',
       url: '/api/v1/admin/charge-packages',

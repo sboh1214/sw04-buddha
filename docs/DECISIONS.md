@@ -438,7 +438,7 @@ PLAN §10.4는 better-auth `databaseHooks.user.create.after`에서 `profiles`/`b
 ## ADR-0020 — API 규약: Nest 12 Standard Schema + zod DTO, 봉투/오류 필터, P 금액은 십진 문자열
 
 - 날짜: 2026-09-03
-- 상태: 채택
+- 상태: 채택, 일부 대체됨(ADR-0050: 와이어 타입 `PAmount`(OpenAPI 컴포넌트 `PAmount`)와 웹의 `formatP(parsePAmount(s))`는 이름이 `CoinAmount`(컴포넌트 `CoinAmount`)와 `formatCoin(parseCoinAmount(s))`로 바뀌었다 — 금액을 십진 정수 문자열로 싣는 규약과 나머지 결정은 유효)
 
 ### 맥락
 
@@ -561,7 +561,7 @@ ADR-0023 이후 남은 두 가지를 오너가 결정했다(PLAN §17 Q6/Q7). �
 
 ## ADR-0025 — 지갑: 충전·원장·관리자 조정과 원장 감사 (M2)
 
-- 상태: 채택, 일부 대체됨(ADR-0049: mock 충전 `POST /payments/charge`는 유료 충전이 닫힌 동안 무엇을 하기 전에 404이고 `/wallet`은 충전 카드를 그리지 않는다 — 코드는 남고 `PAID_COIN_SALES_ENABLED`로 다시 연다. 원장·관리자 조정·원장 감사는 유효)
+- 상태: 채택, 일부 대체됨(ADR-0049: mock 충전 `POST /payments/charge`는 유료 충전이 닫힌 동안 무엇을 하기 전에 404이고 `/wallet`은 충전 카드를 그리지 않는다 — 코드는 남고 `PAID_COIN_SALES_ENABLED`로 다시 연다. 원장·관리자 조정·원장 감사는 유효), 일부 대체됨(ADR-0050: 잔고·원장 열 `available_p`·`locked_p`·`amount_p`·`balance_after_p`는 `available_coin`·`locked_coin`·`amount_coin`·`balance_after_coin`이다 — 조건부 UPDATE, RETURNING 스냅샷, 원장 감사 규칙은 유효)
 
 ### 맥락
 
@@ -595,7 +595,7 @@ PLAN §5.1/5.6과 M2는 P의 유입(mock 충전, 관리자 조정)과 원장 불
 
 ## ADR-0026 — 충전 상품(할인), 쿠폰, 가입 보너스 (오너 결정 2026-09-04)
 
-- 상태: 채택, 일부 대체됨(ADR-0049: 공개 `GET /charge-packages`와 쿠폰 사용 `POST /coupons/redeem`은 유료 충전이 닫힌 동안 404이고, 지갑의 충전 상품·쿠폰 카드와 관리자 메뉴의 충전 상품·쿠폰은 그리지 않는다 — 테이블, 관리자 상품·쿠폰 API와 그 화면(주소로 연다), 가입 보너스는 유효)
+- 상태: 채택, 일부 대체됨(ADR-0049: 공개 `GET /charge-packages`와 쿠폰 사용 `POST /coupons/redeem`은 유료 충전이 닫힌 동안 404이고, 지갑의 충전 상품·쿠폰 카드와 관리자 메뉴의 충전 상품·쿠폰은 그리지 않는다 — 테이블, 관리자 상품·쿠폰 API와 그 화면(주소로 연다), 가입 보너스는 유효), 일부 대체됨(ADR-0050: `charge_packages.amount_p`와 CHECK `price_krw <= amount_p`의 열은 `amount_coin`, `SIGNUP_BONUS_P`는 `SIGNUP_BONUS_COIN`이고, 가입 트리거 함수의 마지막 본문은 마이그레이션 0018에 있다 — 트리거 리터럴과 상수를 함께 바꾸는 규칙과 나머지 결정은 유효)
 
 ### 맥락
 
@@ -620,7 +620,7 @@ M2를 마친 뒤 오너가 세 가지를 정했다(PLAN §17 Q2/Q3): ① 충전�
 ## ADR-0027 — 시장 · LMSR · 거래 · 관리자 시장 CRUD (M3)
 
 - 날짜: 2026-09-06
-- 상태: 채택, 일부 대체됨(ADR-0048: 직접 AMM 체결 `POST /quotes`·`POST /trades`와 슬리피지 가드, `MarketMechanism`, 시장의 LMSR 상태 열과 준비금 `maxLossP`, 관리자 무효와 원가 환불 `MARKET_VOID_REFUND`, 개장 'open' 틱과 LMSR 확률 `pYesBp`, 시드가 검수 없이 연 시장, 결과의 `lmsr.test.ts` 다섯 불변식 — 관리자 시장 생성·수정·열기·마감, 공개 읽기, `GET /me/positions`·`GET /me/orders`, 포지션 회계는 유효)
+- 상태: 채택, 일부 대체됨(ADR-0048: 직접 AMM 체결 `POST /quotes`·`POST /trades`와 슬리피지 가드, `MarketMechanism`, 시장의 LMSR 상태 열과 준비금 `maxLossP`, 관리자 무효와 원가 환불 `MARKET_VOID_REFUND`, 개장 'open' 틱과 LMSR 확률 `pYesBp`, 시드가 검수 없이 연 시장, 결과의 `lmsr.test.ts` 다섯 불변식 — 관리자 시장 생성·수정·열기·마감, 공개 읽기, `GET /me/positions`·`GET /me/orders`, 포지션 회계는 유효), 일부 대체됨(ADR-0050: `realized_pnl_p`와 `volume` 정렬 키 `(volume_p, id)`는 `realized_pnl_coin`·`(volume_coin, id)`이다 — 정렬과 포지션 회계는 유효)
 
 ### 맥락
 
@@ -1056,7 +1056,7 @@ PLAN §4의 저장소 구조는 `docs/API.md`("생성된 OpenAPI 요약")를 M3 
 ## ADR-0038 — 글로벌 리더보드: 매 조회 집계, 닉네임만, 고정 20행 (PLAN M6 선택)
 
 - 날짜: 2026-09-10
-- 상태: 채택
+- 상태: 채택, 일부 대체됨(ADR-0050: 집계 열 `realized_pnl_p`와 `pAmountSchema`·`parsePAmount`+`formatP`는 `realized_pnl_coin`과 `coinAmountSchema`·`parseCoinAmount`+`formatCoin`이다 — 집계·노출 결정은 유효)
 
 ### 맥락
 
@@ -1084,7 +1084,7 @@ PLAN M6의 선택 항목은 "글로벌 리더보드(실현 손익 상위 20) —
 ## ADR-0039 — 인덱스 점검, 키셋 행 비교, `price_ticks` 파티셔닝 미채택 (M6)
 
 - 날짜: 2026-09-10
-- 상태: 채택
+- 상태: 채택, 일부 대체됨(ADR-0050: 인덱스 `markets (status, volume_p DESC, id DESC)`의 열과 이름은 `volume_coin`·`markets_status_volume_coin_id_idx`다 — 인덱스와 키셋 결정은 유효)
 
 ### 맥락
 
@@ -1220,7 +1220,7 @@ PLAN §11.1은 "Polymarket의 카드 기반 탐색 + Kalshi의 정산 기준 노
 ## ADR-0042 — 스마트로페이(SmartroPay) 일반연동: 결제창·콜백 셋·망취소·관리자 환불 (오너 결정 2026-09-28)
 
 - 날짜: 2026-09-28
-- 상태: 채택 (오너 결정 2026-09-28, PLAN §0.2의 청약철회 예외 포함), 일부 대체됨(ADR-0049: 스마트로페이 연동 — `PAYMENT_PROVIDER=smartro`·`SMARTRO_*`, 결제창 준비·콜백 셋·망취소, 관리자 수동 정리와 「확인 필요」, 웹의 SDK·결제창·결과 안내·CSP 호스트, terraform 변수 — 을 지웠고, 공개 `GET /payments/provider`와 관리자 환불은 유료 충전이 닫힌 동안 404다. 프로바이더 레지스트리(mock 하나), `payments`의 상태와 열, `payment_events`, 환불 정책과 그 코드는 유효)
+- 상태: 채택 (오너 결정 2026-09-28, PLAN §0.2의 청약철회 예외 포함), 일부 대체됨(ADR-0049: 스마트로페이 연동 — `PAYMENT_PROVIDER=smartro`·`SMARTRO_*`, 결제창 준비·콜백 셋·망취소, 관리자 수동 정리와 「확인 필요」, 웹의 SDK·결제창·결과 안내·CSP 호스트, terraform 변수 — 을 지웠고, 공개 `GET /payments/provider`와 관리자 환불은 유료 충전이 닫힌 동안 404다. 프로바이더 레지스트리(mock 하나), `payments`의 상태와 열, `payment_events`, 환불 정책과 그 코드는 유효), 일부 대체됨(ADR-0050: 환불 트랜잭션의 `available_p`·`amount_p`·`balance_after_p`는 `*_coin`이고, 잔고 부족 거절의 `details`는 `amountCoin`/`Coin already used`다 — 환불 정책과 순서는 유효)
 
 ### 맥락
 
@@ -1398,7 +1398,7 @@ PLAN은 결제를 끝까지 mock으로 두었다 — §1.2(:42) "충전 버튼 �
 ## ADR-0044 — 사업자 정보 푸터 · 약관 3종 · 공개 충전 안내 `/charge` (오너 결정 2026-09-28)
 
 - 날짜: 2026-09-28
-- 상태: 채택 (오너 결정 2026-09-28; 문서 본문은 법률 검토 전 — Q-M2-3, Q-PG-1), 일부 대체됨(ADR-0049: 공개 `/charge`는 유료 충전이 닫힌 동안 없는 페이지(404)이고 푸터의 '충전 안내' 링크도 없다. `/charge`의 카드 최소 금액 처리(2026-09-29 추기)는 지웠다 — `/wallet?package=` 연결과 미리 고르기는 판매가 열린 동안만 돌고, 사업자 정보 푸터와 약관 3종은 유효, 본문은 #137)
+- 상태: 채택 (오너 결정 2026-09-28; 문서 본문은 법률 검토 전 — Q-M2-3, Q-PG-1), 일부 대체됨(ADR-0049: 공개 `/charge`는 유료 충전이 닫힌 동안 없는 페이지(404)이고 푸터의 '충전 안내' 링크도 없다. `/charge`의 카드 최소 금액 처리(2026-09-29 추기)는 지웠다 — `/wallet?package=` 연결과 미리 고르기는 판매가 열린 동안만 돌고, 사업자 정보 푸터와 약관 3종은 유효, 본문은 #137), 일부 대체됨(ADR-0050: `BUSINESS_INFO.pointExpiry`와 약관의 `{{pointExpiry}}`는 키 이름이 `coinExpiry`다 — 약관 본문은 그대로)
 
 ### 맥락
 
@@ -1991,7 +1991,7 @@ flowchart TB
 ## ADR-0046 — 판정 즉시 확정·정산 단계·이의 폐지 (#19)
 
 - 날짜: 2026-10-06
-- 상태: 채택, 일부 대체됨(ADR-0047: 판정 즉시 확정·이의 폐지·`resolved` 무효 불허와 `ADMIN_ADJUST` 보상·`settled`의 뜻·`voided` 분기·`coin` 단계 지급 — 정산 단계 테이블 `market_settlement_steps`와 실패 기록은 유효)
+- 상태: 채택, 일부 대체됨(ADR-0047: 판정 즉시 확정·이의 폐지·`resolved` 무효 불허와 `ADMIN_ADJUST` 보상·`settled`의 뜻·`voided` 분기·`coin` 단계 지급 — 정산 단계 테이블 `market_settlement_steps`와 실패 기록은 유효), 일부 대체됨(ADR-0050: `finalized` 이벤트 payload의 `paidP`는 새로 쓰는 행부터 `paidCoin`이다 — 정산 단계와 이벤트 구조는 유효)
 
 이슈 번호 표기는 ADR-0045와 같다(`#N` = `https://github.com/sboh1214/sw04-buddha/issues/N`). 이 ADR은 #19가 기록하고, ADR-0033의 판정·이의·확정 부분을 대체한다.
 
@@ -2348,7 +2348,7 @@ ADR-0046의 상태 줄에 '일부 대체됨(ADR-0047: …)'을 이어 쓴다. �
 ## ADR-0048 — 직접 AMM 거래·무효 원가 환불 제거와 운영 DB 초기화 (#125, 오너 결정 2026-10-13)
 
 - 날짜: 2026-10-13
-- 상태: 채택
+- 상태: 채택, 일부 대체됨(ADR-0050: 남는 `AdminMarket.netCollectedP`는 `netCollectedCoin`이다)
 
 이슈 번호와 기획 인용 표기는 ADR-0047과 같다(`#N`, NR·N00\~N06). 이 ADR은 #125가 기록하고, ADR-0027의 직접 AMM 체결·LMSR 상태·준비금·무효 원가 환불·개장 틱·시드 부분, ADR-0032의 매수·매도 패널 부분, ADR-0034의 `trade` 버킷, ADR-0041의 카드 알약 링크와 체결 전 카드 두 줄의 값을 대체한다. D1\~D26은 ADR-0047의 오너 결정이다. 이 ADR의 오너 결정은 결정 1 표의 번호로 '결정 1-5'처럼 적는다.
 
@@ -2563,3 +2563,140 @@ ADR-0046의 상태 줄에 '일부 대체됨(ADR-0047: …)'을 이어 쓴다. �
 - `paymentMethodLabel`은 스마트로페이의 PayMethod 코드(CARD·KAKAO 등)를 한국어로 옮기는 표를 일반 라벨로 남겼다. 모르는 코드는 그대로 보인다.
 - 관리자 환불의 404는 차단과 없는 결제를 구별하지 않고, 둘 다 '이용할 수 없습니다.'다.
 - 원장 라벨 '충전'·'결제 취소(환불)'는 남겼다. 닫힌 동안 그런 행이 생기지 않는다(#73·#116).
+
+---
+
+## ADR-0050 — 내부 식별자 P → Coin: 열·와이어·코드 이름과 이름 변경 마이그레이션 0018 (#192, 오너 결정 2026-10-13)
+
+- 날짜: 2026-10-13
+- 상태: 채택
+
+이슈 번호와 기획 인용 표기는 ADR-0047과 같다(`#N`, NR·N00\~N06). 이 ADR은 #192가 기록하고, ADR-0020의 와이어 이름(`PAmount`·`formatP(parsePAmount(s))`)과 ADR-0025·0026·0027·0038·0039·0042·0044·0046·0048의 결정에 적힌 P 기준 이름(열·제약·인덱스·필드·저장 키·상수·키)을 대체한다. 그 ADR들이 정한 동작은 바꾸지 않고 이름만 바꾼다. 화면 문구와 숫자 표기는 #13이 바꾼다. D1\~D26은 ADR-0047의 오너 결정이다. 이 ADR의 오너 결정은 결정 1 표의 번호로 '결정 1-2'처럼 적는다.
+
+### 맥락
+
+**기획.** 재화의 이름은 가상 Coin이다(NR 요약, N01 §1).
+
+**옛 코드.** M0부터 재화를 P(포인트)라 불렀고 내부 이름도 그것을 따랐다.
+
+- DB 열은 `<이름>_p`(drizzle 필드 `<이름>P`)였고, CHECK 제약 `*_p_check`와 인덱스 `markets_status_volume_p_id_idx`도 그 이름을 땄다.
+- 금액은 와이어에서 `PAmount`였고(ADR-0020), 웹은 `formatP(parsePAmount(s))`로 그렸다.
+- 공유 상수는 `*_P`(`SIGNUP_BONUS_P`·`PAYOUT_PER_CONTRACT_P` 등)였고, REST·실시간 필드는 `*P`(`amountP`·`availableP`·`volumeP` 등)였다.
+- `admin_actions`·`market_events`·`audit_failures`의 JSONB payload도 `amountP`·`paidP`·`volumeP`·`availableP` 같은 키로 썼다.
+- 가입 트리거 함수 `create_profile_for_user()`의 마지막 본문은 마이그레이션 0004에 있었고, plpgsql 본문에 `available_p`·`amount_p`·`balance_after_p`를 적었다.
+
+**ADR-0047.**
+
+- 옛 O-14는 화면만 Coin으로 바꾸고 DB·API·코드 식별자는 유지한다고 했다. D20은 그 '내부 식별자 유지'를 폐기하고, 저장 데이터·API 필드·코드 이름도 Coin 기준으로 바꾼다고 정했다.
+- 결과 1의 표가 ADR-0020을 #192에 넘겼다. 같은 부류로 ADR-0025\~0027의 `*_p` 열 이름과 `SIGNUP_BONUS_P`도 넘겼다.
+- D4는 기존 데이터를 초기화·재시드해도 되고 이전 이슈를 만들지 않는다고 정했다.
+- D9는 결제·쿠폰 코드를 보존한다고 정했다. 스마트로페이 연동은 ADR-0049가 지웠다.
+
+#192 본문의 '오너 결정 필요' 두 항목에 오너가 2026-10-13 답했다(결정 1).
+
+### 결정
+
+**1. 오너 결정 (2026-10-13).**
+
+| #   | 주제                             | 결정                                                                                                                                                                                                                                                                                                                                 |
+| --- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1   | 보존한 결제·쿠폰 코드(D9)의 이름 | 함께 바꾼다((a)). 결제·충전 상품·쿠폰의 열·필드·상수·저장 키도 결정 2의 규칙을 따르고, 유료 판매를 다시 검토할 때(#111)로 미루지 않는다.                                                                                                                                                                                             |
+| 2   | #125와의 순서                    | #125와 같은 초기화 안에서 한다((b)). PR은 차례로 하나씩 main에 머지하고 머지마다 배포된다. 그래서 운영 DB를 비우는 일은 #125 배포 때(0017, ADR-0048 결정 7) 한 번뿐이고, #125 배포부터 #192 배포 전까지 생긴 데이터는 이름 변경 마이그레이션(0018, 결정 3)이 그대로 안고 간다. 데이터를 옮기거나 옛 이름과 호환하는 처리는 없다(D4). |
+
+**2. 이름 규칙.** 재화를 뜻하는 P는 Coin이 된다. snake_case는 `_coin`, camelCase는 `Coin`, 상수는 `_COIN`이고, 붙는 자리는 그대로다(`available_p` → `available_coin`, `amountP` → `amountCoin`, `SIGNUP_BONUS_P` → `SIGNUP_BONUS_COIN`).
+
+- **DB.** 9개 테이블의 13개 열이다.
+  - 열: `balances.available_coin`·`locked_coin`, `ledger_entries.amount_coin`·`balance_after_coin`, `fills.amount_coin`·`fee_coin`, `markets.volume_coin`, `positions.cost_basis_coin`·`realized_pnl_coin`, 그리고 `payments`·`charge_packages`·`coupons`·`coupon_redemptions`의 `amount_coin`.
+  - 제약과 인덱스: CHECK 제약 9개는 `*_coin_check`, 인덱스는 `markets_status_volume_coin_id_idx`다.
+  - drizzle 필드는 `availableCoin`처럼 camelCase다(`casing: 'snake_case'`).
+- **와이어(`packages/shared`).** 금액을 십진 정수 문자열로 싣는 규약(ADR-0020)은 그대로이고 이름만 바뀐다.
+  - `PAmount` → `CoinAmount`이고, OpenAPI 컴포넌트 id도 `CoinAmount`다.
+  - `pAmountSchema` → `coinAmountSchema`, `serializePAmount`·`parsePAmount` → `serializeCoinAmount`·`parseCoinAmount`, `pAmountInputSchema` → `coinAmountInputSchema`.
+  - `P_AMOUNT_INPUT_MAX_LENGTH` → `COIN_AMOUNT_INPUT_MAX_LENGTH`, `MAX_P_AMOUNT` → `MAX_COIN_AMOUNT`.
+  - 파일 `api/p-amount.ts` → `api/coin-amount.ts`.
+- **함수·상수.**
+  - `formatP` → `formatCoin`. 출력은 아직 `12,345P`다(#13).
+  - 상수는 `PAYOUT_PER_CONTRACT_COIN`·`SIGNUP_BONUS_COIN`·`ADJUST_MAX_ABS_COIN`·`COUPON_MIN_COIN`·`COUPON_MAX_COIN`·`CHARGE_PACKAGE_MIN_COIN`·`CHARGE_PACKAGE_MAX_COIN`이다.
+  - `accounting.ts`의 포지션 상태는 `costBasisCoin`·`realizedPnlCoin`이고, `settle()`은 `payoutCoin`을 돌려준다.
+- **REST·실시간 필드.**
+  - 필드는 `amountCoin`·`availableCoin`·`lockedCoin`·`balanceAfterCoin`·`costBasisCoin`·`realizedPnlCoin`·`volumeCoin`·`netCollectedCoin`·`expectedAmountCoin`이다. 실시간 이벤트에서는 `market:tick`·`user:balance`·`user:position`에 들어간다.
+  - 요청 본문도 같다. 관리자 잔고 조정·충전 상품·쿠폰은 `amountCoin`, 충전은 `expectedAmountCoin`이고, 오류 `details`의 경로는 `['amountCoin']`이다.
+  - 영어 오류 메시지와 OpenAPI 요약·설명의 재화 P도 Coin이다(예: 환불 거절의 `Coin already used`).
+- **JSONB 저장 키(새로 쓰는 행).**
+  - `admin_actions.payload`: `amountCoin`(잔고 조정, 결제 환불, 충전 상품·쿠폰 스냅샷), `volumeCoin`(시장 생성·수정·열기·마감·판정의 before/after 스냅샷).
+  - `market_events.payload`: `paidCoin`(`finalized`).
+  - `audit_failures.payload`: `availableCoin`·`lockedCoin`·`ledgerSumCoin`·`differenceCoin`.
+  - 워커 정산 잡의 결과(`paidCoin`)와 원장 감사 CLI 로그도 같다.
+- **웹 전용 이름.**
+  - `use-portfolio`의 `markPriceCoin`·`positionValueCoin`·`unrealizedPnlCoin`·`averageCostCoin`.
+  - copy 키 `errRefundCoinUsed`.
+  - 사업자 정보·약관 자리표시자 키 `pointExpiry` → `coinExpiry`(`BUSINESS_INFO.coinExpiry`, `terms.ts`의 `{{coinExpiry}}`). 키 이름만 바꾸고 약관 본문은 그대로다(#137).
+- **그대로 둔 것.**
+  - 재화가 아닌 P: `price_ticks.p_yes_bp`(확률), `deltaLabel()`의 `%p`, `Pnl`(P&L), PLAN, PG.
+  - 원장 유형, enum 값, `admin_actions.type`, Redis 키, BullMQ 큐와 잡 이름에는 P 기준 이름이 없어 바꿀 것이 없다.
+- **환경 변수: P·포인트 기준 이름이 없다.**
+  - 확인한 곳: `.env.example`, `compose.yaml`·`docker/docker-compose.yml`, `deploy/compose.yaml`·`deploy/deploy.sh`, `terraform/templates/env.tftpl`·`terraform/*.tf`, api·워커의 env 스키마, CI 워크플로.
+  - 이름에 `_P`가 든 것은 `SMTP_PORT`·`SMTP_PASS`뿐이고 재화가 아니다.
+  - 그래서 #192 본문의 두 항목은 할 일 없이 성립한다: '환경 변수 이름을 바꾸면 예시 설정과 배포 설정도 함께 바꾼다'와 '옛 이름이 없어도 서비스가 뜬다'. SSM `/tf-buddha/env`와 `terraform.tfvars`도 그대로다.
+
+**3. 마이그레이션 0018(`packages/db/drizzle/0018_coin_identifiers.sql`).**
+
+- **손으로 쓴 커스텀 마이그레이션이다**(`drizzle-kit generate --custom --name coin_identifiers`).
+  - `drizzle-kit generate`는 사라진 열이 이름이 바뀐 것인지 대화형으로 묻고, 이름이 바뀐 CHECK·인덱스에는 DROP과 CREATE로 답한다. 그래서 문장은 손으로 쓴다.
+  - `meta/0018_snapshot.json`은 `drizzle-kit generate`가 TS 스키마를 직렬화한 그대로 둔다. `db:check`가 통과하고, 다시 `generate`하면 바꿀 것이 없다고 답한다.
+- **이름만 바꾼다.**
+  - 문장은 `ALTER TABLE … RENAME COLUMN` 13개, `RENAME CONSTRAINT` 9개, `ALTER INDEX … RENAME` 1개다.
+  - RENAME은 행을 그대로 둔다. Postgres는 CHECK·인덱스 식을 열 이름이 아니라 열 자체로 저장하므로 다시 만들지 않는다.
+  - `charge_packages_price_within_face_value_check`(`price_krw <= amount_coin`)는 이름에 P가 없어 그대로다.
+- **가입 트리거 함수를 다시 만든다.**
+  - RENAME COLUMN은 plpgsql 본문을 고치지 않는다. 0004의 본문을 그대로 두면 모든 가입 경로(이메일·구글·카카오·네이버)가 트리거에서 실패한다.
+  - 그래서 `create_profile_for_user()`를 새 열 이름으로 `CREATE OR REPLACE`한다. 열 이름과 지역 상수 이름(`bonus_coin`) 말고는 바꾸지 않았다.
+  - 닉네임 접두어 `예측가_`는 #14가, 보너스 10,000은 #70이 바꾼다.
+  - ADR-0026의 규칙(트리거 리터럴과 공유 상수를 함께 바꾼다)은 그대로이고, 상수는 이제 `SIGNUP_BONUS_COIN`이다. 함수의 마지막 본문은 0018에 있다.
+- **타입 검사가 잡지 못하는 raw SQL도 새 이름을 쓴다.** 워커 원장 감사(`apps/worker/src/jobs/ledger-audit.ts`)의 잔고·원장 합 질의와 api 시험의 직접 질의다.
+- **시험.** `packages/db/src/schema.test.ts`가 두 가지를 고정한다. 하나는 P 기준 이름의 열·제약·인덱스가 없다는 것이고, 다른 하나는 `*_coin` 이름이 위 목록과 같다는 것이다. 가입 시험은 트리거가 새 열에 보너스를 쓰는지 본다.
+
+**4. 저장 데이터와 호환(결정 1-2, D4).**
+
+- **데이터를 옮기지 않는다.** 열 RENAME은 행을 그대로 두므로 #125 배포 뒤에 생긴 계정·잔고·원장·시장·결제 행은 새 이름 아래 그대로 남는다. 다시 비우지 않는다.
+- **JSONB 키는 앞으로 쓰는 행만 바뀐다.**
+  - 이미 쓴 `admin_actions`·`market_events`·`audit_failures` 행은 옛 키(`amountP`·`volumeP`·`paidP`·`availableP` 등)를 그대로 갖고, 백필하지 않는다.
+  - 옛 키를 읽는 코드도 없다. 웹 관리자의 정산 이벤트 파서는 `paidCoin`만 읽으므로, #192 배포 전에 쓰인 `finalized` 행은 지급 합계 없이 보인다.
+  - 옛 키가 보이는 관리자 화면은 payload를 그대로 보여 주는 감사 실패뿐이다. 시장 이벤트 화면이 그대로 보여 주는 payload(`created` 등)에는 P 기준 키가 없었고, `admin_actions`의 `amountP`·`volumeP`를 보여 주는 화면은 없다.
+- **API는 옛 필드 이름을 받지 않는다.** zod는 모르는 키를 버리므로, 옛 이름만 보낸 본문은 새 필드가 없어 400(`VALIDATION_ERROR`)이다. 응답과 실시간 이벤트도 새 이름만 싣는다.
+
+**5. 생성물과 시험.**
+
+- `apps/api/openapi.json`, `packages/api-client/src/generated/schema.ts`, `docs/API.md`를 `pnpm api:openapi`로 다시 만들었다. CI가 `git diff --exit-code`로 검사한다.
+- `scripts/generate-api-doc.mjs`의 손으로 쓴 문장은 식별자(`MAX_COIN_AMOUNT`·`expectedAmountCoin`·`coin-amount.ts`)만 바꿨다. 'P 금액' 같은 사람이 읽는 단위 문장은 #13이 바꾼다.
+- 시험과 팩토리를 새 이름에 맞췄다(`createUser({ balanceCoin })`, `createMarket({ volumeCoin })`, `createPosition({ costBasisCoin, realizedPnlCoin })`). 시험 제목과 주석의 재화 P도 Coin으로 적었다. formatter 출력(`12,345P`)을 단언하는 시험은 #13까지 그대로다.
+
+### 결과
+
+**1. 상태 줄.** 결정이 P 기준 이름을 정하거나 적었고 그 부분이 아직 유효한 ADR의 상태 줄에 '일부 대체됨(ADR-0050: …)'을 이어 썼다(덮어쓰지 않는다, ADR-0047 결과 1). 본문은 고치지 않았다. 대상은 ADR-0020(`PAmount`·`formatP(parsePAmount(s))`), ADR-0025(잔고·원장 열), ADR-0026(충전 상품 열과 CHECK, `SIGNUP_BONUS_P`, 트리거 본문의 위치), ADR-0027(`realized_pnl_p`, `volume` 정렬 키), ADR-0038(리더보드 집계 열, 와이어·formatter 이름), ADR-0039(`volume_p` 인덱스), ADR-0042(환불의 열과 `details`), ADR-0044(`pointExpiry`), ADR-0046(`finalized` payload의 `paidP`), ADR-0048(`netCollectedP`)이다. 옛 이름이 이미 지운 부분에만 있는 곳(ADR-0027의 직접 AMM·준비금, ADR-0032의 `TRADE_SLIPPAGE_MIN_P`, ADR-0042의 수동 정리), 정산 단계가 ADR-0046으로 넘어간 ADR-0033의 `finalized` payload, ADR-0047의 O-14 행과 결과 1의 표는 기록으로 두고 상태 줄에 적지 않았다.
+
+**2. 배포.**
+
+- **0018은 한 번 적용되고 데이터를 지우지 않는다.** #192를 머지하면 배포의 `migrate`가 0018을 적용한다. drizzle은 남은 마이그레이션을 한 트랜잭션에서 적용하므로, 0018이 실패하면 옛 이름이 남고 이전 릴리스가 계속 돈다.
+- **배포 창은 ADR-0048 결과 2와 같다.** `deploy/deploy.sh`가 `migrate`를 먼저 돌리므로, 새 컨테이너가 뜰 때까지 이전 api·워커가 옛 열 이름으로 질의해 500·잡 실패를 낸다. 새 컨테이너가 뜨면 풀린다.
+- **이전 번들의 탭은 새로고침해야 한다.** 그때 열려 있던 이전 웹 번들의 탭은 새 필드 이름을 모른다.
+- **롤백.** 0018이 적용된 뒤에는 이전 이미지가 옛 열 이름을 찾으므로 `deploy.yml`의 `image_tag` 재배포만으로는 되돌아갈 수 없다. 되돌리려면 먼저 0018의 RENAME을 거꾸로 하는 SQL(열·제약·인덱스 이름과 `create_profile_for_user()`를 0017 때로)을 `buddha_migrate`로 돌리고 `drizzle.__drizzle_migrations`에서 0018 행을 지운 뒤 이전 이미지를 배포하거나, 0018 전 스냅샷으로 복구한다. 이름 변경은 데이터를 바꾸지 않으므로 거꾸로 하는 RENAME으로 충분하다. 옛 이름을 함께 두는 확장·축소(expand/contract) 마이그레이션이나 응답의 옛 필드 별칭은 두지 않는다(#192 수용 기준, D4, 결정 1-2).
+- **설정은 바꿀 것이 없다.** env·terraform·SSM에 바꿀 것이 없어(결정 2) 오너가 손으로 할 일이 없다.
+- **로컬 개발 DB.** 다음 `pnpm db:migrate`에서 0018을 적용하고 데이터는 그대로다.
+
+**3. 남긴 이름.**
+
+- **화면에 보이는 문구와 숫자 표기(#13).**
+  - `formatCoin`의 출력 'P'와 그것을 단언하는 시험.
+  - copy 값의 P·포인트(키 `errRefundCoinUsed`의 값 포함).
+  - `formatPricePerContract`의 'P'와 충전 상품 그림의 'P' 글자.
+  - `README.md`의 '10,000P' 같은 단위 문장(같은 줄의 상수 이름은 `SIGNUP_BONUS_COIN`으로 고쳤다)과 `docs/API.md`의 'P 금액' 문장(`scripts/generate-api-doc.mjs`가 쓴다).
+- **약관·개인정보처리방침·환불정책 본문(#137).** 'P의 유효기간: `{{coinExpiry}}`'처럼 키만 바뀌었다.
+- **마이그레이션 기록.** 0018 전 마이그레이션 SQL과 스냅샷이 옛 이름을 갖는다. `schema.test.ts`의 #125 블록도 0017이 지운 열(`reserve_p`·`max_cost_p`·`min_proceeds_p`)을 적는다.
+- **PLAN 인용.** `apps/api/src/leaderboard/leaderboard.service.ts` 머리 주석의 PLAN §6.3 인용(`positions.realized_pnl_p`)은 원문 인용이라 그대로다. 리더보드는 #42가 지운다.
+- **문서 기록.** 기록이라 고치지 않는다(ADR-0047 결과 2).
+  - `docs/PLAN.md`의 스키마·API·실시간 표(`*_p`·`*P`, `formatP`).
+  - `docs/QUESTIONS.md`(A-M0-15·A-M1-9의 `formatP`, A-M2-1·A-PG-10의 열 이름, Q-PG-3의 `{{pointExpiry}}` 등).
+  - 이 ADR 전 ADR의 본문.
+
+**4. 다른 이슈에 넘긴 것.** #13(재화 표기와 문구, formatter 출력, `README.md` 3행의 재화 설명, '1P = 1원' 문장), #137(약관 본문), #14(닉네임 접두어 같은 용어), #70(가입 지급과 그 금액), #42(리더보드), #116(원장 계정·유형 — 이 이슈는 이름만 바꿨다), #111(유료 판매 재개).

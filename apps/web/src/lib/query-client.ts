@@ -167,7 +167,7 @@ export type ListView = 'pending' | 'failed' | 'stale' | 'ready';
  * answers `refetch` when the row must MOVE), so a failed one leaves the row in 보유 포지션, out of
  * 정산 이력, and inside 총 평가 금액 where it no longer belongs. 체결 내역 shows a list one row
  * short, and there the refetch is the ONLY path a new fill can arrive by: `market:trade` carries
- * no `amountP`, so it is deliberately never merged into the cache.
+ * no `amountCoin`, so it is deliberately never merged into the cache.
  *
  * `stale` is deliberately NOT `failed`: the rows are real and the last answer is worth keeping on
  * screen — dropping a screenful because one refresh failed loses more than the staleness costs,

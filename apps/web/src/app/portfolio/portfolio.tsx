@@ -13,7 +13,7 @@ import {
   Stack,
   Text,
 } from '@chakra-ui/react';
-import { type OrderStatus, formatP, parsePAmount } from '@buddha/shared';
+import { type OrderStatus, formatCoin, parseCoinAmount } from '@buddha/shared';
 import { useQueries } from '@tanstack/react-query';
 import type { Route } from 'next';
 import NextLink from 'next/link';
@@ -26,16 +26,16 @@ import { marketQueryOptions } from '@/hooks/use-markets';
 import { useMe } from '@/hooks/use-me';
 import {
   type ListState,
-  averageCostP,
+  averageCostCoin,
   combinedListState,
   listState,
-  markPriceP,
+  markPriceCoin,
   markToLiveMarket,
   priceIsStale,
   portfolioTotals,
-  positionValueP,
+  positionValueCoin,
   realizedPnlAcross,
-  unrealizedPnlP,
+  unrealizedPnlCoin,
   useOrders,
   usePositions,
 } from '@/hooks/use-portfolio';
@@ -51,12 +51,13 @@ import {
 /**
  * The four sections of `/portfolio`, all of them personal and all of them client-only.
  *
- * Not one number here is computed in this file: `markPriceP`, `positionValueP`,
- * `unrealizedPnlP`, `averageCostP` and `portfolioTotals` (use-portfolio.ts) own the arithmetic,
- * in `bigint` over the wire's decimal strings. The rule is not tidiness — a NO contract is worth
- * the COMPLEMENT of the market's YES price, and a second copy of that formula is a silent error
- * that produces a plausible number wrong by 100 − 2·price per contract. The same helpers draw
- * 내 포지션 on the detail (my-position.tsx), so the two screens cannot disagree about one row.
+ * Not one number here is computed in this file: `markPriceCoin`, `positionValueCoin`,
+ * `unrealizedPnlCoin`, `averageCostCoin` and `portfolioTotals` (use-portfolio.ts) own the
+ * arithmetic, in `bigint` over the wire's decimal strings. The rule is not tidiness — a NO
+ * contract is worth the COMPLEMENT of the market's YES price, and a second copy of that formula
+ * is a silent error that produces a plausible number wrong by 100 − 2·price per contract. The
+ * same helpers draw 내 포지션 on the detail (my-position.tsx), so the two screens cannot disagree
+ * about one row.
  *
  * Each section holds its own query and therefore its own ladder — skeleton, error + 다시 시도,
  * empty, rows — because they fail independently: a failed 주문 이력 must not blank the holdings.
@@ -198,25 +199,25 @@ export function Portfolio() {
                 {copy.walletBalance}
               </Text>
               <Text fontSize="3xl" fontWeight="bold" data-testid="portfolio-available">
-                {formatP(parsePAmount(me.data.balance.availableP))}
+                {formatCoin(parseCoinAmount(me.data.balance.availableCoin))}
               </Text>
               <HStack gap="2" color="fg.muted" fontSize="sm">
                 <Text>{copy.walletLocked}</Text>
                 <Text data-testid="portfolio-locked">
-                  {formatP(parsePAmount(me.data.balance.lockedP))}
+                  {formatCoin(parseCoinAmount(me.data.balance.lockedCoin))}
                 </Text>
               </HStack>
             </Stack>
             <DataList.Root orientation="horizontal" size="sm">
               <Total label={copy.portfolioValue} state={listState(open)} testId="portfolio-value">
-                {formatP(openTotals.valueP)}
+                {formatCoin(openTotals.valueCoin)}
               </Total>
               <Total
                 label={copy.portfolioUnrealizedPnl}
                 state={listState(open)}
                 testId="portfolio-unrealized"
               >
-                <Signed amount={openTotals.unrealizedPnlP} />
+                <Signed amount={openTotals.unrealizedPnlCoin} />
               </Total>
               <Total
                 label={copy.portfolioRealizedPnl}
@@ -362,11 +363,11 @@ export function Portfolio() {
  */
 function OpenPositionRow({ position }: { position: Position }) {
   const yes = position.outcome === 'YES';
-  const average = averageCostP(position);
+  const average = averageCostCoin(position);
   // All three `undefined` together, for a market with no fill to mark to (체결 없음, N02 §5).
-  const mark = markPriceP(position);
-  const value = positionValueP(position);
-  const unrealized = unrealizedPnlP(position);
+  const mark = markPriceCoin(position);
+  const value = positionValueCoin(position);
+  const unrealized = unrealizedPnlCoin(position);
   return (
     <Stack
       gap="2"
@@ -390,12 +391,12 @@ function OpenPositionRow({ position }: { position: Position }) {
         <Item label={copy.positionQty}>{formatContracts(position.qty)}</Item>
         {/* A row sold out of keeps its realised PnL visible at qty 0, and then has no average. */}
         <Item label={copy.positionAvgPrice}>
-          {average === undefined ? EMPTY : formatP(average)}
+          {average === undefined ? EMPTY : formatCoin(average)}
         </Item>
         <Item label={copy.positionCurrentPrice}>
-          {mark === undefined ? copy.noFills : formatP(mark)}
+          {mark === undefined ? copy.noFills : formatCoin(mark)}
         </Item>
-        <Item label={copy.positionValue}>{value === undefined ? EMPTY : formatP(value)}</Item>
+        <Item label={copy.positionValue}>{value === undefined ? EMPTY : formatCoin(value)}</Item>
         <Item label={copy.positionPnl}>
           {unrealized === undefined ? EMPTY : <Signed amount={unrealized} />}
         </Item>
@@ -408,7 +409,7 @@ function OpenPositionRow({ position }: { position: Position }) {
  * 정산 이력 한 줄: 결과 and 실현 손익 only.
  *
  * No 평가 금액 and no 평가손익 — the holding is gone and the payout has already landed in the
- * balance, so `realizedPnlP` is the whole story. 결과 is a word rather than a coloured badge
+ * balance, so `realizedPnlCoin` is the whole story. 결과 is a word rather than a coloured badge
  * because the row already carries the account's own side as one; two colours side by side would
  * be read as agreement or disagreement, which is exactly what the PnL states in numbers.
  */
@@ -441,7 +442,7 @@ function SettledPositionRow({ position }: { position: Position }) {
         </Item>
         <Item label={copy.positionQty}>{formatContracts(position.qty)}</Item>
         <Item label={copy.positionRealizedPnl}>
-          <Signed amount={parsePAmount(position.realizedPnlP)} />
+          <Signed amount={parseCoinAmount(position.realizedPnlCoin)} />
         </Item>
       </DataList.Root>
     </Stack>
@@ -449,7 +450,7 @@ function SettledPositionRow({ position }: { position: Position }) {
 }
 
 /**
- * 주문 이력 한 줄. `filledQty`/`priceAvgBp`/`amountP` are what the order actually did, and all
+ * 주문 이력 한 줄. `filledQty`/`priceAvgBp`/`amountCoin` are what the order actually did, and all
  * three are null-or-zero on a refusal, so the state badge is what explains the row.
  */
 function OrderRow({ order }: { order: Order }) {
@@ -480,7 +481,7 @@ function OrderRow({ order }: { order: Order }) {
           {order.priceAvgBp === null ? EMPTY : formatPricePerContract(order.priceAvgBp)}
         </Item>
         <Item label={copy.orderAmount}>
-          {order.amountP === null ? EMPTY : formatP(parsePAmount(order.amountP))}
+          {order.amountCoin === null ? EMPTY : formatCoin(parseCoinAmount(order.amountCoin))}
         </Item>
         <Item label={copy.orderCreatedAt}>{formatKst(order.createdAt)}</Item>
       </DataList.Root>
@@ -542,7 +543,7 @@ function LoadFailed({ message, onRetry }: { message: string; onRetry: () => void
 
 /**
  * A summary figure that depends on a list the balance card does not own: a skeleton while that
- * list loads, and a dash if it failed. Never a 0P — the section below already carries the error
+ * list loads, and a dash if it failed. Never a 0 Coin — the section below already carries the error
  * and its 다시 시도, and a zero here would read as "you hold nothing" instead of "not known".
  */
 function Total({
@@ -570,15 +571,15 @@ function Total({
 }
 
 /**
- * A gain or a loss. `formatP` writes a loss with U+2212 (PLAN 11.1-6), so the colour only
+ * A gain or a loss. `formatCoin` writes a loss with U+2212 (PLAN 11.1-6), so the colour only
  * repeats what the sign already says — and at exactly 0 it stays on the ordinary foreground
  * rather than claiming a direction.
  */
 function Signed({ amount }: { amount: bigint }) {
-  if (amount === 0n) return <>{formatP(amount)}</>;
+  if (amount === 0n) return <>{formatCoin(amount)}</>;
   return (
     <Text as="span" colorPalette={amount > 0n ? 'yes' : 'no'} color="colorPalette.fg">
-      {formatP(amount)}
+      {formatCoin(amount)}
     </Text>
   );
 }

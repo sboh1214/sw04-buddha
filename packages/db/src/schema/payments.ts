@@ -16,7 +16,7 @@ import { createdAt, timestampTz, updatedAt } from './columns.js';
 import { paymentStatusEnum } from './enums.js';
 
 /**
- * Charges (P bought with KRW). Provider 'mock' succeeds immediately (PLAN 1.2, M2); a PG with a
+ * Charges (Coin bought with KRW). Provider 'mock' succeeds immediately (PLAN 1.2, M2); a PG with a
  * payment window records every exchange in `payment_events` (ADR-0042). The SmartroPay
  * integration that first did is gone, and the table stays for the next PG (ADR-0049).
  */
@@ -27,9 +27,9 @@ export const payments = pgTable(
     userId: text()
       .notNull()
       .references(() => user.id, { onDelete: 'restrict' }),
-    /** P credited to the balance. */
-    amountP: bigint({ mode: 'bigint' }).notNull(),
-    /** KRW actually charged (below amountP when the package carried a discount). */
+    /** Coin credited to the balance. */
+    amountCoin: bigint({ mode: 'bigint' }).notNull(),
+    /** KRW actually charged (below amountCoin when the package carried a discount). */
     priceKrw: integer().notNull(),
     /**
      * The package bought. SET NULL on delete: an admin may retire a package, and the payment
@@ -90,7 +90,7 @@ export const payments = pgTable(
     uniqueIndex('payments_provider_provider_ref_unique')
       .on(t.provider, t.providerRef)
       .where(sql`${t.providerRef} is not null`),
-    check('payments_amount_p_check', sql`${t.amountP} > 0`),
+    check('payments_amount_coin_check', sql`${t.amountCoin} > 0`),
     check('payments_price_krw_check', sql`${t.priceKrw} > 0`),
   ],
 );

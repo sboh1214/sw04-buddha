@@ -6,8 +6,8 @@ import { ledgerEntryTypeEnum } from './enums.js';
 
 /**
  * Append-only ledger (PLAN 5.6). buddha_app holds INSERT/SELECT only (migration
- * 0001_restrict_app_role). `amount_p` carries the sign; `balance_after_p` snapshots
- * balances.available_p after this entry, for audits.
+ * 0001_restrict_app_role). `amount_coin` carries the sign; `balance_after_coin` snapshots
+ * balances.available_coin after this entry, for audits.
  */
 export const ledgerEntries = pgTable(
   'ledger_entries',
@@ -17,8 +17,8 @@ export const ledgerEntries = pgTable(
       .notNull()
       .references(() => user.id, { onDelete: 'restrict' }),
     type: ledgerEntryTypeEnum().notNull(),
-    amountP: bigint({ mode: 'bigint' }).notNull(),
-    balanceAfterP: bigint({ mode: 'bigint' }).notNull(),
+    amountCoin: bigint({ mode: 'bigint' }).notNull(),
+    balanceAfterCoin: bigint({ mode: 'bigint' }).notNull(),
     /** 'payment' | 'fill' | 'market' | 'admin_action' (LEDGER_REF_TYPES in @buddha/shared). */
     refType: varchar({ length: 32 }),
     refId: text(),

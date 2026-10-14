@@ -14,7 +14,7 @@ import {
   Tag,
   Text,
 } from '@chakra-ui/react';
-import { type MarketStatus, formatP, parsePAmount } from '@buddha/shared';
+import { type MarketStatus, formatCoin, parseCoinAmount } from '@buddha/shared';
 import NextLink from 'next/link';
 import { type ReactNode } from 'react';
 import { CountdownBadge } from '@/components/market/countdown-badge';
@@ -70,7 +70,7 @@ const STATUS_NOTICE: Partial<
   // Judged, and the worker's settlement is running (ADR-0046): usually a few seconds before a
   // `market:status` moves it on to settled.
   resolved: { tone: 'info', message: copy.marketResolvedNotice },
-  // The second line says where the P went: the payout is already in the balance (the worker's
+  // The second line says where the Coin went: the payout is already in the balance (the worker's
   // finalize wrote it, PLAN 5.5), and 내 손익 is the 내 포지션 card below, not this notice.
   settled: { tone: 'success', message: copy.marketSettledNotice, detail: copy.marketSettledPayout },
   voided: { tone: 'error', message: copy.marketVoidedNotice },
@@ -278,9 +278,9 @@ function MarketHeader({
 
       <HStack gap="4" flexWrap="wrap" fontSize="sm" color="fg.muted">
         <Text data-testid="market-detail-volume">
-          {copy.marketVolume} {formatP(parsePAmount(market.volumeP))}
+          {copy.marketVolume} {formatCoin(parseCoinAmount(market.volumeCoin))}
         </Text>
-        {/* Grouped by `formatP` everywhere else; a plain count is written out as it is, and
+        {/* Grouped by `formatCoin` everywhere else; a plain count is written out as it is, and
             deliberately not through `toLocaleString` — the server's ICU data and the
             browser's would then have to agree on this string. */}
         <Text data-testid="market-detail-traders">

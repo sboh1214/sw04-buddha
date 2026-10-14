@@ -1,4 +1,4 @@
-import { formatP } from '@buddha/shared';
+import { formatCoin } from '@buddha/shared';
 import { describe, expect, it, vi } from 'vitest';
 import { copy } from './copy';
 import {
@@ -42,8 +42,8 @@ describe('copy', () => {
     }
   });
 
-  it('formats P via @buddha/shared (workspace wiring)', () => {
-    expect(formatP(12345n)).toBe('12,345P');
+  it('formats Coin via @buddha/shared (workspace wiring)', () => {
+    expect(formatCoin(12345n)).toBe('12,345P');
   });
 });
 

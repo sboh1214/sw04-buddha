@@ -2,17 +2,8 @@
 export const MINUS_SIGN = '−';
 
 /**
- * Formats an integer amount of points as `12,345P` / `−1,200P`.
- *
- * Accepts `bigint` (canonical for P amounts, see PLAN 0.2) or a safe-integer
- * `number`. Non-integers are rejected because P amounts are never fractional;
- * numbers outside ±(2^53 − 1) are rejected because the double has already
- * rounded them, so formatting would silently show a wrong amount. Grouping is
- * done manually so the output does not depend on the runtime's ICU locale data.
- */
-/**
  * Formats a KRW price as `4,900원`. Prices are plain integers (won has no minor unit) and
- * always positive, so this is the P formatter without the sign handling.
+ * always positive, so this is the Coin formatter without the sign handling.
  */
 export function formatKrw(n: number): string {
   if (!Number.isSafeInteger(n) || n < 0) {
@@ -32,9 +23,18 @@ function groupDigits(digits: string): string {
   return grouped;
 }
 
-export function formatP(n: bigint | number): string {
+/**
+ * Formats an integer amount of Coin as `12,345P` / `−1,200P`.
+ *
+ * Accepts `bigint` (canonical for Coin amounts, see PLAN 0.2) or a safe-integer
+ * `number`. Non-integers are rejected because Coin amounts are never fractional;
+ * numbers outside ±(2^53 − 1) are rejected because the double has already
+ * rounded them, so formatting would silently show a wrong amount. Grouping is
+ * done manually so the output does not depend on the runtime's ICU locale data.
+ */
+export function formatCoin(n: bigint | number): string {
   if (typeof n === 'number' && !Number.isSafeInteger(n)) {
-    throw new RangeError(`formatP expects a safe integer, got ${n}`);
+    throw new RangeError(`formatCoin expects a safe integer, got ${n}`);
   }
   const value = typeof n === 'bigint' ? n : BigInt(n);
   const negative = value < 0n;

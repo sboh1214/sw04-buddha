@@ -123,7 +123,7 @@ export class PaymentsController {
   @ApiOperation({
     operationId: 'charge',
     summary:
-      'Buy one charge package (mock provider: succeeds immediately). P is never convertible back to cash. Closed while paid Coin is off: 404 (ADR-0049)',
+      'Buy one charge package (mock provider: succeeds immediately). Coin is never convertible back to cash. Closed while paid Coin is off: 404 (ADR-0049)',
   })
   @ApiHeader({
     name: IDEMPOTENCY_KEY_HEADER,
@@ -173,11 +173,11 @@ export class CouponsController {
   @RateLimit('coupon')
   @ApiOperation({
     operationId: 'redeemCoupon',
-    summary: 'Redeem a coupon code for P. Closed while paid Coin is off: 404 (ADR-0049)',
+    summary: 'Redeem a coupon code for Coin. Closed while paid Coin is off: 404 (ADR-0049)',
   })
   @ApiData(
     couponSchema
-      .pick({ code: true, amountP: true })
+      .pick({ code: true, amountCoin: true })
       .extend({ balance: chargeResultSchema.shape.balance, ledgerEntry: ledgerEntrySchema })
       .meta({ id: 'RedeemCouponResult' }),
   )
@@ -196,7 +196,7 @@ export class CouponsController {
     @Body({ schema: redeemCouponBodySchema }) body: RedeemCouponBody,
   ): Promise<{
     code: string;
-    amountP: string;
+    amountCoin: string;
     balance: RedeemResult['balance'];
     ledgerEntry: RedeemResult['ledgerEntry'];
   }> {
@@ -208,7 +208,7 @@ export class CouponsController {
     const result = await this.coupons.redeem(user.id, body.code);
     return {
       code: result.coupon.code,
-      amountP: result.coupon.amountP,
+      amountCoin: result.coupon.amountCoin,
       balance: result.balance,
       ledgerEntry: result.ledgerEntry,
     };

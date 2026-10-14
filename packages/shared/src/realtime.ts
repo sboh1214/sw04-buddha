@@ -1,5 +1,5 @@
 import * as z from 'zod';
-import { pAmountSchema } from './api/p-amount.js';
+import { coinAmountSchema } from './api/coin-amount.js';
 import { uuidSchema } from './api/uuid.js';
 import { BP_MAX, PRICE_MAX, PRICE_MIN } from './constants.js';
 import {
@@ -112,7 +112,7 @@ export const marketTickEventSchema = z
     marketId: z.uuid(),
     /** `MarketSummary.lastPrice`: null until the market's first fill. */
     lastPrice: z.number().int().min(PRICE_MIN).max(PRICE_MAX).nullable(),
-    volumeP: pAmountSchema,
+    volumeCoin: coinAmountSchema,
     tradeCount: z.number().int().min(0),
     /**
      * Raised by a fill from an account new to this market. It moves with the same fill, so it
@@ -170,8 +170,8 @@ export type MarketStatusEvent = z.infer<typeof marketStatusEventSchema>;
 export const userBalanceEventSchema = z
   .object({
     type: z.literal('user:balance'),
-    availableP: pAmountSchema,
-    lockedP: pAmountSchema,
+    availableCoin: coinAmountSchema,
+    lockedCoin: coinAmountSchema,
     ledgerEntryId: serialIdSchema,
     ts: tsSchema,
   })
@@ -189,8 +189,8 @@ export const userPositionEventSchema = z
     marketId: z.uuid(),
     outcome: outcomeSchema,
     qty: z.number().int().min(0),
-    costBasisP: pAmountSchema,
-    realizedPnlP: pAmountSchema,
+    costBasisCoin: coinAmountSchema,
+    realizedPnlCoin: coinAmountSchema,
     settled: z.boolean(),
     version: z.number().int().min(1),
     ts: tsSchema,

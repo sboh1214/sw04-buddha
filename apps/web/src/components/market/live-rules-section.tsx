@@ -12,7 +12,7 @@ import { type Market } from '@/lib/api';
  * (`market-admin.service.ts` allows 문안·마감 시각·카테고리), and the rest of the detail already
  * follows the row: a focus refetch could move the countdown to a new `closeAt` while this
  * section still quoted the old deadline and the old rules until a full route reload. That is
- * the one panel PLAN 11.1 asks a visitor to trust before spending P, so it may not be the last
+ * the one panel PLAN 11.1 asks a visitor to trust before spending Coin, so it may not be the last
  * thing on the screen still describing a market that has changed.
  *
  * The SSR row stays as a guaranteed FALLBACK, and that is what keeps AC 2 intact. This renders

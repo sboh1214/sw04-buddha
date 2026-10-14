@@ -6,7 +6,7 @@
  */
 import { schema } from '@buddha/db';
 import {
-  SIGNUP_BONUS_P,
+  SIGNUP_BONUS_COIN,
   userChannel,
   type ChargePackage,
   type ChargeResult,
@@ -37,8 +37,8 @@ const jsonHeaders = { origin: 'http://localhost:3000', 'content-type': 'applicat
 describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
   let t: TestApp;
   let user: TestUser;
-  /** 10,000P for 9,700원 (a 3% discount), like the seeded ladder. */
-  let pack: { id: string; amountP: bigint; priceKrw: number };
+  /** 10,000 Coin for 9,700원 (a 3% discount), like the seeded ladder. */
+  let pack: { id: string; amountCoin: bigint; priceKrw: number };
 
   beforeAll(async () => {
     // PLAN M2 AC 2 proves the charge transaction with twenty concurrent charges by one
@@ -90,20 +90,23 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
   }
 
   it('grants the sign-up bonus with a BONUS ledger entry (PLAN 17 Q2)', async () => {
-    expect(await balanceOf(user.id)).toMatchObject({ availableP: SIGNUP_BONUS_P, lockedP: 0n });
+    expect(await balanceOf(user.id)).toMatchObject({
+      availableCoin: SIGNUP_BONUS_COIN,
+      lockedCoin: 0n,
+    });
     const entries = await ledgerOf(user.id);
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({
       type: 'BONUS',
-      amountP: SIGNUP_BONUS_P,
-      balanceAfterP: SIGNUP_BONUS_P,
+      amountCoin: SIGNUP_BONUS_COIN,
+      balanceAfterCoin: SIGNUP_BONUS_COIN,
       memo: '가입 보너스',
     });
   });
 
   it('lists the packages on sale, hiding the retired ones', async () => {
     const retired = await createTestPackage(t.db, {
-      amountP: 1_000n,
+      amountCoin: 1_000n,
       priceKrw: 1_000,
       isActive: false,
     });
@@ -112,17 +115,17 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     const packages = res.json<{ data: ChargePackage[] }>().data;
     expect(packages.map((row) => row.id)).toEqual([pack.id]);
     expect(packages.map((row) => row.id)).not.toContain(retired.id);
-    expect(packages[0]).toMatchObject({ amountP: '10000', priceKrw: 9700, isActive: true });
+    expect(packages[0]).toMatchObject({ amountCoin: '10000', priceKrw: 9700, isActive: true });
   });
 
-  it('charges a package: P credited, KRW price recorded, one DEPOSIT entry (AC 1)', async () => {
+  it('charges a package: Coin credited, KRW price recorded, one DEPOSIT entry (AC 1)', async () => {
     const res = await charge(pack);
     expect(res.statusCode).toBe(200);
     const { data } = res.json<{ data: ChargeResult }>();
-    const expected = SIGNUP_BONUS_P + pack.amountP;
-    expect(data.balance).toEqual({ availableP: expected.toString(), lockedP: '0' });
+    const expected = SIGNUP_BONUS_COIN + pack.amountCoin;
+    expect(data.balance).toEqual({ availableCoin: expected.toString(), lockedCoin: '0' });
     expect(data.payment).toMatchObject({
-      amountP: '10000',
+      amountCoin: '10000',
       priceKrw: 9700,
       packageId: pack.id,
       provider: 'mock',
@@ -138,13 +141,13 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     });
     expect(data.ledgerEntry).toMatchObject({
       type: 'DEPOSIT',
-      amountP: '10000',
-      balanceAfterP: expected.toString(),
+      amountCoin: '10000',
+      balanceAfterCoin: expected.toString(),
       refType: 'payment',
       refId: data.payment.id,
     });
 
-    expect(await balanceOf(user.id)).toMatchObject({ availableP: expected });
+    expect(await balanceOf(user.id)).toMatchObject({ availableCoin: expected });
     const deposits = (await ledgerOf(user.id)).filter((entry) => entry.type === 'DEPOSIT');
     expect(deposits).toHaveLength(1);
   });
@@ -153,15 +156,15 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     const responses = await Promise.all(Array.from({ length: 20 }, () => charge(pack)));
     expect(responses.map((res) => res.statusCode)).toEqual(Array.from({ length: 20 }, () => 200));
 
-    const total = SIGNUP_BONUS_P + pack.amountP * 20n;
-    expect(await balanceOf(user.id)).toMatchObject({ availableP: total });
+    const total = SIGNUP_BONUS_COIN + pack.amountCoin * 20n;
+    expect(await balanceOf(user.id)).toMatchObject({ availableCoin: total });
 
     const deposits = (await ledgerOf(user.id)).filter((entry) => entry.type === 'DEPOSIT');
     expect(deposits).toHaveLength(20);
-    expect(deposits.reduce((sum, entry) => sum + entry.amountP, 0n)).toBe(pack.amountP * 20n);
+    expect(deposits.reduce((sum, entry) => sum + entry.amountCoin, 0n)).toBe(pack.amountCoin * 20n);
     // Every snapshot is distinct and the last one equals the final balance: the updates were
     // serialised by Postgres rather than overwriting each other.
-    const snapshots = deposits.map((entry) => entry.balanceAfterP).sort((a, b) => Number(a - b));
+    const snapshots = deposits.map((entry) => entry.balanceAfterCoin).sort((a, b) => Number(a - b));
     expect(new Set(snapshots).size).toBe(20);
     expect(snapshots.at(-1)).toBe(total);
     // And `/me/ledger`'s (created_at, id) order is the order they committed in: 20 waiters on
@@ -172,7 +175,7 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
   it('stamps the DEPOSIT after the balance lock, not at transaction start (A-M3-14)', async () => {
     // The credit transaction begins, then waits on the balance row this connection holds.
     // Anything that committed against this account meanwhile is already in its
-    // balance_after_p, so its ledger row must sort after it — the column default `now()` is
+    // balance_after_coin, so its ledger row must sort after it — the column default `now()` is
     // the transaction start and sorted before it.
     const holder = await t.db.$client.connect();
     let pending: ReturnType<typeof charge> | undefined;
@@ -200,7 +203,7 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     const deposit = ledger.find((entry) => entry.type === 'DEPOSIT')!;
     expect(deposit.createdAt.getTime()).toBeGreaterThanOrEqual(releasedMs);
     expect((await balanceOf(user.id))!.updatedAt.getTime()).toBe(deposit.createdAt.getTime());
-    expectLedgerChain(ledger, SIGNUP_BONUS_P + pack.amountP);
+    expectLedgerChain(ledger, SIGNUP_BONUS_COIN + pack.amountCoin);
   });
 
   it('refuses an unknown, retired or malformed package', async () => {
@@ -221,11 +224,11 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
       method: 'POST',
       url: '/api/v1/payments/charge',
       headers: chargeHeaders(user.cookie),
-      payload: { amountP: '10000' },
+      payload: { amountCoin: '10000' },
     });
     expect(malformed.statusCode).toBe(400);
 
-    expect(await balanceOf(user.id)).toMatchObject({ availableP: SIGNUP_BONUS_P });
+    expect(await balanceOf(user.id)).toMatchObject({ availableCoin: SIGNUP_BONUS_COIN });
   });
 
   it('refuses an account with no balance row before the provider runs (404, no field)', async () => {
@@ -259,10 +262,10 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     // An admin may re-price a live package (ADR-0026) while a catalogue is still on screen,
     // and `useChargePackages` has no refetch interval — so the body echoes what the card said
     // and the server sells only that offer. Both halves are guarded: raising the price alone
-    // is adverse to the user, raising the P alone is adverse to the house.
+    // is adverse to the user, raising the Coin alone is adverse to the house.
     for (const stale of [
       { ...chargeBody(pack, user.id), expectedPriceKrw: pack.priceKrw - 100 },
-      { ...chargeBody(pack, user.id), expectedAmountP: (pack.amountP + 1n).toString() },
+      { ...chargeBody(pack, user.id), expectedAmountCoin: (pack.amountCoin + 1n).toString() },
     ]) {
       const res = await t.app.inject({
         method: 'POST',
@@ -275,7 +278,7 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     }
 
     // Refused before the provider runs, so nothing is credited and no payment row is left.
-    expect(await balanceOf(user.id)).toMatchObject({ availableP: SIGNUP_BONUS_P });
+    expect(await balanceOf(user.id)).toMatchObject({ availableCoin: SIGNUP_BONUS_COIN });
     expect(await t.db.select().from(schema.payments)).toHaveLength(0);
   });
 
@@ -300,8 +303,8 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
       });
       expect(spy).not.toHaveBeenCalled();
       expect(await t.db.select().from(schema.payments)).toHaveLength(0);
-      expect(await balanceOf(user.id)).toMatchObject({ availableP: SIGNUP_BONUS_P });
-      expect(await balanceOf(other.id)).toMatchObject({ availableP: SIGNUP_BONUS_P });
+      expect(await balanceOf(user.id)).toMatchObject({ availableCoin: SIGNUP_BONUS_COIN });
+      expect(await balanceOf(other.id)).toMatchObject({ availableCoin: SIGNUP_BONUS_COIN });
     } finally {
       spy.mockRestore();
     }
@@ -321,7 +324,7 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
   it('replays a charge whose answer was lost instead of selling it twice (PLAN 5.4)', async () => {
     // The client re-sends the same Idempotency-Key when a request never came back. Before the
     // key existed every request minted its own payment id, so the "retry" was a second
-    // purchase: two payments, two DEPOSIT entries, P credited twice.
+    // purchase: two payments, two DEPOSIT entries, Coin credited twice.
     const key = randomUUID();
     const first = await charge(pack, user, key);
     expect(first.statusCode).toBe(200);
@@ -334,8 +337,8 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     expect(b.ledgerEntry.id).toBe(a.ledgerEntry.id);
     expect(b.balance).toEqual(a.balance);
 
-    const expected = SIGNUP_BONUS_P + pack.amountP;
-    expect(await balanceOf(user.id)).toMatchObject({ availableP: expected });
+    const expected = SIGNUP_BONUS_COIN + pack.amountCoin;
+    expect(await balanceOf(user.id)).toMatchObject({ availableCoin: expected });
     expect(await paymentsOf(user.id)).toHaveLength(1);
     expect((await ledgerOf(user.id)).filter((entry) => entry.type === 'DEPOSIT')).toHaveLength(1);
   });
@@ -365,7 +368,7 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     expect(first.statusCode).toBe(200);
     await t.db
       .update(schema.chargePackages)
-      .set({ amountP: 12_000n, priceKrw: 9_900 })
+      .set({ amountCoin: 12_000n, priceKrw: 9_900 })
       .where(eq(schema.chargePackages.id, pack.id));
 
     const again = await charge(pack, user, key);
@@ -373,12 +376,12 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     const a = first.json<{ data: ChargeResult }>().data;
     const b = again.json<{ data: ChargeResult }>().data;
     expect(b.payment).toEqual(a.payment);
-    expect(b.payment).toMatchObject({ amountP: '10000', priceKrw: 9700, packageId: pack.id });
+    expect(b.payment).toMatchObject({ amountCoin: '10000', priceKrw: 9700, packageId: pack.id });
     expect(b.ledgerEntry).toEqual(a.ledgerEntry);
     expect(await paymentsOf(user.id)).toHaveLength(1);
 
     // The refreshed card carries the new terms: a different purchase, not a lost answer.
-    const fresh = await charge({ ...pack, amountP: 12_000n, priceKrw: 9_900 }, user, key);
+    const fresh = await charge({ ...pack, amountCoin: 12_000n, priceKrw: 9_900 }, user, key);
     expect(fresh.statusCode).toBe(409);
     expect(fresh.json()).toMatchObject({ error: { code: 'DUPLICATE_REQUEST' } });
     expect(await paymentsOf(user.id)).toHaveLength(1);
@@ -387,7 +390,7 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
   it('refuses a re-used Idempotency-Key that carries different terms (DUPLICATE_REQUEST)', async () => {
     // A key is a name for one purchase. The same key with another package is a client bug or
     // a replayed request, never a lost answer, so it must neither sell nor replay (PLAN 7.4).
-    const other = await createTestPackage(t.db, { amountP: 30_000n, priceKrw: 28_500 });
+    const other = await createTestPackage(t.db, { amountCoin: 30_000n, priceKrw: 28_500 });
     const key = randomUUID();
     expect((await charge(pack, user, key)).statusCode).toBe(200);
 
@@ -398,7 +401,9 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     // spent, so its next click is a new purchase rather than a wait.
     expect(res.json<{ error: { details?: unknown } }>().error.details).toBeUndefined();
 
-    expect(await balanceOf(user.id)).toMatchObject({ availableP: SIGNUP_BONUS_P + pack.amountP });
+    expect(await balanceOf(user.id)).toMatchObject({
+      availableCoin: SIGNUP_BONUS_COIN + pack.amountCoin,
+    });
     expect(await paymentsOf(user.id)).toHaveLength(1);
   });
 
@@ -407,7 +412,9 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     const other = await signUpTestUser(t);
     expect((await charge(pack, user, key)).statusCode).toBe(200);
     expect((await charge(pack, other, key)).statusCode).toBe(200);
-    expect(await balanceOf(other.id)).toMatchObject({ availableP: SIGNUP_BONUS_P + pack.amountP });
+    expect(await balanceOf(other.id)).toMatchObject({
+      availableCoin: SIGNUP_BONUS_COIN + pack.amountCoin,
+    });
     expect(await paymentsOf(other.id)).toHaveLength(1);
   });
 
@@ -430,7 +437,7 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     }
     // Refused before the provider runs: nothing reserved, nothing credited.
     expect(await paymentsOf(user.id)).toHaveLength(0);
-    expect(await balanceOf(user.id)).toMatchObject({ availableP: SIGNUP_BONUS_P });
+    expect(await balanceOf(user.id)).toMatchObject({ availableCoin: SIGNUP_BONUS_COIN });
   });
 
   it('lets 20 concurrent requests with one key reach the provider once', async () => {
@@ -450,7 +457,9 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
       }
     }
 
-    expect(await balanceOf(user.id)).toMatchObject({ availableP: SIGNUP_BONUS_P + pack.amountP });
+    expect(await balanceOf(user.id)).toMatchObject({
+      availableCoin: SIGNUP_BONUS_COIN + pack.amountCoin,
+    });
     expect(await paymentsOf(user.id)).toHaveLength(1);
     expect((await ledgerOf(user.id)).filter((entry) => entry.type === 'DEPOSIT')).toHaveLength(1);
   });
@@ -493,7 +502,9 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
         res.json<{ data: ChargeResult }>().data.payment.id,
       );
       expect(await paymentsOf(user.id)).toHaveLength(1);
-      expect(await balanceOf(user.id)).toMatchObject({ availableP: SIGNUP_BONUS_P + pack.amountP });
+      expect(await balanceOf(user.id)).toMatchObject({
+        availableCoin: SIGNUP_BONUS_COIN + pack.amountCoin,
+      });
     } finally {
       spy.mockRestore();
     }
@@ -585,7 +596,7 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({
-      data: [{ amountP: '10000', priceKrw: 9700, provider: 'mock', status: 'succeeded' }],
+      data: [{ amountCoin: '10000', priceKrw: 9700, provider: 'mock', status: 'succeeded' }],
       meta: { nextCursor: null },
     });
   });
@@ -661,8 +672,8 @@ describe.skipIf(!hasTestInfra)('wallet (integration)', () => {
       expect(received.map((message) => JSON.parse(message) as unknown)).toEqual([
         {
           type: 'user:balance',
-          availableP: data.balance.availableP,
-          lockedP: '0',
+          availableCoin: data.balance.availableCoin,
+          lockedCoin: '0',
           ledgerEntryId: data.ledgerEntry.id,
           ts: data.ledgerEntry.createdAt,
         },
