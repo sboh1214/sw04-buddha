@@ -4,6 +4,7 @@
  * drizzle.config.ts only affects column names.
  */
 import {
+  APPROVAL_STATUSES,
   COUNTERPARTY_TYPES,
   LEDGER_ENTRY_TYPES,
   MARKET_STATUSES,
@@ -33,3 +34,4 @@ export const timeInForceEnum = pgEnum('time_in_force', TIME_IN_FORCES);
 export const counterpartyTypeEnum = pgEnum('counterparty_type', COUNTERPARTY_TYPES);
 export const priceTickTriggerEnum = pgEnum('price_tick_trigger', PRICE_TICK_TRIGGERS);
 export const releaseSettingStatusEnum = pgEnum('release_setting_status', RELEASE_SETTING_STATUSES);
+export const approvalStatusEnum = pgEnum('approval_status', APPROVAL_STATUSES);

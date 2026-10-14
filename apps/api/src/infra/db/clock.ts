@@ -25,3 +25,15 @@ export async function clockTimestamp(tx: StatementExecutor): Promise<Date> {
     });
   }
 }
+
+/**
+ * `clock`, or 1 ms after `previous` when the clock has not passed it: an instant strictly after
+ * the write it follows, whichever way the database clock moved since. The clock has millisecond
+ * precision, so a write right behind another can read that instant again, or an earlier one
+ * should the clock step back. Role changes (each after the last one) and approval decisions
+ * (each after its request) keep their order this way, as the seed's second grant does.
+ */
+export function strictlyAfter(clock: Date, previous: Date | null | undefined): Date {
+  if (previous == null) return clock;
+  return new Date(Math.max(clock.getTime(), previous.getTime() + 1));
+}

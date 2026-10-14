@@ -408,6 +408,57 @@ export const copy = {
   errReleaseSettingValueInvalid: '이 항목의 형식에 맞지 않는 값입니다.',
   errReleaseSettingNotFound: '등록되지 않은 항목입니다. 화면을 새로 고쳐 주세요.',
 
+  // --- admin: admin accounts (#171, ADR-0056) ---
+  // 관리자 권한은 하나이고, 관리자가 화면에서 사유를 남기고 다른 관리자의 승인 없이 부여·회수한다.
+  // 부여 조건, 2명 하한, 회수 때의 로그아웃은 오너 결정(2026-10-13 #171)이다. '2명'은
+  // MIN_ADMINS와 같아야 하고, 사유 500자는 ADMIN_ROLE_REASON_MAX_LENGTH와 같아야 한다
+  // (admin-accounts.test.ts가 확인한다).
+  adminAccounts: '운영자 계정',
+  adminAccountsIntro:
+    '관리자 권한은 하나이며, 관리자가 사유를 남기고 부여·회수합니다. 부여·회수할 때마다 작업자·대상 계정·시각·사유가 권한 변경 기록에 남습니다.',
+  adminAccountsGrantRule: '이메일 인증과 실명·휴대전화 입력을 마친 계정에만 부여할 수 있습니다.',
+  adminAccountsRevokeRule:
+    '회수한 뒤에도 관리자가 2명 이상 남아야 합니다. 내 계정의 권한을 회수할 때도 같습니다.',
+  adminAccountsRevokeEffect:
+    '회수하면 그 계정은 모든 기기에서 로그아웃되고, 바로 관리자 기능을 쓸 수 없습니다.',
+  adminAccountsCountUnit: '명',
+  adminAccountsSelf: '나',
+  adminAccountsGrantedAt: '부여',
+  adminAccountsGrantUnknown: '부여 기록 없음',
+  adminAccountsRevoke: '회수',
+  adminAccountsGrantTitle: '관리자 권한 부여',
+  adminAccountsGrantIntro: '이메일 또는 닉네임으로 계정을 찾아 부여합니다.',
+  adminAccountsGrant: '부여',
+  adminAccountsGrantDialogTitle: '관리자 권한을 부여합니다',
+  adminAccountsGrantNotice:
+    '이메일 인증과 실명·휴대전화 입력을 마친 계정에만 부여할 수 있습니다. 부여하면 이 계정은 다음 요청부터 관리자 기능을 씁니다.',
+  adminAccountsGrantDone: '관리자 권한을 부여했습니다.',
+  adminAccountsRevokeDialogTitle: '관리자 권한을 회수합니다',
+  adminAccountsRevokeNotice:
+    '회수하면 이 계정의 모든 세션이 끝나 모든 기기에서 로그아웃되고, 다음 요청부터 관리자 기능을 쓸 수 없습니다. 회수한 뒤에도 관리자가 2명 이상 남아야 합니다.',
+  adminAccountsRevokeSelfNotice:
+    '내 계정의 권한을 회수합니다. 회수하면 나도 바로 로그아웃되고 첫 화면으로 이동합니다.',
+  adminAccountsRevokeDone: '관리자 권한을 회수했습니다.',
+  adminAccountsReason: '사유',
+  adminAccountsReasonHint: '권한 변경 기록에 작업자·대상 계정·시각과 함께 남습니다.',
+  adminAccountsChanges: '권한 변경 기록',
+  adminAccountsChangesEmpty: '권한 변경 기록이 없습니다.',
+  adminAccountsChangeGrant: '부여',
+  adminAccountsChangeRevoke: '회수',
+  adminAccountsChangeActor: '작업자',
+  adminAccountsChangeReason: '사유',
+  adminAccountsTargetGone: '삭제된 계정',
+  errAdminRoleReason: '사유를 1~500자로 입력해 주세요.',
+  errAdminGrantAlreadyAdmin: '이미 관리자인 계정입니다.',
+  errAdminGrantEmailNotVerified:
+    '이메일 인증을 마치지 않은 계정입니다. 이메일 인증과 실명·휴대전화 입력을 마친 계정에만 관리자 권한을 부여할 수 있습니다.',
+  errAdminGrantContactRequired:
+    '실명·휴대전화를 입력하지 않은 계정입니다. 이메일 인증과 실명·휴대전화 입력을 마친 계정에만 관리자 권한을 부여할 수 있습니다.',
+  errAdminRevokeNotAdmin: '관리자가 아닌 계정입니다. 이미 회수되었을 수 있습니다.',
+  errAdminRevokeMinAdmins:
+    '회수하면 관리자가 2명보다 적어지므로 회수할 수 없습니다. 회수한 뒤에도 관리자가 2명 이상 남아야 하고, 내 계정의 권한을 회수할 때도 같습니다. 다른 계정에 먼저 관리자 권한을 부여해 주세요.',
+  errAdminAccountNotFound: '계정을 찾을 수 없습니다. 화면을 새로 고쳐 주세요.',
+
   // --- markets (M4) ---
   // 홈 (PLAN 11.3, ADR-0041 Kalshi 형): 헤더 2단의 상위 카테고리 · 왼쪽 세부 분류 · 정렬 · 검색.
   // 카테고리 목록은 API가 주고 '전체'만 붙인다. 장르 표기는 붙여 쓴다(N01 §1, 오너 결정 #14).

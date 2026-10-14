@@ -7,6 +7,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   nicknameSchema,
+  SEED_ADMIN_GRANT_REASON,
   type CategorySlug,
   SUBCATEGORY_SLUGS,
   type SubcategorySlug,
@@ -16,7 +17,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { closeDb, createDb, type Db } from './client.js';
 import { loadRootEnv } from './env.js';
 import { SEED_MARKETS } from './seed-markets.js';
-import { clockTimestamp } from './tx-helpers.js';
+import { clockTimestamp, lockAdminRoles } from './tx-helpers.js';
 import {
   account,
   adminActions,
@@ -215,114 +216,186 @@ async function pickNickname(tx: Pick<Db, 'select'>, ownUserId: string): Promise<
   throw new Error('[db:seed] could not find a free admin nickname');
 }
 
+type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
+
 /**
- * Creates the first admin (PLAN 10.5) the way better-auth's email sign-up does: a `user`
- * row plus a credential `account` row (providerId 'credential', accountId = user id, scrypt
- * hash from better-auth/crypto). The "user" AFTER INSERT trigger (migrations 0002 and 0004)
- * creates the profile (auto nickname) and the balance, sign-up bonus included: the operator
- * account starts with SIGNUP_BONUS_COIN like every account (Q-M2-2). The seed then renames the
- * profile to 관리자 and promotes it.
- *
- * Re-running never resets an existing password; it only guarantees that the user exists, is
- * verified, has a credential account and has role 'admin'. Returns the admin's user id, the
- * `created_by` and event actor of the seed markets.
+ * One bootstrap admin, the way better-auth's email sign-up makes an account: a `user` row plus a
+ * credential `account` row (providerId 'credential', accountId = user id, scrypt hash from
+ * better-auth/crypto). The "user" AFTER INSERT trigger (migrations 0002 and 0004) creates the
+ * profile (auto nickname) and the balance, sign-up bonus included: the operator account starts
+ * with SIGNUP_BONUS_COIN like every account (Q-M2-2). A fresh account is renamed 관리자 (관리자2
+ * for the second) and promoted; an account the address already has keeps its nickname and
+ * password and is verified and promoted. Writes its `admin_grant` record — actor the account
+ * itself, reason SEED_ADMIN_GRANT_REASON — at `at`, and returns its id. Returns undefined,
+ * changing nothing, for an account that was revoked once: the seed never gives the role back
+ * (owner decision 2026-10-13).
  */
-async function seedAdmin(db: Db, input: AdminInput): Promise<string> {
-  // better-auth lower-cases the email on sign-up and sign-in; match it here.
-  const email = input.email.trim().toLowerCase();
-  if (input.password.length < 8 || input.password.length > 128) {
-    throw new Error(
-      '[db:seed] SEED_ADMIN_PASSWORD must be 8-128 characters (better-auth defaults)',
-    );
+async function seedOneAdmin(tx: Tx, input: AdminInput, at: Date): Promise<string | undefined> {
+  const { email } = input;
+  const now = new Date();
+  let created = false;
+
+  let [existing] = await tx
+    .select({ id: user.id, emailVerified: user.emailVerified })
+    .from(user)
+    .where(eq(user.email, email));
+  if (existing) {
+    const [revoked] = await tx
+      .select({ id: adminActions.id })
+      .from(adminActions)
+      .where(
+        and(
+          eq(adminActions.type, 'admin_revoke'),
+          eq(adminActions.targetType, 'user'),
+          eq(adminActions.targetId, existing.id),
+        ),
+      )
+      .limit(1);
+    if (revoked) {
+      console.warn(`[db:seed] admin ${email}: its admin role was revoked once, not promoted again`);
+      return undefined;
+    }
+  } else {
+    const id = randomUUID();
+    await tx.insert(user).values({
+      id,
+      name: ADMIN_NICKNAME,
+      email,
+      emailVerified: true,
+      createdAt: now,
+      updatedAt: now,
+    });
+    existing = { id, emailVerified: true };
+    created = true;
+  }
+  const userId = existing.id;
+  // The address may already exist unverified: ADR-0024 lets anyone register it (a user row
+  // with no password) before a deploy runs the seed. Adding the credential below would then
+  // produce an admin that `requireEmailVerification` answers with 403 EMAIL_NOT_VERIFIED, so
+  // verify it here as the fresh branch does — the operator owns the SEED_*ADMIN_EMAIL address.
+  const verifiedNow = !created && !existing.emailVerified;
+  if (verifiedNow) {
+    await tx.update(user).set({ emailVerified: true, updatedAt: now }).where(eq(user.id, userId));
   }
 
+  const [credential] = await tx
+    .select({ id: account.id })
+    .from(account)
+    .where(and(eq(account.userId, userId), eq(account.providerId, CREDENTIAL_PROVIDER)));
+  if (!credential) {
+    await tx.insert(account).values({
+      id: randomUUID(),
+      issuer: CREDENTIAL_ISSUER,
+      accountId: userId,
+      providerId: CREDENTIAL_PROVIDER,
+      userId,
+      password: await hashPassword(input.password),
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+
+  const [profile] = await tx
+    .select({ role: profiles.role })
+    .from(profiles)
+    .where(eq(profiles.userId, userId));
+  if (!profile) {
+    throw new Error('[db:seed] the "user" trigger did not create a profile (run db:migrate)');
+  }
+  // A fresh account also trades the trigger's auto nickname for 관리자 in the same statement.
+  await tx
+    .update(profiles)
+    .set({
+      ...(created ? { nickname: await pickNickname(tx, userId) } : {}),
+      role: 'admin',
+      updatedAt: at,
+    })
+    .where(eq(profiles.userId, userId));
+  await tx.insert(adminActions).values({
+    adminId: userId,
+    type: 'admin_grant',
+    targetType: 'user',
+    targetId: userId,
+    payload: { reason: SEED_ADMIN_GRANT_REASON },
+    createdAt: at,
+  });
+
+  // The trigger created the balance, sign-up bonus included (migration 0004) — like every
+  // account. Never touched: balances change only together with a ledger entry (PLAN 0.2),
+  // and a missing row is a broken account for the ledger audit to report, not something
+  // the seed papers over with a silent 0.
+  const [balance] = await tx
+    .select({ userId: balances.userId })
+    .from(balances)
+    .where(eq(balances.userId, userId));
+  if (!balance) {
+    throw new Error('[db:seed] the "user" trigger did not create a balance (run db:migrate)');
+  }
+
+  console.log(
+    `[db:seed] admin ${email}: ${created ? 'created' : 'promoted'}` +
+      ` (role=admin, admin_grant recorded, credential ${credential ? 'kept' : 'created'}${verifiedNow ? ', verified' : ''})`,
+  );
+  return userId;
+}
+
+/**
+ * The bootstrap admins (PLAN 10.5, #171): only while NO account holds the admin role, the first
+ * from SEED_ADMIN_* and, when given, a second from SEED_SECOND_ADMIN_* (each pair both or neither,
+ * the second only with the first and a different email, all checked before anything is seeded,
+ * `adminPair`) — the two-person rule needs two distinct admins in every
+ * environment (owner decision 2026-10-13). Once any admin exists the seed creates and promotes
+ * nobody: admins come and go on the admin screen (`POST /admin/admins`, `…/revoke`), and a
+ * revoked account is never promoted again.
+ *
+ * The one exception to the grant rule of the admin screen (a verified email AND a real name and
+ * mobile number, ADR-0043): nobody exists yet who could grant, so the seed promotes accounts it
+ * verifies itself and with no contact — they enter it at their first sign-in, the onboarding gate
+ * covers /admin too. Each grant is recorded like any other (`admin_grant`, actor the account
+ * itself, reason SEED_ADMIN_GRANT_REASON). Re-running never resets a password.
+ *
+ * Returns the first admin's id when that account holds the role now: the `created_by` and event
+ * actor of the seed markets.
+ */
+async function seedAdmins(
+  db: Db,
+  first: AdminInput,
+  second: AdminInput | undefined,
+): Promise<string | undefined> {
   return db.transaction(async (tx) => {
     await lockSeed(tx);
-    const now = new Date();
-    let created = false;
-
-    let [existing] = await tx
-      .select({ id: user.id, emailVerified: user.emailVerified })
-      .from(user)
-      .where(eq(user.email, email));
-    if (!existing) {
-      const id = randomUUID();
-      await tx.insert(user).values({
-        id,
-        name: ADMIN_NICKNAME,
-        email,
-        emailVerified: true,
-        createdAt: now,
-        updatedAt: now,
-      });
-      existing = { id, emailVerified: true };
-      created = true;
-    }
-    const userId = existing.id;
-    // The address may already exist unverified: ADR-0024 lets anyone register it (a user row
-    // with no password) before a deploy runs the seed. Adding the credential below would then
-    // produce an admin that `requireEmailVerification` answers with 403 EMAIL_NOT_VERIFIED, so
-    // verify it here as the fresh branch does — the operator owns SEED_ADMIN_EMAIL.
-    const verifiedNow = !created && !existing.emailVerified;
-    if (verifiedNow) {
-      await tx.update(user).set({ emailVerified: true, updatedAt: now }).where(eq(user.id, userId));
-    }
-
-    const [credential] = await tx
-      .select({ id: account.id })
-      .from(account)
-      .where(and(eq(account.userId, userId), eq(account.providerId, CREDENTIAL_PROVIDER)));
-    if (!credential) {
-      await tx.insert(account).values({
-        id: randomUUID(),
-        issuer: CREDENTIAL_ISSUER,
-        accountId: userId,
-        providerId: CREDENTIAL_PROVIDER,
-        userId,
-        password: await hashPassword(input.password),
-        createdAt: now,
-        updatedAt: now,
-      });
-    }
-
-    const [profile] = await tx
-      .select({ role: profiles.role, nickname: profiles.nickname })
+    // After the seed lock, like every taker of both: the admin screen's grants and revokes hold
+    // this one too, so "no admin yet" stays true until this commits.
+    await lockAdminRoles(tx, 'exclusive');
+    const [anyAdmin] = await tx
+      .select({ userId: profiles.userId })
       .from(profiles)
-      .where(eq(profiles.userId, userId));
-    if (!profile) {
-      throw new Error('[db:seed] the "user" trigger did not create a profile (run db:migrate)');
-    }
-    if (created) {
-      // Fresh admin: replace the trigger's auto nickname and promote in one statement.
-      const nickname = await pickNickname(tx, userId);
-      await tx
-        .update(profiles)
-        .set({ nickname, role: 'admin', updatedAt: now })
-        .where(eq(profiles.userId, userId));
-    } else if (profile.role !== 'admin') {
-      await tx
-        .update(profiles)
-        .set({ role: 'admin', updatedAt: now })
-        .where(eq(profiles.userId, userId));
+      .where(eq(profiles.role, 'admin'))
+      .limit(1);
+
+    if (!anyAdmin) {
+      // One instant per grant, the second strictly after the first, so the history lists them
+      // in the order they were made.
+      const firstAt = await dbNow(tx);
+      const firstId = await seedOneAdmin(tx, first, firstAt);
+      if (second) {
+        const secondAt = new Date(Math.max((await dbNow(tx)).getTime(), firstAt.getTime() + 1));
+        await seedOneAdmin(tx, second, secondAt);
+      } else {
+        console.log(
+          '[db:seed] SEED_SECOND_ADMIN_EMAIL / SEED_SECOND_ADMIN_PASSWORD not set: one admin only — a two-person approval needs a second (#171)',
+        );
+      }
+      return firstId;
     }
 
-    // The trigger created the balance, sign-up bonus included (migration 0004) — like every
-    // account. Never touched: balances change only together with a ledger entry (PLAN 0.2),
-    // and a missing row is a broken account for the ledger audit to report, not something
-    // the seed papers over with a silent 0.
-    const [balance] = await tx
-      .select({ userId: balances.userId })
-      .from(balances)
-      .where(eq(balances.userId, userId));
-    if (!balance) {
-      throw new Error('[db:seed] the "user" trigger did not create a balance (run db:migrate)');
-    }
-
-    console.log(
-      `[db:seed] admin ${email}: ${created ? 'created' : 'already exists'}` +
-        ` (role=admin, credential ${credential ? 'kept' : 'created'}${verifiedNow ? ', verified' : ''})`,
-    );
-    return userId;
+    console.log('[db:seed] admins: an admin exists already, nobody created or promoted (#171)');
+    const [seeded] = await tx
+      .select({ id: user.id, role: profiles.role })
+      .from(user)
+      .innerJoin(profiles, eq(profiles.userId, user.id))
+      .where(eq(user.email, first.email));
+    return seeded?.role === 'admin' ? seeded.id : undefined;
   });
 }
 
@@ -340,7 +413,7 @@ const SEED_CLOSE_SOON_MS = SEED_CLOSE_SOON_DAYS * 24 * 60 * 60 * 1_000;
  * never leaves a market without its history. Drafts, because a market opens only once another
  * reviewer has checked its rules (N03 §2; #125) — the seed never opens one. No price and no tick:
  * a market has none before its first fill (N02 §5). A market whose slug exists is skipped, never
- * updated. Runs after `seedAdmin`: the admin is `created_by` and the actor of the event.
+ * updated. Runs after `seedAdmins`: the first admin is `created_by` and the actor of the event.
  *
  * One deliberate divergence from that path: `close_at` is an absolute instant (ADR-0027), and
  * `assertFutureCloseAt` refuses a past one on create while this writes it anyway, so a late-run
@@ -463,16 +536,61 @@ if (!url) {
   console.error('[db:seed] DATABASE_URL is not set (copy .env.example to .env)');
   process.exit(1);
 }
-const adminEmail = process.env.SEED_ADMIN_EMAIL;
-const adminPassword = process.env.SEED_ADMIN_PASSWORD;
+/** A configuration the seed refuses: said once on stderr, before anything is seeded. */
+function configError(message: string): never {
+  console.error(`[db:seed] ${message}`);
+  process.exit(1);
+}
+
+/**
+ * One SEED_*ADMIN_* pair: both values or neither, whitespace alone counting as empty — terraform's
+ * validation reads seed_*admin_* the same way, and this catches a local .env or any other direct
+ * run. One without the other is an admin someone meant to configure: seeding without it would
+ * leave the environment with fewer admins than meant (none, or no two-person approval, #171), so
+ * nothing is seeded. The password length is checked here too, and the email lower-cased the way
+ * better-auth does on sign-up and sign-in.
+ */
+function adminPair(emailVariable: string, passwordVariable: string): AdminInput | undefined {
+  const email = process.env[emailVariable] ?? '';
+  const password = process.env[passwordVariable] ?? '';
+  const hasEmail = email.trim() !== '';
+  if (hasEmail !== (password.trim() !== '')) {
+    configError(
+      `${hasEmail ? passwordVariable : emailVariable} is empty: set both ${emailVariable} and ${passwordVariable}, or neither (#171)`,
+    );
+  }
+  if (!hasEmail) return undefined;
+  if (password.length < 8 || password.length > 128) {
+    configError(`${passwordVariable} must be 8-128 characters (better-auth defaults)`);
+  }
+  return { email: email.trim().toLowerCase(), password };
+}
+
+// Every admin setting is checked before the pool opens: a refused configuration seeds nothing.
+const firstAdmin = adminPair('SEED_ADMIN_EMAIL', 'SEED_ADMIN_PASSWORD');
+const secondAdmin = adminPair('SEED_SECOND_ADMIN_EMAIL', 'SEED_SECOND_ADMIN_PASSWORD');
+// The second is the second of two: with no first, seedAdmins would not run, and the seed would
+// end with no admin at all and the configured second skipped.
+if (secondAdmin && !firstAdmin) {
+  configError(
+    'SEED_SECOND_ADMIN_* is set but SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD are not: set the first admin too, or neither (#171)',
+  );
+}
+if (secondAdmin && secondAdmin.email === firstAdmin?.email) {
+  configError('SEED_SECOND_ADMIN_EMAIL must differ from SEED_ADMIN_EMAIL');
+}
 
 const db = createDb(url, { max: 1, applicationName: 'buddha-seed' });
 try {
   await seedCategories(db);
   await seedChargePackages(db);
-  if (adminEmail && adminPassword) {
-    const adminId = await seedAdmin(db, { email: adminEmail, password: adminPassword });
-    await seedMarkets(db, adminId);
+  if (firstAdmin) {
+    const adminId = await seedAdmins(db, firstAdmin, secondAdmin);
+    if (adminId) {
+      await seedMarkets(db, adminId);
+    } else {
+      console.log('[db:seed] markets skipped (the SEED_ADMIN_EMAIL account is not an admin)');
+    }
   } else {
     console.log('[db:seed] SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD not set: admin skipped');
     console.log('[db:seed] markets skipped (no admin)');

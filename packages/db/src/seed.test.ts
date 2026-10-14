@@ -3,8 +3,13 @@ import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { ALL_CATEGORY_SLUGS, CATEGORY_SLUGS, SIGNUP_BONUS_COIN } from '@buddha/shared';
-import { and, asc, eq, sql } from 'drizzle-orm';
+import {
+  ALL_CATEGORY_SLUGS,
+  CATEGORY_SLUGS,
+  SEED_ADMIN_GRANT_REASON,
+  SIGNUP_BONUS_COIN,
+} from '@buddha/shared';
+import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   account,
@@ -19,8 +24,10 @@ import {
   profiles,
   releaseSettings,
   user,
+  userContacts,
 } from './schema/index.js';
 import { SEED_RULE_NO_DELAY_NO } from './seed-markets.js';
+import { createUser } from './test/factories.js';
 import { connectTestDb, hasTestDb, testDbUrls, type TestDb } from './test/harness.js';
 
 /**
@@ -32,24 +39,36 @@ import { connectTestDb, hasTestDb, testDbUrls, type TestDb } from './test/harnes
 const packageRoot = fileURLToPath(new URL('..', import.meta.url));
 const ADMIN_EMAIL = 'seed-admin@test.local';
 const ADMIN_PASSWORD = 'seed-admin-1234';
+const SECOND_EMAIL = 'seed-admin-2@test.local';
+const SECOND_PASSWORD = 'seed-admin-5678';
 
-function seedSpawnOptions(options: { admin?: boolean; clockShiftMs?: number } = {}) {
+interface SeedOptions {
+  admin?: boolean;
+  /** SEED_SECOND_ADMIN_* as well (default), like CI and the e2e runner. */
+  second?: boolean;
+  /** SEED_ADMIN_* exactly as given, in place of `admin`'s. */
+  firstEnv?: { email: string; password: string };
+  /** SEED_SECOND_ADMIN_* exactly as given, in place of `second`. */
+  secondEnv?: { email: string; password: string };
+  clockShiftMs?: number;
+}
+
+function seedSpawnOptions(options: SeedOptions = {}) {
   const urls = testDbUrls();
   if (!urls) throw new Error('TEST_DATABASE_URL is not set');
   const env: Record<string, string | undefined> = { ...process.env, DATABASE_URL: urls.appUrl };
   // On the child only: nothing reads it from the runner's environment, so turbo's strict env
   // mode has nothing to declare.
   if (options.clockShiftMs) env.SEED_TEST_CLOCK_SHIFT_MS = String(options.clockShiftMs);
-  if (options.admin ?? true) {
-    env.SEED_ADMIN_EMAIL = ADMIN_EMAIL;
-    env.SEED_ADMIN_PASSWORD = ADMIN_PASSWORD;
-  } else {
-    // Empty, not deleted: `loadRootEnv()` fills only variables that are absent, and the root
-    // .env sets both, so a deleted variable would come back from the file. An empty value is
-    // what a deploy without an admin configured looks like to the seed (`if (email && ...)`).
-    env.SEED_ADMIN_EMAIL = '';
-    env.SEED_ADMIN_PASSWORD = '';
-  }
+  // Empty, not deleted: `loadRootEnv()` fills only variables that are absent, and the root
+  // .env sets them, so a deleted variable would come back from the file. An empty value is
+  // what a deploy without that admin configured looks like to the seed (`if (email && ...)`).
+  const admin = options.admin ?? true;
+  const second = admin && (options.second ?? true);
+  env.SEED_ADMIN_EMAIL = options.firstEnv?.email ?? (admin ? ADMIN_EMAIL : '');
+  env.SEED_ADMIN_PASSWORD = options.firstEnv?.password ?? (admin ? ADMIN_PASSWORD : '');
+  env.SEED_SECOND_ADMIN_EMAIL = options.secondEnv?.email ?? (second ? SECOND_EMAIL : '');
+  env.SEED_SECOND_ADMIN_PASSWORD = options.secondEnv?.password ?? (second ? SECOND_PASSWORD : '');
   return {
     cwd: packageRoot,
     encoding: 'utf8' as const,
@@ -72,12 +91,12 @@ function seedArgs(clockShiftMs = 0): string[] {
     : ['--import', 'tsx', 'src/seed.ts'];
 }
 
-function runSeed(options: { admin?: boolean; clockShiftMs?: number } = {}): string {
+function runSeed(options: SeedOptions = {}): string {
   return execFileSync(process.execPath, seedArgs(options.clockShiftMs), seedSpawnOptions(options));
 }
 
 /** Both streams: the staleness report is a warning, and a warning goes to stderr. */
-function runSeedIo(options: { admin?: boolean; clockShiftMs?: number } = {}): {
+function runSeedIo(options: SeedOptions = {}): {
   stdout: string;
   stderr: string;
 } {
@@ -171,28 +190,214 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
     await t.reset();
   });
 
-  async function adminState() {
+  async function adminState(email = ADMIN_EMAIL) {
     const [row] = await t.db
       .select({ id: user.id, emailVerified: user.emailVerified })
       .from(user)
-      .where(eq(user.email, ADMIN_EMAIL));
-    if (!row) throw new Error('the seed did not create the admin user');
+      .where(eq(user.email, email));
+    if (!row) throw new Error(`the seed did not create ${email}`);
     const [credential] = await t.db
       .select({ password: account.password })
       .from(account)
       .where(and(eq(account.userId, row.id), eq(account.providerId, 'credential')));
     const [profile] = await t.db
-      .select({ role: profiles.role })
+      .select({ role: profiles.role, nickname: profiles.nickname })
       .from(profiles)
       .where(eq(profiles.userId, row.id));
-    return { ...row, password: credential?.password, role: profile?.role };
+    return {
+      ...row,
+      password: credential?.password,
+      role: profile?.role,
+      nickname: profile?.nickname,
+    };
   }
 
-  it('creates a verified admin with a credential account', async () => {
+  /** The admin_grant / admin_revoke records, oldest first. */
+  async function roleRecords() {
+    return t.db
+      .select({
+        type: adminActions.type,
+        adminId: adminActions.adminId,
+        targetType: adminActions.targetType,
+        targetId: adminActions.targetId,
+        payload: adminActions.payload,
+        createdAt: adminActions.createdAt,
+      })
+      .from(adminActions)
+      .where(inArray(adminActions.type, ['admin_grant', 'admin_revoke']))
+      .orderBy(asc(adminActions.createdAt), asc(adminActions.id));
+  }
+
+  /** What the admin screen's revoke leaves behind: the role reset and its record. */
+  async function revoke(targetId: string, actorId: string) {
+    await t.db.update(profiles).set({ role: 'user' }).where(eq(profiles.userId, targetId));
+    await t.db.insert(adminActions).values({
+      adminId: actorId,
+      type: 'admin_revoke',
+      targetType: 'user',
+      targetId,
+      payload: { reason: '시험' },
+    });
+  }
+
+  it('creates two verified admins with credentials and records each grant (#171)', async () => {
     runSeed();
-    const state = await adminState();
-    expect(state).toMatchObject({ emailVerified: true, role: 'admin' });
-    expect(state.password).toBeTruthy();
+    const first = await adminState();
+    const second = await adminState(SECOND_EMAIL);
+    expect(first).toMatchObject({ emailVerified: true, role: 'admin', nickname: '관리자' });
+    expect(second).toMatchObject({ emailVerified: true, role: 'admin', nickname: '관리자2' });
+    expect(first.password).toBeTruthy();
+    expect(second.password).toBeTruthy();
+    // Each bootstrap admin records its own grant, the second strictly after the first.
+    const records = await roleRecords();
+    expect(records).toEqual([
+      expect.objectContaining({
+        type: 'admin_grant',
+        adminId: first.id,
+        targetType: 'user',
+        targetId: first.id,
+        payload: { reason: SEED_ADMIN_GRANT_REASON },
+      }),
+      expect.objectContaining({
+        type: 'admin_grant',
+        adminId: second.id,
+        targetType: 'user',
+        targetId: second.id,
+        payload: { reason: SEED_ADMIN_GRANT_REASON },
+      }),
+    ]);
+    expect(records[1]!.createdAt.getTime()).toBeGreaterThan(records[0]!.createdAt.getTime());
+    // No contact: the bootstrap admins enter it at their first sign-in (ADR-0043).
+    expect(await t.db.select().from(userContacts)).toEqual([]);
+  });
+
+  it('creates one admin when no second is configured', async () => {
+    const output = runSeed({ second: false });
+    expect(output).toContain('one admin only');
+    expect(await adminState()).toMatchObject({ role: 'admin' });
+    expect(await t.db.select().from(user).where(eq(user.email, SECOND_EMAIL))).toEqual([]);
+    expect(await roleRecords()).toHaveLength(1);
+  });
+
+  it('fails before seeding anything when only one of SEED_SECOND_ADMIN_* is set (#171)', async () => {
+    // Someone meant a second admin: seeding one only would leave no two-person approval, and
+    // say so in a log line at best. Whitespace alone is empty, as terraform's validation has it.
+    for (const secondEnv of [
+      { email: SECOND_EMAIL, password: '' },
+      { email: '', password: SECOND_PASSWORD },
+      { email: '  ', password: SECOND_PASSWORD },
+      { email: SECOND_EMAIL, password: ' \t ' },
+    ]) {
+      const result = spawnSync(process.execPath, seedArgs(), seedSpawnOptions({ secondEnv }));
+      expect(result.status, JSON.stringify(secondEnv)).toBe(1);
+      expect(result.stderr).toContain(
+        'set both SEED_SECOND_ADMIN_EMAIL and SEED_SECOND_ADMIN_PASSWORD, or neither',
+      );
+    }
+    expect(await t.db.select().from(user)).toEqual([]);
+    expect(await t.db.select().from(categories)).toEqual([]);
+    expect(await t.db.select().from(chargePackages)).toEqual([]);
+  });
+
+  it('fails before seeding anything on any other admin setting it cannot seed as given (#171)', async () => {
+    const cases: [SeedOptions, string][] = [
+      // The first pair is both or neither as well: one alone is an admin someone meant.
+      [
+        { firstEnv: { email: ADMIN_EMAIL, password: '' }, second: false },
+        'SEED_ADMIN_PASSWORD is empty: set both SEED_ADMIN_EMAIL and SEED_ADMIN_PASSWORD, or neither',
+      ],
+      [
+        { firstEnv: { email: ' ', password: ADMIN_PASSWORD } },
+        'SEED_ADMIN_EMAIL is empty: set both SEED_ADMIN_EMAIL and SEED_ADMIN_PASSWORD, or neither',
+      ],
+      [
+        { firstEnv: { email: ADMIN_EMAIL, password: '\t' } },
+        'SEED_ADMIN_PASSWORD is empty: set both SEED_ADMIN_EMAIL and SEED_ADMIN_PASSWORD, or neither',
+      ],
+      // A complete second with no first: no admin would be seeded, the second skipped.
+      [
+        {
+          firstEnv: { email: '', password: '' },
+          secondEnv: { email: SECOND_EMAIL, password: SECOND_PASSWORD },
+        },
+        'SEED_SECOND_ADMIN_* is set but SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD are not',
+      ],
+      // The same account twice, as better-auth compares addresses.
+      [
+        { secondEnv: { email: ` ${ADMIN_EMAIL.toUpperCase()}`, password: SECOND_PASSWORD } },
+        'SEED_SECOND_ADMIN_EMAIL must differ from SEED_ADMIN_EMAIL',
+      ],
+      [
+        { secondEnv: { email: SECOND_EMAIL, password: 'short' } },
+        'SEED_SECOND_ADMIN_PASSWORD must be 8-128 characters',
+      ],
+    ];
+    for (const [options, message] of cases) {
+      const result = spawnSync(process.execPath, seedArgs(), seedSpawnOptions(options));
+      expect({ options, status: result.status }).toEqual({ options, status: 1 });
+      expect(result.stderr, JSON.stringify(options)).toContain(message);
+    }
+    expect(await t.db.select().from(user)).toEqual([]);
+    expect(await t.db.select().from(categories)).toEqual([]);
+    expect(await t.db.select().from(chargePackages)).toEqual([]);
+  });
+
+  it('creates and promotes nobody once an admin exists', async () => {
+    // An admin from somewhere else (the admin screen): the seed leaves the accounts alone and
+    // writes no record — and with no SEED_ADMIN_EMAIL admin, no market names a creator.
+    await createUser(t.db, { role: 'admin' });
+    const output = runSeed();
+    expect(output).toContain('nobody created or promoted');
+    expect(output).toContain('markets skipped');
+    expect(
+      await t.db
+        .select()
+        .from(user)
+        .where(inArray(user.email, [ADMIN_EMAIL, SECOND_EMAIL])),
+    ).toEqual([]);
+    expect(await roleRecords()).toEqual([]);
+    expect(await t.db.select().from(markets)).toEqual([]);
+  });
+
+  it('adds no second admin to an existing one: a later SEED_SECOND_ADMIN_* creates nobody', async () => {
+    // The second is then granted on the admin screen instead.
+    runSeed({ second: false });
+    const output = runSeed();
+    expect(output).toContain('nobody created or promoted');
+    expect(await t.db.select().from(user).where(eq(user.email, SECOND_EMAIL))).toEqual([]);
+    expect(await roleRecords()).toHaveLength(1);
+  });
+
+  it('never promotes a revoked seed admin again (#171)', async () => {
+    runSeed();
+    const first = await adminState();
+    const second = await adminState(SECOND_EMAIL);
+    // A third admin, so the revoke below is one the admin screen allows (two remain).
+    await createUser(t.db, { role: 'admin' });
+    await revoke(first.id, second.id);
+    const before = await roleRecords();
+
+    const output = runSeed();
+    expect(output).toContain('nobody created or promoted');
+    expect(await adminState()).toMatchObject({ role: 'user' });
+    expect(await roleRecords()).toEqual(before);
+    // The markets name the first admin as their creator, and it no longer holds the role.
+    expect(output).toContain('markets skipped');
+  });
+
+  it('never promotes a revoked account, even when no admin is left', async () => {
+    // Not reachable through the admin screen (a revoke leaves two admins), but the rule is the
+    // seed's own: an account that lost the role does not get it back from a deploy.
+    runSeed({ second: false });
+    const first = await adminState();
+    await revoke(first.id, first.id);
+
+    const { stdout, stderr } = runSeedIo();
+    expect(stderr).toContain('revoked once, not promoted again');
+    expect(await adminState()).toMatchObject({ role: 'user' });
+    // The second still bootstraps: it never held the role.
+    expect(await adminState(SECOND_EMAIL)).toMatchObject({ role: 'admin' });
+    expect(stdout).toContain('markets skipped');
   });
 
   it('verifies an address that was registered before the seed ran (ADR-0024)', async () => {
@@ -550,6 +755,8 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
     expect(await t.db.select().from(chargePackages)).toHaveLength(5);
     expect(await t.db.select().from(user).where(eq(user.email, ADMIN_EMAIL))).toHaveLength(1);
     expect(await adminState()).toMatchObject({ role: 'admin' });
+    // The admins too: the second seed found them and recorded no grant of its own.
+    expect(await roleRecords()).toHaveLength(2);
     // Each market is a check-then-insert under the same lock: 14, not 28, one event each.
     expect(await t.db.select().from(markets)).toHaveLength(SEED_MARKET_COUNT);
     expect(await t.db.select().from(marketEvents)).toHaveLength(SEED_MARKET_COUNT);

@@ -1,4 +1,4 @@
-import { desc } from 'drizzle-orm';
+import { desc, sql } from 'drizzle-orm';
 import { index, jsonb, pgTable, text, uuid, varchar } from 'drizzle-orm/pg-core';
 import { user } from './auth.js';
 import { createdAt } from './columns.js';
@@ -27,5 +27,12 @@ export const adminActions = pgTable(
      * that looks up a change's row by type and instant (migration 0020).
      */
     index('admin_actions_type_created_at_id_idx').on(t.type, desc(t.createdAt), desc(t.id)),
+    /**
+     * `GET /admin/admins/changes` (#171): grants and revokes together, newest first, with the
+     * row-comparison cursor. Two types in one order, which the index above cannot walk as one.
+     */
+    index('admin_actions_role_change_created_at_id_idx')
+      .on(desc(t.createdAt), desc(t.id))
+      .where(sql`${t.type} IN ('admin_grant', 'admin_revoke')`),
   ],
 );

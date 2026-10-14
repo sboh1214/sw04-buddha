@@ -11,6 +11,7 @@
  * (auth.ts) declare explicit snake_case names and are managed by better-auth (PLAN 6.1).
  */
 export * from './admin-actions.js';
+export * from './approval-requests.js';
 export * from './audit-failures.js';
 export * from './auth.js';
 export * from './balances.js';

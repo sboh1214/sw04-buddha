@@ -69,7 +69,8 @@ jobs:
     # The exception is everything the e2e leg needs: Playwright and the three servers run
     # outside turbo, so they read this block directly.
     # Locally TEST_* point at the docker `test` profile (5433/6380); here the service
-    # containers double as the test database, so TEST_* and DATABASE_* are the same server.
+    # containers double as the test database, so TEST_* and DATABASE_* are the same server (the
+    # e2e leg empties it before seeding).
     env:
       DATABASE_URL: postgres://buddha_app:buddha@localhost:5432/buddha
       DATABASE_MIGRATE_URL: postgres://buddha_migrate:buddha@localhost:5432/buddha
@@ -95,9 +96,12 @@ jobs:
       MAILPIT_URL: http://127.0.0.1:8025
       E2E_BASE_URL: http://localhost:3000
       # db:seed skips the admin — and with it the seeded markets — unless both are set
-      # (packages/db/src/seed.ts); the e2e signs in as this admin to open its own market.
+      # (packages/db/src/seed.ts); the e2e signs in as this admin to open its own market. The
+      # second bootstrap admin: the two-person rule needs two distinct admins here too (#171).
       SEED_ADMIN_EMAIL: admin@buddha.local
       SEED_ADMIN_PASSWORD: ci-only-admin-password
+      SEED_SECOND_ADMIN_EMAIL: admin2@buddha.local
+      SEED_SECOND_ADMIN_PASSWORD: ci-only-second-admin-password
 
     steps:
       - uses: actions/checkout@v7
@@ -154,11 +158,21 @@ jobs:
       - name: Install Playwright chromium
         run: pnpm --filter web exec playwright install --with-deps chromium
 
+      # The vitest suites above ran against this same database (TEST_* = DATABASE_*) and leave
+      # whatever their last case wrote, an admin among it maybe. Since #171 the seed creates its
+      # two admins only while no account is an admin, so empty every table first: the statement
+      # deploy/reset-db.sh runs (wipe-cli.ts as buddha_migrate, docs/RESET.md). The schema and
+      # the migrations stay.
+      - name: Empty the database the tests used
+        run: pnpm --filter @buddha/db run db:wipe --yes
+
       # The e2e flow needs the categories, and its market fixture is created through the admin API
-      # as the seeded admin (SEED_ADMIN_* above). No spec charges: paid Coin is closed (ADR-0049), and
-      # the payment spec puts a package on sale itself (the seed's are off sale, #125) to show the
-      # charge is refused anyway. db:seed already declares those three keys in passThroughEnv, so
-      # turbo.json needs no change.
+      # as the seeded admin (SEED_ADMIN_* above); the admin-accounts spec also signs in as the
+      # second one (SEED_SECOND_ADMIN_*, #171) and needs exactly these two admins, which the seed
+      # creates on the database emptied above. No spec charges:
+      # paid Coin is closed (ADR-0049), and the payment spec puts a package on sale itself (the
+      # seed's are off sale, #125) to show the charge is refused anyway. db:seed declares
+      # DATABASE_URL and the four SEED_*ADMIN_* keys in turbo.json's passThroughEnv.
       - name: Seed the database
         run: pnpm db:seed
 

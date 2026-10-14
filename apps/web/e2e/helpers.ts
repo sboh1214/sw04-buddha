@@ -15,7 +15,8 @@ import { copy } from '../src/copy';
  * The market is created per run, never taken from `pnpm db:seed`. The seed's markets are drafts
  * waiting for review (#125) with absolute KST close times, so a spec pinned to them would pass
  * today and rot on a date nobody will connect to the failure. The two things a spec still needs from
- * the seed are the ones no public or admin route can make: the first admin (PLAN 10.5) and the
+ * the seed are the ones no public or admin route can make: the bootstrap admins (PLAN 10.5 — two
+ * since #171, as the two-person rule needs distinct admins in every environment) and the
  * category rows. Both are named in the error a helper throws, so a missing seed reads as
  * "run pnpm db:seed" rather than as a 401 or a 404 in the middle of a flow.
  *
@@ -41,9 +42,31 @@ export const E2E_CONTACT = { realName: '테스트회원', phone: '010-1234-5678'
 /** `.env.example`'s defaults, so a developer who never exported them still runs the suite. */
 const ADMIN_EMAIL = process.env.SEED_ADMIN_EMAIL ?? 'admin@buddha.local';
 const ADMIN_PASSWORD = process.env.SEED_ADMIN_PASSWORD ?? 'admin1234!';
+const SECOND_ADMIN_EMAIL = process.env.SEED_SECOND_ADMIN_EMAIL ?? 'admin2@buddha.local';
+const SECOND_ADMIN_PASSWORD = process.env.SEED_SECOND_ADMIN_PASSWORD ?? 'admin5678!';
 
-/** What the `admin` fixture gives the seed admin, which `pnpm db:seed` creates without one. */
-const ADMIN_CONTACT = { realName: '테스트관리자', phone: '01000000000' } as const;
+/** A bootstrap admin of `pnpm db:seed`, and the contact its fixture gives it (the seed gives none). */
+interface SeedAdmin {
+  email: string;
+  password: string;
+  contact: { realName: string; phone: string };
+  /** The variables that name it, for the error a missing seed raises. */
+  env: string;
+}
+
+const FIRST_ADMIN: SeedAdmin = {
+  email: ADMIN_EMAIL,
+  password: ADMIN_PASSWORD,
+  contact: { realName: '테스트관리자', phone: '01000000000' },
+  env: 'SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD',
+};
+
+const SECOND_ADMIN: SeedAdmin = {
+  email: SECOND_ADMIN_EMAIL,
+  password: SECOND_ADMIN_PASSWORD,
+  contact: { realName: '테스트둘째관리자', phone: '01000000001' },
+  env: 'SEED_SECOND_ADMIN_EMAIL / SEED_SECOND_ADMIN_PASSWORD',
+};
 
 /** PLAN 13 M4 AC 1: 한 브라우저의 변화가 다른 브라우저의 카드·상세에 1초 내 반영된다. */
 export const REALTIME_BUDGET_MS = 1_000;
@@ -57,39 +80,55 @@ const CLOSE_IN_MS = 24 * 60 * 60 * 1_000;
 // ---- fixtures -----------------------------------------------------------------------
 
 /**
- * `admin` is an API context signed in as the seed admin, isolated from every browser context
- * in the test: the specs' own `request` fixture stays cookie-less, which is what lets AC 2
- * read the detail page's HTML as an anonymous visitor would.
+ * Signs `context` in as a bootstrap admin and gives it a contact.
+ *
+ * The seed admins are accounts like any other, so the onboarding gate (ADR-0043) would send a
+ * spec's browser sign-in as one (`signIn(…, adminAccount…)`) to /onboarding instead of `/`.
+ * Every spec that does that also asks for that admin's fixture, so the admin gets a contact
+ * here — an upsert, so a re-run against a persistent database changes nothing. The body names
+ * the account it is for (`expectedAccountId`, A-PG-24): the sign-in's own answer.
  */
-export const test = base.extend<{ admin: APIRequestContext }>({
+async function signInSeedAdmin(context: APIRequestContext, admin: SeedAdmin): Promise<void> {
+  const signedIn = await context.post('/api/auth/sign-in/email', {
+    data: { email: admin.email, password: admin.password },
+  });
+  if (!signedIn.ok()) {
+    throw new Error(
+      `admin sign-in failed for ${admin.email} (${String(signedIn.status())}): ` +
+        `run \`pnpm db:seed\` with ${admin.env} set — the seed creates its admins only while ` +
+        'the database has none, so one seeded with fewer needs a reset or a grant on /admin/admins',
+    );
+  }
+  const { user } = (await signedIn.json()) as { user: { id: string } };
+  const contact = await context.put('/api/v1/me/contact', {
+    data: { ...admin.contact, expectedAccountId: user.id },
+  });
+  if (!contact.ok()) {
+    throw new Error(
+      `saving the contact of ${admin.email} failed (${String(contact.status())}): ${await contact.text()}`,
+    );
+  }
+}
+
+/**
+ * `admin` is an API context signed in as the first seed admin and `secondAdmin` as the second
+ * (#171), each isolated from every browser context in the test: the specs' own `request`
+ * fixture stays cookie-less, which is what lets AC 2 read the detail page's HTML as an
+ * anonymous visitor would.
+ */
+export const test = base.extend<{ admin: APIRequestContext; secondAdmin: APIRequestContext }>({
   // The second argument is Playwright's `use`, renamed: this package lints with
   // eslint-plugin-react-hooks, which reads a call to `use(…)` outside a component as React's
   // own `use` hook and fails `rules-of-hooks`. Playwright passes it positionally.
   admin: async ({ playwright, baseURL }, provide) => {
     const context = await playwright.request.newContext({ baseURL });
-    const signedIn = await context.post('/api/auth/sign-in/email', {
-      data: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD },
-    });
-    if (!signedIn.ok()) {
-      throw new Error(
-        `admin sign-in failed for ${ADMIN_EMAIL} (${String(signedIn.status())}): ` +
-          'run `pnpm db:seed` with SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD set',
-      );
-    }
-    // The seed admin is an account like any other, so the onboarding gate (ADR-0043) would send
-    // a spec's browser sign-in as the admin (`signIn(…, adminAccount…)`) to /onboarding instead
-    // of `/`. Every spec that does that also asks for this fixture, so the admin gets a contact
-    // here — an upsert, so a re-run against a persistent database changes nothing. The body
-    // names the account it is for (`expectedAccountId`, A-PG-24): the sign-in's own answer.
-    const { user } = (await signedIn.json()) as { user: { id: string } };
-    const contact = await context.put('/api/v1/me/contact', {
-      data: { ...ADMIN_CONTACT, expectedAccountId: user.id },
-    });
-    if (!contact.ok()) {
-      throw new Error(
-        `saving the seed admin's contact failed (${String(contact.status())}): ${await contact.text()}`,
-      );
-    }
+    await signInSeedAdmin(context, FIRST_ADMIN);
+    await provide(context);
+    await context.dispose();
+  },
+  secondAdmin: async ({ playwright, baseURL }, provide) => {
+    const context = await playwright.request.newContext({ baseURL });
+    await signInSeedAdmin(context, SECOND_ADMIN);
     await provide(context);
     await context.dispose();
   },
@@ -163,8 +202,9 @@ export async function signUp(page: Page, email: string): Promise<void> {
 
 /**
  * Signs an existing account in through the login form; lands on `/` with no `next`. The account
- * must have a real name and phone — every `signUp` account does, and the seed admin gets them
- * from the `admin` fixture — or the onboarding gate (ADR-0043) sends it to /onboarding instead.
+ * must have a real name and phone — every `signUp` account does, and the seed admins get them
+ * from the `admin` and `secondAdmin` fixtures — or the onboarding gate (ADR-0043) sends it to
+ * /onboarding instead.
  */
 export async function signIn(page: Page, email: string, password: string): Promise<void> {
   await page.goto('/login');
@@ -185,8 +225,14 @@ export async function logOut(page: Page): Promise<void> {
   await expect(page.getByRole('link', { name: copy.login })).toBeVisible();
 }
 
-/** The seed admin, for a spec that needs a second signed-in browser without a second mailbox. */
+/** The first seed admin, for a spec that needs a second signed-in browser without a second mailbox. */
 export const adminAccount = { email: ADMIN_EMAIL, password: ADMIN_PASSWORD } as const;
+
+/** The second seed admin (#171); a spec that signs a browser in as it asks for `secondAdmin`. */
+export const secondAdminAccount = {
+  email: SECOND_ADMIN_EMAIL,
+  password: SECOND_ADMIN_PASSWORD,
+} as const;
 
 // ---- the market under test ----------------------------------------------------------
 

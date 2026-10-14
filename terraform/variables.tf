@@ -127,15 +127,17 @@ variable "log_level" {
 
 variable "seed_admin_email" {
   description = <<-EOT
-    E-mail of the first admin account. packages/db seed creates it on the first deploy and never
-    resets it afterwards. Must be non-empty: with an empty value the seed silently skips the admin
-    and the site comes up with no way to reach /admin.
+    E-mail of the first admin account. packages/db seed creates it on the first deploy (more
+    exactly: on any seed run while no account holds the admin role) and never resets it
+    afterwards; once an admin exists the seed creates and promotes nobody (#171). Must be
+    non-empty: with an empty value the seed silently skips the admin and the site comes up with
+    no way to reach /admin. Whitespace alone counts as empty: the dotenv line reads it so.
   EOT
   type        = string
 
   validation {
-    condition     = length(var.seed_admin_email) > 0
-    error_message = "seed_admin_email must not be empty (the seed would silently skip creating the admin)."
+    condition     = length(trimspace(var.seed_admin_email)) > 0
+    error_message = "seed_admin_email must not be empty or whitespace only (the seed would silently skip creating the admin)."
   }
 }
 
@@ -152,6 +154,44 @@ variable "seed_admin_password" {
   validation {
     condition     = can(regex("^[A-Za-z0-9]{8,128}$", var.seed_admin_password))
     error_message = "seed_admin_password must be 8-128 characters of [A-Za-z0-9] only (dotenv/compose interpolation safety); it must not be empty."
+  }
+}
+
+variable "seed_second_admin_email" {
+  description = <<-EOT
+    E-mail of the second bootstrap admin (optional, #171). The seed creates it together with the
+    first and only then, while no account holds the admin role: the two-person rule needs two
+    distinct admins in every environment, internal deploys included. Left empty, the site starts
+    with one admin and the second is granted on the admin screen. Set together with
+    seed_second_admin_password, and different from seed_admin_email. Whitespace alone counts as
+    empty, as in the dotenv line and the seed (which trims both e-mails).
+  EOT
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = (trimspace(var.seed_second_admin_email) == "") == (trimspace(var.seed_second_admin_password) == "")
+    error_message = "seed_second_admin_email and seed_second_admin_password must be set together (or both left empty; whitespace alone counts as empty)."
+  }
+
+  validation {
+    condition     = trimspace(var.seed_second_admin_email) == "" || lower(trimspace(var.seed_second_admin_email)) != lower(trimspace(var.seed_admin_email))
+    error_message = "seed_second_admin_email must differ from seed_admin_email."
+  }
+}
+
+variable "seed_second_admin_password" {
+  description = <<-EOT
+    Initial password of the second bootstrap admin (optional; 8-128 characters, letters and
+    digits only, for the same dotenv/compose reason as seed_admin_password).
+  EOT
+  type        = string
+  default     = ""
+  sensitive   = true
+
+  validation {
+    condition     = var.seed_second_admin_password == "" || can(regex("^[A-Za-z0-9]{8,128}$", var.seed_second_admin_password))
+    error_message = "seed_second_admin_password must be empty or 8-128 characters of [A-Za-z0-9] only (dotenv/compose interpolation safety)."
   }
 }
 

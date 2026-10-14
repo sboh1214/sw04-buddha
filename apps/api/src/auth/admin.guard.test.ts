@@ -5,7 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { REDIS } from '../infra/redis/redis.provider.js';
 import { createTestApp, signUpTestUser, type TestApp } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
-import { AdminGuard, roleCacheKey } from './admin.guard.js';
+import { AdminGuard, ROLE_CACHE_TTL_SECONDS, roleCacheKey } from './admin.guard.js';
 
 describe.skipIf(!hasTestInfra)('AdminGuard role cache (integration, PLAN 10.5)', () => {
   let t: TestApp;
@@ -39,6 +39,25 @@ describe.skipIf(!hasTestInfra)('AdminGuard role cache (integration, PLAN 10.5)',
 
     await guard.invalidate(user.id);
     expect(await guard.roleOf(user.id)).toBe('admin');
+  });
+
+  it('answers admin only from Postgres: a cached admin is never taken, nor filled over', async () => {
+    // As a revoke leaves it: it writes nothing to the cache (#171).
+    const user = await signUpTestUser(t);
+    await redis.set(roleCacheKey(user.id), 'admin', 'EX', ROLE_CACHE_TTL_SECONDS);
+    expect(await guard.roleOf(user.id)).toBe('user');
+    expect(await redis.get(roleCacheKey(user.id))).toBe('admin');
+
+    await t.db
+      .update(schema.profiles)
+      .set({ role: 'admin' })
+      .where(eq(schema.profiles.userId, user.id));
+    expect(await guard.roleOf(user.id)).toBe('admin');
+    await t.db
+      .update(schema.profiles)
+      .set({ role: 'user' })
+      .where(eq(schema.profiles.userId, user.id));
+    expect(await guard.roleOf(user.id)).toBe('user'); // no admin answer was cached on the way
   });
 
   it('returns undefined for an unknown user and does not cache it', async () => {

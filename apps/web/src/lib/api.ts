@@ -56,6 +56,15 @@ export type ReleaseSettingChange = components['schemas']['ReleaseSettingChange']
 export type ReleaseSettingChangeBody = components['schemas']['ReleaseSettingChangeBody'];
 /** A status and value, before or after a change: `value` is null exactly while `undecided`. */
 export type ReleaseSettingState = components['schemas']['ReleaseSettingState'];
+/** An account that holds the admin role now, with its latest grant (#171). */
+export type AdminAccount = components['schemas']['AdminAccount'];
+/** One admin grant or revoke as recorded: account, admin, reason and time (#171). */
+export type AdminRoleChange = components['schemas']['AdminRoleChange'];
+/**
+ * `POST /admin/admins`: the account to make an admin and why (required, recorded), and the admin
+ * on screen (`expectedAccountId`).
+ */
+export type AdminGrantBody = components['schemas']['AdminGrantBody'];
 export type ErrorEnvelope = components['schemas']['ErrorEnvelope'];
 
 /** A non-2xx API response, carrying the `{ error: { code, message, details? } }` envelope. */
@@ -98,7 +107,7 @@ export function isApiError(error: unknown, code?: ErrorCode): error is ApiError 
  * way (the charge route's 404 for an unknown `packageId`, INSUFFICIENT_BALANCE on `amountCoin`,
  * the in-progress DUPLICATE_REQUEST on the `Idempotency-Key` header, and the FORBIDDEN on
  * `expectedAccountId` when the cookie belongs to another account — the charge, coupon,
- * contact and password bodies alike).
+ * contact, password and admin grant and revoke bodies alike).
  * Returns the first field name found, e.g. 'nickname'; undefined when no field is named.
  */
 export function validationField(error: ApiError): string | undefined {
@@ -123,9 +132,11 @@ export function validationMessage(error: ApiError): string | undefined {
 /**
  * The 403 that means "the cookie belongs to somebody else than the account on screen": the
  * server refused to charge, to redeem for, or to write the contact or first password of an
- * account the user is not looking at (PLAN 5.3 shape — `chargeBodySchema`,
- * `redeemCouponBodySchema`, `contactBodySchema` and `setPasswordBodySchema` all carry
- * `expectedAccountId`; A-PG-24 for the last two). Only this FORBIDDEN names the field; the CSRF refusal names none.
+ * account the user is not looking at, or to grant or revoke the admin role as one (PLAN 5.3
+ * shape — `chargeBodySchema`, `redeemCouponBodySchema`, `contactBodySchema`,
+ * `setPasswordBodySchema`, `adminGrantBodySchema` and `adminRevokeBodySchema` all carry
+ * `expectedAccountId`; A-PG-24 for the contact and password, #171 for the admin ones). Only this
+ * FORBIDDEN names the field; the CSRF refusal names none.
  *
  * It lives beside `validationField`, which it is built on, rather than in the wallet hook it
  * started in: the keyed flows that send `expectedAccountId` (charge, coupon) must keep their
