@@ -6,13 +6,7 @@
 // table created by migrations, which is all the seed needs.
 import { randomUUID } from 'node:crypto';
 import {
-  initState,
-  maxLossP,
   nicknameSchema,
-  priceOf,
-  probabilityBp,
-  serializeQuantity,
-  type AnyCategorySlug,
   type CategorySlug,
   SUBCATEGORY_SLUGS,
   type SubcategorySlug,
@@ -21,6 +15,7 @@ import { hashPassword } from 'better-auth/crypto';
 import { and, eq, sql } from 'drizzle-orm';
 import { closeDb, createDb, type Db } from './client.js';
 import { loadRootEnv } from './env.js';
+import { SEED_MARKETS } from './seed-markets.js';
 import { clockTimestamp } from './tx-helpers.js';
 import {
   account,
@@ -30,7 +25,6 @@ import {
   chargePackages,
   marketEvents,
   markets,
-  priceTicks,
   profiles,
   user,
 } from './schema/index.js';
@@ -128,12 +122,15 @@ async function seedCategories(db: Db): Promise<void> {
 
 /**
  * Starting charge packages (owner decision 2026-09-04): 4,900원 for 5,000P, and the discount
- * grows with the size of the package. Admins edit these at runtime, so the seed only fills a
- * table no admin has ever managed and never overwrites what an admin has changed — which also
- * means that once a developer has touched packages through the admin screen, `db:seed` will
- * not put the default ladder back (buddha_app cannot delete the admin_actions trace, migration
- * 0001): recreate them in the admin screen, truncate admin_actions as buddha_migrate, or start
- * from an empty database (`docker compose down -v`).
+ * grows with the size of the package. Inserted off sale (`is_active = false`): paid charging is
+ * not offered at launch (D9, #112), so the ladder waits for an admin to put a package on sale.
+ *
+ * Admins edit these at runtime, so the seed only fills a table no admin has ever managed and
+ * never overwrites what an admin has changed — which also means that once a developer has
+ * touched packages through the admin screen, `db:seed` will not put the default ladder back
+ * (buddha_app cannot delete the admin_actions trace, migration 0001): recreate them in the
+ * admin screen, truncate admin_actions as buddha_migrate, or start from an empty database
+ * (`docker compose down -v`).
  */
 const CHARGE_PACKAGES = [
   { amountP: 5_000n, priceKrw: 4_900, sortOrder: 10 }, // 2%
@@ -155,13 +152,11 @@ async function lockSeed(tx: Pick<Db, 'execute'>): Promise<void> {
 }
 
 /**
- * The database clock, read AFTER `lockSeed` — the instant rule every market write follows
- * (ADR-0027; `clockTimestamp` in tx-helpers.ts, which the API and the worker share since M5).
- * The seed runner and Postgres are two machines: a Windows host and a Docker VM, most
- * obviously. A runner that is ahead writes an `open_at` in the future and an open tick that
- * sorts AFTER the first trades' ticks, so `/markets/:id/ticks` draws the initial probability as
- * a reset partway along the chart; a runner that is behind writes `open_at` earlier than the
- * same row's `created_at`.
+ * The database clock (ADR-0027; `clockTimestamp` in tx-helpers.ts, which the API and the worker
+ * share since M5): what the staleness report compares close times against. The seed runner and
+ * Postgres are two machines — a Windows host and a Docker VM, most obviously — and every market
+ * instant the seed leaves behind comes from the database (column defaults), so the report must
+ * judge them on the same clock.
  */
 async function dbNow(tx: Pick<Db, 'execute'>): Promise<Date> {
   try {
@@ -187,12 +182,14 @@ async function seedChargePackages(db: Db): Promise<void> {
       .where(eq(adminActions.targetType, 'charge_package'))
       .limit(1);
     if (managed) return 'managed';
-    await tx.insert(chargePackages).values(CHARGE_PACKAGES.map((row) => ({ ...row })));
+    await tx
+      .insert(chargePackages)
+      .values(CHARGE_PACKAGES.map((row) => ({ ...row, isActive: false })));
     return 'inserted';
   });
   console.log(
     outcome === 'inserted'
-      ? `[db:seed] charge packages: ${String(CHARGE_PACKAGES.length)} inserted`
+      ? `[db:seed] charge packages: ${String(CHARGE_PACKAGES.length)} inserted, off sale`
       : outcome === 'managed'
         ? '[db:seed] charge packages: emptied by an admin, left untouched'
         : '[db:seed] charge packages: already configured, left untouched',
@@ -228,7 +225,7 @@ async function pickNickname(tx: Pick<Db, 'select'>, ownUserId: string): Promise<
  *
  * Re-running never resets an existing password; it only guarantees that the user exists, is
  * verified, has a credential account and has role 'admin'. Returns the admin's user id, the
- * `created_by` / actor of the seed markets.
+ * `created_by` and event actor of the seed markets.
  */
 async function seedAdmin(db: Db, input: AdminInput): Promise<string> {
   // better-auth lower-cases the email on sign-up and sign-in; match it here.
@@ -329,222 +326,6 @@ async function seedAdmin(db: Db, input: AdminInput): Promise<string> {
   });
 }
 
-interface SeedMarket {
-  /** Almost always a leaf: a card's header names it, and the parent lists it too. */
-  category: AnyCategorySlug;
-  slug: string;
-  title: string;
-  description: string;
-  rules: string;
-  resolutionSource: string;
-  /** Initial YES probability in basis points. */
-  initialProbBp: number;
-  /** LMSR liquidity parameter b. */
-  liquidityB: number;
-  /**
-   * `close_at` as an ISO-8601 instant (UTC; the KST wall-clock time is in the entry's comment).
-   * Absolute, never relative to the seed time: each rule names an absolute cutoff, and trading
-   * has to stop before the outcome is public, so a first seed that runs late must not open a
-   * market past its own event (the slug is the idempotency key, so only the first seed counts).
-   */
-  closeAt: string;
-}
-
-/**
- * PLAN 13 M3: 14 open markets, 2-3 per top-level category (12 in M3, plus 주택 and 일자리 with
- * the second level), in the shape of Appendix B — every one with
- * rules that state the criterion, its boundary and the "no announcement → 아니오" clause, plus
- * a resolution source. Never sports or elections (PLAN 0.2). The slug is the idempotency key
- * of the seed: a market whose slug exists is left exactly as it is, copy included — an admin
- * may have edited it, and the seed never overwrites (Q-M3: copy refresh cadence).
- */
-const SEED_MARKETS: readonly SeedMarket[] = [
-  {
-    category: 'rates',
-    slug: 'bok-october-rate-cut-2026',
-    title: '10월 한국은행 금융통화위원회에서 기준금리가 인하될까?',
-    description: '한국은행 금융통화위원회의 10월 통화정책방향 결정회의 결과를 예측합니다.',
-    rules:
-      "2026년 10월 정례 통화정책방향 결정회의에서 한국은행 기준금리가 직전 결정 대비 인하되면 '예'로 정산합니다. 동결이나 인상은 '아니오'입니다. 10월 중 결정회의가 열리지 않거나 2026년 10월 31일(KST)까지 결과가 발표되지 않으면 '아니오'로 정산합니다.",
-    resolutionSource: '한국은행 보도자료(통화정책방향) https://www.bok.or.kr',
-    initialProbBp: 3500,
-    liquidityB: 1000,
-    // 2026-10-21 23:59:59 KST: the October MPC meeting is on 2026-10-22 (BOK 2026 schedule).
-    closeAt: '2026-10-21T14:59:59Z',
-  },
-  {
-    category: 'prices',
-    slug: 'cpi-september-2026-above-2pct',
-    title: '9월 소비자물가 상승률(전년 동월 대비)이 2.0% 이상으로 발표될까?',
-    description: '통계청이 발표하는 2026년 9월 소비자물가 동향을 예측합니다.',
-    rules:
-      "통계청 '2026년 9월 소비자물가동향'의 소비자물가지수 전년동월비 상승률이 2.0% 이상이면 '예'로 정산합니다. 1.9% 이하는 '아니오'입니다. 2026년 10월 31일(KST)까지 공식 발표가 없으면 '아니오'로 정산합니다. 이후 정정치는 반영하지 않습니다.",
-    resolutionSource: '통계청 소비자물가동향 보도자료 https://kostat.go.kr',
-    initialProbBp: 5500,
-    liquidityB: 800,
-    // 2026-09-30 23:59:59 KST: the September CPI release lands in the first days of October.
-    closeAt: '2026-09-30T14:59:59Z',
-  },
-  {
-    category: 'fx',
-    slug: 'krw-usd-yearend-2026-above-1400',
-    title: '올해 마지막 거래일 원/달러 환율 종가가 1,400원 이상일까?',
-    description: '2026년 서울외환시장 마지막 거래일의 원/달러 환율 종가를 예측합니다.',
-    rules:
-      "2026년 서울외환시장 마지막 거래일 원/달러 환율 종가(15:30 기준 종가, 매매기준율 아님)가 1,400.0원 이상이면 '예'로 정산합니다. 1,399.9원 이하는 '아니오'입니다. 종가가 확인되지 않으면 서울외국환중개 고시 종가로 판정하고, 그마저 없으면 '아니오'로 정산합니다.",
-    resolutionSource: '서울외국환중개 환율 고시 https://www.smbs.biz',
-    initialProbBp: 5000,
-    liquidityB: 1500,
-    // 2026-12-29 23:59:59 KST: 2026-12-31 is the year-end market holiday, so the last trading
-    // day is 2026-12-30 and trading here stops before it opens.
-    closeAt: '2026-12-29T14:59:59Z',
-  },
-  {
-    category: 'housing',
-    slug: 'seoul-apartment-price-november-2026-up',
-    title: '11월 서울 아파트 매매가격지수가 전월 대비 상승할까?',
-    description:
-      '한국부동산원이 발표하는 2026년 11월 전국주택가격동향의 서울 아파트 매매가격지수를 예측합니다.',
-    rules:
-      "한국부동산원 '2026년 11월 전국주택가격동향조사'에서 서울 아파트 매매가격지수의 전월 대비 변동률이 0.00%를 초과하면 '예'로 정산합니다. 0.00% 이하(보합·하락)는 '아니오'입니다. 2026년 12월 31일(KST)까지 공식 발표가 없으면 '아니오'로 정산합니다. 이후 정정치는 반영하지 않습니다.",
-    resolutionSource: '한국부동산원 전국주택가격동향조사 https://www.reb.or.kr',
-    initialProbBp: 6000,
-    liquidityB: 1000,
-    // 2026-11-30 23:59:59 KST: the November survey is published in mid-December.
-    closeAt: '2026-11-30T14:59:59Z',
-  },
-  {
-    category: 'jobs',
-    slug: 'unemployment-october-2026-below-3pct',
-    title: '10월 실업률(계절조정)이 3.0% 미만으로 발표될까?',
-    description: '통계청이 발표하는 2026년 10월 고용동향의 계절조정 실업률을 예측합니다.',
-    rules:
-      "통계청 '2026년 10월 고용동향'의 계절조정 실업률이 3.0% 미만이면 '예'로 정산합니다. 3.0% 이상은 '아니오'입니다. 2026년 11월 30일(KST)까지 공식 발표가 없으면 '아니오'로 정산합니다. 이후 정정치는 반영하지 않습니다.",
-    resolutionSource: '통계청 고용동향 보도자료 https://kostat.go.kr',
-    initialProbBp: 4500,
-    liquidityB: 800,
-    // 2026-10-31 23:59:59 KST: the October release lands in the second week of November.
-    closeAt: '2026-10-31T14:59:59Z',
-  },
-  {
-    category: 'rain',
-    slug: 'seoul-first-snow-before-nov-20-2026',
-    title: '서울의 올해 첫눈이 11월 20일 이전에 관측될까?',
-    description: '기상청 서울 관측소 기준 올해 첫눈 관측일을 예측합니다.',
-    rules:
-      "기상청이 발표하는 2026년 서울(종로구 송월동 관측소) 첫눈 관측일이 11월 19일 이전(19일 포함)이면 '예'로 정산합니다. 11월 20일 0시(KST)까지 첫눈 관측 발표가 없으면 '아니오'로 정산합니다. 진눈깨비도 기상청이 첫눈으로 발표하면 인정합니다.",
-    resolutionSource: '기상청 보도자료·기상자료개방포털 https://data.kma.go.kr',
-    initialProbBp: 3000,
-    liquidityB: 1000,
-    // 2026-11-20 00:00 KST: the rule's own cutoff.
-    closeAt: '2026-11-19T15:00:00Z',
-  },
-  {
-    category: 'rain',
-    slug: 'seoul-october-2026-rain-above-50mm',
-    title: '10월 서울 월 강수량이 50mm를 넘을까?',
-    description: '기상청 서울 관측소의 2026년 10월 월 강수량을 예측합니다.',
-    rules:
-      "기상자료개방포털의 서울(108) 관측소 2026년 10월 월합계 강수량이 50.0mm를 초과하면 '예'로 정산합니다. 정확히 50.0mm 이하는 '아니오'입니다. 11월 15일까지 월자료가 공개되지 않으면 일자료 합계로 판정하고, 그마저 없으면 '아니오'로 정산합니다.",
-    resolutionSource: '기상자료개방포털 월자료 https://data.kma.go.kr',
-    initialProbBp: 6000,
-    liquidityB: 800,
-    // 2026-10-31 23:59:59 KST: end of the month being measured.
-    closeAt: '2026-10-31T14:59:59Z',
-  },
-  {
-    category: 'temperature',
-    slug: 'seoul-november-2026-below-minus-5',
-    title: '11월 중 서울 일 최저기온이 영하 5도 이하로 내려가는 날이 있을까?',
-    description: '2026년 11월 서울의 일 최저기온을 예측합니다.',
-    rules:
-      "기상자료개방포털의 서울(108) 관측소 2026년 11월 1일~30일 일 최저기온 중 영하 5.0℃ 이하인 날이 하루라도 있으면 '예'로 정산합니다. 모든 날이 영하 4.9℃ 이상이면 '아니오'입니다. 자료가 공개되지 않으면 '아니오'로 정산합니다.",
-    resolutionSource: '기상자료개방포털 일자료 https://data.kma.go.kr',
-    initialProbBp: 4500,
-    liquidityB: 1000,
-    // 2026-11-30 23:59:59 KST: end of the month being measured.
-    closeAt: '2026-11-30T14:59:59Z',
-  },
-  {
-    category: 'devices',
-    slug: 'korea-telco-6g-trial-2026',
-    title: '연내 국내 통신 3사 중 한 곳이라도 6G 시범 서비스 개시를 공식 발표할까?',
-    description: '국내 통신 3사의 6G 시범 서비스 발표 여부를 예측합니다.',
-    rules:
-      "2026년 12월 31일(KST)까지 SK텔레콤·KT·LG유플러스 중 한 곳이라도 자사 공식 뉴스룸 또는 보도자료로 일반 이용자 대상 '6G 시범 서비스' 개시를 발표하면 '예'로 정산합니다. 기술 시연, 연구 성과 발표, 표준화 참여 발표는 제외합니다. 발표가 없으면 '아니오'로 정산합니다.",
-    resolutionSource: '각사 공식 뉴스룸(SK텔레콤·KT·LG유플러스)',
-    initialProbBp: 2000,
-    liquidityB: 800,
-    // 2026-12-31 23:59:59 KST: the rule's own cutoff.
-    closeAt: '2026-12-31T14:59:59Z',
-  },
-  {
-    category: 'devices',
-    slug: 'samsung-trifold-korea-launch-2026',
-    title: '삼성전자가 연내 국내에 3단 접이식(트라이폴드) 스마트폰을 정식 출시할까?',
-    description: '삼성전자의 3단 접이식 스마트폰 국내 정식 출시 여부를 예측합니다.',
-    rules:
-      "2026년 12월 31일(KST)까지 삼성전자 뉴스룸이 3단 접이식(트라이폴드) 스마트폰의 국내 정식 판매 개시를 발표하면 '예'로 정산합니다. 사전 예약 개시, 해외 출시, 콘셉트 공개만으로는 '아니오'입니다. 발표가 없으면 '아니오'로 정산합니다.",
-    resolutionSource: '삼성전자 뉴스룸 https://news.samsung.com/kr',
-    initialProbBp: 4000,
-    liquidityB: 1000,
-    // 2026-12-31 23:59:59 KST: the rule's own cutoff.
-    closeAt: '2026-12-31T14:59:59Z',
-  },
-  {
-    category: 'movies',
-    slug: 'november-2026-korean-film-3m-in-2-weeks',
-    title: '11월 개봉 한국 영화 중 개봉 2주 안에 누적 관객 300만을 넘는 작품이 나올까?',
-    description: '2026년 11월 개봉 한국 영화의 초반 흥행을 예측합니다.',
-    rules:
-      "영화진흥위원회 통합전산망(KOBIS) 기준으로 2026년 11월 1일~30일에 국내 개봉한 한국 영화 중 개봉일을 포함한 14일 안에 누적 관객 300만 명 이상을 기록한 작품이 하나라도 있으면 '예'로 정산합니다. 해당 작품이 없으면 '아니오'입니다. 재개봉작은 제외합니다.",
-    resolutionSource: '영화진흥위원회 통합전산망 https://www.kobis.or.kr',
-    initialProbBp: 3500,
-    liquidityB: 1000,
-    // 2026-12-13 23:59:59 KST: day 14 of a film released on 2026-11-30, the last window.
-    closeAt: '2026-12-13T14:59:59Z',
-  },
-  {
-    category: 'music',
-    slug: 'melon-last-week-2026-domestic-no1',
-    title: '12월 마지막 주 멜론 주간 차트 1위가 국내 아티스트의 곡일까?',
-    description: '2026년 마지막 멜론 주간 차트 1위 곡을 예측합니다.',
-    rules:
-      "2026년 12월에 시작해 12월 안에 끝나는 마지막 멜론 주간 차트(월요일~일요일)에서 1위 곡의 아티스트가 국내 소속사 아티스트이면 '예'로 정산합니다. 국내외 아티스트 합작곡은 대표 아티스트 기준으로 판정합니다. 차트가 발표되지 않으면 '아니오'로 정산합니다.",
-    resolutionSource: '멜론 차트 https://www.melon.com/chart',
-    initialProbBp: 8000,
-    liquidityB: 800,
-    // 2026-12-27 23:59:59 KST: the last Mon-Sun chart week inside December is 12-21..12-27.
-    closeAt: '2026-12-27T14:59:59Z',
-  },
-  {
-    category: 'exhibitions',
-    slug: 'national-museum-2026-visitors-above-4m',
-    title: '국립중앙박물관의 2026년 연간 관람객이 400만 명을 넘을까?',
-    description: '국립중앙박물관의 2026년 연간 관람객 수를 예측합니다.',
-    rules:
-      "국립중앙박물관이 공식 발표하는 2026년 연간 관람객 수(본관 기준, 특별전 포함)가 400만 명을 초과하면 '예'로 정산합니다. 2027년 1월 31일까지 공식 발표가 없으면 '아니오'로 정산합니다.",
-    resolutionSource: '국립중앙박물관 보도자료 https://www.museum.go.kr',
-    initialProbBp: 5000,
-    liquidityB: 1000,
-    // 2026-12-31 23:59:59 KST: end of the year being counted; the announcement comes later.
-    closeAt: '2026-12-31T14:59:59Z',
-  },
-  {
-    category: 'books',
-    slug: 'korea-new-books-2026-more-than-2025',
-    title: '2026년 국내 신간 발행 종수가 2025년보다 많을까?',
-    description: '2026년 국내 출판 신간 발행 종수를 예측합니다.',
-    rules:
-      "대한출판문화협회가 발표하는 2026년 신간 발행 종수(납본 기준)가 같은 기준의 2025년 종수보다 많으면 '예'로 정산합니다. 같거나 적으면 '아니오'입니다. 2027년 3월 31일까지 발표가 없으면 '아니오'로 정산합니다.",
-    resolutionSource: '대한출판문화협회 출판통계 https://www.kpa21.or.kr',
-    initialProbBp: 4500,
-    liquidityB: 800,
-    // 2026-12-31 23:59:59 KST: end of the year being counted; the announcement comes later.
-    closeAt: '2026-12-31T14:59:59Z',
-  },
-];
-
 /**
  * How close a seeded market's cutoff may come before `db:seed` starts asking for fresh copy.
  * Two weeks: long enough that a warning is actionable (new copy needs an owner decision on the
@@ -554,16 +335,17 @@ const SEED_CLOSE_SOON_DAYS = 14;
 const SEED_CLOSE_SOON_MS = SEED_CLOSE_SOON_DAYS * 24 * 60 * 60 * 1_000;
 
 /**
- * Inserts the seed markets, one transaction per market under the seed lock, exactly as the
- * admin create + open path writes them (M3 design 3.4): the market row, its 'open' price tick
- * and the 'created' / 'opened' events, all in one commit so a crash never leaves a market
- * without its history. A market whose slug exists is skipped, never updated. Runs after
- * `seedAdmin`: the admin is `created_by` and the actor of both events.
+ * Inserts the seed markets as drafts, one transaction per market under the seed lock: the market
+ * row and its 'created' event, as the admin create path writes them (M3 design 3.4), so a crash
+ * never leaves a market without its history. Drafts, because a market opens only once another
+ * reviewer has checked its rules (N03 §2; #125) — the seed never opens one. No price and no tick:
+ * a market has none before its first fill (N02 §5). A market whose slug exists is skipped, never
+ * updated. Runs after `seedAdmin`: the admin is `created_by` and the actor of the event.
  *
  * One deliberate divergence from that path: `close_at` is an absolute instant (ADR-0027), and
- * `assertFutureCloseAt` refuses a past one on both admin routes while this writes it anyway,
- * open, so a late-run seed still gets its 14 markets. Such a market refuses every trade until
- * someone closes it; the loop below says so on every run.
+ * `assertFutureCloseAt` refuses a past one on create while this writes it anyway, so a late-run
+ * seed still gets its 14 drafts. Opening such a draft is refused until an admin moves its close
+ * time; the loop below says so on every run.
  */
 async function seedMarkets(db: Db, adminId: string): Promise<void> {
   const categoryRows = await db
@@ -571,15 +353,14 @@ async function seedMarkets(db: Db, adminId: string): Promise<void> {
     .from(categories);
   const categoryIds = new Map(categoryRows.map((row) => [row.slug, row.id]));
 
-  // One read for the staleness report below. The rows' own instants still come from each
-  // transaction's post-lock read (A-M3-30); this one only decides what to warn about, and a
-  // re-run that inserts nothing spends this single round trip rather than one per market.
+  // One read for the staleness report below; a re-run that inserts nothing spends this single
+  // round trip rather than one per market.
   const reportedAt = await dbNow(db);
 
   let inserted = 0;
   for (const seed of SEED_MARKETS) {
     // `seedCategories` ran first; a missing slug means the category list and the market list
-    // disagree, which is a bug in this file, not a state to seed around.
+    // disagree, which is a bug in this package, not a state to seed around.
     const categoryId = categoryIds.get(seed.category);
     if (categoryId === undefined) {
       throw new Error(`[db:seed] market ${seed.slug}: category "${seed.category}" is not seeded`);
@@ -591,19 +372,15 @@ async function seedMarkets(db: Db, adminId: string): Promise<void> {
     const outcome = await db.transaction(async (tx) => {
       await lockSeed(tx);
       const [existing] = await tx
-        .select({ id: markets.id, closeAt: markets.closeAt })
+        .select({ id: markets.id, status: markets.status, closeAt: markets.closeAt })
         .from(markets)
         .where(eq(markets.slug, seed.slug));
       // Left exactly as it is, status included: a re-seed never rewrites a market an admin
-      // has been working with. Its close time is read back so the report below judges the
-      // row that exists, not the literal in this file.
-      if (existing) return { inserted: false, closeAt: existing.closeAt };
+      // has been working with. Its status and close time are read back so the report below
+      // judges the row that exists, not the literal in this file.
+      if (existing) return { inserted: false, status: existing.status, closeAt: existing.closeAt };
 
-      // After the slug check, not before it: a re-run that inserts nothing then spends no
-      // round trip on a clock it will not use.
-      const now = await dbNow(tx);
-      const p0 = seed.initialProbBp / 10_000;
-      const state = initState(p0, seed.liquidityB);
+      // `created_at`, `last_price` (NULL: no fill yet) and the statistics are column defaults.
       const [market] = await tx
         .insert(markets)
         .values({
@@ -613,42 +390,29 @@ async function seedMarkets(db: Db, adminId: string): Promise<void> {
           rules: seed.rules,
           resolutionSource: seed.resolutionSource,
           categoryId,
-          mechanism: 'lmsr',
-          status: 'open',
-          liquidityB: seed.liquidityB.toFixed(6),
-          qYes: serializeQuantity(state.qYes),
-          qNo: serializeQuantity(state.qNo),
-          initialProbBp: seed.initialProbBp,
-          reserveP: maxLossP(p0, seed.liquidityB),
-          lastPrice: priceOf(state),
-          openAt: now,
+          status: 'draft',
+          openAt: null,
           closeAt,
           createdBy: adminId,
         })
-        .returning({ id: markets.id });
+        .returning({ id: markets.id, status: markets.status });
       if (!market) throw new Error(`[db:seed] market ${seed.slug}: insert returned no row`);
-      await tx.insert(priceTicks).values({
-        marketId: market.id,
-        ts: now,
-        pYesBp: probabilityBp(state),
-        trigger: 'open',
-      });
-      // Two statements, so the bigserial ids keep 'created' before 'opened'.
-      const payload = { source: 'seed' };
-      await tx
+      const [created] = await tx
         .insert(marketEvents)
-        .values({ marketId: market.id, type: 'created', actorId: adminId, payload });
-      const [opened] = await tx
-        .insert(marketEvents)
-        .values({ marketId: market.id, type: 'opened', actorId: adminId, payload })
+        .values({
+          marketId: market.id,
+          type: 'created',
+          actorId: adminId,
+          payload: { source: 'seed' },
+        })
         .returning({ id: marketEvents.id });
-      // The status key every transition writes (M5): the 'opened' event is what put the row in
-      // `open`, so a `market:status` a client compares this row against orders after it.
+      // The status key every transition writes (M5): the 'created' event is what put the row in
+      // `draft`, so a `market:status` a client compares this row against orders after it.
       await tx
         .update(markets)
-        .set({ statusEventId: opened?.id ?? null })
+        .set({ statusEventId: created?.id ?? null })
         .where(eq(markets.id, market.id));
-      return { inserted: true, closeAt };
+      return { inserted: true, status: market.status, closeAt };
     });
     if (outcome.inserted) inserted++;
     console.log(
@@ -657,23 +421,29 @@ async function seedMarkets(db: Db, adminId: string): Promise<void> {
     // Every run, not only the one that inserts: the cutoffs are absolute, so an environment
     // seeded before one passes reaches the same state without the seed doing anything — and
     // that is the larger half. Against the row's own close time, so an admin who pushed it
-    // forward (the copy refresh Q-M3-4 describes) is not nagged about a market they fixed.
+    // forward (the copy refresh Q-M3-4 describes) is not nagged about a market they fixed. Only
+    // a draft or an open market has a close time still ahead of it to care about.
+    if (outcome.status !== 'draft' && outcome.status !== 'open') continue;
     const remainingMs = outcome.closeAt.getTime() - reportedAt.getTime();
-    if (remainingMs <= 0) {
+    if (remainingMs <= 0 && outcome.status === 'draft') {
       // Seeded as written rather than skipped: skipping would make the fixture's size a
       // function of the calendar (every cutoff is in 2026, so a fresh seed would insert
-      // nothing at all from 2027). Such a market refuses every quote and trade with
-      // MARKET_CLOSED until the worker's per-minute `market.close` scan closes it (PLAN 5.5,
-      // M5) — or an admin does from 관리자 → 시장 상세 → 마감. The real fix is fresh copy
-      // (Q-M3-4), under a new slug.
+      // nothing at all from 2027). Opening it is refused until an admin moves the close time
+      // (관리자 → 시장 상세 → 수정). The real fix is fresh copy (Q-M3-4), under a new slug.
+      console.warn(
+        `[db:seed] market ${seed.slug}: closeAt ${seed.closeAt} is already past — it cannot be opened until its close time is moved forward (관리자 → 시장 상세 → 수정); refresh the seed copy`,
+      );
+    } else if (remainingMs <= 0) {
+      // An admin opened the draft and its cutoff has since passed: the worker's per-minute
+      // `market.close` scan closes it (PLAN 5.5, M5), or an admin does.
       console.warn(
         `[db:seed] market ${seed.slug}: closeAt ${seed.closeAt} is already past — the worker's market.close scan will close it within a minute (or 관리자 → 시장 상세 → 마감); refresh the seed copy`,
       );
     } else if (remainingMs <= SEED_CLOSE_SOON_MS) {
-      // The M6 half of the same mechanism. The warning above only fires once the fixture is
-      // already broken — a developer who clones the repo that week gets a home page of closed
-      // markets and no idea it was foreseeable. This one fires while it can still be acted on,
-      // and it is the same signal at a different distance, so refreshing the copy silences both.
+      // The M6 half of the same mechanism. The warnings above only fire once the fixture is
+      // already broken — a developer who clones the repo that week gets markets that cannot
+      // open and no idea it was foreseeable. This one fires while it can still be acted on,
+      // and it is the same signal at a different distance, so refreshing the copy silences all.
       console.warn(
         `[db:seed] market ${seed.slug}: closeAt ${seed.closeAt} is within ${String(
           SEED_CLOSE_SOON_DAYS,

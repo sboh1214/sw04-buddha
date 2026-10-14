@@ -3,7 +3,9 @@
 import {
   Alert,
   Badge,
+  Box,
   Button,
+  Card,
   DataList,
   Grid,
   HStack,
@@ -12,7 +14,7 @@ import {
   Tag,
   Text,
 } from '@chakra-ui/react';
-import { type MarketStatus, type Outcome, formatP, parsePAmount } from '@buddha/shared';
+import { type MarketStatus, formatP, parsePAmount } from '@buddha/shared';
 import NextLink from 'next/link';
 import { type ReactNode } from 'react';
 import { CountdownBadge } from '@/components/market/countdown-badge';
@@ -26,8 +28,8 @@ import { useCategories, useMarket, useMarketTicks } from '@/hooks/use-markets';
 import { type Market } from '@/lib/api';
 import { CATEGORY_TRAIL_SEPARATOR, categoryBreadcrumb } from '@/lib/category-label';
 import { MARKET_STATUS_LABEL, MARKET_STATUS_PALETTE } from '@/lib/market-admin';
+import { HEADER_HEIGHT_PX } from '@/lib/nav';
 import { type RecentMove, recentMove } from '@/lib/ticks';
-import { TradePanel } from './trade-panel';
 
 /**
  * The live half of 시장 상세: everything that a `market:tick` or a `market:status` may change
@@ -36,19 +38,18 @@ import { TradePanel } from './trade-panel';
  * It takes an id, not a row. The page seeded `['market', id]` and `['ticks', id, '1D']` into
  * the cache it dehydrated, so the first client render reads the server's own values out of
  * that cache — no second fetch, no skeleton beside hydrated content — and every later value
- * arrives through the same key, whether it comes from the socket, from this tab's own trade
- * answer or from a refetch. Nothing on this screen holds a copy of the row.
+ * arrives through the same key, whether it comes from the socket or from a refetch. Nothing on
+ * this screen holds a copy of the row.
  *
  * `useMarketSocket([marketId])` is the whole of the realtime wiring here: the provider owns
  * the connection and writes the caches through the reducers in `lib/market-live.ts`, so a
- * status transition moves the badge, the notice and the trade panel below without one line of
- * event handling in this file.
+ * status transition moves the badge and the notice below without one line of event handling in
+ * this file.
  *
- * Layout is the AC 5 constraint. The trade panel is mounted ONCE as the grid's right column;
- * it renders its own sticky card at `md` and up and a `position: fixed` 예/아니오 bar below
- * that, which is why the page container carries a bottom padding and why nothing between it
- * and this grid may create a containing block (transform/filter/contain/will-change would pull
- * the fixed bar back inside the column).
+ * The grid's right column is the order area. There is no way to trade until the CLOB order
+ * panel lands (#119, #66; D13), so an open market's holds the 거래 준비 중 notice (owner decision
+ * #125 (a)) where the direct-AMM trade panel used to be. Any other status leaves the column
+ * empty: the status notice on the left already says what the market is (ADR-0048).
  */
 
 /**
@@ -79,19 +80,11 @@ export interface MarketDetailProps {
   /** The row's canonical lower-cased uuid — the key the page seeded and the socket writes. */
   marketId: string;
   /**
-   * The instant the countdown AND the trade panel's 마감 gate measure their first render against:
-   * the API's own window end, passed down from the page. Both, because they read one close time
-   * and must not read it off two different machines' clocks — the panel's own fallback, the
-   * `['market', id]` cache stamp, is written by the Next host on the seeded load and by the
-   * browser on a revisit. Never read from the clock here — a `Date.now()` in a render body is a
-   * different string on the server and in the browser's first render.
+   * The instant the countdown measures its first render against: the API's own window end,
+   * passed down from the page. Never read from the clock here — a `Date.now()` in a render body
+   * is a different string on the server and in the browser's first render.
    */
   now?: number;
-  /**
-   * The side the trade panel opens on, from the URL's `?outcome=` — a card's pill asks for the
-   * outcome it names (ADR-0041). Absent, the panel starts on 예 as it always has.
-   */
-  initialOutcome?: Outcome;
   /**
    * 정산 기준, rendered by the SERVER component and passed through. It sits in the left column
    * for reading order, but it is never rendered by this file, so no branch of the ladder below
@@ -100,7 +93,7 @@ export interface MarketDetailProps {
   children: ReactNode;
 }
 
-export function MarketDetail({ marketId, now, initialOutcome, children }: MarketDetailProps) {
+export function MarketDetail({ marketId, now, children }: MarketDetailProps) {
   useMarketSocket([marketId]);
   const market = useMarket(marketId);
   // The same seeded series the chart draws (one key, one query, no second request). It is read
@@ -115,7 +108,7 @@ export function MarketDetail({ marketId, now, initialOutcome, children }: Market
       data-testid="market-detail"
     >
       {/* `minW="0"` so a long question or a wide table cannot blow the column out past the
-          grid track and take the sticky panel off screen with it. */}
+          grid track and take the order area off screen with it. */}
       <Stack gap="6" minW="0">
         {data === undefined ? (
           market.isLoadingError ? (
@@ -156,11 +149,11 @@ export function MarketDetail({ marketId, now, initialOutcome, children }: Market
             <MarketHeader market={data} now={now} move={recentMove(series.data?.points)} />
             <StatusNotice market={data} />
             {/* `currentBp` and `currentTradeCount` come from ONE read of the row, so the
-                chart can never draw one trade's probability under another's claim. */}
+                chart can never draw one fill's price under another's claim. */}
             <ProbabilityChart
               marketId={marketId}
               label={data.title}
-              currentBp={data.pYesBp}
+              currentBp={data.lastPrice === null ? null : data.lastPrice * 100}
               currentTradeCount={data.tradeCount}
             />
           </Stack>
@@ -169,22 +162,50 @@ export function MarketDetail({ marketId, now, initialOutcome, children }: Market
         {children}
         {/* Both readings follow the LIVE row rather than the positions list's own copy of it:
             `status` says which of the two position lists this account's rows moved to — a
-            voided market's holder is in 정산 이력, and asking the open list would tell them
+            settled market's holder is in 정산 이력, and asking the open list would tell them
             they never participated — and `lastPrice` is what 현재가 and 평가손익 are marked
-            to, so the card cannot disagree with the probability above it. `undefined` while
+            to, so the card cannot disagree with the price above it. `undefined` while
             the row is unknown, which is each prop's documented default; the page seeds the
             cache before the first client render, so that is a fallback and not the path. */}
         <MyPosition marketId={marketId} status={data?.status} lastPrice={data?.lastPrice} />
         <RecentFills marketId={marketId} />
       </Stack>
 
-      {/* Mounted ONCE. It emits three siblings — the sticky card that is this grid item, the
-          fixed mobile bar and its portalled sheet — and the last two are out of flow, so
-          neither claims a grid track. */}
-      {data === undefined ? null : (
-        <TradePanel market={data} now={now} initialOutcome={initialOutcome} />
-      )}
+      {/* Read off the live row, so a `market:status` that closes the market takes the area
+          away with it. From `md` up the right track stays either way: the left column keeps its
+          width and nothing on it reflows when the market closes under a reader. */}
+      {data?.status === 'open' ? <OrderArea /> : null}
     </Grid>
+  );
+}
+
+/**
+ * 주문 영역 of an open market, while there is no order panel: one line, 거래 준비 중, with no
+ * reason or date beside it (owner decisions #125, ADR-0048). Sticky under the two-row header from
+ * `md` up, where it is the right column; below that it is an ordinary block at the end of the
+ * page, and the tab bar keeps the bottom of the viewport.
+ */
+function OrderArea() {
+  return (
+    <Box
+      position={{ base: 'static', md: 'sticky' }}
+      top={`calc(${String(HEADER_HEIGHT_PX)}px + 16px)`}
+      alignSelf="start"
+      data-testid="order-area"
+    >
+      <Card.Root>
+        <Card.Body>
+          <Alert.Root status="info" role="status">
+            <Alert.Indicator />
+            <Alert.Content>
+              <Alert.Description data-testid="order-area-notice">
+                {copy.tradePreparing}
+              </Alert.Description>
+            </Alert.Content>
+          </Alert.Root>
+        </Card.Body>
+      </Card.Root>
+    </Box>
   );
 }
 
@@ -196,8 +217,7 @@ export function MarketDetail({ marketId, now, initialOutcome, children }: Market
  * `market:status` visibly moves. The countdown is rendered only while the market is open: a
  * settled market has nothing to count down to, and its badge already says so. The two DO
  * disagree for an open market whose close time has passed (진행 중 + 마감됨), and that is the
- * truth: the close job has not run yet, so the row is still `open` while trading is already
- * refused (A-M3-31) — the panel below says the same thing in its own words.
+ * truth: the close job has not run yet, so the row is still `open` (A-M3-31).
  *
  * The category tag writes the whole trail, 경제 › 주택, rather than the leaf alone (ADR-0041's
  * two-level tree): the row only carries the leaf's `{slug, nameKo}`, so the parent's name is
@@ -252,7 +272,6 @@ function MarketHeader({
 
       <ProbabilityDisplay
         lastPrice={market.lastPrice}
-        pYesBp={market.pYesBp}
         deltaPoints={move?.deltaPoints ?? null}
         moveId={move?.moveId}
       />

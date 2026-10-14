@@ -53,7 +53,6 @@ function tickEvent(marketId: string, tradeCount = 1): MarketTickEvent {
   return {
     type: 'market:tick',
     marketId,
-    pYesBp: 5200,
     lastPrice: 52,
     traderCount: 3,
     volumeP: '5125',

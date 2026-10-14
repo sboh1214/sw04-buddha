@@ -2860,87 +2860,6 @@
         ]
       }
     },
-    "/api/v1/quotes": {
-      "post": {
-        "operationId": "quote",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/QuoteBody"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "data": {
-                      "$ref": "#/components/schemas/QuoteResult"
-                    }
-                  },
-                  "required": [
-                    "data"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "VALIDATION_ERROR",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "NOT_FOUND",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "MARKET_NOT_OPEN | MARKET_CLOSED",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "RATE_LIMITED",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Price a buy or sell (mode shares) or the contracts a budget buys (mode spend, buy only)",
-        "tags": [
-          "markets"
-        ]
-      }
-    },
     "/api/v1/admin/markets": {
       "get": {
         "operationId": "adminListMarkets",
@@ -3150,7 +3069,7 @@
             "session": []
           }
         ],
-        "summary": "Create a draft market (LMSR initialised from initialProbBp and liquidityB)",
+        "summary": "Create a draft market (no price until its first fill)",
         "tags": [
           "admin"
         ]
@@ -3247,7 +3166,7 @@
             "session": []
           }
         ],
-        "summary": "One market with its LMSR state, exposure and event log",
+        "summary": "One market with its exposure, settlement steps and event log",
         "tags": [
           "admin"
         ]
@@ -3362,7 +3281,7 @@
             "session": []
           }
         ],
-        "summary": "Edit a draft (any field) or an open market (text, close time, category; liquidityB/initialProbBp/slug refused naming the field, blank rules refused with RULES_REQUIRED); other statuses refuse naming status",
+        "summary": "Edit a draft (any field) or an open market (text, close time, category; slug refused naming the field, blank rules refused with RULES_REQUIRED); other statuses refuse naming status",
         "tags": [
           "admin"
         ]
@@ -3689,232 +3608,6 @@
         ]
       }
     },
-    "/api/v1/admin/markets/{id}/void": {
-      "post": {
-        "operationId": "adminVoidMarket",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/VoidMarketBody"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "data": {
-                      "$ref": "#/components/schemas/AdminMarket"
-                    }
-                  },
-                  "required": [
-                    "data"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "VALIDATION_ERROR",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "UNAUTHENTICATED",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "FORBIDDEN",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "NOT_FOUND",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "RATE_LIMITED",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "summary": "Void an open or closed market: every unsettled position is refunded its cost basis (MARKET_VOID_REFUND) and closed out",
-        "tags": [
-          "admin"
-        ]
-      }
-    },
-    "/api/v1/trades": {
-      "post": {
-        "operationId": "trade",
-        "parameters": [
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "description": "Client-generated key for this trade (PLAN 5.4). Re-sending it returns the first outcome (order and fill verbatim; balance, position and market current) instead of trading again. DUPLICATE_REQUEST (409, no details) answers a key re-used with different terms: the key is spent.",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128,
-              "pattern": "^[A-Za-z0-9_-]+$"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/TradeBody"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "data": {
-                      "$ref": "#/components/schemas/TradeResult"
-                    }
-                  },
-                  "required": [
-                    "data"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "VALIDATION_ERROR",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "UNAUTHENTICATED",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "FORBIDDEN",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "NOT_FOUND",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "MARKET_NOT_OPEN | MARKET_CLOSED | INSUFFICIENT_BALANCE | INSUFFICIENT_POSITION | PRICE_MOVED | DUPLICATE_REQUEST",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "RATE_LIMITED",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "summary": "Buy or sell contracts against the AMM at the current LMSR price. A buy carries maxCostP and a sell minProceedsP (PRICE_MOVED when the recomputed amount is past it).",
-        "tags": [
-          "trades"
-        ]
-      }
-    },
     "/api/v1/me/positions": {
       "get": {
         "operationId": "getMyPositions",
@@ -4190,9 +3883,7 @@
           "NOT_FOUND",
           "VALIDATION_ERROR",
           "MARKET_NOT_OPEN",
-          "MARKET_CLOSED",
           "INSUFFICIENT_BALANCE",
-          "INSUFFICIENT_POSITION",
           "PRICE_MOVED",
           "DUPLICATE_REQUEST",
           "RATE_LIMITED",
@@ -4711,7 +4402,6 @@
               "TRADE_SELL",
               "FEE",
               "SETTLEMENT_PAYOUT",
-              "MARKET_VOID_REFUND",
               "ADMIN_ADJUST",
               "BONUS",
               "PAYMENT_CANCEL",
@@ -5455,14 +5145,10 @@
             ]
           },
           "lastPrice": {
+            "nullable": true,
             "type": "integer",
             "minimum": 1,
             "maximum": 99
-          },
-          "pYesBp": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 10000
           },
           "volumeP": {
             "$ref": "#/components/schemas/PAmount"
@@ -5523,7 +5209,6 @@
           "imageUrl",
           "status",
           "lastPrice",
-          "pYesBp",
           "volumeP",
           "tradeCount",
           "traderCount",
@@ -5582,14 +5267,10 @@
             ]
           },
           "lastPrice": {
+            "nullable": true,
             "type": "integer",
             "minimum": 1,
             "maximum": 99
-          },
-          "pYesBp": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 10000
           },
           "volumeP": {
             "$ref": "#/components/schemas/PAmount"
@@ -5670,7 +5351,6 @@
           "imageUrl",
           "status",
           "lastPrice",
-          "pYesBp",
           "volumeP",
           "tradeCount",
           "traderCount",
@@ -5808,7 +5488,6 @@
             "type": "string",
             "enum": [
               "trade",
-              "open",
               "resolve"
             ]
           }
@@ -5852,95 +5531,6 @@
           "nameKo",
           "sortOrder",
           "parentId"
-        ],
-        "additionalProperties": false
-      },
-      "QuoteBody": {
-        "type": "object",
-        "properties": {
-          "marketId": {
-            "type": "string",
-            "format": "uuid",
-            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-          },
-          "outcome": {
-            "type": "string",
-            "enum": [
-              "YES",
-              "NO"
-            ]
-          },
-          "side": {
-            "type": "string",
-            "enum": [
-              "buy",
-              "sell"
-            ]
-          },
-          "mode": {
-            "type": "string",
-            "enum": [
-              "shares",
-              "spend"
-            ]
-          },
-          "value": {
-            "type": "string",
-            "maxLength": 16,
-            "pattern": "^(0|[1-9]\\d*)$"
-          }
-        },
-        "required": [
-          "marketId",
-          "outcome",
-          "side",
-          "mode",
-          "value"
-        ]
-      },
-      "QuoteResult": {
-        "type": "object",
-        "properties": {
-          "shares": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 9007199254740991
-          },
-          "amountP": {
-            "$ref": "#/components/schemas/PAmount"
-          },
-          "priceAvgBp": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 10000
-          },
-          "priceBeforeBp": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 10000
-          },
-          "priceAfterBp": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 10000
-          },
-          "maxPayoutP": {
-            "$ref": "#/components/schemas/PAmount"
-          },
-          "tradeCount": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 9007199254740991
-          }
-        },
-        "required": [
-          "shares",
-          "amountP",
-          "priceAvgBp",
-          "priceBeforeBp",
-          "priceAfterBp",
-          "maxPayoutP",
-          "tradeCount"
         ],
         "additionalProperties": false
       },
@@ -5990,14 +5580,10 @@
             ]
           },
           "lastPrice": {
+            "nullable": true,
             "type": "integer",
             "minimum": 1,
             "maximum": 99
-          },
-          "pYesBp": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 10000
           },
           "volumeP": {
             "$ref": "#/components/schemas/PAmount"
@@ -6049,7 +5635,6 @@
           "imageUrl",
           "status",
           "lastPrice",
-          "pYesBp",
           "volumeP",
           "tradeCount",
           "traderCount",
@@ -6107,14 +5692,10 @@
             ]
           },
           "lastPrice": {
+            "nullable": true,
             "type": "integer",
             "minimum": 1,
             "maximum": 99
-          },
-          "pYesBp": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 10000
           },
           "volumeP": {
             "$ref": "#/components/schemas/PAmount"
@@ -6186,23 +5767,6 @@
             "format": "date-time",
             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
           },
-          "liquidityB": {
-            "type": "string"
-          },
-          "qYes": {
-            "type": "string"
-          },
-          "qNo": {
-            "type": "string"
-          },
-          "initialProbBp": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 9999
-          },
-          "reserveP": {
-            "$ref": "#/components/schemas/PAmount"
-          },
           "createdBy": {
             "type": "string"
           },
@@ -6255,7 +5819,6 @@
           "imageUrl",
           "status",
           "lastPrice",
-          "pYesBp",
           "volumeP",
           "tradeCount",
           "traderCount",
@@ -6270,11 +5833,6 @@
           "resolvedAt",
           "settledAt",
           "voidedAt",
-          "liquidityB",
-          "qYes",
-          "qNo",
-          "initialProbBp",
-          "reserveP",
           "createdBy",
           "updatedAt",
           "netCollectedP",
@@ -6419,16 +5977,6 @@
             "format": "date-time",
             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
           },
-          "initialProbBp": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 9999
-          },
-          "liquidityB": {
-            "type": "number",
-            "minimum": 1,
-            "maximum": 1000000
-          },
           "slug": {
             "type": "string",
             "pattern": "^[a-z0-9가-힣-]{3,80}$"
@@ -6438,9 +5986,7 @@
           "title",
           "rules",
           "categoryId",
-          "closeAt",
-          "initialProbBp",
-          "liquidityB"
+          "closeAt"
         ]
       },
       "UpdateMarketBody": {
@@ -6482,16 +6028,6 @@
             "format": "date-time",
             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
           },
-          "initialProbBp": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 9999
-          },
-          "liquidityB": {
-            "type": "number",
-            "minimum": 1,
-            "maximum": 1000000
-          },
           "slug": {
             "type": "string",
             "pattern": "^[a-z0-9가-힣-]{3,80}$"
@@ -6524,26 +6060,44 @@
           "result"
         ]
       },
-      "VoidMarketBody": {
-        "type": "object",
-        "properties": {
-          "reason": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 500
-          }
-        },
-        "required": [
-          "reason"
-        ]
-      },
-      "TradeBody": {
+      "Position": {
         "type": "object",
         "properties": {
           "marketId": {
             "type": "string",
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "marketSlug": {
+            "type": "string"
+          },
+          "marketTitle": {
+            "type": "string"
+          },
+          "marketStatus": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "open",
+              "closed",
+              "resolved",
+              "settled",
+              "voided"
+            ]
+          },
+          "marketLastPrice": {
+            "nullable": true,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 99
+          },
+          "resolvedResult": {
+            "nullable": true,
+            "type": "string",
+            "enum": [
+              "YES",
+              "NO"
+            ]
           },
           "outcome": {
             "type": "string",
@@ -6552,73 +6106,45 @@
               "NO"
             ]
           },
-          "side": {
-            "type": "string",
-            "enum": [
-              "buy",
-              "sell"
-            ]
+          "qty": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
           },
-          "shares": {
+          "costBasisP": {
+            "$ref": "#/components/schemas/PAmount"
+          },
+          "realizedPnlP": {
+            "$ref": "#/components/schemas/PAmount"
+          },
+          "settled": {
+            "type": "boolean"
+          },
+          "version": {
             "type": "integer",
             "minimum": 1,
-            "maximum": 1000000
+            "maximum": 9007199254740991
           },
-          "maxCostP": {
-            "maxLength": 17,
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/PAmount"
-              }
-            ]
-          },
-          "minProceedsP": {
-            "maxLength": 17,
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/PAmount"
-              }
-            ]
-          },
-          "expectedAccountId": {
+          "updatedAt": {
             "type": "string",
-            "minLength": 1,
-            "maxLength": 255
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
           }
         },
         "required": [
           "marketId",
+          "marketSlug",
+          "marketTitle",
+          "marketStatus",
+          "marketLastPrice",
+          "resolvedResult",
           "outcome",
-          "side",
-          "shares",
-          "expectedAccountId"
-        ]
-      },
-      "TradeResult": {
-        "type": "object",
-        "properties": {
-          "order": {
-            "$ref": "#/components/schemas/Order"
-          },
-          "fill": {
-            "$ref": "#/components/schemas/Fill"
-          },
-          "balance": {
-            "$ref": "#/components/schemas/Balance"
-          },
-          "position": {
-            "$ref": "#/components/schemas/Position"
-          },
-          "market": {
-            "$ref": "#/components/schemas/MarketStats"
-          }
-        },
-        "required": [
-          "order",
-          "fill",
-          "balance",
-          "position",
-          "market"
+          "qty",
+          "costBasisP",
+          "realizedPnlP",
+          "settled",
+          "version",
+          "updatedAt"
         ],
         "additionalProperties": false
       },
@@ -6696,22 +6222,6 @@
             "minimum": 0,
             "maximum": 10000
           },
-          "maxCostP": {
-            "nullable": true,
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/PAmount"
-              }
-            ]
-          },
-          "minProceedsP": {
-            "nullable": true,
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/PAmount"
-              }
-            ]
-          },
           "createdAt": {
             "type": "string",
             "format": "date-time",
@@ -6731,138 +6241,7 @@
           "status",
           "amountP",
           "priceAvgBp",
-          "maxCostP",
-          "minProceedsP",
           "createdAt"
-        ],
-        "additionalProperties": false
-      },
-      "Position": {
-        "type": "object",
-        "properties": {
-          "marketId": {
-            "type": "string",
-            "format": "uuid",
-            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-          },
-          "marketSlug": {
-            "type": "string"
-          },
-          "marketTitle": {
-            "type": "string"
-          },
-          "marketStatus": {
-            "type": "string",
-            "enum": [
-              "draft",
-              "open",
-              "closed",
-              "resolved",
-              "settled",
-              "voided"
-            ]
-          },
-          "marketLastPrice": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 99
-          },
-          "resolvedResult": {
-            "nullable": true,
-            "type": "string",
-            "enum": [
-              "YES",
-              "NO"
-            ]
-          },
-          "outcome": {
-            "type": "string",
-            "enum": [
-              "YES",
-              "NO"
-            ]
-          },
-          "qty": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 9007199254740991
-          },
-          "costBasisP": {
-            "$ref": "#/components/schemas/PAmount"
-          },
-          "realizedPnlP": {
-            "$ref": "#/components/schemas/PAmount"
-          },
-          "settled": {
-            "type": "boolean"
-          },
-          "version": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 9007199254740991
-          },
-          "updatedAt": {
-            "type": "string",
-            "format": "date-time",
-            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
-          }
-        },
-        "required": [
-          "marketId",
-          "marketSlug",
-          "marketTitle",
-          "marketStatus",
-          "marketLastPrice",
-          "resolvedResult",
-          "outcome",
-          "qty",
-          "costBasisP",
-          "realizedPnlP",
-          "settled",
-          "version",
-          "updatedAt"
-        ],
-        "additionalProperties": false
-      },
-      "MarketStats": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid",
-            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-          },
-          "lastPrice": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 99
-          },
-          "pYesBp": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 10000
-          },
-          "volumeP": {
-            "$ref": "#/components/schemas/PAmount"
-          },
-          "tradeCount": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 9007199254740991
-          },
-          "traderCount": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 9007199254740991
-          }
-        },
-        "required": [
-          "id",
-          "lastPrice",
-          "pYesBp",
-          "volumeP",
-          "tradeCount",
-          "traderCount"
         ],
         "additionalProperties": false
       },

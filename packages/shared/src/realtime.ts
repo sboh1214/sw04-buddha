@@ -11,7 +11,7 @@ import {
 } from './enums.js';
 
 /**
- * Socket.IO event payloads (PLAN 8). The API publishes them to Redis after a trade or a
+ * Socket.IO event payloads (PLAN 8). The API publishes them to Redis after a fill or a
  * status change commits (M3); the M4 gateway forwards them to rooms and the client parses
  * them with the same schemas.
  *
@@ -102,23 +102,33 @@ export function statusSupersedes(incoming: StatusKeyed, held: StatusKeyed): bool
   return statusRank(incoming.status) > statusRank(held.status);
 }
 
-/** Room `market:<id>`: price and stats after a trade (or a tick-writing transition). */
+/**
+ * Room `market:<id>`: price and stats after a fill. Nothing publishes it until the CLOB fills
+ * orders (#119): the direct AMM trade that did is gone (#125).
+ */
 export const marketTickEventSchema = z
   .object({
     type: z.literal('market:tick'),
     marketId: z.uuid(),
-    pYesBp: bpSchema,
-    lastPrice: z.number().int().min(PRICE_MIN).max(PRICE_MAX),
+    /** `MarketSummary.lastPrice`: null until the market's first fill. */
+    lastPrice: z.number().int().min(PRICE_MIN).max(PRICE_MAX).nullable(),
     volumeP: pAmountSchema,
     tradeCount: z.number().int().min(0),
-    /** Raised by a trade from an account new to this market; see `MarketStats.traderCount`. */
+    /**
+     * Raised by a fill from an account new to this market. It moves with the same fill, so it
+     * rides in the same patch: a client that patched every other fill-derived field kept the old
+     * participant count for as long as the market stayed busy.
+     */
     traderCount: z.number().int().min(0),
     ts: tsSchema,
   })
   .meta({ id: 'MarketTickEvent' });
 export type MarketTickEvent = z.infer<typeof marketTickEventSchema>;
 
-/** Room `market:<id>`: one anonymous fill. `fillId` is `Fill.id` (strict per market). */
+/**
+ * Room `market:<id>`: one anonymous fill (no publisher until #119). `fillId` is `Fill.id`
+ * (strict per market).
+ */
 export const marketTradeEventSchema = z
   .object({
     type: z.literal('market:trade'),
@@ -134,7 +144,7 @@ export const marketTradeEventSchema = z
 export type MarketTradeEvent = z.infer<typeof marketTradeEventSchema>;
 
 /**
- * Room `market:<id>`: a status transition (open, close, resolve, finalize, void), or the same status republished so subscribers refetch a descriptive edit (A-M4-36,
+ * Room `market:<id>`: a status transition (open, close, resolve, finalize), or the same status republished so subscribers refetch a descriptive edit (A-M4-36,
  * `MarketAdminService` `update`). `statusEventId` is the transition's `market_events.id` — the
  * key `statusSupersedes` orders by — and the repeat carries the UNCHANGED one, which is what
  * makes it safe: a client drops it as not newer, and only the REST snapshot it triggers
@@ -154,8 +164,8 @@ export const marketStatusEventSchema = z
 export type MarketStatusEvent = z.infer<typeof marketStatusEventSchema>;
 
 /**
- * Room `user:<id>`: the balance after a trade, refund or payout. `ledgerEntryId` is the
- * ledger row that recorded the change — the account's strict order key (see `supersedes`).
+ * Room `user:<id>`: the balance after a ledger entry changed it (a fill, a payout).
+ * `ledgerEntryId` is that ledger row — the account's strict order key (see `supersedes`).
  */
 export const userBalanceEventSchema = z
   .object({
@@ -171,7 +181,7 @@ export type UserBalanceEvent = z.infer<typeof userBalanceEventSchema>;
 /**
  * Room `user:<id>`: one position row after it changed. `version` is the row's, bumped on
  * every write (`Position.version` on the REST snapshot is the same number); `settled` tells
- * a void or settlement apart from a full sell (both leave qty 0).
+ * a settlement apart from a full sell (both leave qty 0).
  */
 export const userPositionEventSchema = z
   .object({

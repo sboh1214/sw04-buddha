@@ -3,9 +3,8 @@
  * profile: the database through the packages/db harness, Redis through TEST_REDIS_URL. Skips
  * when either is unset, exactly like ledger-audit.test.ts.
  *
- * Holders are built the way admin-markets.controller.test.ts builds them for the void: a
- * position row plus the balance debit and TRADE_BUY ledger row a real buy would have written,
- * so the ledger explains the position and the audit (PLAN 5.6) can be run on the result.
+ * Holders are built as a buy would have left them: a position row plus the balance debit and
+ * the TRADE_BUY ledger row that explains it, so the audit (PLAN 5.6) can be run on the result.
  */
 import { randomUUID } from 'node:crypto';
 import { closeDb, createDb, schema, type Db } from '@buddha/db';

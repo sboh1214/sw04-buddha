@@ -33,6 +33,7 @@
     "db:check": "drizzle-kit check",
     "db:migrate": "tsx src/migrate.ts",
     "db:seed": "tsx src/seed.ts",
+    "db:wipe": "tsx src/wipe-cli.ts",
     "db:studio": "drizzle-kit studio",
     "db:auth-schema": "auth generate --config better-auth.config.ts --output src/schema/auth.ts -y"
   },

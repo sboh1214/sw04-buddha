@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Param, Post, Query } from '@nestjs/common';
+import { Controller, Get, Param, Query } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import {
   FILLS_RECENT_LIMIT,
@@ -13,8 +13,6 @@ import {
   marketListQuerySchema,
   marketSchema,
   priceSeriesSchema,
-  quoteBodySchema,
-  quoteResultSchema,
   ticksQuerySchema,
   uuidParamSchema,
   type Category,
@@ -23,15 +21,12 @@ import {
   type MarketListItem,
   type MarketListQuery,
   type PriceSeries,
-  type QuoteBody,
-  type QuoteResult,
   type TicksQuery,
 } from '@buddha/shared';
 import * as z from 'zod';
 import { ApiPage } from '../common/interceptors/response-envelope.interceptor.js';
 import { ApiData, ApiErrors, ApiPageOf } from '../common/openapi/api-response.decorators.js';
 import { MarketService } from './market.service.js';
-import { QuoteService } from './quote.service.js';
 
 /**
  * `GET /markets/:idOrSlug` takes either a uuid or a slug. The slug is NFC-normalised before
@@ -56,8 +51,8 @@ const idOrSlugParamSchema = z
 // (`cursorQuerySchema`, `adminUserQuerySchema`) needs the manual declarations.
 
 /**
- * Public market reads and quotes (PLAN 7.1, M3). No guard: PLAN 7.1's "정보 조회 (공개)"
- * routes serve anonymous visitors, and a quote is a price check with no side effect.
+ * Public market reads (PLAN 7.1, M3). No guard: PLAN 7.1's "정보 조회 (공개)" routes serve
+ * anonymous visitors.
  */
 @ApiTags('markets')
 @Controller('markets')
@@ -139,27 +134,5 @@ export class CategoriesController {
   @ApiData(categorySchema.array())
   listCategories(): Promise<Category[]> {
     return this.markets.listCategories();
-  }
-}
-
-/** `POST /quotes` (PLAN 7.1): a price check, public and without side effects. */
-@ApiTags('markets')
-@Controller('quotes')
-export class QuotesController {
-  constructor(private readonly quotes: QuoteService) {}
-
-  @Post()
-  @HttpCode(200)
-  @ApiOperation({
-    operationId: 'quote',
-    summary:
-      'Price a buy or sell (mode shares) or the contracts a budget buys (mode spend, buy only)',
-  })
-  @ApiData(quoteResultSchema)
-  // NOT_FOUND: unknown market or a draft. MARKET_NOT_OPEN: any status but open.
-  // MARKET_CLOSED: open, but past its close time.
-  @ApiErrors('NOT_FOUND', 'VALIDATION_ERROR', 'MARKET_NOT_OPEN', 'MARKET_CLOSED')
-  quote(@Body({ schema: quoteBodySchema }) body: QuoteBody): Promise<QuoteResult> {
-    return this.quotes.quote(body);
   }
 }

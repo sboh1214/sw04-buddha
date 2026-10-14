@@ -187,7 +187,8 @@ services:
 
   # One-shot: `docker compose run --rm migrate` (the profile keeps `up` from starting it). Runs the
   # committed drizzle migrations as buddha_migrate, then the idempotent seed as buddha_app
-  # (categories, charge packages, first admin, sample markets — safe on every deploy).
+  # (categories, off-sale charge packages, first admin, draft markets — safe on every deploy).
+  # reset-db.sh also runs it as `migrate node packages/db/dist/wipe-cli.js --yes` (docs/RESET.md).
   migrate:
     image: ${ECR_REGISTRY}/tf-buddha-api:${IMAGE_TAG}
     profiles: ['tools']

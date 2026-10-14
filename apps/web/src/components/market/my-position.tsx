@@ -39,9 +39,8 @@ import { sessionListSection } from '@/lib/query-client';
  * the YES price, and valuing it at the YES price is a silent error that produces a plausible
  * number wrong by 100 − 2·price per contract.
  *
- * The list itself is `usePositions` — the same query the portfolio screen and the trade panel
- * read, so a trade's `applyPositionRow` seeds the rows this section shows rather than a second
- * copy of them. It waits for the session on its own, so a signed-out visitor never provokes
+ * The list itself is `usePositions` — the same query the portfolio screen reads, so the two
+ * screens hold one copy of the rows rather than two. It waits for the session on its own, so a signed-out visitor never provokes
  * the 401 that the retry rule refuses to retry; they get the sign-in prompt instead.
  *
  * WHICH of the two lists it reads follows the market's own status through
@@ -67,17 +66,18 @@ export interface MyPositionProps {
    */
   status?: MarketStatus;
   /**
-   * The market's live YES price, which is what 현재가 and 평가손익 are marked to.
+   * The market's live YES price, which is what 현재가 and 평가손익 are marked to; `null` is the
+   * row saying 체결 없음.
    *
    * `Position.marketLastPrice` is a join taken when the positions list was fetched, and only
    * this account's own trades ever move that list; somebody else's trade arrives as a
    * `market:tick` and writes the `['market', id]` cache instead. Without this prop the
-   * probability in the header above and the valuation in this card drifted apart on a market
+   * price in the header above and the valuation in this card drifted apart on a market
    * anyone else was trading — the same reading, from two different prices, one screen apart.
    * `undefined` (the row not loaded) keeps the snapshot the list carried, which is exactly
    * what /portfolio does for a market it has no cache entry for.
    */
-  lastPrice?: number;
+  lastPrice?: number | null;
   'data-testid'?: string;
 }
 
@@ -188,6 +188,8 @@ export function MyPosition({
 function PositionRows({ position }: { position: Position }) {
   const yes = position.outcome === 'YES';
   const average = averageCostP(position);
+  // Both `undefined` for a market with no fill to mark to (체결 없음, N02 §5).
+  const mark = markPriceP(position);
   const unrealized = unrealizedPnlP(position);
   const realized = parsePAmount(position.realizedPnlP);
   return (
@@ -202,9 +204,11 @@ function PositionRows({ position }: { position: Position }) {
         <Item label={copy.positionAvgPrice}>
           {average === undefined ? EMPTY : formatP(average)}
         </Item>
-        <Item label={copy.positionCurrentPrice}>{formatP(markPriceP(position))}</Item>
+        <Item label={copy.positionCurrentPrice}>
+          {mark === undefined ? copy.noFills : formatP(mark)}
+        </Item>
         <Item label={copy.positionPnl}>
-          <Signed amount={unrealized} />
+          {unrealized === undefined ? EMPTY : <Signed amount={unrealized} />}
         </Item>
         <Item label={copy.positionRealizedPnl}>
           <Signed amount={realized} />
@@ -220,12 +224,10 @@ function PositionRows({ position }: { position: Position }) {
  * the two screens. It carries no market link or status badge: this IS that market's page, and
  * the header badge and the status notice above have already said what it became.
  *
- * No 현재가 and no 평가손익. Void and settlement both close the row out (`voidRefund` and
- * `settle` both leave qty and cost basis at 0), the P has already landed in the balance,
- * and `marketLastPrice` on a finished market is only the last price something TRADED at — so
- * marking such a row to it would print a plausible number that is not a result. `realizedPnlP`
- * is the whole story, and on a void it is only what earlier sells made, the refund itself
- * being a return of the cost rather than a gain.
+ * No 현재가 and no 평가손익. Settlement closes the row out (`settle` leaves qty and cost basis at
+ * 0), the P has already landed in the balance, and `marketLastPrice` on a finished market is
+ * only the last price something TRADED at — so marking such a row to it would print a plausible
+ * number that is not a result. `realizedPnlP` is the whole story.
  */
 function SettledPositionRows({ position }: { position: Position }) {
   const yes = position.outcome === 'YES';
@@ -236,7 +238,7 @@ function SettledPositionRows({ position }: { position: Position }) {
         {yes ? copy.yes : copy.no}
       </Badge>
       <DataList.Root orientation="horizontal" size="sm">
-        {/* A voided market resolved to nothing at all, and every P it took was refunded. */}
+        {/* A voided market resolved to nothing at all, so it has no result to name. */}
         <Item label={copy.marketResolvedResult}>
           {result === null ? EMPTY : result === 'YES' ? copy.yes : copy.no}
         </Item>

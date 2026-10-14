@@ -3,9 +3,9 @@
  * docker `test` profile: the judgement (closed → resolved, final at once) with its event, its
  * `market_settlement_steps` rows and its audit row in one transaction, the finalize and close
  * jobs the API registers in the `markets` queue (inspected with a BullMQ Queue on the test
- * Redis, as the worker sees them), the refusal to void a judged market, `settlementSteps` on
- * the admin detail, and `statusEventId` — the transition's `market_events.id` — on every
- * market DTO and every `market:status` published. Skips when TEST_* are unset.
+ * Redis, as the worker sees them), `settlementSteps` on the admin detail, and `statusEventId`
+ * — the transition's `market_events.id` — on every market DTO and every `market:status`
+ * published. Skips when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
 import { createCategory, createMarket, createSettlementStep } from '@buddha/db/test';
@@ -89,19 +89,15 @@ describe.skipIf(!hasTestInfra)('admin markets M5 (integration)', () => {
   const create = (overrides: Record<string, unknown> = {}) =>
     post('/api/v1/admin/markets', {
       title: '기준금리 3% 이하로 인하?',
-      rules: '한국은행 발표 기준. 발표가 없으면 아니오.',
+      rules: '한국은행 발표 기준. 기한까지 3% 이하로 내리지 않으면 아니오.',
       categoryId: category.id,
       closeAt: new Date(Date.now() + 7 * DAY_MS).toISOString(),
-      initialProbBp: 5_000,
-      liquidityB: 1_000,
       ...overrides,
     });
   const open = (id: string) => post(`/api/v1/admin/markets/${id}/open`);
   const close = (id: string) => post(`/api/v1/admin/markets/${id}/close`);
   const resolve = (id: string, body: Record<string, unknown>, cookie?: string) =>
     post(`/api/v1/admin/markets/${id}/resolve`, body, cookie);
-  const voidMarket = (id: string, reason = '데이터 소스 폐쇄') =>
-    post(`/api/v1/admin/markets/${id}/void`, { reason });
 
   /** A market row written by the factory (no events, so `statusEventId` null). */
   const market = (input: Parameters<typeof createMarket>[1] = {}) =>
@@ -387,50 +383,8 @@ describe.skipIf(!hasTestInfra)('admin markets M5 (integration)', () => {
     expect(await jobIds()).toEqual([jobId]);
   });
 
-  // --- void after the judgement -----------------------------------------------------------
-  it('refuses to void a judged market: the result, its steps and its finalize job stand', async () => {
-    const row = await market({ status: 'closed', title: '판정된 시장' });
-    const resolved = detail(await resolve(row.id, { result: 'YES' }));
-    const finalizeId = marketFinalizeJobId(row.id, new Date(resolved.resolvedAt!));
-
-    const refused = await voidMarket(row.id, '결과 확인 불가');
-    expect(refused.statusCode).toBe(400);
-    expect(errorOf(refused)).toMatchObject({
-      code: 'VALIDATION_ERROR',
-      message: 'Market is resolved',
-    });
-    expect(detailPath(refused)).toEqual(['status']);
-
-    // D2: nothing moved — #26 decides what overturns a judgement; until then ADMIN_ADJUST.
-    expect(await marketRow(row.id)).toMatchObject({
-      status: 'resolved',
-      resolvedResult: 'YES',
-      voidedAt: null,
-      statusEventId: Number(resolved.statusEventId),
-    });
-    expect((await eventsFor(row.id)).map((event) => event.type)).toEqual(['resolved']);
-    expect((await actionsFor(row.id)).map((action) => action.type)).toEqual(['market_resolve']);
-    expect(await stepRows(row.id)).toEqual([
-      expect.objectContaining({ step: 'coin', status: 'pending', attempts: 0 }),
-    ]);
-    expect(await jobIds()).toEqual([finalizeId]);
-
-    // A void from closed has never had a result or a step: it records nothing discarded and
-    // leaves no step row behind.
-    const plain = await market({ status: 'closed' });
-    const plainVoid = detail(await voidMarket(plain.id));
-    expect(plainVoid).toMatchObject({ status: 'voided', resolvedResult: null, resolvedAt: null });
-    expect(plainVoid.events[0]!.payload).toEqual({
-      reason: '데이터 소스 폐쇄',
-      refundedAccounts: 0,
-      refundedP: '0',
-    });
-    expect(plainVoid.settlementSteps).toEqual([]);
-    expect(await stepRows(plain.id)).toHaveLength(0);
-  });
-
   // --- close job --------------------------------------------------------------------------
-  it('registers the close job on open, moves it with closeAt, and drops it on close or void', async () => {
+  it('registers the close job on open, moves it with closeAt, and drops it on close', async () => {
     const draft = detail(await create());
     expect(await jobIds()).toEqual([]);
 
@@ -473,13 +427,6 @@ describe.skipIf(!hasTestInfra)('admin markets M5 (integration)', () => {
     // The manual close is the job's job done by hand: the registration is dropped.
     expect((await close(draft.id)).statusCode).toBe(200);
     expect(await queue.getJob(secondId)).toBeUndefined();
-    expect(await jobIds()).toEqual([]);
-
-    // A void from open drops the close job likewise.
-    const opened2 = detail(await open(other.id));
-    const thirdId = marketCloseJobId(other.id, new Date(opened2.closeAt));
-    expect(await jobIds()).toEqual([thirdId]);
-    expect((await voidMarket(other.id)).statusCode).toBe(200);
     expect(await jobIds()).toEqual([]);
   });
 

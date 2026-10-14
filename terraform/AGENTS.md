@@ -4,23 +4,23 @@
 
 ## 어디를 봐야 하는가
 
-| 작업                                               | 위치                                                                                                                                                |
-| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 일상 운영 절차 (롤백, 셸, 로그, 시크릿 교체, 복구) | `README.md`                                                                                                                                         |
-| 변수 / 입력                                        | `variables.tf`, `terraform.tfvars.example` (실제 `terraform.tfvars`는 gitignored)                                                                   |
-| 출력 (워크플로·운영 명령이 소비)                   | `outputs.tf`                                                                                                                                        |
-| 리소스 이름 prefix                                 | `locals.tf` (`name_prefix = "tf-${var.project}"` = `tf-buddha`; 환경은 태그로만)                                                                    |
-| 네트워크                                           | `vpc.tf` (VPC + 퍼블릭 서브넷 1개, NAT 없음), `security-groups.tf` (80/443만)                                                                       |
-| 컴퓨트                                             | `ec2.tf` (AMI data source, 인스턴스, EIP), `templates/user-data.sh.tftpl` (첫 부팅 1회)                                                             |
-| 데이터 볼륨 / 스냅샷                               | `storage.tf` (`aws_ebs_volume.data` + attachment + DLM)                                                                                             |
-| 컨테이너 이미지 저장소                             | `ecr.tf` (`tf-buddha-api` / `-worker` / `-web`)                                                                                                     |
-| 운영 `.env` (시크릿)                               | `ssm.tf` (`random_password` ×4 + SecureString `/tf-buddha/env`), `templates/env.tftpl` (본문)                                                       |
-| 인증/권한                                          | `iam.tf` (인스턴스 역할), `github-oidc.tf` (GitHub OIDC provider — 계정 공용, `prevent_destroy` + 배포 역할 + immutable subject)                    |
-| 이메일 (SES)                                       | `ses.tf` (identity `buddha.sboh.dev`, MAIL FROM `mail.buddha.sboh.dev`, SMTP IAM user) — DNS 레코드는 `outputs.tf`의 `dns_records`                  |
-| DNS                                                | Terraform 밖. `outputs.tf`의 `dns_records`를 Cloudflare 대시보드에 손으로 등록(A DNS-only + DKIM CNAME ×3 + MAIL FROM MX/SPF + DMARC)               |
-| 호스트에서 실제로 도는 것                          | `../deploy/` (compose.yaml, Caddyfile, deploy.sh, host-setup.sh, postgres-init/02-passwords.sh) — api 이미지에 동봉되어 SSM이 `/data/buddha`에 푼다 |
-| 이미지 빌드                                        | `../Dockerfile` (multi-target `api` / `worker` / `web`), `../.dockerignore`                                                                         |
-| CD                                                 | `../.github/workflows/deploy.yml` (OIDC → ECR → SSM Run Command → `/api/health` 스모크)                                                             |
+| 작업                                               | 위치                                                                                                                                                             |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 일상 운영 절차 (롤백, 셸, 로그, 시크릿 교체, 복구) | `README.md`                                                                                                                                                      |
+| 변수 / 입력                                        | `variables.tf`, `terraform.tfvars.example` (실제 `terraform.tfvars`는 gitignored)                                                                                |
+| 출력 (워크플로·운영 명령이 소비)                   | `outputs.tf`                                                                                                                                                     |
+| 리소스 이름 prefix                                 | `locals.tf` (`name_prefix = "tf-${var.project}"` = `tf-buddha`; 환경은 태그로만)                                                                                 |
+| 네트워크                                           | `vpc.tf` (VPC + 퍼블릭 서브넷 1개, NAT 없음), `security-groups.tf` (80/443만)                                                                                    |
+| 컴퓨트                                             | `ec2.tf` (AMI data source, 인스턴스, EIP), `templates/user-data.sh.tftpl` (첫 부팅 1회)                                                                          |
+| 데이터 볼륨 / 스냅샷                               | `storage.tf` (`aws_ebs_volume.data` + attachment + DLM)                                                                                                          |
+| 컨테이너 이미지 저장소                             | `ecr.tf` (`tf-buddha-api` / `-worker` / `-web`)                                                                                                                  |
+| 운영 `.env` (시크릿)                               | `ssm.tf` (`random_password` ×4 + SecureString `/tf-buddha/env`), `templates/env.tftpl` (본문)                                                                    |
+| 인증/권한                                          | `iam.tf` (인스턴스 역할), `github-oidc.tf` (GitHub OIDC provider — 계정 공용, `prevent_destroy` + 배포 역할 + immutable subject)                                 |
+| 이메일 (SES)                                       | `ses.tf` (identity `buddha.sboh.dev`, MAIL FROM `mail.buddha.sboh.dev`, SMTP IAM user) — DNS 레코드는 `outputs.tf`의 `dns_records`                               |
+| DNS                                                | Terraform 밖. `outputs.tf`의 `dns_records`를 Cloudflare 대시보드에 손으로 등록(A DNS-only + DKIM CNAME ×3 + MAIL FROM MX/SPF + DMARC)                            |
+| 호스트에서 실제로 도는 것                          | `../deploy/` (compose.yaml, Caddyfile, deploy.sh, host-setup.sh, reset-db.sh, postgres-init/02-passwords.sh) — api 이미지에 동봉되어 SSM이 `/data/buddha`에 푼다 |
+| 이미지 빌드                                        | `../Dockerfile` (multi-target `api` / `worker` / `web`), `../.dockerignore`                                                                                      |
+| CD                                                 | `../.github/workflows/deploy.yml` (OIDC → ECR → SSM Run Command → `/api/health` 스모크)                                                                          |
 
 ## 핵심 컨벤션
 

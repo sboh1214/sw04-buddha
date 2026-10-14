@@ -38,8 +38,8 @@ import { type MarketListItem, type Me, type Position } from './api';
 export interface LiveMarket {
   id: string;
   status: MarketStatus;
-  lastPrice: number;
-  pYesBp: number;
+  /** The last fill's price, 1..99, or `null` before the first fill (N02 §5's 체결 없음). */
+  lastPrice: number | null;
   volumeP: string;
   tradeCount: number;
   traderCount: number;
@@ -62,14 +62,12 @@ export interface MarketPage {
 export type MarketPages = InfiniteData<MarketPage, string | undefined>;
 
 /**
- * The five fields a `market:tick` moves. `TradeResult.market` (`MarketStats`) carries exactly
- * the same set under `id`, so the trade answer and the socket event can share this reducer —
- * and therefore share one `supersedes` rule, which is what makes whichever arrives second a
- * no-op instead of a rollback (an `Idempotency-Key` replay publishes no event at all).
+ * The four fields a `market:tick` moves, under the market's id. Nothing publishes the event
+ * until the CLOB fills (#119); the reducers keep reading it so a fill arrives already wired.
  */
 export type MarketTickPatch = Pick<
   MarketTickEvent,
-  'marketId' | 'pYesBp' | 'lastPrice' | 'volumeP' | 'tradeCount' | 'traderCount'
+  'marketId' | 'lastPrice' | 'volumeP' | 'tradeCount' | 'traderCount'
 >;
 
 /**
@@ -97,12 +95,16 @@ function hasSparkline(row: object): row is { sparkline: number[] } {
 }
 
 /**
- * A new probability REPLACES the newest sample instead of being pushed: the samples sit on a
- * fixed hourly grid (decision-sparkline), so pushing would slide that grid left on every trade
- * and the drawn shape would crawl. The grid itself only moves on the next fetch (A-M4-2).
+ * A new price REPLACES the newest sample instead of being pushed: the samples sit on a fixed
+ * hourly grid (decision-sparkline), so pushing would slide that grid left on every trade and
+ * the drawn shape would crawl. The grid itself only moves on the next fetch (A-M4-2). The
+ * samples are tick basis points and a fill's price is a whole percent, hence the ×100; with no
+ * fill there is no price to sample, and the line stays as fetched.
  */
-function withLatestSample(sparkline: number[], pYesBp: number): number[] {
-  return sparkline.length === 0 ? [pYesBp] : [...sparkline.slice(0, -1), pYesBp];
+function withLatestSample(sparkline: number[], lastPrice: number | null): number[] {
+  if (lastPrice === null) return sparkline;
+  const bp = lastPrice * 100;
+  return sparkline.length === 0 ? [bp] : [...sparkline.slice(0, -1), bp];
 }
 
 /**
@@ -118,14 +120,13 @@ export function applyTick<T extends LiveMarket>(
   if (!supersedes(event.tradeCount, held.tradeCount)) return undefined;
   const next = {
     ...held,
-    pYesBp: event.pYesBp,
     lastPrice: event.lastPrice,
     volumeP: event.volumeP,
     tradeCount: event.tradeCount,
     traderCount: event.traderCount,
   };
   if (!hasSparkline(held)) return next;
-  return { ...next, sparkline: withLatestSample(held.sparkline, event.pYesBp) };
+  return { ...next, sparkline: withLatestSample(held.sparkline, event.lastPrice) };
 }
 
 /**
@@ -152,10 +153,7 @@ export function applyTick<T extends LiveMarket>(
  *    entry at all — it reads `['markets', filters]` — so without this every tick on the grid
  *    would invalidate a key nothing holds.
  *  - it holds NO data: `applyTick` answers `undefined` for TWO reasons and only "no row" may
- *    become a request. Restarting on "not superseded" would buy one per late or duplicate tick,
- *    and systematically: the trading tab's own `applyMarketStats` has already written the
- *    answer's `tradeCount`, so that tab never supersedes its own echo. Measured at ZERO requests
- *    for ten such ticks.
+ *    become a request. Restarting on "not superseded" would buy one per late or duplicate tick.
  *  - it is FETCHING: an ERRORED query holds no data either, and restarting it per tick would
  *    fight both the retry rule and the error UI. The hazard is an answer ON THE WIRE.
  *  - the WINDOW is free, and this bound is on the FIX rather than on the bug. The three tests
@@ -245,7 +243,6 @@ export function joinMarket<T extends LiveMarket>(held: T | undefined, incoming: 
   if (supersedes(held.tradeCount, incoming.tradeCount)) {
     next = {
       ...next,
-      pYesBp: held.pYesBp,
       lastPrice: held.lastPrice,
       volumeP: held.volumeP,
       tradeCount: held.tradeCount,
@@ -253,10 +250,10 @@ export function joinMarket<T extends LiveMarket>(held: T | undefined, incoming: 
       // snapshot older than what is held must not drag it back with the price.
       traderCount: held.traderCount,
     };
-    // The card's line has to end where its badge says it does: the hourly grid still comes
-    // from the newer fetch, only its newest sample follows the probability we kept.
+    // The card's line has to end where its pill says it does: the hourly grid still comes
+    // from the newer fetch, only its newest sample follows the price we kept.
     if (hasSparkline(next)) {
-      next = { ...next, sparkline: withLatestSample(next.sparkline, held.pYesBp) };
+      next = { ...next, sparkline: withLatestSample(next.sparkline, held.lastPrice) };
     }
   }
   // The status GROUP moves together: the result was written by the same transition as the
@@ -325,10 +322,9 @@ export type PositionPatch =
  * announces: its answer is about to land and stand. The mount that was supposed to fix it is the
  * mount already doing the fetching.
  *
- * That is a different tab from the one that traded, which is why the trade path cannot cover it
- * — `applyTradeResult` runs only in the trading tab — and why the handler must CANCEL before it
- * invalidates (`restartQueries`, query-client.ts): an invalidation alone waits on the request
- * already running rather than issuing one that knows about the trade.
+ * That is why the handler must CANCEL before it invalidates (`restartQueries`,
+ * query-client.ts): an invalidation alone waits on the request already running rather than
+ * issuing one that knows about the change.
  *
  * A row whose `settled` flag MOVED answers `refetch` for the same reason, and it is the second
  * thing this reducer refuses to invent. See the comment on that branch.
@@ -349,9 +345,9 @@ export function applyPositionEvent(
   // restarted the whole `['positions']` root. Measured: five of the account's own trades cost ten
   // requests, and the open list had already been patched in place for each of them.
   //
-  // Sound because settlement is TERMINAL: `settled: true` is written by the void and settle paths
-  // (market-admin.service.ts) and `settled: false` only ever by the INSERT of a brand-new row
-  // (trade.service.ts) — never by an update. So a row this event describes as unsettled was never
+  // Sound because settlement is TERMINAL: `settled: true` is written by the settle path (the
+  // worker's finalize) and `settled: false` only ever by the INSERT of a brand-new row on a fill
+  // — never by an update. So a row this event describes as unsettled was never
   // in the settled list and cannot have left it, and there is nothing for that list to re-ask.
   //
   // Deliberately NOT the general form "ignore any list the event does not belong to". A SETTLED
@@ -371,7 +367,7 @@ export function applyPositionEvent(
   // being patched and joined the other one. Writing it back in place is what
   // `realizedPnlAcross` (use-portfolio.ts) documents as impossible — "a row MOVES between the
   // two lists … so it is never in both and this cannot double count" — and the double count is
-  // exactly what it produced: a voided holding stayed in `['positions', 'open']` carrying its
+  // exactly what it produced: a finished holding stayed in `['positions', 'open']` carrying its
   // realised PnL while 정산 이력 fetched the same row, and 총 실현 손익 printed the sum of one
   // row with itself. The write also refreshed `dataUpdatedAt`, so the poisoned list was inside
   // `staleTime` and the next mount did not correct it.
@@ -391,8 +387,8 @@ export function applyPositionEvent(
     realizedPnlP: event.realizedPnlP,
     settled: event.settled,
     version: event.version,
-    // The publisher's `ts` is the transaction's own instant (trade.service.ts), so it is the
-    // instant this row changed — the same thing `updatedAt` shows on the portfolio.
+    // The publisher's `ts` is the transaction's own instant, so it is the instant this row
+    // changed — the same thing `updatedAt` shows on the portfolio.
     updatedAt: event.ts,
   };
   return { kind: 'replace', positions };
@@ -401,10 +397,9 @@ export function applyPositionEvent(
 /**
  * Whether this event announces an order row that 주문 이력 does not hold yet.
  *
- * A trade writes one (`trade.service.ts` inserts the order and its fill in the same
- * transaction), and no `user:` event carries an `Order`'s id, status, filledQty, amountP or
- * priceAvgBp — so the list cannot be built from the event and has to be asked for. A void or a
- * settlement writes NO order row at all (`market-admin.service.ts` moves positions and
+ * A fill writes one (the order and its fill commit together), and no `user:` event carries an
+ * `Order`'s id, status, filledQty, amountP or priceAvgBp — so the list cannot be built from the
+ * event and has to be asked for. A settlement writes NO order row at all (it moves positions and
  * balances only), so a refetch there could answer nothing the list does not already hold.
  *
  * The same rule `liveMarketStatus` (use-portfolio.ts) states from the other side: a terminal
@@ -424,8 +419,7 @@ export function wroteAnOrder(event: UserPositionEvent): boolean {
  * the cache raw. So a `GET /me/positions` that left before another tab's trade — a mount, a
  * window-focus refetch, the invalidation a `market:status` or a trade triggers — landed after
  * the `user:position` event and rolled qty, cost basis and version back to the pre-trade row.
- * On the market detail that is a stale 매도 ceiling (`heldQtyOf`), and nothing refetches again
- * to correct it.
+ * On the market detail that is a stale 내 포지션, and nothing refetches again to correct it.
  *
  * The LIST comes from `incoming` — rows move between the open and settled lists as markets
  * finish, and only a REST answer knows the membership — and so do the fields only it carries
@@ -496,8 +490,7 @@ export function applyBalanceEvent(held: Me | undefined, event: UserBalanceEvent)
  * from `resnapshot()` on every reconnect and every `realtime:resync`, on the reading that "the
  * events it has seen belong to the connection that delivered them". That reading was wrong:
  * `ledger_entries.id` is a bigserial drawn while the ACCOUNT's balance row is held FOR UPDATE
- * (trade.service.ts, wallet.service.ts and the admin and void paths all lock before they
- * insert), so it is that account's commit order and has nothing to do with which socket carried
+ * (wallet.service.ts and the admin and settle paths all lock before they insert), so it is that account's commit order and has nothing to do with which socket carried
  * it. Clearing it discarded a bound that was still true and re-opened the one window this class
  * cannot order — its FIRST event, which `supersedes(x, null)` takes whatever it says — on every
  * reconnect. A new tab or a new identity still starts clean, because the provider builds a fresh

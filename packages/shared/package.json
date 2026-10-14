@@ -2,7 +2,7 @@
   "name": "@buddha/shared",
   "version": "0.0.0",
   "private": true,
-  "description": "Domain types, zod schemas, LMSR engine, P formatter, constants (pure TS, no framework deps)",
+  "description": "Domain types, zod schemas, LMSR curve maths, P formatter, constants (pure TS, no framework deps)",
   "type": "module",
   "sideEffects": false,
   "files": [

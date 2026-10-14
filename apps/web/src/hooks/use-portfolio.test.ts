@@ -69,10 +69,14 @@ function order(id: string): Order {
     status: 'filled',
     amountP: '630',
     priceAvgBp: 6300,
-    maxCostP: '700',
-    minProceedsP: null,
     createdAt: '2026-09-07T00:00:00.000Z',
   };
+}
+
+/** A figure the test KNOWS is priced; `undefined` (체결 없음) here is a failure, not a value. */
+function priced(value: bigint | undefined): bigint {
+  if (value === undefined) throw new Error('expected a priced figure');
+  return value;
 }
 
 describe('markPriceP / positionValueP / unrealizedPnlP', () => {
@@ -91,7 +95,7 @@ describe('markPriceP / positionValueP / unrealizedPnlP', () => {
     expect(unrealizedPnlP(yes)).toBe(1300n);
     expect(unrealizedPnlP(no)).toBe(-1300n);
     // Both sides of the same market add up to the 100P a winning contract pays.
-    expect(markPriceP(yes) + markPriceP(no)).toBe(100n);
+    expect(priced(markPriceP(yes)) + priced(markPriceP(no))).toBe(100n);
   });
 
   it('holds at both ends of the displayed price range', () => {
@@ -119,8 +123,8 @@ describe('markPriceP / positionValueP / unrealizedPnlP', () => {
     const losing = position({ outcome: 'YES', marketLastPrice: 30, costBasisP: '5000' });
 
     expect(unrealizedPnlP(losing)).toBe(-2000n);
-    expect(formatP(unrealizedPnlP(losing))).toBe(`${MINUS_SIGN}2,000P`);
-    expect(formatP(unrealizedPnlP(losing)).startsWith('-')).toBe(false);
+    expect(formatP(priced(unrealizedPnlP(losing)))).toBe(`${MINUS_SIGN}2,000P`);
+    expect(formatP(priced(unrealizedPnlP(losing))).startsWith('-')).toBe(false);
   });
 
   it('applies the same formula to a settled row, which is why the screen must not show it', () => {
@@ -155,6 +159,31 @@ describe('markPriceP / positionValueP / unrealizedPnlP', () => {
 
     expect(positionValueP(bound)).toBe(212_600_881_053n);
     expect(unrealizedPnlP(bound)).toBe(212_600_881_053n - MAX_P_AMOUNT);
+  });
+});
+
+describe('a market with no fill (체결 없음)', () => {
+  it('has no price to mark a holding to, so every valued figure is undefined', () => {
+    // N02 §5: before the first fill there is no price — the screen shows 체결 없음 and a dash,
+    // never a number derived from an initial setting.
+    const unpriced = position({ marketLastPrice: null, costBasisP: '5000' });
+    expect(markPriceP(unpriced)).toBeUndefined();
+    expect(positionValueP(unpriced)).toBeUndefined();
+    expect(unrealizedPnlP(unpriced)).toBeUndefined();
+  });
+
+  it('is left out of the valued totals but keeps its realised PnL', () => {
+    // Counting its cost without a value would print a loss nobody has.
+    const rows = [
+      position({ outcome: 'YES', qty: 10, marketLastPrice: 60, costBasisP: '400' }),
+      position({ marketLastPrice: null, costBasisP: '5000', realizedPnlP: '30' }),
+    ];
+    expect(portfolioTotals(rows)).toEqual({
+      valueP: 600n,
+      costBasisP: 400n,
+      unrealizedPnlP: 200n,
+      realizedPnlP: 30n,
+    });
   });
 });
 
@@ -201,7 +230,7 @@ describe('portfolioTotals', () => {
     });
     // The total is the sum of the per-row figures, so a row and the summary cannot disagree.
     expect(portfolioTotals(rows).unrealizedPnlP).toBe(
-      rows.reduce((sum, row) => sum + unrealizedPnlP(row), 0n),
+      rows.reduce((sum, row) => sum + priced(unrealizedPnlP(row)), 0n),
     );
   });
 
@@ -299,12 +328,20 @@ describe('markToLiveMarket', () => {
   it('runs the status through `liveMarketStatus` rather than a `??`, wiring included', () => {
     // The guard has to be reached THROUGH this function, not merely exist beside it: a row the
     // list fetched as 마감 must survive a `['market', id]` entry left at 진행 중 by a failed
-    // refetch, and an open holding must not be badged 무효 while it is still valued at the last
-    // traded price. Both are `markToLiveMarket`'s callers' actual arguments (portfolio.tsx).
+    // refetch, and an open holding must not be badged with a terminal status while it is still
+    // valued at the last traded price. Both are `markToLiveMarket`'s callers' actual arguments (portfolio.tsx).
     const closed = position({ marketStatus: 'closed', marketLastPrice: 50 });
     expect(markToLiveMarket(closed, { status: 'open', lastPrice: 50 })).toBe(closed);
     const open = position({ marketStatus: 'open', marketLastPrice: 50 });
     expect(markToLiveMarket(open, { status: 'voided', lastPrice: 50 })).toBe(open);
+  });
+
+  it('takes the live row saying 체결 없음 as it is, and only an absent row as no reading', () => {
+    // `null` is the market cache SAYING there is no fill; `undefined` is no cache entry at all.
+    const row = position({ marketLastPrice: null });
+    expect(markToLiveMarket(row, { lastPrice: null })).toBe(row);
+    expect(markToLiveMarket(row, { lastPrice: 63 }).marketLastPrice).toBe(63);
+    expect(markToLiveMarket(position({ marketLastPrice: 63 }), {}).marketLastPrice).toBe(63);
   });
 
   it('keeps the row itself when there is nothing newer to mark it to', () => {
@@ -320,8 +357,8 @@ describe('총 실현 손익 across the two lists', () => {
   it('is only summable because a row is never in both lists, which the socket used to break', () => {
     // `realizedPnlAcross` sums BOTH lists on a promise its own doc makes: "a row MOVES between
     // the two lists … so it is never in both and this cannot double count". The socket broke
-    // that promise. `applyPositionEvent` matched a row on (marketId, outcome) alone, so a void's
-    // `settled: true` was written back into `['positions', 'open']` — the list the row had just
+    // that promise. `applyPositionEvent` matched a row on (marketId, outcome) alone, so a
+    // settling event's `settled: true` was written back into `['positions', 'open']` — the list the row had just
     // LEFT — and the patch kind stayed `replace`, so nothing was scheduled to correct it. The
     // write refreshed `dataUpdatedAt` too, putting the poisoned list inside `staleTime`.
     const openRow = position({ realizedPnlP: '250', qty: 10, costBasisP: '5000' });
@@ -336,7 +373,7 @@ describe('총 실현 손익 across the two lists', () => {
       version: openRow.version + 1,
       ts: '2026-09-07T01:00:00.000Z',
     };
-    // 정산 이력, once fetched, holds this row: that is where a void puts it.
+    // 정산 이력, once fetched, holds this row: that is where a settlement puts it.
     const settledList: Position[] = [
       { ...openRow, qty: 0, costBasisP: '0', settled: true, version: event.version },
     ];
@@ -410,10 +447,10 @@ describe('liveMarketStatus', () => {
 describe('positionListStatusFor', () => {
   it('sends a finished market to the settled list and everything else to the open one', () => {
     // The bug this pins is a false statement on screen: `GET /me/positions?status=open`
-    // filters on `settled = false`, and the void sets that flag on every holder row in the
-    // same transaction that writes `status: 'voided'`. A detail screen that only ever asked
-    // for 'open' therefore answered "아직 이 시장에 참여하지 않았습니다" to an account that had
-    // just been refunded — while /portfolio listed the very same row under 정산 이력.
+    // filters on `settled = false`, and a finished market's holder rows carry `settled: true`.
+    // A detail screen that only ever asked for 'open' therefore answered "아직 이 시장에 참여하지
+    // 않았습니다" to an account that had just been paid out — while /portfolio listed the very
+    // same row under 정산 이력.
     expect(positionListStatusFor('voided')).toBe('settled');
     expect(positionListStatusFor('settled')).toBe('settled');
     // Trading has stopped in these two and nothing has been paid out yet: the rows are still

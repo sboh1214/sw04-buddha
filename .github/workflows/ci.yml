@@ -154,9 +154,10 @@ jobs:
       - name: Install Playwright chromium
         run: pnpm --filter web exec playwright install --with-deps chromium
 
-      # The e2e flow needs the charge packages and the categories, and its market fixture is
-      # created through the admin API as the seeded admin (SEED_ADMIN_* above). db:seed already
-      # declares those three keys in passThroughEnv, so turbo.json needs no change.
+      # The e2e flow needs the categories, and its market fixture is created through the admin API
+      # as the seeded admin (SEED_ADMIN_* above). The seed's charge packages are off sale (#125), so
+      # the payment spec adds one on sale itself. db:seed already declares those three keys in
+      # passThroughEnv, so turbo.json needs no change.
       - name: Seed the database
         run: pnpm db:seed
 
@@ -165,8 +166,7 @@ jobs:
       # is missing and the start script exits 1 on its BUILD_ID check. `next start` serves the
       # restored `.next` and only warns about output: 'standalone' (only 'export' throws).
       # Logs go to files so the step can exit while all three servers keep running.
-      # The worker too (M5): the settlement spec waits on its `market.finalize` job, and the
-      # per-minute `market.close` scan is what the seed's past-dated markets rely on.
+      # The worker too (M5): the settlement spec waits on its `market.finalize` job.
       - name: Start the API, the worker and the web server
         run: |
           mkdir -p "$RUNNER_TEMP/e2e-logs"

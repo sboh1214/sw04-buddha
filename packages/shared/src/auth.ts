@@ -28,7 +28,7 @@ export type RegisterResult = z.infer<typeof registerResultSchema>;
 
 /**
  * First password of an account that has none (after verification, or a social-only user), and
- * the account the screen is showing (`expectedAccountId`, as on the charge, coupon and trade
+ * the account the screen is showing (`expectedAccountId`, as on the charge and coupon
  * bodies). The cookie decides whose password is set, and a tab whose session was switched
  * elsewhere (another tab signed in as somebody else; sign-ins are not broadcast) keeps showing
  * the old account until it refetches — so the server refuses (403 FORBIDDEN naming the field)

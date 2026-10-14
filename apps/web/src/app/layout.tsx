@@ -20,9 +20,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         <Provider>
           <Nav />
-          {/* Below `md` the bottom of the viewport belongs to a fixed bar — the tab bar, or the
-              trade panel's 예/아니오 bar on the market detail route. Neither is in the flow, so the
-              document itself has to be that much longer or its last row would end up under it.
+          {/* Below `md` the bottom of the viewport belongs to the fixed tab bar. It is not in the
+              flow, so the document itself has to be that much longer or its last row would end
+              up under it.
               The footer is that last row now (ADR-0044), so the clearance is the footer's own
               bottom padding (footer.tsx) rather than `<main>`'s. */}
           <Box as="main">

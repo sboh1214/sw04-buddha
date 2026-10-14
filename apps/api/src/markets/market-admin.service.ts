@@ -4,15 +4,10 @@ import { schema, type Db } from '@buddha/db';
 import {
   decodeKeyset,
   encodeKeyset,
-  initState,
   marketSlugSchema,
-  maxLossP,
-  priceOf,
   serializePAmount,
-  serializeQuantity,
   SETTLEMENT_STEPS,
   slugify,
-  voidRefund,
   type AdminMarket,
   type AdminSettlementStep,
   type CreateMarketBody,
@@ -21,10 +16,8 @@ import {
   type MarketSummary,
   type ResolveMarketBody,
   type UpdateMarketBody,
-  type UserRealtimeEvent,
-  type VoidMarketBody,
 } from '@buddha/shared';
-import { and, asc, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
 import { keysetPredicate } from '../common/keyset.js';
 import { PG_UNIQUE_VIOLATION, isPgError } from '../common/errors/pg-error.js';
@@ -32,37 +25,20 @@ import { clockTimestamp } from '../infra/db/clock.js';
 import { DB } from '../infra/db/db.provider.js';
 import { MarketJobs } from '../jobs/market-jobs.service.js';
 import { MarketPublisher } from '../realtime/market-publisher.js';
-import { toBalance, type Page } from '../wallet/wallet.service.js';
+import { type Page } from '../wallet/wallet.service.js';
 import { lockMarket } from './market-lock.js';
-import {
-  lmsrStateOf,
-  marketWithCategory,
-  pYesBpOf,
-  toMarket,
-  toMarketSummary,
-  type MarketRow,
-} from './market.service.js';
+import { marketWithCategory, toMarket, toMarketSummary, type MarketRow } from './market.service.js';
 
 /** The handle `db.transaction` hands its callback; @buddha/db exports no alias for it. */
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 /** Reads that run either inside a transaction or on the pool. */
 type Executor = Db | Tx;
 
-type PositionRow = typeof schema.positions.$inferSelect;
-type BalanceRow = typeof schema.balances.$inferSelect;
 type MarketEventRow = typeof schema.marketEvents.$inferSelect;
 type SettlementStepRow = typeof schema.marketSettlementSteps.$inferSelect;
 
 /** UNIQUE (slug) on markets (migration 0000). */
 export const MARKET_SLUG_UNIQUE = 'markets_slug_unique';
-
-/**
- * PLAN 5.2: only a market that took (or could have taken) orders can be voided — and only
- * before its judgement. Voiding a `resolved` market would overturn a final result, which is
- * #26's decision (item 4); until then it is refused (ADR-0046, D2) and a wrong judgement is
- * compensated per account with ADMIN_ADJUST.
- */
-const VOIDABLE_STATUSES: ReadonlySet<MarketStatus> = new Set<MarketStatus>(['open', 'closed']);
 
 /** Events the admin detail shows, newest first. */
 const ADMIN_EVENTS_LIMIT = 100;
@@ -119,7 +95,7 @@ function assertFutureCloseAt(closeAt: Date, now: Date): void {
 
 /**
  * What an `admin_actions` payload records about a market (jsonb: P as strings, dates as ISO,
- * never bigint). The LMSR quantities are already strings.
+ * never bigint).
  */
 function snapshot(row: MarketRow): Record<string, unknown> {
   return {
@@ -131,11 +107,6 @@ function snapshot(row: MarketRow): Record<string, unknown> {
     categoryId: row.categoryId,
     imageUrl: row.imageUrl,
     status: row.status,
-    liquidityB: row.liquidityB,
-    qYes: row.qYes,
-    qNo: row.qNo,
-    initialProbBp: row.initialProbBp,
-    reserveP: serializePAmount(row.reserveP),
     lastPrice: row.lastPrice,
     volumeP: serializePAmount(row.volumeP),
     tradeCount: row.tradeCount,
@@ -143,20 +114,6 @@ function snapshot(row: MarketRow): Record<string, unknown> {
     openAt: row.openAt?.toISOString() ?? null,
     closeAt: row.closeAt.toISOString(),
     voidedAt: row.voidedAt?.toISOString() ?? null,
-  };
-}
-
-/** LMSR columns for (p0, b): the create path and a draft re-init share this (ADR-0027). */
-function lmsrColumns(initialProbBp: number, liquidityB: number) {
-  const p0 = initialProbBp / 10_000;
-  const state = initState(p0, liquidityB);
-  return {
-    liquidityB: liquidityB.toFixed(6),
-    qYes: serializeQuantity(state.qYes),
-    qNo: serializeQuantity(state.qNo),
-    initialProbBp,
-    reserveP: maxLossP(p0, liquidityB),
-    lastPrice: priceOf(state),
   };
 }
 
@@ -195,19 +152,11 @@ function toSettlementSteps(rows: SettlementStepRow[]): AdminSettlementStep[] {
   return steps;
 }
 
-/** One closed-out position and, when P moved, the balance after it (published after commit). */
-interface VoidRefund {
-  position: PositionRow;
-  balance: BalanceRow | undefined;
-  /** The MARKET_VOID_REFUND row's id: the account's order key for its `user:balance` event. */
-  ledgerEntryId: number | undefined;
-}
-
 /**
  * Admin market CRUD and transitions (PLAN 5.2, 5.5, 7.3, 12; M3 design 3.4, M5 design 3.3,
  * ADR-0046). Every write is one transaction with its `admin_actions` row and, for a
- * transition, its `market_events` row; open, close, resolve and void take the market's
- * advisory lock first (`lockMarket`) so nothing interleaves with a trade on the same market.
+ * transition, its `market_events` row; open, close and resolve take the market's advisory
+ * lock first (`lockMarket`) so nothing interleaves with another writer of the same market.
  * Realtime events are published, and the worker's jobs registered or cancelled, only after
  * COMMIT, best effort (MarketPublisher, MarketJobs).
  *
@@ -228,9 +177,9 @@ export class MarketAdminService {
   ) {}
 
   /**
-   * A new market is always a draft with LMSR state from `initState(p0, b)` and
-   * `reserve_p = maxLossP(p0, b)` (ADR-0027). The slug is the admin's or derived from the
-   * title; a taken slug is a VALIDATION_ERROR naming `slug` (the unique index decides).
+   * A new market is always a draft, with no price until its first fill (`last_price` null,
+   * N02 §5). The slug is the admin's or derived from the title; a taken slug is a
+   * VALIDATION_ERROR naming `slug` (the unique index decides).
    */
   async create(adminId: string, body: CreateMarketBody): Promise<AdminMarket> {
     const closeAt = new Date(body.closeAt);
@@ -254,9 +203,7 @@ export class MarketAdminService {
             resolutionSource: body.resolutionSource ?? null,
             categoryId: body.categoryId,
             imageUrl: body.imageUrl ?? null,
-            mechanism: 'lmsr',
             status: 'draft',
-            ...lmsrColumns(body.initialProbBp, body.liquidityB),
             openAt: null,
             closeAt,
             createdBy: adminId,
@@ -306,33 +253,27 @@ export class MarketAdminService {
   }
 
   /**
-   * PATCH per status: a draft accepts every field (a new `initialProbBp` or `liquidityB`
-   * re-initialises the LMSR state); an open market accepts the descriptive fields, the close
-   * time and the category, and refuses `liquidityB`, `initialProbBp` and `slug` naming the
-   * field; any other status refuses everything naming `status`. A rules change is also a
-   * `rules_edited` market event (PLAN 12: allowed after a warning, which is the web's dialog).
+   * PATCH per status: a draft accepts every field; an open market accepts the descriptive
+   * fields, the close time and the category, and refuses `slug` naming the field; any other
+   * status refuses everything naming `status`. A rules change is also a `rules_edited` market
+   * event (PLAN 12: allowed after a warning, which is the web's dialog).
    *
-   * An edit that MOVES an open market publishes `market:status` after COMMIT — the delivery
-   * half this path never had. No live event can carry a descriptive field: `market:tick` and
-   * `market:status` carry absolute numbers, and a client takes `title`, `rules`, `category` and
-   * `closeAt` from a REST answer alone (`joinMarket`, market-live.ts). Shortening `closeAt`
-   * already healed itself — the quote AND the trade are refused on the database clock (A-M3-16)
-   * and the web invalidates the row on MARKET_CLOSED — but EXTENDING one did not: a panel
-   * already showing 마감 asks for no quote, so it had no round trip left to be corrected by,
-   * while other traders' ticks went on moving the price in the same cached row (A-M4-36).
+   * An edit that MOVES an open market publishes `market:status` after COMMIT. No live event can
+   * carry a descriptive field: `market:tick` and `market:status` carry absolute numbers, and a
+   * client takes `title`, `rules`, `category` and `closeAt` from a REST answer alone
+   * (`joinMarket`, market-live.ts), so without it a viewer would keep the old text and close
+   * time until something else made it refetch (A-M4-36).
    */
   async update(adminId: string, id: string, body: UpdateMarketBody): Promise<AdminMarket> {
     const { market, moved, closeMoved, now } = await this.db.transaction(async (tx) => {
       const current = await this.lockedRow(tx, id);
       if (current.status === 'open') {
-        for (const field of ['liquidityB', 'initialProbBp', 'slug'] as const) {
-          if (body[field] !== undefined) {
-            throw fieldError(
-              field,
-              `${field} cannot change while the market is open`,
-              'immutable while open',
-            );
-          }
+        if (body.slug !== undefined) {
+          throw fieldError(
+            'slug',
+            'slug cannot change while the market is open',
+            'immutable while open',
+          );
         }
         // What open() required must hold for as long as the market trades: a draft may keep
         // blank rules, a live market may not be edited down to none.
@@ -361,17 +302,6 @@ export class MarketAdminService {
         const closeAt = new Date(body.closeAt);
         assertFutureCloseAt(closeAt, now);
         set.closeAt = closeAt;
-      }
-      if (body.initialProbBp !== undefined || body.liquidityB !== undefined) {
-        // Draft only (an open market was refused above): nobody holds contracts yet, so the
-        // curve can be re-initialised as if the market had been created with these values.
-        Object.assign(
-          set,
-          lmsrColumns(
-            body.initialProbBp ?? current.initialProbBp,
-            body.liquidityB ?? lmsrStateOf(current).b,
-          ),
-        );
       }
 
       let row: MarketRow | undefined;
@@ -430,7 +360,7 @@ export class MarketAdminService {
         now,
       };
     });
-    // Outside the transaction, exactly as open/close/void publish: a subscriber answers
+    // Outside the transaction, exactly as open/close/resolve publish: a subscriber answers
     // `market:status` with a REFETCH, and one issued before COMMIT would read the row this
     // transaction has not written yet. The job registrations go out with it, awaited together:
     // each is bounded on its own (MarketJobs), so a Redis that stops answering costs one bound.
@@ -443,9 +373,10 @@ export class MarketAdminService {
   }
 
   /**
-   * draft → open (PLAN 0.2: never without rules). Writes the 'open' price tick the chart
-   * starts from and the 'opened' event, then publishes `market:status` and registers the
-   * delayed `market.close` job for `closeAt` (PLAN 5.5).
+   * draft → open (PLAN 0.2: never without rules). Writes the 'opened' event, then publishes
+   * `market:status` and registers the delayed `market.close` job for `closeAt` (PLAN 5.5). No
+   * price tick: a market has no price before its first fill (N02 §5). Opening stays allowed
+   * while no route takes orders (#125): until the CLOB (#119) an open market is shown, not traded.
    */
   async open(adminId: string, id: string): Promise<AdminMarket> {
     const { market, now } = await this.db.transaction(async (tx) => {
@@ -455,9 +386,8 @@ export class MarketAdminService {
       if (current.rules.trim() === '') {
         throw rulesRequired('Rules are required before a market opens');
       }
-      // The database clock after the market lock, as a trade reads it: this transaction may
-      // have waited behind one, and the open tick it writes must sort with that trade's ticks
-      // on one clock (clock.ts).
+      // The database clock after the market lock (clock.ts): this transaction may have waited
+      // behind another writer of the market, and its rows must sort after that one's.
       const now = await clockTimestamp(tx);
       assertFutureCloseAt(current.closeAt, now);
 
@@ -474,12 +404,6 @@ export class MarketAdminService {
         .where(eq(schema.markets.id, id))
         .returning();
       if (!row) throw new AppError('INTERNAL', { message: 'Market update failed' });
-      await tx.insert(schema.priceTicks).values({
-        marketId: id,
-        ts: now,
-        pYesBp: pYesBpOf(row),
-        trigger: 'open',
-      });
       await tx.insert(schema.adminActions).values({
         adminId,
         type: 'market_open',
@@ -509,8 +433,9 @@ export class MarketAdminService {
       if (current.status !== 'open') {
         throw new AppError('MARKET_NOT_OPEN', { message: `Market is ${current.status}` });
       }
-      // The database clock after the market lock (clock.ts): a trade or a PATCH may have
-      // committed while this transaction queued, and every row it writes must sort after it.
+      // The database clock after the market lock (clock.ts): a PATCH or the worker's close job
+      // may have committed while this transaction queued, and every row it writes must sort
+      // after it.
       const now = await clockTimestamp(tx);
       const eventId = await this.recordEvent(tx, {
         marketId: id,
@@ -617,192 +542,6 @@ export class MarketAdminService {
     return market;
   }
 
-  /**
-   * Void (PLAN 5.5): an open or closed market only — a judged one is final (VOIDABLE_STATUSES,
-   * ADR-0046). Every unsettled position gets its cost basis back as a MARKET_VOID_REFUND
-   * ledger entry and is closed out (qty 0, settled), the market becomes `voided`. One
-   * transaction, all rows or nothing (MVP scale). The status check runs under the market lock
-   * so an M5 finalize cannot interleave, and the positions are locked in (user_id, outcome)
-   * order — the same order finalize will use — so two settlements touching one user's
-   * balance cannot deadlock. The refund is not bounded by `reserve_p`: it returns
-   * what was paid, and earlier sells may already have realised part of it (ADR-0027).
-   *
-   * Instants come from the database clock after the locks, as in a trade: the void's own
-   * after the market lock, each refund's after that account's balance lock (see clock.ts).
-   *
-   * A voidable market has never been judged, so it carries no result and no settlement step
-   * to discard; `voided` events written before ADR-0046 may still carry a `discardedResult`,
-   * which the web reads. The close job of an open market is cancelled after COMMIT.
-   */
-  async void(adminId: string, id: string, body: VoidMarketBody): Promise<AdminMarket> {
-    const { market, refunds, pendingClose } = await this.db.transaction(async (tx) => {
-      await lockMarket(tx, id);
-      const current = await this.lockedRow(tx, id);
-      if (!VOIDABLE_STATUSES.has(current.status)) throw wrongStatus(current.status);
-
-      const holders = await tx
-        .select()
-        .from(schema.positions)
-        .where(and(eq(schema.positions.marketId, id), eq(schema.positions.settled, false)))
-        .orderBy(asc(schema.positions.userId), asc(schema.positions.outcome))
-        .for('update');
-      // After the last lock the void as a whole can wait on (the rows above never do: they
-      // are only ever written under this market's lock, but the rule holds mechanically).
-      const now = await clockTimestamp(tx);
-
-      const refunds: VoidRefund[] = [];
-      const refundedAccounts = new Set<string>();
-      let refundedP = 0n;
-      for (const position of holders) {
-        const after = voidRefund(position);
-        let balance: BalanceRow | undefined;
-        let ledgerEntryId: number | undefined;
-        if (after.refundP > 0n) {
-          // The balance row first, then the clock: a trade or charge of this account may have
-          // committed while this transaction waited (on the market lock, or on this very row),
-          // and the refund's ledger row must sort after it. Left to the column default, the
-          // row would carry transaction-start `now()` — older than that trade although its
-          // balance_after_p already includes it — and `/me/ledger` would show them inverted.
-          const [locked] = await tx
-            .select({ userId: schema.balances.userId })
-            .from(schema.balances)
-            .where(eq(schema.balances.userId, position.userId))
-            .limit(1)
-            .for('update');
-          if (!locked) {
-            throw new AppError('NOT_FOUND', {
-              message: `Balance not found for account ${position.userId}`,
-            });
-          }
-          const refundedAt = await clockTimestamp(tx);
-          [balance] = await tx
-            .update(schema.balances)
-            .set({
-              availableP: sql`${schema.balances.availableP} + ${after.refundP}`,
-              updatedAt: refundedAt,
-            })
-            .where(eq(schema.balances.userId, position.userId))
-            .returning();
-          if (!balance) {
-            throw new AppError('NOT_FOUND', {
-              message: `Balance not found for account ${position.userId}`,
-            });
-          }
-          const [entry] = await tx
-            .insert(schema.ledgerEntries)
-            .values({
-              userId: position.userId,
-              type: 'MARKET_VOID_REFUND',
-              amountP: after.refundP,
-              balanceAfterP: balance.availableP,
-              refType: 'market',
-              refId: current.id,
-              memo: `무효 환불: ${current.title}`,
-              createdAt: refundedAt,
-            })
-            .returning({ id: schema.ledgerEntries.id });
-          if (!entry) throw new AppError('INTERNAL', { message: 'Ledger insert failed' });
-          ledgerEntryId = entry.id;
-          refundedAccounts.add(position.userId);
-          refundedP += after.refundP;
-        }
-        const [updated] = await tx
-          .update(schema.positions)
-          .set({ qty: after.qty, costBasisP: after.costBasisP, settled: true, updatedAt: now })
-          .where(
-            and(
-              eq(schema.positions.userId, position.userId),
-              eq(schema.positions.marketId, id),
-              eq(schema.positions.outcome, position.outcome),
-            ),
-          )
-          .returning();
-        if (!updated) throw new AppError('INTERNAL', { message: 'Position update failed' });
-        refunds.push({ position: updated, balance, ledgerEntryId });
-      }
-
-      const summary = {
-        reason: body.reason,
-        refundedAccounts: refundedAccounts.size,
-        refundedP: serializePAmount(refundedP),
-      };
-      const eventId = await this.recordEvent(tx, {
-        marketId: id,
-        type: 'voided',
-        actorId: adminId,
-        payload: summary,
-        createdAt: now,
-      });
-      const [row] = await tx
-        .update(schema.markets)
-        .set({ status: 'voided', voidedAt: now, statusEventId: eventId, updatedAt: now })
-        .where(eq(schema.markets.id, id))
-        .returning();
-      if (!row) throw new AppError('INTERNAL', { message: 'Market update failed' });
-      await tx.insert(schema.adminActions).values({
-        adminId,
-        type: 'market_void',
-        targetType: 'market',
-        targetId: current.id,
-        payload: { ...summary, before: snapshot(current), after: snapshot(row) },
-        createdAt: now,
-      });
-      // The close job an open market had registered with the worker, to cancel after COMMIT.
-      const pendingClose = current.status === 'open' ? current.closeAt : undefined;
-      return { market: await this.toAdminMarket(tx, row), refunds, pendingClose };
-    });
-
-    const ts = market.voidedAt ?? market.updatedAt;
-    // The last balance seen per account wins: a holder of both outcomes was credited twice,
-    // and the later refund's ledger row is the greater key.
-    const balances = new Map<string, { balance: BalanceRow; ledgerEntryId: number }>();
-    for (const { position, balance, ledgerEntryId } of refunds) {
-      if (balance && ledgerEntryId !== undefined) {
-        balances.set(position.userId, { balance, ledgerEntryId });
-      }
-    }
-    const events: [string, UserRealtimeEvent][] = [];
-    for (const [userId, { balance, ledgerEntryId }] of balances) {
-      // Stamped with the account's own refund instant (its `updated_at`), not the void's: a
-      // trade of this account elsewhere may sit between the two. The ledger id is what a
-      // client orders by (realtime.ts); the instant is for display.
-      events.push([
-        userId,
-        {
-          type: 'user:balance',
-          ...toBalance(balance),
-          ledgerEntryId: String(ledgerEntryId),
-          ts: balance.updatedAt.toISOString(),
-        },
-      ]);
-    }
-    for (const { position } of refunds) {
-      events.push([
-        position.userId,
-        {
-          type: 'user:position',
-          marketId: position.marketId,
-          outcome: position.outcome,
-          qty: position.qty,
-          costBasisP: serializePAmount(position.costBasisP),
-          realizedPnlP: serializePAmount(position.realizedPnlP),
-          settled: position.settled,
-          version: position.version,
-          ts,
-        },
-      ]);
-    }
-    // Issued back to back, awaited together (MarketPublisher): the status first, then each
-    // account's events, in call order on the wire; a Redis that stops answering costs one
-    // command timeout, not one per holder. The job cancel rides along on its own connection.
-    await Promise.all([
-      this.publishStatus(market),
-      ...events.map(([userId, event]) => this.publisher.publishUser(userId, event)),
-      pendingClose ? this.jobs.cancelClose(market.id, pendingClose) : undefined,
-    ]);
-    return market;
-  }
-
   /** Every status, draft included; newest first over (created_at DESC, id DESC). */
   async list(
     status: MarketStatus | undefined,
@@ -905,7 +644,7 @@ export class MarketAdminService {
   }
 
   /**
-   * The admin detail: the public shape plus the LMSR state, exposure figures and the event
+   * The admin detail: the public shape plus exposure figures, settlement steps and the event
    * log. Reads through `executor` so a transition returns the state it just committed.
    */
   private async toAdminMarket(executor: Executor, row: MarketRow): Promise<AdminMarket> {
@@ -916,7 +655,7 @@ export class MarketAdminService {
       .limit(1);
     if (!category) throw new AppError('INTERNAL', { message: 'Category row missing' });
 
-    // Σ buy amounts − Σ sell amounts: what the AMM has collected net of what it paid out.
+    // Σ buy amounts − Σ sell amounts over the market's fills.
     const [collected] = await executor
       .select({
         net: sql<string>`coalesce(sum(case when ${schema.fills.side} = 'buy' then ${schema.fills.amountP} else -${schema.fills.amountP} end), 0)`,
@@ -958,11 +697,6 @@ export class MarketAdminService {
 
     return {
       ...toMarket(row, category),
-      liquidityB: row.liquidityB,
-      qYes: row.qYes,
-      qNo: row.qNo,
-      initialProbBp: row.initialProbBp,
-      reserveP: serializePAmount(row.reserveP),
       createdBy: row.createdBy,
       updatedAt: row.updatedAt.toISOString(),
       // sum() over bigint is numeric, which pg hands over as a string of digits.
@@ -985,7 +719,7 @@ export class MarketAdminService {
    *
    * A `market:edit` event carrying the new fields was rejected, and not only for its cost across
    * shared + gateway + client: an event-applied `closeAt` could not defend itself against a REST
-   * answer already in flight and the panel would flip between 마감 and open by arrival order. A
+   * answer already in flight and the detail would flip between 마감 and open by arrival order. A
    * repeat of the KEYED event cannot lose that race — it patches nothing and asks for the truth
    * instead, and a `closed` that overtakes it still wins on its key.
    *

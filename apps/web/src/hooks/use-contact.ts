@@ -24,9 +24,9 @@ import { useSession } from '@/lib/use-session';
  * with the 403 `isForAnotherAccount` recognises; every hook here then refetches the session so
  * SessionCacheGuard puts the real account on screen, as the wallet's do.
  *
- * The cache writer and the two mutations' options are exported apart from their hooks, for the
- * reason `use-trade.ts` gives: apps/web runs vitest under `environment: 'node'`, so a decision
- * sealed in a hook body is one no unit test can reach (use-contact.test.ts).
+ * The cache writer and the two mutations' options are exported apart from their hooks: apps/web
+ * runs vitest under `environment: 'node'`, so a decision sealed in a hook body is one no unit
+ * test can reach (use-contact.test.ts).
  */
 
 /** The two fields a form collects; the body adds the account the screen shows. */
@@ -42,9 +42,8 @@ async function putContact(body: ContactBody): Promise<Contact> {
  *
  * `account` is not a guess. It is the `expectedAccountId` the request sent, and the server
  * compared it with the cookie before writing, so a 2xx PROVES whose contact (or password) it
- * was — which `Contact` itself never says. The entry, unlike `['positions']` (`tradeAnswerScope`,
- * use-trade.ts), carries its owner (`Me.id`), so the comparison is the entry's own and needs no
- * reading of the session. A profile of somebody else means the tab switched accounts while the
+ * was — which `Contact` itself never says. The entry, unlike `['positions']`, carries its owner
+ * (`Me.id`), so the comparison is the entry's own and needs no reading of the session. A profile of somebody else means the tab switched accounts while the
  * request ran (SessionCacheGuard reset the caches and the other account's `GET /me` landed):
  * patching A's name and number into B's profile would show them on B's screen and hand them
  * to B's gate, and even a mere refresh is not this answer's to ask for — the guard owns that

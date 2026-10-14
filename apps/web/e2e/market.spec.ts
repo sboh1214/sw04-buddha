@@ -1,16 +1,12 @@
-import { type Page } from '@playwright/test';
+import { type Locator, type Page } from '@playwright/test';
 import { copy } from '../src/copy';
 import {
   REALTIME_BUDGET_MS,
   adminAccount,
-  buyThroughPanel,
-  chargeOnce,
+  closeMarket,
   createOpenMarket,
-  ensureChargePackage,
   expect,
-  freshEmail,
   signIn,
-  signUp,
   subscribed,
   test,
 } from './helpers';
@@ -20,6 +16,11 @@ import {
  * accessibility readings AC 6 can actually be held to in a browser (the Lighthouse number
  * itself is a manual run recorded in ADR-0032).
  *
+ * There is no way to trade until the CLOB lands (#119, #66; D13): a market here has no fill, so
+ * its price reads 체결 없음, its chart is empty (N02 §5) and its order area says 거래 준비 중.
+ * What a fill moves — the live price, the chart's line and its keyboard readout — comes back
+ * with the order panel and its screen tests (#189).
+ *
  * Every test creates its own market through the admin API, so nothing here depends on which
  * markets `pnpm db:seed` wrote or on what today's date does to their close times (A-M3-31).
  */
@@ -27,7 +28,7 @@ import {
 /**
  * The window property a reload would wipe. AC 1 says "리프레시 없이", and the only way to
  * assert that is to prove the document the assertion ran against is the one that was there
- * before the trade.
+ * before the change.
  */
 const NO_RELOAD_MARKER = 'buddhaE2eNoReload';
 
@@ -49,10 +50,9 @@ function documentSurvived(page: Page): Promise<boolean> {
  *
  * `getBoundingClientRect()` in the page rather than `locator.boundingBox()`: under the
  * mobile-375 project (`isMobile: true`) the CDP box-model read answers null for a
- * `position: fixed` element every few runs, while the DOM rect is stable and correct — the
- * bar measured 375x812 sits at y 756 with height 44 on every sample. The rect is also the
- * more honest reading of what this test asserts, which is where the element sits on the
- * first screen.
+ * `position: fixed` element every few runs, while the DOM rect is stable and correct. The rect
+ * is also the more honest reading of what this test asserts, which is where the element sits on
+ * the first screen.
  */
 async function boxOf(page: Page, testId: string) {
   const box = await page.evaluate((id) => {
@@ -67,8 +67,15 @@ async function boxOf(page: Page, testId: string) {
   return box;
 }
 
+/** A box inside a card that is in normal flow (not `position: fixed`, unlike `boxOf`'s). */
+async function boxIn(scope: Locator, testId: string) {
+  const box = await scope.getByTestId(testId).boundingBox();
+  if (box === null) throw new Error(`${testId} has no bounding box`);
+  return box;
+}
+
 test.describe('시장 상세', () => {
-  test('AC 2: 첫 응답 HTML에 질문·확률·정산 기준이 들어 있다', async ({ admin, request }) => {
+  test('AC 2: 첫 응답 HTML에 질문·가격·정산 기준이 들어 있다', async ({ admin, request }) => {
     const market = await createOpenMarket(admin);
 
     /*
@@ -86,15 +93,16 @@ test.describe('시장 상세', () => {
     // the heading the way it already reaches the chart label), which is why this assertion
     // is the guard and not a formality: it renders inside the page's HydrationBoundary and
     // falls back to the row the server fetched (`?? fallback`). Move it above the boundary
-    // and the seed is not there yet — measured, that also strips 확률, the chart path and
-    // the panel below out of this same HTML. Delete the fallback and this line goes red.
+    // and the seed is not there yet — measured, that also strips 확률 and the chart out of
+    // this same HTML. Delete the fallback and this line goes red.
     expect(html).toContain(market.title);
     expect(html).toContain('data-testid="market-detail-question"');
 
-    // 확률 — hydrated from the seeded `['market', id]` entry, so it reaches the HTML too:
-    // "예 50%" from the rolling number's readable copy, "50.00%" beside it.
-    expect(html).toContain(`${copy.yes} ${String(market.lastPrice)}%`);
-    expect(html).toContain(`${(market.pYesBp / 100).toFixed(2)}%`);
+    // 가격 — hydrated from the seeded `['market', id]` entry, so it reaches the HTML too. With no
+    // fill it is 체결 없음 (N02 §5), and no opening setting may stand in for it: the 50% a
+    // direct-AMM market used to open at must not be anywhere on the page (#125).
+    expect(html).toContain(copy.noFills);
+    expect(html).not.toContain(`${copy.yes} 50%`);
 
     // rules — never collapsed, and never behind a cache BRANCH (PLAN 11.1's Kalshi
     // principle). `LiveRulesSection` is a client component now, which is fine: it renders
@@ -105,32 +113,38 @@ test.describe('시장 상세', () => {
     expect(html).toContain(market.rules);
 
     /*
-     * The chart is in the first paint as SVG geometry, not as a client-only mount. `d="M` is
-     * what pins the zero-dependency decision (ADR-0032): recharts' ResponsiveContainer and
-     * visx-responsive render nothing before they have measured the DOM, and uPlot is a canvas,
-     * so none of them could put a path in this string.
+     * The chart is in the first paint, and with no fill it is the 체결 없음 state rather than a
+     * line: opening writes no price tick (N02 §5). The SVG-geometry check that pinned the
+     * zero-dependency decision (ADR-0032) needs a fill to draw, so it returns with the order
+     * panel (#189).
      */
     expect(html).toContain('data-testid="probability-chart"');
-    expect(html).toContain('d="M');
+    expect(html).toContain('data-testid="probability-chart-empty"');
+
+    // 주문 영역 of an open market: 거래 준비 중 where the direct-AMM trade panel was (owner
+    // decision #125 (a)), and nothing of that panel left to quote or trade with.
+    expect(html).toContain('data-testid="order-area-notice"');
+    expect(html).toContain(copy.tradePreparing);
+    expect(html).not.toContain('data-testid="trade-');
   });
 
-  test('AC 1: A의 매수가 B의 상세와 홈 카드를 1초 안에, 리프레시 없이 갱신한다', async ({
+  test('AC 1: 관리자의 마감이 B의 상세와 홈 카드를 1초 안에, 리프레시 없이 갱신한다', async ({
     browser,
     admin,
   }) => {
+    // The change used to be A's buy; with no way to trade (#125) it is the admin's 마감, which
+    // reaches the readers through the same rooms as `market:status`.
     const market = await createOpenMarket(admin);
-    await ensureChargePackage(admin);
 
     // B reads while signed in as another account (the seed admin — a second mailbox round trip
     // would buy nothing here); C reads with no cookie at all.
     const readerContext = await browser.newContext();
     const anonymousContext = await browser.newContext();
-    const traderContext = await browser.newContext();
     try {
       const detailB = await readerContext.newPage();
       await signIn(detailB, adminAccount.email, adminAccount.password);
-      // Armed BEFORE the navigation: the socket opens during the load, and a spec that trades
-      // before the room is joined would be measuring the connect gap, not the gateway.
+      // Armed BEFORE the navigation: the socket opens during the load, and a spec that changes
+      // the market before the room is joined would be measuring the connect gap, not the gateway.
       const detailBJoined = subscribed(detailB, market.id);
       await detailB.goto(`/markets/${market.slug}`);
       await detailBJoined;
@@ -147,41 +161,51 @@ test.describe('시장 상세', () => {
       await homeC.goto(`/?q=${market.tag}`);
       await homeCJoined;
 
-      const probabilityB = detailB.getByTestId('market-probability-value');
-      const cardB = homeB
-        .getByTestId(`market-card-${market.id}`)
-        .getByTestId('market-card-probability');
-      const cardC = homeC
-        .getByTestId(`market-card-${market.id}`)
-        .getByTestId('market-card-probability');
-      await expect(probabilityB).toBeVisible();
-      await expect(cardB).toBeVisible();
-      await expect(cardC).toBeVisible();
+      const statusB = detailB.getByTestId('market-status-badge');
+      const cardB = homeB.getByTestId(`market-card-${market.id}`);
+      const cardC = homeC.getByTestId(`market-card-${market.id}`);
+      await expect(statusB).toHaveText(copy.marketStatusOpen);
+      // Open, so the order area is there, saying 거래 준비 중 and nothing else.
+      await expect(detailB.getByTestId('order-area-notice')).toHaveText(copy.tradePreparing);
+      // An open card names no status — its countdown is its state — and has no fill to price:
+      // its 예 and 아니오 rows stay, '—' in each pill, with 체결 없음 beside them (ADR-0048).
+      await expect(cardB.getByTestId('market-card-no-fills')).toHaveText(copy.noFills);
+      await expect(cardB.getByTestId('market-card-probability')).toHaveText('—');
+      await expect(cardB.getByTestId('market-card-probability-no')).toHaveText('—');
+      await expect(cardB.getByRole('progressbar')).toHaveCount(0);
+      // Laid out as the rows of a priced card: one pill per row on one right edge, and 체결 없음
+      // to the left of them rather than pushing a pill onto a row of its own.
+      const [yesPill, noPill, noFills] = await Promise.all([
+        boxIn(cardB, 'market-card-probability'),
+        boxIn(cardB, 'market-card-probability-no'),
+        boxIn(cardB, 'market-card-no-fills'),
+      ]);
+      expect(noPill.y).toBeGreaterThanOrEqual(yesPill.y + yesPill.height);
+      expect(noPill.x).toBeCloseTo(yesPill.x, 0);
+      expect(noFills.x + noFills.width).toBeLessThanOrEqual(yesPill.x);
+      await expect(cardB).not.toContainText(copy.marketStatusClosed);
+      await expect(cardC).not.toContainText(copy.marketStatusClosed);
 
       const balanceB = detailB.getByTestId('balance-chip');
       await expect(balanceB).toBeVisible();
-      const beforeProbability = (await probabilityB.textContent()) ?? '';
-      const beforeCardB = (await cardB.textContent()) ?? '';
-      const beforeCardC = (await cardC.textContent()) ?? '';
       const beforeBalanceB = (await balanceB.textContent()) ?? '';
       for (const reader of [detailB, homeB, homeC]) {
         await markDocument(reader);
       }
 
-      // --- A: 가입 → 충전 → 매수. 5,000P on a b=10,000 market is 50% → ~66%.
-      const trader = await traderContext.newPage();
-      await signUp(trader, freshEmail());
-      await chargeOnce(trader);
-      await trader.goto(`/markets/${market.slug}`);
-      await buyThroughPanel(trader, 'YES', '5000');
+      await closeMarket(admin, market.id);
 
-      // --- the criterion. The three readers were sent one `market:tick` at the same instant,
+      // --- the criterion. The three readers were sent one `market:status` at the same instant,
       // so the budget is spent by the first assertion and the others are already satisfied.
-      await expect(probabilityB).not.toHaveText(beforeProbability, {
-        timeout: REALTIME_BUDGET_MS,
-      });
-      await expect(cardB).not.toHaveText(beforeCardB, { timeout: REALTIME_BUDGET_MS });
-      await expect(cardC).not.toHaveText(beforeCardC, { timeout: REALTIME_BUDGET_MS });
+      await expect(statusB).toHaveText(copy.marketStatusClosed, { timeout: REALTIME_BUDGET_MS });
+      await expect(cardB).toContainText(copy.marketStatusClosed, { timeout: REALTIME_BUDGET_MS });
+      await expect(cardC).toContainText(copy.marketStatusClosed, { timeout: REALTIME_BUDGET_MS });
+
+      // A market that is not open has no order area at all: the status notice says what it is.
+      await expect(detailB.getByTestId('market-status-notice')).toContainText(
+        copy.marketClosedNotice,
+      );
+      await expect(detailB.getByTestId('order-area')).toHaveCount(0);
 
       for (const reader of [detailB, homeB, homeC]) {
         expect(await documentSurvived(reader), reader.url()).toBe(true);
@@ -193,39 +217,23 @@ test.describe('시장 상세', () => {
       await expect(homeC.getByTestId('balance-chip')).toHaveCount(0);
       await expect(homeC.getByRole('link', { name: copy.login })).toBeVisible();
     } finally {
-      await traderContext.close();
       await anonymousContext.close();
       await readerContext.close();
     }
   });
 
-  test('차트: 이름 있는 그래픽 · 기간 라디오 · 키보드 읽기', async ({ admin, page }) => {
+  test('차트: 기간 라디오 · 체결 없음', async ({ admin, page }) => {
     const market = await createOpenMarket(admin);
     await page.goto(`/markets/${market.slug}`);
 
-    // The series is a `role="img"` whose name is 확률 추이 + the question + the spoken summary,
-    // so a screen reader gets the shape of the line and not just "graphic".
     const chart = page.getByTestId('probability-chart');
-    await expect(chart.getByRole('img', { name: new RegExp(copy.chartLabel) })).toBeVisible();
     // 1일 / 1주 / 전체 as real radios inside a named group, not three styled divs.
     await expect(page.getByTestId('chart-range').getByRole('radio')).toHaveCount(3);
-
-    // The plot is focusable and readable without a pointer: an arrow moves the readout, Escape
-    // clears it (probability-chart.tsx `onKeyDown`).
-    //
-    // Wait for the LINE, not just the figure: the `role="img"` and its focusable plot exist
-    // while the series is still in flight, and an arrow pressed then is deliberately a no-op
-    // (there is no point to read yet), so pressing too early would assert against an empty
-    // series rather than against the keyboard. The mobile project is slow enough to lose
-    // that race on most runs.
-    await expect(chart.getByTestId('probability-chart-line')).toBeVisible();
-    const readout = page.getByTestId('chart-readout');
-    await expect(readout).toHaveText('');
-    await chart.locator('[tabindex="0"]').focus();
-    await page.keyboard.press('ArrowRight');
-    await expect(readout).not.toHaveText('');
-    await page.keyboard.press('Escape');
-    await expect(readout).toHaveText('');
+    // Fills only (N02 §5): a market nobody has traded draws no line, not a flat one at the
+    // opening setting. The named line and its keyboard readout need a fill (#189).
+    await expect(chart.getByTestId('probability-chart-empty')).toHaveText(copy.noFills);
+    await expect(chart.getByTestId('probability-chart-line')).toHaveCount(0);
+    await expect(page.getByTestId('chart-readout')).toHaveText('');
   });
 });
 
@@ -236,23 +244,28 @@ test.describe('시장 상세', () => {
 test.describe('시장 상세 · 375px', () => {
   test.use({ viewport: { width: 375, height: 812 } });
 
-  test('AC 5: 스크롤 없이 확률과 예/아니오 버튼이 보인다', async ({ admin, page }) => {
+  test('AC 5: 스크롤 없이 가격과 하단 탭이 보인다', async ({ admin, page }) => {
+    // The fixed 예/아니오 bar this used to measure went with the trade panel (#125); the tab bar
+    // takes the bottom of the screen on this route like on every other, and the order area is
+    // an ordinary block further down saying 거래 준비 중.
     const market = await createOpenMarket(admin);
     await page.goto(`/markets/${market.slug}`);
 
     await expect(page.getByTestId('market-probability')).toBeVisible();
-    await expect(page.getByTestId('trade-bar-yes')).toBeVisible();
-    await expect(page.getByTestId('trade-bar-no')).toBeVisible();
+    await expect(page.getByTestId('bottom-tabs')).toBeVisible();
+    await expect(page.getByTestId('trade-bar')).toHaveCount(0);
 
     const viewport = page.viewportSize();
     if (viewport === null) throw new Error('no viewport size');
     // Nothing was scrolled to get here, so a bounding box IS the position on the first screen.
     expect(await page.evaluate(() => window.scrollY)).toBe(0);
 
-    for (const testId of ['market-probability', 'trade-bar-yes', 'trade-bar-no']) {
+    for (const testId of ['market-probability', 'bottom-tabs']) {
       const box = await boxOf(page, testId);
       expect(box.y, testId).toBeGreaterThanOrEqual(0);
       expect(box.y + box.height, testId).toBeLessThanOrEqual(viewport.height);
     }
+
+    await expect(page.getByTestId('order-area-notice')).toHaveText(copy.tradePreparing);
   });
 });

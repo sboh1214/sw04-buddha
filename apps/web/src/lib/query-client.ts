@@ -49,7 +49,7 @@ function makeQueryClient() {
   // The same duty for the account's own rows, and for the same reason: `applyPositionEvent`
   // orders `user:position` events by `version`, but a `GET /me/positions` answer went in raw,
   // so a fetch that left before another tab's trade landed after the event and rolled the row
-  // back — a stale 매도 ceiling on the detail and stale 평가손익 on /portfolio, with nothing
+  // back — a stale 내 포지션 on the detail and stale 평가손익 on /portfolio, with nothing
   // scheduled to correct either. `['positions']` covers `['positions', 'open']` and
   // `['positions', 'settled']` by prefix and never reaches `['orders']`.
   client.setQueryDefaults(POSITIONS_KEY, {
@@ -88,10 +88,8 @@ export function getQueryClient(): QueryClient {
  * Cancels every query under `queryKey` that has answered NOTHING yet, so the invalidation that
  * follows issues a REQUEST rather than a subscription to the one already in flight.
  *
- * Here rather than beside either caller because both of this app's private-cache writers need
- * it and neither owns it: the trade answer (`applyTradeResult`, use-trade.ts) in the tab that
- * traded, and the socket's `user:position` handler (realtime-provider.tsx) in every OTHER tab
- * of the same account, which never runs the trade path at all.
+ * Here rather than beside its caller because it is a cache rule, not a socket one, and the
+ * socket's handlers (realtime-provider.tsx) need it for more than one key.
  *
  * `invalidateQueries` restarts a running fetch only where the query already holds data:
  * `refetchQueries` passes `cancelRefetch`, and query-core honours it under

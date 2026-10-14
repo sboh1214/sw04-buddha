@@ -51,7 +51,6 @@ const summary: MarketSummary = {
   imageUrl: null,
   status: 'open',
   lastPrice: 50,
-  pYesBp: 5000,
   volumeP: '120000',
   tradeCount: 10,
   traderCount: 4,
@@ -79,7 +78,6 @@ const detail: Market = {
 const tick = (patch: Partial<MarketTickEvent> = {}): MarketTickEvent => ({
   type: 'market:tick',
   marketId: ID,
-  pYesBp: 6300,
   lastPrice: 63,
   volumeP: '130000',
   tradeCount: 11,
@@ -226,11 +224,11 @@ describe('the live list', () => {
         applyToPages(held, (row) => applyTick(row, tick())),
       );
 
-      expect(byVolume.getCurrentResult().data?.pages[0]?.items[0]?.pYesBp).toBe(6300);
+      expect(byVolume.getCurrentResult().data?.pages[0]?.items[0]?.lastPrice).toBe(63);
       // The same market sits on the SECOND page under the other sort, so one `setQueriesData`
       // over the shared root has to reach every page of every filter — not one query per card.
-      expect(newest.getCurrentResult().data?.pages[1]?.items[0]?.pYesBp).toBe(6300);
-      expect(newest.getCurrentResult().data?.pages[0]?.items[0]?.pYesBp).toBe(summary.pYesBp);
+      expect(newest.getCurrentResult().data?.pages[1]?.items[0]?.lastPrice).toBe(63);
+      expect(newest.getCurrentResult().data?.pages[0]?.items[0]?.lastPrice).toBe(summary.lastPrice);
       // PLAN 11.5: an event must never become a request.
       expect(fetches).toBe(0);
     } finally {
@@ -249,7 +247,7 @@ describe('the live list', () => {
     // started), and a local re-sort can only order the keyset prefix this tab happens to hold,
     // which is neither the server's order nor a correct global one.
     const queryClient = getQueryClient();
-    const leader = { ...card, id: THIRD_ID, slug: 'leader', volumeP: '900000', pYesBp: 4000 };
+    const leader = { ...card, id: THIRD_ID, slug: 'leader', volumeP: '900000', lastPrice: 40 };
     const key = marketsKey(DEFAULT_MARKET_FILTERS);
     queryClient.setQueryData<MarketPages>(key, pagesOf([leader, card]));
 
@@ -300,7 +298,9 @@ describe('the live list', () => {
 
       expect(queryClient.getQueryData<MarketPages>(key)).toBe(held);
       expect(queryClient.getQueryState(key)?.dataUpdatedAt).toBe(updatedAt);
-      expect(observer.getCurrentResult().data?.pages[0]?.items[0]?.pYesBp).toBe(summary.pYesBp);
+      expect(observer.getCurrentResult().data?.pages[0]?.items[0]?.lastPrice).toBe(
+        summary.lastPrice,
+      );
       expect(fetches).toBe(0);
     } finally {
       unsubscribe();
@@ -339,9 +339,7 @@ describe('a tick that arrives during an unseeded first fetch', () => {
       // The first request left before the trade and knows nothing about it.
       queryFn: () =>
         Promise.resolve(
-          (fetches += 1) === 1
-            ? detail
-            : { ...detail, lastPrice: 63, pYesBp: 6300, tradeCount: 11 },
+          (fetches += 1) === 1 ? detail : { ...detail, lastPrice: 63, tradeCount: 11 },
         ),
       retry: false,
     });
@@ -529,7 +527,7 @@ describe('marketQueryOptions', () => {
   it('lands a market opened from an upper-case uuid on the entry the live path writes', () => {
     // A uuid is accepted in either case and answered in lower, and `market:tick` names its market
     // by the row's own id. A screen keyed on the segment as typed would therefore hold a row that
-    // no event, trade answer or invalidation ever reaches (A-M3-29).
+    // no event or invalidation ever reaches (A-M3-29).
     const routeId = ID.toUpperCase();
     expect(marketQueryOptions(routeId).queryKey).toEqual(marketKey(ID));
 
@@ -539,7 +537,6 @@ describe('marketQueryOptions', () => {
     queryClient.setQueryData<Market>(marketKey(detail.id), (row) => applyTick(row, tick()));
 
     const shown = queryClient.getQueryData<Market>(marketQueryOptions(routeId).queryKey);
-    expect(shown?.pYesBp).toBe(6300);
     expect(shown?.lastPrice).toBe(63);
     queryClient.clear();
   });

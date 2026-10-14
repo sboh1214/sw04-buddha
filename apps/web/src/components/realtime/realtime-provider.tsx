@@ -66,9 +66,12 @@ import { type CachedSeries, appendTick } from '@/lib/ticks';
  * market happens to be on screen — while `user:balance` and `user:position` have to be live on
  * every page, since the balance chip lives in Nav.
  *
- * Every write goes through the reducers in lib/market-live.ts and lib/ticks.ts, which the HTTP
- * trade answer writes through as well: one ordering rule for both deliveries, so whichever
- * arrives second is a no-op instead of a rollback. Nothing here restates a reducer.
+ * Every write goes through the reducers in lib/market-live.ts and lib/ticks.ts, which the REST
+ * answers are joined through as well (query-client.ts): one ordering rule for both deliveries,
+ * so whichever arrives second is a no-op instead of a rollback. Nothing here restates a reducer.
+ *
+ * `market:tick` and `market:trade` have no publisher until the CLOB fills (#119); their handlers
+ * stay so a fill arrives already wired.
  */
 
 /**
@@ -324,7 +327,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     const resnapshot = () => {
       // The balance watermark is NOT reset here, and that is the fix rather than an omission.
       // `ledger_entries.id` is a bigserial drawn while the account's balance row is held
-      // FOR UPDATE (trade.service.ts, wallet.service.ts, the admin and void paths), so for one
+      // FOR UPDATE (wallet.service.ts and the admin and settle paths), so for one
       // account it is commit order — a property of the ACCOUNT, not of the socket that happened
       // to deliver it. Clearing it on every reconnect and every `realtime:resync` threw away a
       // bound that was still true and re-opened the one window `BalanceOrder` cannot order: its
@@ -342,8 +345,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     /**
      * One fills refetch per market per window, LEADING and trailing.
      *
-     * The trailing edge is not an optimisation: `['market-fills', id]` has no other writer for
-     * somebody else's trade — the trader's own fill is written by `applyTradeResult`, and
+     * The trailing edge is not an optimisation: `['market-fills', id]` has no other writer —
      * `useMarketFills` carries no `refetchInterval` — so a refused invalidation that is simply
      * dropped leaves the 체결 내역 list one row short until an unrelated trigger happens by.
      * A refusal therefore schedules itself for the rest of the window and every event inside
@@ -518,10 +520,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         queryClient.setQueriesData<MarketPages>({ queryKey: MARKETS_KEY }, (held) =>
           applyToPages(held, (row) => applyStatus(row, event)),
         );
-        // The reducer above has already moved the badge and disabled the panel; this fills in
-        // what the event does not carry. A transition carries no price, yet `open` writes a
-        // price tick and moves lastPrice/pYesBp while publishing only `market:status`
-        // (market-admin.service.ts); `create` publishes nothing, and an EDIT to an open market
+        // The reducer above has already moved the badge and the notice; this fills in what the
+        // event does not carry. `create` publishes nothing, and an EDIT to an open market
         // publishes this event with the status unchanged for exactly this refetch — no event
         // carries `closeAt`, `title` or `rules`, and `applyStatus` drops a repeat on rank, so
         // the restart below is the whole delivery of an admin edit (A-M4-36).
@@ -557,8 +557,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // success dispatch cleared the invalidation flag and restamped `dataUpdatedAt`, so the
         // row sits inside `staleTime` with nothing scheduled. Only a focus, a reconnect or a
         // remount does. The reachable transition is open → closed alone: draft → open cannot be
-        // held (a draft is on no public route) and a void arrives per holder as `user:position`,
-        // which `liveMarketStatus` refuses as terminal anyway. Measured: bare invalidation → one
+        // held (a draft is on no public route) and a terminal status arrives per holder as
+        // `user:position`, which `liveMarketStatus` refuses as terminal anyway. Measured: bare invalidation → one
         // fetch and the row stays `open`; restarted → two and it reads `closed`.
         //
         // No gate and no throttle here, unlike the tick handler. This refetch is sanctioned on
@@ -569,9 +569,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // correction itself. It adds no new refetch site; it upgrades one that was already here.
         //
         // The ticks line is SYMMETRY, not a second fix, and saying so is the point: its hole is
-        // inert. Only the draft → open transition writes a price tick (`market-admin.service.ts`
-        // — close, resolve and void write none), and a draft is invisible on every public route,
-        // so no tab can hold a ticks series for a market whose next transition writes one.
+        // inert. No transition writes a price tick (`market-admin.service.ts`; only a fill does,
+        // N02 §5), so no status event can leave a held series behind.
         // `restartQueries` is still the right call there because it matches by PREFIX, which is
         // what these entries need: they are `['ticks', id, range]`, one per range this tab opened.
         void restartQueries(queryClient, marketKey(event.marketId));
@@ -628,9 +627,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         for (const queryKey of BALANCE_HISTORY_KEYS) void restartQueries(queryClient, queryKey);
         const patch = applyBalanceEvent(queryClient.getQueryData<Me>(ME_QUERY_KEY), parsed.data);
         // Kills an in-flight `GET /me` that would otherwise resolve after this write carrying
-        // an older balance. The primary path for the trading AC is still `TradeResult.balance`
-        // from the HTTP answer (an Idempotency-Key replay publishes NO event); this is the
-        // redundant second delivery, and the only delivery on a void refund or a payout.
+        // an older balance. A charge or a coupon also reaches the chip through its own answer's
+        // refetch (an Idempotency-Key replay publishes NO event); a payout reaches it only here.
         //
         // The cancel is synchronous down to the state change (query-core's retryer rejects and
         // calls `onCancel` in the same tick), so both branches below act on a query that is
@@ -679,12 +677,10 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // 주문 이력 has no reducer and no event of its own: an `Order` carries its id, status,
         // filledQty, amountP, priceAvgBp and the market's slug and title, none of which any
         // `user:` event does, so a row cannot be built and has to be asked for — the same answer
-        // `market:trade` gives 체결 내역. Without it a second tab's /portfolio moved its balance
-        // and its holding on this event and left the order list a row short until a focus or a
-        // reconnect; the trading tab's own `applyTradeResult` never reached this tab.
+        // `market:trade` gives 체결 내역. Without it /portfolio moved its balance and its holding
+        // on this event and left the order list a row short until a focus or a reconnect.
         //
-        // A SETTLING event is excluded because a void or a settlement writes no order row at
-        // all, so the request could only answer what the list already holds. `refetchType`
+        // A SETTLING event is excluded because a settlement writes no order row at all, so the request could only answer what the list already holds. `refetchType`
         // stays at its default `'active'`, so every tab not showing 주문 이력 pays nothing and
         // is merely marked stale.
         if (wroteAnOrder(event)) void restartQueries(queryClient, ORDERS_KEY);
@@ -692,8 +688,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
           // `restartQueries`, not a bare invalidation: a list that has answered nothing yet
           // would otherwise subscribe to the request it already has instead of issuing one,
           // and that request left before the trade this event announces — 보유 없음 on a
-          // market the account just bought into, and a 매도 ceiling to match. Lists that DO
-          // hold rows are refetched exactly as before.
+          // market the account just bought into. Lists that DO hold rows are refetched exactly
+          // as before.
           void restartQueries(queryClient, POSITIONS_KEY);
         }
       },

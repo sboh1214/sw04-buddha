@@ -1,8 +1,7 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import { type PositionState, applyBuy, applySell, settle, voidRefund } from './accounting.js';
+import { type PositionState, applyBuy, applySell, settle } from './accounting.js';
 import { POSITION_QTY_MAX } from './constants.js';
-import { initState, quoteBuy, quoteSell } from './lmsr.js';
 
 const empty: PositionState = { qty: 0, costBasisP: 0n, realizedPnlP: 0n };
 
@@ -37,19 +36,10 @@ describe('applyBuy', () => {
 });
 
 describe('applySell', () => {
-  it('PLAN M3 AC 9: buy 10 then sell 10 leaves qty 0, cost 0, realised = proceeds − cost', () => {
-    const state = initState(0.5, 1000);
-    const buy = quoteBuy(state, 'YES', 10);
-    const sell = quoteSell(buy.next, 'YES', 10);
-    const held = applyBuy(empty, 10, buy.amountP);
-    expect(held).toEqual({ qty: 10, costBasisP: buy.amountP, realizedPnlP: 0n });
-    const closed = applySell(held, 10, sell.amountP);
-    expect(closed).toEqual({
-      qty: 0,
-      costBasisP: 0n,
-      realizedPnlP: sell.amountP - buy.amountP,
-    });
-    expect(closed.realizedPnlP).toBeLessThanOrEqual(0n);
+  it('buy 10 then sell 10 leaves qty 0, cost 0, realised = proceeds − cost', () => {
+    const held = applyBuy(empty, 10, 520n);
+    expect(held).toEqual({ qty: 10, costBasisP: 520n, realizedPnlP: 0n });
+    expect(applySell(held, 10, 480n)).toEqual({ qty: 0, costBasisP: 0n, realizedPnlP: -40n });
   });
 
   it('releases cost pro rata with half-up rounding', () => {
@@ -119,20 +109,5 @@ describe('settle', () => {
   it('is a no-op on an empty row and validates the row', () => {
     expect(settle(empty, true)).toEqual({ ...empty, payoutP: 0n });
     expect(() => settle({ ...empty, qty: -1 }, true)).toThrow(RangeError);
-  });
-});
-
-describe('voidRefund', () => {
-  it('refunds the cost basis, closes the row and keeps realised PnL', () => {
-    const refund = voidRefund({ qty: 4, costBasisP: 190n, realizedPnlP: 25n });
-    expect(refund).toEqual({ qty: 0, costBasisP: 0n, realizedPnlP: 25n, refundP: 190n });
-    // A qty-0 row (fully sold) refunds nothing but still settles.
-    expect(voidRefund({ qty: 0, costBasisP: 0n, realizedPnlP: -12n })).toEqual({
-      qty: 0,
-      costBasisP: 0n,
-      realizedPnlP: -12n,
-      refundP: 0n,
-    });
-    expect(() => voidRefund({ ...empty, qty: 1.5 })).toThrow(RangeError);
   });
 });

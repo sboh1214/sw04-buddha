@@ -83,10 +83,14 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     return ids;
   }
 
-  /** A market order plus its AMM fill, written directly (the trade route is the trades suite's). */
+  /**
+   * A filled order and its fill against `restingOrderId`, written directly: no route places
+   * orders until the CLOB (#119).
+   */
   async function insertFill(input: {
     marketId: string;
     userId: string;
+    restingOrderId: string;
     outcome: Outcome;
     side: 'buy' | 'sell';
     qty: number;
@@ -113,7 +117,8 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
       .values({
         marketId: input.marketId,
         orderId: order!.id,
-        counterpartyType: 'amm',
+        counterpartyType: 'order',
+        counterpartyOrderId: input.restingOrderId,
         outcome: input.outcome,
         side: input.side,
         qty: input.qty,
@@ -127,7 +132,7 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
 
   it('lists open markets by default, never drafts, and filters by status', async () => {
     const open = await market({ title: '열린 시장' });
-    const closed = await market({ title: '마감된 시장', status: 'closed' });
+    const closed = await market({ title: '마감된 시장', status: 'closed', lastPrice: 62 });
     const draft = await market({ title: '초안', status: 'draft' });
 
     const res = await get('/api/v1/markets');
@@ -140,23 +145,23 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
       title: '열린 시장',
       category: { slug: 'economy', nameKo: '경제' },
       status: 'open',
-      lastPrice: 50,
-      pYesBp: 5000,
+      // Never traded: no price, which a client shows as '체결 없음' (N02 §5).
+      lastPrice: null,
       volumeP: '0',
       tradeCount: 0,
       traderCount: 0,
       resolvedResult: null,
-      // The key is always present; a factory market never wrote the `open` tick the admin
-      // transition (and the seed) writes, so this is the one shape with no samples at all.
+      // The key is always present; a market with no fill has no tick, so no samples.
       sparkline: [],
     });
-    // The card carries nothing the public must not see (PLAN 7.1).
-    expect(page.data[0]).not.toHaveProperty('qYes');
-    expect(page.data[0]).not.toHaveProperty('liquidityB');
-    expect(page.data[0]).not.toHaveProperty('reserveP');
+    // Nothing of the direct AMM (#125), and nothing the public must not see (PLAN 7.1).
+    for (const field of ['pYesBp', 'qYes', 'liquidityB', 'reserveP', 'createdBy']) {
+      expect(page.data[0]).not.toHaveProperty(field);
+    }
 
-    const closedPage = await get('/api/v1/markets?status=closed');
-    expect(closedPage.json<ListPage>().data.map((row) => row.id)).toEqual([closed.id]);
+    const closedPage = (await get('/api/v1/markets?status=closed')).json<ListPage>();
+    expect(closedPage.data.map((row) => row.id)).toEqual([closed.id]);
+    expect(closedPage.data[0]).toMatchObject({ lastPrice: 62 });
 
     // `draft` is not a public status at all: refused by the schema, not silently empty.
     const draftPage = await get('/api/v1/markets?status=draft');
@@ -169,10 +174,10 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
   });
 
   it('lists a market past its close time until someone closes it (A-M3-31)', async () => {
-    // The list filters on status alone. M3 has no close job, so a market whose close time has
-    // passed keeps its `open` status — the seed writes such markets on purpose — and it stays
-    // listed, first under `closing`, while every quote and trade answers MARKET_CLOSED. If a
-    // later milestone hides it here, this is the assertion that says so out loud.
+    // The list filters on status alone, so a market whose close time has passed keeps its
+    // `open` status until the worker's close job (or an admin) closes it, and it stays listed,
+    // first under `closing`. If a later milestone hides it here, this is the assertion that says
+    // so out loud.
     const expired = await market({
       title: '마감 시각이 지난 시장',
       closeAt: new Date(Date.now() - 60_000),
@@ -183,15 +188,6 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     expect(page.data.map((row) => row.id)).toContain(expired.id);
     const closing = (await get('/api/v1/markets?sort=closing')).json<ListPage>();
     expect(closing.data.map((row) => row.id)).toEqual([expired.id, later.id]);
-
-    const quote = await t.app.inject({
-      method: 'POST',
-      url: '/api/v1/quotes',
-      headers: { 'content-type': 'application/json' },
-      payload: { marketId: expired.id, outcome: 'YES', side: 'buy', mode: 'shares', value: '10' },
-    });
-    expect(quote.statusCode).toBe(409);
-    expect(quote.json()).toMatchObject({ error: { code: 'MARKET_CLOSED' } });
   });
 
   it('filters by category slug and searches titles with LIKE wildcards escaped', async () => {
@@ -312,10 +308,11 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
       resolvedAt: null,
       voidedAt: null,
     });
-    // PLAN 7.1: no LMSR state, liquidity, reserve or author on the public detail.
-    for (const secret of ['qYes', 'qNo', 'liquidityB', 'reserveP', 'createdBy']) {
-      expect(detail).not.toHaveProperty(secret);
+    // PLAN 7.1: no author on the public detail; and nothing of the direct AMM (#125).
+    for (const field of ['createdBy', 'pYesBp', 'qYes', 'qNo', 'liquidityB', 'reserveP']) {
+      expect(detail).not.toHaveProperty(field);
     }
+    expect(detail.lastPrice).toBeNull();
 
     const bySlug = await get(`/api/v1/markets/${encodeURIComponent('한글-시장-2026')}`);
     expect(bySlug.json<{ data: Market }>().data.id).toBe(open.id);
@@ -390,12 +387,30 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
   it('lists the newest fills, anonymous and capped at FILLS_RECENT_LIMIT', async () => {
     const open = await market();
     const trader = (await createUser(t.db)).user.id;
+    const maker = (await createUser(t.db)).user.id;
     const base = Date.now() - 60 * 60 * 1000;
+    const [resting] = await t.db
+      .insert(schema.orders)
+      .values({
+        userId: maker,
+        marketId: open.id,
+        outcome: 'YES',
+        side: 'sell',
+        type: 'limit',
+        limitPrice: 50,
+        qty: 1_000,
+        status: 'open',
+        timeInForce: 'gtc',
+        idempotencyKey: randomUUID(),
+        createdAt: new Date(base - 1_000),
+      })
+      .returning();
     const written: { id: number; qty: number }[] = [];
     for (let i = 0; i < FILLS_RECENT_LIMIT + 5; i += 1) {
       const fill = await insertFill({
         marketId: open.id,
         userId: trader,
+        restingOrderId: resting!.id,
         outcome: i % 2 === 0 ? 'YES' : 'NO',
         side: i % 3 === 0 ? 'sell' : 'buy',
         qty: i + 1,
@@ -433,7 +448,7 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
       marketId: open.id,
       ts: new Date(base + i * 1_000),
       pYesBp: 4_000 + (i % 100),
-      trigger: i === 0 ? ('open' as const) : ('trade' as const),
+      trigger: 'trade' as const,
     }));
     // One statement per chunk: a 1,200-row VALUES list is fine for Postgres.
     for (let i = 0; i < total; i += 400) {
@@ -446,7 +461,7 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     const ticks = raw.points;
     expect(ticks.length).toBeLessThanOrEqual(TICKS_MAX_POINTS);
     expect(ticks.length).toBeGreaterThanOrEqual(TICKS_MAX_POINTS / 2);
-    expect(ticks[0]).toEqual({ ts: new Date(base).toISOString(), pYesBp: 4_000, trigger: 'open' });
+    expect(ticks[0]).toEqual({ ts: new Date(base).toISOString(), pYesBp: 4_000, trigger: 'trade' });
     expect(ticks.at(-1)).toEqual({
       ts: new Date(base + (total - 1) * 1_000).toISOString(),
       pYesBp: 4_000 + ((total - 1) % 100),
@@ -464,7 +479,7 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
       marketId: dense.id,
       ts: new Date(base + i * 1_000),
       pYesBp: 5_000 + (i % 100),
-      trigger: i === 0 ? ('open' as const) : ('trade' as const),
+      trigger: 'trade' as const,
     }));
     for (let i = 0; i < denseTotal; i += 500) {
       await t.db.insert(schema.priceTicks).values(denseValues.slice(i, i + 500));
@@ -512,8 +527,8 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     });
     expect((await get(`/api/v1/markets/${open.id}/ticks?resolution=5m`)).statusCode).toBe(400);
 
-    // A market without ticks (a factory market never wrote its 'open' tick) is an empty series
-    // — at every resolution: the boundaries have nothing to carry forward and vanish.
+    // A market without ticks (no fill yet: opening writes none) is an empty series — at every
+    // resolution: the boundaries have nothing to carry forward and vanish.
     const bare = await market();
     for (const resolution of ['raw', '1m', '1h']) {
       const empty = await series(`/api/v1/markets/${bare.id}/ticks?resolution=${resolution}`);
@@ -593,7 +608,7 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     const open = await market();
     const t0 = new Date('2026-09-01T00:00:00.000Z').getTime();
     await t.db.insert(schema.priceTicks).values([
-      { marketId: open.id, ts: new Date(t0), pYesBp: 4_000, trigger: 'open' as const },
+      { marketId: open.id, ts: new Date(t0), pYesBp: 4_000, trigger: 'trade' as const },
       {
         marketId: open.id,
         ts: new Date(t0 + 3 * HOUR_MS),
@@ -616,7 +631,7 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     // nothing is emitted at +1h or +2h; the closing boundary is kept even though it repeats.
     // Gap-fill rows would cost 1,440 points for three trades and say nothing more.
     expect(window.points).toEqual([
-      { ts: iso(t0), pYesBp: 4_000, trigger: 'open' },
+      { ts: iso(t0), pYesBp: 4_000, trigger: 'trade' },
       { ts: iso(t0 + 3 * HOUR_MS), pYesBp: 6_500, trigger: 'trade' },
       { ts: iso(t0 + 4 * HOUR_MS), pYesBp: 6_500, trigger: 'trade' },
     ]);
@@ -643,7 +658,7 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
       marketId: open.id,
       ts: new Date(base + Math.floor((i * DAY_MS) / total)),
       pYesBp: 1_000 + (i % 9_000),
-      trigger: i === 0 ? ('open' as const) : ('trade' as const),
+      trigger: 'trade' as const,
     }));
     for (let i = 0; i < total; i += 1_000) {
       await t.db.insert(schema.priceTicks).values(values.slice(i, i + 1_000));
@@ -697,7 +712,7 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
       marketId: open.id,
       ts: new Date(twoHoursAgo),
       pYesBp: 4_000,
-      trigger: 'open' as const,
+      trigger: 'trade' as const,
     });
 
     const windowed = await series(
@@ -722,7 +737,7 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     const outside = openedAt - 2 * HOUR_MS;
     const inside = openedAt - 5 * 60 * 1_000;
     await t.db.insert(schema.priceTicks).values([
-      { marketId: open.id, ts: new Date(outside), pYesBp: 4_000, trigger: 'open' as const },
+      { marketId: open.id, ts: new Date(outside), pYesBp: 4_000, trigger: 'trade' as const },
       { marketId: open.id, ts: new Date(inside), pYesBp: 5_500, trigger: 'trade' as const },
     ]);
 
@@ -765,7 +780,7 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
       marketId: open.id,
       ts: new Date(tickAt),
       pYesBp: 4_000,
-      trigger: 'open' as const,
+      trigger: 'trade' as const,
     });
 
     // A client paging backwards asks for history older than the market itself. Both
@@ -795,7 +810,7 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     );
     expect(Date.parse(skewed.to)).toBeLessThan(ahead);
     expect(skewed.from).toBe(skewed.to);
-    expect(skewed.points).toEqual([{ ts: skewed.to, pYesBp: 4_000, trigger: 'open' }]);
+    expect(skewed.points).toEqual([{ ts: skewed.to, pYesBp: 4_000, trigger: 'trade' }]);
 
     // A window no ladder entry can cover (about ten years) is trimmed at the old end, and the
     // narrowed `from` is the entire report of it. `truncated` stays false: it is the raw
@@ -810,7 +825,7 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     expect(Date.parse(wide.to) - Date.parse(wide.from)).toBe(
       604_800 * 1_000 * (TICKS_MAX_POINTS - 2),
     );
-    expect(wide.points).toEqual([{ ts: iso(tickAt), pYesBp: 4_000, trigger: 'open' }]);
+    expect(wide.points).toEqual([{ ts: iso(tickAt), pYesBp: 4_000, trigger: 'trade' }]);
   });
 
   it('samples the card sparkline on a fixed hourly grid, carrying values forward', async () => {
@@ -846,16 +861,6 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     const page = (await get('/api/v1/markets?limit=10')).json<ListPage>();
     const byId = new Map(page.data.map((row): [string, number[]] => [row.id, row.sparkline]));
     expect(byId.size).toBe(4);
-    // The line ends where the badge says it does: the newest sample is the CARD's own
-    // probability, not the newest tick's. The two agree in production — one trade writes both —
-    // but the rows and the samples are read in separate statements, so a trade committing
-    // between them used to leave the card carrying the old price beside a line already drawn to
-    // the new one. These fixtures insert ticks without moving the row, which is exactly that
-    // disagreement, frozen.
-    for (const row of page.data) {
-      if (row.sparkline.length > 0) expect(row.sparkline.at(-1)).toBe(row.pYesBp);
-    }
-    const cardBp = new Map(page.data.map((row): [string, number] => [row.id, row.pYesBp]));
 
     const quietSpark = byId.get(quiet.id)!;
     expect(quietSpark).toHaveLength(SPARKLINE_MAX_POINTS);
@@ -864,13 +869,14 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     // true flat line instead of coming back empty.
     expect(quietSpark.slice(0, 15)).toEqual(Array.from({ length: 15 }, () => 3_000));
     expect(quietSpark.slice(15, -1)).toEqual(Array.from({ length: 9 }, () => 5_000));
-    expect(quietSpark.at(-1)).toBe(cardBp.get(quiet.id));
+    // The last bucket is the response instant: the newest tick, ten minutes old.
+    expect(quietSpark.at(-1)).toBe(7_000);
 
     // Leading unknowns are TRIMMED, never zero-filled (0 bp is a real probability), so the
     // array's length is what says where the series starts: 25 - 4 = bucket 21.
-    expect(byId.get(young.id)).toEqual([9_100, 9_100, 9_100, cardBp.get(young.id)]);
-    // A factory market bypasses the `open` transition that writes the first tick, so it is the
-    // only shape that answers with no samples at all — with the key present.
+    expect(byId.get(young.id)).toEqual([9_100, 9_100, 9_100, 9_100]);
+    // A market with no fill has no tick (opening writes none), so it answers with no samples at
+    // all — with the key present.
     expect(byId.get(bare.id)).toEqual([]);
 
     const risingSpark = byId.get(rising.id)!;
@@ -878,10 +884,9 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     for (let i = 1; i < risingSpark.length; i += 1) {
       expect(risingSpark[i]!).toBeGreaterThanOrEqual(risingSpark[i - 1]!);
     }
-    expect(risingSpark.at(-1)).toBe(cardBp.get(rising.id));
+    expect(risingSpark.at(-1)).toBe(4_500);
     // Three cards, three different series: the correlated seek is bound to each row's own id,
-    // not to the first market of the page. Fingerprinted on the OLDEST sample, because the
-    // newest is now every card's own probability and these three fixtures share one.
+    // not to the first market of the page.
     expect(new Set([quietSpark[0], byId.get(young.id)![0], risingSpark[0]]).size).toBe(3);
   });
 
@@ -896,7 +901,7 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
         marketId: busy.id,
         ts: new Date(now - 30 * HOUR_MS),
         pYesBp: 2_000,
-        trigger: 'open' as const,
+        trigger: 'trade' as const,
       },
       ...Array.from({ length: TICKS_SCAN_MAX + 1 }, (_, i) => ({
         marketId: busy.id,
@@ -925,13 +930,13 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
       marketId: open.id,
       ts: new Date(Date.now() - 30 * 60 * 1_000),
       pYesBp: 6_100,
-      trigger: 'open' as const,
+      trigger: 'trade' as const,
     });
 
     const item = (await get('/api/v1/markets')).json<ListPage>().data[0]!;
     expect(Object.keys(item)).toContain('sparkline');
-    // One bucket, and its sample is the card's own probability — see the grid case above.
-    expect(item.sparkline).toEqual([item.pYesBp]);
+    // One bucket: the tick in force at the response instant.
+    expect(item.sparkline).toEqual([6_100]);
 
     // `toMarketSummary`/`toMarket` were left alone, so the shared `MarketSummary` component is
     // not widened: neither the public detail nor the admin list ships a chart it never draws.

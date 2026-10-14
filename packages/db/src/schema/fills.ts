@@ -5,7 +5,7 @@ import { counterpartyTypeEnum, orderSideEnum, outcomeEnum } from './enums.js';
 import { markets } from './markets.js';
 import { orders } from './orders.js';
 
-/** Executions. MVP: one fill per market order, counterparty 'amm' (PLAN 5.4 step 7). */
+/** Executions (PLAN 5.4). Each matches an order against a resting one (#119 writes them). */
 export const fills = pgTable(
   'fills',
   {
@@ -39,7 +39,7 @@ export const fills = pgTable(
     check('fills_fee_p_check', sql`${t.feeP} >= 0`),
     check(
       'fills_counterparty_check',
-      sql`(${t.counterpartyType} = 'amm' AND ${t.counterpartyOrderId} IS NULL) OR (${t.counterpartyType} = 'order' AND ${t.counterpartyOrderId} IS NOT NULL)`,
+      sql`${t.counterpartyType} = 'order' AND ${t.counterpartyOrderId} IS NOT NULL`,
     ),
   ],
 );

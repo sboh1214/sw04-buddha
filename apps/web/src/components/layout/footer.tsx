@@ -20,10 +20,10 @@ const LINKS: { key: string; href: Route; label: string; strong?: boolean }[] = [
  * A server component: nothing here reads the session, the URL or the API, so it costs the
  * statically prerendered pages nothing and renders the same for every visitor.
  *
- * Below `md` the bottom of the viewport belongs to a fixed bar (the tab bar, or the trade
- * panel's 예/아니오 bar on a market). The footer is the last thing in the document, so it pays
- * that bar's height as extra bottom padding — `20`, the clearance `<main>` used to pay — on top
- * of its own `8`; otherwise its last lines would sit under the bar with nothing left to scroll.
+ * Below `md` the bottom of the viewport belongs to the fixed tab bar. The footer is the last
+ * thing in the document, so it pays that bar's height as extra bottom padding — `20`, the
+ * clearance `<main>` used to pay — on top of its own `8`; otherwise its last lines would sit
+ * under the bar with nothing left to scroll.
  * The chrome matches the header's (1320px, 24px side padding).
  */
 export function Footer() {

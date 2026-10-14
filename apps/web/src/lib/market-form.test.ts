@@ -1,4 +1,3 @@
-import { formatP, maxLossP } from '@buddha/shared';
 import { createFormControl } from 'react-hook-form';
 import { afterAll, describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
@@ -11,12 +10,10 @@ import {
   isHttpUrl,
   marketFormSchema,
   marketToFormValues,
-  maxLossHelp,
   resolveMarketFormSchema,
   toCreateMarketBody,
   toResolveMarketBody,
   toUpdateMarketBody,
-  voidMarketFormSchema,
 } from './market-form';
 
 const originalTz = process.env.TZ;
@@ -36,8 +33,6 @@ const valid: MarketFormValues = {
   categoryId: '3',
   imageUrl: 'https://example.com/a.png',
   closeAt: '2026-10-01T09:00',
-  probabilityPct: 30,
-  liquidityB: '1000',
   slug: '',
 };
 
@@ -135,24 +130,6 @@ describe('marketFormSchema', () => {
     ]);
   });
 
-  it('keeps the probability inside 1..99', () => {
-    expect(schema.safeParse({ ...valid, probabilityPct: 0 }).success).toBe(false);
-    expect(schema.safeParse({ ...valid, probabilityPct: 100 }).success).toBe(false);
-    expect(schema.safeParse({ ...valid, probabilityPct: 50.5 }).success).toBe(false);
-    expect(schema.safeParse({ ...valid, probabilityPct: 99 }).success).toBe(true);
-  });
-
-  it('bounds the liquidity to the shared limits with at most six decimals', () => {
-    for (const bad of ['0', '0.5', '1000001', '1.1234567', 'abc', '-5', '']) {
-      expect(messages(schema.safeParse({ ...valid, liquidityB: bad })), bad).toEqual([
-        copy.errMarketLiquidity,
-      ]);
-    }
-    for (const good of ['1', '1000', '1000000', '12.5', '0001.123456']) {
-      expect(schema.safeParse({ ...valid, liquidityB: good }).success, good).toBe(true);
-    }
-  });
-
   it('checks a typed slug with the shared rule and lets a blank one through', () => {
     expect(schema.safeParse({ ...valid, slug: '' }).success).toBe(true);
     expect(schema.safeParse({ ...valid, slug: '금리-2026' }).success).toBe(true);
@@ -167,7 +144,7 @@ describe('marketFormSchema', () => {
 });
 
 describe('toCreateMarketBody', () => {
-  it('converts the form into the API body: KST → UTC, pct → bp, blanks → null', () => {
+  it('converts the form into the API body: KST → UTC, blanks → null', () => {
     process.env.TZ = 'UTC';
     expect(toCreateMarketBody({ ...valid, description: '  ', imageUrl: '' })).toEqual({
       title: '10월 기준금리가 인하될까?',
@@ -177,9 +154,13 @@ describe('toCreateMarketBody', () => {
       categoryId: 3,
       imageUrl: null,
       closeAt: '2026-10-01T00:00:00.000Z',
-      initialProbBp: 3000,
-      liquidityB: 1000,
     });
+  });
+
+  it('sends no initial probability or liquidity: a market is made without them (#125)', () => {
+    const body = toCreateMarketBody(valid);
+    expect(body).not.toHaveProperty('initialProbBp');
+    expect(body).not.toHaveProperty('liquidityB');
   });
 
   it('sends the slug only when one was typed', () => {
@@ -192,10 +173,8 @@ describe('toUpdateMarketBody', () => {
   const original: MarketFormValues = { ...valid, title: '원래 질문', closeAt: '2020-01-01T00:00' };
 
   it('is empty when nothing changed, even with a past close time', () => {
-    expect(toUpdateMarketBody(original, original, 'draft')).toEqual({});
-    expect(toUpdateMarketBody({ ...original, title: ' 원래 질문 ' }, original, 'draft')).toEqual(
-      {},
-    );
+    expect(toUpdateMarketBody(original, original)).toEqual({});
+    expect(toUpdateMarketBody({ ...original, title: ' 원래 질문 ' }, original)).toEqual({});
   });
 
   it('sends only the fields that differ', () => {
@@ -203,37 +182,24 @@ describe('toUpdateMarketBody', () => {
       toUpdateMarketBody(
         { ...original, title: '새 질문', rules: '새 기준', closeAt: '2026-10-01T09:00' },
         original,
-        'open',
       ),
     ).toEqual({ title: '새 질문', rules: '새 기준', closeAt: '2026-10-01T00:00:00.000Z' });
-    expect(toUpdateMarketBody({ ...original, description: '' }, original, 'open')).toEqual({
+    expect(toUpdateMarketBody({ ...original, description: '' }, original)).toEqual({
       description: null,
     });
-    expect(toUpdateMarketBody({ ...original, categoryId: '4' }, original, 'open')).toEqual({
+    expect(toUpdateMarketBody({ ...original, categoryId: '4' }, original)).toEqual({
       categoryId: 4,
     });
   });
 
   it('never sends a blank category (a retired one prefilled as "")', () => {
     const noCategory = { ...original, categoryId: '' };
-    expect(toUpdateMarketBody(noCategory, noCategory, 'draft')).toEqual({});
-    expect(toUpdateMarketBody({ ...original, categoryId: '' }, original, 'draft')).toEqual({});
+    expect(toUpdateMarketBody(noCategory, noCategory)).toEqual({});
+    expect(toUpdateMarketBody({ ...original, categoryId: '' }, original)).toEqual({});
     // A title-only edit of such a market is `{ title }` once the schema has let it through.
     const edited = { ...noCategory, title: '고친 질문' };
     expect(marketFormSchema({ now, original: noCategory }).safeParse(edited).success).toBe(true);
-    expect(toUpdateMarketBody(edited, noCategory, 'open')).toEqual({ title: '고친 질문' });
-  });
-
-  it('sends the LMSR parameters only while draft', () => {
-    const changed = { ...original, probabilityPct: 60, liquidityB: '2000' };
-    expect(toUpdateMarketBody(changed, original, 'draft')).toEqual({
-      initialProbBp: 6000,
-      liquidityB: 2000,
-    });
-    // Disabled inputs while open; a stale form must not turn a title edit into a 400.
-    expect(toUpdateMarketBody({ ...changed, title: 'x' }, original, 'open')).toEqual({
-      title: 'x',
-    });
+    expect(toUpdateMarketBody(edited, noCategory)).toEqual({ title: '고친 질문' });
   });
 });
 
@@ -252,8 +218,7 @@ const market: AdminMarket = {
   category: { slug: 'weather', nameKo: '날씨' },
   imageUrl: null,
   status: 'draft',
-  lastPrice: 30,
-  pYesBp: 3000,
+  lastPrice: null,
   volumeP: '0',
   tradeCount: 0,
   traderCount: 0,
@@ -265,11 +230,6 @@ const market: AdminMarket = {
   voidedAt: null,
   createdAt: '2026-09-01T00:00:00.000Z',
   updatedAt: '2026-09-01T00:00:00.000Z',
-  liquidityB: '1000.000000',
-  qYes: '-847.2978603872',
-  qNo: '0.0000000000',
-  initialProbBp: 3000,
-  reserveP: '120398',
   createdBy: 'admin',
   netCollectedP: '0',
   openInterest: { yes: 0, no: 0 },
@@ -356,8 +316,6 @@ describe('marketToFormValues', () => {
       categoryId: '2',
       imageUrl: '',
       closeAt: '2026-10-01T09:00',
-      probabilityPct: 30,
-      liquidityB: '1000',
       slug: 'rate-cut-2026',
     });
   });
@@ -368,29 +326,7 @@ describe('marketToFormValues', () => {
 
   it('round-trips through toUpdateMarketBody as "no change"', () => {
     const values = marketToFormValues(market, categories);
-    expect(toUpdateMarketBody(values, values, 'draft')).toEqual({});
-  });
-
-  it('clamps an odd initialProbBp into the slider range', () => {
-    expect(marketToFormValues({ ...market, initialProbBp: 1 }, categories).probabilityPct).toBe(1);
-    expect(marketToFormValues({ ...market, initialProbBp: 9999 }, categories).probabilityPct).toBe(
-      99,
-    );
-  });
-});
-
-describe('voidMarketFormSchema', () => {
-  it('requires a trimmed reason of 1..500 characters', () => {
-    expect(voidMarketFormSchema.safeParse({ reason: '  중복 시장  ' }).data).toEqual({
-      reason: '중복 시장',
-    });
-    expect(voidMarketFormSchema.safeParse({ reason: 'a'.repeat(500) }).success).toBe(true);
-    expect(messages(voidMarketFormSchema.safeParse({ reason: '   ' }))).toEqual([
-      copy.errMarketVoidReason,
-    ]);
-    expect(messages(voidMarketFormSchema.safeParse({ reason: 'a'.repeat(501) }))).toEqual([
-      copy.errMarketVoidReason,
-    ]);
+    expect(toUpdateMarketBody(values, values)).toEqual({});
   });
 });
 
@@ -446,27 +382,5 @@ describe('toResolveMarketBody', () => {
     expect(
       toResolveMarketBody({ result: 'YES', note: ' 공식 발표 ', evidenceUrl: 'https://e.com/a ' }),
     ).toEqual({ result: 'YES', note: '공식 발표', evidenceUrl: 'https://e.com/a' });
-  });
-});
-
-describe('maxLossHelp', () => {
-  it('shows the shared maxLossP for the slider and the input', () => {
-    expect(maxLossHelp(50, '1000')).toBe(
-      `${copy.adminMarketMaxLoss} ${formatP(maxLossP(0.5, 1000))}`,
-    );
-    expect(maxLossHelp(10, '1000')).toBe(
-      `${copy.adminMarketMaxLoss} ${formatP(maxLossP(0.1, 1000))}`,
-    );
-    // The formatted amount is a positive P, not "0P" or a NaN read of the input.
-    expect(maxLossHelp(10, '1000')).toMatch(/[1-9][\d,]*P$/);
-  });
-
-  it('stays blank while the inputs cannot be read', () => {
-    expect(maxLossHelp(50, '')).toBeUndefined();
-    expect(maxLossHelp(50, 'abc')).toBeUndefined();
-    expect(maxLossHelp(50, '0')).toBeUndefined();
-    expect(maxLossHelp(0, '1000')).toBeUndefined();
-    expect(maxLossHelp(100, '1000')).toBeUndefined();
-    expect(maxLossHelp(Number.NaN, '1000')).toBeUndefined();
   });
 });

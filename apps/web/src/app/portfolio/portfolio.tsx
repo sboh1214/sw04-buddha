@@ -115,8 +115,7 @@ export function Portfolio() {
   /**
    * Which of the four each list section is in. `stale` is the state both ladders used to fold
    * into `ready`: a refetch that fails after the rows exist keeps them and reports
-   * `isRefetchError`, and on THESE lists that silence has a shape — a void or a settlement asks
-   * for both (`applyPositionEvent` answers `refetch` when a row must MOVE), so a failed refresh
+   * `isRefetchError`, and on THESE lists that silence has a shape — a settlement asks for both (`applyPositionEvent` answers `refetch` when a row must MOVE), so a failed refresh
    * leaves the holding in 보유 포지션, out of 정산 이력, and inside 총 평가 금액 where it no
    * longer belongs. The rows stay on screen and the notice says so; see `listView`.
    */
@@ -146,7 +145,7 @@ export function Portfolio() {
   const realizedState = combinedListState(listState(open), listState(settled));
   const orderRows = orders.data?.pages.flatMap((page) => page.items) ?? [];
   // 주문 이력 has no reducer and no event of its own — `restartQueries(queryClient, ORDERS_KEY)`
-  // (realtime-provider.tsx, use-trade.ts) is the ONLY path a new order arrives by, so a failed
+  // (realtime-provider.tsx) is the ONLY path a new order arrives by, so a failed
   // refresh is a list one row short. On an account with no prior orders it is worse than short:
   // the section positively says 아직 주문 내역이 없습니다 about an order the balance and the
   // holding on this same screen already show. Hence `listSection`, which keeps the empty rung
@@ -364,6 +363,10 @@ export function Portfolio() {
 function OpenPositionRow({ position }: { position: Position }) {
   const yes = position.outcome === 'YES';
   const average = averageCostP(position);
+  // All three `undefined` together, for a market with no fill to mark to (체결 없음, N02 §5).
+  const mark = markPriceP(position);
+  const value = positionValueP(position);
+  const unrealized = unrealizedPnlP(position);
   return (
     <Stack
       gap="2"
@@ -389,10 +392,12 @@ function OpenPositionRow({ position }: { position: Position }) {
         <Item label={copy.positionAvgPrice}>
           {average === undefined ? EMPTY : formatP(average)}
         </Item>
-        <Item label={copy.positionCurrentPrice}>{formatP(markPriceP(position))}</Item>
-        <Item label={copy.positionValue}>{formatP(positionValueP(position))}</Item>
+        <Item label={copy.positionCurrentPrice}>
+          {mark === undefined ? copy.noFills : formatP(mark)}
+        </Item>
+        <Item label={copy.positionValue}>{value === undefined ? EMPTY : formatP(value)}</Item>
         <Item label={copy.positionPnl}>
-          <Signed amount={unrealizedPnlP(position)} />
+          {unrealized === undefined ? EMPTY : <Signed amount={unrealized} />}
         </Item>
       </DataList.Root>
     </Stack>
@@ -430,7 +435,7 @@ function SettledPositionRow({ position }: { position: Position }) {
         )}
       </HStack>
       <DataList.Root orientation="horizontal" size="sm">
-        {/* A voided market resolved to nothing at all, and every P it took was refunded. */}
+        {/* A voided market resolved to nothing at all, so it has no result to name. */}
         <Item label={copy.marketResolvedResult}>
           {result === null ? EMPTY : result === 'YES' ? copy.yes : copy.no}
         </Item>
@@ -474,7 +479,7 @@ function OrderRow({ order }: { order: Order }) {
         <Item label={copy.fillAvgPrice}>
           {order.priceAvgBp === null ? EMPTY : formatPricePerContract(order.priceAvgBp)}
         </Item>
-        <Item label={copy.tradeAmountLabel}>
+        <Item label={copy.orderAmount}>
           {order.amountP === null ? EMPTY : formatP(parsePAmount(order.amountP))}
         </Item>
         <Item label={copy.orderCreatedAt}>{formatKst(order.createdAt)}</Item>

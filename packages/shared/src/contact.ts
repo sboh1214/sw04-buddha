@@ -50,7 +50,7 @@ export type ContactFields = z.infer<typeof contactFieldsSchema>;
 
 /**
  * `PUT /me/contact` (and the email sign-up step): the two fields, and the account the screen is
- * showing (`expectedAccountId`, as on the charge, coupon and trade bodies). The cookie decides
+ * showing (`expectedAccountId`, as on the charge and coupon bodies). The cookie decides
  * whose contact is written, and a tab whose session was switched elsewhere (another tab signed
  * in as somebody else; sign-ins are not broadcast) keeps showing the old account until it
  * refetches — the sign-up step's second request can even leave after the switch — so the server

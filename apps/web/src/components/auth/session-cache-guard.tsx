@@ -27,11 +27,10 @@ export function sessionIdentityChanged(
  * React has stopped talking to. An in-flight mutation keeps running after the component that
  * started it unmounts, and react-query only pushes fresh options into a pending mutation from
  * an effect, so a callback that closes over `useSession()`'s answer keeps naming the account
- * that started the work however long the tab has since belonged to somebody else
- * (`tradeAnswerScope`, use-trade.ts; and the payment window's `openWindow`,
- * app/wallet/charge-form.tsx, which reads it through `reservationToOpen` once a prepare
- * answers, so a late answer never opens a window on another account's wallet — the two
- * readers). The query cache cannot stand in for it either: the
+ * that started the work however long the tab has since belonged to somebody else (the payment
+ * window's `openWindow`, app/wallet/charge-form.tsx, which reads it through `reservationToOpen`
+ * once a prepare answers, so a late answer never opens a window on another account's wallet —
+ * the reader). The query cache cannot stand in for it either: the
  * account is knowable there only while `['me']` holds an answer, and `resetQueries` below is
  * precisely what empties it.
  *
@@ -61,9 +60,8 @@ export function cacheOwnerAccount(): SessionIdentity | undefined {
  *
  * PUBLISH FIRST. `resetQueries` blanks `['me']` on its way past, so an owner read after it could
  * only come from a cache that no longer names anybody. That is exactly the window
- * `tradeAnswerScope` (use-trade.ts) has to refuse in: B's `['positions']` has refetched, B's
- * `['me']` has not, and A's still-running trade answer would otherwise be waved through onto B's
- * 보유 포지션.
+ * `reservationToOpen` (lib/smartro-checkout.ts) has to refuse in: B's `['me']` has not answered
+ * yet, and A's still-running prepare would otherwise open A's payment window on B's wallet.
  *
  * PUBLISH ALWAYS, the first answer a tab ever sees included — that one resets nothing, but it is
  * the only answer most tabs get. Published only on a CHANGE, `cacheOwnerAccount()` would stay

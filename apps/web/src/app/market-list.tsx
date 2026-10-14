@@ -24,8 +24,8 @@ import { type MarketFilters } from '@/lib/market-keys';
  *
  * A-M3-31: a market whose close time has passed but is still `open` is NOT filtered out here. It
  * keeps its place in the list and its `CountdownBadge` reads 마감됨 — hiding it would make a
- * market that a trader can still open in another tab vanish from the page it was on, and the API
- * is the one that refuses the trade (`MARKET_CLOSED`). The server `now` is what lets that badge
+ * market that a reader can still open in another tab vanish from the page it was on, and the
+ * server is the one that decides the close. The server `now` is what lets that badge
  * say 마감됨 in the HTML rather than one frame after hydration.
  */
 

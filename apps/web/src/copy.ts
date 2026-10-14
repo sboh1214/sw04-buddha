@@ -201,7 +201,6 @@ export const copy = {
   ledgerTypeTradeSell: '예측 매도',
   ledgerTypeFee: '수수료',
   ledgerTypeSettlement: '정산 지급',
-  ledgerTypeVoidRefund: '무효 환불',
   ledgerTypeAdminAdjust: '관리자 조정',
   ledgerTypeBonus: '보너스',
   ledgerTypePaymentCancel: '결제 취소(환불)',
@@ -283,9 +282,6 @@ export const copy = {
   adminMarketImageUrlPlaceholder: 'https://',
   adminMarketCloseAt: '마감 시각 (KST)',
   adminMarketCloseAtShort: '마감 시각',
-  adminMarketInitialProb: '초기 확률',
-  adminMarketLiquidity: '유동성 b',
-  adminMarketMaxLoss: '최대 손실 ≈',
   adminMarketSlug: '슬러그 (비우면 자동 생성)',
   adminMarketEdit: '수정',
   adminMarketSaved: '시장을 저장했습니다.',
@@ -300,20 +296,12 @@ export const copy = {
   adminMarketCloseTitle: '시장을 마감합니다',
   adminMarketCloseBody: '마감하면 더 이상 예측할 수 없습니다. 계속할까요?',
   adminMarketClosed: '시장을 마감했습니다.',
-  adminMarketVoid: '무효',
-  adminMarketVoidTitle: '시장을 무효 처리합니다',
-  adminMarketVoidBody:
-    '모든 참여자에게 매수 원가를 환불하고 시장을 종료합니다. 되돌릴 수 없습니다.',
-  adminMarketVoidReason: '무효 사유',
-  adminMarketVoided: '시장을 무효 처리했습니다.',
-  adminMarketLmsr: 'LMSR 상태',
-  lmsrQYes: 'q(예)',
-  lmsrQNo: 'q(아니오)',
-  lmsrReserve: '준비금 (최대 손실)',
-  lmsrPrice: '현재가',
-  lmsrNetCollected: '순 수취 P',
-  lmsrOpenInterestYes: '미결제 예',
-  lmsrOpenInterestNo: '미결제 아니오',
+  // 관리자 상세의 거래 현황: 체결·포지션에서 나온 값만 보인다(직접 AMM 상태는 #125에서 지웠다).
+  adminMarketTradeStats: '거래 현황',
+  tradeStatsLastPrice: '현재가',
+  tradeStatsNetCollected: '순 수취 P',
+  tradeStatsOpenInterestYes: '미결제 예',
+  tradeStatsOpenInterestNo: '미결제 아니오',
   marketTradeCount: '거래 수',
   marketTraderCount: '참여자 수',
   marketVolume: '거래량',
@@ -338,9 +326,6 @@ export const copy = {
   eventVoided: '무효',
   eventRulesEdited: '정산 기준 수정',
   eventSystem: '시스템',
-  eventVoidReason: '사유',
-  eventRefundedAccounts: '환불 계정 수',
-  eventRefundedTotal: '환불 합계',
   eventRulesBefore: '이전',
   eventRulesAfter: '이후',
   payloadUnreadable: '표시할 수 없는 내용',
@@ -357,11 +342,9 @@ export const copy = {
   errMarketCategoryUnavailable: '선택할 수 없는 카테고리입니다.',
   errMarketImageUrl: 'http 또는 https로 시작하는 500자 이하의 URL을 입력해 주세요.',
   errMarketCloseAt: '마감 시각은 현재보다 뒤여야 합니다.',
-  errMarketLiquidity: '유동성 b는 1 이상 1,000,000 이하, 소수점 6자리까지 입력해 주세요.',
   errMarketSlug: '슬러그는 영문 소문자·숫자·한글·하이픈 3~80자로 입력하거나 비워 두세요.',
   errMarketSlugTaken: '이미 사용 중인 슬러그입니다.',
   errMarketInvalid: '입력값을 확인해 주세요.',
-  errMarketVoidReason: '사유를 1~500자로 입력해 주세요.',
   errMarketRulesRequired: '정산 기준을 채워야 시장을 열 수 있습니다.',
   errMarketRulesOpen: '열린 시장의 정산 기준은 비울 수 없습니다.',
   errMarketNotOpen: '진행 중인 시장이 아닙니다. 화면을 새로 고쳐 주세요.',
@@ -407,8 +390,8 @@ export const copy = {
   marketCloseAt: '마감',
   marketClosingSoon: '마감 임박',
   marketRemaining: '남은 시간',
-  // A-M3-31: 마감 시각이 지난 `open` 시장도 목록에 남는다. 카운트다운이 이 문구로 바뀌고,
-  // 거래는 서버가 MARKET_CLOSED로 거절한다. 상태 배지의 marketStatusClosed와는 다른 자리다.
+  // A-M3-31: 마감 시각이 지난 `open` 시장도 마감 작업이 돌 때까지 목록에 남는다. 카운트다운이
+  // 이 문구로 바뀐다. 상태 배지의 marketStatusClosed와는 다른 자리다.
   marketClosed: '마감됨',
   marketTraders: '참여자',
   // formatRemaining(lib/datetime.ts)이 숫자에 붙이는 단위. 문자열은 여기에만 있다.
@@ -432,7 +415,8 @@ export const copy = {
   marketClosedNotice: '마감된 시장입니다. 더 이상 예측할 수 없습니다.',
   marketResolvedNotice: '결과가 판정되었습니다. 정산을 진행하고 있습니다.',
   marketSettledNotice: '정산이 끝난 시장입니다.',
-  marketVoidedNotice: '무효 처리된 시장입니다. 매수에 쓴 P는 모두 환불했습니다.',
+  // 원금 환불을 약속하지 않는다(N03 §6). 무효 지급 방식은 #126이 정한다.
+  marketVoidedNotice: '무효 처리된 시장입니다.',
 
   // 정산 기준 섹션 (PLAN 11.1의 Kalshi 원칙: 상세에서 접지 않는다)
   rulesSectionTitle: '정산 기준',
@@ -446,7 +430,6 @@ export const copy = {
   chartRangeDay: '1일',
   chartRangeWeek: '1주',
   chartRangeAll: '전체',
-  chartEmpty: '아직 확률 기록이 없습니다.',
   chartTruncated: '최근 구간만 표시하고 있습니다.',
   // 스크린 리더용 표의 캡션과 두 열 머리글. 한 쌍으로 읽히므로 차트 라벨 옆에 둔다.
   // 차트의 접근 가능한 이름이 되는 한 문장('시작 61%, 최고 66%, 최저 60%, 현재 63%').
@@ -469,6 +452,7 @@ export const copy = {
 
   // 주문 이력 한 줄. 수량·평균가는 체결 쪽 라벨(fillQty/fillAvgPrice)을 그대로 쓴다.
   orderStatus: '상태',
+  orderAmount: '금액',
   orderCreatedAt: '주문 시각',
   orderStatusOpen: '대기',
   orderStatusPartiallyFilled: '부분 체결',
@@ -515,48 +499,14 @@ export const copy = {
   adminMarketPreviewCard: '카드 미리보기',
   adminMarketPreviewDetail: '상세 미리보기',
 
-  // --- markets / trade (M4) ---
-  // 매수/매도 패널. 계약 수·P·확률은 전부 호출 쪽에서 붙인다 — 값은 평범한 문자열이어야 한다.
-  tradeBuy: '매수',
-  tradeSell: '매도',
-  // SegmentGroup의 접근 가능한 이름. 라디오 그룹은 이름이 없으면 스크린 리더가 무엇을
-  // 고르는 것인지 말해 주지 못한다(chartRangeLabel과 같은 자리).
-  tradeModeLabel: '입력 방식',
-  tradeSideLabel: '매수 · 매도',
-  tradeOutcomeLabel: '예 · 아니오',
-  tradeModeAmount: 'P 금액',
-  tradeModeShares: '계약 수',
-  tradeUnitContracts: '계약',
-  tradeAmountLabel: '금액',
-  tradeMax: '최대',
-  tradeHolding: '보유',
-  // 견적 요약 (PLAN 11.1-2): "N계약 · 평균 63P · 맞히면 N×100P (수익 +X P)".
-  tradeContracts: '계약 수',
-  tradeAvgPrice: '평균가',
-  tradePayout: '맞히면 지급',
-  tradeProfit: '예상 수익',
-  tradeAfterProb: '거래 후 확률',
-  // 슬리피지 허용치는 숨기지 않고 절대 금액으로 보여 준다.
-  tradeMaxCost: '최대 지불',
-  tradeMinProceeds: '최소 수령',
-  tradeLoginToTrade: '로그인하고 예측하기',
-  tradeCharge: '충전하기',
-  tradeBought: '매수가 완료되었습니다.',
-  tradeSold: '매도가 완료되었습니다.',
-  // PRICE_MOVED(409) 뒤의 재확인 단계. 새 견적을 보고 한 번 더 눌러야 주문이 나간다.
-  tradePrevious: '이전',
-  tradeReconfirm: '가격이 바뀌었습니다. 새 견적으로 다시 눌러 주세요.',
-  errTradeTooSmall: '한 계약도 살 수 없는 금액입니다.',
-  errTradeAmount: '금액은 1P 이상으로 입력해 주세요.',
-  errTradeShares: '계약 수는 1 이상 1,000,000 이하로 입력해 주세요.',
-  errTradeSharesMax: '보유할 수 있는 계약 수를 넘습니다.',
-  errTradeNoPosition: '보유한 계약이 없습니다.',
-  errTradePosition: '보유한 계약보다 많이 팔 수 없습니다.',
-  errTradeBalance: '잔고가 부족합니다.',
-  errTradeClosed: '마감된 시장입니다.',
-  errTradeDuplicate: '이미 처리된 주문입니다. 잔고와 포지션을 확인해 주세요.',
-  errTradeNotFound: '시장을 찾을 수 없습니다.',
-  errTradeQuote: '견적을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.',
+  // --- markets / 체결 없음 · 거래 공백 (#125) ---
+  // 첫 체결 전의 가격 자리(N02 §5): 초기 설정값을 가격처럼 보이지 않는다. 카드·상세·차트·관리자 목록·
+  // 포트폴리오가 같은 문구를 쓴다.
+  noFills: '체결 없음',
+  // 주문 영역 자리의 안내(오너 결정 #125 (a)): CLOB 주문(#119·#66)이 들어올 때까지 거래할 수 없다.
+  tradePreparing: '거래 준비 중',
+  // 계약 수 단위. 수량은 호출 쪽에서 붙인다.
+  unitContracts: '계약',
 
   // --- 판정 · 정산 (PLAN 5.5 · 11.3 · 12, ADR-0046) ---
   // 관리자 판정 대화상자. 판정은 즉시 확정되고 바로 정산이 시작된다(이의 단계 없음).
@@ -587,11 +537,10 @@ export const copy = {
   // 정산 완료 안내: 지급은 이미 잔고에 반영됐고 내 손익은 아래 내 포지션이 말한다.
   marketSettledPayout:
     '맞힌 계약은 100P씩 지급되었고, 내 손익은 아래 내 포지션에서 볼 수 있습니다.',
-  // 관리자 이벤트 로그의 정산 행: 정산 요약(worker market-finalize)과 과거 무효가 버린 제안(A-M3-23).
+  // 관리자 이벤트 로그의 정산 행: 정산 요약(worker market-finalize).
   eventSettledAccounts: '정산 계정 수',
   eventPaidAccounts: '지급 계정 수',
   eventPaidTotal: '지급 합계',
-  eventDiscardedResult: '취소된 제안 결과',
 
   // --- leaderboard (M6 선택) ---
   // 순위는 실현 손익 기준이고, 아직 아무것도 실현하지 않은 계정은 목록에 없다.

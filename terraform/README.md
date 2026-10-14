@@ -84,7 +84,7 @@ flowchart LR
 | `terraform.tfvars.example`     | 필수 변수의 placeholder. 실제 `terraform.tfvars`는 gitignored                                                                                                                                                                                                                                      |
 | `.gitignore`                   | `.terraform/`, `*.tfstate*`, `*.tfvars`, `*.tfplan` 제외. `.terraform.lock.hcl`은 커밋한다                                                                                                                                                                                                         |
 
-저장소 쪽 짝: `Dockerfile`(multi-target `api|worker|web`), `deploy/`(compose.yaml · Caddyfile · deploy.sh · host-setup.sh · postgres-init/02-passwords.sh), `.github/workflows/deploy.yml`.
+저장소 쪽 짝: `Dockerfile`(multi-target `api|worker|web`), `deploy/`(compose.yaml · Caddyfile · deploy.sh · host-setup.sh · reset-db.sh · postgres-init/02-passwords.sh), `.github/workflows/deploy.yml`.
 
 ## 로컬 전제
 
@@ -308,6 +308,10 @@ sudo docker compose -f /data/buddha/compose.yaml exec -T postgres \
 실제 복구(운영 DB를 덤프 시점으로 되돌리기)는 리허설과 다른 절차다: `api`·`worker`를 먼저 세우고(`sudo docker compose -f /data/buddha/compose.yaml stop api worker`) `pg_restore -U postgres -d buddha --clean --if-exists < …`를 돌린 뒤 `up -d`한다. `--clean`은 현재 데이터를 지우므로 되돌릴 수 없다 — 그 직전에 한 번 더 `pg_dump`를 떠 둔다.
 
 `/data`에 두면 다음 스냅샷에 함께 들어간다. 이 머신 밖으로 꺼내는 길은 일부러 좁다 — 인스턴스 역할에 S3 권한이 없다. 필요하면 `iam.tf`에 버킷 하나짜리 `s3:PutObject`를 잠깐 더하거나, 작은 덤프는 세션에서 `base64 -w0`로 찍어 복사한다.
+
+### 운영 DB 초기화
+
+계정까지 모든 데이터와 Redis를 비우고 시드로 다시 채운다(ADR-0048). #149의 출시 전 재초기화가 이 절차를 쓰고, 다시 할지와 남길 데이터는 #133이 정한다 — 무엇이든 남기기로 하면 그 전에 이 절차를 좁힌다. 세션 안에서 `sudo bash /data/buddha/reset-db.sh --yes` — 덤프를 뜨고 api·worker를 멈춘 뒤 비우고 시드해 다시 띄운다. 끝까지 성공하면 덤프를 지우고, 실패하면 복구용으로 남긴다. 무엇이 지워지고 남는지, 확인과 실패 시 처리는 [docs/RESET.md](../docs/RESET.md).
 
 ### 인스턴스 교체
 

@@ -4,10 +4,9 @@
  * same objects.
  *
  * Conventions (PLAN 0.2): P amounts are `bigint({ mode: 'bigint' })`, prices are
- * `smallint`, quantities are `integer`, LMSR state is `numeric` (string in TS), timestamps
- * are the `timestampTz()` helper from columns.ts — never a bare `timestamp()`, whose
- * microseconds a JS Date cannot hold — ids are `uuid().defaultRandom()`
- * or `bigserial` for append-only logs. Column names: TS camelCase -> DB snake_case via
+ * `smallint`, quantities are `integer`, timestamps are the `timestampTz()` helper from
+ * columns.ts — never a bare `timestamp()`, whose microseconds a JS Date cannot hold — ids are
+ * `uuid().defaultRandom()` or `bigserial` for append-only logs. Column names: TS camelCase -> DB snake_case via
  * `casing: 'snake_case'` (drizzle.config.ts and createDb must agree). better-auth tables
  * (auth.ts) declare explicit snake_case names and are managed by better-auth (PLAN 6.1).
  */

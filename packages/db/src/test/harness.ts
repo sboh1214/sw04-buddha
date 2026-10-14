@@ -17,6 +17,7 @@ import { Client } from 'pg';
 import { closeDb, createDb, type Db } from '../client.js';
 import { loadRootEnv } from '../env.js';
 import { runMigrations } from '../migrator.js';
+import { WIPE_PUBLIC_TABLES_SQL } from '../wipe.js';
 
 const MIGRATE_LOCK_KEY = 'buddha:test-db:migrate';
 const FILE_LOCK_KEY = 'buddha:test-db:file';
@@ -75,7 +76,10 @@ export async function migrateTestDb(): Promise<void> {
 export interface TestDb {
   /** Application-role handle (buddha_app): pass this to the code under test and factories. */
   db: Db;
-  /** Truncates every table in schema `public` (RESTART IDENTITY). Call in beforeEach. */
+  /**
+   * Truncates every table in schema `public` (RESTART IDENTITY) with the statement migration
+   * 0017 and deploy/reset-db.sh run (wipe.ts). Call in beforeEach.
+   */
   reset(): Promise<void>;
   /** Releases the file lock and closes both connections. Call in afterAll. */
   close(): Promise<void>;
@@ -97,12 +101,7 @@ export async function connectTestDb(): Promise<TestDb> {
   return {
     db,
     async reset() {
-      const { rows } = await admin.query<{ tablename: string }>(
-        `SELECT tablename FROM pg_tables WHERE schemaname = 'public'`,
-      );
-      if (rows.length === 0) return;
-      const list = rows.map((r) => `"${r.tablename}"`).join(', ');
-      await admin.query(`TRUNCATE TABLE ${list} RESTART IDENTITY CASCADE`);
+      await admin.query(WIPE_PUBLIC_TABLES_SQL);
     },
     async close() {
       await closeDb(db);

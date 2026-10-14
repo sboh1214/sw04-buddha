@@ -258,8 +258,8 @@ export class AdminService {
     await this.getUser(userId); // 404 before writing anything
 
     const ledgerEntry = await this.db.transaction(async (tx) => {
-      // The balance row first, then the clock: another writer of this account (a trade, a
-      // void refund, a charge) may have committed while this transaction waited on that row,
+      // The balance row first, then the clock: another writer of this account (a
+      // settlement payout, a charge) may have committed while this transaction waited on that row,
       // and the rows written below must sort after it — `now()` is the transaction start and
       // would sort before work their own balance_after_p includes (clock.ts, A-M3-14). The
       // lock is what the UPDATE below would take anyway, so no writer's lock order changes;

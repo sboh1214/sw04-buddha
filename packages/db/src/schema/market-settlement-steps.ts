@@ -16,7 +16,7 @@ import { markets } from './markets.js';
  *
  * `step` and `status` are varchar validated by zod (the `market_events.type` convention), so #29
  * appends the `score` step without an enum migration. Not append-only: the worker updates rows.
- * No row for a voided market (voiding is a refund, not a settlement) or one never judged.
+ * No row for a voided market or one never judged.
  */
 export const marketSettlementSteps = pgTable(
   'market_settlement_steps',

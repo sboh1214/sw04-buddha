@@ -285,7 +285,7 @@ export class WalletService {
     // Retired and deleted packages are already refused above and in `packages.get`; amount and
     // price are the other two things an admin may change under a catalogue that is still on
     // screen (and `useChargePackages` has no refetch interval, so "still on screen" has no
-    // bound). Sell only the offer the user actually read — PLAN 5.3 guards a trade the same way.
+    // bound). Sell only the offer the user actually read.
     if (amountP !== body.expectedAmountP || priceKrw !== body.expectedPriceKrw) {
       throw new AppError('PRICE_MOVED', {
         message: 'This charge package has changed; reload and try again',

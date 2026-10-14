@@ -6,17 +6,17 @@ export interface StatementExecutor {
 }
 
 /**
- * The two statements every writer of market state runs first, shared by apps/api (trades,
- * admin transitions) and apps/worker (close, finalize) so the two cannot drift — PLAN 4.1 lets
+ * The two statements every writer of market state runs first, shared by apps/api (admin
+ * transitions) and apps/worker (close, finalize) so the two cannot drift — PLAN 4.1 lets
  * both apps depend on this package and forbids them depending on each other, which is why they
  * live here rather than beside the API's transaction code. Neither throws a framework error:
  * the API wraps `clockTimestamp` to answer INTERNAL, the worker fails the job.
  */
 
 /**
- * Serialises every writer of one market (PLAN 0.2): trades, open, close, resolve, void and
- * finalize all take `pg_advisory_xact_lock(hashtext(market_id))` first, so the LMSR state, the
- * statistics and the status machine are only ever changed by one transaction at a time.
+ * Serialises every writer of one market (PLAN 0.2): open, close, resolve and finalize all take
+ * `pg_advisory_xact_lock(hashtext(market_id))` first, and so must whatever fills orders (#119),
+ * so the statistics and the status machine are only ever changed by one transaction at a time.
  * Transaction-scoped: released at COMMIT or ROLLBACK, never earlier, and it waits (does not
  * fail) when another transaction holds it.
  *

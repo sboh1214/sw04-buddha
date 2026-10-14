@@ -6,7 +6,6 @@
 import {
   COUNTERPARTY_TYPES,
   LEDGER_ENTRY_TYPES,
-  MARKET_MECHANISMS,
   MARKET_STATUSES,
   MARKET_VISIBILITIES,
   ORDER_SIDES,
@@ -23,7 +22,6 @@ import { pgEnum } from 'drizzle-orm/pg-core';
 export const roleEnum = pgEnum('role', ROLES);
 export const ledgerEntryTypeEnum = pgEnum('ledger_entry_type', LEDGER_ENTRY_TYPES);
 export const paymentStatusEnum = pgEnum('payment_status', PAYMENT_STATUSES);
-export const marketMechanismEnum = pgEnum('market_mechanism', MARKET_MECHANISMS);
 export const marketStatusEnum = pgEnum('market_status', MARKET_STATUSES);
 export const marketVisibilityEnum = pgEnum('market_visibility', MARKET_VISIBILITIES);
 export const outcomeEnum = pgEnum('outcome', OUTCOMES);

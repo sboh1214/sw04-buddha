@@ -1,19 +1,12 @@
 import {
-  DEFAULT_LIQUIDITY_B,
-  LIQUIDITY_B_MAX,
-  LIQUIDITY_B_MIN,
   MARKET_IMAGE_URL_MAX,
   MARKET_RESOLVE_EVIDENCE_URL_MAX,
   MARKET_RESOLVE_NOTE_MAX,
   MARKET_SOURCE_MAX,
   MARKET_TEXT_MAX,
   MARKET_TITLE_MAX,
-  MARKET_VOID_REASON_MAX,
-  type MarketStatus,
   OUTCOMES,
-  formatP,
   marketSlugSchema,
-  maxLossP,
 } from '@buddha/shared';
 import type { KeepStateOptions } from 'react-hook-form';
 import * as z from 'zod';
@@ -29,9 +22,10 @@ import { isoToKstLocal, kstLocalToIso } from './datetime';
 
 /**
  * The admin market form (PLAN 12, design §4), shared by create and edit. Field values are the
- * strings the inputs hold; the probability is the Slider's number. Conversion to the API body
- * happens once, in `toCreateMarketBody` / `toUpdateMarketBody`, so the two screens cannot
- * disagree about it.
+ * strings the inputs hold. Conversion to the API body happens once, in `toCreateMarketBody` /
+ * `toUpdateMarketBody`, so the two screens cannot disagree about it. There is no initial
+ * probability or liquidity: the direct AMM those set up is gone (#125), and a market is made
+ * without either.
  */
 export interface MarketFormValues {
   title: string;
@@ -43,9 +37,6 @@ export interface MarketFormValues {
   imageUrl: string;
   /** `datetime-local` in KST (lib/datetime). */
   closeAt: string;
-  /** 1..99; `initialProbBp = pct * 100` on the wire. */
-  probabilityPct: number;
-  liquidityB: string;
   /** Blank asks the server to derive one from the title (create only). */
   slug: string;
 }
@@ -58,8 +49,6 @@ export const EMPTY_MARKET_FORM: MarketFormValues = {
   categoryId: '',
   imageUrl: '',
   closeAt: '',
-  probabilityPct: 50,
-  liquidityB: String(DEFAULT_LIQUIDITY_B),
   slug: '',
 };
 
@@ -72,9 +61,6 @@ export function isHttpUrl(value: string): boolean {
     return false;
   }
 }
-
-/** ≤ 6 decimals, as the API's numeric(18,6) column holds (shared `atMostSixDecimals`). */
-const LIQUIDITY_PATTERN = /^\d+(\.\d{1,6})?$/;
 
 const CATEGORY_ID_PATTERN = /^\d+$/;
 
@@ -122,15 +108,6 @@ export function marketFormSchema(
       const iso = kstLocalToIso(value);
       return iso !== null && new Date(iso).getTime() > now();
     }, copy.errMarketCloseAt),
-    probabilityPct: z.number().int().min(1, copy.errMarketInvalid).max(99, copy.errMarketInvalid),
-    liquidityB: z
-      .string()
-      .trim()
-      .refine((value) => {
-        if (!LIQUIDITY_PATTERN.test(value)) return false;
-        const b = Number(value);
-        return b >= LIQUIDITY_B_MIN && b <= LIQUIDITY_B_MAX;
-      }, copy.errMarketLiquidity),
     slug: z
       .string()
       .trim()
@@ -167,16 +144,6 @@ export const AFTER_SAVE_RESET = {
   keepDirty: false,
   keepFieldsRef: true,
 } satisfies KeepStateOptions;
-
-/** The 무효 dialog's one field (design §4: reason required, `voidMarketBodySchema { reason: 1..500 }`). */
-export const voidMarketFormSchema = z.object({
-  reason: z
-    .string()
-    .trim()
-    .min(1, copy.errMarketVoidReason)
-    .max(MARKET_VOID_REASON_MAX, copy.errMarketVoidReason),
-});
-export type VoidMarketFormValues = z.infer<typeof voidMarketFormSchema>;
 
 /**
  * The 판정 dialog (PLAN 12 정산 화면, ADR-0046): the result is the one required field, chosen
@@ -231,8 +198,6 @@ export function toCreateMarketBody(values: MarketFormValues): CreateMarketBody {
     categoryId: Number(values.categoryId),
     imageUrl: orNull(values.imageUrl),
     closeAt: kstLocalToIso(values.closeAt) ?? '',
-    initialProbBp: values.probabilityPct * 100,
-    liquidityB: Number(values.liquidityB),
     ...(values.slug.trim() ? { slug: values.slug.trim() } : {}),
   };
 }
@@ -240,15 +205,12 @@ export function toCreateMarketBody(values: MarketFormValues): CreateMarketBody {
 /**
  * The PATCH body: only the fields that differ from the prefilled `original`, so an unchanged
  * close time in the past is never sent and the API's per-status refusals (design 3.4) are
- * only met by a field the admin actually touched. `liquidityB` / `initialProbBp` are dropped
- * unless the market is still a draft — the inputs are disabled then, but a stale form must
- * not turn a title edit into a 400 naming `liquidityB`. The slug is not editable here.
+ * only met by a field the admin actually touched. The slug is not editable here.
  * `{}` when nothing changed; the caller must not send that (the API refuses an empty update).
  */
 export function toUpdateMarketBody(
   values: MarketFormValues,
   original: MarketFormValues,
-  status: MarketStatus,
 ): UpdateMarketBody {
   const next = toCreateMarketBody(values);
   const before = toCreateMarketBody(original);
@@ -264,10 +226,6 @@ export function toUpdateMarketBody(
   }
   if (next.imageUrl !== before.imageUrl) body.imageUrl = next.imageUrl;
   if (values.closeAt !== original.closeAt) body.closeAt = next.closeAt;
-  if (status === 'draft') {
-    if (next.initialProbBp !== before.initialProbBp) body.initialProbBp = next.initialProbBp;
-    if (next.liquidityB !== before.liquidityB) body.liquidityB = next.liquidityB;
-  }
   return body;
 }
 
@@ -286,29 +244,6 @@ export function marketToFormValues(market: AdminMarket, categories: Category[]):
     categoryId: category === undefined ? '' : String(category.id),
     imageUrl: market.imageUrl ?? '',
     closeAt: isoToKstLocal(market.closeAt),
-    probabilityPct: Math.min(99, Math.max(1, Math.round(market.initialProbBp / 100))),
-    liquidityB: trimNumeric(market.liquidityB),
     slug: market.slug,
   };
-}
-
-/** `numeric(18,6)` arrives as "1000.000000"; the input is nicer to read as "1000". */
-function trimNumeric(value: string): string {
-  const n = Number(value);
-  return Number.isFinite(n) ? String(n) : value;
-}
-
-/**
- * PLAN 12's live help under the liquidity input: the operator's worst case for this initial
- * probability and b, from the shared `maxLossP` (ADR-0027) — never re-derived here. Undefined
- * while the inputs cannot be read, so the help line simply stays blank rather than throwing.
- */
-export function maxLossHelp(probabilityPct: number, liquidityB: string): string | undefined {
-  if (!Number.isInteger(probabilityPct) || probabilityPct < 1 || probabilityPct > 99) {
-    return undefined;
-  }
-  if (!LIQUIDITY_PATTERN.test(liquidityB.trim())) return undefined;
-  const b = Number(liquidityB);
-  if (b < LIQUIDITY_B_MIN || b > LIQUIDITY_B_MAX) return undefined;
-  return `${copy.adminMarketMaxLoss} ${formatP(maxLossP(probabilityPct / 100, b))}`;
 }

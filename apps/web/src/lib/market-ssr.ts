@@ -1,10 +1,4 @@
-import {
-  type Outcome,
-  marketListQuerySchema,
-  marketSortSchema,
-  outcomeSchema,
-  publicMarketStatusSchema,
-} from '@buddha/shared';
+import { marketListQuerySchema, marketSortSchema, publicMarketStatusSchema } from '@buddha/shared';
 import { type QueryClient } from '@tanstack/react-query';
 import { type Market, type PriceSeries } from './api';
 import { DEFAULT_MARKET_FILTERS, type MarketFilters, marketKey, ticksKey } from './market-keys';
@@ -26,8 +20,8 @@ import { DEFAULT_TICK_RANGE } from './ticks';
  * `defaultShouldDehydrateQuery` keeps.
  *
  * The market key is always the row's canonical uuid, never the slug the URL carried (A-M3-29):
- * `market:tick`, `TradeResult.market.id` and the ticks/fills routes all speak uuids, so a cache
- * keyed on the slug would never be written to by the live path.
+ * `market:tick` and the ticks/fills routes all speak uuids, so a cache keyed on the slug would
+ * never be written to by the live path.
  *
  * A `null` series — the ticks read failed, which must not 500 the route (api.server.ts) — seeds
  * NOTHING under the ticks key. Seeding the `null` itself would build a SUCCESSFUL query holding
@@ -102,26 +96,4 @@ export function filtersFromSearchParams(searchParams: MarketSearchParams): Marke
     ...(category.success && category.data !== undefined ? { category: category.data } : {}),
     ...(q.success && q.data !== undefined ? { q: q.data } : {}),
   };
-}
-
-/**
- * The detail page's raw `searchParams`: `?outcome=YES|NO`, which a card's pill adds so the
- * trade panel opens on the side the visitor clicked (ADR-0041's Kalshi tile). Same shape rule
- * as `MarketSearchParams`: a repeated param arrives as an array.
- */
-export interface MarketDetailSearchParams {
-  outcome?: string | string[];
-}
-
-/**
- * The outcome a card's pill asked the trade panel to open on, or `undefined` for the panel's
- * own default (예). Parsed with the API's `outcomeSchema`, never a local list, and never a
- * throw: `?outcome=maybe` on a public page is a visitor's typo, not a 500 — it simply opens
- * the panel as if nothing had been asked.
- */
-export function outcomeFromSearchParams(
-  searchParams: MarketDetailSearchParams,
-): Outcome | undefined {
-  const parsed = outcomeSchema.safeParse(firstValue(searchParams.outcome));
-  return parsed.success ? parsed.data : undefined;
 }

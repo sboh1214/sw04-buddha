@@ -176,6 +176,8 @@ export function appendTickToSeries(
   event: MarketTickEvent,
 ): CachedSeries | undefined {
   if (held === undefined) return undefined;
+  // No fill price, nothing to draw: the chart records fills only (N02 §5).
+  if (event.lastPrice === null) return undefined;
 
   const eventMs = Date.parse(event.ts);
   if (!Number.isFinite(eventMs)) return undefined;
@@ -190,10 +192,11 @@ export function appendTickToSeries(
 
   // The event carries no `trigger`, and nothing draws one — the chart is a single step line.
   // 'trade' is the honest label for a live point; a tick published by a status transition is
-  // relabelled by the next fetch, which reads the stored row.
+  // relabelled by the next fetch, which reads the stored row. The fill's price is a whole
+  // percent and the series is in basis points, hence the ×100.
   const point: CachedTick = {
     ts: event.ts,
-    pYesBp: event.pYesBp,
+    pYesBp: event.lastPrice * 100,
     trigger: 'trade',
     tradeCount: event.tradeCount,
   };

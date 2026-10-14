@@ -36,7 +36,7 @@ function series(overrides: Partial<PriceSeries> = {}): PriceSeries {
     truncated: false,
     tradeCount: 41,
     points: [
-      { ts: '2026-09-07T00:00:00.000Z', pYesBp: 4000, trigger: 'open' },
+      { ts: '2026-09-07T00:00:00.000Z', pYesBp: 4000, trigger: 'trade' },
       { ts: '2026-09-07T01:00:00.000Z', pYesBp: 4200, trigger: 'trade' },
     ],
     ...overrides,
@@ -48,13 +48,16 @@ function series(overrides: Partial<PriceSeries> = {}): PriceSeries {
  * `appendTickToSeries` orders on: the server pins its right edge at its own window end, which
  * is later than the `executedAt` an event carries, so a `ts` rule refuses the very tick the
  * answer could not see.
+ *
+ * `bp` is the point the tick should draw; the event carries it as the fill's whole-percent
+ * `lastPrice`, so every value passed here is a multiple of 100.
  */
-function tick(ts: string, pYesBp = 5000, tradeCount = 42): MarketTickEvent {
+function tick(ts: string, bp = 5000, tradeCount = 42): MarketTickEvent {
+  if (bp % 100 !== 0) throw new Error(`a fill price is a whole percent, not ${String(bp)}bp`);
   return {
     type: 'market:tick',
     marketId: MARKET_ID,
-    pYesBp,
-    lastPrice: Math.round(pYesBp / 100),
+    lastPrice: bp / 100,
     volumeP: '12000',
     tradeCount,
     traderCount: 5,
@@ -213,7 +216,7 @@ describe('appendTickToSeries', () => {
     const held = series({
       to: '2026-09-07T01:59:50.000Z',
       points: [
-        { ts: '2026-09-07T00:00:00.000Z', pYesBp: 4000, trigger: 'open' },
+        { ts: '2026-09-07T00:00:00.000Z', pYesBp: 4000, trigger: 'trade' },
         { ts: '2026-09-07T01:59:50.000Z', pYesBp: 4200, trigger: 'trade' },
       ],
     });
@@ -254,6 +257,17 @@ describe('appendTickToSeries', () => {
     expect(appendTickToSeries(undefined, tick('2026-09-07T02:00:00.000Z'))).toBeUndefined();
   });
 
+  it('draws nothing for a tick with no fill price, the chart recording fills only', () => {
+    // N02 §5: 체결 없음 has no level to plot, and inventing one is the line drawn from nothing.
+    const noFill = { ...tick('2026-09-07T02:00:00.000Z'), lastPrice: null };
+    expect(appendTickToSeries(series(), noFill)).toBeUndefined();
+  });
+
+  it("draws the fill's whole-percent price in the series' basis points", () => {
+    const merged = appendTickToSeries(series(), tick('2026-09-07T02:00:00.000Z', 6300));
+    expect(merged?.points.at(-1)?.pYesBp).toBe(6300);
+  });
+
   it('takes a tick the answer pinned its right edge after', () => {
     // THE OTHER ARRIVAL ORDER of the same race, and it used to lose the trade outright. The
     // server pins a point at its own window end, which is LATER than the `executedAt` the
@@ -264,7 +278,7 @@ describe('appendTickToSeries', () => {
     const answered = series({
       to: '2026-09-07T01:00:00.004Z',
       points: [
-        { ts: '2026-09-07T00:00:00.000Z', pYesBp: 4000, trigger: 'open' },
+        { ts: '2026-09-07T00:00:00.000Z', pYesBp: 4000, trigger: 'trade' },
         { ts: '2026-09-07T01:00:00.004Z', pYesBp: 4200, trigger: 'trade' },
       ],
     });

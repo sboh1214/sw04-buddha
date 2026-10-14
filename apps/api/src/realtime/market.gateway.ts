@@ -123,7 +123,7 @@ type RealtimeNamespace = Namespace<
 >;
 
 /**
- * PLAN 8's consumer side: the API publishes an event to Redis after a trade or a status change
+ * PLAN 8's consumer side: the API publishes an event to Redis after a status or balance change
  * commits (MarketPublisher, M3), and this gateway forwards it to the Socket.IO rooms of the
  * `/ws` namespace. Both paths coexist, and the whole multi-instance contract is one invariant:
  *

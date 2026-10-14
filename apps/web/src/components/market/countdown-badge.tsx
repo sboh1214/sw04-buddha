@@ -18,20 +18,15 @@ import { isClosingSoon } from '@/lib/market-admin';
  *
  * That instant is then an ANCHOR the browser only adds a duration to (`tickingNow`), never a
  * value it replaces with its own clock. The badge used to tick on a raw `Date.now()`, so a
- * visitor whose clock was wrong counted down wrong by exactly the skew — and the trade panel
- * beside it anchors now, so ticking differently here would put the two readings of one close
- * time on one screen in disagreement, which is what A-M4-23 promises they never are. On the
- * detail screen the two anchors are now ONE value — the API's own `clock_timestamp()`, carried
- * as the series' window end and handed to both. It used to be two: the panel read the
- * `['market', id]` cache stamp, which is the NEXT host's on the seeded load and the BROWSER's on
- * a revisit, so the two readings of one close time could and did disagree. The panel keeps that
- * stamp only as a fallback for a page whose ticks read failed, which has no window end to share.
+ * visitor whose clock was wrong counted down wrong by exactly the skew. On the detail screen the
+ * anchor is the API's own `clock_timestamp()`, carried as the series' window end — the one
+ * value an order panel's close gate must share with this badge (A-M4-23), so the two readings
+ * of one close time on one screen never disagree.
  *
  * With no `now` at all the badge still renders something true — the absolute close time in KST
  * — and swaps to the countdown once mounted, ticking on the wall clock because there is nothing
  * to anchor to. That is what lets a caller with no server instant (the home grid, the admin
- * preview) drop the component in unchanged, and it is safe there: the badge is display-only and
- * has no panel beside it to disagree with.
+ * preview) drop the component in unchanged, and it is safe there: the badge is display-only.
  *
  * Colour never carries the state alone (PLAN 11.2): 마감 임박 and 마감됨 are written out beside
  * the orange and the grey.

@@ -94,8 +94,8 @@ describe('chartGeometry', () => {
   });
 
   it('holds one price across the full width when the series has no time span', () => {
-    // A market opened a moment ago has exactly one `open` tick, and a burst of trades can share
-    // a millisecond. Every x is then 0 and the trailing H1000 draws the flat hold — never NaN.
+    // A market with a single fill has exactly one tick, and a burst of fills can share a
+    // millisecond. Every x is then 0 and the trailing H1000 draws the flat hold — never NaN.
     for (const points of [[point(0, 6300)], [point(0, 6300), point(0, 6400), point(0, 6200)]]) {
       const geometry = chartGeometry(points);
       expect(geometry.at.every((cell) => cell.x === 0)).toBe(true);
@@ -299,8 +299,8 @@ describe('withLiveEdge', () => {
   });
 
   it('leaves an empty series empty, so the empty state still renders', () => {
-    // The same rule `extendToNow` states: a synthesised point would replace 아직 확률 기록이
-    // 없습니다 with a line drawn from nothing.
+    // The same rule `extendToNow` states: a synthesised point would replace 체결 없음 with a
+    // line drawn from nothing.
     expect(withLiveEdge([], 6300)).toEqual([]);
   });
 

@@ -82,7 +82,7 @@ export class RedisThrottlerStorage implements ThrottlerStorage {
       ttlMs = Number(pttl?.[1]);
     } catch (error) {
       // FAIL OPEN. A limiter that refuses when its store is unreachable turns a Redis blip into
-      // a total outage of a service whose reads, quotes and trades do not need Redis at all —
+      // a total outage of a service whose reads and writes do not need Redis at all —
       // strictly worse than the flood it would have stopped. Same posture as AdminGuard's role
       // cache, which falls back to Postgres rather than refusing.
       this.logger.warn(

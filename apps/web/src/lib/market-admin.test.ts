@@ -21,9 +21,7 @@ import {
   SETTLEMENT_STEP_STATUS_LABEL,
   SETTLEMENT_STEP_STATUS_PALETTE,
   auditFailureKindLabel,
-  canEditLiquidity,
   canResolve,
-  canVoid,
   compactJson,
   deltaLabel,
   deltaMoveKey,
@@ -168,12 +166,8 @@ describe('status predicates', () => {
     expect(settlementPollInterval(undefined)).toBe(false);
   });
 
-  it('allows edits while draft or open, liquidity while draft, void before the 판정 only', () => {
+  it('allows edits while draft or open', () => {
     expect(MARKET_STATUSES.filter(isEditable)).toEqual(['draft', 'open']);
-    expect(MARKET_STATUSES.filter(canEditLiquidity)).toEqual(['draft']);
-    // A judged market cannot be voided (ADR-0046, #26 decides): the API refuses naming `status`,
-    // so the button is not offered.
-    expect(MARKET_STATUSES.filter(canVoid)).toEqual(['open', 'closed']);
   });
 
   it('judges a closed market only', () => {
@@ -251,6 +245,11 @@ describe('formats', () => {
     expect(formatYesPrice(63)).toBe(`${copy.yes} 63%`);
   });
 
+  it('reads a market with no fill as 체결 없음, never as a number (N02 §5)', () => {
+    expect(copy.noFills).toBe('체결 없음');
+    expect(formatYesPrice(null)).toBe(copy.noFills);
+  });
+
   it('renders basis points and quantities for reading', () => {
     expect(formatBp(6300)).toBe('63.00%');
     expect(formatBp(5)).toBe('0.05%');
@@ -271,10 +270,7 @@ describe('formats', () => {
   });
 
   it('appends the contract unit to a grouped count', () => {
-    expect(formatContracts(1234)).toBe(`1,234${copy.tradeUnitContracts}`);
-    // A quote answers fractional shares; formatQuantity trims them the same way it trims the
-    // quantity strings the API sends.
-    expect(formatContracts(0.5)).toBe(`0.5${copy.tradeUnitContracts}`);
+    expect(formatContracts(1234)).toBe(`1,234${copy.unitContracts}`);
   });
 
   it('renders a payload as one JSON line', () => {
@@ -311,19 +307,12 @@ describe('marketEventRows', () => {
   const openAt = '2026-09-06T00:00:00.000Z';
   const closeAt = '2026-10-01T00:00:00.000Z';
 
-  it('reads the void summary as reason, refunded accounts and refunded total', () => {
+  it('reads no void summary: nothing writes one since the admin void and its refund went', () => {
+    // #125 (N03 §6): a void refunds nothing, so a row saying 환불 합계 would describe a payment
+    // that does not exist. A `voided` payload, if one ever turns up, falls back to raw JSON.
     expect(
       marketEventRows('voided', { reason: '중복 시장', refundedAccounts: 3, refundedP: '12500' }),
-    ).toEqual([
-      { label: copy.eventVoidReason, value: '중복 시장' },
-      { label: copy.eventRefundedAccounts, value: '3' },
-      { label: copy.eventRefundedTotal, value: '12,500P' },
-    ]);
-    expect(
-      marketEventRows('voided', { reason: '', refundedAccounts: 0, refundedP: '0' })?.map(
-        (row) => row.value,
-      ),
-    ).toEqual(['', '0', '0P']);
+    ).toBeUndefined();
   });
 
   it('reads the rules diff as before and after, with a blank as a dash', () => {
@@ -341,35 +330,6 @@ describe('marketEventRows', () => {
     expect(marketEventRows('closed', { closedAt: closeAt })).toEqual([
       { label: copy.adminMarketCloseAtShort, value: formatKst(closeAt) },
     ]);
-  });
-
-  it('adds the discarded proposal to an old void, and nothing to one from closed', () => {
-    // A-M3-23: voiding a market inside M5's dispute window cleared its result, and the event
-    // kept what was thrown away. Only old rows carry it (a judged market can no longer be
-    // voided, ADR-0046); a void from `closed` never had one, and the API omits the pair.
-    expect(
-      marketEventRows('voided', {
-        reason: '출처 오류',
-        refundedAccounts: 2,
-        refundedP: '300',
-        discardedResult: 'NO',
-        discardedDisputeUntil: closeAt,
-      }),
-    ).toEqual([
-      { label: copy.eventVoidReason, value: '출처 오류' },
-      { label: copy.eventRefundedAccounts, value: '2' },
-      { label: copy.eventRefundedTotal, value: '300P' },
-      { label: copy.eventDiscardedResult, value: copy.no },
-    ]);
-    expect(
-      marketEventRows('voided', {
-        reason: 'x',
-        refundedAccounts: 0,
-        refundedP: '0',
-        discardedResult: null,
-        discardedDisputeUntil: null,
-      })?.map((row) => row.label),
-    ).toEqual([copy.eventVoidReason, copy.eventRefundedAccounts, copy.eventRefundedTotal]);
   });
 
   it('reads the 판정 as its result, note and evidence; blanks are left out', () => {
@@ -486,14 +446,7 @@ describe('marketEventRows', () => {
   });
 
   it('falls back when a known type carries an unexpected shape', () => {
-    // A half-read row ("사유 undefined", "환불 합계 NaN") is worse than the raw JSON.
-    expect(marketEventRows('voided', { reason: 'x' })).toBeUndefined();
-    expect(
-      marketEventRows('voided', { reason: 'x', refundedAccounts: 1, refundedP: 'abc' }),
-    ).toBeUndefined();
-    expect(
-      marketEventRows('voided', { reason: 'x', refundedAccounts: 1.5, refundedP: '1' }),
-    ).toBeUndefined();
+    // A half-read row ("이전 undefined", "정산 지급 합계 NaN") is worse than the raw JSON.
     expect(marketEventRows('rules_edited', { before: 'a' })).toBeUndefined();
     expect(marketEventRows('rules_edited', 'a → b')).toBeUndefined();
     expect(marketEventRows('opened', { openAt, closeAt: 'not-a-date' })).toBeUndefined();
@@ -545,16 +498,11 @@ describe('transitionErrorMessage', () => {
         apiError(400, 'VALIDATION_ERROR', 'x', [{ path: ['closeAt'], message: 'past' }]),
       ),
     ).toBe(copy.errMarketCloseAt);
-    expect(
-      transitionErrorMessage(
-        apiError(400, 'VALIDATION_ERROR', 'x', [{ path: ['reason'], message: 'blank' }]),
-      ),
-    ).toBe(copy.errMarketVoidReason);
   });
 
-  it('names the refusals of the 판정 and of a void after it as a stale screen', () => {
-    // A market is judged once (ADR-0046): a second 판정, and a void of a judged market, are both
-    // refused naming `status` — the screen showed a state another admin has already moved on.
+  it('names the refusal of a second 판정 as a stale screen', () => {
+    // A market is judged once (ADR-0046): a second 판정 is refused naming `status` — the screen
+    // showed a state another admin has already moved on.
     for (const message of ['market is resolved', 'market is settled']) {
       expect(
         transitionErrorMessage(
@@ -632,8 +580,10 @@ describe('marketFormError', () => {
     const named = (path: string) =>
       marketFormError(apiError(400, 'VALIDATION_ERROR', 'x', [{ path: [path], message: 'bad' }]));
     expect(named('closeAt')).toEqual({ field: 'closeAt', message: copy.errMarketCloseAt });
-    expect(named('initialProbBp')?.field).toBe('probabilityPct');
-    expect(named('liquidityB')).toEqual({ field: 'liquidityB', message: copy.errMarketLiquidity });
+    // The direct-AMM fields went with the form inputs (#125): a stale API naming one has no field
+    // to land on, so it falls to the generic toast.
+    expect(named('initialProbBp')).toBeUndefined();
+    expect(named('liquidityB')).toBeUndefined();
     expect(named('title')).toEqual({ field: 'title', message: copy.errMarketTitle });
     expect(named('rules')).toEqual({ field: 'rules', message: copy.errMarketText });
     expect(named('imageUrl')).toEqual({ field: 'imageUrl', message: copy.errMarketImageUrl });
@@ -659,28 +609,16 @@ describe('marketFormError', () => {
 });
 
 describe('deltaMoveKey', () => {
-  it('gives consecutive small moves distinct identities, where the whole percent did not', () => {
-    // THE HAZARD: `lastPrice` is the whole percent, so three +0.1%p trades inside one percent all
-    // produced `50:+0.1%p`. The badge remembers the last DISMISSED identity, so the second and
-    // third moves matched it and the badge — five seconds, PLAN 11.4 — never came back.
+  it('is the whole percent and the label, the fallback a caller without a moveId gets', () => {
+    expect(deltaMoveKey(63, '+2%p')).toBe('63:+2%p');
+    // 체결 없음 has no price to key on, and no move to badge either.
+    expect(deltaMoveKey(null, '')).toBe(':');
+  });
+
+  it('collapses two small moves inside one percent, which is why the call site passes a moveId', () => {
+    // `lastPrice` is the whole percent, so two +0.1%p moves inside it share one identity — the
+    // badge, dismissed after the first, would stay dark for the second (`recentMove`, ticks.ts).
     const label = deltaLabel(0.1);
-    expect(deltaMoveKey(5010, 50, label)).not.toBe(deltaMoveKey(5020, 50, label));
-    expect(deltaMoveKey(5020, 50, label)).not.toBe(deltaMoveKey(5030, 50, label));
-    // The old identity, kept here to show what it collapsed: all three were one string.
-    expect(`${String(50)}:${label}`).toBe(`${String(50)}:${label}`);
-  });
-
-  it('is the whole percent only for a caller that has no basis points', () => {
-    // A card omits `pYesBp` (PLAN 11.1-1 wants the percentage alone); today the badge has one
-    // call site and it passes both, so this is the contract, not a live path.
-    expect(deltaMoveKey(undefined, 63, '+2%p')).toBe('63:+2%p');
-    expect(deltaMoveKey(6300, 63, '+2%p')).toBe('6300:+2%p');
-  });
-
-  it('cannot collide for two consecutive moves, because a move that ends where it began is hidden', () => {
-    // The property the fix rests on: sharing an identity requires the same ending probability,
-    // and a move from 5010 to 5010 has a zero delta, which `deltaLabel` renders as '' — no badge.
-    expect(deltaLabel(0)).toBe('');
-    expect(deltaMoveKey(5010, 50, deltaLabel(0))).toBe('5010:');
+    expect(deltaMoveKey(50, label)).toBe(deltaMoveKey(50, label));
   });
 });

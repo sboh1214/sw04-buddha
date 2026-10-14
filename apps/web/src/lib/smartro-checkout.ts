@@ -164,8 +164,7 @@ export function checkoutStep(state: CheckoutState, event: CheckoutEvent): Checko
  *
  * `sent` is not a guess. It is what the prepare sent as `expectedAccountId`, and the server
  * compared that with the cookie before it reserved anything (`assertExpectedAccount`), so a 2xx
- * PROVES the payment is that account's — `tradeAnswerScope`'s proof (use-trade.ts). Nothing checks
- * it again afterwards: the window approves at the public ReturnUrl, which finds the payment by its
+ * PROVES the payment is that account's. Nothing checks it again afterwards: the window approves at the public ReturnUrl, which finds the payment by its
  * Moid and credits the payment's own account whoever the cookie names by then (a phone's
  * cross-site post carries no cookie at all). So a window still open, or opened by a late answer,
  * after another tab signed this one in as somebody else would take a card payment on B's wallet
@@ -177,8 +176,7 @@ export function checkoutStep(state: CheckoutState, event: CheckoutEvent): Checko
  * so a switch counts from the moment the tab notices it, not from the sign-in in the other tab
  * (ADR-0042's 2026-09-30 addendum: side-by-side windows, the 5 s focus-refetch limit).
  * `undefined` means nobody has said yet — before better-auth's first answer, or a tree without
- * the guard — and is `tradeAnswerScope`'s permissive fallback: nothing of anybody else's is on
- * screen to confuse, and refusing would strand an ordinary payer. A sign-out (`null`) is not the
+ * the guard — and is let through: nothing of anybody else's is on screen to confuse, and refusing would strand an ordinary payer. A sign-out (`null`) is not the
  * account that opened the window.
  */
 export function checkoutBelongsTo(a: {

@@ -1,6 +1,5 @@
 import { desc, sql } from 'drizzle-orm';
 import {
-  bigint,
   check,
   index,
   integer,
@@ -22,8 +21,8 @@ import {
 import { markets } from './markets.js';
 
 /**
- * CLOB-ready order log (PLAN 6.2, 16). The MVP only writes `type='market'` orders that are
- * filled by the AMM inside the trade transaction (PLAN 5.4 step 6).
+ * CLOB-ready order log (PLAN 6.2, 16). Nothing writes it until the CLOB does (#119, which also
+ * reshapes it); the direct AMM trade that wrote filled market orders is gone (#125).
  */
 export const orders = pgTable(
   'orders',
@@ -47,14 +46,9 @@ export const orders = pgTable(
     /**
      * The client's `Idempotency-Key` (PLAN 5.4), unique per account like
      * `payments.idempotency_key` (migration 0009; before it the key was unique across every
-     * user, so client-minted keys could collide with, or probe, another account's). There is
-     * no Redis response cache: a replay is rebuilt from this row, its fill and its ledger
-     * entry, which already hold the answer and never expire (ADR-0027, M3 design 3.3).
+     * user, so client-minted keys could collide with, or probe, another account's).
      */
     idempotencyKey: text().notNull(),
-    // slippage guards (PLAN 5.3)
-    maxCostP: bigint({ mode: 'bigint' }),
-    minProceedsP: bigint({ mode: 'bigint' }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

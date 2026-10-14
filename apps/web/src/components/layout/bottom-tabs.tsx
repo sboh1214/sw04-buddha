@@ -27,18 +27,6 @@ const TABS: { key: string; href: Route; label: string }[] = [
 ];
 
 /**
- * The market detail screen is the one route with no tab bar: its trade panel puts a fixed
- * 예/아니오 bar in exactly this real estate (decision-trade-panel §6), and that bar is the element
- * AC 5 measures at 375px. Two fixed bars would stack, and the tab bar would cover the trade one.
- *
- * Only `/markets/<slug>` is excluded, not the whole prefix: a future `/markets` index would be a
- * list like the home page and should keep its tabs.
- */
-export function hidesBottomTabs(pathname: string): boolean {
-  return pathname.startsWith('/markets/');
-}
-
-/**
  * Whether a tab is the page being shown. `/` matches only itself — every route starts with it —
  * while the others also match their own subtree, so a future `/wallet/…` keeps 지갑 marked.
  */
@@ -47,9 +35,12 @@ export function isCurrentTab(pathname: string, href: string): boolean {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
+/**
+ * On every route, the market detail included: its 주문 영역 is an ordinary block (#125), so
+ * nothing else claims this place.
+ */
 export function BottomTabs() {
   const pathname = usePathname();
-  if (hidesBottomTabs(pathname)) return null;
 
   return (
     <HStack

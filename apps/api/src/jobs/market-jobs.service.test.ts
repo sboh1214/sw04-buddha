@@ -92,8 +92,8 @@ describe.skipIf(!hasTestInfra)('MarketJobs (integration)', () => {
     // MarketJobs has no way to take a finalize job back: a judgement is final.
     expect('cancelFinalize' in jobs).toBe(false);
 
-    // A seed market whose close time already passed, or a close the admin let expire:
-    // registered without delay rather than refused, so the worker picks it up at once.
+    // A close time that expired before the registration ran: registered without delay rather
+    // than refused, so the worker picks it up at once.
     const past = new Date(resolvedAt.getTime() - HOUR_MS);
     await jobs.scheduleClose(OTHER_ID, past, resolvedAt);
     const due = await queue.getJob(marketCloseJobId(OTHER_ID, past));

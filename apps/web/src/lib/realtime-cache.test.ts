@@ -58,7 +58,6 @@ const summary: MarketSummary = {
   imageUrl: null,
   status: 'open',
   lastPrice: 50,
-  pYesBp: 5000,
   volumeP: '120000',
   tradeCount: 10,
   traderCount: 4,
@@ -86,7 +85,6 @@ const otherCard: MarketListItem = { ...card, id: OTHER_ID, slug: 'other', sparkl
 const tick = (patch: Partial<MarketTickEvent> = {}): MarketTickEvent => ({
   type: 'market:tick',
   marketId: ID,
-  pYesBp: 6300,
   lastPrice: 63,
   volumeP: '130000',
   tradeCount: 11,
@@ -190,7 +188,6 @@ describe('the market detail cache', () => {
       await observer.refetch();
 
       const data = observer.getCurrentResult().data;
-      expect(data?.pYesBp).toBe(6300);
       expect(data?.lastPrice).toBe(63);
       expect(data?.volumeP).toBe('130000');
       expect(data?.tradeCount).toBe(11);
@@ -221,11 +218,11 @@ describe('the market detail cache', () => {
     });
     const unsubscribe = observer.subscribe(() => undefined);
     try {
-      expect(observer.getCurrentResult().data?.pYesBp).toBe(snapshot.pYesBp);
+      expect(observer.getCurrentResult().data?.lastPrice).toBe(snapshot.lastPrice);
 
       queryClient.setQueryData<Market>(marketKey(ID), (held) => applyTick(held, tick()));
 
-      expect(observer.getCurrentResult().data?.pYesBp).toBe(6300);
+      expect(observer.getCurrentResult().data?.lastPrice).toBe(63);
       expect(fetches).toBe(0);
     } finally {
       unsubscribe();
@@ -269,8 +266,8 @@ describe('the market list caches', () => {
 
     const volumePages = queryClient.getQueryData<MarketPages>(byVolume);
     const newestPages = queryClient.getQueryData<MarketPages>(byNewest);
-    expect(volumePages?.pages[0]?.items[0]?.pYesBp).toBe(6300);
-    expect(newestPages?.pages[0]?.items[1]?.pYesBp).toBe(6300);
+    expect(volumePages?.pages[0]?.items[0]?.lastPrice).toBe(63);
+    expect(newestPages?.pages[0]?.items[1]?.lastPrice).toBe(63);
     // Sorted by volume it is still the first card, so only its own page was rebuilt.
     expect(volumePages?.pages[1]).toBe(untouched);
     queryClient.clear();
@@ -474,7 +471,7 @@ describe('the tick series cache', () => {
 
       // And the next event still appends normally, so the series heals on its own.
       queryClient.setQueryData<PriceSeries>(key, (h) =>
-        appendTick(h, tick({ tradeCount: 12, pYesBp: 6400, ts: '2026-09-07T00:00:00.000Z' })),
+        appendTick(h, tick({ tradeCount: 12, lastPrice: 64, ts: '2026-09-07T00:00:00.000Z' })),
       );
       expect(queryClient.getQueryData<PriceSeries>(key)?.points.at(-1)?.pYesBp).toBe(6400);
     } finally {
@@ -509,8 +506,8 @@ describe('the tick series cache', () => {
 
 describe('the positions caches', () => {
   it('does not let a fetch that started before a trade roll the row back', async () => {
-    // The same race the market detail closes above, on the list the 매도 ceiling and 평가손익
-    // are read from: a mount or a focus refetch left before another tab's trade, the
+    // The same race the market detail closes above, on the list 내 포지션 and 평가손익 are
+    // read from: a mount or a focus refetch left before another tab's trade, the
     // `user:position` event applied it, and then the older answer landed. Nothing refetches
     // again afterwards, so the rollback stood until the next unrelated trigger.
     const queryClient = getQueryClient();
@@ -545,12 +542,11 @@ describe('the positions caches', () => {
     }
   });
 
-  it('re-asks when an event lands during the FIRST fetch, in the tab that did not trade', async () => {
-    // THE HAZARD, and it belongs to the OTHER tab: `applyTradeResult` (and the cancel it now
-    // does) runs only where the trade was made. Here the socket delivers the same account's
-    // change while this tab's first `GET /me/positions` is still in flight — a request that
-    // left before the trade. Dropping the event left that pre-trade answer standing, so 보유
-    // 목록 and the 매도 panel said 보유 없음 about a market the account had just bought into.
+  it('re-asks when an event lands during the FIRST fetch', async () => {
+    // THE HAZARD: the socket delivers the account's change while this tab's first
+    // `GET /me/positions` is still in flight — a request that left before the trade. Dropping
+    // the event left that pre-trade answer standing, so 보유 목록 said 보유 없음 about a market
+    // the account had just bought into.
     //
     // An invalidation alone does not fix it either: query-core honours `cancelRefetch` only
     // where the query holds data, so it would have subscribed to the very request that is

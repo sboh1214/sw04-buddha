@@ -19,7 +19,7 @@ import { ConfigService } from '@nestjs/config';
  * to every HTTP route.
  *
  * ONE throttler, not one per bucket: the library applies every configured throttler to every
- * route, so a throttler per row of PLAN 7.5's table would count `/trades` three times over.
+ * route, so a throttler per row of PLAN 7.5's table would count `/payments/charge` once per row.
  * `route` counts the row a handler names with `@RateLimit`, if it names one, and is a no-op
  * elsewhere; its headers carry the `-route` suffix (the library suffixes any name but
  * `default`).

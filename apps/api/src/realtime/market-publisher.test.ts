@@ -126,7 +126,6 @@ describe.skipIf(!hasTestInfra)('MarketPublisher (integration)', () => {
     await publisher.publishMarket(MARKET_ID, {
       type: 'market:tick',
       marketId: MARKET_ID,
-      pYesBp: 5200,
       lastPrice: 52,
       volumeP: '5125',
       tradeCount: 1,
@@ -252,7 +251,6 @@ describe.skipIf(!hasTestInfra)('MarketPublisher (integration)', () => {
         publisher.publishMarket(MARKET_ID, {
           type: 'market:tick',
           marketId: MARKET_ID,
-          pYesBp: 5200,
           lastPrice: 52,
           volumeP: '5125',
           tradeCount: 1,
@@ -292,12 +290,11 @@ describe.skipIf(!hasTestInfra)('MarketPublisher (integration)', () => {
       await nextEvent(stalled, 'ready');
       const publisher = new MarketPublisher(stalled);
       const ts = new Date().toISOString();
-      // One trade's worth of events, issued the way the services issue them.
+      // One fill's worth of market events, issued back to back as a publisher issues them.
       await Promise.all([
         publisher.publishMarket(MARKET_ID, {
           type: 'market:tick',
           marketId: MARKET_ID,
-          pYesBp: 5200,
           lastPrice: 52,
           volumeP: '5125',
           tradeCount: 1,

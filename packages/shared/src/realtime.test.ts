@@ -31,7 +31,6 @@ const ts = '2026-09-05T00:00:00.000Z';
 const tick = {
   type: 'market:tick',
   marketId,
-  pYesBp: 5250,
   lastPrice: 52,
   volumeP: '520',
   tradeCount: 1,
@@ -106,7 +105,12 @@ describe('realtime events (PLAN 8)', () => {
 
   it('bounds the numeric fields', () => {
     expect(realtimeEventSchema.safeParse({ ...tick, lastPrice: 0 }).success).toBe(false);
-    expect(realtimeEventSchema.safeParse({ ...tick, pYesBp: 10_001 }).success).toBe(false);
+    // A market with no fill has no price (N02 §5); the field is still required, and the AMM
+    // probability it once carried is stripped (#125).
+    expect(realtimeEventSchema.parse({ ...tick, lastPrice: null }).type).toBe('market:tick');
+    const { lastPrice: _price, ...tickWithoutPrice } = tick;
+    expect(realtimeEventSchema.safeParse(tickWithoutPrice).success).toBe(false);
+    expect(marketTickEventSchema.parse({ ...tick, pYesBp: 5250 })).not.toHaveProperty('pYesBp');
     expect(realtimeEventSchema.safeParse({ ...trade, qty: 0 }).success).toBe(false);
     expect(realtimeEventSchema.safeParse({ ...trade, side: 'short' }).success).toBe(false);
     expect(realtimeEventSchema.safeParse({ ...position, qty: -1 }).success).toBe(false);
@@ -256,7 +260,7 @@ describe('per-family event unions', () => {
   it('together claim every published type exactly once, and gate as strictly as the union', () => {
     const claimed = [...marketEvents, ...userEvents].map((event) => event.type);
     expect([...REALTIME_EVENT_TYPES].sort()).toEqual([...claimed].sort());
-    expect(marketRealtimeEventSchema.safeParse({ ...tick, pYesBp: 10_001 }).success).toBe(false);
+    expect(marketRealtimeEventSchema.safeParse({ ...tick, lastPrice: 100 }).success).toBe(false);
     expect(marketRealtimeEventSchema.safeParse({ ...trade, fillId: '0' }).success).toBe(false);
     expect(userRealtimeEventSchema.safeParse({ ...balance, availableP: 9480 }).success).toBe(false);
     expect(userRealtimeEventSchema.safeParse({}).success).toBe(false);

@@ -15,8 +15,8 @@ function describeError(err: Error & { code?: string }): string {
  * Upper bound on one command's reply (ms), armed when the command is issued. A Redis that
  * keeps the connection but stops answering — a PUBLISH whose reply never comes, a command
  * parked in the offline queue behind a handshake that never completes — would otherwise park
- * the caller forever; after a trade has COMMITted, that caller is the HTTP response of a
- * trade that succeeded. `connectTimeout` covers the TCP connect only and
+ * the caller forever; after a write has COMMITted, that caller is the HTTP response of a
+ * write that succeeded. `connectTimeout` covers the TCP connect only and
  * `maxRetriesPerRequest` the reconnects; neither bounds a reply. The handshake (HELLO/INFO)
  * and `quit()` at shutdown run under the same bound, so a Redis that accepts TCP and never
  * answers surfaces as `connection error: Command timed out` and reconnects.

@@ -1,11 +1,10 @@
 import * as z from 'zod';
 
 /**
- * Header PLAN 5.4 assigns to client-generated request keys: `POST /trades` (M3) and
- * `POST /payments/charge`. The client makes one key per intent, re-sends the same key when
- * it never saw an answer, and the server replies with what the first request did instead of
- * acting twice. A key re-used with a different body is refused with DUPLICATE_REQUEST
- * (PLAN 7.4: "멱등키 충돌·다른 페이로드").
+ * Header PLAN 5.4 assigns to client-generated request keys (`POST /payments/charge`). The
+ * client makes one key per intent, re-sends the same key when it never saw an answer, and the
+ * server replies with what the first request did instead of acting twice. A key re-used with a
+ * different body is refused with DUPLICATE_REQUEST (PLAN 7.4: "멱등키 충돌·다른 페이로드").
  */
 export const IDEMPOTENCY_KEY_HEADER = 'Idempotency-Key';
 

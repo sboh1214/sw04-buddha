@@ -18,6 +18,10 @@ describe('copy', () => {
     expect(copy.walletNotice).toContain('환전');
   });
 
+  it('promises no refund for a voided market (N03 §6: a void is not a cost refund, #125)', () => {
+    expect(copy.marketVoidedNotice).not.toContain('환불');
+  });
+
   it('contains no forbidden gambling vocabulary', () => {
     for (const text of Object.values(copy)) {
       for (const word of FORBIDDEN_WORDS) {

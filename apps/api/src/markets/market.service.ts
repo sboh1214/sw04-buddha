@@ -10,14 +10,11 @@ import {
   decodeSortCursor,
   encodeKeyset,
   encodeSortCursor,
-  mechanismFor,
-  parseQuantity,
   serializePAmount,
   tickBucketSeconds,
   uuidParamSchema,
   type Category,
   type Fill,
-  type LmsrState,
   type Market,
   type MarketListItem,
   type MarketListQuery,
@@ -64,39 +61,6 @@ export const marketWithCategory = {
   category: { slug: schema.categories.slug, nameKo: schema.categories.nameKo },
 };
 
-/** `numeric` columns cross drizzle as strings; the engine wants doubles (PLAN 0.2). */
-/**
- * Refuses a trade or a quote on a market that is not taking orders (PLAN 5.2, design 3.6):
- * MARKET_NOT_OPEN for any status but `open`, MARKET_CLOSED for an open market whose close
- * time has passed (the M5 close job has not run yet, or is about to). A draft never gets
- * here: `requirePublic` answers NOT_FOUND for it first.
- *
- * One implementation for both routes, and both call it with the database clock (the quote
- * through `requirePublicAt`, the trade with its post-lock `executedAt`), so a quote cannot
- * call a market tradable that `POST /trades` refuses a moment later for the time alone.
- */
-export function assertTradable(market: Pick<MarketRow, 'status' | 'closeAt'>, now: Date): void {
-  if (market.status !== 'open') {
-    throw new AppError('MARKET_NOT_OPEN', { message: `Market is ${market.status}` });
-  }
-  if (market.closeAt.getTime() <= now.getTime()) {
-    throw new AppError('MARKET_CLOSED', { message: 'Market has passed its close time' });
-  }
-}
-
-export function lmsrStateOf(row: Pick<MarketRow, 'qYes' | 'qNo' | 'liquidityB'>): LmsrState {
-  return {
-    qYes: parseQuantity(row.qYes),
-    qNo: parseQuantity(row.qNo),
-    b: parseQuantity(row.liquidityB),
-  };
-}
-
-/** YES probability in basis points, derived from the stored state (not a column). */
-export function pYesBpOf(row: MarketRow): number {
-  return mechanismFor(row.mechanism).probabilityBp(lmsrStateOf(row));
-}
-
 export function toMarketSummary(row: MarketRow, category: CategoryRef): MarketSummary {
   return {
     id: row.id,
@@ -106,7 +70,6 @@ export function toMarketSummary(row: MarketRow, category: CategoryRef): MarketSu
     imageUrl: row.imageUrl,
     status: row.status,
     lastPrice: row.lastPrice,
-    pYesBp: pYesBpOf(row),
     volumeP: serializePAmount(row.volumeP),
     tradeCount: row.tradeCount,
     traderCount: row.traderCount,
@@ -120,19 +83,7 @@ export function toMarketSummary(row: MarketRow, category: CategoryRef): MarketSu
   };
 }
 
-/**
- * A card's sparkline ending on the probability that card reports.
- *
- * Not `withLatestSample` (apps/web market-live.ts) moved here, and the difference is the empty
- * case: the client replaces the newest sample of a line it is already drawing, while an empty
- * answer here means the market has no tick in the window at all, and pinning one sample would
- * draw a flat line where the card should draw nothing.
- */
-function endingOnRow(sparkline: number[], pYesBp: number): number[] {
-  return sparkline.length === 0 ? sparkline : [...sparkline.slice(0, -1), pYesBp];
-}
-
-/** Public detail (PLAN 7.1): no LMSR state, liquidity, reserve or author. */
+/** Public detail (PLAN 7.1): no author, exposure or settlement steps. */
 export function toMarket(row: MarketRow, category: CategoryRef): Market {
   return {
     ...toMarketSummary(row, category),
@@ -165,8 +116,8 @@ function likePattern(q: string): string {
 
 /**
  * Public market reads (PLAN 5.2, 7.1; M3). A draft is invisible on every public route — the
- * list never returns one and the detail, fills, ticks and quote routes answer NOT_FOUND for
- * one, the same as for an id that does not exist: only admins know a draft exists.
+ * list never returns one and the detail, fills and ticks routes answer NOT_FOUND for one, the
+ * same as for an id that does not exist: only admins know a draft exists.
  */
 @Injectable()
 export class MarketService {
@@ -238,12 +189,7 @@ export class MarketService {
     return {
       items: kept.map((row) => ({
         ...toMarketSummary(row.market, row.category),
-        // The line has to end where the badge says it does. The rows above and the samples
-        // here are two statements and therefore two snapshots, so a trade committing between
-        // them left the card carrying the old probability beside a line already drawn to the
-        // new one. Ending the line on the ROW's own probability makes the pair consistent by
-        // construction rather than by timing.
-        sparkline: endingOnRow(spark.get(row.market.id) ?? [], pYesBpOf(row.market)),
+        sparkline: spark.get(row.market.id) ?? [],
       })),
       nextCursor: hasMore && last ? nextCursorOf(last.market) : null,
     };
@@ -276,10 +222,9 @@ export class MarketService {
    * Hourly as-of samples for one page of cards (PLAN 11.4). One correlated LIMIT-1 seek per
    * bucket on `price_ticks_market_id_ts_id_idx`: SPARKLINE_MAX_POINTS x page size seeks,
    * bounded whatever the markets' history — unlike a `ts >= now() - 24h` scan, whose cost
-   * grows with trade volume on an anonymous route (A-M3-20). An hour without a trade carries
-   * the previous value forward for free, and a market opened through the admin transition or
-   * the seed carries the `open` tick that path writes, so its card is a flat line rather than
-   * an empty one; only a market with no tick at all comes back with an empty array.
+   * grows with trade volume on an anonymous route (A-M3-20). An hour without a fill carries
+   * the previous value forward for free. Ticks come from fills only — opening a market writes
+   * none — so a market with no fill yet comes back with an empty array (N02 §5).
    *
    * A separate statement, not a lateral on the paging query: Postgres applies that query's
    * LIMIT above the join, so a lateral there would run once per market the filter matches
@@ -360,11 +305,11 @@ export class MarketService {
   }
 
   /**
-   * The market row for a public sub-resource (fills, ticks, quotes): NOT_FOUND for an unknown
-   * id and for a draft alike — with the database clock read in the same statement, so a
-   * caller that decides on time (`assertTradable`) uses the clock `POST /trades` will use
-   * and not the API host's, at no extra round trip (clock.ts, A-M3-16). Epoch millis as
-   * text, like `clockTimestamp`: no driver-side date parser is involved.
+   * The market row for a public sub-resource (fills, ticks): NOT_FOUND for an unknown id and
+   * for a draft alike — with the database clock read in the same statement, so a window the
+   * caller left open ends on the clock ticks are stamped with and not the API host's, at no
+   * extra round trip (clock.ts, A-M3-16). Epoch millis as text, like `clockTimestamp`: no
+   * driver-side date parser is involved.
    */
   async requirePublicAt(marketId: string): Promise<{ market: MarketRow; now: Date }> {
     const [row] = await this.db
@@ -451,9 +396,9 @@ export class MarketService {
     // `raw` (market.ts), which is the one value `tickBucketSeconds` answers 0 for.
     //
     // `market.openAt` deliberately stays OUT of the filter. No tick can predate a market's
-    // opening — the 'open' tick is written in the same transaction that stamps `openAt` — so
-    // flooring there would only make the answer depend on a bound it cannot need, and the suite
-    // pins that reading outright ("`from` older than the bound is a filter, not a floor").
+    // opening — ticks come from fills, and a draft takes no orders — so flooring there would
+    // only make the answer depend on a bound it cannot need, and the suite pins that reading
+    // outright ("`from` older than the bound is a filter, not a floor").
     const filterFrom =
       query.from !== undefined
         ? new Date(query.from)
@@ -492,8 +437,8 @@ export class MarketService {
 
   /**
    * The probability in force at every boundary of the absolute `bucketSeconds` grid over
-   * [from, to]. Exact, not an approximation: the series is a step function (the LMSR state
-   * holds between trades), so the last tick at or before a boundary IS the value there.
+   * [from, to]. Exact, not an approximation: the series is a step function (the price holds
+   * between fills), so the last tick at or before a boundary IS the value there.
    */
   private async sampleTicks(
     marketId: string,

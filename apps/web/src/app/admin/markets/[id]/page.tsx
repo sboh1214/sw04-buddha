@@ -1,7 +1,7 @@
 import { AdminMarketDetail } from './admin-market-detail';
 
 /**
- * PLAN 12 시장 상세(관리): transitions, LMSR state, event log, fills. Access is checked in the
+ * PLAN 12 시장 상세(관리): transitions, trade stats, event log, fills. Access is checked in the
  * admin layout; an unknown id is the client's 찾을 수 없습니다 alert (the API answers 404),
  * and a malformed one — not a uuid — gets the same alert without a request (`marketIdParam`).
  */
