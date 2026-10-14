@@ -43,7 +43,7 @@ describe('copy', () => {
   });
 
   it('formats Coin via @buddha/shared (workspace wiring)', () => {
-    expect(formatCoin(12345n)).toBe('12,345P');
+    expect(formatCoin(12345n)).toBe('12,345 Coin');
   });
 });
 

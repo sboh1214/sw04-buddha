@@ -94,12 +94,13 @@ function LedgerRow({ entry }: { entry: LedgerEntry }) {
           fontWeight="semibold"
           colorPalette={credit ? 'yes' : 'no'}
           color="colorPalette.fg"
+          whiteSpace="nowrap"
           data-testid="ledger-amount"
         >
           {credit ? '+' : MINUS_SIGN}
           {formatCoin(credit ? amount : -amount)}
         </Text>
-        <Text fontSize="xs" color="fg.muted">
+        <Text fontSize="xs" color="fg.muted" whiteSpace="nowrap">
           {copy.ledgerBalanceAfter} {formatCoin(parseCoinAmount(entry.balanceAfterCoin))}
         </Text>
       </Stack>

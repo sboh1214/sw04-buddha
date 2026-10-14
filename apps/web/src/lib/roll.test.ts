@@ -29,13 +29,14 @@ describe('rollCells', () => {
     // the space, the thousands comma, the percent sign and the U+2212 minus are not digits and
     // never roll, but they still have to be rendered.
     const text = formatCoin(-1200n);
-    expect(text).toBe(`${MINUS_SIGN}1,200P`);
+    expect(text).toBe(`${MINUS_SIGN}1,200 Coin`);
     const cells = rollCells(text);
     expect(cells.map((cell) => cell.char).join('')).toBe(text);
     expect(cells.filter((cell) => cell.offsetPct === null).map((cell) => cell.char)).toEqual([
       MINUS_SIGN,
       ',',
-      'P',
+      ' ',
+      ...'Coin',
     ]);
     expect(rollCells('예 63%').filter((cell) => cell.offsetPct === null).length).toBe(3);
   });
@@ -57,14 +58,16 @@ describe('rollCells', () => {
     expect(new Set(two.map((cell) => cell.key)).size).toBe(two.length);
   });
 
-  it('keeps the P suffix and the units digit in place when a thousand rolls over', () => {
-    const before = rollCells('9,900P');
-    const after = rollCells('10,000P');
-    expect(fromRight(before, 0)?.char).toBe('P');
-    expect(fromRight(after, 0)?.char).toBe('P');
-    expect(fromRight(before, 1)?.offsetPct).toBe(0);
-    expect(fromRight(after, 1)?.offsetPct).toBe(0);
-    expect(fromRight(before, 4)?.char).toBe(',');
-    expect(fromRight(after, 4)?.char).toBe(',');
+  it('keeps the Coin suffix and the units digit in place when a thousand rolls over', () => {
+    const before = rollCells('9,900 Coin');
+    const after = rollCells('10,000 Coin');
+    expect(fromRight(before, 0)?.char).toBe('n');
+    expect(fromRight(after, 0)?.char).toBe('n');
+    expect(fromRight(before, 4)?.char).toBe(' ');
+    expect(fromRight(after, 4)?.char).toBe(' ');
+    expect(fromRight(before, 5)?.offsetPct).toBe(0);
+    expect(fromRight(after, 5)?.offsetPct).toBe(0);
+    expect(fromRight(before, 8)?.char).toBe(',');
+    expect(fromRight(after, 8)?.char).toBe(',');
   });
 });

@@ -91,10 +91,10 @@ const OVERVIEW = `## 개요
   \`(created_at DESC, id DESC)\` 키셋이다).
 - **시각** — 모든 타임스탬프는 ISO 8601 UTC 문자열이다. 정밀도는 밀리초 — timestamptz 컬럼이
   전부 \`timestamp(3)\` 이다.
-- **P 금액** — 10진 정수 문자열이다(\`"12500"\`, \`"-300"\`). JSON number 는 IEEE double 이라
-  Postgres bigint 를 정확히 담지 못해서, P 는 요청·응답 양방향 모두 문자열로 오간다. 요청 본문의
-  P 금액은 부호 1자 + \`MAX_COIN_AMOUNT\`(10^15)의 16자리 = 17자까지만 받는다(그보다 긴 문자열은
-  파싱하기 전에 거절한다: 백만 자리 \`BigInt()\` 는 요청 스레드에서 실제로 CPU 를 쓴다).
+- **Coin 금액** — 10진 정수 문자열이다(\`"12500"\`, \`"-300"\`). JSON number 는 IEEE double 이라
+  Postgres bigint 를 정확히 담지 못해서, Coin 금액은 요청·응답 양방향 모두 문자열로 오간다.
+  요청 본문의 Coin 금액은 부호 1자 + \`MAX_COIN_AMOUNT\`(10^15)의 16자리 = 17자까지만 받는다(그보다
+  긴 문자열은 파싱하기 전에 거절한다: 백만 자리 \`BigInt()\` 는 요청 스레드에서 실제로 CPU 를 쓴다).
 - **본문 형식** — 요청·응답 모두 \`application/json\` 이다.
   \`application/x-www-form-urlencoded\` 파서는 꺼져 있다(HTML 폼이 바로 CSRF 의 모양이다).
 - **operationId** — 오퍼레이션마다 \`@ApiOperation({ operationId })\` 로 명시한다. 명시하지 않은
@@ -322,9 +322,9 @@ const ERROR_NOTES = {
   CONTACT_REQUIRED:
     '실명과 휴대전화 번호를 아직 등록하지 않은 계정이다. `PUT /api/v1/me/contact` 로 등록한 뒤 다시 시도한다.',
   REFUND_NOT_ALLOWED:
-    '환불 정책 밖의 결제다. `details[0].message` 가 까닭을 말한다 — `window_closed`(승인 후 7일이 지났다), `status`(환불할 수 있는 상태가 아니다), `provider`(그 결제 수단은 취소를 지원하지 않는다). 이미 쓴 P 가 있으면 `INSUFFICIENT_BALANCE` 로 답한다.',
+    '환불 정책 밖의 결제다. `details[0].message` 가 까닭을 말한다 — `window_closed`(승인 후 7일이 지났다), `status`(환불할 수 있는 상태가 아니다), `provider`(그 결제 수단은 취소를 지원하지 않는다). 이미 쓴 Coin 이 있으면 `INSUFFICIENT_BALANCE` 로 답한다.',
   PAYMENT_GATEWAY_REFUSED:
-    'PG 가 요청을 거절했다. `details[0].message` 에 PG 의 `<결과 코드> <메시지>` 가 붙는다. 환불이면 회수했던 P 를 되돌려 놓았다. 단 환불 **재시도**가 거절되면 첫 시도가 이미 카드를 취소했을 수 있어 P 를 되돌리지 않고 `refunding` 으로 둔다 — 첫 시도라도 PG 의 답을 기다리는 사이 재시도가 결제를 넘겨받았으면 마찬가지다(그 재시도가 정한다). 거절됐어도 그사이 다른 시도가 환불을 끝냈으면 오류가 아니라 `refunded` 로 마친 결제로 답한다.',
+    'PG 가 요청을 거절했다. `details[0].message` 에 PG 의 `<결과 코드> <메시지>` 가 붙는다. 환불이면 회수했던 Coin 을 되돌려 놓았다. 단 환불 **재시도**가 거절되면 첫 시도가 이미 카드를 취소했을 수 있어 Coin 을 되돌리지 않고 `refunding` 으로 둔다 — 첫 시도라도 PG 의 답을 기다리는 사이 재시도가 결제를 넘겨받았으면 마찬가지다(그 재시도가 정한다). 거절됐어도 그사이 다른 시도가 환불을 끝냈으면 오류가 아니라 `refunded` 로 마친 결제로 답한다.',
   PAYMENT_GATEWAY_ERROR:
     'PG 에 닿지 못했거나 결과를 알 수 없다(502). 다른 5xx 처럼 본문에 내부 사정을 담지 않는다. 환불이면 `refunding` 으로 남으니 다시 시도한다. 단 그사이 다른 시도가 환불을 끝냈으면 오류가 아니라 `refunded` 로 마친 결제로 답한다.',
   INTERNAL: '그 밖의 서버 오류. 본문에 내부 사정을 담지 않는다.',

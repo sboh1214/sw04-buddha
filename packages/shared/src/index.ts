@@ -12,7 +12,7 @@ export * from './api/coin-amount.js';
 export * from './constants.js';
 export * from './contact.js';
 export * from './enums.js';
-export { MINUS_SIGN, formatCoin, formatKrw } from './format.js';
+export { COIN_UNIT, MINUS_SIGN, formatCoin, formatKrw } from './format.js';
 export * from './jobs.js';
 export * from './leaderboard.js';
 export * from './lmsr.js';

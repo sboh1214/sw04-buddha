@@ -8,7 +8,7 @@
  * browser emit identical markup and a page load does not roll every number up from zero.
  *
  * The text arrives already formatted (`formatCoin`, `formatYesPrice`); nothing is formatted here,
- * so the composed labels those helpers produce — '예 63%', '−1,200P' — survive intact and the
+ * so the composed labels those helpers produce — '예 63%', '−1,200 Coin' — survive intact and the
  * 예/아니오 word always travels with its number (PLAN 11.2).
  */
 
@@ -29,10 +29,10 @@ export interface RollCell {
  * Splits an already-formatted string into roll cells.
  *
  * Keys are anchored to the END of the string, not the start. A formatted value changes length
- * on ordinary one-point moves — '예 9%' -> '예 63%', '9,900P' -> '10,000P' — and keying from the
- * left makes React reuse the cell that held a '9' for a '6', animating the wrong glyphs on the
- * common case. Anchored from the right, the units digit, the '%' and the thousands digits keep
- * their identity; a new leading digit simply mounts, which correctly does not animate.
+ * on ordinary one-point moves — '예 9%' -> '예 63%', '9,900 Coin' -> '10,000 Coin' — and keying
+ * from the left makes React reuse the cell that held a '9' for a '6', animating the wrong glyphs
+ * on the common case. Anchored from the right, the units digit, the '%' and the thousands digits
+ * keep their identity; a new leading digit simply mounts, which correctly does not animate.
  *
  * Split by code point rather than by UTF-16 unit, so a character outside the BMP is one cell
  * and cannot be torn into two halves that render as replacement glyphs.

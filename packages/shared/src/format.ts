@@ -2,6 +2,12 @@
 export const MINUS_SIGN = '−';
 
 /**
+ * The unit written after a Coin amount (NR, N01 §1): by `formatCoin`, and by the screens that
+ * write an amount `formatCoin` cannot (a price per contract with two decimals).
+ */
+export const COIN_UNIT = 'Coin';
+
+/**
  * Formats a KRW price as `4,900원`. Prices are plain integers (won has no minor unit) and
  * always positive, so this is the Coin formatter without the sign handling.
  */
@@ -24,7 +30,9 @@ function groupDigits(digits: string): string {
 }
 
 /**
- * Formats an integer amount of Coin as `12,345P` / `−1,200P`.
+ * Formats an integer amount of Coin as `12,345 Coin` / `−1,200 Coin`: the number, one ordinary
+ * space, then the unit (ADR-0047 O-14, ADR-0051). A screen that must not break the line between
+ * the two says so in CSS (`white-space: nowrap`) rather than through a no-break space here.
  *
  * Accepts `bigint` (canonical for Coin amounts, see PLAN 0.2) or a safe-integer
  * `number`. Non-integers are rejected because Coin amounts are never fractional;
@@ -39,5 +47,5 @@ export function formatCoin(n: bigint | number): string {
   const value = typeof n === 'bigint' ? n : BigInt(n);
   const negative = value < 0n;
   const digits = (negative ? -value : value).toString();
-  return `${negative ? MINUS_SIGN : ''}${groupDigits(digits)}P`;
+  return `${negative ? MINUS_SIGN : ''}${groupDigits(digits)} ${COIN_UNIT}`;
 }

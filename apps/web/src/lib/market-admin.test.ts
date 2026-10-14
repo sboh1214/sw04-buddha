@@ -265,8 +265,8 @@ describe('formats', () => {
   });
 
   it('reads basis points as what one contract costs', () => {
-    expect(formatPricePerContract(6300)).toBe('63.00P');
-    expect(formatPricePerContract(5)).toBe('0.05P');
+    expect(formatPricePerContract(6300)).toBe('63.00 Coin');
+    expect(formatPricePerContract(5)).toBe('0.05 Coin');
   });
 
   it('appends the contract unit to a grouped count', () => {
@@ -424,7 +424,7 @@ describe('marketEventRows', () => {
       { label: copy.marketResolvedResult, value: copy.yes },
       { label: copy.eventSettledAccounts, value: '3' },
       { label: copy.eventPaidAccounts, value: '2' },
-      { label: copy.eventPaidTotal, value: '20,000P' },
+      { label: copy.eventPaidTotal, value: '20,000 Coin' },
     ]);
     expect(marketEventRows('finalized', { result: 'NO' })).toEqual([
       { label: copy.marketResolvedResult, value: copy.no },

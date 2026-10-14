@@ -2,6 +2,7 @@ import {
   AUDIT_FAILURE_KINDS,
   type AdminSettlementStep,
   type AuditFailureKind,
+  COIN_UNIT,
   MINUS_SIGN,
   type MarketEventType,
   type MarketStatus,
@@ -246,9 +247,13 @@ export function formatBp(bp: number): string {
   return `${(bp / 100).toFixed(2)}%`;
 }
 
-/** The same basis points as what one contract costs: 6300 → "63.00P" (a winner pays 100 Coin). */
+/**
+ * The same basis points as what one contract costs: 6300 → "63.00 Coin" (a winner pays 100 Coin).
+ * Two decimals, which `formatCoin` (integers only) cannot write, so the unit is spelled here the
+ * way it spells it: one ordinary space, then `COIN_UNIT`.
+ */
 export function formatPricePerContract(bp: number): string {
-  return `${(bp / 100).toFixed(2)}P`;
+  return `${(bp / 100).toFixed(2)} ${COIN_UNIT}`;
 }
 
 /**
