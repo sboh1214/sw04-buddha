@@ -35,11 +35,12 @@ describe('PRIVATE_DATA (#113)', () => {
         'identity-verification',
         'risk-flag',
         'author-holding',
+        'market-maker',
       ]),
     );
     expect(
       PRIVATE_DATA.filter((item) => item.pending !== undefined).map((item) => item.id),
-    ).toEqual(['identity-verification', 'risk-flag', 'author-holding']);
+    ).toEqual(['identity-verification', 'risk-flag', 'author-holding', 'market-maker']);
   });
 });
 
@@ -87,6 +88,17 @@ describe('findPrivateField', () => {
     ['isSuspended', 'risk-flag'],
     ['authorPosition', 'author-holding'],
     ['author_side', 'author-holding'],
+    ['hasBot', 'market-maker'],
+    ['bot_status', 'market-maker'],
+    ['marketMakerInventory', 'market-maker'],
+    ['liquidityB', 'market-maker'],
+    ['liquiditySettings', 'market-maker'],
+    ['maxLossCoin', 'market-maker'],
+    ['safetyTicks', 'market-maker'],
+    ['utilizationBp', 'market-maker'],
+    ['allocatedCoin', 'market-maker'],
+    ['vaultBalance', 'market-maker'],
+    ['topHolderConcentration', 'market-maker'],
   ])('finds %s (%s)', (name, item) => {
     expect(items(name)).toContain(item);
   });
@@ -122,6 +134,10 @@ describe('findPrivateField', () => {
     'parentId',
     'nextCursor',
     'myriad',
+    'bottom',
+    'robot',
+    'limit',
+    'liquid',
   ])('lets %s through', (name) => {
     expect(findPrivateField(name)).toEqual([]);
   });
