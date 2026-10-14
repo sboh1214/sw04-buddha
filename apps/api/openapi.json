@@ -3569,50 +3569,6 @@
           "trades"
         ]
       }
-    },
-    "/api/v1/leaderboard": {
-      "get": {
-        "operationId": "listLeaderboard",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "data": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/LeaderboardEntry"
-                      }
-                    }
-                  },
-                  "required": [
-                    "data"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "RATE_LIMITED",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Top 20 accounts by realized profit and loss, ties broken deterministically",
-        "tags": [
-          "leaderboard"
-        ]
-      }
     }
   },
   "info": {
@@ -5828,28 +5784,6 @@
           "amountCoin",
           "priceAvgBp",
           "createdAt"
-        ],
-        "additionalProperties": false
-      },
-      "LeaderboardEntry": {
-        "type": "object",
-        "properties": {
-          "rank": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 9007199254740991
-          },
-          "nickname": {
-            "$ref": "#/components/schemas/Nickname"
-          },
-          "realizedPnlCoin": {
-            "$ref": "#/components/schemas/CoinAmount"
-          }
-        },
-        "required": [
-          "rank",
-          "nickname",
-          "realizedPnlCoin"
         ],
         "additionalProperties": false
       }

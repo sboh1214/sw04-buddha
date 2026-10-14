@@ -34,7 +34,7 @@ import {
 /**
  * Top navigation (PLAN 11.4, ADR-0041 Kalshi 형): two rows in one sticky header.
  *
- * Row 1: 로고 · 시장/랭킹/커뮤니티 · 검색 · 색상 모드 · 잔고 칩 · 프로필 메뉴. The balance chip and the
+ * Row 1: 로고 · 시장/커뮤니티 · 검색 · 색상 모드 · 잔고 칩 · 프로필 메뉴. The balance chip and the
  * profile menu are `AuthButtons`, unchanged since M1 — the chip stays live because the socket's
  * `user:balance` writes `['me']`.
  *
@@ -132,17 +132,16 @@ export function Nav() {
 }
 
 /**
- * Row 1's three destinations. Next 16 types `href`, so the list is declared as routes rather
+ * Row 1's two destinations. Next 16 types `href`, so the list is declared as routes rather
  * than plain strings (the idiom at bottom-tabs.tsx); `/community` is `app/community/page.tsx`.
  */
 const PRIMARY: { key: PrimaryNavKey; href: Route; label: string }[] = [
   { key: 'markets', href: '/', label: copy.navMarkets },
-  { key: 'ranking', href: '/leaderboard', label: copy.navRanking },
   { key: 'community', href: '/community', label: copy.navCommunity },
 ];
 
 /**
- * 시장 · 랭킹 · 커뮤니티 as Kalshi's pill items, md and up (below md the bottom tab bar is the
+ * 시장 · 커뮤니티 as Kalshi's pill items, md and up (below md the bottom tab bar is the
  * primary navigation, PLAN 11.4). The current item is `aria-current="page"` as well as the
  * `surface.hover` wash, so it is never signalled by the fill alone (PLAN 11.2); which item is
  * current is `isPrimaryCurrent` (lib/nav.ts), where it is tested.

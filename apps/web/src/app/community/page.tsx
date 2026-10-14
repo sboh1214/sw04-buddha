@@ -8,8 +8,8 @@ export const metadata: Metadata = { title: `${copy.communityTitle} | ${copy.appN
 /**
  * `/community`: the destination of the header's 커뮤니티 item, and nothing more.
  *
- * ADR-0041 put 시장 · 랭킹 · 커뮤니티 in the header's first row because that is Kalshi's row,
- * and a nav item has to lead somewhere — a link to a 404 is worse than no link. The feature
+ * ADR-0041 put 커뮤니티 in the header's first row because it is on Kalshi's row, and a nav
+ * item has to lead somewhere — a link to a 404 is worse than no link. The feature
  * itself (comments, sharing, any social surface) is out of the MVP's scope by PLAN §2, so this
  * is a PLACEHOLDER and deliberately not a stub of the feature: no data, no query, no client
  * component, no route segment under it. When 커뮤니티 is actually planned, this file is

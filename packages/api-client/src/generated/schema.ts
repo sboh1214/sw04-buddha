@@ -314,23 +314,6 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/leaderboard": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Top 20 accounts by realized profit and loss, ties broken deterministically */
-        get: operations["listLeaderboard"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/markets": {
         parameters: {
             query?: never;
@@ -794,11 +777,6 @@ export type components = {
             qty: number;
             /** @enum {string} */
             side: "buy" | "sell";
-        };
-        LeaderboardEntry: {
-            nickname: components["schemas"]["Nickname"];
-            rank: number;
-            realizedPnlCoin: components["schemas"]["CoinAmount"];
         };
         LedgerEntry: {
             amountCoin: components["schemas"]["CoinAmount"];
@@ -2582,36 +2560,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description RATE_LIMITED */
-            429: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    listLeaderboard: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        data: components["schemas"]["LeaderboardEntry"][];
-                    };
                 };
             };
             /** @description RATE_LIMITED */

@@ -29,11 +29,6 @@ export const MARKET_FILLS_KEY = ['market-fills'] as const;
 /** `_QUERY_KEY` rather than `_KEY` because the admin screens already import it under that name. */
 export const CATEGORIES_QUERY_KEY = ['categories'] as const;
 /**
- * The global ranking (PLAN M6 선택). Public, so it is NOT in `PRIVATE_QUERY_ROOTS` and the
- * `/leaderboard` page can prefetch it into the HTML like the home page does its cards.
- */
-export const LEADERBOARD_KEY = ['leaderboard'] as const;
-/**
  * Session-scoped, so never SSR'd (`PRIVATE_QUERY_ROOTS` below). They are declared here anyway
  * because the realtime provider refreshes them beside the market keys (`user:position`).
  */

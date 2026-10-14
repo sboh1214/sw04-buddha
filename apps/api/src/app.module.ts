@@ -8,7 +8,6 @@ import { HealthController } from './health/health.controller.js';
 import { DbModule } from './infra/db/db.module.js';
 import { RedisModule } from './infra/redis/redis.module.js';
 import { JobsModule } from './jobs/jobs.module.js';
-import { LeaderboardModule } from './leaderboard/leaderboard.module.js';
 import { MarketsModule } from './markets/markets.module.js';
 import { MeModule } from './me/me.module.js';
 import { RateLimitModule } from './rate-limit/rate-limit.module.js';
@@ -40,7 +39,6 @@ import { WalletModule } from './wallet/wallet.module.js';
     JobsModule,
     MarketsModule,
     TradesModule,
-    LeaderboardModule,
   ],
   controllers: [HealthController],
 })

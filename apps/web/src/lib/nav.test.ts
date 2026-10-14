@@ -27,16 +27,12 @@ describe('isPrimaryCurrent', () => {
   it('lights 시장 on the home list and on a market detail, nowhere else', () => {
     expect(isPrimaryCurrent('/', 'markets')).toBe(true);
     expect(isPrimaryCurrent('/markets/btc-100k', 'markets')).toBe(true);
-    expect(isPrimaryCurrent('/leaderboard', 'markets')).toBe(false);
+    expect(isPrimaryCurrent('/community', 'markets')).toBe(false);
     expect(isPrimaryCurrent('/settings', 'markets')).toBe(false);
     expect(isPrimaryCurrent('/marketsx', 'markets')).toBe(false);
   });
 
-  it('lights 랭킹 and 커뮤니티 on their route and its subtree, not on a look-alike prefix', () => {
-    expect(isPrimaryCurrent('/leaderboard', 'ranking')).toBe(true);
-    expect(isPrimaryCurrent('/leaderboard/weekly', 'ranking')).toBe(true);
-    expect(isPrimaryCurrent('/leaderboardish', 'ranking')).toBe(false);
-    expect(isPrimaryCurrent('/', 'ranking')).toBe(false);
+  it('lights 커뮤니티 on its route and its subtree, not on a look-alike prefix', () => {
     expect(isPrimaryCurrent('/community', 'community')).toBe(true);
     expect(isPrimaryCurrent('/community/rules', 'community')).toBe(true);
     expect(isPrimaryCurrent('/communityx', 'community')).toBe(false);
@@ -44,8 +40,8 @@ describe('isPrimaryCurrent', () => {
   });
 
   it('never lights two items for one path', () => {
-    for (const pathname of ['/', '/markets/x', '/leaderboard', '/community', '/wallet', '/login']) {
-      const lit = (['markets', 'ranking', 'community'] as const).filter((key) =>
+    for (const pathname of ['/', '/markets/x', '/community', '/wallet', '/login']) {
+      const lit = (['markets', 'community'] as const).filter((key) =>
         isPrimaryCurrent(pathname, key),
       );
       expect(lit.length, pathname).toBeLessThanOrEqual(1);
@@ -74,7 +70,7 @@ describe('isAllCategoriesCurrent', () => {
   it('is off on every other route, whatever the query says', () => {
     expect(isAllCategoriesCurrent('/login', null)).toBe(false);
     expect(isAllCategoriesCurrent('/markets/btc-100k', null)).toBe(false);
-    expect(isAllCategoriesCurrent('/leaderboard', '')).toBe(false);
+    expect(isAllCategoriesCurrent('/community', '')).toBe(false);
   });
 });
 
@@ -117,8 +113,8 @@ describe('currentSearchTerm', () => {
   });
 
   it('is undefined off the home route, whatever the URL carries', () => {
-    // A `q` on /leaderboard filters nothing; the box must not claim a search that is not shown.
-    expect(currentSearchTerm('/leaderboard', 'rain')).toBeUndefined();
+    // A `q` on /community filters nothing; the box must not claim a search that is not shown.
+    expect(currentSearchTerm('/community', 'rain')).toBeUndefined();
     expect(currentSearchTerm('/markets/btc-100k', 'rain')).toBeUndefined();
   });
 });
