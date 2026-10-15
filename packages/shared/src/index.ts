@@ -22,6 +22,8 @@ export * from './guards/realtime-events.js';
 export * from './jobs.js';
 export * from './lmsr.js';
 export * from './market.js';
+export * from './market-maker/ladder.js';
+export * from './market-maker/terms.js';
 export * from './me.js';
 export * from './payment-gateway.js';
 export * from './rate-limit.js';
