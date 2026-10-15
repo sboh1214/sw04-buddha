@@ -279,68 +279,80 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
     expect(await roleRecords()).toHaveLength(1);
   });
 
-  it('fails before seeding anything when only one of SEED_SECOND_ADMIN_* is set (#171)', async () => {
-    // Someone meant a second admin: seeding one only would leave no two-person approval, and
-    // say so in a log line at best. Whitespace alone is empty, as terraform's validation has it.
-    for (const secondEnv of [
-      { email: SECOND_EMAIL, password: '' },
-      { email: '', password: SECOND_PASSWORD },
-      { email: '  ', password: SECOND_PASSWORD },
-      { email: SECOND_EMAIL, password: ' \t ' },
-    ]) {
+  /** Nothing at all is seeded: the checks run before the first write. */
+  async function expectNothingSeeded() {
+    expect(await t.db.select().from(user)).toEqual([]);
+    expect(await t.db.select().from(categories)).toEqual([]);
+    expect(await t.db.select().from(chargePackages)).toEqual([]);
+  }
+
+  // One case per spawn: each start of the seed CLI takes several seconds on a CI runner, and
+  // the 30 s test budget (vitest.config.ts) is for up to two of them.
+  it.each([
+    { email: SECOND_EMAIL, password: '' },
+    { email: '', password: SECOND_PASSWORD },
+    { email: '  ', password: SECOND_PASSWORD },
+    { email: SECOND_EMAIL, password: ' \t ' },
+  ])(
+    'fails before seeding anything when only one of SEED_SECOND_ADMIN_* is set (#171): %j',
+    async (secondEnv) => {
+      // Someone meant a second admin: seeding one only would leave no two-person approval, and
+      // say so in a log line at best. Whitespace alone is empty, as terraform's validation has it.
       const result = spawnSync(process.execPath, seedArgs(), seedSpawnOptions({ secondEnv }));
       expect(result.status, JSON.stringify(secondEnv)).toBe(1);
       expect(result.stderr).toContain(
         'set both SEED_SECOND_ADMIN_EMAIL and SEED_SECOND_ADMIN_PASSWORD, or neither',
       );
-    }
-    expect(await t.db.select().from(user)).toEqual([]);
-    expect(await t.db.select().from(categories)).toEqual([]);
-    expect(await t.db.select().from(chargePackages)).toEqual([]);
-  });
+      await expectNothingSeeded();
+    },
+  );
 
-  it('fails before seeding anything on any other admin setting it cannot seed as given (#171)', async () => {
-    const cases: [SeedOptions, string][] = [
-      // The first pair is both or neither as well: one alone is an admin someone meant.
-      [
-        { firstEnv: { email: ADMIN_EMAIL, password: '' }, second: false },
-        'SEED_ADMIN_PASSWORD is empty: set both SEED_ADMIN_EMAIL and SEED_ADMIN_PASSWORD, or neither',
-      ],
-      [
-        { firstEnv: { email: ' ', password: ADMIN_PASSWORD } },
-        'SEED_ADMIN_EMAIL is empty: set both SEED_ADMIN_EMAIL and SEED_ADMIN_PASSWORD, or neither',
-      ],
-      [
-        { firstEnv: { email: ADMIN_EMAIL, password: '\t' } },
-        'SEED_ADMIN_PASSWORD is empty: set both SEED_ADMIN_EMAIL and SEED_ADMIN_PASSWORD, or neither',
-      ],
-      // A complete second with no first: no admin would be seeded, the second skipped.
-      [
-        {
-          firstEnv: { email: '', password: '' },
-          secondEnv: { email: SECOND_EMAIL, password: SECOND_PASSWORD },
-        },
-        'SEED_SECOND_ADMIN_* is set but SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD are not',
-      ],
-      // The same account twice, as better-auth compares addresses.
-      [
-        { secondEnv: { email: ` ${ADMIN_EMAIL.toUpperCase()}`, password: SECOND_PASSWORD } },
-        'SEED_SECOND_ADMIN_EMAIL must differ from SEED_ADMIN_EMAIL',
-      ],
-      [
-        { secondEnv: { email: SECOND_EMAIL, password: 'short' } },
-        'SEED_SECOND_ADMIN_PASSWORD must be 8-128 characters',
-      ],
-    ];
-    for (const [options, message] of cases) {
+  it.each<[string, SeedOptions, string]>([
+    // The first pair is both or neither as well: one alone is an admin someone meant.
+    [
+      'an admin email without a password',
+      { firstEnv: { email: ADMIN_EMAIL, password: '' }, second: false },
+      'SEED_ADMIN_PASSWORD is empty: set both SEED_ADMIN_EMAIL and SEED_ADMIN_PASSWORD, or neither',
+    ],
+    [
+      'a blank admin email',
+      { firstEnv: { email: ' ', password: ADMIN_PASSWORD } },
+      'SEED_ADMIN_EMAIL is empty: set both SEED_ADMIN_EMAIL and SEED_ADMIN_PASSWORD, or neither',
+    ],
+    [
+      'a blank admin password',
+      { firstEnv: { email: ADMIN_EMAIL, password: '\t' } },
+      'SEED_ADMIN_PASSWORD is empty: set both SEED_ADMIN_EMAIL and SEED_ADMIN_PASSWORD, or neither',
+    ],
+    // A complete second with no first: no admin would be seeded, the second skipped.
+    [
+      'a second admin without a first',
+      {
+        firstEnv: { email: '', password: '' },
+        secondEnv: { email: SECOND_EMAIL, password: SECOND_PASSWORD },
+      },
+      'SEED_SECOND_ADMIN_* is set but SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD are not',
+    ],
+    // The same account twice, as better-auth compares addresses.
+    [
+      'the same account twice',
+      { secondEnv: { email: ` ${ADMIN_EMAIL.toUpperCase()}`, password: SECOND_PASSWORD } },
+      'SEED_SECOND_ADMIN_EMAIL must differ from SEED_ADMIN_EMAIL',
+    ],
+    [
+      'a short second password',
+      { secondEnv: { email: SECOND_EMAIL, password: 'short' } },
+      'SEED_SECOND_ADMIN_PASSWORD must be 8-128 characters',
+    ],
+  ])(
+    'fails before seeding anything on any other admin setting it cannot seed as given (#171): %s',
+    async (_, options, message) => {
       const result = spawnSync(process.execPath, seedArgs(), seedSpawnOptions(options));
       expect({ options, status: result.status }).toEqual({ options, status: 1 });
       expect(result.stderr, JSON.stringify(options)).toContain(message);
-    }
-    expect(await t.db.select().from(user)).toEqual([]);
-    expect(await t.db.select().from(categories)).toEqual([]);
-    expect(await t.db.select().from(chargePackages)).toEqual([]);
-  });
+      await expectNothingSeeded();
+    },
+  );
 
   it('creates and promotes nobody once an admin exists', async () => {
     // An admin from somewhere else (the admin screen): the seed leaves the accounts alone and
