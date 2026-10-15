@@ -35,11 +35,12 @@ describe('PRIVATE_DATA (#113)', () => {
         'identity-verification',
         'risk-flag',
         'author-holding',
+        'market-maker',
       ]),
     );
     expect(
       PRIVATE_DATA.filter((item) => item.pending !== undefined).map((item) => item.id),
-    ).toEqual(['identity-verification', 'risk-flag', 'author-holding']);
+    ).toEqual(['identity-verification', 'risk-flag', 'author-holding', 'market-maker']);
   });
 });
 
@@ -87,6 +88,17 @@ describe('findPrivateField', () => {
     ['isSuspended', 'risk-flag'],
     ['authorPosition', 'author-holding'],
     ['author_side', 'author-holding'],
+    ['hasBot', 'market-maker'],
+    ['bot_status', 'market-maker'],
+    ['marketMakerInventory', 'market-maker'],
+    ['liquidityB', 'market-maker'],
+    ['liquiditySettings', 'market-maker'],
+    ['maxLossCoin', 'market-maker'],
+    ['safetyTicks', 'market-maker'],
+    ['utilizationBp', 'market-maker'],
+    ['allocatedCoin', 'market-maker'],
+    ['vaultBalance', 'market-maker'],
+    ['topHolderConcentration', 'market-maker'],
   ])('finds %s (%s)', (name, item) => {
     expect(items(name)).toContain(item);
   });
@@ -122,8 +134,40 @@ describe('findPrivateField', () => {
     'parentId',
     'nextCursor',
     'myriad',
+    'bottom',
+    'robot',
+    'limit',
+    'liquid',
   ])('lets %s through', (name) => {
     expect(findPrivateField(name)).toEqual([]);
+  });
+
+  // Each run of the market-maker item, by a name only that run catches (ADR-0058 결정 1의 20).
+  it.each<[string, string]>([
+    ['botStatus', 'bot'],
+    ['bots', 'bots'],
+    ['isMarketMaker', 'market maker'],
+    ['market_makers', 'market makers'],
+    ['liquidityB', 'liquidity b'],
+    ['liquiditySetting', 'liquidity setting'],
+    ['liquiditySettings', 'liquidity settings'],
+    ['liquidityConfig', 'liquidity config'],
+    ['maxLossCoin', 'max loss'],
+    ['safetyTicks', 'safety ticks'],
+    ['safetySpreadCoin', 'safety spread'],
+    ['inventoryQty', 'inventory'],
+    ['utilizationBp', 'utilization'],
+    ['allocatedCoin', 'allocated'],
+    ['allocation', 'allocation'],
+    ['vaultBalance', 'vault'],
+    ['treasuryCoin', 'treasury'],
+    ['holderConcentration', 'concentration'],
+  ])('keeps %s private as a market-maker field (%s)', (name, words) => {
+    expect(
+      findPrivateField(name)
+        .filter((hit) => hit.item === 'market-maker')
+        .map((hit) => hit.words),
+    ).toEqual([words]);
   });
 
   it('reports the item and the words that matched', () => {

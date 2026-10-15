@@ -8,9 +8,9 @@ import { identifierWords } from './excluded.js';
  *
  * The plan's list (N04 §2, N01 §5) and D8's new records start it; the decision issues change it
  * (#37: the scope of 인증 정보 and of the risk flags, and what else outside the owner-only list is
- * public; #180: a market's bot settings; #123·#122: whether a fill says the house was the other
- * side). Items nothing stores yet are named ahead (`pending`), so the route or event that brings
- * one is refused from its first day.
+ * public; #123·#122: whether a fill says the house was the other side). #180 kept a market's bot
+ * participation and settings to admins (ADR-0058). Items nothing stores yet are named ahead
+ * (`pending`), so the route or event that brings one is refused from its first day.
  *
  * A name is matched by its words (identifierWords): an item's field `['real', 'name']` matches
  * `realName`, `real_name` and `buyerRealName`, never `nameKo`. A public fill or price is not
@@ -32,6 +32,7 @@ export const PRIVATE_DATA_IDS = [
   'auth-secret',
   'risk-flag',
   'author-holding',
+  'market-maker',
 ] as const;
 export type PrivateDataId = (typeof PRIVATE_DATA_IDS)[number];
 
@@ -227,6 +228,34 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
       ['author', 'orders'],
     ],
     pending: '글·댓글 기능이 아직 없다',
+  },
+  {
+    id: 'market-maker',
+    name: '시장별 운영 마켓메이커의 참여 여부·설정·재고·손익·위험',
+    basis: 'ADR-0058(#180 결정 1의 20), N04 §2',
+    // Admins see these (#182); the public sees neither whether a market has a bot nor its
+    // budget, loss limit, b, ladder settings, inventory or risk.
+    fields: [
+      ['bot'],
+      ['bots'],
+      ['market', 'maker'],
+      ['market', 'makers'],
+      ['liquidity', 'b'],
+      ['liquidity', 'setting'],
+      ['liquidity', 'settings'],
+      ['liquidity', 'config'],
+      ['max', 'loss'],
+      ['safety', 'ticks'],
+      ['safety', 'spread'],
+      ['inventory'],
+      ['utilization'],
+      ['allocated'],
+      ['allocation'],
+      ['vault'],
+      ['treasury'],
+      ['concentration'],
+    ],
+    pending: '운영 마켓메이커가 아직 없다(#72·#129·#182)',
   },
 ];
 
