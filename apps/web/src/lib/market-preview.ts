@@ -23,14 +23,17 @@ export const PREVIEW_SLUG = 'preview';
  * a draft and for the unsaved market on 시장 만들기: no fill, so the price is `null` and the card
  * reads 체결 없음 (N02 §5) — there is no initial probability to show as one (#125). Anything past
  * draft has a history of its own, and the 수정 card must preview the card visitors see, not one
- * with 거래량 0 and no participants.
+ * with 체결 없음 and '참여자 0'. Of that history the card draws the price, the status, the
+ * countdown and the 참여자; `volumeCoin` and `tradeCount` come along only because a
+ * `MarketSummary` carries them.
  *
  * Written as two exhaustive objects rather than `base?.x ?? fallback`: `??` reads fine for
  * `lastPrice` but hides that `openAt` and `resolvedResult` are legitimately null on a live row,
  * which would silently take the placeholder for a market that has one.
  *
- * The sparkline stays absent either way — `AdminMarket` carries no tick series — so the preview
- * card is visibly one element short of the home grid's. That is a known gap, not parity.
+ * The card draws nothing else (ADR-0062 removed its trend line, the one element a preview could
+ * not have), so the preview is the home grid's card in full: the 수정 card shows the market's
+ * own 참여자, and the 시장 만들기 card '참여자 0'.
  */
 export function toPreviewMarket(
   body: CreateMarketBody,

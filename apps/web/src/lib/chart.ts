@@ -173,10 +173,10 @@ export function extendToNow(
  * market row, has moved. The caller decides WHETHER the row is newer, by counter
  * (`rowSupersedesSeries`, ticks.ts); this only carries out the decision.
  *
- * `withLatestSample` (market-live.ts) does the same thing to a card's sparkline and `joinMarket`
- * to the row itself — the detail chart was the one live line on the site without the treatment.
- * An empty series stays empty for the reason `extendToNow` gives, and a level that cannot be
- * plotted is refused rather than written into the path as a NaN.
+ * `joinMarket` (market-live.ts) does the same thing to the row itself, and the detail chart is
+ * the one live line on the site (the card draws none, ADR-0062). An empty series stays empty for
+ * the reason `extendToNow` gives, and a level that cannot be plotted is refused rather than
+ * written into the path as a NaN.
  */
 export function withLiveEdge(points: readonly ChartPoint[], bp: number): ChartPoint[] {
   const last = points[points.length - 1];

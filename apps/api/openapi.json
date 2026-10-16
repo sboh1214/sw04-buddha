@@ -2292,7 +2292,7 @@
                     "data": {
                       "type": "array",
                       "items": {
-                        "$ref": "#/components/schemas/MarketListItem"
+                        "$ref": "#/components/schemas/MarketSummary"
                       }
                     },
                     "meta": {
@@ -2329,7 +2329,7 @@
             }
           }
         },
-        "summary": "Markets by status (default open), never drafts; sorted by volume, closing or newest. Each card carries up to 25 hourly YES samples over the last 24 hours, oldest first.",
+        "summary": "Markets by status (default open), never drafts; sorted by volume, closing or newest",
         "tags": [
           "markets"
         ]
@@ -5362,7 +5362,7 @@
         ],
         "additionalProperties": false
       },
-      "MarketListItem": {
+      "MarketSummary": {
         "type": "object",
         "properties": {
           "id": {
@@ -5453,15 +5453,6 @@
             "type": "string",
             "format": "date-time",
             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
-          },
-          "sparkline": {
-            "maxItems": 25,
-            "type": "array",
-            "items": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 10000
-            }
           }
         },
         "required": [
@@ -5479,8 +5470,7 @@
           "openAt",
           "resolvedResult",
           "statusEventId",
-          "createdAt",
-          "sparkline"
+          "createdAt"
         ],
         "additionalProperties": false
       },
@@ -5794,118 +5784,6 @@
           "nameKo",
           "sortOrder",
           "parentId"
-        ],
-        "additionalProperties": false
-      },
-      "MarketSummary": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid",
-            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-          },
-          "slug": {
-            "type": "string"
-          },
-          "title": {
-            "type": "string"
-          },
-          "category": {
-            "type": "object",
-            "properties": {
-              "slug": {
-                "type": "string"
-              },
-              "nameKo": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "slug",
-              "nameKo"
-            ],
-            "additionalProperties": false
-          },
-          "imageUrl": {
-            "nullable": true,
-            "type": "string"
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "draft",
-              "open",
-              "closed",
-              "resolved",
-              "settled",
-              "voided"
-            ]
-          },
-          "lastPrice": {
-            "nullable": true,
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 99
-          },
-          "volumeCoin": {
-            "$ref": "#/components/schemas/CoinAmount"
-          },
-          "tradeCount": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 9007199254740991
-          },
-          "traderCount": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 9007199254740991
-          },
-          "closeAt": {
-            "type": "string",
-            "format": "date-time",
-            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
-          },
-          "openAt": {
-            "nullable": true,
-            "type": "string",
-            "format": "date-time",
-            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
-          },
-          "resolvedResult": {
-            "nullable": true,
-            "type": "string",
-            "enum": [
-              "YES",
-              "NO"
-            ]
-          },
-          "statusEventId": {
-            "nullable": true,
-            "type": "string"
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time",
-            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
-          }
-        },
-        "required": [
-          "id",
-          "slug",
-          "title",
-          "category",
-          "imageUrl",
-          "status",
-          "lastPrice",
-          "volumeCoin",
-          "tradeCount",
-          "traderCount",
-          "closeAt",
-          "openAt",
-          "resolvedResult",
-          "statusEventId",
-          "createdAt"
         ],
         "additionalProperties": false
       },

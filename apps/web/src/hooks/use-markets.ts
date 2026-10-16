@@ -68,7 +68,7 @@ export function marketsInfiniteQueryOptions(filters: MarketFilters) {
   };
 }
 
-/** The home list. Rows are `MarketListItem`, so each card carries its own sparkline. */
+/** The home list. Rows are `MarketSummary`, which is everything a card draws. */
 export function useMarkets(filters: MarketFilters) {
   return useInfiniteQuery(marketsInfiniteQueryOptions(filters));
 }

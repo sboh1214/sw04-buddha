@@ -4,7 +4,7 @@ import {
   type Category,
   type ChargePackage,
   type Market,
-  type MarketListItem,
+  type MarketSummary,
   type PriceSeries,
   isApiError,
   unwrap,
@@ -93,7 +93,7 @@ export async function fetchTicksServer(id: string, range: TickRange): Promise<Pr
 export async function fetchMarketsPageServer(
   filters: MarketFilters,
   cursor?: string,
-): Promise<{ items: MarketListItem[]; nextCursor: string | null }> {
+): Promise<{ items: MarketSummary[]; nextCursor: string | null }> {
   const { data, meta } = unwrap(
     await serverApi.GET('/api/v1/markets', {
       params: {

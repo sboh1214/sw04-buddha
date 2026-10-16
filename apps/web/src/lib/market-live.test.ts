@@ -6,20 +6,13 @@ import {
   PRICE_MAX,
   PRICE_MIN,
   REALTIME_SUBSCRIBE_MAX,
-  SPARKLINE_MAX_POINTS,
   type UserBalanceEvent,
   type UserPositionEvent,
   supersedes,
 } from '@buddha/shared';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import {
-  type Market,
-  type MarketListItem,
-  type MarketSummary,
-  type Me,
-  type Position,
-} from './api';
+import { type Market, type MarketSummary, type Me, type Position } from './api';
 import {
   BalanceOrder,
   type MarketPages,
@@ -59,8 +52,8 @@ const summary: MarketSummary = {
   createdAt: '2026-08-30T00:00:00.000Z',
 };
 
-/** A list card: the same volatile fields plus the drawn samples. */
-const card: MarketListItem = { ...summary, sparkline: [4800, 4900, 5000] };
+/** A list card: the row `GET /markets` answers, which is the summary itself. */
+const card: MarketSummary = { ...summary };
 
 /** The detail: the same volatile fields plus the ones only a resolution moves. */
 const detail: Market = {
@@ -146,7 +139,7 @@ const me: Me = {
 };
 
 /** The infinite-list shape: the last page ends the list, and the first page has no cursor. */
-const pagesOf = (...pages: MarketListItem[][]): MarketPages => ({
+const pagesOf = (...pages: MarketSummary[][]): MarketPages => ({
   pages: pages.map((items, index) => ({
     items,
     nextCursor: index === pages.length - 1 ? null : `cursor-${String(index)}`,
@@ -176,27 +169,25 @@ describe('applyTick', () => {
     expect(applyTick(undefined, tick())).toBeUndefined();
   });
 
-  it('replaces the newest sparkline sample instead of pushing one', () => {
-    // Pushing would slide the fixed hourly grid left on every trade and the drawn shape would
-    // crawl, which is what PLAN 11.1-11.5 buys with a card that never moves under the cursor.
-    const next = applyTick(card, tick());
-    expect(next?.sparkline).toEqual([4800, 4900, 6300]);
-    expect(next?.sparkline).toHaveLength(card.sparkline.length);
+  it('moves the 참여자 on a card with the trade, and adds no other key', () => {
+    // The card's footer shows `traderCount` (ADR-0062), so a tick on the home grid must move it
+    // with the price. The patch is the detail's, field for field: since ADR-0062 a card carries
+    // no samples of its own for a tick to move.
+    expect(applyTick(card, tick())).toEqual({
+      ...card,
+      lastPrice: 63,
+      volumeCoin: '130000',
+      tradeCount: 11,
+      traderCount: 5,
+    });
   });
 
-  it('gives an empty sparkline one sample and never outgrows the grid', () => {
-    expect(applyTick({ ...card, sparkline: [] }, tick())?.sparkline).toEqual([6300]);
-    const full = { ...card, sparkline: Array.from({ length: SPARKLINE_MAX_POINTS }, () => 5000) };
-    expect(applyTick(full, tick())?.sparkline).toHaveLength(SPARKLINE_MAX_POINTS);
-  });
-
-  it('samples the fill price in the sparkline basis points, and nothing without one', () => {
-    // The samples are tick basis points and a fill's price is a whole percent.
-    expect(applyTick(card, tick({ lastPrice: 41 }))?.sparkline).toEqual([4800, 4900, 4100]);
-    // No fill price (체결 없음): the line stays as fetched rather than ending on a made-up level.
-    const next = applyTick(card, tick({ lastPrice: null }));
-    expect(next?.lastPrice).toBeNull();
-    expect(next?.sparkline).toEqual(card.sparkline);
+  it("takes the tick's price as it comes, a null one included", () => {
+    // Not the fixture's default, so the patch is seen taking the event's value.
+    expect(applyTick(card, tick({ lastPrice: 41 }))?.lastPrice).toBe(41);
+    // No fill price (체결 없음): the row says so, rather than keeping the price it held.
+    expect(applyTick(card, tick({ lastPrice: null }))?.lastPrice).toBeNull();
+    expect(applyTick(detail, tick({ lastPrice: null }))?.lastPrice).toBeNull();
   });
 });
 
@@ -336,7 +327,7 @@ describe('applyStatus', () => {
 });
 
 describe('applyToPages', () => {
-  const otherCard: MarketListItem = { ...card, id: OTHER_ID, slug: 'other', sparkline: [] };
+  const otherCard: MarketSummary = { ...card, id: OTHER_ID, slug: 'other' };
 
   it('patches the page that holds the market and keeps the others by reference', () => {
     const held = pagesOf([card], [otherCard]);
@@ -421,19 +412,6 @@ describe('joinMarket', () => {
     expect(joinMarket({ ...detail, id: OTHER_ID }, detail)).toBe(detail);
   });
 
-  it('moves the newest sparkline sample with the price it kept', () => {
-    // The grid comes from the newer fetch, its last sample from the price we are keeping:
-    // a card whose pill says 63% must not draw a line that ends at 50%.
-    const liveCard: MarketListItem = {
-      ...card,
-      lastPrice: 63,
-      tradeCount: 11,
-      sparkline: [4800, 4900, 6300],
-    };
-    const staleCard: MarketListItem = { ...card, sparkline: [4900, 5000, 5000] };
-    expect(joinMarket(liveCard, staleCard).sparkline).toEqual([4900, 5000, 6300]);
-  });
-
   it('never lets either side lose ground, whichever snapshot arrives second', () => {
     const liveArb: fc.Arbitrary<Market> = fc
       .record({
@@ -479,8 +457,8 @@ describe('joinMarket', () => {
 });
 
 describe('joinMarketPages', () => {
-  const otherCard: MarketListItem = { ...card, id: OTHER_ID, slug: 'other', sparkline: [] };
-  const thirdCard: MarketListItem = { ...card, id: THIRD_ID, slug: 'third', sparkline: [] };
+  const otherCard: MarketSummary = { ...card, id: OTHER_ID, slug: 'other' };
+  const thirdCard: MarketSummary = { ...card, id: THIRD_ID, slug: 'third' };
 
   it('takes the page shape from the incoming answer, so a moved row is not duplicated', () => {
     const held = pagesOf([card, otherCard], [thirdCard]);

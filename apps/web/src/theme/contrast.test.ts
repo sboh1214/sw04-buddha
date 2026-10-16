@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { SPARKLINE_STROKE } from '@/components/market/market-sparkline';
 import { CATEGORY_ITEM_OPACITY } from '@/lib/nav';
 import { system } from './system';
 
@@ -7,7 +6,7 @@ import { system } from './system';
  * AC 6 (대비 AA), measured rather than eyeballed. A type-checker cannot see a colour and the
  * Playwright specs assert no ratio, so the pairs the M4 screens actually paint are computed here
  * from the values Chakra resolves at run time — the same numbers the comments in theme/system.ts
- * and market-sparkline.tsx quote. A palette edit that drops one of them below its threshold fails
+ * quote. A palette edit that drops one of them below its threshold fails
  * the suite instead of waiting for a Lighthouse run.
  */
 
@@ -24,7 +23,7 @@ const BUTTON_PALETTES = ['brand', 'yes', 'no'] as const;
 /** WCAG 1.4.3 for the label a solid fill carries: these are 14-16px buttons and 10-12px badges. */
 const TEXT_MIN = 4.5;
 
-/** WCAG 1.4.11 for a graphical object that is not text — the card's 24h trace. */
+/** WCAG 1.4.11 for a graphical object that is not text — a control's boundary, a focus ring. */
 const GRAPHIC_MIN = 3;
 
 /** `_hover` on the solid button recipe is `colorPalette.solid/90` over whatever is behind it. */
@@ -131,22 +130,6 @@ describe('palette contrast', () => {
         shortfall(
           `${palette} solid on bg ${mode}`,
           ratio(resolve(`${palette}.solid`, mode), resolve('bg', mode)),
-          GRAPHIC_MIN,
-        ),
-      ),
-    );
-    expect(failures).toEqual([]);
-  });
-
-  it('draws the card sparkline above the 3:1 non-text minimum', () => {
-    // The trace is the only place a card shows the 24-hour trajectory, so it is content. The
-    // tile sits on `surface.card`, a 2% alpha tint over `bg` (ADR-0041), and `bg`/`bg.subtle`
-    // are the two opaque grounds that bracket it — both have to clear it.
-    const failures = MODES.flatMap((mode) =>
-      (['bg', 'bg.subtle'] as const).flatMap((background) =>
-        shortfall(
-          `${SPARKLINE_STROKE} on ${background} ${mode}`,
-          ratio(resolve(SPARKLINE_STROKE, mode), resolve(background, mode)),
           GRAPHIC_MIN,
         ),
       ),

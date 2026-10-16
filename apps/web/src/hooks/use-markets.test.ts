@@ -7,7 +7,7 @@ import {
   hydrate,
 } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
-import { type Market, type MarketListItem, type MarketSummary } from '@/lib/api';
+import { type Market, type MarketSummary } from '@/lib/api';
 import {
   DEFAULT_MARKET_FILTERS,
   MARKETS_KEY,
@@ -62,8 +62,8 @@ const summary: MarketSummary = {
   createdAt: '2026-08-30T00:00:00.000Z',
 };
 
-const card: MarketListItem = { ...summary, sparkline: [4800, 4900, 5000] };
-const otherCard: MarketListItem = { ...card, id: OTHER_ID, slug: 'other', sparkline: [] };
+const card: MarketSummary = { ...summary };
+const otherCard: MarketSummary = { ...card, id: OTHER_ID, slug: 'other' };
 
 const detail: Market = {
   ...summary,
@@ -99,7 +99,7 @@ const statusEvent = (patch: Partial<MarketStatusEvent> = {}): MarketStatusEvent 
 });
 
 /** The infinite shape the hook holds: the last page ends the list, the first has no cursor. */
-const pagesOf = (...pages: MarketListItem[][]): MarketPages => ({
+const pagesOf = (...pages: MarketSummary[][]): MarketPages => ({
   pages: pages.map((items, index) => ({
     items,
     nextCursor: index === pages.length - 1 ? null : `cursor-${String(index)}`,
@@ -189,7 +189,7 @@ describe('the SSR-seeded list', () => {
       const result = observer.getCurrentResult();
       expect(result.data?.pages).toHaveLength(1);
       expect(result.data?.pages[0]?.items[0]?.id).toBe(ID);
-      expect(result.data?.pages[0]?.items[0]?.sparkline).toEqual(card.sparkline);
+      expect(result.data?.pages[0]?.items[0]).toEqual(card);
       // The seeded page carries a cursor, so 더 보기 is offered from the first paint.
       expect(result.hasNextPage).toBe(true);
       // The whole point of hydrating rather than passing `initialData`: no request on mount.

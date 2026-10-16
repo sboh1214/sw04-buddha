@@ -5,9 +5,9 @@ import { formatKst } from '@/lib/datetime';
 import { formatBp } from '@/lib/market-admin';
 
 /**
- * The chart primitive behind 시장가격 추이 and the card sparkline (PLAN 11.4): one `<svg>` built
- * from `lib/chart.ts` geometry, and nothing else. It carries no directive, so a server
- * component renders it straight into the HTML.
+ * The chart primitive behind 시장가격 추이 (PLAN 11.4): one `<svg>` built from `lib/chart.ts`
+ * geometry, and nothing else. It carries no directive, so a server component renders it straight
+ * into the HTML.
  *
  * Three properties are load-bearing here, and each one is why no chart library can take this
  * file's place.
@@ -52,13 +52,13 @@ const AREA_OPACITY = 0.12;
 export interface LineChartProps {
   points: readonly ChartPoint[];
   /**
-   * Accessible name. Omit it to mark the chart decorative — a card sparkline sits beside a
-   * written 시장가격, and announcing the shape as well would read the same market out twice.
+   * Accessible name. Omit it to mark the chart decorative — a trace beside a written 시장가격
+   * whose shape, announced as well, would read the same market out twice.
    */
   label?: string;
   /** `id` of the description the caller renders, normally a `ChartDataTable`. */
   describedBy?: string;
-  /** Fill the area under the curve. Off for sparklines, where it is noise at 20px tall. */
+  /** Fill the area under the curve. Off by default: at a small height it is noise. */
   area?: boolean;
   /** Stroke width in CSS px; non-scaling, so a wide box does not thicken the line. */
   strokeWidth?: number;

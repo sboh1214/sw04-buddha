@@ -15,7 +15,6 @@ import {
   MARKET_TITLE_MAX,
   PRICE_MAX,
   PRICE_MIN,
-  SPARKLINE_MAX_POINTS,
   TICKS_MAX_POINTS,
 } from './constants.js';
 import {
@@ -83,6 +82,10 @@ const marketSummaryFields = {
   lastPrice: priceSchema.nullable(),
   volumeCoin: coinAmountSchema,
   tradeCount: countSchema,
+  /**
+   * The 사용자 참여자 the card and the detail header show, 0 included (ADR-0061 decision 1, item
+   * 4). Who counts is #177's to decide; leaving the operator's bot out is #121's and #115's.
+   */
   traderCount: countSchema,
   closeAt: z.iso.datetime(),
   openAt: z.iso.datetime().nullable(),
@@ -99,28 +102,14 @@ const marketSummaryFields = {
   createdAt: z.iso.datetime(),
 };
 
-/** List card. */
+/**
+ * List card: the row of `GET /markets` and of `GET /admin/markets`. No list-only DTO sits
+ * beside it any more — the card sparkline that made one (`MarketListItem`, ADR-0030) is gone
+ * (ADR-0062). `volumeCoin` stays although the card no longer shows it: the detail header and
+ * the admin screens do.
+ */
 export const marketSummarySchema = z.object(marketSummaryFields).meta({ id: 'MarketSummary' });
 export type MarketSummary = z.infer<typeof marketSummarySchema>;
-
-/**
- * `GET /markets` card (PLAN 11.4). `MarketSummary` plus the sparkline: the public list is the
- * only reader, so the shared component stays as it is and `GET /admin/markets`, `Market` and
- * `AdminMarket` are not made to carry a chart they never draw.
- *
- * Oldest to newest, at most SPARKLINE_MAX_POINTS hourly samples ending at the response
- * instant, in the basis points of `PriceTick.pYesBp`. Shorter when the market's first tick
- * falls inside the window — leading unknowns are trimmed, never zero-filled (0 bp is a real
- * probability) — and because the grid is fixed, the length says where the series starts:
- * bucket index = SPARKLINE_MAX_POINTS - length. Empty for a market with no fill yet.
- */
-export const marketListItemSchema = z
-  .object({
-    ...marketSummaryFields,
-    sparkline: z.array(bpSchema).max(SPARKLINE_MAX_POINTS),
-  })
-  .meta({ id: 'MarketListItem' });
-export type MarketListItem = z.infer<typeof marketListItemSchema>;
 
 /**
  * Public detail (PLAN 7.1): no author, exposure or settlement steps — those are

@@ -3,23 +3,21 @@ import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import {
   FILLS_RECENT_LIMIT,
   MARKET_SLUG_MAX,
-  SPARKLINE_MAX_POINTS,
-  SPARKLINE_WINDOW_HOURS,
   TICKS_MAX_POINTS,
   TICKS_SCAN_MAX,
   categorySchema,
   fillSchema,
-  marketListItemSchema,
   marketListQuerySchema,
   marketSchema,
+  marketSummarySchema,
   priceSeriesSchema,
   ticksQuerySchema,
   uuidParamSchema,
   type Category,
   type Fill,
   type Market,
-  type MarketListItem,
   type MarketListQuery,
+  type MarketSummary,
   type PriceSeries,
   type TicksQuery,
 } from '@buddha/shared';
@@ -62,16 +60,13 @@ export class MarketsController {
   @Get()
   @ApiOperation({
     operationId: 'listMarkets',
-    summary:
-      'Markets by status (default open), never drafts; sorted by volume, closing or newest. ' +
-      `Each card carries up to ${String(SPARKLINE_MAX_POINTS)} hourly YES samples over the ` +
-      `last ${String(SPARKLINE_WINDOW_HOURS)} hours, oldest first.`,
+    summary: 'Markets by status (default open), never drafts; sorted by volume, closing or newest',
   })
-  @ApiPageOf(marketListItemSchema)
+  @ApiPageOf(marketSummarySchema)
   @ApiErrors('VALIDATION_ERROR')
   async listMarkets(
     @Query({ schema: marketListQuerySchema }) query: MarketListQuery,
-  ): Promise<ApiPage<MarketListItem>> {
+  ): Promise<ApiPage<MarketSummary>> {
     const { items, nextCursor } = await this.markets.list(query);
     return new ApiPage(items, { nextCursor });
   }

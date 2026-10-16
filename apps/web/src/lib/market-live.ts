@@ -10,7 +10,7 @@ import {
   supersedes,
 } from '@buddha/shared';
 import { type InfiniteData } from '@tanstack/react-query';
-import { type MarketListItem, type Me, type Position } from './api';
+import { type MarketSummary, type Me, type Position } from './api';
 
 /**
  * The reducers every realtime writer shares (PLAN 8, 11.5), in two contracts.
@@ -32,8 +32,8 @@ import { type MarketListItem, type Me, type Position } from './api';
 
 /**
  * The volatile subset of a market: what a trade moves, plus what a transition moves. `Market`
- * (the detail), `MarketSummary` and `MarketListItem` (a card) all satisfy it structurally, so
- * one reducer serves the detail cache and every filtered list page.
+ * (the detail) and `MarketSummary` (a card) both satisfy it structurally, so one reducer serves
+ * the detail cache and every filtered list page.
  */
 export interface LiveMarket {
   id: string;
@@ -54,7 +54,7 @@ export interface LiveMarket {
 
 /** One page of `GET /markets` as the list hook keeps it. */
 export interface MarketPage {
-  items: MarketListItem[];
+  items: MarketSummary[];
   nextCursor: string | null;
 }
 
@@ -89,28 +89,12 @@ export type MarketTickPatch = Pick<
  */
 export { statusRank } from '@buddha/shared';
 
-/** Only a list row carries a sparkline; the detail and the admin row do not. */
-function hasSparkline(row: object): row is { sparkline: number[] } {
-  return 'sparkline' in row && Array.isArray(row.sparkline);
-}
-
-/**
- * A new price REPLACES the newest sample instead of being pushed: the samples sit on a fixed
- * hourly grid (decision-sparkline), so pushing would slide that grid left on every trade and
- * the drawn shape would crawl. The grid itself only moves on the next fetch (A-M4-2). The
- * samples are tick basis points and a fill's price is a whole percent, hence the ×100; with no
- * fill there is no price to sample, and the line stays as fetched.
- */
-function withLatestSample(sparkline: number[], lastPrice: number | null): number[] {
-  if (lastPrice === null) return sparkline;
-  const bp = lastPrice * 100;
-  return sparkline.length === 0 ? [bp] : [...sparkline.slice(0, -1), bp];
-}
-
 /**
  * `market:tick` — ordered by `tradeCount`. It never CREATES an entry: the event names the
- * market as `marketId` where the DTO has `id`, and carries no slug, title, category, closeAt
- * or traderCount, so a synthesised row would be a lie the screen could not tell from a load.
+ * market as `marketId` where the DTO has `id`, and carries no slug, title, category or closeAt,
+ * so a synthesised row would be a lie the screen could not tell from a load. `traderCount` does
+ * ride with the price: the tick carries it under the same `tradeCount`, and the card and the
+ * detail header show it.
  */
 export function applyTick<T extends LiveMarket>(
   held: T | undefined,
@@ -118,15 +102,13 @@ export function applyTick<T extends LiveMarket>(
 ): T | undefined {
   if (held === undefined || held.id !== event.marketId) return undefined;
   if (!supersedes(event.tradeCount, held.tradeCount)) return undefined;
-  const next = {
+  return {
     ...held,
     lastPrice: event.lastPrice,
     volumeCoin: event.volumeCoin,
     tradeCount: event.tradeCount,
     traderCount: event.traderCount,
   };
-  if (!hasSparkline(held)) return next;
-  return { ...next, sparkline: withLatestSample(held.sparkline, event.lastPrice) };
 }
 
 /**
@@ -210,7 +192,7 @@ export function applyStatus<T extends LiveMarket>(
  */
 export function applyToPages(
   held: MarketPages | undefined,
-  patch: (row: MarketListItem) => MarketListItem | undefined,
+  patch: (row: MarketSummary) => MarketSummary | undefined,
 ): MarketPages | undefined {
   if (held === undefined) return undefined;
   let moved = false;
@@ -250,11 +232,6 @@ export function joinMarket<T extends LiveMarket>(held: T | undefined, incoming: 
       // snapshot older than what is held must not drag it back with the price.
       traderCount: held.traderCount,
     };
-    // The card's line has to end where its pill says it does: the hourly grid still comes
-    // from the newer fetch, only its newest sample follows the price we kept.
-    if (hasSparkline(next)) {
-      next = { ...next, sparkline: withLatestSample(next.sparkline, held.lastPrice) };
-    }
   }
   // The status GROUP moves together: the result was written by the same transition as the
   // status and its key, so a snapshot older than what is held must not drag either back alone —
@@ -280,7 +257,7 @@ export function joinMarket<T extends LiveMarket>(held: T | undefined, incoming: 
  */
 export function joinMarketPages(held: MarketPages | undefined, incoming: MarketPages): MarketPages {
   if (held === undefined) return incoming;
-  const heldById = new Map<string, MarketListItem>();
+  const heldById = new Map<string, MarketSummary>();
   for (const page of held.pages) {
     for (const row of page.items) heldById.set(row.id, row);
   }

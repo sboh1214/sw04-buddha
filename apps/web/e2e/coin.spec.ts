@@ -8,17 +8,20 @@ import { createOpenMarket, expect, freshEmail, signUp, test } from './helpers';
  * unit, four characters longer than the '12,345P' it replaced. On a narrow screen that could
  * leave 'Coin' on a line of its own or push the amount past the edge, so the spots the issue
  * names are measured at 375px: the header's balance chip (and the row it shares with the wordmark
- * and the search), a market card's 거래량 and the wallet's balance.
+ * and the search), a market's 거래량 and the wallet's balance.
  *
  * The balance is raised to 1,000,000 Coin first — seven digits, the largest single adjustment an
  * admin can make (`ADJUST_MAX_ABS_COIN`) — so the chip is measured with a long amount rather than
  * whatever the sign-up bonus happens to be. The account is a fresh one: the seed admin's balance
  * is read by other specs running alongside this one.
  *
- * A card's volume cannot be raised that way: a new market has no fill and the API has no order
- * path to make one, and the home page renders its cards on the server, so `page.route` cannot
- * rewrite the figure either. The card is measured as it renders ('0 Coin') and then with a
- * nine-digit figure written into the same element, which keeps the card's own styles.
+ * The 거래량 is the detail header's. #13 named the card's, but the card shows none since ADR-0062
+ * (ADR-0061 decision 1, item 4: volume on the detail only), so the measurement moved to the one
+ * screen a visitor still reads it on. It cannot be raised the way the balance is: a new market
+ * has no fill and the API has no order path to make one, and the detail renders on the server,
+ * so `page.route` cannot rewrite the figure either. It is measured as it renders ('0 Coin') and
+ * then with a nine-digit figure written into the same element, which keeps the header's own
+ * styles.
  */
 
 /** `{ data }` out of the success envelope, with the body in the message on a failure. */
@@ -97,10 +100,7 @@ async function expectOneLineOnScreen(page: Page, locator: Locator, name: string)
 test.describe('금액 표기 · 375px', () => {
   test.use({ viewport: { width: 375, height: 812 } });
 
-  test('잔고 칩·시장 카드 거래량·지갑 잔고가 한 줄에 잘리지 않고 보인다', async ({
-    admin,
-    page,
-  }) => {
+  test('잔고 칩·시장 거래량·지갑 잔고가 한 줄에 잘리지 않고 보인다', async ({ admin, page }) => {
     const market = await createOpenMarket(admin);
     await signUp(page, freshEmail());
 
@@ -114,7 +114,7 @@ test.describe('금액 표기 · 375px', () => {
       );
     }
 
-    // --- the header chip and the card, on a home page holding exactly this market's card.
+    // --- the header chip, on a home page holding exactly this market's card.
     await page.goto(`/?q=${market.tag}`);
     const chip = page.getByTestId('balance-chip');
     await expect(chip).toContainText('1,000,000 Coin');
@@ -125,28 +125,31 @@ test.describe('금액 표기 · 375px', () => {
       expect(row[i]!.left, `header item ${String(i)}`).toBeGreaterThanOrEqual(row[i - 1]!.right);
     }
 
+    // The card carries no amount any more (ADR-0062): its footer is the 참여자 count.
     const card = page.getByTestId(`market-card-${market.id}`);
-    const volume = card.getByTestId('market-card-volume');
-    // One line, left of the sparkline, and the sparkline still inside the card.
-    const expectVolumeFits = async (name: string) => {
-      const layout = await expectOneLineOnScreen(page, volume, name);
-      const sparkline = await card.getByTestId('market-card-sparkline').boundingBox();
-      const box = await card.boundingBox();
-      if (sparkline === null || box === null) throw new Error('the card has no bounding box');
-      expect(layout.right, `${name}: beside the sparkline`).toBeLessThanOrEqual(sparkline.x);
-      expect(sparkline.x + sparkline.width, `${name}: sparkline`).toBeLessThanOrEqual(
-        box.x + box.width,
-      );
-    };
+    await expect(card.getByTestId('market-card-traders')).toHaveText(`${copy.marketTraders} 0`);
+    await expect(card).not.toContainText(copy.marketVolume);
+
+    // --- the market's 거래량, which only the detail header shows.
+    await page.goto(`/markets/${market.slug}`);
+    // The figure below is overwritten by hand, so this document has to have hydrated first: an
+    // overwrite that lands while React is still claiming the server's text nodes is a text
+    // mismatch, and the client re-render puts '0 Coin' back — under the assertion that follows,
+    // or worse, before the measurement, which then passes on the short text. The chip is the
+    // signal: it shows the amount only once `useSession` has seen the tab hydrated and the
+    // client has fetched `/me` (auth-buttons.tsx), and the header and the detail hydrate in the
+    // same pass — no Suspense boundary stands between them.
+    await expect(page.getByTestId('balance-chip')).toContainText('1,000,000 Coin');
+    const volume = page.getByTestId('market-detail-volume');
     // No fill yet, so nothing has traded: the volume is 0, written the same way as any other.
     await expect(volume).toHaveText(`${copy.marketVolume} 0 Coin`);
-    await expectVolumeFits('card volume');
+    await expectOneLineOnScreen(page, volume, 'detail volume');
     const longVolume = `${copy.marketVolume} 123,456,789 Coin`;
     await volume.evaluate((element, text) => {
       element.textContent = text;
     }, longVolume);
     await expect(volume).toHaveText(longVolume);
-    await expectVolumeFits('long card volume');
+    await expectOneLineOnScreen(page, volume, 'long detail volume');
 
     // --- the wallet's balance, the largest type an amount is set in.
     await page.goto('/my/wallet');

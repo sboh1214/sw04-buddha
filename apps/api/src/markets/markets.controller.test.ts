@@ -8,25 +8,24 @@ import { createCategory, createMarket, createUser } from '@buddha/db/test';
 import {
   FILLS_RECENT_LIMIT,
   MARKET_SLUG_MAX,
-  SPARKLINE_MAX_POINTS,
   TICKS_MAX_POINTS,
   TICKS_SCAN_MAX,
   type Category,
   type Fill,
   type Market,
-  type MarketListItem,
+  type MarketSummary,
   type Outcome,
+  marketSummarySchema,
   type PriceSeries,
 } from '@buddha/shared';
 import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { AdminGuard } from '../auth/admin.guard.js';
 import { MAX_PARAM_LENGTH } from '../infra/http/fastify-options.js';
-import { createTestApp, signUpTestUser, type TestApp } from '../test/app.js';
+import { createTestApp, type TestApp } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
 
-type ListPage = { data: MarketListItem[]; meta: { nextCursor: string | null } };
+type ListPage = { data: MarketSummary[]; meta: { nextCursor: string | null } };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
@@ -151,8 +150,6 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
       tradeCount: 0,
       traderCount: 0,
       resolvedResult: null,
-      // The key is always present; a market with no fill has no tick, so no samples.
-      sparkline: [],
     });
     // Nothing of the direct AMM (#125), and nothing the public must not see (PLAN 7.1).
     for (const field of ['pYesBp', 'qYes', 'liquidityB', 'reserveCoin', 'createdBy']) {
@@ -830,137 +827,35 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     expect(wide.points).toEqual([{ ts: iso(tickAt), pYesBp: 4_000, trigger: 'trade' }]);
   });
 
-  it('samples the card sparkline on a fixed hourly grid, carrying values forward', async () => {
-    // Ticks sit MID-bucket (…30m) so a slow test or a little clock skew cannot straddle a grid
-    // edge and move a sample into the neighbouring bucket.
-    const tick = (marketId: string, msAgo: number, pYesBp: number) => ({
-      marketId,
-      ts: new Date(Date.now() - msAgo),
-      pYesBp,
-      trigger: 'trade' as const,
-    });
-
-    const quiet = await market({ title: '조용한 시장' });
-    await t.db
-      .insert(schema.priceTicks)
-      .values([
-        tick(quiet.id, 30 * HOUR_MS - HOUR_MS / 2, 3_000),
-        tick(quiet.id, 10 * HOUR_MS - HOUR_MS / 2, 5_000),
-        tick(quiet.id, 10 * 60 * 1_000, 7_000),
-      ]);
-    const young = await market({ title: '어린 시장' });
-    await t.db.insert(schema.priceTicks).values([tick(young.id, 3 * HOUR_MS + HOUR_MS / 2, 9_100)]);
-    const bare = await market({ title: '틱 없는 시장' });
-    const rising = await market({ title: '오르는 시장' });
-    await t.db
-      .insert(schema.priceTicks)
-      .values(
-        Array.from({ length: 6 }, (_, i) =>
-          tick(rising.id, (26 - i * 5) * HOUR_MS - HOUR_MS / 2, 2_000 + i * 500),
-        ),
-      );
-
-    const page = (await get('/api/v1/markets?limit=10')).json<ListPage>();
-    const byId = new Map(page.data.map((row): [string, number[]] => [row.id, row.sparkline]));
-    expect(byId.size).toBe(4);
-
-    const quietSpark = byId.get(quiet.id)!;
-    expect(quietSpark).toHaveLength(SPARKLINE_MAX_POINTS);
-    // An as-of read, not a `ts >= now() - 24h` window: the 29½-hour-old tick is the value in
-    // force for every bucket up to now-10h, so a market that has not traded in a day draws a
-    // true flat line instead of coming back empty.
-    expect(quietSpark.slice(0, 15)).toEqual(Array.from({ length: 15 }, () => 3_000));
-    expect(quietSpark.slice(15, -1)).toEqual(Array.from({ length: 9 }, () => 5_000));
-    // The last bucket is the response instant: the newest tick, ten minutes old.
-    expect(quietSpark.at(-1)).toBe(7_000);
-
-    // Leading unknowns are TRIMMED, never zero-filled (0 bp is a real probability), so the
-    // array's length is what says where the series starts: 25 - 4 = bucket 21.
-    expect(byId.get(young.id)).toEqual([9_100, 9_100, 9_100, 9_100]);
-    // A market with no fill has no tick (opening writes none), so it answers with no samples at
-    // all — with the key present.
-    expect(byId.get(bare.id)).toEqual([]);
-
-    const risingSpark = byId.get(rising.id)!;
-    expect(risingSpark).toHaveLength(SPARKLINE_MAX_POINTS);
-    for (let i = 1; i < risingSpark.length; i += 1) {
-      expect(risingSpark[i]!).toBeGreaterThanOrEqual(risingSpark[i - 1]!);
-    }
-    expect(risingSpark.at(-1)).toBe(4_500);
-    // Three cards, three different series: the correlated seek is bound to each row's own id,
-    // not to the first market of the page.
-    expect(new Set([quietSpark[0], byId.get(young.id)![0], risingSpark[0]]).size).toBe(3);
-  });
-
-  it('keeps the sparkline bounded by the grid, not by the market tick volume', async () => {
-    const busy = await market();
-    const now = Date.now();
-    // One tick older than the window so every bucket has a value in force, then a burst of
-    // TICKS_SCAN_MAX + 1 ticks inside the last half hour. The answer is still 25 samples read
-    // by 25 index seeks: the card never scans the history the chart route has to cap.
-    const values = [
-      {
-        marketId: busy.id,
-        ts: new Date(now - 30 * HOUR_MS),
-        pYesBp: 2_000,
-        trigger: 'trade' as const,
-      },
-      ...Array.from({ length: TICKS_SCAN_MAX + 1 }, (_, i) => ({
-        marketId: busy.id,
-        ts: new Date(now - HOUR_MS / 2 + i),
-        pYesBp: 4_000 + (i % 3_000),
-        trigger: 'trade' as const,
-      })),
-    ];
-    for (let i = 0; i < values.length; i += 1_000) {
-      await t.db.insert(schema.priceTicks).values(values.slice(i, i + 1_000));
-    }
-
-    const item = (await get('/api/v1/markets')).json<ListPage>().data[0]!;
-    expect(item.sparkline).toHaveLength(SPARKLINE_MAX_POINTS);
-    // Every bucket but the last predates the burst and carries the anchor; the last one is the
-    // newest tick, so the sample is the probability in force at the response instant.
-    expect(item.sparkline.slice(0, -1)).toEqual(
-      Array.from({ length: SPARKLINE_MAX_POINTS - 1 }, () => 2_000),
-    );
-    expect(item.sparkline.at(-1)).toBe(4_000 + (TICKS_SCAN_MAX % 3_000));
-  });
-
-  it('carries the sparkline on the list card only, never on the detail or the admin list', async () => {
-    const open = await market();
+  it('lists each market as its summary alone: no sparkline, the participant count as stored', async () => {
+    // ADR-0062: the card draws no price trend (ADR-0061 decision 1, item 4), so the list row is
+    // `MarketSummary` field for field, even for a market whose ticks the old card sampled.
+    const traded = await market({ title: '틱 있는 시장', lastPrice: 61 });
     await t.db.insert(schema.priceTicks).values({
-      marketId: open.id,
+      marketId: traded.id,
       ts: new Date(Date.now() - 30 * 60 * 1_000),
       pYesBp: 6_100,
       trigger: 'trade' as const,
     });
-
-    const item = (await get('/api/v1/markets')).json<ListPage>().data[0]!;
-    expect(Object.keys(item)).toContain('sparkline');
-    // One bucket: the tick in force at the response instant.
-    expect(item.sparkline).toEqual([6_100]);
-
-    // `toMarketSummary`/`toMarket` were left alone, so the shared `MarketSummary` component is
-    // not widened: neither the public detail nor the admin list ships a chart it never draws.
-    const detail = (await get(`/api/v1/markets/${open.id}`)).json<{ data: Market }>().data;
-    expect(detail).not.toHaveProperty('sparkline');
-
-    const admin = await signUpTestUser(t);
     await t.db
-      .update(schema.profiles)
-      .set({ role: 'admin' })
-      .where(eq(schema.profiles.userId, admin.id));
-    // The guard caches roles for 60 s (PLAN 10.5); the promotion above happened behind it.
-    await t.app.get(AdminGuard).invalidate(admin.id);
-    const adminList = await t.app.inject({
-      method: 'GET',
-      url: '/api/v1/admin/markets',
-      headers: { cookie: admin.cookie },
-    });
-    expect(adminList.statusCode).toBe(200);
-    const adminItems = adminList.json<{ data: Record<string, unknown>[] }>().data;
-    expect(adminItems.length).toBeGreaterThan(0);
-    for (const row of adminItems) expect(row).not.toHaveProperty('sparkline');
+      .update(schema.markets)
+      .set({ traderCount: 3 })
+      .where(eq(schema.markets.id, traded.id));
+    const quiet = await market({ title: '체결 없는 시장' });
+
+    const page = (await get('/api/v1/markets')).json<ListPage>();
+    const byId = new Map(page.data.map((row): [string, MarketSummary] => [row.id, row]));
+    expect(byId.size).toBe(2);
+    for (const row of page.data) {
+      expect(Object.keys(row).sort()).toEqual(Object.keys(marketSummarySchema.shape).sort());
+    }
+    // The 참여자 the card shows: the stored count, and 0 written as 0 (ADR-0061 decision 1, item 4).
+    expect(byId.get(traded.id)?.traderCount).toBe(3);
+    expect(byId.get(quiet.id)?.traderCount).toBe(0);
+
+    const detail = (await get(`/api/v1/markets/${traded.id}`)).json<{ data: Market }>().data;
+    expect(detail).not.toHaveProperty('sparkline');
+    expect(detail.traderCount).toBe(3);
   });
 
   it('lists active categories in display order, parents before leaves', async () => {

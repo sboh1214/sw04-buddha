@@ -12,9 +12,7 @@ import {
   LinkOverlay,
   Stack,
   Text,
-  VisuallyHidden,
 } from '@chakra-ui/react';
-import { formatCoin, parseCoinAmount } from '@buddha/shared';
 import type { Route } from 'next';
 import NextLink from 'next/link';
 import { useState } from 'react';
@@ -22,26 +20,31 @@ import { copy } from '@/copy';
 import { type MarketSummary } from '@/lib/api';
 import { parentCategorySlug } from '@/lib/category-tree';
 import { MARKET_STATUS_LABEL, MARKET_STATUS_PALETTE } from '@/lib/market-admin';
-import { type OutcomeRow, outcomeRows } from '@/lib/market-card';
+import { type OutcomeRow, outcomeRows, participantsText } from '@/lib/market-card';
 import { CategoryIcon } from './category-icon';
 import { CountdownBadge } from './countdown-badge';
-import { MarketSparkline } from './market-sparkline';
 
 /**
  * One market in the home grid (PLAN 11.4 MarketCard, PLAN 11.1's Polymarket note), drawn as
  * Kalshi's tile (ADR-0041, measured off kalshi.com): a header — the category's icon and name
  * over the question and its countdown — then one row per outcome, YES and NO, each a label
- * over a hairline bar, the "정답 시 투입 대비 1.59x" figure and a pill with the percentage, and a
- * footer with the 거래량 on the left and the sparkline on the right. The whole card is a link
- * to the detail. A market with no fill yet has no price (N02 §5): the two rows stay, with no bar,
- * no multiple and '—' in each pill, and 체결 없음 once beside them (owner decision #125,
- * ADR-0048). No initial setting is drawn as a price, and the tile keeps its shape at the first
- * fill.
+ * over a hairline bar and its percentage as plain text, and a footer with the 참여자 count. The
+ * whole card is a link to the detail. A market with no fill yet has no price (N02 §5): the two
+ * rows stay, with no bar and '—' in each reading, and 체결 없음 once beside them (owner decision
+ * #125, ADR-0048). No initial setting is drawn as a price, and the tile keeps its shape at the
+ * first fill.
+ *
+ * What the card leaves out is decided too (ADR-0061 decision 1, ADR-0062): no payout multiple
+ * beside a row (O-21 in ADR-0047), no 거래량 and no price trend line — the volume is the detail
+ * header's and the admin's, and the trend is the detail chart's. The NO reading is the display
+ * complement of YES (ADR-0061 decision 1, item 2), never a price to buy at, and both readings
+ * are plain text rather than ADR-0041's outlined pill — Kalshi's buy button — so neither looks
+ * like a control (owner decision 2026-10-16, ADR-0062).
  *
  * The two rows take `row.first` and `row.second` — Kalshi's green and blue — and not the `yes`
  * and `no` palettes the detail screen paints. The pair is what Kalshi draws on every tile, and
  * it can be borrowed without borrowing a meaning: each row is labelled YES or NO in words, the
- * pill is named "YES 63%" (PLAN 11.2, colour never alone), and the bar's length repeats the number
+ * bar is named "YES 63%" (PLAN 11.2, colour never alone), and the bar's length repeats the number
  * beside it, so the colour is decoration on a reading the text already gives. theme/system.ts
  * says the same at the token, and why neither bar is measured for WCAG 1.4.11.
  *
@@ -51,20 +54,19 @@ import { MarketSparkline } from './market-sparkline';
  * at. The socket writes the list cache, this text re-renders, and that is the whole of AC 1
  * here.
  *
- * `market` is a `MarketSummary` rather than the list's `MarketListItem`, and the sparkline is a
- * separate optional prop, so the admin's 카드 미리보기 (Q-M3-6) can render the REAL card from a
- * draft that has no history at all — the preview must show what a visitor will see, not a
- * lookalike that drifts from it.
+ * `market` is a `MarketSummary`, the row `GET /markets` answers, so the admin's 카드 미리보기
+ * (Q-M3-6) renders the REAL card from a draft that has no history at all — the preview must
+ * show what a visitor will see, not a lookalike that drifts from it.
  *
  * `LinkBox`/`LinkOverlay` rather than an anchor wrapped round the card: the accessible name of
  * the link is then the question alone, while the whole card stays clickable. An anchor around
- * everything would announce the category, the price, the volume and the countdown as one name.
+ * everything would announce the category, the price, the countdown and the 참여자 as one name.
  * The tile also holds one link of its own INSIDE the box — the category header goes to that
  * leaf's list — and it works because Chakra's `LinkBox` raises every nested `a[href]` that is
  * not the overlay to `position: relative; z-index: 1`, above the overlay's `::before` that covers
- * the card. The pills are NOT links: they used to open the detail's trade panel on their outcome
- * (`?outcome=`), and with no panel to open (#125) a pill link would be a third tab stop to the
- * same URL. A click on a pill falls through to the overlay. `interactive` below drops every link
+ * the card. The readings are NOT links: they used to open the detail's trade panel on their
+ * outcome (`?outcome=`), and with no panel to open (#125) such a link would be a third tab stop to
+ * the same URL. A click on a reading falls through to the overlay. `interactive` below drops every link
  * for the admin 미리보기 — a card that is not a link must not RENDER one, however thoroughly its
  * clicks are cancelled.
  *
@@ -73,10 +75,11 @@ import { MarketSparkline } from './market-sparkline';
  * accessible name of the overlay is the full question — the clamp is paint, not content — a
  * `title` attribute shows the rest on hover, and the detail page shows all of it (A-UI-4).
  *
- * The sparkline sits in the footer's right slot, where Kalshi prints a market count ("27
- * markets") that has no counterpart here — a market is one question, not a series — and PLAN
- * 11.4 asks for the 24-hour trace on the card. The slot is the same size either way, so the
- * footer keeps Kalshi's 28px line.
+ * The footer is one line, Kalshi's 28px: '참여자 N' on the left (`participantsText`, the detail
+ * header's spelling — the count as it is, 0 included, ADR-0061 decision 1, item 4) where Kalshi
+ * prints its volume. Its right slot, Kalshi's market count ("27 markets"), stays empty: a market
+ * here is one question, not a series. The line is there for every market, so every tile in a
+ * row keeps the same height.
  *
  * The picture is a Chakra `Image` — a plain `<img>`, inside `CategoryIcon` — and never
  * `next/image`: `next.config.ts` declares no `images` block, so the optimizer answers 400 for
@@ -88,7 +91,7 @@ import { MarketSparkline } from './market-sparkline';
 /**
  * The tile's outer stroke, shared by the two shells in `MarketCard` so the 미리보기 cannot drift from the
  * real card by a radius. No `overflow: hidden`: the fill inside inherits the radius, and a clip
- * here would cut the focus ring off a pill on the card's edge.
+ * here would cut off a focus ring drawn on the card's edge.
  */
 const SHELL = {
   position: 'relative',
@@ -99,36 +102,29 @@ const SHELL = {
   borderColor: 'border.subtle',
 } satisfies BoxProps;
 
-/** What a pill paints before the first fill (N02 §5): no number, not a 0 or a 50. */
+/** What a reading paints before the first fill (N02 §5): no number, not a 0 or a 50. */
 const EMPTY = '—';
 
 /**
- * Kalshi's outcome pill (36px, `rounded-x50`, the green outline). The outline is `brand.border`,
- * not `row.first`: a component boundary owes WCAG 1.4.11 its 3:1, which light `row.first` does
- * not pay and light `brand.border` (600) does (theme/system.ts).
+ * An outcome's reading: the percentage as plain emphasised text, right-aligned, with no outline
+ * and no fill. ADR-0041 drew Kalshi's outcome pill here (36px, green outline), which on Kalshi is
+ * the buy button; the owner chose (2026-10-16, ADR-0062) that the card's YES and NO must not look
+ * like a control or a price to buy at — NO is only the display complement of YES (ADR-0061
+ * decision 1, item 2). The pill's 36px row height and 80px column stay, so the rows, the 체결 없음
+ * column and the tile keep their measurements.
  */
-const PILL = {
+const READING = {
   display: 'inline-flex',
   alignItems: 'center',
-  justifyContent: 'center',
+  justifyContent: 'flex-end',
   h: '36px',
   minW: '80px',
-  px: '2',
-  borderRadius: 'pill',
-  borderWidth: '1px',
-  borderColor: 'brand.border',
   textStyle: 'emphasisMd',
   color: 'fg',
 } satisfies BoxProps;
 
 export interface MarketCardProps {
   market: MarketSummary;
-  /**
-   * `MarketListItem.sparkline` — oldest-first hourly price ticks in basis points. Absent for a
-   * draft preview, and `[]` for a market with no fill at all; both render as an empty box of the
-   * same height.
-   */
-  sparkline?: number[];
   /**
    * The instant the countdown measures against, from the caller's server render. Omitted, the
    * badge shows the absolute close time until it has mounted (countdown-badge.tsx).
@@ -152,7 +148,6 @@ export interface MarketCardProps {
 
 export function MarketCard({
   market,
-  sparkline,
   now,
   interactive = true,
   'data-testid': testId,
@@ -211,8 +206,8 @@ export function MarketCard({
   // The whole tile is one column with three bands — header, rows, footer — pushed apart by
   // `justifyContent="space-between"` so the footer sits on the bottom edge of every card in a
   // row whatever the header above it took. `borderRadius="inherit"` keeps the fill inside the
-  // shell's rounded stroke without an `overflow: hidden` on the shell, which would clip the
-  // pill's focus ring.
+  // shell's rounded stroke without an `overflow: hidden` on the shell, which would clip a
+  // focus ring on the card's edge.
   const body = (
     <Stack
       bg="surface.card"
@@ -273,11 +268,10 @@ export function MarketCard({
       </Stack>
 
       {/*
-        Kalshi's row grid, copied cell for cell: the label over its bar in the first column, an
-        empty second column, and the multiple with the pill in the third. Three columns rather
-        than two so the empty cell keeps the pills of every row on one right edge whatever the
-        multiple's width. With no fill the second column says 체결 없음 once, across both rows
-        and beside the two '—' pills; it is last in the DOM so a reader hears YES, NO, then
+        Kalshi's row grid: the label over its bar in the first column, the reading in the third,
+        and between them a column that is empty while there is a price. With no fill it says
+        체결 없음 once, across both rows and beside the two '—' readings, so the readings of both rows
+        stay on one right edge either way; it is last in the DOM so a reader hears YES, NO, then
         체결 없음.
       */}
       <Grid templateColumns="1fr auto auto" columnGap="1" rowGap="6px" w="100%">
@@ -301,19 +295,18 @@ export function MarketCard({
         )}
       </Grid>
 
-      <Flex justify="space-between" align="center" gap="2" minH="28px">
-        {/* One line: `formatCoin` puts an ordinary space before 'Coin' (ADR-0051), and the
-            label, the number and the unit read as one figure beside the sparkline. */}
+      <Flex align="center" minH="28px">
+        {/* `participantsText` writes it in the detail header's spelling. One line, so the label
+            and its number never part. */}
         <Text
           as="span"
           textStyle="bodyXs"
           color="fg"
           whiteSpace="nowrap"
-          data-testid="market-card-volume"
+          data-testid="market-card-traders"
         >
-          {copy.marketVolume} {formatCoin(parseCoinAmount(market.volumeCoin))}
+          {participantsText(market)}
         </Text>
-        {sparkline === undefined ? null : <MarketSparkline points={sparkline} />}
       </Flex>
     </Stack>
   );
@@ -349,14 +342,18 @@ export function MarketCard({
 /**
  * One outcome row's grid cells (a fragment, so the parent `Grid` places them). The reading
  * "YES 63%" is announced ONCE per row, by the bar: a labelled `progressbar` with that string.
- * The pill is a `<span>`, and `aria-label` on a generic element is prohibited by ARIA 1.2 and
- * dropped by browsers, so the pill is the one hidden — it paints the same number the bar
+ * The reading is a `<span>`, and `aria-label` on a generic element is prohibited by ARIA 1.2 and
+ * dropped by browsers, so the reading is the one hidden — it paints the same number the bar
  * already names.
  *
- * With no reading there is no bar to label and no multiple: the row is its label and a '—' pill,
- * and the card's one 체결 없음 says why. The row then has no empty middle cell either — the
- * 체결 없음 holds that column for both rows by explicit placement, and an auto-placed empty cell
- * would skip past it and push the pill onto the next row.
+ * The reading paints a percent, never a Coin price, and is not a control: YES is the last fill and
+ * NO only its display complement (ADR-0061 decision 1, item 2), and neither is a price anyone
+ * can buy at. A click on it falls through to the card's overlay like a click anywhere else.
+ *
+ * With no reading there is no bar to label: the row is its label and a '—', and the card's
+ * one 체결 없음 says why. The row then has no empty middle cell either — the 체결 없음 holds that
+ * column for both rows by explicit placement, and an auto-placed empty cell would skip past it
+ * and push the reading onto the next row.
  */
 function OutcomeRowCells({ row }: { row: OutcomeRow }) {
   const { reading } = row;
@@ -399,22 +396,9 @@ function OutcomeRowCells({ row }: { row: OutcomeRow }) {
         )}
       </Stack>
       {reading !== null && <Box />}
-      <HStack gap="6px">
-        {reading !== null && (
-          <Text as="span" textStyle="emphasisSm" color="fg.muted" minW="18px" textAlign="right">
-            {/*
-              The figure alone is "1.59x", which says nothing to a listener; the sr-only prefix
-              makes it "정답 시 투입 대비 1.59x" — the sentence PLAN 11.1-2 wants everywhere, in the
-              plan's words (docs/TERMS.md).
-            */}
-            <VisuallyHidden>{copy.payoutMultiple} </VisuallyHidden>
-            {reading.multiple}
-          </Text>
-        )}
-        <Box as="span" aria-hidden="true" {...PILL} data-testid={testId}>
-          {percentText}
-        </Box>
-      </HStack>
+      <Box as="span" aria-hidden="true" {...READING} justifySelf="end" data-testid={testId}>
+        {percentText}
+      </Box>
     </>
   );
 }

@@ -26,9 +26,8 @@ export type ChargePackage = components['schemas']['ChargePackage'];
 export type ChargeResult = components['schemas']['ChargeResult'];
 export type Coupon = components['schemas']['Coupon'];
 export type Market = components['schemas']['Market'];
+/** A list row — `GET /markets` and `GET /admin/markets` — and what a market card draws. */
 export type MarketSummary = components['schemas']['MarketSummary'];
-/** A list row: `MarketSummary` plus the card's `sparkline` — only `GET /markets` returns it. */
-export type MarketListItem = components['schemas']['MarketListItem'];
 export type AdminMarket = components['schemas']['AdminMarket'];
 /** One row of `AdminMarket.settlementSteps` (ADR-0046): a judged market's settlement step. */
 export type AdminSettlementStep = components['schemas']['AdminSettlementStep'];

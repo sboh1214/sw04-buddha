@@ -2,8 +2,6 @@ import { Inject, Injectable } from '@nestjs/common';
 import { schema, type Db } from '@buddha/db';
 import {
   FILLS_RECENT_LIMIT,
-  SPARKLINE_BUCKET_HOURS,
-  SPARKLINE_WINDOW_HOURS,
   TICKS_MAX_POINTS,
   TICKS_SCAN_MAX,
   decodeKeyset,
@@ -16,7 +14,6 @@ import {
   type Category,
   type Fill,
   type Market,
-  type MarketListItem,
   type MarketListQuery,
   type MarketSummary,
   type PriceSeries,
@@ -129,7 +126,7 @@ export class MarketService {
    * id DESC) carries a bigint, so it uses the sort cursor. A cursor that does not decode
    * serves the first page rather than a 500 (see decodeKeyset).
    */
-  async list(query: MarketListQuery): Promise<Page<MarketListItem>> {
+  async list(query: MarketListQuery): Promise<Page<MarketSummary>> {
     const { markets, categories } = schema;
     const { cursor, limit } = query;
     const filters = [
@@ -183,14 +180,8 @@ export class MarketService {
     const hasMore = rows.length > limit;
     const kept = hasMore ? rows.slice(0, limit) : rows;
     const last = kept.at(-1);
-    // The sparkline is fetched for the page the keyset already produced, so the card query
-    // above stays exactly what the M3 keyset tests pin.
-    const spark = await this.sparklinesFor(kept.map((row) => row.market.id));
     return {
-      items: kept.map((row) => ({
-        ...toMarketSummary(row.market, row.category),
-        sparkline: spark.get(row.market.id) ?? [],
-      })),
+      items: kept.map((row) => toMarketSummary(row.market, row.category)),
       nextCursor: hasMore && last ? nextCursorOf(last.market) : null,
     };
   }
@@ -216,63 +207,6 @@ export class MarketService {
         .from(categories)
         .where(or(eq(categories.slug, slug), inArray(categories.parentId, named))),
     );
-  }
-
-  /**
-   * Hourly as-of samples for one page of cards (PLAN 11.4). One correlated LIMIT-1 seek per
-   * bucket on `price_ticks_market_id_ts_id_idx`: SPARKLINE_MAX_POINTS x page size seeks,
-   * bounded whatever the markets' history — unlike a `ts >= now() - 24h` scan, whose cost
-   * grows with trade volume on an anonymous route (A-M3-20). An hour without a fill carries
-   * the previous value forward for free. Ticks come from fills only — opening a market writes
-   * none — so a market with no fill yet comes back with an empty array (N02 §5).
-   *
-   * A separate statement, not a lateral on the paging query: Postgres applies that query's
-   * LIMIT above the join, so a lateral there would run once per market the filter matches
-   * rather than once per card. Passing the ids the page already produced makes the bound
-   * structural.
-   *
-   * `now()` is the statement timestamp and is STABLE, so both ends of the grid and every
-   * bucket come from one instant; `make_interval(hours => $n)` binds the constants instead of
-   * concatenating an interval literal, and no `date_trunc` is involved (its result depends on
-   * the session TimeZone GUC, which createDb never sets).
-   */
-  private async sparklinesFor(ids: string[]): Promise<Map<string, number[]>> {
-    if (ids.length === 0) return new Map();
-    const { markets, priceTicks } = schema;
-    // `array_remove(…, null::int)` drops the leading buckets older than the market's first
-    // tick, so the array's LENGTH says where the series starts (0 bp is a real probability, so
-    // they must not be zero-filled).
-    //
-    // The inner column names are written out rather than interpolated as drizzle columns: in a
-    // `.select({...})` field map a `sql` fragment renders a column UNQUALIFIED (`"p_yes_bp"`,
-    // `"id"`), so `${priceTicks.marketId} = ${markets.id}` came out as `"market_id" = "id"` and
-    // bound the correlation to `price_ticks.id` (`operator does not exist: uuid = bigint`). The
-    // inner relation is aliased `pt` and the correlation names `markets.id` explicitly, so every
-    // reference is unambiguous. The names follow `casing: 'snake_case'` (packages/db client.ts).
-    const sparkline = sql<number[] | null>`(
-      select array_remove(
-        array_agg(
-          (select pt.p_yes_bp
-             from ${priceTicks} pt
-            where pt.market_id = markets.id
-              and pt.ts <= g.bucket
-            order by pt.ts desc, pt.id desc
-            limit 1)
-          order by g.bucket
-        ),
-        null::int
-      )
-      from generate_series(
-        now() - make_interval(hours => ${SPARKLINE_WINDOW_HOURS}),
-        now(),
-        make_interval(hours => ${SPARKLINE_BUCKET_HOURS})
-      ) as g(bucket)
-    )`;
-    const rows = await this.db
-      .select({ id: markets.id, sparkline })
-      .from(markets)
-      .where(inArray(markets.id, ids));
-    return new Map(rows.map((row): [string, number[]] => [row.id, row.sparkline ?? []]));
   }
 
   /**

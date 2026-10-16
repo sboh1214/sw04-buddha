@@ -424,7 +424,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** Markets by status (default open), never drafts; sorted by volume, closing or newest. Each card carries up to 25 hourly YES samples over the last 24 hours, oldest first. */
+        /** Markets by status (default open), never drafts; sorted by volume, closing or newest */
         get: operations["listMarkets"];
         put?: never;
         post?: never;
@@ -982,33 +982,6 @@ export type components = {
             payload: unknown;
             /** @enum {string} */
             type: "created" | "opened" | "closed" | "resolve_proposed" | "result_changed" | "finalized" | "voided" | "rules_edited" | "resolved";
-        };
-        MarketListItem: {
-            category: {
-                nameKo: string;
-                slug: string;
-            };
-            /** Format: date-time */
-            closeAt: string;
-            /** Format: date-time */
-            createdAt: string;
-            /** Format: uuid */
-            id: string;
-            imageUrl: string | null;
-            lastPrice: number | null;
-            /** Format: date-time */
-            openAt: string | null;
-            /** @enum {string|null} */
-            resolvedResult: "YES" | "NO" | null;
-            slug: string;
-            sparkline: number[];
-            /** @enum {string} */
-            status: "draft" | "open" | "closed" | "resolved" | "settled" | "voided";
-            statusEventId: string | null;
-            title: string;
-            tradeCount: number;
-            traderCount: number;
-            volumeCoin: components["schemas"]["CoinAmount"];
         };
         MarketSummary: {
             category: {
@@ -3240,7 +3213,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        data: components["schemas"]["MarketListItem"][];
+                        data: components["schemas"]["MarketSummary"][];
                         meta: components["schemas"]["PageMeta"];
                     };
                 };

@@ -9,9 +9,10 @@ import { markets } from './markets.js';
  *
  * ONE TABLE, not partitioned. PLAN 6.2 left "월 단위 파티셔닝은 M6에서 검토" against this line;
  * M6 reviewed it and decided against, with the reasons and the re-open triggers in ADR-0039.
- * The short version: three of the four read shapes are `ts <= boundary ORDER BY ts DESC LIMIT 1`
- * with no lower bound, which partition pruning cannot help — the executor would probe partitions
- * newest-to-oldest where today it makes one index descent, and that is the home page's sparkline.
+ * The short version: two of the three read shapes (the chart's grid samples and its truncation
+ * probe) are `ts <= boundary ORDER BY ts DESC LIMIT 1` with no lower bound, which partition
+ * pruning cannot help — the executor would probe partitions newest-to-oldest where today it makes
+ * one index descent. (ADR-0039 counted a fourth, the home card's sparkline; ADR-0062 removed it.)
  */
 export const priceTicks = pgTable(
   'price_ticks',

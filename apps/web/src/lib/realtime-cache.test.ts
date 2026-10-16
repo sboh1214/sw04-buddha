@@ -7,14 +7,7 @@ import { QueryObserver, hydrate } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 import { ME_QUERY_KEY } from '@/hooks/use-me';
 import { positionsKey } from '@/hooks/use-portfolio';
-import {
-  type Market,
-  type MarketListItem,
-  type MarketSummary,
-  type Me,
-  type Position,
-  type PriceSeries,
-} from './api';
+import { type Market, type MarketSummary, type Me, type Position, type PriceSeries } from './api';
 import {
   DEFAULT_MARKET_FILTERS,
   MARKETS_KEY,
@@ -79,8 +72,8 @@ const snapshot: Market = {
   voidedAt: null,
 };
 
-const card: MarketListItem = { ...summary, sparkline: [4800, 4900, 5000] };
-const otherCard: MarketListItem = { ...card, id: OTHER_ID, slug: 'other', sparkline: [] };
+const card: MarketSummary = { ...summary };
+const otherCard: MarketSummary = { ...card, id: OTHER_ID, slug: 'other' };
 
 const tick = (patch: Partial<MarketTickEvent> = {}): MarketTickEvent => ({
   type: 'market:tick',
@@ -155,7 +148,7 @@ const traded: UserPositionEvent = {
 };
 
 /** The infinite-list shape: the last page ends the list, and the first page has no cursor. */
-const pagesOf = (...pages: MarketListItem[][]): MarketPages => ({
+const pagesOf = (...pages: MarketSummary[][]): MarketPages => ({
   pages: pages.map((items, index) => ({
     items,
     nextCursor: index === pages.length - 1 ? null : `cursor-${String(index)}`,
