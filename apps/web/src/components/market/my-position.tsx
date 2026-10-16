@@ -2,8 +2,6 @@
 
 import { Alert, Badge, Button, Card, DataList, Heading, Skeleton, Stack } from '@chakra-ui/react';
 import { type MarketStatus, parseCoinAmount } from '@buddha/shared';
-import NextLink from 'next/link';
-import { usePathname } from 'next/navigation';
 import { type ReactNode } from 'react';
 import { CoinText } from '@/components/ui/coin-text';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -32,8 +30,9 @@ import { sessionListSection } from '@/lib/query-client';
  *
  * The list itself is `usePositions` — the same query MY's 보유 계약 reads, so the two screens
  * hold one copy of the rows rather than two. It waits for the session on its own, so a
- * signed-out visitor never provokes the 401 that the retry rule refuses to retry; they get the
- * sign-in prompt instead.
+ * signed-out visitor never provokes the 401 that the retry rule refuses to retry, and this card
+ * draws nothing for one (#122): 내 포지션 is a personal area, a signed-in reader's only, and the
+ * detail puts its one sign-in prompt for all the personal areas in this card's place instead.
  *
  * WHICH of the two lists it reads follows the market's own status through
  * `positionListStatusFor`: a finished market moved its holders' rows to the settled list, so
@@ -81,7 +80,6 @@ export function MyPosition({
 }: MyPositionProps) {
   const listStatus = positionListStatusFor(status);
   const positions = usePositions(listStatus);
-  const pathname = usePathname();
   const rows = (positions.data ?? []).filter((row) => row.marketId === marketId);
   // Four states, not three. A refetch that fails after the list has answered KEEPS the rows and
   // reports `isRefetchError`, which this ladder folded into the ordinary reading — and on this
@@ -95,6 +93,11 @@ export function MyPosition({
   // The count is the MARKET-FILTERED one: a stale list full of other markets' rows is empty for
   // this market, which is the reading that has to reach the empty rung rather than an empty list.
   const section = sessionListSection(positions, rows.length);
+  // A personal area, so a signed-in reader's only (ADR-0061 decision 1, item 18): the detail
+  // draws this card for one alone (`personalAreaView`), and a visitor gets the detail's one
+  // sign-in prompt for every personal area rather than a card of this one's own (owner decision
+  // 2026-10-17). The rung is the card's own half of that rule.
+  if (section.body === 'signedOut') return null;
 
   return (
     <Card.Root data-testid={testId}>
@@ -104,74 +107,56 @@ export function MyPosition({
         </Heading>
       </Card.Header>
       <Card.Body>
-        {section.body === 'signedOut' ? (
-          <EmptyState
-            message={copy.marketLoginToSeePosition}
-            action={
-              <Button asChild size="sm" variant="outline">
-                {/* The visitor comes back to the market they were reading, which is the whole
-                    reason the prompt is here rather than a bare link to /login. */}
-                <NextLink href={{ pathname: '/login', query: { next: pathname } }}>
-                  {copy.login}
-                </NextLink>
-              </Button>
-            }
-          />
-        ) : (
-          <Stack gap="3">
-            {/* Above the body, never in place of it: the rows are real and worth keeping on
+        <Stack gap="3">
+          {/* Above the body, never in place of it: the rows are real and worth keeping on
                 screen, and the empty rung is the one that needs the label most. The same shape
-                as 체결 내역 directly below this card. */}
-            {section.stale && (
-              <Alert.Root status="warning" role="status" data-testid="market-my-position-stale">
+                as 최근 체결's stale notice (recent-fills.tsx). */}
+          {section.stale && (
+            <Alert.Root status="warning" role="status" data-testid="market-my-position-stale">
+              <Alert.Indicator />
+              <Alert.Content>
+                <Alert.Description>{copy.marketRefreshFailed}</Alert.Description>
+              </Alert.Content>
+              <Button
+                size="xs"
+                variant="outline"
+                ml="auto"
+                onClick={() => void positions.refetch()}
+              >
+                {copy.retry}
+              </Button>
+            </Alert.Root>
+          )}
+          {section.body === 'pending' ? (
+            <Skeleton height="12" />
+          ) : section.body === 'failed' ? (
+            <Stack gap="2" align="flex-start">
+              <Alert.Root status="error" role="alert">
                 <Alert.Indicator />
                 <Alert.Content>
-                  <Alert.Description>{copy.marketRefreshFailed}</Alert.Description>
+                  <Alert.Description>{copy.errUnknown}</Alert.Description>
                 </Alert.Content>
-                <Button
-                  size="xs"
-                  variant="outline"
-                  ml="auto"
-                  onClick={() => void positions.refetch()}
-                >
-                  {copy.retry}
-                </Button>
               </Alert.Root>
-            )}
-            {section.body === 'pending' ? (
-              <Skeleton height="12" />
-            ) : section.body === 'failed' ? (
-              <Stack gap="2" align="flex-start">
-                <Alert.Root status="error" role="alert">
-                  <Alert.Indicator />
-                  <Alert.Content>
-                    <Alert.Description>{copy.errUnknown}</Alert.Description>
-                  </Alert.Content>
-                </Alert.Root>
-                <Button size="sm" variant="outline" onClick={() => void positions.refetch()}>
-                  {copy.retry}
-                </Button>
-              </Stack>
-            ) : section.body === 'empty' ? (
-              <EmptyState message={copy.marketMyPositionEmpty} />
-            ) : (
-              <Stack gap="4">
-                {rows.map((row) =>
-                  listStatus === 'settled' ? (
-                    // A finished market is never marked to a price (see `SettledPositionRows`),
-                    // so the live one is not passed down here — there is nothing to value.
-                    <SettledPositionRows key={row.outcome} position={row} />
-                  ) : (
-                    <PositionRows
-                      key={row.outcome}
-                      position={markToLiveMarket(row, { lastPrice })}
-                    />
-                  ),
-                )}
-              </Stack>
-            )}
-          </Stack>
-        )}
+              <Button size="sm" variant="outline" onClick={() => void positions.refetch()}>
+                {copy.retry}
+              </Button>
+            </Stack>
+          ) : section.body === 'empty' ? (
+            <EmptyState message={copy.marketMyPositionEmpty} />
+          ) : (
+            <Stack gap="4">
+              {rows.map((row) =>
+                listStatus === 'settled' ? (
+                  // A finished market is never marked to a price (see `SettledPositionRows`),
+                  // so the live one is not passed down here — there is nothing to value.
+                  <SettledPositionRows key={row.outcome} position={row} />
+                ) : (
+                  <PositionRows key={row.outcome} position={markToLiveMarket(row, { lastPrice })} />
+                ),
+              )}
+            </Stack>
+          )}
+        </Stack>
       </Card.Body>
     </Card.Root>
   );

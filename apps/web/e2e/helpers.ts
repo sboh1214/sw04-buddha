@@ -274,6 +274,11 @@ export interface CreateOpenMarketOptions {
    * earlier run has added to. No group, the default: the title is the tag alone.
    */
   group?: string;
+  /**
+   * The market's 배경 (`description`), which the detail draws as its own section only when there
+   * is one (#122). None, the default: the detail has no 배경 section.
+   */
+  description?: string;
 }
 
 /**
@@ -302,7 +307,7 @@ async function unwrap<T>(response: APIResponse): Promise<T> {
  */
 export async function createOpenMarket(
   admin: APIRequestContext,
-  { topLevelCategory = 0, group }: CreateOpenMarketOptions = {},
+  { topLevelCategory = 0, group, description }: CreateOpenMarketOptions = {},
 ): Promise<TestMarket> {
   const categories = await unwrap<Category[]>(await admin.get('/api/v1/categories'));
   const category = categories.filter((row) => row.parentId === null)[topLevelCategory];
@@ -320,7 +325,7 @@ export async function createOpenMarket(
     await admin.post('/api/v1/admin/markets', {
       data: {
         title,
-        description: null,
+        description: description ?? null,
         rules,
         resolutionSource: `테스트 출처 ${tag}`,
         categoryId: category.id,
