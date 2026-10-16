@@ -9,6 +9,8 @@ import {
   marketSearchKey,
   marketsKey,
   publicListQuery,
+  relatedMarketsKey,
+  relatedMarketsQuery,
   searchListQuery,
 } from '@/lib/market-keys';
 import { type MarketPage } from '@/lib/market-live';
@@ -104,6 +106,35 @@ export function marketSearchInfiniteQueryOptions(search: MarketSearch) {
 
 export function useMarketSearch(search: MarketSearch) {
   return useInfiniteQuery(marketSearchInfiniteQueryOptions(search));
+}
+
+/**
+ * A detail's 관련 시장 (#65, ADR-0068): `GET /markets/:id/related`, the markets an admin linked to
+ * this one, in 추천 order, one page per 더 보기 — the home list's page shape, so the home's grid,
+ * card and socket reducers serve it (`['markets', 'related', id]` sits under the home's root,
+ * market-keys.ts). The detail page reads the first page on the server with the same request
+ * (`fetchRelatedMarketsPageServer`) and dehydrates it, so the first paint costs no request; a
+ * read that failed there is read here, and the section shows its own failure.
+ */
+export function relatedMarketsInfiniteQueryOptions(marketId: string) {
+  const id = marketId.toLowerCase();
+  return {
+    queryKey: relatedMarketsKey(id),
+    queryFn: async ({ pageParam }: { pageParam: string | undefined }): Promise<MarketPage> => {
+      const { data, meta } = unwrap(
+        await api.GET('/api/v1/markets/{id}/related', {
+          params: { path: { id }, query: relatedMarketsQuery(pageParam) },
+        }),
+      );
+      return { items: data, nextCursor: meta.nextCursor };
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last: MarketPage) => last.nextCursor ?? undefined,
+  };
+}
+
+export function useRelatedMarkets(marketId: string) {
+  return useInfiniteQuery(relatedMarketsInfiniteQueryOptions(marketId));
 }
 
 /**

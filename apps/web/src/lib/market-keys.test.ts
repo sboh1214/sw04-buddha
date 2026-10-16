@@ -15,6 +15,7 @@ import {
   DEFAULT_SEARCH_FILTERS,
   HOME_MARKET_STATUS,
   MARKETS_KEY,
+  MARKET_RELATED_KEY,
   MARKET_SEARCH_KEY,
   MARKET_FILLS_KEY,
   MARKET_KEY,
@@ -34,6 +35,8 @@ import {
   marketSearchKey,
   marketsKey,
   publicListQuery,
+  relatedMarketsKey,
+  relatedMarketsQuery,
   searchListQuery,
   ticksKey,
   watchStateKey,
@@ -185,6 +188,31 @@ describe('the search screen’s key and query (#15, ADR-0066)', () => {
   });
 });
 
+describe('the related markets’ key and query (#65, ADR-0068)', () => {
+  it('keys a detail’s related markets on the canonical uuid, under the home list’s root', () => {
+    expect(relatedMarketsKey(ID.toUpperCase())).toEqual(['markets', 'related', ID]);
+    // Under ['markets'], so the card join, the socket's card writes and a reconnect's re-read
+    // reach it; never one of the home's lists, the search's results or the detail row.
+    expect(partialMatchKey(relatedMarketsKey(ID), MARKETS_KEY)).toBe(true);
+    expect(partialMatchKey(relatedMarketsKey(ID), MARKET_RELATED_KEY)).toBe(true);
+    expect(partialMatchKey(relatedMarketsKey(ID), MARKET_SEARCH_KEY)).toBe(false);
+    expect(partialMatchKey(marketsKey(DEFAULT_MARKET_FILTERS), MARKET_RELATED_KEY)).toBe(false);
+    expect(partialMatchKey(relatedMarketsKey(ID), MARKET_KEY)).toBe(false);
+    expect(hashKey(relatedMarketsKey(ID))).not.toBe(
+      hashKey(relatedMarketsKey(ID.replace('3', '4'))),
+    );
+    // Public (ADR-0061 decision 1, item 18): the detail dehydrates it.
+    expect(isPrivateQueryKey(relatedMarketsKey(ID))).toBe(false);
+  });
+
+  it('sends a cursor only when there is one, and no order: 추천 is the owner’s (item 19)', () => {
+    expect(relatedMarketsQuery()).toEqual({});
+    expect(relatedMarketsQuery('1788408306789_0_null_abc')).toEqual({
+      cursor: '1788408306789_0_null_abc',
+    });
+  });
+});
+
 describe('key prefix isolation', () => {
   it('never matches the list prefix against the detail prefix', () => {
     // The two `setQueryDefaults` registrations (`structuralSharing` on ['market'] and on
@@ -284,6 +312,7 @@ describe('isPrivateQueryKey', () => {
       marketKey(ID),
       ticksKey(ID, '1D'),
       marketFillsKey(ID),
+      relatedMarketsKey(ID),
     ];
     for (const key of publicKeys) expect(isPrivateQueryKey(key), hashKey(key)).toBe(false);
   });

@@ -349,6 +349,30 @@ export const copy = {
   eventRulesBefore: '이전',
   eventRulesAfter: '이후',
   payloadUnreadable: '표시할 수 없는 내용',
+  // 관리자 상세의 관련 시장 (#65, ADR-0068): 지금 연결된 시장(모든 상태)과 해제, 제목으로 찾아 연결.
+  // 연결·해제는 담당자와 시각만 기록에 남고 사유는 받지 않는다(ADR-0061 결정 1의 19).
+  adminRelatedMarkets: '관련 시장',
+  // 안내 한 줄은 세 문장을 잇는다(lib/related-markets.ts `relatedHint`). 둘째 문장의 상태는 화면의
+  // 상태 라벨(MARKET_STATUS_LABEL)로 적어 같은 카드의 배지와 같고, #173이 라벨을 바꾸면 따라간다.
+  adminRelatedHint: '연결한 두 시장은 서로의 상세에 관련 시장으로 보입니다.',
+  adminRelatedHintShownLead: '상세에는',
+  adminRelatedHintShownTail: '인 시장만 보입니다.',
+  adminRelatedHintNoEffect: '연결은 두 시장의 규칙·거래·판정·정산을 바꾸지 않습니다.',
+  adminRelatedEmpty: '연결된 관련 시장이 없습니다.',
+  adminRelatedLinkedAt: '연결',
+  adminRelatedUnlink: '연결 해제',
+  adminRelatedUnlinkTitle: '관련 시장 연결을 해제합니다',
+  adminRelatedUnlinkBody: '해제하면 두 시장의 상세에서 서로 보이지 않습니다. 계속할까요?',
+  adminRelatedUnlinked: '관련 시장 연결을 해제했습니다.',
+  adminRelatedSearchLabel: '연결할 시장 찾기',
+  adminRelatedSearchPlaceholder: '시장 제목의 일부',
+  adminRelatedSearchSubmit: '찾기',
+  adminRelatedSearchEmpty: '제목에 이 글자가 들어간 시장이 없습니다.',
+  adminRelatedLink: '연결',
+  adminRelatedLinked: '관련 시장을 연결했습니다.',
+  adminRelatedAlreadyLinked: '연결됨',
+  adminRelatedThisMarket: '이 시장',
+  errRelatedSelf: '같은 시장끼리는 연결할 수 없습니다.',
   adminMarketFills: '최근 체결',
   adminNoFills: '아직 체결이 없습니다.',
   buy: '매수',
@@ -562,6 +586,11 @@ export const copy = {
   marketMyOpenOrders: '내 대기 주문',
   marketJudgingRecord: '공개 판정 기록',
   marketDiscussion: '토론',
+  // 관련 시장 (#65, ADR-0068): 토론 뒤, 운영자가 이 시장과 연결한 시장의 카드(홈의 카드 그대로, 추천
+  // 순). 보일 시장이 없으면 섹션을 두고 이 안내를 보인다(ADR-0061 결정 1의 19). 연결은 있어도 보일
+  // 상태(진행 중·거래 마감·판정 완료·정산 완료)의 시장이 없을 때도 같은 글이라 '연결된'을 붙이지 않는다.
+  marketRelated: '관련 시장',
+  marketRelatedEmpty: '관련 시장이 없습니다.',
   // 비로그인 방문자에게 개인 영역(내 포지션·내 대기 주문·내 거래) 대신 그 자리에 하나만 보이는
   // 로그인 안내(오너 결정 2026-10-17, '로그인 안내 하나'). 버튼은 copy.login이고 이 상세로 돌아온다.
   marketPersonalSignedOut: '로그인하면 이 시장의 내 포지션·대기 주문·거래를 볼 수 있습니다.',

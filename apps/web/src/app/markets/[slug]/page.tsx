@@ -6,12 +6,17 @@ import { LiveBackgroundSection } from '@/components/market/live-background-secti
 import { LiveQuestionHeading } from '@/components/market/live-question-heading';
 import { LiveRulesSection } from '@/components/market/live-rules-section';
 import { copy } from '@/copy';
-import { fetchMarketServer, fetchTicksServer } from '@/lib/api.server';
-import { dehydratePublic } from '@/lib/market-keys';
-import { detailWindowEnd, seedMarketDetail } from '@/lib/market-ssr';
+import {
+  fetchMarketServer,
+  fetchRelatedMarketsPageServer,
+  fetchTicksServer,
+} from '@/lib/api.server';
+import { dehydratePublic, relatedMarketsKey } from '@/lib/market-keys';
+import { detailWindowEnd, prefetchRelatedMarkets, seedMarketDetail } from '@/lib/market-ssr';
 import { getQueryClient } from '@/lib/query-client';
 import { DEFAULT_TICK_RANGE } from '@/lib/ticks';
 import { MarketDetail } from './market-detail';
+import { RelatedMarkets } from './related-markets';
 
 /**
  * 시장 상세 (PLAN 11.3), server-rendered so the first paint already carries the question, the
@@ -65,15 +70,28 @@ export default async function MarketPage({ params }: { params: Promise<{ slug: s
   const market = await fetchMarketServer(slug);
   if (market === null) notFound();
 
-  // Both sub-resources of the detail are uuid-only routes, so everything below the row speaks
+  // Every sub-resource of the detail is a uuid-only route, so everything below the row speaks
   // `market.id` and never the slug the URL carried (A-M3-29).
   //
   // `null` when the ticks read failed, and the page renders anyway: the chart is one region of
   // this screen and it reports its own failure, while the question and the 규칙 below are
   // already in hand. Only the row may 404 or 500 this route (api.server.ts).
-  const series = await fetchTicksServer(market.id, DEFAULT_TICK_RANGE);
+  //
+  // 관련 시장 (#65) is read beside it, as the home reads its list (`prefetchRelatedMarkets`), so
+  // the section's first page is in the HTML. Public (ADR-0061 decision 1, item 18), so it is the
+  // same page for every visitor. The two reads run together, so the page waits for the slower of
+  // them; the related read is tried once, never retried here, and a failure is swallowed — the
+  // section then reads its page in the browser and shows its own failure (lib/market-ssr.ts).
   const queryClient = getQueryClient();
+  const [series] = await Promise.all([
+    fetchTicksServer(market.id, DEFAULT_TICK_RANGE),
+    prefetchRelatedMarkets(queryClient, market.id, fetchRelatedMarketsPageServer),
+  ]);
   seedMarketDetail(queryClient, market, series);
+  // The related cards' countdowns measure against the server's read of them, as the home's do
+  // (app/page.tsx says why it is the query's own `dataUpdatedAt`); 0 is a read that failed.
+  const relatedFetchedAt =
+    queryClient.getQueryState(relatedMarketsKey(market.id))?.dataUpdatedAt ?? 0;
 
   return (
     // The home's and the header's width and side padding (1320px, 24px), so the two columns
@@ -123,6 +141,14 @@ export default async function MarketPage({ params }: { params: Promise<{ slug: s
             md: <LiveRulesSection fallback={market} width="md" />,
             base: <LiveRulesSection fallback={market} width="base" />,
           }}
+          // 관련 시장 (#65, ADR-0068), the last section at both widths, so one node: the home's
+          // cards for the markets an admin linked to this one, first page read above.
+          related={
+            <RelatedMarkets
+              marketId={market.id}
+              now={relatedFetchedAt === 0 ? undefined : relatedFetchedAt}
+            />
+          }
         />
       </HydrationBoundary>
     </Container>

@@ -13,6 +13,7 @@ import {
   type MarketFilters,
   type MarketSearch,
   publicListQuery,
+  relatedMarketsQuery,
   searchListQuery,
 } from './market-keys';
 import { type TickRange, ticksQueryFor } from './ticks';
@@ -121,6 +122,26 @@ export async function fetchMarketSearchPageServer(
 ): Promise<{ items: MarketSummary[]; nextCursor: string | null }> {
   const { data, meta } = unwrap(
     await serverApi.GET('/api/v1/markets', { params: { query: searchListQuery(search, cursor) } }),
+  );
+  return { items: data, nextCursor: meta.nextCursor };
+}
+
+/**
+ * One page of a detail's 관련 시장 (`GET /markets/:id/related`, #65), in the same page shape and with
+ * the same request as the browser's `queryFn` (`relatedMarketsQuery`, hooks/use-markets.ts), so the
+ * page the detail reads on the server is the page the client picks up. Rejects on failure, which
+ * the page's prefetch swallows after one attempt (`prefetchRelatedMarkets`, lib/market-ssr.ts —
+ * never retried on the server): the section then reads it in the browser and shows its own
+ * failure, and the rest of the detail renders without it.
+ */
+export async function fetchRelatedMarketsPageServer(
+  marketId: string,
+  cursor?: string,
+): Promise<{ items: MarketSummary[]; nextCursor: string | null }> {
+  const { data, meta } = unwrap(
+    await serverApi.GET('/api/v1/markets/{id}/related', {
+      params: { path: { id: marketId }, query: relatedMarketsQuery(cursor) },
+    }),
   );
   return { items: data, nextCursor: meta.nextCursor };
 }

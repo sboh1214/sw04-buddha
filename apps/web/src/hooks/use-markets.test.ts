@@ -18,6 +18,7 @@ import {
   marketKey,
   marketSearchKey,
   marketsKey,
+  relatedMarketsKey,
 } from '@/lib/market-keys';
 import {
   type MarketPage,
@@ -28,11 +29,13 @@ import {
   applyToPages,
   tickRestartsMarket,
 } from '@/lib/market-live';
+import { prefetchRelatedMarkets } from '@/lib/market-ssr';
 import { getQueryClient, restartQueries } from '@/lib/query-client';
 import {
   marketQueryOptions,
   marketSearchInfiniteQueryOptions,
   marketsInfiniteQueryOptions,
+  relatedMarketsInfiniteQueryOptions,
 } from './use-markets';
 
 /**
@@ -626,6 +629,80 @@ describe('the search screen’s results (#15, ADR-0066)', () => {
       expect(held()?.pages[0]?.items[0]?.status).toBe('closed');
     } finally {
       queryClient.clear();
+    }
+  });
+});
+
+describe('a detail’s 관련 시장 (#65, ADR-0068)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('keys the list on the lower-cased market, asks with no cursor first and follows every cursor', () => {
+    // No cap on what is shown (ADR-0061 decision 1, item 19): 더 보기 has to reach the last link,
+    // so a cursor goes on and only the wire's null ends the list.
+    const options = relatedMarketsInfiniteQueryOptions(ID.toUpperCase());
+    expect(options.queryKey).toEqual(relatedMarketsKey(ID));
+    expect(options.initialPageParam).toBeUndefined();
+    expect(options.getNextPageParam({ items: [], nextCursor: 'c' })).toBe('c');
+    expect(options.getNextPageParam({ items: [], nextCursor: null })).toBeUndefined();
+  });
+
+  it('sends the market’s related route, by its lower-cased id, with the page’s cursor', async () => {
+    const spy = vi.spyOn(api, 'GET').mockResolvedValue({
+      data: { data: [card], meta: { nextCursor: 'cursor-2' } },
+      response: new Response(null, { status: 200 }),
+    });
+    const options = relatedMarketsInfiniteQueryOptions(ID.toUpperCase());
+    await expect(options.queryFn({ pageParam: undefined })).resolves.toEqual({
+      items: [card],
+      nextCursor: 'cursor-2',
+    });
+    // 더 보기: the NEXT page, not the first one again.
+    await options.queryFn({ pageParam: 'cursor-1' });
+    const calls = spy.mock.calls as unknown as [
+      string,
+      { params: { path: unknown; query: unknown } },
+    ][];
+    expect(calls.map(([route, init]) => ({ route, ...init.params }))).toEqual([
+      { route: '/api/v1/markets/{id}/related', path: { id: ID }, query: {} },
+      { route: '/api/v1/markets/{id}/related', path: { id: ID }, query: { cursor: 'cursor-1' } },
+    ]);
+  });
+
+  it('hands the section the page the detail read on the server, without a request', async () => {
+    const serverClient = getQueryClient();
+    await prefetchRelatedMarkets(serverClient, ID, () =>
+      Promise.resolve<MarketPage>({ items: [otherCard], nextCursor: 'cursor-0' }),
+    );
+    const queryClient = getQueryClient();
+    hydrate(queryClient, dehydratePublic(serverClient));
+
+    let fetches = 0;
+    const observer = new InfiniteQueryObserver<
+      MarketPage,
+      Error,
+      MarketPages,
+      readonly unknown[],
+      string | undefined
+    >(queryClient, {
+      ...relatedMarketsInfiniteQueryOptions(ID),
+      queryFn: () => {
+        fetches += 1;
+        return Promise.resolve({ items: [], nextCursor: null });
+      },
+      retry: false,
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
+    try {
+      const result = observer.getCurrentResult();
+      expect(result.data?.pages[0]?.items).toEqual([otherCard]);
+      expect(result.hasNextPage).toBe(true);
+      expect(fetches).toBe(0);
+    } finally {
+      unsubscribe();
+      queryClient.clear();
+      serverClient.clear();
     }
   });
 });

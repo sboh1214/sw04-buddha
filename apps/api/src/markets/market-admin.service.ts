@@ -9,6 +9,7 @@ import {
   SETTLEMENT_STEPS,
   slugify,
   type AdminMarket,
+  type AdminMarketListQuery,
   type AdminSettlementStep,
   type CreateMarketBody,
   type MarketEventType,
@@ -17,7 +18,7 @@ import {
   type ResolveMarketBody,
   type UpdateMarketBody,
 } from '@buddha/shared';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, ilike, sql } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
 import { keysetPredicate } from '../common/keyset.js';
 import { PG_UNIQUE_VIOLATION, isPgError } from '../common/errors/pg-error.js';
@@ -27,7 +28,13 @@ import { MarketJobs } from '../jobs/market-jobs.service.js';
 import { MarketPublisher } from '../realtime/market-publisher.js';
 import { type Page } from '../wallet/wallet.service.js';
 import { lockMarket } from './market-lock.js';
-import { marketWithCategory, toMarket, toMarketSummary, type MarketRow } from './market.service.js';
+import {
+  likePattern,
+  marketWithCategory,
+  toMarket,
+  toMarketSummary,
+  type MarketRow,
+} from './market.service.js';
 
 /** The handle `db.transaction` hands its callback; @buddha/db exports no alias for it. */
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
@@ -542,13 +549,14 @@ export class MarketAdminService {
     return market;
   }
 
-  /** Every status, draft included; newest first over (created_at DESC, id DESC). */
-  async list(
-    status: MarketStatus | undefined,
-    cursor: string | undefined,
-    limit: number,
-  ): Promise<Page<MarketSummary>> {
+  /**
+   * Every status, draft included; newest first over (created_at DESC, id DESC). `q` narrows it to
+   * the titles holding the term, as the public list's search does (`ILIKE`, wildcards literal):
+   * the 관련 시장 picker of the admin detail finds the market to link by it (#65, ADR-0068).
+   */
+  async list(query: AdminMarketListQuery): Promise<Page<MarketSummary>> {
     const { markets, categories } = schema;
+    const { status, cursor, limit, q } = query;
     const keyset = decodeKeyset(cursor, 'uuid');
     const rows = await this.db
       .select(marketWithCategory)
@@ -557,6 +565,7 @@ export class MarketAdminService {
       .where(
         and(
           status ? eq(markets.status, status) : undefined,
+          q ? ilike(markets.title, likePattern(q)) : undefined,
           keyset ? keysetPredicate(markets.createdAt, markets.id, keyset, 'uuid') : undefined,
         ),
       )

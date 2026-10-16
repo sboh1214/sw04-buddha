@@ -15,6 +15,7 @@ import { couponRedemptions, coupons } from './coupons.js';
 import { fills } from './fills.js';
 import { ledgerEntries } from './ledger.js';
 import { marketEvents } from './market-events.js';
+import { marketLinks } from './market-links.js';
 import { marketSearches } from './market-searches.js';
 import { marketSettlementSteps } from './market-settlement-steps.js';
 import { markets } from './markets.js';
@@ -96,6 +97,10 @@ export const marketsRelations = relations(markets, ({ one, many }) => ({
   settlementSteps: many(marketSettlementSteps),
   watches: many(marketWatches),
   watchEvents: many(marketWatchEvents),
+  // 관련 시장 (#65): the links where this market is the pair's smaller id and where it is the
+  // larger one. Its related markets are the other end of both (market-links.ts).
+  linksAsLow: many(marketLinks, { relationName: 'market_link_low' }),
+  linksAsHigh: many(marketLinks, { relationName: 'market_link_high' }),
 }));
 
 export const ordersRelations = relations(orders, ({ one, many }) => ({
@@ -150,6 +155,21 @@ export const marketSearchesRelations = relations(marketSearches, ({ one }) => ({
   user: one(user, { fields: [marketSearches.userId], references: [user.id] }),
 }));
 
+// Two references to `markets`, so both ends name theirs (as `category_parent` above).
+export const marketLinksRelations = relations(marketLinks, ({ one }) => ({
+  lowMarket: one(markets, {
+    fields: [marketLinks.lowMarketId],
+    references: [markets.id],
+    relationName: 'market_link_low',
+  }),
+  highMarket: one(markets, {
+    fields: [marketLinks.highMarketId],
+    references: [markets.id],
+    relationName: 'market_link_high',
+  }),
+  creator: one(user, { fields: [marketLinks.createdBy], references: [user.id] }),
+}));
+
 export const adminActionsRelations = relations(adminActions, ({ one }) => ({
   admin: one(user, { fields: [adminActions.adminId], references: [user.id] }),
 }));
@@ -186,6 +206,7 @@ export const userRelations = relations(user, ({ one, many }) => ({
   watches: many(marketWatches),
   watchEvents: many(marketWatchEvents),
   searches: many(marketSearches),
+  marketLinks: many(marketLinks),
   adminActions: many(adminActions),
   releaseSettingUpdates: many(releaseSettings),
   approvalRequests: many(approvalRequests, { relationName: 'approval_requester' }),

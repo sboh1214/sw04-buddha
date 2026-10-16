@@ -103,8 +103,11 @@ export function toFill(row: FillRow): Fill {
   };
 }
 
-/** `%`, `_` and `\` in a search term are literal characters, not LIKE wildcards. */
-function likePattern(q: string): string {
+/**
+ * `%`, `_` and `\` in a search term are literal characters, not LIKE wildcards. The public list's
+ * search and the admin list's (`MarketAdminService.list`) take the term the same way.
+ */
+export function likePattern(q: string): string {
   return `%${q.replaceAll(/[%_\\]/g, (m) => `\\${m}`)}%`;
 }
 

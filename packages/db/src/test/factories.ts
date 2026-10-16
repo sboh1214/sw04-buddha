@@ -9,6 +9,7 @@ import {
   PRICE_MIN,
   SIGNUP_BONUS_COIN,
   SETTLEMENT_STEPS,
+  relatedMarketPair,
   type MarketStatus,
   type Outcome,
   type Role,
@@ -22,6 +23,7 @@ import {
   categories,
   fills,
   ledgerEntries,
+  marketLinks,
   marketSearches,
   marketSettlementSteps,
   marketWatchEvents,
@@ -439,6 +441,37 @@ export async function createSearch(db: Db, input: CreateSearchInput) {
       query: input.query,
       ...(input.searchedAt === undefined ? {} : { searchedAt: input.searchedAt }),
       ...(input.id === undefined ? {} : { id: input.id }),
+    })
+    .returning();
+  return row!;
+}
+
+export interface CreateMarketLinkInput {
+  /** Either end: the pair is stored once, smaller id first, whichever order is given. */
+  marketId: string;
+  relatedMarketId: string;
+  /** The linking admin. A fresh admin is created when omitted. */
+  createdBy?: string;
+  /** Default: the database clock. An order test sets it, since links can share a millisecond. */
+  createdAt?: Date;
+}
+
+/**
+ * A link between two markets (#65, ADR-0068) as `POST /admin/markets/:id/related` leaves the
+ * `market_links` row — and only the row: no `admin_actions` row, which the API writes beside it.
+ * The pair is ordered here as the API orders it (`relatedMarketPair`), so a market can be linked
+ * from either side; the same market twice throws, as the CHECK would.
+ */
+export async function createMarketLink(db: Db, input: CreateMarketLinkInput) {
+  const pair = relatedMarketPair(input.marketId, input.relatedMarketId);
+  if (pair === undefined) throw new RangeError('a market cannot be linked to itself');
+  const createdBy = input.createdBy ?? (await createUser(db, { role: 'admin' })).user.id;
+  const [row] = await db
+    .insert(marketLinks)
+    .values({
+      ...pair,
+      createdBy,
+      ...(input.createdAt === undefined ? {} : { createdAt: input.createdAt }),
     })
     .returning();
   return row!;

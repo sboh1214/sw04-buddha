@@ -510,9 +510,14 @@ export const resolveMarketBodySchema = z
   .meta({ id: 'ResolveMarketBody' });
 export type ResolveMarketBody = z.infer<typeof resolveMarketBodySchema>;
 
-/** `GET /admin/markets` (no `.meta`: query DTO). Any status, draft included; omitted = all. */
+/**
+ * `GET /admin/markets` (no `.meta`: query DTO). Any status, draft included; omitted = all. `q` is
+ * a title search like the public list's (a case-insensitive partial match, `%`·`_`·`\` literal),
+ * which the admin's 관련 시장 picker finds the market to link with (#65, ADR-0068).
+ */
 export const adminMarketListQuerySchema = cursorQuerySchema.extend({
   status: marketStatusSchema.optional(),
+  q: marketSearchTermSchema.optional(),
 });
 export type AdminMarketListQuery = z.infer<typeof adminMarketListQuerySchema>;
 

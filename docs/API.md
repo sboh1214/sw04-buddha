@@ -96,7 +96,7 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | `APPROVAL_NOT_ALLOWED` | 409 | 2인 통제 요청의 결정(승인·거절)을 받지 않는다. `details[0].message` 가 까닭을 말한다 — `requester`(요청한 계정은 자기 요청을 결정할 수 없다. 어느 환경에서도 예외가 없다), `decided`(이미 결정된 요청이다). 이 규칙을 쓰는 라우트가 이 코드를 문서화한다. |
 | `INTERNAL` | 500 | 그 밖의 서버 오류. 본문에 내부 사정을 담지 않는다. |
 
-## 오퍼레이션 (53개)
+## 오퍼레이션 (57개)
 
 태그별로 묶었고, 태그 안의 순서는 OpenAPI 문서의 경로 순서 그대로다.
 
@@ -144,8 +144,11 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | GET | `/api/v1/admin/payments` | Charges, newest first | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
 | POST | `/api/v1/admin/payments/{id}/refund` | Refund an unused charge within 7 days of its approval: claw back all its Coin, then cancel the whole KRW at the provider (retry a refunding one). Closed while paid Coin is off: 404 (ADR-0049) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `INSUFFICIENT_BALANCE`, `DUPLICATE_REQUEST`, `REFUND_NOT_ALLOWED`, `PAYMENT_GATEWAY_REFUSED`, `RATE_LIMITED`, `PAYMENT_GATEWAY_ERROR` |
 | GET | `/api/v1/admin/audit-failures` | Ledger/balance mismatches found by the ledger.audit job | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
-| GET | `/api/v1/admin/markets` | Every market, drafts included, newest first | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
+| GET | `/api/v1/admin/markets` | Every market, drafts included, newest first; q narrows it to titles holding the term (a case-insensitive partial match), as the related-market picker searches | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
 | POST | `/api/v1/admin/markets` | Create a draft market (no price until its first fill) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
+| GET | `/api/v1/admin/markets/{id}/related` | The markets linked to this one, any status, the latest link first, with who linked | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
+| POST | `/api/v1/admin/markets/{id}/related` | Link another market to this one, two-way, in any status of either; linking a linked pair changes nothing. Answers the links as they stand | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
+| DELETE | `/api/v1/admin/markets/{id}/related/{relatedMarketId}` | Unlink two markets; unlinking a pair that is not linked changes nothing. Answers the path market's links as they stand | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
 | GET | `/api/v1/admin/markets/{id}` | One market with its exposure, settlement steps and event log | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
 | PATCH | `/api/v1/admin/markets/{id}` | Edit a draft (any field) or an open market (text, close time, category; slug refused naming the field, blank rules refused with RULES_REQUIRED); other statuses refuse naming status | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RULES_REQUIRED`, `RATE_LIMITED` |
 | POST | `/api/v1/admin/markets/{id}/open` | draft → open; refused without rules (RULES_REQUIRED) or with a past closeAt | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RULES_REQUIRED`, `RATE_LIMITED` |
@@ -166,6 +169,7 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | GET | `/api/v1/markets` | Markets by status (default open; all is every public status), never drafts, optionally by category and a title search (q, a case-insensitive partial match); sorted recommended (24-hour volume, then the latest opening; the default), newest (latest opening) or closing (soonest close; with any status but open, the open markets first and then the ended ones, latest close first) | — | `VALIDATION_ERROR`, `RATE_LIMITED` |
 | GET | `/api/v1/markets/{idOrSlug}` | One market by id or slug (a draft is NOT_FOUND to the public) | — | `VALIDATION_ERROR`, `NOT_FOUND`, `RATE_LIMITED` |
 | GET | `/api/v1/markets/{id}/fills` | Newest 20 fills, anonymous | — | `VALIDATION_ERROR`, `NOT_FOUND`, `RATE_LIMITED` |
+| GET | `/api/v1/markets/{id}/related` | Markets linked to this one (links are two-way): open, closed, resolved and settled ones, never voided or drafts, sorted recommended (24-hour volume, then the latest opening); a draft or unknown market is NOT_FOUND | — | `VALIDATION_ERROR`, `NOT_FOUND`, `RATE_LIMITED` |
 | GET | `/api/v1/markets/{id}/ticks` | Price series, ascending, at most 500 points. `raw` returns stored ticks, downsampled from the newest 10000 of the range (`truncated` says when older ones were left out). `1m`/`1h` sample the probability in force on an absolute grid, coarsening the stride until the window fits; `bucketSeconds` reports the stride served, and the point at `from` carries the last value at or before it, so the left edge is never empty. | — | `VALIDATION_ERROR`, `NOT_FOUND`, `RATE_LIMITED` |
 | GET | `/api/v1/categories` | Active categories in display order: top-level rows (parentId null) first, then their sub-categories | — | `RATE_LIMITED` |
 
@@ -193,12 +197,12 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | POST | `/api/v1/me/search-history/{id}/delete` | Delete one recent search: every recorded search of the entry's term (an id the account has none of deletes nothing); answers the recent searches (the newest 10 distinct terms, newest first) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
 | POST | `/api/v1/me/search-history/clear` | Delete every recorded search of the account; answers the (empty) recent searches | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
 
-## 스키마 (73개)
+## 스키마 (75개)
 
 요청·응답 본문의 실제 모양은 `apps/api/openapi.json` 의 `components.schemas` 에 있다. 이름만
 적어 두니 거기서 찾아 읽는다. 이름은 zod 스키마의 `.meta({ id })` 에서 온다.
 
-`AdminAccount`, `AdminAccountActor`, `AdminBalanceAdjustResult`, `AdminGrantBody`, `AdminMarket`, `AdminPayment`, `AdminRevokeBody`, `AdminRoleChange`, `AdminRoleChangeType`, `AdminSettlementStep`, `AdminUser`, `AdminUserQuery`, `AuditFailure`, `Balance`, `BalanceAdjustBody`, `Category`, `ChargeBody`, `ChargePackage`, `ChargeResult`, `CoinAmount`, `Contact`, `ContactBody`, `Coupon`, `CouponCode`, `CreateChargePackageBody`, `CreateCouponBody`, `CreateMarketBody`, `CursorQuery`, `ErrorCode`, `ErrorEnvelope`, `Fill`, `LedgerEntry`, `LinkedAccount`, `Market`, `MarketEvent`, `MarketSummary`, `Me`, `Nickname`, `OkResult`, `Order`, `PageMeta`, `Password`, `Payment`, `PaymentProviderInfo`, `Position`, `PriceSeries`, `PriceTick`, `RecentSearch`, `RecordSearchBody`, `RedeemCouponBody`, `RedeemCouponResult`, `RefundPaymentBody`, `RegisterBody`, `RegisterResult`, `ReleaseSetting`, `ReleaseSettingActor`, `ReleaseSettingChange`, `ReleaseSettingChangeBody`, `ReleaseSettingState`, `ReleaseSettingStatus`, `ResolveMarketBody`, `SearchHistoryWriteBody`, `SetPasswordBody`, `SettlementStep`, `SettlementStepStatus`, `UpdateChargePackageBody`, `UpdateCouponBody`, `UpdateMarketBody`, `UpdateMeBody`, `UpdateTimeZoneBody`, `UpdateWatchBody`, `UserRole`, `WatchState`
+`AdminAccount`, `AdminAccountActor`, `AdminBalanceAdjustResult`, `AdminGrantBody`, `AdminMarket`, `AdminPayment`, `AdminRelatedMarket`, `AdminRevokeBody`, `AdminRoleChange`, `AdminRoleChangeType`, `AdminSettlementStep`, `AdminUser`, `AdminUserQuery`, `AuditFailure`, `Balance`, `BalanceAdjustBody`, `Category`, `ChargeBody`, `ChargePackage`, `ChargeResult`, `CoinAmount`, `Contact`, `ContactBody`, `Coupon`, `CouponCode`, `CreateChargePackageBody`, `CreateCouponBody`, `CreateMarketBody`, `CursorQuery`, `ErrorCode`, `ErrorEnvelope`, `Fill`, `LedgerEntry`, `LinkRelatedMarketBody`, `LinkedAccount`, `Market`, `MarketEvent`, `MarketSummary`, `Me`, `Nickname`, `OkResult`, `Order`, `PageMeta`, `Password`, `Payment`, `PaymentProviderInfo`, `Position`, `PriceSeries`, `PriceTick`, `RecentSearch`, `RecordSearchBody`, `RedeemCouponBody`, `RedeemCouponResult`, `RefundPaymentBody`, `RegisterBody`, `RegisterResult`, `ReleaseSetting`, `ReleaseSettingActor`, `ReleaseSettingChange`, `ReleaseSettingChangeBody`, `ReleaseSettingState`, `ReleaseSettingStatus`, `ResolveMarketBody`, `SearchHistoryWriteBody`, `SetPasswordBody`, `SettlementStep`, `SettlementStepStatus`, `UpdateChargePackageBody`, `UpdateCouponBody`, `UpdateMarketBody`, `UpdateMeBody`, `UpdateTimeZoneBody`, `UpdateWatchBody`, `UserRole`, `WatchState`
 
 ## 헬스체크 (문서 밖)
 

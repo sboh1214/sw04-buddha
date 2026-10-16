@@ -5,6 +5,7 @@
  * row — `admin.controller.test.ts` for the balance adjustment, `charge-package.controller.test`
  * and `coupon.controller.test` for the catalogue, `admin-markets.controller.test` and
  * `admin-markets-resolve.controller.test` for the market transitions,
+ * `related-markets.controller.test` for the links between markets,
  * `release-settings.controller.test` for the release settings and
  * `admin-accounts.controller.test` for the admin grants and revokes. What none of them can
  * prove is COMPLETENESS: they assert about routes that exist, so an admin write added tomorrow
@@ -43,6 +44,8 @@ const AUDITED: Readonly<Record<string, AdminActionType>> = {
   'POST /admin/markets/:id/open': 'market_open',
   'POST /admin/markets/:id/close': 'market_close',
   'POST /admin/markets/:id/resolve': 'market_resolve',
+  'POST /admin/markets/:id/related': 'market_link',
+  'DELETE /admin/markets/:id/related/:relatedMarketId': 'market_unlink',
   'POST /admin/payments/:id/refund': 'payment_refund',
   'PATCH /admin/release-settings/:key': 'release_setting_change',
   'POST /admin/admins': 'admin_grant',

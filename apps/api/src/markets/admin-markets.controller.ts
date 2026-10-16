@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   Param,
@@ -13,14 +14,18 @@ import { ApiCookieAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import {
   adminMarketListQuerySchema,
   adminMarketSchema,
+  adminRelatedMarketSchema,
   createMarketBodySchema,
+  linkRelatedMarketBodySchema,
   marketSummarySchema,
   resolveMarketBodySchema,
   updateMarketBodySchema,
   uuidParamSchema,
   type AdminMarket,
   type AdminMarketListQuery,
+  type AdminRelatedMarket,
   type CreateMarketBody,
+  type LinkRelatedMarketBody,
   type MarketSummary,
   type ResolveMarketBody,
   type UpdateMarketBody,
@@ -33,6 +38,7 @@ import { ApiPage } from '../common/interceptors/response-envelope.interceptor.js
 import { ApiData, ApiErrors, ApiPageOf } from '../common/openapi/api-response.decorators.js';
 import { SESSION_SECURITY_SCHEME } from '../openapi/document.js';
 import { MarketAdminService } from './market-admin.service.js';
+import { RelatedMarketsService } from './related-markets.service.js';
 
 /**
  * Admin market CRUD and transitions (PLAN 7.3, 12; M3). Guards run in order: SessionGuard
@@ -44,22 +50,85 @@ import { MarketAdminService } from './market-admin.service.js';
 @Controller('admin/markets')
 @UseGuards(SessionGuard, AdminGuard)
 export class AdminMarketsController {
-  constructor(private readonly markets: MarketAdminService) {}
+  constructor(
+    private readonly markets: MarketAdminService,
+    private readonly related: RelatedMarketsService,
+  ) {}
 
   @Get()
   @ApiOperation({
     operationId: 'adminListMarkets',
-    summary: 'Every market, drafts included, newest first',
+    summary:
+      'Every market, drafts included, newest first; q narrows it to titles holding the term ' +
+      '(a case-insensitive partial match), as the related-market picker searches',
   })
   // No `@ApiQuery`: `adminMarketListQuerySchema` has no component id, so swagger expands it
-  // into the cursor/limit/status parameters itself (see markets.controller.ts).
+  // into the cursor/limit/status/q parameters itself (see markets.controller.ts).
   @ApiPageOf(marketSummarySchema)
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'VALIDATION_ERROR')
   async adminListMarkets(
     @Query({ schema: adminMarketListQuerySchema }) query: AdminMarketListQuery,
   ): Promise<ApiPage<MarketSummary>> {
-    const { items, nextCursor } = await this.markets.list(query.status, query.cursor, query.limit);
+    const { items, nextCursor } = await this.markets.list(query);
     return new ApiPage(items, { nextCursor });
+  }
+
+  /**
+   * 관련 시장 (#65, ADR-0068): the market's links, every status of the market at the other end —
+   * the admin keeps a link whatever either market's state, and the detail filters what it shows.
+   * Unpaginated: it is the list the links are managed from, one market's, made by admins.
+   */
+  @Get(':id/related')
+  @ApiOperation({
+    operationId: 'adminListRelatedMarkets',
+    summary: 'The markets linked to this one, any status, the latest link first, with who linked',
+  })
+  @ApiData(adminRelatedMarketSchema.array())
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
+  adminListRelatedMarkets(
+    @Param('id', { schema: uuidParamSchema }) id: string,
+  ): Promise<AdminRelatedMarket[]> {
+    return this.related.listAdmin(id);
+  }
+
+  @Post(':id/related')
+  @HttpCode(200)
+  @ApiOperation({
+    operationId: 'adminLinkRelatedMarket',
+    summary:
+      'Link another market to this one, two-way, in any status of either; linking a linked ' +
+      'pair changes nothing. Answers the links as they stand',
+  })
+  @ApiData(adminRelatedMarketSchema.array())
+  // VALIDATION_ERROR names `marketId` for the market itself; NOT_FOUND names it for an unknown
+  // one (an unknown market in the path is a plain NOT_FOUND).
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
+  adminLinkRelatedMarket(
+    @CurrentUser() admin: SessionUser,
+    @Param('id', { schema: uuidParamSchema }) id: string,
+    @Body({ schema: linkRelatedMarketBodySchema }) body: LinkRelatedMarketBody,
+  ): Promise<AdminRelatedMarket[]> {
+    return this.related.link(admin.id, id, body.marketId);
+  }
+
+  @Delete(':id/related/:relatedMarketId')
+  @ApiOperation({
+    operationId: 'adminUnlinkRelatedMarket',
+    summary:
+      'Unlink two markets; unlinking a pair that is not linked changes nothing. Answers the ' +
+      "path market's links as they stand",
+  })
+  @ApiData(adminRelatedMarketSchema.array())
+  // The link's refusals, naming the path's `relatedMarketId` where the link names the body's
+  // `marketId`: VALIDATION_ERROR for the market itself, NOT_FOUND for an unknown one (an unknown
+  // market in the first path segment is a plain NOT_FOUND).
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
+  adminUnlinkRelatedMarket(
+    @CurrentUser() admin: SessionUser,
+    @Param('id', { schema: uuidParamSchema }) id: string,
+    @Param('relatedMarketId', { schema: uuidParamSchema }) relatedMarketId: string,
+  ): Promise<AdminRelatedMarket[]> {
+    return this.related.unlink(admin.id, id, relatedMarketId);
   }
 
   @Get(':id')

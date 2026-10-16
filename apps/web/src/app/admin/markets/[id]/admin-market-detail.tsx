@@ -22,22 +22,28 @@ import {
 } from '@chakra-ui/react';
 import { type MarketEventType, OUTCOMES, formatCoin, parseCoinAmount } from '@buddha/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import NextLink from 'next/link';
 import { type ReactNode, useMemo, useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
-import { listView } from '@/lib/query-client';
+import { SEARCH_INPUT_MAX_LENGTH } from '@/lib/market-search';
+import { listSection, listView } from '@/lib/query-client';
 import {
+  applyRelatedMarkets,
   useAdminMarket,
+  useAdminRelatedMarkets,
+  useAdminRelatedSearch,
   useCategories,
   useApplyMarket,
   useMarketFills,
 } from '@/hooks/use-admin-markets';
 import {
   type AdminMarket,
+  type AdminRelatedMarket,
   type Category,
+  type MarketSummary,
   type UpdateMarketBody,
   api,
   isApiError,
@@ -74,6 +80,12 @@ import {
   toResolveMarketBody,
   toUpdateMarketBody,
 } from '@/lib/market-form';
+import {
+  relatedHint,
+  relatedLinkErrorMessage,
+  relatedPickState,
+  relatedSearchSubmit,
+} from '@/lib/related-markets';
 import { MarketFormFields } from '../market-form-fields';
 
 export function AdminMarketDetail({ id }: { id: string }) {
@@ -209,6 +221,10 @@ export function AdminMarketDetail({ id }: { id: string }) {
           staleTime, a socket update) must not throw away what the admin is typing — inside,
           EditMarketForm takes fresh server values only for fields that hold no edits. */}
       <EditMarketCard key={data.status} market={data} />
+
+      {/* Keyed by the market: a title link in it opens another market's detail on this same
+          route, and that one starts with its own empty search. */}
+      <RelatedMarketsPanel key={data.id} market={data} />
 
       <TradeStatsPanel market={data} />
       <EventLog market={data} />
@@ -676,6 +692,308 @@ function SettlementStepsPanel({ market }: { market: AdminMarket }) {
         </Table.ScrollArea>
       </Card.Body>
     </Card.Root>
+  );
+}
+
+/**
+ * 관련 시장 (#65, ADR-0068): the markets linked to this one, and a title search to link another.
+ * Only an admin links (N03 §1), in any status of either market, with no reason and no second admin
+ * (ADR-0061 decision 1, item 19; decision 3, the #65 rows). A link is two-way: the other market's
+ * detail shows this one too, which the hint says, with what a reader sees — the open, closed,
+ * resolved and settled ones — and that a link changes neither market.
+ *
+ * The list is every link whatever the other market's status (a draft or a voided market
+ * included, each with its badge), the latest first, each with when and by whom — the linking
+ * admin's nickname, not the account id (owner decision 2026-10-17). Each row unlinks behind a
+ * confirmation: unlinking takes the market off two public details at once. Linking is one press:
+ * it is undone by the unlink beside it. Both writes answer the links as they now stand, which go on screen at once
+ * (`applyRelatedMarkets`); a repeated link or an unlink of nothing changes nothing on the server.
+ * The search is the admin list's (`GET /admin/markets?q=`, every status), so the market on screen
+ * is among the results — marked 이 시장 — and so is any it is linked with already (연결됨). Its box
+ * holds what the API takes as a term (`SEARCH_INPUT_MAX_LENGTH`), and 찾기 on the term already
+ * searched asks again (`relatedSearchSubmit`) — the way back from a search that failed.
+ *
+ * Both lists take the other lists' ladder (`listSection`): a refresh that failed after rows exist
+ * keeps them under a notice with 다시 시도, instead of passing for current — an empty list that
+ * could not be re-read after a link made from the other market's page would otherwise go on
+ * saying 연결된 관련 시장이 없습니다 (review on #65).
+ */
+function RelatedMarketsPanel({ market }: { market: AdminMarket }) {
+  const queryClient = useQueryClient();
+  const links = useAdminRelatedMarkets(market.id);
+  const linkedIds = useMemo(() => new Set((links.data ?? []).map((row) => row.id)), [links.data]);
+  const [unlinking, setUnlinking] = useState<AdminRelatedMarket | null>(null);
+  const [input, setInput] = useState('');
+  const [term, setTerm] = useState<string | undefined>(undefined);
+  const search = useAdminRelatedSearch(term);
+  const results = search.data?.pages.flatMap((page) => page.items) ?? [];
+  const linkRows = links.data ?? [];
+  const linksSection = listSection(links, linkRows.length);
+  const searchSection = listSection(search, results.length);
+
+  const onError = (error: unknown) =>
+    toaster.create({ type: 'error', title: relatedLinkErrorMessage(error) });
+
+  const link = useMutation({
+    mutationFn: async (relatedId: string) =>
+      unwrap(
+        await api.POST('/api/v1/admin/markets/{id}/related', {
+          params: { path: { id: market.id } },
+          body: { marketId: relatedId },
+        }),
+      ).data,
+    onSuccess: async (fresh, relatedId) => {
+      toaster.create({ type: 'success', title: copy.adminRelatedLinked });
+      await applyRelatedMarkets(queryClient, market.id, relatedId, fresh);
+    },
+    onError,
+  });
+
+  const unlink = useMutation({
+    mutationFn: async (relatedId: string) =>
+      unwrap(
+        await api.DELETE('/api/v1/admin/markets/{id}/related/{relatedMarketId}', {
+          params: { path: { id: market.id, relatedMarketId: relatedId } },
+        }),
+      ).data,
+    onSuccess: async (fresh, relatedId) => {
+      toaster.create({ type: 'success', title: copy.adminRelatedUnlinked });
+      setUnlinking(null);
+      await applyRelatedMarkets(queryClient, market.id, relatedId, fresh);
+    },
+    onError,
+  });
+
+  return (
+    <Card.Root data-testid="admin-related-markets">
+      <Card.Header>
+        <Stack gap="1">
+          <Text fontWeight="semibold">{copy.adminRelatedMarkets}</Text>
+          <Text fontSize="sm" color="fg.muted">
+            {relatedHint()}
+          </Text>
+        </Stack>
+      </Card.Header>
+      <Card.Body>
+        <Stack gap="5">
+          <Stack gap="3">
+            {linksSection.stale && (
+              <RefreshFailedNotice
+                testId="admin-related-stale"
+                onRetry={() => void links.refetch()}
+              />
+            )}
+            {linksSection.body === 'pending' ? (
+              <Skeleton height="12" />
+            ) : linksSection.body === 'failed' ? (
+              <Alert.Root status="error" role="alert">
+                <Alert.Indicator />
+                <Alert.Content>
+                  <Alert.Description>{copy.errUnknown}</Alert.Description>
+                </Alert.Content>
+              </Alert.Root>
+            ) : linksSection.body === 'empty' ? (
+              <Text color="fg.muted" data-testid="admin-related-empty">
+                {copy.adminRelatedEmpty}
+              </Text>
+            ) : (
+              <Stack gap="2" data-testid="admin-related-list">
+                {linkRows.map((row) => (
+                  <HStack
+                    key={row.id}
+                    justify="space-between"
+                    borderWidth="1px"
+                    borderRadius="l2"
+                    p="3"
+                    gap="3"
+                    flexWrap="wrap"
+                    data-testid={`admin-related-${row.id}`}
+                  >
+                    <RelatedMarketLine market={row}>
+                      <Text fontSize="xs" color="fg.muted">
+                        {copy.adminRelatedLinkedAt} {formatKst(row.linkedAt)} ·{' '}
+                        {/* Who linked it, by nickname (owner decision 2026-10-17). */}
+                        <Text as="span" data-testid={`admin-related-linked-by-${row.id}`}>
+                          {row.linkedBy.nickname}
+                        </Text>
+                      </Text>
+                    </RelatedMarketLine>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setUnlinking(row)}
+                      data-testid={`admin-related-unlink-${row.id}`}
+                    >
+                      {copy.adminRelatedUnlink}
+                    </Button>
+                  </HStack>
+                ))}
+              </Stack>
+            )}
+          </Stack>
+
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              const next = relatedSearchSubmit(input, term);
+              if (next.refetch) void search.refetch();
+              else setTerm(next.term);
+            }}
+            noValidate
+          >
+            <Field.Root>
+              <Field.Label>{copy.adminRelatedSearchLabel}</Field.Label>
+              <HStack gap="2" w="full">
+                <Input
+                  value={input}
+                  onChange={(event) => setInput(event.target.value)}
+                  placeholder={copy.adminRelatedSearchPlaceholder}
+                  // The API's bound on a term: a pasted title past it would read as no term.
+                  maxLength={SEARCH_INPUT_MAX_LENGTH}
+                  autoComplete="off"
+                  data-testid="admin-related-search-input"
+                />
+                <Button
+                  type="submit"
+                  size="sm"
+                  variant="outline"
+                  data-testid="admin-related-search-submit"
+                >
+                  {copy.adminRelatedSearchSubmit}
+                </Button>
+              </HStack>
+            </Field.Root>
+          </form>
+
+          {term !== undefined && (
+            <Stack gap="3">
+              {searchSection.stale && (
+                <RefreshFailedNotice
+                  testId="admin-related-search-stale"
+                  onRetry={() => void search.refetch()}
+                />
+              )}
+              {searchSection.body === 'pending' ? (
+                <Skeleton height="12" />
+              ) : searchSection.body === 'failed' ? (
+                <Alert.Root status="error" role="alert">
+                  <Alert.Indicator />
+                  <Alert.Content>
+                    <Alert.Description>{copy.errUnknown}</Alert.Description>
+                  </Alert.Content>
+                </Alert.Root>
+              ) : searchSection.body === 'empty' ? (
+                <Text color="fg.muted" data-testid="admin-related-search-empty">
+                  {copy.adminRelatedSearchEmpty}
+                </Text>
+              ) : (
+                <Stack gap="2" data-testid="admin-related-search-results">
+                  {results.map((row) => {
+                    const state = relatedPickState(row.id, market.id, linkedIds);
+                    return (
+                      <HStack
+                        key={row.id}
+                        justify="space-between"
+                        borderWidth="1px"
+                        borderRadius="l2"
+                        p="3"
+                        gap="3"
+                        flexWrap="wrap"
+                        data-testid={`admin-related-result-${row.id}`}
+                      >
+                        <RelatedMarketLine market={row} />
+                        {state === 'linkable' ? (
+                          <Button
+                            size="sm"
+                            loading={link.isPending && link.variables === row.id}
+                            disabled={link.isPending}
+                            onClick={() => link.mutate(row.id)}
+                            data-testid={`admin-related-link-${row.id}`}
+                          >
+                            {copy.adminRelatedLink}
+                          </Button>
+                        ) : (
+                          <Badge variant="subtle" data-testid={`admin-related-state-${row.id}`}>
+                            {state === 'self'
+                              ? copy.adminRelatedThisMarket
+                              : copy.adminRelatedAlreadyLinked}
+                          </Badge>
+                        )}
+                      </HStack>
+                    );
+                  })}
+                  {search.hasNextPage && (
+                    <Button
+                      alignSelf="center"
+                      size="sm"
+                      variant="ghost"
+                      loading={search.isFetchingNextPage}
+                      onClick={() => void search.fetchNextPage()}
+                      data-testid="admin-related-search-more"
+                    >
+                      {copy.loadMore}
+                    </Button>
+                  )}
+                </Stack>
+              )}
+            </Stack>
+          )}
+        </Stack>
+
+        <ConfirmDialog
+          testId="admin-related-unlink"
+          open={unlinking !== null}
+          onClose={() => setUnlinking(null)}
+          title={copy.adminRelatedUnlinkTitle}
+          confirmLabel={copy.adminRelatedUnlink}
+          loading={unlink.isPending}
+          onConfirm={() => {
+            if (unlinking) unlink.mutate(unlinking.id);
+          }}
+        >
+          <Stack gap="2">
+            <Text fontWeight="medium">{unlinking?.title}</Text>
+            <Text>{copy.adminRelatedUnlinkBody}</Text>
+          </Stack>
+        </ConfirmDialog>
+      </Card.Body>
+    </Card.Root>
+  );
+}
+
+/**
+ * The notice above a list whose refresh failed after it had rows (`listSection`'s `stale`): the
+ * rows stay, and this says they are the last ones read, with 다시 시도 — the reading RecentFills
+ * and the card above already take (`adminMarketRefreshFailed`).
+ */
+function RefreshFailedNotice({ testId, onRetry }: { testId: string; onRetry: () => void }) {
+  return (
+    <Alert.Root status="warning" role="status" data-testid={testId}>
+      <Alert.Indicator />
+      <Alert.Content>
+        <Alert.Description>{copy.adminMarketRefreshFailed}</Alert.Description>
+      </Alert.Content>
+      <Button size="xs" variant="outline" ml="auto" onClick={onRetry}>
+        {copy.retry}
+      </Button>
+    </Alert.Root>
+  );
+}
+
+/** One market in the 관련 시장 panel: its title (to its admin detail) and its status. */
+function RelatedMarketLine({ market, children }: { market: MarketSummary; children?: ReactNode }) {
+  return (
+    <Stack gap="0.5" minW="0">
+      <HStack gap="2" flexWrap="wrap">
+        <ChakraLink asChild fontWeight="semibold">
+          <NextLink href={`/admin/markets/${market.id}`}>{market.title}</NextLink>
+        </ChakraLink>
+        <Badge colorPalette={MARKET_STATUS_PALETTE[market.status]} variant="subtle">
+          {MARKET_STATUS_LABEL[market.status]}
+        </Badge>
+      </HStack>
+      {children}
+    </Stack>
   );
 }
 

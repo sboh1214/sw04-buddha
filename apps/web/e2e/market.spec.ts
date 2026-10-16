@@ -158,9 +158,12 @@ test.describe('시장 상세', () => {
     expect(html).toMatch(/data-testid="order-entry-yes"[^>]*>YES 매수</);
     expect(html).toMatch(/data-testid="order-entry-no"[^>]*>NO 매수</);
     expect(html).not.toContain('data-testid="order-sheet');
-    for (const slot of ['market-order-book', 'market-discussion']) {
+    // …and 관련 시장 (#65) after them, public too and one shared section at both widths, with its
+    // notice for a market nothing is linked to.
+    for (const slot of ['market-order-book', 'market-discussion', 'market-related']) {
       expect(html, slot).toContain(`data-testid="${slot}"`);
     }
+    expect(html).toContain(copy.marketRelatedEmpty);
     for (const width of ['md', 'base']) {
       for (const section of ['market-background', 'market-rules', 'market-judging-record']) {
         expect(html, `${section}-${width}`).toContain(`data-testid="${section}-${width}"`);
@@ -615,16 +618,16 @@ test.describe('시장 상세 · 375px', () => {
     await expect(page.getByTestId('order-entry-bar')).toBeVisible();
 
     // One position, the end of the document, where a sticky bar and a `fixed` one part: the
-    // first screen (AC 5 above) has both meeting the tab bar. Here the last section (토론, 관련
-    // 시장 after it with #65) ends above the bar, and the bar has come off the tab bar with the
-    // detail — it is the detail's last box, above the footer — instead of staying over the footer
-    // as a fixed bar would (ADR-0067).
+    // first screen (AC 5 above) has both meeting the tab bar. Here the last section (관련 시장,
+    // #65 — it took 토론's place as the last, ADR-0068) ends above the bar, and the bar has come off
+    // the tab bar with the detail — it is the detail's last box, above the footer — instead of
+    // staying over the footer as a fixed bar would (ADR-0067).
     await page.evaluate(() => {
       window.scrollTo(0, document.documentElement.scrollHeight);
     });
     await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
     const [last, bar, detail, footer, tabs] = await Promise.all([
-      boxOf(page, 'market-discussion'),
+      boxOf(page, 'market-related'),
       boxOf(page, 'order-entry-bar'),
       boxOf(page, 'market-detail'),
       boxOf(page, 'site-footer'),
@@ -880,6 +883,7 @@ test.describe('시장 상세 · 375px', () => {
       'market-judging-record-base',
       'market-personal-signed-out',
       'market-discussion',
+      'market-related',
     ]);
     await expectSummaryOrder(page);
     await expectReadingOrder(page, [
@@ -889,6 +893,7 @@ test.describe('시장 상세 · 375px', () => {
       copy.rulesSectionTitle,
       copy.marketJudgingRecord,
       copy.marketDiscussion,
+      copy.marketRelated,
     ]);
 
     // It opens on 호가 — N02 §4's short name on the switch, the slot under it titled 호가창 (owner
@@ -1012,6 +1017,7 @@ test.describe('시장 상세 · 1280px', () => {
       'market-fills',
       'market-personal-signed-out',
       'market-discussion',
+      'market-related',
     ]);
     await expect(
       page.getByTestId('market-order-book').getByRole('heading', { level: 2 }),
@@ -1028,6 +1034,7 @@ test.describe('시장 상세 · 1280px', () => {
       copy.marketOrderBook,
       copy.marketRecentFills,
       copy.marketDiscussion,
+      copy.marketRelated,
     ]);
 
     // No switch and no 매수 bar at this width: 호가 and 최근 체결 stand one under the other, and the
@@ -1094,6 +1101,7 @@ test.describe('시장 상세 · 상태와 로그인', () => {
       'market-order-book',
       detailCopyTestId(page, 'market-judging-record'),
       'market-discussion',
+      'market-related',
     ]) {
       await expect(page.getByTestId(slot), slot).toHaveCount(1);
     }

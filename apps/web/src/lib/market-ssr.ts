@@ -7,8 +7,10 @@ import {
   type HomeFilters,
   WATCHLIST_VIEW_PARAM_VALUE,
   marketKey,
+  relatedMarketsKey,
   ticksKey,
 } from './market-keys';
+import { type MarketPage } from './market-live';
 import { DEFAULT_TICK_RANGE } from './ticks';
 
 /**
@@ -43,6 +45,35 @@ export function seedMarketDetail(
 ): void {
   queryClient.setQueryData(marketKey(market.id), market);
   if (series !== null) queryClient.setQueryData(ticksKey(market.id, DEFAULT_TICK_RANGE), series);
+}
+
+/**
+ * The detail's 관련 시장 (#65, ADR-0068), first page, read on the server under the key the
+ * section's own query uses (`relatedMarketsKey`, hooks/use-markets.ts) so the page and its page
+ * params dehydrate and the cards are in the HTML. `prefetchInfiniteQuery` for the reasons
+ * app/page.tsx gives, and with the param the client's factory declares, so the seeded page is
+ * picked up rather than fetched again. `readPage` is the page's server reader
+ * (`fetchRelatedMarketsPageServer`), passed in so this can be tested without the server client.
+ *
+ * `retry: false`, and that is the point of having it here: the server client keeps the app's
+ * default `retry` (query-client.ts: a 5xx or a network failure twice more, 1 s and then 2 s
+ * apart), and query-core turns retries off for a prefetch only when no default names any. This
+ * optional section would then hold the detail's whole HTML about 3 s on a failing read, to end
+ * in the same failure. A prefetch swallows its failure and a failed query is not dehydrated, so
+ * the section reads its page in the browser — with the client's retries — and shows its own
+ * failure there; the rest of the detail waits on one attempt and no more.
+ */
+export function prefetchRelatedMarkets(
+  queryClient: QueryClient,
+  marketId: string,
+  readPage: (marketId: string, cursor?: string) => Promise<MarketPage>,
+): Promise<void> {
+  return queryClient.prefetchInfiniteQuery({
+    queryKey: relatedMarketsKey(marketId),
+    queryFn: ({ pageParam }: { pageParam: string | undefined }) => readPage(marketId, pageParam),
+    initialPageParam: undefined as string | undefined,
+    retry: false,
+  });
 }
 
 /**

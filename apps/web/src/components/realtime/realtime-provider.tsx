@@ -128,9 +128,10 @@ const PRIVATE_SNAPSHOT_KEYS = [
 
 /**
  * Every cache of card pages a market event writes into: the home grid's lists — and the search
- * screen's results, which sit under the same root (`['markets', 'search', …]`, #15, ADR-0066) —
- * and MY's 관심 시장 (#89, ADR-0064). All hold `MarketSummary` rows in the same page shape, so one
- * reducer serves them, and a market on several is moved on all of them by one event.
+ * screen's results and a detail's 관련 시장, which sit under the same root (`['markets', 'search',
+ * …]`, #15, ADR-0066; `['markets', 'related', id]`, #65, ADR-0068) — and MY's 관심 시장 (#89,
+ * ADR-0064). All hold `MarketSummary` rows in the same page shape, so one reducer serves them, and
+ * a market on several is moved on all of them by one event.
  */
 const CARD_PAGES_KEYS = [MARKETS_KEY, WATCHLIST_PAGES_KEY] as const;
 

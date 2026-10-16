@@ -56,6 +56,10 @@ export const PUBLIC_ROUTES: Readonly<Record<string, RegisteredRoute>> = {
   'GET /markets/:id/ticks': {
     reason: '시장가격 흐름(N02 §5 차트): 시장 단위의 가격 기록',
   },
+  'GET /markets/:id/related': {
+    reason:
+      '상세의 관련 시장(#65, ADR-0061 결정 1의 18·19, ADR-0068): 운영자가 이 시장과 연결한 시장의 공개 정보와 집계(목록과 같은 항목), 진행 중·거래 마감·판정 완료·정산 완료(open·closed·resolved·settled)만. 연결한 운영자와 시각은 싣지 않는다',
+  },
   'GET /categories': {
     reason: '시장 탐색의 카테고리(PLAN 7.1 공개 조회)',
   },

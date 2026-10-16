@@ -219,6 +219,16 @@ export const ADMIN_ACTION_TYPES = [
   'market_open',
   'market_close',
   'market_resolve',
+  /**
+   * Two markets became related (#65, ADR-0068): target `market` / the market the admin linked
+   * from, payload `{marketId, relatedMarketId}` — both ends, since the link is one row for the
+   * pair and shows on both details. Written in the transaction that inserts the
+   * `market_links` row, and only when it did (a repeated link writes nothing). Actor and time
+   * only: no reason, no second admin (ADR-0061 decision 1, item 19).
+   */
+  'market_link',
+  /** The link ended (#65): the same target and payload, written only when a row was deleted. */
+  'market_unlink',
   'payment_refund',
   /**
    * A release setting's status and value changed (#170): target `release_setting` / its key,

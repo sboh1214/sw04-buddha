@@ -37,10 +37,11 @@ export type CopiedSection = 'background' | 'rules' | 'judging';
 /**
  * The sections both widths draw from one element in one DOM place. The ones that hold state or
  * fetch are here — the chart and its range, the switch and 최근 체결 (`activity`), 요약 with 관심
- * 등록, 내 포지션 — and are mounted once: the two orders differ only in where the three copied
- * sections stand around them.
+ * 등록, 내 포지션, 관련 시장 with its query and its cards' socket rooms — and are mounted once: the
+ * two orders differ only in where the three copied sections stand around them.
  */
-export type SharedSection = 'summary' | 'chart' | 'activity' | 'position' | 'discussion';
+export type SharedSection =
+  'summary' | 'chart' | 'activity' | 'position' | 'discussion' | 'related';
 
 /**
  * The detail's sections. The order panel is not one of them — it is the right column from md up
@@ -57,7 +58,10 @@ export type SharedSection = 'summary' | 'chart' | 'activity' | 'position' | 'dis
  * - `position`: 내 포지션, and 내 대기 주문 (#123) under it, for a signed-in reader — or, for a
  *   signed-out visitor, the one sign-in prompt that stands for all the personal areas
  *   (`personalAreaView`).
- * - `discussion`: 토론 (#47). 관련 시장 (#65) comes after it.
+ * - `discussion`: 토론 (#47).
+ * - `related`: 관련 시장 (#65, ADR-0068), the last of N02 §4's list at both widths — the markets an
+ *   admin linked to this one, as the home's cards in 추천 order, or a notice that there are none
+ *   (ADR-0061 decision 1, item 19). Public (item 18), so it is in the server's HTML.
  */
 export type DetailSection = SharedSection | CopiedSection;
 
@@ -94,6 +98,8 @@ export const DETAIL_SLOTS: readonly DetailSlot[] = [
   { section: 'judging', width: 'base' },
   { section: 'position', width: 'all' },
   { section: 'discussion', width: 'all' },
+  // 관련 시장 (#65, ADR-0068): N02 §4's last, after 토론 at both widths, so one shared slot.
+  { section: 'related', width: 'all' },
 ];
 
 /**
