@@ -55,16 +55,26 @@ test.describe('MY', () => {
     await page.goto('/my');
 
     // The summary: 잔고 요약 with the sign-up bonus, a preview per tab with content, 준비 중 for
-    // the rest.
+    // the rest. 관심 시장 has its content since #89 (ADR-0064): a fresh account's is empty.
     await expect(page.getByTestId('portfolio-available')).toHaveText('10,000 Coin');
-    for (const key of ['positions', 'orders', 'history', 'wallet']) {
+    for (const key of ['positions', 'orders', 'history', 'wallet', 'watchlist']) {
       const preview = page.getByTestId(`my-preview-${key}`);
       await expect(preview).toBeVisible();
       await expect(preview.getByRole('link', { name: copy.myViewAll })).toBeVisible();
     }
-    for (const key of ['posts', 'watchlist', 'notifications']) {
+    await expect(page.getByTestId('my-preview-watchlist')).toContainText(copy.watchlistEmpty);
+    await expect(page.getByTestId('my-preview-watchlist-coming-soon')).toHaveCount(0);
+    for (const key of ['posts', 'notifications']) {
       await expect(page.getByTestId(`my-preview-${key}-coming-soon`)).toHaveText(copy.comingSoon);
     }
+    // The previews, 준비 중 ones included, run in the tab bar's order (the owner's; 설정 has
+    // none), so 관심 시장 is not drawn above 내 글.
+    const previews = await page
+      .locator('[data-testid^="my-preview-"]')
+      .evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-testid')));
+    expect(previews.filter((id) => TABS.some((tab) => id === `my-preview-${tab.key}`))).toEqual(
+      TABS.filter((tab) => tab.key !== 'settings').map((tab) => `my-preview-${tab.key}`),
+    );
     // A fresh account has never ordered, and 거래·정산 이력's 주문 이력 says that rather than that
     // none has finished (owner decision 2026-10-13); 대기 주문 keeps its own line.
     await expect(page.getByTestId('my-preview-history')).toContainText(copy.portfolioOrdersEmpty);

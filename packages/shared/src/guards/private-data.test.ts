@@ -38,6 +38,7 @@ describe('PRIVATE_DATA (#113)', () => {
         'real-name',
         'phone',
         'time-zone',
+        'watchlist',
         'identity-verification',
         'risk-flag',
         'author-holding',
@@ -90,6 +91,11 @@ describe('findPrivateField', () => {
     ['viewer_tz', 'time-zone'],
     ['timeZoneOfAccount', 'time-zone'],
     ['traderTimezone', 'time-zone'],
+    ['watchCount', 'watchlist'],
+    ['watcherCount', 'watchlist'],
+    ['isWatched', 'watchlist'],
+    ['myWatchlist', 'watchlist'],
+    ['isInterested', 'watchlist'],
     ['identityVerification', 'identity-verification'],
     ['otpSentAt', 'identity-verification'],
     ['ci', 'identity-verification'],
@@ -162,6 +168,12 @@ describe('findPrivateField', () => {
     'judging_zone',
     'marketTimeZone',
     'closeAtTz',
+    // A market's open interest is a trading figure, not a watch (ADR-0064), in the plural too;
+    // a stopwatch is one word; the realtime room message is a subscription, not a watch.
+    'openInterest',
+    'openInterests',
+    'stopwatch',
+    'subscribe',
   ])('lets %s through', (name) => {
     expect(findPrivateField(name)).toEqual([]);
   });
@@ -192,6 +204,42 @@ describe('findPrivateField', () => {
         .filter((hit) => hit.item === 'market-maker')
         .map((hit) => hit.words),
     ).toEqual([words]);
+  });
+
+  // The watchlist item, by a name only that run catches (#37 for #89, ADR-0061 decision 3,
+  // ADR-0064). A run of the item without an example here fails the test below.
+  const WATCHLIST_RUNS: readonly [string, string][] = [
+    ['watchCount', 'watch'],
+    ['market_watches', 'watches'],
+    ['isWatched', 'watched'],
+    ['watchingSince', 'watching'],
+    ['topWatcher', 'watcher'],
+    ['watchersCount', 'watchers'],
+    ['userWatchlist', 'watchlist'],
+    ['watchlists', 'watchlists'],
+    ['interestedCount', 'interested'],
+    ['favoriteCount', 'favorite'],
+    ['favorites', 'favorites'],
+    ['favouriteCount', 'favourite'],
+    ['favourites', 'favourites'],
+    ['bookmarkCount', 'bookmark'],
+    ['bookmarks', 'bookmarks'],
+    ['isBookmarked', 'bookmarked'],
+  ];
+
+  it.each(WATCHLIST_RUNS)('keeps %s private as a watchlist field (%s)', (name, words) => {
+    expect(
+      findPrivateField(name)
+        .filter((hit) => hit.item === 'watchlist')
+        .map((hit) => hit.words),
+    ).toEqual([words]);
+  });
+
+  it('has an example above for every run of the watchlist item', () => {
+    const watchlist = PRIVATE_DATA.find((item) => item.id === 'watchlist')!;
+    expect(watchlist.fields.map((run) => run.join(' ')).sort()).toEqual(
+      WATCHLIST_RUNS.map(([, words]) => words).sort(),
+    );
   });
 
   // The time-zone item, by a name only that word catches (owner decision 2026-10-16, ADR-0063):

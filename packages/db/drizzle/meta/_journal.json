@@ -162,6 +162,13 @@
       "when": 1792135210179,
       "tag": "0022_profile_time_zone",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1792143036167,
+      "tag": "0023_market_watchlist",
+      "breakpoints": true
     }
   ]
 }

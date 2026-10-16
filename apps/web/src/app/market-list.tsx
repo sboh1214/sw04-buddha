@@ -1,7 +1,7 @@
 'use client';
 
 import { Alert, Button, Grid, Skeleton, Stack } from '@chakra-ui/react';
-import { MarketCard } from '@/components/market/market-card';
+import { MARKET_GRID_COLUMNS, MarketCard } from '@/components/market/market-card';
 import { EmptyState } from '@/components/ui/empty-state';
 import { copy } from '@/copy';
 import { useMarketSocket } from '@/hooks/use-market-socket';
@@ -34,13 +34,6 @@ import { type MarketFilters } from '@/lib/market-keys';
  * three-across grid at the content width, three of two — enough to hold the fold's height.
  */
 const SKELETON_ROWS = [0, 1, 2, 3, 4, 5];
-
-/**
- * Kalshi's tile grid (ADR-0041): as many 360px-minimum columns as the main column fits, from md
- * up; one column below. `auto-fill` rather than a breakpoint ladder because the column's width
- * depends on whether the 180px sidebar is beside it, which no breakpoint knows.
- */
-const GRID_COLUMNS = { base: '1fr', md: 'repeat(auto-fill, minmax(360px, 1fr))' };
 
 export interface MarketListProps {
   /** The SAME object the page put in the cache key; never re-derived from the URL here. */
@@ -86,7 +79,7 @@ export function MarketList({
         </Alert.Root>
       )}
       {markets.isPending ? (
-        <Grid templateColumns={GRID_COLUMNS} gap="4" data-testid="markets-skeleton">
+        <Grid templateColumns={MARKET_GRID_COLUMNS} gap="4" data-testid="markets-skeleton">
           {SKELETON_ROWS.map((row) => (
             <Skeleton key={row} height="232px" borderRadius="card" />
           ))}
@@ -113,7 +106,7 @@ export function MarketList({
         />
       ) : (
         <>
-          <Grid templateColumns={GRID_COLUMNS} gap="4" data-testid="markets-grid">
+          <Grid templateColumns={MARKET_GRID_COLUMNS} gap="4" data-testid="markets-grid">
             {rows.map((row, index) => (
               <MarketCard
                 key={row.id}

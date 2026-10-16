@@ -9,6 +9,7 @@ import {
   RELEASE_SETTINGS,
   SETTLEMENT_STEPS,
   SETTLEMENT_STEP_STATUSES,
+  WATCH_EVENT_ACTIONS,
   findExcludedIdentifier,
   identifierWords,
   namesPersonalProbability,
@@ -68,6 +69,7 @@ const VARCHAR_VALUES: Readonly<Record<string, readonly string[]>> = {
   'audit_failures.kind': AUDIT_FAILURE_KINDS,
   'categories.slug': ALL_CATEGORY_SLUGS,
   'release_settings.key': [...RELEASE_SETTINGS.keys()],
+  'market_watch_events.action': WATCH_EVENT_ACTIONS,
 };
 
 /**

@@ -301,6 +301,7 @@ const TAG_LABELS = {
   admin: '관리자',
   markets: '시장·시세',
   trades: '거래·포지션',
+  watchlist: '관심 시장',
 };
 
 /**

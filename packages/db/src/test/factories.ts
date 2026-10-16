@@ -22,6 +22,8 @@ import {
   categories,
   ledgerEntries,
   marketSettlementSteps,
+  marketWatchEvents,
+  marketWatches,
   markets,
   positions,
   profiles,
@@ -274,4 +276,42 @@ export async function createPosition(db: Db, input: CreatePositionInput) {
     })
     .returning();
   return row!;
+}
+
+export interface CreateWatchInput {
+  userId: string;
+  marketId: string;
+  /**
+   * When the watch began. Default: the database clock. A list-order test sets it, since watches
+   * written in one test can share a millisecond.
+   */
+  watchedAt?: Date;
+}
+
+/**
+ * A current watch (#89, ADR-0064) as the API's watch leaves it: the `market_watches` row and its
+ * one `watch` event at the same instant, in one transaction. The primary key applies, so a second
+ * watch of one pair throws — the API's own repeat writes nothing instead.
+ */
+export async function createWatch(db: Db, input: CreateWatchInput) {
+  return db.transaction(async (tx) => {
+    const [watch] = await tx
+      .insert(marketWatches)
+      .values({
+        userId: input.userId,
+        marketId: input.marketId,
+        ...(input.watchedAt === undefined ? {} : { watchedAt: input.watchedAt }),
+      })
+      .returning();
+    const [event] = await tx
+      .insert(marketWatchEvents)
+      .values({
+        userId: input.userId,
+        marketId: input.marketId,
+        action: 'watch',
+        createdAt: watch!.watchedAt,
+      })
+      .returning();
+    return { watch: watch!, event: event! };
+  });
 }

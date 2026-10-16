@@ -109,6 +109,18 @@ export const OWNER_ROUTES: Readonly<Record<string, RegisteredRoute>> = {
   'GET /me/orders': {
     reason: '본인 주문과 체결(N04 §2·§3)',
   },
+  'GET /me/watchlist': {
+    reason:
+      '본인 관심 시장 목록(#89, ADR-0064): 세션 계정이 지금 등록한 시장만, 최근 등록 순. 관심 시장은 본인 밖의 누구에게도 보이지 않는다(#37)',
+  },
+  'GET /me/watchlist/:marketId': {
+    reason:
+      '본인이 한 시장을 관심 등록했는지(#89, ADR-0064): 세션 계정의 등록 여부만, 시장의 등록 수는 없다',
+  },
+  'PUT /me/watchlist/:marketId': {
+    reason:
+      '본인 관심 등록·해제(#89, ADR-0064): 세션 계정의 행과 이력만 쓰고, 시간대처럼 본문의 expectedAccountId가 세션 계정이어야 한다',
+  },
   'POST /payments/charge': {
     reason: '보존한 Coin 충전(D9, ADR-0049): 유료 Coin 판매를 끈 동안 404',
     preservedPaid: true,

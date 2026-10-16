@@ -512,6 +512,12 @@ export const copy = {
   marketMyPosition: '내 포지션',
   marketMyPositionEmpty: '아직 이 시장에 참여하지 않았습니다.',
   marketLoginToSeePosition: '로그인하면 내 포지션을 볼 수 있습니다.',
+  // 관심 시장 (#89, ADR-0064): 상세 머리의 토글 하나. 라벨은 상태와 상관없이 같고, 등록했는지는
+  // 버튼의 눌림(aria-pressed)과 채운 별이 말한다. 로그인하지 않았으면 누를 때 로그인으로 가고,
+  // 돌아와서 다시 눌러야 등록된다(ADR-0061 결정 3).
+  watchToggle: '관심 등록',
+  watchAddFailed: '관심 등록을 하지 못했습니다. 잠시 후 다시 시도해 주세요.',
+  watchRemoveFailed: '관심 해제를 하지 못했습니다. 잠시 후 다시 시도해 주세요.',
 
   // 상태별 안내 (PLAN 11.3). 색과 배지는 MARKET_STATUS_LABEL/PALETTE가 맡고, 이 문구는
   // 그 아래에서 "지금 무엇을 할 수 있는지"를 말한다.
@@ -612,6 +618,8 @@ export const copy = {
   myNotifications: '알림',
   mySettings: '설정',
   myViewAll: '전체 보기',
+  // 관심 시장 탭(#89): 최근 등록 순의 시장 카드. 끝난 시장도 해제할 때까지 상태와 함께 남는다.
+  watchlistEmpty: '아직 관심 시장이 없습니다. 시장 상세에서 관심 등록을 누르면 여기에 모입니다.',
 
   // --- community (placeholder) ---
   // 헤더가 가리키는 자리는 있어야 하므로 화면은 있고, 기능은 아직 없다.

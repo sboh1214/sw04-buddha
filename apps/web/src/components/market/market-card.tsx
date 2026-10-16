@@ -102,6 +102,14 @@ const SHELL = {
   borderColor: 'border.subtle',
 } satisfies BoxProps;
 
+/**
+ * Kalshi's tile grid (ADR-0041) for a list of these cards: as many 360px-minimum columns as the
+ * column fits, from md up; one column below. `auto-fill` rather than a breakpoint ladder because
+ * the column's width depends on whether the 180px sidebar is beside it, which no breakpoint
+ * knows. The home grid and MY's 관심 시장 (#89) both lay their cards out on it.
+ */
+export const MARKET_GRID_COLUMNS = { base: '1fr', md: 'repeat(auto-fill, minmax(360px, 1fr))' };
+
 /** What a reading paints before the first fill (N02 §5): no number, not a 0 or a 50. */
 const EMPTY = '—';
 
@@ -143,6 +151,14 @@ export interface MarketCardProps {
    * `role=link` in the reader's links list and the href live.
    */
   interactive?: boolean;
+  /**
+   * The title's heading level: the rank of the list the card sits in, one below its heading. The
+   * home grid's cards are `h2`s beside the page's `h2` headline; MY's 관심 시장 (#89) lists them
+   * under a section's `h3`, inside the layout's `h2` MY, so there they are `h4` — an `h2` there
+   * would rank each card above its own section and file every later section under the last card
+   * for anyone moving by headings (the page outline is one convention, A-M4-31).
+   */
+  titleAs?: 'h2' | 'h3' | 'h4';
   'data-testid'?: string;
 }
 
@@ -150,6 +166,7 @@ export function MarketCard({
   market,
   now,
   interactive = true,
+  titleAs = 'h2',
   'data-testid': testId,
 }: MarketCardProps) {
   /**
@@ -174,7 +191,7 @@ export function MarketCard({
     // `title` on the heading is what the 미리보기 shows on hover; in the real card the overlay's
     // `::before` covers the tile and is the element the pointer is over, so the overlay anchor
     // below carries the same attribute — one string, two hosts, because the hit target differs.
-    <Heading as="h2" textStyle="title" lineClamp="1" color="fg" title={market.title}>
+    <Heading as={titleAs} textStyle="title" lineClamp="1" color="fg" title={market.title}>
       {market.title}
     </Heading>
   );

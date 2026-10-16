@@ -38,6 +38,7 @@ import {
   ORDERS_KEY,
   POSITIONS_KEY,
   TICKS_KEY,
+  WATCHLIST_PAGES_KEY,
   marketFillsKey,
   marketKey,
 } from '@/lib/market-keys';
@@ -121,7 +122,16 @@ const PRIVATE_SNAPSHOT_KEYS = [
   POSITIONS_KEY,
   ORDERS_KEY,
   ...BALANCE_HISTORY_KEYS,
+  // MY's 관심 시장 cards (#89): the home grid's `['markets']` above, for the cards of one account.
+  WATCHLIST_PAGES_KEY,
 ] as const;
+
+/**
+ * Every cache of card pages a market event writes into: the home grid's lists and MY's 관심 시장
+ * (#89, ADR-0064). Both hold `MarketSummary` rows in the same page shape, so one reducer serves
+ * them, and a market on both is moved on both by one event.
+ */
+const CARD_PAGES_KEYS = [MARKETS_KEY, WATCHLIST_PAGES_KEY] as const;
 
 /** What a screen may ask of the tab's socket. */
 export interface Realtime {
@@ -499,9 +509,11 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // not even converge, because each invalidation cancels the chain the last one started.
         // The order is restored by the next ordinary fetch: a filter change, a reconnect's
         // `resnapshot`, or a mount past `staleTime`.
-        queryClient.setQueriesData<MarketPages>({ queryKey: MARKETS_KEY }, (held) =>
-          applyToPages(held, (row) => applyTick(row, event)),
-        );
+        for (const queryKey of CARD_PAGES_KEYS) {
+          queryClient.setQueriesData<MarketPages>({ queryKey }, (held) =>
+            applyToPages(held, (row) => applyTick(row, event)),
+          );
+        }
         // And every range of this market's series, so the open chart's right edge moves
         // without a refetch (PLAN 11.5: an event must not become a request).
         queryClient.setQueriesData<CachedSeries>(
@@ -517,9 +529,11 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         queryClient.setQueryData<Market>(marketKey(event.marketId), (held) =>
           applyStatus(held, event),
         );
-        queryClient.setQueriesData<MarketPages>({ queryKey: MARKETS_KEY }, (held) =>
-          applyToPages(held, (row) => applyStatus(row, event)),
-        );
+        for (const queryKey of CARD_PAGES_KEYS) {
+          queryClient.setQueriesData<MarketPages>({ queryKey }, (held) =>
+            applyToPages(held, (row) => applyStatus(row, event)),
+          );
+        }
         // The reducer above has already moved the badge and the notice; this fills in what the
         // event does not carry. `create` publishes nothing, and an EDIT to an open market
         // publishes this event with the status unchanged for exactly this refetch — no event

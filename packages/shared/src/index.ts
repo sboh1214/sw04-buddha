@@ -34,3 +34,4 @@ export * from './terms.js';
 export * from './ticks.js';
 export * from './time-zone.js';
 export * from './wallet.js';
+export * from './watchlist.js';

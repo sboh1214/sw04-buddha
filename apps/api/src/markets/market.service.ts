@@ -112,6 +112,30 @@ function likePattern(q: string): string {
 }
 
 /**
+ * `?category=<slug>` on either level of the two-level tree: a top-level slug lists every
+ * market filed under any of its sub-categories (and under itself, should an admin file one
+ * there), a leaf slug lists its own. A predicate on `markets.category_id` rather than a second
+ * join on the aliased parent row, so the card query keeps the exact shape the M3 keyset tests
+ * pin and `markets_category_id_status_idx` still applies; the inner selects touch a table of
+ * ~30 rows. An unknown slug resolves to an empty set, which is the empty page it always was.
+ *
+ * A function rather than a method because `GET /me/watchlist` filters by the same resolution
+ * (ADR-0064): the 관심 시장 toggle of the home (#63) combines with a category, and the two lists
+ * must agree on what a category holds.
+ */
+export function inCategory(db: Db, slug: string) {
+  const { markets, categories } = schema;
+  const named = db.select({ id: categories.id }).from(categories).where(eq(categories.slug, slug));
+  return inArray(
+    markets.categoryId,
+    db
+      .select({ id: categories.id })
+      .from(categories)
+      .where(or(eq(categories.slug, slug), inArray(categories.parentId, named))),
+  );
+}
+
+/**
  * Public market reads (PLAN 5.2, 7.1; M3). A draft is invisible on every public route — the
  * list never returns one and the detail, fills and ticks routes answer NOT_FOUND for one, the
  * same as for an id that does not exist: only admins know a draft exists.
@@ -131,7 +155,7 @@ export class MarketService {
     const { cursor, limit } = query;
     const filters = [
       eq(markets.status, query.status),
-      query.category ? this.inCategory(query.category) : undefined,
+      query.category ? inCategory(this.db, query.category) : undefined,
       query.q ? ilike(markets.title, likePattern(query.q)) : undefined,
     ];
 
@@ -184,29 +208,6 @@ export class MarketService {
       items: kept.map((row) => toMarketSummary(row.market, row.category)),
       nextCursor: hasMore && last ? nextCursorOf(last.market) : null,
     };
-  }
-
-  /**
-   * `?category=<slug>` on either level of the two-level tree: a top-level slug lists every
-   * market filed under any of its sub-categories (and under itself, should an admin file one
-   * there), a leaf slug lists its own. A predicate on `markets.category_id` rather than a second
-   * join on the aliased parent row, so the card query keeps the exact shape the M3 keyset tests
-   * pin and `markets_category_id_status_idx` still applies; the inner selects touch a table of
-   * ~30 rows. An unknown slug resolves to an empty set, which is the empty page it always was.
-   */
-  private inCategory(slug: string) {
-    const { markets, categories } = schema;
-    const named = this.db
-      .select({ id: categories.id })
-      .from(categories)
-      .where(eq(categories.slug, slug));
-    return inArray(
-      markets.categoryId,
-      this.db
-        .select({ id: categories.id })
-        .from(categories)
-        .where(or(eq(categories.slug, slug), inArray(categories.parentId, named))),
-    );
   }
 
   /**
