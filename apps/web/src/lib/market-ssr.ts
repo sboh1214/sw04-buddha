@@ -63,9 +63,10 @@ export function detailWindowEnd(series: PriceSeries | null): number | undefined 
 
 /**
  * The home page's raw `searchParams`. Every value is `string | string[]` because a repeated
- * param arrives as an array (the idiom at my/settings/page.tsx). `status` is read by nothing any
- * more — the home lists open markets only (ADR-0061 decision 1, item 13) — and stays in the type
- * only so the test can say that a bookmarked `?status=` is ignored.
+ * param arrives as an array (the idiom at my/settings/page.tsx). `status` and `q` are read by
+ * nothing any more — the home lists open markets only (ADR-0061 decision 1, item 13) and search
+ * is a screen of its own (item 14, ADR-0066) — and stay in the type only so the test can say that
+ * a bookmarked `?status=` or `?q=` is ignored.
  */
 export interface MarketSearchParams {
   status?: string | string[];
@@ -76,12 +77,12 @@ export interface MarketSearchParams {
 }
 
 /** A repeated param arrives as an array; the first value is the one the filter UI wrote. */
-function firstValue(value: string | string[] | undefined): string | undefined {
+export function firstValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
 
-/** `category` and `q` are normalised by the API's own query schema, never by a local copy. */
-const { category: categoryParam, q: qParam } = marketListQuerySchema.shape;
+/** `category` is normalised by the API's own query schema, never by a local copy. */
+const { category: categoryParam } = marketListQuerySchema.shape;
 
 /**
  * Normalises the URL into the filter object that IS the list's cache key, once, on the server;
@@ -92,15 +93,15 @@ const { category: categoryParam, q: qParam } = marketListQuerySchema.shape;
  * Nothing here throws and nothing redirects (the way D23 treats an old address): a value the
  * screen cannot show is dropped and the default stands. A bookmarked `?status=` is ignored — there
  * is no status filter on the home any more — and so is `?sort=volume`, which no list orders by
- * until #132 (ADR-0061 decision 1, item 11): both land on the open markets by 추천. A blank or over-long `category`/`q` is dropped
- * instead of being sent — the API's schema refuses both, and an omitted field hashes identically
- * to one set to `undefined` (`hashKey` stringifies, and `JSON.stringify` drops undefined values),
- * so `?q=` and no `q` at all share one cache entry.
+ * until #132 (ADR-0061 decision 1, item 11): both land on the open markets by 추천. So is `?q=`:
+ * the search is its own screen (`/search`, ADR-0066), and an old `/?q=rain` link is the home, not
+ * a redirect to the search. A blank or over-long `category` is dropped instead of being sent — the
+ * API's schema refuses it, and an omitted field hashes identically to one set to `undefined`
+ * (`hashKey` stringifies, and `JSON.stringify` drops undefined values).
  *
  * `?watchlist=1` is the 관심 시장 view (`WatchlistViewFilters`, ADR-0065); any other value is
- * not. Its sorts are the watchlist's — 최근 관심 등록 순 by default, or one of the public three —
- * and `q` is dropped there: the caller's watchlist has no title search. `?sort=watched` outside
- * the view is unknown and falls back to 추천.
+ * not. Its sorts are the watchlist's — 최근 관심 등록 순 by default, or one of the public three.
+ * `?sort=watched` outside the view is unknown and falls back to 추천.
  */
 export function filtersFromSearchParams(searchParams: MarketSearchParams): HomeFilters {
   const category = categoryParam.safeParse(firstValue(searchParams.category));
@@ -115,10 +116,5 @@ export function filtersFromSearchParams(searchParams: MarketSearchParams): HomeF
     };
   }
   const sort = marketSortSchema.safeParse(firstValue(searchParams.sort));
-  const q = qParam.safeParse(firstValue(searchParams.q));
-  return {
-    sort: sort.success ? sort.data : DEFAULT_MARKET_FILTERS.sort,
-    ...categoryFilter,
-    ...(q.success && q.data !== undefined ? { q: q.data } : {}),
-  };
+  return { sort: sort.success ? sort.data : DEFAULT_MARKET_FILTERS.sort, ...categoryFilter };
 }

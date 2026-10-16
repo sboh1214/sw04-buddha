@@ -30,6 +30,7 @@ export * from './payment-gateway.js';
 export * from './rate-limit.js';
 export * from './realtime.js';
 export * from './release-settings.js';
+export * from './search-history.js';
 export * from './terms.js';
 export * from './ticks.js';
 export * from './time-zone.js';

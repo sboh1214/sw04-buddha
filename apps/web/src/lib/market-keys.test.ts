@@ -12,23 +12,29 @@ import {
 import {
   CATEGORIES_QUERY_KEY,
   DEFAULT_MARKET_FILTERS,
+  DEFAULT_SEARCH_FILTERS,
   HOME_MARKET_STATUS,
   MARKETS_KEY,
+  MARKET_SEARCH_KEY,
   MARKET_FILLS_KEY,
   MARKET_KEY,
   ORDERS_KEY,
   POSITIONS_KEY,
   PRIVATE_QUERY_ROOTS,
+  SEARCH_HISTORY_KEY,
   TICKS_KEY,
   WATCHLIST_KEY,
   WATCHLIST_PAGES_KEY,
   type MarketFilters,
+  type MarketSearch,
   dehydratePublic,
   isPrivateQueryKey,
   marketFillsKey,
   marketKey,
+  marketSearchKey,
   marketsKey,
   publicListQuery,
+  searchListQuery,
   ticksKey,
   watchStateKey,
   watchlistPagesKey,
@@ -71,14 +77,16 @@ describe('marketsKey', () => {
     // normalised filters and a client object built in another order share one cache entry —
     // which is what stops the list from refetching the moment it hydrates.
     const fromServer: MarketFilters = { sort: 'newest', category: 'economy' };
-    const rebuilt: MarketFilters = { category: 'economy', sort: 'newest', q: undefined };
+    const rebuilt: MarketFilters = { category: 'economy', sort: 'newest', watchlist: undefined };
     expect(hashKey(marketsKey(fromServer))).toBe(hashKey(marketsKey(rebuilt)));
   });
 
-  it('separates a blank q from an absent one', () => {
-    // Why `filtersFromSearchParams` drops an empty `q` instead of passing it through: `?q=`
-    // would otherwise be a second cache entry for the very same list.
-    const blank = hashKey(marketsKey({ ...DEFAULT_MARKET_FILTERS, q: '' }));
+  it('separates a blank category from an absent one', () => {
+    // Why `filtersFromSearchParams` drops an empty `category` instead of passing it through:
+    // `?category=` would otherwise be a second cache entry for the very same list. (This pinned
+    // a blank `q` until the home stopped reading `q`, ADR-0066; the search screen's own key
+    // pins it below.)
+    const blank = hashKey(marketsKey({ ...DEFAULT_MARKET_FILTERS, category: '' }));
     const absent = hashKey(marketsKey(DEFAULT_MARKET_FILTERS));
     expect(blank).not.toBe(absent);
   });
@@ -89,7 +97,6 @@ describe('marketsKey', () => {
       { ...DEFAULT_MARKET_FILTERS, sort: 'newest' },
       { ...DEFAULT_MARKET_FILTERS, sort: 'closing' },
       { ...DEFAULT_MARKET_FILTERS, category: 'economy' },
-      { ...DEFAULT_MARKET_FILTERS, q: '금리' },
     ];
     const hashes = new Set(distinct.map((filters) => hashKey(marketsKey(filters))));
     expect(hashes.size).toBe(distinct.length);
@@ -109,20 +116,72 @@ describe('publicListQuery', () => {
     }
   });
 
-  it('adds a category, a search term and a cursor only when there is one', () => {
-    // The API's query schema refuses a blank one, so an absent filter is no field at all.
-    expect(
-      publicListQuery({ sort: 'closing', category: 'economy', q: '금리' }, '1788408306789_abc'),
-    ).toEqual({
+  it('adds a category and a cursor only when there is one, and never a search term', () => {
+    // The API's query schema refuses a blank one, so an absent filter is no field at all. The
+    // home does not search (ADR-0066): this PR took `q` out of its query.
+    expect(publicListQuery({ sort: 'closing', category: 'economy' }, '1788408306789_abc')).toEqual({
       status: 'open',
       sort: 'closing',
       category: 'economy',
-      q: '금리',
       cursor: '1788408306789_abc',
     });
-    expect(
-      Object.keys(publicListQuery({ sort: 'newest', category: undefined, q: undefined })),
-    ).toEqual(['status', 'sort']);
+    expect(Object.keys(publicListQuery({ sort: 'newest', category: undefined }))).toEqual([
+      'status',
+      'sort',
+    ]);
+  });
+});
+
+describe('the search screen’s key and query (#15, ADR-0066)', () => {
+  const search: MarketSearch = { ...DEFAULT_SEARCH_FILTERS, q: '금리' };
+
+  it('starts on every public status and 추천', () => {
+    // ADR-0061 decision 1, items 13 and 14.
+    expect(DEFAULT_SEARCH_FILTERS).toEqual({ status: 'all', sort: 'recommended' });
+  });
+
+  it('sends the term, the status and the order always, every one of them', () => {
+    // The API's default status is the home's `open`: a search that lost its status would hide
+    // every ended market and still answer. Its default order is 추천: a lost order would answer
+    // in the wrong one. So both are always written out.
+    for (const status of ['all', 'open', 'closed', 'resolved', 'settled', 'voided'] as const) {
+      for (const sort of MARKET_SORTS) {
+        expect(searchListQuery({ ...search, status, sort })).toEqual({ status, sort, q: '금리' });
+      }
+    }
+  });
+
+  it('adds a category and a cursor only when there is one', () => {
+    expect(searchListQuery({ ...search, category: 'economy' }, '1788408306789_abc')).toEqual({
+      status: 'all',
+      sort: 'recommended',
+      q: '금리',
+      category: 'economy',
+      cursor: '1788408306789_abc',
+    });
+    expect(Object.keys(searchListQuery({ ...search, category: undefined }))).toEqual([
+      'status',
+      'sort',
+      'q',
+    ]);
+  });
+
+  it('keys each search apart, under the home list’s root but never as one of its lists', () => {
+    const distinct: MarketSearch[] = [
+      search,
+      { ...search, q: '환율' },
+      { ...search, status: 'closed' },
+      { ...search, sort: 'newest' },
+      { ...search, category: 'economy' },
+    ];
+    const hashes = new Set(distinct.map((entry) => hashKey(marketSearchKey(entry))));
+    expect(hashes.size).toBe(distinct.length);
+    // Under ['markets'], so its card join and the socket's writes reach it; never the home's.
+    expect(partialMatchKey(marketSearchKey(search), MARKETS_KEY)).toBe(true);
+    expect(partialMatchKey(marketSearchKey(search), MARKET_SEARCH_KEY)).toBe(true);
+    expect(partialMatchKey(marketsKey(DEFAULT_MARKET_FILTERS), MARKET_SEARCH_KEY)).toBe(false);
+    expect(partialMatchKey(marketSearchKey(search), MARKET_KEY)).toBe(false);
+    expect(isPrivateQueryKey(marketSearchKey(search))).toBe(false);
   });
 });
 
@@ -186,6 +245,7 @@ describe('isPrivateQueryKey', () => {
       ['ORDERS_KEY', ORDERS_KEY],
       ['watchlistPagesKey', watchlistPagesKey({})],
       ['watchStateKey', watchStateKey(ID)],
+      ['SEARCH_HISTORY_KEY', SEARCH_HISTORY_KEY],
     ];
     for (const [name, key] of sessionKeys) expect(isPrivateQueryKey(key), name).toBe(true);
   });
@@ -193,7 +253,10 @@ describe('isPrivateQueryKey', () => {
   it('registers exactly the roots the app still keys personal data under', () => {
     // The account's own disputes went with the dispute stage (ADR-0046); a root nothing keys
     // under any more is a stale entry, not a lock. 'watchlist' came with #89: nobody but the
-    // member sees a watchlist (#37, ADR-0064).
+    // member sees a watchlist (#37, ADR-0064). 'search-history' came with #15 (ADR-0066): the
+    // recent searches are the session's own, read with the member's cookie, so they are never
+    // fetched on the server or dehydrated (who else may see them is #37 item 11) — this PR
+    // changed the list, so the expectation changed with it.
     expect([...PRIVATE_QUERY_ROOTS].sort()).toEqual(
       [
         'admin',
@@ -204,6 +267,7 @@ describe('isPrivateQueryKey', () => {
         'payments',
         'positions',
         'watchlist',
+        'search-history',
       ].sort(),
     );
     expect(PRIVATE_QUERY_ROOTS.has('disputes')).toBe(false);
@@ -247,6 +311,7 @@ describe('dehydratePublic', () => {
       queryClient.setQueryData(ADMIN_MARKETS_KEY, []);
       queryClient.setQueryData(watchlistPagesKey({}), { pages: [], pageParams: [] });
       queryClient.setQueryData(watchStateKey(ID), { watched: true });
+      queryClient.setQueryData(SEARCH_HISTORY_KEY, [{ id: ID, query: '금리', searchedAt: '' }]);
       queryClient.setQueryData(marketKey(ID), { id: ID });
 
       const roots = dehydratePublic(queryClient).queries.map((query) => query.queryKey[0]);

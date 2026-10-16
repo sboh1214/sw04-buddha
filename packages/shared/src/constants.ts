@@ -82,6 +82,12 @@ export const MARKET_SLUG_PATTERN = /^[a-z0-9가-힣-]{3,80}$/;
 /** `slugify()` keeps this much of the title, leaving room for the server's `-<tag>` suffix. */
 export const MARKET_SLUG_STEM_MAX = 60;
 
+/**
+ * A search term, trimmed: `GET /markets?q=` and a recorded search (`market_searches.query`,
+ * ADR-0066) share it, so whatever the search screen can search it can record.
+ */
+export const MARKET_SEARCH_TERM_MAX = 100;
+
 /** `GET /markets/:id/fills` returns the newest this many (PLAN 7.1). */
 export const FILLS_RECENT_LIMIT = 20;
 /** `GET /markets/:id/ticks` downsamples to at most this many points (PLAN 7.1). */

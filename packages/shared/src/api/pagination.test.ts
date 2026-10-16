@@ -163,6 +163,28 @@ describe('tuple cursors (ADR-0065)', () => {
     expect(decodeTupleCursor('0_0.5', ['int'], 'int')).toBeUndefined();
   });
 
+  it('reads a group as 0 or 1 and nothing else (마감 임박 over ended markets, ADR-0066)', () => {
+    const CLOSING = ['group', 'millis'] as const;
+    for (const group of ['0', '1']) {
+      const cursor = encodeTupleCursor([group, '1788408306789'], uuid);
+      expect(decodeTupleCursor(cursor, CLOSING, 'uuid')).toEqual({
+        values: [group, '1788408306789'],
+        id: uuid,
+      });
+    }
+    for (const group of ['2', '01', '-1', 'null', '']) {
+      expect(
+        decodeTupleCursor(`${group}_1788408306789_${uuid}`, CLOSING, 'uuid'),
+        group,
+      ).toBeUndefined();
+    }
+    // The close time is bounded like every time part, and the home's `<millis>_<uuid>` is a part
+    // short.
+    expect(decodeTupleCursor(`0_253402300800000_${uuid}`, CLOSING, 'uuid')).toBeUndefined();
+    expect(decodeTupleCursor(`1_${uuid}`, CLOSING, 'uuid')).toBeUndefined();
+    expect(decodeTupleCursor(`1788408306789_${uuid}`, CLOSING, 'uuid')).toBeUndefined();
+  });
+
   it('accepts NULL only where the caller named a nullable time', () => {
     expect(decodeTupleCursor(`null_${uuid}`, ['millis'], 'uuid')).toBeUndefined();
     expect(decodeTupleCursor(`null_${uuid}`, ['int'], 'uuid')).toBeUndefined();

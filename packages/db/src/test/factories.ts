@@ -22,6 +22,7 @@ import {
   categories,
   fills,
   ledgerEntries,
+  marketSearches,
   marketSettlementSteps,
   marketWatchEvents,
   marketWatches,
@@ -406,4 +407,39 @@ export async function createWatch(db: Db, input: CreateWatchInput) {
       .returning();
     return { watch: watch!, event: event! };
   });
+}
+
+export interface CreateSearchInput {
+  userId: string;
+  query: string;
+  /**
+   * When it was searched. Default: the database clock. A list-order test sets it, since searches
+   * written in one test can share a millisecond.
+   */
+  searchedAt?: Date;
+  /**
+   * The row's id. Default: the database's random uuid. A test of a tie within one millisecond
+   * sets it, since the larger id wins the tie (migration 0026) and random ones would leave which
+   * is written first to chance.
+   */
+  id?: string;
+}
+
+/**
+ * A recorded search (#15, ADR-0066) as `POST /me/search-history` leaves it: one `market_searches`
+ * row, and its term in `market_search_terms` — which the database's insert trigger writes, for
+ * this insert as for the API's (migration 0026), so the factory adds nothing of its own. The term
+ * is stored as given; the API trims it first.
+ */
+export async function createSearch(db: Db, input: CreateSearchInput) {
+  const [row] = await db
+    .insert(marketSearches)
+    .values({
+      userId: input.userId,
+      query: input.query,
+      ...(input.searchedAt === undefined ? {} : { searchedAt: input.searchedAt }),
+      ...(input.id === undefined ? {} : { id: input.id }),
+    })
+    .returning();
+  return row!;
 }

@@ -21,7 +21,9 @@ import { AuthButtons } from '@/components/auth/auth-buttons';
 import { ColorModeButton } from '@/components/ui/color-mode';
 import { copy } from '@/copy';
 import { useCategories } from '@/hooks/use-markets';
+import { useRecordSearch } from '@/hooks/use-search-history';
 import { type CategoryNode, groupCategories } from '@/lib/category-tree';
+import { SEARCH_INPUT_MAX_LENGTH, SEARCH_PATH } from '@/lib/market-search';
 import {
   CATEGORY_ITEM_OPACITY,
   type UrlSearchParams,
@@ -36,7 +38,8 @@ import {
 import { useSession } from '@/lib/use-session';
 
 /**
- * Top navigation (PLAN 11.4, ADR-0041 Kalshi 형, #16): one sticky header, two rows on 시장 탐색.
+ * Top navigation (PLAN 11.4, ADR-0041 Kalshi 형, #16): one sticky header, two rows on the home
+ * list and the market details.
  *
  * Row 1: 로고 · 시장 탐색/커뮤니티/MY · 검색 · 색상 모드 · 잔고 칩 (or 로그인/가입하기). The three
  * areas are N02 §2's top level, and the tab bar lists the same three below md (bottom-tabs.tsx).
@@ -44,7 +47,8 @@ import { useSession } from '@/lib/use-session';
  * decision 2026-10-13).
  *
  * Row 2: 전체 and the top-level market categories, on every breakpoint (it scrolls sideways where
- * it does not fit), on 시장 탐색 only (`showsCategoryRow`, owner decision 2026-10-13). It is
+ * it does not fit), on the home list and the market details only (`showsCategoryRow`, owner
+ * decision 2026-10-13) — not on the search screen, where row 1 still lights 시장 탐색. It is
  * Kalshi's category strip and the home screen's coarse filter in one: the home screen's own
  * sidebar then lists the leaves of whichever top-level category is chosen.
  *
@@ -59,13 +63,13 @@ import { useSession } from '@/lib/use-session';
  * Kalshi's measurements (from kalshi.com, 2026-09-11): a 1320px container with 24px side
  * padding; row 1 is 40px tall with 12px above and below; row 2 is 30px tall, and the header is
  * 107px with its bottom rule — the number `HEADER_HEIGHT_PX` (lib/nav.ts) records for what sticks
- * under it on 시장 탐색. Without row 2 it is row 1 and the rule.
+ * under it on the home list and the market details. Without row 2 it is row 1 and the rule.
  */
 export function Nav() {
   // The mobile row already carries the logo and the balance chip, so search collapses to an
-  // icon that opens the same form under it — the one search box the app has since ADR-0041. It
-  // finds markets only (N02 §2) and works from every route (owner decision 2026-10-13: it stays
-  // in the header).
+  // icon that opens the same form under it. It finds markets only (N02 §2), works from every
+  // route (owner decision 2026-10-13: it stays in the header) and lands on the search screen
+  // (`/search`, ADR-0066), which has a box of its own beside its filters.
   const [searchOpen, setSearchOpen] = useState(false);
   const pathname = usePathname();
 
@@ -192,20 +196,27 @@ function PrimaryLinks() {
 }
 
 /**
- * The search entry. A real `<form>` that navigates to `/?q=…` rather than an `onSubmit` handler
- * calling `router.push`: `next/form` submits the field as a search param, so the search works
- * with JavaScript disabled and the home page reads the term from the URL it already normalises
- * (`filtersFromSearchParams`) instead of from a second, client-only source of truth. A blank
- * term parses as "no search" there, so submitting an empty box lands on the unfiltered list.
+ * The search entry. A real `<form>` that navigates to `/search?q=…` (ADR-0066: the results are a
+ * screen of their own, ADR-0061 decision 1, item 14) rather than an `onSubmit` handler calling
+ * `router.push`: `next/form` submits the field as a search param, so the search page reads the
+ * term from the URL it normalises (`searchFiltersFromSearchParams`) instead of from a second,
+ * client-only source of truth. Without JavaScript the form still navigates there, and the server
+ * draws the first page of the results when there are any (owner decision 2026-10-16, ADR-0066:
+ * "서버가 첫 페이지도 그린다"; 'no results' and a failure are the browser's to show). A blank term
+ * parses as "no search" there, so submitting an empty box lands on the screen with no term: the
+ * member's recent searches, or a prompt.
  *
- * It posts a fresh `/?q=…` rather than amending the filters already in the URL: this header is on
- * every route, so its search is a way INTO the list, not a refinement of a list the visitor may
- * not even be looking at. It searches markets and nothing else — no user search (N02 §2·§3). It
- * is also the ONLY search box since ADR-0041 — the home screen's own form went with the Kalshi
- * layout, and Kalshi has no search within a category either.
+ * It posts a fresh `/search?q=…` rather than amending the filters already in the URL: this header
+ * is on every route, so its search is a way INTO the results, not a refinement of results the
+ * visitor may not even be looking at — the search screen's own box refines (app/search). It
+ * searches markets and nothing else — no user search (N02 §2·§3).
  *
- * `prefetch={false}`: this header is on every route, and the home page is `force-dynamic`, so the
- * default action prefetch would ask the server for it from every page the visitor opens.
+ * A submit by a signed-in member records the term (`useRecordSearch`, ADR-0061 decision 3, the #15
+ * rows), in the background: the `onSubmit` runs before `next/form` navigates, and nothing waits on
+ * the record. Nothing is recorded for a visitor or a blank term.
+ *
+ * `prefetch={false}`: this header is on every route, and the search page is `force-dynamic`, so
+ * the default action prefetch would ask the server for it from every page the visitor opens.
  *
  * Styled as Kalshi's field: a 38px pill on `surface.input` with no visible stroke and the
  * magnifier at the LEFT. The magnifier IS the submit control rather than a decoration beside a
@@ -219,16 +230,15 @@ function PrimaryLinks() {
  * make every Playwright selector ambiguous.
  *
  * The field is uncontrolled and KEYED on the term the URL carries (`initialTerm`, read by
- * `WithSearchTerm`), which is the whole of the reconciliation it needs — the same rule the home
- * screen's own box followed before ADR-0041 moved search up here. What is typed before Enter is
- * a draft, so it must survive a navigation the draft itself did not cause — picking a category
- * in row 2, changing the sort — and it must NOT survive one that replaced the term: Back out of
- * a search, or a second search. A `useState` seeded on mount could do neither, because a
+ * `WithSearchTerm`), which is the whole of the reconciliation it needs. What is typed before Enter
+ * is a draft, so it must survive a navigation the draft itself did not cause — picking a category
+ * in row 2, changing a filter of the search screen — and it must NOT survive one that replaced
+ * the term: Back out of a search, or a second search. A `useState` seeded on mount could do neither, because a
  * search-param-only navigation re-renders this header without remounting it. Keying on the term
  * remounts the input exactly when the URL's term changes and leaves it alone otherwise — no
- * effect, and nothing that can fight the typing. Without it, `/?q=rain` opened cold showed an
- * empty box over a filtered list, and Back from a second search kept the newer word in the box
- * over the older list.
+ * effect, and nothing that can fight the typing. Without it, `/search?q=rain` opened cold would
+ * show an empty box over the results, and Back from a second search would keep the newer word in
+ * the box over the older results.
  */
 function SearchForm({
   testId,
@@ -237,13 +247,25 @@ function SearchForm({
   onSubmitted,
 }: {
   testId: string;
-  /** The home list's current `q`, or `undefined` off `/` and when there is no search. */
+  /** The search screen's current `q`, or `undefined` off `/search` and when there is no term. */
   initialTerm?: string;
   autoFocus?: boolean;
   onSubmitted?: () => void;
 }) {
+  const record = useRecordSearch();
   return (
-    <Form action="/" prefetch={false} role="search" onSubmit={onSubmitted}>
+    // Named, because the search screen has a search landmark of its own ('고른 조건으로 검색',
+    // market-search.tsx): two of one role on a page need names a screen reader can tell apart.
+    <Form
+      action={SEARCH_PATH}
+      prefetch={false}
+      role="search"
+      aria-label={copy.searchLabel}
+      onSubmit={(event) => {
+        record(new FormData(event.currentTarget).get('q'));
+        onSubmitted?.();
+      }}
+    >
       <InputGroup
         startElement={
           <IconButton
@@ -267,6 +289,9 @@ function SearchForm({
           type="search"
           size="sm"
           defaultValue={initialTerm ?? ''}
+          // The API's bound on a term (`SEARCH_INPUT_MAX_LENGTH`): a longer one would read as no
+          // term on the search screen, so the box never holds one.
+          maxLength={SEARCH_INPUT_MAX_LENGTH}
           // `subtle` is the variant with a transparent stroke; the fill is the theme's search
           // ground rather than the variant's `bg.muted`. The stroke stays in the box (at 0 alpha)
           // so the focus ring the variant paints on it still shows.
@@ -291,11 +316,11 @@ function SearchForm({
 }
 
 /**
- * Hands `SearchForm` the term the home list is filtered on. `useSearchParams` in the root layout
- * has to sit behind a Suspense boundary (see `CategoryNav` for the whole argument), and the
+ * Hands `SearchForm` the term the search screen shows results for. `useSearchParams` in the root
+ * layout has to sit behind a Suspense boundary (see `CategoryNav` for the whole argument), and the
  * fallback is the same form with no term: a static page prerenders the box empty, which is
- * right — off `/` there is no term to show (`currentSearchTerm`) — and `/` is dynamic, so its
- * HTML carries the real one. A render prop rather than a hook because the boundary is what
+ * right — off `/search` there is no term to show (`currentSearchTerm`) — and `/search` is
+ * dynamic, so its HTML carries the real one. A render prop rather than a hook because the boundary is what
  * makes the read safe, and a hook cannot bring its own boundary.
  */
 function WithSearchTerm({ children }: { children: (term: string | undefined) => ReactNode }) {
@@ -313,8 +338,8 @@ function SearchTermReader({ children }: { children: (term: string | undefined) =
 }
 
 /**
- * Row 2 (PLAN 11.4, ADR-0041): 전체 and the top-level categories, on every breakpoint, on
- * 시장 탐색 only (`Nav`).
+ * Row 2 (PLAN 11.4, ADR-0041): 전체 and the top-level categories, on every breakpoint, on the
+ * home list and the market details only (`Nav`, `showsCategoryRow`).
  *
  * The row has to know the URL's `?category=` to mark the current item, and the URL's view to
  * know where its items go (`categoryLinkQuery`: in the 관심 시장 view they keep it on, owner

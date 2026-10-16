@@ -45,6 +45,10 @@ export type Order = components['schemas']['Order'];
 export type WatchState = components['schemas']['WatchState'];
 /** `PUT /me/watchlist/{marketId}`: watch or unwatch, and the account on screen (ADR-0064). */
 export type UpdateWatchBody = components['schemas']['UpdateWatchBody'];
+/** One term of the recent searches (#15, ADR-0066): `GET /me/search-history` and its writes. */
+export type RecentSearch = components['schemas']['RecentSearch'];
+/** `POST /me/search-history`: the submitted term and the account on screen (ADR-0066). */
+export type RecordSearchBody = components['schemas']['RecordSearchBody'];
 export type AdminPayment = components['schemas']['AdminPayment'];
 /** `POST /admin/payments/{id}/refund`: why the admin refunds (required, audited). */
 export type RefundPaymentBody = components['schemas']['RefundPaymentBody'];
@@ -77,6 +81,12 @@ export class ApiError extends Error {
   readonly code: ErrorCode;
   readonly status: number;
   readonly details: unknown;
+  /**
+   * Whether the answer carried the API's own envelope. False for a body something between the
+   * browser and the API wrote in its place: Next's `/api/*` rewrite answers a plain-text 500 when
+   * the API cannot be reached (next.config.ts), a gateway in front of the API a 502, 503 or 504.
+   */
+  readonly enveloped: boolean;
 
   constructor(status: number, envelope: ErrorEnvelope['error'] | undefined) {
     super(envelope?.message ?? `API error ${String(status)}`);
@@ -84,6 +94,7 @@ export class ApiError extends Error {
     this.status = status;
     this.code = envelope?.code ?? (status === 401 ? 'UNAUTHENTICATED' : 'INTERNAL');
     this.details = envelope?.details;
+    this.enveloped = envelope !== undefined;
   }
 }
 
@@ -104,6 +115,18 @@ export function unwrap<T>(result: {
 
 export function isApiError(error: unknown, code?: ErrorCode): error is ApiError {
   return error instanceof ApiError && (code === undefined || error.code === code);
+}
+
+/**
+ * Whether a failed request never reached the API: the fetch itself failed (offline, the web
+ * origin gone — openapi-fetch rejects, so it is not an ApiError at all), or something between
+ * answered for the API with a 5xx that is not the API's envelope — Next's rewrite proxy's 500
+ * when the API is down, a gateway's 502–504 (`ApiError.enveloped`). An error the API answered
+ * itself, a 500 included, is not this: the API was reached and said what went wrong.
+ */
+export function isApiUnreachable(error: unknown): boolean {
+  if (!(error instanceof ApiError)) return true;
+  return !error.enveloped && error.status >= 500;
 }
 
 /**

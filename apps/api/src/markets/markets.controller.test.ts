@@ -250,7 +250,174 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     expect(tooLong.statusCode).toBe(400);
   });
 
+  it('searches every public status with status=all, never a draft, and filters within it (#15)', async () => {
+    // The search screen (ADR-0066): it starts on every public status (ADR-0061 decision 1, item
+    // 13), and a closed market is found through the status filter (N02 §3). One market per status,
+    // each titled with the word searched; a draft with the word, and an open market without it.
+    const weather = await createCategory(t.db, { slug: 'weather', nameKo: '날씨' });
+    const byStatus = {
+      open: await market({ title: '금리 동결? (거래 중)', closeAt: new Date(Date.now() + DAY_MS) }),
+      closed: await market({
+        title: '금리 인하? (마감)',
+        status: 'closed',
+        categoryId: weather.id,
+      }),
+      resolved: await market({ title: '금리 인상? (판정)', status: 'resolved' }),
+      settled: await market({ title: '금리 3%? (정산)', status: 'settled' }),
+      voided: await market({ title: '금리 2%? (무효)', status: 'voided' }),
+    };
+    const draft = await market({ title: '금리 초안', status: 'draft' });
+    await market({ title: '코스피 3000 돌파?' });
+    const ids = async (query: string) => {
+      const res = await get(`/api/v1/markets?${query}`);
+      expect(res.statusCode, query).toBe(200);
+      return res.json<ListPage>().data.map((row) => row.id);
+    };
+    const term = encodeURIComponent('금리');
+
+    const all = await ids(`status=all&q=${term}`);
+    expect(all.sort()).toEqual(
+      Object.values(byStatus)
+        .map((row) => row.id)
+        .sort(),
+    );
+    expect(all).not.toContain(draft.id);
+    // Without a term too: every public market, the unmatched one included, and still no draft.
+    const everything = await ids('status=all&limit=100');
+    expect(everything).toHaveLength(6);
+    expect(everything).not.toContain(draft.id);
+    // Each status on its own finds its market — the closed one by 거래 마감 as the screen asks.
+    for (const [status, row] of Object.entries(byStatus)) {
+      expect(await ids(`status=${status}&q=${term}`), status).toEqual([row.id]);
+    }
+    // The category narrows the same search, and the orders all take it (paging included).
+    expect(await ids(`status=all&q=${term}&category=weather`)).toEqual([byStatus.closed.id]);
+    for (const sort of MARKET_SORTS) {
+      const paged = await walk(`/api/v1/markets?status=all&q=${term}&sort=${sort}&limit=2`);
+      expect(paged.sort(), sort).toEqual(all.sort());
+    }
+    // The home's request is unchanged: no status is `open`, and a word no title holds is an
+    // empty page, not an error.
+    expect(await ids(`q=${term}`)).toEqual([byStatus.open.id]);
+    expect(await ids(`status=all&q=${encodeURIComponent('없는말zzz')}`)).toEqual([]);
+    expect((await get('/api/v1/markets?status=everything')).statusCode).toBe(400);
+  });
+
   const byId = (a: { id: string }, b: { id: string }) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+
+  it('orders 마감 임박 with ended markets listed: 진행 중 first, soonest first, then ended, latest close first (ADR-0066)', async () => {
+    // Owner decision 2026-10-16 (ADR-0066): "진행 중 먼저, 끝난 것은 최근 순". On a list that can
+    // hold ended markets — 모든 상태, or an ended status — the markets whose STATUS is open come
+    // first, by the close time, soonest first; every other public market after them, by the close
+    // time, the latest first. Ended is the status, not the clock: a market an admin closed early
+    // keeps its future close_at and is with the ended ones (first among them, by that close time),
+    // and an open market whose close time has passed is 진행 중 still. `open` alone is the home's
+    // order, as it was.
+    const now = Date.now();
+    const term = encodeURIComponent('환율');
+    const rows = {
+      openPastClose: await market({
+        title: '환율 1420? (마감 시각 지남, 거래 중)',
+        closeAt: new Date(now - HOUR_MS),
+      }),
+      openTomorrow: await market({ title: '환율 1450? (내일)', closeAt: new Date(now + DAY_MS) }),
+      openLater: await market({ title: '환율 1500? (모레)', closeAt: new Date(now + 2 * DAY_MS) }),
+      closedEarly: await market({
+        title: '환율 1400? (일찍 마감)',
+        status: 'closed',
+        closeAt: new Date(now + 12 * HOUR_MS),
+      }),
+      resolvedLastWeek: await market({
+        title: '환율 1380? (판정)',
+        status: 'resolved',
+        closeAt: new Date(now - 7 * DAY_MS),
+      }),
+      closedLastMonth: await market({
+        title: '환율 1350? (마감)',
+        status: 'closed',
+        closeAt: new Date(now - 30 * DAY_MS),
+      }),
+      settledLongAgo: await market({
+        title: '환율 1300? (정산)',
+        status: 'settled',
+        closeAt: new Date(now - 60 * DAY_MS),
+      }),
+    };
+    // Two ties, one in each group, broken by the id: the boundary of a page falls inside each.
+    const tiedOpen = [
+      await market({ title: '환율 1460? (동점 가)', closeAt: new Date(now + DAY_MS + HOUR_MS) }),
+      await market({ title: '환율 1460? (동점 나)', closeAt: new Date(now + DAY_MS + HOUR_MS) }),
+    ].sort(byId);
+    const tiedEnded = [
+      await market({
+        title: '환율 1360? (동점 무효)',
+        status: 'voided',
+        closeAt: new Date(now - 10 * DAY_MS),
+      }),
+      await market({
+        title: '환율 1360? (동점 마감)',
+        status: 'closed',
+        closeAt: new Date(now - 10 * DAY_MS),
+      }),
+    ].sort(byId);
+    await market({ title: '환율 초안', status: 'draft', closeAt: new Date(now + HOUR_MS) });
+    const ids = async (query: string) => {
+      const res = await get(`/api/v1/markets?${query}`);
+      expect(res.statusCode, query).toBe(200);
+      return res.json<ListPage>().data.map((row) => row.id);
+    };
+
+    const expected = [
+      rows.openPastClose.id,
+      rows.openTomorrow.id,
+      ...tiedOpen.map((row) => row.id),
+      rows.openLater.id,
+      rows.closedEarly.id,
+      rows.resolvedLastWeek.id,
+      ...tiedEnded.map((row) => row.id),
+      rows.closedLastMonth.id,
+      rows.settledLongAgo.id,
+    ];
+    expect(await ids(`status=all&q=${term}&sort=closing&limit=100`)).toEqual(expected);
+    // Paged, the same order with nothing repeated or skipped, whatever the page size: pages of one
+    // put a cursor on every row, the last 진행 중 one and the first ended one included, and the
+    // cursor says which group it is in.
+    for (const limit of [1, 2, 3, 4, 5]) {
+      const { ids: paged, cursors } = await walkPages(
+        `/api/v1/markets?status=all&q=${term}&sort=closing&limit=${limit}`,
+      );
+      expect({ limit, paged }).toEqual({ limit, paged: expected });
+      if (limit === 1) {
+        expect(cursors.map((cursor) => cursor.split('_')[0])).toEqual([
+          ...Array.from({ length: 5 }, () => '0'),
+          ...Array.from({ length: 5 }, () => '1'),
+        ]);
+      }
+    }
+    // An ended status alone is the ended group: the latest close first.
+    expect(await ids(`status=closed&q=${term}&sort=closing`)).toEqual([
+      rows.closedEarly.id,
+      ...tiedEnded.filter((row) => row.status === 'closed').map((row) => row.id),
+      rows.closedLastMonth.id,
+    ]);
+    expect(await walk(`/api/v1/markets?status=closed&q=${term}&sort=closing&limit=1`)).toEqual(
+      await ids(`status=closed&q=${term}&sort=closing`),
+    );
+    // 진행 중 alone is the home's order and the home's cursor, `<millis>_<uuid>`.
+    const openOnly = [
+      rows.openPastClose.id,
+      rows.openTomorrow.id,
+      ...tiedOpen.map((row) => row.id),
+      rows.openLater.id,
+    ];
+    expect(await ids(`status=open&q=${term}&sort=closing`)).toEqual(openOnly);
+    const home = await walkPages(`/api/v1/markets?q=${term}&sort=closing&limit=2`);
+    expect(home.ids).toEqual(openOnly);
+    expect(home.cursors[0]).toBe(
+      `${String(rows.openTomorrow.closeAt.getTime())}_${rows.openTomorrow.id}`,
+    );
+  });
+
   /** 신규 in JS, for the expectations (ADR-0065): latest opening first, none last, then the id. */
   const latestOpening = (a: MarketRowLike, b: MarketRowLike) => {
     const opened = (row: MarketRowLike) => row.openAt?.getTime() ?? -Infinity;
@@ -319,6 +486,10 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
       expect({ sort, count: ids.length }).toEqual({ sort, count: 27 });
       expect({ sort, unique: new Set(ids).size }).toEqual({ sort, unique: 27 });
       expect({ sort, ids }).toEqual({ sort, ids: expected[sort] });
+      // Every public status, where 마감 임박 pages on its group and the signed close time
+      // (ADR-0066): with nothing ended, the same order through the same ties.
+      const everyStatus = await walk(`/api/v1/markets?status=all&sort=${sort}&limit=7`);
+      expect({ sort, everyStatus }).toEqual({ sort, everyStatus: expected[sort] });
     }
     // The default sort is 추천 (ADR-0061 decision 1, item 10).
     expect((await get('/api/v1/markets?limit=3')).json<ListPage>().data.map((r) => r.id)).toEqual(
@@ -524,7 +695,7 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     const plan = await t.db.transaction(async (tx) => {
       await tx.execute(sql`SET LOCAL enable_seqscan = off`);
       await tx.execute(sql`SET LOCAL enable_bitmapscan = off`);
-      const order = marketOrder(tx, 'newest', `${String(now)}_${randomUUID()}`);
+      const order = marketOrder(tx, 'newest', `${String(now)}_${randomUUID()}`, 'open');
       const query = tx
         .select({ id: schema.markets.id })
         .from(schema.markets)
@@ -589,6 +760,39 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     for (const { sort, cursor } of foreign) {
       const res = await get(`/api/v1/markets?sort=${sort}&cursor=${encodeURIComponent(cursor)}`);
       expect({ sort, rows: res.json<ListPage>().data.length }).toEqual({ sort, rows: 1 });
+    }
+    // On a list that can hold ended markets (`status=all`, ADR-0066) the malformed cursors above
+    // serve every order's first page too, and 마감 임박 pages on `<group>_<closeAt>_<uuid>`: a
+    // group other than 0 or 1, a close time past year 9999 or below zero, an id that is no uuid,
+    // and the home's `<millis>_<uuid>` (a part short) and 추천's cursor (no group first) serve its
+    // first page; so does the grouped cursor on the home (a part too many), below.
+    const grouped = [
+      `2_1788408306789_${uuid}`,
+      `null_1788408306789_${uuid}`,
+      `0_253402300800000_${uuid}`,
+      `1_-1_${uuid}`,
+      `0_1788408306789_not-a-uuid`,
+      `1788408306789_${uuid}`,
+      `1788408306789_0_null_${uuid}`,
+    ];
+    const cases = [
+      ...MARKET_SORTS.flatMap((sort) => malformed.map((cursor) => ({ sort, cursor }))),
+      ...grouped.map((cursor) => ({ sort: 'closing', cursor })),
+    ];
+    for (const { sort, cursor } of cases) {
+      const res = await get(
+        `/api/v1/markets?status=all&sort=${sort}&cursor=${encodeURIComponent(cursor)}`,
+      );
+      expect({ sort, cursor, status: res.statusCode }).toEqual({ sort, cursor, status: 200 });
+      expect({ sort, cursor, rows: res.json<ListPage>().data.length }).toEqual({
+        sort,
+        cursor,
+        rows: 1,
+      });
+    }
+    for (const cursor of [`0_1788408306789_${uuid}`, `1_1788408306789_${uuid}`]) {
+      const res = await get(`/api/v1/markets?sort=closing&cursor=${encodeURIComponent(cursor)}`);
+      expect({ cursor, rows: res.json<ListPage>().data.length }).toEqual({ cursor, rows: 1 });
     }
   });
 

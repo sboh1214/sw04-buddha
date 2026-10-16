@@ -163,6 +163,18 @@ describe('filtersFromSearchParams', () => {
     expect(filtersFromSearchParams({ sort: 'watched' })).toEqual(DEFAULT_MARKET_FILTERS);
   });
 
+  it('ignores ?q= rather than redirecting: the search is its own screen (ADR-0066)', () => {
+    // ADR-0061 decision 1, item 14: an old `/?q=rain` link opens the home on its default list,
+    // not a search and not a redirect (D23's direction). This PR took `q` off the home, so the
+    // expectations that kept it here are gone; lib/market-search.test.ts holds the screen's own.
+    expect(filtersFromSearchParams({ q: 'rain' })).toEqual(DEFAULT_MARKET_FILTERS);
+    expect(filtersFromSearchParams({ q: 'rain', sort: 'closing', category: 'weather' })).toEqual({
+      sort: 'closing',
+      category: 'weather',
+    });
+    expect('q' in filtersFromSearchParams({ q: 'rain' })).toBe(false);
+  });
+
   it('takes the first value of a repeated param', () => {
     expect(
       filtersFromSearchParams({
@@ -171,23 +183,20 @@ describe('filtersFromSearchParams', () => {
         category: ['sports', 'weather'],
         q: ['snow', 'rain'],
       }),
-    ).toEqual({ sort: 'newest', category: 'sports', q: 'snow' });
+    ).toEqual({ sort: 'newest', category: 'sports' });
   });
 
-  it('trims a category and a search term, and drops what the API would refuse', () => {
-    expect(filtersFromSearchParams({ category: '  weather  ', q: '  snow  ' })).toEqual({
+  it('trims a category, and drops what the API would refuse', () => {
+    expect(filtersFromSearchParams({ category: '  weather  ' })).toEqual({
       ...DEFAULT_MARKET_FILTERS,
       category: 'weather',
-      q: 'snow',
     });
-    // Over the API's own bounds (category 50, q 100): dropped here rather than sent and
-    // answered with a VALIDATION_ERROR the visitor cannot act on.
-    expect(filtersFromSearchParams({ category: 'x'.repeat(51), q: 'y'.repeat(101) })).toEqual(
-      DEFAULT_MARKET_FILTERS,
-    );
+    // Over the API's own bound (category 50): dropped here rather than sent and answered with a
+    // VALIDATION_ERROR the visitor cannot act on.
+    expect(filtersFromSearchParams({ category: 'x'.repeat(51) })).toEqual(DEFAULT_MARKET_FILTERS);
   });
 
-  it('omits a blank search term so it shares one cache key with an absent one', () => {
+  it('omits a blank category so it shares one cache key with an absent one', () => {
     const blank = publicView({ q: '   ', category: ' ' });
     expect('q' in blank).toBe(false);
     expect('category' in blank).toBe(false);

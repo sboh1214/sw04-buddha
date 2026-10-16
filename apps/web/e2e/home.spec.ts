@@ -57,10 +57,7 @@ async function sessionKnown(page: Page, signedIn: boolean): Promise<void> {
 }
 
 test.describe('탐색 홈', () => {
-  test('정렬은 추천·신규·마감 임박뿐이고 처음은 추천이며, 상태 선택은 없다', async ({
-    page,
-    admin,
-  }) => {
+  test('정렬은 추천·신규·마감 임박뿐이고 처음은 추천이며, 상태 선택은 없다', async ({ page }) => {
     await page.goto('/');
     await expect(sortSelect(page).locator('option')).toHaveText([
       copy.sortRecommended,
@@ -86,44 +83,30 @@ test.describe('탐색 홈', () => {
     await sortSelect(page).selectOption('recommended');
     await expect(page).toHaveURL('/');
 
-    // The order picked must reach GET /markets, and the grid is what shows it did: the select's
-    // value comes from the URL, and the API answers an order it was not sent with 추천, its own
-    // default. Two markets of one run's group (`/?q=<group>` lists exactly them), opened one
-    // after the other, so the later opened is also the later to close: 마감 임박 reads [first,
-    // second], 신규 [second, first] — and so does 추천, since neither has a fill (ties by the
-    // latest opening). A navigation renders the list on the server (the page re-runs its
-    // prefetch), so a request recorded in the browser would not show it either.
-    const group = freshTag();
-    const first = await createOpenMarket(admin, { group });
-    const second = await createOpenMarket(admin, { group });
-    const byOpening = [`market-card-${second.id}`, `market-card-${first.id}`];
-    const byClosing = [`market-card-${first.id}`, `market-card-${second.id}`];
-    await page.goto(`/?q=${group}`);
-    await sessionKnown(page, false);
-    await expect.poll(() => cardIds(page)).toEqual(byOpening);
-    await sortSelect(page).selectOption('closing');
-    await expect(page).toHaveURL(`/?q=${group}&sort=closing`);
-    await expect.poll(() => cardIds(page)).toEqual(byClosing);
-    await sortSelect(page).selectOption('newest');
-    await expect(page).toHaveURL(`/?q=${group}&sort=newest`);
-    await expect.poll(() => cardIds(page)).toEqual(byOpening);
-    // Through 마감 임박 again, so the step back to 추천 changes the grid as well.
-    await sortSelect(page).selectOption('closing');
-    await expect.poll(() => cardIds(page)).toEqual(byClosing);
-    await sortSelect(page).selectOption('recommended');
-    await expect(page).toHaveURL(`/?q=${group}`);
-    await expect.poll(() => cardIds(page)).toEqual(byOpening);
+    // That the order picked reaches GET /markets is pinned on the search screen, whose results
+    // a run can isolate by a term (search.spec.ts) and which takes the same orders (ADR-0061
+    // decision 1, item 14): this test isolated two markets on the home with `/?q=<group>`, which
+    // the home no longer reads (ADR-0066), so that half moved there. The home's own requests —
+    // the server's prefetch and the browser's queryFn — are pinned per order by
+    // lib/api.server.test.ts and hooks/use-markets.test.ts.
   });
 
-  test('공개 목록의 검색에 결과가 없으면 검색 결과 안내이고, 관심 시장 보기의 안내가 아니다', async ({
-    page,
-  }) => {
-    // Each view has its own empty (ADR-0065): a public search no market answers says so, and
-    // not the 관심 시장 view's 'no open watched market'. 'Nothing is open yet' cannot be reached
-    // on a database other runs share; listEmptyMessage's unit test holds that one.
-    await page.goto(`/?q=${freshTag()}`);
-    await expect(page.getByTestId('markets-empty')).toHaveText(copy.marketsSearchEmpty);
-    await expect(grid(page)).toHaveCount(0);
+  test('옛 /?q= 주소는 검색하지 않고 리디렉트 없이 홈을 보인다', async ({ page, admin }) => {
+    // The search is a screen of its own (ADR-0061 decision 1, item 14; ADR-0066): the home no
+    // longer reads `q`, and an old `/?q=` link opens the home itself (D23: no redirect). A term
+    // no market holds would have emptied a home that searched; one open market at least is there,
+    // so the list is not empty. This replaces the home's empty-search test: the home has no search
+    // to come back empty any more (its 'no results' is the search screen's, search.spec.ts).
+    await createOpenMarket(admin);
+    const term = freshTag();
+    await page.goto(`/?q=${term}`);
+    await expect(page).toHaveURL(`/?q=${term}`);
+    await expect(grid(page).getByRole('article').first()).toBeVisible();
+    await expect(page.getByTestId('markets-empty')).toHaveCount(0);
+    await expect(page.getByTestId('search-results')).toHaveCount(0);
+    // The header's box describes no search off the search screen (md and up, where it is open).
+    const box = page.getByTestId('nav-search');
+    if (await box.isVisible()) await expect(box).toHaveValue('');
   });
 
   test('로그인하지 않은 방문자도 관심 시장을 보고, 고르면 로그인한 뒤 관심 시장을 켠 홈으로 돌아온다', async ({
@@ -187,9 +170,11 @@ test.describe('탐색 홈', () => {
     request,
   }) => {
     await signUp(page, freshEmail());
-    const first = await createOpenMarket(admin);
+    // `first` and `unwatched` in a category no other spec opens markets in (helpers.ts
+    // `topLevelCategory`), so the public list of it on 신규 holds both on its first page.
+    const first = await createOpenMarket(admin, { topLevelCategory: 2 });
     const elsewhere = await createOpenMarket(admin, { topLevelCategory: 1 });
-    const unwatched = await createOpenMarket(admin);
+    const unwatched = await createOpenMarket(admin, { topLevelCategory: 2 });
     const ended = await createOpenMarket(admin);
     expect(elsewhere.categorySlug).not.toBe(first.categorySlug);
     // Watched the other way round from how they were opened (`first` opened before `elsewhere`),
@@ -277,8 +262,11 @@ test.describe('탐색 홈', () => {
     expect(visitorHeader).toBe(memberHeader);
 
     // Off again: the public list of the category, on 추천 although the view was on 신규 (owner
-    // decision 2026-10-16) — and row 2 is back to its plain links. The unwatched market is in the
-    // list (found by its tag, since the shared database holds every earlier run's markets too).
+    // decision 2026-10-16) — and row 2 is back to its plain links. Then that public list on 신규:
+    // the unwatched market is on it beside the watched one, so the member's home is the public
+    // list again and not the view. Both were opened last in their category, so its first page of
+    // 신규 holds them whatever earlier runs left (`/?category=…&q=<tag>` until the home stopped
+    // reading `q`, ADR-0066).
     await toggle(page).click();
     await expect(page).toHaveURL(`/?category=${first.categorySlug}`);
     await expect(toggle(page)).toHaveAttribute('aria-pressed', 'false');
@@ -289,8 +277,16 @@ test.describe('탐색 홈', () => {
       'href',
       `/?category=${elsewhere.categorySlug}`,
     );
-    await page.goto(`/?category=${first.categorySlug}&q=${unwatched.tag}`);
-    await expect(grid(page).getByRole('article')).toHaveCount(1);
+    await sortSelect(page).selectOption('newest');
+    await expect(page).toHaveURL(`/?category=${first.categorySlug}&sort=newest`);
+    await expect(toggle(page)).toHaveAttribute('aria-pressed', 'false');
     await expect(grid(page).getByTestId(`market-card-${unwatched.id}`)).toBeVisible();
+    await expect(grid(page).getByTestId(`market-card-${first.id}`)).toBeVisible();
+    await expect(grid(page).getByTestId(`market-card-${elsewhere.id}`)).toHaveCount(0);
+    // The same list served cold, from the server's prefetch: the unwatched market is in its HTML.
+    const publicHtml = await (
+      await page.request.get(`/?category=${first.categorySlug}&sort=newest`)
+    ).text();
+    expect(publicHtml).toContain(`market-card-${unwatched.id}`);
   });
 });

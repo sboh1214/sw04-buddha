@@ -129,13 +129,14 @@ test.describe('시장 상세', () => {
     expect(html).not.toContain('data-testid="trade-');
   });
 
-  test('AC 1: 관리자의 마감이 B의 상세와 홈 카드를 1초 안에, 리프레시 없이 갱신한다', async ({
+  test('AC 1: 관리자의 마감이 B의 상세와 홈 카드, C의 검색 결과 카드를 1초 안에, 리프레시 없이 갱신한다', async ({
     browser,
     admin,
   }) => {
     // The change used to be A's buy; with no way to trade (#125) it is the admin's 마감, which
-    // reaches the readers through the same rooms as `market:status`.
-    const market = await createOpenMarket(admin);
+    // reaches the readers through the same rooms as `market:status`. In a category no other spec
+    // opens markets in (helpers.ts `topLevelCategory`), so B finds it on the home's 신규.
+    const market = await createOpenMarket(admin, { topLevelCategory: 3 });
 
     // B reads while signed in as another account (the seed admin — a second mailbox round trip
     // would buy nothing here); C reads with no cookie at all.
@@ -150,21 +151,25 @@ test.describe('시장 상세', () => {
       await detailB.goto(`/markets/${market.slug}`);
       await detailBJoined;
 
-      // `?q=<tag>` is a home page holding exactly this market's card, whatever else the
-      // database contains and whichever way the default 추천 order would have ranked it.
-      const homeB = await readerContext.newPage();
-      const homeBJoined = subscribed(homeB, market.id);
-      await homeB.goto(`/?q=${market.tag}`);
-      await homeBJoined;
+      // B reads the HOME: its list is the server's prefetch, dehydrated and hydrated under the
+      // home's key, and that entry has to take the socket's writes. The market was opened last in
+      // its category, so the home's 신규 of that category has it on the first page whatever else
+      // the database holds (`/?q=<tag>` until the home stopped reading `q`, ADR-0066). C reads
+      // the search screen, whose first page is the server's read too, hydrated under the search's
+      // own key (owner decision 2026-10-16, ADR-0066): `/search?q=<tag>` holds exactly this card.
+      const listB = await readerContext.newPage();
+      const listBJoined = subscribed(listB, market.id);
+      await listB.goto(`/?category=${market.categorySlug}&sort=newest`);
+      await listBJoined;
 
-      const homeC = await anonymousContext.newPage();
-      const homeCJoined = subscribed(homeC, market.id);
-      await homeC.goto(`/?q=${market.tag}`);
-      await homeCJoined;
+      const listC = await anonymousContext.newPage();
+      const listCJoined = subscribed(listC, market.id);
+      await listC.goto(`/search?q=${market.tag}`);
+      await listCJoined;
 
       const statusB = detailB.getByTestId('market-status-badge');
-      const cardB = homeB.getByTestId(`market-card-${market.id}`);
-      const cardC = homeC.getByTestId(`market-card-${market.id}`);
+      const cardB = listB.getByTestId(`market-card-${market.id}`);
+      const cardC = listC.getByTestId(`market-card-${market.id}`);
       await expect(statusB).toHaveText(copy.marketStatusOpen);
       // Open, so the order area is there, saying 거래 준비 중 and nothing else.
       await expect(detailB.getByTestId('order-area-notice')).toHaveText(copy.tradePreparing);
@@ -190,7 +195,7 @@ test.describe('시장 상세', () => {
       const balanceB = detailB.getByTestId('balance-chip');
       await expect(balanceB).toBeVisible();
       const beforeBalanceB = (await balanceB.textContent()) ?? '';
-      for (const reader of [detailB, homeB, homeC]) {
+      for (const reader of [detailB, listB, listC]) {
         await markDocument(reader);
       }
 
@@ -208,15 +213,15 @@ test.describe('시장 상세', () => {
       );
       await expect(detailB.getByTestId('order-area')).toHaveCount(0);
 
-      for (const reader of [detailB, homeB, homeC]) {
+      for (const reader of [detailB, listB, listC]) {
         expect(await documentSurvived(reader), reader.url()).toBe(true);
       }
 
       // Nothing personal crosses a room: B still shows B's own balance, and C — which never
       // sent a cookie — is offered 로그인 rather than a balance at all.
       await expect(balanceB).toHaveText(beforeBalanceB);
-      await expect(homeC.getByTestId('balance-chip')).toHaveCount(0);
-      await expect(homeC.getByRole('link', { name: copy.login })).toBeVisible();
+      await expect(listC.getByTestId('balance-chip')).toHaveCount(0);
+      await expect(listC.getByRole('link', { name: copy.login })).toBeVisible();
     } finally {
       await anonymousContext.close();
       await readerContext.close();
@@ -245,8 +250,8 @@ test.describe('시장 상세', () => {
 test.describe('시장 카드', () => {
   test('YES·NO 두 줄과 참여자 0, 배수·거래량·추이 선은 없다', async ({ admin, page }) => {
     const market = await createOpenMarket(admin);
-    // `?q=<tag>` is a home page holding exactly this market's card.
-    await page.goto(`/?q=${market.tag}`);
+    // `/search?q=<tag>` holds exactly this market's card (`/?q=` until ADR-0066).
+    await page.goto(`/search?q=${market.tag}`);
     const card = page.getByTestId(`market-card-${market.id}`);
 
     // No fill yet: both rows stay with '—' in each pill and 체결 없음 once (ADR-0048).

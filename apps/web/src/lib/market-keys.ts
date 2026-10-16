@@ -3,7 +3,12 @@ import { type QueryClient, defaultShouldDehydrateQuery, dehydrate } from '@tanst
 // an inline type import still emits `import {}` from the module, and `./ticks` imports `ticksKey`
 // back from here — an erased import keeps that a type-level cycle instead of a runtime one, and
 // keeps a server component that only wanted a cache key from loading the browser API client.
-import type { MarketSort, PublicMarketStatus, WatchlistSort } from '@buddha/shared';
+import type {
+  MarketListStatus,
+  MarketSort,
+  PublicMarketStatus,
+  WatchlistSort,
+} from '@buddha/shared';
 import type { TickRange } from './ticks';
 
 /**
@@ -79,7 +84,8 @@ export const HOME_MARKET_STATUS = 'open' satisfies PublicMarketStatus;
  * (`filtersFromSearchParams`), and handed to the client as a prop: two independent derivations
  * of the same `searchParams` would be one default away from a second cache entry, and the
  * second entry would refetch what the SSR payload already carries. No status: the home lists
- * `HOME_MARKET_STATUS` only (ADR-0065).
+ * `HOME_MARKET_STATUS` only (ADR-0065). No search term: search is a screen of its own
+ * (`SearchFilters`, ADR-0066).
  *
  * `watchlist?: undefined` is what tells it apart from the 관심 시장 view (`HomeFilters`), whose
  * list is the caller's and so has no entry under this key at all.
@@ -87,7 +93,6 @@ export const HOME_MARKET_STATUS = 'open' satisfies PublicMarketStatus;
 export interface MarketFilters {
   sort: MarketSort;
   category?: string;
-  q?: string;
   watchlist?: undefined;
 }
 
@@ -98,7 +103,6 @@ export interface PublicListQuery {
   status: typeof HOME_MARKET_STATUS;
   sort: MarketSort;
   category?: string;
-  q?: string;
   cursor?: string;
 }
 
@@ -108,24 +112,86 @@ export interface PublicListQuery {
  * alike — one spelling, so the two cannot drift, the way `watchlistViewFilters` is the 관심 시장
  * view's. The home's status always, the order picked always (the API's default is 추천 too, so a
  * request that lost its order would still answer, in the wrong order — market-keys.test.ts pins
- * every sort through), and the category, search term and cursor only when there is one: the API's
- * query schema refuses a blank one.
+ * every sort through), and the category and cursor only when there is one: the API's query
+ * schema refuses a blank one. Never a search term: the home does not search (ADR-0066).
  */
 export function publicListQuery(filters: MarketFilters, cursor?: string): PublicListQuery {
   return {
     status: HOME_MARKET_STATUS,
     sort: filters.sort,
     ...(filters.category === undefined ? {} : { category: filters.category }),
-    ...(filters.q === undefined ? {} : { q: filters.q }),
     ...(cursor === undefined ? {} : { cursor }),
   };
 }
 
 /**
+ * 시장 검색 (#15, ADR-0066): the search screen's results, under the public list's root so every
+ * duty `['markets']` carries reaches them by prefix — the card join of query-client.ts (a late
+ * answer never rolls a card back), the socket's `market:tick` and `market:status` writes and a
+ * reconnect's re-read (realtime-provider.tsx). Never the home's entry: the second element is
+ * this string, the home's is its filter object, and react-query compares keys element-wise.
+ */
+export const MARKET_SEARCH_KEY = [...MARKETS_KEY, 'search'] as const;
+
+/**
+ * The search screen's URL, normalised once on the server (`searchFiltersFromSearchParams`,
+ * lib/market-search.ts) and handed to the client as a prop, as the home's filters are. `q` absent
+ * is the screen with no search yet: the member's recent searches or a prompt (ADR-0061 decision
+ * 3, the #15 rows), and no list at all. The status starts on every public status (`all`, decision
+ * 1, item 13) and the order on 추천 (item 14, the home's orders).
+ */
+export interface SearchFilters {
+  q?: string;
+  status: MarketListStatus;
+  sort: MarketSort;
+  category?: string;
+}
+
+export const DEFAULT_SEARCH_FILTERS: SearchFilters = { status: 'all', sort: 'recommended' };
+
+/** A search the screen lists: its filters with a term. The list's cache key. */
+export type MarketSearch = SearchFilters & { q: string };
+
+export const marketSearchKey = (search: MarketSearch) => [...MARKET_SEARCH_KEY, search] as const;
+
+/** The query of one page of results, as `GET /markets` takes it (`searchListQuery`). */
+export interface SearchListQuery {
+  status: MarketListStatus;
+  sort: MarketSort;
+  q: string;
+  category?: string;
+  cursor?: string;
+}
+
+/**
+ * One page of results as `GET /markets` is asked for it. The status and the order are always
+ * written out — the API's own default status is the home's `open`, so a search that lost its
+ * status would quietly hide every ended market — and the category and cursor only when there is
+ * one. Pinned per status and order by market-keys.test.ts, as `publicListQuery` is.
+ */
+export function searchListQuery(search: MarketSearch, cursor?: string): SearchListQuery {
+  return {
+    status: search.status,
+    sort: search.sort,
+    q: search.q,
+    ...(search.category === undefined ? {} : { category: search.category }),
+    ...(cursor === undefined ? {} : { cursor }),
+  };
+}
+
+/**
+ * 최근 검색 (#15, ADR-0066): the caller's recent searches, the member's own (ADR-0061 decision 3:
+ * shown to the member) and read with the member's cookie, so the root is in `PRIVATE_QUERY_ROOTS`:
+ * never fetched on the server, never dehydrated.
+ * One entry; no key under it says whose it is (SessionCacheGuard resets it on an account change).
+ */
+export const SEARCH_HISTORY_KEY = ['search-history'] as const;
+
+/**
  * The home's 관심 시장 view (#63, ADR-0065): the caller's watched open markets, of the category
  * the URL names if any, in the order picked — 최근 관심 등록 순 unless another is (ADR-0061
  * decision 3, the #63 row). No `q`: the watchlist has no title search, and the header's search
- * posts a fresh `/?q=…` that leaves this view (#15 moves search to its own screen).
+ * goes to the search screen (`/search`, ADR-0066).
  */
 export interface WatchlistViewFilters {
   watchlist: true;
@@ -192,6 +258,7 @@ export const PRIVATE_QUERY_ROOTS: ReadonlySet<string> = new Set([
   'charge-packages',
   'admin',
   'watchlist',
+  'search-history',
 ]);
 
 export function isPrivateQueryKey(queryKey: readonly unknown[]): boolean {

@@ -5,8 +5,10 @@ import { createOpenMarket, expect, freshEmail, logOut, signUp, test } from './he
 /**
  * 최상위 IA (#16, owner decision 2026-10-13): the desktop header's row 1 and the mobile tab bar
  * list the same three areas — 시장 탐색 · 커뮤니티 · MY — and MY only once someone is signed in;
- * the header's row 2 (전체 and the categories) is drawn on 시장 탐색 only. Both projects run every
- * test, so each one asserts the two lists and then walks whichever of them the viewport shows.
+ * the header's row 2 (전체 and the categories) is drawn on the home and the market details only.
+ * The search screen is 시장 탐색's too (owner decision 2026-10-16, ADR-0066) but has no row 2.
+ * Both projects run every test, so each one asserts the two lists and then walks whichever of them
+ * the viewport shows.
  *
  * The MY addresses' login redirect and the 404 of the old personal addresses are my.spec.ts's.
  */
@@ -111,5 +113,28 @@ test.describe('최상위 메뉴', () => {
       await expect(page.getByTestId('my-tabs'), path).toBeVisible();
       await expect(row, path).toHaveCount(0);
     }
+  });
+
+  test('검색 화면에서는 시장 탐색이 현재 영역이고, 헤더 2단은 없다', async ({ page }) => {
+    // Owner decision 2026-10-16 (ADR-0066): "시장 탐색을 켠다" — on /search, with a term or
+    // without, the header's row 1 and the tab bar both mark 시장 탐색 (whichever the width
+    // shows), and nothing else; row 2 stays the home's and the details' (ADR-0054).
+    for (const path of ['/search', '/search?q=e2e-none']) {
+      await page.goto(path);
+      for (const list of [headerItems(page), tabItems(page)]) {
+        await expect(list.filter({ hasText: copy.navExplore }), path).toHaveAttribute(
+          'aria-current',
+          'page',
+        );
+        await expect(list.and(page.locator('[aria-current="page"]')), path).toHaveCount(1);
+      }
+      await expect(
+        shownNav(page).getByRole('link', { name: copy.navExplore, exact: true }),
+      ).toHaveAttribute('aria-current', 'page');
+      await expect(page.getByTestId('nav-categories'), path).toHaveCount(0);
+    }
+    // And the way out of it: 시장 탐색 is the home, where row 2 comes back.
+    await goToArea(page, copy.navExplore, '/');
+    await expect(page.getByTestId('nav-categories')).toBeVisible();
   });
 });

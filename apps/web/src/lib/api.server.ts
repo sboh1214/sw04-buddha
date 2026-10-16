@@ -9,7 +9,12 @@ import {
   isApiError,
   unwrap,
 } from './api';
-import { type MarketFilters, publicListQuery } from './market-keys';
+import {
+  type MarketFilters,
+  type MarketSearch,
+  publicListQuery,
+  searchListQuery,
+} from './market-keys';
 import { type TickRange, ticksQueryFor } from './ticks';
 
 const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000').replace(/\/$/, '');
@@ -88,7 +93,9 @@ export async function fetchTicksServer(id: string, range: TickRange): Promise<Pr
  * One page of `GET /markets`, in the `{ items, nextCursor }` shape `useInfiniteQuery` holds, so
  * the server-side prefetch and the client's own `queryFn` produce the same page objects under
  * the same key — and the same request: both send `publicListQuery` (market-keys.ts), the home's
- * status, the order picked, and a category or search term only when there is one.
+ * status, the order picked, and a category and cursor only when there is one (never a search
+ * term: the home does not search, ADR-0066 — the search screen's read is the next function).
+ * Pinned per order by api.server.test.ts.
  */
 export async function fetchMarketsPageServer(
   filters: MarketFilters,
@@ -96,6 +103,24 @@ export async function fetchMarketsPageServer(
 ): Promise<{ items: MarketSummary[]; nextCursor: string | null }> {
   const { data, meta } = unwrap(
     await serverApi.GET('/api/v1/markets', { params: { query: publicListQuery(filters, cursor) } }),
+  );
+  return { items: data, nextCursor: meta.nextCursor };
+}
+
+/**
+ * One page of a search's results (`GET /markets` with the term, #15), in the same page shape and
+ * with the same request as the browser's own `queryFn` (`searchListQuery`, hooks/use-markets.ts):
+ * the search page reads the first page here and puts it in the HTML when it holds a card (owner
+ * decision 2026-10-16, ADR-0066: "서버가 첫 페이지도 그린다"; `seedsSearchResults`). Rejects on
+ * failure, which the page's prefetch swallows: the browser then reads the page itself and shows
+ * the failure as its own (N02 §3). Pinned per status and order by api.server.test.ts.
+ */
+export async function fetchMarketSearchPageServer(
+  search: MarketSearch,
+  cursor?: string,
+): Promise<{ items: MarketSummary[]; nextCursor: string | null }> {
+  const { data, meta } = unwrap(
+    await serverApi.GET('/api/v1/markets', { params: { query: searchListQuery(search, cursor) } }),
   );
   return { items: data, nextCursor: meta.nextCursor };
 }

@@ -15,6 +15,7 @@ import { MeModule } from './me/me.module.js';
 import { RateLimitModule } from './rate-limit/rate-limit.module.js';
 import { RealtimeModule } from './realtime/realtime.module.js';
 import { ReleaseSettingsModule } from './release-settings/release-settings.module.js';
+import { SearchHistoryModule } from './search-history/search-history.module.js';
 import { TradesModule } from './trades/trades.module.js';
 import { WalletModule } from './wallet/wallet.module.js';
 import { WatchlistModule } from './watchlist/watchlist.module.js';
@@ -44,6 +45,7 @@ import { WatchlistModule } from './watchlist/watchlist.module.js';
     MarketsModule,
     TradesModule,
     WatchlistModule,
+    SearchHistoryModule,
     ReleaseSettingsModule,
     AdminAccountsModule,
     ApprovalsModule,

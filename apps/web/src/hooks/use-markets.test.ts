@@ -1,4 +1,4 @@
-import { type MarketStatusEvent, type MarketTickEvent } from '@buddha/shared';
+import { MARKET_SORTS, type MarketStatusEvent, type MarketTickEvent } from '@buddha/shared';
 import {
   InfiniteQueryObserver,
   type QueryClient,
@@ -6,14 +6,17 @@ import {
   hashKey,
   hydrate,
 } from '@tanstack/react-query';
-import { describe, expect, it } from 'vitest';
-import { type Market, type MarketSummary } from '@/lib/api';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { type Market, type MarketSummary, api } from '@/lib/api';
 import {
   DEFAULT_MARKET_FILTERS,
+  DEFAULT_SEARCH_FILTERS,
   MARKETS_KEY,
   type MarketFilters,
+  type MarketSearch,
   dehydratePublic,
   marketKey,
+  marketSearchKey,
   marketsKey,
 } from '@/lib/market-keys';
 import {
@@ -26,7 +29,11 @@ import {
   tickRestartsMarket,
 } from '@/lib/market-live';
 import { getQueryClient, restartQueries } from '@/lib/query-client';
-import { marketQueryOptions, marketsInfiniteQueryOptions } from './use-markets';
+import {
+  marketQueryOptions,
+  marketSearchInfiniteQueryOptions,
+  marketsInfiniteQueryOptions,
+} from './use-markets';
 
 /**
  * The market hooks' decisions, driven through a real QueryClient. Nothing renders — this app's
@@ -161,6 +168,75 @@ describe('marketsInfiniteQueryOptions', () => {
     // The wire says `null` for the last page while the page param is `string | undefined`, so the
     // null is mapped rather than passed through — it would otherwise reach `queryFn` as a cursor.
     expect(options.getNextPageParam({ items: [], nextCursor: null })).toBeUndefined();
+  });
+});
+
+/**
+ * What a list's own queryFn sends to `GET /markets`. The API answers a request that lost its
+ * order with 추천, its default, and one that lost its category with every category — a page
+ * either way, the right select value and URL over the wrong cards — so the request itself is
+ * what has to be pinned, per order. `api.GET` is spied on, so nothing leaves the process.
+ */
+describe('the request each list sends', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** Spies on `api.GET` with an empty last page, and answers the query of every call. */
+  function sentQueries() {
+    const spy = vi.spyOn(api, 'GET').mockResolvedValue({
+      data: { data: [], meta: { nextCursor: null } },
+      response: new Response(null, { status: 200 }),
+    });
+    // The generated client's overloads type the calls too narrowly to destructure; each call is
+    // `(path, { params: { query } })`.
+    const calls = spy.mock.calls as unknown as [string, { params: { query: unknown } }][];
+    return () => calls.map(([path, init]) => ({ path, query: init.params.query }));
+  }
+
+  it('sends the home’s status, the order picked, and the category and cursor when there are', async () => {
+    const sent = sentQueries();
+    for (const sort of MARKET_SORTS) {
+      await marketsInfiniteQueryOptions({ sort }).queryFn({ pageParam: undefined });
+      await marketsInfiniteQueryOptions({ sort, category: 'economy' }).queryFn({
+        pageParam: 'cursor-1',
+      });
+    }
+    expect(sent()).toEqual(
+      MARKET_SORTS.flatMap((sort) => [
+        { path: '/api/v1/markets', query: { status: 'open', sort } },
+        {
+          path: '/api/v1/markets',
+          query: { status: 'open', sort, category: 'economy', cursor: 'cursor-1' },
+        },
+      ]),
+    );
+  });
+
+  it('sends a search’s term, status and order always, and the category and cursor when there are', async () => {
+    const sent = sentQueries();
+    for (const sort of MARKET_SORTS) {
+      await marketSearchInfiniteQueryOptions({
+        ...DEFAULT_SEARCH_FILTERS,
+        sort,
+        q: '금리',
+      }).queryFn({ pageParam: undefined });
+      await marketSearchInfiniteQueryOptions({
+        q: '금리',
+        status: 'closed',
+        sort,
+        category: 'economy',
+      }).queryFn({ pageParam: 'cursor-1' });
+    }
+    expect(sent()).toEqual(
+      MARKET_SORTS.flatMap((sort) => [
+        { path: '/api/v1/markets', query: { status: 'all', sort, q: '금리' } },
+        {
+          path: '/api/v1/markets',
+          query: { status: 'closed', sort, q: '금리', category: 'economy', cursor: 'cursor-1' },
+        },
+      ]),
+    );
   });
 });
 
@@ -518,6 +594,37 @@ describe('a status event that arrives during an unseeded first fetch', () => {
       expect(fetches).toBe(seeded + 1);
     } finally {
       unsubscribe();
+      queryClient.clear();
+    }
+  });
+});
+
+describe('the search screen’s results (#15, ADR-0066)', () => {
+  const search: MarketSearch = { ...DEFAULT_SEARCH_FILTERS, q: '금리', status: 'closed' };
+
+  it('keys a search on its own entry, asks with no cursor first and holds no previous search', () => {
+    const options = marketSearchInfiniteQueryOptions(search);
+    expect(options.queryKey).toEqual(marketSearchKey(search));
+    expect(options.initialPageParam).toBeUndefined();
+    expect(options.getNextPageParam({ items: [], nextCursor: null })).toBeUndefined();
+    expect(options.getNextPageParam({ items: [], nextCursor: 'c' })).toBe('c');
+    // A new term is a new search with its own loading state, not the last one's cards.
+    expect(options).not.toHaveProperty('placeholderData');
+  });
+
+  it('takes the socket’s writes and the card join of the home’s root, by prefix', () => {
+    const queryClient = getQueryClient();
+    try {
+      queryClient.setQueryData<MarketPages>(marketSearchKey(search), pagesOf([card]));
+      queryClient.setQueriesData<MarketPages>({ queryKey: MARKETS_KEY }, (held) =>
+        applyToPages(held, (row) => applyStatus(row, statusEvent())),
+      );
+      const held = () => queryClient.getQueryData<MarketPages>(marketSearchKey(search));
+      expect(held()?.pages[0]?.items[0]?.status).toBe('closed');
+      // A late answer read before the close does not roll the card back (joinMarketPages).
+      queryClient.setQueryData<MarketPages>(marketSearchKey(search), pagesOf([card]));
+      expect(held()?.pages[0]?.items[0]?.status).toBe('closed');
+    } finally {
       queryClient.clear();
     }
   });

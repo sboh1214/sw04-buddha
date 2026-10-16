@@ -2,7 +2,7 @@
  * #113 at run time, against the docker `test` profile. Account A's private data is in the
  * database — email, nickname and time zone, real name and phone, password and session, a balance
  * and a ledger memo, orders and the fill one of them got against another account's resting order,
- * a position with its PnL, a payment, two watched markets (#89). Then:
+ * a position with its PnL, a payment, two watched markets (#89), a recorded search (#15). Then:
  * - every registered public route (registry.ts) is called anonymously, as another account B and
  *   as A itself, and no answer may hold one of A's values or a field PRIVATE_DATA names, nor a
  *   field naming an excluded feature or keeping a probability;
@@ -23,7 +23,7 @@
  */
 import { randomInt, randomUUID } from 'node:crypto';
 import { schema } from '@buddha/db';
-import { createMarket, createUser, createWatch } from '@buddha/db/test';
+import { createMarket, createSearch, createUser, createWatch } from '@buddha/db/test';
 import {
   PAGE_LIMIT_MAX,
   REALTIME_EVENT_REGISTRY,
@@ -90,6 +90,8 @@ interface Fixture {
   watched: MarketRow;
   /** The watched market's category slug, the value B's list is filtered by. */
   watchedCategory: string;
+  /** A's recorded search (#15): the id B's delete names, its term a sentinel. */
+  searchId: string;
   paymentId: string;
   /** A's password login: the `account` row better-auth keeps. */
   accountId: string;
@@ -328,6 +330,28 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
   'PUT /me/watchlist/:marketId': {
     params: { marketId: (fixture) => fixture.watched.id },
     body: (fixture) => ({ watched: false, expectedAccountId: fixture.a.id }),
+    status: 403,
+  },
+  // B's recent searches: B searched nothing, so nothing of A's may come back (#15, ADR-0066).
+  'GET /me/search-history': {
+    status: 200,
+    own: ['search term', 'search id'],
+  },
+  // B's cookie naming A's account: refused before anything is written — B's term lands in
+  // nobody's history, A's included (below).
+  'POST /me/search-history': {
+    body: (fixture) => ({ query: 'b-search', expectedAccountId: fixture.a.id }),
+    status: 403,
+  },
+  // B's cookie naming A's account and A's entry: refused, and A's search stays (below). B naming
+  // itself is checked there too: the entry is looked up among B's own rows only.
+  'POST /me/search-history/:id/delete': {
+    params: { id: (fixture) => fixture.searchId },
+    body: (fixture) => ({ expectedAccountId: fixture.a.id }),
+    status: 403,
+  },
+  'POST /me/search-history/clear': {
+    body: (fixture) => ({ expectedAccountId: fixture.a.id }),
     status: 403,
   },
   'POST /payments/charge': {
@@ -694,6 +718,10 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       watchedAt: new Date(watch.watch.watchedAt.getTime() + 1_000),
     });
 
+    // A's search (#15): a term nobody else types, and no market's title holds it.
+    const searchTerm = `leak-search-${tag}`;
+    const search = await createSearch(t.db, { userId: a.id, query: searchTerm });
+
     const paymentKey = `leak-payment-${tag}`;
     const [payment] = await t.db
       .insert(schema.payments)
@@ -730,6 +758,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       market,
       watched,
       watchedCategory: watchedCategory!.slug,
+      searchId: search.id,
       paymentId: payment!.id,
       accountId: account!.id,
       cursors: {
@@ -762,6 +791,8 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         text('payment key', paymentKey),
         text('watched market id', watched.id),
         text('watched market slug', watched.slug),
+        text('search term', searchTerm),
+        text('search id', search.id),
         amount('available balance', AMOUNTS.available),
         amount('locked balance', AMOUNTS.locked),
         amount('position qty', AMOUNTS.positionQty),
@@ -998,6 +1029,23 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       (await call(stateRoute, { params, cookie })).json<{ data: unknown }>().data;
     expect(await stateOf(f.b.cookie)).toEqual({ watched: false });
     expect(await stateOf(f.a.cookie)).toEqual({ watched: true });
+
+    // B's refused writes left A's search and wrote nothing for B (#15). B's delete naming A's
+    // entry as B itself is accepted and reaches nothing: the entry is looked up among B's rows.
+    const searches = () =>
+      t.db
+        .select({ userId: schema.marketSearches.userId, query: schema.marketSearches.query })
+        .from(schema.marketSearches);
+    const aSearch = { userId: f.a.id, query: sentinel('search term') };
+    expect(await searches()).toEqual([aSearch]);
+    const asB = await call(routeOf('POST /me/search-history/:id/delete'), {
+      params: { id: f.searchId },
+      body: { expectedAccountId: f.b.id },
+      cookie: f.b.cookie,
+    });
+    expect(asB.statusCode).toBe(200);
+    expect(asB.json<{ data: unknown }>().data).toEqual([]);
+    expect(await searches()).toEqual([aSearch]);
   });
 
   // ---- the market room --------------------------------------------------------------------

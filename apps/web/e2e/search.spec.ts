@@ -1,0 +1,555 @@
+import { type Page } from '@playwright/test';
+import { copy } from '../src/copy';
+import {
+  closeMarket,
+  createOpenMarket,
+  expect,
+  freshEmail,
+  freshTag,
+  signUp,
+  test,
+} from './helpers';
+
+/**
+ * 시장 검색 (#15, ADR-0066; owner decisions in ADR-0061 decision 1, items 13·14·18, and decision
+ * 3, the #15 rows): the results are a screen of their own (`/search`), reached from the header's
+ * box, on every public status until one is picked — so a closed market is found, and by 거래 마감
+ * alone too — matched on the title, sorted as the home is. 'No results', loading and a failure are
+ * different states, and a failure is never 'no results' (N02 §3). With no term a member sees
+ * their own recent searches (distinct, newest first, each deletable, and all at once) and a
+ * visitor a prompt; only a member's submitted term — and a recent search they pick, as a new
+ * search (owner decision 2026-10-16) — is recorded, never a filter change, never a visitor's
+ * search. The server draws the first page of results when there are any, so the HTML holds them
+ * without JavaScript (owner decision 2026-10-16); 'no results' and a failure are the browser's.
+ */
+
+/**
+ * `MARKET_SEARCH_TERM_MAX` and `MARKET_TITLE_MAX` of `@buddha/shared`, written out: the specs
+ * import that package for types only (helpers.ts says why).
+ */
+const TERM_MAX = 100;
+const TITLE_MAX = 120;
+
+const results = (page: Page) => page.getByTestId('search-results');
+const card = (page: Page, id: string) => page.getByTestId(`market-card-${id}`);
+const recent = (page: Page) => page.getByTestId('recent-search');
+
+/** The `data-testid`s of the result cards, in their order on screen. */
+function cardIds(page: Page): Promise<(string | null)[]> {
+  return results(page)
+    .getByRole('article')
+    .evaluateAll((cards) => cards.map((element) => element.getAttribute('data-testid')));
+}
+
+/**
+ * Waits for the session to be known, which is when a submit knows whether to record: the header
+ * shows the 로그인 pair or the 잔고 chip only from then on (auth-buttons.tsx).
+ */
+async function sessionKnown(page: Page, signedIn: boolean): Promise<void> {
+  await expect(
+    signedIn
+      ? page.getByTestId('balance-chip')
+      : page.locator('header').getByRole('link', { name: copy.login }),
+  ).toBeVisible();
+}
+
+/** Submits `term` from the header's box: the field at md and up, the icon's form below. */
+async function searchFromHeader(page: Page, term: string): Promise<void> {
+  const field = page.getByTestId('nav-search');
+  if (await field.isVisible()) {
+    await field.fill(term);
+    await field.press('Enter');
+    return;
+  }
+  await page.getByTestId('nav-search-toggle').click();
+  const mobile = page.getByTestId('nav-search-mobile');
+  await mobile.fill(term);
+  await mobile.press('Enter');
+}
+
+/** Submits `term` from the search screen's own box. */
+async function searchOnScreen(page: Page, term: string): Promise<void> {
+  const field = page.getByTestId('search-input');
+  await field.fill(term);
+  await field.press('Enter');
+}
+
+/** The header's own HTML in a page's server render: everything from `<header` to `</header>`. */
+function headerHtml(html: string): string {
+  const header = /<header[\s\S]*?<\/header>/.exec(html)?.[0];
+  expect(header, 'the server HTML has a header').toBeDefined();
+  return header ?? '';
+}
+
+/** The market cards in a page's server render, by their `data-testid`, in order. */
+function cardIdsIn(html: string): string[] {
+  return [...html.matchAll(/data-testid="(market-card-[0-9a-f-]{36})"/g)].map((match) => match[1]!);
+}
+
+/** Resolves on the next recorded search (`POST /me/search-history`); arm it before the submit. */
+function recorded(page: Page) {
+  return page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === '/api/v1/me/search-history' &&
+      response.request().method() === 'POST',
+  );
+}
+
+test.describe('시장 검색', () => {
+  test('헤더 검색창은 검색 화면으로 가고, 시장의 고유 태그로 그 카드 하나를 찾아 상세로 간다', async ({
+    page,
+    admin,
+  }) => {
+    const market = await createOpenMarket(admin);
+    await page.goto('/');
+    await sessionKnown(page, false);
+    await searchFromHeader(page, market.tag);
+
+    await expect(page).toHaveURL(`/search?q=${market.tag}`);
+    await expect(page.getByRole('heading', { level: 2, name: copy.searchTitle })).toBeVisible();
+    await expect(results(page).getByRole('article')).toHaveCount(1);
+    await expect(card(page, market.id)).toBeVisible();
+    // The screen's own box carries the term; the header's category row is not on this screen
+    // (ADR-0054: the home and the details only), though 시장 탐색 is lit here (nav.spec.ts).
+    await expect(page.getByTestId('search-input')).toHaveValue(market.tag);
+    await expect(page.getByTestId('nav-categories')).toHaveCount(0);
+    // Two search landmarks on this screen (the header's at md and up), named apart: the screen's
+    // searches within the filters picked, the header's afresh.
+    await expect(
+      page.getByRole('search', { name: copy.searchRefineLabel, exact: true }),
+    ).toHaveCount(1);
+    await expect(
+      page.getByRole('searchbox', { name: copy.searchRefineLabel, exact: true }),
+    ).toHaveValue(market.tag);
+    if (await page.getByTestId('nav-search').isVisible()) {
+      await expect(page.getByRole('search', { name: copy.searchLabel, exact: true })).toHaveCount(
+        1,
+      );
+      await expect(
+        page.getByRole('searchbox', { name: copy.searchLabel, exact: true }),
+      ).toHaveAttribute('data-testid', 'nav-search');
+    }
+    // The filters start on every status and 추천 (ADR-0061 decision 1, items 13 and 14).
+    await expect(page.getByTestId('search-status')).toHaveValue('all');
+    await expect(page.getByTestId('search-sort')).toHaveValue('recommended');
+    await expect(page.getByTestId('search-sort').locator('option')).toHaveText([
+      copy.sortRecommended,
+      copy.sortNewest,
+      copy.sortClosing,
+    ]);
+    // 375px: nothing on the screen runs off its edge.
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true);
+
+    // A result is the market card, and it opens the detail.
+    await card(page, market.id).getByRole('link', { name: market.title }).click();
+    await expect(page).toHaveURL(`/markets/${market.slug}`);
+  });
+
+  test('모든 상태가 처음이라 마감된 시장도 찾고, 거래 마감만 골라도 찾으며, 진행 중에는 없다', async ({
+    page,
+    admin,
+  }) => {
+    const market = await createOpenMarket(admin);
+    await closeMarket(admin, market.id);
+
+    await page.goto(`/search?q=${market.tag}`);
+    await expect(page.getByTestId('search-status')).toHaveValue('all');
+    await expect(card(page, market.id)).toBeVisible();
+    await expect(card(page, market.id)).toContainText(copy.marketStatusClosed);
+    // The card is the server's (it is in the HTML), so it says nothing of hydration: the select's
+    // change reaches the router once the session is known.
+    await sessionKnown(page, false);
+
+    // '모든 상태' and one choice per status label, in order (ADR-0061 decision 1, item 13).
+    await expect(page.getByTestId('search-status').locator('option')).toHaveText([
+      copy.searchStatusAll,
+      copy.marketStatusOpen,
+      copy.marketStatusClosed,
+      copy.marketStatusResolved,
+      copy.marketStatusSettled,
+      copy.marketStatusVoided,
+    ]);
+
+    await page.getByTestId('search-status').selectOption('closed');
+    await expect(page).toHaveURL(`/search?q=${market.tag}&status=closed`);
+    await expect(card(page, market.id)).toBeVisible();
+    await expect(results(page).getByRole('article')).toHaveCount(1);
+
+    await page.getByTestId('search-status').selectOption('open');
+    await expect(page).toHaveURL(`/search?q=${market.tag}&status=open`);
+    await expect(page.getByTestId('markets-empty')).toHaveText(copy.marketsSearchEmpty);
+
+    // Back to every status: the address drops its default again, and the closed market is there.
+    await page.getByTestId('search-status').selectOption('all');
+    await expect(page).toHaveURL(`/search?q=${market.tag}`);
+    await expect(card(page, market.id)).toBeVisible();
+  });
+
+  test('화면의 검색창은 고른 조건 안에서 찾고, 헤더 검색창은 조건 없이 새로 찾는다', async ({
+    page,
+    admin,
+  }) => {
+    // ADR-0066 decision 6 ('두 검색창의 차이'): the screen's box carries the filters on screen as
+    // hidden fields, the header's goes to a bare `/search?q=…` from wherever it is.
+    const market = await createOpenMarket(admin);
+    await closeMarket(admin, market.id);
+    const params = () => Object.fromEntries(new URL(page.url()).searchParams);
+
+    // No term yet, filters picked: they stay in the address, and the box searches within them.
+    await page.goto('/search?status=closed&sort=newest');
+    await expect(page.getByTestId('search-status')).toHaveValue('closed');
+    await searchOnScreen(page, market.tag);
+    // next/form writes the hidden fields first, so the order is not `searchPath`'s: compare the
+    // parameters, not the string.
+    await expect.poll(params).toEqual({ status: 'closed', sort: 'newest', q: market.tag });
+    await expect(card(page, market.id)).toBeVisible();
+    await expect(page.getByTestId('search-status')).toHaveValue('closed');
+    await expect(page.getByTestId('search-sort')).toHaveValue('newest');
+
+    // The header from the same filtered screen: a fresh search, every status and 추천.
+    await searchFromHeader(page, market.tag);
+    await expect(page).toHaveURL(`/search?q=${market.tag}`);
+    await expect(page.getByTestId('search-status')).toHaveValue('all');
+    await expect(page.getByTestId('search-sort')).toHaveValue('recommended');
+    await expect(card(page, market.id)).toBeVisible();
+
+    // Both boxes follow the URL's term while the screen and the header stay mounted (each is
+    // keyed on it): another term from the screen's box shows in the header's (typed into for the
+    // first term at md and up), and Back puts the first term back in both.
+    const other = freshTag();
+    await searchOnScreen(page, other);
+    await expect(page).toHaveURL(`/search?q=${other}`);
+    await expect(page.getByTestId('markets-empty')).toBeVisible();
+    await expect(page.getByTestId('nav-search')).toHaveValue(other);
+    await page.goBack();
+    await expect(page).toHaveURL(`/search?q=${market.tag}`);
+    await expect(card(page, market.id)).toBeVisible();
+    await expect(page.getByTestId('search-input')).toHaveValue(market.tag);
+    await expect(page.getByTestId('nav-search')).toHaveValue(market.tag);
+  });
+
+  test('검색창은 검색어의 최대 길이까지만 받아, 붙여 넣은 긴 글도 검색 결과 화면이 된다', async ({
+    page,
+  }) => {
+    // A term past the API's bound would read as no term, and the screen would answer a search
+    // just typed with its prompt. Both boxes hold the bound at most (`SEARCH_INPUT_MAX_LENGTH`),
+    // so a longer paste is cut to it and is searched: here nothing matches, so 'no results'.
+    const long = `${freshTag()}${'긴'.repeat(TITLE_MAX)}`.slice(0, TITLE_MAX);
+    const kept = long.slice(0, TERM_MAX);
+    await page.goto('/search');
+    await sessionKnown(page, false);
+    await page.getByTestId('search-input').fill(long);
+    await expect(page.getByTestId('search-input')).toHaveValue(kept);
+    await page.getByTestId('search-input').press('Enter');
+    await expect.poll(() => new URL(page.url()).searchParams.get('q')).toBe(kept);
+    await expect(page.getByTestId('markets-empty')).toHaveText(copy.marketsSearchEmpty);
+    await expect(page.getByTestId('search-prompt')).toHaveCount(0);
+
+    // The header's box, at either width.
+    await page.goto('/');
+    await sessionKnown(page, false);
+    await searchFromHeader(page, long);
+    await expect.poll(() => new URL(page.url()).searchParams.get('q')).toBe(kept);
+    await expect(page.getByTestId('markets-empty')).toHaveText(copy.marketsSearchEmpty);
+    await expect(page.getByTestId('search-prompt')).toHaveCount(0);
+  });
+
+  test('카테고리 필터가 결과를 좁히고, 고른 정렬이 결과의 순서를 바꾼다', async ({
+    page,
+    admin,
+  }) => {
+    // Two markets of one run's group (`/search?q=<group>` lists exactly them), in two top-level
+    // categories, opened one after the other — so the later opened is the later to close: 마감
+    // 임박 reads [first, second], 신규 [second, first], and so does 추천, neither having a fill
+    // (ties by the latest opening). The order must reach GET /markets — the server's read of the
+    // first page, and the browser's when there is none — since the select's value comes from the
+    // URL, and the API answers an order it was not sent with 추천, its own default. This half was
+    // the home's test until the home stopped reading `q` (ADR-0066).
+    const group = freshTag();
+    const first = await createOpenMarket(admin, { group });
+    const second = await createOpenMarket(admin, { group, topLevelCategory: 1 });
+    const byOpening = [`market-card-${second.id}`, `market-card-${first.id}`];
+    const byClosing = [`market-card-${first.id}`, `market-card-${second.id}`];
+
+    await page.goto(`/search?q=${group}`);
+    await expect.poll(() => cardIds(page)).toEqual(byOpening);
+    await sessionKnown(page, false);
+    await page.getByTestId('search-sort').selectOption('closing');
+    await expect(page).toHaveURL(`/search?q=${group}&sort=closing`);
+    await expect.poll(() => cardIds(page)).toEqual(byClosing);
+    await page.getByTestId('search-sort').selectOption('newest');
+    await expect(page).toHaveURL(`/search?q=${group}&sort=newest`);
+    await expect.poll(() => cardIds(page)).toEqual(byOpening);
+    await page.getByTestId('search-sort').selectOption('closing');
+    await expect.poll(() => cardIds(page)).toEqual(byClosing);
+    await page.getByTestId('search-sort').selectOption('recommended');
+    await expect(page).toHaveURL(`/search?q=${group}`);
+    await expect.poll(() => cardIds(page)).toEqual(byOpening);
+
+    // The category: the top level of the second market's alone.
+    await page.getByTestId('search-category').selectOption(second.categorySlug);
+    await expect(page).toHaveURL(`/search?q=${group}&category=${second.categorySlug}`);
+    await expect.poll(() => cardIds(page)).toEqual([`market-card-${second.id}`]);
+    await page.getByTestId('search-category').selectOption('');
+    await expect(page).toHaveURL(`/search?q=${group}`);
+    await expect.poll(() => cardIds(page)).toEqual(byOpening);
+  });
+
+  test('어떤 시장도 없는 검색어는 검색 결과가 없다는 안내다', async ({ page }) => {
+    await page.goto(`/search?q=${freshTag()}`);
+    await expect(page.getByTestId('markets-empty')).toHaveText(copy.marketsSearchEmpty);
+    await expect(page.getByTestId('markets-grid')).toHaveCount(0);
+    await expect(page.getByTestId('markets-error')).toHaveCount(0);
+  });
+
+  test('연결이 끊기거나 API가 내려가면 연결 오류, API의 오류 답이면 일반 오류이고, 결과 없음으로 보이지 않는다', async ({
+    page,
+    admin,
+  }) => {
+    // The server reads a search's first page too, but puts it in the HTML only when it holds a
+    // card (owner decision 2026-10-16, ADR-0066); with nothing found, the browser reads the page
+    // itself. So the search is for a run's group word that no market holds yet: the server finds
+    // nothing, and what the browser then gets back is what the visitor sees fail. The market comes
+    // only before the connection is back. Three failures, each its own way:
+    // - `abort`: the request gets no answer at all (offline, the web origin gone);
+    // - `proxy`: the API is down, and Next's `/api/*` rewrite answers for it with a plain-text 500
+    //   (what `next dev`/`next start` send when the proxied API refuses the connection);
+    // - `api`: the API itself answered an error, in its envelope.
+    const group = freshTag();
+    let failure: 'abort' | 'proxy' | 'api' = 'abort';
+    const isMarketList = (url: URL) => url.pathname === '/api/v1/markets';
+    await page.route(isMarketList, (route) =>
+      failure === 'abort'
+        ? route.abort('internetdisconnected')
+        : route.fulfill(
+            failure === 'proxy'
+              ? { status: 500, contentType: 'text/plain', body: 'Internal Server Error' }
+              : {
+                  status: 500,
+                  contentType: 'application/json',
+                  body: JSON.stringify({ error: { code: 'INTERNAL', message: 'Internal error' } }),
+                },
+          ),
+    );
+    const error = page.getByTestId('markets-error');
+    const neverEmpty = async () => {
+      await expect(page.getByTestId('markets-empty')).toHaveCount(0);
+      await expect(page.getByText(copy.marketsSearchEmpty)).toHaveCount(0);
+    };
+
+    await page.goto(`/search?q=${group}`);
+    await expect(error).toBeVisible();
+    await expect(error).toContainText(copy.errNetwork);
+    await neverEmpty();
+
+    failure = 'api';
+    await error.getByRole('button', { name: copy.retry }).click();
+    await expect(error).toContainText(copy.errUnknown);
+    await expect(error).not.toContainText(copy.errNetwork);
+    await neverEmpty();
+
+    failure = 'proxy';
+    await error.getByRole('button', { name: copy.retry }).click();
+    await expect(error).toContainText(copy.errNetwork);
+    await neverEmpty();
+
+    // A market of the group now, and the connection back: 다시 시도 brings the result.
+    const market = await createOpenMarket(admin, { group });
+    await page.unroute(isMarketList);
+    await error.getByRole('button', { name: copy.retry }).click();
+    await expect(card(page, market.id)).toBeVisible();
+    await expect(error).toHaveCount(0);
+  });
+
+  test('로그인하지 않은 방문자는 검색어 없이 열면 입력 안내를 보고, 검색은 기록되지 않는다', async ({
+    page,
+    admin,
+  }) => {
+    const market = await createOpenMarket(admin);
+    const records: string[] = [];
+    page.on('request', (request) => {
+      if (new URL(request.url()).pathname.startsWith('/api/v1/me/search-history')) {
+        records.push(`${request.method()} ${request.url()}`);
+      }
+    });
+
+    await page.goto('/search');
+    await sessionKnown(page, false);
+    await expect(page.getByTestId('search-prompt')).toHaveText(copy.searchPrompt);
+    await expect(page.getByTestId('recent-searches')).toHaveCount(0);
+
+    // The search itself is public (ADR-0061 decision 1, item 18), and a visitor's is not kept.
+    await searchOnScreen(page, market.tag);
+    await expect(page).toHaveURL(`/search?q=${market.tag}`);
+    await expect(card(page, market.id)).toBeVisible();
+    await searchFromHeader(page, market.tag);
+    await expect(card(page, market.id)).toBeVisible();
+    expect(records).toEqual([]);
+  });
+
+  test('회원의 최근 검색: 제출한 검색어와 누른 최근 검색만 중복 없이 최근 순으로 남고, 하나씩·전체를 지운다', async ({
+    page,
+    admin,
+  }) => {
+    const older = await createOpenMarket(admin);
+    const newer = await createOpenMarket(admin);
+    await signUp(page, freshEmail());
+    await sessionKnown(page, true);
+
+    // A new member has searched nothing.
+    await page.goto('/search');
+    await expect(page.getByTestId('recent-searches-empty')).toHaveText(copy.recentSearchesEmpty);
+
+    // One term from the screen's box, one from the header's; each submit is recorded.
+    let saved = recorded(page);
+    await searchOnScreen(page, older.tag);
+    await saved;
+    await expect(card(page, older.id)).toBeVisible();
+    saved = recorded(page);
+    await searchFromHeader(page, newer.tag);
+    await saved;
+    await expect(page).toHaveURL(`/search?q=${newer.tag}`);
+    // The screen stayed mounted, and its box (typed into for the older term) now shows the newer
+    // one: it is keyed on the URL's term, so a refine from it searches what is on screen.
+    await expect(page.getByTestId('search-input')).toHaveValue(newer.tag);
+
+    // Opening an older search by its address and changing a filter records nothing: the term
+    // stays second. A request in flight would fail this, so none may start.
+    const posts: string[] = [];
+    page.on('request', (request) => {
+      if (
+        request.method() === 'POST' &&
+        new URL(request.url()).pathname === '/api/v1/me/search-history'
+      ) {
+        posts.push(request.url());
+      }
+    });
+    await page.goto(`/search?q=${older.tag}`);
+    // The card is in the server's HTML, so it is the session, known only after hydration, that
+    // says the select's change reaches the router.
+    await expect(card(page, older.id)).toBeVisible();
+    await sessionKnown(page, true);
+    await page.getByTestId('search-status').selectOption('closed');
+    await expect(page).toHaveURL(`/search?q=${older.tag}&status=closed`);
+    await page.getByTestId('search-sort').selectOption('newest');
+    await expect(page).toHaveURL(`/search?q=${older.tag}&status=closed&sort=newest`);
+    expect(posts).toEqual([]);
+
+    // No term: the recent searches, newest first.
+    await page.goto('/search');
+    await expect(recent(page)).toHaveCount(2);
+    await expect(recent(page).getByTestId('recent-search-link')).toHaveText([newer.tag, older.tag]);
+    // With filters picked and no term, each entry runs its term within them (ADR-0066 decision
+    // 6: a recent search is a term only, so it keeps what is picked now).
+    await page.goto('/search?status=closed&sort=newest');
+    await expect(recent(page).getByTestId('recent-search-link')).toHaveText([newer.tag, older.tag]);
+    for (const [index, tag] of [newer.tag, older.tag].entries()) {
+      await expect(recent(page).getByTestId('recent-search-link').nth(index)).toHaveAttribute(
+        'href',
+        `/search?q=${tag}&status=closed&sort=newest`,
+      );
+    }
+    // The same term again is one entry, moved first.
+    saved = recorded(page);
+    await searchOnScreen(page, older.tag);
+    await saved;
+    await page.goto('/search');
+    await expect(recent(page).getByTestId('recent-search-link')).toHaveText([older.tag, newer.tag]);
+
+    // An entry runs its search, and picking it is a new search of it (owner decision 2026-10-16,
+    // ADR-0066: "새 검색으로 기록"): the second entry, the least recently searched, is recorded
+    // again and moves first.
+    saved = recorded(page);
+    await recent(page).getByRole('link', { name: newer.tag }).click();
+    await saved;
+    await expect(page).toHaveURL(`/search?q=${newer.tag}`);
+    await expect(card(page, newer.id)).toBeVisible();
+    await page.goto('/search');
+    await expect(recent(page).getByTestId('recent-search-link')).toHaveText([newer.tag, older.tag]);
+
+    // Delete one: it goes, and stays gone after a reload.
+    await recent(page)
+      .filter({ hasText: older.tag })
+      .getByRole('button', { name: `${older.tag} ${copy.recentSearchDelete}` })
+      .click();
+    await expect(recent(page).getByTestId('recent-search-link')).toHaveText([newer.tag]);
+    await page.reload();
+    await expect(recent(page).getByTestId('recent-search-link')).toHaveText([newer.tag]);
+
+    // Delete all.
+    await page.getByTestId('recent-searches-clear').click();
+    await expect(page.getByTestId('recent-searches-empty')).toHaveText(copy.recentSearchesEmpty);
+    await page.reload();
+    await expect(page.getByTestId('recent-searches-empty')).toBeVisible();
+    await expect(recent(page)).toHaveCount(0);
+  });
+
+  test('검색 화면의 HTML은 회원의 쿠키로 받아도 최근 검색을 싣지 않는다', async ({
+    page,
+    request,
+  }) => {
+    // The recent searches are the session's own, read with its cookie in the browser and never
+    // rendered on the server (`PRIVATE_QUERY_ROOTS`, ADR-0066). Until the session is known the
+    // screen draws a placeholder — neither the recent searches nor the prompt — so the server's
+    // HTML is that placeholder for a member and a visitor alike (ADR-0066 decision 6).
+    await signUp(page, freshEmail());
+    await sessionKnown(page, true);
+    const term = freshTag();
+    const saved = recorded(page);
+    await searchFromHeader(page, term);
+    await saved;
+
+    const cookies = await page.context().cookies();
+    const cookie = cookies.map(({ name, value }) => `${name}=${value}`).join('; ');
+    const asMember = await (await request.get('/search', { headers: { cookie } })).text();
+    const anonymous = await (await request.get('/search')).text();
+    expect(asMember).not.toContain(term);
+    expect(anonymous).not.toContain(term);
+    for (const html of [asMember, anonymous]) {
+      expect(html).toContain('data-testid="search-pending"');
+      expect(html).not.toContain('data-testid="search-prompt"');
+      expect(html).not.toContain('data-testid="recent-searches"');
+    }
+    // And the screen itself shows it, once the browser has asked.
+    await page.goto('/search');
+    await expect(recent(page).getByTestId('recent-search-link')).toHaveText([term]);
+  });
+
+  test('검색 결과의 첫 페이지는 서버가 그려, 스크립트 없이 받은 HTML에 카드가 있고 회원과 방문자에게 같다', async ({
+    page,
+    admin,
+    request,
+  }) => {
+    // Owner decision 2026-10-16 (ADR-0066): "서버가 첫 페이지도 그린다". The response body, not
+    // the DOM after hydration: what a visitor without JavaScript gets (the two search boxes are
+    // `next/form`s, which navigate here without it). Read with a member's cookie and with none,
+    // the results are the same cards, and the header is the same bytes: the server reads no
+    // cookie and seeds nothing private.
+    const market = await createOpenMarket(admin);
+    await signUp(page, freshEmail());
+    await sessionKnown(page, true);
+    const cookies = await page.context().cookies();
+    const cookie = cookies.map(({ name, value }) => `${name}=${value}`).join('; ');
+
+    const asMember = await request.get(`/search?q=${market.tag}`, { headers: { cookie } });
+    const anonymous = await request.get(`/search?q=${market.tag}`);
+    for (const response of [asMember, anonymous]) expect(response.status()).toBe(200);
+    const [memberHtml, anonymousHtml] = await Promise.all([asMember.text(), anonymous.text()]);
+    for (const html of [memberHtml, anonymousHtml]) {
+      expect(html).toContain(market.title);
+      expect(html).toContain('data-testid="markets-grid"');
+      expect(html).not.toContain('data-testid="markets-skeleton"');
+      expect(cardIdsIn(html)).toEqual([`market-card-${market.id}`]);
+    }
+    expect(headerHtml(memberHtml)).toBe(headerHtml(anonymousHtml));
+
+    // A search that finds nothing is not answered by the server: its HTML is the skeleton, and
+    // '검색 결과가 없습니다.' is the browser's to say, from its own read (N02 §3).
+    const nothing = await (await request.get(`/search?q=${freshTag()}`)).text();
+    expect(nothing).toContain('data-testid="markets-skeleton"');
+    expect(nothing).not.toContain('data-testid="markets-empty"');
+    expect(nothing).not.toContain(copy.marketsSearchEmpty);
+  });
+});

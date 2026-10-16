@@ -56,6 +56,14 @@ export const RATE_LIMIT_BUCKETS = {
   charge: { scope: 'user', limit: 10 },
   /** `/coupons/redeem`: a coupon code is a short secret and this is the only route that tests one. */
   coupon: { scope: 'user', limit: 10 },
+  /**
+   * `POST /me/search-history` (#15, ADR-0066): recording a submitted search, per account. Not in
+   * PLAN 7.5. Each record is a row that stays (no retention limit, the owner), so with the address
+   * bucket alone one account could grow its history as fast as it had addresses to send from. A
+   * person submitting searches by hand stays far below it, and a refused record never fails the
+   * search: the web drops it (use-search-history.ts).
+   */
+  searchHistory: { scope: 'user', limit: 30 },
   /** Routes that mail an address the caller chose, counted per address (A-M2-10). */
   email: { scope: 'email', limit: 5 },
   /**

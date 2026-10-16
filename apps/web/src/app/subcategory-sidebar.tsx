@@ -18,8 +18,8 @@ import { HEADER_HEIGHT_PX } from '@/lib/nav';
  * column of every leaf of every category would be the header again, vertically.
  *
  * The rows come from `sidebarLinks` (lib/home-view.ts), which is where the decisions live and
- * are tested: which slug the 전체 시장 row points at, which row is current, and that the sort, the
- * 관심 시장 view and a search term ride along on every row. This file only draws them.
+ * are tested: which slug the 전체 시장 row points at, which row is current, and that the sort and
+ * the 관심 시장 view ride along on every row. This file only draws them.
  *
  * The categories arrive twice, exactly as in market-filters.tsx: as the server-read PROP, which
  * is what puts the sidebar in the first paint, and from `useCategories()` afterwards, which is

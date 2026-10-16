@@ -45,6 +45,7 @@ function makeQueryClient() {
     structuralSharing: (held, incoming) =>
       replaceEqualDeep(held, joinMarket(held as Market | undefined, incoming as Market)),
   });
+  // The home's lists and, under the same root, the search screen's results (ADR-0066).
   client.setQueryDefaults(MARKETS_KEY, {
     structuralSharing: (held, incoming) =>
       replaceEqualDeep(

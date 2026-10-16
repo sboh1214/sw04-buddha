@@ -66,15 +66,18 @@ export class WatchlistService {
    * paginated over `(watched_at DESC, market_id DESC)` with the `<millis>_<uuid>` cursor every list
    * uses, or one of the public orders, from the same `marketOrder` as `GET /markets` so a watched
    * market sits where it sits on the home. Items are the `GET /markets` row, so the same card draws
-   * them; an ended market stays with its status until the member unwatches it. A cursor that does
-   * not decode for the order serves the first page.
+   * them; an ended market stays with its status until the member unwatches it. The status filter
+   * goes to `marketOrder` too: without `status=open` (MY lists every status) 마감 임박 puts the
+   * 진행 중 markets first and the ended ones after them, most recently closed first, as the search
+   * does (ADR-0066, owner decision 2026-10-16). A cursor that does not decode for the order serves
+   * the first page.
    */
   async list(userId: string, query: WatchlistQuery): Promise<Page<MarketSummary>> {
     const { markets, categories, marketWatches } = schema;
     const order: MarketOrder<WatchRow> =
       query.sort === 'watched'
         ? watchedOrder(query.cursor)
-        : marketOrder(this.db, query.sort, query.cursor);
+        : marketOrder(this.db, query.sort, query.cursor, query.status);
     let select = this.db
       .select({ ...marketWithCategory, watchedAt: marketWatches.watchedAt, order: order.fields })
       .from(marketWatches)

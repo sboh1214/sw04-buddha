@@ -244,9 +244,10 @@ export interface TestMarket {
   title: string;
   rules: string;
   /**
-   * The random part of the title and the slug. Unique per run, so `/?q=<tag>` is a home page
-   * holding exactly this market's card and nothing else — which is what makes AC 1's card
-   * assertion independent of how many markets the database already has.
+   * The random part of the title and the slug. Unique per run, so `/search?q=<tag>` is a search
+   * screen holding exactly this market's card and nothing else — which is what makes AC 1's card
+   * assertion independent of how many markets the database already has. Every status is
+   * searched until one is picked (ADR-0066), so it finds the market after a close too.
    */
   tag: string;
   /** The slug of the category it is filed under: `/?category=<slug>` lists it. */
@@ -258,13 +259,19 @@ export interface CreateOpenMarketOptions {
    * Which TOP-LEVEL category, by position in `GET /categories` (parents first, in display
    * order): 0, the default, is the first. A spec that needs markets in two different categories
    * passes 1 for the second. Throws when the seed has fewer.
+   *
+   * A spec that must find its market on the HOME itself (which takes no search term since
+   * ADR-0066) opens `/?category=<slug>&sort=newest`: the market it just opened is on that first
+   * page only while fewer than a page of others are opened in the category meanwhile, which the
+   * default category cannot promise while other workers run. Such a spec takes a category no
+   * other spec uses: 2 is home.spec's 관심 시장 test, 3 is market.spec's AC 1.
    */
   topLevelCategory?: number;
   /**
    * A word put in the title before the market's own tag, for a spec that lists several markets
-   * together: give them one `freshTag()` and `/?q=<group>` is a home page holding exactly them,
-   * in the order the sort picked — which is how the order on screen can be checked at all on a
-   * database every earlier run has added to. No group, the default: the title is the tag alone.
+   * together: give them one `freshTag()` and `/search?q=<group>` holds exactly them, in the order
+   * the sort picked — which is how the order on screen can be checked at all on a database every
+   * earlier run has added to. No group, the default: the title is the tag alone.
    */
   group?: string;
 }

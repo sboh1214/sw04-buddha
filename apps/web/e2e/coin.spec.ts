@@ -114,8 +114,9 @@ test.describe('금액 표기 · 375px', () => {
       );
     }
 
-    // --- the header chip, on a home page holding exactly this market's card.
-    await page.goto(`/?q=${market.tag}`);
+    // --- the header chip, on the search screen holding exactly this market's card (`/?q=`
+    // until the search moved off the home, ADR-0066).
+    await page.goto(`/search?q=${market.tag}`);
     const chip = page.getByTestId('balance-chip');
     await expect(chip).toContainText('1,000,000 Coin');
     await expectOneLineOnScreen(page, chip, 'balance chip');

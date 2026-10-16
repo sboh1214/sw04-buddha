@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { schema, type Db } from '@buddha/db';
 import {
+  ALL_MARKET_STATUSES,
   FILLS_RECENT_LIMIT,
   TICKS_MAX_POINTS,
   TICKS_SCAN_MAX,
@@ -143,15 +144,22 @@ export class MarketService {
   /**
    * Keyset-paginated per order (`marketOrder`, market-order.ts — the one place the market orders
    * live, ADR-0065): 추천 joins its 24-hour volume laterally and pages on (window end, volume,
-   * open time, id), 신규 on (open time, id), 마감 임박 on (close time, id). A cursor that does not
-   * decode for the order serves the first page rather than a 500 (see decodeKeyset).
+   * open time, id), 신규 on (open time, id), 마감 임박 on (close time, id) — or, when the status is
+   * not `open` and ended markets can be listed, on (진행 중 first, signed close time, id). A cursor
+   * that does not decode for the order serves the first page rather than a 500 (see decodeKeyset).
+   *
+   * `status=all` is every public status (the search screen's '모든 상태', ADR-0066): a draft is
+   * still never listed. The title search is a plain `ILIKE` over the candidate rows, with no
+   * index of its own (ADR-0066 says why): the sort reads every candidate anyway.
    */
   async list(query: MarketListQuery): Promise<Page<MarketSummary>> {
     const { markets, categories } = schema;
     const { limit } = query;
-    const order = marketOrder(this.db, query.sort, query.cursor);
+    const order = marketOrder(this.db, query.sort, query.cursor, query.status);
     const filters = [
-      eq(markets.status, query.status),
+      query.status === ALL_MARKET_STATUSES
+        ? ne(markets.status, 'draft')
+        : eq(markets.status, query.status),
       query.category ? inCategory(this.db, query.category) : undefined,
       query.q ? ilike(markets.title, likePattern(query.q)) : undefined,
     ];

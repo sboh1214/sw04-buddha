@@ -11,7 +11,9 @@
  * shipped table still says 100.
  */
 import { createHash } from 'node:crypto';
+import { schema } from '@buddha/db';
 import { DEFAULT_RATE_LIMITS, RATE_LIMIT_BUCKETS, RATE_LIMIT_WINDOW_SECONDS } from '@buddha/shared';
+import { eq } from 'drizzle-orm';
 import { type Redis } from 'ioredis';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { REDIS } from '../infra/redis/redis.provider.js';
@@ -152,6 +154,49 @@ describe.skipIf(!hasTestInfra)('rate limits (integration)', () => {
         expect(key).not.toContain(user.id);
         expect(key).not.toContain('@');
       }
+    });
+  });
+
+  describe('POST /me/search-history — 30 a minute per account (ADR-0066)', () => {
+    /**
+     * Not a PLAN 7.5 row: each record is a row that stays (no retention limit, the owner), so the
+     * address bucket alone would let one account grow its history at 100 a minute per address it
+     * sends from. Counted per account, at the shipped number.
+     */
+    const record = (as: TestUser, query: string) =>
+      t.app.inject({
+        method: 'POST',
+        url: '/api/v1/me/search-history',
+        headers: { ...jsonHeaders, cookie: as.cookie },
+        payload: { query, expectedAccountId: as.id },
+      });
+    const rows = (as: TestUser) =>
+      t.db
+        .select({ id: schema.marketSearches.id })
+        .from(schema.marketSearches)
+        .where(eq(schema.marketSearches.userId, as.id));
+
+    it('refuses the 31st record of the window, writing nothing, and counts each account apart', async () => {
+      const user = await signUpTestUser(t);
+      const other = await signUpTestUser(t);
+      expect(RATE_LIMIT_BUCKETS.searchHistory).toEqual({ scope: 'user', limit: 30 });
+      for (let i = 0; i < DEFAULT_RATE_LIMITS.searchHistory; i += 1) {
+        const allowed = await record(user, `검색어 ${String(i)}`);
+        expect([i, allowed.statusCode]).toEqual([i, 200]);
+      }
+      const refused = await record(user, '하나 더');
+      expect(refused.statusCode).toBe(429);
+      const body: RefusalBody = refused.json();
+      expect(body.error.code).toBe('RATE_LIMITED');
+      expect(await rows(user)).toHaveLength(DEFAULT_RATE_LIMITS.searchHistory);
+      // The list is not counted by it, and another account has a bucket of its own.
+      const read = await t.app.inject({
+        method: 'GET',
+        url: '/api/v1/me/search-history',
+        headers: { cookie: user.cookie },
+      });
+      expect(read.statusCode).toBe(200);
+      expect((await record(other, '하나 더')).statusCode).toBe(200);
     });
   });
 

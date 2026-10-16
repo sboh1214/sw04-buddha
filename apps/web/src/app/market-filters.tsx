@@ -52,8 +52,11 @@ import { SubcategoryChips } from './subcategory-sidebar';
  * here — the headline falls back to 예측시장 and the list underneath reports its own failure.
  */
 
-/** The orders' names (ADR-0061 decision 1, items 9–11; decision 3, the #63 row). */
-const SORT_LABEL: Record<WatchlistSort, string> = {
+/**
+ * The orders' names (ADR-0061 decision 1, items 9–11; decision 3, the #63 row). The search
+ * screen's select names its three the same way (item 14: the home's orders).
+ */
+export const SORT_LABEL: Record<WatchlistSort, string> = {
   recommended: copy.sortRecommended,
   newest: copy.sortNewest,
   closing: copy.sortClosing,
@@ -72,9 +75,10 @@ export interface MarketFiltersProps {
  * Kalshi's control pill, on a native `<select>`: 40px tall, a 100px radius, the emphasized alpha
  * stroke and no fill. The right padding leaves room for the chevron `NativeSelect.Indicator`
  * draws over it. `ps`/`pe` rather than `px`/`pr` because those are the keys the size recipe
- * sets, so the override replaces them instead of racing a `padding-inline` shorthand.
+ * sets, so the override replaces them instead of racing a `padding-inline` shorthand. The search
+ * screen's three selects are the same pill.
  */
-const PILL_SELECT = {
+export const PILL_SELECT = {
   h: '40px',
   ps: '4',
   pe: '9',

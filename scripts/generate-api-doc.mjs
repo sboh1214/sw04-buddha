@@ -302,6 +302,7 @@ const TAG_LABELS = {
   markets: '시장·시세',
   trades: '거래·포지션',
   watchlist: '관심 시장',
+  'search-history': '최근 검색',
 };
 
 /**
@@ -343,6 +344,8 @@ const RATE_LIMIT_ROUTES = {
     '모든 HTTP 라우트. 아래 버킷을 지목한 라우트도 여기에 함께 들어간다(주소 하나당 API 전체 합산).',
   charge: '`POST /api/v1/payments/charge`',
   coupon: '`POST /api/v1/coupons/redeem`',
+  searchHistory:
+    '`POST /api/v1/me/search-history`(제출한 검색어 기록). 기록마다 남는 행이라(보관 기간 없음) 계정마다 센다. 웹은 거절된 기록을 버리고 검색은 그대로 간다.',
   email:
     '메일을 보내는 경로 — `POST /api/v1/auth/register` 와 `/api/auth/*` 의 `/change-email`, `/send-verification-email`, `/request-password-reset`, `/forget-password`. 시도 자체를 센다(시도가 곧 피해다). `/change-email` 만은 **로그인한 요청만** 센다(세션 없는 요청은 401 이고 아무에게도 메일이 가지 않으므로): 먼저 **요청한 계정**의 버킷을, 그다음 `newEmail` 의 버킷을 — 인증된 계정의 확인 메일은 본문의 주소가 아니라 계정이 이미 가진 주소로 가고, 계정을 먼저 세야 한 계정이 1분에 다섯 주소까지만 지목할 수 있기 때문이다. `GET /verify-email` 도 링크가 메일을 보내는 종류(이메일 변경의 **확인** 링크: 누를 때마다 새 주소에 다시 보낸다)이면 그 수신 주소로 센다 — 토큰은 1시간짜리 무상태 JWT 라 누른다고 소모되지 않기 때문이다. 서명이 유효한 토큰만 세고, 변경을 적용하는 **검증** 링크는 메일을 보내지 않으므로 세지 않는다.',
   signIn:
