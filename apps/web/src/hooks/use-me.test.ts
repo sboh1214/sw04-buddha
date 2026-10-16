@@ -90,7 +90,7 @@ describe('storeMe', () => {
     try {
       await me.observer.refetch();
 
-      await storeMe(queryClient, inNewYork, session.refetch);
+      await storeMe(queryClient, inNewYork, 'timeZone', session.refetch);
 
       expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)).toEqual(inNewYork);
       expect(zoneHeld(me)).toBe('America/New_York');
@@ -116,7 +116,7 @@ describe('storeMe', () => {
       const inflight = me.observer.refetch();
       expect(queryClient.getQueryState(ME_QUERY_KEY)?.fetchStatus).toBe('fetching');
 
-      await storeMe(queryClient, inNewYork, () => undefined);
+      await storeMe(queryClient, inNewYork, 'timeZone', () => undefined);
       stale.resolve(following);
       await inflight;
       await settle();
@@ -142,7 +142,7 @@ describe('storeMe', () => {
     try {
       expect(me.requests()).toBe(1);
 
-      await storeMe(queryClient, inNewYork, () => undefined);
+      await storeMe(queryClient, inNewYork, 'timeZone', () => undefined);
 
       expect(me.requests()).toBe(2);
       expect(zoneHeld(me)).toBe('America/New_York');
@@ -170,7 +170,7 @@ describe('storeMe', () => {
       await me.observer.refetch();
       const inflight = me.observer.refetch();
 
-      await storeMe(queryClient, inNewYork, session.refetch);
+      await storeMe(queryClient, inNewYork, 'timeZone', session.refetch);
 
       expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)).toEqual(otherMe);
       expect(queryClient.getQueryState(ME_QUERY_KEY)?.fetchStatus).toBe('fetching');
@@ -201,12 +201,48 @@ describe('storeMe', () => {
       await storeMe(
         queryClient,
         { ...otherMe, profile: { ...otherMe.profile, nickname: '비' } },
+        'nickname',
         session.refetch,
       );
 
       expect(session.count()).toBe(1);
       expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)).toEqual(following);
       expect(me.requests()).toBe(1);
+    } finally {
+      me.unsubscribe();
+      queryClient.clear();
+    }
+  });
+
+  it('takes only its own field, so an older answer of the other profile write cannot undo it', async () => {
+    // THE HAZARD (Codex on #209): a nickname save and a time-zone save overlap. The time-zone
+    // answer read the profile before the nickname's UPDATE committed, so it carries the old
+    // nickname; it lands after the nickname answer. Taking its whole profile would put the old
+    // nickname back while the database holds the new one.
+    const queryClient = getQueryClient();
+    const me = meObserver(queryClient, () => Promise.resolve(following));
+    try {
+      await me.observer.refetch();
+      const renamed: Me = { ...following, profile: { ...following.profile, nickname: '새이름' } };
+
+      await storeMe(queryClient, renamed, 'nickname', () => undefined);
+      await storeMe(queryClient, inNewYork, 'timeZone', () => undefined);
+
+      expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)?.profile).toEqual({
+        ...following.profile,
+        nickname: '새이름',
+        timeZone: 'America/New_York',
+      });
+
+      // The other order: a nickname answer that read the zone before the zone's UPDATE.
+      await storeMe(
+        queryClient,
+        { ...renamed, profile: { ...renamed.profile, nickname: '또이름' } },
+        'nickname',
+        () => undefined,
+      );
+      expect(zoneHeld(me)).toBe('America/New_York');
+      expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)?.profile.nickname).toBe('또이름');
     } finally {
       me.unsubscribe();
       queryClient.clear();
@@ -226,7 +262,7 @@ describe('storeMe', () => {
       // What the realtime handler does with the event.
       queryClient.setQueryData<Me>(ME_QUERY_KEY, (held) => held && { ...held, balance: afterFill });
 
-      await storeMe(queryClient, inNewYork, () => undefined);
+      await storeMe(queryClient, inNewYork, 'timeZone', () => undefined);
 
       expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)).toEqual({
         ...following,

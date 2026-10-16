@@ -91,16 +91,24 @@ export function meBelongsTo(queryClient: QueryClient, account: string): boolean 
   return held === undefined || held.id === account;
 }
 
+/** The profile field a profile write owns: the one `storeMe` takes from its answer. */
+export type ProfileField = 'nickname' | 'timeZone';
+
 /**
  * Writes the profile a profile write answered with (`PATCH /me`, `PUT /me/time-zone`) into
  * `['me']`, so every observer — TimeZoneProvider, the header — takes it without a refetch.
  *
- * Only the profile: the answer is a whole `Me`, but the write changed nothing else, and its
- * `balance` is what the server read right after the UPDATE. A fill or a payout that committed
- * after that read may already have reached the tab as `user:balance` and patched `['me']`
- * (realtime-provider.tsx), which drops a repeat of that event; writing the whole answer would put
- * the older balance back on the header chip, the wallet and the order panel until the next
- * refetch. `storeContact` (use-contact.ts) takes only `contact` for the same reason.
+ * Only the field the write changed (`field`): the answer is a whole `Me`, but the write changed
+ * nothing else. Two profile writes can overlap — a nickname save and a time-zone save from the
+ * same settings screen — and each answer is a snapshot of the whole profile read right after
+ * its own UPDATE: a time-zone answer that read the nickname before the nickname's UPDATE
+ * committed, landing last, would put the old nickname back while the database holds the new
+ * one. So each write takes only its own field from its answer. The rest of the answer is no
+ * better: its `balance` is what the server read right after the UPDATE. A fill or a payout that
+ * committed after that read may already have reached the tab as `user:balance` and patched
+ * `['me']` (realtime-provider.tsx), which drops a repeat of that event; writing the whole answer
+ * would put the older balance back on the header chip, the wallet and the order panel until the
+ * next refetch. `storeContact` (use-contact.ts) takes only `contact` for the same reason.
  *
  * A `GET /me` already in flight (a window-focus refetch, a realtime resnapshot) is cancelled
  * first, as `storeContact` and realtime-provider.tsx do before they patch `['me']`: it may have
@@ -125,6 +133,7 @@ export function meBelongsTo(queryClient: QueryClient, account: string): boolean 
 export async function storeMe(
   queryClient: QueryClient,
   me: Me,
+  field: ProfileField,
   onSessionChanged: () => void,
 ): Promise<void> {
   if (!meBelongsTo(queryClient, me.id)) {
@@ -135,7 +144,10 @@ export async function storeMe(
   const held = queryClient.getQueryData<Me>(ME_QUERY_KEY);
   if (held) {
     if (held.id === me.id)
-      queryClient.setQueryData<Me>(ME_QUERY_KEY, { ...held, profile: me.profile });
+      queryClient.setQueryData<Me>(ME_QUERY_KEY, {
+        ...held,
+        profile: { ...held.profile, [field]: me.profile[field] },
+      });
     else onSessionChanged();
     return;
   }
@@ -165,7 +177,7 @@ export function updateNicknameOptions(
   return {
     mutationFn: patch,
     // Returned, so `mutateAsync` settles only once `['me']` holds the answer.
-    onSuccess: (me: Me) => storeMe(queryClient, me, onSessionChanged),
+    onSuccess: (me: Me) => storeMe(queryClient, me, 'nickname', onSessionChanged),
   };
 }
 
@@ -193,7 +205,7 @@ export function updateTimeZoneOptions(
   return {
     mutationFn: put,
     // Returned, so `mutateAsync` settles only once `['me']` holds the answer.
-    onSuccess: (me: Me) => storeMe(queryClient, me, onSessionChanged),
+    onSuccess: (me: Me) => storeMe(queryClient, me, 'timeZone', onSessionChanged),
     onError: (error: Error) => {
       if (isForAnotherAccount(error)) onSessionChanged();
     },
