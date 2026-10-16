@@ -1,7 +1,13 @@
 import { QueryClient, dehydrate, hashKey } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 import { type Market, type PriceSeries } from './api';
-import { DEFAULT_MARKET_FILTERS, dehydratePublic, marketsKey } from './market-keys';
+import { MARKET_SORTS } from '@buddha/shared';
+import {
+  DEFAULT_MARKET_FILTERS,
+  type MarketFilters,
+  dehydratePublic,
+  marketsKey,
+} from './market-keys';
 import { detailWindowEnd, filtersFromSearchParams, seedMarketDetail } from './market-ssr';
 
 const MARKET_ID = '1f2e3d4c-0000-4000-8000-000000000000';
@@ -119,38 +125,42 @@ describe('detailWindowEnd', () => {
 });
 
 describe('filtersFromSearchParams', () => {
+  /** The public view of one URL: what `marketsKey` is built from. */
+  const publicView = (params: Parameters<typeof filtersFromSearchParams>[0]): MarketFilters => {
+    const filters = filtersFromSearchParams(params);
+    if (filters.watchlist === true) throw new Error('expected the public view');
+    return filters;
+  };
+
   it('falls back to the defaults for an absent, unknown or blank param', () => {
     expect(filtersFromSearchParams({})).toEqual(DEFAULT_MARKET_FILTERS);
-    // `draft` is a real status the public list may not filter by; `price` is not a sort at
-    // all. Both are hand-typed URLs, and neither may 500 a public page.
-    expect(filtersFromSearchParams({ status: 'draft', sort: 'price' })).toEqual(
+    expect(DEFAULT_MARKET_FILTERS).toEqual({ sort: 'recommended' });
+    // `price` is not a sort at all: a hand-typed URL, which may not 500 a public page.
+    expect(filtersFromSearchParams({ sort: 'price' })).toEqual(DEFAULT_MARKET_FILTERS);
+    expect(filtersFromSearchParams({ sort: '' })).toEqual(DEFAULT_MARKET_FILTERS);
+    expect(filtersFromSearchParams({ sort: [] })).toEqual(DEFAULT_MARKET_FILTERS);
+  });
+
+  it('keeps each public order', () => {
+    for (const sort of MARKET_SORTS) {
+      expect(filtersFromSearchParams({ sort })).toEqual({ ...DEFAULT_MARKET_FILTERS, sort });
+    }
+  });
+
+  it('ignores a bookmarked ?status= and ?sort=volume rather than redirecting (as D23 does)', () => {
+    // The home has no status filter and lists open markets only (ADR-0061 decision 1, item 13),
+    // and the volume order is gone until #132 (item 11). Links saved before still open the home,
+    // on its default list — this PR changed both, the old expectations kept a status.
+    expect(filtersFromSearchParams({ status: 'settled', sort: 'volume' })).toEqual(
       DEFAULT_MARKET_FILTERS,
     );
-    expect(filtersFromSearchParams({ status: '', sort: '' })).toEqual(DEFAULT_MARKET_FILTERS);
-    expect(filtersFromSearchParams({ status: [], sort: [] })).toEqual(DEFAULT_MARKET_FILTERS);
-  });
-
-  it('keeps a known status and sort', () => {
-    expect(filtersFromSearchParams({ status: 'settled', sort: 'closing' })).toEqual({
-      status: 'settled',
-      sort: 'closing',
-    });
-    // 판정 완료 is a filter of its own (ADR-0046, PUBLIC_MARKET_STATUSES).
-    expect(filtersFromSearchParams({ status: 'resolved' })).toEqual({
-      ...DEFAULT_MARKET_FILTERS,
-      status: 'resolved',
-    });
-  });
-
-  it('sends a bookmarked ?status=resolving back to the default list', () => {
-    // The dispute stage and its status are gone (ADR-0046: renamed to `resolved` in place).
-    // A link saved before that still names the old value, which is now just an unknown status:
-    // the home page opens on its default list rather than answering 500.
-    expect(filtersFromSearchParams({ status: 'resolving' })).toEqual(DEFAULT_MARKET_FILTERS);
     expect(filtersFromSearchParams({ status: 'resolving', sort: 'newest' })).toEqual({
       ...DEFAULT_MARKET_FILTERS,
       sort: 'newest',
     });
+    expect('status' in filtersFromSearchParams({ status: 'closed' })).toBe(false);
+    // 최근 관심 등록 순 is the 관심 시장 view's alone (ADR-0061 decision 3, the #63 row).
+    expect(filtersFromSearchParams({ sort: 'watched' })).toEqual(DEFAULT_MARKET_FILTERS);
   });
 
   it('takes the first value of a repeated param', () => {
@@ -161,7 +171,7 @@ describe('filtersFromSearchParams', () => {
         category: ['sports', 'weather'],
         q: ['snow', 'rain'],
       }),
-    ).toEqual({ status: 'closed', sort: 'newest', category: 'sports', q: 'snow' });
+    ).toEqual({ sort: 'newest', category: 'sports', q: 'snow' });
   });
 
   it('trims a category and a search term, and drops what the API would refuse', () => {
@@ -178,18 +188,64 @@ describe('filtersFromSearchParams', () => {
   });
 
   it('omits a blank search term so it shares one cache key with an absent one', () => {
-    const blank = filtersFromSearchParams({ q: '   ', category: ' ' });
+    const blank = publicView({ q: '   ', category: ' ' });
     expect('q' in blank).toBe(false);
     expect('category' in blank).toBe(false);
     // The home page and the client list must derive the same key or the list refetches the
     // moment it hydrates.
-    expect(hashKey(marketsKey(blank))).toBe(hashKey(marketsKey(filtersFromSearchParams({}))));
+    expect(hashKey(marketsKey(blank))).toBe(hashKey(marketsKey(publicView({}))));
     expect(hashKey(marketsKey(blank))).toBe(hashKey(marketsKey(DEFAULT_MARKET_FILTERS)));
   });
 
   it('ignores the order the params arrive in', () => {
-    const a = filtersFromSearchParams({ q: 'snow', status: 'open', sort: 'volume' });
-    const b = filtersFromSearchParams({ sort: 'volume', q: 'snow', status: 'open' });
+    const a = publicView({ q: 'snow', status: 'open', sort: 'newest' });
+    const b = publicView({ sort: 'newest', q: 'snow', status: 'open' });
     expect(hashKey(marketsKey(a))).toBe(hashKey(marketsKey(b)));
+  });
+
+  describe('the 관심 시장 view (?watchlist=1, ADR-0065)', () => {
+    it('starts on 최근 관심 등록 순 and keeps the category', () => {
+      expect(filtersFromSearchParams({ watchlist: '1' })).toEqual({
+        watchlist: true,
+        sort: 'watched',
+      });
+      expect(filtersFromSearchParams({ watchlist: '1', category: ' economy ' })).toEqual({
+        watchlist: true,
+        sort: 'watched',
+        category: 'economy',
+      });
+    });
+
+    it('takes the public orders too, and nothing else', () => {
+      for (const sort of [...MARKET_SORTS, 'watched']) {
+        expect(filtersFromSearchParams({ watchlist: '1', sort })).toEqual({
+          watchlist: true,
+          sort,
+        });
+      }
+      for (const sort of ['volume', 'price', '']) {
+        expect(filtersFromSearchParams({ watchlist: '1', sort })).toEqual({
+          watchlist: true,
+          sort: 'watched',
+        });
+      }
+    });
+
+    it('drops a search term and a status: the watchlist has neither', () => {
+      expect(filtersFromSearchParams({ watchlist: '1', q: 'snow', status: 'closed' })).toEqual({
+        watchlist: true,
+        sort: 'watched',
+      });
+    });
+
+    it('is on for exactly ?watchlist=1, the first value of a repeated one', () => {
+      for (const value of ['0', 'true', 'on', '', ' 1']) {
+        expect(filtersFromSearchParams({ watchlist: value })).toEqual(DEFAULT_MARKET_FILTERS);
+      }
+      expect(filtersFromSearchParams({ watchlist: ['1', '0'] })).toMatchObject({
+        watchlist: true,
+      });
+      expect(filtersFromSearchParams({ watchlist: ['0', '1'] })).toEqual(DEFAULT_MARKET_FILTERS);
+    });
   });
 });

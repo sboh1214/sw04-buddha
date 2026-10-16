@@ -3,7 +3,7 @@ import { type QueryClient, defaultShouldDehydrateQuery, dehydrate } from '@tanst
 // an inline type import still emits `import {}` from the module, and `./ticks` imports `ticksKey`
 // back from here — an erased import keeps that a type-level cycle instead of a runtime one, and
 // keeps a server component that only wanted a cache key from loading the browser API client.
-import type { MarketSort, PublicMarketStatus } from '@buddha/shared';
+import type { MarketSort, PublicMarketStatus, WatchlistSort } from '@buddha/shared';
 import type { TickRange } from './ticks';
 
 /**
@@ -49,12 +49,14 @@ export const WATCHLIST_PAGES_KEY = [...WATCHLIST_KEY, 'pages'] as const;
 
 /**
  * The list's filters, which are its cache key as `MarketFilters` are the home's. MY asks for none
- * (`{}`: every public status, ended markets included, ADR-0061 decision 3); the home's 관심 시장
- * toggle (#63) will pass a category.
+ * (`{}`: every public status, ended markets included, newest watch first — ADR-0061 decision 3);
+ * the home's 관심 시장 view (#63, ADR-0065) asks for the open markets of its category in the order
+ * picked (`watchlistViewFilters`, lib/home-view.ts).
  */
 export interface WatchlistFilters {
   status?: PublicMarketStatus;
   category?: string;
+  sort?: WatchlistSort;
 }
 
 export const watchlistPagesKey = (filters: WatchlistFilters) =>
@@ -65,19 +67,84 @@ export const watchStateKey = (marketId: string) =>
   [...WATCHLIST_KEY, 'market', marketId.toLowerCase()] as const;
 
 /**
+ * The status the home lists, always (ADR-0061 decision 1, item 13): open markets only, with no
+ * status filter on the screen — the other statuses are the search screen's (#15). Sent by the
+ * public list's query (`publicListQuery`, for its SSR prefetch and its queryFn) and by the 관심
+ * 시장 view, never part of a key's choices.
+ */
+export const HOME_MARKET_STATUS = 'open' satisfies PublicMarketStatus;
+
+/**
  * The public list's filter set, which IS its cache key. Normalised once, on the server
  * (`filtersFromSearchParams`), and handed to the client as a prop: two independent derivations
  * of the same `searchParams` would be one default away from a second cache entry, and the
- * second entry would refetch what the SSR payload already carries.
+ * second entry would refetch what the SSR payload already carries. No status: the home lists
+ * `HOME_MARKET_STATUS` only (ADR-0065).
+ *
+ * `watchlist?: undefined` is what tells it apart from the 관심 시장 view (`HomeFilters`), whose
+ * list is the caller's and so has no entry under this key at all.
  */
 export interface MarketFilters {
-  status: PublicMarketStatus;
   sort: MarketSort;
   category?: string;
   q?: string;
+  watchlist?: undefined;
 }
 
-export const DEFAULT_MARKET_FILTERS: MarketFilters = { status: 'open', sort: 'volume' };
+export const DEFAULT_MARKET_FILTERS: MarketFilters = { sort: 'recommended' };
+
+/** The query of one public list page, as `GET /markets` takes it (`publicListQuery`). */
+export interface PublicListQuery {
+  status: typeof HOME_MARKET_STATUS;
+  sort: MarketSort;
+  category?: string;
+  q?: string;
+  cursor?: string;
+}
+
+/**
+ * One page of the public list as `GET /markets` is asked for it, by the SSR prefetch
+ * (`fetchMarketsPageServer`, api.server.ts) and by the client's queryFn (hooks/use-markets.ts)
+ * alike — one spelling, so the two cannot drift, the way `watchlistViewFilters` is the 관심 시장
+ * view's. The home's status always, the order picked always (the API's default is 추천 too, so a
+ * request that lost its order would still answer, in the wrong order — market-keys.test.ts pins
+ * every sort through), and the category, search term and cursor only when there is one: the API's
+ * query schema refuses a blank one.
+ */
+export function publicListQuery(filters: MarketFilters, cursor?: string): PublicListQuery {
+  return {
+    status: HOME_MARKET_STATUS,
+    sort: filters.sort,
+    ...(filters.category === undefined ? {} : { category: filters.category }),
+    ...(filters.q === undefined ? {} : { q: filters.q }),
+    ...(cursor === undefined ? {} : { cursor }),
+  };
+}
+
+/**
+ * The home's 관심 시장 view (#63, ADR-0065): the caller's watched open markets, of the category
+ * the URL names if any, in the order picked — 최근 관심 등록 순 unless another is (ADR-0061
+ * decision 3, the #63 row). No `q`: the watchlist has no title search, and the header's search
+ * posts a fresh `/?q=…` that leaves this view (#15 moves search to its own screen).
+ */
+export interface WatchlistViewFilters {
+  watchlist: true;
+  sort: WatchlistSort;
+  category?: string;
+}
+
+export const DEFAULT_WATCHLIST_VIEW_SORT = 'watched' satisfies WatchlistSort;
+
+/**
+ * The URL that turns the view on: `?watchlist=1`, and no other value (`filtersFromSearchParams`).
+ * A word of the URL, not of an API answer — the `watchlist` item of PRIVATE_DATA keeps public
+ * response fields from naming a watchlist; the page address names the caller's own view.
+ */
+export const WATCHLIST_VIEW_PARAM = 'watchlist';
+export const WATCHLIST_VIEW_PARAM_VALUE = '1';
+
+/** What the home's URL normalises to (`filtersFromSearchParams`): one of the two views. */
+export type HomeFilters = MarketFilters | WatchlistViewFilters;
 
 /**
  * `hashKey` sorts a plain object's keys and `JSON.stringify` drops undefined-valued properties

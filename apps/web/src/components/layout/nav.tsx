@@ -24,6 +24,8 @@ import { useCategories } from '@/hooks/use-markets';
 import { type CategoryNode, groupCategories } from '@/lib/category-tree';
 import {
   CATEGORY_ITEM_OPACITY,
+  type UrlSearchParams,
+  categoryLinkQuery,
   currentSearchTerm,
   currentTopLevelSlug,
   isAllCategoriesCurrent,
@@ -47,9 +49,12 @@ import { useSession } from '@/lib/use-session';
  * sidebar then lists the leaves of whichever top-level category is chosen.
  *
  * The whole header is a client component: the search box holds the open/closed state of its
- * mobile form, both rows read `usePathname` and row 2 reads `useCategories()` and the URL's
- * `?category=`. It still renders into the server HTML like every other client component, and the
- * pathname is known on the server, so a route without row 2 is served without it.
+ * mobile form, both rows read `usePathname` and row 2 reads `useCategories()` and the URL's query
+ * (`?category=` for the current item, `?watchlist=1` and `?sort=` for where its items go). It
+ * still renders into the server HTML like every other client component, and the pathname is
+ * known on the server, so a route without row 2 is served without it. Nothing in it reads the
+ * session before hydration (`useSession` is pending until then), so the server HTML of an
+ * address is the same for every visitor.
  *
  * Kalshi's measurements (from kalshi.com, 2026-09-11): a 1320px container with 24px side
  * padding; row 1 is 40px tall with 12px above and below; row 2 is 30px tall, and the header is
@@ -303,24 +308,27 @@ function WithSearchTerm({ children }: { children: (term: string | undefined) => 
 
 function SearchTermReader({ children }: { children: (term: string | undefined) => ReactNode }) {
   const pathname = usePathname();
-  const q = useSearchParams().get('q');
-  return children(currentSearchTerm(pathname, q));
+  const searchParams = useSearchParams();
+  return children(currentSearchTerm(pathname, searchParams));
 }
 
 /**
  * Row 2 (PLAN 11.4, ADR-0041): 전체 and the top-level categories, on every breakpoint, on
  * 시장 탐색 only (`Nav`).
  *
- * The row has to know the URL's `?category=` to mark the current item, and the only honest
- * source for that is `useSearchParams` — the same param the home page normalises. Both routes
- * that draw the row (`/` and `/markets/[slug]`) are `force-dynamic`, so the params are known at
- * request time and the real row goes into the HTML. The read still lives in `CurrentCategoryRow`
- * behind its own `<Suspense>`, with the SAME row and nothing marked current as the fallback: a
+ * The row has to know the URL's `?category=` to mark the current item, and the URL's view to
+ * know where its items go (`categoryLinkQuery`: in the 관심 시장 view they keep it on, owner
+ * decision 2026-10-16), and the only honest source for both is `useSearchParams` — the same
+ * params the home page normalises. Both routes that draw the row (`/` and `/markets/[slug]`) are
+ * `force-dynamic`, so the params are known at request time and the real row goes into the HTML.
+ * The read still lives in `CurrentCategoryRow` behind its own `<Suspense>`, with the SAME row,
+ * nothing marked current and the links of a URL with no query as the fallback: a
  * `useSearchParams` read in the root layout during a static prerender bails the render out to the
  * nearest Suspense boundary (`next build` fails when there is none), and the boundary keeps a
  * page that draws the row buildable however it is rendered — a prerendered row is the full row
  * (the links, the skeleton, 전체), and when the boundary resolves in the browser it re-renders to
- * an identical one (off `/` nothing is current anyway), so nothing flashes.
+ * an identical one (off `/` nothing is current and the links are the plain ones anyway), so
+ * nothing flashes.
  *
  * The categories query and the grouping are read ONCE here and handed to both branches of the
  * boundary, so the fallback and the real row cannot disagree about what they list.
@@ -328,18 +336,34 @@ function SearchTermReader({ children }: { children: (term: string | undefined) =
 function CategoryNav() {
   const { data: categories, isPending } = useCategories();
   const tree = categories === undefined ? undefined : groupCategories(categories);
+  const pathname = usePathname();
 
   return (
-    <Suspense fallback={<CategoryRow tree={tree} isPending={isPending} />}>
+    <Suspense
+      fallback={
+        <CategoryRow
+          tree={tree}
+          isPending={isPending}
+          linkQuery={(slug) => categoryLinkQuery(pathname, NO_SEARCH_PARAMS, slug)}
+        />
+      }
+    >
       <CurrentCategoryRow tree={tree} isPending={isPending} />
     </Suspense>
   );
 }
 
-/** The row with its current item read from the URL; see `CategoryNav` for why it is separate. */
+/** The fallback's URL: no query at all, so no item is current and every link is a plain one. */
+const NO_SEARCH_PARAMS: UrlSearchParams = new URLSearchParams();
+
+/**
+ * The row with its current item and its links read from the URL; see `CategoryNav` for why it is
+ * separate.
+ */
 function CurrentCategoryRow({ tree, isPending }: { tree?: CategoryNode[]; isPending: boolean }) {
   const pathname = usePathname();
-  const category = useSearchParams().get('category');
+  const searchParams = useSearchParams();
+  const category = searchParams.get('category');
 
   return (
     <CategoryRow
@@ -347,6 +371,7 @@ function CurrentCategoryRow({ tree, isPending }: { tree?: CategoryNode[]; isPend
       isPending={isPending}
       allCurrent={isAllCategoriesCurrent(pathname, category)}
       currentSlug={currentTopLevelSlug(pathname, tree ?? [], category)}
+      linkQuery={(slug) => categoryLinkQuery(pathname, searchParams, slug)}
     />
   );
 }
@@ -361,9 +386,11 @@ function CurrentCategoryRow({ tree, isPending }: { tree?: CategoryNode[]; isPend
  * the dimmed text still reads at 4.5:1; the number and its measurement live there.
  *
  * A failed `GET /categories` renders the 전체 link alone — a header must not shout about a list
- * it only offers as a shortcut. Each href is a UrlObject rather than a template literal: `href`
- * takes one without a `Route` cast, and Next encodes the slug. `prefetch={false}` on each, for
- * the reason the search form gives: the home route is `force-dynamic`.
+ * it only offers as a shortcut. Where each item goes is `linkQuery` (`categoryLinkQuery`,
+ * lib/nav.ts, where it is tested): a fresh `?category=`, or in the 관심 시장 view the view moved to
+ * that category. Each href is a UrlObject rather than a template literal: `href` takes one without
+ * a `Route` cast, and Next encodes the slug. `prefetch={false}` on each, for the reason the search
+ * form gives: the home route is `force-dynamic`.
  *
  * It scrolls sideways with no visible scrollbar (`scrollbarWidth` for Firefox, the
  * `::-webkit-scrollbar` rule for the rest). A scroll container clips its children's outlines,
@@ -381,11 +408,14 @@ function CategoryRow({
   isPending,
   allCurrent = false,
   currentSlug,
+  linkQuery,
 }: {
   tree?: CategoryNode[];
   isPending: boolean;
   allCurrent?: boolean;
   currentSlug?: string;
+  /** The query an item links to: a top-level slug, or `undefined` for 전체. */
+  linkQuery: (slug: string | undefined) => Record<string, string>;
 }) {
   return (
     <HStack
@@ -406,7 +436,11 @@ function CategoryRow({
       css={{ '&::-webkit-scrollbar': { display: 'none' } }}
       data-testid="nav-categories"
     >
-      <CategoryLink href="/" current={allCurrent} testId="nav-category-all">
+      <CategoryLink
+        href={{ pathname: '/', query: linkQuery(undefined) }}
+        current={allCurrent}
+        testId="nav-category-all"
+      >
         {copy.marketsAll}
       </CategoryLink>
       {isPending ? (
@@ -415,7 +449,7 @@ function CategoryRow({
         tree?.map((node) => (
           <CategoryLink
             key={node.category.slug}
-            href={{ pathname: '/', query: { category: node.category.slug } }}
+            href={{ pathname: '/', query: linkQuery(node.category.slug) }}
             current={node.category.slug === currentSlug}
             testId={`nav-category-${node.category.slug}`}
           >

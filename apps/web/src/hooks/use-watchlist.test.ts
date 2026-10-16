@@ -3,6 +3,7 @@ import {
   QueryObserver,
   type QueryClient,
   type QueryObserverResult,
+  hashKey,
 } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 import { ApiError, type MarketSummary, type Me, type WatchState } from '@/lib/api';
@@ -106,6 +107,15 @@ describe('the watchlist queries', () => {
     expect(watchStateQueryOptions(MARKET, { user: {} }).enabled).toBe(true);
     expect(watchlistInfiniteQueryOptions({}, undefined).enabled).toBe(false);
     expect(watchlistInfiniteQueryOptions({}, { user: {} }).queryKey).toEqual(watchlistPagesKey({}));
+    // The home's 관심 시장 view (ADR-0065) is its own entry per order and category, apart from MY's.
+    const view = { status: 'open', sort: 'recommended', category: 'economy' } as const;
+    expect(watchlistInfiniteQueryOptions(view, { user: {} }).queryKey).toEqual(
+      watchlistPagesKey(view),
+    );
+    expect(hashKey(watchlistPagesKey(view))).not.toBe(
+      hashKey(watchlistPagesKey({ ...view, sort: 'watched' })),
+    );
+    expect(hashKey(watchlistPagesKey(view))).not.toBe(hashKey(watchlistPagesKey({})));
   });
 
   it('page the list on its cursor until a null one, so every watch is reachable (no cap)', async () => {

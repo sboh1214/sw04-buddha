@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { PUBLIC_MARKET_STATUSES, marketListQuerySchema } from './market.js';
+import { MARKET_SORTS, PUBLIC_MARKET_STATUSES, marketListQuerySchema } from './market.js';
 import { findPrivateField } from './guards/private-data.js';
 import {
+  DEFAULT_WATCHLIST_SORT,
+  WATCHLIST_SORTS,
   WATCH_EVENT_ACTIONS,
   updateWatchBodySchema,
   watchStateSchema,
@@ -18,15 +20,16 @@ describe('watchlistQuerySchema', () => {
   it('pages newest watch first with no filter by default: every public status, ended ones too', () => {
     // No status default, unlike `GET /markets` (open): an ended market stays on the list until
     // the member removes it (ADR-0061 decision 3, #89).
-    expect(watchlistQuerySchema.parse({})).toEqual({ limit: 20 });
+    expect(watchlistQuerySchema.parse({})).toEqual({ limit: 20, sort: 'watched' });
     expect(
       watchlistQuerySchema.parse({
         status: 'closed',
         category: ' weather ',
+        sort: 'closing',
         limit: '5',
         cursor: 'c',
       }),
-    ).toEqual({ status: 'closed', category: 'weather', limit: 5, cursor: 'c' });
+    ).toEqual({ status: 'closed', category: 'weather', sort: 'closing', limit: 5, cursor: 'c' });
     for (const status of PUBLIC_MARKET_STATUSES) {
       expect(watchlistQuerySchema.parse({ status }).status).toBe(status);
     }
@@ -41,9 +44,20 @@ describe('watchlistQuerySchema', () => {
     );
   });
 
-  it('has no sort yet: #63 adds the others beside the newest watch', () => {
+  it('orders by the newest watch by default, or by any public order (#63, ADR-0065)', () => {
+    // ADR-0061 decision 3, the #63 row: 추천 · 신규 · 마감 임박 and 최근 관심 등록 순, which a
+    // watchlist alone has and which it starts on. The public three are the same values, so the
+    // home passes the select's value through unchanged.
+    expect(WATCHLIST_SORTS).toEqual(['watched', ...MARKET_SORTS]);
+    expect(DEFAULT_WATCHLIST_SORT).toBe('watched');
+    for (const sort of WATCHLIST_SORTS) {
+      expect(watchlistQuerySchema.parse({ sort }).sort).toBe(sort);
+    }
+    expect(watchlistQuerySchema.safeParse({ sort: 'volume' }).success).toBe(false);
+    // `watched` is the watchlist's own: the public list does not know it.
+    expect(marketListQuerySchema.safeParse({ sort: 'watched' }).success).toBe(false);
     expect(Object.keys(watchlistQuerySchema.shape).sort()).toEqual(
-      ['category', 'cursor', 'limit', 'status'].sort(),
+      ['category', 'cursor', 'limit', 'sort', 'status'].sort(),
     );
   });
 });

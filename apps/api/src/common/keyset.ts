@@ -57,18 +57,43 @@ export function keysetPredicate(
 }
 
 /**
- * The same, for a sort whose first key is not a timestamp: `GET /markets?sort=volume` orders by
- * `(volume_coin DESC, id DESC)` and its cursor carries a bigint. Split from `keysetPredicate`
- * rather than made generic over the cast, because the two cursors are decoded by two different
- * validators in packages/shared and mixing them up is exactly the mistake `idShape` exists to
- * prevent.
+ * How a value half other than the id is cast: a bigint (a volume) or a timestamp (an open time,
+ * a window end). The same closed union of literals as `KeysetIdCast`, for the same reason.
  */
-export function sortKeysetPredicate(
-  sortColumn: AnyPgColumn,
-  idColumn: AnyPgColumn,
-  cursor: { value: string; id: string },
-  valueCast: 'bigint',
-  idCast: KeysetIdCast,
+export type KeysetValueCast = 'bigint' | 'timestamptz';
+
+/** One key of `tupleKeysetPredicate`: what the row is ordered by, and the cursor's value for it. */
+export interface TupleKey {
+  /** A column, or an expression the ORDER BY spells the same way (an index may hold it). */
+  key: AnyPgColumn | SQL;
+  /** The bound value, a string the cast accepts (digits, ISO time, `-infinity`, a uuid). */
+  value: string;
+  cast: KeysetValueCast | KeysetIdCast;
+}
+
+/**
+ * The same row comparison over any number of keys, for an order whose key is more than one
+ * timestamp: the market orders of ADR-0065 — `(coalesce(open_at, '-infinity'), id)` for 신규 and
+ * `(24-hour volume, coalesce(open_at, '-infinity'), id)` for 추천 (market-order.ts). Every key is
+ * compared in the one direction, which is what a row comparison can say; a NULL is written as a
+ * value by the caller (`-infinity`) because a row comparison with a NULL in it is NULL, which
+ * would end the page at the first unopened market.
+ *
+ * The casts play the part they play in `keysetPredicate`: rendered from the closed unions, with
+ * every value a BOUND PARAMETER.
+ */
+export function tupleKeysetPredicate(
+  keys: readonly TupleKey[],
+  /** `before` for a DESC page (the default), `after` for an ASC one. */
+  direction: 'before' | 'after' = 'before',
 ): SQL {
-  return sql`(${sortColumn}, ${idColumn}) < (${cursor.value}::${sql.raw(valueCast)}, ${cursor.id}::${sql.raw(idCast)})`;
+  const row = sql.join(
+    keys.map(({ key }) => sql`${key}`),
+    sql`, `,
+  );
+  const cursor = sql.join(
+    keys.map(({ value, cast }) => sql`${value}::${sql.raw(cast)}`),
+    sql`, `,
+  );
+  return direction === 'before' ? sql`(${row}) < (${cursor})` : sql`(${row}) > (${cursor})`;
 }

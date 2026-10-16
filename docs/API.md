@@ -163,7 +163,7 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 
 | 메서드 | 경로 | 설명 | 인증 | 오류 |
 | --- | --- | --- | --- | --- |
-| GET | `/api/v1/markets` | Markets by status (default open), never drafts; sorted by volume, closing or newest | — | `VALIDATION_ERROR`, `RATE_LIMITED` |
+| GET | `/api/v1/markets` | Markets by status (default open), never drafts; sorted recommended (24-hour volume, then the latest opening; the default), newest (latest opening) or closing (soonest close) | — | `VALIDATION_ERROR`, `RATE_LIMITED` |
 | GET | `/api/v1/markets/{idOrSlug}` | One market by id or slug (a draft is NOT_FOUND to the public) | — | `VALIDATION_ERROR`, `NOT_FOUND`, `RATE_LIMITED` |
 | GET | `/api/v1/markets/{id}/fills` | Newest 20 fills, anonymous | — | `VALIDATION_ERROR`, `NOT_FOUND`, `RATE_LIMITED` |
 | GET | `/api/v1/markets/{id}/ticks` | Price series, ascending, at most 500 points. `raw` returns stored ticks, downsampled from the newest 10000 of the range (`truncated` says when older ones were left out). `1m`/`1h` sample the probability in force on an absolute grid, coarsening the stride until the window fits; `bucketSeconds` reports the stride served, and the point at `from` carries the last value at or before it, so the left edge is never empty. | — | `VALIDATION_ERROR`, `NOT_FOUND`, `RATE_LIMITED` |
@@ -180,7 +180,7 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 
 | 메서드 | 경로 | 설명 | 인증 | 오류 |
 | --- | --- | --- | --- | --- |
-| GET | `/api/v1/me/watchlist` | Markets the account watches, most recently watched first, every public status unless status narrows it (an ended market stays until unwatched); category takes either level like GET /markets | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `RATE_LIMITED` |
+| GET | `/api/v1/me/watchlist` | Markets the account watches, every public status unless status narrows it (an ended market stays until unwatched); category takes either level like GET /markets; sorted watched (most recently watched first, the default) or by the GET /markets orders | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `RATE_LIMITED` |
 | GET | `/api/v1/me/watchlist/{marketId}` | Whether the account watches one market (a draft is NOT_FOUND) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `NOT_FOUND`, `RATE_LIMITED` |
 | PUT | `/api/v1/me/watchlist/{marketId}` | Watch or unwatch one market; repeating either changes nothing (a draft is NOT_FOUND) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
 

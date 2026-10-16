@@ -498,8 +498,10 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // not hold it, so those cost nothing.
         //
         // It writes a card's NUMBERS and never its RANK, and that is a decision rather than an
-        // oversight. `sort=volume` is keyset-paginated on `(volume_coin DESC, id DESC)`
-        // (market.service.ts), so the order belongs to the fetch that produced the page — the
+        // oversight. `sort=recommended` is keyset-paginated on `(24-hour volume DESC, open time
+        // DESC, id DESC)` over the window its first page was read at (market-order.ts, ADR-0065;
+        // the volume order before it was the same on `volume_coin`), so the order belongs to the
+        // fetch that produced the page — the
         // same rule `joinMarketPages` states from the other side ("the page SHAPE comes from
         // `incoming`"), and the same rule list MEMBERSHIP already follows: a market that closes
         // stays in a `status=open` list until the next answer says otherwise. Re-sorting here

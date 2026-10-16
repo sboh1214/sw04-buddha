@@ -2357,12 +2357,12 @@
             "required": false,
             "in": "query",
             "schema": {
-              "default": "volume",
+              "default": "recommended",
               "type": "string",
               "enum": [
-                "volume",
-                "closing",
-                "newest"
+                "recommended",
+                "newest",
+                "closing"
               ]
             }
           },
@@ -2425,7 +2425,7 @@
             }
           }
         },
-        "summary": "Markets by status (default open), never drafts; sorted by volume, closing or newest",
+        "summary": "Markets by status (default open), never drafts; sorted recommended (24-hour volume, then the latest opening; the default), newest (latest opening) or closing (soonest close)",
         "tags": [
           "markets"
         ]
@@ -3716,6 +3716,21 @@
               "maxLength": 50,
               "description": "A category slug on either level; a top-level slug lists every sub-category under it"
             }
+          },
+          {
+            "name": "sort",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": "watched",
+              "type": "string",
+              "enum": [
+                "watched",
+                "recommended",
+                "newest",
+                "closing"
+              ]
+            }
           }
         ],
         "responses": {
@@ -3781,7 +3796,7 @@
             "session": []
           }
         ],
-        "summary": "Markets the account watches, most recently watched first, every public status unless status narrows it (an ended market stays until unwatched); category takes either level like GET /markets",
+        "summary": "Markets the account watches, every public status unless status narrows it (an ended market stays until unwatched); category takes either level like GET /markets; sorted watched (most recently watched first, the default) or by the GET /markets orders",
         "tags": [
           "watchlist"
         ]

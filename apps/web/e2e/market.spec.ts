@@ -151,7 +151,7 @@ test.describe('시장 상세', () => {
       await detailBJoined;
 
       // `?q=<tag>` is a home page holding exactly this market's card, whatever else the
-      // database contains and whichever way the default 거래량 sort would have ranked it.
+      // database contains and whichever way the default 추천 order would have ranked it.
       const homeB = await readerContext.newPage();
       const homeBJoined = subscribed(homeB, market.id);
       await homeB.goto(`/?q=${market.tag}`);

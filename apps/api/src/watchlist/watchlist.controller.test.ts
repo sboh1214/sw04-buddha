@@ -5,10 +5,12 @@
  * cap, the session only (no onboarding check), each change kept as an event and a no-op kept as
  * none, and nobody else's watchlist reachable. Skips when TEST_* are unset.
  */
-import { schema } from '@buddha/db';
-import { createCategory, createMarket, createUser, createWatch } from '@buddha/db/test';
+import { clockTimestamp, schema } from '@buddha/db';
+import { createCategory, createFill, createMarket, createUser, createWatch } from '@buddha/db/test';
 import {
+  MARKET_SORTS,
   PUBLIC_MARKET_STATUSES,
+  WATCHLIST_SORTS,
   errorEnvelopeSchema,
   marketSummarySchema,
   watchStateSchema,
@@ -26,6 +28,9 @@ import { hasTestInfra } from '../test/setup-env.js';
 const TRUSTED_ORIGIN = 'http://localhost:3000';
 
 type ListPage = { data: MarketSummary[]; meta: { nextCursor: string | null } };
+
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
 
 describe.skipIf(!hasTestInfra)('/api/v1/me/watchlist (integration)', () => {
   let t: TestApp;
@@ -351,6 +356,111 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/watchlist (integration)', () => {
     expect(await listedIds('status=settled')).toEqual([]);
 
     for (const query of ['status=draft', 'category=', 'limit=0', 'limit=101']) {
+      const res = await t.app.inject({
+        method: 'GET',
+        url: `/api/v1/me/watchlist?${query}`,
+        headers: { cookie: user.cookie },
+      });
+      expect({ query, status: res.statusCode }).toEqual({ query, status: 400 });
+    }
+  });
+
+  it('orders by 추천 · 신규 · 마감 임박 as GET /markets does, and by the newest watch by default (#63)', async () => {
+    const now = (await clockTimestamp(t.db)).getTime();
+    const weather = await createCategory(t.db, { slug: 'weather', nameKo: '날씨' });
+    // Five watched markets whose three orders all differ, and the busiest market of all, which
+    // nobody watches and so is on no page.
+    const specs = [
+      { volume: 300n, openedAgo: 5, closesIn: 2, watchedAgo: 4 },
+      { volume: 0n, openedAgo: 1, closesIn: 5, watchedAgo: 3 },
+      { volume: 900n, openedAgo: 4, closesIn: 1, watchedAgo: 5 },
+      { volume: 300n, openedAgo: 2, closesIn: 4, watchedAgo: 1 },
+      { volume: 0n, openedAgo: 3, closesIn: 3, watchedAgo: 2 },
+    ];
+    const watched: string[] = [];
+    for (const [index, spec] of specs.entries()) {
+      const m = await market({
+        openAt: new Date(now - spec.openedAgo * HOUR_MS),
+        closeAt: new Date(now + spec.closesIn * DAY_MS),
+        ...(index === 3 ? { categoryId: weather.id } : {}),
+      });
+      if (spec.volume > 0n) {
+        await createFill(t.db, {
+          marketId: m.id,
+          amountCoin: spec.volume,
+          createdAt: new Date(now - HOUR_MS),
+        });
+      }
+      await createWatch(t.db, {
+        userId: user.id,
+        marketId: m.id,
+        watchedAt: new Date(now - spec.watchedAgo * HOUR_MS),
+      });
+      watched.push(m.id);
+    }
+    const busiest = await market({ openAt: new Date(now - HOUR_MS) });
+    await createFill(t.db, { marketId: busiest.id, amountCoin: 99_000n, createdAt: new Date(now) });
+
+    /** Every page of the caller's list in `query`, two at a time. */
+    const walkList = async (query: string) => {
+      const ids: string[] = [];
+      let cursor: string | null = null;
+      let pages = 0;
+      do {
+        const page: ListPage = await list(
+          `${query}&limit=2${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
+        );
+        ids.push(...page.data.map((row) => row.id));
+        cursor = page.meta.nextCursor;
+        pages += 1;
+      } while (cursor !== null && pages < 10);
+      return ids;
+    };
+    const publicOrder = async (sort: string) => {
+      const res = await t.app.inject({ method: 'GET', url: `/api/v1/markets?sort=${sort}` });
+      return res.json<ListPage>().data.map((row) => row.id);
+    };
+
+    // 최근 관심 등록 순, the default: MY's order (ADR-0061 decision 3).
+    const byWatch = [watched[3], watched[4], watched[1], watched[0], watched[2]];
+    expect(await walkList('status=open')).toEqual(byWatch);
+    expect(await walkList('sort=watched')).toEqual(byWatch);
+    // The public three, exactly as the home lists them, the unwatched market left out.
+    for (const sort of MARKET_SORTS) {
+      const expected = (await publicOrder(sort)).filter((id) => watched.includes(id));
+      expect(expected).toHaveLength(5);
+      expect({ sort, ids: await walkList(`sort=${sort}`) }).toEqual({ sort, ids: expected });
+    }
+    // 추천 by its rule: 900, then the two 300s by the latest opening, then the two 0s likewise.
+    expect(await walkList('sort=recommended')).toEqual([
+      watched[2],
+      watched[3],
+      watched[0],
+      watched[1],
+      watched[4],
+    ]);
+    // With the home's filters: open markets of one category, in the order picked.
+    expect(await walkList(`status=open&category=weather&sort=newest`)).toEqual([watched[3]]);
+
+    // A cursor of another shape than the order's serves its first page, as on every list — and so
+    // does a time in year 10000 in any time part (`list` asserts the 200), whose ISO form Postgres
+    // refuses as a timestamptz: the watched-at and close times, the open time, 추천's window end.
+    const uuid = randomUUID();
+    const malformedCursors = [
+      'not-a-cursor',
+      '0_not-a-uuid',
+      `1_2_null_${uuid}x`,
+      `253402300800000_${uuid}`,
+      `253402300800000_0_null_${uuid}`,
+      `1_0_253402300800000_${uuid}`,
+    ];
+    for (const sort of WATCHLIST_SORTS) {
+      for (const malformed of malformedCursors) {
+        const page = await list(`sort=${sort}&cursor=${encodeURIComponent(malformed)}&limit=100`);
+        expect({ sort, malformed, rows: page.data.length }).toEqual({ sort, malformed, rows: 5 });
+      }
+    }
+    for (const query of ['sort=volume', 'sort=']) {
       const res = await t.app.inject({
         method: 'GET',
         url: `/api/v1/me/watchlist?${query}`,

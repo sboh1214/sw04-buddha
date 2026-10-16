@@ -169,6 +169,13 @@
       "when": 1792143036167,
       "tag": "0023_market_watchlist",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1792150541787,
+      "tag": "0024_home_sort_indexes",
+      "breakpoints": true
     }
   ]
 }

@@ -139,9 +139,33 @@ export const PUBLIC_MARKET_STATUSES = [
 export type PublicMarketStatus = (typeof PUBLIC_MARKET_STATUSES)[number];
 export const publicMarketStatusSchema = z.enum(PUBLIC_MARKET_STATUSES);
 
-export const MARKET_SORTS = ['volume', 'closing', 'newest'] as const;
+/**
+ * The public list's orders (ADR-0061 decision 1, items 9–11; ADR-0065), in the order the home's
+ * select lists them:
+ *
+ * - `recommended` (추천, the default): the volume of the last `RECOMMENDED_VOLUME_HOURS` hours,
+ *   largest first, ties by the actual open time, latest first. Counted by a rule, never picked by
+ *   an operator; every fill counts until #132 excludes abnormal ones.
+ * - `newest` (신규): the actual open time (`open_at`), latest first.
+ * - `closing` (마감 임박): the close time, soonest first, with no window.
+ *
+ * Every order ends on the market id. A market with no open time sorts as the earliest open time
+ * there is, so where it lands depends on the order: in `newest` after every market that has one;
+ * in `recommended`, where the open time only breaks ties, after the opened markets of its own
+ * 24-hour volume and nowhere else (a traded one stays ahead of an untraded one); `closing` does
+ * not read the open time. The volume order is gone until #132 brings it back with its exclusions,
+ * so no query names it.
+ */
+export const MARKET_SORTS = ['recommended', 'newest', 'closing'] as const;
 export type MarketSort = (typeof MARKET_SORTS)[number];
 export const marketSortSchema = z.enum(MARKET_SORTS);
+export const DEFAULT_MARKET_SORT = 'recommended' satisfies MarketSort;
+
+/**
+ * The window of 추천 (ADR-0061 decision 1, item 9): the fills of the last 24 hours, counted up to
+ * the instant the first page was read (ADR-0065).
+ */
+export const RECOMMENDED_VOLUME_HOURS = 24;
 
 /**
  * A category slug on either level, as a list filter: a top-level slug lists every sub-category
@@ -159,7 +183,7 @@ export const marketListQuerySchema = cursorQuerySchema.extend({
   /** A category slug on either level: a top-level slug lists every sub-category under it. */
   category: marketCategoryFilterSchema.optional(),
   status: publicMarketStatusSchema.default('open'),
-  sort: marketSortSchema.default('volume'),
+  sort: marketSortSchema.default(DEFAULT_MARKET_SORT),
   /** Title search. */
   q: z.string().trim().min(1).max(100).optional(),
 });

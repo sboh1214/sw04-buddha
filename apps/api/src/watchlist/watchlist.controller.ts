@@ -41,9 +41,9 @@ export class MeWatchlistController {
   @ApiOperation({
     operationId: 'getMyWatchlist',
     summary:
-      'Markets the account watches, most recently watched first, every public status unless ' +
-      'status narrows it (an ended market stays until unwatched); category takes either level ' +
-      'like GET /markets',
+      'Markets the account watches, every public status unless status narrows it (an ended ' +
+      'market stays until unwatched); category takes either level like GET /markets; sorted ' +
+      'watched (most recently watched first, the default) or by the GET /markets orders',
   })
   @ApiPageOf(marketSummarySchema)
   @ApiErrors('UNAUTHENTICATED', 'VALIDATION_ERROR')

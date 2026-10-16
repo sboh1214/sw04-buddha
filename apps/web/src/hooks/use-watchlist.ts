@@ -20,10 +20,10 @@ import { type MarketPage } from '@/lib/market-live';
 import { useSession } from '@/lib/use-session';
 
 /**
- * 관심 시장 (#89, ADR-0064): MY's list and the detail's button. Both are private — the root is in
- * `PRIVATE_QUERY_ROOTS`, so neither is ever dehydrated into a page — and both wait for the session
- * like `useOrders` (use-portfolio.ts): the routes need the cookie, and a signed-out request would
- * take a 401 the retry rule refuses to retry.
+ * 관심 시장 (#89, ADR-0064): MY's list, the home's 관심 시장 view (#63, ADR-0065) and the detail's
+ * button. All are private — the root is in `PRIVATE_QUERY_ROOTS`, so none is ever dehydrated into
+ * a page — and all wait for the session like `useOrders` (use-portfolio.ts): the routes need the
+ * cookie, and a signed-out request would take a 401 the retry rule refuses to retry.
  *
  * The query and mutation options are exported apart from the hooks so they can be tested under
  * the node runner (use-watchlist.test.ts), as use-contact.ts does.
@@ -33,7 +33,8 @@ import { useSession } from '@/lib/use-session';
 type SessionLike = { user: unknown } | null;
 
 /**
- * `GET /me/watchlist`, newest watch first, one page per 더 보기 press — the `useOrders` idiom. The
+ * `GET /me/watchlist` in the order the filters name (newest watch first when they name none, as
+ * MY's do), one page per 더 보기 press — the `useOrders` idiom. The
  * pages are `MarketSummary` rows in the home grid's page shape, so the realtime provider writes a
  * `market:tick` or a `market:status` into them as it does into `['markets', …]`, and the list's
  * `structuralSharing` (query-client.ts) keeps a late refetch from rolling a card back. A filter
@@ -52,6 +53,7 @@ export function watchlistInfiniteQueryOptions(
             query: {
               ...(filters.status === undefined ? {} : { status: filters.status }),
               ...(filters.category === undefined ? {} : { category: filters.category }),
+              ...(filters.sort === undefined ? {} : { sort: filters.sort }),
               ...(pageParam === undefined ? {} : { cursor: pageParam }),
             },
           },
@@ -65,7 +67,12 @@ export function watchlistInfiniteQueryOptions(
   };
 }
 
-/** MY's 관심 시장 list; `isPending` covers the session lookup too, as `useOrders` does. */
+/**
+ * MY's 관심 시장 list (`{}`) and the home's 관심 시장 view (`watchlistViewFilters`, lib/home-view.ts:
+ * open markets, a category, the order picked) — one hook, so a change to its options reaches both
+ * screens. `isPending` covers the session lookup too, as `useOrders` does; the home's view waits on
+ * it (`WatchlistViewList`, app/market-list.tsx).
+ */
 export function useWatchlist(filters: WatchlistFilters = {}) {
   const { data: session, isPending: sessionPending } = useSession();
   const query = useInfiniteQuery(watchlistInfiniteQueryOptions(filters, session));

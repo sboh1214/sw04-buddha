@@ -251,39 +251,39 @@ describe('the market detail cache', () => {
 describe('the market list caches', () => {
   it('patches every filter holding the market and leaves the other pages untouched', () => {
     const queryClient = getQueryClient();
-    const byVolume = marketsKey(DEFAULT_MARKET_FILTERS);
+    const recommended = marketsKey(DEFAULT_MARKET_FILTERS);
     const byNewest = marketsKey({ ...DEFAULT_MARKET_FILTERS, sort: 'newest' });
-    queryClient.setQueryData<MarketPages>(byVolume, pagesOf([card], [otherCard]));
+    queryClient.setQueryData<MarketPages>(recommended, pagesOf([card], [otherCard]));
     queryClient.setQueryData<MarketPages>(byNewest, pagesOf([otherCard, card]));
-    const untouched = queryClient.getQueryData<MarketPages>(byVolume)?.pages[1];
+    const untouched = queryClient.getQueryData<MarketPages>(recommended)?.pages[1];
     expect(untouched?.items[0]?.id).toBe(OTHER_ID);
 
     queryClient.setQueriesData<MarketPages>({ queryKey: MARKETS_KEY }, (held) =>
       applyToPages(held, (row) => applyTick(row, tick())),
     );
 
-    const volumePages = queryClient.getQueryData<MarketPages>(byVolume);
+    const recommendedPages = queryClient.getQueryData<MarketPages>(recommended);
     const newestPages = queryClient.getQueryData<MarketPages>(byNewest);
-    expect(volumePages?.pages[0]?.items[0]?.lastPrice).toBe(63);
+    expect(recommendedPages?.pages[0]?.items[0]?.lastPrice).toBe(63);
     expect(newestPages?.pages[0]?.items[1]?.lastPrice).toBe(63);
-    // Sorted by volume it is still the first card, so only its own page was rebuilt.
-    expect(volumePages?.pages[1]).toBe(untouched);
+    // Under 추천 it is still the first card, so only its own page was rebuilt.
+    expect(recommendedPages?.pages[1]).toBe(untouched);
     queryClient.clear();
   });
 
   it('writes nothing at all for a market no cached page holds', () => {
     const queryClient = getQueryClient();
-    const byVolume = marketsKey(DEFAULT_MARKET_FILTERS);
-    queryClient.setQueryData<MarketPages>(byVolume, pagesOf([card], [otherCard]));
-    const before = queryClient.getQueryState(byVolume)?.dataUpdatedAt;
-    const held = queryClient.getQueryData<MarketPages>(byVolume);
+    const recommended = marketsKey(DEFAULT_MARKET_FILTERS);
+    queryClient.setQueryData<MarketPages>(recommended, pagesOf([card], [otherCard]));
+    const before = queryClient.getQueryState(recommended)?.dataUpdatedAt;
+    const held = queryClient.getQueryData<MarketPages>(recommended);
 
     queryClient.setQueriesData<MarketPages>({ queryKey: MARKETS_KEY }, (pages) =>
       applyToPages(pages, (row) => applyTick(row, tick({ marketId: THIRD_ID }))),
     );
 
-    expect(queryClient.getQueryState(byVolume)?.dataUpdatedAt).toBe(before);
-    expect(queryClient.getQueryData<MarketPages>(byVolume)).toBe(held);
+    expect(queryClient.getQueryState(recommended)?.dataUpdatedAt).toBe(before);
+    expect(queryClient.getQueryData<MarketPages>(recommended)).toBe(held);
     queryClient.clear();
   });
 });

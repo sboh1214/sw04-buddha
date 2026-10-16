@@ -8,7 +8,7 @@ import { useCategories } from '@/hooks/use-markets';
 import { type Category } from '@/lib/api';
 import { groupCategories } from '@/lib/category-tree';
 import { type SidebarLink, sidebarLinks } from '@/lib/home-view';
-import { type MarketFilters } from '@/lib/market-keys';
+import { type HomeFilters } from '@/lib/market-keys';
 import { HEADER_HEIGHT_PX } from '@/lib/nav';
 
 /**
@@ -19,7 +19,7 @@ import { HEADER_HEIGHT_PX } from '@/lib/nav';
  *
  * The rows come from `sidebarLinks` (lib/home-view.ts), which is where the decisions live and
  * are tested: which slug the 전체 시장 row points at, which row is current, and that the sort, the
- * status and a search term ride along on every row. This file only draws them.
+ * 관심 시장 view and a search term ride along on every row. This file only draws them.
  *
  * The categories arrive twice, exactly as in market-filters.tsx: as the server-read PROP, which
  * is what puts the sidebar in the first paint, and from `useCategories()` afterwards, which is
@@ -35,7 +35,7 @@ import { HEADER_HEIGHT_PX } from '@/lib/nav';
 
 export interface SubcategorySidebarProps {
   /** Normalised once on the server; the current row is read from here. */
-  filters: MarketFilters;
+  filters: HomeFilters;
   /** Read by the server component for the first paint; absent if that read failed. */
   categories?: Category[];
 }

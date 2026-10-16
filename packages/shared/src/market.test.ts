@@ -6,9 +6,12 @@ import {
   MARKET_SLUG_STEM_MAX,
   TICKS_MAX_POINTS,
 } from './constants.js';
+import { findExcludedIdentifier } from './guards/excluded.js';
 import {
+  DEFAULT_MARKET_SORT,
   MARKET_SORTS,
   PUBLIC_MARKET_STATUSES,
+  RECOMMENDED_VOLUME_HOURS,
   adminMarketListQuerySchema,
   adminMarketSchema,
   categorySchema,
@@ -248,8 +251,12 @@ describe('read DTOs', () => {
 
 // ---- list queries --------------------------------------------------------------------
 describe('marketListQuerySchema', () => {
-  it('defaults to open markets by volume and coerces the page size', () => {
-    expect(marketListQuerySchema.parse({})).toEqual({ limit: 20, status: 'open', sort: 'volume' });
+  it('defaults to open markets by 추천 and coerces the page size', () => {
+    expect(marketListQuerySchema.parse({})).toEqual({
+      limit: 20,
+      status: 'open',
+      sort: 'recommended',
+    });
     expect(
       marketListQuerySchema.parse({
         category: 'weather',
@@ -273,9 +280,20 @@ describe('marketListQuerySchema', () => {
     expect(PUBLIC_MARKET_STATUSES).not.toContain('draft');
     expect(marketListQuerySchema.safeParse({ status: 'draft' }).success).toBe(false);
     expect(marketListQuerySchema.safeParse({ sort: 'price' }).success).toBe(false);
+    // The volume order is gone until #132 brings it back with its exclusions (ADR-0061 decision
+    // 1, item 11): no URL can ask for it.
+    expect(marketListQuerySchema.safeParse({ sort: 'volume' }).success).toBe(false);
     expect(marketListQuerySchema.safeParse({ q: '' }).success).toBe(false);
     expect(marketListQuerySchema.safeParse({ q: 'x'.repeat(101) }).success).toBe(false);
     for (const sort of MARKET_SORTS) expect(marketListQuerySchema.parse({ sort }).sort).toBe(sort);
+  });
+
+  it('lists 추천 · 신규 · 마감 임박 in that order, 추천 first and the default (ADR-0065)', () => {
+    expect(MARKET_SORTS).toEqual(['recommended', 'newest', 'closing']);
+    expect(DEFAULT_MARKET_SORT).toBe('recommended');
+    expect(RECOMMENDED_VOLUME_HOURS).toBe(24);
+    // The names are API identifiers: none may name an excluded feature (no rank or score).
+    for (const sort of MARKET_SORTS) expect(findExcludedIdentifier(sort, 'api')).toEqual([]);
   });
 
   it('admin list takes any status, draft included, or none', () => {

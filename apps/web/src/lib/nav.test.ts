@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { type Category } from './api';
 import { groupCategories } from './category-tree';
+import { filtersFromSearchParams } from './market-ssr';
 import {
   type PrimaryNavKey,
+  categoryLinkQuery,
   currentSearchTerm,
   currentTopLevelSlug,
   isAllCategoriesCurrent,
@@ -153,22 +155,108 @@ describe('currentTopLevelSlug', () => {
 });
 
 describe('currentSearchTerm', () => {
+  const url = (search: string) => new URLSearchParams(search);
+
   it("is the home list's own term, trimmed the way the list trims it", () => {
-    expect(currentSearchTerm('/', 'rain')).toBe('rain');
-    expect(currentSearchTerm('/', '  rain  ')).toBe('rain');
+    expect(currentSearchTerm('/', url('q=rain'))).toBe('rain');
+    expect(currentSearchTerm('/', url(`q=${encodeURIComponent('  rain  ')}`))).toBe('rain');
+    // Another filter beside it changes nothing: the public list searches within it.
+    expect(currentSearchTerm('/', url('q=rain&category=weather&sort=newest'))).toBe('rain');
   });
 
   it('is undefined for no search, a blank one, or one the list would refuse', () => {
-    expect(currentSearchTerm('/', null)).toBeUndefined();
-    expect(currentSearchTerm('/', undefined)).toBeUndefined();
-    expect(currentSearchTerm('/', '')).toBeUndefined();
-    expect(currentSearchTerm('/', '   ')).toBeUndefined();
-    expect(currentSearchTerm('/', 'a'.repeat(101))).toBeUndefined();
+    expect(currentSearchTerm('/', url(''))).toBeUndefined();
+    expect(currentSearchTerm('/', url('q='))).toBeUndefined();
+    expect(currentSearchTerm('/', url('q=%20%20%20'))).toBeUndefined();
+    expect(currentSearchTerm('/', url(`q=${'a'.repeat(101)}`))).toBeUndefined();
+  });
+
+  it('is undefined in the 관심 시장 view, which drops the term (ADR-0065)', () => {
+    // A hand-edited `/?watchlist=1&q=rain` lists every watched open market; a box that said
+    // 'rain' would describe a search the list is not applying.
+    expect(currentSearchTerm('/', url('watchlist=1&q=rain'))).toBeUndefined();
+    expect(currentSearchTerm('/', url('q=rain&category=economy&watchlist=1'))).toBeUndefined();
+    // Only `1` turns the view on, so any other value is the public list and its search.
+    expect(currentSearchTerm('/', url('watchlist=yes&q=rain'))).toBe('rain');
   });
 
   it('is undefined off the home route, whatever the URL carries', () => {
     // A `q` on /community filters nothing; the box must not claim a search that is not shown.
-    expect(currentSearchTerm('/community', 'rain')).toBeUndefined();
-    expect(currentSearchTerm('/markets/btc-100k', 'rain')).toBeUndefined();
+    expect(currentSearchTerm('/community', url('q=rain'))).toBeUndefined();
+    expect(currentSearchTerm('/markets/btc-100k', url('q=rain'))).toBeUndefined();
+  });
+});
+
+describe('categoryLinkQuery', () => {
+  const url = (search: string) => new URLSearchParams(search);
+
+  it('is a fresh ?category= outside the 관심 시장 view, whatever else the URL carries', () => {
+    // A way INTO the list (ADR-0041): the sort and a search term are left behind.
+    for (const search of [
+      '',
+      'sort=newest',
+      'q=rain&sort=closing&category=weather',
+      'watchlist=yes',
+    ]) {
+      expect(categoryLinkQuery('/', url(search), 'economy'), search).toEqual({
+        category: 'economy',
+      });
+      expect(categoryLinkQuery('/', url(search), undefined), search).toEqual({});
+    }
+  });
+
+  it('keeps the 관심 시장 view on, with its order, and changes only the category (owner decision 2026-10-16)', () => {
+    expect(categoryLinkQuery('/', url('sort=newest&watchlist=1'), 'economy')).toEqual({
+      category: 'economy',
+      sort: 'newest',
+      watchlist: '1',
+    });
+    // From one category to another, and 전체 widens back out of it, still in the view.
+    expect(
+      categoryLinkQuery('/', url('category=housing&sort=closing&watchlist=1'), 'weather'),
+    ).toEqual({
+      category: 'weather',
+      sort: 'closing',
+      watchlist: '1',
+    });
+    expect(
+      categoryLinkQuery('/', url('category=housing&sort=closing&watchlist=1'), undefined),
+    ).toEqual({
+      sort: 'closing',
+      watchlist: '1',
+    });
+    // The view's own first order stays out of the URL, as the view writes it (filterQuery).
+    expect(categoryLinkQuery('/', url('watchlist=1'), 'economy')).toEqual({
+      category: 'economy',
+      watchlist: '1',
+    });
+    expect(categoryLinkQuery('/', url('watchlist=1&sort=watched'), undefined)).toEqual({
+      watchlist: '1',
+    });
+  });
+
+  it('reads the view the way the list does: an order it does not know, and the term it drops', () => {
+    // `volume` is no order (ADR-0061 decision 1, item 11): the list is on 최근 관심 등록 순, and
+    // so is the link. The view has no search, so a hand-edited `q` goes nowhere.
+    expect(categoryLinkQuery('/', url('watchlist=1&sort=volume&q=rain'), 'economy')).toEqual({
+      category: 'economy',
+      watchlist: '1',
+    });
+  });
+
+  it('lands on the view it names, as the home normalises it', () => {
+    const query = categoryLinkQuery('/', url('sort=recommended&watchlist=1'), 'economy');
+    expect(filtersFromSearchParams(query)).toEqual({
+      watchlist: true,
+      sort: 'recommended',
+      category: 'economy',
+    });
+  });
+
+  it('is the plain link off the home route, where a ?watchlist=1 shows no list', () => {
+    expect(
+      categoryLinkQuery('/markets/btc-100k', url('watchlist=1&sort=newest'), 'economy'),
+    ).toEqual({ category: 'economy' });
+    expect(categoryLinkQuery('/markets/btc-100k', url('watchlist=1'), undefined)).toEqual({});
   });
 });

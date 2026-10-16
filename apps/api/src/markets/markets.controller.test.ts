@@ -3,11 +3,13 @@
  * filters and the three sort-specific keysets, id/slug lookup, fills, ticks, categories.
  * Skips when TEST_* are unset.
  */
-import { schema } from '@buddha/db';
-import { createCategory, createMarket, createUser } from '@buddha/db/test';
+import { clockTimestamp, schema } from '@buddha/db';
+import { createCategory, createFill, createMarket, createUser } from '@buddha/db/test';
 import {
+  CURSOR_NULL,
   FILLS_RECENT_LIMIT,
   MARKET_SLUG_MAX,
+  MARKET_SORTS,
   TICKS_MAX_POINTS,
   TICKS_SCAN_MAX,
   type Category,
@@ -19,13 +21,15 @@ import {
   type PriceSeries,
 } from '@buddha/shared';
 import { randomUUID } from 'node:crypto';
-import { eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { MAX_PARAM_LENGTH } from '../infra/http/fastify-options.js';
 import { createTestApp, type TestApp } from '../test/app.js';
+import { marketOrder } from './market-order.js';
 import { hasTestInfra } from '../test/setup-env.js';
 
 type ListPage = { data: MarketSummary[]; meta: { nextCursor: string | null } };
+type MarketRowLike = { id: string; openAt: Date | null };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
@@ -65,9 +69,13 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
 
   const iso = (ms: number) => new Date(ms).toISOString();
 
-  /** Follows `meta.nextCursor` to the end and returns every id in page order. */
-  async function walk(url: string): Promise<string[]> {
+  /**
+   * Follows `meta.nextCursor` to the end: every id in page order, and every cursor it followed
+   * (each page's but the last).
+   */
+  async function walkPages(url: string): Promise<{ ids: string[]; cursors: string[] }> {
     const ids: string[] = [];
+    const cursors: string[] = [];
     let cursor: string | null = null;
     let pages = 0;
     do {
@@ -76,10 +84,16 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
       const page = res.json<ListPage>();
       ids.push(...page.data.map((row) => row.id));
       cursor = page.meta.nextCursor;
+      if (cursor) cursors.push(cursor);
       pages += 1;
       if (pages > 50) throw new Error(`cursor never ended for ${url}`);
     } while (cursor);
-    return ids;
+    return { ids, cursors };
+  }
+
+  /** `walkPages`' ids alone. */
+  async function walk(url: string): Promise<string[]> {
+    return (await walkPages(url)).ids;
   }
 
   /**
@@ -236,56 +250,345 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     expect(tooLong.statusCode).toBe(400);
   });
 
-  it('paginates every sort without gaps or repeats across 26 markets with ties', async () => {
-    // Ties on both sort keys (volume and close time) and, likely, on created_at: the id half of
-    // the keyset is what keeps a page boundary inside a tie from skipping or repeating a row.
-    const base = Date.now() + DAY_MS;
-    for (let i = 0; i < 26; i += 1) {
-      await market({
-        volumeCoin: BigInt(Math.floor(i / 2) * 1_000),
-        closeAt: new Date(base + Math.floor(i / 3) * 60 * 60 * 1000),
-      });
-    }
-    await market({ status: 'draft' }); // never listed, whatever the sort
-    const rows = await t.db.select().from(schema.markets);
-    const open = rows.filter((row) => row.status === 'open');
-    expect(open).toHaveLength(26);
+  const byId = (a: { id: string }, b: { id: string }) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  /** 신규 in JS, for the expectations (ADR-0065): latest opening first, none last, then the id. */
+  const latestOpening = (a: MarketRowLike, b: MarketRowLike) => {
+    const opened = (row: MarketRowLike) => row.openAt?.getTime() ?? -Infinity;
+    return opened(a) === opened(b) ? byId(b, a) : opened(b) > opened(a) ? 1 : -1;
+  };
 
-    const byId = (a: { id: string }, b: { id: string }) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  it('paginates every sort without gaps or repeats across 27 markets with ties', async () => {
+    // Ties on every key — the 24-hour volume, the open time and the close time — so a page
+    // boundary falls inside a tie for each order: the id half of the keyset is what keeps it
+    // from skipping or repeating a row. One public market has no open time and no fill: 신규 puts
+    // it last, and so does 추천 here only because it is untraded — the open time is 추천's
+    // tie-break, so it is last among the markets of its own 24-hour volume (the next test has a
+    // traded one ahead of untraded ones). Pages of 7 over 27 rows end inside a tie on each key.
+    const now = await clockTimestamp(t.db);
+    const base = now.getTime();
+    const taker = (await createUser(t.db)).user.id;
+    const maker = (await createUser(t.db)).user.id;
+    const volume = new Map<string, bigint>();
+    for (let i = 0; i < 26; i += 1) {
+      const m = await market({
+        openAt: new Date(base - 10 * DAY_MS + Math.floor(i / 4) * HOUR_MS),
+        closeAt: new Date(base + DAY_MS + Math.floor(i / 3) * HOUR_MS),
+        // The lifetime volume the card carried, ordered the other way round: 추천 must not
+        // read it (ADR-0061 decision 1, item 9 — the last 24 hours).
+        volumeCoin: BigInt(i * 7_000),
+      });
+      const amount = BigInt(Math.floor((25 - i) / 2) * 1_000);
+      volume.set(m.id, amount);
+      if (amount === 0n) continue;
+      // Two fills for some, so the volume is a SUM and not the last fill's amount.
+      const parts = i % 5 === 0 ? [amount / 2n, amount - amount / 2n] : [amount];
+      for (const amountCoin of parts) {
+        await createFill(t.db, {
+          marketId: m.id,
+          amountCoin,
+          createdAt: new Date(base - HOUR_MS),
+          userId: taker,
+          makerId: maker,
+        });
+      }
+    }
+    const unopened = await market({ openAt: null, closeAt: new Date(base + 2 * DAY_MS) });
+    volume.set(unopened.id, 0n);
+    await market({ status: 'draft' }); // never listed, whatever the sort
+    const open = (await t.db.select().from(schema.markets)).filter((row) => row.status === 'open');
+    expect(open).toHaveLength(27);
+
     const expected = {
-      volume: [...open]
-        .sort((a, b) =>
-          a.volumeCoin === b.volumeCoin ? byId(b, a) : a.volumeCoin > b.volumeCoin ? -1 : 1,
-        )
+      recommended: [...open]
+        .sort((a, b) => {
+          const va = volume.get(a.id)!;
+          const vb = volume.get(b.id)!;
+          return va === vb ? latestOpening(a, b) : va > vb ? -1 : 1;
+        })
         .map((row) => row.id),
+      newest: [...open].sort(latestOpening).map((row) => row.id),
       closing: [...open]
         .sort((a, b) => a.closeAt.getTime() - b.closeAt.getTime() || byId(a, b))
         .map((row) => row.id),
-      newest: [...open]
-        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || byId(b, a))
-        .map((row) => row.id),
     };
+    expect(expected.recommended.at(-1)).toBe(unopened.id);
+    expect(expected.newest.at(-1)).toBe(unopened.id);
 
-    for (const sort of ['volume', 'closing', 'newest'] as const) {
+    for (const sort of MARKET_SORTS) {
       const ids = await walk(`/api/v1/markets?sort=${sort}&limit=7`);
-      expect({ sort, count: ids.length }).toEqual({ sort, count: 26 });
-      expect({ sort, unique: new Set(ids).size }).toEqual({ sort, unique: 26 });
+      expect({ sort, count: ids.length }).toEqual({ sort, count: 27 });
+      expect({ sort, unique: new Set(ids).size }).toEqual({ sort, unique: 27 });
       expect({ sort, ids }).toEqual({ sort, ids: expected[sort] });
     }
-    // Default sort is volume.
+    // The default sort is 추천 (ADR-0061 decision 1, item 10).
     expect((await get('/api/v1/markets?limit=3')).json<ListPage>().data.map((r) => r.id)).toEqual(
-      expected.volume.slice(0, 3),
+      expected.recommended.slice(0, 3),
     );
   });
 
-  it('serves the first page for a malformed cursor instead of a 500', async () => {
+  it('counts 추천 over the last 24 hours of fills only, ties by the latest opening', async () => {
+    const now = (await clockTimestamp(t.db)).getTime();
+    const fill = (marketId: string, amountCoin: bigint, ageMs: number) =>
+      createFill(t.db, { marketId, amountCoin, createdAt: new Date(now - ageMs) });
+    // In the window by a minute, and out of it by a minute: the old fill is the larger one.
+    const recent = await market({ openAt: new Date(now - 3 * DAY_MS) });
+    await fill(recent.id, 500n, DAY_MS - 60_000);
+    await fill(recent.id, 10_000n, DAY_MS + 60_000);
+    // A lifetime volume far above everything else, all of it older than a day.
+    const old = await market({ openAt: new Date(now - 3 * DAY_MS), volumeCoin: 1_000_000n });
+    await fill(old.id, 1_000_000n, 2 * DAY_MS);
+    const fresh = await market({ openAt: new Date(now - 3 * DAY_MS) });
+    await fill(fresh.id, 300n, 60_000);
+    // No fill at all: 0, ordered among themselves by the actual open time, latest first, and the
+    // one with none last.
+    const openedLater = await market({ openAt: new Date(now - HOUR_MS) });
+    const openedEarlier = await market({ openAt: new Date(now - 2 * HOUR_MS) });
+    // No open time: after every market of its volume that has one, then by the id. Three of them,
+    // so a page of one ends on an unopened market with another still to come and its cursor says
+    // `null` for the open time (`CURSOR_NULL`); one of them traded, so such a cursor also falls
+    // between two volumes. No public market lacks an open time on today's paths (market-order.ts),
+    // so this is the one place the NULL cursor reaches the database.
+    const unopenedTraded = await market({ openAt: null });
+    await fill(unopenedTraded.id, 300n, 60_000);
+    const unopened = [await market({ openAt: null }), await market({ openAt: null })]
+      .map((row) => row.id)
+      .sort()
+      .reverse();
+    // A fill of another status's market changes nothing here.
+    const closed = await market({ status: 'closed' });
+    await fill(closed.id, 9_000n, 60_000);
+
+    const expected = [
+      recent.id,
+      fresh.id,
+      unopenedTraded.id,
+      openedLater.id,
+      openedEarlier.id,
+      old.id,
+      ...unopened,
+    ];
+    const page = (await get('/api/v1/markets?sort=recommended')).json<ListPage>();
+    expect(page.data.map((row) => row.id)).toEqual(expected);
+    // Page by page, the same order: each unopened market exactly once, the walk carrying on past
+    // every one of them — a NULL cursor read as any time at all would repeat or loop.
+    const paged = await walkPages('/api/v1/markets?sort=recommended&limit=1');
+    expect(paged.ids).toEqual(expected);
+    const unopenedCursors = paged.cursors
+      .map((cursor) => cursor.split('_'))
+      .filter((parts) => parts[2] === CURSOR_NULL)
+      .map((parts) => ({ volume: parts[1], id: parts[3] }));
+    expect(unopenedCursors).toEqual([
+      { volume: '300', id: unopenedTraded.id },
+      { volume: '0', id: unopened[0] },
+    ]);
+    // The card still carries the lifetime volume the detail shows; 추천 only orders by the day's.
+    expect(page.data.find((row) => row.id === old.id)?.volumeCoin).toBe('1000000');
+    // The status filter applies as before.
+    expect(
+      (await get('/api/v1/markets?sort=recommended&status=closed')).json<ListPage>().data,
+    ).toEqual([expect.objectContaining({ id: closed.id })]);
+  });
+
+  it('counts 추천 over (asOf − 24h, asOf]: a fill exactly a day before the window end is out, one at it is in', async () => {
+    // A hand-made cursor names the window end (ADR-0065: any cursor that decodes is legal), so
+    // fills can sit on its two edges to the millisecond. The rest of it sorts after every market
+    // — the largest int8 volume, the last open time a cursor may name, the largest uuid — so its
+    // page is the whole list counted at `windowEnd`.
+    const now = (await clockTimestamp(t.db)).getTime();
+    const windowEnd = now - 2 * HOUR_MS;
+    const openAt = new Date(now - 3 * DAY_MS);
+    const atStart = await market({ openAt });
+    await createFill(t.db, {
+      marketId: atStart.id,
+      amountCoin: 1_000n,
+      createdAt: new Date(windowEnd - DAY_MS),
+    });
+    const justInside = await market({ openAt });
+    await createFill(t.db, {
+      marketId: justInside.id,
+      amountCoin: 10n,
+      createdAt: new Date(windowEnd - DAY_MS + 1),
+    });
+    const atEnd = await market({ openAt });
+    await createFill(t.db, {
+      marketId: atEnd.id,
+      amountCoin: 100n,
+      createdAt: new Date(windowEnd),
+    });
+    const justAfter = await market({ openAt });
+    await createFill(t.db, {
+      marketId: justAfter.id,
+      amountCoin: 10_000n,
+      createdAt: new Date(windowEnd + 1),
+    });
+
+    const cursor = [
+      String(windowEnd),
+      '9223372036854775807',
+      '253402300799999',
+      'ffffffff-ffff-4fff-bfff-ffffffffffff',
+    ].join('_');
+    const res = await get(`/api/v1/markets?sort=recommended&cursor=${encodeURIComponent(cursor)}`);
+    expect(res.statusCode).toBe(200);
+    // The fill at the window end counts and the one a millisecond inside the start does; the
+    // one exactly a day before the end and the one after it do not, so those two markets have
+    // 0 and tie, the same open time, by the id.
+    expect(res.json<ListPage>().data.map((row) => row.id)).toEqual([
+      atEnd.id,
+      justInside.id,
+      ...[atStart.id, justAfter.id].sort().reverse(),
+    ]);
+  });
+
+  it('pages 추천 over the window of its first page, so a moving clock or a new fill cannot repeat or skip a market', async () => {
+    const now = (await clockTimestamp(t.db)).getTime();
+    // A fill that leaves the 24-hour window about a second from now: in it when the first page
+    // is read, out of it by the time the second is.
+    const leaving = await market({ openAt: new Date(now - 3 * HOUR_MS) });
+    await createFill(t.db, {
+      marketId: leaving.id,
+      amountCoin: 700n,
+      createdAt: new Date(now - DAY_MS + 1_000),
+    });
+    const steady = await market({ openAt: new Date(now - 2 * HOUR_MS) });
+    await createFill(t.db, { marketId: steady.id, amountCoin: 500n, createdAt: new Date(now) });
+    const idle = await market({ openAt: new Date(now - HOUR_MS) });
+
+    const first = (await get('/api/v1/markets?sort=recommended&limit=1')).json<ListPage>();
+    expect(first.data.map((row) => row.id)).toEqual([leaving.id]);
+    const cursor = first.meta.nextCursor!;
+    // The cursor carries the window end the first page was counted at (ADR-0065).
+    const asOf = Number(cursor.split('_')[0]);
+    expect(asOf).toBeGreaterThan(now - 1_000);
+
+    // The first fill ages out, and a new one lands on the idle market after the first page.
+    await new Promise((resolve) => setTimeout(resolve, 1_200));
+    await createFill(t.db, {
+      marketId: idle.id,
+      amountCoin: 2_000n,
+      createdAt: new Date(asOf + 1_000),
+    });
+    expect((await clockTimestamp(t.db)).getTime()).toBeGreaterThan(now + 1_000);
+
+    // Counted live, the second page would hold `leaving` again (now 0, after the cursor's 700)
+    // and lose `idle` (now 2,000, before it). Over the first page's window it is the rest of
+    // that page's order.
+    const rest: string[] = [];
+    let next: string | null = cursor;
+    while (next !== null) {
+      const page: ListPage = (
+        await get(`/api/v1/markets?sort=recommended&limit=1&cursor=${encodeURIComponent(next)}`)
+      ).json<ListPage>();
+      rest.push(...page.data.map((row) => row.id));
+      next = page.meta.nextCursor;
+    }
+    expect(rest).toEqual([steady.id, idle.id]);
+
+    // A first page read now counts the window of now.
+    const fresh = (await get('/api/v1/markets?sort=recommended')).json<ListPage>();
+    expect(fresh.data.map((row) => row.id)).toEqual([idle.id, steady.id, leaving.id]);
+  });
+
+  it('orders 신규 by the actual open time, not by when the market was made', async () => {
+    const now = (await clockTimestamp(t.db)).getTime();
+    // Made first, opened last: an admin who opens a draft a week after writing it.
+    const madeFirst = await market({ openAt: new Date(now - HOUR_MS) });
+    const madeSecond = await market({ openAt: new Date(now - 2 * HOUR_MS) });
+    const unopened = [await market({ openAt: null })];
+    const madeLast = await market({ openAt: new Date(now - 3 * HOUR_MS) });
+    expect(madeLast.createdAt.getTime()).toBeGreaterThanOrEqual(madeFirst.createdAt.getTime());
+    // No open time: after every market that has one, by the id. Three, so pages of one end on an
+    // unopened market with more to come, and the cursor says `null` for its open time
+    // (`CURSOR_NULL`, '-infinity' in the predicate): the walk must carry on past each one, once.
+    unopened.push(await market({ openAt: null }), await market({ openAt: null }));
+    const unopenedIds = unopened
+      .map((row) => row.id)
+      .sort()
+      .reverse();
+
+    const { ids, cursors } = await walkPages('/api/v1/markets?sort=newest&limit=1');
+    expect(ids).toEqual([madeFirst.id, madeSecond.id, madeLast.id, ...unopenedIds]);
+    expect(cursors.filter((cursor) => cursor.startsWith(`${CURSOR_NULL}_`))).toEqual(
+      unopenedIds.slice(0, 2).map((id) => `${CURSOR_NULL}_${id}`),
+    );
+  });
+
+  it('reads 신규 off markets_status_open_at_id_idx, its cursor an Index Cond (migration 0024)', async () => {
+    // The index holds `coalesce(open_at, '-infinity')` and market-order.ts spells the same
+    // expression in another package; if the two drifted apart the planner could no longer use
+    // the index, and a deep page would scan every open market before it. A handful of rows
+    // never makes an index the cheapest plan, so sequential and bitmap scans are switched off
+    // for this one transaction: what is left is whether the index CAN serve the page.
+    const now = (await clockTimestamp(t.db)).getTime();
+    for (let i = 0; i < 3; i += 1) await market({ openAt: new Date(now - i * HOUR_MS) });
+    const plan = await t.db.transaction(async (tx) => {
+      await tx.execute(sql`SET LOCAL enable_seqscan = off`);
+      await tx.execute(sql`SET LOCAL enable_bitmapscan = off`);
+      const order = marketOrder(tx, 'newest', `${String(now)}_${randomUUID()}`);
+      const query = tx
+        .select({ id: schema.markets.id })
+        .from(schema.markets)
+        .where(and(eq(schema.markets.status, 'open'), order.after))
+        .orderBy(...order.orderBy)
+        .limit(21);
+      const { rows } = await tx.execute<{ 'QUERY PLAN': string }>(
+        sql`EXPLAIN SELECT * FROM (${query}) AS page`,
+      );
+      return rows.map((row) => row['QUERY PLAN']).join('\n');
+    });
+    expect(plan).toContain('markets_status_open_at_id_idx');
+    expect(plan).toMatch(/Index Cond: .*ROW\(COALESCE\(open_at/);
+    expect(plan).not.toContain('Sort');
+  });
+
+  it('refuses the volume order: it is gone until #132 (ADR-0061 decision 1, item 11)', async () => {
+    const res = await get('/api/v1/markets?sort=volume');
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR' } });
+  });
+
+  it('serves the first page for a malformed or foreign cursor instead of a 500', async () => {
     await market();
-    for (const sort of ['volume', 'closing', 'newest']) {
-      for (const cursor of ['0_not-a-uuid', 'x_y', '99999999999999999999_' + randomUUID()]) {
+    const uuid = randomUUID();
+    const malformed = [
+      '0_not-a-uuid',
+      'x_y',
+      `99999999999999999999_${uuid}`,
+      // A time in year 10000: a Date, but its ISO form ('+010000-01-01T…') is one Postgres
+      // refuses as a timestamptz (22009), so it must not get past the decoder — for 마감 임박's
+      // close time and 신규's open time.
+      `253402300800000_${uuid}`,
+      // 추천's shape with one part wrong each: a volume past int8, a window end past the last
+      // Date and in year 10000, an open time in year 10000, a NULL where no NULL may be, a part
+      // missing.
+      `1788408306789_9223372036854775808_null_${uuid}`,
+      `8640000000000001_0_null_${uuid}`,
+      `253402300800000_0_null_${uuid}`,
+      `1788408306789_0_253402300800000_${uuid}`,
+      `null_0_null_${uuid}`,
+      `1788408306789_0_${uuid}`,
+    ];
+    for (const sort of MARKET_SORTS) {
+      for (const cursor of malformed) {
         const res = await get(`/api/v1/markets?sort=${sort}&cursor=${encodeURIComponent(cursor)}`);
         expect({ sort, cursor, status: res.statusCode }).toEqual({ sort, cursor, status: 200 });
-        expect(res.json<ListPage>().data).toHaveLength(1);
+        expect({ sort, cursor, rows: res.json<ListPage>().data.length }).toEqual({
+          sort,
+          cursor,
+          rows: 1,
+        });
       }
+    }
+    // Another order's cursor of another shape is malformed for this one: 신규's for 추천, 추천's
+    // for 신규 and 마감 임박.
+    const foreign = [
+      { sort: 'recommended', cursor: `1788408306789_${uuid}` },
+      { sort: 'newest', cursor: `1788408306789_0_null_${uuid}` },
+      { sort: 'closing', cursor: `1788408306789_0_null_${uuid}` },
+    ];
+    for (const { sort, cursor } of foreign) {
+      const res = await get(`/api/v1/markets?sort=${sort}&cursor=${encodeURIComponent(cursor)}`);
+      expect({ sort, rows: res.json<ListPage>().data.length }).toEqual({ sort, rows: 1 });
     }
   });
 

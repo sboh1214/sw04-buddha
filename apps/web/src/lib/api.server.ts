@@ -9,7 +9,7 @@ import {
   isApiError,
   unwrap,
 } from './api';
-import { type MarketFilters } from './market-keys';
+import { type MarketFilters, publicListQuery } from './market-keys';
 import { type TickRange, ticksQueryFor } from './ticks';
 
 const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000').replace(/\/$/, '');
@@ -87,25 +87,15 @@ export async function fetchTicksServer(id: string, range: TickRange): Promise<Pr
 /**
  * One page of `GET /markets`, in the `{ items, nextCursor }` shape `useInfiniteQuery` holds, so
  * the server-side prefetch and the client's own `queryFn` produce the same page objects under
- * the same key. An absent `category`/`q` is omitted rather than sent empty: the API's query
- * schema refuses a blank one, and the filter object is the cache key.
+ * the same key — and the same request: both send `publicListQuery` (market-keys.ts), the home's
+ * status, the order picked, and a category or search term only when there is one.
  */
 export async function fetchMarketsPageServer(
   filters: MarketFilters,
   cursor?: string,
 ): Promise<{ items: MarketSummary[]; nextCursor: string | null }> {
   const { data, meta } = unwrap(
-    await serverApi.GET('/api/v1/markets', {
-      params: {
-        query: {
-          status: filters.status,
-          sort: filters.sort,
-          ...(filters.category === undefined ? {} : { category: filters.category }),
-          ...(filters.q === undefined ? {} : { q: filters.q }),
-          ...(cursor === undefined ? {} : { cursor }),
-        },
-      },
-    }),
+    await serverApi.GET('/api/v1/markets', { params: { query: publicListQuery(filters, cursor) } }),
   );
   return { items: data, nextCursor: meta.nextCursor };
 }

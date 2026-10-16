@@ -2,6 +2,9 @@ import { marketListQuerySchema } from '@buddha/shared';
 import type { Route } from 'next';
 import { copy } from '@/copy';
 import { type CategoryNode, locateCategory } from './category-tree';
+import { filterQuery, isWatchlistView } from './home-view';
+import { DEFAULT_MARKET_FILTERS, type HomeFilters, WATCHLIST_VIEW_PARAM } from './market-keys';
+import { filtersFromSearchParams } from './market-ssr';
 import { MY_PATH } from './my';
 
 /**
@@ -137,21 +140,77 @@ export function currentTopLevelSlug(
   return locateCategory(tree, filteredCategory(category))?.parent.category.slug;
 }
 
+/** What `useSearchParams()` hands the header: the URL's query, read one name at a time. */
+export interface UrlSearchParams {
+  get(name: string): string | null;
+}
+
+/**
+ * The home's filters AS THE LIST READS THEM, from the URL the header sees: the page's own
+ * normalisation (`filtersFromSearchParams`, the function the page builds its list from), never a
+ * copy of it. `get` answers a repeated param with its first value, which is the value
+ * `filtersFromSearchParams` keeps of the array the page receives, so the two agree on that too.
+ * Only meaningful on `/`; the callers check the route first.
+ */
+function homeFiltersOf(searchParams: UrlSearchParams): HomeFilters {
+  const value = (name: string) => searchParams.get(name) ?? undefined;
+  return filtersFromSearchParams({
+    sort: value('sort'),
+    category: value('category'),
+    q: value('q'),
+    [WATCHLIST_VIEW_PARAM]: value(WATCHLIST_VIEW_PARAM),
+  });
+}
+
 /**
  * The `?q=` value AS THE LIST READS IT, for the header's search box: the term the home list is
  * filtered on, or `undefined` when there is none — or when the visitor is not on `/`, where a
  * `q` in the URL filters nothing and a box that still showed it would describe a list that is
- * not on screen. Normalised by the same schema field `filtersFromSearchParams` uses (blank and
- * whitespace-only are "no search"; over-long is dropped), so the box and the list agree on what
- * was searched. This is what the box's `key`/`defaultValue` follow (nav.tsx `SearchForm`).
+ * not on screen. Read off the home's own normalisation (`homeFiltersOf`): blank and
+ * whitespace-only are "no search", over-long is dropped, and the 관심 시장 view (`?watchlist=1`,
+ * ADR-0065) drops `q` altogether — the watchlist has no title search, so `/?watchlist=1&q=rain`
+ * lists every watched open market and the box must not say 'rain'. The box and the list then
+ * agree on what was searched. This is what the box's `key`/`defaultValue` follow (nav.tsx
+ * `SearchForm`).
  */
-const qParam = marketListQuerySchema.shape.q;
-
 export function currentSearchTerm(
   pathname: string,
-  q: string | null | undefined,
+  searchParams: UrlSearchParams,
 ): string | undefined {
   if (pathname !== '/') return undefined;
-  const parsed = qParam.safeParse(q ?? undefined);
-  return parsed.success ? parsed.data : undefined;
+  const filters = homeFiltersOf(searchParams);
+  return isWatchlistView(filters) ? undefined : filters.q;
+}
+
+/**
+ * The query a row-2 item links to: `slug` for a top-level category, `undefined` for 전체. Next's
+ * `href` takes it as `{ pathname: '/', query }`.
+ *
+ * Outside the 관심 시장 view it is a fresh `?category=` (전체: a bare `/`), as the header has
+ * always posted (ADR-0041): row 2 is drawn on every 시장 탐색 route, so it is a way INTO the
+ * list, not a refinement of one the visitor may not be looking at — a sort or a search term in
+ * the URL is left behind.
+ *
+ * In the view (`/?watchlist=1`) it moves the view to that category and keeps it on, in the order
+ * picked (owner decision 2026-10-16, ADR-0065: "켜 둔 채로 옮긴다") — from
+ * `/?sort=newest&watchlist=1`, 경제 is `/?category=economy&sort=newest&watchlist=1` and 전체 is
+ * the URL itself. The view's own default order is left out of the URL as everywhere
+ * (`filterQuery`), and the view has no search term to carry.
+ *
+ * A pure function of the route and the URL, never of the session: the header renders into every
+ * visitor's HTML from the URL alone, so a member and a visitor who open the same address get the
+ * same links (a signed-out visitor in the view is shown the sign-in prompt by the list, which a
+ * category change keeps).
+ */
+export function categoryLinkQuery(
+  pathname: string,
+  searchParams: UrlSearchParams,
+  slug: string | undefined,
+): Record<string, string> {
+  const category = slug === undefined ? {} : { category: slug };
+  const filters = pathname === '/' ? homeFiltersOf(searchParams) : DEFAULT_MARKET_FILTERS;
+  if (isWatchlistView(filters)) {
+    return filterQuery({ watchlist: true, sort: filters.sort, ...category });
+  }
+  return filterQuery({ ...DEFAULT_MARKET_FILTERS, ...category });
 }

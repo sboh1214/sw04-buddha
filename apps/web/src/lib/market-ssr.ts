@@ -1,7 +1,14 @@
-import { marketListQuerySchema, marketSortSchema, publicMarketStatusSchema } from '@buddha/shared';
+import { marketListQuerySchema, marketSortSchema, watchlistSortSchema } from '@buddha/shared';
 import { type QueryClient } from '@tanstack/react-query';
 import { type Market, type PriceSeries } from './api';
-import { DEFAULT_MARKET_FILTERS, type MarketFilters, marketKey, ticksKey } from './market-keys';
+import {
+  DEFAULT_MARKET_FILTERS,
+  DEFAULT_WATCHLIST_VIEW_SORT,
+  type HomeFilters,
+  WATCHLIST_VIEW_PARAM_VALUE,
+  marketKey,
+  ticksKey,
+} from './market-keys';
 import { DEFAULT_TICK_RANGE } from './ticks';
 
 /**
@@ -56,13 +63,16 @@ export function detailWindowEnd(series: PriceSeries | null): number | undefined 
 
 /**
  * The home page's raw `searchParams`. Every value is `string | string[]` because a repeated
- * param arrives as an array (the idiom at my/settings/page.tsx).
+ * param arrives as an array (the idiom at my/settings/page.tsx). `status` is read by nothing any
+ * more — the home lists open markets only (ADR-0061 decision 1, item 13) — and stays in the type
+ * only so the test can say that a bookmarked `?status=` is ignored.
  */
 export interface MarketSearchParams {
   status?: string | string[];
   sort?: string | string[];
   category?: string | string[];
   q?: string | string[];
+  watchlist?: string | string[];
 }
 
 /** A repeated param arrives as an array; the first value is the one the filter UI wrote. */
@@ -79,21 +89,36 @@ const { category: categoryParam, q: qParam } = marketListQuerySchema.shape;
  * be one default away from a second cache entry, which reads as a list that fetches itself
  * again the moment it hydrates.
  *
- * Nothing here throws: a hand-typed `?status=draft` or `?sort=price` falls back to the default
- * rather than 500-ing a public page. A blank or over-long `category`/`q` is dropped instead of
- * being sent — the API's schema refuses both, and an omitted field hashes identically to one
- * set to `undefined` (`hashKey` stringifies, and `JSON.stringify` drops undefined values), so
- * `?q=` and no `q` at all share one cache entry.
+ * Nothing here throws and nothing redirects (the way D23 treats an old address): a value the
+ * screen cannot show is dropped and the default stands. A bookmarked `?status=` is ignored — there
+ * is no status filter on the home any more — and so is `?sort=volume`, which no list orders by
+ * until #132 (ADR-0061 decision 1, item 11): both land on the open markets by 추천. A blank or over-long `category`/`q` is dropped
+ * instead of being sent — the API's schema refuses both, and an omitted field hashes identically
+ * to one set to `undefined` (`hashKey` stringifies, and `JSON.stringify` drops undefined values),
+ * so `?q=` and no `q` at all share one cache entry.
+ *
+ * `?watchlist=1` is the 관심 시장 view (`WatchlistViewFilters`, ADR-0065); any other value is
+ * not. Its sorts are the watchlist's — 최근 관심 등록 순 by default, or one of the public three —
+ * and `q` is dropped there: the caller's watchlist has no title search. `?sort=watched` outside
+ * the view is unknown and falls back to 추천.
  */
-export function filtersFromSearchParams(searchParams: MarketSearchParams): MarketFilters {
-  const status = publicMarketStatusSchema.safeParse(firstValue(searchParams.status));
-  const sort = marketSortSchema.safeParse(firstValue(searchParams.sort));
+export function filtersFromSearchParams(searchParams: MarketSearchParams): HomeFilters {
   const category = categoryParam.safeParse(firstValue(searchParams.category));
+  const categoryFilter =
+    category.success && category.data !== undefined ? { category: category.data } : {};
+  if (firstValue(searchParams.watchlist) === WATCHLIST_VIEW_PARAM_VALUE) {
+    const sort = watchlistSortSchema.safeParse(firstValue(searchParams.sort));
+    return {
+      watchlist: true,
+      sort: sort.success ? sort.data : DEFAULT_WATCHLIST_VIEW_SORT,
+      ...categoryFilter,
+    };
+  }
+  const sort = marketSortSchema.safeParse(firstValue(searchParams.sort));
   const q = qParam.safeParse(firstValue(searchParams.q));
   return {
-    status: status.success ? status.data : DEFAULT_MARKET_FILTERS.status,
     sort: sort.success ? sort.data : DEFAULT_MARKET_FILTERS.sort,
-    ...(category.success && category.data !== undefined ? { category: category.data } : {}),
+    ...categoryFilter,
     ...(q.success && q.data !== undefined ? { q: q.data } : {}),
   };
 }

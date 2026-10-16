@@ -303,14 +303,16 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
     status: 200,
     own: ['filled order id', 'open order id'],
   },
-  // B's list, paged from A's watch and filtered to the watched market's status and category: B
-  // watches nothing, so nothing of A's may come back.
+  // B's list, paged from A's watch in the order that cursor was made for (최근 관심 등록 순) and
+  // filtered to the watched market's status and category: B watches nothing, so nothing of A's
+  // may come back.
   'GET /me/watchlist': {
     query: {
       cursor: (fixture) => fixture.cursors.watchlist,
       limit: LIMIT,
       status: (fixture) => fixture.watched.status,
       category: (fixture) => fixture.watchedCategory,
+      sort: () => 'watched',
     },
     status: 200,
     own: ['watched market id', 'watched market slug'],

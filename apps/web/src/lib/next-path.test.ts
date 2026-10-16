@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { ADMIN_LOGIN_FALLBACK, adminLoginPath, loginPathBackTo, safeNextPath } from './next-path';
+import {
+  ADMIN_LOGIN_FALLBACK,
+  adminLoginPath,
+  loginPathBackTo,
+  loginPathBackToPage,
+  safeNextPath,
+} from './next-path';
 
 const next = (url: string) => new URL(url, 'https://x.invalid').searchParams.get('next');
 
@@ -53,6 +59,23 @@ describe('loginPathBackTo', () => {
     expect(next(loginPathBackTo('/markets/x?tab=rules'))).toBe('/markets/x');
     for (const value of [null, undefined, '', 'https://evil.example/x', '//evil.example', '/\\x']) {
       expect(next(loginPathBackTo(value)), JSON.stringify(value)).toBe('/');
+    }
+  });
+});
+
+describe('loginPathBackToPage', () => {
+  it('keeps the query string: the home’s 관심 시장 view is its query (ADR-0065)', () => {
+    expect(loginPathBackToPage('/?watchlist=1')).toBe('/login?next=%2F%3Fwatchlist%3D1');
+    expect(next(loginPathBackToPage('/?category=economy&sort=closing&watchlist=1'))).toBe(
+      '/?category=economy&sort=closing&watchlist=1',
+    );
+    // The login page reads it back through the same gate, unchanged.
+    expect(safeNextPath(next(loginPathBackToPage('/?watchlist=1')))).toBe('/?watchlist=1');
+  });
+
+  it('refuses anything that is not a path on this origin, as every destination', () => {
+    for (const value of ['https://evil.example/?watchlist=1', '//evil.example', '/\\evil']) {
+      expect(next(loginPathBackToPage(value)), value).toBe('/');
     }
   });
 });
