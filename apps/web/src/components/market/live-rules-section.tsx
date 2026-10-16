@@ -3,6 +3,7 @@
 import { RulesSection } from '@/components/market/rules-section';
 import { useMarket } from '@/hooks/use-markets';
 import { type Market } from '@/lib/api';
+import { type DetailWidth, copyTestId } from '@/lib/market-detail';
 
 /**
  * 규칙, drawn from the live `['market', id]` row rather than the snapshot the server
@@ -20,8 +21,12 @@ import { type Market } from '@/lib/api';
  * rules into the HTML exactly as `MarketDetail`'s own header writes the question and the
  * probability — and if the query ever holds nothing, `fallback` is the row the server fetched,
  * so no branch here can leave 규칙 out of view-source.
+ *
+ * The detail draws 규칙 in a different place at each width, so it renders one copy per width
+ * (`DETAIL_SLOTS`), and `width` names this one: the card is `market-rules-<width>` and the close
+ * time that with `-close-at` (`copyTestId`).
  */
-export function LiveRulesSection({ fallback }: { fallback: Market }) {
+export function LiveRulesSection({ fallback, width }: { fallback: Market; width: DetailWidth }) {
   const market = useMarket(fallback.id).data ?? fallback;
-  return <RulesSection market={market} />;
+  return <RulesSection market={market} data-testid={copyTestId('market-rules', width)} />;
 }

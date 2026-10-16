@@ -4,6 +4,7 @@ import {
   adminAccount,
   closeMarket,
   createOpenMarket,
+  detailCopyTestId,
   documentSurvived,
   expect,
   markDocument,
@@ -116,6 +117,9 @@ test.describe('정산', () => {
     await expect(notice.getByTestId('market-detail-result')).toHaveText(copy.yes);
     await expect(page.getByTestId('dispute-section')).toHaveCount(0);
     await expect(notice).not.toContainText('이의');
-    await expect(page.getByTestId('market-rules')).not.toContainText('정산 예정');
+    // 규칙 as this width draws it (the detail holds one copy per width, ADR-0067).
+    await expect(page.getByTestId(detailCopyTestId(page, 'market-rules'))).not.toContainText(
+      '정산 예정',
+    );
   });
 });

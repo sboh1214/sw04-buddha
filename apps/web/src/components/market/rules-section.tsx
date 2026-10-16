@@ -28,16 +28,14 @@ export interface RulesSectionProps {
   /** `Market` satisfies this; so does the synthetic row the admin preview builds. */
   market: { rules: string; resolutionSource: string | null; closeAt: string };
   /**
-   * Defaults to `market-rules`. The admin form's 규칙 textarea already owns that id, so
-   * the preview beside it must pass its own.
+   * The card's id; the close time's is this with `-close-at`. No default: each caller has its
+   * own — the admin preview's must not be the 규칙 textarea's `market-rules` beside it, and the
+   * market detail renders one copy per width, each under that copy's id (`copyTestId`).
    */
-  'data-testid'?: string;
+  'data-testid': string;
 }
 
-export function RulesSection({
-  market,
-  'data-testid': testId = 'market-rules',
-}: RulesSectionProps) {
+export function RulesSection({ market, 'data-testid': testId }: RulesSectionProps) {
   return (
     <Card.Root data-testid={testId}>
       <Card.Header>

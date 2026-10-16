@@ -34,15 +34,19 @@ import { type Market } from '@/lib/api';
 import { CATEGORY_TRAIL_SEPARATOR, categoryBreadcrumb } from '@/lib/category-label';
 import { MARKET_STATUS_LABEL, MARKET_STATUS_PALETTE } from '@/lib/market-admin';
 import {
+  type CopiedSection,
   DEFAULT_DETAIL_VIEW,
-  DETAIL_SECTIONS,
+  DETAIL_SLOTS,
   DETAIL_VIEW_ITEMS,
-  type DetailSection,
   type DetailView,
+  type DetailWidth,
   type PersonalAreaView,
+  type SharedSection,
+  copyDisplay,
+  copyTestId,
   detailViewOf,
+  perWidth,
   personalAreaView,
-  sectionOrder,
   showsOrderArea,
   viewDisplay,
 } from '@/lib/market-detail';
@@ -69,9 +73,10 @@ import { useSession } from '@/lib/use-session';
  * approved from this PR's screenshots, owner decisions 2026-10-17): 요약 — the question with its
  * category, status, countdown, 관심 등록, YES·NO, 거래량 and 참여자 — then 배경, 규칙·출처·마감, 공개
  * 판정 기록, the chart, 호가창 with 최근 체결 and 내 거래, 내 포지션 and 내 대기 주문, 토론, and then
- * 관련 시장 (#65). The order and what is lifted below md are `lib/market-detail.ts`'s — the sections
- * are rendered by iterating `DETAIL_SECTIONS` — and this file builds each section and lays the two
- * columns out.
+ * 관련 시장 (#65). The order at each width is `lib/market-detail.ts`'s — the sections are rendered
+ * by iterating `DETAIL_SLOTS`, where 배경, 규칙 and 공개 판정 기록 have one copy for each width's
+ * place, so the DOM holds what each width draws in the order it draws it — and this file builds
+ * each section and lays the two columns out.
  *
  * - From md up: two columns. The left one holds every section; the right one is the order panel,
  *   sticky under the header so it stays beside the chart and the 호가 while the page scrolls (N02
@@ -142,10 +147,12 @@ export interface MarketDetailProps {
    * only places them; it never renders them, so no branch of the ladder below — and no hydration
    * failure — can take the question or the rules out of the HTML that AC 2 reads. Each follows
    * the live row on its own (`LiveQuestionHeading`, `LiveBackgroundSection`, `LiveRulesSection`).
+   * 배경 and 규칙 come as one copy per width, each built with that copy's test ids
+   * (`copyTestId`): the two widths draw them in different places (`DETAIL_SLOTS`).
    */
   question: ReactNode;
-  background: ReactNode;
-  rules: ReactNode;
+  background: Record<DetailWidth, ReactNode>;
+  rules: Record<DetailWidth, ReactNode>;
 }
 
 export function MarketDetail({ marketId, now, question, background, rules }: MarketDetailProps) {
@@ -166,12 +173,12 @@ export function MarketDetail({ marketId, now, question, background, rules }: Mar
   // the 매수 bar and an open sheet away with it (ADR-0048).
   const orderArea = showsOrderArea(data?.status);
 
-  // Every section by its key in `DETAIL_SECTIONS`, which is the order they are rendered in below:
-  // the record has to name a node for each key, and the list alone decides where it goes. Below
-  // md three of them are drawn first (`sectionOrder`), each one element carrying its `order`.
-  const sections: Record<DetailSection, ReactNode> = {
+  // Every shared section by its key, and every copied one by its key and width: `DETAIL_SLOTS`,
+  // iterated below, is the order they are rendered in. The records have to name a node for each
+  // key, and the list alone decides where it goes.
+  const sections: Record<SharedSection, ReactNode> = {
     summary: (
-      <Stack gap="4" order={sectionOrder('summary')} data-testid="market-summary">
+      <Stack gap="4" data-testid="market-summary">
         {/* A failed REFETCH keeps the row that is already drawn — the numbers on screen are
             simply the last ones that arrived, which is what the notice says. */}
         {data !== undefined && market.isRefetchError && (
@@ -218,14 +225,8 @@ export function MarketDetail({ marketId, now, question, background, rules }: Mar
         )}
       </Stack>
     ),
-    background,
-    rules,
-    // 공개 판정 기록 (#24) right after the rules it applies (N03 §8 lists the rules, the current
-    // state, the result and the 출처 together), on every public status (owner decision
-    // 2026-10-17).
-    judging: <ComingSoonSection title={copy.marketJudgingRecord} testId="market-judging-record" />,
     chart: data !== undefined && (
-      <Box order={sectionOrder('chart')} minW="0">
+      <Box minW="0">
         {/* `currentBp` and `currentTradeCount` come from ONE read of the row, so the chart can
             never draw one fill's price under another's claim. */}
         <ProbabilityChart
@@ -256,16 +257,39 @@ export function MarketDetail({ marketId, now, question, background, rules }: Mar
     discussion: <ComingSoonSection title={copy.marketDiscussion} testId="market-discussion" />,
     // 관련 시장 (#65) is the next key, after 토론: the last of N02 §4's list.
   };
+  // The sections each width draws in its own place, one copy per width. Only 공개 판정 기록 is
+  // built here; 배경 and 규칙 are the server's, already one per width.
+  const copies: Record<CopiedSection, Record<DetailWidth, ReactNode>> = {
+    background,
+    rules,
+    // 공개 판정 기록 (#24) right after the rules it applies (N03 §8 lists the rules, the current
+    // state, the result and the 출처 together), on every public status (owner decision
+    // 2026-10-17).
+    judging: perWidth((width) => (
+      <ComingSoonSection
+        title={copy.marketJudgingRecord}
+        testId={copyTestId('market-judging-record', width)}
+      />
+    )),
+  };
 
   return (
     <Box data-testid="market-detail">
       <Grid templateColumns={DETAIL_COLUMNS} gap={{ base: '6', md: '8' }}>
-        {/* One flex column, in N02 §4's order (`DETAIL_SECTIONS`). Fragments, so each section's
-            own element is the flex item its `order` applies to. */}
+        {/* One flex column, in DOM order (`DETAIL_SLOTS`): each width draws its own copies and
+            the shared sections, and never anything out of the order the DOM holds it in. A copy's
+            wrapper is `display: contents` at its width, so the section in it is the flex item,
+            and `none` at the other. Fragments keep each shared section's own element the item. */}
         <Stack gap="6" minW="0" data-testid="market-detail-sections">
-          {DETAIL_SECTIONS.map((section) => (
-            <Fragment key={section}>{sections[section]}</Fragment>
-          ))}
+          {DETAIL_SLOTS.map((slot) =>
+            slot.width === 'all' ? (
+              <Fragment key={slot.section}>{sections[slot.section]}</Fragment>
+            ) : (
+              <Box key={`${slot.section}-${slot.width}`} display={copyDisplay(slot.width)}>
+                {copies[slot.section][slot.width]}
+              </Box>
+            ),
+          )}
         </Stack>
 
         {orderArea ? <OrderArea /> : null}
@@ -316,12 +340,7 @@ function PersonalArea({ viewer, children }: { viewer: PersonalAreaView; children
 function MarketActivity({ marketId, member }: { marketId: string; member: boolean }) {
   const [view, setView] = useState<DetailView>(DEFAULT_DETAIL_VIEW);
   return (
-    <Stack
-      gap={{ base: '4', md: '6' }}
-      order={sectionOrder('activity')}
-      minW="0"
-      data-testid="market-activity"
-    >
+    <Stack gap={{ base: '4', md: '6' }} minW="0" data-testid="market-activity">
       <SegmentGroup.Root
         hideFrom="md"
         size="md"

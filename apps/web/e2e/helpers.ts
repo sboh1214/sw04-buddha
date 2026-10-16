@@ -357,6 +357,36 @@ export async function watchThroughApi(page: Page, marketId: string): Promise<voi
 }
 
 /**
+ * Chakra's `md`, 48rem: from this width up the market detail is laid out for md and up, below it
+ * for the phone (lib/market-detail.ts `MD_UP_MEDIA_QUERY`).
+ */
+const MD_MIN_WIDTH_PX = 768;
+
+/**
+ * Which of the market detail's two layouts this page's viewport draws: `md` from md up, `base`
+ * below it — Chakra's names, and lib/market-detail.ts `DetailWidth`. Read at the call, so a spec
+ * that resizes asks again.
+ */
+export function detailWidth(page: Page): 'base' | 'md' {
+  const viewport = page.viewportSize();
+  if (viewport === null) throw new Error('no viewport size');
+  return viewport.width < MD_MIN_WIDTH_PX ? 'base' : 'md';
+}
+
+/**
+ * The test id of the copy of a market detail section that this page's width draws (#122,
+ * ADR-0067). 배경 (`market-background`), 규칙 (`market-rules`) and 공개 판정 기록
+ * (`market-judging-record`) stand in different places at the two widths, so the detail holds each
+ * twice — once where md and up draws it, once where a phone does — and hides the other width's
+ * copy; each copy's ids carry its width after the section's (lib/market-detail.ts `copyTestId`):
+ * `market-rules-md`, `market-rules-base-close-at`. A sub-id goes after this one:
+ * `${detailCopyTestId(page, 'market-rules')}-close-at`.
+ */
+export function detailCopyTestId(page: Page, testId: string): string {
+  return `${testId}-${detailWidth(page)}`;
+}
+
+/**
  * 마감 through the admin API (`POST /admin/markets/:id/close`): trading stops, and the market
  * waits for the admin's 판정. The API, not the UI, because closing is a means here — the
  * settlement spec measures what comes after it.

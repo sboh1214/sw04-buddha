@@ -5,6 +5,7 @@ import {
   adminAccount,
   closeMarket,
   createOpenMarket,
+  detailCopyTestId,
   expect,
   signIn,
   subscribed,
@@ -143,7 +144,9 @@ test.describe('시장 상세', () => {
     /*
      * The frame (#122). 배경 is the server's too, as plain text under its heading. The mobile
      * 매수 bar is in the HTML of an open market with its two entry points and no price on either;
-     * its sheet is not (it mounts on a press). The public 준비 중 slots are there; the personal
+     * its sheet is not (it mounts on a press). The public 준비 중 slots are there — 공개 판정 기록,
+     * like 배경 and 규칙, once for each width's place, since the two widths draw them in different
+     * places and each reads its own copy where it is drawn (ADR-0067); CSS shows one. The personal
      * areas — 내 포지션, 내 거래, 내 대기 주문 — never are, for nobody, and neither is the one
      * sign-in prompt a signed-out visitor gets in their place (owner decision 2026-10-17): the
      * admin context's HTML below carries a session cookie and must hold no more than the
@@ -155,8 +158,13 @@ test.describe('시장 상세', () => {
     expect(html).toMatch(/data-testid="order-entry-yes"[^>]*>YES 매수</);
     expect(html).toMatch(/data-testid="order-entry-no"[^>]*>NO 매수</);
     expect(html).not.toContain('data-testid="order-sheet');
-    for (const slot of ['market-order-book', 'market-judging-record', 'market-discussion']) {
+    for (const slot of ['market-order-book', 'market-discussion']) {
       expect(html, slot).toContain(`data-testid="${slot}"`);
+    }
+    for (const width of ['md', 'base']) {
+      for (const section of ['market-background', 'market-rules', 'market-judging-record']) {
+        expect(html, `${section}-${width}`).toContain(`data-testid="${section}-${width}"`);
+      }
     }
     const memberHtml = await (await admin.get(`/markets/${market.slug}`)).text();
     for (const page of [html, memberHtml]) {
@@ -441,9 +449,11 @@ test.describe('시장 상세', () => {
     await expect(page.getByTestId('watch-button')).toBeVisible();
 
     // `innerText` is the text as drawn: a `pre-wrap` block keeps the line break where it was
-    // written, an ordinary one folds it into a space. The markup stays characters.
-    const section = page.getByTestId('market-background');
-    const text = section.getByTestId('market-background-text');
+    // written, an ordinary one folds it into a space. The markup stays characters. Read off the
+    // copy this width draws (ADR-0067).
+    const id = detailCopyTestId(page, 'market-background');
+    const section = page.getByTestId(id);
+    const text = section.getByTestId(`${id}-text`);
     const drawn = () => text.evaluate((element) => (element as HTMLElement).innerText);
     expect(await drawn()).toBe(description);
     await expect(section.locator('b, strong, em')).toHaveCount(0);
@@ -857,20 +867,29 @@ test.describe('시장 상세 · 375px', () => {
 
     // N02 §4: the first screen is 요약 and the chart, the switch under them, then the rest in the
     // list's order (lib/market-detail.ts `drawnOrder('base')`). This reader is signed out, so 내
-    // 포지션's place holds the one sign-in prompt (below, '시장 상세 · 상태와 로그인').
+    // 포지션's place holds the one sign-in prompt (below, '시장 상세 · 상태와 로그인'). 배경, 규칙 and
+    // 공개 판정 기록 are this width's copies (`-base`), after the switch in the DOM as on screen.
     const switcher = page.getByTestId('market-activity-switch');
-    await expectTopToBottom(page, [
+    await expectInOrder(page, [
       'market-summary',
       'probability-chart',
       'market-activity-switch',
       'market-activity-book',
-      'market-background',
-      'market-rules',
-      'market-judging-record',
+      'market-background-base',
+      'market-rules-base',
+      'market-judging-record-base',
       'market-personal-signed-out',
       'market-discussion',
     ]);
     await expectSummaryOrder(page);
+    await expectReadingOrder(page, [
+      market.title,
+      copy.marketOrderBook,
+      copy.marketBackground,
+      copy.rulesSectionTitle,
+      copy.marketJudgingRecord,
+      copy.marketDiscussion,
+    ]);
 
     // It opens on 호가 — N02 §4's short name on the switch, the slot under it titled 호가창 (owner
     // decision 2026-10-17); 거래 내역 is 최근 체결 (and 내 거래 for a member, below).
@@ -900,24 +919,56 @@ test.describe('시장 상세 · 375px', () => {
   });
 });
 
-/** The vertical order of elements on the page: each one starts below the one before it. */
-async function expectTopToBottom(page: Page, testIds: readonly string[]): Promise<void> {
-  const tops = await page.evaluate(
-    (ids) =>
-      ids.map((id) => {
-        const element = document.querySelector(`[data-testid="${id}"]`);
-        return element === null ? null : element.getBoundingClientRect().top + window.scrollY;
-      }),
+/**
+ * The order of elements on the page, as drawn and as read: each one is drawn (it has a box — the
+ * copy of a section that this width hides has none, so it cannot stand in for the drawn one),
+ * starts below the one before it, and comes after it in the document, which is the order a screen
+ * reader reads and the keyboard walks (WCAG 1.3.2). A CSS `order` that lifts a section on screen
+ * only passes the first two and fails the third: that is what the detail had below md before
+ * ADR-0067 drew each width's 배경, 규칙 and 공개 판정 기록 from a copy of its own.
+ */
+async function expectInOrder(page: Page, testIds: readonly string[]): Promise<void> {
+  const found = await page.evaluate(
+    (ids) => {
+      const elements = ids.map((id) => document.querySelector(`[data-testid="${id}"]`));
+      return elements.map((element, index) => {
+        if (element === null) return null;
+        const rect = element.getBoundingClientRect();
+        const previous = index === 0 ? null : elements[index - 1];
+        return {
+          top: rect.top + window.scrollY,
+          drawn: rect.width > 0 || rect.height > 0,
+          // FOLLOWING: after the one before it in tree order.
+          read:
+            previous == null ||
+            (previous.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+        };
+      });
+    },
     [...testIds],
   );
-  tops.forEach((top, index) => {
-    expect(top, `${testIds[index] ?? ''} is on the page`).not.toBeNull();
+  found.forEach((item, index) => {
+    const id = testIds[index] ?? '';
+    expect(item, `${id} is on the page`).not.toBeNull();
+    expect(item?.drawn, `${id} is drawn`).toBe(true);
   });
   for (let i = 1; i < testIds.length; i += 1) {
-    expect(tops[i]!, `${testIds[i] ?? ''} below ${testIds[i - 1] ?? ''}`).toBeGreaterThan(
-      tops[i - 1]!,
-    );
+    const label = `${testIds[i] ?? ''} after ${testIds[i - 1] ?? ''}`;
+    expect(found[i]!.top, `${label}: below it`).toBeGreaterThan(found[i - 1]!.top);
+    expect(found[i]!.read, `${label}: in the document`).toBe(true);
   }
+}
+
+/**
+ * The detail's section headings as a screen reader lists them: in document order, leaving out
+ * what is `display: none` — the copies of 배경, 규칙 and 공개 판정 기록 for the other width, the
+ * switch's other panel (WCAG 1.3.2, ADR-0067). The question comes first; each section's title
+ * follows in the order the width draws them.
+ */
+async function expectReadingOrder(page: Page, headings: readonly string[]): Promise<void> {
+  await expect(
+    page.getByTestId('market-detail-sections').getByRole('heading', { level: 2 }),
+  ).toHaveText([...headings]);
 }
 
 /**
@@ -926,13 +977,13 @@ async function expectTopToBottom(page: Page, testIds: readonly string[]): Promis
  * the price, then 거래량. Before #122 the question was above the first row.
  */
 async function expectSummaryOrder(page: Page): Promise<void> {
-  await expectTopToBottom(page, [
+  await expectInOrder(page, [
     'market-detail-category',
     'market-detail-question',
     'market-probability',
     'market-detail-volume',
   ]);
-  await expectTopToBottom(page, ['watch-button', 'market-detail-question']);
+  await expectInOrder(page, ['watch-button', 'market-detail-question']);
 }
 
 /**
@@ -949,12 +1000,13 @@ test.describe('시장 상세 · 1280px', () => {
     await expect(page.getByTestId('watch-button')).toBeVisible();
 
     // Signed out, so the one sign-in prompt where 내 포지션 would be (below, '시장 상세 · 상태와
-    // 로그인'). The slots carry the owner's titles, 호가창 and 공개 판정 기록 (2026-10-17).
-    await expectTopToBottom(page, [
+    // 로그인'). The slots carry the owner's titles, 호가창 and 공개 판정 기록 (2026-10-17). 배경, 규칙
+    // and 공개 판정 기록 are this width's copies (`-md`), before the chart in the DOM as on screen.
+    await expectInOrder(page, [
       'market-summary',
-      'market-background',
-      'market-rules',
-      'market-judging-record',
+      'market-background-md',
+      'market-rules-md',
+      'market-judging-record-md',
       'probability-chart',
       'market-order-book',
       'market-fills',
@@ -965,9 +1017,18 @@ test.describe('시장 상세 · 1280px', () => {
       page.getByTestId('market-order-book').getByRole('heading', { level: 2 }),
     ).toHaveText(copy.marketOrderBook);
     await expect(
-      page.getByTestId('market-judging-record').getByRole('heading', { level: 2 }),
+      page.getByTestId('market-judging-record-md').getByRole('heading', { level: 2 }),
     ).toHaveText(copy.marketJudgingRecord);
     await expectSummaryOrder(page);
+    await expectReadingOrder(page, [
+      market.title,
+      copy.marketBackground,
+      copy.rulesSectionTitle,
+      copy.marketJudgingRecord,
+      copy.marketOrderBook,
+      copy.marketRecentFills,
+      copy.marketDiscussion,
+    ]);
 
     // No switch and no 매수 bar at this width: 호가 and 최근 체결 stand one under the other, and the
     // order panel is the right column.
@@ -1028,8 +1089,12 @@ test.describe('시장 상세 · 상태와 로그인', () => {
     await expect(page.getByRole('button', { name: 'NO 매수' })).toHaveCount(0);
     await expect(page.getByTestId('order-area')).toHaveCount(0);
     await expect(page.getByRole('dialog')).toHaveCount(0);
-    // The rest of the frame is the same for every public status.
-    for (const slot of ['market-order-book', 'market-judging-record', 'market-discussion']) {
+    // The rest of the frame is the same for every public status (공개 판정 기록: this width's copy).
+    for (const slot of [
+      'market-order-book',
+      detailCopyTestId(page, 'market-judging-record'),
+      'market-discussion',
+    ]) {
       await expect(page.getByTestId(slot), slot).toHaveCount(1);
     }
   });
@@ -1058,8 +1123,8 @@ test.describe('시장 상세 · 상태와 로그인', () => {
       'href',
       `/login?next=${encodeURIComponent(`/markets/${market.slug}`)}`,
     );
-    await expectTopToBottom(page, [
-      'market-judging-record',
+    await expectInOrder(page, [
+      detailCopyTestId(page, 'market-judging-record'),
       'market-personal-signed-out',
       'market-discussion',
     ]);
@@ -1071,8 +1136,8 @@ test.describe('시장 상세 · 상태와 로그인', () => {
     }
     await expect(detail.getByRole('link', { name: copy.login })).toHaveCount(1);
     await expect(page.getByText(copy.marketPersonalSignedOut)).toHaveCount(1);
-    // A market without a description has no 배경 section either.
-    await expect(page.getByTestId('market-background')).toHaveCount(0);
+    // A market without a description has no 배경 section either, in neither width's place.
+    await expect(page.locator('[data-testid^="market-background"]')).toHaveCount(0);
 
     // The seed admin, whose contact the `admin` fixture filled in (helpers.ts).
     await signIn(page, adminAccount.email, adminAccount.password);
@@ -1084,17 +1149,16 @@ test.describe('시장 상세 · 상태와 로그인', () => {
     // A member's detail has the areas and not the prompt.
     await expect(page.getByTestId('market-personal-signed-out')).toHaveCount(0);
     // 내 포지션 keeps its place after 판정 기록 at both widths (ADR-0067 decision 2).
-    await expectTopToBottom(page, ['market-judging-record', 'market-my-position']);
+    await expectInOrder(page, [
+      detailCopyTestId(page, 'market-judging-record'),
+      'market-my-position',
+    ]);
     const openOrders = page.getByTestId('market-my-open-orders');
     await expect(openOrders).toBeVisible();
     await expect(openOrders).toContainText(copy.marketMyOpenOrders);
     await expect(openOrders).toContainText(copy.comingSoon);
     // 내 대기 주문 is under 내 포지션 (N02 §4 '내 포지션·대기 주문') and before 토론, at both widths.
-    await expectTopToBottom(page, [
-      'market-my-position',
-      'market-my-open-orders',
-      'market-discussion',
-    ]);
+    await expectInOrder(page, ['market-my-position', 'market-my-open-orders', 'market-discussion']);
     // 내 거래 is in 거래 내역: beside 최근 체결 from md up, behind the switch below md.
     if (narrow) {
       await page.getByTestId('market-activity-switch').getByText(copy.marketTradeHistory).click();
@@ -1104,7 +1168,7 @@ test.describe('시장 상세 · 상태와 로그인', () => {
     await expect(myTrades).toContainText(copy.marketMyTrades);
     await expect(myTrades).toContainText(copy.comingSoon);
     // …after 최근 체결 in it, and the two personal slots in the order the owner approved (ADR-0067).
-    await expectTopToBottom(page, [
+    await expectInOrder(page, [
       'market-fills',
       'market-my-trades',
       'market-my-position',

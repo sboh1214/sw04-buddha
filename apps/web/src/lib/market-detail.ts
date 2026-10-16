@@ -19,10 +19,31 @@ import { BOTTOM_TABS_HEIGHT_PX, ORDER_ENTRY_BAR_HEIGHT_PX } from './nav';
  */
 
 /**
- * The detail's sections in the order the DOM holds them and md and up draws them: N02 §4's list.
- * `MarketDetail` renders its sections by iterating this list (a section-to-node record it has to
- * fill for every key), so this is the order on the page and not a description of it — moving a key
- * here moves the section. The order panel is not one of them — it is the right column from md up
+ * The two widths the detail is laid out for, by Chakra's breakpoint names — the keys of a
+ * responsive prop: `base` below md, `md` from md up.
+ */
+export type DetailWidth = 'base' | 'md';
+
+/**
+ * The sections the two widths draw in different places — 배경, 규칙 and 공개 판정 기록: from md up
+ * they come before the chart (N02 §4's list), below md after the 호가·거래 내역 switch (N02 §4's
+ * first screen). Each is in the DOM twice, once in each place (`DETAIL_SLOTS`). They are the ones
+ * that can be: they hold no state, start no request of their own (배경 and 규칙 read the cached
+ * `['market', id]` row) and have no focus stop, so a second copy costs a few nodes and can never
+ * disagree with the first.
+ */
+export type CopiedSection = 'background' | 'rules' | 'judging';
+
+/**
+ * The sections both widths draw from one element in one DOM place. The ones that hold state or
+ * fetch are here — the chart and its range, the switch and 최근 체결 (`activity`), 요약 with 관심
+ * 등록, 내 포지션 — and are mounted once: the two orders differ only in where the three copied
+ * sections stand around them.
+ */
+export type SharedSection = 'summary' | 'chart' | 'activity' | 'position' | 'discussion';
+
+/**
+ * The detail's sections. The order panel is not one of them — it is the right column from md up
  * and a sheet below it.
  *
  * - `summary`: the header — category trail, status, countdown, 관심 등록, the question, YES·NO,
@@ -38,48 +59,84 @@ import { BOTTOM_TABS_HEIGHT_PX, ORDER_ENTRY_BAR_HEIGHT_PX } from './nav';
  *   (`personalAreaView`).
  * - `discussion`: 토론 (#47). 관련 시장 (#65) comes after it.
  */
-export const DETAIL_SECTIONS = [
-  'summary',
-  'background',
-  'rules',
-  'judging',
-  'chart',
-  'activity',
-  'position',
-  'discussion',
-] as const;
-export type DetailSection = (typeof DETAIL_SECTIONS)[number];
+export type DetailSection = SharedSection | CopiedSection;
 
 /**
- * Below md the first screen is 요약 and the chart, and the 호가·거래 내역 switch follows them (N02 §4):
- * these three are drawn ahead of the rest, in this order, and everything else keeps the DOM order
- * after them. From md up nothing is moved. A lifted section is one element that carries its own
- * `order={sectionOrder(...)}` — the three here are.
+ * A place in the detail's column: a shared section, drawn at every width, or one width's copy of a
+ * copied section, drawn at that width only (`copyDisplay`).
  */
-const MOBILE_FIRST: readonly DetailSection[] = ['summary', 'chart', 'activity'];
+export type DetailSlot =
+  { section: SharedSection; width: 'all' } | { section: CopiedSection; width: DetailWidth };
 
 /**
- * A section's CSS `order` in the detail's flex column, per breakpoint: the lifted three take
- * −3, −2 and −1 below md, ahead of everyone else's 0, and every section is 0 from md up, so the DOM
- * order is the desktop order. Only the lifted sections need the prop; for the rest it is 0 anyway.
+ * The detail's column in DOM order. `MarketDetail` renders its sections by iterating this list
+ * (a node for every shared section and one per width for every copied one, both records it has
+ * to fill), so this is the order on the page and not a description of it — moving a slot here
+ * moves the section.
  *
- * The DOM keeps N02 §4's order rather than the mobile one because the moved sections hold the same
- * focus stops in the same relative order either way — 배경, 규칙 and 판정 기록 have none — so the
- * keyboard order matches what is drawn at both widths.
+ * Each width draws its own slots and the shared ones; the other width's copies are
+ * `display: none` there, which takes them out of the accessibility tree as well as the layout. So
+ * the order a width draws (`drawnOrder`) is the order its DOM holds what it draws: the order a
+ * screen reader reads and the keyboard walks is the order on the screen at both widths
+ * (WCAG 1.3.2). From md up that is N02 §4's list (ADR-0061 decision 1, item 16); below md it is
+ * N02 §4's first screen — 요약 and the chart, then the 호가·거래 내역 switch — and then the rest
+ * in the list's order.
  */
-export function sectionOrder(section: DetailSection): { base: number; md: number } {
-  const lifted = MOBILE_FIRST.indexOf(section);
-  return { base: lifted < 0 ? 0 : lifted - MOBILE_FIRST.length, md: 0 };
+export const DETAIL_SLOTS: readonly DetailSlot[] = [
+  { section: 'summary', width: 'all' },
+  { section: 'background', width: 'md' },
+  { section: 'rules', width: 'md' },
+  { section: 'judging', width: 'md' },
+  { section: 'chart', width: 'all' },
+  { section: 'activity', width: 'all' },
+  { section: 'background', width: 'base' },
+  { section: 'rules', width: 'base' },
+  { section: 'judging', width: 'base' },
+  { section: 'position', width: 'all' },
+  { section: 'discussion', width: 'all' },
+];
+
+/**
+ * The sections a width draws, in the order it draws them — which is their DOM order, since a
+ * width draws nothing out of it (see `DETAIL_SLOTS`).
+ */
+export function drawnOrder(width: DetailWidth): DetailSection[] {
+  return DETAIL_SLOTS.filter((slot) => slot.width === 'all' || slot.width === width).map(
+    (slot) => slot.section,
+  );
 }
 
-/** The order the sections are drawn in at a width: a stable sort of the DOM order by `order`. */
-export function drawnOrder(width: 'base' | 'md'): DetailSection[] {
-  return DETAIL_SECTIONS.map((section, index) => ({ section, index }))
-    .sort(
-      (a, b) =>
-        sectionOrder(a.section)[width] - sectionOrder(b.section)[width] || a.index - b.index,
-    )
-    .map(({ section }) => section);
+/**
+ * A copy's CSS `display` per breakpoint. At its own width `contents`: the wrapper draws no box, so
+ * the section inside is the column's flex item exactly as a shared section is, and a 배경 that is
+ * not there leaves no empty item — and no extra gap — behind. At the other width `none`, which
+ * takes the copy out of the layout and of what a screen reader reads.
+ */
+export function copyDisplay(width: DetailWidth): Record<DetailWidth, 'contents' | 'none'> {
+  return {
+    base: width === 'base' ? 'contents' : 'none',
+    md: width === 'md' ? 'contents' : 'none',
+  };
+}
+
+/**
+ * One value for each width, as a record: how `MarketDetail` builds 공개 판정 기록's two copies.
+ * page.tsx writes 배경's and 규칙's out instead — this module loads the app's Chakra system
+ * (`MD_UP_MEDIA_QUERY`), which fails to load in a server component.
+ */
+export function perWidth<T>(make: (width: DetailWidth) => T): Record<DetailWidth, T> {
+  return { md: make('md'), base: make('base') };
+}
+
+/**
+ * A copy's test id: the section's id with the width after it, `market-rules-md` and
+ * `market-rules-base`, and the ids inside it built on that (`market-rules-base-close-at`). Both
+ * copies are in the HTML, so a shared id would match twice and a test could read the copy that is
+ * not drawn; this way each id names one copy, and a spec picks the one its width draws on purpose
+ * (e2e helpers.ts `detailCopyTestId`, which writes the same scheme).
+ */
+export function copyTestId(testId: string, width: DetailWidth): string {
+  return `${testId}-${width}`;
 }
 
 /** The two views of the mobile switch (N02 §4 '호가·거래 내역을 전환'). */

@@ -92,8 +92,13 @@ export default async function MarketPage({ params }: { params: Promise<{ slug: s
           an AC 2 string out even if the query is unreadable. */}
       <HydrationBoundary state={dehydratePublic(queryClient)}>
         {/* `now` is the server's own window end, never a clock read in this render body — see
-            `detailWindowEnd`. It is absent when the series is. The three nodes are rendered HERE
-            and only placed by `MarketDetail`, outside every branch it takes. */}
+            `detailWindowEnd`. It is absent when the series is. The nodes are rendered HERE and
+            only placed by `MarketDetail`, outside every branch it takes. 배경 and 규칙 are
+            rendered once for each width: md and up draws them before the chart, below md after
+            the 호가·거래 내역 switch, and each width reads its own copy where it is drawn
+            (lib/market-detail.ts `DETAIL_SLOTS`). Both copies are in the HTML. Written out
+            rather than built with `perWidth`: lib/market-detail.ts loads the app's Chakra system,
+            which fails to load in a server component. */}
         <MarketDetail
           marketId={market.id}
           now={detailWindowEnd(series)}
@@ -105,13 +110,19 @@ export default async function MarketPage({ params }: { params: Promise<{ slug: s
           // follows the live row.
           question={<LiveQuestionHeading fallback={market} />}
           // 배경 (N02 §4), the market's description, when it has one.
-          background={<LiveBackgroundSection fallback={market} />}
+          background={{
+            md: <LiveBackgroundSection fallback={market} width="md" />,
+            base: <LiveBackgroundSection fallback={market} width="base" />,
+          }}
           // PLAN 11.1's Kalshi principle: 규칙 is never collapsed on the detail. It promises no
           // 판정 schedule (#22's '일정' panel will). The row fetched here is the FALLBACK, not
           // the source: the section follows the live cache so an admin's edit to the rules or
           // the close time cannot leave this panel describing a market the countdown above has
           // already moved past.
-          rules={<LiveRulesSection fallback={market} />}
+          rules={{
+            md: <LiveRulesSection fallback={market} width="md" />,
+            base: <LiveRulesSection fallback={market} width="base" />,
+          }}
         />
       </HydrationBoundary>
     </Container>

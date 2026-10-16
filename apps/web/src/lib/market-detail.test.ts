@@ -7,9 +7,10 @@ import { SRC } from '../test/screen-text';
 import { BOTTOM_TABS_HEIGHT_PX, ORDER_ENTRY_BAR_HEIGHT_PX } from './nav';
 import {
   DEFAULT_DETAIL_VIEW,
-  DETAIL_SECTIONS,
+  DETAIL_SLOTS,
   DETAIL_VIEWS,
   DETAIL_VIEW_ITEMS,
+  type DetailWidth,
   INITIAL_ORDER_SHEET,
   MD_UP_MEDIA_QUERY,
   ORDER_ENTRY_CONTRACTS,
@@ -17,21 +18,25 @@ import {
   backgroundText,
   closeOrderSheet,
   complementReading,
+  copyDisplay,
+  copyTestId,
   detailViewOf,
   drawnOrder,
   openOrderSheet,
   orderEntryLabel,
   orderSheetBody,
+  perWidth,
   personalAreaView,
-  sectionOrder,
   showsOrderArea,
   viewDisplay,
 } from './market-detail';
 
+const WIDTHS: readonly DetailWidth[] = ['md', 'base'];
+
 describe('the detail sections (#122, ADR-0061 decision 1, item 16)', () => {
-  it("is N02 §4's list, and md and up draws it unmoved", () => {
+  it("draws N02 §4's list from md up", () => {
     // 질문·배경·규칙·출처·마감(·판정 기록), 가격 차트, 호가·최근 체결, 내 포지션·대기 주문, 토론.
-    expect(DETAIL_SECTIONS).toEqual([
+    expect(drawnOrder('md')).toEqual([
       'summary',
       'background',
       'rules',
@@ -41,18 +46,6 @@ describe('the detail sections (#122, ADR-0061 decision 1, item 16)', () => {
       'position',
       'discussion',
     ]);
-    expect(drawnOrder('md')).toEqual([...DETAIL_SECTIONS]);
-    for (const section of DETAIL_SECTIONS) expect(sectionOrder(section).md).toBe(0);
-  });
-
-  it('is the order the detail renders: MarketDetail iterates this list, once, for every key', () => {
-    // Without a DOM the page cannot be rendered here, so this reads the component's source: the
-    // sections come out of one `DETAIL_SECTIONS.map` over a record that must name every key, not
-    // out of JSX written in its own order beside a list nobody reads. The DOM order itself is
-    // pinned by market.spec.ts (`expectTopToBottom`).
-    const source = readFileSync(path.join(SRC, 'app/markets/[slug]/market-detail.tsx'), 'utf8');
-    expect(source.match(/DETAIL_SECTIONS\.map\(/g)).toHaveLength(1);
-    expect(source).toContain('Record<DetailSection, ReactNode>');
   });
 
   it('below md draws 요약 and the chart first, then the 호가·거래 내역 switch, then the rest in order', () => {
@@ -69,10 +62,99 @@ describe('the detail sections (#122, ADR-0061 decision 1, item 16)', () => {
     ]);
   });
 
-  it('moves only the three lifted sections, so the others need no order prop', () => {
-    const moved = DETAIL_SECTIONS.filter((section) => sectionOrder(section).base !== 0);
-    expect(moved).toEqual(['summary', 'chart', 'activity']);
-    expect(moved.map((section) => sectionOrder(section).base)).toEqual([-3, -2, -1]);
+  it('holds what each width draws in the order it draws it: no section is drawn out of DOM order', () => {
+    // WCAG 1.3.2 (Codex review on #213): the CSS `order` this replaced lifted the chart and the
+    // switch above 배경·규칙·판정 기록 below md on screen only, so a screen reader met them in
+    // N02 §4's order there. Now a width draws a subsequence of the DOM, so its reading order is
+    // its drawn order by construction — this pins that the DOM is that list, slot by slot.
+    expect(DETAIL_SLOTS.map((slot) => `${slot.section}:${slot.width}`)).toEqual([
+      'summary:all',
+      'background:md',
+      'rules:md',
+      'judging:md',
+      'chart:all',
+      'activity:all',
+      'background:base',
+      'rules:base',
+      'judging:base',
+      'position:all',
+      'discussion:all',
+    ]);
+    // …and what CSS draws at a width is that subsequence: the shared slots and the width's own
+    // copies, whose `display` is not `none` there.
+    for (const width of WIDTHS) {
+      const drawn = DETAIL_SLOTS.filter(
+        (slot) => slot.width === 'all' || copyDisplay(slot.width)[width] !== 'none',
+      );
+      expect(
+        drawn.map((slot) => slot.section),
+        width,
+      ).toEqual(drawnOrder(width));
+    }
+  });
+
+  it('draws every section once at each width, and copies only 배경, 규칙 and 공개 판정 기록', () => {
+    for (const width of WIDTHS) {
+      const drawn = drawnOrder(width);
+      expect(new Set(drawn).size, width).toBe(drawn.length);
+      expect([...drawn].sort(), width).toEqual([...drawnOrder('md')].sort());
+    }
+    // The chart, the switch with 최근 체결, 요약 with 관심 등록 and 내 포지션 hold state or fetch:
+    // one slot each, so each is mounted once.
+    const copied = DETAIL_SLOTS.filter((slot) => slot.width !== 'all');
+    expect(copied.map((slot) => slot.section).sort()).toEqual([
+      'background',
+      'background',
+      'judging',
+      'judging',
+      'rules',
+      'rules',
+    ]);
+    for (const section of ['summary', 'chart', 'activity', 'position', 'discussion']) {
+      expect(
+        DETAIL_SLOTS.filter((slot) => slot.section === section),
+        section,
+      ).toEqual([{ section, width: 'all' }]);
+    }
+  });
+
+  it("shows a copy at its own width only, as `contents` so the section in it is the column's item", () => {
+    expect(copyDisplay('md')).toEqual({ base: 'none', md: 'contents' });
+    expect(copyDisplay('base')).toEqual({ base: 'contents', md: 'none' });
+    // At each width exactly one copy of each copied section is drawn: its own.
+    for (const width of WIDTHS) {
+      for (const section of ['background', 'rules', 'judging']) {
+        const drawn = DETAIL_SLOTS.filter(
+          (slot) =>
+            slot.section === section &&
+            slot.width !== 'all' &&
+            copyDisplay(slot.width)[width] !== 'none',
+        );
+        expect(drawn, `${section} at ${width}`).toEqual([{ section, width }]);
+      }
+    }
+  });
+
+  it("gives each copy its own test ids, the width after the section's (e2e helpers.ts writes the same)", () => {
+    expect(copyTestId('market-rules', 'md')).toBe('market-rules-md');
+    expect(copyTestId('market-rules', 'base')).toBe('market-rules-base');
+    expect(perWidth((width) => copyTestId('market-background', width))).toEqual({
+      md: 'market-background-md',
+      base: 'market-background-base',
+    });
+  });
+
+  it('is the order the detail renders: MarketDetail iterates the slots, once, filling a record per kind', () => {
+    // Without a DOM the page cannot be rendered here, so this reads the component's source: the
+    // sections come out of one `DETAIL_SLOTS.map` over records that must name every key, not out
+    // of JSX written in its own order beside a list nobody reads; and no CSS `order` moves one
+    // on screen away from its place in the DOM. The DOM order itself is pinned by market.spec.ts
+    // (`expectInOrder`, which reads the document order as well as the boxes).
+    const source = readFileSync(path.join(SRC, 'app/markets/[slug]/market-detail.tsx'), 'utf8');
+    expect(source.match(/DETAIL_SLOTS\.map\(/g)).toHaveLength(1);
+    expect(source).toContain('Record<SharedSection, ReactNode>');
+    expect(source).toContain('Record<CopiedSection, Record<DetailWidth, ReactNode>>');
+    expect(source).not.toMatch(/\border=\{/);
   });
 });
 
