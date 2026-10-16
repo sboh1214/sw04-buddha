@@ -12,7 +12,11 @@ import {
 } from '@/lib/api';
 import { SEARCH_HISTORY_KEY } from '@/lib/market-keys';
 import { searchToRecord } from '@/lib/market-search';
-import { type SearchHistoryWrite, afterSearchHistoryWrite } from '@/lib/search-history';
+import {
+  type SearchHistoryWrite,
+  afterSearchHistoryWrite,
+  undoSearchHistoryWrite,
+} from '@/lib/search-history';
 import { useSession } from '@/lib/use-session';
 
 /**
@@ -106,9 +110,10 @@ async function postWrite(write: SearchHistoryWrite): Promise<RecentSearch[]> {
   ).data;
 }
 
-/** What `onMutate` hands to the rollback: the list as it was before the press. */
+/** What `onMutate` hands to the rollback: the list at the press and the entries this write hid. */
 interface HistorySnapshot {
-  held: RecentSearch[] | undefined;
+  before: RecentSearch[];
+  removed: RecentSearch[];
 }
 
 /**
@@ -117,7 +122,9 @@ interface HistorySnapshot {
  * - `onMutate` cancels a read in flight (it may have left before this write and would land after
  *   it with the entry still there), keeps the list, and shows it without the entry
  *   (`afterSearchHistoryWrite`), so the row goes on the press.
- * - failure puts the list back. A refusal as another account also asks for the session again.
+ * - failure puts back the entries THIS write hid (`undoSearchHistoryWrite`), into the list as it
+ *   is then — not the snapshot of the list, which a second delete in flight would have changed.
+ *   A refusal as another account also asks for the session again.
  * - when the last of the writes in flight settles, the list is read again, so the screen ends on
  *   the server's word. Not after each: two quick deletes would otherwise read the list between
  *   them and bring the second entry back for a moment.
@@ -139,16 +146,19 @@ export function searchHistoryWriteOptions(
     onMutate: async (write: SearchHistoryWrite): Promise<HistorySnapshot> => {
       await queryClient.cancelQueries({ queryKey: SEARCH_HISTORY_KEY, exact: true });
       const held = queryClient.getQueryData<RecentSearch[]>(SEARCH_HISTORY_KEY);
-      if (held !== undefined) {
-        queryClient.setQueryData(SEARCH_HISTORY_KEY, afterSearchHistoryWrite(held, write));
-      }
-      return { held };
+      if (held === undefined) return { before: [], removed: [] };
+      const after = afterSearchHistoryWrite(held, write);
+      queryClient.setQueryData(SEARCH_HISTORY_KEY, after);
+      return { before: held, removed: held.filter((entry) => !after.includes(entry)) };
     },
     onError: (error: Error, write: SearchHistoryWrite, snapshot: HistorySnapshot | undefined) => {
       if (isForAnotherAccount(error)) onSessionChanged();
-      if (snapshot?.held !== undefined && meBelongsTo(queryClient, write.expectedAccountId)) {
-        queryClient.setQueryData(SEARCH_HISTORY_KEY, snapshot.held);
-      }
+      if (snapshot === undefined || snapshot.removed.length === 0) return;
+      if (!meBelongsTo(queryClient, write.expectedAccountId)) return;
+      queryClient.setQueryData<RecentSearch[]>(
+        SEARCH_HISTORY_KEY,
+        (current) => current && undoSearchHistoryWrite(current, snapshot.removed, snapshot.before),
+      );
     },
     onSettled: async () => {
       // This write still counts as mutating while its own onSettled runs.

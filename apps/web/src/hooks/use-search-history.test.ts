@@ -207,6 +207,55 @@ describe('searchHistoryWriteOptions', () => {
     expect(sessionAsked).toBe(1);
   });
 
+  it('undoes each failed delete on its own when two are in flight (Codex on #212)', async () => {
+    // Deleting a, then b; both fail, the first failure first. Restoring each write's snapshot
+    // would leave [b] — a hidden though neither delete happened — and the read after them fails
+    // in the same outage, so nothing would correct it.
+    // The server's order: the newest search first.
+    const newer = { ...entry('a', '금리'), searchedAt: '2026-10-16T02:00:00.000Z' };
+    const older = { ...entry('b', '환율'), searchedAt: '2026-10-16T01:00:00.000Z' };
+    const queryClient = seeded('user-a', [newer, older]);
+    const first = deferred<RecentSearch[]>();
+    const second = deferred<RecentSearch[]>();
+    const answers = [first, second];
+    const options = searchHistoryWriteOptions(
+      queryClient,
+      () => undefined,
+      () => answers.shift()!.promise,
+    );
+    const one = new MutationObserver(queryClient, options).mutate(deleteOf('a'));
+    const two = new MutationObserver(queryClient, options).mutate(deleteOf('b'));
+    await flush();
+    expect(held(queryClient)).toEqual([]);
+    first.reject(outage());
+    await expect(one).rejects.toThrow();
+    // b's delete is still out: a comes back, b stays hidden.
+    expect(held(queryClient)).toEqual([newer]);
+    second.reject(outage());
+    await expect(two).rejects.toThrow();
+    expect(held(queryClient)).toEqual([newer, older]);
+
+    // The other order of failures ends the same.
+    const again = seeded('user-a', [newer, older]);
+    const third = deferred<RecentSearch[]>();
+    const fourth = deferred<RecentSearch[]>();
+    const more = [third, fourth];
+    const options2 = searchHistoryWriteOptions(
+      again,
+      () => undefined,
+      () => more.shift()!.promise,
+    );
+    const three = new MutationObserver(again, options2).mutate(deleteOf('a'));
+    const four = new MutationObserver(again, options2).mutate(deleteOf('b'));
+    await flush();
+    fourth.reject(outage());
+    await expect(four).rejects.toThrow();
+    expect(held(again)).toEqual([older]);
+    third.reject(outage());
+    await expect(three).rejects.toThrow();
+    expect(held(again)).toEqual([newer, older]);
+  });
+
   it('never puts one account’s terms back into another account’s list', async () => {
     // The press was for user-a; before its failure landed, the tab became user-b's
     // (SessionCacheGuard reset the cache, and user-b's list was read). The rollback must not
