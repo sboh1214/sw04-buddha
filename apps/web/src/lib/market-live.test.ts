@@ -132,7 +132,12 @@ const me: Me = {
   id: 'user-1',
   email: 'a@example.com',
   emailVerified: true,
-  profile: { nickname: '테스터', role: 'user', createdAt: '2026-08-01T00:00:00.000Z' },
+  profile: {
+    nickname: '테스터',
+    role: 'user',
+    createdAt: '2026-08-01T00:00:00.000Z',
+    timeZone: null,
+  },
   balance: { availableCoin: '100000', lockedCoin: '0' },
   linkedAccounts: [],
   contact: null,

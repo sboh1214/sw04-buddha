@@ -20,7 +20,12 @@ describe('meSchema', () => {
     id: 'u1',
     email: 'user@example.com',
     emailVerified: false,
-    profile: { nickname: 'user_Q7Z9', role: 'user', createdAt: '2026-09-03T00:00:00.000Z' },
+    profile: {
+      nickname: 'user_Q7Z9',
+      role: 'user',
+      createdAt: '2026-09-03T00:00:00.000Z',
+      timeZone: null,
+    },
     balance: { availableCoin: '0', lockedCoin: '0' },
     linkedAccounts: [
       {
@@ -42,6 +47,14 @@ describe('meSchema', () => {
     expect(meSchema.parse(withContact)).toEqual(withContact);
     const { contact: _dropped, ...withoutContact } = sample;
     expect(meSchema.safeParse(withoutContact).success).toBe(false);
+  });
+
+  it('carries the picked time zone, null while the browser is followed, and requires the key', () => {
+    const picked = { ...sample, profile: { ...sample.profile, timeZone: 'America/New_York' } };
+    expect(meSchema.parse(picked)).toEqual(picked);
+    expect(meSchema.parse(sample).profile.timeZone).toBeNull();
+    const { timeZone: _dropped, ...withoutZone } = sample.profile;
+    expect(meSchema.safeParse({ ...sample, profile: withoutZone }).success).toBe(false);
   });
 
   it('rejects a non-string balance', () => {

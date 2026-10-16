@@ -141,6 +141,17 @@ export const copy = {
   passwordNotSet: '아직 비밀번호가 없습니다. 설정하면 이메일로도 로그인할 수 있습니다.',
   settingsTheme: '테마',
   settingsThemeHint: '라이트/다크 모드를 전환합니다.',
+  // 시간대 (ADR-0061 #60-8, ADR-0063). 고르지 않으면 브라우저 시간대를 따르고, 그 선택지 뒤에
+  // 지금 브라우저의 시간대를 괄호로 붙인다. 시간대는 선택지마다 IANA 이름과 브라우저가 주는
+  // 한국어 이름이다('America/New_York — 미 동부 시간', 오너 결정 2026-10-16, lib/time-zone.ts).
+  settingsTimeZone: '시간대',
+  // 관리자 화면은 고른 시간대와 상관없이 한국 시간이고 표시가 없다(ADR-0061 #60-8), 그래서 힌트가
+  // 회원 화면으로 범위를 좁힌다. 표시는 UTC와의 차이다(`(GMT-4)`, ADR-0063).
+  settingsTimeZoneHint:
+    '회원 화면의 시각을 이 시간대로 보여 줍니다. Asia/Seoul이 아니면 시각 옆에 UTC와의 차이를 적습니다. 관리자 화면은 한국 시간입니다.',
+  timeZoneFollowBrowser: '브라우저 시간대 따르기',
+  timeZoneSaved: '시간대를 저장했습니다.',
+  errTimeZoneInvalid: '이 시간대는 저장할 수 없습니다. 다른 시간대를 골라 주세요.',
   settingsAccount: '계정',
   settingsAccountHint: '이메일은 인증을 거친 뒤에만 변경됩니다.',
   settingsEmailUnverified: '이메일 인증이 완료되지 않았습니다.',

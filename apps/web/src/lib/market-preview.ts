@@ -79,7 +79,7 @@ export function toPreviewMarket(
     // Only once the field holds a URL the API would accept: the card puts `imageUrl` straight
     // into an `<img>`, and a half-typed one would have the browser fetch `htt` per keystroke.
     imageUrl: imageUrl !== null && isHttpUrl(imageUrl) ? imageUrl : null,
-    // `''` while the required field is empty: `formatKst` renders that blank and the badge reads
+    // `''` while the required field is empty: the badge's formatter renders that blank and it reads
     // 마감됨 until a close time is typed. Inventing an instant would mean reading the clock here.
     closeAt: body.closeAt,
     ...history,

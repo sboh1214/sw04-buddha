@@ -3,6 +3,7 @@ import { coinAmountSchema } from './api/coin-amount.js';
 import { NICKNAME_MAX_LENGTH, NICKNAME_MIN_LENGTH } from './constants.js';
 import { contactSchema } from './contact.js';
 import { roleSchema } from './enums.js';
+import { TIME_ZONE_MAX_LENGTH } from './time-zone.js';
 
 /**
  * Nickname charset (PLAN 17 Q4 default + `_`): Hangul syllables, ASCII letters, digits and
@@ -42,6 +43,13 @@ export const meSchema = z
       nickname: nicknameSchema,
       role: roleSchema,
       createdAt: z.iso.datetime(),
+      /**
+       * The IANA zone picked in MY 설정 (ADR-0063), or null to follow the browser. A plain
+       * string here, not `timeZoneSchema`: the name was checked when it was written, and a
+       * reader whose tzdata lacks it falls back to the browser's zone rather than refusing the
+       * whole profile.
+       */
+      timeZone: z.string().max(TIME_ZONE_MAX_LENGTH).nullable(),
     }),
     balance: z.object({ availableCoin: coinAmountSchema, lockedCoin: coinAmountSchema }),
     linkedAccounts: z.array(linkedAccountSchema),

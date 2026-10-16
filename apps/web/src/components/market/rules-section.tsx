@@ -1,7 +1,7 @@
 import { Card, DataList, Heading, Stack, Text } from '@chakra-ui/react';
 import { type ReactNode } from 'react';
+import { DateTimeText } from '@/components/time-zone/time-zone-provider';
 import { copy } from '@/copy';
-import { formatKst } from '@/lib/datetime';
 
 /**
  * 규칙 (PLAN 11.4 RulesSection, PLAN 11.1's Kalshi principle): what counts as YES, where
@@ -15,6 +15,10 @@ import { formatKst } from '@/lib/datetime';
  * out of view-source, before any hydration. The rules are plain text on a `pre-wrap` block —
  * the admin form's help text calls them 마크다운, but no markdown renderer exists in this repo
  * and adding one for a paragraph would be a dependency plus an HTML-injection surface.
+ *
+ * The close time is the one client island in it (`DateTimeText`): it reads the member's zone
+ * (ADR-0063), which the server's HTML and the first client render give as KST, so view-source
+ * still holds it. In the admin preview the admin layout holds it at KST.
  */
 
 /** The repo's placeholder for a field the market has not filled in (admin-market-detail.tsx). */
@@ -52,7 +56,9 @@ export function RulesSection({
                   empty string, and both mean the same thing to a reader. */}
               {market.resolutionSource || copy.rulesNone}
             </Item>
-            <Item label={copy.rulesCloseAt}>{formatKst(market.closeAt)}</Item>
+            <Item label={copy.rulesCloseAt} testId={`${testId}-close-at`}>
+              <DateTimeText iso={market.closeAt} />
+            </Item>
           </DataList.Root>
         </Stack>
       </Card.Body>
@@ -60,11 +66,19 @@ export function RulesSection({
   );
 }
 
-function Item({ label, children }: { label: string; children: ReactNode }) {
+function Item({
+  label,
+  testId,
+  children,
+}: {
+  label: string;
+  testId?: string;
+  children: ReactNode;
+}) {
   return (
     <DataList.Item>
       <DataList.ItemLabel>{label}</DataList.ItemLabel>
-      <DataList.ItemValue whiteSpace="pre-wrap" wordBreak="break-word">
+      <DataList.ItemValue whiteSpace="pre-wrap" wordBreak="break-word" data-testid={testId}>
         {children}
       </DataList.ItemValue>
     </DataList.Item>

@@ -32,4 +32,5 @@ export * from './realtime.js';
 export * from './release-settings.js';
 export * from './terms.js';
 export * from './ticks.js';
+export * from './time-zone.js';
 export * from './wallet.js';

@@ -1,7 +1,7 @@
 'use client';
 
 import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import { ME_QUERY_KEY } from '@/hooks/use-me';
+import { ME_QUERY_KEY, meBelongsTo } from '@/hooks/use-me';
 import {
   api,
   isForAnotherAccount,
@@ -37,28 +37,11 @@ async function putContact(body: ContactBody): Promise<Contact> {
 }
 
 /**
- * Whether `['me']` may take a write made for `account`: it holds that account's profile, or no
- * profile at all.
- *
- * `account` is not a guess. It is the `expectedAccountId` the request sent, and the server
- * compared it with the cookie before writing, so a 2xx PROVES whose contact (or password) it
- * was — which `Contact` itself never says. The entry, unlike `['positions']`, carries its owner
- * (`Me.id`), so the comparison is the entry's own and needs no reading of the session. A profile of somebody else means the tab switched accounts while the
- * request ran (SessionCacheGuard reset the caches and the other account's `GET /me` landed):
- * patching A's name and number into B's profile would show them on B's screen and hand them
- * to B's gate, and even a mere refresh is not this answer's to ask for — the guard owns that
- * entry now. No profile at all is nothing of anybody's to overwrite, and the request that fills
- * it asks the cookie.
- */
-export function meBelongsTo(queryClient: QueryClient, account: string): boolean {
-  const held = queryClient.getQueryData<Me>(ME_QUERY_KEY);
-  return held === undefined || held.id === account;
-}
-
-/**
  * Writes the saved contact into `['me']` straight away rather than invalidating: the gate reads
  * that entry, and a refetch still in flight when /onboarding navigates on would leave it
  * holding `contact: null` for one more render — enough to send the member straight back.
+ * `Contact` itself never says whose it is, so the account is the `expectedAccountId` the PUT
+ * sent (`meBelongsTo`, use-me.ts); `storeMe` there is the same write for a profile.
  *
  * A `GET /me` already in flight (a window-focus refetch, a realtime resnapshot) is cancelled
  * first, as realtime-provider.tsx does before it patches `['me']`: it may have left before the

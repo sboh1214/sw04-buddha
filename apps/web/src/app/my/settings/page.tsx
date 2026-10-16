@@ -9,6 +9,7 @@ import { NicknameForm } from './nickname-form';
 import { PasswordForm } from './password-form';
 import { SettingsNotice } from './settings-notice';
 import { ThemeSection } from './theme-section';
+import { TimeZoneSection } from './time-zone-section';
 
 export const metadata: Metadata = { title: `${copy.settingsTitle} | ${copy.appName}` };
 
@@ -34,6 +35,7 @@ export default async function SettingsPage({
       <ContactSection />
       <LinkedAccounts />
       <PasswordForm />
+      <TimeZoneSection />
       <ThemeSection />
     </Stack>
   );

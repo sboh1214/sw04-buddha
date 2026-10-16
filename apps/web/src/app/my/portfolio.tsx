@@ -19,6 +19,7 @@ import type { Route } from 'next';
 import NextLink from 'next/link';
 import { usePathname } from 'next/navigation';
 import { type ReactNode } from 'react';
+import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { CoinText } from '@/components/ui/coin-text';
 import { EmptyState } from '@/components/ui/empty-state';
 import { copy } from '@/copy';
@@ -42,7 +43,6 @@ import {
   usePositions,
 } from '@/hooks/use-portfolio';
 import { type Market, type Order, type Position } from '@/lib/api';
-import { formatKst } from '@/lib/datetime';
 import {
   MARKET_STATUS_LABEL,
   MARKET_STATUS_PALETTE,
@@ -605,6 +605,7 @@ function SettledPositionRow({ position }: { position: Position }) {
  */
 function OrderRow({ order }: { order: Order }) {
   const yes = order.outcome === 'YES';
+  const formatDateTime = useFormatDateTime();
   return (
     <Stack
       gap="2"
@@ -637,7 +638,7 @@ function OrderRow({ order }: { order: Order }) {
             <CoinText amount={parseCoinAmount(order.amountCoin)} />
           )}
         </Item>
-        <Item label={copy.orderCreatedAt}>{formatKst(order.createdAt)}</Item>
+        <Item label={copy.orderCreatedAt}>{formatDateTime(order.createdAt)}</Item>
       </DataList.Root>
     </Stack>
   );

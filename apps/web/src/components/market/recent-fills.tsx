@@ -11,10 +11,10 @@ import {
   Stack,
   Text,
 } from '@chakra-ui/react';
+import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { EmptyState } from '@/components/ui/empty-state';
 import { copy } from '@/copy';
 import { usePublicMarketFills } from '@/hooks/use-markets';
-import { formatKst } from '@/lib/datetime';
 import { listView } from '@/lib/query-client';
 import { formatContracts, formatPricePerContract } from '@/lib/market-admin';
 
@@ -48,6 +48,7 @@ export function RecentFills({
   'data-testid': testId = 'market-fills',
 }: RecentFillsProps) {
   const fills = usePublicMarketFills(marketId, enabled);
+  const formatDateTime = useFormatDateTime();
   // Four states, not three: `listView` is where `stale` stops being folded into `ready`.
   const view = listView(fills);
   // `view` no longer narrows `data` for the compiler the way the old `isPending`/`isLoadingError`
@@ -103,7 +104,7 @@ export function RecentFills({
                 data-testid={`market-fill-${fill.id}`}
               >
                 <Text color="fg.muted" minW="40">
-                  {formatKst(fill.createdAt)}
+                  {formatDateTime(fill.createdAt)}
                 </Text>
                 <Badge colorPalette={fill.outcome === 'YES' ? 'yes' : 'no'} variant="subtle">
                   {fill.outcome === 'YES' ? copy.yes : copy.no}

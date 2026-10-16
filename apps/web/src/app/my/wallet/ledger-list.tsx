@@ -2,10 +2,10 @@
 
 import { Alert, Button, Card, HStack, Skeleton, Stack, Text } from '@chakra-ui/react';
 import { MINUS_SIGN, formatCoin, parseCoinAmount, type LedgerEntryType } from '@buddha/shared';
+import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { copy } from '@/copy';
 import { useLedger } from '@/hooks/use-wallet';
 import { type LedgerEntry } from '@/lib/api';
-import { formatKst } from '@/lib/datetime';
 
 /** PLAN Appendix A: never "베팅"; every ledger type gets plain Korean. */
 const TYPE_LABEL: Record<LedgerEntryType, string> = {
@@ -75,12 +75,13 @@ export function LedgerList() {
 export function LedgerRow({ entry }: { entry: LedgerEntry }) {
   const amount = parseCoinAmount(entry.amountCoin);
   const credit = amount >= 0n;
+  const formatDateTime = useFormatDateTime();
   return (
     <HStack justify="space-between" pt="3" _first={{ pt: 0 }} align="start">
       <Stack gap="0.5">
         <Text fontWeight="medium">{TYPE_LABEL[entry.type]}</Text>
         <Text fontSize="xs" color="fg.muted">
-          {formatKst(entry.createdAt)}
+          {formatDateTime(entry.createdAt)}
         </Text>
         {entry.memo && (
           <Text fontSize="xs" color="fg.muted">

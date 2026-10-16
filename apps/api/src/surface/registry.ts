@@ -90,6 +90,10 @@ export const OWNER_ROUTES: Readonly<Record<string, RegisteredRoute>> = {
   'PUT /me/contact': {
     reason: '본인 실명·휴대전화(ADR-0043): 본문의 expectedAccountId가 세션 계정이어야 한다',
   },
+  'PUT /me/time-zone': {
+    reason:
+      '본인 표시 시간대 저장·해제(ADR-0063): 세션 계정의 프로필만 바꾸고, 연락처처럼 본문의 expectedAccountId가 세션 계정이어야 한다',
+  },
   'GET /me/ledger': {
     reason: '본인 Coin 원장(N04 §3 지갑)',
   },

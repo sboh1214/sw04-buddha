@@ -14,7 +14,12 @@ describe('PRIVATE_DATA (#113)', () => {
     for (const item of PRIVATE_DATA) {
       expect(item.name.trim(), item.id).not.toBe('');
       expect(item.basis.trim(), item.id).not.toBe('');
-      expect(item.fields.length, item.id).toBeGreaterThan(0);
+      // Something names it: a run of words, or a thing and whose it is.
+      if (item.owned === undefined) expect(item.fields.length, item.id).toBeGreaterThan(0);
+      else {
+        expect(item.owned.words.length, item.id).toBeGreaterThan(0);
+        expect(item.owned.whose.length, item.id).toBeGreaterThan(0);
+      }
       for (const run of item.fields) {
         expect(run.length, item.id).toBeGreaterThan(0);
         for (const word of run) expect(word, item.id).toMatch(/^[a-z]+$/);
@@ -32,6 +37,7 @@ describe('PRIVATE_DATA (#113)', () => {
         'email',
         'real-name',
         'phone',
+        'time-zone',
         'identity-verification',
         'risk-flag',
         'author-holding',
@@ -77,6 +83,13 @@ describe('findPrivateField', () => {
     ['buyer_full_name', 'real-name'],
     ['phone', 'phone'],
     ['mobileNumber', 'phone'],
+    ['userTimeZone', 'time-zone'],
+    ['profileTimeZone', 'time-zone'],
+    ['memberZone', 'time-zone'],
+    ['myTimeZone', 'time-zone'],
+    ['viewer_tz', 'time-zone'],
+    ['timeZoneOfAccount', 'time-zone'],
+    ['traderTimezone', 'time-zone'],
     ['identityVerification', 'identity-verification'],
     ['otpSentAt', 'identity-verification'],
     ['ci', 'identity-verification'],
@@ -138,6 +151,17 @@ describe('findPrivateField', () => {
     'robot',
     'limit',
     'liquid',
+    // A market's judging time zone (#22): a zone with no whose-word is public.
+    'timeZone',
+    'time_zone',
+    'timezone',
+    'tz',
+    'zone',
+    'judgingTimeZone',
+    'resolutionTimeZone',
+    'judging_zone',
+    'marketTimeZone',
+    'closeAtTz',
   ])('lets %s through', (name) => {
     expect(findPrivateField(name)).toEqual([]);
   });
@@ -168,6 +192,46 @@ describe('findPrivateField', () => {
         .filter((hit) => hit.item === 'market-maker')
         .map((hit) => hit.words),
     ).toEqual([words]);
+  });
+
+  // The time-zone item, by a name only that word catches (owner decision 2026-10-16, ADR-0063):
+  // each zone word beside one whose-word, and each whose-word it adds to WHOSE.
+  const timeZone = PRIVATE_DATA.find((item) => item.id === 'time-zone')!;
+  const timeZoneHits = (name: string) =>
+    findPrivateField(name)
+      .filter((hit) => hit.item === 'time-zone')
+      .map((hit) => hit.words);
+  const TIME_ZONE_WORDS: readonly [string, string][] = [
+    ['userTimeZone', 'user zone'],
+    ['member_zones', 'member zones'],
+    ['accountTimezone', 'account timezone'],
+    ['profileTimezones', 'profile timezones'],
+    ['ownerTz', 'owner tz'],
+    ['myZone', 'my zone'],
+    ['mineTz', 'mine tz'],
+    ['viewerTimeZone', 'viewer zone'],
+    ['viewersZones', 'viewers zones'],
+  ];
+
+  it.each(TIME_ZONE_WORDS)('keeps %s private as a time-zone field (%s)', (name, words) => {
+    expect(timeZoneHits(name)).toEqual([words]);
+  });
+
+  const fillsWhose = PRIVATE_DATA.find((item) => item.id === 'fills')!.owned!.whose;
+
+  it('has an example above for every zone word and every whose-word it adds', () => {
+    const example = (word: string) =>
+      TIME_ZONE_WORDS.some(([, words]) => words.split(' ').includes(word));
+    expect(timeZone.owned!.words.filter((word) => !example(word))).toEqual([]);
+    expect(
+      timeZone.owned!.whose.filter((word) => !fillsWhose.includes(word) && !example(word)),
+    ).toEqual([]);
+  });
+
+  it('takes every whose-word of the fills item as whose a time zone is', () => {
+    for (const word of fillsWhose) {
+      expect(timeZoneHits(`${word}TimeZone`), word).toEqual([`${word} zone`]);
+    }
   });
 
   it('reports the item and the words that matched', () => {

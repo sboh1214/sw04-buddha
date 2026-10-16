@@ -622,6 +622,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/me/time-zone": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set the time zone times are shown in (null: follow the browser) */
+        put: operations["updateMyTimeZone"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/payments/charge": {
         parameters: {
             query?: never;
@@ -1025,6 +1042,7 @@ export type components = {
                 createdAt: string;
                 nickname: components["schemas"]["Nickname"];
                 role: components["schemas"]["UserRole"];
+                timeZone: string | null;
             };
         };
         Nickname: string;
@@ -1226,6 +1244,10 @@ export type components = {
         };
         UpdateMeBody: {
             nickname: components["schemas"]["Nickname"];
+        };
+        UpdateTimeZoneBody: {
+            expectedAccountId: string;
+            timeZone: string | null;
         };
         /** @enum {string} */
         UserRole: "user" | "admin";
@@ -3883,6 +3905,76 @@ export interface operations {
             };
             /** @description UNAUTHENTICATED */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    updateMyTimeZone: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateTimeZoneBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["Me"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

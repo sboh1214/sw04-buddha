@@ -4,6 +4,7 @@ import type { Metadata, Route } from 'next';
 import { headers } from 'next/headers';
 import NextLink from 'next/link';
 import { redirect } from 'next/navigation';
+import { KstTimeZone } from '@/components/time-zone/time-zone-provider';
 import { copy } from '@/copy';
 import { adminLoginPath } from '@/lib/next-path';
 import { getServerRole, getServerSession } from '@/lib/session.server';
@@ -72,7 +73,10 @@ export default async function AdminLayout({ children }: { children: React.ReactN
             ))}
           </HStack>
         </HStack>
-        {children}
+        {/* KST for every time inside, whichever zone the admin picked as a member (ADR-0061
+            #60-8: 표시와 입력 모두 한국 시간). The admin lists call `formatKst` themselves; this is
+            what holds the member components they borrow — the preview's card and rules. */}
+        <KstTimeZone>{children}</KstTimeZone>
       </Stack>
     </Container>
   );

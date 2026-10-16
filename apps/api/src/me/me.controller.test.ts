@@ -148,6 +148,179 @@ describe.skipIf(!hasTestInfra)('/api/v1/me (integration)', () => {
     expect(health.json()).toMatchObject({ status: 'ok', db: 'ok', redis: 'ok' });
   });
 
+  // --- PUT /me/time-zone (ADR-0063) ---------------------------------------------------
+  describe('PUT /me/time-zone', () => {
+    const TRUSTED_ORIGIN = 'http://localhost:3000';
+    const putTimeZone = (payload: unknown, headers: Record<string, string> = {}) =>
+      t.app.inject({
+        method: 'PUT',
+        url: '/api/v1/me/time-zone',
+        headers: { origin: TRUSTED_ORIGIN, 'content-type': 'application/json', ...headers },
+        payload: JSON.stringify(payload),
+      });
+    const storedZone = async (userId: string) => {
+      const [row] = await t.db
+        .select({ timeZone: schema.profiles.timeZone })
+        .from(schema.profiles)
+        .where(eq(schema.profiles.userId, userId));
+      return row?.timeZone;
+    };
+    const zoneOf = async (cookie: string) => {
+      const res = await t.app.inject({ method: 'GET', url: '/api/v1/me', headers: { cookie } });
+      expect(res.statusCode).toBe(200);
+      return meSchema.parse(res.json<{ data: unknown }>().data).profile.timeZone;
+    };
+
+    it('starts at null (follow the browser), stores a zone, and clears it again with null', async () => {
+      expect(await zoneOf(user.cookie)).toBeNull();
+
+      const set = await putTimeZone(
+        { timeZone: 'America/New_York', expectedAccountId: user.id },
+        { cookie: user.cookie },
+      );
+      expect(set.statusCode).toBe(200);
+      // The whole profile, like PATCH /me, so the web can replace its ['me'] entry.
+      const me = meSchema.parse(set.json<{ data: unknown }>().data);
+      expect(me.id).toBe(user.id);
+      expect(me.profile.timeZone).toBe('America/New_York');
+      expect(await storedZone(user.id)).toBe('America/New_York');
+      expect(await zoneOf(user.cookie)).toBe('America/New_York');
+
+      const cleared = await putTimeZone(
+        { timeZone: null, expectedAccountId: user.id },
+        { cookie: user.cookie },
+      );
+      expect(cleared.statusCode).toBe(200);
+      expect(meSchema.parse(cleared.json<{ data: unknown }>().data).profile.timeZone).toBeNull();
+      expect(await storedZone(user.id)).toBeNull();
+      expect(await zoneOf(user.cookie)).toBeNull();
+    });
+
+    it('stores the name trimmed and as given, not rewritten to another spelling', async () => {
+      for (const [input, stored] of [
+        ['  Europe/London ', 'Europe/London'],
+        ['Asia/Kolkata', 'Asia/Kolkata'],
+        ['Asia/Seoul', 'Asia/Seoul'],
+        // Zones Node knows but leaves out of its list, which the settings select adds.
+        ['UTC', 'UTC'],
+        ['Etc/GMT+5', 'Etc/GMT+5'],
+      ] as const) {
+        const res = await putTimeZone(
+          { timeZone: input, expectedAccountId: user.id },
+          { cookie: user.cookie },
+        );
+        expect({ input, status: res.statusCode }).toEqual({ input, status: 200 });
+        expect(await storedZone(user.id)).toBe(stored);
+      }
+    });
+
+    it('refuses a zone Node does not know with 400 VALIDATION_ERROR naming the field, and writes nothing', async () => {
+      const account = { expectedAccountId: user.id };
+      await putTimeZone({ timeZone: 'Asia/Seoul', ...account }, { cookie: user.cookie });
+      for (const payload of [
+        { timeZone: 'Mars/Olympus_Mons', ...account },
+        { timeZone: '', ...account },
+        { timeZone: '   ', ...account },
+        { timeZone: '+09:00', ...account },
+        // Node matches these whatever their case, but no list holds them.
+        { timeZone: 'ASIA/SEOUL', ...account },
+        { timeZone: 'america/new_york', ...account },
+        { timeZone: `Asia/Seoul${String.fromCharCode(0)}`, ...account },
+        { timeZone: 'A'.repeat(65), ...account },
+        { timeZone: 9, ...account },
+        account,
+      ]) {
+        const res = await putTimeZone(payload, { cookie: user.cookie });
+        expect({ payload, status: res.statusCode }).toEqual({ payload, status: 400 });
+        const { error } = errorEnvelopeSchema.parse(res.json());
+        expect(error.code).toBe('VALIDATION_ERROR');
+        const paths = (error.details as ValidationIssue[]).map((issue) => issue.path);
+        expect(paths.length).toBeGreaterThan(0);
+        expect({ payload, paths: [...new Set(paths.flat())] }).toEqual({
+          payload,
+          paths: ['timeZone'],
+        });
+      }
+      expect(await storedZone(user.id)).toBe('Asia/Seoul');
+    });
+
+    it('answers 401 without a session and 403 for a foreign Origin, writing nothing', async () => {
+      const anonymous = await putTimeZone({
+        timeZone: 'America/New_York',
+        expectedAccountId: user.id,
+      });
+      expect(anonymous.statusCode).toBe(401);
+      expect(errorEnvelopeSchema.parse(anonymous.json()).error.code).toBe('UNAUTHENTICATED');
+
+      for (const origin of ['https://evil.example', 'null']) {
+        const res = await putTimeZone(
+          { timeZone: 'America/New_York', expectedAccountId: user.id },
+          { cookie: user.cookie, origin },
+        );
+        expect({ origin, status: res.statusCode }).toEqual({ origin, status: 403 });
+        expect(errorEnvelopeSchema.parse(res.json()).error.code).toBe('FORBIDDEN');
+      }
+      expect(await storedZone(user.id)).toBeNull();
+    });
+
+    it('keeps each account to its own zone: another member neither sees nor changes it', async () => {
+      const other = await signUpTestUser(t);
+      await putTimeZone(
+        { timeZone: 'Pacific/Chatham', expectedAccountId: user.id },
+        { cookie: user.cookie },
+      );
+      expect(await zoneOf(other.cookie)).toBeNull();
+
+      const res = await putTimeZone(
+        { timeZone: 'Europe/Paris', expectedAccountId: other.id },
+        { cookie: other.cookie },
+      );
+      expect(res.statusCode).toBe(200);
+      expect(res.body).not.toContain('Pacific/Chatham');
+      expect(await zoneOf(user.cookie)).toBe('Pacific/Chatham');
+      expect(await zoneOf(other.cookie)).toBe('Europe/Paris');
+
+      await putTimeZone({ timeZone: null, expectedAccountId: other.id }, { cookie: other.cookie });
+      expect(await zoneOf(user.cookie)).toBe('Pacific/Chatham');
+    });
+
+    it('refuses a body naming another account than the cookie (403 naming expectedAccountId), writing nothing', async () => {
+      // A window still showing `other` after this browser signed in as `user`: the cookie is
+      // user's, the screen other's. Neither profile may change (ADR-0063, A-PG-24).
+      const other = await signUpTestUser(t);
+      await putTimeZone(
+        { timeZone: 'Pacific/Chatham', expectedAccountId: user.id },
+        { cookie: user.cookie },
+      );
+
+      const res = await putTimeZone(
+        { timeZone: 'America/New_York', expectedAccountId: other.id },
+        { cookie: user.cookie },
+      );
+      expect(res.statusCode).toBe(403);
+      const { error } = errorEnvelopeSchema.parse(res.json());
+      expect(error.code).toBe('FORBIDDEN');
+      expect(error.details).toEqual([
+        { path: ['expectedAccountId'], message: 'session belongs to another account' },
+      ]);
+      expect(await storedZone(user.id)).toBe('Pacific/Chatham');
+      expect(await storedZone(other.id)).toBeNull();
+
+      // Leaving the account out, or naming none, is a 400 on the field, not a cookie-only write.
+      for (const payload of [
+        { timeZone: 'America/New_York' },
+        { timeZone: 'America/New_York', expectedAccountId: '' },
+      ]) {
+        const refused = await putTimeZone(payload, { cookie: user.cookie });
+        expect({ payload, status: refused.statusCode }).toEqual({ payload, status: 400 });
+        const details = errorEnvelopeSchema.parse(refused.json()).error
+          .details as ValidationIssue[];
+        expect(details.map((issue) => issue.path)).toEqual([['expectedAccountId']]);
+      }
+      expect(await storedZone(user.id)).toBe('Pacific/Chatham');
+    });
+  });
+
   // --- PUT /me/contact (ADR-0043) ------------------------------------------------------
   describe('PUT /me/contact', () => {
     const TRUSTED_ORIGIN = 'http://localhost:3000';

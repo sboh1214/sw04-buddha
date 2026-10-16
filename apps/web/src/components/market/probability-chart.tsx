@@ -2,6 +2,7 @@
 
 import { Alert, Box, Button, HStack, SegmentGroup, Skeleton, Stack, Text } from '@chakra-ui/react';
 import { useId, useState } from 'react';
+import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { ChartDataTable, LineChart } from '@/components/ui/line-chart';
 import { copy } from '@/copy';
 import { useMarketTicks } from '@/hooks/use-markets';
@@ -19,7 +20,6 @@ import {
   sampleForTable,
   toChartPoints,
 } from '@/lib/chart';
-import { formatKst } from '@/lib/datetime';
 import { formatBp } from '@/lib/market-admin';
 import { DEFAULT_TICK_RANGE, TICK_RANGES, type TickRange, rowSupersedesSeries } from '@/lib/ticks';
 
@@ -117,6 +117,8 @@ export function ProbabilityChart({
   const series = useMarketTicks(marketId, range);
   const tableId = useId();
   const readoutId = useId();
+  // The readout is an absolute time, so it reads in the member's zone (ADR-0063).
+  const formatDateTime = useFormatDateTime();
 
   const held = series.data;
   // `extendToNow` holds the newest fill's price out to the window's right edge, so a quiet
@@ -343,7 +345,7 @@ export function ProbabilityChart({
         fontSize="sm"
         color="fg.muted"
       >
-        {point === undefined ? '' : `${formatKst(isoAt(point.t))} · ${formatBp(point.bp)}`}
+        {point === undefined ? '' : `${formatDateTime(isoAt(point.t))} · ${formatBp(point.bp)}`}
       </Text>
 
       <ChartDataTable id={tableId} rows={sampleForTable(points, TABLE_ROWS)} />
@@ -352,9 +354,9 @@ export function ProbabilityChart({
 }
 
 /**
- * The plotted instant back as an ISO string for `formatKst`. `toISOString` throws outside the
+ * The plotted instant back as an ISO string for the formatter. `toISOString` throws outside the
  * ±8.64e15 ms Date range and a throw in render blanks the screen, so an impossible instant
- * answers `''` — which `formatKst` already renders as an empty cell.
+ * answers `''` — which `formatInTimeZone` already renders as an empty cell.
  */
 function isoAt(t: number): string {
   const at = new Date(t);

@@ -1,7 +1,7 @@
 import { VisuallyHidden } from '@chakra-ui/react';
+import { DateTimeText } from '@/components/time-zone/time-zone-provider';
 import { copy } from '@/copy';
 import { CHART_VIEWBOX, type ChartPoint, chartGeometry } from '@/lib/chart';
-import { formatKst } from '@/lib/datetime';
 import { formatBp } from '@/lib/market-admin';
 
 /**
@@ -141,7 +141,9 @@ export function ChartDataTable({ id, rows }: ChartDataTableProps) {
           {rows.map((row, index) => (
             // Two ticks can share a millisecond, so the instant alone is not a unique key.
             <tr key={`${String(index)}:${String(row.t)}`}>
-              <td>{formatKst(isoAt(row.t))}</td>
+              <td>
+                <DateTimeText iso={isoAt(row.t)} />
+              </td>
               <td>{formatBp(row.bp)}</td>
             </tr>
           ))}
@@ -152,9 +154,9 @@ export function ChartDataTable({ id, rows }: ChartDataTableProps) {
 }
 
 /**
- * The epoch instant back as an ISO string for `formatKst`. `toISOString` throws on an instant
+ * The epoch instant back as an ISO string for the formatter. `toISOString` throws on an instant
  * outside the ±8.64e15 ms Date range, and a throw in render blanks the page, so the invalid
- * case returns `''` — which `formatKst` already answers with an empty cell.
+ * case returns `''` — which `formatInTimeZone` already answers with an empty cell.
  */
 function isoAt(t: number): string {
   const at = new Date(t);

@@ -1,8 +1,8 @@
 /**
  * #113 at run time, against the docker `test` profile. Account A's private data is in the
- * database — email, nickname, real name and phone, password and session, a balance and a ledger
- * memo, orders and the fill one of them got against another account's resting order, a position
- * with its PnL, a payment. Then:
+ * database — email, nickname and time zone, real name and phone, password and session, a balance
+ * and a ledger memo, orders and the fill one of them got against another account's resting order,
+ * a position with its PnL, a payment. Then:
  * - every registered public route (registry.ts) is called anonymously, as another account B and
  *   as A itself, and no answer may hold one of A's values or a field PRIVATE_DATA names, nor a
  *   field naming an excluded feature or keeping a probability;
@@ -237,7 +237,15 @@ interface OwnerCase {
 const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
   'GET /me': {
     status: 200,
-    own: ['email', 'nickname', 'real name', 'phone', 'available balance', 'locked balance'],
+    own: [
+      'email',
+      'nickname',
+      'time zone',
+      'real name',
+      'phone',
+      'available balance',
+      'locked balance',
+    ],
   },
   'PATCH /me': { body: () => ({ nickname: `b_${letters(8)}` }), status: 200 },
   'POST /me/password': {
@@ -250,6 +258,11 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
       phone: '01012345678',
       expectedAccountId: fixture.a.id,
     }),
+    status: 403,
+  },
+  // B's cookie naming A's account: refused before anything is written, and A's zone stays (below).
+  'PUT /me/time-zone': {
+    body: (fixture) => ({ timeZone: 'Europe/Paris', expectedAccountId: fixture.a.id }),
     status: 403,
   },
   'GET /me/ledger': {
@@ -521,7 +534,13 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     await t.app.get(AdminGuard).invalidate(admin.id);
 
     const nickname = `leak_${tag}`;
-    await t.db.update(schema.profiles).set({ nickname }).where(eq(schema.profiles.userId, a.id));
+    // A zone nobody else here picks (B's refused write in OWNER_CASES sends Europe/Paris), so its
+    // name in an answer can only be A's.
+    const timeZone = 'Pacific/Chatham';
+    await t.db
+      .update(schema.profiles)
+      .set({ nickname, timeZone })
+      .where(eq(schema.profiles.userId, a.id));
     const realName = `숨김${letters(8)}`;
     const phone = `010${String(randomInt(10_000_000, 100_000_000))}`;
     await t.db.insert(schema.userContacts).values({ userId: a.id, realName, phone });
@@ -665,6 +684,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         text('user id', a.id),
         text('email', a.email),
         text('nickname', nickname),
+        text('time zone', timeZone),
         text('real name', realName),
         text('phone', phone),
         text('password', a.password),
@@ -883,6 +903,11 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       .where(eq(schema.userContacts.userId, f.a.id));
     const sentinel = (label: string) => f.sentinels.find((s) => s.label === label)!.value;
     expect(contact).toMatchObject({ realName: sentinel('real name'), phone: sentinel('phone') });
+    const [profile] = await t.db
+      .select({ timeZone: schema.profiles.timeZone })
+      .from(schema.profiles)
+      .where(eq(schema.profiles.userId, f.a.id));
+    expect(profile?.timeZone).toBe(sentinel('time zone'));
     expect(passwordBefore).toHaveLength(1);
     expect(await password()).toEqual(passwordBefore);
   });
