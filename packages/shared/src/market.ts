@@ -8,6 +8,7 @@ import {
   MARKET_IMAGE_URL_MAX,
   MARKET_RESOLVE_EVIDENCE_URL_MAX,
   MARKET_RESOLVE_NOTE_MAX,
+  MARKET_SEARCH_TERM_MAX,
   MARKET_SLUG_PATTERN,
   MARKET_SLUG_STEM_MAX,
   MARKET_SOURCE_MAX,
@@ -140,6 +141,17 @@ export type PublicMarketStatus = (typeof PUBLIC_MARKET_STATUSES)[number];
 export const publicMarketStatusSchema = z.enum(PUBLIC_MARKET_STATUSES);
 
 /**
+ * `GET /markets?status=all`: every public status at once — the search screen's '모든 상태', which
+ * it starts on (ADR-0061 decision 1, item 13; ADR-0066). A value of its own rather than an omitted
+ * `status`, because omitted is `open` (the home's list, and every caller written before search):
+ * the default stays what it was and "all" has to be asked for by name.
+ */
+export const ALL_MARKET_STATUSES = 'all';
+export const MARKET_LIST_STATUSES = [...PUBLIC_MARKET_STATUSES, ALL_MARKET_STATUSES] as const;
+export type MarketListStatus = (typeof MARKET_LIST_STATUSES)[number];
+export const marketListStatusSchema = z.enum(MARKET_LIST_STATUSES);
+
+/**
  * The public list's orders (ADR-0061 decision 1, items 9–11; ADR-0065), in the order the home's
  * select lists them:
  *
@@ -147,7 +159,10 @@ export const publicMarketStatusSchema = z.enum(PUBLIC_MARKET_STATUSES);
  *   largest first, ties by the actual open time, latest first. Counted by a rule, never picked by
  *   an operator; every fill counts until #132 excludes abnormal ones.
  * - `newest` (신규): the actual open time (`open_at`), latest first.
- * - `closing` (마감 임박): the close time, soonest first, with no window.
+ * - `closing` (마감 임박): the close time, soonest first, with no window. On a list that can hold
+ *   ended markets (`status=all` or an ended status; MY's 관심 시장), the markets still 진행 중
+ *   (`open`) come first, soonest first, and every other one after them, the most recently closed
+ *   first — ended by its status, not by the clock (ADR-0066, owner decision 2026-10-16).
  *
  * Every order ends on the market id. A market with no open time sorts as the earliest open time
  * there is, so where it lands depends on the order: in `newest` after every market that has one;
@@ -178,14 +193,27 @@ export const marketCategoryFilterSchema = z
   .max(50)
   .describe('A category slug on either level; a top-level slug lists every sub-category under it');
 
-/** `GET /markets` (no `.meta`: query DTO). */
+/**
+ * A search term (ADR-0061 decision 1, item 14; ADR-0066): trimmed, 1..MARKET_SEARCH_TERM_MAX
+ * characters. A market's title holding it (case-insensitive, `%`·`_`·`\` literal) is a match.
+ * `GET /markets?q=` and the recorded search (`POST /me/search-history`) take the same one, so a
+ * term the screen can search is a term it can record. A NUL is refused by the API's global pipe
+ * (Postgres text cannot store one).
+ */
+export const marketSearchTermSchema = z.string().trim().min(1).max(MARKET_SEARCH_TERM_MAX);
+
+/**
+ * `GET /markets` (no `.meta`: query DTO). `status` defaults to `open` — the home's list (ADR-0061
+ * decision 1, item 13) — and `all` is every public status, which the search screen asks for until
+ * a status is picked (ADR-0066).
+ */
 export const marketListQuerySchema = cursorQuerySchema.extend({
   /** A category slug on either level: a top-level slug lists every sub-category under it. */
   category: marketCategoryFilterSchema.optional(),
-  status: publicMarketStatusSchema.default('open'),
+  status: marketListStatusSchema.default('open'),
   sort: marketSortSchema.default(DEFAULT_MARKET_SORT),
-  /** Title search. */
-  q: z.string().trim().min(1).max(100).optional(),
+  /** Title search: a partial match, case-insensitive (the search screen's, ADR-0066). */
+  q: marketSearchTermSchema.optional(),
 });
 export type MarketListQuery = z.infer<typeof marketListQuerySchema>;
 

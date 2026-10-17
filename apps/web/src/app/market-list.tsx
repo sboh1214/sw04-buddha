@@ -130,7 +130,7 @@ function WatchlistViewList({ filters, testId }: { filters: WatchlistViewFilters;
 }
 
 /** The parts of an infinite list of card pages that the grid reads. */
-interface CardList {
+export interface CardList {
   data: InfiniteData<MarketPage> | undefined;
   dataUpdatedAt: number;
   isPending: boolean;
@@ -142,15 +142,26 @@ interface CardList {
   refetch: () => Promise<unknown>;
 }
 
-function MarketGrid({
+/**
+ * The card grid with its rungs: skeleton, a first load that failed (its message, `errorMessage`,
+ * and 다시 시도), the empty message, the cards with 더 보기, and a notice above the cards when a
+ * later refresh failed. The home's two lists draw it, and so does the search screen's results
+ * (app/search/market-search.tsx), whose failure says whether the server could be reached at all.
+ */
+export function MarketGrid({
   list,
   now,
   emptyMessage,
+  errorMessage = copy.errUnknown,
+  cardTitleAs,
   testId,
 }: {
   list: CardList;
   now: number | undefined;
   emptyMessage: string;
+  errorMessage?: string;
+  /** The cards' heading level: `MarketCard`'s own default (`h2`) unless a screen nests them. */
+  cardTitleAs?: 'h2' | 'h3';
   testId: string;
 }) {
   const rows = list.data?.pages.flatMap((page) => page.items) ?? [];
@@ -189,7 +200,7 @@ function MarketGrid({
           <Alert.Root status="error" role="alert">
             <Alert.Indicator />
             <Alert.Content>
-              <Alert.Description>{copy.errUnknown}</Alert.Description>
+              <Alert.Description>{errorMessage}</Alert.Description>
             </Alert.Content>
           </Alert.Root>
           <Button size="sm" variant="outline" onClick={() => void list.refetch()}>
@@ -206,6 +217,7 @@ function MarketGrid({
                 key={row.id}
                 market={row}
                 now={rowAnchor(index, serverRowCount, list.dataUpdatedAt, now)}
+                titleAs={cardTitleAs}
               />
             ))}
           </Grid>

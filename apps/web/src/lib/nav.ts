@@ -4,6 +4,7 @@ import { copy } from '@/copy';
 import { type CategoryNode, locateCategory } from './category-tree';
 import { filterQuery, isWatchlistView } from './home-view';
 import { DEFAULT_MARKET_FILTERS, type HomeFilters, WATCHLIST_VIEW_PARAM } from './market-keys';
+import { SEARCH_PATH, searchFiltersFromSearchParams } from './market-search';
 import { filtersFromSearchParams } from './market-ssr';
 import { MY_PATH } from './my';
 
@@ -43,12 +44,12 @@ export function primaryNavItems(
 
 /**
  * The header's height in CSS px where it has both rows: Kalshi's measured 107 (12 + 40 + 12 for
- * row 1, 30 + 12 for row 2, the 1px rule), which `nav.tsx` is built to. Row 2 is drawn on
- * 시장 탐색 only (`showsCategoryRow`), and so is everything that sticks under the header — the
- * home screen's sidebar and the detail screen's 주문 영역, both of which have to stop exactly
- * under it, and a drift shows as a column sliding under the header. Elsewhere the header is row 1
- * and its rule (65px) with nothing sticky beneath it; a sticky element added off 시장 탐색 needs
- * that height, not this one. It is the same on every breakpoint (row 1 keeps its 40px without the
+ * row 1, 30 + 12 for row 2, the 1px rule), which `nav.tsx` is built to. Row 2 is drawn on the
+ * home list and the market details only (`showsCategoryRow`), and so is everything that sticks
+ * under the header — the home screen's sidebar and the detail screen's 주문 영역, both of which
+ * have to stop exactly under it, and a drift shows as a column sliding under the header.
+ * Elsewhere (the search screen included) the header is row 1 and its rule (65px) with nothing
+ * sticky beneath it; a sticky element added there needs that height, not this one. It is the same on every breakpoint (row 1 keeps its 40px without the
  * primary links) and grows only while the mobile search form is open, when nothing is sticky
  * beneath it.
  */
@@ -67,17 +68,24 @@ function isUnder(pathname: string, root: string): boolean {
   return pathname === root || pathname.startsWith(`${root}/`);
 }
 
+/** The home list and every market detail under it: where the header's row 2 is drawn. */
+function isMarketsBrowse(pathname: string): boolean {
+  return pathname === '/' || pathname.startsWith('/markets/');
+}
+
 /**
  * Whether an area is the page being shown, for the header's row 1 and the tab bar alike.
  * 시장 탐색 owns the home list AND every market detail — `/markets/<slug>` is a market, and a
  * visitor who opened one is still "in the markets" the way Kalshi keeps its Markets item lit on
- * an event page. 커뮤니티 and MY match their own route and its subtree — every MY tab keeps MY
- * lit — but not a look-alike prefix (`/communityx`, `/mysterious`).
+ * an event page — and the search screen (`/search`, owner decision 2026-10-16, ADR-0066: "시장
+ * 탐색을 켠다"), whose results are markets too; not a look-alike (`/searches`). 커뮤니티 and MY
+ * match their own route and its subtree — every MY tab keeps MY lit — but not a look-alike
+ * prefix (`/communityx`, `/mysterious`).
  */
 export function isPrimaryCurrent(pathname: string, key: PrimaryNavKey): boolean {
   switch (key) {
     case 'markets':
-      return pathname === '/' || pathname.startsWith('/markets/');
+      return isMarketsBrowse(pathname) || pathname === SEARCH_PATH;
     case 'community':
       return isUnder(pathname, '/community');
     case 'my':
@@ -87,11 +95,12 @@ export function isPrimaryCurrent(pathname: string, key: PrimaryNavKey): boolean 
 
 /**
  * Whether the header draws row 2, 전체 and the top-level categories (owner decision 2026-10-13):
- * on 시장 탐색 only — the home list it filters and the market details under it — and not on
- * 커뮤니티, MY, the auth and legal pages or /admin.
+ * on the home list it filters and the market details under it — and not on the search screen,
+ * although 시장 탐색 is lit there (`isPrimaryCurrent`; the screen has a category filter of its
+ * own, ADR-0066), nor on 커뮤니티, MY, the auth and legal pages or /admin.
  */
 export function showsCategoryRow(pathname: string): boolean {
-  return isPrimaryCurrent(pathname, 'markets');
+  return isMarketsBrowse(pathname);
 }
 
 /**
@@ -157,29 +166,25 @@ function homeFiltersOf(searchParams: UrlSearchParams): HomeFilters {
   return filtersFromSearchParams({
     sort: value('sort'),
     category: value('category'),
-    q: value('q'),
     [WATCHLIST_VIEW_PARAM]: value(WATCHLIST_VIEW_PARAM),
   });
 }
 
 /**
- * The `?q=` value AS THE LIST READS IT, for the header's search box: the term the home list is
- * filtered on, or `undefined` when there is none — or when the visitor is not on `/`, where a
- * `q` in the URL filters nothing and a box that still showed it would describe a list that is
- * not on screen. Read off the home's own normalisation (`homeFiltersOf`): blank and
- * whitespace-only are "no search", over-long is dropped, and the 관심 시장 view (`?watchlist=1`,
- * ADR-0065) drops `q` altogether — the watchlist has no title search, so `/?watchlist=1&q=rain`
- * lists every watched open market and the box must not say 'rain'. The box and the list then
- * agree on what was searched. This is what the box's `key`/`defaultValue` follow (nav.tsx
- * `SearchForm`).
+ * The term AS THE SEARCH SCREEN READS IT, for the header's search box: the term the results on
+ * screen are for, or `undefined` when there is none — or when the visitor is not on the search
+ * screen (`/search`, ADR-0066), where a `q` in the URL searches nothing (the home has not read
+ * `q` since search moved off it) and a box that still showed it would describe results that are
+ * not on screen. Read off the screen's own normalisation (`searchFiltersFromSearchParams`): blank
+ * and whitespace-only are "no search", over-long is dropped. The box and the results then agree
+ * on what was searched. This is what the box's `key`/`defaultValue` follow (nav.tsx `SearchForm`).
  */
 export function currentSearchTerm(
   pathname: string,
   searchParams: UrlSearchParams,
 ): string | undefined {
-  if (pathname !== '/') return undefined;
-  const filters = homeFiltersOf(searchParams);
-  return isWatchlistView(filters) ? undefined : filters.q;
+  if (pathname !== SEARCH_PATH) return undefined;
+  return searchFiltersFromSearchParams({ q: searchParams.get('q') ?? undefined }).q;
 }
 
 /**
@@ -188,14 +193,14 @@ export function currentSearchTerm(
  *
  * Outside the 관심 시장 view it is a fresh `?category=` (전체: a bare `/`), as the header has
  * always posted (ADR-0041): row 2 is drawn on every 시장 탐색 route, so it is a way INTO the
- * list, not a refinement of one the visitor may not be looking at — a sort or a search term in
- * the URL is left behind.
+ * list, not a refinement of one the visitor may not be looking at — a sort in the URL is left
+ * behind.
  *
  * In the view (`/?watchlist=1`) it moves the view to that category and keeps it on, in the order
  * picked (owner decision 2026-10-16, ADR-0065: "켜 둔 채로 옮긴다") — from
  * `/?sort=newest&watchlist=1`, 경제 is `/?category=economy&sort=newest&watchlist=1` and 전체 is
  * the URL itself. The view's own default order is left out of the URL as everywhere
- * (`filterQuery`), and the view has no search term to carry.
+ * (`filterQuery`).
  *
  * A pure function of the route and the URL, never of the session: the header renders into every
  * visitor's HTML from the URL alone, so a member and a visitor who open the same address get the

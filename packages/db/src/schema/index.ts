@@ -22,6 +22,7 @@ export * from './enums.js';
 export * from './fills.js';
 export * from './ledger.js';
 export * from './market-events.js';
+export * from './market-searches.js';
 export * from './market-settlement-steps.js';
 export * from './markets.js';
 export * from './orders.js';

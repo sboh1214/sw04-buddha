@@ -44,7 +44,6 @@ export function filterQuery(filters: HomeFilters): Record<string, string> {
     query[WATCHLIST_VIEW_PARAM] = WATCHLIST_VIEW_PARAM_VALUE;
     return query;
   }
-  if (filters.q !== undefined) query.q = filters.q;
   if (filters.sort !== DEFAULT_MARKET_FILTERS.sort) query.sort = filters.sort;
   return query;
 }
@@ -85,7 +84,7 @@ export function withSort(filters: HomeFilters, sort: WatchlistSort): HomeFilters
  *   view was on (owner decision 2026-10-16, ADR-0065): each view starts on its own first order, as
  *   turning it on starts on 최근 관심 등록 순. Anyone may, signed in or not.
  * - Off → on: the view of the same category, on 최근 관심 등록 순, whatever was picked on the
- *   public list; a search term is left behind (the view has none). A visitor known to be signed
+ *   public list. A visitor known to be signed
  *   out is sent to the login page instead, told to come back to exactly that view, so a sign-in
  *   lands on it (`signedIn === false`). While the session is still unknown (`undefined`) the view
  *   itself is the answer: it waits for the session and then shows the list, or a sign-in prompt
@@ -123,15 +122,14 @@ export function watchlistViewFilters(filters: WatchlistViewFilters): WatchlistFi
 
 /**
  * What the grid says when its list is empty, one message per view (ADR-0065). The public list
- * tells "nothing is open yet" — the state of the list itself — from "no results", the state of a
- * search someone typed: the difference between "come back later" and "try another word". The 관심
- * 시장 view has its own: watched markets may exist and have ended, which MY still lists, so it
- * says no open one is watched rather than that nothing is — and then how a market gets there,
- * in MY's own sentence (owner decision 2026-10-16, `copy.watchlistViewEmpty`).
+ * says "nothing is open yet", the state of the list itself; "no results" belongs to the search
+ * screen (`copy.marketsSearchEmpty`, ADR-0066), whose list is a word someone typed. The 관심 시장
+ * view has its own: watched markets may exist and have ended, which MY still lists, so it says no
+ * open one is watched rather than that nothing is — and then how a market gets there, in MY's own
+ * sentence (owner decision 2026-10-16, `copy.watchlistViewEmpty`).
  */
 export function listEmptyMessage(filters: HomeFilters): string {
-  if (isWatchlistView(filters)) return copy.watchlistViewEmpty;
-  return filters.q === undefined ? copy.marketsEmpty : copy.marketsSearchEmpty;
+  return isWatchlistView(filters) ? copy.watchlistViewEmpty : copy.marketsEmpty;
 }
 
 /**
@@ -164,8 +162,8 @@ export interface SidebarLink {
  * when the slug is not in the tree — the sidebar then has no parent to list under, so it renders
  * nothing rather than a lone 전체 시장 pointing at a slug it cannot name.
  *
- * Each row's query is built with `filterQuery` over the CURRENT filters, so the sort, the
- * 관심 시장 view and a search term survive a change of sub-category: the sidebar is a refinement of
+ * Each row's query is built with `filterQuery` over the CURRENT filters, so the sort and the
+ * 관심 시장 view survive a change of sub-category: the sidebar is a refinement of
  * the list the visitor is already looking at (관심 시장 combines with a category, ADR-0061
  * decision 1, item 12). The header's category links are a way INTO the list from any route and
  * post a fresh `?category=`, except in the 관심 시장 view, which they keep on with its order

@@ -45,12 +45,17 @@ describe('primaryNavItems', () => {
 });
 
 describe('isPrimaryCurrent', () => {
-  it('lights 시장 탐색 on the home list and on a market detail, nowhere else', () => {
+  it('lights 시장 탐색 on the home list, a market detail and the search screen, nowhere else', () => {
     expect(isPrimaryCurrent('/', 'markets')).toBe(true);
     expect(isPrimaryCurrent('/markets/btc-100k', 'markets')).toBe(true);
+    // Owner decision 2026-10-16 (ADR-0066): "시장 탐색을 켠다" on /search, at every width (the
+    // header's row 1 and the tab bar read this one rule).
+    expect(isPrimaryCurrent('/search', 'markets')).toBe(true);
     expect(isPrimaryCurrent('/community', 'markets')).toBe(false);
     expect(isPrimaryCurrent('/my/settings', 'markets')).toBe(false);
     expect(isPrimaryCurrent('/marketsx', 'markets')).toBe(false);
+    expect(isPrimaryCurrent('/searches', 'markets')).toBe(false);
+    expect(isPrimaryCurrent('/search/x', 'markets')).toBe(false);
   });
 
   it('lights 커뮤니티 on its route and its subtree, not on a look-alike prefix', () => {
@@ -70,7 +75,15 @@ describe('isPrimaryCurrent', () => {
   });
 
   it('never lights two items for one path, and none off the three areas', () => {
-    for (const pathname of ['/', '/markets/x', '/community', '/my', '/my/wallet', '/login']) {
+    for (const pathname of [
+      '/',
+      '/markets/x',
+      '/search',
+      '/community',
+      '/my',
+      '/my/wallet',
+      '/login',
+    ]) {
       const lit = KEYS.filter((key) => isPrimaryCurrent(pathname, key));
       expect(lit.length, pathname).toBeLessThanOrEqual(1);
     }
@@ -84,7 +97,7 @@ describe('isPrimaryCurrent', () => {
 });
 
 describe('showsCategoryRow', () => {
-  it('is on for 시장 탐색: the home list and a market detail', () => {
+  it('is on for the home list and a market detail', () => {
     expect(showsCategoryRow('/')).toBe(true);
     expect(showsCategoryRow('/markets/btc-100k')).toBe(true);
   });
@@ -99,6 +112,9 @@ describe('showsCategoryRow', () => {
       '/onboarding',
       '/admin/markets',
       '/marketsx',
+      // The search screen (ADR-0066): the row stays on / and /markets/* only (ADR-0054), though
+      // 시장 탐색 is lit there (owner decision 2026-10-16).
+      '/search',
     ]) {
       expect(showsCategoryRow(pathname), pathname).toBe(false);
     }
@@ -157,33 +173,29 @@ describe('currentTopLevelSlug', () => {
 describe('currentSearchTerm', () => {
   const url = (search: string) => new URLSearchParams(search);
 
-  it("is the home list's own term, trimmed the way the list trims it", () => {
-    expect(currentSearchTerm('/', url('q=rain'))).toBe('rain');
-    expect(currentSearchTerm('/', url(`q=${encodeURIComponent('  rain  ')}`))).toBe('rain');
-    // Another filter beside it changes nothing: the public list searches within it.
-    expect(currentSearchTerm('/', url('q=rain&category=weather&sort=newest'))).toBe('rain');
+  it("is the search screen's own term, trimmed the way the screen trims it (ADR-0066)", () => {
+    expect(currentSearchTerm('/search', url('q=rain'))).toBe('rain');
+    expect(currentSearchTerm('/search', url(`q=${encodeURIComponent('  rain  ')}`))).toBe('rain');
+    // A filter beside it changes nothing: the results are of that term within it.
+    expect(currentSearchTerm('/search', url('q=rain&status=closed&category=weather'))).toBe('rain');
   });
 
-  it('is undefined for no search, a blank one, or one the list would refuse', () => {
-    expect(currentSearchTerm('/', url(''))).toBeUndefined();
-    expect(currentSearchTerm('/', url('q='))).toBeUndefined();
-    expect(currentSearchTerm('/', url('q=%20%20%20'))).toBeUndefined();
-    expect(currentSearchTerm('/', url(`q=${'a'.repeat(101)}`))).toBeUndefined();
+  it('is undefined for no search, a blank one, or one the screen would refuse', () => {
+    expect(currentSearchTerm('/search', url(''))).toBeUndefined();
+    expect(currentSearchTerm('/search', url('q='))).toBeUndefined();
+    expect(currentSearchTerm('/search', url('q=%20%20%20'))).toBeUndefined();
+    expect(currentSearchTerm('/search', url(`q=${'a'.repeat(101)}`))).toBeUndefined();
   });
 
-  it('is undefined in the 관심 시장 view, which drops the term (ADR-0065)', () => {
-    // A hand-edited `/?watchlist=1&q=rain` lists every watched open market; a box that said
-    // 'rain' would describe a search the list is not applying.
+  it('is undefined off the search screen, the home included, whatever the URL carries', () => {
+    // The home has not read `q` since the search moved to its own screen (ADR-0066), so an old
+    // `/?q=rain` searches nothing and the box must not claim it does — this PR changed what the
+    // box reads, and the expectations that read it on `/` changed with it.
+    expect(currentSearchTerm('/', url('q=rain'))).toBeUndefined();
     expect(currentSearchTerm('/', url('watchlist=1&q=rain'))).toBeUndefined();
-    expect(currentSearchTerm('/', url('q=rain&category=economy&watchlist=1'))).toBeUndefined();
-    // Only `1` turns the view on, so any other value is the public list and its search.
-    expect(currentSearchTerm('/', url('watchlist=yes&q=rain'))).toBe('rain');
-  });
-
-  it('is undefined off the home route, whatever the URL carries', () => {
-    // A `q` on /community filters nothing; the box must not claim a search that is not shown.
     expect(currentSearchTerm('/community', url('q=rain'))).toBeUndefined();
     expect(currentSearchTerm('/markets/btc-100k', url('q=rain'))).toBeUndefined();
+    expect(currentSearchTerm('/searches', url('q=rain'))).toBeUndefined();
   });
 });
 

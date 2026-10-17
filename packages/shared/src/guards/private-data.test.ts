@@ -39,6 +39,7 @@ describe('PRIVATE_DATA (#113)', () => {
         'phone',
         'time-zone',
         'watchlist',
+        'search-history',
         'identity-verification',
         'risk-flag',
         'author-holding',
@@ -96,6 +97,11 @@ describe('findPrivateField', () => {
     ['isWatched', 'watchlist'],
     ['myWatchlist', 'watchlist'],
     ['isInterested', 'watchlist'],
+    ['recentSearches', 'search-history'],
+    ['searchHistory', 'search-history'],
+    ['lastSearchedAt', 'search-history'],
+    ['userQueries', 'search-history'],
+    ['mySearch', 'search-history'],
     ['identityVerification', 'identity-verification'],
     ['otpSentAt', 'identity-verification'],
     ['ci', 'identity-verification'],
@@ -174,6 +180,14 @@ describe('findPrivateField', () => {
     'openInterests',
     'stopwatch',
     'subscribe',
+    // A search's own words with nobody's beside them (ADR-0066): the request's `q` is the caller's,
+    // and a word that only starts like one is another word.
+    'q',
+    'query',
+    'search',
+    'searchable',
+    'keyword',
+    'research',
   ])('lets %s through', (name) => {
     expect(findPrivateField(name)).toEqual([]);
   });
@@ -240,6 +254,49 @@ describe('findPrivateField', () => {
     expect(watchlist.fields.map((run) => run.join(' ')).sort()).toEqual(
       WATCHLIST_RUNS.map(([, words]) => words).sort(),
     );
+  });
+
+  // The search-history item, by a name only that run catches (#15, ADR-0061 decision 3,
+  // ADR-0066), and each word it takes beside a whose-word. A run or a word without an example
+  // here fails the test below.
+  const SEARCH_HISTORY_RUNS: readonly [string, string][] = [
+    ['popularSearches', 'searches'],
+    ['searchedAt', 'searched'],
+    ['recentSearch', 'recent search'],
+    ['searchHistory', 'search history'],
+    ['searchHistories', 'search histories'],
+    ['searchLog', 'search log'],
+    ['search_logs', 'search logs'],
+    ['searchQuery', 'search query'],
+    ['searchQueries', 'search queries'],
+    ['searchTerm', 'search term'],
+    ['searchTerms', 'search terms'],
+    ['viewerSearch', 'viewer search'],
+    ['userQuery', 'user query'],
+    ['accountQueries', 'account queries'],
+    ['memberKeyword', 'member keyword'],
+    ['myKeywords', 'my keywords'],
+  ];
+  const searchHistoryHits = (name: string) =>
+    findPrivateField(name)
+      .filter((hit) => hit.item === 'search-history')
+      .map((hit) => hit.words);
+
+  it.each(SEARCH_HISTORY_RUNS)('keeps %s private as a search-history field (%s)', (name, words) => {
+    expect(searchHistoryHits(name)).toEqual([words]);
+  });
+
+  it('has an example above for every run and every word of the search-history item', () => {
+    const searchHistory = PRIVATE_DATA.find((item) => item.id === 'search-history')!;
+    const examples = SEARCH_HISTORY_RUNS.map(([, words]) => words);
+    for (const run of searchHistory.fields)
+      expect(examples, run.join(' ')).toContain(run.join(' '));
+    for (const word of searchHistory.owned!.words) {
+      expect(
+        examples.some((words) => words.split(' ').includes(word)),
+        word,
+      ).toBe(true);
+    }
   });
 
   // The time-zone item, by a name only that word catches (owner decision 2026-10-16, ADR-0063):

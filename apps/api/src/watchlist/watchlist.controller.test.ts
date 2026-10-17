@@ -470,6 +470,45 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/watchlist (integration)', () => {
     }
   });
 
+  it('orders MY’s 마감 임박 as the search does: 진행 중 first, then ended by the latest close (ADR-0066)', async () => {
+    // MY lists every status (no `status`), so ended markets are on it, and 마감 임박 there is the
+    // search's 모든 상태 order (owner decision 2026-10-16): open markets soonest first, then the
+    // ended ones — ended by the status, an early-closed market included — the latest close first.
+    // The home's view (`status=open`) keeps the home's order.
+    const now = Date.now();
+    const rows = {
+      openSoon: await market({ closeAt: new Date(now + DAY_MS) }),
+      openLater: await market({ closeAt: new Date(now + 3 * DAY_MS) }),
+      closedEarly: await market({ status: 'closed', closeAt: new Date(now + 2 * DAY_MS) }),
+      settled: await market({ status: 'settled', closeAt: new Date(now - 5 * DAY_MS) }),
+      voided: await market({ status: 'voided', closeAt: new Date(now - DAY_MS) }),
+    };
+    for (const m of Object.values(rows)) await watch(m.id);
+    const expected = [
+      rows.openSoon.id,
+      rows.openLater.id,
+      rows.closedEarly.id,
+      rows.voided.id,
+      rows.settled.id,
+    ];
+    expect(await listedIds('sort=closing')).toEqual(expected);
+    // Page by page, across the boundary between the two groups.
+    const paged: string[] = [];
+    let cursor: string | null = null;
+    do {
+      const page: ListPage = await list(
+        `sort=closing&limit=1${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
+      );
+      paged.push(...page.data.map((row) => row.id));
+      cursor = page.meta.nextCursor;
+    } while (cursor !== null && paged.length < 10);
+    expect(paged).toEqual(expected);
+    expect(await listedIds('status=open&sort=closing')).toEqual([
+      rows.openSoon.id,
+      rows.openLater.id,
+    ]);
+  });
+
   // ---- who may ------------------------------------------------------------------------
 
   it('answers 401 without a session and 403 for a foreign Origin, writing nothing', async () => {

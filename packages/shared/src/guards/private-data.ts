@@ -12,7 +12,9 @@ import { identifierWords } from './excluded.js';
  * participation and settings to admins (ADR-0058). The owner kept a user's time zone out while a
  * market's judging time zone (#22) stays public (2026-10-16, ADR-0063), and kept every watchlist
  * and every market's watch count to nobody but the member (#37 for #89, ADR-0061 decision 3,
- * ADR-0064). Items nothing stores yet
+ * ADR-0064). A member's recorded searches are listed by ADR-0066's own choice: the owner decided
+ * they are recorded and shown to the member (#15, ADR-0061 decision 3), not who else may see them.
+ * Items nothing stores yet
  * are named ahead (`pending`), so the route or event that brings one is refused from its first
  * day.
  *
@@ -35,6 +37,7 @@ export const PRIVATE_DATA_IDS = [
   'phone',
   'time-zone',
   'watchlist',
+  'search-history',
   'identity-verification',
   'auth-secret',
   'risk-flag',
@@ -216,6 +219,38 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
       ['bookmarks'],
       ['bookmarked'],
     ],
+  },
+  {
+    id: 'search-history',
+    name: '특정 사용자의 검색 기록(검색어와 시각)',
+    basis:
+      'ADR-0066 결정 6(구현의 선택: ADR-0061 결정 3의 #15 행은 기록과 본인의 최근 검색만 정했다)',
+    // A member's recorded searches stay out of every public answer (ADR-0066's choice; the owner
+    // decided they are recorded and shown to the member, and who else may see them is open, #37
+    // item 11 for operators). A public shape never lists what was searched (`searches`,
+    // `recentSearch`, `searchHistory`, `searchLog`, `searchTerms`, `searchQuery`) or when
+    // (`searchedAt`, `lastSearched`), and a name that says the terms are
+    // somebody's (`userQueries`, `myKeywords`, `viewerSearch`) is a person's. A public answer that
+    // counted or ranked other people's terms ('인기 검색어') would be caught too: nothing decides it
+    // may be public. The `q` a public request takes is the caller's own and is not an answer. The
+    // member's own `GET /me/search-history` is an owner-only route, which this list does not read.
+    fields: [
+      ['searches'],
+      ['searched'],
+      ['recent', 'search'],
+      ['search', 'history'],
+      ['search', 'histories'],
+      ['search', 'log'],
+      ['search', 'logs'],
+      ['search', 'query'],
+      ['search', 'queries'],
+      ['search', 'term'],
+      ['search', 'terms'],
+    ],
+    owned: {
+      words: ['search', 'query', 'queries', 'keyword', 'keywords'],
+      whose: WHOSE_OR_VIEWER,
+    },
   },
   {
     id: 'identity-verification',

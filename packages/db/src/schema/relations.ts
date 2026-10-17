@@ -15,6 +15,7 @@ import { couponRedemptions, coupons } from './coupons.js';
 import { fills } from './fills.js';
 import { ledgerEntries } from './ledger.js';
 import { marketEvents } from './market-events.js';
+import { marketSearches } from './market-searches.js';
 import { marketSettlementSteps } from './market-settlement-steps.js';
 import { markets } from './markets.js';
 import { orders } from './orders.js';
@@ -145,6 +146,10 @@ export const marketWatchEventsRelations = relations(marketWatchEvents, ({ one })
   market: one(markets, { fields: [marketWatchEvents.marketId], references: [markets.id] }),
 }));
 
+export const marketSearchesRelations = relations(marketSearches, ({ one }) => ({
+  user: one(user, { fields: [marketSearches.userId], references: [user.id] }),
+}));
+
 export const adminActionsRelations = relations(adminActions, ({ one }) => ({
   admin: one(user, { fields: [adminActions.adminId], references: [user.id] }),
 }));
@@ -180,6 +185,7 @@ export const userRelations = relations(user, ({ one, many }) => ({
   createdMarkets: many(markets),
   watches: many(marketWatches),
   watchEvents: many(marketWatchEvents),
+  searches: many(marketSearches),
   adminActions: many(adminActions),
   releaseSettingUpdates: many(releaseSettings),
   approvalRequests: many(approvalRequests, { relationName: 'approval_requester' }),

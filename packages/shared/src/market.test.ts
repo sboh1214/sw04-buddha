@@ -8,7 +8,9 @@ import {
 } from './constants.js';
 import { findExcludedIdentifier } from './guards/excluded.js';
 import {
+  ALL_MARKET_STATUSES,
   DEFAULT_MARKET_SORT,
+  MARKET_LIST_STATUSES,
   MARKET_SORTS,
   PUBLIC_MARKET_STATUSES,
   RECOMMENDED_VOLUME_HOURS,
@@ -274,6 +276,18 @@ describe('marketListQuerySchema', () => {
       limit: 5,
       cursor: 'abc',
     });
+  });
+
+  it('takes every public status, or all of them at once for the search screen (ADR-0066)', () => {
+    // ADR-0061 decision 1, item 13: the search starts on every public status; the home asks for
+    // `open`, which stays the default for every caller written before search.
+    expect(ALL_MARKET_STATUSES).toBe('all');
+    expect(MARKET_LIST_STATUSES).toEqual([...PUBLIC_MARKET_STATUSES, 'all']);
+    for (const status of MARKET_LIST_STATUSES) {
+      expect(marketListQuerySchema.parse({ status }).status).toBe(status);
+    }
+    expect(marketListQuerySchema.parse({}).status).toBe('open');
+    expect(findExcludedIdentifier(ALL_MARKET_STATUSES, 'api')).toEqual([]);
   });
 
   it('never lists drafts and only knows the three sorts', () => {

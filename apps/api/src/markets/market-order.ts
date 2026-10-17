@@ -6,6 +6,7 @@ import {
   decodeTupleCursor,
   encodeKeyset,
   encodeTupleCursor,
+  type MarketListStatus,
   type MarketSort,
 } from '@buddha/shared';
 import { and, asc, desc, eq, sql, type SQL } from 'drizzle-orm';
@@ -26,7 +27,16 @@ type SelectSource = Pick<Db, 'select'>;
  *   first; ties by the actual open time, latest first; then the id. Every fill counts until #132
  *   excludes abnormal ones, and the volume is `fills.amount_coin` until #177/#121 define it.
  * - 신규 (`newest`): the actual open time, latest first, then the id.
- * - 마감 임박 (`closing`): the close time, soonest first, then the id; no window.
+ * - 마감 임박 (`closing`): the close time, soonest first, then the id; no window. On a list that
+ *   can hold an ended market — anything but `status = open`: the search's 모든 상태 and its ended
+ *   statuses, MY's 관심 시장 — the markets still 진행 중 come first, soonest first, and every
+ *   other one after them, the most recently closed first (ADR-0066, owner decision 2026-10-16:
+ *   "진행 중 먼저, 끝난 것은 최근 순"). Ended is the STATUS, not the clock: a market an admin
+ *   closed early keeps its future `close_at` and is ended, and an `open` market whose close time
+ *   has passed (before the close job reaches it, A-M3-31) is still 진행 중, first of all. A list of
+ *   open markets only (the home, its 관심 시장 view) is ordered exactly as before, on the plain
+ *   `(close_at, id)` that `markets_status_close_at_idx` serves; the two orders agree on every pair
+ *   of open markets.
  *
  * The open time is `open_at DESC NULLS LAST`, written as `coalesce(open_at, '-infinity')`
  * (`openedAt`): on that key a market with no open time sorts after every one that has one, and
@@ -52,6 +62,34 @@ function openedAtValue(part: string): string {
 /** A row's open time as a cursor part. */
 function openedAtPart(row: MarketRow): string {
   return row.openAt === null ? CURSOR_NULL : row.openAt.getTime().toString();
+}
+
+/**
+ * 마감 임박's group on a list that can hold ended markets: 0 for a market still 진행 중
+ * (`status = 'open'`), 1 for every other — ended by its status (ADR-0066, owner decision
+ * 2026-10-16). The cursor's group (`closingGroupPart`) says the same of the row.
+ */
+const closingGroup: SQL = sql`(CASE WHEN ${schema.markets.status} = 'open' THEN 0 ELSE 1 END)`;
+
+/** The close time as epoch milliseconds, exact for a `timestamp(3)` column. */
+const closeAtMs: SQL = sql`(extract(epoch FROM ${schema.markets.closeAt}) * 1000)::bigint`;
+
+/**
+ * 마감 임박's time key in the same list, signed by the group: the close time for a market 진행 중
+ * and its negation for an ended one, so ONE ascending key is soonest first in the first group and
+ * the most recently closed first in the second — which is what lets a single row comparison
+ * (`tupleKeysetPredicate`, every key the one direction) page across the boundary between them.
+ */
+const closingTime: SQL = sql`(CASE WHEN ${schema.markets.status} = 'open' THEN ${closeAtMs} ELSE -(${closeAtMs}) END)`;
+
+/** A row's group as a cursor part. */
+function closingGroupPart(row: MarketRow): '0' | '1' {
+  return row.status === 'open' ? '0' : '1';
+}
+
+/** The time key's value for a decoded cursor: the close time, negated in the ended group. */
+function closingTimeValue(group: string, closeMs: string): string {
+  return group === '0' ? closeMs : `-${closeMs}`;
 }
 
 /** The alias of the lateral below and of its one column. */
@@ -150,13 +188,22 @@ export const NO_ORDER_FIELDS: MarketOrderFields = {
  * fresh first page (a reload, TanStack's refetch, which re-reads page one and follows its new
  * cursors) counts a fresh window.
  *
- * 신규's cursor is `<openAt>_<id>` with `CURSOR_NULL` for no open time; 마감 임박's is the
- * `<millis>_<uuid>` keyset every list uses.
+ * 신규's cursor is `<openAt>_<id>` with `CURSOR_NULL` for no open time. 마감 임박's is the
+ * `<millis>_<uuid>` keyset every list uses on a list of open markets, and `<group>_<closeAt>_<id>`
+ * on one that can hold ended markets (`group` 0 or 1, the close time unsigned: the predicate
+ * negates it for the ended group). Each is a part short or too many for the other, so a cursor
+ * carried from the home to the search serves the first page.
+ *
+ * `status` is the status the list is filtered on — `open`, another public status, `all`, or
+ * `undefined` for every public status (`GET /me/watchlist` without one). Only 마감 임박 reads it,
+ * and only to know whether an ended market can be on the list. Required, like `decodeKeyset`'s
+ * `idShape`, so every caller says what its filter is.
  */
 export function marketOrder(
   db: SelectSource,
   sort: MarketSort,
   cursor: string | undefined,
+  status: MarketListStatus | undefined,
 ): MarketOrder {
   const { markets } = schema;
   switch (sort) {
@@ -202,19 +249,61 @@ export function marketOrder(
         cursorOf: ({ market }) => encodeTupleCursor([openedAtPart(market)], market.id),
       };
     }
-    case 'closing': {
-      // Soonest first: the `<millis>_<uuid>` keyset with `close_at` as the timestamp half and the
-      // comparison flipped — `after` rather than `before`, because this is an ascending page.
-      const keyset = decodeKeyset(cursor, 'uuid');
-      return {
-        lateral: undefined,
-        fields: NO_ORDER_FIELDS,
-        after: keyset
-          ? keysetPredicate(markets.closeAt, markets.id, keyset, 'uuid', 'after')
-          : undefined,
-        orderBy: [asc(markets.closeAt), asc(markets.id)],
-        cursorOf: ({ market }) => encodeKeyset({ createdAt: market.closeAt, id: market.id }),
-      };
-    }
+    case 'closing':
+      return status === 'open' ? closingOrder(cursor) : closingEndedLastOrder(cursor);
   }
+}
+
+/**
+ * 마감 임박 over open markets only: soonest first, the `<millis>_<uuid>` keyset with `close_at` as
+ * the timestamp half and the comparison flipped — `after` rather than `before`, because this is
+ * an ascending page. Unchanged by ADR-0066: the home and its 관심 시장 view list open markets only.
+ */
+function closingOrder(cursor: string | undefined): MarketOrder {
+  const { markets } = schema;
+  const keyset = decodeKeyset(cursor, 'uuid');
+  return {
+    lateral: undefined,
+    fields: NO_ORDER_FIELDS,
+    after: keyset
+      ? keysetPredicate(markets.closeAt, markets.id, keyset, 'uuid', 'after')
+      : undefined,
+    orderBy: [asc(markets.closeAt), asc(markets.id)],
+    cursorOf: ({ market }) => encodeKeyset({ createdAt: market.closeAt, id: market.id }),
+  };
+}
+
+/**
+ * 마감 임박 over a list that can hold ended markets (ADR-0066, owner decision 2026-10-16): the
+ * 진행 중 group first, soonest first, then the ended one, the most recently closed first; the id
+ * breaks a tie in either. One ascending row comparison over (group, signed close time, id) pages
+ * the whole of it, across the boundary too: a cursor in the first group is followed by the rest
+ * of that group and then every ended market, a cursor in the second by the rest of the second.
+ * No index holds these expressions — the search reads every candidate anyway (ADR-0066 decision
+ * 6, '제목 검색의 색인') — so the predicate is a filter and the page a sort.
+ */
+function closingEndedLastOrder(cursor: string | undefined): MarketOrder {
+  const { markets } = schema;
+  const keyset = decodeTupleCursor(cursor, ['group', 'millis'], 'uuid');
+  return {
+    lateral: undefined,
+    fields: NO_ORDER_FIELDS,
+    after: keyset
+      ? tupleKeysetPredicate(
+          [
+            { key: closingGroup, value: keyset.values[0]!, cast: 'bigint' },
+            {
+              key: closingTime,
+              value: closingTimeValue(keyset.values[0]!, keyset.values[1]!),
+              cast: 'bigint',
+            },
+            { key: markets.id, value: keyset.id, cast: 'uuid' },
+          ],
+          'after',
+        )
+      : undefined,
+    orderBy: [asc(closingGroup), asc(closingTime), asc(markets.id)],
+    cursorOf: ({ market }) =>
+      encodeTupleCursor([closingGroupPart(market), market.closeAt.getTime().toString()], market.id),
+  };
 }

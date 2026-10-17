@@ -2,7 +2,15 @@
 
 import { keepPreviousData, useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { type Market, api, unwrap } from '@/lib/api';
-import { type MarketFilters, marketKey, marketsKey, publicListQuery } from '@/lib/market-keys';
+import {
+  type MarketFilters,
+  type MarketSearch,
+  marketKey,
+  marketSearchKey,
+  marketsKey,
+  publicListQuery,
+  searchListQuery,
+} from '@/lib/market-keys';
 import { type MarketPage } from '@/lib/market-live';
 import { DEFAULT_TICK_RANGE, type TickRange, ticksQueryOptions } from '@/lib/ticks';
 import { useMarketFills as useMarketFillsQuery } from './use-admin-markets';
@@ -37,9 +45,8 @@ import { useMarketFills as useMarketFillsQuery } from './use-admin-markets';
  *
  * The filter object IS the key: it is normalised once, on the server (`filtersFromSearchParams`),
  * and handed to the client as a prop, so no second entry can exist for one URL. `keepPreviousData`
- * keeps the cards that are on screen while the next filter or search term loads — the list is
- * both filtered and searched, so without it every keystroke would drop back to the skeleton
- * (admin-markets.tsx:59-77).
+ * keeps the cards that are on screen while the next category or order loads (admin-markets.tsx:
+ * 59-77).
  */
 export function marketsInfiniteQueryOptions(filters: MarketFilters) {
   return {
@@ -62,6 +69,41 @@ export function marketsInfiniteQueryOptions(filters: MarketFilters) {
 /** The home list. Rows are `MarketSummary`, which is everything a card draws. */
 export function useMarkets(filters: MarketFilters) {
   return useInfiniteQuery(marketsInfiniteQueryOptions(filters));
+}
+
+/**
+ * The search screen's results (#15, ADR-0066): `GET /markets` with the term, the status (every
+ * public one unless one is picked), the category and the order, one page per 더 보기, in the home
+ * list's page shape so the same grid, card and socket reducers serve it (`['markets', 'search',
+ * …]` sits under the home's root, market-keys.ts).
+ *
+ * The search page reads the first page on the server too (`fetchMarketSearchPageServer`, the
+ * same request through `searchListQuery`, so the two produce interchangeable pages under one key)
+ * and seeds it only when it holds a card (`seedsSearchResults`, owner decision 2026-10-16,
+ * ADR-0066). Otherwise this reads it in the browser, so the first load's three outcomes are the
+ * browser's own to show and to retry: the skeleton, '검색 결과가 없습니다.', and a failure that is
+ * never read as no results (N02 §3). No `keepPreviousData`: a new term or filter is a new search,
+ * and its own loading state is what says so, where held cards would show the last search's
+ * results under the new term.
+ */
+export function marketSearchInfiniteQueryOptions(search: MarketSearch) {
+  return {
+    queryKey: marketSearchKey(search),
+    queryFn: async ({ pageParam }: { pageParam: string | undefined }): Promise<MarketPage> => {
+      const { data, meta } = unwrap(
+        await api.GET('/api/v1/markets', {
+          params: { query: searchListQuery(search, pageParam) },
+        }),
+      );
+      return { items: data, nextCursor: meta.nextCursor };
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last: MarketPage) => last.nextCursor ?? undefined,
+  };
+}
+
+export function useMarketSearch(search: MarketSearch) {
+  return useInfiniteQuery(marketSearchInfiniteQueryOptions(search));
 }
 
 /**

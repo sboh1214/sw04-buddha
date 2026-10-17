@@ -44,7 +44,8 @@ export const PUBLIC_ROUTES: Readonly<Record<string, RegisteredRoute>> = {
       '이메일 가입 시작(ADR-0024): 받은 주소로 확인 메일만 보내고 상태 하나를 돌려준다. 주소가 이미 있는지도 알리지 않는다.',
   },
   'GET /markets': {
-    reason: '시장 탐색(PLAN 7.1 공개 조회): 초안이 아닌 시장의 공개 정보와 집계',
+    reason:
+      '시장 탐색과 검색(PLAN 7.1 공개 조회, ADR-0061 결정 1의 18 검색 공개): 초안이 아닌 시장의 공개 정보와 집계. 검색어는 부른 사람의 것이고 여기서 기록하지 않는다(ADR-0066)',
   },
   'GET /markets/:idOrSlug': {
     reason: '시장 상세(PLAN 7.1 공개 조회): 규칙·출처·상태·시장가격과 집계',
@@ -120,6 +121,22 @@ export const OWNER_ROUTES: Readonly<Record<string, RegisteredRoute>> = {
   'PUT /me/watchlist/:marketId': {
     reason:
       '본인 관심 등록·해제(#89, ADR-0064): 세션 계정의 행과 이력만 쓰고, 시간대처럼 본문의 expectedAccountId가 세션 계정이어야 한다',
+  },
+  'GET /me/search-history': {
+    reason:
+      '본인 최근 검색(#15, ADR-0066): 세션 계정이 검색한 검색어 가운데 중복 없이 최근 10개와 시각만. 공개 답과 시장 채널에는 싣지 않는다(PRIVATE_DATA search-history, ADR-0066의 선택). 운영자가 볼 수 있는 범위는 #37 11항',
+  },
+  'POST /me/search-history': {
+    reason:
+      '본인 검색 기록 남기기(#15, ADR-0066): 로그인한 회원이 제출한 검색어 하나를 세션 계정의 기록에만 쓰고, 관심 등록처럼 본문의 expectedAccountId가 세션 계정이어야 한다',
+  },
+  'POST /me/search-history/:id/delete': {
+    reason:
+      '본인 최근 검색 하나 지우기(#15, ADR-0066): 세션 계정의 행 가운데 그 검색어의 것만 지우고, 본문의 expectedAccountId가 세션 계정이어야 한다',
+  },
+  'POST /me/search-history/clear': {
+    reason:
+      '본인 검색 기록 전체 지우기(#15, ADR-0066): 세션 계정의 행만 지우고, 본문의 expectedAccountId가 세션 계정이어야 한다',
   },
   'POST /payments/charge': {
     reason: '보존한 Coin 충전(D9, ADR-0049): 유료 Coin 판매를 끈 동안 404',

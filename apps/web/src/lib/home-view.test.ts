@@ -56,24 +56,24 @@ describe('filterQuery', () => {
     expect(homePath(DEFAULT_MARKET_FILTERS)).toBe('/');
   });
 
-  it('carries only what differs from the defaults, and never a status', () => {
-    // The home has no status filter (ADR-0061 decision 1, item 13); the old `status` key is gone.
+  it('carries only what differs from the defaults, and never a status or a search term', () => {
+    // The home has no status filter (ADR-0061 decision 1, item 13) and no search (item 14: the
+    // search is its own screen, ADR-0066); the old `status` and `q` keys are gone — this PR took
+    // the term off the home, so the expectation that carried it is gone with it.
     expect(filterQuery({ sort: 'newest' })).toEqual({ sort: 'newest' });
     expect(filterQuery({ sort: 'recommended' })).toEqual({});
-    expect(filterQuery({ ...DEFAULT_MARKET_FILTERS, category: 'jobs', q: '금리' })).toEqual({
+    expect(filterQuery({ ...DEFAULT_MARKET_FILTERS, category: 'jobs' })).toEqual({
       category: 'jobs',
-      q: '금리',
     });
   });
 
   it('writes every non-default field at once', () => {
-    expect(filterQuery({ sort: 'closing', category: 'economy', q: 'x' })).toEqual({
+    expect(filterQuery({ sort: 'closing', category: 'economy' })).toEqual({
       category: 'economy',
-      q: 'x',
       sort: 'closing',
     });
-    expect(homePath({ sort: 'closing', category: 'economy', q: 'x' })).toBe(
-      '/?category=economy&q=x&sort=closing',
+    expect(homePath({ sort: 'closing', category: 'economy' })).toBe(
+      '/?category=economy&sort=closing',
     );
   });
 
@@ -90,7 +90,7 @@ describe('filterQuery', () => {
   it('round-trips through filtersFromSearchParams for every view and order', () => {
     const views: HomeFilters[] = [
       ...MARKET_SORTS.map((sort) => ({ sort, category: 'jobs' })),
-      { sort: 'newest', q: '금리' },
+      { sort: 'newest' },
       ...(['watched', ...MARKET_SORTS] as const).map((sort) => ({
         watchlist: true as const,
         sort,
@@ -116,10 +116,9 @@ describe('sortOptions and withSort', () => {
   });
 
   it('changes the order and nothing else', () => {
-    expect(withSort({ sort: 'recommended', category: 'jobs', q: 'x' }, 'closing')).toEqual({
+    expect(withSort({ sort: 'recommended', category: 'jobs' }, 'closing')).toEqual({
       sort: 'closing',
       category: 'jobs',
-      q: 'x',
     });
     expect(withSort({ ...WATCHING, category: 'jobs' }, 'newest')).toEqual({
       ...WATCHING,
@@ -135,11 +134,11 @@ describe('watchlistToggleTarget', () => {
   it('turns the view on for a member and while the session is unknown, on 최근 관심 등록 순', () => {
     for (const signedIn of [true, undefined]) {
       expect(watchlistToggleTarget(DEFAULT_MARKET_FILTERS, signedIn)).toBe('/?watchlist=1');
-      // The category stays (they combine, ADR-0061 decision 1, item 12); the public order and a
-      // search term do not — the view starts on its own order and has no search.
-      expect(
-        watchlistToggleTarget({ sort: 'closing', category: 'economy', q: '금리' }, signedIn),
-      ).toBe('/?category=economy&watchlist=1');
+      // The category stays (they combine, ADR-0061 decision 1, item 12); the public order does
+      // not — the view starts on its own order.
+      expect(watchlistToggleTarget({ sort: 'closing', category: 'economy' }, signedIn)).toBe(
+        '/?category=economy&watchlist=1',
+      );
     }
   });
 
@@ -195,12 +194,12 @@ describe('the 관심 시장 view’s list and sign-in prompt', () => {
 });
 
 describe('listEmptyMessage', () => {
-  it('tells an empty public list from a search with no results', () => {
+  it('says nothing is open on an empty public list, and never that a search found nothing', () => {
+    // The home does not search any more (ADR-0066): 'no results' is the search screen's own
+    // (copy.marketsSearchEmpty) — the expectation for a home search is gone with the home's `q`.
     expect(listEmptyMessage(DEFAULT_MARKET_FILTERS)).toBe(copy.marketsEmpty);
     expect(listEmptyMessage({ sort: 'closing', category: 'jobs' })).toBe(copy.marketsEmpty);
-    expect(listEmptyMessage({ ...DEFAULT_MARKET_FILTERS, q: '금리' })).toBe(
-      copy.marketsSearchEmpty,
-    );
+    expect(listEmptyMessage({ sort: 'newest' })).not.toBe(copy.marketsSearchEmpty);
   });
 
   it('gives the 관심 시장 view its own, whatever its order and category', () => {
@@ -276,11 +275,13 @@ describe('sidebarLinks', () => {
     }
   });
 
-  it('carries the sort and the search term into every row', () => {
+  it('carries the sort into every row', () => {
     // The sidebar refines the list the visitor is already looking at; only the category changes.
-    const filters: MarketFilters = { sort: 'closing', category: 'economy', q: '금리' };
+    // The home has no search term to carry any more (ADR-0066).
+    const filters: MarketFilters = { sort: 'closing', category: 'economy' };
     for (const link of sidebarLinks(TREE, filters)) {
-      expect(link.query).toMatchObject({ sort: 'closing', q: '금리' });
+      expect(link.query).toMatchObject({ sort: 'closing' });
+      expect(link.query).not.toHaveProperty('q');
     }
   });
 

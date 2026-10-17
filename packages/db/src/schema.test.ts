@@ -11,7 +11,7 @@ import {
   releaseSettingChangeBodySchema,
   releaseSettingChangePayloadSchema,
 } from '@buddha/shared';
-import { and, eq, lt, sql } from 'drizzle-orm';
+import { and, eq, inArray, lt, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   adminActions,
@@ -20,6 +20,8 @@ import {
   balances,
   fills,
   ledgerEntries,
+  marketSearchTerms,
+  marketSearches,
   marketSettlementSteps,
   marketWatchEvents,
   marketWatches,
@@ -38,6 +40,7 @@ import {
   createCategory,
   createMarket,
   createPosition,
+  createSearch,
   createSettlementStep,
   createUser,
   createWatch,
@@ -192,6 +195,117 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     });
     expect(watcher?.watches.map((row) => row.marketId)).toEqual([market.id]);
     expect(watcher?.watchEvents.map((row) => row.marketId)).toEqual([market.id]);
+  });
+
+  it('a recorded search resolves its account and back, and holds a term of 100 at most (#15)', async () => {
+    const { user: u } = await createUser(t.db);
+    const row = await createSearch(t.db, { userId: u.id, query: '금리' });
+    const search = await t.db.query.marketSearches.findFirst({
+      where: eq(marketSearches.id, row.id),
+      with: { user: true },
+    });
+    expect(search).toMatchObject({ query: '금리', user: { id: u.id } });
+    const searcher = await t.db.query.user.findFirst({
+      where: eq(user.id, u.id),
+      with: { searches: true },
+    });
+    expect(searcher?.searches.map((entry) => entry.query)).toEqual(['금리']);
+    // The column is the API's bound (MARKET_SEARCH_TERM_MAX), in characters: a hundred Hangul
+    // syllables fit, one more does not (22001).
+    await createSearch(t.db, { userId: u.id, query: '가'.repeat(100) });
+    await expect(createSearch(t.db, { userId: u.id, query: '가'.repeat(101) })).rejects.toSatisfy(
+      (e) => sqlState(e) === '22001',
+    );
+  });
+
+  it('keeps each term of an account at its newest search, through any insert or delete (#15, migration 0026)', async () => {
+    const { user: u } = await createUser(t.db);
+    const { user: other } = await createUser(t.db);
+    const base = Date.now() - 60_000;
+    const at = (seconds: number) => new Date(base + seconds * 1_000);
+    type Term = { userId: string; query: string; searchId: string; searchedAt: Date };
+    /** By account, then term, in JS: the expectations below are written in the same order. */
+    const sorted = (rows: Term[]) =>
+      rows.sort((a, b) => (`${a.userId}\u0000${a.query}` < `${b.userId}\u0000${b.query}` ? -1 : 1));
+    const terms = async () =>
+      sorted(
+        await t.db
+          .select({
+            userId: marketSearchTerms.userId,
+            query: marketSearchTerms.query,
+            searchId: marketSearchTerms.searchId,
+            searchedAt: marketSearchTerms.searchedAt,
+          })
+          .from(marketSearchTerms),
+      );
+    const term = (row: { userId: string; query: string; id: string; searchedAt: Date }): Term => ({
+      userId: row.userId,
+      query: row.query,
+      searchId: row.id,
+      searchedAt: row.searchedAt,
+    });
+
+    // Inserted out of order, as only a factory or a script would: the newest search wins, by its
+    // time and then by its id within one millisecond, whichever was written last.
+    const middle = await createSearch(t.db, { userId: u.id, query: '금리', searchedAt: at(2) });
+    await createSearch(t.db, { userId: u.id, query: '금리', searchedAt: at(1) });
+    expect(await terms()).toEqual([term(middle)]);
+    // One millisecond, one term twice: the larger id wins. The ids are given, so one tie has its
+    // larger id written first (환율) and the other second (물가) — 'the first write stays' and
+    // 'the last write wins' each fail one of them, where random ids left it to a coin flip.
+    const ids = () => [randomUUID(), randomUUID()].sort() as [string, string];
+    const [fxLow, fxHigh] = ids();
+    const fx = await createSearch(t.db, {
+      id: fxHigh,
+      userId: u.id,
+      query: '환율',
+      searchedAt: at(3),
+    });
+    await createSearch(t.db, { id: fxLow, userId: u.id, query: '환율', searchedAt: at(3) });
+    const [cpiLow, cpiHigh] = ids();
+    await createSearch(t.db, { id: cpiLow, userId: u.id, query: '물가', searchedAt: at(3) });
+    const cpi = await createSearch(t.db, {
+      id: cpiHigh,
+      userId: u.id,
+      query: '물가',
+      searchedAt: at(3),
+    });
+    const newest = await createSearch(t.db, { userId: u.id, query: '금리', searchedAt: at(4) });
+    const theirs = await createSearch(t.db, { userId: other.id, query: '금리', searchedAt: at(5) });
+    expect(await terms()).toEqual(sorted([term(newest), term(fx), term(cpi), term(theirs)]));
+
+    // Deleting a term's newest search alone (no route does) points the term at the newest left.
+    await t.db.delete(marketSearches).where(eq(marketSearches.id, newest.id));
+    expect(await terms()).toEqual(sorted([term(middle), term(fx), term(cpi), term(theirs)]));
+    // And when the newest left share a millisecond, at the larger id of them: a newer search of
+    // 환율 and of 물가, deleted in one statement, hands each term back to its tie's larger id —
+    // written first for 환율 and second for 물가, so neither the smaller id nor the order the
+    // rows were written in can pass.
+    const later = [
+      await createSearch(t.db, { userId: u.id, query: '환율', searchedAt: at(6) }),
+      await createSearch(t.db, { userId: u.id, query: '물가', searchedAt: at(6) }),
+    ];
+    expect(await terms()).toEqual(sorted([term(middle), ...later.map(term), term(theirs)]));
+    await t.db.delete(marketSearches).where(
+      inArray(
+        marketSearches.id,
+        later.map((row) => row.id),
+      ),
+    );
+    expect(await terms()).toEqual(sorted([term(middle), term(fx), term(cpi), term(theirs)]));
+    // Deleting every search of a term, as the delete route does, takes the term away — and only
+    // that account's: the other account's search of the same term stays, and so does its term.
+    await t.db
+      .delete(marketSearches)
+      .where(and(eq(marketSearches.userId, u.id), eq(marketSearches.query, '금리')));
+    expect(await terms()).toEqual(sorted([term(fx), term(cpi), term(theirs)]));
+    // A recorded search is never changed in place (migration 0026 revoked UPDATE).
+    await expect(
+      t.db.update(marketSearches).set({ query: '유가' }).where(eq(marketSearches.id, fx.id)),
+    ).rejects.toSatisfy((e) => sqlState(e) === '42501');
+    // Clearing an account's searches, as the clear route does, takes all its terms away.
+    await t.db.delete(marketSearches).where(eq(marketSearches.userId, u.id));
+    expect(await terms()).toEqual([term(theirs)]);
   });
 
   describe('the direct AMM is gone (migration 0017, #125)', () => {
@@ -1313,7 +1427,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         WHERE grantee = 'buddha_app' AND table_schema = 'public'
           AND table_name IN ('ledger_entries', 'market_events', 'admin_actions', 'payment_events',
             'balances', 'payments', 'user_contacts', 'market_settlement_steps', 'release_settings',
-            'approval_requests', 'market_watches', 'market_watch_events')
+            'approval_requests', 'market_watches', 'market_watch_events', 'market_searches',
+            'market_search_terms')
         ORDER BY 1, 2`);
       const grants = Object.groupBy(rows, (r) => r.table);
       const privs = (table: string) => grants[table]?.map((r) => r.privilege).sort() ?? [];
@@ -1334,6 +1449,12 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       // Migration 0023 (#89): an unwatch deletes the current row; the history is append-only.
       expect(privs('market_watches')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
       expect(privs('market_watch_events')).toEqual(['INSERT', 'SELECT']);
+      // Migration 0025 (#15): the member deletes a recorded search, one term or all of them; and
+      // migration 0026 took UPDATE away — a recorded search is never changed in place, which is
+      // what keeps market_search_terms exact. The term rows are written by the triggers, as
+      // buddha_app, upsert included.
+      expect(privs('market_searches')).toEqual(['DELETE', 'INSERT', 'SELECT']);
+      expect(privs('market_search_terms')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
     });
 
     it('cannot UPDATE or DELETE a watch event, and refuses an action outside the list (#95)', async () => {

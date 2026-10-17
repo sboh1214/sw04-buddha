@@ -501,7 +501,27 @@ export const copy = {
   searchPlaceholder: '시장을 찾아보세요',
   searchSubmit: '검색',
   marketsEmpty: '아직 열린 시장이 없습니다.',
+  // 시장 검색 (#15, ADR-0066): 홈과 다른 결과 화면(ADR-0061 결정 1의 14). 처음에는 공개된 모든 상태를
+  // 보이고, 상태 필터는 '모든 상태'와 상태 라벨마다 하나다(결정 1의 13). 제목의 부분 일치로 찾는다
+  // (태그는 #17). 결과 없음 · 불러오는 중 · 연결 오류를 서로 다르게 보인다(N02 §3).
+  searchTitle: '시장 검색',
+  searchStatus: '상태',
+  searchStatusAll: '모든 상태',
+  searchCategory: '카테고리',
+  searchCategoryAll: '모든 카테고리',
+  // 검색 화면 안 검색창(과 그 검색 영역)의 접근 이름. 헤더 검색창(searchLabel)은 어디서든 새로 찾고, 이것은
+  // 화면에서 고른 상태·카테고리·정렬로 찾는다(ADR-0066). 두 검색 영역이 같은 이름이면 화면 낭독기로 가를 수 없다.
+  searchRefineLabel: '고른 조건으로 검색',
   marketsSearchEmpty: '검색 결과가 없습니다.',
+  // 검색어 없이 연 화면(결정 3의 #15): 로그인하지 않은 방문자에게는 검색어 입력 안내, 로그인한 회원에게는
+  // 본인의 최근 검색 기록(중복 없이 최근 10개, 하나씩·전체 지우기). 최근 검색은 본인에게 보이고 공개 응답에는
+  // 싣지 않는다(ADR-0066의 선택). 운영자가 볼 수 있는 범위는 #37 11항이 정한다.
+  searchPrompt: '찾을 시장의 검색어를 입력해 주세요.',
+  recentSearches: '최근 검색',
+  recentSearchesEmpty: '최근 검색 기록이 없습니다.',
+  recentSearchDelete: '삭제',
+  recentSearchesClear: '전체 삭제',
+  recentSearchDeleteFailed: '최근 검색을 지우지 못했습니다. 잠시 후 다시 시도해 주세요.',
   // 관심 시장을 켠 홈: 진행 중인 관심 시장만 보인다(끝난 관심 시장은 MY에 남는다). 뒤 문장은 MY의
   // 빈 관심 시장과 같다(오너 결정 2026-10-16).
   watchlistViewEmpty: `진행 중인 관심 시장이 없습니다. ${WATCHLIST_HOW_TO_ADD}`,

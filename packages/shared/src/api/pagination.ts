@@ -109,6 +109,11 @@ const SORT_VALUE_SHAPES = {
   millis: millisShape,
   /** The same for a nullable column, `CURSOR_NULL` standing for NULL. */
   nullableMillis: (value: string) => value === CURSOR_NULL || millisShape(value),
+  /**
+   * Which of an order's two groups the row is in, `0` or `1`: 마감 임박 over a list that can hold
+   * ended markets, the 진행 중 ones first (ADR-0066, owner decision 2026-10-16).
+   */
+  group: (value: string) => value === '0' || value === '1',
 } as const;
 export type TupleCursorValueShape = keyof typeof SORT_VALUE_SHAPES;
 
@@ -116,11 +121,13 @@ export type TupleCursorValueShape = keyof typeof SORT_VALUE_SHAPES;
  * Keyset cursor for an order of several keys and the id, `<value>_<value>_…_<id>`: the market
  * orders of ADR-0065, whose keys are more than one value or may be NULL. `GET /markets?sort=newest`
  * pages on `(open_at, id)` with `open_at` nullable; `sort=recommended` on the window end it was
- * first read at, the 24-hour volume under that window and `(open_at, id)` again. The values are
- * digits or `CURSOR_NULL`, never `_`, so every separator before the id is one of theirs and the
- * id itself may contain one (a `text` id). With one value it is the `<value>_<id>` cursor the
- * volume order of `GET /markets` paged on (`(volume_coin DESC, id DESC)`, `int`) until ADR-0065
- * removed that order; #132 brings it back on this cursor and `tupleKeysetPredicate`.
+ * first read at, the 24-hour volume under that window and `(open_at, id)` again; `sort=closing`,
+ * on a list that can hold ended markets, on the market's group (진행 중 or ended), its close time
+ * and the id (ADR-0066). The values are digits or `CURSOR_NULL`, never `_`, so every separator
+ * before the id is one of theirs and the id itself may contain one (a `text` id). With one value
+ * it is the `<value>_<id>` cursor the volume order of `GET /markets` paged on (`(volume_coin
+ * DESC, id DESC)`, `int`) until ADR-0065 removed that order; #132 brings it back on this cursor
+ * and `tupleKeysetPredicate`.
  */
 export interface TupleCursor {
   /** One decimal string (or `CURSOR_NULL`) per value shape the caller named, in order. */
