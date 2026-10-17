@@ -9,13 +9,16 @@ import { identifierWords } from './excluded.js';
  * The plan's list (N04 §2, N01 §5) and D8's new records start it; the decision issues change it
  * (#37: the scope of 인증 정보 and of the risk flags, and what else outside the owner-only list is
  * public; #123·#122: whether a fill says the house was the other side). #180 kept a market's bot
- * participation and settings to admins (ADR-0058). Items nothing stores yet are named ahead
- * (`pending`), so the route or event that brings one is refused from its first day.
+ * participation and settings to admins (ADR-0058). The owner kept a user's time zone out while a
+ * market's judging time zone (#22) stays public (2026-10-16, ADR-0063). Items nothing stores yet
+ * are named ahead (`pending`), so the route or event that brings one is refused from its first
+ * day.
  *
  * A name is matched by its words (identifierWords): an item's field `['real', 'name']` matches
  * `realName`, `real_name` and `buyerRealName`, never `nameKo`. A public fill or price is not
  * private: what makes one a person's is an account beside it or a name that says whose it is
- * (`owned`: `userFills`, `fillsByAccount`, while `recentFills` stays public).
+ * (`owned`: `userFills`, `fillsByAccount`, while `recentFills` stays public). A time zone is the
+ * same: `userTimeZone` is a person's, `judgingTimeZone` a market's.
  */
 
 export const PRIVATE_DATA_IDS = [
@@ -28,6 +31,7 @@ export const PRIVATE_DATA_IDS = [
   'email',
   'real-name',
   'phone',
+  'time-zone',
   'identity-verification',
   'auth-secret',
   'risk-flag',
@@ -42,7 +46,10 @@ export interface PrivateData {
   readonly name: string;
   /** The plan sections and owner decisions that keep it private. */
   readonly basis: string;
-  /** Field names that carry it, each as a run of identifier words, lower case. */
+  /**
+   * Field names that carry it, each as a run of identifier words, lower case. Empty for an item
+   * only `owned` names (`time-zone`).
+   */
   readonly fields: readonly (readonly string[])[];
   /**
    * What is public on its own and private once a name says whose it is: a name holding one of
@@ -80,6 +87,12 @@ const WHOSE: readonly string[] = [
   'profile',
   'profiles',
 ];
+
+/**
+ * WHOSE, and the words a name uses for the one reading it: `myTimeZone`, `viewerZone`. Only the
+ * time-zone item uses them (`my`·`mine` alone are already a fills field).
+ */
+const WHOSE_OR_VIEWER: readonly string[] = [...WHOSE, 'my', 'mine', 'viewer', 'viewers'];
 
 export const PRIVATE_DATA: readonly PrivateData[] = [
   {
@@ -154,6 +167,21 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
     name: '휴대전화 번호',
     basis: 'D8, ADR-0043',
     fields: [['phone'], ['phones'], ['mobile'], ['tel'], ['telephone']],
+  },
+  {
+    id: 'time-zone',
+    name: '특정 사용자에게 묶인 시간대',
+    basis: 'ADR-0063(오너 결정 2026-10-16)',
+    // A zone on its own is public: the judging time zone #22 puts on a market (`timeZone`,
+    // `judgingTimeZone`, `resolutionTimeZone`). A name that says whose it is (`userTimeZone`,
+    // `profileTimeZone`, `memberZone`, `myTz`) is a person's. A person's zone under a bare
+    // `timeZone` in a nested object (`Me.profile.timeZone`) is not caught by its name: the
+    // public route check finds account A's zone by its value (apps/api/src/surface).
+    fields: [],
+    owned: {
+      words: ['zone', 'zones', 'timezone', 'timezones', 'tz'],
+      whose: WHOSE_OR_VIEWER,
+    },
   },
   {
     id: 'identity-verification',

@@ -7,6 +7,7 @@ import { EmotionRegistry } from './emotion-registry';
 import { Toaster } from './toaster';
 import { SessionCacheGuard } from '@/components/auth/session-cache-guard';
 import { RealtimeProvider } from '@/components/realtime/realtime-provider';
+import { TimeZoneProvider } from '@/components/time-zone/time-zone-provider';
 import { getQueryClient } from '@/lib/query-client';
 import { system } from '@/theme/system';
 
@@ -19,7 +20,9 @@ import { system } from '@/theme/system';
  * SessionCacheGuard stays a SIBLING that renders first, so its resetQueries runs before
  * RealtimeProvider's new handshake: an account switch empties the cache and only then does
  * the socket start writing into it. Both are idempotent, and both need the QueryClient, so
- * neither can move above QueryClientProvider.
+ * neither can move above QueryClientProvider. TimeZoneProvider reads `['me']` (the picked zone,
+ * ADR-0063), so it sits inside it too; it answers Seoul until the tab has hydrated and the
+ * profile is known (`useMe` no longer pending).
  */
 export function Provider(props: ColorModeProviderProps) {
   const queryClient = getQueryClient();
@@ -29,7 +32,9 @@ export function Provider(props: ColorModeProviderProps) {
         <QueryClientProvider client={queryClient}>
           <SessionCacheGuard />
           <RealtimeProvider>
-            <ColorModeProvider {...props} />
+            <TimeZoneProvider>
+              <ColorModeProvider {...props} />
+            </TimeZoneProvider>
           </RealtimeProvider>
           <Toaster />
         </QueryClientProvider>

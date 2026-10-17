@@ -17,6 +17,14 @@ export const profiles = pgTable(
       .references(() => user.id, { onDelete: 'cascade' }),
     nickname: varchar({ length: 20 }).notNull().unique(),
     role: roleEnum().notNull().default('user'),
+    /**
+     * The IANA zone the member picked in MY 설정 for reading times (ADR-0061 #60-8, ADR-0063),
+     * or null for "follow the browser". Here rather than in a table of its own: it is one
+     * display preference of the account, like the nickname, and the trigger already guarantees
+     * the row. The name is checked by `timeZoneSchema` (@buddha/shared) and stored as given;
+     * TIME_ZONE_MAX_LENGTH is this width.
+     */
+    timeZone: varchar({ length: 64 }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

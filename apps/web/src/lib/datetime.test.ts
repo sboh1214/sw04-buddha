@@ -1,6 +1,8 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
 import {
+  SEOUL_TIME_ZONE,
+  formatInTimeZone,
   formatKst,
   formatRemaining,
   isoToKstLocal,
@@ -79,6 +81,85 @@ describe('formatKst', () => {
 
   it('renders nothing for an unparseable instant', () => {
     expect(formatKst('not-a-date')).toBe('');
+  });
+});
+
+describe('formatInTimeZone', () => {
+  // 14:59Z on New Year's Eve: 23:59 in Seoul, 09:59 in New York (EST), 20:29 in Kolkata.
+  const at = '2026-12-31T14:59:00.000Z';
+
+  it('is exactly formatKst in Seoul: no marker (ADR-0061 #60-8)', () => {
+    for (const tz of ['UTC', 'Asia/Seoul', 'America/New_York']) {
+      process.env.TZ = tz;
+      expect(formatInTimeZone(at, SEOUL_TIME_ZONE), tz).toBe('2026. 12. 31. 오후 11:59');
+      expect(formatInTimeZone(at, SEOUL_TIME_ZONE), tz).toBe(formatKst(at));
+      expect(formatInTimeZone('2026-02-28T20:30:00.000Z', SEOUL_TIME_ZONE), tz).toBe(
+        '2026. 3. 1. 오전 5:30',
+      );
+    }
+  });
+
+  it('renders another zone in the same style with its UTC offset after it, whatever the machine zone', () => {
+    // The day period is corrected as in formatKst: "오전"/"오후" whichever ICU renders it.
+    for (const tz of ['UTC', 'Asia/Seoul', 'America/New_York']) {
+      process.env.TZ = tz;
+      expect(formatInTimeZone(at, 'America/New_York'), tz).toBe('2026. 12. 31. 오전 9:59 (GMT-5)');
+      expect(formatInTimeZone(at, 'Asia/Kolkata'), tz).toBe('2026. 12. 31. 오후 8:29 (GMT+5:30)');
+      // Crosses the date line the other way: Chatham is already in 2027.
+      expect(formatInTimeZone(at, 'Pacific/Chatham'), tz).toBe('2027. 1. 1. 오전 4:44 (GMT+13:45)');
+    }
+  });
+
+  it('marks a zone with Seoul’s offset too: the rule is the zone, not the offset', () => {
+    // Tokyo reads the same wall clock as Seoul but is not Asia/Seoul, so it carries the marker.
+    expect(formatInTimeZone(at, 'Asia/Tokyo')).toBe('2026. 12. 31. 오후 11:59 (GMT+9)');
+  });
+
+  it('marks a zone at UTC itself: the zone is not Seoul', () => {
+    // Some GMT marker, whose exact spelling for zero ("GMT" or "GMT+0") is the ICU's.
+    const zero = /^2026\. 12\. 31\. 오후 2:59 \(GMT(\+0)?\)$/;
+    expect(formatInTimeZone(at, 'UTC')).toMatch(zero);
+    // London in winter is on UTC, and still marked.
+    expect(formatInTimeZone(at, 'Europe/London')).toMatch(zero);
+  });
+
+  it('reads a name the engine resolves to Asia/Seoul as Seoul: no marker', () => {
+    // 'ROK' is a tzdb link to Asia/Seoul, which PUT /me/time-zone stores as given. Node's ICU
+    // resolves it (resolvedOptions().timeZone is 'Asia/Seoul'), so it is Seoul, unmarked. An
+    // engine that keeps the alias's own name there would mark it.
+    expect(formatInTimeZone(at, 'ROK')).toBe(formatKst(at));
+    expect(formatInTimeZone('2026-07-15T00:00:00.000Z', 'ROK')).toBe(
+      formatKst('2026-07-15T00:00:00.000Z'),
+    );
+  });
+
+  it('follows daylight saving across the boundary: the offset is the instant’s own', () => {
+    // US DST began 2026-03-08 at 02:00 EST = 07:00Z; the wall clock jumps to 03:00 EDT.
+    expect(formatInTimeZone('2026-03-08T06:59:00.000Z', 'America/New_York')).toBe(
+      '2026. 3. 8. 오전 1:59 (GMT-5)',
+    );
+    expect(formatInTimeZone('2026-03-08T07:00:00.000Z', 'America/New_York')).toBe(
+      '2026. 3. 8. 오전 3:00 (GMT-4)',
+    );
+    // And back on 2026-11-01 at 02:00 EDT = 06:00Z: 01:xx happens twice, told apart by the marker.
+    expect(formatInTimeZone('2026-11-01T05:30:00.000Z', 'America/New_York')).toBe(
+      '2026. 11. 1. 오전 1:30 (GMT-4)',
+    );
+    expect(formatInTimeZone('2026-11-01T06:30:00.000Z', 'America/New_York')).toBe(
+      '2026. 11. 1. 오전 1:30 (GMT-5)',
+    );
+    // London in summer is an hour ahead of UTC: the marker follows the instant (its winter,
+    // on UTC itself, is the case above).
+    expect(formatInTimeZone('2026-07-01T12:00:00.000Z', 'Europe/London')).toBe(
+      '2026. 7. 1. 오후 1:00 (GMT+1)',
+    );
+  });
+
+  it('renders nothing for an unparseable instant, and KST for a zone this engine cannot read', () => {
+    expect(formatInTimeZone('not-a-date', 'America/New_York')).toBe('');
+    expect(formatInTimeZone('', SEOUL_TIME_ZONE)).toBe('');
+    // A floor, not a path a screen takes: effectiveTimeZone keeps such a name from getting here.
+    expect(formatInTimeZone(at, 'Mars/Olympus_Mons')).toBe(formatKst(at));
   });
 });
 

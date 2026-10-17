@@ -8,12 +8,14 @@ import {
   type OkResult,
   type SetPasswordBody,
   type UpdateMeBody,
+  type UpdateTimeZoneBody,
   contactBodySchema,
   contactSchema,
   meSchema,
   okResultSchema,
   setPasswordBodySchema,
   updateMeBodySchema,
+  updateTimeZoneBodySchema,
 } from '@buddha/shared';
 import { type SessionUser } from '../auth/auth.js';
 import { CurrentUser } from '../auth/current-user.decorator.js';
@@ -101,5 +103,34 @@ export class MeController {
   ): Promise<Contact> {
     assertExpectedAccount(user.id, body.expectedAccountId);
     return this.me.updateContact(user.id, { realName: body.realName, phone: body.phone });
+  }
+
+  /**
+   * ADR-0063 (ADR-0061 #60-8): the time zone MY 설정 picked, or `null` to follow the browser
+   * again. The web formats every member-screen time in it after hydration; the server only
+   * stores it. The name is checked against Node's own Intl (`timeZoneSchema`), so a zone the
+   * server cannot read is refused rather than stored.
+   *
+   * The body names the account the screen shows (`expectedAccountId`, assertExpectedAccount),
+   * as the contact and the first password do: the cookie decides whose profile is written, and a
+   * window still showing account A after another one signed in as B would otherwise change B's
+   * zone while A's screen said it was saved — B's times move with nothing on screen to say why.
+   * Answers the whole profile like `PATCH /me`; the web takes the profile from it into `['me']`.
+   */
+  @Put('time-zone')
+  @ApiOperation({
+    operationId: 'updateMyTimeZone',
+    summary: 'Set the time zone times are shown in (null: follow the browser)',
+  })
+  @ApiData(meSchema)
+  // FORBIDDEN: a mutation whose Origin is not ours (SessionGuard's CSRF check), or a body whose
+  // `expectedAccountId` is not the cookie's account (details name the field; nothing written).
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
+  updateTimeZone(
+    @CurrentUser() user: SessionUser,
+    @Body({ schema: updateTimeZoneBodySchema }) body: UpdateTimeZoneBody,
+  ): Promise<Me> {
+    assertExpectedAccount(user.id, body.expectedAccountId);
+    return this.me.updateTimeZone(user.id, body.timeZone);
   }
 }

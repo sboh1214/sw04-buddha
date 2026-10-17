@@ -23,6 +23,7 @@ export class MeService {
           nickname: schema.profiles.nickname,
           role: schema.profiles.role,
           createdAt: schema.profiles.createdAt,
+          timeZone: schema.profiles.timeZone,
           availableCoin: schema.balances.availableCoin,
           lockedCoin: schema.balances.lockedCoin,
           realName: schema.userContacts.realName,
@@ -60,6 +61,7 @@ export class MeService {
         nickname: row.nickname,
         role: row.role,
         createdAt: row.createdAt.toISOString(),
+        timeZone: row.timeZone,
       },
       balance: {
         availableCoin: serializeCoinAmount(row.availableCoin),
@@ -97,6 +99,21 @@ export class MeService {
       }
       throw error;
     }
+    return this.getMe(userId);
+  }
+
+  /**
+   * ADR-0063: the zone the member reads times in, or null to follow the browser again. The name
+   * was checked by `timeZoneSchema` (Node's Intl) and is stored as given; `updated_at` follows
+   * through drizzle's `$onUpdate`, as for the nickname.
+   */
+  async updateTimeZone(userId: string, timeZone: string | null): Promise<Me> {
+    const updated = await this.db
+      .update(schema.profiles)
+      .set({ timeZone })
+      .where(eq(schema.profiles.userId, userId))
+      .returning({ userId: schema.profiles.userId });
+    if (updated.length === 0) throw new AppError('NOT_FOUND', { message: 'Profile not found' });
     return this.getMe(userId);
   }
 

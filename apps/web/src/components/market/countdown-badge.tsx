@@ -3,8 +3,9 @@
 import { Badge, Text } from '@chakra-ui/react';
 import { type MarketStatus } from '@buddha/shared';
 import { useEffect, useRef, useState } from 'react';
+import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { copy } from '@/copy';
-import { formatKst, formatRemaining, tickingNow } from '@/lib/datetime';
+import { formatRemaining, tickingNow } from '@/lib/datetime';
 import { isClosingSoon } from '@/lib/market-admin';
 
 /**
@@ -23,10 +24,13 @@ import { isClosingSoon } from '@/lib/market-admin';
  * value an order panel's close gate must share with this badge (A-M4-23), so the two readings
  * of one close time on one screen never disagree.
  *
- * With no `now` at all the badge still renders something true — the absolute close time in KST
- * — and swaps to the countdown once mounted, ticking on the wall clock because there is nothing
- * to anchor to. That is what lets a caller with no server instant (the home grid, the admin
- * preview) drop the component in unchanged, and it is safe there: the badge is display-only.
+ * With no `now` at all the badge still renders something true — the absolute close time, in KST
+ * on the server, in the hydrating render and until the profile is known (`useMe` no longer
+ * pending), and in the member's zone after that (ADR-0063; an admin page holds it at KST) — and
+ * swaps to the countdown once mounted, ticking on the wall clock because there is nothing to
+ * anchor to. That is what lets a caller with no server instant
+ * (the home grid, the admin preview) drop the component in unchanged, and it is safe there: the
+ * badge is display-only.
  *
  * Colour never carries the state alone (PLAN 11.2): 마감 임박 and 마감됨 are written out beside
  * the orange and the grey.
@@ -58,10 +62,11 @@ function countdownReading(
   running: boolean,
   clock: number | undefined,
   remaining: string,
+  formatDateTime: (iso: string) => string,
 ): CountdownReading {
   if (!running) return { text: copy.marketClosed, urgent: false };
   if (clock === undefined) {
-    return { text: `${copy.marketCloseAt} ${formatKst(market.closeAt)}`, urgent: false };
+    return { text: `${copy.marketCloseAt} ${formatDateTime(market.closeAt)}`, urgent: false };
   }
   return isClosingSoon(market, clock)
     ? { text: `${copy.marketClosingSoon} ${remaining}`, urgent: true }
@@ -96,6 +101,7 @@ export function CountdownBadge({
 }: CountdownBadgeProps) {
   const [anchor] = useState(now);
   const [clock, setClock] = useState(now);
+  const formatDateTime = useFormatDateTime();
   const remaining = clock === undefined ? '' : formatRemaining(market.closeAt, clock);
   // A market whose close time has passed stays `open` until the close job runs (A-M3-31), so
   // "the countdown ran out" is an ordinary state and the badge, not the status, reports it.
@@ -130,7 +136,7 @@ export function CountdownBadge({
     };
   }, [running, anchor]);
 
-  const reading = countdownReading(market, running, clock, remaining);
+  const reading = countdownReading(market, running, clock, remaining, formatDateTime);
 
   if (variant === 'text') {
     // A span, not a `<p>`: it sits under the card's `<h2>` inside a flex column, and the caller

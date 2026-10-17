@@ -2,7 +2,9 @@ import { copy } from '@/copy';
 
 /**
  * KST at the edges, UTC on the wire — PLAN 7 ("시각은 ISO 8601 UTC. 클라이언트가 KST로 표시")
- * and PLAN 12's "마감 시각(KST 입력, UTC 저장)" for the market form M3 still has to build.
+ * and PLAN 12's "마감 시각(KST 입력, UTC 저장)" for the market form M3 still has to build. That
+ * is still every admin screen and the input below (ADR-0061 #60-8). A member screen reads times
+ * in the member's own zone since ADR-0063 (`formatInTimeZone`, through `useFormatDateTime`).
  *
  * The offset is written out rather than derived from a timezone database: Seoul has been a
  * fixed UTC+9 with no DST since 1988, so `+09:00` is exact for every date these controls can
@@ -52,10 +54,19 @@ export function isoToKstLocal(iso: string): string {
   );
 }
 
+/**
+ * Seoul's IANA name: the zone of every admin screen (ADR-0061 #60-8), of the server's render and
+ * of the first client render (ADR-0063), and the one zone a member-screen time carries no marker
+ * in.
+ */
+export const SEOUL_TIME_ZONE = 'Asia/Seoul';
+
+/** The one style every absolute time on screen has: `2026. 9. 6. 오후 3:00`. */
+const DATE_TIME_STYLE: Intl.DateTimeFormatOptions = { dateStyle: 'medium', timeStyle: 'short' };
+
 const kstDateTime = new Intl.DateTimeFormat('ko-KR', {
-  dateStyle: 'medium',
-  timeStyle: 'short',
-  timeZone: 'Asia/Seoul',
+  ...DATE_TIME_STYLE,
+  timeZone: SEOUL_TIME_ZONE,
 });
 
 /**
@@ -65,16 +76,96 @@ const kstDateTime = new Intl.DateTimeFormat('ko-KR', {
  */
 const DAY_PERIODS: Readonly<Record<string, string>> = { AM: '오전', PM: '오후' };
 
-/** An ISO instant rendered for reading in KST (`2026. 9. 6. 오후 3:00`), as the lists show it. */
-export function formatKst(iso: string): string {
-  const parsed = new Date(iso);
-  if (Number.isNaN(parsed.getTime())) return '';
-  return kstDateTime
-    .formatToParts(parsed)
+/** The formatter's parts joined, with the day period corrected (DAY_PERIODS). */
+function joinParts(parts: Intl.DateTimeFormatPart[]): string {
+  return parts
     .map((part) =>
       part.type === 'dayPeriod' ? (DAY_PERIODS[part.value] ?? part.value) : part.value,
     )
     .join('');
+}
+
+/**
+ * An ISO instant rendered for reading in KST (`2026. 9. 6. 오후 3:00`), as the lists show it.
+ * The admin screens' formatter (ADR-0061 #60-8: 관리자 화면은 표시와 입력 모두 한국 시간); a
+ * member screen reads `formatInTimeZone` through the display zone (ADR-0063).
+ */
+export function formatKst(iso: string): string {
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) return '';
+  return joinParts(kstDateTime.formatToParts(parsed));
+}
+
+/** A zone's two formatters: the time itself, and its UTC offset for the marker. */
+interface ZoneFormats {
+  dateTime: Intl.DateTimeFormat;
+  offset: Intl.DateTimeFormat;
+  /** Seoul under any spelling this engine resolves to it: no marker (ADR-0061 #60-8). */
+  seoul: boolean;
+}
+
+/**
+ * Built once per zone: a page of fills or ledger rows formats dozens of instants, and building an
+ * `Intl.DateTimeFormat` costs far more than using one. Bounded by the zones the engine knows.
+ * `null` is cached too, for a name this engine cannot read.
+ */
+const zoneFormats = new Map<string, ZoneFormats | null>();
+
+function formatsFor(timeZone: string): ZoneFormats | null {
+  const held = zoneFormats.get(timeZone);
+  if (held !== undefined) return held;
+  let formats: ZoneFormats | null;
+  try {
+    const dateTime = new Intl.DateTimeFormat('ko-KR', { ...DATE_TIME_STYLE, timeZone });
+    formats = {
+      dateTime,
+      // `dateStyle`/`timeStyle` cannot be combined with `timeZoneName`, so the offset has a
+      // formatter of its own and only its `timeZoneName` part is read.
+      offset: new Intl.DateTimeFormat('ko-KR', { timeZone, timeZoneName: 'shortOffset' }),
+      seoul:
+        timeZone === SEOUL_TIME_ZONE || dateTime.resolvedOptions().timeZone === SEOUL_TIME_ZONE,
+    };
+  } catch {
+    // RangeError: no such zone here. The caller falls back to KST.
+    formats = null;
+  }
+  zoneFormats.set(timeZone, formats);
+  return formats;
+}
+
+/**
+ * The zone marker `formatInTimeZone` writes after an absolute time, and the only place one is
+ * made: the localized UTC offset AT THAT INSTANT (`GMT-4`, `GMT+5:30`), so it follows daylight
+ * saving — the same zone reads `GMT-5` in January. `''` for Seoul, which has none (ADR-0061
+ * #60-8: 적용된 시간대가 Asia/Seoul이 아닐 때만 절대 시각 옆에 시간대를 적는다).
+ *
+ * The offset rather than the IANA name: `America/Argentina/Buenos_Aires` beside every time
+ * would be longer than the time, and an offset is what a reader compares with the clock on the
+ * wall. Rendered by the browser's own ICU — the server never renders a marker (ADR-0063).
+ */
+function zoneMarker(formats: ZoneFormats, at: Date): string {
+  if (formats.seoul) return '';
+  return formats.offset.formatToParts(at).find((part) => part.type === 'timeZoneName')?.value ?? '';
+}
+
+/**
+ * An ISO instant rendered in `timeZone` for a member screen: the `formatKst` style
+ * (`2026. 9. 6. 오후 3:00`), with the zone marker after it in parentheses whenever the zone is not
+ * Seoul (`2026. 9. 6. 오전 2:00 (GMT-4)`). In Seoul it is exactly `formatKst`.
+ *
+ * A zone this engine cannot read renders KST, unmarked — the time every visitor's first paint
+ * already showed (ADR-0063). `effectiveTimeZone` keeps such a name from getting here, so this
+ * is the formatter's own floor rather than a path a screen takes. `''` for an unreadable instant,
+ * as `formatKst`.
+ */
+export function formatInTimeZone(iso: string, timeZone: string): string {
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) return '';
+  const formats = formatsFor(timeZone);
+  if (formats === null) return formatKst(iso);
+  const text = joinParts(formats.dateTime.formatToParts(parsed));
+  const marker = zoneMarker(formats, parsed);
+  return marker === '' ? text : `${text} (${marker})`;
 }
 
 const SECOND_MS = 1000;

@@ -18,6 +18,8 @@ export type LinkedAccount = components['schemas']['LinkedAccount'];
 /** Real name + mobile number (ADR-0043): `Me.contact`, and the answer to `PUT /me/contact`. */
 export type Contact = components['schemas']['Contact'];
 export type ContactBody = components['schemas']['ContactBody'];
+/** `PUT /me/time-zone` (ADR-0063): the zone, or null to follow the browser, and the account. */
+export type UpdateTimeZoneBody = components['schemas']['UpdateTimeZoneBody'];
 export type LedgerEntry = components['schemas']['LedgerEntry'];
 export type Payment = components['schemas']['Payment'];
 export type Balance = components['schemas']['Balance'];

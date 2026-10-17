@@ -2,10 +2,10 @@
 
 import { Alert, Badge, Button, Card, HStack, Skeleton, Stack, Text } from '@chakra-ui/react';
 import { formatKrw, formatCoin, parseCoinAmount } from '@buddha/shared';
+import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { copy } from '@/copy';
 import { usePayments } from '@/hooks/use-wallet';
 import { type Payment } from '@/lib/api';
-import { formatKst } from '@/lib/datetime';
 import { paymentHistoryReason, paymentMethodLabel, paymentStatusView } from '@/lib/payments';
 
 /**
@@ -70,6 +70,7 @@ function PaymentRow({ payment }: { payment: Payment }) {
   const status = paymentStatusView(payment);
   const method = paymentMethodLabel(payment.method);
   const reason = paymentHistoryReason(payment);
+  const formatDateTime = useFormatDateTime();
   return (
     <HStack
       justify="space-between"
@@ -89,10 +90,10 @@ function PaymentRow({ payment }: { payment: Payment }) {
         {/* When the money moved, not when the payment was made: the approval once there is one. */}
         <Text fontSize="xs" color="fg.muted">
           {payment.approvedAt === null
-            ? formatKst(payment.createdAt)
-            : `${copy.paymentApprovedAt} ${formatKst(payment.approvedAt)}`}
+            ? formatDateTime(payment.createdAt)
+            : `${copy.paymentApprovedAt} ${formatDateTime(payment.approvedAt)}`}
           {payment.refundedAt !== null &&
-            ` · ${copy.paymentRefundedAt} ${formatKst(payment.refundedAt)}`}
+            ` · ${copy.paymentRefundedAt} ${formatDateTime(payment.refundedAt)}`}
         </Text>
         {reason !== null && (
           <Text fontSize="xs" color="fg.muted" wordBreak="break-word">
