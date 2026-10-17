@@ -3,7 +3,6 @@
 import {
   type QueryClient,
   hashKey,
-  keepPreviousData,
   useInfiniteQuery,
   useQuery,
   useQueryClient,
@@ -121,9 +120,15 @@ export function useAdminRelatedMarkets(id: string) {
 /**
  * The picker's results for a term (`GET /admin/markets?q=`, every status, newest first), 20 per
  * page with 더 보기 like the admin list. Nothing is asked until there is a term.
+ *
+ * No `keepPreviousData`: a newly submitted term is a new search, pending until its own answer, as
+ * the public search's is (ADR-0066). Held as a placeholder, the last term's pages stood under the
+ * new term as ready rows while a slow request ran, each with a live 연결 — a press linked a market
+ * the submitted search had not found (Codex review on #214). What the results area shows of the
+ * query is `relatedSearchSection`'s (lib/related-markets.ts).
  */
-export function useAdminRelatedSearch(q: string | undefined) {
-  return useInfiniteQuery({
+export function adminRelatedSearchQueryOptions(q: string | undefined) {
+  return {
     queryKey: adminRelatedSearchKey(q ?? ''),
     queryFn: async ({
       pageParam,
@@ -140,8 +145,11 @@ export function useAdminRelatedSearch(q: string | undefined) {
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last: { nextCursor: string | null }) => last.nextCursor ?? undefined,
     enabled: q !== undefined,
-    placeholderData: keepPreviousData,
-  });
+  };
+}
+
+export function useAdminRelatedSearch(q: string | undefined) {
+  return useInfiniteQuery(adminRelatedSearchQueryOptions(q));
 }
 
 /**
@@ -180,13 +188,21 @@ export function useMarketFills(id: string, enabled: boolean) {
 }
 
 /**
- * After any admin write: the detail, the fills, every filtered list page, and every other market's
- * 관련 시장 list. Each row of such a list badges the market at its other end with its status and
- * title, so a market linked to this one would otherwise go on showing it as it was — a draft just
- * opened still '초안' under the hint that says a draft is not shown, for as long as `staleTime`
- * keeps that list fresh (review on #65). Which lists hold this market is the server's to say, so
- * every one but this market's own is asked; its own holds only other markets, and on this
- * market's screen it is mounted, so including it would be one request per write for nothing.
+ * After any admin write: the detail, the fills, every filtered list page, every other market's
+ * 관련 시장 list, and every public 관련 시장 list. Each row of an admin list badges the market at
+ * its other end with its status and title, so a market linked to this one would otherwise go on
+ * showing it as it was — a draft just opened still '초안' under the hint that says a draft is not
+ * shown, for as long as `staleTime` keeps that list fresh (review on #65). Which lists hold this
+ * market is the server's to say, so every one but this market's own is asked; its own holds only
+ * other markets, and on this market's screen it is mounted, so including it would be one request
+ * per write for nothing.
+ *
+ * The public lists (`['markets', 'related', id]`) are the same hazard on the reader's side: which
+ * markets a detail shows is decided by their statuses, and each card carries the title. A detail
+ * read while a linked market was a draft held an empty page, and coming back to it from the admin
+ * screen that opened the draft reused that page inside `staleTime`; a card kept a title an edit had
+ * changed. Those lists are not mounted during the admin write and no socket room repairs them, so
+ * the whole family is marked, as `applyRelatedMarkets` does for a link (Codex review on #214).
  *
  * Not 남발 (PLAN 11.5): `refetchType` stays at its default `'active'`, so a list page that is
  * not mounted is only marked, and its next mount is the request.
@@ -201,6 +217,7 @@ function invalidateMarket(queryClient: QueryClient, id: string) {
       queryKey: ADMIN_RELATED_MARKETS_KEY,
       predicate: (query) => query.queryHash !== ownLinks,
     }),
+    queryClient.invalidateQueries({ queryKey: MARKET_RELATED_KEY }),
   ]);
 }
 

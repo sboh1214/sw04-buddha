@@ -1,8 +1,16 @@
-import { QueryClient, QueryObserver, partialMatchKey } from '@tanstack/react-query';
-import { describe, expect, it } from 'vitest';
-import { type AdminMarket, type AdminRelatedMarket } from '@/lib/api';
+import {
+  type InfiniteData,
+  InfiniteQueryObserver,
+  QueryClient,
+  QueryObserver,
+  partialMatchKey,
+} from '@tanstack/react-query';
+import { describe, expect, it, vi } from 'vitest';
+import { type AdminMarket, type AdminRelatedMarket, type MarketSummary } from '@/lib/api';
 import { DEFAULT_MARKET_FILTERS, marketsKey, relatedMarketsKey } from '@/lib/market-keys';
-import { type MarketPages } from '@/lib/market-live';
+import { type MarketPage, type MarketPages } from '@/lib/market-live';
+import { relatedSearchSection } from '@/lib/related-markets';
+import { relatedMarketsInfiniteQueryOptions } from './use-markets';
 import {
   ADMIN_MARKETS_KEY,
   ADMIN_RELATED_MARKETS_KEY,
@@ -10,6 +18,7 @@ import {
   adminMarketQueryOptions,
   adminRelatedMarketsKey,
   adminRelatedSearchKey,
+  adminRelatedSearchQueryOptions,
   applyMarket,
   applyRelatedMarkets,
   marketFillsKey,
@@ -367,5 +376,145 @@ describe('applyRelatedMarkets (#65, ADR-0068)', () => {
       unsubscribe();
       queryClient.clear();
     }
+  });
+
+  it('asks again for every public 관련 시장 list on a transition or an edit, and writes none', async () => {
+    // Codex review on #214: which markets a public 관련 시장 list shows is decided by their
+    // statuses, and each card carries the title. B's public list was read while A was a draft,
+    // so it held no A; the admin opens A (every transition and the edit come here, through
+    // `applyMarket`) and goes back to B's detail inside `staleTime` — the cached page would come
+    // back with A still missing. Those lists are not on screen during the admin write and no
+    // socket room repairs them, so the whole family is marked: A's own and B's, not mounted, are
+    // asked on their next mount; one that is mounted asks now. Nothing is written into them.
+    const { queryClient, unsubscribe } = await loadedDetail();
+    const THIRD_ID = 'c3d4e5f6-0000-4000-8000-000000000003';
+    let fetches = 0;
+    const mounted = new InfiniteQueryObserver<
+      MarketPage,
+      Error,
+      MarketPages,
+      readonly unknown[],
+      string | undefined
+    >(queryClient, {
+      ...relatedMarketsInfiniteQueryOptions(THIRD_ID),
+      queryFn: () => {
+        fetches += 1;
+        return Promise.resolve({ items: [], nextCursor: null });
+      },
+      retry: false,
+    });
+    const unsubscribeMounted = mounted.subscribe(() => undefined);
+    try {
+      await mounted.refetch();
+      const held = relatedPages();
+      queryClient.setQueryData(relatedMarketsKey(ID), held);
+      queryClient.setQueryData(relatedMarketsKey(OTHER_ID), held);
+      const before = fetches;
+
+      await applyMarket(queryClient, ID, opened);
+
+      const state = (key: readonly unknown[]) => queryClient.getQueryState(key);
+      expect(state(relatedMarketsKey(OTHER_ID))?.isInvalidated).toBe(true);
+      expect(state(relatedMarketsKey(ID))?.isInvalidated).toBe(true);
+      expect(fetches).toBe(before + 1);
+      expect(queryClient.getQueryData(relatedMarketsKey(OTHER_ID))).toBe(held);
+    } finally {
+      unsubscribeMounted();
+      unsubscribe();
+      queryClient.clear();
+    }
+  });
+});
+
+/** One page of the picker's search, as the API answers it. */
+type SearchPage = { items: MarketSummary[]; nextCursor: string | null };
+
+const found = (id: string, title: string): MarketSummary => ({
+  id,
+  slug: id,
+  title,
+  category: { slug: 'economy', nameKo: '경제' },
+  imageUrl: null,
+  status: 'open',
+  lastPrice: null,
+  volumeCoin: '0',
+  tradeCount: 0,
+  traderCount: 0,
+  closeAt: '2026-10-01T00:00:00.000Z',
+  openAt: '2026-09-07T00:00:00.000Z',
+  resolvedResult: null,
+  statusEventId: '2',
+  createdAt: '2026-09-01T00:00:00.000Z',
+});
+
+describe('the 관련 시장 picker’s search (#65, ADR-0068)', () => {
+  it('shows no row of the last term, and no 더 보기, while a newly submitted term loads', async () => {
+    // Codex review on #214: with the last term's pages held as a placeholder, the panel drew
+    // them as ready rows under the new term while a slow request ran, each with a live 연결, so a
+    // press linked a market the submitted search had not found. An observer over the hook's own
+    // options (so whatever placeholder they hold is held here too), read through the panel's own
+    // reading of it (`relatedSearchSection`).
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const snow = found(OTHER_ID, '첫눈이 11월에 올까?');
+    const rain = found('c3d4e5f6-0000-4000-8000-000000000003', '비가 올까?');
+    let answerRain: (page: SearchPage) => void = () => undefined;
+    const asked: string[] = [];
+    const options = (q: string) => ({
+      ...adminRelatedSearchQueryOptions(q),
+      queryFn: () => {
+        asked.push(q);
+        return q === '첫눈'
+          ? Promise.resolve<SearchPage>({ items: [snow], nextCursor: 'cursor-0' })
+          : new Promise<SearchPage>((resolve) => {
+              answerRain = resolve;
+            });
+      },
+      retry: false,
+    });
+    const observer = new InfiniteQueryObserver<
+      SearchPage,
+      Error,
+      InfiniteData<SearchPage, string | undefined>,
+      readonly unknown[],
+      string | undefined
+    >(queryClient, options('첫눈'));
+    const unsubscribe = observer.subscribe(() => undefined);
+    const shown = () => {
+      const result = observer.getCurrentResult();
+      const rows = result.data?.pages.flatMap((page) => page.items) ?? [];
+      return { result, rows, section: relatedSearchSection(result, rows.length) };
+    };
+    try {
+      await vi.waitFor(() => expect(shown().result.isSuccess).toBe(true));
+      expect(shown().section).toEqual({ stale: false, body: 'rows', more: true });
+
+      observer.setOptions(options('비'));
+
+      // The new term is asked, and until it answers the area is a skeleton: nothing to link.
+      expect(asked).toContain('비');
+      const loading = shown();
+      expect(loading.section).toEqual({ stale: false, body: 'pending', more: false });
+      // No placeholder at all: the last term's pages are not held under the new key.
+      expect(loading.result.isPlaceholderData).toBe(false);
+      expect(loading.result.data).toBeUndefined();
+
+      answerRain({ items: [rain], nextCursor: null });
+      await vi.waitFor(() => expect(shown().result.isSuccess).toBe(true));
+      expect(shown().rows).toEqual([rain]);
+      expect(shown().section).toEqual({ stale: false, body: 'rows', more: false });
+    } finally {
+      unsubscribe();
+      queryClient.clear();
+    }
+  });
+
+  it('keys each term on its own entry and asks nothing without one', () => {
+    expect(adminRelatedSearchQueryOptions('첫눈').queryKey).toEqual(adminRelatedSearchKey('첫눈'));
+    expect(adminRelatedSearchQueryOptions('첫눈').enabled).toBe(true);
+    expect(adminRelatedSearchQueryOptions(undefined).enabled).toBe(false);
+    // A new term is a new search with its own loading state, as the public search's is.
+    expect(adminRelatedSearchQueryOptions('첫눈')).not.toHaveProperty('placeholderData');
   });
 });

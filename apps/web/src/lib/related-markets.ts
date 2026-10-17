@@ -2,6 +2,7 @@ import { RELATED_MARKET_STATUSES, marketSearchTermSchema } from '@buddha/shared'
 import { copy } from '@/copy';
 import { isApiError, validationField } from './api';
 import { MARKET_STATUS_LABEL } from './market-admin';
+import { listSection } from './query-client';
 
 /**
  * 관련 시장 (#65, ADR-0068), the admin half: what the admin detail's 관련 시장 panel decides about
@@ -59,6 +60,37 @@ export function relatedSearchSubmit(
 ): { term: string | undefined; refetch: boolean } {
   const term = relatedSearchTerm(input);
   return { term, refetch: term !== undefined && term === current };
+}
+
+/** What `relatedSearchSection` reads of the picker's search (`useAdminRelatedSearch`). */
+export interface RelatedSearchState {
+  isPending: boolean;
+  isLoadingError: boolean;
+  isRefetchError: boolean;
+  isPlaceholderData: boolean;
+  hasNextPage: boolean;
+}
+
+/**
+ * What the picker's results area shows: the other lists' rungs (`listSection` — a skeleton, a
+ * failure, the empty line, or rows with a notice above them when a refresh failed) and whether
+ * 더 보기 is offered, which is only under rows.
+ *
+ * The rows are the submitted term's own answer and nothing else, because each offers 연결 aimed at
+ * its market. A newly submitted term is therefore `pending` — a skeleton, no 연결, no 더 보기 —
+ * until that answer arrives. The search holds no previous term's pages for it
+ * (`adminRelatedSearchQueryOptions` has no `keepPreviousData`), and pages held as a placeholder
+ * would read as pending here all the same: shown as ready, a slow search left the last term's rows
+ * under the new term, and 연결 on one linked a market the submitted search had not found (Codex
+ * review on #214).
+ */
+export function relatedSearchSection(
+  search: RelatedSearchState,
+  rowCount: number,
+): { stale: boolean; body: 'pending' | 'failed' | 'empty' | 'rows'; more: boolean } {
+  if (search.isPlaceholderData) return { stale: false, body: 'pending', more: false };
+  const section = listSection(search, rowCount);
+  return { ...section, more: section.body === 'rows' && search.hasNextPage };
 }
 
 /** One page of the picker's search, as `GET /admin/markets` takes it: the term, and a cursor. */

@@ -13,7 +13,9 @@ import {
   relatedHint,
   relatedLinkErrorMessage,
   relatedPickState,
+  type RelatedSearchState,
   relatedSearchQuery,
+  relatedSearchSection,
   relatedSearchSubmit,
   relatedSearchTerm,
 } from './related-markets';
@@ -86,6 +88,64 @@ describe('relatedSearchTerm', () => {
   it('asks for the term and the cursor only when there is one', () => {
     expect(relatedSearchQuery('첫눈')).toEqual({ q: '첫눈' });
     expect(relatedSearchQuery('첫눈', 'c')).toEqual({ q: '첫눈', cursor: 'c' });
+  });
+});
+
+/** The search after its term answered: rows, no failure, no placeholder, no next page. */
+const answered: RelatedSearchState = {
+  isPending: false,
+  isLoadingError: false,
+  isRefetchError: false,
+  isPlaceholderData: false,
+  hasNextPage: false,
+};
+
+describe('relatedSearchSection (the picker’s results, #65)', () => {
+  it('offers rows, and 더 보기 under them, only from the submitted term’s own answer', () => {
+    expect(relatedSearchSection(answered, 3)).toEqual({ stale: false, body: 'rows', more: false });
+    expect(relatedSearchSection({ ...answered, hasNextPage: true }, 20)).toEqual({
+      stale: false,
+      body: 'rows',
+      more: true,
+    });
+  });
+
+  it('reads pages held from the last term as pending: no row to link, no 더 보기', () => {
+    // Codex review on #214: shown as ready, the last term's rows stood under the new one with a
+    // live 연결 while a slow search ran. Whatever is held, and however it would otherwise read.
+    for (const held of [
+      { ...answered, isPlaceholderData: true, hasNextPage: true },
+      { ...answered, isPlaceholderData: true, isRefetchError: true },
+    ]) {
+      expect(relatedSearchSection(held, 20)).toEqual({
+        stale: false,
+        body: 'pending',
+        more: false,
+      });
+    }
+  });
+
+  it('keeps the other lists’ rungs: the first load, its failure, the empty line, a stale refresh', () => {
+    expect(relatedSearchSection({ ...answered, isPending: true }, 0)).toEqual({
+      stale: false,
+      body: 'pending',
+      more: false,
+    });
+    expect(relatedSearchSection({ ...answered, isLoadingError: true }, 0)).toEqual({
+      stale: false,
+      body: 'failed',
+      more: false,
+    });
+    // No 더 보기 without a row to put it under.
+    expect(relatedSearchSection({ ...answered, hasNextPage: true }, 0)).toEqual({
+      stale: false,
+      body: 'empty',
+      more: false,
+    });
+    // A refresh that failed keeps its rows under the notice, 더 보기 included.
+    expect(
+      relatedSearchSection({ ...answered, isRefetchError: true, hasNextPage: true }, 20),
+    ).toEqual({ stale: true, body: 'rows', more: true });
   });
 });
 

@@ -84,6 +84,7 @@ import {
   relatedHint,
   relatedLinkErrorMessage,
   relatedPickState,
+  relatedSearchSection,
   relatedSearchSubmit,
 } from '@/lib/related-markets';
 import { MarketFormFields } from '../market-form-fields';
@@ -711,7 +712,9 @@ function SettlementStepsPanel({ market }: { market: AdminMarket }) {
  * The search is the admin list's (`GET /admin/markets?q=`, every status), so the market on screen
  * is among the results — marked 이 시장 — and so is any it is linked with already (연결됨). Its box
  * holds what the API takes as a term (`SEARCH_INPUT_MAX_LENGTH`), and 찾기 on the term already
- * searched asks again (`relatedSearchSubmit`) — the way back from a search that failed.
+ * searched asks again (`relatedSearchSubmit`) — the way back from a search that failed. A newly
+ * submitted term shows a skeleton until its own answer arrives, never the last term's rows with
+ * their 연결 (`relatedSearchSection`, Codex review on #214).
  *
  * Both lists take the other lists' ladder (`listSection`): a refresh that failed after rows exist
  * keeps them under a notice with 다시 시도, instead of passing for current — an empty list that
@@ -729,7 +732,7 @@ function RelatedMarketsPanel({ market }: { market: AdminMarket }) {
   const results = search.data?.pages.flatMap((page) => page.items) ?? [];
   const linkRows = links.data ?? [];
   const linksSection = listSection(links, linkRows.length);
-  const searchSection = listSection(search, results.length);
+  const searchSection = relatedSearchSection(search, results.length);
 
   const onError = (error: unknown) =>
     toaster.create({ type: 'error', title: relatedLinkErrorMessage(error) });
@@ -922,7 +925,7 @@ function RelatedMarketsPanel({ market }: { market: AdminMarket }) {
                       </HStack>
                     );
                   })}
-                  {search.hasNextPage && (
+                  {searchSection.more && (
                     <Button
                       alignSelf="center"
                       size="sm"
