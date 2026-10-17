@@ -1,14 +1,22 @@
 import { QueryClient, dehydrate, hashKey } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
-import { type Market, type PriceSeries } from './api';
+import { ApiError, type Market, type PriceSeries } from './api';
 import { MARKET_SORTS } from '@buddha/shared';
 import {
   DEFAULT_MARKET_FILTERS,
   type MarketFilters,
   dehydratePublic,
   marketsKey,
+  relatedMarketsKey,
 } from './market-keys';
-import { detailWindowEnd, filtersFromSearchParams, seedMarketDetail } from './market-ssr';
+import { type MarketPage } from './market-live';
+import {
+  detailWindowEnd,
+  filtersFromSearchParams,
+  prefetchRelatedMarkets,
+  seedMarketDetail,
+} from './market-ssr';
+import { getQueryClient } from './query-client';
 
 const MARKET_ID = '1f2e3d4c-0000-4000-8000-000000000000';
 
@@ -105,6 +113,47 @@ describe('seedMarketDetail', () => {
     const keys = dehydrate(queryClient).queries.map((query) => query.queryKey);
     expect(keys).toEqual([['market', MARKET_ID]]);
     expect(queryClient.getQueryState(['ticks', MARKET_ID, '1D'])).toBeUndefined();
+  });
+});
+
+describe('prefetchRelatedMarkets (#65, ADR-0068)', () => {
+  const relatedCard = { ...market, id: '2a3b4c5d-0000-4000-8000-000000000000', slug: 'other' };
+
+  it('dehydrates the first page under the key the section reads, asked with no cursor', async () => {
+    // The app's own server client (`isServer` is true here), with the defaults the page gets.
+    const queryClient = getQueryClient();
+    const asked: (string | undefined)[] = [];
+    await prefetchRelatedMarkets(queryClient, MARKET_ID.toUpperCase(), (id, cursor) => {
+      asked.push(id, cursor);
+      return Promise.resolve<MarketPage>({ items: [relatedCard], nextCursor: 'cursor-0' });
+    });
+
+    expect(asked).toEqual([MARKET_ID.toUpperCase(), undefined]);
+    const [query] = dehydratePublic(queryClient).queries;
+    expect(query?.queryKey).toEqual(relatedMarketsKey(MARKET_ID));
+    expect(query?.state.data).toEqual({
+      pages: [{ items: [relatedCard], nextCursor: 'cursor-0' }],
+      pageParams: [undefined],
+    });
+  });
+
+  it('tries a failing read once, so the detail never waits out the client retry rule', async () => {
+    // THE HAZARD (review on #65): the server client's default `retry` asks a 5xx or a network
+    // failure twice more, 1 s and 2 s apart, and a prefetch does not turn that off when a default
+    // names one — so a failing 관련 시장 read held the whole detail ~3 s and failed anyway.
+    const queryClient = getQueryClient();
+    let reads = 0;
+    const started = Date.now();
+    await prefetchRelatedMarkets(queryClient, MARKET_ID, () => {
+      reads += 1;
+      return Promise.reject(new ApiError(500, undefined));
+    });
+
+    expect(reads).toBe(1);
+    expect(Date.now() - started).toBeLessThan(500);
+    // A failed query is not dehydrated, so the section reads its page in the browser.
+    expect(dehydratePublic(queryClient).queries).toEqual([]);
+    expect(queryClient.getQueryState(relatedMarketsKey(MARKET_ID))?.dataUpdatedAt).toBe(0);
   });
 });
 

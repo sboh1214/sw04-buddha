@@ -150,7 +150,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** Every market, drafts included, newest first */
+        /** Every market, drafts included, newest first; q narrows it to titles holding the term (a case-insensitive partial match), as the related-market picker searches */
         get: operations["adminListMarkets"];
         put?: never;
         /** Create a draft market (no price until its first fill) */
@@ -208,6 +208,41 @@ export type paths = {
         /** draft → open; refused without rules (RULES_REQUIRED) or with a past closeAt */
         post: operations["adminOpenMarket"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/markets/{id}/related": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The markets linked to this one, any status, the latest link first, with who linked */
+        get: operations["adminListRelatedMarkets"];
+        put?: never;
+        /** Link another market to this one, two-way, in any status of either; linking a linked pair changes nothing. Answers the links as they stand */
+        post: operations["adminLinkRelatedMarket"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/markets/{id}/related/{relatedMarketId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Unlink two markets; unlinking a pair that is not linked changes nothing. Answers the path market's links as they stand */
+        delete: operations["adminUnlinkRelatedMarket"];
         options?: never;
         head?: never;
         patch?: never;
@@ -443,6 +478,23 @@ export type paths = {
         };
         /** Newest 20 fills, anonymous */
         get: operations["listMarketFills"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/markets/{id}/related": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Markets linked to this one (links are two-way): open, closed, resolved and settled ones, never voided or drafts, sorted recommended (24-hour volume, then the latest opening); a draft or unknown market is NOT_FOUND */
+        get: operations["listRelatedMarkets"];
         put?: never;
         post?: never;
         delete?: never;
@@ -854,6 +906,35 @@ export type components = {
             status: "pending" | "succeeded" | "failed" | "cancelled" | "refunding" | "refunded";
             userId: string;
         };
+        AdminRelatedMarket: {
+            category: {
+                nameKo: string;
+                slug: string;
+            };
+            /** Format: date-time */
+            closeAt: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: uuid */
+            id: string;
+            imageUrl: string | null;
+            lastPrice: number | null;
+            /** Format: date-time */
+            linkedAt: string;
+            linkedBy: components["schemas"]["AdminAccountActor"];
+            /** Format: date-time */
+            openAt: string | null;
+            /** @enum {string|null} */
+            resolvedResult: "YES" | "NO" | null;
+            slug: string;
+            /** @enum {string} */
+            status: "draft" | "open" | "closed" | "resolved" | "settled" | "voided";
+            statusEventId: string | null;
+            title: string;
+            tradeCount: number;
+            traderCount: number;
+            volumeCoin: components["schemas"]["CoinAmount"];
+        };
         AdminRevokeBody: {
             expectedAccountId: string;
             reason: string;
@@ -1042,6 +1123,10 @@ export type components = {
             createdAt: string;
             id: string;
             providerId: string;
+        };
+        LinkRelatedMarketBody: {
+            /** Format: uuid */
+            marketId: string;
         };
         Market: {
             category: {
@@ -2139,6 +2224,7 @@ export interface operations {
             query?: {
                 cursor?: string;
                 limit?: number;
+                q?: string;
                 status?: "draft" | "open" | "closed" | "resolved" | "settled" | "voided";
             };
             header?: never;
@@ -2551,6 +2637,215 @@ export interface operations {
             };
             /** @description RULES_REQUIRED */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminListRelatedMarkets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminRelatedMarket"][];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminLinkRelatedMarket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LinkRelatedMarketBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminRelatedMarket"][];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminUnlinkRelatedMarket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                relatedMarketId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminRelatedMarket"][];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -3386,6 +3681,61 @@ export interface operations {
                 content: {
                     "application/json": {
                         data: components["schemas"]["Fill"][];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listRelatedMarkets: {
+        parameters: {
+            query?: {
+                /** @description Opaque; `meta.nextCursor` of the previous page. */
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["MarketSummary"][];
+                        meta: components["schemas"]["PageMeta"];
                     };
                 };
             };

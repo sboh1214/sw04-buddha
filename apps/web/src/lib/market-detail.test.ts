@@ -35,7 +35,8 @@ const WIDTHS: readonly DetailWidth[] = ['md', 'base'];
 
 describe('the detail sections (#122, ADR-0061 decision 1, item 16)', () => {
   it("draws N02 §4's list from md up", () => {
-    // 질문·배경·규칙·출처·마감(·판정 기록), 가격 차트, 호가·최근 체결, 내 포지션·대기 주문, 토론.
+    // 질문·배경·규칙·출처·마감(·판정 기록), 가격 차트, 호가·최근 체결, 내 포지션·대기 주문, 토론, 관련 시장
+    // — the last one #65's (ADR-0068), in the place #122 left after 토론.
     expect(drawnOrder('md')).toEqual([
       'summary',
       'background',
@@ -45,6 +46,7 @@ describe('the detail sections (#122, ADR-0061 decision 1, item 16)', () => {
       'activity',
       'position',
       'discussion',
+      'related',
     ]);
   });
 
@@ -59,6 +61,7 @@ describe('the detail sections (#122, ADR-0061 decision 1, item 16)', () => {
       'judging',
       'position',
       'discussion',
+      'related',
     ]);
   });
 
@@ -79,6 +82,7 @@ describe('the detail sections (#122, ADR-0061 decision 1, item 16)', () => {
       'judging:base',
       'position:all',
       'discussion:all',
+      'related:all',
     ]);
     // …and what CSS draws at a width is that subsequence: the shared slots and the width's own
     // copies, whose `display` is not `none` there.
@@ -99,8 +103,8 @@ describe('the detail sections (#122, ADR-0061 decision 1, item 16)', () => {
       expect(new Set(drawn).size, width).toBe(drawn.length);
       expect([...drawn].sort(), width).toEqual([...drawnOrder('md')].sort());
     }
-    // The chart, the switch with 최근 체결, 요약 with 관심 등록 and 내 포지션 hold state or fetch:
-    // one slot each, so each is mounted once.
+    // The chart, the switch with 최근 체결, 요약 with 관심 등록, 내 포지션 and 관련 시장 hold state
+    // or fetch: one slot each, so each is mounted once.
     const copied = DETAIL_SLOTS.filter((slot) => slot.width !== 'all');
     expect(copied.map((slot) => slot.section).sort()).toEqual([
       'background',
@@ -110,7 +114,7 @@ describe('the detail sections (#122, ADR-0061 decision 1, item 16)', () => {
       'rules',
       'rules',
     ]);
-    for (const section of ['summary', 'chart', 'activity', 'position', 'discussion']) {
+    for (const section of ['summary', 'chart', 'activity', 'position', 'discussion', 'related']) {
       expect(
         DETAIL_SLOTS.filter((slot) => slot.section === section),
         section,

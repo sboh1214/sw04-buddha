@@ -73,10 +73,10 @@ import { useSession } from '@/lib/use-session';
  * approved from this PR's screenshots, owner decisions 2026-10-17): 요약 — the question with its
  * category, status, countdown, 관심 등록, YES·NO, 거래량 and 참여자 — then 배경, 규칙·출처·마감, 공개
  * 판정 기록, the chart, 호가창 with 최근 체결 and 내 거래, 내 포지션 and 내 대기 주문, 토론, and then
- * 관련 시장 (#65). The order at each width is `lib/market-detail.ts`'s — the sections are rendered
- * by iterating `DETAIL_SLOTS`, where 배경, 규칙 and 공개 판정 기록 have one copy for each width's
- * place, so the DOM holds what each width draws in the order it draws it — and this file builds
- * each section and lays the two columns out.
+ * 관련 시장 (#65, ADR-0068). The order at each width is `lib/market-detail.ts`'s — the sections
+ * are rendered by iterating `DETAIL_SLOTS`, where 배경, 규칙 and 공개 판정 기록 have one copy for each
+ * width's place, so the DOM holds what each width draws in the order it draws it — and this file
+ * builds each section and lays the two columns out.
  *
  * - From md up: two columns. The left one holds every section; the right one is the order panel,
  *   sticky under the header so it stays beside the chart and the 호가 while the page scrolls (N02
@@ -153,9 +153,23 @@ export interface MarketDetailProps {
   question: ReactNode;
   background: Record<DetailWidth, ReactNode>;
   rules: Record<DetailWidth, ReactNode>;
+  /**
+   * 관련 시장 (#65), rendered by the server component with the first page it read and placed here
+   * as the last section, like the three above: the cards are public and in every visitor's HTML.
+   * One node, not one per width: both widths draw it last (`DETAIL_SLOTS`), and it holds a query
+   * and its cards' socket rooms, so it is mounted once.
+   */
+  related: ReactNode;
 }
 
-export function MarketDetail({ marketId, now, question, background, rules }: MarketDetailProps) {
+export function MarketDetail({
+  marketId,
+  now,
+  question,
+  background,
+  rules,
+  related,
+}: MarketDetailProps) {
   useMarketSocket([marketId]);
   const market = useMarket(marketId);
   // The same seeded series the chart draws (one key, one query, no second request). It is read
@@ -255,7 +269,9 @@ export function MarketDetail({ marketId, now, question, background, rules }: Mar
       </PersonalArea>
     ),
     discussion: <ComingSoonSection title={copy.marketDiscussion} testId="market-discussion" />,
-    // 관련 시장 (#65) is the next key, after 토론: the last of N02 §4's list.
+    // 관련 시장 (#65, ADR-0068), after 토론: the last of N02 §4's list, at both widths. Public, so
+    // the page renders it with the first page it read (related-markets.tsx).
+    related,
   };
   // The sections each width draws in its own place, one copy per width. Only 공개 판정 기록 is
   // built here; 배경 and 규칙 are the server's, already one per width.

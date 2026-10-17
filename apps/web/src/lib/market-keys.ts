@@ -180,6 +180,29 @@ export function searchListQuery(search: MarketSearch, cursor?: string): SearchLi
 }
 
 /**
+ * 관련 시장 (#65, ADR-0068): a detail's related markets, `GET /markets/:id/related`, under the
+ * public list's root like the search's results — so every duty `['markets']` carries reaches them
+ * by prefix: the card join of query-client.ts, the socket's `market:tick` and `market:status`
+ * writes into the cards, and a reconnect's re-read (realtime-provider.tsx). Public (ADR-0061
+ * decision 1, item 18): the detail page reads its first page on the server. The market is the
+ * canonical lower-cased uuid, like `marketKey`; the second element is this string, never a filter
+ * object, so it never matches the home's or the search's entries.
+ */
+export const MARKET_RELATED_KEY = [...MARKETS_KEY, 'related'] as const;
+
+export const relatedMarketsKey = (marketId: string) =>
+  [...MARKET_RELATED_KEY, marketId.toLowerCase()] as const;
+
+/**
+ * One page of a detail's related markets as `GET /markets/:id/related` is asked for it, by the
+ * SSR prefetch (`fetchRelatedMarketsPageServer`) and the client's queryFn alike: the cursor only
+ * when there is one, and no order — the owner fixed it to 추천 (ADR-0061 decision 1, item 19).
+ */
+export function relatedMarketsQuery(cursor?: string): { cursor?: string } {
+  return cursor === undefined ? {} : { cursor };
+}
+
+/**
  * 최근 검색 (#15, ADR-0066): the caller's recent searches, the member's own (ADR-0061 decision 3:
  * shown to the member) and read with the member's cookie, so the root is in `PRIVATE_QUERY_ROOTS`:
  * never fetched on the server, never dehydrated.

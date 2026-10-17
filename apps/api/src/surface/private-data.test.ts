@@ -23,7 +23,13 @@
  */
 import { randomInt, randomUUID } from 'node:crypto';
 import { schema } from '@buddha/db';
-import { createMarket, createSearch, createUser, createWatch } from '@buddha/db/test';
+import {
+  createMarket,
+  createMarketLink,
+  createSearch,
+  createUser,
+  createWatch,
+} from '@buddha/db/test';
 import {
   PAGE_LIMIT_MAX,
   REALTIME_EVENT_REGISTRY,
@@ -78,9 +84,12 @@ interface Fixture {
   /**
    * Open; A holds a position in it, has two orders in it and one fill, and watches it (#89) — so
    * every public call and market-room event about it runs against A's user id and nickname with
-   * A among its watchers: a public answer naming who watches a market would carry them.
+   * A among its watchers: a public answer naming who watches a market would carry them. An admin
+   * linked it to one other open market (#65), which its 관련 시장 lists.
    */
   market: MarketRow;
+  /** The open market linked to `market` (#65): the one item of `market`'s 관련 시장. */
+  relatedMarket: MarketRow;
   /**
    * Closed, and on A's watchlist alone (#89). Closed so no public call here lists it — `GET
    * /markets` is called without a query and lists open markets, and the detail routes are called
@@ -718,6 +727,17 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       watchedAt: new Date(watch.watch.watchedAt.getTime() + 1_000),
     });
 
+    // 관련 시장 (#65): A's market linked by the admin to another open market, so `GET
+    // /markets/:id/related` answers an item rather than an empty page — its field names are then
+    // checked like every public answer's, and its values against A's. Not linked to the watched
+    // market: a closed one would be listed, and its id is A's sentinel.
+    const related = await createMarket(t.db, { createdBy: admin.id });
+    await createMarketLink(t.db, {
+      marketId: market.id,
+      relatedMarketId: related.id,
+      createdBy: admin.id,
+    });
+
     // A's search (#15): a term nobody else types, and no market's title holds it.
     const searchTerm = `leak-search-${tag}`;
     const search = await createSearch(t.db, { userId: a.id, query: searchTerm });
@@ -757,6 +777,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       admin,
       market,
       watched,
+      relatedMarket: related,
       watchedCategory: watchedCategory!.slug,
       searchId: search.id,
       paymentId: payment!.id,
@@ -873,8 +894,12 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         leaks: [],
       })),
     );
-    // The answers held A's market and A's fill — anonymously — so there was something to leak.
+    // The answers held A's market, A's fill and the market linked to A's — anonymously — so there
+    // was something to leak, and the 관련 시장 answer's item had its field names checked rather
+    // than an empty page passing for one.
     expect(bodies.get('GET /markets')).toContain(f.market.id);
+    const related = parse(bodies.get('GET /markets/:id/related')!) as { data: { id: string }[] };
+    expect(related.data.map((row) => row.id)).toEqual([f.relatedMarket.id]);
     const fills = parse(bodies.get('GET /markets/:id/fills')!) as { data: object[] };
     expect(fills.data).toEqual([
       expect.objectContaining({

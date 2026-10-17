@@ -1,9 +1,29 @@
 'use client';
 
-import { type QueryClient, useQuery, useQueryClient } from '@tanstack/react-query';
-import { type Category, api, unwrap, type AdminMarket, type Fill } from '@/lib/api';
+import {
+  type QueryClient,
+  hashKey,
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
+import {
+  type AdminMarket,
+  type AdminRelatedMarket,
+  type Category,
+  type Fill,
+  type MarketSummary,
+  api,
+  unwrap,
+} from '@/lib/api';
 import { marketIdParam, settlementPollInterval } from '@/lib/market-admin';
-import { CATEGORIES_QUERY_KEY, MARKET_FILLS_KEY, marketFillsKey } from '@/lib/market-keys';
+import {
+  CATEGORIES_QUERY_KEY,
+  MARKET_FILLS_KEY,
+  MARKET_RELATED_KEY,
+  marketFillsKey,
+} from '@/lib/market-keys';
+import { relatedSearchQuery } from '@/lib/related-markets';
 
 /**
  * Query keys the admin market screens share (PLAN 11.5 rules, admin-prefixed like
@@ -14,6 +34,26 @@ export const ADMIN_MARKETS_KEY = ['admin', 'markets'] as const;
 export const ADMIN_MARKET_KEY = ['admin', 'market'] as const;
 
 export const adminMarketKey = (id: string) => [...ADMIN_MARKET_KEY, id] as const;
+
+/**
+ * 관련 시장 (#65, ADR-0068) on the admin detail: one market's links, every status, under the
+ * private `['admin']` root (never SSR'd). Its own root segment rather than under
+ * `adminMarketKey(id)`, so `applyMarket`'s seed of the detail never lands on the links, and a
+ * write to a market leaves that market's own list alone: no row of it is that market. Every OTHER
+ * market's list is asked again by the write (`invalidateMarket`), since each row badges the market
+ * at its other end with its status and title — the one written may be among them.
+ */
+export const ADMIN_RELATED_MARKETS_KEY = ['admin', 'related-markets'] as const;
+export const adminRelatedMarketsKey = (id: string) =>
+  [...ADMIN_RELATED_MARKETS_KEY, id.toLowerCase()] as const;
+
+/**
+ * The 관련 시장 picker's search: `GET /admin/markets?q=`, under the admin list's prefix so an admin
+ * write that invalidates the lists (`invalidateMarket`) refreshes the statuses it shows too. An
+ * object as the third element, never a status string, so no status filter's entry is it.
+ */
+export const adminRelatedSearchKey = (q: string) =>
+  [...ADMIN_MARKETS_KEY, { relatedSearch: q }] as const;
 
 /**
  * The two keys the admin screens share with the public market screens now live in the
@@ -67,6 +107,73 @@ export function useAdminMarket(routeId: string) {
   });
 }
 
+/** One market's links (`GET /admin/markets/:id/related`): any status, the latest link first. */
+export function useAdminRelatedMarkets(id: string) {
+  return useQuery({
+    queryKey: adminRelatedMarketsKey(id),
+    queryFn: async (): Promise<AdminRelatedMarket[]> =>
+      unwrap(await api.GET('/api/v1/admin/markets/{id}/related', { params: { path: { id } } }))
+        .data,
+  });
+}
+
+/**
+ * The picker's results for a term (`GET /admin/markets?q=`, every status, newest first), 20 per
+ * page with 더 보기 like the admin list. Nothing is asked until there is a term.
+ *
+ * No `keepPreviousData`: a newly submitted term is a new search, pending until its own answer, as
+ * the public search's is (ADR-0066). Held as a placeholder, the last term's pages stood under the
+ * new term as ready rows while a slow request ran, each with a live 연결 — a press linked a market
+ * the submitted search had not found (Codex review on #214). What the results area shows of the
+ * query is `relatedSearchSection`'s (lib/related-markets.ts).
+ */
+export function adminRelatedSearchQueryOptions(q: string | undefined) {
+  return {
+    queryKey: adminRelatedSearchKey(q ?? ''),
+    queryFn: async ({
+      pageParam,
+    }: {
+      pageParam: string | undefined;
+    }): Promise<{ items: MarketSummary[]; nextCursor: string | null }> => {
+      const { data, meta } = unwrap(
+        await api.GET('/api/v1/admin/markets', {
+          params: { query: relatedSearchQuery(q ?? '', pageParam) },
+        }),
+      );
+      return { items: data, nextCursor: meta.nextCursor };
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last: { nextCursor: string | null }) => last.nextCursor ?? undefined,
+    enabled: q !== undefined,
+  };
+}
+
+export function useAdminRelatedSearch(q: string | undefined) {
+  return useInfiniteQuery(adminRelatedSearchQueryOptions(q));
+}
+
+/**
+ * After a link or an unlink: the answer is the market's links as the write committed them, so it
+ * goes on screen now — a refetch that fails cannot leave the old list under a toast that says
+ * otherwise — then the other market's admin list and every public 관련 시장 list held in this tab
+ * (both details change, ADR-0061 decision 1, item 19) are asked again. Not 남발: only mounted
+ * observers refetch (PLAN 11.5). Seed and invalidations stay in one synchronous block, as in
+ * `applyMarket`.
+ */
+export function applyRelatedMarkets(
+  queryClient: QueryClient,
+  id: string,
+  otherId: string,
+  fresh: AdminRelatedMarket[],
+) {
+  queryClient.setQueryData(adminRelatedMarketsKey(id), fresh);
+  return Promise.all([
+    queryClient.invalidateQueries({ queryKey: adminRelatedMarketsKey(id) }),
+    queryClient.invalidateQueries({ queryKey: adminRelatedMarketsKey(otherId) }),
+    queryClient.invalidateQueries({ queryKey: MARKET_RELATED_KEY }),
+  ]);
+}
+
 /**
  * Newest fills, anonymous (`GET /markets/:id/fills`). A draft is invisible on the public
  * routes (404, design 3.2), so the query waits until the market has been opened.
@@ -81,16 +188,36 @@ export function useMarketFills(id: string, enabled: boolean) {
 }
 
 /**
- * After any admin write: the detail, the fills and every filtered list page.
+ * After any admin write: the detail, the fills, every filtered list page, every other market's
+ * 관련 시장 list, and every public 관련 시장 list. Each row of an admin list badges the market at
+ * its other end with its status and title, so a market linked to this one would otherwise go on
+ * showing it as it was — a draft just opened still '초안' under the hint that says a draft is not
+ * shown, for as long as `staleTime` keeps that list fresh (review on #65). Which lists hold this
+ * market is the server's to say, so every one but this market's own is asked; its own holds only
+ * other markets, and on this market's screen it is mounted, so including it would be one request
+ * per write for nothing.
+ *
+ * The public lists (`['markets', 'related', id]`) are the same hazard on the reader's side: which
+ * markets a detail shows is decided by their statuses, and each card carries the title. A detail
+ * read while a linked market was a draft held an empty page, and coming back to it from the admin
+ * screen that opened the draft reused that page inside `staleTime`; a card kept a title an edit had
+ * changed. Those lists are not mounted during the admin write and no socket room repairs them, so
+ * the whole family is marked, as `applyRelatedMarkets` does for a link (Codex review on #214).
  *
  * Not 남발 (PLAN 11.5): `refetchType` stays at its default `'active'`, so a list page that is
  * not mounted is only marked, and its next mount is the request.
  */
 function invalidateMarket(queryClient: QueryClient, id: string) {
+  const ownLinks = hashKey(adminRelatedMarketsKey(id));
   return Promise.all([
     queryClient.invalidateQueries({ queryKey: adminMarketKey(id) }),
     queryClient.invalidateQueries({ queryKey: marketFillsKey(id) }),
     queryClient.invalidateQueries({ queryKey: ADMIN_MARKETS_KEY }),
+    queryClient.invalidateQueries({
+      queryKey: ADMIN_RELATED_MARKETS_KEY,
+      predicate: (query) => query.queryHash !== ownLinks,
+    }),
+    queryClient.invalidateQueries({ queryKey: MARKET_RELATED_KEY }),
   ]);
 }
 

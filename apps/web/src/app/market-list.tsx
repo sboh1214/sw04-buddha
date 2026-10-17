@@ -145,8 +145,10 @@ export interface CardList {
 /**
  * The card grid with its rungs: skeleton, a first load that failed (its message, `errorMessage`,
  * and 다시 시도), the empty message, the cards with 더 보기, and a notice above the cards when a
- * later refresh failed. The home's two lists draw it, and so does the search screen's results
- * (app/search/market-search.tsx), whose failure says whether the server could be reached at all.
+ * later refresh failed. The home's two lists draw it, and so do the search screen's results
+ * (app/search/market-search.tsx), whose failure says whether the server could be reached at all,
+ * and the detail's 관련 시장 (app/markets/[slug]/related-markets.tsx, #65, ADR-0068) under its
+ * heading, with no card around it, whose e2e (related.spec.ts) reads this grid's own test ids.
  */
 export function MarketGrid({
   list,

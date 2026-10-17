@@ -3,13 +3,15 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type {
   fetchMarketSearchPageServer as FetchMarketSearchPage,
   fetchMarketsPageServer as FetchMarketsPage,
+  fetchRelatedMarketsPageServer as FetchRelatedMarketsPage,
 } from './api.server';
 import { type MarketFilters, type MarketSearch } from './market-keys';
 
 /**
  * The SSR reads of `GET /markets`: the home's (`fetchMarketsPageServer`), per order, and the
  * search screen's first page (`fetchMarketSearchPageServer`, owner decision 2026-10-16,
- * ADR-0066), per status and order. Each list's first paint is its read's dehydrated pages, so a
+ * ADR-0066), per status and order — and the detail's 관련 시장 (`fetchRelatedMarketsPageServer`,
+ * #65), whose path names the market. Each list's first paint is its read's dehydrated pages, so a
  * prefetch that dropped the order, the status or the category would paint the wrong cards under
  * the right select value and URL — and the API answers such a request with its defaults (추천,
  * `open`, every category), so nothing else would fail.
@@ -32,10 +34,12 @@ const fakeFetch = vi.fn((input: Request) => {
 // A type-only import above (erased): the module itself is imported after the stub, below.
 let fetchMarketsPageServer: typeof FetchMarketsPage;
 let fetchMarketSearchPageServer: typeof FetchMarketSearchPage;
+let fetchRelatedMarketsPageServer: typeof FetchRelatedMarketsPage;
 
 beforeAll(async () => {
   vi.stubGlobal('fetch', fakeFetch);
-  ({ fetchMarketsPageServer, fetchMarketSearchPageServer } = await import('./api.server'));
+  ({ fetchMarketsPageServer, fetchMarketSearchPageServer, fetchRelatedMarketsPageServer } =
+    await import('./api.server'));
 });
 afterAll(() => {
   vi.unstubAllGlobals();
@@ -89,5 +93,23 @@ describe('fetchMarketSearchPageServer', () => {
         { status, sort, q: '금리', category: 'economy', cursor: 'cursor-1' },
       ]),
     );
+  });
+});
+
+describe('fetchRelatedMarketsPageServer', () => {
+  it('asks the market’s related route, by its id, with the cursor only when there is one', async () => {
+    requests.length = 0;
+    const id = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+    await expect(fetchRelatedMarketsPageServer(id)).resolves.toEqual({
+      items: [],
+      nextCursor: null,
+    });
+    await fetchRelatedMarketsPageServer(id, 'cursor-1');
+    expect(requests.map((url) => url.pathname)).toEqual([
+      `/api/v1/markets/${id}/related`,
+      `/api/v1/markets/${id}/related`,
+    ]);
+    // No order and no status: the owner fixed both (ADR-0061 decision 1, item 19).
+    expect(requests.map(queryOf)).toEqual([{}, { cursor: 'cursor-1' }]);
   });
 });

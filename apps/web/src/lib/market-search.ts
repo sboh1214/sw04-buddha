@@ -30,7 +30,8 @@ import { firstValue } from './market-ssr';
 export const SEARCH_PATH = '/search';
 
 /**
- * The `maxLength` of both search boxes (the header's and the screen's): the API's bound on a
+ * The `maxLength` of both search boxes (the header's and the screen's), and of the admin 관련 시장
+ * picker's box, whose term is the admin list's `q` (#65, ADR-0068): the API's bound on a
  * term. Without it, a longer term (a pasted market title runs to `MARKET_TITLE_MAX`, 120) would
  * read as no term — the screen would answer a search just typed with its prompt, or with the
  * member's recent searches, and record nothing. A browser counts `maxLength` in UTF-16 units and

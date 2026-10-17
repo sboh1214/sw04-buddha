@@ -20,6 +20,7 @@ import {
   balances,
   fills,
   ledgerEntries,
+  marketLinks,
   marketSearchTerms,
   marketSearches,
   marketSettlementSteps,
@@ -39,6 +40,7 @@ import { storedReleaseSettingValue } from './release-settings.js';
 import {
   createCategory,
   createMarket,
+  createMarketLink,
   createPosition,
   createSearch,
   createSettlementStep,
@@ -195,6 +197,51 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     });
     expect(watcher?.watches.map((row) => row.marketId)).toEqual([market.id]);
     expect(watcher?.watchEvents.map((row) => row.marketId)).toEqual([market.id]);
+  });
+
+  it('keeps a link once per unordered pair, never a market with itself, and reads it from both ends (#65)', async () => {
+    const admin = (await createUser(t.db, { role: 'admin' })).user.id;
+    const [a, b] = [await createMarket(t.db), await createMarket(t.db)];
+    const [low, high] = a.id < b.id ? [a, b] : [b, a];
+    // Linked from the larger end, stored smaller first (`relatedMarketPair`): the CHECK and the
+    // shared function agree on the order of two uuids.
+    const link = await createMarketLink(t.db, {
+      marketId: high.id,
+      relatedMarketId: low.id,
+      createdBy: admin,
+    });
+    expect(link).toMatchObject({ lowMarketId: low.id, highMarketId: high.id, createdBy: admin });
+    // The same pair again — in either order — is the primary key's, and the reversed row is the
+    // CHECK's: a pair cannot be written twice by spelling it the other way round.
+    const insert = (lowMarketId: string, highMarketId: string) =>
+      t.db.insert(marketLinks).values({ lowMarketId, highMarketId, createdBy: admin });
+    const duplicate = await insert(low.id, high.id).catch((error: unknown) => error);
+    expect(sqlState(duplicate)).toBe('23505');
+    expect(sqlConstraint(duplicate)).toBe('market_links_low_market_id_high_market_id_pk');
+    const reversed = await insert(high.id, low.id).catch((error: unknown) => error);
+    expect(sqlState(reversed)).toBe('23514');
+    expect(sqlConstraint(reversed)).toBe('market_links_order_check');
+    const itself = await insert(a.id, a.id).catch((error: unknown) => error);
+    expect(sqlConstraint(itself)).toBe('market_links_order_check');
+    // A market's links are the rows where it is either end.
+    const fromLow = await t.db.query.markets.findFirst({
+      where: eq(markets.id, low.id),
+      with: { linksAsLow: { with: { highMarket: true, creator: true } }, linksAsHigh: true },
+    });
+    expect(fromLow?.linksAsLow.map((row) => row.highMarket.id)).toEqual([high.id]);
+    expect(fromLow?.linksAsLow[0]?.creator.id).toBe(admin);
+    expect(fromLow?.linksAsHigh).toEqual([]);
+    const fromHigh = await t.db.query.markets.findFirst({
+      where: eq(markets.id, high.id),
+      with: { linksAsHigh: { with: { lowMarket: true } } },
+    });
+    expect(fromHigh?.linksAsHigh.map((row) => row.lowMarket.id)).toEqual([low.id]);
+    // Unlinking deletes the row: buddha_app keeps DELETE here (the history is admin_actions).
+    const deleted = await t.db
+      .delete(marketLinks)
+      .where(eq(marketLinks.lowMarketId, low.id))
+      .returning();
+    expect(deleted).toHaveLength(1);
   });
 
   it('a recorded search resolves its account and back, and holds a term of 100 at most (#15)', async () => {
@@ -1428,7 +1475,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
           AND table_name IN ('ledger_entries', 'market_events', 'admin_actions', 'payment_events',
             'balances', 'payments', 'user_contacts', 'market_settlement_steps', 'release_settings',
             'approval_requests', 'market_watches', 'market_watch_events', 'market_searches',
-            'market_search_terms')
+            'market_search_terms', 'market_links')
         ORDER BY 1, 2`);
       const grants = Object.groupBy(rows, (r) => r.table);
       const privs = (table: string) => grants[table]?.map((r) => r.privilege).sort() ?? [];
@@ -1455,6 +1502,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       // buddha_app, upsert included.
       expect(privs('market_searches')).toEqual(['DELETE', 'INSERT', 'SELECT']);
       expect(privs('market_search_terms')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
+      // Migration 0027 (#65): an unlink deletes the pair's row; the history is admin_actions.
+      expect(privs('market_links')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
     });
 
     it('cannot UPDATE or DELETE a watch event, and refuses an action outside the list (#95)', async () => {

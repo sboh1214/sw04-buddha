@@ -31,6 +31,8 @@ export type Market = components['schemas']['Market'];
 /** A list row — `GET /markets` and `GET /admin/markets` — and what a market card draws. */
 export type MarketSummary = components['schemas']['MarketSummary'];
 export type AdminMarket = components['schemas']['AdminMarket'];
+/** One of a market's 관련 시장 on the admin detail (#65): the list row, who linked it and when. */
+export type AdminRelatedMarket = components['schemas']['AdminRelatedMarket'];
 /** One row of `AdminMarket.settlementSteps` (ADR-0046): a judged market's settlement step. */
 export type AdminSettlementStep = components['schemas']['AdminSettlementStep'];
 export type MarketEvent = components['schemas']['MarketEvent'];

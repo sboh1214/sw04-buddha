@@ -106,9 +106,17 @@ const SHELL = {
  * Kalshi's tile grid (ADR-0041) for a list of these cards: as many 360px-minimum columns as the
  * column fits, from md up; one column below. `auto-fill` rather than a breakpoint ladder because
  * the column's width depends on whether the 180px sidebar is beside it, which no breakpoint
- * knows. The home grid and MY's 관심 시장 (#89) both lay their cards out on it.
+ * knows. The home grid and MY's 관심 시장 (#89) both lay their cards out on it, and so does the
+ * detail's 관련 시장 (#65), straight under its heading. There the column is about one tile wide —
+ * at md the detail's section column is about 368px, less again where a scrollbar takes its
+ * width — so a track is never wider than its grid (`min(360px, 100%)`): one tile as wide as the
+ * column rather than one that runs out of it. Wherever the column holds a 360px tile the track is
+ * 360px, as it always was.
  */
-export const MARKET_GRID_COLUMNS = { base: '1fr', md: 'repeat(auto-fill, minmax(360px, 1fr))' };
+export const MARKET_GRID_COLUMNS = {
+  base: '1fr',
+  md: 'repeat(auto-fill, minmax(min(360px, 100%), 1fr))',
+};
 
 /** What a reading paints before the first fill (N02 §5): no number, not a 0 or a 50. */
 const EMPTY = '—';

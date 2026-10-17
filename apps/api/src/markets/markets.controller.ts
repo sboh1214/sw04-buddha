@@ -1,11 +1,12 @@
 import { Controller, Get, Param, Query } from '@nestjs/common';
-import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import {
   FILLS_RECENT_LIMIT,
   MARKET_SLUG_MAX,
   TICKS_MAX_POINTS,
   TICKS_SCAN_MAX,
   categorySchema,
+  cursorQuerySchema,
   fillSchema,
   marketListQuerySchema,
   marketSchema,
@@ -14,6 +15,7 @@ import {
   ticksQuerySchema,
   uuidParamSchema,
   type Category,
+  type CursorQuery,
   type Fill,
   type Market,
   type MarketListQuery,
@@ -24,7 +26,9 @@ import {
 import * as z from 'zod';
 import { ApiPage } from '../common/interceptors/response-envelope.interceptor.js';
 import { ApiData, ApiErrors, ApiPageOf } from '../common/openapi/api-response.decorators.js';
+import { CURSOR_QUERY_PARAMS } from '../common/openapi/cursor-query.js';
 import { MarketService } from './market.service.js';
+import { RelatedMarketsService } from './related-markets.service.js';
 
 /**
  * `GET /markets/:idOrSlug` takes either a uuid or a slug. The slug is NFC-normalised before
@@ -55,7 +59,10 @@ const idOrSlugParamSchema = z
 @ApiTags('markets')
 @Controller('markets')
 export class MarketsController {
-  constructor(private readonly markets: MarketService) {}
+  constructor(
+    private readonly markets: MarketService,
+    private readonly related: RelatedMarketsService,
+  ) {}
 
   @Get()
   @ApiOperation({
@@ -96,6 +103,32 @@ export class MarketsController {
   @ApiErrors('NOT_FOUND', 'VALIDATION_ERROR')
   listMarketFills(@Param('id', { schema: uuidParamSchema }) id: string): Promise<Fill[]> {
     return this.markets.listFills(id);
+  }
+
+  /**
+   * 관련 시장 (#65, ADR-0068): the markets an admin linked to this one, from either side of the
+   * link, in the public list's row and the home's 추천 order. Public (ADR-0061 decision 1, item
+   * 18), like the detail it is a section of. `cursorQuerySchema` carries a component id, so its
+   * two parameters are declared by hand (the trades controller does the same).
+   */
+  @Get(':id/related')
+  @ApiOperation({
+    operationId: 'listRelatedMarkets',
+    summary:
+      'Markets linked to this one (links are two-way): open, closed, resolved and settled ones, ' +
+      'never voided or drafts, sorted recommended (24-hour volume, then the latest opening); ' +
+      'a draft or unknown market is NOT_FOUND',
+  })
+  @ApiQuery(CURSOR_QUERY_PARAMS[0])
+  @ApiQuery(CURSOR_QUERY_PARAMS[1])
+  @ApiPageOf(marketSummarySchema)
+  @ApiErrors('NOT_FOUND', 'VALIDATION_ERROR')
+  async listRelatedMarkets(
+    @Param('id', { schema: uuidParamSchema }) id: string,
+    @Query({ schema: cursorQuerySchema }) query: CursorQuery,
+  ): Promise<ApiPage<MarketSummary>> {
+    const { items, nextCursor } = await this.related.listPublic(id, query.cursor, query.limit);
+    return new ApiPage(items, { nextCursor });
   }
 
   @Get(':id/ticks')
