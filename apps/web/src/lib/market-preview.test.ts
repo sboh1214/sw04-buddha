@@ -38,8 +38,8 @@ const traded: MarketSummary = {
 describe('toPreviewMarket', () => {
   it('previews an already-traded market at the price it TRADES at', () => {
     // This same component draws 시장 만들기 and the detail screen's 수정 card, and its
-    // placeholders were written for the first: on a traded market they would preview 체결 없음,
-    // 거래량 0 and no participants beside a public card showing 70%.
+    // placeholders were written for the first: on a traded market they would preview 체결 없음
+    // and '참여자 0' beside a public card showing 70% and its 11 participants.
     const preview = toPreviewMarket(body, categories, traded);
     expect(preview.lastPrice).toBe(70);
     expect(preview.volumeCoin).toBe('1250000');
@@ -62,6 +62,8 @@ describe('toPreviewMarket', () => {
     const preview = toPreviewMarket(body, categories, { ...traded, status: 'draft' });
     expect(preview.lastPrice).toBeNull();
     expect(preview.tradeCount).toBe(0);
+    // The card's footer then reads '참여자 0' — a 0 is shown, not hidden (ADR-0061, ADR-0062).
+    expect(preview.traderCount).toBe(0);
     expect(preview.volumeCoin).toBe('0');
     expect(preview.openAt).toBeNull();
   });

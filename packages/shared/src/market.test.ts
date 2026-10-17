@@ -4,7 +4,6 @@ import {
   INT4_MAX,
   MARKET_SLUG_PATTERN,
   MARKET_SLUG_STEM_MAX,
-  SPARKLINE_MAX_POINTS,
   TICKS_MAX_POINTS,
 } from './constants.js';
 import {
@@ -16,7 +15,6 @@ import {
   createMarketBodySchema,
   fillSchema,
   marketEventSchema,
-  marketListItemSchema,
   marketListQuerySchema,
   marketSchema,
   marketSlugSchema,
@@ -204,26 +202,11 @@ describe('read DTOs', () => {
     expect(fillSchema.parse({ ...fill, userId: 'u' })).not.toHaveProperty('userId');
   });
 
-  it('carry the card sparkline on the list item only, never on the shared summary', () => {
-    const full = Array.from({ length: SPARKLINE_MAX_POINTS }, () => 5250);
-    expect(marketListItemSchema.parse({ ...summary, sparkline: [] })).toEqual({
-      ...summary,
-      sparkline: [],
-    });
-    expect(marketListItemSchema.parse({ ...summary, sparkline: full }).sparkline).toHaveLength(
-      SPARKLINE_MAX_POINTS,
-    );
-    expect(marketListItemSchema.safeParse({ ...summary, sparkline: [...full, 5250] }).success).toBe(
-      false,
-    );
-    expect(marketListItemSchema.safeParse({ ...summary, sparkline: [10_001] }).success).toBe(false);
-    // The shared component was not widened: GET /admin/markets and the embedded summaries ship
-    // it too, so a summary without a sparkline still parses and one handed a sparkline strips it.
-    expect(marketSummarySchema.safeParse(summary).success).toBe(true);
-    expect(marketSummarySchema.parse({ ...summary, sparkline: full })).not.toHaveProperty(
-      'sparkline',
-    );
-    expect(marketListItemSchema.safeParse(summary).success).toBe(false);
+  it('carry no card sparkline on any market shape (ADR-0062)', () => {
+    // The card draws no price trend (ADR-0061 decision 1, item 4), so the list row is the
+    // summary itself: a stray `sparkline` is stripped like any other unknown key.
+    expect(marketSummarySchema.parse({ ...summary, sparkline: [5250] })).toEqual(summary);
+    expect(marketSchema.parse({ ...market, sparkline: [5250] })).not.toHaveProperty('sparkline');
   });
 
   it('describe a price series by the stride and the window the server served', () => {
@@ -460,7 +443,6 @@ describe('statusEventId', () => {
   it('rides on every market shape and must be a string or null', () => {
     expect(marketSummarySchema.parse(summary).statusEventId).toBe('2');
     expect(marketSchema.parse({ ...market, statusEventId: null }).statusEventId).toBeNull();
-    expect(marketListItemSchema.parse({ ...summary, sparkline: [] }).statusEventId).toBe('2');
     expect(marketSummarySchema.safeParse({ ...summary, statusEventId: 2 }).success).toBe(false);
     const { statusEventId: _key, ...withoutKey } = summary;
     expect(marketSummarySchema.safeParse(withoutKey).success).toBe(false);

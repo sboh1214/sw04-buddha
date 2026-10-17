@@ -115,12 +115,9 @@ export function MarketList({
         <>
           <Grid templateColumns={GRID_COLUMNS} gap="4" data-testid="markets-grid">
             {rows.map((row, index) => (
-              // `sparkline` is a separate prop because the card is also the admin's 미리보기,
-              // where a draft has no history at all (Q-M3-6).
               <MarketCard
                 key={row.id}
                 market={row}
-                sparkline={row.sparkline}
                 now={rowAnchor(index, serverRowCount, markets.dataUpdatedAt, now)}
               />
             ))}

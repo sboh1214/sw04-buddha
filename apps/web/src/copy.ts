@@ -478,10 +478,6 @@ export const copy = {
   searchSubmit: '검색',
   marketsEmpty: '아직 열린 시장이 없습니다.',
   marketsSearchEmpty: '검색 결과가 없습니다.',
-  // 카드의 두 줄(YES/NO) 오른쪽 배수 "2.14x" 앞에 스크린리더에만 읽히는 설명. '배당'은 금지어(D21),
-  // '맞히면'이 아니라 기획의 '정답 시'(N02 §6, 오너 결정 #14). 배수 자체는 #61이 지운다.
-  payoutMultiple: '정답 시 투입 대비',
-
   // 카드와 상세 헤더의 짧은 라벨. 숫자·시각은 언제나 호출 쪽에서 붙인다.
   marketCloseAt: '마감',
   marketClosingSoon: '마감 임박',

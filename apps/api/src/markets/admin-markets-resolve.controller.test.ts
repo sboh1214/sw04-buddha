@@ -17,7 +17,6 @@ import {
   SETTLEMENT_STEPS,
   type AdminMarket,
   type Market,
-  type MarketListItem,
   type MarketSummary,
   type Outcome,
 } from '@buddha/shared';
@@ -477,7 +476,7 @@ describe.skipIf(!hasTestInfra)('admin markets M5 (integration)', () => {
     const pub = await t.app.inject({ method: 'GET', url: `/api/v1/markets/${created.id}` });
     expect(data<Market>(pub).statusEventId).toBe(String(closedEvent!.id));
     const list = await t.app.inject({ method: 'GET', url: '/api/v1/markets?status=closed' });
-    expect(data<MarketListItem[]>(list).map((item) => [item.id, item.statusEventId])).toEqual([
+    expect(data<MarketSummary[]>(list).map((item) => [item.id, item.statusEventId])).toEqual([
       [created.id, String(closedEvent!.id)],
     ]);
     expect(detail(await get(`/api/v1/admin/markets/${created.id}`)).statusEventId).toBe(

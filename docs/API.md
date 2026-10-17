@@ -162,7 +162,7 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 
 | 메서드 | 경로 | 설명 | 인증 | 오류 |
 | --- | --- | --- | --- | --- |
-| GET | `/api/v1/markets` | Markets by status (default open), never drafts; sorted by volume, closing or newest. Each card carries up to 25 hourly YES samples over the last 24 hours, oldest first. | — | `VALIDATION_ERROR`, `RATE_LIMITED` |
+| GET | `/api/v1/markets` | Markets by status (default open), never drafts; sorted by volume, closing or newest | — | `VALIDATION_ERROR`, `RATE_LIMITED` |
 | GET | `/api/v1/markets/{idOrSlug}` | One market by id or slug (a draft is NOT_FOUND to the public) | — | `VALIDATION_ERROR`, `NOT_FOUND`, `RATE_LIMITED` |
 | GET | `/api/v1/markets/{id}/fills` | Newest 20 fills, anonymous | — | `VALIDATION_ERROR`, `NOT_FOUND`, `RATE_LIMITED` |
 | GET | `/api/v1/markets/{id}/ticks` | Price series, ascending, at most 500 points. `raw` returns stored ticks, downsampled from the newest 10000 of the range (`truncated` says when older ones were left out). `1m`/`1h` sample the probability in force on an absolute grid, coarsening the stride until the window fits; `bucketSeconds` reports the stride served, and the point at `from` carries the last value at or before it, so the left edge is never empty. | — | `VALIDATION_ERROR`, `NOT_FOUND`, `RATE_LIMITED` |
@@ -175,12 +175,12 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | GET | `/api/v1/me/positions` | Every position of the account, most recently changed first. status=open keeps the unsettled rows (qty may be 0 after a full sell), status=settled the settled ones; omitted lists all. No cursor: bounded by the markets one account has touched. | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `RATE_LIMITED` |
 | GET | `/api/v1/me/orders` | Orders of the account with their fill, newest first | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `RATE_LIMITED` |
 
-## 스키마 (68개)
+## 스키마 (67개)
 
 요청·응답 본문의 실제 모양은 `apps/api/openapi.json` 의 `components.schemas` 에 있다. 이름만
 적어 두니 거기서 찾아 읽는다. 이름은 zod 스키마의 `.meta({ id })` 에서 온다.
 
-`AdminAccount`, `AdminAccountActor`, `AdminBalanceAdjustResult`, `AdminGrantBody`, `AdminMarket`, `AdminPayment`, `AdminRevokeBody`, `AdminRoleChange`, `AdminRoleChangeType`, `AdminSettlementStep`, `AdminUser`, `AdminUserQuery`, `AuditFailure`, `Balance`, `BalanceAdjustBody`, `Category`, `ChargeBody`, `ChargePackage`, `ChargeResult`, `CoinAmount`, `Contact`, `ContactBody`, `Coupon`, `CouponCode`, `CreateChargePackageBody`, `CreateCouponBody`, `CreateMarketBody`, `CursorQuery`, `ErrorCode`, `ErrorEnvelope`, `Fill`, `LedgerEntry`, `LinkedAccount`, `Market`, `MarketEvent`, `MarketListItem`, `MarketSummary`, `Me`, `Nickname`, `OkResult`, `Order`, `PageMeta`, `Password`, `Payment`, `PaymentProviderInfo`, `Position`, `PriceSeries`, `PriceTick`, `RedeemCouponBody`, `RedeemCouponResult`, `RefundPaymentBody`, `RegisterBody`, `RegisterResult`, `ReleaseSetting`, `ReleaseSettingActor`, `ReleaseSettingChange`, `ReleaseSettingChangeBody`, `ReleaseSettingState`, `ReleaseSettingStatus`, `ResolveMarketBody`, `SetPasswordBody`, `SettlementStep`, `SettlementStepStatus`, `UpdateChargePackageBody`, `UpdateCouponBody`, `UpdateMarketBody`, `UpdateMeBody`, `UserRole`
+`AdminAccount`, `AdminAccountActor`, `AdminBalanceAdjustResult`, `AdminGrantBody`, `AdminMarket`, `AdminPayment`, `AdminRevokeBody`, `AdminRoleChange`, `AdminRoleChangeType`, `AdminSettlementStep`, `AdminUser`, `AdminUserQuery`, `AuditFailure`, `Balance`, `BalanceAdjustBody`, `Category`, `ChargeBody`, `ChargePackage`, `ChargeResult`, `CoinAmount`, `Contact`, `ContactBody`, `Coupon`, `CouponCode`, `CreateChargePackageBody`, `CreateCouponBody`, `CreateMarketBody`, `CursorQuery`, `ErrorCode`, `ErrorEnvelope`, `Fill`, `LedgerEntry`, `LinkedAccount`, `Market`, `MarketEvent`, `MarketSummary`, `Me`, `Nickname`, `OkResult`, `Order`, `PageMeta`, `Password`, `Payment`, `PaymentProviderInfo`, `Position`, `PriceSeries`, `PriceTick`, `RedeemCouponBody`, `RedeemCouponResult`, `RefundPaymentBody`, `RegisterBody`, `RegisterResult`, `ReleaseSetting`, `ReleaseSettingActor`, `ReleaseSettingChange`, `ReleaseSettingChangeBody`, `ReleaseSettingState`, `ReleaseSettingStatus`, `ResolveMarketBody`, `SetPasswordBody`, `SettlementStep`, `SettlementStepStatus`, `UpdateChargePackageBody`, `UpdateCouponBody`, `UpdateMarketBody`, `UpdateMeBody`, `UserRole`
 
 ## 헬스체크 (문서 밖)
 

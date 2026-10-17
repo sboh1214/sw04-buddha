@@ -239,6 +239,71 @@ test.describe('시장 상세', () => {
 });
 
 /**
+ * The card's contents (#61, ADR-0062): what ADR-0061 put on it and what it took off. Runs in both
+ * projects, so the footer line is measured at 375px and at 1280px.
+ */
+test.describe('시장 카드', () => {
+  test('YES·NO 두 줄과 참여자 0, 배수·거래량·추이 선은 없다', async ({ admin, page }) => {
+    const market = await createOpenMarket(admin);
+    // `?q=<tag>` is a home page holding exactly this market's card.
+    await page.goto(`/?q=${market.tag}`);
+    const card = page.getByTestId(`market-card-${market.id}`);
+
+    // No fill yet: both rows stay with '—' in each pill and 체결 없음 once (ADR-0048).
+    await expect(card.getByTestId('market-card-probability')).toHaveText('—');
+    await expect(card.getByTestId('market-card-probability-no')).toHaveText('—');
+    await expect(card.getByTestId('market-card-no-fills')).toHaveText(copy.noFills);
+
+    // The participant count, and a 0 is written as 0 rather than hidden (ADR-0061 decision 1,
+    // item 4), in the detail header's spelling.
+    const traders = card.getByTestId('market-card-traders');
+    await expect(traders).toHaveText(`${copy.marketTraders} 0`);
+
+    // What the card no longer draws: no 거래량 and no price trend line (ADR-0061 decision 1,
+    // item 4) — both were on every card, priced or not, so these two fail on the old one.
+    // The payout multiple ('1.59x', O-21) is checked here too, but that line proves nothing yet:
+    // a card with no fill never showed one (ADR-0048) and an e2e market cannot get a fill until
+    // the order path exists (#119, #189). What pins its removal today is the source scan in
+    // lib/market-card.test.ts; this line starts to count once a spec can trade.
+    await expect(card).not.toContainText(/\d\.\d{2}x/);
+    await expect(card).not.toContainText(copy.marketVolume);
+    await expect(card.getByTestId('market-card-volume')).toHaveCount(0);
+    await expect(card.getByTestId('market-card-sparkline')).toHaveCount(0);
+
+    // The footer is one line under the two rows and inside the tile, and the page does not
+    // scroll sideways at either width.
+    const [cardBox, noPill, footer] = await Promise.all([
+      card.boundingBox(),
+      boxIn(card, 'market-card-probability-no'),
+      boxIn(card, 'market-card-traders'),
+    ]);
+    if (cardBox === null) throw new Error('the card has no bounding box');
+    expect(footer.y).toBeGreaterThanOrEqual(noPill.y + noPill.height);
+    expect(footer.x).toBeGreaterThanOrEqual(cardBox.x);
+    expect(footer.x + footer.width).toBeLessThanOrEqual(cardBox.x + cardBox.width);
+    expect(footer.y + footer.height).toBeLessThanOrEqual(cardBox.y + cardBox.height);
+    // One line: two glyph runs share a line when their vertical extents overlap (coin.spec.ts).
+    const lines = await traders.evaluate((element) => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      const found: { top: number; bottom: number }[] = [];
+      for (const rect of Array.from(range.getClientRects())) {
+        if (rect.width === 0 || rect.height === 0) continue;
+        const line = found.find((l) => rect.top < l.bottom && rect.bottom > l.top);
+        if (line === undefined) found.push({ top: rect.top, bottom: rect.bottom });
+      }
+      return found.length;
+    });
+    expect(lines).toBe(1);
+    const width = await page.evaluate(() => ({
+      client: document.documentElement.clientWidth,
+      scroll: document.documentElement.scrollWidth,
+    }));
+    expect(width.scroll).toBeLessThanOrEqual(width.client);
+  });
+});
+
+/**
  * AC 5 is a statement about a 375px viewport, not about a project: pinning the size here runs
  * the measurement in both projects and keeps it true even if the project list changes.
  */

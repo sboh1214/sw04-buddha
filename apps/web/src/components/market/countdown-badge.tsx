@@ -69,7 +69,7 @@ function countdownReading(
 }
 
 export interface CountdownBadgeProps {
-  /** Both fields `isClosingSoon` needs; `Market`, `MarketSummary` and `MarketListItem` fit. */
+  /** Both fields `isClosingSoon` needs; `Market` and `MarketSummary` fit. */
   market: { status: MarketStatus; closeAt: string };
   /**
    * The instant the FIRST render measures against, from the caller's payload or its server
