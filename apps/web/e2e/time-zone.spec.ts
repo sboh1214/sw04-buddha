@@ -3,6 +3,7 @@ import { copy } from '../src/copy';
 import {
   adminAccount,
   createOpenMarket,
+  detailCopyTestId,
   expect,
   freshEmail,
   signIn,
@@ -51,6 +52,14 @@ async function profileLoaded(page: Page): Promise<void> {
   await expect(page.getByTestId('balance-chip')).toContainText('Coin');
 }
 
+/**
+ * The detail's close time (규칙's 마감 시각) in the copy of 규칙 this page's width draws: the detail
+ * holds one copy per width, each under its own ids (ADR-0067).
+ */
+function closeAtTestId(page: Page): string {
+  return `${detailCopyTestId(page, 'market-rules')}-close-at`;
+}
+
 /** React's report of a server/client mismatch: dev "Hydration failed …", production #418/#423/#425. */
 const HYDRATION_ERROR = /hydrat|#418|#423|#425/i;
 
@@ -95,8 +104,8 @@ async function staysThroughSessionRefetch(page: Page, expected: RegExp): Promise
     await held;
     await route.continue().catch(() => undefined); // the tab may have dropped it meanwhile
   });
-  await page.evaluate(() => {
-    const element = document.querySelector('[data-testid="market-rules-close-at"]');
+  await page.evaluate((testId) => {
+    const element = document.querySelector(`[data-testid="${testId}"]`);
     if (!element) throw new Error('no close time on the page');
     const texts: string[] = [];
     Object.assign(window, { closeAtTexts: texts });
@@ -107,7 +116,7 @@ async function staysThroughSessionRefetch(page: Page, expected: RegExp): Promise
     });
     // What better-auth's focus manager listens for (focus-manager.mjs); the page is visible.
     document.dispatchEvent(new Event('visibilitychange'));
-  });
+  }, closeAtTestId(page));
   await refetched;
   // Two frames: whatever the pending state renders has been painted before the answer is let go.
   await page.evaluate(
@@ -121,7 +130,7 @@ async function staysThroughSessionRefetch(page: Page, expected: RegExp): Promise
     () => (window as unknown as { closeAtTexts: string[] }).closeAtTexts,
   );
   expect(texts.filter((text) => !expected.test(text))).toEqual([]);
-  await expect(page.getByTestId('market-rules-close-at')).toHaveText(expected);
+  await expect(page.getByTestId(closeAtTestId(page))).toHaveText(expected);
 }
 
 test.describe('사용자 시간대', () => {
@@ -133,7 +142,7 @@ test.describe('사용자 시간대', () => {
     await signUp(page, freshEmail());
 
     // Nothing picked yet: the browser's zone, which is Seoul here, so no marker.
-    const closeAt = page.getByTestId('market-rules-close-at');
+    const closeAt = page.getByTestId(closeAtTestId(page));
     await page.goto(`/markets/${market.slug}`);
     await profileLoaded(page);
     await expect(closeAt).toHaveText(UNMARKED);
@@ -209,7 +218,7 @@ test.describe('사용자 시간대', () => {
     try {
       const page = await context.newPage();
       const hydrationErrors = watchHydration(page);
-      const closeAt = page.getByTestId('market-rules-close-at');
+      const closeAt = page.getByTestId(closeAtTestId(page));
 
       // Signed out (ADR-0061 #60-8: 로그인하지 않았으면 브라우저 시간대): New York, marked, once the
       // header knows nobody is signed in.

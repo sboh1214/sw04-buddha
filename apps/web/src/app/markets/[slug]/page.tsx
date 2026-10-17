@@ -1,7 +1,8 @@
-import { Container, Stack } from '@chakra-ui/react';
+import { Container } from '@chakra-ui/react';
 import { HydrationBoundary } from '@tanstack/react-query';
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
+import { LiveBackgroundSection } from '@/components/market/live-background-section';
 import { LiveQuestionHeading } from '@/components/market/live-question-heading';
 import { LiveRulesSection } from '@/components/market/live-rules-section';
 import { copy } from '@/copy';
@@ -24,7 +25,8 @@ import { MarketDetail } from './market-detail';
  *
  * Nothing personal is read here. `api.server.ts` forwards no cookie and `dehydratePublic`
  * filters the private roots, so the HTML is byte-identical for a signed-in and an anonymous
- * visitor; 내 포지션 and the balance chip fill in on the client.
+ * visitor; 내 포지션, the personal slots (내 거래, 내 대기 주문) — or a signed-out visitor's one
+ * sign-in prompt in their place — and the balance chip fill in on the client.
  */
 
 /**
@@ -74,38 +76,55 @@ export default async function MarketPage({ params }: { params: Promise<{ slug: s
   seedMarketDetail(queryClient, market, series);
 
   return (
-    // The same padding as the other pages: the bottom tab bar's clearance is the footer's
-    // (footer.tsx).
-    <Container maxW="4xl" py={{ base: '6', md: '10' }}>
-      <Stack gap="6">
-        {/* Every AC 2 string reaches view-source through the SAME door: this boundary. It
-            hydrates a not-yet-present query synchronously during render, so the server pass of
-            each client component below already reads the seeded row — the question, the 시장가격
-            and the 규칙 alike — while each still follows the live cache afterwards.
-            The heading is INSIDE it for exactly that reason and must stay: rendered above the
-            boundary it would run before the seed existed, and measurement showed that takes
-            시장가격, the status badge and the chart path out of the first paint with it. Each component carries the server row as its own `fallback` besides, so no
-            branch can leave an AC 2 string out even if the query is unreadable. */}
-        <HydrationBoundary state={dehydratePublic(queryClient)}>
-          {/* h2, not h1: `Nav` renders the site name as this document's only h1 on every screen
-              (nav.tsx, since M1), and MY and / both title themselves h2 under it.
-              A second h1 here would give the page two, and heading level is not a place for one
-              screen to have its own convention (A-M4-31). The row fetched here is the FALLBACK,
-              not the source: `title` is editable while a market is open, and the chart's label
-              already follows the live row. */}
-          <LiveQuestionHeading fallback={market} />
-          {/* `now` is the server's own window end, never a clock read in this render body —
-              see `detailWindowEnd`. It is absent when the series is. */}
-          <MarketDetail marketId={market.id} now={detailWindowEnd(series)}>
-            {/* PLAN 11.1's Kalshi principle: 규칙 is never collapsed on the detail. It
-                promises no 판정 schedule (#22's '일정' panel will). The row fetched here is the
-                FALLBACK, not the source: the section follows the live cache so an admin's edit
-                to the rules or the close time cannot leave this panel describing a market the
-                countdown above has already moved past. */}
-            <LiveRulesSection fallback={market} />
-          </MarketDetail>
-        </HydrationBoundary>
-      </Stack>
+    // The home's and the header's width and side padding (1320px, 24px), so the two columns
+    // from md up — the sections and the order panel (market-detail.tsx) — line up with the
+    // header's edges (ADR-0067). The bottom tab bar's clearance is the footer's (footer.tsx); the
+    // 매수 bar below md keeps its own place in the flow (order-entry-bar.tsx).
+    <Container maxW="1320px" px="6" py={{ base: '6', md: '10' }}>
+      {/* Every AC 2 string reaches view-source through the SAME door: this boundary. It
+          hydrates a not-yet-present query synchronously during render, so the server pass of
+          each client component below already reads the seeded row — the question, the 시장가격
+          and the 규칙 alike — while each still follows the live cache afterwards.
+          The heading is INSIDE it for exactly that reason and must stay: rendered above the
+          boundary it would run before the seed existed, and measurement showed that takes
+          시장가격, the status badge and the chart path out of the first paint with it. Each
+          component carries the server row as its own `fallback` besides, so no branch can leave
+          an AC 2 string out even if the query is unreadable. */}
+      <HydrationBoundary state={dehydratePublic(queryClient)}>
+        {/* `now` is the server's own window end, never a clock read in this render body — see
+            `detailWindowEnd`. It is absent when the series is. The nodes are rendered HERE and
+            only placed by `MarketDetail`, outside every branch it takes. 배경 and 규칙 are
+            rendered once for each width: md and up draws them before the chart, below md after
+            the 호가·거래 내역 switch, and each width reads its own copy where it is drawn
+            (lib/market-detail.ts `DETAIL_SLOTS`). Both copies are in the HTML. Written out
+            rather than built with `perWidth`: lib/market-detail.ts loads the app's Chakra system,
+            which fails to load in a server component. */}
+        <MarketDetail
+          marketId={market.id}
+          now={detailWindowEnd(series)}
+          // h2, not h1: `Nav` renders the site name as this document's only h1 on every screen
+          // (nav.tsx, since M1), and MY and / both title themselves h2 under it. A second h1
+          // here would give the page two, and heading level is not a place for one screen to
+          // have its own convention (A-M4-31). The row fetched here is the FALLBACK, not the
+          // source: `title` is editable while a market is open, and the chart's label already
+          // follows the live row.
+          question={<LiveQuestionHeading fallback={market} />}
+          // 배경 (N02 §4), the market's description, when it has one.
+          background={{
+            md: <LiveBackgroundSection fallback={market} width="md" />,
+            base: <LiveBackgroundSection fallback={market} width="base" />,
+          }}
+          // PLAN 11.1's Kalshi principle: 규칙 is never collapsed on the detail. It promises no
+          // 판정 schedule (#22's '일정' panel will). The row fetched here is the FALLBACK, not
+          // the source: the section follows the live cache so an admin's edit to the rules or
+          // the close time cannot leave this panel describing a market the countdown above has
+          // already moved past.
+          rules={{
+            md: <LiveRulesSection fallback={market} width="md" />,
+            base: <LiveRulesSection fallback={market} width="base" />,
+          }}
+        />
+      </HydrationBoundary>
     </Container>
   );
 }

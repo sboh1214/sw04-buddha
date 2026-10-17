@@ -50,6 +50,8 @@ export const copy = {
   submit: '확인',
   save: '저장',
   cancel: '취소',
+  // 시트·대화상자를 닫는 단추의 이름(Chakra의 CloseButton은 영어 'Close'를 단다).
+  close: '닫기',
 
   // --- validation ---
   errEmailInvalid: '올바른 이메일 주소를 입력해 주세요.',
@@ -549,7 +551,31 @@ export const copy = {
   marketFillsEmpty: '아직 체결이 없습니다.',
   marketMyPosition: '내 포지션',
   marketMyPositionEmpty: '아직 이 시장에 참여하지 않았습니다.',
-  marketLoginToSeePosition: '로그인하면 내 포지션을 볼 수 있습니다.',
+  // 상세의 배치 틀 (#122, ADR-0067). 배경은 시장의 설명(description)이다. 나머지는 내용을 아직
+  // 만들 수 없어 제목과 comingSoon('준비 중입니다.')으로 보이는 자리다(ADR-0061 결정 3의 #122 행):
+  // 호가창(#179), 내 거래(#121), 내 대기 주문(#123), 공개 판정 기록(#24), 토론(#47). 자리의 제목은
+  // 그 결정의 글 그대로다(오너 결정 2026-10-17). 내 거래와 내 대기 주문은 로그인한 본인에게만 보인다
+  // (ADR-0061 결정 1의 18).
+  marketBackground: '배경',
+  marketOrderBook: '호가창',
+  marketMyTrades: '내 거래',
+  marketMyOpenOrders: '내 대기 주문',
+  marketJudgingRecord: '공개 판정 기록',
+  marketDiscussion: '토론',
+  // 비로그인 방문자에게 개인 영역(내 포지션·내 대기 주문·내 거래) 대신 그 자리에 하나만 보이는
+  // 로그인 안내(오너 결정 2026-10-17, '로그인 안내 하나'). 버튼은 copy.login이고 이 상세로 돌아온다.
+  marketPersonalSignedOut: '로그인하면 이 시장의 내 포지션·대기 주문·거래를 볼 수 있습니다.',
+  // 모바일의 호가·거래 내역 전환(N02 §4). 거래 내역은 시장의 최근 체결과 내 거래다(ADR-0061 결정 1의
+  // 16). 첫 것은 전환 묶음의 이름이고 화면 낭독기에만 들린다. 두 선택지는 N02 §4의 이름 '호가'·'거래
+  // 내역'이고, 호가 판의 자리 제목(marketOrderBook '호가창')과 따로 둔다.
+  marketDetailViewLabel: '호가와 거래 내역 보기',
+  marketDetailViewBook: '호가',
+  marketTradeHistory: '거래 내역',
+  // 모바일 주문 시트(ADR-0061 결정 3의 #122 행). 진입점 'YES 매수'·'NO 매수'는 copy.yes·copy.no와
+  // copy.buy를 잇고(lib/market-detail.ts) 가격을 붙이지 않는다. 시트 안은 회원에게는 주문 패널(#66)
+  // 전까지 tradePreparing('거래 준비 중')이고, 비로그인 방문자에게는 아래의 로그인 안내와 copy.login
+  // 버튼이다(N02 §2 주문은 로그인 뒤, 오너 결정 2026-10-17). 닫는 단추는 copy.close다.
+  orderSheetSignedOut: '거래는 로그인한 뒤에 할 수 있습니다.',
   // 관심 시장 (#89, ADR-0064): 상세 머리의 토글 하나. 라벨은 상태와 상관없이 같고, 등록했는지는
   // 버튼의 눌림(aria-pressed)과 채운 별이 말한다. 로그인하지 않았으면 누를 때 로그인으로 가고,
   // 돌아와서 다시 눌러야 등록된다(ADR-0061 결정 3).

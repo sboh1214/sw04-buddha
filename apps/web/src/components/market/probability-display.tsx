@@ -1,15 +1,32 @@
 'use client';
 
-import { Badge, HStack, Text, VisuallyHidden } from '@chakra-ui/react';
+import { Badge, HStack, Stack, Text, VisuallyHidden } from '@chakra-ui/react';
 import { useEffect, useState } from 'react';
 import { RollingNumber } from '@/components/ui/rolling-number';
 import { copy } from '@/copy';
 import { deltaLabel, deltaMoveKey, formatYesPrice } from '@/lib/market-admin';
+import { complementReading } from '@/lib/market-detail';
 
 /**
- * The detail screen's big reading (PLAN 11.4 ProbabilityDisplay): the last fill's price, "YES 63%",
- * plus a short-lived 시장가격 변화 badge — or 체결 없음 before the first fill (N02 §5), where no initial
- * setting stands in for a price.
+ * The detail screen's big reading (PLAN 11.4 ProbabilityDisplay), in two lines: the last fill's
+ * price, "YES 63%", with a short-lived 시장가격 변화 badge right after it, and under that its display
+ * complement "NO 37%" — or, before the first fill, 체결 없음 once and no second line (N02 §5), where
+ * no initial setting stands in for a price.
+ *
+ * The NO reading is the complement of the same `lastPrice` (ADR-0061 decision 1, item 2: the card
+ * and the detail header show YES and NO together), never what a NO contract costs — that is the
+ * order book's (N02 §5). So it is drawn as the card draws its readings (owner decision 2026-10-16,
+ * ADR-0062): plain text, smaller and muted under the YES figure the 대표 시장가격 is, with no
+ * outline, fill or pointer that would make it look like a price to press. It is plain text rather
+ * than `RollingNumber` for the card's reason too: one rolling figure is the reading, and a second
+ * set of digit stacks would only double the markup.
+ *
+ * The badge is YES's move — its arrow, sign and palette are YES's — so it stands on the YES line,
+ * right after the figure; beside 'NO 37%' it would read as NO's own move, which is the opposite one
+ * (a fill that takes YES from 63 to 61 takes NO from 37 to 39). NO has its own line under it
+ * (owner decision 2026-10-17, 'NO를 아래 줄로', ADR-0067), so the badge coming and going five
+ * seconds later never moves the NO reading: nothing else stands on the YES line after the badge,
+ * and the badge is shorter than the YES figure's line box, so that line keeps its height too.
  *
  * Rolling lives here and nowhere else. A card renders `formatYesPrice` as plain text: AC 1 asks
  * a card to UPDATE within a second, not to animate, PLAN 11.1-1 says a card shows "63%" only,
@@ -38,6 +55,12 @@ const ARROW_DOWN = '▼';
 const VALUE_FONT_SIZE = {
   sm: '2xl',
   lg: { base: '4xl', md: '5xl' },
+} as const;
+
+/** The NO complement's size under the YES figure: a reading, not a second headline. */
+const COMPLEMENT_FONT_SIZE = {
+  sm: 'md',
+  lg: { base: 'lg', md: 'xl' },
 } as const;
 
 export interface ProbabilityDisplayProps {
@@ -81,41 +104,63 @@ export function ProbabilityDisplay({
   }, [move, label]);
 
   const up = (deltaPoints ?? 0) > 0;
+  const complement = complementReading(lastPrice);
   return (
-    <HStack gap="2" align="baseline" flexWrap="wrap" data-testid={testId}>
-      <Text
-        as="span"
-        fontSize={VALUE_FONT_SIZE[size]}
-        fontWeight="bold"
-        // Locked to the roll cells' own line box (rolling-number.tsx), so the digit stacks and
-        // the YES label share one baseline whatever Pretendard's metrics do at this size.
-        lineHeight="1.15"
-      >
-        {/* 체결 없음 is words, not a number: nothing to roll. */}
-        {lastPrice === null ? (
-          <Text as="span" color="fg.muted" data-testid="market-probability-value">
-            {formatYesPrice(lastPrice)}
-          </Text>
-        ) : (
-          <RollingNumber text={formatYesPrice(lastPrice)} data-testid="market-probability-value" />
-        )}
-      </Text>
-      {label === '' || dismissed === move ? null : (
-        <Badge
-          colorPalette={up ? 'yes' : 'no'}
-          variant="subtle"
-          data-testid="market-probability-delta"
+    <Stack gap="0.5" align="flex-start" data-testid={testId}>
+      {/* Line 1: the YES figure and, while it lives, its move. */}
+      <HStack gap="2" align="baseline" flexWrap="wrap">
+        <Text
+          as="span"
+          fontSize={VALUE_FONT_SIZE[size]}
+          fontWeight="bold"
+          // Locked to the roll cells' own line box (rolling-number.tsx), so the digit stacks and
+          // the YES label share one baseline whatever Pretendard's metrics do at this size.
+          lineHeight="1.15"
         >
-          {/* The badge is a number with an arrow; this is the only thing that says what the
-              number is. No live region: the value beside it changes on every tick, and a
-              region here would announce the market's whole history. */}
-          <VisuallyHidden>{copy.probabilityChange}</VisuallyHidden>
-          <Text as="span" aria-hidden="true">
-            {up ? ARROW_UP : ARROW_DOWN}
-          </Text>
-          {label}
-        </Badge>
+          {/* 체결 없음 is words, not a number: nothing to roll. */}
+          {lastPrice === null ? (
+            <Text as="span" color="fg.muted" data-testid="market-probability-value">
+              {formatYesPrice(lastPrice)}
+            </Text>
+          ) : (
+            <RollingNumber
+              text={formatYesPrice(lastPrice)}
+              data-testid="market-probability-value"
+            />
+          )}
+        </Text>
+        {label === '' || dismissed === move ? null : (
+          <Badge
+            colorPalette={up ? 'yes' : 'no'}
+            variant="subtle"
+            data-testid="market-probability-delta"
+          >
+            {/* The badge is a number with an arrow; this is the only thing that says what the
+                number is. No live region: the value beside it changes on every tick, and a
+                region here would announce the market's whole history. */}
+            <VisuallyHidden>{copy.probabilityChange}</VisuallyHidden>
+            <Text as="span" aria-hidden="true">
+              {up ? ARROW_UP : ARROW_DOWN}
+            </Text>
+            {label}
+          </Badge>
+        )}
+      </HStack>
+      {/* Line 2: NO, under the YES line rather than after the badge — the badge is YES's move, and
+          beside 'NO 37%' it would read as NO's own, which went the other way; and on a line of its
+          own nothing the badge does can move it. */}
+      {complement !== null && (
+        <Text
+          as="span"
+          fontSize={COMPLEMENT_FONT_SIZE[size]}
+          fontWeight="medium"
+          color="fg.muted"
+          whiteSpace="nowrap"
+          data-testid="market-probability-no"
+        >
+          {complement}
+        </Text>
       )}
-    </HStack>
+    </Stack>
   );
 }

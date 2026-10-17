@@ -56,6 +56,25 @@ export function primaryNavItems(
 export const HEADER_HEIGHT_PX = 107;
 
 /**
+ * The mobile tab bar's height in CSS px above the home-indicator inset: its 45px row (a 14px label
+ * on a 21px line with 12px above and below — what the bar measured before it was built to this
+ * number) and the 1px rule on top. `bottom-tabs.tsx` is built to it, and the market detail's
+ * YES·NO 매수 bar (#122) sticks exactly this far, plus the same inset, above the bottom of the
+ * viewport — so the two bars meet edge to edge and neither covers the other. A drift shows as a
+ * strip of page between them or as the tabs over the buy buttons (market.spec.ts measures it).
+ */
+export const BOTTOM_TABS_HEIGHT_PX = 46;
+
+/**
+ * The market detail's YES·NO 매수 bar's height in CSS px (#122): its 44px `lg` buttons with 12px
+ * above and below, and the 1px rule on top. `order-entry-bar.tsx` is built to it, so with
+ * `BOTTOM_TABS_HEIGHT_PX` it is the whole band the two bars cover at the bottom of the viewport
+ * below md — the band an open market's page keeps the keyboard focus out of
+ * (`ORDER_ENTRY_SCROLL_PADDING`, lib/market-detail.ts).
+ */
+export const ORDER_ENTRY_BAR_HEIGHT_PX = 69;
+
+/**
  * The resting opacity of row 2's inactive category items. Kalshi rests them at 0.5, which puts
  * 15px text at 3.74:1 on the light page (`fg` is gray.950, #09090b, not black) — under the
  * 4.5:1 WCAG 1.4.3 asks of text and the theme file otherwise measures (AC 6). 0.6 is the first

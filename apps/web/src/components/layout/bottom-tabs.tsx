@@ -4,7 +4,7 @@ import { HStack, Link as ChakraLink } from '@chakra-ui/react';
 import NextLink from 'next/link';
 import { usePathname } from 'next/navigation';
 import { copy } from '@/copy';
-import { isPrimaryCurrent, primaryNavItems } from '@/lib/nav';
+import { BOTTOM_TABS_HEIGHT_PX, isPrimaryCurrent, primaryNavItems } from '@/lib/nav';
 import { useSession } from '@/lib/use-session';
 
 /**
@@ -24,8 +24,9 @@ import { useSession } from '@/lib/use-session';
  * signed-in reader's third arrives after — the bar's height never changes, only the width of its
  * cells.
  *
- * On every route, the market detail included: its 주문 영역 is an ordinary block (#125), so
- * nothing else claims this place.
+ * On every route, the market detail included. There an open market's YES·NO 매수 bar (#122,
+ * order-entry-bar.tsx) sits directly on top of this one rather than in its place: it sticks
+ * `BOTTOM_TABS_HEIGHT_PX` above the bottom of the viewport, the height this bar is built to.
  */
 export function BottomTabs() {
   const pathname = usePathname();
@@ -57,7 +58,10 @@ export function BottomTabs() {
             // 2.5.5): equal columns, each a full-height link.
             flex="1"
             justifyContent="center"
-            py="3"
+            // The row is `BOTTOM_TABS_HEIGHT_PX` less this bar's 1px rule, which is what the
+            // detail's 매수 bar stands on (lib/nav.ts) — a fixed height, not padding around a line
+            // box, so a font change cannot move the edge it meets.
+            h={`${String(BOTTOM_TABS_HEIGHT_PX - 1)}px`}
             fontSize="sm"
             // Weight as well as colour, and `aria-current` on top of both: the current tab is
             // never signalled by colour alone (AC 6).
