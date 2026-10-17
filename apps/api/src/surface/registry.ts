@@ -111,7 +111,7 @@ export const OWNER_ROUTES: Readonly<Record<string, RegisteredRoute>> = {
   },
   'GET /me/watchlist': {
     reason:
-      '본인 관심 시장 목록(#89, ADR-0064): 세션 계정이 지금 등록한 시장만, 최근 등록 순. 관심 시장은 본인 밖의 누구에게도 보이지 않는다(#37)',
+      '본인 관심 시장 목록(#89, ADR-0064·0065): 세션 계정이 지금 등록한 시장만, 최근 등록 순(기본)이나 홈의 추천·신규·마감 임박. 관심 시장은 본인 밖의 누구에게도 보이지 않는다(#37)',
   },
   'GET /me/watchlist/:marketId': {
     reason:

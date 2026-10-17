@@ -3,6 +3,7 @@ import { HydrationBoundary } from '@tanstack/react-query';
 import type { Metadata } from 'next';
 import { copy } from '@/copy';
 import { fetchCategoriesServer, fetchMarketsPageServer } from '@/lib/api.server';
+import { isWatchlistView } from '@/lib/home-view';
 import { dehydratePublic, marketsKey } from '@/lib/market-keys';
 import { type MarketSearchParams, filtersFromSearchParams } from '@/lib/market-ssr';
 import { getQueryClient } from '@/lib/query-client';
@@ -52,7 +53,12 @@ export const metadata: Metadata = { title: `${copy.homeTitle} | ${copy.appName}`
  * shortcut row fills in from the client's own fetch a moment later.
  *
  * No `cookies()` is read and `dehydratePublic` drops every private root, so this HTML is
- * byte-identical for a signed-in and an anonymous visitor (decision-ssr-hydration §9).
+ * byte-identical for a signed-in and an anonymous visitor (decision-ssr-hydration §9) — the
+ * 관심 시장 view (`?watchlist=1`, ADR-0065) included, whose list is drawn as placeholders here
+ * and read by the browser after the session is known.
+ *
+ * The home has no status filter (ADR-0061 decision 1, item 13): every list here is of open
+ * markets, and a bookmarked `?status=` or `?sort=volume` is normalised away, not redirected.
  */
 export default async function HomePage({
   searchParams,
@@ -61,15 +67,19 @@ export default async function HomePage({
 }) {
   const filters = filtersFromSearchParams(await searchParams);
   const queryClient = getQueryClient();
+  // The public list is read here; the 관심 시장 view's is the caller's, so nothing of it is — the
+  // client asks once the session is known, and this HTML stays the same for every visitor.
+  const publicFilters = isWatchlistView(filters) ? undefined : filters;
   const [, categories] = await Promise.all([
-    queryClient.prefetchInfiniteQuery({
-      queryKey: marketsKey(filters),
-      queryFn: ({ pageParam }: { pageParam: string | undefined }) =>
-        fetchMarketsPageServer(filters, pageParam),
-      // `undefined`, not a literal cursor: it is the param the client's own options factory
-      // declares, and a mismatch there is a refetch of the page that is already in the payload.
-      initialPageParam: undefined as string | undefined,
-    }),
+    publicFilters &&
+      queryClient.prefetchInfiniteQuery({
+        queryKey: marketsKey(publicFilters),
+        queryFn: ({ pageParam }: { pageParam: string | undefined }) =>
+          fetchMarketsPageServer(publicFilters, pageParam),
+        // `undefined`, not a literal cursor: it is the param the client's own options factory
+        // declares, and a mismatch there is a refetch of the page that is already in the payload.
+        initialPageParam: undefined as string | undefined,
+      }),
     // `undefined` rather than a rejection: the categories are a convenience — the headline
     // falls back to 예측시장, the sidebar renders nothing, and the list still works without
     // them. The prefetch above swallows its failure the same way.
@@ -89,7 +99,10 @@ export default async function HomePage({
    * A prefetch that failed leaves `dataUpdatedAt` at 0; the badge then falls back to the
    * absolute close time until it has mounted (countdown-badge.tsx), which is still true.
    */
-  const fetchedAt = queryClient.getQueryState(marketsKey(filters))?.dataUpdatedAt ?? 0;
+  const fetchedAt =
+    publicFilters === undefined
+      ? 0
+      : (queryClient.getQueryState(marketsKey(publicFilters))?.dataUpdatedAt ?? 0);
 
   return (
     // Kalshi's content width and side padding (`--content-width` 1320px, 24px); the 24px top

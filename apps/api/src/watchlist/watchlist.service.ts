@@ -11,8 +11,35 @@ import { and, desc, eq, ne } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
 import { keysetPredicate } from '../common/keyset.js';
 import { DB } from '../infra/db/db.provider.js';
+import {
+  NO_ORDER_FIELDS,
+  marketOrder,
+  type MarketOrder,
+  type MarketOrderRow,
+} from '../markets/market-order.js';
 import { inCategory, marketWithCategory, toMarketSummary } from '../markets/market.service.js';
 import { type Page } from '../wallet/wallet.service.js';
+
+/** A watchlist row: the market and its order fields, and when the caller watched it. */
+type WatchRow = MarketOrderRow & { watchedAt: Date };
+
+/**
+ * 최근 관심 등록 순: `(watched_at DESC, market_id DESC)`, which only a watchlist has, in the shape
+ * of the market orders so one query serves all four. Reads nothing beside the row.
+ */
+function watchedOrder(cursor: string | undefined): MarketOrder<WatchRow> {
+  const { marketWatches } = schema;
+  const keyset = decodeKeyset(cursor, 'uuid');
+  return {
+    lateral: undefined,
+    fields: NO_ORDER_FIELDS,
+    after: keyset
+      ? keysetPredicate(marketWatches.watchedAt, marketWatches.marketId, keyset, 'uuid')
+      : undefined,
+    orderBy: [desc(marketWatches.watchedAt), desc(marketWatches.marketId)],
+    cursorOf: (row) => encodeKeyset({ createdAt: row.watchedAt, id: row.market.id }),
+  };
+}
 
 /**
  * 관심 시장 (#89, ADR-0064): the caller's watches. Every read and write is the session account's
@@ -34,31 +61,38 @@ export class WatchlistService {
   constructor(@Inject(DB) private readonly db: Db) {}
 
   /**
-   * Newest watch first (ADR-0061 decision 3: 최근 등록 순), keyset-paginated over
-   * `(watched_at DESC, market_id DESC)` with the `<millis>_<uuid>` cursor every list uses. Items
-   * are the `GET /markets` row, so the same card draws them; an ended market stays with its
-   * status until the member unwatches it. A cursor that does not decode serves the first page.
+   * The caller's watched markets in the order asked for (ADR-0061 decision 3; ADR-0065):
+   * `watched` (최근 관심 등록 순, the default — MY's order and the home view's first), keyset-
+   * paginated over `(watched_at DESC, market_id DESC)` with the `<millis>_<uuid>` cursor every list
+   * uses, or one of the public orders, from the same `marketOrder` as `GET /markets` so a watched
+   * market sits where it sits on the home. Items are the `GET /markets` row, so the same card draws
+   * them; an ended market stays with its status until the member unwatches it. A cursor that does
+   * not decode for the order serves the first page.
    */
   async list(userId: string, query: WatchlistQuery): Promise<Page<MarketSummary>> {
     const { markets, categories, marketWatches } = schema;
-    const keyset = decodeKeyset(query.cursor, 'uuid');
-    const rows = await this.db
-      .select({ ...marketWithCategory, watchedAt: marketWatches.watchedAt })
+    const order: MarketOrder<WatchRow> =
+      query.sort === 'watched'
+        ? watchedOrder(query.cursor)
+        : marketOrder(this.db, query.sort, query.cursor);
+    let select = this.db
+      .select({ ...marketWithCategory, watchedAt: marketWatches.watchedAt, order: order.fields })
       .from(marketWatches)
       .innerJoin(markets, eq(markets.id, marketWatches.marketId))
       .innerJoin(categories, eq(categories.id, markets.categoryId))
+      .$dynamic();
+    if (order.lateral) select = select.crossJoinLateral(order.lateral);
+    const rows = await select
       .where(
         and(
           eq(marketWatches.userId, userId),
           ne(markets.status, 'draft'),
           query.status ? eq(markets.status, query.status) : undefined,
           query.category ? inCategory(this.db, query.category) : undefined,
-          keyset
-            ? keysetPredicate(marketWatches.watchedAt, marketWatches.marketId, keyset, 'uuid')
-            : undefined,
+          order.after,
         ),
       )
-      .orderBy(desc(marketWatches.watchedAt), desc(marketWatches.marketId))
+      .orderBy(...order.orderBy)
       .limit(query.limit + 1);
 
     const hasMore = rows.length > query.limit;
@@ -66,8 +100,7 @@ export class WatchlistService {
     const last = kept.at(-1);
     return {
       items: kept.map((row) => toMarketSummary(row.market, row.category)),
-      nextCursor:
-        hasMore && last ? encodeKeyset({ createdAt: last.watchedAt, id: last.market.id }) : null,
+      nextCursor: hasMore && last ? order.cursorOf(last) : null,
     };
   }
 

@@ -1,3 +1,4 @@
+import { MARKET_SORTS } from '@buddha/shared';
 import { QueryClient, hashKey, partialMatchKey } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 import { ADMIN_MARKETS_KEY } from '@/hooks/use-admin-markets';
@@ -11,6 +12,7 @@ import {
 import {
   CATEGORIES_QUERY_KEY,
   DEFAULT_MARKET_FILTERS,
+  HOME_MARKET_STATUS,
   MARKETS_KEY,
   MARKET_FILLS_KEY,
   MARKET_KEY,
@@ -26,6 +28,7 @@ import {
   marketFillsKey,
   marketKey,
   marketsKey,
+  publicListQuery,
   ticksKey,
   watchStateKey,
   watchlistPagesKey,
@@ -56,16 +59,19 @@ describe('the market key builders', () => {
 });
 
 describe('marketsKey', () => {
-  it('opens on the open markets by volume', () => {
-    expect(DEFAULT_MARKET_FILTERS).toEqual({ status: 'open', sort: 'volume' });
+  it('opens on 추천, with no status: the home lists open markets only (ADR-0065)', () => {
+    // Was `{ status: 'open', sort: 'volume' }` before this PR: the volume order is gone until #132
+    // and the status is no filter but the constant every home list asks for.
+    expect(DEFAULT_MARKET_FILTERS).toEqual({ sort: 'recommended' });
+    expect(HOME_MARKET_STATUS).toBe('open');
   });
 
   it('hashes the same whatever the field order and however an absent filter is spelled', () => {
     // `hashKey` sorts object keys and `JSON.stringify` drops undefined values, so the server's
     // normalised filters and a client object built in another order share one cache entry —
     // which is what stops the list from refetching the moment it hydrates.
-    const fromServer: MarketFilters = { status: 'open', sort: 'volume' };
-    const rebuilt: MarketFilters = { sort: 'volume', status: 'open', category: undefined };
+    const fromServer: MarketFilters = { sort: 'newest', category: 'economy' };
+    const rebuilt: MarketFilters = { category: 'economy', sort: 'newest', q: undefined };
     expect(hashKey(marketsKey(fromServer))).toBe(hashKey(marketsKey(rebuilt)));
   });
 
@@ -81,12 +87,42 @@ describe('marketsKey', () => {
     const distinct: MarketFilters[] = [
       DEFAULT_MARKET_FILTERS,
       { ...DEFAULT_MARKET_FILTERS, sort: 'newest' },
-      { ...DEFAULT_MARKET_FILTERS, status: 'settled' },
+      { ...DEFAULT_MARKET_FILTERS, sort: 'closing' },
       { ...DEFAULT_MARKET_FILTERS, category: 'economy' },
       { ...DEFAULT_MARKET_FILTERS, q: '금리' },
     ];
     const hashes = new Set(distinct.map((filters) => hashKey(marketsKey(filters))));
     expect(hashes.size).toBe(distinct.length);
+  });
+});
+
+describe('publicListQuery', () => {
+  it('sends the order picked, every one of them, with the home status', () => {
+    // The API defaults to 추천 as well, so a request that dropped or pinned its order would still
+    // answer, in the wrong order, and type-check (the query's `sort` is optional): the SSR
+    // prefetch and the client's queryFn both build their query here, and this is what pins it.
+    for (const sort of MARKET_SORTS) {
+      expect(publicListQuery({ ...DEFAULT_MARKET_FILTERS, sort })).toEqual({
+        status: HOME_MARKET_STATUS,
+        sort,
+      });
+    }
+  });
+
+  it('adds a category, a search term and a cursor only when there is one', () => {
+    // The API's query schema refuses a blank one, so an absent filter is no field at all.
+    expect(
+      publicListQuery({ sort: 'closing', category: 'economy', q: '금리' }, '1788408306789_abc'),
+    ).toEqual({
+      status: 'open',
+      sort: 'closing',
+      category: 'economy',
+      q: '금리',
+      cursor: '1788408306789_abc',
+    });
+    expect(
+      Object.keys(publicListQuery({ sort: 'newest', category: undefined, q: undefined })),
+    ).toEqual(['status', 'sort']);
   });
 });
 

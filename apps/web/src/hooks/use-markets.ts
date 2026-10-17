@@ -2,7 +2,7 @@
 
 import { keepPreviousData, useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { type Market, api, unwrap } from '@/lib/api';
-import { type MarketFilters, marketKey, marketsKey } from '@/lib/market-keys';
+import { type MarketFilters, marketKey, marketsKey, publicListQuery } from '@/lib/market-keys';
 import { type MarketPage } from '@/lib/market-live';
 import { DEFAULT_TICK_RANGE, type TickRange, ticksQueryOptions } from '@/lib/ticks';
 import { useMarketFills as useMarketFillsQuery } from './use-admin-markets';
@@ -45,19 +45,10 @@ export function marketsInfiniteQueryOptions(filters: MarketFilters) {
   return {
     queryKey: marketsKey(filters),
     queryFn: async ({ pageParam }: { pageParam: string | undefined }): Promise<MarketPage> => {
-      // An absent `category`/`q` is omitted rather than sent empty: the API's query schema
-      // refuses a blank one. Written the same way as the server twin, field for field.
+      // The same query the server twin sends (`publicListQuery`), so the two cannot drift.
       const { data, meta } = unwrap(
         await api.GET('/api/v1/markets', {
-          params: {
-            query: {
-              status: filters.status,
-              sort: filters.sort,
-              ...(filters.category === undefined ? {} : { category: filters.category }),
-              ...(filters.q === undefined ? {} : { q: filters.q }),
-              ...(pageParam === undefined ? {} : { cursor: pageParam }),
-            },
-          },
+          params: { query: publicListQuery(filters, pageParam) },
         }),
       );
       return { items: data, nextCursor: meta.nextCursor };

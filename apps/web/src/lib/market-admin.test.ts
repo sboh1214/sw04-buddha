@@ -70,8 +70,10 @@ describe('status and event labels', () => {
       settled: '정산 완료',
       voided: copy.marketStatusVoided,
     });
-    // The home status filter walks PUBLIC_MARKET_STATUSES through these labels (D4: 판정 완료 is
-    // a filter of its own, 1:1).
+    // Every public status has a label of its own, 1:1 (D4: 판정 완료 is a status of its own): the
+    // statuses the API's `status` filter takes, as the status badges name them. The home has no
+    // status filter any more (ADR-0065 on ADR-0046 D4); the search screen (#15) is where these
+    // labels will be picked from.
     expect(PUBLIC_MARKET_STATUSES.map((status) => MARKET_STATUS_LABEL[status])).toEqual([
       copy.marketStatusOpen,
       '거래 마감',

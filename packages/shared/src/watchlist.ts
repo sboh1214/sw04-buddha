@@ -1,6 +1,6 @@
 import * as z from 'zod';
 import { cursorQuerySchema } from './api/pagination.js';
-import { marketCategoryFilterSchema, publicMarketStatusSchema } from './market.js';
+import { MARKET_SORTS, marketCategoryFilterSchema, publicMarketStatusSchema } from './market.js';
 
 /**
  * 관심 시장 (#89, ADR-0064): the markets an account keeps an eye on, from the detail page's
@@ -20,15 +20,27 @@ export const WATCH_EVENT_ACTIONS = ['watch', 'unwatch'] as const;
 export type WatchEventAction = (typeof WATCH_EVENT_ACTIONS)[number];
 
 /**
+ * The orders of `GET /me/watchlist` (ADR-0061 decision 3, the #63 row; ADR-0065): `watched`
+ * (최근 관심 등록 순, newest watch first), which only a watchlist has, and the public list's three
+ * (`MARKET_SORTS`), ordered by the same rules. `watched` is the default: MY lists by it alone, and
+ * the home's 관심 시장 view starts on it.
+ */
+export const WATCHLIST_SORTS = ['watched', ...MARKET_SORTS] as const;
+export type WatchlistSort = (typeof WATCHLIST_SORTS)[number];
+export const watchlistSortSchema = z.enum(WATCHLIST_SORTS);
+export const DEFAULT_WATCHLIST_SORT = 'watched' satisfies WatchlistSort;
+
+/**
  * `GET /me/watchlist` (no `.meta`: query DTO, expanded per field like `marketListQuerySchema`).
- * Newest watch first and nothing else in this PR; the two filters are the ones the home's
- * 관심 시장 toggle (#63) will combine with: a public status, and a category slug resolved like
- * `GET /markets` (a top-level slug includes its sub-categories). Both omitted lists every
- * watched market whatever its status, ended ones included.
+ * The two filters are the ones the home's 관심 시장 view (#63) combines with: a public status
+ * (the home asks for `open`), and a category slug resolved like `GET /markets` (a top-level slug
+ * includes its sub-categories). Both omitted lists every watched market whatever its status,
+ * ended ones included, as MY does.
  */
 export const watchlistQuerySchema = cursorQuerySchema.extend({
   status: publicMarketStatusSchema.optional(),
   category: marketCategoryFilterSchema.optional(),
+  sort: watchlistSortSchema.default(DEFAULT_WATCHLIST_SORT),
 });
 export type WatchlistQuery = z.infer<typeof watchlistQuerySchema>;
 

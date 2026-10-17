@@ -60,7 +60,9 @@ export class MarketsController {
   @Get()
   @ApiOperation({
     operationId: 'listMarkets',
-    summary: 'Markets by status (default open), never drafts; sorted by volume, closing or newest',
+    summary:
+      'Markets by status (default open), never drafts; sorted recommended (24-hour volume, then ' +
+      'the latest opening; the default), newest (latest opening) or closing (soonest close)',
   })
   @ApiPageOf(marketSummarySchema)
   @ApiErrors('VALIDATION_ERROR')

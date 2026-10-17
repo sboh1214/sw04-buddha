@@ -20,11 +20,13 @@ import type { Db } from '../client.js';
 import {
   balances,
   categories,
+  fills,
   ledgerEntries,
   marketSettlementSteps,
   marketWatchEvents,
   marketWatches,
   markets,
+  orders,
   positions,
   profiles,
   user,
@@ -137,6 +139,13 @@ export interface CreateMarketInput {
   /** Statistics overrides (list sorting tests). Default 0 like a market nobody traded. */
   volumeCoin?: bigint;
   tradeCount?: number;
+  /**
+   * The actual open time. Default: now for every status but `draft`, which has none (the admin
+   * open path stamps it). A list-order test sets it, or sets `null` for a public market with no
+   * open time, which 신규 puts after every opened market and 추천 after the opened markets of its
+   * own 24-hour volume (the open time is 추천's tie-break; ADR-0065).
+   */
+  openAt?: Date | null;
   closeAt?: Date;
   /**
    * Resolution columns, stored as given and null by default: a test that needs a market
@@ -187,7 +196,7 @@ export async function createMarket(db: Db, input: CreateMarketInput = {}) {
       lastPrice,
       volumeCoin: input.volumeCoin ?? 0n,
       tradeCount: input.tradeCount ?? 0,
-      openAt: status === 'draft' ? null : now,
+      openAt: input.openAt !== undefined ? input.openAt : status === 'draft' ? null : now,
       closeAt: input.closeAt ?? new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),
       resolvedResult: input.resolvedResult ?? null,
       resolvedAt: input.resolvedAt ?? null,
@@ -276,6 +285,89 @@ export async function createPosition(db: Db, input: CreatePositionInput) {
     })
     .returning();
   return row!;
+}
+
+export interface CreateFillInput {
+  marketId: string;
+  /** Total Coin of the fill: what the 24-hour volume of 추천 sums (ADR-0065). */
+  amountCoin: bigint;
+  /** Default: the database clock. A volume-window test sets it. */
+  createdAt?: Date;
+  /** The taker. A fresh user is created when omitted. */
+  userId?: string;
+  /** The resting order's account. A fresh user is created when omitted. */
+  makerId?: string;
+  /** Default 'YES'. */
+  outcome?: Outcome;
+  /** Default 'buy'. */
+  side?: 'buy' | 'sell';
+  /** Default 1. */
+  qty?: number;
+}
+
+/**
+ * One execution as the CLOB will leave it (#119): a filled market order matched against a
+ * resting limit order of another account, and the `fills` row between them — nothing routes an
+ * order yet. No balance, position, ledger entry, tick or market statistic moves: a test that
+ * needs those sets them itself (`createMarket`'s statistics). The two orders share the fill's
+ * instant.
+ */
+export async function createFill(db: Db, input: CreateFillInput) {
+  const taker = input.userId ?? (await createUser(db)).user.id;
+  const maker = input.makerId ?? (await createUser(db)).user.id;
+  const outcome = input.outcome ?? 'YES';
+  const side = input.side ?? 'buy';
+  const qty = input.qty ?? 1;
+  const at = input.createdAt === undefined ? {} : { createdAt: input.createdAt };
+  return db.transaction(async (tx) => {
+    const [resting] = await tx
+      .insert(orders)
+      .values({
+        userId: maker,
+        marketId: input.marketId,
+        outcome: outcome === 'YES' ? 'NO' : 'YES',
+        side: 'buy',
+        type: 'limit',
+        limitPrice: 50,
+        qty,
+        filledQty: qty,
+        status: 'filled',
+        idempotencyKey: randomUUID(),
+        ...at,
+      })
+      .returning();
+    const [order] = await tx
+      .insert(orders)
+      .values({
+        userId: taker,
+        marketId: input.marketId,
+        outcome,
+        side,
+        type: 'market',
+        qty,
+        filledQty: qty,
+        status: 'filled',
+        idempotencyKey: randomUUID(),
+        ...at,
+      })
+      .returning();
+    const [fill] = await tx
+      .insert(fills)
+      .values({
+        marketId: input.marketId,
+        orderId: order!.id,
+        counterpartyType: 'order',
+        counterpartyOrderId: resting!.id,
+        outcome,
+        side,
+        qty,
+        amountCoin: input.amountCoin,
+        priceAvgBp: Math.min(10_000, Math.round((Number(input.amountCoin) * 100) / qty)),
+        ...at,
+      })
+      .returning();
+    return fill!;
+  });
 }
 
 export interface CreateWatchInput {

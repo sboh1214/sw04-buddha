@@ -249,6 +249,33 @@ export interface TestMarket {
    * assertion independent of how many markets the database already has.
    */
   tag: string;
+  /** The slug of the category it is filed under: `/?category=<slug>` lists it. */
+  categorySlug: string;
+}
+
+export interface CreateOpenMarketOptions {
+  /**
+   * Which TOP-LEVEL category, by position in `GET /categories` (parents first, in display
+   * order): 0, the default, is the first. A spec that needs markets in two different categories
+   * passes 1 for the second. Throws when the seed has fewer.
+   */
+  topLevelCategory?: number;
+  /**
+   * A word put in the title before the market's own tag, for a spec that lists several markets
+   * together: give them one `freshTag()` and `/?q=<group>` is a home page holding exactly them,
+   * in the order the sort picked — which is how the order on screen can be checked at all on a
+   * database every earlier run has added to. No group, the default: the title is the tag alone.
+   */
+  group?: string;
+}
+
+/**
+ * A word no market title holds yet: base36 time and randomness, [a-z0-9] and so slug-safe
+ * (MARKET_SLUG_PATTERN allows '-'). The tag of every `createOpenMarket`, and a spec's own
+ * `group`, or a search term no market answers.
+ */
+export function freshTag(): string {
+  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 }
 
 /** `{ data }` out of the PLAN 7 success envelope, with the body in the message on a failure. */
@@ -266,16 +293,18 @@ async function unwrap<T>(response: APIResponse): Promise<T> {
  * to trade until the CLOB lands (#119) — so its price reads 체결 없음 and its chart is empty
  * (N02 §5): opening writes no price tick.
  */
-export async function createOpenMarket(admin: APIRequestContext): Promise<TestMarket> {
+export async function createOpenMarket(
+  admin: APIRequestContext,
+  { topLevelCategory = 0, group }: CreateOpenMarketOptions = {},
+): Promise<TestMarket> {
   const categories = await unwrap<Category[]>(await admin.get('/api/v1/categories'));
-  const category = categories[0];
+  const category = categories.filter((row) => row.parentId === null)[topLevelCategory];
   if (category === undefined) {
     throw new Error('no active category: run `pnpm db:seed` (categories have no admin route)');
   }
 
-  // Slug-safe by construction: base36 is [a-z0-9] and MARKET_SLUG_PATTERN allows '-'.
-  const tag = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
-  const title = `E2E 시장 ${tag}`;
+  const tag = freshTag();
+  const title = group === undefined ? `E2E 시장 ${tag}` : `E2E 시장 ${group} ${tag}`;
   // Deliberately does NOT contain 규칙: AC 2 looks for the section heading and for this
   // text separately, and a rules body carrying the heading would satisfy both on its own.
   const rules = `이 시장은 자동화 테스트가 만들었습니다. 확인 코드 ${tag}.`;
@@ -297,7 +326,22 @@ export async function createOpenMarket(admin: APIRequestContext): Promise<TestMa
   const open = await unwrap<AdminMarket>(
     await admin.post(`/api/v1/admin/markets/${draft.id}/open`),
   );
-  return { id: open.id, slug: open.slug, title, rules, tag };
+  return { id: open.id, slug: open.slug, title, rules, tag, categorySlug: category.slug };
+}
+
+/**
+ * A watch straight at the API with the page's own cookie (#89, ADR-0064), for a spec that needs
+ * several: the detail's press is pinned by watchlist.spec.ts, and more of them would only add
+ * time. Sends the account the cookie is, as the button does (`expectedAccountId`).
+ */
+export async function watchThroughApi(page: Page, marketId: string): Promise<void> {
+  const me = await page.request.get('/api/v1/me');
+  expect(me.ok(), await me.text()).toBe(true);
+  const { data } = (await me.json()) as { data: { id: string } };
+  const saved = await page.request.put(`/api/v1/me/watchlist/${marketId}`, {
+    data: { watched: true, expectedAccountId: data.id },
+  });
+  expect(saved.status(), await saved.text()).toBe(200);
 }
 
 /**

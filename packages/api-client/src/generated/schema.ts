@@ -424,7 +424,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** Markets by status (default open), never drafts; sorted by volume, closing or newest */
+        /** Markets by status (default open), never drafts; sorted recommended (24-hour volume, then the latest opening; the default), newest (latest opening) or closing (soonest close) */
         get: operations["listMarkets"];
         put?: never;
         post?: never;
@@ -646,7 +646,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** Markets the account watches, most recently watched first, every public status unless status narrows it (an ended market stays until unwatched); category takes either level like GET /markets */
+        /** Markets the account watches, every public status unless status narrows it (an ended market stays until unwatched); category takes either level like GET /markets; sorted watched (most recently watched first, the default) or by the GET /markets orders */
         get: operations["getMyWatchlist"];
         put?: never;
         post?: never;
@@ -3262,7 +3262,7 @@ export interface operations {
                 cursor?: string;
                 limit?: number;
                 q?: string;
-                sort?: "volume" | "closing" | "newest";
+                sort?: "recommended" | "newest" | "closing";
                 status?: "open" | "closed" | "resolved" | "settled" | "voided";
             };
             header?: never;
@@ -4041,6 +4041,7 @@ export interface operations {
                 category?: string;
                 cursor?: string;
                 limit?: number;
+                sort?: "watched" | "recommended" | "newest" | "closing";
                 status?: "open" | "closed" | "resolved" | "settled" | "voided";
             };
             header?: never;

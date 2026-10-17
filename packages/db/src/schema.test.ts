@@ -296,7 +296,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
           'ledger_entries.amount_coin',
           'ledger_entries.balance_after_coin',
           'markets.volume_coin',
-          'markets_status_volume_coin_id_idx',
+          // `markets_status_volume_coin_id_idx` went with the volume order (migration 0024,
+          // ADR-0065); #132 brings both back.
           'markets_volume_coin_check',
           'payments.amount_coin',
           'payments_amount_coin_check',

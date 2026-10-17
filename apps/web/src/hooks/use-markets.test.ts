@@ -131,20 +131,19 @@ function listObserver(queryClient: QueryClient, filters: MarketFilters, onFetch:
 
 describe('marketsInfiniteQueryOptions', () => {
   it('keys the list on the filter object, whatever order its fields were written in', () => {
-    const filters: MarketFilters = { status: 'open', sort: 'volume', category: 'economy' };
+    const filters: MarketFilters = { sort: 'closing', category: 'economy' };
     expect(marketsInfiniteQueryOptions(filters).queryKey).toEqual(marketsKey(filters));
 
     // `hashKey` sorts a plain object's keys and `JSON.stringify` drops undefined-valued
     // properties, so field order is irrelevant and `?category=` normalised away hashes like an
     // absent one. This is what lets the server's seed and the client's hook meet on one entry
     // without either side agreeing on how to spell the object.
-    const reordered: MarketFilters = { sort: 'volume', category: 'economy', status: 'open' };
+    const reordered: MarketFilters = { category: 'economy', sort: 'closing' };
     expect(hashKey(marketsInfiniteQueryOptions(reordered).queryKey)).toBe(
       hashKey(marketsInfiniteQueryOptions(filters).queryKey),
     );
     const explicitUndefined: MarketFilters = {
-      status: 'open',
-      sort: 'volume',
+      sort: 'recommended',
       category: undefined,
     };
     expect(hashKey(marketsInfiniteQueryOptions(explicitUndefined).queryKey)).toBe(
@@ -216,15 +215,15 @@ describe('the live list', () => {
     const count = () => {
       fetches += 1;
     };
-    const byVolume = listObserver(queryClient, DEFAULT_MARKET_FILTERS, count);
+    const recommended = listObserver(queryClient, DEFAULT_MARKET_FILTERS, count);
     const newest = listObserver(queryClient, byNewest, count);
-    const stop = [byVolume.subscribe(() => undefined), newest.subscribe(() => undefined)];
+    const stop = [recommended.subscribe(() => undefined), newest.subscribe(() => undefined)];
     try {
       queryClient.setQueriesData<MarketPages>({ queryKey: MARKETS_KEY }, (held) =>
         applyToPages(held, (row) => applyTick(row, tick())),
       );
 
-      expect(byVolume.getCurrentResult().data?.pages[0]?.items[0]?.lastPrice).toBe(63);
+      expect(recommended.getCurrentResult().data?.pages[0]?.items[0]?.lastPrice).toBe(63);
       // The same market sits on the SECOND page under the other sort, so one `setQueriesData`
       // over the shared root has to reach every page of every filter — not one query per card.
       expect(newest.getCurrentResult().data?.pages[1]?.items[0]?.lastPrice).toBe(63);
@@ -238,9 +237,10 @@ describe('the live list', () => {
   });
 
   it("moves a card's numbers and never its rank, which belongs to the fetch", () => {
-    // A DELIBERATE refusal, pinned so it is not "fixed" back. `sort=volume` is keyset-paginated
-    // on `(volume_coin DESC, id DESC)` (market.service.ts), so the order is the answer's: a tick
-    // that overtakes the row above leaves the two cards in the order the server sent them, the
+    // A DELIBERATE refusal, pinned so it is not "fixed" back. `sort=recommended` is keyset-
+    // paginated on `(24-hour volume DESC, open time DESC, id DESC)` (market-order.ts, ADR-0065;
+    // the volume order before it was the same on `volume_coin`), so the order is the answer's: a
+    // tick that overtakes the row above leaves the two cards in the order the server sent them, the
     // same way a market that closes stays in a `status=open` list until the next answer. The
     // alternatives were measured and are worse — invalidating costs one request per cached page
     // per tick and starves under a burst (each invalidation cancels the chain the last one

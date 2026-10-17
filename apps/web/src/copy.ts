@@ -3,6 +3,14 @@
  * ADR-0052): trading is 거래·매수·매도, the price is 시장가격, deciding a result is 판정 and paying
  * Coin out is 정산, and 예측 only names the genre (예측시장).
  */
+
+/**
+ * How a market gets into the watchlist, the sentence both empty watchlists end on: MY's 관심 시장
+ * tab and the home's 관심 시장 view (owner decision 2026-10-16, ADR-0065). Held once, so the two
+ * cannot drift apart.
+ */
+const WATCHLIST_HOW_TO_ADD = '시장 상세에서 관심 등록을 누르면 여기에 모입니다.';
+
 export const copy = {
   appName: 'buddha',
   appDescription: '가상 Coin으로 YES/NO 계약을 호가창에서 거래하는 예측시장',
@@ -265,8 +273,8 @@ export const copy = {
   adminMarketStatusAll: '전체',
   marketStatusDraft: '초안',
   marketStatusOpen: '진행 중',
-  // 상태 배지·홈 상태 필터의 라벨 (O-5, ADR-0046). 카운트다운의 marketCloseAt '마감'·marketClosed
-  // '마감됨'과는 다른 자리다.
+  // 상태 배지의 라벨 (O-5, ADR-0046). 홈의 상태 필터는 ADR-0065가 없앴고, 다른 상태는 검색(#15)이
+  // 고른다. 카운트다운의 marketCloseAt '마감'·marketClosed '마감됨'과는 다른 자리다.
   marketStatusClosed: '거래 마감',
   marketStatusResolved: '판정 완료',
   marketStatusSettled: '정산 완료',
@@ -479,16 +487,26 @@ export const copy = {
   marketCategories: '카테고리',
   marketSubcategories: '세부 분류',
   marketSort: '정렬',
-  sortVolume: '거래량',
-  sortClosing: '마감임박',
+  // 정렬 (ADR-0061 결정 1의 9~11): 규칙으로 센 추천(최근 24시간 거래량 → 신규)이 처음이고, 거래량 순은
+  // #132(비정상 체결 제외) 뒤에 돌아온다. 관심 시장을 켰을 때만 최근 관심 등록 순을 고를 수 있고
+  // 켜면 그것이 처음이다(결정 3의 #63). 홈에는 상태 필터가 없고 진행 중 시장만 보인다(결정 1의 13).
+  sortRecommended: '추천',
   sortNewest: '신규',
-  marketStatusFilter: '상태',
+  sortClosing: '마감 임박',
+  sortWatched: '최근 관심 등록 순',
+  // 분류(결정 1의 12): 전체·카테고리에 겹쳐 고르는 관심 시장. 로그인하지 않았으면 고를 때 로그인으로 간다.
+  homeWatchlistToggle: '관심 시장',
   searchLabel: '시장 검색',
   // Kalshi의 "Trade on anything". 라벨은 searchLabel이 따로 지므로 자리 표시자는 초대장이어도 된다.
   searchPlaceholder: '시장을 찾아보세요',
   searchSubmit: '검색',
   marketsEmpty: '아직 열린 시장이 없습니다.',
   marketsSearchEmpty: '검색 결과가 없습니다.',
+  // 관심 시장을 켠 홈: 진행 중인 관심 시장만 보인다(끝난 관심 시장은 MY에 남는다). 뒤 문장은 MY의
+  // 빈 관심 시장과 같다(오너 결정 2026-10-16).
+  watchlistViewEmpty: `진행 중인 관심 시장이 없습니다. ${WATCHLIST_HOW_TO_ADD}`,
+  // 로그인하지 않은 방문자가 관심 시장을 켠 주소를 열었을 때. 목록은 본인에게만 보인다(#37).
+  watchlistViewSignedOut: '로그인하면 관심 시장을 볼 수 있습니다.',
   // 카드와 상세 헤더의 짧은 라벨. 숫자·시각은 언제나 호출 쪽에서 붙인다.
   marketCloseAt: '마감',
   marketClosingSoon: '마감 임박',
@@ -619,7 +637,7 @@ export const copy = {
   mySettings: '설정',
   myViewAll: '전체 보기',
   // 관심 시장 탭(#89): 최근 등록 순의 시장 카드. 끝난 시장도 해제할 때까지 상태와 함께 남는다.
-  watchlistEmpty: '아직 관심 시장이 없습니다. 시장 상세에서 관심 등록을 누르면 여기에 모입니다.',
+  watchlistEmpty: `아직 관심 시장이 없습니다. ${WATCHLIST_HOW_TO_ADD}`,
 
   // --- community (placeholder) ---
   // 헤더가 가리키는 자리는 있어야 하므로 화면은 있고, 기능은 아직 없다.

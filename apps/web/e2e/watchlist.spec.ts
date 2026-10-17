@@ -14,6 +14,7 @@ import {
   subscribed,
   test,
   type TestMarket,
+  watchThroughApi,
 } from './helpers';
 
 /**
@@ -31,20 +32,6 @@ const watchButton = (page: Page) => page.getByTestId('watch-button');
 async function openDetail(page: Page, slug: string): Promise<void> {
   await page.goto(`/markets/${slug}`);
   await expect(page.getByTestId('market-detail')).toBeVisible();
-}
-
-/**
- * A watch straight at the API with the page's own cookie, for a spec that needs several: the
- * detail's press is pinned by the tests that use it, and four of them would only add time.
- */
-async function watchThroughApi(page: Page, marketId: string): Promise<void> {
-  const me = await page.request.get('/api/v1/me');
-  expect(me.ok(), await me.text()).toBe(true);
-  const { data } = (await me.json()) as { data: { id: string } };
-  const saved = await page.request.put(`/api/v1/me/watchlist/${marketId}`, {
-    data: { watched: true, expectedAccountId: data.id },
-  });
-  expect(saved.status(), await saved.text()).toBe(200);
 }
 
 /** The `data-testid`s of the market cards under `scope`, in their order on screen. */

@@ -1,9 +1,33 @@
+import { MARKET_SORTS } from '@buddha/shared';
+import { hashKey } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
 import { type Category } from './api';
 import { groupCategories } from './category-tree';
-import { filterQuery, homeHeading, sidebarLinks } from './home-view';
-import { DEFAULT_MARKET_FILTERS, type MarketFilters } from './market-keys';
+import {
+  filterQuery,
+  homeHeading,
+  homePath,
+  isWatchlistView,
+  listEmptyMessage,
+  sidebarLinks,
+  sortOptions,
+  watchlistToggleTarget,
+  watchlistViewFilters,
+  watchlistViewLoginPath,
+  withSort,
+} from './home-view';
+import {
+  DEFAULT_MARKET_FILTERS,
+  type HomeFilters,
+  type MarketFilters,
+  type WatchlistViewFilters,
+  watchlistPagesKey,
+} from './market-keys';
+import { filtersFromSearchParams } from './market-ssr';
+
+/** The 관심 시장 view on its first order, no category. */
+const WATCHING: WatchlistViewFilters = { watchlist: true, sort: 'watched' };
 
 const category = (id: number, slug: string, nameKo: string, parentId: number | null): Category => ({
   id,
@@ -29,11 +53,13 @@ const withCategory = (slug: string | undefined): MarketFilters => ({
 describe('filterQuery', () => {
   it('leaves a default view with an empty query, so its URL is a bare /', () => {
     expect(filterQuery(DEFAULT_MARKET_FILTERS)).toEqual({});
+    expect(homePath(DEFAULT_MARKET_FILTERS)).toBe('/');
   });
 
-  it('carries only what differs from the defaults', () => {
-    expect(filterQuery({ status: 'open', sort: 'newest' })).toEqual({ sort: 'newest' });
-    expect(filterQuery({ status: 'settled', sort: 'volume' })).toEqual({ status: 'settled' });
+  it('carries only what differs from the defaults, and never a status', () => {
+    // The home has no status filter (ADR-0061 decision 1, item 13); the old `status` key is gone.
+    expect(filterQuery({ sort: 'newest' })).toEqual({ sort: 'newest' });
+    expect(filterQuery({ sort: 'recommended' })).toEqual({});
     expect(filterQuery({ ...DEFAULT_MARKET_FILTERS, category: 'jobs', q: '금리' })).toEqual({
       category: 'jobs',
       q: '금리',
@@ -41,9 +67,158 @@ describe('filterQuery', () => {
   });
 
   it('writes every non-default field at once', () => {
+    expect(filterQuery({ sort: 'closing', category: 'economy', q: 'x' })).toEqual({
+      category: 'economy',
+      q: 'x',
+      sort: 'closing',
+    });
+    expect(homePath({ sort: 'closing', category: 'economy', q: 'x' })).toBe(
+      '/?category=economy&q=x&sort=closing',
+    );
+  });
+
+  it('writes the 관심 시장 view as ?watchlist=1, its own default order left out', () => {
+    expect(filterQuery(WATCHING)).toEqual({ watchlist: '1' });
+    expect(homePath(WATCHING)).toBe('/?watchlist=1');
+    expect(filterQuery({ ...WATCHING, sort: 'recommended', category: 'economy' })).toEqual({
+      category: 'economy',
+      sort: 'recommended',
+      watchlist: '1',
+    });
+  });
+
+  it('round-trips through filtersFromSearchParams for every view and order', () => {
+    const views: HomeFilters[] = [
+      ...MARKET_SORTS.map((sort) => ({ sort, category: 'jobs' })),
+      { sort: 'newest', q: '금리' },
+      ...(['watched', ...MARKET_SORTS] as const).map((sort) => ({
+        watchlist: true as const,
+        sort,
+        category: 'economy',
+      })),
+    ];
+    for (const view of views) expect(filtersFromSearchParams(filterQuery(view))).toEqual(view);
+  });
+});
+
+describe('sortOptions and withSort', () => {
+  it('offers 추천 · 신규 · 마감 임박 on the public list, nothing else (ADR-0061 decision 1)', () => {
+    expect(sortOptions(DEFAULT_MARKET_FILTERS)).toEqual(['recommended', 'newest', 'closing']);
+  });
+
+  it('puts 최근 관심 등록 순 last in the 관심 시장 view (owner decision 2026-10-16)', () => {
+    // Last although the view starts on it (decision 3, the #63 row): the three public orders
+    // keep their places, whichever order is picked.
+    expect(sortOptions(WATCHING)).toEqual(['recommended', 'newest', 'closing', 'watched']);
+    expect(sortOptions({ ...WATCHING, sort: 'closing' })).toEqual(sortOptions(WATCHING));
+    expect(WATCHING.sort).toBe('watched');
+    expect(filtersFromSearchParams({ watchlist: '1' }).sort).toBe('watched');
+  });
+
+  it('changes the order and nothing else', () => {
+    expect(withSort({ sort: 'recommended', category: 'jobs', q: 'x' }, 'closing')).toEqual({
+      sort: 'closing',
+      category: 'jobs',
+      q: 'x',
+    });
+    expect(withSort({ ...WATCHING, category: 'jobs' }, 'newest')).toEqual({
+      ...WATCHING,
+      category: 'jobs',
+      sort: 'newest',
+    });
+    // `watched` is not an option on the public list; if it ever arrived it would be the default.
+    expect(withSort(DEFAULT_MARKET_FILTERS, 'watched')).toEqual(DEFAULT_MARKET_FILTERS);
+  });
+});
+
+describe('watchlistToggleTarget', () => {
+  it('turns the view on for a member and while the session is unknown, on 최근 관심 등록 순', () => {
+    for (const signedIn of [true, undefined]) {
+      expect(watchlistToggleTarget(DEFAULT_MARKET_FILTERS, signedIn)).toBe('/?watchlist=1');
+      // The category stays (they combine, ADR-0061 decision 1, item 12); the public order and a
+      // search term do not — the view starts on its own order and has no search.
+      expect(
+        watchlistToggleTarget({ sort: 'closing', category: 'economy', q: '금리' }, signedIn),
+      ).toBe('/?category=economy&watchlist=1');
+    }
+  });
+
+  it('sends a signed-out visitor to sign in and back to the view with the toggle on', () => {
+    const target = watchlistToggleTarget({ sort: 'newest', category: 'economy' }, false);
+    expect(target).toBe(`/login?next=${encodeURIComponent('/?category=economy&watchlist=1')}`);
+    const next = new URL(target, 'https://x.invalid').searchParams.get('next');
+    expect(next).toBe('/?category=economy&watchlist=1');
     expect(
-      filterQuery({ status: 'settled', sort: 'closing', category: 'economy', q: 'x' }),
-    ).toEqual({ category: 'economy', q: 'x', sort: 'closing', status: 'settled' });
+      filtersFromSearchParams(Object.fromEntries(new URL(next!, 'https://x.invalid').searchParams)),
+    ).toEqual({
+      watchlist: true,
+      sort: 'watched',
+      category: 'economy',
+    });
+  });
+
+  it('turns the view off for anyone, back to the public list of the category on 추천', () => {
+    // Whatever order the view was on (owner decision 2026-10-16): the public list starts over.
+    for (const signedIn of [true, false, undefined]) {
+      expect(watchlistToggleTarget({ ...WATCHING, sort: 'closing' }, signedIn)).toBe('/');
+      expect(watchlistToggleTarget({ ...WATCHING, category: 'jobs' }, signedIn)).toBe(
+        '/?category=jobs',
+      );
+    }
+  });
+});
+
+describe('the 관심 시장 view’s list and sign-in prompt', () => {
+  it('asks GET /me/watchlist for the open markets of the category in the picked order', () => {
+    expect(watchlistViewFilters(WATCHING)).toEqual({ status: 'open', sort: 'watched' });
+    expect(watchlistViewFilters({ ...WATCHING, sort: 'recommended', category: 'jobs' })).toEqual({
+      status: 'open',
+      sort: 'recommended',
+      category: 'jobs',
+    });
+    // A different entry from MY's `{}`: MY lists every status, the home only open markets.
+    expect(hashKey(watchlistPagesKey(watchlistViewFilters(WATCHING)))).not.toBe(
+      hashKey(watchlistPagesKey({})),
+    );
+  });
+
+  it('brings a signed-out visitor back to the very view, order and category included', () => {
+    expect(watchlistViewLoginPath({ ...WATCHING, sort: 'closing', category: 'jobs' })).toBe(
+      `/login?next=${encodeURIComponent('/?category=jobs&sort=closing&watchlist=1')}`,
+    );
+  });
+
+  it('is told apart from the public list by the URL alone', () => {
+    expect(isWatchlistView(WATCHING)).toBe(true);
+    expect(isWatchlistView(DEFAULT_MARKET_FILTERS)).toBe(false);
+  });
+});
+
+describe('listEmptyMessage', () => {
+  it('tells an empty public list from a search with no results', () => {
+    expect(listEmptyMessage(DEFAULT_MARKET_FILTERS)).toBe(copy.marketsEmpty);
+    expect(listEmptyMessage({ sort: 'closing', category: 'jobs' })).toBe(copy.marketsEmpty);
+    expect(listEmptyMessage({ ...DEFAULT_MARKET_FILTERS, q: '금리' })).toBe(
+      copy.marketsSearchEmpty,
+    );
+  });
+
+  it('gives the 관심 시장 view its own, whatever its order and category', () => {
+    const views: WatchlistViewFilters[] = [
+      WATCHING,
+      { ...WATCHING, sort: 'newest', category: 'jobs' },
+    ];
+    for (const filters of views) expect(listEmptyMessage(filters)).toBe(copy.watchlistViewEmpty);
+    // Three different sentences: no view borrows another's.
+    expect(
+      new Set([copy.marketsEmpty, copy.marketsSearchEmpty, copy.watchlistViewEmpty]).size,
+    ).toBe(3);
+  });
+
+  it('ends the 관심 시장 view’s on MY’s own hint, word for word (owner decision 2026-10-16)', () => {
+    const hint = '시장 상세에서 관심 등록을 누르면 여기에 모입니다.';
+    expect(copy.watchlistViewEmpty).toBe(`진행 중인 관심 시장이 없습니다. ${hint}`);
+    expect(copy.watchlistEmpty).toBe(`아직 관심 시장이 없습니다. ${hint}`);
   });
 });
 
@@ -101,17 +276,21 @@ describe('sidebarLinks', () => {
     }
   });
 
-  it('carries the sort, the status and the search term into every row', () => {
+  it('carries the sort and the search term into every row', () => {
     // The sidebar refines the list the visitor is already looking at; only the category changes.
-    const filters: MarketFilters = {
-      status: 'settled',
-      sort: 'closing',
-      category: 'economy',
-      q: '금리',
-    };
+    const filters: MarketFilters = { sort: 'closing', category: 'economy', q: '금리' };
     for (const link of sidebarLinks(TREE, filters)) {
-      expect(link.query).toMatchObject({ status: 'settled', sort: 'closing', q: '금리' });
+      expect(link.query).toMatchObject({ sort: 'closing', q: '금리' });
     }
+  });
+
+  it('keeps the 관심 시장 view and its order on every row: they combine (ADR-0061 decision 1)', () => {
+    const links = sidebarLinks(TREE, { ...WATCHING, sort: 'newest', category: 'economy' });
+    expect(links.map((link) => link.query)).toEqual([
+      { category: 'economy', sort: 'newest', watchlist: '1' },
+      { category: 'housing', sort: 'newest', watchlist: '1' },
+      { category: 'jobs', sort: 'newest', watchlist: '1' },
+    ]);
   });
 
   it('shows 전체 시장 alone for a top-level category with no leaves', () => {

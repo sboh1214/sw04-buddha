@@ -64,3 +64,15 @@ export function loginPathBackTo(pathname: string | null | undefined): string {
   const path = typeof pathname === 'string' ? pathname.split('?')[0] : undefined;
   return `/login?next=${encodeURIComponent(safeNextPath(path))}`;
 }
+
+/**
+ * The login URL for a page whose query string IS the page: the home's 관심 시장 view
+ * (`/?watchlist=1&category=…`, ADR-0065), which a signed-out visitor who picks it must come back
+ * to with the view on (ADR-0061 decision 1, item 12). Unlike `loginPathBackTo` the query is
+ * carried — the caller builds it from normalised filters (`homePath`), not from the address bar,
+ * so nothing a crafted link adds rides along. The whole of it still goes through `safeNextPath`,
+ * so a value that is not a path on this origin brings the visitor home instead.
+ */
+export function loginPathBackToPage(pathAndQuery: string): string {
+  return `/login?next=${encodeURIComponent(safeNextPath(pathAndQuery))}`;
+}

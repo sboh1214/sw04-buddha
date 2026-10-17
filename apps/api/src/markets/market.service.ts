@@ -4,10 +4,6 @@ import {
   FILLS_RECENT_LIMIT,
   TICKS_MAX_POINTS,
   TICKS_SCAN_MAX,
-  decodeKeyset,
-  decodeSortCursor,
-  encodeKeyset,
-  encodeSortCursor,
   serializeCoinAmount,
   tickBucketSeconds,
   uuidParamSchema,
@@ -23,9 +19,9 @@ import {
 } from '@buddha/shared';
 import { and, asc, desc, eq, gte, ilike, inArray, lte, ne, or, sql } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
-import { keysetPredicate, sortKeysetPredicate } from '../common/keyset.js';
 import { DB } from '../infra/db/db.provider.js';
 import { type Page } from '../wallet/wallet.service.js';
+import { marketOrder } from './market-order.js';
 
 export type MarketRow = typeof schema.markets.$inferSelect;
 type FillRow = typeof schema.fills.$inferSelect;
@@ -145,60 +141,30 @@ export class MarketService {
   constructor(@Inject(DB) private readonly db: Db) {}
 
   /**
-   * Keyset-paginated per sort (design 1.5): newest = (created_at DESC, id DESC) and closing =
-   * (close_at ASC, id ASC) reuse the `<millis>_<uuid>` keyset; volume = (volume_coin DESC,
-   * id DESC) carries a bigint, so it uses the sort cursor. A cursor that does not decode
-   * serves the first page rather than a 500 (see decodeKeyset).
+   * Keyset-paginated per order (`marketOrder`, market-order.ts — the one place the market orders
+   * live, ADR-0065): 추천 joins its 24-hour volume laterally and pages on (window end, volume,
+   * open time, id), 신규 on (open time, id), 마감 임박 on (close time, id). A cursor that does not
+   * decode for the order serves the first page rather than a 500 (see decodeKeyset).
    */
   async list(query: MarketListQuery): Promise<Page<MarketSummary>> {
     const { markets, categories } = schema;
-    const { cursor, limit } = query;
+    const { limit } = query;
+    const order = marketOrder(this.db, query.sort, query.cursor);
     const filters = [
       eq(markets.status, query.status),
       query.category ? inCategory(this.db, query.category) : undefined,
       query.q ? ilike(markets.title, likePattern(query.q)) : undefined,
     ];
 
-    let where;
-    let order;
-    let nextCursorOf: (row: MarketRow) => string;
-    switch (query.sort) {
-      case 'newest': {
-        const keyset = decodeKeyset(cursor, 'uuid');
-        where = keyset ? keysetPredicate(markets.createdAt, markets.id, keyset, 'uuid') : undefined;
-        order = [desc(markets.createdAt), desc(markets.id)];
-        nextCursorOf = (row) => encodeKeyset({ createdAt: row.createdAt, id: row.id });
-        break;
-      }
-      case 'closing': {
-        // Soonest first: the same encoding as `newest`, with `close_at` as the timestamp half
-        // and the comparison flipped — `after` rather than `before`, because this is the one
-        // ascending page in the API.
-        const keyset = decodeKeyset(cursor, 'uuid');
-        where = keyset
-          ? keysetPredicate(markets.closeAt, markets.id, keyset, 'uuid', 'after')
-          : undefined;
-        order = [asc(markets.closeAt), asc(markets.id)];
-        nextCursorOf = (row) => encodeKeyset({ createdAt: row.closeAt, id: row.id });
-        break;
-      }
-      case 'volume': {
-        const keyset = decodeSortCursor(cursor, 'int', 'uuid');
-        where = keyset
-          ? sortKeysetPredicate(markets.volumeCoin, markets.id, keyset, 'bigint', 'uuid')
-          : undefined;
-        order = [desc(markets.volumeCoin), desc(markets.id)];
-        nextCursorOf = (row) => encodeSortCursor(serializeCoinAmount(row.volumeCoin), row.id);
-        break;
-      }
-    }
-
-    const rows = await this.db
-      .select(marketWithCategory)
+    let select = this.db
+      .select({ ...marketWithCategory, order: order.fields })
       .from(markets)
       .innerJoin(categories, eq(categories.id, markets.categoryId))
-      .where(and(...filters, where))
-      .orderBy(...order)
+      .$dynamic();
+    if (order.lateral) select = select.crossJoinLateral(order.lateral);
+    const rows = await select
+      .where(and(...filters, order.after))
+      .orderBy(...order.orderBy)
       .limit(limit + 1);
 
     const hasMore = rows.length > limit;
@@ -206,7 +172,7 @@ export class MarketService {
     const last = kept.at(-1);
     return {
       items: kept.map((row) => toMarketSummary(row.market, row.category)),
-      nextCursor: hasMore && last ? nextCursorOf(last.market) : null,
+      nextCursor: hasMore && last ? order.cursorOf(last) : null,
     };
   }
 
