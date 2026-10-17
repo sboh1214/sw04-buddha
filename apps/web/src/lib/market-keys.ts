@@ -36,6 +36,35 @@ export const POSITIONS_KEY = ['positions'] as const;
 export const ORDERS_KEY = ['orders'] as const;
 
 /**
+ * 관심 시장 (#89, ADR-0064): the caller's watchlist, private like the two above — nobody but the
+ * member sees it (#37), so it is never SSR'd and the detail's button draws no state in the HTML.
+ * One root, two shapes under it: `['watchlist', 'pages', filters]` is MY's infinite list of
+ * `MarketSummary` pages (the home grid's page shape, so the card and the realtime reducers serve
+ * it), and `['watchlist', 'market', id]` is whether the caller watches one market. The two never
+ * match each other's prefix, so the list's `structuralSharing` (query-client.ts) never reaches a
+ * state (market-keys.test.ts pins it).
+ */
+export const WATCHLIST_KEY = ['watchlist'] as const;
+export const WATCHLIST_PAGES_KEY = [...WATCHLIST_KEY, 'pages'] as const;
+
+/**
+ * The list's filters, which are its cache key as `MarketFilters` are the home's. MY asks for none
+ * (`{}`: every public status, ended markets included, ADR-0061 decision 3); the home's 관심 시장
+ * toggle (#63) will pass a category.
+ */
+export interface WatchlistFilters {
+  status?: PublicMarketStatus;
+  category?: string;
+}
+
+export const watchlistPagesKey = (filters: WatchlistFilters) =>
+  [...WATCHLIST_PAGES_KEY, filters] as const;
+
+/** On the canonical lower-cased uuid, like `marketKey` (A-M3-29). */
+export const watchStateKey = (marketId: string) =>
+  [...WATCHLIST_KEY, 'market', marketId.toLowerCase()] as const;
+
+/**
  * The public list's filter set, which IS its cache key. Normalised once, on the server
  * (`filtersFromSearchParams`), and handed to the client as a prop: two independent derivations
  * of the same `searchParams` would be one default away from a second cache entry, and the
@@ -95,6 +124,7 @@ export const PRIVATE_QUERY_ROOTS: ReadonlySet<string> = new Set([
   'payments',
   'charge-packages',
   'admin',
+  'watchlist',
 ]);
 
 export function isPrivateQueryKey(queryKey: readonly unknown[]): boolean {

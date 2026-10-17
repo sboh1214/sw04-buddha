@@ -10,7 +10,9 @@ import { identifierWords } from './excluded.js';
  * (#37: the scope of 인증 정보 and of the risk flags, and what else outside the owner-only list is
  * public; #123·#122: whether a fill says the house was the other side). #180 kept a market's bot
  * participation and settings to admins (ADR-0058). The owner kept a user's time zone out while a
- * market's judging time zone (#22) stays public (2026-10-16, ADR-0063). Items nothing stores yet
+ * market's judging time zone (#22) stays public (2026-10-16, ADR-0063), and kept every watchlist
+ * and every market's watch count to nobody but the member (#37 for #89, ADR-0061 decision 3,
+ * ADR-0064). Items nothing stores yet
  * are named ahead (`pending`), so the route or event that brings one is refused from its first
  * day.
  *
@@ -32,6 +34,7 @@ export const PRIVATE_DATA_IDS = [
   'real-name',
   'phone',
   'time-zone',
+  'watchlist',
   'identity-verification',
   'auth-secret',
   'risk-flag',
@@ -182,6 +185,37 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
       words: ['zone', 'zones', 'timezone', 'timezones', 'tz'],
       whose: WHOSE_OR_VIEWER,
     },
+  },
+  {
+    id: 'watchlist',
+    name: '특정 사용자의 관심 시장 목록과 시장별 관심 등록 수',
+    basis: 'ADR-0061 결정 3(#89·#37, 오너 결정 2026-10-16), ADR-0064',
+    // Nobody but the member sees whom a market is watched by or how many (#37): a public market
+    // shape never says it is watched (`watched`, `isWatched`), counts watchers (`watchCount`,
+    // `watcherCount`, `watchersCount`) or lists anybody's watchlist — nor under the feature's
+    // own Korean name put into English (관심: `interestedCount`, `isInterested`) or the names such
+    // a feature goes by elsewhere (`favoriteCount`, `bookmarked`). `interest` and `interests`
+    // are left out: a market's open interest is a public trading figure. `subscribe` is the
+    // realtime room message, not a watch. The member's own `GET /me/watchlist` is an owner-only
+    // route, which this list does not read.
+    fields: [
+      ['watch'],
+      ['watches'],
+      ['watched'],
+      ['watching'],
+      ['watcher'],
+      ['watchers'],
+      ['watchlist'],
+      ['watchlists'],
+      ['interested'],
+      ['favorite'],
+      ['favorites'],
+      ['favourite'],
+      ['favourites'],
+      ['bookmark'],
+      ['bookmarks'],
+      ['bookmarked'],
+    ],
   },
   {
     id: 'identity-verification',

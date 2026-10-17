@@ -18,6 +18,8 @@ import {
   POSITIONS_KEY,
   PRIVATE_QUERY_ROOTS,
   TICKS_KEY,
+  WATCHLIST_KEY,
+  WATCHLIST_PAGES_KEY,
   type MarketFilters,
   dehydratePublic,
   isPrivateQueryKey,
@@ -25,6 +27,8 @@ import {
   marketKey,
   marketsKey,
   ticksKey,
+  watchStateKey,
+  watchlistPagesKey,
 } from './market-keys';
 
 const ID = '3f2504e0-4f89-11d3-9a0c-0305e82c3301';
@@ -98,6 +102,23 @@ describe('key prefix isolation', () => {
     expect(partialMatchKey(marketKey(ID), MARKET_KEY)).toBe(true);
   });
 
+  it('gives the watchlist join its pages and never a watch state or the home lists (#89)', () => {
+    // The `structuralSharing` on ['watchlist', 'pages'] joins `MarketSummary` pages; under the
+    // same root a `WatchState` lives, which that join would mangle, and the home's
+    // ['markets', …] has its own registration.
+    const pages = watchlistPagesKey({});
+    expect(partialMatchKey(pages, WATCHLIST_PAGES_KEY)).toBe(true);
+    expect(partialMatchKey(watchlistPagesKey({ category: 'economy' }), WATCHLIST_PAGES_KEY)).toBe(
+      true,
+    );
+    expect(partialMatchKey(watchStateKey(ID), WATCHLIST_PAGES_KEY)).toBe(false);
+    expect(partialMatchKey(pages, MARKETS_KEY)).toBe(false);
+    expect(partialMatchKey(marketsKey(DEFAULT_MARKET_FILTERS), WATCHLIST_PAGES_KEY)).toBe(false);
+    // One root covers both, so a SessionCacheGuard reset and `isPrivateQueryKey` reach both.
+    expect(partialMatchKey(watchStateKey(ID), WATCHLIST_KEY)).toBe(true);
+    expect(watchStateKey(ID.toUpperCase())).toEqual(watchStateKey(ID));
+  });
+
   it('gives the positions join both lists and nothing else', () => {
     // The third `setQueryDefaults` registration joins `Position[]` by row version. It has to
     // reach `['positions', 'open']` and `['positions', 'settled']` — the socket and every REST
@@ -127,15 +148,27 @@ describe('isPrivateQueryKey', () => {
       ['ADMIN_MARKETS_KEY', ADMIN_MARKETS_KEY],
       ['POSITIONS_KEY', POSITIONS_KEY],
       ['ORDERS_KEY', ORDERS_KEY],
+      ['watchlistPagesKey', watchlistPagesKey({})],
+      ['watchStateKey', watchStateKey(ID)],
     ];
     for (const [name, key] of sessionKeys) expect(isPrivateQueryKey(key), name).toBe(true);
   });
 
   it('registers exactly the roots the app still keys personal data under', () => {
     // The account's own disputes went with the dispute stage (ADR-0046); a root nothing keys
-    // under any more is a stale entry, not a lock.
+    // under any more is a stale entry, not a lock. 'watchlist' came with #89: nobody but the
+    // member sees a watchlist (#37, ADR-0064).
     expect([...PRIVATE_QUERY_ROOTS].sort()).toEqual(
-      ['admin', 'charge-packages', 'ledger', 'me', 'orders', 'payments', 'positions'].sort(),
+      [
+        'admin',
+        'charge-packages',
+        'ledger',
+        'me',
+        'orders',
+        'payments',
+        'positions',
+        'watchlist',
+      ].sort(),
     );
     expect(PRIVATE_QUERY_ROOTS.has('disputes')).toBe(false);
   });
@@ -176,6 +209,8 @@ describe('dehydratePublic', () => {
       queryClient.setQueryData(PAYMENTS_QUERY_KEY, []);
       queryClient.setQueryData(CHARGE_PACKAGES_QUERY_KEY, []);
       queryClient.setQueryData(ADMIN_MARKETS_KEY, []);
+      queryClient.setQueryData(watchlistPagesKey({}), { pages: [], pageParams: [] });
+      queryClient.setQueryData(watchStateKey(ID), { watched: true });
       queryClient.setQueryData(marketKey(ID), { id: ID });
 
       const roots = dehydratePublic(queryClient).queries.map((query) => query.queryKey[0]);

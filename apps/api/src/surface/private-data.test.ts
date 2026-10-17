@@ -2,7 +2,7 @@
  * #113 at run time, against the docker `test` profile. Account A's private data is in the
  * database — email, nickname and time zone, real name and phone, password and session, a balance
  * and a ledger memo, orders and the fill one of them got against another account's resting order,
- * a position with its PnL, a payment. Then:
+ * a position with its PnL, a payment, two watched markets (#89). Then:
  * - every registered public route (registry.ts) is called anonymously, as another account B and
  *   as A itself, and no answer may hold one of A's values or a field PRIVATE_DATA names, nor a
  *   field naming an excluded feature or keeping a probability;
@@ -23,7 +23,7 @@
  */
 import { randomInt, randomUUID } from 'node:crypto';
 import { schema } from '@buddha/db';
-import { createMarket, createUser } from '@buddha/db/test';
+import { createMarket, createUser, createWatch } from '@buddha/db/test';
 import {
   PAGE_LIMIT_MAX,
   REALTIME_EVENT_REGISTRY,
@@ -75,13 +75,26 @@ interface Fixture {
   a: TestUser;
   b: TestUser;
   admin: TestUser;
-  /** Open; A holds a position in it, has two orders in it and one fill. */
+  /**
+   * Open; A holds a position in it, has two orders in it and one fill, and watches it (#89) — so
+   * every public call and market-room event about it runs against A's user id and nickname with
+   * A among its watchers: a public answer naming who watches a market would carry them.
+   */
   market: MarketRow;
+  /**
+   * Closed, and on A's watchlist alone (#89). Closed so no public call here lists it — `GET
+   * /markets` is called without a query and lists open markets, and the detail routes are called
+   * with `market` — and so its id or slug in an answer can only come from A's watch: a public
+   * answer listing what A watches would carry them.
+   */
+  watched: MarketRow;
+  /** The watched market's category slug, the value B's list is filtered by. */
+  watchedCategory: string;
   paymentId: string;
   /** A's password login: the `account` row better-auth keeps. */
   accountId: string;
   /** Page cursors made from A's rows: a page from there holds A's newest row and the older ones. */
-  cursors: { ledger: string; orders: string; payments: string };
+  cursors: { ledger: string; orders: string; payments: string; watchlist: string };
   sentinels: readonly Sentinel[];
 }
 
@@ -289,6 +302,31 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
     query: { cursor: (fixture) => fixture.cursors.orders, limit: LIMIT },
     status: 200,
     own: ['filled order id', 'open order id'],
+  },
+  // B's list, paged from A's watch and filtered to the watched market's status and category: B
+  // watches nothing, so nothing of A's may come back.
+  'GET /me/watchlist': {
+    query: {
+      cursor: (fixture) => fixture.cursors.watchlist,
+      limit: LIMIT,
+      status: (fixture) => fixture.watched.status,
+      category: (fixture) => fixture.watchedCategory,
+    },
+    status: 200,
+    own: ['watched market id', 'watched market slug'],
+  },
+  // B asking about A's watched market answers B's own state, false (checked below): the answer
+  // is a yes or no with no market in it, so no `own` label can show the check is not blind.
+  'GET /me/watchlist/:marketId': {
+    params: { marketId: (fixture) => fixture.watched.id },
+    status: 200,
+  },
+  // B's cookie naming A's account, unwatching A's market: refused before anything is written,
+  // and A's watch and its history stay (below).
+  'PUT /me/watchlist/:marketId': {
+    params: { marketId: (fixture) => fixture.watched.id },
+    body: (fixture) => ({ watched: false, expectedAccountId: fixture.a.id }),
+    status: 403,
   },
   'POST /payments/charge': {
     body: (fixture) => ({
@@ -638,6 +676,22 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       realizedPnlCoin: AMOUNTS.realizedPnl,
     });
 
+    // A's watches (#89), each with its `watch` event: a closed market nobody else watches, whose
+    // id and slug are sentinels (a public list of A's watches), and the market every public call
+    // reads (a public list of a market's watchers). The second is newer, so the cursor below,
+    // which starts just after the first, leaves it out of every page as well as the status does.
+    const watched = await createMarket(t.db, { createdBy: admin.id, status: 'closed' });
+    const [watchedCategory] = await t.db
+      .select({ slug: schema.categories.slug })
+      .from(schema.categories)
+      .where(eq(schema.categories.id, watched.categoryId));
+    const watch = await createWatch(t.db, { userId: a.id, marketId: watched.id });
+    await createWatch(t.db, {
+      userId: a.id,
+      marketId: market.id,
+      watchedAt: new Date(watch.watch.watchedAt.getTime() + 1_000),
+    });
+
     const paymentKey = `leak-payment-${tag}`;
     const [payment] = await t.db
       .insert(schema.payments)
@@ -672,6 +726,8 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       b,
       admin,
       market,
+      watched,
+      watchedCategory: watchedCategory!.slug,
       paymentId: payment!.id,
       accountId: account!.id,
       cursors: {
@@ -679,6 +735,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         // The later of A's two orders, so the page holds both.
         orders: cursorAfter(open.createdAt >= filled.createdAt ? open : filled),
         payments: cursorAfter(payment!),
+        watchlist: cursorAfter({ createdAt: watch.watch.watchedAt, id: watched.id }),
       },
       sentinels: [
         text('user id', a.id),
@@ -701,6 +758,8 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         text('counterparty order key', makerKey),
         text('payment id', payment!.id),
         text('payment key', paymentKey),
+        text('watched market id', watched.id),
+        text('watched market slug', watched.slug),
         amount('available balance', AMOUNTS.available),
         amount('locked balance', AMOUNTS.locked),
         amount('position qty', AMOUNTS.positionQty),
@@ -910,6 +969,33 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     expect(profile?.timeZone).toBe(sentinel('time zone'));
     expect(passwordBefore).toHaveLength(1);
     expect(await password()).toEqual(passwordBefore);
+
+    // B's refused unwatch left A's watches and their `watch` events, and wrote nothing for B. B
+    // asking about that market heard its own state, and A hears A's (#89).
+    const watches = await t.db
+      .select()
+      .from(schema.marketWatches)
+      .orderBy(schema.marketWatches.watchedAt);
+    expect(watches.map((row) => ({ userId: row.userId, marketId: row.marketId }))).toEqual([
+      { userId: f.a.id, marketId: f.watched.id },
+      { userId: f.a.id, marketId: f.market.id },
+    ]);
+    const events = await t.db
+      .select()
+      .from(schema.marketWatchEvents)
+      .orderBy(schema.marketWatchEvents.id);
+    expect(
+      events.map((row) => ({ userId: row.userId, marketId: row.marketId, action: row.action })),
+    ).toEqual([
+      { userId: f.a.id, marketId: f.watched.id, action: 'watch' },
+      { userId: f.a.id, marketId: f.market.id, action: 'watch' },
+    ]);
+    const stateRoute = routeOf('GET /me/watchlist/:marketId');
+    const params = { marketId: f.watched.id };
+    const stateOf = async (cookie: string) =>
+      (await call(stateRoute, { params, cookie })).json<{ data: unknown }>().data;
+    expect(await stateOf(f.b.cookie)).toEqual({ watched: false });
+    expect(await stateOf(f.a.cookie)).toEqual({ watched: true });
   });
 
   // ---- the market room --------------------------------------------------------------------

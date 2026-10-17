@@ -22,6 +22,7 @@ import { MyPosition } from '@/components/market/my-position';
 import { ProbabilityChart } from '@/components/market/probability-chart';
 import { ProbabilityDisplay } from '@/components/market/probability-display';
 import { RecentFills } from '@/components/market/recent-fills';
+import { WatchButton } from '@/components/market/watch-button';
 import { copy } from '@/copy';
 import { useMarketSocket } from '@/hooks/use-market-socket';
 import { useCategories, useMarket, useMarketTicks } from '@/hooks/use-markets';
@@ -210,7 +211,7 @@ function OrderArea() {
 }
 
 /**
- * 카테고리 · 상태 · 마감 카운트다운 · 시장가격 · 거래량 · 참여자.
+ * 카테고리 · 상태 · 마감 카운트다운 · 관심 등록 · 시장가격 · 거래량 · 참여자.
  *
  * The status badge is rendered for every status, including 진행 중, because it is the one
  * reading that says what the server currently thinks this market is — and it is what a
@@ -268,6 +269,12 @@ function MarketHeader({
           {MARKET_STATUS_LABEL[market.status]}
         </Badge>
         {market.status === 'open' && <CountdownBadge market={market} now={now} />}
+        {/* 관심 등록 (#89): the end of the first row, on every public status (ADR-0061 decision
+            3). Client-only state behind a placeholder, so this row's HTML is the same for every
+            visitor (watch-button.tsx). */}
+        <Box ms="auto">
+          <WatchButton marketId={market.id} />
+        </Box>
       </HStack>
 
       <ProbabilityDisplay

@@ -1,0 +1,123 @@
+import { Inject, Injectable } from '@nestjs/common';
+import { schema, type Db } from '@buddha/db';
+import {
+  decodeKeyset,
+  encodeKeyset,
+  type MarketSummary,
+  type WatchState,
+  type WatchlistQuery,
+} from '@buddha/shared';
+import { and, desc, eq, ne } from 'drizzle-orm';
+import { AppError } from '../common/errors/app-error.js';
+import { keysetPredicate } from '../common/keyset.js';
+import { DB } from '../infra/db/db.provider.js';
+import { inCategory, marketWithCategory, toMarketSummary } from '../markets/market.service.js';
+import { type Page } from '../wallet/wallet.service.js';
+
+/**
+ * 관심 시장 (#89, ADR-0064): the caller's watches. Every read and write is the session account's
+ * own — no method takes another account, and nothing here counts a market's watchers (#37).
+ *
+ * The current state is `market_watches` and its history `market_watch_events` (#95). A watch or
+ * an unwatch that changes the state writes exactly one event in the same transaction, at the same
+ * `now()`; one that changes nothing (a repeated watch, an unwatch of nothing) writes none. Two
+ * requests racing for one (account, market) are ordered by the primary key: the second insert
+ * waits for the first and then conflicts, the second delete waits and then finds nothing, so the
+ * history never records a change the state did not make.
+ *
+ * A market no public route serves — an unknown id or a draft — is NOT_FOUND on both routes that
+ * name one market (the state read and the write), as on the public detail. A draft can never be watched and no market goes back to draft, so a
+ * watched market is always public; the list says so again in its query.
+ */
+@Injectable()
+export class WatchlistService {
+  constructor(@Inject(DB) private readonly db: Db) {}
+
+  /**
+   * Newest watch first (ADR-0061 decision 3: 최근 등록 순), keyset-paginated over
+   * `(watched_at DESC, market_id DESC)` with the `<millis>_<uuid>` cursor every list uses. Items
+   * are the `GET /markets` row, so the same card draws them; an ended market stays with its
+   * status until the member unwatches it. A cursor that does not decode serves the first page.
+   */
+  async list(userId: string, query: WatchlistQuery): Promise<Page<MarketSummary>> {
+    const { markets, categories, marketWatches } = schema;
+    const keyset = decodeKeyset(query.cursor, 'uuid');
+    const rows = await this.db
+      .select({ ...marketWithCategory, watchedAt: marketWatches.watchedAt })
+      .from(marketWatches)
+      .innerJoin(markets, eq(markets.id, marketWatches.marketId))
+      .innerJoin(categories, eq(categories.id, markets.categoryId))
+      .where(
+        and(
+          eq(marketWatches.userId, userId),
+          ne(markets.status, 'draft'),
+          query.status ? eq(markets.status, query.status) : undefined,
+          query.category ? inCategory(this.db, query.category) : undefined,
+          keyset
+            ? keysetPredicate(marketWatches.watchedAt, marketWatches.marketId, keyset, 'uuid')
+            : undefined,
+        ),
+      )
+      .orderBy(desc(marketWatches.watchedAt), desc(marketWatches.marketId))
+      .limit(query.limit + 1);
+
+    const hasMore = rows.length > query.limit;
+    const kept = hasMore ? rows.slice(0, query.limit) : rows;
+    const last = kept.at(-1);
+    return {
+      items: kept.map((row) => toMarketSummary(row.market, row.category)),
+      nextCursor:
+        hasMore && last ? encodeKeyset({ createdAt: last.watchedAt, id: last.market.id }) : null,
+    };
+  }
+
+  /** Whether the caller watches one public market: one read, the market and the caller's row. */
+  async state(userId: string, marketId: string): Promise<WatchState> {
+    const { markets, marketWatches } = schema;
+    const [row] = await this.db
+      .select({ watcher: marketWatches.userId })
+      .from(markets)
+      .leftJoin(
+        marketWatches,
+        and(eq(marketWatches.marketId, markets.id), eq(marketWatches.userId, userId)),
+      )
+      .where(and(eq(markets.id, marketId), ne(markets.status, 'draft')))
+      .limit(1);
+    if (!row) throw new AppError('NOT_FOUND', { message: 'Market not found' });
+    return { watched: row.watcher !== null };
+  }
+
+  /**
+   * Sets the caller's watch of one public market and answers the state it is in now. Idempotent
+   * both ways; only a change writes its event (`watch` or `unwatch`). Nothing else is touched:
+   * no order, position, balance or market statistic (#89 AC).
+   */
+  async set(userId: string, marketId: string, watched: boolean): Promise<WatchState> {
+    const { markets, marketWatches, marketWatchEvents } = schema;
+    return this.db.transaction(async (tx) => {
+      const [market] = await tx
+        .select({ id: markets.id })
+        .from(markets)
+        .where(and(eq(markets.id, marketId), ne(markets.status, 'draft')))
+        .limit(1);
+      if (!market) throw new AppError('NOT_FOUND', { message: 'Market not found' });
+
+      const changed = watched
+        ? await tx
+            .insert(marketWatches)
+            .values({ userId, marketId })
+            .onConflictDoNothing()
+            .returning({ marketId: marketWatches.marketId })
+        : await tx
+            .delete(marketWatches)
+            .where(and(eq(marketWatches.userId, userId), eq(marketWatches.marketId, marketId)))
+            .returning({ marketId: marketWatches.marketId });
+      if (changed.length > 0) {
+        await tx
+          .insert(marketWatchEvents)
+          .values({ userId, marketId, action: watched ? 'watch' : 'unwatch' });
+      }
+      return { watched };
+    });
+  }
+}

@@ -17,6 +17,7 @@ import { RealtimeModule } from './realtime/realtime.module.js';
 import { ReleaseSettingsModule } from './release-settings/release-settings.module.js';
 import { TradesModule } from './trades/trades.module.js';
 import { WalletModule } from './wallet/wallet.module.js';
+import { WatchlistModule } from './watchlist/watchlist.module.js';
 
 @Module({
   imports: [
@@ -42,6 +43,7 @@ import { WalletModule } from './wallet/wallet.module.js';
     JobsModule,
     MarketsModule,
     TradesModule,
+    WatchlistModule,
     ReleaseSettingsModule,
     AdminAccountsModule,
     ApprovalsModule,

@@ -25,6 +25,7 @@ import { priceTicks } from './price-ticks.js';
 import { profiles } from './profiles.js';
 import { releaseSettings } from './release-settings.js';
 import { userContacts } from './user-contacts.js';
+import { marketWatchEvents, marketWatches } from './watchlist.js';
 
 export const profilesRelations = relations(profiles, ({ one }) => ({
   user: one(user, { fields: [profiles.userId], references: [user.id] }),
@@ -92,6 +93,8 @@ export const marketsRelations = relations(markets, ({ one, many }) => ({
   priceTicks: many(priceTicks),
   events: many(marketEvents),
   settlementSteps: many(marketSettlementSteps),
+  watches: many(marketWatches),
+  watchEvents: many(marketWatchEvents),
 }));
 
 export const ordersRelations = relations(orders, ({ one, many }) => ({
@@ -132,6 +135,16 @@ export const marketEventsRelations = relations(marketEvents, ({ one }) => ({
   market: one(markets, { fields: [marketEvents.marketId], references: [markets.id] }),
 }));
 
+export const marketWatchesRelations = relations(marketWatches, ({ one }) => ({
+  user: one(user, { fields: [marketWatches.userId], references: [user.id] }),
+  market: one(markets, { fields: [marketWatches.marketId], references: [markets.id] }),
+}));
+
+export const marketWatchEventsRelations = relations(marketWatchEvents, ({ one }) => ({
+  user: one(user, { fields: [marketWatchEvents.userId], references: [user.id] }),
+  market: one(markets, { fields: [marketWatchEvents.marketId], references: [markets.id] }),
+}));
+
 export const adminActionsRelations = relations(adminActions, ({ one }) => ({
   admin: one(user, { fields: [adminActions.adminId], references: [user.id] }),
 }));
@@ -165,6 +178,8 @@ export const userRelations = relations(user, ({ one, many }) => ({
   orders: many(orders),
   positions: many(positions),
   createdMarkets: many(markets),
+  watches: many(marketWatches),
+  watchEvents: many(marketWatchEvents),
   adminActions: many(adminActions),
   releaseSettingUpdates: many(releaseSettings),
   approvalRequests: many(approvalRequests, { relationName: 'approval_requester' }),

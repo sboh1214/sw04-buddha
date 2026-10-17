@@ -1,12 +1,13 @@
 'use client';
 
-import { HStack, Heading, SimpleGrid, Skeleton, Stack, Text } from '@chakra-ui/react';
+import { HStack, Heading, Skeleton, Stack, Text } from '@chakra-ui/react';
 import { parseCoinAmount } from '@buddha/shared';
 import { CoinText } from '@/components/ui/coin-text';
 import { copy } from '@/copy';
 import { useMe } from '@/hooks/use-me';
 import { useOrders, usePositions } from '@/hooks/use-portfolio';
 import { useLedger } from '@/hooks/use-wallet';
+import { useWatchlist } from '@/hooks/use-watchlist';
 import { MY_PREVIEW_ROWS, MY_TABS, MY_WALLET_PATH, type MyTabKey } from '@/lib/my';
 import { ComingSoonTab } from './coming-soon';
 import {
@@ -21,9 +22,7 @@ import {
   useSessionEnded,
 } from './portfolio';
 import { LedgerRow } from './wallet/ledger-list';
-
-/** The tabs whose content their own issues bring (#51, #89, #53): 준비 중 until then. */
-const COMING_SOON: readonly MyTabKey[] = ['posts', 'watchlist', 'notifications'];
+import { WatchlistBody } from './watchlist/watchlist';
 
 function tab(key: MyTabKey) {
   const found = MY_TABS.find((item) => item.key === key);
@@ -34,7 +33,10 @@ function tab(key: MyTabKey) {
 /**
  * `/my`, MY's first screen (owner decision 2026-10-13): 잔고 요약 — the old portfolio's card —
  * and a preview of each tab, the first `MY_PREVIEW_ROWS` rows through the tab's own list body
- * with a 전체 보기 to the tab. 설정 has no rows to preview; the tabs with no content yet say 준비 중.
+ * with a 전체 보기 to the tab. 설정 has no rows to preview; the tabs with no content yet say 준비 중
+ * (내 글 #51, 알림 #53). The previews run in the tab bar's order (MY_TABS, the owner's), so 관심
+ * 시장 — rows since #89 (ADR-0064), the newest three watches as market cards — sits between the
+ * 준비 중 of 내 글 and of 알림.
  *
  * The holdings, 정산 이력 and the orders are read once here and handed to every card that shows
  * them, so the summary card and the previews are drawn from one price and one list.
@@ -75,12 +77,30 @@ export function MySummary() {
         </Stack>
       </Section>
       <WalletPreview />
-      <SimpleGrid columns={{ base: 1, md: 3 }} gap="6">
-        {COMING_SOON.map((key) => (
-          <ComingSoonTab key={key} title={tab(key).label} testId={`my-preview-${key}`} />
-        ))}
-      </SimpleGrid>
+      <ComingSoonPreview tabKey="posts" />
+      <WatchlistPreview />
+      <ComingSoonPreview tabKey="notifications" />
     </Stack>
+  );
+}
+
+/** The preview of a tab whose content its own issue brings: 준비 중 (ADR-0054 decision 1-7). */
+function ComingSoonPreview({ tabKey }: { tabKey: MyTabKey }) {
+  return <ComingSoonTab title={tab(tabKey).label} testId={`my-preview-${tabKey}`} />;
+}
+
+/**
+ * 관심 시장's preview (#89): the tab's own body with its first `MY_PREVIEW_ROWS` cards, and the
+ * tab's 전체 보기 for the rest. Its own component so its query and its room joins live only as
+ * long as the summary does.
+ */
+function WatchlistPreview() {
+  const watchlist = useWatchlist();
+  const watchlistTab = tab('watchlist');
+  return (
+    <Section title={watchlistTab.label} testId="my-preview-watchlist" href={watchlistTab.href}>
+      <WatchlistBody watchlist={watchlist} limit={MY_PREVIEW_ROWS} />
+    </Section>
   );
 }
 

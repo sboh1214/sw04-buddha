@@ -1,6 +1,12 @@
 import { QueryClient, isServer, replaceEqualDeep } from '@tanstack/react-query';
 import { type Market, type Position, isApiError } from './api';
-import { MARKETS_KEY, MARKET_KEY, POSITIONS_KEY, TICKS_KEY } from './market-keys';
+import {
+  MARKETS_KEY,
+  MARKET_KEY,
+  POSITIONS_KEY,
+  TICKS_KEY,
+  WATCHLIST_PAGES_KEY,
+} from './market-keys';
 import { type MarketPages, joinMarket, joinMarketPages, joinPositions } from './market-live';
 import { type CachedSeries, joinSeries } from './ticks';
 
@@ -40,6 +46,17 @@ function makeQueryClient() {
       replaceEqualDeep(held, joinMarket(held as Market | undefined, incoming as Market)),
   });
   client.setQueryDefaults(MARKETS_KEY, {
+    structuralSharing: (held, incoming) =>
+      replaceEqualDeep(
+        held,
+        joinMarketPages(held as MarketPages | undefined, incoming as MarketPages),
+      ),
+  });
+  // MY's 관심 시장 holds the same cards in the same page shape (#89, ADR-0064), and the socket
+  // writes them the same way (realtime-provider.tsx), so a refetch that left before a trade or
+  // a close must not roll a card back either. `['watchlist', 'pages']` and never the root:
+  // `['watchlist', 'market', id]` is a `WatchState`, which this join would mangle.
+  client.setQueryDefaults(WATCHLIST_PAGES_KEY, {
     structuralSharing: (held, incoming) =>
       replaceEqualDeep(
         held,

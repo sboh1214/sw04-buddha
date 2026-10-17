@@ -21,6 +21,8 @@ import {
   fills,
   ledgerEntries,
   marketSettlementSteps,
+  marketWatchEvents,
+  marketWatches,
   markets,
   orders,
   paymentEvents,
@@ -38,6 +40,7 @@ import {
   createPosition,
   createSettlementStep,
   createUser,
+  createWatch,
 } from './test/factories.js';
 import { connectTestDb, hasTestDb, type TestDb } from './test/harness.js';
 import { lockAdminRoles } from './tx-helpers.js';
@@ -160,6 +163,35 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     });
     expect(withCategory?.category.slug).toBe('economy');
     expect(withCategory?.creator.profile?.role).toBe('admin');
+  });
+
+  it('a watch and its event resolve their account and market, and both resolve them back (#89)', async () => {
+    const { user: u } = await createUser(t.db);
+    const market = await createMarket(t.db);
+    await createWatch(t.db, { userId: u.id, marketId: market.id });
+    const watch = await t.db.query.marketWatches.findFirst({
+      where: eq(marketWatches.userId, u.id),
+      with: { user: true, market: true },
+    });
+    expect(watch).toMatchObject({ user: { id: u.id }, market: { id: market.id } });
+    const event = await t.db.query.marketWatchEvents.findFirst({
+      where: eq(marketWatchEvents.userId, u.id),
+      with: { user: true, market: true },
+    });
+    expect(event).toMatchObject({ action: 'watch', user: { id: u.id }, market: { id: market.id } });
+    // The alerts (#54) and the measures (#151) read them from the market and from the account.
+    const watchedMarket = await t.db.query.markets.findFirst({
+      where: eq(markets.id, market.id),
+      with: { watches: true, watchEvents: true },
+    });
+    expect(watchedMarket?.watches.map((row) => row.userId)).toEqual([u.id]);
+    expect(watchedMarket?.watchEvents.map((row) => row.action)).toEqual(['watch']);
+    const watcher = await t.db.query.user.findFirst({
+      where: eq(user.id, u.id),
+      with: { watches: true, watchEvents: true },
+    });
+    expect(watcher?.watches.map((row) => row.marketId)).toEqual([market.id]);
+    expect(watcher?.watchEvents.map((row) => row.marketId)).toEqual([market.id]);
   });
 
   describe('the direct AMM is gone (migration 0017, #125)', () => {
@@ -1280,7 +1312,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         WHERE grantee = 'buddha_app' AND table_schema = 'public'
           AND table_name IN ('ledger_entries', 'market_events', 'admin_actions', 'payment_events',
             'balances', 'payments', 'user_contacts', 'market_settlement_steps', 'release_settings',
-            'approval_requests')
+            'approval_requests', 'market_watches', 'market_watch_events')
         ORDER BY 1, 2`);
       const grants = Object.groupBy(rows, (r) => r.table);
       const privs = (table: string) => grants[table]?.map((r) => r.privilege).sort() ?? [];
@@ -1298,6 +1330,40 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(privs('release_settings')).toEqual(['INSERT', 'SELECT', 'UPDATE']);
       // Migration 0021: a two-person request is decided in place, never removed.
       expect(privs('approval_requests')).toEqual(['INSERT', 'SELECT', 'UPDATE']);
+      // Migration 0023 (#89): an unwatch deletes the current row; the history is append-only.
+      expect(privs('market_watches')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
+      expect(privs('market_watch_events')).toEqual(['INSERT', 'SELECT']);
+    });
+
+    it('cannot UPDATE or DELETE a watch event, and refuses an action outside the list (#95)', async () => {
+      const { user: u } = await createUser(t.db);
+      const market = await createMarket(t.db);
+      const { watch, event } = await createWatch(t.db, { userId: u.id, marketId: market.id });
+      // The factory's pair shares one instant, as the API's transaction does.
+      expect(event.createdAt.getTime()).toBe(watch.watchedAt.getTime());
+      await expect(
+        t.db
+          .update(marketWatchEvents)
+          .set({ action: 'unwatch' })
+          .where(eq(marketWatchEvents.id, event.id)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '42501');
+      await expect(
+        t.db.delete(marketWatchEvents).where(eq(marketWatchEvents.id, event.id)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '42501');
+      await expect(
+        t.db
+          .insert(marketWatchEvents)
+          .values({ userId: u.id, marketId: market.id, action: 'favorite' }),
+      ).rejects.toSatisfy((e) => sqlState(e) === '23514');
+      // The current row goes with an unwatch, and a second row for one pair is refused.
+      await expect(
+        t.db.insert(marketWatches).values({ userId: u.id, marketId: market.id }),
+      ).rejects.toSatisfy((e) => sqlState(e) === '23505');
+      await t.db
+        .delete(marketWatches)
+        .where(and(eq(marketWatches.userId, u.id), eq(marketWatches.marketId, market.id)));
+      expect(await t.db.select().from(marketWatches)).toEqual([]);
+      expect(await t.db.select().from(marketWatchEvents)).toEqual([event]);
     });
 
     it('cannot UPDATE or DELETE a payment event', async () => {

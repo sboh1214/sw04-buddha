@@ -143,16 +143,21 @@ export const MARKET_SORTS = ['volume', 'closing', 'newest'] as const;
 export type MarketSort = (typeof MARKET_SORTS)[number];
 export const marketSortSchema = z.enum(MARKET_SORTS);
 
+/**
+ * A category slug on either level, as a list filter: a top-level slug lists every sub-category
+ * under it. `GET /markets` and `GET /me/watchlist` (ADR-0064) take the same one.
+ */
+export const marketCategoryFilterSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(50)
+  .describe('A category slug on either level; a top-level slug lists every sub-category under it');
+
 /** `GET /markets` (no `.meta`: query DTO). */
 export const marketListQuerySchema = cursorQuerySchema.extend({
   /** A category slug on either level: a top-level slug lists every sub-category under it. */
-  category: z
-    .string()
-    .trim()
-    .min(1)
-    .max(50)
-    .describe('A category slug on either level; a top-level slug lists every sub-category under it')
-    .optional(),
+  category: marketCategoryFilterSchema.optional(),
   status: publicMarketStatusSchema.default('open'),
   sort: marketSortSchema.default('volume'),
   /** Title search. */

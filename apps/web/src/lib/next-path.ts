@@ -50,3 +50,17 @@ export function adminLoginPath(pathname: string | null | undefined): string {
   const safe = safeNextPath(next, ADMIN_LOGIN_FALLBACK);
   return `/login?next=${encodeURIComponent(safe.startsWith('/admin/') ? safe : ADMIN_LOGIN_FALLBACK)}`;
 }
+
+/**
+ * The login URL a control on a public page sends a signed-out visitor to, told to come back to
+ * that page — the string form of the `{ pathname: '/login', query: { next: pathname } }` links
+ * the screens already render (`AuthButtons`, `MyPosition`), for a button that navigates with
+ * `router.push`, which takes no UrlObject. The 관심 등록 button is one (#89: the visitor returns to
+ * the same market detail and presses again, ADR-0061 decision 3). The path goes through
+ * `safeNextPath` like every destination, so a value that is not a path on this origin brings the
+ * visitor home instead; the query string is not carried.
+ */
+export function loginPathBackTo(pathname: string | null | undefined): string {
+  const path = typeof pathname === 'string' ? pathname.split('?')[0] : undefined;
+  return `/login?next=${encodeURIComponent(safeNextPath(path))}`;
+}

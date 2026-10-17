@@ -41,6 +41,10 @@ export type PriceTick = components['schemas']['PriceTick'];
 export type PriceSeries = components['schemas']['PriceSeries'];
 export type Position = components['schemas']['Position'];
 export type Order = components['schemas']['Order'];
+/** Whether the caller watches one market (#89): `GET` and `PUT /me/watchlist/{marketId}`. */
+export type WatchState = components['schemas']['WatchState'];
+/** `PUT /me/watchlist/{marketId}`: watch or unwatch, and the account on screen (ADR-0064). */
+export type UpdateWatchBody = components['schemas']['UpdateWatchBody'];
 export type AdminPayment = components['schemas']['AdminPayment'];
 /** `POST /admin/payments/{id}/refund`: why the admin refunds (required, audited). */
 export type RefundPaymentBody = components['schemas']['RefundPaymentBody'];
