@@ -1362,7 +1362,7 @@ PLAN은 결제를 끝까지 mock으로 두었다 — §1.2(:42) "충전 버튼 �
 ## ADR-0043 — 실명·휴대전화 수집과 온보딩 게이트 (오너 결정 2026-09-28)
 
 - 날짜: 2026-09-28
-- 상태: 채택 (오너 결정 2026-09-28), 일부 대체됨(ADR-0049: 실명·휴대전화를 결제창의 BuyerName·BuyerTel로 보내는 일과 결제창 준비의 연락처 강제(`CONTACT_REQUIRED`)는 스마트로페이와 함께 없어졌고, `/charge`는 유료 충전이 열린 동안만 온보딩 예외다 — 수집·`user_contacts`·웹 게이트는 유효(D8), 수집 목적 안내의 결제 문구는 #58), 일부 대체됨(ADR-0054: 실명·연락처를 보고 고치는 설정 화면의 주소 `/settings` — 지금은 MY의 설정 탭 `/my/settings`다. 웹 게이트와 그 예외 목록은 유효하고, MY의 주소도 예외가 아니다)
+- 상태: 채택 (오너 결정 2026-09-28), 일부 대체됨(ADR-0049: 실명·휴대전화를 결제창의 BuyerName·BuyerTel로 보내는 일과 결제창 준비의 연락처 강제(`CONTACT_REQUIRED`)는 스마트로페이와 함께 없어졌고, `/charge`는 유료 충전이 열린 동안만 온보딩 예외다 — 수집·`user_contacts`·웹 게이트는 유효(D8), 수집 목적 안내의 결제 문구는 #58), 일부 대체됨(ADR-0054: 실명·연락처를 보고 고치는 설정 화면의 주소 `/settings` — 지금은 MY의 설정 탭 `/my/settings`다. 웹 게이트와 그 예외 목록은 유효하고, MY의 주소도 예외가 아니다), 일부 대체됨(ADR-0070: 확인하지 않은 실명·휴대전화의 수집 — `user_contacts`(마이그레이션 0028이 행째 지웠다)·`PUT /me/contact`·`/set-password` 단계의 두 칸·설정의 실명·연락처 카드·`Me.contact` — 지금은 `/onboarding`의 본인확인(그 번호로 보낸 SMS 인증번호를 확인한 번호, 번호마다 한 계정, `phone_verifications`)이 번호를 받는 하나뿐인 곳이고, 실명은 그 단계에서 함께 받아 MY 설정에서 고치며 번호는 본인이 바꾸지 못한다. 게이트는 `me.verification`으로 판정하고, 예외 목록과 `next` 검증·로그아웃은 유효하다. 알려진 한계 가운데 '본인인증이 없다'와 '번호가 UNIQUE가 아니다'는 풀렸고, '게이트는 웹에만 있다'는 #58이 서버의 확인을 붙일 때까지 유효하다)
 
 ### 맥락
 
@@ -1394,6 +1394,8 @@ PLAN은 결제를 끝까지 mock으로 두었다 — §1.2(:42) "충전 버튼 �
 - 알려진 한계: **본인인증이 없다** — PG로 가는 이름·번호는 회원이 적은 그대로다(오너 질문 Q-PG-6). 번호는 UNIQUE가 아니라 여러 계정이 같은 번호를 쓸 수 있다. 만 14세 이상이라는 가입 조건(약관)을 확인하는 수단도 없다(Q-PG-5). 게이트는 웹에만 있으므로 API를 직접 부르는 클라이언트는 연락처 없이 결제 외의 모든 것을 한다. 기존 계정은 배포 뒤 첫 화면에서 게이트를 만난다. **시드 관리자도 그렇다** — `pnpm db:seed`는 `user_contacts` 행을 만들지 않고 `/admin`은 예외가 아니므로, 로컬에서도 운영에서도 관리자는 첫 로그인에서 `/onboarding`을 만나 실명·휴대전화를 한 번 입력한다. e2e는 `admin` 픽스처가 로그인 직후 연락처를 넣어 이것을 피한다.
 - PLAN 드리프트: §6.2 사용자 정보(:306-310)와 §11.3 화면 목록(`/onboarding`)이 이 ADR과 다르다. QUESTIONS.md「정리 — PLAN 드리프트」.
 - (2026-09-30 추기, PR 리뷰) **연락처와 첫 비밀번호의 쓰기는 화면이 보는 계정만 대신한다**(A-PG-24). `PUT /api/v1/me/contact`의 `ContactBody`와 `POST /api/v1/me/password`의 `SetPasswordBody`에 필수 `expectedAccountId`(1~255자 문자열, 충전·쿠폰·거래 본문과 같은 모양)가 붙었고, `MeController`가 무엇을 쓰기 전에 `assertExpectedAccount`로 쿠키의 계정과 비교한다 — 다르면 403 FORBIDDEN, `details[0]`이 `{ path: ['expectedAccountId'], message: 'session belongs to another account' }`다(CSRF의 403은 필드를 지목하지 않는다). 비밀번호는 better-auth를 부르기 전에, 연락처는 upsert 전에 거절되고, `MeService.updateContact`에는 `realName`·`phone`만 간다(공유 `contactFieldsSchema` — 폼이 쓰는 두 칸의 스키마 — 를 `ContactBody`가 넓힌다). 리뷰가 확인한 경로: `/set-password` 단계는 비밀번호 응답 직후 연락처를 자동으로 보내므로, 그 사이 다른 탭이 B로 로그인하면 A의 화면에서 친 실명·번호가 B의 행을 덮는다(upsert는 이력이 없고, 관리자 화면은 연락처를 보여 주지 않으며, B의 다음 결제창이 그 값을 `BuyerName`·`BuyerTel`로 보낸다). 로그인은 방송되지 않고 나란히 둔 창은 `visibilitychange`가 없어, 오래된 화면이면 비밀번호 요청부터 B의 쿠키로 나간다 — 소셜 전용 B라면 A의 화면에서 친 비밀번호가 B의 첫 비밀번호가 된다. 그래서 두 라우트 모두에 건다: 첫 요청이 거절되면 아무것도 바뀌지 않는다. 필수로 둔 까닭은 다른 본문과 같다 — 선택이면 빠뜨린 호출이 검사를 조용히 건너뛴다. 호출자는 모두 저장소 안에 있다(웹의 `/set-password` 단계·`/onboarding`·설정의 연락처 카드와 비밀번호 폼, e2e의 관리자 픽스처). 쿠키만 보는 채로 둔 쓰기: `PATCH /me`(닉네임)와 이의. 테스트: `me.controller.test.ts`의 `PUT /me/contact` 7건(6에서 — 새 1건: 다른 계정을 지목한 본문은 403이고 두 계정의 행이 그대로다; 기존 잘못된 입력 표에 두 경우: 필드가 없거나 빈 본문은 `expectedAccountId`를 지목한 400. 위 「결과」의 통합 테스트 7건은 `GET /me`의 `contact` 1건을 더한 수라 이제 8건이다), `auth.test.ts` +1(B의 쿠키 + A의 id → 403, 필드 없음 → 400, 두 계정 모두 비밀번호 없음; 자기 id → 설정), 공유 `contact.test.ts` +2·`auth.test.ts`(새, 2). **웹.** (가) 연락처·비밀번호를 보내는 네 폼(`/onboarding`, `/set-password` 단계, 설정의 연락처 카드와 비밀번호 폼)은 세션이 알려지기 전(훅의 `ready`가 false)에는 제출을 막고, 본문에 세션의 사용자 id를 싣는다. `/set-password`는 제출할 때 한 번 읽어 두 요청에 같은 값을 싣는다(`PasswordStepVariables.accountId` — 사이에 다시 읽으면 그때 쿠키의 계정만 나온다). (나) `expectedAccountId`를 지목한 403은 필드 오류가 아니라 `copy.sessionChanged`(「로그인한 계정이 바뀌었습니다…」)로 알리고(`contactSaveFailureMessage`), 훅이 세션을 다시 읽어 SessionCacheGuard가 실제로 로그인한 계정을 화면에 올린다. (다) `['me']`에 대한 쓰기(연락처 패치, 그 앞의 진행 중 `GET /me` 취소, 새로고침)는 그 항목이 요청이 보낸 계정의 프로필이거나 비었을 때만 한다(`meBelongsTo` — 항목의 `Me.id`와 보낸 `expectedAccountId`를 비교한다; `Contact` 자체는 주인을 말하지 않는다). 응답이 전환 뒤에 와 다른 계정의 프로필이 들어 있으면 아무것도 하지 않는다 — 그 항목은 이제 가드의 것이다. 패치는 취소를 기다린 뒤 한 번 더 확인한다. 빈 항목은 확인을 지나므로 가드의 리셋 직후라면 B의 첫 `GET /me`가 취소될 수 있는데, 항목은 다시 비고 쿠키로 다시 물을 뿐이다(요청 하나가 늘 뿐 잘못된 쓰기는 없다). (라) `/set-password`에서 비밀번호는 저장됐는데 연락처가 다른 계정으로 거절되면(`passwordStepFailure`의 `contact-session-changed`) `/onboarding`이 아니라 `/`로 보내고 `setPasswordContactSessionChanged`를 보인다. 보통의 반쯤 끝난 경우(`contact-failed`)는 `/onboarding`으로 보내지만, 여기서 그곳은 지금 쿠키의 계정(B)의 것이라 A의 실패 안내 아래 B를 온보딩으로 이끌게 된다. 비밀번호를 설정한 계정(A)은 다음 로그인에서 온보딩 게이트를 만난다. 비밀번호 자체가 거절되면(`session-changed`) 아무것도 쓰이지 않았으므로 화면에 머문다. 폼은 계정으로 키를 둬(`key={me.id}`) 전환된 화면이 이전 계정의 스키마와 입력값을 이어 쓰지 않는다. 테스트: `use-contact.test.ts` 20(8에서 — 두 요청이 같은 계정을 싣는지, 각 거절의 세션 재조회, 전환 뒤의 응답이 다른 계정의 `['me']`를 건드리지 않는지: 본문이 지목한 계정으로만 패치, 취소 뒤의 재확인, 반쯤 끝난 경우의 새로고침), `contact-form.test.ts` +2(`contactSaveFailureMessage`).
+
+- (2026-10-18 추기, #183) 위 알려진 한계의 '본인인증이 없다'와 '번호는 UNIQUE가 아니라 여러 계정이 같은 번호를 쓸 수 있다'는 ADR-0070이 풀었다. 번호는 그 번호로 보낸 SMS 인증번호를 확인해야 기록되고(`phone_verifications`), 번호 하나에는 계정 하나다(UNIQUE, ADR-0069 결정 1 #57-1). 확인하지 않은 `user_contacts`는 행째 지웠다(D4, 마이그레이션 0028). 만 14세 이상의 확인은 본인확인이 알려 주지 않으며 가입의 필수 확인 항목으로 받는다(ADR-0069 결정 1 #57-4, #58). 게이트가 웹에만 있다는 한계는 #58이 온보딩을 마치지 않은 계정의 쓰기를 서버에서 막을 때까지 남는다(ADR-0069 결정 1 #57-8).
 
 ---
 
@@ -2454,7 +2456,7 @@ ADR-0046의 상태 줄에 '일부 대체됨(ADR-0047: …)'을 이어 쓴다. �
 ## ADR-0049 — 유료 충전·결제·쿠폰 차단과 스마트로페이 연동 삭제 (#112, 오너 결정 2026-10-13)
 
 - 날짜: 2026-10-13
-- 상태: 채택, 일부 대체됨(ADR-0054: 지갑의 주소 `/wallet`(`app/wallet/page.tsx`)과 로그인 `next=/wallet`, 그대로 `/wallet`로 간다고 한 헤더 잔액 칩과 하단 탭의 지갑, 되돌리면 돌아오는 `/charge` → `/wallet?package=` — 지금은 `/my/wallet`(`app/my/wallet/page.tsx`)이고, 로그인으로 보내는 일은 MY의 세션 게이트(`requireMySession` · `myLoginPath`)가 하며 판매가 열린 동안만 `?package=`를 싣는다. 잔액 칩은 `/my/wallet`로 가고 하단 탭에는 지갑이 없다. 닫힌 지갑이 그리는 것, 차단 방식과 되돌리는 방법은 유효)
+- 상태: 채택, 일부 대체됨(ADR-0054: 지갑의 주소 `/wallet`(`app/wallet/page.tsx`)과 로그인 `next=/wallet`, 그대로 `/wallet`로 간다고 한 헤더 잔액 칩과 하단 탭의 지갑, 되돌리면 돌아오는 `/charge` → `/wallet?package=` — 지금은 `/my/wallet`(`app/my/wallet/page.tsx`)이고, 로그인으로 보내는 일은 MY의 세션 게이트(`requireMySession` · `myLoginPath`)가 하며 판매가 열린 동안만 `?package=`를 싣는다. 잔액 칩은 `/my/wallet`로 가고 하단 탭에는 지갑이 없다. 닫힌 지갑이 그리는 것, 차단 방식과 되돌리는 방법은 유효), 일부 대체됨(ADR-0070: 보내는 API 없이 남긴 오류 코드 `CONTACT_REQUIRED` — 지금은 `VERIFICATION_REQUIRED`(409)로 이름을 바꿨고 본인확인을 마치지 않은 계정의 실명 수정(`PUT /me/real-name`)이 쓴다)
 
 이슈 번호와 기획 인용 표기는 ADR-0047과 같다(`#N`, NR·N00\~N06). 이 ADR은 #112가 기록하고, ADR-0042의 스마트로페이 연동, ADR-0025·0026의 충전·충전 상품 공개·쿠폰 사용과 그 화면, ADR-0043의 결제창 연락처 강제와 `/charge` 예외, ADR-0044의 공개 충전 안내를 대체한다. D1\~D26은 ADR-0047의 오너 결정이다. 이 ADR의 오너 결정은 결정 1 표의 번호로 '결정 1-3'처럼 적는다.
 
@@ -3088,7 +3090,7 @@ ADR-0046의 상태 줄에 '일부 대체됨(ADR-0047: …)'을 이어 쓴다. �
 ## ADR-0055 — 출시 설정: 코드 레지스트리와 DB의 값·상태, 사유 필수 변경과 기록, 관리자 화면 `/admin/settings` (#170, 오너 결정 2026-10-13\~14)
 
 - 날짜: 2026-10-14
-- 상태: 채택
+- 상태: 채택, 일부 대체됨(ADR-0070: 결과 3의 '그 밖에 결정 이슈가 정한 값(#183, #187)' 가운데 #183 — 본인확인 인증번호의 자릿수·유효시간·재발송 간격·실패 허용·하루 발송 한도는 출시 설정 항목이 아니라 오너가 정한 코드의 고정값(`@buddha/shared`의 `PHONE_VERIFICATION_LIMITS`, ADR-0069 결정 1 #57-3)이고 #183은 항목을 등록하지 않는다. #187과 나머지 결정은 유효)
 
 이슈 번호와 기획 인용 표기는 ADR-0047과 같다(`#N`, NR·N00\~N06). 이 ADR은 #170이 기록한다. ADR-0047 결정 8의 "출시 설정값을 한곳에서 관리하고 변경을 기록하는 일은 #170이 맡는다. 구현 방식은 PR에서 정한다(D1)."를 구현한다. 새 항목의 등록 규칙은 [docs/SETTINGS.md](SETTINGS.md)에 두고(작업 방식 W3), 이 ADR은 결정과 설계를 적는다. 장치만 만들고 실제 항목은 등록하지 않는다.
 
@@ -3182,7 +3184,7 @@ ADR-0046의 상태 줄에 '일부 대체됨(ADR-0047: …)'을 이어 쓴다. �
 ## ADR-0056 — 운영자 계정: 관리자 권한 하나와 같은 사람 금지, 화면의 사유 필수 부여·회수와 기록, 모든 환경의 2인 통제 공용 규칙, 시드의 부트스트랩 관리자 둘 (#171, 오너 결정 2026-10-13)
 
 - 날짜: 2026-10-14
-- 상태: 채택
+- 상태: 채택, 일부 대체됨(ADR-0070: 결정 1-11의 부여 조건 '실명·휴대전화 입력(ADR-0043)', 결정 2의 거절 `contact_required`(`user_contacts`가 없음)와 결정 3의 `ADMIN_GRANT_REFUSALS` 값 `contact_required` — 지금은 휴대전화 본인확인을 마친 계정(`isPhoneVerified`, `phone_verifications`)이고 거절 사유는 `phone_not_verified`다. 결정 6의 '시드 관리자는 첫 로그인에서 실명·휴대전화를 입력한다'와 e2e 픽스처의 입력, 결정 7의 머리말 규칙·부여 대화상자의 안내·거절 문구가 말하는 '실명·휴대전화' — 지금은 '이메일 인증과 휴대전화 본인확인'이고, 시드 관리자도 첫 로그인에서 `/onboarding`의 SMS 인증번호로 본인확인하며 `admin`·`secondAdmin` 픽스처는 API와 Mailpit으로 본인확인한다. 이메일 인증 조건과 나머지 결정은 유효)
 
 이슈 번호와 기획 인용 표기는 ADR-0047과 같다(`#N`, NR·N00\~N06). 이 ADR은 #171이 기록한다. ADR-0047 결정 5 표의 5행과 D26이 #171에 다시 묻기로 한 2인 통제에 답하고, ADR-0048 결정 6의 '관리자 생성은 그대로'(시드)를 대체한다. D1\~D26은 ADR-0047의 오너 결정이다. 이 ADR의 오너 결정은 결정 1 표의 번호로 '결정 1-3'처럼 적는다.
 
@@ -4897,3 +4899,163 @@ N02 §4의 '데스크톱은 차트·호가와 주문 패널을 병렬', '모바�
 - S3 버킷의 `terraform apply`. #46 또는 #141 PR이 terraform을 고친다.
 - `/admin/settings`에 시작 지급액(#70)과 데이터 종류별 보존기간(#184)의 값을 넣는다. 미정이면 지급은 기다리고 보존기간 처리는 하지 않는다.
 - 고객센터 이메일(사업자 정보의 미정 항목)을 정한다. 제재 이의 안내(#45 14항)가 그 값을 보인다.
+
+---
+
+## ADR-0070 — 휴대전화 SMS 본인확인(#183): 실명과 번호를 한 화면에서 받고 6자리 인증번호를 확인한 번호만 기록(`phone_verifications`, 번호마다 한 계정), 인증번호의 해시와 고정 한도를 세는 발송 기록(`phone_verification_codes`), 알리고와 개발용 발송기(Mailpit), 확인 없는 연락처(`user_contacts`)를 대신하는 온보딩 단계와 게이트, MY 설정의 실명 수정 (#183, 오너 결정 2026-10-17\~18)
+
+- 날짜: 2026-10-18
+- 상태: 채택
+
+이슈 번호와 기획 인용 표기는 ADR-0047과 같다(`#N`, NR·N00\~N06). 이 ADR은 #183을 기록한다. 오너 결정은 ADR-0069(결정 1의 #57 1·3·4·8·18항 행, 결정 4의 #183 두 행과 #58 '세 단계의 순서'·'운영자 계정의 온보딩' 행, 결과 2·3)에 있고, 여기에는 그 행을 옮긴 표(결정 1), 구현(결정 2\~6), 구현의 선택(결정 7), 시험(결정 8)을 적는다. 오너의 결정이 아닌 것은 모두 결정 7에 있고, 그 가운데 오너에게 다시 물을 것은 결과 4에 모았다.
+
+### 맥락
+
+- 기획: N01 §2 "인증된 참여자에게 동일한 시작 코인을 1회 지급한다." N02 §9 "인증·약관 동의·닉네임 설정 → 초기 코인 1회 지급 → 시장 탐색." N04 §2 "계정 이메일·인증 정보·내부 위험 플래그를 노출하지 않는다." 오너 결정 D8(기획의 '인증'은 휴대폰 SMS 6자리 OTP 본인확인이고 실명 입력은 유지한다), D4(배포 환경에 실사용자가 없고 기존 계정의 이전은 하지 않는다).
+- 이 PR 전: 실명과 확인하지 않은 휴대전화 번호를 `user_contacts`에 받았다(ADR-0043). 번호는 UNIQUE가 아니고, `PUT /me/contact`로 언제든 바꿨으며, 이메일 가입은 `/set-password`에서, 나머지는 게이트가 보낸 `/onboarding`에서 넣었다. 게이트는 `me.contact`가 `null`인지로 판정했다. 관리자 권한 부여는 `user_contacts` 행을 요구했다(ADR-0056 결정 1-11, 거절 `contact_required`). 오류 코드 `CONTACT_REQUIRED`는 보내는 API 없이 남아 있었다(ADR-0049). 공개 금지 항목 `identity-verification`은 '아직 없음'이었다(ADR-0057).
+- 범위: #183만. 약관 동의와 닉네임 단계, 온보딩을 마치지 않은 계정의 서버 쪽 제한은 #58, 시작 Coin과 '번호마다 한 번'의 기록은 #70, 탈퇴는 #140, 보존기간은 #184, 개인정보처리방침의 번호 수집·발송 위탁 고지는 #137(D11)이다.
+
+### 결정
+
+**1. 오너 결정 (다시 정하지 않는다).** 결정 칸은 ADR-0069의 글 그대로다(마지막 행은 ADR-0047의 D4, …는 이 PR과 상관없는 부분을 줄였다).
+
+| 근거                     | 주제                          | 결정                                                                                                                                                                          |
+| ------------------------ | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ADR-0069 결정 1 #57 1항  | 지급 1회의 단위               | 본인확인한 휴대전화 번호마다 한 번. «휴대전화 번호당 1회, 번호 한개 당 계정은 하나만 만들 수 있음»                                                                            |
+| ADR-0069 결정 1 #57 1항  | 한 번호의 계정 수             | 한 계정만. 다른 계정이 쓰고 있는 번호로는 본인확인할 수 없다.                                                                                                                 |
+| ADR-0069 결정 1 #57 3항  | SMS 사업자                    | … **알리고**로 정했다(건당 약 9원, 개인 가입, 무료 시험 모드, 발송 서버 IP 등록 필요, 발송 결과를 알리는 웹훅 없음). 사업자 연동은 한 인터페이스 뒤에 두어 바꿀 수 있게 한다. |
+| ADR-0069 결정 1 #57 3항  | 유효시간·한도                 | 이 결정의 고정값: 인증번호 유효 3분, 재발송은 60초 뒤부터, 한 인증번호에 틀린 입력이 5번이면 그 인증번호를 버리고 새로 받아야 한다, 한 계정과 한 번호마다 하루 발송 10번.     |
+| ADR-0069 결정 1 #57 3항  | 번호 변경                     | 본인이 바꿀 수 없고 운영 문의로만 처리한다. 운영자의 처리 기능은 만들지 않고 DB에서 직접 처리한다.                                                                            |
+| ADR-0069 결정 1 #57 3항  | 실명을 받는 곳                | 본인확인 단계에서 휴대전화 번호와 함께 한 화면에서 받는다. 실명은 MY 설정에서 본인이 고칠 수 있다(번호는 고칠 수 없다).                                                       |
+| ADR-0069 결정 1 #57 4항  | 이용 연령                     | 만 14세 이상. 가입 때 '만 14세 이상입니다'를 필수 확인 항목으로 받는다. 별도 확인 수단은 두지 않는다.                                                                         |
+| ADR-0069 결정 1 #57 8항  | 온보딩을 마치지 않은 계정     | 열람만 한다. 글·댓글 쓰기, 좋아요, 신고, 시장 제안, (나중의) 주문은 온보딩을 마친 뒤이고 서버가 막는다. …                                                                     |
+| ADR-0069 결정 1 #57 18항 | 탈퇴 번호                     | 번호는 지우고 비교용 키를 쓴 해시만 '시작 Coin을 받은 번호' 기록으로 남긴다.                                                                                                  |
+| ADR-0069 결정 4 #183     | 기존 번호와 확인한 번호       | 확인한 번호가 ADR-0043의 확인하지 않은 번호를 대신한다. 번호 입력은 본인확인 한 번뿐이고 확인 없는 번호 칸은 없앤다.                                                          |
+| ADR-0069 결정 4 #183     | #137 개정 전 내부 배포의 발송 | 테스터에게 알리고 실제로 보낸다. 사업자 키가 없으면 발송이 실패해 본인확인을 할 수 없다. 로컬과 자동 시험은 개발용 발송기를 쓴다.                                             |
+| ADR-0069 결정 4 #58      | 세 단계의 순서                | 약관 동의 → 본인확인 → 닉네임 설정.                                                                                                                                           |
+| ADR-0069 결정 4 #58      | 운영자 계정의 온보딩          | 일반 계정과 같이 거친다. 시드의 두 관리자도 첫 로그인 때 거친다. 관리자 권한은 본인확인을 마친 계정에만 준다(지금은 연락처를 넣은 계정, ADR-0056 결정 1-11).                  |
+| ADR-0069 결과 3          | 오너가 할 일                  | 알리고 가입, 발신번호 등록, API 키 발급, 발송 서버 IP(EIP) 등록. 키는 배포 환경 변수(SSM)에 넣는다. #183 PR이 변수 이름을 적는다.                                             |
+| ADR-0047 D4              | 기존 데이터                   | 배포 환경(buddha.sboh.dev)은 내부 테스터용이며 실사용자·실결제 데이터가 없다. 기존 데이터는 초기화·재시드해도 된다. 이전(migration)·환불·레거시 정산 이슈는 만들지 않는다.    |
+
+#57 4·8·18항은 이 PR이 하지 않는다. 4항(만 14세 확인)은 #58의 동의 단계가 받고, 8항의 서버 확인은 #58이 하며 이 PR은 그 확인이 읽을 곳 하나를 둔다(결정 2의 `isPhoneVerified`). 18항은 #70·#140이고 이 PR은 그렇게 할 수 있는 저장 모양만 둔다(결정 2).
+
+**2. 저장(마이그레이션 0028).**
+
+- `phone_verifications`: 계정마다 한 행(`user_id` PK → `user.id` ON DELETE CASCADE), `phone varchar(11)` UNIQUE(`phone_verifications_phone_unique`)와 숫자만의 CHECK(`^01[016789][0-9]{7,8}$`), `real_name varchar(30)`, `verified_at`(인증번호가 맞은 확인의 DB 시계), `updated_at`. 이 행을 쓰는 것은 인증번호가 맞은 확인 하나뿐이고, 이 행이 있다는 것이 '본인확인한 계정'의 뜻이다. 실명은 MY 설정에서 이 행에서만 고친다.
+- `phone_verification_codes`: 보낸 인증번호마다 한 행. 인증번호 자체가 아니라 HMAC(`code_hash`), 보낸 번호·실명, `sent_at`·`expires_at`(DB 시계), 틀린 입력 수 `attempts`, 맞은 확인의 `consumed_at`. 고정 한도는 이 행을 센다(계정의 가장 새 행과 24시간 안의 행 수, 번호의 24시간 안의 행 수). 확인에 쓴 행도 지우지 않는다(그 행이 계정과 번호의 24시간 10번에 든다). 색인은 계정의 가장 새 행·번호의 창·창 밖 정리용 세 개다.
+- `user_contacts`는 행째 지웠다(`DROP TABLE … CASCADE`). 확인하지 않은 번호를 무효로 표시해 남기는 대신 지운 것은 결정 7-13이다.
+- 서버가 '본인확인했는지'를 묻는 곳은 하나다: `@buddha/db`의 `isPhoneVerified(db 또는 tx, userId)`. 관리자 권한 부여(ADR-0056 결정 1-11)가 이미 쓰고, #58(온보딩 완료의 서버 확인)·#70(시작 Coin)이 같은 것을 부른다. 잠금 뒤의 판단이 그 쓰기까지 유지되어야 하면 트랜잭션 핸들을 넘긴다.
+- #70·#140을 위한 모양: 번호는 숫자만으로 한 열에 있으므로 #70은 그 값으로 키를 쓴 해시를 만들어 '시작 Coin을 받은 번호'를 따로 기록한다. 이 PR은 그 해시를 만들지 않는다. 탈퇴는 `user` 행을 남기므로(원장·주문·포지션의 FK가 `restrict`, #57 17항의 익명화) 두 표의 CASCADE는 돌지 않는다. 그래서 #140은 그 계정의 `phone_verifications` 행과 `phone_verification_codes` 행을 스스로 지워야(또는 그 행들의 `phone`·`real_name`을 지워야) 번호와 실명이 지워진다(#57 18항). 인증번호 행을 지우면 그 번호의 24시간 발송 수도 줄어든다 — 탈퇴한 사람은 곧바로 다시 가입할 수 있으므로(#57 17항) #140은 그것을 받아들이거나 번호 없이 수만 남긴다.
+
+**3. API.** 모두 본인 전용(`SessionGuard`, `Origin` 검사), 본문에 화면의 계정 `expectedAccountId`(A-PG-24)를 싣고 `assertExpectedAccount`가 무엇을 하기 전에 쿠키의 계정과 견준다(다르면 `expectedAccountId`를 지목한 403).
+
+| 라우트                                | 본문                                   | 답                                                                     | 거절                                                                                                                                                                                                                                 |
+| ------------------------------------- | -------------------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `POST /me/phone-verification/code`    | `realName`·`phone`·`expectedAccountId` | `PhoneVerificationCodeSent` `{ expiresInSeconds, resendAfterSeconds }` | `PHONE_VERIFICATION_NOT_ALLOWED`(409, `already_verified`), `PHONE_VERIFICATION_LIMITED`(429, `resend_interval`·`account_daily`·`phone_daily`와 `retryAfterSeconds`), `RATE_LIMITED`(429), `SMS_SEND_FAILED`(502), `VALIDATION_ERROR` |
+| `POST /me/phone-verification/confirm` | `code`(숫자 6자리)·`expectedAccountId` | `PhoneVerification` `{ realName, phone, verifiedAt }`                  | `VERIFICATION_CODE_REJECTED`(409, `no_code`·`expired`·`attempts_exceeded`, `mismatch`와 `remainingAttempts`), `PHONE_VERIFICATION_NOT_ALLOWED`(409, `already_verified`·`phone_in_use`), `VALIDATION_ERROR`                           |
+| `PUT /me/real-name`                   | `realName`·`expectedAccountId`         | `PhoneVerification`                                                    | `VERIFICATION_REQUIRED`(409, 본인확인 기록이 없다), `VALIDATION_ERROR`                                                                                                                                                               |
+
+- `GET /me`가 `verification: PhoneVerification | null`을 싣는다(`contact` 대신). 따로 읽는 라우트는 없다. `PUT /me/contact`는 없앴다.
+- 고정값은 `@buddha/shared`의 `PHONE_VERIFICATION_LIMITS` 한곳(자릿수 6, 유효 180초, 재발송 60초, 틀린 입력 5번, 하루 10번, 하루 = 86,400초)이다. 출시 설정이 아니다(docs/SETTINGS.md).
+- 발송: 계정과 번호의 advisory 잠금 → 이미 본인확인했으면 거절 → DB 시계 → 24시간이 지난 발송 행 삭제 → 한도 검사(계정의 마지막 발송에서 60초, 24시간 안의 계정·번호의 발송 10번) → 새 행(HMAC) → 커밋 → 그 뒤에 발송기 호출. 발송기가 실패하면 `SMS_SEND_FAILED`(502)다. 사업자가 받지 않은 것이 확실한 실패(`refused`)면 그 행을 지우고, 결과를 알 수 없는 실패(`unknown`, 문자가 갔을 수 있다)면 그 행을 남겨 한도에 세고 확인할 수 있게 한다(결정 7-3). 인증번호는 CSPRNG(`randomInt`)로 뽑은 여섯 자리(앞자리 0 포함)다.
+- 답의 두 기간은 그 행의 DB 시계를 읽은 때부터 발송기가 돌아올 때까지 흐른 시간(API 프로세스의 단조 시계 `performance.now()`, 두 벽시계를 섞지 않는다)을 뺀 값이다: `expiresInSeconds`는 내림, `resendAfterSeconds`는 올림. 답이 오면 세기 시작하는 화면이 서버가 만료라고 하는 인증번호를 유효하다고 보이지 않고, 서버가 아직 막는 다시 받기를 열지 않는다. 남는 차이는 답이 네트워크를 건너는 시간뿐이다.
+- 확인: 계정 잠금 → 이미 본인확인했으면 거절 → 계정의 가장 새 행만 본다(쓴 것·5번 틀린 것·3분 지난 것은 비교하기 전에 거절하고 입력을 세지 않는다) → 상수 시간 비교(`timingSafeEqual`) → 틀리면 `attempts`를 올리고 그 쓰기를 커밋한 뒤 거절(다섯 번째는 `attempts_exceeded`) → 맞으면 그 번호를 다른 계정이 쓰는지 보고(`phone_in_use`), 아니면 그 행을 쓴 것으로 표시하고 `phone_verifications`를 쓴다. 두 계정이 같은 번호를 동시에 확인하면 UNIQUE가 하나만 남기고 다른 하나는 `phone_in_use`다(`confirmWriteRefusal`이 `phone_verifications_phone_unique`의 위반을 그 거절로 읽는다).
+- 이름 붙은 레이트 리밋 버킷 `phoneVerification`(계정마다 1분에 5번)을 발송에 건다. DB 한도와 별개의 겹 방어이고 거절된 요청도 센다.
+- 로그: DB 오류는 SQLSTATE만 남기고(`verificationWriteFailure`, drizzle이 바인드 값을 메시지에 넣으므로 ADR-0043의 `contactWriteFailure`와 같다), 발송기 오류는 긴 숫자열을 가린 낱말만 남긴다(`redactDigits`). 어느 거절 메시지도 번호·실명·인증번호를 말하지 않는다.
+- 관리자 권한 부여는 `isPhoneVerified`를 요구하고 거절 사유는 `phone_not_verified`다(웹 문구 `errAdminGrantPhoneNotVerified`). `CONTACT_REQUIRED`는 `VERIFICATION_REQUIRED`가 됐다.
+
+**4. 발송기와 환경 변수.**
+
+- `SmsSender` 인터페이스(`apps/api/src/sms/sms-sender.ts`) 하나 뒤에 둘이 있고 `SMS_PROVIDER`가 고른다(`sms.provider.ts`). 비워 두면 `NODE_ENV=production`에서 `aligo`, 그 밖에서 `dev`다. 운영은 `dev`를 거절한다(env 검사).
+- 알리고(`aligo-sms-sender.ts`): `https://apis.aligo.in/send/`에 `application/x-www-form-urlencoded`로 `key`·`user_id`·`sender`·`receiver`·`msg`·`msg_type=SMS`(시험 모드면 `testmode_yn=Y`). 2xx이고 `result_code`가 1일 때만 성공이고, 네트워크 오류·2xx 밖·`result_code` ≠ 1은 실패다. 실패(`SmsSendError`)는 문자가 갔을 수 있는지를 함께 말한다(`outcome`): 키 없음, 요청이 나가기 전의 연결 실패(`ECONNREFUSED`·`ENOTFOUND`·`EAI_AGAIN`·`ENETUNREACH`·`EHOSTUNREACH`·`UND_ERR_CONNECT_TIMEOUT`), 500 미만의 2xx 아닌 답, 거절 `result_code`, 받은 수신자 0은 `refused`다. 시간 초과(10초)와 그 밖의 네트워크 오류, 5xx(알리고 앞의 게이트웨이가 받은 뒤 답할 수 있다), 알리고의 JSON이 아닌 2xx는 `unknown`이다. 발송기가 아닌 오류(버그)도 `unknown`으로 읽는다(`sendOutcome`). 번호와 인증번호를 로그에 남기지 않는다.
+- 키: `ALIGO_API_KEY`·`ALIGO_USER_ID`·`ALIGO_SENDER`(발신번호, 숫자 8\~11자리)는 셋 다 있거나 다 없어야 한다. 없어도 API는 뜨고(시작 로그에 경고 한 줄) 모든 발송이 `SMS_SEND_FAILED`라 아무도 본인확인을 마치지 못한다(결정 1의 #183 둘째 행). `ALIGO_TEST_MODE`는 결정 7-10이다.
+- 개발용 발송기(`dev-sms-sender.ts`): 문자를 보내지 않고 API의 메일러로 `sms-<번호 숫자>@sms.buddha.local`에 메일을 보낸다(Mailpit). 메일은 등록한 메일 템플릿 `devVerificationCode`이고 제목이 `[buddha] 개발용 SMS: 본인확인 인증번호 NNNNNN`이다.
+- 문자 문구는 `sms/templates.ts`의 `SMS_TEMPLATES`에 등록한 템플릿에서만 만든다: `[buddha] 본인확인 인증번호는 NNNNNN입니다. 3분 안에 입력해 주세요.`(EUC-KR 66바이트). 그 검사는 결정 8과 docs/GUARDS.md 'SMS'다.
+- 배포: `terraform/variables.tf`의 `aligo_api_key`·`aligo_user_id`·`aligo_sender`(sensitive)·`aligo_test_mode`가 SSM의 env 파일(`templates/env.tftpl`, 늘 `SMS_PROVIDER=aligo`)을 거쳐 호스트 `.env`가 된다. `deploy/compose.yaml`의 api가 그 값을 받는다. `.env.example`은 `SMS_PROVIDER=dev`다.
+
+**5. 공개 금지와 등록.** `OWNER_ROUTES`에 세 라우트를 더하고 `PUT /me/contact`를 지웠다(`registry.ts`). `private-data.test.ts`의 `OWNER_CASES`는 B가 A의 계정을 댄 세 쓰기(403, A의 기록이 그대로)를, 표지값에는 A의 본인확인 기록(번호·실명)과 A가 확인에 쓴 인증번호 행의 해시를 심었다. 거절된 쓰기 뒤에 A의 기록과 인증번호 행이 그대로이고 아무에게도 문자가 가지 않았는지 본다. `PRIVATE_DATA`의 `identity-verification`(본인확인 여부·시각·인증번호의 필드 이름)은 이제 '아직 없음'이 아니고, 번호는 `phone`, 실명은 `real-name` 항목이 그대로 막는다. `GET /me`는 본인 전용 라우트라 이 목록이 보지 않는다. 공개 프로필에 본인확인 표시를 두지 않는 것(ADR-0069 결정 3의 8항)은 프로필(#41)이 지킨다.
+
+**6. 웹.**
+
+- `/onboarding`의 단계(`app/onboarding/verification-step.tsx`): 실명·휴대전화 → '인증번호 받기' → 인증번호 입력과 남은 유효시간 → '본인확인 완료'. 이 화면이 보내지 않은 인증번호(새로 고침 전, 다른 탭, 답을 받지 못한 발송)는 '이미 받은 인증번호 입력'으로, 그리고 1분 안의 발송 때문에 다시 받기가 거절되면 저절로 열리는 입력 칸에 넣는다(결정 7-15). 확인한 기록을 `['me']`에 바로 쓰고(`storeVerification`, ADR-0043의 `storeContact`와 같은 취소·계정 확인), 폼이 `next`로 보낸다. 단계에는 지금 이것 하나이고 #58이 약관 동의와 닉네임을 앞뒤에 붙인다(결정 1의 #58 첫 행).
+- 게이트(`lib/onboarding.ts`·`components/auth/onboarding-gate.tsx`): `me.verification === null`이면 보낸다. 예외 목록·`next` 검증·로그아웃은 ADR-0043 그대로다.
+- `/set-password`: 첫 비밀번호만 받는다(결정 7-14). `useSetPasswordAndContact`·`ContactStepError`는 없앴고 `useSetPassword`를 쓴다.
+- MY 설정의 '본인확인' 카드(`app/my/settings/verification-section.tsx`): 실명은 고치고(`PUT /me/real-name`), 번호는 `010-1234-5678` 꼴의 읽기 전용 칸과 '번호는 직접 바꿀 수 없습니다. 바꾸려면 고객센터로 문의해 주세요.'다. 본인확인 기록이 없으면 본인확인으로 가는 단추를 보인다.
+- 규칙과 거절의 읽기는 `lib/phone-verification.ts` 한곳(폼 스키마는 공유 스키마를 그대로 쓰고 문구만 한국어, `codeRequestFailure`·`confirmFailure`·`realNameSaveFailure`, 카운트다운), 요청과 캐시 쓰기는 `hooks/use-phone-verification.ts`다. 거절 문구는 `copy.ts`의 '본인확인과 온보딩' 묶음에 있고, 문장이 말하는 수(3분·1분·5번·10번·24시간·6자리)가 `PHONE_VERIFICATION_LIMITS`와 같은지 시험이 본다.
+
+**7. 구현의 선택.** 오너가 정하지 않은 것을 이 PR이 정했다. 되돌리기 쉬운 쪽을 골랐고, 오너에게 다시 물을 것은 결과 4에 있다.
+
+1. **'하루'는 직전 24시간이다**(달력의 하루가 아니다). 요청한 순간마다 한도가 성립하고, 회원이 고른 시간대(ADR-0063)와 무관하며, 자정을 끼고 20번을 보내는 일이 없다.
+2. **인증번호는 HMAC-SHA256으로만 저장한다.** 키는 `BETTER_AUTH_SECRET`에서 고정 라벨로 이끌어 내고(`deriveCodeKey`) 행 id에 묶는다(같은 인증번호도 행마다 다른 해시, 표를 가져가도 백만 번 대입으로 풀리지 않는다). 비교는 상수 시간이다.
+3. **사업자가 받지 않은 것이 확실한 발송만 세지 않는다.** 발송기의 실패는 둘이다(`SmsSendError.outcome`, 결정 4). `refused`(사업자에 닿지 않았거나 사업자가 거절했다)는 그 행을 지우므로 한도에 들지 않고 확인할 수도 없다. `unknown`(시간 초과·요청 뒤에 끊긴 연결·5xx·읽을 수 없는 2xx — 알리고가 받아 문자를 보냈을 수 있다)은 그 행을 남겨 60초 간격과 하루 10번에 세고, 그 인증번호를 확인할 수 있게 둔다. '발송'을 사업자가 받았을 수 있는 것으로 읽었다: 받았을 수 있는 문자를 세지 않으면 알리고가 늦게 답하는 동안 한 번호에 오너가 정한 하루 10번보다 많은 문자가 갈 수 있고(레이트 리밋 버킷만 남아 1분에 5번), 문자로 온 인증번호가 `no_code`로 거절된다. 둘 다 `SMS_SEND_FAILED`(502)이고 5xx 본문은 사정을 싣지 않으므로(ADR-0020) 화면은 둘을 가리지 않는다 — 문자를 받은 회원은 '이미 받은 인증번호 입력'으로 넣고, 1분 안에 다시 받으려 하면 입력 칸이 열린다(7-15). 거절을 거듭하는 요청은 레이트 리밋 버킷(1분에 5번)이 묶는다.
+4. **`phone_in_use`는 인증번호가 맞은 뒤에만 답한다.** 발송 단계에서 답하면 아무 번호나 넣어 그 번호가 어느 계정에 쓰였는지 알아낼 수 있다. 그 번호를 가진 사람만 안다. 그 확인은 인증번호를 쓴 것으로 하지 않고 입력도 세지 않는다.
+5. **한도가 여럿 걸리면 가장 오래 기다리는 것을 답한다.** `retryAfterSeconds`가 같은 요청이 모든 한도를 지나는 때다(다른 계정이 그 번호로 보내는 것은 알 수 없다).
+6. **24시간이 지난 발송 행은 발송할 때마다 지운다.** 워커 작업은 두지 않았다. 아무도 보내지 않으면 다음 발송까지 남는다 — 그 행의 번호·실명(확인에 쓴 행도, 확인하지 않은 행도)은 24시간이 아니라 그 뒤 아무 계정의 다음 발송 때까지 남는다. 이 행을 한도를 세는 짧은 기록으로 볼지 보존기간을 따로 정하는 '본인확인 기록'(#184)으로 볼지는 오너가 정하지 않았다(결과 4).
+7. **새 발송이 앞 인증번호를 대신한다.** 확인은 계정의 가장 새 행만 본다. 다시 받은 뒤 앞 인증번호를 넣으면 새 인증번호와 견주어 틀린 입력으로 센다.
+8. **오류 코드 이름.** `CONTACT_REQUIRED`를 `VERIFICATION_REQUIRED`로, 관리자 부여 거절 `contact_required`를 `phone_not_verified`로 바꿨다. 새 뜻에 옛 이름을 남기면 '연락처'가 계속 읽힌다. 깨지는 호출자는 없다 — 까닭은 둘이 다르다. `CONTACT_REQUIRED`는 보내는 API가 없던 코드다(ADR-0049). `contact_required`는 `POST /admin/admins`가 보내던 살아 있는 값이지만, 읽는 곳(웹의 `ADMIN_ROLE_REFUSAL_MESSAGE`, API·웹 시험, e2e)이 모두 이 저장소에 있어 이 PR에서 함께 바뀌고, 배포 환경에는 바깥 클라이언트가 없다(D4).
+9. **개발용 발송기는 Mailpit 메일이다.** 로컬 개발자와 e2e가 가입 메일과 같은 곳에서 인증번호를 읽는다. 메일 템플릿 `devVerificationCode`로 보내므로 메일 검사가 그 문구를 보고, 메일 입력에 `code`(서버가 뽑은 숫자)를 더했다. 그 메일은 문자의 문구를 그대로 싣지 않고 같은 내용을 메일 템플릿에서 다시 쓴다(메일 검사가 낱말을 템플릿 입력으로 받지 않아서다).
+10. **`ALIGO_TEST_MODE`를 두었다.** 알리고의 `testmode_yn=Y`는 성공으로 답하고 아무에게도 보내지 않으며 요금이 없다. 키와 발송 서버 IP를 공짜로 확인하는 용도다. 켜 두면 아무도 본인확인을 마치지 못한다. 기본은 꺼짐.
+11. **문자 문구는 초안이다.** `[buddha] 본인확인 인증번호는 NNNNNN입니다. 3분 안에 입력해 주세요.` 한 통(90바이트)에 들어가게 썼고 서비스 이름은 메일과 같이 `buddha`다(PLAN 17 Q7 전).
+12. **레이트 리밋 버킷은 계정마다 1분에 5번이다**(발송만). 오너의 한도가 문자를 묶고, 이 버킷은 거절되는 요청을 묶는다.
+13. **`user_contacts`는 무효 표시가 아니라 행째 지웠다.** D4가 이전을 하지 않기로 했고, 확인하지 않은 번호를 남겨 둘 쓸모가 없으며(어느 화면·API도 읽지 않는다), 남기면 보존기간을 따로 정해야 하는 개인정보가 된다. 모든 계정(시드 관리자 포함)은 다음 로그인에서 본인확인을 거친다.
+14. **`/set-password`는 비밀번호만 받고 홈으로 간다.** 그 뒤 게이트가 본인확인으로 보낸다. 본인확인하지 않은 계정을 어디로 보낼지를 게이트 한곳이 정하게 하려는 것이고, #58이 약관 동의를 그 앞에 붙일 때 `/set-password`를 고치지 않아도 된다.
+15. **단계의 화면.** 인증번호를 보내면 실명·번호 칸을 읽기 전용으로 잠근다(확인은 보낼 때의 번호와 실명을 기록하므로, 보낸 뒤 고친 값은 서버가 보지 않는다). '실명·번호 다시 입력'이 두 칸을 다시 열고, '인증번호 다시 받기'는 같은 번호로 새로 보낸다. 두 카운트다운(유효 3분, 다시 받기 60초)은 서버가 답한 상대 초(서버가 답하기 전에 쓴 시간을 뺀 값, 결정 3)를 브라우저의 단조 시계(`performance.now()`)로 센다. 화면이 끝났다고 해도 확인 단추는 막지 않는다(서버가 판단한다).
+    - 이 화면이 보내지 않은 인증번호도 넣을 수 있다. 서버는 어느 화면이 보냈든 계정의 가장 새 인증번호를 확인하는데, 새로 고침(휴대전화에서 문자 앱을 오가다 탭이 버려진 경우 포함)·다른 탭·답을 받지 못한 발송(7-3) 뒤에는 화면이 그 인증번호를 모른다. 입력 칸이 닫혀 있는 동안 '이미 받은 인증번호 입력'이 칸을 열고, 1분 안의 발송 때문에 다시 받기가 거절되면(`resend_interval`) 칸을 저절로 열며 '최근에 보낸 인증번호가 있습니다. 문자로 받았다면 아래에 입력해 주세요.'를 거절 문구 앞에 붙인다. 그 인증번호는 다른 번호로 갔을 수 있으므로 실명·번호 칸은 잠그지 않고 어느 번호인지 말하지 않으며, 언제 보냈는지 모르므로 유효시간을 세지 않는다(서버가 `expired` 등으로 답한다).
+    - 틀린 인증번호는 그 칸 아래, 다른 계정의 번호는 번호 칸 아래와 폼 위의 알림 둘 다에 보인다 — 칸 아래에 새로 붙는 글은 화면 낭독기가 읽지 않으므로 `role=alert`인 알림이 읽고, 커서는 고칠 번호 칸으로 간다. 인증번호를 더 쓸 수 없게 되면(`expired`·`attempts_exceeded`·`no_code`) 알림을 띄우고 커서를 번호 칸으로 옮긴다(입력 칸이 사라져 커서가 페이지 맨 위로 가지 않게, 거기서 Enter가 다시 받기다). 나머지는 폼 위의 알림에 보인다.
+16. **설정 카드의 번호 안내**는 '고객센터로 문의해 주세요'다. 고객센터 이메일은 아직 미정이라(ADR-0069 결과 3) 주소를 적지 않았다.
+17. **수집 목적 문장을 지웠다.** 옛 문구('결제에 필요한 실명과 휴대전화 번호', '결제할 때 구매자 정보로 전달됩니다')는 결제가 닫혀(ADR-0049) 사실이 아니고, 그 문장을 위한 화면 검사 허용(`COPY_ALLOWANCES`)도 함께 지웠다. 새 문구는 무엇을 하는지(번호로 받은 인증번호를 입력한다)만 말한다. 목적과 위탁 고지는 #58(동의 문구)·#137(방침)이 쓴다.
+18. **실명은 인증번호 행에 함께 둔다.** 같은 화면에서 받은 실명은 확인할 때 그 행에서 기록으로 옮긴다. 확인하지 않은 실명은 따로 남지 않고 그 행과 함께 지워진다 — 24시간이 지난 뒤 아무 계정의 다음 발송 때다(7-6).
+19. **e2e는 계정마다 새 번호를 쓴다**(`freshPhone()`, 010과 무작위 여덟 자리). 시드 관리자는 고정 번호 둘이고, `admin`·`secondAdmin` 픽스처가 API와 Mailpit으로 한 번 본인확인한다. 병렬 워커가 같은 관리자를 동시에 확인하려 하면 하나만 인증번호를 받고 나머지는 429를 받은 뒤 `GET /me`가 본인확인을 말할 때까지 기다린다.
+
+**8. 시험.**
+
+- shared `phone-verification.test.ts`(14): 실명·번호·인증번호 스키마, 고정값, 거절 `details` 스키마. `me.test.ts`·`api/errors` 등록.
+- API `phone-verification.rules.test.ts`(20): 인증번호 뽑기(앞자리 0, 기본은 `node:crypto`의 `randomInt`에 10^6을 묻는다), HMAC과 상수 시간 비교, 만료, 재발송 60초, 계정·번호의 24시간 10번과 창이 지나면 풀림, 가장 오래 기다리는 한도, 남은 입력과 다섯 번째, 동시 확인의 UNIQUE 위반을 `phone_in_use`로 읽고 그 밖은 결함으로 남김(`confirmWriteRefusal`)과 그 제약 이름이 drizzle 스키마의 이름과 같음, DB 오류에서 SQLSTATE만 남김. `phone-verification.controller.test.ts`(23, `createTestApp`과 메모리 발송기): 발송·확인·기록(AC 1·2), 사업자가 걸린 시간을 뺀 두 기간, 쓴 인증번호와 본인확인 뒤의 거절, 틀린 입력을 세고 다섯 번째에 버림, 3분 뒤 거절(입력을 세지 않음), 보낸 것 없음과 가장 새 것만, 재발송 60초, 계정·번호의 하루 10번, 한 계정이 남의 번호의 하루 10번을 채우면 그 번호는 24시간 막힘(결과 5, 지금의 동작을 고정), 사업자가 받지 않은 발송은 세지 않고 확인되지 않음, 결과를 알 수 없는 발송은 세고(60초·계정·번호) 확인됨, 레이트 리밋(계정마다 — 버킷 정의와 다른 계정은 통과), 다른 계정의 번호(인증번호가 맞은 뒤에만), 두 계정의 동시 확인에서 하나만, 동시의 틀린 입력 여덟 번이 모두 세짐(계정 잠금), 한 계정의 동시 발송 셋에서 하나만(번호가 달라도, 계정 잠금), 두 계정이 한 번호의 열 번째를 동시에 요청하면 하나만(번호 잠금), 실명 수정(다른 계정의 기록은 그대로, 본인확인하지 않은 계정은 계속 거절), 잘못된 입력 400, 401·외부 Origin 403, 다른 계정을 댄 쓰기 403. 틀린 입력·확인·지운 발송이 다른 계정의 인증번호 행을 건드리지 않는지도 본다. `aligo-sms-sender.test.ts`(12, 가짜 fetch): 알리고의 요청 모양(한 통, 등록한 발신번호, form), 시험 모드, 키가 없으면 묻지 않고 실패, 거절·접수 없음·4xx·연결 전 실패는 `refused`, 5xx·읽을 수 없는 답·끊긴 연결·시간 초과는 `unknown`(받는 번호를 말하지 않음), 개발용 발송기의 Mailpit 주소와 등록 템플릿·메일 실패, 여섯 자리 이상 숫자열 가림, 발송기가 아닌 오류는 `unknown`. `sms.provider.test.ts`(5, 가짜 fetch와 메모리 메일러): 운영에서 키가 없으면 묻지도 메일하지도 않고 실패, 운영의 알리고는 설정한 키로 시험 모드 없이, `ALIGO_TEST_MODE`일 때만 시험 모드, 운영 밖은 Mailpit, `SMS_PROVIDER=aligo`면 운영 밖에서도 알리고. `sms/templates.test.ts`(6): 제외 기능 문구, 등록, 형식만 가져옴, 한 통·EUC-KR. `me.controller.test.ts`: `GET /me`의 `verification`, `PUT /me/contact`가 없음. `admin-accounts.controller.test.ts`: `phone_not_verified`. `env.test.ts`: `SMS_PROVIDER` 기본값과 운영의 `dev` 거절, 알리고 키 셋. `mail/templates.test.ts`: `devVerificationCode`와 입력 `code`. `registry.test.ts`·`private-data.test.ts`: 위 결정 5.
+- 웹 `lib/phone-verification.test.ts`(20): 폼 스키마가 API 본문 스키마와 같은 것을 받고 같은 값으로 정규화함(속성 시험), 문구, 카운트다운·기다림 표기, 문구의 수가 고정값과 같음, 세 거절 읽기. `hooks/use-phone-verification.test.ts`(16, 실제 QueryClient): `['me']`에 기록 쓰기와 진행 중 `GET /me` 취소·다른 계정의 프로필을 건드리지 않음, 다른 계정으로 거절되면 세션 재조회, 이미 본인확인했다는 거절에 `['me']` 재조회, 실명 수정과 기록이 없어진 경우. `lib/onboarding.test.ts`: 게이트가 `verification`으로 판정. `excluded-features.test.ts`: 지운 허용. `lib/admin-accounts.test.ts`: 부여 조건을 말하는 네 문구(머리말 규칙·대화상자 안내·두 거절)가 모두 '이메일 인증과 휴대전화 본인확인'이다.
+- e2e(375px·1280px 두 프로젝트, 개발용 발송기와 Mailpit): `onboarding.spec.ts`(5) — 이메일 가입이 비밀번호만 정한 뒤 게이트로 본인확인에 가고 홈으로 돌아옴, 설정에서 번호는 읽기 전용·실명은 규칙대로 고치고 새로고침 뒤 유지, 게이트(`/terms` 예외, `/my/wallet` → `/onboarding?next=…` → 필수·형식 오류 → 본인확인 → `/my/wallet`), `next` 검증, 로그아웃 둘, 로그아웃 상태의 `/onboarding`. `phone-verification.spec.ts`(6) — 틀린 인증번호의 남은 입력 기회와 맞는 인증번호로 완료, 다섯 번 틀리면 버려지고(커서는 번호 칸) 서버도 맞는 인증번호를 거절, 다시 받기의 60초(단추의 카운트다운, '실명·번호 다시 입력'이 두 칸을 엶, API의 `resend_interval`), 다른 계정이 본인확인한 번호의 거절(알림과 번호 칸, 커서는 번호 칸)과 게이트 유지, 새로 고침 뒤 '이미 받은 인증번호 입력'으로 완료, 다른 화면이 1분 안에 보낸 인증번호가 있으면 다시 받기가 입력 칸을 열고 그 인증번호로 완료. `helpers.ts`의 `signUp`이 모든 가입을 본인확인까지 하므로 가입하는 모든 스펙이 이 흐름을 지난다.
+
+### 결과
+
+**1. 상태 줄.** 이어 썼다(덮어쓰지 않는다, ADR-0047 결과 1).
+
+- ADR-0043: 일부 대체됨. 확인하지 않은 실명·휴대전화의 수집(`user_contacts`, `PUT /me/contact`, `/set-password`의 두 칸, 설정 카드, `Me.contact`) — 지금은 본인확인이다. 게이트의 예외 목록과 `next` 검증은 유효. 결과의 알려진 한계에 추기했다(이슈 #183 범위의 요청).
+- ADR-0056: 일부 대체됨. 결정 1-11의 부여 조건, 결정 2·3의 `contact_required`, 결정 6·7의 '실명·휴대전화'(시드 관리자의 첫 로그인, e2e 픽스처, 머리말 규칙·대화상자 안내·거절 문구) — 지금은 본인확인(`phone_not_verified`, '이메일 인증과 휴대전화 본인확인').
+- ADR-0055: 일부 대체됨. 결과 3의 '그 밖에 결정 이슈가 정한 값' 가운데 #183 — 인증번호 한도는 출시 설정 항목이 아니라 코드의 고정값이다(docs/SETTINGS.md).
+- ADR-0049: 일부 대체됨. 남겨 둔 `CONTACT_REQUIRED` — 지금은 `VERIFICATION_REQUIRED`.
+
+**2. 문서.** `docs/API.md`·`apps/api/openapi.json`·api-client는 생성했다. `README.md`: Mailpit 줄 아래 개발용 발송기와 알리고 설정, 시드 관리자의 첫 로그인, 경로 표의 `/my/settings`·`/signup …`·`/onboarding` 행, 관리자 부여 조건, e2e의 인증번호 읽기. `docs/GUARDS.md`: 공개 금지 표의 `identity-verification`(더는 아직 없음이 아니다)·`phone`·`real-name`, 지운 `COPY_ALLOWANCES`, 메일 입력 `code`와 개발용 발송기, 새 'SMS' 등록 규칙과 검사 표의 줄, better-auth 플러그인 문장. `docs/RESET.md`: 지우는 표에 두 표, 결과와 확인 절차의 본인확인. `docs/SETTINGS.md`: 인증번호 한도는 출시 설정이 아니다(출시 설정 예시 줄의 '작성 빈도 제한(#187)'도 뺐다 — ADR-0069 결정 2 #45-15가 그 한도를 고정값으로 정했다. 그 한도를 '출시 설정이 아닌 것'에 적는 일은 #187이 한다). `.env.example`·`deploy/compose.yaml`·terraform: 결정 4. `terraform/README.md`: 최초 부트스트랩의 알리고 준비(1단계)와 EIP 등록·`aligo_*` 입력·다시 apply(4단계), 이미 도는 배포에 #183을 처음 올릴 때의 한 번(결과 3), drift 절의 tfvars 목록. 기록이라 고치지 않은 것(ADR-0047 결과 2): `docs/QUESTIONS.md`의 Q-PG-6(본인인증 시점 — D8·ADR-0069와 이 ADR이 답한다)·A-PG-7·A-PG-11·A-PG-24의 연락처와 `user_contacts`, 이 ADR 전 ADR의 본문(상태 줄은 결과 1). 약관·방침의 실명·휴대전화 문장은 #137이다(결과 5).
+
+**3. 오너가 할 일(ADR-0069 결과 3).** 알리고에 가입하고 발신번호를 등록하고 API 키를 발급받은 뒤 EC2 Elastic IP(`terraform output public_ip`)를 발송 서버 IP로 등록한다. 값은 `terraform.tfvars`의 `aligo_api_key`·`aligo_user_id`·`aligo_sender`(그리고 확인만 할 때 `aligo_test_mode = true`)에 넣고 `terraform apply` → 배포로 호스트 `.env`의 `ALIGO_API_KEY`·`ALIGO_USER_ID`·`ALIGO_SENDER`·`ALIGO_TEST_MODE`가 된다. 넣기 전에는 배포 환경에서 아무도 본인확인을 마치지 못한다(시드 관리자 포함). 테스터에게 실제 번호로 문자가 간다는 것을 알린다(결정 1의 #183 둘째 행). 절차는 `terraform/README.md`의 최초 부트스트랩 1·4단계에 있다.
+
+이 PR을 처음 배포할 때의 한 번(마이그레이션 0028): 이미 도는 배포에서는 그 배포 전에(또는 함께) 기존 `terraform.tfvars`에 `aligo_*`를 넣고 apply한다. 0028은 `user_contacts`를 행째 지우므로 모든 계정이 다음 로그인에서 본인확인을 다시 거친다(7-13). `deploy.sh`는 새 컨테이너로 바꾸기 전에 `migrate`를 돌리므로, 그 몇 초 동안은 아직 `user_contacts`를 조인하는 옛 API의 `GET /me`·`GET /admin/admins`가 500으로 답한다(새 컨테이너가 뜨면 풀린다). 배포 환경에 실사용자가 없어(D4) 따로 막지 않았다.
+
+**4. 오너에게 물을 것.** 결정 7 가운데 오너가 달리 정할 수 있는 것.
+
+- 문자 문구(7-11)와 서비스 이름 `buddha`(PLAN 17 Q7 전까지).
+- 발송이 실패했을 때 무엇을 '하루 10번'에 셀지(7-3). 지금은 사업자가 받지 않은 것이 확실한 발송은 세지 않고, 결과를 알 수 없는 발송(시간 초과·끊긴 연결·5xx·읽을 수 없는 답 — 알리고가 문자를 보냈을 수 있다)은 세며 그 인증번호를 확인할 수 있게 둔다. 결과를 알 수 없을 때 화면이 '인증번호를 보내지 못했습니다' 대신 '문자가 갔을 수 있다'고 말해야 하는지(지금은 두 실패가 같은 502라 같은 문구다).
+- 다른 계정이 본인확인한 번호를 언제 거절할지(7-4). 지금은 인증번호가 맞은 뒤에만 답한다 — 그 사이 문자 한 통(약 9원)이 나가고 계정·번호의 하루 10번에 든다. 발송 단계에서 거절하면 문자는 아끼지만 아무 번호나 넣어 이 서비스에 본인확인한 번호인지 알 수 있다.
+- 다시 받은 뒤 앞 인증번호를 넣었을 때(7-7). 지금은 새 인증번호와 견주어 틀린 입력으로 세고 '인증번호가 맞지 않습니다'라고 답한다(5번 가운데 하나를 쓴다). '바뀐 인증번호'로 따로 거절하고 세지 않을지.
+- 번호의 하루 10번을 모든 계정의 발송으로 셀지(결과 5). 지금은 그렇게 세므로 버린 계정 하나(엇갈린 둘이면 틈 없이)가 남의 번호를 24시간마다 다시 채워 그 사람이 본인확인을 마치지 못하게 하고 하루 10통의 문자를 보낼 수 있다. (번호, 계정)마다 세고 한 번호에 문자를 보낼 수 있는 계정 수를 하루 몇으로 묶을지, 그 번호로 보낸 적 없는 계정에는 창마다 한 번을 남길지.
+- 서비스 전체의 하루 SMS 발송 상한(넘으면 `SMS_SEND_FAILED`나 `PHONE_VERIFICATION_LIMITED`)과/또는 접속 주소(IP)별 하루 발송 상한을 둘지, 알리고 잔액·발송량 급증 알림을 둘지(결과 5).
+- 인증번호 행(번호·실명·해시·발송 시각)이 한도를 세는 짧은 기록(24시간이 지난 뒤 다음 발송 때 지운다, 7-6)인지, 보존기간을 출시 설정으로 따로 정하는 '본인확인 기록'(#57 18항·#184)인지.
+- `ALIGO_TEST_MODE`를 남길지(7-10).
+- 설정 카드의 번호 변경 안내 문장과 연락처(7-16), 단계 화면의 배치(7-15: 잠금과 '실명·번호 다시 입력', 화면이 보내지 않은 인증번호의 '이미 받은 인증번호 입력'과 1분 안의 다시 받기가 여는 입력 칸, 다른 계정의 번호를 칸 아래와 알림 둘 다에 보이는 것).
+
+**5. 알려진 한계와 다른 이슈에 넘긴 것.**
+
+- #58: 약관 동의(만 14세 확인 포함)와 닉네임 단계, 온보딩 완료의 서버 확인(`isPhoneVerified`를 쓴다). 그때까지 게이트는 웹에만 있다.
+- #70: '번호마다 한 번'의 기록(번호의 키 있는 해시)과 시작 Coin. #140: 탈퇴 때 그 계정의 `phone_verifications` 행과 `phone_verification_codes` 행(번호·실명)을 지운다 — 탈퇴는 `user` 행을 남기므로 CASCADE가 하지 않는다(#57 18항, 결정 2). #184: 본인확인 기록의 보존기간(두 표 모두, 인증번호 행을 그 기록으로 볼지는 결과 4). #98: 다계정 감시.
+- 번호의 하루 10번은 모든 계정의 발송을 센다(ADR-0069 #57-3을 글자 그대로). 그래서 버린 계정 하나가 남의 번호로 60초마다 열 번 보내면 그 번호는 24시간 동안 누구도(그 번호의 주인도) 인증번호를 받지 못하고(`phone_daily`), 가장 오래된 발송이 창을 나가는 때(`retryAfterSeconds`가 알려 준다)에 다시 채우면 계속 막힌다 — 엇갈린 계정 둘이면 틈이 없다. 주인은 열람만 하고 참여하지 못하며(#57 8항), 하루 10통의 원치 않는 문자를 받는다. 이미 본인확인한 번호로도 발송은 막지 않으므로(7-4) 본인확인 뒤에도 문자는 갈 수 있다. 운영자의 대처: 그 번호의 다른 계정 행을 지우고(`DELETE FROM phone_verification_codes WHERE phone = '<숫자>' AND user_id <> '<주인>'`), 필요하면 그 계정들을 제한한다(#98). 바꿀지는 결과 4.
+- 고정 한도는 계정마다와 번호마다뿐이다. 서비스 전체나 접속 주소(IP)마다의 하루 발송 상한은 없다(레이트 리밋은 계정마다 1분에 5번, 주소마다 API 전체 1분에 100번). 그래서 많은 계정(catch-all 메일 도메인이나 여러 소셜 계정으로 만든)이 계정마다 24시간에 10통씩 아무 번호로나 보내 알리고 선불 잔액을 바닥낼 수 있고, 잔액이 없으면 모든 발송이 `SMS_SEND_FAILED`라 새 계정이 아무도 본인확인을 마치지 못한다. #98(다계정 감시)은 이것을 묶지 않는다. 상한과 알림은 결과 4.
+- #137(D11): 개인정보처리방침의 휴대전화 번호 수집·SMS 발송 위탁(알리고) 고지와 이용약관의 회원 정보 조항. 지금 약관은 '설정 화면에서 실명·휴대전화를 고친다'와 결제 구매자 정보를 말하는데, 번호는 이제 본인이 바꾸지 못한다. 약관·방침의 글은 그 이슈가 한 번에 고친다(`legal/privacy.ts`의 코드 주석만 표 이름을 고쳤다).
+- 알리고 발송기는 가짜 fetch로만 시험했다. 실제 응답(발송 서버 IP 등록, `result_code`·`success_cnt`의 실제 모양)은 오너가 키를 넣은 뒤에 확인된다.
+- 운영자가 번호를 바꾸는 절차(#57-3의 'DB에서 직접')는 문서가 없다. `phone_verifications`의 그 계정 행의 `phone`을 고친다(UNIQUE·CHECK가 지킨다). 그 계정의 `phone_verification_codes`를 그대로 두면 옛 번호와 실명이 그 행이 정리될 때(24시간이 지난 뒤 다음 발송, 7-6)까지 남고 옛 번호의 하루 발송 수에 든다. 옛 번호를 곧바로 지우려면 그 행도 지운다.
+
+**6. 파일.**
+
+- shared: `packages/shared/src/phone-verification.ts`(+ 테스트, `contact.ts`·테스트를 대신), `me.ts`, `api/errors.ts`, `admin-accounts.ts`, `rate-limit.ts`, `guards/private-data.ts`(+ 테스트), `index.ts`.
+- db: `schema/phone-verifications.ts`(`schema/user-contacts.ts`를 대신), `phone-verification.ts`(`isPhoneVerified`), `drizzle/0028_phone_verification.sql`과 스냅샷, `test/factories.ts`(`createPhoneVerification`·`randomPhone`), `seed.ts`.
+- API: `phone-verification/`(규칙·서비스·컨트롤러·모듈과 시험), `sms/`(인터페이스·알리고·개발용·제공자·모듈·템플릿과 시험, 제공자 시험 `sms.provider.test.ts`), `test/memory-sms-sender.ts`(결과를 알 수 없는 실패와 느린 사업자를 흉내 낸다), `me/`, `admin-accounts/`, `config/env.ts`, `auth/auth.module.ts`(`AUTH_ENV_KEYS`), `mail/templates.ts`, `surface/registry.ts`·`private-data.test.ts`, `openapi.json`.
+- 웹: `lib/phone-verification.ts`(+ 테스트, `lib/contact-form.ts`를 대신), `hooks/use-phone-verification.ts`(+ 테스트, `hooks/use-contact.ts`를 대신), `app/onboarding/verification-step.tsx`·`onboarding-form.tsx`, `app/set-password/set-password-form.tsx`, `app/my/settings/verification-section.tsx`(`contact-section.tsx`를 대신), `components/auth/real-name-field.tsx`(`contact-inputs.tsx`를 대신), `lib/onboarding.ts`, `components/auth/onboarding-gate.tsx`, `copy.ts`, `excluded-features.test.ts`, `lib/admin-accounts.ts`. e2e: `helpers.ts`, `onboarding.spec.ts`, `phone-verification.spec.ts`(새), `auth.spec.ts`(공용 `signUp`), 주석만 고친 `admin-accounts.spec.ts`·`market.spec.ts`·`my.spec.ts`·`payment.spec.ts`.
+- 배포: `.env.example`, `deploy/compose.yaml`, `terraform/variables.tf`·`ssm.tf`·`templates/env.tftpl`·`terraform.tfvars.example`·`README.md`.
+- 문서 생성: `scripts/generate-api-doc.mjs`(`SMS_SEND_FAILED`의 두 경우).

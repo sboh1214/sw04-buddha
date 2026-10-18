@@ -106,7 +106,7 @@ const me: Me = {
   },
   balance: { availableCoin: '100000', lockedCoin: '0' },
   linkedAccounts: [],
-  contact: null,
+  verification: null,
 };
 
 /** The series as the server answered it a moment BEFORE the trade the tick announces. */

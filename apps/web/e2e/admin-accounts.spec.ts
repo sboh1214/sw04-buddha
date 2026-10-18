@@ -15,7 +15,7 @@ import {
 
 /**
  * 운영자 계정 (#171, ADR-0056): an admin grants the role on the screen to an account that has a
- * verified email and a real name and phone, and revokes it with a reason; the revoked account
+ * verified email and a verified phone (ADR-0070), and revokes it with a reason; the revoked account
  * is signed out at once and is a member again. A revoke that would leave fewer than two admins
  * is refused, one's own included. A member never reaches the screen or its API.
  *
@@ -83,14 +83,14 @@ test.describe('관리자 권한 부여·회수 (#171)', () => {
     const memberContext = await browser.newContext();
     const pendingContext = await browser.newContext();
     try {
-      // The account to grant: a sign-up verifies its email and takes a real name and phone.
+      // The account to grant: a sign-up verifies its email and then its phone.
       const memberPage = await memberContext.newPage();
       const memberEmail = freshEmail();
       await signUp(memberPage, memberEmail);
       await memberPage.goto('/admin/admins');
       await expect(memberPage).toHaveURL('/');
 
-      // One that verified its email but has given no real name and phone yet.
+      // One that verified its email but not its phone yet.
       const pendingPage = await pendingContext.newPage();
       const pendingEmail = freshEmail();
       await openSetPassword(pendingPage, pendingEmail);
@@ -112,12 +112,12 @@ test.describe('관리자 권한 부여·회수 (#171)', () => {
       const dialog = page.getByTestId('admin-role-dialog');
       const latest = page.getByTestId('admin-role-change').first();
 
-      // Refused without a real name and phone: the dialog says why and stays.
+      // Refused before the phone is verified (ADR-0070): the dialog says why and stays.
       await openGrant(page, pendingEmail);
       await dialog.getByTestId('admin-role-reason').fill('e2e 조건 확인');
       await dialog.getByTestId('admin-role-submit').click();
       await expect(dialog.getByTestId('admin-role-refusal')).toHaveText(
-        copy.errAdminGrantContactRequired,
+        copy.errAdminGrantPhoneNotVerified,
       );
       await dialog.getByTestId('admin-role-cancel').click();
       await expect(dialog).toBeHidden();

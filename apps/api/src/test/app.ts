@@ -28,7 +28,9 @@ import { RATE_LIMIT_KEY_PREFIX } from '../rate-limit/redis-throttler.storage.js'
 import { UNCOUNTED_PEERS } from '../rate-limit/uncounted-peers.js';
 import { RealtimeIoAdapter } from '../realtime/realtime-io.adapter.js';
 import { RELEASE_SETTINGS_REGISTRY } from '../release-settings/release-settings.registry.js';
+import { SMS_SENDER } from '../sms/sms-sender.js';
 import { createMemoryMailer, type MemoryMailer } from './memory-mailer.js';
+import { createMemorySmsSender, type MemorySmsSender } from './memory-sms-sender.js';
 
 export interface TestApp {
   app: NestFastifyApplication;
@@ -36,6 +38,8 @@ export interface TestApp {
   db: Db;
   auth: Auth;
   mailer: MemoryMailer;
+  /** The SMS sender every verification code goes through (ADR-0070): texts nobody. */
+  sms: MemorySmsSender;
   /** `http://127.0.0.1:<port>`, only with `{ listen: true }`. */
   url?: string;
   /** Truncates every table (owner role, via the packages/db harness). Call in beforeEach. */
@@ -89,15 +93,18 @@ export interface CreateTestAppOptions {
 
 /**
  * Boots AppModule exactly like main.ts (prefix, versioning, bodyParser: false, the realtime
- * WebSocket adapter) with the in-memory mailer, and by default without listening. Holds the
- * packages/db test-file lock until close().
+ * WebSocket adapter) with the in-memory mailer and SMS sender, and by default without listening.
+ * Holds the packages/db test-file lock until close().
  */
 export async function createTestApp(options: CreateTestAppOptions = {}): Promise<TestApp> {
   const harness: TestDb = await connectTestDb();
   const mailer = createMemoryMailer();
+  const sms = createMemorySmsSender();
   const builder = Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(MAILER)
     .useValue(mailer)
+    .overrideProvider(SMS_SENDER)
+    .useValue(sms)
     .overrideProvider(RATE_LIMITS)
     .useValue({ ...DEFAULT_RATE_LIMITS, ...options.rateLimits })
     .overrideProvider(UNCOUNTED_PEERS)
@@ -136,6 +143,7 @@ export async function createTestApp(options: CreateTestAppOptions = {}): Promise
     db: app.get<Db>(DB),
     auth: app.get<Auth>(AUTH),
     mailer,
+    sms,
     url,
     reset: async () => {
       await harness.reset();

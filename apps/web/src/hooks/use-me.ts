@@ -34,9 +34,9 @@ export function useMe() {
 
 /**
  * `POST /api/v1/me/password`: the first password of an account that has none, set from the
- * settings screen (a social-only user). The sign-up's /set-password step uses
- * `useSetPasswordAndContact` (use-contact.ts) instead. Refreshes the linked-account list, which
- * decides whether the settings screen offers "set" or "change".
+ * settings screen (a social-only user) and by the sign-up's /set-password step. Refreshes the
+ * linked-account list, which decides whether the settings screen offers "set" or "change" and
+ * /set-password its "already set" branch.
  *
  * The body names the account the screen shows (`expectedAccountId`, A-PG-24), read from the
  * session as `useCharge` reads it: the cookie decides whose password is set, and a settings tab
@@ -74,7 +74,7 @@ export function useSetPassword() {
  * Whether `['me']` may take a write made for `account`: it holds that account's profile, or no
  * profile at all.
  *
- * `account` is not a guess. For a contact or a password it is the `expectedAccountId` the
+ * `account` is not a guess. For a verification or a password it is the `expectedAccountId` the
  * request sent, which the server compared with the cookie before writing; for a `Me` a write
  * answered with it is that answer's own `id`, the account whose row was written. Either way a 2xx
  * PROVES whose write it was. The entry, unlike `['positions']`, carries its owner (`Me.id`), so
@@ -82,9 +82,9 @@ export function useSetPassword() {
  * else means the tab switched accounts while the request ran (SessionCacheGuard reset the caches
  * and the other account's `GET /me` landed) — or, for the cookie-only `PATCH /me`, that the tab
  * never learned of a switch (`storeMe`): writing the answer there would show one account's name,
- * number or choices on the other's screen, and even a mere refresh is not this answer's to ask
- * for — the guard owns that entry. No profile at all is nothing of anybody's to overwrite, and
- * the request that fills it asks the cookie.
+ * real name, number or choices on the other's screen, and even a mere refresh is not this
+ * answer's to ask for — the guard owns that entry. No profile at all is nothing of anybody's to
+ * overwrite, and the request that fills it asks the cookie.
  */
 export function meBelongsTo(queryClient: QueryClient, account: string): boolean {
   const held = queryClient.getQueryData<Me>(ME_QUERY_KEY);
@@ -108,11 +108,12 @@ export type ProfileField = 'nickname' | 'timeZone';
  * committed after that read may already have reached the tab as `user:balance` and patched
  * `['me']` (realtime-provider.tsx), which drops a repeat of that event; writing the whole answer
  * would put the older balance back on the header chip, the wallet and the order panel until the
- * next refetch. `storeContact` (use-contact.ts) takes only `contact` for the same reason.
+ * next refetch. `storeVerification` (use-phone-verification.ts) takes only `verification` for the
+ * same reason.
  *
  * A `GET /me` already in flight (a window-focus refetch, a realtime resnapshot) is cancelled
- * first, as `storeContact` and realtime-provider.tsx do before they patch `['me']`: it may have
- * left before the write committed, and answering after this one it would put the old nickname
+ * first, as `storeVerification` and realtime-provider.tsx do before they patch `['me']`: it may
+ * have left before the write committed, and answering after this one it would put the old nickname
  * or zone back until the next refetch — the toast saying 저장했습니다 over times read in the zone
  * just left. The cancel reverts the entry to what it held before that request; if that is
  * nothing (a first fetch), the entry is re-asked rather than filled: it held nobody's profile,
@@ -164,10 +165,10 @@ async function putTimeZone(body: UpdateTimeZoneBody): Promise<Me> {
 
 /**
  * `PATCH /api/v1/me` (nickname) as mutation options: the answer's profile goes into `['me']`
- * through `storeMe`. Exported apart from its hook, as use-contact.ts does its own, because
- * apps/web runs vitest under `environment: 'node'` (use-me.test.ts). `onSessionChanged` is the
- * hook's session refetch and `patch` stands in the request; both parameters so a test can watch
- * them.
+ * through `storeMe`. Exported apart from its hook, as use-phone-verification.ts does its own,
+ * because apps/web runs vitest under `environment: 'node'` (use-me.test.ts). `onSessionChanged`
+ * is the hook's session refetch and `patch` stands in the request; both parameters so a test can
+ * watch them.
  */
 export function updateNicknameOptions(
   queryClient: QueryClient,
@@ -195,7 +196,7 @@ export function useUpdateNickname() {
  * profile goes into `['me']` through `storeMe`, as the nickname's does, so TimeZoneProvider
  * switches every time on screen without a refetch — and a `GET /me` that left before the PUT
  * cannot switch them back. The 403 for another account asks for the session again, as the
- * contact's does, so SessionCacheGuard puts the account really signed in on screen.
+ * verification's do, so SessionCacheGuard puts the account really signed in on screen.
  */
 export function updateTimeZoneOptions(
   queryClient: QueryClient,
@@ -214,7 +215,7 @@ export function updateTimeZoneOptions(
 
 /**
  * `updateTimeZoneOptions` as the settings 시간대 card's mutation, plus the account the screen
- * shows (`accountId`, the session's user id — `useUpdateContact`'s source), which the card sends
+ * shows (`accountId`, the session's user id — `useUpdateRealName`'s source), which the card sends
  * as `expectedAccountId`. `ready` is false until better-auth has said whose session this is; the
  * card keeps its save disabled until then.
  */

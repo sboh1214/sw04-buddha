@@ -22,11 +22,11 @@ import { markets } from './markets.js';
 import { orders } from './orders.js';
 import { paymentEvents } from './payment-events.js';
 import { payments } from './payments.js';
+import { phoneVerificationCodes, phoneVerifications } from './phone-verifications.js';
 import { positions } from './positions.js';
 import { priceTicks } from './price-ticks.js';
 import { profiles } from './profiles.js';
 import { releaseSettings } from './release-settings.js';
-import { userContacts } from './user-contacts.js';
 import { marketWatchEvents, marketWatches } from './watchlist.js';
 
 export const profilesRelations = relations(profiles, ({ one }) => ({
@@ -56,8 +56,12 @@ export const paymentEventsRelations = relations(paymentEvents, ({ one }) => ({
   payment: one(payments, { fields: [paymentEvents.paymentId], references: [payments.id] }),
 }));
 
-export const userContactsRelations = relations(userContacts, ({ one }) => ({
-  user: one(user, { fields: [userContacts.userId], references: [user.id] }),
+export const phoneVerificationsRelations = relations(phoneVerifications, ({ one }) => ({
+  user: one(user, { fields: [phoneVerifications.userId], references: [user.id] }),
+}));
+
+export const phoneVerificationCodesRelations = relations(phoneVerificationCodes, ({ one }) => ({
+  user: one(user, { fields: [phoneVerificationCodes.userId], references: [user.id] }),
 }));
 
 export const chargePackagesRelations = relations(chargePackages, ({ many }) => ({
@@ -197,7 +201,11 @@ export const userRelations = relations(user, ({ one, many }) => ({
   accounts: many(account),
   profile: one(profiles, { fields: [user.id], references: [profiles.userId] }),
   balance: one(balances, { fields: [user.id], references: [balances.userId] }),
-  contact: one(userContacts, { fields: [user.id], references: [userContacts.userId] }),
+  phoneVerification: one(phoneVerifications, {
+    fields: [user.id],
+    references: [phoneVerifications.userId],
+  }),
+  phoneVerificationCodes: many(phoneVerificationCodes),
   ledgerEntries: many(ledgerEntries),
   payments: many(payments),
   orders: many(orders),

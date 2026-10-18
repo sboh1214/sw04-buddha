@@ -140,7 +140,7 @@ const me: Me = {
   },
   balance: { availableCoin: '100000', lockedCoin: '0' },
   linkedAccounts: [],
-  contact: null,
+  verification: null,
 };
 
 /** The infinite-list shape: the last page ends the list, and the first page has no cursor. */

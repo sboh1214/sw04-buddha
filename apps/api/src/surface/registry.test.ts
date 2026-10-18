@@ -500,7 +500,13 @@ describe('the public API document (static)', () => {
         findPrivateField(name).map((hit) => hit.item),
       ),
     );
-    for (const item of ['email', 'real-name', 'phone', 'balance'] as const) {
+    for (const item of [
+      'email',
+      'real-name',
+      'phone',
+      'identity-verification',
+      'balance',
+    ] as const) {
       expect([...items]).toContain(item);
     }
   });

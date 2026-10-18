@@ -48,7 +48,7 @@ describe('PRIVATE_DATA (#113)', () => {
     );
     expect(
       PRIVATE_DATA.filter((item) => item.pending !== undefined).map((item) => item.id),
-    ).toEqual(['identity-verification', 'risk-flag', 'author-holding', 'market-maker']);
+    ).toEqual(['risk-flag', 'author-holding', 'market-maker']);
   });
 });
 
@@ -103,6 +103,9 @@ describe('findPrivateField', () => {
     ['userQueries', 'search-history'],
     ['mySearch', 'search-history'],
     ['identityVerification', 'identity-verification'],
+    ['verification', 'identity-verification'],
+    ['verifiedAt', 'identity-verification'],
+    ['phoneVerified', 'identity-verification'],
     ['otpSentAt', 'identity-verification'],
     ['ci', 'identity-verification'],
     ['birthDate', 'identity-verification'],

@@ -250,8 +250,8 @@ export function timeZoneFromSelect(value: string): string | null {
 
 /**
  * What the settings 시간대 card shows when `PUT /me/time-zone` fails: a message under the select,
- * or a toast (`contactFieldError` and `contactSaveFailureMessage` in lib/contact-form.ts are the
- * same split for the contact card).
+ * or a toast (`realNameSaveFailure` in lib/phone-verification.ts is the same split for the
+ * real-name card).
  *
  * - A `VALIDATION_ERROR` naming `timeZone`: the server's Intl does not know a zone this browser
  *   listed (newer tzdata here). The select is what to change, so the message goes under it.

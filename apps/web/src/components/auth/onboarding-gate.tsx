@@ -8,17 +8,18 @@ import { useMe } from '@/hooks/use-me';
 import { gatedPagePath, needsOnboarding, onboardingPath } from '@/lib/onboarding';
 
 /**
- * The onboarding gate (ADR-0043), wrapped around every page by the root layout: a signed-in
- * account with no real name and mobile number is sent to `/onboarding?next=<this page>`, from
- * everywhere but the exempt routes (lib/onboarding.ts, where the decision lives and is tested).
- * /admin is gated like the rest — it renders inside this same `<main>`.
+ * The onboarding gate (ADR-0043, keyed on 본인확인 since ADR-0070), wrapped around every page by
+ * the root layout: a signed-in account that has not completed the SMS verification is sent to
+ * `/onboarding?next=<this page>`, from everywhere but the exempt routes (lib/onboarding.ts, where
+ * the decision lives and is tested). /admin is gated like the rest — it renders inside this same
+ * `<main>`.
  *
- * Client-side because the answer is `GET /me`'s `contact`, which the page already fetches for
- * the nav's balance chip; see lib/onboarding.ts for why not `proxy.ts`.
+ * Client-side because the answer is `GET /me`'s `verification`, which the page already fetches
+ * for the nav's balance chip; see lib/onboarding.ts for why not `proxy.ts`.
  *
  * Flash: until the session and `/me` have answered, the page renders as usual — hiding every
  * page from every member for that long would cost far more than it saves the few who are
- * redirected. Once the answer says "no contact", the page is replaced by a placeholder the size
+ * redirected. Once the answer says "not verified", the page is replaced by a placeholder the size
  * of the onboarding card in the same render that schedules the redirect, so the gated page is
  * visible for at most the session and `/me` round trips of a hard load (and never on a client-side
  * navigation, where `['me']` is already known). `replace`, so Back does not return to a page
@@ -28,7 +29,7 @@ export function OnboardingGate({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { data: me, isLoggedIn } = useMe();
-  const redirect = needsOnboarding(pathname, isLoggedIn && me ? me.contact : undefined);
+  const redirect = needsOnboarding(pathname, isLoggedIn && me ? me.verification : undefined);
 
   useEffect(() => {
     if (!redirect) return;

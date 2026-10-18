@@ -28,6 +28,14 @@ seed_admin_password = ""
 # naver_client_id      = ""
 # naver_client_secret  = ""
 
+# --- 알리고 SMS for 본인확인 (ADR-0070): all three or none ----------------------------------------
+# Register the sender number and the Elastic IP (`terraform output public_ip`) with 알리고 first.
+# Without them the API starts and every verification code send fails, so nobody can verify.
+# aligo_api_key   = ""
+# aligo_user_id   = ""
+# aligo_sender    = ""   # digits, e.g. "0212345678"
+# aligo_test_mode = false
+
 # --- Only if you need to change the defaults -------------------------------------------------------
 # profile       = "inno-frame"   # AWS CLI profile that maps to the terraform-iam user (never root)
 # instance_type = "t4g.small"    # t4g.medium if 2 GiB proves too small

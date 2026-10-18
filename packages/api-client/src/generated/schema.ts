@@ -13,7 +13,7 @@ export type paths = {
         /** Every account that holds the admin role now, with its latest grant */
         get: operations["adminListAdmins"];
         put?: never;
-        /** Make an account an admin with a reason (recorded); only an account with a verified email and a real name and mobile number on file */
+        /** Make an account an admin with a reason (recorded); only an account with a verified email that has verified its mobile number */
         post: operations["adminGrantAdmin"];
         delete?: never;
         options?: never;
@@ -555,23 +555,6 @@ export type paths = {
         patch: operations["updateMe"];
         trace?: never;
     };
-    "/api/v1/me/contact": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /** Set real name and mobile number */
-        put: operations["updateMyContact"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/me/ledger": {
         parameters: {
             query?: never;
@@ -657,6 +640,40 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/me/phone-verification/code": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Text a six-digit code to the mobile number, keeping the real name for the confirmation */
+        post: operations["requestPhoneVerificationCode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/phone-verification/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Confirm the account's newest code: records the verified number and real name */
+        post: operations["confirmPhoneVerification"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me/positions": {
         parameters: {
             query?: never;
@@ -667,6 +684,23 @@ export type paths = {
         /** Every position of the account, most recently changed first. status=open keeps the unsettled rows (qty may be 0 after a full sell), status=settled the settled ones; omitted lists all. No cursor: bounded by the markets one account has touched. */
         get: operations["getMyPositions"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/real-name": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Change the real name */
+        put: operations["updateMyRealName"];
         post?: never;
         delete?: never;
         options?: never;
@@ -1026,14 +1060,9 @@ export type components = {
         };
         /** @description Integer amount of Coin as a decimal string (bigint). */
         CoinAmount: string;
-        Contact: {
-            phone: string;
-            realName: string;
-        };
-        ContactBody: {
+        ConfirmPhoneVerificationBody: {
+            code: string;
             expectedAccountId: string;
-            phone: string;
-            realName: string;
         };
         Coupon: {
             amountCoin: components["schemas"]["CoinAmount"];
@@ -1084,7 +1113,7 @@ export type components = {
             limit: number;
         };
         /** @enum {string} */
-        ErrorCode: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "VALIDATION_ERROR" | "MARKET_NOT_OPEN" | "INSUFFICIENT_BALANCE" | "PRICE_MOVED" | "DUPLICATE_REQUEST" | "RATE_LIMITED" | "RULES_REQUIRED" | "CONTACT_REQUIRED" | "REFUND_NOT_ALLOWED" | "PAYMENT_GATEWAY_REFUSED" | "PAYMENT_GATEWAY_ERROR" | "ROLE_CHANGE_NOT_ALLOWED" | "APPROVAL_NOT_ALLOWED" | "INTERNAL";
+        ErrorCode: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "VALIDATION_ERROR" | "MARKET_NOT_OPEN" | "INSUFFICIENT_BALANCE" | "PRICE_MOVED" | "DUPLICATE_REQUEST" | "RATE_LIMITED" | "RULES_REQUIRED" | "VERIFICATION_REQUIRED" | "REFUND_NOT_ALLOWED" | "PAYMENT_GATEWAY_REFUSED" | "PAYMENT_GATEWAY_ERROR" | "ROLE_CHANGE_NOT_ALLOWED" | "APPROVAL_NOT_ALLOWED" | "PHONE_VERIFICATION_NOT_ALLOWED" | "PHONE_VERIFICATION_LIMITED" | "VERIFICATION_CODE_REJECTED" | "SMS_SEND_FAILED" | "INTERNAL";
         ErrorEnvelope: {
             error: {
                 code: components["schemas"]["ErrorCode"];
@@ -1203,7 +1232,6 @@ export type components = {
                 availableCoin: components["schemas"]["CoinAmount"];
                 lockedCoin: components["schemas"]["CoinAmount"];
             };
-            contact: components["schemas"]["Contact"] | null;
             /** Format: email */
             email: string;
             emailVerified: boolean;
@@ -1216,6 +1244,7 @@ export type components = {
                 role: components["schemas"]["UserRole"];
                 timeZone: string | null;
             };
+            verification: components["schemas"]["PhoneVerification"] | null;
         };
         Nickname: string;
         OkResult: {
@@ -1272,6 +1301,16 @@ export type components = {
         PaymentProviderInfo: {
             /** @enum {string} */
             provider: "mock";
+        };
+        PhoneVerification: {
+            phone: string;
+            realName: string;
+            /** Format: date-time */
+            verifiedAt: string;
+        };
+        PhoneVerificationCodeSent: {
+            expiresInSeconds: number;
+            resendAfterSeconds: number;
         };
         Position: {
             costBasisCoin: components["schemas"]["CoinAmount"];
@@ -1385,6 +1424,11 @@ export type components = {
         };
         /** @enum {string} */
         ReleaseSettingStatus: "undecided" | "proposal" | "test" | "approved";
+        RequestPhoneVerificationCodeBody: {
+            expectedAccountId: string;
+            phone: string;
+            realName: string;
+        };
         ResolveMarketBody: {
             /** Format: uri */
             evidenceUrl?: string | null;
@@ -1430,6 +1474,10 @@ export type components = {
         };
         UpdateMeBody: {
             nickname: components["schemas"]["Nickname"];
+        };
+        UpdateRealNameBody: {
+            expectedAccountId: string;
+            realName: string;
         };
         UpdateTimeZoneBody: {
             expectedAccountId: string;
@@ -3991,67 +4039,6 @@ export interface operations {
             };
         };
     };
-    updateMyContact: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ContactBody"];
-            };
-        };
-        responses: {
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        data: components["schemas"]["Contact"];
-                    };
-                };
-            };
-            /** @description VALIDATION_ERROR */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description UNAUTHENTICATED */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description FORBIDDEN */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description RATE_LIMITED */
-            429: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
     getMyLedger: {
         parameters: {
             query?: {
@@ -4331,6 +4318,155 @@ export interface operations {
             };
         };
     };
+    requestPhoneVerificationCode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RequestPhoneVerificationCodeBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["PhoneVerificationCodeSent"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description PHONE_VERIFICATION_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description PHONE_VERIFICATION_LIMITED | RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description SMS_SEND_FAILED */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    confirmPhoneVerification: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfirmPhoneVerificationBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["PhoneVerification"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description VERIFICATION_CODE_REJECTED | PHONE_VERIFICATION_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     getMyPositions: {
         parameters: {
             query?: {
@@ -4363,6 +4499,76 @@ export interface operations {
             };
             /** @description UNAUTHENTICATED */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    updateMyRealName: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateRealNameBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["PhoneVerification"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description VERIFICATION_REQUIRED */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

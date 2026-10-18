@@ -1,50 +1,44 @@
 'use client';
 
 import { Alert, Button, Skeleton, Stack } from '@chakra-ui/react';
-import { zodResolver } from '@hookform/resolvers/zod';
 import type { Route } from 'next';
 import NextLink from 'next/link';
 import { useRouter } from 'next/navigation';
 import { type ReactNode, useEffect } from 'react';
-import { useForm } from 'react-hook-form';
-import { ContactInputs } from '@/components/auth/contact-inputs';
 import { SignOutButton } from '@/components/auth/sign-out-button';
 import { EmptyState } from '@/components/ui/empty-state';
-import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
-import { useUpdateContact } from '@/hooks/use-contact';
 import { useMe } from '@/hooks/use-me';
-import {
-  contactFormSchema,
-  contactFieldError,
-  contactSaveFailureMessage,
-  type ContactFormValues,
-} from '@/lib/contact-form';
 import { onboardingPath } from '@/lib/onboarding';
 import { profileView } from '@/lib/query-client';
+import { VerificationStep } from './verification-step';
 
 /**
  * `next` is already validated by the page (`onboardingNext`). The ONE place that navigates on
- * is the effect below, keyed on `['me']` holding a contact: a member who arrives with one
- * already (another tab saved it, or Back returned here) is sent straight on, and a save lands
- * in the same place because `useUpdateContact` writes the contact into `['me']` before its
- * promise settles — so the gate on `next` already sees it, and nothing can navigate twice.
+ * is the effect below, keyed on `['me']` holding a verification: a member who arrives verified
+ * already (another tab finished, or Back returned here) is sent straight on, and a confirmation
+ * lands in the same place because `useConfirmPhoneVerification` writes the record into `['me']`
+ * before its promise settles — so the gate on `next` already sees it, and nothing can navigate
+ * twice.
+ *
+ * The step on screen is the verification alone (#183). The owner's order of the onboarding is
+ * 약관 동의 → 본인확인 → 닉네임 (ADR-0069 decision 4, #58), and #58 adds the other two around it.
  */
 export function OnboardingForm({ next }: { next: string }) {
   const router = useRouter();
   const { data: me, isPending, isFetching, isLoggedIn, refetch } = useMe();
-  const hasContact = me?.contact != null;
+  const verified = me?.verification != null;
   // The four states MY's screens read (`profileView`), for the same reason: the page's
   // session check is server-side and runs only on navigation, so a session that ends under this
   // form (it expired, another tab signed out) left it offering a retry that can only 401.
   const view = profileView({ isLoggedIn, isPending, isFetching, hasProfile: me !== undefined });
 
   useEffect(() => {
-    if (hasContact) router.replace(next as Route);
-  }, [hasContact, next, router]);
+    if (verified) router.replace(next as Route);
+  }, [verified, next, router]);
 
   // On its way to `next` (the effect above), so not held here.
-  if (hasContact) return <Skeleton height="64" />;
+  if (verified) return <Skeleton height="64" />;
 
   // Back through the login screen to this same round trip, as the page's own redirect sends it.
   // No 로그아웃 here: there is no session left to end.
@@ -84,67 +78,18 @@ export function OnboardingForm({ next }: { next: string }) {
       </Stack>
     );
   } else {
-    step = <OnboardingFields />;
+    // Keyed on the account, so a session switched under this screen (SessionCacheGuard) mounts a
+    // fresh step for the new one instead of keeping the previous account's inputs and countdowns.
+    step = <VerificationStep key={me?.id} />;
   }
 
   // 로그아웃 under every rung of an account held here (owner decision 2026-10-13, #16): the header
-  // has no profile menu and MY is gated, so without it an account that does not want to give its
-  // contact — or cannot, while `/me` fails — could not sign out at all.
+  // has no profile menu and MY is gated, so without it an account that does not want to verify —
+  // or cannot, while `/me` fails or no text arrives — could not sign out at all.
   return (
     <Stack gap="4">
       {step}
       <SignOutButton alignSelf="center" data-testid="onboarding-logout" />
     </Stack>
-  );
-}
-
-function OnboardingFields() {
-  const update = useUpdateContact();
-  const {
-    register,
-    handleSubmit,
-    setError,
-    formState: { errors, isSubmitting },
-  } = useForm<ContactFormValues>({
-    resolver: zodResolver(contactFormSchema),
-    defaultValues: { realName: '', phone: '' },
-  });
-
-  const onSubmit = handleSubmit(async (contact) => {
-    // The account the screen shows rides along (`expectedAccountId`, A-PG-24). Unreachable
-    // while the button honours `ready`.
-    if (update.accountId === undefined) return;
-    try {
-      await update.mutateAsync({ ...contact, expectedAccountId: update.accountId });
-      toaster.create({ type: 'success', title: copy.contactSaved });
-    } catch (error) {
-      const fieldError = contactFieldError(error);
-      if (fieldError) {
-        setError(fieldError.field, { message: fieldError.message });
-        return;
-      }
-      toaster.create({ type: 'error', title: contactSaveFailureMessage(error) });
-    }
-  });
-
-  return (
-    <form onSubmit={(e) => void onSubmit(e)} noValidate data-testid="onboarding-form">
-      <Stack gap="5">
-        <ContactInputs
-          realName={register('realName')}
-          phone={register('phone')}
-          errors={{ realName: errors.realName?.message, phone: errors.phone?.message }}
-        />
-        <Button
-          type="submit"
-          size="lg"
-          loading={isSubmitting}
-          disabled={!update.ready}
-          data-testid="onboarding-submit"
-        >
-          {copy.onboardingSubmit}
-        </Button>
-      </Stack>
-    </form>
   );
 }

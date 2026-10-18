@@ -23,9 +23,9 @@ import { WatchlistService } from './watchlist.service.js';
 /**
  * `/api/v1/me/watchlist` (#89, ADR-0064): the caller's 관심 시장. Owner-only routes: the session
  * decides whose watchlist is read or written and nothing here takes another account (#37). The
- * server checks the session only, never the onboarding contact (ADR-0061 decision 3, #57); the
- * web's onboarding gate (ADR-0043) is unchanged. Counted like `PATCH /me`: the per-address bucket
- * every route has, no named one.
+ * server checks the session only, never the account's verification (ADR-0061 decision 3, #57);
+ * the web's onboarding gate (ADR-0043, keyed on the verification since ADR-0070) is unchanged.
+ * Counted like `PATCH /me`: the per-address bucket every route has, no named one.
  *
  * `watchlistQuerySchema` carries no `.meta({ id })`, so swagger expands it into one parameter per
  * field by itself (markets.controller.ts says why no `@ApiQuery` sits beside it).
@@ -75,9 +75,9 @@ export class MeWatchlistController {
    * carries `expectedAccountId`, and OpenAPI 3.0 leaves a DELETE's body undefined.
    *
    * The body names the account the screen shows (`expectedAccountId`, assertExpectedAccount), as
-   * the contact and the time zone do (ADR-0063): the cookie decides whose watchlist is written,
-   * and a window still showing account A after another one signed in as B would otherwise put the
-   * market on B's list — or take it off — while A's button said it was A's.
+   * the verification and the time zone do (ADR-0063): the cookie decides whose watchlist is
+   * written, and a window still showing account A after another one signed in as B would otherwise
+   * put the market on B's list — or take it off — while A's button said it was A's.
    */
   @Put('watchlist/:marketId')
   @ApiOperation({

@@ -12,6 +12,7 @@ import { RedisModule } from './infra/redis/redis.module.js';
 import { JobsModule } from './jobs/jobs.module.js';
 import { MarketsModule } from './markets/markets.module.js';
 import { MeModule } from './me/me.module.js';
+import { PhoneVerificationModule } from './phone-verification/phone-verification.module.js';
 import { RateLimitModule } from './rate-limit/rate-limit.module.js';
 import { RealtimeModule } from './realtime/realtime.module.js';
 import { ReleaseSettingsModule } from './release-settings/release-settings.module.js';
@@ -38,6 +39,7 @@ import { WatchlistModule } from './watchlist/watchlist.module.js';
     // through the same better-auth instance, and a guard is only reachable once routing exists.
     RateLimitModule,
     MeModule,
+    PhoneVerificationModule,
     WalletModule,
     AdminModule,
     RealtimeModule,

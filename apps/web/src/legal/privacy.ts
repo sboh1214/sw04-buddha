@@ -8,7 +8,8 @@ import { type LegalDocument, bullets, numbered, paragraph, table } from './docum
  *
  * The collected items are what the code actually stores: better-auth's `user`/`account`/
  * `session` rows (email, password hash, the provider's name/image, IP and user agent),
- * `profiles` (nickname), `user_contacts` (real name, mobile, ADR-0043) and `payments` /
+ * `profiles` (nickname), `phone_verifications` (real name and verified mobile, ADR-0070; the
+ * policy's wording of it is #137's, D11) and `payments` /
  * `payment_events` (the PG's approval result, whose card number arrives masked — SmartroPay
  * masks digits 7-12). The processors are the PG and AWS (terraform/: ap-northeast-2, SES in the
  * same region). Keep this list in step with the schema when either changes.

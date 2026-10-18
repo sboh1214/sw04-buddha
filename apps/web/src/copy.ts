@@ -454,13 +454,14 @@ export const copy = {
 
   // --- admin: admin accounts (#171, ADR-0056) ---
   // 관리자 권한은 하나이고, 관리자가 화면에서 사유를 남기고 다른 관리자의 승인 없이 부여·회수한다.
-  // 부여 조건, 2명 하한, 회수 때의 로그아웃은 오너 결정(2026-10-13 #171)이다. '2명'은
+  // 부여 조건, 2명 하한, 회수 때의 로그아웃은 오너 결정(2026-10-13 #171)이다. 부여 조건의 둘째는
+  // 휴대전화 본인확인이다(ADR-0069 결정 4 #58, ADR-0070 — 옛 '실명·휴대전화 입력'을 대신한다). '2명'은
   // MIN_ADMINS와 같아야 하고, 사유 500자는 ADMIN_ROLE_REASON_MAX_LENGTH와 같아야 한다
   // (admin-accounts.test.ts가 확인한다).
   adminAccounts: '운영자 계정',
   adminAccountsIntro:
     '관리자 권한은 하나이며, 관리자가 사유를 남기고 부여·회수합니다. 부여·회수할 때마다 작업자·대상 계정·시각·사유가 권한 변경 기록에 남습니다.',
-  adminAccountsGrantRule: '이메일 인증과 실명·휴대전화 입력을 마친 계정에만 부여할 수 있습니다.',
+  adminAccountsGrantRule: '이메일 인증과 휴대전화 본인확인을 마친 계정에만 부여할 수 있습니다.',
   adminAccountsRevokeRule:
     '회수한 뒤에도 관리자가 2명 이상 남아야 합니다. 내 계정의 권한을 회수할 때도 같습니다.',
   adminAccountsRevokeEffect:
@@ -475,7 +476,7 @@ export const copy = {
   adminAccountsGrant: '부여',
   adminAccountsGrantDialogTitle: '관리자 권한을 부여합니다',
   adminAccountsGrantNotice:
-    '이메일 인증과 실명·휴대전화 입력을 마친 계정에만 부여할 수 있습니다. 부여하면 이 계정은 다음 요청부터 관리자 기능을 씁니다.',
+    '이메일 인증과 휴대전화 본인확인을 마친 계정에만 부여할 수 있습니다. 부여하면 이 계정은 다음 요청부터 관리자 기능을 씁니다.',
   adminAccountsGrantDone: '관리자 권한을 부여했습니다.',
   adminAccountsRevokeDialogTitle: '관리자 권한을 회수합니다',
   adminAccountsRevokeNotice:
@@ -495,9 +496,9 @@ export const copy = {
   errAdminRoleReason: '사유를 1~500자로 입력해 주세요.',
   errAdminGrantAlreadyAdmin: '이미 관리자인 계정입니다.',
   errAdminGrantEmailNotVerified:
-    '이메일 인증을 마치지 않은 계정입니다. 이메일 인증과 실명·휴대전화 입력을 마친 계정에만 관리자 권한을 부여할 수 있습니다.',
-  errAdminGrantContactRequired:
-    '실명·휴대전화를 입력하지 않은 계정입니다. 이메일 인증과 실명·휴대전화 입력을 마친 계정에만 관리자 권한을 부여할 수 있습니다.',
+    '이메일 인증을 마치지 않은 계정입니다. 이메일 인증과 휴대전화 본인확인을 마친 계정에만 관리자 권한을 부여할 수 있습니다.',
+  errAdminGrantPhoneNotVerified:
+    '휴대전화 본인확인을 마치지 않은 계정입니다. 이메일 인증과 휴대전화 본인확인을 마친 계정에만 관리자 권한을 부여할 수 있습니다.',
   errAdminRevokeNotAdmin: '관리자가 아닌 계정입니다. 이미 회수되었을 수 있습니다.',
   errAdminRevokeMinAdmins:
     '회수하면 관리자가 2명보다 적어지므로 회수할 수 없습니다. 회수한 뒤에도 관리자가 2명 이상 남아야 하고, 내 계정의 권한을 회수할 때도 같습니다. 다른 계정에 먼저 관리자 권한을 부여해 주세요.',
@@ -801,39 +802,78 @@ export const copy = {
   chargeGuideRefundLink: '환불정책 자세히 보기',
   chargeGuideLoadError: '충전 상품을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.',
 
-  // --- 실명·휴대전화와 온보딩 (ADR-0043) ---
-  // 결제의 구매자 정보로 쓰려고 받는다(수집 목적 안내는 #58에서 고친다). 본인인증은 아직 없어서
-  // 형식만 확인하고 입력한 그대로 저장한다. 규칙은 @buddha/shared의 realNameSchema·phoneSchema(lib/contact-form.ts)다.
+  // --- 본인확인과 온보딩 (ADR-0043, ADR-0070) ---
+  // 휴대전화 SMS 인증번호 본인확인(#183, ADR-0069 결정 1 #57-1·#57-3). 실명과 번호를 한 화면에서 받고 그 번호로
+  // 보낸 6자리 인증번호를 확인한다. 번호 입력은 이 단계 하나뿐이고(확인하지 않은 번호 칸은 없앴다), 확인한 뒤에는
+  // 실명만 MY 설정에서 고친다. 규칙은 @buddha/shared의 realNameSchema·phoneSchema·phoneVerificationCodeSchema
+  // (lib/phone-verification.ts)이고, 문장 속 수치(3분·1분·5번·10번·24시간)는 PHONE_VERIFICATION_LIMITS와 같아야
+  // 한다(lib/phone-verification.test.ts가 확인한다). 사용자에게 수집 목적을 말하는 문장은 #58·#137이 쓴다.
   realName: '실명',
   realNameHint: '2~30자의 문자(한글·영문 등). 띄어쓰기와 가운뎃점(·)을 쓸 수 있습니다.',
   phone: '휴대전화 번호',
   phonePlaceholder: '010-1234-5678',
   phoneHint: '하이픈(-)은 넣어도 되고 빼도 됩니다.',
-  contactVerificationNotice:
-    '본인인증은 추후 도입 예정입니다. 지금은 입력한 실명과 번호를 그대로 저장합니다.',
-  contactPrivacyLink: '개인정보처리방침 보기',
+  verificationPrivacyLink: '개인정보처리방침 보기',
   errRealNameRequired: '실명을 입력해 주세요.',
   errRealNameFormat:
     '실명은 2~30자의 문자(한글·영문 등)로 입력해 주세요. 숫자와 기호는 쓸 수 없고, 띄어쓰기와 가운뎃점(·)은 글자 사이에만 쓸 수 있습니다.',
   errPhoneRequired: '휴대전화 번호를 입력해 주세요.',
   errPhoneFormat:
     '010·011·016~019로 시작하는 휴대전화 번호 10~11자리를 입력해 주세요. (예: 010-1234-5678)',
-  onboardingTitle: '실명·연락처 입력',
-  onboardingSignedOut: '로그인이 풀렸습니다. 다시 로그인하면 이어서 입력할 수 있습니다.',
+  onboardingTitle: '본인확인',
+  onboardingSignedOut: '로그인이 풀렸습니다. 다시 로그인하면 이어서 본인확인을 할 수 있습니다.',
   onboardingSubtitle:
-    '결제에 필요한 실명과 휴대전화 번호를 입력해 주세요. 입력을 마치면 서비스를 계속 이용할 수 있습니다.',
-  onboardingSubmit: '저장하고 계속하기',
-  contactSaved: '실명과 휴대전화 번호를 저장했습니다.',
-  settingsContact: '실명·연락처',
-  settingsContactHint: '결제할 때 구매자 정보로 전달됩니다.',
-  setPasswordContactHeading: '결제에 쓰일 실명과 휴대전화 번호도 입력해 주세요.',
-  // 비밀번호는 이미 저장된 뒤라 이 화면에서 다시 시도할 수 없다(설정 완료 안내로 바뀐다).
-  setPasswordContactFailed:
-    '비밀번호는 저장했지만 실명·연락처를 저장하지 못했습니다. 다음 화면에서 다시 입력해 주세요.',
-  // 비밀번호는 저장한 뒤, 다른 탭이 다른 계정으로 로그인해 연락처 요청이 거절됐을 때(A-PG-24).
-  // 지금 쿠키의 계정에 /onboarding을 권하면 안 되므로, 원래 계정으로 다시 로그인하라고만 한다.
-  setPasswordContactSessionChanged:
-    '비밀번호는 저장했지만, 그사이 로그인한 계정이 바뀌어 실명·연락처는 저장하지 않았습니다. 원래 계정으로 다시 로그인하면 이어서 입력할 수 있습니다.',
+    '실명과 휴대전화 번호를 입력하고, 그 번호로 받은 6자리 인증번호를 입력해 주세요. 본인확인을 마치면 서비스를 계속 이용할 수 있습니다.',
+  verificationSend: '인증번호 받기',
+  verificationResend: '인증번호 다시 받기',
+  // 인증번호를 보낸 뒤 실명·번호 칸은 잠긴다. 고치려면 이 단추로 두 칸을 다시 연다(다시 받는 것은 1분 뒤부터).
+  verificationEdit: '실명·번호 다시 입력',
+  // 이 화면이 보내지 않은 인증번호(새로 고침 전, 다른 탭, 답을 받지 못한 발송)를 넣는 칸을 연다. 서버는
+  // 어느 화면이 보냈든 계정의 가장 새 인증번호를 확인한다.
+  verificationCodeEnter: '이미 받은 인증번호 입력',
+  // 1분 안에 보낸 인증번호가 있어 다시 받기가 거절됐을 때, 인증번호 칸을 열며 앞에 붙는다. 어느 번호로
+  // 보냈는지는 말하지 않는다(다른 탭에서 다른 번호로 보냈을 수 있다).
+  verificationCodeWaiting: '최근에 보낸 인증번호가 있습니다. 문자로 받았다면 아래에 입력해 주세요.',
+  verificationCode: '인증번호',
+  verificationCodeHint: '문자로 받은 숫자 6자리를 입력해 주세요.',
+  verificationCodeSent: '입력한 번호로 인증번호를 보냈습니다. 3분 안에 입력해 주세요.',
+  // 인증번호의 남은 유효시간 앞에 붙는다(예: '남은 시간 2:59').
+  verificationExpiresIn: '남은 시간',
+  verificationConfirm: '본인확인 완료',
+  verificationDone: '본인확인을 마쳤습니다.',
+  // 기다려야 하는 시간 뒤에 붙는다(예: '… 42초 뒤에 다시 시도해 주세요.').
+  verificationRetryAfter: '뒤에 다시 시도해 주세요.',
+  // 틀린 인증번호의 남은 입력 기회(예: '(남은 입력 기회 4번)').
+  verificationAttemptsLeft: '남은 입력 기회',
+  verificationAttemptsUnit: '번',
+  errVerificationCodeRequired: '인증번호를 입력해 주세요.',
+  errVerificationCodeFormat: '인증번호는 숫자 6자리입니다.',
+  errVerificationCodeMismatch: '인증번호가 맞지 않습니다.',
+  errVerificationCodeExpired: '인증번호의 유효시간 3분이 지났습니다. 인증번호를 다시 받아 주세요.',
+  errVerificationCodeAttemptsExceeded:
+    '인증번호를 5번 잘못 입력해 이 인증번호는 더 쓸 수 없습니다. 인증번호를 다시 받아 주세요.',
+  errVerificationCodeNone: '확인할 인증번호가 없습니다. 인증번호를 다시 받아 주세요.',
+  errVerificationResendWait: '인증번호는 1분에 한 번 받을 수 있습니다.',
+  errVerificationAccountDaily: '한 계정은 24시간 동안 인증번호를 10번까지 받을 수 있습니다.',
+  errVerificationPhoneDaily: '한 번호로는 24시간 동안 인증번호를 10번까지 받을 수 있습니다.',
+  errVerificationTooManyRequests: '요청이 너무 많습니다.',
+  // 문자 발송 사업자가 받았다고 답하지 않았다(SMS_SEND_FAILED). 받지 않은 것이 확실하면 보낸 것으로 세지
+  // 않고, 결과를 알 수 없으면(문자가 갔을 수 있다) 세고 그 인증번호는 '이미 받은 인증번호 입력'으로 넣을 수
+  // 있다(ADR-0070 7-3). 화면은 둘을 가리지 못한다(같은 502). 결과를 알 수 없을 때의 문구는 오너에게 물을 것.
+  errVerificationSendFailed: '인증번호를 보내지 못했습니다. 잠시 후 다시 시도해 주세요.',
+  errVerificationAlreadyDone: '이미 본인확인을 마친 계정입니다.',
+  // 한 번호에는 한 계정만(#57-1). 인증번호가 맞은 뒤에만 알려 준다(번호의 주인만 안다).
+  errPhoneInUse:
+    '다른 계정이 이미 본인확인에 쓴 번호입니다. 번호 하나로는 계정 하나만 본인확인할 수 있습니다.',
+  errRealNameUnverified: '본인확인을 마친 계정만 실명을 고칠 수 있습니다.',
+  settingsVerification: '본인확인',
+  // 확인하는 것은 번호뿐이다(실명은 형식만 본다). 실명이 확인된 값처럼 읽히지 않게 둘을 나눠 말한다.
+  settingsVerificationHint: '본인확인으로 확인한 휴대전화 번호와, 여기서 고칠 수 있는 실명입니다.',
+  // 번호는 본인이 바꾸지 못하고 운영 문의로만 처리한다(#57-3, 운영자가 DB에서 바꾼다).
+  verifiedPhoneHint: '번호는 직접 바꿀 수 없습니다. 바꾸려면 고객센터로 문의해 주세요.',
+  realNameSaved: '실명을 저장했습니다.',
+  settingsNotVerified: '아직 휴대전화 본인확인을 하지 않았습니다.',
+  settingsVerifyNow: '본인확인하기',
 
   // --- 결제 내역 · 관리자 환불 (ADR-0042) ---
   // 유료 충전을 닫은 동안(ADR-0049) 그리지 않지만 코드와 함께 남긴다. 환불 기한 7일은 @buddha/shared의

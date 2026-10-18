@@ -46,6 +46,10 @@ const mailbox = z.string().refine(
 );
 
 export const OAUTH_PROVIDERS = ['google', 'kakao', 'naver'] as const;
+
+/** Who texts the verification codes (SMS_PROVIDER, ADR-0070). */
+export const SMS_PROVIDERS = ['dev', 'aligo'] as const;
+export type SmsProvider = (typeof SMS_PROVIDERS)[number];
 export type OAuthProvider = (typeof OAUTH_PROVIDERS)[number];
 
 /**
@@ -175,6 +179,32 @@ export const envSchema = z
      * refund uses the provider recorded on the payment row.
      */
     PAYMENT_PROVIDER: optionalString.pipe(paymentProviderSchema.default('mock')),
+
+    // --- SMS for 본인확인 (#183, ADR-0069 decision 1 #57-3, ADR-0070) ---
+    /**
+     * Who texts the verification codes: `aligo` (알리고, the provider the owner chose) or `dev`,
+     * which texts nobody and mails each code to Mailpit instead (`sms-<digits>@sms.buddha.local`),
+     * for local development and the e2e suite. Unset, `aligo` under NODE_ENV=production and `dev`
+     * everywhere else (`smsProvider`). Production refuses `dev`: a deployed API must never answer
+     * "sent" for a code nobody received.
+     */
+    SMS_PROVIDER: optionalString.pipe(z.enum(SMS_PROVIDERS).optional()),
+    /**
+     * 알리고 credentials and the registered sender number (발신번호, digits). All three or none;
+     * with none, `aligo` refuses every send (SMS_SEND_FAILED) and so no account can complete the
+     * verification — the owner's decision for a deployment without keys, rather than a silent
+     * success. The provider also accepts sends only from the server addresses registered with
+     * it (EIP).
+     */
+    ALIGO_API_KEY: optionalString,
+    ALIGO_USER_ID: optionalString,
+    ALIGO_SENDER: optionalString,
+    /**
+     * 알리고's `testmode_yn=Y`: the provider answers as it would but texts nobody and charges
+     * nothing, so the keys and the registered address can be checked. No code arrives, so no
+     * account can verify while it is on.
+     */
+    ALIGO_TEST_MODE: z.stringbool().default(false),
   })
   .superRefine((env, ctx) => {
     // Same reason as WEB_ORIGIN below: a bad entry must fail at `loadEnv()` under its own name.
@@ -269,6 +299,29 @@ export const envSchema = z
         message: 'SMTP_USER and SMTP_PASS must be set together',
       });
     }
+    if (env.NODE_ENV === 'production' && env.SMS_PROVIDER === 'dev') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['SMS_PROVIDER'],
+        message: 'dev texts nobody; production sends verification codes through aligo',
+      });
+    }
+    const aligo = [env.ALIGO_API_KEY, env.ALIGO_USER_ID, env.ALIGO_SENDER];
+    if (aligo.some(Boolean) && !aligo.every(Boolean)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['ALIGO_API_KEY'],
+        message:
+          'ALIGO_API_KEY, ALIGO_USER_ID and ALIGO_SENDER must be set together (or all empty)',
+      });
+    }
+    if (env.ALIGO_SENDER !== undefined && !/^\d{8,11}$/.test(env.ALIGO_SENDER)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['ALIGO_SENDER'],
+        message: 'ALIGO_SENDER must be the registered sender number, 8 to 11 digits',
+      });
+    }
     for (const provider of OAUTH_PROVIDERS) {
       const prefix = provider.toUpperCase();
       const id = env[`${prefix}_CLIENT_ID` as `${Uppercase<OAuthProvider>}_CLIENT_ID`];
@@ -355,6 +408,23 @@ export function parseTrustProxy(value: string): boolean | string[] {
     .split(',')
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0);
+}
+
+/**
+ * SMS_PROVIDER as configured, or its default: `aligo` under NODE_ENV=production, so a deployment
+ * that forgot the variable sends through the real provider (and fails without its keys) rather
+ * than through the development sender, and `dev` everywhere else.
+ */
+export function smsProvider(env: Pick<Env, 'NODE_ENV' | 'SMS_PROVIDER'>): SmsProvider {
+  return env.SMS_PROVIDER ?? (env.NODE_ENV === 'production' ? 'aligo' : 'dev');
+}
+
+/** 알리고's credentials and sender number, or undefined when they are not configured. */
+export function aligoCredentials(
+  env: Pick<Env, 'ALIGO_API_KEY' | 'ALIGO_USER_ID' | 'ALIGO_SENDER'>,
+): { apiKey: string; userId: string; sender: string } | undefined {
+  const { ALIGO_API_KEY: apiKey, ALIGO_USER_ID: userId, ALIGO_SENDER: sender } = env;
+  return apiKey && userId && sender ? { apiKey, userId, sender } : undefined;
 }
 
 export interface OAuthCredentials {

@@ -9,7 +9,12 @@ import {
   onboardingPath,
 } from './onboarding';
 
-const CONTACT = { realName: '홍길동', phone: '01012345678' };
+/** What `GET /me` carries once the account has confirmed its code (ADR-0070). */
+const VERIFIED = {
+  realName: '홍길동',
+  phone: '01012345678',
+  verifiedAt: '2026-10-18T00:00:00.000Z',
+};
 
 describe('isOnboardingExempt', () => {
   it('lists exactly the routes ADR-0043 names, plus /api', () => {
@@ -77,7 +82,7 @@ describe('isOnboardingExempt', () => {
 });
 
 describe('needsOnboarding', () => {
-  it('redirects a signed-in account without a contact from a gated page', () => {
+  it('redirects a signed-in account that has not verified from a gated page', () => {
     expect(needsOnboarding('/', null)).toBe(true);
     expect(needsOnboarding('/my/wallet', null)).toBe(true);
     expect(needsOnboarding('/admin/markets', null)).toBe(true);
@@ -89,10 +94,10 @@ describe('needsOnboarding', () => {
     expect(needsOnboarding('/privacy', null)).toBe(false);
   });
 
-  it('never redirects while the answer is unknown, or once the account has a contact', () => {
+  it('never redirects while the answer is unknown, or once the account has verified', () => {
     expect(needsOnboarding('/my/wallet', undefined)).toBe(false);
-    expect(needsOnboarding('/my/wallet', CONTACT)).toBe(false);
-    expect(needsOnboarding('/admin/users', CONTACT)).toBe(false);
+    expect(needsOnboarding('/my/wallet', VERIFIED)).toBe(false);
+    expect(needsOnboarding('/admin/users', VERIFIED)).toBe(false);
   });
 
   it('leaves a held account the two screens with 로그아웃, and lets it go once signed out', () => {
@@ -102,7 +107,8 @@ describe('needsOnboarding', () => {
     for (const path of ['/onboarding', '/set-password']) {
       expect(needsOnboarding(path, null), path).toBe(false);
     }
-    // `useSignOut` lands on home, where a signed-out tab asks no `GET /me`: the contact is unknown.
+    // `useSignOut` lands on home, where a signed-out tab asks no `GET /me`: the verification is
+    // unknown.
     expect(needsOnboarding('/', undefined)).toBe(false);
   });
 });

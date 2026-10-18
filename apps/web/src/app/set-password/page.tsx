@@ -24,7 +24,8 @@ export const metadata: Metadata = { title: `${copy.setPasswordTitle} | ${copy.ap
  *   note says the link is stale without sending them after a new one.
  *
  * 로그아웃 sits under the form in every state (owner decision 2026-10-13, #16): an account that has
- * not given its contact yet is kept out of MY, where the other 로그아웃 is, by the onboarding gate.
+ * not verified its phone yet (ADR-0070) is kept out of MY, where the other 로그아웃 is, by the
+ * onboarding gate.
  */
 export default async function SetPasswordPage({
   searchParams,

@@ -53,7 +53,7 @@ export type WatchState = z.infer<typeof watchStateSchema>;
 
 /**
  * `PUT /me/watchlist/:marketId`: the state to set — `true` watches, `false` unwatches — and the
- * account the screen shows (`expectedAccountId`, as on the contact and time-zone bodies,
+ * account the screen shows (`expectedAccountId`, as on the verification and time-zone bodies,
  * A-PG-24). The cookie decides whose watchlist is written, and a window still showing account A
  * after another one signed in as B would otherwise put the market on B's list while A's button
  * said it was A's. The server refuses the mismatch (403 FORBIDDEN naming the field) before it

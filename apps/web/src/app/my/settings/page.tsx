@@ -3,13 +3,13 @@ import type { Metadata } from 'next';
 import { copy } from '@/copy';
 import { requireMySession } from '@/lib/my.server';
 import { AccountSection } from './account-section';
-import { ContactSection } from './contact-section';
 import { LinkedAccounts } from './linked-accounts';
 import { NicknameForm } from './nickname-form';
 import { PasswordForm } from './password-form';
 import { SettingsNotice } from './settings-notice';
 import { ThemeSection } from './theme-section';
 import { TimeZoneSection } from './time-zone-section';
+import { VerificationSection } from './verification-section';
 
 export const metadata: Metadata = { title: `${copy.settingsTitle} | ${copy.appName}` };
 
@@ -32,7 +32,7 @@ export default async function SettingsPage({
       {error !== undefined && <SettingsNotice code={error} />}
       <NicknameForm />
       <AccountSection />
-      <ContactSection />
+      <VerificationSection />
       <LinkedAccounts />
       <PasswordForm />
       <TimeZoneSection />

@@ -3,7 +3,7 @@
  * connected with (buddha_app in integration tests), bypassing better-auth and the API so a
  * test can build its fixture state in a few lines. Never used outside tests.
  */
-import { randomUUID } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
 import {
   PRICE_MAX,
   PRICE_MIN,
@@ -30,6 +30,7 @@ import {
   marketWatches,
   markets,
   orders,
+  phoneVerifications,
   positions,
   profiles,
   user,
@@ -472,6 +473,40 @@ export async function createMarketLink(db: Db, input: CreateMarketLinkInput) {
       ...pair,
       createdBy,
       ...(input.createdAt === undefined ? {} : { createdAt: input.createdAt }),
+    })
+    .returning();
+  return row!;
+}
+
+export interface CreatePhoneVerificationInput {
+  userId: string;
+  /** Digits only. Default: a random 010 number, so two verified accounts never share one. */
+  phone?: string;
+  /** Default: 홍길동. */
+  realName?: string;
+  /** Default: the database clock. */
+  verifiedAt?: Date;
+}
+
+/** A random mobile number, digits only: 010 and eight digits. */
+export function randomPhone(): string {
+  return `010${String(randomInt(0, 100_000_000)).padStart(8, '0')}`;
+}
+
+/**
+ * A completed 본인확인 (#183, ADR-0070) as a matched confirmation leaves it: the
+ * `phone_verifications` row, and nothing of the code that was sent for it. For a test whose
+ * subject needs a verified account rather than the verification itself; the number is UNIQUE, so
+ * the same number twice throws, as a second account confirming it would be refused.
+ */
+export async function createPhoneVerification(db: Db, input: CreatePhoneVerificationInput) {
+  const [row] = await db
+    .insert(phoneVerifications)
+    .values({
+      userId: input.userId,
+      phone: input.phone ?? randomPhone(),
+      realName: input.realName ?? '홍길동',
+      ...(input.verifiedAt === undefined ? {} : { verifiedAt: input.verifiedAt }),
     })
     .returning();
   return row!;

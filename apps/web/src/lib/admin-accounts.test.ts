@@ -48,10 +48,17 @@ describe('the copy and the shared rules', () => {
     expect(copy.errAdminRoleReason).toContain(`1~${String(ADMIN_ROLE_REASON_MAX_LENGTH)}자`);
   });
 
-  it('states the grant conditions and what a revoke does (owner decision 2026-10-13)', () => {
-    for (const text of [copy.adminAccountsGrantRule, copy.adminAccountsGrantNotice]) {
-      expect(text).toContain('이메일 인증');
-      expect(text).toContain('실명·휴대전화');
+  it('states the grant conditions and what a revoke does (owner decision 2026-10-13, ADR-0070)', () => {
+    // Every text that names the grant conditions names both: a verified email and a completed
+    // phone verification — never the real name and number typed without one (ADR-0043).
+    for (const text of [
+      copy.adminAccountsGrantRule,
+      copy.adminAccountsGrantNotice,
+      copy.errAdminGrantEmailNotVerified,
+      copy.errAdminGrantPhoneNotVerified,
+    ]) {
+      expect(text).toContain('이메일 인증과 휴대전화 본인확인');
+      expect(text).not.toContain('입력을 마친');
     }
     expect(copy.adminAccountsRevokeEffect).toContain('로그아웃');
     expect(copy.adminAccountsRevokeNotice).toContain('로그아웃');
@@ -73,8 +80,8 @@ describe('refusals', () => {
   });
 
   it('explains a refusal by the rules inside the dialog', () => {
-    expect(adminRoleChangeRefusal(refused('contact_required'))).toEqual({
-      alert: copy.errAdminGrantContactRequired,
+    expect(adminRoleChangeRefusal(refused('phone_not_verified'))).toEqual({
+      alert: copy.errAdminGrantPhoneNotVerified,
     });
     expect(adminRoleChangeRefusal(refused('email_not_verified'))).toEqual({
       alert: copy.errAdminGrantEmailNotVerified,

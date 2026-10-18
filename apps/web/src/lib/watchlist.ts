@@ -94,7 +94,7 @@ export function watchPressAction(press: WatchPress): WatchPressAction | null {
 /**
  * The toast of a press that failed. The optimistic state has been rolled back by then
  * (`updateWatchOptions`), so it says which change did not happen. A refusal as another account
- * (the cookie is somebody else's now, A-PG-24) says that instead, as the contact and the time
+ * (the cookie is somebody else's now, A-PG-24) says that instead, as the verification and the time
  * zone do; the hook has asked for the session again, and SessionCacheGuard puts the real account
  * on screen.
  */

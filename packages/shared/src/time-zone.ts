@@ -65,12 +65,12 @@ export const timeZoneSchema = z
  * `PUT /me/time-zone`: the zone to read times in, or `null` to follow the browser again. The key
  * is required either way, so a body that forgot it is a 400 rather than a silent clear.
  *
- * The body also names the account the screen is showing (`expectedAccountId`, as on the contact
- * and password bodies, A-PG-24). The cookie decides whose profile is written, and a tab whose
- * session was switched elsewhere (another window signed in as somebody else; sign-ins are not
- * broadcast) keeps showing the old account: without it the zone picked there would land on the
- * other account, which nothing on that screen would show (ADR-0063). The server refuses the
- * mismatch (403 FORBIDDEN naming the field) before it writes.
+ * The body also names the account the screen is showing (`expectedAccountId`, as on the
+ * verification and password bodies, A-PG-24). The cookie decides whose profile is written, and a
+ * tab whose session was switched elsewhere (another window signed in as somebody else; sign-ins
+ * are not broadcast) keeps showing the old account: without it the zone picked there would land
+ * on the other account, which nothing on that screen would show (ADR-0063). The server refuses
+ * the mismatch (403 FORBIDDEN naming the field) before it writes.
  */
 export const updateTimeZoneBodySchema = z
   .object({

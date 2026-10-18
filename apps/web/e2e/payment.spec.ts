@@ -89,7 +89,7 @@ test.describe('유료 충전 닫힘 (ADR-0049)', () => {
   });
 
   test('관리자 메뉴에 충전 상품·쿠폰·결제가 없다', async ({ page, admin }) => {
-    // The fixture gives the seed admin its contact, so the onboarding gate lets it through.
+    // The fixture verifies the seed admin's phone, so the onboarding gate lets it through.
     void admin;
     await signIn(page, adminAccount.email, adminAccount.password);
     await page.goto('/admin/markets');

@@ -26,7 +26,7 @@ import { useSession } from '@/lib/use-session';
  * cookie, and a signed-out request would take a 401 the retry rule refuses to retry.
  *
  * The query and mutation options are exported apart from the hooks so they can be tested under
- * the node runner (use-watchlist.test.ts), as use-contact.ts does.
+ * the node runner (use-watchlist.test.ts), as use-phone-verification.ts does.
  */
 
 /** Just enough of better-auth's session to say whether anybody is signed in (use-portfolio.ts). */
@@ -159,7 +159,7 @@ function restoreRead(
  *   held (the press came after a failed read), the failed read itself (`restoreRead`), so the
  *   entry is not left showing a write that did not happen and the toggle keeps its focus while
  *   the state is read again. A refusal as another account also asks for the session again
- *   (`onSessionChanged`), as the contact and time-zone writes do.
+ *   (`onSessionChanged`), as the verification and time-zone writes do.
  * - either way the list and this market's state are invalidated: the list's membership changed
  *   (it is usually not mounted here, so that only marks it stale for MY), and the state is read
  *   again so the screen ends on the server's word, whatever the answer was.

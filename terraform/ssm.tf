@@ -35,7 +35,7 @@ resource "aws_ssm_parameter" "env" {
   name        = local.ssm_env_parameter
   description = "Complete production .env for the tf-buddha compose stack; read by deploy/deploy.sh"
   type        = "SecureString"
-  # Standard tier: free, 4 KB limit (the rendered file is ~2.3 KB with every optional key set).
+  # Standard tier: free, 4 KB limit (the rendered file is ~2.7 KB with every optional key set).
   tier = "Standard"
 
   value = templatefile("${path.module}/templates/env.tftpl", {
@@ -56,6 +56,10 @@ resource "aws_ssm_parameter" "env" {
     kakao_client_secret        = var.kakao_client_secret
     naver_client_id            = var.naver_client_id
     naver_client_secret        = var.naver_client_secret
+    aligo_api_key              = var.aligo_api_key
+    aligo_user_id              = var.aligo_user_id
+    aligo_sender               = var.aligo_sender
+    aligo_test_mode            = var.aligo_test_mode
     postgres_password          = random_password.postgres_superuser.result
     seed_admin_email           = var.seed_admin_email
     seed_admin_password        = var.seed_admin_password

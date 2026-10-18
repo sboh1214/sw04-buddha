@@ -316,8 +316,8 @@ function CandidateRow({
 
 /**
  * The grant or the revoke, with its required reason. Pinned while the request runs, as the other
- * admin dialogs are. A refused reason goes under the field; a refusal by the rules (a missing
- * contact, fewer than two admins left, …) is explained inside the dialog, which stays; any other
+ * admin dialogs are. A refused reason goes under the field; a refusal by the rules (a phone not
+ * verified, fewer than two admins left, …) is explained inside the dialog, which stays; any other
  * answer is a toast that closes it (`adminRoleChangeRefusal`).
  *
  * Both name the admin the screen shows (`expectedAccountId`), read from the session of the render

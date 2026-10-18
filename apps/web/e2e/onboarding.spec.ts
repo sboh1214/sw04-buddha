@@ -1,66 +1,78 @@
 import { copy } from '../src/copy';
-import { E2E_CONTACT, E2E_PASSWORD, expect, freshEmail, openSetPassword, test } from './helpers';
+import {
+  E2E_PASSWORD,
+  E2E_REAL_NAME,
+  expect,
+  freshEmail,
+  freshPhone,
+  openSetPassword,
+  test,
+  verifyPhone,
+} from './helpers';
 
 /**
- * 실명·휴대전화 수집과 온보딩 게이트 (ADR-0043).
+ * 본인확인과 온보딩 게이트 (ADR-0043, ADR-0070).
  *
- * An account without a contact cannot be made from here through a social provider, and no
- * route clears one — but the email sign-up passes through exactly that state: the verification
- * link signs the account in on /set-password before it has given anything. Leaving that page
- * for another one is what a social sign-up or an account older than the requirement does after
- * signing in, so the gate is exercised on a real account with no database access.
+ * An account that has not verified cannot be made from here through a social provider, and no
+ * route clears a verification — but the email sign-up passes through exactly that state: the
+ * verification link signs the account in on /set-password before it has verified anything.
+ * Leaving that page for another one is what a social sign-up or an account older than the
+ * requirement does after signing in, so the gate is exercised on a real account with no database
+ * access. The codes come from the API's development SMS sender, which mails them to Mailpit
+ * (helpers.ts `smsCode`); phone-verification.spec.ts covers the step's refusals.
  *
- * Messages are matched `exact`: the onboarding subtitle contains "휴대전화 번호를 입력해 주세요."
- * as a phrase, and a substring match would find the field error in it.
+ * Messages are matched `exact`: the onboarding subtitle contains "휴대전화 번호를 입력하고" as a
+ * phrase, and a substring match could find a field error in it.
  */
-test.describe('실명·연락처 (ADR-0043)', () => {
-  test('이메일 가입: 비밀번호 설정 단계가 실명·휴대전화를 요구하고, 설정 화면에서 바꿀 수 있다', async ({
+test.describe('본인확인과 온보딩 게이트 (ADR-0070)', () => {
+  test('이메일 가입: 비밀번호만 정하면 본인확인 단계로 가고, 설정에서 실명은 고치고 번호는 읽기만 한다', async ({
     page,
   }) => {
     await openSetPassword(page, freshEmail());
+    // No real name or number here any more: the 본인확인 step is the one place they are given.
+    await expect(page.getByTestId('new-password')).toBeVisible();
+    await expect(page.getByTestId('verification-real-name')).toHaveCount(0);
+    await expect(page.getByTestId('verification-phone')).toHaveCount(0);
     await page.getByTestId('new-password').fill(E2E_PASSWORD);
     await page.getByTestId('new-password-confirm').fill(E2E_PASSWORD);
-
-    // Both fields are required, and nothing is sent without them — not even the password,
-    // which would otherwise swap this form for "비밀번호가 이미 설정되어 있습니다".
     await page.getByRole('button', { name: copy.setPasswordSubmit }).click();
-    await expect(page.getByText(copy.errRealNameRequired, { exact: true })).toBeVisible();
-    await expect(page.getByText(copy.errPhoneRequired, { exact: true })).toBeVisible();
-    await expect(page).toHaveURL('/set-password');
 
-    // The shared phoneSchema's rule: a landline is refused before the request.
-    await page.getByTestId('contact-real-name').fill(E2E_CONTACT.realName);
-    await page.getByTestId('contact-phone').fill('02-123-4567');
-    await page.getByRole('button', { name: copy.setPasswordSubmit }).click();
-    await expect(page.getByText(copy.errPhoneFormat, { exact: true })).toBeVisible();
-    await expect(page).toHaveURL('/set-password');
-
-    await page.getByTestId('contact-phone').fill(E2E_CONTACT.phone);
-    await page.getByRole('button', { name: copy.setPasswordSubmit }).click();
+    // Home, and the gate takes the account that has not verified on to the step.
+    await expect(page).toHaveURL('/onboarding');
+    const phone = freshPhone();
+    await verifyPhone(page, phone);
     await expect(page).toHaveURL('/');
+    await expect(page.getByText(copy.verificationDone)).toBeVisible();
 
-    // /my/settings shows what was saved — the number as digits on the wire, hyphenated here.
+    // /my/settings shows the record: the number read-only and hyphenated, the name editable.
     await page.goto('/my/settings');
-    const card = page.getByTestId('settings-contact');
-    await expect(card.getByTestId('contact-real-name')).toHaveValue(E2E_CONTACT.realName);
-    await expect(card.getByTestId('contact-phone')).toHaveValue('010-1234-5678');
-    await expect(card.getByTestId('contact-save')).toBeDisabled();
+    const card = page.getByTestId('settings-verification');
+    const formatted = `${phone.slice(0, 3)}-${phone.slice(3, 7)}-${phone.slice(7)}`;
+    await expect(card.getByTestId('verification-real-name')).toHaveValue(E2E_REAL_NAME);
+    await expect(card.getByTestId('verification-phone')).toHaveValue(formatted);
+    await expect(card.getByTestId('verification-phone')).not.toBeEditable();
+    await expect(card.getByText(copy.verifiedPhoneHint)).toBeVisible();
+    await expect(card.getByTestId('verification-real-name-save')).toBeDisabled();
 
-    await card.getByTestId('contact-phone').fill('010 9876 5432');
-    await card.getByTestId('contact-save').click();
-    await expect(page.getByText(copy.contactSaved)).toBeVisible();
-    await expect(card.getByTestId('contact-phone')).toHaveValue('010-9876-5432');
+    // The real name keeps the shared rule, and saves trimmed.
+    await card.getByTestId('verification-real-name').fill('홍길동1');
+    await card.getByTestId('verification-real-name-save').click();
+    await expect(card.getByText(copy.errRealNameFormat, { exact: true })).toBeVisible();
+    await card.getByTestId('verification-real-name').fill(' 김 철수 ');
+    await card.getByTestId('verification-real-name-save').click();
+    await expect(page.getByText(copy.realNameSaved)).toBeVisible();
+    await expect(card.getByTestId('verification-real-name')).toHaveValue('김 철수');
 
     await page.reload();
-    await expect(page.getByTestId('settings-contact').getByTestId('contact-phone')).toHaveValue(
-      '010-9876-5432',
-    );
+    const reloaded = page.getByTestId('settings-verification');
+    await expect(reloaded.getByTestId('verification-real-name')).toHaveValue('김 철수');
+    await expect(reloaded.getByTestId('verification-phone')).toHaveValue(formatted);
   });
 
-  test('연락처가 없는 계정은 /onboarding으로 보내지고, 저장하면 가려던 화면으로 돌아간다', async ({
+  test('본인확인하지 않은 계정은 /onboarding으로 보내지고, 마치면 가려던 화면으로 돌아간다', async ({
     page,
   }) => {
-    // Signed in, no password, no contact.
+    // Signed in, no password, not verified.
     await openSetPassword(page, freshEmail());
 
     // Exempt: the legal documents stay readable. The balance chip means `GET /me` has answered,
@@ -73,23 +85,24 @@ test.describe('실명·연락처 (ADR-0043)', () => {
     // Gated: any other page sends the account to /onboarding, carrying where it was going.
     await page.goto('/my/wallet');
     await expect(page).toHaveURL('/onboarding?next=%2Fmy%2Fwallet');
-    await expect(page.getByTestId('onboarding-form')).toBeVisible();
+    await expect(page.getByTestId('verification-step')).toBeVisible();
 
     // Required, and checked with the API's own rules before anything is sent.
-    await page.getByTestId('onboarding-submit').click();
+    await page.getByTestId('verification-send').click();
     await expect(page.getByText(copy.errRealNameRequired, { exact: true })).toBeVisible();
     await expect(page.getByText(copy.errPhoneRequired, { exact: true })).toBeVisible();
-    await page.getByTestId('contact-real-name').fill('홍길동1');
-    await page.getByTestId('contact-phone').fill(E2E_CONTACT.phone);
-    await page.getByTestId('onboarding-submit').click();
+    await page.getByTestId('verification-real-name').fill('홍길동1');
+    await page.getByTestId('verification-phone').fill('02-123-4567');
+    await page.getByTestId('verification-send').click();
     await expect(page.getByText(copy.errRealNameFormat, { exact: true })).toBeVisible();
+    await expect(page.getByText(copy.errPhoneFormat, { exact: true })).toBeVisible();
+    await expect(page.getByTestId('verification-code')).toHaveCount(0);
     await expect(page).toHaveURL('/onboarding?next=%2Fmy%2Fwallet');
 
-    // Saved → back to the page the gate sent it away from.
-    await page.getByTestId('contact-real-name').fill(E2E_CONTACT.realName);
-    await page.getByTestId('onboarding-submit').click();
+    // Verified → back to the page the gate sent it away from.
+    await verifyPhone(page);
     await expect(page).toHaveURL('/my/wallet');
-    await expect(page.getByText(copy.contactSaved)).toBeVisible();
+    await expect(page.getByText(copy.verificationDone)).toBeVisible();
 
     // The gate is satisfied now: other pages open as usual.
     await page.goto('/');
@@ -97,8 +110,8 @@ test.describe('실명·연락처 (ADR-0043)', () => {
     await expect(page.getByTestId('onboarding-gate')).toHaveCount(0);
     await expect(page).toHaveURL('/');
 
-    // /onboarding sends an account that has a contact straight on — to a path on this origin
-    // only; anything else is home.
+    // /onboarding sends a verified account straight on — to a path on this origin only;
+    // anything else is home.
     await page.goto('/onboarding?next=%2Fmy%2Fsettings');
     await expect(page).toHaveURL('/my/settings');
     await page.goto(`/onboarding?next=${encodeURIComponent('https://evil.example/')}`);
@@ -106,10 +119,8 @@ test.describe('실명·연락처 (ADR-0043)', () => {
     await page.goto(`/onboarding?next=${encodeURIComponent('//evil.example')}`);
     await expect(page).toHaveURL('/');
 
-    // /set-password asks only for the password of an account that already gave its contact.
+    // /set-password still sets the first password of an account that has none, and goes home.
     await page.goto('/set-password');
-    await expect(page.getByTestId('new-password')).toBeVisible();
-    await expect(page.getByTestId('set-password-contact')).toHaveCount(0);
     await page.getByTestId('new-password').fill(E2E_PASSWORD);
     await page.getByTestId('new-password-confirm').fill(E2E_PASSWORD);
     await page.getByRole('button', { name: copy.setPasswordSubmit }).click();
@@ -131,7 +142,7 @@ test.describe('실명·연락처 (ADR-0043)', () => {
     await openSetPassword(page, freshEmail());
     await page.goto('/my');
     await expect(page).toHaveURL('/onboarding?next=%2Fmy');
-    await expect(page.getByTestId('onboarding-form')).toBeVisible();
+    await expect(page.getByTestId('verification-step')).toBeVisible();
     await page.getByTestId('onboarding-logout').click();
     await expect(page).toHaveURL('/');
     await expect(page.getByRole('link', { name: copy.login })).toBeVisible();
@@ -141,8 +152,8 @@ test.describe('실명·연락처 (ADR-0043)', () => {
 
   test('프로필을 불러오지 못한 /onboarding에도 로그아웃이 있다', async ({ page }) => {
     await openSetPassword(page, freshEmail());
-    // `GET /me` failing is the rung with no form; the gate cannot say "no contact" either, so the
-    // screen is opened directly.
+    // `GET /me` failing is the rung with no form; the gate cannot say "not verified" either, so
+    // the screen is opened directly.
     await page.route('**/api/v1/me', (route) => route.abort());
     await page.goto('/onboarding');
     await expect(page.getByTestId('onboarding-unavailable')).toBeVisible();

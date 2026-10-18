@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { envSchema, parseTrustProxy, uncountedPeers, webOrigins } from './env.js';
+import {
+  aligoCredentials,
+  envSchema,
+  parseTrustProxy,
+  smsProvider,
+  uncountedPeers,
+  webOrigins,
+} from './env.js';
 
 /**
  * The env schema is pure (no DB, no Redis), so this suite runs with the docker test profile
@@ -276,5 +283,59 @@ describe('payments (ADR-0042)', () => {
     });
     expect(parsed.PAYMENT_PROVIDER).toBe('mock');
     expect(parsed).not.toHaveProperty('SMARTRO_MID');
+  });
+});
+
+describe('SMS (#183, ADR-0070)', () => {
+  const aligo = { ALIGO_API_KEY: 'key', ALIGO_USER_ID: 'buddha', ALIGO_SENDER: '0212345678' };
+
+  it('sends through aligo in production and through the dev sender elsewhere, unless told', () => {
+    expect(smsProvider(envSchema.parse(base))).toBe('aligo');
+    for (const NODE_ENV of ['development', 'test'] as const) {
+      expect(smsProvider(envSchema.parse({ ...base, NODE_ENV }))).toBe('dev');
+      // compose renders an unset `${SMS_PROVIDER}` as ''.
+      expect(smsProvider(envSchema.parse({ ...base, NODE_ENV, SMS_PROVIDER: ' ' }))).toBe('dev');
+      expect(smsProvider(envSchema.parse({ ...base, NODE_ENV, SMS_PROVIDER: 'aligo' }))).toBe(
+        'aligo',
+      );
+    }
+  });
+
+  it('refuses the dev sender in production, and a provider it does not know', () => {
+    for (const [env, path] of [
+      [{ ...base, SMS_PROVIDER: 'dev' }, 'SMS_PROVIDER'],
+      [{ ...base, NODE_ENV: 'development', SMS_PROVIDER: 'twilio' }, 'SMS_PROVIDER'],
+    ] as const) {
+      const result = envSchema.safeParse(env);
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error.issues.map((issue) => issue.path)).toEqual([[path]]);
+    }
+  });
+
+  it('boots without the aligo keys, which then refuse every send (no credentials)', () => {
+    const env = envSchema.parse(base);
+    expect(aligoCredentials(env)).toBeUndefined();
+    expect(env.ALIGO_TEST_MODE).toBe(false);
+    expect(aligoCredentials(envSchema.parse({ ...base, ...aligo }))).toEqual({
+      apiKey: 'key',
+      userId: 'buddha',
+      sender: '0212345678',
+    });
+    expect(envSchema.parse({ ...base, ...aligo, ALIGO_TEST_MODE: 'true' }).ALIGO_TEST_MODE).toBe(
+      true,
+    );
+  });
+
+  it('takes the three aligo keys together or not at all, and a sender of digits', () => {
+    for (const [env, path] of [
+      [{ ...base, ALIGO_API_KEY: 'key' }, 'ALIGO_API_KEY'],
+      [{ ...base, ...aligo, ALIGO_USER_ID: '' }, 'ALIGO_API_KEY'],
+      [{ ...base, ...aligo, ALIGO_SENDER: '02-1234-5678' }, 'ALIGO_SENDER'],
+      [{ ...base, ...aligo, ALIGO_SENDER: '1234567' }, 'ALIGO_SENDER'],
+    ] as const) {
+      const result = envSchema.safeParse(env);
+      expect(result.success, JSON.stringify(env)).toBe(false);
+      if (!result.success) expect(result.error.issues.map((issue) => issue.path)).toEqual([[path]]);
+    }
   });
 });

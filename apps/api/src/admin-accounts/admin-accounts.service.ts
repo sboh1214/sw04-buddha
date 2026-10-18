@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { lockAdminRoles, schema, type Db } from '@buddha/db';
+import { isPhoneVerified, lockAdminRoles, schema, type Db } from '@buddha/db';
 import {
   adminRoleChangePayloadSchema,
   decodeKeyset,
@@ -39,8 +39,7 @@ export function roleChangeNotAllowed(reason: AdminRoleChangeRefusal): AppError {
   const messages: Record<AdminRoleChangeRefusal, string> = {
     already_admin: 'The account is an admin already',
     email_not_verified: 'Only an account with a verified email can become an admin',
-    contact_required:
-      'Only an account with a real name and mobile number on file can become an admin',
+    phone_not_verified: 'Only an account that has verified its mobile number can become an admin',
     not_admin: 'The account is not an admin',
     min_admins: `A revoke may not leave fewer than ${String(MIN_ADMINS)} admins`,
   };
@@ -124,28 +123,24 @@ export class AdminAccountsService {
 
   /**
    * Makes `userId` an admin: refused (ROLE_CHANGE_NOT_ALLOWED) for an admin, an unverified email
-   * or an account with no real name and mobile number on file (ADR-0043; owner decision
-   * 2026-10-13). No other admin's approval: the two-person rule does not cover role changes.
+   * or an account that has not completed the SMS verification (ADR-0069 decision 4 #58,
+   * ADR-0070; owner decision 2026-10-13 for the rest). No other admin's approval: the two-person
+   * rule does not cover role changes.
    */
   async grant(actorId: string, userId: string, reason: string): Promise<AdminRoleChange> {
     const recordId = await this.db.transaction(async (tx) => {
       await lockAdminRoles(tx, 'exclusive');
       await this.assertAdmin(tx, actorId);
       const [target] = await tx
-        .select({
-          role: schema.profiles.role,
-          emailVerified: schema.user.emailVerified,
-          contact: schema.userContacts.userId,
-        })
+        .select({ role: schema.profiles.role, emailVerified: schema.user.emailVerified })
         .from(schema.user)
         .innerJoin(schema.profiles, eq(schema.profiles.userId, schema.user.id))
-        .leftJoin(schema.userContacts, eq(schema.userContacts.userId, schema.user.id))
         .where(eq(schema.user.id, userId))
         .limit(1);
       if (!target) throw new AppError('NOT_FOUND', { message: 'User not found' });
       if (target.role === 'admin') throw roleChangeNotAllowed('already_admin');
       if (!target.emailVerified) throw roleChangeNotAllowed('email_not_verified');
-      if (target.contact === null) throw roleChangeNotAllowed('contact_required');
+      if (!(await isPhoneVerified(tx, userId))) throw roleChangeNotAllowed('phone_not_verified');
       return this.writeRole(tx, actorId, userId, 'admin_grant', reason);
     });
     await this.cacheAdmin(userId);
