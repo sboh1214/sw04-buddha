@@ -769,8 +769,18 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         ...values,
       });
       const [row] = await t.db.insert(phoneVerificationCodes).values(code()).returning();
-      expect(row).toMatchObject({ attempts: 0, consumedAt: null });
+      expect(row).toMatchObject({ attempts: 0, consumedAt: null, clientIp: null });
       expect(row!.sentAt.getTime()).toBeLessThan(row!.expiresAt.getTime());
+      // The client address is an inet (migration 0029): one spelling of an address, so the
+      // per-address limit counts `2001:DB8:0::1` and `2001:db8::1` as the address they are.
+      const [addressed] = await t.db
+        .insert(phoneVerificationCodes)
+        .values(code({ clientIp: '2001:DB8:0:0::1' }))
+        .returning();
+      expect(addressed!.clientIp).toBe('2001:db8::1');
+      await expect(
+        t.db.insert(phoneVerificationCodes).values(code({ clientIp: 'not-an-address' })),
+      ).rejects.toSatisfy((e) => sqlState(e) === '22P02');
       await expect(
         t.db.insert(phoneVerificationCodes).values(code({ attempts: -1 })),
       ).rejects.toSatisfy(

@@ -25,10 +25,12 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<ErrorCode, number>> = {
   // A limit of the code sends (ADR-0070), refused like a rate limit: the same request passes later.
   PHONE_VERIFICATION_LIMITED: HttpStatus.TOO_MANY_REQUESTS,
   VERIFICATION_CODE_REJECTED: HttpStatus.CONFLICT,
-  // The SMS provider did not confirm the send — it refused, could not be reached, or its answer
-  // was lost (the text may have gone, ADR-0070 decision 7-3): an upstream failure like the PG's,
-  // sealed like every other 5xx by ApiExceptionFilter.
+  // The SMS provider refused the text or could not be reached (SMS_SEND_FAILED), or its answer was
+  // lost and the text may have gone (SMS_SEND_UNCONFIRMED, ADR-0070): upstream failures like the
+  // PG's, sealed like every other 5xx by ApiExceptionFilter — which keeps the code, the one thing
+  // the screen tells the two apart by.
   SMS_SEND_FAILED: HttpStatus.BAD_GATEWAY,
+  SMS_SEND_UNCONFIRMED: HttpStatus.BAD_GATEWAY,
   INTERNAL: HttpStatus.INTERNAL_SERVER_ERROR,
 };
 

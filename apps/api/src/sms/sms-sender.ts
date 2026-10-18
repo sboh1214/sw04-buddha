@@ -41,7 +41,8 @@ export const SMS_SENDER = Symbol('SMS_SENDER');
  *   the provider's answer — so the provider may have taken it and texted the code.
  *
  * PhoneVerificationService forgets a `refused` send and keeps an `unknown` one: only a send that
- * certainly did not happen may leave the fixed daily limits uncounted.
+ * certainly did not happen may leave the fixed daily limits uncounted. It answers them apart —
+ * SMS_SEND_FAILED and SMS_SEND_UNCONFIRMED — so the screen can say the text may have come.
  */
 export type SmsSendOutcome = 'refused' | 'unknown';
 

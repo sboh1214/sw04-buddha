@@ -10,7 +10,7 @@ import {
   type PhoneVerificationNotAllowedDetails,
   type VerificationCodeRejectedDetails,
 } from '@buddha/shared';
-import { and, desc, eq, gt, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, ne, sql, type SQL } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
 import { findPgError, isPgError, PG_UNIQUE_VIOLATION } from '../common/errors/pg-error.js';
 import { type Env } from '../config/env.js';
@@ -24,10 +24,11 @@ import {
   drawCode,
   expiryOf,
   hashCode,
+  matchesOlderCode,
   mismatchRefusal,
+  OLDER_CODES_COMPARED,
   pendingCodeRefusal,
   sendRefusal,
-  type SendWindow,
 } from './phone-verification.rules.js';
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
@@ -37,7 +38,15 @@ export const PHONE_UNIQUE_CONSTRAINT = 'phone_verifications_phone_unique';
 
 const codes = schema.phoneVerificationCodes;
 const verifications = schema.phoneVerifications;
-const { codeTtlSeconds, resendIntervalSeconds } = PHONE_VERIFICATION_LIMITS;
+const {
+  codeTtlSeconds,
+  resendIntervalSeconds,
+  accountDailySends,
+  accountPhoneDailySends,
+  phoneDailyAccounts,
+  ipDailySends,
+  serviceDailySends,
+} = PHONE_VERIFICATION_LIMITS;
 
 export function verificationNotAllowed(details: PhoneVerificationNotAllowedDetails): AppError {
   const messages = {
@@ -82,30 +91,38 @@ export function codeRejected(details: VerificationCodeRejectedDetails): AppError
  * a record is written is a confirmation that matched the newest code sent for the account, so
  * nothing outside the code — a request that skips the screen included — can verify an account.
  *
- * - Sending takes the account's and the number's locks, reads the database clock, refuses by the
- *   fixed limits (rules: 60 s since the account's previous send, ten sends in 24 hours for the
- *   account and for the number), deletes the codes older than the window and records the new
- *   one — all before the provider is asked, so concurrent requests count each other. The text is
- *   sent after that transaction commits (the provider's latency holds no lock). A failed send
- *   answers SMS_SEND_FAILED (502); what happens to its row depends on what the failure says about
- *   the text (ADR-0070 decision 7-3). A send the provider certainly did not take (`refused`) is
- *   deleted again: neither a send the limits count nor a code that can be confirmed. A send whose
- *   outcome is unknown (a timeout, a lost answer: the provider may have texted the code) is kept:
- *   it counts against the limits like any send and its code can be confirmed, so a provider that
- *   answers late can never let a number receive more texts than the limits allow.
+ * - Sending takes the account's lock and the service's send lock, reads the database clock,
+ *   refuses by the fixed limits (rules: 60 s since the account's previous send; in 24 hours ten
+ *   sends for the account and for the account at the number, three accounts at the number, twenty
+ *   from the client address, five hundred for the service) and records the new send — all before
+ *   the provider is asked, so concurrent requests count each other. The text is sent after that
+ *   transaction commits (the provider's latency holds no lock). What a failed send leaves depends
+ *   on what the failure says about the text (ADR-0070). A send the provider certainly did not take
+ *   (`refused`) is deleted again — neither a send the limits count nor a code that can be
+ *   confirmed — and answered SMS_SEND_FAILED. A send whose outcome is unknown (a timeout, a lost
+ *   answer: the provider may have texted the code) is kept: it counts against the limits like any
+ *   send and its code can be confirmed, and it is answered SMS_SEND_UNCONFIRMED, so the screen can
+ *   say the text may have come. A provider that answers late can never let a phone receive more
+ *   texts than the limits allow.
+ * - The rows are never purged here: each is the account's 본인확인 기록 (owner decision
+ *   2026-10-18), which #184's retention job deletes after the account's withdrawal. The limits
+ *   read the window through their indexes, so the rows outside it cost nothing.
  * - The spans answered (`expiresInSeconds`, `resendAfterSeconds`) are counted from the database
  *   clock the row was written with, less the time the provider took, so a browser that starts
  *   counting when the answer arrives never shows a code valid that the server calls expired.
  * - Confirming takes the account's lock and reads the newest code: refused when none waits, when
- *   it is discarded or expired, and on a wrong entry, which is counted (the fifth discards it) in
- *   a transaction that commits before the refusal is answered. A match records the verification
- *   with the number and the real name the code was sent with. One account per number is the
- *   UNIQUE of `phone_verifications.phone`; the read before it only spares the write. Whether the
- *   number is taken is answered after the code matched, so only the number's holder learns it.
+ *   it is discarded or expired, and on a wrong entry. A wrong entry that is one of the account's
+ *   older codes — the text before a resend, however old, among the nine codes before the newest
+ *   (`OLDER_CODES_COMPARED`); never another account's — is answered `superseded` and not
+ *   counted; any other is counted (the fifth discards the code) in a transaction that commits
+ *   before the refusal is answered. A match records the verification with the number and the real
+ *   name the code was sent with. One account per number is the UNIQUE of
+ *   `phone_verifications.phone`; the read before it only spares the write. Whether the number is
+ *   taken is answered after the code matched, so only the number's holder learns it.
  *
- * Neither the number, the real name nor the code reaches a log: every database failure leaves as
- * its SQLSTATE alone (`verificationWriteFailure`), every provider failure as SmsSendError's
- * redacted words, and no refusal's message names them.
+ * Neither the number, the real name, the address nor the code reaches a log: every database
+ * failure leaves as its SQLSTATE alone (`verificationWriteFailure`), every provider failure as
+ * SmsSendError's redacted words, and no refusal's message names them.
  */
 @Injectable()
 export class PhoneVerificationService {
@@ -129,12 +146,15 @@ export class PhoneVerificationService {
 
   /**
    * Texts a new code to `phone` for `userId`, with `realName` kept beside it until a
-   * confirmation copies both into the account's record. The caller has checked the body's
+   * confirmation copies both into the account's record. `clientIp` is the address the request
+   * names (`clientAddress`, rate-limit.tracker.ts), or null when it names no client; the send
+   * records it and the per-address limit counts it. The caller has checked the body's
    * `expectedAccountId` against `userId` (the controller).
    */
   async requestCode(
     userId: string,
     input: { realName: string; phone: string },
+    clientIp: string | null,
   ): Promise<PhoneVerificationCodeSent> {
     const id = randomUUID();
     const code = drawCode();
@@ -143,15 +163,13 @@ export class PhoneVerificationService {
     let clockReadAt = 0;
     await this.write(async (tx) => {
       await lockAccount(tx, userId);
-      await lockPhone(tx, input.phone);
+      await lockSends(tx);
       if (await isPhoneVerified(tx, userId)) {
         throw verificationNotAllowed({ reason: 'already_verified' });
       }
       const clock = await clockTimestamp(tx);
       clockReadAt = performance.now();
-      const since = dayWindowStart(clock);
-      // Only the window counts; anything older is personal data with no use left.
-      await tx.delete(codes).where(lt(codes.sentAt, since));
+      const window = gt(codes.sentAt, dayWindowStart(clock));
       const [last] = await tx
         .select({ sentAt: codes.sentAt })
         .from(codes)
@@ -161,8 +179,18 @@ export class PhoneVerificationService {
       const refusal = sendRefusal({
         clock,
         lastAccountSend: last?.sentAt ?? null,
-        account: await sendWindow(tx, and(eq(codes.userId, userId), gt(codes.sentAt, since))),
-        phone: await sendWindow(tx, and(eq(codes.phone, input.phone), gt(codes.sentAt, since))),
+        account: await recentSends(tx, and(eq(codes.userId, userId), window), accountDailySends),
+        accountPhone: await recentSends(
+          tx,
+          and(eq(codes.userId, userId), eq(codes.phone, input.phone), window),
+          accountPhoneDailySends,
+        ),
+        phoneAccounts: await recentAccounts(tx, input.phone, userId, window),
+        ip:
+          clientIp === null
+            ? null
+            : await recentSends(tx, and(eq(codes.clientIp, clientIp), window), ipDailySends),
+        service: await recentSends(tx, window, serviceDailySends),
       });
       if (refusal) throw verificationLimited(refusal);
       await tx.insert(codes).values({
@@ -173,6 +201,7 @@ export class PhoneVerificationService {
         codeHash: hashCode(this.codeKey, id, code),
         sentAt: clock,
         expiresAt: expiryOf(clock),
+        clientIp,
       });
     });
 
@@ -183,21 +212,22 @@ export class PhoneVerificationService {
         expiresInMinutes: codeTtlSeconds / 60,
       });
     } catch (error) {
-      const outcome = sendOutcome(error);
-      if (outcome === 'refused') {
+      const reason = redactDigits(error instanceof Error ? error.message : String(error));
+      if (sendOutcome(error) === 'refused') {
         // Certainly not a send: it neither counts against the limits nor can be confirmed.
-        // Should this delete fail too, the row only counts until it ages out; nobody holds its
-        // code.
+        // Should this delete fail too, the row stays and counts until it leaves the window;
+        // nobody holds its code.
         await this.db
           .delete(codes)
           .where(eq(codes.id, id))
           .catch(() => undefined);
+        throw new AppError('SMS_SEND_FAILED', {
+          message: `The verification code was not sent: ${reason}`,
+        });
       }
       // An unknown outcome keeps its row: the phone may hold this code, and the limits count it.
-      throw new AppError('SMS_SEND_FAILED', {
-        message: `The verification code ${
-          outcome === 'refused' ? 'was not sent' : 'may have been sent (kept and counted)'
-        }: ${redactDigits(error instanceof Error ? error.message : String(error))}`,
+      throw new AppError('SMS_SEND_UNCONFIRMED', {
+        message: `The verification code may have been sent (kept and counted): ${reason}`,
       });
     }
     const spent = (performance.now() - clockReadAt) / 1_000;
@@ -212,7 +242,7 @@ export class PhoneVerificationService {
   /**
    * Confirms the account's newest code with `code`: records the verification and answers it, or
    * refuses (VERIFICATION_CODE_REJECTED, PHONE_VERIFICATION_NOT_ALLOWED). A wrong entry is
-   * counted before the refusal leaves.
+   * counted before the refusal leaves, unless it is one of the account's older codes.
    */
   async confirm(userId: string, code: string): Promise<PhoneVerification> {
     const outcome = await this.write(
@@ -233,6 +263,19 @@ export class PhoneVerificationService {
           return { refused: codeRejected(refusal ?? { reason: 'no_code' }) };
         }
         if (!codeMatches(this.codeKey, pending.id, code, pending.codeHash)) {
+          // The text before a resend, typed after it: refused without spending an entry of the
+          // newest code (owner decision 2026-10-18), however long ago it came. The account's own
+          // codes before the newest — never another account's — newest first, as many as
+          // OLDER_CODES_COMPARED (every code of the last 24 hours, and older ones beyond it).
+          const older = await tx
+            .select({ id: codes.id, codeHash: codes.codeHash })
+            .from(codes)
+            .where(and(eq(codes.userId, userId), ne(codes.id, pending.id)))
+            .orderBy(desc(codes.sentAt), desc(codes.id))
+            .limit(OLDER_CODES_COMPARED);
+          if (matchesOlderCode(this.codeKey, code, older)) {
+            return { refused: codeRejected({ reason: 'superseded' }) };
+          }
           const attempts = pending.attempts + 1;
           await tx.update(codes).set({ attempts }).where(eq(codes.id, pending.id));
           // Returned, not thrown: the counted entry must commit with the refusal.
@@ -320,24 +363,53 @@ async function lockAccount(tx: Tx, userId: string): Promise<void> {
   );
 }
 
-/** Serialises the sends to one number, whichever accounts ask: its daily count stays exact. */
-async function lockPhone(tx: Tx, phone: string): Promise<void> {
+/**
+ * Serialises every send of the service, whichever account, number or address asks: the counts of
+ * a number's accounts, of an address and of the whole service stay exact, as the account lock
+ * keeps the account's. Held only for the counting and the insert — never while the provider is
+ * asked — and the service sends at most five hundred codes a day, so nothing waits on it long.
+ * Taken after the account's lock, as every send takes both: no two sends wait on each other in
+ * opposite orders, and a confirmation takes the account's alone.
+ */
+async function lockSends(tx: Tx): Promise<void> {
+  // The two-key form, as lockAccount: apart from every single-key advisory lock.
   await tx.execute(
-    sql`SELECT pg_advisory_xact_lock(hashtext('buddha:phone-verification:phone'), hashtext(${phone}))`,
+    sql`SELECT pg_advisory_xact_lock(hashtext('buddha:phone-verification:sends'), 0)`,
   );
 }
 
-/** How many codes `where` selects, and the oldest one's send. */
-async function sendWindow(tx: Tx, where: ReturnType<typeof and>): Promise<SendWindow> {
-  const [row] = await tx
-    .select({
-      count: sql<number>`count(*)::int`,
-      // Read through the column's own decoder, as a selected `sent_at` would be.
-      oldest: sql<Date | null>`min(${codes.sentAt})`.mapWith(codes.sentAt),
-    })
+/**
+ * The sends `where` selects, newest first, at most `limit` of them: whether a daily limit is
+ * reached, and the send at the limit, are all `sendRefusal` reads. Each `where` names the window
+ * and the columns of one of the indexes (account, number, address, or the send time alone), so
+ * the rows outside the window — kept as 본인확인 기록 — are never read.
+ */
+async function recentSends(tx: Tx, where: SQL | undefined, limit: number): Promise<Date[]> {
+  const rows = await tx
+    .select({ sentAt: codes.sentAt })
     .from(codes)
-    .where(where);
-  return { count: row?.count ?? 0, oldest: row?.oldest ?? null };
+    .where(where)
+    .orderBy(desc(codes.sentAt))
+    .limit(limit);
+  return rows.map((row) => row.sentAt);
+}
+
+/**
+ * The newest send of each account other than `userId` to `phone` within `window`, newest first,
+ * at most as many as a number may receive codes for: whether the number's accounts are reached
+ * for an account that has not sent to it, and when the one at the limit leaves the window.
+ */
+async function recentAccounts(tx: Tx, phone: string, userId: string, window: SQL): Promise<Date[]> {
+  // Read through the column's own decoder, as a selected `sent_at` would be.
+  const newest = sql<Date>`max(${codes.sentAt})`.mapWith(codes.sentAt);
+  const rows = await tx
+    .select({ newest })
+    .from(codes)
+    .where(and(eq(codes.phone, phone), ne(codes.userId, userId), window))
+    .groupBy(codes.userId)
+    .orderBy(desc(newest))
+    .limit(phoneDailyAccounts);
+  return rows.map((row) => row.newest);
 }
 
 /**

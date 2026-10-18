@@ -98,14 +98,18 @@ describe('phoneSchema', () => {
   });
 });
 
-describe('PHONE_VERIFICATION_LIMITS (owner decision 2026-10-17, #57-3)', () => {
+describe('PHONE_VERIFICATION_LIMITS (owner decisions 2026-10-17 and 2026-10-18, #57-3)', () => {
   it('holds the values the owner fixed', () => {
     expect(PHONE_VERIFICATION_LIMITS).toEqual({
       codeLength: 6,
       codeTtlSeconds: 180,
       resendIntervalSeconds: 60,
       maxAttempts: 5,
-      dailySends: 10,
+      accountDailySends: 10,
+      accountPhoneDailySends: 10,
+      phoneDailyAccounts: 3,
+      ipDailySends: 20,
+      serviceDailySends: 500,
       dailyWindowSeconds: 86_400,
     });
   });
@@ -200,7 +204,14 @@ describe('refusal details (ADR-0070)', () => {
   });
 
   it('names the limit a send hit and when the same request passes it', () => {
-    for (const reason of ['resend_interval', 'account_daily', 'phone_daily']) {
+    for (const reason of [
+      'resend_interval',
+      'account_daily',
+      'account_phone_daily',
+      'phone_accounts',
+      'ip_daily',
+      'service_daily',
+    ]) {
       expect(
         phoneVerificationLimitedDetailsSchema.parse({ reason, retryAfterSeconds: 42 }),
       ).toEqual({ reason, retryAfterSeconds: 42 });
@@ -211,12 +222,23 @@ describe('refusal details (ADR-0070)', () => {
         retryAfterSeconds: 0,
       }).success,
     ).toBe(false);
+    // The number's own ten a day is gone (owner decision 2026-10-18): a pair's, and three accounts.
+    expect(
+      phoneVerificationLimitedDetailsSchema.safeParse({
+        reason: 'phone_daily',
+        retryAfterSeconds: 42,
+      }).success,
+    ).toBe(false);
   });
 
   it('names why a code verified nothing, with the entries left only on a mismatch', () => {
-    for (const reason of ['no_code', 'expired', 'attempts_exceeded']) {
+    for (const reason of ['no_code', 'expired', 'attempts_exceeded', 'superseded']) {
       expect(verificationCodeRejectedDetailsSchema.parse({ reason })).toEqual({ reason });
     }
+    // An older code spends no entry, so it says none.
+    expect(
+      verificationCodeRejectedDetailsSchema.parse({ reason: 'superseded', remainingAttempts: 4 }),
+    ).toEqual({ reason: 'superseded' });
     expect(
       verificationCodeRejectedDetailsSchema.parse({ reason: 'mismatch', remainingAttempts: 4 }),
     ).toEqual({ reason: 'mismatch', remainingAttempts: 4 });

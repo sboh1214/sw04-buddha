@@ -1,7 +1,8 @@
 /**
  * The code's rules (ADR-0069 decision 1 #57-3, ADR-0070) without Postgres: what the drawn codes
  * look like, the keyed hash and its constant-time comparison, expiry, the entries a code takes,
- * the resend interval and the daily limits of the account and the number. Runs everywhere.
+ * an older code recognised, the resend interval and the daily limits of the account, the account
+ * at a number, the accounts at a number, the client address and the service. Runs everywhere.
  */
 import * as crypto from 'node:crypto';
 import { schema } from '@buddha/db';
@@ -18,7 +19,9 @@ import {
   drawCode,
   expiryOf,
   hashCode,
+  matchesOlderCode,
   mismatchRefusal,
+  OLDER_CODES_COMPARED,
   pendingCodeRefusal,
   sendRefusal,
   type SendHistory,
@@ -149,14 +152,67 @@ describe('mismatchRefusal', () => {
   });
 });
 
+describe('matchesOlderCode', () => {
+  const OLDER = '7f1f0d0e-7a52-4b6e-9a41-0d4b0c1e2f3a';
+  const OLDEST = '8f1f0d0e-7a52-4b6e-9a41-0d4b0c1e2f3a';
+  const older = [
+    { id: OLDER, codeHash: hashCode(key, OLDER, '111111') },
+    { id: OLDEST, codeHash: hashCode(key, OLDEST, '222222') },
+  ];
+
+  it('recognises any older code of the account, under its own row', () => {
+    expect(matchesOlderCode(key, '111111', older)).toBe(true);
+    expect(matchesOlderCode(key, '222222', older)).toBe(true);
+    expect(matchesOlderCode(key, '333333', older)).toBe(false);
+    expect(matchesOlderCode(key, '111111', [])).toBe(false);
+    // Bound to the row it was sent as: the same digits hashed for another row are not it.
+    expect(matchesOlderCode(key, '111111', [{ id: OLDEST, codeHash: older[0]!.codeHash }])).toBe(
+      false,
+    );
+  });
+
+  it('compares every older code in constant time, without stopping at a match', () => {
+    vi.mocked(crypto.timingSafeEqual).mockClear();
+    expect(matchesOlderCode(key, '111111', older)).toBe(true);
+    expect(crypto.timingSafeEqual).toHaveBeenCalledTimes(2);
+  });
+
+  it('is given a day’s sends less the newest: every code of the last 24 hours, with no time bound', () => {
+    // The account sends at most ten codes in any 24 hours, so the nine before the newest hold
+    // every older code of that window — and the text before a resend, however long ago it came.
+    expect(OLDER_CODES_COMPARED).toBe(PHONE_VERIFICATION_LIMITS.accountDailySends - 1);
+  });
+});
+
 describe('sendRefusal', () => {
-  const none = { count: 0, oldest: null };
   const history = (overrides: Partial<SendHistory> = {}): SendHistory => ({
     clock: T0,
     lastAccountSend: null,
-    account: none,
-    phone: none,
+    account: [],
+    accountPhone: [],
+    phoneAccounts: [],
+    ip: [],
+    service: [],
     ...overrides,
+  });
+  /** `count` sends, newest first: the newest `newestAgo` before T0, one minute apart. */
+  const sends = (count: number, newestAgo: number) =>
+    Array.from({ length: count }, (_, index) => at(-newestAgo - index * 60 * SECOND));
+  /** The send at a limit `limit` leaves the window `waitSeconds` from now: newest first. */
+  const atLimit = (limit: number, waitSeconds: number) =>
+    Array.from({ length: limit }, (_, index) =>
+      index === limit - 1 ? at(-DAY + waitSeconds * SECOND) : at(-index * 60 * SECOND),
+    );
+
+  it('holds the fixed values the owner gave (2026-10-17 and 2026-10-18)', () => {
+    expect(PHONE_VERIFICATION_LIMITS).toMatchObject({
+      accountDailySends: 10,
+      accountPhoneDailySends: 10,
+      phoneDailyAccounts: 3,
+      ipDailySends: 20,
+      serviceDailySends: 500,
+      dailyWindowSeconds: 86_400,
+    });
   });
 
   it('lets the first send go', () => {
@@ -175,21 +231,59 @@ describe('sendRefusal', () => {
     expect(sendRefusal(history({ lastAccountSend: at(-60 * SECOND) }))).toBeUndefined();
   });
 
-  it('refuses the eleventh send of the account in 24 hours until the oldest leaves the window', () => {
-    const oldest = at(-DAY + 90 * SECOND);
-    expect(sendRefusal(history({ account: { count: 9, oldest } }))).toBeUndefined();
-    expect(sendRefusal(history({ account: { count: 10, oldest } }))).toEqual({
+  it('refuses the eleventh send of the account in 24 hours until the tenth newest leaves', () => {
+    expect(sendRefusal(history({ account: sends(9, 2 * 60 * SECOND) }))).toBeUndefined();
+    expect(sendRefusal(history({ account: atLimit(10, 90) }))).toEqual({
       reason: 'account_daily',
       retryAfterSeconds: 90,
     });
   });
 
-  it('refuses the eleventh send to the number in 24 hours, whichever accounts asked', () => {
-    const oldest = at(-DAY + 3_600 * SECOND);
-    expect(sendRefusal(history({ phone: { count: 9, oldest } }))).toBeUndefined();
-    expect(sendRefusal(history({ phone: { count: 12, oldest } }))).toEqual({
-      reason: 'phone_daily',
-      retryAfterSeconds: 3_600,
+  it('refuses the eleventh send of the account to one number (the pair, owner decision 2026-10-18)', () => {
+    // Every send of the pair is the account's too, so with the shipped values the account's own
+    // ten answer first, on a tie — the pair's limit stands on its own only in this pure form.
+    expect(sendRefusal(history({ accountPhone: sends(9, 2 * 60 * SECOND) }))).toBeUndefined();
+    expect(sendRefusal(history({ accountPhone: atLimit(10, 600) }))).toEqual({
+      reason: 'account_phone_daily',
+      retryAfterSeconds: 600,
+    });
+    const both = atLimit(10, 600);
+    expect(sendRefusal(history({ account: both, accountPhone: both }))).toEqual({
+      reason: 'account_daily',
+      retryAfterSeconds: 600,
+    });
+  });
+
+  it('refuses a fourth account at a number, but none of the three that have sent to it', () => {
+    // Two other accounts: a third may come.
+    expect(sendRefusal(history({ phoneAccounts: sends(2, 2 * 60 * SECOND) }))).toBeUndefined();
+    // Three other accounts: refused until the third newest of them leaves the window.
+    const three = [at(-5 * SECOND), at(-3_600 * SECOND), at(-DAY + 1_800 * SECOND)];
+    expect(sendRefusal(history({ phoneAccounts: three }))).toEqual({
+      reason: 'phone_accounts',
+      retryAfterSeconds: 1_800,
+    });
+    // An account that has itself sent to the number in the window is one of the three.
+    expect(
+      sendRefusal(history({ phoneAccounts: three, accountPhone: [at(-120 * SECOND)] })),
+    ).toBeUndefined();
+  });
+
+  it('refuses the twenty-first send from one client address, and counts none for no address', () => {
+    expect(sendRefusal(history({ ip: sends(19, 2 * 60 * SECOND) }))).toBeUndefined();
+    expect(sendRefusal(history({ ip: atLimit(20, 300) }))).toEqual({
+      reason: 'ip_daily',
+      retryAfterSeconds: 300,
+    });
+    // A request that names no client (loopback, the web's rewrite) is not counted by address.
+    expect(sendRefusal(history({ ip: null }))).toBeUndefined();
+  });
+
+  it('refuses the service’s five hundred and first send in 24 hours', () => {
+    expect(sendRefusal(history({ service: sends(499, 2 * 60 * SECOND) }))).toBeUndefined();
+    expect(sendRefusal(history({ service: atLimit(500, 42) }))).toEqual({
+      reason: 'service_daily',
+      retryAfterSeconds: 42,
     });
   });
 
@@ -198,16 +292,17 @@ describe('sendRefusal', () => {
       sendRefusal(
         history({
           lastAccountSend: at(-10 * SECOND),
-          account: { count: 10, oldest: at(-DAY + 20 * SECOND) },
-          phone: { count: 10, oldest: at(-DAY + 600 * SECOND) },
+          account: atLimit(10, 20),
+          ip: atLimit(20, 600),
+          service: atLimit(500, 300),
         }),
       ),
-    ).toEqual({ reason: 'phone_daily', retryAfterSeconds: 600 });
+    ).toEqual({ reason: 'ip_daily', retryAfterSeconds: 600 });
     expect(
       sendRefusal(
         history({
           lastAccountSend: at(-10 * SECOND),
-          account: { count: 10, oldest: at(-DAY + 20 * SECOND) },
+          account: atLimit(10, 20),
         }),
       ),
     ).toEqual({ reason: 'resend_interval', retryAfterSeconds: 50 });

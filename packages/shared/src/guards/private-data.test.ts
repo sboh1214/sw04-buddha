@@ -109,6 +109,8 @@ describe('findPrivateField', () => {
     ['otpSentAt', 'identity-verification'],
     ['ci', 'identity-verification'],
     ['birthDate', 'identity-verification'],
+    ['clientIp', 'identity-verification'],
+    ['ip_address', 'identity-verification'],
     ['passwordHash', 'auth-secret'],
     ['sessionToken', 'auth-secret'],
     ['riskFlags', 'risk-flag'],

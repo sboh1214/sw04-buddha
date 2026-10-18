@@ -185,7 +185,11 @@ describe('the numbers the copy states are the fixed values (ADR-0069 decision 1 
       codeTtlSeconds,
       resendIntervalSeconds,
       maxAttempts,
-      dailySends,
+      accountDailySends,
+      accountPhoneDailySends,
+      phoneDailyAccounts,
+      ipDailySends,
+      serviceDailySends,
       dailyWindowSeconds,
     } = PHONE_VERIFICATION_LIMITS;
     expect(codeLength).toBe(6);
@@ -196,8 +200,14 @@ describe('the numbers the copy states are the fixed values (ADR-0069 decision 1 
     expect(copy.errVerificationCodeExpired).toContain(`${String(codeTtlSeconds / 60)}분`);
     expect(copy.errVerificationResendWait).toContain(`${String(resendIntervalSeconds / 60)}분`);
     expect(copy.errVerificationCodeAttemptsExceeded).toContain(`${String(maxAttempts)}번`);
-    for (const message of [copy.errVerificationAccountDaily, copy.errVerificationPhoneDaily]) {
-      expect(message).toContain(`${String(dailySends)}번`);
+    for (const [message, count] of [
+      [copy.errVerificationAccountDaily, `${String(accountDailySends)}번`],
+      [copy.errVerificationAccountPhoneDaily, `${String(accountPhoneDailySends)}번`],
+      [copy.errVerificationPhoneAccounts, `계정 ${String(phoneDailyAccounts)}개`],
+      [copy.errVerificationIpDaily, `${String(ipDailySends)}번`],
+      [copy.errVerificationServiceDaily, `${String(serviceDailySends)}건`],
+    ] as const) {
+      expect(message).toContain(count);
       expect(message).toContain(`${String(dailyWindowSeconds / 3600)}시간`);
     }
   });
@@ -239,10 +249,25 @@ describe('codeRequestFailure', () => {
       kind: 'notice',
       message: `${copy.errVerificationAccountDaily} 1${copy.unitHour} 2${copy.unitMinute} ${copy.verificationRetryAfter}`,
     });
-    expect(codeRequestFailure(limited('phone_daily', 90))).toEqual({
-      kind: 'notice',
-      message: `${copy.errVerificationPhoneDaily} 1${copy.unitMinute} 30${copy.unitSecond} ${copy.verificationRetryAfter}`,
-    });
+    for (const [reason, message] of [
+      ['account_phone_daily', copy.errVerificationAccountPhoneDaily],
+      ['phone_accounts', copy.errVerificationPhoneAccounts],
+      ['ip_daily', copy.errVerificationIpDaily],
+      ['service_daily', copy.errVerificationServiceDaily],
+    ] as const) {
+      expect(codeRequestFailure(limited(reason, 90))).toEqual({
+        kind: 'notice',
+        message: `${message} 1${copy.unitMinute} 30${copy.unitSecond} ${copy.verificationRetryAfter}`,
+      });
+    }
+    // Each daily limit says its own sentence.
+    expect(
+      new Set(
+        ['account_daily', 'account_phone_daily', 'phone_accounts', 'ip_daily', 'service_daily'].map(
+          (reason) => codeRequestFailure(limited(reason, 90)).message,
+        ),
+      ).size,
+    ).toBe(5);
     // Details the client cannot read: a generic notice rather than a wrong wait.
     expect(codeRequestFailure(limited('later', 5)).kind).toBe('notice');
   });
@@ -259,10 +284,19 @@ describe('codeRequestFailure', () => {
   });
 
   it('tells the provider, the session and "verified already" apart from the rest', () => {
+    // Certainly not sent: said, and nothing waits.
     expect(codeRequestFailure(refusal(502, 'SMS_SEND_FAILED'))).toEqual({
       kind: 'notice',
       message: copy.errVerificationSendFailed,
     });
+    // May have been sent (owner decision 2026-10-18): the step opens the code input and waits
+    // out the whole resend interval before another send.
+    expect(codeRequestFailure(refusal(502, 'SMS_SEND_UNCONFIRMED'))).toEqual({
+      kind: 'maybe-sent',
+      message: copy.verificationMaybeSent,
+      resendAfterSeconds: PHONE_VERIFICATION_LIMITS.resendIntervalSeconds,
+    });
+    expect(copy.verificationMaybeSent).not.toBe(copy.errVerificationSendFailed);
     const already = refusal(409, 'PHONE_VERIFICATION_NOT_ALLOWED', {
       reason: 'already_verified',
     });
@@ -298,6 +332,13 @@ describe('confirmFailure', () => {
     expect(
       confirmFailure(refusal(400, 'VALIDATION_ERROR', [{ path: ['code'], message: 'x' }])),
     ).toEqual({ kind: 'field', message: copy.errVerificationCodeFormat });
+  });
+
+  it('asks for the new code under the input when an older one is typed (no entry spent)', () => {
+    expect(confirmFailure(rejected({ reason: 'superseded' }))).toEqual({
+      kind: 'field',
+      message: copy.errVerificationCodeSuperseded,
+    });
   });
 
   it('sends the step back for a new code once this one can verify nothing', () => {

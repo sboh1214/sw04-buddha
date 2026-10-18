@@ -78,22 +78,36 @@ function useCountdowns(code: Span | null, resend: Span | null) {
 interface Notice {
   status: 'info' | 'error';
   message: string;
+  /**
+   * Read out as an alert (`role=alert`) although it is information: it comes with the cursor
+   * moving into the code input, and a polite status mounted with its text while the focus moves
+   * is often not read at all. For what the member must hear before typing a code: a text that may
+   * have come (SMS_SEND_UNCONFIRMED), a code sent under a minute ago from elsewhere.
+   */
+  urgent?: boolean;
 }
 
 /** The open code input: what the step knows of the code it confirms. */
 interface CodeEntry {
   /**
-   * The code's validity as this screen's send was answered, or null when this screen did not
-   * send the code it confirms — one sent before a reload or in another tab, or by a send whose
-   * answer was lost. No countdown then: the server says whether the code still holds.
+   * The code's validity as this screen's send was answered, or null when the step has no answer
+   * that says it — a code sent before a reload or in another tab, by a send whose answer never
+   * arrived, or by one whose provider's answer was lost (SMS_SEND_UNCONFIRMED). No countdown
+   * then: the server says whether the code still holds.
    */
   span: Span | null;
   /**
-   * The name and the number are locked: this screen sent the code with them, and the
-   * confirmation records what the code was sent with. A code this screen did not send leaves
-   * them open — it may have gone to another number than the one typed here.
+   * The name and the number are locked: this screen sent (or may have sent) the code with them,
+   * and the confirmation records what the code was sent with. A code this screen did not ask for
+   * leaves them open — it may have gone to another number than the one typed here.
    */
   locked: boolean;
+  /**
+   * What the notice says for as long as this code is tried, or null. A text that may have come
+   * (SMS_SEND_UNCONFIRMED) stays said through every entry refused under the input — a wrong code,
+   * an older one — so a member whose text never came still reads that they can ask again later.
+   */
+  standing: Notice | null;
 }
 
 /**
@@ -114,11 +128,21 @@ interface CodeEntry {
  *   code sent before a reload, in another tab or by a send whose answer was lost; a refusal for
  *   the resend wait opens it by itself, since it says a code went out under a minute ago. Such a
  *   code has no countdown, and the name and the number stay open.
+ * - A send whose provider's answer was lost (SMS_SEND_UNCONFIRMED) may have texted the code, and
+ *   the server keeps it (owner decision 2026-10-18): the step says the text may have come, opens
+ *   the code input with the name and the number locked as for a sent code, and counts the send
+ *   button down for the resend interval — but not the validity, which no answer gave. That notice
+ *   stays while the code is tried: a refusal under the input (an older code typed because the new
+ *   text never came) does not take away the line that says to ask again later.
+ * - An older code typed after a resend is refused under the input (`superseded`) without
+ *   spending an entry; only the newest confirms.
  * - What each refusal means is lib/phone-verification.ts's (`codeRequestFailure`,
  *   `confirmFailure`); what is said goes above the forms (`verification-notice`), except what
- *   belongs to one input — a wrong code with the entries it has left — which goes under it. The
- *   number another account verified goes under the number, which takes the focus, and in the
- *   notice too, whose `role=alert` reads it out (a message mounted under a field is not).
+ *   belongs to one input — a wrong code with the entries it has left, an older code — which goes
+ *   under it. The number another account verified goes under the number, which takes the focus,
+ *   and in the notice too, whose `role=alert` reads it out (a message mounted under a field is
+ *   not). The notices that open the code input — a text that may have come, a code sent under a
+ *   minute ago — are information but `role=alert` too: the cursor moves with them.
  * - A confirmation writes the record into `['me']` before it settles
  *   (`useConfirmPhoneVerification`), and the form above this step navigates on from there.
  */
@@ -151,7 +175,7 @@ export function VerificationStep() {
 
   /** Opens the code input for a code this screen did not send. */
   const openForWaitingCode = () => {
-    setEntry({ span: null, locked: false });
+    setEntry({ span: null, locked: false, standing: null });
     codeForm.reset({ code: '' });
   };
 
@@ -174,7 +198,7 @@ export function VerificationStep() {
     try {
       const sent = await request.mutateAsync({ ...values, expectedAccountId: accountId });
       const from = monotonicNow();
-      setEntry({ span: { seconds: sent.expiresInSeconds, from }, locked: true });
+      setEntry({ span: { seconds: sent.expiresInSeconds, from }, locked: true, standing: null });
       setResend({ seconds: sent.resendAfterSeconds, from });
       codeForm.reset({ code: '' });
       setNotice({ status: 'info', message: copy.verificationCodeSent });
@@ -185,12 +209,21 @@ export function VerificationStep() {
         details.setError(failure.field, { message: failure.message });
         return;
       }
+      if (failure.kind === 'maybe-sent') {
+        // The text may have come: its code waits, with the name and the number it went to.
+        const maybeSent: Notice = { status: 'info', message: failure.message, urgent: true };
+        setEntry({ span: null, locked: true, standing: maybeSent });
+        setResend({ seconds: failure.resendAfterSeconds, from: monotonicNow() });
+        codeForm.reset({ code: '' });
+        setNotice(maybeSent);
+        return;
+      }
       if (failure.kind === 'resend-wait') {
         setResend({ seconds: failure.retryAfterSeconds, from: monotonicNow() });
         if (entry === null) {
           // A code went out under a minute ago and this screen shows no input for it.
           openForWaitingCode();
-          setNotice({ status: 'info', message: failure.codeWaitingMessage });
+          setNotice({ status: 'info', message: failure.codeWaitingMessage, urgent: true });
           return;
         }
       }
@@ -202,9 +235,11 @@ export function VerificationStep() {
   const onConfirm = codeForm.handleSubmit(async (values) => {
     const accountId = confirm.accountId;
     if (accountId === undefined) return;
-    setNotice(null);
+    // What this code stands with stays (`CodeEntry.standing`); any other notice goes.
+    setNotice(entry?.standing ?? null);
     try {
       await confirm.mutateAsync({ code: values.code, expectedAccountId: accountId });
+      setNotice(null);
       toaster.create({ type: 'success', title: copy.verificationDone });
     } catch (error) {
       const failure = confirmFailure(error);
@@ -250,7 +285,7 @@ export function VerificationStep() {
       {notice && (
         <Alert.Root
           status={notice.status}
-          role={notice.status === 'error' ? 'alert' : 'status'}
+          role={notice.status === 'error' || notice.urgent === true ? 'alert' : 'status'}
           data-testid="verification-notice"
         >
           <Alert.Indicator />
@@ -330,7 +365,8 @@ export function VerificationStep() {
               <Field.ErrorText>{codeErrors.code?.message}</Field.ErrorText>
             </Field.Root>
             {/* No live region: a line that changes every second would be read out every second.
-                Only for a code this screen sent: of any other the server alone knows the age. */}
+                Only for a code whose send this screen was answered: of any other the server
+                alone knows the age. */}
             {entry.span !== null && (
               <Text
                 fontSize="sm"

@@ -320,6 +320,7 @@ describe('POST /me/phone-verification/code (requestCodeOptions)', () => {
           retryAfterSeconds: 30,
         }),
         refused(502, 'SMS_SEND_FAILED'),
+        refused(502, 'SMS_SEND_UNCONFIRMED'),
         refused(403, 'FORBIDDEN'),
       ]) {
         const request = new MutationObserver(

@@ -489,7 +489,7 @@
             }
           },
           "502": {
-            "description": "SMS_SEND_FAILED",
+            "description": "SMS_SEND_FAILED | SMS_SEND_UNCONFIRMED",
             "content": {
               "application/json": {
                 "schema": {
@@ -5762,6 +5762,7 @@
           "PHONE_VERIFICATION_LIMITED",
           "VERIFICATION_CODE_REJECTED",
           "SMS_SEND_FAILED",
+          "SMS_SEND_UNCONFIRMED",
           "INTERNAL"
         ]
       },

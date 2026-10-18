@@ -1,5 +1,5 @@
 import { desc, sql } from 'drizzle-orm';
-import { check, index, pgTable, smallint, text, uuid, varchar } from 'drizzle-orm/pg-core';
+import { check, index, inet, pgTable, smallint, text, uuid, varchar } from 'drizzle-orm/pg-core';
 import { user } from './auth.js';
 import { timestampTz, updatedAt } from './columns.js';
 
@@ -16,7 +16,10 @@ import { timestampTz, updatedAt } from './columns.js';
  *   once; the CHECK keeps it the digits `phoneSchema` (@buddha/shared) yields, so two spellings of
  *   one number cannot pass as two. The member cannot change it; operators do it here by hand
  *   (#57-3). A keyed hash of it is what the starting Coin's "once per number" will keep (#70), so
- *   withdrawal (#140) can delete this row and the number with it.
+ *   withdrawal (#140) can delete this row and the number with it. Copies of the number and the
+ *   real name stay in `phone_verification_codes` all the same, kept as 본인확인 기록 past the
+ *   withdrawal (owner answer 8, ADR-0070) — not the immediate deletion ADR-0069 #57-18 says,
+ *   which ADR-0070 puts to the owner.
  * - `real_name` is what the member gave with the number, editable in MY 설정 (#57-3).
  *
  * CASCADE like `profiles`: personal data goes with the account, and nothing references it.
@@ -40,26 +43,36 @@ export const phoneVerifications = pgTable(
 );
 
 /**
- * The SMS codes sent for 본인확인 (ADR-0070), one row per send, which is also the record the
- * owner's fixed limits count (ADR-0069 decision 1 #57-3, PHONE_VERIFICATION_LIMITS): the newest
- * row of an account says whether the 60 seconds since its last send have passed, and the rows of
- * the last 24 hours, by account and by number, whether ten were sent already. Kept in Postgres so
- * the limits hold across restarts and API instances.
+ * The SMS codes sent for 본인확인 (ADR-0070), one row per send: the 본인확인 기록 of the account
+ * (owner decision 2026-10-18) and the record the owner's fixed limits count (ADR-0069 decision 1
+ * #57-3, PHONE_VERIFICATION_LIMITS). The newest row of an account says whether the 60 seconds
+ * since its last send have passed; the rows of the last 24 hours, by account, by account and
+ * number, by number (how many accounts), by client address and in all, whether a limit is
+ * reached. Kept in Postgres so the limits hold across restarts and API instances.
  *
- * - Only the newest row of an account can be confirmed; a new send replaces the code it held.
+ * - Only the newest row of an account can be confirmed; a new send replaces the code it held. An
+ *   older code of the account — among the nine before the newest, however old — is recognised
+ *   when typed (`superseded`) and not counted.
  * - `code_hash` is an HMAC of the code under a key derived from the server's secret, bound to the
  *   row's id: the six digits themselves are never stored, and a copy of this table does not give
  *   them away to a million guesses. The API compares in constant time.
  * - `attempts` counts wrong entries: the fifth discards the code (#57-3). `consumed_at` is set by
  *   the confirmation that matched it, in the transaction that writes `phone_verifications`.
  * - `phone` and `real_name` are what the request named; the confirmation copies them over.
+ * - `client_ip` is the address the request came from when it names a client — the per-address
+ *   rate limit's rule (`isCountableAddress`: not loopback, not a proxy RATE_LIMIT_UNCOUNTED_PEERS
+ *   lists; behind Caddy, TRUST_PROXY makes it the visitor's) — and NULL otherwise. Personal data
+ *   like the rest of the row: no route returns it and nothing logs it.
  *
- * Transient: a row older than the 24-hour window counts for nothing, and the API deletes those
- * whenever it sends (so a row lasts until the next send by any account after its 24 hours). A
- * send the SMS provider certainly refused is deleted at once (it was never a send); one whose
- * outcome is unknown stays, counted and confirmable, since the phone may hold its code. The
- * account FK is CASCADE, but withdrawal keeps the `user` row (the ledger references it), so the
- * withdrawal of #140 must delete these rows — the number and the real name — itself (ADR-0070).
+ * Kept, not purged: the rows are the account's 본인확인 기록 (number, real name, code hash, time,
+ * address), which the retention job of #184 deletes once the retention period of that kind has
+ * passed since the account's withdrawal (ADR-0069 #184); a live account keeps them. So the number,
+ * the real name and the address outlive a withdrawal, unlike the immediate deletion of ADR-0069
+ * #57-18; whether #140 should blank them then is an open owner question (ADR-0070). A send the
+ * SMS provider certainly refused is deleted at once (it was never a send); one whose outcome is
+ * unknown stays, counted and confirmable, since the phone may hold its code. The account FK is
+ * CASCADE, but withdrawal keeps the `user` row (the ledger references it), so nothing here goes
+ * with a withdrawal by itself (ADR-0070).
  */
 export const phoneVerificationCodes = pgTable(
   'phone_verification_codes',
@@ -79,18 +92,25 @@ export const phoneVerificationCodes = pgTable(
     expiresAt: timestampTz().notNull(),
     attempts: smallint().notNull().default(0),
     consumedAt: timestampTz(),
+    /** The client address of the request, when it names one; NULL behind loopback or a proxy. */
+    clientIp: inet(),
   },
   (t) => [
-    /** An account's newest code (the one a confirmation reads) and its sends of the last day. */
+    /**
+     * An account's newest code (the one a confirmation reads), its sends of the last day and the
+     * older codes a confirmation recognises (the nine before the newest).
+     */
     index('phone_verification_codes_user_id_sent_at_id_idx').on(
       t.userId,
       desc(t.sentAt),
       desc(t.id),
     ),
-    /** The sends to one number in the last day, whichever accounts asked. */
+    /** The sends to one number in the last day, and the accounts they were for. */
     index('phone_verification_codes_phone_sent_at_idx').on(t.phone, t.sentAt),
-    /** The rows past the 24-hour window, which every send deletes. */
+    /** The service's sends in the last day. */
     index('phone_verification_codes_sent_at_idx').on(t.sentAt),
+    /** The sends from one client address in the last day. */
+    index('phone_verification_codes_client_ip_sent_at_idx').on(t.clientIp, t.sentAt),
     check('phone_verification_codes_attempts_check', sql`${t.attempts} >= 0`),
     check('phone_verification_codes_expiry_check', sql`${t.expiresAt} > ${t.sentAt}`),
   ],

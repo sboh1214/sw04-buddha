@@ -806,8 +806,9 @@ export const copy = {
   // 휴대전화 SMS 인증번호 본인확인(#183, ADR-0069 결정 1 #57-1·#57-3). 실명과 번호를 한 화면에서 받고 그 번호로
   // 보낸 6자리 인증번호를 확인한다. 번호 입력은 이 단계 하나뿐이고(확인하지 않은 번호 칸은 없앴다), 확인한 뒤에는
   // 실명만 MY 설정에서 고친다. 규칙은 @buddha/shared의 realNameSchema·phoneSchema·phoneVerificationCodeSchema
-  // (lib/phone-verification.ts)이고, 문장 속 수치(3분·1분·5번·10번·24시간)는 PHONE_VERIFICATION_LIMITS와 같아야
-  // 한다(lib/phone-verification.test.ts가 확인한다). 사용자에게 수집 목적을 말하는 문장은 #58·#137이 쓴다.
+  // (lib/phone-verification.ts)이고, 문장 속 수치(3분·1분·5번·10번·3개·20번·500건·24시간)는
+  // PHONE_VERIFICATION_LIMITS와 같아야 한다(lib/phone-verification.test.ts가 확인한다). 사용자에게 수집 목적을
+  // 말하는 문장은 #58·#137이 쓴다.
   realName: '실명',
   realNameHint: '2~30자의 문자(한글·영문 등). 띄어쓰기와 가운뎃점(·)을 쓸 수 있습니다.',
   phone: '휴대전화 번호',
@@ -837,6 +838,11 @@ export const copy = {
   verificationCode: '인증번호',
   verificationCodeHint: '문자로 받은 숫자 6자리를 입력해 주세요.',
   verificationCodeSent: '입력한 번호로 인증번호를 보냈습니다. 3분 안에 입력해 주세요.',
+  // 문자 발송 사업자의 답을 받지 못했다(SMS_SEND_UNCONFIRMED: 시간 초과·5xx·읽을 수 없는 답). 문자가 갔을 수
+  // 있으므로 그 발송은 한도에 세고 그 인증번호는 확인할 수 있다. 인증번호 칸을 열고, 다시 받기는 1분 뒤부터다
+  // (오너 결정 2026-10-18, ADR-0070).
+  verificationMaybeSent:
+    '인증번호 문자가 갔을 수 있습니다. 받았다면 그 인증번호를 아래에 입력하고, 받지 못했다면 잠시 뒤 다시 받아 주세요.',
   // 인증번호의 남은 유효시간 앞에 붙는다(예: '남은 시간 2:59').
   verificationExpiresIn: '남은 시간',
   verificationConfirm: '본인확인 완료',
@@ -853,13 +859,23 @@ export const copy = {
   errVerificationCodeAttemptsExceeded:
     '인증번호를 5번 잘못 입력해 이 인증번호는 더 쓸 수 없습니다. 인증번호를 다시 받아 주세요.',
   errVerificationCodeNone: '확인할 인증번호가 없습니다. 인증번호를 다시 받아 주세요.',
+  // 다시 받은 뒤 그 전에 받은 인증번호를 넣었다(superseded). 가장 새 인증번호만 확인하고, 틀린 입력 기회는
+  // 쓰지 않는다(오너 결정 2026-10-18).
+  errVerificationCodeSuperseded: '예전에 받은 인증번호입니다. 새로 받은 인증번호를 입력해 주세요.',
   errVerificationResendWait: '인증번호는 1분에 한 번 받을 수 있습니다.',
+  // 하루 한도는 모두 직전 24시간이다(오너 결정 2026-10-17·18). 계정·번호 쌍의 10번은 계정의 10번과 함께
+  // 차므로 화면에는 거의 나오지 않는다(ADR-0070).
   errVerificationAccountDaily: '한 계정은 24시간 동안 인증번호를 10번까지 받을 수 있습니다.',
-  errVerificationPhoneDaily: '한 번호로는 24시간 동안 인증번호를 10번까지 받을 수 있습니다.',
+  errVerificationAccountPhoneDaily:
+    '한 계정이 한 번호로 받을 수 있는 인증번호는 24시간 동안 10번까지입니다.',
+  errVerificationPhoneAccounts: '한 번호로는 24시간 동안 계정 3개까지 인증번호를 받을 수 있습니다.',
+  errVerificationIpDaily:
+    '같은 접속 주소(IP)에서는 24시간 동안 인증번호를 20번까지 받을 수 있습니다.',
+  errVerificationServiceDaily:
+    '서비스 전체의 인증번호 발송이 24시간 동안 보낼 수 있는 500건에 이르렀습니다.',
   errVerificationTooManyRequests: '요청이 너무 많습니다.',
-  // 문자 발송 사업자가 받았다고 답하지 않았다(SMS_SEND_FAILED). 받지 않은 것이 확실하면 보낸 것으로 세지
-  // 않고, 결과를 알 수 없으면(문자가 갔을 수 있다) 세고 그 인증번호는 '이미 받은 인증번호 입력'으로 넣을 수
-  // 있다(ADR-0070 7-3). 화면은 둘을 가리지 못한다(같은 502). 결과를 알 수 없을 때의 문구는 오너에게 물을 것.
+  // 문자 발송 사업자가 받지 않은 것이 확실하다(SMS_SEND_FAILED: 거절, 연결 전 실패). 보낸 것으로 세지 않는다.
+  // 결과를 알 수 없는 발송은 verificationMaybeSent다(ADR-0070).
   errVerificationSendFailed: '인증번호를 보내지 못했습니다. 잠시 후 다시 시도해 주세요.',
   errVerificationAlreadyDone: '이미 본인확인을 마친 계정입니다.',
   // 한 번호에는 한 계정만(#57-1). 인증번호가 맞은 뒤에만 알려 준다(번호의 주인만 안다).

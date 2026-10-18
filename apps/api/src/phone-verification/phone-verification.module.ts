@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module.js';
 import { DbModule } from '../infra/db/db.module.js';
+import { RateLimitsModule } from '../rate-limit/rate-limit.limits.js';
 import { SmsModule } from '../sms/sms.module.js';
 import { PhoneVerificationController } from './phone-verification.controller.js';
 import { PhoneVerificationService } from './phone-verification.service.js';
@@ -12,7 +13,8 @@ import { PhoneVerificationService } from './phone-verification.service.js';
  * (#58, #70) ask it — or `isPhoneVerified` (@buddha/db) inside their own transaction.
  */
 @Module({
-  imports: [DbModule, AuthModule, SmsModule],
+  // RateLimitsModule for UNCOUNTED_PEERS: the client address is named by the rate limit's rule.
+  imports: [DbModule, AuthModule, SmsModule, RateLimitsModule],
   controllers: [PhoneVerificationController],
   providers: [PhoneVerificationService],
   exports: [PhoneVerificationService],

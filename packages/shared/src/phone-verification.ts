@@ -53,19 +53,35 @@ export const phoneSchema = z
   .pipe(z.string().regex(PHONE_PATTERN, 'must be a Korean mobile number (01X)'));
 
 /**
- * The fixed values of the code (owner decision 2026-10-17, ADR-0069 decision 1 #57-3: fixed in
- * code, not release settings): six digits, valid three minutes, a new one sixty seconds after the
- * previous send at the earliest, five wrong entries discard a code (a new one must be requested),
- * and at most ten sends a day for one account and for one number. "A day" is the 24 hours before
- * the request (rolling), not a calendar day: the bound holds at any moment, whatever time zone a
- * member reads times in (ADR-0063), and never lets twenty sends straddle a midnight.
+ * The fixed values of the code (owner decisions 2026-10-17 and 2026-10-18, ADR-0069 decision 1
+ * #57-3 and ADR-0070: fixed in code, not release settings): six digits, valid three minutes, a new
+ * one sixty seconds after the account's previous send at the earliest, and five wrong entries
+ * discard a code (a new one must be requested). A day's sends are bounded five ways:
+ *
+ * - `accountDailySends`: one account, whatever the numbers;
+ * - `accountPhoneDailySends`: one account to one number. With these values an account reaches its
+ *   own ten no later than any of its pairs (every send of a pair is a send of the account), so the
+ *   account's limit answers first; the pair's is kept as the owner stated it;
+ * - `phoneDailyAccounts`: the accounts one number may receive codes for — a fourth account is
+ *   refused, the three that have sent to it are not;
+ * - `ipDailySends`: one client address (as the per-address rate limit names it; a request that
+ *   names no client — loopback, the web server's rewrite — is not counted by address);
+ * - `serviceDailySends`: the whole service.
+ *
+ * "A day" is the 24 hours before the request (rolling), not a calendar day, for each of them: the
+ * bound holds at any moment, whatever time zone a member reads times in (ADR-0063), and never
+ * lets twice the bound straddle a midnight.
  */
 export const PHONE_VERIFICATION_LIMITS = {
   codeLength: 6,
   codeTtlSeconds: 180,
   resendIntervalSeconds: 60,
   maxAttempts: 5,
-  dailySends: 10,
+  accountDailySends: 10,
+  accountPhoneDailySends: 10,
+  phoneDailyAccounts: 3,
+  ipDailySends: 20,
+  serviceDailySends: 500,
   dailyWindowSeconds: 24 * 60 * 60,
 } as const;
 
@@ -170,15 +186,26 @@ export type PhoneVerificationNotAllowedDetails = z.infer<
 >;
 
 /**
- * PHONE_VERIFICATION_LIMITED (429): no code was sent, because the account's previous send is
- * less than `resendIntervalSeconds` old (`resend_interval`), or the account (`account_daily`) or
- * the number (`phone_daily`) has had `dailySends` codes in the last 24 hours.
- * `retryAfterSeconds` is when the same request would pass that limit.
+ * PHONE_VERIFICATION_LIMITED (429): no code was sent, because of one of the fixed limits of
+ * PHONE_VERIFICATION_LIMITS, each over the last 24 hours but the first:
+ *
+ * - `resend_interval`: the account's previous send is less than `resendIntervalSeconds` old;
+ * - `account_daily`: the account has had `accountDailySends` codes;
+ * - `account_phone_daily`: the account has had `accountPhoneDailySends` codes at this number;
+ * - `phone_accounts`: the number has had codes for `phoneDailyAccounts` other accounts;
+ * - `ip_daily`: the client address the request came from has asked for `ipDailySends` codes;
+ * - `service_daily`: the service has sent `serviceDailySends` codes.
+ *
+ * `retryAfterSeconds` is when the same request would pass that limit (when several refuse, the
+ * one that lasts longest).
  */
 export const PHONE_VERIFICATION_LIMIT_REASONS = [
   'resend_interval',
   'account_daily',
-  'phone_daily',
+  'account_phone_daily',
+  'phone_accounts',
+  'ip_daily',
+  'service_daily',
 ] as const;
 export type PhoneVerificationLimitReason = (typeof PHONE_VERIFICATION_LIMIT_REASONS)[number];
 export const phoneVerificationLimitedDetailsSchema = z.object({
@@ -191,18 +218,21 @@ export type PhoneVerificationLimitedDetails = z.infer<typeof phoneVerificationLi
  * VERIFICATION_CODE_REJECTED (409): the account is not verified by this confirmation, because
  * no code is waiting (`no_code`: none was sent, or the newest was used), the newest code is
  * past its three minutes (`expired`), it took its fifth wrong entry already and is discarded
- * (`attempts_exceeded`, also the answer to that fifth entry), or the code does not match
+ * (`attempts_exceeded`, also the answer to that fifth entry), the code typed is an older code of
+ * the account that a newer send replaced (`superseded`: only the newest confirms, and this entry
+ * is not counted against it — owner decision 2026-10-18, ADR-0070), or the code does not match
  * (`mismatch`, with the entries the code has left).
  */
 export const VERIFICATION_CODE_REJECTIONS = [
   'no_code',
   'expired',
   'attempts_exceeded',
+  'superseded',
   'mismatch',
 ] as const;
 export type VerificationCodeRejection = (typeof VERIFICATION_CODE_REJECTIONS)[number];
 export const verificationCodeRejectedDetailsSchema = z.discriminatedUnion('reason', [
-  z.object({ reason: z.enum(['no_code', 'expired', 'attempts_exceeded']) }),
+  z.object({ reason: z.enum(['no_code', 'expired', 'attempts_exceeded', 'superseded']) }),
   z.object({
     reason: z.literal('mismatch'),
     remainingAttempts: z

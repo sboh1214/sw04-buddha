@@ -258,14 +258,18 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
     basis: 'D8, ADR-0069 결정 1(#57-3), ADR-0070',
     // The SMS verification (#183, ADR-0070) is stored: a public shape never says whether, when or
     // how an account verified (`verified`, `verifiedAt`, `verification`), nor carries a code
-    // (`otp`). The verified number is `phone` above and the real name `real-name`. The account's
-    // own `GET /me` is an owner-only route, which this list does not read.
+    // (`otp`) or the client address a code was asked from (`ip`, `clientIp`: the record keeps it,
+    // owner decision 2026-10-18). The verified number is `phone` above and the real name
+    // `real-name`. The account's own `GET /me` is an owner-only route, which this list does not
+    // read.
     fields: [
       ['verification'],
       ['verifications'],
       ['verified'],
       ['identity'],
       ['otp'],
+      ['ip'],
+      ['ips'],
       ['kyc'],
       ['ci'],
       ['di'],

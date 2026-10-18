@@ -1,10 +1,12 @@
 import {
+  PHONE_VERIFICATION_LIMITS,
   phoneSchema,
   phoneVerificationCodeSchema,
   phoneVerificationLimitedDetailsSchema,
   phoneVerificationNotAllowedDetailsSchema,
   realNameSchema,
   verificationCodeRejectedDetailsSchema,
+  type PhoneVerificationLimitReason,
 } from '@buddha/shared';
 import * as z from 'zod';
 import { copy } from '@/copy';
@@ -161,10 +163,28 @@ export type CodeRequestFailure =
       codeWaitingMessage: string;
       retryAfterSeconds: number;
     }
+  /**
+   * The provider's answer was lost (SMS_SEND_UNCONFIRMED): the text may have come, and its code
+   * can be confirmed (owner decision 2026-10-18, ADR-0070). The step opens the code input for it,
+   * keeps the name and the number it was sent with locked, and counts the send button down for
+   * `resendAfterSeconds` — the whole resend interval from this answer, which the server's own wait
+   * (started before the provider was asked) never outlasts. No validity countdown: the server
+   * says whether the code still holds.
+   */
+  | { kind: 'maybe-sent'; message: string; resendAfterSeconds: number }
   /** Verified already (another tab): the hook refreshed `['me']`, and the page moves on. */
   | { kind: 'verified'; message: string }
   /** Anything else, said above the form: a daily limit, the provider, the session, the rest. */
   | { kind: 'notice'; message: string };
+
+/** What each daily limit says (the resend interval is the step's own `resend-wait`). */
+const DAILY_LIMIT_MESSAGES = {
+  account_daily: copy.errVerificationAccountDaily,
+  account_phone_daily: copy.errVerificationAccountPhoneDaily,
+  phone_accounts: copy.errVerificationPhoneAccounts,
+  ip_daily: copy.errVerificationIpDaily,
+  service_daily: copy.errVerificationServiceDaily,
+} as const satisfies Record<Exclude<PhoneVerificationLimitReason, 'resend_interval'>, string>;
 
 export function codeRequestFailure(error: unknown): CodeRequestFailure {
   if (isApiError(error, 'VALIDATION_ERROR')) {
@@ -185,11 +205,7 @@ export function codeRequestFailure(error: unknown): CodeRequestFailure {
         retryAfterSeconds,
       };
     }
-    const message =
-      reason === 'account_daily'
-        ? copy.errVerificationAccountDaily
-        : copy.errVerificationPhoneDaily;
-    return { kind: 'notice', message: withWait(message, retryAfterSeconds) };
+    return { kind: 'notice', message: withWait(DAILY_LIMIT_MESSAGES[reason], retryAfterSeconds) };
   }
   if (isApiError(error, 'RATE_LIMITED')) {
     const wait = rateLimitWait(error.details);
@@ -209,13 +225,23 @@ export function codeRequestFailure(error: unknown): CodeRequestFailure {
   if (isApiError(error, 'SMS_SEND_FAILED')) {
     return { kind: 'notice', message: copy.errVerificationSendFailed };
   }
+  if (isApiError(error, 'SMS_SEND_UNCONFIRMED')) {
+    return {
+      kind: 'maybe-sent',
+      message: copy.verificationMaybeSent,
+      resendAfterSeconds: PHONE_VERIFICATION_LIMITS.resendIntervalSeconds,
+    };
+  }
   if (isForAnotherAccount(error)) return { kind: 'notice', message: copy.sessionChanged };
   return { kind: 'notice', message: copy.errUnknown };
 }
 
 /** What the step does with a refused confirmation (`POST /me/phone-verification/confirm`). */
 export type ConfirmFailure =
-  /** A wrong code with entries left (counted), or one the server would not read: under the input. */
+  /**
+   * Under the input: a wrong code with entries left (counted), an older code a resend replaced
+   * (not counted), or one the server would not read.
+   */
   | { kind: 'field'; message: string }
   /**
    * The code can no longer verify anything — none waits, its three minutes are over, or it took
@@ -243,6 +269,8 @@ export function confirmFailure(error: unknown): ConfirmFailure {
             details.data.remainingAttempts,
           )}${copy.verificationAttemptsUnit})`,
         };
+      case 'superseded':
+        return { kind: 'field', message: copy.errVerificationCodeSuperseded };
       case 'expired':
         return { kind: 'code-gone', message: copy.errVerificationCodeExpired };
       case 'attempts_exceeded':

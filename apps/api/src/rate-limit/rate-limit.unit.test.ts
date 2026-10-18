@@ -6,7 +6,7 @@ import { type Redis } from 'ioredis';
 import { describe, expect, it, vi } from 'vitest';
 import { uncountedPeers } from '../config/env.js';
 import { emailTracker } from './email-tracker.js';
-import { isCountableAddress } from './rate-limit.tracker.js';
+import { clientAddress, isCountableAddress } from './rate-limit.tracker.js';
 import { RATE_LIMIT_KEY_PREFIX, RedisThrottlerStorage } from './redis-throttler.storage.js';
 
 describe('isCountableAddress', () => {
@@ -55,6 +55,31 @@ describe('isCountableAddress', () => {
     expect(
       isCountableAddress('::1', uncountedPeers({ RATE_LIMIT_UNCOUNTED_PEERS: undefined })),
     ).toBe(false);
+  });
+});
+
+describe('clientAddress (the per-address limit of the SMS codes, ADR-0070)', () => {
+  it('names a countable client as one spelling an inet column takes', () => {
+    expect(clientAddress('203.0.113.7')).toBe('203.0.113.7');
+    // The dual-stack spelling of an IPv4 peer is the same client.
+    expect(clientAddress('::ffff:203.0.113.7')).toBe('203.0.113.7');
+    expect(clientAddress('2001:db8::1')).toBe('2001:db8::1');
+    // A zone is not part of the address, and Postgres' inet refuses one.
+    expect(clientAddress('fe80::1%eth0')).toBe('fe80::1');
+  });
+
+  it('names nobody for what cannot name a client, by the rule of isCountableAddress', () => {
+    expect(clientAddress(undefined)).toBeNull();
+    expect(clientAddress('')).toBeNull();
+    expect(clientAddress('127.0.0.1')).toBeNull();
+    expect(clientAddress('::1')).toBeNull();
+    expect(clientAddress('::ffff:127.0.0.1')).toBeNull();
+    expect(clientAddress('not-an-address')).toBeNull();
+    // The web server of deploy/compose.yaml, in both spellings; its neighbour is a client.
+    const listed = uncountedPeers({ RATE_LIMIT_UNCOUNTED_PEERS: '172.28.0.20/32' });
+    expect(clientAddress('172.28.0.20', listed)).toBeNull();
+    expect(clientAddress('::ffff:172.28.0.20', listed)).toBeNull();
+    expect(clientAddress('172.28.0.21', listed)).toBe('172.28.0.21');
   });
 });
 

@@ -11,8 +11,17 @@ import {
  * Postgres. PhoneVerificationService reads the rows under its locks and applies these.
  */
 
-const { codeLength, codeTtlSeconds, resendIntervalSeconds, maxAttempts, dailySends } =
-  PHONE_VERIFICATION_LIMITS;
+const {
+  codeLength,
+  codeTtlSeconds,
+  resendIntervalSeconds,
+  maxAttempts,
+  accountDailySends,
+  accountPhoneDailySends,
+  phoneDailyAccounts,
+  ipDailySends,
+  serviceDailySends,
+} = PHONE_VERIFICATION_LIMITS;
 const DAY_MS = PHONE_VERIFICATION_LIMITS.dailyWindowSeconds * 1_000;
 
 /** Six digits from the CSPRNG, leading zeros kept: every one of the 10^6 codes equally likely. */
@@ -63,51 +72,79 @@ function secondsUntil(at: number, clock: Date): number {
   return Math.max(1, Math.ceil((at - clock.getTime()) / 1_000));
 }
 
-/** The sends one limit counts: how many in the window, and the oldest of them. */
-export interface SendWindow {
-  count: number;
-  oldest: Date | null;
-}
-
+/**
+ * What the daily limits read, each as the sends (or, for the number's accounts, each account's
+ * newest send) of the 24 hours before `clock`, NEWEST FIRST. A list may stop at its limit: only
+ * whether it reaches the limit, and the send at the limit, matter.
+ */
 export interface SendHistory {
   /** The database clock of this request, read after its locks. */
   clock: Date;
-  /** The account's newest send, whatever the number; null when it has none. */
+  /** The account's newest send, whatever the number or its age; null when it has none. */
   lastAccountSend: Date | null;
-  /** The account's sends since `dayWindowStart(clock)`. */
-  account: SendWindow;
-  /** The number's sends since `dayWindowStart(clock)`, whichever accounts asked. */
-  phone: SendWindow;
+  /** The account's sends, whatever the numbers. */
+  account: readonly Date[];
+  /** The account's sends to the number of this request. */
+  accountPhone: readonly Date[];
+  /** The newest send of each OTHER account to the number of this request. */
+  phoneAccounts: readonly Date[];
+  /**
+   * The sends from the client address of this request, or null when the request names no client
+   * (loopback, a proxy whose forwarding is not trusted: the per-address rate limit's rule), which
+   * no per-address limit can count.
+   */
+  ip: readonly Date[] | null;
+  /** The service's sends. */
+  service: readonly Date[];
 }
 
 /**
- * Whether a send may go now, or which limit refuses it (#57-3): sixty seconds since the account's
- * previous send, and ten sends in 24 hours for the account and for the number. When several
- * refuse, the one that lasts longest is answered, so `retryAfterSeconds` is when the same request
- * would pass all of them (as far as this account can know: other accounts may text the number
- * meanwhile).
+ * The refusal of a window that holds `limit` sends or more, or undefined. Newest first, so the
+ * send at the limit is `sends[limit - 1]`: once it leaves the window, fewer than `limit` remain
+ * and the same request passes (unless more are sent meanwhile).
+ */
+function windowRefusal(
+  reason: PhoneVerificationLimitedDetails['reason'],
+  sends: readonly Date[],
+  limit: number,
+  clock: Date,
+): PhoneVerificationLimitedDetails | undefined {
+  const atLimit = sends[limit - 1];
+  if (atLimit === undefined) return undefined;
+  return { reason, retryAfterSeconds: secondsUntil(atLimit.getTime() + DAY_MS, clock) };
+}
+
+/**
+ * Whether a send may go now, or which limit refuses it (#57-3, owner decisions 2026-10-18): sixty
+ * seconds since the account's previous send, and in 24 hours ten sends for the account, ten for
+ * the account at this number, three accounts at this number (an account that has sent to it in
+ * the window is one of them and passes), twenty from the client address (when the request names
+ * one) and five hundred for the service. When several refuse, the one that lasts longest is
+ * answered — the first of them in that order on a tie — so `retryAfterSeconds` is when the same
+ * request would pass all of them, as far as this request can know (others may send meanwhile).
  */
 export function sendRefusal(history: SendHistory): PhoneVerificationLimitedDetails | undefined {
   const { clock } = history;
-  const refusals: PhoneVerificationLimitedDetails[] = [];
+  const refusals: (PhoneVerificationLimitedDetails | undefined)[] = [];
   if (history.lastAccountSend !== null) {
     const next = history.lastAccountSend.getTime() + resendIntervalSeconds * 1_000;
     if (next > clock.getTime()) {
       refusals.push({ reason: 'resend_interval', retryAfterSeconds: secondsUntil(next, clock) });
     }
   }
-  for (const [reason, window] of [
-    ['account_daily', history.account],
-    ['phone_daily', history.phone],
-  ] as const) {
-    if (window.count >= dailySends && window.oldest !== null) {
-      const next = window.oldest.getTime() + DAY_MS;
-      refusals.push({ reason, retryAfterSeconds: secondsUntil(next, clock) });
-    }
-  }
+  refusals.push(
+    windowRefusal('account_daily', history.account, accountDailySends, clock),
+    windowRefusal('account_phone_daily', history.accountPhone, accountPhoneDailySends, clock),
+    history.accountPhone.length === 0
+      ? windowRefusal('phone_accounts', history.phoneAccounts, phoneDailyAccounts, clock)
+      : undefined,
+    history.ip === null ? undefined : windowRefusal('ip_daily', history.ip, ipDailySends, clock),
+    windowRefusal('service_daily', history.service, serviceDailySends, clock),
+  );
   return refusals.reduce<PhoneVerificationLimitedDetails | undefined>(
     (longest, refusal) =>
-      longest === undefined || refusal.retryAfterSeconds > longest.retryAfterSeconds
+      refusal !== undefined &&
+      (longest === undefined || refusal.retryAfterSeconds > longest.retryAfterSeconds)
         ? refusal
         : longest,
     undefined,
@@ -135,6 +172,34 @@ export function pendingCodeRefusal(
   if (code.attempts >= maxAttempts) return { reason: 'attempts_exceeded' };
   if (clock.getTime() >= code.expiresAt.getTime()) return { reason: 'expired' };
   return undefined;
+}
+
+/**
+ * How many of the account's codes before the newest a wrong entry is compared with, newest first
+ * (`matchesOlderCode`): a day's sends less the newest. Every code of the last 24 hours is among
+ * them — the account sends at most ten in any 24 hours — and so is the text just before a resend
+ * however long ago it came, while the comparison stays bounded however long the record grows.
+ */
+export const OLDER_CODES_COMPARED = accountDailySends - 1;
+
+/** One of the account's older codes, as a confirmation reads it. */
+export interface OlderCode {
+  id: string;
+  codeHash: string;
+}
+
+/**
+ * Whether `code`, which did not match the account's newest code, is one of its `older` codes —
+ * sent before the newest, which replaced it. Such an entry is answered `superseded` and spends no
+ * entry of the newest code (owner decision 2026-10-18, ADR-0070): the member typed the text that
+ * came first, not a guess. Every older code is compared, each in constant time, without stopping
+ * at the first match.
+ */
+export function matchesOlderCode(key: Buffer, code: string, older: readonly OlderCode[]): boolean {
+  return older.reduce(
+    (matched, row) => codeMatches(key, row.id, code, row.codeHash) || matched,
+    false,
+  );
 }
 
 /**

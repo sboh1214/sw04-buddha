@@ -628,12 +628,14 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       .update(schema.profiles)
       .set({ nickname, timeZone })
       .where(eq(schema.profiles.userId, a.id));
-    // A's 본인확인 (ADR-0070): the record, and the code it was confirmed with (its hash a
-    // sentinel too: nobody but A may see whether, when or how A verified).
+    // A's 본인확인 (ADR-0070): the record, and the code it was confirmed with (its hash and the
+    // address it was asked from sentinels too: nobody but A may see whether, when, how or from
+    // where A verified — and no route shows A the address either).
     const realName = `숨김${letters(8)}`;
     const phone = `010${String(randomInt(10_000_000, 100_000_000))}`;
     await createPhoneVerification(t.db, { userId: a.id, realName, phone });
     const codeHash = randomUUID().replaceAll('-', '').repeat(2);
+    const clientIp = `2001:db8::${randomInt(0x1000, 0x10000).toString(16)}:${randomInt(0x1000, 0x10000).toString(16)}`;
     await t.db.insert(schema.phoneVerificationCodes).values({
       id: randomUUID(),
       userId: a.id,
@@ -642,6 +644,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       codeHash,
       expiresAt: new Date(Date.now() + 180_000),
       consumedAt: new Date(),
+      clientIp,
     });
 
     // The balance as the books would have it: the change is an ADMIN_ADJUST entry.
@@ -824,6 +827,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         text('real name', realName),
         text('phone', phone),
         text('verification code hash', codeHash),
+        text('verification client address', clientIp),
         text('password', a.password),
         text('session token', session!.token),
         text('account id', account!.id),

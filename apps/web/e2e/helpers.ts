@@ -39,8 +39,8 @@ export const E2E_REAL_NAME = '테스트회원';
 /**
  * A mobile number no other account here has verified: 010 and eight random digits. Each account
  * needs its own since ADR-0070 — one account per verified number (ADR-0069 decision 1 #57-1) —
- * and a number also has a daily send limit of its own, so no two accounts share one even across
- * re-runs against a persistent database (a collision is one in a hundred million).
+ * and a number receives codes for at most three accounts a day, so no two accounts share one
+ * even across re-runs against a persistent database (a collision is one in a hundred million).
  */
 export function freshPhone(): string {
   return `010${String(Math.floor(Math.random() * 100_000_000)).padStart(8, '0')}`;
@@ -88,6 +88,18 @@ const ADMIN_VERIFY_MS = 120_000;
 
 /** How long a fixture that was refused waits before it asks `GET /me` again. */
 const ADMIN_VERIFY_POLL_MS = 2_000;
+
+/**
+ * What a run says when the service-wide limit refuses its codes: every send stays as an
+ * account's 본인확인 기록 (ADR-0070), so a persistent database counts the sends of every run of
+ * the last 24 hours against the service's five hundred — about eighty a full run (both
+ * projects).
+ */
+const SERVICE_LIMIT_HELP =
+  'the service-wide limit of 500 verification codes in 24 hours (ADR-0070) is reached in this ' +
+  "database, which keeps every earlier run's sends: on an isolated e2e database delete them " +
+  '(`DELETE FROM phone_verification_codes`, as the migration role) or wait until the oldest is ' +
+  '24 hours old';
 
 /** PLAN 13 M4 AC 1: 한 브라우저의 변화가 다른 브라우저의 카드·상세에 1초 내 반영된다. */
 export const REALTIME_BUDGET_MS = 1_000;
@@ -158,7 +170,11 @@ async function verifySeedAdmin(
             (await confirmed.text()),
         );
       }
-    } else if (sent.status() !== 429 && sent.status() !== 409) {
+    } else if (sent.status() === 429) {
+      // A daily limit is not another worker's minute: waiting would not end it in this test.
+      const body = (await sent.json()) as { error: { details?: { reason?: string } } };
+      if (body.error.details?.reason === 'service_daily') throw new Error(SERVICE_LIMIT_HELP);
+    } else if (sent.status() !== 409) {
       throw new Error(
         `requesting a code for ${admin.email} failed (${String(sent.status())}): ${await sent.text()}`,
       );
@@ -279,10 +295,23 @@ export async function verifyPhone(
   await page.getByTestId('verification-real-name').fill(realName);
   await page.getByTestId('verification-phone').fill(phone);
   await page.getByTestId('verification-send').click();
-  await expect(page.getByTestId('verification-code')).toBeVisible();
+  await expectCodeInput(page);
   await page.getByTestId('verification-code').fill(await smsCode(phone, seen));
   await page.getByTestId('verification-confirm').click();
   return phone;
+}
+
+/**
+ * Waits for the code input a send opens, and fails with what to do when the service-wide limit
+ * refused the send instead (SERVICE_LIMIT_HELP) rather than as a missing input.
+ */
+export async function expectCodeInput(page: Page): Promise<void> {
+  const input = page.getByTestId('verification-code');
+  const serviceLimit = page
+    .getByTestId('verification-notice')
+    .filter({ hasText: copy.errVerificationServiceDaily });
+  await expect(input.or(serviceLimit)).toBeVisible();
+  if (await serviceLimit.isVisible()) throw new Error(SERVICE_LIMIT_HELP);
 }
 
 /**

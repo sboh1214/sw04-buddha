@@ -3,6 +3,7 @@ import { copy } from '../src/copy';
 import {
   E2E_REAL_NAME,
   expect,
+  expectCodeInput,
   freshEmail,
   freshPhone,
   logOut,
@@ -15,10 +16,12 @@ import {
 
 /**
  * 본인확인 (#183, ADR-0070): the step's refusals as a member meets them — a wrong code with the
- * entries it has left, the fifth wrong entry that discards the code, the resend wait, and a
- * number another account has verified (one account per number, ADR-0069 decision 1 #57-1) —
- * and a code the screen did not send (a reload, another tab, a lost answer), which can still be
- * entered. The happy path and the gate are onboarding.spec.ts's.
+ * entries it has left, the fifth wrong entry that discards the code, the resend wait, an older
+ * code typed after a resend, and a number another account has verified (one account per number,
+ * ADR-0069 decision 1 #57-1) — a code the screen did not send (a reload, another tab, a lost
+ * answer), which can still be entered, and a send whose provider's answer was lost, which may have
+ * texted the code and says so while its code is tried (owner decisions 2026-10-18). The happy
+ * path and the gate are onboarding.spec.ts's.
  *
  * Every account and number is fresh, so the per-account and per-number limits never meet another
  * test's sends. The codes come from the API's development SMS sender through Mailpit.
@@ -32,10 +35,13 @@ async function sendCode(page: Page, phone: string): Promise<string> {
   await page.getByTestId('verification-real-name').fill(E2E_REAL_NAME);
   await page.getByTestId('verification-phone').fill(phone);
   await page.getByTestId('verification-send').click();
-  await expect(page.getByTestId('verification-code')).toBeVisible();
+  await expectCodeInput(page);
   await expect(page.getByTestId('verification-notice')).toHaveText(copy.verificationCodeSent);
   return smsCode(phone, seen);
 }
+
+/** The resend wait, with room for the screen's countdown to reach 0 and enable the button. */
+const RESEND_WAIT_MS = 75_000;
 
 /** Six digits that are not `code`. */
 function wrongCode(code: string): string {
@@ -206,6 +212,8 @@ test.describe('본인확인 인증번호 (#183)', () => {
     await page.getByTestId('verification-phone').fill(phone);
     await page.getByTestId('verification-send').click();
     await expect(page.getByTestId('verification-code')).toBeVisible();
+    // Read out although the cursor moves into the code input with it.
+    await expect(page.getByTestId('verification-notice')).toHaveAttribute('role', 'alert');
     await expect(page.getByTestId('verification-notice')).toContainText(
       copy.verificationCodeWaiting,
     );
@@ -214,5 +222,159 @@ test.describe('본인확인 인증번호 (#183)', () => {
     await page.getByTestId('verification-code').fill(code);
     await page.getByTestId('verification-confirm').click();
     await expect(page).toHaveURL('/');
+  });
+
+  test('다시 받은 뒤 예전 인증번호를 넣으면 틀린 입력으로 세지 않고 새 인증번호를 묻는다', async ({
+    page,
+  }) => {
+    test.slow(); // the resend interval is a real minute
+    const phone = freshPhone();
+    const older = await sendCode(page, phone);
+
+    // A minute later, 다시 받기 sends a new code to the same number.
+    const send = page.getByTestId('verification-send');
+    await expect(send).toBeEnabled({ timeout: RESEND_WAIT_MS });
+    const seen = await smsMessageIds(phone);
+    await send.click();
+    // Answered: the minute counts down again (the input is cleared for the new code by then).
+    await expect(send).toContainText(`${copy.verificationResend} (0:`);
+    await expect(page.getByTestId('verification-notice')).toHaveText(copy.verificationCodeSent);
+    const newest = await smsCode(phone, seen);
+    test.skip(older === newest, 'the two draws were the same code (one in a million)');
+
+    // The first text, typed now: asked for the new code under the input, no entry spent.
+    await page.getByTestId('verification-code').fill(older);
+    await page.getByTestId('verification-confirm').click();
+    await expect(page.getByText(copy.errVerificationCodeSuperseded, { exact: true })).toBeVisible();
+    await expect(page.getByTestId('verification-code')).toBeVisible();
+    // A real wrong entry after it is the first counted: four left.
+    const other = ['000000', '000001', '000002'].find((code) => code !== older && code !== newest)!;
+    await page.getByTestId('verification-code').fill(other);
+    await page.getByTestId('verification-confirm').click();
+    await expect(page.getByText(mismatch(4), { exact: true })).toBeVisible();
+
+    await page.getByTestId('verification-code').fill(newest);
+    await page.getByTestId('verification-confirm').click();
+    await expect(page).toHaveURL('/');
+    await expect(page.getByText(copy.verificationDone)).toBeVisible();
+  });
+
+  test('발송 결과를 알 수 없으면 문자가 갔을 수 있다고 알리고 그 인증번호를 받는다', async ({
+    page,
+  }) => {
+    const phone = freshPhone();
+    await openSetPassword(page, freshEmail());
+    await page.goto('/onboarding');
+    await expect(page.getByTestId('verification-step')).toBeVisible();
+
+    // The API sends the code (the development sender mails it to Mailpit), and the answer the
+    // screen gets is the one a lost provider answer makes: 502 SMS_SEND_UNCONFIRMED.
+    let realStatus = 0;
+    await page.route('**/api/v1/me/phone-verification/code', async (route) => {
+      realStatus = (await route.fetch()).status();
+      await route.fulfill({
+        status: 502,
+        json: { error: { code: 'SMS_SEND_UNCONFIRMED', message: 'Internal server error' } },
+      });
+    });
+    const seen = await smsMessageIds(phone);
+    await page.getByTestId('verification-real-name').fill(E2E_REAL_NAME);
+    await page.getByTestId('verification-phone').fill(phone);
+    await page.getByTestId('verification-send').click();
+
+    // Not "could not send": the text may have come. The input is open for its code, the name and
+    // the number it went to are locked, and 다시 받기 waits out the minute.
+    await expect(page.getByTestId('verification-notice')).toHaveText(copy.verificationMaybeSent);
+    // Read out although it is information: the cursor moves into the code input with it.
+    await expect(page.getByTestId('verification-notice')).toHaveAttribute('role', 'alert');
+    expect(realStatus).toBe(200);
+    await expect(page.getByTestId('verification-notice')).not.toContainText(
+      copy.errVerificationSendFailed,
+    );
+    await expect(page.getByTestId('verification-code')).toBeFocused();
+    await expect(page.getByTestId('verification-phone')).not.toBeEditable();
+    await expect(page.getByTestId('verification-real-name')).not.toBeEditable();
+    await expect(page.getByTestId('verification-send')).toBeDisabled();
+    await expect(page.getByTestId('verification-send')).toContainText(
+      `${copy.verificationResend} (`,
+    );
+    // No answer said how long the code holds: no countdown, the server decides.
+    await expect(page.getByTestId('verification-code-expiry')).toHaveCount(0);
+    await page.unroute('**/api/v1/me/phone-verification/code');
+
+    // The text did come: its code verifies the account.
+    await page.getByTestId('verification-code').fill(await smsCode(phone, seen));
+    await page.getByTestId('verification-confirm').click();
+    await expect(page).toHaveURL('/');
+    await expect(page.getByText(copy.verificationDone)).toBeVisible();
+  });
+
+  test('다시 받기의 결과를 알 수 없을 때 예전 인증번호를 넣어도 문자가 갔을 수 있다는 안내가 남는다', async ({
+    page,
+  }) => {
+    test.slow(); // the resend interval is a real minute
+    const phone = freshPhone();
+    const older = await sendCode(page, phone);
+
+    // A minute later, 다시 받기: the API sends a new code (kept as the newest), and the answer the
+    // screen gets is the one a lost provider answer makes: 502 SMS_SEND_UNCONFIRMED.
+    const send = page.getByTestId('verification-send');
+    await expect(send).toBeEnabled({ timeout: RESEND_WAIT_MS });
+    let realStatus = 0;
+    await page.route('**/api/v1/me/phone-verification/code', async (route) => {
+      realStatus = (await route.fetch()).status();
+      await route.fulfill({
+        status: 502,
+        json: { error: { code: 'SMS_SEND_UNCONFIRMED', message: 'Internal server error' } },
+      });
+    });
+    const seen = await smsMessageIds(phone);
+    await send.click();
+    const notice = page.getByTestId('verification-notice');
+    await expect(notice).toHaveText(copy.verificationMaybeSent);
+    expect(realStatus).toBe(200);
+    await page.unroute('**/api/v1/me/phone-verification/code');
+    const newest = await smsCode(phone, seen);
+    test.skip(older === newest, 'the two draws were the same code (one in a million)');
+
+    // The new text "never came", so the member types the first one: refused under the input as
+    // an older code — and the line that says to ask again later if nothing came stays.
+    await page.getByTestId('verification-code').fill(older);
+    await page.getByTestId('verification-confirm').click();
+    await expect(page.getByText(copy.errVerificationCodeSuperseded, { exact: true })).toBeVisible();
+    await expect(notice).toHaveText(copy.verificationMaybeSent);
+    // A wrong code keeps it too (the first counted entry: four left).
+    const other = ['000000', '000001', '000002'].find((code) => code !== older && code !== newest)!;
+    await page.getByTestId('verification-code').fill(other);
+    await page.getByTestId('verification-confirm').click();
+    await expect(page.getByText(mismatch(4), { exact: true })).toBeVisible();
+    await expect(notice).toHaveText(copy.verificationMaybeSent);
+
+    await page.getByTestId('verification-code').fill(newest);
+    await page.getByTestId('verification-confirm').click();
+    await expect(page).toHaveURL('/');
+    await expect(page.getByText(copy.verificationDone)).toBeVisible();
+  });
+
+  test('보내지 못한 것이 확실하면 그대로 알리고 인증번호 칸을 열지 않는다', async ({ page }) => {
+    await openSetPassword(page, freshEmail());
+    await page.goto('/onboarding');
+    await expect(page.getByTestId('verification-step')).toBeVisible();
+    // A refusal before anything was sent (the provider said no): 502 SMS_SEND_FAILED.
+    await page.route('**/api/v1/me/phone-verification/code', (route) =>
+      route.fulfill({
+        status: 502,
+        json: { error: { code: 'SMS_SEND_FAILED', message: 'Internal server error' } },
+      }),
+    );
+    await page.getByTestId('verification-real-name').fill(E2E_REAL_NAME);
+    await page.getByTestId('verification-phone').fill(freshPhone());
+    await page.getByTestId('verification-send').click();
+    await expect(page.getByTestId('verification-notice')).toHaveText(
+      copy.errVerificationSendFailed,
+    );
+    await expect(page.getByTestId('verification-code')).toHaveCount(0);
+    await expect(page.getByTestId('verification-phone')).toBeEditable();
+    await expect(page.getByTestId('verification-send')).toBeEnabled();
   });
 });
