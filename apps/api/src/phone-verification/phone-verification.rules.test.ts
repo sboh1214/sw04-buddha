@@ -26,6 +26,7 @@ import {
   pendingCodeRefusal,
   sendRefusal,
   sharedWaitSeconds,
+  sharedWindowStart,
   type SendHistory,
 } from './phone-verification.rules.js';
 import {
@@ -106,11 +107,21 @@ describe('the keyed hash', () => {
   });
 });
 
-describe('expiry and the window', () => {
+describe('expiry and the windows', () => {
   it('ends a code three minutes after its send and counts the 24 hours before now', () => {
     expect(expiryOf(T0)).toEqual(at(PHONE_VERIFICATION_LIMITS.codeTtlSeconds * SECOND));
     expect(expiryOf(T0)).toEqual(at(180 * SECOND));
     expect(dayWindowStart(T0)).toEqual(at(-DAY));
+    expect(dayWindowStart(at(17_400))).toEqual(at(-DAY + 17_400));
+  });
+
+  it('counts the shared limits over the 24 hours before the minute began (third round)', () => {
+    // T0 is on a minute: the two windows agree there, and part only within the minute.
+    expect(sharedWindowStart(T0)).toEqual(at(-DAY));
+    expect(sharedWindowStart(at(1))).toEqual(at(-DAY));
+    expect(sharedWindowStart(at(17_400))).toEqual(at(-DAY));
+    expect(sharedWindowStart(at(59_999))).toEqual(at(-DAY));
+    expect(sharedWindowStart(at(60_000))).toEqual(at(-DAY + 60_000));
   });
 });
 
@@ -348,24 +359,115 @@ describe('sendRefusal', () => {
     expect(sharedWaitSeconds(minute(5).getTime(), minute(4, 59.9))).toBe(60);
   });
 
-  it('opens a shared limit when the send at the limit leaves the window, not at the minute answered', () => {
-    // The answer is in whole minutes; the limit is not (ADR-0070 7-25). The third other account's
-    // send leaves the window at T0 + 17.4 s: a request a millisecond before is refused with the
-    // minute, one a millisecond after passes — before the moment that refusal named. So a member
-    // asking again and again through that minute learns the instant to the rate limit's step.
+  it('holds a shared limit shut until the minute it answered, not until the send leaves (third round)', () => {
+    // The third other account's send turns 24 hours old at T0 + 17.4 s (clock time). The refusal
+    // answers the minute that holds it, 12:01 — and the limit stays shut until then: asked a
+    // millisecond after the send is 24 hours old, or at any instant of that minute, the same
+    // request is refused with the same answer, so asking again and again through the minute does
+    // not find the 17.4 seconds. It passes from the minute answered on (owner decision 2026-10-18,
+    // third round; ADR-0070 7-25 had it open at the instant itself).
     const third = at(-DAY + 17_400);
     const leaves = third.getTime() + DAY;
-    /** The other accounts' sends the service reads at `clock`: those inside its window. */
+    const opens = T0.getTime() + 60 * SECOND;
+    /** The other accounts' sends the service reads at `clock`: those inside the shared window. */
     const others = (clock: Date) =>
       [at(-5 * SECOND), at(-3_600 * SECOND), third].filter(
-        (sent) => sent.getTime() > dayWindowStart(clock).getTime(),
+        (sent) => sent.getTime() > sharedWindowStart(clock).getTime(),
       );
-    const before = new Date(leaves - 1);
-    const refused = sendRefusal(history({ clock: before, phoneAccounts: others(before) }));
-    expect(refused).toEqual({ reason: 'phone_accounts', retryAfterSeconds: 60 });
-    const after = new Date(leaves + 1);
-    expect(sendRefusal(history({ clock: after, phoneAccounts: others(after) }))).toBeUndefined();
-    expect(after.getTime()).toBeLessThan(before.getTime() + refused!.retryAfterSeconds * SECOND);
+    const ask = (clock: Date) => sendRefusal(history({ clock, phoneAccounts: others(clock) }));
+    for (const ms of [leaves - 1, leaves, leaves + 1, opens - 1_000, opens - 1]) {
+      const clock = new Date(ms);
+      const refusal = ask(clock);
+      expect(refusal, clock.toISOString()).toEqual({
+        reason: 'phone_accounts',
+        retryAfterSeconds: 60,
+      });
+      // The answer, counted from the start of the asking minute, is the minute the limit opens.
+      expect(Math.floor(ms / 60_000) * 60_000 + refusal!.retryAfterSeconds * SECOND).toBe(opens);
+    }
+    // Asked earlier in the minute, the same: the answer moves on the clock's minutes only.
+    expect(ask(at(1))).toEqual({ reason: 'phone_accounts', retryAfterSeconds: 60 });
+    expect(ask(at(-1))).toEqual({ reason: 'phone_accounts', retryAfterSeconds: 120 });
+    expect(ask(new Date(opens))).toBeUndefined();
+    expect(ask(new Date(opens + 1))).toBeUndefined();
+    // Even given the send, the rules do not count it past its minute.
+    expect(
+      sendRefusal(
+        history({
+          clock: new Date(opens),
+          phoneAccounts: [at(-5 * SECOND), at(-3_600 * SECOND), third],
+        }),
+      ),
+    ).toBeUndefined();
+  });
+
+  it('keeps every shared limit shut exactly until the minute answered, and the account’s own to the instant', () => {
+    // Over a sweep of send times and asking instants: a shared limit refuses while the clock is
+    // before the first whole minute at or after the send's 24 hours, answers that minute counted
+    // from the start of the asking minute (so a client waiting it from its answer never comes back
+    // before the limit opens, and less than a minute after), and the account's own limits refuse
+    // only until the instant itself, to the second.
+    const MINUTE = 60 * SECOND;
+    const shared = [
+      { key: 'phoneAccounts', limit: 3, reason: 'phone_accounts' },
+      { key: 'ip', limit: 50, reason: 'ip_daily' },
+      { key: 'service', limit: 500, reason: 'service_daily' },
+    ] as const;
+    const own = [
+      { key: 'account', limit: 10, reason: 'account_daily' },
+      { key: 'accountPhone', limit: 10, reason: 'account_phone_daily' },
+    ] as const;
+    for (const offset of [0, 1, 17_400, 59_999, 60_000, 61_234]) {
+      const sent = at(-DAY + offset);
+      const turns = sent.getTime() + DAY;
+      const opens = Math.ceil(turns / MINUTE) * MINUTE;
+      for (let ms = turns - 2 * MINUTE; ms <= opens + MINUTE; ms += 7_919) {
+        const clock = new Date(ms);
+        const label = `${String(offset)} ${clock.toISOString()}`;
+        for (const { key, limit, reason } of shared) {
+          const sends = Array.from({ length: limit }, (_, index) =>
+            index === limit - 1 ? sent : at(-index * SECOND),
+          );
+          const refusal = sendRefusal(history({ clock, [key]: sends }));
+          if (ms >= opens) {
+            expect(refusal, label).toBeUndefined();
+            continue;
+          }
+          expect(refusal?.reason, label).toBe(reason);
+          const wait = refusal!.retryAfterSeconds * SECOND;
+          expect(Math.floor(ms / MINUTE) * MINUTE + wait, label).toBe(opens);
+          expect(ms + wait, label).toBeGreaterThanOrEqual(opens);
+          expect(ms + wait, label).toBeLessThan(opens + MINUTE);
+        }
+        for (const { key, limit, reason } of own) {
+          const sends = Array.from({ length: limit }, (_, index) =>
+            index === limit - 1 ? sent : at(-index * 61 * SECOND),
+          );
+          const refusal = sendRefusal(history({ clock, [key]: sends }));
+          if (ms >= turns) {
+            expect(refusal, label).toBeUndefined();
+            continue;
+          }
+          expect(refusal, label).toEqual({
+            reason,
+            retryAfterSeconds: Math.max(1, Math.ceil((turns - ms) / SECOND)),
+          });
+        }
+      }
+    }
+  });
+
+  it('counts an account as one of the number’s three only by its own send of the last 24 hours', () => {
+    const three = [at(-5 * SECOND), at(-3_600 * SECOND), at(-DAY + 1_800 * SECOND)];
+    // Its own send to the number within 24 hours: one of the three, not refused.
+    expect(
+      sendRefusal(history({ phoneAccounts: three, accountPhone: [at(-DAY + 1)] })),
+    ).toBeUndefined();
+    // Its own send older than that is no longer: it is a fourth.
+    expect(sendRefusal(history({ phoneAccounts: three, accountPhone: [at(-DAY)] }))).toEqual({
+      reason: 'phone_accounts',
+      retryAfterSeconds: 1_800,
+    });
   });
 
   it('answers the limit that lasts longest when several refuse', () => {

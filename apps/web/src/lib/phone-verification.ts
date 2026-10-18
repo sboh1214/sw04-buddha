@@ -150,28 +150,25 @@ export function isVerifiedAlready(error: unknown): boolean {
  * A notice above the step's forms. `warning` is the look of a text that may have come — the
  * provider's answer was lost (SMS_SEND_UNCONFIRMED) or the API's never reached the browser —
  * apart from the `info` of a sent code (owner decision 2026-10-18, second round: 주의(노란) 모양).
- * `palette` paints it over its status's own colours: Chakra draws `warning` orange, and the owner
- * asked for yellow, so that notice is `yellow` (its status, icon, `data-status` and role stay the
- * warning's). `urgent` reads it out as an alert (`role=alert`) although it is no error: it comes
- * with the cursor moving into the code input, and a polite status mounted while the focus moves
- * is often not read at all — a text that may have come, a code sent under a minute ago from
- * elsewhere.
+ * The status alone decides the colour: the theme draws every warning yellow (theme/system.ts,
+ * third round: 앱의 주의 안내를 모두 노란색으로), so no notice names a palette. `urgent` reads it
+ * out as an alert (`role=alert`) although it is no error: it comes with the cursor moving into the
+ * code input, and a polite status mounted while the focus moves is often not read at all — a text
+ * that may have come, a code sent under a minute ago from elsewhere.
  */
 export interface VerificationNotice {
   status: 'info' | 'warning' | 'error';
   message: string;
-  palette?: 'yellow';
   urgent?: boolean;
 }
 
 /**
  * The notice of a text that may have come: SMS_SEND_UNCONFIRMED, and a request whose answer never
- * reached the browser. A warning drawn yellow (second round: 주의(노란) 모양), read out as an alert.
+ * reached the browser. A warning (yellow, as every warning is), read out as an alert.
  */
 const MAYBE_SENT_NOTICE: VerificationNotice = {
   status: 'warning',
   message: copy.verificationMaybeSent,
-  palette: 'yellow',
   urgent: true,
 };
 
@@ -273,7 +270,8 @@ export function codeRequestFailure(error: unknown): CodeRequestFailure {
 export type ConfirmFailure =
   /**
    * Under the input: a wrong code with entries left (counted), an older code a resend replaced
-   * (not counted), or one the server would not read.
+   * (not counted) — said apart after a send whose outcome is unknown (`ConfirmContext`) — or one
+   * the server would not read.
    */
   | { kind: 'field'; message: string }
   /**
@@ -290,7 +288,21 @@ export type ConfirmFailure =
   | { kind: 'verified'; message: string }
   | { kind: 'notice'; message: string };
 
-export function confirmFailure(error: unknown): ConfirmFailure {
+/** What the step knows of the code it confirms, beyond the refusal itself. */
+export interface ConfirmContext {
+  /**
+   * The step's last send — the one that made the account's newest code, as far as the screen
+   * knows — may or may not have texted its code: the provider's answer was lost
+   * (SMS_SEND_UNCONFIRMED) or the API's never reached the browser (the `maybe-sent` of
+   * `codeRequestFailure`). An older code typed then is likely the last text that did come, the
+   * new one never having arrived, and is answered so (owner decision 2026-10-18, third round).
+   * The screen's to know, whichever way its code input was opened (verification-step.tsx); after
+   * a reload it is not known, and the plain sentence is said (ADR-0070 7-32).
+   */
+  lastSendUncertain?: boolean;
+}
+
+export function confirmFailure(error: unknown, context: ConfirmContext = {}): ConfirmFailure {
   if (isApiError(error, 'VERIFICATION_CODE_REJECTED')) {
     const details = verificationCodeRejectedDetailsSchema.safeParse(error.details);
     if (!details.success) return { kind: 'code-gone', message: copy.errVerificationCodeNone };
@@ -303,7 +315,16 @@ export function confirmFailure(error: unknown): ConfirmFailure {
           )}${copy.verificationAttemptsUnit})`,
         };
       case 'superseded':
-        return { kind: 'field', message: copy.errVerificationCodeSuperseded };
+        // After a send whose outcome is unknown the new text may never have come: the member is
+        // told to type the last text's code, and to ask again later if no new one comes, rather
+        // than to type a new code they may not have.
+        return {
+          kind: 'field',
+          message:
+            context.lastSendUncertain === true
+              ? copy.errVerificationCodeSupersededUncertain
+              : copy.errVerificationCodeSuperseded,
+        };
       case 'expired':
         return { kind: 'code-gone', message: copy.errVerificationCodeExpired };
       case 'attempts_exceeded':

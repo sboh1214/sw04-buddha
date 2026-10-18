@@ -7,6 +7,7 @@ import {
   createOpenMarket,
   detailCopyTestId,
   expect,
+  expectYellowWarning,
   signIn,
   subscribed,
   test,
@@ -1091,6 +1092,8 @@ test.describe('시장 상세 · 상태와 로그인', () => {
     await expect(page.getByTestId('watch-button')).toBeVisible();
 
     await expect(page.getByTestId('market-status-notice')).toContainText(copy.marketClosedNotice);
+    // A warning, drawn yellow as every 주의 안내 is (owner decision 2026-10-18, third round).
+    await expectYellowWarning(page.getByTestId('market-status-notice'));
     await expect(page.getByTestId('order-entry-bar')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'YES 매수' })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'NO 매수' })).toHaveCount(0);

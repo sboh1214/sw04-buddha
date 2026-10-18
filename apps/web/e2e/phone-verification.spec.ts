@@ -2,8 +2,10 @@ import type { Page } from '@playwright/test';
 import { copy } from '../src/copy';
 import {
   E2E_REAL_NAME,
+  backgroundOf,
   expect,
   expectCodeInput,
+  expectYellowWarning,
   freshEmail,
   freshPhone,
   logOut,
@@ -12,6 +14,7 @@ import {
   smsCode,
   smsMessageIds,
   test,
+  tokenColour,
 } from './helpers';
 
 /**
@@ -21,8 +24,9 @@ import {
  * ADR-0069 decision 1 #57-1) — a code the screen did not send (a reload, another tab), which can
  * still be entered, and a send whose answer was lost — the provider's (SMS_SEND_UNCONFIRMED) or
  * the API's own on its way to the browser (a dropped connection, a gateway's 5xx, a timeout) —
- * which may have texted the code and says so, as a warning, while its code is tried (owner
- * decisions 2026-10-18). The happy path and the gate are onboarding.spec.ts's.
+ * which may have texted the code and says so, as a warning, while its code is tried, and after
+ * which an older code is answered as the last text that came for as long as the screen knows it
+ * (owner decisions 2026-10-18). The happy path and the gate are onboarding.spec.ts's.
  *
  * Every account and number is fresh, so the per-account and per-number limits never meet another
  * test's sends. The codes come from the API's development SMS sender through Mailpit.
@@ -44,40 +48,8 @@ async function sendCode(page: Page, phone: string): Promise<string> {
 /** The resend wait, with room for the screen's countdown to reach 0 and enable the button. */
 const RESEND_WAIT_MS = 75_000;
 
-/** The background the step's notice is drawn with: information and a warning differ. */
-function noticeBackground(page: Page): Promise<string> {
-  return page
-    .getByTestId('verification-notice')
-    .evaluate((element) => getComputedStyle(element).backgroundColor);
-}
-
-/**
- * The colour a Chakra colour token (`yellow.subtle`) paints as a background on this page, in
- * its colour mode: read off a probe inside the notice, so it resolves as the notice's own would.
- */
-function tokenBackground(page: Page, token: string): Promise<string> {
-  return page.getByTestId('verification-notice').evaluate((element, name) => {
-    const probe = document.createElement('div');
-    probe.style.backgroundColor = `var(--chakra-colors-${name.replace('.', '-')})`;
-    element.append(probe);
-    const colour = getComputedStyle(probe).backgroundColor;
-    probe.remove();
-    return colour;
-  }, token);
-}
-
-/**
- * The warning is drawn yellow, as the owner answered (second round: 주의(노란) 모양): the yellow
- * palette's subtle background, not the orange Chakra gives the `warning` status by itself.
- */
-async function expectYellowNotice(page: Page): Promise<void> {
-  const yellow = await tokenBackground(page, 'yellow.subtle');
-  const orange = await tokenBackground(page, 'orange.subtle');
-  // Both tokens resolve to a colour (an unknown variable paints nothing) and they differ.
-  expect(yellow).not.toBe('rgba(0, 0, 0, 0)');
-  expect(yellow).not.toBe(orange);
-  expect(await noticeBackground(page)).toBe(yellow);
-}
+/** The step's notice, above its forms. */
+const noticeOf = (page: Page) => page.getByTestId('verification-notice');
 
 /**
  * The step after a code request whose answer was lost, however it was lost (owner decisions
@@ -91,7 +63,8 @@ async function expectMaybeSent(page: Page): Promise<void> {
   // A warning (second round: 주의(노란) 모양), read out although no error: the cursor moves with it.
   await expect(notice).toHaveAttribute('data-status', 'warning');
   await expect(notice).toHaveAttribute('role', 'alert');
-  await expectYellowNotice(page);
+  // Yellow, as every warning is (third round).
+  await expectYellowWarning(notice);
   await expect(notice).not.toContainText(copy.errVerificationSendFailed);
   await expect(page.getByTestId('verification-code')).toBeFocused();
   await expect(page.getByTestId('verification-phone')).not.toBeEditable();
@@ -99,6 +72,21 @@ async function expectMaybeSent(page: Page): Promise<void> {
   await expect(page.getByTestId('verification-send')).toBeDisabled();
   await expect(page.getByTestId('verification-send')).toContainText(`${copy.verificationResend} (`);
   await expect(page.getByTestId('verification-code-expiry')).toHaveCount(0);
+}
+
+/**
+ * Types `older` — a code before the newest, whose send's outcome is unknown — and expects it
+ * refused under the input in the words for that case (owner decision 2026-10-18, third round 3):
+ * type the last text's code, ask again later if no new text comes; not "type the new code".
+ */
+async function expectSupersededUncertain(page: Page, older: string): Promise<void> {
+  await page.getByTestId('verification-code').fill(older);
+  await page.getByTestId('verification-confirm').click();
+  await expect(
+    page.getByText(copy.errVerificationCodeSupersededUncertain, { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText(copy.errVerificationCodeSuperseded, { exact: true })).toHaveCount(0);
+  await expect(page.getByTestId('verification-code')).toBeVisible();
 }
 
 /** Six digits that are not `code`. */
@@ -304,6 +292,10 @@ test.describe('본인확인 인증번호 (#183)', () => {
     await page.getByTestId('verification-code').fill(older);
     await page.getByTestId('verification-confirm').click();
     await expect(page.getByText(copy.errVerificationCodeSuperseded, { exact: true })).toBeVisible();
+    // The words for a send that may not have come are the uncertain resend's alone (third round).
+    await expect(
+      page.getByText(copy.errVerificationCodeSupersededUncertain, { exact: true }),
+    ).toHaveCount(0);
     await expect(page.getByTestId('verification-code')).toBeVisible();
     // A real wrong entry after it is the first counted: four left.
     const other = ['000000', '000001', '000002'].find((code) => code !== older && code !== newest)!;
@@ -353,7 +345,7 @@ test.describe('본인확인 인증번호 (#183)', () => {
     await expect(page.getByText(copy.verificationDone)).toBeVisible();
   });
 
-  test('다시 받기의 결과를 알 수 없을 때 예전 인증번호를 넣어도 문자가 갔을 수 있다는 안내가 남는다', async ({
+  test('다시 받기의 결과를 알 수 없을 때 예전 인증번호를 넣으면 마지막 문자의 인증번호를 묻고 문자가 갔을 수 있다는 안내가 남는다', async ({
     page,
   }) => {
     test.slow(); // the resend interval is a real minute
@@ -361,9 +353,9 @@ test.describe('본인확인 인증번호 (#183)', () => {
     const older = await sendCode(page, phone);
     // The sent code's notice is information (blue); the lost answer's below is a warning, drawn
     // apart, in yellow.
-    await expect(page.getByTestId('verification-notice')).toHaveAttribute('data-status', 'info');
-    const sentBackground = await noticeBackground(page);
-    expect(sentBackground).toBe(await tokenBackground(page, 'blue.subtle'));
+    await expect(noticeOf(page)).toHaveAttribute('data-status', 'info');
+    const sentBackground = await backgroundOf(noticeOf(page));
+    expect(sentBackground).toBe(await tokenColour(noticeOf(page), 'blue.subtle'));
 
     // A minute later, 다시 받기: the API sends a new code (kept as the newest), and the answer the
     // screen gets is the one a lost provider answer makes: 502 SMS_SEND_UNCONFIRMED.
@@ -382,18 +374,18 @@ test.describe('본인확인 인증번호 (#183)', () => {
     const notice = page.getByTestId('verification-notice');
     await expect(notice).toHaveText(copy.verificationMaybeSent);
     await expect(notice).toHaveAttribute('data-status', 'warning');
-    expect(await noticeBackground(page)).not.toBe(sentBackground);
-    await expectYellowNotice(page);
+    expect(await backgroundOf(notice)).not.toBe(sentBackground);
+    await expectYellowWarning(notice);
     expect(realStatus).toBe(200);
     await page.unroute('**/api/v1/me/phone-verification/code');
     const newest = await smsCode(phone, seen);
     test.skip(older === newest, 'the two draws were the same code (one in a million)');
 
     // The new text "never came", so the member types the first one: refused under the input as
-    // an older code — and the line that says to ask again later if nothing came stays.
-    await page.getByTestId('verification-code').fill(older);
-    await page.getByTestId('verification-confirm').click();
-    await expect(page.getByText(copy.errVerificationCodeSuperseded, { exact: true })).toBeVisible();
+    // an older code, in the words for a send that may not have come — type the last text's code,
+    // ask again later if no new text comes (owner decision 2026-10-18, third round), not "type the
+    // new code" — and the line that says to ask again later if nothing came stays above.
+    await expectSupersededUncertain(page, older);
     await expect(notice).toHaveText(copy.verificationMaybeSent);
     // A wrong code keeps it too (the first counted entry: four left).
     const other = ['000000', '000001', '000002'].find((code) => code !== older && code !== newest)!;
@@ -402,7 +394,113 @@ test.describe('본인확인 인증번호 (#183)', () => {
     await expect(page.getByText(mismatch(4), { exact: true })).toBeVisible();
     await expect(notice).toHaveText(copy.verificationMaybeSent);
 
+    // Another minute, and a 다시 받기 that surely sent nothing (the provider refused: 502
+    // SMS_SEND_FAILED, never reaching the API here): the newest code is still the uncertain
+    // resend's, so the older code is still answered as the last text that came (ADR-0070 7-32).
+    await expect(send).toBeEnabled({ timeout: RESEND_WAIT_MS });
+    await page.route('**/api/v1/me/phone-verification/code', (route) =>
+      route.fulfill({
+        status: 502,
+        json: { error: { code: 'SMS_SEND_FAILED', message: 'Internal server error' } },
+      }),
+    );
+    await send.click();
+    await expect(notice).toHaveText(copy.errVerificationSendFailed);
+    await expect(page.getByTestId('verification-code')).toBeVisible();
+    await page.unroute('**/api/v1/me/phone-verification/code');
+    await expectSupersededUncertain(page, older);
+    // The code's own notice comes back with the entry (`CodeEntry.standing`).
+    await expect(notice).toHaveText(copy.verificationMaybeSent);
+
+    // 실명·번호 다시 입력 → 이미 받은 인증번호 입력 on the same screen: the newest code is still
+    // that send's, and the screen still knows it (the flag is the screen's, not the input's).
+    await page.getByTestId('verification-edit').click();
+    await expect(page.getByTestId('verification-code')).toHaveCount(0);
+    await page.getByTestId('verification-enter-code').click();
+    await expectSupersededUncertain(page, older);
+
+    // A reload forgets what this screen saw of its sends: 이미 받은 인증번호 입력 then answers
+    // the older code in the plain words (7-32 — whether the server's record of the unknown send
+    // should say otherwise is the owner's open question, ADR-0070 결과 4).
+    await page.reload();
+    await page.getByTestId('verification-enter-code').click();
+    await page.getByTestId('verification-code').fill(older);
+    await page.getByTestId('verification-confirm').click();
+    await expect(page.getByText(copy.errVerificationCodeSuperseded, { exact: true })).toBeVisible();
+    await expect(
+      page.getByText(copy.errVerificationCodeSupersededUncertain, { exact: true }),
+    ).toHaveCount(0);
+
+    // None of the older codes spent an entry: the newest still verifies.
     await page.getByTestId('verification-code').fill(newest);
+    await page.getByTestId('verification-confirm').click();
+    await expect(page).toHaveURL('/');
+    await expect(page.getByText(copy.verificationDone)).toBeVisible();
+  });
+
+  test('답을 받지 못한 다시 받기 뒤 실명·번호 다시 입력과 이미 받은 인증번호 입력으로 예전 인증번호를 넣어도 마지막 문자의 인증번호를 묻고, 다른 화면이 보낸 뒤에는 보통의 문장이다', async ({
+    page,
+  }) => {
+    test.slow(); // the resend interval is a real minute
+    const phone = freshPhone();
+    const older = await sendCode(page, phone);
+
+    // A minute later, 다시 받기: the API sends a new code (kept as the newest), and its answer
+    // never reaches the browser — the other way a send's outcome is unknown (second round).
+    const send = page.getByTestId('verification-send');
+    await expect(send).toBeEnabled({ timeout: RESEND_WAIT_MS });
+    let realStatus = 0;
+    await page.route('**/api/v1/me/phone-verification/code', async (route) => {
+      realStatus = (await route.fetch()).status();
+      await route.abort('timedout');
+    });
+    const seen = await smsMessageIds(phone);
+    await send.click();
+    await expectMaybeSent(page);
+    expect(realStatus).toBe(200);
+    await page.unroute('**/api/v1/me/phone-verification/code');
+    const newest = await smsCode(phone, seen);
+    test.skip(older === newest, 'the two draws were the same code (one in a million)');
+
+    // No new text came, so the member opens the name and the number again, thinks better of it
+    // and goes back to the code they have (the send button still counts the minute down).
+    await page.getByTestId('verification-edit').click();
+    await expect(page.getByTestId('verification-code')).toHaveCount(0);
+    await expect(page.getByTestId('verification-notice')).toHaveCount(0);
+    await expect(send).toBeDisabled();
+    await page.getByTestId('verification-enter-code').click();
+    // The older code: the last text that came, not one a new text replaced (third round 3).
+    await expectSupersededUncertain(page, older);
+
+    // Once the minute is over another tab of the account texts a code, and this screen's send
+    // right after is refused for the resend wait: the newest code is now a send this screen did
+    // not see, whose outcome it does not know, so an older code reads in the plain words again,
+    // as after a reload (ADR-0070 7-32).
+    await expect(send).toBeEnabled({ timeout: RESEND_WAIT_MS });
+    const me = (await (await page.request.get('/api/v1/me')).json()) as { data: { id: string } };
+    const seenOther = await smsMessageIds(phone);
+    const otherTab = await page.request.post('/api/v1/me/phone-verification/code', {
+      data: { realName: E2E_REAL_NAME, phone, expectedAccountId: me.data.id },
+    });
+    expect(otherTab.status()).toBe(200);
+    const latest = await smsCode(phone, seenOther);
+    test.skip(
+      latest === older || latest === newest,
+      'two draws were the same code (one in a million)',
+    );
+    await send.click();
+    await expect(page.getByTestId('verification-notice')).toContainText(
+      copy.errVerificationResendWait,
+    );
+    await expect(send).toBeDisabled();
+    await page.getByTestId('verification-code').fill(older);
+    await page.getByTestId('verification-confirm').click();
+    await expect(page.getByText(copy.errVerificationCodeSuperseded, { exact: true })).toBeVisible();
+    await expect(
+      page.getByText(copy.errVerificationCodeSupersededUncertain, { exact: true }),
+    ).toHaveCount(0);
+
+    await page.getByTestId('verification-code').fill(latest);
     await page.getByTestId('verification-confirm').click();
     await expect(page).toHaveURL('/');
     await expect(page.getByText(copy.verificationDone)).toBeVisible();

@@ -29,6 +29,7 @@ import {
   OLDER_CODES_COMPARED,
   pendingCodeRefusal,
   sendRefusal,
+  sharedWindowStart,
 } from './phone-verification.rules.js';
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
@@ -102,13 +103,13 @@ export function codeRejected(details: VerificationCodeRejectedDetails): AppError
  * - Sending takes the account's lock and the service's send lock, reads the database clock,
  *   refuses by the fixed limits (rules: 60 s since the account's previous send; in 24 hours ten
  *   sends for the account and for the account at the number, three accounts at the number, fifty
- *   from the client address, five hundred for the service — the waits of the last three, which
- *   other accounts' sends fill, in whole minutes) and records the new send — all before
- *   the provider is asked, so concurrent requests count each other. The text is sent after that
- *   transaction commits (the provider's latency holds no lock). What a failed send leaves depends
- *   on what the failure says about the text (ADR-0070). A send the provider certainly did not take
- *   (`refused`) is deleted again — neither a send the limits count nor a code that can be
- *   confirmed — and answered SMS_SEND_FAILED. A send whose outcome is unknown (a timeout, a lost
+ *   from the client address, five hundred for the service — the last three, which other accounts'
+ *   sends fill, held shut until the whole minute their wait answers) and records the new send —
+ *   all before the provider is asked, so concurrent requests count each other. The text is sent
+ *   after that transaction commits (the provider's latency holds no lock). What a failed send
+ *   leaves depends on what the failure says about the text (ADR-0070). A send the provider
+ *   certainly did not take (`refused`) is deleted again — neither a send the limits count nor a
+ *   code that can be confirmed — and answered SMS_SEND_FAILED. A send whose outcome is unknown (a timeout, a lost
  *   answer: the provider may have texted the code) is kept: it counts against the limits like any
  *   send and its code can be confirmed, and it is answered SMS_SEND_UNCONFIRMED, so the screen can
  *   say the text may have come. A provider that answers late can never let a phone receive more
@@ -183,7 +184,11 @@ export class PhoneVerificationService {
       }
       const clock = await clockTimestamp(tx);
       clockReadAt = performance.now();
+      // The account's own limits count the 24 hours before the clock; the ones shared with other
+      // accounts the 24 hours before its minute began, so a send stays in them until the minute
+      // their refusal answers (owner decision 2026-10-18, third round).
       const window = gt(codes.sentAt, dayWindowStart(clock));
+      const sharedWindow = gt(codes.sentAt, sharedWindowStart(clock));
       const [last] = await tx
         .select({ sentAt: codes.sentAt })
         .from(codes)
@@ -199,12 +204,12 @@ export class PhoneVerificationService {
           and(eq(codes.userId, userId), eq(codes.phone, input.phone), window),
           accountPhoneDailySends,
         ),
-        phoneAccounts: await recentAccounts(tx, input.phone, userId, window),
+        phoneAccounts: await recentAccounts(tx, input.phone, userId, sharedWindow),
         ip:
           clientIp === null
             ? null
-            : await recentSends(tx, and(eq(codes.clientIp, clientIp), window), ipDailySends),
-        service: await recentSends(tx, window, serviceDailySends),
+            : await recentSends(tx, and(eq(codes.clientIp, clientIp), sharedWindow), ipDailySends),
+        service: await recentSends(tx, sharedWindow, serviceDailySends),
       });
       if (refusal) throw verificationLimited(refusal);
       await tx.insert(codes).values({

@@ -4,7 +4,7 @@ import { PHONE_VERIFICATION_LIMITS, SMS_STATUS_DAYS, type AdminSmsStatus } from 
 import { count, gt, gte, sql } from 'drizzle-orm';
 import { clockTimestamp } from '../infra/db/clock.js';
 import { DB } from '../infra/db/db.provider.js';
-import { dayWindowStart } from './phone-verification.rules.js';
+import { sharedWindowStart } from './phone-verification.rules.js';
 
 const codes = schema.phoneVerificationCodes;
 const refusedSends = schema.phoneVerificationRefusedSends;
@@ -29,7 +29,8 @@ export function kstDayStart(ms: number): number {
 /**
  * The admin's SMS send status (owner decision 2026-10-18, second round, ADR-0070): how many
  * 본인확인 texts went out, how many the provider never answered for, and how many it refused —
- * over the 24 hours of the service's daily limit and over the last seven Korean calendar days.
+ * over the window of the service's daily limit (24 hours, and the seconds of the current minute)
+ * and over the last seven Korean calendar days.
  * Counts only, read in one snapshot at one database clock: the sends from
  * `phone_verification_codes` (every recorded send, the ones the limits count, `send_outcome`
  * saying which the provider took) and the refusals from `phone_verification_refused_sends` (their
@@ -46,8 +47,11 @@ export class SmsStatusService {
     const read = await this.db.transaction(
       async (tx) => {
         const clock = await clockTimestamp(tx);
-        // The window the service's daily limit counts in (`service_daily`), to the millisecond.
-        const window = dayWindowStart(clock);
+        // The window the service's daily limit counts in (`service_daily`), to the millisecond:
+        // the 24 hours before the minute of the clock began, through the clock (the limit keeps
+        // a send until the whole minute its refusal answers, owner decision 2026-10-18, third
+        // round), so `sent` is what that limit counts.
+        const window = sharedWindowStart(clock);
         const today = kstDayStart(clock.getTime());
         const firstDay = new Date(today - (SMS_STATUS_DAYS - 1) * DAY_MS);
         // The Korean date of a row, grouped in the database (Asia/Seoul, as admin screens read).

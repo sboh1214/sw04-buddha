@@ -202,8 +202,11 @@ export type PhoneVerificationNotAllowedDetails = z.infer<
  * one that lasts longest). For the account's own limits (`resend_interval`, `account_daily`,
  * `account_phone_daily`) it is exact to the second. The limits counted with other accounts' sends
  * (`PHONE_VERIFICATION_SHARED_LIMIT_REASONS`: `phone_accounts`, `ip_daily`, `service_daily`)
- * answer whole minutes, rounded up, so the answer never tells another account's send time to the
- * second (owner decision 2026-10-18, second round, ADR-0070): never sooner than the limit allows.
+ * answer whole minutes of the server's clock, rounded up, so the answer never tells another
+ * account's send time to the second (owner decision 2026-10-18, second round, ADR-0070), and they
+ * stay shut until that minute (third round): a send counts in them until the clock's first whole
+ * minute after it is 24 hours old, so getting through tells no finer time either. The wait counts
+ * from the start of the asking minute: never sooner than the limit opens, less than a minute after.
  */
 export const PHONE_VERIFICATION_LIMIT_REASONS = [
   'resend_interval',
@@ -218,7 +221,8 @@ export type PhoneVerificationLimitReason = (typeof PHONE_VERIFICATION_LIMIT_REAS
 /**
  * The limits that count other accounts' sends as well as the caller's — the number's accounts,
  * the client address and the whole service — whose `retryAfterSeconds` is answered in whole
- * minutes (PHONE_VERIFICATION_LIMITED above). The rest are the account's own and exact.
+ * minutes and which stay shut until that minute (PHONE_VERIFICATION_LIMITED above). The rest are
+ * the account's own and exact.
  */
 export const PHONE_VERIFICATION_SHARED_LIMIT_REASONS = [
   'phone_accounts',
@@ -306,8 +310,9 @@ export const SMS_STATUS_DAYS = 7;
 /**
  * `GET /admin/sms/status` (owner decision 2026-10-18, second round, ADR-0070): the admin's view of
  * the 본인확인 texts, as counts only — no number, name, address or account. `last24Hours` is the
- * window of the service's daily limit (the 24 hours before `asOf`, the database clock): `sent`
- * against `serviceLimit` (`serviceDailySends`) is how close the service is to stopping its sends.
+ * window of the service's daily limit (the 24 hours before the minute of `asOf`, the database
+ * clock, began, through `asOf`): `sent` against `serviceLimit` (`serviceDailySends`) is how close
+ * the service is to stopping its sends.
  * `days` are the last SMS_STATUS_DAYS Korean calendar days, newest (today, so far) first.
  */
 export const adminSmsStatusSchema = z

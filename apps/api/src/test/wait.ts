@@ -1,5 +1,7 @@
 // Timing helpers for the integration suites: bounded polls instead of guessed sleeps.
 
+import { clockTimestamp, type StatementExecutor } from '@buddha/db';
+
 export const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 const POLL_MS = 20;
@@ -58,5 +60,22 @@ export async function waitForLockWaiter(client: LockPollClient, what: string): P
       );
     }
     await sleep(POLL_MS);
+  }
+}
+
+const MINUTE_MS = 60_000;
+
+/**
+ * The start (epoch ms) of the database clock's current minute, read at least a second into it and
+ * five seconds before its end — sleeping into the next minute otherwise (six seconds at most) — so
+ * the few requests a test makes right after fall in that same minute. For the limits that hold
+ * to the clock's whole minutes (#183, ADR-0070: the ones shared with other accounts).
+ */
+export async function currentClockMinute(db: StatementExecutor): Promise<number> {
+  for (;;) {
+    const clock = (await clockTimestamp(db)).getTime();
+    const into = clock % MINUTE_MS;
+    if (into >= 1_000 && into <= 55_000) return clock - into;
+    await sleep(into < 1_000 ? 1_100 - into : MINUTE_MS + 1_100 - into);
   }
 }

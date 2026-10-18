@@ -32,6 +32,7 @@ import { type LightMyRequestResponse } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
+import { currentClockMinute } from '../test/wait.js';
 import { PhoneVerificationService } from './phone-verification.service.js';
 
 const ORIGIN = 'http://localhost:3000';
@@ -200,6 +201,27 @@ describe.skipIf(!hasTestInfra)('본인확인 /api/v1/me/phone-verification (inte
   /** The limit a refused code request names. */
   const limitOf = (res: LightMyRequestResponse) =>
     phoneVerificationLimitedDetailsSchema.parse(refusal(res, 429, 'PHONE_VERIFICATION_LIMITED'));
+
+  /** Past sends for `userId` to `phone` at exactly `sentAt`, from `clientIp` (none by default). */
+  async function sendsAt(
+    userId: string,
+    phone: string,
+    sentAt: readonly Date[],
+    clientIp: string | null = null,
+  ) {
+    await t.db.insert(schema.phoneVerificationCodes).values(
+      sentAt.map((at) => ({
+        id: randomUUID(),
+        userId,
+        phone,
+        realName: '홍길동',
+        codeHash: 'f'.repeat(64),
+        sentAt: at,
+        expiresAt: new Date(at.getTime() + 180_000),
+        clientIp,
+      })),
+    );
+  }
 
   // ---- the happy path -------------------------------------------------------------------
 
@@ -532,14 +554,16 @@ describe.skipIf(!hasTestInfra)('본인확인 /api/v1/me/phone-verification (inte
       .delete(schema.phoneVerificationCodes)
       .where(eq(schema.phoneVerificationCodes.userId, accounts[0]!.id));
     expect((await request(third)).statusCode).toBe(200);
-    // …and once an account's sends to the number are all older than 24 hours, it no longer counts.
+    // …and once an account's sends to the number are all older than 24 hours (and the minute the
+    // refusal answered has come), it no longer counts.
     const fourth = await signUpTestUser(t);
     expect(limitOf(await request(fourth)).reason).toBe('phone_accounts');
     await t.db
       .update(schema.phoneVerificationCodes)
       .set({
-        sentAt: new Date(Date.now() - DAY_MS - 60_000),
-        expiresAt: new Date(Date.now() - DAY_MS + 120_000),
+        // Past the minute the refusal answered too (the shared limits hold to it): two minutes.
+        sentAt: new Date(Date.now() - DAY_MS - 2 * 60_000),
+        expiresAt: new Date(Date.now() - DAY_MS + 60_000),
       })
       .where(eq(schema.phoneVerificationCodes.userId, accounts[2]!.id));
     expect((await request(fourth)).statusCode).toBe(200);
@@ -633,6 +657,92 @@ describe.skipIf(!hasTestInfra)('본인확인 /api/v1/me/phone-verification (inte
     expect((await request(user)).statusCode).toBe(200);
     const other = await signUpTestUser(t);
     expect(limitOf(await request(other, { phone: '01077778888' })).reason).toBe('service_daily');
+  });
+
+  describe('holds the limits shared with other accounts shut until the minute they answer (owner decision 2026-10-18, third round)', () => {
+    /**
+     * Each shared limit reached by sends of other accounts, the one at the limit 24 hours old a
+     * millisecond into the current minute: it has left the 24 hours, but the limit answered the
+     * minute after it and stays shut until then. Then the same send a minute older — as when
+     * the clock has passed the minute answered — and the same request passes.
+     */
+    const cases = [
+      {
+        reason: 'phone_accounts',
+        fill: async (turned: Date) => {
+          const now = Date.now();
+          for (const sentAt of [new Date(now - 2 * 60_000), new Date(now - 3_600_000), turned]) {
+            const { user: other } = await createUser(t.db);
+            await sendsAt(other.id, PHONE, [sentAt]);
+          }
+        },
+        ask: (as: TestUser) => request(as),
+      },
+      {
+        reason: 'ip_daily',
+        fill: async (turned: Date) => {
+          const { user: other } = await createUser(t.db);
+          const now = Date.now();
+          const newer = Array.from(
+            { length: 49 },
+            (_, i) => new Date(now - 2 * 60_000 - i * 1_000),
+          );
+          await sendsAt(other.id, '01055550000', [...newer, turned], VISITOR);
+        },
+        ask: (as: TestUser) => requestFrom(VISITOR, as),
+      },
+      {
+        reason: 'service_daily',
+        fill: async (turned: Date) => {
+          const { user: other } = await createUser(t.db);
+          const now = Date.now();
+          const newer = Array.from(
+            { length: 499 },
+            (_, i) => new Date(now - 2 * 60_000 - i * 1_000),
+          );
+          await sendsAt(other.id, '01055550000', [...newer, turned]);
+        },
+        ask: (as: TestUser) => request(as),
+      },
+    ] as const;
+
+    it.each(cases)('$reason', async ({ reason, fill, ask }) => {
+      const minute = await currentClockMinute(t.db);
+      // 24 hours old a millisecond into this minute: out of the 24 hours by the time we ask.
+      const turned = new Date(minute - DAY_MS + 1);
+      await fill(turned);
+
+      const limited = limitOf(await ask(user));
+      expect(limited).toEqual({ reason, retryAfterSeconds: 60 });
+      expect(await codeRows(user.id)).toEqual([]);
+      expect(t.sms.messages).toEqual([]);
+
+      // A minute on (the clock past the minute answered): the send no longer counts.
+      await t.db
+        .update(schema.phoneVerificationCodes)
+        .set({
+          sentAt: new Date(turned.getTime() - 60_000),
+          expiresAt: new Date(turned.getTime() + 120_000),
+        })
+        .where(eq(schema.phoneVerificationCodes.sentAt, turned));
+      expect((await ask(user)).statusCode).toBe(200);
+      expect(t.sms.messages).toHaveLength(1);
+    });
+
+    it('but lets the account’s own ten go the instant the tenth is 24 hours old', async () => {
+      const minute = await currentClockMinute(t.db);
+      // Ten sends of the account, the oldest 24 hours old a millisecond into this minute and the
+      // newest over a minute ago (no resend wait): its own limit is exact, so it has room again.
+      const now = Date.now();
+      await sendsAt(
+        user.id,
+        '01055550000',
+        Array.from({ length: 9 }, (_, i) => new Date(now - 2 * 60_000 - i * 60_000)),
+      );
+      await sendsAt(user.id, '01055550001', [new Date(minute - DAY_MS + 1)]);
+      expect((await request(user)).statusCode).toBe(200);
+      expect(t.sms.messages).toHaveLength(1);
+    });
   });
 
   it('counts a send the provider refused for nothing, and that code cannot be confirmed (AC 1)', async () => {

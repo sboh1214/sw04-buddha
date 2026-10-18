@@ -63,7 +63,10 @@ export function expiryOf(sentAt: Date): Date {
   return new Date(sentAt.getTime() + codeTtlSeconds * 1_000);
 }
 
-/** The start of the 24-hour window the daily limits count in, ending at `clock`. */
+/**
+ * The start of the 24-hour window the account's own daily limits count in (`account_daily`,
+ * `account_phone_daily`), ending at `clock`: a send counts until the instant it is 24 hours old.
+ */
 export function dayWindowStart(clock: Date): Date {
   return new Date(clock.getTime() - DAY_MS);
 }
@@ -75,22 +78,40 @@ function secondsUntil(at: number, clock: Date): number {
 
 const MINUTE_MS = 60_000;
 
+/** The clock's whole minute at or after `at` (epoch ms). */
+function minuteCeiling(at: number): number {
+  return Math.ceil(at / MINUTE_MS) * MINUTE_MS;
+}
+
 /**
- * The wait answered for a limit counted with other accounts' sends (`isSharedLimitReason`: the
- * number's accounts, the client address, the service), in whole minutes: from the minute of
- * `clock` (rounded down) to the minute `at` falls in (rounded up), both on the database clock.
- * Never shorter than the exact wait, at most two minutes longer, and at least one minute.
+ * The start of the window the limits shared with other accounts count in (`isSharedLimitReason`:
+ * the number's accounts, the client address, the service): the 24 hours before the minute of
+ * `clock` began, so through `clock` itself. A send counts in them until the clock's first whole
+ * minute at or after the instant it is 24 hours old — the minute their refusal answers
+ * (`sharedWaitSeconds`) — not until that instant itself (owner decision 2026-10-18, third round:
+ * held shut until the minute told). `sent > sharedWindowStart(clock)` is exactly
+ * `minuteCeiling(sent + 24 h) > clock`.
+ */
+export function sharedWindowStart(clock: Date): Date {
+  return new Date(Math.floor(clock.getTime() / MINUTE_MS) * MINUTE_MS - DAY_MS);
+}
+
+/**
+ * The wait answered for a limit counted with other accounts' sends (`isSharedLimitReason`), whose
+ * send at the limit turns 24 hours old at `at`: in whole minutes, from the minute of `clock`
+ * (rounded down) to the minute `at` falls in (rounded up), both on the database clock. Never
+ * shorter than the exact wait, at most two minutes longer, and at least one minute.
  *
  * Both ends sit on whole minutes of the clock, not only the length (owner decision 2026-10-18,
  * second round: such a wait must not tell another account's send time to the second). A length
  * merely rounded up to minutes would still step at a second of `at`'s choosing, and a member
  * asking again at chosen seconds — refusals cost nothing — would find that second; this answer
  * steps only on the clock's whole minutes, so asking at any second tells `at` to the minute only.
- * That is the answer's precision, not the limit's: the limit itself opens at `at` (the window
- * drops the send at the limit to the millisecond), up to two minutes before the moment answered,
- * so a member who keeps asking through that minute and gets through learns `at` to the rate
- * limit's step (five a minute per account), as ADR-0070 7-25 says. Holding the limit shut until
- * the answered minute is the owner's question, not this function's.
+ * And the limit opens on that minute, not at `at` (third round): the shared window
+ * (`sharedWindowStart`) keeps the send until the clock reaches `minuteCeiling(at)`, so a member
+ * who keeps asking through the minute is refused until the minute answered and learns nothing
+ * finer by getting through either. The answer counts from the start of the asking minute, so a
+ * client that waits it from its answer asks again at that minute or less than a minute after it.
  */
 export function sharedWaitSeconds(at: number, clock: Date): number {
   const from = Math.floor(clock.getTime() / MINUTE_MS);
@@ -100,8 +121,11 @@ export function sharedWaitSeconds(at: number, clock: Date): number {
 
 /**
  * What the daily limits read, each as the sends (or, for the number's accounts, each account's
- * newest send) of the 24 hours before `clock`, NEWEST FIRST. A list may stop at its limit: only
- * whether it reaches the limit, and the send at the limit, matter.
+ * newest send) of its window before `clock`, NEWEST FIRST: the 24 hours before `clock` for the
+ * account's own (`dayWindowStart`), the 24 hours before the minute of `clock` for the ones shared
+ * with other accounts (`sharedWindowStart`). A list may stop at its limit: only whether it reaches
+ * the limit, and the send at the limit, matter. A send older than its window is not counted
+ * whether or not a list holds it.
  */
 export interface SendHistory {
   /** The database clock of this request, read after its locks. */
@@ -112,24 +136,25 @@ export interface SendHistory {
   account: readonly Date[];
   /** The account's sends to the number of this request. */
   accountPhone: readonly Date[];
-  /** The newest send of each OTHER account to the number of this request. */
+  /** The newest send of each OTHER account to the number of this request (shared window). */
   phoneAccounts: readonly Date[];
   /**
-   * The sends from the client address of this request, or null when the request names no client
-   * (loopback, a proxy whose forwarding is not trusted: the per-address rate limit's rule), which
-   * no per-address limit can count.
+   * The sends from the client address of this request (shared window), or null when the request
+   * names no client (loopback, a proxy whose forwarding is not trusted: the per-address rate
+   * limit's rule), which no per-address limit can count.
    */
   ip: readonly Date[] | null;
-  /** The service's sends. */
+  /** The service's sends (shared window). */
   service: readonly Date[];
 }
 
 /**
  * The refusal of a window that holds `limit` sends or more, or undefined. Newest first, so the
  * send at the limit is `sends[limit - 1]`: once it leaves the window, fewer than `limit` remain
- * and the same request passes (unless more are sent meanwhile). The wait is exact for the
- * account's own limits and in whole minutes for the ones other accounts' sends fill
- * (`sharedWaitSeconds`).
+ * and the same request passes (unless more are sent meanwhile). The account's own limits let it
+ * go the instant it is 24 hours old and answer the wait exactly; the ones other accounts' sends
+ * fill keep it until the clock's next whole minute from then and answer that minute
+ * (`sharedWindowStart`, `sharedWaitSeconds`, owner decisions 2026-10-18, second and third round).
  */
 function windowRefusal(
   reason: PhoneVerificationLimitedDetails['reason'],
@@ -140,12 +165,14 @@ function windowRefusal(
   const atLimit = sends[limit - 1];
   if (atLimit === undefined) return undefined;
   const at = atLimit.getTime() + DAY_MS;
-  return {
-    reason,
-    retryAfterSeconds: isSharedLimitReason(reason)
-      ? sharedWaitSeconds(at, clock)
-      : secondsUntil(at, clock),
-  };
+  if (!isSharedLimitReason(reason)) {
+    return at > clock.getTime()
+      ? { reason, retryAfterSeconds: secondsUntil(at, clock) }
+      : undefined;
+  }
+  return minuteCeiling(at) > clock.getTime()
+    ? { reason, retryAfterSeconds: sharedWaitSeconds(at, clock) }
+    : undefined;
 }
 
 /**
@@ -157,10 +184,16 @@ function windowRefusal(
  * answered — the first of them in that order on a tie — so `retryAfterSeconds` is when the same
  * request would pass all of them, as far as this request can know (others may send meanwhile).
  * The waits compared are the ones answered — the shared limits' in whole minutes — so which limit
- * is answered says nothing finer about another account's send than its wait does.
+ * is answered says nothing finer about another account's send than its wait does, and the shared
+ * limits stay shut until the minute they answer (owner decision 2026-10-18, third round), so
+ * getting through says nothing finer either.
  */
 export function sendRefusal(history: SendHistory): PhoneVerificationLimitedDetails | undefined {
   const { clock } = history;
+  // One of the number's accounts already: a send of its own to the number within its 24 hours.
+  const sentToPhone = history.accountPhone.some(
+    (sent) => sent.getTime() + DAY_MS > clock.getTime(),
+  );
   const refusals: (PhoneVerificationLimitedDetails | undefined)[] = [];
   if (history.lastAccountSend !== null) {
     const next = history.lastAccountSend.getTime() + resendIntervalSeconds * 1_000;
@@ -171,9 +204,9 @@ export function sendRefusal(history: SendHistory): PhoneVerificationLimitedDetai
   refusals.push(
     windowRefusal('account_daily', history.account, accountDailySends, clock),
     windowRefusal('account_phone_daily', history.accountPhone, accountPhoneDailySends, clock),
-    history.accountPhone.length === 0
-      ? windowRefusal('phone_accounts', history.phoneAccounts, phoneDailyAccounts, clock)
-      : undefined,
+    sentToPhone
+      ? undefined
+      : windowRefusal('phone_accounts', history.phoneAccounts, phoneDailyAccounts, clock),
     history.ip === null ? undefined : windowRefusal('ip_daily', history.ip, ipDailySends, clock),
     windowRefusal('service_daily', history.service, serviceDailySends, clock),
   );

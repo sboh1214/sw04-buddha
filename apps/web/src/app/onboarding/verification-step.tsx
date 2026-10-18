@@ -130,7 +130,15 @@ interface CodeEntry {
  *   while the code is tried: a refusal under the input (an older code typed because the new text
  *   never came) does not take away the line that says to ask again later.
  * - An older code typed after a resend is refused under the input (`superseded`) without
- *   spending an entry; only the newest confirms.
+ *   spending an entry; only the newest confirms. After a resend whose outcome is unknown it is
+ *   most likely the last text that came, and is answered so: type the last text's code, and ask
+ *   again later if no new text comes (owner decision 2026-10-18, third round). Whether this
+ *   screen's last send is such a send belongs to the screen, not to one opening of the code input
+ *   (`lastSendUncertain`): the server checks the account's newest code however the input was
+ *   opened, so the answer holds through 실명·번호 다시 입력 → 이미 받은 인증번호 입력 and through
+ *   a send that sent nothing (a certain failure, a limit) until a send succeeds. A reload or
+ *   another tab does not know it, and answers as after a resend that was sent — and so does this
+ *   screen once a refusal for the resend wait tells it another tab has sent since (ADR-0070 7-32).
  * - What each refusal means is lib/phone-verification.ts's (`codeRequestFailure`,
  *   `confirmFailure`); what is said goes above the forms (`verification-notice`), except what
  *   belongs to one input — a wrong code with the entries it has left, an older code — which goes
@@ -151,6 +159,17 @@ export function VerificationStep() {
   // How long the send button waits: the resend interval of the last send, or of a refusal.
   const [resend, setResend] = useState<Span | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
+  // Whether the account's newest code, as far as this screen knows, came from a send whose
+  // outcome is unknown (the `maybe-sent` of `codeRequestFailure`) — so an older code typed now is
+  // most likely the last text that came, not one a new text replaced (`confirmFailure`'s
+  // `lastSendUncertain`, owner decision 2026-10-18, third round). Set by that send and cleared by
+  // a send that succeeds, and by a refusal for the resend wait: the send button waits that minute
+  // out after this screen's own sends, so such a refusal says a send this screen did not see
+  // (another tab) made the newest code, whose outcome it does not know — as after a reload.
+  // Nothing else changes the newest code, so nothing else touches it — not a send refused before
+  // anything went (SMS_SEND_FAILED, a limit, a field), not 실명·번호 다시 입력, not the input
+  // opened again by 이미 받은 인증번호 입력. A reload forgets it.
+  const [lastSendUncertain, setLastSendUncertain] = useState(false);
   const { codeLeft, resendLeft } = useCountdowns(entry?.span ?? null, resend);
   const locked = entry?.locked === true;
 
@@ -195,6 +214,7 @@ export function VerificationStep() {
       const sent = await request.mutateAsync({ ...values, expectedAccountId: accountId });
       const from = monotonicNow();
       setEntry({ span: { seconds: sent.expiresInSeconds, from }, locked: true, standing: null });
+      setLastSendUncertain(false);
       setResend({ seconds: sent.resendAfterSeconds, from });
       codeForm.reset({ code: '' });
       setNotice({ status: 'info', message: copy.verificationCodeSent });
@@ -208,6 +228,7 @@ export function VerificationStep() {
       if (failure.kind === 'maybe-sent') {
         // The text may have come: its code waits, with the name and the number it went to.
         setEntry({ span: null, locked: true, standing: failure.notice });
+        setLastSendUncertain(true);
         setResend({ seconds: failure.resendAfterSeconds, from: monotonicNow() });
         codeForm.reset({ code: '' });
         setNotice(failure.notice);
@@ -215,6 +236,8 @@ export function VerificationStep() {
       }
       if (failure.kind === 'resend-wait') {
         setResend({ seconds: failure.retryAfterSeconds, from: monotonicNow() });
+        // A send of another screen is the newest code now, and this one does not know its outcome.
+        setLastSendUncertain(false);
         if (entry === null) {
           // A code went out under a minute ago and this screen shows no input for it.
           openForWaitingCode();
@@ -237,7 +260,7 @@ export function VerificationStep() {
       setNotice(null);
       toaster.create({ type: 'success', title: copy.verificationDone });
     } catch (error) {
-      const failure = confirmFailure(error);
+      const failure = confirmFailure(error, { lastSendUncertain });
       switch (failure.kind) {
         case 'field':
           codeForm.setError('code', { message: failure.message }, { shouldFocus: true });
@@ -280,7 +303,6 @@ export function VerificationStep() {
       {notice && (
         <Alert.Root
           status={notice.status}
-          colorPalette={notice.palette}
           role={notice.status === 'error' || notice.urgent === true ? 'alert' : 'status'}
           data-status={notice.status}
           data-testid="verification-notice"

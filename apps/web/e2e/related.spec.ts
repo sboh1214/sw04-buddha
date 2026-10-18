@@ -6,6 +6,7 @@ import {
   closeMarket,
   createOpenMarket,
   expect,
+  expectYellowWarning,
   freshTag,
   signIn,
   subscribed,
@@ -205,6 +206,8 @@ test.describe('관련 시장', () => {
       await expect(adminPage.getByText(copy.adminRelatedLinked)).toBeVisible();
       const stale = panel.getByTestId('admin-related-stale');
       await expect(stale).toContainText(copy.adminMarketRefreshFailed);
+      // A warning, drawn yellow on the admin screens too (owner decision 2026-10-18, third round).
+      await expectYellowWarning(stale);
       await expect(panel.getByTestId(`admin-related-${b.id}`)).toContainText(b.title);
       linksDown = false;
       await stale.getByRole('button', { name: copy.retry }).click();

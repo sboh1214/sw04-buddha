@@ -15,6 +15,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
+import { currentClockMinute } from '../test/wait.js';
 
 const ORIGIN = 'http://localhost:3000';
 const HOUR_MS = 60 * 60 * 1_000;
@@ -159,6 +160,26 @@ describe.skipIf(!hasTestInfra)('SMS 발송 현황 /api/v1/admin/sms/status (inte
     for (const secret of [a.id, '01012345678', '홍길동', '203.0.113.7']) {
       expect(body).not.toContain(secret);
     }
+  });
+
+  it('counts over the window the service’s limit counts in: a send stays until its minute (third round)', async () => {
+    // The database clock's minute: the read below falls in it.
+    const minute = await currentClockMinute(t.db);
+    const { user: a } = await createUser(t.db);
+    // 24 hours old a millisecond into this minute: past the 24 hours, but the service's limit
+    // keeps it until the next minute (owner decision 2026-10-18, third round), and so does the
+    // count beside that limit. A minute older, it has left both.
+    await send(a.id, minute - DAY_MS + 1, 'accepted');
+    await send(a.id, minute - DAY_MS - MINUTE_MS + 1, 'accepted');
+    await t.db
+      .insert(schema.phoneVerificationRefusedSends)
+      .values([
+        { attemptedAt: new Date(minute - DAY_MS + 1) },
+        { attemptedAt: new Date(minute - DAY_MS - MINUTE_MS + 1) },
+      ]);
+    const status = await statusOf();
+    expect(Date.parse(status.asOf) - minute).toBeLessThan(MINUTE_MS);
+    expect(status.last24Hours).toEqual({ sent: 1, unknown: 0, refused: 1, serviceLimit: 500 });
   });
 
   it('splits the days at midnight in Seoul, whatever hour it runs at', async () => {

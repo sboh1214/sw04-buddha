@@ -309,15 +309,14 @@ describe('codeRequestFailure', () => {
       message: copy.errVerificationSendFailed,
     });
     // May have been sent (owner decision 2026-10-18): the step opens the code input and waits
-    // out the whole resend interval before another send, under a warning drawn yellow (second
-    // round: 주의(노란) 모양 — Chakra's `warning` alone is orange; apart from the information of a
-    // sent code) read out as an alert.
+    // out the whole resend interval before another send, under a warning (second round: 주의(노란)
+    // 모양 — the theme draws every warning yellow, third round; apart from the information of a
+    // sent code) read out as an alert. No palette of its own: the status decides.
     const maybeSent = {
       kind: 'maybe-sent',
       notice: {
         status: 'warning',
         message: copy.verificationMaybeSent,
-        palette: 'yellow',
         urgent: true,
       },
       resendAfterSeconds: PHONE_VERIFICATION_LIMITS.resendIntervalSeconds,
@@ -354,7 +353,6 @@ describe('codeRequestFailure', () => {
       notice: {
         status: 'warning',
         message: copy.verificationMaybeSent,
-        palette: 'yellow',
         urgent: true,
       },
       resendAfterSeconds: PHONE_VERIFICATION_LIMITS.resendIntervalSeconds,
@@ -397,6 +395,33 @@ describe('confirmFailure', () => {
       kind: 'field',
       message: copy.errVerificationCodeSuperseded,
     });
+    expect(
+      confirmFailure(rejected({ reason: 'superseded' }), { lastSendUncertain: false }),
+    ).toEqual({ kind: 'field', message: copy.errVerificationCodeSuperseded });
+  });
+
+  it('asks for the last text’s code instead after a send whose outcome is unknown (third round)', () => {
+    // The new text may never have come: not "type the new code", but the owner's own sentence.
+    expect(confirmFailure(rejected({ reason: 'superseded' }), { lastSendUncertain: true })).toEqual(
+      { kind: 'field', message: copy.errVerificationCodeSupersededUncertain },
+    );
+    expect(copy.errVerificationCodeSupersededUncertain).toBe(
+      '마지막에 받은 문자의 인증번호를 입력해 주세요. 새 문자가 오지 않았다면 잠시 뒤 다시 받아 주세요.',
+    );
+    expect(copy.errVerificationCodeSupersededUncertain).not.toBe(
+      copy.errVerificationCodeSuperseded,
+    );
+    // Only the older code is said apart: every other refusal reads as it does after any send.
+    for (const details of [
+      { reason: 'mismatch', remainingAttempts: 3 },
+      { reason: 'expired' },
+      { reason: 'attempts_exceeded' },
+      { reason: 'no_code' },
+    ]) {
+      expect(confirmFailure(rejected(details), { lastSendUncertain: true })).toEqual(
+        confirmFailure(rejected(details)),
+      );
+    }
   });
 
   it('sends the step back for a new code once this one can verify nothing', () => {

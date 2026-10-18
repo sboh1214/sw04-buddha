@@ -3,6 +3,7 @@ import {
   test as base,
   type APIRequestContext,
   type APIResponse,
+  type Locator,
   type Page,
 } from '@playwright/test';
 import type { AdminMarket, Category } from '@buddha/shared';
@@ -312,6 +313,53 @@ export async function expectCodeInput(page: Page): Promise<void> {
     .filter({ hasText: copy.errVerificationServiceDaily });
   await expect(input.or(serviceLimit)).toBeVisible();
   if (await serviceLimit.isVisible()) throw new Error(SERVICE_LIMIT_HELP);
+}
+
+/**
+ * The colour a Chakra colour token (`yellow.subtle`) paints as `property` (`backgroundColor`,
+ * `color`) where `element` is, in that page's colour mode: read off a probe appended inside it, so
+ * it resolves as the element's own would.
+ */
+export function tokenColour(
+  element: Locator,
+  token: string,
+  property: 'backgroundColor' | 'color' = 'backgroundColor',
+): Promise<string> {
+  return element.evaluate(
+    (node, [name, prop]) => {
+      const probe = document.createElement('div');
+      probe.style[prop] = `var(--chakra-colors-${name.replace('.', '-')})`;
+      node.append(probe);
+      const colour = getComputedStyle(probe)[prop];
+      probe.remove();
+      return colour;
+    },
+    [token, property] as const,
+  );
+}
+
+/** The background `element` is drawn with. */
+export function backgroundOf(element: Locator): Promise<string> {
+  return element.evaluate((node) => getComputedStyle(node).backgroundColor);
+}
+
+/**
+ * Every 주의 안내 is yellow (owner decision 2026-10-18, third round, ADR-0070 — the 본인확인
+ * "the text may have come" notice first, second round): `element`, an alert of the warning status,
+ * is drawn with the yellow palette — `yellow.subtle` behind `yellow.fg` words — and not with the
+ * orange Chakra gives the status by itself. The theme decides it (theme/system.ts), not the screen.
+ */
+export async function expectYellowWarning(element: Locator): Promise<void> {
+  await expect(element).toBeVisible();
+  const yellow = await tokenColour(element, 'yellow.subtle');
+  const orange = await tokenColour(element, 'orange.subtle');
+  // Both tokens resolve to a colour (an unknown variable paints nothing) and they differ.
+  expect(yellow).not.toBe('rgba(0, 0, 0, 0)');
+  expect(yellow).not.toBe(orange);
+  expect(await backgroundOf(element)).toBe(yellow);
+  expect(await element.evaluate((node) => getComputedStyle(node).color)).toBe(
+    await tokenColour(element, 'yellow.fg', 'color'),
+  );
 }
 
 /**
