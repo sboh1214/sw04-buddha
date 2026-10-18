@@ -10,7 +10,7 @@ import {
 } from '@buddha/shared';
 import * as z from 'zod';
 import { copy } from '@/copy';
-import { isApiError, isForAnotherAccount, validationField } from './api';
+import { isApiError, isApiUnreachable, isForAnotherAccount, validationField } from './api';
 
 /**
  * 본인확인 (#183, ADR-0070) as its screens read it: the forms of the verification step on
@@ -146,6 +146,35 @@ export function isVerifiedAlready(error: unknown): boolean {
 
 // ---- refusals -----------------------------------------------------------------------
 
+/**
+ * A notice above the step's forms. `warning` is the look of a text that may have come — the
+ * provider's answer was lost (SMS_SEND_UNCONFIRMED) or the API's never reached the browser —
+ * apart from the `info` of a sent code (owner decision 2026-10-18, second round: 주의(노란) 모양).
+ * `palette` paints it over its status's own colours: Chakra draws `warning` orange, and the owner
+ * asked for yellow, so that notice is `yellow` (its status, icon, `data-status` and role stay the
+ * warning's). `urgent` reads it out as an alert (`role=alert`) although it is no error: it comes
+ * with the cursor moving into the code input, and a polite status mounted while the focus moves
+ * is often not read at all — a text that may have come, a code sent under a minute ago from
+ * elsewhere.
+ */
+export interface VerificationNotice {
+  status: 'info' | 'warning' | 'error';
+  message: string;
+  palette?: 'yellow';
+  urgent?: boolean;
+}
+
+/**
+ * The notice of a text that may have come: SMS_SEND_UNCONFIRMED, and a request whose answer never
+ * reached the browser. A warning drawn yellow (second round: 주의(노란) 모양), read out as an alert.
+ */
+const MAYBE_SENT_NOTICE: VerificationNotice = {
+  status: 'warning',
+  message: copy.verificationMaybeSent,
+  palette: 'yellow',
+  urgent: true,
+};
+
 /** What the step does with a refused code request (`POST /me/phone-verification/code`). */
 export type CodeRequestFailure =
   /** A field the server named (it disagrees with the form after a deploy): shown under it. */
@@ -164,14 +193,17 @@ export type CodeRequestFailure =
       retryAfterSeconds: number;
     }
   /**
-   * The provider's answer was lost (SMS_SEND_UNCONFIRMED): the text may have come, and its code
-   * can be confirmed (owner decision 2026-10-18, ADR-0070). The step opens the code input for it,
-   * keeps the name and the number it was sent with locked, and counts the send button down for
-   * `resendAfterSeconds` — the whole resend interval from this answer, which the server's own wait
-   * (started before the provider was asked) never outlasts. No validity countdown: the server
-   * says whether the code still holds.
+   * The text may have come, and its code can be confirmed (owner decisions 2026-10-18,
+   * ADR-0070): the provider's answer was lost (SMS_SEND_UNCONFIRMED), or the API's own answer
+   * never reached the browser — the network dropped, a gateway in front of the API answered a 5xx
+   * without the API's envelope, the request timed out (`isApiUnreachable`) — after which the
+   * server may have sent it all the same. The step says so (`notice`, a warning), opens the code
+   * input for it, keeps the name and the number it was sent with locked, and counts the send
+   * button down for `resendAfterSeconds` — the whole resend interval from this answer, which the
+   * server's own wait (started before the provider was asked) never outlasts. No validity
+   * countdown: the server says whether the code still holds.
    */
-  | { kind: 'maybe-sent'; message: string; resendAfterSeconds: number }
+  | { kind: 'maybe-sent'; notice: VerificationNotice; resendAfterSeconds: number }
   /** Verified already (another tab): the hook refreshed `['me']`, and the page moves on. */
   | { kind: 'verified'; message: string }
   /** Anything else, said above the form: a daily limit, the provider, the session, the rest. */
@@ -225,10 +257,11 @@ export function codeRequestFailure(error: unknown): CodeRequestFailure {
   if (isApiError(error, 'SMS_SEND_FAILED')) {
     return { kind: 'notice', message: copy.errVerificationSendFailed };
   }
-  if (isApiError(error, 'SMS_SEND_UNCONFIRMED')) {
+  // A lost answer, the provider's or the API's own: whether a text went is not known.
+  if (isApiError(error, 'SMS_SEND_UNCONFIRMED') || isApiUnreachable(error)) {
     return {
       kind: 'maybe-sent',
-      message: copy.verificationMaybeSent,
+      notice: MAYBE_SENT_NOTICE,
       resendAfterSeconds: PHONE_VERIFICATION_LIMITS.resendIntervalSeconds,
     };
   }

@@ -2,7 +2,8 @@
  * The code's rules (ADR-0069 decision 1 #57-3, ADR-0070) without Postgres: what the drawn codes
  * look like, the keyed hash and its constant-time comparison, expiry, the entries a code takes,
  * an older code recognised, the resend interval and the daily limits of the account, the account
- * at a number, the accounts at a number, the client address and the service. Runs everywhere.
+ * at a number, the accounts at a number, the client address and the service, and the whole
+ * minutes the limits shared with other accounts answer. Runs everywhere.
  */
 import * as crypto from 'node:crypto';
 import { schema } from '@buddha/db';
@@ -24,6 +25,7 @@ import {
   OLDER_CODES_COMPARED,
   pendingCodeRefusal,
   sendRefusal,
+  sharedWaitSeconds,
   type SendHistory,
 } from './phone-verification.rules.js';
 import {
@@ -209,7 +211,7 @@ describe('sendRefusal', () => {
       accountDailySends: 10,
       accountPhoneDailySends: 10,
       phoneDailyAccounts: 3,
-      ipDailySends: 20,
+      ipDailySends: 50,
       serviceDailySends: 500,
       dailyWindowSeconds: 86_400,
     });
@@ -257,11 +259,18 @@ describe('sendRefusal', () => {
   it('refuses a fourth account at a number, but none of the three that have sent to it', () => {
     // Two other accounts: a third may come.
     expect(sendRefusal(history({ phoneAccounts: sends(2, 2 * 60 * SECOND) }))).toBeUndefined();
-    // Three other accounts: refused until the third newest of them leaves the window.
+    // Three other accounts: refused until the third newest of them leaves the window, in whole
+    // minutes (T0 is on a minute, and so is this send's time).
     const three = [at(-5 * SECOND), at(-3_600 * SECOND), at(-DAY + 1_800 * SECOND)];
     expect(sendRefusal(history({ phoneAccounts: three }))).toEqual({
       reason: 'phone_accounts',
       retryAfterSeconds: 1_800,
+    });
+    // Off the minute, it is rounded up to the next one.
+    const offMinute = [at(-5 * SECOND), at(-3_600 * SECOND), at(-DAY + 1_800 * SECOND + 1)];
+    expect(sendRefusal(history({ phoneAccounts: offMinute }))).toEqual({
+      reason: 'phone_accounts',
+      retryAfterSeconds: 1_860,
     });
     // An account that has itself sent to the number in the window is one of the three.
     expect(
@@ -269,9 +278,13 @@ describe('sendRefusal', () => {
     ).toBeUndefined();
   });
 
-  it('refuses the twenty-first send from one client address, and counts none for no address', () => {
-    expect(sendRefusal(history({ ip: sends(19, 2 * 60 * SECOND) }))).toBeUndefined();
-    expect(sendRefusal(history({ ip: atLimit(20, 300) }))).toEqual({
+  it('refuses the fifty-first send from one client address, and counts none for no address', () => {
+    expect(sendRefusal(history({ ip: sends(49, 2 * 60 * SECOND) }))).toBeUndefined();
+    expect(sendRefusal(history({ ip: atLimit(50, 300) }))).toEqual({
+      reason: 'ip_daily',
+      retryAfterSeconds: 300,
+    });
+    expect(sendRefusal(history({ ip: atLimit(50, 241) }))).toEqual({
       reason: 'ip_daily',
       retryAfterSeconds: 300,
     });
@@ -281,10 +294,78 @@ describe('sendRefusal', () => {
 
   it('refuses the service’s five hundred and first send in 24 hours', () => {
     expect(sendRefusal(history({ service: sends(499, 2 * 60 * SECOND) }))).toBeUndefined();
+    // Forty-two seconds away: answered as the minute it falls in.
     expect(sendRefusal(history({ service: atLimit(500, 42) }))).toEqual({
       reason: 'service_daily',
+      retryAfterSeconds: 60,
+    });
+  });
+
+  it('answers the account’s own limits to the second and the shared ones in whole minutes (second round)', () => {
+    // The same 42 seconds: exact for the account's own ten, a minute for the service's.
+    expect(sendRefusal(history({ account: atLimit(10, 42) }))).toEqual({
+      reason: 'account_daily',
       retryAfterSeconds: 42,
     });
+    expect(sendRefusal(history({ accountPhone: atLimit(10, 42) }))).toEqual({
+      reason: 'account_phone_daily',
+      retryAfterSeconds: 42,
+    });
+    expect(sendRefusal(history({ lastAccountSend: at(-18 * SECOND) }))).toEqual({
+      reason: 'resend_interval',
+      retryAfterSeconds: 42,
+    });
+    for (const shared of [
+      { phoneAccounts: atLimit(3, 42) },
+      { ip: atLimit(50, 42) },
+      { service: atLimit(500, 42) },
+    ]) {
+      expect(sendRefusal(history(shared))?.retryAfterSeconds).toBe(60);
+    }
+  });
+
+  it('answers a shared limit the same whole minutes whatever second it is asked at', () => {
+    // Another account's send leaves the window at 12:30:17.4 (clock time). Asked at any second
+    // of 12:01, the answer is 30 minutes, at 12:02 29: it moves on the clock's minutes only, so
+    // asking again and again does not find the 17.4 seconds.
+    const minute = (m: number, s = 0) => new Date(Date.UTC(2026, 9, 18, 3, m, 0) + s * SECOND);
+    const leaves = minute(30, 17.4).getTime();
+    for (const s of [0, 0.001, 17, 17.4, 17.5, 42, 59.999]) {
+      expect(sharedWaitSeconds(leaves, minute(1, s)), String(s)).toBe(30 * 60);
+      expect(sharedWaitSeconds(leaves, minute(2, s)), String(s)).toBe(29 * 60);
+    }
+    // Never shorter than the exact wait, and at most two minutes longer.
+    for (let ms = 0; ms < 120_000; ms += 997) {
+      const clock = new Date(T0.getTime() + ms);
+      const wait = sharedWaitSeconds(leaves, clock);
+      const exact = (leaves - clock.getTime()) / SECOND;
+      expect(wait % 60).toBe(0);
+      expect(wait).toBeGreaterThanOrEqual(exact);
+      expect(wait).toBeLessThan(exact + 120);
+    }
+    // At least a minute, on the minute itself too.
+    expect(sharedWaitSeconds(minute(5, 0.5).getTime(), minute(5, 0))).toBe(60);
+    expect(sharedWaitSeconds(minute(5).getTime(), minute(4, 59.9))).toBe(60);
+  });
+
+  it('opens a shared limit when the send at the limit leaves the window, not at the minute answered', () => {
+    // The answer is in whole minutes; the limit is not (ADR-0070 7-25). The third other account's
+    // send leaves the window at T0 + 17.4 s: a request a millisecond before is refused with the
+    // minute, one a millisecond after passes — before the moment that refusal named. So a member
+    // asking again and again through that minute learns the instant to the rate limit's step.
+    const third = at(-DAY + 17_400);
+    const leaves = third.getTime() + DAY;
+    /** The other accounts' sends the service reads at `clock`: those inside its window. */
+    const others = (clock: Date) =>
+      [at(-5 * SECOND), at(-3_600 * SECOND), third].filter(
+        (sent) => sent.getTime() > dayWindowStart(clock).getTime(),
+      );
+    const before = new Date(leaves - 1);
+    const refused = sendRefusal(history({ clock: before, phoneAccounts: others(before) }));
+    expect(refused).toEqual({ reason: 'phone_accounts', retryAfterSeconds: 60 });
+    const after = new Date(leaves + 1);
+    expect(sendRefusal(history({ clock: after, phoneAccounts: others(after) }))).toBeUndefined();
+    expect(after.getTime()).toBeLessThan(before.getTime() + refused!.retryAfterSeconds * SECOND);
   });
 
   it('answers the limit that lasts longest when several refuse', () => {
@@ -293,11 +374,21 @@ describe('sendRefusal', () => {
         history({
           lastAccountSend: at(-10 * SECOND),
           account: atLimit(10, 20),
-          ip: atLimit(20, 600),
+          ip: atLimit(50, 600),
           service: atLimit(500, 300),
         }),
       ),
     ).toEqual({ reason: 'ip_daily', retryAfterSeconds: 600 });
+    // Compared as answered: the service's 42 seconds are its minute, longer than the account's 50
+    // seconds — and on a tie of the answers the account's own limit, first in the order, is told.
+    expect(sendRefusal(history({ account: atLimit(10, 50), service: atLimit(500, 42) }))).toEqual({
+      reason: 'service_daily',
+      retryAfterSeconds: 60,
+    });
+    expect(sendRefusal(history({ account: atLimit(10, 60), service: atLimit(500, 42) }))).toEqual({
+      reason: 'account_daily',
+      retryAfterSeconds: 60,
+    });
     expect(
       sendRefusal(
         history({

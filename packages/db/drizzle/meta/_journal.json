@@ -211,6 +211,13 @@
       "when": 1792310499654,
       "tag": "0029_phone_verification_records",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1792319379637,
+      "tag": "0030_sms_send_status",
+      "breakpoints": true
     }
   ]
 }

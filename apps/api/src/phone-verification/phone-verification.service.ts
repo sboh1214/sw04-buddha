@@ -10,7 +10,7 @@ import {
   type PhoneVerificationNotAllowedDetails,
   type VerificationCodeRejectedDetails,
 } from '@buddha/shared';
-import { and, desc, eq, gt, ne, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gt, lt, ne, sql, type SQL } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
 import { findPgError, isPgError, PG_UNIQUE_VIOLATION } from '../common/errors/pg-error.js';
 import { type Env } from '../config/env.js';
@@ -38,6 +38,14 @@ export const PHONE_UNIQUE_CONSTRAINT = 'phone_verifications_phone_unique';
 
 const codes = schema.phoneVerificationCodes;
 const verifications = schema.phoneVerifications;
+const refusedSends = schema.phoneVerificationRefusedSends;
+
+/**
+ * How long a refused send's time is kept (`phone_verification_refused_sends`): the admin's send
+ * status reads seven Korean calendar days at most (SMS_STATUS_DAYS), which start no more than
+ * seven days ago, so eight leave a day to spare. Each refusal deletes the rows older than this.
+ */
+export const REFUSED_SENDS_KEPT_DAYS = 8;
 const {
   codeTtlSeconds,
   resendIntervalSeconds,
@@ -93,8 +101,9 @@ export function codeRejected(details: VerificationCodeRejectedDetails): AppError
  *
  * - Sending takes the account's lock and the service's send lock, reads the database clock,
  *   refuses by the fixed limits (rules: 60 s since the account's previous send; in 24 hours ten
- *   sends for the account and for the account at the number, three accounts at the number, twenty
- *   from the client address, five hundred for the service) and records the new send — all before
+ *   sends for the account and for the account at the number, three accounts at the number, fifty
+ *   from the client address, five hundred for the service — the waits of the last three, which
+ *   other accounts' sends fill, in whole minutes) and records the new send — all before
  *   the provider is asked, so concurrent requests count each other. The text is sent after that
  *   transaction commits (the provider's latency holds no lock). What a failed send leaves depends
  *   on what the failure says about the text (ADR-0070). A send the provider certainly did not take
@@ -103,10 +112,15 @@ export function codeRejected(details: VerificationCodeRejectedDetails): AppError
  *   answer: the provider may have texted the code) is kept: it counts against the limits like any
  *   send and its code can be confirmed, and it is answered SMS_SEND_UNCONFIRMED, so the screen can
  *   say the text may have come. A provider that answers late can never let a phone receive more
- *   texts than the limits allow.
- * - The rows are never purged here: each is the account's 본인확인 기록 (owner decision
- *   2026-10-18), which #184's retention job deletes after the account's withdrawal. The limits
- *   read the window through their indexes, so the rows outside it cost nothing.
+ *   texts than the limits allow. What the provider said is kept for the admin's send status
+ *   (owner decision 2026-10-18, second round): a recorded send is `unknown` until the provider
+ *   takes it (`send_outcome` = `accepted`), and a refused one leaves its time alone in
+ *   `phone_verification_refused_sends`, with no personal data.
+ * - The rows are never purged here: each is the account's 본인확인 기록 (owner decisions
+ *   2026-10-18), which #184's retention job deletes once its period has passed since the account's
+ *   withdrawal — number, real name and address in plain text until then, an exception the owner
+ *   made to ADR-0069 #57-18's immediate deletion. The limits read the window through their
+ *   indexes, so the rows outside it cost nothing.
  * - The spans answered (`expiresInSeconds`, `resendAfterSeconds`) are counted from the database
  *   clock the row was written with, less the time the provider took, so a browser that starts
  *   counting when the answer arrives never shows a code valid that the server calls expired.
@@ -202,6 +216,8 @@ export class PhoneVerificationService {
         sentAt: clock,
         expiresAt: expiryOf(clock),
         clientIp,
+        // Until the provider says it took the text: a send whose answer never comes stays so.
+        sendOutcome: 'unknown',
       });
     });
 
@@ -215,12 +231,9 @@ export class PhoneVerificationService {
       const reason = redactDigits(error instanceof Error ? error.message : String(error));
       if (sendOutcome(error) === 'refused') {
         // Certainly not a send: it neither counts against the limits nor can be confirmed.
-        // Should this delete fail too, the row stays and counts until it leaves the window;
+        // Should this fail too, the row stays (`unknown`) and counts until it leaves the window;
         // nobody holds its code.
-        await this.db
-          .delete(codes)
-          .where(eq(codes.id, id))
-          .catch(() => undefined);
+        await this.forgetRefusedSend(id).catch(() => undefined);
         throw new AppError('SMS_SEND_FAILED', {
           message: `The verification code was not sent: ${reason}`,
         });
@@ -230,6 +243,14 @@ export class PhoneVerificationService {
         message: `The verification code may have been sent (kept and counted): ${reason}`,
       });
     }
+    // For the admin's send status only: the text went whether or not this write lands (it
+    // stays `unknown` then), so its failure is not the member's. Before the spans are counted,
+    // so the time it takes comes off them too.
+    await this.db
+      .update(codes)
+      .set({ sendOutcome: 'accepted' })
+      .where(eq(codes.id, id))
+      .catch(() => undefined);
     const spent = (performance.now() - clockReadAt) / 1_000;
     return {
       // Down for the validity, up for the wait: the screen never promises more time than the
@@ -329,6 +350,29 @@ export class PhoneVerificationService {
       });
     }
     return toPhoneVerification(row);
+  }
+
+  /**
+   * A send the provider certainly refused stops being a send: its row goes (no limit counts it,
+   * no code of it can be confirmed, none of its personal data is kept) and its time alone is
+   * counted for the admin's send status, in one transaction — a refused send is counted either
+   * as a send or as a refusal, never as both. The refusals older than REFUSED_SENDS_KEPT_DAYS
+   * go with it, so the table holds about a week while refusals keep coming. Only a refusal
+   * deletes them: once refusals stop, the last ones stay until the next (times only, outside the
+   * seven days the status reads).
+   */
+  private async forgetRefusedSend(id: string): Promise<void> {
+    await this.db.transaction(async (tx) => {
+      const [gone] = await tx
+        .delete(codes)
+        .where(eq(codes.id, id))
+        .returning({ sentAt: codes.sentAt });
+      if (gone === undefined) return;
+      // The send's own database clock, as the sends it is counted beside have theirs.
+      await tx.insert(refusedSends).values({ attemptedAt: gone.sentAt });
+      const keptFrom = gone.sentAt.getTime() - REFUSED_SENDS_KEPT_DAYS * 24 * 60 * 60 * 1_000;
+      await tx.delete(refusedSends).where(lt(refusedSends.attemptedAt, new Date(keptFrom)));
+    });
   }
 
   /**

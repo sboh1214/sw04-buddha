@@ -21,6 +21,7 @@ import {
   verificationDetailsSchema,
   type VerificationCodeValues,
   type VerificationDetailsValues,
+  type VerificationNotice,
 } from '@/lib/phone-verification';
 
 /** A span the server answered in seconds, and when that answer arrived (`performance.now()`). */
@@ -75,17 +76,8 @@ function useCountdowns(code: Span | null, resend: Span | null) {
   return { codeLeft, resendLeft };
 }
 
-interface Notice {
-  status: 'info' | 'error';
-  message: string;
-  /**
-   * Read out as an alert (`role=alert`) although it is information: it comes with the cursor
-   * moving into the code input, and a polite status mounted with its text while the focus moves
-   * is often not read at all. For what the member must hear before typing a code: a text that may
-   * have come (SMS_SEND_UNCONFIRMED), a code sent under a minute ago from elsewhere.
-   */
-  urgent?: boolean;
-}
+/** A notice above the forms: its look, its words and whether it is read out as an alert. */
+type Notice = VerificationNotice;
 
 /** The open code input: what the step knows of the code it confirms. */
 interface CodeEntry {
@@ -104,8 +96,9 @@ interface CodeEntry {
   locked: boolean;
   /**
    * What the notice says for as long as this code is tried, or null. A text that may have come
-   * (SMS_SEND_UNCONFIRMED) stays said through every entry refused under the input — a wrong code,
-   * an older one — so a member whose text never came still reads that they can ask again later.
+   * (SMS_SEND_UNCONFIRMED, or a send whose answer never arrived) stays said through every entry
+   * refused under the input — a wrong code, an older one — so a member whose text never came still
+   * reads that they can ask again later.
    */
   standing: Notice | null;
 }
@@ -125,15 +118,17 @@ interface CodeEntry {
  *   same countdown from its `retryAfterSeconds`.
  * - A code this screen did not send can still be confirmed: the server checks the account's
  *   newest code whichever screen asked for it. 이미 받은 인증번호 입력 opens the code input for a
- *   code sent before a reload, in another tab or by a send whose answer was lost; a refusal for
- *   the resend wait opens it by itself, since it says a code went out under a minute ago. Such a
- *   code has no countdown, and the name and the number stay open.
- * - A send whose provider's answer was lost (SMS_SEND_UNCONFIRMED) may have texted the code, and
- *   the server keeps it (owner decision 2026-10-18): the step says the text may have come, opens
- *   the code input with the name and the number locked as for a sent code, and counts the send
- *   button down for the resend interval — but not the validity, which no answer gave. That notice
- *   stays while the code is tried: a refusal under the input (an older code typed because the new
- *   text never came) does not take away the line that says to ask again later.
+ *   code sent before a reload or in another tab; a refusal for the resend wait opens it by
+ *   itself, since it says a code went out under a minute ago. Such a code has no countdown, and
+ *   the name and the number stay open.
+ * - A send whose answer was lost may have texted the code, and the server keeps it (owner
+ *   decisions 2026-10-18): the provider's answer (SMS_SEND_UNCONFIRMED) or the API's own (the
+ *   network dropped, a gateway's 5xx without the API's envelope, a timeout). The step says the
+ *   text may have come — a warning, apart from the information of a sent code — opens the code
+ *   input with the name and the number locked as for a sent code, and counts the send button
+ *   down for the resend interval — but not the validity, which no answer gave. That notice stays
+ *   while the code is tried: a refusal under the input (an older code typed because the new text
+ *   never came) does not take away the line that says to ask again later.
  * - An older code typed after a resend is refused under the input (`superseded`) without
  *   spending an entry; only the newest confirms.
  * - What each refusal means is lib/phone-verification.ts's (`codeRequestFailure`,
@@ -141,8 +136,9 @@ interface CodeEntry {
  *   belongs to one input — a wrong code with the entries it has left, an older code — which goes
  *   under it. The number another account verified goes under the number, which takes the focus,
  *   and in the notice too, whose `role=alert` reads it out (a message mounted under a field is
- *   not). The notices that open the code input — a text that may have come, a code sent under a
- *   minute ago — are information but `role=alert` too: the cursor moves with them.
+ *   not). The notices that open the code input — a text that may have come (a warning), a code
+ *   sent under a minute ago (information) — are not errors but `role=alert` too: the cursor moves
+ *   with them.
  * - A confirmation writes the record into `['me']` before it settles
  *   (`useConfirmPhoneVerification`), and the form above this step navigates on from there.
  */
@@ -211,11 +207,10 @@ export function VerificationStep() {
       }
       if (failure.kind === 'maybe-sent') {
         // The text may have come: its code waits, with the name and the number it went to.
-        const maybeSent: Notice = { status: 'info', message: failure.message, urgent: true };
-        setEntry({ span: null, locked: true, standing: maybeSent });
+        setEntry({ span: null, locked: true, standing: failure.notice });
         setResend({ seconds: failure.resendAfterSeconds, from: monotonicNow() });
         codeForm.reset({ code: '' });
-        setNotice(maybeSent);
+        setNotice(failure.notice);
         return;
       }
       if (failure.kind === 'resend-wait') {
@@ -285,7 +280,9 @@ export function VerificationStep() {
       {notice && (
         <Alert.Root
           status={notice.status}
+          colorPalette={notice.palette}
           role={notice.status === 'error' || notice.urgent === true ? 'alert' : 'status'}
+          data-status={notice.status}
           data-testid="verification-notice"
         >
           <Alert.Indicator />

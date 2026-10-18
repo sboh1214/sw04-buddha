@@ -260,11 +260,30 @@ describe('codeRequestFailure', () => {
         message: `${message} 1${copy.unitMinute} 30${copy.unitSecond} ${copy.verificationRetryAfter}`,
       });
     }
+    // The limits counted with other accounts answer whole minutes (owner decision 2026-10-18,
+    // second round): said as minutes, never seconds.
+    for (const [reason, message] of [
+      ['phone_accounts', copy.errVerificationPhoneAccounts],
+      ['ip_daily', copy.errVerificationIpDaily],
+      ['service_daily', copy.errVerificationServiceDaily],
+    ] as const) {
+      expect(codeRequestFailure(limited(reason, 1_860))).toEqual({
+        kind: 'notice',
+        message: `${message} 31${copy.unitMinute} ${copy.verificationRetryAfter}`,
+      });
+      expect(codeRequestFailure(limited(reason, 60))).toEqual({
+        kind: 'notice',
+        message: `${message} 1${copy.unitMinute} ${copy.verificationRetryAfter}`,
+      });
+    }
     // Each daily limit says its own sentence.
     expect(
       new Set(
         ['account_daily', 'account_phone_daily', 'phone_accounts', 'ip_daily', 'service_daily'].map(
-          (reason) => codeRequestFailure(limited(reason, 90)).message,
+          (reason) => {
+            const failure = codeRequestFailure(limited(reason, 90));
+            return failure.kind === 'notice' ? failure.message : failure.kind;
+          },
         ),
       ).size,
     ).toBe(5);
@@ -290,12 +309,20 @@ describe('codeRequestFailure', () => {
       message: copy.errVerificationSendFailed,
     });
     // May have been sent (owner decision 2026-10-18): the step opens the code input and waits
-    // out the whole resend interval before another send.
-    expect(codeRequestFailure(refusal(502, 'SMS_SEND_UNCONFIRMED'))).toEqual({
+    // out the whole resend interval before another send, under a warning drawn yellow (second
+    // round: 주의(노란) 모양 — Chakra's `warning` alone is orange; apart from the information of a
+    // sent code) read out as an alert.
+    const maybeSent = {
       kind: 'maybe-sent',
-      message: copy.verificationMaybeSent,
+      notice: {
+        status: 'warning',
+        message: copy.verificationMaybeSent,
+        palette: 'yellow',
+        urgent: true,
+      },
       resendAfterSeconds: PHONE_VERIFICATION_LIMITS.resendIntervalSeconds,
-    });
+    };
+    expect(codeRequestFailure(refusal(502, 'SMS_SEND_UNCONFIRMED'))).toEqual(maybeSent);
     expect(copy.verificationMaybeSent).not.toBe(copy.errVerificationSendFailed);
     const already = refusal(409, 'PHONE_VERIFICATION_NOT_ALLOWED', {
       reason: 'already_verified',
@@ -314,7 +341,38 @@ describe('codeRequestFailure', () => {
       kind: 'notice',
       message: copy.errUnknown,
     });
-    expect(codeRequestFailure(new TypeError('Failed to fetch'))).toEqual({
+    // A 500 the API answered itself (its envelope): it was reached and sent nothing.
+    expect(codeRequestFailure(refusal(500, 'INTERNAL'))).toEqual({
+      kind: 'notice',
+      message: copy.errUnknown,
+    });
+  });
+
+  it('says the text may have come when no answer of the API reached the browser (second round)', () => {
+    const maybeSent = {
+      kind: 'maybe-sent',
+      notice: {
+        status: 'warning',
+        message: copy.verificationMaybeSent,
+        palette: 'yellow',
+        urgent: true,
+      },
+      resendAfterSeconds: PHONE_VERIFICATION_LIMITS.resendIntervalSeconds,
+    };
+    // The fetch itself failed: the network dropped, or the request timed out on the way.
+    expect(codeRequestFailure(new TypeError('Failed to fetch'))).toEqual(maybeSent);
+    expect(codeRequestFailure(new DOMException('signal timed out', 'TimeoutError'))).toEqual(
+      maybeSent,
+    );
+    // A gateway in front of the API answered for it, without the API's envelope: its 502/503/504,
+    // or the plain-text 500 of Next's rewrite when the API is out of reach.
+    for (const status of [500, 502, 503, 504]) {
+      expect(codeRequestFailure(new ApiError(status, undefined)), String(status)).toEqual(
+        maybeSent,
+      );
+    }
+    // A non-5xx without the envelope is not a lost answer.
+    expect(codeRequestFailure(new ApiError(404, undefined))).toEqual({
       kind: 'notice',
       message: copy.errUnknown,
     });

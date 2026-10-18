@@ -3,8 +3,10 @@
  * profile, with the in-memory SMS sender: the code is texted and confirmed, the record is the
  * only way to "verified", and every fixed limit holds — three minutes, five entries, sixty
  * seconds, and in 24 hours ten per account and per account at a number, three accounts per
- * number, twenty per client address and five hundred for the service — with one account per
- * number. The sends stay as the accounts' 본인확인 기록 (owner decision 2026-10-18).
+ * number, fifty per client address and five hundred for the service — with one account per
+ * number; the limits shared with other accounts answer their waits in whole minutes. The sends
+ * stay as the accounts' 본인확인 기록 (owner decisions 2026-10-18), with what the provider said
+ * of each, and a send the provider refused leaves its time alone.
  *
  * The app trusts one proxy (Caddy's address in production) and lists one uncounted peer (the web
  * server's), so a request can name a client the way production's do: `inject` presents loopback
@@ -35,6 +37,10 @@ import { PhoneVerificationService } from './phone-verification.service.js';
 const ORIGIN = 'http://localhost:3000';
 const PHONE = '01012345678';
 const DAY_MS = 24 * 60 * 60 * 1_000;
+/** Whether `seconds` is the whole minutes from `minutes` to `minutes + 1`: a shared limit's wait. */
+function wholeMinutesFrom(seconds: number, minutes: number): boolean {
+  return seconds % 60 === 0 && seconds >= minutes * 60 && seconds <= (minutes + 1) * 60;
+}
 /** Caddy and the web server in deploy/compose.yaml: the trusted proxy and the uncounted peer. */
 const PROXY = '172.28.0.10';
 const WEB = '172.28.0.20';
@@ -135,6 +141,11 @@ describe.skipIf(!hasTestInfra)('본인확인 /api/v1/me/phone-verification (inte
       .where(userId === undefined ? undefined : eq(schema.phoneVerificationCodes.userId, userId))
       .orderBy(schema.phoneVerificationCodes.sentAt);
   const verificationRows = () => t.db.select().from(schema.phoneVerifications);
+  const refusedRows = () =>
+    t.db
+      .select()
+      .from(schema.phoneVerificationRefusedSends)
+      .orderBy(schema.phoneVerificationRefusedSends.attemptedAt);
 
   /** The refusal's code and details, after checking its status. */
   function refusal(res: LightMyRequestResponse, status: number, code: ErrorCode) {
@@ -210,7 +221,7 @@ describe.skipIf(!hasTestInfra)('본인확인 /api/v1/me/phone-verification (inte
     const code = t.sms.lastCodeTo(PHONE);
 
     // Stored as an HMAC, with the number and the name as normalised, valid three minutes. A
-    // loopback peer names no client: no address recorded.
+    // loopback peer names no client: no address recorded. The provider took it: `accepted`.
     const [row] = await codeRows(user.id);
     expect(row).toMatchObject({
       phone: PHONE,
@@ -218,6 +229,7 @@ describe.skipIf(!hasTestInfra)('본인확인 /api/v1/me/phone-verification (inte
       attempts: 0,
       consumedAt: null,
       clientIp: null,
+      sendOutcome: 'accepted',
     });
     expect(row!.codeHash).toMatch(/^[0-9a-f]{64}$/);
     expect(row!.codeHash).not.toContain(code);
@@ -502,11 +514,13 @@ describe.skipIf(!hasTestInfra)('본인확인 /api/v1/me/phone-verification (inte
       await pastSends(other.id, PHONE, 1, agoMs);
       accounts.push(other);
     }
-    // A fourth is refused with its own reason, until the third newest of them leaves the window.
+    // A fourth is refused with its own reason, until the third newest of them leaves the window —
+    // in whole minutes, since it is another account's send (owner decision, second round).
     const limited = limitOf(await request(user));
     expect(limited.reason).toBe('phone_accounts');
-    expect(limited.retryAfterSeconds).toBeGreaterThan(29 * 60);
-    expect(limited.retryAfterSeconds).toBeLessThanOrEqual(30 * 60);
+    expect(wholeMinutesFrom(limited.retryAfterSeconds, 30), String(limited.retryAfterSeconds)).toBe(
+      true,
+    );
     expect(t.sms.messages).toEqual([]);
     expect(await codeRows(user.id)).toEqual([]);
     // Another number is open to it.
@@ -540,35 +554,42 @@ describe.skipIf(!hasTestInfra)('본인확인 /api/v1/me/phone-verification (inte
     expect(t.sms.messages).toHaveLength(1);
   });
 
-  it('texts at most twenty codes a day from one client address, as the rate limit names it (owner decision 2026-10-18)', async () => {
-    // Twenty sends from the visitor's address, by other accounts, the oldest 23 h 50 min ago.
+  it('texts at most fifty codes a day from one client address, as the rate limit names it (owner decisions 2026-10-18)', async () => {
+    // Forty-nine sends from the visitor's address, by another account, the oldest 23 h 50 min ago.
     const { user: other } = await createUser(t.db);
-    await pastSends(other.id, '01055550000', 19, 2 * 60_000, { clientIp: VISITOR });
+    await pastSends(other.id, '01055550000', 48, 2 * 60_000, { clientIp: VISITOR });
     await pastSends(other.id, '01055550001', 1, DAY_MS - 10 * 60_000, { clientIp: VISITOR });
+    // The fiftieth goes (the owner raised twenty to fifty, second round), and records the address.
+    expect((await requestFrom(VISITOR, user)).statusCode).toBe(200);
+    expect((await codeRows(user.id))[0]).toMatchObject({ clientIp: VISITOR });
+    t.sms.messages.length = 0;
 
-    // From the visitor directly, and through Caddy (the trusted proxy names it): refused.
-    const limited = limitOf(await requestFrom(VISITOR, user));
+    // A fifty-first, from the visitor directly and through Caddy (the trusted proxy names it):
+    // refused until the oldest leaves, in whole minutes (other people's sends behind the address).
+    const second = await signUpTestUser(t);
+    const limited = limitOf(await requestFrom(VISITOR, second));
     expect(limited.reason).toBe('ip_daily');
-    expect(limited.retryAfterSeconds).toBeGreaterThan(9 * 60);
-    expect(limited.retryAfterSeconds).toBeLessThanOrEqual(10 * 60);
-    expect(limitOf(await requestFrom(PROXY, user, {}, { 'x-forwarded-for': VISITOR })).reason).toBe(
-      'ip_daily',
+    expect(wholeMinutesFrom(limited.retryAfterSeconds, 10), String(limited.retryAfterSeconds)).toBe(
+      true,
     );
+    expect(
+      limitOf(await requestFrom(PROXY, second, {}, { 'x-forwarded-for': VISITOR })).reason,
+    ).toBe('ip_daily');
     // An IPv4 visitor on a dual-stack socket is the same address.
-    expect(limitOf(await requestFrom(`::ffff:${VISITOR}`, user)).reason).toBe('ip_daily');
+    expect(limitOf(await requestFrom(`::ffff:${VISITOR}`, second)).reason).toBe('ip_daily');
     expect(t.sms.messages).toEqual([]);
 
     // Another visitor is not: its send records its own address.
     expect(
-      (await requestFrom(PROXY, user, {}, { 'x-forwarded-for': '198.51.100.9' })).statusCode,
+      (await requestFrom(PROXY, second, {}, { 'x-forwarded-for': '198.51.100.9' })).statusCode,
     ).toBe(200);
-    expect((await codeRows(user.id))[0]).toMatchObject({ clientIp: '198.51.100.9' });
+    expect((await codeRows(second.id))[0]).toMatchObject({ clientIp: '198.51.100.9' });
   });
 
   it('counts no address for a request that names no client: loopback and the web server', async () => {
-    // Twenty sends with no address: nothing a per-address limit can count.
+    // Fifty sends with no address: nothing a per-address limit can count.
     const { user: other } = await createUser(t.db);
-    await pastSends(other.id, '01055550000', 20, 2 * 60_000);
+    await pastSends(other.id, '01055550000', 50, 2 * 60_000);
     // The web server's rewrite (an uncounted peer) and loopback name nobody: no address limit,
     // and no address recorded.
     expect((await requestFrom(WEB, user)).statusCode).toBe(200);
@@ -599,9 +620,11 @@ describe.skipIf(!hasTestInfra)('본인확인 /api/v1/me/phone-verification (inte
       .where(eq(schema.phoneVerificationCodes.userId, oldest!.id));
     const limited = limitOf(await request(user));
     expect(limited.reason).toBe('service_daily');
-    // Until the newest of the oldest account's ten leaves: the 500th newest send of the service.
-    expect(limited.retryAfterSeconds).toBeGreaterThan(4 * 60);
-    expect(limited.retryAfterSeconds).toBeLessThanOrEqual(5 * 60);
+    // Until the newest of the oldest account's ten leaves: the 500th newest send of the service,
+    // in whole minutes.
+    expect(wholeMinutesFrom(limited.retryAfterSeconds, 5), String(limited.retryAfterSeconds)).toBe(
+      true,
+    );
     expect(t.sms.messages).toEqual([]);
     // One send leaves the window: one more may go.
     await t.db
@@ -616,6 +639,14 @@ describe.skipIf(!hasTestInfra)('본인확인 /api/v1/me/phone-verification (inte
     // Other accounts' sends to the same number: forgetting the refused send must not forget them.
     const { user: bystander } = await createUser(t.db);
     await pastSends(bystander.id, PHONE, 3, 2 * 60_000);
+    // Refusals of nine and of seven days ago: the older is past the eight days kept.
+    const now = Date.now();
+    await t.db
+      .insert(schema.phoneVerificationRefusedSends)
+      .values([
+        { attemptedAt: new Date(now - 9 * DAY_MS) },
+        { attemptedAt: new Date(now - 7 * DAY_MS) },
+      ]);
     t.sms.failNext(1, 'refused');
     const failed = await request(user);
     expect(refusal(failed, 502, 'SMS_SEND_FAILED')).toBeUndefined();
@@ -623,6 +654,14 @@ describe.skipIf(!hasTestInfra)('본인확인 /api/v1/me/phone-verification (inte
     expect(failed.body).not.toContain(PHONE);
     expect(await codeRows(user.id)).toEqual([]);
     expect(await codeRows(bystander.id)).toHaveLength(3);
+    // Its time alone is counted for the admin's send status (second round), and the refusal of
+    // nine days ago went with it.
+    const refused = await refusedRows();
+    expect(refused.map((row) => row.attemptedAt.getTime())).toEqual([
+      now - 7 * DAY_MS,
+      expect.any(Number) as number,
+    ]);
+    expect(Math.abs(refused[1]!.attemptedAt.getTime() - Date.now())).toBeLessThan(60_000);
     expect(t.sms.messages).toEqual([]);
     expect(refusal(await confirm(user, '123456'), 409, 'VERIFICATION_CODE_REJECTED')).toEqual({
       reason: 'no_code',
@@ -630,6 +669,30 @@ describe.skipIf(!hasTestInfra)('본인확인 /api/v1/me/phone-verification (inte
     // No interval to wait out: nothing was sent.
     expect((await request(user)).statusCode).toBe(200);
     expect((await confirm(user, t.sms.lastCodeTo(PHONE))).statusCode).toBe(200);
+  });
+
+  it('deletes the old refusals only when a refusal is recorded: a spell without one keeps them', async () => {
+    // A refusal of nine days ago, past the eight days kept — from before the provider's keys
+    // worked, say.
+    const now = Date.now();
+    await t.db
+      .insert(schema.phoneVerificationRefusedSends)
+      .values({ attemptedAt: new Date(now - 9 * DAY_MS) });
+    // A send the provider takes and one whose answer was lost: neither deletes it.
+    expect((await request(user)).statusCode).toBe(200);
+    const other = await signUpTestUser(t);
+    t.sms.failNext(1, 'unknown');
+    refusal(await request(other, { phone: '01077778888' }), 502, 'SMS_SEND_UNCONFIRMED');
+    expect((await refusedRows()).map((row) => row.attemptedAt.getTime())).toEqual([
+      now - 9 * DAY_MS,
+    ]);
+    // The next refusal does, and is the one left.
+    const third = await signUpTestUser(t);
+    t.sms.failNext(1, 'refused');
+    refusal(await request(third, { phone: '01099990000' }), 502, 'SMS_SEND_FAILED');
+    const refused = await refusedRows();
+    expect(refused).toHaveLength(1);
+    expect(Math.abs(refused[0]!.attemptedAt.getTime() - Date.now())).toBeLessThan(60_000);
   });
 
   it('leaves the code sent before a refused resend confirmable: only the refused send is gone', async () => {
@@ -653,9 +716,12 @@ describe.skipIf(!hasTestInfra)('본인확인 /api/v1/me/phone-verification (inte
     const failed = await request(user);
     expect(refusal(failed, 502, 'SMS_SEND_UNCONFIRMED')).toBeUndefined();
     expect(failed.body).not.toContain(PHONE);
+    // Kept as a send whose outcome nobody knows (the admin's send status counts it so), and not
+    // as a refusal.
     expect(await codeRows(user.id)).toMatchObject([
-      { phone: PHONE, attempts: 0, consumedAt: null },
+      { phone: PHONE, attempts: 0, consumedAt: null, sendOutcome: 'unknown' },
     ]);
+    expect(await refusedRows()).toEqual([]);
 
     // Counted like any send: the resend interval holds, so a slow provider cannot be asked again
     // and again for texts the limits never see.

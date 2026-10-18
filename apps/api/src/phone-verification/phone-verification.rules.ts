@@ -1,6 +1,7 @@
 import { createHmac, randomInt, timingSafeEqual } from 'node:crypto';
 import {
   PHONE_VERIFICATION_LIMITS,
+  isSharedLimitReason,
   type PhoneVerificationLimitedDetails,
   type VerificationCodeRejectedDetails,
 } from '@buddha/shared';
@@ -72,6 +73,31 @@ function secondsUntil(at: number, clock: Date): number {
   return Math.max(1, Math.ceil((at - clock.getTime()) / 1_000));
 }
 
+const MINUTE_MS = 60_000;
+
+/**
+ * The wait answered for a limit counted with other accounts' sends (`isSharedLimitReason`: the
+ * number's accounts, the client address, the service), in whole minutes: from the minute of
+ * `clock` (rounded down) to the minute `at` falls in (rounded up), both on the database clock.
+ * Never shorter than the exact wait, at most two minutes longer, and at least one minute.
+ *
+ * Both ends sit on whole minutes of the clock, not only the length (owner decision 2026-10-18,
+ * second round: such a wait must not tell another account's send time to the second). A length
+ * merely rounded up to minutes would still step at a second of `at`'s choosing, and a member
+ * asking again at chosen seconds — refusals cost nothing — would find that second; this answer
+ * steps only on the clock's whole minutes, so asking at any second tells `at` to the minute only.
+ * That is the answer's precision, not the limit's: the limit itself opens at `at` (the window
+ * drops the send at the limit to the millisecond), up to two minutes before the moment answered,
+ * so a member who keeps asking through that minute and gets through learns `at` to the rate
+ * limit's step (five a minute per account), as ADR-0070 7-25 says. Holding the limit shut until
+ * the answered minute is the owner's question, not this function's.
+ */
+export function sharedWaitSeconds(at: number, clock: Date): number {
+  const from = Math.floor(clock.getTime() / MINUTE_MS);
+  const until = Math.ceil(at / MINUTE_MS);
+  return Math.max(1, until - from) * 60;
+}
+
 /**
  * What the daily limits read, each as the sends (or, for the number's accounts, each account's
  * newest send) of the 24 hours before `clock`, NEWEST FIRST. A list may stop at its limit: only
@@ -101,7 +127,9 @@ export interface SendHistory {
 /**
  * The refusal of a window that holds `limit` sends or more, or undefined. Newest first, so the
  * send at the limit is `sends[limit - 1]`: once it leaves the window, fewer than `limit` remain
- * and the same request passes (unless more are sent meanwhile).
+ * and the same request passes (unless more are sent meanwhile). The wait is exact for the
+ * account's own limits and in whole minutes for the ones other accounts' sends fill
+ * (`sharedWaitSeconds`).
  */
 function windowRefusal(
   reason: PhoneVerificationLimitedDetails['reason'],
@@ -111,17 +139,25 @@ function windowRefusal(
 ): PhoneVerificationLimitedDetails | undefined {
   const atLimit = sends[limit - 1];
   if (atLimit === undefined) return undefined;
-  return { reason, retryAfterSeconds: secondsUntil(atLimit.getTime() + DAY_MS, clock) };
+  const at = atLimit.getTime() + DAY_MS;
+  return {
+    reason,
+    retryAfterSeconds: isSharedLimitReason(reason)
+      ? sharedWaitSeconds(at, clock)
+      : secondsUntil(at, clock),
+  };
 }
 
 /**
  * Whether a send may go now, or which limit refuses it (#57-3, owner decisions 2026-10-18): sixty
  * seconds since the account's previous send, and in 24 hours ten sends for the account, ten for
  * the account at this number, three accounts at this number (an account that has sent to it in
- * the window is one of them and passes), twenty from the client address (when the request names
+ * the window is one of them and passes), fifty from the client address (when the request names
  * one) and five hundred for the service. When several refuse, the one that lasts longest is
  * answered — the first of them in that order on a tie — so `retryAfterSeconds` is when the same
  * request would pass all of them, as far as this request can know (others may send meanwhile).
+ * The waits compared are the ones answered — the shared limits' in whole minutes — so which limit
+ * is answered says nothing finer about another account's send than its wait does.
  */
 export function sendRefusal(history: SendHistory): PhoneVerificationLimitedDetails | undefined {
   const { clock } = history;

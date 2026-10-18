@@ -87,6 +87,11 @@ export type AdminRoleChange = components['schemas']['AdminRoleChange'];
  * on screen (`expectedAccountId`).
  */
 export type AdminGrantBody = components['schemas']['AdminGrantBody'];
+/**
+ * `GET /admin/sms/status` (#183, ADR-0070): the counts of the 본인확인 texts — the last 24 hours
+ * against the service's daily limit, and seven Korean days, newest first.
+ */
+export type AdminSmsStatus = components['schemas']['AdminSmsStatus'];
 export type ErrorEnvelope = components['schemas']['ErrorEnvelope'];
 
 /** A non-2xx API response, carrying the `{ error: { code, message, details? } }` envelope. */

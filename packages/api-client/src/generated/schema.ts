@@ -350,6 +350,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/sms/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Counts of the verification texts: sent (against the daily service limit), unanswered and refused, in the last 24 hours and per Korean day for seven days */
+        get: operations["adminSmsStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/users": {
         parameters: {
             query?: never;
@@ -999,6 +1016,17 @@ export type components = {
             /** Format: date-time */
             updatedAt: string;
         };
+        AdminSmsStatus: {
+            /** Format: date-time */
+            asOf: string;
+            days: components["schemas"]["SmsSendDay"][];
+            last24Hours: {
+                refused: number;
+                sent: number;
+                serviceLimit: number;
+                unknown: number;
+            };
+        };
         AdminUser: {
             balance: components["schemas"]["Balance"];
             /** Format: date-time */
@@ -1447,6 +1475,13 @@ export type components = {
         SettlementStep: "coin";
         /** @enum {string} */
         SettlementStepStatus: "pending" | "done" | "failed";
+        SmsSendDay: {
+            /** Format: date */
+            date: string;
+            refused: number;
+            sent: number;
+            unknown: number;
+        };
         UpdateChargePackageBody: {
             amountCoin?: components["schemas"]["CoinAmount"];
             isActive?: boolean;
@@ -3298,6 +3333,54 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminSmsStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminSmsStatus"];
+                    };
                 };
             };
             /** @description UNAUTHENTICATED */

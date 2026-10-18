@@ -18,10 +18,11 @@ import {
  * 본인확인 (#183, ADR-0070): the step's refusals as a member meets them — a wrong code with the
  * entries it has left, the fifth wrong entry that discards the code, the resend wait, an older
  * code typed after a resend, and a number another account has verified (one account per number,
- * ADR-0069 decision 1 #57-1) — a code the screen did not send (a reload, another tab, a lost
- * answer), which can still be entered, and a send whose provider's answer was lost, which may have
- * texted the code and says so while its code is tried (owner decisions 2026-10-18). The happy
- * path and the gate are onboarding.spec.ts's.
+ * ADR-0069 decision 1 #57-1) — a code the screen did not send (a reload, another tab), which can
+ * still be entered, and a send whose answer was lost — the provider's (SMS_SEND_UNCONFIRMED) or
+ * the API's own on its way to the browser (a dropped connection, a gateway's 5xx, a timeout) —
+ * which may have texted the code and says so, as a warning, while its code is tried (owner
+ * decisions 2026-10-18). The happy path and the gate are onboarding.spec.ts's.
  *
  * Every account and number is fresh, so the per-account and per-number limits never meet another
  * test's sends. The codes come from the API's development SMS sender through Mailpit.
@@ -42,6 +43,63 @@ async function sendCode(page: Page, phone: string): Promise<string> {
 
 /** The resend wait, with room for the screen's countdown to reach 0 and enable the button. */
 const RESEND_WAIT_MS = 75_000;
+
+/** The background the step's notice is drawn with: information and a warning differ. */
+function noticeBackground(page: Page): Promise<string> {
+  return page
+    .getByTestId('verification-notice')
+    .evaluate((element) => getComputedStyle(element).backgroundColor);
+}
+
+/**
+ * The colour a Chakra colour token (`yellow.subtle`) paints as a background on this page, in
+ * its colour mode: read off a probe inside the notice, so it resolves as the notice's own would.
+ */
+function tokenBackground(page: Page, token: string): Promise<string> {
+  return page.getByTestId('verification-notice').evaluate((element, name) => {
+    const probe = document.createElement('div');
+    probe.style.backgroundColor = `var(--chakra-colors-${name.replace('.', '-')})`;
+    element.append(probe);
+    const colour = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    return colour;
+  }, token);
+}
+
+/**
+ * The warning is drawn yellow, as the owner answered (second round: 주의(노란) 모양): the yellow
+ * palette's subtle background, not the orange Chakra gives the `warning` status by itself.
+ */
+async function expectYellowNotice(page: Page): Promise<void> {
+  const yellow = await tokenBackground(page, 'yellow.subtle');
+  const orange = await tokenBackground(page, 'orange.subtle');
+  // Both tokens resolve to a colour (an unknown variable paints nothing) and they differ.
+  expect(yellow).not.toBe('rgba(0, 0, 0, 0)');
+  expect(yellow).not.toBe(orange);
+  expect(await noticeBackground(page)).toBe(yellow);
+}
+
+/**
+ * The step after a code request whose answer was lost, however it was lost (owner decisions
+ * 2026-10-18): the warning that the text may have come, read out as an alert, the code input
+ * open and focused, the name and the number locked, 다시 받기 waiting out the minute, and no
+ * validity countdown (no answer said how long the code holds).
+ */
+async function expectMaybeSent(page: Page): Promise<void> {
+  const notice = page.getByTestId('verification-notice');
+  await expect(notice).toHaveText(copy.verificationMaybeSent);
+  // A warning (second round: 주의(노란) 모양), read out although no error: the cursor moves with it.
+  await expect(notice).toHaveAttribute('data-status', 'warning');
+  await expect(notice).toHaveAttribute('role', 'alert');
+  await expectYellowNotice(page);
+  await expect(notice).not.toContainText(copy.errVerificationSendFailed);
+  await expect(page.getByTestId('verification-code')).toBeFocused();
+  await expect(page.getByTestId('verification-phone')).not.toBeEditable();
+  await expect(page.getByTestId('verification-real-name')).not.toBeEditable();
+  await expect(page.getByTestId('verification-send')).toBeDisabled();
+  await expect(page.getByTestId('verification-send')).toContainText(`${copy.verificationResend} (`);
+  await expect(page.getByTestId('verification-code-expiry')).toHaveCount(0);
+}
 
 /** Six digits that are not `code`. */
 function wrongCode(code: string): string {
@@ -284,22 +342,8 @@ test.describe('본인확인 인증번호 (#183)', () => {
 
     // Not "could not send": the text may have come. The input is open for its code, the name and
     // the number it went to are locked, and 다시 받기 waits out the minute.
-    await expect(page.getByTestId('verification-notice')).toHaveText(copy.verificationMaybeSent);
-    // Read out although it is information: the cursor moves into the code input with it.
-    await expect(page.getByTestId('verification-notice')).toHaveAttribute('role', 'alert');
+    await expectMaybeSent(page);
     expect(realStatus).toBe(200);
-    await expect(page.getByTestId('verification-notice')).not.toContainText(
-      copy.errVerificationSendFailed,
-    );
-    await expect(page.getByTestId('verification-code')).toBeFocused();
-    await expect(page.getByTestId('verification-phone')).not.toBeEditable();
-    await expect(page.getByTestId('verification-real-name')).not.toBeEditable();
-    await expect(page.getByTestId('verification-send')).toBeDisabled();
-    await expect(page.getByTestId('verification-send')).toContainText(
-      `${copy.verificationResend} (`,
-    );
-    // No answer said how long the code holds: no countdown, the server decides.
-    await expect(page.getByTestId('verification-code-expiry')).toHaveCount(0);
     await page.unroute('**/api/v1/me/phone-verification/code');
 
     // The text did come: its code verifies the account.
@@ -315,6 +359,11 @@ test.describe('본인확인 인증번호 (#183)', () => {
     test.slow(); // the resend interval is a real minute
     const phone = freshPhone();
     const older = await sendCode(page, phone);
+    // The sent code's notice is information (blue); the lost answer's below is a warning, drawn
+    // apart, in yellow.
+    await expect(page.getByTestId('verification-notice')).toHaveAttribute('data-status', 'info');
+    const sentBackground = await noticeBackground(page);
+    expect(sentBackground).toBe(await tokenBackground(page, 'blue.subtle'));
 
     // A minute later, 다시 받기: the API sends a new code (kept as the newest), and the answer the
     // screen gets is the one a lost provider answer makes: 502 SMS_SEND_UNCONFIRMED.
@@ -332,6 +381,9 @@ test.describe('본인확인 인증번호 (#183)', () => {
     await send.click();
     const notice = page.getByTestId('verification-notice');
     await expect(notice).toHaveText(copy.verificationMaybeSent);
+    await expect(notice).toHaveAttribute('data-status', 'warning');
+    expect(await noticeBackground(page)).not.toBe(sentBackground);
+    await expectYellowNotice(page);
     expect(realStatus).toBe(200);
     await page.unroute('**/api/v1/me/phone-verification/code');
     const newest = await smsCode(phone, seen);
@@ -356,6 +408,72 @@ test.describe('본인확인 인증번호 (#183)', () => {
     await expect(page.getByText(copy.verificationDone)).toBeVisible();
   });
 
+  test('API의 답이 브라우저에 오지 않으면(연결 끊김·시간 초과) 문자가 갔을 수 있다고 알리고 그 인증번호를 받는다', async ({
+    page,
+  }) => {
+    const phone = freshPhone();
+    await openSetPassword(page, freshEmail());
+    await page.goto('/onboarding');
+    await expect(page.getByTestId('verification-step')).toBeVisible();
+
+    // The API sends the code, and its answer never reaches the browser: the request fails at the
+    // network level, as a dropped connection or a timeout on the way back does.
+    let realStatus = 0;
+    await page.route('**/api/v1/me/phone-verification/code', async (route) => {
+      realStatus = (await route.fetch()).status();
+      await route.abort('timedout');
+    });
+    const seen = await smsMessageIds(phone);
+    await page.getByTestId('verification-real-name').fill(E2E_REAL_NAME);
+    await page.getByTestId('verification-phone').fill(phone);
+    await page.getByTestId('verification-send').click();
+
+    // Not "a problem occurred": whether the text went is not known, so it is said as for a lost
+    // provider answer (owner decision 2026-10-18, second round).
+    await expectMaybeSent(page);
+    expect(realStatus).toBe(200);
+    await expect(page.getByTestId('verification-notice')).not.toContainText(copy.errUnknown);
+    await page.unroute('**/api/v1/me/phone-verification/code');
+
+    // The text did come: its code verifies the account.
+    await page.getByTestId('verification-code').fill(await smsCode(phone, seen));
+    await page.getByTestId('verification-confirm').click();
+    await expect(page).toHaveURL('/');
+    await expect(page.getByText(copy.verificationDone)).toBeVisible();
+  });
+
+  test('앞단 게이트웨이가 API 대신 5xx로 답해도 문자가 갔을 수 있다고 알린다', async ({ page }) => {
+    const phone = freshPhone();
+    await openSetPassword(page, freshEmail());
+    await page.goto('/onboarding');
+    await expect(page.getByTestId('verification-step')).toBeVisible();
+
+    // The API sends the code, and a gateway in front of it answers for it — a 502 page, not the
+    // API's error envelope.
+    let realStatus = 0;
+    await page.route('**/api/v1/me/phone-verification/code', async (route) => {
+      realStatus = (await route.fetch()).status();
+      await route.fulfill({
+        status: 502,
+        contentType: 'text/html',
+        body: '<html><body><h1>502 Bad Gateway</h1></body></html>',
+      });
+    });
+    const seen = await smsMessageIds(phone);
+    await page.getByTestId('verification-real-name').fill(E2E_REAL_NAME);
+    await page.getByTestId('verification-phone').fill(phone);
+    await page.getByTestId('verification-send').click();
+
+    await expectMaybeSent(page);
+    expect(realStatus).toBe(200);
+    await page.unroute('**/api/v1/me/phone-verification/code');
+
+    await page.getByTestId('verification-code').fill(await smsCode(phone, seen));
+    await page.getByTestId('verification-confirm').click();
+    await expect(page).toHaveURL('/');
+    await expect(page.getByText(copy.verificationDone)).toBeVisible();
+  });
+
   test('보내지 못한 것이 확실하면 그대로 알리고 인증번호 칸을 열지 않는다', async ({ page }) => {
     await openSetPassword(page, freshEmail());
     await page.goto('/onboarding');
@@ -373,6 +491,7 @@ test.describe('본인확인 인증번호 (#183)', () => {
     await expect(page.getByTestId('verification-notice')).toHaveText(
       copy.errVerificationSendFailed,
     );
+    await expect(page.getByTestId('verification-notice')).toHaveAttribute('data-status', 'error');
     await expect(page.getByTestId('verification-code')).toHaveCount(0);
     await expect(page.getByTestId('verification-phone')).toBeEditable();
     await expect(page.getByTestId('verification-send')).toBeEnabled();

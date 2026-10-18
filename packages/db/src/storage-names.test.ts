@@ -6,6 +6,7 @@ import {
   MARKET_EVENT_TYPES,
   PAYMENT_EVENT_TYPES,
   PAYMENT_PROVIDERS,
+  PHONE_VERIFICATION_SEND_OUTCOMES,
   RELEASE_SETTINGS,
   SETTLEMENT_STEPS,
   SETTLEMENT_STEP_STATUSES,
@@ -70,6 +71,7 @@ const VARCHAR_VALUES: Readonly<Record<string, readonly string[]>> = {
   'categories.slug': ALL_CATEGORY_SLUGS,
   'release_settings.key': [...RELEASE_SETTINGS.keys()],
   'market_watch_events.action': WATCH_EVENT_ACTIONS,
+  'phone_verification_codes.send_outcome': PHONE_VERIFICATION_SEND_OUTCOMES,
 };
 
 /**

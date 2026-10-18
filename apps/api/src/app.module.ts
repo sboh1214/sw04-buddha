@@ -12,6 +12,7 @@ import { RedisModule } from './infra/redis/redis.module.js';
 import { JobsModule } from './jobs/jobs.module.js';
 import { MarketsModule } from './markets/markets.module.js';
 import { MeModule } from './me/me.module.js';
+import { AdminSmsStatusModule } from './phone-verification/admin-sms-status.module.js';
 import { PhoneVerificationModule } from './phone-verification/phone-verification.module.js';
 import { RateLimitModule } from './rate-limit/rate-limit.module.js';
 import { RealtimeModule } from './realtime/realtime.module.js';
@@ -50,6 +51,7 @@ import { WatchlistModule } from './watchlist/watchlist.module.js';
     SearchHistoryModule,
     ReleaseSettingsModule,
     AdminAccountsModule,
+    AdminSmsStatusModule,
     ApprovalsModule,
   ],
   controllers: [HealthController],

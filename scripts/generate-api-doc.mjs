@@ -339,7 +339,7 @@ const ERROR_NOTES = {
   PHONE_VERIFICATION_NOT_ALLOWED:
     '본인확인을 받지 않는다. `details.reason` 이 까닭을 말한다 — `already_verified`(이미 본인확인을 마쳤다), `phone_in_use`(그 번호는 다른 계정이 본인확인한 번호다. 한 번호에 한 계정, 맞는 인증번호를 확인한 뒤에만 알린다).',
   PHONE_VERIFICATION_LIMITED:
-    '인증번호를 보내지 않았다. `details.reason` 이 걸린 한도를, `details.retryAfterSeconds` 가 같은 요청이 그 한도를 지나는 때까지의 초를 말한다(여럿이면 가장 오래 걸리는 것) — `resend_interval`(그 계정의 앞선 발송 뒤 60초가 지나지 않았다), 직전 24시간의 `account_daily`(그 계정이 10번 받았다), `account_phone_daily`(그 계정이 그 번호로 10번 받았다), `phone_accounts`(그 번호로 다른 계정 3개가 받았다), `ip_daily`(같은 접속 주소(IP)의 요청으로 20번 보냈다. 클라이언트를 가리키지 못하는 접속 — 루프백, 웹 서버의 rewrite — 은 세지 않는다), `service_daily`(서비스 전체가 500건 보냈다).',
+    '인증번호를 보내지 않았다. `details.reason` 이 걸린 한도를, `details.retryAfterSeconds` 가 같은 요청이 그 한도를 지나는 때까지의 초를 말한다(여럿이면 가장 오래 걸리는 것) — `resend_interval`(그 계정의 앞선 발송 뒤 60초가 지나지 않았다), 직전 24시간의 `account_daily`(그 계정이 10번 받았다), `account_phone_daily`(그 계정이 그 번호로 10번 받았다), `phone_accounts`(그 번호로 다른 계정 3개가 받았다), `ip_daily`(같은 접속 주소(IP)의 요청으로 50번 보냈다. 클라이언트를 가리키지 못하는 접속 — 루프백, 웹 서버의 rewrite — 은 세지 않는다), `service_daily`(서비스 전체가 500건 보냈다). 그 계정만의 한도(`resend_interval`·`account_daily`·`account_phone_daily`)는 초까지 정확하고, 다른 계정의 발송과 함께 세는 한도(`phone_accounts`·`ip_daily`·`service_daily`)는 서버 시계의 분 단위로 올려 60의 배수로 답한다 — 남의 발송 시각을 초까지 알리지 않으며, 말한 때에는 그 한도가 이미 열려 있다(한도째 발송이 창을 나가는 때에 열리므로 말한 때보다 많아야 2분 먼저 열린다).',
   VERIFICATION_CODE_REJECTED:
     '본인확인이 되지 않았다. `details.reason` 이 까닭을 말한다 — `no_code`(기다리는 인증번호가 없다: 받지 않았거나 이미 썼다), `expired`(3분이 지났다), `attempts_exceeded`(틀린 입력이 5번이 되어 그 인증번호를 버렸다. 새로 받아야 한다), `superseded`(다시 받기 전의 인증번호다. 새 인증번호를 넣어야 하고, 틀린 입력으로 세지 않는다), `mismatch`(틀렸다. `details.remainingAttempts` 가 남은 입력 수다). 계정의 가장 최근 인증번호만 확인한다.',
   SMS_SEND_FAILED:

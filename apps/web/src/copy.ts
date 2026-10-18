@@ -504,6 +504,29 @@ export const copy = {
     '회수하면 관리자가 2명보다 적어지므로 회수할 수 없습니다. 회수한 뒤에도 관리자가 2명 이상 남아야 하고, 내 계정의 권한을 회수할 때도 같습니다. 다른 계정에 먼저 관리자 권한을 부여해 주세요.',
   errAdminAccountNotFound: '계정을 찾을 수 없습니다. 화면을 새로 고쳐 주세요.',
 
+  // --- admin: SMS 발송 현황 (#183, ADR-0070) ---
+  // 본인확인 인증번호 문자의 수만 보인다(오너 결정 2026-10-18 2차: 발송 알림 대신 관리자 화면의 발송 현황).
+  // '보낸 문자'는 한도에 드는 발송(결과를 알 수 없는 발송 포함), '보내지 못함'은 사업자가 거절해 한도에 들지
+  // 않은 발송이다. 서비스 한도의 수는 API가 준다(serviceLimit = PHONE_VERIFICATION_LIMITS.serviceDailySends).
+  adminSms: 'SMS 발송',
+  adminSmsIntro:
+    '본인확인 인증번호 문자의 발송 수입니다. 번호·실명·계정은 보이지 않고 수만 셉니다. 날짜는 한국 시간입니다.',
+  adminSmsLast24Hours: '최근 24시간',
+  adminSmsAsOf: '기준 시각',
+  adminSmsSent: '보낸 문자',
+  adminSmsSentHint:
+    '서비스 전체의 24시간 한도에 드는 발송입니다. 결과를 알 수 없는 발송도 듭니다. 한도에 이르면 새 발송이 멈춥니다.',
+  adminSmsUnknown: '결과를 알 수 없음',
+  adminSmsUnknownHint:
+    '문자 발송 사업자의 답을 받지 못한 발송입니다. 문자가 갔을 수 있어 한도에 셉니다.',
+  adminSmsRefused: '보내지 못함',
+  adminSmsRefusedHint:
+    '사업자가 받지 않은 것이 확실한 발송입니다(키 없음, 거절 등). 한도에 세지 않습니다.',
+  adminSmsDays: '최근 7일',
+  adminSmsDate: '날짜',
+  adminSmsToday: '오늘',
+  adminSmsCountUnit: '건',
+
   // --- markets (M4) ---
   // 홈 (PLAN 11.3, ADR-0041 Kalshi 형): 헤더 2단의 상위 카테고리 · 왼쪽 세부 분류 · 정렬 · 검색.
   // 카테고리 목록은 API가 주고 '전체'만 붙인다. 장르 표기는 붙여 쓴다(N01 §1, 오너 결정 #14).
@@ -806,7 +829,7 @@ export const copy = {
   // 휴대전화 SMS 인증번호 본인확인(#183, ADR-0069 결정 1 #57-1·#57-3). 실명과 번호를 한 화면에서 받고 그 번호로
   // 보낸 6자리 인증번호를 확인한다. 번호 입력은 이 단계 하나뿐이고(확인하지 않은 번호 칸은 없앴다), 확인한 뒤에는
   // 실명만 MY 설정에서 고친다. 규칙은 @buddha/shared의 realNameSchema·phoneSchema·phoneVerificationCodeSchema
-  // (lib/phone-verification.ts)이고, 문장 속 수치(3분·1분·5번·10번·3개·20번·500건·24시간)는
+  // (lib/phone-verification.ts)이고, 문장 속 수치(3분·1분·5번·10번·3개·50번·500건·24시간)는
   // PHONE_VERIFICATION_LIMITS와 같아야 한다(lib/phone-verification.test.ts가 확인한다). 사용자에게 수집 목적을
   // 말하는 문장은 #58·#137이 쓴다.
   realName: '실명',
@@ -838,9 +861,10 @@ export const copy = {
   verificationCode: '인증번호',
   verificationCodeHint: '문자로 받은 숫자 6자리를 입력해 주세요.',
   verificationCodeSent: '입력한 번호로 인증번호를 보냈습니다. 3분 안에 입력해 주세요.',
-  // 문자 발송 사업자의 답을 받지 못했다(SMS_SEND_UNCONFIRMED: 시간 초과·5xx·읽을 수 없는 답). 문자가 갔을 수
-  // 있으므로 그 발송은 한도에 세고 그 인증번호는 확인할 수 있다. 인증번호 칸을 열고, 다시 받기는 1분 뒤부터다
-  // (오너 결정 2026-10-18, ADR-0070).
+  // 문자 발송 사업자의 답을 받지 못했거나(SMS_SEND_UNCONFIRMED: 시간 초과·5xx·읽을 수 없는 답) 브라우저가
+  // API의 답을 받지 못했다(네트워크 끊김·게이트웨이 오류·시간 초과). 문자가 갔을 수 있으므로 그 발송은 한도에
+  // 세고 그 인증번호는 확인할 수 있다. 인증번호 칸을 열고, 다시 받기는 1분 뒤부터다. 주의(노란) 모양의
+  // 알림이다(오너 결정 2026-10-18, ADR-0070).
   verificationMaybeSent:
     '인증번호 문자가 갔을 수 있습니다. 받았다면 그 인증번호를 아래에 입력하고, 받지 못했다면 잠시 뒤 다시 받아 주세요.',
   // 인증번호의 남은 유효시간 앞에 붙는다(예: '남은 시간 2:59').
@@ -864,13 +888,14 @@ export const copy = {
   errVerificationCodeSuperseded: '예전에 받은 인증번호입니다. 새로 받은 인증번호를 입력해 주세요.',
   errVerificationResendWait: '인증번호는 1분에 한 번 받을 수 있습니다.',
   // 하루 한도는 모두 직전 24시간이다(오너 결정 2026-10-17·18). 계정·번호 쌍의 10번은 계정의 10번과 함께
-  // 차므로 화면에는 거의 나오지 않는다(ADR-0070).
+  // 차므로 화면에는 거의 나오지 않는다(ADR-0070). 다른 계정과 함께 세는 한도(번호의 계정 수·접속 주소·
+  // 서비스 전체)의 기다림은 분 단위로 온다(오너 결정 2026-10-18 2차).
   errVerificationAccountDaily: '한 계정은 24시간 동안 인증번호를 10번까지 받을 수 있습니다.',
   errVerificationAccountPhoneDaily:
     '한 계정이 한 번호로 받을 수 있는 인증번호는 24시간 동안 10번까지입니다.',
   errVerificationPhoneAccounts: '한 번호로는 24시간 동안 계정 3개까지 인증번호를 받을 수 있습니다.',
   errVerificationIpDaily:
-    '같은 접속 주소(IP)에서는 24시간 동안 인증번호를 20번까지 받을 수 있습니다.',
+    '같은 접속 주소(IP)에서는 24시간 동안 인증번호를 50번까지 받을 수 있습니다.',
   errVerificationServiceDaily:
     '서비스 전체의 인증번호 발송이 24시간 동안 보낼 수 있는 500건에 이르렀습니다.',
   errVerificationTooManyRequests: '요청이 너무 많습니다.',

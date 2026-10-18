@@ -95,13 +95,13 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | `ROLE_CHANGE_NOT_ALLOWED` | 409 | 관리자 권한 부여·회수의 규칙에 맞지 않는다. `details[0].message` 가 까닭을 말한다 — 부여는 `already_admin`(이미 관리자다), `email_not_verified`(이메일 인증을 마치지 않았다), `phone_not_verified`(휴대전화 본인확인을 마치지 않았다), 회수는 `not_admin`(관리자가 아니다), `min_admins`(회수하면 관리자가 2명 미만이 된다. 자기 회수도 같다). |
 | `APPROVAL_NOT_ALLOWED` | 409 | 2인 통제 요청의 결정(승인·거절)을 받지 않는다. `details[0].message` 가 까닭을 말한다 — `requester`(요청한 계정은 자기 요청을 결정할 수 없다. 어느 환경에서도 예외가 없다), `decided`(이미 결정된 요청이다). 이 규칙을 쓰는 라우트가 이 코드를 문서화한다. |
 | `PHONE_VERIFICATION_NOT_ALLOWED` | 409 | 본인확인을 받지 않는다. `details.reason` 이 까닭을 말한다 — `already_verified`(이미 본인확인을 마쳤다), `phone_in_use`(그 번호는 다른 계정이 본인확인한 번호다. 한 번호에 한 계정, 맞는 인증번호를 확인한 뒤에만 알린다). |
-| `PHONE_VERIFICATION_LIMITED` | 429 | 인증번호를 보내지 않았다. `details.reason` 이 걸린 한도를, `details.retryAfterSeconds` 가 같은 요청이 그 한도를 지나는 때까지의 초를 말한다(여럿이면 가장 오래 걸리는 것) — `resend_interval`(그 계정의 앞선 발송 뒤 60초가 지나지 않았다), 직전 24시간의 `account_daily`(그 계정이 10번 받았다), `account_phone_daily`(그 계정이 그 번호로 10번 받았다), `phone_accounts`(그 번호로 다른 계정 3개가 받았다), `ip_daily`(같은 접속 주소(IP)의 요청으로 20번 보냈다. 클라이언트를 가리키지 못하는 접속 — 루프백, 웹 서버의 rewrite — 은 세지 않는다), `service_daily`(서비스 전체가 500건 보냈다). |
+| `PHONE_VERIFICATION_LIMITED` | 429 | 인증번호를 보내지 않았다. `details.reason` 이 걸린 한도를, `details.retryAfterSeconds` 가 같은 요청이 그 한도를 지나는 때까지의 초를 말한다(여럿이면 가장 오래 걸리는 것) — `resend_interval`(그 계정의 앞선 발송 뒤 60초가 지나지 않았다), 직전 24시간의 `account_daily`(그 계정이 10번 받았다), `account_phone_daily`(그 계정이 그 번호로 10번 받았다), `phone_accounts`(그 번호로 다른 계정 3개가 받았다), `ip_daily`(같은 접속 주소(IP)의 요청으로 50번 보냈다. 클라이언트를 가리키지 못하는 접속 — 루프백, 웹 서버의 rewrite — 은 세지 않는다), `service_daily`(서비스 전체가 500건 보냈다). 그 계정만의 한도(`resend_interval`·`account_daily`·`account_phone_daily`)는 초까지 정확하고, 다른 계정의 발송과 함께 세는 한도(`phone_accounts`·`ip_daily`·`service_daily`)는 서버 시계의 분 단위로 올려 60의 배수로 답한다 — 남의 발송 시각을 초까지 알리지 않으며, 말한 때에는 그 한도가 이미 열려 있다(한도째 발송이 창을 나가는 때에 열리므로 말한 때보다 많아야 2분 먼저 열린다). |
 | `VERIFICATION_CODE_REJECTED` | 409 | 본인확인이 되지 않았다. `details.reason` 이 까닭을 말한다 — `no_code`(기다리는 인증번호가 없다: 받지 않았거나 이미 썼다), `expired`(3분이 지났다), `attempts_exceeded`(틀린 입력이 5번이 되어 그 인증번호를 버렸다. 새로 받아야 한다), `superseded`(다시 받기 전의 인증번호다. 새 인증번호를 넣어야 하고, 틀린 입력으로 세지 않는다), `mismatch`(틀렸다. `details.remainingAttempts` 가 남은 입력 수다). 계정의 가장 최근 인증번호만 확인한다. |
 | `SMS_SEND_FAILED` | 502 | SMS 사업자가 인증번호 문자를 받지 않은 것이 확실하다(502: 거절, 요청이 나가기 전의 연결 실패). 이 발송은 세지 않고 이 요청이 남긴 인증번호도 없다. 앞서 받은 인증번호는 3분 안이고 버려지지 않았으면 그대로 확인할 수 있다(그것이 다시 가장 최근 인증번호다). 다른 5xx 처럼 본문에 내부 사정을 담지 않는다. |
 | `SMS_SEND_UNCONFIRMED` | 502 | SMS 사업자의 답을 받지 못했다(502: 시간 초과, 요청이 나간 뒤 끊긴 연결, 5xx, 읽을 수 없는 답). 문자가 갔을 수 있으므로 발송으로 세고(60초 간격과 하루 한도) 그 인증번호는 확인할 수 있다. 5xx 본문은 `details` 를 싣지 않으므로 코드로 `SMS_SEND_FAILED` 와 가린다. |
 | `INTERNAL` | 500 | 그 밖의 서버 오류. 본문에 내부 사정을 담지 않는다. |
 
-## 오퍼레이션 (59개)
+## 오퍼레이션 (60개)
 
 태그별로 묶었고, 태그 안의 순서는 OpenAPI 문서의 경로 순서 그대로다.
 
@@ -168,6 +168,7 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | POST | `/api/v1/admin/admins` | Make an account an admin with a reason (recorded); only an account with a verified email that has verified its mobile number | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ROLE_CHANGE_NOT_ALLOWED`, `RATE_LIMITED` |
 | GET | `/api/v1/admin/admins/changes` | Admin grants and revokes, newest first: account, admin, reason and time (of one account with `userId`) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
 | POST | `/api/v1/admin/admins/{userId}/revoke` | Take the admin role from an account (one's own included) with a reason (recorded) and sign it out everywhere; refused when fewer than two admins would remain | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ROLE_CHANGE_NOT_ALLOWED`, `RATE_LIMITED` |
+| GET | `/api/v1/admin/sms/status` | Counts of the verification texts: sent (against the daily service limit), unanswered and refused, in the last 24 hours and per Korean day for seven days | 🔒 | `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
 
 ### `markets` — 시장·시세
 
@@ -204,12 +205,12 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | POST | `/api/v1/me/search-history/{id}/delete` | Delete one recent search: every recorded search of the entry's term (an id the account has none of deletes nothing); answers the recent searches (the newest 10 distinct terms, newest first) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
 | POST | `/api/v1/me/search-history/clear` | Delete every recorded search of the account; answers the (empty) recent searches | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
 
-## 스키마 (78개)
+## 스키마 (80개)
 
 요청·응답 본문의 실제 모양은 `apps/api/openapi.json` 의 `components.schemas` 에 있다. 이름만
 적어 두니 거기서 찾아 읽는다. 이름은 zod 스키마의 `.meta({ id })` 에서 온다.
 
-`AdminAccount`, `AdminAccountActor`, `AdminBalanceAdjustResult`, `AdminGrantBody`, `AdminMarket`, `AdminPayment`, `AdminRelatedMarket`, `AdminRevokeBody`, `AdminRoleChange`, `AdminRoleChangeType`, `AdminSettlementStep`, `AdminUser`, `AdminUserQuery`, `AuditFailure`, `Balance`, `BalanceAdjustBody`, `Category`, `ChargeBody`, `ChargePackage`, `ChargeResult`, `CoinAmount`, `ConfirmPhoneVerificationBody`, `Coupon`, `CouponCode`, `CreateChargePackageBody`, `CreateCouponBody`, `CreateMarketBody`, `CursorQuery`, `ErrorCode`, `ErrorEnvelope`, `Fill`, `LedgerEntry`, `LinkRelatedMarketBody`, `LinkedAccount`, `Market`, `MarketEvent`, `MarketSummary`, `Me`, `Nickname`, `OkResult`, `Order`, `PageMeta`, `Password`, `Payment`, `PaymentProviderInfo`, `PhoneVerification`, `PhoneVerificationCodeSent`, `Position`, `PriceSeries`, `PriceTick`, `RecentSearch`, `RecordSearchBody`, `RedeemCouponBody`, `RedeemCouponResult`, `RefundPaymentBody`, `RegisterBody`, `RegisterResult`, `ReleaseSetting`, `ReleaseSettingActor`, `ReleaseSettingChange`, `ReleaseSettingChangeBody`, `ReleaseSettingState`, `ReleaseSettingStatus`, `RequestPhoneVerificationCodeBody`, `ResolveMarketBody`, `SearchHistoryWriteBody`, `SetPasswordBody`, `SettlementStep`, `SettlementStepStatus`, `UpdateChargePackageBody`, `UpdateCouponBody`, `UpdateMarketBody`, `UpdateMeBody`, `UpdateRealNameBody`, `UpdateTimeZoneBody`, `UpdateWatchBody`, `UserRole`, `WatchState`
+`AdminAccount`, `AdminAccountActor`, `AdminBalanceAdjustResult`, `AdminGrantBody`, `AdminMarket`, `AdminPayment`, `AdminRelatedMarket`, `AdminRevokeBody`, `AdminRoleChange`, `AdminRoleChangeType`, `AdminSettlementStep`, `AdminSmsStatus`, `AdminUser`, `AdminUserQuery`, `AuditFailure`, `Balance`, `BalanceAdjustBody`, `Category`, `ChargeBody`, `ChargePackage`, `ChargeResult`, `CoinAmount`, `ConfirmPhoneVerificationBody`, `Coupon`, `CouponCode`, `CreateChargePackageBody`, `CreateCouponBody`, `CreateMarketBody`, `CursorQuery`, `ErrorCode`, `ErrorEnvelope`, `Fill`, `LedgerEntry`, `LinkRelatedMarketBody`, `LinkedAccount`, `Market`, `MarketEvent`, `MarketSummary`, `Me`, `Nickname`, `OkResult`, `Order`, `PageMeta`, `Password`, `Payment`, `PaymentProviderInfo`, `PhoneVerification`, `PhoneVerificationCodeSent`, `Position`, `PriceSeries`, `PriceTick`, `RecentSearch`, `RecordSearchBody`, `RedeemCouponBody`, `RedeemCouponResult`, `RefundPaymentBody`, `RegisterBody`, `RegisterResult`, `ReleaseSetting`, `ReleaseSettingActor`, `ReleaseSettingChange`, `ReleaseSettingChangeBody`, `ReleaseSettingState`, `ReleaseSettingStatus`, `RequestPhoneVerificationCodeBody`, `ResolveMarketBody`, `SearchHistoryWriteBody`, `SetPasswordBody`, `SettlementStep`, `SettlementStepStatus`, `SmsSendDay`, `UpdateChargePackageBody`, `UpdateCouponBody`, `UpdateMarketBody`, `UpdateMeBody`, `UpdateRealNameBody`, `UpdateTimeZoneBody`, `UpdateWatchBody`, `UserRole`, `WatchState`
 
 ## 헬스체크 (문서 밖)
 

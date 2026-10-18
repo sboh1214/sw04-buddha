@@ -170,6 +170,20 @@ describe('palette contrast', () => {
     expect(failures).toEqual([]);
   });
 
+  it('reads the yellow notice of the verification step at 4.5:1 (1.4.3)', () => {
+    // 본인확인's "the text may have come" notice (owner decision 2026-10-18, second round:
+    // 주의(노란) 모양, ADR-0070) is Chakra's subtle alert in the built-in yellow palette rather
+    // than the warning status's orange: `yellow.fg` words and icon on `yellow.subtle`.
+    const failures = MODES.flatMap((mode) =>
+      shortfall(
+        `yellow.fg on yellow.subtle ${mode}`,
+        ratio(resolve('yellow.fg', mode), resolve('yellow.subtle', mode)),
+        TEXT_MIN,
+      ),
+    );
+    expect(failures).toEqual([]);
+  });
+
   it('reads the dimmed category items of the header at 4.5:1 (1.4.3)', () => {
     // nav.tsx rests row 2's inactive items at `CATEGORY_ITEM_OPACITY` over the page, which is
     // Kalshi's treatment; the opacity is the smallest step that keeps 15px text AA in both modes.

@@ -65,7 +65,9 @@ export const phoneSchema = z
  * - `phoneDailyAccounts`: the accounts one number may receive codes for — a fourth account is
  *   refused, the three that have sent to it are not;
  * - `ipDailySends`: one client address (as the per-address rate limit names it; a request that
- *   names no client — loopback, the web server's rewrite — is not counted by address);
+ *   names no client — loopback, the web server's rewrite — is not counted by address). Fifty, not
+ *   the twenty first decided: people behind one public address (a carrier's NAT, a school's or an
+ *   office's network) share it (owner decision 2026-10-18, second round);
  * - `serviceDailySends`: the whole service.
  *
  * "A day" is the 24 hours before the request (rolling), not a calendar day, for each of them: the
@@ -80,7 +82,7 @@ export const PHONE_VERIFICATION_LIMITS = {
   accountDailySends: 10,
   accountPhoneDailySends: 10,
   phoneDailyAccounts: 3,
-  ipDailySends: 20,
+  ipDailySends: 50,
   serviceDailySends: 500,
   dailyWindowSeconds: 24 * 60 * 60,
 } as const;
@@ -197,7 +199,11 @@ export type PhoneVerificationNotAllowedDetails = z.infer<
  * - `service_daily`: the service has sent `serviceDailySends` codes.
  *
  * `retryAfterSeconds` is when the same request would pass that limit (when several refuse, the
- * one that lasts longest).
+ * one that lasts longest). For the account's own limits (`resend_interval`, `account_daily`,
+ * `account_phone_daily`) it is exact to the second. The limits counted with other accounts' sends
+ * (`PHONE_VERIFICATION_SHARED_LIMIT_REASONS`: `phone_accounts`, `ip_daily`, `service_daily`)
+ * answer whole minutes, rounded up, so the answer never tells another account's send time to the
+ * second (owner decision 2026-10-18, second round, ADR-0070): never sooner than the limit allows.
  */
 export const PHONE_VERIFICATION_LIMIT_REASONS = [
   'resend_interval',
@@ -208,6 +214,26 @@ export const PHONE_VERIFICATION_LIMIT_REASONS = [
   'service_daily',
 ] as const;
 export type PhoneVerificationLimitReason = (typeof PHONE_VERIFICATION_LIMIT_REASONS)[number];
+
+/**
+ * The limits that count other accounts' sends as well as the caller's — the number's accounts,
+ * the client address and the whole service — whose `retryAfterSeconds` is answered in whole
+ * minutes (PHONE_VERIFICATION_LIMITED above). The rest are the account's own and exact.
+ */
+export const PHONE_VERIFICATION_SHARED_LIMIT_REASONS = [
+  'phone_accounts',
+  'ip_daily',
+  'service_daily',
+] as const satisfies readonly PhoneVerificationLimitReason[];
+export type PhoneVerificationSharedLimitReason =
+  (typeof PHONE_VERIFICATION_SHARED_LIMIT_REASONS)[number];
+
+/** Whether `reason` is one of PHONE_VERIFICATION_SHARED_LIMIT_REASONS. */
+export function isSharedLimitReason(
+  reason: PhoneVerificationLimitReason,
+): reason is PhoneVerificationSharedLimitReason {
+  return (PHONE_VERIFICATION_SHARED_LIMIT_REASONS as readonly string[]).includes(reason);
+}
 export const phoneVerificationLimitedDetailsSchema = z.object({
   reason: z.enum(PHONE_VERIFICATION_LIMIT_REASONS),
   retryAfterSeconds: z.number().int().min(1),
@@ -243,3 +269,57 @@ export const verificationCodeRejectedDetailsSchema = z.discriminatedUnion('reaso
   }),
 ]);
 export type VerificationCodeRejectedDetails = z.infer<typeof verificationCodeRejectedDetailsSchema>;
+
+// ---- the admin's SMS send status ------------------------------------------------------------
+
+/**
+ * What the provider said of a recorded send (`phone_verification_codes.send_outcome`, ADR-0070):
+ * `accepted` once it took the text, `unknown` until then — and for good when its answer never
+ * came (SMS_SEND_UNCONFIRMED: a timeout, a 5xx, an unreadable answer). A send it certainly
+ * refused is not a recorded send at all (SMS_SEND_FAILED): only its time is kept, apart.
+ */
+export const PHONE_VERIFICATION_SEND_OUTCOMES = ['accepted', 'unknown'] as const;
+export type PhoneVerificationSendOutcome = (typeof PHONE_VERIFICATION_SEND_OUTCOMES)[number];
+
+const sendCountSchema = z.number().int().min(0);
+
+/**
+ * One Korean calendar day of 본인확인 sends (Asia/Seoul, as the admin screens read times,
+ * ADR-0061 #60-8): `sent` is every send recorded that day — what the daily limits count,
+ * whatever the provider answered — `unknown` the part of them whose answer never came (or has not
+ * yet: a send is `unknown` until the provider answers), and `refused` the sends the provider
+ * certainly refused, which no limit counts.
+ */
+export const smsSendDaySchema = z
+  .object({
+    date: z.iso.date(),
+    sent: sendCountSchema,
+    unknown: sendCountSchema,
+    refused: sendCountSchema,
+  })
+  .meta({ id: 'SmsSendDay' });
+export type SmsSendDay = z.infer<typeof smsSendDaySchema>;
+
+/** How many days `AdminSmsStatus.days` holds: today and the six before it. */
+export const SMS_STATUS_DAYS = 7;
+
+/**
+ * `GET /admin/sms/status` (owner decision 2026-10-18, second round, ADR-0070): the admin's view of
+ * the 본인확인 texts, as counts only — no number, name, address or account. `last24Hours` is the
+ * window of the service's daily limit (the 24 hours before `asOf`, the database clock): `sent`
+ * against `serviceLimit` (`serviceDailySends`) is how close the service is to stopping its sends.
+ * `days` are the last SMS_STATUS_DAYS Korean calendar days, newest (today, so far) first.
+ */
+export const adminSmsStatusSchema = z
+  .object({
+    asOf: z.iso.datetime(),
+    last24Hours: z.object({
+      sent: sendCountSchema,
+      unknown: sendCountSchema,
+      refused: sendCountSchema,
+      serviceLimit: z.number().int().positive(),
+    }),
+    days: z.array(smsSendDaySchema).length(SMS_STATUS_DAYS),
+  })
+  .meta({ id: 'AdminSmsStatus' });
+export type AdminSmsStatus = z.infer<typeof adminSmsStatusSchema>;

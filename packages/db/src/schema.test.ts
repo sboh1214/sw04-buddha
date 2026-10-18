@@ -31,6 +31,7 @@ import {
   paymentEvents,
   payments,
   phoneVerificationCodes,
+  phoneVerificationRefusedSends,
   phoneVerifications,
   positions,
   profiles,
@@ -769,7 +770,13 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         ...values,
       });
       const [row] = await t.db.insert(phoneVerificationCodes).values(code()).returning();
-      expect(row).toMatchObject({ attempts: 0, consumedAt: null, clientIp: null });
+      // A send is `unknown` until the provider takes it (migration 0030).
+      expect(row).toMatchObject({
+        attempts: 0,
+        consumedAt: null,
+        clientIp: null,
+        sendOutcome: 'unknown',
+      });
       expect(row!.sentAt.getTime()).toBeLessThan(row!.expiresAt.getTime());
       // The client address is an inet (migration 0029): one spelling of an address, so the
       // per-address limit counts `2001:DB8:0::1` and `2001:db8::1` as the address they are.
@@ -795,6 +802,44 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         (e) =>
           sqlState(e) === '23514' && sqlConstraint(e) === 'phone_verification_codes_expiry_check',
       );
+      // What the provider said: taken, or not yet known. A refused send is not a row here.
+      const [accepted] = await t.db
+        .update(phoneVerificationCodes)
+        .set({ sendOutcome: 'accepted' })
+        .where(eq(phoneVerificationCodes.id, row!.id))
+        .returning();
+      expect(accepted!.sendOutcome).toBe('accepted');
+      await expect(
+        t.db.execute(
+          sql`UPDATE phone_verification_codes SET send_outcome = 'refused' WHERE id = ${row!.id}`,
+        ),
+      ).rejects.toSatisfy(
+        (e) =>
+          sqlState(e) === '23514' &&
+          sqlConstraint(e) === 'phone_verification_codes_send_outcome_check',
+      );
+    });
+
+    it('keeps a refused send’s time alone, never changed (#183, migration 0030)', async () => {
+      const attemptedAt = new Date(Date.now() - 60_000);
+      const [row] = await t.db
+        .insert(phoneVerificationRefusedSends)
+        .values({ attemptedAt })
+        .returning();
+      // The time and an id: no account, number, name or address to keep.
+      expect(Object.keys(row!).sort()).toEqual(['attemptedAt', 'id']);
+      expect(row!.attemptedAt.getTime()).toBe(attemptedAt.getTime());
+      await expect(
+        t.db
+          .update(phoneVerificationRefusedSends)
+          .set({ attemptedAt: new Date() })
+          .where(eq(phoneVerificationRefusedSends.id, row!.id)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '42501');
+      // Deleted by the API once older than the week the status reads.
+      await t.db
+        .delete(phoneVerificationRefusedSends)
+        .where(eq(phoneVerificationRefusedSends.id, row!.id));
+      expect(await t.db.select().from(phoneVerificationRefusedSends)).toEqual([]);
     });
   });
 
@@ -1528,6 +1573,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         WHERE grantee = 'buddha_app' AND table_schema = 'public'
           AND table_name IN ('ledger_entries', 'market_events', 'admin_actions', 'payment_events',
             'balances', 'payments', 'phone_verifications', 'phone_verification_codes',
+            'phone_verification_refused_sends',
             'market_settlement_steps', 'release_settings',
             'approval_requests', 'market_watches', 'market_watch_events', 'market_searches',
             'market_search_terms', 'market_links')
@@ -1542,9 +1588,12 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(privs('balances')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
       expect(privs('payments')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
       // Migration 0028 (#183): the real name changes in place and the row goes with the account;
-      // a code's wrong entries and its use are counted in place, and old or unsent codes deleted.
+      // a code's wrong entries, its use and what the provider said (0030) are written in place,
+      // and a send the provider refused is deleted (the rest are 본인확인 기록, #184's to delete).
       expect(privs('phone_verifications')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
       expect(privs('phone_verification_codes')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
+      // Migration 0030: a refused send's time is written and deleted after a week, never changed.
+      expect(privs('phone_verification_refused_sends')).toEqual(['DELETE', 'INSERT', 'SELECT']);
       // Migration 0016: the worker updates a step's row in place.
       expect(privs('market_settlement_steps')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
       // Migration 0020: a release setting is changed, never removed.

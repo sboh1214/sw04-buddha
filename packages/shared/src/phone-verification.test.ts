@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   PHONE_VERIFICATION_LIMITS,
+  PHONE_VERIFICATION_LIMIT_REASONS,
+  PHONE_VERIFICATION_SEND_OUTCOMES,
+  PHONE_VERIFICATION_SHARED_LIMIT_REASONS,
   REAL_NAME_MAX_LENGTH,
+  SMS_STATUS_DAYS,
+  adminSmsStatusSchema,
   confirmPhoneVerificationBodySchema,
+  isSharedLimitReason,
   phoneSchema,
   phoneVerificationCodeSchema,
   phoneVerificationLimitedDetailsSchema,
@@ -108,7 +114,8 @@ describe('PHONE_VERIFICATION_LIMITS (owner decisions 2026-10-17 and 2026-10-18, 
       accountDailySends: 10,
       accountPhoneDailySends: 10,
       phoneDailyAccounts: 3,
-      ipDailySends: 20,
+      // Raised from 20 (owner decision 2026-10-18, second round).
+      ipDailySends: 50,
       serviceDailySends: 500,
       dailyWindowSeconds: 86_400,
     });
@@ -231,6 +238,21 @@ describe('refusal details (ADR-0070)', () => {
     ).toBe(false);
   });
 
+  it('names the limits counted with other accounts, which answer whole minutes (second round)', () => {
+    expect(PHONE_VERIFICATION_SHARED_LIMIT_REASONS).toEqual([
+      'phone_accounts',
+      'ip_daily',
+      'service_daily',
+    ]);
+    expect(
+      PHONE_VERIFICATION_LIMIT_REASONS.filter((reason) => isSharedLimitReason(reason)),
+    ).toEqual([...PHONE_VERIFICATION_SHARED_LIMIT_REASONS]);
+    // The account's own stay exact.
+    for (const reason of ['resend_interval', 'account_daily', 'account_phone_daily'] as const) {
+      expect(isSharedLimitReason(reason), reason).toBe(false);
+    }
+  });
+
   it('names why a code verified nothing, with the entries left only on a mismatch', () => {
     for (const reason of ['no_code', 'expired', 'attempts_exceeded', 'superseded']) {
       expect(verificationCodeRejectedDetailsSchema.parse({ reason })).toEqual({ reason });
@@ -250,5 +272,47 @@ describe('refusal details (ADR-0070)', () => {
     expect(verificationCodeRejectedDetailsSchema.safeParse({ reason: 'mismatch' }).success).toBe(
       false,
     );
+  });
+});
+
+describe('adminSmsStatusSchema (owner decision 2026-10-18, second round)', () => {
+  const day = (date: string) => ({ date, sent: 3, unknown: 1, refused: 2 });
+  const days = [
+    '2026-10-18',
+    '2026-10-17',
+    '2026-10-16',
+    '2026-10-15',
+    '2026-10-14',
+    '2026-10-13',
+    '2026-10-12',
+  ].map(day);
+
+  it('carries counts only: the last 24 hours against the service limit, and seven days', () => {
+    const status = {
+      asOf: '2026-10-18T03:00:00.000Z',
+      last24Hours: { sent: 12, unknown: 1, refused: 4, serviceLimit: 500 },
+      days,
+    };
+    expect(adminSmsStatusSchema.parse(status)).toEqual(status);
+    expect(SMS_STATUS_DAYS).toBe(7);
+    expect(PHONE_VERIFICATION_SEND_OUTCOMES).toEqual(['accepted', 'unknown']);
+  });
+
+  it('refuses a negative count, a day that is not a date, and another number of days', () => {
+    const base = {
+      asOf: '2026-10-18T03:00:00.000Z',
+      last24Hours: { sent: 0, unknown: 0, refused: 0, serviceLimit: 500 },
+      days,
+    };
+    expect(adminSmsStatusSchema.safeParse(base).success).toBe(true);
+    expect(
+      adminSmsStatusSchema.safeParse({ ...base, last24Hours: { ...base.last24Hours, sent: -1 } })
+        .success,
+    ).toBe(false);
+    expect(
+      adminSmsStatusSchema.safeParse({ ...base, days: [{ ...day('2026-10-18T00:00'), sent: 1 }] })
+        .success,
+    ).toBe(false);
+    expect(adminSmsStatusSchema.safeParse({ ...base, days: days.slice(1) }).success).toBe(false);
   });
 });
