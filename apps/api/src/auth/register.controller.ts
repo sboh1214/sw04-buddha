@@ -23,8 +23,8 @@ export class RegisterController {
   @Post('register')
   @HttpCode(200)
   // Keyed on the ADDRESS in the body, not on the caller (A-M2-10): this route puts mail in
-  // somebody's inbox and hands out a sign-up bonus, so what has to be bounded is how often one
-  // mailbox can be written to, however many clients ask. An unparseable body falls back to the
+  // somebody's inbox (it no longer hands out Coin: #70), so what has to be bounded is how often
+  // one mailbox can be written to, however many clients ask. An unparseable body falls back to the
   // address bucket and is refused by the pipe a moment later.
   @RateLimit('email')
   @ApiOperation({

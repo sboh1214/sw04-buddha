@@ -367,7 +367,11 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
 
       // --- bob: nothing paid, realised −cost, row closed out ------------------------------
       expect((await balanceOf(bob)).availableCoin).toBe(10_000n - 300n);
-      expect((await ledgerOf(bob)).map((entry) => entry.type)).toEqual(['BONUS', 'TRADE_BUY']);
+      // The factory's starting Coin (an ADMIN_ADJUST: signing up grants nothing, #70), the buy.
+      expect((await ledgerOf(bob)).map((entry) => entry.type)).toEqual([
+        'ADMIN_ADJUST',
+        'TRADE_BUY',
+      ]);
       expect(await positionOf(bob, market.id, 'NO')).toMatchObject({
         qty: 0,
         costBasisCoin: 0n,
@@ -1158,7 +1162,7 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
     expect(balance.availableCoin).toBe(10_000n - 500n - 40n + 1_000n);
     const ledger = await ledgerOf(alice);
     expect(ledger.map((entry) => entry.type)).toEqual([
-      'BONUS',
+      'ADMIN_ADJUST',
       'TRADE_BUY',
       'TRADE_BUY',
       'SETTLEMENT_PAYOUT',

@@ -431,9 +431,13 @@ export function joinPositions(held: Position[] | undefined, incoming: Position[]
 
 /**
  * What a `user:balance` event may do to the cached `Me`. A KIND rather than a value, the shape
- * `applyPositionEvent` already answers in, because the two outcomes are not both cache writes.
+ * `applyPositionEvent` already answers in, because the outcomes are not all cache writes:
+ * `replace` writes `me`, `refetch` writes nothing and asks for the profile, and
+ * `replaceAndRefetch` does both — the figure moves at once, and the part of the profile the event
+ * cannot speak for is asked again.
  */
-export type BalancePatch = { kind: 'replace'; me: Me } | { kind: 'refetch' };
+export type BalancePatch =
+  { kind: 'replace'; me: Me } | { kind: 'replaceAndRefetch'; me: Me } | { kind: 'refetch' };
 
 /**
  * `user:balance` — never invents a `Me` for a visitor who is not signed in, and never leaves a
@@ -447,13 +451,25 @@ export type BalancePatch = { kind: 'replace'; me: Me } | { kind: 'refetch' };
  * the next window focus, on every refund, payout or other-tab trade that arrived while the
  * profile was still loading. The event's own numbers cannot fill that gap either: `Me` carries
  * the profile and the linked login methods too, so there is no `Me` to build from it.
+ *
+ * `replaceAndRefetch` is the answer for a `Me` whose start Coin is waiting (`startGrant.status`
+ * `pending`, #70, ADR-0071). The worker pays such a grant once an admin enters the amount, and
+ * that payment reaches the tab only as this event — which carries two amounts, a ledger id and a
+ * time, not what the entry was. So the event may be the grant's payment and cannot say so: the
+ * balance is written now, and the profile is asked again for `startGrant`, or the wallet would
+ * go on saying 시작 Coin은 준비되는 대로 지급됩니다 above the balance that already holds it. While
+ * nothing waits — every account but one whose amount is still undecided — this is the plain
+ * `replace` and costs no request.
  */
 export function applyBalanceEvent(held: Me | undefined, event: UserBalanceEvent): BalancePatch {
   if (held === undefined) return { kind: 'refetch' };
-  return {
-    kind: 'replace',
-    me: { ...held, balance: { availableCoin: event.availableCoin, lockedCoin: event.lockedCoin } },
+  const me: Me = {
+    ...held,
+    balance: { availableCoin: event.availableCoin, lockedCoin: event.lockedCoin },
   };
+  return held.startGrant?.status === 'pending'
+    ? { kind: 'replaceAndRefetch', me }
+    : { kind: 'replace', me };
 }
 
 /**

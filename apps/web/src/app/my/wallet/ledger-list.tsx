@@ -1,24 +1,12 @@
 'use client';
 
 import { Alert, Button, Card, HStack, Skeleton, Stack, Text } from '@chakra-ui/react';
-import { MINUS_SIGN, formatCoin, parseCoinAmount, type LedgerEntryType } from '@buddha/shared';
+import { MINUS_SIGN, formatCoin, parseCoinAmount } from '@buddha/shared';
 import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { copy } from '@/copy';
 import { useLedger } from '@/hooks/use-wallet';
 import { type LedgerEntry } from '@/lib/api';
-
-/** PLAN Appendix A: never "베팅"; every ledger type gets plain Korean. */
-const TYPE_LABEL: Record<LedgerEntryType, string> = {
-  DEPOSIT: copy.ledgerTypeDeposit,
-  TRADE_BUY: copy.ledgerTypeTradeBuy,
-  TRADE_SELL: copy.ledgerTypeTradeSell,
-  FEE: copy.ledgerTypeFee,
-  SETTLEMENT_PAYOUT: copy.ledgerTypeSettlement,
-  ADMIN_ADJUST: copy.ledgerTypeAdminAdjust,
-  BONUS: copy.ledgerTypeBonus,
-  PAYMENT_CANCEL: copy.ledgerTypePaymentCancel,
-  PAYMENT_CANCEL_REVERSAL: copy.ledgerTypePaymentCancelReversal,
-};
+import { LEDGER_TYPE_LABEL } from '@/lib/wallet';
 
 export function LedgerList() {
   const { data, isPending, isError, fetchNextPage, hasNextPage, isFetchingNextPage, refetch } =
@@ -79,7 +67,9 @@ export function LedgerRow({ entry }: { entry: LedgerEntry }) {
   return (
     <HStack justify="space-between" pt="3" _first={{ pt: 0 }} align="start">
       <Stack gap="0.5">
-        <Text fontWeight="medium">{TYPE_LABEL[entry.type]}</Text>
+        <Text fontWeight="medium" data-testid="ledger-type">
+          {LEDGER_TYPE_LABEL[entry.type]}
+        </Text>
         <Text fontSize="xs" color="fg.muted">
           {formatDateTime(entry.createdAt)}
         </Text>

@@ -2,6 +2,7 @@ import * as z from 'zod';
 import { type ValidationIssue } from './api/errors.js';
 import { cursorQuerySchema } from './api/pagination.js';
 import { releaseSettingStatusSchema, type ReleaseSettingStatus } from './enums.js';
+import { START_GRANT_MAX_COIN } from './start-grant.js';
 
 /**
  * Release settings (출시 설정, #170): the values a simulation or an operating approval settles —
@@ -170,13 +171,31 @@ export function defineReleaseSettings(
 }
 
 /**
- * The shipped registry. Empty on purpose: #170 builds the mechanism, and each value is registered
- * by the issue that uses it (#70, #74, #119, #152·#175, #140·#184, …) — define it with
- * `defineReleaseSetting` and list it here, then update every test that pins the emptiness
- * (docs/SETTINGS.md, 항목 등록하기). Tests inject their own registry
+ * 시작 지급액 (#70, ADR-0071): the Coin a verified mobile number gets once (start-grant.ts). Read
+ * once per grant, when it is paid, inside the paying transaction; whatever the status, a value is
+ * paid (ADR-0069 decision 7) and no value leaves the grant `pending` until an admin enters one
+ * (decision 4 #70). A changed value applies to the grants paid after the change; granted accounts
+ * keep theirs (#57-2). An integer, 1 to START_GRANT_MAX_COIN.
+ */
+export const START_COIN_SETTING = defineReleaseSetting({
+  key: 'grant.start_coin',
+  label: '시작 지급액',
+  unit: 'Coin',
+  description:
+    '본인확인한 휴대전화 번호마다 한 번 주는 시작 Coin의 금액(#70). 값이 있으면 상태와 상관없이 그 값으로 주고, 미정이면 지급을 기다리게 했다가 값을 넣으면 기다리던 계정에 준다. 바꾼 값은 그 뒤의 지급부터 적용하고 이미 받은 계정은 그대로다.',
+  schema: z.number().int().min(1).max(START_GRANT_MAX_COIN),
+});
+
+/**
+ * The shipped registry, in the order the admin screen lists it. #170 built the mechanism, and each
+ * value is registered by the issue that uses it (#70 the start grant; #74, #119, #152·#175,
+ * #140·#184, … to come) — define it with `defineReleaseSetting` and list it here, then update every
+ * test that pins the list (docs/SETTINGS.md, 항목 등록하기). Tests inject their own registry
  * (`createTestApp({ releaseSettings })` in apps/api).
  */
-export const RELEASE_SETTINGS: ReleaseSettingsRegistry = defineReleaseSettings([]);
+export const RELEASE_SETTINGS: ReleaseSettingsRegistry = defineReleaseSettings([
+  START_COIN_SETTING,
+]);
 
 /** A stored status and value: `value` is null exactly when `status` is `undecided`. */
 export interface ReleaseSettingState {

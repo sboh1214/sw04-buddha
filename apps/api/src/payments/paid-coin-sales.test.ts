@@ -8,7 +8,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { schema } from '@buddha/db';
-import { PAID_COIN_SALES_ENABLED, SIGNUP_BONUS_COIN } from '@buddha/shared';
+import { PAID_COIN_SALES_ENABLED } from '@buddha/shared';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
@@ -106,7 +106,7 @@ describe.skipIf(!hasTestInfra)('paid Coin closed (integration)', () => {
 
   it('refuses a charge before anything, signed in or not, and credits nothing', async () => {
     const before = await moneyOf(member.id);
-    expect(before.balance).toEqual({ availableCoin: SIGNUP_BONUS_COIN, lockedCoin: 0n });
+    expect(before.balance).toEqual({ availableCoin: 0n, lockedCoin: 0n });
     const charge = vi.spyOn(t.app.get(MockPaymentProvider), 'charge');
 
     const requests = [

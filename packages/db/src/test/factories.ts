@@ -3,15 +3,15 @@
  * connected with (buddha_app in integration tests), bypassing better-auth and the API so a
  * test can build its fixture state in a few lines. Never used outside tests.
  */
-import { randomInt, randomUUID } from 'node:crypto';
+import { randomBytes, randomInt, randomUUID } from 'node:crypto';
 import {
   PRICE_MAX,
   PRICE_MIN,
-  SIGNUP_BONUS_COIN,
   SETTLEMENT_STEPS,
   relatedMarketPair,
   type MarketStatus,
   type Outcome,
+  type ReleaseSettingStatus,
   type Role,
   type SettlementStep,
   type SettlementStepStatus,
@@ -19,6 +19,7 @@ import {
 import { eq } from 'drizzle-orm';
 import type { Db } from '../client.js';
 import {
+  adminActions,
   balances,
   categories,
   fills,
@@ -33,8 +34,12 @@ import {
   phoneVerifications,
   positions,
   profiles,
+  releaseSettings,
+  startGrants,
   user,
 } from '../schema/index.js';
+import { storedReleaseSettingValue } from '../release-settings.js';
+import { payStartGrant } from '../start-grants.js';
 
 /** Short unique tag for generated emails/slugs/nicknames. */
 const tag = () => randomUUID().replaceAll('-', '').slice(0, 8);
@@ -46,9 +51,9 @@ export interface CreateUserInput {
   nickname?: string;
   role?: Role;
   /**
-   * Balance the user should end up with. Every account is created with SIGNUP_BONUS_COIN by the
-   * trigger (migration 0004); asking for something else writes the difference as an
-   * ADMIN_ADJUST entry, so the PLAN 5.6 invariant keeps holding. Omit to keep the bonus.
+   * Balance the user should end up with. Every account is created with 0 and no ledger entry by
+   * the trigger (migration 0031: no sign-up grant, #70); asking for more writes it as an
+   * ADMIN_ADJUST entry, so the PLAN 5.6 invariant keeps holding. Omit to keep 0, as a new account.
    */
   balanceCoin?: bigint;
 }
@@ -61,7 +66,7 @@ export interface CreateUserInput {
 export async function createUser(db: Db, input: CreateUserInput = {}) {
   const id = input.id ?? randomUUID();
   const t = tag();
-  const balanceCoin = input.balanceCoin ?? SIGNUP_BONUS_COIN;
+  const balanceCoin = input.balanceCoin ?? 0n;
   return db.transaction(async (tx) => {
     const [userRow] = await tx
       .insert(user)
@@ -510,4 +515,100 @@ export async function createPhoneVerification(db: Db, input: CreatePhoneVerifica
     })
     .returning();
   return row!;
+}
+
+export interface CreateStartGrantInput {
+  userId: string;
+  /**
+   * The keyed hash of the number (64 lower-case hex). Default: a random one, so two grants never
+   * share a number; a test about "the same number" passes the API's hash of it.
+   */
+  phoneHash?: string;
+  /**
+   * Pays it with this amount (the START_GRANT entry and the balance, through `payStartGrant`, as
+   * the API and the worker pay). Omit for a grant still pending, as one recorded while the
+   * release setting `grant.start_coin` was undecided.
+   */
+  amountCoin?: bigint;
+}
+
+/** A random keyed-hash-shaped value: 64 lower-case hex characters. */
+export function randomPhoneHash(): string {
+  return randomBytes(32).toString('hex');
+}
+
+/**
+ * A start grant (#70, ADR-0071) as the grant leaves it: the `start_grants` row, pending, or paid
+ * when `amountCoin` is given. A grant is recorded only for an account with a 본인확인 record, and
+ * `payStartGrant` pays no other, so an account without one gets one (a random number, which the
+ * random `phoneHash` need not match); a test of a withdrawn account deletes it afterwards. Does
+ * not hash the number; a test whose subject is the grant itself goes through the API's
+ * StartGrantService.
+ */
+export async function createStartGrant(db: Db, input: CreateStartGrantInput) {
+  return db.transaction(async (tx) => {
+    await tx
+      .insert(phoneVerifications)
+      .values({ userId: input.userId, phone: randomPhone(), realName: '홍길동' })
+      .onConflictDoNothing({ target: phoneVerifications.userId });
+    const [row] = await tx
+      .insert(startGrants)
+      .values({ userId: input.userId, phoneHash: input.phoneHash ?? randomPhoneHash() })
+      .returning();
+    if (input.amountCoin === undefined) return row!;
+    const amountCoin = input.amountCoin;
+    const paid = await payStartGrant(tx, row!.id, () => Promise.resolve(amountCoin));
+    if (paid.outcome !== 'granted') throw new Error(`start grant not paid: ${paid.outcome}`);
+    return paid.grant;
+  });
+}
+
+export interface SetReleaseSettingInput {
+  /** The admin the change is recorded under (release_settings.updated_by, admin_actions). */
+  adminId: string;
+  key: string;
+  status: ReleaseSettingStatus;
+  /** Null exactly while `undecided`. */
+  value: unknown;
+  /** Default: 시험. */
+  reason?: string;
+}
+
+/**
+ * A release setting changed as the admin screen changes it (#170, migration 0020): the row and its
+ * `release_setting_change` record in one transaction, at an instant after the key's last change.
+ * For a suite that needs an item's value where the API's ReleaseSettingsService is not at hand
+ * (the worker); it checks neither the registry nor the item's schema.
+ */
+export async function setReleaseSetting(db: Db, input: SetReleaseSettingInput) {
+  const { adminId, key, status, value } = input;
+  await db.transaction(async (tx) => {
+    const [current] = await tx
+      .select({
+        status: releaseSettings.status,
+        value: storedReleaseSettingValue,
+        updatedAt: releaseSettings.updatedAt,
+      })
+      .from(releaseSettings)
+      .where(eq(releaseSettings.key, key));
+    const at = new Date(Math.max(Date.now(), (current?.updatedAt.getTime() ?? 0) + 1));
+    await tx.insert(adminActions).values({
+      adminId,
+      type: 'release_setting_change',
+      targetType: 'release_setting',
+      targetId: key,
+      payload: {
+        key,
+        before: { status: current?.status ?? 'undecided', value: current?.value ?? null },
+        after: { status, value },
+        reason: input.reason ?? '시험',
+      },
+      createdAt: at,
+    });
+    const written = { status, value, updatedAt: at, updatedBy: adminId };
+    await tx
+      .insert(releaseSettings)
+      .values({ key, ...written })
+      .onConflictDoUpdate({ target: releaseSettings.key, set: written });
+  });
 }

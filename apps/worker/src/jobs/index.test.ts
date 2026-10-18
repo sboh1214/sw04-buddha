@@ -11,12 +11,15 @@ import {
   connectTestDb,
   createMarket,
   createPosition,
+  createStartGrant,
   createUser,
   hasTestDb,
+  setReleaseSetting,
   type TestDb,
 } from '@buddha/db/test';
 import {
   JOB_NAMES,
+  START_COIN_SETTING,
   marketChannel,
   userChannel,
   type MarketRealtimeEvent,
@@ -238,6 +241,32 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
     });
     // The counts line is promoted to info when something failed, even with nothing settled.
     expect(logs.at(-1)).toMatchObject({ level: 30, msg: 'market finalize scan', failed: 1 });
+  });
+
+  it('start_grant.pay reports JSON-safe counts, quietly while the amount is undecided (#70)', async () => {
+    const { user } = await createUser(t.db);
+    const grant = await createStartGrant(t.db, { userId: user.id });
+    const idle = { undecided: true, paid: 0, skipped: 0, failed: 0, failures: [] };
+    await expect(run({ name: JOB_NAMES.startGrantPay })).resolves.toEqual(idle);
+    expect(logs.at(-1)).toMatchObject({ level: 20, msg: 'start grant payment', paid: 0 });
+
+    const admin = (await createUser(t.db, { role: 'admin' })).user.id;
+    await setReleaseSetting(t.db, {
+      adminId: admin,
+      key: START_COIN_SETTING.key,
+      status: 'test',
+      value: 10_000,
+    });
+    const result = await run({ name: JOB_NAMES.startGrantPay });
+    expect(result).toEqual({ undecided: false, paid: 1, skipped: 0, failed: 0, failures: [] });
+    expect(() => JSON.stringify(result)).not.toThrow();
+    expect(logs.at(-1)).toMatchObject({ level: 30, msg: 'start grant payment', paid: 1 });
+    expect(published.map((p) => p.channel)).toEqual([userChannel(user.id)]);
+    const [paid] = await t.db
+      .select()
+      .from(schema.startGrants)
+      .where(eq(schema.startGrants.id, grant.id));
+    expect(paid?.amountCoin).toBe(10_000n);
   });
 
   it('ledger.audit runs on the audit connection and reports the mismatch count', async () => {

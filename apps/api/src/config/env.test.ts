@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   aligoCredentials,
+  DEV_PHONE_HASH_KEY,
   envSchema,
   parseTrustProxy,
+  phoneHashKey,
   smsProvider,
   uncountedPeers,
   webOrigins,
@@ -17,6 +19,7 @@ const base = {
   DATABASE_URL: 'postgres://u:p@localhost:5432/buddha',
   REDIS_URL: 'redis://localhost:6379',
   BETTER_AUTH_SECRET: 'x'.repeat(32),
+  PHONE_HASH_KEY: 'h'.repeat(32),
 } as const;
 
 const parseFrom = (SMTP_FROM: string) => envSchema.safeParse({ ...base, SMTP_FROM });
@@ -337,5 +340,49 @@ describe('SMS (#183, ADR-0070)', () => {
       expect(result.success, JSON.stringify(env)).toBe(false);
       if (!result.success) expect(result.error.issues.map((issue) => issue.path)).toEqual([[path]]);
     }
+  });
+});
+
+describe('PHONE_HASH_KEY (#70, ADR-0071)', () => {
+  const { PHONE_HASH_KEY: _key, ...withoutKey } = base;
+
+  it('is required in production, at least 32 characters, not a repository key and not the session secret', () => {
+    for (const env of [
+      withoutKey,
+      { ...base, PHONE_HASH_KEY: '' },
+      { ...base, PHONE_HASH_KEY: 'h'.repeat(31) },
+      { ...base, PHONE_HASH_KEY: base.BETTER_AUTH_SECRET },
+      // Long enough, but public: the code's development key, and another value carrying its mark
+      // — a production .env given either would hash with a key anyone has.
+      { ...base, PHONE_HASH_KEY: DEV_PHONE_HASH_KEY },
+      { ...base, PHONE_HASH_KEY: 'development-only-phone-hash-key-change-in-production' },
+    ]) {
+      const result = envSchema.safeParse(env);
+      expect(result.success, JSON.stringify(env)).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.map((issue) => issue.path)).toEqual([['PHONE_HASH_KEY']]);
+      }
+    }
+    expect(phoneHashKey(envSchema.parse(base))).toBe('h'.repeat(32));
+  });
+
+  it('falls back to the development key outside production only', () => {
+    for (const NODE_ENV of ['development', 'test'] as const) {
+      const env = envSchema.parse({ ...withoutKey, NODE_ENV });
+      expect(phoneHashKey(env)).toBe(DEV_PHONE_HASH_KEY);
+      // Left empty, as .env.example has it: the same fallback.
+      expect(phoneHashKey(envSchema.parse({ ...base, NODE_ENV, PHONE_HASH_KEY: '' }))).toBe(
+        DEV_PHONE_HASH_KEY,
+      );
+      // A development key is fine outside production.
+      expect(
+        envSchema.safeParse({ ...base, NODE_ENV, PHONE_HASH_KEY: DEV_PHONE_HASH_KEY }).success,
+      ).toBe(true);
+      expect(phoneHashKey(envSchema.parse({ ...base, NODE_ENV }))).toBe('h'.repeat(32));
+    }
+    // Should a production env ever get past the schema without it, the key is not invented.
+    expect(() => phoneHashKey({ NODE_ENV: 'production', PHONE_HASH_KEY: undefined })).toThrow(
+      /required in production/,
+    );
   });
 });

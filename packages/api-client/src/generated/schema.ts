@@ -1170,9 +1170,9 @@ export type components = {
             memo: string | null;
             refId: string | null;
             /** @enum {string|null} */
-            refType: "payment" | "fill" | "market" | "admin_action" | "coupon" | null;
+            refType: "payment" | "fill" | "market" | "admin_action" | "coupon" | "start_grant" | null;
             /** @enum {string} */
-            type: "DEPOSIT" | "TRADE_BUY" | "TRADE_SELL" | "FEE" | "SETTLEMENT_PAYOUT" | "ADMIN_ADJUST" | "BONUS" | "PAYMENT_CANCEL" | "PAYMENT_CANCEL_REVERSAL";
+            type: "DEPOSIT" | "TRADE_BUY" | "TRADE_SELL" | "FEE" | "SETTLEMENT_PAYOUT" | "ADMIN_ADJUST" | "BONUS" | "PAYMENT_CANCEL" | "PAYMENT_CANCEL_REVERSAL" | "START_GRANT";
         };
         LinkedAccount: {
             accountId: string;
@@ -1272,6 +1272,7 @@ export type components = {
                 role: components["schemas"]["UserRole"];
                 timeZone: string | null;
             };
+            startGrant: components["schemas"]["StartGrant"] | null;
             verification: components["schemas"]["PhoneVerification"] | null;
         };
         Nickname: string;
@@ -1481,6 +1482,13 @@ export type components = {
             refused: number;
             sent: number;
             unknown: number;
+        };
+        StartGrant: {
+            amountCoin: components["schemas"]["CoinAmount"] | null;
+            /** Format: date-time */
+            grantedAt: string | null;
+            /** @enum {string} */
+            status: "pending" | "granted";
         };
         UpdateChargePackageBody: {
             amountCoin?: components["schemas"]["CoinAmount"];

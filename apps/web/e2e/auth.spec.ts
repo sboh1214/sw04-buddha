@@ -14,9 +14,12 @@ test.describe('signup -> login -> settings', () => {
   test('email signup, logout, login, /me visible in settings', async ({ page }) => {
     const email = freshEmail();
     await signUp(page, email);
-    // Nav shows the balance chip once `GET /me` resolves: the sign-up bonus (the `user` insert
-    // trigger). Not '0 Coin' — "10,000 Coin" contains that too, so such a check could never fail.
-    await expect(page.getByTestId('balance-chip')).toContainText('10,000 Coin');
+    // Nav shows the balance chip once `GET /me` resolves: 0, since creating an account grants
+    // nothing (#70, ADR-0071) — the sign-up trigger's 10,000 Coin is gone. The whole chip is
+    // matched, label and amount: '0 Coin' alone is also inside '10,000 Coin' and could not fail.
+    await expect(page.getByTestId('balance-chip')).toHaveText(
+      new RegExp(`^${copy.balance}\\s*0 Coin$`),
+    );
 
     await logOut(page);
 

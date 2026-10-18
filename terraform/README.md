@@ -78,7 +78,7 @@ flowchart LR
 | `github-oidc.tf`               | `aws_iam_openid_connect_provider.github`(계정 공용, `prevent_destroy` — 2026-10-02부터 이 root 소유), `aws_iam_role.github_actions_deploy`(`tf-buddha-github-deploy`): ECR push/describe, `ec2:DescribeInstances`, `ssm:SendCommand`(인스턴스 ARN 고정)                                                                                  |
 | `ecr.tf`                       | `aws_ecr_repository.app` for_each `api/worker/web` + lifecycle(태그된 이미지 10개, untagged 7일)                                                                                                                                                                                                                                         |
 | `ses.tf`                       | `aws_sesv2_email_identity.app`(`buddha.sboh.dev`, `dkim_signing_attributes` 미지정), MAIL FROM `mail.buddha.sboh.dev`, SMTP 전용 IAM user `tf-buddha-ses-smtp` + access key                                                                                                                                                              |
-| `ssm.tf`                       | `random_password` ×4(`better_auth_secret`, `postgres_superuser`, `db_app`, `db_migrate`), `aws_ssm_parameter.env`(`/tf-buddha/env`, SecureString, Standard 티어)                                                                                                                                                                         |
+| `ssm.tf`                       | `random_password` ×5(`better_auth_secret`, `phone_hash_key`(`prevent_destroy`), `postgres_superuser`, `db_app`, `db_migrate`), `aws_ssm_parameter.env`(`/tf-buddha/env`, SecureString, Standard 티어)                                                                                                                                    |
 | `templates/env.tftpl`          | `/tf-buddha/env`의 본문(운영 `.env`). `deploy/compose.yaml`이 소비하는 키의 단일 진실 원천                                                                                                                                                                                                                                               |
 | `templates/user-data.sh.tftpl` | 첫 부팅 1회: docker 설치, `/data` 라벨 마운트(`mkfs`는 빈 볼륨일 때만), `RequiresMountsFor=/data` drop-in, `dd` swap 2 GiB. 시크릿·앱 파일 없음                                                                                                                                                                                          |
 | `terraform.tfvars.example`     | 필수 변수의 placeholder. 실제 `terraform.tfvars`는 gitignored                                                                                                                                                                                                                                                                            |
@@ -214,6 +214,8 @@ aws sesv2 get-email-identity --email-identity buddha.sboh.dev --profile inno-fra
 
 **#183(마이그레이션 0028)을 처음 배포할 때 한 번.** 이미 돌고 있는 배포에서는 그 배포 전에(또는 함께) 기존 `terraform.tfvars`에 `aligo_*`를 넣고 apply한다 — 그 전에는 시드 관리자를 포함해 아무도 `/onboarding`의 본인확인을 지나지 못한다. 0028은 확인하지 않은 연락처 `user_contacts`를 행째 지우므로 모든 계정이 다음 로그인에서 본인확인을 다시 거치고, `migrate`가 도는 몇 초 동안은 아직 그 표를 읽는 옛 API의 `GET /api/v1/me`·`GET /api/v1/admin/admins`가 500으로 답한다(새 컨테이너가 뜨면 풀린다, ADR-0070 결과 3).
 
+**#70(마이그레이션 0031)을 처음 배포할 때 한 번.** 그 배포 **전에** `terraform apply`로 `random_password.phone_hash_key`를 만들어 SSM의 env에 `PHONE_HASH_KEY`를 넣는다. 운영 API는 이 값이 없거나 32자보다 짧으면 뜨지 않는다(`apps/api/src/config/env.ts`). 0031은 가입 트리거의 10,000 Coin 지급을 없애고 `start_grants` 표를 만들 뿐 기존 계정의 잔고·원장은 건드리지 않는다(D4, ADR-0071).
+
 ### 롤백 / 같은 태그 재배포
 
 ```bash
@@ -240,7 +242,7 @@ pino JSON 한 줄이 요청 한 건이다(ADR-0035). 로그는 json-file 드라�
 
 ### 시크릿 교체
 
-시크릿은 `ssm.tf`의 `random_password` 넷이다. 하나를 새로 뽑으면 SSM 파라미터가 갱신되고, **다음 배포**가 `.env`를 다시 렌더해 컨테이너를 새 값으로 재생성한다.
+시크릿은 `ssm.tf`의 `random_password` 다섯이다. 하나를 새로 뽑으면 SSM 파라미터가 갱신되고, **다음 배포**가 `.env`를 다시 렌더해 컨테이너를 새 값으로 재생성한다.
 
 ```bash
 terraform apply -replace=random_password.better_auth_secret
@@ -248,6 +250,8 @@ gh workflow run deploy.yml --ref main -f image_tag=<현재 sha>     # .env 재�
 ```
 
 `better_auth_secret`을 바꾸면 모든 세션이 무효가 된다(사용자 전원 재로그인).
+
+**`phone_hash_key`는 교체하지 않는다**(`-replace`·taint 금지, ADR-0071). 운영 `.env`의 `PHONE_HASH_KEY`로, 본인확인한 휴대전화 번호를 키 있는 해시로 바꿔 '시작 Coin을 받은 번호'(`start_grants`)로 기록하는 키다. 바꾸면 저장된 해시가 어느 번호와도 맞지 않게 되어, 시작 Coin을 받은 번호가 다음 계정에서 다시 받고 번호마다 세는 한도(ADR-0069 결정 7)도 처음부터 다시 센다. 새 키로도 API는 그대로 뜨므로 아무것도 알려 주지 않는다. 그래서 `ssm.tf`의 `lifecycle { prevent_destroy = true }`가 막는다 — `-replace`·taint, 값을 새로 뽑게 하는 `length`·`special`의 수정, `terraform destroy`는 모두 plan 단계에서 오류로 끝난다. 그 줄을 지우는 커밋은 하지 않는다. 정말 바꿔야 하면(유출) 오너가 그 결과를 정한 뒤 기록을 옮기는 절차를 먼저 만든다 — 지금은 없다.
 
 **DB 롤 비밀번호(`postgres_superuser`, `db_app`, `db_migrate`)는 한 단계가 더 있다.** `postgres-init/02-passwords.sh`는 initdb 때 한 번만 돈다. 새 값을 SSM에 넣은 뒤 배포를 돌리면 `migrate` 서비스가 옛 비밀번호의 데이터베이스에 새 비밀번호로 붙으려다 실패하므로, 배포 **전에** 손으로 `ALTER ROLE`을 한다.
 
@@ -326,13 +330,24 @@ aws ec2 start-instances --profile inno-frame --instance-ids "$(terraform output 
 
 멈춰 있는 동안 EC2 시간 요금은 없지만 EBS(≈ $2.4) + 스냅샷 + **EIP(≈ $3.65, 실행 중인 인스턴스에 붙어 있지 않아도 청구)** + ECR ≈ **월 $6.5**가 남는다. 시작하면 `/data`가 라벨로 마운트되고 컨테이너가 스스로 올라온다. EIP가 그대로라 DNS는 손대지 않는다.
 
-몇 달 이상 쓰지 않을 거면 `terraform destroy`가 답이다. 단 `prevent_destroy`가 둘(`aws_ebs_volume.data`, `aws_iam_openid_connect_provider.github`)이라 그대로 돌리면 plan 단계에서 통째로 거절된다(아무것도 지워지지 않는다). 순서:
+몇 달 이상 쓰지 않을 거면 `terraform destroy`가 답이다. 단 `prevent_destroy`가 셋(`aws_ebs_volume.data`, `aws_iam_openid_connect_provider.github`, `random_password.phone_hash_key`)이라 그대로 돌리면 plan 단계에서 통째로 거절된다(아무것도 지워지지 않는다). 순서:
 
 ```bash
 terraform state rm aws_iam_openid_connect_provider.github   # provider는 계정에 남긴다 — 이 root만 관리를 놓는다
+terraform state mv -state-out=phone-hash-key.tfstate \
+  random_password.phone_hash_key random_password.phone_hash_key   # 키를 state 밖의 파일로 옮겨 둔다
 # storage.tf의 aws_ebs_volume.data에서 prevent_destroy 줄만 지우고(마지막 스냅샷 id를 적어 둔 뒤):
 terraform destroy
 ```
+
+`phone_hash_key`는 지우지 않고 옮긴다. 스냅샷에서 되살린 `start_grants`의 해시는 그 키로만 번호와 맞는다(ADR-0071). 옮긴 `phone-hash-key.tfstate`에는 키가 평문으로 있으니(`.gitignore`의 `*.tfstate*`가 커밋은 막는다) [상태 파일](#상태-파일)의 tfstate처럼 `gpg -c`로 암호화해 이 머신 밖에도 둔다. 다시 올릴 때는 첫 `terraform apply` **전에** 되돌린다(로컬 tfstate 기준):
+
+```bash
+terraform state mv -state=phone-hash-key.tfstate -state-out=terraform.tfstate \
+  random_password.phone_hash_key random_password.phone_hash_key
+```
+
+빠뜨리면 apply가 새 키를 만들고, API는 그대로 뜨지만 되살린 기록의 번호가 모두 처음 보는 번호가 된다.
 
 GitHub OIDC provider는 이 root가 관리할 뿐 계정 공용이다 — 다른 프로젝트의 배포 역할(지금은 sai-web의 `sai-production-github-deploy`)이 같은 provider를 신뢰하므로, 이 root를 내리면서 지우면 2026-09-22의 사고를 반대 방향으로 되풀이한다. 그 `prevent_destroy` 줄은 지우지 않는다. 다시 올릴 때는 [최초 부트스트랩](#최초-부트스트랩) 4단계의 import로 provider를 다시 가져온다. DLM 스냅샷은 정책이 지워져도 남는다.
 
@@ -462,7 +477,7 @@ ap-northeast-2 온디맨드, Pricing API로 확인(2026-09).
 
 ## 상태 파일
 
-`terraform.tfstate`는 **로컬**이다(inno-frame 관례). 그 안에 `random_password` 넷의 평문, SES SMTP 비밀번호, `/tf-buddha/env`의 렌더 결과 전체가 들어 있다. `.gitignore`가 `*.tfstate*`를 막지만 그것으로 끝이 아니다.
+`terraform.tfstate`는 **로컬**이다(inno-frame 관례). 그 안에 `random_password` 다섯의 평문, SES SMTP 비밀번호, `/tf-buddha/env`의 렌더 결과 전체가 들어 있다. `.gitignore`가 `*.tfstate*`를 막지만 그것으로 끝이 아니다.
 
 - **오프머신 백업.** apply 뒤마다:
 

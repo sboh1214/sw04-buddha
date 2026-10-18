@@ -1,16 +1,37 @@
 import type { APIResponse } from '@playwright/test';
+import type { ReleaseSetting, ReleaseSettingStatus } from '@buddha/shared';
 import { copy } from '../src/copy';
 import { adminAccount, expect, freshEmail, signIn, signUp, test } from './helpers';
 
 /**
- * 출시 설정 (#170, ADR-0055) as the shipped build has it: the registry is empty until the issues
- * that own the values register them (docs/SETTINGS.md), so the screen shows its empty state and
- * the API lists nothing. Registering, changing and recording an item are fixed by the API suite
- * with injected test items (`createTestApp({ releaseSettings })`); a browser cannot register one.
+ * 출시 설정 (#170, ADR-0055) as the shipped build has it: one registered item since #70 — 시작 지급액
+ * (`grant.start_coin`, ADR-0071) — which the screen and the API list alike. Changing and recording
+ * an item are fixed by the API suite with injected test items (`createTestApp({ releaseSettings
+ * })`), and paying the start Coin once a value is entered by the API and worker suites; a browser
+ * cannot register one.
+ *
+ * Nothing here changes the item. A value entered in a run would be paid by the worker to every
+ * waiting grant and stay for the runs after it, so the spec reads the status the database holds —
+ * 미정 on a fresh one, as nothing writes a value (docs/SETTINGS.md) — and checks the screen against
+ * it. Its change dialog is opened and cancelled only.
  */
 
 const LIST = '/api/v1/admin/release-settings';
 const CHANGES = '/api/v1/admin/release-settings/changes';
+
+/** The one key the shipped registry holds (`START_COIN_SETTING`). */
+const START_COIN_KEY = 'grant.start_coin';
+
+/**
+ * The badge names (`RELEASE_SETTING_STATUS_LABELS`), restated: these specs import only types from
+ * `@buddha/shared` (helpers.ts).
+ */
+const STATUS_LABEL: Readonly<Record<ReleaseSettingStatus, string>> = {
+  undecided: '미정',
+  proposal: '설계 제안',
+  test: '시험값',
+  approved: '승인됨',
+};
 
 /** `{ data }` out of the success envelope, with the body in the message on a failure. */
 async function dataOf<T>(response: APIResponse): Promise<T> {
@@ -27,13 +48,24 @@ async function expectForbidden(response: APIResponse): Promise<void> {
 }
 
 test.describe('출시 설정 (#170)', () => {
-  test('관리자 메뉴에서 열면 등록된 항목이 없다고 보이고, 미정만 보기에서도 같다', async ({
+  test('관리자 메뉴에서 열면 시작 지급액 하나가 보이고, 미정만 보기는 그 상태대로 거른다', async ({
     page,
     admin,
   }) => {
-    // The API agrees: no item, undecided or not, and no item to change.
-    expect(await dataOf<unknown[]>(await admin.get(LIST))).toEqual([]);
-    expect(await dataOf<unknown[]>(await admin.get(`${LIST}?status=undecided`))).toEqual([]);
+    // The API: the one item, as #70 registered it — a whole number of Coin.
+    const items = await dataOf<ReleaseSetting[]>(await admin.get(LIST));
+    expect(items.map((item) => item.key)).toEqual([START_COIN_KEY]);
+    const [startCoin] = items;
+    if (startCoin === undefined) throw new Error('unreachable');
+    expect(startCoin).toMatchObject({ key: START_COIN_KEY, label: '시작 지급액', unit: 'Coin' });
+    expect(startCoin.valueSchema.type).toBe('integer');
+    const undecided = startCoin.status === 'undecided';
+    expect(undecided).toBe(startCoin.value === null);
+    expect(
+      (await dataOf<ReleaseSetting[]>(await admin.get(`${LIST}?status=undecided`))).map(
+        (item) => item.key,
+      ),
+    ).toEqual(undecided ? [START_COIN_KEY] : []);
     const unknown = await admin.patch(`${LIST}/e2e.unregistered`, {
       data: { status: 'undecided', reason: 'e2e' },
     });
@@ -47,9 +79,21 @@ test.describe('출시 설정 (#170)', () => {
       .click();
     await expect(page).toHaveURL('/admin/settings');
 
-    const empty = page.getByTestId('release-settings-empty');
-    await expect(empty).toHaveText(copy.adminReleaseSettingsEmpty);
-    await expect(page.getByTestId('release-settings-count')).toHaveText('전체 0개 · 미정 0개');
+    // The screen: the item with its name, key, status, value and unit — and nothing else.
+    await expect(page.getByTestId('release-settings-empty')).toHaveCount(0);
+    await expect(page.getByTestId('release-settings-count')).toHaveText(
+      `전체 1개 · 미정 ${undecided ? '1' : '0'}개`,
+    );
+    await expect(page.locator('[data-testid^="release-setting-edit-"]')).toHaveCount(1);
+    const row = page.getByTestId(`release-setting-${START_COIN_KEY}`);
+    await expect(row).toContainText('시작 지급액');
+    await expect(row).toContainText(START_COIN_KEY);
+    await expect(row).toContainText(startCoin.description);
+    await expect(row.getByTestId('release-setting-status')).toHaveText(
+      STATUS_LABEL[startCoin.status],
+    );
+    if (undecided) await expect(row.getByTestId('release-setting-value')).toHaveText('—');
+    await expect(row).toContainText(`${copy.adminReleaseSettingUnit}Coin`);
     // The legend names all four statuses, so 설계 제안 and 시험값 never pass for 승인됨.
     const legend = page.getByTestId('release-settings-legend');
     for (const hint of [
@@ -61,15 +105,35 @@ test.describe('출시 설정 (#170)', () => {
       await expect(legend).toContainText(hint);
     }
 
-    // 미정만 보기 on an empty registry still says the registry is empty, not that none is 미정.
+    // Its change dialog takes a value as one line of JSON (a whole number), once a status with a
+    // value is picked; cancelled, nothing is written.
+    await page.getByTestId(`release-setting-edit-${START_COIN_KEY}`).click();
+    const dialog = page.getByTestId('release-setting-dialog');
+    await expect(dialog).toContainText('시작 지급액');
+    await dialog.getByTestId('release-setting-status-test').click();
+    const valueInput = dialog.getByTestId('release-setting-value-input');
+    await expect(valueInput).toBeVisible();
+    expect(await valueInput.evaluate((element) => element.tagName)).toBe('INPUT');
+    await expect(dialog).toContainText(copy.adminReleaseSettingValueJsonHint);
+    await dialog.getByTestId('release-setting-cancel').click();
+    await expect(dialog).toHaveCount(0);
+    expect((await dataOf<ReleaseSetting[]>(await admin.get(LIST)))[0]).toEqual(startCoin);
+
+    // 미정만 보기 keeps the item while it is 미정 and otherwise says none is 미정.
     const toggle = page.getByTestId('release-settings-undecided-only');
     await toggle.getByText(copy.adminReleaseSettingsUndecidedOnly).click();
     await expect(toggle.locator('input')).toBeChecked();
-    await expect(empty).toHaveText(copy.adminReleaseSettingsEmpty);
-    await expect(page.locator('[data-testid^="release-setting-edit-"]')).toHaveCount(0);
+    if (undecided) {
+      await expect(row).toBeVisible();
+    } else {
+      await expect(page.getByTestId('release-settings-empty')).toHaveText(
+        copy.adminReleaseSettingsNoUndecided,
+      );
+      await expect(row).toHaveCount(0);
+    }
 
-    // Nothing can be changed, so a fresh database has no record; a persistent one may hold
-    // records of a key a developer registered for a while — shown, either way, under its heading.
+    // A fresh database has no record; a persistent one may hold records of changes a developer
+    // made — shown, either way, under its heading.
     const changes = page.getByTestId('release-setting-changes');
     await expect(
       changes.getByRole('heading', { name: copy.adminReleaseSettingChanges }),
@@ -102,6 +166,12 @@ test.describe('출시 설정 (#170)', () => {
     await expectForbidden(
       await page.request.patch(`${LIST}/e2e.unregistered`, {
         data: { status: 'undecided', reason: 'e2e' },
+      }),
+    );
+    // Least of all the amount every waiting account would be paid (#70).
+    await expectForbidden(
+      await page.request.patch(`${LIST}/${START_COIN_KEY}`, {
+        data: { status: 'test', value: 1, reason: 'e2e' },
       }),
     );
   });

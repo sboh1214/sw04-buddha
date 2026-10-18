@@ -75,6 +75,21 @@ export function domainCovers(cookieDomain: string, host: string): boolean {
   return target === domain || target.endsWith(`.${domain}`);
 }
 
+/**
+ * The key `phoneHash` uses outside production when PHONE_HASH_KEY is unset: local development, the
+ * test suites and the e2e. Never a production key — the env schema requires PHONE_HASH_KEY there,
+ * and refuses this value and any other repository key (`DEV_KEY_MARK`). Hashes made with it match
+ * nothing a deployment stores.
+ */
+export const DEV_PHONE_HASH_KEY = 'development-only-phone-hash-key-not-for-production';
+
+/**
+ * What a development key in the repository carries (DEV_PHONE_HASH_KEY, and any value made after
+ * it). A key in a public repository hashes nothing: anyone with a dump reverses the hashes by
+ * trying every mobile number (10^8–10^9), so production refuses it.
+ */
+const DEV_KEY_MARK = 'development-only';
+
 export const envSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -205,6 +220,23 @@ export const envSchema = z
      * account can verify while it is on.
      */
     ALIGO_TEST_MODE: z.stringbool().default(false),
+
+    // --- The keyed hash of a verified mobile number (#70, ADR-0069 decisions 1 and 7, ADR-0071) ---
+    /**
+     * The HMAC-SHA256 key of `phoneHash` (identity/phone-hash.ts): what recognises a verified number
+     * once the number itself is gone — the start Coin's "once per number" (`start_grants`), kept
+     * through a withdrawal (#57-18), and the per-number limits later issues count (decision 7).
+     * Its own secret, not one derived from BETTER_AUTH_SECRET: rotating the session secret (every
+     * session then signs in again) must not also forget which numbers got their start Coin.
+     * Required in production, at least 32 characters (`openssl rand -base64 32`), not a development
+     * key from the repository and not the same value as BETTER_AUTH_SECRET; elsewhere, unset
+     * falls back to DEV_PHONE_HASH_KEY.
+     *
+     * NEVER CHANGE IT on a deployment that holds hashes: every stored hash stops matching its
+     * number, so a number that got its start Coin would get it again on its next account and
+     * every per-number count would start over (ADR-0071).
+     */
+    PHONE_HASH_KEY: optionalString,
   })
   .superRefine((env, ctx) => {
     // Same reason as WEB_ORIGIN below: a bad entry must fail at `loadEnv()` under its own name.
@@ -290,6 +322,30 @@ export const envSchema = z
         code: 'custom',
         path: ['BETTER_AUTH_SECRET'],
         message: 'must be at least 32 characters in production',
+      });
+    }
+    if (env.NODE_ENV === 'production' && (env.PHONE_HASH_KEY?.length ?? 0) < 32) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['PHONE_HASH_KEY'],
+        message:
+          'required in production, at least 32 characters (generate one with `openssl rand -base64 32`)',
+      });
+    } else if (env.NODE_ENV === 'production' && env.PHONE_HASH_KEY?.includes(DEV_KEY_MARK)) {
+      // Long enough, and public: the key cannot be rotated later (ADR-0071 7-2), so a hash stored
+      // under it would stay reversible for good.
+      ctx.addIssue({
+        code: 'custom',
+        path: ['PHONE_HASH_KEY'],
+        message:
+          'must not be a development key from the repository (generate one with `openssl rand -base64 32`)',
+      });
+    }
+    if (env.PHONE_HASH_KEY !== undefined && env.PHONE_HASH_KEY === env.BETTER_AUTH_SECRET) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['PHONE_HASH_KEY'],
+        message: 'must not be BETTER_AUTH_SECRET: the two are rotated for different reasons',
       });
     }
     if (Boolean(env.SMTP_USER) !== Boolean(env.SMTP_PASS)) {
@@ -417,6 +473,15 @@ export function parseTrustProxy(value: string): boolean | string[] {
  */
 export function smsProvider(env: Pick<Env, 'NODE_ENV' | 'SMS_PROVIDER'>): SmsProvider {
   return env.SMS_PROVIDER ?? (env.NODE_ENV === 'production' ? 'aligo' : 'dev');
+}
+
+/** PHONE_HASH_KEY, or DEV_PHONE_HASH_KEY outside production (the schema requires it there). */
+export function phoneHashKey(env: Pick<Env, 'NODE_ENV' | 'PHONE_HASH_KEY'>): string {
+  if (env.PHONE_HASH_KEY !== undefined) return env.PHONE_HASH_KEY;
+  if (env.NODE_ENV === 'production') {
+    throw new Error('PHONE_HASH_KEY is required in production');
+  }
+  return DEV_PHONE_HASH_KEY;
 }
 
 /** 알리고's credentials and sender number, or undefined when they are not configured. */

@@ -3,6 +3,7 @@ import { coinAmountSchema } from './api/coin-amount.js';
 import { NICKNAME_MAX_LENGTH, NICKNAME_MIN_LENGTH } from './constants.js';
 import { roleSchema } from './enums.js';
 import { phoneVerificationSchema } from './phone-verification.js';
+import { startGrantSchema } from './start-grant.js';
 import { TIME_ZONE_MAX_LENGTH } from './time-zone.js';
 
 /**
@@ -59,6 +60,13 @@ export const meSchema = z
      * account to `/onboarding`. Owner-only, like everything here.
      */
     verification: phoneVerificationSchema.nullable(),
+    /**
+     * The account's start Coin (#70, ADR-0071): `pending` while the amount is undecided (the
+     * wallet says it will be paid), `granted` once paid; null while the account has no grant
+     * record — not yet granted, or verified with a number that already received its start Coin
+     * on another account (ADR-0069 decision 1 #57-1). Owner-only, like the balance.
+     */
+    startGrant: startGrantSchema.nullable(),
   })
   .meta({ id: 'Me' });
 export type Me = z.infer<typeof meSchema>;

@@ -76,8 +76,10 @@ test.describe('최상위 메뉴', () => {
 
     // The balance chip is the header's way into 지갑; nothing else of the account is up there. It
     // shows the available Coin alone, under the label 잔고 (owner decisions 2026-10-13).
-    await expect(page.getByTestId('balance-chip')).toContainText(copy.balance);
-    await expect(page.getByTestId('balance-chip')).toContainText('10,000 Coin');
+    // A new account's 0 (#70, ADR-0071), matched whole: '0 Coin' is also inside '10,000 Coin'.
+    await expect(page.getByTestId('balance-chip')).toHaveText(
+      new RegExp(`^${copy.balance}\\s*0 Coin$`),
+    );
     await page.getByTestId('balance-chip').click();
     await expect(page).toHaveURL('/my/wallet');
     await expect(page.locator('header [role="menu"], header [aria-haspopup="menu"]')).toHaveCount(

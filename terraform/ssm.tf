@@ -12,6 +12,23 @@ resource "random_password" "better_auth_secret" {
   special = false
 }
 
+# The key of the keyed hash of a verified mobile number (#70, ADR-0071; apps/api/src/config/env.ts
+# requires >= 32 characters in production). Unlike better_auth_secret it must NEVER be replaced
+# (`-replace`, a taint): every stored hash would stop matching its number, so a number that got
+# its start Coin would get it again on its next account, and every per-number limit would restart.
+# Nothing at runtime notices a new key (the API starts as usual), so prevent_destroy makes the
+# plan fail instead: an edit of length/special (each forces a new value), a taint, `-replace` or a
+# `terraform destroy`. Taking the root down keeps the key with `terraform state mv` (README
+# "중지 / 시작").
+resource "random_password" "phone_hash_key" {
+  length  = 48
+  special = false
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
 # postgres superuser: only postgres-init (initdb) and manual maintenance use it.
 resource "random_password" "postgres_superuser" {
   length  = 32
@@ -47,6 +64,7 @@ resource "aws_ssm_parameter" "env" {
     db_app_password            = random_password.db_app.result
     db_migrate_password        = random_password.db_migrate.result
     better_auth_secret         = random_password.better_auth_secret.result
+    phone_hash_key             = random_password.phone_hash_key.result
     smtp_user                  = aws_iam_access_key.ses_smtp.id
     smtp_pass                  = aws_iam_access_key.ses_smtp.ses_smtp_password_v4
     smtp_from                  = var.smtp_from

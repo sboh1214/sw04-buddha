@@ -4,8 +4,8 @@ import {
   type UserPositionEvent,
 } from '@buddha/shared';
 import { QueryObserver, hydrate } from '@tanstack/react-query';
-import { describe, expect, it } from 'vitest';
-import { ME_QUERY_KEY } from '@/hooks/use-me';
+import { describe, expect, it, vi } from 'vitest';
+import { ME_QUERY_KEY, storeBalanceEvent } from '@/hooks/use-me';
 import { positionsKey } from '@/hooks/use-portfolio';
 import { type Market, type MarketSummary, type Me, type Position, type PriceSeries } from './api';
 import {
@@ -107,6 +107,7 @@ const me: Me = {
   balance: { availableCoin: '100000', lockedCoin: '0' },
   linkedAccounts: [],
   verification: null,
+  startGrant: null,
 };
 
 /** The series as the server answered it a moment BEFORE the trade the tick announces. */
@@ -289,6 +290,9 @@ describe('the market list caches', () => {
 });
 
 describe('the me cache', () => {
+  // Every case drives `storeBalanceEvent`, the write realtime-provider.tsx's `user:balance`
+  // handler makes once an event passes its order gate — the provider's own steps, not a copy.
+
   it('is not created by a balance event for a visitor who is not signed in', () => {
     // `user:balance` is only delivered to a signed-in socket, but a sign-out that races the
     // last event must not leave a synthesised profile behind for the next screen to read.
@@ -296,9 +300,10 @@ describe('the me cache', () => {
     // asked for builds no entry — which is what makes that answer safe here.
     const queryClient = getQueryClient();
 
-    const patch = applyBalanceEvent(queryClient.getQueryData<Me>(ME_QUERY_KEY), balance);
-    expect(patch.kind).toBe('refetch');
-    void queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY, exact: true });
+    expect(applyBalanceEvent(queryClient.getQueryData<Me>(ME_QUERY_KEY), balance).kind).toBe(
+      'refetch',
+    );
+    storeBalanceEvent(queryClient, balance);
 
     expect(queryClient.getQueryData(ME_QUERY_KEY)).toBeUndefined();
     expect(queryClient.getQueryState(ME_QUERY_KEY)).toBeUndefined();
@@ -310,7 +315,8 @@ describe('the me cache', () => {
     // handler cancels that request so a snapshot taken before the event cannot land on top of
     // it — and a cancel REVERTS the query to the state it had before it started, which for a
     // first load is `pending` with no data and no observer fetching. Writing nothing there
-    // left the balance chip and 잔고 요약 on a skeleton until the next window focus.
+    // left the balance chip and 잔고 요약 on a skeleton until the next window focus; the
+    // handler asks again instead.
     const queryClient = getQueryClient();
     let answer: Me = { ...me, balance: { availableCoin: '100000', lockedCoin: '0' } };
     let fetches = 0;
@@ -327,30 +333,90 @@ describe('the me cache', () => {
       // The first request is in flight and has answered nothing yet.
       const first = observer.refetch();
       expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)).toBeUndefined();
-
-      const patch = applyBalanceEvent(queryClient.getQueryData<Me>(ME_QUERY_KEY), balance);
-      expect(patch.kind).toBe('refetch');
-      void queryClient.cancelQueries({ queryKey: ME_QUERY_KEY, exact: true });
-      // The cancel is synchronous down to the state change, so the query is idle again and the
-      // refetch below is a REAL second request rather than a subscription to the cancelled one.
-      // This is also the stuck state itself: nothing is fetching, nothing has answered, and no
-      // observer is going to try again on its own.
-      expect(queryClient.getQueryState(ME_QUERY_KEY)?.fetchStatus).toBe('idle');
-      expect(observer.getCurrentResult().isPending).toBe(true);
-      expect(observer.getCurrentResult().data).toBeUndefined();
+      expect(applyBalanceEvent(undefined, balance).kind).toBe('refetch');
       // What the server answers now reflects the event the socket delivered.
       answer = {
         ...me,
         balance: { availableCoin: balance.availableCoin, lockedCoin: balance.lockedCoin },
       };
-      await queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY, exact: true });
+      storeBalanceEvent(queryClient, balance);
       await first;
 
+      // A REAL second request rather than the cancelled one: without it nothing would fetch,
+      // nothing would answer, and no observer would try again on its own.
+      await vi.waitFor(() => expect(observer.getCurrentResult().isPending).toBe(false));
       expect(observer.getCurrentResult().data?.balance).toEqual({
         availableCoin: '80000',
         lockedCoin: '1200',
       });
-      expect(observer.getCurrentResult().isPending).toBe(false);
+      expect(fetches).toBe(2);
+    } finally {
+      unsubscribe();
+      queryClient.clear();
+    }
+  });
+
+  it('shows the paid balance at once and drops the waiting start grant on the answer (#70)', async () => {
+    // The worker pays a grant that waited for its amount, and the tab learns of it only through
+    // `user:balance`: the balance is written at once, then `GET /me` is asked again — the event
+    // cannot say it was the grant, `GET /me` can.
+    const queryClient = getQueryClient();
+    const waiting: Me = {
+      ...me,
+      balance: { availableCoin: '0', lockedCoin: '0' },
+      startGrant: { status: 'pending', amountCoin: null, grantedAt: null },
+    };
+    const paid: UserBalanceEvent = { ...balance, availableCoin: '10000', lockedCoin: '0' };
+    let answer: Me = waiting;
+    let fetches = 0;
+    const observer = new QueryObserver<Me>(queryClient, {
+      queryKey: ME_QUERY_KEY,
+      queryFn: () => {
+        fetches += 1;
+        return Promise.resolve(answer);
+      },
+      retry: false,
+      staleTime: Infinity,
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
+    try {
+      await observer.refetch();
+      expect(observer.getCurrentResult().data?.startGrant?.status).toBe('pending');
+
+      // What the server answers once the payment committed, before the event was published.
+      answer = {
+        ...waiting,
+        balance: { availableCoin: '10000', lockedCoin: '0' },
+        startGrant: {
+          status: 'granted',
+          amountCoin: '10000',
+          grantedAt: '2026-10-18T00:00:00.000Z',
+        },
+      };
+      expect(applyBalanceEvent(queryClient.getQueryData<Me>(ME_QUERY_KEY), paid).kind).toBe(
+        'replaceAndRefetch',
+      );
+      storeBalanceEvent(queryClient, paid);
+      // The figure moves before any answer: the chip and the wallet do not wait for the request.
+      expect(observer.getCurrentResult().data?.balance.availableCoin).toBe('10000');
+      expect(observer.getCurrentResult().data?.startGrant?.status).toBe('pending');
+
+      // Even with a staleTime that would keep any other answer, the handler asks again, and the
+      // answer that says it is paid drops the notice.
+      await vi.waitFor(() =>
+        expect(observer.getCurrentResult().data?.startGrant).toEqual(answer.startGrant),
+      );
+      expect(fetches).toBe(2);
+      expect(observer.getCurrentResult().data?.balance.availableCoin).toBe('10000');
+
+      // Paid, a later balance event is a write alone: no third request.
+      const later = { ...balance, availableCoin: '9000', ledgerEntryId: '10' };
+      expect(applyBalanceEvent(queryClient.getQueryData<Me>(ME_QUERY_KEY), later).kind).toBe(
+        'replace',
+      );
+      storeBalanceEvent(queryClient, later);
+      expect(observer.getCurrentResult().data?.balance.availableCoin).toBe('9000');
+      await new Promise((resolve) => setTimeout(resolve, 20));
       expect(fetches).toBe(2);
     } finally {
       unsubscribe();

@@ -10,13 +10,14 @@ import {
 const marketId = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
 
 describe('jobs (PLAN 9)', () => {
-  it('declares the three queues and the four job names', () => {
-    expect(QUEUE_NAMES).toEqual(['markets', 'audit', 'stats']);
+  it('declares the four queues and the five job names', () => {
+    expect(QUEUE_NAMES).toEqual(['markets', 'audit', 'stats', 'wallet']);
     expect(Object.values(JOB_NAMES)).toEqual([
       'market.close',
       'market.finalize',
       'ledger.audit',
       'market.trader_count',
+      'start_grant.pay',
     ]);
   });
 

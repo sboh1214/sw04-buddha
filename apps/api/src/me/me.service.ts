@@ -5,6 +5,7 @@ import { asc, eq } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
 import { isPgError, PG_UNIQUE_VIOLATION } from '../common/errors/pg-error.js';
 import { DB } from '../infra/db/db.provider.js';
+import { toStartGrant } from '../start-grant/start-grant.service.js';
 
 /** Constraint name drizzle generates for `profiles.nickname.unique()`. */
 export const NICKNAME_UNIQUE_CONSTRAINT = 'profiles_nickname_unique';
@@ -29,6 +30,9 @@ export class MeService {
           realName: schema.phoneVerifications.realName,
           phone: schema.phoneVerifications.phone,
           verifiedAt: schema.phoneVerifications.verifiedAt,
+          startGrantId: schema.startGrants.id,
+          startGrantAmountCoin: schema.startGrants.amountCoin,
+          startGrantedAt: schema.startGrants.grantedAt,
         })
         .from(schema.user)
         .innerJoin(schema.profiles, eq(schema.profiles.userId, schema.user.id))
@@ -36,6 +40,9 @@ export class MeService {
         // At most one row per account (user_id is its primary key); none until the account
         // confirms an SMS code (ADR-0070).
         .leftJoin(schema.phoneVerifications, eq(schema.phoneVerifications.userId, schema.user.id))
+        // At most one row per account (user_id is UNIQUE); none until the account is granted or
+        // waits for its start Coin (#70, ADR-0071).
+        .leftJoin(schema.startGrants, eq(schema.startGrants.userId, schema.user.id))
         .where(eq(schema.user.id, userId))
         .limit(1),
       // Read-only view of better-auth's account table (PLAN 6.1: never written by us).
@@ -78,6 +85,10 @@ export class MeService {
         row.realName !== null && row.phone !== null && row.verifiedAt !== null
           ? { realName: row.realName, phone: row.phone, verifiedAt: row.verifiedAt.toISOString() }
           : null,
+      startGrant:
+        row.startGrantId === null
+          ? null
+          : toStartGrant({ amountCoin: row.startGrantAmountCoin, grantedAt: row.startGrantedAt }),
     };
   }
 

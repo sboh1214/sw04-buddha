@@ -6,6 +6,7 @@ import {
   JSONB_NUL_MESSAGE,
   RELEASE_SETTINGS,
   RELEASE_SETTING_STATUS_LABELS,
+  START_COIN_SETTING,
   defineReleaseSetting,
   defineReleaseSettings,
   isReleaseSettingUnchanged,
@@ -18,6 +19,7 @@ import {
   releaseSettingValueJsonSchema,
   type ReleaseSettingValue,
 } from './release-settings.js';
+import { START_GRANT_MAX_COIN } from './start-grant.js';
 
 /** U+0000: PostgreSQL's jsonb cannot hold it. */
 const NUL = String.fromCharCode(0);
@@ -39,8 +41,31 @@ const window = defineReleaseSetting({
 });
 
 describe('release settings registry', () => {
-  it('ships empty: each item is registered by the issue that uses it', () => {
-    expect([...RELEASE_SETTINGS.keys()]).toEqual([]);
+  it('ships the items the issues that use them registered: the start grant (#70)', () => {
+    expect([...RELEASE_SETTINGS.keys()]).toEqual(['grant.start_coin']);
+    expect(RELEASE_SETTINGS.get('grant.start_coin')).toBe(START_COIN_SETTING);
+  });
+
+  it('takes a whole Coin amount for the start grant, up to START_GRANT_MAX_COIN (#70)', () => {
+    const accepts = (value: unknown) => START_COIN_SETTING.schema.safeParse(value).success;
+    expect(START_COIN_SETTING).toMatchObject({ label: '시작 지급액', unit: 'Coin' });
+    expect(accepts(1)).toBe(true);
+    expect(accepts(10_000)).toBe(true);
+    expect(accepts(START_GRANT_MAX_COIN)).toBe(true);
+    // No zero (no grant is not a grant of nothing: leave it undecided), no fraction, no string,
+    // nothing above the bound.
+    for (const value of [0, -1, 10.5, '10000', START_GRANT_MAX_COIN + 1]) {
+      expect(accepts(value), String(value)).toBe(false);
+    }
+    // Read back as stored: a number in, the same number out.
+    expect(
+      readReleaseSetting(RELEASE_SETTINGS, START_COIN_SETTING, { status: 'test', value: 5_000 }),
+    ).toEqual({ key: 'grant.start_coin', status: 'test', value: 5_000 });
+    expect(readReleaseSetting(RELEASE_SETTINGS, START_COIN_SETTING, undefined)).toEqual({
+      key: 'grant.start_coin',
+      status: 'undecided',
+      value: null,
+    });
   });
 
   it('labels every status, and only proposal and test are distinct from approved', () => {
@@ -251,7 +276,8 @@ describe('readReleaseSetting', () => {
 
   it('reads only the very definition the registry holds', () => {
     const stored = { status: 'test', value: 48 } as const;
-    // Another key, a copy of a registered definition, and the shipped (empty) registry.
+    // Another key, a copy of a registered definition, and the shipped registry (which lists the
+    // start grant, not this suite's item).
     const unlisted = defineReleaseSetting({ ...hours, key: 'test.unlisted' });
     for (const [inRegistry, definition] of [
       [registry, unlisted],

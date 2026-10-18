@@ -6,7 +6,6 @@ import {
   MARKET_STATUSES,
   PRICE_TICK_TRIGGERS,
   RELEASE_SETTING_STATUSES,
-  SIGNUP_BONUS_COIN,
   nicknameSchema,
   releaseSettingChangeBodySchema,
   releaseSettingChangePayloadSchema,
@@ -36,6 +35,7 @@ import {
   positions,
   profiles,
   releaseSettings,
+  startGrants,
   user,
 } from './schema/index.js';
 import { storedReleaseSettingValue } from './release-settings.js';
@@ -47,11 +47,14 @@ import {
   createPosition,
   createSearch,
   createSettlementStep,
+  createStartGrant,
   createUser,
   createWatch,
+  randomPhoneHash,
 } from './test/factories.js';
 import { connectTestDb, hasTestDb, type TestDb } from './test/harness.js';
 import { isPhoneVerified } from './phone-verification.js';
+import { payStartGrant, pendingStartGrantIds } from './start-grants.js';
 import { lockAdminRoles } from './tx-helpers.js';
 
 /**
@@ -99,18 +102,13 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     expect(profile?.nickname).toMatch(/^user_[23456789A-HJ-NP-Z]{4}$/);
     expect(nicknameSchema.safeParse(profile?.nickname).success).toBe(true);
     expect(profile?.role).toBe('user');
-    // Migration 0004: the sign-up bonus lands in the same transaction, with its ledger entry.
-    expect(balance?.availableCoin).toBe(SIGNUP_BONUS_COIN);
+    // Migration 0031 (#70): creating an account grants nothing — a zero balance and no ledger
+    // entry, whatever the sign-up path. The start Coin comes from the start grant.
+    expect(balance?.availableCoin).toBe(0n);
     expect(balance?.lockedCoin).toBe(0n);
-    const bonus = await t.db.query.ledgerEntries.findFirst({
-      where: eq(ledgerEntries.userId, 'u-trigger'),
-    });
-    expect(bonus).toMatchObject({
-      type: 'BONUS',
-      amountCoin: SIGNUP_BONUS_COIN,
-      balanceAfterCoin: SIGNUP_BONUS_COIN,
-      memo: '가입 보너스',
-    });
+    expect(
+      await t.db.select().from(ledgerEntries).where(eq(ledgerEntries.userId, 'u-trigger')),
+    ).toEqual([]);
   });
 
   it('createUser applies nickname/role/balance and keeps the ledger invariant', async () => {
@@ -469,6 +467,9 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
           'positions.cost_basis_coin',
           'positions.realized_pnl_coin',
           'positions_cost_basis_coin_check',
+          // The start grant (migration 0031, #70): coined that way from the start.
+          'start_grants.amount_coin',
+          'start_grants_amount_coin_check',
         ].sort(),
       );
     });
@@ -613,8 +614,9 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       settled: false,
     });
     expect(await t.db.select().from(positions)).toHaveLength(1);
+    // No ledger entry at all: the trigger grants nothing (migration 0031), and neither does this.
     const entries = await t.db.select().from(ledgerEntries).where(eq(ledgerEntries.userId, u.id));
-    expect(entries.map((entry) => entry.type)).toEqual(['BONUS']);
+    expect(entries).toEqual([]);
   });
 
   it('positions.version starts at 1 and every ORM update bumps it (migration 0010)', async () => {
@@ -1548,6 +1550,355 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     });
   });
 
+  describe('start grants (migration 0031, #70, ADR-0071)', () => {
+    const amountOf = (amount: bigint | null) => () => Promise.resolve(amount);
+
+    async function ledgerOf(userId: string) {
+      return t.db
+        .select()
+        .from(ledgerEntries)
+        .where(eq(ledgerEntries.userId, userId))
+        .orderBy(ledgerEntries.id);
+    }
+
+    it('keeps one grant per number and one per account, pending until paid', async () => {
+      const { user: a } = await createUser(t.db);
+      const { user: b } = await createUser(t.db);
+      const hash = randomPhoneHash();
+      const row = await createStartGrant(t.db, { userId: a.id, phoneHash: hash });
+      expect(row).toMatchObject({
+        userId: a.id,
+        phoneHash: hash,
+        amountCoin: null,
+        ledgerEntryId: null,
+        grantedAt: null,
+      });
+      // The same number for another account (a re-signup after a withdrawal), and a second
+      // number for the same account (an operator changed it): both refused.
+      await expect(
+        t.db.insert(startGrants).values({ userId: b.id, phoneHash: hash }),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23505' && sqlConstraint(e) === 'start_grants_phone_hash_unique',
+      );
+      await expect(
+        t.db.insert(startGrants).values({ userId: a.id, phoneHash: randomPhoneHash() }),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23505' && sqlConstraint(e) === 'start_grants_user_id_unique',
+      );
+      // A hash is 64 lower-case hex characters, never a number in clear.
+      for (const phoneHash of ['01012345678', 'A'.repeat(64), 'a'.repeat(63)]) {
+        await expect(
+          t.db.insert(startGrants).values({ userId: b.id, phoneHash }),
+        ).rejects.toSatisfy(
+          (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'start_grants_phone_hash_check',
+        );
+      }
+    });
+
+    it('pays a grant once: the balance, one START_GRANT entry and the row together', async () => {
+      const { user: u } = await createUser(t.db);
+      const grant = await createStartGrant(t.db, { userId: u.id });
+      const first = await t.db.transaction((tx) => payStartGrant(tx, grant.id, amountOf(10_000n)));
+      expect(first.outcome).toBe('granted');
+      if (first.outcome !== 'granted') throw new Error('not granted');
+      expect(first.ledgerEntry).toMatchObject({
+        userId: u.id,
+        type: 'START_GRANT',
+        amountCoin: 10_000n,
+        balanceAfterCoin: 10_000n,
+        refType: 'start_grant',
+        refId: grant.id,
+        memo: null,
+      });
+      expect(first.grant).toMatchObject({
+        amountCoin: 10_000n,
+        ledgerEntryId: first.ledgerEntry.id,
+        grantedAt: first.ledgerEntry.createdAt,
+      });
+      expect(first.balance.availableCoin).toBe(10_000n);
+      // Again, with another amount: paid already, nothing written, the amount it got stays.
+      const again = await t.db.transaction((tx) => payStartGrant(tx, grant.id, amountOf(5_000n)));
+      expect(again).toEqual({ outcome: 'already_granted', grant: first.grant });
+      expect((await ledgerOf(u.id)).map((e) => [e.type, e.amountCoin])).toEqual([
+        ['START_GRANT', 10_000n],
+      ]);
+    });
+
+    it('leaves a grant pending while the amount is undecided, then pays the value set later', async () => {
+      const { user: u } = await createUser(t.db);
+      const grant = await createStartGrant(t.db, { userId: u.id });
+      const waiting = await t.db.transaction((tx) => payStartGrant(tx, grant.id, amountOf(null)));
+      expect(waiting).toEqual({ outcome: 'pending', grant });
+      expect(await ledgerOf(u.id)).toEqual([]);
+      expect(await pendingStartGrantIds(t.db, 10)).toEqual([grant.id]);
+      const paid = await t.db.transaction((tx) => payStartGrant(tx, grant.id, amountOf(3_000n)));
+      expect(paid.outcome).toBe('granted');
+      expect(await pendingStartGrantIds(t.db, 10)).toEqual([]);
+    });
+
+    it('pays once when two transactions pay one grant at the same time', async () => {
+      const { user: u } = await createUser(t.db);
+      const grant = await createStartGrant(t.db, { userId: u.id });
+      const outcomes = await Promise.all(
+        Array.from({ length: 4 }, () =>
+          t.db.transaction((tx) => payStartGrant(tx, grant.id, amountOf(10_000n))),
+        ),
+      );
+      expect(outcomes.map((o) => o.outcome).sort()).toEqual([
+        'already_granted',
+        'already_granted',
+        'already_granted',
+        'granted',
+      ]);
+      expect((await ledgerOf(u.id)).map((e) => e.type)).toEqual(['START_GRANT']);
+      const [balance] = await t.db.select().from(balances).where(eq(balances.userId, u.id));
+      expect(balance!.availableCoin).toBe(10_000n);
+    });
+
+    it('lists pending grants oldest first, up to the limit', async () => {
+      const ids: string[] = [];
+      for (let i = 0; i < 3; i += 1) {
+        const { user: u } = await createUser(t.db);
+        ids.push((await createStartGrant(t.db, { userId: u.id })).id);
+      }
+      const { user: paid } = await createUser(t.db);
+      await createStartGrant(t.db, { userId: paid.id, amountCoin: 100n });
+      expect(await pendingStartGrantIds(t.db, 10)).toEqual(ids);
+      expect(await pendingStartGrantIds(t.db, 2)).toEqual(ids.slice(0, 2));
+    });
+
+    it('records a grant pending only, and pays it through the CHECKs: all three columns, a positive amount', async () => {
+      const { user: u } = await createUser(t.db, { balanceCoin: 100n });
+      const [entry] = await ledgerOf(u.id);
+      // Inserted with anything paid: refused by migration 0031's insert trigger, before the CHECKs
+      // (a BEFORE ROW trigger runs first) — a payment is the checked UPDATE, never an INSERT.
+      const insertRefused = (e: unknown) =>
+        sqlState(e) === '23000' && /must be inserted pending/.test(errorMessage(e));
+      for (const values of [
+        { amountCoin: 100n },
+        { grantedAt: new Date() },
+        { ledgerEntryId: entry!.id },
+        { amountCoin: 100n, grantedAt: new Date() },
+        { amountCoin: 0n, grantedAt: new Date(), ledgerEntryId: entry!.id },
+      ]) {
+        await expect(
+          t.db
+            .insert(startGrants)
+            .values({ userId: u.id, phoneHash: randomPhoneHash(), ...values }),
+        ).rejects.toSatisfy(insertRefused);
+      }
+      // The CHECKs, on the one way to pay: an UPDATE of the pending row.
+      const pending = await createStartGrant(t.db, { userId: u.id });
+      for (const set of [{ amountCoin: 100n }, { ledgerEntryId: entry!.id }]) {
+        await expect(
+          t.db.update(startGrants).set(set).where(eq(startGrants.id, pending.id)),
+        ).rejects.toSatisfy(
+          (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'start_grants_paid_check',
+        );
+      }
+      // A zero payment by an entry that is otherwise its own: only the amount's CHECK refuses it.
+      const [zero] = await t.db
+        .insert(ledgerEntries)
+        .values({
+          userId: u.id,
+          type: 'START_GRANT',
+          amountCoin: 0n,
+          balanceAfterCoin: 100n,
+          refType: 'start_grant',
+          refId: pending.id,
+        })
+        .returning();
+      await expect(
+        t.db
+          .update(startGrants)
+          .set({ amountCoin: 0n, ledgerEntryId: zero!.id, grantedAt: new Date() })
+          .where(eq(startGrants.id, pending.id)),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'start_grants_amount_coin_check',
+      );
+    });
+
+    it('never takes a grant inserted paid, not even with an entry that would pay it', async () => {
+      const { user: a } = await createUser(t.db);
+      const { user: b } = await createUser(t.db, { balanceCoin: 100n });
+      const refused = (e: unknown) =>
+        sqlState(e) === '23000' && /must be inserted pending/.test(errorMessage(e));
+      // B's ADMIN_ADJUST entry of the same amount: the grant would say A got Coin B holds, and the
+      // number would count as paid with no START_GRANT entry — for good, as the app cannot fix it.
+      const [adjust] = await ledgerOf(b.id);
+      await expect(
+        t.db.insert(startGrants).values({
+          userId: a.id,
+          phoneHash: randomPhoneHash(),
+          amountCoin: 100n,
+          ledgerEntryId: adjust!.id,
+          grantedAt: new Date(),
+        }),
+      ).rejects.toSatisfy(refused);
+      // A's own START_GRANT entry naming the row to be: still refused, the row starts pending.
+      const id = randomUUID();
+      const [own] = await t.db
+        .insert(ledgerEntries)
+        .values({
+          userId: a.id,
+          type: 'START_GRANT',
+          amountCoin: 100n,
+          balanceAfterCoin: 100n,
+          refType: 'start_grant',
+          refId: id,
+        })
+        .returning();
+      await expect(
+        t.db.insert(startGrants).values({
+          id,
+          userId: a.id,
+          phoneHash: randomPhoneHash(),
+          amountCoin: 100n,
+          ledgerEntryId: own!.id,
+          grantedAt: new Date(),
+        }),
+      ).rejects.toSatisfy(refused);
+      expect(await t.db.select().from(startGrants)).toEqual([]);
+    });
+
+    it('never rewrites a record, nor pays it with an entry that is not its own START_GRANT', async () => {
+      const { user: a } = await createUser(t.db);
+      const { user: b } = await createUser(t.db, { balanceCoin: 700n });
+      const pending = await createStartGrant(t.db, { userId: a.id });
+      const another = await createStartGrant(t.db, { userId: b.id });
+      // Each refusal is matched by its own message, so a case cannot pass on another check's.
+      const identityRefused = (e: unknown) =>
+        sqlState(e) === '23000' &&
+        /its account, number and recording time never change/.test(errorMessage(e));
+      const notItsOwn = (e: unknown) =>
+        sqlState(e) === '23000' && /is paid only by its own START_GRANT/.test(errorMessage(e));
+      const paidRefused = (e: unknown) =>
+        sqlState(e) === '23000' &&
+        /was paid at .*: a paid grant never changes/.test(errorMessage(e));
+      // The account, the number and the time it was recorded never change.
+      for (const set of [
+        { userId: b.id },
+        { phoneHash: randomPhoneHash() },
+        { createdAt: new Date(0) },
+      ]) {
+        await expect(
+          t.db.update(startGrants).set(set).where(eq(startGrants.id, pending.id)),
+        ).rejects.toSatisfy(identityRefused);
+      }
+
+      // Paid by an entry that is this grant's own START_GRANT in every field but one: each
+      // condition of the trigger's check, on its own (ledger_entry_id is UNIQUE, so one entry each).
+      const entry = async (values: Partial<typeof ledgerEntries.$inferInsert>) => {
+        const [row] = await t.db
+          .insert(ledgerEntries)
+          .values({
+            userId: a.id,
+            type: 'START_GRANT',
+            amountCoin: 700n,
+            balanceAfterCoin: 700n,
+            refType: 'start_grant',
+            refId: pending.id,
+            ...values,
+          })
+          .returning();
+        return row!;
+      };
+      const payWith = (ledgerEntryId: number) =>
+        t.db
+          .update(startGrants)
+          .set({ amountCoin: 700n, ledgerEntryId, grantedAt: new Date() })
+          .where(eq(startGrants.id, pending.id));
+      const [adjust] = await ledgerOf(b.id);
+      const oneFieldOff: Partial<typeof ledgerEntries.$inferInsert>[] = [
+        { userId: b.id }, // another account's: the grant would say A got Coin that B holds
+        { type: 'ADMIN_ADJUST' }, // not a start grant
+        { refType: 'admin_action' }, // pointing at something else
+        { refId: another.id }, // another grant's
+        { amountCoin: 50n, balanceAfterCoin: 50n }, // another amount
+      ];
+      for (const values of oneFieldOff) {
+        await expect(payWith((await entry(values)).id)).rejects.toSatisfy(notItsOwn);
+      }
+      await expect(payWith(adjust!.id)).rejects.toSatisfy(notItsOwn);
+      // The entry named is the one checked: with A's own START_GRANT entry in the ledger, naming
+      // B's ADMIN_ADJUST of the same amount is still refused…
+      const own = await entry({});
+      await expect(payWith(adjust!.id)).rejects.toSatisfy(notItsOwn);
+      // …and naming its own pays it (the check is not blind).
+      await payWith(own.id);
+
+      // A paid grant never changes again: not back to pending (the next run would pay it a second
+      // START_GRANT entry), not to another entry that passes every other check, not another amount.
+      await expect(
+        t.db
+          .update(startGrants)
+          .set({ amountCoin: null, ledgerEntryId: null, grantedAt: null })
+          .where(eq(startGrants.id, pending.id)),
+      ).rejects.toSatisfy(paidRefused);
+      await expect(payWith((await entry({})).id)).rejects.toSatisfy(paidRefused);
+      await expect(
+        t.db.update(startGrants).set({ amountCoin: 200n }).where(eq(startGrants.id, pending.id)),
+      ).rejects.toSatisfy(paidRefused);
+      // No row is ever deleted by the app, pending or paid.
+      for (const id of [another.id, pending.id]) {
+        await expect(t.db.delete(startGrants).where(eq(startGrants.id, id))).rejects.toSatisfy(
+          (e) => sqlState(e) === '42501',
+        );
+      }
+    });
+
+    it('pays nothing to a grant whose account lost its 본인확인 record, and scans past it', async () => {
+      const { user: gone } = await createUser(t.db);
+      const { user: kept } = await createUser(t.db);
+      const left = await createStartGrant(t.db, { userId: gone.id });
+      const waiting = await createStartGrant(t.db, { userId: kept.id });
+      // What a withdrawal will do to the number (#140), while the grant waits for its amount.
+      await t.db.delete(phoneVerifications).where(eq(phoneVerifications.userId, gone.id));
+      // Out of the scan, though it is the oldest: it would sort first for good otherwise.
+      expect(await pendingStartGrantIds(t.db, 1)).toEqual([waiting.id]);
+      const result = await t.db.transaction((tx) => payStartGrant(tx, left.id, amountOf(10_000n)));
+      expect(result).toEqual({ outcome: 'unverified', grant: left });
+      expect(await ledgerOf(gone.id)).toEqual([]);
+      const [balance] = await t.db.select().from(balances).where(eq(balances.userId, gone.id));
+      expect(balance!.availableCoin).toBe(0n);
+      // Still pending, still the record of its number (ADR-0071 7-11).
+      expect(await t.db.select().from(startGrants).where(eq(startGrants.id, left.id))).toEqual([
+        left,
+      ]);
+    });
+
+    it('holds the 본인확인 record while it pays, so a withdrawal cannot delete it meanwhile', async () => {
+      const { user: u } = await createUser(t.db);
+      const grant = await createStartGrant(t.db, { userId: u.id });
+      await t.db.transaction(async (tx) => {
+        expect((await payStartGrant(tx, grant.id, amountOf(100n))).outcome).toBe('granted');
+        await expect(
+          t.db.transaction(async (other) => {
+            await other.execute(sql`SET LOCAL lock_timeout = '200ms'`);
+            await other.delete(phoneVerifications).where(eq(phoneVerifications.userId, u.id));
+          }),
+        ).rejects.toSatisfy((e) => sqlState(e) === '55P03');
+        // The member's own edit of the real name is not held up (FOR KEY SHARE, not FOR SHARE).
+        await t.db.transaction(async (other) => {
+          await other.execute(sql`SET LOCAL lock_timeout = '200ms'`);
+          await other
+            .update(phoneVerifications)
+            .set({ realName: '김철수' })
+            .where(eq(phoneVerifications.userId, u.id));
+        });
+      });
+    });
+
+    it('keeps the record of a number when the number itself is deleted (#140, #57-18)', async () => {
+      const { user: u } = await createUser(t.db);
+      await createPhoneVerification(t.db, { userId: u.id, phone: '01055556666' });
+      const grant = await createStartGrant(t.db, { userId: u.id, amountCoin: 100n });
+      // What a withdrawal will do to the number (#140): delete the verification row.
+      await t.db.delete(phoneVerifications).where(eq(phoneVerifications.userId, u.id));
+      expect(await t.db.select().from(startGrants)).toEqual([grant]);
+    });
+  });
+
   describe('buddha_app privileges (PLAN 6.4)', () => {
     it('can INSERT and SELECT ledger_entries but not UPDATE or DELETE', async () => {
       const { user: u } = await createUser(t.db, { balanceCoin: 500n });
@@ -1556,8 +1907,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         .from(ledgerEntries)
         .where(eq(ledgerEntries.userId, u.id))
         .orderBy(ledgerEntries.id);
-      // The trigger's sign-up BONUS, then the factory's correction down to 500 Coin.
-      expect(rows.map((row) => row.type)).toEqual(['BONUS', 'ADMIN_ADJUST']);
+      // The factory's 500 Coin (the trigger writes no entry since migration 0031).
+      expect(rows.map((row) => row.type)).toEqual(['ADMIN_ADJUST']);
       await expect(
         t.db.update(ledgerEntries).set({ memo: 'x' }).where(eq(ledgerEntries.id, rows[0]!.id)),
       ).rejects.toSatisfy((e) => sqlState(e) === '42501');

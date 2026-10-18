@@ -26,10 +26,10 @@ import {
 } from 'react';
 import { type Socket, io } from 'socket.io-client';
 import { type SessionIdentity } from '@/components/auth/session-cache-guard';
-import { ME_QUERY_KEY } from '@/hooks/use-me';
+import { ME_QUERY_KEY, storeBalanceEvent } from '@/hooks/use-me';
 import { BALANCE_HISTORY_KEYS } from '@/hooks/use-wallet';
 import { listStatusOf } from '@/hooks/use-portfolio';
-import { type Market, type Me, type Position } from '@/lib/api';
+import { type Market, type Position } from '@/lib/api';
 import { useSession } from '@/lib/use-session';
 import {
   MARKETS_KEY,
@@ -46,7 +46,6 @@ import {
   BalanceOrder,
   type MarketPages,
   Throttle,
-  applyBalanceEvent,
   applyPositionEvent,
   applyStatus,
   applyTick,
@@ -550,7 +549,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // end up right without one, and it falls into exactly two kinds.
         //
         //  - the event cannot BUILD the row it is about: this one (a transition carries no
-        //    price), `market:trade` → `refreshFills`, `user:position` → `['orders']`.
+        //    price), `market:trade` → `refreshFills`, `user:position` → `['orders']`,
+        //    `user:balance` → `['me']` while the account's start Coin waits (#70).
         //  - the cache could not TAKE the event, so the answer already on the wire is the stale
         //    one: this one again on an unseeded key (below), `market:tick` → `['market', id]`
         //    while its first answer is in flight, `user:position` → `['positions']` for a list
@@ -625,11 +625,11 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // account's own commit order, so an ACCEPTED event always names a row this tab has never
         // held and a late or duplicate delivery spends nothing.
         //
-        // Above the `patch.kind` branch because that branch RETURNS, and the tab it returns for —
-        // one whose `GET /me` is in flight — is on /my/wallet precisely the tab whose FIRST
-        // `GET /me/ledger` is in flight too. `restartQueries` for that same reason: `['ledger']`
-        // is never seeded and never SSR'd, so a bare invalidation would hand back the request
-        // that left before the payout committed.
+        // Whatever `storeBalanceEvent` makes of `['me']` below — including the tab whose
+        // `GET /me` is in flight, which on /my/wallet is precisely the tab whose FIRST
+        // `GET /me/ledger` is in flight too. `restartQueries` for that reason: `['ledger']` is
+        // never seeded and never SSR'd, so a bare invalidation would hand back the request that
+        // left before the payout committed.
         //
         // 결제 내역 sits beside 원장 on /my/wallet (while paid Coin is on sale, ADR-0049) and
         // contradicts it the same way when left behind: an admin refund claws the Coin back (a
@@ -641,29 +641,9 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // publishes nothing; the list's own bounded poll while a row is still moving
         // (`paymentsPoll`, use-wallet.ts) carries that row the rest of the way.
         for (const queryKey of BALANCE_HISTORY_KEYS) void restartQueries(queryClient, queryKey);
-        const patch = applyBalanceEvent(queryClient.getQueryData<Me>(ME_QUERY_KEY), parsed.data);
-        // Kills an in-flight `GET /me` that would otherwise resolve after this write carrying
-        // an older balance. A charge or a coupon also reaches the chip through its own answer's
-        // refetch (an Idempotency-Key replay publishes NO event); a payout reaches it only here.
-        //
-        // The cancel is synchronous down to the state change (query-core's retryer rejects and
-        // calls `onCancel` in the same tick), so both branches below act on a query that is
-        // already idle.
-        void queryClient.cancelQueries({ queryKey: ME_QUERY_KEY, exact: true });
-        if (patch.kind === 'refetch') {
-          // Nothing to patch, and the cancel has just REVERTED the first `GET /me` to the
-          // state it had before it started — `pending` with no data, and no observer left
-          // fetching. So the request has to be re-issued, or the balance chip and the 잔고
-          // 요약 spin until the next window focus. Issued after the event was received, so
-          // its answer cannot be the snapshot this event already superseded.
-          void queryClient.invalidateQueries({
-            queryKey: ME_QUERY_KEY,
-            exact: true,
-            refetchType: 'active',
-          });
-          return;
-        }
-        queryClient.setQueryData<Me>(ME_QUERY_KEY, patch.me);
+        // The balance chip and the 잔고 요약: the figure at once, and `GET /me` asked again where
+        // the event cannot say the rest (a first load it interrupted, a start Coin that waits).
+        storeBalanceEvent(queryClient, parsed.data);
       },
 
       'user:position': (raw: unknown) => {

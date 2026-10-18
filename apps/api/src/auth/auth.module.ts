@@ -53,6 +53,7 @@ const AUTH_ENV_KEYS = [
   'ALIGO_USER_ID',
   'ALIGO_SENDER',
   'ALIGO_TEST_MODE',
+  'PHONE_HASH_KEY',
 ] as const satisfies readonly (keyof Env)[];
 
 /**

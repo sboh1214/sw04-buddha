@@ -57,6 +57,8 @@ describe('findPrivateField', () => {
     ['balance', 'balance'],
     ['availableCoin', 'balance'],
     ['locked_coin', 'balance'],
+    ['startGrant', 'balance'],
+    ['start_grants', 'balance'],
     ['orderId', 'orders'],
     ['counterparty_order_id', 'orders'],
     ['orders', 'orders'],

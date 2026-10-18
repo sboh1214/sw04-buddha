@@ -48,6 +48,7 @@ const me = (id: string): Me => ({
     phone: '01012345678',
     verifiedAt: '2026-10-18T00:00:00.000Z',
   },
+  startGrant: null,
 });
 
 const press = (watched: boolean, account = 'user-1'): WatchVariables => ({

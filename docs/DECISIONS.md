@@ -416,7 +416,7 @@ PLAN §10.1은 `@thallesp/nestjs-better-auth`를 지정하지만 2.7.0의 peer �
 ## ADR-0019 — 프로필·잔고 자동 생성은 Postgres 트리거 (PLAN §10.4의 databaseHooks 대신)
 
 - 날짜: 2026-09-03
-- 상태: 채택 (PLAN §10.4 문구와 다름, QUESTIONS A-M1-1), 일부 대체됨(ADR-0052: 자동 닉네임 접두어 `예측가_` — 새 가입의 자동 닉네임은 `user_XXXX`이고, 트리거 함수의 마지막 본문은 마이그레이션 0019에 있다. 같은 트랜잭션의 트리거, 네 글자 접미사와 재시도, 닉네임 규칙은 유효)
+- 상태: 채택 (PLAN §10.4 문구와 다름, QUESTIONS A-M1-1), 일부 대체됨(ADR-0052: 자동 닉네임 접두어 `예측가_` — 새 가입의 자동 닉네임은 `user_XXXX`이고, 트리거 함수의 마지막 본문은 마이그레이션 0019에 있다. 같은 트랜잭션의 트리거, 네 글자 접미사와 재시도, 닉네임 규칙은 유효), 일부 대체됨(ADR-0071: 2026-09-05 추기의 '같은 트리거가 가입 보너스 10,000P와 `BONUS` 원장도 함께 쓴다' — 마이그레이션 0031부터 트리거는 프로필과 잔고 0의 행만 만들고 원장을 쓰지 않는다. 트리거 함수의 마지막 본문은 0031에 있다. 같은 트랜잭션의 트리거와 나머지 결정은 유효)
 
 ### 맥락
 
@@ -598,7 +598,7 @@ PLAN §5.1/5.6과 M2는 P의 유입(mock 충전, 관리자 조정)과 원장 불
 
 ## ADR-0026 — 충전 상품(할인), 쿠폰, 가입 보너스 (오너 결정 2026-09-04)
 
-- 상태: 채택, 일부 대체됨(ADR-0049: 공개 `GET /charge-packages`와 쿠폰 사용 `POST /coupons/redeem`은 유료 충전이 닫힌 동안 404이고, 지갑의 충전 상품·쿠폰 카드와 관리자 메뉴의 충전 상품·쿠폰은 그리지 않는다 — 테이블, 관리자 상품·쿠폰 API와 그 화면(주소로 연다), 가입 보너스는 유효), 일부 대체됨(ADR-0050: `charge_packages.amount_p`와 CHECK `price_krw <= amount_p`의 열은 `amount_coin`, `SIGNUP_BONUS_P`는 `SIGNUP_BONUS_COIN`이고, 가입 트리거 함수의 마지막 본문은 마이그레이션 0018에 있다 — 트리거 리터럴과 상수를 함께 바꾸는 규칙과 나머지 결정은 유효), 일부 대체됨(ADR-0051: 결과의 '1P = 1원은 액면가로 유지된다' — 화면·README는 Coin과 원화의 교환 비율을 적지 않는다. 보존한 충전 상품의 CHECK `price_krw <= amount_coin`과 할인 계산은 그대로다), 일부 대체됨(ADR-0052: 가입 트리거 함수의 마지막 본문은 마이그레이션 0019에 있다 — 바뀐 것은 자동 닉네임 접두어뿐이고 보너스 리터럴과 `BONUS` 원장은 그대로다)
+- 상태: 채택, 일부 대체됨(ADR-0049: 공개 `GET /charge-packages`와 쿠폰 사용 `POST /coupons/redeem`은 유료 충전이 닫힌 동안 404이고, 지갑의 충전 상품·쿠폰 카드와 관리자 메뉴의 충전 상품·쿠폰은 그리지 않는다 — 테이블, 관리자 상품·쿠폰 API와 그 화면(주소로 연다), 가입 보너스는 유효), 일부 대체됨(ADR-0050: `charge_packages.amount_p`와 CHECK `price_krw <= amount_p`의 열은 `amount_coin`, `SIGNUP_BONUS_P`는 `SIGNUP_BONUS_COIN`이고, 가입 트리거 함수의 마지막 본문은 마이그레이션 0018에 있다 — 트리거 리터럴과 상수를 함께 바꾸는 규칙과 나머지 결정은 유효), 일부 대체됨(ADR-0051: 결과의 '1P = 1원은 액면가로 유지된다' — 화면·README는 Coin과 원화의 교환 비율을 적지 않는다. 보존한 충전 상품의 CHECK `price_krw <= amount_coin`과 할인 계산은 그대로다), 일부 대체됨(ADR-0052: 가입 트리거 함수의 마지막 본문은 마이그레이션 0019에 있다 — 바뀐 것은 자동 닉네임 접두어뿐이고 보너스 리터럴과 `BONUS` 원장은 그대로다), 일부 대체됨(ADR-0071: 가입 보너스 10,000P(`user` 트리거, 미인증 계정 포함, `SIGNUP_BONUS_COIN`) — 계정을 만들 때는 아무것도 주지 않는다(마이그레이션 0031, 상수 삭제). 시작 Coin은 본인확인한 휴대전화 번호마다 한 번 전용 원장 유형 `START_GRANT`('시작 지급')로 주고 금액은 출시 설정 `grant.start_coin`이다. `BONUS`는 쿠폰 사용과 #70 전에 만든 계정의 옛 가입 지급에만 남는다. 충전 상품·쿠폰의 결정은 유효)
 
 ### 맥락
 
@@ -2574,7 +2574,7 @@ ADR-0046의 상태 줄에 '일부 대체됨(ADR-0047: …)'을 이어 쓴다. �
 ## ADR-0050 — 내부 식별자 P → Coin: 열·와이어·코드 이름과 이름 변경 마이그레이션 0018 (#192, 오너 결정 2026-10-13)
 
 - 날짜: 2026-10-13
-- 상태: 채택, 일부 대체됨(ADR-0065: 결정 2의 인덱스 `markets_status_volume_coin_id_idx` — 거래량 순과 함께 지웠고(마이그레이션 0024) 결정 3의 `schema.test.ts` Coin 이름 목록에서도 뺐다. #132가 거래량 순을 다시 넣을 때 인덱스를 다시 정한다. 나머지 이름과 규칙은 유효)
+- 상태: 채택, 일부 대체됨(ADR-0065: 결정 2의 인덱스 `markets_status_volume_coin_id_idx` — 거래량 순과 함께 지웠고(마이그레이션 0024) 결정 3의 `schema.test.ts` Coin 이름 목록에서도 뺐다. #132가 거래량 순을 다시 넣을 때 인덱스를 다시 정한다. 나머지 이름과 규칙은 유효), 일부 대체됨(ADR-0071: 결정 2의 상수 `SIGNUP_BONUS_COIN`과 결정 3의 'ADR-0026의 규칙(트리거 리터럴과 공유 상수를 함께 바꾼다)은 그대로' — 상수를 지웠고 가입 트리거는 Coin을 주지 않는다(마이그레이션 0031). 트리거 함수의 마지막 본문은 0031에 있다. 나머지 이름과 규칙은 유효)
 
 이슈 번호와 기획 인용 표기는 ADR-0047과 같다(`#N`, NR·N00\~N06). 이 ADR은 #192가 기록하고, ADR-0020의 와이어 이름(`PAmount`·`formatP(parsePAmount(s))`)과 ADR-0025·0026·0027·0038·0039·0042·0044·0046·0048의 결정에 적힌 P 기준 이름(열·제약·인덱스·필드·저장 키·상수·키)을 대체한다. 그 ADR들이 정한 동작은 바꾸지 않고 이름만 바꾼다. 화면 문구와 숫자 표기는 #13이 바꾼다. D1\~D26은 ADR-0047의 오너 결정이다. 이 ADR의 오너 결정은 결정 1 표의 번호로 '결정 1-2'처럼 적는다.
 
@@ -2711,7 +2711,7 @@ ADR-0046의 상태 줄에 '일부 대체됨(ADR-0047: …)'을 이어 쓴다. �
 ## ADR-0051 — 재화 표기 P → Coin: 숫자 뒤 'Coin', 라벨의 '코인', 교환 비율 문장 삭제, 옛 단위 회귀 시험 (#13, 오너 결정 2026-10-13)
 
 - 날짜: 2026-10-13
-- 상태: 채택, 일부 대체됨(ADR-0054: 375px e2e가 겹치지 않는지 재는 헤더 첫 줄의 프로필 버튼 — 프로필 메뉴가 없어 로고·검색 아이콘·잔고 칩을 잰다. 결정 3의 '헤더 첫 줄의 여유' 측정값은 프로필 버튼이 있던 헤더의 것이다. 표기·줄바꿈 결정과 나머지 측정 대상은 유효), 일부 대체됨(ADR-0062: 결정 3의 375px 확인 대상과 `nowrap` 자리 가운데 시장 카드의 거래량, 그 거래량이 스파크라인과 겹치지 않는지 — 카드에 거래량과 스파크라인이 없어 e2e는 같은 방법으로 상세 헤더의 거래량을 잰다. 상세의 거래량과 나머지 표기·줄바꿈 결정은 유효)
+- 상태: 채택, 일부 대체됨(ADR-0054: 375px e2e가 겹치지 않는지 재는 헤더 첫 줄의 프로필 버튼 — 프로필 메뉴가 없어 로고·검색 아이콘·잔고 칩을 잰다. 결정 3의 '헤더 첫 줄의 여유' 측정값은 프로필 버튼이 있던 헤더의 것이다. 표기·줄바꿈 결정과 나머지 측정 대상은 유효), 일부 대체됨(ADR-0062: 결정 3의 375px 확인 대상과 `nowrap` 자리 가운데 시장 카드의 거래량, 그 거래량이 스파크라인과 겹치지 않는지 — 카드에 거래량과 스파크라인이 없어 e2e는 같은 방법으로 상세 헤더의 거래량을 잰다. 상세의 거래량과 나머지 표기·줄바꿈 결정은 유효), 일부 대체됨(ADR-0071: 결정 5의 README 가입 안내 '시작 Coin이 자동 지급되고 … `SIGNUP_BONUS_COIN`과 가입 트리거' — 가입만으로는 Coin을 주지 않고, 시작 Coin은 본인확인한 휴대전화 번호마다 한 번이며 금액은 출시 설정 `grant.start_coin`이다. 교환 비율 문장 삭제와 나머지 표기 결정은 유효)
 
 이슈 번호와 기획 인용 표기는 ADR-0047과 같다(`#N`, NR·N00\~N06). 이 ADR은 #13이 기록하고, ADR-0026 결과의 '1P = 1원은 **액면가**로 유지된다'를 대체한다. 사람이 보는 표기만 다룬다. 내부 이름은 ADR-0050(#192)이 이미 Coin 기준으로 바꿨다. D1\~D26은 ADR-0047의 오너 결정이다. 이 ADR의 오너 결정은 결정 1 표의 번호로 '결정 1-2'처럼 적는다.
 
@@ -2820,7 +2820,7 @@ ADR-0046의 상태 줄에 '일부 대체됨(ADR-0047: …)'을 이어 쓴다. �
 ## ADR-0052 — 화면 용어: 거래·시장가격·판정·규칙, YES/NO, 자동 닉네임 `user_`, 용어 대응표 (#14, 오너 결정 2026-10-13)
 
 - 날짜: 2026-10-13
-- 상태: 채택, 일부 대체됨(ADR-0062: 결정 1-5를 적용한 카드 배수 앞의 스크린 리더 설명 '정답 시 투입 대비'(`copy.payoutMultiple`) — 카드에 배수가 없어 그 문구도 없다. 결정 1-5와 정산 완료 안내 '정답인 계약은 …'은 유효)
+- 상태: 채택, 일부 대체됨(ADR-0062: 결정 1-5를 적용한 카드 배수 앞의 스크린 리더 설명 '정답 시 투입 대비'(`copy.payoutMultiple`) — 카드에 배수가 없어 그 문구도 없다. 결정 1-5와 정산 완료 안내 '정답인 계약은 …'은 유효), 일부 대체됨(ADR-0071: 결정 4의 '가입 보너스 10,000과 `BONUS` 원장 … 은 그대로다' — 마이그레이션 0031이 `create_profile_for_user()`를 0019의 본문에서 그 둘만 빼고 다시 만들었고, 트리거 함수의 마지막 본문은 0031에 있다. 자동 닉네임 `user_XXXX`와 10회 재시도는 유효)
 
 이슈 번호와 기획 인용 표기는 ADR-0047과 같다(`#N`, NR·N00\~N06). 이 ADR은 #14가 기록한다. ADR-0019의 자동 닉네임 `예측가_XXXX`, ADR-0041의 카드 두 줄 이름 '예'·'아니오', ADR-0048의 시드 설명·규칙 문장의 용어를 대체한다. 사람이 읽는 문구와 기본값만 다룬다. 저장 데이터·API 필드·원장 유형의 이름은 그대로다. D1\~D26은 ADR-0047의 오너 결정이고, 이 ADR의 오너 결정은 결정 1 표의 번호로 '결정 1-2'처럼 적는다.
 
@@ -5122,3 +5122,152 @@ N02 §4의 '데스크톱은 차트·호가와 주문 패널을 병렬', '모바�
 - 웹: `lib/phone-verification.ts`(+ 테스트, `lib/contact-form.ts`를 대신), `hooks/use-phone-verification.ts`(+ 테스트, `hooks/use-contact.ts`를 대신), `app/onboarding/verification-step.tsx`·`onboarding-form.tsx`, `app/set-password/set-password-form.tsx`, `app/my/settings/verification-section.tsx`(`contact-section.tsx`를 대신), `components/auth/real-name-field.tsx`(`contact-inputs.tsx`를 대신), `lib/onboarding.ts`, `components/auth/onboarding-gate.tsx`, `copy.ts`, 2차 고침의 `lib/api.ts`(`AdminSmsStatus`)·`lib/admin-sms.ts`(+ 테스트)·`app/admin/sms/`(쪽과 화면)·`app/admin/layout.tsx`(메뉴), `excluded-features.test.ts`, `lib/admin-accounts.ts`, `theme/contrast.test.ts`(노란 안내), `lib/time-zone.test.ts`(`smsAsOf`를 관리자 화면의 KST 호출로 등록). e2e: `helpers.ts`(`expectCodeInput`, `SERVICE_LIMIT_HELP`), `onboarding.spec.ts`, `phone-verification.spec.ts`(새), `admin-sms.spec.ts`(새, 2차 답 6), `auth.spec.ts`(공용 `signUp`), 주석만 고친 `admin-accounts.spec.ts`·`market.spec.ts`·`my.spec.ts`·`payment.spec.ts`. 3차 고침: `theme/system.ts`(주의 알림·토스트의 노랑, `yellow.border`·`yellow.focusRing`)와 `theme/contrast.test.ts`, `lib/phone-verification.ts`(`palette`를 없앰, `ConfirmContext`)와 시험, `app/onboarding/verification-step.tsx`(화면의 `lastSendUncertain`), `copy.ts`(`errVerificationCodeSupersededUncertain`), e2e `helpers.ts`(`expectYellowWarning`·`tokenColour`·`backgroundOf`)·`phone-verification.spec.ts`·`market.spec.ts`·`related.spec.ts`.
 - 배포: `.env.example`, `deploy/compose.yaml`, `terraform/variables.tf`·`ssm.tf`·`templates/env.tftpl`·`terraform.tfvars.example`·`README.md`.
 - 문서 생성: `scripts/generate-api-doc.mjs`(`SMS_SEND_FAILED`·`SMS_SEND_UNCONFIRMED`, 한도 사유와 공유 한도의 분 단위 — 3차 고침에서 답한 분까지 닫힘, `superseded`).
+
+---
+
+## ADR-0071 — 시작 Coin 한 번(#70): 본인확인한 번호마다 한 번의 지급 기록(`start_grants`, 번호는 `PHONE_HASH_KEY`의 키 있는 해시)과 그 id인 지급 이벤트 ID, 전용 원장 유형 '시작 지급'(`START_GRANT`), 출시 설정 '시작 지급액'(`grant.start_coin`)과 미정일 때의 지급 대기·워커의 매 분 지급, 요청 경로 없는 내부 지급 기능, 가입 트리거의 지급 제거(마이그레이션 0031), 지갑의 지급 대기 안내 (#70, 오너 결정 2026-10-17\~18)
+
+- 날짜: 2026-10-18
+- 상태: 채택
+
+이슈 번호와 기획 인용 표기는 ADR-0047과 같다(`#N`, NR·N00\~N06). 이 ADR은 #70을 기록한다. 오너 결정은 모두 ADR-0069에 있고 결정 1의 표에 그 행을 옮겼다. 이 PR을 만들며 오너에게 새로 물은 것은 없다. 그 아래는 구현(결정 2\~6), 구현의 선택(결정 7), 시험(결정 8)이다. 오너의 결정이 아닌 것은 모두 결정 7에 있고, 오너에게 물을 것은 결과 4에 모았다.
+
+### 맥락
+
+- 기획: N01 §2 "인증된 참여자에게 동일한 시작 코인을 1회 지급한다. 지급 이벤트 ID로 중복 수령을 막는다." 신규 발행·운영금 이전은 별도 원장 유형으로 기록한다. N01 §9 잔액을 직접 덮어쓰지 않는다. N01 §10 초기 지급액은 시뮬레이션 뒤 출시 설정으로 확정한다. N02 §8 지급·재지급은 거래 수익으로 계산하지 않는다. N02 §9 "인증·약관 동의·닉네임 설정 → 초기 코인 1회 지급 → 시장 탐색." N04 §5 입출처별 코인 지급을 사실 기록으로 보존한다. 오너 결정 D4(기존 데이터의 이전·백필·회수 없음), D8(기획의 '인증'은 휴대폰 SMS 본인확인), D18(세 단계를 마친 계정에 시작 Coin).
+- 이 PR 전: 계정을 만드는 `user` AFTER INSERT 트리거 `create_profile_for_user()`가 프로필·잔고와 함께 10,000 Coin을 `BONUS` 원장으로 줬다(ADR-0026, 마이그레이션 0004 → 0018 → 0019). 모든 가입 경로(이메일·Google·Kakao·Naver)가 이 INSERT를 지나므로 본인확인하지 않은 계정도 받았고, 금액은 트리거 리터럴과 `SIGNUP_BONUS_COIN` 두 곳에 있었다. `BONUS`는 쿠폰 사용과 함께 쓰는 유형이었다. 출시 설정 레지스트리는 비어 있었다(ADR-0055). 본인확인한 번호는 `phone_verifications`에 숫자만으로 한 계정에 하나이고(번호마다 한 계정, ADR-0070), 서버가 '본인확인했는지'를 묻는 곳은 `isPhoneVerified` 하나다.
+- 범위: #70만. 약관 동의·본인확인·닉네임의 완료를 서버에서 확인하고 이 지급 기능을 부르는 일과 지급 뒤 안내 화면은 #58, 탈퇴 때 번호를 지우는 일은 #140, 봇·시스템 계정의 판별은 #115, 지급 알림은 M13(#52), 재지급은 #74, 시작 지급액의 값은 #71(후보)·#133(확정)이다.
+
+### 결정
+
+**1. 오너 결정 (다시 정하지 않는다).** 결정 칸은 ADR-0069의 글 그대로다(…는 이 PR과 상관없는 부분을 줄였다. ADR-0069 결정 7로 고쳐 적은 행은 고친 글이다. D18의 뒷문장은 줄였다).
+
+| 근거                     | 주제                           | 결정                                                                                                                                                                                                                                                                                                                                                         |
+| ------------------------ | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| ADR-0069 결정 1 #57 1항  | 지급 1회의 단위                | 본인확인한 휴대전화 번호마다 한 번. «휴대전화 번호당 1회, 번호 한개 당 계정은 하나만 만들 수 있음»                                                                                                                                                                                                                                                           |
+| ADR-0069 결정 1 #57 1항  | 재가입 때 지급                 | 다시 주지 않는다. 그래서 탈퇴 뒤에도 그 번호가 이미 받았음을 알아볼 수 있어야 한다(18의 '탈퇴 번호').                                                                                                                                                                                                                                                        |
+| ADR-0069 결정 1 #57 2항  | 출시 뒤 지급액 변경            | 바꾸면 그 뒤 지급부터 적용하고 이미 받은 계정은 그대로 둔다. 바꾼 사실은 출시 설정의 변경 기록(ADR-0055)에 남는다.                                                                                                                                                                                                                                           |
+| ADR-0069 결정 1 #57 10항 | 지급 뒤 안내                   | 짧은 안내 화면을 둔다: 지급액, Coin은 현금으로 바꿀 수 없다는 것, 운영 유동성(봇)이 거래 상대가 될 수 있다는 것. 그다음이 관심 카테고리 단계다.                                                                                                                                                                                                              |
+| ADR-0069 결정 1 #57 17항 | 재가입                         | 같은 번호·로그인 수단으로 바로 다시 가입할 수 있다. 시작 Coin은 다시 주지 않는다(1항).                                                                                                                                                                                                                                                                       |
+| ADR-0069 결정 1 #57 18항 | 탈퇴 번호                      | 번호는 지우고 비교용 키를 쓴 해시만 '시작 Coin을 받은 번호' 기록으로 남긴다.                                                                                                                                                                                                                                                                                 |
+| ADR-0069 결정 4 #70      | 원장 유형 (#73 3항)            | 신규 발행이고 전용 원장 유형 '시작 지급'을 새로 둔다. 쿠폰과 함께 쓰는 `BONUS`는 쓰지 않는다.                                                                                                                                                                                                                                                                |
+| ADR-0069 결정 4 #70      | 지급액이 미정일 때             | 온보딩은 끝내고 지급만 기다리게 한다. 관리자가 출시 설정에 값을 넣으면 기다리던 계정에 그 값으로 준다(상태가 설계 제안·시험값이어도 값이 있으면 준다, 결정 7). 기다리는 동안 지급 안내 화면은 지급액 자리에 '시작 Coin은 준비되는 대로 지급됩니다'를 보이고 나머지 안내와 관심 카테고리 단계는 같다. 지갑에도 지급 대기 중임을 보인다(오너 결정 2026-10-18). |
+| ADR-0069 결정 4 #70      | 운영자 계정                    | 일반 계정과 같은 조건으로 받는다. 운영 권한 계정의 거래 제한은 #133이 정한다.                                                                                                                                                                                                                                                                                |
+| ADR-0069 결정 4 #70      | 가입 자동 지급 제거와 #58 사이 | 공백을 받아들인다. 두 PR을 따로 머지해도 된다.                                                                                                                                                                                                                                                                                                               |
+| ADR-0069 결정 7          | 출시 설정의 상태               | 되돌릴 수 없는 두 일 가운데 시작 Coin 지급은 값이 있으면 상태(설계 제안·시험값·승인됨)와 상관없이 하고, … ADR-0055는 상태와 상관없이 값을 돌려주고 쓰는 쪽이 정하게 한다.                                                                                                                                                                                    |
+| ADR-0069 결정 7          | 재가입과 계정 단위 한도        | 빈도 한도, 신고 중복, 좋아요 한 번, 시장 제안 한도는 계정이 아니라 본인확인한 번호(키 있는 해시) 기준으로 이어 센다. 탈퇴 뒤 같은 번호로 바로 다시 가입하는 것(#57 17항)은 그대로다.                                                                                                                                                                         |
+| ADR-0069 결과 3          | 오너가 할 일                   | `/admin/settings`에 시작 지급액(#70)과 데이터 종류별 보존기간(#184)의 값을 넣는다. 미정이면 지급은 기다리고 보존기간 처리는 하지 않는다.                                                                                                                                                                                                                     |
+| ADR-0047 D18             | 지급 대상                      | 시작 Coin은 본인확인·약관 동의·닉네임 설정을 모두 마친 계정에 지급한다(N02 §9의 순서).                                                                                                                                                                                                                                                                       |
+| ADR-0047 D4              | 기존 데이터                    | 배포 환경(buddha.sboh.dev)은 내부 테스터용이며 실사용자·실결제 데이터가 없다. 기존 데이터는 초기화·재시드해도 된다. 이전(migration)·환불·레거시 정산 이슈는 만들지 않는다.                                                                                                                                                                                   |
+
+#57 10항의 안내 화면과 D18의 세 단계 확인은 #58이 하고, 이 PR은 #58이 부를 지급 기능과 '기다림'의 상태(`Me.startGrant`)를 둔다. 결정 4 #70의 '지급 안내 화면'에는 #58이 같은 대기 문구(`copy.walletStartGrantPending`, 결정 6)를 쓸 수 있다. 결정 7의 '재가입과 계정 단위 한도'는 이 PR이 세지 않는다. 그 한도들이 같은 해시를 쓰도록 해시 함수를 한곳에 두었다(결정 5).
+
+**2. 저장(마이그레이션 0031).** drizzle-kit이 만든 앞부분과 손으로 더한 끝부분(표시해 두었다)이다. 스냅샷은 생성된 그대로다.
+
+- 원장 유형 `START_GRANT`('시작 지급')를 `ledger_entry_type`에 더하고(`ADD VALUE`라 같은 배치에서 쓰지 않는다, 0014와 같다), `ledger_entries.ref_type`에 `start_grant`(→ `start_grants.id`)를 더했다(`LEDGER_REF_TYPES`). `BONUS`는 쿠폰과 #70 전에 만든 계정의 옛 가입 지급에만 남는다.
+- `start_grants`: 시작 Coin을 받았거나 기다리는 번호마다 한 행이고, 행의 `id`가 N01 §2의 지급 이벤트 ID다. `user_id`(UNIQUE `start_grants_user_id_unique`, `user.id` RESTRICT — 탈퇴해도 계정 행은 남는다), `phone_hash varchar(64)`(UNIQUE `start_grants_phone_hash_unique`와 소문자 16진 64자의 CHECK), `created_at`(기록한 때, DB 시계), 그리고 지급의 세 칸 `amount_coin`·`ledger_entry_id`(UNIQUE, `ledger_entries.id` RESTRICT)·`granted_at` — 기다리는 동안 셋 다 NULL이고 지급한 트랜잭션이 셋을 함께 채운다(CHECK `start_grants_paid_check`, 금액은 0보다 크다). 기다리는 행의 부분 색인(`created_at`, `granted_at IS NULL`)이 워커의 스캔을 받친다.
+- 기록을 잃지 않는다: `buddha_app`의 DELETE를 회수했고(`docker/postgres/init/01-roles.sql`의 목록에도 적었다), 트리거 둘이 나머지를 지킨다. 트리거마다 함수와 이름이 같다(0021·0026과 같다).
+  - `start_grants_start_pending`(BEFORE INSERT): 지급의 세 칸 가운데 하나라도 찬 행은 넣지 못한다. CHECK만으로는 아무 금액과 아직 쓰이지 않은 아무 원장 행(다른 계정의 것, 다른 유형의 것)으로 '지급함'인 행을 넣을 수 있고, 그 행은 앱이 고치지도 지우지도 못한 채 그 번호를 '받은 번호'로 남긴다. 0021의 `approval_requests_start_pending`과 같은 자리다. 그래서 지급은 언제나 아래의 검사를 받는 UPDATE다.
+  - `start_grants_keep_record`(BEFORE UPDATE): '기다림 → 지급' 밖의 모든 UPDATE를 거절한다 — 계정·번호·기록 시각은 바뀌지 않고, 지급한 행은 다시 바뀌지 않으며(기다림으로 되돌리기와 다른 원장 행으로 바꾸기 포함), 지급은 같은 계정·같은 금액·이 행을 가리키는 `START_GRANT` 원장 행으로만 된다.
+  - 그래서 '지급함'인 행은 모두 자기 원장 행을 가리킨다. 지울 수 있는 것은 소유자 권한의 TRUNCATE(재초기화, docs/RESET.md)와 운영자의 손뿐이다.
+- 가입 트리거: `create_profile_for_user()`를 0019의 본문에서 10,000 Coin과 그 `BONUS` 원장 행만 빼고 다시 만들었다. 자동 닉네임(`user_` + 네 글자, 10회 재시도, ADR-0052)과 잔고 0의 행은 그대로이고 같은 트랜잭션이다(ADR-0019). 모든 가입 경로가 이 INSERT를 지나므로 새 계정은 경로와 상관없이 잔고 0, 원장 0행으로 시작한다. `SIGNUP_BONUS_COIN`은 지웠다. 기존 계정의 10,000 Coin과 `BONUS` 행은 그대로다(D4, 결과 4의 첫 질문).
+- `phone_verifications`에는 해시 열을 두지 않았다(7-1).
+
+**3. 지급 기능(요청 경로 없음).**
+
+- `StartGrantService.grant(userId)`(`apps/api/src/start-grant/`)가 지급의 입구이고 컨트롤러가 없다. #58이 세 단계를 서버에서 확인한 뒤 부른다. 계정 생성·로그인·`GET /me` 같은 요청은 이것을 부르지 않는다. 한 트랜잭션에서: ① 그 계정의 `phone_verifications` 행을 `FOR SHARE`로 읽는다 — 없으면 `VERIFICATION_REQUIRED`로 거절하고 아무것도 쓰지 않는다(잠금은 커밋까지 번호가 바뀌거나 지워지지 않게 한다). `isPhoneVerified`를 부르지 않고 행을 직접 읽는 것은 번호와 잠금이 함께 필요해서다 — 같은 행이 있는지의 같은 검사다(ADR-0070 결정 2). ② 번호의 키 있는 해시(결정 5)로 `start_grants`에 그 계정의 행을 `ON CONFLICT DO NOTHING`으로 넣는다. 두 UNIQUE(계정, 번호) 가운데 하나에 걸리면 넣지 않는다 — 그 계정의 행이 이미 있으면 그 행을 쓰고, 없으면 그 번호의 시작 Coin은 다른 계정의 것(지급했든 기다리든)이라 `number_already_used`로 끝내며 이 계정에는 아무 기록도 남기지 않는다. ③ `payStartGrant`로 그 행을 지급한다(아래). 결과는 `granted`·`already_granted`·`pending`·`number_already_used`이고, 지급했으면 커밋 뒤에 `user:balance`를 발행한다.
+- `payStartGrant(tx, grantId, readAmount)`(`@buddha/db`)가 시작 Coin을 주는 유일한 곳이고, API와 워커가 같이 쓴다(둘은 서로를 가져오지 않는다, PLAN 4.1 — `clockTimestamp`와 같은 자리). 순서: 지급 행 `FOR UPDATE` → 이미 지급했으면 끝 → 그 계정의 본인확인 기록(`isPhoneVerified`, `FOR KEY SHARE`) — 없으면 `unverified`로 끝내고 아무것도 쓰지 않는다(7-11) → 지급액을 그 트랜잭션에서 한 번 읽는다(값이 없으면 `pending`으로 끝) → 잔고 행 `FOR UPDATE` → DB 시계(`clockTimestamp`, 마지막 잠금 뒤) → 잔고 UPDATE, `START_GRANT` 원장 행(`ref_type` `start_grant`, `ref_id` 지급 행, 메모 없음), 지급 행의 세 칸을 같은 시각으로. 같은 지급을 두 번 부르거나 동시에 부르면 둘째는 행 잠금을 기다린 뒤 지급한 행을 보고 아무것도 쓰지 않는다 — 원장 행은 언제나 하나다. 본인확인 기록의 잠금은 탈퇴가 그 행을 지우는 일을 이 지급의 커밋 뒤로 미루고(지급이 탈퇴와 나란히 들어가지 않는다), `FOR KEY SHARE`라 회원의 실명 수정은 막지 않는다. API의 지급은 그 행을 이미 `FOR SHARE`로 들고 있고 두 공유 잠금은 서로 막지 않는다. 어느 지급이든 본인확인 기록을 잔고보다 먼저 잠그고(워커는 지급 행 다음에, API의 지급은 지급 행보다도 먼저), 잔고를 쓰는 다른 일은 지급 행도 본인확인 기록도 잠그지 않으므로 다른 잔고 쓰기와 엇갈리지 않는다(탈퇴는 결과 5).
+- 운영자 계정도 같은 조건이다(결정 1). 시드는 관리자에게 Coin을 주지 않는다 — 관리자도 첫 로그인의 본인확인과 #58의 온보딩을 거쳐 받는다. 봇·시스템 계정(#115)은 아직 없다. `grant`에 그 판별이 들어갈 자리를 표시해 두었다(기록하기 전에 거른다).
+- 거래 수익이 아니다(N02 §8): 손익은 `positions.realized_pnl_coin`에만 있고 손익을 셈하는 어느 코드도 원장을 읽지 않는다. 원장 감사(`ledger.audit`)에는 다른 원장 행과 같이 든다 — 잔고와 원장 합계가 맞는다.
+
+**4. 지급액과 기다리는 지급.**
+
+- 출시 설정 `START_COIN_SETTING`(`@buddha/shared`): 키 `grant.start_coin`, 이름 '시작 지급액', 단위 Coin, 값은 1\~1,000,000의 정수(`START_GRANT_MAX_COIN`). 레지스트리의 첫 항목이고, 비어 있음을 고정하던 네 곳(docs/SETTINGS.md '항목 등록하기' 4)을 이 항목으로 고쳤다. 코드에 고정한 지급액은 없다.
+- 값이 있으면 상태(설계 제안·시험값·승인됨)와 상관없이 그 값으로 주고, 미정이면 지급 행을 기다림으로 남긴다(결정 1의 결정 4 #70·결정 7).
+- 워커 잡 `start_grant.pay`(큐 `wallet`, 매 분, `JOB_SCHEDULES`): 먼저 설정을 트랜잭션 밖에서 한 번 읽어 미정이면 아무것도 보지 않고 끝낸다(출시 전 매 분의 보통 경우). 값이 있으면 기다리는 행 가운데 그 계정에 본인확인 기록이 있는 것을 오래된 것부터 500개까지 골라(`pendingStartGrantIds`) 행마다 자기 트랜잭션에서 `payStartGrant`로 지급하고 커밋 뒤 `user:balance`를 발행한다. 본인확인 기록이 없어진 계정(기다리는 동안 탈퇴, 7-11)의 행은 고르지 않는다 — 지급하지 않을 행이 언제나 가장 오래된 자리에 있어, 500개가 쌓이면 실행마다 그것만 보고 새 지급에 닿지 못한다. 한 행의 실패(잔고 행이 없는 깨진 계정 등)는 기록하고 다음 행으로 간다(스캔의 규칙, `scan.ts`). 그래서 관리자가 값을 넣으면 기다리던 계정은 1분 안에 그 값을 받는다. 두 실행이 겹치거나 API의 지급과 겹쳐도 원장 행은 하나다.
+- 지급액은 지급하는 트랜잭션에서 한 번 읽는다(ADR-0055 '일을 시작할 때 한 번'). 지급한 계정의 금액은 그 행과 원장에 남아 바뀌지 않고, 바꾼 값은 그 뒤에 지급하는 행부터 쓰인다(#57 2항). 기다리던 행은 지급되는 때의 값을 받는다(결정 4 #70 '그 값으로').
+
+**5. 번호의 키 있는 해시.**
+
+- `phoneHash(key, phone)`(`apps/api/src/identity/phone-hash.ts`)가 번호에서 해시를 만드는 한곳이고, 뒤 이슈(결정 7의 번호 기준 한도)가 같은 것을 쓴다. 안정된 약속: HMAC-SHA256, 키는 `PHONE_HASH_KEY`의 UTF-8 바이트, 메시지는 `phoneSchema`가 내는 숫자만의 번호(`01012345678`) 그대로, 결과는 소문자 16진 64자. 숫자가 아닌 표기는 거절한다(같은 번호가 두 해시가 되지 않게). 고정 시험 벡터가 이 약속을 묶는다. 키·메시지·인코딩 가운데 하나라도 바꾸면 그것은 교체다(7-2).
+- `PhoneHasher`(Nest 주입)가 배포의 키로 해시한다. `PHONE_HASH_KEY`: 운영(`NODE_ENV=production`)에서는 필수이고 32자 이상이며, 저장소에 있는 개발용 키(`DEV_PHONE_HASH_KEY`처럼 `development-only`가 든 값)이거나 `BETTER_AUTH_SECRET`과 같으면 API가 뜨지 않는다(`env.ts`). 공개된 키로 만든 해시는 번호를 모두 대입해 풀리고 키는 바꿀 수 없어서다(7-2). 운영 밖에서 비워 두면 고정된 개발용 키(`DEV_PHONE_HASH_KEY`)를 쓴다 — CI와 e2e는 바꿀 것이 없다. 배포: `terraform/ssm.tf`의 `random_password.phone_hash_key`(48자)가 SSM의 env(`templates/env.tftpl`)를 거쳐 호스트 `.env`가 되고, `deploy/compose.yaml`의 api가 받는다. `.env.example`은 값을 비워 두고(운영 밖에서는 개발용 키를 쓴다) 운영의 조건과 '바꾸지 말 것'을 적었다.
+- 해시는 번호로 되돌릴 수 없다: 휴대전화 번호는 10^8\~10^9개뿐이라 키 없는 SHA-256은 몇 분이면 모두 대입해 풀리지만, 키가 없으면 그 대입이 쓸모없다.
+
+**6. 공개 금지, 웹.**
+
+- `GET /me`(본인 전용)가 `startGrant: StartGrant | null`을 싣는다: `pending`(금액·시각 NULL), `granted`(금액과 지급 시각), 지급 기록이 없으면 `null`(아직 온보딩 전이거나, 그 번호의 시작 Coin이 다른 계정의 것). 해시와 지급 행의 id는 싣지 않는다. 따로 읽는 라우트는 없다. `OWNER_ROUTES`의 `GET /me` 사유에 더했다. `PRIVATE_DATA`의 `balance`가 `startGrant`·`startGrants` 필드를 막는다 — 공개 응답은 어느 계정이 받았는지·얼마를·언제를 말하지 않는다. 번호의 해시는 `phone` 항목(`phoneHash`)이 막는다.
+- 지갑(`/my/wallet`)의 잔고 카드: 지급을 기다리는 동안(`startGrant.status === 'pending'`) 잔고 아래에 정보 알림 '시작 Coin은 준비되는 대로 지급됩니다.'(`copy.walletStartGrantPending`, 결정 1의 오너 문구)를 보인다. 판정은 `lib/wallet.ts`의 `startGrantPending` 하나다. 지급했거나 기록이 없으면 아무것도 보이지 않는다(7-12).
+- 이용 내역의 유형 이름은 `lib/wallet.ts`의 `LEDGER_TYPE_LABEL`로 옮겼고(`ledger-list.tsx`에서) `START_GRANT`는 '시작 지급'이다. 모든 유형이 서로 다른 이름이다.
+- 실시간: 지급은 `user:balance`로만 탭에 닿고 그 이벤트는 어느 원장 행인지 말하지 않는다. 그래서 `applyBalanceEvent`가, 들고 있는 `Me`의 지급이 기다림이면 `replaceAndRefetch`로 답하고 `RealtimeProvider`는 잔고를 곧바로 쓴 뒤 `['me']`를 다시 묻는다. 그 `['me']` 쓰기는 `storeBalanceEvent`(`hooks/use-me.ts`)로 옮겨 provider가 부른다 — node에서 도는 시험이 provider를 그리지 못해도 provider의 단계 그대로를 돌린다. 그 답이 `granted`이면 안내가 사라진다. 기다리는 지급이 없으면 지금처럼 쓰기만 한다(요청 없음). 이 재요청은 그 파일의 규칙에서 '이벤트가 그것이 말하는 행을 만들 수 없다'는 첫째 갈래다.
+
+**7. 구현의 선택.** 오너가 정하지 않은 것을 이 PR이 정했다. 되돌리기 쉬운 쪽을 골랐다.
+
+1. **해시는 지급 기록에만 두고 `phone_verifications`에 두지 않는다.** 브리프는 살아 있는 계정 옆(본인확인 기록)에 해시를 두어 뒤 이슈가 싸게 조인하게 하는 것도 생각해 보라고 했다. 두지 않은 까닭: 번호는 운영자가 DB에서 손으로 바꾸고(#57 3항), 거기서는 키 있는 해시를 다시 셈할 수 없어 옆 열이 옛 번호의 해시로 남는다. NOT NULL 열을 더하려면 기존 행을 채우는 마이그레이션이 필요한데 SQL은 키를 모른다. 해시는 필요할 때 지금의 번호로 셈하므로(지급할 때) 언제나 그 번호의 것이다. 번호마다 세는 뒤 이슈는 자기 행에 그때의 해시를 저장한다(행이 생길 때 `PhoneHasher`로) — 탈퇴 뒤에도 남는 것은 그 행이고, 살아 있는 계정의 조인은 `phone_verifications.phone`을 해시해 견준다.
+2. **키는 따로 둔 비밀(`PHONE_HASH_KEY`)이고 바꾸지 않는다.** `BETTER_AUTH_SECRET`에서 이끌어 내지 않은 까닭: 세션 비밀은 유출 때 바꾸는 값이고(모두 다시 로그인하면 끝난다), 이 키를 바꾸면 저장된 모든 해시가 어느 번호와도 맞지 않게 되어 시작 Coin을 받은 번호가 다음 계정에서 다시 받고 번호마다 세는 한도도 처음부터 센다. 그래서 같은 값이면 API가 뜨지 않게 했다. 새 키로도 API는 그대로 떠서 아무것도 알려 주지 않으므로, terraform의 `random_password.phone_hash_key`에 `prevent_destroy`를 걸었다 — `-replace`·taint, 값을 새로 뽑게 하는 `length`·`special`의 수정, `terraform destroy`가 plan 단계에서 오류로 끝난다. root를 내릴 때는 키를 `terraform state mv`로 state 밖의 파일에 옮겨 두고 다시 올릴 때 첫 apply 전에 되돌린다(terraform/README.md '시크릿 교체'·'중지 / 시작', terraform/AGENTS.md의 금지). 유출되면 그 키로 번호를 대입해 볼 수 있으니 해시 표와 키가 함께 새어야 풀린다. 교체 절차(기록을 새 키로 옮기기)는 없다 — 옮기려면 원래 번호가 있어야 하고, 탈퇴로 지운 번호는 없다.
+3. **해시의 메시지는 번호의 숫자뿐이다.** 계정 id나 용도 라벨을 섞지 않았다. 지급과 뒤 이슈의 한도가 같은 번호를 같은 값으로 알아봐야 해서다(결정 7 '본인확인한 번호(키 있는 해시)'). 용도마다 키를 달리할 까닭이 생기면 그때 새 함수를 둔다.
+4. **지급 이벤트 ID는 `start_grants.id`이고, 번호와 계정에 각각 UNIQUE다.** 지급 전에 기록부터 남기고(기다림), 그 행을 잠가 한 번만 지급한다. 번호의 UNIQUE는 같은 번호의 다른 계정을, 계정의 UNIQUE는 번호가 바뀐 같은 계정을 막는다.
+5. **기다리는 지급은 워커가 매 분 훑어 준다.** 출시 설정을 바꾸는 API에서 바로 지급하지 않았다: 그 변경 트랜잭션에 계정 수만큼의 지급을 묶지 않고, 배포·재시작에 걸린 실행도 다음 분에 이어 가며, 같은 `payStartGrant`라 겹쳐도 한 번이다. 대가는 값을 넣은 뒤 최대 1분의 지연과 미정인 동안 매 분 설정 한 행을 읽는 것이다. 한 실행에 500행(행마다 짧은 트랜잭션), 남으면 다음 분이다.
+6. **지급액은 지급하는 트랜잭션에서 읽는다.** 기다리던 계정은 지급되는 때의 값을 받는다 — 기다리는 동안 값이 두 번 바뀌면 마지막 값이다. 지급한 계정은 바뀌지 않는다(#57 2항).
+7. **상한은 1,000,000 Coin이다.** 쿠폰(`COUPON_MAX_COIN`)·관리자 조정(`ADJUST_MAX_ABS_COIN`)과 같다. 화면에서의 오타를 막는 경계이고 금액의 결정이 아니다(#133).
+8. **`START_GRANT` 원장 행에는 메모가 없다.** 유형이 무엇인지 말한다('시작 지급').
+9. **지급은 그 계정의 지갑에 실시간으로 알린다**(`user:balance`, 커밋 뒤, 최선). 다른 잔고 변경과 같다(PLAN 8).
+10. **번호가 이미 쓰인 계정에는 기록을 남기지 않는다**(`number_already_used`). 그 계정의 `startGrant`는 `null`이고 지갑은 아무 안내도 하지 않는다. 같은 계정이 뒤에 다시 불려도 같은 답이다.
+11. **기다리는 동안의 지급 기록도 그 번호의 것이고, 본인확인 기록이 없어진 계정에는 지급하지 않는다.** 기다리던 계정이 탈퇴하고 같은 번호로 새 계정을 만들면 새 계정은 받지 않는다(`number_already_used`). 탈퇴로 본인확인 기록(`phone_verifications` 행)이 없어진 계정의 기다리는 지급은 값이 들어와도 지급하지 않고 기다림으로 남는다(`payStartGrant`의 `unverified`, 워커는 고르지도 않는다). 오너가 정하지 않은 일이라(결과 4의 둘째 질문) 되돌릴 수 있는 쪽을 골랐다: 아무것도 쓰지 않으므로 오너가 (a)를 고르면 그때 지급하고 (c)를 고르면 기록을 지우면 된다. 지급하면 원장 행은 지우지 않으니 되돌릴 수 없다. #70의 본문('본인확인 기록이 없는 계정에는 지급하지 않는다')과 완료 조건('본인확인 완료 기록(#183)이 없는 계정에는 지급 기능이 시작 Coin을 지급하지 않는다')도 지급하는 쪽(API와 워커)마다 그 기록을 본다는 뜻으로 읽었다.
+12. **지갑의 안내는 잔고 카드 안, 잔고 아래의 정보 알림이다.** 안내가 설명하는 것이 그 0 Coin이라 그 옆에 두었다. 고정 안내(현금 환전·출금 없음)와 같은 모양이고 `role`은 없다(페이지를 열 때부터 있는 글이다). MY 요약의 지갑 미리보기와 헤더의 잔고 칩에는 두지 않았다 — 결정 4 #70은 '지갑'이라 했다(결과 4).
+13. **`BONUS`로 남은 옛 가입 지급의 이름은 '보너스' 그대로다.** 옛 행을 `START_GRANT`로 바꾸지 않았다(D4, 원장은 고치지 않는다).
+14. **e2e는 지급 대기 화면을 API의 답을 바꿔 그린다.** 이 빌드에는 지급 기록을 만드는 요청이 없어서다(#58 전). 기록·대기·한 번의 지급은 API·DB·워커 시험이 실제 DB로 본다. 출시 설정 e2e는 시작 지급액의 값을 바꾸지 않는다 — 넣은 값은 워커가 곧바로 쓰고 e2e DB에 남는다.
+
+**8. 시험.**
+
+- shared: `enums.test.ts`(`START_GRANT`가 `BONUS`와 다른 자기 유형), `me.test.ts`(`startGrant`의 기다림·지급 모양), `release-settings.test.ts`(출시 레지스트리가 `grant.start_coin` 하나, 1\~1,000,000의 정수만), `jobs.test.ts`(큐 넷·잡 다섯), `guards/private-data.test.ts`(`startGrant`·`start_grants`가 `balance`).
+- db: `schema.test.ts`의 'start grants (migration 0031)'(11): 번호마다·계정마다 하나와 기다림, 잔고·`START_GRANT` 한 행·기록을 함께 한 번 지급, 미정이면 기다렸다가 넣은 값으로, 두 트랜잭션의 동시 지급에서 한 번, 기다리는 행을 오래된 순으로 한도까지, 기다림으로만 넣고 지급 칸 셋의 CHECK와 양수는 UPDATE에서, 지급한 행을 넣지 못함(다른 계정의 원장 행으로도, 그 행을 가리키는 자기 `START_GRANT` 원장 행으로도), 기록을 고치지 못하고 트리거 검사의 조건마다(계정·유형·`ref_type`·`ref_id`·금액·가리킨 원장 행) 한 칸만 다른 원장 행으로 지급하지 못하며 지급한 행은 기다림으로 되돌리거나 다른 원장 행·금액으로 바꾸지 못함(거절은 저마다의 메시지로 확인), 본인확인 기록이 없어진 계정의 지급은 하지 않고 스캔에서도 빠짐, 지급하는 동안 본인확인 기록을 지우지 못하고 실명 수정은 막지 않음, 번호(`phone_verifications` 행)를 지워도 기록이 남음(#140). 가입 트리거가 잔고 0·원장 0행이고(`seed.test.ts`의 관리자 포함) `wipe.test.ts`·팩토리(`createStartGrant`, 잔고는 `ADMIN_ADJUST`로)·`storage-names.test.ts`(`BONUS_NAMES`의 사유)를 고쳤다.
+- API: `start-grant.service.test.ts`(11): 라우트가 없음(컨트롤러 없음, 앱의 어느 라우트도 start·grant를 말하지 않음), 본인확인 없으면 거절하고 아무것도 쓰지 않음, 설정 값으로 한 번(잔고·원장 한 행·기록·실시간 이벤트), 동시 호출에서 한 번, 미정이면 기다렸다가 값이 들어오면 그 값, 상태(설계 제안·시험값·승인됨)와 상관없이 지급, 바꾼 값은 그 뒤 지급에만, 탈퇴(번호 행 삭제)한 계정의 번호로 새 계정이 본인확인해도 지급 없음(지급했든 기다리든), 운영자 계정도 같음, 거래 수익이 아님(포지션·손익이 움직이지 않음). `phone-hash.test.ts`(4): 고정 벡터, 번호·키마다 다른 값, 숫자만, 운영의 키와 운영 밖의 개발용 키. `env.test.ts`: `PHONE_HASH_KEY`의 운영 필수·32자·저장소의 개발용 키 거절(`DEV_PHONE_HASH_KEY`와 `development-only`가 든 다른 값)·세션 비밀과 다름, 비워 두면 운영 밖에서 개발용 키. `auth.test.ts`: 이메일 가입과 소셜 로그인이 만든 계정 모두 잔고 0·원장 0행. `me.controller.test.ts`: `GET /me`의 `startGrant`가 없음 → 기다림 → 지급. `release-settings.controller.test.ts`: 주입 없이 뜬 앱이 `grant.start_coin`을 미정으로 보이고 정수 범위 밖을 거절. `private-data.test.ts`: A의 지급(행 id·금액·번호의 해시)을 표지값으로 심고, 해시는 본인확인 발송의 인증번호 해시·접속 주소와 함께 A 자신의 답(본인 전용 라우트와 better-auth 라우트)에도 없음(`NEVER_SHOWN`). 잔고 10,000을 가정하던 시험(지갑·쿠폰·충전 상품·관리자·환불·유료 판매)을 고쳤다.
+- 워커: `start-grant-pay.test.ts`(6): 미정이면 행을 보지도 않음, 넣은 값으로 기다리던 행 모두를 한 번씩 지급하고 지갑마다 알림, 두 실행이 겹쳐도 한 번, 뒤에 바뀐 값은 아직 기다리는 행에만, 기다리는 동안 탈퇴(본인확인 기록 삭제)한 계정은 지급하지 않고 기다림으로 남으며 한 실행에 하나여도 뒤의 지급을 막지 않음, 지급하지 못한 행을 넘어 계속하고 한 실행에 한 묶음까지. `ledger-audit.test.ts`(시작 지급도 맞음, 원장 없는 계정의 잔고 행이 사라지면 알림), `jobs/index.test.ts`(결과가 JSON이고 미정이면 조용함), `queues.test.ts`.
+- 웹: `lib/wallet.test.ts`(5): 모든 유형에 서로 다른 이름, `START_GRANT`는 '시작 지급'이고 보너스가 아님, 기다릴 때만 안내(지급·기록 없음·프로필 전에는 없음), 오너의 문구에 수나 날짜가 없음. `lib/market-live.test.ts`: 기다리는 동안의 `user:balance`는 `replaceAndRefetch`(잔고만 쓰고 지급 상태는 그대로), 지급 뒤와 기록 없는 계정은 `replace`. `lib/realtime-cache.test.ts`: provider의 `['me']` 쓰기(`storeBalanceEvent`)를 실제 QueryClient로 돌려, 잔고가 곧바로 바뀌고 다시 받은 답이 기다림을 지움(요청 둘), 그 뒤의 이벤트는 쓰기만(요청 없음). 첫 `GET /me`를 끊은 이벤트가 다시 묻는 것과 로그인 전의 이벤트가 항목을 만들지 않는 것도 같은 함수로 본다. 고정 픽스처에 `startGrant: null`.
+- e2e(375px·1280px): `start-grant.spec.ts`(새, 2) — 가입한 계정은 `GET /me`의 `startGrant`가 없고 잔고 0·원장 0행이며 지갑이 0 Coin·'아직 내역이 없습니다.'·안내 없음, `GET /me`가 기다림이라고 답하면 잔고 카드에 안내가 보이고 지급이라고 답하면(원장도 `START_GRANT` 한 행) 안내 대신 '시작 지급' +10,000 Coin. `release-settings.spec.ts` — 관리자 API와 화면이 시작 지급액 하나(이름·키·설명·상태·단위, '전체 1개 · 미정 N개', 변경 대화상자의 한 줄 JSON 입력과 취소)를 보이고 값을 바꾸지 않음, 회원은 그 값을 바꿀 수 없음(403). `auth.spec.ts`·`nav.spec.ts`(잔고 칩 전체가 '잔고 0 Coin'), `my.spec.ts`(잔고 요약 0 Coin), `payment.spec.ts`·`coin.spec.ts`·`helpers.ts`(주석).
+
+### 결과
+
+**1. 상태 줄.** 이어 썼다(덮어쓰지 않는다, ADR-0047 결과 1).
+
+- ADR-0026: 일부 대체됨. 가입 보너스 10,000P(`user` 트리거, 미인증 계정 포함, `SIGNUP_BONUS_COIN`) — 계정을 만들 때는 아무것도 주지 않고, 시작 Coin은 본인확인한 번호마다 한 번 `START_GRANT`로 준다.
+- ADR-0019: 일부 대체됨. 2026-09-05 추기의 '같은 트리거가 가입 보너스와 `BONUS` 원장도 함께 쓴다' — 트리거는 프로필과 잔고 0만 만든다(마지막 본문은 0031).
+- ADR-0052: 일부 대체됨. 결정 4의 '가입 보너스 10,000과 `BONUS` 원장은 그대로다' — 0031이 그 둘을 뺐다.
+- ADR-0050: 일부 대체됨. 결정 2의 상수 `SIGNUP_BONUS_COIN`과 결정 3의 '트리거 리터럴과 공유 상수를 함께 바꾸는 ADR-0026의 규칙은 그대로' — 상수를 지웠고 트리거는 Coin을 주지 않는다.
+- ADR-0051: 일부 대체됨. 결정 5의 README 가입 안내('시작 Coin이 자동 지급되고 … `SIGNUP_BONUS_COIN`과 가입 트리거') — 가입만으로는 주지 않고 금액은 출시 설정 `grant.start_coin`이다.
+- ADR-0055 결과 2의 '`SIGNUP_BONUS_COIN`과 가입 트리거의 상수는 그대로이고 옛 상수를 지우는 일은 그 값을 등록하는 이슈가 한다'는 그 일을 #70에 넘겼을 뿐 정하지 않았으므로 상태 줄을 고치지 않았다(ADR-0052 결과 1의 관례).
+
+**2. 문서.** `docs/API.md`·`apps/api/openapi.json`·api-client는 생성했다(`StartGrant`, `Me.startGrant`, `START_GRANT`, `start_grant`, 실시간 표의 `user:balance` 설명 — 생성기 `scripts/generate-api-doc.mjs`). `README.md`: 시작 Coin의 문단(가입 지급 없음, 번호마다 한 번, #58 전의 공백, 시작 지급액과 기다림, `PHONE_HASH_KEY`), 경로 표의 `/my/wallet`·`/admin/settings` 줄, 워커 그림과 잡 목록의 `start_grant.pay`. `docs/SETTINGS.md`: 레지스트리의 첫 항목, 옛 두 곳을 지운 것, '항목 등록하기' 4의 네 곳, 미정일 때의 처리, 예상 항목 표의 시작 지급액. `docs/RESET.md`: 지우는 표의 `start_grants`(지우면 그 번호들이 다시 받을 수 있다), 반복 잡, 결과와 확인의 '가입 지급' 문장. `docs/GUARDS.md`: 공개 금지 표의 `balance`, `BONUS_NAMES`의 사유, 런타임 검사의 표지값과 A 자신의 답에도 없어야 하는 값(`NEVER_SHOWN`). `docker/postgres/init/01-roles.sql`: 앞뒤 주석의 목록에 `start_grants`의 DELETE 회수(0031). `terraform/README.md`: `random_password` 다섯, `phone_hash_key`를 교체하지 말 것과 그것을 막는 `prevent_destroy`, '중지 / 시작'의 destroy 전에 키를 옮기고 다시 올릴 때 되돌리기, #70을 처음 배포할 때의 apply. `terraform/AGENTS.md`: `random_password` ×5와 `phone_hash_key`의 금지. `.env.example`·`deploy/compose.yaml`·`terraform/ssm.tf`·`templates/env.tftpl`: 결정 5. 기록이라 고치지 않은 것(ADR-0047 결과 2): `docs/QUESTIONS.md`의 Q-M2-2(시드 관리자의 가입 보너스)·A-M2-10(미인증 계정의 보너스), `docs/PLAN.md`, 이 ADR 전 ADR의 본문(상태 줄은 결과 1), 마이그레이션 0004·0018·0019의 본문과 주석.
+
+**3. 오너가 할 일.**
+
+- 이 PR을 처음 배포하기 **전에** `terraform apply`로 `random_password.phone_hash_key`를 만든다(SSM의 env에 `PHONE_HASH_KEY`가 들어간다). 없으면 운영 API가 뜨지 않는다. 이 키는 한 번 만든 뒤 바꾸지 않는다(7-2, terraform/README.md '시크릿 교체').
+- 시작 지급액이 정해지면 `/admin/settings`의 '시작 지급액'에 넣는다(ADR-0069 결과 3). 상태가 시험값이어도 값이 있으면 그때부터 지급한다(결정 7). 그 전에는 #58 뒤 온보딩을 마친 계정의 지급이 기다리고 지갑이 대기 안내를 보인다.
+- 결과 4의 질문에 답한다.
+
+**4. 오너에게 물을 것.** 지금 동작은 각 질문의 마지막 문장이다.
+
+- **#70 전에 만든 계정.** 그 계정들은 가입 때 10,000 Coin(`BONUS`)을 받았고(D4로 회수하지 않는다), 그 번호에는 시작 Coin 기록이 없으므로 #58이 생긴 뒤 온보딩을 마치면 시작 Coin도 받는다 — 두 번 받는다. (a) 그대로 둔다 (b) `BONUS` 가입 지급 행이 있는 계정은 시작 Coin을 받지 않게 한다 (c) 이 PR(또는 #58)을 배포할 때 배포 DB를 재초기화한다(docs/RESET.md, D4). 지금은 (a)다.
+- **기다리는 동안 탈퇴한 계정(#140).** 탈퇴는 본인확인 기록(번호)을 지우고 계정 행과 지급 기록은 남긴다. 그 계정의 기다리는 지급을 (a) 값이 들어오면 그 계정에 지급한다 — 탈퇴 소멸(#57-16)은 탈퇴하는 때 이미 기록했으므로 그 Coin은 닫힌 계정의 잔고에 남는다. 없애려면 #140이 탈퇴 뒤에 들어온 Coin도 소멸시키게 하는 것까지 정해야 한다 (b) 지급하지 않고 그 번호의 기록으로만 남긴다 (c) 기록을 지워 그 번호의 다음 계정이 받게 한다. (a)·(b)이면 그 번호의 다음 계정은 받지 않는다. #140이 탈퇴 때 무엇을 할지가 이 답을 따른다. 지금은 (b)다(7-11) — 아무것도 쓰지 않았으므로 (a)·(c)로 바꿀 수 있다.
+- **운영자가 DB에서 번호를 바꿀 때(#57 3항).** 지급 기록은 옛 번호의 해시로 남는다. 그래서 옛 번호는 다른 계정에서 다시 받지 못하고, 새 번호는 기록이 없어 그 계정이 탈퇴한 뒤 새 계정이 그 번호로 다시 받을 수 있다. 번호를 바꿀 때 새 번호도 '받은 번호'로 기록할지(기록이 계정마다 하나라 표 모양이 바뀐다). 지금은 아무것도 하지 않는다.
+- **지급 대기 안내의 자리.** 결정 4 #70의 '지갑에도'를 지갑 탭의 잔고 카드로 읽었다(7-12). MY 요약의 지갑 미리보기(잔고를 같이 보인다)에도 보일지. 지금은 지갑 탭에만 있다.
+
+**5. 알려진 한계와 다른 이슈에 넘긴 것.**
+
+- #58: 세 단계(약관 동의 → 본인확인 → 닉네임)를 서버에서 확인한 뒤 `StartGrantService.grant`를 부르고, 그 결과로 지급 뒤 안내 화면(#57 10항, 기다림이면 지급액 자리에 같은 대기 문구 `copy.walletStartGrantPending`, `number_already_used`면 무엇을 보일지)을 그린다. 그때까지 아무것도 지급 기능을 부르지 않아 새 계정은 0 Coin이다(결정 1의 '공백을 받아들인다').
+- #115: 봇·시스템 계정의 판별을 `grant`의 표시한 자리에 넣는다(기록 전에 거른다). #73: 사용자에게 Coin이 들어오는 경로의 닫힌 목록(GUARDS.md '검사하지 않는 것')에 `START_GRANT`가 든다.
+- #140: 탈퇴는 그 계정의 `phone_verifications` 행(번호·실명)을 지우고 `start_grants`는 건드리지 않는다 — 그 행이 '시작 Coin을 받은 번호'다(앱은 지우지도 고치지도 못한다). 기다리는 지급은 결과 4의 둘째 질문이고 지금은 지급하지 않는다(7-11). 탈퇴는 본인확인 기록을 지우는 일을 잔고(탈퇴 소멸)보다 먼저 잠근다 — `payStartGrant`가 본인확인 기록 → 잔고 순으로 잠그므로, 거꾸로 잡으면 서로 기다린다(Postgres가 하나를 끊고 워커는 다음 분에 다시 하지만 탈퇴가 실패할 수 있다).
+- 결정 7의 번호 기준 한도(#187 작성 빈도·#50 신고 중복·#49 좋아요·#77 제안·#141 업로드): `phoneHash`(`PhoneHasher`)로 셈해 자기 행에 저장한다(7-1·7-3).
+- #133·#149: 재초기화(`wipe`)는 `start_grants`도 비우므로 재초기화 뒤에는 같은 번호가 다시 받는다. 다시 줄지는 #133의 재초기화 범위가 정한다. 시작 지급액의 출시 값도 #133이다.
+- #52: 시작 Coin 지급 알림.
+- `PHONE_HASH_KEY`는 교체 절차가 없다(7-2).
+
+**6. 파일.**
+
+- shared: `start-grant.ts`(새, `StartGrant`·`START_GRANT_MAX_COIN`), `enums.ts`(`START_GRANT`, `start_grant`), `release-settings.ts`(`START_COIN_SETTING`, 레지스트리), `me.ts`(`startGrant`), `jobs.ts`(큐 `wallet`, `start_grant.pay`), `constants.ts`(`SIGNUP_BONUS_COIN` 삭제), `guards/private-data.ts`·`guards/excluded.ts`(주석), `index.ts`와 시험.
+- db: `drizzle/0031_start_grants.sql`과 스냅샷, `schema/start-grants.ts`(새)·`schema/index.ts`·`schema/relations.ts`·`schema/phone-verifications.ts`(주석), `start-grants.ts`(새, `payStartGrant`·`pendingStartGrantIds`), `phone-verification.ts`(`isPhoneVerified`의 잠금), `index.ts`, `seed.ts`, `test/factories.ts`(`createStartGrant`, 본인확인 기록도), `schema.test.ts`·`seed.test.ts`·`wipe.test.ts`·`storage-names.test.ts`. `docker/postgres/init/01-roles.sql`(주석).
+- API: `start-grant/`(새, 서비스·모듈·시험), `identity/`(새, `phone-hash.ts`·모듈·시험), `config/env.ts`(`PHONE_HASH_KEY`), `auth/auth.module.ts`(env 키 목록), `auth/register.controller.ts`(주석), `me/me.service.ts`, `app.module.ts`, `surface/registry.ts`, `openapi.json`, 잔고 10,000을 가정하던 시험들.
+- 워커: `jobs/start-grant-pay.ts`(새, + 시험), `jobs/index.ts`, `queues.ts`, `jobs/ledger-audit.ts`(주석)와 시험.
+- 웹: `lib/wallet.ts`(새, + 시험), `app/my/wallet/balance-card.tsx`·`ledger-list.tsx`, `lib/market-live.ts`, `hooks/use-me.ts`(`storeBalanceEvent`), `components/realtime/realtime-provider.tsx`, `copy.ts`(`walletStartGrantPending`, `ledgerTypeStartGrant`), 시험 픽스처. e2e: `start-grant.spec.ts`(새), `release-settings.spec.ts`, `auth.spec.ts`, `nav.spec.ts`, `my.spec.ts`, 주석만 고친 `payment.spec.ts`·`coin.spec.ts`·`helpers.ts`.
+- 배포: `.env.example`, `deploy/compose.yaml`, `terraform/ssm.tf`·`templates/env.tftpl`·`README.md`·`AGENTS.md`.
+- 문서 생성: `scripts/generate-api-doc.mjs`(`user:balance`의 설명).

@@ -4,6 +4,12 @@ export { isPhoneVerified } from './phone-verification.js';
 export { getReleaseSetting, storedReleaseSettingValue } from './release-settings.js';
 export * as schema from './schema/index.js';
 export {
+  payStartGrant,
+  pendingStartGrantIds,
+  type PayStartGrantResult,
+  type StartGrantRow,
+} from './start-grants.js';
+export {
   clockTimestamp,
   lockAdminRoles,
   lockMarket,

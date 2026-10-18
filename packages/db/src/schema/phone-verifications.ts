@@ -26,11 +26,13 @@ import { timestampTz, updatedAt } from './columns.js';
  *   not a read before the write, is what holds it when two accounts confirm the same number at
  *   once; the CHECK keeps it the digits `phoneSchema` (@buddha/shared) yields, so two spellings of
  *   one number cannot pass as two. The member cannot change it; operators do it here by hand
- *   (#57-3). A keyed hash of it is what the starting Coin's "once per number" will keep (#70), so
- *   withdrawal (#140) can delete this row and the number with it — the one row #140 deletes for
- *   본인확인. Copies of the number and the real name stay in `phone_verification_codes` all the
- *   same, kept as 본인확인 기록 past the withdrawal: the owner made them an exception to ADR-0069
- *   #57-18's immediate deletion (ADR-0070, owner decision 2026-10-18, second round).
+ *   (#57-3). The starting Coin's "once per number" keeps a keyed hash of it in `start_grants`
+ *   (#70, ADR-0071) — computed from this column when needed, never stored beside it, since a hand
+ *   edit here could not recompute it — so withdrawal (#140) can delete this row and the number
+ *   with it (the one row #140 deletes for 본인확인). Copies of the number and the real name stay
+ *   in `phone_verification_codes` all the same, kept as 본인확인 기록 past the withdrawal: the
+ *   owner made them an exception to ADR-0069 #57-18's immediate deletion (ADR-0070, owner decision
+ *   2026-10-18, second round).
  * - `real_name` is what the member gave with the number, editable in MY 설정 (#57-3).
  *
  * CASCADE like `profiles`: personal data goes with the account, and nothing references it.

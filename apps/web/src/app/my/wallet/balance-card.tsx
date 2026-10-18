@@ -8,8 +8,17 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { copy } from '@/copy';
 import { useMe } from '@/hooks/use-me';
 import { profileView } from '@/lib/query-client';
+import { startGrantPending } from '@/lib/wallet';
 
-/** Balance summary (PLAN 11.3). `locked_coin` is always 0 in the MVP but shown for honesty. */
+/**
+ * Balance summary (PLAN 11.3). `locked_coin` is always 0 in the MVP but shown for honesty.
+ *
+ * Under the balance, while the account's start Coin waits for its amount, the owner's notice that
+ * it will be paid (ADR-0069 decision 4 #70, `startGrantPending`). The balance it sits under is
+ * still the account's real one — 0 for a new account — so the notice says why rather than leaving
+ * a bare 0 Coin. When the worker pays the grant, `user:balance` moves the figure and asks for the
+ * profile again (`applyBalanceEvent`), which takes the notice away.
+ */
 export function BalanceCard() {
   const { data: me, isPending, isFetching, isLoggedIn, refetch } = useMe();
   // The same four states MY's other screens read, and for the same reason: MY's session gate is
@@ -64,6 +73,14 @@ export function BalanceCard() {
                 data-testid="wallet-locked"
               />
             </HStack>
+            {startGrantPending(me) && (
+              <Alert.Root status="info" mt="3" data-testid="wallet-start-grant-pending">
+                <Alert.Indicator />
+                <Alert.Content>
+                  <Alert.Description>{copy.walletStartGrantPending}</Alert.Description>
+                </Alert.Content>
+              </Alert.Root>
+            )}
           </Stack>
         )}
       </Card.Body>

@@ -5931,6 +5931,14 @@
                 "$ref": "#/components/schemas/PhoneVerification"
               }
             ]
+          },
+          "startGrant": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/StartGrant"
+              }
+            ]
           }
         },
         "required": [
@@ -5940,7 +5948,8 @@
           "profile",
           "balance",
           "linkedAccounts",
-          "verification"
+          "verification",
+          "startGrant"
         ],
         "additionalProperties": false
       },
@@ -6008,6 +6017,38 @@
           "realName",
           "phone",
           "verifiedAt"
+        ],
+        "additionalProperties": false
+      },
+      "StartGrant": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "granted"
+            ]
+          },
+          "amountCoin": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CoinAmount"
+              }
+            ]
+          },
+          "grantedAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          }
+        },
+        "required": [
+          "status",
+          "amountCoin",
+          "grantedAt"
         ],
         "additionalProperties": false
       },
@@ -6388,7 +6429,8 @@
               "ADMIN_ADJUST",
               "BONUS",
               "PAYMENT_CANCEL",
-              "PAYMENT_CANCEL_REVERSAL"
+              "PAYMENT_CANCEL_REVERSAL",
+              "START_GRANT"
             ]
           },
           "amountCoin": {
@@ -6405,7 +6447,8 @@
               "fill",
               "market",
               "admin_action",
-              "coupon"
+              "coupon",
+              "start_grant"
             ]
           },
           "refId": {

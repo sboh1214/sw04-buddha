@@ -14,7 +14,7 @@
 | 컴퓨트                                             | `ec2.tf` (AMI data source, 인스턴스, EIP), `templates/user-data.sh.tftpl` (첫 부팅 1회)                                                                          |
 | 데이터 볼륨 / 스냅샷                               | `storage.tf` (`aws_ebs_volume.data` + attachment + DLM)                                                                                                          |
 | 컨테이너 이미지 저장소                             | `ecr.tf` (`tf-buddha-api` / `-worker` / `-web`)                                                                                                                  |
-| 운영 `.env` (시크릿)                               | `ssm.tf` (`random_password` ×4 + SecureString `/tf-buddha/env`), `templates/env.tftpl` (본문)                                                                    |
+| 운영 `.env` (시크릿)                               | `ssm.tf` (`random_password` ×5, 그중 `phone_hash_key`는 `prevent_destroy` + SecureString `/tf-buddha/env`), `templates/env.tftpl` (본문)                         |
 | 인증/권한                                          | `iam.tf` (인스턴스 역할), `github-oidc.tf` (GitHub OIDC provider — 계정 공용, `prevent_destroy` + 배포 역할 + immutable subject)                                 |
 | 이메일 (SES)                                       | `ses.tf` (identity `buddha.sboh.dev`, MAIL FROM `mail.buddha.sboh.dev`, SMTP IAM user) — DNS 레코드는 `outputs.tf`의 `dns_records`                               |
 | DNS                                                | Terraform 밖. `outputs.tf`의 `dns_records`를 Cloudflare 대시보드에 손으로 등록(A DNS-only + DKIM CNAME ×3 + MAIL FROM MX/SPF + DMARC)                            |
@@ -56,4 +56,5 @@
 - **금지**: `/tf-buddha/env`를 콘솔에서 편집. `aws_ssm_parameter.env`는 템플릿 렌더 결과라 다음 apply가 덮어쓴다. `terraform.tfvars` 또는 `templates/env.tftpl`을 고친다.
 - **금지**: `aws_iam_openid_connect_provider.github`의 `prevent_destroy` 제거를 커밋, 이 root를 내리면서 provider까지 destroy(먼저 `state rm`), 또는 다른 Terraform root에서 GitHub OIDC provider를 `resource`로 만들거나 import하기. 계정에 하나뿐이라 다른 root는 data source로만 읽는다 — 소유한 state의 destroy가 계정의 모든 GitHub Actions 배포를 끊는다(2026-09-22 inno-frame destroy).
 - **금지**: `aws_ebs_volume.data`의 `prevent_destroy` 제거를 커밋. 스냅샷 복구 절차(README)에서 **일시적으로** 주석 처리하고 즉시 복원한다.
+- **금지**: `random_password.phone_hash_key`의 `prevent_destroy` 제거를 커밋, 그 `length`·`special`의 수정(값을 새로 뽑는다), `-replace`·taint, 또는 이 root를 내리면서 키를 state에 둔 채 destroy(먼저 `state mv`로 옮긴다, README「중지 / 시작」). 운영 `PHONE_HASH_KEY`다 — 새 키로도 API는 그대로 뜨지만 저장된 번호 해시(`start_grants`)가 모두 무효가 되어 시작 Coin을 받은 번호가 다시 받는다(ADR-0071).
 - **금지**: root 자격증명으로 apply. `aws sts get-caller-identity --profile inno-frame`이 `user/terraform-iam`이어야 한다.

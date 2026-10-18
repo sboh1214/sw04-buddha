@@ -77,13 +77,14 @@ const VARCHAR_VALUES: Readonly<Record<string, readonly string[]>> = {
 /**
  * The stored names that may name a bonus — a table, column, constraint, enum or stored value,
  * keyed as storageNames() places them — with why. 'bonus' is a path token of the activity reward
- * only: the starting Coin is the product's own (N01 §2), and so a bonus-named stored name is held
- * to this list instead. A new one is added here with its reason, which a reviewer reads.
+ * only: the coupon's BONUS ledger type is the product's own (ADR-0026), and so a bonus-named
+ * stored name is held to this list instead. A new one is added here with its reason, which a
+ * reviewer reads.
  */
 const BONUS_NAMES: Readonly<Record<string, string>> = {
   'ledger_entry_type value BONUS':
-    'the starting Coin every verified account gets once (N01 §2, SIGNUP_BONUS_COIN) and the ' +
-    'kept coupon redemption (D9, ADR-0049)',
+    'the kept coupon redemption (D9, ADR-0049), and the sign-up grant of accounts created before ' +
+    '#70. The start Coin has its own START_GRANT type (ADR-0069 decision 4 #70, ADR-0071)',
 };
 const BONUS_FORMS = tokenForms('bonus');
 

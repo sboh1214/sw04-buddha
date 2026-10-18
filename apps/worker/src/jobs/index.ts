@@ -9,6 +9,7 @@ import { runLedgerAudit } from './ledger-audit.js';
 import { closeDueMarkets, closeMarket } from './market-close.js';
 import { finalizeDueMarkets, finalizeMarket } from './market-finalize.js';
 import { type ScanFailure } from './scan.js';
+import { payPendingStartGrants } from './start-grant-pay.js';
 
 export interface JobContext {
   db: Db;
@@ -76,6 +77,24 @@ const HANDLERS: Partial<Record<string, Handler>> = {
       logger.info({ checked: result.checked }, 'ledger audit clean');
     }
     return { checked: result.checked, mismatches: result.recorded };
+  },
+  [JOB_NAMES.startGrantPay]: async (_job, { db, publish, logger }) => {
+    const { undecided, paid, skipped, failed, failures } = await payPendingStartGrants(db, publish);
+    // Like a scan's: one error line per grant, the run itself does not fail (the next run, a
+    // minute later, tries them again).
+    for (const { grantId, err } of failures) {
+      logger.error({ grantId, err }, 'start grant payment failed');
+    }
+    const result = {
+      undecided,
+      paid,
+      skipped,
+      failed,
+      failures: failures.map(({ grantId, message }) => ({ grantId, message })),
+    };
+    // Every minute: quiet unless it paid something or failed.
+    logger[paid > 0 || failed > 0 ? 'info' : 'debug'](result, 'start grant payment');
+    return result;
   },
 };
 

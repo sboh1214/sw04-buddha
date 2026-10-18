@@ -85,7 +85,7 @@ export const PUBLIC_ROUTES: Readonly<Record<string, RegisteredRoute>> = {
 export const OWNER_ROUTES: Readonly<Record<string, RegisteredRoute>> = {
   'GET /me': {
     reason:
-      '본인 계정: 이메일·프로필·잔액·로그인 수단과 본인확인 기록(확인한 휴대전화·실명·확인 시각, ADR-0070)(N04 §2)',
+      '본인 계정: 이메일·프로필·잔액·로그인 수단과 본인확인 기록(확인한 휴대전화·실명·확인 시각, ADR-0070), 시작 Coin의 지급 대기·지급(금액·시각, ADR-0071)(N04 §2)',
   },
   'PATCH /me': {
     reason: '본인 닉네임 변경',

@@ -221,9 +221,10 @@ type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 /**
  * One bootstrap admin, the way better-auth's email sign-up makes an account: a `user` row plus a
  * credential `account` row (providerId 'credential', accountId = user id, scrypt hash from
- * better-auth/crypto). The "user" AFTER INSERT trigger (migrations 0002 and 0004) creates the
- * profile (auto nickname) and the balance, sign-up bonus included: the operator account starts
- * with SIGNUP_BONUS_COIN like every account (Q-M2-2). A fresh account is renamed 관리자 (관리자2
+ * better-auth/crypto). The "user" AFTER INSERT trigger (migrations 0002 and 0031) creates the
+ * profile (auto nickname) and a zero balance with no ledger entry, like every account: the
+ * operator account gets its start Coin as everyone does, after its 본인확인 and onboarding (#70,
+ * ADR-0069 decision 4 #70), never from the seed. A fresh account is renamed 관리자 (관리자2
  * for the second) and promoted; an account the address already has keeps its nickname and
  * password and is verified and promoted. Writes its `admin_grant` record — actor the account
  * itself, reason SEED_ADMIN_GRANT_REASON — at `at`, and returns its id. Returns undefined,
@@ -320,10 +321,9 @@ async function seedOneAdmin(tx: Tx, input: AdminInput, at: Date): Promise<string
     createdAt: at,
   });
 
-  // The trigger created the balance, sign-up bonus included (migration 0004) — like every
-  // account. Never touched: balances change only together with a ledger entry (PLAN 0.2),
-  // and a missing row is a broken account for the ledger audit to report, not something
-  // the seed papers over with a silent 0.
+  // The trigger created the balance, at 0 (migration 0031) — like every account. Never
+  // touched: balances change only together with a ledger entry (PLAN 0.2), and a missing row is
+  // a broken account for the ledger audit to report, not something the seed papers over.
   const [balance] = await tx
     .select({ userId: balances.userId })
     .from(balances)

@@ -56,9 +56,10 @@ describe('enums', () => {
     // one removal so far (MARKET_VOID_REFUND) recreated the type on an emptied table (0017).
     expect(enums.PAYMENT_STATUSES.slice(0, 3)).toEqual(['pending', 'succeeded', 'failed']);
     expect(enums.PAYMENT_STATUSES.slice(3)).toEqual(['cancelled', 'refunding', 'refunded']);
-    expect(enums.LEDGER_ENTRY_TYPES.slice(-2)).toEqual([
+    expect(enums.LEDGER_ENTRY_TYPES.slice(-3)).toEqual([
       'PAYMENT_CANCEL',
       'PAYMENT_CANCEL_REVERSAL',
+      'START_GRANT',
     ]);
     expect(enums.paymentStatusSchema.parse('refunding')).toBe('refunding');
     expect(enums.ledgerEntryTypeSchema.parse('PAYMENT_CANCEL_REVERSAL')).toBe(
@@ -137,5 +138,12 @@ describe('enums', () => {
     );
     expect(enums.ledgerRefTypeSchema.parse('fill')).toBe('fill');
     expect(enums.categorySlugSchema.parse('weather')).toBe('weather');
+  });
+
+  it('gives the start grant a ledger type of its own, apart from the coupon BONUS (#70)', () => {
+    // ADR-0069 decision 4 #70: new issuance under its own type '시작 지급', never BONUS.
+    expect(enums.ledgerEntryTypeSchema.parse('START_GRANT')).toBe('START_GRANT');
+    expect(enums.ledgerRefTypeSchema.parse('start_grant')).toBe('start_grant');
+    expect(enums.LEDGER_ENTRY_TYPES).toContain('BONUS');
   });
 });

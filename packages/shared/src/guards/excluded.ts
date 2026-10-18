@@ -183,17 +183,18 @@ export const EXCLUDED_FEATURES: readonly ExcludedFeature[] = [
       /체크인/,
       /리워드/,
       /적립/,
-      // 보상 alone is also the compensation N01 §9 records, and 보너스·지급 are the sign-up
-      // Coin's and the payout's words; an activity shortly before them in the same sentence
-      // makes them a reward ('거래량 보너스', '좋아요 10개마다 Coin 지급', '매일 접속하면').
+      // 보상 alone is also the compensation N01 §9 records, and 보너스·지급 are the coupon's,
+      // the start Coin's (시작 지급, #70) and the payout's words; an activity shortly before them
+      // in the same sentence makes them a reward ('거래량 보너스', '좋아요 10개마다 Coin 지급',
+      // '매일 접속하면').
       // 글 is a post as its own word, not inside 게시글 (named) or 글자·글꼴·글씨.
       /(?:거래량|거래\s*횟수|주문\s*횟수|활동량?|행동량|접속|(?<![가-힣])글(?![자꼴씨])|게시글|답글|댓글|좋아요)[^.?!\n]{0,16}?(?:보상|보너스|지급)/,
       // A bonus for coming back or for trading: '매일 보너스', '로그인 보너스', '7일 연속 거래 시
       // 보너스', '첫 거래 보너스'. Not the sign-up's '가입 보너스', and not 지급 (정산 지급).
       /(?:매일|일일|로그인|연속|거래)[^.?!\n]{0,12}?보너스/,
     ],
-    // `bonus` alone is the sign-up BONUS: a path token only, and storage-names.test.ts holds
-    // bonus-named stored names to a list of their own.
+    // `bonus` alone is the coupon's BONUS ledger type: a path token only, and
+    // storage-names.test.ts holds bonus-named stored names to a list of their own.
     tokens: ['reward', 'attendance', 'check in', 'streak', 'daily bonus', 'login bonus'],
     pathTokens: ['bonus'],
   },

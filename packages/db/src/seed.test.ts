@@ -3,12 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import {
-  ALL_CATEGORY_SLUGS,
-  CATEGORY_SLUGS,
-  SEED_ADMIN_GRANT_REASON,
-  SIGNUP_BONUS_COIN,
-} from '@buddha/shared';
+import { ALL_CATEGORY_SLUGS, CATEGORY_SLUGS, SEED_ADMIN_GRANT_REASON } from '@buddha/shared';
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -438,10 +433,11 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
     expect(await adminState()).toMatchObject({ password: before.password, role: 'admin' });
   });
 
-  it('gives the admin the sign-up bonus like every account (migration 0004, Q-M2-2)', async () => {
-    // The admin is a `user` row like any other, so the trigger's bonus lands on it too. The
-    // seed leaves it there: pre-0004 accounts of every kind keep their 0, and a zero operator
-    // account would need an owner decision plus an offset entry or a trigger exemption.
+  it('gives the admin no Coin at sign-up, like every account (migration 0031, #70)', async () => {
+    // The admin is a `user` row like any other, and creating one grants nothing: a zero balance
+    // and no ledger entry. Its start Coin comes like everyone's (ADR-0069 decision 4 #70: an
+    // operator account gets it under the same conditions), once it verifies its number and
+    // finishes the onboarding (#58) — the seed grants nothing either.
     runSeed();
     const { id } = await adminState();
     async function wallet() {
@@ -454,8 +450,8 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
       return { balance, entries: entries.map((entry) => [entry.type, entry.amountCoin]) };
     }
     const first = await wallet();
-    expect(first.balance).toMatchObject({ availableCoin: SIGNUP_BONUS_COIN, lockedCoin: 0n });
-    expect(first.entries).toEqual([['BONUS', SIGNUP_BONUS_COIN]]);
+    expect(first.balance).toMatchObject({ availableCoin: 0n, lockedCoin: 0n });
+    expect(first.entries).toEqual([]);
     // Re-running touches neither the balance nor the ledger.
     runSeed();
     expect(await wallet()).toEqual(first);

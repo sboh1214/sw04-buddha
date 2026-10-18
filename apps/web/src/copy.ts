@@ -184,6 +184,9 @@ export const copy = {
   walletTitle: '지갑',
   walletBalance: '사용 가능 잔고',
   walletLocked: '주문 예약',
+  // ADR-0069 decision 4 #70, the owner's words: the start Coin waits for its amount (the release
+  // setting 시작 지급액 is undecided) and is paid once an admin enters it (ADR-0071).
+  walletStartGrantPending: '시작 Coin은 준비되는 대로 지급됩니다.',
   chargeTitle: '코인 충전',
   chargeHint: '금액이 클수록 할인율이 높습니다.',
   chargeDiscount: '할인',
@@ -224,6 +227,8 @@ export const copy = {
   ledgerTypeBonus: '보너스',
   ledgerTypePaymentCancel: '결제 취소(환불)',
   ledgerTypePaymentCancelReversal: '결제 취소 복원',
+  // ADR-0069 decision 4 #70: the start Coin's own ledger type, '시작 지급'.
+  ledgerTypeStartGrant: '시작 지급',
 
   // --- admin (M2 minimum, PLAN 12) ---
   adminTitle: '관리자',

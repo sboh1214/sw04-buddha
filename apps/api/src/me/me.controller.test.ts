@@ -1,11 +1,6 @@
 import { schema } from '@buddha/db';
-import { createPhoneVerification } from '@buddha/db/test';
-import {
-  SIGNUP_BONUS_COIN,
-  errorEnvelopeSchema,
-  meSchema,
-  type ValidationIssue,
-} from '@buddha/shared';
+import { createPhoneVerification, createStartGrant } from '@buddha/db/test';
+import { errorEnvelopeSchema, meSchema, type ValidationIssue } from '@buddha/shared';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
@@ -26,7 +21,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/me (integration)', () => {
     user = await signUpTestUser(t);
   });
 
-  it('GET /me returns user, profile, the bonus balance and the credential account (AC 1)', async () => {
+  it('GET /me returns user, profile, the zero balance and the credential account (AC 1)', async () => {
     const res = await t.app.inject({
       method: 'GET',
       url: '/api/v1/me',
@@ -40,7 +35,9 @@ describe.skipIf(!hasTestInfra)('/api/v1/me (integration)', () => {
     expect(me.emailVerified).toBe(true); // signUpTestUser follows the verification link
     expect(me.profile.role).toBe('user');
     expect(me.profile.nickname).toMatch(/^user_[A-Z2-9]{4}$/);
-    expect(me.balance).toEqual({ availableCoin: SIGNUP_BONUS_COIN.toString(), lockedCoin: '0' });
+    // Signing up grants nothing (#70): the start Coin comes after the onboarding.
+    expect(me.balance).toEqual({ availableCoin: '0', lockedCoin: '0' });
+    expect(me.startGrant).toBeNull();
     expect(me.linkedAccounts).toHaveLength(1);
     const [credential] = me.linkedAccounts;
     expect(credential).toMatchObject({ providerId: 'credential', accountId: user.id });
@@ -74,6 +71,40 @@ describe.skipIf(!hasTestInfra)('/api/v1/me (integration)', () => {
       phone: '01012345678',
       verifiedAt: verifiedAt.toISOString(),
     });
+  });
+
+  it('GET /me reports the start grant: none, then pending, then granted with its amount (#70)', async () => {
+    const startGrantOf = async (account: TestUser) => {
+      const res = await t.app.inject({
+        method: 'GET',
+        url: '/api/v1/me',
+        headers: { cookie: account.cookie },
+      });
+      expect(res.statusCode).toBe(200);
+      return meSchema.parse(res.json<{ data: unknown }>().data).startGrant;
+    };
+    expect(await startGrantOf(user)).toBeNull();
+    // Waiting for an amount: the wallet says it will be paid.
+    await createStartGrant(t.db, { userId: user.id });
+    expect(await startGrantOf(user)).toEqual({
+      status: 'pending',
+      amountCoin: null,
+      grantedAt: null,
+    });
+    // Paid: another account's grant, with its amount and instant; the balance holds it.
+    const other = await signUpTestUser(t);
+    const paid = await createStartGrant(t.db, { userId: other.id, amountCoin: 12_345n });
+    expect(await startGrantOf(other)).toEqual({
+      status: 'granted',
+      amountCoin: '12345',
+      grantedAt: paid.grantedAt!.toISOString(),
+    });
+    const res = await t.app.inject({
+      method: 'GET',
+      url: '/api/v1/me',
+      headers: { cookie: other.cookie },
+    });
+    expect(meSchema.parse(res.json<{ data: unknown }>().data).balance.availableCoin).toBe('12345');
   });
 
   it('GET /me without a session -> 401 UNAUTHENTICATED envelope', async () => {

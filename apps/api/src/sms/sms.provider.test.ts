@@ -20,6 +20,8 @@ const base = {
   DATABASE_URL: 'postgres://u:p@localhost:5432/buddha',
   REDIS_URL: 'redis://localhost:6379',
   BETTER_AUTH_SECRET: 'x'.repeat(32),
+  // Required in production (#70); what it is does not matter here.
+  PHONE_HASH_KEY: 'p'.repeat(32),
 } as const;
 const aligo = { ALIGO_API_KEY: 'api-key', ALIGO_USER_ID: 'buddha', ALIGO_SENDER: '0212345678' };
 const sms = { to: '01098765432', code: '012345', expiresInMinutes: 3 };
