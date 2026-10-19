@@ -50,7 +50,7 @@ describe('PRIVATE_DATA (#113)', () => {
     );
     expect(
       PRIVATE_DATA.filter((item) => item.pending !== undefined).map((item) => item.id),
-    ).toEqual(['risk-flag', 'author-holding', 'market-maker']);
+    ).toEqual(['risk-flag', 'market-maker']);
   });
 });
 

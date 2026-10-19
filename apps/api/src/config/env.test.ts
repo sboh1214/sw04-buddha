@@ -386,3 +386,31 @@ describe('PHONE_HASH_KEY (#70, ADR-0071)', () => {
     );
   });
 });
+
+describe('media storage (#46, ADR-0073)', () => {
+  it('boots in production without a bucket (every upload then fails) and refuses the local directory', () => {
+    const env = envSchema.parse(base);
+    expect(env.MEDIA_STORAGE).toBeUndefined();
+    expect(env.MEDIA_S3_BUCKET).toBeUndefined();
+    for (const [values, path] of [
+      [{ MEDIA_STORAGE: 'local' }, 'MEDIA_STORAGE'],
+      [{ MEDIA_S3_ACCESS_KEY_ID: 'AKIA' }, 'MEDIA_S3_ACCESS_KEY_ID'],
+      [{ MEDIA_S3_BUCKET: 'Not A Bucket' }, 'MEDIA_S3_BUCKET'],
+    ] as const) {
+      const result = envSchema.safeParse({ ...base, ...values });
+      expect(result.success, JSON.stringify(values)).toBe(false);
+      if (!result.success) expect(result.error.issues.map((issue) => issue.path)).toEqual([[path]]);
+    }
+    expect(
+      envSchema.parse({
+        ...base,
+        MEDIA_S3_BUCKET: 'tf-buddha-prod-media',
+        MEDIA_S3_ACCESS_KEY_ID: 'AKIA',
+        MEDIA_S3_SECRET_ACCESS_KEY: 'secret',
+      }).MEDIA_S3_BUCKET,
+    ).toBe('tf-buddha-prod-media');
+    expect(
+      envSchema.safeParse({ ...base, NODE_ENV: 'development', MEDIA_STORAGE: 'local' }).success,
+    ).toBe(true);
+  });
+});

@@ -380,7 +380,12 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
   {
     id: 'author-holding',
     name: '글 작성자의 보유 방향·주문',
-    basis: 'N04 §2, N05 §2',
+    basis: 'N04 §2, N05 §2, ADR-0069 결정 3(#37-13), ADR-0073',
+    // Posts exist (#46): writing and trading are independent, and a post never carries what its
+    // author holds or ordered (N05 §2 «보유 포지션이나 주문은 자동 첨부하지 않는다», #37-13 no
+    // chosen direction either). The author of a public post is its public id, nickname, image and
+    // 운영자 mark only (ADR-0069 decision 5); `positions`, `orders` and the like are caught above
+    // whoever they belong to.
     fields: [
       ['author', 'position'],
       ['author', 'positions'],
@@ -391,7 +396,6 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
       ['author', 'order'],
       ['author', 'orders'],
     ],
-    pending: '글·댓글 기능이 아직 없다',
   },
   {
     id: 'market-maker',

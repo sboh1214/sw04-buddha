@@ -89,6 +89,21 @@ catalog:
   drizzle-kit: 0.31.10
   pg: 8.23.0
   "@types/pg": 8.23.1
+  # media (#46, ADR-0073): the post images. sharp decodes, checks, re-encodes and strips the
+  # metadata of an upload in the API (prebuilt libvips binaries per platform as optional
+  # dependencies, no install script); the S3 client is @buddha/storage's driver for the private
+  # bucket the API and the worker share.
+  sharp: 0.35.5
+  "@aws-sdk/client-s3": 3.1146.0
+  # the post editor (#46, ADR-0073): TipTap 3 over ProseMirror, in apps/web only. Its JSON is the
+  # stored format (TipTap's node and mark names); the server's allow-list (@buddha/shared
+  # post-document.ts) decides what of it is kept, so the editor is a convenience, not a boundary.
+  "@tiptap/react": 3.32.0
+  "@tiptap/pm": 3.32.0
+  "@tiptap/starter-kit": 3.32.0
+  "@tiptap/extension-table": 3.32.0
+  "@tiptap/extension-text-style": 3.32.0
+  "@tiptap/extensions": 3.32.0
   # mobile (react / react-native for mobile come from the `expo` catalog below)
   expo: 57.0.19
   expo-dev-client: 57.0.18

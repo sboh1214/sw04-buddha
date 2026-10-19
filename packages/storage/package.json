@@ -1,0 +1,36 @@
+{
+  "name": "@buddha/storage",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Object storage behind one interface: the private S3 bucket of the post images (#46) and a local directory for development, e2e and tests (shared by apps/api and apps/worker)",
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsc -b tsconfig.build.json",
+    "dev": "tsc -b tsconfig.build.json --watch --preserveWatchOutput",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@buddha/config-eslint": "workspace:*",
+    "@buddha/config-ts": "workspace:*",
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

@@ -35,6 +35,11 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<ErrorCode, number>> = {
   // with that state, like VERIFICATION_REQUIRED, which the same request passes once it is done.
   ONBOARDING_REQUIRED: HttpStatus.CONFLICT,
   NICKNAME_NOT_ALLOWED: HttpStatus.CONFLICT,
+  // The post's state refuses the edit (hidden by an operator, #45-5): a conflict with that state.
+  POST_NOT_EDITABLE: HttpStatus.CONFLICT,
+  // The upload is understood and refused for what it is (#45-3): not an allowed image, too large,
+  // too many pixels or undecodable.
+  IMAGE_NOT_ALLOWED: HttpStatus.UNPROCESSABLE_ENTITY,
   INTERNAL: HttpStatus.INTERNAL_SERVER_ERROR,
 };
 

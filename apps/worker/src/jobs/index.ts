@@ -1,4 +1,5 @@
 import { type Db } from '@buddha/db';
+import { type ObjectStorage } from '@buddha/storage';
 import { marketJobDataSchema, type MarketJobData } from '@buddha/shared';
 import { UnrecoverableError, type Job, type Processor } from 'bullmq';
 import { type Logger } from 'pino';
@@ -8,6 +9,7 @@ import { type Publish } from '../realtime.js';
 import { runLedgerAudit } from './ledger-audit.js';
 import { closeDueMarkets, closeMarket } from './market-close.js';
 import { finalizeDueMarkets, finalizeMarket } from './market-finalize.js';
+import { removeOrphanMedia } from './media-orphan-cleanup.js';
 import { type ScanFailure } from './scan.js';
 import { payPendingStartGrants } from './start-grant-pay.js';
 
@@ -17,6 +19,8 @@ export interface JobContext {
   auditDb: Db;
   /** Realtime events after a market job commits (realtime.ts); best effort, never throws. */
   publish: Publish;
+  /** The media store (#46): the orphan clean-up removes objects from it. */
+  storage: ObjectStorage;
   logger: Logger;
 }
 
@@ -94,6 +98,21 @@ const HANDLERS: Partial<Record<string, Handler>> = {
     };
     // Every minute: quiet unless it paid something or failed.
     logger[paid > 0 || failed > 0 ? 'info' : 'debug'](result, 'start grant payment');
+    return result;
+  },
+  [JOB_NAMES.mediaOrphanCleanup]: async (_job, { db, storage, logger }) => {
+    const { removed, failed, failures } = await removeOrphanMedia(db, storage);
+    // An object the store kept is a stray file nothing names: one error line each, and the run
+    // itself does not fail (its rows are gone, so a retry would not find them).
+    for (const { storageKey, err } of failures) {
+      logger.error({ storageKey, err }, 'orphan upload object not removed');
+    }
+    const result = {
+      removed,
+      failed,
+      failures: failures.map(({ storageKey, message }) => ({ storageKey, message })),
+    };
+    logger[removed > 0 ? 'info' : 'debug'](result, 'orphan upload clean-up');
     return result;
   },
 };

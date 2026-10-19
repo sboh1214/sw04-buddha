@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type {
   fetchMarketSearchPageServer as FetchMarketSearchPage,
   fetchMarketsPageServer as FetchMarketsPage,
+  fetchPostsPageServer as FetchPostsPage,
   fetchRelatedMarketsPageServer as FetchRelatedMarketsPage,
 } from './api.server';
 import { type MarketFilters, type MarketSearch } from './market-keys';
@@ -35,11 +36,16 @@ const fakeFetch = vi.fn((input: Request) => {
 let fetchMarketsPageServer: typeof FetchMarketsPage;
 let fetchMarketSearchPageServer: typeof FetchMarketSearchPage;
 let fetchRelatedMarketsPageServer: typeof FetchRelatedMarketsPage;
+let fetchPostsPageServer: typeof FetchPostsPage;
 
 beforeAll(async () => {
   vi.stubGlobal('fetch', fakeFetch);
-  ({ fetchMarketsPageServer, fetchMarketSearchPageServer, fetchRelatedMarketsPageServer } =
-    await import('./api.server'));
+  ({
+    fetchMarketsPageServer,
+    fetchMarketSearchPageServer,
+    fetchRelatedMarketsPageServer,
+    fetchPostsPageServer,
+  } = await import('./api.server'));
 });
 afterAll(() => {
   vi.unstubAllGlobals();
@@ -111,5 +117,19 @@ describe('fetchRelatedMarketsPageServer', () => {
     ]);
     // No order and no status: the owner fixed both (ADR-0061 decision 1, item 19).
     expect(requests.map(queryOf)).toEqual([{}, { cursor: 'cursor-1' }]);
+  });
+});
+
+describe('fetchPostsPageServer', () => {
+  it('sends the filters that are on as the list asks for them (#46), the market as marketId', async () => {
+    requests.length = 0;
+    const market = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+    await expect(fetchPostsPageServer({})).resolves.toEqual({ items: [], nextCursor: null });
+    await fetchPostsPageServer({ market, category: 'economy', q: '금리' }, 'cursor-1');
+    expect(requests.map((url) => url.pathname)).toEqual(['/api/v1/posts', '/api/v1/posts']);
+    expect(requests.map(queryOf)).toEqual([
+      {},
+      { marketId: market, category: 'economy', q: '금리', cursor: 'cursor-1' },
+    ]);
   });
 });

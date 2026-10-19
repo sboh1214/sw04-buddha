@@ -1,0 +1,222 @@
+'use client';
+
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+} from '@tanstack/react-query';
+import { ME_QUERY_KEY, useMe } from '@/hooks/use-me';
+import {
+  type CreatePostBody,
+  type Post,
+  type PostDeletion,
+  type UpdatePostBody,
+  type UploadedImage,
+  api,
+  isApiError,
+  isForAnotherAccount,
+  unwrap,
+} from '@/lib/api';
+import { uploadContentType } from '@/lib/post-editor';
+import {
+  type CommunityFilters,
+  POST_LIST_KEY,
+  type PostPage,
+  communityPostsKey,
+  postKey,
+  postListQuery,
+} from '@/lib/posts';
+
+/**
+ * 근거 글 (#46, ADR-0073): the community list, a post page, the writes and the image upload.
+ *
+ * Keys and requests live in lib/posts.ts — the server pages seed the cache under those keys, and a
+ * server component cannot take a key from a `'use client'` module (the rule use-markets.ts states).
+ * The option factories are exported apart from the hooks so the node test runner reaches them
+ * (use-posts.test.ts), as use-watchlist.ts does.
+ */
+
+/**
+ * `GET /posts` with the filters, newest first, one page per 더 보기, in the page shape the server
+ * page dehydrates (`fetchPostsPageServer`, the same request through `postListQuery`), so the first
+ * page is picked up rather than fetched again. `keepPreviousData` keeps the cards on screen while a
+ * new filter's first page loads, as the home's list does.
+ */
+export function communityPostsInfiniteQueryOptions(filters: CommunityFilters) {
+  return {
+    queryKey: communityPostsKey(filters),
+    queryFn: async ({ pageParam }: { pageParam: string | undefined }): Promise<PostPage> => {
+      const { data, meta } = unwrap(
+        await api.GET('/api/v1/posts', { params: { query: postListQuery(filters, pageParam) } }),
+      );
+      return { items: data, nextCursor: meta.nextCursor };
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last: PostPage) => last.nextCursor ?? undefined,
+    placeholderData: keepPreviousData,
+  };
+}
+
+export function useCommunityPosts(filters: CommunityFilters) {
+  return useInfiniteQuery(communityPostsInfiniteQueryOptions(filters));
+}
+
+/** One post page (`GET /posts/:postId`), keyed and requested by the lower-cased uuid. */
+export function postQueryOptions(postId: string) {
+  const id = postId.toLowerCase();
+  return {
+    queryKey: postKey(id),
+    queryFn: async (): Promise<Post> =>
+      unwrap(await api.GET('/api/v1/posts/{postId}', { params: { path: { postId: id } } })).data,
+  };
+}
+
+export function usePost(postId: string) {
+  return useQuery(postQueryOptions(postId));
+}
+
+/**
+ * Who is writing: the account the screen shows (`expectedAccountId` on every write, A-PG-24) and
+ * its public id, which tells the viewer's own posts apart (`isOwnPost`). Both come from `GET /me`,
+ * so they are undefined until it has answered — and for a visitor, who writes nothing.
+ */
+export function usePostWriter() {
+  const me = useMe();
+  return {
+    pending: me.isPending,
+    signedIn: me.isLoggedIn,
+    /** Signed in, and `GET /me` failed: who is writing is unknown, so nothing is offered. */
+    failed: me.isLoggedIn && me.isError,
+    accountId: me.data?.id,
+    publicId: me.data?.profile.publicId,
+  };
+}
+
+/** What a write sends: a new post's market, title and body, and the account on screen. */
+export type CreatePostVariables = CreatePostBody;
+
+/** An edit: the post, its new title and body, and the account on screen. */
+export interface UpdatePostVariables extends UpdatePostBody {
+  postId: string;
+}
+
+/** A deletion: the post and the account on screen. */
+export interface DeletePostVariables {
+  postId: string;
+  expectedAccountId: string;
+}
+
+/**
+ * A refused write's side effects, shared by the three: the cookie as another account asks for the
+ * session again (`onSessionChanged`, SessionCacheGuard then shows who is signed in), and a refusal
+ * for the onboarding reads `['me']` again, so the onboarding gate takes the account to its step.
+ */
+async function afterRefusal(queryClient: QueryClient, error: Error, onSessionChanged: () => void) {
+  if (isForAnotherAccount(error)) onSessionChanged();
+  if (isApiError(error, 'ONBOARDING_REQUIRED')) {
+    await queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY, exact: true });
+  }
+}
+
+/**
+ * `POST /posts` as mutation options. The answer is the post as its page shows it, so it is written
+ * under its key before the screen goes there (no second read), and every list is marked stale —
+ * the new post is the newest of each it belongs to.
+ */
+export function createPostOptions(queryClient: QueryClient, onSessionChanged: () => void) {
+  return {
+    // Documented as a `Post` (the route shares the page's schema); a new post is always published.
+    mutationFn: async (body: CreatePostVariables): Promise<Post> =>
+      unwrap(await api.POST('/api/v1/posts', { body })).data,
+    onSuccess: async (post: Post) => {
+      queryClient.setQueryData<Post>(postKey(post.id), post);
+      await queryClient.invalidateQueries({ queryKey: POST_LIST_KEY });
+    },
+    onError: (error: Error) => afterRefusal(queryClient, error, onSessionChanged),
+  };
+}
+
+/** `PUT /posts/:postId`: the edited post replaces the held one; the lists' cards follow it. */
+export function updatePostOptions(queryClient: QueryClient, onSessionChanged: () => void) {
+  return {
+    mutationFn: async ({ postId, ...body }: UpdatePostVariables): Promise<Post> =>
+      unwrap(
+        await api.PUT('/api/v1/posts/{postId}', {
+          params: { path: { postId: postId.toLowerCase() } },
+          body,
+        }),
+      ).data,
+    onSuccess: async (post: Post) => {
+      queryClient.setQueryData<Post>(postKey(post.id), post);
+      await queryClient.invalidateQueries({ queryKey: POST_LIST_KEY });
+    },
+    onError: async (error: Error, { postId }: UpdatePostVariables) => {
+      await afterRefusal(queryClient, error, onSessionChanged);
+      // Hidden or deleted meanwhile: the page is read again so it shows what the post is now.
+      if (isApiError(error, 'POST_NOT_EDITABLE') || isApiError(error, 'NOT_FOUND')) {
+        await queryClient.invalidateQueries({ queryKey: postKey(postId), exact: true });
+      }
+    },
+  };
+}
+
+/**
+ * `POST /posts/:postId/delete`. The held page is dropped rather than kept: the post is gone from
+ * every view, or — once replies exist (#48) — a placeholder the next read answers. The lists are
+ * marked stale, so the card leaves them.
+ */
+export function deletePostOptions(queryClient: QueryClient, onSessionChanged: () => void) {
+  return {
+    mutationFn: async ({ postId, expectedAccountId }: DeletePostVariables): Promise<PostDeletion> =>
+      unwrap(
+        await api.POST('/api/v1/posts/{postId}/delete', {
+          params: { path: { postId: postId.toLowerCase() } },
+          body: { expectedAccountId },
+        }),
+      ).data,
+    onSuccess: async (_deletion: PostDeletion, { postId }: DeletePostVariables) => {
+      queryClient.removeQueries({ queryKey: postKey(postId), exact: true });
+      await queryClient.invalidateQueries({ queryKey: POST_LIST_KEY });
+    },
+    onError: (error: Error) => afterRefusal(queryClient, error, onSessionChanged),
+  };
+}
+
+export function useCreatePost(onSessionChanged: () => void) {
+  const queryClient = useQueryClient();
+  return useMutation(createPostOptions(queryClient, onSessionChanged));
+}
+
+export function useUpdatePost(onSessionChanged: () => void) {
+  const queryClient = useQueryClient();
+  return useMutation(updatePostOptions(queryClient, onSessionChanged));
+}
+
+export function useDeletePost(onSessionChanged: () => void) {
+  const queryClient = useQueryClient();
+  return useMutation(deletePostOptions(queryClient, onSessionChanged));
+}
+
+/**
+ * `POST /media/images`: the file itself as the body (no multipart, no field names), under its own
+ * type or `application/octet-stream` (`uploadContentType`), with the account on screen in the
+ * query — the body is the file, so it cannot ride there. The server checks the bytes, strips the
+ * metadata and stores the result; the answer's id goes into the editor's image node.
+ */
+export async function uploadPostImage(
+  file: Blob & { type: string },
+  expectedAccountId: string,
+): Promise<UploadedImage> {
+  return unwrap(
+    await api.POST('/api/v1/media/images', {
+      params: { query: { expectedAccountId } },
+      // openapi-fetch would JSON-encode the body: the file goes as it is.
+      body: file as unknown as string,
+      bodySerializer: (body: unknown) => body as BodyInit,
+      headers: { 'Content-Type': uploadContentType(file) },
+    }),
+  ).data;
+}

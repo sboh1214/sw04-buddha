@@ -32,6 +32,7 @@ COPY apps/web/package.json apps/web/
 COPY apps/mobile/package.json apps/mobile/
 COPY packages/shared/package.json packages/shared/
 COPY packages/db/package.json packages/db/
+COPY packages/storage/package.json packages/storage/
 COPY packages/api-client/package.json packages/api-client/
 COPY packages/config-ts/package.json packages/config-ts/
 COPY packages/config-eslint/package.json packages/config-eslint/
@@ -78,6 +79,10 @@ COPY --from=prod-deps /app/packages/db/node_modules packages/db/node_modules
 COPY --from=build-server /app/packages/db/dist packages/db/dist
 # drizzle-orm's migrator resolves ../drizzle/ from packages/db/dist (packages/db/src/migrator.ts).
 COPY packages/db/drizzle packages/db/drizzle
+# The media store (#46): the S3 driver both the api and the worker use.
+COPY --from=prod-deps /app/packages/storage/package.json packages/storage/
+COPY --from=prod-deps /app/packages/storage/node_modules packages/storage/node_modules
+COPY --from=build-server /app/packages/storage/dist packages/storage/dist
 
 FROM server-runtime AS api
 COPY --from=prod-deps /app/apps/api/package.json apps/api/

@@ -10,15 +10,18 @@ import {
   PRICE_MIN,
   currentConsentVersion,
   SETTLEMENT_STEPS,
+  readPostDocument,
   relatedMarketPair,
+  type ImageContentType,
   type MarketStatus,
+  type PostDocument,
   type Outcome,
   type ReleaseSettingStatus,
   type Role,
   type SettlementStep,
   type SettlementStepStatus,
 } from '@buddha/shared';
-import { eq, sql } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import type { Db } from '../client.js';
 import {
   adminActions,
@@ -33,9 +36,12 @@ import {
   marketWatchEvents,
   marketWatches,
   markets,
+  mediaObjects,
   orders,
   phoneVerifications,
   positions,
+  postImages,
+  posts,
   profiles,
   releaseSettings,
   user,
@@ -680,5 +686,118 @@ export async function setReleaseSetting(db: Db, input: SetReleaseSettingInput) {
       .insert(releaseSettings)
       .values({ key, ...written })
       .onConflictDoUpdate({ target: releaseSettings.key, set: written });
+  });
+}
+
+export interface CreateMediaInput {
+  ownerId: string;
+  /** Default: image/webp. */
+  contentType?: ImageContentType;
+  /** Default: the database clock. The orphan cleanup's tests set an older one. */
+  createdAt?: Date;
+}
+
+const EXTENSION_OF: Readonly<Record<ImageContentType, string>> = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+};
+
+/**
+ * An upload's row as `POST /media/images` leaves it (#46): a post image of `ownerId`, attached to
+ * nothing. Only the row — the object is the test's store's to hold or not (@buddha/storage's
+ * MemoryObjectStorage); its key is the API's shape, `post-images/<id>.<ext>`.
+ */
+export async function createMedia(db: Db, input: CreateMediaInput) {
+  const id = randomUUID();
+  const contentType = input.contentType ?? 'image/webp';
+  const [row] = await db
+    .insert(mediaObjects)
+    .values({
+      id,
+      ownerId: input.ownerId,
+      kind: 'post_image',
+      storageKey: `post-images/${id}.${EXTENSION_OF[contentType]}`,
+      contentType,
+      byteSize: 1_024,
+      width: 64,
+      height: 48,
+      ...(input.createdAt === undefined ? {} : { createdAt: input.createdAt }),
+    })
+    .returning();
+  return row!;
+}
+
+export interface CreatePostInput {
+  marketId: string;
+  authorId: string;
+  /** Default: none. */
+  title?: string | null;
+  /**
+   * The body as text: one paragraph per line. Default: '근거 <tag>'. Ignored with `document`.
+   */
+  text?: string;
+  /** The whole body, as `sanitizePostDocument` would have stored it. */
+  document?: PostDocument;
+  /**
+   * Uploads (`createMedia`) the body shows after its paragraphs, in order: attached to the post
+   * as the API attaches them. Ignored with `document`, whose own images are attached instead.
+   */
+  imageIds?: string[];
+  /** Default: the database clock. A list's order test sets it. */
+  createdAt?: Date;
+  editedAt?: Date;
+  deletedAt?: Date;
+  hiddenAt?: Date;
+}
+
+/**
+ * A post (#46) as `POST /posts` leaves it — the row with its body's text and images derived as the
+ * API derives them (`readPostDocument`), and each image attached (`post_images`, the upload's
+ * `attached_at`) — or, with the times, as an edit, a deletion or an operator's hiding left it.
+ * No revision rows: an edit's history is the API's to write.
+ */
+export async function createPost(db: Db, input: CreatePostInput) {
+  const document: PostDocument = input.document ?? {
+    type: 'doc',
+    content: [
+      ...(input.text ?? `근거 ${tag()}`)
+        .split('\n')
+        .map((line) =>
+          line === ''
+            ? { type: 'paragraph' as const }
+            : { type: 'paragraph' as const, content: [{ type: 'text' as const, text: line }] },
+        ),
+      ...(input.imageIds ?? []).map((mediaId) => ({ type: 'image' as const, attrs: { mediaId } })),
+    ],
+  };
+  const read = readPostDocument(document);
+  return db.transaction(async (tx) => {
+    const [post] = await tx
+      .insert(posts)
+      .values({
+        marketId: input.marketId,
+        authorId: input.authorId,
+        title: input.title ?? null,
+        body: document,
+        bodyText: read.text,
+        imageIds: read.imageIds,
+        ...(input.createdAt === undefined ? {} : { createdAt: input.createdAt }),
+        ...(input.editedAt === undefined ? {} : { editedAt: input.editedAt }),
+        ...(input.deletedAt === undefined ? {} : { deletedAt: input.deletedAt }),
+        ...(input.hiddenAt === undefined ? {} : { hiddenAt: input.hiddenAt }),
+      })
+      .returning();
+    if (read.imageIds.length > 0) {
+      await tx
+        .insert(postImages)
+        .values(read.imageIds.map((mediaId) => ({ postId: post!.id, mediaId })));
+      await tx
+        .update(mediaObjects)
+        .set({ attachedAt: sql`now()` })
+        .where(inArray(mediaObjects.id, read.imageIds));
+    }
+    return post!;
   });
 }

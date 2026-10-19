@@ -4,23 +4,24 @@
 
 ## 어디를 봐야 하는가
 
-| 작업                                               | 위치                                                                                                                                                             |
-| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 일상 운영 절차 (롤백, 셸, 로그, 시크릿 교체, 복구) | `README.md`                                                                                                                                                      |
-| 변수 / 입력                                        | `variables.tf`, `terraform.tfvars.example` (실제 `terraform.tfvars`는 gitignored)                                                                                |
-| 출력 (워크플로·운영 명령이 소비)                   | `outputs.tf`                                                                                                                                                     |
-| 리소스 이름 prefix                                 | `locals.tf` (`name_prefix = "tf-${var.project}"` = `tf-buddha`; 환경은 태그로만)                                                                                 |
-| 네트워크                                           | `vpc.tf` (VPC + 퍼블릭 서브넷 1개, NAT 없음), `security-groups.tf` (80/443만)                                                                                    |
-| 컴퓨트                                             | `ec2.tf` (AMI data source, 인스턴스, EIP), `templates/user-data.sh.tftpl` (첫 부팅 1회)                                                                          |
-| 데이터 볼륨 / 스냅샷                               | `storage.tf` (`aws_ebs_volume.data` + attachment + DLM)                                                                                                          |
-| 컨테이너 이미지 저장소                             | `ecr.tf` (`tf-buddha-api` / `-worker` / `-web`)                                                                                                                  |
-| 운영 `.env` (시크릿)                               | `ssm.tf` (`random_password` ×5, 그중 `phone_hash_key`는 `prevent_destroy` + SecureString `/tf-buddha/env`), `templates/env.tftpl` (본문)                         |
-| 인증/권한                                          | `iam.tf` (인스턴스 역할), `github-oidc.tf` (GitHub OIDC provider — 계정 공용, `prevent_destroy` + 배포 역할 + immutable subject)                                 |
-| 이메일 (SES)                                       | `ses.tf` (identity `buddha.sboh.dev`, MAIL FROM `mail.buddha.sboh.dev`, SMTP IAM user) — DNS 레코드는 `outputs.tf`의 `dns_records`                               |
-| DNS                                                | Terraform 밖. `outputs.tf`의 `dns_records`를 Cloudflare 대시보드에 손으로 등록(A DNS-only + DKIM CNAME ×3 + MAIL FROM MX/SPF + DMARC)                            |
-| 호스트에서 실제로 도는 것                          | `../deploy/` (compose.yaml, Caddyfile, deploy.sh, host-setup.sh, reset-db.sh, postgres-init/02-passwords.sh) — api 이미지에 동봉되어 SSM이 `/data/buddha`에 푼다 |
-| 이미지 빌드                                        | `../Dockerfile` (multi-target `api` / `worker` / `web`), `../.dockerignore`                                                                                      |
-| CD                                                 | `../.github/workflows/deploy.yml` (OIDC → ECR → SSM Run Command → `/api/health` 스모크)                                                                          |
+| 작업                                               | 위치                                                                                                                                                                                                 |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 일상 운영 절차 (롤백, 셸, 로그, 시크릿 교체, 복구) | `README.md`                                                                                                                                                                                          |
+| 변수 / 입력                                        | `variables.tf`, `terraform.tfvars.example` (실제 `terraform.tfvars`는 gitignored)                                                                                                                    |
+| 출력 (워크플로·운영 명령이 소비)                   | `outputs.tf`                                                                                                                                                                                         |
+| 리소스 이름 prefix                                 | `locals.tf` (`name_prefix = "tf-${var.project}"` = `tf-buddha`; 환경은 태그로만)                                                                                                                     |
+| 네트워크                                           | `vpc.tf` (VPC + 퍼블릭 서브넷 1개, NAT 없음), `security-groups.tf` (80/443만)                                                                                                                        |
+| 컴퓨트                                             | `ec2.tf` (AMI data source, 인스턴스, EIP), `templates/user-data.sh.tftpl` (첫 부팅 1회)                                                                                                              |
+| 데이터 볼륨 / 스냅샷                               | `storage.tf` (`aws_ebs_volume.data` + attachment + DLM)                                                                                                                                              |
+| 컨테이너 이미지 저장소                             | `ecr.tf` (`tf-buddha-api` / `-worker` / `-web`)                                                                                                                                                      |
+| 운영 `.env` (시크릿)                               | `ssm.tf` (`random_password` ×5, 그중 `phone_hash_key`는 `prevent_destroy` + SecureString `/tf-buddha/env`), `templates/env.tftpl` (본문)                                                             |
+| 인증/권한                                          | `iam.tf` (인스턴스 역할), `github-oidc.tf` (GitHub OIDC provider — 계정 공용, `prevent_destroy` + 배포 역할 + immutable subject)                                                                     |
+| 이메일 (SES)                                       | `ses.tf` (identity `buddha.sboh.dev`, MAIL FROM `mail.buddha.sboh.dev`, SMTP IAM user) — DNS 레코드는 `outputs.tf`의 `dns_records`                                                                   |
+| 글 이미지 저장소 (S3)                              | `media.tf` (비공개 버킷 `tf-buddha-media-<계정 id>`, `prevent_destroy`, 공개 접근 차단·SSE-S3·TLS 전용, 앱 전용 IAM user `tf-buddha-media` + access key → `/tf-buddha/env`의 `MEDIA_S3_*`, ADR-0073) |
+| DNS                                                | Terraform 밖. `outputs.tf`의 `dns_records`를 Cloudflare 대시보드에 손으로 등록(A DNS-only + DKIM CNAME ×3 + MAIL FROM MX/SPF + DMARC)                                                                |
+| 호스트에서 실제로 도는 것                          | `../deploy/` (compose.yaml, Caddyfile, deploy.sh, host-setup.sh, reset-db.sh, postgres-init/02-passwords.sh) — api 이미지에 동봉되어 SSM이 `/data/buddha`에 푼다                                     |
+| 이미지 빌드                                        | `../Dockerfile` (multi-target `api` / `worker` / `web`), `../.dockerignore`                                                                                                                          |
+| CD                                                 | `../.github/workflows/deploy.yml` (OIDC → ECR → SSM Run Command → `/api/health` 스모크)                                                                                                              |
 
 ## 핵심 컨벤션
 
@@ -55,6 +56,7 @@
 - **금지**: OIDC 신뢰 정책에 inno-frame 형식 `repo:sboh1214/sw04-buddha:ref:refs/heads/main` 복사. 이 저장소의 sub claim은 immutable 형식이라 그 문자열은 영원히 매치되지 않고, 워크플로는 `Not authorized to perform sts:AssumeRoleWithWebIdentity`로 죽는다.
 - **금지**: `/tf-buddha/env`를 콘솔에서 편집. `aws_ssm_parameter.env`는 템플릿 렌더 결과라 다음 apply가 덮어쓴다. `terraform.tfvars` 또는 `templates/env.tftpl`을 고친다.
 - **금지**: `aws_iam_openid_connect_provider.github`의 `prevent_destroy` 제거를 커밋, 이 root를 내리면서 provider까지 destroy(먼저 `state rm`), 또는 다른 Terraform root에서 GitHub OIDC provider를 `resource`로 만들거나 import하기. 계정에 하나뿐이라 다른 root는 data source로만 읽는다 — 소유한 state의 destroy가 계정의 모든 GitHub Actions 배포를 끊는다(2026-09-22 inno-frame destroy).
+- **금지**: 글 이미지 버킷(`aws_s3_bucket.media`)에 공개 읽기(버킷 정책·ACL·공개 접근 차단 해제)를 더하거나 `prevent_destroy`를 지우는 커밋. 이미지는 API가 보이는 글의 것만 내준다 — 숨기거나 지운 글의 이미지를 막는 자리가 그것뿐이다(ADR-0073). 버킷 자격증명은 인스턴스 역할이 아니라 `tf-buddha-media`의 키다. hop limit을 2로 올리는 것으로 대신하지 않는다.
 - **금지**: `aws_ebs_volume.data`의 `prevent_destroy` 제거를 커밋. 스냅샷 복구 절차(README)에서 **일시적으로** 주석 처리하고 즉시 복원한다.
 - **금지**: `random_password.phone_hash_key`의 `prevent_destroy` 제거를 커밋, 그 `length`·`special`의 수정(값을 새로 뽑는다), `-replace`·taint, 또는 이 root를 내리면서 키를 state에 둔 채 destroy(먼저 `state mv`로 옮긴다, README「중지 / 시작」). 운영 `PHONE_HASH_KEY`다 — 새 키로도 API는 그대로 뜨지만 저장된 번호 해시(`start_grant_numbers`)가 모두 무효가 되어 시작 Coin을 받은 번호가 다시 받는다(ADR-0071).
 - **금지**: root 자격증명으로 apply. `aws sts get-caller-identity --profile inno-frame`이 `user/terraform-iam`이어야 한다.

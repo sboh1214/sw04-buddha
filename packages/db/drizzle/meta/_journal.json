@@ -232,6 +232,13 @@
       "when": 1792396816811,
       "tag": "0032_onboarding",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1792400170658,
+      "tag": "0033_posts",
+      "breakpoints": true
     }
   ]
 }

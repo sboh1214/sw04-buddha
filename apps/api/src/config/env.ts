@@ -1,6 +1,7 @@
 import { BlockList, isIP } from 'node:net';
 import path from 'node:path';
 import { paymentProviderSchema } from '@buddha/shared';
+import { mediaStorageEnvIssues, mediaStorageEnvShape } from '@buddha/storage';
 import { config as loadDotenv } from 'dotenv';
 import * as z from 'zod';
 
@@ -238,8 +239,16 @@ export const envSchema = z
      * every per-number count would start over (ADR-0071).
      */
     PHONE_HASH_KEY: optionalString,
+
+    // --- Media storage (#46, ADR-0073): the post images, in the private S3 bucket or a local
+    //     directory. The same keys as apps/worker, which removes uploads nothing took
+    //     (@buddha/storage `mediaStorageEnvShape` documents each).
+    ...mediaStorageEnvShape,
   })
   .superRefine((env, ctx) => {
+    for (const issue of mediaStorageEnvIssues(env)) {
+      ctx.addIssue({ code: 'custom', path: [issue.path], message: issue.message });
+    }
     // Same reason as WEB_ORIGIN below: a bad entry must fail at `loadEnv()` under its own name.
     try {
       uncountedPeers(env);

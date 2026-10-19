@@ -1,0 +1,108 @@
+import { randomUUID } from 'node:crypto';
+import { Inject, Injectable, Logger } from '@nestjs/common';
+import { schema, type Db } from '@buddha/db';
+import { type ImageContentType, type UploadedImage } from '@buddha/shared';
+import { type ObjectStorage } from '@buddha/storage';
+import { and, eq, isNull, sql } from 'drizzle-orm';
+import { DB } from '../infra/db/db.provider.js';
+import { IMAGE_EXTENSION, processImage } from './image.js';
+import { OBJECT_STORAGE } from './object-storage.provider.js';
+
+/** An image `GET /media/:mediaId` may serve: where its bytes are and their type. */
+export interface ShownImage {
+  readonly storageKey: string;
+  readonly contentType: ImageContentType;
+}
+
+/**
+ * 올린 이미지 (#46, ADR-0073): the upload of a post's image and its public read. The API is the
+ * only way in and out of the store (ADR-0069 decision 2 #45-3: the browser never writes to it, and
+ * the bucket is private), so whether an image may be shown is decided here on every read.
+ */
+@Injectable()
+export class MediaService {
+  private readonly logger = new Logger(MediaService.name);
+
+  constructor(
+    @Inject(DB) private readonly db: Db,
+    @Inject(OBJECT_STORAGE) private readonly storage: ObjectStorage,
+  ) {}
+
+  /**
+   * Checks, converts and stores one upload of `ownerId` (`processImage`), then records it — not yet
+   * attached to anything: a post takes it by its id when it is written (PostsService), and an upload
+   * nothing takes is removed by the worker after ORPHAN_MEDIA_HOURS.
+   *
+   * The object is written before its row, so a row never names an object that is not there; if
+   * the row then fails, the object is removed again (a removal that fails too leaves bytes nothing
+   * names, which no reader can reach).
+   */
+  async uploadPostImage(ownerId: string, bytes: Uint8Array): Promise<UploadedImage> {
+    // #187 plugs in here: the daily upload limit (50 a day, counted per verified number's keyed
+    // hash, ADR-0069 decision 7) is checked before anything is decoded or stored.
+    const image = await processImage(bytes);
+    const id = randomUUID();
+    const storageKey = `post-images/${id}.${IMAGE_EXTENSION[image.contentType]}`;
+    await this.storage.put(storageKey, image.body, image.contentType);
+    try {
+      await this.db.insert(schema.mediaObjects).values({
+        id,
+        ownerId,
+        kind: 'post_image',
+        storageKey,
+        contentType: image.contentType,
+        byteSize: image.body.length,
+        width: image.width,
+        height: image.height,
+      });
+    } catch (error) {
+      await this.storage.delete(storageKey).catch((cleanup: unknown) => {
+        this.logger.error({ err: cleanup, storageKey }, 'could not remove an unrecorded upload');
+      });
+      throw error;
+    }
+    return {
+      id,
+      contentType: image.contentType,
+      width: image.width,
+      height: image.height,
+      byteSize: image.body.length,
+    };
+  }
+
+  /**
+   * One image, while a post shows it: attached to a post that is neither deleted nor hidden, and
+   * in that post's current body (`posts.image_ids` — an image an edit took out stays for the
+   * operators' history and is no longer served). Null otherwise, whoever asks: an upload nothing
+   * took yet, a hidden or deleted post's image (#45-5) and an unknown id answer alike. The row
+   * only — the bytes are `bytesOf`'s, so a revalidation that ends in a 304 reads no object.
+   */
+  async findShown(mediaId: string): Promise<ShownImage | null> {
+    const { mediaObjects, postImages, posts } = schema;
+    const [row] = await this.db
+      .select({ storageKey: mediaObjects.storageKey, contentType: mediaObjects.contentType })
+      .from(mediaObjects)
+      .innerJoin(postImages, eq(postImages.mediaId, mediaObjects.id))
+      .innerJoin(posts, eq(posts.id, postImages.postId))
+      .where(
+        and(
+          eq(mediaObjects.id, mediaId),
+          isNull(posts.deletedAt),
+          isNull(posts.hiddenAt),
+          sql`${mediaObjects.id} = ANY(${posts.imageIds})`,
+        ),
+      );
+    return row
+      ? { storageKey: row.storageKey, contentType: row.contentType as ImageContentType }
+      : null;
+  }
+
+  /** The bytes of a shown image, or null when its object is gone (logged: no request causes it). */
+  async bytesOf(image: ShownImage): Promise<Uint8Array | null> {
+    const body = await this.storage.get(image.storageKey);
+    if (body === null) {
+      this.logger.error({ storageKey: image.storageKey }, 'a shown image has no object');
+    }
+    return body;
+  }
+}

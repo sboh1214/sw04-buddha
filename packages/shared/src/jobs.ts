@@ -6,7 +6,7 @@ import { uuidSchema } from './api/uuid.js';
  * close and finalize jobs after a transition commits) and the consumer (apps/worker). One
  * module, so a renamed job cannot leave the API adding work that no worker handles.
  */
-export const QUEUE_NAMES = ['markets', 'audit', 'stats', 'wallet'] as const;
+export const QUEUE_NAMES = ['markets', 'audit', 'stats', 'wallet', 'media'] as const;
 export type QueueName = (typeof QUEUE_NAMES)[number];
 
 export const JOB_NAMES = {
@@ -20,6 +20,12 @@ export const JOB_NAMES = {
    * onboarding while the amount was undecided get it within a minute of an admin entering it.
    */
   startGrantPay: 'start_grant.pay',
+  /**
+   * Removes the uploads nothing took (#46, ADR-0073): an image uploaded for a post that was never
+   * written, ORPHAN_MEDIA_HOURS after its upload — its object from storage and its row. The
+   * worker's hourly scan.
+   */
+  mediaOrphanCleanup: 'media.orphan_cleanup',
 } as const;
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];
 

@@ -43,6 +43,14 @@ export interface RegisteredRoute {
    * a reviewer sees it.
    */
   readonly onboarded?: true;
+  /**
+   * A public route that shows a person (ADR-0069 decision 5, owner decision 2026-10-18 on ADR-0057
+   * 결과 5-1): why it must, and that it shows only the author's public id, nickname, image and
+   * 운영자 mark. private-data.test.ts lets the nickname and the public id of account A through on
+   * this route alone; A's account id, email and every other value of A stay forbidden on it as
+   * everywhere, and every other public route may show no person at all.
+   */
+  readonly showsPerson?: string;
 }
 
 export const PUBLIC_ROUTES: Readonly<Record<string, RegisteredRoute>> = {
@@ -66,6 +74,22 @@ export const PUBLIC_ROUTES: Readonly<Record<string, RegisteredRoute>> = {
   'GET /markets/:id/related': {
     reason:
       '상세의 관련 시장(#65, ADR-0061 결정 1의 18·19, ADR-0068): 운영자가 이 시장과 연결한 시장의 공개 정보와 집계(목록과 같은 항목), 진행 중·거래 마감·판정 완료·정산 완료(open·closed·resolved·settled)만. 연결한 운영자와 시각은 싣지 않는다',
+  },
+  'GET /posts': {
+    reason:
+      '커뮤니티 목록(#46, N05 §2 비로그인 열람, ADR-0069 결정 2 #45-7): 모든 시장의 근거 글을 최신순으로, 지우거나 숨긴 글은 빼고, 시장·카테고리 필터와 제목·본문 검색. 카드마다 제목·본문 앞부분·첫 이미지·작성 시각·수정 표시·시장(제목·상태·카테고리)과 작성자. 작성자의 보유·주문·잔액은 싣지 않는다(N05 §2)',
+    showsPerson:
+      '근거 글의 작성자 표기(N05 §2, ADR-0069 결정 2 #45-9·결정 3 #37-3·#37-6·결정 5): 작성자의 공개 id·지금 닉네임·이미지·운영자 표시만. 계정 id는 싣지 않는다',
+  },
+  'GET /posts/:postId': {
+    reason:
+      '근거 글 화면(#46, N05 §2 비로그인 열람): 제목·본문(허용 목록의 서식, 이미지는 미디어 id)·작성 시각·수정 표시·시장과 작성자. 숨긴 글과 아래가 달린 지운 글은 자리표시(시장만)이고, 아래가 없는 지운 글은 없는 글처럼 404다(ADR-0069 결정 2 #45-5). 운영자만 보는 이전 내용·지운 원문은 싣지 않는다',
+    showsPerson:
+      '근거 글의 작성자 표기(N05 §2, ADR-0069 결정 2 #45-9·결정 3 #37-3·#37-6·결정 5): 작성자의 공개 id·지금 닉네임·이미지·운영자 표시만. 자리표시에는 작성자가 없다. 계정 id는 싣지 않는다',
+  },
+  'GET /media/:mediaId': {
+    reason:
+      '근거 글의 이미지(#46, ADR-0069 결정 2 #45-3): 지우거나 숨기지 않은 글의 지금 본문에 있는 이미지의 바이트만(서버가 EXIF를 지우고 다시 인코딩한 것). 그 밖의 이미지(어느 글도 쓰지 않은 업로드, 수정으로 뺀 이미지, 지우거나 숨긴 글의 이미지)는 404이고, 올린 계정은 싣지 않는다',
   },
   'GET /categories': {
     reason: '시장 탐색의 카테고리(PLAN 7.1 공개 조회)',
@@ -109,6 +133,26 @@ export const OWNER_ROUTES: Readonly<Record<string, RegisteredRoute>> = {
   'PUT /me/interest-categories': {
     reason:
       '본인 관심 카테고리 설정·건너뛰기(#58, ADR-0069 결정 1 #57-7): 온보딩을 마친 세션 계정의 관심 카테고리만 바꾼다. 본문의 expectedAccountId가 세션 계정이어야 한다',
+    onboarded: true,
+  },
+  'POST /posts': {
+    reason:
+      '근거 글 쓰기(#46, ADR-0069 결정 2 #45-1·#45-3·#45-6): 온보딩을 마친 세션 계정이 공개 상태의 시장 하나에 제목(선택)과 서식 있는 본문을 쓴다. 본문의 이미지는 세션 계정이 올린 것만 받는다. 보유·주문·확률은 받지도 붙이지도 않는다(N05 §2). 본문의 expectedAccountId가 세션 계정이어야 한다',
+    onboarded: true,
+  },
+  'PUT /posts/:postId': {
+    reason:
+      '근거 글 고치기(#46, ADR-0069 결정 2 #45-4): 세션 계정이 쓴 글의 제목·본문만 바꾸고(시장은 못 바꾼다) 이전 내용을 운영자 전용 이력에 남긴다. 다른 계정의 글은 403, 숨긴 글은 409. 본문의 expectedAccountId가 세션 계정이어야 한다',
+    onboarded: true,
+  },
+  'POST /posts/:postId/delete': {
+    reason:
+      '근거 글 지우기(#46, ADR-0069 결정 2 #45-5): 세션 계정이 쓴 글만 지운다(원문은 운영자만 보게 남는다). 다른 계정의 글은 403. 본문의 expectedAccountId가 세션 계정이어야 한다',
+    onboarded: true,
+  },
+  'POST /media/images': {
+    reason:
+      '근거 글 이미지 올리기(#46, ADR-0069 결정 2 #45-3): 온보딩을 마친 세션 계정이 보낸 파일을 내용으로 검사하고 EXIF를 지우고 줄여 비공개 저장소에 두며, 그 이미지의 id·형식·크기만 돌려준다. 파일이 본문이라 쿼리의 expectedAccountId가 세션 계정이어야 한다',
     onboarded: true,
   },
   'POST /me/password': {

@@ -5,6 +5,7 @@ import {
   type ChargePackage,
   type Market,
   type MarketSummary,
+  type Post,
   type PriceSeries,
   isApiError,
   unwrap,
@@ -16,6 +17,7 @@ import {
   relatedMarketsQuery,
   searchListQuery,
 } from './market-keys';
+import { type CommunityFilters, type PostPage, postListQuery } from './posts';
 import { type TickRange, ticksQueryFor } from './ticks';
 
 const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000').replace(/\/$/, '');
@@ -162,3 +164,35 @@ export async function fetchCategoriesServer(): Promise<Category[]> {
 export async function fetchChargePackagesServer(): Promise<ChargePackage[]> {
   return unwrap(await serverApi.GET('/api/v1/charge-packages')).data;
 }
+
+/**
+ * One page of the community list (`GET /posts`, #46), in the same page shape and with the same
+ * request as the browser's `queryFn` (`postListQuery`, hooks/use-posts.ts), so the page the server
+ * reads is the page the client picks up. Public (N05 §2: 비로그인 열람). Rejects on failure, which
+ * the page's prefetch swallows: the list then reads it in the browser and shows its own failure.
+ */
+export async function fetchPostsPageServer(
+  filters: CommunityFilters,
+  cursor?: string,
+): Promise<PostPage> {
+  const { data, meta } = unwrap(
+    await serverApi.GET('/api/v1/posts', { params: { query: postListQuery(filters, cursor) } }),
+  );
+  return { items: data, nextCursor: meta.nextCursor };
+}
+
+/**
+ * `GET /posts/:postId` for the post page (#46), memoised for the request like the market row, so
+ * `generateMetadata` and the page cost one round trip. `null` for NOT_FOUND — a deleted post with
+ * nothing under it is gone (#45-5) — and for the VALIDATION_ERROR a segment that is not a uuid
+ * earns; both are a 404 to a visitor. Any other failure throws.
+ */
+export const fetchPostServer = cache(async (postId: string): Promise<Post | null> => {
+  try {
+    return unwrap(await serverApi.GET('/api/v1/posts/{postId}', { params: { path: { postId } } }))
+      .data;
+  } catch (error) {
+    if (isApiError(error, 'NOT_FOUND') || isApiError(error, 'VALIDATION_ERROR')) return null;
+    throw error;
+  }
+});

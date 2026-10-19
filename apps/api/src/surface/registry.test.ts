@@ -433,6 +433,24 @@ function fieldNames(node: unknown): string[] {
   return [...own(node), ...[...referencedSchemas(node)].flatMap((name) => own(schemas[name]))];
 }
 
+/**
+ * The property names of every object schema in a part of the document and in the components it
+ * refers to, one list per object (sorted).
+ */
+function objectShapes(node: unknown): string[][] {
+  const own = (value: unknown): string[][] => {
+    if (Array.isArray(value)) return value.flatMap(own);
+    if (value === null || typeof value !== 'object') return [];
+    const record = value as Record<string, unknown>;
+    const shape =
+      record.properties !== null && typeof record.properties === 'object'
+        ? [Object.keys(record.properties).sort()]
+        : [];
+    return [...shape, ...Object.values(record).flatMap(own)];
+  };
+  return [...own(node), ...[...referencedSchemas(node)].flatMap((name) => own(schemas[name]))];
+}
+
 describe('the public API document (static)', () => {
   it('reads the document at all', () => {
     expect(operations.length).toBeGreaterThanOrEqual(30);
@@ -520,6 +538,48 @@ describe('the public API document (static)', () => {
       })
       .map(({ key }) => key);
     expect(missing).toEqual([]);
+  });
+
+  it('shows a person only where a public route says why, and then by its public face alone (#46)', () => {
+    // ADR-0069 decision 5: a public answer may name a person — a post's author — only on a route
+    // registered with the reason, and then by the public id, the nickname, the image and the
+    // 운영자 mark. The account id stays forbidden there (the `counterparty` item of PRIVATE_DATA,
+    // checked above for every public answer).
+    const PERSON_FIELDS = ['publicId', 'nickname'];
+    const showing = Object.entries(PUBLIC_ROUTES)
+      .filter(([, entry]) => entry.showsPerson !== undefined)
+      .map(([key]) => key);
+    expect(showing.sort()).toEqual(['GET /posts', 'GET /posts/:postId']);
+    for (const key of showing) expect(PUBLIC_ROUTES[key]!.showsPerson!.trim(), key).not.toBe('');
+    expect(
+      Object.entries(OWNER_ROUTES)
+        .filter(([, entry]) => entry.showsPerson !== undefined)
+        .map(([key]) => key),
+    ).toEqual([]);
+    const shown = operations
+      .filter(({ key }) => key in PUBLIC_ROUTES)
+      .map(({ key, operation }) => ({
+        key,
+        fields: fieldNames(operation.responses).filter((name) => PERSON_FIELDS.includes(name)),
+      }));
+    expect(
+      shown
+        .filter(({ fields }) => fields.length > 0)
+        .map(({ key }) => key)
+        .sort(),
+    ).toEqual(showing.sort());
+    for (const { key, fields } of shown.filter(({ key }) => showing.includes(key))) {
+      expect([...new Set(fields)].sort(), key).toEqual(['nickname', 'publicId']);
+      // Every object that names a person names it by exactly the public face: a field added to
+      // the author (when it joined, whether it verified…) fails here, on every such route.
+      const people = objectShapes(
+        operations.find((op) => op.key === key)!.operation.responses,
+      ).filter((shape) => shape.some((name) => PERSON_FIELDS.includes(name)));
+      expect(people.length, key).toBeGreaterThan(0);
+      for (const shape of people) {
+        expect(shape, key).toEqual(['imageUrl', 'isAdmin', 'kind', 'nickname', 'publicId']);
+      }
+    }
   });
 
   it('finds paid purchase in the kept paid routes: the allowance is what lets them through', () => {

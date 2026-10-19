@@ -22,6 +22,20 @@ describe('parseEnv', () => {
     expect(() => parseEnv({ ...required, REDIS_URL: 'http://localhost' })).toThrow(/REDIS_URL/);
   });
 
+  it('takes the media store’s keys as the API does, refusing the local directory in production (#46)', () => {
+    expect(parseEnv(required).MEDIA_STORAGE).toBeUndefined();
+    expect(parseEnv(required).MEDIA_S3_BUCKET).toBeUndefined();
+    expect(parseEnv({ ...required, MEDIA_S3_BUCKET: 'tf-buddha-prod-media' }).MEDIA_S3_BUCKET).toBe(
+      'tf-buddha-prod-media',
+    );
+    expect(() => parseEnv({ ...required, NODE_ENV: 'production', MEDIA_STORAGE: 'local' })).toThrow(
+      /MEDIA_STORAGE/,
+    );
+    expect(() => parseEnv({ ...required, MEDIA_S3_SECRET_ACCESS_KEY: 's' })).toThrow(
+      /MEDIA_S3_ACCESS_KEY_ID/,
+    );
+  });
+
   it('rejects a missing DATABASE_URL', () => {
     expect(() => parseEnv({ REDIS_URL: required.REDIS_URL })).toThrow(/DATABASE_URL/);
   });

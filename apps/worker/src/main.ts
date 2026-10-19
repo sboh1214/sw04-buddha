@@ -1,4 +1,5 @@
 import { closeDb, createDb, type Db } from '@buddha/db';
+import { createObjectStorage } from '@buddha/storage';
 import { isNotConnectionError, type Queue, type Worker } from 'bullmq';
 import { sql } from 'drizzle-orm';
 import { Redis } from 'ioredis';
@@ -84,10 +85,17 @@ async function main(): Promise<void> {
   // settlement job — with `/health` still answering ready. `createPublisherRedis` (realtime.ts)
   // bounds it, the way the API splits `REDIS_QUEUE` off its shared client for the same reason.
   const publishRedis = createPublisherRedis(env.REDIS_URL, logger);
+  // The media store the API writes uploads to (MEDIA_STORAGE, @buddha/storage): the same bucket in
+  // a deployment, the same directory in development and the e2e suite.
+  const storage = createObjectStorage(env);
+  if (storage.driver === 'unconfigured') {
+    logger.warn('MEDIA_STORAGE is s3 but MEDIA_S3_BUCKET is not set: orphan uploads stay');
+  }
   const processor = createProcessor({
     db,
     auditDb,
     publish: createPublisher(publishRedis, logger),
+    storage,
     logger,
   });
 

@@ -89,8 +89,14 @@ export const PILL_SELECT = {
   textStyle: 'emphasisSm',
 } as const;
 
-/** The same pill as a button: 40px, a 100px radius and the emphasized stroke when off. */
-const PILL_BUTTON = {
+/**
+ * The same pill as a button: 40px, a 100px radius and the emphasized stroke when off. Exported for
+ * the community list's market filter (#46), which must spread this very object: Chakra memoises a
+ * style set's CSS under its keys sorted, so a copy with the same keys in another order would make
+ * the server (whose cache outlives a request) and a fresh browser write two class names for one
+ * style — a hydration mismatch.
+ */
+export const PILL_BUTTON = {
   h: '40px',
   px: '4',
   borderRadius: 'pill',

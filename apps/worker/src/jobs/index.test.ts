@@ -10,6 +10,7 @@ import { schema } from '@buddha/db';
 import {
   connectTestDb,
   createMarket,
+  createMedia,
   createPosition,
   createStartGrant,
   createUser,
@@ -29,6 +30,7 @@ import { UnrecoverableError, type Job } from 'bullmq';
 import { eq } from 'drizzle-orm';
 import { pino } from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { MemoryObjectStorage } from '@buddha/storage';
 import { type Publish } from '../realtime.js';
 import { createProcessor } from './index.js';
 
@@ -51,6 +53,7 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
   let published: { channel: string; event: MarketRealtimeEvent | UserRealtimeEvent }[];
   let logs: Record<string, unknown>[];
   let run: (input: JobStub) => Promise<unknown>;
+  let storage: MemoryObjectStorage;
 
   beforeAll(async () => {
     t = await connectTestDb();
@@ -71,7 +74,8 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
       { level: 'debug' },
       { write: (line: string) => logs.push(JSON.parse(line) as Record<string, unknown>) },
     );
-    const processor = createProcessor({ db: t.db, auditDb: t.db, publish, logger });
+    storage = new MemoryObjectStorage();
+    const processor = createProcessor({ db: t.db, auditDb: t.db, publish, storage, logger });
     run = (input) => processor(job(input)) as Promise<unknown>;
   });
 
@@ -267,6 +271,39 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
       .from(schema.startGrants)
       .where(eq(schema.startGrants.id, grant.id));
     expect(paid?.amountCoin).toBe(10_000n);
+  });
+
+  it('media.orphan_cleanup reports JSON-safe counts and logs an object the store kept (#46)', async () => {
+    const { user } = await createUser(t.db);
+    const old = new Date(Date.now() - 25 * 60 * MINUTE_MS);
+    const gone = await createMedia(t.db, { ownerId: user.id, createdAt: old });
+    const kept = await createMedia(t.db, { ownerId: user.id, createdAt: old });
+    await storage.put(gone.storageKey, new Uint8Array([1]), 'image/webp');
+    // The store refuses one key: its row is gone all the same, and the job does not fail.
+    const refusing = storage.delete.bind(storage);
+    storage.delete = (key) =>
+      key === kept.storageKey ? Promise.reject(new Error('AccessDenied')) : refusing(key);
+    const result = await run({ name: JOB_NAMES.mediaOrphanCleanup });
+    expect(result).toEqual({
+      removed: 2,
+      failed: 1,
+      failures: [{ storageKey: kept.storageKey, message: 'AccessDenied' }],
+    });
+    expect(JSON.parse(JSON.stringify(result))).toEqual(result);
+    expect(storage.objects.has(gone.storageKey)).toBe(false);
+    expect(await t.db.select().from(schema.mediaObjects)).toEqual([]);
+    expect(logs.filter((line) => line.msg === 'orphan upload object not removed')).toEqual([
+      expect.objectContaining({ storageKey: kept.storageKey, level: 50 }),
+    ]);
+    // A run with nothing to do is quiet (debug).
+    expect(await run({ name: JOB_NAMES.mediaOrphanCleanup })).toEqual({
+      removed: 0,
+      failed: 0,
+      failures: [],
+    });
+    expect(
+      logs.filter((line) => line.msg === 'orphan upload clean-up').map((line) => line.level),
+    ).toEqual([30, 20]);
   });
 
   it('ledger.audit runs on the audit connection and reports the mismatch count', async () => {

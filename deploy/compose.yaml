@@ -123,6 +123,13 @@ services:
       ALIGO_TEST_MODE: ${ALIGO_TEST_MODE:-false}
       # The keyed hash of a verified number (ADR-0071): required in production, never rotated.
       PHONE_HASH_KEY: ${PHONE_HASH_KEY}
+      # The post images (#46, ADR-0073): the private bucket, always s3 here. Until terraform has
+      # made the bucket and the .env names it, the api starts and every upload fails.
+      MEDIA_STORAGE: s3
+      MEDIA_S3_BUCKET: ${MEDIA_S3_BUCKET:-}
+      MEDIA_S3_REGION: ${MEDIA_S3_REGION:-}
+      MEDIA_S3_ACCESS_KEY_ID: ${MEDIA_S3_ACCESS_KEY_ID:-}
+      MEDIA_S3_SECRET_ACCESS_KEY: ${MEDIA_S3_SECRET_ACCESS_KEY:-}
       # The only payment provider since the SmartroPay integration was removed (ADR-0049). A literal
       # rather than `${PAYMENT_PROVIDER}`: an .env rendered before then may still carry
       # PAYMENT_PROVIDER=smartro, which the api refuses to start on, and its SMARTRO_* lines are
@@ -166,6 +173,12 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-info}
       WORKER_HOST: 127.0.0.1
       WORKER_HEALTH_PORT: '4100'
+      # The api's media store (#46): the worker removes the uploads no post took.
+      MEDIA_STORAGE: s3
+      MEDIA_S3_BUCKET: ${MEDIA_S3_BUCKET:-}
+      MEDIA_S3_REGION: ${MEDIA_S3_REGION:-}
+      MEDIA_S3_ACCESS_KEY_ID: ${MEDIA_S3_ACCESS_KEY_ID:-}
+      MEDIA_S3_SECRET_ACCESS_KEY: ${MEDIA_S3_SECRET_ACCESS_KEY:-}
       NODE_OPTIONS: --max-old-space-size=160
     depends_on:
       postgres:
