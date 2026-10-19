@@ -7,7 +7,9 @@
  * the draft opens nothing and is not public, and sits where a market may (the operator's category,
  * else the proposal's when it is a leaf or a parent with no leaves, ADR-0041); who and when kept
  * and shown, each move recorded in `admin_actions` with its operator; the internal memo apart from
- * the proposer. Skips when TEST_* are unset.
+ * the proposer. And the owner's answers of 2026-10-19: a 채택 made with no market takes one later,
+ * once (a draft or an existing market, `proposal_link`), the status staying 채택; a retired wish is
+ * shown as retired. Skips when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
 import { completeOnboarding, createCategory, createMarket, createProposal } from '@buddha/db/test';
@@ -117,6 +119,8 @@ describe.skipIf(!hasTestInfra)('/api/v1/admin/proposals (integration)', () => {
     post(`/${id}/adopt`, payload, who);
   const reject = (id: string, payload: unknown, who: TestUser = admin) =>
     post(`/${id}/reject`, payload, who);
+  const link = (id: string, payload: unknown, who: TestUser = admin) =>
+    post(`/${id}/market`, payload, who);
   const actions = () =>
     t.db
       .select({
@@ -380,6 +384,17 @@ describe.skipIf(!hasTestInfra)('/api/v1/admin/proposals (integration)', () => {
     // A wish retired after it was proposed (only the database can retire one today) is refused as
     // retired, not as missing: the proposal does name a category.
     const retiredWish = await proposal({ status: 'reviewing', categoryId: retired.id });
+    // The screen reads it as retired (owner decision 2026-10-19: no default for the draft then).
+    expect(answerOf(await get(`/${retiredWish.id}`)).category).toEqual({
+      id: retired.id,
+      slug: retired.slug,
+      nameKo: retired.nameKo,
+      isActive: false,
+    });
+    expect(answerOf(await get(`/${today.id}`)).category).toMatchObject({
+      id: category.id,
+      isActive: true,
+    });
     const wishInactive = await adopt(retiredWish.id, { market: { type: 'draft' } });
     expect(wishInactive.statusCode).toBe(400);
     expect(errorOf(wishInactive)).toMatchObject({
@@ -511,6 +526,179 @@ describe.skipIf(!hasTestInfra)('/api/v1/admin/proposals (integration)', () => {
       { from: 'reviewing', to: 'adopted', marketId: draft.id, marketCreated: false, memo: null },
       { from: 'reviewing', to: 'adopted', marketId: null, marketCreated: false, memo: null },
     ]);
+  });
+
+  // ---- a market linked later (owner decision 2026-10-19) -----------------------------------
+
+  it('links an existing market later, once, to a proposal adopted with none; the status stays 채택', async () => {
+    const adopted = answerOf(
+      await adopt((await proposal({ status: 'reviewing' })).id, { memo: '채택 사유' }),
+    );
+    expect(adopted).toMatchObject({
+      status: 'adopted',
+      adoption: { memo: '채택 사유', market: null },
+      marketLinkedAt: null,
+      marketLinkedBy: null,
+    });
+    const draft = await createMarket(t.db, {
+      createdBy: admin.id,
+      categoryId: category.id,
+      status: 'draft',
+    });
+    // An unknown market is NOT_FOUND naming the field, and nothing is linked.
+    const unknown = await link(adopted.id, {
+      market: { type: 'existing', marketId: randomUUID() },
+    });
+    expect(unknown.statusCode).toBe(404);
+    expect(errorOf(unknown)).toMatchObject({ details: [{ path: ['market', 'marketId'] }] });
+    // Another operator links it: kept with who and when, beside the 채택's own record.
+    const linked = answerOf(
+      await link(adopted.id, { market: { type: 'existing', marketId: draft.id } }, second),
+    );
+    expect(linked).toMatchObject({
+      status: 'adopted',
+      decidedAt: adopted.decidedAt,
+      decidedBy: { id: admin.id },
+      marketLinkedBy: { id: second.id },
+      adoption: {
+        memo: '채택 사유',
+        market: { id: draft.id, slug: draft.slug, title: draft.title, status: 'draft' },
+      },
+    });
+    expect(Date.parse(linked.marketLinkedAt!)).toBeGreaterThanOrEqual(
+      Date.parse(adopted.decidedAt!),
+    );
+    expect(answerOf(await get(`/${adopted.id}`))).toEqual(linked);
+    expect((await actions()).at(-1)).toEqual({
+      adminId: second.id,
+      type: 'proposal_link',
+      targetType: 'market_proposal',
+      targetId: adopted.id,
+      payload: { marketId: draft.id, marketCreated: false },
+    });
+    // The proposer sees the link once the market is public, as after a 채택 with it.
+    expect((await proposerView(adopted.id)).adoption).toEqual({ memo: '채택 사유', market: null });
+    const opened = await t.app.inject({
+      method: 'POST',
+      url: `/api/v1/admin/markets/${draft.id}/open`,
+      headers: { ...jsonHeaders, cookie: admin.cookie },
+      payload: '{}',
+    });
+    expect(opened.statusCode, opened.body).toBe(200);
+    expect((await proposerView(adopted.id)).adoption).toEqual({
+      memo: '채택 사유',
+      market: { id: draft.id, slug: draft.slug, title: draft.title },
+    });
+    // Once: a second link is refused naming `market`, and the first stays.
+    const other = await createMarket(t.db, { createdBy: admin.id, categoryId: category.id });
+    const again = await link(adopted.id, { market: { type: 'existing', marketId: other.id } });
+    expect(again.statusCode).toBe(400);
+    expect(errorOf(again)).toMatchObject({
+      code: 'VALIDATION_ERROR',
+      details: [{ path: ['market'], message: 'already linked' }],
+    });
+    expect(answerOf(await get(`/${adopted.id}`)).adoption?.market?.id).toBe(draft.id);
+    // A 채택 that came with its market takes no other either.
+    const withMarket = answerOf(
+      await adopt((await proposal({ status: 'reviewing' })).id, {
+        market: { type: 'existing', marketId: other.id },
+      }),
+    );
+    expect(withMarket.marketLinkedAt).toBeNull();
+    const replaced = await link(withMarket.id, {
+      market: { type: 'existing', marketId: draft.id },
+    });
+    expect(replaced.statusCode).toBe(400);
+    expect(errorOf(replaced)).toMatchObject({ details: [{ path: ['market'] }] });
+    expect(
+      (await actions()).filter((row) => row.type === 'proposal_link').map((row) => row.targetId),
+    ).toEqual([adopted.id]);
+  });
+
+  it('links only a 채택: any other status is refused naming it, and nothing is made', async () => {
+    const submitted = await proposal();
+    const reviewing = await proposal({ status: 'reviewing' });
+    const rejected = await proposal({ status: 'rejected' });
+    const retracted = await proposal({ status: 'retracted' });
+    for (const row of [submitted, reviewing, rejected, retracted]) {
+      for (const market of [{ type: 'draft' }, { type: 'existing', marketId: randomUUID() }]) {
+        const res = await link(row.id, { market });
+        expect(res.statusCode).toBe(400);
+        expect(errorOf(res)).toMatchObject({
+          code: 'VALIDATION_ERROR',
+          details: [{ path: ['status'] }],
+        });
+      }
+    }
+    // A body without a market is no link.
+    const adopted = await proposal({ status: 'adopted' });
+    expect((await link(adopted.id, {})).statusCode).toBe(400);
+    expect((await link(randomUUID(), { market: { type: 'draft' } })).statusCode).toBe(404);
+    expect(await t.db.select().from(schema.markets)).toEqual([]);
+    expect(await actions()).toEqual([]);
+  });
+
+  it('makes a draft from the proposal when it links one later, with the 채택’s defaults and refusals', async () => {
+    const adopted = await proposal({
+      status: 'adopted',
+      categoryId: null,
+      deadline: koreanDate(40),
+    });
+    // No category to file the draft under: refused as at the 채택, and nothing is written.
+    const missing = await link(adopted.id, { market: { type: 'draft' } });
+    expect(missing.statusCode).toBe(400);
+    expect(errorOf(missing)).toMatchObject({
+      details: [{ path: ['market', 'categoryId'], message: 'required' }],
+    });
+    expect(await t.db.select().from(schema.markets)).toEqual([]);
+    expect(answerOf(await get(`/${adopted.id}`))).toMatchObject({
+      adoption: { market: null },
+      marketLinkedAt: null,
+    });
+    const answer = answerOf(
+      await link(adopted.id, { market: { type: 'draft', categoryId: category.id } }),
+    );
+    expect(answer).toMatchObject({
+      status: 'adopted',
+      marketLinkedBy: { id: admin.id },
+      adoption: { market: { status: 'draft' } },
+    });
+    const marketId = answer.adoption!.market!.id;
+    const [market] = await t.db
+      .select()
+      .from(schema.markets)
+      .where(eq(schema.markets.id, marketId));
+    expect(market).toMatchObject({
+      status: 'draft',
+      title: adopted.question,
+      rules: adopted.yesCondition,
+      resolutionSource: adopted.expectedSources,
+      description: adopted.background,
+      categoryId: category.id,
+      createdBy: admin.id,
+      openAt: null,
+    });
+    expect(market!.closeAt.toISOString()).toBe(
+      proposalDraftCloseAt(adopted.deadline).toISOString(),
+    );
+    expect((await actions()).map((row) => [row.type, row.payload])).toEqual([
+      ['market_create', expect.anything()],
+      ['proposal_link', { marketId, marketCreated: true }],
+    ]);
+  });
+
+  it('lets one of two links at once win; the other is told the proposal has a market', async () => {
+    const adopted = await proposal({ status: 'adopted' });
+    const [a, b] = await Promise.all([
+      link(adopted.id, { market: { type: 'draft' } }),
+      link(adopted.id, { market: { type: 'draft' } }, second),
+    ]);
+    expect([a.statusCode, b.statusCode].sort()).toEqual([200, 400]);
+    const lost = a.statusCode === 400 ? a : b;
+    expect(errorOf(lost)).toMatchObject({ details: [{ path: ['market'] }] });
+    // The loser's draft went with its transaction: one market, one link.
+    expect(await t.db.select().from(schema.markets)).toHaveLength(1);
+    expect((await actions()).filter((row) => row.type === 'proposal_link')).toHaveLength(1);
   });
 
   it('keeps 반려 and 철회 final too', async () => {

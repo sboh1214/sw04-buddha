@@ -17,10 +17,14 @@ const { marketProposals, categories, profiles } = schema;
 /** The adopted market and a 중복's existing market: two joins of `markets`, so two names. */
 const adoptedMarket = alias(schema.markets, 'proposal_market');
 const duplicateMarket = alias(schema.markets, 'proposal_duplicate_market');
-/** The proposer, the operator who started the review and the one who decided. */
+/**
+ * The proposer, the operator who started the review, the one who decided, and the one who linked
+ * a market after the 채택 (owner decision 2026-10-19).
+ */
 const proposerProfile = alias(profiles, 'proposal_proposer');
 const reviewerProfile = alias(profiles, 'proposal_reviewer');
 const deciderProfile = alias(profiles, 'proposal_decider');
+const linkerProfile = alias(profiles, 'proposal_linker');
 
 /**
  * What every reader of a proposal selects: the form, the status and its moves, the category and
@@ -80,19 +84,25 @@ export function proposalQuery(executor: Executor) {
 export type ProposalRow = Awaited<ReturnType<ReturnType<typeof proposalQuery>['execute']>>[number];
 
 /**
- * A proposal with what the admin screen shows besides: the internal memo, and the proposer and
- * operators by their current nickname (`AdminAccountActor`, read here — the row stores ids, as
- * every admin record does). Every account has a profile (trigger 0002); the joins are LEFT only so
- * that a missing one could never hide a proposal from the screen that reviews it.
+ * A proposal with what the admin screen shows besides: the internal memo, whether the wished-for
+ * category is still in use (a retired wish is no default for a draft, owner decision 2026-10-19),
+ * a market linked after the 채택 and when, and the proposer and operators by their current nickname
+ * (`AdminAccountActor`, read here — the row stores ids, as every admin record does). Every account
+ * has a profile (trigger 0002); the joins are LEFT only so that a missing one could never hide a
+ * proposal from the screen that reviews it.
  */
 export function adminProposalQuery(executor: Executor) {
   return executor
     .select({
       ...proposalSelection,
+      categoryIsActive: categories.isActive,
       internalMemo: marketProposals.internalMemo,
+      marketLinkedAt: marketProposals.marketLinkedAt,
+      marketLinkedBy: marketProposals.marketLinkedBy,
       proposerNickname: proposerProfile.nickname,
       reviewerNickname: reviewerProfile.nickname,
       deciderNickname: deciderProfile.nickname,
+      linkerNickname: linkerProfile.nickname,
     })
     .from(marketProposals)
     .leftJoin(categories, eq(categories.id, marketProposals.categoryId))
@@ -101,6 +111,7 @@ export function adminProposalQuery(executor: Executor) {
     .leftJoin(proposerProfile, eq(proposerProfile.userId, marketProposals.userId))
     .leftJoin(reviewerProfile, eq(reviewerProfile.userId, marketProposals.reviewStartedBy))
     .leftJoin(deciderProfile, eq(deciderProfile.userId, marketProposals.decidedBy))
+    .leftJoin(linkerProfile, eq(linkerProfile.userId, marketProposals.marketLinkedBy))
     .$dynamic();
 }
 
@@ -166,17 +177,23 @@ export function toProposal(row: ProposalRow): Proposal {
 const actor = (id: string | null, nickname: string | null) =>
   id === null ? null : { id, nickname: nickname ?? '' };
 
-/** The operators' view (`AdminProposal`): everything, markets in any status, who and when. */
+/**
+ * The operators' view (`AdminProposal`): everything, markets in any status, who and when, and
+ * whether the wished-for category is still in use.
+ */
 export function toAdminProposal(row: AdminProposalRow): AdminProposal {
-  const { proposal } = row;
+  const { proposal, category } = row;
   return {
     ...submitted(row),
+    category: category === null ? null : { ...category, isActive: row.categoryIsActive ?? false },
     proposer: { id: proposal.userId, nickname: row.proposerNickname ?? '' },
     reviewStartedAt: proposal.reviewStartedAt?.toISOString() ?? null,
     reviewStartedBy: actor(proposal.reviewStartedBy, row.reviewerNickname),
     decidedAt: proposal.decidedAt?.toISOString() ?? null,
     decidedBy: actor(proposal.decidedBy, row.deciderNickname),
     retractedAt: proposal.retractedAt?.toISOString() ?? null,
+    marketLinkedAt: row.marketLinkedAt?.toISOString() ?? null,
+    marketLinkedBy: actor(row.marketLinkedBy, row.linkerNickname),
     rejection:
       proposal.status === 'rejected' && proposal.rejectionReason !== null
         ? {

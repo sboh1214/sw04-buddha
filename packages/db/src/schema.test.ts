@@ -4810,6 +4810,83 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(memo?.internalMemo).toBe('내부 메모');
     });
 
+    it('lets a 채택 with no market take one later, once, with who and when — and nothing else (owner decision 2026-10-19)', async () => {
+      const { user: u } = await createUser(t.db);
+      const { user: admin } = await createUser(t.db, { role: 'admin' });
+      const market = await createMarket(t.db, { createdBy: admin.id });
+      const another = await createMarket(t.db, { createdBy: admin.id });
+      const at = new Date();
+      const update = (id: string, values: Partial<typeof marketProposals.$inferInsert>) =>
+        t.db.update(marketProposals).set(values).where(eq(marketProposals.id, id)).returning();
+      const refused = (e: unknown) => sqlState(e) === '23514';
+      const linkTo = (marketId: string) => ({
+        marketId,
+        marketLinkedAt: at,
+        marketLinkedBy: admin.id,
+      });
+
+      const adopted = await createProposal(t.db, {
+        userId: u.id,
+        status: 'adopted',
+        adminId: admin.id,
+      });
+      // A market alone, or who and when apart, is no link.
+      await expect(update(adopted.id, { marketId: market.id })).rejects.toSatisfy(refused);
+      await expect(
+        update(adopted.id, { marketId: market.id, marketLinkedAt: at }),
+      ).rejects.toSatisfy(refused);
+      await expect(
+        update(adopted.id, { marketLinkedAt: at, marketLinkedBy: admin.id }),
+      ).rejects.toSatisfy(refused);
+      // The one change: the market with who and when; the status and the decision stay.
+      const [linked] = await update(adopted.id, linkTo(market.id));
+      expect(linked).toMatchObject({
+        status: 'adopted',
+        marketId: market.id,
+        marketLinkedAt: at,
+        marketLinkedBy: admin.id,
+        decidedAt: adopted.decidedAt,
+      });
+      // Once: never another market, never none again, never another who or when.
+      await expect(update(adopted.id, linkTo(another.id))).rejects.toSatisfy(refused);
+      await expect(
+        update(adopted.id, { marketId: null, marketLinkedAt: null, marketLinkedBy: null }),
+      ).rejects.toSatisfy(refused);
+      await expect(
+        update(adopted.id, { marketLinkedAt: new Date(at.getTime() + 1_000) }),
+      ).rejects.toSatisfy(refused);
+      // A 채택 that came with its market: never replaced, and no link recorded on it.
+      const withMarket = await createProposal(t.db, {
+        userId: u.id,
+        status: 'adopted',
+        adminId: admin.id,
+        marketId: market.id,
+      });
+      expect(withMarket.marketLinkedAt).toBeNull();
+      await expect(update(withMarket.id, linkTo(another.id))).rejects.toSatisfy(refused);
+      await expect(
+        update(withMarket.id, { marketLinkedAt: at, marketLinkedBy: admin.id }),
+      ).rejects.toSatisfy(refused);
+      // No other status takes a market without its move, and no move records a link.
+      for (const status of ['submitted', 'reviewing', 'rejected', 'retracted'] as const) {
+        const row = await createProposal(t.db, { userId: u.id, status, adminId: admin.id });
+        await expect(update(row.id, linkTo(market.id))).rejects.toSatisfy(refused);
+      }
+      const reviewing = await createProposal(t.db, {
+        userId: u.id,
+        status: 'reviewing',
+        adminId: admin.id,
+      });
+      await expect(
+        update(reviewing.id, {
+          status: 'adopted',
+          decidedAt: at,
+          decidedBy: admin.id,
+          ...linkTo(market.id),
+        }),
+      ).rejects.toSatisfy(refused);
+    });
+
     it('ties each status to its columns: a reason and explanation for 반려, a market only for 중복 and 채택', async () => {
       const { user: u } = await createUser(t.db);
       const { user: admin } = await createUser(t.db, { role: 'admin' });

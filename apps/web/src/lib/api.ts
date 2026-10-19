@@ -315,6 +315,11 @@ export type ProposalWriteBody = components['schemas']['ProposalWriteBody'];
 export type AdminProposal = components['schemas']['AdminProposal'];
 /** `POST /admin/proposals/{id}/adopt`: the memo and the market (a draft, an existing one, none). */
 export type AdoptProposalBody = components['schemas']['AdoptProposalBody'];
+/**
+ * `POST /admin/proposals/{id}/market`: the market of a proposal adopted with none, linked later and
+ * once (a draft or an existing one, owner decision 2026-10-19).
+ */
+export type LinkProposalMarketBody = components['schemas']['LinkProposalMarketBody'];
 /** `POST /admin/proposals/{id}/reject`: the reason, the explanation and a duplicate's market. */
 export type RejectProposalBody = components['schemas']['RejectProposalBody'];
 export type ErrorEnvelope = components['schemas']['ErrorEnvelope'];

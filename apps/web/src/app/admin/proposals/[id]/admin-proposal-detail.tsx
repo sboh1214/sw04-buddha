@@ -26,6 +26,7 @@ import { type ReactNode, useMemo, useState } from 'react';
 import {
   Controller,
   type FieldValues,
+  type UseFormRegisterReturn,
   type UseFormSetError,
   useForm,
   useWatch,
@@ -37,13 +38,16 @@ import { applyProposal, useAdminProposal } from '@/hooks/use-admin-proposals';
 import { useCategories } from '@/hooks/use-markets';
 import { type AdminProposal, type MarketSummary, api, isApiError, unwrap } from '@/lib/api';
 import { CATEGORY_TRAIL_SEPARATOR } from '@/lib/category-label';
-import { groupCategories } from '@/lib/category-tree';
+import { type CategoryNode, groupCategories } from '@/lib/category-tree';
 import { formatKst } from '@/lib/datetime';
 import {
   ADMIN_PROPOSALS_PATH,
   type AdminProposalField,
+  type AdoptMarketChoice,
   type AdoptProposalFormValues,
+  type DraftCategoryView,
   EMPTY_ADOPT_FORM,
+  EMPTY_LINK_FORM,
   EMPTY_REJECT_FORM,
   type InternalMemoFormValues,
   PROPOSAL_REJECTION_REASON_LABEL,
@@ -54,22 +58,26 @@ import {
   adminProposalFailure,
   adminProposalKey,
   adoptProposalFormSchema,
+  draftCategoryView,
   formatProposalDate,
   internalMemoFormSchema,
-  proposalCategoryFitsDraft,
+  type LinkProposalMarketFormValues,
+  linkProposalMarketFormSchema,
   proposalIdParam,
   rejectProposalFormSchema,
   toAdoptProposalBody,
+  toLinkProposalMarketBody,
   toRejectProposalBody,
 } from '@/lib/proposals';
 import { AdminMarketLine, MarketPicker } from './market-picker';
 
 /**
  * 시장 제안 상세 (#77, ADR-0089; ADR-0069 decision 4 #77): what was proposed and by whom, the
- * record — who started the review, who decided it and when (검토 흐름·기록) — the result the proposer
- * reads, the operators' moves the status allows (`adminProposalActions`: 검토 시작 from 접수, 채택 from
- * 검토, 반려 from either; nothing once 채택, 반려 or 철회 — they are final), and the internal memo.
- * Times are KST like every admin screen (ADR-0063).
+ * record — who started the review, who decided it, who linked a market later, and when (검토
+ * 흐름·기록) — the result the proposer reads, the operators' moves the status allows
+ * (`adminProposalActions`: 검토 시작 from 접수, 채택 from 검토, 반려 from either; 채택, 반려 and 철회
+ * are final — a 채택 made with no market only takes one later, once: 시장 연결, owner decision
+ * 2026-10-19), and the internal memo. Times are KST like every admin screen (ADR-0063).
  *
  * Every move answers with the proposal as it committed, which goes on screen at once
  * (`applyProposal`). A move the status no longer allows — another operator decided it, the proposer
@@ -107,7 +115,7 @@ export function AdminProposalDetail({ id }: { id: string }) {
   }
 
   const data = proposal.data;
-  const actions = adminProposalActions(data.status);
+  const actions = adminProposalActions(data);
   return (
     <Stack gap="4" data-testid="admin-proposal-detail" data-status={data.status}>
       <BackLink />
@@ -125,7 +133,7 @@ export function AdminProposalDetail({ id }: { id: string }) {
       <ContentCard proposal={data} />
       <RecordCard proposal={data} />
       {(data.rejection !== null || data.adoption !== null) && <ResultCard proposal={data} />}
-      {(actions.review || actions.adopt || actions.reject) && (
+      {(actions.review || actions.adopt || actions.reject || actions.link) && (
         <Card.Root data-testid="admin-proposal-actions">
           <Card.Header>
             <Text fontWeight="semibold">{copy.adminProposalActions}</Text>
@@ -136,6 +144,7 @@ export function AdminProposalDetail({ id }: { id: string }) {
               {/* Keyed on the status: a form whose proposal moved starts over. */}
               {actions.adopt && <AdoptForm key={`adopt-${data.status}`} proposal={data} />}
               {actions.reject && <RejectForm key={`reject-${data.status}`} proposal={data} />}
+              {actions.link && <LinkMarketForm proposal={data} />}
             </Stack>
           </Card.Body>
         </Card.Root>
@@ -242,6 +251,11 @@ function RecordCard({ proposal }: { proposal: AdminProposal }) {
               {formatKst(proposal.retractedAt)}
             </Item>
           )}
+          {proposal.marketLinkedAt !== null && (
+            <Item label={copy.adminProposalLink} testId="admin-proposal-record-linked">
+              {formatKst(proposal.marketLinkedAt)} · {proposal.marketLinkedBy?.nickname ?? ''}
+            </Item>
+          )}
         </DataList.Root>
       </Card.Body>
     </Card.Root>
@@ -342,21 +356,150 @@ function StartReview({ proposal }: { proposal: AdminProposal }) {
   );
 }
 
+/** The labels of the market choices, in the order the forms offer them. */
+const MARKET_CHOICE_LABEL: Record<AdoptMarketChoice, string> = {
+  none: copy.adminProposalMarketNone,
+  draft: copy.adminProposalMarketDraft,
+  existing: copy.adminProposalMarketExisting,
+};
+
+/**
+ * Where a 채택 or a later link leads, as radio buttons: the group's accessible name is its own
+ * Label part (admin-market-detail.tsx). `testId` prefixes each choice's.
+ */
+function MarketChoiceRadio({
+  name,
+  value,
+  choices,
+  onChange,
+  onBlur,
+  testId,
+}: {
+  name: string;
+  value: AdoptMarketChoice;
+  choices: readonly AdoptMarketChoice[];
+  onChange: (value: AdoptMarketChoice) => void;
+  onBlur: () => void;
+  testId: string;
+}) {
+  return (
+    <RadioGroup.Root
+      name={name}
+      value={value}
+      onValueChange={(details) => {
+        const picked = choices.find((choice) => choice === details.value);
+        if (picked !== undefined) onChange(picked);
+      }}
+      colorPalette="brand"
+    >
+      <RadioGroup.Label fontWeight="medium" mb="1">
+        {copy.adminProposalMarketChoice}
+      </RadioGroup.Label>
+      <Stack gap="2">
+        {choices.map((choice) => (
+          <RadioGroup.Item key={choice} value={choice} data-testid={`${testId}-${choice}`}>
+            <RadioGroup.ItemHiddenInput onBlur={onBlur} />
+            <RadioGroup.ItemIndicator />
+            <RadioGroup.ItemText>{MARKET_CHOICE_LABEL[choice]}</RadioGroup.ItemText>
+          </RadioGroup.Item>
+        ))}
+      </Stack>
+    </RadioGroup.Root>
+  );
+}
+
+/**
+ * A draft's category and close time, the 채택's and the later link's alike. What the category says
+ * of the proposer's wish is `draftCategoryView`'s (lib/proposals.ts): the blank option's label —
+ * the wish where it may stand in, else '카테고리 선택' — and the line below the list, if any: a
+ * wished parent that has leaves with the ask to pick a leaf, or a wish retired since it was
+ * proposed (owner decision 2026-10-19 13). The close time is typed in KST, blank for 00:00 of the
+ * proposal's date in Korea.
+ */
+function DraftFields({
+  tree,
+  view,
+  category,
+  closeAt,
+  categoryError,
+  closeAtError,
+  testId,
+}: {
+  tree: readonly CategoryNode[];
+  view: DraftCategoryView;
+  category: UseFormRegisterReturn;
+  closeAt: UseFormRegisterReturn;
+  categoryError?: string;
+  closeAtError?: string;
+  testId: string;
+}) {
+  const { blankLabel, hint } = view;
+  return (
+    <HStack gap="2" align="start" flexWrap="wrap">
+      <Field.Root invalid={categoryError !== undefined} maxW="64">
+        <Field.Label>{copy.adminProposalDraftCategory}</Field.Label>
+        <NativeSelect.Root>
+          <NativeSelect.Field data-testid={`${testId}-category`} {...category}>
+            <option value="">{blankLabel}</option>
+            {/* The market form's options (market-form-fields.tsx): a market is filed under a
+                leaf, and under a parent only when it has none (ADR-0041). The proposal's own wish
+                is the blank option above only where a market may sit; a wished parent that has
+                leaves, or a retired wish, is named below the list instead, and one is picked. */}
+            {tree.flatMap(({ category: parent, children }) =>
+              children.length === 0
+                ? [
+                    <option key={parent.id} value={String(parent.id)}>
+                      {parent.nameKo}
+                    </option>,
+                  ]
+                : children.map((leaf) => (
+                    <option key={leaf.id} value={String(leaf.id)}>
+                      {`${parent.nameKo}${CATEGORY_TRAIL_SEPARATOR}${leaf.nameKo}`}
+                    </option>
+                  )),
+            )}
+          </NativeSelect.Field>
+          <NativeSelect.Indicator />
+        </NativeSelect.Root>
+        {hint !== null && (
+          <Field.HelperText data-testid={`${testId}-category-${hint.kind}`}>
+            {hint.text}
+          </Field.HelperText>
+        )}
+        <Field.ErrorText>{categoryError}</Field.ErrorText>
+      </Field.Root>
+      <Field.Root invalid={closeAtError !== undefined} maxW="64">
+        <Field.Label>{copy.adminProposalDraftCloseAt}</Field.Label>
+        <Input type="datetime-local" data-testid={`${testId}-close-at`} {...closeAt} />
+        <Field.HelperText>{copy.adminProposalDraftCloseAtHint}</Field.HelperText>
+        <Field.ErrorText>{closeAtError}</Field.ErrorText>
+      </Field.Root>
+    </HStack>
+  );
+}
+
+/**
+ * The active categories as a tree, and what the draft's category shows for the proposal's wish —
+ * with whether the wish may stand in for one (`view.wishFits`).
+ */
+function useDraftCategories(proposal: AdminProposal) {
+  const categories = useCategories();
+  const tree = useMemo(() => groupCategories(categories.data ?? []), [categories.data]);
+  const view = useMemo(() => draftCategoryView(proposal.category, tree), [proposal.category, tree]);
+  return { tree, view };
+}
+
 /**
  * 검토 → 채택 (final): the memo the proposer reads, and the market — none, a draft made from the
- * proposal (its category: the one picked, else the proposal's where a market may sit — a leaf or a
- * parent with no leaves, `proposalCategoryFitsDraft`; its close time: the one typed in KST, else
- * 00:00 of the proposal's date in Korea), or an existing market picked by title. The press asks for
- * confirmation first: a 채택 is never undone, and it opens nothing and grants nothing.
+ * proposal (`DraftFields`), or an existing market picked by title. The press asks for confirmation
+ * first: a 채택 is never undone, and it opens nothing and grants nothing.
  */
 function AdoptForm({ proposal }: { proposal: AdminProposal }) {
   const queryClient = useQueryClient();
-  const categories = useCategories();
-  const tree = useMemo(() => groupCategories(categories.data ?? []), [categories.data]);
+  const { tree, view } = useDraftCategories(proposal);
   const [picked, setPicked] = useState<MarketSummary | null>(null);
   const [confirming, setConfirming] = useState<AdoptProposalFormValues | null>(null);
-  // Whether the proposal's wish can be the blank option: not a parent that has leaves (ADR-0041).
-  const wishFits = proposalCategoryFitsDraft(proposal.category, tree);
+  const { wishFits } = view;
   const schema = useMemo(() => adoptProposalFormSchema(wishFits), [wishFits]);
   const {
     control,
@@ -412,98 +555,26 @@ function AdoptForm({ proposal }: { proposal: AdminProposal }) {
           name="market"
           control={control}
           render={({ field }) => (
-            // The group's accessible name is its own Label part (admin-market-detail.tsx).
-            <RadioGroup.Root
+            <MarketChoiceRadio
               name={field.name}
               value={field.value}
-              onValueChange={(details) => {
-                if (
-                  details.value === 'none' ||
-                  details.value === 'draft' ||
-                  details.value === 'existing'
-                ) {
-                  field.onChange(details.value);
-                }
-              }}
-              colorPalette="brand"
-            >
-              <RadioGroup.Label fontWeight="medium" mb="1">
-                {copy.adminProposalMarketChoice}
-              </RadioGroup.Label>
-              <Stack gap="2">
-                {(
-                  [
-                    ['none', copy.adminProposalMarketNone],
-                    ['draft', copy.adminProposalMarketDraft],
-                    ['existing', copy.adminProposalMarketExisting],
-                  ] as const
-                ).map(([value, text]) => (
-                  <RadioGroup.Item
-                    key={value}
-                    value={value}
-                    data-testid={`admin-proposal-adopt-market-${value}`}
-                  >
-                    <RadioGroup.ItemHiddenInput onBlur={field.onBlur} />
-                    <RadioGroup.ItemIndicator />
-                    <RadioGroup.ItemText>{text}</RadioGroup.ItemText>
-                  </RadioGroup.Item>
-                ))}
-              </Stack>
-            </RadioGroup.Root>
+              choices={['none', 'draft', 'existing']}
+              onChange={field.onChange}
+              onBlur={field.onBlur}
+              testId="admin-proposal-adopt-market"
+            />
           )}
         />
         {market === 'draft' && (
-          <HStack gap="2" align="start" flexWrap="wrap">
-            <Field.Root invalid={!!errors.categoryId} maxW="64">
-              <Field.Label>{copy.adminProposalDraftCategory}</Field.Label>
-              <NativeSelect.Root>
-                <NativeSelect.Field
-                  data-testid="admin-proposal-draft-category"
-                  {...register('categoryId')}
-                >
-                  <option value="">
-                    {proposal.category !== null && wishFits
-                      ? `${copy.adminProposalDraftCategoryFromProposal} (${proposal.category.nameKo})`
-                      : copy.adminMarketCategoryPlaceholder}
-                  </option>
-                  {/* The market form's options (market-form-fields.tsx): a market is filed under a
-                      leaf, and under a parent only when it has none (ADR-0041). The proposal's own
-                      wish is the blank option above only where a market may sit; a wished parent
-                      that has leaves is named below the list instead, and a leaf is picked. */}
-                  {tree.flatMap(({ category: parent, children }) =>
-                    children.length === 0
-                      ? [
-                          <option key={parent.id} value={String(parent.id)}>
-                            {parent.nameKo}
-                          </option>,
-                        ]
-                      : children.map((leaf) => (
-                          <option key={leaf.id} value={String(leaf.id)}>
-                            {`${parent.nameKo}${CATEGORY_TRAIL_SEPARATOR}${leaf.nameKo}`}
-                          </option>
-                        )),
-                  )}
-                </NativeSelect.Field>
-                <NativeSelect.Indicator />
-              </NativeSelect.Root>
-              {proposal.category !== null && !wishFits && (
-                <Field.HelperText data-testid="admin-proposal-draft-category-wish">
-                  {`${copy.adminProposalDraftCategoryFromProposal}: ${proposal.category.nameKo}. ${copy.adminProposalDraftCategoryPickLeaf}`}
-                </Field.HelperText>
-              )}
-              <Field.ErrorText>{errors.categoryId?.message}</Field.ErrorText>
-            </Field.Root>
-            <Field.Root invalid={!!errors.closeAt} maxW="64">
-              <Field.Label>{copy.adminProposalDraftCloseAt}</Field.Label>
-              <Input
-                type="datetime-local"
-                data-testid="admin-proposal-draft-close-at"
-                {...register('closeAt')}
-              />
-              <Field.HelperText>{copy.adminProposalDraftCloseAtHint}</Field.HelperText>
-              <Field.ErrorText>{errors.closeAt?.message}</Field.ErrorText>
-            </Field.Root>
-          </HStack>
+          <DraftFields
+            tree={tree}
+            view={view}
+            category={register('categoryId')}
+            closeAt={register('closeAt')}
+            categoryError={errors.categoryId?.message}
+            closeAtError={errors.closeAt?.message}
+            testId="admin-proposal-draft"
+          />
         )}
         {market === 'existing' && (
           <MarketPicker
@@ -541,6 +612,137 @@ function AdoptForm({ proposal }: { proposal: AdminProposal }) {
           <Text fontWeight="medium">{proposal.question}</Text>
           <Text>{copy.adminProposalAdoptBody}</Text>
           {/* Only a draft is opened on the market screen: no draft without that choice. */}
+          {confirming?.market === 'draft' && <Text>{copy.adminProposalAdoptDraftBody}</Text>}
+        </Stack>
+      </ConfirmDialog>
+    </form>
+  );
+}
+
+/**
+ * 시장 연결 (owner decision 2026-10-19): a market for a 채택 made with none, later and once — an
+ * existing market picked by title, or a draft made from the proposal as at the 채택 (`DraftFields`).
+ * The status stays 채택 and the memo as it was. Confirmed first: the link is never replaced. A
+ * link another operator made first is refused ('already linked'), and the detail is read again —
+ * the form goes with it.
+ */
+function LinkMarketForm({ proposal }: { proposal: AdminProposal }) {
+  const queryClient = useQueryClient();
+  const { tree, view } = useDraftCategories(proposal);
+  const [picked, setPicked] = useState<MarketSummary | null>(null);
+  const [confirming, setConfirming] = useState<LinkProposalMarketFormValues | null>(null);
+  const { wishFits } = view;
+  const schema = useMemo(() => linkProposalMarketFormSchema(wishFits), [wishFits]);
+  const {
+    control,
+    register,
+    handleSubmit,
+    setValue,
+    setError,
+    formState: { errors },
+  } = useForm<LinkProposalMarketFormValues>({
+    resolver: zodResolver(schema),
+    defaultValues: EMPTY_LINK_FORM,
+  });
+  const market = useWatch({ control, name: 'market' });
+  const report = useReportFailure<LinkProposalMarketFormValues>(proposal, setError, {
+    categoryId: 'categoryId',
+    closeAt: 'closeAt',
+    marketId: 'marketId',
+  });
+
+  const link = useMutation({
+    mutationFn: async (values: LinkProposalMarketFormValues) =>
+      unwrap(
+        await api.POST('/api/v1/admin/proposals/{id}/market', {
+          params: { path: { id: proposal.id } },
+          body: toLinkProposalMarketBody(values),
+        }),
+      ).data,
+    onSuccess: async (fresh, values) => {
+      toaster.create({ type: 'success', title: copy.adminProposalLinked });
+      setConfirming(null);
+      await applyProposal(queryClient, fresh, { marketCreated: values.market === 'draft' });
+    },
+    onError: (error) => {
+      setConfirming(null);
+      report(error);
+    },
+  });
+
+  const submit = handleSubmit((values) => setConfirming(values));
+
+  return (
+    <form onSubmit={(event) => void submit(event)} noValidate data-testid="admin-proposal-link">
+      <Stack gap="3">
+        <Stack gap="1">
+          <Heading as="h4" size="sm">
+            {copy.adminProposalLink}
+          </Heading>
+          <Text fontSize="sm" color="fg.muted">
+            {copy.adminProposalLinkHint}
+          </Text>
+        </Stack>
+        <Controller
+          name="market"
+          control={control}
+          render={({ field }) => (
+            <MarketChoiceRadio
+              name={field.name}
+              value={field.value}
+              choices={['existing', 'draft']}
+              onChange={field.onChange}
+              onBlur={field.onBlur}
+              testId="admin-proposal-link-market"
+            />
+          )}
+        />
+        {market === 'draft' && (
+          <DraftFields
+            tree={tree}
+            view={view}
+            category={register('categoryId')}
+            closeAt={register('closeAt')}
+            categoryError={errors.categoryId?.message}
+            closeAtError={errors.closeAt?.message}
+            testId="admin-proposal-link-draft"
+          />
+        )}
+        {market === 'existing' && (
+          <MarketPicker
+            label={copy.adminProposalExistingMarket}
+            picked={picked}
+            onPick={(next) => {
+              setPicked(next);
+              setValue('marketId', next?.id ?? '', { shouldValidate: next !== null });
+            }}
+            error={errors.marketId?.message}
+            testId="admin-proposal-link-picker"
+          />
+        )}
+        <Button
+          type="submit"
+          size="sm"
+          alignSelf="flex-start"
+          data-testid="admin-proposal-link-submit"
+        >
+          {copy.adminProposalLink}
+        </Button>
+      </Stack>
+      <ConfirmDialog
+        testId="admin-proposal-link"
+        open={confirming !== null}
+        onClose={() => setConfirming(null)}
+        title={copy.adminProposalLinkTitle}
+        confirmLabel={copy.adminProposalLink}
+        loading={link.isPending}
+        onConfirm={() => {
+          if (confirming !== null) link.mutate(confirming);
+        }}
+      >
+        <Stack gap="2">
+          <Text fontWeight="medium">{proposal.question}</Text>
+          <Text>{copy.adminProposalLinkBody}</Text>
           {confirming?.market === 'draft' && <Text>{copy.adminProposalAdoptDraftBody}</Text>}
         </Stack>
       </ConfirmDialog>

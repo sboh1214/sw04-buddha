@@ -220,7 +220,7 @@ describe('retractProposalOptions', () => {
     queryClient.clear();
   });
 
-  it('asks for the account’s ["me"] when the onboarding is not done any more, so the gate follows', async () => {
+  it('never asks for ["me"]: the onboarding does not refuse a 철회 (owner decision 2026-10-19)', async () => {
     const queryClient = getQueryClient();
     queryClient.setQueryData(ME_QUERY_KEY, me('user-1'));
     seedList(queryClient, [proposal('p1', 'submitted')]);
@@ -233,13 +233,10 @@ describe('retractProposalOptions', () => {
           () => Promise.reject(error),
         ),
       );
-    // Another account's ["me"] in the tab: left to SessionCacheGuard.
-    await expect(
-      failWith(refused(409, 'ONBOARDING_REQUIRED')).mutate(press('user-2')),
-    ).rejects.toThrow();
+    await expect(failWith(refused(404, 'NOT_FOUND')).mutate(press())).rejects.toThrow();
+    await expect(failWith(refused(500, 'INTERNAL')).mutate(press())).rejects.toThrow();
     expect(invalidated(queryClient, ME_QUERY_KEY)).toBe(false);
-    await expect(failWith(refused(409, 'ONBOARDING_REQUIRED')).mutate(press())).rejects.toThrow();
-    expect(invalidated(queryClient, ME_QUERY_KEY)).toBe(true);
+    expect(invalidated(queryClient, MY_PROPOSALS_KEY)).toBe(true);
     queryClient.clear();
   });
 });

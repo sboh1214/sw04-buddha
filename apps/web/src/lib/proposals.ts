@@ -5,6 +5,7 @@ import {
   PROPOSAL_REJECTION_REASONS,
   PROPOSAL_SOURCES_MAX,
   PROPOSAL_YES_CONDITION_MAX,
+  canLinkProposalMarket,
   canMoveProposal,
   isProposalDeadlineOpen,
   proposalLimitedDetailsSchema,
@@ -16,8 +17,10 @@ import type { Route } from 'next';
 import * as z from 'zod';
 import { copy } from '@/copy';
 import {
+  type AdminProposal,
   type AdoptProposalBody,
   type CreateProposalBody,
+  type LinkProposalMarketBody,
   type RejectProposalBody,
   isApiError,
   isForAnotherAccount,
@@ -120,19 +123,23 @@ export function canRetractProposal(status: ProposalStatus): boolean {
 }
 
 /**
- * What the operators may do with a proposal in `status`: start the review (접수), adopt (검토), reject
- * (접수 or 검토) — the shared transition table, so a button is never offered for a move the server
- * refuses. Nothing out of 채택, 반려 or 철회.
+ * What the operators may do with a proposal: start the review (접수), adopt (검토), reject (접수 or
+ * 검토) — the shared transition table — and link a market to a 채택 that has none, once
+ * (`canLinkProposalMarket`, owner decision 2026-10-19), so a button is never offered for a write the
+ * server refuses. Nothing else out of 채택, and nothing out of 반려 or 철회.
  */
-export function adminProposalActions(status: ProposalStatus): {
+export function adminProposalActions(proposal: Pick<AdminProposal, 'status' | 'adoption'>): {
   review: boolean;
   adopt: boolean;
   reject: boolean;
+  link: boolean;
 } {
+  const { status, adoption } = proposal;
   return {
     review: canMoveProposal(status, 'reviewing'),
     adopt: canMoveProposal(status, 'adopted'),
     reject: canMoveProposal(status, 'rejected'),
+    link: canLinkProposalMarket(status, (adoption?.market ?? null) !== null),
   };
 }
 
@@ -356,16 +363,15 @@ export function proposalFailure(error: unknown): ProposalFailure {
 
 /**
  * A refused 철회: the review started (or the proposal was decided) in the meantime — the list is
- * read again and the button goes with the status — the onboarding is not done any more (a terms
- * revision asked to agree again: `['me']` is read again and the gate takes the page on), the
- * proposal is not this account's (any more), the session changed, or anything else.
+ * read again and the button goes with the status — the proposal is not this account's (any more),
+ * the session changed, or anything else. The onboarding never refuses it: signed in is enough
+ * (owner decision 2026-10-19, as for deleting one's own post), so there is no such line.
  */
 export function retractFailureMessage(error: unknown): string {
   if (isForAnotherAccount(error)) return copy.sessionChanged;
   if (isApiError(error, 'VALIDATION_ERROR') && issuePath(error) === 'status') {
     return copy.errProposalRetractStatus;
   }
-  if (isApiError(error, 'ONBOARDING_REQUIRED')) return copy.errProposalRetractOnboarding;
   if (isApiError(error, 'NOT_FOUND')) return copy.errProposalNotFound;
   return copy.errUnknown;
 }
@@ -428,10 +434,12 @@ export function toRejectProposalBody(values: RejectProposalFormValues): RejectPr
 /** Where a 채택 leads (ADR-0069 decision 4 #77 채택과 시장): nowhere, a new draft, an existing market. */
 export type AdoptMarketChoice = 'none' | 'draft' | 'existing';
 
-/** The 채택 form. */
-export interface AdoptProposalFormValues {
-  /** The memo the proposer reads, optional. */
-  memo: string;
+/**
+ * The market part of the 채택 form and of the later link's (owner decision 2026-10-19): where it
+ * leads, and the draft's or the existing market's fields. The link offers the same two markets as
+ * the 채택 — a draft made from the proposal or an existing market — but never none.
+ */
+export interface ProposalMarketFormValues {
   market: AdoptMarketChoice;
   /**
    * The draft's category as the `<select>` holds it; '' for the proposal's own when it may stand
@@ -444,6 +452,12 @@ export interface AdoptProposalFormValues {
   marketId: string;
 }
 
+/** The 채택 form. */
+export interface AdoptProposalFormValues extends ProposalMarketFormValues {
+  /** The memo the proposer reads, optional. */
+  memo: string;
+}
+
 export const EMPTY_ADOPT_FORM: AdoptProposalFormValues = {
   memo: '',
   market: 'none',
@@ -453,30 +467,157 @@ export const EMPTY_ADOPT_FORM: AdoptProposalFormValues = {
 };
 
 /**
+ * The later link's form (owner decision 2026-10-19): the market part with the two choices that
+ * link one — there is no 'none', which is not linking.
+ */
+export interface LinkProposalMarketFormValues extends Omit<ProposalMarketFormValues, 'market'> {
+  market: 'draft' | 'existing';
+}
+
+/** An existing market first (the nearer to linking one); a draft made from the proposal is the other. */
+export const EMPTY_LINK_FORM: LinkProposalMarketFormValues = {
+  market: 'existing',
+  categoryId: '',
+  closeAt: '',
+  marketId: '',
+};
+
+/**
  * Whether a draft may take the proposal's own category when the operator picks none: a leaf, or a
  * parent with no active leaves — where the market form would file a market (ADR-0041: markets sit
  * on leaves, and a parent that has leaves is not offered). A wished parent that has leaves is not:
- * the operator picks one (the server refuses that fallback too, as no category). `tree` is the
- * active categories (`groupCategories`); a category not in it — retired since it was wished for,
- * or the list not loaded yet — is left to the server, which answers a retired one naming
- * `market.categoryId` ('inactive') and a parent with leaves likewise ('required').
+ * the operator picks one (the server refuses that fallback too, as no category). Nor is a wish
+ * retired since it was proposed (`isActive` false, owner decision 2026-10-19): the draft's
+ * category is left blank for the operator, and the wish is named as retired
+ * (`retiredWishLine`) — the server refuses that fallback too ('inactive'). `tree` is the active
+ * categories (`groupCategories`); an active wish not in it — the list not loaded yet — is left to
+ * the server, which answers a parent with leaves naming `market.categoryId` ('required').
  */
 export function proposalCategoryFitsDraft(
-  category: { slug: string } | null,
+  category: { slug: string; isActive: boolean } | null,
   tree: readonly CategoryNode[],
 ): boolean {
-  if (category === null) return false;
+  if (category === null || !category.isActive) return false;
   const place = locateCategory(tree, category.slug);
   return place === undefined || place.leaf !== undefined || place.parent.children.length === 0;
 }
 
 /**
- * The 채택 form's schema. A draft needs a category: the one picked, else the proposal's when it may
- * stand in (`proposalCategoryFits`, from `proposalCategoryFitsDraft`) — the server refuses a draft
- * with neither. A close time typed must be in the future (`now`); a blank one is the server's
+ * The line under the draft's category when the proposer's wish is retired (owner decision
+ * 2026-10-19): what was wished for, said to be out of use, so the operator picks another.
+ */
+export function retiredWishLine(name: string): string {
+  return `${copy.adminProposalDraftCategoryWishedBy}: ${name} ${copy.adminProposalDraftCategoryRetired}`;
+}
+
+/**
+ * The line under the draft's category that names the proposer's wish. `kind` is the test id's
+ * suffix (`…-category-retired`, `…-category-wish`).
+ */
+export interface DraftCategoryHint {
+  kind: 'retired' | 'wish';
+  text: string;
+}
+
+/** What the draft's category shows for the proposer's wish: the 채택's and the later link's alike. */
+export interface DraftCategoryView {
+  /** Whether the wish stands in when none is picked (`proposalCategoryFitsDraft`). */
+  wishFits: boolean;
+  /** The blank option's label: the wish where it stands in, else '카테고리 선택'. */
+  blankLabel: string;
+  /** The line under the list, or none. */
+  hint: DraftCategoryHint | null;
+}
+
+/**
+ * The draft's category for the proposer's wish (`category`) against the active categories
+ * (`tree`). A wish that may stand in is the blank option, and nothing is said below. A wish
+ * retired since it was proposed (owner decision 2026-10-19 13) leaves the blank option '카테고리
+ * 선택' and is named below as retired (`retiredWishLine`) — whatever level it was. An active
+ * wished parent that has leaves leaves the blank option '카테고리 선택' too and is named below
+ * with the ask to pick a leaf (ADR-0041). No wish: '카테고리 선택' and nothing below.
+ */
+export function draftCategoryView(
+  category: { slug: string; nameKo: string; isActive: boolean } | null,
+  tree: readonly CategoryNode[],
+): DraftCategoryView {
+  const wishFits = proposalCategoryFitsDraft(category, tree);
+  if (category === null) {
+    return { wishFits, blankLabel: copy.adminMarketCategoryPlaceholder, hint: null };
+  }
+  if (!category.isActive) {
+    return {
+      wishFits,
+      blankLabel: copy.adminMarketCategoryPlaceholder,
+      hint: { kind: 'retired', text: retiredWishLine(category.nameKo) },
+    };
+  }
+  if (wishFits) {
+    return {
+      wishFits,
+      blankLabel: `${copy.adminProposalDraftCategoryFromProposal} (${category.nameKo})`,
+      hint: null,
+    };
+  }
+  return {
+    wishFits,
+    blankLabel: copy.adminMarketCategoryPlaceholder,
+    hint: {
+      kind: 'wish',
+      text: `${copy.adminProposalDraftCategoryFromProposal}: ${category.nameKo}. ${copy.adminProposalDraftCategoryPickLeaf}`,
+    },
+  };
+}
+
+const marketFormFields = {
+  categoryId: z.string(),
+  closeAt: z.string(),
+  marketId: z.string(),
+};
+
+/**
+ * The market part's checks, the 채택's and the link's alike. A draft needs a category: the one
+ * picked, else the proposal's when it may stand in (`proposalCategoryFits`) — the server refuses a
+ * draft with neither. A close time typed must be in the future (`now`); a blank one is the server's
  * default, which it checks itself (a default already past is refused naming `market.closeAt`,
  * `adminProposalFailure`). Linking needs a picked market.
  */
+function checkMarketChoice(
+  values: ProposalMarketFormValues | LinkProposalMarketFormValues,
+  ctx: z.RefinementCtx,
+  proposalCategoryFits: boolean,
+  now: () => number,
+) {
+  if (values.market === 'draft') {
+    const picked = CATEGORY_ID_PATTERN.test(values.categoryId);
+    if (!picked && !(values.categoryId === '' && proposalCategoryFits)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['categoryId'],
+        message: copy.errProposalDraftCategory,
+      });
+    }
+    if (values.closeAt !== '') {
+      const iso = kstLocalToIso(values.closeAt);
+      if (iso === null || new Date(iso).getTime() <= now()) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['closeAt'],
+          message: copy.errProposalDraftCloseAt,
+        });
+      }
+    }
+  }
+  if (values.market === 'existing' && values.marketId === '') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['marketId'],
+      message: copy.errProposalExistingMarket,
+    });
+  }
+}
+
+/** The 채택 form's schema: the memo, and the market part (`checkMarketChoice`). */
 export function adoptProposalFormSchema(
   proposalCategoryFits: boolean,
   now: () => number = Date.now,
@@ -485,59 +626,51 @@ export function adoptProposalFormSchema(
     .object({
       memo: z.string().trim().max(PROPOSAL_NOTE_MAX, copy.errProposalMemo),
       market: z.enum(['none', 'draft', 'existing']),
-      categoryId: z.string(),
-      closeAt: z.string(),
-      marketId: z.string(),
+      ...marketFormFields,
     })
-    .superRefine((values, ctx) => {
-      if (values.market === 'draft') {
-        const picked = CATEGORY_ID_PATTERN.test(values.categoryId);
-        if (!picked && !(values.categoryId === '' && proposalCategoryFits)) {
-          ctx.addIssue({
-            code: 'custom',
-            path: ['categoryId'],
-            message: copy.errProposalDraftCategory,
-          });
-        }
-        if (values.closeAt !== '') {
-          const iso = kstLocalToIso(values.closeAt);
-          if (iso === null || new Date(iso).getTime() <= now()) {
-            ctx.addIssue({
-              code: 'custom',
-              path: ['closeAt'],
-              message: copy.errProposalDraftCloseAt,
-            });
-          }
-        }
-      }
-      if (values.market === 'existing' && values.marketId === '') {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['marketId'],
-          message: copy.errProposalExistingMarket,
-        });
-      }
-    });
+    .superRefine((values, ctx) => checkMarketChoice(values, ctx, proposalCategoryFits, now));
+}
+
+/**
+ * The later link's schema (owner decision 2026-10-19): a draft or an existing market — never
+ * none — with the 채택's checks.
+ */
+export function linkProposalMarketFormSchema(
+  proposalCategoryFits: boolean,
+  now: () => number = Date.now,
+) {
+  return z
+    .object({ market: z.enum(['draft', 'existing']), ...marketFormFields })
+    .superRefine((values, ctx) => checkMarketChoice(values, ctx, proposalCategoryFits, now));
+}
+
+/** A draft or an existing market as the API takes it (`ProposalAdoptionMarket`). */
+function toProposalAdoptionMarket(
+  values: LinkProposalMarketFormValues,
+): LinkProposalMarketBody['market'] {
+  if (values.market === 'existing') return { type: 'existing', marketId: values.marketId };
+  const closeAt = values.closeAt === '' ? null : kstLocalToIso(values.closeAt);
+  return {
+    type: 'draft',
+    ...(values.categoryId === '' ? {} : { categoryId: Number(values.categoryId) }),
+    ...(closeAt === null ? {} : { closeAt }),
+  };
 }
 
 /** Only for values `adoptProposalFormSchema` accepted. A blank memo is none. */
 export function toAdoptProposalBody(values: AdoptProposalFormValues): AdoptProposalBody {
-  const memo = orNull(values.memo);
-  if (values.market === 'draft') {
-    const closeAt = values.closeAt === '' ? null : kstLocalToIso(values.closeAt);
-    return {
-      memo,
-      market: {
-        type: 'draft',
-        ...(values.categoryId === '' ? {} : { categoryId: Number(values.categoryId) }),
-        ...(closeAt === null ? {} : { closeAt }),
-      },
-    };
-  }
-  if (values.market === 'existing') {
-    return { memo, market: { type: 'existing', marketId: values.marketId } };
-  }
-  return { memo, market: null };
+  const { market } = values;
+  return {
+    memo: orNull(values.memo),
+    market: market === 'none' ? null : toProposalAdoptionMarket({ ...values, market }),
+  };
+}
+
+/** Only for values `linkProposalMarketFormSchema` accepted. */
+export function toLinkProposalMarketBody(
+  values: LinkProposalMarketFormValues,
+): LinkProposalMarketBody {
+  return { market: toProposalAdoptionMarket(values) };
 }
 
 /** The internal memo's form (never shown to the proposer). */
@@ -549,7 +682,7 @@ export type InternalMemoFormValues = z.input<typeof internalMemoFormSchema>;
 /** The fields of the operators' forms a refusal can land on. */
 export type AdminProposalField = 'categoryId' | 'closeAt' | 'marketId' | 'duplicateMarketId';
 
-/** What an operator's screen does with a refused review, 채택, 반려 or memo. */
+/** What an operator's screen does with a refused review, 채택, 반려, link or memo. */
 export interface AdminProposalFailure {
   message: string;
   /** The form field the refusal is about, when it is one. */
@@ -563,14 +696,16 @@ export interface AdminProposalFailure {
 
 /**
  * A refusal of an operator's write, read: a status that moved (VALIDATION_ERROR naming `status`),
- * the draft's category (none to stand in — `required` — or retired, `inactive` — or unknown, a
- * 404) or close time (past), a market that is not there (a 404 naming the field that carried it),
- * and the proposal itself gone (404).
+ * a market linked meanwhile (naming `market`: another operator linked one first — the link is once,
+ * owner decision 2026-10-19), the draft's category (none to stand in — `required` — or retired,
+ * `inactive` — or unknown, a 404) or close time (past), a market that is not there (a 404 naming
+ * the field that carried it), and the proposal itself gone (404).
  */
 export function adminProposalFailure(error: unknown): AdminProposalFailure {
   const path = issuePath(error);
   if (isApiError(error, 'VALIDATION_ERROR')) {
     if (path === 'status') return { message: copy.errProposalStatus, refresh: true };
+    if (path === 'market') return { message: copy.errProposalMarketAlreadyLinked, refresh: true };
     if (path === 'market.categoryId') {
       // A retired category — the proposal's own, or the one picked, retired meanwhile — is not
       // a missing one: the proposal may well name a category.

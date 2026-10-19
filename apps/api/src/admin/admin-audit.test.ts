@@ -100,6 +100,7 @@ const AUDITED: Readonly<Record<string, AdminActionType>> = {
     'account_restriction_retract',
   'POST /admin/proposals/:id/review': 'proposal_review',
   'POST /admin/proposals/:id/adopt': 'proposal_adopt',
+  'POST /admin/proposals/:id/market': 'proposal_link',
   'PUT /admin/proposals/:id/internal-memo': 'proposal_memo',
   'POST /admin/proposals/:id/reject': 'proposal_reject',
 };

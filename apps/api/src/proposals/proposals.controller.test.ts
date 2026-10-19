@@ -4,10 +4,11 @@
  * decided (ADR-0069 decision 4 #77; decision 1 #57-8·#57-13; decision 2 #45-12; decision 7) is what
  * is pinned: the form (question 100, one date, YES condition 1,000, sources required, background and
  * category optional, no probability), 접수 first, the onboarding and the restrictions, five waiting
- * and three a day counted by the verified number's hash, 철회 from 접수 only (and, as every write, by
- * an account that finished the onboarding), the reason and the market's link (once public) shown
- * to the proposer with the time of each status, and no operator or internal memo, and nobody
- * else's proposal reachable. Skips when TEST_* are unset.
+ * and three a day counted by the verified number's hash for a member (an operator's account is
+ * exempt, owner decision 2026-10-19), 철회 from 접수 only (signed in is enough, whatever the
+ * onboarding — owner decision 2026-10-19), the reason and the market's link (once public) shown to
+ * the proposer with the time of each status, and no operator or internal memo, and nobody else's
+ * proposal reachable. Skips when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
 import {
@@ -199,16 +200,22 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/proposals (integration)', () => {
     expect(await rows()).toEqual([]);
   });
 
-  it('keeps an account that has not finished the onboarding from retracting too, and lets it read (#57-8)', async () => {
+  it('lets an account that has not finished the onboarding read and retract its own 접수 proposal (owner decision 2026-10-19)', async () => {
     // Its 접수 proposal from before — as a member a terms revision sent back to agree again has.
     const fresh = await signUpTestUser(t);
     const own = await createProposal(t.db, { userId: fresh.id });
-    const refused = await retract(own.id, fresh);
-    expect(refused.statusCode).toBe(409);
-    expect(errorOf(refused)).toMatchObject({ code: 'ONBOARDING_REQUIRED' });
-    // Reading is what such an account does: its list and the proposal, still 접수.
     expect((await get('/api/v1/me/proposals', fresh)).statusCode).toBe(200);
     expect((await one(own.id, fresh)).status).toBe('submitted');
+    // Signed in is enough, as for deleting one's own post (#46).
+    const res = await retract(own.id, fresh);
+    expect(res.statusCode, res.body).toBe(200);
+    expect(proposalSchema.parse(res.json<{ data: unknown }>().data).status).toBe('retracted');
+    // Still only its own: another account's proposal is not there for it, and stays 접수.
+    const others = await createProposal(t.db, { userId: user.id, phoneHash });
+    const refused = await retract(others.id, fresh);
+    expect(refused.statusCode).toBe(404);
+    expect(errorOf(refused)).toMatchObject({ code: 'NOT_FOUND' });
+    expect((await one(others.id)).status).toBe('submitted');
   });
 
   it('asks the restriction hook inside the submission, and writes nothing once it refuses (#139, #185)', async () => {
@@ -371,6 +378,33 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/proposals (integration)', () => {
     const other = await signUpTestUser(t);
     await onboard(other);
     expect((await propose(form({}, other), other)).statusCode).toBe(201);
+    expect(await rows()).toHaveLength(PROPOSAL_LIMITS.pendingProposals + 1);
+  });
+
+  it('lets an operator’s account propose past both limits, as long as it is one (owner decision 2026-10-19)', async () => {
+    // At both limits: five waiting, three of them in the last 24 hours.
+    const old = new Date(Date.now() - 2 * DAY_MS);
+    for (let i = 0; i < PROPOSAL_LIMITS.pendingProposals; i += 1) {
+      await createProposal(t.db, {
+        userId: user.id,
+        phoneHash,
+        ...(i < PROPOSAL_LIMITS.dailyProposals ? {} : { createdAt: old }),
+      });
+    }
+    expect((await propose(form())).statusCode).toBe(429);
+    const setRole = (role: 'admin' | 'user') =>
+      t.db.update(schema.profiles).set({ role }).where(eq(schema.profiles.userId, user.id));
+    await setRole('admin');
+    const taken = await propose(form());
+    expect(taken.statusCode, taken.body).toBe(201);
+    // Stored as any proposal of the number, its hash included: it counts for that number.
+    const stored = (await rows()).at(-1)!;
+    expect(stored).toMatchObject({ userId: user.id, phoneHash, status: 'submitted' });
+    // The role is read in the submission, not from a cache: revoked, the limits are back at once.
+    await setRole('user');
+    const refused = await propose(form());
+    expect(refused.statusCode).toBe(429);
+    expect((errorOf(refused).details as ProposalLimitedDetails).reason).toBe('pending');
     expect(await rows()).toHaveLength(PROPOSAL_LIMITS.pendingProposals + 1);
   });
 

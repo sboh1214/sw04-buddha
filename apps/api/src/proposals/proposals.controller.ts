@@ -26,12 +26,13 @@ import { ProposalsService } from './proposals.service.js';
  * `/api/v1/me/proposals` (#77): the caller's 시장 제안 — submitting one, 내 제안 and the 철회 of a 접수
  * one. Owner-only routes: the session decides whose proposals are read or written, and another
  * account's proposal is NOT_FOUND (ADR-0069 decision 4 #77: only the proposer and the operators see
- * one). Submitting and retracting are open to accounts that finished the onboarding
- * (OnboardedGuard: #57-8 leaves the rest only reading); submitting also to accounts that are not
- * restricted (the hook in proposal-restrictions.ts, #139 and #185), while a restriction leaves the
- * 철회 open (#45-12). Reading one's own is the session alone. Counted like the other owner routes:
- * the per-address bucket every route has. The limits that bound how many proposals there are —
- * PROPOSAL_LIMITS, per verified number — are the service's, from the database.
+ * one). Submitting is open to accounts that finished the onboarding (OnboardedGuard: #57-8 leaves
+ * the rest only reading) and are not restricted (the hook in proposal-restrictions.ts, #139 and
+ * #185). Retracting one's own 접수 proposal, like reading one's own, is the session alone (owner
+ * decision 2026-10-19, as #46's own-post delete): neither the onboarding nor a restriction (#45-12)
+ * refuses it. Counted like the other owner routes: the per-address bucket every route has. The
+ * limits that bound how many proposals there are — PROPOSAL_LIMITS, per verified number, for
+ * members — are the service's, from the database.
  *
  * Every write names the account the screen shows (`expectedAccountId`, assertExpectedAccount, as
  * every owner write since A-PG-24): a window still showing account A after another one signed in as
@@ -81,7 +82,7 @@ export class MeProposalsController {
   /**
    * Submits a proposal, 접수 (ADR-0069 decision 4 #77). Refused for an account that has not
    * finished the onboarding (the guard, before the body is read), under a restriction (the hook),
-   * for a date before today in Korea or a category that is not active, and past the limits.
+   * for a date before today in Korea or a category that is not active, and past a member's limits.
    */
   @Post()
   @UseGuards(OnboardedGuard)
@@ -96,8 +97,9 @@ export class MeProposalsController {
   // cookie's account (nothing written). ONBOARDING_REQUIRED: the onboarding is not done.
   // VERIFICATION_REQUIRED: the 본인확인 record went away while the request ran (a withdrawal).
   // VALIDATION_ERROR: the form, a date before today (Korea), a category that is not active.
-  // PROPOSAL_LIMITED: the verified number's waiting or daily proposals. RATE_LIMITED is every
-  // route's address bucket, named here beside the other 429 so the document keeps both.
+  // PROPOSAL_LIMITED: the verified number's waiting or daily proposals (a member's: an operator's
+  // account is exempt, owner decision 2026-10-19). RATE_LIMITED is every route's address bucket,
+  // named here beside the other 429 so the document keeps both.
   @ApiErrors(
     'UNAUTHENTICATED',
     'FORBIDDEN',
@@ -116,21 +118,22 @@ export class MeProposalsController {
   }
 
   /**
-   * 접수 → 철회. A write, so an account that has not finished the onboarding — or that a terms
-   * revision sent back to agree again — is refused, as #57-8 leaves it only reading (ADR-0089
-   * decision 7-9, the owner asked). No restriction refuses it (#45-12).
+   * 접수 → 철회. Signed in is enough — no OnboardedGuard (owner decision 2026-10-19, ADR-0089): an
+   * account that has not finished the onboarding, or that a terms revision sent back to agree
+   * again, still takes its own 접수 proposal back, as it still deletes its own post (#46,
+   * ADR-0073). No restriction refuses it either (#45-12).
    */
   @Post(':id/retract')
   @HttpCode(200)
-  @UseGuards(OnboardedGuard)
   @ApiOperation({
     operationId: 'retractMyProposal',
     summary:
-      'Retract one of the account’s proposals while it is submitted (VALIDATION_ERROR naming ' +
-      'status once the review started or it was decided or retracted)',
+      'Retract one of the account’s proposals while it is submitted, signed in whatever the ' +
+      'onboarding (VALIDATION_ERROR naming status once the review started or it was decided or ' +
+      'retracted)',
   })
   @ApiData(proposalSchema)
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR', 'ONBOARDING_REQUIRED')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
   retract(
     @CurrentUser() user: SessionUser,
     @Param('id', { schema: uuidParamSchema }) id: string,

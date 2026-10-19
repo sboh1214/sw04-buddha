@@ -9,6 +9,7 @@ import {
   PROPOSAL_YES_CONDITION_MAX,
   adoptProposalBodySchema,
   createProposalBodySchema,
+  linkProposalMarketBodySchema,
   isProposalDeadlineOpen,
   rejectProposalBodySchema,
   type ProposalStatus,
@@ -23,6 +24,7 @@ import {
   ADMIN_PROPOSALS_KEY,
   ADMIN_PROPOSAL_KEY,
   EMPTY_ADOPT_FORM,
+  EMPTY_LINK_FORM,
   EMPTY_PROPOSAL_FORM,
   EMPTY_REJECT_FORM,
   MY_PROPOSALS_KEY,
@@ -39,18 +41,22 @@ import {
   adminProposalsKey,
   adoptProposalFormSchema,
   canRetractProposal,
+  draftCategoryView,
   formatProposalDate,
   issueMessage,
   issuePath,
   koreanToday,
+  linkProposalMarketFormSchema,
   proposalCategoryFitsDraft,
   proposalFailure,
   proposalFormSchema,
   proposalIdParam,
   rejectProposalFormSchema,
   retractFailureMessage,
+  retiredWishLine,
   toAdoptProposalBody,
   toCreateProposalBody,
+  toLinkProposalMarketBody,
   toRejectProposalBody,
 } from './proposals';
 
@@ -158,13 +164,23 @@ describe('statuses and reasons', () => {
 
   it('offers the operators the moves the status allows, and none once it is final', () => {
     const table = Object.fromEntries(
-      PROPOSAL_STATUSES.map((status) => [status, adminProposalActions(status)]),
+      PROPOSAL_STATUSES.map((status) => [status, adminProposalActions({ status, adoption: null })]),
     ) as Record<ProposalStatus, ReturnType<typeof adminProposalActions>>;
-    expect(table.submitted).toEqual({ review: true, adopt: false, reject: true });
-    expect(table.reviewing).toEqual({ review: false, adopt: true, reject: true });
-    for (const final of ['adopted', 'rejected', 'retracted'] as const) {
-      expect(table[final]).toEqual({ review: false, adopt: false, reject: false });
+    expect(table.submitted).toEqual({ review: true, adopt: false, reject: true, link: false });
+    expect(table.reviewing).toEqual({ review: false, adopt: true, reject: true, link: false });
+    for (const final of ['rejected', 'retracted'] as const) {
+      expect(table[final]).toEqual({ review: false, adopt: false, reject: false, link: false });
     }
+  });
+
+  it('offers a later market link on a 채택 without one only, once (owner decision 2026-10-19)', () => {
+    const market = { id: 'm', slug: 'm', title: 'm', status: 'draft' as const };
+    expect(
+      adminProposalActions({ status: 'adopted', adoption: { memo: null, market: null } }),
+    ).toEqual({ review: false, adopt: false, reject: false, link: true });
+    expect(adminProposalActions({ status: 'adopted', adoption: { memo: null, market } }).link).toBe(
+      false,
+    );
   });
 });
 
@@ -386,12 +402,11 @@ describe('proposalFailure', () => {
 });
 
 describe('retractFailureMessage', () => {
-  it('says the review started, the proposal is gone, the onboarding is not done, the session changed, or the rest', () => {
+  it('says the review started, the proposal is gone, the session changed, or the rest', () => {
     expect(retractFailureMessage(invalid(['status']))).toBe(copy.errProposalRetractStatus);
     expect(retractFailureMessage(refused(404, 'NOT_FOUND'))).toBe(copy.errProposalNotFound);
-    expect(retractFailureMessage(refused(409, 'ONBOARDING_REQUIRED'))).toBe(
-      copy.errProposalRetractOnboarding,
-    );
+    // The onboarding never refuses a 철회 (owner decision 2026-10-19): no line of its own.
+    expect(copy).not.toHaveProperty('errProposalRetractOnboarding');
     expect(
       retractFailureMessage(
         refused(403, 'FORBIDDEN', [{ path: ['expectedAccountId'], message: 'x' }]),
@@ -465,7 +480,7 @@ describe('proposalCategoryFitsDraft', () => {
     category(2, 'weather', null),
     category(11, 'rates', 1),
   ]);
-  const wish = (slug: string) => ({ slug });
+  const wish = (slug: string, isActive = true) => ({ slug, isActive });
 
   it('lets the wish stand in where a market may sit: a leaf, or a parent with no leaves (ADR-0041)', () => {
     expect(proposalCategoryFitsDraft(wish('rates'), tree)).toBe(true);
@@ -477,9 +492,104 @@ describe('proposalCategoryFitsDraft', () => {
     expect(proposalCategoryFitsDraft(null, tree)).toBe(false);
   });
 
-  it('leaves a category not in the active tree to the server (retired, or the list not loaded)', () => {
-    expect(proposalCategoryFitsDraft(wish('retired'), tree)).toBe(true);
+  it('never lets a retired wish stand in: the operator picks (owner decision 2026-10-19)', () => {
+    expect(proposalCategoryFitsDraft(wish('retired', false), tree)).toBe(false);
+    expect(proposalCategoryFitsDraft(wish('rates', false), tree)).toBe(false);
+    expect(proposalCategoryFitsDraft(wish('retired', false), [])).toBe(false);
+    expect(retiredWishLine('날씨')).toBe(
+      '제안자가 바란 카테고리: 날씨 (지금은 쓰지 않는 카테고리)',
+    );
+  });
+
+  it('leaves an active wish not in the tree to the server (the list not loaded yet)', () => {
     expect(proposalCategoryFitsDraft(wish('economy'), [])).toBe(true);
+  });
+});
+
+describe('draftCategoryView', () => {
+  const category = (
+    id: number,
+    slug: string,
+    nameKo: string,
+    parentId: number | null,
+  ): Category => ({
+    id,
+    slug,
+    nameKo,
+    sortOrder: id,
+    parentId,
+  });
+  // 경제 has leaves, 날씨 has none.
+  const tree = groupCategories([
+    category(1, 'economy', '경제', null),
+    category(2, 'weather', '날씨', null),
+    category(11, 'rates', '금리', 1),
+  ]);
+  const wish = (slug: string, nameKo: string, isActive = true) => ({ slug, nameKo, isActive });
+  const placeholder = copy.adminMarketCategoryPlaceholder;
+
+  it('names a retired wish below as retired, the blank option left to pick (owner decision 2026-10-19 13)', () => {
+    const retired = {
+      wishFits: false,
+      blankLabel: placeholder,
+      hint: { kind: 'retired', text: retiredWishLine('예전') },
+    };
+    expect(draftCategoryView(wish('old', '예전', false), tree)).toEqual(retired);
+    expect(retired.hint.text).toBe('제안자가 바란 카테고리: 예전 (지금은 쓰지 않는 카테고리)');
+    // Retired is said whatever level the wish was — a leaf, a parent with leaves, one with none —
+    // and never the ask to pick a leaf; the list not loaded yet changes nothing.
+    for (const [slug, nameKo] of [
+      ['rates', '금리'],
+      ['economy', '경제'],
+      ['weather', '날씨'],
+    ] as const) {
+      expect(draftCategoryView(wish(slug, nameKo, false), tree)).toEqual({
+        wishFits: false,
+        blankLabel: placeholder,
+        hint: { kind: 'retired', text: retiredWishLine(nameKo) },
+      });
+    }
+    expect(draftCategoryView(wish('old', '예전', false), [])).toEqual(retired);
+  });
+
+  it('names an active wished parent that has leaves below with the ask to pick a leaf (ADR-0041)', () => {
+    expect(draftCategoryView(wish('economy', '경제'), tree)).toEqual({
+      wishFits: false,
+      blankLabel: placeholder,
+      hint: {
+        kind: 'wish',
+        text: `${copy.adminProposalDraftCategoryFromProposal}: 경제. ${copy.adminProposalDraftCategoryPickLeaf}`,
+      },
+    });
+  });
+
+  it('makes a wish that may stand in the blank option, with nothing below', () => {
+    const fromProposal = (name: string) =>
+      `${copy.adminProposalDraftCategoryFromProposal} (${name})`;
+    expect(draftCategoryView(wish('rates', '금리'), tree)).toEqual({
+      wishFits: true,
+      blankLabel: fromProposal('금리'),
+      hint: null,
+    });
+    expect(draftCategoryView(wish('weather', '날씨'), tree)).toEqual({
+      wishFits: true,
+      blankLabel: fromProposal('날씨'),
+      hint: null,
+    });
+    // The list not loaded yet: left to the server, as proposalCategoryFitsDraft.
+    expect(draftCategoryView(wish('economy', '경제'), [])).toEqual({
+      wishFits: true,
+      blankLabel: fromProposal('경제'),
+      hint: null,
+    });
+  });
+
+  it('leaves no wish to pick, with nothing below', () => {
+    expect(draftCategoryView(null, tree)).toEqual({
+      wishFits: false,
+      blankLabel: placeholder,
+      hint: null,
+    });
   });
 });
 
@@ -542,10 +652,57 @@ describe('the 채택 form', () => {
   });
 });
 
+describe('the later market link’s form (owner decision 2026-10-19)', () => {
+  const now = () => NOON_KST.getTime();
+  const errorsOf = (values: typeof EMPTY_LINK_FORM, wishFits: boolean) =>
+    messagesByField(linkProposalMarketFormSchema(wishFits, now).safeParse(values));
+
+  it('starts at an existing market, and needs one picked', () => {
+    expect(EMPTY_LINK_FORM.market).toBe('existing');
+    expect(errorsOf(EMPTY_LINK_FORM, true)).toEqual({ marketId: copy.errProposalExistingMarket });
+    expect(errorsOf({ ...EMPTY_LINK_FORM, marketId: 'm' }, true)).toEqual({});
+  });
+
+  it('offers a draft as the 채택 does, with its checks, and never none', () => {
+    const draft = { ...EMPTY_LINK_FORM, market: 'draft' as const };
+    expect(errorsOf(draft, false)).toEqual({ categoryId: copy.errProposalDraftCategory });
+    expect(errorsOf(draft, true)).toEqual({});
+    expect(errorsOf({ ...draft, closeAt: '2026-10-19T11:00' }, true)).toEqual({
+      closeAt: copy.errProposalDraftCloseAt,
+    });
+    expect(
+      linkProposalMarketFormSchema(true, now).safeParse({ ...EMPTY_LINK_FORM, market: 'none' })
+        .success,
+    ).toBe(false);
+  });
+
+  it('sends the API’s shape: a draft with what was given, or an existing market', () => {
+    const market = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+    const bodies = [
+      toLinkProposalMarketBody({ ...EMPTY_LINK_FORM, market: 'draft' }),
+      toLinkProposalMarketBody({ ...EMPTY_LINK_FORM, market: 'draft', categoryId: '4' }),
+      toLinkProposalMarketBody({ ...EMPTY_LINK_FORM, marketId: market }),
+    ];
+    expect(bodies).toEqual([
+      { market: { type: 'draft' } },
+      { market: { type: 'draft', categoryId: 4 } },
+      { market: { type: 'existing', marketId: market } },
+    ]);
+    for (const body of bodies) {
+      expect(linkProposalMarketBodySchema.safeParse(body).success).toBe(true);
+    }
+  });
+});
+
 describe('adminProposalFailure', () => {
   it('reads a status that moved as a reason to read the proposal again', () => {
     expect(adminProposalFailure(invalid(['status']))).toEqual({
       message: copy.errProposalStatus,
+      refresh: true,
+    });
+    // A market another operator linked first: the link is once (owner decision 2026-10-19).
+    expect(adminProposalFailure(invalid(['market'], 'already linked'))).toEqual({
+      message: copy.errProposalMarketAlreadyLinked,
       refresh: true,
     });
     expect(adminProposalFailure(refused(404, 'NOT_FOUND'))).toEqual({

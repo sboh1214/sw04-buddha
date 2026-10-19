@@ -183,8 +183,9 @@ export const ERROR_CODES = [
   /**
    * No market proposal was taken: the proposals of the verified number waiting for the operators
    * reached their limit, or its proposals of the last 24 hours did (#77). Counted by the keyed
-   * hash of the verified number, not by account. Details carry the reason, the limit and, for the
-   * daily one, retryAfterSeconds, proposalLimitedDetailsSchema.
+   * hash of the verified number, not by account; an operator account has no limits (owner
+   * decision 2026-10-19). Details carry the reason, the limit and, for the daily one,
+   * retryAfterSeconds, proposalLimitedDetailsSchema.
    */
   'PROPOSAL_LIMITED',
   'INTERNAL',

@@ -1,4 +1,9 @@
-import { type APIResponse, type Browser, type Page } from '@playwright/test';
+import {
+  type APIRequestContext,
+  type APIResponse,
+  type Browser,
+  type Page,
+} from '@playwright/test';
 import type { Proposal } from '@buddha/shared';
 import { copy } from '../src/copy';
 import {
@@ -23,8 +28,9 @@ import {
  * only once the market is public. Another proposal is rejected as a 중복 with the existing market,
  * whose link the member sees with the reason and the explanation; a 접수 proposal is retracted (철회)
  * and a 검토 one cannot be; the fourth proposal in 24 hours is refused (the limit counts the
- * retracted and rejected ones). The search's no-results screen leads a visitor to the login and
- * back to the form.
+ * retracted and rejected ones). A proposal adopted with no market takes one later, once (owner
+ * decision 2026-10-19): an existing draft market picked by title, whose link the member sees once
+ * it opens. The search's no-results screen leads a visitor to the login and back to the form.
  *
  * Who may propose (onboarding, restrictions), the waiting limit, the exact edges of both limits,
  * the status machine against races and who sees what are the API's integration tests
@@ -67,6 +73,34 @@ async function proposeThroughApi(page: Page, question: string): Promise<Proposal
       },
     }),
   );
+}
+
+/** A draft market straight at the admin API (not opened), titled with `title`. */
+async function createDraftMarket(
+  admin: APIRequestContext,
+  title: string,
+): Promise<{ id: string; slug: string; title: string }> {
+  const categories = await dataOf<{ id: number; parentId: number | null }[]>(
+    await admin.get('/api/v1/categories'),
+  );
+  const category = categories.find((row) => row.parentId === null);
+  if (category === undefined) throw new Error('no active category: run `pnpm db:seed`');
+  const tag = freshTag();
+  const draft = await dataOf<{ id: string; slug: string }>(
+    await admin.post('/api/v1/admin/markets', {
+      data: {
+        title,
+        description: null,
+        rules: `자동화 테스트가 만든 초안입니다. ${tag}`,
+        resolutionSource: `테스트 출처 ${tag}`,
+        categoryId: category.id,
+        imageUrl: null,
+        closeAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1_000).toISOString(),
+        slug: `e2e-${tag}`,
+      },
+    }),
+  );
+  return { id: draft.id, slug: draft.slug, title };
 }
 
 /** Fills the form and submits it. */
@@ -189,6 +223,12 @@ test.describe('시장 제안', () => {
       await expect(adminPage.getByTestId('admin-proposal-draft-category-wish')).toContainText(
         copy.adminProposalDraftCategoryPickLeaf,
       );
+      // Which line, and the blank option's label, are draftCategoryView's (unit-tested there,
+      // the retired wish included — no API retires a category, so e2e cannot reach that one).
+      await expect(adminPage.getByTestId('admin-proposal-draft-category-retired')).toHaveCount(0);
+      await expect(
+        adminPage.getByTestId('admin-proposal-draft-category').locator('option').first(),
+      ).toHaveText(copy.adminMarketCategoryPlaceholder);
       await adminPage.getByTestId('admin-proposal-adopt-submit').click();
       await expect(
         adminPage.getByText(copy.errProposalDraftCategory, { exact: true }),
@@ -317,6 +357,78 @@ test.describe('시장 제안', () => {
     await expect(page).toHaveURL('/proposals/new');
     const items = await dataOf<Proposal[]>(await page.request.get('/api/v1/me/proposals'));
     expect(items).toHaveLength(3);
+  });
+
+  test('시장 없이 채택한 제안에는 나중에 한 번 시장을 연결하고, 그 시장이 공개되면 제안자가 링크를 본다', async ({
+    admin,
+    browser,
+    page,
+  }) => {
+    const group = freshTag();
+    await signUp(page, freshEmail());
+    const proposal = await proposeThroughApi(page, `E2E 나중 연결 ${group}`);
+    await dataOf(await admin.post(`/api/v1/admin/proposals/${proposal.id}/review`));
+    const draft = await createDraftMarket(admin, `E2E 초안 ${group}`);
+    const adminNickname = (await meOf(admin)).profile.nickname;
+
+    const operator = await adminBrowser(browser);
+    try {
+      const adminPage = operator.page;
+      await adminPage.goto(`/admin/proposals/${proposal.id}`);
+      // --- 채택 with no market (the form's first choice), confirmed.
+      await adminPage.getByTestId('admin-proposal-adopt-submit').click();
+      await adminPage.getByTestId('admin-proposal-adopt-confirm').click();
+      await expect(adminPage.getByText(copy.adminProposalAdopted)).toBeVisible();
+      await expect(adminPage.getByTestId('admin-proposal-market')).toContainText(
+        copy.adminProposalNoMarket,
+      );
+
+      // --- 시장 연결, on offer for a 채택 with no market (owner decision 2026-10-19): an existing
+      // market, a draft here, picked by its title — refused until one is picked.
+      const form = adminPage.getByTestId('admin-proposal-link');
+      await expect(form).toContainText(copy.adminProposalLinkHint);
+      await adminPage.getByTestId('admin-proposal-link-submit').click();
+      await expect(adminPage.getByText(copy.errProposalExistingMarket)).toBeVisible();
+      await adminPage.getByTestId('admin-proposal-link-picker-input').fill(group);
+      await adminPage.getByTestId('admin-proposal-link-picker-submit').click();
+      await adminPage.getByTestId(`admin-proposal-link-picker-pick-${draft.id}`).click();
+      await expect(adminPage.getByTestId('admin-proposal-link-picker-picked')).toContainText(
+        draft.title,
+      );
+      await adminPage.getByTestId('admin-proposal-link-submit').click();
+      await expect(adminPage.getByText(copy.adminProposalLinkBody)).toBeVisible();
+      await adminPage.getByTestId('admin-proposal-link-confirm').click();
+      await expect(adminPage.getByText(copy.adminProposalLinked)).toBeVisible();
+
+      // --- still 채택, the link kept with its operator, and no second link: it is once.
+      await expect(adminPage.getByTestId('admin-proposal-status')).toHaveText(
+        copy.proposalStatusAdopted,
+      );
+      await expect(adminPage.getByTestId('admin-proposal-record-linked')).toContainText(
+        adminNickname,
+      );
+      const marketCell = adminPage.getByTestId('admin-proposal-market');
+      await expect(marketCell).toContainText(draft.title);
+      await expect(marketCell).toContainText(copy.marketStatusDraft);
+      await expect(adminPage.getByTestId('admin-proposal-actions')).toHaveCount(0);
+    } finally {
+      await operator.close();
+    }
+
+    // --- the member: 채택, and no link while the market is a draft.
+    await page.goto('/my/proposals');
+    await expect(statusOf(page, proposal.id)).toHaveText(copy.proposalStatusAdopted);
+    await expect(page.getByTestId(`my-proposal-market-${proposal.id}`)).toHaveCount(0);
+
+    // --- once the operators open it, its link.
+    const opened = await dataOf<{ slug: string; status: string }>(
+      await admin.post(`/api/v1/admin/markets/${draft.id}/open`),
+    );
+    expect(opened.status).toBe('open');
+    await page.reload();
+    const link = page.getByTestId(`my-proposal-market-${proposal.id}`);
+    await expect(link).toHaveText(draft.title);
+    await expect(link).toHaveAttribute('href', `/markets/${opened.slug}`);
   });
 
   test('검색 결과가 없으면 시장 제안하기가 있고, 로그인하지 않은 방문자는 로그인한 뒤 양식으로 온다', async ({

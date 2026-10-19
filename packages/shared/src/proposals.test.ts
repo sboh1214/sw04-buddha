@@ -6,9 +6,12 @@ import {
   PROPOSAL_LIMITS,
   PROPOSAL_SOURCES_MAX,
   adoptProposalBodySchema,
+  adminProposalSchema,
+  canLinkProposalMarket,
   canMoveProposal,
   createProposalBodySchema,
   isProposalDeadlineOpen,
+  linkProposalMarketBodySchema,
   proposalDraftCloseAt,
   proposalInternalMemoBodySchema,
   proposalLimitedDetailsSchema,
@@ -84,6 +87,17 @@ describe('the statuses (#77)', () => {
     expect(PENDING_PROPOSAL_STATUSES).toEqual(['submitted', 'reviewing']);
     expect(PROPOSAL_LIMITS).toMatchObject({ pendingProposals: 5, dailyProposals: 3 });
   });
+
+  it('links a market later only to a 채택 that has none, and moves nothing (owner decision 2026-10-19)', () => {
+    const linkable = PROPOSAL_STATUSES.flatMap((status) =>
+      [false, true]
+        .filter((hasMarket) => canLinkProposalMarket(status, hasMarket))
+        .map((hasMarket) => `${status}:${String(hasMarket)}`),
+    );
+    expect(linkable).toEqual(['adopted:false']);
+    // Not a move: 채택 stays final.
+    expect(PROPOSAL_STATUSES.some((to) => canMoveProposal('adopted', to))).toBe(false);
+  });
 });
 
 describe('the date (#77)', () => {
@@ -131,6 +145,28 @@ describe('the operators’ bodies (#77)', () => {
       adoptProposalBodySchema.safeParse({ market: { type: 'existing', marketId: 'x' } }).success,
     ).toBe(false);
     expect(adoptProposalBodySchema.safeParse({ market: { type: 'open' } }).success).toBe(false);
+  });
+
+  it('links a market later as a 채택 does — a draft or an existing market — and never none', () => {
+    expect(
+      linkProposalMarketBodySchema.parse({ market: { type: 'draft', closeAt: undefined } }),
+    ).toEqual({ market: { type: 'draft' } });
+    const market = '7C0B4D3E-2E8A-4C4B-9F7E-0E5A2B9C1D11';
+    expect(
+      linkProposalMarketBodySchema.parse({ market: { type: 'existing', marketId: market } }),
+    ).toEqual({ market: { type: 'existing', marketId: market.toLowerCase() } });
+    for (const body of [{}, { market: null }, { market: { type: 'open' } }, { memo: '메모' }]) {
+      expect(linkProposalMarketBodySchema.safeParse(body).success, JSON.stringify(body)).toBe(
+        false,
+      );
+    }
+  });
+
+  it('shows the operators whether the wished category is still in use, and who linked a market', () => {
+    const shape = adminProposalSchema.shape;
+    expect(shape.category.unwrap().shape).toHaveProperty('isActive');
+    expect(shape).toHaveProperty('marketLinkedAt');
+    expect(shape).toHaveProperty('marketLinkedBy');
   });
 
   it('keeps an internal memo or clears it', () => {

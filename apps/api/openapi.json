@@ -16953,16 +16953,6 @@
               }
             }
           },
-          "409": {
-            "description": "ONBOARDING_REQUIRED",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
           "429": {
             "description": "RATE_LIMITED",
             "content": {
@@ -16979,7 +16969,7 @@
             "session": []
           }
         ],
-        "summary": "Retract one of the account’s proposals while it is submitted (VALIDATION_ERROR naming status once the review started or it was decided or retracted)",
+        "summary": "Retract one of the account’s proposals while it is submitted, signed in whatever the onboarding (VALIDATION_ERROR naming status once the review started or it was decided or retracted)",
         "tags": [
           "proposals"
         ]
@@ -17438,6 +17428,123 @@
           }
         ],
         "summary": "reviewing → adopted, final: an optional memo for the proposer, and optionally a draft market made from the proposal or an existing market. Opens nothing and grants nothing",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/proposals/{id}/market": {
+      "post": {
+        "operationId": "adminLinkProposalMarket",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LinkProposalMarketBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AdminProposal"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Link a market to a proposal adopted without one, once: a draft market made from the proposal or an existing market. The status stays adopted. Opens nothing and grants nothing",
         "tags": [
           "admin"
         ]
@@ -26283,12 +26390,16 @@
               },
               "nameKo": {
                 "type": "string"
+              },
+              "isActive": {
+                "type": "boolean"
               }
             },
             "required": [
               "id",
               "slug",
-              "nameKo"
+              "nameKo",
+              "isActive"
             ],
             "additionalProperties": false
           },
@@ -26336,6 +26447,20 @@
             "type": "string",
             "format": "date-time",
             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "marketLinkedAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "marketLinkedBy": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdminAccountActor"
+              }
+            ]
           },
           "rejection": {
             "nullable": true,
@@ -26407,6 +26532,8 @@
           "decidedAt",
           "decidedBy",
           "retractedAt",
+          "marketLinkedAt",
+          "marketLinkedBy",
           "rejection",
           "adoption",
           "internalMemo"
@@ -26512,6 +26639,17 @@
               "marketId"
             ]
           }
+        ]
+      },
+      "LinkProposalMarketBody": {
+        "type": "object",
+        "properties": {
+          "market": {
+            "$ref": "#/components/schemas/ProposalAdoptionMarket"
+          }
+        },
+        "required": [
+          "market"
         ]
       },
       "RejectProposalBody": {

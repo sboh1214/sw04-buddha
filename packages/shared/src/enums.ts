@@ -445,7 +445,7 @@ export const ADMIN_ACTION_TYPES = [
   /**
    * 시장 제안 (#77): an admin started reviewing a proposal (접수 → 검토). Target `market_proposal`
    * / its id, payload `{from, to}` (the statuses). Written in the transaction that moves the row,
-   * as are the three below: the record of which operator did what when (ADR-0069 decision 4 #77,
+   * as are the four below: the record of which operator did what when (ADR-0069 decision 4 #77,
    * 검토 흐름·기록), which the proposal's own columns repeat for the admin screen.
    */
   'proposal_review',
@@ -455,6 +455,13 @@ export const ADMIN_ACTION_TYPES = [
    * and the memo the proposer sees. A draft made here also writes its own `market_create`.
    */
   'proposal_adopt',
+  /**
+   * A market was linked later to a proposal adopted with none (owner decision 2026-10-19,
+   * ADR-0089): payload `{marketId, marketCreated}` — a draft made from the proposal then
+   * (`marketCreated`, with its own `market_create`) or an existing market. Once per proposal; the
+   * status stays 채택.
+   */
+  'proposal_link',
   /**
    * A proposal was rejected (접수 or 검토 → 반려): payload `{from, to, reason, explanation,
    * duplicateMarketId}`.

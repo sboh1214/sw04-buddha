@@ -404,7 +404,7 @@ const ERROR_NOTES = {
   ACCOUNT_CLOSED:
     '본인이 탈퇴한 계정이다(#140). 그 계정의 원장은 탈퇴 소멸에서 끝나므로 운영자의 잔액 조정을 받지 않고, 다시 로그인하지 못하고 프로필이 바뀌지 않으므로 관리자 권한 부여도 받지 않는다.',
   PROPOSAL_LIMITED:
-    '시장 제안을 받지 않았다(#77). 한도는 계정이 아니라 본인확인한 번호(키 있는 해시)로 센다. `details.reason` 이 걸린 한도를, `details.limit` 이 그 수를 말한다 — `pending`(처리 대기(접수·검토) 제안이 5건이다. 하나가 채택·반려·철회되면 다시 낼 수 있어 `details.retryAfterSeconds` 는 `null`), `daily`(직전 24시간에 3건을 냈다. 그 뒤 철회·반려된 것도 센다. `details.retryAfterSeconds` 가 가장 오래된 것이 24시간을 벗어나기까지의 초를 분 단위로 올린 값).',
+    '시장 제안을 받지 않았다(#77). 한도는 계정이 아니라 본인확인한 번호(키 있는 해시)로 센다. 운영자 계정에는 한도가 없다. `details.reason` 이 걸린 한도를, `details.limit` 이 그 수를 말한다 — `pending`(처리 대기(접수·검토) 제안이 5건이다. 하나가 채택·반려·철회되면 다시 낼 수 있어 `details.retryAfterSeconds` 는 `null`), `daily`(직전 24시간에 3건을 냈다. 그 뒤 철회·반려된 것도 센다. `details.retryAfterSeconds` 가 가장 오래된 것이 24시간을 벗어나기까지의 초를 분 단위로 올린 값).',
   INTERNAL: '그 밖의 서버 오류. 본문에 내부 사정을 담지 않는다.',
 };
 

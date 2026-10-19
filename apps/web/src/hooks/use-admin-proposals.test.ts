@@ -31,6 +31,8 @@ const adminProposal = (status: AdminProposal['status']): AdminProposal => ({
   decidedAt: null,
   decidedBy: null,
   retractedAt: null,
+  marketLinkedAt: null,
+  marketLinkedBy: null,
   rejection: null,
   adoption: null,
   internalMemo: null,

@@ -89,7 +89,8 @@ export function useAdminProposal(routeId: string) {
  * now — a refetch that fails cannot leave the old status and its buttons under a toast that says
  * otherwise (`applyMarket`'s reason) — then every filtered list is asked again, and the member's
  * own 내 제안 in this tab too (an operator may have proposed it: the owner set no same-person rule).
- * A 채택 that made a draft also asks the admin market lists again: the draft is a new row there.
+ * A 채택 or a later market link (owner decision 2026-10-19) that made a draft also asks the admin
+ * market lists again: the draft is a new row there.
  * Seed and invalidations stay in one synchronous block, as in `applyMarket`.
  */
 export function applyProposal(

@@ -14,12 +14,14 @@ import {
   adminProposalListQuerySchema,
   adminProposalSchema,
   adoptProposalBodySchema,
+  linkProposalMarketBodySchema,
   proposalInternalMemoBodySchema,
   rejectProposalBodySchema,
   uuidParamSchema,
   type AdminProposal,
   type AdminProposalListQuery,
   type AdoptProposalBody,
+  type LinkProposalMarketBody,
   type ProposalInternalMemoBody,
   type RejectProposalBody,
 } from '@buddha/shared';
@@ -34,7 +36,8 @@ import { SESSION_SECURITY_SCHEME } from '../openapi/document.js';
 import { AdminProposalsService } from './admin-proposals.service.js';
 
 /**
- * The operators' review of 시장 제안 (#77, ADR-0069 decision 4 #77). Guards in the order every
+ * The operators' review of 시장 제안 (#77, ADR-0069 decision 4 #77), and the later link of a market
+ * to a proposal adopted with none (owner decision 2026-10-19). Guards in the order every
  * /admin route runs them (admin-access.test.ts): SessionGuard, AdminGuard, then OnboardedGuard
  * (ADR-0072). Each move writes its `admin_actions` row in its transaction (admin-audit.test.ts).
  * A move the status does not allow is VALIDATION_ERROR naming `status`.
@@ -104,6 +107,32 @@ export class AdminProposalsController {
     @Body({ schema: adoptProposalBodySchema }) body: AdoptProposalBody,
   ): Promise<AdminProposal> {
     return this.proposals.adopt(admin.id, id, body);
+  }
+
+  /**
+   * A market for a proposal adopted with none, later and once (owner decision 2026-10-19,
+   * ADR-0089): a draft made from the proposal or an existing market, as at the 채택. The status
+   * stays adopted; who linked it and when are kept and recorded (`proposal_link`).
+   */
+  @Post(':id/market')
+  @HttpCode(200)
+  @ApiOperation({
+    operationId: 'adminLinkProposalMarket',
+    summary:
+      'Link a market to a proposal adopted without one, once: a draft market made from the ' +
+      'proposal or an existing market. The status stays adopted. Opens nothing and grants nothing',
+  })
+  @ApiData(adminProposalSchema)
+  // NOT_FOUND names `market.marketId` or `market.categoryId` as the adoption's does;
+  // VALIDATION_ERROR names `status` (not adopted), `market` ('already linked': it has a market,
+  // from the adoption or an earlier link), `market.categoryId` or `market.closeAt`.
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
+  adminLinkProposalMarket(
+    @CurrentUser() admin: SessionUser,
+    @Param('id', { schema: uuidParamSchema }) id: string,
+    @Body({ schema: linkProposalMarketBodySchema }) body: LinkProposalMarketBody,
+  ): Promise<AdminProposal> {
+    return this.proposals.linkMarket(admin.id, id, body);
   }
 
   @Post(':id/reject')

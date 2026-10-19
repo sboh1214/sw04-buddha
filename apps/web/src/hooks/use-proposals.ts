@@ -11,7 +11,6 @@ import {
   type CreateProposalBody,
   type Proposal,
   api,
-  isApiError,
   isForAnotherAccount,
   unwrap,
 } from '@/lib/api';
@@ -150,10 +149,9 @@ export function storeProposal(queryClient: QueryClient, proposal: Proposal, acco
 /**
  * `POST /me/proposals/:id/retract` as mutation options: the answer goes into the list
  * (`storeProposal`), then the list is read again — on a refusal too, since a 철회 refused for its
- * status means the review started meanwhile, and the list should say so. A 철회 refused because
- * the onboarding is not done any more (a terms revision asked to agree again, #57-8) asks for
- * that account's `['me']` again, so the onboarding gate takes the page on, as the form's refusal
- * does.
+ * status means the review started meanwhile, and the list should say so. The onboarding never
+ * refuses a 철회 (signed in is enough, owner decision 2026-10-19), so nothing here asks for
+ * `['me']`; a cookie of another account asks for the session.
  */
 export function retractProposalOptions(
   queryClient: QueryClient,
@@ -167,11 +165,8 @@ export function retractProposalOptions(
       storeProposal(queryClient, proposal, variables.expectedAccountId);
       await settle();
     },
-    onError: async (error: Error, variables: RetractVariables) => {
+    onError: async (error: Error) => {
       if (isForAnotherAccount(error)) onSessionChanged();
-      if (isApiError(error, 'ONBOARDING_REQUIRED')) {
-        await refreshOwnMe(queryClient, variables.expectedAccountId);
-      }
       await settle();
     },
   };

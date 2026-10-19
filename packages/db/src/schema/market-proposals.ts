@@ -18,8 +18,8 @@ import { markets } from './markets.js';
  * operators' review of it. What was submitted never changes (no edits), the status moves only
  * along PROPOSAL_TRANSITIONS (@buddha/shared) — 접수 → 검토 → 채택·반려, 접수 → 반려, 접수 → 철회 —
  * and 채택, 반려 and 철회 are final; triggers (migration 0032) hold both whoever writes, and the
- * CHECKs below tie each status to the columns it fills. The operators' internal memo is the one
- * thing that changes after a decision.
+ * CHECKs below tie each status to the columns it fills. The operators' internal memo, and once
+ * the market of a 채택 that had none, are what change after a decision.
  *
  * - `phone_hash` is the keyed hash of the proposer's verified number when it proposed (HMAC under
  *   PHONE_HASH_KEY, apps/api identity/phone-hash.ts, ADR-0071): the pending and daily limits count
@@ -32,6 +32,10 @@ import { markets } from './markets.js';
  * - A 반려 keeps its reason, the explanation the proposer reads and, for a 중복 only, the existing
  *   market. A 채택 keeps the memo the proposer reads, if any, and the market it led to, if any — a
  *   draft made from it or an existing market.
+ * - A 채택 with no market may take one later, once (owner decision 2026-10-19): `market_id` is
+ *   set then with `market_linked_at`/`market_linked_by` (who and when, `proposal_link` in
+ *   `admin_actions`), the status staying 채택. A market that came with the 채택 has no link time.
+ *   That is the one change a 채택 allows besides the internal memo (the trigger).
  * - `internal_memo` is the operators' alone; no owner-only answer carries it.
  *
  * Accounts and markets are RESTRICT: an account row stays through a withdrawal (#140), and a
@@ -69,6 +73,9 @@ export const marketProposals = pgTable(
     duplicateMarketId: uuid().references(() => markets.id, { onDelete: 'restrict' }),
     adoptionMemo: varchar({ length: PROPOSAL_NOTE_MAX }),
     marketId: uuid().references(() => markets.id, { onDelete: 'restrict' }),
+    /** A market linked after the 채택, once (owner decision 2026-10-19): when, and by whom. */
+    marketLinkedAt: timestampTz(),
+    marketLinkedBy: text().references(() => user.id, { onDelete: 'restrict' }),
     internalMemo: varchar({ length: PROPOSAL_NOTE_MAX }),
   },
   (t) => [
@@ -83,17 +90,17 @@ export const marketProposals = pgTable(
     // are decided, nothing else is; only 철회 is retracted.
     check(
       'market_proposals_moves_check',
-      sql`(${t.reviewStartedAt} IS NULL) = (${t.reviewStartedBy} IS NULL) AND (${t.decidedAt} IS NULL) = (${t.decidedBy} IS NULL) AND (${t.reviewStartedAt} IS NOT NULL OR ${t.status} NOT IN ('reviewing', 'adopted')) AND (${t.reviewStartedAt} IS NULL OR ${t.status} NOT IN ('submitted', 'retracted')) AND (${t.decidedAt} IS NOT NULL) = (${t.status} IN ('adopted', 'rejected')) AND (${t.retractedAt} IS NOT NULL) = (${t.status} = 'retracted')`,
+      sql`(${t.reviewStartedAt} IS NULL) = (${t.reviewStartedBy} IS NULL) AND (${t.decidedAt} IS NULL) = (${t.decidedBy} IS NULL) AND (${t.marketLinkedAt} IS NULL) = (${t.marketLinkedBy} IS NULL) AND (${t.reviewStartedAt} IS NOT NULL OR ${t.status} NOT IN ('reviewing', 'adopted')) AND (${t.reviewStartedAt} IS NULL OR ${t.status} NOT IN ('submitted', 'retracted')) AND (${t.decidedAt} IS NOT NULL) = (${t.status} IN ('adopted', 'rejected')) AND (${t.retractedAt} IS NOT NULL) = (${t.status} = 'retracted')`,
     ),
     // A 반려 has its reason and explanation, and a market exactly when the reason is 중복.
     check(
       'market_proposals_rejection_check',
       sql`(${t.rejectionReason} IS NOT NULL) = (${t.status} = 'rejected') AND (${t.rejectionReason} IS NULL) = (${t.rejectionExplanation} IS NULL) AND btrim(${t.rejectionExplanation}) IS DISTINCT FROM '' AND coalesce(${t.rejectionReason} = 'duplicate', false) = (${t.duplicateMarketId} IS NOT NULL)`,
     ),
-    // Only a 채택 has a memo for the proposer or a market.
+    // Only a 채택 has a memo for the proposer or a market, and a later link has its market.
     check(
       'market_proposals_adoption_check',
-      sql`${t.status} = 'adopted' OR (${t.adoptionMemo} IS NULL AND ${t.marketId} IS NULL)`,
+      sql`(${t.status} = 'adopted' OR (${t.adoptionMemo} IS NULL AND ${t.marketId} IS NULL AND ${t.marketLinkedAt} IS NULL)) AND (${t.marketLinkedAt} IS NULL OR ${t.marketId} IS NOT NULL)`,
     ),
     check(
       'market_proposals_memo_check',

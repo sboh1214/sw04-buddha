@@ -964,6 +964,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/proposals/{id}/market": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Link a market to a proposal adopted without one, once: a draft market made from the proposal or an existing market. The status stays adopted. Opens nothing and grants nothing */
+        post: operations["adminLinkProposalMarket"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/proposals/{id}/reject": {
         parameters: {
             query?: never;
@@ -2016,7 +2033,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Retract one of the account’s proposals while it is submitted (VALIDATION_ERROR naming status once the review started or it was decided or retracted) */
+        /** Retract one of the account’s proposals while it is submitted, signed in whatever the onboarding (VALIDATION_ERROR naming status once the review started or it was decided or retracted) */
         post: operations["retractMyProposal"];
         delete?: never;
         options?: never;
@@ -2933,6 +2950,7 @@ export type components = {
             background: string | null;
             category: {
                 id: number;
+                isActive: boolean;
                 nameKo: string;
                 slug: string;
             } | null;
@@ -2947,6 +2965,9 @@ export type components = {
             /** Format: uuid */
             id: string;
             internalMemo: string | null;
+            /** Format: date-time */
+            marketLinkedAt: string | null;
+            marketLinkedBy: components["schemas"]["AdminAccountActor"] | null;
             proposer: components["schemas"]["AdminAccountActor"];
             question: string;
             rejection: {
@@ -3517,6 +3538,9 @@ export type components = {
             createdAt: string;
             id: string;
             providerId: string;
+        };
+        LinkProposalMarketBody: {
+            market: components["schemas"]["ProposalAdoptionMarket"];
         };
         LinkRelatedMarketBody: {
             /** Format: uuid */
@@ -9666,6 +9690,87 @@ export interface operations {
             };
         };
     };
+    adminLinkProposalMarket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LinkProposalMarketBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminProposal"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     adminRejectProposal: {
         parameters: {
             query?: never;
@@ -14171,15 +14276,6 @@ export interface operations {
             };
             /** @description NOT_FOUND */
             404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description ONBOARDING_REQUIRED */
-            409: {
                 headers: {
                     [name: string]: unknown;
                 };

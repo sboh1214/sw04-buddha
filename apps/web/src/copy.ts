@@ -2389,7 +2389,6 @@ export const copy = {
     '철회한 제안은 되돌릴 수 없고 운영자가 검토하지 않습니다. 철회해도 24시간 동안 낸 제안 수에는 들어갑니다.',
   proposalRetracted: '제안을 철회했습니다.',
   errProposalRetractStatus: '검토가 시작되었거나 이미 처리된 제안이라 철회할 수 없습니다.',
-  errProposalRetractOnboarding: '온보딩을 마친 뒤에 철회할 수 있습니다.',
   errProposalNotFound: '제안을 찾을 수 없습니다.',
   // 관리자: 목록·상세(/admin/proposals). 검토 시작·채택·반려한 운영자와 시각을 보인다.
   adminProposals: '시장 제안',
@@ -2421,9 +2420,21 @@ export const copy = {
   adminProposalDraftCategoryFromProposal: '제안의 희망 카테고리',
   // 희망 카테고리가 하위 카테고리가 있는 상위일 때: 시장은 하위에 둔다(ADR-0041).
   adminProposalDraftCategoryPickLeaf: '하위 카테고리가 있어 초안에는 그 가운데 하나를 골라 주세요.',
+  // 희망 카테고리가 제안한 뒤에 쓰이지 않게 되었을 때(오너 결정 2026-10-19): 초안의 기본값으로 쓰지 않고
+  // 칸 아래에 '제안자가 바란 카테고리: X (지금은 쓰지 않는 카테고리)'로 보인다(retiredWishLine).
+  adminProposalDraftCategoryWishedBy: '제안자가 바란 카테고리',
+  adminProposalDraftCategoryRetired: '(지금은 쓰지 않는 카테고리)',
   adminProposalDraftCloseAt: '초안의 마감 시각 (KST, 선택)',
   adminProposalDraftCloseAtHint:
     '비우면 결과가 정해질 날짜의 0시(한국 시간)입니다. 초안의 모든 칸은 열기 전에 시장 화면에서 고칠 수 있습니다.',
+  // 시장 없이 채택한 제안에 나중에 한 번 시장을 잇는다(오너 결정 2026-10-19). 상태는 채택 그대로다.
+  adminProposalLink: '시장 연결',
+  adminProposalLinkHint:
+    '시장 없이 채택한 제안입니다. 시장은 한 번만 연결할 수 있고, 연결한 뒤에는 바꿀 수 없습니다.',
+  adminProposalLinkTitle: '제안에 시장을 연결합니다',
+  adminProposalLinkBody:
+    '연결한 시장은 바꿀 수 없습니다. 연결해도 시장은 열리지 않고 Coin도 지급되지 않습니다. 시장이 공개되면 제안자가 내 제안에서 그 링크를 봅니다.',
+  adminProposalLinked: '시장을 연결했습니다.',
   adminProposalReject: '반려',
   adminProposalRejectTitle: '제안을 반려합니다',
   adminProposalRejectBody: '반려는 되돌릴 수 없습니다. 고른 사유와 설명이 제안자에게 보입니다.',
@@ -2449,6 +2460,7 @@ export const copy = {
     '더 이상 쓸 수 없는 카테고리입니다. 다른 카테고리를 골라 주세요.',
   errProposalDraftCloseAt: '마감 시각은 지금보다 뒤여야 합니다.',
   errProposalStatus: '제안의 상태가 바뀌었습니다. 새로 읽은 상태를 확인해 주세요.',
+  errProposalMarketAlreadyLinked: '이미 시장이 연결된 제안입니다. 새로 읽은 내용을 확인해 주세요.',
   errProposalMarketNotFound: '시장을 찾을 수 없습니다.',
   errProposalCategoryNotFound: '카테고리를 찾을 수 없습니다.',
 

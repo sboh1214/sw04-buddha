@@ -23,15 +23,20 @@ import {
  * - Who: an account that finished the onboarding, not under an account restriction (#139) nor a
  *   writing restriction (#185). At most PROPOSAL_LIMITS.pendingProposals proposals waiting
  *   (접수·검토) and PROPOSAL_LIMITS.dailyProposals a day, counted by the verified number's keyed
- *   hash (ADR-0071), not by account (decision 7). The repeated-link check does not apply.
+ *   hash (ADR-0071), not by account (decision 7) — members only: an operator's account is exempt,
+ *   as from the frequency limits (owner decision 2026-10-19). The repeated-link check does not
+ *   apply.
  * - The statuses (PROPOSAL_STATUSES): 접수 → 검토 → 채택·반려, 접수 → 반려 directly, and 접수 → 철회 by
- *   the proposer. 채택 and 반려 are never undone.
+ *   the proposer — signed in is enough for that, whatever the onboarding (owner decision
+ *   2026-10-19). 채택 and 반려 are never undone.
  * - A 반려 names a reason from PROPOSAL_REJECTION_REASONS — a 중복 with the existing market — and an
  *   explanation the proposer reads; a 채택 may carry a memo. The operators' internal memo is apart
  *   and never reaches the proposer.
  * - A 채택 may make a market draft filled from the proposal, or link an existing market; the
  *   proposer sees the market's link once it is public (not a draft). It grants no Coin and opens
- *   nothing: the market opens through the operators' own steps (#78 adds the second reviewer).
+ *   nothing: the market opens through the operators' own steps (#78 adds the second reviewer). A
+ *   proposal adopted with no market may have one linked later, once, the same two ways
+ *   (`canLinkProposalMarket`, owner decision 2026-10-19); it stays 채택.
  * - Only the proposer and the operators see a proposal. A market never shows who proposed it, and
  *   a proposal is not something to report.
  */
@@ -58,7 +63,8 @@ export const PROPOSAL_NOTE_MAX = 1_000;
  * hash across every account that verified it (decision 7): proposals waiting for the operators
  * (접수·검토, PENDING_PROPOSAL_STATUSES), and proposals made in the last `dailyWindowSeconds` — a
  * rolling 24 hours, as the 본인확인's daily limits count (PHONE_VERIFICATION_LIMITS), whatever their
- * status since (a retracted or rejected one still counts for its day).
+ * status since (a retracted or rejected one still counts for its day; owner decision 2026-10-19).
+ * A member's limits: an operator's account proposes past them (owner decision 2026-10-19).
  */
 export const PROPOSAL_LIMITS = {
   pendingProposals: 5,
@@ -87,6 +93,16 @@ export const PROPOSAL_TRANSITIONS: Readonly<Record<ProposalStatus, readonly Prop
 
 export function canMoveProposal(from: ProposalStatus, to: ProposalStatus): boolean {
   return PROPOSAL_TRANSITIONS[from].includes(to);
+}
+
+/**
+ * Whether a market may be linked to a proposal now (owner decision 2026-10-19): only to a 채택
+ * that has none — adopted with no market and not linked since. Once, so a proposal with a market
+ * never takes another; the status stays 채택. Not a move of PROPOSAL_TRANSITIONS: the database
+ * allows exactly this one change of a 채택 (migration 0032's trigger), whoever writes.
+ */
+export function canLinkProposalMarket(status: ProposalStatus, hasMarket: boolean): boolean {
+  return status === 'adopted' && !hasMarket;
 }
 
 /** Korea keeps no daylight saving since 1988: a Korean date is the UTC date nine hours on. */
@@ -162,6 +178,13 @@ const proposalCategorySchema = z.object({
   nameKo: z.string(),
 });
 
+/**
+ * The wished-for category as the operators see it: whether it is still in use (`isActive`). A
+ * wish retired since it was proposed is no default for a draft — the 채택 form leaves the draft's
+ * category to the operator and names the wish as retired (owner decision 2026-10-19).
+ */
+const adminProposalCategorySchema = proposalCategorySchema.extend({ isActive: z.boolean() });
+
 /** The fields a proposal was submitted with: the same for the proposer and the operators. */
 const proposalFields = {
   id: z.uuid(),
@@ -195,8 +218,8 @@ export type ProposalMarket = z.infer<typeof proposalMarketSchema>;
  * - `rejection` is there once 반려: the reason, the explanation, and for a 중복 the existing market
  *   while it is public (`duplicateMarket`, null while it is a draft).
  * - `adoption` is there once 채택: the memo, if any, and the market it led to while that market is
- *   public (`market`, null while it is a draft or when none was linked). Never a promise of Coin
- *   or of opening.
+ *   public (`market`, null while it is a draft or when none was linked — at the 채택 or later).
+ *   Never a promise of Coin or of opening.
  */
 export const proposalSchema = z
   .object({
@@ -229,13 +252,16 @@ export type AdminProposalMarket = z.infer<typeof adminProposalMarketSchema>;
 /**
  * A proposal on the admin screen (`GET /admin/proposals`, `GET /admin/proposals/:id` and the
  * writes' answers): what was submitted, who proposed it, who started the review and who decided it
- * and when (ADR-0069 decision 4 #77, 검토 흐름·기록), the reason or memo, the market, and the
+ * and when (ADR-0069 decision 4 #77, 검토 흐름·기록), the reason or memo, the market — and who
+ * linked it and when, when it was linked after the 채택 (owner decision 2026-10-19) — and the
  * operators' internal memo. Accounts are named as every admin record names one
- * (`AdminAccountActor`: id and current nickname).
+ * (`AdminAccountActor`: id and current nickname). The wished-for category says whether it is still
+ * in use.
  */
 export const adminProposalSchema = z
   .object({
     ...proposalFields,
+    category: adminProposalCategorySchema.nullable(),
     proposer: adminAccountActorSchema,
     reviewStartedAt: z.iso.datetime().nullable(),
     reviewStartedBy: adminAccountActorSchema.nullable(),
@@ -243,6 +269,9 @@ export const adminProposalSchema = z
     decidedAt: z.iso.datetime().nullable(),
     decidedBy: adminAccountActorSchema.nullable(),
     retractedAt: z.iso.datetime().nullable(),
+    /** A market linked after the 채택, once; null while none was (or it came with the 채택). */
+    marketLinkedAt: z.iso.datetime().nullable(),
+    marketLinkedBy: adminAccountActorSchema.nullable(),
     rejection: z
       .object({
         reason: proposalRejectionReasonSchema,
@@ -298,6 +327,18 @@ export const adoptProposalBodySchema = z
   })
   .meta({ id: 'AdoptProposalBody' });
 export type AdoptProposalBody = z.infer<typeof adoptProposalBodySchema>;
+
+/**
+ * `POST /admin/proposals/:id/market` (owner decision 2026-10-19): the market of a proposal adopted
+ * with none, linked later — a draft made from the proposal or an existing market, as at the 채택
+ * (`proposalAdoptionMarketSchema`, the same defaults and refusals). Once: a proposal that has a
+ * market — from the 채택 or from an earlier link — is refused. The status stays 채택, and the memo
+ * stays as the 채택 left it.
+ */
+export const linkProposalMarketBodySchema = z
+  .object({ market: proposalAdoptionMarketSchema })
+  .meta({ id: 'LinkProposalMarketBody' });
+export type LinkProposalMarketBody = z.infer<typeof linkProposalMarketBodySchema>;
 
 /**
  * `POST /admin/proposals/:id/reject` (접수 or 검토 → 반려): the reason, the explanation the proposer

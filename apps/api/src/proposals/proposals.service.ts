@@ -42,10 +42,13 @@ const { marketProposals } = schema;
  *    two submissions on one number — two tabs, or two accounts the number verified one after
  *    another — count one after the other, so neither limit is passed by a race.
  * 4. The date (today in Korea or later, at the database clock) and the category (active), then
- *    the limits (PROPOSAL_LIMITED), then the row, 접수.
+ *    the limits (PROPOSAL_LIMITED) — for a member: an operator's account is exempt (owner decision
+ *    2026-10-19, as from #187's frequency limits and the upload limit) — then the row, 접수.
  *
  * The form's checks come before the limits, so a refusal for the limits means the form itself
- * was fine; the onboarding and the restrictions come before both, as a guard's would.
+ * was fine; the onboarding and the restrictions come before both, as a guard's would. An
+ * operator's proposal is stored like a member's, the number's hash included: it is a proposal of
+ * that number, and a member account the number verifies later counts it (decision 7).
  */
 @Injectable()
 export class ProposalsService {
@@ -75,7 +78,7 @@ export class ProposalsService {
       }
       const categoryId = body.categoryId ?? null;
       if (categoryId !== null) await this.requireActiveCategory(tx, categoryId);
-      await this.assertWithinLimits(tx, phoneHash, now);
+      if (!(await this.isOperator(tx, userId))) await this.assertWithinLimits(tx, phoneHash, now);
       const background = body.background?.trim() ? body.background : null;
       const [row] = await tx
         .insert(marketProposals)
@@ -132,14 +135,14 @@ export class ProposalsService {
    * `POST /me/proposals/:id/retract`: 접수 → 철회, the proposer's one move (ADR-0069 decision 4
    * #77, 수정·철회). Under the row lock, so a review started meanwhile wins or waits: once 검토,
    * 채택 or 반려 — or 철회 already — it is refused naming `status`, as a market's wrong status is.
-   * Refused for an account that has not finished the onboarding (`assertOnboarded`, held to the
-   * write's snapshot as `create` holds it; OnboardedGuard asked first): #57-8 leaves such an
-   * account only reading. Not refused by a restriction (proposal-restrictions.ts): it takes the
-   * caller's own proposal back and adds nothing, as deleting one's own post does (#45-12).
+   * Signed in is enough (owner decision 2026-10-19): an account that has not finished the
+   * onboarding, or that a terms revision sent back to agree again, still retracts its own 접수
+   * proposal, as it still deletes its own post (#46, ADR-0073). Nor does a restriction refuse it
+   * (proposal-restrictions.ts): it takes the caller's own proposal back and adds nothing, as
+   * deleting one's own post does (#45-12).
    */
   async retract(userId: string, id: string): Promise<Proposal> {
     return this.db.transaction(async (tx) => {
-      await assertOnboarded(tx, userId);
       const [current] = await tx
         .select({ status: marketProposals.status })
         .from(marketProposals)
@@ -168,6 +171,20 @@ export class ProposalsService {
       .limit(1);
     if (!row) throw new AppError('NOT_FOUND', { message: 'Proposal not found' });
     return toProposal(row);
+  }
+
+  /**
+   * Whether the proposing account is an operator's (`profiles.role`), read in the submission's
+   * transaction rather than through AdminGuard's 60-second cache: an account revoked a moment ago
+   * is a member's again at once. Operators are exempt from the limits (owner decision 2026-10-19).
+   */
+  private async isOperator(tx: Tx, userId: string): Promise<boolean> {
+    const [profile] = await tx
+      .select({ role: schema.profiles.role })
+      .from(schema.profiles)
+      .where(eq(schema.profiles.userId, userId))
+      .limit(1);
+    return profile?.role === 'admin';
   }
 
   /**
