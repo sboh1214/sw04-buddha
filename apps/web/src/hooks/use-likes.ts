@@ -23,6 +23,7 @@ import {
   isStaleLikeRefusal,
   likedIn,
   movedLikeCount,
+  myLikesUnreadable,
   myPostLikesKey,
   postLikeCount,
   withCommentLikeCount,
@@ -327,4 +328,20 @@ export function useLike(postId: string, target: LikeTarget) {
     mine: { isFetched: mine.isFetched, liked: likedIn(mine.data, target) },
     toggle,
   };
+}
+
+/**
+ * Whether the post page of `postId` says that the reader's likes could not be read
+ * (`myLikesUnreadable`): the same one read every like button of the page shares, so the line
+ * shows exactly when the buttons are on the `unavailable` rung.
+ */
+export function useMyLikesUnreadable(postId: string): boolean {
+  const { data: session, isPending: sessionPending } = useSession();
+  const mine = useQuery(myPostLikesQueryOptions(postId, session));
+  return myLikesUnreadable({
+    sessionPending,
+    signedIn: session != null,
+    isFetched: mine.isFetched,
+    likes: mine.data,
+  });
 }

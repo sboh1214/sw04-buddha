@@ -44,7 +44,23 @@
  *    this transaction only. It reads what is committed: a cancellation or payment of that grant
  *    still in flight is not waited for, and the change is refused until asked again (ADR-0071
  *    7-26).
- * 4. What now holds the new number: one row or none (the account has no grant yet). `this_account`
+ * 4. The account's likes (#49, owner decision 2026-10-20, ADR-0076): «좋아요 한 번» counts per
+ *    verified number (ADR-0069 decision 7), so the account's own `post_likes` and `comment_likes`
+ *    rows — those whose account it is — go over to the new number's hash, and they no longer hold
+ *    the old number. Not the likes it inherited from a withdrawn account on the old number (that
+ *    account's rows, which it saw as its own, ADR-0076 7-3): they stay under the old hash and
+ *    become the next holder's, who sees them as its own and cannot add one to those targets
+ *    (ADR-0076 7-20, an owner question in 결과 4). Where the new number already liked a target
+ *    the account liked — a withdrawn account that held it — one like stays, the account's: that
+ *    other row is deleted first (only on the account's targets: the new number's likes of any
+ *    other target stay, and the account sees them as its own, ADR-0076 7-18), then the account's
+ *    rows are deleted and inserted again under the new hash with their account, target and time
+ *    (buddha_app has no UPDATE on them, migration 0035). A second DO block with the same two
+ *    SET LOCAL values; it answers `DO` and nothing to read. After step 1, which holds the
+ *    account's 본인확인 row: a like of the account's in flight has committed by then (it holds
+ *    that row FOR KEY SHARE, LikesService) and is moved too, and a later one waits for the COMMIT
+ *    and is made under the new hash. Run again, it moves nothing.
+ * 5. What now holds the new number: one row or none (the account has no grant yet). `this_account`
  *    t: recorded for this account. f: another account's paid grant holds it (`paid` t — after
  *    `UPDATE 1` a waiting one failed step 2 or 3), and `has_grant` says whether this account has a
  *    grant. It has none (`has_grant` f): it then gets no start Coin on this number while that row
@@ -83,6 +99,26 @@ DO $$BEGIN
         AND h.user_id <> pv.user_id AND h.granted_at IS NULL) THEN
     RAISE EXCEPTION 'refused: a waiting start grant of another account holds the new number';
   END IF;
+END$$;
+DO $$BEGIN
+  DELETE FROM post_likes o USING post_likes a
+    WHERE a.user_id = current_setting('phone_change.user_id') AND o.post_id = a.post_id
+      AND o.phone_hash = current_setting('phone_change.new_hash') AND o.user_id <> a.user_id;
+  DELETE FROM comment_likes o USING comment_likes a
+    WHERE a.user_id = current_setting('phone_change.user_id') AND o.comment_id = a.comment_id
+      AND o.phone_hash = current_setting('phone_change.new_hash') AND o.user_id <> a.user_id;
+  WITH moved AS (DELETE FROM post_likes
+      WHERE user_id = current_setting('phone_change.user_id')
+        AND phone_hash <> current_setting('phone_change.new_hash')
+      RETURNING post_id, user_id, created_at)
+    INSERT INTO post_likes (post_id, user_id, phone_hash, created_at)
+      SELECT post_id, user_id, current_setting('phone_change.new_hash'), created_at FROM moved;
+  WITH moved AS (DELETE FROM comment_likes
+      WHERE user_id = current_setting('phone_change.user_id')
+        AND phone_hash <> current_setting('phone_change.new_hash')
+      RETURNING comment_id, user_id, created_at)
+    INSERT INTO comment_likes (comment_id, user_id, phone_hash, created_at)
+      SELECT comment_id, user_id, current_setting('phone_change.new_hash'), created_at FROM moved;
 END$$;
 SELECT g.user_id = :'user_id' AS this_account, n.source, g.granted_at IS NOT NULL AS paid,
     EXISTS (SELECT 1 FROM start_grants o

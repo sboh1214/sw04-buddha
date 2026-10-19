@@ -1,20 +1,11 @@
 'use client';
 
-import {
-  Button,
-  Popover,
-  Portal,
-  Stack,
-  Text,
-  VisuallyHidden,
-  type ButtonProps,
-} from '@chakra-ui/react';
+import { Box, Button, Text, type ButtonProps } from '@chakra-ui/react';
 import type { Route } from 'next';
-import NextLink from 'next/link';
-import { forwardRef, useId, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
-import { useLike } from '@/hooks/use-likes';
+import { useLike, useMyLikesUnreadable } from '@/hooks/use-likes';
 import {
   type LikeButtonView,
   type LikeTarget,
@@ -22,6 +13,7 @@ import {
   likeCountText,
   likeFailureMessage,
   likePressAction,
+  likesUnreadableId,
 } from '@/lib/likes';
 import { loginPathBackTo } from '@/lib/next-path';
 import { postPath } from '@/lib/posts';
@@ -38,16 +30,16 @@ import { postPath } from '@/lib/posts';
  * stays '좋아요 N' either way (WAI-ARIA APG, as the watch button), with the heart filled and the
  * brand tint repeating the state for the eye — colour never carries it alone (PLAN 11.2).
  *
- * A visitor's press opens a small prompt: one sentence and 로그인, which comes back to this post
- * (`loginPathBackTo`, the comment box's way back). Nothing is remembered for after the login; the
- * reader presses again. The button is one element on every rung — the server's HTML and the
- * hydrating render are the pending rung, and a visitor's turns into the signed-out one once the
- * session answers, so a button that changed its element there would drop the keyboard focus a
- * visitor already put on it. The prompt therefore hangs beside the button rather than wrapping it
- * (no `Popover.Trigger`, whose popup attributes a member's toggle must not carry): the popover is
- * told the button is its trigger (`ids.trigger`), which places it, keeps a press of the button
- * from counting as a press outside, and gives the focus back to it on closing; the button carries
- * the popup's attributes on the signed-out rung only.
+ * A visitor's press goes straight to the login page, told to come back to this post
+ * (`loginPathBackTo`), as the watch button's does (owner decision 2026-10-20, answer 8); nothing
+ * is remembered for after the login, and the reader presses again. The button is one element on
+ * every rung — the server's HTML and the hydrating render are the pending rung, and a visitor's
+ * turns into the signed-out one once the session answers, so a keyboard focus a visitor already
+ * put on it stays.
+ *
+ * When the reader's likes could not be read, every button of the page shows its count and cannot
+ * be pressed, and the page says why in one line (`LikesUnreadableNotice`), which each button names
+ * as its description (owner decision 2026-10-20, answer 10).
  *
  * A member's press moves the toggle and the count at once (`updateLikeOptions`), and a failure
  * puts both back with a toast saying which change did not happen. The toast is raised from the
@@ -66,6 +58,7 @@ export function LikeButton({
   count: number;
 }) {
   const like = useLike(postId, target);
+  const router = useRouter();
   const view = likeButtonView({
     sessionPending: like.sessionPending,
     signedIn: like.signedIn,
@@ -74,27 +67,15 @@ export function LikeButton({
   });
   const look = target.kind === 'post' ? POST_LOOK : COMMENT_LOOK;
   const testId = target.kind === 'post' ? 'post-like' : 'comment-like';
-  const id = useId();
-  const ids = {
-    button: `${id}-like`,
-    prompt: `${id}-prompt`,
-    promptText: `${id}-prompt-text`,
-    reason: `${id}-reason`,
-  };
-  const [promptOpen, setPromptOpen] = useState(false);
-  const signedOut = view.kind === 'signed-out';
-  // The prompt belongs to the signed-out rung: a session that arrived meanwhile closes it, and a
-  // later sign-out does not find it open again.
-  if (!signedOut && promptOpen) setPromptOpen(false);
+  const unavailable = view.kind === 'unavailable';
 
   const press = () => {
-    if (signedOut) {
-      setPromptOpen((open) => !open);
+    const action = likePressAction(view);
+    if (action === null) return;
+    if (action.kind === 'login') {
+      router.push(loginPathBackTo(postPath(postId)) as Route);
       return;
     }
-    if (view.kind !== 'toggle') return;
-    const action = likePressAction(view.press);
-    if (action === null) return;
     // The toggle is drawn only once the session named the account.
     const accountId = like.accountId;
     if (accountId === undefined) return;
@@ -107,67 +88,61 @@ export function LikeButton({
   };
 
   return (
-    <>
-      <LikeToggle
-        id={ids.button}
-        view={view}
-        count={count}
-        look={look}
-        onClick={press}
-        data-testid={testId}
-        aria-haspopup={signedOut ? 'dialog' : undefined}
-        aria-expanded={signedOut ? promptOpen : undefined}
-        aria-controls={signedOut && promptOpen ? ids.prompt : undefined}
-        // Why it cannot be pressed (ADR-0076 7-15): the tooltip for the pointer, the description
-        // for a screen reader — every button of the page is on this rung at once, so no toast.
-        aria-describedby={view.kind === 'unavailable' ? ids.reason : undefined}
-        title={view.kind === 'unavailable' ? copy.likeMineUnavailable : undefined}
-      />
-      {view.kind === 'unavailable' && (
-        <VisuallyHidden id={ids.reason}>{copy.likeMineUnavailable}</VisuallyHidden>
-      )}
-      {signedOut && (
-        <Popover.Root
-          open={promptOpen}
-          onOpenChange={(details) => setPromptOpen(details.open)}
-          ids={{ trigger: ids.button, content: ids.prompt }}
-          lazyMount
-          unmountOnExit
-          positioning={{ placement: 'bottom-start' }}
+    <LikeToggle
+      view={view}
+      count={count}
+      look={look}
+      onClick={press}
+      data-testid={testId}
+      // Why it cannot be pressed (ADR-0076 7-15): the page's line of text, which a screen reader
+      // reads as the button's description, and the tooltip for a pointer on a button far from it.
+      aria-describedby={unavailable ? likesUnreadableId(postId) : undefined}
+      title={unavailable ? copy.likeMineUnavailable : undefined}
+    />
+  );
+}
+
+/**
+ * The page's one line saying the reader's likes could not be read (owner decision 2026-10-20,
+ * answer 10), while it is so (`useMyLikesUnreadable`): beside the post's 좋아요, or above the
+ * comments under a hidden or deleted post, whose own 좋아요 is gone — there only while a published
+ * comment takes one (`show`). Every like button of the page names the line as its description
+ * (`likesUnreadableId`); the line exists only while it is so, so no button names an empty one.
+ *
+ * The line is written into a status region that is on the page before it, empty — from the
+ * server's HTML on, as the comment box's limit is (comments-section.tsx): a polite live region
+ * that appears with its sentence already inside is easily not announced, and this line always
+ * appears after the page is drawn (the session is pending in the server's HTML). Empty, the region
+ * leaves the flow (`position: absolute`, still in the accessibility tree), so it adds no gap to
+ * the row or the column it stands in.
+ */
+export function LikesUnreadableNotice({
+  postId,
+  show = true,
+}: {
+  postId: string;
+  /** Whether the line may show here at all; the region stays mounted either way. */
+  show?: boolean;
+}) {
+  const unreadable = useMyLikesUnreadable(postId) && show;
+  return (
+    <Box
+      role="status"
+      aria-live="polite"
+      position={unreadable ? undefined : 'absolute'}
+      data-testid="likes-unreadable-status"
+    >
+      {unreadable && (
+        <Text
+          id={likesUnreadableId(postId)}
+          textStyle="bodySm"
+          color="fg.muted"
+          data-testid="likes-unreadable"
         >
-          <Portal>
-            <Popover.Positioner>
-              {/* Named by its sentence: the popover links a title only when it is in the page
-                  as the popover starts, and this content mounts on opening (lazyMount). */}
-              <Popover.Content
-                maxW="min(20rem, calc(100vw - 2rem))"
-                aria-labelledby={ids.promptText}
-                data-testid="like-sign-in"
-              >
-                <Popover.Arrow>
-                  <Popover.ArrowTip />
-                </Popover.Arrow>
-                <Popover.Body>
-                  <Stack gap="3" align="flex-start">
-                    <Text id={ids.promptText} textStyle="bodySm">
-                      {copy.likeSignInPrompt}
-                    </Text>
-                    <Button asChild size="sm" variant="outline">
-                      <NextLink
-                        href={loginPathBackTo(postPath(postId)) as Route}
-                        data-testid="like-sign-in-login"
-                      >
-                        {copy.login}
-                      </NextLink>
-                    </Button>
-                  </Stack>
-                </Popover.Body>
-              </Popover.Content>
-            </Popover.Positioner>
-          </Portal>
-        </Popover.Root>
+          {copy.likeMineUnavailable}
+        </Text>
       )}
-    </>
+    </Box>
   );
 }
 
@@ -196,18 +171,14 @@ type LikeToggleProps = ButtonProps & {
  * reader's state is read: a disabled button drops the keyboard focus it holds. The press waits
  * instead (`likePressAction`'s `wait`, and `LikeButton` sends nothing off the toggle rung), and
  * `aria-busy` says so. Only when the reader's likes could not be read is it `aria-disabled` (still
- * focusable). A ref and the rest of the props go through (the sign-in prompt's attributes).
+ * focusable). The rest of the props go through (the press, the description of that rung).
  */
-const LikeToggle = forwardRef<HTMLButtonElement, LikeToggleProps>(function LikeToggle(
-  { view, count, look, ...rest },
-  ref,
-) {
+function LikeToggle({ view, count, look, ...rest }: LikeToggleProps) {
   const pressed = view.kind === 'toggle' && view.pressed;
   const busy = view.kind === 'pending' || (view.kind === 'toggle' && view.press === 'wait');
   const variant = 'variant' in look ? look.variant : pressed ? 'subtle' : 'outline';
   return (
     <Button
-      ref={ref}
       {...look}
       variant={variant}
       colorPalette={pressed ? 'brand' : 'gray'}
@@ -221,7 +192,7 @@ const LikeToggle = forwardRef<HTMLButtonElement, LikeToggleProps>(function LikeT
       {likeCountText(count)}
     </Button>
   );
-});
+}
 
 /** The repo draws its own icons (watch-button.tsx); the label beside it carries the name. */
 function HeartIcon({ filled }: { filled: boolean }) {

@@ -17,9 +17,11 @@ import {
  * moving by one at each press; the page read again shows the same counts (in the server's HTML)
  * and the member's own presses; the post's community card carries the count. A post of an ended
  * market still takes likes; a deleted post's placeholder has no count and no button, while the
- * comments under it keep theirs. A visitor reads the counts and is asked to sign in when pressing
- * one, coming back to the post, the button keeping the keyboard focus as the session answers.
- * For both, the page hydrates without a mismatch. The once-per-person rule, the refusals, the
+ * comments under it keep theirs. A visitor reads the counts and a press goes straight to the login
+ * page, coming back to the post (owner decision 2026-10-20), the button keeping the keyboard focus
+ * as the session answers. For both, the page hydrates without a mismatch. When the member's own
+ * likes cannot be read, the counts stay, the buttons cannot be pressed, and one line on the page
+ * says why (owner decision 2026-10-20). The once-per-person rule, the refusals, the
  * onboarding and the concurrency are the API's tests (likes.controller.test.ts), and so is that a
  * like moves no Coin and writes no ledger entry (a balance read here could move under a start Coin
  * the worker pays meanwhile); this walks the screens.
@@ -184,7 +186,7 @@ test.describe('좋아요', () => {
     await expectToggle(commentLike(page, adminComment), 1, true);
   });
 
-  test('로그인하지 않은 방문자는 좋아요 수를 읽고, 누르면 이 글로 돌아오는 로그인 안내를 받는다', async ({
+  test('로그인하지 않은 방문자는 좋아요 수를 읽고, 누르면 곧바로 이 글로 돌아오는 로그인 화면으로 간다', async ({
     admin,
     page,
     request,
@@ -195,6 +197,7 @@ test.describe('좋아요', () => {
     const comment = await commentThroughApi(admin, postId, null, `방문자가 보는 댓글 ${tag}`);
     await likeThroughApi(admin, 'posts', postId);
     await likeThroughApi(admin, 'comments', comment);
+    const login = `/login?next=${encodeURIComponent(`/community/posts/${postId}`)}`;
 
     // The counts are the server's: in the HTML before any script runs.
     const html = await (await request.get(`/community/posts/${postId}`)).text();
@@ -218,56 +221,139 @@ test.describe('좋아요', () => {
     await postLike.focus();
     releaseSession();
     await page.unroute(isSessionRead);
-    // Not a toggle for a visitor: a button that asks them to sign in.
+    // Not a toggle for a visitor, and no popup: a button that goes to the login page.
     await expect(postLike).toHaveAttribute('data-view', 'signed-out');
     await expect(postLike).toBeFocused();
     await expect(postLike).not.toHaveAttribute('aria-pressed');
-    await expect(postLike).toHaveAttribute('aria-expanded', 'false');
+    await expect(postLike).not.toHaveAttribute('aria-haspopup');
+    await expect(postLike).not.toHaveAttribute('aria-expanded');
     await expect(postLike).toHaveText(likes(1));
-    await postLike.click();
-    const prompt = page.getByTestId('like-sign-in');
-    await expect(prompt).toBeVisible();
-    await expect(postLike).toHaveAttribute('aria-expanded', 'true');
-    // A dialog named by its sentence, so a screen reader landing on 로그인 hears why.
-    await expect(prompt).toHaveAttribute('role', 'dialog');
-    await expect(prompt).toHaveAccessibleName(copy.likeSignInPrompt);
-    await expect(prompt).toContainText(copy.likeSignInPrompt);
-    await expect(prompt.getByTestId('like-sign-in-login')).toHaveAttribute(
-      'href',
-      `/login?next=${encodeURIComponent(`/community/posts/${postId}`)}`,
-    );
-    // Inside a phone's width, with no sideways scroll.
-    const box = await prompt.boundingBox();
-    const viewport = page.viewportSize();
-    expect(box && viewport && box.x >= 0 && box.x + box.width <= viewport.width).toBe(true);
-    expect(
-      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
-    ).toBe(true);
-    await page.keyboard.press('Escape');
-    await expect(prompt).toHaveCount(0);
-    await expect(postLike).toBeFocused();
-    await expect(postLike).toHaveAttribute('aria-expanded', 'false');
-    await expect(postLike).toHaveText(likes(1));
-    // A second press of the button closes what the first opened.
-    await postLike.click();
-    await expect(prompt).toBeVisible();
-    await postLike.click();
-    await expect(prompt).toHaveCount(0);
     expect(hydration).toEqual([]);
+    // Owner decision 2026-10-20 (answer 8): straight to the login page, which comes back here —
+    // the watch button's way — with nothing counted.
+    await postLike.click();
+    await expect(page).toHaveURL(login);
+    await page.goBack();
+    await expect(postLike).toHaveText(likes(1));
 
-    // A comment's 좋아요 asks the same, and nothing was counted.
+    // A comment's 좋아요 goes the same way.
     const like = commentLike(page, comment);
     await expect(like).toHaveAttribute('data-view', 'signed-out');
-    await like.click();
-    await expect(page.getByTestId('like-sign-in')).toContainText(copy.likeSignInPrompt);
     await expect(like).toHaveText(likes(1));
-    await page.getByTestId('like-sign-in-login').click();
-    await expect(page).toHaveURL(`/login?next=${encodeURIComponent(`/community/posts/${postId}`)}`);
+    await like.click();
+    await expect(page).toHaveURL(login);
 
     // And the card's count, for everyone.
     await page.goto(`/community?q=${tag}`);
     await expect(page.getByTestId(`post-card-${postId}`).getByTestId('post-card-likes')).toHaveText(
       likes(1),
     );
+  });
+
+  test('내가 누른 좋아요를 불러오지 못하면 수는 보이고 단추는 눌리지 않으며, 까닭이 화면에 한 번 글로 보인다', async ({
+    admin,
+    page,
+  }) => {
+    const market = await createOpenMarket(admin);
+    const tag = freshTag();
+    await signUp(page, freshEmail());
+    const postId = await postThroughApi(page.request, market.id, `못 읽는 글 ${tag}`, tag);
+    const comment = await commentThroughApi(admin, postId, null, `운영자의 댓글 ${tag}`);
+    const reply = await commentThroughApi(admin, postId, comment, `운영자의 답글 ${tag}`);
+    await likeThroughApi(admin, 'posts', postId);
+
+    // The member's own likes cannot be read (each read, and its retries, fails) — answered only
+    // once `release` is called, so the page can be seen before the line appears.
+    const isMyLikesRead = (url: URL) => url.pathname.startsWith('/api/v1/me/likes/');
+    let release = () => {};
+    const failMyLikesOnRelease = async () => {
+      await page.unroute(isMyLikesRead);
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      await page.route(isMyLikesRead, async (route) => {
+        await released;
+        await route.fulfill({
+          status: 503,
+          json: { error: { code: 'INTERNAL', message: 'unavailable' } },
+        });
+      });
+    };
+    /**
+     * Opens the post, its member's likes held unanswered, and finds the page's status region for
+     * the line `within` the post's reactions or its comments: on the page and empty, so that the
+     * line written into it later is announced (a status that appears with its text inside often
+     * is not, ADR-0076 7-21). Then the reads fail, and the line appears in that very element.
+     */
+    const expectLineWrittenIntoItsRegion = async (within: Locator) => {
+      await failMyLikesOnRelease();
+      const asked = page.waitForRequest((request) => isMyLikesRead(new URL(request.url())));
+      await page.goto(`/community/posts/${postId}`);
+      const region = within.getByTestId('likes-unreadable-status');
+      await asked; // the browser's session answered, and the page is hydrated
+      await expect(region).toHaveAttribute('role', 'status');
+      await expect(region).toBeEmpty();
+      await expect(page.getByTestId('likes-unreadable-status')).toHaveCount(1);
+      const before = await region.elementHandle();
+      release();
+      const line = within.getByTestId('likes-unreadable');
+      await expect(line).toHaveText(copy.likeMineUnavailable);
+      expect(await line.evaluate((el, held) => el.parentElement === held, before)).toBe(true);
+    };
+    let presses = 0;
+    page.on('request', (request) => {
+      if (request.method() === 'PUT' && request.url().includes('/like')) presses += 1;
+    });
+    const postLike = page.getByTestId('post-like');
+    const notice = page.getByTestId('likes-unreadable');
+    await expectLineWrittenIntoItsRegion(page.getByTestId('post-reactions'));
+    // Owner decision 2026-10-20 (answer 10): the counts stay and cannot be pressed, and the
+    // reason is a line of text on the screen — one for the page, beside the post's 좋아요 — which
+    // every button names as its description.
+    await expect(notice).toHaveText(copy.likeMineUnavailable);
+    await expect(notice).toBeVisible();
+    await expect(notice).toHaveCount(1);
+    await expect(page.getByTestId('post-reactions').getByTestId('likes-unreadable')).toBeVisible();
+    for (const button of [postLike, commentLike(page, comment), commentLike(page, reply)]) {
+      await expect(button).toHaveAttribute('data-view', 'unavailable');
+      await expect(button).toHaveAttribute('aria-disabled', 'true');
+      await expect(button).toHaveAccessibleDescription(copy.likeMineUnavailable);
+    }
+    await expect(postLike).toHaveText(likes(1));
+    // A press sends nothing (by keyboard: the button is focusable, and Playwright's click would
+    // wait for an aria-disabled button to be enabled).
+    for (const button of [postLike, commentLike(page, comment)]) {
+      await button.focus();
+      await expect(button).toBeFocused();
+      await page.keyboard.press('Enter');
+    }
+    await expect(postLike).toHaveText(likes(1));
+    await expect(commentLike(page, comment)).toHaveText(likes(0));
+    expect(presses).toBe(0);
+    // Inside a phone's width, with no sideways scroll.
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true);
+
+    // Deleted with comments under it: the post's 좋아요 is gone, so the line stands above the
+    // comments that still take one.
+    await page.getByTestId('post-delete').click();
+    await page.getByTestId('post-delete-confirm').click();
+    await expect(page).toHaveURL('/community');
+    await expectLineWrittenIntoItsRegion(page.getByTestId('post-comments'));
+    await expect(page.getByTestId('post-deleted')).toBeVisible();
+    await expect(page.getByTestId('post-like')).toHaveCount(0);
+    await expect(notice).toHaveCount(1);
+    await expect(commentLike(page, comment)).toHaveAccessibleDescription(copy.likeMineUnavailable);
+
+    // Readable again: the line goes and the toggles come back.
+    await page.unroute(isMyLikesRead);
+    await page.reload();
+    await expectToggle(commentLike(page, comment), 0, false);
+    await expect(notice).toHaveCount(0);
+    // The region stays, empty, and names nothing: no button points at it.
+    await expect(page.getByTestId('likes-unreadable-status')).toBeEmpty();
+    await expect(commentLike(page, comment)).not.toHaveAttribute('aria-describedby');
+    expect(presses).toBe(0);
   });
 });

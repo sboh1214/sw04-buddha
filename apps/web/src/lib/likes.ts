@@ -20,8 +20,10 @@ import { type CommentPages } from './comments';
  * take likes, one's own too; only the count is shown — beside the post, the comment and on the
  * card — never who liked, and the reader sees whether they liked it themselves. A deleted or
  * hidden one takes none and shows no count (its placeholder has none); a post of an ended market
- * takes them. An account that finished the onboarding likes (#57-8); a visitor reads the counts.
- * Display only (D5, N05 §2): a count is never a score or a rank, pays nothing and sorts nothing.
+ * takes them. An account that finished the onboarding likes (#57-8); a visitor reads the counts,
+ * and a press takes them to the login page and back to the post (owner decision 2026-10-20,
+ * answer 8 — the watch button's way). Display only (D5, N05 §2): a count is never a score or a
+ * rank, pays nothing and sorts nothing.
  */
 
 // ---- cache key ---------------------------------------------------------------------------------
@@ -146,8 +148,10 @@ export type LikePress = 'like' | 'unlike' | 'wait';
  *   press sends nothing;
  * - `unavailable`: signed in, and the read of the reader's likes failed before any succeeded —
  *   the count, and a button that cannot be pressed (`aria-disabled`), since drawing it unpressed
- *   would tell a reader who came to take a like back that there is none;
- * - `signed-out`: a press opens the sign-in prompt (#49: a visitor does not like);
+ *   would tell a reader who came to take a like back that there is none; the page says why in a
+ *   line of text (`myLikesUnreadable`, owner decision 2026-10-20, answer 10);
+ * - `signed-out`: a press goes to the login page, told to come back to the post (#49: a visitor
+ *   does not like; owner decision 2026-10-20, answer 8);
  * - `toggle`: pressed or not, and what a press sends.
  */
 export type LikeButtonView =
@@ -192,19 +196,61 @@ export function likeButtonView(input: LikeButtonInput): LikeButtonView {
   return { kind: 'toggle', pressed, press: pressed ? 'unlike' : 'like' };
 }
 
+/** What a press of a like button asks for: the login page, or the state to send (`PUT …/like`). */
+export type LikePressAction = { kind: 'login' } | { kind: 'put'; liked: boolean };
+
 /**
- * The state a press of the toggle sends (`PUT …/like`), from its `press`; `null` sends nothing —
- * so the second click of a double-click on 좋아요 never sends an unlike behind the like.
+ * What a press of the button on rung `view` does. A visitor's goes to the login page, which comes
+ * back to the post (the watch button's `watchPressAction`); nothing is remembered for after it,
+ * so the reader presses again. A toggle's sends its `press`. `null` sends nothing: while the
+ * reader's state is unknown or unreadable, and while a press is on the wire — so the second
+ * click of a double-click on 좋아요 never sends an unlike behind the like.
  */
-export function likePressAction(press: LikePress): { liked: boolean } | null {
-  switch (press) {
-    case 'wait':
+export function likePressAction(view: LikeButtonView): LikePressAction | null {
+  switch (view.kind) {
+    case 'signed-out':
+      return { kind: 'login' };
+    case 'pending':
+    case 'unavailable':
       return null;
-    case 'like':
-      return { liked: true };
-    case 'unlike':
-      return { liked: false };
+    case 'toggle':
+      switch (view.press) {
+        case 'wait':
+          return null;
+        case 'like':
+          return { kind: 'put', liked: true };
+        case 'unlike':
+          return { kind: 'put', liked: false };
+      }
   }
+}
+
+// ---- the reader's likes unreadable ------------------------------------------------------------
+
+/**
+ * Whether the page says, in a line of text, that the reader's likes could not be read: signed in,
+ * and the read of `GET /me/likes/posts/:postId` failed before any succeeded — exactly when every
+ * like button of the page is on the `unavailable` rung (`likeButtonView`). Owner decision
+ * 2026-10-20, answer 10: the count stays, the buttons cannot be pressed, and the reason is on the
+ * screen, not only in a tooltip and a screen reader's description. One line for the page, not one
+ * per button: every button is on that rung at once.
+ */
+export function myLikesUnreadable(input: {
+  sessionPending: boolean;
+  signedIn: boolean;
+  isFetched: boolean;
+  likes: MyPostLikes | undefined;
+}): boolean {
+  return !input.sessionPending && input.signedIn && input.isFetched && input.likes === undefined;
+}
+
+/**
+ * The id of that line on the post page of `postId`: every like button on the `unavailable` rung
+ * names it as its description (`aria-describedby`). One per page, so the post's id makes it
+ * unique.
+ */
+export function likesUnreadableId(postId: string): string {
+  return `likes-unreadable-${postId.toLowerCase()}`;
 }
 
 // ---- refusals ----------------------------------------------------------------------------------

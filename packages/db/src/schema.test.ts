@@ -1391,7 +1391,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         (e) =>
           sqlState(e) === '23505' && sqlConstraint(e) === 'comment_likes_phone_hash_comment_id_pk',
       );
-      // The same account on another number — an operator changed it by hand — neither.
+      // The same account on another number — changed outside the operator's procedure, which
+      // carries the account's likes to the new number (ADR-0076) — neither.
       await expect(createPostLike(t.db, { postId: post.id, userId: a.id })).rejects.toSatisfy(
         (e) => sqlState(e) === '23505' && sqlConstraint(e) === 'post_likes_user_id_post_id_unique',
       );

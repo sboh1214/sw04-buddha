@@ -95,7 +95,7 @@ import { refreshFailed } from '@/lib/query-client';
 import { useSession } from '@/lib/use-session';
 import { CommentText } from './comment-text';
 import { HeldCommentText, useHeldCommentTexts } from './held-comment-text';
-import { LikeButton } from './like-button';
+import { LikeButton, LikesUnreadableNotice } from './like-button';
 import { PostByline } from './post-author';
 
 /** Who reads the page, once `GET /me` has said: the account the writes name and its public id. */
@@ -600,6 +600,14 @@ export function CommentsSection({
             </Alert.Content>
           </Alert.Root>
         )}
+        {/* Under a hidden or deleted post, whose own 좋아요 is gone, the line saying the reader's
+            likes could not be read stands above the comments that still take one (beside the
+            post's 좋아요 otherwise, post-screen.tsx). Its status region is mounted with the
+            placeholder, before any comment that takes one, so the line is announced when it
+            appears. A post gone from every view shows no comment, so no line either. */}
+        {!open && !gone && (
+          <LikesUnreadableNotice postId={post.id} show={threads.some(hasPublishedComment)} />
+        )}
         {gone ? null : comments.isPending ? (
           // Every visit starts here — the server's HTML too, the comments being the browser's to
           // read — so the wait is named for a screen reader as well as drawn: '불러오는 중' under
@@ -983,18 +991,23 @@ function CommentItem({
   );
 }
 
+/** Whether a thread holds a comment that takes a like: one published, the 댓글 or a 대댓글. */
+function hasPublishedComment(thread: CommentThread): boolean {
+  return [thread.comment, ...thread.replies].some((comment) => comment.state === 'published');
+}
+
 /**
  * A published comment: the byline (author, time, 수정됨 — the post's, ADR-0073), the text with its
  * links, and its actions — 좋아요 with its count for every reader (#49, ADR-0076: a visitor's press
- * asks them to sign in; one's own comment takes one too, and so does a comment under a hidden or
- * deleted post — the rule is the comment's own), 답글 where the thread takes one, and for its
- * author 수정 (in place, or the step left first) and 삭제 (asked first, with a session alone). A
- * placeholder has none of them. The author is told by the public id of `GET /me` (`isOwnPost`),
- * never in the HTML; the server checks the author on every write. When the edit closes — 취소, or
- * saved — the focus goes back to 수정, as a reply's goes back to 답글. An edit draft taken back
- * after a step opens the edit with it, and so does an edit's text held apart until a read brought
- * this 대댓글 within the 300 a read of the pages keeps (`reopened`, 오너 결정 2026-10-22 (2차) 답
- * 2·(3차) 답 1).
+ * goes to the login page and back; one's own comment takes one too, and so does a comment under a
+ * hidden or deleted post — the rule is the comment's own, owner decision 2026-10-20), 답글 where
+ * the thread takes one, and for its author 수정 (in place, or the step left first) and 삭제 (asked
+ * first, with a session alone). A placeholder has none of them. The author is told by the public
+ * id of `GET /me` (`isOwnPost`), never in the HTML; the server checks the author on every write.
+ * When the edit closes — 취소, or saved — the focus goes back to 수정, as a reply's goes back to
+ * 답글. An edit draft taken back after a step opens the edit with it, and so does an edit's text
+ * held apart until a read brought this 대댓글 within the 300 a read of the pages keeps (`reopened`,
+ * 오너 결정 2026-10-22 (2차) 답 2·(3차) 답 1).
  */
 function PublishedCommentItem({
   context,

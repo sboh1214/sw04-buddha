@@ -28,14 +28,19 @@ import { posts } from './posts.js';
  *   ADR-0071 hash, `PhoneHasher` in apps/api), and the primary key is (hash, target): an account
  *   that withdraws and signs up again with the same number cannot like the same target twice. The
  *   CHECK keeps it the 64 lower-case hex the hash is.
- * - (`user_id`, target) is UNIQUE as well: one like per account, should an operator change the
- *   account's number by hand (#57-3) after it liked.
+ * - (`user_id`, target) is UNIQUE as well: one like per account whatever hash its rows carry. The
+ *   operator's change of a member's number (#57-3, docs/OPERATIONS.md) moves the account's rows to
+ *   the new number's hash (owner decision 2026-10-20, ADR-0076), so they carry the account's
+ *   current number; this holds should a number ever change outside that procedure.
  * The constraints, not a read before the write, are what hold this when two requests like at once.
  *
  * A withdrawn account's likes stay and keep counting (#37-17): the account and the target are
  * RESTRICT, as the authors and posts of the comments are — the app deletes a like only when its
- * liker takes it back. buddha_app loses UPDATE (migration 0035): a like is never moved to another
- * target or account, only inserted or deleted.
+ * liker takes it back. buddha_app loses UPDATE (migration 0035): a row is never rewritten — moved to
+ * another target or account — only inserted or deleted. The operator's number change carries an
+ * account's likes to the new number that way: it deletes the rows and inserts them again under the
+ * new hash, with their account, target and time (OPERATOR_PHONE_CHANGE_SQL), and where the new
+ * number liked the same target already, the other row goes (one per number).
  */
 export const postLikes = pgTable(
   'post_likes',

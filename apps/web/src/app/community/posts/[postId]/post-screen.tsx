@@ -19,7 +19,7 @@ import NextLink from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useId, useRef, useState } from 'react';
 import { CommentsSection } from '@/components/post/comments-section';
-import { LikeButton } from '@/components/post/like-button';
+import { LikeButton, LikesUnreadableNotice } from '@/components/post/like-button';
 import { PostByline } from '@/components/post/post-author';
 import { PostBody } from '@/components/post/post-body';
 import { toaster } from '@/components/ui/toaster';
@@ -48,7 +48,8 @@ import { useSession } from '@/lib/use-session';
  * A published post: the title (an `h2` under the nav's `h1`; a post without one has its first line
  * as an `h2` only a screen reader sees, so the body's `h3`–`h5` always sit under one), the byline
  * (author, time, 수정됨), the body, its 좋아요 (#49, ADR-0076: the public count, and the reader's
- * own toggle once the browser knows who reads) and the market it belongs to — a link to its
+ * own toggle once the browser knows who reads — with a line beside it when the reader's likes could
+ * not be read, owner decision 2026-10-20, answer 10) and the market it belongs to — a link to its
  * detail, which opens in every status, and to the community list of that market. Its author also
  * gets 수정 and 삭제 (`isOwnPost`, by the public id of `GET /me`, so nothing of it is in the HTML). A
  * hidden or deleted post is its placeholder and its market only (#45-5) — no count and no 좋아요,
@@ -149,12 +150,13 @@ export function PostScreen({ postId, fallback }: { postId: string; fallback: Pos
             </HStack>
           </Stack>
           <PostBody document={post.body} />
-          <HStack gap="2" data-testid="post-reactions">
+          <HStack gap="3" flexWrap="wrap" data-testid="post-reactions">
             <LikeButton
               postId={post.id}
               target={{ kind: 'post', id: post.id }}
               count={post.likeCount}
             />
+            <LikesUnreadableNotice postId={post.id} />
           </HStack>
         </>
       )}

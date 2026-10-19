@@ -27,8 +27,8 @@ import { RetriedImage } from './retried-image';
  * thumbnail on the right (asked for again after a 429, `RetriedImage`), the byline (author, time,
  * 수정됨), '댓글 N' (#48, ADR-0074: the 댓글 and 대댓글 the public reads) and '좋아요 N' (#49,
  * ADR-0076). Both counts are the public ones, the same for every reader and drawn by the server;
- * the card says nothing of whether the reader liked the post (that is the post page's toggle,
- * ADR-0076 — a question for the owner), and it is not a button: the whole card opens the post.
+ * the card says nothing of whether the reader liked the post (that is the post page's toggle —
+ * owner decision 2026-10-20, ADR-0076), and it is not a button: the whole card opens the post.
  *
  * `showMarket={false}` leaves the market line out — the market's title and its status badge — for a
  * list that is one market's already: the market detail's 토론 (#47, owner decision 2026-10-20 6), where

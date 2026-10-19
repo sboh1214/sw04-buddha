@@ -35,11 +35,17 @@ interface Liker {
  * `comment_likes`). So a person's like is a row of the target with their account, or with their
  * number's hash when the account that made it has no 본인확인 record any more (it withdrew, #140):
  * an account that withdrew and came back on the same number sees its like and can take it back,
- * but cannot like again (decision 7). A row of an account that still holds its record is that
- * account's alone — an account whose number an operator changed by hand (#57-3) keeps its likes,
- * and whoever verifies its old number later neither sees them as theirs nor takes them back; that
- * newcomer's like of the same target hits the number's primary key and is answered as not liked,
- * nothing written (ADR-0076 7-3, a question for the owner).
+ * but cannot like again (decision 7; owner decision 2026-10-20, answer 3). An operator's change of
+ * a member's number (#57-3) moves the account's rows to the new number's hash in the same
+ * transaction (OPERATOR_PHONE_CHANGE_SQL, owner decision 2026-10-20, answer 2), so a live
+ * account's own rows carry its current number and its likes no longer hold the old one. The likes
+ * it inherited from a withdrawn account on its old number (that account's rows) are not moved:
+ * they stay under the old hash and become the old number's next holder's, who sees them as its
+ * own and cannot add one to those targets (ADR-0076 7-20, an owner question in 결과 4). A row of
+ * an account that still holds its record is that account's alone all the same: should a number
+ * ever change outside that procedure, its next holder neither sees nor takes back the live
+ * account's likes, and its like of the same target hits the number's primary key and is answered
+ * as not liked, nothing written (ADR-0076 7-3, kept as a guard).
  *
  * Writes and the target's state: a like is written under the target's row held shared
  * (`FOR SHARE`), as a new comment is (CommentsService), so the author's deletion and an operator's
@@ -109,7 +115,7 @@ export class LikesService {
    * Refused: a comment that is gone (a deleted 대댓글, a deleted 댓글 with nothing under it) or
    * unknown (NOT_FOUND), and a deleted 댓글's placeholder or a hidden comment (LIKE_NOT_ALLOWED).
    * Whether the post above it is hidden or deleted does not matter: the comment is read in full
-   * there (ADR-0074 7-5) and the rule names the target (ADR-0076, a question for the owner).
+   * there (ADR-0074 7-5) and the rule names the target (owner decision 2026-10-20, answer 4).
    */
   async setCommentLike(userId: string, commentId: string, liked: boolean): Promise<LikeState> {
     const { postComments, commentLikes } = schema;
@@ -240,11 +246,13 @@ export class LikesService {
 /**
  * A like row of `liker`'s: their account's, or their number's when the account that made it holds
  * no 본인확인 record any more — it withdrew (#140 deletes the record and keeps the likes, #37-17),
- * and the number's like carries on to whoever verifies it next (decision 7). Never another live
- * account's: after an operator moved that account to a new number (#57-3), its rows still carry
- * the old number's hash, and the next holder of the old number must not read them as its own or
- * take them back (ADR-0069 decision 4 #49: «본인은 자기가 눌렀는지 본다»). `phone_verifications`
- * is keyed by the account, so the check is one probe of its primary key per row.
+ * and the number's like carries on to whoever verifies it next (decision 7; owner decision
+ * 2026-10-20, answer 3). Never another live account's (ADR-0069 decision 4 #49: «본인은 자기가
+ * 눌렀는지 본다»). The operator's number change moves a live account's rows to its new number
+ * (owner decision 2026-10-20, answer 2), so no live account's row carries another account's
+ * number and matching the hash alone would answer the same; the check stays as a guard for a
+ * number changed outside that procedure (ADR-0076 7-3). `phone_verifications` is keyed by the
+ * account, so it is one probe of its primary key per row.
  */
 function likedBy(table: typeof schema.postLikes | typeof schema.commentLikes, liker: Liker): SQL {
   const byAccount = eq(table.userId, liker.userId);
@@ -260,8 +268,9 @@ function likedBy(table: typeof schema.postLikes | typeof schema.commentLikes, li
  * target, so either key's conflict leaves it unwritten — the same account's twin request that
  * committed meanwhile (the UNIQUE), or another account's like under the same number's hash (the
  * primary key). Read again then (READ COMMITTED: the read sees what committed before it): the
- * twin's row is the caller's like, so it stands; a live account's row on the caller's number is
- * not, so the answer says not liked and nothing was written (decision 7-3).
+ * twin's row is the caller's like, so it stands; a live account's row on the caller's number —
+ * which only a number changed outside the operator's procedure leaves — is not, so the answer
+ * says not liked and nothing was written (decision 7-3).
  */
 async function writeLike(
   liked: boolean,

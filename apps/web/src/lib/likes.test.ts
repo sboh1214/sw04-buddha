@@ -12,6 +12,7 @@ import {
   LIKES_KEY,
   type LikeButtonInput,
   type LikePress,
+  type LikePressAction,
   commentLikeCount,
   isStaleLikeRefusal,
   likeButtonView,
@@ -19,7 +20,9 @@ import {
   likeFailureMessage,
   likePressAction,
   likedIn,
+  likesUnreadableId,
   movedLikeCount,
+  myLikesUnreadable,
   myPostLikesKey,
   postLikeCount,
   withCommentLikeCount,
@@ -217,7 +220,7 @@ describe('likeButtonView (#49, ADR-0076)', () => {
     }
   });
 
-  it('asks a visitor to sign in, even with a previous account’s likes still in the cache', () => {
+  it('is a visitor’s button, even with a previous account’s likes still in the cache', () => {
     expect(likeButtonView({ ...settled, signedIn: false })).toEqual({ kind: 'signed-out' });
     expect(
       likeButtonView({ ...settled, signedIn: false, mine: { isFetched: true, liked: true } }),
@@ -246,14 +249,60 @@ describe('likeButtonView (#49, ADR-0076)', () => {
   });
 
   it('sends the state a press asks for, and nothing while one is on the wire', () => {
-    const sent: Record<LikePress, { liked: boolean } | null> = {
-      like: { liked: true },
-      unlike: { liked: false },
+    const sent: Record<LikePress, LikePressAction | null> = {
+      like: { kind: 'put', liked: true },
+      unlike: { kind: 'put', liked: false },
       wait: null,
     };
     for (const [press, action] of Object.entries(sent)) {
-      expect(likePressAction(press as LikePress), press).toEqual(action);
+      expect(
+        likePressAction({ kind: 'toggle', pressed: press === 'unlike', press: press as LikePress }),
+        press,
+      ).toEqual(action);
     }
+  });
+
+  it('takes a visitor’s press straight to the login page (owner decision 2026-10-20, answer 8)', () => {
+    // As the watch button's: no prompt in place, nothing remembered for after the login.
+    expect(likePressAction(likeButtonView({ ...settled, signedIn: false }))).toEqual({
+      kind: 'login',
+    });
+  });
+
+  it('sends nothing while the reader’s likes are unknown or unreadable', () => {
+    expect(likePressAction({ kind: 'pending' })).toBeNull();
+    expect(likePressAction({ kind: 'unavailable' })).toBeNull();
+  });
+});
+
+describe('myLikesUnreadable (owner decision 2026-10-20, answer 10)', () => {
+  const read = { sessionPending: false, signedIn: true, isFetched: true, likes: undefined };
+
+  it('says so exactly when the buttons are on the unavailable rung', () => {
+    const cases = [
+      read,
+      { ...read, sessionPending: true },
+      { ...read, signedIn: false },
+      { ...read, isFetched: false },
+      { ...read, likes: { postLiked: false, likedCommentIds: [] } },
+      { ...read, likes: { postLiked: true, likedCommentIds: [] } },
+    ];
+    for (const input of cases) {
+      const liked = input.likes === undefined ? undefined : input.likes.postLiked;
+      const view = likeButtonView({
+        sessionPending: input.sessionPending,
+        signedIn: input.signedIn,
+        mine: { isFetched: input.isFetched, liked },
+        saving: false,
+      });
+      expect(myLikesUnreadable(input), JSON.stringify(input)).toBe(view.kind === 'unavailable');
+    }
+    expect(myLikesUnreadable(read)).toBe(true);
+  });
+
+  it('names one line per post page', () => {
+    expect(likesUnreadableId('ABC-1')).toBe(likesUnreadableId('abc-1'));
+    expect(likesUnreadableId('abc-1')).not.toBe(likesUnreadableId('abc-2'));
   });
 });
 
