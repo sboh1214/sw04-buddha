@@ -90,6 +90,7 @@ const published = (
   },
   createdAt: '2026-10-19T00:00:00.000Z',
   editedAt: null,
+  likeCount: 0,
 });
 
 const thread = (comment: PublishedComment): CommentThread => ({

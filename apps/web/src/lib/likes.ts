@@ -1,0 +1,278 @@
+import { LIKE_NOT_ALLOWED_REASONS, type LikeNotAllowedReason } from '@buddha/shared';
+import { copy } from '@/copy';
+import {
+  type MyPostLikes,
+  type Post,
+  type PostComment,
+  isApiError,
+  isApiUnreachable,
+  isForAnotherAccount,
+} from './api';
+import { type CommentPages } from './comments';
+
+/**
+ * 좋아요 (#49, ADR-0076) as the post page and the cards draw them: the cache key of what the
+ * reader liked, the toggle's rungs, what a like's answer does to the counts held, and what a
+ * refusal says. Pure functions of the API's answers, apart from the components and the hooks so
+ * the node test runner reaches them (the rule `lib/watchlist.ts` follows).
+ *
+ * Owner decisions (ADR-0069 decision 4, the #49 rows; decision 7): a 근거 글, a 댓글 and a 대댓글
+ * take likes, one's own too; only the count is shown — beside the post, the comment and on the
+ * card — never who liked, and the reader sees whether they liked it themselves. A deleted or
+ * hidden one takes none and shows no count (its placeholder has none); a post of an ended market
+ * takes them. An account that finished the onboarding likes (#57-8); a visitor reads the counts.
+ * Display only (D5, N05 §2): a count is never a score or a rank, pays nothing and sorts nothing.
+ */
+
+// ---- cache key ---------------------------------------------------------------------------------
+
+/**
+ * What the reader liked (`GET /me/likes/posts/:postId`), one entry per post page: the reader's
+ * own, read with their cookie, so the root is in `PRIVATE_QUERY_ROOTS` (market-keys.ts) — never
+ * fetched on the server, never dehydrated, and reset with every other personal entry when the
+ * session changes (SessionCacheGuard). No key under it says whose it is. The counts are public
+ * and ride on the post, the comments and the cards (`likeCount`), the same for everyone.
+ */
+export const LIKES_KEY = ['likes'] as const;
+
+export const myPostLikesKey = (postId: string) =>
+  [...LIKES_KEY, 'post', postId.toLowerCase()] as const;
+
+// ---- what is liked -----------------------------------------------------------------------------
+
+/** What a like button is for: the post of the page, or a 댓글 or a 대댓글 under it. */
+export type LikeTarget = { kind: 'post'; id: string } | { kind: 'comment'; id: string };
+
+/**
+ * Whether the reader likes `target`, by what `GET /me/likes/posts/:postId` answered; undefined
+ * while nothing has answered. A comment written after that answer is in none of its ids, and
+ * nobody can have liked it from this account without this page writing it in (`withLiked`).
+ */
+export function likedIn(likes: MyPostLikes | undefined, target: LikeTarget): boolean | undefined {
+  if (likes === undefined) return undefined;
+  const id = target.id.toLowerCase();
+  return target.kind === 'post' ? likes.postLiked : likes.likedCommentIds.includes(id);
+}
+
+/** `likes` with the reader's state of `target` set to `liked`, every other target as it was. */
+export function withLiked(likes: MyPostLikes, target: LikeTarget, liked: boolean): MyPostLikes {
+  if (target.kind === 'post') return { ...likes, postLiked: liked };
+  const id = target.id.toLowerCase();
+  const others = likes.likedCommentIds.filter((held) => held !== id);
+  return { ...likes, likedCommentIds: liked ? [...others, id] : others };
+}
+
+// ---- the counts held ---------------------------------------------------------------------------
+
+/**
+ * The count a press shows before the server answers: one more for a like, one fewer for an
+ * unlike, nothing when the state does not change. Never below zero — a count read before
+ * somebody else's unlike may already be one short of what the reader remembers.
+ */
+export function movedLikeCount(count: number, from: boolean, to: boolean): number {
+  if (from === to) return count;
+  return Math.max(0, count + (to ? 1 : -1));
+}
+
+/** The post's count, while it is published (a placeholder has none). */
+export function postLikeCount(post: Post | undefined): number | undefined {
+  return post?.state === 'published' ? post.likeCount : undefined;
+}
+
+/** `post` with its count set to `count`; a placeholder, or no post, as it was. */
+export function withPostLikeCount(post: Post | undefined, count: number): Post | undefined {
+  return post?.state === 'published' ? { ...post, likeCount: count } : post;
+}
+
+/** The count of the published comment `commentId` among the pages held, if they hold it. */
+export function commentLikeCount(
+  pages: CommentPages | undefined,
+  commentId: string,
+): number | undefined {
+  const id = commentId.toLowerCase();
+  for (const page of pages?.pages ?? []) {
+    for (const thread of page.items) {
+      for (const comment of [thread.comment, ...thread.replies]) {
+        if (comment.id === id && comment.state === 'published') return comment.likeCount;
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The pages with the count of the published comment `commentId` — a 댓글 or a 대댓글, on any page
+ * — set to `count`. Every other comment, and a placeholder of the same id, as it was.
+ */
+export function withCommentLikeCount(
+  pages: CommentPages | undefined,
+  commentId: string,
+  count: number,
+): CommentPages | undefined {
+  if (pages === undefined) return undefined;
+  const id = commentId.toLowerCase();
+  const set = (comment: PostComment): PostComment =>
+    comment.id === id && comment.state === 'published' ? { ...comment, likeCount: count } : comment;
+  return {
+    ...pages,
+    pages: pages.pages.map((page) => ({
+      ...page,
+      items: page.items.map((thread) => ({
+        comment: set(thread.comment),
+        replies: thread.replies.map(set),
+      })),
+    })),
+  };
+}
+
+/**
+ * '좋아요 N': the count beside a post, a comment and on a card. A 0 is written as 0. Written with
+ * `String`, as '댓글 N' is (`commentCountText`): the card is drawn on the server and in the browser,
+ * whose number data never have to agree.
+ */
+export function likeCountText(count: number): string {
+  return `${copy.likeToggle} ${String(count)}`;
+}
+
+// ---- the toggle ------------------------------------------------------------------------------
+
+/** What a press of the toggle does once the reader's state is known. */
+export type LikePress = 'like' | 'unlike' | 'wait';
+
+/**
+ * What a like button draws. The count is drawn on every rung — it is public and in the server's
+ * HTML — and only the reader's own state waits for the browser:
+ * - `pending`: the session, or the reader's likes, not known yet — the count, unpressed, and a
+ *   press sends nothing;
+ * - `unavailable`: signed in, and the read of the reader's likes failed before any succeeded —
+ *   the count, and a button that cannot be pressed (`aria-disabled`), since drawing it unpressed
+ *   would tell a reader who came to take a like back that there is none;
+ * - `signed-out`: a press opens the sign-in prompt (#49: a visitor does not like);
+ * - `toggle`: pressed or not, and what a press sends.
+ */
+export type LikeButtonView =
+  | { kind: 'pending' }
+  | { kind: 'unavailable' }
+  | { kind: 'signed-out' }
+  | { kind: 'toggle'; pressed: boolean; press: LikePress };
+
+export interface LikeButtonInput {
+  /**
+   * better-auth has not said who is signed in yet. Always true on the server and through
+   * hydration (`useSession`), which is what keeps the post page's HTML the same for every reader.
+   */
+  sessionPending: boolean;
+  signedIn: boolean;
+  /**
+   * The reader's likes (`GET /me/likes/posts/:postId`) as `useQuery` reports them. `isFetched`: a
+   * read has answered — with the likes or with a failure — since the entry was made (a session
+   * change makes a new one); it stays true through later reads, so a toggle on screen is never
+   * swapped back for the pending rung while it holds the keyboard focus (the watch button's
+   * reason, lib/watchlist.ts). `liked` is undefined before the likes are known and after their
+   * first read failed; a later failed read keeps what the last good one said.
+   */
+  mine: { isFetched: boolean; liked: boolean | undefined };
+  /** A press of this button is on the wire. */
+  saving: boolean;
+}
+
+/**
+ * The button's rung. While a press is on the wire the toggle shows where it is going (the
+ * optimistic state) and a second press waits: two writes in flight could land in either order and
+ * leave the screen and the server disagreeing.
+ */
+export function likeButtonView(input: LikeButtonInput): LikeButtonView {
+  if (input.sessionPending) return { kind: 'pending' };
+  if (!input.signedIn) return { kind: 'signed-out' };
+  if (input.mine.liked === undefined) {
+    return input.mine.isFetched ? { kind: 'unavailable' } : { kind: 'pending' };
+  }
+  const pressed = input.mine.liked;
+  if (input.saving) return { kind: 'toggle', pressed, press: 'wait' };
+  return { kind: 'toggle', pressed, press: pressed ? 'unlike' : 'like' };
+}
+
+/**
+ * The state a press of the toggle sends (`PUT …/like`), from its `press`; `null` sends nothing —
+ * so the second click of a double-click on 좋아요 never sends an unlike behind the like.
+ */
+export function likePressAction(press: LikePress): { liked: boolean } | null {
+  switch (press) {
+    case 'wait':
+      return null;
+    case 'like':
+      return { liked: true };
+    case 'unlike':
+      return { liked: false };
+  }
+}
+
+// ---- refusals ----------------------------------------------------------------------------------
+
+/** The reason of a LIKE_NOT_ALLOWED answer (`{ reason }`), when it carries one. */
+function notAllowedReason(details: unknown): LikeNotAllowedReason | undefined {
+  if (typeof details !== 'object' || details === null || !('reason' in details)) return undefined;
+  const { reason } = details;
+  return LIKE_NOT_ALLOWED_REASONS.find((known) => known === reason);
+}
+
+/**
+ * A refusal's toast by what the press asked for: a like that cannot be added, or a like that
+ * cannot be taken back (the API refuses both on a deleted or hidden target, ADR-0076 7-6) — a
+ * reader who came to take theirs back is told so, not that they cannot press it.
+ */
+const NOT_ALLOWED_MESSAGES: Record<
+  'add' | 'remove',
+  Record<LikeTarget['kind'], Record<LikeNotAllowedReason, string>>
+> = {
+  add: {
+    post: { deleted: copy.errLikePostDeleted, hidden: copy.errLikePostHidden },
+    comment: { deleted: copy.errLikeCommentDeleted, hidden: copy.errLikeCommentHidden },
+  },
+  remove: {
+    post: { deleted: copy.errLikePostDeletedRemove, hidden: copy.errLikePostHiddenRemove },
+    comment: {
+      deleted: copy.errLikeCommentDeletedRemove,
+      hidden: copy.errLikeCommentHiddenRemove,
+    },
+  },
+};
+
+/**
+ * The toast of a press that failed. The optimistic state has been put back by then
+ * (`updateLikeOptions`), so it says which change did not happen, or why it could not:
+ * - the cookie is another account than the screen's (`expectedAccountId`, A-PG-24): the screen
+ *   is stale, as the watch button says;
+ * - LIKE_NOT_ALLOWED: the post or the comment was deleted (its placeholder) or hidden meanwhile —
+ *   that the like could not be added, or could not be taken back, as the press asked;
+ * - NOT_FOUND: it left every view;
+ * - ONBOARDING_REQUIRED: the onboarding is not done (a consent a revision asked for again,
+ *   #57-5) — the gate follows `['me']`;
+ * - a request that never reached the API, and anything else: the change that did not happen.
+ */
+export function likeFailureMessage(
+  error: unknown,
+  target: LikeTarget['kind'],
+  liked: boolean,
+): string {
+  if (isForAnotherAccount(error)) return copy.sessionChanged;
+  if (isApiError(error, 'LIKE_NOT_ALLOWED')) {
+    const reason = notAllowedReason(error.details);
+    if (reason !== undefined) return NOT_ALLOWED_MESSAGES[liked ? 'add' : 'remove'][target][reason];
+  }
+  if (isApiError(error, 'NOT_FOUND')) {
+    return target === 'post' ? copy.errPostGone : copy.errCommentGone;
+  }
+  if (isApiError(error, 'ONBOARDING_REQUIRED')) return copy.errPostOnboarding;
+  if (isApiUnreachable(error)) return copy.errNetwork;
+  return liked ? copy.likeAddFailed : copy.likeRemoveFailed;
+}
+
+/**
+ * Whether a refusal means the page is out of date — the post or the comment was deleted or
+ * hidden, or is gone — so the hooks read the post and its comments again and the page shows
+ * what they are now (the placeholder, with no count and no button, or the post's 404).
+ */
+export function isStaleLikeRefusal(error: unknown): boolean {
+  return isApiError(error, 'LIKE_NOT_ALLOWED') || isApiError(error, 'NOT_FOUND');
+}

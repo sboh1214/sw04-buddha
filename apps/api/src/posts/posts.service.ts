@@ -45,6 +45,7 @@ import { AppError } from '../common/errors/app-error.js';
 import { PG_UNIQUE_VIOLATION, isPgError } from '../common/errors/pg-error.js';
 import { keysetPredicate } from '../common/keyset.js';
 import { DB } from '../infra/db/db.provider.js';
+import { postLikeCountSql } from '../likes/like-queries.js';
 import { inCategory, likePattern } from '../markets/market.service.js';
 import { assertOnboarded } from '../onboarding/onboarded.guard.js';
 import { type Page } from '../wallet/wallet.service.js';
@@ -157,8 +158,9 @@ export class PostsService {
   constructor(@Inject(DB) private readonly db: Db) {}
 
   /**
-   * The columns both public reads select: the post, its author's public face, its market, and how
-   * many comments it shows (#48).
+   * The columns both public reads select: the post, its author's public face, its market, how
+   * many comments it shows (#48) and how many like it (#49). The same for every reader: whether
+   * the reader liked it is `GET /me/likes/posts/:postId`'s.
    */
   private readonly columns = {
     id: schema.posts.id,
@@ -183,6 +185,7 @@ export class PostsService {
       categoryNameKo: schema.categories.nameKo,
     },
     commentCount: visibleCommentCountSql(schema.posts.id),
+    likeCount: postLikeCountSql(schema.posts.id),
   };
 
   /**
@@ -286,6 +289,7 @@ export class PostsService {
         createdAt: row.createdAt.toISOString(),
         editedAt: row.editedAt?.toISOString() ?? null,
         commentCount: row.commentCount,
+        likeCount: row.likeCount,
       })),
       nextCursor: hasMore && last ? encodeKeyset({ createdAt: last.createdAt, id: last.id }) : null,
     };
@@ -293,7 +297,8 @@ export class PostsService {
 
   /**
    * `GET /posts/:postId`: the post page, in the state the public sees (`publicStateOf`). A post
-   * that is gone — deleted with nothing under it, or never there — is NOT_FOUND.
+   * that is gone — deleted with nothing under it, or never there — is NOT_FOUND. A placeholder
+   * carries no like count (#49: a deleted or hidden post takes no like).
    */
   async get(postId: string): Promise<Post> {
     const { posts, profiles, markets, categories } = schema;
@@ -326,6 +331,7 @@ export class PostsService {
           createdAt: row.createdAt.toISOString(),
           editedAt: row.editedAt?.toISOString() ?? null,
           commentCount,
+          likeCount: row.likeCount,
         };
     }
   }

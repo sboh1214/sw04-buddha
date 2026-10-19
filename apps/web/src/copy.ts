@@ -787,7 +787,7 @@ export const copy = {
   // --- community (#46, ADR-0073) ---
   // 근거 글(N05 §2)과 그것을 모은 커뮤니티 목록. 글 하나는 시장 하나에 달리고(#45-1), 목록은 최신순
   // 하나에 시장·카테고리 필터와 제목·본문 검색이 있다(#45-7). 누구나 읽고 온보딩을 마친 계정이 쓴다.
-  // 카드의 댓글 수는 #48이 더했고(아래 commentsHeading), 좋아요 수는 #49가 더한다(없는 수를 그리지 않는다).
+  // 카드의 댓글 수는 #48이(아래 commentsHeading), 좋아요 수는 #49가(아래 likeToggle) 더했다.
   communityTitle: '커뮤니티',
   communityWrite: '글쓰기',
   communityListLabel: '근거 글 목록',
@@ -1020,6 +1020,26 @@ export const copy = {
   commentDiscardTitle: '쓰던 내용 버리기',
   commentDiscardQuestion: '쓰던 내용이 사라집니다. 버릴까요?',
   commentDiscardConfirm: '버리기',
+
+  // --- likes (#49, ADR-0076) ---
+  // 근거 글과 댓글·답글의 좋아요. 수만 보이고 누가 눌렀는지는 보이지 않으며, 본인은 자기가 눌렀는지를
+  // 단추의 눌림으로 본다. 자기 글에도 누를 수 있다. 수는 표시일 뿐 점수나 Coin이 되지 않고 목록의
+  // 차례도 바꾸지 않는다(D5). 지우거나 숨긴 글·댓글의 자리표시에는 수도 단추도 없다.
+  likeToggle: '좋아요',
+  likeSignInPrompt: '좋아요를 누르려면 로그인해 주세요.',
+  likeAddFailed: '좋아요를 누르지 못했습니다. 잠시 후 다시 시도해 주세요.',
+  likeRemoveFailed: '좋아요를 취소하지 못했습니다. 잠시 후 다시 시도해 주세요.',
+  errLikePostDeleted: '삭제된 글에는 좋아요를 누를 수 없습니다.',
+  errLikePostHidden: '운영 정책에 따라 숨긴 글에는 좋아요를 누를 수 없습니다.',
+  errLikeCommentDeleted: '삭제된 댓글에는 좋아요를 누를 수 없습니다.',
+  errLikeCommentHidden: '운영 정책에 따라 숨긴 댓글에는 좋아요를 누를 수 없습니다.',
+  // 취소도 같은 거절이다(ADR-0076 7-6). 누른 좋아요는 그대로 남는다.
+  errLikePostDeletedRemove: '삭제된 글의 좋아요는 취소할 수 없습니다.',
+  errLikePostHiddenRemove: '운영 정책에 따라 숨긴 글의 좋아요는 취소할 수 없습니다.',
+  errLikeCommentDeletedRemove: '삭제된 댓글의 좋아요는 취소할 수 없습니다.',
+  errLikeCommentHiddenRemove: '운영 정책에 따라 숨긴 댓글의 좋아요는 취소할 수 없습니다.',
+  // 내가 누른 것을 처음 읽지 못해 단추를 누를 수 없을 때, 단추가 가리키는 까닭(ADR-0076 7-15).
+  likeMineUnavailable: '내가 누른 좋아요를 불러오지 못했습니다.',
 
   // 관리자 시장 폼의 미리보기 (Q-M3-6): 실제 카드·규칙 컴포넌트를 그대로 그린다.
   adminMarketPreview: '미리보기',

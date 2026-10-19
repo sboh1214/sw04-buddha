@@ -33,8 +33,8 @@ import { firstValue } from './market-ssr';
  * in the title and the text (#45-7); anyone reads, signed in or not, and an account that finished
  * the onboarding writes (#57-8). A card is the title, two lines of the text without formatting, a
  * small square thumbnail of the first image, the author, the time and the market's title (owner
- * decision 2026-10-18) and the comment count (#48, lib/comments.ts); the like count comes with #49
- * and is not drawn before it.
+ * decision 2026-10-18), the comment count (#48, lib/comments.ts) and the like count (#49,
+ * lib/likes.ts). Likes never order the list: newest first stays the only order (D5, #45-7).
  */
 
 /** The community list's address (N02 §2: one of the three top-level areas, #16). */

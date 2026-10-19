@@ -1,5 +1,6 @@
 import * as z from 'zod';
 import { uuidSchema } from './api/uuid.js';
+import { likeCountSchema } from './like.js';
 import { postAuthorSchema } from './post.js';
 import { codePointLength, postLinkHref } from './post-document.js';
 
@@ -237,7 +238,8 @@ export function commentSegments(text: string): CommentSegment[] {
 /**
  * A comment the public reads: its text, its author (the same public face as a post's, ADR-0069
  * decision 5: public id, current nickname, image, 운영자 mark), when it was written and last edited
- * ('수정됨'). `parentId` is the 댓글 a 대댓글 hangs under, null for a 댓글.
+ * ('수정됨'), and how many like it (#49 — the same for everyone; a placeholder shows none).
+ * `parentId` is the 댓글 a 대댓글 hangs under, null for a 댓글.
  */
 export const publishedCommentSchema = z
   .object({
@@ -248,6 +250,7 @@ export const publishedCommentSchema = z
     author: postAuthorSchema,
     createdAt: z.iso.datetime(),
     editedAt: z.iso.datetime().nullable(),
+    likeCount: likeCountSchema,
   })
   .meta({ id: 'PublishedComment' });
 export type PublishedComment = z.infer<typeof publishedCommentSchema>;

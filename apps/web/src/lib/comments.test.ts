@@ -85,6 +85,7 @@ const comment = (id: string, parentId: string | null = null, body = id): Publish
   author,
   createdAt: '2026-10-19T00:00:00.000Z',
   editedAt: null,
+  likeCount: 0,
 });
 
 const thread = (

@@ -255,10 +255,16 @@ describe('a comment’s answers and requests', () => {
       author,
       createdAt,
       editedAt: null,
+      likeCount: 2,
     } as const;
     expect(postCommentSchema.parse(published)).toEqual(published);
+    // The like count (#49) is a count, on the published comment only.
+    for (const likeCount of [-1, 0.5, undefined]) {
+      expect(postCommentSchema.safeParse({ ...published, likeCount }).success).toBe(false);
+    }
     for (const state of ['deleted', 'hidden'] as const) {
       expect(postCommentSchema.parse({ state, id: ID })).toEqual({ state, id: ID });
+      expect(postCommentSchema.parse({ state, id: ID, likeCount: 3 })).toEqual({ state, id: ID });
     }
     const reply = { ...published, id: OTHER, parentId: ID, editedAt: createdAt };
     const thread = {

@@ -23,6 +23,7 @@ export * from './enums.js';
 export * from './fills.js';
 export * from './interest-categories.js';
 export * from './ledger.js';
+export * from './likes.js';
 export * from './market-events.js';
 export * from './market-links.js';
 export * from './market-searches.js';

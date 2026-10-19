@@ -40,6 +40,7 @@ describe('PRIVATE_DATA (#113)', () => {
         'time-zone',
         'watchlist',
         'search-history',
+        'likers',
         'identity-verification',
         'consent',
         'former-nickname',
@@ -107,6 +108,11 @@ describe('findPrivateField', () => {
     ['lastSearchedAt', 'search-history'],
     ['userQueries', 'search-history'],
     ['mySearch', 'search-history'],
+    ['likedByMe', 'likers'],
+    ['isLiked', 'likers'],
+    ['liked_by', 'likers'],
+    ['likerIds', 'likers'],
+    ['likers', 'likers'],
     ['identityVerification', 'identity-verification'],
     ['verification', 'identity-verification'],
     ['verifiedAt', 'identity-verification'],
@@ -213,6 +219,10 @@ describe('findPrivateField', () => {
     // A nickname on its own is public (an author's, #37-5's profile); only a former one is not.
     'nickname',
     'authorNickname',
+    // A like's count is public beside a post and a comment (#49); only who liked is not.
+    'likeCount',
+    'like_count',
+    'likes',
   ])('lets %s through', (name) => {
     expect(findPrivateField(name)).toEqual([]);
   });

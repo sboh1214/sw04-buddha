@@ -44,6 +44,9 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<ErrorCode, number>> = {
   // comment's state refuses the edit (hidden by an operator): conflicts with that state.
   COMMENT_NOT_ALLOWED: HttpStatus.CONFLICT,
   COMMENT_NOT_EDITABLE: HttpStatus.CONFLICT,
+  // The target's state refuses the like (a deleted post's or 댓글's placeholder, or hidden, #49):
+  // a conflict with that state.
+  LIKE_NOT_ALLOWED: HttpStatus.CONFLICT,
   INTERNAL: HttpStatus.INTERNAL_SERVER_ERROR,
 };
 

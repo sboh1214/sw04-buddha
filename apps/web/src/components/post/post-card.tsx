@@ -14,6 +14,7 @@ import NextLink from 'next/link';
 import { copy } from '@/copy';
 import { type PostSummary } from '@/lib/api';
 import { commentCountText } from '@/lib/comments';
+import { likeCountText } from '@/lib/likes';
 import { MARKET_STATUS_LABEL, MARKET_STATUS_PALETTE } from '@/lib/market-admin';
 import { postFirstLine, postPath } from '@/lib/posts';
 import { PostByline } from './post-author';
@@ -24,8 +25,10 @@ import { RetriedImage } from './retried-image';
  * above — a link to its detail, which opens in every status (#46's acceptance criteria) — the
  * post's title, two lines of its text without formatting, the first image as a small square
  * thumbnail on the right (asked for again after a 429, `RetriedImage`), the byline (author, time,
- * 수정됨) and '댓글 N' (#48, ADR-0074: the 댓글 and 대댓글 the public reads). The like count the
- * owner listed comes with #49; nothing is drawn for a count that does not exist yet.
+ * 수정됨), '댓글 N' (#48, ADR-0074: the 댓글 and 대댓글 the public reads) and '좋아요 N' (#49,
+ * ADR-0076). Both counts are the public ones, the same for every reader and drawn by the server;
+ * the card says nothing of whether the reader liked the post (that is the post page's toggle,
+ * ADR-0076 — a question for the owner), and it is not a button: the whole card opens the post.
  *
  * `showMarket={false}` leaves the market line out — the market's title and its status badge — for a
  * list that is one market's already: the market detail's 토론 (#47, owner decision 2026-10-20 6), where
@@ -141,6 +144,15 @@ export function PostCard({
               data-testid="post-card-comments"
             >
               {commentCountText(post.commentCount)}
+            </Text>
+            <Text
+              as="span"
+              textStyle="bodyXs"
+              color="fg.muted"
+              whiteSpace="nowrap"
+              data-testid="post-card-likes"
+            >
+              {likeCountText(post.likeCount)}
             </Text>
           </HStack>
         </Stack>

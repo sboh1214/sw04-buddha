@@ -11,6 +11,7 @@ import { HealthController } from './health/health.controller.js';
 import { DbModule } from './infra/db/db.module.js';
 import { RedisModule } from './infra/redis/redis.module.js';
 import { JobsModule } from './jobs/jobs.module.js';
+import { LikesModule } from './likes/likes.module.js';
 import { MarketsModule } from './markets/markets.module.js';
 import { MediaModule } from './media/media.module.js';
 import { MeModule } from './me/me.module.js';
@@ -71,6 +72,9 @@ import { WatchlistModule } from './watchlist/watchlist.module.js';
     // 댓글·대댓글 (#48): a post's comments and their authors' writes. After the posts, whose
     // routes it follows in the document, and the onboarding, whose guard it uses.
     CommentsModule,
+    // 좋아요 (#49): likes of posts and comments, and what the caller liked on a post page. After the
+    // comments, whose routes it follows in the document, and the onboarding, whose guard it uses.
+    LikesModule,
   ],
   controllers: [HealthController],
 })
