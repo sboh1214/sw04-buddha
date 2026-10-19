@@ -49,6 +49,7 @@ import { SessionGuard } from '../auth/session.guard.js';
 import { ApiPage } from '../common/interceptors/response-envelope.interceptor.js';
 import { ApiData, ApiErrors, ApiPageOf } from '../common/openapi/api-response.decorators.js';
 import { CURSOR_QUERY_PARAMS } from '../common/openapi/cursor-query.js';
+import { OnboardedGuard } from '../onboarding/onboarded.guard.js';
 import { SESSION_SECURITY_SCHEME } from '../openapi/document.js';
 import { PaidCoinSalesGuard } from '../payments/paid-coin-sales.guard.js';
 import { ChargePackageService } from '../wallet/charge-package.service.js';
@@ -58,12 +59,14 @@ import { PaymentRefundService } from './payment-refund.service.js';
 
 /**
  * PLAN 7.3 / 12. Guards run in order, so SessionGuard fills `request.auth` before AdminGuard
- * reads the role (401 without a session, 403 for a non-admin).
+ * reads the role (401 without a session, 403 for a non-admin), and OnboardedGuard then refuses an
+ * admin that has not finished the onboarding (409 ONBOARDING_REQUIRED, 오너 결정 2026-10-19,
+ * ADR-0072) — after the role, so a member hears 403 whatever its onboarding.
  */
 @ApiTags('admin')
 @ApiCookieAuth(SESSION_SECURITY_SCHEME)
 @Controller('admin')
-@UseGuards(SessionGuard, AdminGuard)
+@UseGuards(SessionGuard, AdminGuard, OnboardedGuard)
 export class AdminController {
   constructor(
     private readonly admin: AdminService,
@@ -79,7 +82,7 @@ export class AdminController {
     summary: 'Every charge package, active or not',
   })
   @ApiData(chargePackageSchema.array())
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED')
   listChargePackages(): Promise<ChargePackage[]> {
     return this.packages.listAll();
   }
@@ -87,7 +90,7 @@ export class AdminController {
   @Post('charge-packages')
   @ApiOperation({ operationId: 'adminCreateChargePackage', summary: 'Add a charge package' })
   @ApiData(chargePackageSchema, 201)
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'VALIDATION_ERROR')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'VALIDATION_ERROR')
   createChargePackage(
     @CurrentUser() admin: SessionUser,
     @Body({ schema: createChargePackageBodySchema }) body: CreateChargePackageBody,
@@ -101,7 +104,7 @@ export class AdminController {
     summary: 'Change the amount, price, order or availability',
   })
   @ApiData(chargePackageSchema)
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
   updateChargePackage(
     @CurrentUser() admin: SessionUser,
     @Param('id', { schema: uuidParamSchema }) id: string,
@@ -116,7 +119,7 @@ export class AdminController {
     operationId: 'adminDeleteChargePackage',
     summary: 'Remove a package (past payments keep their own amount and price)',
   })
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
   async deleteChargePackage(
     @CurrentUser() admin: SessionUser,
     @Param('id', { schema: uuidParamSchema }) id: string,
@@ -130,7 +133,7 @@ export class AdminController {
   @ApiQuery(CURSOR_QUERY_PARAMS[0])
   @ApiQuery(CURSOR_QUERY_PARAMS[1])
   @ApiPageOf(couponSchema)
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'VALIDATION_ERROR')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'VALIDATION_ERROR')
   async listCoupons(
     @Query({ schema: cursorQuerySchema }) query: CursorQuery,
   ): Promise<ApiPage<Coupon>> {
@@ -144,7 +147,7 @@ export class AdminController {
     summary: 'Issue a coupon (the code is generated when omitted)',
   })
   @ApiData(couponSchema, 201)
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'VALIDATION_ERROR')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'VALIDATION_ERROR')
   createCoupon(
     @CurrentUser() admin: SessionUser,
     @Body({ schema: createCouponBodySchema }) body: CreateCouponBody,
@@ -158,7 +161,7 @@ export class AdminController {
     summary: 'Disable a coupon or change its cap, expiry or memo',
   })
   @ApiData(couponSchema)
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
   updateCoupon(
     @CurrentUser() admin: SessionUser,
     @Param('id', { schema: uuidParamSchema }) id: string,
@@ -173,7 +176,7 @@ export class AdminController {
   @ApiQuery(CURSOR_QUERY_PARAMS[0])
   @ApiQuery(CURSOR_QUERY_PARAMS[1])
   @ApiPageOf(adminUserSchema)
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'VALIDATION_ERROR')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'VALIDATION_ERROR')
   async listUsers(
     @Query({ schema: adminUserQuerySchema }) query: AdminUserQuery,
   ): Promise<ApiPage<AdminUser>> {
@@ -191,6 +194,7 @@ export class AdminController {
   @ApiErrors(
     'UNAUTHENTICATED',
     'FORBIDDEN',
+    'ONBOARDING_REQUIRED',
     'NOT_FOUND',
     'VALIDATION_ERROR',
     'INSUFFICIENT_BALANCE',
@@ -208,7 +212,7 @@ export class AdminController {
   @ApiQuery(CURSOR_QUERY_PARAMS[0])
   @ApiQuery(CURSOR_QUERY_PARAMS[1])
   @ApiPageOf(adminPaymentSchema)
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'VALIDATION_ERROR')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'VALIDATION_ERROR')
   async listPayments(
     @Query({ schema: cursorQuerySchema }) query: CursorQuery,
   ): Promise<ApiPage<AdminPayment>> {
@@ -238,6 +242,7 @@ export class AdminController {
   @ApiErrors(
     'UNAUTHENTICATED',
     'FORBIDDEN',
+    'ONBOARDING_REQUIRED',
     'NOT_FOUND',
     'VALIDATION_ERROR',
     'INSUFFICIENT_BALANCE',
@@ -262,7 +267,7 @@ export class AdminController {
   @ApiQuery(CURSOR_QUERY_PARAMS[0])
   @ApiQuery(CURSOR_QUERY_PARAMS[1])
   @ApiPageOf(auditFailureSchema)
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'VALIDATION_ERROR')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'VALIDATION_ERROR')
   async listAuditFailures(
     @Query({ schema: cursorQuerySchema }) query: CursorQuery,
   ): Promise<ApiPage<AuditFailure>> {

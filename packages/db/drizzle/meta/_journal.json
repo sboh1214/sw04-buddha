@@ -225,6 +225,13 @@
       "when": 1792328205997,
       "tag": "0031_start_grants",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1792396816811,
+      "tag": "0032_onboarding",
+      "breakpoints": true
     }
   ]
 }

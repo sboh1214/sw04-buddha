@@ -2,10 +2,10 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import { schema, type Db } from '@buddha/db';
-import { isNoEmailAddress } from '@buddha/shared';
+import { isNoEmailAddress, setPasswordCallbackURL } from '@buddha/shared';
 import { AppError } from '../common/errors/app-error.js';
 import { DB } from '../infra/db/db.provider.js';
-import { AUTH, type Auth, CREDENTIAL_PROVIDER_ID, SET_PASSWORD_PATH } from './auth.js';
+import { AUTH, type Auth, CREDENTIAL_PROVIDER_ID } from './auth.js';
 
 /**
  * Sign-up (ADR-0024, PLAN 17 Q7): create the user with NO password and mail the
@@ -29,7 +29,13 @@ export class RegistrationService {
     @Inject(DB) private readonly db: Db,
   ) {}
 
-  async register(email: string): Promise<void> {
+  /**
+   * `next` (already a path on this origin, `nextPathSchema`) is where the visitor was before
+   * signing up (#58, ADR-0069 decision 1 #57-9). It rides in the link's `callbackURL`, so
+   * /set-password — wherever the link is opened — sends the account on there, and the onboarding
+   * gate from there to its steps and back.
+   */
+  async register(email: string, next?: string): Promise<void> {
     const address = email.trim().toLowerCase();
     if (isNoEmailAddress(address)) {
       throw new AppError('VALIDATION_ERROR', {
@@ -45,7 +51,7 @@ export class RegistrationService {
         email: address,
         password: randomBytes(24).toString('base64url'),
         name: address.split('@')[0] ?? address,
-        callbackURL: SET_PASSWORD_PATH,
+        callbackURL: setPasswordCallbackURL(next),
       },
     });
     const removed = await this.db

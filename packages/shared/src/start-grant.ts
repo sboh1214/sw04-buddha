@@ -27,8 +27,14 @@ export const START_GRANT_MAX_COIN = 1_000_000;
  * - `pending`: the account is eligible and its number recorded, but the amount is undecided; it is
  *   paid when the release setting gets a value (ADR-0069 decision 4 #70).
  * - `granted`: paid, once, with the amount read when it was paid.
+ * - `number_used`: none for this account: its onboarding asked for the grant (#58's nickname step)
+ *   but the verified number counts for another account's grant (`start_grant_numbers`), paid or
+ *   waiting — typically a paid one whose account withdrew before this one verified the number
+ *   (#57-1·#57-17). Not a grant record (`start_grants` has no row for the account); the
+ *   onboarding's notice screen says '이 번호로는 이미 시작 Coin을 받았습니다' (오너 결정
+ *   2026-10-19, ADR-0072).
  */
-export const START_GRANT_STATUSES = ['pending', 'granted'] as const;
+export const START_GRANT_STATUSES = ['pending', 'granted', 'number_used'] as const;
 export type StartGrantStatus = (typeof START_GRANT_STATUSES)[number];
 export const startGrantStatusSchema = z.enum(START_GRANT_STATUSES);
 
@@ -44,17 +50,18 @@ export const START_GRANT_NUMBER_SOURCES = ['grant', 'operator'] as const;
 export type StartGrantNumberSource = (typeof START_GRANT_NUMBER_SOURCES)[number];
 
 /**
- * `Me.startGrant`: this account's start grant. `amountCoin` and `grantedAt` are null exactly while
- * it is `pending`. An account with no grant record (not yet eligible, or verified with a number
- * that already received one) has `startGrant: null`, and so has one whose waiting grant was
- * cancelled when it withdrew (owner decision 2026-10-18) — a withdrawn account reads nothing.
+ * `Me.startGrant`: this account's start grant. `amountCoin` and `grantedAt` are set exactly when it
+ * is `granted`. `number_used` says the account gets none because its number already did; an
+ * account whose onboarding has not asked for the grant yet has `startGrant: null`, and so has one
+ * whose waiting grant was cancelled when it withdrew (owner decision 2026-10-18) — a withdrawn
+ * account reads nothing.
  */
 export const startGrantSchema = z
   .object({
     status: startGrantStatusSchema,
-    /** The Coin paid (the START_GRANT ledger entry's amount); null while pending. */
+    /** The Coin paid (the START_GRANT ledger entry's amount); null unless granted. */
     amountCoin: coinAmountSchema.nullable(),
-    /** When it was paid (the ledger entry's time); null while pending. */
+    /** When it was paid (the ledger entry's time); null unless granted. */
     grantedAt: z.iso.datetime().nullable(),
   })
   .meta({ id: 'StartGrant' });

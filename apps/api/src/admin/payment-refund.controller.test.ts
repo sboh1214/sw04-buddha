@@ -10,6 +10,7 @@
 import { randomUUID } from 'node:crypto';
 import { Logger } from '@nestjs/common';
 import { schema } from '@buddha/db';
+import { completeOnboarding } from '@buddha/db/test';
 import {
   userChannel,
   type AdminPayment,
@@ -80,6 +81,8 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
       .update(schema.profiles)
       .set({ role: 'admin' })
       .where(eq(schema.profiles.userId, admin.id));
+    // An admin finishes the onboarding like any account before /admin answers it (ADR-0072).
+    await completeOnboarding(t.db, { userId: admin.id });
     // The guard caches roles for 60 s (PLAN 10.5); the promotion above happened behind it.
     await t.app.get(AdminGuard).invalidate(admin.id);
     pack = await createTestPackage(t.db);

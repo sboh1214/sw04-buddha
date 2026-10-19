@@ -12,6 +12,7 @@ import { RedisModule } from './infra/redis/redis.module.js';
 import { JobsModule } from './jobs/jobs.module.js';
 import { MarketsModule } from './markets/markets.module.js';
 import { MeModule } from './me/me.module.js';
+import { OnboardingModule } from './onboarding/onboarding.module.js';
 import { AdminSmsStatusModule } from './phone-verification/admin-sms-status.module.js';
 import { PhoneVerificationModule } from './phone-verification/phone-verification.module.js';
 import { RateLimitModule } from './rate-limit/rate-limit.module.js';
@@ -56,6 +57,10 @@ import { WatchlistModule } from './watchlist/watchlist.module.js';
     ApprovalsModule,
     // No routes (ADR-0071): the start grant is an internal service the onboarding (#58) calls.
     StartGrantModule,
+    // 가입 직후 온보딩 (#58): the consent and nickname steps — the start grant's one caller — and the
+    // interest categories; exports OnboardedGuard for the actions #57-8 keeps from the rest. Last,
+    // after the modules it imports, so the document keeps their routes where they were.
+    OnboardingModule,
   ],
   controllers: [HealthController],
 })

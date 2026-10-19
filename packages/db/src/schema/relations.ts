@@ -11,14 +11,17 @@ import { account, session, user } from './auth.js';
 import { balances } from './balances.js';
 import { categories } from './categories.js';
 import { chargePackages } from './charge-packages.js';
+import { consentRecords } from './consent-records.js';
 import { couponRedemptions, coupons } from './coupons.js';
 import { fills } from './fills.js';
+import { profileInterestCategories } from './interest-categories.js';
 import { ledgerEntries } from './ledger.js';
 import { marketEvents } from './market-events.js';
 import { marketLinks } from './market-links.js';
 import { marketSearches } from './market-searches.js';
 import { marketSettlementSteps } from './market-settlement-steps.js';
 import { markets } from './markets.js';
+import { nicknameHolds } from './nickname-holds.js';
 import { orders } from './orders.js';
 import { paymentEvents } from './payment-events.js';
 import { payments } from './payments.js';
@@ -30,9 +33,32 @@ import { releaseSettings } from './release-settings.js';
 import { startGrantNumbers, startGrants } from './start-grants.js';
 import { marketWatchEvents, marketWatches } from './watchlist.js';
 
-export const profilesRelations = relations(profiles, ({ one }) => ({
+export const profilesRelations = relations(profiles, ({ one, many }) => ({
   user: one(user, { fields: [profiles.userId], references: [user.id] }),
   balance: one(balances, { fields: [profiles.userId], references: [balances.userId] }),
+  interestCategories: many(profileInterestCategories),
+}));
+
+export const profileInterestCategoriesRelations = relations(
+  profileInterestCategories,
+  ({ one }) => ({
+    profile: one(profiles, {
+      fields: [profileInterestCategories.userId],
+      references: [profiles.userId],
+    }),
+    category: one(categories, {
+      fields: [profileInterestCategories.categoryId],
+      references: [categories.id],
+    }),
+  }),
+);
+
+export const consentRecordsRelations = relations(consentRecords, ({ one }) => ({
+  user: one(user, { fields: [consentRecords.userId], references: [user.id] }),
+}));
+
+export const nicknameHoldsRelations = relations(nicknameHolds, ({ one }) => ({
+  user: one(user, { fields: [nicknameHolds.userId], references: [user.id] }),
 }));
 
 export const balancesRelations = relations(balances, ({ one }) => ({
@@ -94,6 +120,7 @@ export const couponRedemptionsRelations = relations(couponRedemptions, ({ one })
 
 export const categoriesRelations = relations(categories, ({ one, many }) => ({
   markets: many(markets),
+  interestPicks: many(profileInterestCategories),
   // Both ends of the self-reference need a `relationName`: with two relations between the
   // same pair of tables drizzle cannot tell which foreign key each one walks.
   parent: one(categories, {
@@ -221,6 +248,8 @@ export const userRelations = relations(user, ({ one, many }) => ({
   }),
   phoneVerificationCodes: many(phoneVerificationCodes),
   startGrant: one(startGrants, { fields: [user.id], references: [startGrants.userId] }),
+  consentRecords: many(consentRecords),
+  nicknameHolds: many(nicknameHolds),
   ledgerEntries: many(ledgerEntries),
   payments: many(payments),
   orders: many(orders),

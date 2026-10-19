@@ -1,29 +1,18 @@
 'use client';
 
-import { Button, Field, HStack, Input, Stack } from '@chakra-ui/react';
-import { NICKNAME_MAX_LENGTH, NICKNAME_MIN_LENGTH, NICKNAME_PATTERN } from '@buddha/shared';
+import { Alert, Button, Field, HStack, Input, Stack } from '@chakra-ui/react';
+import { NICKNAME_MAX_LENGTH } from '@buddha/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useMemo } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
-import * as z from 'zod';
+import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
-import { useMe, useUpdateNickname } from '@/hooks/use-me';
-import { isApiError, validationField } from '@/lib/api';
+import { refreshOwnMe, useMe, useUpdateNickname } from '@/hooks/use-me';
+import { nicknameFailure, nicknameFormSchema, type NicknameFormValues } from '@/lib/nickname';
 import { ProfileUnavailable } from './profile-unavailable';
 import { SettingsSection } from './section';
-
-// Same bounds/pattern as @buddha/shared nicknameSchema (PLAN 11.5: the policy is not
-// re-implemented, only the message is localised here); the API validates again.
-const schema = z.object({
-  nickname: z
-    .string()
-    .trim()
-    .min(NICKNAME_MIN_LENGTH, copy.errNicknameFormat)
-    .max(NICKNAME_MAX_LENGTH, copy.errNicknameFormat)
-    .regex(NICKNAME_PATTERN, copy.errNicknameFormat),
-});
-type FormValues = z.infer<typeof schema>;
 
 export function NicknameForm() {
   const { data: me, isPending } = useMe();
@@ -32,7 +21,7 @@ export function NicknameForm() {
       {isPending || !me ? (
         <ProfileUnavailable />
       ) : (
-        <NicknameFields nickname={me.profile.nickname} />
+        <NicknameFields nickname={me.profile.nickname} accountId={me.id} />
       )}
     </SettingsSection>
   );
@@ -43,17 +32,29 @@ export function NicknameForm() {
  * first paint, no reset-by-effect that could wipe an edit in progress). `values` keeps the
  * form in sync with later refetches (deep-compared by react-hook-form, so an unrelated
  * refetch with the same nickname is a no-op) without discarding a dirty field.
+ *
+ * The nickname rules of #58 (ADR-0069 decision 1 #57-6), the same ones as the onboarding's
+ * nickname step (lib/nickname.ts): the format and, for a typed nickname, no `user_` prefix and no
+ * operator-impersonating word, checked before sending; the server's answers for a nickname taken
+ * (ignoring case) or held for 30 days after another account gave it up, and for the 30 days
+ * between changes — with when the next change is allowed, in the member's time zone — under the
+ * input. MY 설정 is reached only by an onboarded account (the gate), so `ONBOARDING_REQUIRED` here
+ * means another tab's state changed: `['me']` is asked again, and the gate follows it.
  */
-function NicknameFields({ nickname }: { nickname: string }) {
+function NicknameFields({ nickname, accountId }: { nickname: string; accountId: string }) {
   const update = useUpdateNickname();
+  const queryClient = useQueryClient();
+  const formatDate = useFormatDateTime();
+  const [notice, setNotice] = useState<string | null>(null);
   const values = useMemo(() => ({ nickname }), [nickname]);
+  const schema = useMemo(() => nicknameFormSchema(nickname), [nickname]);
   const {
     register,
     handleSubmit,
     reset,
     setError,
     formState: { errors, isDirty },
-  } = useForm<FormValues>({
+  } = useForm<NicknameFormValues>({
     resolver: zodResolver(schema),
     defaultValues: values,
     values,
@@ -61,36 +62,40 @@ function NicknameFields({ nickname }: { nickname: string }) {
   });
 
   const onSubmit = handleSubmit(async (form) => {
+    setNotice(null);
     try {
-      await update.mutateAsync(form.nickname);
+      // The account this screen shows (#58: PATCH /me names it, as every owner write does).
+      await update.mutateAsync({ nickname: form.nickname, expectedAccountId: accountId });
       reset({ nickname: form.nickname });
       toaster.create({ type: 'success', title: copy.nicknameSaved });
     } catch (error) {
-      // Duplicate nickname -> VALIDATION_ERROR (PLAN 13 M1 AC) -> field error.
-      if (
-        isApiError(error, 'VALIDATION_ERROR') &&
-        (validationField(error) ?? 'nickname') === 'nickname'
-      ) {
-        setError('nickname', { message: copy.errNicknameTaken });
+      const failure = nicknameFailure(error, formatDate);
+      if (failure.kind === 'field') {
+        setError('nickname', { message: failure.message }, { shouldFocus: true });
         return;
       }
-      toaster.create({
-        type: 'error',
-        title: copy.errUnknown,
-        description: error instanceof Error ? error.message : undefined,
-      });
+      if (failure.kind === 'refresh') void refreshOwnMe(queryClient, accountId);
+      setNotice(failure.message);
     }
   });
 
   return (
     <form onSubmit={(e) => void onSubmit(e)} noValidate>
       <Stack gap="4">
+        {notice && (
+          <Alert.Root status="error" role="alert" data-testid="nickname-notice">
+            <Alert.Indicator />
+            <Alert.Content>
+              <Alert.Description>{notice}</Alert.Description>
+            </Alert.Content>
+          </Alert.Root>
+        )}
         <Field.Root invalid={!!errors.nickname} required>
           <Field.Label>{copy.nickname}</Field.Label>
           <HStack w="full" align="start">
             <Input
               autoComplete="nickname"
-              maxLength={20}
+              maxLength={NICKNAME_MAX_LENGTH}
               data-testid="nickname-input"
               {...register('nickname')}
             />
@@ -98,8 +103,10 @@ function NicknameFields({ nickname }: { nickname: string }) {
               {copy.save}
             </Button>
           </HStack>
-          <Field.HelperText>{copy.nicknameHint}</Field.HelperText>
-          <Field.ErrorText>{errors.nickname?.message}</Field.ErrorText>
+          <Field.HelperText>
+            {copy.nicknameHint}. {copy.nicknameRulesHint} {copy.nicknameChangeRule}
+          </Field.HelperText>
+          <Field.ErrorText data-testid="nickname-error">{errors.nickname?.message}</Field.ErrorText>
         </Field.Root>
       </Stack>
     </form>

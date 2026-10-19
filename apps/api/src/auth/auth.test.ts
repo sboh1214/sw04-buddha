@@ -379,6 +379,45 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
     expect(await userRow(email)).toBeUndefined();
   });
 
+  it('carries the page the visitor came from through the link to /set-password (#58)', async () => {
+    // ADR-0069 decision 1 #57-9: after the onboarding a sign-up returns to the page it left. The
+    // link is the one thing that crosses the mailbox, so it carries `next` itself.
+    const address = 'it-auth-register-next@test.local';
+    const next = '/markets/abc?x=1';
+    expect((await register({ email: address, next })).statusCode).toBe(200);
+    const link = verificationLinkFor(t.mailer, address);
+    expect(new URL(link).searchParams.get('callbackURL')).toBe(
+      `/set-password?next=${encodeURIComponent(next)}`,
+    );
+    // Followed, it lands there signed in — and better-auth's own `error` on a broken copy of the
+    // same link is added beside `next`, not over it.
+    const res = await t.app.inject({ method: 'GET', url: pathOf(link) });
+    expect(res.statusCode).toBe(302);
+    const target = new URL(String(res.headers.location), 'http://localhost:3000');
+    expect(target.pathname).toBe('/set-password');
+    expect(target.searchParams.get('next')).toBe(next);
+    expect(sessionCookieOf(res.headers['set-cookie'])).toBeDefined();
+    const broken = new URL(link);
+    broken.searchParams.set('token', 'not-a-token');
+    const refused = await t.app.inject({ method: 'GET', url: pathOf(broken.toString()) });
+    expect(refused.statusCode).toBe(302);
+    const landed = new URL(String(refused.headers.location), 'http://localhost:3000');
+    expect(landed.pathname).toBe('/set-password');
+    expect(landed.searchParams.get('next')).toBe(next);
+    expect(landed.searchParams.get('error')).toBe('INVALID_TOKEN');
+  });
+
+  it('refuses a next that is not a path on this origin, and mails nothing (#58)', async () => {
+    const bad = ['https://evil.example/x', '//evil.example', '/\\evil.example'];
+    for (const [index, next] of bad.entries()) {
+      // An address each: the route's rate limit counts per address (`email`).
+      const res = await register({ email: `it-auth-bad-next-${String(index)}@test.local`, next });
+      expect(res.statusCode, next).toBe(400);
+      expect(res.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR' } });
+    }
+    expect(t.mailer.messages).toHaveLength(0);
+  });
+
   it('refuses the synthetic no-email domain on register and on every credential endpoint', async () => {
     const synthetic = 'kakao_42@noemail.buddha.local';
     const registered = await register({ email: synthetic });

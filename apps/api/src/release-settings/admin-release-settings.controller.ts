@@ -19,6 +19,7 @@ import { CurrentUser } from '../auth/current-user.decorator.js';
 import { SessionGuard } from '../auth/session.guard.js';
 import { ApiPage } from '../common/interceptors/response-envelope.interceptor.js';
 import { ApiData, ApiErrors, ApiPageOf } from '../common/openapi/api-response.decorators.js';
+import { OnboardedGuard } from '../onboarding/onboarded.guard.js';
 import { SESSION_SECURITY_SCHEME } from '../openapi/document.js';
 import { ReleaseSettingsService } from './release-settings.service.js';
 
@@ -26,12 +27,13 @@ import { ReleaseSettingsService } from './release-settings.service.js';
  * Release settings (#170) for admins: the items with their status and value, a change with a
  * reason, and the change records. Guards run in order: SessionGuard fills `request.auth` (401
  * without a session, 403 for a foreign Origin on a mutation), AdminGuard reads the role (403 for
- * a member) — the records included (N04 §6).
+ * a member) — the records included (N04 §6) — and OnboardedGuard refuses an admin that has not
+ * finished the onboarding (409 ONBOARDING_REQUIRED, ADR-0072).
  */
 @ApiTags('admin')
 @ApiCookieAuth(SESSION_SECURITY_SCHEME)
 @Controller('admin/release-settings')
-@UseGuards(SessionGuard, AdminGuard)
+@UseGuards(SessionGuard, AdminGuard, OnboardedGuard)
 export class AdminReleaseSettingsController {
   constructor(private readonly settings: ReleaseSettingsService) {}
 
@@ -43,7 +45,7 @@ export class AdminReleaseSettingsController {
   })
   // No `@ApiQuery`: the query schema has no component id, so swagger expands it itself.
   @ApiData(releaseSettingSchema.array())
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'VALIDATION_ERROR')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'VALIDATION_ERROR')
   list(
     @Query({ schema: releaseSettingListQuerySchema }) query: ReleaseSettingListQuery,
   ): Promise<ReleaseSetting[]> {
@@ -57,7 +59,7 @@ export class AdminReleaseSettingsController {
       'Release setting changes, newest first: before and after, reason, admin and time (of one key with `key`)',
   })
   @ApiPageOf(releaseSettingChangeSchema)
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'VALIDATION_ERROR')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'VALIDATION_ERROR')
   async listChanges(
     @Query({ schema: releaseSettingChangeListQuerySchema }) query: ReleaseSettingChangeListQuery,
   ): Promise<ApiPage<ReleaseSettingChange>> {
@@ -79,7 +81,7 @@ export class AdminReleaseSettingsController {
   // NOT_FOUND: no registered item has this key. VALIDATION_ERROR: also a value that breaks the
   // status rule or the item's schema (details under `value`), and a change that keeps the
   // current status and value (path `[]`, RELEASE_SETTING_UNCHANGED_MESSAGE).
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
   change(
     @CurrentUser() admin: SessionUser,
     @Param('key', { schema: releaseSettingKeySchema }) key: string,

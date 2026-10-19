@@ -1,7 +1,7 @@
 'use client';
 
 import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import { ME_QUERY_KEY, meBelongsTo } from '@/hooks/use-me';
+import { ME_QUERY_KEY, meBelongsTo, refreshOwnMe } from '@/hooks/use-me';
 import {
   api,
   isApiError,
@@ -14,6 +14,7 @@ import {
   type RequestPhoneVerificationCodeBody,
   type UpdateRealNameBody,
 } from '@/lib/api';
+import { afterVerification } from '@/lib/onboarding';
 import { isVerifiedAlready } from '@/lib/phone-verification';
 import { useSession } from '@/lib/use-session';
 
@@ -51,8 +52,11 @@ async function putRealName(body: UpdateRealNameBody): Promise<PhoneVerification>
 
 /**
  * Writes the account's verification into `['me']` straight away rather than invalidating: the
- * gate reads that entry, and a refetch still in flight when /onboarding navigates on would leave
- * it holding `verification: null` for one more render — enough to send the member straight back.
+ * gate and /onboarding's stepper read that entry, and a refetch still in flight when the stepper
+ * moves on would leave it holding `verification: null` for one more render — enough to show the
+ * step again. The onboarding's own `verification` and where it resumes go with it
+ * (`afterVerification`, lib/onboarding.ts: the step done, the next one the nickname, #58), worked
+ * out by the same function the server answers `GET /me` with.
  * `PhoneVerification` itself never says whose it is, so the account is the `expectedAccountId`
  * the request sent (`meBelongsTo`, use-me.ts); `storeMe` there is the same write for a profile.
  *
@@ -79,20 +83,15 @@ export async function storeVerification(
   await queryClient.cancelQueries({ queryKey: ME_QUERY_KEY, exact: true });
   const held = queryClient.getQueryData<Me>(ME_QUERY_KEY);
   if (held) {
-    if (held.id === account) queryClient.setQueryData<Me>(ME_QUERY_KEY, { ...held, verification });
+    if (held.id === account) {
+      queryClient.setQueryData<Me>(ME_QUERY_KEY, {
+        ...held,
+        verification,
+        onboarding: afterVerification(held.onboarding),
+      });
+    }
     return;
   }
-  await queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY, exact: true });
-}
-
-/**
- * A refusal that says `['me']` is out of date for `account` — verified already (another tab
- * finished first), or not verified any more (the real-name card's VERIFICATION_REQUIRED) — asks
- * for it again, so the gate and the screen follow the server. Only while the entry is that
- * account's: another account's profile there belongs to SessionCacheGuard.
- */
-async function refreshOwnMe(queryClient: QueryClient, account: string): Promise<void> {
-  if (!meBelongsTo(queryClient, account)) return;
   await queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY, exact: true });
 }
 
@@ -115,7 +114,12 @@ export function requestCodeOptions(
         onSessionChanged();
         return;
       }
-      if (isVerifiedAlready(error)) await refreshOwnMe(queryClient, body.expectedAccountId);
+      // ONBOARDING_REQUIRED: the consent comes first (#58) and the account's no longer stands —
+      // a revision that asked for it again while this screen was open — so the stepper goes back
+      // to the consent step with the fresh `['me']`.
+      if (isVerifiedAlready(error) || isApiError(error, 'ONBOARDING_REQUIRED')) {
+        await refreshOwnMe(queryClient, body.expectedAccountId);
+      }
     },
   };
 }

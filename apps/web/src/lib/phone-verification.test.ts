@@ -193,7 +193,7 @@ describe('the numbers the copy states are the fixed values (ADR-0069 decision 1 
       dailyWindowSeconds,
     } = PHONE_VERIFICATION_LIMITS;
     expect(codeLength).toBe(6);
-    expect(copy.onboardingSubtitle).toContain(`${String(codeLength)}자리`);
+    expect(copy.verificationIntro).toContain(`${String(codeLength)}자리`);
     expect(copy.verificationCodeHint).toContain(`${String(codeLength)}자리`);
     expect(copy.errVerificationCodeFormat).toContain(`${String(codeLength)}자리`);
     expect(copy.verificationCodeSent).toContain(`${String(codeTtlSeconds / 60)}분`);
@@ -374,6 +374,13 @@ describe('codeRequestFailure', () => {
       kind: 'notice',
       message: copy.errUnknown,
     });
+  });
+
+  it('says the consent comes first when the server refuses the code for want of it (#58)', () => {
+    // The hook has asked `['me']` again; the stepper goes back to the consent step with it.
+    expect(codeRequestFailure(refusal(409, 'ONBOARDING_REQUIRED', { steps: ['consent'] }))).toEqual(
+      { kind: 'notice', message: copy.errOnboardingStepsFirst },
+    );
   });
 });
 

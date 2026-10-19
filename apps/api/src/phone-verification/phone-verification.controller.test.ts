@@ -14,7 +14,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { isPhoneVerified, schema } from '@buddha/db';
-import { createPhoneVerification, createUser } from '@buddha/db/test';
+import { createConsents, createPhoneVerification, createUser } from '@buddha/db/test';
 import {
   PHONE_VERIFICATION_LIMITS,
   RATE_LIMIT_BUCKETS,
@@ -61,8 +61,19 @@ describe.skipIf(!hasTestInfra)('본인확인 /api/v1/me/phone-verification (inte
   beforeEach(async () => {
     await t.reset();
     t.sms.messages.length = 0;
-    user = await signUpTestUser(t);
+    user = await signUp();
   });
+
+  /**
+   * A signed-up account past the consent step, which the code request needs first (#58: the
+   * consent's 개인정보 수집·이용 agreement covers taking and texting the number). The refusal
+   * without it is onboarding.controller.test.ts's.
+   */
+  async function signUp(): Promise<TestUser> {
+    const account = await signUpTestUser(t);
+    await createConsents(t.db, { userId: account.id });
+    return account;
+  }
 
   const call = (
     method: 'POST' | 'PUT',
@@ -405,7 +416,7 @@ describe.skipIf(!hasTestInfra)('본인확인 /api/v1/me/phone-verification (inte
 
     // Another account's code — real, recent and still waiting — is not one of this account's:
     // a wrong entry, counted, and the other account's code untouched (answer 7 is per account).
-    const sender = await signUpTestUser(t);
+    const sender = await signUp();
     expect((await request(sender, { phone: '01077770000' })).statusCode).toBe(200);
     const theirs = t.sms.lastCodeTo('01077770000');
     if (![older, newest, other].includes(theirs)) {
@@ -548,7 +559,7 @@ describe.skipIf(!hasTestInfra)('본인확인 /api/v1/me/phone-verification (inte
     // Another number is open to it.
     expect((await request(user, { phone: '01077778888' })).statusCode).toBe(200);
     // One of the three — an account that has sent to the number in the window — is not refused.
-    const third = await signUpTestUser(t);
+    const third = await signUp();
     await pastSends(third.id, PHONE, 1, 5 * 60_000);
     await t.db
       .delete(schema.phoneVerificationCodes)
@@ -556,7 +567,7 @@ describe.skipIf(!hasTestInfra)('본인확인 /api/v1/me/phone-verification (inte
     expect((await request(third)).statusCode).toBe(200);
     // …and once an account's sends to the number are all older than 24 hours (and the minute the
     // refusal answered has come), it no longer counts.
-    const fourth = await signUpTestUser(t);
+    const fourth = await signUp();
     expect(limitOf(await request(fourth)).reason).toBe('phone_accounts');
     await t.db
       .update(schema.phoneVerificationCodes)
@@ -590,7 +601,7 @@ describe.skipIf(!hasTestInfra)('본인확인 /api/v1/me/phone-verification (inte
 
     // A fifty-first, from the visitor directly and through Caddy (the trusted proxy names it):
     // refused until the oldest leaves, in whole minutes (other people's sends behind the address).
-    const second = await signUpTestUser(t);
+    const second = await signUp();
     const limited = limitOf(await requestFrom(VISITOR, second));
     expect(limited.reason).toBe('ip_daily');
     expect(wholeMinutesFrom(limited.retryAfterSeconds, 10), String(limited.retryAfterSeconds)).toBe(
@@ -617,7 +628,7 @@ describe.skipIf(!hasTestInfra)('본인확인 /api/v1/me/phone-verification (inte
     // The web server's rewrite (an uncounted peer) and loopback name nobody: no address limit,
     // and no address recorded.
     expect((await requestFrom(WEB, user)).statusCode).toBe(200);
-    const second = await signUpTestUser(t);
+    const second = await signUp();
     expect((await request(second, { phone: '01077778888' })).statusCode).toBe(200);
     expect((await codeRows(user.id))[0]).toMatchObject({ clientIp: null });
     expect((await codeRows(second.id))[0]).toMatchObject({ clientIp: null });
@@ -655,7 +666,7 @@ describe.skipIf(!hasTestInfra)('본인확인 /api/v1/me/phone-verification (inte
       .delete(schema.phoneVerificationCodes)
       .where(eq(schema.phoneVerificationCodes.id, (await codeRows(oldest!.id))[0]!.id));
     expect((await request(user)).statusCode).toBe(200);
-    const other = await signUpTestUser(t);
+    const other = await signUp();
     expect(limitOf(await request(other, { phone: '01077778888' })).reason).toBe('service_daily');
   });
 
@@ -790,14 +801,14 @@ describe.skipIf(!hasTestInfra)('본인확인 /api/v1/me/phone-verification (inte
       .values({ attemptedAt: new Date(now - 9 * DAY_MS) });
     // A send the provider takes and one whose answer was lost: neither deletes it.
     expect((await request(user)).statusCode).toBe(200);
-    const other = await signUpTestUser(t);
+    const other = await signUp();
     t.sms.failNext(1, 'unknown');
     refusal(await request(other, { phone: '01077778888' }), 502, 'SMS_SEND_UNCONFIRMED');
     expect((await refusedRows()).map((row) => row.attemptedAt.getTime())).toEqual([
       now - 9 * DAY_MS,
     ]);
     // The next refusal does, and is the one left.
-    const third = await signUpTestUser(t);
+    const third = await signUp();
     t.sms.failNext(1, 'refused');
     refusal(await request(third, { phone: '01099990000' }), 502, 'SMS_SEND_FAILED');
     const refused = await refusedRows();
@@ -856,7 +867,7 @@ describe.skipIf(!hasTestInfra)('본인확인 /api/v1/me/phone-verification (inte
     expect(await codeRows(user.id)).toHaveLength(10);
     expect(limitOf(await request(user, { phone: '01077778888' })).reason).toBe('account_daily');
     // Another account at the same number is a pair of its own (owner decision 2026-10-18).
-    const other = await signUpTestUser(t);
+    const other = await signUp();
     expect((await request(other)).statusCode).toBe(200);
   });
 
@@ -880,14 +891,14 @@ describe.skipIf(!hasTestInfra)('본인확인 /api/v1/me/phone-verification (inte
       'RATE_LIMITED',
     ]);
     // Another account, from the same address, has its own bucket.
-    const other = await signUpTestUser(t);
+    const other = await signUp();
     expect((await request(other, { phone: '01077778888' })).statusCode).toBe(200);
   });
 
   // ---- one account per number ----------------------------------------------------------------
 
   it('refuses a number another account verified, telling only the holder of the number (AC 4)', async () => {
-    const holder = await signUpTestUser(t);
+    const holder = await signUp();
     await createPhoneVerification(t.db, { userId: holder.id, phone: PHONE });
     // The code is sent: whether the number is taken is not told to whoever merely names it.
     expect((await request(user)).statusCode).toBe(200);
@@ -904,7 +915,7 @@ describe.skipIf(!hasTestInfra)('본인확인 /api/v1/me/phone-verification (inte
   });
 
   it('lets one of two accounts confirming one number at once have it (AC 4)', async () => {
-    const other = await signUpTestUser(t);
+    const other = await signUp();
     await request(user);
     const mine = t.sms.lastCodeTo(PHONE);
     await request(other);
@@ -960,7 +971,7 @@ describe.skipIf(!hasTestInfra)('본인확인 /api/v1/me/phone-verification (inte
       const { user: past } = await createUser(t.db);
       await pastSends(past.id, PHONE, 1, 2 * 60_000 + i * 60_000);
     }
-    const other = await signUpTestUser(t);
+    const other = await signUp();
     const answers = await Promise.all([request(user), request(other)]);
     expect(answers.map((res) => res.statusCode).sort()).toEqual([200, 429]);
     expect(limitOf(answers.find((res) => res.statusCode === 429)!).reason).toBe('phone_accounts');
@@ -983,7 +994,7 @@ describe.skipIf(!hasTestInfra)('본인확인 /api/v1/me/phone-verification (inte
         stepMs: 1_000,
       });
     }
-    const other = await signUpTestUser(t);
+    const other = await signUp();
     const answers = await Promise.all([request(user), request(other, { phone: '01077778888' })]);
     expect(answers.map((res) => res.statusCode).sort()).toEqual([200, 429]);
     expect(limitOf(answers.find((res) => res.statusCode === 429)!).reason).toBe('service_daily');
@@ -1042,7 +1053,7 @@ describe.skipIf(!hasTestInfra)('본인확인 /api/v1/me/phone-verification (inte
       .from(schema.phoneVerifications)
       .where(eq(schema.phoneVerifications.userId, other.id));
     expect(othersAfter).toEqual(othersBefore);
-    const unverified = await signUpTestUser(t);
+    const unverified = await signUp();
     expect(
       refusal(await renameTo(unverified, '이영수'), 409, 'VERIFICATION_REQUIRED'),
     ).toBeUndefined();
@@ -1087,7 +1098,7 @@ describe.skipIf(!hasTestInfra)('본인확인 /api/v1/me/phone-verification (inte
 
   it('refuses every write naming another account than the cookie (403 naming expectedAccountId)', async () => {
     // A tab still showing `user` after another tab signed in as `other`.
-    const other = await signUpTestUser(t);
+    const other = await signUp();
     await request(other);
     const code = t.sms.lastCodeTo(PHONE);
     t.sms.messages.length = 0;

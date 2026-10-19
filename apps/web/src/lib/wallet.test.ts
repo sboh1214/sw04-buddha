@@ -32,10 +32,16 @@ describe('startGrantPending', () => {
     expect(startGrantPending(pending)).toBe(true);
   });
 
-  it('says nothing once it is paid, without a grant record, or before the profile is known', () => {
-    // Paid: the ledger's 시작 지급 row says so. No record: the account has not finished the
-    // onboarding, or its number's start Coin went to an earlier account — nothing is waiting.
+  it('says nothing once it is paid, without a grant, or before the profile is known', () => {
+    // Paid: the ledger's 시작 지급 row says so. No grant: the account has not finished the
+    // onboarding, or its number's start Coin went to an earlier account (`number_used`, which
+    // only the onboarding's notice says, ADR-0072) — nothing is waiting.
     expect(startGrantPending(granted)).toBe(false);
+    expect(
+      startGrantPending({
+        startGrant: { status: 'number_used', amountCoin: null, grantedAt: null },
+      }),
+    ).toBe(false);
     expect(startGrantPending({ startGrant: null })).toBe(false);
     expect(startGrantPending(undefined)).toBe(false);
   });

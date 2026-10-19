@@ -39,11 +39,35 @@ const unverified: Me = {
     role: 'user',
     createdAt: '2026-08-01T00:00:00.000Z',
     timeZone: null,
+    nicknameChangeAvailableAt: null,
+    interestCategoryIds: [],
   },
   balance: { availableCoin: '0', lockedCoin: '0' },
   linkedAccounts: [],
   verification: null,
   startGrant: null,
+  // The consent step done (it comes first, ADR-0069 decision 4 #58): the 본인확인 is next.
+  onboarding: {
+    consent: true,
+    verification: false,
+    nickname: false,
+    completed: false,
+    interests: false,
+    nextStep: 'verification',
+    consents: (['terms', 'privacy', 'age', 'marketing'] as const).map((item) => ({
+      item,
+      version: 'draft-2026-10-18',
+      agreed: item !== 'marketing',
+      recordedAt: '2026-10-18T00:00:00.000Z',
+    })),
+  },
+};
+
+/** `unverified` once its code is confirmed: the record, and the nickname step next (#58). */
+const verifiedMe: Me = {
+  ...unverified,
+  verification: verified,
+  onboarding: { ...unverified.onboarding, verification: true, nextStep: 'nickname' },
 };
 
 /** The account the tab switched to while a request ran (SessionCacheGuard reset, then B's GET). */
@@ -107,7 +131,7 @@ function meObserver(queryClient: QueryClient, answer: (request: number) => Promi
 }
 
 describe('storeVerification', () => {
-  it('patches the record into the profile already held, without a request', async () => {
+  it('patches the record — and where the onboarding resumes — into the profile held, without a request', async () => {
     const queryClient = getQueryClient();
     const me = meObserver(queryClient, () => Promise.resolve(unverified));
     try {
@@ -115,10 +139,8 @@ describe('storeVerification', () => {
 
       await storeVerification(queryClient, verified, 'user-1');
 
-      expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)).toEqual({
-        ...unverified,
-        verification: verified,
-      });
+      // The stepper reads `onboarding.nextStep`: it moves on to the nickname in this render.
+      expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)).toEqual(verifiedMe);
       expect(me.observer.getCurrentResult().data?.verification).toEqual(verified);
       expect(me.requests()).toBe(1);
     } finally {
@@ -280,6 +302,37 @@ describe('POST /me/phone-verification/code (requestCodeOptions)', () => {
       // Already refreshed when the rejection reaches the form: the page moves on with it.
       expect(me.requests()).toBe(2);
       expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)?.verification).toEqual(verified);
+      expect(session.count()).toBe(0);
+    } finally {
+      me.unsubscribe();
+      queryClient.clear();
+    }
+  });
+
+  it("asks ['me'] again when the server wants the consent first, so the stepper goes back to it", async () => {
+    // A revision that asked for the consent again while the step was open (#57-5).
+    const queryClient = getQueryClient();
+    const session = sessionRefetches();
+    const reconsent: Me = {
+      ...unverified,
+      onboarding: { ...unverified.onboarding, consent: false, nextStep: 'consent' },
+    };
+    const me = meObserver(queryClient, (request) =>
+      Promise.resolve(request === 1 ? unverified : reconsent),
+    );
+    try {
+      await me.observer.refetch();
+      const request = new MutationObserver(
+        queryClient,
+        requestCodeOptions(queryClient, session.onSessionChanged, () =>
+          Promise.reject(refused(409, 'ONBOARDING_REQUIRED', { steps: ['consent'] })),
+        ),
+      );
+
+      await expect(request.mutate(body)).rejects.toBeInstanceOf(ApiError);
+
+      expect(me.requests()).toBe(2);
+      expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)?.onboarding.nextStep).toBe('consent');
       expect(session.count()).toBe(0);
     } finally {
       me.unsubscribe();
@@ -454,7 +507,17 @@ describe('POST /me/phone-verification/confirm (confirmVerificationOptions)', () 
 });
 
 describe('PUT /me/real-name (updateRealNameOptions)', () => {
-  const held: Me = { ...unverified, verification: verified };
+  /** An onboarded account: MY 설정 is where the real name changes. */
+  const held: Me = {
+    ...verifiedMe,
+    onboarding: {
+      ...verifiedMe.onboarding,
+      nickname: true,
+      completed: true,
+      interests: true,
+      nextStep: null,
+    },
+  };
   const renamed: PhoneVerification = { ...verified, realName: '김철수' };
   const body = { realName: '김철수', expectedAccountId: 'user-1' };
 
@@ -474,6 +537,8 @@ describe('PUT /me/real-name (updateRealNameOptions)', () => {
       await expect(rename.mutate(body)).resolves.toEqual(renamed);
 
       expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)?.verification).toEqual(renamed);
+      // A rename is no step: the onboarding stays as it was.
+      expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)?.onboarding).toEqual(held.onboarding);
       expect(me.requests()).toBe(1);
     } finally {
       me.unsubscribe();

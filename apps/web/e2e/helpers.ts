@@ -6,8 +6,9 @@ import {
   type Locator,
   type Page,
 } from '@playwright/test';
-import type { AdminMarket, Category } from '@buddha/shared';
+import type { AdminMarket, Category, Me } from '@buddha/shared';
 import { copy } from '../src/copy';
+import { E2E_CONSENT_VERSIONS } from './consent-versions';
 
 /**
  * Fixtures every M4 spec shares (PLAN 14): the Mailpit sign-up flow auth.spec.ts introduced,
@@ -55,8 +56,8 @@ const SECOND_ADMIN_PASSWORD = process.env.SEED_SECOND_ADMIN_PASSWORD ?? 'admin56
 
 /**
  * A bootstrap admin of `pnpm db:seed`, and the real name and number its fixture verifies it with
- * (the seed verifies nobody). Fixed numbers, one per admin: verified once, they stay the admin's
- * in a persistent database. `freshPhone()` draws one of them once in fifty million.
+ * (the seed onboards nobody, #58). Fixed numbers, one per admin: verified once, they stay the
+ * admin's in a persistent database. `freshPhone()` draws one of them once in fifty million.
  */
 interface SeedAdmin {
   email: string;
@@ -81,9 +82,9 @@ const SECOND_ADMIN: SeedAdmin = {
 };
 
 /**
- * How long a fixture keeps trying to verify a seed admin. Parallel workers share the two admins,
- * so all but one of them are refused (the 60-second resend interval, or the per-account rate
- * limit) while the one that got the code confirms it; the rest wait and look again.
+ * How long a fixture keeps trying to onboard a seed admin. Parallel workers share the two admins,
+ * so all but one of them are refused the code (the 60-second resend interval, or the per-account
+ * rate limit) while the one that got the code confirms it; the rest wait and look again.
  */
 const ADMIN_VERIFY_MS = 120_000;
 
@@ -114,14 +115,14 @@ const CLOSE_IN_MS = 24 * 60 * 60 * 1_000;
 // ---- fixtures -----------------------------------------------------------------------
 
 /**
- * Signs `context` in as a bootstrap admin and makes sure it has completed 본인확인 (ADR-0070).
+ * Signs `context` in as a bootstrap admin and makes sure it has finished the onboarding (#58).
  *
  * The seed admins are accounts like any other, so the onboarding gate would send a spec's
  * browser sign-in as one (`signIn(…, adminAccount…)`) to /onboarding instead of `/` — the
  * owner's decision for operators (ADR-0069 decision 4, #58: they onboard as every account does).
  * Every spec that signs a browser in as an admin also asks for that admin's fixture, so the admin
- * is verified here, through the API and the development SMS sender, the first time any fixture
- * runs against a database; after that `GET /me` already says so and nothing is sent. Every body
+ * onboards here, through the API and the development SMS sender, the first time any fixture runs
+ * against a database; after that `GET /me` already says so and nothing is written. Every body
  * names the account it is for (`expectedAccountId`, A-PG-24): the sign-in's own answer.
  */
 async function signInSeedAdmin(context: APIRequestContext, admin: SeedAdmin): Promise<void> {
@@ -136,24 +137,41 @@ async function signInSeedAdmin(context: APIRequestContext, admin: SeedAdmin): Pr
     );
   }
   const { user } = (await signedIn.json()) as { user: { id: string } };
-  await verifySeedAdmin(context, admin, user.id);
+  await onboardSeedAdmin(context, admin, user.id);
 }
 
 /**
- * Verifies a seed admin unless it is already. Workers running in parallel share the two admins:
- * the one whose code request is answered confirms the code it reads from Mailpit, and the others
- * — refused with 429 (the resend interval, or the per-account rate limit) or with a code that a
- * newer one replaced — wait and ask `GET /me` again until it says verified.
+ * Takes a seed admin through whatever is left of its onboarding (#58): the consent, the 본인확인,
+ * the nickname step with the nickname the seed gave it, and the interest categories skipped.
+ * Workers running in parallel share the two admins, and every step but the 본인확인 is safe to
+ * repeat (the same consent answers are not written again, the same nickname confirms nothing new
+ * and grants once, the skip stays a skip). The 본인확인 is not: the worker whose code request is
+ * answered confirms the code it reads from Mailpit, and the others — refused with 429 (the resend
+ * interval, or the per-account rate limit) or with a code that a newer one replaced — wait and ask
+ * `GET /me` again until it says verified.
  */
-async function verifySeedAdmin(
+async function onboardSeedAdmin(
   context: APIRequestContext,
   admin: SeedAdmin,
   expectedAccountId: string,
 ): Promise<void> {
   const deadline = Date.now() + ADMIN_VERIFY_MS;
   while (Date.now() < deadline) {
-    const me = await unwrap<{ verification: unknown }>(await context.get('/api/v1/me'));
-    if (me.verification !== null) return;
+    const me = await unwrap<Me>(await context.get('/api/v1/me'));
+    const step = me.onboarding.nextStep;
+    if (step === null) return;
+    if (step === 'consent') {
+      await agreeThroughApi(context, expectedAccountId);
+      continue;
+    }
+    if (step === 'nickname') {
+      await confirmNicknameThroughApi(context, expectedAccountId, me.profile.nickname);
+      continue;
+    }
+    if (step === 'interests') {
+      await answerInterestsThroughApi(context, expectedAccountId, []);
+      continue;
+    }
     const seen = await smsMessageIds(admin.verification.phone);
     const sent = await context.post('/api/v1/me/phone-verification/code', {
       data: { ...admin.verification, expectedAccountId },
@@ -163,7 +181,7 @@ async function verifySeedAdmin(
       const confirmed = await context.post('/api/v1/me/phone-verification/confirm', {
         data: { code, expectedAccountId },
       });
-      if (confirmed.ok()) return;
+      if (confirmed.ok()) continue;
       // 409: another worker verified first, or its newer code replaced this one.
       if (confirmed.status() !== 409) {
         throw new Error(
@@ -182,7 +200,9 @@ async function verifySeedAdmin(
     }
     await new Promise((resolve) => setTimeout(resolve, ADMIN_VERIFY_POLL_MS));
   }
-  throw new Error(`${admin.email} was not verified within ${String(ADMIN_VERIFY_MS)} ms`);
+  throw new Error(
+    `${admin.email} did not finish the onboarding within ${String(ADMIN_VERIFY_MS)} ms`,
+  );
 }
 
 /**
@@ -284,7 +304,8 @@ export async function smsCode(phone: string, seen: readonly string[] = []): Prom
 /**
  * The 본인확인 step on /onboarding (ADR-0070), done as a member does it: the real name and the
  * number, 인증번호 받기, the code the development sender mailed to Mailpit, 본인확인 완료. The
- * page then goes on to its `next`, which the caller checks. Returns the number verified.
+ * stepper then goes on to the nickname step (#58), which the caller checks. Returns the number
+ * verified.
  */
 export async function verifyPhone(
   page: Page,
@@ -363,10 +384,21 @@ export async function expectYellowWarning(element: Locator): Promise<void> {
 }
 
 /**
+ * The consent step on /onboarding (#58), done as a member does it: 전체 동의 — the optional
+ * marketing item with the rest — and 동의하고 계속하기. The stepper then shows the 본인확인 step.
+ */
+export async function agreeOnScreen(page: Page): Promise<void> {
+  await expect(page.getByTestId('consent-step')).toBeVisible();
+  await page.getByTestId('consent-all').click();
+  await page.getByTestId('consent-submit').click();
+  await expect(page.getByTestId('verification-step')).toBeVisible();
+}
+
+/**
  * The first half of a sign-up (ADR-0024): the form takes the email only, and the link in the
  * mail signs the user in and lands on /set-password. The account is signed in from here on
- * but has neither a password nor a verified phone yet — which is also the state the onboarding
- * gate exists for (ADR-0043, ADR-0070), so onboarding.spec.ts starts from this.
+ * but has neither a password nor any onboarding step done — which is also the state the
+ * onboarding gate exists for (ADR-0043, #58), so onboarding.spec.ts starts from this.
  */
 export async function openSetPassword(page: Page, email: string): Promise<void> {
   await page.goto('/signup');
@@ -378,34 +410,162 @@ export async function openSetPassword(page: Page, email: string): Promise<void> 
   await expect(page).toHaveURL('/set-password');
 }
 
+/** Sets the first password on /set-password, which then goes on to its `next` (home by default). */
+export async function setFirstPassword(page: Page): Promise<void> {
+  await page.getByTestId('new-password').fill(E2E_PASSWORD);
+  await page.getByTestId('new-password-confirm').fill(E2E_PASSWORD);
+  await page.getByRole('button', { name: copy.setPasswordSubmit }).click();
+}
+
+// ---- the onboarding through the API (#58) -------------------------------------------
+
+/** `GET /me` of the account `context` is signed in as. */
+export async function meOf(context: APIRequestContext): Promise<Me> {
+  return unwrap<Me>(await context.get('/api/v1/me'));
+}
+
 /**
- * Sign-up (ADR-0024, ADR-0070): /set-password takes the first password and goes home, where the
- * onboarding gate takes the account on to the 본인확인 step; verified, it is back on `/`. It
- * arrives with 0 Coin and an empty ledger: creating an account grants nothing since #70
- * (ADR-0071), and the start Coin comes from the grant the onboarding (#58) will call, which
- * nothing in this build does yet. Returns the number it verified (`phone`, a fresh one unless
- * given).
+ * The consent step through the API: every item at its current version (consent-versions.ts), the
+ * required ones agreed and the optional marketing one as `marketing` says (declined by default).
+ */
+export async function agreeThroughApi(
+  context: APIRequestContext,
+  expectedAccountId: string,
+  marketing = false,
+): Promise<Me> {
+  const answer = (item: keyof typeof E2E_CONSENT_VERSIONS, agreed: boolean) => ({
+    version: E2E_CONSENT_VERSIONS[item],
+    agreed,
+  });
+  return unwrap<Me>(
+    await context.post('/api/v1/me/consents', {
+      data: {
+        consents: {
+          terms: answer('terms', true),
+          privacy: answer('privacy', true),
+          age: answer('age', true),
+          marketing: answer('marketing', marketing),
+        },
+        expectedAccountId,
+      },
+    }),
+  );
+}
+
+/** The 본인확인 through the API, with the code the development sender mailed to Mailpit. */
+export async function verifyThroughApi(
+  context: APIRequestContext,
+  expectedAccountId: string,
+  phone: string,
+  realName: string = E2E_REAL_NAME,
+): Promise<void> {
+  const seen = await smsMessageIds(phone);
+  const sent = await context.post('/api/v1/me/phone-verification/code', {
+    data: { realName, phone, expectedAccountId },
+  });
+  if (sent.status() === 429) {
+    const body = (await sent.json()) as { error: { details?: { reason?: string } } };
+    if (body.error.details?.reason === 'service_daily') throw new Error(SERVICE_LIMIT_HELP);
+  }
+  await unwrap<unknown>(sent);
+  await unwrap<unknown>(
+    await context.post('/api/v1/me/phone-verification/confirm', {
+      data: { code: await smsCode(phone, seen), expectedAccountId },
+    }),
+  );
+}
+
+/**
+ * The nickname step through the API: `nickname` set or — the account's own — confirmed. With it
+ * the server grants the start Coin (#70), or leaves it waiting while the amount is undecided.
+ */
+export async function confirmNicknameThroughApi(
+  context: APIRequestContext,
+  expectedAccountId: string,
+  nickname: string,
+): Promise<Me> {
+  return unwrap<Me>(
+    await context.post('/api/v1/me/onboarding/nickname', {
+      data: { nickname, expectedAccountId },
+    }),
+  );
+}
+
+/** The interest categories through the API: `categoryIds`, or none — the skip. */
+export async function answerInterestsThroughApi(
+  context: APIRequestContext,
+  expectedAccountId: string,
+  categoryIds: readonly number[],
+): Promise<Me> {
+  return unwrap<Me>(
+    await context.put('/api/v1/me/interest-categories', {
+      data: { categoryIds, expectedAccountId },
+    }),
+  );
+}
+
+export interface OnboardingOptions {
+  /** The number to verify; a fresh one unless given. */
+  phone?: string;
+  /** The nickname to set at the nickname step; the auto nickname confirmed unless given. */
+  nickname?: string;
+}
+
+/**
+ * Whatever is left of the onboarding of the account `context` is signed in as, through the API
+ * (#58): what every spec's accounts go through on their way to the screens they test, quickly —
+ * onboarding.spec.ts and phone-verification.spec.ts walk the screens themselves. Returns `GET /me`
+ * once nothing is left, and the number verified.
+ */
+export async function completeOnboardingThroughApi(
+  context: APIRequestContext,
+  { phone = freshPhone(), nickname }: OnboardingOptions = {},
+): Promise<{ me: Me; phone: string }> {
+  let me = await meOf(context);
+  if (!me.onboarding.consent) me = await agreeThroughApi(context, me.id);
+  if (!me.onboarding.verification) {
+    await verifyThroughApi(context, me.id, phone);
+    me = await meOf(context);
+  }
+  if (!me.onboarding.nickname) {
+    me = await confirmNicknameThroughApi(context, me.id, nickname ?? me.profile.nickname);
+  }
+  if (!me.onboarding.interests) me = await answerInterestsThroughApi(context, me.id, []);
+  expect(me.onboarding.nextStep).toBeNull();
+  return { me, phone };
+}
+
+/**
+ * Sign-up (ADR-0024, #58): /set-password takes the first password and goes home, where the
+ * onboarding gate takes the account on to its first step, the consent. The rest of the onboarding
+ * — consent, 본인확인 (a fresh number unless `phone` is given), the nickname (the auto one confirmed
+ * unless `nickname` is given) and the interest categories skipped — is done through the API
+ * (`completeOnboardingThroughApi`) with the page's own cookie, and the page goes home: it lands
+ * there onboarded. Creating the account granted nothing (#70); the nickname step recorded its start
+ * Coin, paid while the release setting 시작 지급액 has a value and waiting otherwise (ADR-0071).
+ * Returns the number it verified.
  */
 export async function signUp(
   page: Page,
   email: string,
   phone: string = freshPhone(),
+  { nickname }: Pick<OnboardingOptions, 'nickname'> = {},
 ): Promise<string> {
   await openSetPassword(page, email);
-  await page.getByTestId('new-password').fill(E2E_PASSWORD);
-  await page.getByTestId('new-password-confirm').fill(E2E_PASSWORD);
-  await page.getByRole('button', { name: copy.setPasswordSubmit }).click();
+  await setFirstPassword(page);
   await expect(page).toHaveURL('/onboarding');
-  await verifyPhone(page, phone);
+  await expect(page.getByTestId('consent-step')).toBeVisible();
+  await completeOnboardingThroughApi(page.request, { phone, ...(nickname ? { nickname } : {}) });
+  await page.goto('/');
   await expect(page).toHaveURL('/');
   return phone;
 }
 
 /**
  * Signs an existing account in through the login form; lands on `/` with no `next`. The account
- * must have verified its phone — every `signUp` account has, and the seed admins are verified by
- * the `admin` and `secondAdmin` fixtures — or the onboarding gate (ADR-0070) sends it to
- * /onboarding instead.
+ * must have finished its onboarding — every `signUp` account has, and the seed admins do in the
+ * `admin` and `secondAdmin` fixtures — or the onboarding gate (#58) sends it to /onboarding
+ * instead.
  */
 export async function signIn(page: Page, email: string, password: string): Promise<void> {
   await page.goto('/login');

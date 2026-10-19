@@ -36,6 +36,13 @@ export interface RegisteredRoute {
   readonly preservedPaid?: true;
   /** Left out of the OpenAPI document (`@ApiExcludeController`); docs/API.md describes it. */
   readonly undocumented?: true;
+  /**
+   * Open to accounts that have done the onboarding only (OnboardedGuard, #58: ADR-0069 decision 1
+   * #57-8 keeps writes, likes, reports, proposals and orders from the rest). registry.test.ts holds
+   * this flag and the guard to each other, so a route that should carry the check says so here and
+   * a reviewer sees it.
+   */
+  readonly onboarded?: true;
 }
 
 export const PUBLIC_ROUTES: Readonly<Record<string, RegisteredRoute>> = {
@@ -85,10 +92,24 @@ export const PUBLIC_ROUTES: Readonly<Record<string, RegisteredRoute>> = {
 export const OWNER_ROUTES: Readonly<Record<string, RegisteredRoute>> = {
   'GET /me': {
     reason:
-      '본인 계정: 이메일·프로필·잔액·로그인 수단과 본인확인 기록(확인한 휴대전화·실명·확인 시각, ADR-0070), 시작 Coin의 지급 대기·지급(금액·시각, ADR-0071)(N04 §2)',
+      '본인 계정: 이메일·프로필·잔액·로그인 수단과 본인확인 기록(확인한 휴대전화·실명·확인 시각, ADR-0070), 시작 Coin의 지급 대기·지급(금액·시각, ADR-0071)과 그 번호가 이미 받았는지(#58), 온보딩의 단계와 항목마다의 가장 새 동의(항목·판·동의 여부·시각, 접속 주소와 브라우저는 싣지 않는다)·다음 닉네임 변경 가능 시각·관심 카테고리(#58)(N04 §2)',
   },
   'PATCH /me': {
-    reason: '본인 닉네임 변경',
+    reason:
+      '본인 닉네임 변경(#58, ADR-0069 결정 1 #57-6): 세션 계정의 닉네임만 규칙과 30일 간격대로 바꾸고 비운 닉네임을 다른 계정에 30일 막는다. 본문의 expectedAccountId가 세션 계정이어야 한다',
+  },
+  'POST /me/consents': {
+    reason:
+      '본인 약관 동의(#58, ADR-0069 결정 1 #57-5): 세션 계정의 항목마다의 동의를 지금 판으로 기록하고(동의 시각·접속 주소·브라우저 정보를 함께 남긴다) 본인 계정을 돌려준다. 본문의 expectedAccountId가 세션 계정이어야 한다',
+  },
+  'POST /me/onboarding/nickname': {
+    reason:
+      '본인 온보딩의 닉네임 설정(#58, ADR-0069 결정 1 #57-6): 약관 동의와 본인확인을 마친 세션 계정의 닉네임을 확정하고 그 계정의 시작 Coin을 지급하거나 대기시킨다(#70). 본문의 expectedAccountId가 세션 계정이어야 한다',
+  },
+  'PUT /me/interest-categories': {
+    reason:
+      '본인 관심 카테고리 설정·건너뛰기(#58, ADR-0069 결정 1 #57-7): 온보딩을 마친 세션 계정의 관심 카테고리만 바꾼다. 본문의 expectedAccountId가 세션 계정이어야 한다',
+    onboarded: true,
   },
   'POST /me/password': {
     reason: '본인 첫 비밀번호 설정: 본문의 expectedAccountId가 세션 계정이어야 한다',

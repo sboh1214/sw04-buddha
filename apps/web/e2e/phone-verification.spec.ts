@@ -2,6 +2,7 @@ import type { Page } from '@playwright/test';
 import { copy } from '../src/copy';
 import {
   E2E_REAL_NAME,
+  agreeOnScreen,
   backgroundOf,
   expect,
   expectCodeInput,
@@ -26,16 +27,36 @@ import {
  * the API's own on its way to the browser (a dropped connection, a gateway's 5xx, a timeout) —
  * which may have texted the code and says so, as a warning, while its code is tried, and after
  * which an older code is answered as the last text that came for as long as the screen knows it
- * (owner decisions 2026-10-18). The happy path and the gate are onboarding.spec.ts's.
+ * (owner decisions 2026-10-18). The happy path and the gate are onboarding.spec.ts's. The step is
+ * the onboarding's second (#58): every test agrees to the consent on screen first.
  *
  * Every account and number is fresh, so the per-account and per-number limits never meet another
  * test's sends. The codes come from the API's development SMS sender through Mailpit.
  */
 
-/** Opens the step for a fresh signed-in account that has not verified, and sends a code. */
-async function sendCode(page: Page, phone: string): Promise<string> {
+/**
+ * Opens the 본인확인 step for a fresh signed-in account: the onboarding's consent first (#58, the
+ * owner's order), which the stepper follows with this step.
+ */
+async function openVerificationStep(page: Page): Promise<void> {
   await openSetPassword(page, freshEmail());
   await page.goto('/onboarding');
+  await agreeOnScreen(page);
+}
+
+/**
+ * A confirmed code: the toast, and the onboarding's next step (#58) on the same screen — the
+ * stepper moves on to the nickname rather than leaving /onboarding.
+ */
+async function expectVerified(page: Page): Promise<void> {
+  await expect(page.getByText(copy.verificationDone)).toBeVisible();
+  await expect(page.getByTestId('nickname-step')).toBeVisible();
+  await expect(page).toHaveURL('/onboarding');
+}
+
+/** Opens the step for a fresh signed-in account that has not verified, and sends a code. */
+async function sendCode(page: Page, phone: string): Promise<string> {
+  await openVerificationStep(page);
   const seen = await smsMessageIds(phone);
   await page.getByTestId('verification-real-name').fill(E2E_REAL_NAME);
   await page.getByTestId('verification-phone').fill(phone);
@@ -125,8 +146,7 @@ test.describe('본인확인 인증번호 (#183)', () => {
 
     await page.getByTestId('verification-code').fill(code);
     await page.getByTestId('verification-confirm').click();
-    await expect(page).toHaveURL('/');
-    await expect(page.getByText(copy.verificationDone)).toBeVisible();
+    await expectVerified(page);
   });
 
   test('다섯 번 틀리면 그 인증번호는 버려지고 새로 받아야 한다', async ({ page }) => {
@@ -232,17 +252,14 @@ test.describe('본인확인 인증번호 (#183)', () => {
 
     await page.getByTestId('verification-code').fill(code);
     await page.getByTestId('verification-confirm').click();
-    await expect(page).toHaveURL('/');
-    await expect(page.getByText(copy.verificationDone)).toBeVisible();
+    await expectVerified(page);
   });
 
   test('1분 안에 다른 화면에서 보낸 인증번호가 있으면 다시 받기 대신 그 입력 칸을 연다', async ({
     page,
   }) => {
     const phone = freshPhone();
-    await openSetPassword(page, freshEmail());
-    await page.goto('/onboarding');
-    await expect(page.getByTestId('verification-step')).toBeVisible();
+    await openVerificationStep(page);
 
     // Another tab of the account (or a send whose answer this screen never got) texts a code.
     const seen = await smsMessageIds(phone);
@@ -267,7 +284,7 @@ test.describe('본인확인 인증번호 (#183)', () => {
 
     await page.getByTestId('verification-code').fill(code);
     await page.getByTestId('verification-confirm').click();
-    await expect(page).toHaveURL('/');
+    await expectVerified(page);
   });
 
   test('다시 받은 뒤 예전 인증번호를 넣으면 틀린 입력으로 세지 않고 새 인증번호를 묻는다', async ({
@@ -305,17 +322,14 @@ test.describe('본인확인 인증번호 (#183)', () => {
 
     await page.getByTestId('verification-code').fill(newest);
     await page.getByTestId('verification-confirm').click();
-    await expect(page).toHaveURL('/');
-    await expect(page.getByText(copy.verificationDone)).toBeVisible();
+    await expectVerified(page);
   });
 
   test('발송 결과를 알 수 없으면 문자가 갔을 수 있다고 알리고 그 인증번호를 받는다', async ({
     page,
   }) => {
     const phone = freshPhone();
-    await openSetPassword(page, freshEmail());
-    await page.goto('/onboarding');
-    await expect(page.getByTestId('verification-step')).toBeVisible();
+    await openVerificationStep(page);
 
     // The API sends the code (the development sender mails it to Mailpit), and the answer the
     // screen gets is the one a lost provider answer makes: 502 SMS_SEND_UNCONFIRMED.
@@ -341,8 +355,7 @@ test.describe('본인확인 인증번호 (#183)', () => {
     // The text did come: its code verifies the account.
     await page.getByTestId('verification-code').fill(await smsCode(phone, seen));
     await page.getByTestId('verification-confirm').click();
-    await expect(page).toHaveURL('/');
-    await expect(page.getByText(copy.verificationDone)).toBeVisible();
+    await expectVerified(page);
   });
 
   test('다시 받기의 결과를 알 수 없을 때 예전 인증번호를 넣으면 마지막 문자의 인증번호를 묻고 문자가 갔을 수 있다는 안내가 남는다', async ({
@@ -434,8 +447,7 @@ test.describe('본인확인 인증번호 (#183)', () => {
     // None of the older codes spent an entry: the newest still verifies.
     await page.getByTestId('verification-code').fill(newest);
     await page.getByTestId('verification-confirm').click();
-    await expect(page).toHaveURL('/');
-    await expect(page.getByText(copy.verificationDone)).toBeVisible();
+    await expectVerified(page);
   });
 
   test('답을 받지 못한 다시 받기 뒤 실명·번호 다시 입력과 이미 받은 인증번호 입력으로 예전 인증번호를 넣어도 마지막 문자의 인증번호를 묻고, 다른 화면이 보낸 뒤에는 보통의 문장이다', async ({
@@ -502,17 +514,14 @@ test.describe('본인확인 인증번호 (#183)', () => {
 
     await page.getByTestId('verification-code').fill(latest);
     await page.getByTestId('verification-confirm').click();
-    await expect(page).toHaveURL('/');
-    await expect(page.getByText(copy.verificationDone)).toBeVisible();
+    await expectVerified(page);
   });
 
   test('API의 답이 브라우저에 오지 않으면(연결 끊김·시간 초과) 문자가 갔을 수 있다고 알리고 그 인증번호를 받는다', async ({
     page,
   }) => {
     const phone = freshPhone();
-    await openSetPassword(page, freshEmail());
-    await page.goto('/onboarding');
-    await expect(page.getByTestId('verification-step')).toBeVisible();
+    await openVerificationStep(page);
 
     // The API sends the code, and its answer never reaches the browser: the request fails at the
     // network level, as a dropped connection or a timeout on the way back does.
@@ -536,15 +545,12 @@ test.describe('본인확인 인증번호 (#183)', () => {
     // The text did come: its code verifies the account.
     await page.getByTestId('verification-code').fill(await smsCode(phone, seen));
     await page.getByTestId('verification-confirm').click();
-    await expect(page).toHaveURL('/');
-    await expect(page.getByText(copy.verificationDone)).toBeVisible();
+    await expectVerified(page);
   });
 
   test('앞단 게이트웨이가 API 대신 5xx로 답해도 문자가 갔을 수 있다고 알린다', async ({ page }) => {
     const phone = freshPhone();
-    await openSetPassword(page, freshEmail());
-    await page.goto('/onboarding');
-    await expect(page.getByTestId('verification-step')).toBeVisible();
+    await openVerificationStep(page);
 
     // The API sends the code, and a gateway in front of it answers for it — a 502 page, not the
     // API's error envelope.
@@ -568,14 +574,11 @@ test.describe('본인확인 인증번호 (#183)', () => {
 
     await page.getByTestId('verification-code').fill(await smsCode(phone, seen));
     await page.getByTestId('verification-confirm').click();
-    await expect(page).toHaveURL('/');
-    await expect(page.getByText(copy.verificationDone)).toBeVisible();
+    await expectVerified(page);
   });
 
   test('보내지 못한 것이 확실하면 그대로 알리고 인증번호 칸을 열지 않는다', async ({ page }) => {
-    await openSetPassword(page, freshEmail());
-    await page.goto('/onboarding');
-    await expect(page.getByTestId('verification-step')).toBeVisible();
+    await openVerificationStep(page);
     // A refusal before anything was sent (the provider said no): 502 SMS_SEND_FAILED.
     await page.route('**/api/v1/me/phone-verification/code', (route) =>
       route.fulfill({

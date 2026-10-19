@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { isPhoneVerified, schema, type Db } from '@buddha/db';
+import { hasStandingConsent, isPhoneVerified, schema, type Db } from '@buddha/db';
 import {
   PHONE_VERIFICATION_LIMITS,
+  type OnboardingRequiredDetails,
   type PhoneVerification,
   type PhoneVerificationCodeSent,
   type PhoneVerificationLimitedDetails,
@@ -178,6 +179,17 @@ export class PhoneVerificationService {
     let clockReadAt = 0;
     await this.write(async (tx) => {
       await lockAccount(tx, userId);
+      // The consent step comes first (#58, ADR-0069 decision 4 #58): its 개인정보 수집·이용
+      // agreement is what lets the number be taken and texted through the provider, so no number
+      // is recorded or texted for an account without it standing. Before the service-wide lock:
+      // a refusal holds nobody else's send.
+      if (!(await hasStandingConsent(tx, userId))) {
+        const details: OnboardingRequiredDetails = { steps: ['consent'] };
+        throw new AppError('ONBOARDING_REQUIRED', {
+          message: 'The consent step comes before the verification',
+          details,
+        });
+      }
       await lockSends(tx);
       if (await isPhoneVerified(tx, userId)) {
         throw verificationNotAllowed({ reason: 'already_verified' });

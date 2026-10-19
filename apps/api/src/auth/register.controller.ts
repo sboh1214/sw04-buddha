@@ -13,7 +13,8 @@ import { RegistrationService } from './registration.service.js';
 /**
  * PLAN 7.1 public route. Sign-up takes the email only; the password is set after the
  * verification link proves the mailbox (ADR-0024). better-auth owns /api/auth/*, so this
- * lives under the versioned prefix at /api/v1/auth/register.
+ * lives under the versioned prefix at /api/v1/auth/register. `next`, the page the visitor came
+ * from, rides in the link to /set-password (#58).
  */
 @ApiTags('auth')
 @Controller('auth')
@@ -36,7 +37,7 @@ export class RegisterController {
   async register(
     @Body({ schema: registerBodySchema }) body: RegisterBody,
   ): Promise<RegisterResult> {
-    await this.registration.register(body.email);
+    await this.registration.register(body.email, body.next);
     return { status: 'sent' };
   }
 }

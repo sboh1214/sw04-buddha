@@ -33,6 +33,8 @@ const me = (id: string): Me => ({
     role: 'user',
     createdAt: '2026-08-01T00:00:00.000Z',
     timeZone: null,
+    nicknameChangeAvailableAt: null,
+    interestCategoryIds: [],
   },
   balance: { availableCoin: '0', lockedCoin: '0' },
   linkedAccounts: [],
@@ -42,6 +44,15 @@ const me = (id: string): Me => ({
     verifiedAt: '2026-10-18T00:00:00.000Z',
   },
   startGrant: null,
+  onboarding: {
+    consent: true,
+    verification: true,
+    nickname: true,
+    completed: true,
+    interests: true,
+    nextStep: null,
+    consents: [],
+  },
 });
 
 const outage = () => new ApiError(503, { code: 'INTERNAL', message: 'x' } as never);

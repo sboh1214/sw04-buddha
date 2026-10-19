@@ -5,8 +5,10 @@
  */
 import { randomBytes, randomInt, randomUUID } from 'node:crypto';
 import {
+  CONSENT_ITEMS,
   PRICE_MAX,
   PRICE_MIN,
+  currentConsentVersion,
   SETTLEMENT_STEPS,
   relatedMarketPair,
   type MarketStatus,
@@ -16,12 +18,13 @@ import {
   type SettlementStep,
   type SettlementStepStatus,
 } from '@buddha/shared';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import type { Db } from '../client.js';
 import {
   adminActions,
   balances,
   categories,
+  consentRecords,
   fills,
   ledgerEntries,
   marketLinks,
@@ -565,6 +568,69 @@ export async function createStartGrant(db: Db, input: CreateStartGrantInput) {
     }
     return paid.grant;
   });
+}
+
+export interface CreateConsentsInput {
+  userId: string;
+  /** The optional marketing item's answer. Default: not agreed. */
+  marketing?: boolean;
+  /** Versions to record instead of the current ones, by item (a record from before a revision). */
+  versions?: Partial<Record<(typeof CONSENT_ITEMS)[number], string>>;
+  clientIp?: string | null;
+  userAgent?: string | null;
+}
+
+/**
+ * The consent step as `POST /me/consents` records it (#58): one row per item, the required ones
+ * agreed, at the current versions unless `versions` says otherwise. For a test whose subject needs
+ * an account past its consent step rather than the step itself.
+ */
+export async function createConsents(db: Db, input: CreateConsentsInput) {
+  return db
+    .insert(consentRecords)
+    .values(
+      CONSENT_ITEMS.map((item) => ({
+        userId: input.userId,
+        item,
+        version: input.versions?.[item] ?? currentConsentVersion(item),
+        agreed: item === 'marketing' ? (input.marketing ?? false) : true,
+        clientIp: input.clientIp ?? null,
+        userAgent: input.userAgent ?? null,
+      })),
+    )
+    .returning();
+}
+
+export interface CompleteOnboardingInput {
+  userId: string;
+  /** The 본인확인's number, digits only, when the account has no record yet. Default: random. */
+  phone?: string;
+  /** Also answer the interest categories step (with none). Default: false. */
+  interests?: boolean;
+}
+
+/**
+ * An account past the onboarding's three steps (#58) as the API leaves it, without the start
+ * Coin: its consent records, a 본인확인 record (kept if it has one), and its nickname confirmed as
+ * it is. For a test whose subject needs an onboarded account — an action #57-8 keeps from the rest
+ * — rather than the onboarding itself; the start grant is `createStartGrant`'s.
+ */
+export async function completeOnboarding(db: Db, input: CompleteOnboardingInput) {
+  await createConsents(db, { userId: input.userId });
+  await db
+    .insert(phoneVerifications)
+    .values({ userId: input.userId, phone: input.phone ?? randomPhone(), realName: '홍길동' })
+    .onConflictDoNothing({ target: phoneVerifications.userId });
+  const [profile] = await db
+    .update(profiles)
+    .set({
+      nicknameConfirmedAt: sql`now()`,
+      ...(input.interests ? { interestsAnsweredAt: sql`now()` } : {}),
+    })
+    .where(eq(profiles.userId, input.userId))
+    .returning();
+  if (!profile) throw new Error(`no profile for ${input.userId}`);
+  return profile;
 }
 
 export interface SetReleaseSettingInput {

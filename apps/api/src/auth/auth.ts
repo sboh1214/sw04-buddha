@@ -7,6 +7,7 @@ import { type Db, schema } from '@buddha/db';
 import {
   DEFAULT_RATE_LIMITS,
   NO_EMAIL_DOMAIN,
+  SET_PASSWORD_PATH,
   isNoEmailAddress,
   type RateLimits,
 } from '@buddha/shared';
@@ -25,10 +26,11 @@ export const AUTH_BASE_PATH = '/api/auth';
 /** `account.providerId` of the email+password login method. */
 export const CREDENTIAL_PROVIDER_ID = 'credential';
 
-/** Page that asks a freshly verified user for their first password (ADR-0024). */
-export const SET_PASSWORD_PATH = '/set-password';
-
-/** Where a verification link lands when the client did not ask for a specific page. */
+/**
+ * Where a verification link lands when the client did not ask for a specific page: the page that
+ * asks a freshly verified user for their first password (ADR-0024, `SET_PASSWORD_PATH` of
+ * @buddha/shared, which also builds the link that carries the sign-up's `next`, #58).
+ */
 const DEFAULT_VERIFY_CALLBACK = SET_PASSWORD_PATH;
 
 /**

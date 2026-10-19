@@ -63,10 +63,12 @@ export class PhoneVerificationController {
   // PHONE_VERIFICATION_NOT_ALLOWED: verified already. SMS_SEND_FAILED: the provider certainly did
   // not take the text — counted for nothing. SMS_SEND_UNCONFIRMED: its answer was lost and the
   // text may have gone — counted against the limits, and its code can be confirmed (ADR-0070).
+  // ONBOARDING_REQUIRED: the consent step is not done (#58: it comes first) — nothing recorded.
   @ApiErrors(
     'UNAUTHENTICATED',
     'FORBIDDEN',
     'VALIDATION_ERROR',
+    'ONBOARDING_REQUIRED',
     'PHONE_VERIFICATION_NOT_ALLOWED',
     'PHONE_VERIFICATION_LIMITED',
     'RATE_LIMITED',

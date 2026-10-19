@@ -31,6 +31,10 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<ErrorCode, number>> = {
   // the screen tells the two apart by.
   SMS_SEND_FAILED: HttpStatus.BAD_GATEWAY,
   SMS_SEND_UNCONFIRMED: HttpStatus.BAD_GATEWAY,
+  // The account's state refuses the action until it has done the onboarding (#58): a conflict
+  // with that state, like VERIFICATION_REQUIRED, which the same request passes once it is done.
+  ONBOARDING_REQUIRED: HttpStatus.CONFLICT,
+  NICKNAME_NOT_ALLOWED: HttpStatus.CONFLICT,
   INTERNAL: HttpStatus.INTERNAL_SERVER_ERROR,
 };
 

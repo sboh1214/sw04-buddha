@@ -1,0 +1,124 @@
+import * as z from 'zod';
+import { consentRecordSchema, type ConsentRecord } from './consent.js';
+import { INT4_MAX } from './constants.js';
+import { nicknameSchema } from './nickname.js';
+
+/**
+ * 가입 직후 온보딩 (#58, ADR-0069 decision 1 #57-7~#57-10 and decision 4 #58): 약관 동의 →
+ * 본인확인 → 닉네임 설정, then the start Coin (#70) once the server has confirmed all three, the
+ * notice screen, and the interest categories, which can be skipped.
+ *
+ * - `consent`: every required item agreed at a version that still holds (consent.ts) — false
+ *   again for an account that agreed only before a revision that changed members' rights.
+ * - `verification`: the SMS 본인확인 (#183, ADR-0070).
+ * - `nickname`: the nickname step confirmed — the offered auto nickname unchanged counts.
+ * - `interests`: the interest categories step answered, some chosen or skipped; never asked again.
+ *
+ * The first three are the onboarding (REQUIRED_ONBOARDING_STEPS): an account that has not done
+ * them only browses, and the server refuses it what needs them (ONBOARDING_REQUIRED, #57-8).
+ */
+export const ONBOARDING_STEPS = ['consent', 'verification', 'nickname', 'interests'] as const;
+export type OnboardingStep = (typeof ONBOARDING_STEPS)[number];
+export const onboardingStepSchema = z.enum(ONBOARDING_STEPS).meta({ id: 'OnboardingStep' });
+
+/** The steps the onboarding is done with (#57-8, D18), in their order (decision 4 #58). */
+export const REQUIRED_ONBOARDING_STEPS = ['consent', 'verification', 'nickname'] as const;
+export type RequiredOnboardingStep = (typeof REQUIRED_ONBOARDING_STEPS)[number];
+
+/** Which steps an account has done; what `onboardingState` reads. */
+export interface OnboardingProgress {
+  readonly consent: boolean;
+  readonly verification: boolean;
+  readonly nickname: boolean;
+  readonly interests: boolean;
+}
+
+/** The required steps an account has not done, in order. Empty: the onboarding is done. */
+export function missingOnboardingSteps(progress: OnboardingProgress): RequiredOnboardingStep[] {
+  return REQUIRED_ONBOARDING_STEPS.filter((step) => !progress[step]);
+}
+
+/**
+ * `Me.onboarding`: the account's progress, for the web's gate and stepper. Owner-only, like all of
+ * `GET /me`.
+ */
+export const onboardingSchema = z
+  .object({
+    consent: z.boolean(),
+    verification: z.boolean(),
+    nickname: z.boolean(),
+    /** The three required steps done: the account may do what #57-8 keeps from the rest. */
+    completed: z.boolean(),
+    interests: z.boolean(),
+    /**
+     * Where the account resumes (#57-8 '남은 단계부터'): the first step not done in
+     * ONBOARDING_STEPS order — the interests come after the start Coin and its notice (#57-7) —
+     * or null with nothing left.
+     */
+    nextStep: onboardingStepSchema.nullable(),
+    /** The account's newest answer to each item it answered, in CONSENT_ITEMS order. */
+    consents: z.array(consentRecordSchema),
+  })
+  .meta({ id: 'Onboarding' });
+export type Onboarding = z.infer<typeof onboardingSchema>;
+
+/** `Me.onboarding` from the account's progress and its newest consent answers. */
+export function onboardingState(
+  progress: OnboardingProgress,
+  consents: readonly ConsentRecord[],
+): Onboarding {
+  const completed = missingOnboardingSteps(progress).length === 0;
+  return {
+    consent: progress.consent,
+    verification: progress.verification,
+    nickname: progress.nickname,
+    completed,
+    interests: progress.interests,
+    nextStep: ONBOARDING_STEPS.find((step) => !progress[step]) ?? null,
+    consents: [...consents],
+  };
+}
+
+/**
+ * `ONBOARDING_REQUIRED`'s details: the required steps the account has not done — every one an
+ * action needs (an action open to onboarded accounts only names all it misses; the code request of
+ * the 본인확인 names the consent only).
+ */
+export const onboardingRequiredDetailsSchema = z.object({
+  steps: z.array(z.enum(REQUIRED_ONBOARDING_STEPS)).min(1),
+});
+export type OnboardingRequiredDetails = z.infer<typeof onboardingRequiredDetailsSchema>;
+
+const expectedAccountIdSchema = z.string().min(1).max(255);
+
+/**
+ * `POST /me/onboarding/nickname`: the nickname step. The nickname the account has (its auto
+ * nickname) confirms it as it is; another one is held to the rules (nickname.ts). Either way it is
+ * not a change for the interval, and the server grants the start Coin once the three steps are
+ * done.
+ */
+export const setOnboardingNicknameBodySchema = z
+  .object({ nickname: nicknameSchema, expectedAccountId: expectedAccountIdSchema })
+  .meta({ id: 'SetOnboardingNicknameBody' });
+export type SetOnboardingNicknameBody = z.infer<typeof setOnboardingNicknameBodySchema>;
+
+/**
+ * Bound on the categories one request names. There is no limit on how many a member picks (#57-7
+ * «상한 없음»): this only bounds the input, far above the seeded list (~30, operators manage it,
+ * D10).
+ */
+export const INTEREST_CATEGORIES_INPUT_MAX = 200;
+
+/**
+ * `PUT /me/interest-categories`: the account's interest categories (N04 §2's 관심 카테고리, a
+ * public profile item once #41 shows it), replacing what it had — top-level and sub-categories
+ * alike (#57-7), active ones only. An empty list is the skip: the step is answered either way and
+ * never asked again (#57-7). Ids repeat harmlessly.
+ */
+export const setInterestCategoriesBodySchema = z
+  .object({
+    categoryIds: z.array(z.number().int().min(1).max(INT4_MAX)).max(INTEREST_CATEGORIES_INPUT_MAX),
+    expectedAccountId: expectedAccountIdSchema,
+  })
+  .meta({ id: 'SetInterestCategoriesBody' });
+export type SetInterestCategoriesBody = z.infer<typeof setInterestCategoriesBodySchema>;

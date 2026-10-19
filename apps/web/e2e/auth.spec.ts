@@ -1,12 +1,12 @@
 import { expect, test } from '@playwright/test';
 import { copy } from '../src/copy';
-import { freshEmail, logOut, signUp } from './helpers';
+import { freshEmail, freshTag, logOut, signUp } from './helpers';
 
 /**
  * M1 flow (PLAN 13 M1 AC 1): email signup -> logout -> login -> /my/settings shows the profile
  * that `GET /api/v1/me` returned. Each run uses a fresh email (and, since ADR-0070, a fresh
- * number for the 본인확인 step `signUp` goes through), so it is re-runnable against a persistent
- * local database. Skeleton: enabled in CI in M4 (PLAN 14).
+ * number for the 본인확인 step of the onboarding `signUp` goes through, #58), so it is re-runnable
+ * against a persistent local database. Skeleton: enabled in CI in M4 (PLAN 14).
  */
 const password = 'passw0rd-e2e';
 
@@ -15,8 +15,9 @@ test.describe('signup -> login -> settings', () => {
     const email = freshEmail();
     await signUp(page, email);
     // Nav shows the balance chip once `GET /me` resolves: 0, since creating an account grants
-    // nothing (#70, ADR-0071) — the sign-up trigger's 10,000 Coin is gone. The whole chip is
-    // matched, label and amount: '0 Coin' alone is also inside '10,000 Coin' and could not fail.
+    // nothing and the start Coin the onboarding records waits for its amount (#70, ADR-0071) — the
+    // sign-up trigger's 10,000 Coin is gone. The whole chip is matched, label and amount: '0 Coin'
+    // alone is also inside '10,000 Coin' and could not fail.
     await expect(page.getByTestId('balance-chip')).toHaveText(
       new RegExp(`^${copy.balance}\\s*0 Coin$`),
     );
@@ -42,18 +43,20 @@ test.describe('signup -> login -> settings', () => {
   });
 
   test('duplicate nickname -> field error (AC 4)', async ({ page }) => {
-    // Two accounts; the second one tries to take the first one's nickname.
-    await signUp(page, freshEmail());
+    // Two accounts; the second one tries to take the first one's nickname — in another case, which
+    // is the same nickname since #58 (ADR-0069 decision 1 #57-6). The first sets one of its own at
+    // the onboarding's nickname step: an auto nickname (`user_…`) is not one anybody may type.
+    const taken = `Dup${freshTag().slice(-8)}`;
+    await signUp(page, freshEmail(), undefined, { nickname: taken });
     await page.goto('/my/settings');
     // Wait for the seeded value: the input exists before `GET /me` resolves.
-    await expect(page.getByTestId('nickname-input')).toHaveValue(/^user_/);
-    const taken = await page.getByTestId('nickname-input').inputValue();
+    await expect(page.getByTestId('nickname-input')).toHaveValue(taken);
     await logOut(page);
 
     await signUp(page, freshEmail());
     await page.goto('/my/settings');
     await expect(page.getByTestId('nickname-input')).toHaveValue(/^user_/);
-    await page.getByTestId('nickname-input').fill(taken);
+    await page.getByTestId('nickname-input').fill(taken.toLowerCase());
     // Scoped: the 본인확인 card has its own '저장' button.
     await page.getByTestId('settings-profile').getByRole('button', { name: copy.save }).click();
     await expect(page.getByText(copy.errNicknameTaken)).toBeVisible();

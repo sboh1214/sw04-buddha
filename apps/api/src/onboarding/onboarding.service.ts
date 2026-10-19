@@ -1,0 +1,184 @@
+import { Inject, Injectable } from '@nestjs/common';
+import { readOnboarding, schema, type Db } from '@buddha/db';
+import {
+  CONSENT_ITEMS,
+  CONSENT_USER_AGENT_MAX_LENGTH,
+  missingOnboardingSteps,
+  type Me,
+  type OnboardingRequiredDetails,
+  type RecordConsentsBody,
+  type ValidationIssue,
+} from '@buddha/shared';
+import { and, eq, inArray, notInArray, sql } from 'drizzle-orm';
+import { AppError } from '../common/errors/app-error.js';
+import { DB } from '../infra/db/db.provider.js';
+import { MeService } from '../me/me.service.js';
+import { NicknameService } from '../me/nickname.service.js';
+import { StartGrantService } from '../start-grant/start-grant.service.js';
+
+type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
+
+/** Where a consent came from: what the record keeps beside the answers (#57-5). */
+export interface ConsentClient {
+  /** `clientAddress` (rate-limit.tracker.ts), or null when the request names no client. */
+  ip: string | null;
+  /** The request's `User-Agent`, as sent; cut to CONSENT_USER_AGENT_MAX_LENGTH here. */
+  userAgent: string | null;
+}
+
+/**
+ * The onboarding's writes (#58, ADR-0069 decision 1 #57-4~#57-10 and decision 4 #58), in the
+ * order the owner set: 약관 동의 → 본인확인 (#183's own routes, which ask for the consent first) →
+ * 닉네임 설정, then the start Coin, then the interest categories. Each step refuses an account that
+ * has not done the ones before it (ONBOARDING_REQUIRED), whatever screen sent it.
+ *
+ * The start Coin is granted in ONE place (#58's acceptance: '온보딩 안에서 #70의 지급 기능을
+ * 부르는 곳은 이 세 단계 완료 확인 처리뿐이다'): the nickname step, the last of the three, in the
+ * transaction that confirms the nickname, after it has read the consent and the 본인확인 (then it
+ * takes the profile's row lock, and the grant holds the 본인확인 record FOR SHARE until it commits —
+ * a record gone in between is VERIFICATION_REQUIRED). So an account whose onboarding is done always
+ * had its grant asked for, a step repeated or sent twice at once grants once (#70's guarantee and
+ * the row lock), and an account missing a step gets nothing however the request is made.
+ */
+@Injectable()
+export class OnboardingService {
+  constructor(
+    @Inject(DB) private readonly db: Db,
+    private readonly me: MeService,
+    private readonly nicknames: NicknameService,
+    private readonly startGrant: StartGrantService,
+  ) {}
+
+  /**
+   * `POST /me/consents`: the consent step's answers (the body has checked every item at its current
+   * version, the required ones agreed), recorded with the time, the client address and the browser
+   * (#57-5). An item whose newest answer is the same — same version, same choice — is not written
+   * again, so a repeated submission adds nothing; a changed one is a new row, the old one kept. Any
+   * account may answer it again: it is also the re-consent after a revision that asked for it.
+   */
+  async recordConsents(
+    userId: string,
+    consents: RecordConsentsBody['consents'],
+    client: ConsentClient,
+  ): Promise<Me> {
+    await this.db.transaction(async (tx) => {
+      // One submission of an account at a time, so two at once do not both find the newest answer
+      // different and write it twice. The two-key form, as the 본인확인's account lock.
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(hashtext('buddha:consent'), hashtext(${userId}))`,
+      );
+      const read = await readOnboarding(tx, userId);
+      if (!read) throw new AppError('NOT_FOUND', { message: 'Profile not found' });
+      const newest = new Map(read.consents.map((record) => [record.item, record]));
+      const rows = CONSENT_ITEMS.filter((item) => {
+        const before = newest.get(item);
+        return (
+          before === undefined ||
+          before.version !== consents[item].version ||
+          before.agreed !== consents[item].agreed
+        );
+      }).map((item) => ({
+        userId,
+        item,
+        version: consents[item].version,
+        agreed: consents[item].agreed,
+        clientIp: client.ip,
+        userAgent: client.userAgent?.slice(0, CONSENT_USER_AGENT_MAX_LENGTH) ?? null,
+      }));
+      if (rows.length > 0) await tx.insert(schema.consentRecords).values(rows);
+    });
+    return this.me.getMe(userId);
+  }
+
+  /**
+   * `POST /me/onboarding/nickname`: the nickname step and, with it, the start Coin (#70) — the one
+   * place the onboarding grants it. Refused while the consent or the 본인확인 is not done. The
+   * nickname is confirmed or chosen under the rules (NicknameService.confirmInOnboarding), then
+   * `StartGrantService.grantIn` records and pays the grant in the same transaction — or leaves it
+   * waiting while the amount is undecided (decision 4 #70), or records nothing when the verified
+   * number's start Coin went to another account (#57-1). Its balance event goes out after the
+   * commit. The answer is the whole `Me`: `startGrant` is what the notice screen shows (#57-10).
+   */
+  async setNickname(userId: string, nickname: string): Promise<Me> {
+    const granted = await this.db.transaction(async (tx) => {
+      await this.assertStepsBeforeNickname(tx, userId);
+      await this.nicknames.confirmInOnboarding(tx, userId, nickname);
+      return this.startGrant.grantIn(tx, userId);
+    });
+    await this.startGrant.announce(userId, granted);
+    return this.me.getMe(userId);
+  }
+
+  /**
+   * `PUT /me/interest-categories`: the account's interest categories (#57-7), replacing what it
+   * had, from the active categories only (top-level and sub-categories, D10: operators keep the
+   * list; the seeded one until #17), as many as it likes. None is the skip. Either way the step
+   * is answered, and never asked again. The route is open to onboarded accounts only
+   * (OnboardedGuard): the step comes after the start Coin. MY 설정 (#41) changes them here too.
+   */
+  async setInterests(userId: string, categoryIds: readonly number[]): Promise<Me> {
+    const wanted = [...new Set(categoryIds)];
+    await this.db.transaction(async (tx) => {
+      const [profile] = await tx
+        .select({ userId: schema.profiles.userId })
+        .from(schema.profiles)
+        .where(eq(schema.profiles.userId, userId))
+        .limit(1)
+        .for('update');
+      if (!profile) throw new AppError('NOT_FOUND', { message: 'Profile not found' });
+      if (wanted.length > 0) {
+        const active = await tx
+          .select({ id: schema.categories.id })
+          .from(schema.categories)
+          .where(and(inArray(schema.categories.id, wanted), eq(schema.categories.isActive, true)));
+        const known = new Set(active.map((row) => row.id));
+        const unknown: ValidationIssue[] = categoryIds.flatMap((id, index) =>
+          known.has(id)
+            ? []
+            : [{ path: ['categoryIds', index], message: 'not an active category' }],
+        );
+        if (unknown.length > 0) {
+          throw new AppError('VALIDATION_ERROR', {
+            message: 'Unknown or inactive category',
+            details: unknown,
+          });
+        }
+      }
+      // What it keeps keeps its row (and when it was picked); what it dropped goes.
+      await tx
+        .delete(schema.profileInterestCategories)
+        .where(
+          wanted.length === 0
+            ? eq(schema.profileInterestCategories.userId, userId)
+            : and(
+                eq(schema.profileInterestCategories.userId, userId),
+                notInArray(schema.profileInterestCategories.categoryId, wanted),
+              ),
+        );
+      if (wanted.length > 0) {
+        await tx
+          .insert(schema.profileInterestCategories)
+          .values(wanted.map((categoryId) => ({ userId, categoryId })))
+          .onConflictDoNothing();
+      }
+      await tx
+        .update(schema.profiles)
+        .set({ interestsAnsweredAt: sql`coalesce(${schema.profiles.interestsAnsweredAt}, now())` })
+        .where(eq(schema.profiles.userId, userId));
+    });
+    return this.me.getMe(userId);
+  }
+
+  /** The nickname step's order (decision 4 #58): the consent and the 본인확인 come first. */
+  private async assertStepsBeforeNickname(tx: Tx, userId: string): Promise<void> {
+    const read = await readOnboarding(tx, userId);
+    if (!read) throw new AppError('NOT_FOUND', { message: 'Profile not found' });
+    const steps = missingOnboardingSteps({ ...read.progress, nickname: true });
+    if (steps.length === 0) return;
+    const details: OnboardingRequiredDetails = { steps };
+    throw new AppError('ONBOARDING_REQUIRED', {
+      message: 'The consent and the verification come before the nickname',
+      details,
+    });
+  }
+}

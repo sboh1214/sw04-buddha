@@ -5,6 +5,7 @@
  * profile; skips when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
+import { completeOnboarding } from '@buddha/db/test';
 import { discountPercent, type ChargePackage } from '@buddha/shared';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -42,6 +43,8 @@ describe.skipIf(!hasTestInfra)('admin charge packages (integration)', () => {
       .update(schema.profiles)
       .set({ role: 'admin' })
       .where(eq(schema.profiles.userId, admin.id));
+    // An admin finishes the onboarding like any account before /admin answers it (ADR-0072).
+    await completeOnboarding(t.db, { userId: admin.id });
     await t.app.get(AdminGuard).invalidate(admin.id);
   });
 

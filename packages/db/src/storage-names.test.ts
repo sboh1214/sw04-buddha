@@ -2,6 +2,7 @@ import {
   ADMIN_ACTION_TYPES,
   ALL_CATEGORY_SLUGS,
   AUDIT_FAILURE_KINDS,
+  CONSENT_ITEMS,
   LEDGER_REF_TYPES,
   MARKET_EVENT_TYPES,
   PAYMENT_EVENT_TYPES,
@@ -74,6 +75,7 @@ const VARCHAR_VALUES: Readonly<Record<string, readonly string[]>> = {
   'market_watch_events.action': WATCH_EVENT_ACTIONS,
   'phone_verification_codes.send_outcome': PHONE_VERIFICATION_SEND_OUTCOMES,
   'start_grant_numbers.source': START_GRANT_NUMBER_SOURCES,
+  'consent_records.item': CONSENT_ITEMS,
 };
 
 /**

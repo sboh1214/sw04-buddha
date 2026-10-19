@@ -3,7 +3,14 @@
 import { type UserBalanceEvent } from '@buddha/shared';
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { copy } from '@/copy';
-import { api, isForAnotherAccount, unwrap, type Me, type UpdateTimeZoneBody } from '@/lib/api';
+import {
+  api,
+  isForAnotherAccount,
+  unwrap,
+  type Me,
+  type UpdateMeBody,
+  type UpdateTimeZoneBody,
+} from '@/lib/api';
 import { authClient, authErrorMessage } from '@/lib/auth-client';
 import { applyBalanceEvent } from '@/lib/market-live';
 import { useSession } from '@/lib/use-session';
@@ -93,8 +100,34 @@ export function meBelongsTo(queryClient: QueryClient, account: string): boolean 
   return held === undefined || held.id === account;
 }
 
-/** The profile field a profile write owns: the one `storeMe` takes from its answer. */
+/**
+ * The profile field a profile write owns: the one `storeMe` takes from its answer. A nickname
+ * change brings when the nickname may change next with it (#58: once in 30 days).
+ */
 export type ProfileField = 'nickname' | 'timeZone';
+
+/** `held`'s profile with what the `field` write changed taken from `answer`. */
+function withProfileField(held: Me, answer: Me, field: ProfileField): Me['profile'] {
+  return field === 'nickname'
+    ? {
+        ...held.profile,
+        nickname: answer.profile.nickname,
+        nicknameChangeAvailableAt: answer.profile.nicknameChangeAvailableAt,
+      }
+    : { ...held.profile, timeZone: answer.profile.timeZone };
+}
+
+/**
+ * A refusal that says `['me']` is out of date for `account` — verified already (another tab
+ * finished first), not verified any more (the real-name card's VERIFICATION_REQUIRED), an
+ * onboarding step done or not done elsewhere (#58) — asks for it again, so the gate, the stepper
+ * and the screen follow the server. Only while the entry is that account's: another account's
+ * profile there belongs to SessionCacheGuard.
+ */
+export async function refreshOwnMe(queryClient: QueryClient, account: string): Promise<void> {
+  if (!meBelongsTo(queryClient, account)) return;
+  await queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY, exact: true });
+}
 
 /**
  * Writes the profile a profile write answered with (`PATCH /me`, `PUT /me/time-zone`) into
@@ -149,7 +182,7 @@ export async function storeMe(
     if (held.id === me.id)
       queryClient.setQueryData<Me>(ME_QUERY_KEY, {
         ...held,
-        profile: { ...held.profile, [field]: me.profile[field] },
+        profile: withProfileField(held, me, field),
       });
     else onSessionChanged();
     return;
@@ -201,8 +234,8 @@ export function storeBalanceEvent(queryClient: QueryClient, event: UserBalanceEv
   }
 }
 
-async function patchNickname(nickname: string): Promise<Me> {
-  return unwrap(await api.PATCH('/api/v1/me', { body: { nickname } })).data;
+async function patchNickname(body: UpdateMeBody): Promise<Me> {
+  return unwrap(await api.PATCH('/api/v1/me', { body })).data;
 }
 
 async function putTimeZone(body: UpdateTimeZoneBody): Promise<Me> {
@@ -214,17 +247,22 @@ async function putTimeZone(body: UpdateTimeZoneBody): Promise<Me> {
  * through `storeMe`. Exported apart from its hook, as use-phone-verification.ts does its own,
  * because apps/web runs vitest under `environment: 'node'` (use-me.test.ts). `onSessionChanged`
  * is the hook's session refetch and `patch` stands in the request; both parameters so a test can
- * watch them.
+ * watch them. Since #58 the body names the account the screen shows (`expectedAccountId`), so the
+ * 403 for another account asks for the session again, as the time zone's does: nothing was
+ * written, and SessionCacheGuard puts the account really signed in on screen.
  */
 export function updateNicknameOptions(
   queryClient: QueryClient,
   onSessionChanged: () => void,
-  patch: (nickname: string) => Promise<Me> = patchNickname,
+  patch: (body: UpdateMeBody) => Promise<Me> = patchNickname,
 ) {
   return {
     mutationFn: patch,
     // Returned, so `mutateAsync` settles only once `['me']` holds the answer.
     onSuccess: (me: Me) => storeMe(queryClient, me, 'nickname', onSessionChanged),
+    onError: (error: Error) => {
+      if (isForAnotherAccount(error)) onSessionChanged();
+    },
   };
 }
 

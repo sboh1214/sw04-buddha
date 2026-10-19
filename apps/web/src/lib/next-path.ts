@@ -1,40 +1,26 @@
+import { isSameOriginPath } from '@buddha/shared';
+
 /**
- * Post-authentication destinations. No dependency of its own on purpose: a server layout
- * imports it (`app/admin/layout.tsx`) and must not pull the better-auth browser client in
- * with it.
+ * Post-authentication destinations. No dependency on the better-auth browser client on purpose: a
+ * server layout imports it (`app/admin/layout.tsx`) and must not pull that client in with it.
  */
 export const ADMIN_LOGIN_FALLBACK = '/admin/users';
 
-/** ASCII control characters (0x00-0x1f, 0x7f) or a backslash (0x5c) anywhere in the path. */
-function hasControlCharOrBackslash(path: string): boolean {
-  for (const ch of path) {
-    const code = ch.charCodeAt(0);
-    if (code <= 0x1f || code === 0x7f || code === 0x5c) return true;
-  }
-  return false;
-}
-
 /**
  * Only same-origin paths are accepted as a post-auth destination, so a crafted
- * `?next=https://evil` can never turn the login page into an open redirect.
- * - A repeated parameter (`?next=/a&next=/b`) reaches a page as an array. Nothing here ever
- *   builds one, so the redirect gate REFUSES anything that is not a string rather than
- *   picking a winner — deliberately unlike `errorCodes()` above, which flattens because a
- *   notice is cosmetic while a redirect target is a security decision.
- * - `//host` is protocol-relative and `/\host` is treated the same by browsers.
- * - ASCII control characters are rejected anywhere: the WHATWG URL parser strips tab and
- *   newline before parsing, so `/\t/evil.com` would resolve to `http://evil.com/`.
- * - Finally the path must resolve on a fixed dummy origin, which is the authoritative check.
+ * `?next=https://evil` can never turn the login page into an open redirect. The rule itself —
+ * no `//host` or `/\host`, no ASCII control character anywhere (the URL parser strips tab and
+ * newline, so `/\t/evil.com` would resolve to `http://evil.com/`), and resolving on a fixed dummy
+ * origin — is `isSameOriginPath` (@buddha/shared), which the API applies to the `next` a sign-up
+ * carries through its verification mail (#58) as well.
+ *
+ * A repeated parameter (`?next=/a&next=/b`) reaches a page as an array. Nothing here ever builds
+ * one, so the redirect gate REFUSES anything that is not a string rather than picking a winner —
+ * deliberately unlike `errorCodes()` (auth-client.ts), which flattens because a notice is
+ * cosmetic while a redirect target is a security decision.
  */
 export function safeNextPath(next: string | string[] | null | undefined, fallback = '/'): string {
-  if (typeof next !== 'string' || !next.startsWith('/') || next.startsWith('//')) return fallback;
-  if (hasControlCharOrBackslash(next)) return fallback;
-  try {
-    if (new URL(next, 'https://x.invalid').origin !== 'https://x.invalid') return fallback;
-  } catch {
-    return fallback;
-  }
-  return next;
+  return typeof next === 'string' && isSameOriginPath(next) ? next : fallback;
 }
 
 /**
@@ -75,4 +61,21 @@ export function loginPathBackTo(pathname: string | null | undefined): string {
  */
 export function loginPathBackToPage(pathAndQuery: string): string {
   return `/login?next=${encodeURIComponent(safeNextPath(pathAndQuery))}`;
+}
+
+/** The screens a sign-in or a sign-up passes through: never a destination of their own. */
+const AUTH_SCREENS = ['/login', '/signup', '/set-password', '/reset-password', '/onboarding'];
+
+/**
+ * The query a link to an auth screen carries so the visitor keeps where it was going: the header's
+ * 가입하기, the login screen's 회원가입 links and the sign-up screen's 로그인 link (#58, ADR-0069
+ * decision 1 #57-9 — a visitor who signs up from a market comes back to that market after the
+ * onboarding). Nothing for home or for an auth screen itself (the header's link on /login), so the
+ * plain `/signup` stays plain. For a `NextLink` `href={{ pathname, query }}`.
+ */
+export function nextQuery(next: string): { next?: string } {
+  const safe = safeNextPath(next);
+  const path = safe.split('?')[0] ?? safe;
+  const auth = AUTH_SCREENS.some((root) => path === root || path.startsWith(`${root}/`));
+  return safe === '/' || auth ? {} : { next: safe };
 }

@@ -147,8 +147,11 @@ interface CodeEntry {
  *   not). The notices that open the code input — a text that may have come (a warning), a code
  *   sent under a minute ago (information) — are not errors but `role=alert` too: the cursor moves
  *   with them.
- * - A confirmation writes the record into `['me']` before it settles
- *   (`useConfirmPhoneVerification`), and the form above this step navigates on from there.
+ * - A confirmation writes the record — and the onboarding's next step, the nickname — into
+ *   `['me']` before it settles (`useConfirmPhoneVerification`), and the stepper (onboarding-form.tsx)
+ *   moves on from there. The step comes after the consent (ADR-0069 decision 4 #58): a code request
+ *   the server refuses for want of it (ONBOARDING_REQUIRED) asks `['me']` again, and the stepper
+ *   goes back to the consent step.
  */
 export function VerificationStep() {
   const request = useRequestVerificationCode();
@@ -245,7 +248,7 @@ export function VerificationStep() {
           return;
         }
       }
-      // `verified`: the hook asked `['me']` again, and the form above moves on with it.
+      // `verified`: the hook asked `['me']` again, and the stepper moves on with it.
       setNotice({ status: 'error', message: failure.message });
     }
   });

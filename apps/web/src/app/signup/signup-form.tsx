@@ -15,24 +15,26 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import NextLink from 'next/link';
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
+import { setPasswordCallbackURL } from '@buddha/shared';
 import * as z from 'zod';
 import { SocialButtons } from '@/components/auth/social-buttons';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { api, isApiError, unwrap } from '@/lib/api';
 import { authClient, authErrorMessage } from '@/lib/auth-client';
+import { nextQuery } from '@/lib/next-path';
 
 const schema = z.object({ email: z.email(copy.errEmailInvalid) });
 type FormValues = z.infer<typeof schema>;
 
 /**
  * Sign-up asks for the email only (ADR-0024): the account has no password until the
- * verification link proves the mailbox, and the link itself leads to the set-password page.
- * The answer never says whether the address was already registered.
+ * verification link proves the mailbox, and the link itself leads to the set-password page —
+ * carrying `next`, the page the visitor was on (#58: `RegisterBody.next`; the re-sent link's
+ * `callbackURL` below is built by the same `setPasswordCallbackURL`). The answer never says
+ * whether the address was already registered.
  */
-const VERIFY_CALLBACK = '/set-password';
-
-export function SignupForm() {
+export function SignupForm({ next }: { next: string }) {
   const [formError, setFormError] = useState<string | null>(null);
   const [sentTo, setSentTo] = useState<string | null>(null);
   const {
@@ -44,7 +46,11 @@ export function SignupForm() {
   const onSubmit = handleSubmit(async (values) => {
     setFormError(null);
     try {
-      unwrap(await api.POST('/api/v1/auth/register', { body: { email: values.email } }));
+      unwrap(
+        await api.POST('/api/v1/auth/register', {
+          body: { email: values.email, ...nextQuery(next) },
+        }),
+      );
       setSentTo(values.email);
     } catch (error) {
       setFormError(
@@ -53,7 +59,7 @@ export function SignupForm() {
     }
   });
 
-  if (sentTo) return <CheckMailPanel email={sentTo} />;
+  if (sentTo) return <CheckMailPanel email={sentTo} next={next} />;
 
   return (
     <Stack gap="6">
@@ -95,12 +101,12 @@ export function SignupForm() {
         <Separator flex="1" />
       </HStack>
 
-      <SocialButtons callbackURL="/" />
+      <SocialButtons callbackURL={next} />
 
       <Text fontSize="sm" color="fg.muted" textAlign="center">
         {copy.alreadyHaveAccount}{' '}
         <Link asChild colorPalette="brand" color="colorPalette.fg" fontWeight="medium">
-          <NextLink href="/login">{copy.login}</NextLink>
+          <NextLink href={{ pathname: '/login', query: nextQuery(next) }}>{copy.login}</NextLink>
         </Link>
       </Text>
     </Stack>
@@ -108,14 +114,14 @@ export function SignupForm() {
 }
 
 /** Shown after registering: where the mail went, how to get another one, where to log in. */
-function CheckMailPanel({ email }: { email: string }) {
+function CheckMailPanel({ email, next }: { email: string; next: string }) {
   const [busy, setBusy] = useState(false);
 
   async function resend() {
     setBusy(true);
     const { error } = await authClient.sendVerificationEmail({
       email,
-      callbackURL: VERIFY_CALLBACK,
+      callbackURL: setPasswordCallbackURL(nextQuery(next).next),
     });
     setBusy(false);
     toaster.create(

@@ -572,6 +572,40 @@ export type paths = {
         patch: operations["updateMe"];
         trace?: never;
     };
+    "/api/v1/me/consents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record the consent step: each item at its current version */
+        post: operations["recordMyConsents"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/interest-categories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set the interest categories (none: skip the step) */
+        put: operations["setMyInterestCategories"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me/ledger": {
         parameters: {
             query?: never;
@@ -583,6 +617,23 @@ export type paths = {
         get: operations["getMyLedger"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/onboarding/nickname": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Set or confirm the nickname in the onboarding, and grant the start Coin */
+        post: operations["setMyOnboardingNickname"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1092,6 +1143,15 @@ export type components = {
             code: string;
             expectedAccountId: string;
         };
+        /** @enum {string} */
+        ConsentItem: "terms" | "privacy" | "age" | "marketing";
+        ConsentRecord: {
+            agreed: boolean;
+            item: components["schemas"]["ConsentItem"];
+            /** Format: date-time */
+            recordedAt: string;
+            version: string;
+        };
         Coupon: {
             amountCoin: components["schemas"]["CoinAmount"];
             code: string;
@@ -1141,7 +1201,7 @@ export type components = {
             limit: number;
         };
         /** @enum {string} */
-        ErrorCode: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "VALIDATION_ERROR" | "MARKET_NOT_OPEN" | "INSUFFICIENT_BALANCE" | "PRICE_MOVED" | "DUPLICATE_REQUEST" | "RATE_LIMITED" | "RULES_REQUIRED" | "VERIFICATION_REQUIRED" | "REFUND_NOT_ALLOWED" | "PAYMENT_GATEWAY_REFUSED" | "PAYMENT_GATEWAY_ERROR" | "ROLE_CHANGE_NOT_ALLOWED" | "APPROVAL_NOT_ALLOWED" | "PHONE_VERIFICATION_NOT_ALLOWED" | "PHONE_VERIFICATION_LIMITED" | "VERIFICATION_CODE_REJECTED" | "SMS_SEND_FAILED" | "SMS_SEND_UNCONFIRMED" | "INTERNAL";
+        ErrorCode: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "VALIDATION_ERROR" | "MARKET_NOT_OPEN" | "INSUFFICIENT_BALANCE" | "PRICE_MOVED" | "DUPLICATE_REQUEST" | "RATE_LIMITED" | "RULES_REQUIRED" | "VERIFICATION_REQUIRED" | "REFUND_NOT_ALLOWED" | "PAYMENT_GATEWAY_REFUSED" | "PAYMENT_GATEWAY_ERROR" | "ROLE_CHANGE_NOT_ALLOWED" | "APPROVAL_NOT_ALLOWED" | "PHONE_VERIFICATION_NOT_ALLOWED" | "PHONE_VERIFICATION_LIMITED" | "VERIFICATION_CODE_REJECTED" | "SMS_SEND_FAILED" | "SMS_SEND_UNCONFIRMED" | "ONBOARDING_REQUIRED" | "NICKNAME_NOT_ALLOWED" | "INTERNAL";
         ErrorEnvelope: {
             error: {
                 code: components["schemas"]["ErrorCode"];
@@ -1265,21 +1325,37 @@ export type components = {
             emailVerified: boolean;
             id: string;
             linkedAccounts: components["schemas"]["LinkedAccount"][];
+            onboarding: components["schemas"]["Onboarding"];
             profile: {
                 /** Format: date-time */
                 createdAt: string;
+                interestCategoryIds: number[];
                 nickname: components["schemas"]["Nickname"];
+                /** Format: date-time */
+                nicknameChangeAvailableAt: string | null;
                 role: components["schemas"]["UserRole"];
                 timeZone: string | null;
             };
             startGrant: components["schemas"]["StartGrant"] | null;
             verification: components["schemas"]["PhoneVerification"] | null;
         };
+        NextPath: string;
         Nickname: string;
         OkResult: {
             /** @enum {boolean} */
             ok: true;
         };
+        Onboarding: {
+            completed: boolean;
+            consent: boolean;
+            consents: components["schemas"]["ConsentRecord"][];
+            interests: boolean;
+            nextStep: components["schemas"]["OnboardingStep"] | null;
+            nickname: boolean;
+            verification: boolean;
+        };
+        /** @enum {string} */
+        OnboardingStep: "consent" | "verification" | "nickname" | "interests";
         Order: {
             amountCoin: components["schemas"]["CoinAmount"] | null;
             /** Format: date-time */
@@ -1387,6 +1463,34 @@ export type components = {
             /** Format: date-time */
             searchedAt: string;
         };
+        RecordConsentsBody: {
+            consents: {
+                age: {
+                    /** @enum {boolean} */
+                    agreed: true;
+                    /** @enum {string} */
+                    version: "draft-2026-10-18";
+                };
+                marketing: {
+                    agreed: boolean;
+                    /** @enum {string} */
+                    version: "draft-2026-10-18";
+                };
+                privacy: {
+                    /** @enum {boolean} */
+                    agreed: true;
+                    /** @enum {string} */
+                    version: "draft-2026-10-18";
+                };
+                terms: {
+                    /** @enum {boolean} */
+                    agreed: true;
+                    /** @enum {string} */
+                    version: "draft-2026-10-18";
+                };
+            };
+            expectedAccountId: string;
+        };
         RecordSearchBody: {
             expectedAccountId: string;
             query: string;
@@ -1407,6 +1511,7 @@ export type components = {
         RegisterBody: {
             /** Format: email */
             email: string;
+            next?: components["schemas"]["NextPath"];
         };
         RegisterResult: {
             /** @enum {string} */
@@ -1468,6 +1573,14 @@ export type components = {
         SearchHistoryWriteBody: {
             expectedAccountId: string;
         };
+        SetInterestCategoriesBody: {
+            categoryIds: number[];
+            expectedAccountId: string;
+        };
+        SetOnboardingNicknameBody: {
+            expectedAccountId: string;
+            nickname: components["schemas"]["Nickname"];
+        };
         SetPasswordBody: {
             expectedAccountId: string;
             newPassword: components["schemas"]["Password"];
@@ -1488,7 +1601,7 @@ export type components = {
             /** Format: date-time */
             grantedAt: string | null;
             /** @enum {string} */
-            status: "pending" | "granted";
+            status: "pending" | "granted" | "number_used";
         };
         UpdateChargePackageBody: {
             amountCoin?: components["schemas"]["CoinAmount"];
@@ -1516,6 +1629,7 @@ export type components = {
             title?: string;
         };
         UpdateMeBody: {
+            expectedAccountId: string;
             nickname: components["schemas"]["Nickname"];
         };
         UpdateRealNameBody: {
@@ -1574,6 +1688,15 @@ export interface operations {
             };
             /** @description FORBIDDEN */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1651,7 +1774,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description ROLE_CHANGE_NOT_ALLOWED */
+            /** @description ONBOARDING_REQUIRED | ROLE_CHANGE_NOT_ALLOWED */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -1732,7 +1855,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description ROLE_CHANGE_NOT_ALLOWED */
+            /** @description ONBOARDING_REQUIRED | ROLE_CHANGE_NOT_ALLOWED */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -1803,6 +1926,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description RATE_LIMITED */
             429: {
                 headers: {
@@ -1865,6 +1997,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description RATE_LIMITED */
             429: {
                 headers: {
@@ -1906,6 +2047,15 @@ export interface operations {
             };
             /** @description FORBIDDEN */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1974,6 +2124,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description RATE_LIMITED */
             429: {
                 headers: {
@@ -2025,6 +2184,15 @@ export interface operations {
             };
             /** @description NOT_FOUND */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2104,6 +2272,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description RATE_LIMITED */
             429: {
                 headers: {
@@ -2166,6 +2343,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description RATE_LIMITED */
             429: {
                 headers: {
@@ -2220,6 +2406,15 @@ export interface operations {
             };
             /** @description FORBIDDEN */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2299,6 +2494,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description RATE_LIMITED */
             429: {
                 headers: {
@@ -2355,6 +2559,15 @@ export interface operations {
             };
             /** @description FORBIDDEN */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2432,6 +2645,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description RATE_LIMITED */
             429: {
                 headers: {
@@ -2493,6 +2715,15 @@ export interface operations {
             };
             /** @description NOT_FOUND */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2565,6 +2796,15 @@ export interface operations {
             };
             /** @description NOT_FOUND */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2649,7 +2889,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description MARKET_NOT_OPEN */
+            /** @description ONBOARDING_REQUIRED | MARKET_NOT_OPEN */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -2719,6 +2959,15 @@ export interface operations {
             };
             /** @description NOT_FOUND */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2803,6 +3052,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description RATE_LIMITED */
             429: {
                 headers: {
@@ -2875,6 +3133,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description RATE_LIMITED */
             429: {
                 headers: {
@@ -2937,6 +3204,15 @@ export interface operations {
             };
             /** @description NOT_FOUND */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -3016,6 +3292,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description RATE_LIMITED */
             429: {
                 headers: {
@@ -3071,6 +3356,15 @@ export interface operations {
             };
             /** @description FORBIDDEN */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -3150,7 +3444,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description INSUFFICIENT_BALANCE | DUPLICATE_REQUEST | REFUND_NOT_ALLOWED | PAYMENT_GATEWAY_REFUSED */
+            /** @description ONBOARDING_REQUIRED | INSUFFICIENT_BALANCE | DUPLICATE_REQUEST | REFUND_NOT_ALLOWED | PAYMENT_GATEWAY_REFUSED */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -3220,6 +3514,15 @@ export interface operations {
             };
             /** @description FORBIDDEN */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -3299,6 +3602,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description RATE_LIMITED */
             429: {
                 headers: {
@@ -3361,6 +3673,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description RATE_LIMITED */
             429: {
                 headers: {
@@ -3402,6 +3723,15 @@ export interface operations {
             };
             /** @description FORBIDDEN */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -3465,6 +3795,15 @@ export interface operations {
             };
             /** @description FORBIDDEN */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -3544,7 +3883,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description INSUFFICIENT_BALANCE */
+            /** @description ONBOARDING_REQUIRED | INSUFFICIENT_BALANCE */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -4119,6 +4458,164 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description ONBOARDING_REQUIRED | NICKNAME_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    recordMyConsents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecordConsentsBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["Me"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    setMyInterestCategories: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetInterestCategoriesBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["Me"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description RATE_LIMITED */
             429: {
                 headers: {
@@ -4165,6 +4662,85 @@ export interface operations {
             };
             /** @description UNAUTHENTICATED */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    setMyOnboardingNickname: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetOnboardingNicknameBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["Me"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | NICKNAME_NOT_ALLOWED | VERIFICATION_REQUIRED */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -4459,7 +5035,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description PHONE_VERIFICATION_NOT_ALLOWED */
+            /** @description ONBOARDING_REQUIRED | PHONE_VERIFICATION_NOT_ALLOWED */
             409: {
                 headers: {
                     [name: string]: unknown;

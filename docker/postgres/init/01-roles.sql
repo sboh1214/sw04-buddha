@@ -11,9 +11,9 @@
 --                   (ledger_entries, market_events, admin_actions, payment_events,
 --                   market_watch_events: INSERT/SELECT only; release_settings,
 --                   approval_requests, start_grants, start_grant_numbers: no DELETE;
---                   market_searches, phone_verification_refused_sends: no UPDATE) are
---                   applied later by migrations with REVOKE (0001, 0015, 0020, 0021, 0023,
---                   0026, 0030, 0031), see bottom.
+--                   market_searches, phone_verification_refused_sends, consent_records: no
+--                   UPDATE) are applied later by migrations with REVOKE (0001, 0015, 0020, 0021,
+--                   0023, 0026, 0030, 0031, 0032), see bottom.
 
 CREATE ROLE buddha_migrate LOGIN PASSWORD 'buddha';
 CREATE ROLE buddha_app LOGIN PASSWORD 'buddha';
@@ -47,6 +47,6 @@ GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO buddha_app;
 --   REVOKE UPDATE, DELETE ON TABLE ledger_entries, market_events, admin_actions FROM buddha_app;
 -- and so do 0015 (payment_events: UPDATE, DELETE), 0020 (release_settings: DELETE), 0021
 -- (approval_requests: DELETE), 0023 (market_watch_events: UPDATE, DELETE), 0026
--- (market_searches: UPDATE), 0030 (phone_verification_refused_sends: UPDATE) and 0031
--- (start_grants, start_grant_numbers: DELETE).
+-- (market_searches: UPDATE), 0030 (phone_verification_refused_sends: UPDATE), 0031
+-- (start_grants, start_grant_numbers: DELETE) and 0032 (consent_records: UPDATE).
 -- Default privileges are applied at CREATE time, so a REVOKE afterwards sticks.

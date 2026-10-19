@@ -59,7 +59,22 @@ export const copy = {
   errPasswordTooLong: '비밀번호는 128자 이하여야 합니다.',
   errPasswordMismatch: '비밀번호가 일치하지 않습니다.',
   errNicknameFormat: '닉네임은 2~20자의 한글·영문·숫자·밑줄(_)만 쓸 수 있습니다.',
-  errNicknameTaken: '이미 사용 중인 닉네임입니다.',
+  // 닉네임 규칙(#58, ADR-0069 결정 1 #57-6). 대소문자를 구분하지 않고 겹치는 닉네임과, 다른 계정이 바꾸거나
+  // 탈퇴로 비운 지 30일이 안 된 닉네임은 같은 답이다 — 어느 쪽인지 말하면 누가 최근에 닉네임을 바꿨는지
+  // 알려 주게 된다(#37-3). 30은 NICKNAME_HOLD_DAYS, 간격의 30은 NICKNAME_CHANGE_INTERVAL_DAYS, 예약어 목록은
+  // NICKNAME_RESERVED_WORDS와 같아야 한다(lib/nickname.test.ts가 확인한다).
+  errNicknameTaken: '이미 사용 중이거나, 다른 회원이 쓰다가 30일이 지나지 않은 닉네임입니다.',
+  // 온보딩의 닉네임 단계와 MY 설정이 같이 보인다. MY 설정에는 그대로 쓸 자동 닉네임이 남아 있지 않을 수 있어
+  // 규칙만 말한다(자동 닉네임을 그대로 써도 된다는 것은 닉네임 단계의 안내 nicknameStepIntro가 말한다).
+  errNicknameAutoPrefix:
+    "'user_'로 시작하는 닉네임은 직접 정할 수 없습니다. 다른 닉네임을 입력해 주세요.",
+  errNicknameReservedWord:
+    '운영자로 오해할 수 있는 낱말(운영자·관리자·운영팀·공식·admin·buddha)이 들어간 닉네임은 쓸 수 없습니다.',
+  // 바꾼 지 30일이 안 됐다. 뒤에 다음에 바꿀 수 있는 시각과 nicknameChangeAgainFrom이 붙는다.
+  errNicknameChangeInterval: '닉네임은 30일에 한 번 바꿀 수 있습니다.',
+  nicknameChangeAgainFrom: '부터 다시 바꿀 수 있습니다.',
+  // 온보딩의 닉네임 단계를 다른 탭에서 이미 마쳤다. 화면은 서버를 다시 읽어 다음 단계로 간다.
+  errNicknameAlreadySet: '닉네임은 이미 정했습니다.',
   errRequired: '필수 항목입니다.',
 
   // --- login ---
@@ -101,7 +116,9 @@ export const copy = {
   loginSetPasswordHint:
     '인증 링크는 눌렀지만 비밀번호를 정하지 못했다면, 아래 「비밀번호를 잊으셨나요?」에서 비밀번호를 설정해 주세요.',
   verificationResent: '인증 메일을 다시 보냈습니다.',
-  signupNotice: '가입하면 서비스 안내에 동의한 것으로 간주합니다.',
+  // 약관 동의는 가입 화면이 아니라 온보딩의 첫 단계에서 항목마다 받는다(#58, ADR-0069 결정 1 #57-5). 가입만으로
+  // 동의한 것으로 보지 않는다.
+  signupNotice: '약관 동의는 가입한 뒤 첫 단계에서 항목마다 받습니다.',
 
   // --- reset password ---
   resetTitle: '비밀번호 재설정',
@@ -119,6 +136,11 @@ export const copy = {
   settingsProfile: '프로필',
   nickname: '닉네임',
   nicknameHint: '2~20자 한글·영문·숫자·밑줄(_)',
+  // 직접 입력한 닉네임의 규칙(#57-6). 온보딩의 닉네임 단계와 MY 설정의 닉네임 카드가 같이 보인다.
+  nicknameRulesHint:
+    "'user_'로 시작하거나 운영자로 오해할 수 있는 낱말이 들어간 닉네임은 쓸 수 없습니다.",
+  // 가입 뒤의 변경 간격(#57-6). 온보딩에서 정한 것은 변경으로 세지 않는다.
+  nicknameChangeRule: '닉네임은 30일에 한 번 바꿀 수 있습니다.',
   nicknameSaved: '닉네임을 변경했습니다.',
   settingsLinkedAccounts: '연결된 로그인 수단',
   settingsLinkedHint: '로그인 수단이 하나뿐이면 해제할 수 없습니다.',
@@ -145,6 +167,8 @@ export const copy = {
     '이 링크는 이미 사용되었거나 만료되었습니다. 이메일 인증은 끝났으니 그대로 진행하셔도 됩니다.',
   passwordAlreadySet: '비밀번호가 이미 설정되어 있습니다.',
   goHome: '홈으로 가기',
+  // 가입하기 전에 보던 화면으로 가는 링크(#58, #57-9). 홈이면 goHome이다.
+  continueOn: '계속하기',
   settingsPassword: '비밀번호 변경',
   passwordChanged: '비밀번호를 변경했습니다.',
   passwordWrong: '현재 비밀번호가 올바르지 않습니다.',
@@ -849,10 +873,9 @@ export const copy = {
   errPhoneRequired: '휴대전화 번호를 입력해 주세요.',
   errPhoneFormat:
     '010·011·016~019로 시작하는 휴대전화 번호 10~11자리를 입력해 주세요. (예: 010-1234-5678)',
-  onboardingTitle: '본인확인',
-  onboardingSignedOut: '로그인이 풀렸습니다. 다시 로그인하면 이어서 본인확인을 할 수 있습니다.',
-  onboardingSubtitle:
-    '실명과 휴대전화 번호를 입력하고, 그 번호로 받은 6자리 인증번호를 입력해 주세요. 본인확인을 마치면 서비스를 계속 이용할 수 있습니다.',
+  // 본인확인 단계의 안내(온보딩의 둘째 단계).
+  verificationIntro:
+    '실명과 휴대전화 번호를 입력하고, 그 번호로 받은 6자리 인증번호를 입력해 주세요.',
   verificationSend: '인증번호 받기',
   verificationResend: '인증번호 다시 받기',
   // 인증번호를 보낸 뒤 실명·번호 칸은 잠긴다. 고치려면 이 단추로 두 칸을 다시 연다(다시 받는 것은 1분 뒤부터).
@@ -924,6 +947,68 @@ export const copy = {
   realNameSaved: '실명을 저장했습니다.',
   settingsNotVerified: '아직 휴대전화 본인확인을 하지 않았습니다.',
   settingsVerifyNow: '본인확인하기',
+
+  // --- 온보딩 (#58, ADR-0072) ---
+  // 가입 직후 온보딩: 약관 동의 → 본인확인 → 닉네임 설정 → 시작 Coin 안내 → 관심 카테고리(건너뛸 수 있음)
+  // → 가입 전에 보던 화면(ADR-0069 결정 4 #58, 결정 1 #57-7~#57-10). 단계의 이름은 진행 표시와 각 단계의
+  // 제목이다. 마치지 않은 단계가 있으면 어느 화면에서든 남은 단계로 온다(#57-8, 약관·방침 화면은 예외).
+  onboardingTitle: '시작하기',
+  onboardingSignedOut: '로그인이 풀렸습니다. 다시 로그인하면 남은 단계부터 이어서 할 수 있습니다.',
+  onboardingProgress: '진행 단계',
+  onboardingStepConsent: '약관 동의',
+  onboardingStepVerification: '본인확인',
+  onboardingStepNickname: '닉네임 설정',
+  onboardingStepNotice: '시작 Coin 안내',
+  onboardingStepInterests: '관심 카테고리',
+  // 단계를 마치기 전에 앞 단계가 풀렸다(다른 탭, 재동의를 묻는 개정). 화면은 서버를 다시 읽어 그 단계로 가므로
+  // 이 문장은 다시 읽기가 실패해 화면이 그대로일 때만 보인다(그 밖에는 단계가 바뀌며 사라진다, ADR-0072 결과 4).
+  errOnboardingStepsFirst: '앞 단계를 먼저 마쳐 주세요.',
+
+  // 약관 동의(#57-4·#57-5). 항목마다 체크하고 '전체 동의'로 한꺼번에 고른다. 필수는 이용약관·개인정보
+  // 수집·이용(휴대전화 번호 수집과 SMS 발송 위탁 포함)·연령 확인이고 선택은 마케팅 정보 수신이다. 연령 확인의
+  // 문장은 오너의 글 그대로이고 14는 BUSINESS_INFO.minimumAge와 같아야 한다(lib/consent.test.ts가 확인한다).
+  // 동의문 두 개(개인정보 수집·이용, 마케팅 정보 수신)는 legal/consent-texts.ts에 있다.
+  consentIntro: '서비스를 이용하려면 아래 필수 항목에 동의해 주세요.',
+  consentAll: '전체 동의',
+  consentAllHint: '선택 항목인 마케팅 정보 수신까지 모두 동의합니다.',
+  consentTerms: '이용약관에 동의합니다',
+  consentPrivacy: '개인정보 수집·이용에 동의합니다',
+  consentAge: '만 14세 이상입니다',
+  consentMarketing: '마케팅 정보 수신에 동의합니다',
+  consentRequiredTag: '(필수)',
+  consentOptionalTag: '(선택)',
+  consentViewTerms: '이용약관 보기',
+  consentViewPrivacyPolicy: '개인정보처리방침 보기',
+  consentShowText: '내용 보기',
+  consentHideText: '내용 접기',
+  consentSubmit: '동의하고 계속하기',
+  errConsentRequired: '필수 항목에 모두 동의해야 다음 단계로 갈 수 있습니다.',
+  // 화면을 연 사이에 동의할 문서가 개정됐다(서버가 지금 판이 아니라고 거절). 다시 읽고 동의하게 한다.
+  errConsentOutdated: '동의할 내용이 바뀌었습니다. 화면을 새로 고친 뒤 다시 동의해 주세요.',
+
+  // 닉네임 설정(#57-6): 자동 닉네임(user_XXXX)을 미리 채우고, 그대로 정해도 닉네임 설정을 마친 것이다.
+  nicknameStepIntro: '다른 회원에게 보이는 이름입니다. 자동으로 만든 닉네임을 그대로 써도 됩니다.',
+  nicknameStepSubmit: '이 닉네임으로 정하기',
+
+  // 시작 Coin 안내(#57-10): 지급액(미정이면 지급액 자리에 walletStartGrantPending — 오너의 한 문장이 지갑과
+  // 같다, 결정 4 #70), Coin은 현금으로 바꿀 수 없다는 것, 운영 유동성(봇)이 거래 상대가 될 수 있다는 것.
+  onboardingNoticeGranted: '시작 Coin을 지급했습니다.',
+  onboardingNoticeAmount: '지급한 시작 Coin',
+  // 본인확인한 번호의 시작 Coin이 이미 다른 계정(예: 탈퇴한 계정)에 갔다(#57-1): 지급액 자리에 오너의 문장
+  // (오너 결정 2026-10-19, ADR-0072). 나머지 안내와 관심 카테고리 단계는 같다.
+  onboardingNoticeNumberUsed: '이 번호로는 이미 시작 Coin을 받았습니다.',
+  onboardingNoticeNoCash: 'Coin은 현금으로 바꿀 수 없습니다.',
+  onboardingNoticeCounterparty: '거래할 때 운영 유동성(봇)이 거래 상대가 될 수 있습니다.',
+  onboardingNoticeNext: '다음',
+
+  // 관심 카테고리(#57-7): 상위·하위 카테고리 모두, 몇 개든 고르고, 건너뛰면 다시 묻지 않는다.
+  interestsIntro: '관심 있는 카테고리를 고르세요. 여러 개 고를 수 있고, 건너뛰어도 됩니다.',
+  interestsSave: '선택 완료',
+  interestsSkip: '건너뛰기',
+  interestsLoadError: '카테고리를 불러오지 못했습니다.',
+  // 화면을 연 사이 운영자가 카테고리를 닫았다. 목록을 다시 불러온다.
+  errInterestsUnavailable:
+    '지금은 고를 수 없는 카테고리가 있습니다. 목록을 다시 불러왔으니 다시 골라 주세요.',
 
   // --- 결제 내역 · 관리자 환불 (ADR-0042) ---
   // 유료 충전을 닫은 동안(ADR-0049) 그리지 않지만 코드와 함께 남긴다. 환불 기한 7일은 @buddha/shared의

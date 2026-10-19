@@ -68,6 +68,19 @@ export const ERROR_CODES = [
    * limits and its code can be confirmed (ADR-0070). Its own code as a 5xx body has no details.
    */
   'SMS_SEND_UNCONFIRMED',
+  /**
+   * The account has not done the onboarding steps this action needs: the consent, the
+   * verification or the nickname step (#58). Details carry the missing steps in order,
+   * onboardingRequiredDetailsSchema. An account that has not done all three only browses.
+   */
+  'ONBOARDING_REQUIRED',
+  /**
+   * A nickname the rules refuse: the auto nickname prefix or a reserved word in a typed one, one
+   * another account has or gave up less than 30 days ago, a change within 30 days of the last, or
+   * another nickname once the onboarding step is done. Details carry the reason and, for the
+   * interval, when the next change is allowed, nicknameNotAllowedDetailsSchema.
+   */
+  'NICKNAME_NOT_ALLOWED',
   'INTERNAL',
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];

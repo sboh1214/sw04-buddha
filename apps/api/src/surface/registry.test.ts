@@ -27,6 +27,7 @@ import { describe, expect, it } from 'vitest';
 import * as z from 'zod';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { SessionGuard } from '../auth/session.guard.js';
+import { OnboardedGuard } from '../onboarding/onboarded.guard.js';
 import { PaidCoinSalesGuard } from '../payments/paid-coin-sales.guard.js';
 import { SRC, programOf, sources, srcPath } from '../test/program.js';
 import {
@@ -240,6 +241,34 @@ describe('public and owner-only routes (static)', () => {
     })) {
       expect(entry.reason.trim(), key).not.toBe('');
     }
+  });
+
+  it('flags exactly the routes behind OnboardedGuard, each after SessionGuard (#58, #57-8)', () => {
+    const guarded = routes.filter((route) => guardsOf(route).includes(OnboardedGuard));
+    // A sanity check on the walk: the interest categories are behind it today.
+    expect(guarded.map((route) => route.key)).toContain('PUT /me/interest-categories');
+    expect(
+      guarded
+        .filter((route) => classOf(route) === 'owner')
+        .filter((route) => registered(route)?.onboarded !== true)
+        .map((route) => route.key),
+    ).toEqual([]);
+    expect(
+      routes
+        .filter((route) => registered(route)?.onboarded === true)
+        .filter((route) => !guardsOf(route).includes(OnboardedGuard))
+        .map((route) => route.key),
+    ).toEqual([]);
+    // It reads the session SessionGuard resolved: never on a public route, never before it.
+    expect(
+      guarded
+        .filter((route) => {
+          const guards = guardsOf(route);
+          const session = guards.indexOf(SessionGuard);
+          return session < 0 || session > guards.indexOf(OnboardedGuard);
+        })
+        .map((route) => route.key),
+    ).toEqual([]);
   });
 
   it('closes every kept paid route first, while paid Coin is off (D9, ADR-0049)', () => {
@@ -466,6 +495,25 @@ describe('the public API document (static)', () => {
       ),
     );
     expect(found).toEqual([]);
+  });
+
+  it('documents ONBOARDING_REQUIRED (409) on every route behind OnboardedGuard (#58)', () => {
+    // The admin surface included (오너 결정 2026-10-19, ADR-0072): a client reads the refusal it
+    // can get from the document, as for every other code.
+    const guarded = new Set(
+      routes.filter((route) => guardsOf(route).includes(OnboardedGuard)).map((route) => route.key),
+    );
+    const documented = operations.filter(({ key }) => guarded.has(key));
+    expect(documented.map(({ key }) => key)).toEqual(
+      expect.arrayContaining(['PUT /me/interest-categories', 'GET /admin/release-settings']),
+    );
+    const missing = documented
+      .filter(({ operation }) => {
+        const conflict = operation.responses?.['409'] as { description?: string } | undefined;
+        return !(conflict?.description ?? '').split(' | ').includes('ONBOARDING_REQUIRED');
+      })
+      .map(({ key }) => key);
+    expect(missing).toEqual([]);
   });
 
   it('finds paid purchase in the kept paid routes: the allowance is what lets them through', () => {

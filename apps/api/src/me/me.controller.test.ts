@@ -1,5 +1,5 @@
 import { cancelStartGrant, schema } from '@buddha/db';
-import { createPhoneVerification, createStartGrant } from '@buddha/db/test';
+import { completeOnboarding, createPhoneVerification, createStartGrant } from '@buddha/db/test';
 import { errorEnvelopeSchema, meSchema, type ValidationIssue } from '@buddha/shared';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -35,6 +35,18 @@ describe.skipIf(!hasTestInfra)('/api/v1/me (integration)', () => {
     expect(me.emailVerified).toBe(true); // signUpTestUser follows the verification link
     expect(me.profile.role).toBe('user');
     expect(me.profile.nickname).toMatch(/^user_[A-Z2-9]{4}$/);
+    expect(me.profile.nicknameChangeAvailableAt).toBeNull();
+    expect(me.profile.interestCategoryIds).toEqual([]);
+    // A new account starts the onboarding at the consent step (#58).
+    expect(me.onboarding).toEqual({
+      consent: false,
+      verification: false,
+      nickname: false,
+      completed: false,
+      interests: false,
+      nextStep: 'consent',
+      consents: [],
+    });
     // Signing up grants nothing (#70): the start Coin comes after the onboarding.
     expect(me.balance).toEqual({ availableCoin: '0', lockedCoin: '0' });
     expect(me.startGrant).toBeNull();
@@ -117,13 +129,17 @@ describe.skipIf(!hasTestInfra)('/api/v1/me (integration)', () => {
     expect(errorEnvelopeSchema.parse(res.json()).error.code).toBe('UNAUTHENTICATED');
   });
 
-  it('PATCH /me changes the nickname', async () => {
-    const res = await t.app.inject({
+  const patchMe = (as: TestUser, payload: unknown) =>
+    t.app.inject({
       method: 'PATCH',
       url: '/api/v1/me',
-      headers: { cookie: user.cookie },
-      payload: { nickname: '거래왕_kim1' },
+      headers: { cookie: as.cookie, origin: 'http://localhost:3000' },
+      payload: payload as Record<string, unknown>,
     });
+
+  it('PATCH /me changes the nickname of an account past the onboarding’s nickname step (#58)', async () => {
+    await completeOnboarding(t.db, { userId: user.id });
+    const res = await patchMe(user, { nickname: '거래왕_kim1', expectedAccountId: user.id });
     expect(res.statusCode).toBe(200);
     expect(meSchema.parse(res.json<{ data: unknown }>().data).profile.nickname).toBe('거래왕_kim1');
     const [row] = await t.db
@@ -133,37 +149,35 @@ describe.skipIf(!hasTestInfra)('/api/v1/me (integration)', () => {
     expect(row?.nickname).toBe('거래왕_kim1');
   });
 
-  it('PATCH /me with a taken nickname -> 400 VALIDATION_ERROR with the field in details (AC 4)', async () => {
+  it('PATCH /me with a nickname another account has, in any case -> 409 NICKNAME_NOT_ALLOWED taken (AC 4)', async () => {
     const other = await signUpTestUser(t);
-    await t.app.inject({
-      method: 'PATCH',
-      url: '/api/v1/me',
-      headers: { cookie: other.cookie },
-      payload: { nickname: 'taken_name' },
-    });
-    const res = await t.app.inject({
-      method: 'PATCH',
-      url: '/api/v1/me',
-      headers: { cookie: user.cookie },
-      payload: { nickname: 'taken_name' },
-    });
-    expect(res.statusCode).toBe(400);
-    const { error } = errorEnvelopeSchema.parse(res.json());
-    expect(error.code).toBe('VALIDATION_ERROR');
-    expect(error.details).toEqual([{ path: ['nickname'], message: 'already in use' }]);
+    await completeOnboarding(t.db, { userId: other.id });
+    await completeOnboarding(t.db, { userId: user.id });
+    expect(
+      (await patchMe(other, { nickname: 'Taken_Name', expectedAccountId: other.id })).statusCode,
+    ).toBe(200);
+    for (const nickname of ['Taken_Name', 'taken_name', 'TAKEN_NAME']) {
+      const res = await patchMe(user, { nickname, expectedAccountId: user.id });
+      expect(res.statusCode).toBe(409);
+      const { error } = errorEnvelopeSchema.parse(res.json());
+      expect(error.code).toBe('NICKNAME_NOT_ALLOWED');
+      expect(error.details).toEqual({ reason: 'taken' });
+    }
   });
 
-  it('PATCH /me with an invalid nickname -> 400 VALIDATION_ERROR from the zod schema', async () => {
-    const res = await t.app.inject({
-      method: 'PATCH',
-      url: '/api/v1/me',
-      headers: { cookie: user.cookie },
-      payload: { nickname: 'a' },
-    });
+  it('PATCH /me with an invalid nickname or no account named -> 400 VALIDATION_ERROR from the zod schema', async () => {
+    const res = await patchMe(user, { nickname: 'a', expectedAccountId: user.id });
     expect(res.statusCode).toBe(400);
     const { error } = errorEnvelopeSchema.parse(res.json());
     expect(error.code).toBe('VALIDATION_ERROR');
     expect(error.details).toMatchObject([{ path: ['nickname'] }]);
+    const unnamed = await patchMe(user, { nickname: '새이름' });
+    expect(unnamed.statusCode).toBe(400);
+    expect(
+      (errorEnvelopeSchema.parse(unnamed.json()).error.details as ValidationIssue[]).map(
+        (issue) => issue.path,
+      ),
+    ).toEqual([['expectedAccountId']]);
   });
 
   it('malformed JSON body -> 400 VALIDATION_ERROR envelope (Fastify parser error)', async () => {
