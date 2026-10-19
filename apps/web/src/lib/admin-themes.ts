@@ -1,5 +1,7 @@
 import {
+  THEME_DATE_MAX,
   THEME_DATE_MIN,
+  THEME_DATE_OUT_OF_RANGE,
   THEME_INTRO_MAX,
   THEME_NAME_MAX,
   THEME_NOTICE_BODY_MAX,
@@ -27,6 +29,8 @@ import {
  * required; the period is two Korean dates, both in it; the address is the slug the operator
  * chooses at creation and cannot change once the theme has been published; a theme is published
  * with a market in it; a notice is plain text, title up to 100 and body up to 5,000 characters.
+ * And of the second round the same day: the dates lie within 2000-01-01 and 2100-12-31, and the
+ * market a publish needs is one that is not a draft.
  */
 
 /** The theme form's values: the strings the inputs hold. Dates are `<input type="date">`'s. */
@@ -50,18 +54,22 @@ export const EMPTY_THEME_FORM: ThemeFormValues = {
 /** A `YYYY-MM-DD` the date input gives, or '' when it holds none. */
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
+/** A date the input holds at all: anything else reads as no date, so the field asks for one. */
+const isDate = (value: string) => DATE.test(value);
 /**
- * A date the API takes: a four-digit year from `THEME_DATE_MIN` on, as the inputs' `min` and
- * `max` already hold a browser to. Anything else reads as no date, so the field asks for one.
+ * A date the API takes (owner decision 2026-10-19, second round): from `THEME_DATE_MIN` to
+ * `THEME_DATE_MAX`, which the inputs' `min` and `max` also offer a browser — but a typed year can
+ * still fall outside them, so the form says the range.
  */
-const isThemeDate = (value: string) => DATE.test(value) && value >= THEME_DATE_MIN;
+const inThemeRange = (value: string) => value >= THEME_DATE_MIN && value <= THEME_DATE_MAX;
+const isThemeDate = (value: string) => isDate(value) && inThemeRange(value);
 
 /**
  * The form's rules, the API's restated in the admin's words: the slug in a market slug's alphabet
  * (`themeSlugSchema`, the API's own), the name and the introduction within their bounds, both
- * dates — an empty one asks for it — and an end on or after the start. The API checks everything
- * again; a refusal it alone can give (a taken slug, a fixed one, a start after an end another
- * admin just moved) lands on the field through `themeFormError`.
+ * dates — an empty one asks for it, one outside the range says the range — and an end on or after
+ * the start. The API checks everything again; a refusal it alone can give (a taken slug, a fixed
+ * one, a start after an end another admin just moved) lands on the field through `themeFormError`.
  */
 export const themeFormSchema = z
   .object({
@@ -71,8 +79,14 @@ export const themeFormSchema = z
       .refine((value) => themeSlugSchema.safeParse(value).success, copy.errThemeSlug),
     name: z.string().trim().min(1, copy.errThemeName).max(THEME_NAME_MAX, copy.errThemeName),
     intro: z.string().trim().min(1, copy.errThemeIntro).max(THEME_INTRO_MAX, copy.errThemeIntro),
-    startDate: z.string().refine(isThemeDate, copy.errThemeStartDate),
-    endDate: z.string().refine(isThemeDate, copy.errThemeEndDateRequired),
+    startDate: z
+      .string()
+      .refine(isDate, copy.errThemeStartDate)
+      .refine((value) => !isDate(value) || inThemeRange(value), copy.errThemeDateRange),
+    endDate: z
+      .string()
+      .refine(isDate, copy.errThemeEndDateRequired)
+      .refine((value) => !isDate(value) || inThemeRange(value), copy.errThemeDateRange),
   })
   .refine(
     (values) =>
@@ -145,8 +159,9 @@ const THEME_FORM_FIELDS: readonly ThemeFormField[] = [
  * Where a refused create or edit lands on the form: the field the API named, with words the admin
  * can act on — a slug another theme has, a slug fixed by the first publish, a malformed one; a
  * period out of order, on the half the request sent (`THEME_REFUSALS`: a start sent alone that is
- * after the stored end, which another admin may have just moved, or an end before the start);
- * the other fields' bounds. `undefined` for anything else, which is the toast's.
+ * after the stored end, which another admin may have just moved, or an end before the start); a
+ * date outside the range (`THEME_DATE_OUT_OF_RANGE`); the other fields' bounds. `undefined` for
+ * anything else, which is the toast's.
  */
 export function themeFormError(
   error: unknown,
@@ -175,7 +190,9 @@ export function themeFormError(
         message:
           reason === THEME_REFUSALS.startAfterEnd.message
             ? copy.errThemeStartDateOrder
-            : copy.errThemeStartDate,
+            : reason === THEME_DATE_OUT_OF_RANGE
+              ? copy.errThemeDateRange
+              : copy.errThemeStartDate,
       };
     case 'endDate':
       return {
@@ -183,19 +200,21 @@ export function themeFormError(
         message:
           reason === THEME_REFUSALS.endBeforeStart.message
             ? copy.errThemeEndDate
-            : copy.errThemeEndDateRequired,
+            : reason === THEME_DATE_OUT_OF_RANGE
+              ? copy.errThemeDateRange
+              : copy.errThemeEndDateRequired,
       };
   }
 }
 
 /**
  * A refused publish or another theme write, in words: a publish of a theme with no market in it
- * (owner decision 2026-10-19), a theme that is not there, or anything else.
+ * that is not a draft (owner decisions 2026-10-19), a theme that is not there, or anything else.
  */
 export function themeWriteErrorMessage(error: unknown): string {
   if (
     isApiError(error, 'VALIDATION_ERROR') &&
-    validationField(error) === THEME_REFUSALS.noMarket.field
+    validationField(error) === THEME_REFUSALS.noPublicMarket.field
   ) {
     return copy.adminThemePublishNeedsMarket;
   }
@@ -232,7 +251,8 @@ export function toThemeNoticeBody(values: ThemeNoticeFormValues): ThemeNoticeFor
 /**
  * What the market picker offers for one market it found: `linked` for one already in the theme —
  * the API would change nothing — and `linkable` for the rest, in any status (ADR-0069 decision 4,
- * '편성 규칙': a draft too, which the public pages show once it opens).
+ * '편성 규칙': a draft too, which the public pages show once it opens — and which a publish counts
+ * from then, not before; owner decision 2026-10-19, second round).
  */
 export function themePickState(
   candidateId: string,

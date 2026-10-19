@@ -176,7 +176,9 @@ export const copy = {
   passwordChanged: '비밀번호를 변경했습니다.',
   passwordWrong: '현재 비밀번호가 올바르지 않습니다.',
   passwordNotSet: '아직 비밀번호가 없습니다. 설정하면 이메일로도 로그인할 수 있습니다.',
-  settingsTheme: '테마',
+  // 라이트/다크 전환 칸. 시장 묶음의 이름이 '테마'(#81)라 이 칸은 '화면 모드'다(오너 결정 2026-10-19
+  // 2차, ADR-0088).
+  settingsTheme: '화면 모드',
   settingsThemeHint: '라이트/다크 모드를 전환합니다.',
   // 시간대 (ADR-0061 #60-8, ADR-0063). 고르지 않으면 브라우저 시간대를 따르고, 그 선택지 뒤에
   // 지금 브라우저의 시간대를 괄호로 붙인다. 시간대는 선택지마다 IANA 이름과 브라우저가 주는
@@ -487,9 +489,10 @@ export const copy = {
   adminThemeIntro: '소개',
   adminThemeStartDate: '시작일',
   adminThemeEndDate: '종료일',
-  // 기간의 뜻(오너 결정 2026-10-19): 한국 날짜 단위, 두 날 모두 기간에 든다.
+  // 기간의 뜻(오너 결정 2026-10-19): 한국 날짜 단위, 두 날 모두 기간에 든다. 날짜는 2000년 1월 1일부터
+  // 2100년 12월 31일까지(같은 날 2차).
   adminThemePeriodHint:
-    '한국 날짜로 넣습니다. 시작일 0시부터 진행 중, 종료일 다음 날 0시부터 종료로 보입니다.',
+    '한국 날짜로 넣습니다(2000년 1월 1일~2100년 12월 31일). 시작일 0시부터 진행 중, 종료일 다음 날 0시부터 종료로 보입니다.',
   adminThemesEmpty: '만든 테마가 없습니다.',
   adminThemeNotFound: '테마를 찾을 수 없습니다.',
   adminBackToThemes: '테마 목록으로',
@@ -511,16 +514,21 @@ export const copy = {
   adminThemePublishedAt: '공개 시각',
   adminThemeMarkets: '시장',
   // 편성은 자유롭다(ADR-0069 결정 4의 #81 '편성 규칙'): 어느 상태의 시장이든 넣고, 초안 시장은 공개
-  // 페이지에 보이지 않는다. 넣고 빼는 것은 시장의 규칙·거래·판정·정산을 바꾸지 않는다(N05 §7).
+  // 페이지에 보이지 않으며 공개 조건에도 세지 않는다(오너 결정 2026-10-19 2차). 넣고 빼는 것은 시장의
+  // 규칙·거래·판정·정산을 바꾸지 않는다(N05 §7).
   adminThemeMarketsHint:
-    '넣은 시장은 테마 페이지에 시장 카드로 보입니다. 초안 시장은 열릴 때까지 보이지 않습니다. 넣고 빼도 시장의 규칙·거래·판정·정산은 바뀌지 않습니다.',
+    '넣은 시장은 테마 페이지에 시장 카드로 보입니다. 초안 시장은 열릴 때까지 보이지 않고, 공개에 필요한 시장으로도 세지 않습니다. 넣고 빼도 시장의 규칙·거래·판정·정산은 바뀌지 않습니다.',
   adminThemeMarketsEmpty: '넣은 시장이 없습니다.',
   adminThemeMarketLinkedAt: '넣음',
   adminThemeMarketUnlink: '빼기',
   adminThemeMarketUnlinkTitle: '테마에서 시장을 뺍니다',
   adminThemeMarketUnlinkBody: '빼면 테마 페이지의 시장과 결과에서 보이지 않습니다. 계속할까요?',
-  // 공개에는 시장이 하나 이상 있어야 한다(오너 결정 2026-10-19). 공개한 뒤 모두 빼는 것은 된다.
-  adminThemePublishNeedsMarket: '시장을 하나 이상 넣어야 공개할 수 있습니다.',
+  // 공개에는 초안이 아닌 시장이 하나 이상 있어야 한다(오너 결정 2026-10-19, 초안은 세지 않는 것은 같은
+  // 날 2차). 공개한 뒤 모두 빼는 것은 된다. 앞의 것은 공개 거절, 뒤의 것은 공개 전의 공개하기 옆 안내.
+  adminThemePublishNeedsMarket:
+    '초안이 아닌 시장을 하나 이상 넣어야 공개할 수 있습니다. 초안 시장은 세지 않습니다.',
+  adminThemePublishHint:
+    '공개하려면 초안이 아닌 시장이 하나 이상 들어 있어야 합니다. 초안 시장은 열린 뒤부터 셉니다.',
   adminThemeMarketUnlinked: '테마에서 시장을 뺐습니다.',
   adminThemeMarketSearchLabel: '넣을 시장 찾기',
   adminThemeMarketSearchSubmit: '찾기',
@@ -555,6 +563,7 @@ export const copy = {
   errThemeStartDateOrder: '시작일은 종료일과 같거나 앞서야 합니다.',
   errThemeEndDateRequired: '종료일을 입력해 주세요.',
   errThemeEndDate: '종료일은 시작일과 같거나 뒤여야 합니다.',
+  errThemeDateRange: '날짜는 2000년 1월 1일부터 2100년 12월 31일 사이로 입력해 주세요.',
   errThemeNoticeTitle: '제목은 1~100자로 입력해 주세요.',
   errThemeNoticeBody: '내용은 1~5,000자로 입력해 주세요.',
   adminMarketFills: '최근 체결',
@@ -979,7 +988,8 @@ export const copy = {
   themeStatusOngoing: '진행 중',
   themeStatusEnded: '종료',
   themePeriod: '기간',
-  // 테마 기간의 날짜(오너 결정 2026-10-19 '10월 20일 ~ 11월 3일'): 연도는 기간이 해를 넘길 때만 붙는다.
+  // 테마 기간의 날짜(오너 결정 2026-10-19 '10월 20일 ~ 11월 3일'): 올해가 아닌 날짜가 있으면 연도를
+  // 붙인다('2025년 10월 20일 ~ 11월 3일', 같은 날 2차).
   dateYearSuffix: '년',
   dateMonthSuffix: '월',
   dateDaySuffix: '일',
@@ -994,10 +1004,16 @@ export const copy = {
   themeResults: '결과',
   themeResultsEmpty: '결과가 나온 시장이 없습니다.',
   themeResultVoided: '무효',
-  // 탐색 홈의 진행 중인 테마(ADR-0069 결정 4의 #81 '탐색 홈 노출'). 진행 중인 테마가 없으면 자리가 없다.
-  homeThemes: '진행 중인 테마',
+  // 탐색 홈의 테마 줄(ADR-0069 결정 4의 #81 '탐색 홈 노출', 오너 결정 2026-10-19 2차): 진행 중인 테마,
+  // 없으면 예정된 테마의 카드와 '모든 테마'. 모두 종료면 카드 없이 제목·안내·'모든 테마'이고, 공개된
+  // 테마가 하나도 없을 때만 줄이 없다. 예정·종료 때의 제목과 안내 글은 이 PR이 골랐다(ADR-0088).
+  homeThemesOngoing: '진행 중인 테마',
+  homeThemesUpcoming: '예정된 테마',
+  homeThemesNone: '테마',
+  homeThemesNoneBody: '진행 중이거나 예정된 테마가 없습니다.',
   homeThemesAll: '모든 테마',
-  // 시장 상세의 소속 테마 링크(ADR-0069 결정 4의 #81 '시장 상세의 소속 묶음 링크'). 공개된 테마만.
+  // 시장 상세의 소속 테마 링크(ADR-0069 결정 4의 #81 '시장 상세의 소속 묶음 링크'). 공개된 테마만,
+  // 종료된 테마도, 링크마다 '이름 · 진행 중'처럼 상태를 붙인다(오너 결정 2026-10-19 2차).
   marketThemes: '테마',
   // 비로그인 방문자에게 개인 영역(내 포지션·내 대기 주문·내 거래) 대신 그 자리에 하나만 보이는
   // 로그인 안내(오너 결정 2026-10-17, '로그인 안내 하나'). 버튼은 copy.login이고 이 상세로 돌아온다.

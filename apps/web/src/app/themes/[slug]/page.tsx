@@ -14,6 +14,7 @@ import {
   prefetchThemeMarkets,
   prefetchThemeResults,
   seedTheme,
+  themeKey,
   themeMarketsKey,
   themeSlugParam,
 } from '@/lib/themes';
@@ -68,6 +69,9 @@ export default async function ThemeRoute({ params }: { params: Promise<{ slug: s
   // The cards' countdowns measure against the server's read of them, as the home's do; 0 is a
   // read that failed.
   const marketsFetchedAt = queryClient.getQueryState(themeMarketsKey(theme.id))?.dataUpdatedAt ?? 0;
+  // The seed's own time, which rides along in the dehydrated state: the year the period is
+  // written against, the same on the server and in the hydrating browser.
+  const themeReadAt = queryClient.getQueryState(themeKey(theme.id))?.dataUpdatedAt ?? 0;
 
   return (
     <Container maxW="1320px" px="6" py={{ base: '6', md: '10' }}>
@@ -75,6 +79,7 @@ export default async function ThemeRoute({ params }: { params: Promise<{ slug: s
         <ThemePage
           themeId={theme.id}
           fallback={theme}
+          fallbackReadAt={themeReadAt}
           marketsNow={marketsFetchedAt === 0 ? undefined : marketsFetchedAt}
         />
       </HydrationBoundary>

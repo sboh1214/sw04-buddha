@@ -30,20 +30,25 @@ import { type PublicMarketStatus, marketSlugSchema, marketSummarySchema } from '
  * a notice is plain text whose addresses become links, hidden and shown again but never deleted,
  * and marked 수정됨 once edited; the public list runs 진행 중 → 예정 → 종료; the address is a slug
  * the operator chooses at creation and cannot change once the theme has been published; a voided
- * market is among the theme's cards; a theme is published only with a market in it.
+ * market is among the theme's cards; a theme is published only with a market in it. And of the
+ * second round the same day: that market must be a public one — a draft does not count; the slug
+ * stays fixed from the first publish on, through an unpublish; the introduction's addresses are
+ * links too; the dates lie within 2000-01-01 and 2100-12-31; the name and introduction bounds
+ * stand.
  *
  * A theme changes nothing of its markets: no rule, status, order, fill, position or settlement
  * path reads `themes` or `theme_markets` (N05 §7 "개별 시장의 거래·정산 규칙은 바꾸지 않는다").
  */
 
 /**
- * A theme's name: one line, as long as a notice's title. A choice of this PR, not an owner
- * decision (ADR-0088 decision 6 and 결과 4): the owner bounded the notices only.
+ * A theme's name: one line, as long as a notice's title. Chosen by this PR and kept by the owner
+ * (2026-10-19, second round, ADR-0088).
  */
 export const THEME_NAME_MAX = 100;
 /**
- * A theme's introduction: plain text, line breaks kept, as long as a market's description
- * (`MARKET_TEXT_MAX`). A choice of this PR, as the name's bound is.
+ * A theme's introduction: plain text, line breaks kept and web addresses linked on the page, as
+ * long as a market's description (`MARKET_TEXT_MAX`). Chosen by this PR and kept by the owner, as
+ * the name's bound is.
  */
 export const THEME_INTRO_MAX = 5_000;
 /** A notice's title: one line, as long as a community post's title (owner decision 2026-10-18, #46). */
@@ -59,7 +64,8 @@ export const THEME_NOTICE_BODY_MAX = 5_000;
  * theme is made, in a market slug's alphabet and bounds — `a-z`, `0-9`, Korean syllables and `-`,
  * 3 to 80 characters, never uuid-shaped, NFC — so the two kinds of address read alike and `GET
  * /themes/:idOrSlug` can tell an id from a slug as `GET /markets/:idOrSlug` does. It changes until
- * the theme is first published and never after.
+ * the theme is first published and never after, unpublished or not (owner decision 2026-10-19,
+ * second round): an address announced once keeps working.
  */
 export const themeSlugSchema = marketSlugSchema;
 
@@ -84,22 +90,33 @@ export type ThemeStatus = (typeof THEME_STATUSES)[number];
 export const themeStatusSchema = z.enum(THEME_STATUSES);
 
 /**
- * The dates a period may use: what Postgres's `date` stores of the four-digit years
- * `z.iso.date()` takes. Postgres has no year 0 (1 BC comes before 1 AD), so `0000-01-01` would
- * pass `z.iso.date()` and fail at the insert as a 500; the request is refused naming the field
- * instead. `z.iso.date()` itself ends at 9999-12-31. Only what storage takes, not a product range:
- * the owner has set none (ADR-0088 결과 4). The admin's date inputs carry both as `min`/`max`.
+ * The dates a period may use (owner decision 2026-10-19, second round, ADR-0088): 2000-01-01 to
+ * 2100-12-31, both in. The API refuses a date outside them naming the field
+ * (`THEME_DATE_OUT_OF_RANGE`), and the admin's date inputs carry both as `min`/`max`. The column
+ * itself stores any date Postgres has; the range is the product's, not storage's — and it keeps
+ * out the year 0000 `z.iso.date()` takes and Postgres does not (a 500 at the insert otherwise).
  */
-export const THEME_DATE_MIN = '0001-01-01';
-export const THEME_DATE_MAX = '9999-12-31';
+export const THEME_DATE_MIN = '2000-01-01';
+export const THEME_DATE_MAX = '2100-12-31';
+/** The refusal of a date outside `THEME_DATE_MIN`…`THEME_DATE_MAX`, on the field that sent it. */
+export const THEME_DATE_OUT_OF_RANGE = `must be between ${THEME_DATE_MIN} and ${THEME_DATE_MAX}`;
 
-/** A period's date as a request sends it: a calendar date from `THEME_DATE_MIN` on. */
+/** Whether a string is a real calendar date, `YYYY-MM-DD`: what `z.iso.date()` takes. */
+const isCalendarDate = (value: string) => z.iso.date().safeParse(value).success;
+
+/**
+ * A period's date as a request sends it: a calendar date within the range. `YYYY-MM-DD` strings
+ * order as the dates do. The range is checked on a real calendar date only, so a string that is
+ * none — of another shape, or of the right shape but no such day (`2026-02-30`, `1999-02-30`,
+ * `2101-13-01`) — is `z.iso.date()`'s one issue, never a second one about the range, whatever its
+ * year (zod runs every check, the refinement too, after the date check failed).
+ */
 const themeDateSchema = z.iso
   .date()
-  // A four-digit year below 0001 is 0000 alone; a malformed date is `z.iso.date()`'s one issue.
-  .refine((value) => !value.startsWith('0000-'), {
-    message: `must not be before ${THEME_DATE_MIN}`,
-  });
+  .refine(
+    (value) => !isCalendarDate(value) || (value >= THEME_DATE_MIN && value <= THEME_DATE_MAX),
+    { message: THEME_DATE_OUT_OF_RANGE },
+  );
 
 /** A theme's period as stored and sent: Korean dates, `YYYY-MM-DD`. */
 export interface ThemePeriod {
@@ -214,8 +231,8 @@ export type ThemeResult = z.infer<typeof themeResultSchema>;
 
 /**
  * `GET /themes` (no `.meta`: query DTO, expanded per field like `marketListQuerySchema`): the
- * published themes in the list's order (`THEME_LIST_STATUS_ORDER`), or those of one status — the
- * explore home asks for `ongoing`.
+ * published themes in the list's order (`THEME_LIST_STATUS_ORDER`), or those of one status. The
+ * explore home reads the first few of all of them and keeps the leading status's (ADR-0088).
  */
 export const themeListQuerySchema = cursorQuerySchema.extend({
   status: themeStatusSchema.optional(),
@@ -239,24 +256,36 @@ const themeFields = {
 /**
  * The refusals of the theme writes, as VALIDATION_ERROR details (`{ path: [field], message }`):
  * a slug another theme has, a slug change once the theme has been published, a publish of a
- * theme with no market in it (owner decision 2026-10-19: a theme goes public with one market at
- * least; taking every market out afterwards is allowed), and a period that would end before it
- * starts, named by the half the request sent — the end when it sent both or the end alone, the
- * start when it sent the start alone (the end is then the stored one). The web reads them to say
- * which, in words that fit.
+ * theme with no public market in it (owner decisions 2026-10-19: a theme goes public with one
+ * market at least, and of the second round, a market that is not a draft — a draft is on no
+ * public page, so a theme of drafts alone would be an empty page; taking every market out
+ * afterwards is allowed), and a period that would end before it starts, named by the half the
+ * request sent — the end when it sent both or the end alone, the start when it sent the start
+ * alone (the end is then the stored one). The web reads them to say which, in words that fit.
  */
 export const THEME_REFUSALS = {
   slugTaken: { field: 'slug', message: 'already exists' },
   slugFixed: { field: 'slug', message: 'fixed once published' },
-  noMarket: { field: 'markets', message: 'at least one market is required to publish' },
+  noPublicMarket: {
+    field: 'markets',
+    message: 'at least one market that is not a draft is required to publish',
+  },
   endBeforeStart: { field: 'endDate', message: 'must not be before startDate' },
   startAfterEnd: { field: 'startDate', message: 'must not be after endDate' },
 } as const;
 
-/** The period may be one day — both days are in it — and never end before it starts. */
+/**
+ * The period may be one day — both days are in it — and never end before it starts. Only two real
+ * calendar dates are compared: a date that is none is its own field's one issue (`themeDateSchema`),
+ * and an order against it would be a second issue that means nothing.
+ */
 function periodInOrder(value: { startDate?: string; endDate?: string }): boolean {
   return (
-    value.startDate === undefined || value.endDate === undefined || value.endDate >= value.startDate
+    value.startDate === undefined ||
+    value.endDate === undefined ||
+    !isCalendarDate(value.startDate) ||
+    !isCalendarDate(value.endDate) ||
+    value.endDate >= value.startDate
   );
 }
 const PERIOD_ORDER = {

@@ -7,6 +7,7 @@ import { PUBLIC_MARKET_STATUSES, marketSummarySchema } from './market.js';
 import {
   THEME_DATE_MAX,
   THEME_DATE_MIN,
+  THEME_DATE_OUT_OF_RANGE,
   THEME_INTRO_MAX,
   THEME_LIST_STATUS_ORDER,
   THEME_NAME_MAX,
@@ -142,33 +143,70 @@ describe('createThemeBodySchema', () => {
     }
   });
 
-  it('takes every date Postgres stores, and refuses the year 0000 it does not, naming the field', () => {
+  it('takes the dates from 2000-01-01 to 2100-12-31 and refuses others naming the field (owner decision 2026-10-19, second round)', () => {
+    expect([THEME_DATE_MIN, THEME_DATE_MAX]).toEqual(['2000-01-01', '2100-12-31']);
     for (const period of [
       { startDate: THEME_DATE_MIN, endDate: THEME_DATE_MIN },
-      { startDate: '9999-01-01', endDate: THEME_DATE_MAX },
+      { startDate: THEME_DATE_MIN, endDate: THEME_DATE_MAX },
+      { startDate: THEME_DATE_MAX, endDate: THEME_DATE_MAX },
     ]) {
       expect(createThemeBodySchema.safeParse({ ...body, ...period }).success).toBe(true);
     }
     for (const [field, date] of [
+      ['startDate', '1999-12-31'],
       ['startDate', '0000-01-01'],
-      ['endDate', '0000-02-29'],
+      ['endDate', '2101-01-01'],
+      ['endDate', '9999-12-31'],
     ] as const) {
-      const result = createThemeBodySchema.safeParse({
-        ...body,
-        startDate: '0000-01-01',
-        endDate: '0001-01-01',
-        [field]: date,
-      });
-      expect(result.error?.issues.map((issue) => [issue.path, issue.message])).toContainEqual([
-        [field],
-        `must not be before ${THEME_DATE_MIN}`,
-      ]);
+      const result = createThemeBodySchema.safeParse({ ...body, ...PERIOD, [field]: date });
+      expect(
+        result.error?.issues.map((issue) => [issue.path, issue.message]),
+        `${field} ${date}`,
+      ).toContainEqual([[field], THEME_DATE_OUT_OF_RANGE]);
     }
-    // A malformed date is one issue, not two.
-    expect(createThemeBodySchema.safeParse({ ...body, startDate: '' }).error?.issues).toHaveLength(
-      1,
-    );
-    expect(updateThemeBodySchema.safeParse({ endDate: '0000-12-31' }).success).toBe(false);
+    expect(THEME_DATE_OUT_OF_RANGE).toBe('must be between 2000-01-01 and 2100-12-31');
+    // A malformed date is one issue, not a second one about the range — whatever its year: a
+    // string of the right shape but no such day is no date to check the range of, nor to put in
+    // order against the end (`2101-13-01` sorts after `PERIOD.endDate`).
+    for (const field of ['startDate', 'endDate'] as const) {
+      for (const date of ['', '2026-02-30', '2026-1-1', '1999-02-30', '2101-13-01', '9999-99-99']) {
+        for (const result of [
+          createThemeBodySchema.safeParse({ ...body, [field]: date }),
+          updateThemeBodySchema.safeParse({ ...PERIOD, [field]: date }),
+          updateThemeBodySchema.safeParse({ [field]: date }),
+        ]) {
+          const issues = result.error?.issues.map((issue) => [issue.path, issue.message]);
+          expect(issues, `${field} ${date}`).toHaveLength(1);
+          expect(issues?.[0]?.[0], `${field} ${date}`).toEqual([field]);
+          expect(issues?.[0]?.[1], `${field} ${date}`).not.toBe(THEME_DATE_OUT_OF_RANGE);
+        }
+      }
+    }
+    // An edit is held to the same range, each half alone too.
+    for (const [field, date] of [
+      ['startDate', '1999-12-31'],
+      ['startDate', '0000-01-01'],
+      ['endDate', '2101-01-01'],
+      ['endDate', '9999-12-31'],
+    ] as const) {
+      expect(
+        updateThemeBodySchema
+          .safeParse({ [field]: date })
+          .error?.issues.map((issue) => [issue.path, issue.message]),
+        `${field} ${date}`,
+      ).toEqual([[[field], THEME_DATE_OUT_OF_RANGE]]);
+    }
+    expect(updateThemeBodySchema.safeParse({ startDate: THEME_DATE_MIN }).success).toBe(true);
+    expect(updateThemeBodySchema.safeParse({ endDate: THEME_DATE_MAX }).success).toBe(true);
+  });
+});
+
+describe('THEME_REFUSALS', () => {
+  it('names markets when a publish has no public market: a draft does not count (owner decision 2026-10-19, second round)', () => {
+    expect(THEME_REFUSALS.noPublicMarket).toEqual({
+      field: 'markets',
+      message: 'at least one market that is not a draft is required to publish',
+    });
   });
 });
 

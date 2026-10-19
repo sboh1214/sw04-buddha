@@ -1,4 +1,9 @@
-import { THEME_NOTICE_BODY_MAX, THEME_NOTICE_TITLE_MAX, THEME_REFUSALS } from '@buddha/shared';
+import {
+  THEME_DATE_OUT_OF_RANGE,
+  THEME_NOTICE_BODY_MAX,
+  THEME_NOTICE_TITLE_MAX,
+  THEME_REFUSALS,
+} from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
 import {
@@ -70,14 +75,21 @@ describe('themeFormSchema (#81, owner decision 2026-10-19)', () => {
     expect(issues({ ...values, endDate: '' })).toEqual([['endDate', copy.errThemeEndDateRequired]]);
   });
 
-  it('takes the dates the API takes, from 0001-01-01 to 9999-12-31', () => {
+  it('takes the dates the API takes, from 2000-01-01 to 2100-12-31, and says the range otherwise (owner decision 2026-10-19, second round)', () => {
     expect(
-      themeFormSchema.safeParse({ ...values, startDate: '0001-01-01', endDate: '9999-12-31' })
+      themeFormSchema.safeParse({ ...values, startDate: '2000-01-01', endDate: '2100-12-31' })
         .success,
     ).toBe(true);
-    expect(issues({ ...values, startDate: '0000-01-01' })).toEqual([
-      ['startDate', copy.errThemeStartDate],
+    expect(issues({ ...values, startDate: '1999-12-31' })).toEqual([
+      ['startDate', copy.errThemeDateRange],
     ]);
+    expect(issues({ ...values, startDate: '0000-01-01' })).toEqual([
+      ['startDate', copy.errThemeDateRange],
+    ]);
+    expect(issues({ ...values, endDate: '2101-01-01' })).toEqual([
+      ['endDate', copy.errThemeDateRange],
+    ]);
+    // Not a date at all: the field asks for one.
     expect(issues({ ...values, endDate: '+10000-01-01' })).toEqual([
       ['endDate', copy.errThemeEndDateRequired],
     ]);
@@ -168,20 +180,32 @@ describe('the refusals in words', () => {
     });
   });
 
+  it('says the range for a date outside it, on the field the API named', () => {
+    for (const field of ['startDate', 'endDate'] as const) {
+      expect(themeFormError(refused(field, THEME_DATE_OUT_OF_RANGE))).toEqual({
+        field,
+        message: copy.errThemeDateRange,
+      });
+    }
+  });
+
   it('lands the other fields on theirs, and anything else on the toast', () => {
     expect(themeFormError(refused('name', 'Too big'))).toEqual({
       field: 'name',
       message: copy.errThemeName,
     });
-    expect(themeFormError(refused('markets', THEME_REFUSALS.noMarket.message))).toBeUndefined();
+    expect(
+      themeFormError(refused('markets', THEME_REFUSALS.noPublicMarket.message)),
+    ).toBeUndefined();
     expect(themeFormError(refused('slug', 'x', 'NOT_FOUND'))).toBeUndefined();
     expect(themeFormError(new Error('network'))).toBeUndefined();
   });
 
-  it('says a publish needs a market (owner decision 2026-10-19)', () => {
-    expect(themeWriteErrorMessage(refused('markets', THEME_REFUSALS.noMarket.message))).toBe(
+  it('says a publish needs a market that is not a draft (owner decisions 2026-10-19)', () => {
+    expect(themeWriteErrorMessage(refused('markets', THEME_REFUSALS.noPublicMarket.message))).toBe(
       copy.adminThemePublishNeedsMarket,
     );
+    expect(copy.adminThemePublishNeedsMarket).toContain('초안');
     expect(themeWriteErrorMessage(new ApiError(404, { code: 'NOT_FOUND', message: 'x' }))).toBe(
       copy.adminThemeNotFound,
     );

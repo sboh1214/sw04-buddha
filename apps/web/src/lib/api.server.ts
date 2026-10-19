@@ -295,7 +295,7 @@ export async function fetchThemeListPageServer(cursor?: string): Promise<ThemeLi
   return { items: data, nextCursor: meta.nextCursor };
 }
 
-/** The explore home's ongoing themes: the first page of `GET /themes?status=ongoing`. */
+/** The explore home's theme row: the first few of `GET /themes`, every status (`homeThemesRow`). */
 export async function fetchHomeThemesServer(): Promise<ThemeSummary[]> {
   return unwrap(await serverApi.GET('/api/v1/themes', { params: { query: homeThemesQuery() } }))
     .data;

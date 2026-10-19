@@ -52,7 +52,7 @@ export function ThemeList() {
         <>
           <Grid templateColumns={THEME_GRID_COLUMNS} gap="4" data-testid="themes-grid">
             {rows.map((theme) => (
-              <ThemeCard key={theme.id} theme={theme} />
+              <ThemeCard key={theme.id} theme={theme} readAt={themes.dataUpdatedAt} />
             ))}
           </Grid>
           {themes.hasNextPage && (

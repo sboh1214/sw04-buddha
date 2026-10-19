@@ -17,7 +17,7 @@ import {
 } from '@/lib/themes';
 
 /**
- * 테마 (#81, ADR-0088) in public: the list, the explore home's ongoing themes, a theme's page, its
+ * 테마 (#81, ADR-0088) in public: the list, the explore home's theme row, a theme's page, its
  * markets and its results, and the themes a market is in. Every key, request shape and SSR seed is
  * lib/themes.ts's — a module the server pages can call — and the query-option factories are
  * exported apart from the hooks so the unit tests reach them without React (use-markets.ts gives
@@ -47,8 +47,10 @@ export function useThemeList() {
 }
 
 /**
- * The explore home's 진행 중인 테마 (ADR-0069 decision 4, '탐색 홈 노출'): the first page of the
- * ongoing ones, the soonest to end first. One page: the row is a few links and 모든 테마 leads on.
+ * The explore home's theme row (ADR-0069 decision 4, '탐색 홈 노출'): the first few published
+ * themes in the list's order, which `homeThemesRow` reads as the ongoing ones, else the upcoming
+ * ones, else none but 모든 테마 (owner decision 2026-10-19, second round). One page: the row is a
+ * few links and 모든 테마 leads on.
  */
 export function homeThemesQueryOptions() {
   return {

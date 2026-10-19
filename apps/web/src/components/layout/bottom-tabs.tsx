@@ -11,8 +11,8 @@ import { useSession } from '@/lib/use-session';
  * The mobile bottom tab bar (PLAN 11.4 레이아웃, #16), below `md` only: the same three areas as
  * the desktop header's row 1 — 시장 탐색 · 커뮤니티 · MY — from the same list (`primaryNavItems`,
  * lib/nav.ts), so every width reaches the same places. Which tab is current is
- * `isPrimaryCurrent`, the header's own rule: 시장 탐색 stays lit on a market detail and on the
- * search screen (ADR-0066), and MY on every MY tab.
+ * `isPrimaryCurrent`, the header's own rule: 시장 탐색 stays lit on a market detail, on the
+ * search screen (ADR-0066) and on the theme pages (ADR-0088), and MY on every MY tab.
  *
  * Fixed to the bottom of the viewport, so the document needs that much extra scroll length or
  * every page's last row would sit under it — the site footer, the last row of every page, pays it

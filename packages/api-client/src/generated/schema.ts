@@ -1025,7 +1025,7 @@ export type paths = {
         /** Every theme, published or not, newest first */
         get: operations["adminListThemes"];
         put?: never;
-        /** Create an unpublished theme: slug, name, introduction and Korean period, all required; a slug another theme has is refused naming slug */
+        /** Create an unpublished theme: slug, name, introduction and Korean period, all required, dates from 2000-01-01 to 2100-12-31; a slug another theme has is refused naming slug */
         post: operations["adminCreateTheme"];
         delete?: never;
         options?: never;
@@ -1047,7 +1047,7 @@ export type paths = {
         delete?: never;
         options?: never;
         head?: never;
-        /** Edit the name, introduction or period at any time, and the slug until the theme is first published (refused naming slug after that); an end before the start is refused naming the half the body sent (start == end is a one-day theme) */
+        /** Edit the name, introduction or period at any time, and the slug until the theme is first published (refused naming slug after that, unpublished or not); an end before the start is refused naming the half the body sent (start == end is a one-day theme), and a date outside 2000-01-01 to 2100-12-31 naming its field */
         patch: operations["adminUpdateTheme"];
         trace?: never;
     };
@@ -1163,7 +1163,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Make the theme public; refused naming markets while it has no market; a published theme stays as it is */
+        /** Make the theme public; refused naming markets while it has no market that is not a draft (drafts do not count); a published theme stays as it is */
         post: operations["adminPublishTheme"];
         delete?: never;
         options?: never;

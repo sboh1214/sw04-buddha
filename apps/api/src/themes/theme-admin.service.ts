@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { schema, type Db } from '@buddha/db';
 import {
+  PUBLIC_MARKET_STATUSES,
   THEME_REFUSALS,
   decodeKeyset,
   encodeKeyset,
@@ -15,7 +16,7 @@ import {
   type UpdateThemeBody,
   type UpdateThemeNoticeBody,
 } from '@buddha/shared';
-import { and, count, desc, eq } from 'drizzle-orm';
+import { and, count, desc, eq, inArray } from 'drizzle-orm';
 import { keysetPredicate } from '../common/keyset.js';
 import { AppError } from '../common/errors/app-error.js';
 import { PG_UNIQUE_VIOLATION, isPgError } from '../common/errors/pg-error.js';
@@ -62,8 +63,9 @@ function refusal(
  * published or not — with no cap on markets and any market status; a theme is unpublished and
  * never deleted; every change records the admin and the time and nothing else. And of 2026-10-19
  * (ADR-0088): a notice is hidden and never deleted; the slug is the operator's at creation and
- * fixed once the theme has been published; a theme is published only with a market in it, and
- * every market may be taken out afterwards.
+ * fixed once the theme has been published — through an unpublish too (second round); a theme is
+ * published only with a public market in it — a draft does not count (second round) — and every
+ * market may be taken out afterwards.
  *
  * Each write that changes something writes one `admin_actions` row (a `theme_*` type, target
  * `theme` / the theme's id) in the same transaction, at the same clock reading as the change; a
@@ -192,8 +194,10 @@ export class ThemeAdminService {
 
   /**
    * `POST /admin/themes/:id/publish`: public from now; a published theme stays as it is. A theme
-   * with no market in it — in any status — is VALIDATION_ERROR naming `markets` (owner decision
-   * 2026-10-19). The first publish fixes the slug (`first_published_at`).
+   * with no public market in it is VALIDATION_ERROR naming `markets` (owner decisions 2026-10-19:
+   * a market at least, and of the second round, one that is not a draft — a draft is on no public
+   * page, so a theme of drafts alone would go public as an empty page). The first publish fixes
+   * the slug (`first_published_at`).
    */
   async publish(adminId: string, themeId: string): Promise<AdminTheme> {
     return this.setPublished(adminId, themeId, true);
@@ -342,9 +346,13 @@ export class ThemeAdminService {
       if ((current.publishedAt !== null) !== published) {
         // Counted under the theme's row lock: a link or unlink of this theme takes no such lock,
         // so a market taken out in the same instant may leave a theme just published empty — as
-        // taking every market out after publishing may, which the owner allows.
-        if (published && (await this.marketCount(tx, themeId)) === 0) {
-          throw refusal(THEME_REFUSALS.noMarket, 'A theme is published with a market in it');
+        // taking every market out after publishing may, which the owner allows. A market counted
+        // stays public: no path takes a market back to draft.
+        if (published && (await this.publicMarketCount(tx, themeId)) === 0) {
+          throw refusal(
+            THEME_REFUSALS.noPublicMarket,
+            'A theme is published with a market that is not a draft in it',
+          );
         }
         await tx
           .update(schema.themes)
@@ -427,12 +435,22 @@ export class ThemeAdminService {
     return row;
   }
 
-  /** How many markets the theme holds, any status. */
-  private async marketCount(executor: Executor, themeId: string): Promise<number> {
+  /**
+   * How many of the theme's markets the public pages show: every status but a draft, the set the
+   * theme's public cards are (`ThemesService.listMarkets`, `PUBLIC_MARKET_STATUSES`).
+   */
+  private async publicMarketCount(executor: Executor, themeId: string): Promise<number> {
+    const { themeMarkets, markets } = schema;
     const [row] = await executor
       .select({ n: count() })
-      .from(schema.themeMarkets)
-      .where(eq(schema.themeMarkets.themeId, themeId));
+      .from(themeMarkets)
+      .innerJoin(markets, eq(markets.id, themeMarkets.marketId))
+      .where(
+        and(
+          eq(themeMarkets.themeId, themeId),
+          inArray(markets.status, [...PUBLIC_MARKET_STATUSES]),
+        ),
+      );
     return row?.n ?? 0;
   }
 

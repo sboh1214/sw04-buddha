@@ -77,7 +77,8 @@ export function ThemeFormFields({
         <HStack gap="2" align="start" flexWrap="wrap">
           <Field.Root invalid={!!errors.startDate} required maxW="56">
             <Field.Label>{copy.adminThemeStartDate}</Field.Label>
-            {/* `min`/`max`: the dates the API stores, so a browser offers no year it refuses. */}
+            {/* `min`/`max`: the dates the API takes (2000-01-01 to 2100-12-31, owner decision
+                2026-10-19, second round), so a browser's picker offers no day it refuses. */}
             <Input
               type="date"
               min={THEME_DATE_MIN}

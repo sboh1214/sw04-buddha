@@ -21,7 +21,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { Route } from 'next';
 import NextLink from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { ThemeStatusBadge } from '@/components/theme/theme-card';
 import { toaster } from '@/components/ui/toaster';
@@ -72,7 +72,8 @@ import { ThemeFormFields } from '../theme-form-fields';
  * 테마 상세(관리) (#81, ADR-0088): one theme — its publication, the edit form, its markets and its
  * notices. Owner decisions (ADR-0069 decision 4, the #81 rows, and of 2026-10-19): every admin may
  * do all of it at any time; a theme is unpublished and never deleted, and a notice hidden and
- * never deleted; publishing needs a market in the theme; the address is fixed once published;
+ * never deleted; publishing needs a market in the theme that is not a draft (the second round's
+ * answer); the address is fixed once published, through an unpublish too;
  * every change records the admin and the time and asks no reason (the API's). Times are in Korean
  * time (`formatKst`, ADR-0063); the period is Korean dates as they are.
  */
@@ -140,7 +141,7 @@ export function AdminThemeDetail({ id }: { id: string }) {
       <Card.Root>
         <Card.Body>
           <DataList.Root orientation="horizontal" size="sm">
-            <Item label={copy.themePeriod}>{formatThemePeriod(data)}</Item>
+            <Item label={copy.themePeriod}>{formatThemePeriod(data, theme.dataUpdatedAt)}</Item>
             <Item label={copy.adminThemeCreatedBy}>{data.createdBy.nickname}</Item>
             <Item label={copy.adminThemeCreatedAt}>{formatKst(data.createdAt)}</Item>
             <Item label={copy.adminThemeUpdatedAt}>{formatKst(data.updatedAt)}</Item>
@@ -185,12 +186,16 @@ function Item({ label, children }: { label: string; children: React.ReactNode })
 /**
  * 공개하기 · 비공개로 돌리기, and the public page while it is published. Publishing asks nothing (it
  * is undone by unpublishing); unpublishing asks first, since every public entry loses the theme at
- * once. A publish with no market in the theme is refused by the API with its own words (owner
- * decision 2026-10-19).
+ * once. Beside 공개하기 a line says what a publish needs — a market in the theme that is not a
+ * draft (owner decisions 2026-10-19) — and is the button's description (`aria-describedby`), so a
+ * screen reader says the rule with the button rather than only after a refusal, as the period
+ * hint is the date fields'. A publish without such a market is refused by the API, which the toast
+ * says in the same words; the server alone decides, since a draft may open meanwhile.
  */
 function PublishButtons({ theme }: { theme: AdminTheme }) {
   const queryClient = useQueryClient();
   const [confirming, setConfirming] = useState(false);
+  const publishHintId = useId();
   const published = theme.publishedAt !== null;
   const write = useMutation({
     mutationFn: async (to: 'publish' | 'unpublish') =>
@@ -235,14 +240,20 @@ function PublishButtons({ theme }: { theme: AdminTheme }) {
           </Button>
         </>
       ) : (
-        <Button
-          size="sm"
-          loading={write.isPending}
-          onClick={() => write.mutate('publish')}
-          data-testid="theme-publish"
-        >
-          {copy.adminThemePublish}
-        </Button>
+        <>
+          <Button
+            size="sm"
+            loading={write.isPending}
+            onClick={() => write.mutate('publish')}
+            aria-describedby={publishHintId}
+            data-testid="theme-publish"
+          >
+            {copy.adminThemePublish}
+          </Button>
+          <Text id={publishHintId} fontSize="sm" color="fg.muted" data-testid="theme-publish-hint">
+            {copy.adminThemePublishHint}
+          </Text>
+        </>
       )}
       <ConfirmDialog
         testId="theme-unpublish-dialog"

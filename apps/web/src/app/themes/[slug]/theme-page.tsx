@@ -21,7 +21,7 @@ import { useTheme, useThemeMarkets, useThemeResults } from '@/hooks/use-themes';
 import { type Theme, type ThemeNotice } from '@/lib/api';
 import { MARKET_STATUS_LABEL } from '@/lib/market-admin';
 import { listSection } from '@/lib/query-client';
-import { formatThemePeriod, noticeParts, themeResultLabel } from '@/lib/themes';
+import { formatThemePeriod, linkedTextParts, themeResultLabel } from '@/lib/themes';
 import { MarketGrid } from '../../market-list';
 
 /**
@@ -34,16 +34,22 @@ import { MarketGrid } from '../../market-list';
 export function ThemePage({
   themeId,
   fallback,
+  fallbackReadAt,
   marketsNow,
 }: {
   themeId: string;
   /** The row the server read, should the cache not hold it (the seed is the path). */
   fallback: Theme;
+  /** When the server read `fallback`: the year its period is written against. */
+  fallbackReadAt: number;
   /** The server's read of the first market page, for the cards' countdowns (`rowAnchor`). */
   marketsNow?: number;
 }) {
   const query = useTheme(themeId);
   const theme = query.data ?? fallback;
+  // The year the period is written against is the one of the read that brought the row, so the
+  // server's HTML and the hydrating browser agree (`formatThemePeriod`).
+  const readAt = query.data === undefined ? fallbackReadAt : query.dataUpdatedAt;
   return (
     <Stack gap="10" data-testid="theme-page">
       <Stack gap="3">
@@ -55,15 +61,16 @@ export function ThemePage({
         <HStack gap="2" flexWrap="wrap">
           <ThemeStatusBadge theme={theme} testId="theme-status" />
           <Text color="fg.muted" data-testid="theme-period">
-            {formatThemePeriod(theme)}
+            {formatThemePeriod(theme, readAt)}
           </Text>
         </HStack>
         <Heading as="h2" size="2xl" data-testid="theme-name">
           {theme.name}
         </Heading>
-        {/* Plain text with its line breaks, as the operator wrote it. */}
+        {/* Plain text with its line breaks, as the operator wrote it, its web addresses links as
+            a notice's are (owner decision 2026-10-19, second round). */}
         <Text whiteSpace="pre-wrap" wordBreak="break-word" data-testid="theme-intro">
-          {theme.intro}
+          <LinkedText text={theme.intro} />
         </Text>
       </Stack>
 
@@ -140,7 +147,7 @@ function ThemeNotices({ notices }: { notices: ThemeNotice[] }) {
                 )}
               </HStack>
               <Text whiteSpace="pre-wrap" wordBreak="break-word">
-                <NoticeText text={notice.body} />
+                <LinkedText text={notice.body} />
               </Text>
             </Stack>
           ))}
@@ -151,13 +158,13 @@ function ThemeNotices({ notices }: { notices: ThemeNotice[] }) {
 }
 
 /**
- * A notice's body with its web addresses as links (`noticeParts`): a new tab, and no referrer,
- * opener or ranking credit handed to an address an operator pasted.
+ * A notice's body or the introduction with its web addresses as links (`linkedTextParts`): a new
+ * tab, and no referrer, opener or ranking credit handed to an address an operator pasted.
  */
-function NoticeText({ text }: { text: string }) {
+function LinkedText({ text }: { text: string }) {
   return (
     <>
-      {noticeParts(text).map((part, index) =>
+      {linkedTextParts(text).map((part, index) =>
         part.kind === 'text' ? (
           // The runs never move, so their place is their identity.
           <span key={index}>{part.text}</span>

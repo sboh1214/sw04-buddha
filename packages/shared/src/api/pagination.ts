@@ -126,10 +126,11 @@ const SORT_VALUE_SHAPES = {
    * A theme's date key within its status, days since 1970-01-01: the end date for 진행 중, the
    * start date for 예정, the end date negated for 종료 (most recently ended first), so one
    * ascending row comparison pages all three. Up to seven digits, because the key is a stored
-   * date and not today: a period may use any date from 0001-01-01 to 9999-12-31 (`z.iso.date()`
-   * stops at the year 9999), so a 진행 중 or 예정 key runs up to 2932896 (9999-12-31), and a 종료 key
-   * is at most 719162 (an end on 0001-01-01) and at least minus today. Six digits refused every
-   * cursor after a theme dated 4707-11-29 or later, and the list then served its first page again.
+   * date and not today: the API takes 2000-01-01 to 2100-12-31 only (`THEME_DATE_MIN`·`MAX`), but
+   * the column stores any date from 0001-01-01 to 9999-12-31 and the list reads every stored row,
+   * so a 진행 중 or 예정 key runs up to 2932896 (9999-12-31), and a 종료 key is at most 719162 (an
+   * end on 0001-01-01) and at least minus today. Six digits refused every cursor after a theme
+   * dated 4707-11-29 or later, and the list then served its first page again.
    */
   signedEpochDay: (value: string) => /^-?\d{1,7}$/.test(value),
 } as const;

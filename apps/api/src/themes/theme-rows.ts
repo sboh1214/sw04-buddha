@@ -78,7 +78,8 @@ export function themeListPage(
   now: Date,
 ): { today: string; after: SQL | undefined } {
   // The day is the database clock's, six digits (`epochDay`); the key is a stored date, up to
-  // seven (`signedEpochDay`: a period may end on 9999-12-31). Both are integers Postgres takes.
+  // seven (`signedEpochDay`: the column stores up to 9999-12-31, past the API's 2100-12-31).
+  // Both are integers Postgres takes.
   const decoded = decodeTupleCursor(cursor, THEME_CURSOR_SHAPES, 'uuid');
   if (decoded === undefined) return { today: koreanDateAt(now), after: undefined };
   const today = dateOfEpochDay(Number(decoded.values[0]));

@@ -3,6 +3,7 @@ import { copy } from '../src/copy';
 import {
   adminAccount,
   closeMarket,
+  createDraftMarket,
   createOpenMarket,
   expect,
   freshTag,
@@ -12,13 +13,16 @@ import {
 } from './helpers';
 
 /**
- * 테마 (#81, ADR-0088; owner decisions in ADR-0069 decision 4, the #81 rows, and of 2026-10-19):
- * an admin makes a theme at an address of their choosing, puts two markets in it — a theme is
- * published only with a market in it — writes a notice and publishes it; a signed-out visitor
- * then finds it on the list page (`/themes`), on the explore home's 진행 중인 테마 and on the
- * detail of a market in it — each in the server's HTML too — and opens its page at the slug: the
- * period in Korean dates and its status, the introduction, the notice with its address linked,
- * and the two markets as the home's cards. One market is judged while the visitor is on the page:
+ * 테마 (#81, ADR-0088; owner decisions in ADR-0069 decision 4, the #81 rows, and of 2026-10-19,
+ * two rounds): an admin makes a theme at an address of their choosing — a date outside 2000 to
+ * 2100 is refused on the form — puts a draft in it, which does not make it publishable, then two
+ * open markets — a theme is published only with a market in it that is not a draft — writes a
+ * notice and publishes it; a signed-out visitor then finds it on the list page (`/themes`), on the
+ * explore home's 진행 중인 테마 and on the detail of a market in it, the link saying the theme's
+ * status — each in the server's HTML too — and opens its page at the slug, 시장 탐색 lit: the
+ * period in Korean dates and its status, the introduction and the notice with their addresses
+ * linked, and the two open markets as the home's cards (the draft has none). One market is judged
+ * while the visitor is on the page:
  * its result appears there without a reload, YES and a link to the market. The address cannot
  * change after the publish, and an unsaved one typed before it is dropped. The admin renames the
  * theme, edits the notice (수정됨), hides it and shows it again, and takes the judged market out;
@@ -40,17 +44,46 @@ function koreanDate(days: number): string {
 }
 
 /**
- * The period as the owner asked it written, '10월 20일 ~ 11월 3일' (2026-10-19), with both years
- * when it crosses one — the page's own rule (`formatThemePeriod`), restated as the reader sees it.
+ * The period as the owner asked it written, '10월 20일 ~ 11월 3일' (2026-10-19), with the year on
+ * the start when a date is not this year's and on the end too when its year is another (the
+ * second round) — the page's own rule (`formatThemePeriod`), restated as the reader sees it. This
+ * spec's period is yesterday to today, so it carries years only around a Korean New Year.
  */
 function writtenPeriod({ startDate, endDate }: { startDate: string; endDate: string }): string {
+  const thisYear = Number(koreanDate(0).slice(0, 4));
   const parts = (date: string) => date.split('-').map(Number) as [number, number, number];
   const [startYear, startMonth, startDay] = parts(startDate);
   const [endYear, endMonth, endDay] = parts(endDate);
-  const withYear = startYear !== endYear;
-  const write = (year: number, month: number, day: number) =>
+  const write = (year: number, month: number, day: number, withYear: boolean) =>
     `${withYear ? `${String(year)}년 ` : ''}${String(month)}월 ${String(day)}일`;
-  return `${write(startYear, startMonth, startDay)} ~ ${write(endYear, endMonth, endDay)}`;
+  return `${write(startYear, startMonth, startDay, startYear !== thisYear || endYear !== thisYear)} ~ ${write(endYear, endMonth, endDay, endYear !== startYear)}`;
+}
+
+/**
+ * 시장 탐색 is the current area in the header's row 1 and in the tab bar — both in the DOM at every
+ * width, one of them hidden — on the theme pages (owner decision 2026-10-19, second round), with
+ * no category row (that is the home's and the market details', as on the search screen).
+ */
+async function expectExploreLit(page: Page): Promise<void> {
+  for (const list of [
+    page.locator(`header nav[aria-label="${copy.navPrimary}"] a`),
+    page.locator('[data-testid="bottom-tabs"] a'),
+  ]) {
+    await expect(list.filter({ hasText: copy.navExplore })).toHaveAttribute('aria-current', 'page');
+    await expect(list.and(page.locator('[aria-current="page"]'))).toHaveCount(1);
+  }
+  await expect(page.getByTestId('nav-categories')).toHaveCount(0);
+}
+
+/**
+ * Lets the admin page's toasts go before its next press. A toast pauses while the pointer rests
+ * on the stack, and on a phone the stack — two refused publishes, three markets put in, a notice
+ * and the publish here — covers the form the next step fills, so the pointer left on it by the
+ * last press would hold them there for good and the press would wait on them.
+ */
+async function letToastsGo(page: Page): Promise<void> {
+  await page.mouse.move(0, 0);
+  await expect(page.locator('[data-scope="toast"][data-part="root"]')).toHaveCount(0);
 }
 
 /** The public page's status code, as a signed-out visitor opens it. */
@@ -71,6 +104,9 @@ test.describe('테마', () => {
     const group = freshTag();
     const a = await createOpenMarket(admin, { group });
     const b = await createOpenMarket(admin, { group });
+    // A draft: on no public page, and so no market a publish counts (owner decision 2026-10-19,
+    // second round).
+    const draft = await createDraftMarket(admin, { group });
     const slug = `e2e-theme-${group}`;
     const name = `E2E 테마 ${group}`;
     const renamed = `${name} 고침`;
@@ -78,6 +114,7 @@ test.describe('테마', () => {
     // theme that ends soonest, so the home's few cards hold it whatever else is on.
     const period = { startDate: koreanDate(-1), endDate: koreanDate(0) };
     const noticeUrl = `https://example.com/e2e/${group}`;
+    const introUrl = `https://example.com/e2e/intro-${group}`;
     // The theme's id, read off its admin detail's address, for the checks after the admin leaves.
     let createdId: string | undefined;
 
@@ -95,9 +132,17 @@ test.describe('테마', () => {
       await expect(adminPage).toHaveURL(/\/admin\/themes$/);
       await adminPage.getByTestId('theme-slug').fill(slug);
       await adminPage.getByTestId('theme-name-input').fill(name);
-      await adminPage.getByTestId('theme-intro-input').fill(`첫 줄 ${group}\n둘째 줄`);
-      await adminPage.getByTestId('theme-start-date').fill(period.startDate);
+      await adminPage
+        .getByTestId('theme-intro-input')
+        .fill(`첫 줄 ${group}\n둘째 줄은 ${introUrl} 에 있습니다.`);
+      // A date before 2000 is the form's to refuse, in the range's words (owner decision
+      // 2026-10-19, second round); nothing is made.
+      await adminPage.getByTestId('theme-start-date').fill('1999-12-31');
       await adminPage.getByTestId('theme-end-date').fill(period.endDate);
+      await adminPage.getByTestId('theme-create').click();
+      await expect(adminPage.getByText(copy.errThemeDateRange)).toBeVisible();
+      await expect(adminPage).toHaveURL(/\/admin\/themes$/);
+      await adminPage.getByTestId('theme-start-date').fill(period.startDate);
       // The Korean-date hint is read with both date fields, not only seen under them.
       const hintId = await adminPage.getByTestId('theme-period-hint').getAttribute('id');
       expect(hintId).toBeTruthy();
@@ -116,20 +161,48 @@ test.describe('테마', () => {
       // Not public before it is published.
       expect(await pageStatus(request, `/themes/${slug}`)).toBe(404);
 
-      // --- an empty theme is not published (owner decision 2026-10-19).
-      await adminPage.getByTestId('theme-publish').click();
-      await expect(adminPage.getByText(copy.adminThemePublishNeedsMarket)).toBeVisible();
+      // --- an empty theme is not published (owner decision 2026-10-19), as 공개하기 says beside it.
+      await expect(adminPage.getByTestId('theme-publish-hint')).toHaveText(
+        copy.adminThemePublishHint,
+      );
+      // …and read with 공개하기 (its `aria-describedby`), not only seen beside it.
+      await expect(adminPage.getByTestId('theme-publish')).toHaveAccessibleDescription(
+        copy.adminThemePublishHint,
+      );
+      const publishOnce = async () => {
+        const answer = adminPage.waitForResponse(
+          (response) =>
+            response.request().method() === 'POST' &&
+            response.url().endsWith(`/api/v1/admin/themes/${themeId}/publish`),
+        );
+        await adminPage.getByTestId('theme-publish').click();
+        return (await answer).status();
+      };
+      expect(await publishOnce()).toBe(400);
+      await expect(adminPage.getByText(copy.adminThemePublishNeedsMarket).first()).toBeVisible();
       await expect(adminPage.getByTestId('admin-theme-published')).toHaveText(
         copy.adminThemeUnpublished,
       );
 
-      // --- the two markets, found by title and put in with a click each.
+      // --- the draft, found by title and put in: still not published — a draft does not count
+      // (the second round).
       const markets = adminPage.getByTestId('admin-theme-markets');
       await expect(markets.getByTestId('admin-theme-markets-empty')).toHaveText(
         copy.adminThemeMarketsEmpty,
       );
       await markets.getByTestId('admin-theme-market-search-input').fill(group);
       await markets.getByTestId('admin-theme-market-search-submit').click();
+      await markets.getByTestId(`admin-theme-market-link-${draft.id}`).click();
+      await expect(markets.getByTestId(`admin-theme-market-${draft.id}`)).toContainText(
+        draft.title,
+      );
+      expect(await publishOnce()).toBe(400);
+      await expect(adminPage.getByText(copy.adminThemePublishNeedsMarket).first()).toBeVisible();
+      await expect(adminPage.getByTestId('admin-theme-published')).toHaveText(
+        copy.adminThemeUnpublished,
+      );
+
+      // --- the two open markets, put in with a click each.
       for (const market of [a, b]) {
         await markets.getByTestId(`admin-theme-market-link-${market.id}`).click();
         await expect(markets.getByTestId(`admin-theme-market-${market.id}`)).toContainText(
@@ -153,8 +226,9 @@ test.describe('테마', () => {
       // --- publish: now it has markets. A new address typed and not saved is not the theme's.
       await adminPage.getByTestId('theme-slug').fill(`${slug}-unsaved`);
       await expect(adminPage.getByTestId('theme-save')).toBeEnabled();
-      await adminPage.getByTestId('theme-publish').click();
+      expect(await publishOnce()).toBe(200);
       await expect(adminPage.getByText(copy.adminThemePublishDone)).toBeVisible();
+      await expect(adminPage.getByTestId('theme-publish-hint')).toHaveCount(0);
       await expect(adminPage.getByTestId('admin-theme-published')).toHaveText(
         copy.adminThemePublished,
       );
@@ -169,6 +243,7 @@ test.describe('테마', () => {
       const listHtml = await (await request.get('/themes')).text();
       expect(listHtml).toContain(name);
       await page.goto('/themes');
+      await expectExploreLit(page);
       const card = themeCard(page, themeId);
       await expect(card).toContainText(name);
       await expect(card).toContainText(copy.themeStatusOngoing);
@@ -182,7 +257,13 @@ test.describe('테마', () => {
       await expect(page.getByTestId('theme-name')).toHaveText(name);
       await expect(page.getByTestId('theme-status')).toHaveText(copy.themeStatusOngoing);
       await expect(page.getByTestId('theme-period')).toHaveText(writtenPeriod(period));
-      await expect(page.getByTestId('theme-intro')).toContainText(`첫 줄 ${group}`);
+      await expectExploreLit(page);
+      const intro = page.getByTestId('theme-intro');
+      await expect(intro).toContainText(`첫 줄 ${group}`);
+      // The introduction's address is a link out too (owner decision 2026-10-19, second round).
+      const introLink = intro.getByRole('link', { name: introUrl });
+      await expect(introLink).toHaveAttribute('href', introUrl);
+      await expect(introLink).toHaveAttribute('target', '_blank');
       const notice = page.getByTestId('theme-notices').getByRole('article');
       await expect(notice).toHaveCount(1);
       await expect(notice.getByRole('heading', { level: 4 })).toHaveText(`일정 안내 ${group}`);
@@ -198,6 +279,8 @@ test.describe('테마', () => {
           grid.getByTestId(`market-card-${market.id}`).getByRole('link', { name: market.title }),
         ).toHaveAttribute('href', `/markets/${market.slug}`);
       }
+      // The draft in it has no card: no public page shows a draft.
+      await expect(grid.getByTestId(`market-card-${draft.id}`)).toHaveCount(0);
       // No market has a result yet.
       await expect(page.getByTestId('theme-results-empty')).toHaveText(copy.themeResultsEmpty);
       const pageHtml = await (await request.get(`/themes/${slug}`)).text();
@@ -228,10 +311,13 @@ test.describe('테마', () => {
         `data-testid="theme-result-${b.id}"`,
       );
 
-      // --- the explore home's 진행 중인 테마, on 전체, and not under a category.
+      // --- the explore home's 진행 중인 테마, on 전체, and not under a category. (When none is
+      // ongoing the row is the upcoming ones under 예정된 테마, and with neither no card but 모든
+      // 테마 — `homeThemesRow`'s unit tests and the row's render test, app/home-themes.test.tsx:
+      // the e2e database's other themes are not this spec's to choose.)
       await page.goto('/');
       const home = page.getByTestId('home-themes');
-      await expect(home.getByRole('heading', { level: 2 })).toHaveText(copy.homeThemes);
+      await expect(home.getByRole('heading', { level: 2 })).toHaveText(copy.homeThemesOngoing);
       await expect(themeCard(page, themeId)).toBeVisible();
       await expect(home.getByTestId('home-themes-all')).toHaveAttribute('href', '/themes');
       // The server reads the home's themes into its HTML, so the check after the unpublish below
@@ -241,18 +327,32 @@ test.describe('테마', () => {
       await expect(page.getByTestId('markets-grid')).toBeVisible();
       await expect(page.getByTestId('home-themes')).toHaveCount(0);
 
-      // --- the detail of a market in it links back to the theme.
+      // --- the detail of a market in it links back to the theme, saying its status (owner
+      // decision 2026-10-19, second round). (An ended theme's link, '· 종료', is the render
+      // test's, app/markets/[slug]/market-themes.test.tsx.)
       await page.goto(`/markets/${a.slug}`);
-      await expect(page.getByTestId(`market-theme-${themeId}`)).toHaveAttribute(
-        'href',
-        `/themes/${slug}`,
+      const themeLink = page.getByTestId(`market-theme-${themeId}`);
+      await expect(themeLink).toHaveAttribute('href', `/themes/${slug}`);
+      await expect(themeLink).toHaveAccessibleName(`${name} · ${copy.themeStatusOngoing}`);
+      await expect(themeLink).toContainText(name);
+      await expect(themeLink).toContainText(copy.themeStatusOngoing);
+      // One label: the status at the name's size and line height, not the page's 16px beside the
+      // tag's 12px name.
+      const textBox = (testId: string) =>
+        page.getByTestId(testId).evaluate((element) => {
+          const style = getComputedStyle(element);
+          return { fontSize: style.fontSize, lineHeight: style.lineHeight };
+        });
+      expect(await textBox(`market-theme-status-${themeId}`)).toEqual(
+        await textBox(`market-theme-name-${themeId}`),
       );
-      await expect(page.getByTestId('market-themes')).toContainText(name);
-      expect(await (await request.get(`/markets/${a.slug}`)).text()).toContain(
-        `data-testid="market-theme-${themeId}"`,
-      );
+      // In the server's HTML too: the link, and its name with the status.
+      const detailHtml = await (await request.get(`/markets/${a.slug}`)).text();
+      expect(detailHtml).toContain(`data-testid="market-theme-${themeId}"`);
+      expect(detailHtml).toContain(`aria-label="${name} · ${copy.themeStatusOngoing}"`);
 
       // --- renamed after publishing (editable at any time): the list says the new name.
+      await letToastsGo(adminPage);
       await adminPage.getByTestId('theme-name-input').fill(renamed);
       await adminPage.getByTestId('theme-save').click();
       await expect(adminPage.getByText(copy.adminThemeSaved)).toBeVisible();

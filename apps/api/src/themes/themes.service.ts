@@ -61,7 +61,8 @@ export class ThemesService {
    * `GET /themes`: the published themes, or those of one status, in the public order (owner
    * decision 2026-10-19): 진행 중 by the soonest end, 예정 by the soonest start, 종료 by the latest
    * end, keyset-paged on `(rank, key, id)` with the first page's Korean date pinned in the cursor
-   * (`themeListPage`). The explore home asks for `ongoing`.
+   * (`themeListPage`). The explore home reads the first few of every status and keeps the
+   * leading status's (ADR-0088).
    */
   async list(query: ThemeListQuery): Promise<Page<ThemeSummary>> {
     const { themes } = schema;

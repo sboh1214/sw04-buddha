@@ -214,29 +214,43 @@ describe.skipIf(!hasTestInfra)('themes for admins (integration)', () => {
     expect(await types()).toEqual(['theme_create']);
   });
 
-  it('takes any date Postgres stores and refuses the year 0000 naming the field, not a 500', async () => {
+  it('takes the dates from 2000-01-01 to 2100-12-31 and refuses others naming the field, the year 0000 too and not as a 500 (owner decision 2026-10-19, second round)', async () => {
     const base = { slug: 'far-dates', name: '테마', intro: '소개' };
     for (const [field, body] of [
+      ['startDate', { startDate: '1999-12-31', endDate: '2026-10-20' }],
+      ['endDate', { startDate: '2026-10-20', endDate: '2101-01-01' }],
       ['startDate', { startDate: '0000-01-01', endDate: '2026-10-20' }],
-      ['endDate', { startDate: '0001-01-01', endDate: '0000-12-31' }],
+      ['endDate', { startDate: '2000-01-01', endDate: '9999-12-31' }],
     ] as const) {
       const res = await send('POST', '/admin/themes', { ...base, ...body });
       expect(res.statusCode).toBe(400);
       expect(errorOf(res).code).toBe('VALIDATION_ERROR');
-      expect(errorOf(res).details?.map((detail) => detail.path)).toContainEqual([field]);
+      expect(errorOf(res).details).toContainEqual({
+        path: [field],
+        message: 'must be between 2000-01-01 and 2100-12-31',
+      });
     }
     expect(await t.db.select().from(schema.themes)).toEqual([]);
     const far = await send('POST', '/admin/themes', {
       ...base,
-      startDate: '0001-01-01',
-      endDate: '9999-12-31',
+      startDate: '2000-01-01',
+      endDate: '2100-12-31',
     });
     expect(far.statusCode).toBe(201);
     const stored = data<AdminTheme>(far);
-    expect(stored).toMatchObject({ startDate: '0001-01-01', endDate: '9999-12-31' });
-    const edited = await send('PATCH', `/admin/themes/${stored.id}`, { startDate: '0000-06-01' });
-    expect(edited.statusCode).toBe(400);
-    expect(errorOf(edited).details?.map((detail) => detail.path)).toEqual([['startDate']]);
+    expect(stored).toMatchObject({ startDate: '2000-01-01', endDate: '2100-12-31' });
+    for (const [field, body] of [
+      ['startDate', { startDate: '1999-12-31' }],
+      ['endDate', { endDate: '2101-01-01' }],
+      ['startDate', { startDate: '0000-06-01' }],
+      ['endDate', { endDate: '9999-12-31' }],
+    ] as const) {
+      const edited = await send('PATCH', `/admin/themes/${stored.id}`, body);
+      expect(edited.statusCode).toBe(400);
+      expect(errorOf(edited).details).toEqual([
+        { path: [field], message: 'must be between 2000-01-01 and 2100-12-31' },
+      ]);
+    }
     expect(await types()).toEqual(['theme_create']);
   });
 
@@ -310,21 +324,32 @@ describe.skipIf(!hasTestInfra)('themes for admins (integration)', () => {
     );
   });
 
-  it('publishes only a theme with a market in it, and any admin may then empty it (owner decision 2026-10-19)', async () => {
+  it('publishes only a theme with a public market in it, and any admin may then empty it (owner decisions 2026-10-19)', async () => {
+    const refusedFor = {
+      path: ['markets'],
+      message: 'at least one market that is not a draft is required to publish',
+    };
     // Another theme holds a market: the count is this theme's own.
     const busy = await create();
     await withMarket(busy.id);
     const theme = await create();
     const empty = await send('POST', `/admin/themes/${theme.id}/publish`);
     expect(empty.statusCode).toBe(400);
-    expect(errorOf(empty)).toMatchObject({
-      code: 'VALIDATION_ERROR',
-      details: [{ path: ['markets'], message: 'at least one market is required to publish' }],
-    });
+    expect(errorOf(empty)).toMatchObject({ code: 'VALIDATION_ERROR', details: [refusedFor] });
     expect(await publicStatus(theme.id)).toBe(404);
-    // A draft market counts: a market is in it, which the public pages show once it opens.
+    // A draft does not count (second round): it is on no public page, so the theme would go
+    // public as an empty page.
     const draft = await market({ status: 'draft' });
     await send('POST', `/admin/themes/${theme.id}/markets`, { marketId: draft.id });
+    const draftOnly = await send('POST', `/admin/themes/${theme.id}/publish`);
+    expect(draftOnly.statusCode).toBe(400);
+    expect(errorOf(draftOnly)).toMatchObject({ code: 'VALIDATION_ERROR', details: [refusedFor] });
+    expect(await publicStatus(theme.id)).toBe(404);
+    // Once the draft opens, it counts.
+    await t.db
+      .update(schema.markets)
+      .set({ status: 'open' })
+      .where(eq(schema.markets.id, draft.id));
     const published = await send('POST', `/admin/themes/${theme.id}/publish`);
     expect(published.statusCode).toBe(200);
     // Taking every market out afterwards is allowed; the theme stays public.
@@ -339,6 +364,24 @@ describe.skipIf(!hasTestInfra)('themes for admins (integration)', () => {
     ]);
     // Already public, so a publish again is no change and no refusal.
     expect((await send('POST', `/admin/themes/${theme.id}/publish`)).statusCode).toBe(200);
+  });
+
+  it('counts every public status toward a publish, a voided or ended market too, and never a draft', async () => {
+    for (const status of ['open', 'closed', 'resolved', 'settled', 'voided'] as const) {
+      const theme = await create();
+      // A draft beside it changes nothing either way.
+      const draft = await market({ status: 'draft' });
+      const shown = await market({ status });
+      for (const linked of [draft, shown]) {
+        await createThemeMarket(t.db, {
+          themeId: theme.id,
+          marketId: linked.id,
+          createdBy: admin.id,
+        });
+      }
+      const res = await send('POST', `/admin/themes/${theme.id}/publish`);
+      expect(res.statusCode, status).toBe(200);
+    }
   });
 
   it('refuses an edit to another theme’s slug naming slug, as a create is refused', async () => {

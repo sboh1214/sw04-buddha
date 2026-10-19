@@ -92,19 +92,30 @@ function isMarketsBrowse(pathname: string): boolean {
   return pathname === '/' || pathname.startsWith('/markets/');
 }
 
+/** The public theme list; a theme's page is `/themes/<slug>` (#81, ADR-0088). */
+const THEMES_PATH = '/themes';
+
+/** The theme list and a theme's page — one segment under it, as the routes are. */
+function isThemes(pathname: string): boolean {
+  if (pathname === THEMES_PATH) return true;
+  const rest = pathname.startsWith(`${THEMES_PATH}/`) ? pathname.slice(THEMES_PATH.length + 1) : '';
+  return rest !== '' && !rest.includes('/');
+}
+
 /**
  * Whether an area is the page being shown, for the header's row 1 and the tab bar alike.
  * 시장 탐색 owns the home list AND every market detail — `/markets/<slug>` is a market, and a
  * visitor who opened one is still "in the markets" the way Kalshi keeps its Markets item lit on
- * an event page — and the search screen (`/search`, owner decision 2026-10-16, ADR-0066: "시장
- * 탐색을 켠다"), whose results are markets too; not a look-alike (`/searches`). 커뮤니티 and MY
- * match their own route and its subtree — every MY tab keeps MY lit — but not a look-alike
- * prefix (`/communityx`, `/mysterious`).
+ * an event page — the search screen (`/search`, owner decision 2026-10-16, ADR-0066: "시장
+ * 탐색을 켠다"), whose results are markets too, and the theme list and a theme's page (`/themes`,
+ * `/themes/<slug>`, owner decision 2026-10-19, second round, ADR-0088), which gather markets;
+ * not a look-alike (`/searches`, `/themesx`). 커뮤니티 and MY match their own route and its
+ * subtree — every MY tab keeps MY lit — but not a look-alike prefix (`/communityx`, `/mysterious`).
  */
 export function isPrimaryCurrent(pathname: string, key: PrimaryNavKey): boolean {
   switch (key) {
     case 'markets':
-      return isMarketsBrowse(pathname) || pathname === SEARCH_PATH;
+      return isMarketsBrowse(pathname) || pathname === SEARCH_PATH || isThemes(pathname);
     case 'community':
       return isUnder(pathname, '/community');
     case 'my':
@@ -116,7 +127,8 @@ export function isPrimaryCurrent(pathname: string, key: PrimaryNavKey): boolean 
  * Whether the header draws row 2, 전체 and the top-level categories (owner decision 2026-10-13):
  * on the home list it filters and the market details under it — and not on the search screen,
  * although 시장 탐색 is lit there (`isPrimaryCurrent`; the screen has a category filter of its
- * own, ADR-0066), nor on 커뮤니티, MY, the auth and legal pages or /admin.
+ * own, ADR-0066), nor on the theme pages, lit as well (a theme is tied to no category, ADR-0069
+ * decision 4), nor on 커뮤니티, MY, the auth and legal pages or /admin.
  */
 export function showsCategoryRow(pathname: string): boolean {
   return isMarketsBrowse(pathname);

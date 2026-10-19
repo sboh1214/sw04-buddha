@@ -273,9 +273,10 @@ describe.skipIf(!hasTestInfra)('themes in public (integration)', () => {
   });
 
   it('pages past themes dated as late as 9999-12-31 and as early as 0001-01-01', async () => {
-    // A period may use any date Postgres stores (`THEME_DATE_MIN`·`THEME_DATE_MAX`): an
-    // operator's 'no end' of 9999-12-31 puts a seven-digit key in the cursor, which the next page
-    // must read rather than serve the first page again.
+    // The API takes 2000-01-01 to 2100-12-31 only (`THEME_DATE_MIN`·`THEME_DATE_MAX`, owner
+    // decision 2026-10-19, second round), but the column stores any date Postgres has and the
+    // list reads every stored row: a row dated by hand to 9999-12-31 puts a seven-digit key in
+    // the cursor, which the next page must read rather than serve the first page again.
     const today = await kstToday();
     const soon = await theme({ startDate: shift(today, -1), endDate: shift(today, 3) });
     const lateEnd = await theme({ startDate: shift(today, -1), endDate: '9999-12-30' });

@@ -26,16 +26,19 @@ export function ThemeStatusBadge({
 }
 
 /**
- * One theme in a list — the public list (`/themes`) and the explore home's 진행 중인 테마: its
- * status, its period in Korean dates and its name, the whole card a link to its page (`/themes/
- * <slug>`). Nothing else: who made it is not public, and a theme has no count, score or reward to
- * show (ADR-0069 decision 4, '이름').
+ * One theme in a list — the public list (`/themes`) and the explore home's theme row: its status,
+ * its period in Korean dates and its name, the whole card a link to its page (`/themes/<slug>`).
+ * Nothing else: who made it is not public, and a theme has no count, score or reward to show
+ * (ADR-0069 decision 4, '이름').
  */
 export function ThemeCard({
   theme,
+  readAt,
   titleAs = 'h3',
 }: {
   theme: ThemeSummary;
+  /** When the list was read (its query's `dataUpdatedAt`): the year the period is written against. */
+  readAt: number;
   /** The name's heading level, one below the heading of the list the card sits in. */
   titleAs?: 'h3' | 'h4';
 }) {
@@ -56,7 +59,7 @@ export function ThemeCard({
         <HStack gap="2" flexWrap="wrap">
           <ThemeStatusBadge theme={theme} />
           <Text fontSize="sm" color="fg.muted" data-testid={`theme-card-period-${theme.id}`}>
-            {formatThemePeriod(theme)}
+            {formatThemePeriod(theme, readAt)}
           </Text>
         </HStack>
         <Heading as={titleAs} size="md" lineClamp="2">

@@ -58,6 +58,17 @@ describe('isPrimaryCurrent', () => {
     expect(isPrimaryCurrent('/search/x', 'markets')).toBe(false);
   });
 
+  it('lights 시장 탐색 on the theme list and a theme page (owner decision 2026-10-19, second round)', () => {
+    expect(isPrimaryCurrent('/themes', 'markets')).toBe(true);
+    expect(isPrimaryCurrent('/themes/2026-election', 'markets')).toBe(true);
+    expect(isPrimaryCurrent(`/themes/${encodeURIComponent('노벨상-주간')}`, 'markets')).toBe(true);
+    expect(isPrimaryCurrent('/themesx', 'markets')).toBe(false);
+    expect(isPrimaryCurrent('/themes/', 'markets')).toBe(false);
+    expect(isPrimaryCurrent('/themes/a/b', 'markets')).toBe(false);
+    expect(isPrimaryCurrent('/admin/themes', 'markets')).toBe(false);
+    expect(isPrimaryCurrent('/themes', 'community')).toBe(false);
+  });
+
   it('lights 커뮤니티 on its route and its subtree, not on a look-alike prefix', () => {
     expect(isPrimaryCurrent('/community', 'community')).toBe(true);
     expect(isPrimaryCurrent('/community/rules', 'community')).toBe(true);
@@ -79,6 +90,8 @@ describe('isPrimaryCurrent', () => {
       '/',
       '/markets/x',
       '/search',
+      '/themes',
+      '/themes/x',
       '/community',
       '/my',
       '/my/wallet',
@@ -115,6 +128,9 @@ describe('showsCategoryRow', () => {
       // The search screen (ADR-0066): the row stays on / and /markets/* only (ADR-0054), though
       // 시장 탐색 is lit there (owner decision 2026-10-16).
       '/search',
+      // And the theme pages, lit as well (owner decision 2026-10-19, second round, ADR-0088).
+      '/themes',
+      '/themes/2026-election',
     ]) {
       expect(showsCategoryRow(pathname), pathname).toBe(false);
     }

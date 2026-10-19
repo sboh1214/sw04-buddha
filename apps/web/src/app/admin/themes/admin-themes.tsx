@@ -84,7 +84,7 @@ export function AdminThemes() {
                   </Badge>
                 </HStack>
                 <Text fontSize="xs" color="fg.muted">
-                  /themes/{theme.slug} · {formatThemePeriod(theme)}
+                  /themes/{theme.slug} · {formatThemePeriod(theme, themes.dataUpdatedAt)}
                 </Text>
               </Stack>
             </HStack>

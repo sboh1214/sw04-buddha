@@ -66,9 +66,10 @@ export const metadata: Metadata = { title: `${copy.homeTitle} | ${copy.appName}`
  * The home has no status filter (ADR-0061 decision 1, item 13): every list here is of open
  * markets, and a bookmarked `?status=` or `?sort=volume` is normalised away, not redirected.
  *
- * 진행 중인 테마 (#81, ADR-0069 decision 4, '탐색 홈 노출'; ADR-0088) heads the main column on 전체
- * (`showsHomeThemes`): read here beside the list, once (`retry: false`, lib/themes.ts), public and
- * so in every visitor's HTML.
+ * The theme row (#81, ADR-0069 decision 4, '탐색 홈 노출'; ADR-0088) heads the main column on 전체
+ * (`showsHomeThemes`): the ongoing themes, else the upcoming ones, with 모든 테마 whenever a theme
+ * is public (`homeThemesRow`). Read here beside the list, once (`retry: false`, lib/themes.ts),
+ * public and so in every visitor's HTML.
  */
 export default async function HomePage({
   searchParams,
