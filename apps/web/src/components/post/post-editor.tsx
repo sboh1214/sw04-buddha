@@ -177,6 +177,12 @@ export interface PostEditorProps {
   initialDocument?: PostDocument;
   /** Every change, as the editor's JSON (what the write sends). */
   onChange: (json: unknown) => void;
+  /**
+   * The editor's JSON once it is made, before any change: what the form compares a change with to
+   * tell a draft from the document it started from (the editor fills in attributes the stored
+   * body leaves out, so the stored body itself is no baseline).
+   */
+  onReady?: (json: unknown) => void;
   /** The account on screen, which an upload names; no upload while it is unknown. */
   accountId: string | undefined;
   /** Uploads in flight, so the form can hold its submit until they land. */
@@ -194,6 +200,7 @@ export interface PostEditorProps {
 export function PostEditor({
   initialDocument,
   onChange,
+  onReady,
   accountId,
   onUploadingChange,
   disabled = false,
@@ -248,6 +255,14 @@ export function PostEditor({
         'data-testid': 'post-editor-content',
       },
       transformPastedHTML: keepServerLinks,
+    },
+    onCreate: ({ editor: made }) => {
+      // Settled first: StarterKit's trailing node adds an empty paragraph after a body that ends in
+      // anything else (a heading, an image, a table — a body the API took from elsewhere) on the
+      // editor's first transaction of any kind, a focus too. Run now, outside the undo history, the
+      // baseline is the document the writer sees, and clicking into it changes nothing.
+      made.view.dispatch(made.state.tr.setMeta('addToHistory', false));
+      onReady?.(made.getJSON());
     },
     onUpdate: ({ editor: changed }) => {
       onChange(changed.getJSON());

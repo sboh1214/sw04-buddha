@@ -46,7 +46,7 @@ output "data_volume_id" {
 }
 
 output "media_bucket_name" {
-  description = "The private bucket of the post images (media.tf). Never public: images are served by the API. A database reset does not empty it (docs/RESET.md)."
+  description = "The private bucket of the post images (media.tf). Never public: images are served by the API. The database reset empties it too (deploy/reset-db.sh, docs/RESET.md)."
   value       = aws_s3_bucket.media.bucket
 }
 

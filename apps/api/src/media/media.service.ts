@@ -8,10 +8,12 @@ import { DB } from '../infra/db/db.provider.js';
 import { IMAGE_EXTENSION, processImage } from './image.js';
 import { OBJECT_STORAGE } from './object-storage.provider.js';
 
-/** An image `GET /media/:mediaId` may serve: where its bytes are and their type. */
+/** An image `GET /media/:mediaId` may serve: where its bytes are, their type and how many. */
 export interface ShownImage {
   readonly storageKey: string;
   readonly contentType: ImageContentType;
+  /** The stored object's size, which the read holds while it answers (`imageReads`). */
+  readonly byteSize: number;
 }
 
 /**
@@ -80,7 +82,11 @@ export class MediaService {
   async findShown(mediaId: string): Promise<ShownImage | null> {
     const { mediaObjects, postImages, posts } = schema;
     const [row] = await this.db
-      .select({ storageKey: mediaObjects.storageKey, contentType: mediaObjects.contentType })
+      .select({
+        storageKey: mediaObjects.storageKey,
+        contentType: mediaObjects.contentType,
+        byteSize: mediaObjects.byteSize,
+      })
       .from(mediaObjects)
       .innerJoin(postImages, eq(postImages.mediaId, mediaObjects.id))
       .innerJoin(posts, eq(posts.id, postImages.postId))
@@ -93,7 +99,11 @@ export class MediaService {
         ),
       );
     return row
-      ? { storageKey: row.storageKey, contentType: row.contentType as ImageContentType }
+      ? {
+          storageKey: row.storageKey,
+          contentType: row.contentType as ImageContentType,
+          byteSize: row.byteSize,
+        }
       : null;
   }
 

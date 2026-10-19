@@ -8,7 +8,7 @@ import {
 import { hashKey } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
-import { ApiError, type PostAuthor } from './api';
+import { ApiError, type Post, type PostAuthor } from './api';
 import { isPrivateQueryKey } from './market-keys';
 import {
   COMMUNITY_PATH,
@@ -26,6 +26,7 @@ import {
   postFirstLine,
   postKey,
   postListQuery,
+  postPageMetadata,
   postPath,
   postPlaceholderMessage,
   postReadErrorMessage,
@@ -176,6 +177,55 @@ describe('what a post page says instead of a post (#45-5)', () => {
   it('names neither the author nor the post', () => {
     expect(postPlaceholderMessage('deleted')).toBe('삭제된 글입니다.');
     expect(postPlaceholderMessage('hidden')).toBe('운영 정책에 따라 숨긴 글입니다.');
+  });
+});
+
+describe('a post page’s metadata', () => {
+  const postMarket = {
+    id: '6f1c0f5e-8a0e-4f8b-9d7e-2b1a3c4d5e6f',
+    slug: 'rate-cut',
+    title: '금리 인하',
+    status: 'open',
+    category: { slug: 'economy', nameKo: '경제' },
+  } as const;
+  const id = '0b6f6a3e-2c1d-4c8e-9f0a-1b2c3d4e5f60';
+
+  it('keeps every answer out of search engines: the post, both placeholders and none (owner decision 2026-10-19)', () => {
+    const published: Post = {
+      state: 'published',
+      id,
+      title: null,
+      body: {
+        type: 'doc',
+        content: [{ type: 'paragraph', content: [{ type: 'text', text: '근거 한 줄' }] }],
+      },
+      author: { kind: 'former_member' },
+      market: postMarket,
+      createdAt: '2026-10-19T00:00:00.000Z',
+      editedAt: null,
+    };
+    const answers: (Post | null)[] = [
+      published,
+      { state: 'hidden', id, market: postMarket },
+      { state: 'deleted', id, market: postMarket },
+      null,
+    ];
+    for (const post of answers) {
+      expect(postPageMetadata(post).robots).toEqual({ index: false });
+    }
+    expect(postPageMetadata(published)).toMatchObject({
+      title: `근거 한 줄 | ${copy.appName}`,
+      description: '근거 한 줄',
+    });
+  });
+
+  it('names a placeholder by what it says, never by the post', () => {
+    const hidden = postPageMetadata({ state: 'hidden', id, market: postMarket });
+    expect(hidden.title).toBe(`${copy.postHiddenPlaceholder} | ${copy.appName}`);
+    expect(hidden.description).toBeUndefined();
+    const deleted = postPageMetadata({ state: 'deleted', id, market: postMarket });
+    expect(deleted.title).toBe(`${copy.postDeletedPlaceholder} | ${copy.appName}`);
+    expect(postPageMetadata(null).title).toBe(`${copy.postNotFound} | ${copy.appName}`);
   });
 });
 

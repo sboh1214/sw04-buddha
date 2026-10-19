@@ -1,7 +1,8 @@
 /**
  * 근거 글 (#46, ADR-0073; ADR-0069 decision 2 #45) against the docker `test` profile: the
- * community list, a post page and the author's writes. Pinned: anyone reads and only an account
- * that finished the onboarding writes; a post is on one market in any public status; the body is
+ * community list, a post page and the author's writes. Pinned: anyone reads, only an account that
+ * finished the onboarding writes or edits, and any signed-in author deletes their own post (owner
+ * decision 2026-10-19); a post is on one market in any public status; the body is
  * normalised (no markup, links http(s) only, images the author's own uploads); the author is named
  * by public id, current nickname and 운영자 mark, never the account id; edits keep the operators'
  * history and show as edited; deletion and hiding follow #45-5; writing never touches a balance,
@@ -711,16 +712,47 @@ describe.skipIf(!hasTestInfra)('/api/v1/posts (integration)', () => {
     expect((await show(hidden.id)).statusCode).toBe(404);
   });
 
-  it('refuses every write of an account that has not finished the onboarding', async () => {
+  it('refuses the writes of an account that has not finished the onboarding', async () => {
     const post = await written();
     const newcomer = await signUpTestUser(t);
-    for (const res of [
-      await edit(post.id, { title: null, body: doc('x') }, newcomer),
-      await remove(post.id, newcomer),
-    ]) {
-      expect(res.statusCode).toBe(409);
-      expect(res.json<{ error: { code: string } }>().error.code).toBe('ONBOARDING_REQUIRED');
-    }
+    const res = await edit(post.id, { title: null, body: doc('x') }, newcomer);
+    expect(res.statusCode).toBe(409);
+    expect(res.json<{ error: { code: string } }>().error.code).toBe('ONBOARDING_REQUIRED');
+    // Deleting asks for no onboarding, so another account's post is refused as not its own.
+    expect((await remove(post.id, newcomer)).statusCode).toBe(403);
+    const [row] = await t.db.select().from(schema.posts).where(eq(schema.posts.id, post.id));
+    expect(row?.deletedAt).toBeNull();
+  });
+
+  it('lets an author delete their own post signed in alone, whatever their onboarding (owner decision 2026-10-19)', async () => {
+    // An author whose onboarding is not done — here an account that never finished it; the same
+    // holds for one a consent revision asks again (#57-5) — may not write or edit, and still
+    // deletes what they wrote (#45-12 leaves deleting open under a 작성 제한 too).
+    const newcomer = await signUpTestUser(t);
+    const own = await createPost(t.db, {
+      marketId: market.id,
+      authorId: newcomer.id,
+      text: '내 글',
+    });
+    const refused = await edit(own.id, { title: null, body: doc('고침') }, newcomer);
+    expect(refused.json<{ error: { code: string } }>().error.code).toBe('ONBOARDING_REQUIRED');
+    // Signed out is still refused, and nothing is deleted.
+    const anonymous = await send(
+      'POST',
+      `/posts/${own.id}/delete`,
+      { expectedAccountId: newcomer.id },
+      null,
+    );
+    expect(anonymous.statusCode).toBe(401);
+    const res = await remove(own.id, newcomer);
+    expect(res.statusCode, res.body).toBe(200);
+    expect(postDeletionSchema.parse(res.json<{ data: unknown }>().data)).toEqual({
+      id: own.id,
+      placeholder: false,
+    });
+    const [row] = await t.db.select().from(schema.posts).where(eq(schema.posts.id, own.id));
+    expect(row).toMatchObject({ bodyText: '내 글', deletedAt: expect.any(Date) as unknown });
+    expect((await show(own.id)).statusCode).toBe(404);
   });
 
   it('checks the onboarding again inside the write itself, past the guard (#57-8)', async () => {

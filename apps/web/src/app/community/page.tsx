@@ -18,7 +18,15 @@ import { CommunityScreen } from './community-screen';
  */
 export const dynamic = 'force-dynamic';
 
-export const metadata: Metadata = { title: `${copy.communityTitle} | ${copy.appName}` };
+/**
+ * Not for search engines (owner decision 2026-10-19, ADR-0073): the list shows members' nicknames
+ * and posts, kept out of search results as the profiles are (#37-1). The post pages and the write
+ * and edit screens say the same.
+ */
+export const metadata: Metadata = {
+  title: `${copy.communityTitle} | ${copy.appName}`,
+  robots: { index: false },
+};
 
 /**
  * `/community`: 커뮤니티, one of the three top-level areas (N02 §2, #16) — every market's 근거 글,

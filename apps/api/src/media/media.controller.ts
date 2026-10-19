@@ -1,3 +1,4 @@
+import { finished } from 'node:stream';
 import { Body, Controller, Get, Param, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
 import {
   ApiBody,
@@ -30,6 +31,7 @@ import { ApiData, ApiErrors } from '../common/openapi/api-response.decorators.js
 import { OnboardedGuard } from '../onboarding/onboarded.guard.js';
 import { SESSION_SECURITY_SCHEME } from '../openapi/document.js';
 import { IMAGE_UPLOAD_CONTENT_TYPES } from './image-body.js';
+import { IMAGE_READ_BUSY_RETRY_SECONDS, imageReads, imageReadsBusy } from './image-reads.js';
 import { IMAGE_BUSY_RETRY_SECONDS } from './image.js';
 import { MediaService } from './media.service.js';
 
@@ -111,6 +113,12 @@ export class MediaController {
    * `Cache-Control: no-cache` with a strong ETag (the id: an image's bytes never change): a browser
    * keeps the image but asks every time, so hiding or deleting a post stops its images at once,
    * and an image still shown costs a 304.
+   *
+   * An answer with the image holds its bytes from the storage read until the answer has been handed
+   * to the socket, or the client has gone: a share of the process's budget (`imageReads`), taken
+   * before the store is read. Past the budget the read is RATE_LIMITED with `Retry-After`, as a full
+   * conversion queue is for an upload — so clients that read slowly, or not at all, fill the budget
+   * and not the API's memory (ADR-0073 decision 9-36). A 304 holds nothing.
    */
   @Get(':mediaId')
   @RawResponse()
@@ -127,6 +135,8 @@ export class MediaController {
     content: Object.fromEntries(IMAGE_CONTENT_TYPES.map((type) => [type, BINARY])),
   })
   @ApiResponse({ status: 304, description: 'Not modified (If-None-Match)' })
+  // RATE_LIMITED (every route documents it) is also the answer while the images being sent hold
+  // the process's budget (image-reads.ts).
   @ApiErrors('NOT_FOUND', 'VALIDATION_ERROR')
   async read(
     @Param('mediaId', { schema: uuidParamSchema }) mediaId: string,
@@ -140,14 +150,31 @@ export class MediaController {
       void reply.status(304).header('cache-control', 'public, no-cache').header('etag', etag);
       return undefined;
     }
-    const body = await this.media.bytesOf(image);
-    if (body === null) throw imageNotFound();
+    const release = imageReads.take(image.byteSize);
+    if (release === null) {
+      void reply.header('retry-after', String(IMAGE_READ_BUSY_RETRY_SECONDS));
+      throw imageReadsBusy();
+    }
+    // Given back once the answer is out or the client has gone — at once if it went already.
+    finished(reply.raw, release);
+    let body: Uint8Array | null;
+    try {
+      body = await this.media.bytesOf(image);
+    } catch (error) {
+      release();
+      throw error;
+    }
+    if (body === null) {
+      release();
+      throw imageNotFound();
+    }
     void reply
       .header('content-type', image.contentType)
       .header('cache-control', 'public, no-cache')
       .header('etag', etag)
       .header('content-disposition', 'inline');
-    return Buffer.from(body);
+    // The store's bytes themselves, not a copy of them.
+    return Buffer.from(body.buffer, body.byteOffset, body.byteLength);
   }
 }
 

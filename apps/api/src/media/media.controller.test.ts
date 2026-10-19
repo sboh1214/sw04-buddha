@@ -3,8 +3,10 @@
  * `GET /media/:mediaId`. Pinned: the upload is the file itself, open to an account that finished
  * the onboarding and naming the account the screen shows; the content decides the type and the
  * stored object is the server's own encoding without metadata; the read serves an image only
- * while a post shows it, to anyone, revalidated on every use. Skips when TEST_* are unset.
+ * while a post shows it, to anyone, revalidated on every use, and holds no more images at once than
+ * the process's budget. Skips when TEST_* are unset.
  */
+import { get as httpGet } from 'node:http';
 import { schema } from '@buddha/db';
 import { completeOnboarding, createMarket, createMedia, createPost } from '@buddha/db/test';
 import { IMAGE_MAX_BYTES, uploadedImageSchema, type UploadedImage } from '@buddha/shared';
@@ -14,6 +16,12 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { IMAGE_BODY_LIMIT } from './image-body.js';
+import {
+  ByteBudget,
+  IMAGE_READ_BUDGET_BYTES,
+  IMAGE_READ_BUSY_RETRY_SECONDS,
+  imageReads,
+} from './image-reads.js';
 import { IMAGE_BUSY_RETRY_SECONDS, OneAtATime, imageConversions } from './image.js';
 
 /** setup-env.ts fixes WEB_ORIGIN to this. */
@@ -34,7 +42,8 @@ describe.skipIf(!hasTestInfra)('/api/v1/media (integration)', () => {
   let author: TestUser;
 
   beforeAll(async () => {
-    t = await createTestApp();
+    // Listening too: a client that goes away mid-read needs a socket (`inject` has none).
+    t = await createTestApp({ listen: true });
   });
   afterAll(async () => {
     await t?.close(); // undefined when beforeAll timed out waiting for the file lock
@@ -341,5 +350,133 @@ describe.skipIf(!hasTestInfra)('/api/v1/media (integration)', () => {
     const media = await createMedia(t.db, { ownerId: author.id });
     await createPost(t.db, { marketId: market.id, authorId: author.id, imageIds: [media.id] });
     expect((await read(media.id)).statusCode).toBe(404);
+    expect(imageReads.size).toBe(0);
+  });
+
+  /** An upload of the author's, shown by a post of theirs. */
+  async function shown(): Promise<{ id: string; body: Uint8Array }> {
+    const image = await stored();
+    const market = await createMarket(t.db);
+    await createPost(t.db, { marketId: market.id, authorId: author.id, imageIds: [image.id] });
+    return image;
+  }
+
+  it('holds its image within the process’s budget: past it, refused unread; given back once sent', async () => {
+    const image = await shown();
+    const getObject = t.storage.get.bind(t.storage);
+    // While the store is read, the image's bytes are already counted.
+    const held: number[] = [];
+    const get = vi.spyOn(t.storage, 'get').mockImplementation((key) => {
+      held.push(imageReads.size);
+      return getObject(key);
+    });
+    try {
+      // Other reads hold the whole budget.
+      const others = imageReads.take(IMAGE_READ_BUDGET_BYTES);
+      expect(others).not.toBeNull();
+      try {
+        const busy = await read(image.id);
+        expect(busy.statusCode).toBe(429);
+        expect(busy.headers['retry-after']).toBe(String(IMAGE_READ_BUSY_RETRY_SECONDS));
+        expect(busy.json<{ error: { code: string; details: unknown } }>().error).toMatchObject({
+          code: 'RATE_LIMITED',
+          details: { retryAfterSeconds: IMAGE_READ_BUSY_RETRY_SECONDS },
+        });
+        expect(get).not.toHaveBeenCalled();
+        // A revalidation holds nothing: answered all the same.
+        expect((await read(image.id, { 'if-none-match': `"${image.id}"` })).statusCode).toBe(304);
+      } finally {
+        others?.();
+      }
+      expect(imageReads.size).toBe(0);
+
+      const res = await read(image.id);
+      expect(res.statusCode).toBe(200);
+      expect(new Uint8Array(res.rawPayload)).toEqual(image.body);
+      expect(held).toEqual([image.body.length]);
+      await vi.waitFor(() => {
+        expect(imageReads.size).toBe(0);
+      });
+
+      // A store that fails gives the share back too.
+      get.mockRejectedValueOnce(new Error('store down'));
+      expect((await read(image.id)).statusCode).toBe(500);
+      await vi.waitFor(() => {
+        expect(imageReads.size).toBe(0);
+      });
+    } finally {
+      get.mockRestore();
+    }
+  });
+
+  it('gives the share back when the client goes before its image is sent', async () => {
+    const image = await shown();
+    const getObject = t.storage.get.bind(t.storage);
+    let reached!: () => void;
+    const reading = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    const get = vi.spyOn(t.storage, 'get').mockImplementationOnce(async (key) => {
+      reached();
+      await gate;
+      return getObject(key);
+    });
+    try {
+      const request = httpGet(`${t.url!}/api/v1/media/${image.id}`);
+      request.on('error', () => undefined);
+      await reading;
+      expect(imageReads.size).toBe(image.body.length);
+      // The client hangs up while the store is still being read: its share is free at once.
+      request.destroy();
+      await vi.waitFor(() => {
+        expect(imageReads.size).toBe(0);
+      });
+      open();
+      // The late bytes go nowhere, and take nothing back.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(imageReads.size).toBe(0);
+    } finally {
+      open();
+      get.mockRestore();
+    }
+    expect((await read(image.id)).statusCode).toBe(200);
+  });
+});
+
+describe('ByteBudget', () => {
+  it('takes shares up to the budget and refuses one past it', () => {
+    const budget = new ByteBudget(10);
+    const a = budget.take(6);
+    const b = budget.take(4);
+    expect(a).not.toBeNull();
+    expect(b).not.toBeNull();
+    expect(budget.size).toBe(10);
+    expect(budget.take(1)).toBeNull();
+    a?.();
+    expect(budget.size).toBe(4);
+    expect(budget.take(6)).not.toBeNull();
+    expect(budget.size).toBe(10);
+  });
+
+  it('gives a share back once, however often it is released', () => {
+    const budget = new ByteBudget(10);
+    const a = budget.take(3);
+    budget.take(2);
+    a?.();
+    a?.();
+    expect(budget.size).toBe(2);
+  });
+
+  it('takes any one share while it holds nothing, so no image is refused for its size alone', () => {
+    const budget = new ByteBudget(10);
+    const large = budget.take(25);
+    expect(large).not.toBeNull();
+    expect(budget.take(1)).toBeNull();
+    large?.();
+    expect(budget.size).toBe(0);
   });
 });

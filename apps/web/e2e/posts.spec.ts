@@ -21,6 +21,10 @@ import {
  * deletes it (gone from the list, its page 404). The picker offers a closed market too (#45-6). A
  * visitor reads the list and a post — on a closed market too, whose link still opens the market's
  * detail, and an admin's untitled post with its '운영자' mark — and is asked to sign in to write.
+ * None of the community's screens is for search engines (noindex), and leaving a draft asks first —
+ * a refusal keeps it, an answer of yes leaves (owner decisions 2026-10-19): a body without a title,
+ * the edit screen (where an untouched body asks nothing, a click into it included), and Forward and
+ * a jump back in a browser without the Navigation API too.
  * The allow-list, the image checks, the permissions and the paging are the API's and the shared
  * package's tests; this walks the screens.
  */
@@ -32,6 +36,16 @@ const PNG = Buffer.from(
 );
 
 const card = (page: Page, postId: string) => page.getByTestId(`post-card-${postId}`);
+
+/**
+ * The page asks search engines not to index it (owner decision 2026-10-19): a robots meta that
+ * says `noindex`, and none that says otherwise. Counted rather than read from one element: during
+ * a client-side move between two such pages both pages' tags can be in the document for a moment.
+ */
+async function expectNotIndexed(page: Page): Promise<void> {
+  await expect(page.locator('meta[name="robots"][content*="noindex"]').first()).toBeAttached();
+  await expect(page.locator('meta[name="robots"]:not([content*="noindex"])')).toHaveCount(0);
+}
 
 /** The post id of the post page the browser is on. */
 function postIdOf(page: Page): string {
@@ -59,12 +73,16 @@ async function pasteHtml(editor: Locator, html: string): Promise<void> {
   }, html);
 }
 
-/** A post straight at the API with the context's cookie, for a spec whose subject is reading it. */
+/**
+ * A post straight at the API with the context's cookie, for a spec whose subject is reading it:
+ * a paragraph of `text` (in italics, with a link), then the `after` blocks.
+ */
 async function postThroughApi(
   context: APIRequestContext,
   marketId: string,
   title: string | null,
   text: string,
+  after: readonly unknown[] = [],
 ): Promise<string> {
   const me = await meOf(context);
   const res = await context.post('/api/v1/posts', {
@@ -85,6 +103,7 @@ async function postThroughApi(
               },
             ],
           },
+          ...after,
         ],
       },
       expectedAccountId: me.id,
@@ -110,6 +129,7 @@ test.describe('근거 글', () => {
     await page.goto('/community');
     await page.getByTestId('community-write').click();
     await expect(page).toHaveURL('/community/write');
+    await expectNotIndexed(page);
     await pickMarket(page, 'post-write-market-picker', other);
     await expect(page).toHaveURL(`/community/write?market=${other.id}`);
     await expect(page.getByTestId('post-write-market-title')).toHaveText(other.title);
@@ -242,6 +262,7 @@ test.describe('근거 글', () => {
     // --- edit: the title and the body, never the market; '수정됨' (#45-4).
     await page.getByTestId('post-edit').click();
     await expect(page).toHaveURL(`/community/posts/${postId}/edit`);
+    await expectNotIndexed(page);
     await expect(page.getByTestId('post-edit-market')).toHaveText(market.title);
     await expect(page.getByTestId('post-editor-content')).toContainText('굵은 근거');
     await page.getByTestId('post-title-input').fill(`고친 근거 ${tag}`);
@@ -287,6 +308,8 @@ test.describe('근거 글', () => {
     await logOut(page);
 
     await page.goto(`/community?q=${tag}`);
+    // Neither the list nor a post page is for search engines (owner decision 2026-10-19).
+    await expectNotIndexed(page);
     await expect(card(page, postId)).toBeVisible();
     await expect(card(page, postId).getByTestId('post-author-admin')).toHaveCount(0);
     // The admin's card: '운영자', and its first line as the heading a screen reader lists.
@@ -300,6 +323,7 @@ test.describe('근거 글', () => {
     await page.goto(`/community?q=${tag}`);
     await card(page, postId).getByTestId('post-card-link').click();
     await expect(page).toHaveURL(`/community/posts/${postId}`);
+    await expectNotIndexed(page);
     await expect(page.getByTestId('post-title')).toHaveText(`마감 뒤 근거 ${tag}`);
     await expect(page.getByTestId('post-body').locator('em')).toHaveText(tag);
     const link = page.getByTestId('post-body').getByRole('link', { name: '출처' });
@@ -323,5 +347,206 @@ test.describe('근거 글', () => {
       `/login?next=${encodeURIComponent(`/community/write?market=${market.id}`)}`,
     );
     await expect(page.getByTestId('post-editor')).toHaveCount(0);
+  });
+
+  test('쓰던 글을 두고 머리의 링크나 뒤로 가기로 떠나면 먼저 묻고, 머무르면 글이 그대로이고, 나가면 떠난다', async ({
+    admin,
+    page,
+  }) => {
+    const market = await createOpenMarket(admin);
+    await signUp(page, freshEmail());
+    // Into the write screen within the app, so Back is the app's own (`popstate`), not another
+    // document's (`beforeunload`, the browser's dialog).
+    await page.goto('/community');
+    await page.getByTestId('community-write').click();
+    await pickMarket(page, 'post-write-market-picker', market);
+    const write = `/community/write?market=${market.id}`;
+    await expect(page).toHaveURL(write);
+    const asked: string[] = [];
+    const answer = (accept: boolean) => {
+      page.once('dialog', (dialog) => {
+        asked.push(`${dialog.type()}: ${dialog.message()}`);
+        void (accept ? dialog.accept() : dialog.dismiss());
+      });
+    };
+    const question = `confirm: ${copy.postLeaveConfirm}`;
+    // The wordmark in the header, a Next.js link on every screen and both widths.
+    const home = page.getByRole('heading', { level: 1, name: copy.appName }).getByRole('link');
+
+    // --- a draft: a title and a line of the body.
+    await page.getByTestId('post-title-input').fill('떠나기 전 제목');
+    const editor = page.getByTestId('post-editor-content');
+    await editor.click();
+    await page.keyboard.type('쓰던 근거');
+
+    // --- the header link, refused: still here, the draft as it was.
+    answer(false);
+    await home.click();
+    await expect.poll(() => asked).toEqual([question]);
+    await expect(page).toHaveURL(write);
+    await expect(page.getByTestId('post-title-input')).toHaveValue('떠나기 전 제목');
+    await expect(editor).toContainText('쓰던 근거');
+
+    // --- Back, refused: the address returns to the screen and the draft stays.
+    answer(false);
+    await page.evaluate(() => {
+      window.history.back();
+    });
+    await expect.poll(() => asked).toEqual([question, question]);
+    await expect(page).toHaveURL(write);
+    await expect(page.getByTestId('post-title-input')).toHaveValue('떠나기 전 제목');
+    await expect(editor).toContainText('쓰던 근거');
+
+    // --- Back, allowed: the router takes the step it was held from — the community list.
+    answer(true);
+    await page.evaluate(() => {
+      window.history.back();
+    });
+    await expect(page).toHaveURL('/community');
+    await expect(page.getByTestId('community-write')).toBeVisible();
+    expect(asked).toEqual([question, question, question]);
+
+    // --- a draft again, and the header link allowed: gone to the home screen.
+    await page.getByTestId('community-write').click();
+    await pickMarket(page, 'post-write-market-picker', market);
+    await expect(page).toHaveURL(write);
+    await page.getByTestId('post-title-input').fill('다시 쓴 제목');
+    answer(true);
+    await home.click();
+    await expect(page).toHaveURL('/');
+    expect(asked).toEqual([question, question, question, question]);
+
+    // --- an empty screen asks nothing (an unexpected dialog would be dismissed and keep us).
+    await page.goto(write);
+    page.on('dialog', (dialog) => {
+      asked.push(`${dialog.type()}: ${dialog.message()}`);
+      void dialog.dismiss();
+    });
+    await expect(page.getByTestId('post-title-input')).toBeVisible();
+    await home.click();
+    await expect(page).toHaveURL('/');
+    expect(asked).toHaveLength(4);
+  });
+
+  test('제목 없이 본문만 쓴 글과 수정 화면도 떠나기 전에 묻고, 고치지 않은 수정 화면은 본문을 눌러도 묻지 않는다', async ({
+    admin,
+    page,
+  }) => {
+    const market = await createOpenMarket(admin);
+    await signUp(page, freshEmail());
+    // Every dialog is recorded and answered from `answers` — dismissed when none was expected, which
+    // keeps the page where it is and fails the address the step expects.
+    const asked: string[] = [];
+    const answers: boolean[] = [];
+    page.on('dialog', (dialog) => {
+      asked.push(`${dialog.type()}: ${dialog.message()}`);
+      void (answers.shift() === true ? dialog.accept() : dialog.dismiss());
+    });
+    const question = `confirm: ${copy.postLeaveConfirm}`;
+    const home = page.getByRole('heading', { level: 1, name: copy.appName }).getByRole('link');
+    const editor = page.getByTestId('post-editor-content');
+
+    // --- the write screen, the body only (the title is optional, #45-1): the body alone asks.
+    const write = `/community/write?market=${market.id}`;
+    await page.goto(write);
+    await editor.click();
+    await page.keyboard.type('제목 없는 근거');
+    answers.push(false);
+    await home.click();
+    await expect.poll(() => asked).toEqual([question]);
+    await expect(page).toHaveURL(write);
+    await expect(editor).toContainText('제목 없는 근거');
+    await expect(page.getByTestId('post-title-input')).toHaveValue('');
+    answers.push(true);
+    await home.click();
+    await expect(page).toHaveURL('/');
+
+    // --- the edit screen of a post whose body ends in a heading — a body the API took from
+    // elsewhere; the editor adds an empty paragraph after it on its first transaction, a focus too.
+    const postId = await postThroughApi(page.request, market.id, '고칠 글', '고칠 근거', [
+      { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: '맺음' }] },
+    ]);
+    const edit = `/community/posts/${postId}/edit`;
+    await page.goto(edit);
+    await expect(editor).toContainText('맺음');
+    // Into the body and out, nothing typed: nothing to lose, nothing asked.
+    await editor.click();
+    await home.click();
+    await expect(page).toHaveURL('/');
+    expect(asked).toEqual([question, question]);
+
+    // --- the edit screen with the body changed: asks, and a refusal keeps the change.
+    await page.goto(edit);
+    await editor.click();
+    await page.keyboard.type('더한 근거');
+    answers.push(false);
+    await home.click();
+    await expect.poll(() => asked).toEqual([question, question, question]);
+    await expect(page).toHaveURL(edit);
+    await expect(editor).toContainText('더한 근거');
+  });
+
+  test('Navigation API가 없는 브라우저에서도 앞으로 가기와 여러 칸 뒤로 가기를 묻고, 머무르면 주소가 쓰기 화면으로 돌아온다', async ({
+    admin,
+    page,
+  }) => {
+    // A browser without the Navigation API (older Safari and Firefox): the guard
+    // measures a move by the numbers it writes into the entries' state.
+    await page.addInitScript(() => {
+      Object.defineProperty(window, 'navigation', { value: undefined, configurable: true });
+    });
+    const market = await createOpenMarket(admin);
+    await signUp(page, freshEmail());
+    const asked: string[] = [];
+    const answers: boolean[] = [];
+    page.on('dialog', (dialog) => {
+      asked.push(`${dialog.type()}: ${dialog.message()}`);
+      void (answers.shift() === true ? dialog.accept() : dialog.dismiss());
+    });
+    const question = `confirm: ${copy.postLeaveConfirm}`;
+    const home = page.getByRole('heading', { level: 1, name: copy.appName }).getByRole('link');
+    const title = page.getByTestId('post-title-input');
+    const traverse = (delta: number) =>
+      page.evaluate((by) => {
+        window.history.go(by);
+      }, delta);
+
+    // Three entries of one document — the list, a search, the write screen — and one ahead of it.
+    await page.goto('/community');
+    expect(
+      await page.evaluate(() => (window as { navigation?: unknown }).navigation),
+    ).toBeUndefined();
+    const tag = freshTag();
+    await page.getByTestId('community-search-input').fill(tag);
+    await page.getByTestId('community-search-submit').click();
+    await expect(page).toHaveURL(`/community?q=${tag}`);
+    await page.getByTestId('community-write').click();
+    await pickMarket(page, 'post-write-market-picker', market);
+    const write = `/community/write?market=${market.id}`;
+    await expect(page).toHaveURL(write);
+    await home.click();
+    await expect(page).toHaveURL('/');
+    await traverse(-1);
+    await expect(page).toHaveURL(write);
+    await title.fill('떠나기 전 제목');
+
+    // Forward, refused: back to the write screen — not further forward, where nothing is.
+    answers.push(false);
+    await traverse(1);
+    await expect.poll(() => asked).toEqual([question]);
+    await expect(page).toHaveURL(write);
+    await expect(title).toHaveValue('떠나기 전 제목');
+    // Two back at once, refused: forward by two.
+    answers.push(false);
+    await traverse(-2);
+    await expect.poll(() => asked).toEqual([question, question]);
+    await expect(page).toHaveURL(write);
+    await expect(title).toHaveValue('떠나기 전 제목');
+    // Back, allowed: the router takes it to the search.
+    answers.push(true);
+    await traverse(-1);
+    await expect(page).toHaveURL(`/community?q=${tag}`);
+    await expect(page.getByTestId('community-write')).toBeVisible();
+    expect(asked).toEqual([question, question, question]);
   });
 });

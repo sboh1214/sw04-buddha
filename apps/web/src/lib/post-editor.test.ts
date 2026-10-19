@@ -12,7 +12,9 @@ import { system } from '@/theme/system';
 import { ApiError } from './api';
 import {
   POST_TEXT_COLOR_LABEL,
+  bodyChangedFrom,
   countEditorDocument,
+  draftChanged,
   imagePrecheck,
   imageRefusalMessage,
   imageUploadErrorMessage,
@@ -146,8 +148,10 @@ describe('a picked image', () => {
       new ApiError(422, { code: 'IMAGE_NOT_ALLOWED', message: 'x', details: { reason } } as never);
     expect(imageUploadErrorMessage(refused('type'))).toBe(copy.errImageType);
     expect(imageUploadErrorMessage(refused('size'))).toBe(copy.errImageSize);
-    expect(imageUploadErrorMessage(refused('pixels'))).toBe(copy.errImagePixels);
-    expect(imageUploadErrorMessage(refused('frames'))).toBe(copy.errImageFrames);
+    // One sentence for a frame too large and for too many frames (owner decision 2026-10-19).
+    expect(copy.errImageTooLarge).toBe('이미지가 너무 크거나 프레임이 너무 많습니다.');
+    expect(imageUploadErrorMessage(refused('pixels'))).toBe(copy.errImageTooLarge);
+    expect(imageUploadErrorMessage(refused('frames'))).toBe(copy.errImageTooLarge);
     expect(imageUploadErrorMessage(refused('unreadable'))).toBe(copy.errImageUnreadable);
     expect(imageUploadErrorMessage(refused('empty'))).toBe(copy.errImageEmpty);
     expect(imageUploadErrorMessage(refused('later'))).toBe(copy.errImageUpload);
@@ -219,5 +223,48 @@ describe('the copy', () => {
     expect(copy.errPostBodyTooLong).toContain(`${number(POST_BODY_MAX_LENGTH)}자`);
     expect(copy.errPostTooManyImages).toContain(`${number(POST_IMAGES_MAX)}장`);
     expect(copy.errImageSize).toContain(`${String(IMAGE_MAX_BYTES / 1024 / 1024)}MB`);
+  });
+});
+
+describe('draftChanged', () => {
+  // Leaving the write or edit screen asks first while this holds (owner decision 2026-10-19).
+  const clean = { title: '', initialTitle: null, bodyChanged: false, uploading: false };
+
+  it('is false for a form as it started', () => {
+    expect(draftChanged(clean)).toBe(false);
+    expect(draftChanged({ ...clean, title: '그대로', initialTitle: '그대로' })).toBe(false);
+    // Spaces at either end are trimmed by the server: nothing to lose.
+    expect(draftChanged({ ...clean, title: '  ' })).toBe(false);
+    expect(draftChanged({ ...clean, title: ' 그대로 ', initialTitle: '그대로' })).toBe(false);
+  });
+
+  it('is true for a changed title or body, and while an image uploads', () => {
+    expect(draftChanged({ ...clean, title: '새 제목' })).toBe(true);
+    expect(draftChanged({ ...clean, title: '', initialTitle: '지운 제목' })).toBe(true);
+    expect(draftChanged({ ...clean, bodyChanged: true })).toBe(true);
+    expect(draftChanged({ ...clean, uploading: true })).toBe(true);
+  });
+
+  it('asks in the screen’s words (asking is the owner’s decision, the sentence is not)', () => {
+    expect(copy.postLeaveConfirm).toBe('쓰던 내용이 사라집니다. 나갈까요?');
+  });
+});
+
+describe('bodyChangedFrom', () => {
+  const made = { type: 'doc', content: [{ type: 'paragraph', attrs: { textAlign: null } }] };
+  const typed = {
+    type: 'doc',
+    content: [
+      { type: 'paragraph', attrs: { textAlign: null }, content: [{ type: 'text', text: '근거' }] },
+    ],
+  };
+
+  it('compares the editor’s document with its own first one, and nothing before there is one', () => {
+    expect(bodyChangedFrom(null, typed)).toBe(false);
+    const baseline = JSON.stringify(made);
+    expect(bodyChangedFrom(baseline, made)).toBe(false);
+    expect(bodyChangedFrom(baseline, typed)).toBe(true);
+    // Typed and taken out again: nothing to lose.
+    expect(bodyChangedFrom(baseline, structuredClone(made))).toBe(false);
   });
 });

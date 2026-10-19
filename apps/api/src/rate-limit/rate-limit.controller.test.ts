@@ -12,6 +12,7 @@
  */
 import { createHash } from 'node:crypto';
 import { schema } from '@buddha/db';
+import { createMarket, createMedia, createPost } from '@buddha/db/test';
 import {
   CONSENT_ITEMS,
   DEFAULT_RATE_LIMITS,
@@ -62,9 +63,11 @@ describe.skipIf(!hasTestInfra)('rate limits (integration)', () => {
     // the life of the app, so building one inside a suite that already holds it deadlocks.
     // `uncountedPeers` names two networks a split deployment's web host could live on; the
     // cases below present a peer from each and one from outside them.
+    // The image reads' own address bucket is lowered for the same reason, to 3 — distinct from
+    // the default's 2, so a refusal says which bucket it came from.
     t = await createTestApp({
       paidCoinSales: true,
-      rateLimits: { default: 2 },
+      rateLimits: { default: 2, mediaRead: 3 },
       uncountedPeers: '10.0.0.0/8, fd00::/8',
     });
     redis = t.app.get<Redis>(REDIS);
@@ -87,6 +90,9 @@ describe.skipIf(!hasTestInfra)('rate limits (integration)', () => {
     expect(RATE_LIMIT_BUCKETS.default.scope).toBe('ip');
     expect(RATE_LIMIT_BUCKETS.charge.scope).toBe('user');
     expect(RATE_LIMIT_BUCKETS.email.scope).toBe('email');
+    // Not PLAN 7.5's: the image reads' own per-address bucket (owner decision 2026-10-19).
+    expect(RATE_LIMIT_BUCKETS.mediaRead).toEqual({ scope: 'ip', limit: 600 });
+    expect(DEFAULT_RATE_LIMITS.mediaRead).toBe(600);
   });
 
   describe('POST /payments/charge — 10 a minute per account', () => {
@@ -672,6 +678,65 @@ describe.skipIf(!hasTestInfra)('rate limits (integration)', () => {
       const uncounted = await anonymous('/api/v1/categories');
       expect(uncounted.statusCode).toBe(200);
       expect(uncounted.headers['x-ratelimit-limit']).toBeUndefined();
+    });
+
+    it('counts an image read in its own bucket, never in the default — 304s too (owner decision 2026-10-19)', async () => {
+      // The API checks an image on every use (no-cache + ETag), so a page of thumbnails is a page
+      // of requests: they are counted per address in `mediaRead` (600 a minute shipped, 3 here),
+      // and the default's hundred (2 here) is left to everything else.
+      const author = await signUpTestUser(t);
+      const market = await createMarket(t.db);
+      const image = await createMedia(t.db, { ownerId: author.id });
+      await createPost(t.db, { marketId: market.id, authorId: author.id, imageIds: [image.id] });
+      const peer = '203.0.113.31';
+      const revalidate = () =>
+        t.app.inject({
+          method: 'GET',
+          url: `/api/v1/media/${image.id}`,
+          headers: { 'if-none-match': `"${image.id}"` },
+          remoteAddress: peer,
+        });
+
+      const first = await revalidate();
+      expect(first.statusCode).toBe(304);
+      expect(first.headers['x-ratelimit-limit']).toBe('3');
+      expect(first.headers['x-ratelimit-remaining']).toBe('2');
+      // An image no post shows is the same route, and the same bucket.
+      expect(
+        (await anonymous('/api/v1/media/0b6f6a3e-2c1d-4c8e-9f0a-1b2c3d4e5f60', peer)).statusCode,
+      ).toBe(404);
+      // The default is untouched: two requests of its own, then refused.
+      const other = await anonymous('/api/v1/categories', peer);
+      expect(other.statusCode).toBe(200);
+      expect(other.headers['x-ratelimit-limit']).toBe('2');
+      expect(other.headers['x-ratelimit-remaining']).toBe('1');
+      expect((await anonymous('/api/v1/categories', peer)).statusCode).toBe(200);
+      expect((await anonymous('/api/v1/categories', peer)).statusCode).toBe(429);
+      // A spent default does not stop the images, which run out at their own limit.
+      expect((await revalidate()).statusCode).toBe(304);
+      const refused = await revalidate();
+      expect(refused.statusCode).toBe(429);
+      expect(refused.json()).toMatchObject({ error: { code: 'RATE_LIMITED' } });
+      expect(Number(refused.headers['retry-after'])).toBeGreaterThan(0);
+      // Two counters for the one address, under one digest (the sign-up's own `email` bucket
+      // aside).
+      const keys = (await redis.keys(`${RATE_LIMIT_KEY_PREFIX}:*:any:*`)).sort();
+      expect(keys).toEqual([
+        expect.stringMatching(/^rl:default:any:[0-9a-f]{32}$/),
+        expect.stringMatching(/^rl:mediaRead:any:[0-9a-f]{32}$/),
+      ]);
+      expect(keys[0]?.split(':').at(-1)).toBe(keys[1]?.split(':').at(-1));
+      // Another address is another reader.
+      expect(
+        (
+          await t.app.inject({
+            method: 'GET',
+            url: `/api/v1/media/${image.id}`,
+            headers: { 'if-none-match': `"${image.id}"` },
+            remoteAddress: '203.0.113.32',
+          })
+        ).statusCode,
+      ).toBe(304);
     });
 
     it('skips a peer RATE_LIMIT_UNCOUNTED_PEERS names, on both halves — a web host elsewhere', async () => {

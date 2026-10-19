@@ -311,6 +311,9 @@ export class PostsService {
    * `POST /posts/:postId/delete`: the author deletes the post (#45-5), a hidden one too. Its
    * content stays for operators (and #184's retention); the public sees the placeholder while
    * replies hang under it and nothing otherwise — never restored. A second deletion is NOT_FOUND.
+   * It never passes `checkWriter`: deleting one's own post asks for a session and nothing more — not
+   * the onboarding, not a consent a revision asks for again (owner decision 2026-10-19, ADR-0073),
+   * and not #185's 작성 제한 either (#45-12: 자기 글 삭제는 제재 중에도 할 수 있다).
    */
   async delete(authorId: string, postId: string): Promise<PostDeletion> {
     return this.db.transaction(async (tx) => {

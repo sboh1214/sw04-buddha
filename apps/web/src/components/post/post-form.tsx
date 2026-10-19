@@ -7,9 +7,15 @@ import {
   POST_TITLE_MAX_LENGTH,
   type PostDocument,
 } from '@buddha/shared';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { copy } from '@/copy';
-import { countEditorDocument, titleTooLong } from '@/lib/post-editor';
+import { useLeaveGuard } from '@/hooks/use-leave-guard';
+import {
+  bodyChangedFrom,
+  countEditorDocument,
+  draftChanged,
+  titleTooLong,
+} from '@/lib/post-editor';
 import { PostEditor } from './post-editor';
 
 /** What the form sends: the title (blank is none) and the editor's JSON. */
@@ -30,6 +36,11 @@ export interface PostFormValues {
  * The body is a field like the title for assistive tech: the editor is `aria-invalid` while a
  * limit is passed and described by the counts and the limit's message, which a polite live region
  * announces when it appears (the counts themselves change on every key and are not announced).
+ *
+ * Leaving with a draft asks first (owner decision 2026-10-19, `useLeaveGuard`): while the title or
+ * the body differs from what the form started with, or an image is uploading, and nothing is being
+ * sent — once the screen sends (`pending`, which the screens hold through the move to the post) the
+ * draft is the server's.
  */
 export function PostForm({
   initialTitle = null,
@@ -55,6 +66,13 @@ export function PostForm({
   const [title, setTitle] = useState(initialTitle ?? '');
   const [body, setBody] = useState<unknown>(initialDocument ?? { type: 'doc', content: [] });
   const [uploading, setUploading] = useState(false);
+  // The editor's own JSON when it was made (`onReady`), and whether the body differs from it now.
+  const baseline = useRef<string | null>(null);
+  const [bodyChanged, setBodyChanged] = useState(false);
+  useLeaveGuard(
+    !pending && draftChanged({ title, initialTitle, bodyChanged, uploading }),
+    copy.postLeaveConfirm,
+  );
   const count = countEditorDocument(body);
   const titleInvalid = titleTooLong(title);
   const blocked =
@@ -99,7 +117,13 @@ export function PostForm({
         </Text>
         <PostEditor
           initialDocument={initialDocument}
-          onChange={setBody}
+          onReady={(json) => {
+            baseline.current = JSON.stringify(json);
+          }}
+          onChange={(json) => {
+            setBody(json);
+            setBodyChanged(bodyChangedFrom(baseline.current, json));
+          }}
           accountId={accountId}
           onUploadingChange={setUploading}
           disabled={pending}

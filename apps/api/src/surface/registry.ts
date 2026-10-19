@@ -147,8 +147,7 @@ export const OWNER_ROUTES: Readonly<Record<string, RegisteredRoute>> = {
   },
   'POST /posts/:postId/delete': {
     reason:
-      '근거 글 지우기(#46, ADR-0069 결정 2 #45-5): 세션 계정이 쓴 글만 지운다(원문은 운영자만 보게 남는다). 다른 계정의 글은 403. 본문의 expectedAccountId가 세션 계정이어야 한다',
-    onboarded: true,
+      '근거 글 지우기(#46, ADR-0069 결정 2 #45-5): 세션 계정이 쓴 글만 지운다(원문은 운영자만 보게 남는다). 다른 계정의 글은 403. 로그인만 보고 온보딩·재동의는 보지 않는다(오너 결정 2026-10-19, ADR-0073). 본문의 expectedAccountId가 세션 계정이어야 한다',
   },
   'POST /media/images': {
     reason:

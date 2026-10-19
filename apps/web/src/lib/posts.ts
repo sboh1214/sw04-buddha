@@ -2,10 +2,13 @@ import {
   postBodyRefusalOf,
   postExcerpt,
   postListQuerySchema,
+  readPostDocument,
   type PostState,
 } from '@buddha/shared';
+import type { Metadata } from 'next';
 import { copy } from '@/copy';
 import {
+  type Post,
   type PostAuthor,
   type PostSummary,
   isApiError,
@@ -235,6 +238,48 @@ export function postPlaceholderMessage(state: Exclude<PostState, 'published'>): 
   return state === 'deleted' ? copy.postDeletedPlaceholder : copy.postHiddenPlaceholder;
 }
 
+/** Search engines cut a description around here. */
+const META_DESCRIPTION_MAX = 160;
+
+/** An untitled post's tab title: the start of its text, this many characters. */
+const META_TITLE_TEXT_MAX = 40;
+
+/**
+ * The first `max` characters of `text` by code point, as the post's own limits count: a UTF-16
+ * slice could cut a writer's emoji in half and leave a lone surrogate (U+FFFD on the page).
+ */
+const headOf = (text: string, max: number) => Array.from(text).slice(0, max).join('');
+
+/**
+ * Every answer of a post page — the post, its placeholder, and none — is kept out of search
+ * engines (owner decision 2026-10-19, ADR-0073: a post page shows its author's nickname, and is not
+ * indexed, as the profiles are not, #37-1). The description stays for a link a member shares.
+ */
+const NOT_INDEXED: Metadata['robots'] = { index: false };
+
+/**
+ * A post page's metadata (`generateMetadata` of `/community/posts/[id]`) from the post the API
+ * answered, null for none: its title (or the start of its text), the start of its text as the
+ * description, and `noindex` on every answer — the placeholders' and a missing post's too.
+ */
+export function postPageMetadata(post: Post | null): Metadata {
+  if (post === null) {
+    return { title: `${copy.postNotFound} | ${copy.appName}`, robots: NOT_INDEXED };
+  }
+  if (post.state !== 'published') {
+    return {
+      title: `${postPlaceholderMessage(post.state)} | ${copy.appName}`,
+      robots: NOT_INDEXED,
+    };
+  }
+  const text = postExcerpt(readPostDocument(post.body).text).replace(/\n/g, ' ');
+  return {
+    title: `${post.title ?? headOf(text, META_TITLE_TEXT_MAX)} | ${copy.appName}`,
+    description: headOf(text, META_DESCRIPTION_MAX),
+    robots: NOT_INDEXED,
+  };
+}
+
 // ---- refusals ------------------------------------------------------------------------------
 
 /**
@@ -246,7 +291,9 @@ export function postPlaceholderMessage(state: Exclude<PostState, 'published'>): 
  * - NOT_FOUND naming `marketId`: the market is not a public one (a draft, or gone);
  *   any other NOT_FOUND: the post was deleted meanwhile;
  * - FORBIDDEN: another account's post;
- * - ONBOARDING_REQUIRED: a consent a revision asked for again (#57-5), say — the gate follows `['me']`;
+ * - ONBOARDING_REQUIRED: a consent a revision asked for again (#57-5), say — the gate follows `['me']`
+ *   (a write and an edit only: deleting one's own post asks for a session alone, owner decision
+ *   2026-10-19);
  * - VALIDATION_ERROR on `title` or on `body`, the body's told apart by `postBodyRefusalOf` (the
  *   shared module that writes the server's messages reads them): no text, too long, too many
  *   images, or an image the writer cannot use — an upload no post took is removed after

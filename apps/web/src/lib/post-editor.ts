@@ -110,8 +110,10 @@ export function uploadContentType(file: { type: string }): string {
 const IMAGE_REFUSAL_MESSAGE: Record<ImageRefusal, string> = {
   type: copy.errImageType,
   size: copy.errImageSize,
-  pixels: copy.errImagePixels,
-  frames: copy.errImageFrames,
+  // One sentence for both (owner decision 2026-10-19): a frame too large to decode, or more
+  // frames than the decoding budget — the writer picks a smaller or shorter image either way.
+  pixels: copy.errImageTooLarge,
+  frames: copy.errImageTooLarge,
   unreadable: copy.errImageUnreadable,
   empty: copy.errImageEmpty,
 };
@@ -192,4 +194,32 @@ export const POST_TEXT_COLOR_OPTIONS: readonly PostTextColor[] = POST_TEXT_COLOR
 /** Whether a stored colour name is one of the six (a document from the API always is). */
 export function isPostTextColor(value: unknown): value is PostTextColor {
   return (POST_TEXT_COLORS as readonly unknown[]).includes(value);
+}
+
+/**
+ * Whether the write or edit form holds something leaving would lose (owner decision 2026-10-19,
+ * ADR-0073: leaving with a draft asks first): a title other than the one it started with (spaces
+ * at either end aside — the server trims them), a body the editor changed from the document it
+ * started with (`bodyChanged`: the editor's JSON compared with its own JSON when it was made), or
+ * an image still uploading.
+ */
+export function draftChanged(draft: {
+  title: string;
+  initialTitle: string | null;
+  bodyChanged: boolean;
+  uploading: boolean;
+}): boolean {
+  return (
+    draft.uploading || draft.bodyChanged || draft.title.trim() !== (draft.initialTitle ?? '').trim()
+  );
+}
+
+/**
+ * Whether the editor's document `json` differs from `baseline`, the editor's own JSON when it was
+ * made (`PostEditor`'s `onReady`, serialised): false while there is no baseline yet. The stored
+ * body is no baseline — the editor fills in attributes it leaves out — so an edit screen nobody
+ * typed in would always differ from it.
+ */
+export function bodyChangedFrom(baseline: string | null, json: unknown): boolean {
+  return baseline !== null && JSON.stringify(json) !== baseline;
 }

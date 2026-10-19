@@ -993,7 +993,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** The author deletes the post (a hidden one too): it stays as the placeholder 삭제된 글입니다 while replies hang under it, and is gone from every view otherwise. Never restored */
+        /** The author deletes the post (a hidden one too), signed in whatever their onboarding: it stays as the placeholder 삭제된 글입니다 while replies hang under it, and is gone from every view otherwise. Never restored */
         post: operations["deletePost"];
         delete?: never;
         options?: never;
@@ -6611,15 +6611,6 @@ export interface operations {
             };
             /** @description NOT_FOUND */
             404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description ONBOARDING_REQUIRED */
-            409: {
                 headers: {
                     [name: string]: unknown;
                 };

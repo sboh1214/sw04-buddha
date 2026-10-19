@@ -293,7 +293,7 @@ sudo docker compose -f /data/buddha/compose.yaml exec -T postgres \
 
 ### 운영 DB 초기화
 
-계정까지 모든 데이터와 Redis를 비우고 시드로 다시 채운다(ADR-0048). #149의 출시 전 재초기화가 이 절차를 쓰고, 다시 할지와 남길 데이터는 #133이 정한다 — 무엇이든 남기기로 하면 그 전에 이 절차를 좁힌다. 세션 안에서 `sudo bash /data/buddha/reset-db.sh --yes` — 덤프를 뜨고 api·worker를 멈춘 뒤 비우고 시드해 다시 띄운다. 끝까지 성공하면 덤프를 지우고, 실패하면 복구용으로 남긴다. 무엇이 지워지고 남는지, 확인과 실패 시 처리는 [docs/RESET.md](../docs/RESET.md). #70(마이그레이션 0031)을 배포한 뒤 오너가 정한 때 한 번 한다(오너 결정 2026-10-18, [docs/RESET.md](../docs/RESET.md#70-배포-때-오너-결정-2026-10-18)).
+계정까지 모든 데이터와 Redis를 비우고 시드로 다시 채운다(ADR-0048). #149의 출시 전 재초기화가 이 절차를 쓰고, 다시 할지와 남길 데이터는 #133이 정한다 — 무엇이든 남기기로 하면 그 전에 이 절차를 좁힌다. 세션 안에서 `sudo bash /data/buddha/reset-db.sh --yes` — 덤프를 뜨고 api·worker를 멈춘 뒤 비우고(글 이미지 버킷의 객체도, 오너 결정 2026-10-19) 시드해 다시 띄운다. 끝까지 성공하면 덤프를 지우고, 실패하면 복구용으로 남긴다. 무엇이 지워지고 남는지, 확인과 실패 시 처리는 [docs/RESET.md](../docs/RESET.md). #70(마이그레이션 0031)을 배포한 뒤 오너가 정한 때 한 번 한다(오너 결정 2026-10-18, [docs/RESET.md](../docs/RESET.md#70-배포-때-오너-결정-2026-10-18)).
 
 ### 운영자의 손 작업
 
@@ -459,7 +459,7 @@ terraform output -raw github_oidc_subject                            # 신뢰 �
 - **`terraform-iam`은 `AdministratorAccess`다.** 이 프로필로 실행하는 모든 것이 계정 전체에 닿는다. root는 쓰지 않고, 이 사용자에게 MFA를 유지한다. plan을 읽지 않고 apply하지 않는다.
 - **`ssm:SendCommand`는 인스턴스 ARN에 고정**되어 있다(`aws_instance.app.arn` + `AWS-RunShellScript` 문서). 정책 문서가 인스턴스 리소스를 참조하므로 `-replace=aws_instance.app`을 하는 같은 apply가 정책도 다시 쓴다. 콘솔에서 인스턴스를 바꾼 경우나 apply가 도중에 끊긴 경우에는 `terraform apply`를 한 번 더 돌려 ARN을 맞춘다 — 그전까지 워크플로는 `AccessDenied`로 실패한다.
 - 인스턴스 역할에 S3·CloudWatch Logs 권한은 없다. 필요해지면 `iam.tf`에 리소스 한정으로 더한다.
-- `tf-buddha-media`는 글 이미지 버킷 전용 IAM user다(`media.tf`, ADR-0073). 정책은 그 버킷 객체의 `PutObject`·`GetObject`·`DeleteObject`와 버킷의 `ListBucket`(없는 키를 403이 아니라 404로 받기 위해서)뿐이다. access key는 state와 `/tf-buddha/env`에 있고 compose가 api·worker에만 넘긴다. 인스턴스 역할을 쓰지 않는 까닭: `ec2.tf`의 IMDS hop limit 1이 컨테이너가 인스턴스 자격증명에 닿지 못하게 하는데, 2로 올리면 web·caddy를 포함한 모든 컨테이너가 S3 권한까지 얻는다.
+- `tf-buddha-media`는 글 이미지 버킷 전용 IAM user다(`media.tf`, ADR-0073). 정책은 그 버킷 객체의 `PutObject`·`GetObject`·`DeleteObject`와 버킷의 `ListBucket`(없는 키를 403이 아니라 404로 받기 위해서. DB 초기화의 `empty-cli.js`가 버킷을 비울 때도 이 둘로 나열하고 지운다)뿐이다. access key는 state와 `/tf-buddha/env`에 있고 compose가 api·worker에만 넘긴다. 인스턴스 역할을 쓰지 않는 까닭: `ec2.tf`의 IMDS hop limit 1이 컨테이너가 인스턴스 자격증명에 닿지 못하게 하는데, 2로 올리면 web·caddy를 포함한 모든 컨테이너가 S3 권한까지 얻는다.
 - `tf-buddha-ses-smtp`는 SES SMTP 인터페이스 전용 IAM user다. 정책이 identity ARN과 `ses:FromAddress = *@buddha.sboh.dev`로 좁혀져 있다. access key는 state와 `/tf-buddha/env`에 있다.
 
 ## 비용 노트

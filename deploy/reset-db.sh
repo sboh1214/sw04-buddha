@@ -1,18 +1,25 @@
 #!/usr/bin/env bash
-# Wipe the deployed database and Redis, then refill them with the seed, by the procedure in
-# docs/RESET.md. Run as root on the host, from an SSM session:
+# Wipe the deployed database, Redis and the media bucket, then refill the database with the seed,
+# by the procedure in docs/RESET.md. Run as root on the host, from an SSM session:
 # `sudo bash /data/buddha/reset-db.sh --yes`. Every account, session, market, order, fill, ledger
-# entry and payment row goes — the scope the owner chose for #125 (ADR-0048) — and the only way
-# back is the dump this script takes first. #149's pre-launch reset uses this procedure in the
-# scope #133 decides; if that keeps any data, narrow the wipe before running it.
+# entry, payment row and post goes — the scope the owner chose for #125 (ADR-0048) — and with them
+# every image in the media bucket (owner decision 2026-10-19, ADR-0073). The only way back for the
+# database is the dump this script takes first; the images have none. #149's pre-launch reset uses
+# this procedure in the scope #133 decides; if that keeps any data, narrow the wipe before running
+# it.
 #
-#   reset-db.sh --yes     # dump, stop api + worker, wipe Postgres and Redis, migrate + seed, start
+#   reset-db.sh --yes     # dump, stop api + worker, wipe Postgres, Redis and the bucket,
+#                         # migrate + seed, start
 #
 # The wipe is WIPE_PUBLIC_TABLES_SQL (packages/db/src/wipe.ts), the very statement migration 0017
 # ran once when #125 deployed, run by packages/db/dist/wipe-cli.js as buddha_migrate inside the
 # deployed api image. Redis is flushed whole: the delayed close/finalize jobs of the deleted
 # markets would otherwise fail as "not found", and the worker re-installs its repeatable jobs when
-# it starts.
+# it starts. The media bucket is emptied by packages/storage/dist/empty-cli.js in a one-off api
+# container — the api's own MEDIA_S3_* key and bucket, nothing on the host — after the database
+# wipe (never before it: a run that failed earlier leaves rows pointing at their images) and while
+# api and worker are stopped (no upload lands meanwhile). A deployment with no bucket named yet
+# (MEDIA_S3_BUCKET empty) skips it.
 #
 # The dump lives exactly as long as it can be needed (owner decision, ADR-0048): deleted once every
 # step has succeeded, kept — and its path printed — when any step fails or the run is interrupted,
@@ -26,7 +33,7 @@ ROOT=/data/buddha
 DUMPS=/data
 
 if [ "${1:-}" != "--yes" ]; then
-  echo "reset-db.sh: this deletes every account and all data on this host; pass --yes to run it" >&2
+  echo "reset-db.sh: this deletes every account and all data on this host, and every image in the media bucket; pass --yes to run it" >&2
   exit 1
 fi
 
@@ -40,10 +47,10 @@ flock -w 600 9
 
 docker compose up -d --wait postgres redis
 
-# The deployed image must carry the wipe CLI (every image built since #125 does). Checked before
-# anything is stopped, so an old tag leaves the site serving.
-if ! docker compose run --rm --no-deps migrate test -f packages/db/dist/wipe-cli.js; then
-  echo "reset-db.sh: the deployed api image has no packages/db/dist/wipe-cli.js; deploy a newer tag first" >&2
+# The deployed image must carry the wipe CLI (every image built since #125 does) and the bucket's
+# (since #46). Checked before anything is stopped, so an old tag leaves the site serving.
+if ! docker compose run --rm --no-deps migrate sh -c 'test -f packages/db/dist/wipe-cli.js && test -f packages/storage/dist/empty-cli.js'; then
+  echo "reset-db.sh: the deployed api image has no packages/db/dist/wipe-cli.js or packages/storage/dist/empty-cli.js; deploy a newer tag first" >&2
   exit 1
 fi
 
@@ -67,6 +74,8 @@ trap 'echo "reset-db.sh: failed; the pre-reset dump is kept at $DUMP for the res
 docker compose stop api worker
 docker compose run --rm --no-deps migrate node packages/db/dist/wipe-cli.js --yes
 docker compose exec -T redis redis-cli FLUSHALL
+# The images the wiped rows pointed at (skipped when no bucket is named).
+docker compose run --rm --no-deps api node packages/storage/dist/empty-cli.js --yes
 # The service's own command: pending migrations (normally none), then the seed.
 docker compose run --rm migrate
 docker compose up -d --wait --wait-timeout 300

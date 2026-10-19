@@ -247,6 +247,14 @@ describe('public and owner-only routes (static)', () => {
     const guarded = routes.filter((route) => guardsOf(route).includes(OnboardedGuard));
     // A sanity check on the walk: the interest categories are behind it today.
     expect(guarded.map((route) => route.key)).toContain('PUT /me/interest-categories');
+    // A post's writes are behind it — but not deleting one's own post, which asks for a session
+    // alone (owner decision 2026-10-19, ADR-0073): no guard and no `onboarded` mark.
+    expect(guarded.map((route) => route.key)).toEqual(
+      expect.arrayContaining(['POST /posts', 'PUT /posts/:postId', 'POST /media/images']),
+    );
+    const deletePost = routes.find((route) => route.key === 'POST /posts/:postId/delete');
+    expect(deletePost && guardsOf(deletePost)).toEqual([SessionGuard]);
+    expect(OWNER_ROUTES['POST /posts/:postId/delete']?.onboarded).toBeUndefined();
     expect(
       guarded
         .filter((route) => classOf(route) === 'owner')

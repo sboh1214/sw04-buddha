@@ -18,7 +18,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
  * deploy/reset-db.sh (docs/RESET.md), run for real by bash against stand-ins for `docker`,
  * `findmnt` and `flock`, with its two host paths pointed into a temp directory. What it pins is
  * the owner's rule for the pre-reset dump (ADR-0048): deleted once every step has succeeded,
- * kept — and named — when any step after it fails. The script lives outside this package;
+ * kept — and named — when any step after it fails; and the media bucket emptied after the wipe,
+ * under the same `--yes` (owner decision 2026-10-19, ADR-0073; the CLI's own `--yes` and its skip
+ * of a deployment with no bucket — compose's empty MEDIA_S3_* — are packages/storage's empty.test.ts,
+ * which runs the CLI's `runEmptyCli`). The script lives outside this package;
  * packages/db/turbo.json names it as an input of `test`.
  */
 
@@ -41,11 +44,14 @@ exit 0
 /** The calls a whole run makes, in order (each a substring of one logged `docker` call). */
 const STEPS = [
   'compose up -d --wait postgres redis',
-  'compose run --rm --no-deps migrate test -f packages/db/dist/wipe-cli.js',
+  'compose run --rm --no-deps migrate sh -c test -f packages/db/dist/wipe-cli.js && test -f packages/storage/dist/empty-cli.js',
   'compose exec -T postgres pg_dump -U postgres -Fc buddha',
   'compose stop api worker',
   'compose run --rm --no-deps migrate node packages/db/dist/wipe-cli.js --yes',
   'compose exec -T redis redis-cli FLUSHALL',
+  // The media bucket, after the wipe and while api and worker are stopped (owner decision
+  // 2026-10-19, ADR-0073), with the api's own variables.
+  'compose run --rm --no-deps api node packages/storage/dist/empty-cli.js --yes',
   'compose run --rm migrate',
   'compose up -d --wait --wait-timeout 300',
   'compose ps',
@@ -127,6 +133,7 @@ describe.skipIf(process.platform === 'win32')('deploy/reset-db.sh (ADR-0048)', (
   it.each([
     ['the wipe', 'wipe-cli.js --yes'],
     ['the Redis flush', 'FLUSHALL'],
+    ['emptying the bucket', 'empty-cli.js --yes'],
     ['migrate + seed', 'compose run --rm migrate'],
     ['the restart', '--wait-timeout 300'],
   ])('keeps the dump, owner-only, and says where when %s fails', (_step, failOn) => {
@@ -159,10 +166,25 @@ describe.skipIf(process.platform === 'win32')('deploy/reset-db.sh (ADR-0048)', (
     expect(result.stdout).toContain(`an earlier run's dump is still on disk: ${earlier}`);
   });
 
-  it('does nothing without --yes', () => {
+  it('does nothing without --yes, and says the bucket goes too', () => {
     const result = run([]);
     expect(result.status).toBe(1);
+    expect(result.stderr).toContain('every image in the media bucket');
     expect(loggedCalls()).toEqual([]);
     expect(dumpFiles()).toEqual([]);
+  });
+
+  it('stops before anything when the image lacks either CLI, the site still serving', () => {
+    const result = run(['--yes'], 'test -f packages/db/dist/wipe-cli.js');
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('packages/storage/dist/empty-cli.js');
+    expect(loggedCalls().join('\n')).not.toContain('stop api worker');
+    expect(dumpFiles()).toEqual([]);
+  });
+
+  it('runs CLIs that exist: the wipe’s and the bucket’s sources are where the script says', () => {
+    for (const source of ['../../db/src/wipe-cli.ts', '../../storage/src/empty-cli.ts']) {
+      expect(existsSync(new URL(source, import.meta.url)), source).toBe(true);
+    }
   });
 });

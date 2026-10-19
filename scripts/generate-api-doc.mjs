@@ -232,8 +232,10 @@ const RATE_LIMIT_NOTES = `- **버킷을 지목한 라우트는 두 번 세어진
   \`X-RateLimit-Reset\` 이 붙는다. 버킷을 지목한 라우트는 같은 이름에 \`-route\` 가 붙은 세 개를
   더 받는다. 거절될 때는 \`Retry-After\`(초)가 더 붙고 — 어느 버킷이 거절했든 접미사 없이 —,
   본문은 PLAN 7 봉투의 \`RATE_LIMITED\` 이며 \`details.retryAfterSeconds\` 에 같은 숫자가 들어 있다.
-- **\`ip\` 스코프는 API 전체가 한 통이고, 파싱과 핸들러보다 앞에서 센다.** PLAN 7.5 의 기본값은
-  주소당으로 쓰여 있으므로 경로별로 나누면 한 호출자가 경로 수만큼 100번을 쓸 수 있다. 세는 곳은
+- **\`ip\` 스코프는 경로를 가리지 않고 주소마다 세고(이미지 읽기만 따로), 파싱과 핸들러보다 앞에서 센다.** PLAN 7.5 의 기본값은
+  주소당으로 쓰여 있으므로 경로별로 나누면 한 호출자가 경로 수만큼 100번을 쓸 수 있다. 예외는 이미지
+  읽기 하나다: \`GET /api/v1/media/{mediaId}\` 는 \`default\` 가 아니라 \`mediaRead\` 에만 들고(304 포함),
+  그 응답의 \`X-RateLimit-*\` 은 그 버킷의 한도를 말한다. 세는 곳은
   Fastify 의 \`onRequest\` 훅이라 핸들러에 닿지 못하는 요청 — 파싱할 수 없는 본문(400), \`bodyLimit\`
   초과(413), 라우트 없는 경로(404) — 도 센다(라우터가 훅 이전에 직접 답하는 둘, 해독할 수 없는
   경로 400 과 \`maxParamLength\` 초과 414 만 예외다). 클라이언트를 지목할 수 없는 피어는 아예
@@ -362,7 +364,7 @@ const ERROR_NOTES = {
   SMS_SEND_UNCONFIRMED:
     'SMS 사업자의 답을 받지 못했다(502: 시간 초과, 요청이 나간 뒤 끊긴 연결, 5xx, 읽을 수 없는 답). 문자가 갔을 수 있으므로 발송으로 세고(60초 간격과 하루 한도) 그 인증번호는 확인할 수 있다. 5xx 본문은 `details` 를 싣지 않으므로 코드로 `SMS_SEND_FAILED` 와 가린다.',
   ONBOARDING_REQUIRED:
-    '그 동작에 필요한 온보딩 단계를 마치지 않은 계정이다(#58). `details.steps` 가 마치지 않은 단계를 순서대로 말한다 — `consent`(약관 동의, `POST /api/v1/me/consents`), `verification`(휴대전화 본인확인), `nickname`(닉네임 설정, `POST /api/v1/me/onboarding/nickname`). 본인확인 인증번호 요청은 약관 동의만 요구하고, 닉네임 설정은 약관 동의와 본인확인을, 온보딩을 마친 계정만 하는 동작(관심 카테고리, 모든 관리자 API, 이후의 글·좋아요·신고·제안·주문)은 세 단계를 모두 요구한다. 관리자 API는 관리자 권한을 먼저 보므로 관리자가 아닌 계정에는 `FORBIDDEN` 이다. 권리를 바꾸는 약관 개정 뒤에는 다시 동의할 때까지 `consent` 가 남는다.',
+    '그 동작에 필요한 온보딩 단계를 마치지 않은 계정이다(#58). `details.steps` 가 마치지 않은 단계를 순서대로 말한다 — `consent`(약관 동의, `POST /api/v1/me/consents`), `verification`(휴대전화 본인확인), `nickname`(닉네임 설정, `POST /api/v1/me/onboarding/nickname`). 본인확인 인증번호 요청은 약관 동의만 요구하고, 닉네임 설정은 약관 동의와 본인확인을, 온보딩을 마친 계정만 하는 동작(관심 카테고리, 모든 관리자 API, 근거 글 쓰기·수정과 이미지 올리기, 이후의 댓글·좋아요·신고·제안·주문)은 세 단계를 모두 요구한다. 자기 글 삭제는 로그인만 본다(ADR-0073). 관리자 API는 관리자 권한을 먼저 보므로 관리자가 아닌 계정에는 `FORBIDDEN` 이다. 권리를 바꾸는 약관 개정 뒤에는 다시 동의할 때까지 `consent` 가 남는다.',
   NICKNAME_NOT_ALLOWED:
     '닉네임 규칙에 맞지 않는다(#58). `details.reason` 이 까닭을 말한다 — `auto_prefix`(직접 입력한 닉네임이 자동 닉네임의 `user_` 로 시작한다. 대소문자 무관), `reserved_word`(운영자를 사칭하는 낱말이 들어 있다. 대소문자 무관, 밑줄을 빼고 견준다), `taken`(다른 계정이 대소문자만 다른 닉네임까지 포함해 쓰고 있거나, 다른 계정이 비운 지 30일이 지나지 않았다), `change_interval`(마지막 변경 뒤 30일이 지나지 않았다. `details.nextChangeAt` 이 다음 변경이 되는 시각), `already_set`(온보딩의 닉네임 설정을 이미 마쳤다. 바꾸려면 `PATCH /api/v1/me`).',
   POST_NOT_EDITABLE:
@@ -375,7 +377,9 @@ const ERROR_NOTES = {
 /** 레이트 리밋 버킷별 적용 라우트. 버킷 목록·스코프·한도는 소스에서 읽는다. */
 const RATE_LIMIT_ROUTES = {
   default:
-    '모든 HTTP 라우트. 아래 버킷을 지목한 라우트도 여기에 함께 들어간다(주소 하나당 API 전체 합산).',
+    '이미지 읽기(`mediaRead`)를 뺀 모든 HTTP 라우트. 아래 `user`·`email` 버킷을 지목한 라우트도 여기에 함께 들어간다(주소 하나당 API 전체 합산).',
+  mediaRead:
+    '`GET /api/v1/media/{mediaId}`(근거 글의 이미지 읽기, 304 포함). `default` 대신 이 버킷에만 든다(오너 결정 2026-10-19, ADR-0073) — API가 이미지를 쓸 때마다 다시 확인하므로(no-cache + ETag) 이미지를 그릴 때마다 요청이 하나이고, 썸네일이 있는 목록이나 이미지가 많은 글을 읽는 것만으로 기본 100/분에 닿을 수 있어서다. PLAN 7.5 의 표에는 없다.',
   charge: '`POST /api/v1/payments/charge`',
   coupon: '`POST /api/v1/coupons/redeem`',
   searchHistory:
@@ -392,7 +396,7 @@ const RATE_LIMIT_ROUTES = {
 
 /** 레이트 리밋 스코프의 뜻(`RateLimitScope`). */
 const RATE_LIMIT_SCOPES = {
-  ip: '클라이언트 주소 (API 전체에 하나)',
+  ip: '클라이언트 주소 (라우트를 가리지 않고 버킷마다 하나. 요청 하나는 주소 버킷 하나에만 든다)',
   user: '로그인 계정 (라우트별)',
   email: '본문이 지목한 이메일 주소 (라우트별)',
 };

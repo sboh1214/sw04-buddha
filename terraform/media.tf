@@ -17,7 +17,8 @@ resource "aws_s3_bucket" "media" {
   }
 
   # The images of every post. Destroying the bucket must be an explicit, manual act, as for the
-  # data volume (storage.tf); a database reset does not empty it (docs/RESET.md).
+  # data volume (storage.tf). The database reset empties it — its objects, never the bucket
+  # (deploy/reset-db.sh, docs/RESET.md; owner decision 2026-10-19, ADR-0073).
   lifecycle {
     prevent_destroy = true
   }
@@ -111,11 +112,13 @@ resource "aws_iam_user" "media" {
   }
 }
 
-# Exactly what @buddha/storage's S3 driver calls: PutObject (an upload), GetObject (a read the API
-# serves), DeleteObject (the worker's orphan clean-up). ListBucket is there for one reason: without
-# it S3 answers a GetObject of a missing key with 403 AccessDenied instead of 404 NoSuchKey, and the
+# Exactly what @buddha/storage calls: PutObject (an upload), GetObject (a read the API serves),
+# DeleteObject (the worker's orphan clean-up). ListBucket is there first because without it S3
+# answers a GetObject of a missing key with 403 AccessDenied instead of 404 NoSuchKey, and the
 # driver reads only the 404 as "no object" (packages/storage/src/s3.ts) — a row whose object is gone
-# would be a 500 instead of the image's 404. The app itself never lists.
+# would be a 500 instead of the image's 404. The app itself never lists: the one caller that lists
+# (and deletes the listing with DeleteObjects, which S3 authorises as DeleteObject) is the database
+# reset's empty-cli.js, run in a one-off api container with this key (deploy/reset-db.sh).
 data "aws_iam_policy_document" "media_app" {
   statement {
     sid = "ReadWriteMediaObjects"

@@ -49,9 +49,9 @@ interface ParsedContent {
 /**
  * `/api/v1/posts` (#46, ADR-0073): 근거 글. The list and a post are public — anyone reads, signed in
  * or not (N05 §2) — and name the author by public id, nickname, image and 운영자 mark only
- * (ADR-0069 decision 5; registry.ts `showsPerson`). Writing, editing and deleting are the author's,
- * open to accounts that finished the onboarding (#57-8, OnboardedGuard), each naming the account
- * the screen shows (`expectedAccountId`).
+ * (ADR-0069 decision 5; registry.ts `showsPerson`). Writing and editing are open to accounts that
+ * finished the onboarding (#57-8, OnboardedGuard), deleting one's own post to any signed-in author
+ * (owner decision 2026-10-19), each naming the account the screen shows (`expectedAccountId`).
  *
  * `postListQuerySchema` carries no `.meta({ id })`, so swagger expands it into one parameter per
  * field by itself (markets.controller.ts says why no `@ApiQuery` sits beside it).
@@ -144,19 +144,25 @@ export class PostsController {
   /**
    * A POST rather than a DELETE, as the search history's deletes are: the body names the account
    * the screen shows, and OpenAPI 3.0 leaves a DELETE's body undefined.
+   *
+   * Signed in is enough — no OnboardedGuard (owner decision 2026-10-19, ADR-0073): an author whose
+   * consent a revision asks for again, or who has not finished the onboarding for any other reason,
+   * still deletes their own post, as a restriction from writing (#185) leaves deleting open
+   * (ADR-0069 decision 2 #45-12).
    */
   @Post(':postId/delete')
   @HttpCode(200)
-  @UseGuards(SessionGuard, OnboardedGuard)
+  @UseGuards(SessionGuard)
   @ApiCookieAuth(SESSION_SECURITY_SCHEME)
   @ApiOperation({
     operationId: 'deletePost',
     summary:
-      'The author deletes the post (a hidden one too): it stays as the placeholder 삭제된 글입니다 ' +
-      'while replies hang under it, and is gone from every view otherwise. Never restored',
+      'The author deletes the post (a hidden one too), signed in whatever their onboarding: it ' +
+      'stays as the placeholder 삭제된 글입니다 while replies hang under it, and is gone from every ' +
+      'view otherwise. Never restored',
   })
   @ApiData(postDeletionSchema)
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR', 'ONBOARDING_REQUIRED')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
   delete(
     @CurrentUser() user: SessionUser,
     @Param('postId', { schema: uuidParamSchema }) postId: string,
