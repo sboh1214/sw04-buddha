@@ -1,22 +1,81 @@
 /**
  * The operator's phone-hash CLI (docs/OPERATIONS.md, owner decision 2026-10-18, ADR-0071): what
- * it prints for what is typed, and that it never prints the key or a secret of the environment.
- * Pure: the entry (phone-hash-cli.ts) only wires these to stdin, stdout and `loadEnv`.
+ * it prints for what is typed, that it never prints the key or a secret of the environment, and
+ * the confirmation code it picks (`--code`, ADR-0071 7-29). Pure: the entry (phone-hash-cli.ts)
+ * only wires these to stdin, stdout and `loadEnv`.
  */
-import { describe, expect, it } from 'vitest';
+import * as crypto from 'node:crypto';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { envSchema } from '../config/env.js';
 import { phoneHash } from './phone-hash.js';
-import { describeEnvError, phoneHashCliFormat, phoneHashCliLine } from './phone-hash-operator.js';
+import {
+  describeEnvError,
+  operatorConfirmationCode,
+  phoneHashCliLine,
+  phoneHashCliMode,
+} from './phone-hash-operator.js';
+
+vi.mock('node:crypto', async (importOriginal) => {
+  const actual = await importOriginal<typeof crypto>();
+  return { ...actual, randomInt: vi.fn(actual.randomInt) };
+});
+
+afterEach(() => {
+  vi.mocked(crypto.randomInt).mockClear();
+});
 
 const KEY = 'operator-test-phone-hash-key-0123456789';
 
-describe('phoneHashCliFormat', () => {
-  it('takes no argument (a hash per line) or --psql, and nothing else', () => {
-    expect(phoneHashCliFormat([])).toBe('hash');
-    expect(phoneHashCliFormat(['--psql'])).toBe('psql');
+describe('phoneHashCliMode', () => {
+  it('takes no argument (a hash per line), --psql or --code, and nothing else', () => {
+    expect(phoneHashCliMode([])).toBe('hash');
+    expect(phoneHashCliMode(['--psql'])).toBe('psql');
+    expect(phoneHashCliMode(['--code'])).toBe('code');
     // Not a number on the command line: it would stay in the shell history.
-    for (const argv of [['01012345678'], ['--psql', '01012345678'], ['--key'], ['-p']]) {
-      expect(phoneHashCliFormat(argv), argv.join(' ')).toBeNull();
+    for (const argv of [
+      ['01012345678'],
+      ['--psql', '01012345678'],
+      ['--code', '--psql'],
+      ['--code', '6'],
+      ['--key'],
+      ['-p'],
+    ]) {
+      expect(phoneHashCliMode(argv), argv.join(' ')).toBeNull();
+    }
+  });
+});
+
+describe('operatorConfirmationCode', () => {
+  it('is six digits, leading zeros kept, over the whole range', () => {
+    expect(operatorConfirmationCode(() => 0)).toBe('000000');
+    expect(operatorConfirmationCode(() => 42)).toBe('000042');
+    expect(operatorConfirmationCode((_min, max) => max - 1)).toBe('999999');
+    const draw = vi.fn((min: number) => min);
+    operatorConfirmationCode(draw);
+    expect(draw).toHaveBeenCalledWith(0, 1_000_000);
+  });
+
+  it('draws from node:crypto’s CSPRNG by default, not Math.random', () => {
+    // Codex review (ADR-0071 7-29): the code is the only proof the requester holds the new number.
+    const random = vi.spyOn(Math, 'random');
+    const codes = Array.from({ length: 200 }, () => operatorConfirmationCode());
+    for (const code of codes) expect(code).toMatch(/^\d{6}$/);
+    // node:crypto's randomInt, asked for the whole range [0, 10^6) every time.
+    expect(crypto.randomInt).toHaveBeenCalledTimes(200);
+    expect(
+      vi.mocked(crypto.randomInt).mock.calls.every(([min, max]) => min === 0 && max === 1_000_000),
+    ).toBe(true);
+    expect(random).not.toHaveBeenCalled();
+    random.mockRestore();
+    expect(new Set(codes).size).toBeGreaterThan(150);
+  });
+
+  it('pads whatever the CSPRNG returns to six digits', () => {
+    for (const value of [0, 7, 99_999, 100_000, 999_999]) {
+      vi.mocked(crypto.randomInt).mockImplementationOnce(() => value);
+      const code = operatorConfirmationCode();
+      expect(code).toMatch(/^\d{6}$/);
+      expect(Number(code)).toBe(value);
     }
   });
 });

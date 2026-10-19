@@ -1,3 +1,4 @@
+import { randomInt } from 'node:crypto';
 import { phoneSchema } from '@buddha/shared';
 import { ZodError } from 'zod';
 import { phoneHash } from './phone-hash.js';
@@ -8,11 +9,13 @@ import { phoneHash } from './phone-hash.js';
  * is tested. An operator who changes a member's number by hand (ADR-0069 #57-3) records the new
  * number as one that received the start Coin, and SQL cannot compute the hash without the key —
  * so the CLI does it inside the api container, with the deployment's PHONE_HASH_KEY, and prints
- * the hash only, never the key (docs/OPERATIONS.md).
+ * the hash only, never the key (docs/OPERATIONS.md). The same CLI picks the confirmation code
+ * the operator texts to the new number before changing it (`--code`, ADR-0071 7-29).
  */
 
 export const PHONE_HASH_CLI_USAGE =
-  'usage: phone-hash-cli.js [--psql] — mobile numbers on stdin, one per line';
+  'usage: phone-hash-cli.js [--psql] — mobile numbers on stdin, one per line; ' +
+  'phone-hash-cli.js --code — one 6-digit confirmation code';
 
 /**
  * - `hash`: one line per number, its hash (64 lower-case hex) — the stable value of `phoneHash`;
@@ -22,11 +25,32 @@ export const PHONE_HASH_CLI_USAGE =
  */
 export type PhoneHashCliFormat = 'hash' | 'psql';
 
-/** The CLI's arguments: none, or `--psql`. Null for anything else (a usage error). */
-export function phoneHashCliFormat(argv: readonly string[]): PhoneHashCliFormat | null {
+/**
+ * What the CLI does: hash the numbers typed (`hash` or `psql`), or `code` — read nothing, use no
+ * key, print one confirmation code (`operatorConfirmationCode`).
+ */
+export type PhoneHashCliMode = PhoneHashCliFormat | 'code';
+
+/** The CLI's arguments: none, `--psql` or `--code`. Null for anything else (a usage error). */
+export function phoneHashCliMode(argv: readonly string[]): PhoneHashCliMode | null {
   if (argv.length === 0) return 'hash';
   if (argv.length === 1 && argv[0] === '--psql') return 'psql';
+  if (argv.length === 1 && argv[0] === '--code') return 'code';
   return null;
+}
+
+/**
+ * The 6-digit code step 1 of docs/OPERATIONS.md texts to the new number, which the member sends
+ * back from the account's email (owner decisions 2026-10-19 3차, answer 1, and 4차, answer 2):
+ * leading zeros kept, every one of the 10^6 codes equally likely, drawn from node:crypto's CSPRNG.
+ * It is the only proof that the requester holds the new number, so it must not be predictable —
+ * not PostgreSQL's `random()`, which is no CSPRNG (Codex review, ADR-0071 7-29). `draw` is
+ * `randomInt(min, max)` (max exclusive); the tests pass their own.
+ */
+export function operatorConfirmationCode(
+  draw: (min: number, max: number) => number = (min, max) => randomInt(min, max),
+): string {
+  return String(draw(0, 1_000_000)).padStart(6, '0');
 }
 
 export type PhoneHashCliLine = { ok: true; lines: string[] } | { ok: false; error: string };

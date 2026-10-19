@@ -4,25 +4,35 @@
 //
 //   sudo docker compose -f /data/buddha/compose.yaml exec api node apps/api/dist/identity/phone-hash-cli.js --psql
 //
-// and locally `corepack pnpm --filter api run phone-hash [--psql]` after a build (the .env's key,
-// or the development key outside production). Numbers come on stdin, one per line — typed, so
-// they stay out of the shell history and the process list — and only the hashes go to stdout
-// (phone-hash-operator.ts). The key itself is never printed. The environment is checked as the
-// API checks it (`loadEnv`): production refuses to run without a valid PHONE_HASH_KEY.
+// and locally `corepack pnpm --filter api run phone-hash [--psql | --code]` after a build (the
+// .env's key, or the development key outside production). Numbers come on stdin, one per line —
+// typed, so they stay out of the shell history and the process list — and only the hashes go to
+// stdout (phone-hash-operator.ts). The key itself is never printed. The environment is checked as
+// the API checks it (`loadEnv`): production refuses to run without a valid PHONE_HASH_KEY.
+//
+// `--code` prints the 6-digit confirmation code step 1 of the doc texts to the new number, from
+// node:crypto's CSPRNG (ADR-0071 7-29), and exits: it reads no input and uses no key, so it does
+// not read the environment either.
 import { createInterface } from 'node:readline';
 import { DEV_PHONE_HASH_KEY, loadEnv, phoneHashKey } from '../config/env.js';
 import {
   PHONE_HASH_CLI_USAGE,
   describeEnvError,
-  phoneHashCliFormat,
+  operatorConfirmationCode,
   phoneHashCliLine,
+  phoneHashCliMode,
 } from './phone-hash-operator.js';
 
-const format = phoneHashCliFormat(process.argv.slice(2));
-if (format === null) {
+const mode = phoneHashCliMode(process.argv.slice(2));
+if (mode === null) {
   console.error(`[phone-hash] ${PHONE_HASH_CLI_USAGE}`);
   process.exit(2);
 }
+if (mode === 'code') {
+  console.log(operatorConfirmationCode());
+  process.exit(0);
+}
+const format = mode;
 
 let key: string;
 try {

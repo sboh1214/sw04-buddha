@@ -3,10 +3,11 @@
  * 2026-10-19, 2026-10-19 3차 and 4차, ADR-0071): the SQL docs/OPERATIONS.md gives, verbatim, and
  * what it does when run as buddha_app the way the doc runs it — psql, BEGIN, the statements, then
  * the COMMIT or ROLLBACK the doc's result table gives for what they returned, with psql's variables
- * written in. The account lookup, the pre-check of the new number and the confirmation code that
- * come before any confirmation SMS (step 1) are run the same way. The keyed hash of the new number
- * comes from the API's phone-hash CLI there; here any 64-hex value stands for it (this package has
- * no key). Skips the database part when TEST_* are unset.
+ * written in. The account lookup and the pre-check of the new number that come before any
+ * confirmation SMS (step 1) are run the same way. The keyed hash of the new number and the
+ * confirmation code come from the API's phone-hash CLI there (its own tests,
+ * apps/api/src/identity/phone-hash-operator.test.ts); here any 64-hex value stands for the hash
+ * (this package has no key). Skips the database part when TEST_* are unset.
  */
 import { readFileSync } from 'node:fs';
 import { and, eq, isNull, sql } from 'drizzle-orm';
@@ -14,7 +15,6 @@ import { Client, type DatabaseError, type QueryResult } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   OPERATOR_ACCOUNT_LOOKUP_SQL,
-  OPERATOR_CONFIRMATION_CODE_SQL,
   OPERATOR_NUMBER_PRECHECK_SQL,
   OPERATOR_PHONE_CHANGE_SQL,
 } from './phone-change.js';
@@ -48,6 +48,14 @@ const REFUSAL_REPLY = `'${REFUSAL_SENTENCE}'라고만`;
 
 /** The fixed text of the confirmation SMS (owner, 2026-10-19 4차, answer 2). */
 const SMS_BLOCK = '```text\n[buddha] 번호 변경 확인 번호 NNNNNN\n```';
+
+/**
+ * How step 1 picks the confirmation code: the API's CLI in the api container, from node:crypto's
+ * CSPRNG — not PostgreSQL's random(), which is no CSPRNG (Codex review, ADR-0071 7-29).
+ */
+const CODE_COMMAND =
+  'sudo docker compose -f /data/buddha/compose.yaml exec api node apps/api/dist/identity/phone-hash-cli.js --code';
+const CODE_BLOCK = ['```bash', CODE_COMMAND, '```'].join('\n');
 
 /** The psql variables a statement uses, `:'name'`. */
 function variablesOf(text: string): string[] {
@@ -214,7 +222,7 @@ describe('the operator phone change (docs/OPERATIONS.md)', () => {
     expect(OPERATIONS).toContain(
       ['```sql', "\\set user_id '<찾은 계정 id>'", OPERATOR_NUMBER_PRECHECK_SQL, '```'].join('\n'),
     );
-    expect(OPERATIONS).toContain(['```sql', OPERATOR_CONFIRMATION_CODE_SQL, '```'].join('\n'));
+    expect(OPERATIONS).toContain(CODE_BLOCK);
   });
 
   it('names its psql variables and nothing else, and none inside the DO block', () => {
@@ -222,7 +230,6 @@ describe('the operator phone change (docs/OPERATIONS.md)', () => {
     expect(variablesOf(OPERATOR_ACCOUNT_LOOKUP_SQL)).toEqual(['sender']);
     // The pre-check takes what the change takes: the lookup's id and the CLI's two lines.
     expect(variablesOf(OPERATOR_NUMBER_PRECHECK_SQL)).toEqual(['new_hash', 'new_phone', 'user_id']);
-    expect(variablesOf(OPERATOR_CONFIRMATION_CODE_SQL)).toEqual([]);
     // psql writes no variable into a dollar-quoted body: the DO block reads the two values the
     // SET LOCAL lines just before it hand over, and nothing else.
     expect(DO_BODY).toContain('RAISE EXCEPTION');
@@ -237,12 +244,8 @@ describe('the operator phone change (docs/OPERATIONS.md)', () => {
       "SET LOCAL phone_change.user_id = :'user_id'",
       "SET LOCAL phone_change.new_hash = :'new_hash'",
     ]);
-    // The three statements of step 1 only read.
-    for (const text of [
-      OPERATOR_ACCOUNT_LOOKUP_SQL,
-      OPERATOR_NUMBER_PRECHECK_SQL,
-      OPERATOR_CONFIRMATION_CODE_SQL,
-    ]) {
+    // The two statements of step 1 only read.
+    for (const text of [OPERATOR_ACCOUNT_LOOKUP_SQL, OPERATOR_NUMBER_PRECHECK_SQL]) {
       expect(statementsIn(text)).toHaveLength(1);
       expect(text).toMatch(/^SELECT /);
     }
@@ -257,7 +260,7 @@ describe('the operator phone change (docs/OPERATIONS.md)', () => {
     const authenticated = text.indexOf('그 판정이 다음 둘 가운데 하나이면 통과다');
     const lookup = text.indexOf(OPERATOR_ACCOUNT_LOOKUP_SQL);
     const precheck = text.indexOf(OPERATOR_NUMBER_PRECHECK_SQL);
-    const code = text.indexOf(OPERATOR_CONFIRMATION_CODE_SQL);
+    const code = text.indexOf(CODE_BLOCK);
     const sms = text.indexOf(SMS_BLOCK);
     expect(authenticated).toBeGreaterThan(-1);
     expect(lookup).toBeGreaterThan(authenticated);
@@ -295,7 +298,7 @@ describe('the operator phone change (docs/OPERATIONS.md)', () => {
     expect(after).toContain('하나라도 `t`이면 거절한다 — 문자를 보내지 않고 거절의 문장만 알린다');
     expect(after).toContain('둘 다 `f`일 때만 확인 번호를 뽑는다');
     expect(after.indexOf('둘 다 `f`일 때만 확인 번호를 뽑는다')).toBeLessThan(
-      after.indexOf(OPERATOR_CONFIRMATION_CODE_SQL),
+      after.indexOf(CODE_BLOCK),
     );
     // Each column names the step 5 refusal it stands for.
     expect(after).toContain('`other_verified`는 새 번호가 다른 계정이 본인확인한 번호인지');
@@ -346,6 +349,25 @@ describe('the operator phone change (docs/OPERATIONS.md)', () => {
     expect(sectionOf('**거절의 문장.**', '```text')).toContain(
       '확인 번호를 세 번 보내도 맞는 답이 오지 않을 때',
     );
+  });
+
+  it('picks the confirmation code with the CLI’s CSPRNG, not PostgreSQL random()', () => {
+    // Codex review (ADR-0071 7-29): the code is the only proof the requester holds the new number,
+    // so it comes from node:crypto's randomInt (the CLI's own tests check the draw), and no step
+    // of the doc picks it in psql.
+    const text = step1();
+    const code = text.indexOf(CODE_BLOCK);
+    expect(code).toBeGreaterThan(-1);
+    expect(text.lastIndexOf(CODE_BLOCK)).toBe(code);
+    const before = text.slice(0, code);
+    expect(before).toContain(
+      '확인 번호는 3단계의 CLI를 `--code`로 띄워 뽑은 무작위 6자리 숫자다(앞의 0도 자리다)',
+    );
+    expect(before).toContain('CLI는 Node의 암호용 난수(`crypto.randomInt`)로 뽑는다');
+    expect(before).toContain('PostgreSQL의 `random()`은 암호용 난수가 아니어서 쓰지 않는다');
+    const sqlBlocks = [...OPERATIONS.matchAll(/```sql\n([\s\S]*?)```/g)].map((m) => m[1]!);
+    expect(sqlBlocks.length).toBeGreaterThan(0);
+    for (const block of sqlBlocks) expect(block).not.toMatch(/random\s*\(/i);
   });
 
   it('passes sender authentication on SPF and DKIM for the sender’s domain, or on DMARC, read from the operator’s own provider', () => {
@@ -1153,22 +1175,6 @@ describe.skipIf(!hasTestDb())('the operator phone change (integration)', () => {
     // A withdrawn account (#140 deletes its 본인확인 record) is not one to change either.
     await withdraw(member.id);
     expect(await lookup('member@test.local')).toEqual([{ id: member.id, verified: false }]);
-  });
-
-  it('picks a confirmation code of six digits, leading zeros kept, read only', async () => {
-    // Step 1 (owner decision 2026-10-19 3차, answer 1): the code texted to the new number.
-    const codes: string[] = [];
-    for (let i = 0; i < 200; i++) {
-      const rows = await read<{ code: string }>(OPERATOR_CONFIRMATION_CODE_SQL, {});
-      expect(rows).toHaveLength(1);
-      codes.push(rows[0]!.code);
-    }
-    for (const code of codes) expect(code).toMatch(/^\d{6}$/);
-    expect(new Set(codes).size).toBeGreaterThan(150);
-    // The whole range, not a narrowed one padded with zeros (`random() * 100000` would start every
-    // code with 0 and still be six digits, nearly all distinct): the first digit takes most of its
-    // ten values in 200 codes (fewer than 8 has odds below 1e-28).
-    expect(new Set(codes.map((c) => c[0])).size).toBeGreaterThanOrEqual(8);
   });
 
   it('changes nothing for an unknown account, and refuses a number another account verified', async () => {

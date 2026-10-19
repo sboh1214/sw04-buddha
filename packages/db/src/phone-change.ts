@@ -14,11 +14,11 @@
  * last code the operator texted to it — at most three codes per request (owner decisions
  * 2026-10-19, answer 1, 3차, answers 1 and 2, and 4차, answers 1 and 2; the account is looked up
  * first, OPERATOR_ACCOUNT_LOOKUP_SQL, and looked up again for the reply's sender, which must give
- * the same id, still verified; the code comes from OPERATOR_CONFIRMATION_CODE_SQL and is noted with
- * the number it was texted to, which the CLI's `new_phone` line must match digit for digit —
- * ADR-0071 7-29 to 7-32), in one transaction with psql's ON_ERROR_ROLLBACK off, reading the
- * results first and then ending it with the COMMIT or ROLLBACK the doc's result table gives for
- * them:
+ * the same id, still verified; the code comes from the same CLI's `--code` — node:crypto's
+ * CSPRNG, not PostgreSQL's random() — and is noted with the number it was texted to, which the
+ * CLI's `new_phone` line must match digit for digit — ADR-0071 7-29 to 7-32), in one transaction
+ * with psql's ON_ERROR_ROLLBACK off, reading the results first and then ending it with the COMMIT
+ * or ROLLBACK the doc's result table gives for them:
  *
  * 1. The number itself, `UPDATE 1` (0: no such account). `phone_verifications.phone` stays UNIQUE
  *    and digits only (its constraints — another account's verified number is a 23505 here), and
@@ -60,7 +60,7 @@
  * before the confirmation SMS what it could see then, so these come only from what changed after
  * it (ADR-0071 7-31).
  *
- * Kept here with the procedure's three read-only statements below, each one text in two places
+ * Kept here with the procedure's two read-only statements below, each one text in two places
  * like the wipe statement (wipe.ts): phone-change.test.ts reads docs/OPERATIONS.md for them and
  * runs them against the test database the way psql does.
  */
@@ -121,14 +121,3 @@ export const OPERATOR_NUMBER_PRECHECK_SQL = `SELECT EXISTS (SELECT 1 FROM phone_
     EXISTS (SELECT 1 FROM start_grant_numbers n JOIN start_grants g ON g.id = n.grant_id
       WHERE n.phone_hash = :'new_hash' AND n.released_at IS NULL
         AND g.user_id <> :'user_id' AND g.granted_at IS NULL) AS other_waiting;`;
-
-/**
- * The 6-digit confirmation code step 1 texts to the new number once the pre-check passes (owner
- * decision 2026-10-19 3차, answer 1): six digits, leading zeros kept, picked at random so that
- * only the phone receiving the text knows it — the member sends it back from the account's email
- * (ADR-0071 7-29). The text is fixed, '[buddha] 번호 변경 확인 번호 NNNNNN'; the code is valid
- * for 30 minutes from the SMS, a new one replaces it, and a request gets at most three (4차,
- * answer 2, ADR-0071 7-32) — the operator notes each with its number and the time it was sent.
- * Read only, no variable.
- */
-export const OPERATOR_CONFIRMATION_CODE_SQL = `SELECT to_char(floor(random() * 1000000), 'FM000000') AS code;`;
