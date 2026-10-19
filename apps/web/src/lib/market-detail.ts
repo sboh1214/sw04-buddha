@@ -37,8 +37,8 @@ export type CopiedSection = 'background' | 'rules' | 'judging';
 /**
  * The sections both widths draw from one element in one DOM place. The ones that hold state or
  * fetch are here — the chart and its range, the switch and 최근 체결 (`activity`), 요약 with 관심
- * 등록, 내 포지션, 관련 시장 with its query and its cards' socket rooms — and are mounted once: the
- * two orders differ only in where the three copied sections stand around them.
+ * 등록, 내 포지션, 토론 with its query, 관련 시장 with its query and its cards' socket rooms — and are
+ * mounted once: the two orders differ only in where the three copied sections stand around them.
  */
 export type SharedSection =
   'summary' | 'chart' | 'activity' | 'position' | 'discussion' | 'related';
@@ -58,7 +58,9 @@ export type SharedSection =
  * - `position`: 내 포지션, and 내 대기 주문 (#123) under it, for a signed-in reader — or, for a
  *   signed-out visitor, the one sign-in prompt that stands for all the personal areas
  *   (`personalAreaView`).
- * - `discussion`: 토론 (#47).
+ * - `discussion`: 토론 (#47, ADR-0075) — this market's posts as the community list's cards, newest
+ *   first, every one of them in the detail a 더 보기 at a time, the count beside the heading and
+ *   글쓰기 always there (ADR-0069 decision 4 #47). Public, so it is in the server's HTML.
  * - `related`: 관련 시장 (#65, ADR-0068), the last of N02 §4's list at both widths — the markets an
  *   admin linked to this one, as the home's cards in 추천 order, or a notice that there are none
  *   (ADR-0061 decision 1, item 19). Public (item 18), so it is in the server's HTML.

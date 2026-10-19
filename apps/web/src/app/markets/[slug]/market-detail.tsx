@@ -53,6 +53,7 @@ import {
 import { HEADER_HEIGHT_PX } from '@/lib/nav';
 import { type RecentMove, recentMove } from '@/lib/ticks';
 import { useSession } from '@/lib/use-session';
+import { MarketDiscussion } from './market-discussion';
 
 /**
  * The live half of 시장 상세: everything that a `market:tick` or a `market:status` may change
@@ -72,11 +73,11 @@ import { useSession } from '@/lib/use-session';
  * The frame (#122, ADR-0067) is N02 §4's list in the owner's order (ADR-0061 decision 1, item 16;
  * approved from this PR's screenshots, owner decisions 2026-10-17): 요약 — the question with its
  * category, status, countdown, 관심 등록, YES·NO, 거래량 and 참여자 — then 배경, 규칙·출처·마감, 공개
- * 판정 기록, the chart, 호가창 with 최근 체결 and 내 거래, 내 포지션 and 내 대기 주문, 토론, and then
- * 관련 시장 (#65, ADR-0068). The order at each width is `lib/market-detail.ts`'s — the sections
- * are rendered by iterating `DETAIL_SLOTS`, where 배경, 규칙 and 공개 판정 기록 have one copy for each
- * width's place, so the DOM holds what each width draws in the order it draws it — and this file
- * builds each section and lays the two columns out.
+ * 판정 기록, the chart, 호가창 with 최근 체결 and 내 거래, 내 포지션 and 내 대기 주문, 토론 (#47,
+ * ADR-0075), and then 관련 시장 (#65, ADR-0068). The order at each width is
+ * `lib/market-detail.ts`'s — the sections are rendered by iterating `DETAIL_SLOTS`, where 배경, 규칙
+ * and 공개 판정 기록 have one copy for each width's place, so the DOM holds what each width draws in
+ * the order it draws it — and this file builds each section and lays the two columns out.
  *
  * - From md up: two columns. The left one holds every section; the right one is the order panel,
  *   sticky under the header so it stays beside the chart and the 호가 while the page scrolls (N02
@@ -89,11 +90,11 @@ import { useSession } from '@/lib/use-session';
  *   거래 내역 (최근 체결 and 내 거래), then the rest (N02 §4). The order panel is a bottom sheet
  *   opened from a YES 매수 · NO 매수 bar on an open market (`OrderEntryBar`); a signed-out visitor
  *   finds a sign-in prompt in it instead of 거래 준비 중 (N02 §2).
- * - Sections whose content another issue brings — 호가창, 내 거래, 내 대기 주문, 공개 판정 기록,
- *   토론 — are their title and 준비 중 (`ComingSoonSection`, the owner's #122 row). The personal
- *   areas — 내 포지션, 내 거래 and 내 대기 주문 — are drawn for a signed-in reader only; a signed-out
- *   visitor gets one sign-in prompt where 내 포지션 · 내 대기 주문 stand, and neither is ever in the
- *   server's HTML (`personalAreaView`).
+ * - Sections whose content another issue brings — 호가창, 내 거래, 내 대기 주문, 공개 판정 기록 —
+ *   are their title and 준비 중 (`ComingSoonSection`, the owner's #122 row). The personal areas —
+ *   내 포지션, 내 거래 and 내 대기 주문 — are drawn for a signed-in reader only; a signed-out visitor
+ *   gets one sign-in prompt where 내 포지션 · 내 대기 주문 stand, and neither is ever in the server's
+ *   HTML (`personalAreaView`).
  */
 
 /**
@@ -268,7 +269,11 @@ export function MarketDetail({
         <ComingSoonSection title={copy.marketMyOpenOrders} testId="market-my-open-orders" />
       </PersonalArea>
     ),
-    discussion: <ComingSoonSection title={copy.marketDiscussion} testId="market-discussion" />,
+    // 토론 (#47, ADR-0075): this market's posts as the community list's cards, newest first, every
+    // one of them a 더 보기 at a time, the count beside the heading and 글쓰기 always there. Public,
+    // so the page read its first page on the server (market-discussion.tsx). One slot at both
+    // widths: it holds a query.
+    discussion: <MarketDiscussion marketId={marketId} />,
     // 관련 시장 (#65, ADR-0068), after 토론: the last of N02 §4's list, at both widths. Public, so
     // the page renders it with the first page it read (related-markets.tsx).
     related,

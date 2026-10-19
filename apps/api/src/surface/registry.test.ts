@@ -548,7 +548,7 @@ describe('the public API document (static)', () => {
     expect(missing).toEqual([]);
   });
 
-  it('shows a person only where a public route says why, and then by its public face alone (#46, #48)', () => {
+  it('shows a person only where a public route says why, and then by its public face alone (#46, #47, #48)', () => {
     // ADR-0069 decision 5: a public answer may name a person — a post's or a comment's author — only on a route
     // registered with the reason, and then by the public id, the nickname, the image and the
     // 운영자 mark. The account id stays forbidden there (the `counterparty` item of PRIVATE_DATA,
@@ -559,6 +559,7 @@ describe('the public API document (static)', () => {
       .map(([key]) => key);
     expect(showing.sort()).toEqual([
       'GET /comments/:commentId/replies',
+      'GET /markets/:id/posts',
       'GET /posts',
       'GET /posts/:postId',
       'GET /posts/:postId/comments',

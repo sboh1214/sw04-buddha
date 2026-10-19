@@ -7,10 +7,12 @@ import { LiveQuestionHeading } from '@/components/market/live-question-heading';
 import { LiveRulesSection } from '@/components/market/live-rules-section';
 import { copy } from '@/copy';
 import {
+  fetchMarketPostsPageServer,
   fetchMarketServer,
   fetchRelatedMarketsPageServer,
   fetchTicksServer,
 } from '@/lib/api.server';
+import { prefetchMarketPosts } from '@/lib/discussion';
 import { dehydratePublic, relatedMarketsKey } from '@/lib/market-keys';
 import { detailWindowEnd, prefetchRelatedMarkets, seedMarketDetail } from '@/lib/market-ssr';
 import { getQueryClient } from '@/lib/query-client';
@@ -31,7 +33,8 @@ import { RelatedMarkets } from './related-markets';
  * Nothing personal is read here. `api.server.ts` forwards no cookie and `dehydratePublic`
  * filters the private roots, so the HTML is byte-identical for a signed-in and an anonymous
  * visitor; 내 포지션, the personal slots (내 거래, 내 대기 주문) — or a signed-out visitor's one
- * sign-in prompt in their place — and the balance chip fill in on the client.
+ * sign-in prompt in their place — and the balance chip fill in on the client. 토론's 글쓰기 is one
+ * link for everyone (market-discussion.tsx), so it does not tell visitors apart either.
  */
 
 /**
@@ -77,15 +80,18 @@ export default async function MarketPage({ params }: { params: Promise<{ slug: s
   // this screen and it reports its own failure, while the question and the 규칙 below are
   // already in hand. Only the row may 404 or 500 this route (api.server.ts).
   //
-  // 관련 시장 (#65) is read beside it, as the home reads its list (`prefetchRelatedMarkets`), so
-  // the section's first page is in the HTML. Public (ADR-0061 decision 1, item 18), so it is the
-  // same page for every visitor. The two reads run together, so the page waits for the slower of
-  // them; the related read is tried once, never retried here, and a failure is swallowed — the
-  // section then reads its page in the browser and shows its own failure (lib/market-ssr.ts).
+  // 관련 시장 (#65) and 토론 (#47) are read beside it, as the home reads its list
+  // (`prefetchRelatedMarkets`, `prefetchMarketPosts`), so each section's first page — and 토론's
+  // count — is in the HTML. Both are public (ADR-0061 decision 1, item 18; N02 §2 «공개 토론»), so
+  // this is the same page for every visitor. The reads run together, so the page waits for the
+  // slowest of them; each section's read is tried once, never retried here, and a failure is
+  // swallowed — that section then reads its page in the browser and shows its own failure
+  // (lib/market-ssr.ts, lib/discussion.ts).
   const queryClient = getQueryClient();
   const [series] = await Promise.all([
     fetchTicksServer(market.id, DEFAULT_TICK_RANGE),
     prefetchRelatedMarkets(queryClient, market.id, fetchRelatedMarketsPageServer),
+    prefetchMarketPosts(queryClient, market.id, fetchMarketPostsPageServer),
   ]);
   seedMarketDetail(queryClient, market, series);
   // The related cards' countdowns measure against the server's read of them, as the home's do
@@ -142,7 +148,8 @@ export default async function MarketPage({ params }: { params: Promise<{ slug: s
             base: <LiveRulesSection fallback={market} width="base" />,
           }}
           // 관련 시장 (#65, ADR-0068), the last section at both widths, so one node: the home's
-          // cards for the markets an admin linked to this one, first page read above.
+          // cards for the markets an admin linked to this one, first page read above. 토론 (#47)
+          // needs nothing from here but the page read above: `MarketDetail` builds it from the id.
           related={
             <RelatedMarkets
               marketId={market.id}

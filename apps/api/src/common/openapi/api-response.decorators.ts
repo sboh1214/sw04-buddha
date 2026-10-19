@@ -1,6 +1,12 @@
 import { applyDecorators } from '@nestjs/common';
 import { ApiResponse } from '@nestjs/swagger';
-import { dataEnvelope, type ErrorCode, errorEnvelopeSchema, pageEnvelope } from '@buddha/shared';
+import {
+  countedPageEnvelope,
+  dataEnvelope,
+  type ErrorCode,
+  errorEnvelopeSchema,
+  pageEnvelope,
+} from '@buddha/shared';
 import type * as z from 'zod';
 import { HTTP_STATUS_BY_CODE } from '../errors/app-error.js';
 
@@ -16,6 +22,11 @@ export function ApiData(schema: z.ZodType, status = 200): MethodDecorator {
 /** Documents a `{ data: T[], meta: { nextCursor } }` cursor page. */
 export function ApiPageOf(item: z.ZodType, status = 200): MethodDecorator {
   return ApiResponse({ status, standardSchema: pageEnvelope(item) });
+}
+
+/** Documents a `{ data: T[], meta: { nextCursor, total } }` cursor page that counts its list. */
+export function ApiCountedPageOf(item: z.ZodType, status = 200): MethodDecorator {
+  return ApiResponse({ status, standardSchema: countedPageEnvelope(item) });
 }
 
 /**

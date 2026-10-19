@@ -22,6 +22,8 @@ import {
   communitySearchFields,
   isFiltered,
   isOwnPost,
+  marketPostsKey,
+  marketPostsQuery,
   nameInitial,
   postEditDeleted,
   postEditPath,
@@ -146,6 +148,28 @@ describe('the post keys and requests', () => {
       q: '금리',
       cursor: 'c1',
     });
+  });
+});
+
+describe('a market detail’s 토론 (#47, ADR-0075)', () => {
+  it('is keyed by the lower-cased market under the lists’ root, so the writes that mark the lists stale reach it', () => {
+    expect(marketPostsKey(MARKET)).toEqual(['posts', 'list', 'market', market]);
+    expect(marketPostsKey(MARKET).slice(0, 2)).toEqual([...POST_LIST_KEY]);
+    expect(isPrivateQueryKey(marketPostsKey(MARKET))).toBe(false);
+    // Not the community list's market filter: a different request (no count) under its own entry.
+    expect(hashKey(marketPostsKey(MARKET))).not.toBe(hashKey(communityPostsKey({ market })));
+    expect(hashKey(marketPostsKey(MARKET))).not.toBe(
+      hashKey(marketPostsKey('9c858901-8a57-4791-81fe-4c455b099bc9')),
+    );
+  });
+
+  it('asks a page by its cursor alone: newest first is the only order, 20 the API’s page', () => {
+    expect(marketPostsQuery()).toEqual({});
+    expect(marketPostsQuery('c2')).toEqual({ cursor: 'c2' });
+  });
+
+  it('opens the write screen with the market picked', () => {
+    expect(writePath(market)).toBe(`/community/write?market=${market}`);
   });
 });
 

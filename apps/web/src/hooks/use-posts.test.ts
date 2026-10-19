@@ -1,6 +1,14 @@
-import { MutationObserver, QueryObserver } from '@tanstack/react-query';
+import {
+  InfiniteQueryObserver,
+  MutationObserver,
+  QueryObserver,
+  hydrate,
+  type InfiniteData,
+} from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, type Me, type Post, type PostSummary, api } from '@/lib/api';
+import { prefetchMarketPosts } from '@/lib/discussion';
+import { dehydratePublic } from '@/lib/market-keys';
 import {
   type DraftStorage,
   type PostDraftKey,
@@ -10,7 +18,9 @@ import {
   readPostDraft,
 } from '@/lib/post-drafts';
 import {
+  type CountedPostPage,
   communityPostsKey,
+  marketPostsKey,
   postEditDeleted,
   postEditGoneAfter,
   postGoneAfter,
@@ -23,6 +33,7 @@ import {
   communityPostsInfiniteQueryOptions,
   createPostOptions,
   deletePostOptions,
+  marketPostsInfiniteQueryOptions,
   postImageUploader,
   postQueryOptions,
   updatePostOptions,
@@ -121,6 +132,100 @@ describe('the community list', () => {
     });
     expect(options.getNextPageParam({ items: [], nextCursor: null })).toBeUndefined();
     expect(options.getNextPageParam({ items: [], nextCursor: 'c3' })).toBe('c3');
+  });
+});
+
+describe('a market detail’s 토론 (#47, ADR-0075)', () => {
+  it('is keyed and asked for by the lower-cased market, a page per cursor, with the count', async () => {
+    const get = vi
+      .spyOn(api, 'GET')
+      .mockResolvedValue(answer([summary], { nextCursor: 'c2', total: 21 }));
+    const options = marketPostsInfiniteQueryOptions(MARKET.toUpperCase());
+    expect(options.queryKey).toEqual(marketPostsKey(MARKET));
+    expect(options.initialPageParam).toBeUndefined();
+    await expect(options.queryFn({ pageParam: undefined })).resolves.toEqual({
+      items: [summary],
+      nextCursor: 'c2',
+      total: 21,
+    });
+    // 더 보기: the NEXT page, not the first one again.
+    await options.queryFn({ pageParam: 'c2' });
+    expect(get.mock.calls).toEqual([
+      ['/api/v1/markets/{id}/posts', { params: { path: { id: MARKET }, query: {} } }],
+      ['/api/v1/markets/{id}/posts', { params: { path: { id: MARKET }, query: { cursor: 'c2' } } }],
+    ]);
+    expect(options.getNextPageParam({ items: [], nextCursor: 'c3', total: 1 })).toBe('c3');
+    expect(options.getNextPageParam({ items: [], nextCursor: null, total: 1 })).toBeUndefined();
+  });
+
+  it('hands the section the page the detail read on the server, without a request', async () => {
+    const serverClient = getQueryClient();
+    await prefetchMarketPosts(serverClient, MARKET, () =>
+      Promise.resolve<CountedPostPage>({ items: [summary], nextCursor: 'c1', total: 21 }),
+    );
+    const queryClient = getQueryClient();
+    hydrate(queryClient, dehydratePublic(serverClient));
+
+    let fetches = 0;
+    const observer = new InfiniteQueryObserver<
+      CountedPostPage,
+      Error,
+      InfiniteData<CountedPostPage>,
+      readonly unknown[],
+      string | undefined
+    >(queryClient, {
+      ...marketPostsInfiniteQueryOptions(MARKET),
+      queryFn: () => {
+        fetches += 1;
+        return Promise.resolve({ items: [], nextCursor: null, total: 0 });
+      },
+      retry: false,
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
+    try {
+      const result = observer.getCurrentResult();
+      expect(result.data?.pages).toEqual([{ items: [summary], nextCursor: 'c1', total: 21 }]);
+      expect(result.hasNextPage).toBe(true);
+      expect(fetches).toBe(0);
+    } finally {
+      unsubscribe();
+      queryClient.clear();
+      serverClient.clear();
+    }
+  });
+
+  it('is marked stale by a new post, an edit and a deletion, as the community list is', async () => {
+    const queryClient = getQueryClient();
+    const held = () => {
+      queryClient.setQueryData(marketPostsKey(MARKET), { pages: [], pageParams: [] });
+      return () => queryClient.getQueryState(marketPostsKey(MARKET))?.isInvalidated;
+    };
+    // The create's answer, then the deletion's.
+    vi.spyOn(api, 'POST')
+      .mockResolvedValueOnce(answer(published))
+      .mockResolvedValueOnce(answer({ id: post, placeholder: false }));
+    vi.spyOn(api, 'PUT').mockResolvedValue(answer(published));
+
+    let invalidated = held();
+    await new MutationObserver(
+      queryClient,
+      createPostOptions(queryClient, () => undefined),
+    ).mutate({ marketId: MARKET, title: null, body: {}, expectedAccountId: 'user-1' });
+    expect(invalidated()).toBe(true);
+
+    invalidated = held();
+    await new MutationObserver(
+      queryClient,
+      updatePostOptions(queryClient, () => undefined),
+    ).mutate({ postId: POST, title: null, body: {}, expectedAccountId: 'user-1' });
+    expect(invalidated()).toBe(true);
+
+    invalidated = held();
+    await new MutationObserver(
+      queryClient,
+      deletePostOptions(queryClient, () => undefined),
+    ).mutate({ postId: POST, expectedAccountId: 'user-1' });
+    expect(invalidated()).toBe(true);
   });
 });
 

@@ -80,7 +80,9 @@ const OVERVIEW = `## 개요
   문서에 \`servers\` 가 없으므로 경로는 API 오리진 기준 상대 경로다. 브라우저는 Next.js
   rewrite(\`/api/:path*\` → \`NEXT_PUBLIC_API_URL\`)를 거쳐 같은 오리진으로 호출한다.
 - **성공 봉투** — 단일 리소스는 \`{ "data": ... }\`, 커서 목록은
-  \`{ "data": [...], "meta": { "nextCursor": ... } }\`.
+  \`{ "data": [...], "meta": { "nextCursor": ... } }\`. 화면이 목록 전체의 수를 보이는 목록은
+  \`meta\` 에 그 수 \`total\` 도 싣는다(\`CountedPageMeta\` — 그 페이지와 같은 시점에 센 수, 지금은
+  시장 상세의 토론 \`GET /api/v1/markets/{id}/posts\`).
 - **실패 봉투** — \`{ "error": { "code": ..., "message": ..., "details"?: ... } }\`. \`details\` 는
   값이 없으면 키 자체가 없다(\`undefined\` 로 넣지 않는다). \`VALIDATION_ERROR\` 의 \`details\` 는
   \`{ path, message }\` 배열(\`ValidationIssue\`)이다. \`message\` 는 개발자용 영어 문자열이고,

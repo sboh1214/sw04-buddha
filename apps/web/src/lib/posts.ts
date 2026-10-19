@@ -271,6 +271,17 @@ export const POST_LIST_KEY = [...POSTS_KEY, 'list'] as const;
 export const communityPostsKey = (filters: CommunityFilters) =>
   [...POST_LIST_KEY, filters] as const;
 
+/**
+ * A market detail's 토론 (#47, ADR-0075): that market's posts as the list's cards, by the market's
+ * lower-cased uuid. Under the lists' root rather than beside it, so every write that marks the
+ * lists stale — a post written, edited or deleted (use-posts.ts), a comment that moves a card's
+ * '댓글 N' (use-comments.ts) — marks the section and its count stale with them, without a line of
+ * its own. Apart from `communityPostsKey`'s filter objects (`{ market }` is the community list's
+ * market filter, a different request), and public like them.
+ */
+export const marketPostsKey = (marketId: string) =>
+  [...POST_LIST_KEY, 'market', marketId.toLowerCase()] as const;
+
 /** One post page, by the canonical lower-cased uuid (the id the API answers with). */
 export const postKey = (postId: string) => [...POSTS_KEY, 'post', postId.toLowerCase()] as const;
 
@@ -278,6 +289,26 @@ export const postKey = (postId: string) => [...POSTS_KEY, 'post', postId.toLower
 export interface PostPage {
   items: PostSummary[];
   nextCursor: string | null;
+}
+
+/**
+ * One page of a market's 토론 (`GET /markets/:id/posts`, `CountedPageMeta`): the list's page and
+ * `total`, how many posts the whole list holds — counted in the same snapshot as the page's cards
+ * (ADR-0075), so one page never disagrees with itself. A later page counts again, at its own
+ * moment; the section shows the first page's count, the list its 더 보기 walk continues
+ * (`discussionView`, lib/discussion.ts).
+ */
+export interface CountedPostPage extends PostPage {
+  total: number;
+}
+
+/**
+ * One page of a market's 토론 as the server page and the browser's `queryFn` both ask for it: the
+ * cursor when there is one, nothing else — the order is the list's only one (newest first, #45-7)
+ * and the page size the API's default, 20 (ADR-0069 decision 4 #47 «20개씩 더 불러온다»).
+ */
+export function marketPostsQuery(cursor?: string): { cursor?: string } {
+  return cursor === undefined ? {} : { cursor };
 }
 
 /**

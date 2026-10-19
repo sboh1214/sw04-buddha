@@ -554,6 +554,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/markets/{id}/posts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A market’s discussion: its posts as the community list’s cards, newest first, never a deleted or hidden one, and meta.total, how many the whole list holds; readable in every public status, ended markets too. A draft or unknown market is NOT_FOUND */
+        get: operations["listMarketPosts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/markets/{id}/related": {
         parameters: {
             query?: never;
@@ -1318,6 +1335,10 @@ export type components = {
             /** Format: date-time */
             recordedAt: string;
             version: string;
+        };
+        CountedPageMeta: {
+            nextCursor: string | null;
+            total: number;
         };
         Coupon: {
             amountCoin: components["schemas"]["CoinAmount"];
@@ -4787,6 +4808,61 @@ export interface operations {
                 content: {
                     "application/json": {
                         data: components["schemas"]["Fill"][];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listMarketPosts: {
+        parameters: {
+            query?: {
+                /** @description Opaque; `meta.nextCursor` of the previous page. */
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["PostSummary"][];
+                        meta: components["schemas"]["CountedPageMeta"];
                     };
                 };
             };

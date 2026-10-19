@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type {
   fetchMarketSearchPageServer as FetchMarketSearchPage,
   fetchMarketsPageServer as FetchMarketsPage,
+  fetchMarketPostsPageServer as FetchMarketPostsPage,
   fetchPostsPageServer as FetchPostsPage,
   fetchRelatedMarketsPageServer as FetchRelatedMarketsPage,
   lookUpWriteMarketServer as LookUpWriteMarket,
@@ -39,6 +40,7 @@ let fetchMarketSearchPageServer: typeof FetchMarketSearchPage;
 let fetchRelatedMarketsPageServer: typeof FetchRelatedMarketsPage;
 let fetchPostsPageServer: typeof FetchPostsPage;
 let lookUpWriteMarketServer: typeof LookUpWriteMarket;
+let fetchMarketPostsPageServer: typeof FetchMarketPostsPage;
 
 beforeAll(async () => {
   vi.stubGlobal('fetch', fakeFetch);
@@ -48,6 +50,7 @@ beforeAll(async () => {
     fetchRelatedMarketsPageServer,
     fetchPostsPageServer,
     lookUpWriteMarketServer,
+    fetchMarketPostsPageServer,
   } = await import('./api.server'));
 });
 afterAll(() => {
@@ -184,5 +187,39 @@ describe('the write page’s read of its market (lookUpWriteMarketServer)', () =
       kind: 'none',
     });
     expect(fakeFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('fetchMarketPostsPageServer', () => {
+  it('asks the market’s 토론 by its id, with the cursor only when there is one, and keeps the count (#47)', async () => {
+    requests.length = 0;
+    const id = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+    const counted = () =>
+      Promise.resolve(
+        new Response(JSON.stringify({ data: [], meta: { nextCursor: null, total: 3 } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
+    fakeFetch.mockImplementationOnce((input: Request) => {
+      requests.push(new URL(input.url));
+      return counted();
+    });
+    fakeFetch.mockImplementationOnce((input: Request) => {
+      requests.push(new URL(input.url));
+      return counted();
+    });
+    await expect(fetchMarketPostsPageServer(id)).resolves.toEqual({
+      items: [],
+      nextCursor: null,
+      total: 3,
+    });
+    await fetchMarketPostsPageServer(id, 'cursor-1');
+    expect(requests.map((url) => url.pathname)).toEqual([
+      `/api/v1/markets/${id}/posts`,
+      `/api/v1/markets/${id}/posts`,
+    ]);
+    // No order and no filter: newest first is the list's only order (#45-7).
+    expect(requests.map(queryOf)).toEqual([{}, { cursor: 'cursor-1' }]);
   });
 });

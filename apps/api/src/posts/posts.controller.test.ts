@@ -12,6 +12,7 @@ import { schema } from '@buddha/db';
 import {
   completeOnboarding,
   createCategory,
+  createComment,
   createMarket,
   createMedia,
   createPost,
@@ -40,6 +41,10 @@ import { PostsService, postAuthorOf, publicStateOf } from './posts.service.js';
 const TRUSTED_ORIGIN = 'http://localhost:3000';
 
 type ListPage = { data: PostSummary[]; meta: { nextCursor: string | null } };
+type DiscussionPage = {
+  data: PostSummary[];
+  meta: { nextCursor: string | null; total: number };
+};
 
 const doc = (...paragraphs: string[]) => ({
   type: 'doc',
@@ -824,5 +829,155 @@ describe.skipIf(!hasTestInfra)('/api/v1/posts (integration)', () => {
     const [row] = await t.db.select().from(schema.posts).where(eq(schema.posts.id, own.id));
     expect(row).toMatchObject({ title: null, bodyText: '처음', editedAt: null });
     expect(await t.db.select().from(schema.postRevisions)).toEqual([]);
+  });
+
+  // ---- a market's 토론 (#47) -------------------------------------------------------------------
+
+  const discussionAt = (marketId: string, query = '', cookie?: string) =>
+    t.app.inject({
+      method: 'GET',
+      url: `/api/v1/markets/${marketId}/posts${query === '' ? '' : `?${query}`}`,
+      headers: cookie ? { cookie } : {},
+    });
+  const discussion = async (marketId: string, query = '', cookie?: string) => {
+    const res = await discussionAt(marketId, query, cookie);
+    expect(res.statusCode, res.body).toBe(200);
+    const body = res.json<DiscussionPage>();
+    for (const row of body.data) postSummarySchema.parse(row);
+    return body;
+  };
+
+  it('lists the market’s posts as the community list’s cards, every one by 더 보기, and counts them', async () => {
+    const elsewhere = await createMarket(t.db);
+    const base = Date.now() - 600_000;
+    const ids: string[] = [];
+    for (let i = 0; i < 21; i += 1) {
+      const post = await createPost(t.db, {
+        marketId: market.id,
+        authorId: i % 2 === 0 ? author.id : other.id,
+        createdAt: new Date(base + i * 1_000),
+      });
+      ids.unshift(post.id);
+    }
+    // Neither another market's post, nor a deleted or a hidden one: not a card, not counted. A
+    // deleted post with a comment under it stays out of the list too (ADR-0074 decision 1).
+    await createPost(t.db, { marketId: elsewhere.id, authorId: author.id });
+    await createPost(t.db, { marketId: market.id, authorId: author.id, deletedAt: new Date() });
+    await createPost(t.db, { marketId: market.id, authorId: author.id, hiddenAt: new Date() });
+    const answered = await createPost(t.db, {
+      marketId: market.id,
+      authorId: author.id,
+      deletedAt: new Date(),
+    });
+    await createComment(t.db, { postId: answered.id, authorId: other.id });
+
+    // 20 a page by default (ADR-0069 decision 4: «20개씩 더 불러옴»), newest first, and the
+    // whole list's count on every page, signed in or not (N02 §2).
+    const first = await discussion(market.id);
+    expect(first.data.map((row) => row.id)).toEqual(ids.slice(0, 20));
+    expect(first.meta.total).toBe(21);
+    expect(first.meta.nextCursor).not.toBeNull();
+    const second = await discussion(
+      market.id,
+      `cursor=${encodeURIComponent(first.meta.nextCursor!)}`,
+      other.cookie,
+    );
+    expect(second.data.map((row) => row.id)).toEqual(ids.slice(20));
+    expect(second.meta).toEqual({ nextCursor: null, total: 21 });
+    // The very cards of `GET /posts?marketId=`, page for page.
+    expect(first.data).toEqual((await page(`marketId=${market.id}`)).data);
+    // A cursor that does not decode serves the first page; a smaller limit pages the same list.
+    expect((await discussion(market.id, 'cursor=nonsense')).data).toEqual(first.data);
+    const two = await discussion(market.id, 'limit=2');
+    expect(two.data.map((row) => row.id)).toEqual(ids.slice(0, 2));
+    expect(two.meta.total).toBe(21);
+    // The other market's discussion holds its own post alone.
+    const theirs = await discussion(elsewhere.id);
+    expect(theirs.data).toHaveLength(1);
+    expect(theirs.meta).toEqual({ nextCursor: null, total: 1 });
+  });
+
+  it('is read on a market in every public status, empty with 0, and NOT_FOUND for a draft or unknown one', async () => {
+    // N05 §3: an ended market's discussion is read as it was; #45-6 takes posts on all of them.
+    for (const status of ['open', 'closed', 'resolved', 'settled', 'voided'] as const) {
+      const at = await createMarket(t.db, { status });
+      expect(await discussion(at.id), status).toEqual({
+        data: [],
+        meta: { nextCursor: null, total: 0 },
+      });
+      const post = await createPost(t.db, { marketId: at.id, authorId: author.id });
+      const body = await discussion(at.id);
+      expect(
+        { status, ids: body.data.map((row) => row.id), total: body.meta.total },
+        status,
+      ).toEqual({ status, ids: [post.id], total: 1 });
+      expect(body.data[0]?.market).toMatchObject({ id: at.id, status });
+    }
+    const draft = await createMarket(t.db, { status: 'draft' });
+    for (const marketId of [draft.id, '0b6f6a3e-2c1d-4c8e-9f0a-1b2c3d4e5f60']) {
+      const res = await discussionAt(marketId);
+      expect(res.statusCode).toBe(404);
+      expect(res.json<{ error: { code: string } }>().error.code).toBe('NOT_FOUND');
+    }
+    // A sub-resource of a market takes its uuid, never the slug.
+    expect((await discussionAt(market.slug)).statusCode).toBe(400);
+    expect((await discussionAt(market.id, 'limit=0')).statusCode).toBe(400);
+  });
+
+  it('names the author by the public face only and carries nothing of the author’s trading', async () => {
+    await written({ title: '토론 글' });
+    const res = await discussionAt(market.id);
+    const [card] = res.json<DiscussionPage>().data;
+    const [profile] = await t.db
+      .select()
+      .from(schema.profiles)
+      .where(eq(schema.profiles.userId, author.id));
+    expect(card?.author).toEqual({
+      kind: 'member',
+      publicId: profile!.publicId,
+      nickname: profile!.nickname,
+      imageUrl: null,
+      isAdmin: false,
+    });
+    expect(res.body).not.toContain(author.id);
+    expect(res.body).not.toContain(author.email);
+  });
+
+  it('counts and lists from one snapshot, even when a post commits while the cards wait', async () => {
+    const seen = await createPost(t.db, { marketId: market.id, authorId: author.id });
+    // Another connection writes a post on the market and, before committing, takes the profiles
+    // table, which the cards join (the count reads posts alone): the read counts, then waits on
+    // the cards. Committed while it waits, the post is in neither — the snapshot of the read's
+    // first statement. Under READ COMMITTED the cards would read anew after the wait and hold a
+    // post the count missed.
+    const holder = await t.db.$client.connect();
+    let pending: ReturnType<typeof discussionAt> | undefined;
+    let committed = false;
+    try {
+      await holder.query('BEGIN');
+      await holder.query(
+        `INSERT INTO posts (market_id, author_id, body, body_text)
+           VALUES ($1, $2, '{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"늦은 글"}]}]}'::jsonb, '늦은 글')`,
+        [market.id, other.id],
+      );
+      await holder.query('LOCK TABLE profiles IN ACCESS EXCLUSIVE MODE');
+      pending = discussionAt(market.id);
+      await waitForLockWaiter(holder, 'the discussion read waiting on the profiles table');
+      await holder.query('COMMIT');
+      committed = true;
+      const res = await pending;
+      expect(res.statusCode, res.body).toBe(200);
+      const body = res.json<DiscussionPage>();
+      expect({ ids: body.data.map((row) => row.id), total: body.meta.total }).toEqual({
+        ids: [seen.id],
+        total: 1,
+      });
+    } finally {
+      if (!committed) await holder.query('ROLLBACK');
+      holder.release();
+      await pending?.catch(() => undefined);
+    }
+    // The next read has both.
+    expect((await discussion(market.id)).meta.total).toBe(2);
   });
 });

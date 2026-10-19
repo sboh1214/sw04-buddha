@@ -1,6 +1,12 @@
 import * as z from 'zod';
 import { describe, expect, it } from 'vitest';
-import { dataEnvelope, pageEnvelope, pageMetaSchema } from './api/envelope.js';
+import {
+  countedPageEnvelope,
+  countedPageMetaSchema,
+  dataEnvelope,
+  pageEnvelope,
+  pageMetaSchema,
+} from './api/envelope.js';
 import { ERROR_CODES, errorEnvelopeSchema, validationIssueSchema } from './api/errors.js';
 import {
   COIN_AMOUNT_INPUT_MAX_LENGTH,
@@ -51,6 +57,28 @@ describe('envelopes', () => {
     const page = pageEnvelope(item).parse({ data: [{ id: 'a' }], meta: { nextCursor: null } });
     expect(page.meta.nextCursor).toBeNull();
     expect(pageMetaSchema.parse({ nextCursor: 'abc' }).nextCursor).toBe('abc');
+  });
+
+  it('counts the whole list beside the cursor on a counted page (#47)', () => {
+    const item = z.object({ id: z.string() });
+    const page = countedPageEnvelope(item).parse({
+      data: [{ id: 'a' }],
+      meta: { nextCursor: 'abc', total: 21 },
+    });
+    expect(page.meta).toEqual({ nextCursor: 'abc', total: 21 });
+    // The count is a count: present, a number, a whole one, never negative. Each case carries a
+    // valid cursor, so the count is the one thing wrong with it: a case without one fails on the
+    // cursor and would stay refused with any rule of the count taken away.
+    for (const meta of [
+      { nextCursor: null },
+      { nextCursor: null, total: '3' },
+      { nextCursor: null, total: 1.5 },
+      { nextCursor: null, total: -1 },
+    ]) {
+      expect(countedPageMetaSchema.safeParse(meta).success, JSON.stringify(meta)).toBe(false);
+    }
+    // A plain page's meta is the cursor alone: the count is the counted page's only.
+    expect(pageMetaSchema.parse({ nextCursor: null, total: 3 })).toEqual({ nextCursor: null });
   });
 
   it('only admits PLAN 7.4 error codes', () => {
