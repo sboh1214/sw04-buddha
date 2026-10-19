@@ -8,6 +8,7 @@ import {
   POST_LINK_MAX_LENGTH,
   POST_BODY_EMPTY_MESSAGE,
   POST_TEXT_COLORS,
+  TRIM_WHITESPACE_CLASS,
   canonicalJson,
   codePointLength,
   postBlockSchema,
@@ -576,6 +577,27 @@ describe('reading a document', () => {
     expect(codePointLength(postExcerpt('😀'.repeat(POST_EXCERPT_MAX_LENGTH + 5)))).toBe(
       POST_EXCERPT_MAX_LENGTH,
     );
+    // No blanks at its end: a cut inside a run of blanks keeps none of them, so any start of a text
+    // long enough previews as the whole text does (PostsService.list reads only a start).
+    const spaced = `a${' '.repeat(700)}b\n둘째 줄`;
+    expect(postExcerpt(spaced)).toBe('a');
+    for (const head of [POST_EXCERPT_MAX_LENGTH, 600, 701]) {
+      expect(postExcerpt(spaced.slice(0, head))).toBe(postExcerpt(spaced));
+    }
+    expect(postExcerpt(`${'가'.repeat(POST_EXCERPT_MAX_LENGTH - 1)}\n둘째 줄`)).toBe(
+      `${'가'.repeat(POST_EXCERPT_MAX_LENGTH - 1)}`,
+    );
+  });
+
+  it('names exactly the characters trim removes, for a query to read blank lines as the excerpt does', () => {
+    const blank = new RegExp(`^${TRIM_WHITESPACE_CLASS}$`, 'u');
+    const differ: string[] = [];
+    for (let point = 0; point <= 0x10ffff; point += 1) {
+      if (point >= 0xd800 && point <= 0xdfff) continue;
+      const char = String.fromCodePoint(point);
+      if (blank.test(char) !== (char.trim() === '')) differ.push(point.toString(16));
+    }
+    expect(differ).toEqual([]);
   });
 
   it('counts code points', () => {

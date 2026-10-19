@@ -3,7 +3,6 @@ import {
   Box,
   HStack,
   Heading,
-  Image,
   Link as ChakraLink,
   LinkBox,
   LinkOverlay,
@@ -17,13 +16,15 @@ import { type PostSummary } from '@/lib/api';
 import { MARKET_STATUS_LABEL, MARKET_STATUS_PALETTE } from '@/lib/market-admin';
 import { postFirstLine, postPath } from '@/lib/posts';
 import { PostByline } from './post-author';
+import { RetriedImage } from './retried-image';
 
 /**
  * One card of the community list (#46, ADR-0073; owner decisions 2026-10-18): the market's title
  * above — a link to its detail, which opens in every status (#46's acceptance criteria) — the
  * post's title, two lines of its text without formatting, the first image as a small square
- * thumbnail on the right, and the byline (author, time, 수정됨). The comment and like counts the
- * owner listed come with #48 and #49; nothing is drawn for a count that does not exist yet.
+ * thumbnail on the right (asked for again after a 429, `RetriedImage`), and the byline (author,
+ * time, 수정됨). The comment and like counts the owner listed come with #48 and #49; nothing is
+ * drawn for a count that does not exist yet.
  *
  * `LinkBox`/`LinkOverlay`, as the market card: the whole card opens the post, and Chakra's
  * `LinkBox` raises the nested market link above the overlay, so both stay one click each. A post
@@ -116,7 +117,7 @@ export function PostCard({
         </Stack>
         {post.thumbnailUrl !== null && (
           <Box flexShrink="0" boxSize={{ base: '64px', md: '80px' }}>
-            <Image
+            <RetriedImage
               src={post.thumbnailUrl}
               alt={copy.postThumbnailAlt}
               boxSize="100%"

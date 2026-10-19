@@ -21,6 +21,7 @@ import {
   POST_BODY_MAX_LENGTH,
   postDeletionSchema,
   postDocumentInputSchema,
+  postExcerpt,
   postImageNotUsableMessage,
   postSchema,
   postSummarySchema,
@@ -531,6 +532,53 @@ describe.skipIf(!hasTestInfra)('/api/v1/posts (integration)', () => {
       market: { id: market.id, title: '기준금리 인하' },
       editedAt: null,
     });
+  });
+
+  it('previews the first lines with text however many blank lines come before and between them', async () => {
+    // Text the API takes: blank lines are text inside a code block, and only the whole body must
+    // not be blank — 2,200 characters of blank lines (U+3000 too, which trim also removes) before
+    // the first line and between it and the next, past what a list reads of a body.
+    const blankLines = (line: string) => ({
+      type: 'codeBlock',
+      content: [{ type: 'text', text: line.repeat(1_100) }],
+    });
+    const paragraph = (text: string) => ({ type: 'paragraph', content: [{ type: 'text', text }] });
+    const post = await written({
+      title: null,
+      body: {
+        type: 'doc',
+        content: [
+          blankLines(' \n'),
+          paragraph('  첫 줄 '),
+          blankLines('　\n'),
+          paragraph('둘째 줄'),
+        ],
+      },
+    });
+    const [row] = await t.db
+      .select({ bodyText: schema.posts.bodyText })
+      .from(schema.posts)
+      .where(eq(schema.posts.id, post.id));
+    expect(row?.bodyText.length).toBeGreaterThan(4_000);
+    const [card] = (await page()).data;
+    expect(card?.excerpt).toBe('첫 줄\n둘째 줄');
+    expect(card?.excerpt).toBe(postExcerpt(row?.bodyText ?? ''));
+
+    // A run of blanks inside a line, from before the excerpt's end to past what a list reads: the
+    // cut of the start the list reads ends in it, and the card is still the whole text's excerpt.
+    const spaced = await written({
+      title: null,
+      body: { type: 'doc', content: [paragraph(`a${' '.repeat(700)}b`), paragraph('둘째 줄')] },
+    });
+    const [spacedRow] = await t.db
+      .select({ bodyText: schema.posts.bodyText })
+      .from(schema.posts)
+      .where(eq(schema.posts.id, spaced.id));
+    expect(spacedRow?.bodyText).toContain(' '.repeat(700));
+    const [spacedCard] = (await page()).data;
+    expect(spacedCard?.id).toBe(spaced.id);
+    expect(spacedCard?.excerpt).toBe('a');
+    expect(spacedCard?.excerpt).toBe(postExcerpt(spacedRow?.bodyText ?? ''));
   });
 
   it('shows the author’s current nickname on old posts and 운영자 on an admin’s', async () => {

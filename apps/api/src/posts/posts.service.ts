@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import { schema, type Db } from '@buddha/db';
 import {
+  POST_EXCERPT_MAX_LENGTH,
+  TRIM_WHITESPACE_CLASS,
   canonicalJson,
   decodeKeyset,
   encodeKeyset,
@@ -20,7 +22,7 @@ import {
   type Role,
   type SanitizedPostDocument,
 } from '@buddha/shared';
-import { and, desc, eq, ilike, inArray, isNull, sql } from 'drizzle-orm';
+import { type AnyColumn, type SQL, and, desc, eq, ilike, inArray, isNull, sql } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
 import { PG_UNIQUE_VIOLATION, isPgError } from '../common/errors/pg-error.js';
 import { keysetPredicate } from '../common/keyset.js';
@@ -39,11 +41,28 @@ export interface PostContent {
 }
 
 /**
- * How much of a post's text a list reads for its card: the excerpt keeps POST_EXCERPT_MAX_LENGTH
- * characters of the non-empty lines, and this leaves room for blank lines before them without
- * moving whole bodies for a page of cards.
+ * How much of a post's text a list reads for its card (`cardText`): the excerpt's own length and as
+ * much again, without moving whole bodies for a page of cards. Once the blank lines are out, any
+ * start as long as the excerpt gives the whole text's excerpt — the line the cut ends in is trimmed
+ * at its end, and so is the excerpt (`postExcerpt`) — and the rest is margin.
  */
-const LIST_TEXT_HEAD = 2_000;
+const LIST_TEXT_HEAD = POST_EXCERPT_MAX_LENGTH * 2;
+
+/** A run of what `postExcerpt` reads as blank around a line break: the breaks between lines it keeps. */
+const BLANKS_AROUND_BREAKS = `${TRIM_WHITESPACE_CLASS}*\n${TRIM_WHITESPACE_CLASS}*`;
+/** What `postExcerpt` reads as blank before the first non-empty line. */
+const LEADING_BLANKS = `^${TRIM_WHITESPACE_CLASS}+`;
+
+/**
+ * The start of a post's text for its card, read in the database: the text with its blank lines and
+ * the blanks around its line breaks taken out first — what `postExcerpt` drops anyway — and only then
+ * cut to LIST_TEXT_HEAD, so the excerpt the API makes from it is the one the whole text gives.
+ * Cutting first left nothing to show when a body opened with more blank lines than the cut kept
+ * (a code block of empty lines is text; only the whole body must not be blank).
+ */
+function cardText(bodyText: AnyColumn): SQL<string> {
+  return sql<string>`left(regexp_replace(regexp_replace(${bodyText}, ${BLANKS_AROUND_BREAKS}, ${'\n'}, 'g'), ${LEADING_BLANKS}, ''), ${LIST_TEXT_HEAD})`;
+}
 
 /** The account behind a post, as a query reads it. */
 interface AuthorRow {
@@ -150,7 +169,7 @@ export class PostsService {
     const rows = await this.db
       .select({
         ...this.columns,
-        textHead: sql<string>`left(${posts.bodyText}, ${LIST_TEXT_HEAD})`,
+        textHead: cardText(posts.bodyText),
       })
       .from(posts)
       .innerJoin(profiles, eq(profiles.userId, posts.authorId))

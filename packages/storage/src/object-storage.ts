@@ -14,13 +14,22 @@
  * starts, and every upload fails rather than the API refusing to boot — the precedent of 알리고
  * without keys, ADR-0070).
  */
+/** How a read may be given up (`ObjectStorage.get`). */
+export interface ObjectReadOptions {
+  readonly signal?: AbortSignal;
+}
+
 export interface ObjectStorage {
   /** Which driver this is, for the boot log and the health of a deployment. */
   readonly driver: 'local' | 's3' | 'memory' | 'unconfigured';
   /** Writes `body` under `key`, replacing whatever was there. */
   put(key: string, body: Uint8Array, contentType: string): Promise<void>;
-  /** The bytes under `key`, or null when there is no such object. */
-  get(key: string): Promise<Uint8Array | null>;
+  /**
+   * The bytes under `key`, or null when there is no such object. `signal` gives the read up: once
+   * it is aborted the driver stops reading (an S3 request and its body, a file) and rejects —
+   * the caller still holds whatever it set aside for the read until the promise settles.
+   */
+  get(key: string, options?: ObjectReadOptions): Promise<Uint8Array | null>;
   /** Removes the object under `key`; a key with no object is not an error. */
   delete(key: string): Promise<void>;
 }

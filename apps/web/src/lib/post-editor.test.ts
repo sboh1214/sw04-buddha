@@ -6,7 +6,7 @@ import {
   POST_TITLE_MAX_LENGTH,
   sanitizePostDocument,
 } from '@buddha/shared';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { copy } from '@/copy';
 import { system } from '@/theme/system';
 import { ApiError } from './api';
@@ -14,6 +14,7 @@ import {
   POST_TEXT_COLOR_LABEL,
   bodyChangedFrom,
   countEditorDocument,
+  createImageSlots,
   draftChanged,
   editorImageIds,
   imagePrecheck,
@@ -23,8 +24,10 @@ import {
   linkInputHref,
   pastedLinkHref,
   postTextColorToken,
+  refusesImageBatch,
   titleTooLong,
   uploadContentType,
+  uploadImageBatch,
 } from './post-editor';
 
 /**
@@ -302,5 +305,178 @@ describe('bodyChangedFrom', () => {
     expect(bodyChangedFrom(baseline, typed)).toBe(true);
     // Typed and taken out again: nothing to lose.
     expect(bodyChangedFrom(baseline, structuredClone(made))).toBe(false);
+  });
+});
+
+describe('createImageSlots', () => {
+  it('counts the uploads on their way beside the document, so batches together stay within the limit', () => {
+    const slots = createImageSlots();
+    // A first batch of six leaves; while it uploads, a second of five would pass ten.
+    expect(slots.take(0, 6)).toBe(true);
+    expect(slots.take(0, 5)).toBe(false);
+    expect(slots.inFlight).toBe(6);
+    // Four more fit beside them.
+    expect(slots.take(0, 4)).toBe(true);
+    expect(slots.inFlight).toBe(POST_IMAGES_MAX);
+    // Each image landing moves from the uploads to the document: still no room.
+    for (let landed = 1; landed <= 3; landed += 1) {
+      slots.give();
+      expect(slots.take(landed, 1)).toBe(false);
+    }
+    // An upload that fails gives its slot back for good.
+    slots.give();
+    expect(slots.take(3, 1)).toBe(true);
+    expect(slots.inFlight).toBe(7);
+  });
+
+  it('gives back no more than it took', () => {
+    const slots = createImageSlots(2);
+    slots.give();
+    expect(slots.inFlight).toBe(0);
+    expect(slots.take(0, 2)).toBe(true);
+    expect(slots.take(0, 1)).toBe(false);
+    slots.give(5);
+    expect(slots.inFlight).toBe(0);
+  });
+
+  it('gives several back at once', () => {
+    const slots = createImageSlots();
+    expect(slots.take(0, 6)).toBe(true);
+    slots.give(4);
+    expect(slots.inFlight).toBe(2);
+    expect(slots.take(2, 6)).toBe(true);
+  });
+});
+
+/** An upload refusal the API would answer, as `unwrap` throws it. */
+const refusal = (status: number, code: string, details?: unknown) =>
+  new ApiError(status, { code, message: code, details } as never);
+
+const ONBOARDING = refusal(409, 'ONBOARDING_REQUIRED', { steps: ['consent'] });
+const ANOTHER_ACCOUNT = refusal(403, 'FORBIDDEN', [
+  { path: ['expectedAccountId'], message: 'not the signed-in account' },
+]);
+const SIGNED_OUT = refusal(401, 'UNAUTHENTICATED');
+const NOT_AN_IMAGE = refusal(422, 'IMAGE_NOT_ALLOWED', { reason: 'type' });
+
+describe('refusesImageBatch', () => {
+  it('is a refusal about the account, not about the file', () => {
+    expect(refusesImageBatch(ONBOARDING)).toBe(true);
+    expect(refusesImageBatch(ANOTHER_ACCOUNT)).toBe(true);
+    expect(refusesImageBatch(SIGNED_OUT)).toBe(true);
+    expect(refusesImageBatch(NOT_AN_IMAGE)).toBe(false);
+    expect(refusesImageBatch(refusal(413, 'VALIDATION_ERROR'))).toBe(false);
+    expect(refusesImageBatch(refusal(429, 'RATE_LIMITED'))).toBe(false);
+    // The CSRF refusal names no field: about the request, not the account on screen.
+    expect(refusesImageBatch(refusal(403, 'FORBIDDEN'))).toBe(false);
+    expect(refusesImageBatch(new TypeError('Failed to fetch'))).toBe(false);
+  });
+});
+
+describe('uploadImageBatch', () => {
+  const file = (name: string, size = 100, type = 'image/png') => ({ name, size, type });
+
+  /**
+   * A batch over `files` whose slots were taken, each send answered by `answer` (a thrown error, or
+   * nothing for an upload that lands and is placed): what each step saw, and the slots it holds
+   * while each file is sent.
+   */
+  async function run(
+    files: { name: string; size: number; type: string }[],
+    answer: (name: string) => Error | undefined,
+    options: { alive?: () => boolean } = {},
+  ) {
+    const slots = createImageSlots();
+    expect(slots.take(0, files.length)).toBe(true);
+    const sent: string[] = [];
+    const heldWhileSending: number[] = [];
+    const refused = vi.fn();
+    const failed = vi.fn();
+    await uploadImageBatch(files, slots, {
+      alive: options.alive ?? (() => true),
+      refused,
+      send: async (sending, placed) => {
+        sent.push(sending.name);
+        heldWhileSending.push(slots.inFlight);
+        await Promise.resolve();
+        const error = answer(sending.name);
+        if (error !== undefined) throw error;
+        placed();
+        // Placed: the document counts it, the slot is back before the send settles.
+        heldWhileSending.push(slots.inFlight);
+      },
+      failed,
+    });
+    return { slots, sent, heldWhileSending, refused, failed };
+  }
+
+  it('gives each file’s slot back however it ends: placed, refused before it left, or failed', async () => {
+    const files = [
+      file('placed'),
+      file('empty', 0),
+      file('too-large', IMAGE_MAX_BYTES + 1),
+      file('a-pdf', 100, 'application/pdf'),
+      file('not-an-image'),
+      file('down'),
+      file('last'),
+    ];
+    const result = await run(files, (name) =>
+      name === 'not-an-image'
+        ? NOT_AN_IMAGE
+        : name === 'down'
+          ? new TypeError('Failed to fetch')
+          : undefined,
+    );
+    // A refusal about the file, or the network, leaves the rest of the batch going.
+    expect(result.sent).toEqual(['placed', 'not-an-image', 'down', 'last']);
+    expect(result.refused.mock.calls).toEqual([['empty'], ['size'], ['type']]);
+    expect(result.failed.mock.calls).toEqual([[NOT_AN_IMAGE], [expect.any(TypeError)]]);
+    // Seven taken; the first placed gives one back at once, each refusal its own before the next.
+    expect(result.heldWhileSending).toEqual([7, 6, 3, 2, 1, 0]);
+    expect(result.slots.inFlight).toBe(0);
+    // All ten are free again.
+    expect(result.slots.take(0, POST_IMAGES_MAX)).toBe(true);
+  });
+
+  it.each([
+    ['for the onboarding', ONBOARDING],
+    ['as another account', ANOTHER_ACCOUNT],
+    ['for no session', SIGNED_OUT],
+  ])(
+    'ends the batch at an upload refused %s: said once, nothing more sent, every slot back',
+    async (_name, error) => {
+      const result = await run(
+        [file('first'), file('second'), file('third'), file('fourth')],
+        () => error,
+      );
+      expect(result.sent).toEqual(['first']);
+      expect(result.failed.mock.calls).toEqual([[error]]);
+      expect(result.slots.inFlight).toBe(0);
+      expect(result.slots.take(0, POST_IMAGES_MAX)).toBe(true);
+    },
+  );
+
+  it('ends the batch at an account refusal after files that went in, and gives the rest back', async () => {
+    const result = await run([file('a'), file('b'), file('c'), file('d')], (name) =>
+      name === 'b' ? ONBOARDING : undefined,
+    );
+    expect(result.sent).toEqual(['a', 'b']);
+    // One image in the document; the other three slots are free.
+    expect(result.slots.inFlight).toBe(0);
+    expect(result.slots.take(1, POST_IMAGES_MAX - 1)).toBe(true);
+  });
+
+  it('sends nothing more once the editor is gone, and gives the unsent files’ slots back', async () => {
+    // Asked before each file: there for the first, gone before the second.
+    let asked = 0;
+    const result = await run([file('a'), file('b'), file('c')], () => undefined, {
+      alive: () => {
+        asked += 1;
+        return asked === 1;
+      },
+    });
+    expect(result.sent).toEqual(['a']);
+    expect(result.failed).not.toHaveBeenCalled();
+    expect(result.slots.inFlight).toBe(0);
   });
 });

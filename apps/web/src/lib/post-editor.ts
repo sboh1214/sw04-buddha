@@ -243,3 +243,119 @@ export function draftChanged(draft: {
 export function bodyChangedFrom(baseline: string | null, json: unknown): boolean {
   return baseline !== null && JSON.stringify(json) !== baseline;
 }
+
+/** The editor's image slots (`createImageSlots`). */
+export interface ImageSlots {
+  /** Uploads taken and not yet in the document, nor given up. */
+  readonly inFlight: number;
+  /**
+   * Takes a slot for each of `count` files beside the document's `held` images, or nothing — and
+   * false — when the document, the uploads on their way and these would pass the limit.
+   */
+  take(held: number, count: number): boolean;
+  /**
+   * Gives `count` slots back (one by default): their images are in the document now (counted
+   * there), or never will be.
+   */
+  give(count?: number): void;
+}
+
+/**
+ * The images a post may still take (#45-3: POST_IMAGES_MAX): those in the document and the uploads
+ * still on their way. The toolbar and the drop target stay open while uploads run, so a second
+ * batch picked or dropped meanwhile counts the first one's files too — counting the document alone,
+ * two batches could each pass and land more images than a post holds, the form unsendable and the
+ * surplus uploads orphans. A batch takes its slots before its first file leaves and gives each back
+ * as its image goes into the document or fails — and those of the files a stopped batch never sent,
+ * at once (`uploadImageBatch`).
+ */
+export function createImageSlots(max: number = POST_IMAGES_MAX): ImageSlots {
+  let inFlight = 0;
+  return {
+    get inFlight() {
+      return inFlight;
+    },
+    take(held, count) {
+      if (held + inFlight + count > max) return false;
+      inFlight += count;
+      return true;
+    },
+    give(count = 1) {
+      inFlight = Math.max(0, inFlight - count);
+    },
+  };
+}
+
+/**
+ * Whether an upload's refusal is about the account rather than the file: no session
+ * (UNAUTHENTICATED), the cookie as another account (`isForAnotherAccount`), or a step of the
+ * onboarding left (ONBOARDING_REQUIRED). Every file after it would be refused the same way.
+ */
+export function refusesImageBatch(error: unknown): boolean {
+  return (
+    isApiError(error, 'ONBOARDING_REQUIRED') ||
+    isApiError(error, 'UNAUTHENTICATED') ||
+    isForAnotherAccount(error)
+  );
+}
+
+/** What `uploadImageBatch` does with each file (components/post/post-editor.tsx). */
+export interface ImageBatchSteps<F> {
+  /** False once the editor is gone (the onboarding gate took the form away): nothing more leaves. */
+  alive(): boolean;
+  /** A file the precheck refused (`imagePrecheck`): never sent. */
+  refused(reason: ImageRefusal): void;
+  /**
+   * Sends one file and puts its image in the document, calling `placed` once the image is there
+   * (the document counts it from then on); settles when the file is done with.
+   */
+  send(file: F, placed: () => void): Promise<void>;
+  /** A send that failed. */
+  failed(error: unknown): void;
+}
+
+/**
+ * Sends a batch whose slots are taken (`ImageSlots.take`), one file after another, and gives each
+ * file's slot back however it ends: refused before it left, placed in the document, or failed. A
+ * refusal about the account (`refusesImageBatch`) ends the batch — said once, the account's state
+ * already put on screen by the upload (`postImageUploader`) — and so does an editor gone; the files
+ * not sent give their slots back at once. Sending on would have every later file refused alike,
+ * each refusal reading the account again and said once more, on the page the gate moved to.
+ */
+export async function uploadImageBatch<F extends { type: string; size: number }>(
+  files: readonly F[],
+  slots: ImageSlots,
+  steps: ImageBatchSteps<F>,
+): Promise<void> {
+  // The slots of the files not yet started.
+  let unsent = files.length;
+  try {
+    for (const file of files) {
+      if (!steps.alive()) return;
+      unsent -= 1;
+      let held = true;
+      const giveBack = () => {
+        if (!held) return;
+        held = false;
+        slots.give();
+      };
+      try {
+        const refusal = imagePrecheck(file);
+        if (refusal !== undefined) {
+          steps.refused(refusal);
+          continue;
+        }
+        try {
+          await steps.send(file, giveBack);
+        } catch (error) {
+          steps.failed(error);
+          if (refusesImageBatch(error)) return;
+        }
+      } finally {
+        giveBack();
+      }
+    }
+  } finally {
+    slots.give(unsent);
+  }
+}

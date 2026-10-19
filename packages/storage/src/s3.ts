@@ -6,7 +6,7 @@ import {
   S3Client,
   type S3ClientConfig,
 } from '@aws-sdk/client-s3';
-import { assertObjectKey, type ObjectStorage } from './object-storage.js';
+import { assertObjectKey, type ObjectReadOptions, type ObjectStorage } from './object-storage.js';
 
 /** What the driver needs of an S3 client: only `send`, so a test can hand it a fake one. */
 export type S3Sender = Pick<S3Client, 'send'>;
@@ -36,14 +36,42 @@ export function createS3Client(config: S3StorageConfig): S3Client {
   return new S3Client(options);
 }
 
-/** Whether `error` is S3's answer for a key with no object. */
+/**
+ * Whether `error` is S3's answer for a key with no object: the modelled `NoSuchKey` (by its class,
+ * or by its name when another copy of the SDK made it) and nothing else. Other 404s are failures of
+ * the store, not answers about the object — `NoSuchBucket` after a wrong bucket name or a removed
+ * bucket would otherwise make every image look gone (a 404 per image) while nothing reports the
+ * outage — so they are passed on like any other failure.
+ */
 function isNoSuchKey(error: unknown): boolean {
   return (
-    error instanceof NoSuchKey ||
-    (error as { name?: unknown } | undefined)?.name === 'NoSuchKey' ||
-    (error as { $metadata?: { httpStatusCode?: number } } | undefined)?.$metadata
-      ?.httpStatusCode === 404
+    error instanceof NoSuchKey || (error as { name?: unknown } | undefined)?.name === 'NoSuchKey'
   );
+}
+
+/** What an S3 answer's body is in Node: a stream the SDK can read whole, and stop. */
+interface ObjectBody {
+  transformToByteArray(): Promise<Uint8Array>;
+  destroy?: (error?: Error) => void;
+}
+
+/**
+ * The whole of `body`. A `signal` aborted while the bytes stream in destroys the stream, so the read
+ * rejects then rather than downloading the rest (the SDK's own `abortSignal` stops the request; this
+ * stops the body after the answer has begun).
+ */
+async function readWhole(body: ObjectBody, signal: AbortSignal | undefined): Promise<Uint8Array> {
+  if (signal === undefined) return body.transformToByteArray();
+  signal.throwIfAborted();
+  const stop = () => {
+    body.destroy?.(signal.reason instanceof Error ? signal.reason : new Error('aborted'));
+  };
+  signal.addEventListener('abort', stop, { once: true });
+  try {
+    return await body.transformToByteArray();
+  } finally {
+    signal.removeEventListener('abort', stop);
+  }
 }
 
 /**
@@ -69,14 +97,15 @@ export class S3ObjectStorage implements ObjectStorage {
     );
   }
 
-  async get(key: string): Promise<Uint8Array | null> {
+  async get(key: string, options: ObjectReadOptions = {}): Promise<Uint8Array | null> {
     assertObjectKey(key);
     try {
       const answer = await this.client.send(
         new GetObjectCommand({ Bucket: this.bucket, Key: key }),
+        { abortSignal: options.signal },
       );
       if (!answer.Body) return null;
-      return await answer.Body.transformToByteArray();
+      return await readWhole(answer.Body as ObjectBody, options.signal);
     } catch (error) {
       if (isNoSuchKey(error)) return null;
       throw error;

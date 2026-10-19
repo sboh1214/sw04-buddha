@@ -1,4 +1,4 @@
-import { assertObjectKey, type ObjectStorage } from './object-storage.js';
+import { assertObjectKey, type ObjectReadOptions, type ObjectStorage } from './object-storage.js';
 
 /** One object a MemoryObjectStorage holds. */
 export interface MemoryObject {
@@ -33,8 +33,10 @@ export class MemoryObjectStorage implements ObjectStorage {
     });
   }
 
-  get(key: string): Promise<Uint8Array | null> {
+  /** Answers at once, so there is nothing to give up — except a read already given up. */
+  get(key: string, options: ObjectReadOptions = {}): Promise<Uint8Array | null> {
     return withKey(key, () => {
+      options.signal?.throwIfAborted();
       const object = this.objects.get(key);
       return object ? new Uint8Array(object.body) : null;
     });

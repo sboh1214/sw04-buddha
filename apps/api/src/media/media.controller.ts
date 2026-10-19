@@ -70,8 +70,9 @@ export class MediaController {
   @ApiData(uploadedImageSchema, 201)
   // FORBIDDEN: a mutation whose Origin is not ours (SessionGuard's CSRF check, or the body
   // parser's hook before the body is read — image-body.ts), or a query whose `expectedAccountId`
-  // is not the cookie's account (details name the field; nothing stored). RATE_LIMITED (every
-  // route documents it) is also the answer when too many conversions are waiting (image.ts).
+  // is not the cookie's account (details name the field; nothing stored). UNAUTHENTICATED and
+  // ONBOARDING_REQUIRED are answered by that hook too, before the body is read. RATE_LIMITED
+  // (every route documents it) is also the answer when too many conversions are waiting (image.ts).
   @ApiErrors(
     'UNAUTHENTICATED',
     'FORBIDDEN',
@@ -115,10 +116,12 @@ export class MediaController {
    * and an image still shown costs a 304.
    *
    * An answer with the image holds its bytes from the storage read until the answer has been handed
-   * to the socket, or the client has gone: a share of the process's budget (`imageReads`), taken
-   * before the store is read. Past the budget the read is RATE_LIMITED with `Retry-After`, as a full
-   * conversion queue is for an upload — so clients that read slowly, or not at all, fill the budget
-   * and not the API's memory (ADR-0073 decision 9-36). A 304 holds nothing.
+   * to the socket, or the client has gone — and in either case until the storage read has settled:
+   * a share of the process's budget (`imageReads`), taken before the store is read. A client that
+   * goes gives the read up (an aborted signal), and the share comes back once that read has stopped.
+   * Past the budget the read is RATE_LIMITED with `Retry-After`, as a full conversion queue is for an
+   * upload — so clients that read slowly, or not at all, or hang up mid-read, fill the budget and not
+   * the API's memory (ADR-0073 decision 9-36). A 304 holds nothing.
    */
   @Get(':mediaId')
   @RawResponse()
@@ -155,19 +158,28 @@ export class MediaController {
       void reply.header('retry-after', String(IMAGE_READ_BUSY_RETRY_SECONDS));
       throw imageReadsBusy();
     }
-    // Given back once the answer is out or the client has gone — at once if it went already.
-    finished(reply.raw, release);
+    // The client going gives the store's read up (`gone`) — at once if it went already — but the
+    // share is given back only when the answer is out or the client has gone AND the read has
+    // settled: a read given up still holds what it has gathered until it stops, so a client that
+    // hangs up mid-read cannot hand its share on while its image is still being read into memory.
+    const gone = new AbortController();
+    const answered = new Promise<void>((resolve) => {
+      finished(reply.raw, () => {
+        gone.abort();
+        resolve();
+      });
+    });
+    const reading = this.media.bytesOf(image, gone.signal);
+    void Promise.allSettled([answered, reading]).then(release);
     let body: Uint8Array | null;
     try {
-      body = await this.media.bytesOf(image);
+      body = await reading;
     } catch (error) {
-      release();
+      // Given up because the client went: there is no one to answer.
+      if (gone.signal.aborted) return undefined;
       throw error;
     }
-    if (body === null) {
-      release();
-      throw imageNotFound();
-    }
+    if (body === null) throw imageNotFound();
     void reply
       .header('content-type', image.contentType)
       .header('cache-control', 'public, no-cache')

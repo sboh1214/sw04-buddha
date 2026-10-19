@@ -1,13 +1,14 @@
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { PassThrough } from 'node:stream';
 import {
   DeleteObjectCommand,
   GetObjectCommand,
   NoSuchKey,
   PutObjectCommand,
 } from '@aws-sdk/client-s3';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_MEDIA_LOCAL_DIR,
   createObjectStorage,
@@ -86,6 +87,15 @@ describe('LocalObjectStorage', () => {
     expect(readdirSync(path.join(root, 'post-images'))).toEqual([path.basename(KEY)]);
   });
 
+  it('gives a read up when its signal is aborted', async () => {
+    const storage = new LocalObjectStorage(root);
+    await storage.put(KEY, bytes(1), 'image/webp');
+    await expect(storage.get(KEY, { signal: AbortSignal.abort() })).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+    expect(await storage.get(KEY, { signal: new AbortController().signal })).toEqual(bytes(1));
+  });
+
   it('copies nothing it was not asked to: a caller changing its buffer later changes nothing', async () => {
     const storage = new LocalObjectStorage(root);
     const body = bytes(1, 2);
@@ -107,6 +117,9 @@ describe('MemoryObjectStorage', () => {
     const read = await storage.get(KEY);
     read![0] = 0;
     expect(await storage.get(KEY)).toEqual(bytes(4, 5));
+    await expect(storage.get(KEY, { signal: AbortSignal.abort() })).rejects.toMatchObject({
+      name: 'AbortError',
+    });
   });
 });
 
@@ -152,19 +165,74 @@ describe('S3ObjectStorage', () => {
     expect(new Set(sent.map((entry) => entry.input.Bucket))).toEqual(new Set(['buddha-media']));
   });
 
-  it('reads a 404 by another name as no object, and passes any other failure on', async () => {
-    const missing = {
-      send: () =>
-        Promise.reject(Object.assign(new Error('x'), { $metadata: { httpStatusCode: 404 } })),
-    } as unknown as S3Sender;
-    expect(await new S3ObjectStorage(missing, 'b-1').get(KEY)).toBeNull();
+  /** A client whose every command fails with `error`. */
+  const failing = (error: Error) => ({ send: () => Promise.reject(error) }) as unknown as S3Sender;
+  /** An S3 service error as the SDK makes it: a name and the HTTP status. */
+  const s3Error = (name: string, status: number) =>
+    Object.assign(new Error(name), { name, $metadata: { httpStatusCode: status } });
+
+  it('reads only S3’s NoSuchKey as no object, and passes every other failure on — another 404 too', async () => {
+    // NoSuchKey by its name too: an error another copy of the SDK made is not this one's class.
+    expect(
+      await new S3ObjectStorage(failing(s3Error('NoSuchKey', 404)), 'b-1').get(KEY),
+    ).toBeNull();
     const empty = { send: () => Promise.resolve({}) } as unknown as S3Sender;
     expect(await new S3ObjectStorage(empty, 'b-1').get(KEY)).toBeNull();
-    const denied = {
-      send: () =>
-        Promise.reject(Object.assign(new Error('AccessDenied'), { name: 'AccessDenied' })),
+    // A wrong or removed bucket is the store failing, not every image missing.
+    await expect(
+      new S3ObjectStorage(failing(s3Error('NoSuchBucket', 404)), 'b-1').get(KEY),
+    ).rejects.toThrow('NoSuchBucket');
+    await expect(
+      new S3ObjectStorage(failing(s3Error('NotFound', 404)), 'b-1').get(KEY),
+    ).rejects.toThrow('NotFound');
+    await expect(
+      new S3ObjectStorage(failing(s3Error('AccessDenied', 403)), 'b-1').get(KEY),
+    ).rejects.toThrow('AccessDenied');
+  });
+
+  it('gives a read up when its signal is aborted: the request, and a body still streaming in', async () => {
+    const body = new PassThrough();
+    const options: unknown[] = [];
+    const client = {
+      send: (_command: unknown, sendOptions: unknown) => {
+        options.push(sendOptions);
+        return Promise.resolve({
+          Body: Object.assign(body, {
+            transformToByteArray: () =>
+              new Promise<Uint8Array>((resolve, reject) => {
+                const chunks: Buffer[] = [];
+                body.on('data', (chunk: Buffer) => chunks.push(chunk));
+                body.on('end', () => resolve(new Uint8Array(Buffer.concat(chunks))));
+                body.on('error', reject);
+              }),
+          }),
+        });
+      },
     } as unknown as S3Sender;
-    await expect(new S3ObjectStorage(denied, 'b-1').get(KEY)).rejects.toThrow('AccessDenied');
+    const storage = new S3ObjectStorage(client, 'b-1');
+    const gone = new AbortController();
+    const reading = storage.get(KEY, { signal: gone.signal });
+    await vi.waitFor(() => {
+      expect(options).toHaveLength(1);
+    });
+    // The SDK gets the signal for the request itself.
+    expect(options[0]).toEqual({ abortSignal: gone.signal });
+    body.write(Buffer.from([1, 2]));
+    gone.abort();
+    await expect(reading).rejects.toMatchObject({ name: 'AbortError' });
+    expect(body.destroyed).toBe(true);
+    // A read given up before it starts sends nothing.
+    await expect(storage.get(KEY, { signal: gone.signal })).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+    // Without a signal, the body is read whole as before.
+    const plain = {
+      send: () =>
+        Promise.resolve({
+          Body: { transformToByteArray: () => Promise.resolve(bytes(3, 4)) },
+        }),
+    } as unknown as S3Sender;
+    expect(await new S3ObjectStorage(plain, 'b-1').get(KEY)).toEqual(bytes(3, 4));
   });
 });
 

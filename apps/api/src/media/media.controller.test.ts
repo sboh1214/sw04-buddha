@@ -6,7 +6,7 @@
  * while a post shows it, to anyone, revalidated on every use, and holds no more images at once than
  * the process's budget. Skips when TEST_* are unset.
  */
-import { get as httpGet } from 'node:http';
+import { type IncomingMessage, get as httpGet, request as httpRequest } from 'node:http';
 import { schema } from '@buddha/db';
 import { completeOnboarding, createMarket, createMedia, createPost } from '@buddha/db/test';
 import { IMAGE_MAX_BYTES, uploadedImageSchema, type UploadedImage } from '@buddha/shared';
@@ -14,6 +14,7 @@ import { eq } from 'drizzle-orm';
 import sharp from 'sharp';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
+import { SESSION_COOKIE } from '../openapi/document.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { IMAGE_BODY_LIMIT } from './image-body.js';
 import {
@@ -190,6 +191,22 @@ describe.skipIf(!hasTestInfra)('/api/v1/media (integration)', () => {
     const anonymous = await upload(huge, { who: null, expected: 'x' });
     expect(anonymous.statusCode).toBe(401);
     expect(anonymous.json<{ error: { code: string } }>().error.code).toBe('UNAUTHENTICATED');
+    // A made-up cookie and no Origin (no browser: curl, a script) names no session: refused
+    // unread too, the session resolved through better-auth before the body (not the cookie's
+    // presence alone).
+    const madeUp = await t.app.inject({
+      method: 'POST',
+      url: `/api/v1/media/images?expectedAccountId=${author.id}`,
+      headers: { 'content-type': 'image/jpeg', cookie: `${SESSION_COOKIE}=x` },
+      payload: huge,
+    });
+    expect(madeUp.statusCode).toBe(401);
+    expect(madeUp.json<{ error: { code: string } }>().error.code).toBe('UNAUTHENTICATED');
+    // A real session of an account with a step left is refused unread as well.
+    const newcomer = await signUpTestUser(t);
+    const early = await upload(huge, { who: newcomer });
+    expect(early.statusCode).toBe(409);
+    expect(early.json<{ error: { code: string } }>().error.code).toBe('ONBOARDING_REQUIRED');
     const foreign = await t.app.inject({
       method: 'POST',
       url: `/api/v1/media/images?expectedAccountId=${author.id}`,
@@ -204,6 +221,44 @@ describe.skipIf(!hasTestInfra)('/api/v1/media (integration)', () => {
     // The upload route itself still reads it, and cuts it at the limit.
     expect((await upload(huge)).statusCode).toBe(413);
     expect(await mediaRows()).toEqual([]);
+  });
+
+  it('answers a made-up cookie before the body has come', async () => {
+    // A real socket, the body announced at the parser's limit and only begun: were the body read
+    // first, the answer would wait for the rest of it (which never comes).
+    const request = httpRequest(`${t.url!}/api/v1/media/images?expectedAccountId=${author.id}`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'image/jpeg',
+        'content-length': String(IMAGE_BODY_LIMIT),
+        cookie: `${SESSION_COOKIE}=x`,
+      },
+    });
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      const answered = new Promise<{ status: number; body: string }>((resolve, reject) => {
+        request.on('response', (response) => {
+          const chunks: Buffer[] = [];
+          response.on('data', (chunk: Buffer) => chunks.push(chunk));
+          response.on('end', () => {
+            resolve({ status: response.statusCode ?? 0, body: Buffer.concat(chunks).toString() });
+          });
+        });
+        request.on('error', reject);
+        request.write(Buffer.alloc(1024));
+      });
+      const waited = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error('no answer before the body was sent'));
+        }, 3_000);
+      });
+      const res = await Promise.race([answered, waited]);
+      expect(res.status).toBe(401);
+      expect(JSON.parse(res.body)).toMatchObject({ error: { code: 'UNAUTHENTICATED' } });
+    } finally {
+      clearTimeout(timer);
+      request.destroy();
+    }
   });
 
   it('removes the stored object when its row cannot be written', async () => {
@@ -350,7 +405,10 @@ describe.skipIf(!hasTestInfra)('/api/v1/media (integration)', () => {
     const media = await createMedia(t.db, { ownerId: author.id });
     await createPost(t.db, { marketId: market.id, authorId: author.id, imageIds: [media.id] });
     expect((await read(media.id)).statusCode).toBe(404);
-    expect(imageReads.size).toBe(0);
+    // Given back once that answer is out (the store's read had settled before it).
+    await vi.waitFor(() => {
+      expect(imageReads.size).toBe(0);
+    });
   });
 
   /** An upload of the author's, shown by a post of theirs. */
@@ -409,34 +467,44 @@ describe.skipIf(!hasTestInfra)('/api/v1/media (integration)', () => {
     }
   });
 
-  it('gives the share back when the client goes before its image is sent', async () => {
+  it('gives the read up when the client goes before its image is sent, and its share back only once that read has stopped', async () => {
     const image = await shown();
     const getObject = t.storage.get.bind(t.storage);
-    let reached!: () => void;
-    const reading = new Promise<void>((resolve) => {
+    let reached!: (signal: AbortSignal | undefined) => void;
+    const reading = new Promise<AbortSignal | undefined>((resolve) => {
       reached = resolve;
     });
     let open!: () => void;
     const gate = new Promise<void>((resolve) => {
       open = resolve;
     });
-    const get = vi.spyOn(t.storage, 'get').mockImplementationOnce(async (key) => {
-      reached();
+    // A store read that takes its time, and — as S3's does — keeps going until it notices it was
+    // given up: what it gathered stays in memory until then.
+    const get = vi.spyOn(t.storage, 'get').mockImplementationOnce(async (key, options) => {
+      reached(options?.signal);
       await gate;
+      options?.signal?.throwIfAborted();
       return getObject(key);
     });
     try {
       const request = httpGet(`${t.url!}/api/v1/media/${image.id}`);
       request.on('error', () => undefined);
-      await reading;
+      const signal = await reading;
       expect(imageReads.size).toBe(image.body.length);
-      // The client hangs up while the store is still being read: its share is free at once.
+      expect(signal?.aborted).toBe(false);
+      // The client hangs up while the store is still being read: the read is given up…
       request.destroy();
+      await vi.waitFor(() => {
+        expect(signal?.aborted).toBe(true);
+      });
+      // …but its share stays taken while that read has not stopped.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(imageReads.size).toBe(image.body.length);
+      open();
       await vi.waitFor(() => {
         expect(imageReads.size).toBe(0);
       });
-      open();
-      // The late bytes go nowhere, and take nothing back.
+      // Nothing more is taken back afterwards.
       await new Promise((resolve) => setTimeout(resolve, 50));
       expect(imageReads.size).toBe(0);
     } finally {
@@ -444,6 +512,86 @@ describe.skipIf(!hasTestInfra)('/api/v1/media (integration)', () => {
       get.mockRestore();
     }
     expect((await read(image.id)).statusCode).toBe(200);
+  });
+
+  it('keeps the share of a read that outlives its answer until the read stops', async () => {
+    const image = await shown();
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    // The store fails slowly after the client went: the share is held through the failure.
+    const get = vi.spyOn(t.storage, 'get').mockImplementationOnce(async () => {
+      await gate;
+      throw new Error('store down');
+    });
+    try {
+      const request = httpGet(`${t.url!}/api/v1/media/${image.id}`);
+      request.on('error', () => undefined);
+      await vi.waitFor(() => {
+        expect(get).toHaveBeenCalled();
+      });
+      request.destroy();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(imageReads.size).toBe(image.body.length);
+      open();
+      await vi.waitFor(() => {
+        expect(imageReads.size).toBe(0);
+      });
+    } finally {
+      open();
+      get.mockRestore();
+    }
+  });
+
+  it('keeps the share of an answer the client is not reading, after the store read has settled, until the answer is out', async () => {
+    const image = await shown();
+    // Far more than a loopback socket's buffers take: while the client reads nothing, the answer
+    // cannot all be handed to the socket. (The share is the row's size, not these bytes: the
+    // controller serves the store's bytes as they come.)
+    const large = new Uint8Array(64 * 1024 * 1024);
+    let settled = false;
+    const get = vi.spyOn(t.storage, 'get').mockImplementationOnce(() => {
+      const read = Promise.resolve(large);
+      void read.then(() => {
+        settled = true;
+      });
+      return read;
+    });
+    let response: IncomingMessage | undefined;
+    const request = httpGet(`${t.url!}/api/v1/media/${image.id}`, (res) => {
+      // Reads nothing for now: the rest of the answer waits in the API.
+      res.pause();
+      response = res;
+    });
+    request.on('error', () => undefined);
+    try {
+      await vi.waitFor(() => {
+        expect(response?.statusCode).toBe(200);
+      });
+      expect(settled).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      // The store read has settled, but the answer is not out: the share stays taken (9-36).
+      expect(imageReads.size).toBe(image.body.length);
+      // Read to its end: the answer is out, the share comes back.
+      let received = 0;
+      response!.on('data', (chunk: Buffer) => {
+        received += chunk.length;
+      });
+      response!.resume();
+      await vi.waitFor(
+        () => {
+          expect(imageReads.size).toBe(0);
+        },
+        { timeout: 10_000 },
+      );
+      await vi.waitFor(() => {
+        expect(received).toBe(large.length);
+      });
+    } finally {
+      request.destroy();
+      get.mockRestore();
+    }
   });
 });
 

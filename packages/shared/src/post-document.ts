@@ -780,16 +780,33 @@ export const postDocumentInputSchema = z
 export const POST_EXCERPT_MAX_LENGTH = 300;
 
 /**
+ * The characters `String.prototype.trim` removes — ECMAScript's WhiteSpace (tab, vertical tab,
+ * form feed, U+FEFF and every space separator, Zs) and LineTerminator (LF, CR, U+2028, U+2029) — as
+ * a regular-expression bracket expression that JavaScript and Postgres (an ARE) read alike: the
+ * escapes are character-entry escapes in both, and U+2000–U+200A are listed one by one, as a range
+ * in a Postgres bracket expression may follow the collation. What `postExcerpt` treats as blank,
+ * for a query that reads a card's text in the database (PostsService.list).
+ */
+export const TRIM_WHITESPACE_CLASS =
+  '[\\t\\n\\v\\f\\r \\u00a0\\u1680\\u2000\\u2001\\u2002\\u2003\\u2004\\u2005\\u2006\\u2007\\u2008' +
+  '\\u2009\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]';
+
+/**
  * A card's preview (owner decision 2026-10-18: «서식 뺀 앞부분 두 줄»): the text's non-empty lines,
- * trimmed, at most POST_EXCERPT_MAX_LENGTH characters. The web clamps it to two lines; the server
- * sends enough to fill them.
+ * trimmed, at most POST_EXCERPT_MAX_LENGTH characters, with no blanks at its end. The web clamps it
+ * to two lines; the server sends enough to fill them.
+ *
+ * The end is trimmed after the cut so that any start of the text long enough gives the excerpt the
+ * whole text gives (PostsService.list reads only the start of a body): a run of blanks inside a
+ * line that the cut of that start ends in is trimmed with the line, and would otherwise leave the
+ * whole text's excerpt longer by the blanks it kept.
  */
 export function postExcerpt(text: string): string {
   const lines = text
     .split('\n')
     .map((line) => line.trim())
     .filter((line) => line !== '');
-  return codePointSlice(lines.join('\n'), POST_EXCERPT_MAX_LENGTH);
+  return codePointSlice(lines.join('\n'), POST_EXCERPT_MAX_LENGTH).trimEnd();
 }
 
 /**

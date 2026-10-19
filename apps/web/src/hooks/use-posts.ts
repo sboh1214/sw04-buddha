@@ -111,10 +111,11 @@ export interface DeletePostVariables {
 }
 
 /**
- * A refused write's side effects, shared by the three: the cookie as another account asks for the
- * session again (`onSessionChanged`, SessionCacheGuard then shows who is signed in), and a refusal
- * for the onboarding reads `['me']` again, so the onboarding gate takes the account to its step —
- * and the form, going, keeps its draft in this tab (hooks/use-post-draft.ts, 오너 결정 2026-10-20).
+ * A refused write's side effects, shared by the three and the image upload (`postImageUploader`):
+ * the cookie as another account asks for the session again (`onSessionChanged`, SessionCacheGuard
+ * then shows who is signed in), and a refusal for the onboarding reads `['me']` again, so the
+ * onboarding gate takes the account to its step — and the form, going, keeps its draft in this tab
+ * (hooks/use-post-draft.ts, 오너 결정 2026-10-20).
  */
 async function afterRefusal(queryClient: QueryClient, error: Error, onSessionChanged: () => void) {
   if (isForAnotherAccount(error)) onSessionChanged();
@@ -231,4 +232,27 @@ export async function uploadPostImage(
       headers: { 'Content-Type': uploadContentType(file) },
     }),
   ).data;
+}
+
+/**
+ * `uploadPostImage` as the editor sends it: a refusal runs the writes' side effects first
+ * (`afterRefusal`) — an upload refused for the onboarding (a revision asked for consent again) or
+ * as another account (the cookie changed in another tab) puts the account's real state on screen,
+ * as a refused send does, rather than leaving the form up with every later upload and the send
+ * refused the same way — and is then the editor's to show.
+ */
+export function postImageUploader(queryClient: QueryClient, onSessionChanged: () => void) {
+  return async (file: Blob & { type: string }, expectedAccountId: string) => {
+    try {
+      return await uploadPostImage(file, expectedAccountId);
+    } catch (error) {
+      await afterRefusal(queryClient, error as Error, onSessionChanged);
+      throw error;
+    }
+  };
+}
+
+export function useUploadPostImage(onSessionChanged: () => void) {
+  const queryClient = useQueryClient();
+  return postImageUploader(queryClient, onSessionChanged);
 }

@@ -1,4 +1,4 @@
-import { Box, Image } from '@chakra-ui/react';
+import { Box } from '@chakra-ui/react';
 import {
   mediaPath,
   type PostBlock,
@@ -12,6 +12,7 @@ import { type ReactNode } from 'react';
 import { copy } from '@/copy';
 import { isPostTextColor } from '@/lib/post-editor';
 import { POST_CONTENT_CSS } from './post-content-style';
+import { RetriedImage } from './retried-image';
 
 /**
  * A post's body (#46, ADR-0073), drawn node by node as React elements from the stored document —
@@ -22,7 +23,8 @@ import { POST_CONTENT_CSS } from './post-content-style';
  *
  * - A link opens in a new tab with `noopener noreferrer` and `nofollow ugc` (a writer's link is
  *   not an endorsement), and only an http(s) address is drawn as a link at all.
- * - An image is ours, by its media id (`GET /media/:id`, served only while a post shows it).
+ * - An image is ours, by its media id (`GET /media/:id`, served only while a post shows it), and
+ *   asked for again when the API said to wait (`RetriedImage`).
  * - A colour is a name drawn through the theme (`data-color`, post-content-style.ts).
  * - Headings are `h3`–`h5` under the page's `h1` and the post's `h2`.
  */
@@ -163,8 +165,8 @@ function block(node: PostBlock, key: number): ReactNode {
       return (
         // A plain <img> (Chakra's `Image`): the image is ours, revalidated on every use
         // (`no-cache` + ETag), so it stops the moment the post is hidden or deleted — no
-        // optimiser in front to keep a copy.
-        <Image
+        // optimiser in front to keep a copy. Asked for again after a 429 (`RetriedImage`).
+        <RetriedImage
           key={key}
           src={mediaPath(node.attrs.mediaId)}
           alt={copy.postImageAlt}

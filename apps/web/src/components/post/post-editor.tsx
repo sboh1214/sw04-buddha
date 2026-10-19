@@ -14,7 +14,6 @@ import {
 } from '@chakra-ui/react';
 import {
   IMAGE_CONTENT_TYPES,
-  POST_IMAGES_MAX,
   mediaPath,
   type PostDocument,
   type PostHeadingLevel,
@@ -23,6 +22,7 @@ import {
 import { Table, TableCell, TableHeader, TableRow } from '@tiptap/extension-table';
 import { TextStyle } from '@tiptap/extension-text-style';
 import { Placeholder } from '@tiptap/extensions';
+import { NodeSelection } from '@tiptap/pm/state';
 import {
   EditorContent,
   Extension,
@@ -37,19 +37,21 @@ import StarterKit from '@tiptap/starter-kit';
 import { useEffect, useRef, useState } from 'react';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
-import { uploadPostImage } from '@/hooks/use-posts';
+import { useUploadPostImage } from '@/hooks/use-posts';
 import {
   POST_TEXT_COLOR_LABEL,
   POST_TEXT_COLOR_OPTIONS,
   countEditorDocument,
-  imagePrecheck,
+  createImageSlots,
   imageRefusalMessage,
   imageUploadErrorMessage,
   isPostTextColor,
   linkInputHref,
   pastedLinkHref,
+  uploadImageBatch,
 } from '@/lib/post-editor';
 import { previewSize } from '@/lib/post-drafts';
+import { useSession } from '@/lib/use-session';
 import { POST_CONTENT_CSS } from './post-content-style';
 
 /**
@@ -319,6 +321,11 @@ export function PostEditor({
   });
 
   const [uploads, setUploads] = useState(0);
+  // The slots the uploads on their way hold (`createImageSlots`): one for the editor's life.
+  const [slots] = useState(createImageSlots);
+  const { refetch: refetchSession } = useSession();
+  // A refused upload runs a refused send's side effects (`postImageUploader`).
+  const upload = useUploadPostImage(() => void refetchSession());
   const fileInput = useRef<HTMLInputElement>(null);
 
   // `editable` above is read once, when the editor is made; a send in flight locks it after that.
@@ -353,41 +360,60 @@ export function PostEditor({
 
   const insertImages = async (files: File[]) => {
     if (editor === null || accountId === undefined) return;
-    const held = countEditorDocument(editor.getJSON()).images;
-    if (held + files.length > POST_IMAGES_MAX) {
+    // The document's images and the uploads still on their way (`createImageSlots`): a batch
+    // picked or dropped while another uploads cannot pass the limit together with it.
+    if (!slots.take(countEditorDocument(editor.getJSON()).images, files.length)) {
       toaster.create({ type: 'error', title: copy.errPostTooManyImages });
       return;
     }
-    for (const file of files) {
-      const refusal = imagePrecheck(file);
-      if (refusal !== undefined) {
-        toaster.create({ type: 'error', title: imageRefusalMessage(refusal) });
-        continue;
-      }
-      changeUploads(1);
-      try {
-        const [preview, uploaded] = await Promise.all([
-          readAsDataUrl(file),
-          uploadPostImage(file, accountId),
-        ]);
-        previews.set(uploaded.id, preview);
-        editor
-          .chain()
-          .focus()
-          .insertContent({ type: 'image', attrs: { mediaId: uploaded.id } })
-          .run();
-        if (onPreview !== undefined) {
-          // Still counted as uploading (the `finally` below), so the form cannot send — and be
-          // refused for the onboarding — before the kept draft's copy is drawn.
-          const small = await smallPreviewOf(preview);
-          if (small !== undefined) onPreview(uploaded.id, small);
+    // One file after another; a refusal about the account, or the editor gone, ends the batch
+    // (`uploadImageBatch`).
+    await uploadImageBatch(files, slots, {
+      alive: () => !editor.isDestroyed,
+      refused: (reason) => {
+        toaster.create({ type: 'error', title: imageRefusalMessage(reason) });
+      },
+      send: async (file, placed) => {
+        changeUploads(1);
+        try {
+          const [preview, uploaded] = await Promise.all([
+            readAsDataUrl(file),
+            upload(file, accountId),
+          ]);
+          previews.set(uploaded.id, preview);
+          // After an image goes in, the selection is that image (a node selection, which is where
+          // ProseMirror puts the cursor after an atom at the end): the next one goes after it rather
+          // than replacing it, so every image of a batch stays — and so does an image the writer
+          // had selected. A text selection is replaced, as typing over it would.
+          const { selection } = editor.state;
+          editor
+            .chain()
+            .focus()
+            .insertContentAt(
+              selection instanceof NodeSelection
+                ? selection.to
+                : { from: selection.from, to: selection.to },
+              { type: 'image', attrs: { mediaId: uploaded.id } },
+            )
+            .run();
+          // The document counts it from here.
+          placed();
+          if (onPreview !== undefined) {
+            // Still counted as uploading (the `finally` below), so the form cannot send — and be
+            // refused for the onboarding — before the kept draft's copy is drawn.
+            const small = await smallPreviewOf(preview);
+            if (small !== undefined) onPreview(uploaded.id, small);
+          }
+        } finally {
+          changeUploads(-1);
         }
-      } catch (error) {
+      },
+      // A refusal for the onboarding or as another account has already put the account's state
+      // on screen (`useUploadPostImage`), as a refused send does.
+      failed: (error) => {
         toaster.create({ type: 'error', title: imageUploadErrorMessage(error) });
-      } finally {
-        changeUploads(-1);
-      }
-    }
+      },
+    });
   };
 
   if (editor === null) {

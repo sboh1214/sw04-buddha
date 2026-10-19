@@ -17,6 +17,7 @@ import {
   communityPostsInfiniteQueryOptions,
   createPostOptions,
   deletePostOptions,
+  postImageUploader,
   postQueryOptions,
   updatePostOptions,
   uploadPostImage,
@@ -394,5 +395,54 @@ describe('an image upload', () => {
     // Not JSON: the serializer hands the file on untouched.
     expect(init.bodySerializer(file)).toBe(file);
     expect(init.headers).toEqual({ 'Content-Type': 'image/png' });
+  });
+
+  it('refused as another account or for the onboarding, does what a refused write does', async () => {
+    const queryClient = getQueryClient();
+    const me = new QueryObserver(queryClient, {
+      queryKey: ME_QUERY_KEY,
+      queryFn: () => Promise.resolve({}),
+      enabled: false,
+    });
+    queryClient.setQueryData(ME_QUERY_KEY, {});
+    const unsubscribe = me.subscribe(() => undefined);
+    const sessionChanged = vi.fn();
+    const send = vi.spyOn(api, 'POST');
+    const upload = postImageUploader(queryClient, sessionChanged);
+    const file = new Blob([new Uint8Array([1])], { type: 'image/png' });
+
+    // The cookie is another account's now (another tab): the session is asked for again.
+    const otherAccount = new ApiError(403, {
+      code: 'FORBIDDEN',
+      message: 'x',
+      details: [{ path: ['expectedAccountId'], message: 'other account' }],
+    });
+    send.mockRejectedValueOnce(otherAccount);
+    await expect(upload(file, 'user-1')).rejects.toBe(otherAccount);
+    expect(sessionChanged).toHaveBeenCalledTimes(1);
+    expect(queryClient.getQueryState(ME_QUERY_KEY)?.isInvalidated).toBe(false);
+
+    // A step left (a revision asked for consent again): /me is read again, so the gate moves on.
+    send.mockRejectedValueOnce(
+      new ApiError(409, { code: 'ONBOARDING_REQUIRED', message: 'x' } as never),
+    );
+    await expect(upload(file, 'user-1')).rejects.toBeInstanceOf(ApiError);
+    expect(queryClient.getQueryState(ME_QUERY_KEY)?.isInvalidated).toBe(true);
+    expect(sessionChanged).toHaveBeenCalledTimes(1);
+
+    // Any other refusal is the editor's alone to show.
+    queryClient.setQueryData(ME_QUERY_KEY, {});
+    send.mockRejectedValueOnce(
+      new ApiError(422, { code: 'IMAGE_NOT_ALLOWED', message: 'x' } as never),
+    );
+    await expect(upload(file, 'user-1')).rejects.toBeInstanceOf(ApiError);
+    expect(queryClient.getQueryState(ME_QUERY_KEY)?.isInvalidated).toBe(false);
+    expect(sessionChanged).toHaveBeenCalledTimes(1);
+
+    send.mockResolvedValueOnce(
+      answer({ id: MARKET, contentType: 'image/png', width: 1, height: 1, byteSize: 68 }),
+    );
+    await expect(upload(file, 'user-1')).resolves.toMatchObject({ id: MARKET });
+    unsubscribe();
   });
 });

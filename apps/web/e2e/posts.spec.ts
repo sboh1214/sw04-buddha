@@ -1,4 +1,4 @@
-import { type APIRequestContext, type Locator, type Page } from '@playwright/test';
+import { type APIRequestContext, type Locator, type Page, type Route } from '@playwright/test';
 import type { Me } from '@buddha/shared';
 import { copy } from '../src/copy';
 import {
@@ -43,7 +43,12 @@ import {
  * the gate takes it to its first step and the onboarding brings it back to the post (오너 결정
  * 2026-10-20 3차 답 1). No spec can bring about a re-consent for real (the consent versions are
  * the build's), so `GET /me` says it in the browser (`asReconsent`), as onboarding.spec.ts draws
- * it.
+ * it. An image upload refused for the onboarding takes the writer to the step as a refused send
+ * does, and one refused as another account reads the session again — either way the rest of the
+ * batch is not sent; images picked while others upload count those too, so a post never takes
+ * more than ten, and an image refused or failed gives its place back; and an image the API asked
+ * to read again later (429) is drawn once it can be — a post's and a card's — but asked for three
+ * times at most (ADR-0073 결과 5, Codex review of #219).
  * The allow-list, the image checks, the permissions and the paging are the API's and the shared
  * package's tests; this walks the screens.
  */
@@ -122,6 +127,20 @@ const ONBOARDING_REFUSAL = {
     },
   },
 };
+
+/** `count` PNG files for the editor's picker, named from `first` on. */
+const pngFiles = (count: number, first = 1) =>
+  Array.from({ length: count }, (_, index) => ({
+    name: `evidence-${String(first + index)}.png`,
+    mimeType: 'image/png',
+    buffer: PNG,
+  }));
+
+/** The toaster's region (components/ui/toaster.tsx — zag's toast group), mounted with the app. */
+const toastsOf = (page: Page) => page.locator('body > [data-scope="toast"][data-part="group"]');
+
+/** Long enough for a request the screen would send next (a batch's next upload) to have left. */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 1_000));
 
 /** The post drafts kept in this tab's sessionStorage (lib/post-drafts.ts), by storage key. */
 function draftsInTab(page: Page): Promise<Record<string, { previews: Record<string, string> }>> {
@@ -1056,6 +1075,247 @@ test.describe('근거 글', () => {
     await expect(page.getByTestId('post-form')).toBeVisible();
     await expect(page.getByTestId('post-draft-restored')).toHaveCount(0);
     await expect(page.getByTestId('post-title-input')).toHaveValue('');
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+  });
+
+  test('이미지 업로드가 온보딩 때문에 거절되면 보내기가 거절될 때처럼 남은 단계로 가고, 쓰던 글은 이 탭에 두며, 함께 고른 나머지는 보내지 않는다', async ({
+    admin,
+    page,
+  }) => {
+    const market = await createOpenMarket(admin);
+    await signUp(page, freshEmail());
+    const reconsent = await asReconsent(page);
+    const write = `/community/write?market=${market.id}`;
+    await page.goto(write);
+    await page.getByTestId('post-title-input').fill('업로드 전에 쓰던 제목');
+    // A revision asked for consent again while the screen was open: the upload is refused for it.
+    let uploads = 0;
+    await page.route('**/api/v1/media/images**', async (route) => {
+      uploads += 1;
+      reconsent.on = true;
+      await route.fulfill(ONBOARDING_REFUSAL);
+    });
+    await page.getByTestId('post-editor-file').setInputFiles(pngFiles(3));
+    // `/me` read again, the gate takes the account to its step — and the draft stays in the tab.
+    await expect(page).toHaveURL(`/onboarding?next=${encodeURIComponent(write)}`);
+    expect(Object.keys(await draftsInTab(page))).toEqual([`buddha.postDraft:new:${market.id}`]);
+    // The refusal is about the account: the other two would be refused alike, so they never leave
+    // and the refusal is said once (ADR-0073 decision 9-41).
+    await settle();
+    expect(uploads).toBe(1);
+    await expect(toastsOf(page).getByText(copy.errPostOnboarding)).toHaveCount(1);
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+  });
+
+  test('이미지를 올리는 동안 더 고른 이미지는 올리는 중인 것까지 세어 글마다 10장을 넘기지 않는다', async ({
+    admin,
+    page,
+  }) => {
+    const market = await createOpenMarket(admin);
+    await signUp(page, freshEmail());
+    await page.goto(`/community/write?market=${market.id}`);
+    const editor = page.getByTestId('post-editor-content');
+    await expect(editor).toBeVisible();
+    // The uploads wait here until let go: the first batch is still on its way when the next comes.
+    const held: Route[] = [];
+    let holding = true;
+    await page.route('**/api/v1/media/images**', async (route) => {
+      if (holding) held.push(route);
+      else await route.continue();
+    });
+    const picker = page.getByTestId('post-editor-file');
+    await picker.setInputFiles(pngFiles(6, 1));
+    await expect.poll(() => held.length).toBe(1);
+    // Five more with six on their way would be eleven: refused, nothing of it sent.
+    await picker.setInputFiles(pngFiles(5, 7));
+    await expect(toastsOf(page).getByText(copy.errPostTooManyImages)).toBeVisible();
+    // Four fit beside them.
+    await picker.setInputFiles(pngFiles(4, 12));
+    await expect.poll(() => held.length).toBe(2);
+    holding = false;
+    for (const route of held) await route.continue();
+    await expect(page.getByTestId('post-editor-uploading')).toHaveCount(0);
+    await expect(editor.locator('img[data-media-id]')).toHaveCount(10);
+    await expect(page.getByTestId('post-body-images')).toContainText('10 / 10');
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+  });
+
+  test('이미지 읽기가 잠시 뒤에 다시 받으라고(429) 하면 글의 이미지와 카드의 썸네일을 그 뒤에 다시 받아 그린다', async ({
+    admin,
+    page,
+  }) => {
+    const market = await createOpenMarket(admin);
+    const tag = freshTag();
+    await signUp(page, freshEmail());
+    const me = await meOf(page.request);
+    const uploaded = await page.request.post(`/api/v1/media/images?expectedAccountId=${me.id}`, {
+      headers: { 'content-type': 'image/png' },
+      data: PNG,
+    });
+    expect(uploaded.status(), await uploaded.text()).toBe(201);
+    const mediaId = ((await uploaded.json()) as { data: { id: string } }).data.id;
+    const postId = await postThroughApi(page.request, market.id, `기다린 이미지 ${tag}`, tag, [
+      { type: 'image', attrs: { mediaId } },
+    ]);
+    // The API's answer while the images it is sending hold its budget (ADR-0073 decision 9-36):
+    // twice for each screen, then the image.
+    let refusals = 0;
+    await page.route(`**/api/v1/media/${mediaId}`, async (route) => {
+      if (refusals >= 2) return route.fallback();
+      refusals += 1;
+      await route.fulfill({
+        status: 429,
+        headers: { 'retry-after': '1' },
+        json: {
+          error: {
+            code: 'RATE_LIMITED',
+            message: 'Too many images are being sent; read it again',
+            details: { retryAfterSeconds: 1 },
+          },
+        },
+      });
+    });
+    const drawn = (image: Locator) =>
+      image.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0);
+
+    await page.goto(`/community/posts/${postId}`);
+    const image = page.getByTestId('post-body').getByTestId('post-image');
+    await expect.poll(() => drawn(image), { timeout: 15_000 }).toBe(true);
+    expect(refusals).toBe(2);
+
+    refusals = 0;
+    await page.goto(`/community?q=${tag}`);
+    const thumbnail = card(page, postId).getByTestId('post-card-thumbnail');
+    await expect.poll(() => drawn(thumbnail), { timeout: 15_000 }).toBe(true);
+    expect(refusals).toBe(2);
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+  });
+
+  test('다른 계정의 쿠키로 거절된 업로드는 세션을 다시 읽고 나머지를 보내지 않으며, 거절되거나 실패한 이미지의 자리는 모두 돌아온다', async ({
+    admin,
+    page,
+  }) => {
+    const market = await createOpenMarket(admin);
+    await signUp(page, freshEmail());
+    await page.goto(`/community/write?market=${market.id}`);
+    const editor = page.getByTestId('post-editor-content');
+    await expect(editor).toBeVisible();
+    const toasts = toastsOf(page);
+    let answer: 'another account' | 'unreadable' | 'real' = 'another account';
+    let uploads = 0;
+    await page.route('**/api/v1/media/images**', async (route) => {
+      uploads += 1;
+      if (answer === 'real') return route.continue();
+      await route.fulfill(
+        answer === 'another account'
+          ? {
+              status: 403,
+              json: {
+                error: {
+                  code: 'FORBIDDEN',
+                  message: 'Not the signed-in account',
+                  details: [{ path: ['expectedAccountId'], message: 'not the signed-in account' }],
+                },
+              },
+            }
+          : {
+              status: 422,
+              json: {
+                error: {
+                  code: 'IMAGE_NOT_ALLOWED',
+                  message: 'Not an image this post takes',
+                  details: { reason: 'unreadable' },
+                },
+              },
+            },
+      );
+    });
+    const picker = page.getByTestId('post-editor-file');
+
+    // The cookie is another account's (signed in again in another tab): the session is read again,
+    // as a refused send does (`postImageUploader`), and the rest of the batch stays home.
+    const sessionRead = page.waitForRequest(
+      (request) => new URL(request.url()).pathname === '/api/auth/get-session',
+      { timeout: 10_000 },
+    );
+    await picker.setInputFiles(pngFiles(3));
+    await sessionRead;
+    await expect(toasts.getByText(copy.sessionChanged)).toHaveCount(1);
+    await settle();
+    expect(uploads).toBe(1);
+    await expect(toasts.getByText(copy.sessionChanged)).toHaveCount(1);
+
+    // Ten the API refuses, one by one, and one the editor refuses before it leaves.
+    answer = 'unreadable';
+    uploads = 0;
+    await picker.setInputFiles(pngFiles(10, 4));
+    await expect.poll(() => uploads).toBe(10);
+    await expect(page.getByTestId('post-editor-uploading')).toHaveCount(0);
+    await picker.setInputFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: PNG });
+    await expect(toasts.getByText(copy.errImageType)).toBeVisible();
+    expect(uploads).toBe(10);
+    await expect(editor.locator('img[data-media-id]')).toHaveCount(0);
+
+    // None of those holds a slot: ten real ones still fit.
+    answer = 'real';
+    await picker.setInputFiles(pngFiles(10, 14));
+    await expect(page.getByTestId('post-editor-uploading')).toHaveCount(0);
+    await expect(editor.locator('img[data-media-id]')).toHaveCount(10);
+    await expect(page.getByTestId('post-body-images')).toContainText('10 / 10');
+    await expect(toasts.getByText(copy.errPostTooManyImages)).toHaveCount(0);
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+  });
+
+  test('이미지 읽기가 다시 받은 뒤에도 429면 이미지마다 세 번까지만 다시 받고 깨진 채 둔다', async ({
+    admin,
+    page,
+  }) => {
+    const market = await createOpenMarket(admin);
+    await signUp(page, freshEmail());
+    const me = await meOf(page.request);
+    const uploaded = await page.request.post(`/api/v1/media/images?expectedAccountId=${me.id}`, {
+      headers: { 'content-type': 'image/png' },
+      data: PNG,
+    });
+    expect(uploaded.status(), await uploaded.text()).toBe(201);
+    const mediaId = ((await uploaded.json()) as { data: { id: string } }).data.id;
+    const postId = await postThroughApi(page.request, market.id, '끝내 기다린 이미지', freshTag(), [
+      { type: 'image', attrs: { mediaId } },
+    ]);
+    // The element is refused every time; the recovering `fetch` gets the image. Routing turns the
+    // browser's cache off, so each new element asks again — and is refused again.
+    let recoveries = 0;
+    await page.route(`**/api/v1/media/${mediaId}`, async (route) => {
+      if (route.request().resourceType() !== 'image') {
+        recoveries += 1;
+        return route.fallback();
+      }
+      await route.fulfill({
+        status: 429,
+        headers: { 'retry-after': '1' },
+        json: {
+          error: {
+            code: 'RATE_LIMITED',
+            message: 'Too many images are being sent; read it again',
+            details: { retryAfterSeconds: 1 },
+          },
+        },
+      });
+    });
+
+    await page.goto(`/community/posts/${postId}`);
+    const image = page.getByTestId('post-body').getByTestId('post-image');
+    // The budget is the image's, spent across its failures (IMAGE_RETRY_ATTEMPTS, ADR-0073 9-39):
+    // three recoveries, then it stays broken rather than asking for ever.
+    await expect.poll(() => recoveries, { timeout: 15_000 }).toBe(3);
+    await settle();
+    await settle();
+    expect(recoveries).toBe(3);
+    expect(
+      await image.evaluate(
+        (element: HTMLImageElement) => element.complete && element.naturalWidth === 0,
+      ),
+    ).toBe(true);
     await page.unrouteAll({ behavior: 'ignoreErrors' });
   });
 });

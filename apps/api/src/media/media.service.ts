@@ -107,9 +107,12 @@ export class MediaService {
       : null;
   }
 
-  /** The bytes of a shown image, or null when its object is gone (logged: no request causes it). */
-  async bytesOf(image: ShownImage): Promise<Uint8Array | null> {
-    const body = await this.storage.get(image.storageKey);
+  /**
+   * The bytes of a shown image, or null when its object is gone (logged: no request causes it).
+   * `signal` gives the read up (the client went): it then rejects.
+   */
+  async bytesOf(image: ShownImage, signal?: AbortSignal): Promise<Uint8Array | null> {
+    const body = await this.storage.get(image.storageKey, { signal });
     if (body === null) {
       this.logger.error({ storageKey: image.storageKey }, 'a shown image has no object');
     }

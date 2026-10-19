@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { assertObjectKey, type ObjectStorage } from './object-storage.js';
+import { assertObjectKey, type ObjectReadOptions, type ObjectStorage } from './object-storage.js';
 
 /** Whether `error` is the file system's "no such file". */
 function isMissing(error: unknown): boolean {
@@ -40,9 +40,9 @@ export class LocalObjectStorage implements ObjectStorage {
     await rename(temporary, target);
   }
 
-  async get(key: string): Promise<Uint8Array | null> {
+  async get(key: string, options: ObjectReadOptions = {}): Promise<Uint8Array | null> {
     try {
-      return new Uint8Array(await readFile(this.pathOf(key)));
+      return new Uint8Array(await readFile(this.pathOf(key), { signal: options.signal }));
     } catch (error) {
       if (isMissing(error)) return null;
       throw error;

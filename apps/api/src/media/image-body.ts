@@ -1,8 +1,8 @@
 import { IMAGE_CONTENT_TYPES, IMAGE_MAX_BYTES } from '@buddha/shared';
 import { errorCodes, type FastifyInstance, type FastifyRequest } from 'fastify';
-import { isTrustedOrigin } from '../auth/session.guard.js';
+import { type SessionData } from '../auth/auth.js';
+import { type AuthenticatedRequest, isTrustedOrigin } from '../auth/session.guard.js';
 import { AppError } from '../common/errors/app-error.js';
-import { SESSION_COOKIE } from '../openapi/document.js';
 
 /**
  * The Content-Types `POST /media/images` takes its file under: the four image types and the
@@ -32,28 +32,40 @@ function mediaTypeOf(request: FastifyRequest): string | undefined {
   return header.split(';', 1)[0]?.trim().toLowerCase();
 }
 
-/** Why the gate below refuses `request` before its body is read, or undefined to let it through. */
-function imageBodyRefusal(
+/**
+ * What the gate below makes of `request` before its body is read: `pass` for a request whose body
+ * is not this parser's (another type, or a GET or HEAD), a refusal, or `upload` — the upload route
+ * from one of our pages, whose sender is checked next (`installImageBodyParser`).
+ */
+function imageBodyStep(
   request: FastifyRequest,
   trustedOrigins: ReadonlySet<string>,
-): Error | undefined {
+): 'pass' | 'upload' | Error {
   const type = mediaTypeOf(request);
-  if (type === undefined || !IMAGE_UPLOAD_CONTENT_TYPES.includes(type)) return undefined;
+  if (type === undefined || !IMAGE_UPLOAD_CONTENT_TYPES.includes(type)) return 'pass';
   // A GET or a HEAD has its body ignored, never parsed: nothing to keep from it.
-  if (request.method === 'GET' || request.method === 'HEAD') return undefined;
+  if (request.method === 'GET' || request.method === 'HEAD') return 'pass';
   if (
     request.method !== IMAGE_UPLOAD_ROUTE.method ||
     request.routeOptions.url !== IMAGE_UPLOAD_ROUTE.url
   ) {
     return new errorCodes.FST_ERR_CTP_INVALID_MEDIA_TYPE();
   }
-  if (!(request.headers.cookie ?? '').includes(`${SESSION_COOKIE}=`)) {
-    return new AppError('UNAUTHENTICATED', { message: 'Sign in required' });
-  }
+  // SessionGuard's order: the Origin first, which costs no lookup.
   if (!isTrustedOrigin(request, trustedOrigins)) {
     return new AppError('FORBIDDEN', { message: 'Cross-origin request refused' });
   }
-  return undefined;
+  return 'upload';
+}
+
+/** Who may send an upload's body, as the gate asks before reading it. */
+export interface ImageBodySenders {
+  /** The origins SessionGuard trusts. */
+  readonly trustedOrigins: ReadonlySet<string>;
+  /** The better-auth session of the request's cookie, or null — what SessionGuard reads. */
+  sessionOf(request: FastifyRequest): Promise<SessionData | null>;
+  /** Refuses (ONBOARDING_REQUIRED) an account with a step of the onboarding left. */
+  assertOnboarded(userId: string): Promise<void>;
 }
 
 /**
@@ -65,21 +77,29 @@ function imageBodyRefusal(
  *
  * A content-type parser belongs to the whole instance, and Nest puts every route on that one
  * instance; Fastify reads the body before any Nest guard runs. So a gate (`onRequest`, ahead of
- * the parser) keeps the parser to the upload route and keeps an anonymous caller from making the
- * API hold 10MiB for nothing:
+ * the parser, after the address limit's hook — address-limit.ts, installed before the app's init)
+ * keeps the parser to the upload route and to the accounts that may upload, so no one else can make
+ * the API hold up to 10MiB per request:
  *
  * - a body of these types on any other route is refused unread, 415 — what it was before this
  *   parser existed (no other route takes one);
- * - on the upload route, a request without a session cookie is refused unread (401), and one from
- *   a foreign page (403, SessionGuard's Origin check, `isTrustedOrigin`). A cookie is easy to make
- *   up, so this only stops the casual case; SessionGuard and OnboardedGuard still decide.
+ * - on the upload route, a request from a foreign page is refused unread (403, SessionGuard's
+ *   Origin check, `isTrustedOrigin`); then the cookie's session is resolved through better-auth, as
+ *   SessionGuard resolves it — a cookie that names no session (none, made up, expired, signed out)
+ *   is refused unread (401) — and the account must have finished the onboarding
+ *   (ONBOARDING_REQUIRED unread, OnboardedGuard's answer). The session is left on the request, so
+ *   SessionGuard does not read it again; SessionGuard and OnboardedGuard still run after the body.
  */
-export function installImageBodyParser(
-  fastify: FastifyInstance,
-  trustedOrigins: ReadonlySet<string>,
-): void {
-  fastify.addHook('onRequest', (request, _reply, done) => {
-    done(imageBodyRefusal(request, trustedOrigins));
+export function installImageBodyParser(fastify: FastifyInstance, senders: ImageBodySenders): void {
+  fastify.addHook('onRequest', async (request) => {
+    const step = imageBodyStep(request, senders.trustedOrigins);
+    if (step === 'pass') return;
+    if (step instanceof Error) throw step;
+    const authenticated = request as AuthenticatedRequest;
+    const session = authenticated.auth ?? (await senders.sessionOf(request));
+    if (!session) throw new AppError('UNAUTHENTICATED', { message: 'Sign in required' });
+    authenticated.auth = session;
+    await senders.assertOnboarded(session.user.id);
   });
   fastify.addContentTypeParser(
     [...IMAGE_UPLOAD_CONTENT_TYPES],
