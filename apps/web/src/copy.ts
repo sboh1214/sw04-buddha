@@ -1011,9 +1011,10 @@ export const copy = {
   // 같다, 결정 4 #70), Coin은 현금으로 바꿀 수 없다는 것, 운영 유동성(봇)이 거래 상대가 될 수 있다는 것.
   onboardingNoticeGranted: '시작 Coin을 지급했습니다.',
   onboardingNoticeAmount: '지급한 시작 Coin',
-  // 본인확인한 번호의 시작 Coin이 이미 다른 계정(예: 탈퇴한 계정)에 갔다(#57-1): 지급액 자리에 오너의 문장
-  // (오너 결정 2026-10-19, ADR-0072). 나머지 안내와 관심 카테고리 단계는 같다.
-  onboardingNoticeNumberUsed: '이 번호로는 이미 시작 Coin을 받았습니다.',
+  // 본인확인한 번호의 시작 Coin이 다른 계정(예: 탈퇴한 계정)의 것이다(#57-1): 지급액 자리에 오너의 문장
+  // (오너 결정 2026-10-19, ADR-0072). '이미 받았습니다'가 아닌 것은 드물게 그 계정의 지급이 아직 기다리는
+  // 중일 수도 있어서다(3차 답 5). 나머지 안내와 관심 카테고리 단계는 같다.
+  onboardingNoticeNumberUsed: '이 번호로는 시작 Coin을 받을 수 없습니다.',
   onboardingNoticeNoCash: 'Coin은 현금으로 바꿀 수 없습니다.',
   onboardingNoticeCounterparty: '거래할 때 운영 유동성(봇)이 거래 상대가 될 수 있습니다.',
   onboardingNoticeNext: '다음',

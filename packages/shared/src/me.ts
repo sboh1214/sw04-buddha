@@ -60,7 +60,7 @@ export const meSchema = z
     /**
      * The account's start Coin (#70, ADR-0071): `pending` while the amount is undecided (the
      * wallet says it will be paid), `granted` once paid, `number_used` when the onboarding asked
-     * for it but the verified number had already received its start Coin on another account
+     * for it but the verified number's start Coin was another account's, paid or waiting
      * (ADR-0069 decision 1 #57-1; the notice screen says so, ADR-0072); null until the onboarding
      * asks for it. Owner-only, like the balance: only the account learns this of its own number.
      */

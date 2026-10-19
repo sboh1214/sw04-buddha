@@ -52,7 +52,7 @@ export type StartGrantTxResult =
 /**
  * `Me.startGrant` of an account whose onboarding asked for the grant while its verified number
  * counted for another account's grant (`number_already_used`): the notice screen says the number
- * already received it (오너 결정 2026-10-19, ADR-0072). Not a record of this account: `GET /me`
+ * cannot receive it (오너 결정 2026-10-19, ADR-0072). Not a record of this account: `GET /me`
  * finds the number held by the other account's grant (`startGrantHoldsNumber`, @buddha/db).
  */
 export const NUMBER_USED_START_GRANT: StartGrant = {

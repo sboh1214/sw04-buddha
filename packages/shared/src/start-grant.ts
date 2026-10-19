@@ -31,8 +31,9 @@ export const START_GRANT_MAX_COIN = 1_000_000;
  *   but the verified number counts for another account's grant (`start_grant_numbers`), paid or
  *   waiting — typically a paid one whose account withdrew before this one verified the number
  *   (#57-1·#57-17). Not a grant record (`start_grants` has no row for the account); the
- *   onboarding's notice screen says '이 번호로는 이미 시작 Coin을 받았습니다' (오너 결정
- *   2026-10-19, ADR-0072).
+ *   onboarding's notice screen says '이 번호로는 시작 Coin을 받을 수 없습니다' — not 'already
+ *   received', as the other account's grant may still be waiting (오너 결정 2026-10-19, 3차 답 5,
+ *   ADR-0072).
  */
 export const START_GRANT_STATUSES = ['pending', 'granted', 'number_used'] as const;
 export type StartGrantStatus = (typeof START_GRANT_STATUSES)[number];
@@ -51,10 +52,10 @@ export type StartGrantNumberSource = (typeof START_GRANT_NUMBER_SOURCES)[number]
 
 /**
  * `Me.startGrant`: this account's start grant. `amountCoin` and `grantedAt` are set exactly when it
- * is `granted`. `number_used` says the account gets none because its number already did; an
- * account whose onboarding has not asked for the grant yet has `startGrant: null`, and so has one
- * whose waiting grant was cancelled when it withdrew (owner decision 2026-10-18) — a withdrawn
- * account reads nothing.
+ * is `granted`. `number_used` says the account gets none because its number's start Coin is
+ * another account's; an account whose onboarding has not asked for the grant yet has
+ * `startGrant: null`, and so has one whose waiting grant was cancelled when it withdrew (owner
+ * decision 2026-10-18) — a withdrawn account reads nothing.
  */
 export const startGrantSchema = z
   .object({

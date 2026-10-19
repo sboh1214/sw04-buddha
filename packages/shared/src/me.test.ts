@@ -76,7 +76,7 @@ describe('meSchema', () => {
       },
     };
     expect(meSchema.parse(granted)).toEqual(granted);
-    // #58 (오너 결정 2026-10-19): the account's number already received its start Coin elsewhere.
+    // #58 (오너 결정 2026-10-19): the account's number's start Coin is another account's.
     const numberUsed = {
       ...sample,
       startGrant: { status: 'number_used', amountCoin: null, grantedAt: null },

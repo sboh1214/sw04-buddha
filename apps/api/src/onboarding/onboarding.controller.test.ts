@@ -617,7 +617,7 @@ describe.skipIf(!hasTestInfra)('온보딩 /api/v1/me (integration, #58)', () => 
         me = meOf(await setNickname(user, await nicknameOf(user.id)));
       });
       expect(me.onboarding.completed).toBe(true);
-      // What the notice screen reads (오너 결정 2026-10-19): the number already received it.
+      // What the notice screen reads (오너 결정 2026-10-19): the number cannot receive it.
       expect(me.startGrant).toEqual({ status: 'number_used', amountCoin: null, grantedAt: null });
       expect((await getMe(user)).startGrant).toEqual(me.startGrant);
       expect(await ledgerOf(user.id)).toEqual([]);

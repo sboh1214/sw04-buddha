@@ -9,9 +9,10 @@ import { startGrantNotice } from '@/lib/onboarding';
 /**
  * The short notice after the start Coin (#58, ADR-0069 decision 1 #57-10): what was paid — or, while
  * the amount is undecided, the owner's sentence in its place (decision 4 #70), or, when the verified
- * number already received its start Coin on another account, the owner's sentence saying so (오너
- * 결정 2026-10-19) — that Coin cannot be exchanged for cash, and that the operating liquidity (the
- * bot) can be the other side of a trade. Then the interest categories (#57-7).
+ * number's start Coin is another account's (paid, or rarely still waiting), the owner's sentence that
+ * this number cannot receive it (오너 결정 2026-10-19) — that Coin cannot be exchanged for cash, and
+ * that the operating liquidity (the bot) can be the other side of a trade. Then the interest
+ * categories (#57-7).
  *
  * Nothing here is recorded: the server granted (or left waiting) with the nickname step, and this
  * screen only says so. `startGrant` is `['me']`'s, so a payment that lands while it is open (the
