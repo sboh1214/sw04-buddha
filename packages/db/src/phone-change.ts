@@ -6,11 +6,16 @@
  * nothing (owner decision 2026-10-18, ADR-0071). Three psql variables: `user_id` (the account),
  * `new_phone` (its digits) and `new_hash` (the keyed hash of those digits, from the API's
  * phone-hash CLI, apps/api/src/identity/phone-hash-cli.ts — SQL cannot compute it without the
- * key). The doc runs it only for a request that came from the account's email and whose new
- * number the member confirmed (owner decision 2026-10-19, answer 1; the account is looked up first,
- * OPERATOR_ACCOUNT_LOOKUP_SQL), in one transaction with psql's ON_ERROR_ROLLBACK off, reading
- * the three results first and then ending it with the COMMIT or ROLLBACK the doc's result table
- * gives for them:
+ * key). The doc runs it only for a request that came from the account's current email and passed
+ * sender authentication (the operator's own mail provider's verdict, not any other
+ * Authentication-Results line), and whose new number the member confirmed by sending back, from
+ * that email, the code the operator texted to it (owner decisions 2026-10-19, answer 1, and
+ * 2026-10-19 3차, answers 1 and 2; the account is looked up first, OPERATOR_ACCOUNT_LOOKUP_SQL,
+ * and looked up again for the reply's sender, which must give the same id, still verified; the
+ * code comes from OPERATOR_CONFIRMATION_CODE_SQL and is noted with the number it was texted to,
+ * which the CLI's `new_phone` line must match digit for digit — ADR-0071 7-29, 7-30), in one
+ * transaction with psql's ON_ERROR_ROLLBACK off, reading the results first and then ending it
+ * with the COMMIT or ROLLBACK the doc's result table gives for them:
  *
  * 1. The number itself, `UPDATE 1` (0: no such account). `phone_verifications.phone` stays UNIQUE
  *    and digits only (its constraints — another account's verified number is a 23505 here), and
@@ -26,27 +31,29 @@
  *    paid again. So the owner refused that change (2026-10-19, answer 2): the INSERT goes ahead
  *    and the one live row per number (`start_grant_numbers_phone_hash_live_idx`) fails it,
  *    23505. The transaction is aborted, the operator's COMMIT then answers ROLLBACK, and the
- *    number stays as it was — until that grant is paid or cancelled, when the change, asked and
- *    confirmed again from the doc's step 1 (ADR-0071 7-28), goes through. The index decides as
- *    the row is written: a grant recording the number or a cancellation freeing it meanwhile is
- *    waited for and counts as it ends; a grant paid meanwhile is still refused, and running it
- *    again goes through (ADR-0071 7-25).
- * 3. What now holds the new number: one row or none (the account has no grant yet). `this_account`
- *    t: recorded for this account. f: another account's grant holds it — paid (`paid` t) when this
- *    account has a grant, since a waiting one failed step 2; either when it has none (`has_grant`
- *    f), and that account then gets no start Coin on this number while that row holds it (its
- *    grant answers `number_already_used`). The SQL has no row to add for such an account, so it
- *    cannot refuse it; the doc's table splits that row by `paid`. Paid: the number got the start
- *    Coin, the operator COMMITs, and then tells the member so with the reply that the number was
- *    changed (owner decision 2026-10-19, answer 3) — after COMMIT, not before, so the open
- *    transaction does not hold the account's phone_verifications row lock while the reply is
- *    written (ADR-0071 7-27). Waiting: nobody got it on this number yet, and the operator
- *    ROLLBACKs as for step 2's refusal (2026-10-19, answer 2; ADR-0071 7-26) — there a COMMIT
- *    would keep the change.
+ *    number stays as it was. The index decides as the row is written: a grant recording the
+ *    number or a cancellation freeing it meanwhile is waited for and counts as it ends; a grant
+ *    paid meanwhile is still refused, and asking again goes through (ADR-0071 7-25).
+ * 3. The same refusal for an account with no grant, which step 2 has no row to refuse with (owner
+ *    decision 2026-10-19 3차, answer 4): the DO block raises when the account has a 본인확인
+ *    record and a waiting grant of another account holds the new number. psql writes no variable
+ *    into a dollar-quoted body, so the two SET LOCAL lines hand it `user_id` and `new_hash` for
+ *    this transaction only. It reads what is committed: a cancellation or payment of that grant
+ *    still in flight is not waited for, and the change is refused until asked again (ADR-0071
+ *    7-26). Either refusal, the member is told only that the number cannot be changed to now,
+ *    and asks again later (2026-10-19 3차, answer 3).
+ * 4. What now holds the new number: one row or none (the account has no grant yet). `this_account`
+ *    t: recorded for this account. f: another account's paid grant holds it (`paid` t — after
+ *    `UPDATE 1` a waiting one failed step 2 or 3), and `has_grant` says whether this account has a
+ *    grant. It has none (`has_grant` f): it then gets no start Coin on this number while that row
+ *    holds it (its grant answers `number_already_used`); the operator COMMITs and then tells the
+ *    member so with the reply that the number was changed (owner decision 2026-10-19, answer 3) —
+ *    after COMMIT, not before, so the open transaction does not hold the account's
+ *    phone_verifications row lock while the reply is written (ADR-0071 7-27).
  *
- * Kept here with the procedure's two read-only statements below, each one text in two places like
- * the wipe statement (wipe.ts): phone-change.test.ts reads docs/OPERATIONS.md for them and runs
- * them against the test database the way psql does.
+ * Kept here with the procedure's three read-only statements below, each one text in two places
+ * like the wipe statement (wipe.ts): phone-change.test.ts reads docs/OPERATIONS.md for them and
+ * runs them against the test database the way psql does.
  */
 export const OPERATOR_PHONE_CHANGE_SQL = `UPDATE phone_verifications SET phone = :'new_phone', updated_at = now()
   WHERE user_id = :'user_id';
@@ -56,6 +63,18 @@ INSERT INTO start_grant_numbers (phone_hash, grant_id, source)
     AND NOT EXISTS (SELECT 1 FROM start_grant_numbers n JOIN start_grants h ON h.id = n.grant_id
       WHERE n.phone_hash = :'new_hash' AND n.released_at IS NULL
         AND (h.id = g.id OR h.granted_at IS NOT NULL));
+SET LOCAL phone_change.user_id = :'user_id';
+SET LOCAL phone_change.new_hash = :'new_hash';
+DO $$BEGIN
+  IF EXISTS (SELECT 1 FROM phone_verifications pv
+      JOIN start_grant_numbers n ON n.phone_hash = current_setting('phone_change.new_hash')
+        AND n.released_at IS NULL
+      JOIN start_grants h ON h.id = n.grant_id
+      WHERE pv.user_id = current_setting('phone_change.user_id')
+        AND h.user_id <> pv.user_id AND h.granted_at IS NULL) THEN
+    RAISE EXCEPTION 'refused: a waiting start grant of another account holds the new number';
+  END IF;
+END$$;
 SELECT g.user_id = :'user_id' AS this_account, n.source, g.granted_at IS NOT NULL AS paid,
     EXISTS (SELECT 1 FROM start_grants o
       WHERE o.user_id = :'user_id' AND o.cancelled_at IS NULL) AS has_grant
@@ -64,20 +83,32 @@ SELECT g.user_id = :'user_id' AS this_account, n.source, g.granted_at IS NOT NUL
 
 /**
  * Step 1 of the same procedure, before any confirmation SMS goes out (owner decision 2026-10-19,
- * answer 1): the account whose sign-up email a number-change request came from, and whether it has
+ * answer 1): the account whose current email a number-change request came from, and whether it has
  * a 본인확인 record to change. No row, or `verified` f, and the operator stops there — sends
- * nothing, changes nothing (ADR-0071 7-20). Read only. One psql variable, `sender`, the address
- * the request came from; account emails are stored lower-case.
+ * nothing, changes nothing (ADR-0071 7-20). Run twice: when the request arrives, and again with the
+ * sender of the member's authenticated reply carrying the code — the 가입 이메일 is the account's
+ * current email (2026-10-19 3차, answer 2), which the member may have changed meanwhile, so only
+ * the same id with `verified` t goes on, and that id is step 5's `user_id` (ADR-0071 7-29). Read
+ * only. One psql variable, `sender`, the address the mail came from; account emails are stored
+ * lower-case.
  */
 export const OPERATOR_ACCOUNT_LOOKUP_SQL = `SELECT u.id, pv.user_id IS NOT NULL AS verified
   FROM "user" u LEFT JOIN phone_verifications pv ON pv.user_id = u.id
   WHERE u.email = lower(:'sender');`;
 
 /**
- * Before a refused change is tried again (from step 1, ADR-0071 7-28): whether the grant holding
- * the new number has been settled. `paid` f: it still waits, and the change would be refused
- * again. `paid` t (paid) or no row (cancelled, the number freed): settled. Read only; `new_hash`
- * as for the change.
+ * The 6-digit confirmation code step 1 texts to the new number once the account is found (owner
+ * decision 2026-10-19 3차, answer 1): six digits, leading zeros kept, picked at random so that
+ * only the phone receiving the text knows it — the member sends it back from the account's email
+ * (ADR-0071 7-29). Read only, no variable.
+ */
+export const OPERATOR_CONFIRMATION_CODE_SQL = `SELECT to_char(floor(random() * 1000000), 'FM000000') AS code;`;
+
+/**
+ * Before the confirmation SMS of a request that asks again for a number refused before (from step
+ * 1, ADR-0071 7-28): whether the grant holding the new number has been settled. `paid` f: it still
+ * waits, and the change would be refused again. `paid` t (paid) or no row (cancelled, the number
+ * freed): settled. Read only; `new_hash` as for the change.
  */
 export const OPERATOR_NUMBER_HOLDER_SQL = `SELECT g.granted_at IS NOT NULL AS paid
   FROM start_grant_numbers n JOIN start_grants g ON g.id = n.grant_id

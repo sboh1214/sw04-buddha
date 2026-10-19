@@ -1,12 +1,13 @@
 /**
- * An operator's change of a member's number (ADR-0069 #57-3, owner decisions 2026-10-18 and
- * 2026-10-19, ADR-0071): the SQL docs/OPERATIONS.md gives, verbatim, and what it does when run as
- * buddha_app the way the doc runs it — psql, BEGIN, the three statements, then the COMMIT or
- * ROLLBACK the doc's result table gives for what they returned, with psql's variables written in.
- * The account lookup that comes before any confirmation SMS (step 1) and the read-only check
- * before a refused change is tried again are run the same way. The keyed hash of the new number
- * comes from the API's phone-hash CLI there; here any 64-hex value stands for it (this package
- * has no key). Skips the database part when TEST_* are unset.
+ * An operator's change of a member's number (ADR-0069 #57-3, owner decisions 2026-10-18,
+ * 2026-10-19 and 2026-10-19 3차, ADR-0071): the SQL docs/OPERATIONS.md gives, verbatim, and what
+ * it does when run as buddha_app the way the doc runs it — psql, BEGIN, the statements, then the
+ * COMMIT or ROLLBACK the doc's result table gives for what they returned, with psql's variables
+ * written in. The account lookup and the confirmation code that come before any confirmation SMS
+ * (step 1) and the read-only check before a refused number is asked for again are run the same
+ * way. The keyed hash of the new number comes from the API's phone-hash CLI there; here any
+ * 64-hex value stands for it (this package has no key). Skips the database part when TEST_* are
+ * unset.
  */
 import { readFileSync } from 'node:fs';
 import { and, eq, isNull, sql } from 'drizzle-orm';
@@ -14,6 +15,7 @@ import { Client, type DatabaseError, type QueryResult } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   OPERATOR_ACCOUNT_LOOKUP_SQL,
+  OPERATOR_CONFIRMATION_CODE_SQL,
   OPERATOR_NUMBER_HOLDER_SQL,
   OPERATOR_PHONE_CHANGE_SQL,
 } from './phone-change.js';
@@ -33,10 +35,44 @@ const OPERATIONS = readFileSync(new URL('../../../docs/OPERATIONS.md', import.me
 /** The index a waiting grant of another account refuses the INSERT with (owner, 2026-10-19). */
 const LIVE_NUMBER = 'start_grant_numbers_phone_hash_live_idx';
 
+/**
+ * What the DO block raises for an account with no grant moved onto a number another account's
+ * waiting grant holds (owner, 2026-10-19 3차, answer 4).
+ */
+const DO_REFUSAL = 'refused: a waiting start grant of another account holds the new number';
+
+/** The owner's words to the member for either refusal, and nothing more (2026-10-19 3차, answer 3). */
+const REFUSAL_REPLY = "'지금은 그 번호로 바꿀 수 없습니다'라고만";
+
 /** The psql variables a statement uses, `:'name'`. */
 function variablesOf(text: string): string[] {
   return [...new Set([...text.matchAll(/:'(\w+)'/g)].map((m) => m[1]!))].sort();
 }
+
+/**
+ * A script's statements as psql sends them: split at each `;` outside a dollar-quoted body (the
+ * DO block's). No statement here has a `;` or `$$` inside a quoted literal.
+ */
+function statementsIn(text: string): string[] {
+  const statements: string[] = [];
+  let start = 0;
+  let quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    if (text.startsWith('$$', i)) {
+      quoted = !quoted;
+      i++;
+    } else if (!quoted && text[i] === ';') {
+      statements.push(text.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+  expect(quoted).toBe(false);
+  expect(text.slice(start).trim()).toBe('');
+  return statements;
+}
+
+/** The DO block's body: what psql writes no variable into. */
+const DO_BODY = /\$\$([\s\S]*)\$\$/.exec(OPERATOR_PHONE_CHANGE_SQL)?.[1] ?? '';
 
 /** The doc's text from one bold heading to the next given one. */
 function sectionOf(from: string, to: string): string {
@@ -54,18 +90,20 @@ interface Held {
   has_grant: boolean;
 }
 
-const STATEMENTS = ['update', 'insert', 'select'] as const;
+/** The change's statements in order: the two SET LOCAL lines hand the DO block its values. */
+const STATEMENTS = ['update', 'insert', 'set', 'set', 'do', 'select'] as const;
 
-/** What the three statements returned: a refusal (a statement failed), or the counts and rows. */
+/**
+ * Which statement failed first and how: the constraint for the UPDATE and the INSERT, the message
+ * the DO block raises.
+ */
+type Refusal =
+  | { at: 'update' | 'insert'; code: string | undefined; constraint: string | undefined }
+  | { at: 'do'; code: string | undefined; message: string };
+
+/** What the statements returned: a refusal (a statement failed), or the counts and rows. */
 type Outcome =
-  | {
-      refused: {
-        at: (typeof STATEMENTS)[number];
-        code: string | undefined;
-        constraint: string | undefined;
-      };
-    }
-  | { updated: number | null; inserted: number | null; held: Held[] };
+  { refused: Refusal } | { updated: number | null; inserted: number | null; held: Held[] };
 
 /** The rows of step 5's result table: what psql shows, what it means, what the operator does. */
 const RESULT_ROWS = (() => {
@@ -86,19 +124,18 @@ const RESULT_ROWS = (() => {
 
 /**
  * Whether a row's 결과 cell describes an outcome: every condition the cell states holds — the
- * failing statement and its constraint, or `UPDATE n`, `INSERT 0 n`, 한 줄 / 줄 없음 and the
- * last row's columns. A condition the cell does not state is not looked at.
+ * failing statement, its SQLSTATE and its constraint (or, for the DO block, its message), or
+ * `UPDATE n`, `INSERT 0 n`, 한 줄 / 줄 없음 and the last row's columns. A condition the cell does
+ * not state is not looked at.
  */
 function describes(cell: string, outcome: Outcome): boolean {
-  const error = /^`(UPDATE|INSERT)`에서 오류\(23505 `(\w+)`\)$/.exec(cell);
+  const error = /^`(UPDATE|INSERT|DO)`에서 오류\((\w+) `([^`]+)`\)$/.exec(cell);
   if ('refused' in outcome) {
-    const { at, code, constraint } = outcome.refused;
-    return (
-      error !== null &&
-      error[1]!.toLowerCase() === at &&
-      code === '23505' &&
-      error[2] === constraint
-    );
+    const refused = outcome.refused;
+    if (error === null || error[1]!.toLowerCase() !== refused.at || error[2] !== refused.code) {
+      return false;
+    }
+    return error[3] === (refused.at === 'do' ? refused.message : refused.constraint);
   }
   if (error) return false;
   const count = (pattern: RegExp) => {
@@ -134,14 +171,22 @@ const REFUSED_WAITING = {
 } as const;
 
 /**
- * What the three statements return for an account with no grant moved onto a number another
- * account's waiting grant holds: the SQL refuses nothing (there is no row to add), the last row
- * shows it.
+ * The same refusal for an account with no grant, which the INSERT has no row to refuse with: the
+ * DO block raises it (owner decision 2026-10-19 3차, answer 4).
  */
-const NO_GRANT_ON_WAITING = {
+const REFUSED_NO_GRANT = {
+  refused: { at: 'do', code: 'P0001', message: DO_REFUSAL },
+  commit: 'ROLLBACK',
+} as const;
+
+/**
+ * An account with no grant on a number another account got the start Coin with: the change goes
+ * through, and the member is told so (owner decision 2026-10-19, answer 3).
+ */
+const NO_GRANT_ON_PAID = {
   updated: 1,
   inserted: 0,
-  held: [{ this_account: false, source: 'grant', paid: false, has_grant: false }],
+  held: [{ this_account: false, source: 'grant', paid: true, has_grant: false }],
 };
 
 describe('the operator phone change (docs/OPERATIONS.md)', () => {
@@ -152,58 +197,205 @@ describe('the operator phone change (docs/OPERATIONS.md)', () => {
         '\n',
       ),
     );
+    expect(OPERATIONS).toContain(['```sql', OPERATOR_CONFIRMATION_CODE_SQL, '```'].join('\n'));
     expect(OPERATIONS).toContain(['```sql', OPERATOR_NUMBER_HOLDER_SQL, '```'].join('\n'));
   });
 
-  it('names its psql variables and nothing else', () => {
+  it('names its psql variables and nothing else, and none inside the DO block', () => {
     expect(variablesOf(OPERATOR_PHONE_CHANGE_SQL)).toEqual(['new_hash', 'new_phone', 'user_id']);
     expect(variablesOf(OPERATOR_ACCOUNT_LOOKUP_SQL)).toEqual(['sender']);
+    expect(variablesOf(OPERATOR_CONFIRMATION_CODE_SQL)).toEqual([]);
     expect(variablesOf(OPERATOR_NUMBER_HOLDER_SQL)).toEqual(['new_hash']);
+    // psql writes no variable into a dollar-quoted body: the DO block reads the two values the
+    // SET LOCAL lines just before it hand over, and nothing else.
+    expect(DO_BODY).toContain('RAISE EXCEPTION');
+    expect(variablesOf(DO_BODY)).toEqual([]);
+    expect([...DO_BODY.matchAll(/current_setting\('([\w.]+)'\)/g)].map((m) => m[1])).toEqual([
+      'phone_change.new_hash',
+      'phone_change.user_id',
+    ]);
+    const statements = statementsIn(OPERATOR_PHONE_CHANGE_SQL);
+    expect(statements.map((s) => /^\w+/.exec(s)![0].toLowerCase())).toEqual([...STATEMENTS]);
+    expect(statements.slice(2, 4)).toEqual([
+      "SET LOCAL phone_change.user_id = :'user_id'",
+      "SET LOCAL phone_change.new_hash = :'new_hash'",
+    ]);
   });
 
-  it('looks the sender’s account up in step 1, before the confirmation SMS goes out', () => {
-    // Owner decision 2026-10-19 answer 1: only a request from the account's sign-up email. The
-    // lookup comes first, so no SMS goes to a number named by an address that is no member's.
+  it('checks the request in step 1, before the confirmation SMS goes out, and how', () => {
+    // Owner decisions 2026-10-19 answer 1 and 3차 answers 1–2: only a request from the account's
+    // current email that passed sender authentication; the lookup comes first, so no SMS goes to a
+    // number named by an address that is no member's; then a code texted to the new number, which
+    // the member sends back from that email.
     const step1 = sectionOf('**1. 요청 확인.**', '**2. 셸.**');
+    // Both must pass — not either one (3차 answer 2, ADR-0071 7-30).
+    const authenticated = step1.indexOf('SPF와 DKIM이 모두 `pass`');
     const lookup = step1.indexOf(OPERATOR_ACCOUNT_LOOKUP_SQL);
-    expect(lookup).toBeGreaterThan(-1);
-    expect(step1.indexOf('확인 문자를 보내')).toBeGreaterThan(lookup);
+    const code = step1.indexOf(OPERATOR_CONFIRMATION_CODE_SQL);
+    const sms = step1.indexOf('```text\n[buddha] 번호 변경 확인 번호 NNNNNN\n```');
+    expect(authenticated).toBeGreaterThan(-1);
+    expect(lookup).toBeGreaterThan(authenticated);
+    expect(step1.indexOf('확인 문자를 보낸다')).toBeGreaterThan(lookup);
+    expect(step1.indexOf('확인 문자를 보낸다')).toBe(step1.lastIndexOf('확인 문자를 보낸다'));
+    expect(code).toBeGreaterThan(lookup);
+    expect(sms).toBeGreaterThan(code);
+    expect(step1).toContain('지금 이메일(`user.email`)');
+    expect(step1).toContain('`…@noemail.buddha.local`');
+    expect(step1).toContain('MY 설정');
+    // The code goes by SMS only: in the mail, a reply would prove the mailbox, not the number.
+    expect(step1).toContain('확인 번호는 문자로만 보내고 메일에는 적지 않는다');
+    // The member's reply: from the 가입 이메일, the code matching, authenticated like the request.
+    const replied = step1.indexOf(
+      '회원이 가입 이메일(요청을 보낸 그 주소)에서 답장으로 보낸 번호가 보낸 확인 번호와 같을 때만',
+    );
+    expect(replied).toBeGreaterThan(sms);
+    expect(step1).toContain('답장도 요청 메일처럼 발신 인증을 본다');
     // Step 4 only connects: the account was found in step 1.
     expect(sectionOf('**4. psql.**', '**5. ')).not.toContain('FROM "user"');
+  });
+
+  it('reads only the operator’s own mail provider’s verdict, and its domains as each provider writes them', () => {
+    // Any sender can plant an Authentication-Results line; the receiving server strips only the
+    // ones claiming its own authserv-id. So the verdict read is the topmost line that provider
+    // added (or its own display of it), and every line below is ignored (ADR-0071 7-30).
+    const step1 = sectionOf('**1. 요청 확인.**', '**2. 셸.**');
+    const verdict = step1.indexOf(
+      '고객센터 메일함의 메일 서비스가 그 메일을 받으며 스스로 매긴 판정 하나다',
+    );
+    expect(verdict).toBeGreaterThan(-1);
+    expect(verdict).toBeLessThan(step1.indexOf('SPF와 DKIM이 모두 `pass`'));
+    expect(step1).toContain(
+      '메일 원본의 맨 위 `Authentication-Results` 줄(그 서비스의 받는 서버가 자기 이름, 곧 authserv-id를 맨 앞에 적어 더한 줄)',
+    );
+    expect(step1).toContain(
+      '그 아래에 있는 다른 `Authentication-Results` 줄과 `ARC-Authentication-Results` 줄은 보낸 쪽이나 거쳐 온 서버가 써 넣을 수 있으므로 보지 않는다',
+    );
+    // The support mailbox is undecided, so its authserv-id is not written yet.
+    expect(step1).toContain('authserv-id를 적지 못했다 — 정해지면 여기에 적는다');
+    // Gmail writes DKIM's domain as header.i=@domain and smtp.mailfrom as a whole address.
+    expect(step1).toContain(
+      '`smtp.mailfrom`의 도메인이고(서비스에 따라 주소 전체로 적으니 `@` 뒤를 본다)',
+    );
+    expect(step1).toContain('(`header.d=도메인`, Gmail은 `header.i=@도메인`)');
+  });
+
+  it('mails the account’s own address, not Reply-To, and checks that address again on the reply', () => {
+    // A spoofed request's Reply-To would take the operator's mail away from the real member; the
+    // 가입 이메일 is the account's current email (3차 answer 2), which may change before the reply.
+    const step1 = sectionOf('**1. 요청 확인.**', '**2. 셸.**');
+    const sms = step1.indexOf('```text\n[buddha] 번호 변경 확인 번호 NNNNNN\n```');
+    const mailed = step1.indexOf(
+      '이 메일의 받는 사람은 위에서 계정을 찾은 주소(`sender`에 넣은 주소, 곧 그 계정의 `user.email`)를 손으로 적거나',
+    );
+    expect(mailed).toBeGreaterThan(sms);
+    expect(step1).toContain('요청 메일의 답장 버튼으로 받는 사람을 정하지 않는다');
+    expect(step1).toContain('`Reply-To`');
+    // Once the reply's code matches: the same lookup (not a second copy of it) with the reply's
+    // sender, the same id still verified, or stop — and that id is step 5's.
+    const replied = step1.indexOf('답장으로 보낸 번호가 보낸 확인 번호와 같을 때만');
+    const again = step1.indexOf('위의 계정 찾기를 답장을 보낸 주소로 다시 돌린다');
+    expect(again).toBeGreaterThan(replied);
+    expect(step1.indexOf(OPERATOR_ACCOUNT_LOOKUP_SQL)).toBe(
+      step1.lastIndexOf(OPERATOR_ACCOUNT_LOOKUP_SQL),
+    );
+    expect(step1.slice(again)).toContain(
+      '처음에 찾은 것과 같은 `id`에 `verified` = `t`일 때만 다음 단계로 간다',
+    );
+    expect(step1.slice(again)).toContain('처음의 조회와 같이 여기서 그만둔다');
+    expect(step1.slice(again)).toContain('5단계의 `user_id`는 이 다시 찾은 `id`다');
+    expect(step1).not.toContain('찾아 둔 `id`');
+    expect(sectionOf('**5. 바꾸고 기록하기.**', '```sql')).toContain(
+      '1단계에서 답장의 주소로 다시 찾은 계정의 id',
+    );
+  });
+
+  it('changes only to the number the code was texted to', () => {
+    // A mistyped number in step 3 would end in COMMIT like any other and could never be told
+    // apart: the number is noted with the code, entered alone, and the CLI's line checked.
+    const step1 = sectionOf('**1. 요청 확인.**', '**2. 셸.**');
+    expect(step1).toContain(
+      '보낸 확인 번호와 그 번호를 보낸 휴대전화 번호(숫자만)를 함께 적어 둔다',
+    );
+    expect(step1).toContain('새 요청으로 보고 1단계부터 한다(그 번호로 새 확인 번호를 보낸다)');
+    const step3 = sectionOf('**3. 새 번호의 해시.**', '**4. psql.**');
+    expect(step3).toContain('1단계에서 확인 번호를 보내고 적어 둔 그 번호를 입력한 뒤');
+    const printed = step3.indexOf("```text\n\\set new_phone '");
+    const checked = step3.indexOf(
+      '찍힌 `\\set new_phone` 줄의 숫자가 1단계에서 적어 둔 번호(확인 번호를 보낸 번호)와 한 자리도 빠짐없이 같은지 본다',
+    );
+    expect(printed).toBeGreaterThan(-1);
+    expect(checked).toBeGreaterThan(printed);
+    expect(step3.slice(checked)).toContain('다르면 붙여 넣지 않고 CLI를 다시 띄워');
+    expect(sectionOf('**5. 바꾸고 기록하기.**', '```sql')).toContain(
+      '`new_phone`이 확인 번호를 보낸 번호와 같은지 본 것',
+    );
+  });
+
+  it('leaves what to tell the member undecided where the owner has not said', () => {
+    // The owner's sentence covers the two refusals of a waiting grant's number only (3차 answer 3):
+    // another account's verified number, and an account gone between the steps, have none yet —
+    // nor does the account answered number_already_used on a number a waiting grant holds (3차
+    // answer 4 accepted that it gets nothing, not what it is told). ADR-0071 결과 4 asks.
+    const undecided = '무엇을 알릴지는 정하지 않았다(ADR-0071 결과 4)';
+    const taken = docRowFor({
+      refused: { at: 'update', code: '23505', constraint: 'phone_verifications_phone_unique' },
+    });
+    expect(taken.end).toBe('ROLLBACK');
+    expect(taken.next).toContain(undecided);
+    const gone = docRowFor({ updated: 0, inserted: 0, held: [] });
+    expect(gone.end).toBe('ROLLBACK');
+    expect(gone.next).toContain(undecided);
+    expect(gone.next).toContain('1단계의 계정 찾기를 답장의 주소로 다시 돌린다');
+    for (const row of [taken, gone]) expect(row.next).not.toContain(REFUSAL_REPLY);
+    expect(sectionOf('**바뀌는 것.**', '\n- 그 계정에')).toContain(
+      `다른 계정이 본인확인한 번호여서 실패했을 때 회원에게 ${undecided}`,
+    );
+    expect(sectionOf('## 회원의 휴대전화 번호 바꾸기', '**바뀌는 것.**')).toContain(
+      '그 번호로는 아직 아무도 시작 Coin을 받지 않았다 — 그 계정에 무엇을 보일지는 정하지 않았다(ADR-0071 결과 4)',
+    );
   });
 
   it('says COMMIT or ROLLBACK on every row of its result table, which states what it matches', () => {
     expect(RESULT_ROWS.length).toBeGreaterThan(0);
     for (const row of RESULT_ROWS) {
       expect(row.next, row.result).toMatch(/^`(COMMIT|ROLLBACK);`/);
-      expect(row.result).toMatch(/`(UPDATE|INSERT)( \d+|`에서 오류)/);
+      expect(row.result).toMatch(/`(UPDATE|INSERT|DO)( \d+|`에서 오류)/);
     }
   });
 
-  it('rolls back both refusals of a waiting grant’s number, and tries them again from step 1', () => {
-    // Owner decision 2026-10-19 answer 2, for an account with a grant (the SQL refuses it) and
-    // without one (the operator does, off the last row: ADR-0071 7-26). A retry asks and confirms
-    // the number again: the confirmation taken before the refusal is not reused (7-28).
-    for (const outcome of [REFUSED_WAITING, NO_GRANT_ON_WAITING]) {
+  it('rolls back both refusals of a waiting grant’s number, says only that, and waits to be asked again', () => {
+    // Owner decision 2026-10-19 answer 2, and 3차 answers 3–4: refused for an account with a grant
+    // (the INSERT) and without one (the DO block); the member is told only that the number cannot
+    // be changed to now, and asks again later — handled from step 1, the confirmation taken before
+    // the refusal not reused (ADR-0071 7-28).
+    for (const outcome of [REFUSED_WAITING, REFUSED_NO_GRANT]) {
       const row = docRowFor(outcome);
       expect(row.end).toBe('ROLLBACK');
-      expect(row.next).toContain('1단계부터 다시');
+      expect(row.next).toContain(REFUSAL_REPLY);
+      expect(row.next).toContain('회원이 나중에 다시 요청하면 1단계부터');
     }
-    expect(sectionOf('**거절된 변경을 다시 할 때.**', '```sql')).toContain('1단계부터 다시');
+    // The member asks again; the operator does not retry once the grant settles (3차 answer 3).
+    expect(docRowFor(REFUSED_WAITING).next).toContain('운영자가 먼저 다시 하지 않는다');
+    const again = sectionOf('**거절한 번호를 다시 요청받았을 때.**', '```sql');
+    expect(again).toContain('운영자가 먼저 다시 하지 않고');
+    expect(again).toContain('1단계부터');
+    expect(again).toContain("다시 '지금은 그 번호로 바꿀 수 없습니다'라고만 알린다");
     expect(sectionOf('**하지 않는 것.**', '**로컬.**')).toContain('1단계부터 다시');
+    // No row is left for the last row showing a waiting grant of another account: the SQL refuses
+    // every such change now.
+    const waiting = { ...NO_GRANT_ON_PAID, held: [{ ...NO_GRANT_ON_PAID.held[0]!, paid: false }] };
+    expect(RESULT_ROWS.filter((row) => describes(row.result, waiting))).toEqual([]);
     // The member is told the number got the start Coin only when it did (2026-10-19 answer 3).
-    const paid = {
-      ...NO_GRANT_ON_WAITING,
-      held: [{ ...NO_GRANT_ON_WAITING.held[0]!, paid: true }],
-    };
-    expect(docRowFor(paid).end).toBe('COMMIT');
-    expect(docRowFor(paid).next).toContain('이미 시작 Coin을 받아');
-    expect(docRowFor(NO_GRANT_ON_WAITING).next).not.toContain('이미 시작 Coin을 받아');
+    expect(docRowFor(NO_GRANT_ON_PAID).end).toBe('COMMIT');
+    expect(docRowFor(NO_GRANT_ON_PAID).next).toContain('이미 시작 Coin을 받아');
+    for (const outcome of [REFUSED_WAITING, REFUSED_NO_GRANT]) {
+      expect(docRowFor(outcome).next).not.toContain('이미 시작 Coin을 받아');
+    }
   });
 
   it('turns psql’s ON_ERROR_ROLLBACK off just before it, so a refusal aborts it all', () => {
     // The variables' block, one sentence, then the transaction: with ON_ERROR_ROLLBACK on, psql
-    // would undo the refused INSERT alone and the COMMIT would keep the number without its record.
+    // would undo the refused INSERT or DO block alone, and the COMMIT would keep the number.
     expect(OPERATIONS).toMatch(/\\set ON_ERROR_ROLLBACK off\n```\n\n[^\n]+\n\n```sql\nBEGIN;\n/);
   });
 });
@@ -238,13 +430,9 @@ describe.skipIf(!hasTestDb())('the operator phone change (integration)', () => {
     });
   }
 
-  /** The doc's three statements, the variables written in. */
+  /** The doc's statements, the variables written in. */
   function statementsOf(vars: Vars): string[] {
-    const text = withVariables(OPERATOR_PHONE_CHANGE_SQL, { ...vars });
-    const statements = text
-      .split(/;\n/)
-      .map((statement) => statement.replace(/;$/, '').trim())
-      .filter(Boolean);
+    const statements = statementsIn(withVariables(OPERATOR_PHONE_CHANGE_SQL, { ...vars }));
     expect(statements).toHaveLength(STATEMENTS.length);
     return statements;
   }
@@ -272,46 +460,60 @@ describe.skipIf(!hasTestDb())('the operator phone change (integration)', () => {
 
   /**
    * Runs the doc's SQL as the operator does in psql with ON_ERROR_ROLLBACK off: on a connection of
-   * its own as buddha_app, BEGIN, the three statements, then what the doc's result table says for
-   * what they returned. When they all go through, that is the one row of the table that matches
-   * the two row counts and the final query's rows, and its COMMIT or ROLLBACK: it returns those
-   * and `next`, the one it ran. When one fails, psql goes on to the next, which the aborted
+   * its own as buddha_app, BEGIN, the statements, then what the doc's result table says for what
+   * they returned. When they all go through, that is the one row of the table that matches the two
+   * row counts and the final query's rows, and its COMMIT or ROLLBACK: it returns those and
+   * `next`, the one it ran. When one fails, psql goes on to the next, which the aborted
    * transaction refuses (25P02); the table's row for that failure says ROLLBACK, and a COMMIT
    * typed instead answers ROLLBACK too, which is what it sends: then it returns which statement
-   * failed, how, and that ROLLBACK — nothing was kept, whatever the operator typed.
+   * failed, how, and that ROLLBACK — nothing was kept, whatever the operator typed. Either way the
+   * values the SET LOCAL lines handed the DO block are gone once the transaction ends.
    */
   async function change(vars: Vars) {
     const client = new Client({ connectionString: testDbUrls()!.appUrl, application_name: PSQL });
     await client.connect();
     try {
       await client.query('BEGIN');
-      const results: QueryResult[] = [];
-      const failures: { at: (typeof STATEMENTS)[number]; error: DatabaseError }[] = [];
+      const results: (QueryResult | undefined)[] = [];
+      const failures: { index: number; error: DatabaseError }[] = [];
       for (const [index, statement] of statementsOf(vars).entries()) {
         try {
           results.push(await client.query(statement));
         } catch (error) {
-          failures.push({ at: STATEMENTS[index]!, error: error as DatabaseError });
+          results.push(undefined);
+          failures.push({ index, error: error as DatabaseError });
         }
       }
       const [first, ...rest] = failures;
+      let outcome;
       if (first === undefined) {
-        const [update, insert, held] = results;
-        const outcome = {
-          updated: update!.rowCount,
-          inserted: insert!.rowCount,
-          held: held!.rows as Held[],
+        const resultOf = (at: (typeof STATEMENTS)[number]) => results[STATEMENTS.indexOf(at)]!;
+        const held = {
+          updated: resultOf('update').rowCount,
+          inserted: resultOf('insert').rowCount,
+          held: resultOf('select').rows as Held[],
         };
-        const { end } = docRowFor(outcome);
+        const { end } = docRowFor(held);
         expect((await client.query(end)).command).toBe(end);
-        return { ...outcome, next: end };
+        outcome = { ...held, next: end };
+      } else {
+        const at = STATEMENTS[first.index]!;
+        const { code, constraint, message } = first.error;
+        if (at !== 'update' && at !== 'insert' && at !== 'do') throw first.error;
+        const refused: Refusal = at === 'do' ? { at, code, message } : { at, code, constraint };
+        expect(docRowFor({ refused }).end).toBe('ROLLBACK');
+        const commit = (await client.query('COMMIT')).command;
+        expect(rest.map((failure) => failure.error.code)).toEqual(rest.map(() => '25P02'));
+        expect(rest).toHaveLength(STATEMENTS.length - 1 - first.index);
+        outcome = { refused, commit };
       }
-      const refused = { at: first.at, code: first.error.code, constraint: first.error.constraint };
-      expect(docRowFor({ refused }).end).toBe('ROLLBACK');
-      const commit = (await client.query('COMMIT')).command;
-      expect(rest.map((failure) => failure.error.code)).toEqual(rest.map(() => '25P02'));
-      expect(rest).toHaveLength(STATEMENTS.length - 1 - STATEMENTS.indexOf(first.at));
-      return { refused, commit };
+      const { rows } = await client.query<{ user_id: string | null; new_hash: string | null }>(
+        `SELECT current_setting('phone_change.user_id', true) AS user_id,
+           current_setting('phone_change.new_hash', true) AS new_hash`,
+      );
+      // NULL when the SET LOCAL lines never ran (an earlier statement failed), '' after they did.
+      expect(rows.map((row) => [row.user_id ?? '', row.new_hash ?? ''])).toEqual([['', '']]);
+      return outcome;
     } finally {
       await client.end();
     }
@@ -356,6 +558,42 @@ describe.skipIf(!hasTestDb())('the operator phone change (integration)', () => {
       await tx.delete(phoneVerifications).where(eq(phoneVerifications.userId, userId));
       return cancelled;
     });
+  }
+
+  /**
+   * A withdrawal (#140) cancelled and held open until `end`, then committed or rolled back: `held`
+   * once it has cancelled the grant and deleted the 본인확인 record.
+   */
+  function withdrawal(userId: string, ending: 'commit' | 'rollback') {
+    let end!: () => void;
+    const ended = new Promise<void>((resolve) => (end = resolve));
+    let cancelled!: () => void;
+    const held = new Promise<void>((resolve) => (cancelled = resolve));
+    const done = t.db
+      .transaction(async (tx) => {
+        expect((await cancelStartGrant(tx, userId)).outcome).toBe('cancelled');
+        await tx.delete(phoneVerifications).where(eq(phoneVerifications.userId, userId));
+        cancelled();
+        await ended;
+        if (ending === 'rollback') tx.rollback();
+      })
+      .then(
+        () => 'committed',
+        () => 'rolled back',
+      );
+    return { held, end, done };
+  }
+
+  /** Whether the psql connection is waiting on a lock (its INSERT, on the withdrawal's rows). */
+  async function psqlWaits() {
+    for (let attempt = 0; attempt < 250; attempt++) {
+      const { rows } = await t.db.execute<{ waiting: number }>(sql`
+        SELECT count(*)::int AS waiting FROM pg_stat_activity
+        WHERE application_name = ${PSQL} AND wait_event_type = 'Lock'`);
+      if ((rows[0]?.waiting ?? 0) > 0) return true;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    return false;
   }
 
   /** Pays a waiting grant, as the worker does once the amount is set. */
@@ -556,42 +794,8 @@ describe.skipIf(!hasTestDb())('the operator phone change (integration)', () => {
     const { user: x } = await createUser(t.db);
     const xGrant = await createStartGrant(t.db, { userId: x.id, amountCoin: 100n });
     const vars = { user_id: x.id, new_phone: phone, new_hash: n };
-
-    /** Y's withdrawal, cancelled and held open until `end`; then committed or rolled back. */
-    function withdrawal(ending: 'commit' | 'rollback') {
-      let end!: () => void;
-      const ended = new Promise<void>((resolve) => (end = resolve));
-      let cancelled!: () => void;
-      const held = new Promise<void>((resolve) => (cancelled = resolve));
-      const done = t.db
-        .transaction(async (tx) => {
-          expect((await cancelStartGrant(tx, y.id)).outcome).toBe('cancelled');
-          await tx.delete(phoneVerifications).where(eq(phoneVerifications.userId, y.id));
-          cancelled();
-          await ended;
-          if (ending === 'rollback') tx.rollback();
-        })
-        .then(
-          () => 'committed',
-          () => 'rolled back',
-        );
-      return { held, end, done };
-    }
-
-    /** Whether the psql connection is waiting on a lock (its INSERT, on the withdrawal's rows). */
-    async function psqlWaits() {
-      for (let attempt = 0; attempt < 250; attempt++) {
-        const { rows } = await t.db.execute<{ waiting: number }>(sql`
-          SELECT count(*)::int AS waiting FROM pg_stat_activity
-          WHERE application_name = ${PSQL} AND wait_event_type = 'Lock'`);
-        if ((rows[0]?.waiting ?? 0) > 0) return true;
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      }
-      return false;
-    }
-
     for (const ending of ['rollback', 'commit'] as const) {
-      const meanwhile = withdrawal(ending);
+      const meanwhile = withdrawal(y.id, ending);
       await Promise.race([meanwhile.held, meanwhile.done]);
       const changing = change(vars);
       try {
@@ -616,6 +820,36 @@ describe.skipIf(!hasTestDb())('the operator phone change (integration)', () => {
     expect(await liveHolders(n)).toEqual([{ grantId: xGrant.id }]);
   });
 
+  it('refuses an account with no grant while the waiting grant’s cancellation is in flight, without waiting', async () => {
+    // ADR-0071 7-26: the DO block reads what is committed and takes no lock, so a withdrawal not
+    // yet committed still counts as the grant waiting — refused at once, on the refusal side only:
+    // asked again after the withdrawal commits, the change goes through.
+    const { y, n, phone } = await waitingHolder();
+    const { user } = await createUser(t.db);
+    const { phone: before } = await createPhoneVerification(t.db, { userId: user.id });
+    const vars = { user_id: user.id, new_phone: phone, new_hash: n };
+    const meanwhile = withdrawal(y.id, 'commit');
+    await Promise.race([meanwhile.held, meanwhile.done]);
+    let refused;
+    try {
+      refused = await Promise.race([
+        change(vars),
+        new Promise((resolve) => setTimeout(() => resolve('waited'), 5_000)),
+      ]);
+    } finally {
+      meanwhile.end();
+    }
+    expect(refused).toEqual(REFUSED_NO_GRANT);
+    expect(await meanwhile.done).toBe('committed');
+    expect(await phoneOf(user.id)).toBe(before);
+    expect(await holderOf(n)).toEqual([]);
+    expect(await change(vars)).toEqual({ updated: 1, inserted: 0, held: [], next: 'COMMIT' });
+    expect(await phoneOf(user.id)).toBe(phone);
+    expect((await t.db.transaction((tx) => recordStartGrant(tx, user.id, n))).outcome).toBe(
+      'recorded',
+    );
+  });
+
   it('tells an account with no grant moved onto a number that got the start Coin: it will get none', async () => {
     const { user: earlier } = await createUser(t.db);
     const takenHash = randomPhoneHash();
@@ -626,42 +860,36 @@ describe.skipIf(!hasTestDb())('the operator phone change (integration)', () => {
     await createPhoneVerification(t.db, { userId: user.id });
     expect(
       await change({ user_id: user.id, new_phone: randomPhone(), new_hash: takenHash }),
-    ).toEqual({
-      updated: 1,
-      inserted: 0,
-      held: [{ this_account: false, source: 'grant', paid: true, has_grant: false }],
-      next: 'COMMIT',
-    });
+    ).toEqual({ ...NO_GRANT_ON_PAID, next: 'COMMIT' });
     // Its grant (#58) on the new number records nothing.
     const recorded = await t.db.transaction((tx) => recordStartGrant(tx, user.id, takenHash));
     expect(recorded).toEqual({ outcome: 'number_already_used' });
   });
 
-  it('rolls back an account with no grant moved onto a number a waiting grant holds, until it settles', async () => {
-    // Owner decision 2026-10-19 answer 2 (ADR-0071 7-26): nobody got the start Coin on N yet, so
-    // answer 3's "already got it" would be untrue. The SQL has no row to add for an account with
-    // no grant, so no refusal of its own: the doc's row for the last row's `paid` f, `has_grant` f
-    // says ROLLBACK, and `change` runs it.
+  it('refuses an account with no grant moved onto a number a waiting grant holds, until it settles', async () => {
+    // Owner decision 2026-10-19 3차 answer 4 (ADR-0071 7-26): refused like an account with a
+    // grant — nobody got the start Coin on N yet, so answer 3's "already got it" would be untrue.
+    // The INSERT has no row to add for an account with no grant; the DO block raises, the
+    // transaction is aborted, and the operator's COMMIT answers ROLLBACK.
     for (const settle of ['pay', 'withdraw'] as const) {
       const { y, grant: yGrant, n, phone } = await waitingHolder();
       const { user } = await createUser(t.db);
       const { phone: before } = await createPhoneVerification(t.db, { userId: user.id });
       const vars = { user_id: user.id, new_phone: phone, new_hash: n };
-      expect(await change(vars)).toEqual({ ...NO_GRANT_ON_WAITING, next: 'ROLLBACK' });
+      expect(await change(vars)).toEqual(REFUSED_NO_GRANT);
       expect(await phoneOf(user.id)).toBe(before);
       expect(await liveHolders(n)).toEqual([{ grantId: yGrant.id }]);
+      // Asked again while Y's grant waits: the same refusal, and the read-only check before the
+      // confirmation SMS says so without trying.
       expect(await holderOf(n)).toEqual([{ paid: false }]);
+      expect(await change(vars)).toEqual(REFUSED_NO_GRANT);
+      expect(await phoneOf(user.id)).toBe(before);
       // Once Y's grant is settled the change, asked and confirmed again from step 1, goes through.
       if (settle === 'pay') {
         // Paid: N got the start Coin, and this account gets none on it (answer 3).
         expect((await pay(yGrant.id)).outcome).toBe('granted');
         expect(await holderOf(n)).toEqual([{ paid: true }]);
-        expect(await change(vars)).toEqual({
-          updated: 1,
-          inserted: 0,
-          held: [{ this_account: false, source: 'grant', paid: true, has_grant: false }],
-          next: 'COMMIT',
-        });
+        expect(await change(vars)).toEqual({ ...NO_GRANT_ON_PAID, next: 'COMMIT' });
         expect(await t.db.transaction((tx) => recordStartGrant(tx, user.id, n))).toEqual({
           outcome: 'number_already_used',
         });
@@ -693,6 +921,22 @@ describe.skipIf(!hasTestDb())('the operator phone change (integration)', () => {
     expect(await lookup('member@test.local')).toEqual([{ id: member.id, verified: false }]);
   });
 
+  it('picks a confirmation code of six digits, leading zeros kept, read only', async () => {
+    // Step 1 (owner decision 2026-10-19 3차, answer 1): the code texted to the new number.
+    const codes: string[] = [];
+    for (let i = 0; i < 200; i++) {
+      const rows = await read<{ code: string }>(OPERATOR_CONFIRMATION_CODE_SQL, {});
+      expect(rows).toHaveLength(1);
+      codes.push(rows[0]!.code);
+    }
+    for (const code of codes) expect(code).toMatch(/^\d{6}$/);
+    expect(new Set(codes).size).toBeGreaterThan(150);
+    // The whole range, not a narrowed one padded with zeros (`random() * 100000` would start every
+    // code with 0 and still be six digits, nearly all distinct): the first digit takes most of its
+    // ten values in 200 codes (fewer than 8 has odds below 1e-28).
+    expect(new Set(codes.map((c) => c[0])).size).toBeGreaterThanOrEqual(8);
+  });
+
   it('changes nothing for an unknown account, and refuses a number another account verified', async () => {
     expect(
       await change({
@@ -701,6 +945,22 @@ describe.skipIf(!hasTestDb())('the operator phone change (integration)', () => {
         new_hash: randomPhoneHash(),
       }),
     ).toEqual({ updated: 0, inserted: 0, held: [], next: 'ROLLBACK' });
+    // A mistyped id on a number a waiting grant holds is still `UPDATE 0`, not the DO block's
+    // refusal: it speaks only for an account with a 본인확인 record — nothing to tell a member.
+    const { y, n, phone } = await waitingHolder();
+    expect(await change({ user_id: 'no-such-account', new_phone: phone, new_hash: n })).toEqual({
+      updated: 0,
+      inserted: 0,
+      held: [{ this_account: false, source: 'grant', paid: false, has_grant: false }],
+      next: 'ROLLBACK',
+    });
+    // Nor for the holder itself, whose number it is.
+    expect(await change({ user_id: y.id, new_phone: phone, new_hash: n })).toMatchObject({
+      updated: 1,
+      inserted: 0,
+      held: [{ this_account: true, source: 'grant', paid: false, has_grant: true }],
+      next: 'COMMIT',
+    });
     const { user: a } = await createUser(t.db);
     const { user: b } = await createUser(t.db);
     const verified = await createPhoneVerification(t.db, { userId: a.id });
