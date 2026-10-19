@@ -23,7 +23,10 @@
  * No history entry is added: pushing a duplicate entry to catch the back button (the usual trap)
  * leaves that entry behind for every later Back, and Chrome skips entries pushed without a user
  * gesture anyway. Navigations the screen makes itself (`router.push` after a save, the write
- * screen's `router.replace` of its market) are neither clicks nor `popstate`, so they pass.
+ * screen's `router.replace` of its market) are neither clicks nor `popstate`, so they pass — and so
+ * does the onboarding gate's `router.replace` to a step left, which loses nothing: the form keeps
+ * its draft in the tab as it goes, and takes it back after the step (오너 결정 2026-10-20,
+ * lib/post-drafts.ts).
  *
  * The logic is here, against a `LeaveGuardHost` — the window, as far as the guard reads it — so it
  * is tested without a browser (leave-guard.test.ts); lib/leave-guard-window.ts binds it to the

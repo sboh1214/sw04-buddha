@@ -1,6 +1,8 @@
 import { type APIRequestContext, type Locator, type Page } from '@playwright/test';
+import type { Me } from '@buddha/shared';
 import { copy } from '../src/copy';
 import {
+  E2E_PASSWORD,
   closeMarket,
   createOpenMarket,
   expect,
@@ -8,6 +10,7 @@ import {
   freshTag,
   logOut,
   meOf,
+  signIn,
   signUp,
   test,
 } from './helpers';
@@ -24,7 +27,15 @@ import {
  * None of the community's screens is for search engines (noindex), and leaving a draft asks first —
  * a refusal keeps it, an answer of yes leaves (owner decisions 2026-10-19): a body without a title,
  * the edit screen (where an untouched body asks nothing, a click into it included), and Forward and
- * a jump back in a browser without the Navigation API too.
+ * a jump back in a browser without the Navigation API too. An author with an onboarding step left
+ * — a re-consent — still opens their post and deletes it, and its 수정 goes through the step first;
+ * a draft the onboarding gate takes the writer away from is kept in the tab without asking and
+ * comes back, formatting and image, once the step is done, the notice focused — on the edit
+ * screen too, where discarding it puts the saved post back (what was typed after the restore goes
+ * with it, ADR-0073 결과 4의 2) and focuses the title; signing out from the step removes it (owner
+ * decisions 2026-10-20). No spec can bring about a
+ * re-consent for real (the consent versions are the build's), so `GET /me` says it in the browser
+ * (`asReconsent`), as onboarding.spec.ts draws it.
  * The allow-list, the image checks, the permissions and the paging are the API's and the shared
  * package's tests; this walks the screens.
  */
@@ -45,6 +56,77 @@ const card = (page: Page, postId: string) => page.getByTestId(`post-card-${postI
 async function expectNotIndexed(page: Page): Promise<void> {
   await expect(page.locator('meta[name="robots"][content*="noindex"]').first()).toBeAttached();
   await expect(page.locator('meta[name="robots"]:not([content*="noindex"])')).toHaveCount(0);
+}
+
+/**
+ * `GET /me` in this page answering as the server would after a revision of the terms that changed
+ * members' rights (오너 결정 2026-10-19 (2차) 1): the terms agreement no longer stands, so the
+ * consent step is the account's next — while `on`. Agreeing on that step turns it off, as the
+ * server's own answer then says nothing is left. The account itself has finished its onboarding,
+ * so the server takes its writes; what this shows is the screens' side (onboarding.spec.ts draws
+ * the re-consent the same way).
+ */
+async function asReconsent(page: Page): Promise<{ on: boolean }> {
+  const state = { on: false };
+  await page.route('**/api/v1/me', async (route) => {
+    if (route.request().method() !== 'GET' || !state.on) return route.fallback();
+    const response = await route.fetch();
+    // Signed out (a spec that signs out with it on): a 401, no account to draw it for.
+    if (!response.ok()) return route.fulfill({ response });
+    const body = (await response.json()) as { data: Me };
+    const { onboarding } = body.data;
+    body.data.onboarding = {
+      ...onboarding,
+      consent: false,
+      completed: false,
+      nextStep: 'consent',
+      consents: onboarding.consents.map((answer) =>
+        answer.item === 'terms' ? { ...answer, version: 'draft-1999-01-01' } : answer,
+      ),
+    };
+    await route.fulfill({ response, json: body });
+  });
+  await page.route('**/api/v1/me/consents', async (route) => {
+    const response = await route.fetch();
+    state.on = false;
+    await route.fulfill({ response });
+  });
+  return state;
+}
+
+/** The consent step of a re-consent, agreed on screen: 전체 동의, then 동의하고 계속하기. */
+async function agreeAgain(page: Page): Promise<void> {
+  await expect(page.getByTestId('onboarding-return-reason')).toHaveText(
+    copy.onboardingReconsentReason,
+  );
+  await page.getByTestId('consent-all').click();
+  await page.getByTestId('consent-submit').click();
+}
+
+/** A write refused as the server refuses an account with a step left (409 ONBOARDING_REQUIRED). */
+const ONBOARDING_REFUSAL = {
+  status: 409,
+  json: {
+    error: {
+      code: 'ONBOARDING_REQUIRED',
+      message: 'The onboarding is not done',
+      details: { steps: ['consent'] },
+    },
+  },
+};
+
+/** The post drafts kept in this tab's sessionStorage (lib/post-drafts.ts), by storage key. */
+function draftsInTab(page: Page): Promise<Record<string, { previews: Record<string, string> }>> {
+  return page.evaluate(() =>
+    Object.fromEntries(
+      Object.keys(sessionStorage)
+        .filter((key) => key.startsWith('buddha.postDraft:'))
+        .map((key) => [
+          key,
+          JSON.parse(sessionStorage.getItem(key) ?? '{}') as { previews: Record<string, string> },
+        ]),
+    ),
+  );
 }
 
 /** The post id of the post page the browser is on. */
@@ -548,5 +630,255 @@ test.describe('근거 글', () => {
     await expect(page).toHaveURL(`/community?q=${tag}`);
     await expect(page.getByTestId('community-write')).toBeVisible();
     expect(asked).toEqual([question, question, question]);
+  });
+
+  test('온보딩 단계가 남은 작성자(재동의)도 자기 글 화면을 열어 지우고, 그 화면의 수정은 남은 단계를 거쳐 수정 화면으로 간다', async ({
+    admin,
+    page,
+  }) => {
+    const market = await createOpenMarket(admin);
+    await signUp(page, freshEmail());
+    const tag = freshTag();
+    const postId = await postThroughApi(page.request, market.id, `지울 글 ${tag}`, '지울 근거');
+    const postPage = `/community/posts/${postId}`;
+    const edit = `${postPage}/edit`;
+    const viaStep = `/onboarding?next=${encodeURIComponent(edit)}`;
+    const reconsent = await asReconsent(page);
+
+    // --- the post page opens for an account with a step left (오너 결정 2026-10-20): not sent
+    // on, the author's own 수정 and 삭제 on it.
+    reconsent.on = true;
+    await page.goto(postPage);
+    await expect(page.getByTestId('post-title')).toHaveText(`지울 글 ${tag}`);
+    await expect(page.getByTestId('post-delete')).toBeVisible();
+    await expect(page).toHaveURL(postPage);
+    // 수정 is the remaining step, which comes back to the edit screen.
+    await expect(page.getByTestId('post-edit')).toHaveAttribute('href', viaStep);
+    // Everything else stays gated: the edit screen and the community list send it on.
+    await page.goto(edit);
+    await expect(page).toHaveURL(viaStep);
+    await page.goto('/community');
+    await expect(page).toHaveURL(`/onboarding?next=${encodeURIComponent('/community')}`);
+
+    // --- 수정: the step, then the edit screen.
+    await page.goto(postPage);
+    await page.getByTestId('post-edit').click();
+    await expect(page).toHaveURL(viaStep);
+    await agreeAgain(page);
+    await expect(page).toHaveURL(edit);
+    await expect(page.getByTestId('post-form')).toBeVisible();
+
+    // --- the consent asked for again: 삭제 with a session alone (오너 결정 2026-10-19 답 2).
+    reconsent.on = true;
+    await page.goto(postPage);
+    await expect(page.getByTestId('post-delete')).toBeVisible();
+    await expect(page).toHaveURL(postPage);
+    await page.getByTestId('post-delete').click();
+    await page.getByTestId('post-delete-confirm').click();
+    // Gone; the community list it then goes to is gated, so the step comes first.
+    await expect(page).toHaveURL(`/onboarding?next=${encodeURIComponent('/community')}`);
+    expect((await page.request.get(`/api/v1/posts/${postId}`)).status()).toBe(404);
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+  });
+
+  test('쓰던 글에서 온보딩 게이트가 남은 단계로 보내면 묻지 않고 이 탭에 두었다가, 단계를 마치고 돌아오면 서식과 이미지까지 되살린다', async ({
+    admin,
+    page,
+  }) => {
+    const market = await createOpenMarket(admin);
+    await signUp(page, freshEmail());
+    const tag = freshTag();
+    const asked: string[] = [];
+    const answers: boolean[] = [];
+    page.on('dialog', (dialog) => {
+      asked.push(`${dialog.type()}: ${dialog.message()}`);
+      void (answers.shift() === true ? dialog.accept() : dialog.dismiss());
+    });
+    const question = `confirm: ${copy.postLeaveConfirm}`;
+    const home = page.getByRole('heading', { level: 1, name: copy.appName }).getByRole('link');
+    const reconsent = await asReconsent(page);
+    const write = `/community/write?market=${market.id}`;
+
+    // --- a draft: a title, formatted text and an image.
+    await page.goto(write);
+    await page.getByTestId('post-title-input').fill(`되살릴 제목 ${tag}`);
+    const editor = page.getByTestId('post-editor-content');
+    await editor.click();
+    await page.getByTestId('post-editor-bold').click();
+    await page.keyboard.type('굵은 근거');
+    await page.getByTestId('post-editor-bold').click();
+    await page.keyboard.type(' 이어 쓴 근거');
+    await page
+      .getByTestId('post-editor-file')
+      .setInputFiles({ name: 'evidence.png', mimeType: 'image/png', buffer: PNG });
+    await expect(editor.locator('img[data-media-id]')).toHaveCount(1);
+    const mediaId = await editor.locator('img[data-media-id]').getAttribute('data-media-id');
+    expect(mediaId).toMatch(/^[0-9a-f-]{36}$/);
+
+    // --- the write refused for the onboarding: a revision asked for the consent again meanwhile.
+    await page.route('**/api/v1/posts', async (route) => {
+      if (route.request().method() !== 'POST') return route.fallback();
+      reconsent.on = true;
+      await route.fulfill(ONBOARDING_REFUSAL);
+    });
+    await page.getByTestId('post-submit').click();
+    // The gate takes the account to its step and asks nothing: the draft is kept in this tab.
+    await expect(page).toHaveURL(`/onboarding?next=${encodeURIComponent(write)}`);
+    await expect(page.getByTestId('consent-step')).toBeVisible();
+    expect(asked).toEqual([]);
+    const kept = await draftsInTab(page);
+    expect(Object.keys(kept)).toEqual([`buddha.postDraft:new:${market.id}`]);
+    expect(kept[`buddha.postDraft:new:${market.id}`]?.previews[mediaId ?? '']).toMatch(
+      /^data:image\/(webp|jpeg);base64,/,
+    );
+
+    // --- the step done: back on the write screen, the draft taken back and said so.
+    await agreeAgain(page);
+    await expect(page).toHaveURL(write);
+    const notice = page.getByTestId('post-draft-restored');
+    await expect(notice).toContainText(copy.postDraftRestored);
+    // Focused, so a screen reader says it (it appears with its text in it), named by its sentence.
+    await expect(notice).toBeFocused();
+    await expect(notice).toHaveAccessibleName(copy.postDraftRestored);
+    await expect(page.getByTestId('post-title-input')).toHaveValue(`되살릴 제목 ${tag}`);
+    await expect(editor.locator('strong')).toHaveText('굵은 근거');
+    await expect(editor).toContainText('이어 쓴 근거');
+    // The upload is not served before a post shows it: drawn from the preview the draft kept.
+    const image = editor.locator(`img[data-media-id="${mediaId ?? ''}"]`);
+    await expect(image).toHaveAttribute('src', /^data:image\//);
+    await expect
+      .poll(() => image.evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0))
+      .toBe(true);
+    // Taken back, it is the form's again — gone from the storage, and guarded like any draft.
+    expect(await draftsInTab(page)).toEqual({});
+    answers.push(false);
+    await home.click();
+    await expect.poll(() => asked).toEqual([question]);
+    await expect(page).toHaveURL(write);
+
+    // --- sent: the post holds it all, and nothing is kept.
+    await page.unroute('**/api/v1/posts');
+    await page.getByTestId('post-submit').click();
+    await expect(page).toHaveURL(/\/community\/posts\/[0-9a-f-]{36}$/);
+    await expect(page.getByTestId('post-title')).toHaveText(`되살릴 제목 ${tag}`);
+    const body = page.getByTestId('post-body');
+    await expect(body.locator('strong')).toHaveText('굵은 근거');
+    await expect(body.getByTestId('post-image')).toHaveAttribute(
+      'src',
+      `/api/v1/media/${mediaId ?? ''}`,
+    );
+    expect(await draftsInTab(page)).toEqual({});
+    expect(asked).toEqual([question]);
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+  });
+
+  test('수정 화면의 쓰던 글도 게이트를 지나 되살리고, 되살린 내용을 버리면 저장된 글로 돌아가 묻지 않고 떠난다', async ({
+    admin,
+    page,
+  }) => {
+    const market = await createOpenMarket(admin);
+    await signUp(page, freshEmail());
+    const postId = await postThroughApi(page.request, market.id, '저장된 제목', '저장된 근거');
+    const edit = `/community/posts/${postId}/edit`;
+    const asked: string[] = [];
+    page.on('dialog', (dialog) => {
+      asked.push(`${dialog.type()}: ${dialog.message()}`);
+      void dialog.dismiss();
+    });
+    const home = page.getByRole('heading', { level: 1, name: copy.appName }).getByRole('link');
+    const reconsent = await asReconsent(page);
+    const title = page.getByTestId('post-title-input');
+    const editor = page.getByTestId('post-editor-content');
+
+    // --- an edit under way, its save refused for the onboarding.
+    await page.goto(edit);
+    await expect(editor).toContainText('저장된 근거');
+    await title.fill('고치던 제목');
+    await editor.click();
+    await page.keyboard.press('End');
+    await page.keyboard.type(' 고치던 근거');
+    await page.route(`**/api/v1/posts/${postId}`, async (route) => {
+      if (route.request().method() !== 'PUT') return route.fallback();
+      reconsent.on = true;
+      await route.fulfill(ONBOARDING_REFUSAL);
+    });
+    await page.getByTestId('post-submit').click();
+    await expect(page).toHaveURL(`/onboarding?next=${encodeURIComponent(edit)}`);
+    expect(asked).toEqual([]);
+    expect(Object.keys(await draftsInTab(page))).toEqual([`buddha.postDraft:edit:${postId}`]);
+
+    // --- back on the edit screen once agreed: the edit taken back.
+    await agreeAgain(page);
+    await expect(page).toHaveURL(edit);
+    await expect(page.getByTestId('post-draft-restored')).toBeVisible();
+    await expect(title).toHaveValue('고치던 제목');
+    await expect(editor).toContainText('고치던 근거');
+    // Written on after the restore: the notice and its discard stay.
+    await editor.click();
+    await page.keyboard.press('End');
+    await page.keyboard.type(' 되살린 뒤 쓴 근거');
+    await expect(editor).toContainText('되살린 뒤 쓴 근거');
+    await expect(page.getByTestId('post-draft-discard')).toBeVisible();
+
+    // --- discarded: the saved post again — what was typed after the restore goes too, without
+    // asking (as built, ADR-0073 결과 4의 2 asks the owner) — nothing to lose, so leaving asks
+    // nothing; the focus is on the redrawn title, not lost with the button.
+    await page.getByTestId('post-draft-discard').click();
+    await expect(page.getByTestId('post-draft-restored')).toHaveCount(0);
+    await expect(title).toHaveValue('저장된 제목');
+    await expect(title).toBeFocused();
+    await expect(editor).toContainText('저장된 근거');
+    await expect(editor).not.toContainText('고치던 근거');
+    await expect(editor).not.toContainText('되살린 뒤 쓴 근거');
+    expect(asked).toEqual([]);
+    expect(await draftsInTab(page)).toEqual({});
+    await home.click();
+    await expect(page).toHaveURL('/');
+    expect(asked).toEqual([]);
+    // Nothing was saved.
+    const saved = (await (await page.request.get(`/api/v1/posts/${postId}`)).json()) as {
+      data: { title: string | null; editedAt: string | null };
+    };
+    expect(saved.data).toMatchObject({ title: '저장된 제목', editedAt: null });
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+  });
+
+  test('게이트가 이 탭에 둔 쓰던 글은 단계에서 로그아웃하면 지워져, 같은 계정이 다시 로그인해도 되살아나지 않는다', async ({
+    admin,
+    page,
+  }) => {
+    const market = await createOpenMarket(admin);
+    const email = freshEmail();
+    await signUp(page, email);
+    const reconsent = await asReconsent(page);
+    const write = `/community/write?market=${market.id}`;
+
+    // --- a draft, kept by the gate when its write is refused for the onboarding.
+    await page.goto(write);
+    await page.getByTestId('post-title-input').fill('로그아웃 전에 쓰던 제목');
+    await page.getByTestId('post-editor-content').click();
+    await page.keyboard.type('로그아웃 전에 쓰던 근거');
+    await page.route('**/api/v1/posts', async (route) => {
+      if (route.request().method() !== 'POST') return route.fallback();
+      reconsent.on = true;
+      await route.fulfill(ONBOARDING_REFUSAL);
+    });
+    await page.getByTestId('post-submit').click();
+    await expect(page).toHaveURL(`/onboarding?next=${encodeURIComponent(write)}`);
+    expect(Object.keys(await draftsInTab(page))).toEqual([`buddha.postDraft:new:${market.id}`]);
+
+    // --- 로그아웃 on the step: the tab's kept drafts go with the session (useSignOut).
+    await page.getByTestId('onboarding-logout').click();
+    await expect(page).toHaveURL('/');
+    expect(await draftsInTab(page)).toEqual({});
+
+    // --- the same account back in this tab, nothing left: the write screen is a fresh one.
+    reconsent.on = false;
+    await signIn(page, email, E2E_PASSWORD);
+    await page.goto(write);
+    await expect(page.getByTestId('post-form')).toBeVisible();
+    await expect(page.getByTestId('post-draft-restored')).toHaveCount(0);
+    await expect(page.getByTestId('post-title-input')).toHaveValue('');
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
   });
 });

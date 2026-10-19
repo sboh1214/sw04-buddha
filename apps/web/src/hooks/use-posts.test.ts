@@ -1,9 +1,18 @@
 import { MutationObserver, QueryObserver } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, type Post, type PostSummary, api } from '@/lib/api';
+import { ApiError, type Me, type Post, type PostSummary, api } from '@/lib/api';
+import {
+  type DraftStorage,
+  type PostDraftKey,
+  clearPostDraft,
+  keepPostDraft,
+  postDraftMoment,
+  readPostDraft,
+} from '@/lib/post-drafts';
 import { communityPostsKey, postKey } from '@/lib/posts';
 import { getQueryClient } from '@/lib/query-client';
 import { ME_QUERY_KEY } from './use-me';
+import { type HeldPostDraftAt, keepHeldPostDraft } from './use-post-draft';
 import {
   communityPostsInfiniteQueryOptions,
   createPostOptions,
@@ -69,7 +78,26 @@ const answer = (data: unknown, meta?: unknown) =>
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
+
+/** This tab's `sessionStorage` as the drafts read it, over a Map (the tests run under node). */
+function tabStorage(): DraftStorage {
+  const items = new Map<string, string>();
+  return {
+    get length() {
+      return items.size;
+    },
+    key: (index) => [...items.keys()][index] ?? null,
+    getItem: (key) => items.get(key) ?? null,
+    setItem: (key, value) => {
+      items.set(key, value);
+    },
+    removeItem: (key) => {
+      items.delete(key);
+    },
+  };
+}
 
 describe('the community list', () => {
   it('is keyed by its filters and asks with them, a page per cursor', async () => {
@@ -138,6 +166,156 @@ describe('the writes', () => {
       edit.mutate({ postId: POST, title: null, body: {}, expectedAccountId: 'user-1' }),
     ).rejects.toBeInstanceOf(ApiError);
     expect(queryClient.getQueryState(postKey(post))?.isInvalidated).toBe(true);
+  });
+
+  it('a write or an edit that lands removes the draft the onboarding gate kept for its screen — a refusal keeps it (오너 결정 2026-10-20)', async () => {
+    const queryClient = getQueryClient();
+    const storage = tabStorage();
+    vi.stubGlobal('window', { sessionStorage: storage });
+    const draft = { title: '쓰던 제목', body: { type: 'doc', content: [] }, previews: {} };
+    const now = Date.now();
+    const newKey = { kind: 'new', marketId: MARKET } as const;
+    const editKey = { kind: 'edit', postId: post } as const;
+    keepPostDraft(storage, newKey, 'user-1', draft, now);
+    keepPostDraft(storage, editKey, 'user-1', draft, now);
+
+    // Refused: the draft stays for the screen to take back after the onboarding.
+    const send = vi
+      .spyOn(api, 'POST')
+      .mockRejectedValueOnce(new ApiError(409, { code: 'ONBOARDING_REQUIRED', message: 'x' }));
+    const write = new MutationObserver(
+      queryClient,
+      createPostOptions(queryClient, () => undefined),
+    );
+    const body = { marketId: MARKET, title: null, body: {}, expectedAccountId: 'user-1' };
+    await expect(write.mutate(body)).rejects.toBeInstanceOf(ApiError);
+    expect(readPostDraft(storage, newKey, 'user-1', now)).toEqual(draft);
+
+    // Landed — the screen may be gone by then: the post holds it now.
+    send.mockResolvedValueOnce(answer(published));
+    await write.mutate(body);
+    expect(readPostDraft(storage, newKey, 'user-1', now)).toBeNull();
+    expect(readPostDraft(storage, editKey, 'user-1', now)).toEqual(draft);
+
+    vi.spyOn(api, 'PUT').mockResolvedValueOnce(answer(published));
+    const edit = new MutationObserver(
+      queryClient,
+      updatePostOptions(queryClient, () => undefined),
+    );
+    await edit.mutate({ postId: POST, title: null, body: {}, expectedAccountId: 'user-1' });
+    expect(readPostDraft(storage, editKey, 'user-1', now)).toBeNull();
+  });
+
+  it('a form the gate takes away while a landed write is still being handled keeps nothing — the success has not reached it (오너 결정 2026-10-20)', async () => {
+    const storage = tabStorage();
+    vi.stubGlobal('window', { sessionStorage: storage });
+    // `GET /me` as the gate finds it: the account has a step left (a re-consent just shipped).
+    const me = { id: 'user-1', onboarding: { nextStep: 'consent' } } as Me;
+    const screens: {
+      key: PostDraftKey;
+      send: (queryClient: ReturnType<typeof getQueryClient>) => Promise<unknown>;
+    }[] = [
+      {
+        key: { kind: 'new', marketId: MARKET },
+        send: (queryClient) => {
+          vi.spyOn(api, 'POST').mockResolvedValueOnce(answer(published));
+          const write = new MutationObserver(
+            queryClient,
+            createPostOptions(queryClient, () => undefined),
+          );
+          return write.mutate({
+            marketId: MARKET,
+            title: '쓰던 제목',
+            body: {},
+            expectedAccountId: 'user-1',
+          });
+        },
+      },
+      {
+        key: { kind: 'edit', postId: post },
+        send: (queryClient) => {
+          vi.spyOn(api, 'PUT').mockResolvedValueOnce(answer(published));
+          const edit = new MutationObserver(
+            queryClient,
+            updatePostOptions(queryClient, () => undefined),
+          );
+          return edit.mutate({
+            postId: POST,
+            title: '쓰던 제목',
+            body: {},
+            expectedAccountId: 'user-1',
+          });
+        },
+      },
+    ];
+    for (const { key, send } of screens) {
+      const queryClient = getQueryClient();
+      // The form's last render: sending (locked), not saved yet, with something to keep.
+      const last: HeldPostDraftAt = {
+        key,
+        accountId: 'user-1',
+        hasDraft: true,
+        saved: false,
+        title: '쓰던 제목',
+        body: { type: 'doc', content: [] },
+        previews: new Map(),
+        moment: postDraftMoment(),
+      };
+      // Before anything landed, the gate taking it away keeps it (a 409 is being handled, say).
+      expect(keepHeldPostDraft(last, me)).toBe(true);
+      expect(readPostDraft(storage, key, 'user-1', Date.now())).not.toBeNull();
+      clearPostDraft(storage, key);
+
+      // The write lands; its success is held in `onSuccess` (the lists being read again).
+      let release: (() => void) | undefined;
+      vi.spyOn(queryClient, 'invalidateQueries').mockImplementation(
+        () =>
+          new Promise<void>((resolve) => {
+            release = resolve;
+          }),
+      );
+      const sent = send(queryClient);
+      await vi.waitFor(() => {
+        expect(release).toBeDefined();
+      });
+      // TanStack has not marked the mutation succeeded: the form still holds `saved: false`.
+      expect(queryClient.getMutationCache().getAll()[0]?.state.status).toBe('pending');
+      // The gate takes the form away now: nothing is kept.
+      expect(keepHeldPostDraft(last, me)).toBe(false);
+      expect(readPostDraft(storage, key, 'user-1', Date.now())).toBeNull();
+      release?.();
+      await sent;
+      expect(queryClient.getMutationCache().getAll()[0]?.state.status).toBe('success');
+      expect(readPostDraft(storage, key, 'user-1', Date.now())).toBeNull();
+
+      // A form of the same screen drawn afterwards keeps its own draft again.
+      expect(keepHeldPostDraft({ ...last, moment: postDraftMoment() }, me)).toBe(true);
+      clearPostDraft(storage, key);
+    }
+  });
+
+  it('a form going away keeps nothing for another account, nor with no step left', () => {
+    const storage = tabStorage();
+    vi.stubGlobal('window', { sessionStorage: storage });
+    const key = { kind: 'new', marketId: MARKET } as const;
+    const last: HeldPostDraftAt = {
+      key,
+      accountId: 'user-1',
+      hasDraft: true,
+      saved: false,
+      title: '쓰던 제목',
+      body: { type: 'doc', content: [] },
+      previews: new Map(),
+      moment: postDraftMoment(),
+    };
+    const stepLeft = { nextStep: 'consent' } as Me['onboarding'];
+    expect(keepHeldPostDraft(last, { id: 'user-2', onboarding: stepLeft } as Me)).toBe(false);
+    expect(keepHeldPostDraft(last, undefined)).toBe(false);
+    expect(keepHeldPostDraft(last, { id: 'user-1', onboarding: { nextStep: null } } as Me)).toBe(
+      false,
+    );
+    expect(keepHeldPostDraft({ ...last, accountId: undefined }, undefined)).toBe(false);
+    expect(readPostDraft(storage, key, 'user-1', Date.now())).toBeNull();
   });
 
   it('a deletion drops the held page and marks the lists stale', async () => {

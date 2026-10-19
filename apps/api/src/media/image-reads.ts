@@ -2,7 +2,8 @@ import { AppError } from '../common/errors/app-error.js';
 
 /**
  * The bytes of the image reads the API may hold at once, process-wide (`GET /media/:mediaId`,
- * ADR-0073 decision 9-36). Implementation-chosen, not the owner's.
+ * ADR-0073 decision 9-36). Implementation-chosen; the owner kept it as built (owner decision
+ * 2026-10-20), and the retry second with it.
  *
  * A read holds its whole image (the store answers with the bytes, at most a few MB each) from the
  * storage read until its answer has been handed to the socket — for a client that reads slowly or

@@ -7,21 +7,47 @@ import {
   POST_TITLE_MAX_LENGTH,
   type PostDocument,
 } from '@buddha/shared';
-import { useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { copy } from '@/copy';
 import { useLeaveGuard } from '@/hooks/use-leave-guard';
+import { useKeepPostDraftForOnboarding } from '@/hooks/use-post-draft';
 import {
   bodyChangedFrom,
   countEditorDocument,
   draftChanged,
   titleTooLong,
 } from '@/lib/post-editor';
+import {
+  type PostDraft,
+  type PostDraftKey,
+  clearSessionPostDraft,
+  hasDraftToKeep,
+  readSessionPostDraft,
+} from '@/lib/post-drafts';
 import { PostEditor } from './post-editor';
 
 /** What the form sends: the title (blank is none) and the editor's JSON. */
 export interface PostFormValues {
   title: string | null;
   body: unknown;
+}
+
+export interface PostFormProps {
+  initialTitle?: string | null;
+  initialDocument?: PostDocument;
+  /** Which screen's draft this is, where the onboarding gate keeps it (lib/post-drafts.ts). */
+  draftKey: PostDraftKey;
+  accountId: string | undefined;
+  submitLabel: string;
+  /** Sending, or sent and on the way to the post: the form is locked. */
+  pending: boolean;
+  /** The write succeeded: the draft is the server's and is not kept. */
+  saved: boolean;
+  /** The last refusal, in Korean; undefined when there is none. */
+  errorMessage: string | undefined;
+  /** The images the last refusal named (`refusedImageIds`). */
+  refusedImageIds?: readonly string[];
+  onSubmit: (values: PostFormValues) => void;
 }
 
 /**
@@ -41,38 +67,100 @@ export interface PostFormValues {
  * the body differs from what the form started with, or an image is uploading, and nothing is being
  * sent — once the screen sends (`pending`, which the screens hold through the move to the post) the
  * draft is the server's.
+ *
+ * The onboarding gate taking the account to a step left keeps the draft in this tab instead, and
+ * asks nothing (오너 결정 2026-10-20, lib/post-drafts.ts) — a title or a body changed, or a draft
+ * taken back (`hasDraftToKeep`; an image still uploading is not something it can keep): the
+ * screen opened again by the same account takes it back — the title, the body and the uploads'
+ * previews — says so above the form, and offers to discard it, which puts back what the screen
+ * started with (everything typed since the restore goes too — ADR-0073 결과 4의 2 asks the owner).
+ * Taken back, it is removed from the storage: the form holds it, and guards it like any draft.
+ *
+ * Focus: the notice is focused when the form is drawn with a draft taken back — it appears with
+ * its text already in it, which a live region may not announce, and the reader lands on it with
+ * the discard right after; after a discard, which redraws the form and removes the focused button,
+ * the title field is focused rather than the focus falling back to the page.
  */
-export function PostForm({
+export function PostForm(props: PostFormProps) {
+  const { draftKey, accountId } = props;
+  // Read once, when the form is made (the editor takes its first document then).
+  const [kept] = useState(() => ({
+    key: draftKey,
+    draft: accountId === undefined ? null : readSessionPostDraft(draftKey, accountId),
+  }));
+  const [restored, setRestored] = useState<PostDraft | null>(kept.draft);
+  // A discard draws the form afresh from what the screen started with.
+  const [generation, setGeneration] = useState(0);
+  useEffect(() => {
+    if (kept.draft !== null) clearSessionPostDraft(kept.key);
+  }, [kept]);
+  return (
+    <PostFormFields
+      key={generation}
+      {...props}
+      restored={restored}
+      focusTitle={generation > 0}
+      onDiscard={() => {
+        clearSessionPostDraft(kept.key);
+        setRestored(null);
+        setGeneration((count) => count + 1);
+      }}
+    />
+  );
+}
+
+function PostFormFields({
   initialTitle = null,
   initialDocument,
+  draftKey,
   accountId,
   submitLabel,
   pending,
+  saved,
   errorMessage,
   refusedImageIds,
   onSubmit,
-}: {
-  initialTitle?: string | null;
-  initialDocument?: PostDocument;
-  accountId: string | undefined;
-  submitLabel: string;
-  pending: boolean;
-  /** The last refusal, in Korean; undefined when there is none. */
-  errorMessage: string | undefined;
-  /** The images the last refusal named (`refusedImageIds`). */
-  refusedImageIds?: readonly string[];
-  onSubmit: (values: PostFormValues) => void;
+  restored,
+  focusTitle,
+  onDiscard,
+}: PostFormProps & {
+  restored: PostDraft | null;
+  /** Drawn afresh by a discard: the title field takes the focus the discard button had. */
+  focusTitle: boolean;
+  onDiscard: () => void;
 }) {
-  const [title, setTitle] = useState(initialTitle ?? '');
-  const [body, setBody] = useState<unknown>(initialDocument ?? { type: 'doc', content: [] });
+  const [title, setTitle] = useState(restored?.title ?? initialTitle ?? '');
+  const [body, setBody] = useState<unknown>(
+    restored?.body ?? initialDocument ?? { type: 'doc', content: [] },
+  );
   const [uploading, setUploading] = useState(false);
   // The editor's own JSON when it was made (`onReady`), and whether the body differs from it now.
   const baseline = useRef<string | null>(null);
   const [bodyChanged, setBodyChanged] = useState(false);
-  useLeaveGuard(
-    !pending && draftChanged({ title, initialTitle, bodyChanged, uploading }),
-    copy.postLeaveConfirm,
-  );
+  // The uploads' small previews, by media id, for a draft the gate keeps: the ones taken back with
+  // it, and each new upload's once the editor has drawn it small.
+  const [previews] = useState(() => new Map(Object.entries(restored?.previews ?? {})));
+  // A draft taken back is something to lose until it is sent or discarded, as typed text is.
+  const dirty = restored !== null || draftChanged({ title, initialTitle, bodyChanged, uploading });
+  useLeaveGuard(!pending && dirty, copy.postLeaveConfirm);
+  useKeepPostDraftForOnboarding({
+    key: draftKey,
+    accountId,
+    // What the kept draft can carry: not an upload in flight, which leaving still loses (above).
+    hasDraft: hasDraftToKeep({ title, initialTitle, bodyChanged, restored: restored !== null }),
+    saved,
+    title,
+    body: body as PostDraft['body'],
+    previews,
+  });
+  const noticeRef = useRef<HTMLDivElement>(null);
+  const noticeTextId = useId();
+  const titleRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    // Each holds for the form's life: a discard draws a new one (PostForm's `generation`).
+    if (restored !== null) noticeRef.current?.focus();
+    else if (focusTitle) titleRef.current?.focus();
+  }, [restored, focusTitle]);
   const count = countEditorDocument(body);
   const titleInvalid = titleTooLong(title);
   const blocked =
@@ -96,9 +184,37 @@ export function PostForm({
       }}
       data-testid="post-form"
     >
+      {restored !== null && (
+        <Alert.Root
+          ref={noticeRef}
+          status="info"
+          role="status"
+          // Focused when drawn (above), named by its sentence so that is what is read out.
+          tabIndex={-1}
+          aria-labelledby={noticeTextId}
+          data-testid="post-draft-restored"
+        >
+          <Alert.Indicator />
+          <Alert.Content>
+            <Alert.Description id={noticeTextId}>{copy.postDraftRestored}</Alert.Description>
+          </Alert.Content>
+          <Button
+            size="xs"
+            variant="outline"
+            alignSelf="center"
+            disabled={pending}
+            onClick={onDiscard}
+            data-testid="post-draft-discard"
+          >
+            {copy.postDraftDiscard}
+          </Button>
+        </Alert.Root>
+      )}
+
       <Field.Root invalid={titleInvalid}>
         <Field.Label>{copy.postWriteTitleLabel}</Field.Label>
         <Input
+          ref={titleRef}
           value={title}
           // UTF-16 units: twice the code points, so an emoji title is never cut short; the count
           // below is the rule.
@@ -116,13 +232,17 @@ export function PostForm({
           {copy.postWriteBodyLabel}
         </Text>
         <PostEditor
-          initialDocument={initialDocument}
+          initialDocument={restored?.body ?? initialDocument}
+          initialPreviews={restored?.previews}
           onReady={(json) => {
             baseline.current = JSON.stringify(json);
           }}
           onChange={(json) => {
             setBody(json);
             setBodyChanged(bodyChangedFrom(baseline.current, json));
+          }}
+          onPreview={(mediaId, preview) => {
+            previews.set(mediaId, preview);
           }}
           accountId={accountId}
           onUploadingChange={setUploading}

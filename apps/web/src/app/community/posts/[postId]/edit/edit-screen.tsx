@@ -85,11 +85,13 @@ function EditForm({
       <PostForm
         initialTitle={post.title}
         initialDocument={post.body}
+        draftKey={{ kind: 'edit', postId: post.id }}
         accountId={accountId}
         submitLabel={copy.postEditSubmit}
         // Held through the move to the post once saved, as the write screen holds it: the form
         // stays locked, and leaving no longer asks (the draft is the server's).
         pending={update.isPending || update.isSuccess}
+        saved={update.isSuccess}
         errorMessage={refusal}
         refusedImageIds={refusedImageIds(update.error)}
         onSubmit={({ title, body }) => {

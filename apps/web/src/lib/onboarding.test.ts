@@ -2,15 +2,19 @@ import { PAID_COIN_SALES_ENABLED } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
 import { type Me } from './api';
 import {
+  ONBOARDING_EXEMPT_PAGES,
   ONBOARDING_EXEMPT_PATHS,
   ONBOARDING_SCREENS,
   afterVerification,
   gatedPagePath,
+  hasOnboardingStepLeft,
   interestIds,
   isOnboardingExempt,
   isReconsent,
+  isRoutePage,
   isStepBack,
   needsOnboarding,
+  onboardingEntryPath,
   onboardingNext,
   onboardingPath,
   onboardingReturnReason,
@@ -123,6 +127,105 @@ describe('isOnboardingExempt', () => {
     ]) {
       expect(isOnboardingExempt(path), path).toBe(false);
     }
+  });
+});
+
+/** A post page's address (#46): `/community/posts/<uuid>`. */
+const POST_ID = '0b6f6c1e-3f7a-4c51-9d0e-6a1f2b3c4d5e';
+const POST_PAGE = `/community/posts/${POST_ID}`;
+
+describe('the pages exempt for a login-only action (오너 결정 2026-10-20)', () => {
+  it('lists exactly the post page, each entry with its reason', () => {
+    expect(ONBOARDING_EXEMPT_PAGES.map((page) => page.route)).toEqual([
+      '/community/posts/[postId]',
+    ]);
+    for (const page of ONBOARDING_EXEMPT_PAGES) expect(page.reason.trim()).not.toBe('');
+  });
+
+  it('matches a route segment for segment, a dynamic one to any value but an empty one', () => {
+    expect(isRoutePage(POST_PAGE, '/community/posts/[postId]')).toBe(true);
+    expect(isRoutePage('/community/posts/not-a-uuid', '/community/posts/[postId]')).toBe(true);
+    expect(isRoutePage('/my/proposals', '/my/proposals')).toBe(true);
+    for (const path of [
+      '/community/posts/',
+      '/community/posts',
+      `${POST_PAGE}/edit`,
+      `${POST_PAGE}/`,
+      `/community/postsx/${POST_ID}`,
+      `/x/community/posts/${POST_ID}`,
+      '/community',
+    ]) {
+      expect(isRoutePage(path, '/community/posts/[postId]'), path).toBe(false);
+    }
+  });
+
+  it('exempts the post page — its own and anybody else’s — and nothing under it or beside it', () => {
+    expect(isOnboardingExempt(POST_PAGE)).toBe(true);
+    for (const path of [
+      `${POST_PAGE}/edit`,
+      '/community',
+      '/community/write',
+      '/community/posts',
+      `/markets/btc-100k`,
+    ]) {
+      expect(isOnboardingExempt(path), path).toBe(false);
+    }
+  });
+
+  it('lets an account with any step left — a re-consent included — stay on a post page', () => {
+    for (const onboarding of [FRESH, CONSENTED, VERIFIED, RECONSENT]) {
+      expect(needsOnboarding(POST_PAGE, onboarding), String(onboarding.nextStep)).toBe(false);
+    }
+  });
+
+  it('lets a brand-new account that signed up or signed in from a post page stay on it too — as built, asked in ADR-0073 결과 4의 4', () => {
+    // Every auth screen goes back to `next` (the nav's 로그인·가입하기 carry the post page): the
+    // new account is not sent on there, and its onboarding starts on its next move, with that
+    // move's page as `next` — not the post page.
+    expect(needsOnboarding(POST_PAGE, FRESH)).toBe(false);
+    expect(needsOnboarding('/community', FRESH)).toBe(true);
+    expect(onboardingPath('/community')).toBe(
+      `/onboarding?next=${encodeURIComponent('/community')}`,
+    );
+  });
+
+  it('still sends it on from the write and edit screens and the community list', () => {
+    for (const onboarding of [FRESH, RECONSENT]) {
+      for (const path of [`${POST_PAGE}/edit`, '/community/write', '/community']) {
+        expect(needsOnboarding(path, onboarding), path).toBe(true);
+      }
+    }
+  });
+});
+
+describe('the write and edit entries on an exempt page', () => {
+  const edit = `${POST_PAGE}/edit`;
+
+  it('tells a step left from nothing left and from not known', () => {
+    for (const onboarding of [FRESH, CONSENTED, VERIFIED, RECONSENT]) {
+      expect(hasOnboardingStepLeft(onboarding)).toBe(true);
+    }
+    expect(hasOnboardingStepLeft(COMPLETED)).toBe(false);
+    expect(hasOnboardingStepLeft(DONE)).toBe(false);
+    expect(hasOnboardingStepLeft(undefined)).toBe(false);
+  });
+
+  it('go to the remaining step, which comes back to the form once done', () => {
+    const path = onboardingEntryPath(edit, RECONSENT);
+    expect(path).toBe(`/onboarding?next=${encodeURIComponent(edit)}`);
+    const next = new URL(path, 'https://x.invalid').searchParams.get('next');
+    expect(onboardingNext(next)).toBe(edit);
+    // The query of the form's page rides along (a new post's market).
+    expect(onboardingEntryPath('/community/write?market=abc', FRESH)).toBe(
+      '/onboarding?next=%2Fcommunity%2Fwrite%3Fmarket%3Dabc',
+    );
+  });
+
+  it('go to the form itself with nothing left, or while the onboarding is not known', () => {
+    expect(onboardingEntryPath(edit, DONE)).toBe(edit);
+    expect(onboardingEntryPath(edit, COMPLETED)).toBe(edit);
+    // The form's own page is gated: it decides once `GET /me` has answered.
+    expect(onboardingEntryPath(edit, undefined)).toBe(edit);
   });
 });
 

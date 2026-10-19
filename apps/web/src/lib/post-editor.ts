@@ -75,6 +75,26 @@ export function countEditorDocument(json: unknown): EditorCount {
   };
 }
 
+/**
+ * The media ids of the editor's image nodes, in the order they appear (each once): the uploads a
+ * kept draft holds previews for (lib/post-drafts.ts).
+ */
+export function editorImageIds(json: unknown): string[] {
+  const ids = new Set<string>();
+  const walk = (node: unknown, depth: number) => {
+    if (typeof node !== 'object' || node === null || depth > 64) return;
+    const { type, content } = node as EditorNode;
+    const attrs = (node as { attrs?: unknown }).attrs;
+    if (type === 'image' && typeof attrs === 'object' && attrs !== null) {
+      const mediaId = (attrs as { mediaId?: unknown }).mediaId;
+      if (typeof mediaId === 'string') ids.add(mediaId);
+    }
+    if (Array.isArray(content)) for (const child of content) walk(child, depth + 1);
+  };
+  walk(json, 0);
+  return [...ids];
+}
+
 /** Whether a title fits (#45-1 optional; 100 characters at most, owner decision 2026-10-18). */
 export function titleTooLong(title: string): boolean {
   return codePointLength(title.trim()) > POST_TITLE_MAX_LENGTH;

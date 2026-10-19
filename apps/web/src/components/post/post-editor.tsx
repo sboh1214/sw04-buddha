@@ -31,6 +31,7 @@ import {
   useEditor,
   useEditorState,
   type Editor,
+  type JSONContent,
 } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import { useEffect, useRef, useState } from 'react';
@@ -48,6 +49,7 @@ import {
   linkInputHref,
   pastedLinkHref,
 } from '@/lib/post-editor';
+import { previewSize } from '@/lib/post-drafts';
 import { POST_CONTENT_CSS } from './post-content-style';
 
 /**
@@ -65,7 +67,12 @@ import { POST_CONTENT_CSS } from './post-content-style';
  * An image is uploaded the moment it is picked (`POST /media/images`), and the node takes the id
  * the answer names. The server serves an upload only once a post shows it, so a new image is drawn
  * from the file picked (a `data:` URL — the page's CSP allows `data:` images, not `blob:`) until
- * the post is saved; an image already in the post is drawn from `GET /media/:id`.
+ * the post is saved; an image already in the post is drawn from `GET /media/:id`. A draft the
+ * onboarding gate kept (lib/post-drafts.ts) comes back with a small copy of each new upload's
+ * preview (`initialPreviews`) — the file picked is gone with the page — which `onPreview` hands
+ * the form as each upload's preview is drawn. The upload counts as under way until then
+ * (`onUploadingChange`), so the form sends nothing before it: a write the onboarding refuses —
+ * the gate's usual way of taking a draft away — finds every image's preview there to keep.
  */
 
 /** The image node: `{ type: 'image', attrs: { mediaId } }` — never a `src` the writer chose. */
@@ -158,6 +165,38 @@ function keepServerLinks(html: string): string {
 /** The accepted file types, for the file picker; the server decides by the bytes anyway. */
 const IMAGE_ACCEPT = IMAGE_CONTENT_TYPES.join(',');
 
+/**
+ * A small copy of an upload's preview for a kept draft (DRAFT_PREVIEW_MAX_SIDE on the longer side,
+ * `previewSize`): WebP, or JPEG on white where the browser does not write WebP (Safari) — a draft
+ * that held each upload's whole file would not fit this tab's storage. The first frame of an
+ * animation. Undefined when the browser cannot draw it.
+ */
+async function smallPreviewOf(preview: string): Promise<string | undefined> {
+  try {
+    const image = new Image();
+    image.src = preview;
+    await image.decode();
+    const { width, height } = previewSize(image.naturalWidth, image.naturalHeight);
+    const encode = (type: string, background?: string) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext('2d');
+      if (context === null) return undefined;
+      if (background !== undefined) {
+        context.fillStyle = background;
+        context.fillRect(0, 0, width, height);
+      }
+      context.drawImage(image, 0, 0, width, height);
+      return canvas.toDataURL(type, 0.8);
+    };
+    const webp = encode('image/webp');
+    return webp?.startsWith('data:image/webp') ? webp : encode('image/jpeg', '#ffffff');
+  } catch {
+    return undefined;
+  }
+}
+
 /** Reads a picked file as a `data:` URL, the editor's preview of an upload not yet served. */
 function readAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -173,8 +212,15 @@ function readAsDataUrl(file: File): Promise<string> {
 }
 
 export interface PostEditorProps {
-  /** The stored body, when editing; a new post starts empty. */
-  initialDocument?: PostDocument;
+  /**
+   * The stored body, when editing, or the editor's own JSON of a draft taken back; a new post
+   * starts empty.
+   */
+  initialDocument?: PostDocument | JSONContent;
+  /** A kept draft's previews of its uploads, by media id (`data:` URLs). */
+  initialPreviews?: Readonly<Record<string, string>>;
+  /** Each new upload's small preview, once drawn: what a kept draft takes with it. */
+  onPreview?: (mediaId: string, preview: string) => void;
   /** Every change, as the editor's JSON (what the write sends). */
   onChange: (json: unknown) => void;
   /**
@@ -199,6 +245,8 @@ export interface PostEditorProps {
 
 export function PostEditor({
   initialDocument,
+  initialPreviews,
+  onPreview,
   onChange,
   onReady,
   accountId,
@@ -211,9 +259,10 @@ export function PostEditor({
   /**
    * Previews of this session's uploads, by media id; read by the image node's `srcOf` whenever
    * ProseMirror draws an image. One Map for the editor's life (state, so render never reads a ref);
-   * filled as uploads land, which is outside render.
+   * filled as uploads land, which is outside render — and, for a draft taken back, with the small
+   * previews it kept.
    */
-  const [previews] = useState(() => new Map<string, string>());
+  const [previews] = useState(() => new Map<string, string>(Object.entries(initialPreviews ?? {})));
   const editor = useEditor({
     // Next renders this component on the server too; the editor exists in the browser only.
     immediatelyRender: false,
@@ -327,6 +376,12 @@ export function PostEditor({
           .focus()
           .insertContent({ type: 'image', attrs: { mediaId: uploaded.id } })
           .run();
+        if (onPreview !== undefined) {
+          // Still counted as uploading (the `finally` below), so the form cannot send — and be
+          // refused for the onboarding — before the kept draft's copy is drawn.
+          const small = await smallPreviewOf(preview);
+          if (small !== undefined) onPreview(uploaded.id, small);
+        }
       } catch (error) {
         toaster.create({ type: 'error', title: imageUploadErrorMessage(error) });
       } finally {

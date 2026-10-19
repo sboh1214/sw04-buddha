@@ -14,8 +14,8 @@ import { loginPathBackToPage } from '@/lib/next-path';
  * session and `GET /me` have answered it draws a placeholder (the HTML names nobody); a visitor
  * gets a sign-in prompt that comes back to this screen with its query (`back`: the market picked);
  * a member gets the screen. An account with onboarding steps left never reaches here — the
- * onboarding gate takes it to its step first (#57-8) — and the server refuses its writes besides
- * (OnboardedGuard).
+ * onboarding gate takes it to its step first (#57-8), keeping a draft the form held (오너 결정
+ * 2026-10-20, lib/post-drafts.ts) — and the server refuses its writes besides (OnboardedGuard).
  */
 export function WriteGate({
   back,

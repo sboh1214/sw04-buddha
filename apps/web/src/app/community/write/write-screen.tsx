@@ -132,9 +132,13 @@ function WriteForm({ market, accountId }: { market: WriteMarket; accountId: stri
         </Stack>
       </Box>
       <PostForm
+        // The market on screen: a draft the onboarding gate keeps comes back on this market's
+        // write screen, the address the onboarding returns to.
+        draftKey={{ kind: 'new', marketId: market.id }}
         accountId={accountId}
         submitLabel={copy.postWriteSubmit}
         pending={sent}
+        saved={create.isSuccess}
         errorMessage={refusal}
         refusedImageIds={refusedImageIds(create.error)}
         onSubmit={({ title, body }) => {

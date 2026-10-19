@@ -20,6 +20,7 @@ import {
   isForAnotherAccount,
   unwrap,
 } from '@/lib/api';
+import { postDraftLanded } from '@/lib/post-drafts';
 import { uploadContentType } from '@/lib/post-editor';
 import {
   type CommunityFilters,
@@ -112,7 +113,8 @@ export interface DeletePostVariables {
 /**
  * A refused write's side effects, shared by the three: the cookie as another account asks for the
  * session again (`onSessionChanged`, SessionCacheGuard then shows who is signed in), and a refusal
- * for the onboarding reads `['me']` again, so the onboarding gate takes the account to its step.
+ * for the onboarding reads `['me']` again, so the onboarding gate takes the account to its step —
+ * and the form, going, keeps its draft in this tab (hooks/use-post-draft.ts, 오너 결정 2026-10-20).
  */
 async function afterRefusal(queryClient: QueryClient, error: Error, onSessionChanged: () => void) {
   if (isForAnotherAccount(error)) onSessionChanged();
@@ -124,14 +126,20 @@ async function afterRefusal(queryClient: QueryClient, error: Error, onSessionCha
 /**
  * `POST /posts` as mutation options. The answer is the post as its page shows it, so it is written
  * under its key before the screen goes there (no second read), and every list is marked stale —
- * the new post is the newest of each it belongs to.
+ * the new post is the newest of each it belongs to. A draft of that market's write screen the
+ * onboarding gate kept in this tab is the post now and is removed (lib/post-drafts.ts) — here, not
+ * on the screen, as the gate may have taken the screen away while the write was in flight — and
+ * the landing is recorded first (`postDraftLanded`): the mutation counts as succeeded, and the form
+ * renders `saved`, only after this has run, and a form the gate takes away meanwhile must not keep
+ * the draft again.
  */
 export function createPostOptions(queryClient: QueryClient, onSessionChanged: () => void) {
   return {
     // Documented as a `Post` (the route shares the page's schema); a new post is always published.
     mutationFn: async (body: CreatePostVariables): Promise<Post> =>
       unwrap(await api.POST('/api/v1/posts', { body })).data,
-    onSuccess: async (post: Post) => {
+    onSuccess: async (post: Post, { marketId }: CreatePostVariables) => {
+      postDraftLanded({ kind: 'new', marketId });
       queryClient.setQueryData<Post>(postKey(post.id), post);
       await queryClient.invalidateQueries({ queryKey: POST_LIST_KEY });
     },
@@ -139,7 +147,10 @@ export function createPostOptions(queryClient: QueryClient, onSessionChanged: ()
   };
 }
 
-/** `PUT /posts/:postId`: the edited post replaces the held one; the lists' cards follow it. */
+/**
+ * `PUT /posts/:postId`: the edited post replaces the held one; the lists' cards follow it, and a
+ * kept draft of its edit screen goes, as a new post's does.
+ */
 export function updatePostOptions(queryClient: QueryClient, onSessionChanged: () => void) {
   return {
     mutationFn: async ({ postId, ...body }: UpdatePostVariables): Promise<Post> =>
@@ -149,7 +160,8 @@ export function updatePostOptions(queryClient: QueryClient, onSessionChanged: ()
           body,
         }),
       ).data,
-    onSuccess: async (post: Post) => {
+    onSuccess: async (post: Post, { postId }: UpdatePostVariables) => {
+      postDraftLanded({ kind: 'edit', postId });
       queryClient.setQueryData<Post>(postKey(post.id), post);
       await queryClient.invalidateQueries({ queryKey: POST_LIST_KEY });
     },

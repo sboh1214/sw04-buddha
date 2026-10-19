@@ -15,6 +15,7 @@ import {
   bodyChangedFrom,
   countEditorDocument,
   draftChanged,
+  editorImageIds,
   imagePrecheck,
   imageRefusalMessage,
   imageUploadErrorMessage,
@@ -245,8 +246,43 @@ describe('draftChanged', () => {
     expect(draftChanged({ ...clean, uploading: true })).toBe(true);
   });
 
-  it('asks in the screen’s words (asking is the owner’s decision, the sentence is not)', () => {
+  it('asks in the sentence the owner approved (2026-10-20)', () => {
     expect(copy.postLeaveConfirm).toBe('쓰던 내용이 사라집니다. 나갈까요?');
+  });
+});
+
+describe('editorImageIds', () => {
+  const other = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
+
+  it('names each image of the document once, in order, wherever it sits', () => {
+    expect(
+      editorImageIds({
+        type: 'doc',
+        content: [
+          image,
+          paragraph('글'),
+          {
+            type: 'table',
+            content: [
+              {
+                type: 'tableRow',
+                content: [
+                  { type: 'tableCell', content: [{ type: 'image', attrs: { mediaId: other } }] },
+                ],
+              },
+            ],
+          },
+          image,
+        ],
+      }),
+    ).toEqual([MEDIA, other]);
+  });
+
+  it('names nothing for a document without images, or for what is no document', () => {
+    expect(editorImageIds({ type: 'doc', content: [paragraph('글')] })).toEqual([]);
+    expect(editorImageIds({ type: 'doc', content: [{ type: 'image', attrs: {} }] })).toEqual([]);
+    expect(editorImageIds(null)).toEqual([]);
+    expect(editorImageIds('doc')).toEqual([]);
   });
 });
 

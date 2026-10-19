@@ -22,6 +22,7 @@ import { PostByline } from '@/components/post/post-author';
 import { PostBody } from '@/components/post/post-body';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
+import { useOnboardingEntry } from '@/hooks/use-onboarding-entry';
 import { postQueryOptions, useDeletePost, usePostWriter } from '@/hooks/use-posts';
 import { type Post, type PostMarket } from '@/lib/api';
 import { MARKET_STATUS_LABEL, MARKET_STATUS_PALETTE } from '@/lib/market-admin';
@@ -44,9 +45,15 @@ import { useSession } from '@/lib/use-session';
  * A published post: the title (an `h2` under the nav's `h1`; a post without one has its first line
  * as an `h2` only a screen reader sees, so the body's `h3`–`h5` always sit under one), the byline
  * (author, time, 수정됨), the body and the market it belongs to — a link to its detail, which opens
- * in every status, and to the community list of that market. Its author also gets 수정 and 삭제 (`isOwnPost`, by the
- * public id of `GET /me`, so nothing of it is in the HTML). A hidden or deleted post is its
- * placeholder and its market only (#45-5).
+ * in every status, and to the community list of that market. Its author also gets 수정 and 삭제
+ * (`isOwnPost`, by the public id of `GET /me`, so nothing of it is in the HTML). A hidden or
+ * deleted post is its placeholder and its market only (#45-5).
+ *
+ * The onboarding gate lets an account with steps left — a re-consent included — open this page
+ * (`ONBOARDING_EXEMPT_PAGES`, 오너 결정 2026-10-20): deleting one's own post asks for a session
+ * alone (오너 결정 2026-10-19 답 2), on screen too. Its 수정 then goes to the remaining step and
+ * comes back to the edit screen once that is done (`useOnboardingEntry`); everything else this
+ * page links to is gated as before.
  */
 export function PostScreen({ postId, fallback }: { postId: string; fallback: Post }) {
   const query = useQuery(postQueryOptions(postId));
@@ -162,11 +169,14 @@ function BackLink() {
 /**
  * 수정 and 삭제, for the author only and only once `GET /me` has said who the viewer is. 삭제 asks
  * first (it is never undone, #45-5) and then leaves for the community list, which no longer lists
- * the post. The server checks the author on every write; these only hide what would be refused.
+ * the post — and, for an author with an onboarding step left, the gate there takes it on to that
+ * step. 수정 is the edit screen, or that step first (`entryPath`). The server checks the author on
+ * every write; these only hide what would be refused.
  */
 function AuthorActions({ post }: { post: Extract<Post, { state: 'published' }> }) {
   const router = useRouter();
   const writer = usePostWriter();
+  const { entryPath } = useOnboardingEntry();
   const { refetch: refetchSession } = useSession();
   const remove = useDeletePost(() => void refetchSession());
   const [confirming, setConfirming] = useState(false);
@@ -177,7 +187,7 @@ function AuthorActions({ post }: { post: Extract<Post, { state: 'published' }> }
   return (
     <HStack gap="2" data-testid="post-author-actions">
       <Button asChild size="xs" variant="outline">
-        <NextLink href={postEditPath(post.id) as Route} data-testid="post-edit">
+        <NextLink href={entryPath(postEditPath(post.id)) as Route} data-testid="post-edit">
           {copy.postEdit}
         </NextLink>
       </Button>

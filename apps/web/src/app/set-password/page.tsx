@@ -27,7 +27,9 @@ export const metadata: Metadata = { title: `${copy.setPasswordTitle} | ${copy.ap
  *
  * `?next=` is the page the visitor signed up from (#58, ADR-0069 decision 1 #57-9), which the link
  * carries (`setPasswordCallbackURL`): the form goes on there once the password is set, and the
- * onboarding gate takes the account from there to its steps and back. Validated here once
+ * onboarding gate takes the account from there to its steps and back — except from a page it
+ * exempts for a login-only action (the post page), where the account stays until its next move
+ * (ADR-0073 9-37, asked in 결과 4의 4). Validated here once
  * (`safeNextPath`); home without one. A broken link without a session keeps it too: the login
  * screen comes back to this page with the same `next`.
  *
