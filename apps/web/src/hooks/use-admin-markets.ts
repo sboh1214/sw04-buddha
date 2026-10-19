@@ -24,6 +24,8 @@ import {
   marketFillsKey,
 } from '@/lib/market-keys';
 import { relatedSearchQuery } from '@/lib/related-markets';
+import { THEME_MARKETS_KEY, THEME_RESULTS_KEY } from '@/lib/themes';
+import { ADMIN_THEME_MARKETS_KEY } from './use-admin-themes';
 
 /**
  * Query keys the admin market screens share (PLAN 11.5 rules, admin-prefixed like
@@ -204,6 +206,11 @@ export function useMarketFills(id: string, enabled: boolean) {
  * changed. Those lists are not mounted during the admin write and no socket room repairs them, so
  * the whole family is marked, as `applyRelatedMarkets` does for a link (Codex review on #214).
  *
+ * 테마 (#81, ADR-0088) holds markets the same way: a theme's cards (`['markets', 'theme', id]`)
+ * and its results (`['themes', 'results', id]`) show a market's title and status — which decide
+ * whether it is a result at all — and the admin's theme market lists badge each market's status.
+ * Which themes hold this market is the server's to say, so every one of those lists is marked.
+ *
  * Not 남발 (PLAN 11.5): `refetchType` stays at its default `'active'`, so a list page that is
  * not mounted is only marked, and its next mount is the request.
  */
@@ -218,6 +225,9 @@ function invalidateMarket(queryClient: QueryClient, id: string) {
       predicate: (query) => query.queryHash !== ownLinks,
     }),
     queryClient.invalidateQueries({ queryKey: MARKET_RELATED_KEY }),
+    queryClient.invalidateQueries({ queryKey: THEME_MARKETS_KEY }),
+    queryClient.invalidateQueries({ queryKey: THEME_RESULTS_KEY }),
+    queryClient.invalidateQueries({ queryKey: ADMIN_THEME_MARKETS_KEY }),
   ]);
 }
 

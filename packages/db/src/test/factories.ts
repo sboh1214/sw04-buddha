@@ -72,6 +72,9 @@ import {
   reports,
   session,
   startGrants,
+  themeMarkets,
+  themeNotices,
+  themes,
   user,
   verification,
   writeLimitEvents,
@@ -203,6 +206,8 @@ export interface CreateMarketInput {
   resolvedResult?: Outcome | null;
   resolvedAt?: Date | null;
   settledAt?: Date | null;
+  /** When it was voided; null by default, as the other resolution columns. */
+  voidedAt?: Date | null;
   statusEventId?: number | null;
   /**
    * `market_settlement_steps` rows (ADR-0046) as the real paths leave them: for `resolved`, one
@@ -248,6 +253,7 @@ export async function createMarket(db: Db, input: CreateMarketInput = {}) {
       resolvedResult: input.resolvedResult ?? null,
       resolvedAt: input.resolvedAt ?? null,
       settledAt: input.settledAt ?? null,
+      voidedAt: input.voidedAt ?? null,
       statusEventId: input.statusEventId ?? null,
       createdBy,
     })
@@ -1496,4 +1502,109 @@ export async function closeAccount(db: Db, userId: string): Promise<Date> {
       );
     return at;
   });
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** Korea keeps no daylight saving: a Korean date is the UTC date nine hours on. */
+const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
+
+/** The Korean date `days` from today, `YYYY-MM-DD`, as a theme's period stores it. */
+export function koreanDateFromToday(days: number): string {
+  return new Date(Date.now() + KST_OFFSET_MS + days * DAY_MS).toISOString().slice(0, 10);
+}
+
+export interface CreateThemeInput {
+  /** The admin who made it. A fresh admin is created when omitted. */
+  createdBy?: string;
+  /** Default: `theme-<tag>`, unique. */
+  slug?: string;
+  name?: string;
+  intro?: string;
+  /** A Korean date, `YYYY-MM-DD`. Default: yesterday — 진행 중 with the default end. */
+  startDate?: string;
+  /** Default: a week from today (KST). */
+  endDate?: string;
+  /** When it was made public; default null, an unpublished theme as `POST /admin/themes` leaves it. */
+  publishedAt?: Date | null;
+  /** Default: `publishedAt` — a published theme has been published once at least. */
+  firstPublishedAt?: Date | null;
+  createdAt?: Date;
+}
+
+/**
+ * A theme (#81) as `POST /admin/themes` leaves the `themes` row — and only the row: no
+ * `admin_actions` row, which the API writes beside it. Unpublished unless `publishedAt` is given.
+ */
+export async function createTheme(db: Db, input: CreateThemeInput = {}) {
+  const t = tag();
+  const createdBy = input.createdBy ?? (await createUser(db, { role: 'admin' })).user.id;
+  const publishedAt = input.publishedAt ?? null;
+  const [row] = await db
+    .insert(themes)
+    .values({
+      slug: input.slug ?? `theme-${t}`,
+      name: input.name ?? `테스트 테마 ${t}`,
+      intro: input.intro ?? '테스트용 테마 소개.',
+      startDate: input.startDate ?? koreanDateFromToday(-1),
+      endDate: input.endDate ?? koreanDateFromToday(7),
+      publishedAt,
+      firstPublishedAt: input.firstPublishedAt === undefined ? publishedAt : input.firstPublishedAt,
+      createdBy,
+      ...(input.createdAt === undefined ? {} : { createdAt: input.createdAt }),
+    })
+    .returning();
+  return row!;
+}
+
+export interface CreateThemeMarketInput {
+  themeId: string;
+  marketId: string;
+  /** The admin who put it in. A fresh admin is created when omitted. */
+  createdBy?: string;
+  /** Default: the database clock. */
+  createdAt?: Date;
+}
+
+/** A market put in a theme (#81): the `theme_markets` row alone, no `admin_actions` row. */
+export async function createThemeMarket(db: Db, input: CreateThemeMarketInput) {
+  const createdBy = input.createdBy ?? (await createUser(db, { role: 'admin' })).user.id;
+  const [row] = await db
+    .insert(themeMarkets)
+    .values({
+      themeId: input.themeId,
+      marketId: input.marketId,
+      createdBy,
+      ...(input.createdAt === undefined ? {} : { createdAt: input.createdAt }),
+    })
+    .returning();
+  return row!;
+}
+
+export interface CreateThemeNoticeInput {
+  themeId: string;
+  createdBy?: string;
+  title?: string;
+  body?: string;
+  createdAt?: Date;
+  editedAt?: Date | null;
+  hiddenAt?: Date | null;
+}
+
+/** A theme notice (#81): the `theme_notices` row alone, shown unless `hiddenAt` is given. */
+export async function createThemeNotice(db: Db, input: CreateThemeNoticeInput) {
+  const t = tag();
+  const createdBy = input.createdBy ?? (await createUser(db, { role: 'admin' })).user.id;
+  const [row] = await db
+    .insert(themeNotices)
+    .values({
+      themeId: input.themeId,
+      title: input.title ?? `테스트 공지 ${t}`,
+      body: input.body ?? '테스트용 공지 내용.',
+      createdBy,
+      editedAt: input.editedAt ?? null,
+      hiddenAt: input.hiddenAt ?? null,
+      ...(input.createdAt === undefined ? {} : { createdAt: input.createdAt }),
+    })
+    .returning();
+  return row!;
 }

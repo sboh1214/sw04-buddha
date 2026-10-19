@@ -261,6 +261,39 @@ export const ADMIN_ACTION_TYPES = [
   'market_link',
   /** The link ended (#65): the same target and payload, written only when a row was deleted. */
   'market_unlink',
+  /**
+   * 테마 (#81): an admin made a theme — target `theme` / its id, payload `{slug, name, intro,
+   * startDate, endDate}`, the dates as stored (Korean dates, `YYYY-MM-DD`) — in the transaction
+   * that inserts the `themes` row. Every theme record below has the same target and records the
+   * actor and the time alone: no reason, no second admin (ADR-0069 decision 4, the #81 '기록·승인'
+   * row). Each is written only when its write changed something.
+   */
+  'theme_create',
+  /**
+   * The address (slug — it changes only until the first publish), the name, the introduction or
+   * the period changed: payload `{before, after}`, the changed fields only, keyed as in
+   * `theme_create`.
+   */
+  'theme_update',
+  /** The theme became public (`published_at` set). No payload. */
+  'theme_publish',
+  /** The theme stopped being public (`published_at` cleared); it is never deleted. No payload. */
+  'theme_unpublish',
+  /** A market was put in the theme (a `theme_markets` row): payload `{themeId, marketId}`. */
+  'theme_market_link',
+  /** A market left the theme (its row deleted): the same payload. */
+  'theme_market_unlink',
+  /** A theme notice was written: payload `{noticeId, title, body}`. */
+  'theme_notice_create',
+  /**
+   * A notice's title or body changed: payload `{noticeId, before, after}`, the changed fields —
+   * the earlier text stays here, for admins only.
+   */
+  'theme_notice_update',
+  /** A notice left the public page (`hidden_at` set); it is never deleted. Payload `{noticeId}`. */
+  'theme_notice_hide',
+  /** A hidden notice is shown again (`hidden_at` cleared). Payload `{noticeId}`. */
+  'theme_notice_show',
   'payment_refund',
   /**
    * A release setting's status and value changed (#170): target `release_setting` / its key,

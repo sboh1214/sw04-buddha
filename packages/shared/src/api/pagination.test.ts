@@ -185,6 +185,36 @@ describe('tuple cursors (ADR-0065)', () => {
     expect(decodeTupleCursor(`1788408306789_${uuid}`, CLOSING, 'uuid')).toBeUndefined();
   });
 
+  it('reads the public theme order: a day, a rank of three, a signed day (#81, ADR-0088)', () => {
+    const THEMES = ['epochDay', 'themeRank', 'signedEpochDay'] as const;
+    for (const [rank, key] of [
+      ['0', '20760'],
+      ['1', '20761'],
+      ['2', '-20750'],
+      // A period's date may be any up to 9999-12-31: its key then has seven digits.
+      ['0', '2932896'],
+      ['1', '2932532'],
+      ['2', '719162'],
+    ] as const) {
+      const cursor = encodeTupleCursor(['20745', rank, key], uuid);
+      expect(decodeTupleCursor(cursor, THEMES, 'uuid')).toEqual({
+        values: ['20745', rank, key],
+        id: uuid,
+      });
+    }
+    for (const bad of [
+      `-1_0_20760_${uuid}`,
+      `1234567_0_20760_${uuid}`,
+      `20745_3_20760_${uuid}`,
+      `20745_0_1.5_${uuid}`,
+      `20745_0_12345678_${uuid}`,
+      `20745_0_--1_${uuid}`,
+      `20745_0_${uuid}`,
+    ]) {
+      expect(decodeTupleCursor(bad, THEMES, 'uuid'), bad).toBeUndefined();
+    }
+  });
+
   it('accepts NULL only where the caller named a nullable time', () => {
     expect(decodeTupleCursor(`null_${uuid}`, ['millis'], 'uuid')).toBeUndefined();
     expect(decodeTupleCursor(`null_${uuid}`, ['int'], 'uuid')).toBeUndefined();

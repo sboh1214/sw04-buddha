@@ -74,6 +74,9 @@ import {
   session,
   startGrantNumbers,
   startGrants,
+  themeMarkets,
+  themeNotices,
+  themes,
   user,
   verification,
   writeLimitEvents,
@@ -104,6 +107,9 @@ import {
   createSearch,
   createSettlementStep,
   createStartGrant,
+  createTheme,
+  createThemeMarket,
+  createThemeNotice,
   createUser,
   createWatch,
   createWriteLimitEvent,
@@ -624,6 +630,88 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       .where(eq(marketLinks.lowMarketId, low.id))
       .returning();
     expect(deleted).toHaveLength(1);
+  });
+
+  it('keeps a theme, its markets and its notices, a market in any number of themes (#81)', async () => {
+    const admin = (await createUser(t.db, { role: 'admin' })).user.id;
+    const [one, two] = [
+      await createTheme(t.db, { createdBy: admin }),
+      await createTheme(t.db, { createdBy: admin }),
+    ];
+    const market = await createMarket(t.db, { status: 'draft' });
+    await createThemeMarket(t.db, { themeId: one.id, marketId: market.id, createdBy: admin });
+    // The same market in a second theme: no cap and no exclusivity (ADR-0069 decision 4).
+    await createThemeMarket(t.db, { themeId: two.id, marketId: market.id, createdBy: admin });
+    const notice = await createThemeNotice(t.db, { themeId: one.id, createdBy: admin });
+    // One row per (theme, market).
+    const duplicate = await t.db
+      .insert(themeMarkets)
+      .values({ themeId: one.id, marketId: market.id, createdBy: admin })
+      .catch((error: unknown) => error);
+    expect(sqlState(duplicate)).toBe('23505');
+    expect(sqlConstraint(duplicate)).toBe('theme_markets_theme_id_market_id_pk');
+    // Relations both ways: the theme's markets and notices, the market's themes, the admin's.
+    const theme = await t.db.query.themes.findFirst({
+      where: eq(themes.id, one.id),
+      with: { markets: { with: { market: true } }, notices: true, creator: true },
+    });
+    expect(theme?.markets.map((row) => row.market.id)).toEqual([market.id]);
+    expect(theme?.notices.map((row) => row.id)).toEqual([notice.id]);
+    expect(theme?.creator.id).toBe(admin);
+    const inThemes = await t.db.query.markets.findFirst({
+      where: eq(markets.id, market.id),
+      with: { themeMarkets: { with: { theme: true } } },
+    });
+    expect(inThemes?.themeMarkets.map((row) => row.theme.id).sort()).toEqual(
+      [one.id, two.id].sort(),
+    );
+    const maker = await t.db.query.user.findFirst({
+      where: eq(user.id, admin),
+      with: { themes: true, themeMarkets: true, themeNotices: true },
+    });
+    expect(maker?.themes).toHaveLength(2);
+    expect(maker?.themeMarkets).toHaveLength(2);
+    expect(maker?.themeNotices).toHaveLength(1);
+  });
+
+  it('refuses a theme whose period ends before it starts, keeps a one-day one, one slug per theme (#81)', async () => {
+    const error = await createTheme(t.db, { startDate: '2026-10-20', endDate: '2026-10-19' }).catch(
+      (caught: unknown) => caught,
+    );
+    expect(sqlState(error)).toBe('23514');
+    expect(sqlConstraint(error)).toBe('themes_period_check');
+    // Both days are in the period, so a theme of one day starts and ends on the same date.
+    const oneDay = await createTheme(t.db, { startDate: '2026-10-20', endDate: '2026-10-20' });
+    expect([oneDay.startDate, oneDay.endDate]).toEqual(['2026-10-20', '2026-10-20']);
+    // The address is one theme's.
+    const taken = await createTheme(t.db, { slug: oneDay.slug }).catch((caught: unknown) => caught);
+    expect(sqlState(taken)).toBe('23505');
+    expect(sqlConstraint(taken)).toBe('themes_slug_unique');
+  });
+
+  it('unpublishes a theme and hides a notice, never deletes either; unlinks a market (#81)', async () => {
+    const theme = await createTheme(t.db, { publishedAt: new Date() });
+    const notice = await createThemeNotice(t.db, { themeId: theme.id });
+    const market = await createMarket(t.db);
+    await createThemeMarket(t.db, { themeId: theme.id, marketId: market.id });
+    // In place: the publish state and the notice's visibility are UPDATEs.
+    await t.db.update(themes).set({ publishedAt: null }).where(eq(themes.id, theme.id));
+    await t.db
+      .update(themeNotices)
+      .set({ hiddenAt: new Date() })
+      .where(eq(themeNotices.id, notice.id));
+    await expect(t.db.delete(themes).where(eq(themes.id, theme.id))).rejects.toSatisfy(
+      (e) => sqlState(e) === '42501',
+    );
+    await expect(t.db.delete(themeNotices).where(eq(themeNotices.id, notice.id))).rejects.toSatisfy(
+      (e) => sqlState(e) === '42501',
+    );
+    // Taking a market out deletes its row; the history is admin_actions.
+    const removed = await t.db
+      .delete(themeMarkets)
+      .where(eq(themeMarkets.themeId, theme.id))
+      .returning();
+    expect(removed).toHaveLength(1);
   });
 
   it('a recorded search resolves its account and back, and holds a term of 100 at most (#15)', async () => {
@@ -6292,7 +6380,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
             'approval_requests', 'market_watches', 'market_watch_events', 'market_searches',
             'market_search_terms', 'market_links', 'consent_records', 'nickname_holds',
             'profile_interest_categories', 'post_likes', 'comment_likes',
-            'write_limit_events', 'link_uses', 'link_flags', 'retention_purges')
+            'write_limit_events', 'link_uses', 'link_flags', 'retention_purges',
+            'themes', 'theme_markets', 'theme_notices')
         ORDER BY 1, 2`);
       const grants = Object.groupBy(rows, (r) => r.table);
       const privs = (table: string) => grants[table]?.map((r) => r.privilege).sort() ?? [];
@@ -6355,6 +6444,11 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(columns).toEqual([{ column: 'review_action_id', privilege: 'UPDATE' }]);
       // Migration 0044 (#184): the purge records are operational records, kept with no period.
       expect(privs('retention_purges')).toEqual(['INSERT', 'SELECT']);
+      // Migration 0031 (#81): a theme is unpublished and a notice hidden, in place, never
+      // deleted; a market taken out of a theme deletes its row (the history is admin_actions).
+      expect(privs('themes')).toEqual(['INSERT', 'SELECT', 'UPDATE']);
+      expect(privs('theme_notices')).toEqual(['INSERT', 'SELECT', 'UPDATE']);
+      expect(privs('theme_markets')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
     });
 
     it('cannot UPDATE or DELETE a watch event, and refuses an action outside the list (#95)', async () => {

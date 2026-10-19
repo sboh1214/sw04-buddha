@@ -282,6 +282,26 @@ export type AdminLinkFlagReviewBody = components['schemas']['AdminLinkFlagReview
  */
 export type RetentionPurge = components['schemas']['RetentionPurge'];
 export type RetentionPurgeKind = components['schemas']['RetentionPurgeKind'];
+/**
+ * 테마 (#81, ADR-0088), public: a list row (`GET /themes`, the home's and a market detail's
+ * links), a theme's page with its shown notices, one notice, and one row of its results list.
+ */
+export type ThemeSummary = components['schemas']['ThemeSummary'];
+export type Theme = components['schemas']['Theme'];
+export type ThemeNotice = components['schemas']['ThemeNotice'];
+export type ThemeResult = components['schemas']['ThemeResult'];
+/**
+ * 테마 for admins: a list row with its publication, one theme with who made it and every notice
+ * (hidden ones too), a notice as the admin sees it, and a market of the theme with who put it in.
+ */
+export type AdminThemeSummary = components['schemas']['AdminThemeSummary'];
+export type AdminTheme = components['schemas']['AdminTheme'];
+export type AdminThemeNotice = components['schemas']['AdminThemeNotice'];
+export type AdminThemeMarket = components['schemas']['AdminThemeMarket'];
+export type CreateThemeBody = components['schemas']['CreateThemeBody'];
+export type UpdateThemeBody = components['schemas']['UpdateThemeBody'];
+export type CreateThemeNoticeBody = components['schemas']['CreateThemeNoticeBody'];
+export type UpdateThemeNoticeBody = components['schemas']['UpdateThemeNoticeBody'];
 export type ErrorEnvelope = components['schemas']['ErrorEnvelope'];
 
 /** A non-2xx API response, carrying the `{ error: { code, message, details? } }` envelope. */

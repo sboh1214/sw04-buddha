@@ -976,9 +976,10 @@ function RelatedMarketsPanel({ market }: { market: AdminMarket }) {
 /**
  * The notice above a list whose refresh failed after it had rows (`listSection`'s `stale`): the
  * rows stay, and this says they are the last ones read, with 다시 시도 — the reading RecentFills
- * and the card above already take (`adminMarketRefreshFailed`).
+ * and the card above already take (`adminMarketRefreshFailed`). Exported with `RelatedMarketLine`
+ * and `ConfirmDialog` for the admin theme screen (#81), whose market panel is this one's twin.
  */
-function RefreshFailedNotice({ testId, onRetry }: { testId: string; onRetry: () => void }) {
+export function RefreshFailedNotice({ testId, onRetry }: { testId: string; onRetry: () => void }) {
   return (
     <Alert.Root status="warning" role="status" data-testid={testId}>
       <Alert.Indicator />
@@ -993,7 +994,13 @@ function RefreshFailedNotice({ testId, onRetry }: { testId: string; onRetry: () 
 }
 
 /** One market in the 관련 시장 panel: its title (to its admin detail) and its status. */
-function RelatedMarketLine({ market, children }: { market: MarketSummary; children?: ReactNode }) {
+export function RelatedMarketLine({
+  market,
+  children,
+}: {
+  market: MarketSummary;
+  children?: ReactNode;
+}) {
   return (
     <Stack gap="0.5" minW="0">
       <HStack gap="2" flexWrap="wrap">
@@ -1169,7 +1176,7 @@ function RecentFills({ market }: { market: AdminMarket }) {
   );
 }
 
-interface ConfirmDialogProps {
+export interface ConfirmDialogProps {
   /** Prefix of the two buttons' test ids: `<testId>-confirm` and `<testId>-cancel`. */
   testId: string;
   open: boolean;
@@ -1187,7 +1194,7 @@ interface ConfirmDialogProps {
  * pinned while the mutation runs: Cancel, Esc and the backdrop all wait, since dismissing it
  * mid-flight would leave the request running against a screen that no longer shows it.
  */
-function ConfirmDialog({
+export function ConfirmDialog({
   testId,
   open,
   onClose,

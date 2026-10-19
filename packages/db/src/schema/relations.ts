@@ -37,6 +37,7 @@ import { priceTicks } from './price-ticks.js';
 import { profiles } from './profiles.js';
 import { releaseSettings } from './release-settings.js';
 import { startGrantNumbers, startGrants } from './start-grants.js';
+import { themeMarkets, themeNotices, themes } from './themes.js';
 import { marketWatchEvents, marketWatches } from './watchlist.js';
 
 export const profilesRelations = relations(profiles, ({ one, many }) => ({
@@ -154,6 +155,8 @@ export const marketsRelations = relations(markets, ({ one, many }) => ({
   // larger one. Its related markets are the other end of both (market-links.ts).
   linksAsLow: many(marketLinks, { relationName: 'market_link_low' }),
   linksAsHigh: many(marketLinks, { relationName: 'market_link_high' }),
+  // 테마 (#81): the themes this market is in.
+  themeMarkets: many(themeMarkets),
   posts: many(posts),
 }));
 
@@ -309,6 +312,23 @@ export const marketLinksRelations = relations(marketLinks, ({ one }) => ({
   creator: one(user, { fields: [marketLinks.createdBy], references: [user.id] }),
 }));
 
+export const themesRelations = relations(themes, ({ one, many }) => ({
+  creator: one(user, { fields: [themes.createdBy], references: [user.id] }),
+  markets: many(themeMarkets),
+  notices: many(themeNotices),
+}));
+
+export const themeMarketsRelations = relations(themeMarkets, ({ one }) => ({
+  theme: one(themes, { fields: [themeMarkets.themeId], references: [themes.id] }),
+  market: one(markets, { fields: [themeMarkets.marketId], references: [markets.id] }),
+  creator: one(user, { fields: [themeMarkets.createdBy], references: [user.id] }),
+}));
+
+export const themeNoticesRelations = relations(themeNotices, ({ one }) => ({
+  theme: one(themes, { fields: [themeNotices.themeId], references: [themes.id] }),
+  creator: one(user, { fields: [themeNotices.createdBy], references: [user.id] }),
+}));
+
 export const adminActionsRelations = relations(adminActions, ({ one, many }) => ({
   admin: one(user, { fields: [adminActions.adminId], references: [user.id] }),
   /** The review-list entries a `link_flag_review` mark covered (#187). */
@@ -360,6 +380,9 @@ export const userRelations = relations(user, ({ one, many }) => ({
   postLikes: many(postLikes),
   commentLikes: many(commentLikes),
   media: many(mediaObjects),
+  themes: many(themes),
+  themeMarkets: many(themeMarkets),
+  themeNotices: many(themeNotices),
   adminActions: many(adminActions),
   releaseSettingUpdates: many(releaseSettings),
   approvalRequests: many(approvalRequests, { relationName: 'approval_requester' }),
