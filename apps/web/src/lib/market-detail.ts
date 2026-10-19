@@ -58,9 +58,11 @@ export type SharedSection =
  * - `position`: 내 포지션, and 내 대기 주문 (#123) under it, for a signed-in reader — or, for a
  *   signed-out visitor, the one sign-in prompt that stands for all the personal areas
  *   (`personalAreaView`).
- * - `discussion`: 토론 (#47, ADR-0075) — this market's posts as the community list's cards, newest
- *   first, every one of them in the detail a 더 보기 at a time, the count beside the heading and
- *   글쓰기 always there (ADR-0069 decision 4 #47). Public, so it is in the server's HTML.
+ * - `discussion`: 토론 (#47, ADR-0075) — this market's posts as the community list's cards without
+ *   their market line, newest first, every one of them in the detail a 더 보기 at a time, the count
+ *   beside the heading and 글쓰기 always there (ADR-0069 decision 4 #47). Public, yet its posts are
+ *   read in the browser only: the server's HTML holds its heading, 글쓰기 and its loading state,
+ *   never a post (owner decision 2026-10-20).
  * - `related`: 관련 시장 (#65, ADR-0068), the last of N02 §4's list at both widths — the markets an
  *   admin linked to this one, as the home's cards in 추천 order, or a notice that there are none
  *   (ADR-0061 decision 1, item 19). Public (item 18), so it is in the server's HTML.

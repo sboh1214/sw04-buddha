@@ -96,6 +96,7 @@ const answered: RelatedSearchState = {
   isPending: false,
   isLoadingError: false,
   isRefetchError: false,
+  error: null,
   isPlaceholderData: false,
   hasNextPage: false,
 };

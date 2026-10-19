@@ -72,10 +72,10 @@ export function useCommunityPosts(filters: CommunityFilters) {
 
 /**
  * A market detail's 토론 (#47, ADR-0075): `GET /markets/:id/posts`, the market's posts newest first,
- * 20 a page per 더 보기 (ADR-0069 decision 4 #47), each page with the count of the whole list. The
- * detail reads the first page on the server (`fetchMarketPostsPageServer`, the same request through
- * `marketPostsQuery`) and dehydrates it, so the first paint costs no request. No
- * `keepPreviousData`: the key never changes under a mounted section (one market per page).
+ * 20 a page per 더 보기 (ADR-0069 decision 4 #47), each page with the count of the whole list. Read
+ * in the browser only — the detail's server page does not seed it, so no post reaches the HTML a
+ * search engine gets (owner decision 2026-10-20 1). No `keepPreviousData`: the key never changes
+ * under a mounted section (one market per page).
  */
 export function marketPostsInfiniteQueryOptions(marketId: string) {
   const id = marketId.toLowerCase();

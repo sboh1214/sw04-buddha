@@ -25,6 +25,7 @@ import NextLink from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
+import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { ADMIN_MARKETS_KEY, useCategories } from '@/hooks/use-admin-markets';
@@ -46,6 +47,7 @@ import {
   marketFormSchema,
   toCreateMarketBody,
 } from '@/lib/market-form';
+import { readFailed } from '@/lib/query-client';
 import { MarketFormFields } from './market-form-fields';
 
 const createSchema = marketFormSchema();
@@ -107,7 +109,7 @@ export function AdminMarkets() {
 
       {markets.isPending ? (
         <Skeleton height="24" />
-      ) : markets.isError ? (
+      ) : readFailed(markets) ? (
         <Alert.Root status="error" role="alert">
           <Alert.Indicator />
           <Alert.Content>
@@ -165,16 +167,23 @@ export function AdminMarkets() {
             </HStack>
           ))}
           {markets.hasNextPage && (
-            <Button
-              alignSelf="center"
-              size="sm"
-              variant="ghost"
-              loading={markets.isFetchingNextPage}
-              onClick={() => void markets.fetchNextPage()}
-              data-testid="admin-markets-more"
-            >
-              {copy.loadMore}
-            </Button>
+            <>
+              <LoadMoreFailed
+                list={markets}
+                message={copy.errUnknown}
+                data-testid="admin-markets-more-failed"
+              />
+              <Button
+                alignSelf="center"
+                size="sm"
+                variant="ghost"
+                loading={markets.isFetchingNextPage}
+                onClick={() => void markets.fetchNextPage()}
+                data-testid="admin-markets-more"
+              >
+                {copy.loadMore}
+              </Button>
+            </>
           )}
         </Stack>
       )}

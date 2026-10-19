@@ -2,10 +2,12 @@
 
 import { Alert, Button, HStack, Skeleton, Stack, Text } from '@chakra-ui/react';
 import { useInfiniteQuery } from '@tanstack/react-query';
+import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { copy } from '@/copy';
 import { api, unwrap } from '@/lib/api';
 import { formatKst } from '@/lib/datetime';
 import { auditFailureKindLabel, compactJson } from '@/lib/market-admin';
+import { readFailed } from '@/lib/query-client';
 
 const ADMIN_AUDIT_FAILURES_KEY = ['admin', 'audit-failures'] as const;
 
@@ -31,7 +33,7 @@ export function AdminAuditFailures() {
   const rows = failures.data?.pages.flatMap((page) => page.items) ?? [];
 
   if (failures.isPending) return <Skeleton height="24" />;
-  if (failures.isError) {
+  if (readFailed(failures)) {
     return (
       <Alert.Root status="error" role="alert">
         <Alert.Indicator />
@@ -66,16 +68,23 @@ export function AdminAuditFailures() {
         </Stack>
       ))}
       {failures.hasNextPage && (
-        <Button
-          alignSelf="center"
-          size="sm"
-          variant="ghost"
-          loading={failures.isFetchingNextPage}
-          onClick={() => void failures.fetchNextPage()}
-          data-testid="admin-audit-failures-more"
-        >
-          {copy.loadMore}
-        </Button>
+        <>
+          <LoadMoreFailed
+            list={failures}
+            message={copy.errUnknown}
+            data-testid="admin-audit-failures-more-failed"
+          />
+          <Button
+            alignSelf="center"
+            size="sm"
+            variant="ghost"
+            loading={failures.isFetchingNextPage}
+            onClick={() => void failures.fetchNextPage()}
+            data-testid="admin-audit-failures-more"
+          >
+            {copy.loadMore}
+          </Button>
+        </>
       )}
     </Stack>
   );

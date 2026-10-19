@@ -4,6 +4,7 @@ import { Alert, Button, Grid, Skeleton, Stack } from '@chakra-ui/react';
 import NextLink from 'next/link';
 import { MARKET_GRID_COLUMNS, MarketCard } from '@/components/market/market-card';
 import { EmptyState } from '@/components/ui/empty-state';
+import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { copy } from '@/copy';
 import { useMarketSocket } from '@/hooks/use-market-socket';
 import { useWatchlist } from '@/hooks/use-watchlist';
@@ -81,16 +82,25 @@ export function WatchlistBody({ watchlist, limit }: { watchlist: Watchlist; limi
             ))}
           </Grid>
           {more && (
-            <Button
-              alignSelf="center"
-              size="sm"
-              variant="ghost"
-              loading={watchlist.isFetchingNextPage}
-              onClick={() => void watchlist.fetchNextPage()}
-              data-testid="my-watchlist-more"
-            >
-              {copy.loadMore}
-            </Button>
+            <>
+              {/* A 더 보기 that failed: the cards stay, the message above the button that asks
+                  again (owner decision 2026-10-20 7). Never on the preview, which has no 더 보기. */}
+              <LoadMoreFailed
+                list={watchlist}
+                message={copy.errUnknown}
+                data-testid="my-watchlist-more-failed"
+              />
+              <Button
+                alignSelf="center"
+                size="sm"
+                variant="ghost"
+                loading={watchlist.isFetchingNextPage}
+                onClick={() => void watchlist.fetchNextPage()}
+                data-testid="my-watchlist-more"
+              >
+                {copy.loadMore}
+              </Button>
+            </>
           )}
         </Stack>
       )}

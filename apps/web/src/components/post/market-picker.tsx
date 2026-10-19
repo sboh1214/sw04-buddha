@@ -16,6 +16,7 @@ import { marketSearchTermSchema } from '@buddha/shared';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { EmptyState } from '@/components/ui/empty-state';
+import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { copy } from '@/copy';
 import { marketSearchInfiniteQueryOptions } from '@/hooks/use-markets';
 import { type MarketSummary } from '@/lib/api';
@@ -143,15 +144,25 @@ export function MarketPicker({
             ))}
           </Box>
           {results.hasNextPage && (
-            <Button
-              alignSelf="center"
-              size="sm"
-              variant="outline"
-              loading={results.isFetchingNextPage}
-              onClick={() => void results.fetchNextPage()}
-            >
-              {copy.loadMore}
-            </Button>
+            <>
+              {/* A 더 보기 that failed: the markets found stay, the search's own message above the
+                  button that asks again (owner decision 2026-10-20 7). */}
+              <LoadMoreFailed
+                list={results}
+                message={searchErrorMessage(results.error)}
+                data-testid={`${testId}-more-failed`}
+              />
+              <Button
+                alignSelf="center"
+                size="sm"
+                variant="outline"
+                loading={results.isFetchingNextPage}
+                onClick={() => void results.fetchNextPage()}
+                data-testid={`${testId}-more`}
+              >
+                {copy.loadMore}
+              </Button>
+            </>
           )}
         </Stack>
       )}

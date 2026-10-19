@@ -67,6 +67,8 @@ export interface RelatedSearchState {
   isPending: boolean;
   isLoadingError: boolean;
   isRefetchError: boolean;
+  /** Tells a refetch after a failed 더 보기 from a failed refresh (`refreshFailed`). */
+  error: unknown;
   isPlaceholderData: boolean;
   hasNextPage: boolean;
 }

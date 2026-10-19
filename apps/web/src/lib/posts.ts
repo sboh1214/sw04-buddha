@@ -303,9 +303,10 @@ export interface CountedPostPage extends PostPage {
 }
 
 /**
- * One page of a market's 토론 as the server page and the browser's `queryFn` both ask for it: the
- * cursor when there is one, nothing else — the order is the list's only one (newest first, #45-7)
- * and the page size the API's default, 20 (ADR-0069 decision 4 #47 «20개씩 더 불러온다»).
+ * One page of a market's 토론 as the browser's `queryFn` asks for it (the section is read in the
+ * browser only, ADR-0075): the cursor when there is one, nothing else — the order is the list's
+ * only one (newest first, #45-7) and the page size the API's default, 20 (ADR-0069 decision 4 #47
+ * «20개씩 더 불러온다»).
  */
 export function marketPostsQuery(cursor?: string): { cursor?: string } {
   return cursor === undefined ? {} : { cursor };

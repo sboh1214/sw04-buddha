@@ -2,7 +2,6 @@ import { type APIRequestContext, type Page } from '@playwright/test';
 import { copy } from '../src/copy';
 import {
   E2E_PASSWORD,
-  REALTIME_BUDGET_MS,
   closeMarket,
   completeOnboardingThroughApi,
   createOpenMarket,
@@ -14,23 +13,24 @@ import {
   openSetPassword,
   setFirstPassword,
   signUp,
-  subscribed,
   test,
 } from './helpers';
 
 /**
- * 토론 (#47, ADR-0075; owner decisions in ADR-0069 decision 4 #47, decision 2 #45-6 and of
- * 2026-10-18): the market detail's section of that market's 근거 글. Before any post it is its
- * empty notice with '글 0' and 글쓰기, in the server's HTML too; with posts it is the community
- * list's cards, newest first, the first 20 in the HTML and 20 more per 더 보기 until every post is
- * there, with how many beside the heading — only this market's, each card opening its post; a
- * 더 보기 that fails says so beside the button and can be pressed again. A market closed under the
- * reader shows 거래 마감 on its cards as in its header, and a closed market's 토론 reads the same
- * and still offers 글쓰기 (every public status takes a post). A refresh that fails keeps the cards
- * and the count under a notice. 글쓰기 is one link to the write screen of this market: a visitor
- * is asked to sign in there and comes back to it, and a member writes straight away, the post then
- * at the top of the section. An account with onboarding steps left never stays on the detail: the
- * gate takes it to its step, as it does from the write screen's address.
+ * 토론 (#47, ADR-0075; owner decisions in ADR-0069 decision 4 #47, decision 2 #45-6, of 2026-10-18
+ * and of 2026-10-20): the market detail's section of that market's 근거 글, read in the browser only
+ * — the server's HTML holds its heading, 글쓰기 and its loading state, never a post, a count or an
+ * author, and robots.txt keeps crawlers off `/api/`, where the browser reads them, while the detail
+ * stays open to search engines. Before any post it is its empty notice with '글 0' and 글쓰기; with
+ * posts it is the community list's cards without their market line, newest first, 20 at a time
+ * per 더 보기 until every post is there, with how many beside the heading — only this market's,
+ * each card opening its post; a first read that fails says so with 다시 시도, and a 더 보기 that
+ * fails says so above the button, which asks again. A closed market's 토론 reads the same and still
+ * offers 글쓰기 (every public status takes a post). A refresh that fails keeps the cards and the
+ * count under a notice. 글쓰기 is one link to the write screen of this market: a visitor is asked to
+ * sign in there and comes back to it, and a member writes straight away, the post then at the top
+ * of the section. An account with onboarding steps left never stays on the detail: the gate takes
+ * it to its step, as it does from the write screen's address.
  *
  * What the API leaves out — deleted and hidden posts, a draft market, an author's holdings or
  * orders — is the API's integration and guard tests' (posts.controller.test.ts,
@@ -84,8 +84,24 @@ async function openDetail(page: Page, slug: string): Promise<void> {
 /** The write screen of `marketId`, where the section's 글쓰기 goes for every reader. */
 const writeHref = (marketId: string) => `/community/write?market=${marketId}`;
 
+/**
+ * The detail's HTML as the server sends it to anyone (no cookie): the section's frame — the
+ * heading, 글쓰기 and the loading state — and nothing it reads (owner decision 2026-10-20 1).
+ */
+async function serverHtml(request: APIRequestContext, slug: string): Promise<string> {
+  const html = await (await request.get(`/markets/${slug}`)).text();
+  expect(html).toContain('data-testid="market-discussion"');
+  expect(html).toMatch(new RegExp(`<h2[^>]*>${copy.marketDiscussion}</h2>`));
+  expect(html).toContain('data-testid="market-discussion-write"');
+  expect(html).toContain('data-testid="market-discussion-loading"');
+  expect(html).not.toContain('data-testid="post-card-');
+  expect(html).not.toContain('data-testid="market-discussion-count"');
+  expect(html).not.toContain(copy.marketDiscussionEmpty);
+  return html;
+}
+
 test.describe('시장 상세 · 토론', () => {
-  test('글이 없으면 빈 안내와 글 0, 있으면 이 시장의 글만 커뮤니티 카드로 최신순, 처음 20개는 HTML에 있고 더 보기로 모두 보이며, 카드는 글 화면을 연다', async ({
+  test('글이 없으면 빈 안내와 글 0, 있으면 이 시장의 글만 시장 줄 없는 커뮤니티 카드로 최신순, 서버 HTML에는 글이 없고 브라우저가 20개씩 더 보기로 모두 읽으며, 카드는 글 화면을 연다', async ({
     admin,
     page,
     request,
@@ -94,16 +110,9 @@ test.describe('시장 상세 · 토론', () => {
     const other = await createOpenMarket(admin);
     const tag = freshTag();
 
-    // --- no post yet: the section stays, with its notice, the count and 글쓰기 — in the server's
-    // HTML as well (N02 §2 «공개 토론»; the empty section is the owner's to confirm from the PR's
-    // screenshot, ADR-0069 decision 4 #47).
-    const empty = await (await request.get(`/markets/${market.slug}`)).text();
-    expect(empty).toContain('data-testid="market-discussion"');
-    expect(empty).toMatch(new RegExp(`<h2[^>]*>${copy.marketDiscussion}</h2>`));
-    expect(empty).toContain(copy.marketDiscussionEmpty);
-    expect(empty).toMatch(/data-testid="market-discussion-count"[^>]*>글 0</);
-    expect(empty).toContain('data-testid="market-discussion-write"');
-    expect(empty).toContain(`href="${writeHref(market.id)}"`);
+    // --- no post yet: the section stays, with its notice, the count and 글쓰기 (owner decision
+    // 2026-10-20 4) — read in the browser; the server's HTML has the frame and the loading state.
+    expect(await serverHtml(request, market.slug)).toContain(`href="${writeHref(market.id)}"`);
     await openDetail(page, market.slug);
     await expect(section(page).getByRole('heading', { level: 2 })).toHaveText(
       copy.marketDiscussion,
@@ -112,6 +121,7 @@ test.describe('시장 상세 · 토론', () => {
     await expect(section(page).getByTestId('market-discussion-empty')).toHaveText(
       copy.marketDiscussionEmpty,
     );
+    await expect(section(page).getByTestId('market-discussion-loading')).toHaveCount(0);
     await expect(section(page).getByTestId('market-discussion-write')).toHaveText(
       copy.communityWrite,
     );
@@ -120,8 +130,8 @@ test.describe('시장 상세 · 토론', () => {
       writeHref(market.id),
     );
     await expect(section(page).getByTestId('market-discussion-more')).toHaveCount(0);
-    // No card around the section, as 관련 시장 under it has none (ADR-0075): the cards are the
-    // boxes.
+    // No card around the section, as 관련 시장 under it has none (owner decision 2026-10-20 5):
+    // the cards are the boxes.
     await expect(section(page)).toHaveCSS('border-top-width', '0px');
 
     // --- 21 posts, one at a time so each is newer than the last, and one on another market.
@@ -136,14 +146,11 @@ test.describe('시장 상세 · 토론', () => {
     await postThroughApi(admin, other.id, elsewhere, elsewhere);
     const newestFirst = [...titles].reverse();
 
-    // The first page in the HTML: the newest 20 and the count of all 21 — not the oldest, and
-    // nothing of the other market.
-    const html = await (await request.get(`/markets/${market.slug}`)).text();
-    expect(html).toMatch(/data-testid="market-discussion-count"[^>]*>글 21</);
-    for (const title of newestFirst.slice(0, 20)) expect(html, title).toContain(title);
-    expect(html).not.toContain(titles[0]);
-    expect(html).not.toContain(elsewhere);
-    expect(html).not.toContain(copy.marketDiscussionEmpty);
+    // Not one post in the server's HTML or its dehydrated state: no title, no author.
+    const html = await serverHtml(request, market.slug);
+    for (const title of titles) expect(html, title).not.toContain(title);
+    expect(html).not.toContain(tag);
+    expect(html).not.toContain((await meOf(admin)).profile.nickname);
 
     await openDetail(page, market.slug);
     const list = section(page).getByTestId('market-discussion-list');
@@ -152,14 +159,16 @@ test.describe('시장 상세 · 토론', () => {
     await expect(section(page).getByTestId('market-discussion-count')).toHaveText('글 21');
     await expect(section(page).getByTestId('market-discussion-empty')).toHaveCount(0);
     const newest = section(page).getByTestId(`post-card-${ids[20] ?? ''}`);
-    await expect(newest.getByTestId('post-card-market')).toHaveText(market.title);
     await expect(newest.getByTestId('post-card-excerpt')).toHaveText(titles[20] ?? '');
     await expect(newest.getByTestId('post-author-admin')).toHaveText(copy.postAuthorAdmin);
     await expect(newest.getByTestId('post-card-comments')).toHaveText(`${copy.commentsHeading} 0`);
+    // No market line on any card: they are all this market's (owner decision 2026-10-20 6).
+    await expect(section(page).getByTestId('post-card-market')).toHaveCount(0);
+    await expect(list).not.toContainText(market.title);
 
     // A 더 보기 that fails — the next page refused through the client's retries — keeps the 20
-    // cards and the count, says so beside the button, and leaves 더 보기 to ask again (review on
-    // #47: it used to stop spinning and say nothing).
+    // cards and the count, says so above the button, and leaves 더 보기 to ask again (owner
+    // decision 2026-10-20 7).
     const more = section(page).getByTestId('market-discussion-more');
     await expect(more).toHaveText(copy.loadMore);
     const isNextPage = (url: URL) =>
@@ -169,6 +178,12 @@ test.describe('시장 상세 · 토론', () => {
     const moreFailed = section(page).getByTestId('market-discussion-more-failed');
     await expect(moreFailed).toHaveText(copy.errUnknown);
     await expect(moreFailed).toHaveAttribute('role', 'alert');
+    // Above the button: the notice, then 더 보기.
+    await expect(
+      section(page).locator(
+        '[data-testid="market-discussion-more-failed"] + [data-testid="market-discussion-more"]',
+      ),
+    ).toHaveCount(1);
     await expect(list.getByRole('heading', { level: 3 })).toHaveText(newestFirst.slice(0, 20));
     await expect(section(page).getByTestId('market-discussion-count')).toHaveText('글 21');
     await expect(section(page).getByTestId('market-discussion-refresh-failed')).toHaveCount(0);
@@ -192,7 +207,7 @@ test.describe('시장 상세 · 토론', () => {
     await expect(page.getByTestId('post-title')).toHaveText(titles[0] ?? '');
   });
 
-  test('읽는 사이 마감된 시장의 카드에 거래 마감이 보이고, 마감된 시장에서도 토론의 글을 읽으며 글쓰기가 있다', async ({
+  test('마감된 시장에서도 토론의 글을 읽고 글쓰기가 있으며, 카드에는 시장 줄도 상태도 없다', async ({
     admin,
     page,
     request,
@@ -201,33 +216,21 @@ test.describe('시장 상세 · 토론', () => {
     const tag = freshTag();
     const title = `마감 전 근거 ${tag}`;
     const id = await postThroughApi(admin, market.id, title, tag);
-
-    // Closed under a reader: the cards' market line follows the detail's live row, so 거래 마감
-    // reaches them with the header (review on #47: the header moved and the cards did not). The
-    // room is joined before the market changes, so this measures the event, not the connect gap.
-    const joined = subscribed(page, market.id);
-    await openDetail(page, market.slug);
-    await joined;
-    const card = section(page).getByTestId(`post-card-${id}`);
-    await expect(card.getByTestId('post-card-market')).toHaveText(market.title);
-    await expect(card).not.toContainText(copy.marketStatusClosed);
     await closeMarket(admin, market.id);
-    await expect(page.getByTestId('market-status-badge')).toHaveText(copy.marketStatusClosed, {
-      timeout: REALTIME_BUDGET_MS,
-    });
-    await expect(card).toContainText(copy.marketStatusClosed, { timeout: REALTIME_BUDGET_MS });
 
-    // N05 §3: an ended market's 토론 is read like an open one's, from the server's HTML on.
-    const html = await (await request.get(`/markets/${market.slug}`)).text();
-    expect(html).toContain(`data-testid="post-card-${id}"`);
-    expect(html).toContain(title);
-    expect(html).toMatch(/data-testid="market-discussion-count"[^>]*>글 1</);
+    // N05 §3: an ended market's 토론 is read like an open one's — in the browser, as there.
+    const html = await serverHtml(request, market.slug);
+    expect(html).not.toContain(title);
 
     await openDetail(page, market.slug);
     await expect(page.getByTestId('market-status-badge')).toHaveText(copy.marketStatusClosed);
+    const card = section(page).getByTestId(`post-card-${id}`);
     await expect(card.getByRole('heading', { level: 3 })).toHaveText(title);
-    await expect(card).toContainText(copy.marketStatusClosed);
     await expect(section(page).getByTestId('market-discussion-count')).toHaveText('글 1');
+    // The market's status is the header's to say: the card has no market line, so no badge
+    // (owner decision 2026-10-20 6).
+    await expect(card.getByTestId('post-card-market')).toHaveCount(0);
+    await expect(card).not.toContainText(copy.marketStatusClosed);
     // Every public status takes a post (#45-6), so the door is open here too.
     await expect(section(page).getByTestId('market-discussion-write')).toHaveAttribute(
       'href',
@@ -238,10 +241,11 @@ test.describe('시장 상세 · 토론', () => {
     await expect(page.getByTestId('post-body')).toContainText(tag);
   });
 
-  test('글쓰기는 방문자를 로그인 안내를 거쳐 이 시장의 쓰기 화면으로 보내고 회원은 곧바로 써서 토론 맨 위에서 보며, 온보딩을 마치지 않은 계정은 상세에서도 쓰기 화면의 주소에서도 온보딩으로 간다', async ({
+  test('글쓰기는 방문자를 로그인 안내를 거쳐 이 시장의 쓰기 화면으로 보내고 회원은 곧바로 써서 토론 맨 위에서 보며(서버 HTML에는 그 글도 닉네임도 없다), 온보딩을 마치지 않은 계정은 상세에서도 쓰기 화면의 주소에서도 온보딩으로 간다', async ({
     admin,
     browser,
     page,
+    request,
   }) => {
     const market = await createOpenMarket(admin);
     const tag = freshTag();
@@ -250,7 +254,7 @@ test.describe('시장 상세 · 토론', () => {
     await logOut(page);
 
     // --- a visitor: 글쓰기 opens the write screen of this market, which asks them to sign in and
-    // comes back to it (#46's door, N05 §2 «로그인 작성»).
+    // comes back to it (#46's door, N05 §2 «로그인 작성»; owner decision 2026-10-20 2).
     await openDetail(page, market.slug);
     await section(page).getByTestId('market-discussion-write').click();
     await expect(page).toHaveURL(writeHref(market.id));
@@ -287,6 +291,14 @@ test.describe('시장 상세 · 토론', () => {
       section(page).getByTestId('market-discussion-list').getByRole('heading', { level: 3 }),
     ).toHaveText([`토론에서 쓴 글 ${tag}`]);
     await expect(section(page).getByTestId('market-discussion-count')).toHaveText('글 1');
+    // The member's byline is on the card in the browser — and neither the post nor the member's
+    // nickname is in the HTML the server gives anyone, a search engine included (owner decision
+    // 2026-10-20 1).
+    const { nickname } = (await meOf(page.request)).profile;
+    await expect(section(page).getByTestId('post-author-name')).toHaveText(nickname);
+    const html = await serverHtml(request, market.slug);
+    expect(html).not.toContain(`토론에서 쓴 글 ${tag}`);
+    expect(html).not.toContain(nickname);
 
     // --- an account with onboarding steps left never stays on the detail (the gate takes it to
     // its step, #57-8), and 글쓰기's write screen takes it there too; done, it comes back to the
@@ -318,8 +330,9 @@ test.describe('시장 상세 · 토론', () => {
 
   test('다시 읽기가 실패하면 카드와 글 수를 남기고 그 위에 알린다', async ({ admin, page }) => {
     // Review on #47: the notice over held cards was reached by no test. The page's clock, so the
-    // seeded page can be made older than `staleTime` (30 s, lib/query-client.ts) without waiting
-    // for it; a refocus then reads the list again, as it does for a reader coming back to the tab.
+    // page read on mount can be made older than `staleTime` (30 s, lib/query-client.ts) without
+    // waiting for it; a refocus then reads the list again, as it does for a reader coming back to
+    // the tab.
     const market = await createOpenMarket(admin);
     const tag = freshTag();
     const title = `다시 읽기 ${tag}`;
@@ -361,5 +374,66 @@ test.describe('시장 상세 · 토론', () => {
     await refocus();
     await expect(notice).toHaveCount(0);
     await expect(list.getByRole('heading', { level: 3 })).toHaveText([title]);
+  });
+
+  test('첫 읽기가 실패하면 그 안내와 다시 시도를 보이고, 다시 시도로 글을 읽는다', async ({
+    admin,
+    page,
+  }) => {
+    // Reachable now that the browser makes the first read (owner decision 2026-10-20 1): before,
+    // the server read the first page and `page.route` could not refuse it.
+    const market = await createOpenMarket(admin);
+    const tag = freshTag();
+    const title = `첫 읽기 ${tag}`;
+    const id = await postThroughApi(admin, market.id, title, tag);
+    const isRead = isDiscussionRead(market.id);
+    await page.route(isRead, (route) => route.fulfill(SERVER_ERROR));
+    await openDetail(page, market.slug);
+
+    // Refused through the client's retries: the failure and 다시 시도, with 글쓰기 still there and
+    // nothing to count.
+    const failed = section(page).getByTestId('market-discussion-error');
+    await expect(failed.getByRole('alert')).toHaveText(copy.errUnknown);
+    await expect(failed.getByRole('button', { name: copy.retry })).toBeVisible();
+    await expect(section(page).getByTestId('market-discussion-loading')).toHaveCount(0);
+    await expect(section(page).getByTestId('market-discussion-count')).toHaveCount(0);
+    await expect(section(page).getByTestId('market-discussion-empty')).toHaveCount(0);
+    await expect(section(page).getByTestId('market-discussion-write')).toHaveAttribute(
+      'href',
+      writeHref(market.id),
+    );
+
+    // Readable again: 다시 시도 brings the post and its count.
+    await page.unroute(isRead);
+    await failed.getByRole('button', { name: copy.retry }).click();
+    await expect(section(page).getByTestId(`post-card-${id}`)).toBeVisible();
+    await expect(
+      section(page).getByTestId('market-discussion-list').getByRole('heading', { level: 3 }),
+    ).toHaveText([title]);
+    await expect(section(page).getByTestId('market-discussion-count')).toHaveText('글 1');
+    await expect(failed).toHaveCount(0);
+  });
+
+  test('검색 로봇은 robots.txt로 /api/를 읽지 못하고, 시장 상세는 검색 엔진에 열려 있다', async ({
+    admin,
+    request,
+  }) => {
+    // Owner decision 2026-10-20 1: the 토론 is read from `/api/`, which crawlers are asked to
+    // leave alone; every page stays open — the detail has no `noindex`. Two lines and no
+    // `Allow: /`: Next would write it ahead of the `Disallow`, and a crawler that takes the first
+    // matching line would then fetch `/api/` (lib/robots.test.ts reads the text both ways).
+    const robots = await request.get('/robots.txt');
+    expect(robots.status()).toBe(200);
+    expect(robots.headers()['content-type']).toContain('text/plain');
+    expect(
+      (await robots.text())
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line !== ''),
+    ).toEqual(['User-Agent: *', 'Disallow: /api/']);
+
+    const market = await createOpenMarket(admin);
+    const html = await serverHtml(request, market.slug);
+    expect(html).not.toMatch(/<meta name="robots"/);
   });
 });

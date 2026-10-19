@@ -1,26 +1,24 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { InfiniteQueryObserver, type InfiniteData } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
 import { ApiError, type PostSummary } from './api';
-import {
-  type LiveMarket,
-  discussionCountText,
-  discussionView,
-  onLiveMarket,
-  prefetchMarketPosts,
-} from './discussion';
-import { dehydratePublic } from './market-keys';
+import { discussionCountText, discussionView } from './discussion';
 import { type CountedPostPage, marketPostsKey } from './posts';
-import { getQueryClient } from './query-client';
+import { getQueryClient, moreFailed } from './query-client';
 
 /**
  * The market detail's 토론 (#47, ADR-0075) as the section reads it: the rung it is on — loading, a
- * first read that failed, no post yet, the cards, 더 보기, a 더 보기 that failed — the count beside
- * its heading, the cards' market line on the detail's live row, and the server's seed of its first
- * page. The section component only draws these (no DOM here: vitest runs
- * under node), so the states are driven through a real QueryClient (`getQueryClient()` answers a
- * fresh one per call under node) and an observer, as the section's `useInfiniteQuery` holds them.
+ * first read that failed, no post yet, the cards, 더 보기, a 더 보기 that failed — and the count
+ * beside its heading; and, from the sources, that the server page reads none of it and the cards
+ * draw no market line (owner decisions 2026-10-20 1 and 6). The section component only draws these
+ * (no DOM here: vitest runs under node), so the states are driven through a real QueryClient
+ * (`getQueryClient()` answers a fresh one per call under node) and an observer, as the section's
+ * `useInfiniteQuery` holds them.
  */
+
+const SRC = path.resolve(import.meta.dirname, '..');
 
 const MARKET = '3F2504E0-4F89-11D3-9A0C-0305E82C3301';
 
@@ -102,7 +100,9 @@ function observe(readPage: (cursor: string | undefined) => Promise<CountedPostPa
   const unsubscribe = observer.subscribe(() => undefined);
   return {
     observer,
-    view: (live?: LiveMarket) => discussionView(observer.getCurrentResult(), live),
+    view: () => discussionView(observer.getCurrentResult()),
+    /** The notice above 더 보기 (`LoadMoreFailed`), as the section's own query drives it. */
+    failedMore: () => moreFailed(observer.getCurrentResult()),
     done: () => {
       unsubscribe();
       queryClient.clear();
@@ -137,7 +137,6 @@ describe('the 토론 section’s rungs (#47)', () => {
         posts: [],
         total: undefined,
         more: false,
-        moreFailed: false,
       });
     } finally {
       done();
@@ -154,7 +153,6 @@ describe('the 토론 section’s rungs (#47)', () => {
         posts: [],
         total: undefined,
         more: false,
-        moreFailed: false,
       });
     } finally {
       done();
@@ -173,7 +171,6 @@ describe('the 토론 section’s rungs (#47)', () => {
         posts: [],
         total: 0,
         more: false,
-        moreFailed: false,
       });
     } finally {
       done();
@@ -277,12 +274,13 @@ describe('the 토론 section’s rungs (#47)', () => {
     }
   });
 
-  it('says a 더 보기 failed beside it, keeping the cards, the count and 더 보기 to try again', async () => {
+  it('keeps the cards, the count and 더 보기 when a 더 보기 fails, with the notice above it until asked again', async () => {
     // Review on #47: TanStack reports a failed next page as `isFetchNextPageError`, not as a
     // refresh's `isRefetchError`, so the section said nothing and looked as it did before the
-    // press.
+    // press. The notice is every 더 보기 list's (`LoadMoreFailed` on `moreFailed`, owner decision
+    // 2026-10-20 7); the section keeps its rung and its 더 보기.
     let down = true;
-    const { observer, view, done } = observe((cursor) =>
+    const { observer, view, failedMore, done } = observe((cursor) =>
       cursor === undefined
         ? Promise.resolve({ items: cards(21, 20), nextCursor: 'c2', total: 21 })
         : down
@@ -291,27 +289,24 @@ describe('the 토론 section’s rungs (#47)', () => {
     );
     try {
       await settled(observer, (result) => result.isSuccess);
+      expect(failedMore()).toBe(false);
       await observer.fetchNextPage();
       expect(observer.getCurrentResult()).toMatchObject({
         isFetchNextPageError: true,
         isRefetchError: false,
       });
-      expect(view()).toMatchObject({
-        stale: false,
-        body: 'rows',
-        total: 21,
-        more: true,
-        moreFailed: true,
-      });
+      expect(view()).toMatchObject({ stale: false, body: 'rows', total: 21, more: true });
+      expect(failedMore()).toBe(true);
       expect(view().posts).toHaveLength(20);
 
       // Asked again: not said while it is being asked, and gone once the page came.
       down = false;
       const again = observer.fetchNextPage();
       expect(observer.getCurrentResult().isFetchingNextPage).toBe(true);
-      expect(view().moreFailed).toBe(false);
+      expect(failedMore()).toBe(false);
       await again;
-      expect(view()).toMatchObject({ body: 'rows', more: false, moreFailed: false });
+      expect(view()).toMatchObject({ body: 'rows', more: false });
+      expect(failedMore()).toBe(false);
       expect(view().posts).toHaveLength(21);
     } finally {
       done();
@@ -335,7 +330,6 @@ describe('the 토론 section’s rungs (#47)', () => {
         body: 'rows',
         total: 2,
         more: false,
-        moreFailed: false,
       });
       expect(view().posts).toHaveLength(2);
     } finally {
@@ -343,80 +337,44 @@ describe('the 토론 section’s rungs (#47)', () => {
     }
   });
 
-  it('offers no 더 보기, and says no 더 보기 failed, over a pending, failed or empty list, whatever the flags say', () => {
-    const flags = {
-      isPending: false,
-      isLoadingError: false,
-      isRefetchError: false,
-      isFetchNextPageError: true,
-      isFetchingNextPage: false,
-    };
+  it('offers no 더 보기 — and so no notice above it — over a pending, failed or empty list, whatever the flags say', () => {
+    // The notice is drawn inside 더 보기's condition (market-discussion.tsx), so `more` false
+    // leaves no place for it.
+    const flags = { isPending: false, isLoadingError: false, isRefetchError: false, error: null };
     expect(
       discussionView({ ...flags, isPending: true, hasNextPage: true, data: undefined }),
-    ).toMatchObject({ more: false, moreFailed: false });
+    ).toMatchObject({ more: false });
     expect(
       discussionView({ ...flags, isLoadingError: true, hasNextPage: true, data: undefined }),
-    ).toMatchObject({ more: false, moreFailed: false });
+    ).toMatchObject({ more: false });
     expect(
       discussionView({
         ...flags,
         hasNextPage: true,
         data: { pages: [{ items: [], nextCursor: 'c', total: 0 }], pageParams: [undefined] },
       }),
-    ).toMatchObject({ body: 'empty', more: false, moreFailed: false });
+    ).toMatchObject({ body: 'empty', more: false });
   });
 });
 
-describe('the 토론 cards’ market line (#47)', () => {
-  const live: LiveMarket = {
-    id: MARKET.toLowerCase(),
-    status: 'closed',
-    title: '금리 인하? (수정)',
-  };
-  const open = (n: number): PostSummary => {
-    const post = card(n);
-    return { ...post, market: { ...post.market, status: 'open' } };
-  };
-
-  it('follows the detail’s live row, so a market closed or retitled under the reader shows on its cards', () => {
-    // Review on #47: a `market:status` moved the header to 거래 마감 and left every card of the
-    // same screen without its badge (a card's market is the post page's snapshot of it).
-    const view = discussionView(
-      {
-        isPending: false,
-        isLoadingError: false,
-        isRefetchError: false,
-        isFetchNextPageError: false,
-        isFetchingNextPage: false,
-        hasNextPage: false,
-        data: {
-          pages: [{ items: [open(2), open(1)], nextCursor: null, total: 2 }],
-          pageParams: [undefined],
-        },
-      },
-      live,
+describe('the 토론 cards (#47, owner decision 2026-10-20 6)', () => {
+  it('draw no market line — every card is this market’s — while the community list’s keep it', () => {
+    // `PostCard`'s `showMarket` (no DOM under node, so the two callers are read): the section
+    // turns the line off, the community list leaves the default on. The live-row overlay that
+    // kept the line's status and title current is gone with it.
+    const section = readFileSync(
+      path.join(SRC, 'app/markets/[slug]/market-discussion.tsx'),
+      'utf8',
     );
-    expect(view.posts.map((post) => post.market)).toEqual([
-      { ...open(2).market, status: 'closed', title: '금리 인하? (수정)' },
-      { ...open(1).market, status: 'closed', title: '금리 인하? (수정)' },
-    ]);
-    // Nothing but the market line changes.
-    expect(view.posts.map((post) => ({ ...post, market: undefined }))).toEqual(
-      [open(2), open(1)].map((post) => ({ ...post, market: undefined })),
+    expect(section).toContain(
+      '<PostCard key={post.id} post={post} titleAs="h3" showMarket={false} />',
     );
-  });
-
-  it('leaves a card as it came while the row is unknown, already agrees, or is another market’s', () => {
-    const cardsHeld = [open(2), open(1)];
-    expect(onLiveMarket(cardsHeld, undefined)).toBe(cardsHeld);
-    const agreeing = card(3);
-    const [same] = onLiveMarket([agreeing], { ...live, title: agreeing.market.title });
-    expect(same).toBe(agreeing);
-    const [other] = onLiveMarket([open(4)], {
-      ...live,
-      id: '00000000-0000-4000-8000-000000000999',
-    });
-    expect(other?.market.status).toBe('open');
+    expect(section).not.toContain('useMarket(');
+    const community = readFileSync(path.join(SRC, 'app/community/community-screen.tsx'), 'utf8');
+    expect(community).toContain('<PostCard key={post.id} post={post} />');
+    const card = readFileSync(path.join(SRC, 'components/post/post-card.tsx'), 'utf8');
+    expect(card).toContain('showMarket = true');
+    expect(card).toMatch(/\{showMarket && \(\s*<HStack[\s\S]*?data-testid="post-card-market"/);
   });
 });
 
@@ -428,50 +386,14 @@ describe('the 토론 count', () => {
   });
 });
 
-describe('prefetchMarketPosts (#47, ADR-0075)', () => {
-  it('dehydrates the first page and its count under the key the section reads, asked with no cursor', async () => {
-    const queryClient = getQueryClient();
-    const asked: (string | undefined)[] = [];
-    await prefetchMarketPosts(queryClient, MARKET, (id, cursor) => {
-      asked.push(id, cursor);
-      return Promise.resolve<CountedPostPage>({ items: [card(1)], nextCursor: 'c1', total: 21 });
-    });
-
-    expect(asked).toEqual([MARKET, undefined]);
-    const [query] = dehydratePublic(queryClient).queries;
-    expect(query?.queryKey).toEqual(marketPostsKey(MARKET.toLowerCase()));
-    expect(query?.state.data).toEqual({
-      pages: [{ items: [card(1)], nextCursor: 'c1', total: 21 }],
-      pageParams: [undefined],
-    });
-  });
-
-  it('dehydrates an empty first page too: no post yet is the section’s empty state', async () => {
-    const queryClient = getQueryClient();
-    await prefetchMarketPosts(queryClient, MARKET, () =>
-      Promise.resolve<CountedPostPage>({ items: [], nextCursor: null, total: 0 }),
-    );
-    const [query] = dehydratePublic(queryClient).queries;
-    expect(query?.state.data).toEqual({
-      pages: [{ items: [], nextCursor: null, total: 0 }],
-      pageParams: [undefined],
-    });
-  });
-
-  it('tries a failing read once, so the detail never waits out the client retry rule', async () => {
-    // The hazard `prefetchRelatedMarkets` met (review on #65): the server client's default retry
-    // asks a 5xx twice more, 1 s and 2 s apart, unless the prefetch says otherwise.
-    const queryClient = getQueryClient();
-    let reads = 0;
-    const started = Date.now();
-    await prefetchMarketPosts(queryClient, MARKET, () => {
-      reads += 1;
-      return Promise.reject(new ApiError(500, undefined));
-    });
-
-    expect(reads).toBe(1);
-    expect(Date.now() - started).toBeLessThan(500);
-    // A failed query is not dehydrated, so the section reads its page in the browser.
-    expect(dehydratePublic(queryClient).queries).toEqual([]);
+describe('the 토론 and the server page (#47, owner decision 2026-10-20 1)', () => {
+  it('is never read by the detail’s server page, so no post reaches its HTML or dehydrated state', () => {
+    // The page reads the row, the ticks and 관련 시장 — nothing of the posts: no reader of
+    // `GET /markets/:id/posts` on the server and no seed under the section's key. The e2e reads
+    // the HTML itself (discussion.spec.ts).
+    const page = readFileSync(path.join(SRC, 'app/markets/[slug]/page.tsx'), 'utf8');
+    const server = readFileSync(path.join(SRC, 'lib/api.server.ts'), 'utf8');
+    expect(page).not.toMatch(/marketPostsKey|MarketPosts|lib\/discussion/);
+    expect(server).not.toContain("'/api/v1/markets/{id}/posts'");
   });
 });

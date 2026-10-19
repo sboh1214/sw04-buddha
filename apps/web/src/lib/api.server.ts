@@ -19,11 +19,9 @@ import {
 } from './market-keys';
 import {
   type CommunityFilters,
-  type CountedPostPage,
   type PostPage,
   type WriteMarketLookup,
   lookUpWriteMarket,
-  marketPostsQuery,
   postListQuery,
 } from './posts';
 import { type TickRange, ticksQueryFor } from './ticks';
@@ -197,26 +195,6 @@ export async function fetchPostsPageServer(
     await serverApi.GET('/api/v1/posts', { params: { query: postListQuery(filters, cursor) } }),
   );
   return { items: data, nextCursor: meta.nextCursor };
-}
-
-/**
- * One page of a market detail's 토론 (`GET /markets/:id/posts`, #47, ADR-0075): the market's posts
- * as the community list's cards and `total`, the count the section shows — the same request as the
- * browser's `queryFn` (`marketPostsQuery`, hooks/use-posts.ts), so the page the detail reads on the
- * server is the page the client picks up. Public (N02 §2 «공개 토론»). Rejects on failure, which the
- * detail's prefetch swallows after one attempt (`prefetchMarketPosts`, lib/discussion.ts): the
- * section then reads it in the browser and shows its own failure.
- */
-export async function fetchMarketPostsPageServer(
-  marketId: string,
-  cursor?: string,
-): Promise<CountedPostPage> {
-  const { data, meta } = unwrap(
-    await serverApi.GET('/api/v1/markets/{id}/posts', {
-      params: { path: { id: marketId }, query: marketPostsQuery(cursor) },
-    }),
-  );
-  return { items: data, nextCursor: meta.nextCursor, total: meta.total };
 }
 
 /**

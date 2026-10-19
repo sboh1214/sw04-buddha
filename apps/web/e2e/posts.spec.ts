@@ -2071,4 +2071,58 @@ test.describe('근거 글', () => {
     await expect(page).toHaveURL(edit);
     await page.unrouteAll({ behavior: 'ignoreErrors' });
   });
+
+  test('커뮤니티 목록의 더 보기가 실패하면 카드를 남기고 그 위에 알리며, 다시 누르면 나머지가 온다', async ({
+    admin,
+    page,
+  }) => {
+    // Owner decision 2026-10-20 7 (ADR-0075): every 더 보기 list says its 더 보기 failed, above the
+    // button, which asks again — the 토론 has its own walk in discussion.spec.ts; this is the
+    // second list, the community list narrowed to one market so its pages are this test's posts.
+    const market = await createOpenMarket(admin);
+    const tag = freshTag();
+    const titles = Array.from(
+      { length: 21 },
+      (_, i) => `더 보기 ${tag} #${String(i + 1).padStart(2, '0')}`,
+    );
+    for (const title of titles) await postThroughApi(admin, market.id, title, tag);
+    const newestFirst = [...titles].reverse();
+
+    await page.goto(`/community?market=${market.id}`);
+    // Hydrated (the header's 로그인 shows only then), so 더 보기 has its handler.
+    await expect(page.locator('header').getByRole('link', { name: copy.login })).toBeVisible();
+    const list = page.getByTestId('community-posts');
+    const headings = list.getByRole('heading', { level: 3 });
+    await expect(headings).toHaveText(newestFirst.slice(0, 20));
+
+    // The next page refused through the client's retries (a 5xx is asked twice more).
+    const isNextPage = (url: URL) =>
+      url.pathname === '/api/v1/posts' && url.searchParams.has('cursor');
+    await page.route(isNextPage, (route) =>
+      route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: { code: 'INTERNAL', message: 'Internal error' } }),
+      }),
+    );
+    const more = page.getByTestId('community-more');
+    await more.click();
+    const failed = page.getByTestId('community-more-failed');
+    await expect(failed).toHaveText(copy.errUnknown);
+    await expect(failed).toHaveAttribute('role', 'alert');
+    await expect(
+      list.locator('[data-testid="community-more-failed"] + [data-testid="community-more"]'),
+    ).toHaveCount(1);
+    await expect(headings).toHaveText(newestFirst.slice(0, 20));
+    await expect(page.getByTestId('community-error')).toHaveCount(0);
+    await expect(page.getByTestId('community-refresh-failed')).toHaveCount(0);
+    await expect(more).toBeEnabled();
+
+    // Readable again: 더 보기 brings the 21st, and the notice and the button go.
+    await page.unroute(isNextPage);
+    await more.click();
+    await expect(headings).toHaveText(newestFirst);
+    await expect(failed).toHaveCount(0);
+    await expect(more).toHaveCount(0);
+  });
 });

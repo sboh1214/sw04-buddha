@@ -2,13 +2,10 @@ import {
   InfiniteQueryObserver,
   MutationObserver,
   QueryObserver,
-  hydrate,
   type InfiniteData,
 } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, type Me, type Post, type PostSummary, api } from '@/lib/api';
-import { prefetchMarketPosts } from '@/lib/discussion';
-import { dehydratePublic } from '@/lib/market-keys';
 import {
   type DraftStorage,
   type PostDraftKey,
@@ -158,15 +155,11 @@ describe('a market detail’s 토론 (#47, ADR-0075)', () => {
     expect(options.getNextPageParam({ items: [], nextCursor: null, total: 1 })).toBeUndefined();
   });
 
-  it('hands the section the page the detail read on the server, without a request', async () => {
-    const serverClient = getQueryClient();
-    await prefetchMarketPosts(serverClient, MARKET, () =>
-      Promise.resolve<CountedPostPage>({ items: [summary], nextCursor: 'c1', total: 21 }),
-    );
+  it('reads its first page in the browser, since the detail seeds none of it (owner decision 2026-10-20 1)', async () => {
+    // The detail's server page reads no post (no title, text or author in the HTML a search
+    // engine gets), so the section's query starts empty and asks for the first page itself.
     const queryClient = getQueryClient();
-    hydrate(queryClient, dehydratePublic(serverClient));
-
-    let fetches = 0;
+    const asked: (string | undefined)[] = [];
     const observer = new InfiniteQueryObserver<
       CountedPostPage,
       Error,
@@ -175,22 +168,25 @@ describe('a market detail’s 토론 (#47, ADR-0075)', () => {
       string | undefined
     >(queryClient, {
       ...marketPostsInfiniteQueryOptions(MARKET),
-      queryFn: () => {
-        fetches += 1;
-        return Promise.resolve({ items: [], nextCursor: null, total: 0 });
+      queryFn: ({ pageParam }) => {
+        asked.push(pageParam);
+        return Promise.resolve({ items: [summary], nextCursor: 'c1', total: 21 });
       },
       retry: false,
     });
+    expect(observer.getCurrentResult().isPending).toBe(true);
     const unsubscribe = observer.subscribe(() => undefined);
     try {
+      for (let i = 0; i < 100 && !observer.getCurrentResult().isSuccess; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
       const result = observer.getCurrentResult();
+      expect(asked).toEqual([undefined]);
       expect(result.data?.pages).toEqual([{ items: [summary], nextCursor: 'c1', total: 21 }]);
       expect(result.hasNextPage).toBe(true);
-      expect(fetches).toBe(0);
     } finally {
       unsubscribe();
       queryClient.clear();
-      serverClient.clear();
     }
   });
 

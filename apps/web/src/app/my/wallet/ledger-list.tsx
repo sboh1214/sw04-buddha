@@ -3,14 +3,16 @@
 import { Alert, Button, Card, HStack, Skeleton, Stack, Text } from '@chakra-ui/react';
 import { MINUS_SIGN, formatCoin, parseCoinAmount } from '@buddha/shared';
 import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
+import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { copy } from '@/copy';
 import { useLedger } from '@/hooks/use-wallet';
 import { type LedgerEntry } from '@/lib/api';
+import { readFailed } from '@/lib/query-client';
 import { LEDGER_TYPE_LABEL } from '@/lib/wallet';
 
 export function LedgerList() {
-  const { data, isPending, isError, fetchNextPage, hasNextPage, isFetchingNextPage, refetch } =
-    useLedger();
+  const list = useLedger();
+  const { data, isPending, fetchNextPage, hasNextPage, isFetchingNextPage, refetch } = list;
   const entries = data?.pages.flatMap((page) => page.items) ?? [];
 
   return (
@@ -21,7 +23,7 @@ export function LedgerList() {
       <Card.Body>
         {isPending ? (
           <Skeleton height="24" />
-        ) : isError ? (
+        ) : readFailed(list) ? (
           <Stack gap="3" align="flex-start">
             <Alert.Root status="error" role="alert">
               <Alert.Indicator />
@@ -36,22 +38,34 @@ export function LedgerList() {
         ) : entries.length === 0 ? (
           <Text color="fg.muted">{copy.ledgerEmpty}</Text>
         ) : (
-          <Stack gap="3" divideY="1px">
-            {entries.map((entry) => (
-              <LedgerRow key={entry.id} entry={entry} />
-            ))}
+          <Stack gap="3">
+            <Stack gap="3" divideY="1px">
+              {entries.map((entry) => (
+                <LedgerRow key={entry.id} entry={entry} />
+              ))}
+            </Stack>
             {hasNextPage && (
-              <Button
-                alignSelf="center"
-                size="sm"
-                variant="ghost"
-                mt="3"
-                loading={isFetchingNextPage}
-                onClick={() => void fetchNextPage()}
-                data-testid="ledger-more"
-              >
-                {copy.loadMore}
-              </Button>
+              <>
+                {/* A 더 보기 that failed: the rows stay, the message above the button that asks
+                    again (owner decision 2026-10-20 7). Outside the divided rows, so no row
+                    divider is drawn over it. */}
+                <LoadMoreFailed
+                  list={list}
+                  message={copy.errUnknown}
+                  data-testid="ledger-more-failed"
+                />
+                <Button
+                  alignSelf="center"
+                  size="sm"
+                  variant="ghost"
+                  mt="3"
+                  loading={isFetchingNextPage}
+                  onClick={() => void fetchNextPage()}
+                  data-testid="ledger-more"
+                >
+                  {copy.loadMore}
+                </Button>
+              </>
             )}
           </Stack>
         )}

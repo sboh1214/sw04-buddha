@@ -1,58 +1,30 @@
-import { type InfiniteData, type QueryClient } from '@tanstack/react-query';
+import { type InfiniteData } from '@tanstack/react-query';
 import { copy } from '@/copy';
-import { type Market, type PostSummary } from './api';
-import { type CountedPostPage, marketPostsKey } from './posts';
+import { type PostSummary } from './api';
+import { type CountedPostPage } from './posts';
 import { listSection } from './query-client';
 
 /**
  * 토론 (#47, ADR-0075): the market detail's section of that market's 근거 글 as the screen reads it —
- * the server's seed of its first page, the rung the section is on, and the count it shows. Pure
- * functions of the query and of the API's answers, kept out of the section component
- * (`app/markets/[slug]/market-discussion.tsx`) so the node test runner reaches them (the rule
- * `market-ssr.ts` states), and free of `'use client'`, so the server page seeds the key the
- * browser's hook reads.
+ * the rung the section is on and the count it shows. Pure functions of the query and of the API's
+ * answers, kept out of the section component (`app/markets/[slug]/market-discussion.tsx`) so the
+ * node test runner reaches them (the rule `market-ssr.ts` states).
  *
- * Owner decisions (ADR-0069 decision 4 #47 and decision 2 #45-6, and of 2026-10-18): every post of
- * the market in the detail itself, newest first, 20 more per 더 보기, with the count shown; each as
- * the community list's preview card, which opens the post page; readable in every public status,
- * and — every public status taking posts — the write entry always there.
+ * Owner decisions (ADR-0069 decision 4 #47 and decision 2 #45-6, of 2026-10-18 and of 2026-10-20):
+ * every post of the market in the detail itself, newest first, 20 more per 더 보기, with the count
+ * shown; each as the community list's preview card without its market line — it is this market —
+ * which opens the post page; readable in every public status, and — every public status taking
+ * posts — the write entry always there. The section is read in the browser only, never by the
+ * server page (owner decision 2026-10-20 1: no post in the HTML a search engine gets), so its
+ * first rung on every load is `pending`.
  */
-
-/**
- * The detail's 토론, first page, read on the server under the key the section's own query uses
- * (`marketPostsKey`, hooks/use-posts.ts), so the page and its page params dehydrate and the cards
- * and the count are in the HTML — the same for every visitor: the read forwards no cookie. The
- * param the client's factory declares, so the seeded page is picked up rather than fetched again.
- * `readPage` is the page's server reader (`fetchMarketPostsPageServer`), passed in so this can be
- * tested without the server client.
- *
- * `retry: false`, for the reason `prefetchRelatedMarkets` (market-ssr.ts) gives: the server client
- * keeps the app's default retries (a 5xx or a network failure twice more, 1 s then 2 s apart), and
- * a prefetch turns them off only when no default names any, so a failing read of this one section
- * would hold the whole detail about 3 s to end in the same failure. A prefetch swallows its failure
- * and a failed query is not dehydrated, so the section reads its page in the browser — with the
- * client's retries — and shows its own failure there. An empty first page IS dehydrated: no post
- * yet is the section's empty state, not a failure.
- */
-export function prefetchMarketPosts(
-  queryClient: QueryClient,
-  marketId: string,
-  readPage: (marketId: string, cursor?: string) => Promise<CountedPostPage>,
-): Promise<void> {
-  return queryClient.prefetchInfiniteQuery({
-    queryKey: marketPostsKey(marketId),
-    queryFn: ({ pageParam }: { pageParam: string | undefined }) => readPage(marketId, pageParam),
-    initialPageParam: undefined as string | undefined,
-    retry: false,
-  });
-}
 
 /** What the section draws: its rung, the cards, the count, and whether 더 보기 is offered. */
 export interface DiscussionView {
   /** A refresh failed while cards are held: they stay, with a notice above them (`listSection`). */
   stale: boolean;
   body: 'pending' | 'failed' | 'empty' | 'rows';
-  /** The cards of every page read, newest first, their market line on the live row (`onLiveMarket`). */
+  /** The cards of every page read, newest first. */
   posts: PostSummary[];
   /**
    * How many posts the market's whole list held when its first page was read — every page, not
@@ -62,74 +34,46 @@ export interface DiscussionView {
    * (21 cards beside '글 23'), and a post deleted meanwhile would count less than the cards shown.
    * The first page's count is the one that matches the cards once the last page is in — save for a
    * post below the cards that was deleted or hidden before a 더 보기 reached it, which it still
-   * counts (ADR-0075 5-4). Every page is read again from the first, and the count with it, at the next refresh of
-   * the list — a refocus past `staleTime`, a remount, the reader's own write — which is when a post
-   * someone else wrote meanwhile appears, at the top (5-11). Absent until a page has been read.
+   * counts (ADR-0075 5-4). Every page is read again from the first, and the count with it, at the
+   * next refresh of the list — a refocus past `staleTime`, a remount, the reader's own write — which
+   * is when a post someone else wrote meanwhile appears, at the top (5-11; owner decision 2026-10-20
+   * 8). Absent until a page has been read.
    */
   total: number | undefined;
-  /** 더 보기: another page follows, and there are cards for it to follow. */
-  more: boolean;
   /**
-   * The last 더 보기 failed (after the client's retries) and is not being asked again: the cards
-   * and the count stay, 더 보기 stays to try again, and the section says so beside it (ADR-0075
-   * 5-14). `listSection` cannot see it — TanStack reports a failed next page as
-   * `isFetchNextPageError` and leaves `isRefetchError` false — and a refresh's notice would say
-   * something else (that what is shown may be old), not that nothing more came.
+   * 더 보기: another page follows, and there are cards for it to follow. A 더 보기 that failed keeps
+   * it — the button is the way to ask again — with the notice every 더 보기 list shows above it
+   * (`LoadMoreFailed`, owner decision 2026-10-20 7).
    */
-  moreFailed: boolean;
-}
-
-/** The detail's own market as its live row holds it (`useMarket`): what the cards' market line shows. */
-export type LiveMarket = Pick<Market, 'id' | 'status' | 'title'>;
-
-/**
- * The cards with the detail's live row laid over their market line. Every card of the section is
- * this market's, and a card's `market` is the post page's snapshot of it: no market event reaches
- * the posts lists (`PostMarket` has no `statusEventId` to order one by), so a market an admin closes
- * while the page is open would keep its cards without the 거래 마감 badge its header already shows,
- * and a title edit would leave their market line on the old title, until the list is read again.
- * The detail's row is live already — seeded by the page, written by `market:status` in its order,
- * read again after an edit — so the cards take its status and title (ADR-0075 5-15). Nothing else
- * of a card changes, and a card stands as it came while the row is unknown or is another market's.
- */
-export function onLiveMarket(posts: PostSummary[], live: LiveMarket | undefined): PostSummary[] {
-  if (live === undefined) return posts;
-  return posts.map((post) =>
-    post.market.id === live.id &&
-    (post.market.status !== live.status || post.market.title !== live.title)
-      ? { ...post, market: { ...post.market, status: live.status, title: live.title } }
-      : post,
-  );
+  more: boolean;
 }
 
 /**
  * The section's rung from its query: the list sections' ladder (`listSection` — loading, a first
  * read that failed, no post yet, the cards — with a failed refresh as a notice over whatever is
- * held, never a rung that hides it), plus the count, 더 보기 and a 더 보기 that failed. `live` is the
- * detail's row, which the cards' market line follows (`onLiveMarket`).
+ * held, never a rung that hides it), plus the count and 더 보기. A 더 보기 that failed is neither a
+ * rung nor a refresh's notice: `listSection` never sees it (TanStack reports it as
+ * `isFetchNextPageError` and leaves `isRefetchError` false), so the cards and the count stay, and
+ * the notice above 더 보기 is `moreFailed`'s (lib/query-client.ts).
  */
-export function discussionView(
-  query: {
-    isPending: boolean;
-    isLoadingError: boolean;
-    isRefetchError: boolean;
-    isFetchNextPageError: boolean;
-    isFetchingNextPage: boolean;
-    hasNextPage: boolean;
-    data: InfiniteData<CountedPostPage> | undefined;
-  },
-  live?: LiveMarket,
-): DiscussionView {
+export function discussionView(query: {
+  isPending: boolean;
+  isLoadingError: boolean;
+  isRefetchError: boolean;
+  /** Tells a refetch after a failed 더 보기 from a failed refresh (`refreshFailed`). */
+  error: unknown;
+  hasNextPage: boolean;
+  data: InfiniteData<CountedPostPage> | undefined;
+}): DiscussionView {
   const pages = query.data?.pages ?? [];
   const posts = pages.flatMap((page) => page.items);
   const { stale, body } = listSection(query, posts.length);
   return {
     stale,
     body,
-    posts: onLiveMarket(posts, live),
+    posts,
     total: pages[0]?.total,
     more: body === 'rows' && query.hasNextPage,
-    moreFailed: body === 'rows' && query.isFetchNextPageError && !query.isFetchingNextPage,
   };
 }
 

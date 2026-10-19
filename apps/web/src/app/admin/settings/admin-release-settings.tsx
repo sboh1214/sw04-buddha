@@ -26,6 +26,7 @@ import {
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useId, useMemo, useState } from 'react';
 import { Controller, useForm, useWatch } from 'react-hook-form';
+import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import {
@@ -35,6 +36,7 @@ import {
 } from '@/hooks/use-admin-release-settings';
 import { type ReleaseSetting, type ReleaseSettingChange } from '@/lib/api';
 import { formatKst } from '@/lib/datetime';
+import { readFailed } from '@/lib/query-client';
 import {
   NO_VALUE,
   RELEASE_SETTING_STATUS_BADGE,
@@ -441,7 +443,7 @@ function ChangeLog() {
       </Heading>
       {changes.isPending ? (
         <Skeleton height="24" />
-      ) : changes.isError ? (
+      ) : readFailed(changes) ? (
         <Alert.Root status="error" role="alert">
           <Alert.Indicator />
           <Alert.Content>
@@ -458,16 +460,23 @@ function ChangeLog() {
             <ChangeRow key={entry.id} entry={entry} />
           ))}
           {changes.hasNextPage && (
-            <Button
-              alignSelf="center"
-              size="sm"
-              variant="ghost"
-              loading={changes.isFetchingNextPage}
-              onClick={() => void changes.fetchNextPage()}
-              data-testid="release-setting-changes-more"
-            >
-              {copy.loadMore}
-            </Button>
+            <>
+              <LoadMoreFailed
+                list={changes}
+                message={copy.errUnknown}
+                data-testid="release-setting-changes-more-failed"
+              />
+              <Button
+                alignSelf="center"
+                size="sm"
+                variant="ghost"
+                loading={changes.isFetchingNextPage}
+                onClick={() => void changes.fetchNextPage()}
+                data-testid="release-setting-changes-more"
+              >
+                {copy.loadMore}
+              </Button>
+            </>
           )}
         </Stack>
       )}

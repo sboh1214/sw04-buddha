@@ -269,10 +269,10 @@ export function MarketDetail({
         <ComingSoonSection title={copy.marketMyOpenOrders} testId="market-my-open-orders" />
       </PersonalArea>
     ),
-    // 토론 (#47, ADR-0075): this market's posts as the community list's cards, newest first, every
-    // one of them a 더 보기 at a time, the count beside the heading and 글쓰기 always there. Public,
-    // so the page read its first page on the server (market-discussion.tsx). One slot at both
-    // widths: it holds a query.
+    // 토론 (#47, ADR-0075): this market's posts as the community list's cards (without their
+    // market line), newest first, every one of them a 더 보기 at a time, the count beside the
+    // heading and 글쓰기 always there. Public, but read in the browser only — no post in the
+    // server's HTML (market-discussion.tsx). One slot at both widths: it holds a query.
     discussion: <MarketDiscussion marketId={marketId} />,
     // 관련 시장 (#65, ADR-0068), after 토론: the last of N02 §4's list, at both widths. Public, so
     // the page renders it with the first page it read (related-markets.tsx).
