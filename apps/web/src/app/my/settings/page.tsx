@@ -13,6 +13,7 @@ import { ModerationSection } from './moderation-section';
 import { NicknameForm } from './nickname-form';
 import { PasswordForm } from './password-form';
 import { ProfileImageSection } from './profile-image-section';
+import { ProposalsSection } from './proposals-section';
 import { SettingsNotice } from './settings-notice';
 import { ThemeSection } from './theme-section';
 import { TimeZoneSection } from './time-zone-section';
@@ -58,6 +59,8 @@ export default async function SettingsPage({
       <TimeZoneSection />
       <ThemeSection />
       <ModerationSection />
+      {/* 내 제안 (#77): linked from 설정 as from the summary, since it has no tab. */}
+      <ProposalsSection />
       <ClosureSection />
     </Stack>
   );

@@ -323,6 +323,13 @@
       "when": 1792887907975,
       "tag": "0045_themes",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1792397166124,
+      "tag": "0032_market_proposals",
+      "breakpoints": true
     }
   ]
 }

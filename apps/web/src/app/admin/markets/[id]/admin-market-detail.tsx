@@ -6,13 +6,11 @@ import {
   Button,
   Card,
   DataList,
-  Dialog,
   Field,
   HStack,
   Heading,
   Input,
   Link as ChakraLink,
-  Portal,
   RadioGroup,
   Skeleton,
   Stack,
@@ -26,6 +24,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import NextLink from 'next/link';
 import { type ReactNode, useMemo, useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
@@ -977,7 +976,8 @@ function RelatedMarketsPanel({ market }: { market: AdminMarket }) {
  * The notice above a list whose refresh failed after it had rows (`listSection`'s `stale`): the
  * rows stay, and this says they are the last ones read, with 다시 시도 — the reading RecentFills
  * and the card above already take (`adminMarketRefreshFailed`). Exported with `RelatedMarketLine`
- * and `ConfirmDialog` for the admin theme screen (#81), whose market panel is this one's twin.
+ * for the admin theme screen (#81), whose market panel is this one's twin (its `ConfirmDialog` is
+ * the shared one, components/ui/confirm-dialog.tsx, since #77).
  */
 export function RefreshFailedNotice({ testId, onRetry }: { testId: string; onRetry: () => void }) {
   return (
@@ -1173,79 +1173,5 @@ function RecentFills({ market }: { market: AdminMarket }) {
         )}
       </Card.Body>
     </Card.Root>
-  );
-}
-
-export interface ConfirmDialogProps {
-  /** Prefix of the two buttons' test ids: `<testId>-confirm` and `<testId>-cancel`. */
-  testId: string;
-  open: boolean;
-  onClose: () => void;
-  title: string;
-  confirmLabel: string;
-  loading: boolean;
-  onConfirm: () => void;
-  children: ReactNode;
-}
-
-/**
- * The one confirmation shape the transitions and the open-market edit share. Mounted only
- * while open (three of these live on the page; a closed one must not answer a test id), and
- * pinned while the mutation runs: Cancel, Esc and the backdrop all wait, since dismissing it
- * mid-flight would leave the request running against a screen that no longer shows it.
- */
-export function ConfirmDialog({
-  testId,
-  open,
-  onClose,
-  title,
-  confirmLabel,
-  loading,
-  onConfirm,
-  children,
-}: ConfirmDialogProps) {
-  return (
-    <Dialog.Root
-      open={open}
-      onOpenChange={(details) => {
-        if (!details.open && !loading) onClose();
-      }}
-      role="alertdialog"
-      lazyMount
-      unmountOnExit
-      closeOnInteractOutside={!loading}
-      closeOnEscape={!loading}
-    >
-      <Portal>
-        <Dialog.Backdrop />
-        <Dialog.Positioner>
-          <Dialog.Content>
-            <Dialog.Header>
-              <Dialog.Title>{title}</Dialog.Title>
-            </Dialog.Header>
-            <Dialog.Body>{children}</Dialog.Body>
-            <Dialog.Footer>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={loading}
-                onClick={onClose}
-                data-testid={`${testId}-cancel`}
-              >
-                {copy.cancel}
-              </Button>
-              <Button
-                size="sm"
-                loading={loading}
-                onClick={onConfirm}
-                data-testid={`${testId}-confirm`}
-              >
-                {confirmLabel}
-              </Button>
-            </Dialog.Footer>
-          </Dialog.Content>
-        </Dialog.Positioner>
-      </Portal>
-    </Dialog.Root>
   );
 }

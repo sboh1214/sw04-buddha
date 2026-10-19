@@ -32,6 +32,8 @@ export const metadata: Metadata = { title: `${copy.adminTitle} | ${copy.appName}
 const NAV: { href: Route; label: string }[] = [
   { href: '/admin/markets', label: copy.adminMarkets },
   { href: '/admin/themes', label: copy.adminThemes },
+  // 시장 제안 (#77, ADR-0089): the members' proposals and their review.
+  { href: '/admin/proposals', label: copy.adminProposals },
   { href: '/admin/notices', label: copy.adminNotices },
   { href: '/admin/users', label: copy.adminUsers },
   { href: '/admin/reports', label: copy.adminModeration },

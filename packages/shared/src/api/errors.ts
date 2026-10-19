@@ -180,6 +180,13 @@ export const ERROR_CODES = [
    * and so is an admin grant, as a closed account signs in no more and its profile never changes.
    */
   'ACCOUNT_CLOSED',
+  /**
+   * No market proposal was taken: the proposals of the verified number waiting for the operators
+   * reached their limit, or its proposals of the last 24 hours did (#77). Counted by the keyed
+   * hash of the verified number, not by account. Details carry the reason, the limit and, for the
+   * daily one, retryAfterSeconds, proposalLimitedDetailsSchema.
+   */
+  'PROPOSAL_LIMITED',
   'INTERNAL',
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];

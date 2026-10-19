@@ -19,6 +19,7 @@ import Form from 'next/form';
 import NextLink from 'next/link';
 import { useRouter } from 'next/navigation';
 import { toaster } from '@/components/ui/toaster';
+import { ProposeMarketEntry } from '@/components/proposals/propose-market-entry';
 import { EmptyState } from '@/components/ui/empty-state';
 import { copy } from '@/copy';
 import { useCategories, useMarketSearch } from '@/hooks/use-markets';
@@ -261,7 +262,8 @@ function PillSelect({
  * The results: the home's grid (`MarketGrid`) over `GET /markets` with the term and the filters.
  * A first page with cards in it is the server's read, hydrated (app/search/page.tsx); anything
  * else is read in the browser, whose rungs are the three N02 §3 keeps apart — the skeleton while
- * loading, '검색 결과가 없습니다.' for an answer with nothing in it, and a first load that failed,
+ * loading, '검색 결과가 없습니다.' for an answer with nothing in it — and under it, there only, the way
+ * to propose the market that was not found (#77, ADR-0089) — and a first load that failed,
  * which says whether the server could be reached at all (`searchErrorMessage`) and offers
  * 다시 시도 — plus the home's notice above the cards when a later refresh failed. Cards are `h3`,
  * under the screen's `h2`; each joins its market's room like the home's.
@@ -275,6 +277,8 @@ function SearchResults({ search, now }: { search: Search; now: number | undefine
       emptyMessage={copy.marketsSearchEmpty}
       errorMessage={searchErrorMessage(results.error)}
       cardTitleAs="h3"
+      // 시장 제안하기 on the no-results screen (ADR-0069 decision 4 #77 위치), under the message.
+      emptyAction={<ProposeMarketEntry testId="search-propose-market" />}
       testId="search-results"
     />
   );

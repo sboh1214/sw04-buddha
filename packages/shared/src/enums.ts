@@ -442,6 +442,29 @@ export const ADMIN_ACTION_TYPES = [
    * who asked — no one else retracts it.
    */
   'account_restriction_retract',
+  /**
+   * 시장 제안 (#77): an admin started reviewing a proposal (접수 → 검토). Target `market_proposal`
+   * / its id, payload `{from, to}` (the statuses). Written in the transaction that moves the row,
+   * as are the three below: the record of which operator did what when (ADR-0069 decision 4 #77,
+   * 검토 흐름·기록), which the proposal's own columns repeat for the admin screen.
+   */
+  'proposal_review',
+  /**
+   * A proposal was adopted (검토 → 채택): payload `{from, to, marketId, marketCreated, memo}` — the
+   * market linked (a draft made from the proposal, `marketCreated`, or an existing one) or none,
+   * and the memo the proposer sees. A draft made here also writes its own `market_create`.
+   */
+  'proposal_adopt',
+  /**
+   * A proposal was rejected (접수 or 검토 → 반려): payload `{from, to, reason, explanation,
+   * duplicateMarketId}`.
+   */
+  'proposal_reject',
+  /**
+   * The operators' internal memo on a proposal changed (never shown to the proposer): payload
+   * `{before, after}`. Written only when the memo changed.
+   */
+  'proposal_memo',
 ] as const;
 export type AdminActionType = (typeof ADMIN_ACTION_TYPES)[number];
 export const adminActionTypeSchema = z.enum(ADMIN_ACTION_TYPES);
@@ -601,6 +624,43 @@ export type RestrictionEndChangeKind = (typeof RESTRICTION_END_CHANGE_KINDS)[num
 export const restrictionEndChangeKindSchema = z
   .enum(RESTRICTION_END_CHANGE_KINDS)
   .meta({ id: 'RestrictionEndChangeKind' });
+
+// ---- market proposals (#77) ---------------------------------------------------------
+/**
+ * market_proposals.status (Postgres enum `market_proposal_status`), the five statuses of a 시장
+ * 제안 (ADR-0069 decision 4 #77): 접수 (`submitted`, where every proposal starts), 검토
+ * (`reviewing`), 채택 (`adopted`), 반려 (`rejected`) and 철회 (`retracted`, the fifth: the proposer
+ * took it back while it was 접수). The moves are 접수 → 검토 → 채택·반려, 접수 → 반려 and 접수 → 철회;
+ * 채택, 반려 and 철회 are final (PROPOSAL_TRANSITIONS, proposals.ts). Not `withdrawn`: that word is
+ * the cash-out's in the excluded-feature guard (guards/excluded.ts), which reads every stored name
+ * and route path.
+ */
+export const PROPOSAL_STATUSES = [
+  'submitted',
+  'reviewing',
+  'adopted',
+  'rejected',
+  'retracted',
+] as const;
+export type ProposalStatus = (typeof PROPOSAL_STATUSES)[number];
+export const proposalStatusSchema = z.enum(PROPOSAL_STATUSES).meta({ id: 'ProposalStatus' });
+
+/**
+ * market_proposals.rejection_reason (Postgres enum `market_proposal_rejection_reason`): the list a
+ * 반려 picks one from (ADR-0069 decision 4 #77, 사유) — 중복 (`duplicate`, with the existing
+ * market), 판정 기준이 모호함 (`ambiguous_criteria`), 개설 금지 주제 (`prohibited_topic`) and 기타
+ * (`other`). The explanation the proposer reads goes with every one of them.
+ */
+export const PROPOSAL_REJECTION_REASONS = [
+  'duplicate',
+  'ambiguous_criteria',
+  'prohibited_topic',
+  'other',
+] as const;
+export type ProposalRejectionReason = (typeof PROPOSAL_REJECTION_REASONS)[number];
+export const proposalRejectionReasonSchema = z
+  .enum(PROPOSAL_REJECTION_REASONS)
+  .meta({ id: 'ProposalRejectionReason' });
 
 /**
  * Seed categories (PLAN 1.3, 6.2): the five TOP-LEVEL slugs. Never sports or elections

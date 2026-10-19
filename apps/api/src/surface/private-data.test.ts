@@ -12,8 +12,10 @@
  * a 소개 and an interest category on A's public profile (#41), an operator's hiding of A's post
  * with its reason (#50), a report A filed and a report another member filed on A's post (#50), a
  * writing restriction A was given and an operator lifted, with the lift's reason (#185), an
- * account restriction A was given and lifted, each step approved by another admin, and a request
- * to restrict A again that waits for its approval (#139). Then:
+ * account restriction A was given and lifted, each step approved by another admin, a request to
+ * restrict A again that waits for its approval (#139), and two market proposals (#77): one 접수,
+ * one adopted into the open market every public call reads, with the operators' internal memo on
+ * it. Then:
  * - every registered public route (registry.ts) is called anonymously, as another account B and
  *   as A itself, and no answer may hold one of A's values or a field PRIVATE_DATA names, nor a
  *   field naming an excluded feature or keeping a probability — except that a route registered
@@ -26,7 +28,8 @@
  *   (N04 §7 "다른 사용자가 비공개 자산·주문을 조회할 수 없어야 한다"). A's own answer is
  *   looked at for one more thing: it may not hold what nobody is shown (`NEVER_SHOWN`: the keyed
  *   hash of A's number, the code hash and client address of A's 본인확인, the client address and
- *   browser of A's consents, A's former nickname). The field names in it
+ *   browser of A's consents, A's former nickname, the internal memo on A's proposal). The field
+ *   names in it
  *   are not looked at: the excluded-feature names are the public API's (owner decision
  *   2026-10-14 #113);
  * - every better-auth route that answers with an account's data (AUTH_ROUTES `answersAccount`)
@@ -57,6 +60,7 @@ import {
   createPost,
   createPostLike,
   createProfileImage,
+  createProposal,
   createReport,
   createSearch,
   createStartGrant,
@@ -176,6 +180,8 @@ interface Fixture {
   watchedCategory: string;
   /** A's recorded search (#15): the id B's delete names, its term a sentinel. */
   searchId: string;
+  /** A's 접수 proposal (#77): the id B's read and retract name. */
+  proposalId: string;
   /** A's verified number (ADR-0070), digits: what B's code request names. */
   phone: string;
   /** An active category: what B's refused interest categories name (#58). */
@@ -193,6 +199,7 @@ interface Fixture {
     reports: string;
     /** The action an operator took on A (#50). */
     actions: string;
+    proposals: string;
   };
   sentinels: readonly Sentinel[];
 }
@@ -416,6 +423,8 @@ const NEVER_SHOWN: readonly string[] = [
   // member's), and a request to restrict A its operator retracted: neither is ever A's to read.
   'account restriction memo',
   'retracted restriction request',
+  // #77: the operators' internal memo is theirs alone — the proposer's own answers included.
+  'proposal internal memo',
 ];
 
 interface OwnerCase {
@@ -748,6 +757,36 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
   // account closes (A's record, number and profile stay, below).
   'POST /me/closure': {
     body: (fixture) => ({ confirmation: '탈퇴', expectedAccountId: fixture.a.id }),
+    status: 403,
+  },
+  // B's proposals: B proposed nothing, so nothing of A's may come back (#77), paged from A's
+  // newest proposal.
+  'GET /me/proposals': {
+    query: { cursor: (fixture) => fixture.cursors.proposals, limit: LIMIT },
+    status: 200,
+    own: ['proposal id', 'proposal question', 'proposal yes condition', 'proposal adoption memo'],
+  },
+  'GET /me/proposals/:id': {
+    params: { id: (fixture) => fixture.proposalId },
+    status: 404,
+    own: ['proposal id', 'proposal question'],
+  },
+  // B's cookie naming A's account: refused before anything is written — no proposal of anybody's,
+  // and nothing counted against A's number (below).
+  'POST /me/proposals': {
+    body: (fixture) => ({
+      question: 'B의 제안',
+      deadline: '2099-01-01',
+      yesCondition: 'B의 조건',
+      expectedSources: 'B의 출처',
+      expectedAccountId: fixture.a.id,
+    }),
+    status: 403,
+  },
+  // B's cookie naming A's account and A's proposal: refused, and A's proposal stays 접수 (below).
+  'POST /me/proposals/:id/retract': {
+    params: { id: (fixture) => fixture.proposalId },
+    body: (fixture) => ({ expectedAccountId: fixture.a.id }),
     status: 403,
   },
   'POST /payments/charge': {
@@ -1479,6 +1518,32 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     const searchTerm = `leak-search-${tag}`;
     const search = await createSearch(t.db, { userId: a.id, query: searchTerm });
 
+    // A's proposals (#77), counted by A's number's hash: one adopted into the open market every
+    // public call reads — a public market answer naming who proposed it would carry A's id or
+    // nickname, or the proposal's own words — with the operators' internal memo on it (nobody's
+    // to see but theirs, A included), and one 접수, the one B's read and retract name.
+    const proposalQuestion = `leak-proposal-${tag}`;
+    const proposalCondition = `leak-condition-${tag}`;
+    const adoptionMemo = `leak-adoption-${tag}`;
+    const internalMemo = `leak-internal-${tag}`;
+    const adoptedProposal = await createProposal(t.db, {
+      userId: a.id,
+      phoneHash,
+      question: proposalQuestion,
+      yesCondition: proposalCondition,
+      status: 'adopted',
+      adminId: admin.id,
+      adoptionMemo,
+      marketId: market.id,
+      internalMemo,
+    });
+    const proposal = await createProposal(t.db, {
+      userId: a.id,
+      phoneHash,
+      question: `${proposalQuestion}-2`,
+      createdAt: new Date(adoptedProposal.createdAt.getTime() + 1_000),
+    });
+
     const paymentKey = `leak-payment-${tag}`;
     const [payment] = await t.db
       .insert(schema.payments)
@@ -1525,6 +1590,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       judgedMarket: judged,
       watchedCategory: watchedCategory!.slug,
       searchId: search.id,
+      proposalId: proposal.id,
       phone,
       categoryId,
       paymentId: payment!.id,
@@ -1538,6 +1604,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         comments: cursorAfter(hiddenComment),
         reports: cursorAfter(report),
         actions: cursorAfter(hiding),
+        proposals: cursorAfter(proposal),
       },
       sentinels: [
         text('user id', a.id),
@@ -1592,6 +1659,12 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         text('watched market slug', watched.slug),
         text('search term', searchTerm),
         text('search id', search.id),
+        text('proposal id', proposal.id),
+        text('adopted proposal id', adoptedProposal.id),
+        text('proposal question', proposalQuestion),
+        text('proposal yes condition', proposalCondition),
+        text('proposal adoption memo', adoptionMemo),
+        text('proposal internal memo', internalMemo),
         text('start grant id', startGrant.id),
         text('phone hash', phoneHash),
         amount('start grant amount', AMOUNTS.startGrant),
@@ -2162,6 +2235,30 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       status: 200,
       leaks: [],
     });
+
+    // B's refused proposal and retract left A's proposals as they were and wrote nothing for B
+    // (#77). B retracting A's proposal as B itself is NOT_FOUND: it is looked up among B's own.
+    const proposals = () =>
+      t.db
+        .select({
+          id: schema.marketProposals.id,
+          userId: schema.marketProposals.userId,
+          status: schema.marketProposals.status,
+        })
+        .from(schema.marketProposals)
+        .orderBy(schema.marketProposals.createdAt);
+    const aProposals = [
+      { id: sentinel('adopted proposal id'), userId: f.a.id, status: 'adopted' },
+      { id: f.proposalId, userId: f.a.id, status: 'submitted' },
+    ];
+    expect(await proposals()).toEqual(aProposals);
+    const retractAsB = await call(routeOf('POST /me/proposals/:id/retract'), {
+      params: { id: f.proposalId },
+      body: { expectedAccountId: f.b.id },
+      cookie: f.b.cookie,
+    });
+    expect(retractAsB.statusCode).toBe(404);
+    expect(await proposals()).toEqual(aProposals);
   });
 
   // ---- the market room --------------------------------------------------------------------

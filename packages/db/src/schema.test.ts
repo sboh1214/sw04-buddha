@@ -11,6 +11,8 @@ import {
   MARKET_STATUSES,
   MODERATION_REASONS,
   PRICE_TICK_TRIGGERS,
+  PROPOSAL_REJECTION_REASONS,
+  PROPOSAL_STATUSES,
   RELEASE_SETTING_STATUSES,
   REPORT_REASONS,
   REPORT_STATUSES,
@@ -37,6 +39,7 @@ import {
   linkFlags,
   linkUses,
   marketLinks,
+  marketProposals,
   marketSearchTerms,
   marketSearches,
   marketSettlementSteps,
@@ -103,6 +106,7 @@ import {
   createPostLike,
   createPosition,
   createProfileImage,
+  createProposal,
   createReport,
   createSearch,
   createSettlementStep,
@@ -4625,6 +4629,262 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       .where(eq(profiles.userId, profile.userId))
       .returning();
     expect(updated!.updatedAt.getTime()).toBeGreaterThan(profile.updatedAt.getTime());
+  });
+
+  describe('market proposals (migration 0032, #77)', () => {
+    it('labels its enums like PROPOSAL_STATUSES and PROPOSAL_REJECTION_REASONS', async () => {
+      async function labels(type: string): Promise<string[]> {
+        const { rows } = await t.db.execute<{ label: string }>(sql`
+          SELECT e.enumlabel AS label FROM pg_enum e JOIN pg_type ty ON ty.oid = e.enumtypid
+          WHERE ty.typname = ${type} ORDER BY e.enumsortorder`);
+        return rows.map((r) => r.label);
+      }
+      expect(await labels('market_proposal_status')).toEqual([...PROPOSAL_STATUSES]);
+      expect(await labels('market_proposal_rejection_reason')).toEqual([
+        ...PROPOSAL_REJECTION_REASONS,
+      ]);
+    });
+
+    it('stores a proposal submitted, with its number hash and the form as sent, and resolves it', async () => {
+      const { user: u } = await createUser(t.db);
+      const category = await createCategory(t.db);
+      const hash = randomPhoneHash();
+      const row = await createProposal(t.db, {
+        userId: u.id,
+        phoneHash: hash,
+        question: '질문',
+        deadline: '2031-02-03',
+        background: '배경',
+        categoryId: category.id,
+      });
+      expect(row).toMatchObject({
+        userId: u.id,
+        phoneHash: hash,
+        question: '질문',
+        deadline: '2031-02-03',
+        background: '배경',
+        categoryId: category.id,
+        status: 'submitted',
+        reviewStartedAt: null,
+        decidedAt: null,
+        retractedAt: null,
+      });
+      const found = await t.db.query.marketProposals.findFirst({
+        where: eq(marketProposals.id, row.id),
+        with: { user: true, category: true },
+      });
+      expect(found?.user.id).toBe(u.id);
+      expect(found?.category?.id).toBe(category.id);
+    });
+
+    it('inserts a proposal submitted only, and never a blank or oversized field', async () => {
+      const { user: u } = await createUser(t.db);
+      const values = {
+        userId: u.id,
+        phoneHash: randomPhoneHash(),
+        question: '질문',
+        deadline: '2031-02-03',
+        yesCondition: 'YES 조건',
+        expectedSources: '출처',
+      };
+      await expect(
+        t.db.insert(marketProposals).values({ ...values, status: 'reviewing' }),
+      ).rejects.toSatisfy((e) => sqlState(e) === '23514');
+      for (const blank of [{ question: '  ' }, { yesCondition: '' }, { background: ' ' }]) {
+        await expect(
+          t.db.insert(marketProposals).values({ ...values, ...blank }),
+        ).rejects.toSatisfy(
+          (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'market_proposals_text_check',
+        );
+      }
+      await expect(
+        t.db.insert(marketProposals).values({ ...values, question: '가'.repeat(101) }),
+      ).rejects.toSatisfy((e) => sqlState(e) === '22001');
+      // A hash is 64 lower-case hex characters, never a number in clear.
+      await expect(
+        t.db.insert(marketProposals).values({ ...values, phoneHash: '01012345678' }),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'market_proposals_phone_hash_check',
+      );
+    });
+
+    it('moves along the owner’s steps only, and never out of a final status', async () => {
+      const { user: u } = await createUser(t.db);
+      const { user: admin } = await createUser(t.db, { role: 'admin' });
+      const at = new Date();
+      const update = (id: string, values: Partial<typeof marketProposals.$inferInsert>) =>
+        t.db.update(marketProposals).set(values).where(eq(marketProposals.id, id));
+      const refused = (e: unknown) => sqlState(e) === '23514';
+
+      // 접수 → 채택 skips the review.
+      const submitted = await createProposal(t.db, { userId: u.id });
+      await expect(
+        update(submitted.id, {
+          status: 'adopted',
+          reviewStartedAt: at,
+          reviewStartedBy: admin.id,
+          decidedAt: at,
+          decidedBy: admin.id,
+        }),
+      ).rejects.toSatisfy(refused);
+      // 접수 → 반려 directly records no review start.
+      await expect(
+        update(submitted.id, {
+          status: 'rejected',
+          reviewStartedAt: at,
+          reviewStartedBy: admin.id,
+          decidedAt: at,
+          decidedBy: admin.id,
+          rejectionReason: 'other',
+          rejectionExplanation: '설명',
+        }),
+      ).rejects.toSatisfy(refused);
+      // 검토 → 철회: the proposer retracts while 접수 only.
+      const reviewing = await createProposal(t.db, { userId: u.id, status: 'reviewing' });
+      await expect(
+        update(reviewing.id, { status: 'retracted', retractedAt: at }),
+      ).rejects.toSatisfy(refused);
+      // 검토 → 접수 goes back.
+      await expect(
+        update(reviewing.id, { status: 'submitted', reviewStartedAt: null, reviewStartedBy: null }),
+      ).rejects.toSatisfy(refused);
+      // A decision keeps the review start it came after.
+      await expect(
+        update(reviewing.id, {
+          status: 'rejected',
+          reviewStartedBy: u.id,
+          decidedAt: at,
+          decidedBy: admin.id,
+          rejectionReason: 'other',
+          rejectionExplanation: '설명',
+        }),
+      ).rejects.toSatisfy(refused);
+
+      // 채택, 반려 and 철회 are final.
+      const adopted = await createProposal(t.db, {
+        userId: u.id,
+        status: 'adopted',
+        adminId: admin.id,
+      });
+      const rejected = await createProposal(t.db, {
+        userId: u.id,
+        status: 'rejected',
+        rejectUnreviewed: true,
+        adminId: admin.id,
+      });
+      expect(rejected.reviewStartedAt).toBeNull();
+      const retracted = await createProposal(t.db, { userId: u.id, status: 'retracted' });
+      for (const final of [adopted, rejected, retracted]) {
+        for (const status of PROPOSAL_STATUSES.filter((s) => s !== final.status)) {
+          await expect(update(final.id, { status })).rejects.toSatisfy(refused);
+        }
+      }
+      // Nor does a decision change in place.
+      await expect(update(adopted.id, { adoptionMemo: '다른 메모' })).rejects.toSatisfy(refused);
+      await expect(update(rejected.id, { rejectionExplanation: '다른 설명' })).rejects.toSatisfy(
+        refused,
+      );
+    });
+
+    it('never edits what was submitted, and changes only the internal memo without a move', async () => {
+      const { user: u } = await createUser(t.db);
+      const row = await createProposal(t.db, { userId: u.id, status: 'adopted' });
+      for (const values of [
+        { question: '다른 질문' },
+        { deadline: '2040-01-01' },
+        { yesCondition: '다른 조건' },
+        { expectedSources: '다른 출처' },
+        { background: '다른 배경' },
+        { phoneHash: randomPhoneHash() },
+        { categoryId: (await createCategory(t.db)).id },
+      ]) {
+        await expect(
+          t.db.update(marketProposals).set(values).where(eq(marketProposals.id, row.id)),
+        ).rejects.toSatisfy((e) => sqlState(e) === '23514');
+      }
+      const [memo] = await t.db
+        .update(marketProposals)
+        .set({ internalMemo: '내부 메모' })
+        .where(eq(marketProposals.id, row.id))
+        .returning();
+      expect(memo?.internalMemo).toBe('내부 메모');
+    });
+
+    it('ties each status to its columns: a reason and explanation for 반려, a market only for 중복 and 채택', async () => {
+      const { user: u } = await createUser(t.db);
+      const { user: admin } = await createUser(t.db, { role: 'admin' });
+      const market = await createMarket(t.db, { createdBy: admin.id });
+      const at = new Date();
+      const rejectWith = async (values: Partial<typeof marketProposals.$inferInsert>) => {
+        const row = await createProposal(t.db, { userId: u.id });
+        return t.db
+          .update(marketProposals)
+          .set({ status: 'rejected', decidedAt: at, decidedBy: admin.id, ...values })
+          .where(eq(marketProposals.id, row.id));
+      };
+      const check = (name: string) => (e: unknown) =>
+        sqlState(e) === '23514' && sqlConstraint(e) === name;
+      await expect(rejectWith({ rejectionExplanation: '설명' })).rejects.toSatisfy(
+        check('market_proposals_rejection_check'),
+      );
+      await expect(rejectWith({ rejectionReason: 'other' })).rejects.toSatisfy(
+        check('market_proposals_rejection_check'),
+      );
+      await expect(
+        rejectWith({ rejectionReason: 'other', rejectionExplanation: ' ' }),
+      ).rejects.toSatisfy(check('market_proposals_rejection_check'));
+      // 중복 names the existing market; nothing else does.
+      await expect(
+        rejectWith({ rejectionReason: 'duplicate', rejectionExplanation: '설명' }),
+      ).rejects.toSatisfy(check('market_proposals_rejection_check'));
+      await expect(
+        rejectWith({
+          rejectionReason: 'other',
+          rejectionExplanation: '설명',
+          duplicateMarketId: market.id,
+        }),
+      ).rejects.toSatisfy(check('market_proposals_rejection_check'));
+      await rejectWith({
+        rejectionReason: 'duplicate',
+        rejectionExplanation: '설명',
+        duplicateMarketId: market.id,
+      });
+      // Only 채택 carries a memo or a market.
+      const reviewing = await createProposal(t.db, { userId: u.id, status: 'reviewing' });
+      await expect(
+        t.db
+          .update(marketProposals)
+          .set({
+            status: 'rejected',
+            decidedAt: at,
+            decidedBy: admin.id,
+            rejectionReason: 'other',
+            rejectionExplanation: '설명',
+            marketId: market.id,
+          })
+          .where(eq(marketProposals.id, reviewing.id)),
+      ).rejects.toSatisfy(check('market_proposals_adoption_check'));
+      const adopted = await createProposal(t.db, {
+        userId: u.id,
+        status: 'adopted',
+        adoptionMemo: '메모',
+        marketId: market.id,
+      });
+      const found = await t.db.query.marketProposals.findFirst({
+        where: eq(marketProposals.id, adopted.id),
+        with: { market: true },
+      });
+      expect(found?.market?.id).toBe(market.id);
+    });
+
+    it('keeps a proposal through its account and its market: both RESTRICT', async () => {
+      const { user: u } = await createUser(t.db);
+      const market = await createMarket(t.db);
+      await createProposal(t.db, { userId: u.id, status: 'adopted', marketId: market.id });
+      await expect(t.db.delete(user).where(eq(user.id, u.id))).rejects.toSatisfy(
+        (e) => sqlState(e) === '23503',
+      );
+    });
   });
 
   describe('timestamptz precision (migration 0005)', () => {

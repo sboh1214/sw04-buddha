@@ -4,6 +4,7 @@ import { Alert, Button, Grid, Skeleton, Stack } from '@chakra-ui/react';
 import { type InfiniteData } from '@tanstack/react-query';
 import type { Route } from 'next';
 import NextLink from 'next/link';
+import { type ReactNode } from 'react';
 import { MARKET_GRID_COLUMNS, MarketCard } from '@/components/market/market-card';
 import { EmptyState } from '@/components/ui/empty-state';
 import { LoadMoreFailed } from '@/components/ui/load-more-failed';
@@ -163,6 +164,7 @@ export function MarketGrid({
   emptyMessage,
   errorMessage = copy.errUnknown,
   cardTitleAs,
+  emptyAction,
   testId,
 }: {
   list: CardList;
@@ -171,6 +173,11 @@ export function MarketGrid({
   errorMessage?: string;
   /** The cards' heading level: `MarketCard`'s own default (`h2`) unless a screen nests them. */
   cardTitleAs?: 'h2' | 'h3' | 'h4';
+  /**
+   * What follows the empty message, outside it: the search's 시장 제안하기 (#77, ADR-0089). Only
+   * for an answer with nothing in it — never for a load that failed or is still out.
+   */
+  emptyAction?: ReactNode;
   testId: string;
 }) {
   const rows = list.data?.pages.flatMap((page) => page.items) ?? [];
@@ -218,7 +225,10 @@ export function MarketGrid({
           </Button>
         </Stack>
       ) : rows.length === 0 ? (
-        <EmptyState message={emptyMessage} data-testid="markets-empty" />
+        <>
+          <EmptyState message={emptyMessage} data-testid="markets-empty" />
+          {emptyAction}
+        </>
       ) : (
         <>
           <Grid templateColumns={MARKET_GRID_COLUMNS} gap="4" data-testid="markets-grid">

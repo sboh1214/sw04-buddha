@@ -10,6 +10,7 @@
  * `restrictions.controller.test` for the writing restrictions and their shortenings and lifts
  * (#185),
  * `admin-themes.controller.test` for the themes, their markets and notices,
+ * `admin-proposals.controller.test` for the review of market proposals,
  * `release-settings.controller.test` for the release settings,
  * `admin-accounts.controller.test` for the admin grants and revokes,
  * `notices.controller.test` for the notices' writes, pins and unpins and
@@ -97,6 +98,10 @@ const AUDITED: Readonly<Record<string, AdminActionType>> = {
   // Owner decision 2026-10-23: the one who asked may retract a request before its decision.
   'POST /admin/moderation/account-restriction-requests/:requestId/retract':
     'account_restriction_retract',
+  'POST /admin/proposals/:id/review': 'proposal_review',
+  'POST /admin/proposals/:id/adopt': 'proposal_adopt',
+  'PUT /admin/proposals/:id/internal-memo': 'proposal_memo',
+  'POST /admin/proposals/:id/reject': 'proposal_reject',
 };
 
 const adminRoutes = discoverRoutes().filter((route) => isAdminPath(route.path));

@@ -298,6 +298,8 @@ describe('isPrivateQueryKey', () => {
     // reasons (#45-5: the member's alone), read with their cookie; a profile's lists are public.
     // 'my-moderation' came with #50 (ADR-0081): the member's own reports and the actions taken on
     // them (PRIVATE_DATA `reports`, `moderation`); the operators' reads live under 'admin'.
+    // 'proposals' came with #77 (ADR-0089): a proposal is the proposer's and the operators' alone
+    // (ADR-0069 decision 4) — that PR changed the list too.
     expect([...PRIVATE_QUERY_ROOTS].sort()).toEqual(
       [
         'admin',
@@ -312,6 +314,7 @@ describe('isPrivateQueryKey', () => {
         'likes',
         'my-authored',
         'my-moderation',
+        'proposals',
       ].sort(),
     );
     expect(PRIVATE_QUERY_ROOTS.has('disputes')).toBe(false);
