@@ -780,7 +780,7 @@ export const copy = {
   // --- community (#46, ADR-0073) ---
   // 근거 글(N05 §2)과 그것을 모은 커뮤니티 목록. 글 하나는 시장 하나에 달리고(#45-1), 목록은 최신순
   // 하나에 시장·카테고리 필터와 제목·본문 검색이 있다(#45-7). 누구나 읽고 온보딩을 마친 계정이 쓴다.
-  // 카드의 댓글 수·좋아요 수는 #48·#49가 생길 때 더한다(없는 수를 그리지 않는다).
+  // 카드의 댓글 수는 #48이 더했고(아래 commentsHeading), 좋아요 수는 #49가 더한다(없는 수를 그리지 않는다).
   communityTitle: '커뮤니티',
   communityWrite: '글쓰기',
   communityListLabel: '근거 글 목록',
@@ -802,7 +802,7 @@ export const copy = {
   postEdited: '수정됨',
   postImageAlt: '글에 넣은 이미지',
   postThumbnailAlt: '글의 첫 이미지',
-  // 자리표시(#45-5): 작성자와 글의 어떤 말도 보이지 않고 시장만 남는다.
+  // 자리표시(#45-5): 작성자와 글의 어떤 말도 보이지 않고 시장과 그 아래 댓글만 남는다(#48).
   postDeletedPlaceholder: '삭제된 글입니다.',
   postHiddenPlaceholder: '운영 정책에 따라 숨긴 글입니다.',
   postNotFound: '없거나 삭제된 글입니다.',
@@ -928,6 +928,48 @@ export const copy = {
   errImageUnreadable: '이미지를 읽을 수 없습니다. 다른 파일을 골라 주세요.',
   errImageEmpty: '빈 파일입니다. 다른 파일을 골라 주세요.',
   errImageUpload: '이미지를 올리지 못했습니다. 다시 시도해 주세요.',
+
+  // --- comments (#48, ADR-0074) ---
+  // 근거 글 아래의 댓글과 그 아래의 답글(대댓글). 두 층뿐이라 답글에 답하면 같은 댓글 아래 답글이 된다
+  // (#45-2). 모두 오래된 것부터(작성 순). 평문이고 http·https 주소는 링크로 보이며 1,000자, 줄바꿈은
+  // 그대로다(#45-3). 누구나 읽고 온보딩을 마친 계정이 쓴다. 댓글 수는 지우거나 숨기지 않은 댓글과
+  // 답글의 수일 뿐이다(ADR-0074).
+  commentsHeading: '댓글',
+  commentsEmpty: '아직 댓글이 없습니다.',
+  commentsRepliesLabel: '답글 목록',
+  commentWriteLabel: '댓글 쓰기',
+  commentWritePlaceholder: '댓글을 입력해 주세요. http·https 주소는 링크로 보입니다.',
+  commentReplyLabel: '답글 쓰기',
+  commentReplyPlaceholder: '답글을 입력해 주세요.',
+  commentSubmit: '올리기',
+  commentLengthUnit: '자',
+  commentReply: '답글',
+  commentEdit: '수정',
+  commentEditLabel: '댓글 수정',
+  commentEditSave: '저장',
+  commentDelete: '삭제',
+  commentDeleteTitle: '댓글을 삭제합니다',
+  commentDeleteBody: '삭제한 댓글은 되살릴 수 없습니다. 계속할까요?',
+  commentDeleteConfirm: '삭제하기',
+  commentDeletedToast: '댓글을 삭제했습니다.',
+  commentSignedOut: '댓글을 쓰려면 로그인해 주세요.',
+  // 자리표시(#45-5): 작성자와 댓글의 어떤 말도 보이지 않는다. 글의 자리표시와 같은 말이다.
+  commentDeletedPlaceholder: '삭제된 글입니다.',
+  commentHiddenPlaceholder: '운영 정책에 따라 숨긴 글입니다.',
+  // 숨기거나 지운 글은 새 댓글을, 숨긴 댓글은 새 답글을 받지 않는다(#45-5). 지워 자리표시로 남은 댓글도
+  // 새 답글을 받지 않는다(ADR-0074 7-4, 오너에게 묻는 중).
+  commentClosedPostHidden: '운영 정책에 따라 숨긴 글에는 댓글을 달 수 없습니다.',
+  commentClosedPostDeleted: '삭제된 글에는 댓글을 달 수 없습니다.',
+  errCommentParentHidden: '운영 정책에 따라 숨긴 댓글에는 답글을 달 수 없습니다.',
+  errCommentParentDeleted: '삭제된 댓글에는 답글을 달 수 없습니다.',
+  errCommentParentGone: '답글을 달 댓글이 없거나 삭제되었습니다.',
+  errCommentNotAllowed: '이 글이나 댓글에는 더 달 수 없습니다.',
+  // 숨긴 댓글(#45-5): 작성자가 지울 수는 있지만 그 단추는 #50·#51이 붙인다 — 글과 같다.
+  errCommentNotEditable: '운영 정책에 따라 숨긴 댓글은 고칠 수 없습니다.',
+  errCommentGone: '없거나 삭제된 댓글입니다.',
+  errCommentNotYours: '다른 사람의 댓글은 고치거나 삭제할 수 없습니다.',
+  errCommentBodyEmpty: '댓글을 입력해 주세요.',
+  errCommentBodyTooLong: '댓글은 1,000자 이하로 입력해 주세요.',
 
   // 관리자 시장 폼의 미리보기 (Q-M3-6): 실제 카드·규칙 컴포넌트를 그대로 그린다.
   adminMarketPreview: '미리보기',

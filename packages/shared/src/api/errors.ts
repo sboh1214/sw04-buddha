@@ -93,6 +93,16 @@ export const ERROR_CODES = [
    * imageNotAllowedDetailsSchema.
    */
   'IMAGE_NOT_ALLOWED',
+  /**
+   * A new comment where none is taken: the post is hidden or deleted, or the comment it would
+   * hang under is. Details carry the reason, commentNotAllowedDetailsSchema.
+   */
+  'COMMENT_NOT_ALLOWED',
+  /**
+   * The author cannot edit this comment now: an operator hid it. A hidden comment can still be
+   * deleted. Details carry the reason, commentNotEditableDetailsSchema.
+   */
+  'COMMENT_NOT_EDITABLE',
   'INTERNAL',
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];

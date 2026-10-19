@@ -36,6 +36,7 @@ export * from './payment-events.js';
 export * from './payments.js';
 export * from './phone-verifications.js';
 export * from './positions.js';
+export * from './post-comments.js';
 export * from './posts.js';
 export * from './price-ticks.js';
 export * from './profiles.js';

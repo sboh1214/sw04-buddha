@@ -32,8 +32,8 @@ import { firstValue } from './market-ssr';
  * in the title and the text (#45-7); anyone reads, signed in or not, and an account that finished
  * the onboarding writes (#57-8). A card is the title, two lines of the text without formatting, a
  * small square thumbnail of the first image, the author, the time and the market's title (owner
- * decision 2026-10-18); the comment and like counts come with #48 and #49 and are not drawn
- * before them.
+ * decision 2026-10-18) and the comment count (#48, lib/comments.ts); the like count comes with #49
+ * and is not drawn before it.
  */
 
 /** The community list's address (N02 §2: one of the three top-level areas, #16). */
@@ -356,9 +356,9 @@ export function isOwnPost(author: PostAuthor, viewerPublicId: string | undefined
 }
 
 /**
- * What a post page shows instead of a post (#45-5): '삭제된 글입니다' for a deleted post replies
- * still hang under (none before #48) and '운영 정책에 따라 숨긴 글입니다' for a hidden one — never
- * the author or a word of the post, only its market.
+ * What a post page shows instead of a post (#45-5): '삭제된 글입니다' for a deleted post comments
+ * still hang under (#48) and '운영 정책에 따라 숨긴 글입니다' for a hidden one — never the author or
+ * a word of the post, only its market and its comments.
  */
 export function postPlaceholderMessage(state: Exclude<PostState, 'published'>): string {
   return state === 'deleted' ? copy.postDeletedPlaceholder : copy.postHiddenPlaceholder;

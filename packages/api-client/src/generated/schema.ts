@@ -452,6 +452,40 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/comments/{commentId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** The author replaces the body; the comment shows as edited and the earlier version is kept for operators. The same text changes nothing. A hidden comment cannot be edited (COMMENT_NOT_EDITABLE) */
+        put: operations["updateComment"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/comments/{commentId}/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** The author deletes the comment (a hidden one too): a 댓글 stays as the placeholder 삭제된 글입니다 while 대댓글 hang under it, and anything else is gone from every view. Never restored */
+        post: operations["deleteComment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/coupons/redeem": {
         parameters: {
             query?: never;
@@ -984,6 +1018,24 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/posts/{postId}/comments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A post’s comments: its 댓글 oldest first, a page at a time, each with every 대댓글 under it oldest first; a deleted 댓글 that 대댓글 hang under and a hidden comment are placeholders, other deleted ones are left out. A post that is gone is NOT_FOUND */
+        get: operations["listComments"];
+        put?: never;
+        /** A comment of plain text (at most 1000 characters, line breaks kept): a 댓글, or with parentId a 대댓글 — under the 댓글 named, or under the 댓글 of the 대댓글 named. A hidden or deleted post or 댓글 takes none (COMMENT_NOT_ALLOWED) */
+        post: operations["createComment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/posts/{postId}/delete": {
         parameters: {
             query?: never;
@@ -1226,6 +1278,15 @@ export type components = {
         };
         /** @description Integer amount of Coin as a decimal string (bigint). */
         CoinAmount: string;
+        CommentDeletion: {
+            /** Format: uuid */
+            id: string;
+            placeholder: boolean;
+        };
+        CommentThread: {
+            comment: components["schemas"]["PostComment"];
+            replies: components["schemas"]["PostComment"][];
+        };
         ConfirmPhoneVerificationBody: {
             code: string;
             expectedAccountId: string;
@@ -1262,6 +1323,13 @@ export type components = {
             /** @default 0 */
             sortOrder: number;
         };
+        CreateCommentBody: {
+            /** @description Plain text, line breaks kept, at most 1000 characters after trimming; web addresses show as links */
+            body: string;
+            expectedAccountId: string;
+            /** Format: uuid */
+            parentId?: string | null;
+        };
         CreateCouponBody: {
             amountCoin: components["schemas"]["CoinAmount"];
             code?: components["schemas"]["CouponCode"];
@@ -1296,7 +1364,17 @@ export type components = {
             /** @default 20 */
             limit: number;
         };
+        DeleteCommentBody: {
+            expectedAccountId: string;
+        };
+        DeletedComment: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            state: "deleted";
+        };
         DeletedPost: {
+            commentCount: number;
             /** Format: uuid */
             id: string;
             market: components["schemas"]["PostMarket"];
@@ -1307,7 +1385,7 @@ export type components = {
             expectedAccountId: string;
         };
         /** @enum {string} */
-        ErrorCode: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "VALIDATION_ERROR" | "MARKET_NOT_OPEN" | "INSUFFICIENT_BALANCE" | "PRICE_MOVED" | "DUPLICATE_REQUEST" | "RATE_LIMITED" | "RULES_REQUIRED" | "VERIFICATION_REQUIRED" | "REFUND_NOT_ALLOWED" | "PAYMENT_GATEWAY_REFUSED" | "PAYMENT_GATEWAY_ERROR" | "ROLE_CHANGE_NOT_ALLOWED" | "APPROVAL_NOT_ALLOWED" | "PHONE_VERIFICATION_NOT_ALLOWED" | "PHONE_VERIFICATION_LIMITED" | "VERIFICATION_CODE_REJECTED" | "SMS_SEND_FAILED" | "SMS_SEND_UNCONFIRMED" | "ONBOARDING_REQUIRED" | "NICKNAME_NOT_ALLOWED" | "POST_NOT_EDITABLE" | "IMAGE_NOT_ALLOWED" | "INTERNAL";
+        ErrorCode: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "VALIDATION_ERROR" | "MARKET_NOT_OPEN" | "INSUFFICIENT_BALANCE" | "PRICE_MOVED" | "DUPLICATE_REQUEST" | "RATE_LIMITED" | "RULES_REQUIRED" | "VERIFICATION_REQUIRED" | "REFUND_NOT_ALLOWED" | "PAYMENT_GATEWAY_REFUSED" | "PAYMENT_GATEWAY_ERROR" | "ROLE_CHANGE_NOT_ALLOWED" | "APPROVAL_NOT_ALLOWED" | "PHONE_VERIFICATION_NOT_ALLOWED" | "PHONE_VERIFICATION_LIMITED" | "VERIFICATION_CODE_REJECTED" | "SMS_SEND_FAILED" | "SMS_SEND_UNCONFIRMED" | "ONBOARDING_REQUIRED" | "NICKNAME_NOT_ALLOWED" | "POST_NOT_EDITABLE" | "IMAGE_NOT_ALLOWED" | "COMMENT_NOT_ALLOWED" | "COMMENT_NOT_EDITABLE" | "INTERNAL";
         ErrorEnvelope: {
             error: {
                 code: components["schemas"]["ErrorCode"];
@@ -1327,7 +1405,14 @@ export type components = {
             /** @enum {string} */
             side: "buy" | "sell";
         };
+        HiddenComment: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            state: "hidden";
+        };
         HiddenPost: {
+            commentCount: number;
             /** Format: uuid */
             id: string;
             market: components["schemas"]["PostMarket"];
@@ -1615,6 +1700,7 @@ export type components = {
             /** @enum {string} */
             type: "table";
         };
+        PostComment: components["schemas"]["PublishedComment"] | components["schemas"]["DeletedComment"] | components["schemas"]["HiddenComment"];
         PostDeletion: {
             /** Format: uuid */
             id: string;
@@ -1679,6 +1765,7 @@ export type components = {
         };
         PostSummary: {
             author: components["schemas"]["PostAuthor"];
+            commentCount: number;
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
@@ -1722,9 +1809,24 @@ export type components = {
             /** Format: date-time */
             ts: string;
         };
+        PublishedComment: {
+            author: components["schemas"]["PostAuthor"];
+            body: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            editedAt: string | null;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            parentId: string | null;
+            /** @enum {string} */
+            state: "published";
+        };
         PublishedPost: {
             author: components["schemas"]["PostAuthor"];
             body: components["schemas"]["PostDocument"];
+            commentCount: number;
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
@@ -1888,6 +1990,11 @@ export type components = {
             isActive?: boolean;
             priceKrw?: number;
             sortOrder?: number;
+        };
+        UpdateCommentBody: {
+            /** @description Plain text, line breaks kept, at most 1000 characters after trimming; web addresses show as links */
+            body: string;
+            expectedAccountId: string;
         };
         UpdateCouponBody: {
             /** Format: date-time */
@@ -4311,6 +4418,159 @@ export interface operations {
             };
         };
     };
+    updateComment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                commentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateCommentBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["PublishedComment"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | COMMENT_NOT_EDITABLE */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    deleteComment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                commentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeleteCommentBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["CommentDeletion"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     redeemCoupon: {
         parameters: {
             query?: never;
@@ -6538,6 +6798,142 @@ export interface operations {
                 };
             };
             /** @description ONBOARDING_REQUIRED | POST_NOT_EDITABLE */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listComments: {
+        parameters: {
+            query?: {
+                /** @description Opaque; `meta.nextCursor` of the previous page. */
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                postId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["CommentThread"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    createComment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                postId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateCommentBody"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["PublishedComment"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | COMMENT_NOT_ALLOWED */
             409: {
                 headers: {
                     [name: string]: unknown;

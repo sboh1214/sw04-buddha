@@ -87,10 +87,17 @@ export const postMarketSchema = z
 export type PostMarket = z.infer<typeof postMarketSchema>;
 
 /**
+ * How many comments the public reads under a post (#45-7: «댓글 수»; #48, ADR-0074): its 댓글 and
+ * 대댓글 alike, never a deleted or a hidden one. A number shown beside the post, never a score of its
+ * author (N05 §2).
+ */
+const commentCountSchema = z.number().int().min(0);
+
+/**
  * One card of the community list (owner decisions 2026-10-18: a preview card — the title, two lines
- * of the text without formatting, the first image as a small square thumbnail, the author, the
- * time and the market's title). The comment and like counts the owner listed come with the comments
- * (#48) and the likes (#49): nothing here counts what does not exist yet.
+ * of the text without formatting, the first image as a small square thumbnail, the comment count,
+ * the author, the time and the market's title). The like count the owner listed comes with the
+ * likes (#49): nothing here counts what does not exist yet.
  */
 export const postSummarySchema = z
   .object({
@@ -105,6 +112,7 @@ export const postSummarySchema = z
     createdAt: z.iso.datetime(),
     /** The last edit ('수정됨'), or null while the post was never edited. */
     editedAt: z.iso.datetime().nullable(),
+    commentCount: commentCountSchema,
   })
   .meta({ id: 'PostSummary' });
 export type PostSummary = z.infer<typeof postSummarySchema>;
@@ -115,11 +123,12 @@ export type PostState = (typeof POST_STATES)[number];
 
 /**
  * A post page. `published`: the whole post. A post its author deleted is `deleted` only while
- * replies hang under it (#45-5: '삭제된 글입니다', the author hidden, never restored) — with none it
- * is gone (NOT_FOUND); there are no replies before #48, so today a deleted post is always gone.
- * `hidden`: an operator hid it (#45-5, the action comes with #50): '운영 정책에 따라 숨긴 글입니다',
- * nothing of the post but its market. Neither placeholder names the author or keeps a word of the
- * post; the original stays for operators only.
+ * comments hang under it (#45-5: '삭제된 글입니다', the author hidden, never restored) — with none
+ * left it is gone (NOT_FOUND). `hidden`: an operator hid it (#45-5, the action comes with #50):
+ * '운영 정책에 따라 숨긴 글입니다', nothing of the post but its market. Neither placeholder names the
+ * author or keeps a word of the post; the original stays for operators only. The comments under
+ * any of the three stay readable (`GET /posts/:postId/comments`, #48), and `commentCount` counts
+ * them on every state, as the card does.
  */
 export const postSchema = z
   .discriminatedUnion('state', [
@@ -133,13 +142,24 @@ export const postSchema = z
         market: postMarketSchema,
         createdAt: z.iso.datetime(),
         editedAt: z.iso.datetime().nullable(),
+        commentCount: commentCountSchema,
       })
       .meta({ id: 'PublishedPost' }),
     z
-      .object({ state: z.literal('deleted'), id: z.uuid(), market: postMarketSchema })
+      .object({
+        state: z.literal('deleted'),
+        id: z.uuid(),
+        market: postMarketSchema,
+        commentCount: commentCountSchema,
+      })
       .meta({ id: 'DeletedPost' }),
     z
-      .object({ state: z.literal('hidden'), id: z.uuid(), market: postMarketSchema })
+      .object({
+        state: z.literal('hidden'),
+        id: z.uuid(),
+        market: postMarketSchema,
+        commentCount: commentCountSchema,
+      })
       .meta({ id: 'HiddenPost' }),
   ])
   .meta({ id: 'Post' });
@@ -196,8 +216,8 @@ export const deletePostBodySchema = z
 export type DeletePostBody = z.infer<typeof deletePostBodySchema>;
 
 /**
- * The answer of a deletion: whether the post stays as the placeholder '삭제된 글입니다' (replies
- * hang under it, #45-5) or is gone from every view. Always gone before #48 brings replies.
+ * The answer of a deletion: whether the post stays as the placeholder '삭제된 글입니다' (comments
+ * hang under it, #45-5) or is gone from every view.
  */
 export const postDeletionSchema = z
   .object({ id: z.uuid(), placeholder: z.boolean() })

@@ -18,6 +18,7 @@ import type { Route } from 'next';
 import NextLink from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
+import { CommentsSection } from '@/components/post/comments-section';
 import { PostByline } from '@/components/post/post-author';
 import { PostBody } from '@/components/post/post-body';
 import { toaster } from '@/components/ui/toaster';
@@ -48,7 +49,9 @@ import { useSession } from '@/lib/use-session';
  * (author, time, 수정됨), the body and the market it belongs to — a link to its detail, which opens
  * in every status, and to the community list of that market. Its author also gets 수정 and 삭제
  * (`isOwnPost`, by the public id of `GET /me`, so nothing of it is in the HTML). A hidden or
- * deleted post is its placeholder and its market only (#45-5).
+ * deleted post is its placeholder and its market only (#45-5). Under either come the post's
+ * comments (#48, ADR-0074): a placeholder keeps them readable (N04 §6), and only a published post
+ * takes new ones.
  *
  * The onboarding gate lets an account that finished its onboarding once and faces a re-consent
  * alone open this page (`ONBOARDING_EXEMPT_PAGES`, 오너 결정 2026-10-20): deleting one's own post
@@ -57,9 +60,11 @@ import { useSession } from '@/lib/use-session';
  * everything else this page links to is gated as before. An account that has not finished is sent
  * on from this page too, and comes back to it at the end.
  *
- * A post can leave every view while its page is open: its author deletes it in another tab, and a
- * read of it after that — a window's focus — answers NOT_FOUND, while the query keeps the post it
- * read before (ADR-0073 9-50, Codex review of #219, round 5). From then on (`postGoneAfter`) the
+ * A post can leave every view while its page is open: its author deletes it in another tab, the
+ * last comment under a deleted post is deleted, or a comment write is refused because the post is
+ * gone. A read of it after that — the read after the write, or a window's focus — answers
+ * NOT_FOUND, while the query keeps the post it read before: the placeholder, a count and a box that
+ * no longer hold (ADR-0073 9-50, Codex review of #219, round 5). From then on (`postGoneAfter`) the
  * page says '없거나 삭제된 글입니다.' in place of the post and its market, and draws the server page
  * again (`router.refresh`): it answers what a reload does, the 404 (`notFound()`, page.tsx). A read
  * that fails otherwise keeps the post on screen.
@@ -99,6 +104,7 @@ export function PostScreen({ postId, fallback }: { postId: string; fallback: Pos
           </Alert.Content>
         </Alert.Root>
         <MarketBox market={post.market} />
+        <CommentsSection post={post} />
         <BackLink />
       </Stack>
     );
@@ -128,6 +134,7 @@ export function PostScreen({ postId, fallback }: { postId: string; fallback: Pos
       </Stack>
       <PostBody document={post.body} />
       <MarketBox market={post.market} />
+      <CommentsSection post={post} />
       <BackLink />
     </Stack>
   );
@@ -199,7 +206,8 @@ function BackLink() {
 /**
  * 수정 and 삭제, for the author only and only once `GET /me` has said who the viewer is. 삭제 asks
  * first (it is never undone, #45-5) and then leaves for the community list, which no longer lists
- * the post — and, for an author facing a re-consent, the gate there takes it on to that step
+ * the post — a post with comments under it stays at its address as '삭제된 글입니다' with them
+ * (#48) — and, for an author facing a re-consent, the gate there takes it on to that step
  * (오너 결정 2026-10-20 3차 답 4). 수정 is the edit screen, or that step first (`entryPath`). The
  * server checks the author on every write; these only hide what would be refused.
  */

@@ -435,11 +435,12 @@ describe('a post page’s metadata', () => {
       market: postMarket,
       createdAt: '2026-10-19T00:00:00.000Z',
       editedAt: null,
+      commentCount: 0,
     };
     const answers: (Post | null)[] = [
       published,
-      { state: 'hidden', id, market: postMarket },
-      { state: 'deleted', id, market: postMarket },
+      { state: 'hidden', id, market: postMarket, commentCount: 0 },
+      { state: 'deleted', id, market: postMarket, commentCount: 0 },
       null,
     ];
     for (const post of answers) {
@@ -452,10 +453,10 @@ describe('a post page’s metadata', () => {
   });
 
   it('names a placeholder by what it says, never by the post', () => {
-    const hidden = postPageMetadata({ state: 'hidden', id, market: postMarket });
+    const hidden = postPageMetadata({ state: 'hidden', id, market: postMarket, commentCount: 0 });
     expect(hidden.title).toBe(`${copy.postHiddenPlaceholder} | ${copy.appName}`);
     expect(hidden.description).toBeUndefined();
-    const deleted = postPageMetadata({ state: 'deleted', id, market: postMarket });
+    const deleted = postPageMetadata({ state: 'deleted', id, market: postMarket, commentCount: 0 });
     expect(deleted.title).toBe(`${copy.postDeletedPlaceholder} | ${copy.appName}`);
     expect(postPageMetadata(null).title).toBe(`${copy.postNotFound} | ${copy.appName}`);
   });

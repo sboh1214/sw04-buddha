@@ -57,6 +57,7 @@ const published: Post = {
   },
   createdAt: '2026-10-18T00:00:00.000Z',
   editedAt: null,
+  commentCount: 0,
 };
 
 const summary: PostSummary = {
@@ -68,6 +69,7 @@ const summary: PostSummary = {
   market: published.market,
   createdAt: published.createdAt,
   editedAt: null,
+  commentCount: 0,
 };
 
 /** openapi-fetch's `{ data, response }`, the shape `unwrap` reads. */

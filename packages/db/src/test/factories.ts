@@ -40,6 +40,7 @@ import {
   orders,
   phoneVerifications,
   positions,
+  postComments,
   postImages,
   posts,
   profiles,
@@ -800,4 +801,41 @@ export async function createPost(db: Db, input: CreatePostInput) {
     }
     return post!;
   });
+}
+
+export interface CreateCommentInput {
+  postId: string;
+  authorId: string;
+  /** The 댓글 a 대댓글 hangs under. Default: none — a 댓글. */
+  parentId?: string | null;
+  /** Default: '댓글 <tag>'. Stored as given: the API's normalisation is the API's. */
+  body?: string;
+  /** Default: the database clock. An order test sets it. */
+  createdAt?: Date;
+  editedAt?: Date;
+  deletedAt?: Date;
+  hiddenAt?: Date;
+}
+
+/**
+ * A comment (#48) as `POST /posts/:postId/comments` leaves it, or, with the times, as an edit, a
+ * deletion or an operator's hiding left it. No revision rows: an edit's history is the API's to
+ * write. The database holds the layers (a 대댓글's parent is a 댓글 of the same post) whoever
+ * writes, this factory included.
+ */
+export async function createComment(db: Db, input: CreateCommentInput) {
+  const [comment] = await db
+    .insert(postComments)
+    .values({
+      postId: input.postId,
+      authorId: input.authorId,
+      parentId: input.parentId ?? null,
+      body: input.body ?? `댓글 ${tag()}`,
+      ...(input.createdAt === undefined ? {} : { createdAt: input.createdAt }),
+      ...(input.editedAt === undefined ? {} : { editedAt: input.editedAt }),
+      ...(input.deletedAt === undefined ? {} : { deletedAt: input.deletedAt }),
+      ...(input.hiddenAt === undefined ? {} : { hiddenAt: input.hiddenAt }),
+    })
+    .returning();
+  return comment!;
 }

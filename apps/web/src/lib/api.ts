@@ -84,6 +84,18 @@ export type PostDeletion = components['schemas']['PostDeletion'];
 /** `POST /posts` and `PUT /posts/:postId`: the title, the editor's JSON and the account on screen. */
 export type CreatePostBody = components['schemas']['CreatePostBody'];
 export type UpdatePostBody = components['schemas']['UpdatePostBody'];
+/**
+ * 댓글·대댓글 (#48, ADR-0074): one 댓글 of `GET /posts/:postId/comments` with every 대댓글 under it,
+ * a comment in one of its three states (the published one, or the placeholder of a deleted 댓글
+ * with 대댓글 under it or of a hidden comment), the published one alone (what the writes answer),
+ * the answer of a deletion, and the bodies of a new comment and of an edit.
+ */
+export type CommentThread = components['schemas']['CommentThread'];
+export type PostComment = components['schemas']['PostComment'];
+export type PublishedComment = components['schemas']['PublishedComment'];
+export type CommentDeletion = components['schemas']['CommentDeletion'];
+export type CreateCommentBody = components['schemas']['CreateCommentBody'];
+export type UpdateCommentBody = components['schemas']['UpdateCommentBody'];
 /** `POST /media/images`'s answer: the stored image's id, which the editor's image node carries. */
 export type UploadedImage = components['schemas']['UploadedImage'];
 export type AdminPayment = components['schemas']['AdminPayment'];

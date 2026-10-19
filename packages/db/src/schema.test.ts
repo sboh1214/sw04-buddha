@@ -42,6 +42,8 @@ import {
   phoneVerificationRefusedSends,
   phoneVerifications,
   positions,
+  postCommentRevisions,
+  postComments,
   postImages,
   postRevisions,
   posts,
@@ -59,6 +61,7 @@ import {
   createConsents,
   createMarket,
   createMarketLink,
+  createComment,
   createMedia,
   createPhoneVerification,
   createPost,
@@ -867,6 +870,175 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       ).rejects.toSatisfy(
         (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'media_deletions_attempts_check',
       );
+    });
+  });
+
+  describe('comments under a post (migration 0034, #48)', () => {
+    /** A post on an open market by a new account, and that account. */
+    async function postFixture() {
+      const { user: author } = await createUser(t.db);
+      const market = await createMarket(t.db);
+      const post = await createPost(t.db, { marketId: market.id, authorId: author.id });
+      return { author, market, post };
+    }
+
+    it('stores a 댓글 and a 대댓글 under it, the relations both ways', async () => {
+      const { author, post } = await postFixture();
+      const comment = await createComment(t.db, {
+        postId: post.id,
+        authorId: author.id,
+        body: '첫 줄\n둘째 줄',
+      });
+      const reply = await createComment(t.db, {
+        postId: post.id,
+        authorId: author.id,
+        parentId: comment.id,
+      });
+      expect(comment).toMatchObject({
+        parentId: null,
+        body: '첫 줄\n둘째 줄',
+        editedAt: null,
+        deletedAt: null,
+        hiddenAt: null,
+        isReply: false,
+        parentIsReply: null,
+      });
+      expect(reply).toMatchObject({ parentId: comment.id, isReply: true, parentIsReply: false });
+      const withAll = await t.db.query.postComments.findFirst({
+        where: eq(postComments.id, comment.id),
+        with: { post: true, author: true, replies: true },
+      });
+      expect(withAll?.post.id).toBe(post.id);
+      expect(withAll?.author.id).toBe(author.id);
+      expect(withAll?.replies.map((row) => row.id)).toEqual([reply.id]);
+      const withParent = await t.db.query.postComments.findFirst({
+        where: eq(postComments.id, reply.id),
+        with: { parent: true },
+      });
+      expect(withParent?.parent?.id).toBe(comment.id);
+      const postWith = await t.db.query.posts.findFirst({
+        where: eq(posts.id, post.id),
+        with: { comments: true },
+      });
+      expect(postWith?.comments.map((row) => row.id).sort()).toEqual([comment.id, reply.id].sort());
+    });
+
+    it('holds two layers whoever writes: a 대댓글’s parent is a 댓글 of the same post (#45-2)', async () => {
+      const { author, market, post } = await postFixture();
+      const comment = await createComment(t.db, { postId: post.id, authorId: author.id });
+      const reply = await createComment(t.db, {
+        postId: post.id,
+        authorId: author.id,
+        parentId: comment.id,
+      });
+      const parentRefused = (e: unknown) =>
+        sqlState(e) === '23503' && sqlConstraint(e) === 'post_comments_parent_fk';
+      // A reply to a 대댓글.
+      await expect(
+        createComment(t.db, { postId: post.id, authorId: author.id, parentId: reply.id }),
+      ).rejects.toSatisfy(parentRefused);
+      // A reply under a 댓글 of another post.
+      const other = await createPost(t.db, { marketId: market.id, authorId: author.id });
+      await expect(
+        createComment(t.db, { postId: other.id, authorId: author.id, parentId: comment.id }),
+      ).rejects.toSatisfy(parentRefused);
+      // A parent that does not exist, and a comment its own parent.
+      await expect(
+        createComment(t.db, { postId: post.id, authorId: author.id, parentId: randomUUID() }),
+      ).rejects.toSatisfy(parentRefused);
+      await expect(
+        t.db
+          .update(postComments)
+          .set({ parentId: comment.id })
+          .where(eq(postComments.id, comment.id)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '23503');
+      // A 댓글 with a 대댓글 cannot become a 대댓글 itself, nor move to another post.
+      const second = await createComment(t.db, { postId: post.id, authorId: author.id });
+      await expect(
+        t.db
+          .update(postComments)
+          .set({ parentId: second.id })
+          .where(eq(postComments.id, comment.id)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '23503');
+      await expect(
+        t.db.update(postComments).set({ postId: other.id }).where(eq(postComments.id, comment.id)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '23503');
+      // The generated keys are the database's: nobody writes them.
+      await expect(
+        t.db.execute(
+          sql`INSERT INTO post_comments (post_id, author_id, body, is_reply) VALUES (${post.id}, ${author.id}, 'x', true)`,
+        ),
+      ).rejects.toSatisfy((e) => sqlState(e) === '428C9');
+      expect(
+        (await t.db.select({ id: postComments.id }).from(postComments)).map((row) => row.id).sort(),
+      ).toEqual([comment.id, reply.id, second.id].sort());
+    });
+
+    it('refuses a blank body, a body over 1,000 characters and the removal of a comment’s post or author', async () => {
+      const { author, post } = await postFixture();
+      await expect(
+        createComment(t.db, { postId: post.id, authorId: author.id, body: '   ' }),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'post_comments_body_check',
+      );
+      // 1,000 code points fit (an emoji is one, as `codePointLength` counts it); one more does not.
+      await createComment(t.db, { postId: post.id, authorId: author.id, body: '😀'.repeat(1_000) });
+      await expect(
+        createComment(t.db, { postId: post.id, authorId: author.id, body: '가'.repeat(1_001) }),
+      ).rejects.toSatisfy((e) => sqlState(e) === '22001');
+      await expect(t.db.delete(posts).where(eq(posts.id, post.id))).rejects.toSatisfy(
+        (e) => sqlState(e) === '23503',
+      );
+      await expect(t.db.delete(user).where(eq(user.id, author.id))).rejects.toSatisfy(
+        (e) => sqlState(e) === '23503',
+      );
+    });
+
+    it('keeps an edit’s history append-only, deletable later by the retention work', async () => {
+      const { author, post } = await postFixture();
+      const comment = await createComment(t.db, { postId: post.id, authorId: author.id });
+      const [revision] = await t.db
+        .insert(postCommentRevisions)
+        .values({ commentId: comment.id, body: comment.body, writtenAt: comment.createdAt })
+        .returning();
+      await expect(
+        t.db
+          .update(postCommentRevisions)
+          .set({ body: 'rewritten' })
+          .where(eq(postCommentRevisions.id, revision!.id)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '42501');
+      await t.db.delete(postCommentRevisions).where(eq(postCommentRevisions.id, revision!.id));
+      expect(await t.db.select().from(postCommentRevisions)).toEqual([]);
+    });
+
+    it('counts a post’s visible comments, what its partial index holds', async () => {
+      const { author, post } = await postFixture();
+      const comment = await createComment(t.db, { postId: post.id, authorId: author.id });
+      await createComment(t.db, { postId: post.id, authorId: author.id, parentId: comment.id });
+      await createComment(t.db, {
+        postId: post.id,
+        authorId: author.id,
+        parentId: comment.id,
+        deletedAt: new Date(),
+      });
+      await createComment(t.db, { postId: post.id, authorId: author.id, hiddenAt: new Date() });
+      const [index] = (
+        await t.db.execute<{ indexdef: string }>(
+          sql`SELECT indexdef FROM pg_indexes WHERE indexname = 'post_comments_visible_post_id_idx'`,
+        )
+      ).rows;
+      expect(index?.indexdef).toContain('WHERE ((deleted_at IS NULL) AND (hidden_at IS NULL))');
+      const [visible] = await t.db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(postComments)
+        .where(
+          and(
+            eq(postComments.postId, post.id),
+            isNull(postComments.deletedAt),
+            isNull(postComments.hiddenAt),
+          ),
+        );
+      expect(visible?.n).toBe(2);
     });
   });
 

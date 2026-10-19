@@ -1,6 +1,7 @@
 import { MARKET_LIST_STATUSES, MARKET_SORTS } from '@buddha/shared';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type {
+  fetchCommentsPageServer as FetchCommentsPage,
   fetchMarketSearchPageServer as FetchMarketSearchPage,
   fetchMarketsPageServer as FetchMarketsPage,
   fetchPostsPageServer as FetchPostsPage,
@@ -39,6 +40,7 @@ let fetchMarketSearchPageServer: typeof FetchMarketSearchPage;
 let fetchRelatedMarketsPageServer: typeof FetchRelatedMarketsPage;
 let fetchPostsPageServer: typeof FetchPostsPage;
 let lookUpWriteMarketServer: typeof LookUpWriteMarket;
+let fetchCommentsPageServer: typeof FetchCommentsPage;
 
 beforeAll(async () => {
   vi.stubGlobal('fetch', fakeFetch);
@@ -48,6 +50,7 @@ beforeAll(async () => {
     fetchRelatedMarketsPageServer,
     fetchPostsPageServer,
     lookUpWriteMarketServer,
+    fetchCommentsPageServer,
   } = await import('./api.server'));
 });
 afterAll(() => {
@@ -184,5 +187,19 @@ describe('the write page’s read of its market (lookUpWriteMarketServer)', () =
       kind: 'none',
     });
     expect(fakeFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('fetchCommentsPageServer', () => {
+  it('asks for a post’s comments by its id, with the cursor only when there is one (#48)', async () => {
+    requests.length = 0;
+    const post = 'b7c9a1d2-6f34-4e58-9b0a-2d1e5f8c7a46';
+    await expect(fetchCommentsPageServer(post)).resolves.toEqual({ items: [], nextCursor: null });
+    await fetchCommentsPageServer(post, 'cursor-2');
+    expect(requests.map((url) => url.pathname)).toEqual([
+      `/api/v1/posts/${post}/comments`,
+      `/api/v1/posts/${post}/comments`,
+    ]);
+    expect(requests.map(queryOf)).toEqual([{}, { cursor: 'cursor-2' }]);
   });
 });

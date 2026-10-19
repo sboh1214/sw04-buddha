@@ -17,6 +17,7 @@ import {
   relatedMarketsQuery,
   searchListQuery,
 } from './market-keys';
+import { type CommentPage, commentPageQuery } from './comments';
 import {
   type CommunityFilters,
   type PostPage,
@@ -212,3 +213,22 @@ export const fetchPostServer = cache(async (postId: string): Promise<Post | null
     throw error;
   }
 });
+
+/**
+ * One page of `GET /posts/:postId/comments` for the post page (#48, ADR-0074): the first 20 댓글,
+ * oldest first, each with every 대댓글 under it — the same request the browser's `queryFn` sends
+ * (`commentPageQuery`), so the seeded page is picked up rather than fetched again. Throws on any
+ * failure: the page prefetches it, which keeps a failed read out of the dehydrated state, and the
+ * browser then reads the comments itself.
+ */
+export async function fetchCommentsPageServer(
+  postId: string,
+  cursor?: string,
+): Promise<CommentPage> {
+  const { data, meta } = unwrap(
+    await serverApi.GET('/api/v1/posts/{postId}/comments', {
+      params: { path: { postId }, query: commentPageQuery(cursor) },
+    }),
+  );
+  return { items: data, nextCursor: meta.nextCursor };
+}

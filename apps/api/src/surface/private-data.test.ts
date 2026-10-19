@@ -5,11 +5,12 @@
  * and session, a balance and a ledger memo, orders and the fill one of them got against another
  * account's resting order, a position with its PnL, a payment, two watched markets (#89), a
  * recorded search (#15), its consent records with the address and browser they came with, a
- * nickname it gave up (#58) and a post with an image on the market it trades (#46). Then:
+ * nickname it gave up (#58), a post with an image on the market it trades (#46) and comments under
+ * it (#48). Then:
  * - every registered public route (registry.ts) is called anonymously, as another account B and
  *   as A itself, and no answer may hold one of A's values or a field PRIVATE_DATA names, nor a
  *   field naming an excluded feature or keeping a probability — except that a route registered
- *   as showing a person (`showsPerson`: a post's author, ADR-0069 decision 5) may hold A's
+ *   as showing a person (`showsPerson`: a post's or a comment's author, ADR-0069 decision 5) may hold A's
  *   nickname and public id, and must, so the allowance is not vacuous;
  * - every registered owner-only route is called as B, aimed at A wherever it takes an id or an
  *   account — in its path, its query (a page cursor made from A's row) or its body — and no
@@ -38,6 +39,7 @@ import {
   createConsents,
   createMarket,
   createMarketLink,
+  createComment,
   createMedia,
   createPhoneVerification,
   createPost,
@@ -114,6 +116,11 @@ interface Fixture {
    * called with, so their answers name A as the author and serve A's upload.
    */
   post: { id: string; mediaId: string };
+  /**
+   * A's 댓글 under that post (#48), with a 대댓글 of A's under it: what the comment routes are called
+   * with, so the comment list names A as an author and B's refused writes aim at A's comment.
+   */
+  comment: { id: string };
   /**
    * Closed, and on A's watchlist alone (#89). Closed so no public call here lists it — `GET
    * /markets` is called without a query and lists open markets, and the detail routes are called
@@ -302,6 +309,10 @@ const NEVER_SHOWN: readonly string[] = [
   // replaced and a post A deleted — whoever asks, A included.
   'post revision',
   'deleted post',
+  // #48: the same of A's comments — an earlier version and a deleted 댓글 that shows as its
+  // placeholder ('삭제된 글입니다', a 대댓글 under it).
+  'comment revision',
+  'deleted comment',
 ];
 
 interface OwnerCase {
@@ -491,6 +502,27 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
   },
   'POST /posts/:postId/delete': {
     params: { postId: (fixture) => fixture.post.id },
+    body: (fixture) => ({ expectedAccountId: fixture.a.id }),
+    status: 403,
+  },
+  // B's cookie naming A's account (#48): refused before anything is read or written — no comment
+  // of B's, A's comment as it was (below). B naming itself on A's comment is refused there too.
+  'POST /posts/:postId/comments': {
+    params: { postId: (fixture) => fixture.post.id },
+    body: (fixture) => ({
+      parentId: fixture.comment.id,
+      body: 'B의 대댓글',
+      expectedAccountId: fixture.a.id,
+    }),
+    status: 403,
+  },
+  'PUT /comments/:commentId': {
+    params: { commentId: (fixture) => fixture.comment.id },
+    body: (fixture) => ({ body: 'B가 고친 댓글', expectedAccountId: fixture.a.id }),
+    status: 403,
+  },
+  'POST /comments/:commentId/delete': {
+    params: { commentId: (fixture) => fixture.comment.id },
     body: (fixture) => ({ expectedAccountId: fixture.a.id }),
     status: 403,
   },
@@ -954,6 +986,33 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       deletedAt: new Date(),
     });
 
+    // A's comments under that post (#48): a 댓글 with A's 대댓글 under it, which the comment list
+    // shows with A as their author; a 댓글 A deleted that shows as its placeholder (a 대댓글 hangs
+    // under it) and an earlier version of A's 댓글, as an edit leaves it — both A's words that are
+    // nobody's to read through the API, A's included (`NEVER_SHOWN`).
+    const comment = await createComment(t.db, {
+      postId: post.id,
+      authorId: a.id,
+      body: `A의 댓글 ${tag}`,
+    });
+    await createComment(t.db, { postId: post.id, authorId: a.id, parentId: comment.id });
+    const commentRevisionText = `leak-comment-revision-${tag}`;
+    await t.db.insert(schema.postCommentRevisions).values({
+      commentId: comment.id,
+      body: commentRevisionText,
+      writtenAt: new Date(comment.createdAt.getTime() - 60_000),
+    });
+    const deletedCommentText = `leak-deleted-comment-${tag}`;
+    const deletedComment = await createComment(t.db, {
+      postId: post.id,
+      authorId: a.id,
+      body: deletedCommentText,
+      // After A's other 댓글, so the list's order (oldest first) is the expectation's.
+      createdAt: new Date(comment.createdAt.getTime() + 1_000),
+      deletedAt: new Date(),
+    });
+    await createComment(t.db, { postId: post.id, authorId: a.id, parentId: deletedComment.id });
+
     // A's search (#15): a term nobody else types, and no market's title holds it.
     const searchTerm = `leak-search-${tag}`;
     const search = await createSearch(t.db, { userId: a.id, query: searchTerm });
@@ -995,6 +1054,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       watched,
       relatedMarket: related,
       post: { id: post.id, mediaId: media.id },
+      comment: { id: comment.id },
       watchedCategory: watchedCategory!.slug,
       searchId: search.id,
       phone,
@@ -1014,6 +1074,8 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         text('public id', publicId),
         text('post revision', revisionText),
         text('deleted post', deletedText),
+        text('comment revision', commentRevisionText),
+        text('deleted comment', deletedCommentText),
         text('time zone', timeZone),
         text('real name', realName),
         text('phone', phone),
@@ -1148,9 +1210,10 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       })),
     );
     // The allowance is not vacuous: every route that may show a person showed A, the author of
-    // the post it was called with, to everyone — the list and the post page (#46).
+    // the post it was called with, to everyone — the list and the post page (#46) and the post's
+    // comments (#48).
     expect(persons.map(({ route }) => route)).toEqual(
-      expect.arrayContaining(['GET /posts', 'GET /posts/:postId']),
+      expect.arrayContaining(['GET /posts', 'GET /posts/:postId', 'GET /posts/:postId/comments']),
     );
     expect(persons).toEqual(
       persons.map(({ route, caller }) => ({ route, caller, shown: PERSON_LABELS })),
@@ -1162,6 +1225,25 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       data: { state: 'published', id: f.post.id },
     });
     expect(bodies.get('GET /media/:mediaId')).toContain('PNG');
+    // The comment route answered A's 댓글 with its 대댓글 and the placeholder of the deleted one.
+    const threads = parse(bodies.get('GET /posts/:postId/comments')!) as {
+      data: { comment: { state: string; id: string }; replies: { state: string }[] }[];
+    };
+    expect(
+      threads.data.map(({ comment, replies }) => ({
+        state: comment.state,
+        id: comment.id,
+        replies: replies.map((reply) => reply.state),
+      })),
+    ).toEqual([
+      { state: 'published', id: f.comment.id, replies: ['published'] },
+      { state: 'deleted', id: expect.any(String) as unknown, replies: ['published'] },
+    ]);
+    // The placeholder is its id alone, read off the raw answer: no author or time rides on it.
+    expect(threads.data[1]?.comment).toEqual({
+      state: 'deleted',
+      id: expect.any(String) as unknown,
+    });
     // The answers held A's market, A's fill and the market linked to A's — anonymously — so there
     // was something to leak, and the 관련 시장 answer's item had its field names checked rather
     // than an empty page passing for one.
@@ -1282,6 +1364,9 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         t.db.select().from(schema.postRevisions),
         t.db.select().from(schema.mediaObjects).orderBy(schema.mediaObjects.id),
         t.db.select().from(schema.postImages),
+        // #48: the comments and their history B's refused comment writes would have written.
+        t.db.select().from(schema.postComments).orderBy(schema.postComments.id),
+        t.db.select().from(schema.postCommentRevisions),
       ])),
       [...t.storage.objects.keys()].sort(),
     ];
@@ -1411,6 +1496,22 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     ] as const) {
       const res = await call(routeOf(key), {
         params: { postId: f.post.id },
+        body,
+        cookie: f.b.cookie,
+      });
+      expect({ key, status: res.statusCode, leaks: leaked(res.body) }).toEqual({
+        key,
+        status: 403,
+        leaks: [],
+      });
+    }
+    // The same of A's comment (#48): only its author changes it.
+    for (const [key, body] of [
+      ['PUT /comments/:commentId', { body: 'B가 고친 댓글', expectedAccountId: f.b.id }],
+      ['POST /comments/:commentId/delete', { expectedAccountId: f.b.id }],
+    ] as const) {
+      const res = await call(routeOf(key), {
+        params: { commentId: f.comment.id },
         body,
         cookie: f.b.cookie,
       });

@@ -610,6 +610,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/posts (integration)', () => {
       state: 'hidden',
       id: hidden.id,
       market: expect.objectContaining({ id: market.id }) as unknown,
+      commentCount: 0,
     });
     expect(res.body).not.toContain('숨긴 글');
     const deleted = await createPost(t.db, {
