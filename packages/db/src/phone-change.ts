@@ -7,15 +7,18 @@
  * `new_phone` (its digits) and `new_hash` (the keyed hash of those digits, from the API's
  * phone-hash CLI, apps/api/src/identity/phone-hash-cli.ts — SQL cannot compute it without the
  * key). The doc runs it only for a request that came from the account's current email and passed
- * sender authentication (the operator's own mail provider's verdict, not any other
- * Authentication-Results line), and whose new number the member confirmed by sending back, from
- * that email, the code the operator texted to it (owner decisions 2026-10-19, answer 1, and
- * 2026-10-19 3차, answers 1 and 2; the account is looked up first, OPERATOR_ACCOUNT_LOOKUP_SQL,
- * and looked up again for the reply's sender, which must give the same id, still verified; the
- * code comes from OPERATOR_CONFIRMATION_CODE_SQL and is noted with the number it was texted to,
- * which the CLI's `new_phone` line must match digit for digit — ADR-0071 7-29, 7-30), in one
- * transaction with psql's ON_ERROR_ROLLBACK off, reading the results first and then ending it
- * with the COMMIT or ROLLBACK the doc's result table gives for them:
+ * sender authentication (the operator's own mail provider's verdict, the topmost
+ * Authentication-Results line: SPF and DKIM both passing for the sender's domain, or DMARC
+ * passing), whose new number passed the pre-check before any SMS (OPERATOR_NUMBER_PRECHECK_SQL),
+ * and whose member confirmed the number by sending back, from that email within 30 minutes, the
+ * last code the operator texted to it — at most three codes per request (owner decisions
+ * 2026-10-19, answer 1, 3차, answers 1 and 2, and 4차, answers 1 and 2; the account is looked up
+ * first, OPERATOR_ACCOUNT_LOOKUP_SQL, and looked up again for the reply's sender, which must give
+ * the same id, still verified; the code comes from OPERATOR_CONFIRMATION_CODE_SQL and is noted with
+ * the number it was texted to, which the CLI's `new_phone` line must match digit for digit —
+ * ADR-0071 7-29 to 7-32), in one transaction with psql's ON_ERROR_ROLLBACK off, reading the
+ * results first and then ending it with the COMMIT or ROLLBACK the doc's result table gives for
+ * them:
  *
  * 1. The number itself, `UPDATE 1` (0: no such account). `phone_verifications.phone` stays UNIQUE
  *    and digits only (its constraints — another account's verified number is a 23505 here), and
@@ -40,8 +43,7 @@
  *    into a dollar-quoted body, so the two SET LOCAL lines hand it `user_id` and `new_hash` for
  *    this transaction only. It reads what is committed: a cancellation or payment of that grant
  *    still in flight is not waited for, and the change is refused until asked again (ADR-0071
- *    7-26). Either refusal, the member is told only that the number cannot be changed to now,
- *    and asks again later (2026-10-19 3차, answer 3).
+ *    7-26).
  * 4. What now holds the new number: one row or none (the account has no grant yet). `this_account`
  *    t: recorded for this account. f: another account's paid grant holds it (`paid` t — after
  *    `UPDATE 1` a waiting one failed step 2 or 3), and `has_grant` says whether this account has a
@@ -50,6 +52,13 @@
  *    member so with the reply that the number was changed (owner decision 2026-10-19, answer 3) —
  *    after COMMIT, not before, so the open transaction does not hold the account's
  *    phone_verifications row lock while the reply is written (ADR-0071 7-27).
+ *
+ * Every refusal here — `UPDATE 0` (the account gone meanwhile), another account's verified number
+ * (23505 on the UPDATE), either refusal of a waiting grant's number — is told to the member with
+ * the same one sentence and no reason, after the ROLLBACK, and the member asks again later (owner
+ * decisions 2026-10-19 3차, answer 3, and 4차, answer 1). The pre-check has already turned away
+ * before the confirmation SMS what it could see then, so these come only from what changed after
+ * it (ADR-0071 7-31).
  *
  * Kept here with the procedure's three read-only statements below, each one text in two places
  * like the wipe statement (wipe.ts): phone-change.test.ts reads docs/OPERATIONS.md for them and
@@ -84,32 +93,42 @@ SELECT g.user_id = :'user_id' AS this_account, n.source, g.granted_at IS NOT NUL
 /**
  * Step 1 of the same procedure, before any confirmation SMS goes out (owner decision 2026-10-19,
  * answer 1): the account whose current email a number-change request came from, and whether it has
- * a 본인확인 record to change. No row, or `verified` f, and the operator stops there — sends
- * nothing, changes nothing (ADR-0071 7-20). Run twice: when the request arrives, and again with the
- * sender of the member's authenticated reply carrying the code — the 가입 이메일 is the account's
- * current email (2026-10-19 3차, answer 2), which the member may have changed meanwhile, so only
- * the same id with `verified` t goes on, and that id is step 5's `user_id` (ADR-0071 7-29). Read
- * only. One psql variable, `sender`, the address the mail came from; account emails are stored
- * lower-case.
+ * a 본인확인 record to change. No row, and the operator stops there — sends nothing, changes
+ * nothing (ADR-0071 7-20); `verified` f, and the request is refused with the one sentence (4차,
+ * answer 1, ADR-0071 7-33). Run on the request, and again on every authenticated reply with the
+ * reply's sender — the 가입 이메일 is the account's current email (2026-10-19 3차, answer 2),
+ * which the member may have changed meanwhile, so only the same id with `verified` t goes on (any
+ * other answer is refused), and that id is step 5's `user_id` (ADR-0071 7-29). Read only. One psql
+ * variable, `sender`, the address the mail came from; account emails are stored lower-case.
  */
 export const OPERATOR_ACCOUNT_LOOKUP_SQL = `SELECT u.id, pv.user_id IS NOT NULL AS verified
   FROM "user" u LEFT JOIN phone_verifications pv ON pv.user_id = u.id
   WHERE u.email = lower(:'sender');`;
 
 /**
- * The 6-digit confirmation code step 1 texts to the new number once the account is found (owner
- * decision 2026-10-19 3차, answer 1): six digits, leading zeros kept, picked at random so that
- * only the phone receiving the text knows it — the member sends it back from the account's email
- * (ADR-0071 7-29). Read only, no variable.
+ * Step 1, after the lookup and before every confirmation code is picked and texted (owner decision
+ * 2026-10-19 4차, answer 1): whether step 5 would refuse the new number on what can be seen now —
+ * `other_verified`, another account verified it (step 5's UPDATE, 23505); `other_waiting`, a
+ * waiting grant of another account holds it (step 5's INSERT or DO block). Either t, and no SMS
+ * goes out: the request is refused with the one sentence. Both f, and the code may be sent. The
+ * account's own number and its own grant's numbers are not flagged — step 5 takes them. A paid
+ * grant's number is not flagged either: step 5 changes to it and records nothing (2026-10-19,
+ * answers 2 and 3). Read only; `user_id` from the lookup, `new_phone` and `new_hash` from the
+ * hash CLI as for the change (ADR-0071 7-31).
  */
-export const OPERATOR_CONFIRMATION_CODE_SQL = `SELECT to_char(floor(random() * 1000000), 'FM000000') AS code;`;
+export const OPERATOR_NUMBER_PRECHECK_SQL = `SELECT EXISTS (SELECT 1 FROM phone_verifications pv
+      WHERE pv.phone = :'new_phone' AND pv.user_id <> :'user_id') AS other_verified,
+    EXISTS (SELECT 1 FROM start_grant_numbers n JOIN start_grants g ON g.id = n.grant_id
+      WHERE n.phone_hash = :'new_hash' AND n.released_at IS NULL
+        AND g.user_id <> :'user_id' AND g.granted_at IS NULL) AS other_waiting;`;
 
 /**
- * Before the confirmation SMS of a request that asks again for a number refused before (from step
- * 1, ADR-0071 7-28): whether the grant holding the new number has been settled. `paid` f: it still
- * waits, and the change would be refused again. `paid` t (paid) or no row (cancelled, the number
- * freed): settled. Read only; `new_hash` as for the change.
+ * The 6-digit confirmation code step 1 texts to the new number once the pre-check passes (owner
+ * decision 2026-10-19 3차, answer 1): six digits, leading zeros kept, picked at random so that
+ * only the phone receiving the text knows it — the member sends it back from the account's email
+ * (ADR-0071 7-29). The text is fixed, '[buddha] 번호 변경 확인 번호 NNNNNN'; the code is valid
+ * for 30 minutes from the SMS, a new one replaces it, and a request gets at most three (4차,
+ * answer 2, ADR-0071 7-32) — the operator notes each with its number and the time it was sent.
+ * Read only, no variable.
  */
-export const OPERATOR_NUMBER_HOLDER_SQL = `SELECT g.granted_at IS NOT NULL AS paid
-  FROM start_grant_numbers n JOIN start_grants g ON g.id = n.grant_id
-  WHERE n.phone_hash = :'new_hash' AND n.released_at IS NULL;`;
+export const OPERATOR_CONFIRMATION_CODE_SQL = `SELECT to_char(floor(random() * 1000000), 'FM000000') AS code;`;
