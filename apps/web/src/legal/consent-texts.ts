@@ -19,7 +19,8 @@ import { type LegalDocument, paragraph, table } from './document';
  * not the name nor the profile photo, which are neither asked of the provider (Google's and Kakao's
  * scopes, `OAUTH_SCOPES`; Naver's developer console) nor stored (`user.name` and `user.image` hold
  * nothing and the provider's ID token, which carries both, is not kept: the API's auth hooks,
- * 오너 결정 2026-10-19 (2차) 3, ADR-0072 7-30·7-40); the
+ * 오너 결정 2026-10-19 (2차) 3, ADR-0072 7-30·7-40), nor the provider's access and refresh tokens
+ * (the same hooks, 오너 결정 2026-10-19 (4차) 1 — so the text names none); the
  * real name and the verified number (`phone_verifications`), every code sent with its number, real
  * name, time and client IP
  * (`phone_verification_codes`, the 본인확인 기록 kept for #184's retention period, past a

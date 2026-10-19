@@ -199,6 +199,10 @@ Nest 라우팅·전역 prefix·버저닝·본문 파싱보다 **먼저** 실행�
 - \`GET /api/auth/account-info\` — \`disabledPaths\` 로 막혀 HTTP 로는 **404** 다. 그 답은 연결한 소셜
   로그인 제공자의 프로필(이름·사진)인데, 이 서비스는 제공자에게 그것을 묻지도(구글은 \`openid\`·\`email\`,
   카카오는 \`account_email\` 만) 그것을 담은 제공자의 ID 토큰을 두지도 않는다(ADR-0072 7-30·7-31·7-40).
+- \`POST /api/auth/get-access-token\`·\`POST /api/auth/refresh-token\` — \`disabledPaths\` 로 막혀 HTTP
+  로는 **404** 다. 둘은 세션 계정에 연결한 소셜 로그인 제공자의 접근 토큰을(뒤의 것은 저장한 갱신
+  토큰으로 새로 받아) 내주는데, 이 서비스는 제공자의 접근·갱신 토큰을 두지 않는다 — 로그인과 연결은
+  콜백이 받은 토큰으로 제공자에게 묻고 저장하지 않는다(ADR-0072 7-30·7-31, 오너 결정 2026-10-19 (4차) 1).
 - 최초 비밀번호 설정에는 대응하는 HTTP 경로가 없다. better-auth 의 \`setPassword\` 는 서버 전용
   엔드포인트라, 이 저장소는 \`POST /api/v1/me/password\` 로 감싸 노출한다. 본문은
   \`newPassword\` 와 화면이 보는 계정 \`expectedAccountId\` 이고, 그것이 쿠키의 계정이 아니면

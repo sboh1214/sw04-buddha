@@ -45,6 +45,26 @@ const SIGN_IN_PATH = '/sign-in/email';
 const UPDATE_USER_PATH = '/update-user';
 /** better-auth's read of a linked provider's profile (name, photo), refused the same way. */
 const ACCOUNT_INFO_PATH = '/account-info';
+/** better-auth's hand-out of a linked provider's stored access token, refused the same way. */
+const GET_ACCESS_TOKEN_PATH = '/get-access-token';
+/** better-auth's refresh of a linked provider's stored tokens, refused the same way. */
+const REFRESH_TOKEN_PATH = '/refresh-token';
+
+/**
+ * What the `account` hooks below write on every login account row: none of the provider's tokens
+ * (오너 결정 2026-10-19 (2차) 3 for the ID token, (4차) 1 for the access and refresh tokens and their
+ * expiry, ADR-0072 7-30). better-auth uses them for nothing but the routes `disabledPaths` refuses.
+ */
+const NO_PROVIDER_TOKENS = {
+  idToken: null,
+  accessToken: null,
+  refreshToken: null,
+  accessTokenExpiresAt: null,
+  refreshTokenExpiresAt: null,
+} as const;
+const PROVIDER_TOKEN_FIELDS = Object.keys(
+  NO_PROVIDER_TOKENS,
+) as (keyof typeof NO_PROVIDER_TOKENS)[];
 
 /**
  * What the service asks each provider for (오너 결정 2026-10-19 (2차) 3, ADR-0072 7-40): the
@@ -264,8 +284,20 @@ export function createAuth({
      * asks for (`OAUTH_SCOPES`) nor keeps: read from the stored ID token (Google's, never stored
      * now) or fetched afresh with the stored access token (Kakao's, Naver's). The web never
      * called it.
+     *
+     * `/get-access-token` and `/refresh-token` too (오너 결정 2026-10-19 (4차) 1, ADR-0072 7-31):
+     * they hand the session's account its linked provider's stored access token — the second
+     * after refreshing it with the stored refresh token — and the service keeps neither (the
+     * `account` hooks below). Signing in, linking and unlinking never read them back; nothing
+     * else in better-auth but these two and `/account-info` does. The web never called either.
      */
-    disabledPaths: ['/sign-up/email', UPDATE_USER_PATH, ACCOUNT_INFO_PATH],
+    disabledPaths: [
+      '/sign-up/email',
+      UPDATE_USER_PATH,
+      ACCOUNT_INFO_PATH,
+      GET_ACCESS_TOKEN_PATH,
+      REFRESH_TOKEN_PATH,
+    ],
     database: drizzleAdapter(db, {
       provider: 'pg',
       schema: {
@@ -405,7 +437,7 @@ export function createAuth({
        * column writes the same instead (an update hook can replace values, not drop keys): an
        * upgrade or an option turned on later cannot refill them. better-auth's `/update-user`,
        * which writes nothing else, is disabled above. The provider's ID token, which carries them
-       * too, is kept out of `account` below.
+       * too, is kept out of `account` below, and so are its access and refresh tokens.
        */
       user: {
         create: {
@@ -423,14 +455,22 @@ export function createAuth({
         },
       },
       /**
-       * The provider's ID token is not stored either (오너 결정 2026-10-19 (2차) 3, ADR-0072 7-30):
-       * better-auth copies it into `account.id_token` as it came — on a social sign-up, on a link,
-       * and again on every later sign-in (`updateAccountOnSignIn`) and token refresh — and Google's
-       * is a readable JWT whose payload carries the member's name and photo address (`name`,
-       * `picture`) whenever the `profile` scope was granted. Every account is created with none and
-       * any update that names it writes none (an update hook replaces values, it cannot drop keys).
-       * Signing in never reads it back: Google's `getUserInfo` decodes the token of the callback's
-       * own token response, and no provider here signs out through it (`createEndSessionURL`).
+       * None of the provider's tokens is stored either (ADR-0072 7-30). better-auth copies them
+       * into `account` as they came — on a social sign-up, on a link, and again on every later
+       * sign-in (`updateAccountOnSignIn`) and token refresh:
+       * - the ID token (오너 결정 2026-10-19 (2차) 3): Google's is a readable JWT whose payload
+       *   carries the member's name and photo address (`name`, `picture`) whenever the `profile`
+       *   scope was granted;
+       * - the access and refresh tokens and their expiry (오너 결정 2026-10-19 (4차) 1): a standing
+       *   key to the member's provider account, kept in plain text (`encryptOAuthTokens` is off).
+       * Every account is created with none (`NO_PROVIDER_TOKENS`) and any update that names one
+       * writes none (an update hook replaces values, it cannot drop keys). Nothing the service
+       * serves reads them back: a sign-in or a link reads the provider's answer from the tokens
+       * of the callback's own token response (Google's `getUserInfo` decodes that ID token, Kakao's
+       * and Naver's ask with that access token); unlinking deletes the row and revokes nothing; no
+       * provider here signs out through the ID token (`createEndSessionURL`); better-auth's own
+       * sessions are its `session` rows. Only `/get-access-token`, `/refresh-token` and
+       * `/account-info` read them, and `disabledPaths` refuses all three.
        */
       account: {
         create: {
@@ -447,18 +487,25 @@ export function createAuth({
            * Returning `false` cancels the create (better-auth `createWithHooks`), and
            * `signUpEmail` ignores what `linkAccount` returns. Scoped to `/sign-up/email`, so
            * /set-password, password reset and social linking still create their accounts — each
-           * without an ID token.
+           * without a provider token.
            */
           before: (account, context) =>
             Promise.resolve(
               context?.path === '/sign-up/email' && account.providerId === CREDENTIAL_PROVIDER_ID
                 ? false
-                : { data: { ...account, idToken: null } },
+                : { data: { ...account, ...NO_PROVIDER_TOKENS } },
             ),
         },
         update: {
           before: (data) =>
-            Promise.resolve({ data: data.idToken !== undefined ? { idToken: null } : {} }),
+            Promise.resolve({
+              data: Object.fromEntries(
+                PROVIDER_TOKEN_FIELDS.filter((field) => data[field] !== undefined).map((field) => [
+                  field,
+                  null,
+                ]),
+              ),
+            }),
         },
       },
     },

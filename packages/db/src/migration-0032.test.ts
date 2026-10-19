@@ -127,15 +127,16 @@ describe.skipIf(!hasTestDb())('migration 0032: the case variants (integration)',
 });
 
 /**
- * Migration 0032's tail that clears what a social login left behind (오너 결정 2026-10-19 (2차) 3,
- * ADR-0072 7-30): better-auth's name and photo on `user`, and the provider's ID token on `account`
- * — Google's carries the member's name and photo address. From 0032 on the API's auth hooks keep
- * both from being written; these statements are what clears the rows a persistent database (dev,
- * deployed) already holds, and migrations run against an empty test database, so they would
- * otherwise never meet a row in any test. Run as the migrate role, in a transaction rolled back.
+ * Migration 0032's tail that clears what a social login left behind (ADR-0072 7-30): better-auth's
+ * name and photo on `user` (오너 결정 2026-10-19 (2차) 3), and the provider's tokens on `account` —
+ * the ID token, Google's carrying the member's name and photo address ((2차) 3), and the access and
+ * refresh tokens with their expiry ((4차) 1). From 0032 on the API's auth hooks keep them from being
+ * written; these statements are what clears the rows a persistent database (dev, deployed) already
+ * holds, and migrations run against an empty test database, so they would otherwise never meet a
+ * row in any test. Run as the migrate role, in a transaction rolled back.
  */
 describe.skipIf(!hasTestDb())(
-  'migration 0032: no social name, photo or ID token (integration)',
+  'migration 0032: no social name, photo or provider token (integration)',
   () => {
     let t: TestDb;
     let migrate: Client;
@@ -193,13 +194,30 @@ describe.skipIf(!hasTestDb())(
       'signature',
     ].join('.');
 
-    async function account(id: string, userId: string, idToken: string | null): Promise<void> {
+    /** A provider's tokens as better-auth stored them; each left out is NULL. */
+    interface Tokens {
+      idToken?: string;
+      accessToken?: string;
+      refreshToken?: string;
+      accessTokenExpiresAt?: Date;
+      refreshTokenExpiresAt?: Date;
+    }
+
+    async function account(id: string, userId: string, tokens: Tokens): Promise<void> {
       await migrate.query(
-        `INSERT INTO "account" (id, issuer, account_id, provider_id, user_id, access_token,
-         refresh_token, id_token, scope, updated_at)
-       VALUES ($1, 'https://accounts.google.com', $1, 'google', $2, 'access-' || $1,
-         'refresh-' || $1, $3, 'openid,email', now())`,
-        [id, userId, idToken],
+        `INSERT INTO "account" (id, issuer, account_id, provider_id, user_id, id_token, access_token,
+         refresh_token, access_token_expires_at, refresh_token_expires_at, scope, updated_at)
+       VALUES ($1, 'https://accounts.google.com', $1, 'google', $2, $3, $4, $5, $6, $7,
+         'openid,email', now())`,
+        [
+          id,
+          userId,
+          tokens.idToken ?? null,
+          tokens.accessToken ?? null,
+          tokens.refreshToken ?? null,
+          tokens.accessTokenExpiresAt ?? null,
+          tokens.refreshTokenExpiresAt ?? null,
+        ],
       );
     }
 
@@ -209,10 +227,14 @@ describe.skipIf(!hasTestDb())(
         id_token: string | null;
         access_token: string | null;
         refresh_token: string | null;
+        access_token_expires_at: Date | null;
+        refresh_token_expires_at: Date | null;
         account_id: string;
         scope: string | null;
       }>(
-        'SELECT id, id_token, access_token, refresh_token, account_id, scope FROM "account" ORDER BY id',
+        `SELECT id, id_token, access_token, refresh_token, access_token_expires_at,
+           refresh_token_expires_at, account_id, scope
+         FROM "account" ORDER BY id`,
       );
       return rows;
     }
@@ -237,20 +259,41 @@ describe.skipIf(!hasTestDb())(
       });
     });
 
-    it('clears every stored ID token and keeps the rest of the login account', async () => {
+    it('clears every stored provider token and keeps the rest of the login account', async () => {
       await rolledBack(async () => {
+        const inAnHour = new Date(Date.now() + 3_600_000);
         await user('google', '', null);
-        await account('with-token', 'google', GOOGLE_ID_TOKEN);
-        await account('without-token', 'google', null);
+        // Every token a sign-in left, and rows holding only one of them.
+        await account('all', 'google', {
+          idToken: GOOGLE_ID_TOKEN,
+          accessToken: 'access-all',
+          refreshToken: 'refresh-all',
+          accessTokenExpiresAt: inAnHour,
+          refreshTokenExpiresAt: inAnHour,
+        });
+        await account('id-only', 'google', { idToken: GOOGLE_ID_TOKEN });
+        await account('access-only', 'google', { accessToken: 'access-only' });
+        await account('refresh-only', 'google', { refreshToken: 'refresh-only' });
+        await account('expiry-only', 'google', { accessTokenExpiresAt: inAnHour });
+        await account('refresh-expiry-only', 'google', { refreshTokenExpiresAt: inAnHour });
 
         const { rowCount } = await migrate.query(statementOf('UPDATE "account"'));
-        expect(rowCount).toBe(1);
+        expect(rowCount).toBe(6);
         expect(await accounts()).toEqual(
-          ['with-token', 'without-token'].map((id) => ({
+          [
+            'access-only',
+            'all',
+            'expiry-only',
+            'id-only',
+            'refresh-expiry-only',
+            'refresh-only',
+          ].map((id) => ({
             id,
             id_token: null,
-            access_token: `access-${id}`,
-            refresh_token: `refresh-${id}`,
+            access_token: null,
+            refresh_token: null,
+            access_token_expires_at: null,
+            refresh_token_expires_at: null,
             account_id: id,
             scope: 'openid,email',
           })),
@@ -261,7 +304,7 @@ describe.skipIf(!hasTestDb())(
     it('touches no row that holds none of them', async () => {
       await rolledBack(async () => {
         await user('clean', '', null);
-        await account('clean-account', 'clean', null);
+        await account('clean-account', 'clean', {});
         expect((await migrate.query(statementOf('UPDATE "user"'))).rowCount).toBe(0);
         expect((await migrate.query(statementOf('UPDATE "account"'))).rowCount).toBe(0);
       });

@@ -204,7 +204,9 @@ export interface RegisteredAuthRoute {
  * `/sign-up/email` is disabled (ADR-0024): RegistrationService calls it on the server only.
  * `/update-user` is disabled (ADR-0072): it writes only better-auth's name and photo, which the
  * service does not keep (a social login's are not stored, 오너 결정 2026-10-19 (2차) 3). So is
- * `/account-info` (ADR-0072 7-31): its answer is the linked provider's name and photo.
+ * `/account-info` (ADR-0072 7-31): its answer is the linked provider's name and photo. And
+ * `/get-access-token` and `/refresh-token` (오너 결정 2026-10-19 (4차) 1, 7-31): they hand out the
+ * linked provider's access and refresh tokens, which the service does not keep.
  */
 export const AUTH_ROUTES: Readonly<Record<string, RegisteredAuthRoute>> = {
   'POST /sign-in/social': {
@@ -297,14 +299,6 @@ export const AUTH_ROUTES: Readonly<Record<string, RegisteredAuthRoute>> = {
   'POST /unlink-account': {
     reason:
       '세션 계정의 로그인 수단 하나 끊기(PLAN 10.3, 마지막 하나는 거절): 다른 계정의 것이면 찾지 못한다.',
-  },
-  'POST /refresh-token': {
-    reason: '세션 계정에 연결된 제공자 토큰 갱신: 세션 계정의 것만 찾는다.',
-    answersAccount: true,
-  },
-  'POST /get-access-token': {
-    reason: '세션 계정에 연결된 제공자의 접근 토큰: 세션 계정의 것만 찾는다.',
-    answersAccount: true,
   },
   'GET /ok': {
     reason: 'better-auth의 생존 확인: { ok: true }.',

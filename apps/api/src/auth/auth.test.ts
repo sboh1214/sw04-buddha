@@ -266,13 +266,15 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
     ].join('.');
   }
 
-  /** The tokens a login account row holds. */
+  /** The tokens a login account row holds, and its scope. */
   async function accountTokens(accountRowId: string) {
     const [row] = await t.db
       .select({
         idToken: schema.account.idToken,
         accessToken: schema.account.accessToken,
         refreshToken: schema.account.refreshToken,
+        accessTokenExpiresAt: schema.account.accessTokenExpiresAt,
+        refreshTokenExpiresAt: schema.account.refreshTokenExpiresAt,
         scope: schema.account.scope,
       })
       .from(schema.account)
@@ -280,10 +282,31 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
     return row;
   }
 
-  it('keeps no provider ID token, which carries the name and photo (ADR-0072 7-30)', async () => {
-    // 오너 결정 2026-10-19 (2차) 3. better-auth hands the ID token to the account row as it came: on
-    // a social sign-up (createOAuthUser, the callback's createAccount), on a link (linkAccount), and
-    // again on every sign-in and refresh (updateAccount). Each keeps the rest of what it carries.
+  /** What a provider's token response hands better-auth: every token and its expiry. */
+  function providerTokens(label: string) {
+    return {
+      accessToken: `${label}-access`,
+      refreshToken: `${label}-refresh`,
+      idToken: idTokenNaming('홍길동'),
+      accessTokenExpiresAt: new Date(Date.now() + 3_600_000),
+      refreshTokenExpiresAt: new Date(Date.now() + 86_400_000),
+    };
+  }
+
+  const NO_TOKENS = {
+    idToken: null,
+    accessToken: null,
+    refreshToken: null,
+    accessTokenExpiresAt: null,
+    refreshTokenExpiresAt: null,
+  };
+
+  it('keeps no provider token: no ID, access or refresh token (ADR-0072 7-30)', async () => {
+    // 오너 결정 2026-10-19 (2차) 3 for the ID token, which carries the name and photo, and (4차) 1
+    // for the access and refresh tokens and their expiry. better-auth hands them to the account row
+    // as they came: on a social sign-up (createOAuthUser, the callback's createAccount), on a link
+    // (linkAccount), and again on every sign-in and refresh (updateAccount). Each keeps the rest of
+    // what it carries.
     const context = await t.auth.$context;
     const created = await context.internalAdapter.createOAuthUser(
       { email: 'it-auth-social-token@test.local', name: '', emailVerified: true },
@@ -291,29 +314,26 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
         providerId: 'google',
         issuer: 'https://accounts.google.com',
         accountId: `google-token-${String(Date.now())}`,
-        accessToken: 'access-1',
-        refreshToken: 'refresh-1',
-        idToken: idTokenNaming('홍길동'),
+        ...providerTokens('google-1'),
         scope: 'openid,email',
       },
     );
-    expect(created.account).toMatchObject({ idToken: null, accessToken: 'access-1' });
+    expect(created.account).toMatchObject(NO_TOKENS);
     expect(await accountTokens(created.account.id)).toEqual({
-      idToken: null,
-      accessToken: 'access-1',
-      refreshToken: 'refresh-1',
+      ...NO_TOKENS,
       scope: 'openid,email',
     });
 
-    // The next sign-in's fresh tokens (`updateAccountOnSignIn`): the ID token stays out.
+    // The next sign-in's fresh tokens (`updateAccountOnSignIn`) or a refresh: none is written, and
+    // what else the update carries still is.
     await context.internalAdapter.updateAccount(created.account.id, {
-      accessToken: 'access-2',
-      idToken: idTokenNaming('홍길동'),
+      providerId: 'google',
+      ...providerTokens('google-2'),
+      scope: 'openid,email,https://www.googleapis.com/auth/userinfo.email',
     });
-    expect(await accountTokens(created.account.id)).toMatchObject({
-      idToken: null,
-      accessToken: 'access-2',
-      refreshToken: 'refresh-1',
+    expect(await accountTokens(created.account.id)).toEqual({
+      ...NO_TOKENS,
+      scope: 'openid,email,https://www.googleapis.com/auth/userinfo.email',
     });
 
     // A second provider linked to the same member.
@@ -322,13 +342,10 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
       providerId: 'kakao',
       issuer: 'https://kauth.kakao.com',
       accountId: `kakao-token-${String(Date.now())}`,
-      accessToken: 'kakao-access',
-      idToken: idTokenNaming('김철수'),
+      ...providerTokens('kakao'),
+      scope: 'account_email',
     });
-    expect(await accountTokens(linked.id)).toMatchObject({
-      idToken: null,
-      accessToken: 'kakao-access',
-    });
+    expect(await accountTokens(linked.id)).toEqual({ ...NO_TOKENS, scope: 'account_email' });
 
     // And the plain createAccount the link callback uses.
     const account = await context.internalAdapter.createAccount({
@@ -336,20 +353,16 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
       providerId: 'naver',
       issuer: 'https://nid.naver.com',
       accountId: `naver-token-${String(Date.now())}`,
-      accessToken: 'naver-access',
-      idToken: idTokenNaming('이영희'),
+      ...providerTokens('naver'),
     });
-    expect(await accountTokens(account.id)).toMatchObject({
-      idToken: null,
-      accessToken: 'naver-access',
-    });
+    expect(await accountTokens(account.id)).toMatchObject(NO_TOKENS);
     // The member's three login accounts, none holding one.
-    expect(
-      await t.db
-        .select({ idToken: schema.account.idToken })
-        .from(schema.account)
-        .where(eq(schema.account.userId, created.user.id)),
-    ).toEqual([{ idToken: null }, { idToken: null }, { idToken: null }]);
+    const rows = await t.db
+      .select({ id: schema.account.id })
+      .from(schema.account)
+      .where(eq(schema.account.userId, created.user.id));
+    expect(rows).toHaveLength(3);
+    for (const row of rows) expect(await accountTokens(row.id)).toMatchObject(NO_TOKENS);
   });
 
   it('signing in before the link is clicked fails and sends nothing', async () => {
@@ -713,6 +726,26 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
     });
     expect(attempt.statusCode).toBe(404);
     expect(attempt.body).toBe('Not Found');
+  });
+
+  it('better-auth’s get-access-token and refresh-token are not exposed: no provider token through them (ADR-0072 7-31)', async () => {
+    // 오너 결정 2026-10-19 (4차) 1: they hand the session's account its linked provider's stored
+    // access token (and refresh it with the stored refresh token), which the service keeps none of;
+    // disabledPaths answers before an account is looked up.
+    const member = await signUpTestUser(t);
+    for (const path of ['/api/auth/get-access-token', '/api/auth/refresh-token']) {
+      const attempt = await t.app.inject({
+        method: 'POST',
+        url: path,
+        headers: { ...browserHeaders, cookie: member.cookie },
+        payload: { accountId: 'any-account' },
+      });
+      expect({ path, status: attempt.statusCode, body: attempt.body }).toEqual({
+        path,
+        status: 404,
+        body: 'Not Found',
+      });
+    }
   });
 
   /**

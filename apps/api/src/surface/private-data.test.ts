@@ -121,8 +121,6 @@ interface Fixture {
   /** An active category: what B's refused interest categories name (#58). */
   categoryId: number;
   paymentId: string;
-  /** A's password login: the `account` row better-auth keeps. */
-  accountId: string;
   /** Page cursors made from A's rows: a page from there holds A's newest row and the older ones. */
   cursors: { ledger: string; orders: string; payments: string; watchlist: string };
   sentinels: readonly Sentinel[];
@@ -473,9 +471,6 @@ interface AuthCase {
   own?: { request?: (fixture: Fixture) => AuthRequest; labels: readonly string[] };
 }
 
-/** A's login account and A, as better-auth's account-token routes take them. */
-const aimedAtA = (fixture: Fixture) => ({ accountId: fixture.accountId, userId: fixture.a.id });
-
 const WRONG_PASSWORD = 'not-the-password-1';
 
 /** The better-auth routes that answer with an account's data (AUTH_ROUTES `answersAccount`). */
@@ -523,14 +518,6 @@ const AUTH_CASES: Readonly<Record<string, AuthCase>> = {
   'GET /list-accounts': {
     status: { anonymous: 401, B: 200 },
     own: { labels: ['user id', 'account id'] },
-  },
-  'POST /refresh-token': {
-    request: (fixture) => ({ body: aimedAtA(fixture) }),
-    status: { anonymous: 401, B: 400 },
-  },
-  'POST /get-access-token': {
-    request: (fixture) => ({ body: aimedAtA(fixture) }),
-    status: { anonymous: 401, B: 400 },
   },
 };
 
@@ -905,7 +892,6 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       phone,
       categoryId,
       paymentId: payment!.id,
-      accountId: account!.id,
       cursors: {
         ledger: cursorAfter(entry!),
         // The later of A's two orders, so the page holds both.
