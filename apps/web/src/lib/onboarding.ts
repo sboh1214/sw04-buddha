@@ -22,10 +22,10 @@ import { safeNextPath } from './next-path';
  * account that left the onboarding screen before them has skipped them (오너 결정 2026-10-19 (2차) 5).
  * Email sign-ups set their password on /set-password first and meet the gate on the page it goes
  * on to (`next`): every auth screen — the login form, the social callback, /set-password — goes
- * back to `next`, and the gate there starts the onboarding. Not on a page exempt for a login-only
- * action (ONBOARDING_EXEMPT_PAGES, the post page): an account that signed up or signed in from one
- * comes back to it with its steps left and stays; its onboarding starts on its next move, with
- * that move's page as `next` (ADR-0073 9-37 — whether it should is asked in 결과 4의 4).
+ * back to `next`, and the gate there starts the onboarding — on a post page too, which the gate
+ * exempts for an account facing a re-consent alone (ONBOARDING_EXEMPT_PAGES), never for one that
+ * has not finished its onboarding: a new account that signed up or signed in from a post page is
+ * sent on from it, and comes back to it at the end (오너 결정 2026-10-20, ADR-0073 9-37).
  *
  * Pure functions of the URL and of what `GET /me` said, kept out of the gate component
  * (components/auth/onboarding-gate.tsx) and the stepper (app/onboarding/onboarding-form.tsx) so
@@ -74,16 +74,19 @@ export const ONBOARDING_EXEMPT_PATHS: readonly string[] = [
 ];
 
 /**
- * A page an account with onboarding steps left may still open because the owner lets it do
- * something there with a session alone — the server asks nothing more of that action — and the
- * screen has to reach it too (오너 결정 2026-10-20, ADR-0073). Unlike ONBOARDING_EXEMPT_PATHS an
- * entry is exactly one page, never the pages under it: the post page is exempt, its edit screen
- * is not. What the page offers that the onboarding still keeps from the account — writing,
- * editing, and later the comment boxes (#48) — sends it to its step instead of opening the form
- * (`onboardingEntryPath`, hooks/use-onboarding-entry.ts), so the exemption opens the page and
- * never a write. The exemption is for every account with a step left, not only an author facing a
- * re-consent: a visitor who signs up or signs in from the page comes back to it (`next`) and is not
- * sent on from there — as built; ADR-0073 결과 4의 4 asks the owner whether it should be.
+ * A page an account facing a re-consent may still open because the owner lets it do something
+ * there with a session alone — the server asks nothing more of that action — and the screen has to
+ * reach it too (오너 결정 2026-10-20, ADR-0073). Unlike ONBOARDING_EXEMPT_PATHS an entry is exactly
+ * one page, never the pages under it: the post page is exempt, its edit screen is not. What the
+ * page offers that the onboarding still keeps from the account — writing, editing, and later the
+ * comment boxes (#48) — sends it to its step instead of opening the form (`onboardingEntryPath`,
+ * hooks/use-onboarding-entry.ts), so the exemption opens the page and never a write.
+ *
+ * Only for an account that finished its onboarding once and has a re-consent alone left
+ * (`hasOnlyReconsentLeft`, 오너 결정 2026-10-20 3차 답 1): what it did before the revision — its
+ * own posts — is what it may still remove. An account that has not finished — a new one that signed
+ * up or signed in from the page, `next` bringing it back there — is sent on from it like from any
+ * page, with the page as `next`, and comes back to it at the end (#57-9).
  */
 export interface OnboardingExemptPage {
   /**
@@ -105,7 +108,7 @@ export const ONBOARDING_EXEMPT_PAGES: readonly OnboardingExemptPage[] = [
   {
     route: '/community/posts/[postId]',
     reason:
-      'an author deletes their own post with a session alone (owner decisions 2026-10-19 answer 2 and 2026-10-20, #46); its edit entry goes to the step',
+      'an author facing a re-consent deletes their own post with a session alone (owner decisions 2026-10-19 answer 2 and 2026-10-20, #46); its edit entry goes to the step',
   },
 ];
 
@@ -126,10 +129,29 @@ export function isRoutePage(pathname: string, route: string): boolean {
   );
 }
 
+/** Whether `pathname` is exempt for every account with a step left (ONBOARDING_EXEMPT_PATHS). */
 export function isOnboardingExempt(pathname: string): boolean {
+  return ONBOARDING_EXEMPT_PATHS.some((root) => isUnder(pathname, root));
+}
+
+/** Whether `pathname` is a page exempt for a login-only action (ONBOARDING_EXEMPT_PAGES). */
+export function isOnboardingExemptPage(pathname: string): boolean {
+  return ONBOARDING_EXEMPT_PAGES.some((page) => isRoutePage(pathname, page.route));
+}
+
+/**
+ * Whether what is left of the account's onboarding is a re-consent alone: it finished the
+ * onboarding once — its 본인확인 and nickname are done, and it agreed to the required items before
+ * (`isReconsent`) — and a revision that changed members' rights has since asked for the consent
+ * again (#57-5). Not an account that agreed and left before its 본인확인 and then met a revision:
+ * it never finished, and has nothing it did as a member to take back.
+ */
+export function hasOnlyReconsentLeft(onboarding: Onboarding | undefined): boolean {
   return (
-    ONBOARDING_EXEMPT_PATHS.some((root) => isUnder(pathname, root)) ||
-    ONBOARDING_EXEMPT_PAGES.some((page) => isRoutePage(pathname, page.route))
+    onboarding !== undefined &&
+    onboarding.verification &&
+    onboarding.nickname &&
+    isReconsent(onboarding)
   );
 }
 
@@ -149,16 +171,21 @@ export function hasOnboardingStepLeft(onboarding: Onboarding | undefined): boole
  *   or the consent again after a revision that asked for it (#57-5). Never the interest categories:
  *   the onboarding screen shows them once, and leaving is skipping them (오너 결정 2026-10-19 (2차) 5).
  * - `nextStep: null` — nothing to do.
+ * Every account with a step left stays on the auth and legal screens (ONBOARDING_EXEMPT_PATHS);
+ * one with a re-consent alone left stays on a page of a login-only action too
+ * (ONBOARDING_EXEMPT_PAGES, `hasOnlyReconsentLeft`).
  */
 export function needsOnboarding(pathname: string, onboarding: Onboarding | undefined): boolean {
-  return hasOnboardingStepLeft(onboarding) && !isOnboardingExempt(pathname);
+  if (!hasOnboardingStepLeft(onboarding) || isOnboardingExempt(pathname)) return false;
+  return !(isOnboardingExemptPage(pathname) && hasOnlyReconsentLeft(onboarding));
 }
 
 /**
  * Where an entry to a form on an exempt page goes (오너 결정 2026-10-20: 글쓰기·수정, later the
  * comment boxes): the form's page `target` (pathname + search) for an account with nothing left,
- * or — with a step left — that step, which comes back to `target` once done (#57-9). While the
- * onboarding is not known the entry is the form's own page, whose gate decides when it is.
+ * or — with a step left (a re-consent: no other account stays on the page) — that step, which
+ * comes back to `target` once done (#57-9). While the onboarding is not known the entry is the
+ * form's own page, whose gate decides when it is.
  */
 export function onboardingEntryPath(target: string, onboarding: Onboarding | undefined): string {
   return hasOnboardingStepLeft(onboarding) ? onboardingPath(target) : target;

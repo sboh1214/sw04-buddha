@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { copy } from '@/copy';
 import { type Onboarding } from './onboarding';
 import {
   DRAFT_PREVIEW_MAX_SIDE,
+  POST_DRAFT_DISCARDED_TOAST,
   POST_DRAFT_PREFIX,
   POST_DRAFT_TTL_MS,
   type DraftStorage,
@@ -10,11 +12,13 @@ import {
   clearPostDrafts,
   hasDraftToKeep,
   keepPostDraft,
+  nextRestoredDraftState,
   postDraftLandedSince,
   postDraftMoment,
   postDraftStorageKey,
   previewSize,
   readPostDraft,
+  restoredDraftState,
   postDraftLanded,
   shouldKeepPostDraft,
   sweepPostDrafts,
@@ -137,6 +141,7 @@ describe('keeping and taking back', () => {
   });
 
   it('expires POST_DRAFT_TTL_MS after it was kept, and is dropped then', () => {
+    // An hour (오너 결정 2026-10-20 3차 답 2).
     expect(POST_DRAFT_TTL_MS).toBe(60 * 60 * 1000);
     const storage = new MemoryStorage();
     keepPostDraft(storage, NEW, ACCOUNT, DRAFT, NOW);
@@ -319,6 +324,62 @@ describe('what a form has to keep', () => {
       false,
     );
     expect(hasDraftToKeep({ ...blank, title: '   ' })).toBe(false);
+  });
+});
+
+describe('discarding a draft taken back (오너 결정 2026-10-20 3차 답 3)', () => {
+  const restored = restoredDraftState(DRAFT);
+
+  it('starts with the draft held, nothing asked, the form drawn once', () => {
+    expect(restored).toEqual({ restored: DRAFT, asking: false, generation: 0, discarded: false });
+    expect(restoredDraftState(null).restored).toBeNull();
+  });
+
+  it('always asks first: the discard button only opens the dialog', () => {
+    const asking = nextRestoredDraftState(restored, 'ask');
+    expect(asking).toEqual({ ...restored, asking: true });
+    // Asked again while open: the same.
+    expect(nextRestoredDraftState(asking, 'ask')).toBe(asking);
+  });
+
+  it('keeps the draft and the form as they were when the dialog is dismissed', () => {
+    const dismissed = nextRestoredDraftState(nextRestoredDraftState(restored, 'ask'), 'cancel');
+    expect(dismissed).toEqual(restored);
+    expect(dismissed.restored).toBe(DRAFT);
+    // And it can be asked again.
+    expect(nextRestoredDraftState(dismissed, 'ask').asking).toBe(true);
+  });
+
+  it('discards on the dialog’s answer: the form drawn afresh, the focus sent to its title', () => {
+    const discarded = nextRestoredDraftState(nextRestoredDraftState(restored, 'ask'), 'discard');
+    expect(discarded).toEqual({ restored: null, asking: false, generation: 1, discarded: true });
+  });
+
+  it('never discards unasked, nor twice, nor a form that took nothing back', () => {
+    expect(nextRestoredDraftState(restored, 'discard')).toBe(restored);
+    const discarded = nextRestoredDraftState(nextRestoredDraftState(restored, 'ask'), 'discard');
+    expect(nextRestoredDraftState(discarded, 'ask')).toBe(discarded);
+    expect(nextRestoredDraftState(discarded, 'discard')).toBe(discarded);
+    const none = restoredDraftState(null);
+    expect(nextRestoredDraftState(none, 'ask')).toBe(none);
+    expect(nextRestoredDraftState(none, 'discard')).toBe(none);
+    expect(nextRestoredDraftState(none, 'cancel')).toBe(none);
+  });
+
+  it('asks and announces in the owner’s sentences', () => {
+    expect(copy.postDraftDiscardQuestion).toBe(
+      '되살린 내용을 버릴까요? 그 뒤에 쓴 내용도 사라집니다.',
+    );
+    expect(copy.postDraftDiscarded).toBe('되살린 내용을 버렸습니다.');
+  });
+
+  it('says a discard in a toast, on screen, like the app’s other completions (3차 답 5)', () => {
+    // A completion toast: the toaster's live region is what screen readers hear it from, and
+    // nothing else says it (the e2e counts the sentence's copies the moment it lands).
+    expect(POST_DRAFT_DISCARDED_TOAST).toEqual({
+      type: 'success',
+      title: '되살린 내용을 버렸습니다.',
+    });
   });
 });
 

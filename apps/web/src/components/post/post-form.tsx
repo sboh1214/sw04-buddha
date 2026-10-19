@@ -1,13 +1,25 @@
 'use client';
 
-import { Alert, Box, Button, Field, HStack, Input, Stack, Text } from '@chakra-ui/react';
+import {
+  Alert,
+  Box,
+  Button,
+  Dialog,
+  Field,
+  HStack,
+  Input,
+  Portal,
+  Stack,
+  Text,
+} from '@chakra-ui/react';
 import {
   POST_BODY_MAX_LENGTH,
   POST_IMAGES_MAX,
   POST_TITLE_MAX_LENGTH,
   type PostDocument,
 } from '@buddha/shared';
-import { useEffect, useId, useRef, useState } from 'react';
+import { type RefObject, useEffect, useId, useReducer, useRef, useState } from 'react';
+import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { useLeaveGuard } from '@/hooks/use-leave-guard';
 import { useKeepPostDraftForOnboarding } from '@/hooks/use-post-draft';
@@ -18,11 +30,14 @@ import {
   titleTooLong,
 } from '@/lib/post-editor';
 import {
+  POST_DRAFT_DISCARDED_TOAST,
   type PostDraft,
   type PostDraftKey,
   clearSessionPostDraft,
   hasDraftToKeep,
+  nextRestoredDraftState,
   readSessionPostDraft,
+  restoredDraftState,
 } from '@/lib/post-drafts';
 import { PostEditor } from './post-editor';
 
@@ -73,13 +88,23 @@ export interface PostFormProps {
  * taken back (`hasDraftToKeep`; an image still uploading is not something it can keep): the
  * screen opened again by the same account takes it back — the title, the body and the uploads'
  * previews — says so above the form, and offers to discard it, which puts back what the screen
- * started with (everything typed since the restore goes too — ADR-0073 결과 4의 2 asks the owner).
- * Taken back, it is removed from the storage: the form holds it, and guards it like any draft.
+ * started with; everything typed since the restore goes too, so the discard always asks first in
+ * a dialog that says so (오너 결정 2026-10-20 3차 답 3, `nextRestoredDraftState`), and a discard
+ * says so in a toast like the app's other completions — on screen and, once, to screen readers
+ * (오너 결정 2026-10-20 3차 답 5, `POST_DRAFT_DISCARDED_TOAST`). Taken back, it is removed from the
+ * storage: the form holds it, and guards it like any draft.
  *
  * Focus: the notice is focused when the form is drawn with a draft taken back — it appears with
  * its text already in it, which a live region may not announce, and the reader lands on it with
- * the discard right after; after a discard, which redraws the form and removes the focused button,
- * the title field is focused rather than the focus falling back to the page.
+ * the discard right after. The dialog opens on 취소 (the first of its buttons; nothing is lost on
+ * Enter), and closing it without discarding puts the focus back on the discard button. A discard
+ * redraws the form and removes that button: the title field is focused rather than the focus
+ * falling back to the page, and the toast '되살린 내용을 버렸습니다.' appears. Its one announcement
+ * is the toaster's (components/ui/toaster.tsx): the toaster's region is a polite live region
+ * (`aria-live="polite"`, zag's toast group) mounted with the app and portalled to <body>, and the
+ * modal dialog, which hides the other children of <body> from assistive tech while it is open and
+ * is still open when 버리기 adds the toast, leaves a child of <body> with `aria-live` exposed (zag's
+ * `hideOthers`) — so the sentence goes into a region exposed all along, and no other region says it.
  */
 export function PostForm(props: PostFormProps) {
   const { draftKey, accountId } = props;
@@ -88,24 +113,107 @@ export function PostForm(props: PostFormProps) {
     key: draftKey,
     draft: accountId === undefined ? null : readSessionPostDraft(draftKey, accountId),
   }));
-  const [restored, setRestored] = useState<PostDraft | null>(kept.draft);
-  // A discard draws the form afresh from what the screen started with.
-  const [generation, setGeneration] = useState(0);
+  const [held, send] = useReducer(nextRestoredDraftState, kept.draft, restoredDraftState);
+  // The title field of the fields on screen: where a discard leaves the focus.
+  const titleRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (kept.draft !== null) clearSessionPostDraft(kept.key);
   }, [kept]);
   return (
-    <PostFormFields
-      key={generation}
-      {...props}
-      restored={restored}
-      focusTitle={generation > 0}
-      onDiscard={() => {
-        clearSessionPostDraft(kept.key);
-        setRestored(null);
-        setGeneration((count) => count + 1);
+    <>
+      <PostFormFields
+        // A discard draws the form afresh from what the screen started with.
+        key={held.generation}
+        {...props}
+        restored={held.restored}
+        focusTitle={held.generation > 0}
+        titleRef={titleRef}
+        onDiscard={() => send('ask')}
+      />
+      {kept.draft !== null && (
+        <DiscardDialog
+          open={held.asking}
+          discarded={held.discarded}
+          titleRef={titleRef}
+          onCancel={() => send('cancel')}
+          onDiscard={() => {
+            // Once: a second click on 버리기 while the dialog closes discards nothing, and says
+            // nothing either.
+            if (!held.asking) return;
+            clearSessionPostDraft(kept.key);
+            send('discard');
+            toaster.create(POST_DRAFT_DISCARDED_TOAST);
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+/**
+ * The confirm of '되살린 내용 버리기' (오너 결정 2026-10-20 3차 답 3): asked every time — what was
+ * typed since the restore goes with the draft. 버리기 discards; 취소, Escape and a click outside keep
+ * the form as it is. Its focus comes back to the discard button when it closes, or — once
+ * discarded, the button gone with the fields it was in — goes to the redrawn title field
+ * (`finalFocusEl`).
+ */
+function DiscardDialog({
+  open,
+  discarded,
+  titleRef,
+  onCancel,
+  onDiscard,
+}: {
+  open: boolean;
+  discarded: boolean;
+  titleRef: RefObject<HTMLInputElement | null>;
+  onCancel: () => void;
+  onDiscard: () => void;
+}) {
+  return (
+    <Dialog.Root
+      open={open}
+      onOpenChange={(details) => {
+        if (!details.open) onCancel();
       }}
-    />
+      role="alertdialog"
+      lazyMount
+      unmountOnExit
+      closeOnInteractOutside
+      {...(discarded ? { finalFocusEl: () => titleRef.current } : {})}
+    >
+      <Portal>
+        <Dialog.Backdrop />
+        <Dialog.Positioner>
+          <Dialog.Content data-testid="post-draft-discard-dialog">
+            <Dialog.Header>
+              <Dialog.Title>{copy.postDraftDiscard}</Dialog.Title>
+            </Dialog.Header>
+            <Dialog.Body>
+              <Dialog.Description>{copy.postDraftDiscardQuestion}</Dialog.Description>
+            </Dialog.Body>
+            <Dialog.Footer>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={onCancel}
+                data-testid="post-draft-discard-cancel"
+              >
+                {copy.cancel}
+              </Button>
+              <Button
+                size="sm"
+                colorPalette="no"
+                onClick={onDiscard}
+                data-testid="post-draft-discard-confirm"
+              >
+                {copy.postDraftDiscardConfirm}
+              </Button>
+            </Dialog.Footer>
+          </Dialog.Content>
+        </Dialog.Positioner>
+      </Portal>
+    </Dialog.Root>
   );
 }
 
@@ -122,11 +230,14 @@ function PostFormFields({
   onSubmit,
   restored,
   focusTitle,
+  titleRef,
   onDiscard,
 }: PostFormProps & {
   restored: PostDraft | null;
   /** Drawn afresh by a discard: the title field takes the focus the discard button had. */
   focusTitle: boolean;
+  titleRef: RefObject<HTMLInputElement | null>;
+  /** The discard button: asks first (`DiscardDialog`). */
   onDiscard: () => void;
 }) {
   const [title, setTitle] = useState(restored?.title ?? initialTitle ?? '');
@@ -155,12 +266,11 @@ function PostFormFields({
   });
   const noticeRef = useRef<HTMLDivElement>(null);
   const noticeTextId = useId();
-  const titleRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     // Each holds for the form's life: a discard draws a new one (PostForm's `generation`).
     if (restored !== null) noticeRef.current?.focus();
     else if (focusTitle) titleRef.current?.focus();
-  }, [restored, focusTitle]);
+  }, [restored, focusTitle, titleRef]);
   const count = countEditorDocument(body);
   const titleInvalid = titleTooLong(title);
   const blocked =

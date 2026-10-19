@@ -1,4 +1,5 @@
 import type { JSONContent } from '@tiptap/react';
+import { copy } from '@/copy';
 import { hasOnboardingStepLeft, type Onboarding } from './onboarding';
 
 /**
@@ -21,8 +22,8 @@ import { hasOnboardingStepLeft, type Onboarding } from './onboarding';
  *   and the gate keeps it again should it send the account on once more), once a write or an edit
  *   of that screen succeeds (one in flight when the gate took the account away included, and a
  *   form the gate takes away while that success is being handled keeps nothing —
- *   `postDraftLanded`), when the writer discards it, when the account signs out in the tab, and
- *   POST_DRAFT_TTL_MS after it was kept.
+ *   `postDraftLanded`), when the writer discards it (asked first, `nextRestoredDraftState`), when
+ *   the account signs out in the tab, and POST_DRAFT_TTL_MS after it was kept.
  * - Only what it can carry: a title or a body changed, or a draft taken back before
  *   (`hasDraftToKeep`). An image still uploading is not in it — the editor inserts the image when
  *   the upload answers, and the gate has taken the editor away by then — so a form whose only
@@ -60,9 +61,10 @@ export interface DraftStorage {
 }
 
 /**
- * How long a kept draft waits for its screen: an hour (구현의 선택 — the owner's «잠시»). The
- * onboarding's steps take minutes; a draft older than this is more likely forgotten than wanted,
- * and the tab may have changed hands. The uploads it names outlive it (ORPHAN_MEDIA_HOURS, 24).
+ * How long a kept draft waits for its screen: an hour (오너 결정 2026-10-20 3차 답 2 — the owner's
+ * «잠시», which the implementation set and the owner kept). The onboarding's steps take minutes; a
+ * draft older than this is more likely forgotten than wanted, and the tab may have changed hands.
+ * Closing the tab removes it sooner. The uploads it names outlive it (ORPHAN_MEDIA_HOURS, 24).
  */
 export const POST_DRAFT_TTL_MS = 60 * 60 * 1000;
 
@@ -293,6 +295,64 @@ export function previewSize(
     height: Math.max(1, Math.round(height * scale)),
   };
 }
+
+// ---- the draft taken back, on the form ------------------------------------------------------
+
+/**
+ * A form's hold of the draft it took back, and the discard of it (오너 결정 2026-10-20 3차 답 3):
+ * '되살린 내용 버리기' always asks first — a discard is for good, and takes everything typed since
+ * the restore with it — and only the dialog's 버리기 discards:
+ * - `ask` (the button): the dialog opens; the form is as it was.
+ * - `cancel` (취소, Escape, a click outside): the dialog closes; the form is as it was.
+ * - `discard` (버리기, only while the dialog is open): the draft goes, the form is drawn afresh
+ *   with what the screen started with (`generation`, the fields' React key — a new post's empty
+ *   form, or the saved post), and `discarded` sends the dialog's focus to the redrawn title field.
+ *   The form says so in a toast (`POST_DRAFT_DISCARDED_TOAST`).
+ */
+export interface RestoredDraftState {
+  /** The draft taken back, until it is discarded (or sent: the screen goes then). */
+  readonly restored: PostDraft | null;
+  /** The confirm dialog of the discard is open. */
+  readonly asking: boolean;
+  /** How many times a discard drew the form afresh. */
+  readonly generation: number;
+  /** A discard happened: the dialog closes onto the redrawn title field (its `finalFocusEl`). */
+  readonly discarded: boolean;
+}
+
+export type RestoredDraftEvent = 'ask' | 'cancel' | 'discard';
+
+/** A form made with `restored` taken back (null: none), nothing asked yet. */
+export function restoredDraftState(restored: PostDraft | null): RestoredDraftState {
+  return { restored, asking: false, generation: 0, discarded: false };
+}
+
+export function nextRestoredDraftState(
+  state: RestoredDraftState,
+  event: RestoredDraftEvent,
+): RestoredDraftState {
+  switch (event) {
+    case 'ask':
+      return state.restored === null || state.asking ? state : { ...state, asking: true };
+    case 'cancel':
+      return state.asking ? { ...state, asking: false } : state;
+    case 'discard':
+      // Never unasked: a discard is the answer to the dialog.
+      return state.asking && state.restored !== null
+        ? { restored: null, asking: false, generation: state.generation + 1, discarded: true }
+        : state;
+  }
+}
+
+/**
+ * What a discard says (오너 결정 2026-10-20 3차 답 5: on screen too, as a toast, and to screen
+ * readers once): a toast like the app's other completions, in the owner's sentence. The toaster's
+ * region is the one live region that says it (components/post/post-form.tsx).
+ */
+export const POST_DRAFT_DISCARDED_TOAST = {
+  type: 'success',
+  title: copy.postDraftDiscarded,
+} as const;
 
 // ---- this tab's sessionStorage --------------------------------------------------------------
 

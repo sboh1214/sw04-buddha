@@ -8,8 +8,10 @@ import {
   afterVerification,
   gatedPagePath,
   hasOnboardingStepLeft,
+  hasOnlyReconsentLeft,
   interestIds,
   isOnboardingExempt,
+  isOnboardingExemptPage,
   isReconsent,
   isRoutePage,
   isStepBack,
@@ -159,8 +161,10 @@ describe('the pages exempt for a login-only action (오너 결정 2026-10-20)', 
     }
   });
 
-  it('exempts the post page — its own and anybody else’s — and nothing under it or beside it', () => {
-    expect(isOnboardingExempt(POST_PAGE)).toBe(true);
+  it('is the post page — its own and anybody else’s — and nothing under it or beside it', () => {
+    expect(isOnboardingExemptPage(POST_PAGE)).toBe(true);
+    // Not exempt for every account, as the auth and legal screens are.
+    expect(isOnboardingExempt(POST_PAGE)).toBe(false);
     for (const path of [
       `${POST_PAGE}/edit`,
       '/community',
@@ -168,33 +172,56 @@ describe('the pages exempt for a login-only action (오너 결정 2026-10-20)', 
       '/community/posts',
       `/markets/btc-100k`,
     ]) {
-      expect(isOnboardingExempt(path), path).toBe(false);
+      expect(isOnboardingExemptPage(path), path).toBe(false);
     }
   });
 
-  it('lets an account with any step left — a re-consent included — stay on a post page', () => {
-    for (const onboarding of [FRESH, CONSENTED, VERIFIED, RECONSENT]) {
-      expect(needsOnboarding(POST_PAGE, onboarding), String(onboarding.nextStep)).toBe(false);
+  it('tells a re-consent alone from an onboarding not finished (3차 답 1)', () => {
+    expect(hasOnlyReconsentLeft(RECONSENT)).toBe(true);
+    for (const onboarding of [FRESH, CONSENTED, VERIFIED, COMPLETED, DONE, undefined]) {
+      expect(hasOnlyReconsentLeft(onboarding), String(onboarding?.nextStep)).toBe(false);
     }
+    // Agreed once, left before the 본인확인, then a revision: the consent again, but the
+    // onboarding was never finished.
+    const agreedThenLeft: Onboarding = { ...CONSENTED, consent: false, nextStep: 'consent' };
+    expect(isReconsent(agreedThenLeft)).toBe(true);
+    expect(hasOnlyReconsentLeft(agreedThenLeft)).toBe(false);
+    // Verified too, the nickname not yet confirmed: the same.
+    const verifiedThenLeft: Onboarding = { ...VERIFIED, consent: false, nextStep: 'consent' };
+    expect(hasOnlyReconsentLeft(verifiedThenLeft)).toBe(false);
   });
 
-  it('lets a brand-new account that signed up or signed in from a post page stay on it too — as built, asked in ADR-0073 결과 4의 4', () => {
-    // Every auth screen goes back to `next` (the nav's 로그인·가입하기 carry the post page): the
-    // new account is not sent on there, and its onboarding starts on its next move, with that
-    // move's page as `next` — not the post page.
-    expect(needsOnboarding(POST_PAGE, FRESH)).toBe(false);
-    expect(needsOnboarding('/community', FRESH)).toBe(true);
-    expect(onboardingPath('/community')).toBe(
-      `/onboarding?next=${encodeURIComponent('/community')}`,
+  it('lets an account that finished once and faces a re-consent alone stay on a post page', () => {
+    expect(needsOnboarding(POST_PAGE, RECONSENT)).toBe(false);
+  });
+
+  it('sends an account that has not finished its onboarding on from a post page, the page as next (3차 답 1)', () => {
+    const agreedThenLeft: Onboarding = { ...CONSENTED, consent: false, nextStep: 'consent' };
+    for (const onboarding of [FRESH, CONSENTED, VERIFIED, agreedThenLeft]) {
+      expect(needsOnboarding(POST_PAGE, onboarding), String(onboarding.nextStep)).toBe(true);
+    }
+    // Every auth screen goes back to `next` (the nav's 로그인·가입하기 carry the post page): the gate
+    // there takes a new account to its first step, which comes back to the post page once done
+    // (#57-9).
+    const path = onboardingPath(gatedPagePath(POST_PAGE, { pathname: POST_PAGE, search: '' }));
+    expect(path).toBe(`/onboarding?next=${encodeURIComponent(POST_PAGE)}`);
+    expect(onboardingNext(new URL(path, 'https://x.invalid').searchParams.get('next'))).toBe(
+      POST_PAGE,
     );
   });
 
-  it('still sends it on from the write and edit screens and the community list', () => {
+  it('still sends a re-consent on from the write and edit screens and the community list', () => {
     for (const onboarding of [FRESH, RECONSENT]) {
       for (const path of [`${POST_PAGE}/edit`, '/community/write', '/community']) {
         expect(needsOnboarding(path, onboarding), path).toBe(true);
       }
     }
+  });
+
+  it('never redirects from a post page while the onboarding is not known, or with nothing left', () => {
+    expect(needsOnboarding(POST_PAGE, undefined)).toBe(false);
+    expect(needsOnboarding(POST_PAGE, COMPLETED)).toBe(false);
+    expect(needsOnboarding(POST_PAGE, DONE)).toBe(false);
   });
 });
 

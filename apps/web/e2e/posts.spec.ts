@@ -3,16 +3,20 @@ import type { Me } from '@buddha/shared';
 import { copy } from '../src/copy';
 import {
   E2E_PASSWORD,
+  agreeOnScreen,
   closeMarket,
+  completeOnboardingThroughApi,
   createOpenMarket,
   expect,
   freshEmail,
   freshTag,
   logOut,
   meOf,
+  setFirstPassword,
   signIn,
   signUp,
   test,
+  verificationLink,
 } from './helpers';
 
 /**
@@ -27,15 +31,19 @@ import {
  * None of the community's screens is for search engines (noindex), and leaving a draft asks first —
  * a refusal keeps it, an answer of yes leaves (owner decisions 2026-10-19): a body without a title,
  * the edit screen (where an untouched body asks nothing, a click into it included), and Forward and
- * a jump back in a browser without the Navigation API too. An author with an onboarding step left
- * — a re-consent — still opens their post and deletes it, and its 수정 goes through the step first;
+ * a jump back in a browser without the Navigation API too. An author facing a re-consent still
+ * opens their post and deletes it, and its 수정 goes through the step first;
  * a draft the onboarding gate takes the writer away from is kept in the tab without asking and
  * comes back, formatting and image, once the step is done, the notice focused — on the edit
- * screen too, where discarding it puts the saved post back (what was typed after the restore goes
- * with it, ADR-0073 결과 4의 2) and focuses the title; signing out from the step removes it (owner
- * decisions 2026-10-20). No spec can bring about a
- * re-consent for real (the consent versions are the build's), so `GET /me` says it in the browser
- * (`asReconsent`), as onboarding.spec.ts draws it.
+ * screen too, where discarding it always asks first (a dismissal keeps it all) and then puts the
+ * saved post back (what was typed after the restore goes with it), says so in a toast — on screen,
+ * and once to screen readers — and focuses the title; signing out from the step removes it (owner
+ * decisions 2026-10-20). A new
+ * account that signs up or signs in from a post page is not let stay on it with its steps left:
+ * the gate takes it to its first step and the onboarding brings it back to the post (오너 결정
+ * 2026-10-20 3차 답 1). No spec can bring about a re-consent for real (the consent versions are
+ * the build's), so `GET /me` says it in the browser (`asReconsent`), as onboarding.spec.ts draws
+ * it.
  * The allow-list, the image checks, the permissions and the paging are the API's and the shared
  * package's tests; this walks the screens.
  */
@@ -632,7 +640,7 @@ test.describe('근거 글', () => {
     expect(asked).toEqual([question, question, question]);
   });
 
-  test('온보딩 단계가 남은 작성자(재동의)도 자기 글 화면을 열어 지우고, 그 화면의 수정은 남은 단계를 거쳐 수정 화면으로 간다', async ({
+  test('재동의가 남은 작성자도 자기 글 화면을 열어 지우고, 그 화면의 수정은 남은 단계를 거쳐 수정 화면으로 간다', async ({
     admin,
     page,
   }) => {
@@ -645,8 +653,8 @@ test.describe('근거 글', () => {
     const viaStep = `/onboarding?next=${encodeURIComponent(edit)}`;
     const reconsent = await asReconsent(page);
 
-    // --- the post page opens for an account with a step left (오너 결정 2026-10-20): not sent
-    // on, the author's own 수정 and 삭제 on it.
+    // --- the post page opens for an account that finished once and faces a re-consent alone
+    // (오너 결정 2026-10-20): not sent on, the author's own 수정 and 삭제 on it.
     reconsent.on = true;
     await page.goto(postPage);
     await expect(page.getByTestId('post-title')).toHaveText(`지울 글 ${tag}`);
@@ -679,6 +687,59 @@ test.describe('근거 글', () => {
     await expect(page).toHaveURL(`/onboarding?next=${encodeURIComponent('/community')}`);
     expect((await page.request.get(`/api/v1/posts/${postId}`)).status()).toBe(404);
     await page.unrouteAll({ behavior: 'ignoreErrors' });
+  });
+
+  test('근거 글 화면에서 가입하거나 로그인한 새 계정은 그 화면에 머물지 않고 남은 단계로 가며, 단계를 마치면 그 글로 돌아온다', async ({
+    admin,
+    page,
+  }) => {
+    const market = await createOpenMarket(admin);
+    const tag = freshTag();
+    const postId = await postThroughApi(admin, market.id, `가입 전에 읽던 글 ${tag}`, '읽던 근거');
+    const postPage = `/community/posts/${postId}`;
+    const viaStep = `/onboarding?next=${encodeURIComponent(postPage)}`;
+
+    // --- a visitor on the post signs up from the header; the post rides along (#57-9).
+    await page.goto(postPage);
+    await expect(page.getByTestId('post-title')).toHaveText(`가입 전에 읽던 글 ${tag}`);
+    await page.getByRole('link', { name: copy.signup }).first().click();
+    await expect(page).toHaveURL(`/signup?next=${encodeURIComponent(postPage)}`);
+    const email = freshEmail();
+    await page.getByLabel(copy.email).fill(email);
+    await page.getByRole('button', { name: copy.signupWithEmail }).click();
+    await expect(page.getByTestId('signup-check-mail')).toBeVisible();
+    await page.goto(await verificationLink(email));
+    await expect(page).toHaveURL(`/set-password?next=${encodeURIComponent(postPage)}`);
+    await setFirstPassword(page);
+    // The post page, then the gate: the exemption is a re-consent's, not a new account's (오너 결정
+    // 2026-10-20 3차 답 1) — the first step, carrying the post.
+    await expect(page).toHaveURL(viaStep);
+    await expect(page.getByTestId('consent-step')).toBeVisible();
+    await expect(page.getByTestId('onboarding-return-reason')).toHaveCount(0);
+
+    // --- left on the step, signed in again from the post with the steps still left: the same.
+    await page.getByTestId('onboarding-logout').click();
+    await expect(page).toHaveURL('/');
+    await page.goto(postPage);
+    await page.getByRole('link', { name: copy.login }).first().click();
+    await expect(page).toHaveURL(`/login?next=${encodeURIComponent(postPage)}`);
+    await page.getByLabel(copy.email).fill(email);
+    await page.getByLabel(copy.password, { exact: true }).fill(E2E_PASSWORD);
+    await page.getByRole('button', { name: copy.loginWithEmail }).click();
+    await expect(page).toHaveURL(viaStep);
+    await expect(page.getByTestId('consent-step')).toBeVisible();
+    // Not even after the consent: agreed once but never finished is not a re-consent.
+    await agreeOnScreen(page);
+    await page.goto(postPage);
+    await expect(page).toHaveURL(viaStep);
+    await expect(page.getByTestId('verification-step')).toBeVisible();
+
+    // --- the steps done: the onboarding goes on to the post.
+    await completeOnboardingThroughApi(page.request);
+    await page.reload();
+    await expect(page).toHaveURL(postPage);
+    await expect(page.getByTestId('post-title')).toHaveText(`가입 전에 읽던 글 ${tag}`);
+    await expect(page.getByTestId('onboarding-gate')).toHaveCount(0);
   });
 
   test('쓰던 글에서 온보딩 게이트가 남은 단계로 보내면 묻지 않고 이 탭에 두었다가, 단계를 마치고 돌아오면 서식과 이미지까지 되살린다', async ({
@@ -772,7 +833,7 @@ test.describe('근거 글', () => {
     await page.unrouteAll({ behavior: 'ignoreErrors' });
   });
 
-  test('수정 화면의 쓰던 글도 게이트를 지나 되살리고, 되살린 내용을 버리면 저장된 글로 돌아가 묻지 않고 떠난다', async ({
+  test('수정 화면의 쓰던 글도 게이트를 지나 되살리고, 되살린 내용 버리기는 늘 먼저 물어 취소하면 그대로, 버리면 저장된 글로 돌아가 알리고 묻지 않고 떠난다', async ({
     admin,
     page,
   }) => {
@@ -813,17 +874,133 @@ test.describe('근거 글', () => {
     await expect(page.getByTestId('post-draft-restored')).toBeVisible();
     await expect(title).toHaveValue('고치던 제목');
     await expect(editor).toContainText('고치던 근거');
+    const discard = page.getByTestId('post-draft-discard');
+    const dialog = page.getByTestId('post-draft-discard-dialog');
+    // The sentence a discard says, wherever it is (a toast once discarded, nowhere before).
+    const discarded = page.getByText(copy.postDraftDiscarded);
+    // The toaster's region (components/ui/toaster.tsx — zag's toast group), mounted with the app.
+    const toasts = page.locator('body > [data-scope="toast"][data-part="group"]');
+    // Nothing typed since the restore: the discard still asks first (3차 답 3 — always, not only
+    // once something was written after the restore), and dismissed it keeps the draft.
+    await discard.click();
+    await expect(dialog).toBeVisible();
+    await expect(title).toHaveValue('고치던 제목');
+    await expect(editor).toContainText('고치던 근거');
+    await page.getByTestId('post-draft-discard-cancel').click();
+    await expect(dialog).toHaveCount(0);
+    await expect(discard).toBeFocused();
+    await expect(page.getByTestId('post-draft-restored')).toBeVisible();
+    await expect(title).toHaveValue('고치던 제목');
+    await expect(editor).toContainText('고치던 근거');
+    await expect(discarded).toHaveCount(0);
     // Written on after the restore: the notice and its discard stay.
     await editor.click();
     await page.keyboard.press('End');
     await page.keyboard.type(' 되살린 뒤 쓴 근거');
     await expect(editor).toContainText('되살린 뒤 쓴 근거');
-    await expect(page.getByTestId('post-draft-discard')).toBeVisible();
+    await expect(discard).toBeVisible();
 
-    // --- discarded: the saved post again — what was typed after the restore goes too, without
-    // asking (as built, ADR-0073 결과 4의 2 asks the owner) — nothing to lose, so leaving asks
-    // nothing; the focus is on the redrawn title, not lost with the button.
-    await page.getByTestId('post-draft-discard').click();
+    // --- the discard always asks first, in the app's own dialog (오너 결정 2026-10-20 3차 답 3):
+    // what was typed after the restore goes too, and the dialog says so. Dismissed, the form is
+    // as it was and the focus is back on the discard button.
+    // The toaster's region is there before anything is discarded: a polite live region, a child of
+    // <body>. Nothing has said the discard.
+    await expect(toasts).toHaveAttribute('aria-live', 'polite');
+    await expect(discarded).toHaveCount(0);
+    await discard.click();
+    await expect(dialog).toBeVisible();
+    // The modal dialog hides the rest of the page from assistive tech (aria-hidden on the other
+    // children of <body>, a frame after it opens) — the form is under it, the toaster's region is
+    // not, so the toast a discard adds to it lands in a region that was exposed all along.
+    const underHidden = (el: Element) => el.closest('[aria-hidden="true"], [inert]') !== null;
+    await expect.poll(() => page.getByTestId('post-form').evaluate(underHidden)).toBe(true);
+    expect(await toasts.evaluate(underHidden)).toBe(false);
+    await expect(page.getByRole('alertdialog')).toHaveAccessibleName(copy.postDraftDiscard);
+    await expect(page.getByRole('alertdialog')).toHaveAccessibleDescription(
+      copy.postDraftDiscardQuestion,
+    );
+    // It opens on 취소: nothing is lost on Enter.
+    await expect(page.getByTestId('post-draft-discard-cancel')).toBeFocused();
+    await page.getByTestId('post-draft-discard-cancel').click();
+    await expect(dialog).toHaveCount(0);
+    await expect(discard).toBeFocused();
+    await expect(page.getByTestId('post-draft-restored')).toBeVisible();
+    await expect(title).toHaveValue('고치던 제목');
+    await expect(editor).toContainText('되살린 뒤 쓴 근거');
+    await expect(discarded).toHaveCount(0);
+    // Escape is a dismissal too, and so is a click outside the dialog.
+    for (const dismiss of [
+      () => page.keyboard.press('Escape'),
+      () => page.mouse.click(4, 4),
+    ] as const) {
+      await discard.click();
+      await expect(dialog).toBeVisible();
+      await dismiss();
+      await expect(dialog).toHaveCount(0);
+      await expect(discard).toBeFocused();
+      await expect(page.getByTestId('post-draft-restored')).toBeVisible();
+      await expect(title).toHaveValue('고치던 제목');
+      await expect(editor).toContainText('되살린 뒤 쓴 근거');
+      await expect(discarded).toHaveCount(0);
+    }
+
+    // --- discarded on 버리기: the saved post again — what was typed after the restore goes too —
+    // said in a toast (오너 결정 2026-10-20 3차 답 5: on screen too, and once to screen readers),
+    // the focus on the redrawn title, not lost with the button; nothing to lose, so leaving asks
+    // nothing.
+    // The sentence is checked where it lands, the moment it does (an observer's callback runs
+    // before the dialog's own close has undone its hiding): in the toaster's region, outside
+    // anything hidden, and nowhere else in the document — the toaster says it, and nothing else.
+    await page.evaluate((sentence) => {
+      const landed: { exposed: boolean; inToaster: boolean; copies: number }[] = [];
+      Object.assign(window, { discardedLanded: landed });
+      const copies = () => {
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        let count = 0;
+        while (walker.nextNode()) {
+          const text = walker.currentNode;
+          if (text.parentElement?.closest('script, style') != null) continue;
+          if (text.textContent?.includes(sentence)) count++;
+        }
+        return count;
+      };
+      new MutationObserver((records) => {
+        for (const record of records) {
+          for (const node of record.addedNodes) {
+            const el = node instanceof Element ? node : node.parentElement;
+            if (el === null || !(node.textContent ?? '').includes(sentence)) continue;
+            landed.push({
+              exposed: el.closest('[aria-hidden="true"], [inert]') === null,
+              inToaster:
+                el.closest('[aria-live]')?.matches('[data-scope="toast"][data-part="group"]') ??
+                false,
+              copies: copies(),
+            });
+          }
+        }
+      }).observe(document.body, { childList: true, subtree: true });
+    }, copy.postDraftDiscarded);
+    await discard.click();
+    await page.getByTestId('post-draft-discard-confirm').click();
+    // On screen: a completion toast like the app's others, named by the owner's sentence.
+    const toast = toasts.getByRole('status').filter({ hasText: copy.postDraftDiscarded });
+    await expect(toast).toBeVisible();
+    await expect(toast).toHaveAccessibleName(copy.postDraftDiscarded);
+    await expect(toast).toHaveAttribute('data-type', 'success');
+    await expect(discarded).toHaveCount(1);
+    const landed = await page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            discardedLanded: { exposed: boolean; inToaster: boolean; copies: number }[];
+          }
+        ).discardedLanded,
+    );
+    expect(landed.length).toBeGreaterThan(0);
+    expect(landed).toEqual(
+      Array.from(landed, () => ({ exposed: true, inToaster: true, copies: 1 })),
+    );
+    await expect(dialog).toHaveCount(0);
     await expect(page.getByTestId('post-draft-restored')).toHaveCount(0);
     await expect(title).toHaveValue('저장된 제목');
     await expect(title).toBeFocused();
