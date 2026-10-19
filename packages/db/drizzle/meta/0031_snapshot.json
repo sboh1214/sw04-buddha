@@ -1,5 +1,5 @@
 {
-  "id": "6795b2a2-0c66-4b17-b9c4-6e65d49f5de2",
+  "id": "72df4152-0de7-4d49-a4e6-bf73ef2737cc",
   "prevId": "a3f6840d-6e37-4580-ad2c-98f65116af24",
   "version": "7",
   "dialect": "postgresql",
@@ -3532,6 +3532,114 @@
       },
       "isRLSEnabled": false
     },
+    "public.start_grant_numbers": {
+      "name": "start_grant_numbers",
+      "schema": "",
+      "columns": {
+        "phone_hash": {
+          "name": "phone_hash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "grant_id": {
+          "name": "grant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source": {
+          "name": "source",
+          "type": "varchar(8)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "released_at": {
+          "name": "released_at",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "start_grant_numbers_phone_hash_live_idx": {
+          "name": "start_grant_numbers_phone_hash_live_idx",
+          "columns": [
+            {
+              "expression": "phone_hash",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"start_grant_numbers\".\"released_at\" IS NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "start_grant_numbers_grant_id_source_grant_idx": {
+          "name": "start_grant_numbers_grant_id_source_grant_idx",
+          "columns": [
+            {
+              "expression": "grant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"start_grant_numbers\".\"source\" = 'grant'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "start_grant_numbers_grant_id_start_grants_id_fk": {
+          "name": "start_grant_numbers_grant_id_start_grants_id_fk",
+          "tableFrom": "start_grant_numbers",
+          "tableTo": "start_grants",
+          "columnsFrom": [
+            "grant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "start_grant_numbers_grant_id_phone_hash_pk": {
+          "name": "start_grant_numbers_grant_id_phone_hash_pk",
+          "columns": [
+            "grant_id",
+            "phone_hash"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "start_grant_numbers_phone_hash_check": {
+          "name": "start_grant_numbers_phone_hash_check",
+          "value": "\"start_grant_numbers\".\"phone_hash\" ~ '^[0-9a-f]{64}$'"
+        },
+        "start_grant_numbers_source_check": {
+          "name": "start_grant_numbers_source_check",
+          "value": "\"start_grant_numbers\".\"source\" IN ('grant', 'operator')"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.start_grants": {
       "name": "start_grants",
       "schema": "",
@@ -3546,12 +3654,6 @@
         "user_id": {
           "name": "user_id",
           "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "phone_hash": {
-          "name": "phone_hash",
-          "type": "varchar(64)",
           "primaryKey": false,
           "notNull": true
         },
@@ -3579,6 +3681,12 @@
           "type": "timestamp (3) with time zone",
           "primaryKey": false,
           "notNull": false
+        },
+        "cancelled_at": {
+          "name": "cancelled_at",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -3593,7 +3701,7 @@
             }
           ],
           "isUnique": false,
-          "where": "\"start_grants\".\"granted_at\" IS NULL",
+          "where": "\"start_grants\".\"granted_at\" IS NULL AND \"start_grants\".\"cancelled_at\" IS NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -3636,13 +3744,6 @@
             "user_id"
           ]
         },
-        "start_grants_phone_hash_unique": {
-          "name": "start_grants_phone_hash_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "phone_hash"
-          ]
-        },
         "start_grants_ledger_entry_id_unique": {
           "name": "start_grants_ledger_entry_id_unique",
           "nullsNotDistinct": false,
@@ -3661,9 +3762,9 @@
           "name": "start_grants_amount_coin_check",
           "value": "\"start_grants\".\"amount_coin\" > 0"
         },
-        "start_grants_phone_hash_check": {
-          "name": "start_grants_phone_hash_check",
-          "value": "\"start_grants\".\"phone_hash\" ~ '^[0-9a-f]{64}$'"
+        "start_grants_settled_check": {
+          "name": "start_grants_settled_check",
+          "value": "\"start_grants\".\"granted_at\" IS NULL OR \"start_grants\".\"cancelled_at\" IS NULL"
         }
       },
       "isRLSEnabled": false

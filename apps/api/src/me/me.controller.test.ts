@@ -1,4 +1,4 @@
-import { schema } from '@buddha/db';
+import { cancelStartGrant, schema } from '@buddha/db';
 import { createPhoneVerification, createStartGrant } from '@buddha/db/test';
 import { errorEnvelopeSchema, meSchema, type ValidationIssue } from '@buddha/shared';
 import { eq } from 'drizzle-orm';
@@ -105,6 +105,10 @@ describe.skipIf(!hasTestInfra)('/api/v1/me (integration)', () => {
       headers: { cookie: other.cookie },
     });
     expect(meSchema.parse(res.json<{ data: unknown }>().data).balance.availableCoin).toBe('12345');
+    // Cancelled by a withdrawal while it waited (owner decision 2026-10-18): nothing waits any
+    // more, so nothing is shown — as for an account with no grant.
+    await t.db.transaction((tx) => cancelStartGrant(tx, user.id));
+    expect(await startGrantOf(user)).toBeNull();
   });
 
   it('GET /me without a session -> 401 UNAUTHENTICATED envelope', async () => {

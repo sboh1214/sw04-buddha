@@ -224,8 +224,9 @@ export const envSchema = z
     // --- The keyed hash of a verified mobile number (#70, ADR-0069 decisions 1 and 7, ADR-0071) ---
     /**
      * The HMAC-SHA256 key of `phoneHash` (identity/phone-hash.ts): what recognises a verified number
-     * once the number itself is gone — the start Coin's "once per number" (`start_grants`), kept
-     * through a withdrawal (#57-18), and the per-number limits later issues count (decision 7).
+     * once the number itself is gone — the start Coin's "once per number"
+     * (`start_grant_numbers`), kept through a withdrawal (#57-18), and the per-number limits later
+     * issues count (decision 7).
      * Its own secret, not one derived from BETTER_AUTH_SECRET: rotating the session secret (every
      * session then signs in again) must not also forget which numbers got their start Coin.
      * Required in production, at least 32 characters (`openssl rand -base64 32`), not a development

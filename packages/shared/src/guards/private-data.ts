@@ -106,8 +106,9 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
     name: '특정 사용자에게 묶인 잔액',
     basis: 'N04 §2, ADR-0071(시작 지급)',
     // The start Coin an account got or awaits (#70) is its wallet's: a public shape never says
-    // whether, how much or when an account was granted it (`startGrant`, `startGrants`). The
-    // account's own `GET /me` is an owner-only route, which this list does not read.
+    // whether, how much or when an account was granted it, nor which numbers count for it
+    // (`startGrant`, `startGrants`, `start_grant_numbers`). The account's own `GET /me` is an
+    // owner-only route, which this list does not read.
     fields: [
       ['balance'],
       ['balances'],

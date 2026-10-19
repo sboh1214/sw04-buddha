@@ -8,7 +8,9 @@ import { coinAmountSchema } from './api/coin-amount.js';
  * confirms consent, verification and nickname, and never again to that number — not to a new
  * account that verifies it after the first one withdrew (#57-17). The amount is the release setting
  * `grant.start_coin` (START_COIN_SETTING); while it has no value the grant waits (`pending`) and is
- * paid when an admin enters one.
+ * paid when an admin enters one. A grant still waiting when its account withdraws is cancelled
+ * instead, and its number may get the start Coin with the next account (owner decision
+ * 2026-10-18: nothing was paid, so the number's once is unused).
  *
  * Owner-only, like the balance it lands in (PRIVATE_DATA `balance`): only the account itself reads
  * it, on `GET /me`.
@@ -31,9 +33,21 @@ export type StartGrantStatus = (typeof START_GRANT_STATUSES)[number];
 export const startGrantStatusSchema = z.enum(START_GRANT_STATUSES);
 
 /**
+ * How a number came to be recorded as one that received the start Coin (`start_grant_numbers`,
+ * ADR-0071 — never on the wire):
+ * - `grant`: the number the account had when its grant was recorded — one per grant;
+ * - `operator`: a number an operator gave the account by hand later (#57-3), recorded beside the
+ *   first so that it, too, never gets the start Coin again (owner decision 2026-10-18, the
+ *   procedure in docs/OPERATIONS.md).
+ */
+export const START_GRANT_NUMBER_SOURCES = ['grant', 'operator'] as const;
+export type StartGrantNumberSource = (typeof START_GRANT_NUMBER_SOURCES)[number];
+
+/**
  * `Me.startGrant`: this account's start grant. `amountCoin` and `grantedAt` are null exactly while
  * it is `pending`. An account with no grant record (not yet eligible, or verified with a number
- * that already received one) has `startGrant: null`.
+ * that already received one) has `startGrant: null`, and so has one whose waiting grant was
+ * cancelled when it withdrew (owner decision 2026-10-18) — a withdrawn account reads nothing.
  */
 export const startGrantSchema = z
   .object({

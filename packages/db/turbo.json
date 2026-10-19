@@ -3,7 +3,11 @@
   "extends": ["//"],
   "tasks": {
     "test": {
-      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/deploy/reset-db.sh"]
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/deploy/reset-db.sh",
+        "$TURBO_ROOT$/docs/OPERATIONS.md"
+      ]
     }
   }
 }

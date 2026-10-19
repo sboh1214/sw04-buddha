@@ -6,8 +6,9 @@ import { expect, freshEmail, signUp, test } from './helpers';
 /**
  * 시작 Coin (#70, ADR-0071) as a member sees it before the onboarding (#58) calls the grant:
  * creating an account grants nothing — every sign-up starts at 0 Coin with no ledger entry — and
- * the wallet says the start Coin is on its way only while the account's grant waits for its amount
- * (ADR-0069 decision 4 #70).
+ * the wallet — its balance card and MY 요약's wallet preview (owner decision 2026-10-18) — says the
+ * start Coin is on its way only while the account's grant waits for its amount (ADR-0069 decision
+ * 4 #70).
  *
  * Nothing in this build records a grant on a request: the grant has no route, and #58 is not here
  * yet. So the waiting and the paid wallet are drawn from the API's answers rewritten in the
@@ -56,9 +57,14 @@ test.describe('시작 Coin (#70)', () => {
     await expect(page.getByTestId('wallet-available')).toHaveText('0 Coin');
     await expect(page.getByTestId('ledger-list')).toContainText(copy.ledgerEmpty);
     await expect(page.getByTestId('wallet-start-grant-pending')).toHaveCount(0);
+    // MY 요약's wallet preview says nothing either.
+    await page.goto('/my');
+    await expect(page.getByTestId('my-preview-wallet-available')).toHaveText('0 Coin');
+    await expect(page.getByTestId('my-preview-wallet')).toContainText(copy.ledgerEmpty);
+    await expect(page.getByTestId('my-preview-wallet-start-grant-pending')).toHaveCount(0);
   });
 
-  test('지급 대기 중이면 지갑의 잔고 아래에 안내가 보이고, 지급되면 안내 대신 원장의 시작 지급이 보인다', async ({
+  test('지급 대기 중이면 지갑과 MY 요약의 지갑 미리보기에 안내가 보이고, 지급되면 안내 대신 원장의 시작 지급이 보인다', async ({
     page,
   }) => {
     await signUp(page, freshEmail());
@@ -77,6 +83,17 @@ test.describe('시작 Coin (#70)', () => {
     await expect(page.getByTestId('wallet-available')).toHaveText('0 Coin');
     // The fixed notice above stays as it was.
     await expect(page.getByTestId('wallet-notice')).toHaveText(copy.walletNotice);
+    // MY 요약's wallet preview tells it too, under the same balance (owner decision 2026-10-18).
+    await page.goto('/my');
+    const preview = page.getByTestId('my-preview-wallet');
+    const previewNotice = preview.getByTestId('my-preview-wallet-start-grant-pending');
+    await expect(previewNotice).toHaveText(copy.walletStartGrantPending);
+    // The preview's own 가용 figure: 잠금 beside it shows '0 Coin' too.
+    const previewAvailable = preview.getByTestId('my-preview-wallet-available');
+    await expect(previewAvailable).toHaveText('0 Coin');
+    // Once, in the preview: 잔고 요약 above it does not repeat it.
+    await expect(page.getByText(copy.walletStartGrantPending)).toHaveCount(1);
+    await page.goto('/my/wallet');
 
     // --- paid: the profile says granted and the ledger holds the one START_GRANT entry.
     const grantedAt = new Date().toISOString();
@@ -107,5 +124,12 @@ test.describe('시작 Coin (#70)', () => {
     const row = page.getByTestId('ledger-list').getByTestId('ledger-type');
     await expect(row).toHaveText(copy.ledgerTypeStartGrant);
     await expect(page.getByTestId('ledger-amount')).toHaveText('+10,000 Coin');
+    // And the preview: the balance and the 시작 지급 row, no notice.
+    await page.goto('/my');
+    // The 가용 figure itself, not the ledger row's '+10,000 Coin' beside it.
+    await expect(previewAvailable).toHaveText('10,000 Coin');
+    await expect(preview.getByTestId('ledger-type')).toHaveText(copy.ledgerTypeStartGrant);
+    await expect(preview.getByTestId('ledger-amount')).toHaveText('+10,000 Coin');
+    await expect(previewNotice).toHaveCount(0);
   });
 });

@@ -33,7 +33,8 @@ export interface StartGrantPayOutcome {
   paid: number;
   /**
    * Grants another payer paid first, that found the amount undecided inside their transaction, or
-   * whose account lost its 본인확인 record (a withdrawal, #140) between the scan and the payment.
+   * whose account withdrew (#140: the grant cancelled, the 본인확인 record gone) between the scan
+   * and the payment.
    */
   skipped: number;
   failed: number;
@@ -57,10 +58,10 @@ async function amountIn(tx: Tx): Promise<bigint | null> {
  * transaction of its own by `payStartGrant` (@buddha/db), the same function the API's grant uses,
  * which locks the grant, reads the amount once inside that transaction and pays a pending grant
  * only: a grant the API paid meanwhile, or two runs at once, still give one ledger entry. A grant
- * whose account withdrew while it waited (its 본인확인 record gone, #140) is neither scanned nor
- * paid: it stays pending as the record of its number (ADR-0071 7-11, an owner question). One
- * grant's failure is recorded and the loop goes on, so a broken account (no balance row) does not
- * hold every grant behind it — the scans' rule (scan.ts).
+ * whose account withdrew while it waited is cancelled by the withdrawal (#140, owner decision
+ * 2026-10-18) and is no longer pending; one whose 본인확인 record went some other way is neither
+ * scanned nor paid. One grant's failure is recorded and the loop goes on, so a broken account (no
+ * balance row) does not hold every grant behind it — the scans' rule (scan.ts).
  *
  * Every payment publishes `user:balance` after its COMMIT, like every balance change (PLAN 8).
  */

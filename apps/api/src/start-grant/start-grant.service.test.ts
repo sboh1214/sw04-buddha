@@ -1,12 +1,15 @@
 /**
  * 시작 지급 (#70, ADR-0071) against the docker `test` profile: the start Coin once per verified
  * number, with the amount of the release setting `grant.start_coin`, waiting while it is undecided,
- * never again for a number whose first account withdrew, and from no route. The service is called
- * as the onboarding (#58) will call it; the worker's payment of waiting grants has its own suite
+ * never again for a number whose first account got it or still waits for it, and from no route. A
+ * waiting grant cancelled by its account's withdrawal frees the number, and a number an operator
+ * recorded counts too (owner decisions 2026-10-18). The service is called as the onboarding (#58)
+ * will call it, a withdrawal as #140 will take it (`cancelStartGrant` and the 본인확인 record
+ * deleted, in one transaction); the worker's payment of waiting grants has its own suite
  * (apps/worker start-grant-pay.test.ts). Skips when TEST_* are unset.
  */
 import { MODULE_METADATA } from '@nestjs/common/constants.js';
-import { schema } from '@buddha/db';
+import { cancelStartGrant, schema } from '@buddha/db';
 import { createPhoneVerification, createUser } from '@buddha/db/test';
 import {
   START_COIN_SETTING,
@@ -92,6 +95,33 @@ describe.skipIf(!hasTestInfra)('StartGrantService (integration)', () => {
     return row!.availableCoin;
   }
 
+  /**
+   * What a withdrawal does for the start Coin and the number (#140, owner decision 2026-10-18):
+   * the waiting grant cancelled and the 본인확인 record deleted, in one transaction.
+   */
+  async function withdraw(userId: string) {
+    return t.db.transaction(async (tx) => {
+      const cancelled = await cancelStartGrant(tx, userId);
+      await tx
+        .delete(schema.phoneVerifications)
+        .where(eq(schema.phoneVerifications.userId, userId));
+      return cancelled;
+    });
+  }
+
+  async function numbersOf(userId: string) {
+    return t.db
+      .select({
+        phoneHash: schema.startGrantNumbers.phoneHash,
+        source: schema.startGrantNumbers.source,
+        releasedAt: schema.startGrantNumbers.releasedAt,
+      })
+      .from(schema.startGrantNumbers)
+      .innerJoin(schema.startGrants, eq(schema.startGrants.id, schema.startGrantNumbers.grantId))
+      .where(eq(schema.startGrants.userId, userId))
+      .orderBy(asc(schema.startGrantNumbers.createdAt));
+  }
+
   async function startGrantOnMe(user: TestUser) {
     const res = await t.app.inject({
       method: 'GET',
@@ -138,15 +168,24 @@ describe.skipIf(!hasTestInfra)('StartGrantService (integration)', () => {
       refId: record!.id,
     });
     expectLedgerChain(ledger, 10_000n);
-    // The record holds the keyed hash of the number, never the number.
     expect(record).toMatchObject({
       userId: user.id,
-      phoneHash: t.app.get(PhoneHasher).hash('01011112222'),
       amountCoin: 10_000n,
       ledgerEntryId: ledger[0]!.id,
       grantedAt: ledger[0]!.createdAt,
+      cancelledAt: null,
     });
-    expect(Object.values(record!).map(String).join(' ')).not.toContain('01011112222');
+    // The record of its number holds the keyed hash of the number, never the number.
+    const numbers = await numbersOf(user.id);
+    expect(numbers).toEqual([
+      {
+        phoneHash: t.app.get(PhoneHasher).hash('01011112222'),
+        source: 'grant',
+        releasedAt: null,
+      },
+    ]);
+    const stored = [...Object.values(record!), ...numbers.flatMap((n) => Object.values(n))];
+    expect(stored.map(String).join(' ')).not.toContain('01011112222');
     const startGrant = {
       status: 'granted',
       amountCoin: '10000',
@@ -185,6 +224,7 @@ describe.skipIf(!hasTestInfra)('StartGrantService (integration)', () => {
     expect((await ledgerOf(user.id)).map((entry) => entry.type)).toEqual(['START_GRANT']);
     expect(await balanceOf(user.id)).toBe(10_000n);
     expect(await t.db.select().from(schema.startGrants)).toHaveLength(1);
+    expect(await t.db.select().from(schema.startGrantNumbers)).toHaveLength(1);
   });
 
   it('waits while the amount is undecided, then pays the value an admin sets', async () => {
@@ -242,10 +282,8 @@ describe.skipIf(!hasTestInfra)('StartGrantService (integration)', () => {
     const phone = '01033334444';
     const first = await verified(phone);
     await grants.grant(first.id);
-    // What a withdrawal does to the number (#140): the 본인확인 record goes, the grant stays.
-    await t.db
-      .delete(schema.phoneVerifications)
-      .where(eq(schema.phoneVerifications.userId, first.id));
+    // The withdrawal (#140): a paid grant is not cancelled, and the record of its number stays.
+    expect((await withdraw(first.id)).outcome).toBe('granted');
     const again = await verified(phone);
     expect(await grants.grant(again.id)).toEqual({ outcome: 'number_already_used' });
     expect(await ledgerOf(again.id)).toEqual([]);
@@ -255,10 +293,39 @@ describe.skipIf(!hasTestInfra)('StartGrantService (integration)', () => {
     expect(records.map((record) => record.userId)).toEqual([first.id]);
   });
 
-  it('counts a waiting grant as the number’s too: the next account on it gets nothing', async () => {
+  it('cancels a waiting grant when its account withdraws: the next account on the number gets the start Coin', async () => {
     const phone = '01055556666';
     const first = await verified(phone);
     expect((await grants.grant(first.id)).outcome).toBe('pending');
+    // The withdrawal while it waits: cancelled, its number free again (owner decision 2026-10-18).
+    const cancelled = await withdraw(first.id);
+    expect(cancelled.outcome).toBe('cancelled');
+    expect((await numbersOf(first.id)).map((n) => n.releasedAt)).toEqual([
+      cancelled.outcome === 'cancelled' ? cancelled.grant.cancelledAt : 'not cancelled',
+    ]);
+    const again = await verified(phone);
+    expect((await grants.grant(again.id)).outcome).toBe('pending');
+    await setAmount(10_000);
+    expect(await grants.grant(again.id)).toMatchObject({
+      outcome: 'granted',
+      startGrant: { amountCoin: '10000' },
+    });
+    expect(await balanceOf(again.id)).toBe(10_000n);
+    // The cancelled grant is never paid, by the API or otherwise, and stays as history.
+    expect(await ledgerOf(first.id)).toEqual([]);
+    expect(await balanceOf(first.id)).toBe(0n);
+    const [kept] = await t.db
+      .select()
+      .from(schema.startGrants)
+      .where(eq(schema.startGrants.userId, first.id));
+    expect(kept).toMatchObject({ grantedAt: null, cancelledAt: expect.any(Date) as Date });
+  });
+
+  it('counts a waiting grant as the number’s while it is not cancelled', async () => {
+    const phone = '01077778888';
+    const first = await verified(phone);
+    expect((await grants.grant(first.id)).outcome).toBe('pending');
+    // The 본인확인 record gone with no cancellation (by hand, not a withdrawal): still held.
     await t.db
       .delete(schema.phoneVerifications)
       .where(eq(schema.phoneVerifications.userId, first.id));
@@ -266,6 +333,51 @@ describe.skipIf(!hasTestInfra)('StartGrantService (integration)', () => {
     await setAmount(10_000);
     expect(await grants.grant(again.id)).toEqual({ outcome: 'number_already_used' });
     expect(await balanceOf(again.id)).toBe(0n);
+  });
+
+  it('counts a number an operator recorded for the account: a later account on it gets nothing', async () => {
+    await setAmount(10_000);
+    const first = await verified('01012121212');
+    await grants.grant(first.id);
+    // The operator's change of the number (docs/OPERATIONS.md): the number, and its record beside
+    // the grant (the SQL itself is pinned by @buddha/db phone-change.test.ts).
+    const newPhone = '01034343434';
+    const [grant] = await t.db
+      .select()
+      .from(schema.startGrants)
+      .where(eq(schema.startGrants.userId, first.id));
+    await t.db.transaction(async (tx) => {
+      await tx
+        .update(schema.phoneVerifications)
+        .set({ phone: newPhone })
+        .where(eq(schema.phoneVerifications.userId, first.id));
+      await tx.insert(schema.startGrantNumbers).values({
+        grantId: grant!.id,
+        phoneHash: t.app.get(PhoneHasher).hash(newPhone),
+        source: 'operator',
+      });
+    });
+    // Asked again with the new number: the account's one grant, paid already.
+    expect((await grants.grant(first.id)).outcome).toBe('already_granted');
+    expect((await numbersOf(first.id)).map((n) => n.source)).toEqual(['grant', 'operator']);
+    await withdraw(first.id);
+    for (const phone of ['01012121212', newPhone]) {
+      const later = await verified(phone);
+      expect(await grants.grant(later.id), phone).toEqual({ outcome: 'number_already_used' });
+    }
+    expect(await t.db.select().from(schema.startGrants)).toHaveLength(1);
+  });
+
+  it('gives an account whose grant was cancelled nothing more, and shows it no grant', async () => {
+    const user = await verified('01056565656');
+    expect((await grants.grant(user.id)).outcome).toBe('pending');
+    await withdraw(user.id);
+    // Only by hand could the account have a 본인확인 record again (a withdrawal deleted it).
+    await createPhoneVerification(t.db, { userId: user.id, phone: '01056565656' });
+    await setAmount(10_000);
+    expect(await grants.grant(user.id)).toEqual({ outcome: 'cancelled' });
+    expect(await balanceOf(user.id)).toBe(0n);
+    expect(await startGrantOnMe(user)).toBeNull();
   });
 
   it('grants an operator account under the same conditions as any account', async () => {

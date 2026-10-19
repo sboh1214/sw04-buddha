@@ -12,7 +12,8 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "openapi:export": "node dist/openapi-export.js"
+    "openapi:export": "node dist/openapi-export.js",
+    "phone-hash": "node dist/identity/phone-hash-cli.js"
   },
   "dependencies": {
     "@buddha/db": "workspace:*",

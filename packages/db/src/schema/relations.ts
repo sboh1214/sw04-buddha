@@ -27,7 +27,7 @@ import { positions } from './positions.js';
 import { priceTicks } from './price-ticks.js';
 import { profiles } from './profiles.js';
 import { releaseSettings } from './release-settings.js';
-import { startGrants } from './start-grants.js';
+import { startGrantNumbers, startGrants } from './start-grants.js';
 import { marketWatchEvents, marketWatches } from './watchlist.js';
 
 export const profilesRelations = relations(profiles, ({ one }) => ({
@@ -61,12 +61,17 @@ export const phoneVerificationsRelations = relations(phoneVerifications, ({ one 
   user: one(user, { fields: [phoneVerifications.userId], references: [user.id] }),
 }));
 
-export const startGrantsRelations = relations(startGrants, ({ one }) => ({
+export const startGrantsRelations = relations(startGrants, ({ one, many }) => ({
   user: one(user, { fields: [startGrants.userId], references: [user.id] }),
   ledgerEntry: one(ledgerEntries, {
     fields: [startGrants.ledgerEntryId],
     references: [ledgerEntries.id],
   }),
+  numbers: many(startGrantNumbers),
+}));
+
+export const startGrantNumbersRelations = relations(startGrantNumbers, ({ one }) => ({
+  grant: one(startGrants, { fields: [startGrantNumbers.grantId], references: [startGrants.id] }),
 }));
 
 export const phoneVerificationCodesRelations = relations(phoneVerificationCodes, ({ one }) => ({

@@ -56,5 +56,5 @@
 - **금지**: `/tf-buddha/env`를 콘솔에서 편집. `aws_ssm_parameter.env`는 템플릿 렌더 결과라 다음 apply가 덮어쓴다. `terraform.tfvars` 또는 `templates/env.tftpl`을 고친다.
 - **금지**: `aws_iam_openid_connect_provider.github`의 `prevent_destroy` 제거를 커밋, 이 root를 내리면서 provider까지 destroy(먼저 `state rm`), 또는 다른 Terraform root에서 GitHub OIDC provider를 `resource`로 만들거나 import하기. 계정에 하나뿐이라 다른 root는 data source로만 읽는다 — 소유한 state의 destroy가 계정의 모든 GitHub Actions 배포를 끊는다(2026-09-22 inno-frame destroy).
 - **금지**: `aws_ebs_volume.data`의 `prevent_destroy` 제거를 커밋. 스냅샷 복구 절차(README)에서 **일시적으로** 주석 처리하고 즉시 복원한다.
-- **금지**: `random_password.phone_hash_key`의 `prevent_destroy` 제거를 커밋, 그 `length`·`special`의 수정(값을 새로 뽑는다), `-replace`·taint, 또는 이 root를 내리면서 키를 state에 둔 채 destroy(먼저 `state mv`로 옮긴다, README「중지 / 시작」). 운영 `PHONE_HASH_KEY`다 — 새 키로도 API는 그대로 뜨지만 저장된 번호 해시(`start_grants`)가 모두 무효가 되어 시작 Coin을 받은 번호가 다시 받는다(ADR-0071).
+- **금지**: `random_password.phone_hash_key`의 `prevent_destroy` 제거를 커밋, 그 `length`·`special`의 수정(값을 새로 뽑는다), `-replace`·taint, 또는 이 root를 내리면서 키를 state에 둔 채 destroy(먼저 `state mv`로 옮긴다, README「중지 / 시작」). 운영 `PHONE_HASH_KEY`다 — 새 키로도 API는 그대로 뜨지만 저장된 번호 해시(`start_grant_numbers`)가 모두 무효가 되어 시작 Coin을 받은 번호가 다시 받는다(ADR-0071).
 - **금지**: root 자격증명으로 apply. `aws sts get-caller-identity --profile inno-frame`이 `user/terraform-iam`이어야 한다.

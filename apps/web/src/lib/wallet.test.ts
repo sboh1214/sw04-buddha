@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { LEDGER_ENTRY_TYPES } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
@@ -43,5 +44,30 @@ describe('startGrantPending', () => {
     expect(copy.walletStartGrantPending).toBe('시작 Coin은 준비되는 대로 지급됩니다.');
     // Nothing is decided while it waits: the notice promises neither a figure nor a time.
     expect(copy.walletStartGrantPending).not.toMatch(/\d/);
+  });
+});
+
+describe('where the wait is told', () => {
+  const source = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8');
+
+  it("is one notice, drawn from startGrantPending with the owner's words", () => {
+    const notice = source('../app/my/wallet/start-grant-notice.tsx');
+    expect(notice).toContain('if (!startGrantPending(me)) return null;');
+    expect(notice).toContain('{copy.walletStartGrantPending}');
+  });
+
+  it('is shown under the balance on the wallet and on MY 요약’s wallet preview (owner decision 2026-10-18)', () => {
+    // The wallet's balance card (ADR-0069 decision 4 #70: '지갑에도') and the preview of the wallet
+    // on MY's first screen, which shows the same balance; each with its own test id for the e2e.
+    for (const [path, testId] of [
+      ['../app/my/wallet/balance-card.tsx', 'wallet-start-grant-pending'],
+      ['../app/my/summary.tsx', 'my-preview-wallet-start-grant-pending'],
+    ] as const) {
+      const screen = source(path);
+      expect(screen, path).toMatch(/<StartGrantPendingNotice\b[^>]*\bme=\{me(\.data)?\}/s);
+      expect(screen, path).toContain(`testId="${testId}"`);
+      // Only through the shared notice: no second copy of the words or the rule.
+      expect(screen, path).not.toContain('walletStartGrantPending');
+    }
   });
 });

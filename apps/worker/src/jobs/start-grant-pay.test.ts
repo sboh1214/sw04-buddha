@@ -1,13 +1,14 @@
 /**
  * `start_grant.pay` (#70, ADR-0071) against the docker `test` database: the start grants that
  * waited while the amount was undecided are paid once an admin enters one, with that value, once
- * each, and a run while it is undecided pays nothing, nor ever pays an account that withdrew while
- * it waited. The grants are recorded the way the API records them (a pending `start_grants` row of
- * an account with its 본인확인 record) and the release setting is changed the way the admin
- * screen changes it (a row and its record). Publishes go to a recording stub. Skips when TEST_* are
- * unset.
+ * each, and a run while it is undecided pays nothing, nor ever pays a grant its account's
+ * withdrawal cancelled (owner decision 2026-10-18) or an account with no 본인확인 record. The
+ * grants are recorded the way the API records them (`recordStartGrant`: a pending `start_grants`
+ * row and its number, for an account with its 본인확인 record) and the release setting is changed
+ * the way the admin screen changes it (a row and its record). Publishes go to a recording stub.
+ * Skips when TEST_* are unset.
  */
-import { schema } from '@buddha/db';
+import { cancelStartGrant, schema } from '@buddha/db';
 import {
   connectTestDb,
   createStartGrant,
@@ -149,13 +150,21 @@ describe.skipIf(!hasTestDb())('start_grant.pay (integration)', () => {
     expect((await ledgerOf(late.userId)).map((e) => e.amountCoin)).toEqual([4_000n]);
   });
 
-  it('pays no waiting grant whose account withdrew, and is never held up by one', async () => {
-    const gone = await waiting();
+  it('pays no grant a withdrawal cancelled, and none whose account lost its 본인확인 record', async () => {
+    const withdrew = await waiting();
+    const byHand = await waiting();
     const kept = await waiting();
-    // What a withdrawal does to the number (#140) while the grant waits: the 본인확인 record goes.
+    // The withdrawal (#140) while the grant waits: cancelled, and the 본인확인 record goes.
+    await t.db.transaction(async (tx) => {
+      expect((await cancelStartGrant(tx, withdrew.userId)).outcome).toBe('cancelled');
+      await tx
+        .delete(schema.phoneVerifications)
+        .where(eq(schema.phoneVerifications.userId, withdrew.userId));
+    });
+    // The record deleted by hand, with no cancellation: the grant stays pending, unpaid.
     await t.db
       .delete(schema.phoneVerifications)
-      .where(eq(schema.phoneVerifications.userId, gone.userId));
+      .where(eq(schema.phoneVerifications.userId, byHand.userId));
     await setAmount(10_000);
 
     expect(await payPendingStartGrants(t.db, publish)).toEqual({
@@ -165,21 +174,28 @@ describe.skipIf(!hasTestDb())('start_grant.pay (integration)', () => {
       failed: 0,
       failures: [],
     });
-    expect(await ledgerOf(gone.userId)).toEqual([]);
+    expect(await ledgerOf(withdrew.userId)).toEqual([]);
+    expect(await ledgerOf(byHand.userId)).toEqual([]);
     expect((await ledgerOf(kept.userId)).map((e) => e.amountCoin)).toEqual([10_000n]);
     expect(published.map((p) => p.channel)).toEqual([userChannel(kept.userId)]);
-    // Left pending: the record of its number, nothing paid (ADR-0071 7-11).
-    const [left] = await t.db
-      .select()
-      .from(schema.startGrants)
-      .where(eq(schema.startGrants.id, gone.grantId));
-    expect(left).toMatchObject({ amountCoin: null, ledgerEntryId: null, grantedAt: null });
+    const grantOf = async (grantId: string) => {
+      const [row] = await t.db
+        .select()
+        .from(schema.startGrants)
+        .where(eq(schema.startGrants.id, grantId));
+      return row;
+    };
+    expect(await grantOf(withdrew.grantId)).toMatchObject({
+      grantedAt: null,
+      cancelledAt: expect.any(Date) as Date,
+    });
+    expect(await grantOf(byHand.grantId)).toMatchObject({ grantedAt: null, cancelledAt: null });
 
-    // The oldest waiting row, for good — yet a run of one still reaches a later grant.
+    // The unpaid pending row is the oldest for good — yet a run of one still reaches a later grant.
     const later = await waiting();
     expect(await payPendingStartGrants(t.db, publish, 1)).toMatchObject({ paid: 1, skipped: 0 });
     expect(await ledgerOf(later.userId)).toHaveLength(1);
-    expect(await ledgerOf(gone.userId)).toEqual([]);
+    expect(await ledgerOf(byHand.userId)).toEqual([]);
   });
 
   it('goes on past a grant it cannot pay, and pays at most a batch per run', async () => {

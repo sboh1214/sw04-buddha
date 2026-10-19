@@ -23,7 +23,9 @@ import { type Env, phoneHashKey } from '../config/env.js';
  *
  * Not stored beside the number in `phone_verifications`: operators change a member's number in the
  * database by hand (#57-3), and a hash kept there would go stale with no way to recompute it there.
- * Computed from the live number when it is needed, it is always the number's own.
+ * Computed from the live number when it is needed, it is always the number's own. The operator who
+ * changes a number computes the new one's hash with the phone-hash CLI (phone-hash-cli.ts, the
+ * same function and key) to record it for the start Coin (docs/OPERATIONS.md).
  */
 export function phoneHash(key: string, phone: string): string {
   // The digits phoneSchema yields, and nothing else: `010-1234-5678` must not hash to a second

@@ -33,6 +33,7 @@ export class MeService {
           startGrantId: schema.startGrants.id,
           startGrantAmountCoin: schema.startGrants.amountCoin,
           startGrantedAt: schema.startGrants.grantedAt,
+          startGrantCancelledAt: schema.startGrants.cancelledAt,
         })
         .from(schema.user)
         .innerJoin(schema.profiles, eq(schema.profiles.userId, schema.user.id))
@@ -41,7 +42,7 @@ export class MeService {
         // confirms an SMS code (ADR-0070).
         .leftJoin(schema.phoneVerifications, eq(schema.phoneVerifications.userId, schema.user.id))
         // At most one row per account (user_id is UNIQUE); none until the account is granted or
-        // waits for its start Coin (#70, ADR-0071).
+        // waits for its start Coin (#70, ADR-0071). A cancelled one reads as none (toStartGrant).
         .leftJoin(schema.startGrants, eq(schema.startGrants.userId, schema.user.id))
         .where(eq(schema.user.id, userId))
         .limit(1),
@@ -88,7 +89,11 @@ export class MeService {
       startGrant:
         row.startGrantId === null
           ? null
-          : toStartGrant({ amountCoin: row.startGrantAmountCoin, grantedAt: row.startGrantedAt }),
+          : toStartGrant({
+              amountCoin: row.startGrantAmountCoin,
+              grantedAt: row.startGrantedAt,
+              cancelledAt: row.startGrantCancelledAt,
+            }),
     };
   }
 

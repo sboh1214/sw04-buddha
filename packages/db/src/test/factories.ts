@@ -35,11 +35,10 @@ import {
   positions,
   profiles,
   releaseSettings,
-  startGrants,
   user,
 } from '../schema/index.js';
 import { storedReleaseSettingValue } from '../release-settings.js';
-import { payStartGrant } from '../start-grants.js';
+import { payStartGrant, recordStartGrant } from '../start-grants.js';
 
 /** Short unique tag for generated emails/slugs/nicknames. */
 const tag = () => randomUUID().replaceAll('-', '').slice(0, 8);
@@ -520,8 +519,9 @@ export async function createPhoneVerification(db: Db, input: CreatePhoneVerifica
 export interface CreateStartGrantInput {
   userId: string;
   /**
-   * The keyed hash of the number (64 lower-case hex). Default: a random one, so two grants never
-   * share a number; a test about "the same number" passes the API's hash of it.
+   * The keyed hash of the number (64 lower-case hex), recorded as the grant's own number. Default:
+   * a random one, so two grants never share a number; a test about "the same number" passes the
+   * API's hash of it, or one hash twice.
    */
   phoneHash?: string;
   /**
@@ -538,12 +538,13 @@ export function randomPhoneHash(): string {
 }
 
 /**
- * A start grant (#70, ADR-0071) as the grant leaves it: the `start_grants` row, pending, or paid
+ * A start grant (#70, ADR-0071) as the grant leaves it: the `start_grants` row and its number's
+ * `start_grant_numbers` row (`source` 'grant'), recorded by `recordStartGrant`, pending, or paid
  * when `amountCoin` is given. A grant is recorded only for an account with a 본인확인 record, and
  * `payStartGrant` pays no other, so an account without one gets one (a random number, which the
  * random `phoneHash` need not match); a test of a withdrawn account deletes it afterwards. Does
  * not hash the number; a test whose subject is the grant itself goes through the API's
- * StartGrantService.
+ * StartGrantService. Throws when the account has a grant already or the hash is held by another.
  */
 export async function createStartGrant(db: Db, input: CreateStartGrantInput) {
   return db.transaction(async (tx) => {
@@ -551,14 +552,17 @@ export async function createStartGrant(db: Db, input: CreateStartGrantInput) {
       .insert(phoneVerifications)
       .values({ userId: input.userId, phone: randomPhone(), realName: '홍길동' })
       .onConflictDoNothing({ target: phoneVerifications.userId });
-    const [row] = await tx
-      .insert(startGrants)
-      .values({ userId: input.userId, phoneHash: input.phoneHash ?? randomPhoneHash() })
-      .returning();
-    if (input.amountCoin === undefined) return row!;
+    const recorded = await recordStartGrant(tx, input.userId, input.phoneHash ?? randomPhoneHash());
+    if (recorded.outcome !== 'recorded') {
+      throw new Error(`start grant not recorded: ${recorded.outcome}`);
+    }
     const amountCoin = input.amountCoin;
-    const paid = await payStartGrant(tx, row!.id, () => Promise.resolve(amountCoin));
-    if (paid.outcome !== 'granted') throw new Error(`start grant not paid: ${paid.outcome}`);
+    const paid = await payStartGrant(tx, recorded.grantId, () =>
+      Promise.resolve(amountCoin ?? null),
+    );
+    if (amountCoin === undefined ? paid.outcome !== 'pending' : paid.outcome !== 'granted') {
+      throw new Error(`start grant not left as asked: ${paid.outcome}`);
+    }
     return paid.grant;
   });
 }

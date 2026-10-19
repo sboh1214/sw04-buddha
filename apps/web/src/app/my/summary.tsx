@@ -22,6 +22,7 @@ import {
   useSessionEnded,
 } from './portfolio';
 import { LedgerRow } from './wallet/ledger-list';
+import { StartGrantPendingNotice } from './wallet/start-grant-notice';
 import { WatchlistBody } from './watchlist/watchlist';
 
 function tab(key: MyTabKey) {
@@ -105,8 +106,10 @@ function WatchlistPreview() {
 }
 
 /**
- * 지갑's preview: the balance as the wallet's own card states it, and the newest ledger rows.
- * A failed `GET /me` is reported once, by 잔고 요약 above, so the balance here is a dash then.
+ * 지갑's preview: the balance as the wallet's own card states it — with the wallet's notice while
+ * the start Coin waits for its amount (`StartGrantPendingNotice`, owner decision 2026-10-18) — and
+ * the newest ledger rows. A failed `GET /me` is reported once, by 잔고 요약 above, so the balance
+ * here is a dash then, and there is no notice.
  */
 function WalletPreview() {
   const me = useMe();
@@ -126,6 +129,7 @@ function WalletPreview() {
                 <CoinText
                   fontWeight="semibold"
                   amount={parseCoinAmount(me.data.balance.availableCoin)}
+                  data-testid="my-preview-wallet-available"
                 />
               ) : (
                 <Text>—</Text>
@@ -141,6 +145,11 @@ function WalletPreview() {
             </HStack>
           </HStack>
         )}
+        <StartGrantPendingNotice
+          me={me.data}
+          size="sm"
+          testId="my-preview-wallet-start-grant-pending"
+        />
         <Stack gap="3">
           <Heading as="h4" size="sm">
             {copy.ledgerTitle}

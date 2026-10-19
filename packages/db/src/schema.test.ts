@@ -10,7 +10,7 @@ import {
   releaseSettingChangeBodySchema,
   releaseSettingChangePayloadSchema,
 } from '@buddha/shared';
-import { and, eq, inArray, lt, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   adminActions,
@@ -35,6 +35,7 @@ import {
   positions,
   profiles,
   releaseSettings,
+  startGrantNumbers,
   startGrants,
   user,
 } from './schema/index.js';
@@ -54,7 +55,12 @@ import {
 } from './test/factories.js';
 import { connectTestDb, hasTestDb, type TestDb } from './test/harness.js';
 import { isPhoneVerified } from './phone-verification.js';
-import { payStartGrant, pendingStartGrantIds } from './start-grants.js';
+import {
+  cancelStartGrant,
+  payStartGrant,
+  pendingStartGrantIds,
+  recordStartGrant,
+} from './start-grants.js';
 import { lockAdminRoles } from './tx-helpers.js';
 
 /**
@@ -1552,6 +1558,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
 
   describe('start grants (migration 0031, #70, ADR-0071)', () => {
     const amountOf = (amount: bigint | null) => () => Promise.resolve(amount);
+    const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
     async function ledgerOf(userId: string) {
       return t.db
@@ -1561,38 +1568,168 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         .orderBy(ledgerEntries.id);
     }
 
-    it('keeps one grant per number and one per account, pending until paid', async () => {
+    async function numbersOf(grantId: string) {
+      return t.db
+        .select()
+        .from(startGrantNumbers)
+        .where(eq(startGrantNumbers.grantId, grantId))
+        .orderBy(startGrantNumbers.createdAt, startGrantNumbers.source);
+    }
+
+    /** `recordStartGrant` in a transaction of its own, for an account with a 본인확인 record. */
+    async function record(userId: string, phoneHash: string) {
+      await createPhoneVerification(t.db, { userId }).catch(() => undefined);
+      return t.db.transaction((tx) => recordStartGrant(tx, userId, phoneHash));
+    }
+
+    /** An operator's record of another number for the account's grant (docs/OPERATIONS.md). */
+    async function recordOperatorNumber(grantId: string, phoneHash: string) {
+      const [row] = await t.db
+        .insert(startGrantNumbers)
+        .values({ grantId, phoneHash, source: 'operator' })
+        .returning();
+      return row!;
+    }
+
+    it('records one grant per account, holding its number; a number counts for one grant', async () => {
       const { user: a } = await createUser(t.db);
       const { user: b } = await createUser(t.db);
       const hash = randomPhoneHash();
-      const row = await createStartGrant(t.db, { userId: a.id, phoneHash: hash });
-      expect(row).toMatchObject({
+      const first = await record(a.id, hash);
+      expect(first.outcome).toBe('recorded');
+      if (first.outcome !== 'recorded') throw new Error('not recorded');
+      const [grant] = await t.db.select().from(startGrants);
+      expect(grant).toMatchObject({
+        id: first.grantId,
         userId: a.id,
-        phoneHash: hash,
         amountCoin: null,
         ledgerEntryId: null,
         grantedAt: null,
+        cancelledAt: null,
       });
-      // The same number for another account (a re-signup after a withdrawal), and a second
-      // number for the same account (an operator changed it): both refused.
+      expect(await numbersOf(first.grantId)).toEqual([
+        expect.objectContaining({ phoneHash: hash, source: 'grant', releasedAt: null }),
+      ]);
+      // Again for the same account, with another number now (an operator changed it): its grant.
+      expect(await record(a.id, randomPhoneHash())).toEqual({
+        outcome: 'existing',
+        grantId: first.grantId,
+      });
+      // The same number for another account (a re-signup after a withdrawal): nothing recorded.
+      expect(await record(b.id, hash)).toEqual({ outcome: 'number_already_used' });
+      expect(await t.db.select().from(startGrants)).toEqual([grant]);
+      expect(await t.db.select().from(startGrantNumbers)).toHaveLength(1);
+    });
+
+    it('holds the rules in the constraints: per account, per live number, per grant', async () => {
+      const { user: a } = await createUser(t.db);
+      const { user: b } = await createUser(t.db);
+      const hash = randomPhoneHash();
+      const grant = await createStartGrant(t.db, { userId: a.id, phoneHash: hash });
+      const other = await createStartGrant(t.db, { userId: b.id });
+      const violates =
+        (constraint: string, state = '23505') =>
+        (e: unknown) =>
+          sqlState(e) === state && sqlConstraint(e) === constraint;
+      // A second grant for the account.
       await expect(
-        t.db.insert(startGrants).values({ userId: b.id, phoneHash: hash }),
-      ).rejects.toSatisfy(
-        (e) => sqlState(e) === '23505' && sqlConstraint(e) === 'start_grants_phone_hash_unique',
-      );
+        t.db.transaction(async (tx) => {
+          const [row] = await tx.insert(startGrants).values({ userId: a.id }).returning();
+          await tx
+            .insert(startGrantNumbers)
+            .values({ grantId: row!.id, phoneHash: randomPhoneHash(), source: 'grant' });
+        }),
+      ).rejects.toSatisfy(violates('start_grants_user_id_unique'));
+      // The number held by another grant, whatever the source.
+      for (const source of ['operator', 'grant'] as const) {
+        await expect(
+          t.db.insert(startGrantNumbers).values({ grantId: other.id, phoneHash: hash, source }),
+        ).rejects.toSatisfy(violates('start_grant_numbers_phone_hash_live_idx'));
+      }
+      // A second number of the grant's own kind; the same number twice for one grant.
       await expect(
-        t.db.insert(startGrants).values({ userId: a.id, phoneHash: randomPhoneHash() }),
-      ).rejects.toSatisfy(
-        (e) => sqlState(e) === '23505' && sqlConstraint(e) === 'start_grants_user_id_unique',
-      );
-      // A hash is 64 lower-case hex characters, never a number in clear.
+        t.db
+          .insert(startGrantNumbers)
+          .values({ grantId: grant.id, phoneHash: randomPhoneHash(), source: 'grant' }),
+      ).rejects.toSatisfy(violates('start_grant_numbers_grant_id_source_grant_idx'));
+      await expect(
+        t.db
+          .insert(startGrantNumbers)
+          .values({ grantId: grant.id, phoneHash: hash, source: 'operator' }),
+      ).rejects.toSatisfy(violates('start_grant_numbers_grant_id_phone_hash_pk'));
+      // A hash is 64 lower-case hex characters, never a number in clear; a source is one of two.
       for (const phoneHash of ['01012345678', 'A'.repeat(64), 'a'.repeat(63)]) {
         await expect(
-          t.db.insert(startGrants).values({ userId: b.id, phoneHash }),
-        ).rejects.toSatisfy(
-          (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'start_grants_phone_hash_check',
-        );
+          t.db
+            .insert(startGrantNumbers)
+            .values({ grantId: grant.id, phoneHash, source: 'operator' }),
+        ).rejects.toSatisfy(violates('start_grant_numbers_phone_hash_check', '23514'));
       }
+      await expect(
+        t.db.execute(
+          sql`INSERT INTO start_grant_numbers (phone_hash, grant_id, source) VALUES (${randomPhoneHash()}, ${grant.id}, 'member')`,
+        ),
+      ).rejects.toSatisfy(violates('start_grant_numbers_source_check', '23514'));
+      // A grant recorded without its number is refused when its transaction commits.
+      const { user: c } = await createUser(t.db);
+      await expect(t.db.insert(startGrants).values({ userId: c.id })).rejects.toSatisfy(
+        (e) => sqlState(e) === '23000' && /recorded without its number/.test(errorMessage(e)),
+      );
+      expect(await t.db.select().from(startGrants).where(eq(startGrants.userId, c.id))).toEqual([]);
+    });
+
+    it('records an operator number beside the grant: both count, and the grant is still one', async () => {
+      const { user: a } = await createUser(t.db);
+      const first = randomPhoneHash();
+      const second = randomPhoneHash();
+      const grant = await createStartGrant(t.db, {
+        userId: a.id,
+        phoneHash: first,
+        amountCoin: 100n,
+      });
+      await recordOperatorNumber(grant.id, second);
+      expect((await numbersOf(grant.id)).map((n) => [n.phoneHash, n.source])).toEqual([
+        [first, 'grant'],
+        [second, 'operator'],
+      ]);
+      // A later account on either number gets nothing; the account has one grant and one entry.
+      for (const hash of [first, second]) {
+        const { user: later } = await createUser(t.db);
+        expect(await record(later.id, hash)).toEqual({ outcome: 'number_already_used' });
+      }
+      expect(await t.db.select().from(startGrants)).toEqual([grant]);
+      expect((await ledgerOf(a.id)).map((e) => e.type)).toEqual(['START_GRANT']);
+    });
+
+    it('records once when calls for one account, or for one number, come at the same time', async () => {
+      const { user: a } = await createUser(t.db);
+      await createPhoneVerification(t.db, { userId: a.id });
+      const hash = randomPhoneHash();
+      const same = await Promise.all(
+        Array.from({ length: 4 }, () => t.db.transaction((tx) => recordStartGrant(tx, a.id, hash))),
+      );
+      expect(same.map((r) => r.outcome).sort()).toEqual([
+        'existing',
+        'existing',
+        'existing',
+        'recorded',
+      ]);
+      // Four accounts on one number at once (the constraint, not phone_verifications, decides).
+      const accounts = await Promise.all(
+        Array.from({ length: 4 }, async () => (await createUser(t.db)).user.id),
+      );
+      const shared = randomPhoneHash();
+      const racing = await Promise.all(
+        accounts.map((id) => t.db.transaction((tx) => recordStartGrant(tx, id, shared))),
+      );
+      expect(racing.map((r) => r.outcome).sort()).toEqual([
+        'number_already_used',
+        'number_already_used',
+        'number_already_used',
+        'recorded',
+      ]);
+      expect(await t.db.select().from(startGrants)).toHaveLength(2);
+      expect(await t.db.select().from(startGrantNumbers)).toHaveLength(2);
     });
 
     it('pays a grant once: the balance, one START_GRANT entry and the row together', async () => {
@@ -1614,6 +1751,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         amountCoin: 10_000n,
         ledgerEntryId: first.ledgerEntry.id,
         grantedAt: first.ledgerEntry.createdAt,
+        cancelledAt: null,
       });
       expect(first.balance.availableCoin).toBe(10_000n);
       // Again, with another amount: paid already, nothing written, the amount it got stays.
@@ -1655,7 +1793,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(balance!.availableCoin).toBe(10_000n);
     });
 
-    it('lists pending grants oldest first, up to the limit', async () => {
+    it('lists pending grants oldest first, up to the limit, and no paid or cancelled one', async () => {
       const ids: string[] = [];
       for (let i = 0; i < 3; i += 1) {
         const { user: u } = await createUser(t.db);
@@ -1663,6 +1801,9 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       }
       const { user: paid } = await createUser(t.db);
       await createStartGrant(t.db, { userId: paid.id, amountCoin: 100n });
+      const { user: withdrew } = await createUser(t.db);
+      await createStartGrant(t.db, { userId: withdrew.id });
+      await t.db.transaction((tx) => cancelStartGrant(tx, withdrew.id));
       expect(await pendingStartGrantIds(t.db, 10)).toEqual(ids);
       expect(await pendingStartGrantIds(t.db, 2)).toEqual(ids.slice(0, 2));
     });
@@ -1670,21 +1811,20 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     it('records a grant pending only, and pays it through the CHECKs: all three columns, a positive amount', async () => {
       const { user: u } = await createUser(t.db, { balanceCoin: 100n });
       const [entry] = await ledgerOf(u.id);
-      // Inserted with anything paid: refused by migration 0031's insert trigger, before the CHECKs
-      // (a BEFORE ROW trigger runs first) — a payment is the checked UPDATE, never an INSERT.
+      // Inserted with anything paid or cancelled: refused by migration 0031's insert trigger,
+      // before the CHECKs (a BEFORE ROW trigger runs first) — a payment is the checked UPDATE.
       const insertRefused = (e: unknown) =>
         sqlState(e) === '23000' && /must be inserted pending/.test(errorMessage(e));
       for (const values of [
         { amountCoin: 100n },
         { grantedAt: new Date() },
         { ledgerEntryId: entry!.id },
+        { cancelledAt: new Date() },
         { amountCoin: 100n, grantedAt: new Date() },
         { amountCoin: 0n, grantedAt: new Date(), ledgerEntryId: entry!.id },
       ]) {
         await expect(
-          t.db
-            .insert(startGrants)
-            .values({ userId: u.id, phoneHash: randomPhoneHash(), ...values }),
+          t.db.insert(startGrants).values({ userId: u.id, ...values }),
         ).rejects.toSatisfy(insertRefused);
       }
       // The CHECKs, on the one way to pay: an UPDATE of the pending row.
@@ -1716,6 +1856,31 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       ).rejects.toSatisfy(
         (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'start_grants_amount_coin_check',
       );
+      // Paid and cancelled at once, by an entry that would pay it: the settled CHECK.
+      const [own] = await t.db
+        .insert(ledgerEntries)
+        .values({
+          userId: u.id,
+          type: 'START_GRANT',
+          amountCoin: 100n,
+          balanceAfterCoin: 200n,
+          refType: 'start_grant',
+          refId: pending.id,
+        })
+        .returning();
+      await expect(
+        t.db
+          .update(startGrants)
+          .set({
+            amountCoin: 100n,
+            ledgerEntryId: own!.id,
+            grantedAt: new Date(),
+            cancelledAt: new Date(),
+          })
+          .where(eq(startGrants.id, pending.id)),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'start_grants_settled_check',
+      );
     });
 
     it('never takes a grant inserted paid, not even with an entry that would pay it', async () => {
@@ -1729,7 +1894,6 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       await expect(
         t.db.insert(startGrants).values({
           userId: a.id,
-          phoneHash: randomPhoneHash(),
           amountCoin: 100n,
           ledgerEntryId: adjust!.id,
           grantedAt: new Date(),
@@ -1752,7 +1916,6 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         t.db.insert(startGrants).values({
           id,
           userId: a.id,
-          phoneHash: randomPhoneHash(),
           amountCoin: 100n,
           ledgerEntryId: own!.id,
           grantedAt: new Date(),
@@ -1769,18 +1932,14 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       // Each refusal is matched by its own message, so a case cannot pass on another check's.
       const identityRefused = (e: unknown) =>
         sqlState(e) === '23000' &&
-        /its account, number and recording time never change/.test(errorMessage(e));
+        /its account and recording time never change/.test(errorMessage(e));
       const notItsOwn = (e: unknown) =>
         sqlState(e) === '23000' && /is paid only by its own START_GRANT/.test(errorMessage(e));
       const paidRefused = (e: unknown) =>
         sqlState(e) === '23000' &&
         /was paid at .*: a paid grant never changes/.test(errorMessage(e));
-      // The account, the number and the time it was recorded never change.
-      for (const set of [
-        { userId: b.id },
-        { phoneHash: randomPhoneHash() },
-        { createdAt: new Date(0) },
-      ]) {
+      // The account and the time it was recorded never change.
+      for (const set of [{ userId: b.id }, { createdAt: new Date(0) }]) {
         await expect(
           t.db.update(startGrants).set(set).where(eq(startGrants.id, pending.id)),
         ).rejects.toSatisfy(identityRefused);
@@ -1828,7 +1987,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       await payWith(own.id);
 
       // A paid grant never changes again: not back to pending (the next run would pay it a second
-      // START_GRANT entry), not to another entry that passes every other check, not another amount.
+      // START_GRANT entry), not to another entry that passes every other check, not another
+      // amount, and it is never cancelled (its numbers stay used).
       await expect(
         t.db
           .update(startGrants)
@@ -1839,20 +1999,458 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       await expect(
         t.db.update(startGrants).set({ amountCoin: 200n }).where(eq(startGrants.id, pending.id)),
       ).rejects.toSatisfy(paidRefused);
-      // No row is ever deleted by the app, pending or paid.
+      await expect(
+        t.db
+          .update(startGrants)
+          .set({ amountCoin: null, ledgerEntryId: null, grantedAt: null, cancelledAt: new Date() })
+          .where(eq(startGrants.id, pending.id)),
+      ).rejects.toSatisfy(paidRefused);
+      // No row is ever deleted by the app, pending or paid, nor any number.
       for (const id of [another.id, pending.id]) {
         await expect(t.db.delete(startGrants).where(eq(startGrants.id, id))).rejects.toSatisfy(
           (e) => sqlState(e) === '42501',
         );
+        await expect(
+          t.db.delete(startGrantNumbers).where(eq(startGrantNumbers.grantId, id)),
+        ).rejects.toSatisfy((e) => sqlState(e) === '42501');
       }
     });
 
-    it('pays nothing to a grant whose account lost its 본인확인 record, and scans past it', async () => {
+    it('cancels a waiting grant and frees its numbers: the next account on the number is granted', async () => {
+      const { user: a } = await createUser(t.db);
+      const own = randomPhoneHash();
+      const recorded = randomPhoneHash();
+      const grant = await createStartGrant(t.db, { userId: a.id, phoneHash: own });
+      await recordOperatorNumber(grant.id, recorded);
+      // The withdrawal (#140): the 본인확인 record goes and the waiting grant is cancelled, in one
+      // transaction.
+      const result = await t.db.transaction(async (tx) => {
+        await tx.delete(phoneVerifications).where(eq(phoneVerifications.userId, a.id));
+        return cancelStartGrant(tx, a.id);
+      });
+      expect(result.outcome).toBe('cancelled');
+      if (result.outcome !== 'cancelled') throw new Error('not cancelled');
+      expect(result.grant).toMatchObject({ id: grant.id, cancelledAt: expect.any(Date) as Date });
+      expect(result.grant.grantedAt).toBeNull();
+      // Every number it held is released at the cancellation's instant, and kept as history.
+      expect(result.released.map((n) => [n.phoneHash, n.releasedAt])).toEqual([
+        [own, result.grant.cancelledAt],
+        [recorded, result.grant.cancelledAt],
+      ]);
+      expect(await numbersOf(grant.id)).toEqual(result.released);
+      // Never paid now, by any payer, whatever the amount; not pending any more.
+      const paid = await t.db.transaction((tx) => payStartGrant(tx, grant.id, amountOf(10_000n)));
+      expect(paid).toEqual({ outcome: 'cancelled', grant: result.grant });
+      expect(await pendingStartGrantIds(t.db, 10)).toEqual([]);
+      expect(await ledgerOf(a.id)).toEqual([]);
+      // Again: nothing more.
+      expect(await t.db.transaction((tx) => cancelStartGrant(tx, a.id))).toEqual({
+        outcome: 'already_cancelled',
+        grant: result.grant,
+      });
+
+      // The next account that verifies either number records its own grant, and is paid.
+      for (const hash of [own, recorded]) {
+        const { user: next } = await createUser(t.db);
+        const again = await record(next.id, hash);
+        expect(again.outcome).toBe('recorded');
+        if (again.outcome !== 'recorded') throw new Error('not recorded');
+        const pay = await t.db.transaction((tx) =>
+          payStartGrant(tx, again.grantId, amountOf(10_000n)),
+        );
+        expect(pay.outcome).toBe('granted');
+        expect((await ledgerOf(next.id)).map((e) => [e.type, e.amountCoin])).toEqual([
+          ['START_GRANT', 10_000n],
+        ]);
+      }
+      // The cancelled grant stays, with its released numbers.
+      expect(await t.db.select().from(startGrants).where(eq(startGrants.id, grant.id))).toEqual([
+        result.grant,
+      ]);
+    });
+
+    it('cancels nothing that was paid, nor an account with no grant; a cancelled grant never changes', async () => {
+      const { user: paid } = await createUser(t.db);
+      const hash = randomPhoneHash();
+      const grant = await createStartGrant(t.db, {
+        userId: paid.id,
+        phoneHash: hash,
+        amountCoin: 100n,
+      });
+      expect(await t.db.transaction((tx) => cancelStartGrant(tx, paid.id))).toEqual({
+        outcome: 'granted',
+        grant,
+      });
+      // Still paid, its number still used: the next account on it gets nothing.
+      expect(await t.db.select().from(startGrants)).toEqual([grant]);
+      const { user: next } = await createUser(t.db);
+      expect(await record(next.id, hash)).toEqual({ outcome: 'number_already_used' });
+      const { user: none } = await createUser(t.db);
+      expect(await t.db.transaction((tx) => cancelStartGrant(tx, none.id))).toEqual({
+        outcome: 'none',
+      });
+
+      // A cancelled grant: not paid, not back to pending, its time never moved.
+      const { user: gone } = await createUser(t.db);
+      const waiting = await createStartGrant(t.db, { userId: gone.id });
+      await t.db.transaction((tx) => cancelStartGrant(tx, gone.id));
+      const cancelledRefused = (e: unknown) =>
+        sqlState(e) === '23000' &&
+        /was cancelled at .*: a cancelled grant never changes/.test(errorMessage(e));
+      for (const set of [{ cancelledAt: null }, { cancelledAt: new Date(0) }]) {
+        await expect(
+          t.db.update(startGrants).set(set).where(eq(startGrants.id, waiting.id)),
+        ).rejects.toSatisfy(cancelledRefused);
+      }
+    });
+
+    it('keeps a number record to its release by its own grant’s cancellation', async () => {
+      const { user: a } = await createUser(t.db);
+      const { user: b } = await createUser(t.db);
+      const grant = await createStartGrant(t.db, { userId: a.id });
+      const [number] = await numbersOf(grant.id);
+      const where = and(
+        eq(startGrantNumbers.grantId, grant.id),
+        eq(startGrantNumbers.phoneHash, number!.phoneHash),
+      );
+      const other = await createStartGrant(t.db, { userId: b.id });
+      const fixed = (e: unknown) =>
+        sqlState(e) === '23000' &&
+        /its number, grant, source and recording time never change/.test(errorMessage(e));
+      for (const set of [
+        { phoneHash: randomPhoneHash() },
+        { grantId: other.id },
+        { source: 'operator' as const },
+        { createdAt: new Date(0) },
+      ]) {
+        await expect(t.db.update(startGrantNumbers).set(set).where(where)).rejects.toSatisfy(fixed);
+      }
+      // Released only by the grant's cancellation, never by hand while the grant stands.
+      await expect(
+        t.db.update(startGrantNumbers).set({ releasedAt: new Date() }).where(where),
+      ).rejects.toSatisfy(
+        (e) =>
+          sqlState(e) === '23000' &&
+          /released only by the grant's cancellation/.test(errorMessage(e)),
+      );
+      // Inserted held only.
+      await expect(
+        t.db.insert(startGrantNumbers).values({
+          grantId: grant.id,
+          phoneHash: randomPhoneHash(),
+          source: 'operator',
+          releasedAt: new Date(),
+        }),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23000' && /must be inserted held/.test(errorMessage(e)),
+      );
+      // A cancelled grant records no number, and its released rows never change again.
+      await t.db.transaction((tx) => cancelStartGrant(tx, a.id));
+      await expect(recordOperatorNumber(grant.id, randomPhoneHash())).rejects.toSatisfy(
+        (e) => sqlState(e) === '23000' && /it records no number/.test(errorMessage(e)),
+      );
+      await expect(
+        t.db.update(startGrantNumbers).set({ releasedAt: null }).where(where),
+      ).rejects.toSatisfy(
+        (e) =>
+          sqlState(e) === '23000' &&
+          /was released at .*: a released number never changes/.test(errorMessage(e)),
+      );
+    });
+
+    it('cancels or pays, never both, when a withdrawal and a payment meet', async () => {
+      // The withdrawal first: the payment waits on the 본인확인 record, then finds it cancelled.
+      const { user: a } = await createUser(t.db);
+      const first = await createStartGrant(t.db, { userId: a.id });
+      let resume!: () => void;
+      const held = new Promise<void>((resolve) => (resume = resolve));
+      let entered!: () => void;
+      const inside = new Promise<void>((resolve) => (entered = resolve));
+      const withdrawal = t.db.transaction(async (tx) => {
+        expect((await cancelStartGrant(tx, a.id)).outcome).toBe('cancelled');
+        await tx.delete(phoneVerifications).where(eq(phoneVerifications.userId, a.id));
+        entered();
+        await held;
+      });
+      await inside;
+      let paidAt: number | undefined;
+      const payment = t.db
+        .transaction((tx) => payStartGrant(tx, first.id, amountOf(10_000n)))
+        .finally(() => (paidAt = Date.now()));
+      await pause(150);
+      expect(paidAt).toBeUndefined();
+      resume();
+      await withdrawal;
+      expect((await payment).outcome).toBe('cancelled');
+      expect(await ledgerOf(a.id)).toEqual([]);
+
+      // The payment first: the withdrawal's cancellation waits, then finds it paid.
+      const { user: b } = await createUser(t.db);
+      const second = await createStartGrant(t.db, { userId: b.id });
+      let release!: () => void;
+      const paying = new Promise<void>((resolve) => (release = resolve));
+      let paid!: () => void;
+      const didPay = new Promise<void>((resolve) => (paid = resolve));
+      const payer = t.db.transaction(async (tx) => {
+        expect((await payStartGrant(tx, second.id, amountOf(10_000n))).outcome).toBe('granted');
+        paid();
+        await paying;
+      });
+      await didPay;
+      let cancelledAt: number | undefined;
+      const cancel = t.db
+        .transaction((tx) => cancelStartGrant(tx, b.id))
+        .finally(() => (cancelledAt = Date.now()));
+      await pause(150);
+      expect(cancelledAt).toBeUndefined();
+      release();
+      await payer;
+      expect((await cancel).outcome).toBe('granted');
+      expect((await ledgerOf(b.id)).map((e) => e.type)).toEqual(['START_GRANT']);
+
+      // Two withdrawals' cancellations of one grant: one cancels.
+      const { user: c } = await createUser(t.db);
+      await createStartGrant(t.db, { userId: c.id });
+      const both = await Promise.all([
+        t.db.transaction((tx) => cancelStartGrant(tx, c.id)),
+        t.db.transaction((tx) => cancelStartGrant(tx, c.id)),
+      ]);
+      expect(both.map((r) => r.outcome).sort()).toEqual(['already_cancelled', 'cancelled']);
+    });
+
+    /** A gate one transaction waits at until the test opens it. */
+    function gate() {
+      let open!: () => void;
+      const opened = new Promise<void>((resolve) => (open = resolve));
+      return { open, opened };
+    }
+
+    /**
+     * How each of two meeting transactions ended: 'ok', or the SQLSTATE it failed with — 40P01 is
+     * Postgres breaking a deadlock by aborting one of them (after deadlock_timeout, 1s).
+     */
+    async function endings(...steps: Promise<unknown>[]): Promise<string[]> {
+      const settled = await Promise.allSettled(steps);
+      return settled.map((r) =>
+        r.status === 'fulfilled' ? 'ok' : (sqlState(r.reason) ?? errorMessage(r.reason)),
+      );
+    }
+
+    it('takes the 본인확인 record before the grant, so a withdrawal and a payment never deadlock', async () => {
+      // A withdrawal that cancels, then deletes the record (as #140 may, and the API tests do): the
+      // payment waits on the record the cancellation holds. Were the cancellation not to take the
+      // record first, the payment would hold it (KEY SHARE) waiting on the grant, and the
+      // withdrawal's DELETE would wait on the payment: a deadlock.
+      const { user: a } = await createUser(t.db);
+      const first = await createStartGrant(t.db, { userId: a.id });
+      const cancelled = gate();
+      const deleteRecord = gate();
+      const withdrawal = t.db.transaction(async (tx) => {
+        expect((await cancelStartGrant(tx, a.id)).outcome).toBe('cancelled');
+        cancelled.open();
+        await deleteRecord.opened;
+        await tx.delete(phoneVerifications).where(eq(phoneVerifications.userId, a.id));
+      });
+      await cancelled.opened;
+      let paidAt: number | undefined;
+      const payment = t.db
+        .transaction((tx) => payStartGrant(tx, first.id, amountOf(10_000n)))
+        .finally(() => (paidAt = Date.now()));
+      await pause(150);
+      const waited = paidAt === undefined;
+      deleteRecord.open();
+      expect(await endings(withdrawal, payment)).toEqual(['ok', 'ok']);
+      expect(waited).toBe(true);
+      expect((await payment).outcome).toBe('cancelled');
+      expect(await ledgerOf(a.id)).toEqual([]);
+
+      // A withdrawal that takes the record before anything else: the payment waits on the record,
+      // not on the grant. Were the payment to lock the grant first (the first commit's order), the
+      // cancellation would wait on the grant while the payment waits on the record: a deadlock.
+      const { user: b } = await createUser(t.db);
+      const second = await createStartGrant(t.db, { userId: b.id });
+      const locked = gate();
+      const cancel = gate();
+      const withdrawing = t.db.transaction(async (tx) => {
+        await tx
+          .select({ held: sql`1` })
+          .from(phoneVerifications)
+          .where(eq(phoneVerifications.userId, b.id))
+          .for('update');
+        locked.open();
+        await cancel.opened;
+        expect((await cancelStartGrant(tx, b.id)).outcome).toBe('cancelled');
+        await tx.delete(phoneVerifications).where(eq(phoneVerifications.userId, b.id));
+      });
+      await locked.opened;
+      let payingDoneAt: number | undefined;
+      const paying = t.db
+        .transaction((tx) => payStartGrant(tx, second.id, amountOf(10_000n)))
+        .finally(() => (payingDoneAt = Date.now()));
+      await pause(150);
+      const blocked = payingDoneAt === undefined;
+      cancel.open();
+      expect(await endings(withdrawing, paying)).toEqual(['ok', 'ok']);
+      expect(blocked).toBe(true);
+      expect((await paying).outcome).toBe('cancelled');
+      expect(await ledgerOf(b.id)).toEqual([]);
+    });
+
+    it('orders an operator number and a cancellation of its grant: refused after, released if before', async () => {
+      // An insert of its own (not OPERATOR_PHONE_CHANGE_SQL, whose UPDATE of the 본인확인 record
+      // waits for the cancellation there already): the start_held trigger reads the grant FOR
+      // SHARE, so it waits for the cancellation's commit and then sees it. Without that it would
+      // read the grant as pending, and the release, which cannot see the uncommitted row, would
+      // leave a live number on a cancelled grant — held for good (answer 2 frees it).
+      const { user: a } = await createUser(t.db);
+      const grant = await createStartGrant(t.db, { userId: a.id });
+      const cancelled = gate();
+      const commit = gate();
+      const withdrawal = t.db.transaction(async (tx) => {
+        expect((await cancelStartGrant(tx, a.id)).outcome).toBe('cancelled');
+        cancelled.open();
+        await commit.opened;
+      });
+      await cancelled.opened;
+      const late = randomPhoneHash();
+      let insertedAt: number | undefined;
+      const inserting = recordOperatorNumber(grant.id, late).finally(
+        () => (insertedAt = Date.now()),
+      );
+      await pause(150);
+      const waited = insertedAt === undefined;
+      commit.open();
+      const [ended, refused] = await Promise.allSettled([withdrawal, inserting]);
+      expect(ended.status).toBe('fulfilled');
+      expect(refused.status).toBe('rejected');
+      expect(
+        refused.status === 'rejected' &&
+          sqlState(refused.reason) === '23000' &&
+          /it records no number/.test(errorMessage(refused.reason)),
+      ).toBe(true);
+      expect(waited).toBe(true);
+      expect((await numbersOf(grant.id)).map((n) => [n.source, n.releasedAt !== null])).toEqual([
+        ['grant', true],
+      ]);
+
+      // The operator's insert first, still open: the cancellation waits for it, then releases it
+      // with the grant's own number, at the same instant.
+      const { user: b } = await createUser(t.db);
+      const other = await createStartGrant(t.db, { userId: b.id });
+      const early = randomPhoneHash();
+      const inserted = gate();
+      const end = gate();
+      const operator = t.db.transaction(async (tx) => {
+        await tx
+          .insert(startGrantNumbers)
+          .values({ grantId: other.id, phoneHash: early, source: 'operator' });
+        inserted.open();
+        await end.opened;
+      });
+      await inserted.opened;
+      let cancelledAt: number | undefined;
+      const cancelling = t.db
+        .transaction((tx) => cancelStartGrant(tx, b.id))
+        .finally(() => (cancelledAt = Date.now()));
+      await pause(150);
+      const held = cancelledAt === undefined;
+      end.open();
+      expect(await endings(operator, cancelling)).toEqual(['ok', 'ok']);
+      expect(held).toBe(true);
+      const result = await cancelling;
+      if (result.outcome !== 'cancelled') throw new Error(`not cancelled: ${result.outcome}`);
+      expect(result.released.map((n) => [n.source, n.phoneHash, n.releasedAt])).toEqual([
+        ['grant', expect.any(String), result.grant.cancelledAt],
+        ['operator', early, result.grant.cancelledAt],
+      ]);
+      expect(
+        await t.db
+          .select()
+          .from(startGrantNumbers)
+          .where(and(eq(startGrantNumbers.phoneHash, early), isNull(startGrantNumbers.releasedAt))),
+      ).toEqual([]);
+    });
+
+    it('frees a number to one new account, and only once the cancellation commits', async () => {
+      /**
+       * A withdrawal that cancels the grant holding `hash` and waits before it ends, with
+       * `accounts` recording their grants on that number meanwhile: they wait on the number's
+       * row until the withdrawal commits or rolls back (the live UNIQUE decides, not a read).
+       */
+      async function meet(hash: string, end: 'commit' | 'rollback', accounts: string[]) {
+        const [owner] = await t.db
+          .select({ userId: startGrants.userId })
+          .from(startGrants)
+          .innerJoin(startGrantNumbers, eq(startGrantNumbers.grantId, startGrants.id))
+          .where(and(eq(startGrantNumbers.phoneHash, hash), isNull(startGrantNumbers.releasedAt)));
+        let resume!: () => void;
+        const held = new Promise<void>((resolve) => (resume = resolve));
+        let entered!: () => void;
+        const inside = new Promise<void>((resolve) => (entered = resolve));
+        const rolledBack = new Error('the withdrawal failed');
+        const withdrawal = t.db
+          .transaction(async (tx) => {
+            expect((await cancelStartGrant(tx, owner!.userId)).outcome).toBe('cancelled');
+            entered();
+            await held;
+            if (end === 'rollback') throw rolledBack;
+          })
+          .catch((error: unknown) => {
+            if (error !== rolledBack) throw error;
+          });
+        await inside;
+        let recordedAt: number | undefined;
+        const racing = Promise.all(
+          accounts.map((id) => t.db.transaction((tx) => recordStartGrant(tx, id, hash))),
+        ).finally(() => (recordedAt = Date.now()));
+        await pause(150);
+        expect(recordedAt).toBeUndefined();
+        resume();
+        await withdrawal;
+        return (await racing).map((r) => r.outcome).sort();
+      }
+      const newAccounts = async (n: number) => {
+        const ids: string[] = [];
+        for (let i = 0; i < n; i += 1) {
+          const { user } = await createUser(t.db);
+          await createPhoneVerification(t.db, { userId: user.id });
+          ids.push(user.id);
+        }
+        return ids;
+      };
+
+      // Committed: of three accounts on the number at once, one records its grant.
+      const { user: a } = await createUser(t.db);
+      const freed = randomPhoneHash();
+      await createStartGrant(t.db, { userId: a.id, phoneHash: freed });
+      expect(await meet(freed, 'commit', await newAccounts(3))).toEqual([
+        'number_already_used',
+        'number_already_used',
+        'recorded',
+      ]);
+      const live = await t.db
+        .select({ grantId: startGrantNumbers.grantId })
+        .from(startGrantNumbers)
+        .where(and(eq(startGrantNumbers.phoneHash, freed), isNull(startGrantNumbers.releasedAt)));
+      expect(live).toHaveLength(1);
+
+      // Rolled back: the grant still waits and holds the number, so the account gets nothing.
+      const { user: b } = await createUser(t.db);
+      const kept = randomPhoneHash();
+      const grant = await createStartGrant(t.db, { userId: b.id, phoneHash: kept });
+      expect(await meet(kept, 'rollback', await newAccounts(1))).toEqual(['number_already_used']);
+      expect(await t.db.select().from(startGrants).where(eq(startGrants.id, grant.id))).toEqual([
+        grant,
+      ]);
+      expect((await numbersOf(grant.id)).map((n) => n.releasedAt)).toEqual([null]);
+    });
+
+    it('pays nothing to a grant whose account lost its 본인확인 record by hand, and scans past it', async () => {
       const { user: gone } = await createUser(t.db);
       const { user: kept } = await createUser(t.db);
       const left = await createStartGrant(t.db, { userId: gone.id });
       const waiting = await createStartGrant(t.db, { userId: kept.id });
-      // What a withdrawal will do to the number (#140), while the grant waits for its amount.
+      // The record deleted with no cancellation (not a withdrawal, which cancels too).
       await t.db.delete(phoneVerifications).where(eq(phoneVerifications.userId, gone.id));
       // Out of the scan, though it is the oldest: it would sort first for good otherwise.
       expect(await pendingStartGrantIds(t.db, 1)).toEqual([waiting.id]);
@@ -1861,10 +2459,11 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(await ledgerOf(gone.id)).toEqual([]);
       const [balance] = await t.db.select().from(balances).where(eq(balances.userId, gone.id));
       expect(balance!.availableCoin).toBe(0n);
-      // Still pending, still the record of its number (ADR-0071 7-11).
+      // Still pending, still holding its number.
       expect(await t.db.select().from(startGrants).where(eq(startGrants.id, left.id))).toEqual([
         left,
       ]);
+      expect((await numbersOf(left.id)).map((n) => n.releasedAt)).toEqual([null]);
     });
 
     it('holds the 본인확인 record while it pays, so a withdrawal cannot delete it meanwhile', async () => {
@@ -1893,9 +2492,11 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       const { user: u } = await createUser(t.db);
       await createPhoneVerification(t.db, { userId: u.id, phone: '01055556666' });
       const grant = await createStartGrant(t.db, { userId: u.id, amountCoin: 100n });
+      const numbers = await numbersOf(grant.id);
       // What a withdrawal will do to the number (#140): delete the verification row.
       await t.db.delete(phoneVerifications).where(eq(phoneVerifications.userId, u.id));
       expect(await t.db.select().from(startGrants)).toEqual([grant]);
+      expect(await numbersOf(grant.id)).toEqual(numbers);
     });
   });
 

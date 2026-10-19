@@ -214,7 +214,7 @@ aws sesv2 get-email-identity --email-identity buddha.sboh.dev --profile inno-fra
 
 **#183(마이그레이션 0028)을 처음 배포할 때 한 번.** 이미 돌고 있는 배포에서는 그 배포 전에(또는 함께) 기존 `terraform.tfvars`에 `aligo_*`를 넣고 apply한다 — 그 전에는 시드 관리자를 포함해 아무도 `/onboarding`의 본인확인을 지나지 못한다. 0028은 확인하지 않은 연락처 `user_contacts`를 행째 지우므로 모든 계정이 다음 로그인에서 본인확인을 다시 거치고, `migrate`가 도는 몇 초 동안은 아직 그 표를 읽는 옛 API의 `GET /api/v1/me`·`GET /api/v1/admin/admins`가 500으로 답한다(새 컨테이너가 뜨면 풀린다, ADR-0070 결과 3).
 
-**#70(마이그레이션 0031)을 처음 배포할 때 한 번.** 그 배포 **전에** `terraform apply`로 `random_password.phone_hash_key`를 만들어 SSM의 env에 `PHONE_HASH_KEY`를 넣는다. 운영 API는 이 값이 없거나 32자보다 짧으면 뜨지 않는다(`apps/api/src/config/env.ts`). 0031은 가입 트리거의 10,000 Coin 지급을 없애고 `start_grants` 표를 만들 뿐 기존 계정의 잔고·원장은 건드리지 않는다(D4, ADR-0071).
+**#70(마이그레이션 0031)을 처음 배포할 때 한 번.** 그 배포 **전에** `terraform apply`로 `random_password.phone_hash_key`를 만들어 SSM의 env에 `PHONE_HASH_KEY`를 넣는다. 운영 API는 이 값이 없거나 32자보다 짧으면 뜨지 않는다(`apps/api/src/config/env.ts`). 0031은 가입 트리거의 10,000 Coin 지급을 없애고 `start_grants`·`start_grant_numbers` 표를 만들 뿐 기존 계정의 잔고·원장은 건드리지 않는다(D4, ADR-0071).
 
 ### 롤백 / 같은 태그 재배포
 
@@ -251,7 +251,7 @@ gh workflow run deploy.yml --ref main -f image_tag=<현재 sha>     # .env 재�
 
 `better_auth_secret`을 바꾸면 모든 세션이 무효가 된다(사용자 전원 재로그인).
 
-**`phone_hash_key`는 교체하지 않는다**(`-replace`·taint 금지, ADR-0071). 운영 `.env`의 `PHONE_HASH_KEY`로, 본인확인한 휴대전화 번호를 키 있는 해시로 바꿔 '시작 Coin을 받은 번호'(`start_grants`)로 기록하는 키다. 바꾸면 저장된 해시가 어느 번호와도 맞지 않게 되어, 시작 Coin을 받은 번호가 다음 계정에서 다시 받고 번호마다 세는 한도(ADR-0069 결정 7)도 처음부터 다시 센다. 새 키로도 API는 그대로 뜨므로 아무것도 알려 주지 않는다. 그래서 `ssm.tf`의 `lifecycle { prevent_destroy = true }`가 막는다 — `-replace`·taint, 값을 새로 뽑게 하는 `length`·`special`의 수정, `terraform destroy`는 모두 plan 단계에서 오류로 끝난다. 그 줄을 지우는 커밋은 하지 않는다. 정말 바꿔야 하면(유출) 오너가 그 결과를 정한 뒤 기록을 옮기는 절차를 먼저 만든다 — 지금은 없다.
+**`phone_hash_key`는 교체하지 않는다**(`-replace`·taint 금지, ADR-0071). 운영 `.env`의 `PHONE_HASH_KEY`로, 본인확인한 휴대전화 번호를 키 있는 해시로 바꿔 '시작 Coin을 받은 번호'(`start_grant_numbers`)로 기록하는 키다. 바꾸면 저장된 해시가 어느 번호와도 맞지 않게 되어, 시작 Coin을 받은 번호가 다음 계정에서 다시 받고 번호마다 세는 한도(ADR-0069 결정 7)도 처음부터 다시 센다. 새 키로도 API는 그대로 뜨므로 아무것도 알려 주지 않는다. 그래서 `ssm.tf`의 `lifecycle { prevent_destroy = true }`가 막는다 — `-replace`·taint, 값을 새로 뽑게 하는 `length`·`special`의 수정, `terraform destroy`는 모두 plan 단계에서 오류로 끝난다. 그 줄을 지우는 커밋은 하지 않는다. 정말 바꿔야 하면(유출) 오너가 그 결과를 정한 뒤 기록을 옮기는 절차를 먼저 만든다 — 지금은 없다.
 
 **DB 롤 비밀번호(`postgres_superuser`, `db_app`, `db_migrate`)는 한 단계가 더 있다.** `postgres-init/02-passwords.sh`는 initdb 때 한 번만 돈다. 새 값을 SSM에 넣은 뒤 배포를 돌리면 `migrate` 서비스가 옛 비밀번호의 데이터베이스에 새 비밀번호로 붙으려다 실패하므로, 배포 **전에** 손으로 `ALTER ROLE`을 한다.
 
@@ -292,7 +292,11 @@ sudo docker compose -f /data/buddha/compose.yaml exec -T postgres \
 
 ### 운영 DB 초기화
 
-계정까지 모든 데이터와 Redis를 비우고 시드로 다시 채운다(ADR-0048). #149의 출시 전 재초기화가 이 절차를 쓰고, 다시 할지와 남길 데이터는 #133이 정한다 — 무엇이든 남기기로 하면 그 전에 이 절차를 좁힌다. 세션 안에서 `sudo bash /data/buddha/reset-db.sh --yes` — 덤프를 뜨고 api·worker를 멈춘 뒤 비우고 시드해 다시 띄운다. 끝까지 성공하면 덤프를 지우고, 실패하면 복구용으로 남긴다. 무엇이 지워지고 남는지, 확인과 실패 시 처리는 [docs/RESET.md](../docs/RESET.md).
+계정까지 모든 데이터와 Redis를 비우고 시드로 다시 채운다(ADR-0048). #149의 출시 전 재초기화가 이 절차를 쓰고, 다시 할지와 남길 데이터는 #133이 정한다 — 무엇이든 남기기로 하면 그 전에 이 절차를 좁힌다. 세션 안에서 `sudo bash /data/buddha/reset-db.sh --yes` — 덤프를 뜨고 api·worker를 멈춘 뒤 비우고 시드해 다시 띄운다. 끝까지 성공하면 덤프를 지우고, 실패하면 복구용으로 남긴다. 무엇이 지워지고 남는지, 확인과 실패 시 처리는 [docs/RESET.md](../docs/RESET.md). #70(마이그레이션 0031)을 배포한 뒤 오너가 정한 때 한 번 한다(오너 결정 2026-10-18, [docs/RESET.md](../docs/RESET.md#70-배포-때-오너-결정-2026-10-18)).
+
+### 운영자의 손 작업
+
+회원의 휴대전화 번호 바꾸기처럼 화면 없이 DB에서 손으로 하는 일은 [docs/OPERATIONS.md](../docs/OPERATIONS.md)에 있다. 번호의 키 있는 해시는 api 컨테이너 안의 해시 CLI로 센다 — `PHONE_HASH_KEY`는 그 컨테이너 밖으로 꺼내지 않는다.
 
 ### 인스턴스 교체
 
@@ -340,7 +344,7 @@ terraform state mv -state-out=phone-hash-key.tfstate \
 terraform destroy
 ```
 
-`phone_hash_key`는 지우지 않고 옮긴다. 스냅샷에서 되살린 `start_grants`의 해시는 그 키로만 번호와 맞는다(ADR-0071). 옮긴 `phone-hash-key.tfstate`에는 키가 평문으로 있으니(`.gitignore`의 `*.tfstate*`가 커밋은 막는다) [상태 파일](#상태-파일)의 tfstate처럼 `gpg -c`로 암호화해 이 머신 밖에도 둔다. 다시 올릴 때는 첫 `terraform apply` **전에** 되돌린다(로컬 tfstate 기준):
+`phone_hash_key`는 지우지 않고 옮긴다. 스냅샷에서 되살린 `start_grant_numbers`의 해시는 그 키로만 번호와 맞는다(ADR-0071). 옮긴 `phone-hash-key.tfstate`에는 키가 평문으로 있으니(`.gitignore`의 `*.tfstate*`가 커밋은 막는다) [상태 파일](#상태-파일)의 tfstate처럼 `gpg -c`로 암호화해 이 머신 밖에도 둔다. 다시 올릴 때는 첫 `terraform apply` **전에** 되돌린다(로컬 tfstate 기준):
 
 ```bash
 terraform state mv -state=phone-hash-key.tfstate -state-out=terraform.tfstate \
