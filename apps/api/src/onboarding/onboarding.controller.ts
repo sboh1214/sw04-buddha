@@ -44,27 +44,30 @@ export class OnboardingController {
   ) {}
 
   /**
-   * The consent step (ADR-0069 decision 1 #57-4·#57-5): every item answered at its current version,
-   * the required ones agreed. The record keeps, beside each answer, the time, the client address by
-   * the rate limit's rule (`clientAddress`: behind Caddy the visitor, nobody behind loopback or a
-   * proxy RATE_LIMIT_UNCOUNTED_PEERS lists) and the browser's `User-Agent`. Also the re-consent
-   * after a revision that changed members' rights.
+   * The consent step (ADR-0069 decision 1 #57-4·#57-5): the items it asks answered at their current
+   * version, the required ones agreed — every item the first time, and in the re-consent after a
+   * revision that changed members' rights only the items it left behind. Also MY 설정's marketing
+   * switch, which sends that answer alone (ADR-0072). The record keeps, beside each answer, the
+   * time, the client address by the rate limit's rule (`clientAddress`: behind Caddy the visitor,
+   * nobody behind loopback or a proxy RATE_LIMIT_UNCOUNTED_PEERS lists) and the browser's
+   * `User-Agent`.
    */
   @Post('consents')
   @HttpCode(200)
   // Per account on top of the address bucket: every changed answer is a row that stays (the app
   // cannot rewrite one, and they are kept for the retention period), and the optional marketing
-  // answer can be flipped at will — a scripted client must not grow one account's history at the
-  // address bucket's pace times its addresses (ADR-0072 7-26).
+  // answer can be flipped at will (MY 설정's switch) — a scripted client must not grow one account's
+  // history at the address bucket's pace times its addresses (ADR-0072 7-26).
   @RateLimit('consent')
   @ApiOperation({
     operationId: 'recordMyConsents',
-    summary: 'Record the consent step: each item at its current version',
+    summary: 'Record consent answers: the items the consent step asks, or the marketing one alone',
   })
   @ApiData(meSchema)
   // FORBIDDEN: a mutation whose Origin is not ours, or a body whose `expectedAccountId` is not the
-  // cookie's account (nothing recorded). VALIDATION_ERROR: an item missing, a version that is not
-  // the current one, or a required item not agreed. RATE_LIMITED: the account's `consent` bucket.
+  // cookie's account (nothing recorded). VALIDATION_ERROR: no item, an item the account's consent
+  // step asks left out, a version that is not the current one, or a required item not agreed.
+  // RATE_LIMITED: the account's `consent` bucket.
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR', 'RATE_LIMITED')
   recordConsents(
     @CurrentUser() user: SessionUser,

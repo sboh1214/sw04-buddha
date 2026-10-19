@@ -4,16 +4,20 @@ import { Alert, Box, Button, Heading, HStack, Skeleton, Stack, Text } from '@cha
 import type { Route } from 'next';
 import NextLink from 'next/link';
 import { useRouter } from 'next/navigation';
-import { type ReactNode, useEffect, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
 import { SignOutButton } from '@/components/auth/sign-out-button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { copy } from '@/copy';
 import { useMe } from '@/hooks/use-me';
 import { type Me } from '@/lib/api';
+import { consentStepItems } from '@/lib/consent';
 import {
   ONBOARDING_SCREENS,
+  isStepBack,
   onboardingPath,
+  onboardingReturnReason,
   onboardingScreen,
+  type OnboardingReturnReason,
   type OnboardingScreen,
 } from '@/lib/onboarding';
 import { profileView } from '@/lib/query-client';
@@ -32,15 +36,23 @@ const SCREEN_TITLES: Readonly<Record<OnboardingScreen, string>> = {
   interests: copy.onboardingStepInterests,
 };
 
+/** Why the account is on an earlier step than it was going to (오너 결정 2026-10-19 (2차) 6). */
+const RETURN_REASONS: Readonly<Record<OnboardingReturnReason, string>> = {
+  reconsent: copy.onboardingReconsentReason,
+  earlier_step: copy.errOnboardingStepsFirst,
+};
+
 /**
  * /onboarding (#58, ADR-0072): the stepper. `next` is already validated by the page
  * (`onboardingNext`). Which screen shows is the server's answer — `GET /me`'s `onboarding.nextStep`
- * in `['me']`, the notice standing before the interests (`onboardingScreen`) — so an account
- * resumes at its remaining step whenever and wherever it comes back (#57-8), and every step's
- * write puts its answer into `['me']` before it settles, which moves the stepper on in the same
- * render. The ONE place that navigates away is the effect below, keyed on nothing being left: an
- * account that arrives done already (another tab finished, or Back returned here) is sent straight
- * on, and the last step lands in the same place — nothing can navigate twice.
+ * in `['me']`, and after the nickname step on this visit the notice and the interests
+ * (`onboardingScreen`) — so an account resumes at its remaining step whenever and wherever it comes
+ * back (#57-8), and every step's write puts its answer into `['me']` before it settles, which moves
+ * the stepper on in the same render. The ONE place that navigates away is the effect below, keyed
+ * on nothing being left: an account that arrives done already (another tab finished, Back returned
+ * here, or it left at the notice or the interests — they are shown once, 오너 결정 2026-10-19
+ * (2차) 5) is sent straight on, and the last step lands in the same place — nothing can navigate
+ * twice.
  */
 export function OnboardingForm({ next }: { next: string }) {
   const { data: me, isPending, isFetching, isLoggedIn, refetch } = useMe();
@@ -105,20 +117,40 @@ export function OnboardingForm({ next }: { next: string }) {
 }
 
 /**
- * The screens of one account's onboarding. `noticeRead` is the one piece of state the server does
- * not hold (lib/onboarding.ts `ONBOARDING_SCREENS`).
+ * The screens of one account's onboarding. What the visit holds beside the server's answer
+ * (`StepperVisit`): whether the nickname step was the next step on it — then the notice and the
+ * interests follow the grant — and whether the notice was read. Both are kept as the render goes
+ * (the documented way to adjust state to what changed since the last render), so they are true in
+ * the very render whose `['me']` says the nickname step is done.
  *
  * The heading names the screen and takes the focus when the screen changes — a step finished, or
  * the server sent the account back to an earlier one — so a screen reader hears where it is and
  * the keyboard starts from the top of the new step. Not on the first screen: arriving on the page
- * is no change, and the browser's own focus handling of a navigation stands.
+ * is no change, and the browser's own focus handling of a navigation stands. Above the heading the
+ * stepper says why the account is on an earlier step than it was going to (오너 결정 2026-10-19
+ * (2차) 6, `onboardingReturnReason`): read out at once (`alert`) when the server sent it back while
+ * it was here. When the gate brought it for a re-consent the sentence is there from the first
+ * render, a `status` that screen readers do not reliably read out when it appears with its text in
+ * it — so that first screen is the one whose heading takes the focus on arrival, and the heading is
+ * described by the sentence (`aria-describedby`): the step's name and the reason are read together
+ * (ADR-0072 7-36).
  */
 function Stepper({ me, next }: { me: Me; next: string }) {
   const router = useRouter();
   const [noticeRead, setNoticeRead] = useState(false);
-  const screen = onboardingScreen(me.onboarding, noticeRead);
+  const [reachedNickname, setReachedNickname] = useState(me.onboarding.nextStep === 'nickname');
+  if (!reachedNickname && me.onboarding.nextStep === 'nickname') setReachedNickname(true);
+  const screen = onboardingScreen(me.onboarding, { reachedNickname, noticeRead });
+  // The screen shown, and whether the server sent the account back to it from a later one.
+  const [shown, setShown] = useState({ screen, sentBack: false });
+  if (shown.screen !== screen) setShown({ screen, sentBack: isStepBack(shown.screen, screen) });
+  const reason = onboardingReturnReason(me.onboarding, screen, shown.sentBack);
+  // Brought here for a re-consent, rather than sent back while on this screen.
+  const arrivedForReconsent = reason === 'reconsent' && !shown.sentBack;
+  const reasonId = useId();
   const heading = useRef<HTMLHeadingElement>(null);
-  const lastScreen = useRef<OnboardingScreen | null>(screen);
+  // No screen before the first, so the effect below focuses it, only on a re-consent arrival.
+  const lastScreen = useRef<OnboardingScreen | null>(arrivedForReconsent ? null : screen);
 
   useEffect(() => {
     if (screen === null) router.replace(next as Route);
@@ -136,7 +168,7 @@ function Stepper({ me, next }: { me: Me; next: string }) {
   let step: ReactNode;
   switch (screen) {
     case 'consent':
-      step = <ConsentStep />;
+      step = <ConsentStep items={consentStepItems(me.onboarding.consents)} />;
       break;
     case 'verification':
       step = (
@@ -147,7 +179,7 @@ function Stepper({ me, next }: { me: Me; next: string }) {
       );
       break;
     case 'nickname':
-      step = <NicknameStep nickname={me.profile.nickname} role={me.profile.role} />;
+      step = <NicknameStep nickname={me.profile.nickname} />;
       break;
     case 'notice':
       step = <NoticeStep startGrant={me.startGrant} onNext={() => setNoticeRead(true)} />;
@@ -160,6 +192,19 @@ function Stepper({ me, next }: { me: Me; next: string }) {
   return (
     <Stack gap="5" data-testid={`onboarding-step-${screen}`}>
       <Progress current={position} />
+      {reason !== null && (
+        <Alert.Root
+          id={reasonId}
+          status="warning"
+          role={shown.sentBack ? 'alert' : 'status'}
+          data-testid="onboarding-return-reason"
+        >
+          <Alert.Indicator />
+          <Alert.Content>
+            <Alert.Description>{RETURN_REASONS[reason]}</Alert.Description>
+          </Alert.Content>
+        </Alert.Root>
+      )}
       <Stack gap="1">
         <Text fontSize="sm" color="fg.muted" data-testid="onboarding-position">
           {position + 1} / {ONBOARDING_SCREENS.length}
@@ -170,6 +215,7 @@ function Stepper({ me, next }: { me: Me; next: string }) {
           ref={heading}
           tabIndex={-1}
           outline="none"
+          aria-describedby={arrivedForReconsent ? reasonId : undefined}
           data-testid="onboarding-heading"
         >
           {SCREEN_TITLES[screen]}

@@ -1,6 +1,5 @@
 import * as z from 'zod';
 import { NICKNAME_MAX_LENGTH, NICKNAME_MIN_LENGTH } from './constants.js';
-import { type Role } from './enums.js';
 
 /**
  * Nickname charset (PLAN 17 Q4 default + `_`): Hangul syllables, ASCII letters, digits and
@@ -32,7 +31,10 @@ export const nicknameSchema = z
  *   word that passes for the operators (NICKNAME_RESERVED_WORDS), both ignoring case, the words
  *   also with underscores put between their letters (`nicknameRuleViolation`). The auto nickname
  *   itself (`user_XXXX`, ADR-0052) stays: the onboarding's nickname step offers it, and confirming
- *   it unchanged sets the nickname (`keptNicknameViolation`).
+ *   it unchanged sets the nickname. Every other nickname an account already has — an admin's, the
+ *   seed's 관리자 included — meets the same rules there (`keptNicknameViolation`).
+ * - Look-alikes ('adm1n', '0fficial') are not refused: reports take care of impersonation
+ *   (오너 결정 2026-10-19 (2차) 7, ADR-0072).
  * - After the onboarding a nickname changes once in NICKNAME_CHANGE_INTERVAL_DAYS; the onboarding's
  *   choice is not a change.
  * - A nickname a change (or a withdrawal, #140) gave up is held for NICKNAME_HOLD_DAYS: no other
@@ -61,8 +63,9 @@ export function isAutoNickname(nickname: string): boolean {
  * (#57-6 «운영자·관리자·운영팀·공식·admin·buddha 등»). Contained anywhere — '공식' keeps
  * '비공식' out too, as the owner's rule reads — and with underscores between their letters too
  * ('관_리_자', 'ad_min'): the underscore is the charset's only separator, and a word spread over
- * it still reads as the word (ADR-0072 7-24). Nothing else is normalised (digits for letters,
- * 'adm1n', are a question for the owner, ADR-0072 결과 4). Extending it is adding a word here.
+ * it still reads as the word (ADR-0072 7-24). Nothing else is normalised: look-alikes with digits
+ * for letters ('adm1n', '0fficial') are not blocked — reports take care of impersonation (오너
+ * 결정 2026-10-19 (2차) 7). Extending it is adding a word here.
  */
 export const NICKNAME_RESERVED_WORDS = [
   '운영자',
@@ -110,13 +113,13 @@ export function nicknameRuleViolation(nickname: string): NicknameRuleViolation |
 /**
  * The rule the onboarding's nickname step finds broken when the account confirms the nickname it
  * already has, or null (ADR-0072 7-25). The owner's rule (#57-6) lets the offered auto nickname be
- * confirmed as it is, and holds a nickname a member typed to `nicknameRuleViolation` — which a
- * nickname typed through MY 설정 before #58 never met, so it meets it here. An admin's nickname is
- * kept as it is (the seed names its admins 관리자, 관리자2), pending the owner's answer
- * (ADR-0072 결과 4). The API and the web's nickname step apply this same function.
+ * confirmed as it is, and holds every other nickname to `nicknameRuleViolation` — one typed
+ * through MY 설정 before #58, which met only the format, and an admin's (the seed named its admins
+ * 관리자, 관리자2) alike: the step refuses it and asks for another (오너 결정 2026-10-19 (2차) 2).
+ * The API and the web's nickname step apply this same function.
  */
-export function keptNicknameViolation(nickname: string, role: Role): NicknameRuleViolation | null {
-  if (isAutoNickname(nickname) || role === 'admin') return null;
+export function keptNicknameViolation(nickname: string): NicknameRuleViolation | null {
+  if (isAutoNickname(nickname)) return null;
   return nicknameRuleViolation(nickname);
 }
 

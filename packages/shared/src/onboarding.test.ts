@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { INT4_MAX } from './constants.js';
 import {
   INTEREST_CATEGORIES_INPUT_MAX,
-  ONBOARDING_STEPS,
   REQUIRED_ONBOARDING_STEPS,
   missingOnboardingSteps,
   onboardingRequiredDetailsSchema,
@@ -27,8 +26,7 @@ const record = {
 };
 
 describe('onboarding steps (decision 4 #58, #57-7)', () => {
-  it('runs consent, verification and nickname, then the interests after the start Coin', () => {
-    expect(ONBOARDING_STEPS).toEqual(['consent', 'verification', 'nickname', 'interests']);
+  it('runs consent, verification and nickname', () => {
     expect(REQUIRED_ONBOARDING_STEPS).toEqual(['consent', 'verification', 'nickname']);
   });
 
@@ -73,13 +71,22 @@ describe('onboardingState', () => {
     expect(onboardingSchema.parse(reconsent)).toEqual(reconsent);
   });
 
-  it('completes with the three required steps; the interests come next, then nothing', () => {
+  it('completes with the three required steps: the interests are no step to resume at', () => {
+    // An account that left before answering them skipped them (오너 결정 2026-10-19 (2차) 5).
     const done = { consent: true, verification: true, nickname: true, interests: false };
-    expect(onboardingState(done, [])).toMatchObject({ completed: true, nextStep: 'interests' });
-    expect(onboardingState({ ...done, interests: true }, [])).toMatchObject({
+    expect(onboardingState(done, [])).toMatchObject({
       completed: true,
+      interests: false,
       nextStep: null,
     });
+    expect(onboardingState({ ...done, interests: true }, [])).toMatchObject({
+      completed: true,
+      interests: true,
+      nextStep: null,
+    });
+    expect(
+      onboardingSchema.safeParse({ ...onboardingState(done, []), nextStep: 'interests' }).success,
+    ).toBe(false);
   });
 
   it('describes the refusal of an account that has not done them', () => {

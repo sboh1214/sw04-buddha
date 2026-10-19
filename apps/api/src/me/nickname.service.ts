@@ -42,10 +42,11 @@ function refused(details: NicknameNotAllowedDetails): AppError {
  * nickname step and the change of MY 설정 (`PATCH /me`), under one set of rules.
  *
  * - The nickname the account has, confirmed in the onboarding's nickname step: the offered auto
- *   nickname is taken as it is (#57-6), and so is an admin's (the seed's 관리자, pending the
- *   owner); any other — one typed through MY 설정 before #58, when only the format held — meets
- *   the rules first (`keptNicknameViolation`, ADR-0072 7-25). Sending it again after the step, or
- *   to MY 설정, changes nothing.
+ *   nickname is taken as it is (#57-6); any other — one typed through MY 설정 before #58, when
+ *   only the format held, or an admin's, the seed's 관리자 included (오너 결정 2026-10-19 (2차) 2) —
+ *   meets the rules first (`keptNicknameViolation`, ADR-0072 7-25), and one that breaks them is
+ *   refused: the member types another. Sending it again after the step, or to MY 설정, changes
+ *   nothing.
  * - Any other nickname is one the member chose: never the auto nickname's prefix nor a reserved
  *   word (`nicknameRuleViolation`, the rule the web's forms apply too), never one another account
  *   has, ignoring case (the unique index on lower(nickname)), nor one another account — or a
@@ -97,8 +98,8 @@ export class NicknameService {
 
   /**
    * The onboarding's nickname step, inside the caller's transaction (which grants the start Coin
-   * with it, #70): `nickname` unchanged confirms it — the auto nickname or an admin's as it is, any
-   * other once it meets the rules — and another is held to the rules. Once the step is done the
+   * with it, #70): `nickname` unchanged confirms it — the auto nickname as it is, any other once it
+   * meets the rules — and another is held to the rules. Once the step is done the
    * same nickname is a no-op — a repeated or concurrent step — and another one is `already_set`: a
    * change is `PATCH /me`, under the interval.
    */
@@ -110,7 +111,7 @@ export class NicknameService {
     }
     const now = await clockTimestamp(tx);
     if (nickname === profile.nickname) {
-      const violation = keptNicknameViolation(nickname, profile.role);
+      const violation = keptNicknameViolation(nickname);
       if (violation !== null) throw refused({ reason: violation });
       await tx
         .update(schema.profiles)
@@ -126,7 +127,6 @@ export class NicknameService {
     const [profile] = await tx
       .select({
         nickname: schema.profiles.nickname,
-        role: schema.profiles.role,
         nicknameConfirmedAt: schema.profiles.nicknameConfirmedAt,
         nicknameChangedAt: schema.profiles.nicknameChangedAt,
       })

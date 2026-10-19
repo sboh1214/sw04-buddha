@@ -2,7 +2,6 @@ import {
   NICKNAME_CHANGE_INTERVAL_DAYS,
   NICKNAME_HOLD_DAYS,
   NICKNAME_RESERVED_WORDS,
-  type Role,
 } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
@@ -24,8 +23,8 @@ const refused = (status: number, code: string, details?: unknown) =>
   });
 
 /** The error message a form shows for `value`, or undefined when it passes. */
-function messageFor(current: string, value: string, onboardingRole?: Role): string | undefined {
-  const parsed = nicknameFormSchema(current, onboardingRole).safeParse({ nickname: value });
+function messageFor(current: string, value: string, onboarding = false): string | undefined {
+  const parsed = nicknameFormSchema(current, { onboarding }).safeParse({ nickname: value });
   return parsed.success ? undefined : parsed.error.issues[0]?.message;
 }
 
@@ -33,19 +32,20 @@ const formatDate = (iso: string) => `<${iso}>`;
 
 describe('nicknameFormSchema', () => {
   it('takes the offered auto nickname unchanged in the nickname step: confirming it sets it (#57-6)', () => {
-    expect(messageFor('user_AB2K', 'user_AB2K', 'user')).toBeUndefined();
-    // An admin's too (the seed's 관리자), as the server keeps it, pending the owner.
-    expect(messageFor('관리자', '관리자', 'admin')).toBeUndefined();
+    expect(messageFor('user_AB2K', 'user_AB2K', true)).toBeUndefined();
     // An ordinary nickname kept from before #58.
-    expect(messageFor('예측가_AB2K', '예측가_AB2K', 'user')).toBeUndefined();
+    expect(messageFor('예측가_AB2K', '예측가_AB2K', true)).toBeUndefined();
   });
 
   it('holds a nickname kept from before #58 to the rules when the nickname step confirms it', () => {
-    expect(messageFor('buddha_official', 'buddha_official', 'user')).toBe(
+    expect(messageFor('buddha_official', 'buddha_official', true)).toBe(
       copy.errNicknameReservedWord,
     );
-    expect(messageFor('user_kim', 'user_kim', 'user')).toBe(copy.errNicknameAutoPrefix);
-    expect(messageFor('관_리_자', '관_리_자', 'user')).toBe(copy.errNicknameReservedWord);
+    expect(messageFor('user_kim', 'user_kim', true)).toBe(copy.errNicknameAutoPrefix);
+    expect(messageFor('관_리_자', '관_리_자', true)).toBe(copy.errNicknameReservedWord);
+    // An admin's too: the seed's 관리자 is refused and another asked for (오너 결정 2026-10-19 (2차) 2).
+    expect(messageFor('관리자', '관리자', true)).toBe(copy.errNicknameReservedWord);
+    expect(messageFor('관리자', '시장지기', true)).toBeUndefined();
   });
 
   it('checks nothing of the nickname the account has in MY 설정, where sending it changes nothing', () => {

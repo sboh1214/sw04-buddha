@@ -15,10 +15,13 @@ import { type LegalDocument, paragraph, table } from './document';
  *
  * What the privacy text says is what the code collects and keeps (ADR-0069 decision 1 #57-1·#57-3·
  * #57-5·#57-18, ADR-0070, ADR-0071): the email (better-auth `user`); for a sign-up or a link
- * through Google, Kakao or Naver, the provider's member id (better-auth `account.account_id`) and
- * the name and profile picture it passes on (`user.name`, `user.image` — the providers' own
- * mapping, which auth.ts keeps but for the email), as /privacy lists them; the real name and the verified
- * number (`phone_verifications`), every code sent with its number, real name, time and client IP
+ * through Google, Kakao or Naver, the provider's member id (better-auth `account.account_id`) —
+ * not the name nor the profile photo, which are neither asked of the provider (Google's and Kakao's
+ * scopes, `OAUTH_SCOPES`; Naver's developer console) nor stored (`user.name` and `user.image` hold
+ * nothing and the provider's ID token, which carries both, is not kept: the API's auth hooks,
+ * 오너 결정 2026-10-19 (2차) 3, ADR-0072 7-30·7-40); the
+ * real name and the verified number (`phone_verifications`), every code sent with its number, real
+ * name, time and client IP
  * (`phone_verification_codes`, the 본인확인 기록 kept for #184's retention period, past a
  * withdrawal), each consent answer with its version, time, client IP and User-Agent
  * (`consent_records`, kept for the retention period), and the keyed hash of a number that received
@@ -43,7 +46,7 @@ export const PRIVACY_CONSENT_TEXT: LegalDocument = {
         ['회원 식별과 로그인, 문의 대응', '이메일 주소', '탈퇴할 때까지'],
         [
           '회원 식별과 로그인(소셜 로그인으로 가입하거나 연결한 경우)',
-          '소셜 로그인 제공자(Google, 카카오, 네이버)가 발급한 회원 식별자, 제공자가 전달하는 이름(닉네임)과 프로필 사진 주소',
+          '소셜 로그인 제공자(Google, 카카오, 네이버)가 발급한 회원 식별자',
           '탈퇴할 때까지',
         ],
         [
@@ -72,28 +75,27 @@ export const PRIVACY_CONSENT_TEXT: LegalDocument = {
   addendum: [],
 };
 
-/** 마케팅 정보 수신 동의 (선택): the optional item `marketing` (#57-5). Nothing sends any yet. */
+/**
+ * 마케팅 정보 수신 동의 (선택): the optional item `marketing` (#57-5) — by email only, and turned on
+ * and off in MY 설정 at any time (오너 결정 2026-10-19 (2차) 4, ADR-0072). Nothing sends any yet.
+ */
 export const MARKETING_CONSENT_TEXT: LegalDocument = {
   title: '마케팅 정보 수신 동의(선택)',
   numbering: 'decimal',
   intro: [
     paragraph(
-      '회사는 {{serviceName}}의 새 기능과 서비스 소식을 알리기 위해, 동의한 회원의 개인정보를 아래와 같이 이용합니다.',
+      '회사는 {{serviceName}}의 새 기능과 서비스 소식을 이메일로 알리기 위해, 동의한 회원의 개인정보를 아래와 같이 이용합니다.',
     ),
     table(
       '마케팅 정보 수신을 위해 이용하는 개인정보',
       ['이용 목적', '이용 항목', '보유·이용 기간'],
-      [
-        [
-          '새 기능과 서비스 소식의 안내(이메일, 문자)',
-          '이메일 주소, 휴대전화 번호',
-          '동의를 철회하거나 탈퇴할 때까지',
-        ],
-      ],
+      [['새 기능과 서비스 소식의 이메일 안내', '이메일 주소', '동의를 철회하거나 탈퇴할 때까지']],
     ),
-    paragraph('지금은 마케팅 정보를 보내지 않습니다. 보내기 시작하면 동의한 회원에게만 보냅니다.'),
     paragraph(
-      '이 동의는 선택이며, 동의하지 않아도 서비스를 이용할 수 있습니다. 동의는 언제든지 고객센터 이메일({{email}})로 철회할 수 있습니다.',
+      '지금은 마케팅 정보를 보내지 않습니다. 보내기 시작하면 동의한 회원에게만 이메일로 보냅니다.',
+    ),
+    paragraph(
+      '이 동의는 선택이며, 동의하지 않아도 서비스를 이용할 수 있습니다. 동의는 언제든지 MY의 설정 화면에서 철회하거나 다시 할 수 있습니다.',
     ),
   ],
   sections: [],

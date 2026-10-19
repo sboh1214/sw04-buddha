@@ -4,6 +4,9 @@ import {
   CONSENT_ITEMS,
   CONSENT_VERSION_MAX_LENGTH,
   REQUIRED_CONSENT_ITEMS,
+  consentAgreed,
+  consentAnswerStands,
+  consentItemsToAsk,
   consentRecordSchema,
   consentVersionHolds,
   currentConsentVersion,
@@ -166,6 +169,88 @@ describe('re-consent after a revision (#57-5)', () => {
   });
 });
 
+describe('consentItemsToAsk (오너 결정 2026-10-19 (2차) 1)', () => {
+  const agreedToAll = CONSENT_ITEMS.map((item) => ({
+    item,
+    version: current(item),
+    agreed: true,
+  }));
+  /** CONSENT_DOCUMENTS with `item` revised to a version that changes members' rights. */
+  const revisedRights = (item: ConsentItem): ConsentDocuments => ({
+    ...CONSENT_DOCUMENTS,
+    [item]: {
+      required: CONSENT_DOCUMENTS[item].required,
+      versions: [
+        { version: current(item), requiresReconsent: true },
+        { version: '2027-01-01', requiresReconsent: true },
+      ],
+    },
+  });
+
+  it('asks every item the first time, the marketing one included', () => {
+    expect(consentItemsToAsk([])).toEqual(['terms', 'privacy', 'age', 'marketing']);
+    expect(consentAnswerStands('marketing', undefined)).toBe(false);
+  });
+
+  it('asks nothing once every answer stands, the marketing refusal included', () => {
+    expect(consentItemsToAsk(agreedToAll)).toEqual([]);
+    const declined = agreedToAll.map((answer) =>
+      answer.item === 'marketing' ? { ...answer, agreed: false } : answer,
+    );
+    expect(consentItemsToAsk(declined)).toEqual([]);
+  });
+
+  it('asks again only the items a revision that changed rights left behind', () => {
+    // The terms revised: only the terms, and the marketing answer stays as it was either way.
+    for (const marketing of [true, false]) {
+      const answers = agreedToAll.map((answer) =>
+        answer.item === 'marketing' ? { ...answer, agreed: marketing } : answer,
+      );
+      expect(consentItemsToAsk(answers, revisedRights('terms'))).toEqual(['terms']);
+      expect(consentAgreed('marketing', answers, revisedRights('terms'))).toBe(marketing);
+    }
+    // A revision that only announces asks nothing.
+    const announced: ConsentDocuments = {
+      ...CONSENT_DOCUMENTS,
+      privacy: {
+        required: true,
+        versions: [
+          { version: current('privacy'), requiresReconsent: true },
+          { version: '2027-01-01', requiresReconsent: false },
+        ],
+      },
+    };
+    expect(consentItemsToAsk(agreedToAll, announced)).toEqual([]);
+  });
+
+  it('asks the marketing item again only for an opt-in its own revision left behind', () => {
+    const documents = revisedRights('marketing');
+    expect(consentItemsToAsk(agreedToAll, documents)).toEqual(['marketing']);
+    expect(consentAgreed('marketing', agreedToAll, documents)).toBe(false);
+    // A refusal agrees to nothing a revision could change: it stands.
+    const declined = agreedToAll.map((answer) =>
+      answer.item === 'marketing' ? { ...answer, agreed: false } : answer,
+    );
+    expect(consentItemsToAsk(declined, documents)).toEqual([]);
+    // Never a condition of the onboarding (`missingConsents`).
+    expect(missingConsents(agreedToAll, documents)).toEqual([]);
+  });
+
+  it('reads the newest answer to each item: a later entry replaces an earlier one', () => {
+    const marketing = (agreed: boolean) => ({
+      item: 'marketing' as const,
+      version: current('marketing'),
+      agreed,
+    });
+    expect(consentAgreed('marketing', [marketing(true), marketing(false)])).toBe(false);
+    expect(consentAgreed('marketing', [marketing(false), marketing(true)])).toBe(true);
+    expect(consentAgreed('marketing', [])).toBe(false);
+    expect(consentAgreed('marketing', [{ ...marketing(true), version: 'draft-1999-01-01' }])).toBe(
+      false,
+    );
+  });
+});
+
 describe('recordConsentsBodySchema', () => {
   it('takes every item at its current version, the optional one either way', () => {
     expect(recordConsentsBodySchema.parse(body(false))).toEqual(body(false));
@@ -182,20 +267,34 @@ describe('recordConsentsBodySchema', () => {
     }
   });
 
-  it('refuses a version that is not the current one, and an item left out', () => {
+  it('refuses a version that is not the current one, and a body that answers nothing', () => {
     const stale = recordConsentsBodySchema.safeParse(
       body(true, { terms: { version: 'draft-1999-01-01', agreed: true } }),
     );
     expect(stale.success).toBe(false);
     expect(stale.error?.issues[0]?.path).toEqual(['consents', 'terms', 'version']);
-    const { marketing: _dropped, ...withoutMarketing } = body(true).consents;
     expect(
-      recordConsentsBodySchema.safeParse({ consents: withoutMarketing, expectedAccountId: 'u1' })
-        .success,
+      recordConsentsBodySchema.safeParse({ consents: {}, expectedAccountId: 'u1' }).success,
     ).toBe(false);
     expect(
       recordConsentsBodySchema.safeParse({ ...body(true), expectedAccountId: '' }).success,
     ).toBe(false);
+  });
+
+  it('takes some items only: a re-consent’s, or MY 설정’s marketing answer alone', () => {
+    // Which items a submission must answer is the server's to say (`consentItemsToAsk`).
+    const reconsent = {
+      consents: { terms: { version: current('terms'), agreed: true } },
+      expectedAccountId: 'u1',
+    };
+    expect(recordConsentsBodySchema.parse(reconsent)).toEqual(reconsent);
+    for (const agreed of [true, false]) {
+      const marketing = {
+        consents: { marketing: { version: current('marketing'), agreed } },
+        expectedAccountId: 'u1',
+      };
+      expect(recordConsentsBodySchema.parse(marketing)).toEqual(marketing);
+    }
   });
 
   it('describes a record as the account reads it, without the address or the browser', () => {

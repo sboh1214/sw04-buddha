@@ -141,14 +141,14 @@ async function signInSeedAdmin(context: APIRequestContext, admin: SeedAdmin): Pr
 }
 
 /**
- * Takes a seed admin through whatever is left of its onboarding (#58): the consent, the 본인확인,
- * the nickname step with the nickname the seed gave it, and the interest categories skipped.
- * Workers running in parallel share the two admins, and every step but the 본인확인 is safe to
- * repeat (the same consent answers are not written again, the same nickname confirms nothing new
- * and grants once, the skip stays a skip). The 본인확인 is not: the worker whose code request is
- * answered confirms the code it reads from Mailpit, and the others — refused with 429 (the resend
- * interval, or the per-account rate limit) or with a code that a newer one replaced — wait and ask
- * `GET /me` again until it says verified.
+ * Takes a seed admin through whatever is left of its onboarding (#58): the consent, the 본인확인 and
+ * the nickname step (`chooseSeedAdminNickname`). Workers running in parallel share the two admins,
+ * and every step but the 본인확인 is safe to repeat (the same consent answers are not written again,
+ * the same nickname confirms nothing new and grants once, and a second worker's other nickname is
+ * `already_set`, after which `GET /me` says the step is done). The 본인확인 is not: the worker
+ * whose code request is answered confirms the code it reads from Mailpit, and the others — refused
+ * with 429 (the resend interval, or the per-account rate limit) or with a code that a newer one
+ * replaced — wait and ask `GET /me` again until it says verified.
  */
 async function onboardSeedAdmin(
   context: APIRequestContext,
@@ -165,11 +165,7 @@ async function onboardSeedAdmin(
       continue;
     }
     if (step === 'nickname') {
-      await confirmNicknameThroughApi(context, expectedAccountId, me.profile.nickname);
-      continue;
-    }
-    if (step === 'interests') {
-      await answerInterestsThroughApi(context, expectedAccountId, []);
+      await chooseSeedAdminNickname(context, expectedAccountId, me.profile.nickname);
       continue;
     }
     const seen = await smsMessageIds(admin.verification.phone);
@@ -203,6 +199,41 @@ async function onboardSeedAdmin(
   throw new Error(
     `${admin.email} did not finish the onboarding within ${String(ADMIN_VERIFY_MS)} ms`,
   );
+}
+
+/**
+ * The seed admin's nickname step (오너 결정 2026-10-19 (2차) 2): the nickname it has, confirmed —
+ * the auto nickname a fresh seed leaves — unless the rules refuse it, as they refuse the 관리자 an
+ * earlier seed gave (a reserved word): then one of its own, as an admin does on the screen. A
+ * refusal because another worker finished the step first (`already_set`) is fine: the caller reads
+ * `GET /me` again.
+ */
+async function chooseSeedAdminNickname(
+  context: APIRequestContext,
+  expectedAccountId: string,
+  current: string,
+): Promise<void> {
+  const post = (nickname: string) =>
+    context.post('/api/v1/me/onboarding/nickname', { data: { nickname, expectedAccountId } });
+  const kept = await post(current);
+  if (kept.ok()) return;
+  const refusal = (
+    (await kept.json()) as { error: { code: string; details?: { reason?: string } } }
+  ).error;
+  const reason = refusal.details?.reason;
+  if (refusal.code !== 'NICKNAME_NOT_ALLOWED') {
+    throw new Error(`the nickname step of ${current} failed: ${JSON.stringify(refusal)}`);
+  }
+  if (reason === 'already_set') return;
+  if (reason !== 'reserved_word' && reason !== 'auto_prefix') {
+    throw new Error(`the nickname step of ${current} failed: ${JSON.stringify(refusal)}`);
+  }
+  const chosen = await post(`시장지기${freshTag().slice(-8)}`);
+  if (chosen.ok()) return;
+  const second = ((await chosen.json()) as { error: { details?: { reason?: string } } }).error;
+  if (second.details?.reason !== 'already_set') {
+    throw new Error(`the seed admin's own nickname was refused: ${JSON.stringify(second)}`);
+  }
 }
 
 /**

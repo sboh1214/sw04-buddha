@@ -15,11 +15,22 @@ import {
   allConsentState,
   consentBody,
   consentFailure,
+  consentStepItems,
   consentTag,
   isRequiredConsent,
+  marketingConsentBody,
+  marketingConsentOn,
   missingRequiredConsents,
   withAllConsents,
 } from './consent';
+
+const ALL = CONSENT_ITEMS;
+/** A newest answer as `GET /me` lists it. */
+const answer = (item: (typeof CONSENT_ITEMS)[number], agreed = true, version?: string) => ({
+  item,
+  version: version ?? currentConsentVersion(item),
+  agreed,
+});
 
 /**
  * The consent step's rules (#58, ADR-0069 decision 1 #57-4·#57-5) as the screen applies them, held
@@ -54,45 +65,91 @@ describe('the consent items', () => {
   });
 });
 
+describe('the items the step asks (오너 결정 2026-10-19 (2차) 1)', () => {
+  it('asks all four the first time', () => {
+    expect(consentStepItems([])).toEqual(['terms', 'privacy', 'age', 'marketing']);
+  });
+
+  it('asks only what a revision left behind, keeping the marketing answer', () => {
+    // The terms agreed to a version the list no longer holds: only the terms, whatever the
+    // marketing answer was.
+    for (const marketing of [true, false]) {
+      const answers = [
+        answer('terms', true, 'draft-1999-01-01'),
+        answer('privacy'),
+        answer('age'),
+        answer('marketing', marketing),
+      ];
+      expect(consentStepItems(answers)).toEqual(['terms']);
+      expect(marketingConsentOn(answers)).toBe(marketing);
+    }
+  });
+
+  it('never shows an empty step: every item if nothing is left to ask', () => {
+    expect(consentStepItems(ALL.map((item) => answer(item)))).toEqual(ALL);
+  });
+});
+
 describe('전체 동의', () => {
   it('starts with every box empty, the optional one included', () => {
     expect(NO_CONSENTS).toEqual({ terms: false, privacy: false, age: false, marketing: false });
-    expect(allConsentState(NO_CONSENTS)).toBe(false);
+    expect(allConsentState(NO_CONSENTS, ALL)).toBe(false);
   });
 
-  it('checks and clears all four, and shows the mixed state in between', () => {
-    expect(withAllConsents(true)).toEqual({
+  it('checks and clears every item shown, and shows the mixed state in between', () => {
+    expect(withAllConsents(NO_CONSENTS, ALL, true)).toEqual({
       terms: true,
       privacy: true,
       age: true,
       marketing: true,
     });
-    expect(allConsentState(withAllConsents(true))).toBe(true);
-    expect(withAllConsents(false)).toEqual(NO_CONSENTS);
-    expect(allConsentState({ ...NO_CONSENTS, privacy: true })).toBe('indeterminate');
-    expect(allConsentState({ ...withAllConsents(true), marketing: false })).toBe('indeterminate');
+    expect(allConsentState(withAllConsents(NO_CONSENTS, ALL, true), ALL)).toBe(true);
+    expect(withAllConsents(withAllConsents(NO_CONSENTS, ALL, true), ALL, false)).toEqual(
+      NO_CONSENTS,
+    );
+    expect(allConsentState({ ...NO_CONSENTS, privacy: true }, ALL)).toBe('indeterminate');
+    expect(
+      allConsentState({ ...withAllConsents(NO_CONSENTS, ALL, true), marketing: false }, ALL),
+    ).toBe('indeterminate');
+  });
+
+  it('covers only the items shown in a re-consent', () => {
+    const items = ['terms'] as const;
+    expect(withAllConsents(NO_CONSENTS, items, true)).toEqual({ ...NO_CONSENTS, terms: true });
+    expect(allConsentState({ ...NO_CONSENTS, terms: true }, items)).toBe(true);
   });
 });
 
 describe('consentBody', () => {
-  it('sends nothing while a required item is unchecked, naming them in order', () => {
+  it('sends nothing while a required item shown is unchecked, naming them in order', () => {
     const choices = { ...NO_CONSENTS, privacy: true, marketing: true };
-    expect(missingRequiredConsents(choices)).toEqual(['terms', 'age']);
-    expect(consentBody(choices, 'user-1')).toBeNull();
+    expect(missingRequiredConsents(choices, ALL)).toEqual(['terms', 'age']);
+    expect(consentBody(choices, ALL, 'user-1')).toBeNull();
+    // An item not shown is not the step's to miss.
+    expect(missingRequiredConsents(choices, ['privacy', 'marketing'])).toEqual([]);
   });
 
-  it('answers every item at its current version, the optional one either way', () => {
+  it('answers every item shown at its current version, the optional one either way', () => {
     for (const marketing of [true, false]) {
-      const body = consentBody({ terms: true, privacy: true, age: true, marketing }, 'user-1');
+      const body = consentBody({ terms: true, privacy: true, age: true, marketing }, ALL, 'user-1');
       expect(body).not.toBeNull();
       // Exactly what the server parses the body with.
       expect(recordConsentsBodySchema.parse(body)).toEqual(body);
       for (const item of CONSENT_ITEMS) {
-        expect(body?.consents[item].version).toBe(currentConsentVersion(item));
+        expect(body?.consents[item]?.version).toBe(currentConsentVersion(item));
       }
-      expect(body?.consents.marketing.agreed).toBe(marketing);
+      expect(body?.consents.marketing?.agreed).toBe(marketing);
       expect(body?.expectedAccountId).toBe('user-1');
     }
+  });
+
+  it('answers only the items a re-consent shows: the marketing answer is left as it was', () => {
+    const body = consentBody({ ...NO_CONSENTS, terms: true }, ['terms'], 'user-1');
+    expect(body).toEqual({
+      consents: { terms: { version: currentConsentVersion('terms'), agreed: true } },
+      expectedAccountId: 'user-1',
+    });
+    expect(recordConsentsBodySchema.parse(body)).toEqual(body);
   });
 
   it("is what the e2e specs' API-level onboarding sends (e2e/consent-versions.ts)", () => {
@@ -108,12 +165,45 @@ describe('consentBody', () => {
   });
 });
 
+describe('MY 설정의 마케팅 정보 수신 (오너 결정 2026-10-19 (2차) 4)', () => {
+  it('is on while the newest marketing answer agrees to a version that holds', () => {
+    expect(marketingConsentOn([])).toBe(false);
+    expect(marketingConsentOn([answer('marketing')])).toBe(true);
+    expect(marketingConsentOn([answer('marketing', false)])).toBe(false);
+    expect(marketingConsentOn([answer('marketing', true, 'draft-1999-01-01')])).toBe(false);
+  });
+
+  it('sends the marketing answer alone, at the current version', () => {
+    for (const agreed of [true, false]) {
+      const body = marketingConsentBody(agreed, 'user-1');
+      expect(body).toEqual({
+        consents: { marketing: { version: currentConsentVersion('marketing'), agreed } },
+        expectedAccountId: 'user-1',
+      });
+      expect(recordConsentsBodySchema.parse(body)).toEqual(body);
+    }
+  });
+});
+
 describe('consentFailure', () => {
   it('asks for a reload when the screen showed an older version than the server asks for', () => {
     const outdated = refused(400, 'VALIDATION_ERROR', [
       { path: ['consents', 'terms', 'version'], message: 'Invalid input' },
     ]);
     expect(consentFailure(outdated)).toBe(copy.errConsentOutdated);
+  });
+
+  it('asks for a reload when the server asks an item the screen did not show', () => {
+    const fewer = refused(400, 'VALIDATION_ERROR', [
+      { path: ['consents', 'marketing'], message: 'this item is asked: answer it' },
+    ]);
+    expect(consentFailure(fewer)).toBe(copy.errConsentOutdated);
+  });
+
+  it('says the rate limit when the account answered too often (MY 설정’s switch)', () => {
+    expect(consentFailure(refused(429, 'RATE_LIMITED', { retryAfterSeconds: 30 }))).toBe(
+      copy.errConsentTooManyRequests,
+    );
   });
 
   it('says the required items for any other validation refusal, the session switch, the rest', () => {

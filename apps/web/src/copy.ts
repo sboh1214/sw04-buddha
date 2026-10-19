@@ -186,6 +186,16 @@ export const copy = {
   timeZoneFollowBrowser: '브라우저 시간대 따르기',
   timeZoneSaved: '시간대를 저장했습니다.',
   errTimeZoneInvalid: '이 시간대는 저장할 수 없습니다. 다른 시간대를 골라 주세요.',
+  // 마케팅 정보 수신(#58, 오너 결정 2026-10-19 (2차) 4, ADR-0072): 이메일로만 받고 MY 설정에서 언제든 켜고
+  // 끈다. 바꿀 때마다 동의 기록이 하나씩 남는다(동의 단계와 같은 시각·IP·브라우저). 켜는 줄은 동의 단계의
+  // consentMarketing이고, 동의문(legal/consent-texts.ts)은 '내용 보기'로 펼친다. 지금은 보내는 기능이 없다.
+  settingsMarketing: '마케팅 정보 수신',
+  settingsMarketingHint:
+    '새 기능과 서비스 소식을 이메일로 받을지 정합니다. 언제든 켜고 끌 수 있습니다.',
+  // 바꾼 뒤의 알림과, 마지막으로 바꾼 시각(회원의 시간대) 앞에 붙는 말.
+  marketingConsentOn: '마케팅 정보 수신에 동의했습니다.',
+  marketingConsentOff: '마케팅 정보 수신 동의를 철회했습니다.',
+  marketingConsentChangedAt: '마지막으로 바꾼 때:',
   settingsAccount: '계정',
   settingsAccountHint: '이메일은 인증을 거친 뒤에만 변경됩니다.',
   settingsEmailUnverified: '이메일 인증이 완료되지 않았습니다.',
@@ -960,14 +970,19 @@ export const copy = {
   onboardingStepNickname: '닉네임 설정',
   onboardingStepNotice: '시작 Coin 안내',
   onboardingStepInterests: '관심 카테고리',
-  // 단계를 마치기 전에 앞 단계가 풀렸다(다른 탭, 재동의를 묻는 개정). 화면은 서버를 다시 읽어 그 단계로 가므로
-  // 이 문장은 다시 읽기가 실패해 화면이 그대로일 때만 보인다(그 밖에는 단계가 바뀌며 사라진다, ADR-0072 결과 4).
+  // 단계를 마치기 전에 앞 단계가 풀렸다(다른 탭, 재동의를 묻는 개정). 화면은 서버를 다시 읽어 그 단계로 가고
+  // 돌아간 단계의 제목 위에 이 문장을 보인다(오너 결정 2026-10-19 (2차) 6, ADR-0072). 다시 읽기가 실패해
+  // 화면이 그대로이면 그 단계 안에서 보인다.
   errOnboardingStepsFirst: '앞 단계를 먼저 마쳐 주세요.',
+  // 권리를 바꾸는 개정으로 동의를 다시 받는 동의 단계의 제목 위(오너 결정 2026-10-19 (2차) 6). 그 단계는
+  // 서지 않게 된 항목만 다시 묻는다(2차 1).
+  onboardingReconsentReason: '약관이 바뀌어 다시 동의가 필요합니다.',
 
   // 약관 동의(#57-4·#57-5). 항목마다 체크하고 '전체 동의'로 한꺼번에 고른다. 필수는 이용약관·개인정보
   // 수집·이용(휴대전화 번호 수집과 SMS 발송 위탁 포함)·연령 확인이고 선택은 마케팅 정보 수신이다. 연령 확인의
   // 문장은 오너의 글 그대로이고 14는 BUSINESS_INFO.minimumAge와 같아야 한다(lib/consent.test.ts가 확인한다).
-  // 동의문 두 개(개인정보 수집·이용, 마케팅 정보 수신)는 legal/consent-texts.ts에 있다.
+  // 동의문 두 개(개인정보 수집·이용, 마케팅 정보 수신)는 legal/consent-texts.ts에 있다. 재동의는 서지 않게
+  // 된 항목만 묻고(오너 결정 2026-10-19 (2차) 1), consentAllHint는 마케팅 항목이 있을 때만 보인다.
   consentIntro: '서비스를 이용하려면 아래 필수 항목에 동의해 주세요.',
   consentAll: '전체 동의',
   consentAllHint: '선택 항목인 마케팅 정보 수신까지 모두 동의합니다.',
@@ -985,6 +1000,8 @@ export const copy = {
   errConsentRequired: '필수 항목에 모두 동의해야 다음 단계로 갈 수 있습니다.',
   // 화면을 연 사이에 동의할 문서가 개정됐다(서버가 지금 판이 아니라고 거절). 다시 읽고 동의하게 한다.
   errConsentOutdated: '동의할 내용이 바뀌었습니다. 화면을 새로 고친 뒤 다시 동의해 주세요.',
+  // 계정마다 1분에 5번(동의 기록의 계정 한도, ADR-0072 7-26) — MY 설정의 마케팅 켜고 끄기를 빠르게 되풀이할 때.
+  errConsentTooManyRequests: '요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.',
 
   // 닉네임 설정(#57-6): 자동 닉네임(user_XXXX)을 미리 채우고, 그대로 정해도 닉네임 설정을 마친 것이다.
   nicknameStepIntro: '다른 회원에게 보이는 이름입니다. 자동으로 만든 닉네임을 그대로 써도 됩니다.',

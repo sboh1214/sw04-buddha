@@ -265,7 +265,9 @@ export function codeRequestFailure(error: unknown): CodeRequestFailure {
   // The consent comes first (#58) and the account's no longer stands (a revision asked for it
   // again while the step was open): the hook asked `['me']` again, and the stepper goes back to it
   // — this step and its line with it; the line stays only when `['me']` did not move (its read
-  // failed). Whether to say why the account went back is a question for the owner (ADR-0072 결과 4).
+  // failed). Where it did, the stepper says above the consent step's heading why the account is
+  // there — the re-consent sentence, since the account agreed before (`onboardingReturnReason`,
+  // 오너 결정 2026-10-19 (2차) 6).
   if (isApiError(error, 'ONBOARDING_REQUIRED')) {
     return { kind: 'notice', message: copy.errOnboardingStepsFirst };
   }

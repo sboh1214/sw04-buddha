@@ -3,6 +3,7 @@ import { readOnboarding, schema, type Db } from '@buddha/db';
 import {
   CONSENT_ITEMS,
   CONSENT_USER_AGENT_MAX_LENGTH,
+  consentItemsToAsk,
   missingOnboardingSteps,
   type Me,
   type OnboardingRequiredDetails,
@@ -50,11 +51,20 @@ export class OnboardingService {
   ) {}
 
   /**
-   * `POST /me/consents`: the consent step's answers (the body has checked every item at its current
-   * version, the required ones agreed), recorded with the time, the client address and the browser
-   * (#57-5). An item whose newest answer is the same — same version, same choice — is not written
-   * again, so a repeated submission adds nothing; a changed one is a new row, the old one kept. Any
-   * account may answer it again: it is also the re-consent after a revision that asked for it.
+   * `POST /me/consents`: answers to the consent items (the body has named at least one, each at its
+   * current version, the required ones agreed), recorded with the time, the client address and the
+   * browser (#57-5).
+   *
+   * The submission must answer every item the account's consent step asks now
+   * (`consentItemsToAsk` on its newest answers, read under the lock): every item the first time,
+   * after a revision that changed members' rights only the ones it left behind — so the marketing
+   * answer is not asked again and stays as it was (오너 결정 2026-10-19 (2차) 1). One that leaves any
+   * of them out is VALIDATION_ERROR naming each, and nothing is written: the required items cannot
+   * be skipped, and the step leaves no item unanswered. Any other item named is recorded as well —
+   * MY 설정's marketing switch sends that answer alone, at any time (2차 4).
+   *
+   * An item whose newest answer is the same — same version, same choice — is not written again, so
+   * a repeated submission adds nothing; a changed one is a new row, the old one kept.
    */
   async recordConsents(
     userId: string,
@@ -69,22 +79,32 @@ export class OnboardingService {
       );
       const read = await readOnboarding(tx, userId);
       if (!read) throw new AppError('NOT_FOUND', { message: 'Profile not found' });
+      const unanswered: ValidationIssue[] = consentItemsToAsk(read.consents)
+        .filter((item) => consents[item] === undefined)
+        .map((item) => ({ path: ['consents', item], message: 'this item is asked: answer it' }));
+      if (unanswered.length > 0) {
+        throw new AppError('VALIDATION_ERROR', {
+          message: 'The consent step asks these items',
+          details: unanswered,
+        });
+      }
       const newest = new Map(read.consents.map((record) => [record.item, record]));
-      const rows = CONSENT_ITEMS.filter((item) => {
+      const rows = CONSENT_ITEMS.flatMap((item) => {
+        const answer = consents[item];
+        if (answer === undefined) return [];
         const before = newest.get(item);
-        return (
-          before === undefined ||
-          before.version !== consents[item].version ||
-          before.agreed !== consents[item].agreed
-        );
-      }).map((item) => ({
-        userId,
-        item,
-        version: consents[item].version,
-        agreed: consents[item].agreed,
-        clientIp: client.ip,
-        userAgent: client.userAgent?.slice(0, CONSENT_USER_AGENT_MAX_LENGTH) ?? null,
-      }));
+        if (before?.version === answer.version && before.agreed === answer.agreed) return [];
+        return [
+          {
+            userId,
+            item,
+            version: answer.version,
+            agreed: answer.agreed,
+            clientIp: client.ip,
+            userAgent: client.userAgent?.slice(0, CONSENT_USER_AGENT_MAX_LENGTH) ?? null,
+          },
+        ];
+      });
       if (rows.length > 0) await tx.insert(schema.consentRecords).values(rows);
     });
     return this.me.getMe(userId);

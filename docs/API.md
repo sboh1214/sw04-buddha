@@ -124,7 +124,7 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | POST | `/api/v1/me/phone-verification/code` | Text a six-digit code to the mobile number, keeping the real name for the confirmation | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `ONBOARDING_REQUIRED`, `PHONE_VERIFICATION_NOT_ALLOWED`, `PHONE_VERIFICATION_LIMITED`, `RATE_LIMITED`, `SMS_SEND_FAILED`, `SMS_SEND_UNCONFIRMED` |
 | POST | `/api/v1/me/phone-verification/confirm` | Confirm the account's newest code: records the verified number and real name | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `VERIFICATION_CODE_REJECTED`, `PHONE_VERIFICATION_NOT_ALLOWED`, `RATE_LIMITED` |
 | PUT | `/api/v1/me/real-name` | Change the real name | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `VERIFICATION_REQUIRED`, `RATE_LIMITED` |
-| POST | `/api/v1/me/consents` | Record the consent step: each item at its current version | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
+| POST | `/api/v1/me/consents` | Record consent answers: the items the consent step asks, or the marketing one alone | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
 | POST | `/api/v1/me/onboarding/nickname` | Set or confirm the nickname in the onboarding, and grant the start Coin | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `NICKNAME_NOT_ALLOWED`, `VERIFICATION_REQUIRED`, `RATE_LIMITED` |
 | PUT | `/api/v1/me/interest-categories` | Set the interest categories (none: skip the step) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `RATE_LIMITED` |
 
@@ -292,6 +292,13 @@ Nest 라우팅·전역 prefix·버저닝·본문 파싱보다 **먼저** 실행�
   주소에나 비밀번호를 먼저 심을 수 있어서, 공격자가 피해자 주소로 가입해 두고 피해자가 우리 인증
   메일을 누르면 그 비밀번호가 피해자 계정의 것이 된다. 서버 안에서 호출하는
   `auth.api.signUpEmail` 은 계속 동작한다(`disabledPaths` 는 HTTP 라우터에서만 검사된다).
+- `POST /api/auth/update-user` — `disabledPaths` 로 막혀 HTTP 로는 **404** 다. 그 경로가 쓰는 것은
+  better-auth 의 이름(`user.name`)과 사진(`user.image`)뿐인데 이 서비스는 그 둘을 두지 않는다
+  (회원의 이름은 닉네임, `PATCH /api/v1/me`). 서버 안의 `auth.api.updateUser` 는 남지만 데이터베이스
+  훅이 두 칸을 그대로 둔다(ADR-0072 7-30·7-31, 오너 결정 2026-10-19 (2차) 3).
+- `GET /api/auth/account-info` — `disabledPaths` 로 막혀 HTTP 로는 **404** 다. 그 답은 연결한 소셜
+  로그인 제공자의 프로필(이름·사진)인데, 이 서비스는 제공자에게 그것을 묻지도(구글은 `openid`·`email`,
+  카카오는 `account_email` 만) 그것을 담은 제공자의 ID 토큰을 두지도 않는다(ADR-0072 7-30·7-31·7-40).
 - 최초 비밀번호 설정에는 대응하는 HTTP 경로가 없다. better-auth 의 `setPassword` 는 서버 전용
   엔드포인트라, 이 저장소는 `POST /api/v1/me/password` 로 감싸 노출한다. 본문은
   `newPassword` 와 화면이 보는 계정 `expectedAccountId` 이고, 그것이 쿠키의 계정이 아니면
@@ -325,7 +332,7 @@ PLAN 7.5 의 표는 `packages/shared/src/rate-limit.ts` 한 곳에 있고, 아�
 | `coupon` | 로그인 계정 (라우트별) | 10 | `POST /api/v1/coupons/redeem` |
 | `searchHistory` | 로그인 계정 (라우트별) | 30 | `POST /api/v1/me/search-history`(제출한 검색어 기록). 기록마다 남는 행이라(보관 기간 없음) 계정마다 센다. 웹은 거절된 기록을 버리고 검색은 그대로 간다. |
 | `phoneVerification` | 로그인 계정 (라우트별) | 5 | `POST /api/v1/me/phone-verification/code`(본인확인 인증번호 요청). 계정마다 센다. 발송 수 자체는 이 버킷이 아니라 DB 의 고정 한도(60초 간격, 계정·번호마다 24시간 10번, `PHONE_VERIFICATION_LIMITED`)가 막고, 이 버킷은 그 한도에 거절당할 요청을 스크립트가 쏟아 내는 속도를 막는다. |
-| `consent` | 로그인 계정 (라우트별) | 5 | `POST /api/v1/me/consents`(약관 동의). 계정마다 센다. 바뀐 답마다 고치지 못하고 보존기간 동안 남는 동의 기록 행이 쌓이므로(선택 항목인 마케팅 정보 수신은 몇 번이든 켜고 끌 수 있다), 주소 버킷만으로는 한 계정이 보낼 주소가 있는 만큼 기록을 늘릴 수 있다. 동의 단계는 한 번(개정 뒤 다시 묻는 때에 한 번 더) 보낸다. |
+| `consent` | 로그인 계정 (라우트별) | 5 | `POST /api/v1/me/consents`(약관 동의와 MY 설정의 마케팅 정보 수신 켜고 끄기). 계정마다 센다. 바뀐 답마다 고치지 못하고 보존기간 동안 남는 동의 기록 행이 쌓이므로(선택 항목인 마케팅 정보 수신은 MY 설정에서 몇 번이든 켜고 끌 수 있다), 주소 버킷만으로는 한 계정이 보낼 주소가 있는 만큼 기록을 늘릴 수 있다. 동의 단계는 한 번(개정 뒤 다시 묻는 때에 한 번 더) 보내고, MY 설정의 마케팅 스위치는 바꿀 때마다 한 번 보낸다. |
 | `email` | 본문이 지목한 이메일 주소 (라우트별) | 5 | 메일을 보내는 경로 — `POST /api/v1/auth/register` 와 `/api/auth/*` 의 `/change-email`, `/send-verification-email`, `/request-password-reset`, `/forget-password`. 시도 자체를 센다(시도가 곧 피해다). `/change-email` 만은 **로그인한 요청만** 센다(세션 없는 요청은 401 이고 아무에게도 메일이 가지 않으므로): 먼저 **요청한 계정**의 버킷을, 그다음 `newEmail` 의 버킷을 — 인증된 계정의 확인 메일은 본문의 주소가 아니라 계정이 이미 가진 주소로 가고, 계정을 먼저 세야 한 계정이 1분에 다섯 주소까지만 지목할 수 있기 때문이다. `GET /verify-email` 도 링크가 메일을 보내는 종류(이메일 변경의 **확인** 링크: 누를 때마다 새 주소에 다시 보낸다)이면 그 수신 주소로 센다 — 토큰은 1시간짜리 무상태 JWT 라 누른다고 소모되지 않기 때문이다. 서명이 유효한 토큰만 세고, 변경을 적용하는 **검증** 링크는 메일을 보내지 않으므로 세지 않는다. |
 | `signIn` | 본문이 지목한 이메일 주소 (라우트별) | 10 | `/api/auth/sign-in/email`. 시도를 세되 **성공한 로그인이 버킷을 지운다** — 비밀번호가 맞은 로그인은 공격이 아니고, 그것까지 남기면 공유 계정이 쓰이는 것만으로 스스로 잠긴다. `/api/auth/*` 전체는 이와 별도로 `default`(주소) 버킷에도 들어간다. |
 

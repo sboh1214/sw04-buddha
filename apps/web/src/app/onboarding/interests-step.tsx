@@ -14,8 +14,10 @@ import { interestIds, withInterest } from '@/lib/onboarding';
  * and its notice, before the market. The categories are the operators' list (D10) — the seeded one
  * until #17's admin screen, `GET /categories` — top-level and sub-categories alike, as many as the
  * member likes. 건너뛰기 sends none, and either way the step is answered and never asked again
- * (#57-7); what was picked is the account's interest categories, a public profile item once #41
- * shows the profile. Changing them later is #41's MY setting, not this screen.
+ * (#57-7) — nor is it once the account left this screen or the notice before it: the screen shows
+ * once, right after the nickname step (오너 결정 2026-10-19 (2차) 5). What was picked is the
+ * account's interest categories, a public profile item once #41 shows the profile. Changing them
+ * later is #41's MY setting, not this screen.
  *
  * The categories are grouped as the header groups them (`groupCategories`): each top-level category
  * with its sub-categories under it, each a checkbox of its own. A category an operator retired

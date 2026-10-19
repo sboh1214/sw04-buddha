@@ -5,6 +5,7 @@ import { APIError, createAuthMiddleware, getSessionFromCtx } from 'better-auth/a
 import { verifyJWT } from 'better-auth/crypto';
 import { type Db, schema } from '@buddha/db';
 import {
+  AUTH_USER_NAME,
   DEFAULT_RATE_LIMITS,
   NO_EMAIL_DOMAIN,
   SET_PASSWORD_PATH,
@@ -39,6 +40,25 @@ const DEFAULT_VERIFY_CALLBACK = SET_PASSWORD_PATH;
  * now that `disabledPaths` 404s it over HTTP.
  */
 const SIGN_IN_PATH = '/sign-in/email';
+
+/** better-auth's own name-and-photo update, refused over HTTP (`disabledPaths` below). */
+const UPDATE_USER_PATH = '/update-user';
+/** better-auth's read of a linked provider's profile (name, photo), refused the same way. */
+const ACCOUNT_INFO_PATH = '/account-info';
+
+/**
+ * What the service asks each provider for (오너 결정 2026-10-19 (2차) 3, ADR-0072 7-40): the
+ * member identifier and the email address, and not the name or the profile photo it does not
+ * keep. better-auth's defaults add Google's `profile` (a name and a photo in the ID token) and
+ * Kakao's `profile_nickname` and `profile_image`; `disableDefaultScope` drops them. Google's
+ * `openid` brings the ID token better-auth reads the member (`sub`) and the address from, and
+ * `email` the address and `email_verified`. Naver takes no scope from the request — its developer
+ * console decides what it hands over (ADR-0072 결과 3).
+ */
+export const OAUTH_SCOPES = {
+  google: ['openid', 'email'],
+  kakao: ['account_email'],
+} as const;
 const CHANGE_EMAIL_PATH = '/change-email';
 
 const EMAIL_INPUT_PATHS = new Set([
@@ -235,8 +255,17 @@ export function createAuth({
      * `disabledPaths` is checked in the HTTP router's `onRequest` only, so the route 404s
      * for the outside world while `auth.api.signUpEmail` — the server-side call
      * RegistrationService makes — still works. Paths are relative to `basePath`.
+     *
+     * `/update-user` too (오너 결정 2026-10-19 (2차) 3, ADR-0072): all it writes is `user.name`
+     * and `user.image` — better-auth's own name and photo, which this service does not keep (a
+     * member's name is the nickname, `PATCH /me`) — so it is refused rather than left to answer
+     * success while the hooks below keep both columns as they are. And `/account-info`, whose
+     * whole answer is the linked provider's profile — the name and photo the service neither
+     * asks for (`OAUTH_SCOPES`) nor keeps: read from the stored ID token (Google's, never stored
+     * now) or fetched afresh with the stored access token (Kakao's, Naver's). The web never
+     * called it.
      */
-    disabledPaths: ['/sign-up/email'],
+    disabledPaths: ['/sign-up/email', UPDATE_USER_PATH, ACCOUNT_INFO_PATH],
     database: drizzleAdapter(db, {
       provider: 'pg',
       schema: {
@@ -286,11 +315,21 @@ export function createAuth({
     },
 
     socialProviders: {
-      ...(providers.google ? { google: providers.google } : {}),
+      ...(providers.google
+        ? {
+            google: {
+              ...providers.google,
+              disableDefaultScope: true,
+              scope: [...OAUTH_SCOPES.google],
+            },
+          }
+        : {}),
       ...(providers.kakao
         ? {
             kakao: {
               ...providers.kakao,
+              disableDefaultScope: true,
+              scope: [...OAUTH_SCOPES.kakao],
               // The built-in provider maps kakao_account.email, which is undefined when
               // the user withheld consent (email_needs_agreement); mapProfileToUser is
               // spread last by the provider, so these fields win.
@@ -356,6 +395,43 @@ export function createAuth({
     },
 
     databaseHooks: {
+      /**
+       * A social login's provider name and profile photo are not stored (오너 결정 2026-10-19 (2차)
+       * 3, ADR-0072; #37-6 '소셜 로그인 사진은 쓰지 않는다'): better-auth copies the provider's
+       * `name` and `image` into the `user` row on a social sign-up (`handleOAuthUserInfo`), and on a
+       * later sign-in or link when told to (`overrideUserInfoOnSignIn`, `updateUserInfoOnLink`,
+       * both off here). Every account is created with AUTH_USER_NAME and no image, whatever the
+       * sign-up passed — the email sign-up's name, a provider's — and any update that names either
+       * column writes the same instead (an update hook can replace values, not drop keys): an
+       * upgrade or an option turned on later cannot refill them. better-auth's `/update-user`,
+       * which writes nothing else, is disabled above. The provider's ID token, which carries them
+       * too, is kept out of `account` below.
+       */
+      user: {
+        create: {
+          before: (user) =>
+            Promise.resolve({ data: { ...user, name: AUTH_USER_NAME, image: null } }),
+        },
+        update: {
+          before: (data) =>
+            Promise.resolve({
+              data: {
+                ...(data.name !== undefined ? { name: AUTH_USER_NAME } : {}),
+                ...(data.image !== undefined ? { image: null } : {}),
+              },
+            }),
+        },
+      },
+      /**
+       * The provider's ID token is not stored either (오너 결정 2026-10-19 (2차) 3, ADR-0072 7-30):
+       * better-auth copies it into `account.id_token` as it came — on a social sign-up, on a link,
+       * and again on every later sign-in (`updateAccountOnSignIn`) and token refresh — and Google's
+       * is a readable JWT whose payload carries the member's name and photo address (`name`,
+       * `picture`) whenever the `profile` scope was granted. Every account is created with none and
+       * any update that names it writes none (an update hook replaces values, it cannot drop keys).
+       * Signing in never reads it back: Google's `getUserInfo` decodes the token of the callback's
+       * own token response, and no provider here signs out through it (`createEndSessionURL`).
+       */
       account: {
         create: {
           /**
@@ -370,14 +446,19 @@ export function createAuth({
            *
            * Returning `false` cancels the create (better-auth `createWithHooks`), and
            * `signUpEmail` ignores what `linkAccount` returns. Scoped to `/sign-up/email`, so
-           * /set-password, password reset and social linking still create their accounts.
+           * /set-password, password reset and social linking still create their accounts — each
+           * without an ID token.
            */
           before: (account, context) =>
             Promise.resolve(
               context?.path === '/sign-up/email' && account.providerId === CREDENTIAL_PROVIDER_ID
                 ? false
-                : undefined,
+                : { data: { ...account, idToken: null } },
             ),
+        },
+        update: {
+          before: (data) =>
+            Promise.resolve({ data: data.idToken !== undefined ? { idToken: null } : {} }),
         },
       },
     },

@@ -12,18 +12,22 @@ import { nicknameSchema } from './nickname.js';
  *   again for an account that agreed only before a revision that changed members' rights.
  * - `verification`: the SMS 본인확인 (#183, ADR-0070).
  * - `nickname`: the nickname step confirmed — the offered auto nickname unchanged counts.
- * - `interests`: the interest categories step answered, some chosen or skipped; never asked again.
+ * - `interests`: the interest categories picked or skipped on their step.
  *
  * The first three are the onboarding (REQUIRED_ONBOARDING_STEPS): an account that has not done
- * them only browses, and the server refuses it what needs them (ONBOARDING_REQUIRED, #57-8).
+ * them only browses, and the server refuses it what needs them (ONBOARDING_REQUIRED, #57-8), and
+ * they are where an account resumes. The interest categories are not: the onboarding screen shows
+ * them once, after the notice that follows the nickname step, and an account that left there has
+ * skipped them — nothing sends it back (오너 결정 2026-10-19 (2차) 5, ADR-0072).
+ *
+ * REQUIRED_ONBOARDING_STEPS: the steps the onboarding is done with (#57-8, D18), in their order
+ * (decision 4 #58).
  */
-export const ONBOARDING_STEPS = ['consent', 'verification', 'nickname', 'interests'] as const;
-export type OnboardingStep = (typeof ONBOARDING_STEPS)[number];
-export const onboardingStepSchema = z.enum(ONBOARDING_STEPS).meta({ id: 'OnboardingStep' });
-
-/** The steps the onboarding is done with (#57-8, D18), in their order (decision 4 #58). */
 export const REQUIRED_ONBOARDING_STEPS = ['consent', 'verification', 'nickname'] as const;
 export type RequiredOnboardingStep = (typeof REQUIRED_ONBOARDING_STEPS)[number];
+export const onboardingStepSchema = z
+  .enum(REQUIRED_ONBOARDING_STEPS)
+  .meta({ id: 'OnboardingStep' });
 
 /** Which steps an account has done; what `onboardingState` reads. */
 export interface OnboardingProgress {
@@ -49,11 +53,15 @@ export const onboardingSchema = z
     nickname: z.boolean(),
     /** The three required steps done: the account may do what #57-8 keeps from the rest. */
     completed: z.boolean(),
+    /**
+     * The interest categories picked or skipped on their step (#57-7). Not a step to resume at: an
+     * account that left the onboarding screen before answering them has skipped them.
+     */
     interests: z.boolean(),
     /**
-     * Where the account resumes (#57-8 '남은 단계부터'): the first step not done in
-     * ONBOARDING_STEPS order — the interests come after the start Coin and its notice (#57-7) —
-     * or null with nothing left.
+     * Where the account resumes (#57-8 '남은 단계부터'): the first required step not done, in
+     * REQUIRED_ONBOARDING_STEPS order, or null once the three are done — the web's gate sends an
+     * account with one to the onboarding screen.
      */
     nextStep: onboardingStepSchema.nullable(),
     /** The account's newest answer to each item it answered, in CONSENT_ITEMS order. */
@@ -74,7 +82,7 @@ export function onboardingState(
     nickname: progress.nickname,
     completed,
     interests: progress.interests,
-    nextStep: ONBOARDING_STEPS.find((step) => !progress[step]) ?? null,
+    nextStep: REQUIRED_ONBOARDING_STEPS.find((step) => !progress[step]) ?? null,
     consents: [...consents],
   };
 }
@@ -113,7 +121,8 @@ export const INTEREST_CATEGORIES_INPUT_MAX = 200;
  * `PUT /me/interest-categories`: the account's interest categories (N04 §2's 관심 카테고리, a
  * public profile item once #41 shows it), replacing what it had — top-level and sub-categories
  * alike (#57-7), active ones only. An empty list is the skip: the step is answered either way and
- * never asked again (#57-7). Ids repeat harmlessly.
+ * never asked again (#57-7) — nor is it once the account left the screen before it. Ids repeat
+ * harmlessly.
  */
 export const setInterestCategoriesBodySchema = z
   .object({

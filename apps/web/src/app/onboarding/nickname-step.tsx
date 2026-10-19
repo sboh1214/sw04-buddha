@@ -1,7 +1,7 @@
 'use client';
 
 import { Alert, Button, Field, Input, Stack, Text } from '@chakra-ui/react';
-import { NICKNAME_MAX_LENGTH, type Role } from '@buddha/shared';
+import { NICKNAME_MAX_LENGTH } from '@buddha/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
@@ -15,25 +15,26 @@ import { nicknameFailure, nicknameFormSchema, type NicknameFormValues } from '@/
  * the nickname the account has — its auto nickname `user_XXXX` (ADR-0052) — and confirming it
  * unchanged sets it. Another one is held to the rules (`nicknameFormSchema`, the shared ones the
  * server applies) before anything is sent, and so is the one it has unless it is the auto nickname
- * or an admin's (`keptNicknameViolation`: a nickname typed through MY 설정 before #58 meets the
- * rules here); what only the server knows (taken, ignoring case, or given up by another account
- * less than 30 days ago) comes back under the input.
+ * (`keptNicknameViolation`: a nickname typed through MY 설정 before #58, or an admin's — the seed's
+ * 관리자 — meets the rules here, and one that breaks them is refused under the input so the member
+ * types another, 오너 결정 2026-10-19 (2차) 2); what only the server knows (taken, ignoring case,
+ * or given up by another account less than 30 days ago) comes back under the input.
  *
  * With this step the server grants the start Coin (#70) — the answer's `startGrant` goes into
  * `['me']` with the nickname (use-onboarding.ts), and the stepper shows the notice about it. A
  * refusal that says the screen is out of date (the step done in another tab, a step before it no
  * longer done) has asked `['me']` again before it reaches this form: the stepper moves to wherever
- * the server says, this step and its line with it — the line stays only when `['me']` did not move
- * (its read failed), and then it says what to do.
+ * the server says, saying why above that step's heading, and this step and its line go with it —
+ * the line stays only when `['me']` did not move (its read failed), and then it says what to do.
  *
  * `nickname` seeds the input once: the stepper keys this step on the account, so a session switched
  * under it mounts a fresh one.
  */
-export function NicknameStep({ nickname, role }: { nickname: string; role: Role }) {
+export function NicknameStep({ nickname }: { nickname: string }) {
   const save = useSetOnboardingNickname();
   const formatDate = useFormatDateTime();
   const [notice, setNotice] = useState<string | null>(null);
-  const schema = useMemo(() => nicknameFormSchema(nickname, role), [nickname, role]);
+  const schema = useMemo(() => nicknameFormSchema(nickname, { onboarding: true }), [nickname]);
   const {
     register,
     handleSubmit,

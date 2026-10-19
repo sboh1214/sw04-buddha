@@ -11,6 +11,8 @@
 --   (nickname_changed_at, once in 30 days) and the interests step answered (interests_answered_at).
 -- - Nicknames are unique ignoring case: profiles_nickname_unique gives way to a unique index on
 --   lower(nickname), and the auto nickname's generator skips a held nickname.
+-- - "user".name and "user".image hold nothing, and "account".id_token neither (a social login's
+--   name and photo are not stored, and a provider's ID token carries them).
 CREATE TABLE "consent_records" (
 	"id" bigserial PRIMARY KEY NOT NULL,
 	"user_id" text NOT NULL,
@@ -149,4 +151,15 @@ BEGIN
   INSERT INTO balances (user_id) VALUES (NEW.id);
   RETURN NEW;
 END;
-$$;
+$$;--> statement-breakpoint
+-- Hand-edited: a social login's provider name and profile photo are not stored (오너 결정 2026-10-19
+-- (2차) 3, ADR-0072). From here on the API's auth database hooks write AUTH_USER_NAME ('',
+-- @buddha/shared) and no image on every account and keep later updates from writing either; the
+-- rows already there are cleared the same way — the email sign-up's name (its address's local part)
+-- and the seed admins' 관리자 with them. D4 lets existing data be reset. A no-op on a clean table.
+UPDATE "user" SET name = '', image = NULL WHERE name <> '' OR image IS NOT NULL;--> statement-breakpoint
+-- Hand-edited: nor the provider's ID token, which better-auth copied into "account" as it came (on
+-- a social sign-up, a link and every sign-in) — Google's is a readable JWT carrying the member's
+-- name and photo address (오너 결정 2026-10-19 (2차) 3, ADR-0072 7-30). From here on the API's
+-- account hooks write none; signing in never reads it back. A no-op on a clean table.
+UPDATE "account" SET id_token = NULL WHERE id_token IS NOT NULL;

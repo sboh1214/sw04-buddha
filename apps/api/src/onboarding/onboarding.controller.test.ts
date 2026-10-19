@@ -295,15 +295,112 @@ describe.skipIf(!hasTestInfra)('온보딩 /api/v1/me (integration, #58)', () => 
       expect(
         (refusal(stale, 400, 'VALIDATION_ERROR') as ValidationIssue[]).map((issue) => issue.path),
       ).toEqual([['consents', 'terms', 'version']]);
-      const { consents } = consentBody(user.id);
+      expect(await consentRows(user.id)).toEqual([]);
+      expect((await getMe(user)).onboarding.nextStep).toBe('consent');
+      // The first consent step asks every item: one left out — the optional one too — is named.
+      // Another account: the `consent` bucket allows five a minute.
+      const other = await signUpTestUser(t);
+      const { consents } = consentBody(other.id);
       const { marketing: _left, ...partial } = consents as Record<string, unknown>;
+      expect(
+        (
+          refusal(
+            await consent(other, { consents: partial, expectedAccountId: other.id }),
+            400,
+            'VALIDATION_ERROR',
+          ) as ValidationIssue[]
+        ).map((issue) => issue.path),
+      ).toEqual([['consents', 'marketing']]);
       refusal(
-        await consent(user, { consents: partial, expectedAccountId: user.id }),
+        await consent(other, { consents: {}, expectedAccountId: other.id }),
         400,
         'VALIDATION_ERROR',
       );
-      expect(await consentRows(user.id)).toEqual([]);
+      expect(await consentRows(other.id)).toEqual([]);
+    });
+
+    it('asks a re-consent only the items a revision left behind, keeping the marketing answer', async () => {
+      // 오너 결정 2026-10-19 (2차) 1. An onboarded account that agreed to the marketing too, whose
+      // terms agreement a revision that changed members' rights left behind (a version the list no
+      // longer holds reads the same).
+      await completeOnboarding(t.db, { userId: user.id, interests: true });
+      await t.db.delete(schema.consentRecords).where(eq(schema.consentRecords.userId, user.id));
+      await createConsents(t.db, {
+        userId: user.id,
+        marketing: true,
+        versions: { terms: 'draft-1999-01-01' },
+      });
+      const before = await consentRows(user.id);
       expect((await getMe(user)).onboarding.nextStep).toBe('consent');
+      // Without the terms: refused, naming them only.
+      const withoutTerms = await consent(user, {
+        consents: { privacy: { version: currentConsentVersion('privacy'), agreed: true } },
+        expectedAccountId: user.id,
+      });
+      expect(
+        (refusal(withoutTerms, 400, 'VALIDATION_ERROR') as ValidationIssue[]).map(
+          (issue) => issue.path,
+        ),
+      ).toEqual([['consents', 'terms']]);
+      // The terms alone: done, one new row, and the marketing opt-in stands as it was.
+      const me = meOf(
+        await consent(user, {
+          consents: { terms: { version: currentConsentVersion('terms'), agreed: true } },
+          expectedAccountId: user.id,
+        }),
+      );
+      expect(me.onboarding).toMatchObject({ consent: true, completed: true, nextStep: null });
+      expect(me.onboarding.consents.find((c) => c.item === 'marketing')?.agreed).toBe(true);
+      const after = await consentRows(user.id);
+      expect(after.slice(0, before.length)).toEqual(before);
+      expect(after.slice(before.length).map((row) => [row.item, row.version, row.agreed])).toEqual([
+        ['terms', currentConsentVersion('terms'), true],
+      ]);
+    });
+
+    it('takes the marketing answer alone at any time once the consent stands (MY 설정)', async () => {
+      // 오너 결정 2026-10-19 (2차) 4: MY 설정 turns it on and off, every change a record with the
+      // address and the browser.
+      const marketing = (agreed: boolean) => ({
+        consents: { marketing: { version: currentConsentVersion('marketing'), agreed } },
+        expectedAccountId: user.id,
+      });
+      // Before the consent step the step's own items are named: nothing recorded.
+      expect(
+        (
+          refusal(
+            await consent(user, marketing(true)),
+            400,
+            'VALIDATION_ERROR',
+          ) as ValidationIssue[]
+        ).map((issue) => issue.path),
+      ).toEqual([
+        ['consents', 'terms'],
+        ['consents', 'privacy'],
+        ['consents', 'age'],
+      ]);
+      expect(await consentRows(user.id)).toEqual([]);
+      meOf(await consent(user, consentBody(user.id, false)));
+      const on = meOf(
+        await consent(
+          user,
+          marketing(true),
+          { 'user-agent': BROWSER, 'x-forwarded-for': VISITOR },
+          PROXY,
+        ),
+      );
+      expect(on.onboarding.consents.find((c) => c.item === 'marketing')?.agreed).toBe(true);
+      meOf(await consent(user, marketing(true)));
+      const off = meOf(await consent(user, marketing(false)));
+      expect(off.onboarding.consents.find((c) => c.item === 'marketing')?.agreed).toBe(false);
+      expect(off.onboarding.consent).toBe(true);
+      const rows = await consentRows(user.id);
+      expect(rows.map((row) => [row.item, row.agreed])).toEqual([
+        ...CONSENT_ITEMS.map((item) => [item, item !== 'marketing']),
+        ['marketing', true],
+        ['marketing', false],
+      ]);
+      expect(rows[CONSENT_ITEMS.length]).toMatchObject({ clientIp: VISITOR, userAgent: BROWSER });
     });
 
     it('refuses a body naming another account, a foreign Origin and no session, recording nothing', async () => {
@@ -410,7 +507,9 @@ describe.skipIf(!hasTestInfra)('온보딩 /api/v1/me (integration, #58)', () => 
         nickname: true,
         completed: true,
         interests: false,
-        nextStep: 'interests',
+        // The interests are shown once, after the notice, and not resumed at: nothing is next
+        // (오너 결정 2026-10-19 (2차) 5).
+        nextStep: null,
       });
       // The amount is undecided (decision 4 #70): the grant waits, nothing paid.
       expect(me.startGrant).toEqual({ status: 'pending', amountCoin: null, grantedAt: null });
@@ -557,7 +656,7 @@ describe.skipIf(!hasTestInfra)('온보딩 /api/v1/me (integration, #58)', () => 
       expect(me.startGrant).toBeNull();
     });
 
-    it('holds a nickname kept from before #58 to the rules, but the auto one or an admin’s', async () => {
+    it('holds every nickname kept from before #58 to the rules, an admin’s too, but the auto one', async () => {
       // Before #58 MY 설정 held a nickname to the format only, so an account may still have one
       // the rules now refuse. Confirmed as it is in the nickname step, it meets them (ADR-0072
       // 7-25), and the step is not done.
@@ -579,14 +678,23 @@ describe.skipIf(!hasTestInfra)('온보딩 /api/v1/me (integration, #58)', () => 
       await atNicknameStep(older);
       await setStoredNickname(older.id, '예측가_A7K2');
       expect(meOf(await setNickname(older, '예측가_A7K2')).profile.nickname).toBe('예측가_A7K2');
-      // So is an admin's — the seed's 관리자 — pending the owner (ADR-0072 결과 4).
+      // An admin's is held to them too — the seed's 관리자 (오너 결정 2026-10-19 (2차) 2): refused,
+      // and the admin picks another.
       const admin = await signUpTestUser(t);
       await atNicknameStep(admin);
       await t.db
         .update(schema.profiles)
         .set({ nickname: '관리자', role: 'admin' })
         .where(eq(schema.profiles.userId, admin.id));
-      expect(meOf(await setNickname(admin, '관리자')).onboarding.nickname).toBe(true);
+      expect(nicknameRefusal(await setNickname(admin, '관리자'))).toEqual({
+        reason: 'reserved_word',
+      });
+      expect((await getMe(admin)).onboarding.nickname).toBe(false);
+      expect(meOf(await setNickname(admin, '시장지기')).profile.nickname).toBe('시장지기');
+      // Look-alikes are not refused: reports take care of impersonation (2차 7).
+      const lookAlike = await signUpTestUser(t);
+      await atNicknameStep(lookAlike);
+      expect(meOf(await setNickname(lookAlike, 'adm1n')).profile.nickname).toBe('adm1n');
     });
 
     it('refuses a body naming another account, writing nothing and granting nothing', async () => {

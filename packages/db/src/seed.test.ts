@@ -3,7 +3,13 @@ import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { ALL_CATEGORY_SLUGS, CATEGORY_SLUGS, SEED_ADMIN_GRANT_REASON } from '@buddha/shared';
+import {
+  ALL_CATEGORY_SLUGS,
+  AUTH_USER_NAME,
+  AUTO_NICKNAME_PATTERN,
+  CATEGORY_SLUGS,
+  SEED_ADMIN_GRANT_REASON,
+} from '@buddha/shared';
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -187,7 +193,12 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
 
   async function adminState(email = ADMIN_EMAIL) {
     const [row] = await t.db
-      .select({ id: user.id, emailVerified: user.emailVerified })
+      .select({
+        id: user.id,
+        emailVerified: user.emailVerified,
+        name: user.name,
+        image: user.image,
+      })
       .from(user)
       .where(eq(user.email, email));
     if (!row) throw new Error(`the seed did not create ${email}`);
@@ -239,8 +250,17 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
     runSeed();
     const first = await adminState();
     const second = await adminState(SECOND_EMAIL);
-    expect(first).toMatchObject({ emailVerified: true, role: 'admin', nickname: '관리자' });
-    expect(second).toMatchObject({ emailVerified: true, role: 'admin', nickname: '관리자2' });
+    // The trigger's auto nickname, kept: 관리자 is a reserved word the admin could not confirm at
+    // its onboarding's nickname step (오너 결정 2026-10-19 (2차) 2). No name, no photo (3).
+    for (const admin of [first, second]) {
+      expect(admin).toMatchObject({
+        emailVerified: true,
+        role: 'admin',
+        name: AUTH_USER_NAME,
+        image: null,
+      });
+      expect(admin.nickname).toMatch(AUTO_NICKNAME_PATTERN);
+    }
     expect(first.password).toBeTruthy();
     expect(second.password).toBeTruthy();
     // Each bootstrap admin records its own grant, the second strictly after the first.

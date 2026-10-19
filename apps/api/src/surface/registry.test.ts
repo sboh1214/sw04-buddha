@@ -300,6 +300,12 @@ describe('public and owner-only routes (static)', () => {
     // Sign-up is RegistrationService's on the server only (ADR-0024); Nest serves nothing there.
     expect(disabledAuthPaths()).toContain('/sign-up/email');
     expect(authRoutes.map((route) => route.path)).not.toContain('/sign-up/email');
+    // better-auth's name-and-photo update and its read of the provider's profile: the service
+    // keeps neither (ADR-0072 7-31).
+    for (const path of ['/update-user', '/account-info']) {
+      expect(disabledAuthPaths()).toContain(path);
+      expect(authRoutes.map((route) => route.path)).not.toContain(path);
+    }
     expect(routes.filter((route) => route.url.startsWith('/api/auth/'))).toEqual([]);
   });
 

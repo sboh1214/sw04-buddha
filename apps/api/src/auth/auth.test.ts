@@ -4,6 +4,7 @@
  * (fails under CI=true, see the harness).
  */
 import { schema } from '@buddha/db';
+import { AUTH_USER_NAME } from '@buddha/shared';
 import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { type Redis } from 'ioredis';
@@ -202,6 +203,153 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
         .from(schema.ledgerEntries)
         .where(eq(schema.ledgerEntries.userId, created.user.id)),
     ).toEqual([]);
+  });
+
+  /** The better-auth `user` row's name and photo. */
+  async function nameAndImage(userId: string) {
+    const [row] = await t.db
+      .select({ name: schema.user.name, image: schema.user.image })
+      .from(schema.user)
+      .where(eq(schema.user.id, userId));
+    return row;
+  }
+
+  it('keeps no name or photo: not the email sign-up’s, not a provider’s (ADR-0072)', async () => {
+    // 오너 결정 2026-10-19 (2차) 3: a social login's provider name and profile photo are not
+    // stored. The email sign-up above passed better-auth a name too.
+    const signedUp = await userRow(email);
+    expect(await nameAndImage(signedUp!.id)).toEqual({ name: AUTH_USER_NAME, image: null });
+
+    // A social sign-up: better-auth's createOAuthUser with what the provider handed over.
+    const context = await t.auth.$context;
+    const created = await context.internalAdapter.createOAuthUser(
+      {
+        email: 'it-auth-social-name@test.local',
+        name: '홍길동',
+        image: 'https://k.kakaocdn.net/photo.jpg',
+        emailVerified: true,
+      },
+      {
+        providerId: 'kakao',
+        issuer: 'https://kauth.kakao.com',
+        accountId: `kakao-name-${String(Date.now())}`,
+      },
+    );
+    expect(created.user).toMatchObject({ name: AUTH_USER_NAME, image: null });
+    expect(await nameAndImage(created.user.id)).toEqual({ name: AUTH_USER_NAME, image: null });
+
+    // A later sign-in or link that copies the provider's profile over (`overrideUserInfoOnSignIn`,
+    // `updateUserInfoOnLink`) goes through the same update: neither column is written, and what
+    // else it carries still is.
+    await context.internalAdapter.updateUser(created.user.id, {
+      name: '홍길동',
+      image: 'https://k.kakaocdn.net/photo.jpg',
+      emailVerified: false,
+    });
+    expect(await nameAndImage(created.user.id)).toEqual({ name: AUTH_USER_NAME, image: null });
+    expect((await userRow('it-auth-social-name@test.local'))?.emailVerified).toBe(false);
+  });
+
+  /** A provider's ID token as Google's looks: a readable JWT whose payload names the member. */
+  function idTokenNaming(name: string): string {
+    const part = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url');
+    return [
+      part({ alg: 'RS256', typ: 'JWT' }),
+      part({
+        sub: `google-${name}`,
+        email: 'member@gmail.com',
+        email_verified: true,
+        name,
+        picture: 'https://lh3.googleusercontent.com/a/photo',
+      }),
+      'signature',
+    ].join('.');
+  }
+
+  /** The tokens a login account row holds. */
+  async function accountTokens(accountRowId: string) {
+    const [row] = await t.db
+      .select({
+        idToken: schema.account.idToken,
+        accessToken: schema.account.accessToken,
+        refreshToken: schema.account.refreshToken,
+        scope: schema.account.scope,
+      })
+      .from(schema.account)
+      .where(eq(schema.account.id, accountRowId));
+    return row;
+  }
+
+  it('keeps no provider ID token, which carries the name and photo (ADR-0072 7-30)', async () => {
+    // 오너 결정 2026-10-19 (2차) 3. better-auth hands the ID token to the account row as it came: on
+    // a social sign-up (createOAuthUser, the callback's createAccount), on a link (linkAccount), and
+    // again on every sign-in and refresh (updateAccount). Each keeps the rest of what it carries.
+    const context = await t.auth.$context;
+    const created = await context.internalAdapter.createOAuthUser(
+      { email: 'it-auth-social-token@test.local', name: '', emailVerified: true },
+      {
+        providerId: 'google',
+        issuer: 'https://accounts.google.com',
+        accountId: `google-token-${String(Date.now())}`,
+        accessToken: 'access-1',
+        refreshToken: 'refresh-1',
+        idToken: idTokenNaming('홍길동'),
+        scope: 'openid,email',
+      },
+    );
+    expect(created.account).toMatchObject({ idToken: null, accessToken: 'access-1' });
+    expect(await accountTokens(created.account.id)).toEqual({
+      idToken: null,
+      accessToken: 'access-1',
+      refreshToken: 'refresh-1',
+      scope: 'openid,email',
+    });
+
+    // The next sign-in's fresh tokens (`updateAccountOnSignIn`): the ID token stays out.
+    await context.internalAdapter.updateAccount(created.account.id, {
+      accessToken: 'access-2',
+      idToken: idTokenNaming('홍길동'),
+    });
+    expect(await accountTokens(created.account.id)).toMatchObject({
+      idToken: null,
+      accessToken: 'access-2',
+      refreshToken: 'refresh-1',
+    });
+
+    // A second provider linked to the same member.
+    const linked = await context.internalAdapter.linkAccount({
+      userId: created.user.id,
+      providerId: 'kakao',
+      issuer: 'https://kauth.kakao.com',
+      accountId: `kakao-token-${String(Date.now())}`,
+      accessToken: 'kakao-access',
+      idToken: idTokenNaming('김철수'),
+    });
+    expect(await accountTokens(linked.id)).toMatchObject({
+      idToken: null,
+      accessToken: 'kakao-access',
+    });
+
+    // And the plain createAccount the link callback uses.
+    const account = await context.internalAdapter.createAccount({
+      userId: created.user.id,
+      providerId: 'naver',
+      issuer: 'https://nid.naver.com',
+      accountId: `naver-token-${String(Date.now())}`,
+      accessToken: 'naver-access',
+      idToken: idTokenNaming('이영희'),
+    });
+    expect(await accountTokens(account.id)).toMatchObject({
+      idToken: null,
+      accessToken: 'naver-access',
+    });
+    // The member's three login accounts, none holding one.
+    expect(
+      await t.db
+        .select({ idToken: schema.account.idToken })
+        .from(schema.account)
+        .where(eq(schema.account.userId, created.user.id)),
+    ).toEqual([{ idToken: null }, { idToken: null }, { idToken: null }]);
   });
 
   it('signing in before the link is clicked fails and sends nothing', async () => {
@@ -540,6 +688,31 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
     expect(user).toMatchObject({ emailVerified: false });
     expect(await credentialAccount(user!.id)).toBeUndefined();
     expect(t.mailer.messages).toHaveLength(1);
+  });
+
+  it('better-auth’s update-user is not exposed: no name or photo through it (ADR-0072)', async () => {
+    const member = await signUpTestUser(t);
+    const attempt = await t.app.inject({
+      method: 'POST',
+      url: '/api/auth/update-user',
+      headers: { ...browserHeaders, cookie: member.cookie },
+      payload: { name: '홍길동', image: 'https://example.com/me.jpg' },
+    });
+    expect(attempt.statusCode).toBe(404);
+    expect(await nameAndImage(member.id)).toEqual({ name: AUTH_USER_NAME, image: null });
+  });
+
+  it('better-auth’s account-info is not exposed: no provider profile through it (ADR-0072 7-31)', async () => {
+    // Its answer is the linked provider's name and photo, read from the stored ID token or
+    // fetched with the stored access token; disabledPaths answers before either is looked at.
+    const member = await signUpTestUser(t);
+    const attempt = await t.app.inject({
+      method: 'GET',
+      url: '/api/auth/account-info',
+      headers: { ...browserHeaders, cookie: member.cookie },
+    });
+    expect(attempt.statusCode).toBe(404);
+    expect(attempt.body).toBe('Not Found');
   });
 
   /**

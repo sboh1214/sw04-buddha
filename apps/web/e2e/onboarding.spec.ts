@@ -25,8 +25,9 @@ import {
 
 /**
  * 가입 직후 온보딩 (#58, ADR-0072) and its gate (ADR-0043): 약관 동의 → 본인확인 → 닉네임 설정 →
- * 시작 Coin 안내 → 관심 카테고리(건너뛸 수 있음) → the page the account was on before it signed up
- * (ADR-0069 decision 4 #58, decision 1 #57-4~#57-10).
+ * 시작 Coin 안내 → 관심 카테고리(건너뛸 수 있음, shown once) → the page the account was on before it
+ * signed up (ADR-0069 decision 4 #58, decision 1 #57-4~#57-10), the re-consent after a revision and
+ * the reason a step was sent back, and MY 설정's marketing switch (오너 결정 2026-10-19 (2차)).
  *
  * The email sign-up passes through exactly the state the gate exists for: the verification link
  * signs the account in on /set-password before any step is done. Leaving that page for another one
@@ -124,6 +125,10 @@ test.describe('가입 직후 온보딩 (#58)', () => {
     const consent = page.getByTestId('consent-step');
     await expect(consent).toBeVisible();
     await expect(page.getByTestId('onboarding-heading')).toHaveText(copy.onboardingStepConsent);
+    // A first consent has nothing to explain: no reason, and arriving moves no focus (7-36).
+    await expect(page.getByTestId('onboarding-return-reason')).toHaveCount(0);
+    await expect(page.getByTestId('onboarding-heading')).not.toBeFocused();
+    await expect(page.getByTestId('onboarding-heading')).not.toHaveAttribute('aria-describedby');
     await expect(page.getByTestId('onboarding-position')).toHaveText('1 / 5');
     for (const item of ['terms', 'privacy', 'age', 'marketing']) {
       await expect(consent.getByTestId(`consent-${item}`).getByRole('checkbox')).not.toBeChecked();
@@ -264,14 +269,21 @@ test.describe('가입 직후 온보딩 (#58)', () => {
     await expect(page.getByTestId('nickname-step')).toBeVisible();
     await page.getByTestId('nickname-step-submit').click();
 
-    // Left at the notice: the notice again, then the interests — still held until answered.
+    // Left at the notice: the three steps are done and the interests skipped — they are shown
+    // once, right after the nickname step (오너 결정 2026-10-19 (2차) 5). Nothing sends the
+    // account back, and /onboarding opened again goes straight on.
     await expect(page.getByTestId('notice-step')).toBeVisible();
     await page.goto('/my/wallet');
-    await expect(page).toHaveURL('/onboarding?next=%2Fmy%2Fwallet');
-    await expect(page.getByTestId('notice-step')).toBeVisible();
-    await page.getByTestId('notice-next').click();
-    await page.getByTestId('interests-skip').click();
+    await expect(page.getByTestId('balance-chip')).toBeVisible();
+    await expect(page.getByTestId('onboarding-gate')).toHaveCount(0);
     await expect(page).toHaveURL('/my/wallet');
+    await page.goto('/onboarding?next=%2Fmy%2Fwallet');
+    await expect(page).toHaveURL('/my/wallet');
+    expect((await meOf(page.request)).onboarding).toMatchObject({
+      completed: true,
+      interests: false,
+      nextStep: null,
+    });
 
     // Nothing left: other pages open as usual.
     await page.goto('/');
@@ -491,6 +503,171 @@ test.describe('가입 직후 온보딩 (#58)', () => {
     await page.getByTestId('notice-next').click();
     await expect(page.getByTestId('interests-step')).toBeVisible();
     await page.unrouteAll({ behavior: 'ignoreErrors' });
+  });
+
+  /**
+   * `GET /me` with `onboarding` rewritten by `edit` while `active()` says so: what no spec can bring
+   * about for real looks like on screen — a revision of the consent texts that changed members'
+   * rights (the version table is the build's), a step that came undone.
+   */
+  async function rewriteOnboarding(
+    page: Page,
+    active: () => boolean,
+    edit: (onboarding: Me['onboarding']) => Me['onboarding'],
+  ): Promise<void> {
+    await page.route('**/api/v1/me', async (route) => {
+      if (route.request().method() !== 'GET' || !active()) return route.fallback();
+      const response = await route.fetch();
+      const body = (await response.json()) as { data: Me };
+      body.data.onboarding = edit(body.data.onboarding);
+      await route.fulfill({ response, json: body });
+    });
+  }
+
+  test('권리를 바꾸는 개정 뒤의 재동의는 서지 않게 된 항목만 묻고 까닭을 보이며, 마케팅 동의는 그대로 둔다', async ({
+    page,
+  }) => {
+    // An onboarded account that agreed to the marketing too (the consent answers again, through the
+    // API: only the marketing one changes).
+    await signUp(page, freshEmail());
+    const { id } = await meOf(page.request);
+    await agreeThroughApi(page.request, id, true);
+    // A revision of the terms that changed members' rights (오너 결정 2026-10-19 (2차) 1·6): the
+    // terms agreement no longer stands, the rest does — `GET /me` says what the server would, until
+    // the account agrees again.
+    let revised = true;
+    await rewriteOnboarding(
+      page,
+      () => revised,
+      (onboarding) => ({
+        ...onboarding,
+        consent: false,
+        completed: false,
+        nextStep: 'consent',
+        consents: onboarding.consents.map((answer) =>
+          answer.item === 'terms' ? { ...answer, version: 'draft-1999-01-01' } : answer,
+        ),
+      }),
+    );
+    await page.route('**/api/v1/me/consents', async (route) => {
+      const response = await route.fetch();
+      revised = false;
+      await route.fulfill({ response });
+    });
+
+    // The next sign-in's gate: the consent step, saying why, asking the terms only.
+    await page.goto('/my/wallet');
+    await expect(page).toHaveURL('/onboarding?next=%2Fmy%2Fwallet');
+    const reason = page.getByTestId('onboarding-return-reason');
+    await expect(reason).toHaveText(copy.onboardingReconsentReason);
+    await expect(reason).toHaveAttribute('role', 'status');
+    // A status that appears with its text in it is not reliably read out (ADR-0072 7-36): the
+    // heading takes the focus and is described by the sentence, so both are read on arrival.
+    const heading = page.getByTestId('onboarding-heading');
+    await expect(heading).toBeFocused();
+    await expect(heading).toHaveAccessibleDescription(copy.onboardingReconsentReason);
+    const consent = page.getByTestId('consent-step');
+    await expect(consent.getByTestId('consent-item-terms')).toBeVisible();
+    for (const item of ['privacy', 'age', 'marketing']) {
+      await expect(consent.getByTestId(`consent-item-${item}`)).toHaveCount(0);
+    }
+    await expect(consent.getByText(copy.consentAllHint)).toHaveCount(0);
+    await expect(consent.getByTestId('consent-terms').getByRole('checkbox')).not.toBeChecked();
+    await page.getByTestId('consent-submit').click();
+    await expect(page.getByTestId('consent-required-error')).toBeVisible();
+    await page.getByTestId('consent-all').click();
+    await page.getByTestId('consent-submit').click();
+
+    // Back where it was going; the marketing opt-in stands as it was.
+    await expect(page).toHaveURL('/my/wallet');
+    const me = await meOf(page.request);
+    expect(me.onboarding).toMatchObject({ consent: true, completed: true, nextStep: null });
+    expect(me.onboarding.consents.find((answer) => answer.item === 'marketing')?.agreed).toBe(true);
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+  });
+
+  test('단계를 하는 사이 앞 단계가 풀려 돌려보내지면 그 단계의 제목 위에 까닭을 알린다', async ({
+    page,
+  }) => {
+    await atNicknameStep(page);
+    // The 본인확인 came undone while the nickname step was open (오너 결정 2026-10-19 (2차) 6): the
+    // server refuses the step, and `GET /me` names the 본인확인 again.
+    let undone = false;
+    await rewriteOnboarding(
+      page,
+      () => undone,
+      (onboarding) => ({
+        ...onboarding,
+        verification: false,
+        completed: false,
+        nextStep: 'verification',
+      }),
+    );
+    await page.route('**/api/v1/me/onboarding/nickname', async (route) => {
+      undone = true;
+      await route.fulfill({
+        status: 409,
+        json: {
+          error: {
+            code: 'ONBOARDING_REQUIRED',
+            message: 'The consent and the verification come before the nickname',
+            details: { steps: ['verification'] },
+          },
+        },
+      });
+    });
+    await page.getByTestId('nickname-step-submit').click();
+
+    await expect(page.getByTestId('verification-step')).toBeVisible();
+    const reason = page.getByTestId('onboarding-return-reason');
+    await expect(reason).toHaveText(copy.errOnboardingStepsFirst);
+    await expect(reason).toHaveAttribute('role', 'alert');
+    await expect(page.getByTestId('onboarding-heading')).toBeFocused();
+    await expect(page.getByTestId('onboarding-heading')).toHaveText(
+      copy.onboardingStepVerification,
+    );
+
+    // Back to the truth: the nickname step, and nothing to explain.
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+    await page.reload();
+    await expect(page.getByTestId('nickname-step')).toBeVisible();
+    await expect(page.getByTestId('onboarding-return-reason')).toHaveCount(0);
+  });
+
+  test('MY 설정에서 이메일 마케팅 정보 수신을 언제든 켜고 끈다', async ({ page }) => {
+    // 오너 결정 2026-10-19 (2차) 4. Declined at the consent step (signUp's).
+    await signUp(page, freshEmail());
+    await page.goto('/my/settings');
+    const card = page.getByTestId('settings-marketing');
+    const box = card.getByRole('checkbox', { name: copy.consentMarketing });
+    await expect(box).not.toBeChecked();
+    await expect(box).toBeEnabled();
+    // The text agreed to opens in place: by email only.
+    await card.getByTestId('settings-marketing-toggle').click();
+    const text = card.getByTestId('settings-marketing-text');
+    await expect(text).toContainText('이메일 주소');
+    await expect(text).not.toContainText('휴대전화');
+    const marketingAnswer = async () =>
+      (await meOf(page.request)).onboarding.consents.find((answer) => answer.item === 'marketing');
+
+    // On: recorded, with when.
+    await card.getByTestId('settings-marketing-switch').click();
+    await expect(page.getByText(copy.marketingConsentOn)).toBeVisible();
+    await expect(box).toBeChecked();
+    expect((await marketingAnswer())?.agreed).toBe(true);
+    await expect(card.getByTestId('settings-marketing-changed-at')).toContainText(
+      copy.marketingConsentChangedAt,
+    );
+
+    // Off again, and still off after a reload: the server's answer.
+    await expect(box).toBeEnabled();
+    await card.getByTestId('settings-marketing-switch').click();
+    await expect(page.getByText(copy.marketingConsentOff)).toBeVisible();
+    expect((await marketingAnswer())?.agreed).toBe(false);
+    await page.reload();
+    await expect(
+      page.getByTestId('settings-marketing').getByRole('checkbox', { name: copy.consentMarketing }),
+    ).not.toBeChecked();
   });
 
   test('비밀번호만 정하면 온보딩으로 가고, 본인확인한 번호는 설정에서 읽기만 하며 실명은 고친다', async ({

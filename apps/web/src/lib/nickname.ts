@@ -4,7 +4,6 @@ import {
   nicknameRuleViolation,
   nicknameSchema,
   type NicknameRuleViolation,
-  type Role,
 } from '@buddha/shared';
 import * as z from 'zod';
 import { copy } from '@/copy';
@@ -34,13 +33,14 @@ const RULE_MESSAGES = {
  * at either end is not part of a name). The format holds for every value; the rules for a typed
  * one (`nicknameRuleViolation`). `current` itself, as the server reads it:
  *
- * - in the onboarding's nickname step, which passes the account's `role` (`onboardingRole`),
- *   confirming it sets the nickname, under `keptNicknameViolation` — the offered auto nickname
- *   (`user_XXXX`, #57-6) and an admin's (the seed's 관리자) as they are, any other (one typed
- *   through MY 설정 before #58) only once it meets the rules;
- * - in MY 설정, which passes no role, sending it changes nothing, so there is nothing to check.
+ * - in the onboarding's nickname step (`onboarding`), confirming it sets the nickname, under
+ *   `keptNicknameViolation` — the offered auto nickname (`user_XXXX`, #57-6) as it is, any other
+ *   (one typed through MY 설정 before #58, an admin's — the seed's 관리자 —) only once it meets the
+ *   rules: one that breaks them is refused here and the member types another (오너 결정 2026-10-19
+ *   (2차) 2);
+ * - in MY 설정, sending it changes nothing, so there is nothing to check.
  */
-export function nicknameFormSchema(current: string, onboardingRole?: Role) {
+export function nicknameFormSchema(current: string, { onboarding = false } = {}) {
   return z.object({
     nickname: z
       .string()
@@ -52,9 +52,8 @@ export function nicknameFormSchema(current: string, onboardingRole?: Role) {
         }
         let violation: NicknameRuleViolation | null;
         if (value !== current) violation = nicknameRuleViolation(value);
-        else if (onboardingRole !== undefined) {
-          violation = keptNicknameViolation(value, onboardingRole);
-        } else violation = null;
+        else if (onboarding) violation = keptNicknameViolation(value);
+        else violation = null;
         if (violation !== null) ctx.addIssue({ code: 'custom', message: RULE_MESSAGES[violation] });
       }),
   });
@@ -71,8 +70,8 @@ export type NicknameFailure =
    * again before the refusal reached the form: the stepper and the gate follow the server from
    * there. When the new `['me']` names another screen the step (and this line with it) is gone
    * before it is read — the member lands on the screen the server named, its heading focused; the
-   * line shows only where `['me']` did not move (its read failed). Whether to say why the account
-   * was sent back is a question for the owner (ADR-0072 결과 4).
+   * line shows only where `['me']` did not move (its read failed); where it did, the stepper says
+   * above the earlier step's heading why the account is there (오너 결정 2026-10-19 (2차) 6).
    */
   | { kind: 'refresh'; message: string }
   /** Anything else, as a notice: the session switched, the generic error. */

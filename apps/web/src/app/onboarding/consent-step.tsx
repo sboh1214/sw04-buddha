@@ -11,14 +11,14 @@ import {
   Stack,
   Text,
 } from '@chakra-ui/react';
-import { CONSENT_ITEMS, type ConsentItem } from '@buddha/shared';
+import { type ConsentItem } from '@buddha/shared';
 import NextLink from 'next/link';
 import { useId, useRef, useState } from 'react';
 import { copy } from '@/copy';
 import { useRecordConsents } from '@/hooks/use-onboarding';
 import { MARKETING_CONSENT_TEXT, PRIVACY_CONSENT_TEXT } from '@/legal/consent-texts';
+import { ConsentTextRegion } from '@/legal/consent-text-view';
 import { type LegalDocument, resolveLegalDocument } from '@/legal/document';
-import { LegalBlocks } from '@/legal/legal-document-view';
 import {
   CONSENT_LABELS,
   NO_CONSENTS,
@@ -48,10 +48,13 @@ const LINKS: Partial<Record<ConsentItem, { href: '/terms' | '/privacy'; label: s
 
 /**
  * 약관 동의, the onboarding's first step (#58, ADR-0069 decision 1 #57-4·#57-5 and decision 4
- * #58): a checkbox per item — 이용약관, 개인정보 수집·이용 and '만 14세 이상입니다' required,
- * 마케팅 정보 수신 optional — and '전체 동의' over them, which checks or clears all four and shows
- * the mixed state when some are checked. Every box starts empty (`NO_CONSENTS`), the re-consent
- * after a revision included.
+ * #58): a checkbox per item asked — 이용약관, 개인정보 수집·이용 and '만 14세 이상입니다' required,
+ * 마케팅 정보 수신 optional — and '전체 동의' over them, which checks or clears them all and shows
+ * the mixed state when some are checked. `items` is what the step asks (`consentStepItems`): all
+ * four the first time; in the re-consent after a revision that changed members' rights only the
+ * items it left behind, so the marketing answer stays as it was (오너 결정 2026-10-19 (2차) 1) —
+ * the stepper says above the heading why the account is here again. Every box starts empty
+ * (`NO_CONSENTS`), the re-consent included.
  *
  * The 이용약관 and the 개인정보처리방침 open in a new tab; the two consent texts this step owns
  * (consent-texts.ts) open in place under their item ('내용 보기', a disclosure button). Going on
@@ -60,7 +63,7 @@ const LINKS: Partial<Record<ConsentItem, { href: '/terms' | '/privacy'; label: s
  * `POST /me/consents` goes into `['me']` before the mutation settles (use-onboarding.ts), and the
  * stepper moves on with it.
  */
-export function ConsentStep() {
+export function ConsentStep({ items }: { items: readonly ConsentItem[] }) {
   const record = useRecordConsents();
   const [choices, setChoices] = useState<ConsentChoices>(NO_CONSENTS);
   const [triedWithMissing, setTriedWithMissing] = useState(false);
@@ -69,7 +72,7 @@ export function ConsentStep() {
   const inputs = useRef<Partial<Record<ConsentItem, HTMLInputElement | null>>>({});
   const idPrefix = useId();
 
-  const missing = missingRequiredConsents(choices);
+  const missing = missingRequiredConsents(choices, items);
   // Said once a submit met it, and only while it still holds: checking the last required box
   // takes the alert away.
   const showMissing = triedWithMissing && missing.length > 0;
@@ -91,7 +94,7 @@ export function ConsentStep() {
     // Unreachable while the button honours `ready`.
     const accountId = record.accountId;
     if (accountId === undefined) return;
-    const body = consentBody(choices, accountId);
+    const body = consentBody(choices, items, accountId);
     if (body === null) {
       setTriedWithMissing(true);
       const first = missing[0];
@@ -119,8 +122,10 @@ export function ConsentStep() {
       )}
       <Stack gap="1">
         <Checkbox.Root
-          checked={allConsentState(choices)}
-          onCheckedChange={(details) => setChoices(withAllConsents(details.checked === true))}
+          checked={allConsentState(choices, items)}
+          onCheckedChange={(details) =>
+            setChoices((previous) => withAllConsents(previous, items, details.checked === true))
+          }
           colorPalette="brand"
           size="lg"
           data-testid="consent-all"
@@ -129,13 +134,15 @@ export function ConsentStep() {
           <Checkbox.Control />
           <Checkbox.Label fontWeight="semibold">{copy.consentAll}</Checkbox.Label>
         </Checkbox.Root>
-        <Text fontSize="sm" color="fg.muted" ps="8">
-          {copy.consentAllHint}
-        </Text>
+        {items.includes('marketing') && (
+          <Text fontSize="sm" color="fg.muted" ps="8">
+            {copy.consentAllHint}
+          </Text>
+        )}
       </Stack>
       <Separator />
       <Stack as="ul" gap="4" listStyleType="none" aria-label={copy.onboardingStepConsent}>
-        {CONSENT_ITEMS.map((item) => {
+        {items.map((item) => {
           const text = INLINE_TEXTS[item];
           const link = LINKS[item];
           const regionId = `${idPrefix}-${item}-text`;
@@ -189,29 +196,12 @@ export function ConsentStep() {
                 </HStack>
               )}
               {text !== undefined && open && (
-                // Scrolls on its own so a long text does not push the button off a phone screen;
-                // focusable so the keyboard can scroll it too.
-                <Stack
+                <ConsentTextRegion
                   id={regionId}
-                  role="region"
-                  aria-label={text.title}
-                  tabIndex={0}
-                  gap="3"
-                  mt="2"
-                  ms="7"
-                  p="3"
-                  maxH="72"
-                  overflowY="auto"
-                  borderWidth="1px"
-                  borderRadius="md"
-                  fontSize="sm"
-                  wordBreak="keep-all"
-                  overflowWrap="break-word"
-                  data-testid={`consent-${item}-text`}
-                >
-                  <Text fontWeight="semibold">{text.title}</Text>
-                  <LegalBlocks blocks={text.intro} stackedTables />
-                </Stack>
+                  text={text}
+                  indent="7"
+                  testId={`consent-${item}-text`}
+                />
               )}
             </Box>
           );

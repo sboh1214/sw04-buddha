@@ -74,12 +74,13 @@ export const RATE_LIMIT_BUCKETS = {
    */
   phoneVerification: { scope: 'user', limit: 5 },
   /**
-   * `POST /me/consents` (#58, ADR-0072): the consent step's answers, per account. Not in PLAN
-   * 7.5. Every changed answer is a `consent_records` row that stays — the app may not rewrite one,
-   * and they are kept for the retention period (#57-18) — and the optional marketing answer can be
-   * flipped at will, so with the address bucket alone one account could grow its history as fast
-   * as it had addresses to send from. A member answers the step once (again after a revision
-   * that asks for it), far below this. The number is this PR's choice (ADR-0072 7-26).
+   * `POST /me/consents` (#58, ADR-0072): the consent step's answers and MY 설정's marketing
+   * switch, per account. Not in PLAN 7.5. Every changed answer is a `consent_records` row that
+   * stays — the app may not rewrite one, and they are kept for the retention period (#57-18) — and
+   * the optional marketing answer can be flipped at will, so with the address bucket alone one
+   * account could grow its history as fast as it had addresses to send from. A member answers the
+   * step once (again after a revision that asks for it) and sends one request per flip of the
+   * switch (ADR-0072 7-37), far below this. The number is this PR's choice (ADR-0072 7-26).
    */
   consent: { scope: 'user', limit: 5 },
   /** Routes that mail an address the caller chose, counted per address (A-M2-10). */

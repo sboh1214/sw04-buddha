@@ -103,18 +103,24 @@ describe('nickname rules (#57-6)', () => {
     }
   });
 
-  it('holds the nickname an account confirms as it is to the rules, but the auto one or an admin’s', () => {
+  it('holds every nickname an account confirms as it is to the rules, but the auto one', () => {
     // The offered auto nickname is confirmed as it is (#57-6).
-    expect(keptNicknameViolation('user_A7K2', 'user')).toBeNull();
+    expect(keptNicknameViolation('user_A7K2')).toBeNull();
     // One typed before #58 meets the rules now.
-    expect(keptNicknameViolation('user_kim', 'user')).toBe('auto_prefix');
-    expect(keptNicknameViolation('buddha_official', 'user')).toBe('reserved_word');
-    expect(keptNicknameViolation('운_영_자', 'user')).toBe('reserved_word');
-    expect(keptNicknameViolation('예측가_A7K2', 'user')).toBeNull();
-    expect(keptNicknameViolation('홍길동', 'user')).toBeNull();
-    // An admin's is kept (the seed's 관리자), pending the owner (ADR-0072 결과 4).
-    expect(keptNicknameViolation('관리자', 'admin')).toBeNull();
-    expect(keptNicknameViolation('관리자2', 'admin')).toBeNull();
+    expect(keptNicknameViolation('user_kim')).toBe('auto_prefix');
+    expect(keptNicknameViolation('buddha_official')).toBe('reserved_word');
+    expect(keptNicknameViolation('운_영_자')).toBe('reserved_word');
+    expect(keptNicknameViolation('예측가_A7K2')).toBeNull();
+    expect(keptNicknameViolation('홍길동')).toBeNull();
+    // An admin's too, the seed's 관리자 included (오너 결정 2026-10-19 (2차) 2).
+    expect(keptNicknameViolation('관리자')).toBe('reserved_word');
+    expect(keptNicknameViolation('관리자2')).toBe('reserved_word');
+  });
+
+  it('leaves look-alikes to the reports (오너 결정 2026-10-19 (2차) 7)', () => {
+    for (const lookAlike of ['adm1n', '0fficial', 'budd4a', '관1리자']) {
+      expect(nicknameRuleViolation(lookAlike), lookAlike).toBeNull();
+    }
   });
 
   it('describes each refusal, the interval with when the next change is allowed', () => {

@@ -86,7 +86,11 @@ export async function storeOnboardingAnswer(
   }
 }
 
-/** `POST /me/consents` as mutation options: the consent step (#57-5). */
+/**
+ * `POST /me/consents` as mutation options: the consent step (#57-5) and MY 설정's marketing switch
+ * (오너 결정 2026-10-19 (2차) 4), whose answer is the same `onboarding` with the marketing answer
+ * changed.
+ */
 export function recordConsentsOptions(
   queryClient: QueryClient,
   onSessionChanged: () => void,
@@ -165,7 +169,7 @@ function useScreenAccount() {
   return { queryClient, accountId, refetchSession: () => void refetch() };
 }
 
-/** `recordConsentsOptions` as the consent step's mutation. */
+/** `recordConsentsOptions` as the consent step's mutation, and MY 설정's marketing switch's. */
 export function useRecordConsents() {
   const { queryClient, accountId, refetchSession } = useScreenAccount();
   const mutation = useMutation(recordConsentsOptions(queryClient, refetchSession));

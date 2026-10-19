@@ -10,6 +10,16 @@ export const passwordSchema = z
   .max(PASSWORD_MAX_LENGTH)
   .meta({ id: 'Password' });
 
+/**
+ * What better-auth's `user.name` holds for every account: nothing that names anyone. The column is
+ * better-auth's and cannot be null; on the service a member is their nickname (`profiles`). A
+ * social login's provider name is not stored, nor its profile photo — `user.image` stays null
+ * (오너 결정 2026-10-19 (2차) 3, ADR-0072): the API's auth database hooks write this on every account
+ * created, whatever the sign-up passed, and keep any later update — a provider's on sign-in or
+ * linking, better-auth's own update-user — from writing either column. The seed's admins too.
+ */
+export const AUTH_USER_NAME = '';
+
 /** The longest destination a sign-up carries through its verification mail (`RegisterBody.next`). */
 export const NEXT_PATH_MAX_LENGTH = 2048;
 

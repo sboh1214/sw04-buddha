@@ -8,9 +8,12 @@ import {
   gatedPagePath,
   interestIds,
   isOnboardingExempt,
+  isReconsent,
+  isStepBack,
   needsOnboarding,
   onboardingNext,
   onboardingPath,
+  onboardingReturnReason,
   onboardingScreen,
   startGrantNotice,
   takeOnboardingAnswer,
@@ -44,14 +47,17 @@ const CONSENTED: Onboarding = {
   consents: CONSENTS,
 };
 const VERIFIED: Onboarding = { ...CONSENTED, verification: true, nextStep: 'nickname' };
-/** The three required steps done and the start Coin granted; the interests not answered yet. */
+/**
+ * The three required steps done and the start Coin granted; the interests not answered — on the
+ * notice or the interests screen right now, or left there (skipped, 오너 결정 2026-10-19 (2차) 5).
+ */
 const COMPLETED: Onboarding = {
   ...VERIFIED,
   nickname: true,
   completed: true,
-  nextStep: 'interests',
+  nextStep: null,
 };
-const DONE: Onboarding = { ...COMPLETED, interests: true, nextStep: null };
+const DONE: Onboarding = { ...COMPLETED, interests: true };
 /** Done once, then a revision that changed members' rights asked for the consent again (#57-5). */
 const RECONSENT: Onboarding = { ...DONE, consent: false, completed: false, nextStep: 'consent' };
 
@@ -129,10 +135,10 @@ describe('needsOnboarding', () => {
     }
   });
 
-  it('holds an onboarded account until it answers the interest categories (#57-7, #57-8)', () => {
-    // The interests come after the start Coin and before the market; skipping is an answer.
+  it('never sends an onboarded account back for the interest categories (2차 5)', () => {
+    // Shown once, after the notice; an account that left before answering them skipped them.
     expect(COMPLETED.completed).toBe(true);
-    expect(needsOnboarding('/', COMPLETED)).toBe(true);
+    expect(needsOnboarding('/', COMPLETED)).toBe(false);
     expect(needsOnboarding('/', DONE)).toBe(false);
   });
 
@@ -240,6 +246,9 @@ describe('gatedPagePath', () => {
 });
 
 describe('onboardingScreen', () => {
+  const visit = { reachedNickname: false, noticeRead: false };
+  const afterNickname = { reachedNickname: true, noticeRead: false };
+
   it("follows the server's next step, in the owner's order (decision 4 #58)", () => {
     expect(ONBOARDING_SCREENS).toEqual([
       'consent',
@@ -248,22 +257,63 @@ describe('onboardingScreen', () => {
       'notice',
       'interests',
     ]);
-    expect(onboardingScreen(FRESH, false)).toBe('consent');
-    expect(onboardingScreen(CONSENTED, false)).toBe('verification');
-    expect(onboardingScreen(VERIFIED, false)).toBe('nickname');
-    expect(onboardingScreen(RECONSENT, false)).toBe('consent');
+    expect(onboardingScreen(FRESH, visit)).toBe('consent');
+    expect(onboardingScreen(CONSENTED, visit)).toBe('verification');
+    expect(onboardingScreen(VERIFIED, visit)).toBe('nickname');
+    expect(onboardingScreen(RECONSENT, visit)).toBe('consent');
+    // The server's step comes first whatever the visit holds.
+    expect(onboardingScreen(RECONSENT, { reachedNickname: true, noticeRead: true })).toBe(
+      'consent',
+    );
   });
 
-  it('shows the notice after the start Coin, then the interests once it is read (#57-7, #57-10)', () => {
-    expect(onboardingScreen(COMPLETED, false)).toBe('notice');
-    expect(onboardingScreen(COMPLETED, true)).toBe('interests');
-    // An account that left at the notice or at the interests reads it again on its way back:
-    // nothing on the server says it was read.
+  it('shows the notice after the nickname step of this visit, then the interests (#57-7, #57-10)', () => {
+    expect(onboardingScreen(COMPLETED, afterNickname)).toBe('notice');
+    expect(onboardingScreen(COMPLETED, { reachedNickname: true, noticeRead: true })).toBe(
+      'interests',
+    );
+    // Answered or skipped: nothing left.
+    expect(onboardingScreen(DONE, { reachedNickname: true, noticeRead: true })).toBeNull();
   });
 
-  it('is null with nothing left, whatever was read', () => {
-    expect(onboardingScreen(DONE, false)).toBeNull();
-    expect(onboardingScreen(DONE, true)).toBeNull();
+  it('shows neither to an account that arrives with the three done: they were skipped (2차 5)', () => {
+    // It left at the notice or the interests, or it is back after a re-consent.
+    expect(onboardingScreen(COMPLETED, visit)).toBeNull();
+    expect(onboardingScreen(COMPLETED, { reachedNickname: false, noticeRead: true })).toBeNull();
+    expect(onboardingScreen(DONE, visit)).toBeNull();
+  });
+});
+
+describe('why the account is on an earlier step (오너 결정 2026-10-19 (2차) 6)', () => {
+  it('tells a step back from a step forward', () => {
+    expect(isStepBack('nickname', 'consent')).toBe(true);
+    expect(isStepBack('interests', 'consent')).toBe(true);
+    expect(isStepBack('notice', 'verification')).toBe(true);
+    expect(isStepBack('consent', 'verification')).toBe(false);
+    expect(isStepBack('nickname', 'nickname')).toBe(false);
+    expect(isStepBack(null, 'consent')).toBe(false);
+    expect(isStepBack('nickname', null)).toBe(false);
+  });
+
+  it('says a re-consent on its consent step, however the account got there', () => {
+    expect(isReconsent(RECONSENT)).toBe(true);
+    expect(isReconsent(FRESH)).toBe(false);
+    expect(isReconsent(DONE)).toBe(false);
+    expect(onboardingReturnReason(RECONSENT, 'consent', false)).toBe('reconsent');
+    expect(onboardingReturnReason(RECONSENT, 'consent', true)).toBe('reconsent');
+    // An account that declined the marketing only agreed to nothing required: not a re-consent.
+    expect(isReconsent({ ...FRESH, consents: [agreed('marketing', false)] })).toBe(false);
+  });
+
+  it('says to finish the earlier step when the server sent the account back to it', () => {
+    expect(onboardingReturnReason(CONSENTED, 'verification', true)).toBe('earlier_step');
+    expect(onboardingReturnReason(FRESH, 'consent', true)).toBe('earlier_step');
+  });
+
+  it('says nothing where the account was going anyway', () => {
+    expect(onboardingReturnReason(FRESH, 'consent', false)).toBeNull();
+    expect(onboardingReturnReason(VERIFIED, 'nickname', false)).toBeNull();
+    expect(onboardingReturnReason(COMPLETED, null, true)).toBeNull();
   });
 });
 

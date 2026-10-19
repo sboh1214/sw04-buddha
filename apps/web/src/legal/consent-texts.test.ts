@@ -68,11 +68,13 @@ describe('개인정보 수집·이용 동의 (the brief and ADR-0069 decision 1 
     }
   });
 
-  it('names what a social sign-up keeps: the provider’s member id, the name and the picture', () => {
-    // better-auth keeps them for Google, Kakao and Naver (`account.account_id`, `user.name`,
-    // `user.image`), and /privacy lists them; the consent to collection must not leave them out.
+  it('names what a social sign-up keeps: the provider’s member id, not its name or photo', () => {
+    // better-auth keeps the member id for Google, Kakao and Naver (`account.account_id`); the name
+    // and the profile photo the provider passes on are not stored (`user.name`, `user.image` hold
+    // nothing — 오너 결정 2026-10-19 (2차) 3), so the consent does not name them.
     expect(privacy).toContain('소셜 로그인 제공자(Google, 카카오, 네이버)가 발급한 회원 식별자');
-    expect(privacy).toContain('이름(닉네임)과 프로필 사진 주소');
+    expect(privacy).not.toContain('프로필 사진');
+    expect(privacy).not.toContain('이름(닉네임)');
   });
 
   it('names the purposes: 본인확인, the start Coin once per number, 문의 대응', () => {
@@ -105,7 +107,14 @@ describe('마케팅 정보 수신 동의', () => {
     expect(marketing).toContain('선택');
     expect(marketing).toContain('동의하지 않아도 서비스를 이용할 수 있습니다');
     expect(marketing).toContain('지금은 마케팅 정보를 보내지 않습니다');
-    expect(marketing).toContain('철회');
+    // MY 설정's switch (오너 결정 2026-10-19 (2차) 4).
+    expect(marketing).toContain('MY의 설정 화면에서 철회');
+  });
+
+  it('is by email only: the email address, never the mobile number or a text message (2차 4)', () => {
+    expect(marketing).toContain('이메일 주소');
+    expect(marketing).toContain('이메일로');
+    for (const other of ['휴대전화', '문자', 'SMS']) expect(marketing).not.toContain(other);
   });
 });
 
@@ -136,13 +145,15 @@ function fingerprint(strings: readonly string[]): string {
  * `ConsentVersion.version`). When this fails, the text an item's agreement covers was edited: add a
  * version to that item in CONSENT_DOCUMENTS (@buddha/shared) — `requiresReconsent: true` if the
  * revision changes members' rights, which sends every account back to the consent step at its next
- * sign-in (#57-5) — then pin the new version and fingerprint here.
+ * sign-in (#57-5) — then pin the new version and fingerprint here. Before #58 was merged, while no
+ * record anywhere named a version, the privacy and marketing texts were reworded in review under
+ * the same draft version, and only their fingerprints re-pinned (ADR-0072 7-8).
  */
 const PINNED: Readonly<Record<ConsentItem, { version: string; fingerprint: string }>> = {
   terms: { version: 'draft-2026-10-18', fingerprint: '345fbea9be0f9e51' },
-  privacy: { version: 'draft-2026-10-18', fingerprint: 'dd3b9600ec3fb20e' },
+  privacy: { version: 'draft-2026-10-18', fingerprint: '82fffd0484932c2b' },
   age: { version: 'draft-2026-10-18', fingerprint: '2b86fed295e0c120' },
-  marketing: { version: 'draft-2026-10-18', fingerprint: 'edfc60bf8b245a0a' },
+  marketing: { version: 'draft-2026-10-18', fingerprint: '079d6754df83aa51' },
 };
 
 describe('the consent versions (#57-5)', () => {

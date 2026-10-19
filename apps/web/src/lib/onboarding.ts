@@ -1,4 +1,5 @@
 import {
+  CONSENT_DOCUMENTS,
   PAID_COIN_SALES_ENABLED,
   onboardingState,
   type ConsentRecord,
@@ -13,12 +14,13 @@ import { safeNextPath } from './next-path';
  * into `['me']`.
  *
  * The gate (ADR-0043, keyed on 본인확인 by ADR-0070 and on the whole onboarding since #58): a
- * signed-in account whose `GET /me` names a next step — every new account, social or email, an
- * account that has not answered the interest categories yet, and one whose consent a revision that
- * changed members' rights asked for again (#57-5) — is sent to /onboarding from every screen except
- * the ones below, resumes at that step (#57-8 '남은 단계부터'), and comes back to where it was going
- * once nothing is left (#57-9). Email sign-ups set their password on /set-password first and meet
- * the gate right after it.
+ * signed-in account whose `GET /me` names a next step — every new account, social or email, until
+ * its consent, 본인확인 and nickname are done, and one whose consent a revision that changed
+ * members' rights asked for again (#57-5) — is sent to /onboarding from every screen except the
+ * ones below, resumes at that step (#57-8 '남은 단계부터'), and comes back to where it was going
+ * once nothing is left (#57-9). The interest categories are not a step it is sent back to: an
+ * account that left the onboarding screen before them has skipped them (오너 결정 2026-10-19 (2차) 5).
+ * Email sign-ups set their password on /set-password first and meet the gate right after it.
  *
  * Pure functions of the URL and of what `GET /me` said, kept out of the gate component
  * (components/auth/onboarding-gate.tsx) and the stepper (app/onboarding/onboarding-form.tsx) so
@@ -78,9 +80,9 @@ export function isOnboardingExempt(pathname: string): boolean {
  * Whether the gate sends this page to /onboarding. `onboarding` is what `GET /me` said:
  * - `undefined` — not known: no session, the session or `/me` still pending, or `/me` failed.
  *   Never redirect on a guess; an onboarded member must not be bounced while it loads.
- * - a next step — signed in, with that step (and maybe more) left: the three required ones, the
- *   interest categories after them (#57-7: asked once, before the market, until answered or
- *   skipped), or the consent again after a revision that asked for it (#57-5).
+ * - a next step — signed in, with that step (and maybe more) left: one of the three required ones,
+ *   or the consent again after a revision that asked for it (#57-5). Never the interest categories:
+ *   the onboarding screen shows them once, and leaving is skipping them (오너 결정 2026-10-19 (2차) 5).
  * - `nextStep: null` — nothing to do.
  */
 export function needsOnboarding(pathname: string, onboarding: Onboarding | undefined): boolean {
@@ -136,11 +138,12 @@ export function gatedPagePath(pathname: string, location: { pathname: string; se
  * 동의 → 본인확인 → 닉네임 설정, then — the server having granted the start Coin with the nickname
  * step — the notice about it, then the interest categories, which can be skipped.
  *
- * The notice is the one screen the server does not track: it says what the nickname step's answer
- * (`startGrant`) and two fixed facts say, and has nothing to record. So it stands before the
- * interests step whenever that is the next step and the notice has not been read on this screen —
- * an account that left at the notice or at the interests reads it again on its way back, which
- * costs one press and keeps "after the grant, the notice" true however the account arrives.
+ * The first three are the server's (`onboarding.nextStep`). The notice and the interests follow
+ * the nickname step on the same visit to the screen, and only then: the server records neither
+ * the notice (it says what the nickname step's answer, `startGrant`, and two fixed facts say) nor
+ * that the interests were shown, and an account that left at either has skipped the interests —
+ * the gate does not send it back, and /onboarding opened again goes straight on (오너 결정
+ * 2026-10-19 (2차) 5: the interest step is shown once).
  */
 export const ONBOARDING_SCREENS = [
   'consent',
@@ -151,17 +154,69 @@ export const ONBOARDING_SCREENS = [
 ] as const;
 export type OnboardingScreen = (typeof ONBOARDING_SCREENS)[number];
 
+/** What the stepper remembers of the visit, beside `GET /me`. */
+export interface StepperVisit {
+  /**
+   * The nickname step was the server's next step during this visit: the three steps were finished
+   * on it (or in another tab meanwhile), so the notice and the interests follow. An account that
+   * arrives with the three done — it left at the notice or the interests, or it comes back for a
+   * re-consent — is not shown them.
+   */
+  readonly reachedNickname: boolean;
+  /** The notice was read (its 다음). */
+  readonly noticeRead: boolean;
+}
+
 /**
- * The screen for an account whose `GET /me` says `onboarding`, or null with nothing left — then
- * the stepper goes on to `next`. `noticeRead`: the notice was read on this screen (its 다음).
+ * The screen for an account whose `GET /me` says `onboarding`, on a visit that went as `visit`
+ * says, or null with nothing left — then the stepper goes on to `next`.
  */
 export function onboardingScreen(
   onboarding: Onboarding,
-  noticeRead: boolean,
+  visit: StepperVisit,
 ): OnboardingScreen | null {
-  const step = onboarding.nextStep;
-  if (step === null) return null;
-  return step === 'interests' && !noticeRead ? 'notice' : step;
+  if (onboarding.nextStep !== null) return onboarding.nextStep;
+  if (!visit.reachedNickname || onboarding.interests) return null;
+  return visit.noticeRead ? 'interests' : 'notice';
+}
+
+/** Whether `to` comes before `from` among the screens: the server sent the account back. */
+export function isStepBack(from: OnboardingScreen | null, to: OnboardingScreen | null): boolean {
+  if (from === null || to === null) return false;
+  return ONBOARDING_SCREENS.indexOf(to) < ONBOARDING_SCREENS.indexOf(from);
+}
+
+/**
+ * A consent step the account has done before: it agreed to a required item once, and a revision
+ * that changed members' rights has since left that agreement behind (#57-5) — the step it is on
+ * is a re-consent, not its first.
+ */
+export function isReconsent(onboarding: Onboarding): boolean {
+  return (
+    !onboarding.consent &&
+    onboarding.consents.some((answer) => answer.agreed && CONSENT_DOCUMENTS[answer.item].required)
+  );
+}
+
+/**
+ * Why the stepper shows the step it shows rather than a later one (오너 결정 2026-10-19 (2차) 6),
+ * said above the step's heading:
+ * - `reconsent`: the consent step of an account that agreed before — '약관이 바뀌어 다시 동의가
+ *   필요합니다.' — whether the gate brought it here or the stepper was sent back to it;
+ * - `earlier_step`: any other screen the server sent the account back to from a later one
+ *   (`sentBack`: the step done in another tab came undone, a write was refused because one before
+ *   it is not done) — '앞 단계를 먼저 마쳐 주세요.';
+ * - null: the account is where it was going.
+ */
+export type OnboardingReturnReason = 'reconsent' | 'earlier_step';
+
+export function onboardingReturnReason(
+  onboarding: Onboarding,
+  screen: OnboardingScreen | null,
+  sentBack: boolean,
+): OnboardingReturnReason | null {
+  if (screen === 'consent' && isReconsent(onboarding)) return 'reconsent';
+  return sentBack && screen !== null ? 'earlier_step' : null;
 }
 
 /**

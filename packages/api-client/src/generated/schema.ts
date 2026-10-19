@@ -581,7 +581,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Record the consent step: each item at its current version */
+        /** Record consent answers: the items the consent step asks, or the marketing one alone */
         post: operations["recordMyConsents"];
         delete?: never;
         options?: never;
@@ -1355,7 +1355,7 @@ export type components = {
             verification: boolean;
         };
         /** @enum {string} */
-        OnboardingStep: "consent" | "verification" | "nickname" | "interests";
+        OnboardingStep: "consent" | "verification" | "nickname";
         Order: {
             amountCoin: components["schemas"]["CoinAmount"] | null;
             /** Format: date-time */
@@ -1465,24 +1465,24 @@ export type components = {
         };
         RecordConsentsBody: {
             consents: {
-                age: {
+                age?: {
                     /** @enum {boolean} */
                     agreed: true;
                     /** @enum {string} */
                     version: "draft-2026-10-18";
                 };
-                marketing: {
+                marketing?: {
                     agreed: boolean;
                     /** @enum {string} */
                     version: "draft-2026-10-18";
                 };
-                privacy: {
+                privacy?: {
                     /** @enum {boolean} */
                     agreed: true;
                     /** @enum {string} */
                     version: "draft-2026-10-18";
                 };
-                terms: {
+                terms?: {
                     /** @enum {boolean} */
                     agreed: true;
                     /** @enum {string} */

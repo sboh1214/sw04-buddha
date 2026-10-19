@@ -74,7 +74,7 @@ const named: Me = {
   profile: { ...verifiedMe.profile, nickname: '새닉네임' },
   balance: { availableCoin: '10000', lockedCoin: '0' },
   startGrant: { status: 'granted', amountCoin: '10000', grantedAt: '2026-10-18T00:00:01.000Z' },
-  onboarding: { ...verifiedMe.onboarding, nickname: true, completed: true, nextStep: 'interests' },
+  onboarding: { ...verifiedMe.onboarding, nickname: true, completed: true, nextStep: null },
 };
 
 const otherMe: Me = { ...fresh, id: 'user-2', email: 'b@example.com' };
@@ -181,7 +181,7 @@ describe('storeOnboardingAnswer', () => {
       const held = queryClient.getQueryData<Me>(ME_QUERY_KEY);
       expect(held?.startGrant).toEqual(named.startGrant);
       expect(held?.profile.nickname).toBe('새닉네임');
-      expect(held?.onboarding.nextStep).toBe('interests');
+      expect(held?.onboarding).toMatchObject({ completed: true, nextStep: null });
       // Then the balance, from a GET /me of its own (not taken from the write's snapshot).
       await settle();
       expect(me.requests()).toBe(2);

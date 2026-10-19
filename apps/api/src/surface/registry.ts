@@ -100,7 +100,7 @@ export const OWNER_ROUTES: Readonly<Record<string, RegisteredRoute>> = {
   },
   'POST /me/consents': {
     reason:
-      '본인 약관 동의(#58, ADR-0069 결정 1 #57-5): 세션 계정의 항목마다의 동의를 지금 판으로 기록하고(동의 시각·접속 주소·브라우저 정보를 함께 남긴다) 본인 계정을 돌려준다. 본문의 expectedAccountId가 세션 계정이어야 한다',
+      '본인 약관 동의(#58, ADR-0069 결정 1 #57-5): 세션 계정의 동의 단계가 묻는 항목(재동의면 서지 않게 된 항목만)과 MY 설정의 마케팅 정보 수신 켜고 끄기를 지금 판으로 기록하고(동의 시각·접속 주소·브라우저 정보를 함께 남긴다) 본인 계정을 돌려준다. 본문의 expectedAccountId가 세션 계정이어야 한다',
   },
   'POST /me/onboarding/nickname': {
     reason:
@@ -202,6 +202,9 @@ export interface RegisteredAuthRoute {
  * code is the API's own, ADR-0070) or an upgrade that adds an endpoint is refused until it is
  * written here. Keys are `METHOD /path`.
  * `/sign-up/email` is disabled (ADR-0024): RegistrationService calls it on the server only.
+ * `/update-user` is disabled (ADR-0072): it writes only better-auth's name and photo, which the
+ * service does not keep (a social login's are not stored, 오너 결정 2026-10-19 (2차) 3). So is
+ * `/account-info` (ADR-0072 7-31): its answer is the linked provider's name and photo.
  */
 export const AUTH_ROUTES: Readonly<Record<string, RegisteredAuthRoute>> = {
   'POST /sign-in/social': {
@@ -259,9 +262,6 @@ export const AUTH_ROUTES: Readonly<Record<string, RegisteredAuthRoute>> = {
       '세션의 추가 필드 고치기: 추가 필드를 두지 않아서 거절한다. 고치면 세션 계정의 그 세션을 돌려준다.',
     answersAccount: true,
   },
-  'POST /update-user': {
-    reason: '세션 계정의 이름·이미지 고치기(better-auth 사용자 필드). 상태만 돌려준다.',
-  },
   'POST /delete-user': {
     reason: '계정 삭제: better-auth의 계정 삭제(user.deleteUser)를 켜지 않아서 거절한다.',
   },
@@ -304,10 +304,6 @@ export const AUTH_ROUTES: Readonly<Record<string, RegisteredAuthRoute>> = {
   },
   'POST /get-access-token': {
     reason: '세션 계정에 연결된 제공자의 접근 토큰: 세션 계정의 것만 찾는다.',
-    answersAccount: true,
-  },
-  'GET /account-info': {
-    reason: '세션 계정에 연결된 제공자의 계정 정보: 세션 계정의 것만 찾는다.',
     answersAccount: true,
   },
   'GET /ok': {

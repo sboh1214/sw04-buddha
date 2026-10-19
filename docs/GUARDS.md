@@ -170,7 +170,7 @@ better-auth가 Nest 라우팅 앞에서 `/api/auth` 아래에 내는 라우트�
    - `status`: 둘이 받아야 하는 답(`anonymous`, `B`).
    - `own`: A가 보내면 보이는 A의 값(표지값의 라벨). A를 바꾸거나 A의 것이 보일 수 없으면 두지 않는다.
 
-빠뜨리면: `registry.test.ts`가 인증 인스턴스(`createAuth`로 앱과 같게 만들고 OAuth 제공자를 모두 켠 것)의 `auth.api`에서 경로가 있는 엔드포인트를 메서드마다 찾아(플러그인의 것 포함, 서버 전용과 `disabledPaths` 빼고) 등록이 빠진 것과 더는 내지 않는 줄을 실패시킨다(오너 결정 (a)). 플러그인(휴대전화 번호 로그인 등)을 켜거나 better-auth를 올려 엔드포인트가 늘면 여기서 걸린다. #183의 SMS 인증번호는 better-auth 플러그인이 아니라 API의 본인 전용 라우트다(ADR-0070). `private-data.test.ts`의 정적 시험은 `answersAccount` 줄과 `AUTH_CASES`가 다르면 DB 없이 실패한다. 런타임 검사는 앱의 실제 인증 인스턴스가 내는 라우트가 `AUTH_ROUTES`와 같은지와, 각 경우의 답에 A의 값이 없는지 본다. `/sign-up/email`은 꺼 두었다(ADR-0024, 서버의 `RegistrationService`만 부른다).
+빠뜨리면: `registry.test.ts`가 인증 인스턴스(`createAuth`로 앱과 같게 만들고 OAuth 제공자를 모두 켠 것)의 `auth.api`에서 경로가 있는 엔드포인트를 메서드마다 찾아(플러그인의 것 포함, 서버 전용과 `disabledPaths` 빼고) 등록이 빠진 것과 더는 내지 않는 줄을 실패시킨다(오너 결정 (a)). 플러그인(휴대전화 번호 로그인 등)을 켜거나 better-auth를 올려 엔드포인트가 늘면 여기서 걸린다. #183의 SMS 인증번호는 better-auth 플러그인이 아니라 API의 본인 전용 라우트다(ADR-0070). `private-data.test.ts`의 정적 시험은 `answersAccount` 줄과 `AUTH_CASES`가 다르면 DB 없이 실패한다. 런타임 검사는 앱의 실제 인증 인스턴스가 내는 라우트가 `AUTH_ROUTES`와 같은지와, 각 경우의 답에 A의 값이 없는지 본다. `/sign-up/email`은 꺼 두었다(ADR-0024, 서버의 `RegistrationService`만 부른다). `/update-user`도 꺼 두었다(ADR-0072: 그 경로가 쓰는 better-auth의 이름·사진은 두지 않는다 — 소셜 로그인의 이름·사진을 저장하지 않는다는 오너 결정, `user` 데이터베이스 훅이 다른 경로의 쓰기도 막는다). `/account-info`도 꺼 두었다(ADR-0072 7-31: 그 답은 연결한 제공자의 이름·사진이다 — 그 둘을 담는 제공자의 ID 토큰은 `account` 데이터베이스 훅이 두지 않는다).
 
 ### 실시간 이벤트
 

@@ -6110,7 +6110,7 @@
             "session": []
           }
         ],
-        "summary": "Record the consent step: each item at its current version",
+        "summary": "Record consent answers: the items the consent step asks, or the marketing one alone",
         "tags": [
           "me"
         ]
@@ -6703,8 +6703,7 @@
         "enum": [
           "consent",
           "verification",
-          "nickname",
-          "interests"
+          "nickname"
         ]
       },
       "ConsentRecord": {
@@ -9406,13 +9405,7 @@
                   "agreed"
                 ]
               }
-            },
-            "required": [
-              "terms",
-              "privacy",
-              "age",
-              "marketing"
-            ]
+            }
           },
           "expectedAccountId": {
             "type": "string",

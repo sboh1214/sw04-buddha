@@ -532,10 +532,6 @@ const AUTH_CASES: Readonly<Record<string, AuthCase>> = {
     request: (fixture) => ({ body: aimedAtA(fixture) }),
     status: { anonymous: 401, B: 400 },
   },
-  'GET /account-info': {
-    request: (fixture) => ({ query: aimedAtA(fixture) }),
-    status: { anonymous: 401, B: 400 },
-  },
 };
 
 /** The parameter names of a route: `id` of `/me/payments/:id`. */

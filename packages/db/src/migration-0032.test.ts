@@ -13,22 +13,24 @@ function withoutLeadingComments(statement: string): string {
 }
 
 /**
- * The hand-edited block of migration 0032 that clears the case variants before
- * `profiles_nickname_lower_unique` is built, read from the migration itself: no second copy to
- * drift from what a persistent database (dev, deployed) runs.
+ * The one statement of migration 0032 that starts with `start`, read from the migration itself: no
+ * second copy to drift from what a persistent database (dev, deployed) runs.
  */
-function caseVariantBlock(): string {
+function statementOf(start: string): string {
   const migration = readFileSync(
     new URL('../drizzle/0032_onboarding.sql', import.meta.url),
     'utf8',
   );
-  const blocks = migration
+  const statements = migration
     .split(STATEMENT_BREAKPOINT)
     .map(withoutLeadingComments)
-    .filter((statement) => statement.startsWith('DO $$'));
-  expect(blocks).toHaveLength(1);
-  return blocks[0]!;
+    .filter((statement) => statement.startsWith(start));
+  expect(statements).toHaveLength(1);
+  return statements[0]!;
 }
+
+/** The hand-edited block that clears the case variants before `profiles_nickname_lower_unique`. */
+const caseVariantBlock = () => statementOf('DO $$');
 
 /**
  * Migration 0032's clean-up of the nicknames that differ only in case (#58, ADR-0069 decision 1
@@ -123,3 +125,146 @@ describe.skipIf(!hasTestDb())('migration 0032: the case variants (integration)',
     });
   });
 });
+
+/**
+ * Migration 0032's tail that clears what a social login left behind (오너 결정 2026-10-19 (2차) 3,
+ * ADR-0072 7-30): better-auth's name and photo on `user`, and the provider's ID token on `account`
+ * — Google's carries the member's name and photo address. From 0032 on the API's auth hooks keep
+ * both from being written; these statements are what clears the rows a persistent database (dev,
+ * deployed) already holds, and migrations run against an empty test database, so they would
+ * otherwise never meet a row in any test. Run as the migrate role, in a transaction rolled back.
+ */
+describe.skipIf(!hasTestDb())(
+  'migration 0032: no social name, photo or ID token (integration)',
+  () => {
+    let t: TestDb;
+    let migrate: Client;
+    beforeAll(async () => {
+      t = await connectTestDb();
+      migrate = new Client({ connectionString: testDbUrls()!.migrateUrl });
+      await migrate.connect();
+    });
+    afterAll(async () => {
+      await migrate?.end();
+      await t?.close(); // undefined when beforeAll timed out waiting for the file lock
+    });
+    beforeEach(async () => {
+      await t.reset();
+    });
+
+    async function rolledBack(body: () => Promise<void>): Promise<void> {
+      await migrate.query('BEGIN');
+      try {
+        await body();
+      } finally {
+        await migrate.query('ROLLBACK');
+      }
+    }
+
+    async function user(id: string, name: string, image: string | null): Promise<void> {
+      await migrate.query(
+        `INSERT INTO "user" (id, name, email, email_verified, image) VALUES ($1, $2, $3, true, $4)`,
+        [id, name, `${id}@test.local`, image],
+      );
+    }
+
+    async function users() {
+      const { rows } = await migrate.query<{
+        id: string;
+        name: string;
+        image: string | null;
+        email: string;
+        email_verified: boolean;
+      }>('SELECT id, name, image, email, email_verified FROM "user" ORDER BY id');
+      return rows;
+    }
+
+    /** A provider's ID token as Google's looks: a JWT whose payload names the member. */
+    const GOOGLE_ID_TOKEN = [
+      Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url'),
+      Buffer.from(
+        JSON.stringify({
+          sub: '1234567890',
+          email: 'member@gmail.com',
+          name: '홍길동',
+          picture: 'https://lh3.googleusercontent.com/a/photo',
+        }),
+      ).toString('base64url'),
+      'signature',
+    ].join('.');
+
+    async function account(id: string, userId: string, idToken: string | null): Promise<void> {
+      await migrate.query(
+        `INSERT INTO "account" (id, issuer, account_id, provider_id, user_id, access_token,
+         refresh_token, id_token, scope, updated_at)
+       VALUES ($1, 'https://accounts.google.com', $1, 'google', $2, 'access-' || $1,
+         'refresh-' || $1, $3, 'openid,email', now())`,
+        [id, userId, idToken],
+      );
+    }
+
+    async function accounts() {
+      const { rows } = await migrate.query<{
+        id: string;
+        id_token: string | null;
+        access_token: string | null;
+        refresh_token: string | null;
+        account_id: string;
+        scope: string | null;
+      }>(
+        'SELECT id, id_token, access_token, refresh_token, account_id, scope FROM "account" ORDER BY id',
+      );
+      return rows;
+    }
+
+    it('clears every user’s name and photo, and nothing else', async () => {
+      await rolledBack(async () => {
+        await user('both', '홍길동', 'https://k.kakaocdn.net/photo.jpg');
+        await user('name-only', '관리자', null);
+        await user('image-only', '', 'https://phinf.pstatic.net/photo.jpg');
+
+        const { rowCount } = await migrate.query(statementOf('UPDATE "user"'));
+        expect(rowCount).toBe(3);
+        expect(await users()).toEqual(
+          ['both', 'image-only', 'name-only'].map((id) => ({
+            id,
+            name: '',
+            image: null,
+            email: `${id}@test.local`,
+            email_verified: true,
+          })),
+        );
+      });
+    });
+
+    it('clears every stored ID token and keeps the rest of the login account', async () => {
+      await rolledBack(async () => {
+        await user('google', '', null);
+        await account('with-token', 'google', GOOGLE_ID_TOKEN);
+        await account('without-token', 'google', null);
+
+        const { rowCount } = await migrate.query(statementOf('UPDATE "account"'));
+        expect(rowCount).toBe(1);
+        expect(await accounts()).toEqual(
+          ['with-token', 'without-token'].map((id) => ({
+            id,
+            id_token: null,
+            access_token: `access-${id}`,
+            refresh_token: `refresh-${id}`,
+            account_id: id,
+            scope: 'openid,email',
+          })),
+        );
+      });
+    });
+
+    it('touches no row that holds none of them', async () => {
+      await rolledBack(async () => {
+        await user('clean', '', null);
+        await account('clean-account', 'clean', null);
+        expect((await migrate.query(statementOf('UPDATE "user"'))).rowCount).toBe(0);
+        expect((await migrate.query(statementOf('UPDATE "account"'))).rowCount).toBe(0);
+      });
+    });
+  },
+);

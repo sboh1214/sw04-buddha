@@ -2,7 +2,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import { schema, type Db } from '@buddha/db';
-import { isNoEmailAddress, setPasswordCallbackURL } from '@buddha/shared';
+import { AUTH_USER_NAME, isNoEmailAddress, setPasswordCallbackURL } from '@buddha/shared';
 import { AppError } from '../common/errors/app-error.js';
 import { DB } from '../infra/db/db.provider.js';
 import { AUTH, type Auth, CREDENTIAL_PROVIDER_ID } from './auth.js';
@@ -50,7 +50,8 @@ export class RegistrationService {
       body: {
         email: address,
         password: randomBytes(24).toString('base64url'),
-        name: address.split('@')[0] ?? address,
+        // better-auth requires a name; the account keeps none (AUTH_USER_NAME, the user hooks).
+        name: AUTH_USER_NAME,
         callbackURL: setPasswordCallbackURL(next),
       },
     });
