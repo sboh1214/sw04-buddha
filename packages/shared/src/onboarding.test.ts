@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { INT4_MAX } from './constants.js';
 import {
   INTEREST_CATEGORIES_INPUT_MAX,
+  INTERESTS_FIRST_ANSWER_WINDOW_HOURS,
   REQUIRED_ONBOARDING_STEPS,
   answerInterestsStepBodySchema,
   missingOnboardingSteps,
@@ -131,5 +132,11 @@ describe('onboarding bodies', () => {
       expect(schema.safeParse({ categoryIds, expectedAccountId: 'u1' }).success).toBe(false);
     }
     expect(schema.safeParse({ categoryIds: [] }).success).toBe(false);
+  });
+});
+
+describe('the interests step’s first answer (owner decision 2026-10-21 (3rd) answer 1)', () => {
+  it('stays open 24 hours after the nickname step, the value the owner set', () => {
+    expect(INTERESTS_FIRST_ANSWER_WINDOW_HOURS).toBe(24);
   });
 });

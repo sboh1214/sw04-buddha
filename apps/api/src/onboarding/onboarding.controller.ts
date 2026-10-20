@@ -120,11 +120,14 @@ export class OnboardingController {
    * The interests step (#57-7), from the onboarding's screen: the categories picked, or none — the
    * skip, which the screen also sends when the account leaves it, or the start-Coin notice before
    * it, without an answer, so the server records the skip (owner decision 2026-10-21 (2nd) answer
-   * 2, ADR-0078). While the step is unanswered this is its first answer: for onboarded accounts
-   * only, and let through a writing or an account restriction (a first choice, owner decision
-   * 2026-10-21 answer 4). Once answered, a skip changes nothing and picks are a change as in MY 설정
-   * (`PUT /me/interest-categories`). No OnboardedGuard: the service asks the onboarding in its
-   * transaction (`assertPublicItemOnboarding`), as for MY 설정's write.
+   * 2, ADR-0078). While the step is unanswered, within 24 hours of the nickname step
+   * (INTERESTS_FIRST_ANSWER_WINDOW_HOURS, owner decision 2026-10-21 (3rd) answer 1), this is its
+   * first answer: for onboarded accounts only, and let through a writing or an account restriction
+   * (a first choice, owner decision 2026-10-21 answer 4). Past those hours the step's picks are a
+   * change as in MY 설정 and its skip records the skip. Once answered, a skip changes nothing and
+   * picks are a change as in MY 설정 (`PUT /me/interest-categories`). No OnboardedGuard: the service
+   * asks the onboarding in its transaction (`assertPublicItemOnboarding`), as for MY 설정's write —
+   * or, for the skip past those hours, which gives no public item a value, `assertOnboarded` alone.
    */
   @Post('onboarding/interests')
   @HttpCode(200)
@@ -134,8 +137,9 @@ export class OnboardingController {
   })
   @ApiData(meSchema)
   // ONBOARDING_REQUIRED: the consent, the verification or the nickname step is not done, and the
-  // write is the step's first answer or adds a category. FORBIDDEN (no field named): a category
-  // added once the step is answered, under a writing or an account restriction.
+  // write answers the step (picks or the skip while it is unanswered) or adds a category.
+  // FORBIDDEN (no field named): a category added under a writing or an account restriction once
+  // the step is answered, or 24 hours after the nickname step while it is not.
   // VALIDATION_ERROR: a category that does not exist or is not active (details name each).
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR', 'ONBOARDING_REQUIRED')
   answerInterestsStep(

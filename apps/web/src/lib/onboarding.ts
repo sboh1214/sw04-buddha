@@ -250,7 +250,9 @@ export function gatedPagePath(pathname: string, location: { pathname: string; se
  * the gate does not send it back, and /onboarding opened again goes straight on (오너 결정
  * 2026-10-19 (2차) 5: the interest step is shown once). The stepper tells the server that skip as
  * the account leaves (`leavingSkipsInterests`, owner decision 2026-10-21 (2nd) answer 2,
- * ADR-0078), so the step's first answer — which a restriction lets through — is the screen's own.
+ * ADR-0078), so the step's first answer — which a restriction lets through — is the screen's own,
+ * and the server takes it as one within 24 hours of the nickname step only (owner decision
+ * 2026-10-21 (3rd) answer 1).
  */
 export const ONBOARDING_SCREENS = [
   'consent',

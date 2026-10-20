@@ -138,6 +138,18 @@ export const answerInterestsStepBodySchema = z
 export type AnswerInterestsStepBody = z.infer<typeof answerInterestsStepBodySchema>;
 
 /**
+ * How long after the nickname step (`profiles.nickname_confirmed_at`) the interests step's answer
+ * from its screen (`POST /me/onboarding/interests`) still counts as the step's first answer — the
+ * account's first choice of a public profile item, which a writing or an account restriction lets
+ * through. After it, an unanswered step's picks are a change as MY 설정's (refused under a
+ * restriction; outside one saved, the step answered with them), and its skip records the skip. The
+ * owner set it (owner decision 2026-10-21 (3rd) answer 1, ADR-0078): the screen comes right after
+ * the nickname step, so this bounds the first answer of an account whose leaving the server never
+ * heard of (ADR-0078 decision 7-23). A fixed value, not a release setting (docs/SETTINGS.md).
+ */
+export const INTERESTS_FIRST_ANSWER_WINDOW_HOURS = 24;
+
+/**
  * `PUT /me/interest-categories`: MY 설정's interest categories (N04 §2's 관심 카테고리, a public
  * profile item, #41), replacing what the account had — top-level and sub-categories alike, active
  * ones only; an empty list drops them all. Never the onboarding step's answer

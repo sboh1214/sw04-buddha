@@ -3,6 +3,7 @@ import { readOnboarding, schema, type Db } from '@buddha/db';
 import {
   CONSENT_ITEMS,
   CONSENT_USER_AGENT_MAX_LENGTH,
+  INTERESTS_FIRST_ANSWER_WINDOW_HOURS,
   consentItemsToAsk,
   missingOnboardingSteps,
   type Me,
@@ -21,6 +22,7 @@ import {
   type PublicItemEdit,
 } from '../me/public-items.js';
 import { StartGrantService } from '../start-grant/start-grant.service.js';
+import { assertOnboarded } from './onboarded.guard.js';
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 
@@ -143,12 +145,17 @@ export class OnboardingService {
    * `POST /me/onboarding/interests`: the interests step's answer from its screen (#57-7) — some
    * categories, or none: the skip, which the screen also sends when the account leaves it, or the
    * start-Coin notice before it, without an answer (owner decision 2026-10-21 (2nd) answer 2,
-   * ADR-0078). While the step is unanswered (`interests_answered_at` null) this is its first answer
-   * (`first`): the onboarding's step after the start Coin, so for onboarded accounts only, and a
-   * first choice, so a writing or an account restriction lets it through (owner decision 2026-10-21
-   * answer 4) — picks and the skip alike. Either way the step is answered and never asked again.
-   * Once it is answered — another tab answered it, or the account left and the screen came back
-   * (the browser's back-forward cache) — a skip changes nothing, and picks are a change as MY 설정's
+   * ADR-0078). While the step is unanswered (`interests_answered_at` null) and the nickname step was
+   * confirmed less than INTERESTS_FIRST_ANSWER_WINDOW_HOURS ago, this is its first answer (`first`):
+   * the onboarding's step after the start Coin, so for onboarded accounts only, and a first choice,
+   * so a writing or an account restriction lets it through (owner decision 2026-10-21 answer 4) —
+   * picks and the skip alike. Past that window (owner decision 2026-10-21 (3rd) answer 1: an account
+   * whose leaving never reached the server) the step's picks are a change as MY 설정's (`replace`:
+   * refused under a restriction, outside one saved with the step answered), and its skip records the
+   * skip (for onboarded accounts only, as any answer of the step; no restriction asked: no public
+   * item takes a value). Either way the step is answered and never asked again. Once it is answered
+   * — another tab answered it, or the account left and the screen came back (the browser's
+   * back-forward cache) — a skip changes nothing, and picks are a change as MY 설정's
    * (`setInterests`): never a way back to the first answer.
    */
   answerInterestsStep(userId: string, categoryIds: readonly number[]): Promise<Me> {
@@ -181,7 +188,10 @@ export class OnboardingService {
    * They are a public profile item (#37-5), so a write is a `PublicItemEdit` asked of the onboarding
    * (`assertPublicItemOnboarding`, rather than OnboardedGuard: a dropping needs sign-in only) and
    * of the restriction (`assertPublicItemEdit`), in that order, under the profile's lock — and only
-   * the onboarding screen's write while the step is unanswered is `first` (`from: 'step'`).
+   * the onboarding screen's write while the step is unanswered, within
+   * INTERESTS_FIRST_ANSWER_WINDOW_HOURS of the nickname step, is `first` (`from: 'step'`). The
+   * screen's skip of an unanswered step past that window is no public item's edit: it answers the
+   * step, which is asked of the onboarding only.
    */
   private async writeInterests(
     userId: string,
@@ -191,7 +201,13 @@ export class OnboardingService {
     const wanted = [...new Set(categoryIds)];
     await this.db.transaction(async (tx) => {
       const [profile] = await tx
-        .select({ answeredAt: schema.profiles.interestsAnsweredAt })
+        .select({
+          answeredAt: schema.profiles.interestsAnsweredAt,
+          // Whether the step's first answer is still open (owner decision 2026-10-21 (3rd) answer
+          // 1): the nickname step confirmed less than the window ago, by the database's clock as
+          // the confirmation was. Not confirmed yet: open, and the onboarding check refuses it.
+          firstAnswerOpen: sql<boolean>`(${schema.profiles.nicknameConfirmedAt} IS NULL OR now() < ${schema.profiles.nicknameConfirmedAt} + make_interval(hours => ${INTERESTS_FIRST_ANSWER_WINDOW_HOURS}))`,
+        })
         .from(schema.profiles)
         .where(eq(schema.profiles.userId, userId))
         .limit(1)
@@ -204,16 +220,26 @@ export class OnboardingService {
         .where(eq(schema.profileInterestCategories.userId, userId));
       const had = new Set(current.map((pick) => pick.categoryId));
       const adds = wanted.some((id) => !had.has(id));
-      const first = from === 'step' && profile.answeredAt === null;
+      const stepUnanswered = from === 'step' && profile.answeredAt === null;
+      const first = stepUnanswered && profile.firstAnswerOpen;
+      // The skip of an unanswered step past the first answer's window records the skip (3rd answer
+      // 1). An unanswered step has no picks (every write of them answers it), so it drops none.
+      const lateSkip = stepUnanswered && !first && wanted.length === 0;
       // What changes nothing asks and writes nothing: the same picks, or the skip of a step already
       // answered — a skip never takes picks away.
-      const skipsAgain = from === 'step' && wanted.length === 0;
-      if (!first && (skipsAgain || (!adds && wanted.length === had.size))) return;
-      let edit: PublicItemEdit = 'clear';
-      if (first) edit = 'first';
-      else if (adds) edit = 'replace';
-      await assertPublicItemOnboarding(tx, userId, edit);
-      await assertPublicItemEdit(tx, userId, edit);
+      const skipsAgain = from === 'step' && !stepUnanswered && wanted.length === 0;
+      if (!first && !lateSkip && (skipsAgain || (!adds && wanted.length === had.size))) return;
+      if (lateSkip) {
+        // An answer of the step, so for onboarded accounts only (as the first answer, ADR-0078
+        // decision 7-8 (2)), and no public item's new value, so no restriction is asked.
+        await assertOnboarded(tx, userId);
+      } else {
+        let edit: PublicItemEdit = 'clear';
+        if (first) edit = 'first';
+        else if (adds) edit = 'replace';
+        await assertPublicItemOnboarding(tx, userId, edit);
+        await assertPublicItemEdit(tx, userId, edit);
+      }
       if (wanted.length > 0) {
         const active = await tx
           .select({ id: schema.categories.id })

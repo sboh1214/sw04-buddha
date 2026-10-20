@@ -19,8 +19,11 @@ import { interestIds, withInterest } from '@/lib/onboarding';
  * notice before it: the screen shows once, right after the nickname step (오너 결정 2026-10-19
  * (2차) 5), and the stepper sends the same skip as the account leaves (owner decision 2026-10-21
  * (2nd) answer 2, ADR-0078). This screen's first answer is the account's first choice, which a
- * writing or an account restriction lets through (owner decision 2026-10-21 answer 4); MY 설정's
- * card (#41) changes them later, a first pick there included, under the restriction's rule.
+ * writing or an account restriction lets through (owner decision 2026-10-21 answer 4) — within 24
+ * hours of the nickname step only (3rd answer 1): a screen left open past them sends a change, which
+ * a restriction refuses (the general sentence below, until #185 and #139), while 건너뛰기 still
+ * answers the step. MY 설정's card (#41) changes them later, a first pick there included, under the
+ * restriction's rule.
  *
  * The categories are grouped as the header groups them (`groupCategories`): each top-level category
  * with its sub-categories under it, each a checkbox of its own (`InterestChecklist`, the list MY

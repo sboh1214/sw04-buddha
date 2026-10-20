@@ -14,11 +14,13 @@ type Executor = Db | Tx;
  *   deleted;
  * - `first`: the account's first choice of it inside the onboarding's screens — the nickname step
  *   and the interests step's first answer (picks or the skip, `POST /me/onboarding/interests` while
- *   `interests_answered_at` is null) — which is not a change (owner decision 2026-10-21 answer 4,
- *   ADR-0078: «처음 고르는 것은 허용»). Only those screens' writes: an account that left the start-Coin
- *   notice or the interests screen without answering skipped the step, the screen tells the server
- *   so, and MY 설정's first pick is a change (`replace`) however it left (owner decision 2026-10-21
- *   (2nd) answer 2: «온보딩 화면 안의 첫 선택만 허용»).
+ *   `interests_answered_at` is null, within INTERESTS_FIRST_ANSWER_WINDOW_HOURS — 24 — of the
+ *   nickname step) — which is not a change (owner decision 2026-10-21 answer 4, ADR-0078: «처음
+ *   고르는 것은 허용»). Only those screens' writes: an account that left the start-Coin notice or the
+ *   interests screen without answering skipped the step, the screen tells the server so, and MY
+ *   설정's first pick is a change (`replace`) however it left (owner decision 2026-10-21 (2nd) answer
+ *   2: «온보딩 화면 안의 첫 선택만 허용»); and past the window the step's own picks are one too, for an
+ *   account whose leaving the server never heard of (3rd answer 1: «닉네임 확정 뒤 24시간 안에만»).
  * A write that changes nothing is none of them: its caller returns before asking.
  */
 export type PublicItemEdit = 'replace' | 'clear' | 'first';
@@ -49,9 +51,9 @@ export const sanctionInForce: SanctionCheck = () => Promise.resolve(false);
  * Callers: the onboarding's nickname step (`POST /me/onboarding/nickname`, OnboardingService,
  * always `first`), the nickname change (`PATCH /me`, NicknameService), the 소개 (`PUT /me/bio`,
  * MeService), the interests step (`POST /me/onboarding/interests`, OnboardingService — `first`
- * while the step is unanswered) and MY 설정's interest categories (`PUT /me/interest-categories`,
- * OnboardingService — never `first`); the image (#141) joins them. `sanctioned` is the lookup —
- * `sanctionInForce` but in unit tests.
+ * while the step is unanswered, within 24 hours of the nickname step) and MY 설정's interest
+ * categories (`PUT /me/interest-categories`, OnboardingService — never `first`); the image (#141)
+ * joins them. `sanctioned` is the lookup — `sanctionInForce` but in unit tests.
  *
  * The refusal is a 403 FORBIDDEN that names no field (the web tells the other account's cookie by
  * its `expectedAccountId` detail) — until #185 and #139, which give it a code of its own carrying

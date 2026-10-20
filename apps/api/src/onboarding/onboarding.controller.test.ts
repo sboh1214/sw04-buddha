@@ -5,7 +5,8 @@
  * (ignoring case, the prefix and the reserved words, the 30-day interval and hold), the start Coin
  * granted once by the nickname step only, and the interest categories: the onboarding step's
  * answer with its skip — also what the screen sends when the account leaves it (owner decision
- * 2026-10-21 (2nd) answer 2, ADR-0078) — and MY 설정's write, which is never that answer.
+ * 2026-10-21 (2nd) answer 2, ADR-0078), the step's first answer only within 24 hours of the nickname
+ * step (3rd answer 1) — and MY 설정's write, which is never that answer.
  *
  * The app trusts one proxy (Caddy's address in production) and lists one uncounted peer (the web
  * server's), so a consent can name a client the way production's do: `inject` presents loopback
@@ -35,7 +36,7 @@ import {
   type Me,
   type ValidationIssue,
 } from '@buddha/shared';
-import { asc, eq } from 'drizzle-orm';
+import { asc, eq, sql } from 'drizzle-orm';
 import { type LightMyRequestResponse } from 'fastify';
 import { Redis } from 'ioredis';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -210,6 +211,17 @@ describe.skipIf(!hasTestInfra)('온보딩 /api/v1/me (integration, #58)', () => 
       await subscriber.quit();
     }
     return received.map((message) => JSON.parse(message) as unknown);
+  }
+
+  /**
+   * Moves the account's nickname step back by `ago` (a Postgres interval), by the database's clock
+   * as the step's own `now()`: how long ago the interests step's screen first came (ADR-0078).
+   */
+  async function nicknameConfirmedAgo(userId: string, ago: string) {
+    await t.db
+      .update(schema.profiles)
+      .set({ nicknameConfirmedAt: sql`now() - ${ago}::interval` })
+      .where(eq(schema.profiles.userId, userId));
   }
 
   /** Sets a nickname straight in the table, as an account could have before #58's rules. */
@@ -963,6 +975,39 @@ describe.skipIf(!hasTestInfra)('온보딩 /api/v1/me (integration, #58)', () => 
       expect(meOf(await answerInterests(user, [])).profile.interestCategoryIds).toEqual([
         category.id,
       ]);
+    });
+
+    it('takes the step’s answer as its first only within 24 hours of the nickname step: past them picks are a change that answers it, and none records the skip (owner decision 2026-10-21 (3rd) answer 1)', async () => {
+      // An account whose leaving never reached the server: the three steps done, the interests step
+      // unanswered. Within the 24 hours its screen's pick is the first answer (a restriction lets it
+      // through, public-items-sanctioned.test.ts); past them it is MY 설정's change, saved with no
+      // restriction in force, and the step is answered with it.
+      await completeOnboarding(t.db, { userId: user.id });
+      await nicknameConfirmedAgo(user.id, '24 hours 1 minute');
+      const category = await createCategory(t.db);
+      const picked = meOf(await answerInterests(user, [category.id]));
+      expect(picked.profile.interestCategoryIds).toEqual([category.id]);
+      expect(picked.onboarding.interests).toBe(true);
+      // The skip past them records the skip, picking nothing.
+      const late = await signUpTestUser(t);
+      await completeOnboarding(t.db, { userId: late.id });
+      await nicknameConfirmedAgo(late.id, '3 days');
+      const skipped = meOf(await answerInterests(late, []));
+      expect(skipped.onboarding.interests).toBe(true);
+      expect(skipped.profile.interestCategoryIds).toEqual([]);
+      // Both answer the step, so both wait for the three steps, as the first answer does (ADR-0078
+      // decision 7-8 (2)): an account a re-consent holds back hears the consent step, nothing
+      // recorded — the skip included, which is no clearing.
+      const held = await signUpTestUser(t);
+      await completeOnboarding(t.db, { userId: held.id });
+      await nicknameConfirmedAgo(held.id, '25 hours');
+      await t.db.delete(schema.consentRecords).where(eq(schema.consentRecords.userId, held.id));
+      await createConsents(t.db, { userId: held.id, versions: { terms: 'draft-1999-01-01' } });
+      expect(stepsOf(await answerInterests(held, []))).toEqual(['consent']);
+      expect(stepsOf(await answerInterests(held, [category.id]))).toEqual(['consent']);
+      expect((await getMe(held)).onboarding.interests).toBe(false);
+      meOf(await consent(held));
+      expect(meOf(await answerInterests(held, [])).onboarding.interests).toBe(true);
     });
 
     it('refuses a category that does not exist or is retired, naming each, and writes nothing', async () => {

@@ -10,9 +10,11 @@
  * (`POST /me/onboarding/interests`) takes its first picks; only later additions are refused. Only
  * that screen's first answer passes (owner decision 2026-10-21 (2nd) answer 2): MY 설정's first
  * pick is refused however the account left the step — with the skip its screen sent on leaving, or
- * with nothing recorded — and so is the screen's pick once the step is answered. An account the
- * onboarding holds back (a re-consent) hears that before the restriction (ADR-0078 decision 4).
- * Skips when TEST_* are unset.
+ * with nothing recorded — and so is the screen's pick once the step is answered, or once 24 hours
+ * have passed since the nickname step (owner decision 2026-10-21 (3rd) answer 1: the first answer's
+ * window, whose boundary is tested at 23 h 59 min and 24 h 1 min; the screen's skip then records
+ * the skip). An account the onboarding holds back (a re-consent) hears that before the restriction
+ * (ADR-0078 decision 4). Skips when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
 import {
@@ -22,7 +24,7 @@ import {
   createPhoneVerification,
 } from '@buddha/db/test';
 import { meSchema, onboardingRequiredDetailsSchema } from '@buddha/shared';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
@@ -83,13 +85,19 @@ describe.skipIf(!hasTestInfra)('public profile items under a restriction (integr
       },
       payload: JSON.stringify({ ...payload, expectedAccountId: who.id }),
     });
-  const answeredAt = async () => {
+  const answeredAt = async (userId: string = member.id) => {
     const [row] = await t.db
       .select({ at: schema.profiles.interestsAnsweredAt })
       .from(schema.profiles)
-      .where(eq(schema.profiles.userId, member.id));
+      .where(eq(schema.profiles.userId, userId));
     return row!.at;
   };
+  /** The nickname step moved back by `ago` (a Postgres interval), by the database's clock. */
+  const nicknameConfirmedAgo = (userId: string, ago: string) =>
+    t.db
+      .update(schema.profiles)
+      .set({ nicknameConfirmedAt: sql`now() - ${ago}::interval` })
+      .where(eq(schema.profiles.userId, userId));
   const profileRow = async () => {
     const [row] = await t.db
       .select({
@@ -336,5 +344,56 @@ describe.skipIf(!hasTestInfra)('public profile items under a restriction (integr
     expect(firstPick.statusCode, firstPick.body).toBe(200);
     expect(await picks(picker.id)).toEqual([category.id]);
     expect(sanction.asked).toEqual([]);
+  });
+
+  it('takes the interests step’s screen as the first answer only within 24 hours of the nickname step: past them its pick is a change and its skip records the skip (owner decision 2026-10-21 (3rd) answer 1)', async () => {
+    // Two members who finished the three steps and whose leaving of the onboarding's screens never
+    // reached the server (the interests step unanswered): `member` confirmed its nickname 23 hours
+    // 59 minutes ago, `late` 24 hours 1 minute ago.
+    const late = await signUpTestUser(t);
+    await completeOnboarding(t.db, { userId: late.id });
+    await nicknameConfirmedAgo(member.id, '23 hours 59 minutes');
+    await nicknameConfirmedAgo(late.id, '24 hours 1 minute');
+    const category = await createCategory(t.db);
+    sanction.on = true;
+
+    // Within the 24 hours: the step's first answer, a first choice taken unasked.
+    const within = await send('POST', '/me/onboarding/interests', { categoryIds: [category.id] });
+    expect(within.statusCode, within.body).toBe(200);
+    expect(await picks()).toEqual([category.id]);
+    expect(await answeredAt()).not.toBeNull();
+    expect(sanction.asked).toEqual([]);
+
+    // Past them: a change ('replace'), refused under the restriction — nothing written, the step
+    // still unanswered.
+    const past = await send(
+      'POST',
+      '/me/onboarding/interests',
+      { categoryIds: [category.id] },
+      late,
+    );
+    expect(codeOf(past)).toEqual({ status: 403, code: 'FORBIDDEN' });
+    expect(sanction.asked).toEqual([late.id]);
+    expect(await picks(late.id)).toEqual([]);
+    expect(await answeredAt(late.id)).toBeNull();
+
+    // Its skip records the skip, unasked: no public item takes a value.
+    sanction.asked = [];
+    const skipped = await send('POST', '/me/onboarding/interests', { categoryIds: [] }, late);
+    expect(skipped.statusCode, skipped.body).toBe(200);
+    expect(await answeredAt(late.id)).not.toBeNull();
+    expect(await picks(late.id)).toEqual([]);
+    expect(sanction.asked).toEqual([]);
+  });
+
+  it('saves the interests step’s pick past the 24 hours as a change once no restriction is in force, answering the step (owner decision 2026-10-21 (3rd) answer 1)', async () => {
+    await nicknameConfirmedAgo(member.id, '24 hours 1 minute');
+    const category = await createCategory(t.db);
+    const picked = await send('POST', '/me/onboarding/interests', { categoryIds: [category.id] });
+    expect(picked.statusCode, picked.body).toBe(200);
+    // Asked, as every new value is, and let through.
+    expect(sanction.asked).toEqual([member.id]);
+    expect(await picks()).toEqual([category.id]);
+    expect(await answeredAt()).not.toBeNull();
   });
 });
