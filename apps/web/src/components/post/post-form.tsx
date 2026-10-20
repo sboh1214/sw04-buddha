@@ -52,8 +52,11 @@ export interface PostFormValues {
 export interface PostFormProps {
   initialTitle?: string | null;
   initialDocument?: PostDocument;
-  /** Which screen's draft this is, where the onboarding gate keeps it (lib/post-drafts.ts). */
-  draftKey: PostDraftKey;
+  /**
+   * Which screen's draft this is, where the onboarding gate keeps it (lib/post-drafts.ts). Absent,
+   * the form keeps no draft: a notice's (#138), whose admin screens have no onboarding move.
+   */
+  draftKey?: PostDraftKey;
   accountId: string | undefined;
   submitLabel: string;
   /** Sending, or sent and on the way to the post: the form is locked. */
@@ -80,6 +83,26 @@ export interface PostFormProps {
    * changes, and false as the form goes: what the edit screen keeps should its post go (`gone`).
    */
   onHoldingChange?: (holding: boolean) => void;
+  /** A notice's form (#138): a required title; absent, a post's, whose title is optional. */
+  notice?: NoticeFormOptions;
+  /**
+   * Whether leaving with a draft asks first (`useLeaveGuard`; the default). False on a notice's
+   * forms (#138), which do not ask yet: that comes with ADR-0077 decision 8-20.
+   */
+  leaveGuard?: boolean;
+}
+
+/**
+ * The same form for an operator's notice (#138, ADR-0077 — «글과 같은 서식 편집기»): its title is
+ * required, so the send waits for one and the field says so, and the labels say what a notice
+ * holds. A notice's title limit is the post title's (`NOTICE_TITLE_MAX_LENGTH`, lib/notices.test.ts
+ * checks they are one number), so the count below holds for both.
+ */
+export interface NoticeFormOptions {
+  titleRequired: true;
+  titleLabel: string;
+  titlePlaceholder: string;
+  bodyPlaceholder: string;
 }
 
 /**
@@ -141,13 +164,16 @@ export function PostForm(props: PostFormProps) {
   // Read once, when the form is made (the editor takes its first document then).
   const [kept] = useState(() => ({
     key: draftKey,
-    draft: accountId === undefined ? null : readSessionPostDraft(draftKey, accountId),
+    draft:
+      accountId === undefined || draftKey === undefined
+        ? null
+        : readSessionPostDraft(draftKey, accountId),
   }));
   const [held, send] = useReducer(nextRestoredDraftState, kept.draft, restoredDraftState);
   // The title field of the fields on screen: where a discard leaves the focus.
   const titleRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
-    if (kept.draft !== null) clearSessionPostDraft(kept.key);
+    if (kept.draft !== null && kept.key !== undefined) clearSessionPostDraft(kept.key);
   }, [kept]);
   return (
     <>
@@ -171,7 +197,7 @@ export function PostForm(props: PostFormProps) {
             // Once: a second click on 버리기 while the dialog closes discards nothing, and says
             // nothing either.
             if (!held.asking) return;
-            clearSessionPostDraft(kept.key);
+            if (kept.key !== undefined) clearSessionPostDraft(kept.key);
             send('discard');
             toaster.create(POST_DRAFT_DISCARDED_TOAST);
           }}
@@ -262,6 +288,8 @@ function PostFormFields({
   gone = false,
   onClose,
   onHoldingChange,
+  notice,
+  leaveGuard = true,
   restored,
   focusTitle,
   titleRef,
@@ -294,7 +322,7 @@ function PostFormFields({
   // A draft taken back is something to lose until it is sent or discarded, as typed text is.
   const dirty = restored !== null || draftChanged({ title, initialTitle, bodyChanged, uploading });
   // Held once the post is gone (오너 결정 2026-10-24): leaving asks until the writer closes it.
-  useLeaveGuard(gone || (!pending && dirty), copy.postLeaveConfirm);
+  useLeaveGuard(gone || (leaveGuard && !pending && dirty), copy.postLeaveConfirm);
   // What the edit screen keeps should the post go: what leaving would lose, while no write of it
   // has landed — and, once gone, the form is on screen only while it holds that.
   const holding = gone || (dirty && !saved);
@@ -302,16 +330,27 @@ function PostFormFields({
     onHoldingChange?.(holding);
   }, [holding, onHoldingChange]);
   useEffect(() => () => onHoldingChange?.(false), [onHoldingChange]);
-  useKeepPostDraftForOnboarding({
-    key: draftKey,
-    accountId,
-    // What the kept draft can carry: not an upload in flight, which leaving still loses (above).
-    hasDraft: hasDraftToKeep({ title, initialTitle, bodyChanged, restored: restored !== null }),
-    saved,
-    title,
-    body: body as PostDraft['body'],
-    previews,
-  });
+  useKeepPostDraftForOnboarding(
+    // A form with no draft key (a notice's, #138) keeps nothing.
+    draftKey === undefined
+      ? null
+      : {
+          key: draftKey,
+          accountId,
+          // What the kept draft can carry: not an upload in flight, which leaving still loses
+          // (above).
+          hasDraft: hasDraftToKeep({
+            title,
+            initialTitle,
+            bodyChanged,
+            restored: restored !== null,
+          }),
+          saved,
+          title,
+          body: body as PostDraft['body'],
+          previews,
+        },
+  );
   const noticeRef = useRef<HTMLDivElement>(null);
   const noticeTextId = useId();
   useEffect(() => {
@@ -322,9 +361,11 @@ function PostFormFields({
   // '이미지 n / 10장' counts the uploads on their way too (owner decision 2026-10-21).
   const count = countWithUploads(countEditorDocument(body), imagesUploading);
   const titleInvalid = titleTooLong(title);
+  const titleMissing = notice?.titleRequired === true && title.trim() === '';
   const blocked =
     gone ||
     pending ||
+    titleMissing ||
     uploading ||
     accountId === undefined ||
     count.empty ||
@@ -372,15 +413,15 @@ function PostFormFields({
         </Alert.Root>
       )}
 
-      <Field.Root invalid={titleInvalid}>
-        <Field.Label>{copy.postWriteTitleLabel}</Field.Label>
+      <Field.Root invalid={titleInvalid} required={notice?.titleRequired}>
+        <Field.Label>{notice?.titleLabel ?? copy.postWriteTitleLabel}</Field.Label>
         <Input
           ref={titleRef}
           value={title}
           // UTF-16 units: twice the code points, so an emoji title is never cut short; the count
           // below is the rule.
           maxLength={POST_TITLE_MAX_LENGTH * 2}
-          placeholder={copy.postWriteTitlePlaceholder}
+          placeholder={notice?.titlePlaceholder ?? copy.postWriteTitlePlaceholder}
           // Read-only rather than disabled once the post is gone: its text is still the writer's to
           // select and copy.
           readOnly={gone}
@@ -416,6 +457,7 @@ function PostFormFields({
           invalid={count.tooLong || count.tooManyImages}
           describedBy="post-body-length post-body-images post-body-errors"
           refusedImageIds={refusedImageIds}
+          placeholder={notice?.bodyPlaceholder}
         />
         <HStack gap="3" justify="flex-end" textStyle="bodyXs" color="fg.muted">
           <Text

@@ -566,6 +566,51 @@ export const copy = {
   adminSmsToday: '오늘',
   adminSmsCountUnit: '건',
 
+  // --- admin: 운영 공지 (#138, ADR-0077) ---
+  // 모든 운영자가 쓰고·고치고·고정하고·해제하며 다른 운영자의 승인은 없다(#45-8). 고정은 동시에 3개까지
+  // (NOTICE_PIN_LIMIT, notices.test.ts가 같은 수인지 본다)이고 자동 해제는 없다. 해제한 공지는 공지 목록에
+  // 남아 다시 고정할 수 있다. 공지는 '운영팀'으로 보이고, 네 작업은 운영자와 시각만 운영 기록에 남는다
+  // (사유 없음, #138). 지우는 기능은 없다(ADR-0077 결정 8-7).
+  // 안내는 목록 화면과 쓰기 화면에 함께 보이므로 '여기'가 아니라 '공지 목록'이라 쓴다. '고정하지 않은 공지도
+  // 주소로 누구나 읽는다'는 ADR-0077 결정 8-1(오너에게 묻는 중, 결과 4-1)의 지금 동작이다 — 운영자가 고정하지
+  // 않은 공지를 비공개 초안으로 여기지 않게 쓰기 전에 알린다. 오너가 고정한 공지만 공개하기로 하면 이 문장을 뺀다.
+  adminNotices: '공지',
+  adminNoticesIntro:
+    "공지는 커뮤니티 목록 위의 고정 영역에 보입니다. 동시에 3개까지 고정할 수 있고, 해제한 공지는 공지 목록에 남아 다시 고정할 수 있습니다. 고정하지 않은 공지도 쓰는 즉시 그 주소로 누구나 읽을 수 있고, 지울 수 없으며 고칠 수만 있습니다. 공지는 '운영팀'의 이름으로 보이고 댓글·좋아요·신고를 받지 않습니다.",
+  adminNoticeRecordHint: '쓰기·수정·고정·해제는 작업한 운영자와 시각이 운영 기록에 남습니다.',
+  adminNoticeWrite: '공지 쓰기',
+  adminNoticesPinned: '고정한 공지',
+  adminNoticesUnpinned: '고정하지 않은 공지',
+  adminNoticesPinnedEmpty: '고정한 공지가 없습니다.',
+  adminNoticesUnpinnedEmpty: '고정하지 않은 공지가 없습니다.',
+  adminNoticeCreatedAt: '작성',
+  adminNoticePinnedAt: '고정',
+  adminNoticePin: '고정',
+  adminNoticeUnpin: '고정 해제',
+  adminNoticeView: '공지 보기',
+  adminNoticePinnedToast: '공지를 고정했습니다.',
+  adminNoticeUnpinnedToast: '공지 고정을 해제했습니다.',
+  adminNoticeCreated: '공지를 썼습니다. 목록에서 고정할 수 있습니다.',
+  adminNoticeSaved: '공지를 고쳤습니다.',
+  adminNoticeUnchanged: '바뀐 내용이 없습니다.',
+  adminNoticeNewTitle: '공지 쓰기',
+  adminNoticeEditTitle: '공지 수정',
+  adminNoticeSubmit: '올리기',
+  adminNoticeSave: '저장',
+  adminNoticeStatePinned: '고정 중',
+  adminNoticeStateUnpinned: '고정하지 않음',
+  adminNoticeBack: '공지 목록으로',
+  adminNoticeNotFound: '공지를 찾을 수 없습니다.',
+  adminNoticeRefreshFailed:
+    '최신 정보를 불러오지 못했습니다. 보이는 내용은 마지막으로 불러온 것입니다.',
+  noticeWriteTitleLabel: '제목',
+  noticeWriteTitlePlaceholder: '공지 제목',
+  noticeWriteBodyPlaceholder: '공지 내용을 적어 주세요. 링크와 이미지를 넣을 수 있습니다.',
+  // 고정이 이미 3개일 때(NOTICE_PIN_LIMIT_REACHED). 자동으로 해제하지 않으므로 해제를 먼저 하게 한다.
+  errNoticePinLimit:
+    '공지는 동시에 3개까지 고정할 수 있습니다. 고정한 공지 하나를 해제한 뒤 다시 고정해 주세요.',
+  errNoticeTitle: '제목을 100자 이하의 한 줄로 입력해 주세요.',
+
   // --- markets (M4) ---
   // 홈 (PLAN 11.3, ADR-0041 Kalshi 형): 헤더 2단의 상위 카테고리 · 왼쪽 세부 분류 · 정렬 · 검색.
   // 카테고리 목록은 API가 주고 '전체'만 붙인다. 장르 표기는 붙여 쓴다(N01 §1, 오너 결정 #14).
@@ -935,6 +980,15 @@ export const copy = {
   errImageUnreadable: '이미지를 읽을 수 없습니다. 다른 파일을 골라 주세요.',
   errImageEmpty: '빈 파일입니다. 다른 파일을 골라 주세요.',
   errImageUpload: '이미지를 올리지 못했습니다. 다시 시도해 주세요.',
+
+  // --- 운영 공지 (#138, ADR-0077) ---
+  // 커뮤니티 목록 위의 고정 영역(최대 3개, #45-8)과 공지 화면. 작성자는 '운영팀'이고 운영자의 닉네임은
+  // 보이지 않는다. 공지는 읽기만 한다(댓글·좋아요·신고 없음). 고치면 '수정됨'(copy.postEdited)이 붙는다.
+  noticeBadge: '공지',
+  noticeAuthor: '운영팀',
+  noticesLabel: '고정 공지',
+  noticesLoadFailed: '공지를 불러오지 못했습니다.',
+  noticeNotFound: '없는 공지입니다.',
 
   // --- comments (#48, ADR-0074) ---
   // 근거 글 아래의 댓글과 그 아래의 답글(대댓글). 두 층뿐이라 답글에 답하면 같은 댓글 아래 답글이 된다

@@ -1,0 +1,453 @@
+import type { APIRequestContext, APIResponse, Locator, Page } from '@playwright/test';
+import { NOTICE_PIN_LIMIT } from '@buddha/shared';
+import { copy } from '../src/copy';
+import { adminAccount, expect, freshEmail, freshTag, meOf, signIn, signUp, test } from './helpers';
+
+/**
+ * 운영 공지 (#138, ADR-0077; owner decisions in ADR-0069 decision 2 #45-8 and decision 4 #138): an
+ * admin writes a notice on the admin screen with the posts' editor (a required title, formatting,
+ * a link and an image), pins it, and every visitor sees it in the fixed area above the community
+ * list — '공지', its title, '운영팀', never the operator — and opens its page, read-only. An edit
+ * shows '수정됨'. At most NOTICE_PIN_LIMIT are pinned: the next pin is refused and nothing is
+ * unpinned to make room; an unpinned notice leaves the area, stays on the admin screen and at its
+ * address, and is pinned again. A member reaches neither the screen nor its API.
+ *
+ * The pinned set is the service's, one for every spec: both projects share one database, and the
+ * limit and the area's order are about every notice pinned there. So the pinning runs once, in the
+ * desktop project, in order — the area is opened at 375px in a context of its own — and it starts
+ * by unpinning whatever an earlier run left pinned. The audit rows, the history and the race are
+ * the API's tests (notices.controller.test.ts); this walks the screens.
+ */
+
+const NOTICES = '/api/v1/admin/notices';
+
+/** A 1×1 PNG, as posts.spec.ts uploads. */
+const PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+  'base64',
+);
+
+/** `{ data }` out of the success envelope, with the body in the message on a failure. */
+async function dataOf<T>(response: APIResponse): Promise<T> {
+  const body = await response.text();
+  if (!response.ok()) {
+    throw new Error(`${response.url()} -> ${String(response.status())} ${body}`);
+  }
+  return (JSON.parse(body) as { data: T }).data;
+}
+
+async function expectError(response: APIResponse, status: number, code: string): Promise<void> {
+  expect(response.status(), response.url()).toBe(status);
+  expect(((await response.json()) as { error: { code: string } }).error.code).toBe(code);
+}
+
+/** A server error as the API's envelope says it (discussion.spec.ts's): the client retries it. */
+const SERVER_ERROR = {
+  status: 500,
+  contentType: 'application/json',
+  body: JSON.stringify({ error: { code: 'INTERNAL', message: 'Internal error' } }),
+};
+
+/** The browser's reads of the fixed area (`GET /notices`), and no other notice read. */
+const isPinnedRead = (url: URL) => url.pathname === '/api/v1/notices';
+
+/** Every pinned notice unpinned through the admin API: the area starts empty, whatever ran before. */
+async function unpinAll(admin: APIRequestContext): Promise<void> {
+  const pinned = await dataOf<{ id: string }[]>(await admin.get(`${NOTICES}?state=pinned`));
+  for (const { id } of pinned) await dataOf(await admin.post(`${NOTICES}/${id}/unpin`));
+}
+
+/** A notice straight at the admin API, unpinned, for a step whose subject is not its writing. */
+async function noticeThroughApi(admin: APIRequestContext, title: string): Promise<string> {
+  const res = await admin.post(NOTICES, {
+    data: {
+      title,
+      body: {
+        type: 'doc',
+        content: [{ type: 'paragraph', content: [{ type: 'text', text: `${title} 본문` }] }],
+      },
+    },
+  });
+  expect(res.status(), await res.text()).toBe(201);
+  return ((await res.json()) as { data: { id: string } }).data.id;
+}
+
+/** Pastes `html` into the editor as a browser does from another page (posts.spec.ts's helper). */
+async function pasteHtml(editor: Locator, html: string): Promise<void> {
+  await editor.evaluate((element, pasted) => {
+    const data = new DataTransfer();
+    data.setData('text/html', pasted);
+    data.setData('text/plain', pasted.replace(/<[^>]*>/g, ''));
+    element.dispatchEvent(
+      new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }),
+    );
+  }, html);
+}
+
+/** The notice id of the admin edit screen or the notice page the browser is on. */
+function noticeIdOf(page: Page): string {
+  const match = /\/notices\/([0-9a-f-]{36})$/.exec(new URL(page.url()).pathname);
+  if (match?.[1] === undefined) throw new Error(`not a notice page: ${page.url()}`);
+  return match[1];
+}
+
+const adminRow = (page: Page, id: string) => page.getByTestId(`admin-notice-${id}`);
+const pinnedList = (page: Page) => page.getByTestId('admin-notices-pinned');
+const unpinnedList = (page: Page) => page.getByTestId('admin-notices-unpinned');
+
+test.describe('운영 공지 (#138)', () => {
+  test.describe('고정과 해제', () => {
+    test.describe.configure({ mode: 'serial' });
+    test.skip(
+      ({ isMobile }) => isMobile,
+      'the pinned set is shared: pinning runs once, on desktop',
+    );
+
+    test('관리자가 공지를 쓰고 고정하면 커뮤니티 목록 위에 보이고, 고치면 수정됨이 붙고, 넷째 고정은 거절되며, 해제한 공지는 빠졌다가 다시 고정된다', async ({
+      admin,
+      page,
+      browser,
+      request,
+    }) => {
+      const tag = freshTag();
+      const nickname = (await meOf(admin)).profile.nickname;
+      await unpinAll(admin);
+      const visitorContext = await browser.newContext();
+      const phoneContext = await browser.newContext({
+        viewport: { width: 375, height: 812 },
+        isMobile: true,
+      });
+      // The server's HTML alone: what a visitor gets before (or without) any script.
+      const noScriptContext = await browser.newContext({ javaScriptEnabled: false });
+      try {
+        const visitor = await visitorContext.newPage();
+
+        // --- the admin edit screen at no notice: an unknown id, and a segment that is not a uuid.
+        await signIn(page, adminAccount.email, adminAccount.password);
+        for (const address of [
+          '/admin/notices/00000000-0000-4000-8000-000000000000',
+          '/admin/notices/not-a-uuid',
+        ]) {
+          await page.goto(address);
+          await expect(page.getByTestId('admin-notice-not-found')).toHaveText(
+            copy.adminNoticeNotFound,
+          );
+          await expect(page.getByTestId('admin-notice-edit')).toHaveCount(0);
+        }
+
+        // --- the admin screen, from the admin menu: nothing pinned yet.
+        await page.goto('/admin/markets');
+        await page
+          .getByTestId('admin-nav')
+          .getByRole('link', { name: copy.adminNotices, exact: true })
+          .click();
+        await expect(page).toHaveURL('/admin/notices');
+        await expect(pinnedList(page).getByTestId('admin-notices-pinned-empty')).toHaveText(
+          copy.adminNoticesPinnedEmpty,
+        );
+        await expect(page.getByTestId('admin-notices-pinned-count')).toHaveText(
+          `0 / ${String(NOTICE_PIN_LIMIT)}`,
+        );
+
+        // --- 공지 쓰기: the posts' editor, with a required title (#138 «제목 필수»).
+        await page.getByTestId('admin-notice-write').click();
+        await expect(page).toHaveURL('/admin/notices/new');
+        const editor = page.getByTestId('post-editor-content');
+        await editor.click();
+        await page.getByTestId('post-editor-bold').click();
+        await page.keyboard.type('점검 시간');
+        await page.getByTestId('post-editor-bold').click();
+        await page.keyboard.type(` 안내 ${tag}`);
+        await page.keyboard.press('Enter');
+        await pasteHtml(editor, '<a href="https://example.com/notice">자세한 안내</a>');
+        await expect(editor.locator('a')).toHaveAttribute('href', 'https://example.com/notice');
+        await page
+          .getByTestId('post-editor-file')
+          .setInputFiles({ name: 'notice.png', mimeType: 'image/png', buffer: PNG });
+        await expect(editor.locator('img[data-media-id]')).toHaveCount(1);
+        // The upload done (it holds the send too), only the missing title holds it now.
+        await expect(page.getByTestId('post-editor-uploading')).toHaveCount(0);
+        // No title, no send: the field is required, labelled as a notice's — exactly, not the
+        // post's '제목 (선택)', whose text holds the notice's (and so does the editor's 제목 select).
+        const titleInput = page.getByTestId('post-title-input');
+        await expect(titleInput).toHaveJSProperty('required', true);
+        const titleLabel = page.getByTestId('post-form').locator('label').first();
+        await expect(titleLabel).toHaveText(copy.noticeWriteTitleLabel);
+        expect(await titleLabel.getAttribute('for')).toBe(await titleInput.getAttribute('id'));
+        await expect(page.getByTestId('post-form').getByText(copy.postWriteTitleLabel)).toHaveCount(
+          0,
+        );
+        await expect(page.getByTestId('post-submit')).toBeDisabled();
+        await titleInput.fill('   ');
+        await expect(page.getByTestId('post-submit')).toBeDisabled(); // a blank title is none
+        const title = `서버 점검 ${tag}`;
+        await titleInput.fill(title);
+        await expect(page.getByTestId('post-submit')).toBeEnabled();
+        await titleInput.fill('');
+        await expect(page.getByTestId('post-submit')).toBeDisabled();
+        await titleInput.fill(title);
+        await page.getByTestId('post-submit').click();
+        await expect(page.getByText(copy.adminNoticeCreated)).toBeVisible();
+        await expect(page).toHaveURL('/admin/notices');
+
+        // Written unpinned: in the unpinned list, its title the way to its screen, with 고정.
+        const titleLink = unpinnedList(page).getByRole('link', { name: title, exact: true });
+        await expect(titleLink).toHaveAttribute('href', /^\/admin\/notices\/[0-9a-f-]{36}$/);
+        const first = (await titleLink.getAttribute('href'))!.split('/').pop()!;
+        await expect(adminRow(page, first).getByTestId('admin-notice-pin')).toBeVisible();
+        await visitor.goto('/community');
+        await expect(visitor.getByTestId('community-notices')).toHaveCount(0);
+
+        // --- 고정: it moves to the pinned list, and the fixed area shows it to everyone.
+        await adminRow(page, first).getByTestId('admin-notice-pin').click();
+        await expect(page.getByText(copy.adminNoticePinnedToast)).toBeVisible();
+        await expect(pinnedList(page).getByTestId(`admin-notice-${first}`)).toBeVisible();
+        await expect(unpinnedList(page).getByTestId(`admin-notice-${first}`)).toHaveCount(0);
+        await expect(page.getByTestId('admin-notices-pinned-count')).toHaveText(
+          `1 / ${String(NOTICE_PIN_LIMIT)}`,
+        );
+
+        // The community list's HTML holds the area itself, drawn by the server — not only the
+        // notices in the page's data, which hold the title too: without a script, the row is there.
+        const noScript = await noScriptContext.newPage();
+        await noScript.goto('/community');
+        await expect(
+          noScript
+            .getByTestId('community-notices')
+            .getByTestId(`community-notice-${first}`)
+            .getByTestId('community-notice-title'),
+        ).toHaveText(title);
+        await visitor.goto('/community');
+        const area = visitor.getByTestId('community-notices');
+        await expect(area).toHaveAttribute('aria-label', copy.noticesLabel);
+        const row = area.getByTestId(`community-notice-${first}`);
+        await expect(row.getByTestId('community-notice-title')).toHaveText(title);
+        await expect(row).toContainText(copy.noticeBadge);
+        await expect(row.getByTestId('notice-author')).toHaveText(copy.noticeAuthor);
+        await expect(row.getByTestId('notice-edited')).toHaveCount(0);
+        await expect(area).not.toContainText(nickname);
+        await expect(area).not.toContainText(copy.postAuthorAdmin);
+        // Above the list and its controls, apart from the posts.
+        await expect(visitor.getByTestId('community-posts').getByText(title)).toHaveCount(0);
+        const areaBox = await area.boundingBox();
+        const searchBox = await visitor.getByTestId('community-search-input').boundingBox();
+        expect(areaBox!.y).toBeLessThan(searchBox!.y);
+        // On a filtered list too: the area is fixed, never one of the results.
+        await visitor.goto(`/community?q=${freshTag()}`);
+        await expect(visitor.getByTestId('community-empty')).toBeVisible();
+        await expect(visitor.getByTestId(`community-notice-${first}`)).toBeVisible();
+
+        // A refresh that fails keeps the rows, with no failure over them (ADR-0077 decision 8-10).
+        // The page's clock, so the seeded read can be made older than `staleTime` (30 s) without
+        // waiting, and a refocus reads the area again (discussion.spec.ts's way).
+        const watcher = await visitorContext.newPage();
+        await watcher.clock.install();
+        await watcher.goto('/community');
+        const watched = watcher.getByTestId('community-notices');
+        await expect(watched.getByTestId(`community-notice-${first}`)).toBeVisible();
+        let refused = 0;
+        await watcher.route(isPinnedRead, (route) => {
+          refused += 1;
+          return route.fulfill(SERVER_ERROR);
+        });
+        await watcher.clock.fastForward('00:31');
+        await watcher.evaluate(() => window.dispatchEvent(new Event('visibilitychange')));
+        // Marked once the refresh has failed through the client's retries: the rows stayed.
+        await expect(watched).toHaveAttribute('data-refresh-failed', 'true');
+        expect(refused).toBeGreaterThan(0);
+        await expect(watched.getByTestId(`community-notice-${first}`)).toBeVisible();
+        await expect(watcher.getByTestId('community-notices-error')).toHaveCount(0);
+        await watcher.close();
+
+        // At 375px the row fits the screen: one line of title, no sideways scroll.
+        const phone = await phoneContext.newPage();
+        await phone.goto('/community');
+        await expect(phone.getByTestId(`community-notice-${first}`)).toBeVisible();
+        expect(
+          await phone.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+        ).toBe(true);
+
+        // --- the notice page: read-only, '운영팀', the body as a post's.
+        await visitor.goto('/community');
+        await visitor.getByTestId(`community-notice-${first}`).getByRole('link').click();
+        await expect(visitor).toHaveURL(`/community/notices/${first}`);
+        await expect(visitor.getByTestId('notice-badge')).toHaveText(copy.noticeBadge);
+        await expect(visitor.getByRole('heading', { level: 2, name: title })).toBeVisible();
+        await expect(visitor.getByTestId('notice-author')).toHaveText(copy.noticeAuthor);
+        await expect(visitor.getByTestId('notice-edited')).toHaveCount(0);
+        const body = visitor.getByTestId('post-body');
+        await expect(body.locator('strong')).toHaveText('점검 시간');
+        await expect(body).toContainText(`안내 ${tag}`);
+        const link = body.getByRole('link', { name: '자세한 안내' });
+        await expect(link).toHaveAttribute('href', 'https://example.com/notice');
+        await expect(link).toHaveAttribute('rel', /noopener/);
+        const image = body.getByTestId('post-image');
+        await expect(image).toHaveAttribute('src', /^\/api\/v1\/media\/[0-9a-f-]{36}$/);
+        await expect
+          .poll(() =>
+            image.evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0),
+          )
+          .toBe(true);
+        // No comment, like or report (#45-8), and no operator anywhere on it.
+        await expect(visitor.getByTestId('comments-heading')).toHaveCount(0);
+        await expect(visitor.getByTestId('post-author-actions')).toHaveCount(0);
+        await expect(visitor.getByTestId('notice-screen')).not.toContainText(nickname);
+        await expect(visitor.locator('meta[name="robots"]')).toHaveAttribute('content', /noindex/);
+        expect(await (await request.get(`/community/notices/${first}`)).text()).not.toContain(
+          nickname,
+        );
+        await visitor.getByTestId('notice-back').click();
+        await expect(visitor).toHaveURL('/community');
+
+        // --- an edit, from the title on the admin screen: '수정됨' everywhere it is drawn.
+        await adminRow(page, first).getByTestId('admin-notice-title').click();
+        await expect(page).toHaveURL(`/admin/notices/${first}`);
+        await expect(page.getByTestId('admin-notice-state')).toHaveText(
+          copy.adminNoticeStatePinned,
+        );
+        await expect(titleInput).toHaveValue(title);
+        // The same content changes nothing, and says so.
+        await expect(page.getByTestId('post-editor-content')).toBeVisible();
+        await page.getByTestId('post-submit').click();
+        await expect(page.getByText(copy.adminNoticeUnchanged)).toBeVisible();
+        const edited = `${title} (변경)`;
+        await titleInput.fill(edited);
+        await page.getByTestId('post-submit').click();
+        await expect(page.getByText(copy.adminNoticeSaved)).toBeVisible();
+        await visitor.goto(`/community/notices/${first}`);
+        await expect(visitor.getByTestId('notice-title')).toHaveText(edited);
+        await expect(visitor.getByTestId('notice-edited')).toHaveText(copy.postEdited);
+        await expect(visitor.getByTestId('post-body').getByTestId('post-image')).toHaveCount(1);
+        await visitor.goto('/community');
+        await expect(
+          visitor.getByTestId(`community-notice-${first}`).getByTestId('notice-edited'),
+        ).toHaveText(copy.postEdited);
+
+        // --- the limit: two more pinned fill the area; the fourth is refused, nothing unpinned.
+        const second = await noticeThroughApi(admin, `둘째 공지 ${tag}`);
+        const third = await noticeThroughApi(admin, `셋째 공지 ${tag}`);
+        const fourth = await noticeThroughApi(admin, `넷째 공지 ${tag}`);
+        await dataOf(await admin.post(`${NOTICES}/${second}/pin`));
+        await dataOf(await admin.post(`${NOTICES}/${third}/pin`));
+        await page.goto('/admin/notices');
+        await expect(page.getByTestId('admin-notices-pinned-count')).toHaveText(
+          `${String(NOTICE_PIN_LIMIT)} / ${String(NOTICE_PIN_LIMIT)}`,
+        );
+        await adminRow(page, fourth).getByTestId('admin-notice-pin').click();
+        await expect(page.getByText(copy.errNoticePinLimit)).toBeVisible();
+        await expect(unpinnedList(page).getByTestId(`admin-notice-${fourth}`)).toBeVisible();
+        await expect(pinnedList(page).getByTestId('admin-notice-title')).toHaveCount(
+          NOTICE_PIN_LIMIT,
+        );
+        await expect(pinnedList(page).getByTestId(`admin-notice-${first}`)).toBeVisible();
+        await expectError(
+          await admin.post(`${NOTICES}/${fourth}/pin`),
+          409,
+          'NOTICE_PIN_LIMIT_REACHED',
+        );
+        // The area: the latest pinned first, the first still there.
+        await visitor.goto('/community');
+        await expect(
+          visitor.getByTestId('community-notices').getByTestId('community-notice-title'),
+        ).toHaveText([`셋째 공지 ${tag}`, `둘째 공지 ${tag}`, edited]);
+
+        // --- 고정 해제: out of the area, kept on the admin screen and at its address.
+        await pinnedList(page)
+          .getByTestId(`admin-notice-${first}`)
+          .getByTestId('admin-notice-unpin')
+          .click();
+        await expect(page.getByText(copy.adminNoticeUnpinnedToast)).toBeVisible();
+        await expect(unpinnedList(page).getByTestId(`admin-notice-${first}`)).toBeVisible();
+        await expect(page.getByTestId('admin-notices-pinned-count')).toHaveText(
+          `2 / ${String(NOTICE_PIN_LIMIT)}`,
+        );
+        await visitor.goto('/community');
+        await expect(
+          visitor.getByTestId('community-notices').getByTestId('community-notice-title'),
+        ).toHaveText([`셋째 공지 ${tag}`, `둘째 공지 ${tag}`]);
+        const kept = await visitor.goto(`/community/notices/${first}`);
+        expect(kept?.status()).toBe(200);
+        await expect(visitor.getByTestId('notice-title')).toHaveText(edited);
+
+        // A slot is free: the fourth pins now, on top; the first is pinned again from its screen.
+        await adminRow(page, fourth).getByTestId('admin-notice-pin').click();
+        await expect(pinnedList(page).getByTestId(`admin-notice-${fourth}`)).toBeVisible();
+        await page.goto(`/admin/notices/${first}`);
+        await expect(page.getByTestId('admin-notice-state')).toHaveText(
+          copy.adminNoticeStateUnpinned,
+        );
+        await page.getByTestId('admin-notice-pin').click();
+        await expect(page.getByText(copy.errNoticePinLimit)).toBeVisible();
+        await dataOf(await admin.post(`${NOTICES}/${second}/unpin`));
+        await page.getByTestId('admin-notice-pin').click();
+        await expect(page.getByTestId('admin-notice-state')).toHaveText(
+          copy.adminNoticeStatePinned,
+        );
+        expect(noticeIdOf(page)).toBe(first);
+        await visitor.goto('/community');
+        await expect(
+          visitor.getByTestId('community-notices').getByTestId('community-notice-title'),
+        ).toHaveText([edited, `넷째 공지 ${tag}`, `셋째 공지 ${tag}`]);
+      } finally {
+        await visitorContext.close();
+        await phoneContext.close();
+        await noScriptContext.close();
+        await unpinAll(admin);
+      }
+    });
+  });
+
+  test('관리자가 아닌 계정은 공지 화면과 API에 닿지 못하고, 고정하지 않은 공지도 주소로 누구나 읽는다', async ({
+    admin,
+    page,
+    request,
+  }) => {
+    const tag = freshTag();
+    const id = await noticeThroughApi(admin, `주소로 읽는 공지 ${tag}`);
+
+    // Signed out: the admin gate sends the visitor to sign in, and the API asks for a session.
+    await page.goto('/admin/notices');
+    await page.waitForURL(/\/login\?/);
+    expect(new URL(page.url()).searchParams.get('next')).toBe('/admin/notices');
+    await expectError(await request.post(NOTICES, { data: {} }), 401, 'UNAUTHENTICATED');
+
+    // A notice no one pinned opens at its address for anyone (ADR-0077), and an unknown one is 404.
+    const opened = await page.goto(`/community/notices/${id}`);
+    expect(opened?.status()).toBe(200);
+    await expect(page.getByTestId('notice-title')).toHaveText(`주소로 읽는 공지 ${tag}`);
+    await expect(page.getByTestId('notice-author')).toHaveText(copy.noticeAuthor);
+    const missing = await page.goto('/community/notices/00000000-0000-4000-8000-000000000000');
+    expect(missing?.status()).toBe(404);
+    expect((await page.goto('/community/notices/not-a-notice'))?.status()).toBe(404);
+
+    // A member: the admin layout sends it home, and the API refuses every notice write.
+    await signUp(page, freshEmail());
+    await page.goto('/admin/notices');
+    await expect(page).toHaveURL('/');
+    await expect(page.getByTestId('admin-notices')).toHaveCount(0);
+    await page.goto('/admin/notices/new');
+    await expect(page).toHaveURL('/');
+    await expectError(await page.request.get(`${NOTICES}?state=pinned`), 403, 'FORBIDDEN');
+    await expectError(
+      await page.request.post(NOTICES, {
+        data: { title: '회원의 공지', body: { type: 'doc', content: [] } },
+      }),
+      403,
+      'FORBIDDEN',
+    );
+    await expectError(
+      await page.request.put(`${NOTICES}/${id}`, {
+        data: { title: '회원이 고친 공지', body: { type: 'doc', content: [] } },
+      }),
+      403,
+      'FORBIDDEN',
+    );
+    await expectError(await page.request.post(`${NOTICES}/${id}/pin`), 403, 'FORBIDDEN');
+    await expectError(await page.request.post(`${NOTICES}/${id}/unpin`), 403, 'FORBIDDEN');
+    // Nothing changed: still unpinned and as written.
+    const after = await dataOf<{ title: string; pinnedAt: string | null }>(
+      await admin.get(`${NOTICES}/${id}`),
+    );
+    expect(after).toMatchObject({ title: `주소로 읽는 공지 ${tag}`, pinnedAt: null });
+  });
+});

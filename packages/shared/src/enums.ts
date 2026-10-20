@@ -266,6 +266,25 @@ export const ADMIN_ACTION_TYPES = [
    * the transaction that resets `profiles.role` and deletes the account's sessions.
    */
   'admin_revoke',
+  /**
+   * 운영 공지 (#138, ADR-0069 decision 4: the admin and the time of every write, pin and unpin,
+   * no reason): a notice was written — target `notice` / its id, no payload. Written in the
+   * transaction that inserts the `notices` row. A new notice is not pinned.
+   */
+  'notice_create',
+  /**
+   * A notice's title or body changed: target `notice` / its id, payload `{revisionId}` — the
+   * `notice_revisions` row that keeps the version it replaced (the operators' history, #138).
+   * Written only when something changed, in the transaction that writes both.
+   */
+  'notice_update',
+  /**
+   * A notice was pinned above the community list: target `notice` / its id, no payload. Written
+   * only when it was not pinned already, in the transaction that pins it.
+   */
+  'notice_pin',
+  /** A notice was unpinned: the same target, written only when it was pinned. */
+  'notice_unpin',
 ] as const;
 export type AdminActionType = (typeof ADMIN_ACTION_TYPES)[number];
 export const adminActionTypeSchema = z.enum(ADMIN_ACTION_TYPES);

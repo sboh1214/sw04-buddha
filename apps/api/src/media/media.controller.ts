@@ -66,11 +66,11 @@ export class MediaController {
   @ApiOperation({
     operationId: 'uploadImage',
     summary:
-      `An image for a post: JPEG, PNG, WebP or GIF by its content, at most ${String(IMAGE_MAX_BYTES)} ` +
+      `An image for a post (or an admin’s notice): JPEG, PNG, WebP or GIF by its content, at most ${String(IMAGE_MAX_BYTES)} ` +
       `bytes. Stored without its metadata, the long side at most ${String(IMAGE_MAX_DIMENSION)}px (a ` +
       `still WebP with alpha at most ${String(WEBP_ALPHA_MAX_OUTPUT_PIXELS)} pixels), a GIF ` +
       'still moving. Its id goes into the post’s image node; it is served once a post shows it, and ' +
-      `removed if no post takes it within ${String(ORPHAN_MEDIA_HOURS)} hours`,
+      `removed if nothing takes it within ${String(ORPHAN_MEDIA_HOURS)} hours`,
   })
   @ApiConsumes(...IMAGE_UPLOAD_CONTENT_TYPES)
   @ApiBody(BINARY)
@@ -129,8 +129,9 @@ export class MediaController {
   }
 
   /**
-   * The image itself, while a post shows it (MediaService.findShown): otherwise NOT_FOUND — an upload no
-   * post took, an image an edit removed, and every image of a deleted or hidden post (#45-5).
+   * The image itself, while a post or a notice (#138) shows it (MediaService.findShown): otherwise
+   * NOT_FOUND — an upload nothing took, an image an edit removed, and every image of a deleted or
+   * hidden post (#45-5).
    *
    * `Cache-Control: no-cache` with a strong ETag (the id: an image's bytes never change): a browser
    * keeps the image but asks every time, so hiding or deleting a post stops its images at once,
@@ -160,8 +161,8 @@ export class MediaController {
   @ApiOperation({
     operationId: 'getImage',
     summary:
-      'An image a post shows (NOT_FOUND for any other: not attached, removed by an edit, or of a ' +
-      'deleted or hidden post). Revalidated on every use (ETag)',
+      'An image a post or a notice shows (NOT_FOUND for any other: not attached, removed by an ' +
+      'edit, or of a deleted or hidden post). Revalidated on every use (ETag)',
   })
   @ApiProduces(...IMAGE_CONTENT_TYPES)
   @ApiResponse({

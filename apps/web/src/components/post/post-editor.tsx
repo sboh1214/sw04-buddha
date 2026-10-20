@@ -280,6 +280,8 @@ export interface PostEditorProps {
   describedBy?: string;
   /** Images the server refused (`refusedImageIds`), drawn with a border until they are replaced. */
   refusedImageIds?: readonly string[];
+  /** The empty editor's hint: a post's by default; a notice's (#138) says what a notice holds. */
+  placeholder?: string;
 }
 
 export function PostEditor({
@@ -296,6 +298,7 @@ export function PostEditor({
   invalid = false,
   describedBy,
   refusedImageIds = [],
+  placeholder = copy.postWriteBodyPlaceholder,
 }: PostEditorProps) {
   /**
    * Previews of this session's uploads, by media id; read by the image node's `srcOf` whenever
@@ -335,7 +338,7 @@ export function PostEditor({
       TableRow,
       TableHeader,
       TableCell,
-      Placeholder.configure({ placeholder: copy.postWriteBodyPlaceholder }),
+      Placeholder.configure({ placeholder }),
     ],
     content: initialDocument ?? '',
     editable: !disabled,

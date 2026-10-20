@@ -111,9 +111,10 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | `COMMENT_NOT_ALLOWED` | 409 | 그 자리에는 새 댓글을 받지 않는다(#48). `details.reason` 이 까닭을 말한다 — `post_hidden`(운영 정책에 따라 숨긴 글이다), `post_deleted`(작성자가 지운 글이다. 댓글이 달려 자리표시로 남은 글), `parent_hidden`(답하려는 댓글이나 대댓글이 숨긴 것이다), `parent_deleted`(답하려는 댓글이 지워져 자리표시로 남은 것이다). 화면에서 빠진 글이나 댓글(아래가 없는 지운 것)은 `NOT_FOUND` 다. |
 | `COMMENT_NOT_EDITABLE` | 409 | 그 댓글은 지금 작성자가 고칠 수 없다(#48). `details.reason` 이 까닭을 말한다 — `hidden`(운영 정책에 따라 숨긴 댓글이다. 숨긴 댓글은 지울 수는 있다). |
 | `LIKE_NOT_ALLOWED` | 409 | 그 글이나 댓글은 지금 좋아요를 받지 않는다(#49). 좋아요 취소도 같다. `details.reason` 이 까닭을 말한다 — `deleted`(작성자가 지워 자리표시로 남은 글이나 댓글이다), `hidden`(운영 정책에 따라 숨긴 글이나 댓글이다). 화면에서 빠진 글이나 댓글(아래가 없는 지운 것)은 `NOT_FOUND` 다. |
+| `NOTICE_PIN_LIMIT_REACHED` | 409 | 이미 공지 3개가 고정되어 있어 더 고정할 수 없다(#138). `details.limit` 이 동시에 고정할 수 있는 수다. 자동으로 풀리는 공지는 없으니 하나를 풀고(`POST /api/v1/admin/notices/{noticeId}/unpin`) 다시 고정한다. |
 | `INTERNAL` | 500 | 그 밖의 서버 오류. 본문에 내부 사정을 담지 않는다. |
 
-## 오퍼레이션 (79개)
+## 오퍼레이션 (87개)
 
 태그별로 묶었고, 태그 안의 순서는 OpenAPI 문서의 경로 순서 그대로다.
 
@@ -184,6 +185,12 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | GET | `/api/v1/admin/admins/changes` | Admin grants and revokes, newest first: account, admin, reason and time (of one account with `userId`) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `ONBOARDING_REQUIRED`, `RATE_LIMITED` |
 | POST | `/api/v1/admin/admins/{userId}/revoke` | Take the admin role from an account (one's own included) with a reason (recorded) and sign it out everywhere; refused when fewer than two admins would remain | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `ROLE_CHANGE_NOT_ALLOWED`, `RATE_LIMITED` |
 | GET | `/api/v1/admin/sms/status` | Counts of the verification texts: sent (against the daily service limit), unanswered and refused, in the last 24 hours and per Korean day for seven days | 🔒 | `UNAUTHENTICATED`, `FORBIDDEN`, `ONBOARDING_REQUIRED`, `RATE_LIMITED` |
+| GET | `/api/v1/admin/notices` | The notices of one state: pinned (the fixed area, the latest pinned first) or unpinned (every other notice, the newest first — each may be pinned again) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `ONBOARDING_REQUIRED`, `RATE_LIMITED` |
+| POST | `/api/v1/admin/notices` | Write a notice, not pinned: a required title and a formatted body as a post’s (at most 5000 characters of text and 10 images, each an upload of the admin’s own that no post or notice has taken) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `ONBOARDING_REQUIRED`, `RATE_LIMITED` |
+| GET | `/api/v1/admin/notices/{noticeId}` | One notice, as the editor loads it | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `RATE_LIMITED` |
+| PUT | `/api/v1/admin/notices/{noticeId}` | Replace a notice’s title and body: it shows as edited and the earlier version is kept for operators. The same content changes nothing (`changed: false`). A pinned notice stays pinned. The later of two saves wins; no version is checked | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `RATE_LIMITED` |
+| POST | `/api/v1/admin/notices/{noticeId}/pin` | Pin a notice above the community list, on top; refused while 3 are pinned (NOTICE_PIN_LIMIT_REACHED — none is unpinned to make room). A pinned one changes nothing | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `NOTICE_PIN_LIMIT_REACHED`, `RATE_LIMITED` |
+| POST | `/api/v1/admin/notices/{noticeId}/unpin` | Unpin a notice: out of the fixed area, kept on the admin screen and at its address, and may be pinned again. One not pinned changes nothing | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `RATE_LIMITED` |
 
 ### `markets` — 시장·시세
 
@@ -235,8 +242,8 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 
 | 메서드 | 경로 | 설명 | 인증 | 오류 |
 | --- | --- | --- | --- | --- |
-| POST | `/api/v1/media/images` | An image for a post: JPEG, PNG, WebP or GIF by its content, at most 5242880 bytes. Stored without its metadata, the long side at most 2048px (a still WebP with alpha at most 3400000 pixels), a GIF still moving. Its id goes into the post’s image node; it is served once a post shows it, and removed if no post takes it within 24 hours | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `ONBOARDING_REQUIRED`, `IMAGE_NOT_ALLOWED`, `RATE_LIMITED` |
-| GET | `/api/v1/media/{mediaId}` | An image a post shows (NOT_FOUND for any other: not attached, removed by an edit, or of a deleted or hidden post). Revalidated on every use (ETag) | — | `VALIDATION_ERROR`, `NOT_FOUND`, `RATE_LIMITED` |
+| POST | `/api/v1/media/images` | An image for a post (or an admin’s notice): JPEG, PNG, WebP or GIF by its content, at most 5242880 bytes. Stored without its metadata, the long side at most 2048px (a still WebP with alpha at most 3400000 pixels), a GIF still moving. Its id goes into the post’s image node; it is served once a post shows it, and removed if nothing takes it within 24 hours | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `ONBOARDING_REQUIRED`, `IMAGE_NOT_ALLOWED`, `RATE_LIMITED` |
+| GET | `/api/v1/media/{mediaId}` | An image a post or a notice shows (NOT_FOUND for any other: not attached, removed by an edit, or of a deleted or hidden post). Revalidated on every use (ETag) | — | `VALIDATION_ERROR`, `NOT_FOUND`, `RATE_LIMITED` |
 
 ### `comments`
 
@@ -256,12 +263,19 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | PUT | `/api/v1/comments/{commentId}/like` | Like a 댓글 or a 대댓글 (liked: true) or take the like back (false), as a post’s like. A deleted 댓글’s placeholder and a hidden comment take none (LIKE_NOT_ALLOWED). Answers the state and the comment’s like count | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `LIKE_NOT_ALLOWED`, `RATE_LIMITED` |
 | GET | `/api/v1/me/likes/posts/{postId}` | Whether the account likes a post and which of the comments under it it likes (by its account, or by its verified number for a like a withdrawn account left); no count and nobody else’s | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `RATE_LIMITED` |
 
-## 스키마 (120개)
+### `notices`
+
+| 메서드 | 경로 | 설명 | 인증 | 오류 |
+| --- | --- | --- | --- | --- |
+| GET | `/api/v1/notices` | The pinned notices (at most 3), the latest pinned first: the fixed area above the community list | — | `RATE_LIMITED` |
+| GET | `/api/v1/notices/{noticeId}` | A notice page, pinned or not: its title, body and dates | — | `VALIDATION_ERROR`, `NOT_FOUND`, `RATE_LIMITED` |
+
+## 스키마 (127개)
 
 요청·응답 본문의 실제 모양은 `apps/api/openapi.json` 의 `components.schemas` 에 있다. 이름만
 적어 두니 거기서 찾아 읽는다. 이름은 zod 스키마의 `.meta({ id })` 에서 온다.
 
-`AdminAccount`, `AdminAccountActor`, `AdminBalanceAdjustResult`, `AdminGrantBody`, `AdminMarket`, `AdminPayment`, `AdminRelatedMarket`, `AdminRevokeBody`, `AdminRoleChange`, `AdminRoleChangeType`, `AdminSettlementStep`, `AdminSmsStatus`, `AdminUser`, `AdminUserQuery`, `AuditFailure`, `Balance`, `BalanceAdjustBody`, `Category`, `ChargeBody`, `ChargePackage`, `ChargeResult`, `CoinAmount`, `CommentDeletion`, `CommentThread`, `ConfirmPhoneVerificationBody`, `ConsentItem`, `ConsentRecord`, `CountedPageMeta`, `Coupon`, `CouponCode`, `CreateChargePackageBody`, `CreateCommentBody`, `CreateCouponBody`, `CreateMarketBody`, `CreatePostBody`, `CursorQuery`, `DeleteCommentBody`, `DeletePostBody`, `DeletedComment`, `DeletedPost`, `ErrorCode`, `ErrorEnvelope`, `Fill`, `HiddenComment`, `HiddenPost`, `LedgerEntry`, `LikeState`, `LinkRelatedMarketBody`, `LinkedAccount`, `Market`, `MarketEvent`, `MarketSummary`, `Me`, `MyPostLikes`, `NextPath`, `Nickname`, `OkResult`, `Onboarding`, `OnboardingStep`, `Order`, `PageMeta`, `Password`, `Payment`, `PaymentProviderInfo`, `PhoneVerification`, `PhoneVerificationCodeSent`, `Position`, `Post`, `PostAuthor`, `PostBlock`, `PostComment`, `PostDeletion`, `PostDocument`, `PostInline`, `PostListItem`, `PostMark`, `PostMarket`, `PostSummary`, `PostTableRow`, `PriceSeries`, `PriceTick`, `PublishedComment`, `PublishedPost`, `RecentSearch`, `RecordConsentsBody`, `RecordSearchBody`, `RedeemCouponBody`, `RedeemCouponResult`, `RefundPaymentBody`, `RegisterBody`, `RegisterResult`, `ReleaseSetting`, `ReleaseSettingActor`, `ReleaseSettingChange`, `ReleaseSettingChangeBody`, `ReleaseSettingState`, `ReleaseSettingStatus`, `RequestPhoneVerificationCodeBody`, `ResolveMarketBody`, `SearchHistoryWriteBody`, `SetInterestCategoriesBody`, `SetOnboardingNicknameBody`, `SetPasswordBody`, `SettlementStep`, `SettlementStepStatus`, `SmsSendDay`, `StartGrant`, `UpdateChargePackageBody`, `UpdateCommentBody`, `UpdateCouponBody`, `UpdateLikeBody`, `UpdateMarketBody`, `UpdateMeBody`, `UpdatePostBody`, `UpdateRealNameBody`, `UpdateTimeZoneBody`, `UpdateWatchBody`, `UploadedImage`, `UserRole`, `WatchState`
+`AdminAccount`, `AdminAccountActor`, `AdminBalanceAdjustResult`, `AdminGrantBody`, `AdminMarket`, `AdminNotice`, `AdminNoticeSummary`, `AdminNoticeUpdateResult`, `AdminPayment`, `AdminRelatedMarket`, `AdminRevokeBody`, `AdminRoleChange`, `AdminRoleChangeType`, `AdminSettlementStep`, `AdminSmsStatus`, `AdminUser`, `AdminUserQuery`, `AuditFailure`, `Balance`, `BalanceAdjustBody`, `Category`, `ChargeBody`, `ChargePackage`, `ChargeResult`, `CoinAmount`, `CommentDeletion`, `CommentThread`, `ConfirmPhoneVerificationBody`, `ConsentItem`, `ConsentRecord`, `CountedPageMeta`, `Coupon`, `CouponCode`, `CreateChargePackageBody`, `CreateCommentBody`, `CreateCouponBody`, `CreateMarketBody`, `CreateNoticeBody`, `CreatePostBody`, `CursorQuery`, `DeleteCommentBody`, `DeletePostBody`, `DeletedComment`, `DeletedPost`, `ErrorCode`, `ErrorEnvelope`, `Fill`, `HiddenComment`, `HiddenPost`, `LedgerEntry`, `LikeState`, `LinkRelatedMarketBody`, `LinkedAccount`, `Market`, `MarketEvent`, `MarketSummary`, `Me`, `MyPostLikes`, `NextPath`, `Nickname`, `Notice`, `NoticeSummary`, `OkResult`, `Onboarding`, `OnboardingStep`, `Order`, `PageMeta`, `Password`, `Payment`, `PaymentProviderInfo`, `PhoneVerification`, `PhoneVerificationCodeSent`, `Position`, `Post`, `PostAuthor`, `PostBlock`, `PostComment`, `PostDeletion`, `PostDocument`, `PostInline`, `PostListItem`, `PostMark`, `PostMarket`, `PostSummary`, `PostTableRow`, `PriceSeries`, `PriceTick`, `PublishedComment`, `PublishedPost`, `RecentSearch`, `RecordConsentsBody`, `RecordSearchBody`, `RedeemCouponBody`, `RedeemCouponResult`, `RefundPaymentBody`, `RegisterBody`, `RegisterResult`, `ReleaseSetting`, `ReleaseSettingActor`, `ReleaseSettingChange`, `ReleaseSettingChangeBody`, `ReleaseSettingState`, `ReleaseSettingStatus`, `RequestPhoneVerificationCodeBody`, `ResolveMarketBody`, `SearchHistoryWriteBody`, `SetInterestCategoriesBody`, `SetOnboardingNicknameBody`, `SetPasswordBody`, `SettlementStep`, `SettlementStepStatus`, `SmsSendDay`, `StartGrant`, `UpdateChargePackageBody`, `UpdateCommentBody`, `UpdateCouponBody`, `UpdateLikeBody`, `UpdateMarketBody`, `UpdateMeBody`, `UpdateNoticeBody`, `UpdatePostBody`, `UpdateRealNameBody`, `UpdateTimeZoneBody`, `UpdateWatchBody`, `UploadedImage`, `UserRole`, `WatchState`
 
 ## 헬스체크 (문서 밖)
 

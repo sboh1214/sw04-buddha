@@ -20,6 +20,7 @@ import Form from 'next/form';
 import NextLink from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
+import { PinnedNotices } from '@/components/notice/pinned-notices';
 import { MarketPicker } from '@/components/post/market-picker';
 import { PostCard } from '@/components/post/post-card';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -49,7 +50,8 @@ const SKELETON_ROWS = [0, 1, 2, 3];
  * The community list (#46, ADR-0073): the `h2` with 글쓰기, the search box (title and text, within
  * the market and category picked), the market filter (a chip naming the market, or a picker that
  * finds one by its title) and the category select (either level, as the search screen's), and the
- * cards, newest first — the only order (#45-7) — one page per 더 보기.
+ * cards, newest first — the only order (#45-7) — one page per 더 보기. Between the `h2` and the
+ * search box, the operators' pinned notices (#138, ADR-0077).
  *
  * Every control writes to the URL and reads its value back out of the `filters` prop the server
  * normalised (the home's rule): the query string is the one source of truth, so a filtered list is
@@ -89,6 +91,10 @@ export function CommunityScreen({
           </NextLink>
         </Button>
       </HStack>
+
+      {/* The operators' pinned notices (#138, ADR-0077): above the list and its controls, the same
+          on every filter and search — the area is fixed, never one of the results. */}
+      <PinnedNotices />
 
       <SearchBox filters={filters} />
 

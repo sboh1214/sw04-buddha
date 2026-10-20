@@ -73,13 +73,15 @@ export function keepHeldPostDraft(last: HeldPostDraftAt, me: Me | undefined): bo
  * left is the gate taking the account to it (`keepHeldPostDraft`). That is also how a write
  * refused with ONBOARDING_REQUIRED ends (use-posts.ts reads `['me']` again, and the gate follows).
  * `['me']` is read from the cache rather than through `useMe`: the form never renders again with
- * the answer that unmounts it.
+ * the answer that unmounts it. A null `draft` keeps nothing: a form with no draft key (a notice's,
+ * #138 — the admin screens have no onboarding move).
  */
-export function useKeepPostDraftForOnboarding(draft: HeldPostDraft): void {
+export function useKeepPostDraftForOnboarding(draft: HeldPostDraft | null): void {
   const queryClient = useQueryClient();
   const [form] = useState(() => Symbol('post-draft'));
   useEffect(() => {
-    held.set(form, { ...draft, moment: postDraftMoment() });
+    if (draft === null) held.delete(form);
+    else held.set(form, { ...draft, moment: postDraftMoment() });
   });
   useEffect(
     () => () => {

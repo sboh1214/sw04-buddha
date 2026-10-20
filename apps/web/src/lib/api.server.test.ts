@@ -3,6 +3,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type {
   fetchMarketSearchPageServer as FetchMarketSearchPage,
   fetchMarketsPageServer as FetchMarketsPage,
+  fetchNoticeServer as FetchNotice,
+  fetchPinnedNoticesServer as FetchPinnedNotices,
   fetchPostsPageServer as FetchPostsPage,
   fetchRelatedMarketsPageServer as FetchRelatedMarketsPage,
   lookUpWriteMarketServer as LookUpWriteMarket,
@@ -23,8 +25,20 @@ import { type MarketFilters, type MarketSearch } from './market-keys';
  */
 
 const requests: URL[] = [];
+
+/** A notice id the fake API answers NOT_FOUND for, as it does for a notice that never was. */
+const MISSING_NOTICE = '0b3e6f1a-2c4d-4e5f-8a9b-1c2d3e4f5a6b';
+
 const fakeFetch = vi.fn((input: Request) => {
   requests.push(new URL(input.url));
+  if (new URL(input.url).pathname === `/api/v1/notices/${MISSING_NOTICE}`) {
+    return Promise.resolve(
+      new Response(JSON.stringify({ error: { code: 'NOT_FOUND', message: 'Notice not found' } }), {
+        status: 404,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+  }
   return Promise.resolve(
     new Response(JSON.stringify({ data: [], meta: { nextCursor: null } }), {
       status: 200,
@@ -39,6 +53,8 @@ let fetchMarketSearchPageServer: typeof FetchMarketSearchPage;
 let fetchRelatedMarketsPageServer: typeof FetchRelatedMarketsPage;
 let fetchPostsPageServer: typeof FetchPostsPage;
 let lookUpWriteMarketServer: typeof LookUpWriteMarket;
+let fetchPinnedNoticesServer: typeof FetchPinnedNotices;
+let fetchNoticeServer: typeof FetchNotice;
 
 beforeAll(async () => {
   vi.stubGlobal('fetch', fakeFetch);
@@ -48,6 +64,8 @@ beforeAll(async () => {
     fetchRelatedMarketsPageServer,
     fetchPostsPageServer,
     lookUpWriteMarketServer,
+    fetchPinnedNoticesServer,
+    fetchNoticeServer,
   } = await import('./api.server'));
 });
 afterAll(() => {
@@ -184,5 +202,20 @@ describe('the write page’s read of its market (lookUpWriteMarketServer)', () =
       kind: 'none',
     });
     expect(fakeFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('the notice reads (#138)', () => {
+  it('asks for the pinned notices without a query: the API decides the order and the limit', async () => {
+    requests.length = 0;
+    await expect(fetchPinnedNoticesServer()).resolves.toEqual([]);
+    expect(requests.map((url) => url.pathname)).toEqual(['/api/v1/notices']);
+    expect(requests.map(queryOf)).toEqual([{}]);
+  });
+
+  it('asks for a notice by its id, and reads a notice that is not there as null (a 404 page)', async () => {
+    requests.length = 0;
+    await expect(fetchNoticeServer(MISSING_NOTICE)).resolves.toBeNull();
+    expect(requests.map((url) => url.pathname)).toEqual([`/api/v1/notices/${MISSING_NOTICE}`]);
   });
 });

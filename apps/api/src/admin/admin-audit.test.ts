@@ -6,8 +6,9 @@
  * and `coupon.controller.test` for the catalogue, `admin-markets.controller.test` and
  * `admin-markets-resolve.controller.test` for the market transitions,
  * `related-markets.controller.test` for the links between markets,
- * `release-settings.controller.test` for the release settings and
- * `admin-accounts.controller.test` for the admin grants and revokes. What none of them can
+ * `release-settings.controller.test` for the release settings,
+ * `admin-accounts.controller.test` for the admin grants and revokes and
+ * `notices.controller.test` for the notices' writes, pins and unpins. What none of them can
  * prove is COMPLETENESS: they assert about routes that exist, so an admin write added tomorrow
  * with no audit row would break nothing.
  *
@@ -50,6 +51,10 @@ const AUDITED: Readonly<Record<string, AdminActionType>> = {
   'PATCH /admin/release-settings/:key': 'release_setting_change',
   'POST /admin/admins': 'admin_grant',
   'POST /admin/admins/:userId/revoke': 'admin_revoke',
+  'POST /admin/notices': 'notice_create',
+  'PUT /admin/notices/:noticeId': 'notice_update',
+  'POST /admin/notices/:noticeId/pin': 'notice_pin',
+  'POST /admin/notices/:noticeId/unpin': 'notice_unpin',
 };
 
 const adminRoutes = discoverRoutes().filter((route) => isAdminPath(route.path));

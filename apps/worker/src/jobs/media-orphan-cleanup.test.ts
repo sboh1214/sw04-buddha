@@ -1,17 +1,18 @@
 /**
  * `media.orphan_cleanup` (#46, ADR-0073) on the docker `test` database: which uploads it removes
  * — those no post took within ORPHAN_MEDIA_HOURS, row and object — and which it leaves: a younger
- * one, one a post took, and one a post is taking at that moment (locked, skipped). An object the
- * store refuses to remove keeps its key queued (`media_deletions`) and a later run removes it once
- * the store lets it go — the key is never lost before then (Codex review of #219, round 3) — and
- * the hourly runs try it again 1, 2, 4 … hours after the run it was refused on, however late in
- * that run the refusal came. Skips when TEST_* are unset.
+ * one, one a post or a notice (#138) took, and one a post is taking at that moment (locked,
+ * skipped). An object the store refuses to remove keeps its key queued (`media_deletions`) and a
+ * later run removes it once the store lets it go — the key is never lost before then (Codex review
+ * of #219, round 3) — and the hourly runs try it again 1, 2, 4 … hours after the run it was
+ * refused on, however late in that run the refusal came. Skips when TEST_* are unset.
  */
 import { schema, type Db } from '@buddha/db';
 import {
   connectTestDb,
   createMarket,
   createMedia,
+  createNotice,
   createPost,
   createUser,
   hasTestDb,
@@ -113,6 +114,15 @@ describe.skipIf(!hasTestDb())('media.orphan_cleanup (integration)', () => {
     expect(await queue()).toEqual([]);
     // A run with nothing due removes nothing.
     expect(await removeOrphanMedia(t.db, storage)).toEqual(clean(0, 0));
+  });
+
+  it('leaves an upload a notice took, as one a post took (#138)', async () => {
+    const taken = await upload(ORPHAN_MEDIA_HOURS + 5);
+    await createNotice(t.db, { imageIds: [taken.id] });
+    expect(await removeOrphanMedia(t.db, storage)).toEqual(clean(0, 0));
+    expect(await queue()).toEqual([]);
+    expect(await rows()).toEqual([taken.id]);
+    expect(storage.objects.has(taken.storageKey)).toBe(true);
   });
 
   it('works through a backlog a batch at a time, oldest first', async () => {

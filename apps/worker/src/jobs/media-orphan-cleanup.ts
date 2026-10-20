@@ -77,9 +77,9 @@ export interface OrphanMediaOutcome {
 }
 
 /**
- * `media.orphan_cleanup` (#46, ADR-0073): removes the uploads no post took within
- * ORPHAN_MEDIA_HOURS — an image picked in the editor for a post that was never written — row and
- * object. Hourly (JOB_SCHEDULES).
+ * `media.orphan_cleanup` (#46, ADR-0073): removes the uploads no post — nor notice, #138 — took
+ * within ORPHAN_MEDIA_HOURS — an image picked in the editor for a post that was never written —
+ * row and object. Hourly (JOB_SCHEDULES).
  *
  * 1. The rows go first, in one transaction that locks them `SKIP LOCKED`: a post being written
  *    locks the uploads it takes (`FOR UPDATE`, the API's PostsService), so the run passes over an
@@ -96,8 +96,10 @@ export interface OrphanMediaOutcome {
  *    removal of nothing as done), so a run that stopped between the store and the queue repeats
  *    harmlessly.
  *
- * An upload a post took (`attached_at`) is never this job's: a post's history keeps its images,
- * and their removal after the retention period is #184's.
+ * An upload a post or a notice took (`attached_at`) is never this job's: a post's history keeps
+ * its images, and their removal after the retention period is #184's; a notice's history keeps
+ * its images as well — whether they follow the posts' retention is the owner's to say (ADR-0077).
+ * NoticesService locks the uploads it takes the same way.
  */
 export async function removeOrphanMedia(
   db: Db,

@@ -109,6 +109,11 @@ export const ERROR_CODES = [
    * likeNotAllowedDetailsSchema.
    */
   'LIKE_NOT_ALLOWED',
+  /**
+   * A pin while as many notices as the limit allows are pinned already: one must be unpinned
+   * first, nothing unpins itself. Details carry the limit, noticePinLimitDetailsSchema.
+   */
+  'NOTICE_PIN_LIMIT_REACHED',
   'INTERNAL',
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];

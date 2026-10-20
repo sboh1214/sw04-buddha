@@ -33,8 +33,9 @@ export class MediaService {
 
   /**
    * Checks, converts and stores one upload of `ownerId` (`processImage`), then records it — not yet
-   * attached to anything: a post takes it by its id when it is written (PostsService), and an upload
-   * nothing takes is removed by the worker after ORPHAN_MEDIA_HOURS.
+   * attached to anything: a post takes it by its id when it is written (PostsService), or a notice
+   * an admin writes in the same editor (NoticesService, #138), and an upload nothing takes is
+   * removed by the worker after ORPHAN_MEDIA_HOURS.
    *
    * The object is written before its row, so a row never names an object that is not there; if
    * the row then fails, the object is removed again (`removeUnrecordedUpload` — a removal the
@@ -74,13 +75,20 @@ export class MediaService {
   }
 
   /**
-   * One image, while a post shows it: attached to a post that is neither deleted nor hidden, and
-   * in that post's current body (`posts.image_ids` — an image an edit took out stays for the
-   * operators' history and is no longer served). Null otherwise, whoever asks: an upload nothing
-   * took yet, a hidden or deleted post's image (#45-5) and an unknown id answer alike. The row
-   * only — the bytes are `bytesOf`'s, so a revalidation that ends in a 304 reads no object.
+   * One image, while a post or a notice shows it: attached to a post that is neither deleted nor
+   * hidden, and in that post's current body (`posts.image_ids` — an image an edit took out stays
+   * for the operators' history and is no longer served), or in a notice's current body (#138: a
+   * notice is read at its address pinned or not, and is never deleted or hidden). Null otherwise,
+   * whoever asks: an upload nothing took yet, a hidden or deleted post's image (#45-5) and an
+   * unknown id answer alike. The row only — the bytes are `bytesOf`'s, so a revalidation that
+   * ends in a 304 reads no object.
    */
   async findShown(mediaId: string): Promise<ShownImage | null> {
+    return (await this.findShownByPost(mediaId)) ?? (await this.findShownByNotice(mediaId));
+  }
+
+  /** `findShown` for a post's image: the read #46 wrote, the one most images take. */
+  private async findShownByPost(mediaId: string): Promise<ShownImage | null> {
     const { mediaObjects, postImages, posts } = schema;
     const [row] = await this.db
       .select({
@@ -99,6 +107,28 @@ export class MediaService {
           sql`${mediaObjects.id} = ANY(${posts.imageIds})`,
         ),
       );
+    return row
+      ? {
+          storageKey: row.storageKey,
+          contentType: row.contentType as ImageContentType,
+          byteSize: row.byteSize,
+        }
+      : null;
+  }
+
+  /** `findShown` for a notice's image (#138): in the current body of the notice that holds it. */
+  private async findShownByNotice(mediaId: string): Promise<ShownImage | null> {
+    const { mediaObjects, noticeImages, notices } = schema;
+    const [row] = await this.db
+      .select({
+        storageKey: mediaObjects.storageKey,
+        contentType: mediaObjects.contentType,
+        byteSize: mediaObjects.byteSize,
+      })
+      .from(mediaObjects)
+      .innerJoin(noticeImages, eq(noticeImages.mediaId, mediaObjects.id))
+      .innerJoin(notices, eq(notices.id, noticeImages.noticeId))
+      .where(and(eq(mediaObjects.id, mediaId), sql`${mediaObjects.id} = ANY(${notices.imageIds})`));
     return row
       ? {
           storageKey: row.storageKey,

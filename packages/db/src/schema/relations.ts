@@ -24,6 +24,7 @@ import { marketSettlementSteps } from './market-settlement-steps.js';
 import { markets } from './markets.js';
 import { mediaObjects } from './media-objects.js';
 import { nicknameHolds } from './nickname-holds.js';
+import { noticeImages, noticeRevisions, notices } from './notices.js';
 import { orders } from './orders.js';
 import { paymentEvents } from './payment-events.js';
 import { payments } from './payments.js';
@@ -207,6 +208,22 @@ export const postImagesRelations = relations(postImages, ({ one }) => ({
 export const mediaObjectsRelations = relations(mediaObjects, ({ one }) => ({
   owner: one(user, { fields: [mediaObjects.ownerId], references: [user.id] }),
   post: one(postImages, { fields: [mediaObjects.id], references: [postImages.mediaId] }),
+  // 운영 공지 (#138): an upload a notice took instead (never both, the API's rule).
+  notice: one(noticeImages, { fields: [mediaObjects.id], references: [noticeImages.mediaId] }),
+}));
+
+export const noticesRelations = relations(notices, ({ many }) => ({
+  revisions: many(noticeRevisions),
+  images: many(noticeImages),
+}));
+
+export const noticeRevisionsRelations = relations(noticeRevisions, ({ one }) => ({
+  notice: one(notices, { fields: [noticeRevisions.noticeId], references: [notices.id] }),
+}));
+
+export const noticeImagesRelations = relations(noticeImages, ({ one }) => ({
+  notice: one(notices, { fields: [noticeImages.noticeId], references: [notices.id] }),
+  media: one(mediaObjects, { fields: [noticeImages.mediaId], references: [mediaObjects.id] }),
 }));
 
 export const ordersRelations = relations(orders, ({ one, many }) => ({

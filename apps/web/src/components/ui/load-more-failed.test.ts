@@ -127,6 +127,7 @@ describe('the notice above a 더 보기 that failed', () => {
         'app/admin/coupons/admin-coupons.tsx',
         'app/admin/markets/[id]/admin-market-detail.tsx',
         'app/admin/markets/admin-markets.tsx',
+        'app/admin/notices/admin-notices.tsx',
         'app/admin/payments/admin-payments.tsx',
         'app/admin/settings/admin-release-settings.tsx',
         'app/admin/users/admin-users.tsx',
@@ -207,6 +208,7 @@ describe('the notice above a 더 보기 that failed', () => {
     expect(pagedHooks).toEqual(
       [
         'useAdminGrantCandidates',
+        'useAdminNotices',
         'useAdminPayments',
         'useAdminRelatedSearch',
         'useAdminRoleChanges',
