@@ -181,8 +181,18 @@ describe('an author', () => {
       initial: '근',
       imageUrl: null,
       isAdmin: false,
+      href: '/u/k7m2p9qx4z',
     });
     expect(authorView(member({ isAdmin: true }))).toMatchObject({ isAdmin: true });
+  });
+
+  it('leads to the public profile by the public id, never by the nickname (#41, #37-2)', () => {
+    expect(authorView(member({ nickname: '새이름' }))).toMatchObject({
+      name: '새이름',
+      href: '/u/k7m2p9qx4z',
+    });
+    // A withdrawn author has no profile and no link (#37-16).
+    expect(authorView({ kind: 'former_member' })).not.toHaveProperty('href');
   });
 
   it('is 탈퇴한 사용자 and nothing else once withdrawn (#140)', () => {

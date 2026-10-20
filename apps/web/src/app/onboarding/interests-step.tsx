@@ -1,7 +1,8 @@
 'use client';
 
-import { Alert, Box, Button, Checkbox, HStack, Skeleton, Stack, Text } from '@chakra-ui/react';
+import { Alert, Button, HStack, Skeleton, Stack, Text } from '@chakra-ui/react';
 import { type ReactNode, useMemo, useState } from 'react';
+import { InterestChecklist } from '@/components/profile/interest-checklist';
 import { copy } from '@/copy';
 import { useCategories } from '@/hooks/use-markets';
 import { useSetInterestCategories } from '@/hooks/use-onboarding';
@@ -20,7 +21,8 @@ import { interestIds, withInterest } from '@/lib/onboarding';
  * later is #41's MY setting, not this screen.
  *
  * The categories are grouped as the header groups them (`groupCategories`): each top-level category
- * with its sub-categories under it, each a checkbox of its own. A category an operator retired
+ * with its sub-categories under it, each a checkbox of its own (`InterestChecklist`, the list MY
+ * 설정's card draws too, #41). A category an operator retired
  * while the screen was open is refused by the server (VALIDATION_ERROR naming it); the list is
  * loaded again and the member picks again from what is there. If the list cannot be loaded at all,
  * 건너뛰기 still works — the step must never hold an account that only wants the market.
@@ -81,43 +83,7 @@ export function InterestsStep() {
       </Stack>
     );
   } else {
-    list = (
-      <Stack as="ul" gap="4" listStyleType="none" data-testid="interests-list">
-        {tree.map((node) => (
-          <Box as="li" key={node.category.id}>
-            <Checkbox.Root
-              checked={picked.has(node.category.id)}
-              onCheckedChange={(details) => toggle(node.category.id, details.checked === true)}
-              colorPalette="brand"
-              data-testid={`interest-${node.category.slug}`}
-            >
-              <Checkbox.HiddenInput />
-              <Checkbox.Control />
-              <Checkbox.Label fontWeight="semibold">{node.category.nameKo}</Checkbox.Label>
-            </Checkbox.Root>
-            {node.children.length > 0 && (
-              <HStack as="ul" listStyleType="none" gap="3" wrap="wrap" ps="7" pt="2">
-                {node.children.map((child) => (
-                  <Box as="li" key={child.id}>
-                    <Checkbox.Root
-                      checked={picked.has(child.id)}
-                      onCheckedChange={(details) => toggle(child.id, details.checked === true)}
-                      colorPalette="brand"
-                      size="sm"
-                      data-testid={`interest-${child.slug}`}
-                    >
-                      <Checkbox.HiddenInput />
-                      <Checkbox.Control />
-                      <Checkbox.Label>{child.nameKo}</Checkbox.Label>
-                    </Checkbox.Root>
-                  </Box>
-                ))}
-              </HStack>
-            )}
-          </Box>
-        ))}
-      </Stack>
-    );
+    list = <InterestChecklist tree={tree} picked={picked} onToggle={toggle} />;
   }
 
   return (

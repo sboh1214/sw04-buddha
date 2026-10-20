@@ -106,6 +106,15 @@ export type UpdateCommentBody = components['schemas']['UpdateCommentBody'];
 export type LikeState = components['schemas']['LikeState'];
 export type UpdateLikeBody = components['schemas']['UpdateLikeBody'];
 export type MyPostLikes = components['schemas']['MyPostLikes'];
+/**
+ * 공개 프로필 (#41, ADR-0078): what `GET /profiles/:publicId` answers of a member — the public face
+ * (`ProfileMember`, the `member` face of PostAuthor), the 소개, the interest categories with their
+ * parents, the month joined and the three counts — and the body of `PUT /me/bio`.
+ */
+export type PublicProfile = components['schemas']['PublicProfile'];
+export type ProfileMember = components['schemas']['ProfileMember'];
+export type ProfileInterestCategory = components['schemas']['ProfileInterestCategory'];
+export type UpdateBioBody = components['schemas']['UpdateBioBody'];
 /** `POST /media/images`'s answer: the stored image's id, which the editor's image node carries. */
 export type UploadedImage = components['schemas']['UploadedImage'];
 /**

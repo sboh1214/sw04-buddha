@@ -1582,6 +1582,35 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     });
   });
 
+  it('keeps a profile’s 소개 absent or with text, 160 characters at most (migration 0037, #41)', async () => {
+    const { user: u, profile } = await createUser(t.db);
+    // None until the member writes one: every new and existing profile.
+    expect(profile.bio).toBeNull();
+    const bioOf = async () =>
+      (await t.db.select({ bio: profiles.bio }).from(profiles).where(eq(profiles.userId, u.id)))[0]
+        ?.bio;
+    // 160 characters, counted as code points (an emoji is one), line breaks kept.
+    const longest = `${'😀'.repeat(80)}\n${'가'.repeat(79)}`;
+    await t.db.update(profiles).set({ bio: longest }).where(eq(profiles.userId, u.id));
+    expect(await bioOf()).toBe(longest);
+    await expect(
+      t.db
+        .update(profiles)
+        .set({ bio: `${longest}a` })
+        .where(eq(profiles.userId, u.id)),
+    ).rejects.toSatisfy((e) => sqlState(e) === '22001');
+    for (const blank of ['', '   ']) {
+      await expect(
+        t.db.update(profiles).set({ bio: blank }).where(eq(profiles.userId, u.id)),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'profiles_bio_check',
+      );
+    }
+    // buddha_app writes it like the nickname and clears it with null.
+    await t.db.update(profiles).set({ bio: null }).where(eq(profiles.userId, u.id));
+    expect(await bioOf()).toBeNull();
+  });
+
   describe('the direct AMM is gone (migration 0017, #125)', () => {
     it('has dropped its market columns, the slippage guards and market_mechanism', async () => {
       const { rows } = await t.db.execute<{ table: string; column: string }>(sql`

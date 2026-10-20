@@ -795,6 +795,23 @@ export type paths = {
         patch: operations["updateMe"];
         trace?: never;
     };
+    "/api/v1/me/bio": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set the public profile’s 소개: plain text, line breaks kept, at most 160 characters; null or blank clears it */
+        put: operations["updateMyBio"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me/consents": {
         parameters: {
             query?: never;
@@ -1303,6 +1320,23 @@ export type paths = {
         get?: never;
         /** Like a post (liked: true) or take the like back (false); repeating either changes nothing. One like per person: per account and per verified number. One’s own post too, in any public market status. A deleted post’s placeholder and a hidden post take none (LIKE_NOT_ALLOWED). Answers the state and the post’s like count — not liked, nothing written, when another live account’s like holds the verified number’s place */
         put: operations["updatePostLike"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/profiles/{publicId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A member’s public profile: the nickname, the image, the 운영자 mark, the bio, the interest categories, the month joined, and the counts of visible posts, comments and the likes they received; an unknown public id is NOT_FOUND */
+        get: operations["getProfile"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -1855,6 +1889,7 @@ export type components = {
             linkedAccounts: components["schemas"]["LinkedAccount"][];
             onboarding: components["schemas"]["Onboarding"];
             profile: {
+                bio: string | null;
                 /** Format: date-time */
                 createdAt: string;
                 interestCategoryIds: number[];
@@ -2165,6 +2200,32 @@ export type components = {
             /** Format: date-time */
             ts: string;
         };
+        ProfileInterestCategory: {
+            nameKo: string;
+            parent: {
+                nameKo: string;
+                slug: string;
+            } | null;
+            slug: string;
+        };
+        ProfileMember: {
+            imageUrl: string | null;
+            isAdmin: boolean;
+            /** @enum {string} */
+            kind: "member";
+            nickname: string;
+            /** @description An account’s public id: 10 lower-case letters and digits, never the account id */
+            publicId: string;
+        };
+        PublicProfile: {
+            bio: string | null;
+            commentCount: number;
+            interestCategories: components["schemas"]["ProfileInterestCategory"][];
+            joinedMonth: string;
+            member: components["schemas"]["ProfileMember"];
+            postCount: number;
+            receivedLikeCount: number;
+        };
         PublishedComment: {
             author: components["schemas"]["PostAuthor"];
             body: string;
@@ -2342,6 +2403,11 @@ export type components = {
             grantedAt: string | null;
             /** @enum {string} */
             status: "pending" | "granted" | "number_used";
+        };
+        UpdateBioBody: {
+            /** @description Plain text, line breaks kept, at most 160 characters after trimming; blank or null clears it */
+            bio: string | null;
+            expectedAccountId: string;
         };
         UpdateChargePackageBody: {
             amountCoin?: components["schemas"]["CoinAmount"];
@@ -6372,6 +6438,85 @@ export interface operations {
             };
         };
     };
+    updateMyBio: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateBioBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["Me"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     recordMyConsents: {
         parameters: {
             query?: never;
@@ -8555,6 +8700,47 @@ export interface operations {
             };
             /** @description ONBOARDING_REQUIRED | LIKE_NOT_ALLOWED */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                publicId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["PublicProfile"];
+                    };
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

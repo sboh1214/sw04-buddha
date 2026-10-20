@@ -19,6 +19,7 @@ import { eq } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
 import { isPgError, PG_UNIQUE_VIOLATION } from '../common/errors/pg-error.js';
 import { DB } from '../infra/db/db.provider.js';
+import { assertPublicItemEdit } from './public-items.js';
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 
@@ -67,7 +68,7 @@ export class NicknameService {
   /**
    * `PATCH /me`: the change of MY 설정. Refused (ONBOARDING_REQUIRED) before the onboarding's
    * nickname step: until then the account sets its nickname there, where the choice is not a
-   * change.
+   * change. Refused too under a writing or an account restriction (`assertPublicItemEdit`, #41).
    */
   async change(userId: string, nickname: string): Promise<void> {
     await this.db.transaction(async (tx) => {
@@ -83,6 +84,8 @@ export class NicknameService {
         });
       }
       if (nickname === profile.nickname) return;
+      // A public item (#37-9): no change of the nickname under a writing or an account restriction.
+      await assertPublicItemEdit(tx, userId, 'replace');
       const now = await clockTimestamp(tx);
       if (profile.nicknameChangedAt !== null) {
         const next = new Date(

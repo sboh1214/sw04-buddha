@@ -6,15 +6,16 @@
  * account's resting order, a position with its PnL, a payment, two watched markets (#89), a
  * recorded search (#15), its consent records with the address and browser they came with, a
  * nickname it gave up (#58), a post with an image on the market it trades (#46), comments under
- * it (#48) and A's likes of both, made with the keyed hash of A's number (#49), and a pinned
- * notice whose operator — its writer, editor and pinner, and its image's uploader — is A, with an
- * earlier version kept for operators, and a notice A wrote and never pinned, which is not public
- * (#138). Then:
+ * it (#48) and A's likes of both, made with the keyed hash of A's number (#49), a pinned notice
+ * whose operator — its writer, editor and pinner, and its image's uploader — is A, with an earlier
+ * version kept for operators, and a notice A wrote and never pinned, which is not public (#138),
+ * and a 소개 and an interest category on A's public profile (#41). Then:
  * - every registered public route (registry.ts) is called anonymously, as another account B and
  *   as A itself, and no answer may hold one of A's values or a field PRIVATE_DATA names, nor a
  *   field naming an excluded feature or keeping a probability — except that a route registered
- *   as showing a person (`showsPerson`: a post's or a comment's author, ADR-0069 decision 5) may hold A's
- *   nickname and public id, and must, so the allowance is not vacuous;
+ *   as showing a person (`showsPerson`: a post's or a comment's author, a profile's member,
+ *   ADR-0069 decision 5) may hold A's nickname and public id, and must, so the allowance is not
+ *   vacuous;
  * - every registered owner-only route is called as B, aimed at A wherever it takes an id or an
  *   account — in its path, its query (a page cursor made from A's row) or its body — and no
  *   answer may hold A's values; the same request as A shows them, so the check is not blind
@@ -133,6 +134,13 @@ interface Fixture {
    * notice routes are called with, so an answer naming the notice's operator would carry A.
    */
   notice: { id: string };
+  /**
+   * A's public id (#46): the profile route (#41) is called with it, so its answer is A's public
+   * profile, and the person routes may show it.
+   */
+  publicId: string;
+  /** A's 소개 (#41): public, shown on A's profile — not a sentinel. */
+  bio: string;
   /**
    * Closed, and on A's watchlist alone (#89). Closed so no public call here lists it — `GET
    * /markets` is called without a query and lists open markets, and the detail routes are called
@@ -275,8 +283,8 @@ function forbiddenFields(body: string): string[] {
 // ---- the cases ---------------------------------------------------------------------------
 
 /**
- * Path parameters of the public routes, by name: A's market, A's post and the image in it, and the
- * notice A operated.
+ * Path parameters of the public routes, by name: A's market, A's post and the image in it, the
+ * notice A operated, and A's public id (the profile).
  */
 const PUBLIC_PARAMS: Readonly<Record<string, (fixture: Fixture) => string>> = {
   id: (fixture) => fixture.market.id,
@@ -286,13 +294,14 @@ const PUBLIC_PARAMS: Readonly<Record<string, (fixture: Fixture) => string>> = {
   // A's 댓글, whose 대댓글 the reply page reads (#48, '답글 더 보기').
   commentId: (fixture) => fixture.comment.id,
   noticeId: (fixture) => fixture.notice.id,
+  publicId: (fixture) => fixture.publicId,
 };
 
 /**
  * What a route that shows a person (`showsPerson`, ADR-0069 decision 5) may hold of A, the author
- * of the post it shows: A's nickname — the current one (#37-3) — and A's public id. Nothing else of
- * A: the account id, the email and every other value stay sentinels there as everywhere. #141 adds
- * the image when A has one.
+ * of the post it shows or the member of the profile: A's nickname — the current one (#37-3) — and
+ * A's public id. Nothing else of A: the account id, the email and every other value stay sentinels
+ * there as everywhere. #141 adds the image when A has one.
  */
 const PERSON_LABELS: readonly string[] = ['nickname', 'public id'];
 
@@ -421,6 +430,12 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
   },
   'PUT /me/real-name': {
     body: (fixture) => ({ realName: '다른사람', expectedAccountId: fixture.a.id }),
+    status: 403,
+  },
+  // B's cookie naming A's account (#41): B has done the onboarding, so the guard lets it to the
+  // account check, which refuses before anything is written — A's 소개 stays (below).
+  'PUT /me/bio': {
+    body: (fixture) => ({ bio: 'B가 쓴 소개', expectedAccountId: fixture.a.id }),
     status: 403,
   },
   // B's cookie naming A's account: refused before anything is written, and A's zone stays (below).
@@ -867,6 +882,11 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       .where(eq(schema.categories.isActive, true))
       .limit(1);
     const categoryId = category?.id ?? (await createCategoryRow());
+    // A's public profile items (#41): a 소개 and an interest category, which A's profile shows to
+    // everyone — so its answer has them for the field checks, and B's refused writes aim at them.
+    const bio = `A의 소개 ${tag}\n둘째 줄`;
+    await t.db.update(schema.profiles).set({ bio }).where(eq(schema.profiles.userId, a.id));
+    await t.db.insert(schema.profileInterestCategories).values({ userId: a.id, categoryId });
 
     // The balance as the books would have it: the change is an ADMIN_ADJUST entry.
     const [before] = await t.db
@@ -1153,6 +1173,8 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       post: { id: post.id, mediaId: media.id },
       comment: { id: comment.id },
       notice: { id: notice.id },
+      publicId,
+      bio,
       watchedCategory: watchedCategory!.slug,
       searchId: search.id,
       phone,
@@ -1311,7 +1333,8 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     );
     // The allowance is not vacuous: every route that may show a person showed A, the author of
     // the post it was called with, to everyone — the list and the post page (#46), the post's
-    // comments and a comment's reply page (#48) and the 토론 of the market the post is on (#47).
+    // comments and a comment's reply page (#48) and the 토론 of the market the post is on (#47) —
+    // and A's profile showed A (#41).
     expect(persons.map(({ route }) => route)).toEqual(
       expect.arrayContaining([
         'GET /posts',
@@ -1319,6 +1342,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         'GET /posts/:postId/comments',
         'GET /comments/:commentId/replies',
         'GET /markets/:id/posts',
+        'GET /profiles/:publicId',
       ]),
     );
     expect(persons).toEqual(
@@ -1383,6 +1407,20 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     expect(threads.data[1]?.comment).toEqual({
       state: 'deleted',
       id: expect.any(String) as unknown,
+    });
+    // The profile route answered A's profile with its public items (#41) — the 소개 and the
+    // category — and counted A's visible posts (not the deleted one), comments (the 댓글, its
+    // 대댓글 and the 대댓글 under the deleted 댓글) and the likes they hold, so its field names were
+    // checked on a full answer.
+    expect(parse(bodies.get('GET /profiles/:publicId')!)).toMatchObject({
+      data: {
+        member: { kind: 'member', publicId: f.publicId, isAdmin: false },
+        bio: f.bio,
+        interestCategories: [expect.objectContaining({ slug: expect.any(String) as unknown })],
+        postCount: 1,
+        commentCount: 3,
+        receivedLikeCount: 2,
+      },
     });
     // The answers held A's market, A's fill and the market linked to A's — anonymously — so there
     // was something to leak, and the 관련 시장 answer's item had its field names checked rather
@@ -1488,6 +1526,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
             confirmed: schema.profiles.nicknameConfirmedAt,
             changed: schema.profiles.nicknameChangedAt,
             interests: schema.profiles.interestsAnsweredAt,
+            bio: schema.profiles.bio,
           })
           .from(schema.profiles)
           .orderBy(schema.profiles.userId),
@@ -1580,7 +1619,8 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     expect(profile?.timeZone).toBe(sentinel('time zone'));
     expect(passwordBefore).toHaveLength(1);
     expect(await password()).toEqual(passwordBefore);
-    // B's refused consent, nickname, change and interest categories changed nobody's (#58).
+    // B's refused consent, nickname, change and interest categories changed nobody's (#58), nor
+    // did its 소개 (#41).
     expect(await onboardingState()).toEqual(onboardingBefore);
 
     // B's refused unwatch left A's watches and their `watch` events, and wrote nothing for B. B

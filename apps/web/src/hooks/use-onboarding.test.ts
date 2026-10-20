@@ -38,6 +38,7 @@ const fresh: Me = {
     timeZone: null,
     nicknameChangeAvailableAt: null,
     interestCategoryIds: [],
+    bio: null,
   },
   balance: { availableCoin: '0', lockedCoin: '0' },
   linkedAccounts: [],

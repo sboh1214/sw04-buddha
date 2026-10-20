@@ -55,6 +55,11 @@ export const meSchema = z
        * empty while none is chosen. A public profile item once #41 shows the profile (#37-5).
        */
       interestCategoryIds: z.array(z.number().int().min(1)),
+      /**
+       * The 소개 of the public profile (#41), as MY 설정 edits it (`PUT /me/bio`): plain text with
+       * its line breaks, or null while there is none.
+       */
+      bio: z.string().nullable(),
     }),
     balance: z.object({ availableCoin: coinAmountSchema, lockedCoin: coinAmountSchema }),
     linkedAccounts: z.array(linkedAccountSchema),

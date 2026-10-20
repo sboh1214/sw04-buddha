@@ -1,9 +1,12 @@
 'use client';
 
-import { Alert, Button, Field, HStack, Input, Stack } from '@chakra-ui/react';
+import { Alert, Button, Link as ChakraLink, Field, HStack, Input, Stack } from '@chakra-ui/react';
 import { NICKNAME_MAX_LENGTH } from '@buddha/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useQueryClient } from '@tanstack/react-query';
+import type { Route } from 'next';
+import NextLink from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
@@ -11,9 +14,15 @@ import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { refreshOwnMe, useMe, useUpdateNickname } from '@/hooks/use-me';
 import { nicknameFailure, nicknameFormSchema, type NicknameFormValues } from '@/lib/nickname';
+import { profilePath } from '@/lib/profile';
 import { ProfileUnavailable } from './profile-unavailable';
 import { SettingsSection } from './section';
 
+/**
+ * 프로필: the nickname, and the way to the member's own public profile (#41, ADR-0078) — where the
+ * nickname, the 소개 and the interest categories edited on this screen are shown to everyone
+ * (`/u/<publicId>`, whose own page links back here, ADR-0069 decision 4 #41).
+ */
 export function NicknameForm() {
   const { data: me, isPending } = useMe();
   return (
@@ -21,7 +30,17 @@ export function NicknameForm() {
       {isPending || !me ? (
         <ProfileUnavailable />
       ) : (
-        <NicknameFields nickname={me.profile.nickname} accountId={me.id} />
+        <Stack gap="4">
+          <NicknameFields nickname={me.profile.nickname} accountId={me.id} />
+          <ChakraLink asChild alignSelf="flex-start" textStyle="bodySm" color="brand.fg">
+            <NextLink
+              href={profilePath(me.profile.publicId) as Route}
+              data-testid="settings-view-profile"
+            >
+              {copy.settingsViewProfile}
+            </NextLink>
+          </ChakraLink>
+        </Stack>
       )}
     </SettingsSection>
   );
@@ -43,6 +62,7 @@ export function NicknameForm() {
  */
 function NicknameFields({ nickname, accountId }: { nickname: string; accountId: string }) {
   const update = useUpdateNickname();
+  const router = useRouter();
   const queryClient = useQueryClient();
   const formatDate = useFormatDateTime();
   const [notice, setNotice] = useState<string | null>(null);
@@ -68,6 +88,8 @@ function NicknameFields({ nickname, accountId }: { nickname: string; accountId: 
       await update.mutateAsync({ nickname: form.nickname, expectedAccountId: accountId });
       reset({ nickname: form.nickname });
       toaster.create({ type: 'success', title: copy.nicknameSaved });
+      // Back to the profile (or to a post's byline) shows the new nickname (bio-section.tsx).
+      router.refresh();
     } catch (error) {
       const failure = nicknameFailure(error, formatDate);
       if (failure.kind === 'field') {

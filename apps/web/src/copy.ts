@@ -1121,6 +1121,44 @@ export const copy = {
   // 설명·툴팁이다(ADR-0076 7-15, 오너 결정 2026-10-20).
   likeMineUnavailable: '내가 누른 좋아요를 불러오지 못했습니다.',
 
+  // --- 공개 프로필 (#41, ADR-0078) ---
+  // /u/<공개 id>: 누구나 보고 검색 엔진에는 노출하지 않는다(#37-1). 지금 닉네임·이미지(없으면 닉네임 첫
+  // 글자)·관리자 계정의 '운영자'(postAuthorAdmin, 운영 권한만 뜻한다)·소개(평문, 링크 없음)·고른 관심
+  // 카테고리(고르지 않았으면 표시 없음)·가입 연·월('2026년 10월 가입')과 글·댓글 수, 받은 좋아요 합계
+  // (#37-4 — 수일 뿐이고 점수·순위로 부르지 않는다). 글·댓글 목록은 #51이 채운다(그때까지 '준비 중').
+  // 작성자 표기(postAuthor*)의 이름과 이미지가 이 화면의 링크다.
+  profileYearUnit: '년',
+  profileMonthUnit: '월',
+  profileJoined: '가입',
+  profileBio: '소개',
+  profileInterests: '관심 카테고리',
+  profileCountsLabel: '글·댓글 수와 받은 좋아요',
+  profilePostCount: '글',
+  profileCommentCount: '댓글',
+  profileReceivedLikes: '받은 좋아요',
+  profilePostsHeading: '글·댓글',
+  profileNotFound: '없는 프로필입니다.',
+  // 본인이 자기 프로필을 볼 때만(오너 결정, ADR-0069 결정 4 #41: «MY 설정에서 고치기» 링크).
+  profileEdit: 'MY 설정에서 고치기',
+  // MY 설정의 공개 항목(결정 4 #41). 닉네임 카드에서 자기 공개 프로필로 간다.
+  settingsViewProfile: '내 공개 프로필 보기',
+  // 소개(#37-3): 평문 160자(코드 포인트로 센다, 줄바꿈도 한 자), 줄바꿈은 그대로, 주소는 링크가 되지
+  // 않는다. 비우고 저장하면 소개가 없어진다.
+  settingsBio: '소개',
+  settingsBioHint:
+    '공개 프로필에 보입니다. 160자까지 쓸 수 있고, 줄바꿈은 그대로 보이며 주소는 링크가 되지 않습니다. 비우고 저장하면 소개가 없어집니다.',
+  // 프로필은 로그인하지 않은 방문자도 본다(#37-1): '다른 회원에게'가 아니라 공개 프로필이다.
+  bioPlaceholder: '공개 프로필에 보일 소개를 적어 주세요.',
+  bioLengthUnit: '자',
+  bioSaved: '소개를 저장했습니다.',
+  bioCleared: '소개를 비웠습니다.',
+  errBioTooLong: '소개는 160자 이하로 입력해 주세요.',
+  // 관심 카테고리(#37-5, #57-7): 온보딩에서 고른 것을 여기서 바꾼다. 상위·하위 모두, 몇 개든, 모두 빼도 된다.
+  settingsInterests: '관심 카테고리',
+  settingsInterestsHint:
+    '고른 카테고리는 공개 프로필에 보입니다. 상위·하위 카테고리를 몇 개든 고를 수 있고, 모두 빼도 됩니다.',
+  interestsSaved: '관심 카테고리를 저장했습니다.',
+
   // 관리자 시장 폼의 미리보기 (Q-M3-6): 실제 카드·규칙 컴포넌트를 그대로 그린다.
   adminMarketPreview: '미리보기',
   adminMarketPreviewCard: '카드 미리보기',
@@ -1357,8 +1395,10 @@ export const copy = {
   onboardingNoticeCounterparty: '거래할 때 운영 유동성(봇)이 거래 상대가 될 수 있습니다.',
   onboardingNoticeNext: '다음',
 
-  // 관심 카테고리(#57-7): 상위·하위 카테고리 모두, 몇 개든 고르고, 건너뛰면 다시 묻지 않는다.
-  interestsIntro: '관심 있는 카테고리를 고르세요. 여러 개 고를 수 있고, 건너뛰어도 됩니다.',
+  // 관심 카테고리(#57-7): 상위·하위 카테고리 모두, 몇 개든 고르고, 건너뛰면 다시 묻지 않는다. 고른 것은
+  // 늘 공개 프로필에 보이므로(#37-5) 고르는 이 자리에서도 MY 설정의 안내와 같은 말로 알린다(ADR-0078 7-21).
+  interestsIntro:
+    '관심 있는 카테고리를 고르세요. 고른 카테고리는 공개 프로필에 보입니다. 여러 개 고를 수 있고, 건너뛰어도 됩니다.',
   interestsSave: '선택 완료',
   interestsSkip: '건너뛰기',
   interestsLoadError: '카테고리를 불러오지 못했습니다.',

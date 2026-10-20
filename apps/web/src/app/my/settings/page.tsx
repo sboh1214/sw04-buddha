@@ -3,6 +3,8 @@ import type { Metadata } from 'next';
 import { copy } from '@/copy';
 import { requireMySession } from '@/lib/my.server';
 import { AccountSection } from './account-section';
+import { BioSection } from './bio-section';
+import { InterestsSection } from './interests-section';
 import { LinkedAccounts } from './linked-accounts';
 import { MarketingSection } from './marketing-section';
 import { NicknameForm } from './nickname-form';
@@ -15,7 +17,9 @@ import { VerificationSection } from './verification-section';
 export const metadata: Metadata = { title: `${copy.settingsTitle} | ${copy.appName}` };
 
 /**
- * MY's 설정 (`/my/settings`, #16). Server component: no session -> the login page, on every
+ * MY's 설정 (`/my/settings`, #16). The public profile's items come first — the nickname (#58), the
+ * 소개 and the interest categories (#41, ADR-0069 decision 4 #41: «MY 설정») — then the account's
+ * own settings. Server component: no session -> the login page, on every
  * navigation to it (`requireMySession`); the sections are client components. `?error=<code>` is
  * where better-auth sends the browser when a 연결 round-trip or a verification / change-email
  * link fails (see settings-notice.tsx).
@@ -32,6 +36,8 @@ export default async function SettingsPage({
     <Stack gap="8" maxW="2xl">
       {error !== undefined && <SettingsNotice code={error} />}
       <NicknameForm />
+      <BioSection />
+      <InterestsSection />
       <AccountSection />
       <VerificationSection />
       <LinkedAccounts />

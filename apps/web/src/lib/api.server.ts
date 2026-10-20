@@ -9,6 +9,7 @@ import {
   type NoticeSummary,
   type Post,
   type PriceSeries,
+  type PublicProfile,
   isApiError,
   unwrap,
 } from './api';
@@ -211,6 +212,24 @@ export const fetchPostServer = cache(async (postId: string): Promise<Post | null
       .data;
   } catch (error) {
     if (isApiError(error, 'NOT_FOUND') || isApiError(error, 'VALIDATION_ERROR')) return null;
+    throw error;
+  }
+});
+
+/**
+ * `GET /profiles/:publicId` for the public profile page (#41, ADR-0078), memoised for the request
+ * like the post, so `generateMetadata` and the page cost one round trip. Public and the same answer
+ * for every reader (no cookie rides along, as for every read here). `null` for NOT_FOUND — an
+ * unknown public id, anything that cannot be one, and once #140 is there a withdrawn account
+ * (#37-16) — which is a 404 to a visitor. Any other failure throws.
+ */
+export const fetchProfileServer = cache(async (publicId: string): Promise<PublicProfile | null> => {
+  try {
+    return unwrap(
+      await serverApi.GET('/api/v1/profiles/{publicId}', { params: { path: { publicId } } }),
+    ).data;
+  } catch (error) {
+    if (isApiError(error, 'NOT_FOUND')) return null;
     throw error;
   }
 });

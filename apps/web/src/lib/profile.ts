@@ -1,0 +1,230 @@
+import {
+  BIO_MAX_LENGTH,
+  JOINED_MONTH_PATTERN,
+  bioRefusalOf,
+  codePointLength,
+  normaliseBio,
+} from '@buddha/shared';
+import type { Metadata } from 'next';
+import * as z from 'zod';
+import { copy } from '@/copy';
+import {
+  type ProfileInterestCategory,
+  type PublicProfile,
+  isApiError,
+  isApiUnreachable,
+  isForAnotherAccount,
+  validationField,
+  validationMessage,
+} from './api';
+import { CATEGORY_TRAIL_SEPARATOR } from './category-label';
+
+/**
+ * 공개 프로필 (#41, ADR-0078) as the screens read it: its address, what the page says of the
+ * member's public items, and MY 설정's two editors of them — the 소개 and the interest categories.
+ * Pure functions of the API's answers, kept apart from the components and the hooks so the node
+ * test runner reaches them, and free of `'use client'`, so the server page uses them too.
+ *
+ * Owner decisions (ADR-0069 decision 3 #37, decision 4 #41, decision 7): the profile lives at
+ * `/u/<publicId>` — the public id never changes, so an old link finds the member after a nickname
+ * change (#37-2) — and anyone reads it, signed in or not, while search engines are kept away
+ * (#37-1). It shows the CURRENT nickname (#37-3), the image (#141; the nickname's first letter
+ * until then, #37-6), '운영자' on an admin account (#45-9), the 소개 — plain text of at most 160
+ * characters, its line breaks kept, never a link (#37-3) —, every interest category picked and
+ * nothing when none (#37-5), the year and month joined ('2026년 10월 가입', #37-3), and the counts
+ * of posts, comments and likes received (#37-4) — numbers, never a score, a rank or a skill (N05
+ * §2, D5). Nothing else of the account (#37-8, #37-11~13). The member edits the 소개 and the
+ * categories in MY 설정, and the own profile links there (decision 4 #41).
+ */
+
+// ---- the address ---------------------------------------------------------------------------------
+
+/** The profile's address: the public id, never the account id nor the nickname (#37-2). */
+export function profilePath(publicId: string): string {
+  return `/u/${publicId}`;
+}
+
+/** MY 설정, where the public items are edited (decision 4 #41: «MY 설정»). */
+export const PROFILE_SETTINGS_PATH = '/my/settings';
+
+/**
+ * Every answer of the profile page — the profile, and none — is kept out of search engines
+ * (#37-1: «검색 엔진에는 노출하지 않는다»): `noindex` on the page itself, whichever it is. The tab
+ * says whose profile it is by the current nickname, and nothing more. No description of its own —
+ * the 소개 is not made one, for a page no search engine shows — so the page keeps the site's, which
+ * Next merges in from the root layout (`copy.appDescription`, ADR-0078 7-20).
+ */
+export function profilePageMetadata(profile: PublicProfile | null): Metadata {
+  const title = profile === null ? copy.profileNotFound : profile.member.nickname;
+  return { title: `${title} | ${copy.appName}`, robots: { index: false } };
+}
+
+/**
+ * Whether the viewer is the member: the profile's public id is the viewer's own
+ * (`Me.profile.publicId`), never the account id, which no public answer carries (ADR-0069
+ * decision 5) — as a post tells its author. Decides only whether the page offers the link to MY
+ * 설정; every edit is an owner route the server checks.
+ */
+export function isOwnProfile(publicId: string, viewerPublicId: string | undefined): boolean {
+  return viewerPublicId !== undefined && publicId === viewerPublicId;
+}
+
+// ---- what the page says ----------------------------------------------------------------------------
+
+/**
+ * '2026년 10월 가입' (#37-3: «연·월»): the month the account joined as the API answers it
+ * (`YYYY-MM`, Korea time — ADR-0078), the month without a leading zero. Nothing finer is known
+ * here: the answer carries no day or time. A value the pattern refuses (never sent) says nothing
+ * rather than a broken date.
+ */
+export function joinedMonthText(joinedMonth: string): string {
+  if (!JOINED_MONTH_PATTERN.test(joinedMonth)) return '';
+  const [year = '', month = ''] = joinedMonth.split('-');
+  return `${year}${copy.profileYearUnit} ${String(Number(month))}${copy.profileMonthUnit} ${copy.profileJoined}`;
+}
+
+/**
+ * An interest category as the profile writes it: a top-level one by its name, a sub-category after
+ * the top-level one it sits under (the same name can sit under two) — the trail the market detail
+ * writes (`CATEGORY_TRAIL_SEPARATOR`).
+ */
+export function interestCategoryLabel(category: ProfileInterestCategory): string {
+  return category.parent === null
+    ? category.nameKo
+    : `${category.parent.nameKo}${CATEGORY_TRAIL_SEPARATOR}${category.nameKo}`;
+}
+
+/** One of the profile's counts (#37-4): what it counts and the number. */
+export interface ProfileCount {
+  key: 'posts' | 'comments' | 'likes';
+  label: string;
+  value: string;
+}
+
+/**
+ * The three counts in the owner's order (#37-4: «글·댓글 수와 받은 좋아요 합계»): visible posts,
+ * visible 댓글 and 대댓글, and the likes those hold (ADR-0078; deleted and hidden ones count for
+ * none — owner decision 2026-10-20). A number each, with its thousands separated — the profile is
+ * drawn on the server alone, so no browser has to agree on the format. Never added up, ranked or
+ * called anything but what it counts.
+ */
+export function profileCounts(profile: PublicProfile): ProfileCount[] {
+  const format = (count: number) => count.toLocaleString('ko-KR');
+  return [
+    { key: 'posts', label: copy.profilePostCount, value: format(profile.postCount) },
+    { key: 'comments', label: copy.profileCommentCount, value: format(profile.commentCount) },
+    { key: 'likes', label: copy.profileReceivedLikes, value: format(profile.receivedLikeCount) },
+  ];
+}
+
+// ---- MY 설정: the 소개 ----------------------------------------------------------------------------
+
+/** A 소개 being written, as the server will measure it (#37-3). */
+export interface BioDraft {
+  /** What the server keeps: line breaks as `\n`, control characters dropped, trimmed. */
+  bio: string;
+  length: number;
+  tooLong: boolean;
+}
+
+/**
+ * Counts a 소개 the way `bioInputSchema` does — normalised (`normaliseBio`), then code points
+ * (`codePointLength`: '가', 'a' and '😀' are one each, a line break one) — so the count under the
+ * box is the server's and the member sees the limit before saving.
+ */
+export function bioDraft(text: string): BioDraft {
+  const bio = normaliseBio(text);
+  const length = codePointLength(bio);
+  return { bio, length, tooLong: length > BIO_MAX_LENGTH };
+}
+
+/**
+ * What `PUT /me/bio` is sent for the text in the box: the 소개 as the server keeps it, or `null`
+ * when nothing is left — an empty or blank box clears the 소개 (#37-19: clearing is one of the
+ * deletions, and it stays open during a restriction, decision 7).
+ */
+export function bioToSend(text: string): string | null {
+  const { bio } = bioDraft(text);
+  return bio === '' ? null : bio;
+}
+
+/** The count under the box: '12 / 160자'. */
+export function bioLengthText(length: number): string {
+  return `${length.toLocaleString('ko-KR')} / ${BIO_MAX_LENGTH.toLocaleString('ko-KR')}${copy.bioLengthUnit}`;
+}
+
+/** What MY 설정 does with a refused write of a public item (`PUT /me/bio`, the categories). */
+export type ProfileItemFailure =
+  /** Under the field: the 소개 is too long. */
+  | { kind: 'field'; message: string }
+  /**
+   * `['me']` is out of date — a revision asked for the consent again while the screen was open
+   * (ONBOARDING_REQUIRED) — and the hook has asked for it again: the gate follows from there.
+   */
+  | { kind: 'refresh'; message: string }
+  /** The categories on screen are not all offered any more: the list is read again. */
+  | { kind: 'categories'; message: string }
+  /** Anything else, as a notice: the session switched, the connection, the generic error. */
+  | { kind: 'notice'; message: string };
+
+/**
+ * What a refused public-item write tells the member:
+ * - the cookie is another account than the screen's (`expectedAccountId`): the session switched;
+ * - ONBOARDING_REQUIRED: MY 설정 is reached onboarded only, so another tab or a revision changed
+ *   that — the hook asked `['me']` again and the gate takes the member on;
+ * - VALIDATION_ERROR on `bio` (`bioRefusalOf`): more than 160 characters; on `categoryIds`: a
+ *   category retired while the screen was open — the list is loaded again;
+ * - a request that never reached the API, and anything else — the FORBIDDEN a writing or an
+ *   account restriction will answer for a new value (#185, #139; ADR-0078) included: what the
+ *   member sees of a restriction is those issues' to say.
+ */
+export function profileItemFailure(error: unknown): ProfileItemFailure {
+  if (isForAnotherAccount(error)) return { kind: 'notice', message: copy.sessionChanged };
+  if (isApiError(error, 'ONBOARDING_REQUIRED')) {
+    return { kind: 'refresh', message: copy.errPostOnboarding };
+  }
+  if (isApiError(error, 'VALIDATION_ERROR')) {
+    const field = validationField(error);
+    if (field === 'bio') {
+      const refusal = bioRefusalOf(validationMessage(error) ?? '');
+      if (refusal?.kind === 'too_long') return { kind: 'field', message: copy.errBioTooLong };
+    }
+    if (field === 'categoryIds') {
+      return { kind: 'categories', message: copy.errInterestsUnavailable };
+    }
+  }
+  return {
+    kind: 'notice',
+    message: isApiUnreachable(error) ? copy.errNetwork : copy.errUnknown,
+  };
+}
+
+// ---- MY 설정: the interest categories -------------------------------------------------------------
+
+/**
+ * Whether the categories picked on screen differ from the account's: both read among the
+ * categories the list offers (a retired one is neither shown nor sent, `interestIds`), so a
+ * category operators retired does not leave the 저장 button lit on a screen where nothing moved.
+ */
+export function interestsChanged(
+  picked: readonly number[],
+  held: readonly number[],
+  offered: readonly { id: number }[],
+): boolean {
+  const ids = new Set(offered.map((category) => category.id));
+  const shown = (list: readonly number[]) =>
+    [...new Set(list.filter((id) => ids.has(id)))].sort((a, b) => a - b).join(',');
+  return shown(picked) !== shown(held);
+}
+
+/**
+ * MY 설정's 소개 form (`react-hook-form`, as the nickname card): the text as typed, refused before
+ * sending when it is longer than the server takes (`bioDraft`). Blank is not refused — it clears the
+ * 소개 (`bioToSend`).
+ */
+export const bioFormSchema = z.object({
+  bio: z.string().superRefine((text, ctx) => {
+    if (bioDraft(text).tooLong) ctx.addIssue({ code: 'custom', message: copy.errBioTooLong });
+  }),
+});
+export type BioFormValues = z.input<typeof bioFormSchema>;

@@ -12,6 +12,7 @@ import { PhoneHasher } from '../identity/phone-hash.js';
 import { DB } from '../infra/db/db.provider.js';
 import { NUMBER_USED_START_GRANT, toStartGrant } from '../start-grant/start-grant.service.js';
 import { NicknameService } from './nickname.service.js';
+import { assertPublicItemEdit } from './public-items.js';
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
@@ -36,6 +37,7 @@ export class MeService {
           createdAt: schema.profiles.createdAt,
           timeZone: schema.profiles.timeZone,
           nicknameChangedAt: schema.profiles.nicknameChangedAt,
+          bio: schema.profiles.bio,
           availableCoin: schema.balances.availableCoin,
           lockedCoin: schema.balances.lockedCoin,
           realName: schema.phoneVerifications.realName,
@@ -122,6 +124,7 @@ export class MeService {
                 row.nicknameChangedAt.getTime() + NICKNAME_CHANGE_INTERVAL_DAYS * DAY_MS,
               ).toISOString(),
         interestCategoryIds: interests.map((pick) => pick.categoryId),
+        bio: row.bio,
       },
       balance: {
         availableCoin: serializeCoinAmount(row.availableCoin),
@@ -148,6 +151,31 @@ export class MeService {
    */
   async updateNickname(userId: string, nickname: string): Promise<Me> {
     await this.nicknames.change(userId, nickname);
+    return this.getMe(userId);
+  }
+
+  /**
+   * `PUT /me/bio`: the 소개 of the public profile (#41, ADR-0069 decision 3 #37-3), replacing what
+   * it was, or none (`null`) to clear it. The text arrives normalised and within BIO_MAX_LENGTH
+   * (`bioInputSchema`). The same text again changes nothing. Otherwise a 소개 with text is a new
+   * value, which a writing or an account restriction refuses, while clearing it stays open
+   * (`assertPublicItemEdit`, #37-9 and decision 7) — asked after the profile row is taken FOR
+   * UPDATE, so what was read holds until the write commits. `updated_at` follows through drizzle's
+   * `$onUpdate`.
+   */
+  async updateBio(userId: string, bio: string | null): Promise<Me> {
+    await this.db.transaction(async (tx) => {
+      const [profile] = await tx
+        .select({ bio: schema.profiles.bio })
+        .from(schema.profiles)
+        .where(eq(schema.profiles.userId, userId))
+        .limit(1)
+        .for('update');
+      if (!profile) throw new AppError('NOT_FOUND', { message: 'Profile not found' });
+      if (profile.bio === bio) return;
+      await assertPublicItemEdit(tx, userId, bio === null ? 'clear' : 'replace');
+      await tx.update(schema.profiles).set({ bio }).where(eq(schema.profiles.userId, userId));
+    });
     return this.getMe(userId);
   }
 
