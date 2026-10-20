@@ -23,6 +23,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import {
+  type CommentBoxDialogRef,
   type CommentBoxRootRef,
   CommentBoxGoingContext,
   keepSectionTextsForStep,
@@ -52,6 +53,7 @@ import {
   hasCommentDrafts,
 } from '@/lib/comment-drafts';
 import {
+  type CommentsPostState,
   type HeldText,
   type HeldTextPlace,
   type ResolvedCommentDrafts,
@@ -59,6 +61,7 @@ import {
   commentDraft,
   commentLengthText,
   commentPlaceholderMessage,
+  commentTextChanged,
   commentThreadsOf,
   commentWriteErrorMessage,
   commentsClosedMessage,
@@ -118,7 +121,9 @@ interface ThreadContext {
  * new 댓글.
  *
  * The box is for an account that `GET /me` names — a visitor reads and is asked to sign in, coming
- * back to this post (N05 §2 «비로그인 열람, 로그인 작성»); an account with onboarding steps left
+ * back to this post (N05 §2 «비로그인 열람, 로그인 작성»); a later read of `GET /me` that fails
+ * keeps it while the account it named is held, as the 답글 and 수정 boxes stay (only a first read
+ * that failed says '내 정보를 불러오지 못했습니다.'); an account with onboarding steps left
  * is taken to its step and back by the onboarding gate (#57-8) — except one facing a re-consent
  * alone, for which this page is exempt (`ONBOARDING_EXEMPT_PAGES`, ADR-0073) so it can delete its
  * own comments with a session alone: its comment writes go to that step first and come back here
@@ -126,21 +131,39 @@ interface ThreadContext {
  * box is a sentence saying so. Nothing personal is in the HTML: the first page is public and
  * seeded by the server, whose own and whose 답글 are decided here once `GET /me` has answered.
  *
- * What a box holds is kept on the ways the owner decided (오너 결정 2026-10-20 답 1·2·4): leaving
- * the page with text in a box asks first (`useCommentBoxDraft`); going to an onboarding step keeps
- * each box's text in this tab, and this page takes it back into its box after the step
+ * What a box holds is kept on the ways the owner decided (오너 결정 2026-10-20 답 1·2·4,
+ * 2026-10-21 답 1·2·3): leaving the page with text in a box asks first (`useCommentBoxDraft`), and
+ * so does a 답글 or 수정 box's 취소 (`CommentBox`); going to an onboarding step keeps each box's
+ * text in this tab, and this page takes it back into its box after the step
  * (`useCommentDraftsTakenBack`, reading on through the pages for a thread not read yet) — or, when
- * that box can no longer open, shows it apart with why; and a box whose write was refused (or was
- * in flight) and which the thread read again no longer holds leaves its text and why it cannot be
- * sent where the box stood until the writer closes them (`useHeldCommentTexts`, for the account on
- * screen only). Leaving while any of that is on screen asks too — and going to a step keeps it in
- * the tab as well, as the draft of the box it stood for, to be shown again after the step
- * (`keepSectionTextsForStep`). A box with no write that goes
- * because its thread or the post changed under it — read again in the background — keeps nothing,
- * and a post gone from every view takes the page, and all of it, to its 404 (post-screen.tsx):
- * both are questions for the owner (ADR-0074 결과 4).
+ * that box can no longer open, shows it apart with why; and a box the thread read again no longer
+ * holds — its write refused or in flight, or no write at all and its place gone under it (the
+ * comment or the post deleted or hidden elsewhere, the writer's own 댓글 deleted under an open
+ * 답글) — leaves its text and why it cannot be sent where the box stood until the writer closes
+ * them (`useHeldCommentTexts`, for the account on screen only). Leaving while any of that is on
+ * screen asks too — and going to a step keeps it in the tab as well, as the draft of the box it
+ * stood for, to be shown again after the step (`keepSectionTextsForStep`). A post gone from every
+ * view (`gone`, post-screen.tsx) keeps the section for those texts alone — every box goes, its
+ * text held with '없거나 삭제된 글입니다.' — and the page is told once none is left
+ * (`onNothingHeld`), for its 404.
  */
-export function CommentsSection({ post }: { post: Post }) {
+export function CommentsSection({
+  post,
+  gone = false,
+  onNothingHeld,
+  focusGone,
+}: {
+  post: Post;
+  /**
+   * The post is out of every view (오너 결정 2026-10-21 답 1): the section shows the texts it holds
+   * apart and nothing else, until they are closed.
+   */
+  gone?: boolean;
+  /** Told while `gone` once no text is held apart, nor on its way to be. */
+  onNothingHeld?: () => void;
+  /** While `gone`: the focus to what the page says instead of the post, from a text closed. */
+  focusGone?: () => void;
+}) {
   const comments = useComments(post.id);
   const writer = usePostWriter();
   const viewer: Viewer | undefined =
@@ -149,11 +172,12 @@ export function CommentsSection({ post }: { post: Post }) {
       : undefined;
   const { stepLeft, entryPath } = useOnboardingEntry();
   const stepPath = stepLeft ? entryPath(postPath(post.id)) : undefined;
-  const open = post.state === 'published';
+  const postState: CommentsPostState = gone ? 'gone' : post.state;
+  const open = postState === 'published';
   const threads = useMemo(() => commentThreadsOf(comments.data), [comments.data]);
   const heading = useRef<HTMLHeadingElement>(null);
 
-  const heldTexts = useHeldCommentTexts(viewer?.accountId, { postState: post.state, threads });
+  const heldTexts = useHeldCommentTexts(viewer?.accountId, { postState, threads });
   const { drafts, take, reads } = useCommentDraftsTakenBack(post.id, viewer?.accountId, stepLeft);
   const viewerPublicId = viewer?.publicId;
   const viewerAccountId = viewer?.accountId;
@@ -180,16 +204,27 @@ export function CommentsSection({ post }: { post: Post }) {
   const allRead = comments.isSuccess && !comments.hasNextPage;
   const takenBack = useMemo(
     () =>
-      viewerPublicId === undefined || !comments.isSuccess || !readAgain || !hasCommentDrafts(drafts)
+      viewerPublicId === undefined || !hasCommentDrafts(drafts)
         ? NOTHING_TAKEN_BACK
-        : resolveCommentDrafts(drafts, {
-            postId: post.id.toLowerCase(),
-            postState: post.state,
-            threads,
-            allRead,
-            viewerPublicId,
-          }),
-    [drafts, threads, post.id, post.state, allRead, viewerPublicId, comments.isSuccess, readAgain],
+        : // A post gone from every view takes none of them: each is held apart, with why.
+          postState === 'gone'
+          ? resolveCommentDrafts(drafts, {
+              postId: post.id.toLowerCase(),
+              postState,
+              threads: [],
+              allRead: true,
+              viewerPublicId,
+            })
+          : !comments.isSuccess || !readAgain
+            ? NOTHING_TAKEN_BACK
+            : resolveCommentDrafts(drafts, {
+                postId: post.id.toLowerCase(),
+                postState,
+                threads,
+                allRead,
+                viewerPublicId,
+              }),
+    [drafts, threads, post.id, postState, allRead, viewerPublicId, comments.isSuccess, readAgain],
   );
   // A draft no box can take any more is shown apart, with why; one whose thread is not read yet
   // reads on (as a new 댓글 does, ADR-0074 7-14).
@@ -230,9 +265,23 @@ export function CommentsSection({ post }: { post: Post }) {
     [post.id, queryClient],
   );
 
-  const placed = placeHeldTexts(threads, heldTexts.held);
+  // A post gone from every view (오너 결정 2026-10-21 답 1): its 404 waits while a text is held
+  // apart, or on its way to be — a box that went with its write in flight hears its refusal a
+  // moment later (`pageMayGo`). The drafts are a guard: drafts taken back are held in the effects of
+  // the render the post goes in, before `pageMayGo` can say yes (its `post-gone` comes from an
+  // effect of that render too) — this only covers drafts read in the very render the last held
+  // text is closed.
+  const nothingHeld = heldTexts.pageMayGo && !hasCommentDrafts(drafts);
+  useEffect(() => {
+    if (gone && nothingHeld) onNothingHeld?.();
+  }, [gone, nothingHeld, onNothingHeld]);
+
+  const placed = placeHeldTexts(gone ? [] : threads, heldTexts.held);
   const onTaken = useCallback((key: CommentDraftKey) => take([key]), [take]);
-  const focusHeading = () => heading.current?.focus({ preventScroll: true });
+  const focusHeading = () => {
+    if (gone) focusGone?.();
+    else heading.current?.focus({ preventScroll: true });
+  };
   const onCloseHeld = (id: string) => {
     heldTexts.dismiss(id);
     // The text and its 닫기 are gone: the focus goes to the comments' heading rather than the
@@ -250,21 +299,32 @@ export function CommentsSection({ post }: { post: Post }) {
     focusHeading,
   };
 
+  // A post gone from every view shows the texts held apart and nothing else — its comments are
+  // gone with it — in the same section, each text at the same place in it (`placed.rest`).
   return (
     <CommentBoxGoingContext.Provider value={heldTexts.going}>
-      <Stack as="section" aria-labelledby="comments-heading" gap="4" data-testid="post-comments">
+      <Stack
+        as="section"
+        aria-labelledby={gone ? undefined : 'comments-heading'}
+        aria-label={gone ? copy.commentsHeading : undefined}
+        gap="4"
+        data-testid="post-comments"
+        data-gone={gone ? '' : undefined}
+      >
         {/* A peer of the post's title (`h2`), not one of its body's headings (`h3`–`h5`). */}
-        <Heading
-          ref={heading}
-          as="h2"
-          id="comments-heading"
-          tabIndex={-1}
-          textStyle="titleLg"
-          data-testid="comments-heading"
-        >
-          {commentCountText(post.commentCount)}
-        </Heading>
-        {comments.isRefetchError && (
+        {!gone && (
+          <Heading
+            ref={heading}
+            as="h2"
+            id="comments-heading"
+            tabIndex={-1}
+            textStyle="titleLg"
+            data-testid="comments-heading"
+          >
+            {commentCountText(post.commentCount)}
+          </Heading>
+        )}
+        {!gone && comments.isRefetchError && (
           <Alert.Root status="warning" role="status" data-testid="comments-refresh-failed">
             <Alert.Indicator />
             <Alert.Content>
@@ -272,7 +332,7 @@ export function CommentsSection({ post }: { post: Post }) {
             </Alert.Content>
           </Alert.Root>
         )}
-        {comments.isPending ? (
+        {gone ? null : comments.isPending ? (
           SKELETON_ROWS.map((row) => <Skeleton key={row} height="72px" borderRadius="card" />)
         ) : comments.isLoadingError ? (
           <Stack gap="3" align="flex-start" data-testid="comments-error">
@@ -303,7 +363,7 @@ export function CommentsSection({ post }: { post: Post }) {
             ))}
           </Stack>
         )}
-        {comments.hasNextPage && (
+        {!gone && comments.hasNextPage && (
           <Button
             alignSelf="center"
             variant="outline"
@@ -320,13 +380,13 @@ export function CommentsSection({ post }: { post: Post }) {
           </Button>
         )}
         <HeldTexts held={placed.rest} onClose={onCloseHeld} />
-        {post.state !== 'published' ? (
+        {gone ? null : post.state !== 'published' ? (
           <Text textStyle="bodySm" color="fg.muted" data-testid="comments-closed">
             {commentsClosedMessage(post.state)}
           </Text>
         ) : writer.pending ? (
           <Skeleton height="96px" borderRadius="card" data-testid="comment-composer-pending" />
-        ) : writer.failed ? (
+        ) : writer.failed && viewer === undefined ? (
           <Text textStyle="bodySm" color="fg.muted" data-testid="comment-composer-failed">
             {copy.errProfileLoad}
           </Text>
@@ -756,13 +816,16 @@ function CommentComposer({
       focusSignal={focusSignal}
       focusOnMount={startText === undefined}
       rootRef={box.rootRef}
-      onCancel={
-        onDone &&
-        (() => {
-          box.close();
-          create.reset();
-          onDone();
-        })
+      dialogRef={box.dialogRef}
+      cancel={
+        onDone && {
+          asks: commentTextChanged(text, ''),
+          drop: box.close,
+          close: () => {
+            create.reset();
+            onDone();
+          },
+        }
       }
       onSubmit={(draft) => {
         if (stepPath !== undefined) {
@@ -775,7 +838,11 @@ function CommentComposer({
             box.landed();
             setText('');
             setRestored(false);
-            onDone?.();
+            if (onDone !== undefined) {
+              // A reply's box closes with its text sent: nothing of it to hold as it goes.
+              box.close();
+              onDone();
+            }
           }, box.refused);
       }}
       testId={reply ? 'reply-composer' : 'comment-composer'}
@@ -839,10 +906,8 @@ function CommentEditForm({
       focusSignal={0}
       focusOnMount={startText === undefined}
       rootRef={box.rootRef}
-      onCancel={() => {
-        box.close();
-        onDone();
-      }}
+      dialogRef={box.dialogRef}
+      cancel={{ asks: commentTextChanged(text, comment.body), drop: box.close, close: onDone }}
       onSubmit={(draft) => {
         if (stepPath !== undefined) {
           router.push(stepPath as Route);
@@ -857,6 +922,7 @@ function CommentEditForm({
           .mutateAsync({ commentId: comment.id, body: draft, expectedAccountId: accountId })
           .then(() => {
             box.landed();
+            box.close();
             onDone();
           }, box.refused);
       }}
@@ -886,7 +952,8 @@ function CommentBox({
   focusSignal,
   focusOnMount = true,
   rootRef,
-  onCancel,
+  dialogRef,
+  cancel,
   onSubmit,
   testId,
 }: {
@@ -907,7 +974,15 @@ function CommentBox({
   focusOnMount?: boolean;
   /** Follows the focus in it, for the text it may leave (`useCommentBoxDraft`). */
   rootRef: CommentBoxRootRef;
-  onCancel: (() => void) | undefined;
+  /** Follows the focus in its 취소's dialog, the box's own (`useCommentBoxDraft`). */
+  dialogRef: CommentBoxDialogRef;
+  /**
+   * 취소, for a 답글's box and an edit (none for the new 댓글's): `asks` while the text differs from
+   * what the box started with (오너 결정 2026-10-21 답 3) — then 버리기 in `DiscardTextDialog` is
+   * what closes it. `drop`: the writer let the text go, so nothing of it is held from then on
+   * (`useCommentBoxDraft`'s `close`); `close`: the box closes, the focus to what opened it.
+   */
+  cancel: { asks: boolean; drop: () => void; close: () => void } | undefined;
   /** The text as the server will keep it (`commentDraft`). */
   onSubmit: (body: string) => void;
   testId: string;
@@ -917,6 +992,11 @@ function CommentBox({
   const draft = commentDraft(text);
   const blocked = pending || draft.empty || draft.tooLong;
   useFocusOn(box, focusSignal, focusOnMount);
+  // 취소 with a changed text asks first; 버리기 lets the text go at once and closes the box once
+  // the dialog is out — its focus back on the box's 취소 first, then where the box's closing puts
+  // it (the 답글 or 수정 that opened it), so it never falls to the page with the dialog.
+  const [asking, setAsking] = useState(false);
+  const closeOnExit = useRef(false);
 
   return (
     <Stack
@@ -965,12 +1045,19 @@ function CommentBox({
           {commentLengthText(draft.length)}
         </Text>
         <HStack gap="2">
-          {onCancel !== undefined && (
+          {cancel !== undefined && (
             <Button
               size="sm"
               variant="ghost"
               disabled={pending}
-              onClick={onCancel}
+              onClick={() => {
+                if (cancel.asks) {
+                  setAsking(true);
+                  return;
+                }
+                cancel.drop();
+                cancel.close();
+              }}
               data-testid="comment-cancel"
             >
               {copy.cancel}
@@ -1004,7 +1091,98 @@ function CommentBox({
           </Alert.Content>
         </Alert.Root>
       )}
+      {cancel !== undefined && (
+        <DiscardTextDialog
+          open={asking}
+          contentRef={dialogRef}
+          onKeep={() => setAsking(false)}
+          onDiscard={() => {
+            // Once: a second click on 버리기 while the dialog closes does nothing more.
+            if (!asking) return;
+            cancel.drop();
+            closeOnExit.current = true;
+            setAsking(false);
+          }}
+          onClosed={() => {
+            if (!closeOnExit.current) return;
+            closeOnExit.current = false;
+            cancel.close();
+          }}
+        />
+      )}
     </Stack>
+  );
+}
+
+/**
+ * What 취소 asks of a 답글 or 수정 box holding a changed text — a restored draft too (오너 결정
+ * 2026-10-21 답 3): '쓰던 내용 버리기', '쓰던 내용이 사라집니다. 버릴까요?', 취소 and 버리기 — the
+ * post's discard (ADR-0073 3차 답 3) in words, the leave's sentence (오너 결정 2026-10-20 답 1)
+ * in its first half. 취소, Escape and a click outside keep the box as it is, the focus back on its
+ * 취소; 버리기 closes the box once the dialog is out (`onClosed`), as the post's dialog closes onto
+ * the field drawn afresh. A read that takes the box away while the dialog is open takes the dialog
+ * with it: the focus in it was the box's (`contentRef`), and goes to the text the box left
+ * (ADR-0074 7-25) rather than to the page's start.
+ */
+function DiscardTextDialog({
+  open,
+  contentRef,
+  onKeep,
+  onDiscard,
+  onClosed,
+}: {
+  open: boolean;
+  /** On its content: the focus in it is the box's (`CommentBoxDialogRef`). */
+  contentRef: CommentBoxDialogRef;
+  onKeep: () => void;
+  onDiscard: () => void;
+  /** The dialog is out of the page (its exit done). */
+  onClosed: () => void;
+}) {
+  return (
+    <Dialog.Root
+      open={open}
+      onOpenChange={(details) => {
+        if (!details.open) onKeep();
+      }}
+      role="alertdialog"
+      lazyMount
+      unmountOnExit
+      closeOnInteractOutside
+      onExitComplete={onClosed}
+    >
+      <Portal>
+        <Dialog.Backdrop />
+        <Dialog.Positioner>
+          <Dialog.Content ref={contentRef} data-testid="comment-discard-dialog">
+            <Dialog.Header>
+              <Dialog.Title>{copy.commentDiscardTitle}</Dialog.Title>
+            </Dialog.Header>
+            <Dialog.Body>
+              <Dialog.Description>{copy.commentDiscardQuestion}</Dialog.Description>
+            </Dialog.Body>
+            <Dialog.Footer>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={onKeep}
+                data-testid="comment-discard-cancel"
+              >
+                {copy.cancel}
+              </Button>
+              <Button
+                size="sm"
+                colorPalette="no"
+                onClick={onDiscard}
+                data-testid="comment-discard-confirm"
+              >
+                {copy.commentDiscardConfirm}
+              </Button>
+            </Dialog.Footer>
+          </Dialog.Content>
+        </Dialog.Positioner>
+      </Portal>
+    </Dialog.Root>
   );
 }
 

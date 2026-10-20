@@ -17,7 +17,7 @@ import { useQuery } from '@tanstack/react-query';
 import type { Route } from 'next';
 import NextLink from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useCallback, useId, useRef, useState } from 'react';
 import { CommentsSection } from '@/components/post/comments-section';
 import { PostByline } from '@/components/post/post-author';
 import { PostBody } from '@/components/post/post-body';
@@ -65,24 +65,32 @@ import { useSession } from '@/lib/use-session';
  * last comment under a deleted post is deleted, or a comment write is refused because the post is
  * gone. A read of it after that — the read after the write, or a window's focus — answers
  * NOT_FOUND, while the query keeps the post it read before: the placeholder, a count and a box that
- * no longer hold (ADR-0073 9-50, Codex review of #219, round 5). From then on (`postGoneAfter`) the
- * page says '없거나 삭제된 글입니다.' in place of the post and its market, and draws the server page
- * again (`router.refresh`): it answers what a reload does, the 404 (`notFound()`, page.tsx). A read
- * that fails otherwise keeps the post on screen.
- * The comment section goes with the page — a write refused because the post is gone, its text and
- * the texts held apart (오너 결정 2026-10-20 답 4) with it; whether the page should keep them first
- * is a question for the owner (ADR-0074 결과 4).
+ * no longer hold (ADR-0073 9-50, Codex review of #219, round 5). From then on (`postGoneAfter`, the
+ * edit screen's rule too) the page says '없거나 삭제된 글입니다.' in place of the post and its market,
+ * and the comment section shows only the texts it holds apart — a write refused because the post
+ * is gone, every box with a changed text, each with why — until the writer has closed them all
+ * (오너 결정 2026-10-21 답 1; leaving asks while they are shown). Then — at once when there is
+ * none — the server page is drawn again (`router.refresh`): it answers what a reload does, the 404
+ * (`notFound()`, page.tsx). A read that fails otherwise keeps the post on screen.
  */
 export function PostScreen({ postId, fallback }: { postId: string; fallback: Post }) {
   const router = useRouter();
   const query = useQuery(postQueryOptions(postId));
   const post = query.data ?? fallback;
+  // Once gone, gone for good (`postGoneAfter`): a later read failing otherwise (the network) does
+  // not bring back the post as it was last read.
   const [gone, setGone] = useState(false);
   const nowGone = postGoneAfter(gone, query);
   if (nowGone !== gone) setGone(nowGone);
-  useEffect(() => {
-    if (gone) router.refresh();
-  }, [gone, router]);
+  const goneNotice = useRef<HTMLDivElement>(null);
+  const goneTextId = useId();
+  const refreshed = useRef(false);
+  const toNotFound = useCallback(() => {
+    if (refreshed.current) return;
+    refreshed.current = true;
+    router.refresh();
+  }, [router]);
+  const focusGone = useCallback(() => goneNotice.current?.focus({ preventScroll: true }), []);
 
   // One tree for every state, the post's head (title, byline and body, the placeholder, or the
   // sentence of a post gone) in one slot: the comments sit at the same place whether the post is
@@ -92,10 +100,21 @@ export function PostScreen({ postId, fallback }: { postId: string; fallback: Pos
   return (
     <Stack gap="6" data-testid="post-screen">
       {gone ? (
-        <Alert.Root status="info" data-testid="post-gone">
+        // Where the focus goes from a text closed while others are left (the comments' heading is
+        // gone with them): named by its sentence, so that is what is read out, as a held text is
+        // by its reason. A group, not a live region: drawn as the post goes, it would be read out
+        // over the held texts' own alerts.
+        <Alert.Root
+          ref={goneNotice}
+          status="info"
+          role="group"
+          aria-labelledby={goneTextId}
+          tabIndex={-1}
+          data-testid="post-gone"
+        >
           <Alert.Indicator />
           <Alert.Content>
-            <Alert.Description>{copy.postNotFound}</Alert.Description>
+            <Alert.Description id={goneTextId}>{copy.postNotFound}</Alert.Description>
           </Alert.Content>
         </Alert.Root>
       ) : post.state !== 'published' ? (
@@ -131,7 +150,7 @@ export function PostScreen({ postId, fallback }: { postId: string; fallback: Pos
         </>
       )}
       {!gone && <MarketBox market={post.market} />}
-      <CommentsSection post={post} />
+      <CommentsSection post={post} gone={gone} onNothingHeld={toNotFound} focusGone={focusGone} />
       <BackLink />
     </Stack>
   );

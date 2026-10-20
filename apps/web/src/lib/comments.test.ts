@@ -422,6 +422,16 @@ describe('why a box’s place takes its text no more', () => {
       ).toBeUndefined();
     }
   });
+
+  it('is the post gone for every box once the post is out of every view (오너 결정 2026-10-21 답 1)', () => {
+    const gone = { postState: 'gone' as const, threads };
+    expect(goneBoxReason({ kind: 'post' }, gone)).toBe(copy.errPostGone);
+    expect(goneBoxReason({ kind: 'thread', threadId: 't1' }, gone)).toBe(copy.errPostGone);
+    expect(goneBoxReason({ kind: 'comment', commentId: 'r1', threadId: 't1' }, gone)).toBe(
+      copy.errPostGone,
+    );
+    expect(copy.errPostGone).toBe(copy.postNotFound);
+  });
 });
 
 describe('drafts taken back after an onboarding step', () => {
@@ -538,6 +548,40 @@ describe('drafts taken back after an onboarding step', () => {
         ['답글', commentsClosedMessage(postState)],
       ]);
     }
+  });
+
+  it('are all shown apart with the post gone once it is out of every view (오너 결정 2026-10-21 답 1)', () => {
+    const resolved = resolveCommentDrafts(
+      drafts({
+        comment: '새 댓글',
+        replies: new Map([['t1', '답글']]),
+        edits: new Map([['t1', '고친 댓글']]),
+      }),
+      { ...view([thread(mine('t1'))]), postState: 'gone' },
+    );
+    expect(resolved.comment).toBeUndefined();
+    expect(resolved.replies.size + resolved.edits.size).toBe(0);
+    expect(resolved.waiting).toBe(false);
+    expect(resolved.unplaced).toEqual([
+      {
+        key: { kind: 'comment', postId: post },
+        text: '새 댓글',
+        reason: copy.errPostGone,
+        place: { kind: 'post' },
+      },
+      {
+        key: { kind: 'reply', postId: post, parentId: 't1' },
+        text: '답글',
+        reason: copy.errPostGone,
+        place: { kind: 'thread', threadId: 't1' },
+      },
+      {
+        key: { kind: 'edit', postId: post, commentId: 't1' },
+        text: '고친 댓글',
+        reason: copy.errPostGone,
+        place: { kind: 'comment', commentId: 't1', threadId: 't1' },
+      },
+    ]);
   });
 
   it('wait for the pages still to read when their comment is not among those read', () => {

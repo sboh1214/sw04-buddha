@@ -51,7 +51,8 @@ import { afterRefusal } from './use-posts';
  *
  * The post's count moves with the write at once (`moveCommentCount`) and the post and the
  * community list's cards are then read again, which only confirms it — or finds the post gone,
- * which the post page answers by drawing its 404 (post-screen.tsx). A refusal that says the
+ * which the post page answers by drawing its 404 once no text is held apart (post-screen.tsx,
+ * 오너 결정 2026-10-21 답 1). A refusal that says the
  * thread on screen is out of date reads the post and its comments again.
  */
 

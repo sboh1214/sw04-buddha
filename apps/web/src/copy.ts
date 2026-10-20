@@ -977,7 +977,14 @@ export const copy = {
   commentDraftRestored: '쓰던 내용을 되살렸습니다.',
   // 쓰기가 거절되고 그 상자가 다시 읽은 화면에 없을 때(또는 되살린 쓰던 내용을 받을 상자가 없을 때), 거절의
   // 까닭과 함께 닫을 때까지 보이는 쓰던 글자의 읽기 전용 칸 이름(오너 결정 2026-10-20 답 4). 닫는 단추는 copy.close.
+  // 보내지 않은 상자가 다시 읽기로 사라질 때와(2026-10-21 답 2) 글이 모든 화면에서 빠질 때(답 1)도 같은 칸이다.
   commentHeldText: '쓰던 내용',
+  // 답글·수정 상자의 '취소'를 누를 때 글자가 처음과 다르면(되살린 상자 포함) 먼저 묻는 확인 창(오너 결정
+  // 2026-10-21 답 3): 창의 제목과 단추는 글의 '되살린 내용 버리기'와 같은 꼴, 묻는 문장은 떠날 때의 문장
+  // (postLeaveConfirm)의 앞 절 그대로다. 단추는 '취소'(copy.cancel, 상자를 그대로 둔다)와 commentDiscardConfirm.
+  commentDiscardTitle: '쓰던 내용 버리기',
+  commentDiscardQuestion: '쓰던 내용이 사라집니다. 버릴까요?',
+  commentDiscardConfirm: '버리기',
 
   // 관리자 시장 폼의 미리보기 (Q-M3-6): 실제 카드·규칙 컴포넌트를 그대로 그린다.
   adminMarketPreview: '미리보기',

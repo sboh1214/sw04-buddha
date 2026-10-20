@@ -16,12 +16,14 @@ import {
 } from './use-comment-draft';
 
 /**
- * A comment box going away (오너 결정 2026-10-20 답 2·4, ADR-0074): its text is kept in this tab when
- * the page is going to an onboarding step — for the account on screen, with text other than the
- * box started with, and no write of it landed since its last render — and never otherwise; and it
- * is left to the section, to show with why it cannot be sent, only while its write is in flight or
- * refused and the writer did not close it. The section going to a step keeps the texts it shows
- * apart from any box the same way, as the drafts of the boxes they stood for.
+ * A comment box going away (오너 결정 2026-10-20 답 2·4, 2026-10-21 답 2, ADR-0074): its text is
+ * kept in this tab when the page is going to an onboarding step — for the account on screen, with
+ * text other than the box started with, no write of it landed since its last render, and its place
+ * taking it still (the page itself going) — and never otherwise; and any other changed text the
+ * writer did not close (취소) is left to the section with how its write stood — in flight, refused
+ * or none — to show with why it cannot be sent: a box a read took away in place, a step left or
+ * not. The section going to a step keeps the texts it shows apart from any box the same way, as the
+ * drafts of the boxes they stood for.
  */
 
 class MemoryStorage implements DraftStorage {
@@ -111,34 +113,110 @@ describe('what a comment box going away leaves the section', () => {
     closed: false,
     ...box(partial),
   });
+  /** Its place takes it still: the page itself is going. */
+  const PLACE_KEPT = false;
+  /** Its place takes it no more: a read took the box away in place. */
+  const PLACE_GONE = true;
 
-  it('is its text while its write is in flight or refused', () => {
-    expect(commentBoxLeaves(going({ pending: true }), me('account-a', null))).toBe('left');
-    expect(commentBoxLeaves(going({ refused: true }), me('account-a', null))).toBe('left');
+  it('is its text with its write in flight or refused', () => {
+    for (const place of [PLACE_KEPT, PLACE_GONE]) {
+      expect(commentBoxLeaves(going({ pending: true }), me('account-a', null), place)).toBe(
+        'pending',
+      );
+      expect(commentBoxLeaves(going({ refused: true }), me('account-a', null), place)).toBe(
+        'refused',
+      );
+    }
+  });
+
+  it('is its text with no write too — the section holds it where its place took it no more (오너 결정 2026-10-21 답 2)', () => {
+    expect(commentBoxLeaves(going(), me('account-a', null), PLACE_GONE)).toBe('none');
+    expect(commentBoxLeaves(going(), undefined, PLACE_GONE)).toBe('none');
+    expect(
+      commentBoxLeaves(
+        going({
+          key: { kind: 'edit', postId: POST, commentId: PARENT },
+          text: '고친 댓글',
+          initial: '댓글',
+        }),
+        me('account-a', null),
+        PLACE_GONE,
+      ),
+    ).toBe('none');
+    // Its place taking it still, the section drops it (lib/held-comment-texts.ts).
+    expect(commentBoxLeaves(going(), me('account-a', null), PLACE_KEPT)).toBe('none');
   });
 
   it('is nothing once the writer closed it (취소), even after a refusal', () => {
-    expect(commentBoxLeaves(going({ refused: true, closed: true }), me('account-a', null))).toBe(
-      'dropped',
-    );
+    expect(
+      commentBoxLeaves(going({ refused: true, closed: true }), me('account-a', null), PLACE_GONE),
+    ).toBe('dropped');
   });
 
   it('is nothing once a write of it landed since its last render', () => {
     const last = going({ pending: true });
     commentDraftLanded(last.key);
-    expect(commentBoxLeaves(last, me('account-a', null))).toBe('dropped');
+    expect(commentBoxLeaves(last, me('account-a', null), PLACE_GONE)).toBe('dropped');
   });
 
-  it('is nothing when its text is kept for a step — which keeps it', () => {
-    expect(commentBoxLeaves(going({ refused: true }), me('account-a', 'consent'))).toBe('dropped');
-    expect(storage.items.size).toBe(1);
-  });
-
-  it('is nothing with nothing to lose, or with no write in flight or refused (ADR-0074 결과 4)', () => {
-    expect(commentBoxLeaves(going({ refused: true, text: '  ' }), me('account-a', null))).toBe(
+  it('is nothing when its text is kept for a step as the page goes, its place taking it still — which keeps it', () => {
+    expect(commentBoxLeaves(going({ refused: true }), me('account-a', 'consent'), PLACE_KEPT)).toBe(
       'dropped',
     );
-    expect(commentBoxLeaves(going(), me('account-a', null))).toBe('dropped');
+    expect([...readCommentDrafts(storage, POST, 'account-a', Date.now()).replies]).toEqual([
+      [PARENT, '쓰던 답글'],
+    ]);
+  });
+
+  it('is its text, kept nowhere, when a read takes it away in place with a step left — the page stays (7-23), and the section shows it (오너 결정 2026-10-21 답 2)', () => {
+    const consent = me('account-a', 'consent');
+    expect(commentBoxLeaves(going(), consent, PLACE_GONE)).toBe('none');
+    expect(commentBoxLeaves(going({ refused: true }), consent, PLACE_GONE)).toBe('refused');
+    expect(commentBoxLeaves(going({ pending: true }), consent, PLACE_GONE)).toBe('pending');
+    expect(
+      commentBoxLeaves(
+        going({
+          key: { kind: 'comment', postId: POST },
+          text: '쓰던 댓글',
+          place: { kind: 'post' },
+        }),
+        consent,
+        PLACE_GONE,
+      ),
+    ).toBe('none');
+    // Never both shown and kept: a text closed now does not come back after the step.
+    expect(storage.items.size).toBe(0);
+  });
+
+  it('is nothing with nothing to lose: no text, or an edit as the comment stands', () => {
+    expect(
+      commentBoxLeaves(going({ refused: true, text: '  ' }), me('account-a', null), PLACE_GONE),
+    ).toBe('dropped');
+    expect(commentBoxLeaves(going({ text: '' }), me('account-a', null), PLACE_GONE)).toBe(
+      'dropped',
+    );
+    expect(
+      commentBoxLeaves(
+        going({
+          key: { kind: 'edit', postId: POST, commentId: PARENT },
+          text: '댓글 ',
+          initial: '댓글',
+        }),
+        me('account-a', 'consent'),
+        PLACE_KEPT,
+      ),
+    ).toBe('dropped');
+    expect(storage.items.size).toBe(0);
+  });
+
+  it('is nothing once the writer closed it with no write either (취소, asked first)', () => {
+    expect(commentBoxLeaves(going({ closed: true }), me('account-a', null), PLACE_GONE)).toBe(
+      'dropped',
+    );
+    expect(commentBoxLeaves(going({ closed: true }), me('account-a', 'consent'), PLACE_KEPT)).toBe(
+      'dropped',
+    );
+    expect(storage.items.size).toBe(0);
   });
 });
 

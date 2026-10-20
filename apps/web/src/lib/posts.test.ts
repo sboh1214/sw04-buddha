@@ -215,20 +215,28 @@ describe('a post gone while its page is open (postGoneAfter, Codex review of #21
     expect(postGoneAfter(true, read)).toBe(true);
   });
 
-  it('is what the post page and the edit screen draw from, and both then draw the server page again (the 404)', () => {
+  it('is what the post page and the edit screen draw from, and both then draw the server page again (the 404) — the post page once no comment text is held apart', () => {
     // No component renders under node: the screens' wiring is pinned in their source, as the
     // write screen's is below.
     const source = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8');
     const refreshAtOnce =
       /useEffect\(\(\) => \{\s*if \(gone\) router\.refresh\(\);\s*\}, \[gone, router\]\);/;
-    // The post page: the sentence in place of the post (or its placeholder) and its market, in the
-    // one tree the comment section stays mounted in (#48, ADR-0074 결정 6), and the server page at
-    // once.
+    // The post page (#48, ADR-0074 7-27): the server page is drawn again once the comment section
+    // holds no text apart — at once when it holds none (오너 결정 2026-10-21 답 1) — not as the post
+    // goes.
     const page = source('../app/community/posts/[postId]/post-screen.tsx');
     expect(page).toContain('const [gone, setGone] = useState(false);');
     expect(page).toContain('const nowGone = postGoneAfter(gone, query);');
     expect(page).toContain('if (nowGone !== gone) setGone(nowGone);');
-    expect(page).toMatch(refreshAtOnce);
+    expect(page).not.toMatch(refreshAtOnce);
+    expect(page).toMatch(
+      /const toNotFound = useCallback\(\(\) => \{[\s\S]*?router\.refresh\(\);\s*\}, \[router\]\);/,
+    );
+    expect(page).toContain(
+      '<CommentsSection post={post} gone={gone} onNothingHeld={toNotFound} focusGone={focusGone} />',
+    );
+    // The sentence in place of the post (or its placeholder) and its market, in the one tree the
+    // comment section stays mounted in (#48, ADR-0074 결정 6).
     expect(page).toMatch(
       /\{gone \? \([\s\S]*?data-testid="post-gone"[\s\S]*?\{copy\.postNotFound\}[\s\S]*?\) : post\.state !== 'published' \? \(/,
     );

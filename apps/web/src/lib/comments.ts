@@ -284,7 +284,8 @@ export function commentWriteErrorMessage(error: unknown, write: CommentWrite): s
  * Whether a refusal means the thread on screen is out of date — the post or a 댓글 was hidden or
  * deleted, or a comment or the post is gone — so the hooks read the post and its comments again
  * and the page shows what they are now: the placeholders, the box closed, or for a post gone from
- * every view its 404 (post-screen.tsx). A refused write's words stay under its button; should the
+ * every view its 404 — once no text is held apart (post-screen.tsx, 오너 결정 2026-10-21 답 1). A
+ * refused write's words stay under its button; should the
  * thread read again no longer hold the box, they stay with its text where the box stood until the
  * writer closes them (`useCommentBoxDraft`, components/post/held-comment-text.tsx) — and, being
  * about the thread, they are what that text says rather than the box's place as read again
@@ -326,7 +327,9 @@ export type HeldTextPlace =
  * Text the page shows apart from any box, with why it cannot be sent, until the writer closes it
  * (오너 결정 2026-10-20 답 4): the text of a box whose write was refused and which went — the post
  * or the 댓글 hidden or deleted, the comment gone, so the thread read again no longer holds it —
- * and a draft taken back after an onboarding step whose box can no longer open
+ * the text of a box with no write that went because its place took it no more (a read in the
+ * background, the writer's own 댓글 deleted under an open 답글: 오너 결정 2026-10-21 답 2), and a
+ * draft taken back after an onboarding step whose box can no longer open
  * (`resolveCommentDrafts`). Only the account on screen's (lib/held-comment-texts.ts).
  */
 export interface HeldText {
@@ -429,19 +432,30 @@ function editRefusalOf(state: PostComment['state']): string | undefined {
 }
 
 /**
+ * The post as its page shows it: published, hidden or deleted (its placeholder, ADR-0073) — or
+ * `gone`, out of every view while the page is open (a deleted post's last comment deleted, the
+ * read after a write NOT_FOUND): the page holds off its 404 while texts are held apart and shows
+ * only them under '없거나 삭제된 글입니다.' (오너 결정 2026-10-21 답 1, post-screen.tsx).
+ */
+export type CommentsPostState = Post['state'] | 'gone';
+
+/**
  * Why the place a box stood in takes its text no more, as the post and its threads now read — in
- * the words the server would refuse it in — or nothing while it still would: the post hidden or
- * deleted (a new 댓글, a 대댓글; an edit is still its author's, 7-6), the 댓글 to answer a
+ * the words the server would refuse it in — or nothing while it still would: the post out of every
+ * view ('없거나 삭제된 글입니다.', for every box — its comments are gone with it), the post hidden
+ * or deleted (a new 댓글, a 대댓글; an edit is still its author's, 7-6), the 댓글 to answer a
  * placeholder or out of the view, the comment edited hidden or out of it. A box gone from a thread
  * on screen went with that thread's pages read, so one not among them is gone. What a held text
- * says when the refusal its box heard was about something else — a network failure, say — and the
- * box went later because its thread changed (`heldTextsOf`).
+ * says for a box with no write that went because its place changed (오너 결정 2026-10-21 답 2), and
+ * when the refusal its box heard was about something else — a network failure, say — and the box
+ * went later because its thread changed (`heldTextsOf`).
  */
 export function goneBoxReason(
   place: HeldTextPlace,
-  view: { postState: Post['state']; threads: readonly CommentThread[] },
+  view: { postState: CommentsPostState; threads: readonly CommentThread[] },
 ): string | undefined {
   const { postState, threads } = view;
+  if (postState === 'gone') return copy.errPostGone;
   if (place.kind !== 'comment' && postState !== 'published') {
     return commentsClosedMessage(postState);
   }
@@ -494,13 +508,14 @@ export interface ResolvedCommentDrafts {
  * longer open, apart, with the words the server would refuse it in (`unplaced`): the post hidden
  * or deleted meanwhile, the 댓글 a placeholder or gone, the comment hidden or gone. A comment not
  * among the pages read waits for them (`waiting`: the page reads on) and is gone once every page
- * is read (`allRead`).
+ * is read (`allRead`). A post out of every view (`gone`) takes none: each is shown apart with
+ * '없거나 삭제된 글입니다.' (오너 결정 2026-10-21 답 1).
  */
 export function resolveCommentDrafts(
   drafts: CommentDrafts,
   view: {
     postId: string;
-    postState: Post['state'];
+    postState: CommentsPostState;
     threads: readonly CommentThread[];
     allRead: boolean;
     viewerPublicId: string;
@@ -512,6 +527,35 @@ export function resolveCommentDrafts(
   const unplaced: UnplacedCommentDraft[] = [];
   let comment: string | undefined;
   let waiting = false;
+
+  if (postState === 'gone') {
+    const reason = copy.errPostGone;
+    if (drafts.comment !== undefined) {
+      unplaced.push({
+        key: { kind: 'comment', postId },
+        text: drafts.comment,
+        reason,
+        place: { kind: 'post' },
+      });
+    }
+    for (const [parentId, text] of drafts.replies) {
+      unplaced.push({
+        key: { kind: 'reply', postId, parentId },
+        text,
+        reason,
+        place: { kind: 'thread', threadId: parentId },
+      });
+    }
+    for (const [commentId, text] of drafts.edits) {
+      unplaced.push({
+        key: { kind: 'edit', postId, commentId },
+        text,
+        reason,
+        place: { kind: 'comment', commentId, threadId: commentId },
+      });
+    }
+    return { comment, replies, edits, unplaced, waiting };
+  }
 
   if (drafts.comment !== undefined) {
     if (postState === 'published') comment = drafts.comment;
