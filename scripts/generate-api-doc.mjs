@@ -70,7 +70,8 @@ const BANNER = `<!-- 이 파일은 scripts/generate-api-doc.mjs 가 생성합니
 /**
  * 개요. Read from packages/shared/src/api/{envelope,pagination,coin-amount}.ts, the document's own
  * `info.description`, apps/api/src/main.ts's prefix/versioning (mirrored in openapi-export.ts),
- * apps/api/src/openapi/document.ts (operationIdFactory) and apps/web/next.config.ts (the rewrite).
+ * apps/api/src/openapi/document.ts (operationIdFactory), apps/web/next.config.ts (the rewrite),
+ * apps/api/src/infra/http/security-headers.ts (`X-Robots-Tag`) and apps/web/src/app/robots.ts.
  */
 const OVERVIEW = `## 개요
 
@@ -99,6 +100,9 @@ const OVERVIEW = `## 개요
   긴 문자열은 파싱하기 전에 거절한다: 백만 자리 \`BigInt()\` 는 요청 스레드에서 실제로 CPU 를 쓴다).
 - **본문 형식** — 요청·응답 모두 \`application/json\` 이다.
   \`application/x-www-form-urlencoded\` 파서는 꺼져 있다(HTML 폼이 바로 CSRF 의 모양이다).
+- **검색 엔진** — 모든 응답(\`/api/auth/*\`·헬스체크·오류 응답까지)에 \`X-Robots-Tag: noindex\` 가
+  붙는다(\`apps/api/src/infra/http/security-headers.ts\`, ADR-0075). 웹의 \`/robots.txt\` 는 검색
+  로봇에게 \`/api/\` 를 막는다. API 의 답은 검색 엔진이 담을 화면이 아니다.
 - **operationId** — 오퍼레이션마다 \`@ApiOperation({ operationId })\` 로 명시한다. 명시하지 않은
   오퍼레이션만 컨트롤러의 메서드 이름을 쓴다(\`openapi/document.ts\` 의 \`operationIdFactory\`).`;
 

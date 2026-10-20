@@ -61,6 +61,15 @@ export const helmetOptions: FastifyHelmetOptions = {
 };
 
 /**
+ * `X-Robots-Tag` on every response of this server (#47, ADR-0075 — owner decision 2026-10-21):
+ * nothing the API answers is a page for a search engine. robots.txt (the web's `app/robots.ts`)
+ * already asks crawlers not to fetch `/api/`; this is the second layer the owner chose beside it
+ * — a crawler that fetches an API address anyway (robots.txt is advice), or finds one linked
+ * somewhere, is told not to index it, the 토론's posts and the rest of the public API alike.
+ */
+export const ROBOTS_TAG = 'noindex';
+
+/**
  * Registers the headers on the Fastify instance behind a Nest app.
  *
  * Called from BOTH main.ts and test/app.ts, and it exists so those two cannot drift: a header
@@ -68,10 +77,23 @@ export const helmetOptions: FastifyHelmetOptions = {
  * has already had to learn that lesson (`useWebSocketAdapter` carries the same warning). Must
  * run before `init()`/`listen()` — a Fastify plugin cannot be added to a started instance.
  *
+ * `X-Robots-Tag` is written the way helmet writes its headers: on `reply.raw`, in an `onRequest`
+ * hook registered here — ahead of the address limit's hook (main.ts) and of the middie middleware
+ * Nest flushes during init — so better-auth's `/api/auth/*` answers (written on the raw response,
+ * never flushing Fastify's reply headers), the address limit's 429, a path no route matches, a
+ * body that does not parse and every error Nest's filter answers carry it as a 200 does.
+ *
  * The Socket.IO handshake is deliberately untouched by it: engine.io attaches to the raw HTTP
  * server on its own path and never enters Fastify's request lifecycle, so no hook here can add
  * or remove a header on it.
  */
 export async function registerSecurityHeaders(app: NestFastifyApplication): Promise<void> {
   await app.register(helmet, helmetOptions);
+  app
+    .getHttpAdapter()
+    .getInstance()
+    .addHook('onRequest', (_request, reply, done) => {
+      reply.raw.setHeader('X-Robots-Tag', ROBOTS_TAG);
+      done();
+    });
 }

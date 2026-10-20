@@ -54,6 +54,11 @@ describe('security headers', () => {
     expect(res.headers['strict-transport-security']).toBe('max-age=63072000; includeSubDomains');
   });
 
+  it('asks search engines not to index any response (ADR-0075, owner decision 2026-10-21)', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/thing' });
+    expect(res.headers['x-robots-tag']).toBe('noindex');
+  });
+
   it('allows a sibling host of the same site to read a response (ADR-0017)', async () => {
     // `same-origin` — helmet's default — would be a rule this architecture is built to break:
     // the browser dials the API origin directly for the socket, and the app dials it for
@@ -70,5 +75,6 @@ describe('security headers', () => {
     // to frame and read, and it is the response most likely to escape a per-route rule.
     expect(res.headers['content-security-policy']).toContain("frame-ancestors 'none'");
     expect(res.headers['x-content-type-options']).toBe('nosniff');
+    expect(res.headers['x-robots-tag']).toBe('noindex');
   });
 });

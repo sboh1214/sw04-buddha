@@ -674,6 +674,7 @@ describe.skipIf(!hasTestInfra)('rate limits (integration)', () => {
       // Sent from the hook, so the API's security headers must still be on it (the helmet
       // plugin is registered first, main.ts / test/app.ts).
       expect(refused.headers['x-content-type-options']).toBe('nosniff');
+      expect(refused.headers['x-robots-tag']).toBe('noindex');
       // A loopback peer is not counted, and says so by carrying none of them.
       const uncounted = await anonymous('/api/v1/categories');
       expect(uncounted.statusCode).toBe(200);

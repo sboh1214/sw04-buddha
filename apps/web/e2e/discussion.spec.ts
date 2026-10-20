@@ -17,20 +17,21 @@ import {
 } from './helpers';
 
 /**
- * 토론 (#47, ADR-0075; owner decisions in ADR-0069 decision 4 #47, decision 2 #45-6, of 2026-10-18
- * and of 2026-10-20): the market detail's section of that market's 근거 글, read in the browser only
- * — the server's HTML holds its heading, 글쓰기 and its loading state, never a post, a count or an
- * author, and robots.txt keeps crawlers off `/api/`, where the browser reads them, while the detail
- * stays open to search engines. Before any post it is its empty notice with '글 0' and 글쓰기; with
- * posts it is the community list's cards without their market line, newest first, 20 at a time
- * per 더 보기 until every post is there, with how many beside the heading — only this market's,
- * each card opening its post; a first read that fails says so with 다시 시도, and a 더 보기 that
- * fails says so above the button, which asks again. A closed market's 토론 reads the same and still
- * offers 글쓰기 (every public status takes a post). A refresh that fails keeps the cards and the
- * count under a notice. 글쓰기 is one link to the write screen of this market: a visitor is asked to
- * sign in there and comes back to it, and a member writes straight away, the post then at the top
- * of the section. An account with onboarding steps left never stays on the detail: the gate takes
- * it to its step, as it does from the write screen's address.
+ * 토론 (#47, ADR-0075; owner decisions in ADR-0069 decision 4 #47, decision 2 #45-6, of 2026-10-18,
+ * of 2026-10-20 and of 2026-10-21): the market detail's section of that market's 근거 글, read in the
+ * browser only — the server's HTML holds its heading, 글쓰기 and its loading state, never a post, a
+ * count or an author, and robots.txt keeps crawlers off `/api/`, where the browser reads them,
+ * every answer of which says `noindex`, while the detail stays open to search engines. Before any
+ * post it is its empty notice with '글 0' and 글쓰기; with posts it is the community list's cards
+ * without their market line, newest first, 20 at a time per 더 보기 until every post is there, with
+ * how many beside the heading — only this market's, each card opening its post; a first read that
+ * fails says so with 다시 시도, and a 더 보기 that fails says so above the button, which asks again. A
+ * closed market's 토론 reads the same and still offers 글쓰기 (every public status takes a post). A
+ * refresh that fails keeps the cards and the count under a notice. 글쓰기 is one link to the write
+ * screen of this market: a visitor is asked to sign in there and comes back to it, and a member
+ * writes straight away, the post then at the top of the section. An account with onboarding steps
+ * left never stays on the detail: the gate takes it to its step, as it does from the write screen's
+ * address.
  *
  * What the API leaves out — deleted and hidden posts, a draft market, an author's holdings or
  * orders — is the API's integration and guard tests' (posts.controller.test.ts,
@@ -414,7 +415,7 @@ test.describe('시장 상세 · 토론', () => {
     await expect(failed).toHaveCount(0);
   });
 
-  test('검색 로봇은 robots.txt로 /api/를 읽지 못하고, 시장 상세는 검색 엔진에 열려 있다', async ({
+  test('검색 로봇은 robots.txt로 /api/를 읽지 못하고 /api/의 답은 noindex이며, 시장 상세는 검색 엔진에 열려 있다', async ({
     admin,
     request,
   }) => {
@@ -435,5 +436,14 @@ test.describe('시장 상세 · 토론', () => {
     const market = await createOpenMarket(admin);
     const html = await serverHtml(request, market.slug);
     expect(html).not.toMatch(/<meta name="robots"/);
+
+    // Owner decision 2026-10-21: and every `/api` answer says `noindex`, through the web's own
+    // origin as the browser reads the 토론 — for a crawler that fetches it anyway. The page does not.
+    const posts = await request.get(`/api/v1/markets/${market.id}/posts`);
+    expect(posts.status()).toBe(200);
+    expect(posts.headers()['x-robots-tag']).toBe('noindex');
+    const detail = await request.get(`/markets/${market.slug}`);
+    expect(detail.status()).toBe(200);
+    expect(detail.headers()['x-robots-tag']).toBeUndefined();
   });
 });
