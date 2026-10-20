@@ -167,19 +167,24 @@ function refusalOf(details: unknown): ImageRefusal | undefined {
 /**
  * What a refused upload says, or nothing: the server's reason (IMAGE_NOT_ALLOWED); a body refused
  * by its length before the route (413, twice the limit) is the size; the cookie as another account
- * is a stale screen; a refusal for the onboarding says nothing — the gate takes the account to its
- * step and the form keeps its draft in the tab, as for a refused send (owner decision 2026-10-21);
- * anything else is a failed upload, said apart from an unreachable server — the API busy receiving
- * other uploads (RATE_LIMITED) included: that file failed, the batch goes on.
+ * is a stale screen; a refusal for the onboarding says nothing while the onboarding gate takes the
+ * account to its step (`gateMoves` — `['me']`, read again after the refusal, names a step left) and
+ * the form keeps its draft in the tab, as for a refused send (owner decision 2026-10-21), and when
+ * the gate stays — that read failed — says what a refused send says (owner decision 2026-10-21
+ * answer 6); anything else is a failed upload, said apart from an unreachable server — the
+ * API busy receiving other uploads or the account's three in flight (RATE_LIMITED), and a body cut
+ * for idling (408), included: that file failed, the batch goes on.
  */
-export function imageUploadErrorMessage(error: unknown): string | undefined {
+export function imageUploadErrorMessage(error: unknown, gateMoves: boolean): string | undefined {
   if (isForAnotherAccount(error)) return copy.sessionChanged;
   if (isApiError(error, 'IMAGE_NOT_ALLOWED')) {
     const reason = refusalOf(error.details);
     return reason === undefined ? copy.errImageUpload : imageRefusalMessage(reason);
   }
   if (isApiError(error) && error.status === 413) return copy.errImageSize;
-  if (isApiError(error, 'ONBOARDING_REQUIRED')) return undefined;
+  if (isApiError(error, 'ONBOARDING_REQUIRED')) {
+    return gateMoves ? undefined : copy.errPostOnboarding;
+  }
   return isApiUnreachable(error) ? copy.errNetwork : copy.errImageUpload;
 }
 
@@ -364,9 +369,39 @@ export function takeImageBatch<F extends { type: string; size: number }>(
   return { sending, refusals, taken };
 }
 
+/** One editor's uploads, sent one at a time (`createUploadQueue`). */
+export interface UploadQueue {
+  /** Runs `send` once every send queued before it has settled, however it ended: its outcome. */
+  run<T>(send: () => Promise<T>): Promise<T>;
+}
+
+/**
+ * The line every upload of one editor waits in, whatever batch it is of: one send at a time, in the
+ * order they came, a failed one letting the next go. A pick or a drop while another batch uploads
+ * starts its own batch (the toolbar and the drop target stay open, `createImageSlots`), and each
+ * holds one of the account's three uploads in flight on the API until its answer (owner decision
+ * 2026-10-21 answer 4, apps/api image-body.ts) — so batches sent side by side, four single picks
+ * during one slow photo, had the fourth refused (429) as that file's failure. In this line the
+ * writer's page holds one of the three. Slots are taken when a batch starts all the same
+ * (`takeImageBatch`): a file waiting its turn is counted ('이미지 n / 10장').
+ */
+export function createUploadQueue(): UploadQueue {
+  let tail: Promise<unknown> = Promise.resolve();
+  return {
+    run<T>(send: () => Promise<T>): Promise<T> {
+      const result = tail.then(send);
+      tail = result.catch(() => undefined);
+      return result;
+    },
+  };
+}
+
 /** What `uploadImageBatch` does with each file (components/post/post-editor.tsx). */
 export interface ImageBatchSteps<F> {
-  /** False once the editor is gone (the onboarding gate took the form away): nothing more leaves. */
+  /**
+   * False once the editor is gone (the onboarding gate took the form away): nothing more leaves —
+   * asked as each file's turn comes.
+   */
   alive(): boolean;
   /**
    * Sends one file and puts its image in the document, calling `placed` once the image is there
@@ -378,40 +413,47 @@ export interface ImageBatchSteps<F> {
 }
 
 /**
- * Sends the files `takeImageBatch` let through and took the slots for, one file after another, and
+ * Sends the files `takeImageBatch` let through and took the slots for, one file after another in
+ * the editor's line (`queue` — behind the sends of its other batches, `createUploadQueue`), and
  * gives each file's slot back however it ends: placed in the document, or failed. A refusal about
- * the account (`refusesImageBatch`) ends the batch — handed to `failed` once (said once, or for the
- * onboarding not at all — `imageUploadErrorMessage`), the account's state already put on screen by
- * the upload (`postImageUploader`) — and so does an editor gone; the files not sent give their
- * slots back at once. Sending on would have every later file refused alike, each refusal reading
- * the account again, on the page the gate moved to. Any other failure is that file's alone (a
- * refused image, the network, the API busy receiving — RATE_LIMITED): the batch goes on.
+ * the account (`refusesImageBatch`) ends the batch — handed to `failed` once (said once; for the
+ * onboarding only when the gate stays — `imageUploadErrorMessage`), the account's state already
+ * put on screen by the upload (`postImageUploader`) — and so does an editor gone by a file's turn;
+ * the files not sent give their slots back at once. Sending on would have every later file refused
+ * alike, each refusal reading the account again, on the page the gate moved to. Any other failure
+ * is that file's alone (a refused image, the network, the API busy receiving or the account's three
+ * uploads in flight — RATE_LIMITED, a body cut for idling): the batch goes on.
  */
 export async function uploadImageBatch<F>(
   files: readonly F[],
   slots: ImageSlots,
+  queue: UploadQueue,
   steps: ImageBatchSteps<F>,
 ): Promise<void> {
   // The slots of the files not yet started.
   let unsent = files.length;
   try {
     for (const file of files) {
-      if (!steps.alive()) return;
-      unsent -= 1;
-      let held = true;
-      const giveBack = () => {
-        if (!held) return;
-        held = false;
-        slots.give();
-      };
-      try {
-        await steps.send(file, giveBack);
-      } catch (error) {
-        steps.failed(error);
-        if (refusesImageBatch(error)) return;
-      } finally {
-        giveBack();
-      }
+      const outcome = await queue.run(async (): Promise<'next' | 'stop'> => {
+        if (!steps.alive()) return 'stop';
+        unsent -= 1;
+        let held = true;
+        const giveBack = () => {
+          if (!held) return;
+          held = false;
+          slots.give();
+        };
+        try {
+          await steps.send(file, giveBack);
+          return 'next';
+        } catch (error) {
+          steps.failed(error);
+          return refusesImageBatch(error) ? 'stop' : 'next';
+        } finally {
+          giveBack();
+        }
+      });
+      if (outcome === 'stop') return;
     }
   } finally {
     slots.give(unsent);

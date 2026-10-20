@@ -34,14 +34,20 @@ import {
   type JSONContent,
 } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
+import { useQueryClient } from '@tanstack/react-query';
+import { usePathname } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
+import { ME_QUERY_KEY } from '@/hooks/use-me';
 import { useUploadPostImage } from '@/hooks/use-posts';
+import { type Me } from '@/lib/api';
+import { needsOnboarding } from '@/lib/onboarding';
 import {
   POST_TEXT_COLOR_LABEL,
   POST_TEXT_COLOR_OPTIONS,
   countEditorDocument,
+  createUploadQueue,
   imageRefusalMessage,
   imageUploadErrorMessage,
   isPostTextColor,
@@ -330,9 +336,20 @@ export function PostEditor({
   });
 
   const [uploads, setUploads] = useState(0);
+  // Every batch's files go up one at a time through this line, for the editor's life: a batch
+  // picked or dropped while another uploads waits its turn, so the writer's page holds one of the
+  // account's three uploads in flight on the API (`createUploadQueue`).
+  const [sends] = useState(createUploadQueue);
   const { refetch: refetchSession } = useSession();
   // A refused upload runs a refused send's side effects (`postImageUploader`).
   const upload = useUploadPostImage(() => void refetchSession());
+  const queryClient = useQueryClient();
+  const pathname = usePathname();
+  // Whether the onboarding gate (components/auth/onboarding-gate.tsx) is taking the account away
+  // from this page, by `['me']` as the cache holds it at the call — after a refused upload has read
+  // it again — rather than as this render saw it.
+  const gateMoves = () =>
+    needsOnboarding(pathname, queryClient.getQueryData<Me>(ME_QUERY_KEY)?.onboarding);
   const fileInput = useRef<HTMLInputElement>(null);
 
   // `editable` above is read once, when the editor is made; a send in flight locks it after that.
@@ -379,9 +396,9 @@ export function PostEditor({
       return;
     }
     if (batch.sending.length === 0) return;
-    // One file after another; a refusal about the account, or the editor gone, ends the batch
-    // (`uploadImageBatch`).
-    await uploadImageBatch(batch.sending, slots, {
+    // One file after another, behind the files of the editor's other batches; a refusal about the
+    // account, or the editor gone by a file's turn, ends the batch (`uploadImageBatch`).
+    await uploadImageBatch(batch.sending, slots, sends, {
       alive: () => !editor.isDestroyed,
       send: async (file, placed) => {
         changeUploads(1);
@@ -420,12 +437,12 @@ export function PostEditor({
       },
       // A refusal for the onboarding or as another account has already put the account's state
       // on screen (`useUploadPostImage`), as a refused send does. The onboarding's says nothing
-      // (owner decision 2026-10-21): the gate takes the account to its step, the draft kept in the
-      // tab — a toast would follow it there. (Should `['me']` fail to be read again, the gate stays
-      // and nothing is said: an open question to the owner, ADR-0073 결과 4.) Any other is said:
-      // that file's failure alone.
+      // while the gate takes the account to its step, the draft kept in the tab — a toast would
+      // follow it there (owner decision 2026-10-21); should `['me']` fail to be read again, the
+      // gate stays, and it says what a refused send says (owner decision 2026-10-21
+      // answer 6). Any other is said: that file's failure alone.
       failed: (error) => {
-        const message = imageUploadErrorMessage(error);
+        const message = imageUploadErrorMessage(error, gateMoves());
         if (message !== undefined) toaster.create({ type: 'error', title: message });
       },
     });

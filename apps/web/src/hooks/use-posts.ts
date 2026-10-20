@@ -89,8 +89,14 @@ export function usePostWriter() {
   return {
     pending: me.isPending,
     signedIn: me.isLoggedIn,
-    /** Signed in, and `GET /me` failed: who is writing is unknown, so nothing is offered. */
-    failed: me.isLoggedIn && me.isError,
+    /**
+     * Signed in, and `GET /me` failed without ever answering: who is writing is unknown, so
+     * nothing is offered. A read again that fails (a refused write's, a window's focus) keeps what
+     * the last one said — the form and its draft stay, as the onboarding gate does — rather than
+     * taking the form, and what was written in it, away; the server checks the account of every
+     * write besides (`expectedAccountId`).
+     */
+    failed: me.isLoggedIn && me.isError && me.data === undefined,
     accountId: me.data?.id,
     publicId: me.data?.profile.publicId,
   };

@@ -10,12 +10,14 @@ import { describe, expect, it, vi } from 'vitest';
 import { copy } from '@/copy';
 import { system } from '@/theme/system';
 import { ApiError } from './api';
+import { postWriteErrorMessage } from './posts';
 import {
   POST_TEXT_COLOR_LABEL,
   bodyChangedFrom,
   countEditorDocument,
   countWithUploads,
   createImageSlots,
+  createUploadQueue,
   draftChanged,
   editorImageIds,
   imagePrecheck,
@@ -152,20 +154,21 @@ describe('a picked image', () => {
   it('says the server’s reason when it refuses one', () => {
     const refused = (reason: string) =>
       new ApiError(422, { code: 'IMAGE_NOT_ALLOWED', message: 'x', details: { reason } } as never);
-    expect(imageUploadErrorMessage(refused('type'))).toBe(copy.errImageType);
-    expect(imageUploadErrorMessage(refused('size'))).toBe(copy.errImageSize);
+    expect(imageUploadErrorMessage(refused('type'), true)).toBe(copy.errImageType);
+    expect(imageUploadErrorMessage(refused('size'), true)).toBe(copy.errImageSize);
     // One sentence for a frame too large and for too many frames (owner decision 2026-10-19).
     expect(copy.errImageTooLarge).toBe('이미지가 너무 크거나 프레임이 너무 많습니다.');
-    expect(imageUploadErrorMessage(refused('pixels'))).toBe(copy.errImageTooLarge);
-    expect(imageUploadErrorMessage(refused('frames'))).toBe(copy.errImageTooLarge);
-    expect(imageUploadErrorMessage(refused('unreadable'))).toBe(copy.errImageUnreadable);
-    expect(imageUploadErrorMessage(refused('empty'))).toBe(copy.errImageEmpty);
-    expect(imageUploadErrorMessage(refused('later'))).toBe(copy.errImageUpload);
+    expect(imageUploadErrorMessage(refused('pixels'), true)).toBe(copy.errImageTooLarge);
+    expect(imageUploadErrorMessage(refused('frames'), true)).toBe(copy.errImageTooLarge);
+    expect(imageUploadErrorMessage(refused('unreadable'), true)).toBe(copy.errImageUnreadable);
+    expect(imageUploadErrorMessage(refused('empty'), true)).toBe(copy.errImageEmpty);
+    expect(imageUploadErrorMessage(refused('later'), true)).toBe(copy.errImageUpload);
     expect(imageRefusalMessage('size')).toBe(copy.errImageSize);
     // Refused by its length before the route, past twice the limit.
     expect(
       imageUploadErrorMessage(
         new ApiError(413, { code: 'VALIDATION_ERROR', message: 'too large' } as never),
+        true,
       ),
     ).toBe(copy.errImageSize);
     expect(
@@ -175,26 +178,31 @@ describe('a picked image', () => {
           message: 'x',
           details: [{ path: ['expectedAccountId'], message: 'other account' }],
         }),
+        true,
       ),
     ).toBe(copy.sessionChanged);
-    expect(imageUploadErrorMessage(new TypeError('Failed to fetch'))).toBe(copy.errNetwork);
+    expect(imageUploadErrorMessage(new TypeError('Failed to fetch'), true)).toBe(copy.errNetwork);
   });
 
-  it('says nothing for a refusal for the onboarding: the gate takes the account to its step (owner decision 2026-10-21)', () => {
-    expect(
-      imageUploadErrorMessage(
-        new ApiError(409, {
-          code: 'ONBOARDING_REQUIRED',
-          message: 'x',
-          details: { steps: ['consent'] },
-        } as never),
-      ),
-    ).toBeUndefined();
+  it('says nothing for a refusal for the onboarding while the gate takes the account to its step, and what a refused send says when it stays (owner decisions 2026-10-21)', () => {
+    const onboarding = new ApiError(409, {
+      code: 'ONBOARDING_REQUIRED',
+      message: 'x',
+      details: { steps: ['consent'] },
+    } as never);
+    // `['me']` read again names the step: the gate moves, and a toast would follow it there.
+    expect(imageUploadErrorMessage(onboarding, true)).toBeUndefined();
+    // That read failed (the address limit's 429, the network): the gate stays, so it is said.
+    expect(imageUploadErrorMessage(onboarding, false)).toBe(copy.errPostOnboarding);
+    expect(copy.errPostOnboarding).toBe(postWriteErrorMessage(onboarding));
+    // Whether the gate moves says nothing about any other refusal.
+    expect(imageUploadErrorMessage(new TypeError('Failed to fetch'), false)).toBe(copy.errNetwork);
   });
 
-  it('says that the file failed when the API is busy receiving other uploads (owner decision 2026-10-21)', () => {
-    // 429 with Retry-After: the uploads being received hold the process's budget, or too many
-    // conversions wait — that file's failure, nothing about the account.
+  it('says that the file failed when the API is busy receiving other uploads, has the account’s three in flight, or cut the body for idling (owner decisions 2026-10-21)', () => {
+    // 429 with Retry-After: the uploads being received hold the process's budget, the account has
+    // three uploads in flight, or too many conversions wait — that file's failure, nothing about
+    // the account.
     expect(
       imageUploadErrorMessage(
         new ApiError(429, {
@@ -202,6 +210,14 @@ describe('a picked image', () => {
           message: 'busy',
           details: { retryAfterSeconds: 2 },
         } as never),
+        true,
+      ),
+    ).toBe(copy.errImageUpload);
+    // 408: no byte of the body came for 30 seconds.
+    expect(
+      imageUploadErrorMessage(
+        new ApiError(408, { code: 'VALIDATION_ERROR', message: 'idle' } as never),
+        true,
       ),
     ).toBe(copy.errImageUpload);
   });
@@ -522,7 +538,7 @@ describe('uploadImageBatch', () => {
     const sent: string[] = [];
     const heldWhileSending: number[] = [];
     const failed = vi.fn();
-    await uploadImageBatch(files, slots, {
+    await uploadImageBatch(files, slots, createUploadQueue(), {
       alive: options.alive ?? (() => true),
       send: async (sending, placed) => {
         sent.push(sending.name);
@@ -599,7 +615,7 @@ describe('uploadImageBatch', () => {
   });
 
   it('sends nothing more once the editor is gone, and gives the unsent files’ slots back', async () => {
-    // Asked before each file: there for the first, gone before the second.
+    // Asked as each file's turn comes: there for the first, gone before the second.
     let asked = 0;
     const result = await run([file('a'), file('b'), file('c')], () => undefined, {
       alive: () => {
@@ -608,7 +624,127 @@ describe('uploadImageBatch', () => {
       },
     });
     expect(result.sent).toEqual(['a']);
+    expect(asked).toBe(2);
     expect(result.failed).not.toHaveBeenCalled();
     expect(result.slots.inFlight).toBe(0);
+  });
+
+  /** A send that waits until let go: the sends in flight, and the most there were at once. */
+  function heldSends() {
+    const waiting: (() => void)[] = [];
+    let inFlight = 0;
+    let most = 0;
+    const sent: string[] = [];
+    const send = async (sending: { name: string }, placed: () => void) => {
+      sent.push(sending.name);
+      inFlight += 1;
+      most = Math.max(most, inFlight);
+      await new Promise<void>((resolve) => waiting.push(resolve));
+      inFlight -= 1;
+      placed();
+    };
+    return {
+      send,
+      sent,
+      waiting,
+      get most() {
+        return most;
+      },
+    };
+  }
+
+  /** Lets the sends go one after another until every batch has ended. */
+  async function letEachGo(sends: ReturnType<typeof heldSends>, batches: Promise<void>[]) {
+    let done = false;
+    void Promise.all(batches).then(() => {
+      done = true;
+    });
+    while (!done) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      sends.waiting.shift()?.();
+    }
+  }
+
+  it('sends one file at a time from one editor, whatever batches it has going (the account’s three in flight, owner decision 2026-10-21 answer 4)', async () => {
+    // Three single picks and a pair while the first is still on its way: each its own batch, all
+    // in the editor's one line.
+    const slots = createImageSlots();
+    const queue = createUploadQueue();
+    const sends = heldSends();
+    const failed = vi.fn();
+    const batches = [['a'], ['b'], ['c', 'd'], ['e']].map((names) => {
+      expect(slots.take(0, names.length)).toBe(true);
+      return uploadImageBatch(
+        names.map((name) => file(name)),
+        slots,
+        queue,
+        { alive: () => true, send: sends.send, failed },
+      );
+    });
+    await letEachGo(sends, batches);
+    expect(sends.most).toBe(1);
+    // In the order they came: a batch's next file queues behind the files picked meanwhile.
+    expect(sends.sent).toEqual(['a', 'b', 'c', 'e', 'd']);
+    expect(failed).not.toHaveBeenCalled();
+    expect(slots.inFlight).toBe(0);
+  });
+
+  it('lets the next file go after one that failed, and sends nothing of a waiting batch once the editor is gone', async () => {
+    const slots = createImageSlots();
+    const queue = createUploadQueue();
+    const failed = vi.fn();
+    let alive = true;
+    const sent: string[] = [];
+    const steps = {
+      alive: () => alive,
+      send: async (sending: { name: string }, placed: () => void) => {
+        sent.push(sending.name);
+        await Promise.resolve();
+        if (sending.name === 'refused') throw NOT_AN_IMAGE;
+        if (sending.name === 'last') alive = false;
+        placed();
+      },
+      failed,
+    };
+    expect(slots.take(0, 5)).toBe(true);
+    const first = uploadImageBatch([file('refused'), file('last')], slots, queue, steps);
+    const waiting = uploadImageBatch(
+      [file('next'), file('never'), file('nor')],
+      slots,
+      queue,
+      steps,
+    );
+    await Promise.all([first, waiting]);
+    // The failure is that file's alone; once the editor is gone, the waiting batch's turn comes and
+    // sends nothing more — every slot back.
+    expect(sent).toEqual(['refused', 'next', 'last']);
+    expect(failed.mock.calls).toEqual([[NOT_AN_IMAGE]]);
+    expect(slots.inFlight).toBe(0);
+  });
+});
+
+describe('createUploadQueue', () => {
+  it('runs one send at a time, in the order they came, each with its own outcome', async () => {
+    const queue = createUploadQueue();
+    const order: string[] = [];
+    let running = 0;
+    const send = (name: string, fail = false) =>
+      queue.run(async () => {
+        running += 1;
+        expect(running).toBe(1);
+        order.push(`${name} starts`);
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        order.push(`${name} ends`);
+        running -= 1;
+        if (fail) throw new Error(name);
+        return name;
+      });
+    const outcomes = await Promise.allSettled([send('a'), send('b', true), send('c')]);
+    expect(outcomes).toEqual([
+      { status: 'fulfilled', value: 'a' },
+      { status: 'rejected', reason: new Error('b') },
+      { status: 'fulfilled', value: 'c' },
+    ]);
+    expect(order).toEqual(['a starts', 'a ends', 'b starts', 'b ends', 'c starts', 'c ends']);
   });
 });

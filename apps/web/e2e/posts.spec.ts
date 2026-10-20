@@ -1114,7 +1114,61 @@ test.describe('근거 글', () => {
     await page.unrouteAll({ behavior: 'ignoreErrors' });
   });
 
-  test('이미지를 올리는 동안 더 고른 이미지는 올리는 중인 것까지 세어 글마다 10장을 넘기지 않고, 이미지 수도 올리는 중인 것을 세며, 미리 거른 파일은 세지 않는다', async ({
+  test('이미지 업로드가 온보딩 때문에 거절됐는데 내 정보를 다시 읽지 못해 게이트가 데려가지 못하면, 보내기의 거절과 같은 문장을 한 번 알리고 양식과 쓰던 글은 그대로다', async ({
+    admin,
+    page,
+  }) => {
+    const market = await createOpenMarket(admin);
+    await signUp(page, freshEmail());
+    const write = `/community/write?market=${market.id}`;
+    await page.goto(write);
+    const editor = page.getByTestId('post-editor-content');
+    await expect(editor).toBeVisible();
+    await page.getByTestId('post-title-input').fill('업로드 전에 쓰던 제목');
+    // The upload is refused for the onboarding, and `/me`, read again after it, is refused by the
+    // address limit (a 4xx: not retried): `['me']` still names no step left, so the gate stays.
+    let uploads = 0;
+    let meReads = 0;
+    await page.route('**/api/v1/media/images**', async (route) => {
+      uploads += 1;
+      await route.fulfill(ONBOARDING_REFUSAL);
+    });
+    await page.route('**/api/v1/me', async (route) => {
+      if (route.request().method() !== 'GET') return route.fallback();
+      meReads += 1;
+      await route.fulfill({
+        status: 429,
+        headers: { 'retry-after': '30' },
+        json: {
+          error: {
+            code: 'RATE_LIMITED',
+            message: 'Too many requests',
+            details: { retryAfterSeconds: 30 },
+          },
+        },
+      });
+    });
+    await page.getByTestId('post-editor-file').setInputFiles(pngFiles(3));
+    // Said once, as a refused send says it (owner decision 2026-10-21 answer 6) — and only
+    // here: where the gate moves, nothing is said (the spec above).
+    const toasts = toastsOf(page);
+    await expect(toasts.getByText(copy.errPostOnboarding)).toHaveCount(1);
+    await settle();
+    expect(meReads).toBeGreaterThan(0);
+    // The refusal is about the account: the other two never leave (ADR-0073 decision 9-41).
+    expect(uploads).toBe(1);
+    await expect(toasts.locator('[data-part="root"]')).toHaveCount(1);
+    // The screen stays, the form with it — not '내 정보를 불러오지 못했습니다.' in its place — and
+    // what was written: no image went in, and the count is back.
+    await expect(page).toHaveURL(write);
+    await expect(page.getByTestId('post-write-failed')).toHaveCount(0);
+    await expect(page.getByTestId('post-title-input')).toHaveValue('업로드 전에 쓰던 제목');
+    await expect(editor.locator('img[data-media-id]')).toHaveCount(0);
+    await expect(page.getByTestId('post-body-images')).toContainText('0 / 10');
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+  });
+
+  test('이미지를 올리는 동안 더 고른 이미지는 올리는 중인 것까지 세어 글마다 10장을 넘기지 않고, 이미지 수도 올리는 중인 것을 세며, 미리 거른 파일은 세지 않고, 묶음들은 한 번에 하나씩 올라간다', async ({
     admin,
     page,
   }) => {
@@ -1124,11 +1178,12 @@ test.describe('근거 글', () => {
     const editor = page.getByTestId('post-editor-content');
     await expect(editor).toBeVisible();
     // The uploads wait here until let go: the first batch is still on its way when the next comes.
+    // The most waiting at once is what the page had in flight at once.
     const held: Route[] = [];
-    let holding = true;
-    await page.route('**/api/v1/media/images**', async (route) => {
-      if (holding) held.push(route);
-      else await route.continue();
+    let mostHeld = 0;
+    await page.route('**/api/v1/media/images**', (route) => {
+      held.push(route);
+      mostHeld = Math.max(mostHeld, held.length);
     });
     const picker = page.getByTestId('post-editor-file');
     const images = page.getByTestId('post-body-images');
@@ -1151,15 +1206,21 @@ test.describe('근거 글', () => {
       { name: 'notes.txt', mimeType: 'text/plain', buffer: PNG },
     ]);
     await expect(toastsOf(page).getByText(copy.errImageType)).toBeVisible();
-    await expect.poll(() => held.length).toBe(2);
     await expect(images).toContainText('10 / 10');
     await expect(bodyErrors.getByText(copy.errPostTooManyImages)).toHaveCount(0);
-    holding = false;
-    for (const route of held) await route.continue();
+    // The second batch waits its turn behind the first: the page has one upload in flight, of the
+    // account's three on the API (owner decision 2026-10-21 answer 4, ADR-0073 decision 9-41).
+    expect(held).toHaveLength(1);
+    // Let each go as it comes: the ten, never two at once.
+    for (let sent = 0; sent < 10; sent += 1) {
+      await expect.poll(() => held.length).toBeGreaterThan(0);
+      await held.shift()!.continue();
+    }
     await expect(page.getByTestId('post-editor-uploading')).toHaveCount(0);
     await expect(editor.locator('img[data-media-id]')).toHaveCount(10);
     await expect(images).toContainText('10 / 10');
     await expect(bodyErrors.getByText(copy.errPostTooManyImages)).toHaveCount(0);
+    expect(mostHeld).toBe(1);
     await page.unrouteAll({ behavior: 'ignoreErrors' });
   });
 

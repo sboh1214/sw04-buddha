@@ -30,7 +30,7 @@ import { AppError } from '../common/errors/app-error.js';
 import { ApiData, ApiErrors } from '../common/openapi/api-response.decorators.js';
 import { OnboardedGuard } from '../onboarding/onboarded.guard.js';
 import { SESSION_SECURITY_SCHEME } from '../openapi/document.js';
-import { IMAGE_UPLOAD_CONTENT_TYPES } from './image-body.js';
+import { IMAGE_UPLOAD_CONTENT_TYPES, runUploadWork } from './image-body.js';
 import { IMAGE_READ_BUSY_RETRY_SECONDS, imageReads, imageReadsBusy } from './image-reads.js';
 import { IMAGE_BUSY_RETRY_SECONDS } from './image.js';
 import { MediaService } from './media.service.js';
@@ -53,6 +53,11 @@ export class MediaController {
    * or `application/octet-stream`; the type decides nothing, the bytes are checked. The account the
    * screen shows rides in the query (`expectedAccountId`): the body is the file, and the cookie
    * alone would put the upload on whichever account signed in last in another tab.
+   *
+   * The conversion and the store run as part of the upload the body parser's gate let in
+   * (`runUploadWork`, image-body.ts): the account's place among its three uploads in flight is held
+   * until they settle, even when the client has hung up meanwhile, and a client gone before they
+   * start has nothing stored — there is no one to answer.
    */
   @Post('images')
   @UseGuards(SessionGuard, OnboardedGuard)
@@ -71,11 +76,12 @@ export class MediaController {
   // FORBIDDEN: a mutation whose Origin is not ours (SessionGuard's CSRF check, or the body
   // parser's hook before the body is read — image-body.ts), or a query whose `expectedAccountId`
   // is not the cookie's account (details name the field; nothing stored). UNAUTHENTICATED and
-  // ONBOARDING_REQUIRED are answered by that hook too, before the body is read, and so are a body
-  // with no Content-Length (411) or one over the parser's limit (413), both VALIDATION_ERROR.
-  // RATE_LIMITED (every route documents it) is also the answer, with `Retry-After`, when the
-  // uploads being received hold the process's budget (that hook again, unread — image-body.ts) and
-  // when too many conversions are waiting (image.ts).
+  // ONBOARDING_REQUIRED are answered by that hook too, before the body is read, and so is a body
+  // declared over the parser's limit (413, VALIDATION_ERROR); a body that sends no byte for 30
+  // seconds is cut (408, VALIDATION_ERROR — image-body.ts). RATE_LIMITED (every route documents
+  // it) is also the answer, with `Retry-After`, when the account has three uploads in flight or
+  // the uploads being received hold the process's budget (that hook again, unread —
+  // image-body.ts) and when too many conversions are waiting (image.ts).
   @ApiErrors(
     'UNAUTHENTICATED',
     'FORBIDDEN',
@@ -87,8 +93,9 @@ export class MediaController {
     @CurrentUser() user: SessionUser,
     @Query({ schema: uploadImageQuerySchema }) query: UploadImageQuery,
     @Body() body: unknown,
+    @Req() request: FastifyRequest,
     @Res({ passthrough: true }) reply: FastifyReply,
-  ): Promise<UploadedImage> {
+  ): Promise<UploadedImage | undefined> {
     assertExpectedAccount(user.id, query.expectedAccountId);
     if (!(body instanceof Buffer)) {
       throw new AppError('VALIDATION_ERROR', {
@@ -98,8 +105,13 @@ export class MediaController {
         ],
       });
     }
+    const work = runUploadWork(request, () =>
+      this.media.uploadPostImage(user.id, new Uint8Array(body)),
+    );
+    // The client has gone already: there is no one to answer.
+    if (work === undefined) return undefined;
     try {
-      return await this.media.uploadPostImage(user.id, new Uint8Array(body));
+      return await work;
     } catch (error) {
       // Too many conversions waiting (image.ts `imageConversions`): the header every other 429
       // of the API carries, with the same seconds as `details.retryAfterSeconds`.

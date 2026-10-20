@@ -1,4 +1,4 @@
-import { finished } from 'node:stream';
+import { Transform, type TransformCallback, finished } from 'node:stream';
 import { HttpStatus } from '@nestjs/common';
 import { IMAGE_CONTENT_TYPES, IMAGE_MAX_BYTES } from '@buddha/shared';
 import { errorCodes, type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
@@ -7,6 +7,7 @@ import { type AuthenticatedRequest, isTrustedOrigin } from '../auth/session.guar
 import { AppError } from '../common/errors/app-error.js';
 import { ByteBudget } from './byte-budget.js';
 import { IMAGE_BUSY_RETRY_SECONDS } from './image.js';
+import { InFlightPerKey } from './in-flight.js';
 
 /**
  * The Content-Types `POST /media/images` takes its file under: the four image types and the
@@ -25,7 +26,8 @@ export const IMAGE_UPLOAD_ROUTE = { method: 'POST', url: '/api/v1/media/images' 
  * How large a body the parser reads: twice the upload limit, so a file a little over 5MB reaches
  * the handler and is refused with the reason (IMAGE_NOT_ALLOWED `size`) the web can show, while
  * anything absurd is refused by its Content-Length before a byte is read (413, VALIDATION_ERROR —
- * by the gate below, as Fastify itself would at the parser; a body without one is not let in).
+ * by the gate below, as Fastify itself would at the parser), and a body that declares no length
+ * (chunked) is cut by the parser once it passes this (413 as well, mid-body).
  */
 export const IMAGE_BODY_LIMIT = IMAGE_MAX_BYTES * 2;
 
@@ -35,25 +37,67 @@ export const IMAGE_BODY_LIMIT = IMAGE_MAX_BYTES * 2;
  * one such account could still send many uploads at once, each held up to IMAGE_BODY_LIMIT while
  * it arrives — past the API container's 448MiB (deploy/compose.yaml) beside a conversion's
  * 128MiB (image.ts) and the reads' 32MiB (image-reads.ts). So an upload takes its declared length
- * (`Content-Length`) out of this budget before a byte of its body is read, and gives it back once
- * the body is in or the request has ended without it. 64MiB is six bodies at the parser's limit,
- * or a dozen photos near 5MB.
+ * (`Content-Length`), or the parser's limit when it declares none, out of this budget before a
+ * byte of its body is read, and gives it back once the body is in or the request has ended
+ * without it. 64MiB is six bodies at the parser's limit, or a dozen photos near 5MB.
  *
- * The share is the declared length, held from before a byte of the body has come, and nothing
- * times it out: neither the API (Fastify 5's `requestTimeout`/`connectionTimeout` are 0, main.ts
- * sets neither) nor Caddy (no `read_body`) cuts a body that stops arriving. So holding a share
- * costs its sender no body byte — an onboarded account's seven uploads that send nothing hold the
- * whole budget, every other upload 429, for as long as their connections stay open. Before the
- * budget, such requests held nothing. Whether to give a body being received a deadline is the
- * owner's question (ADR-0073 결과 4); `media.controller.test.ts` pins today's behaviour.
+ * The share is taken before a byte of the body has come, so it is a reservation that costs its
+ * sender nothing to hold. Two bounds keep one account from holding the budget with bodies that do
+ * not come (owner decision 2026-10-21 answer 4): a body that sends no byte for
+ * IMAGE_UPLOAD_IDLE_SECONDS is cut and gives its share back (`IdleCut`), and an account has at
+ * most IMAGE_UPLOADS_PER_ACCOUNT uploads in flight — three bodies at the parser's limit are 30MiB,
+ * under half the budget.
  */
 export const IMAGE_UPLOAD_RECEIVING_BYTES = 64 * 1024 * 1024;
 
 /** The API's uploads being received (`installImageBodyParser`): one budget for the process. */
 export const imageUploadsReceiving = new ByteBudget(IMAGE_UPLOAD_RECEIVING_BYTES);
 
+/**
+ * How long an upload's body may send nothing before it is cut: 30 seconds (owner decision
+ * 2026-10-21 answer 4). An idle time, not a deadline: a slow phone that keeps sending is
+ * never cut, however long its file takes; a body that stops — or never starts — is, and its share
+ * of the budget comes back at once. Neither the API (Fastify 5's `requestTimeout` and
+ * `connectionTimeout` are 0; main.ts sets neither) nor Caddy (no `read_body`) would cut it.
+ */
+export const IMAGE_UPLOAD_IDLE_SECONDS = 30;
+
+/**
+ * The idle time the gate gives each upload it lets in, read when the upload's body starts: the
+ * owner's 30 seconds. A setting rather than the constant only so the integration test can watch a
+ * cut without waiting half a minute; nothing else changes it.
+ */
+export const imageUploadIdle = { ms: IMAGE_UPLOAD_IDLE_SECONDS * 1000 };
+
+/**
+ * How many uploads an account may have in flight at once, process-wide: 3 (owner decision
+ * 2026-10-21 answer 4). In flight from when the gate lets it in until its answer has ended — or its
+ * client has gone — and the handler's work on it has settled (`runUploadWork`): through the body,
+ * the conversion queue and the store, a client that hangs up once its whole body is in included
+ * (nothing stops that work), so one account holds neither the budget above nor the conversion queue
+ * (image.ts: one at a time and eight waiting) alone. The web's editor sends one upload at a time,
+ * whatever batches it has going (`createUploadQueue`), so a writer's page holds one of the three;
+ * other tabs of the same account hold their own. The fourth is refused unread: RATE_LIMITED with
+ * `Retry-After`.
+ */
+export const IMAGE_UPLOADS_PER_ACCOUNT = 3;
+
+/** Each account's uploads in flight (`installImageBodyParser`), by account id. */
+export const imageUploadsInFlight = new InFlightPerKey(IMAGE_UPLOADS_PER_ACCOUNT);
+
 /** Each upload's share of `imageUploadsReceiving`, given back by the parser once its body is in. */
 const receiving = new WeakMap<FastifyRequest, () => void>();
+
+/** An upload's place among its account's uploads in flight (`letUploadIn`, `runUploadWork`). */
+interface UploadPlace {
+  /** The answer has ended, or the client has gone: no work starts for the upload any more. */
+  ended: boolean;
+  /** The handler's work on the upload once it has started, settled however it ends. */
+  work: Promise<void> | undefined;
+}
+
+/** Each upload's place, by request. */
+const places = new WeakMap<FastifyRequest, UploadPlace>();
 
 /** The length an upload declares, or undefined when it declares none (a chunked body). */
 function declaredLength(request: FastifyRequest): number | undefined {
@@ -63,41 +107,167 @@ function declaredLength(request: FastifyRequest): number | undefined {
   return Number(header);
 }
 
+/** An upload refused for the moment: RATE_LIMITED with `Retry-After`, sent again later. */
+function uploadBusy(reply: FastifyReply, message: string): AppError {
+  void reply.header('retry-after', String(IMAGE_BUSY_RETRY_SECONDS));
+  return new AppError('RATE_LIMITED', {
+    message,
+    details: { retryAfterSeconds: IMAGE_BUSY_RETRY_SECONDS },
+  });
+}
+
 /**
- * Takes the share of an upload whose sender may upload, before its body is read: refused unread
- * with no declared length (411, VALIDATION_ERROR — what it would hold is not known before it has
- * come), with one over the parser's limit (413, VALIDATION_ERROR — Fastify's own answer from its
- * Content-Length, which it would give at the parser), or past the budget: RATE_LIMITED with
- * `Retry-After`, the upload route's answer for a full conversion queue (image.ts) — a client may
- * send it again then; the web's editor says that file failed and goes on with its batch (owner
- * decision 2026-10-21). 411 and 429 leave the connection open: what is still coming of the body is
- * let through unheld (Node's HTTP server), and a browser still sending reads the answer rather
- * than a reset. The share comes back when the parser has the whole body, or when the answer ends
- * without it — refused after this, cut off, or the client gone mid-body.
+ * Lets in the upload of `accountId`, a sender who may upload, before its body is read: refused
+ * unread with a declared length over the parser's limit (413, VALIDATION_ERROR — Fastify's own
+ * answer from its Content-Length, which it would give at the parser), with three of the account's
+ * uploads in flight already, or past the budget. Both of those are RATE_LIMITED with `Retry-After`,
+ * the upload route's answer for a full conversion queue (image.ts) — a client may send it again
+ * then; the web's editor says that file failed and goes on with its batch (owner decision
+ * 2026-10-21). A body that declares no length takes the parser's limit, the most it can hold
+ * (owner decision 2026-10-21 answer 5), and the parser still cuts it there. 429 leaves the
+ * connection open: what is still coming of the body is let through unheld (Node's HTTP server),
+ * and a browser still sending reads the answer rather than a reset. The share comes back when the
+ * parser has the whole body, when the body is cut for idling (`IdleCut`), or when the answer ends
+ * without it — refused after this, cut off, or the client gone mid-body. The account's place comes
+ * back when the answer has ended and the handler's work on the upload, if it started, has settled
+ * (`runUploadWork`).
  */
-function receiveWithinBudget(request: FastifyRequest, reply: FastifyReply): void {
-  const length = declaredLength(request);
-  if (length === undefined) {
-    throw new AppError('VALIDATION_ERROR', {
-      status: HttpStatus.LENGTH_REQUIRED,
-      message: 'Send the file with its Content-Length',
-    });
-  }
+function letUploadIn(request: FastifyRequest, reply: FastifyReply, accountId: string): void {
+  const length = declaredLength(request) ?? IMAGE_BODY_LIMIT;
   if (length > IMAGE_BODY_LIMIT) {
     // As Fastify answers it: the client would send the rest anyway.
     void reply.header('connection', 'close');
     throw new errorCodes.FST_ERR_CTP_BODY_TOO_LARGE();
   }
+  const leave = imageUploadsInFlight.take(accountId);
+  if (leave === null) {
+    throw uploadBusy(reply, 'Too many uploads of this account are in flight; send it again');
+  }
   const release = imageUploadsReceiving.take(length);
   if (release === null) {
-    void reply.header('retry-after', String(IMAGE_BUSY_RETRY_SECONDS));
-    throw new AppError('RATE_LIMITED', {
-      message: 'Too many uploads are being received; send it again',
-      details: { retryAfterSeconds: IMAGE_BUSY_RETRY_SECONDS },
-    });
+    leave();
+    throw uploadBusy(reply, 'Too many uploads are being received; send it again');
   }
   receiving.set(request, release);
-  finished(reply.raw, release);
+  const place: UploadPlace = { ended: false, work: undefined };
+  places.set(request, place);
+  finished(reply.raw, () => {
+    release();
+    place.ended = true;
+    // A client that hangs up once its whole body is in leaves the handler working on it: the place
+    // is the account's again only once that work has settled.
+    if (place.work === undefined) leave();
+    else void place.work.then(leave);
+  });
+}
+
+/**
+ * Runs the handler's work on an upload the gate let in (`work`: the conversion, the store and the
+ * row — MediaService.uploadPostImage) as part of that upload: the account's place comes back only
+ * once the work has settled, as well as the answer ended. Nothing stops the work when its client
+ * hangs up (the answer ends at once then), so a place given back at the hang-up would let one
+ * account keep any number of its uploads in the conversion queue — three at a time, hanging up
+ * each once its body is in.
+ *
+ * Starts nothing, and returns undefined, when the client has gone already — after its body was in,
+ * while the guards ran: its id would reach no one, so storing it would only leave an orphan, and
+ * its place is back already. The check and the start are one step, so a client that goes after it
+ * finds the work started and its place held until the work settles.
+ */
+export function runUploadWork<T>(
+  request: FastifyRequest,
+  work: () => Promise<T>,
+): Promise<T> | undefined {
+  const place = places.get(request);
+  if (place?.ended === true) return undefined;
+  const running = work();
+  if (place !== undefined) {
+    place.work = running.then(
+      () => undefined,
+      () => undefined,
+    );
+  }
+  return running;
+}
+
+/**
+ * An upload's body as the parser reads it (the `preParsing` hook below hands it over in place of
+ * the request): every byte passed on as it came, and the stream failed — the parser then answers
+ * with the error — once no byte has come for `idleMs`, from when the body starts to be read. Its
+ * `receivedEncodedLength` is what Fastify counts against the parser's limit, as it would count the
+ * request's own bytes.
+ */
+class IdleCut extends Transform {
+  receivedEncodedLength = 0;
+  private readonly timer: NodeJS.Timeout;
+  private stopped = false;
+
+  constructor(idleMs: number, onIdle: (body: IdleCut) => void) {
+    super();
+    this.timer = setTimeout(() => {
+      onIdle(this);
+    }, idleMs);
+  }
+
+  override _transform(chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback): void {
+    this.receivedEncodedLength += chunk.length;
+    if (!this.stopped) this.timer.refresh();
+    callback(null, chunk);
+  }
+
+  override _flush(callback: TransformCallback): void {
+    this.stop();
+    callback();
+  }
+
+  override _destroy(error: Error | null, callback: (error?: Error | null) => void): void {
+    this.stop();
+    callback(error);
+  }
+
+  /** No cut any more: the body is in, or the request has ended. */
+  stop(): void {
+    this.stopped = true;
+    clearTimeout(this.timer);
+  }
+}
+
+/**
+ * Watches the body of an upload the gate let in for `idleMs` without a byte (`IdleCut`): cut, its
+ * share back at once, answered 408 VALIDATION_ERROR — the code ApiExceptionFilter gives any other
+ * 4xx it has no code for (`codeForStatus`), as for the 413 — and its connection closed, so nothing
+ * more of it is waited for. The request's own stream is piped, not wrapped in a pipeline: a
+ * pipeline would destroy it with the cut, and with it the socket the answer goes out on.
+ */
+function watchUploadBody(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  payload: NodeJS.ReadableStream,
+): IdleCut {
+  const idleMs = imageUploadIdle.ms;
+  const body = new IdleCut(idleMs, (idle) => {
+    receiving.get(request)?.();
+    void reply.header('connection', 'close');
+    idle.destroy(
+      new AppError('VALIDATION_ERROR', {
+        status: HttpStatus.REQUEST_TIMEOUT,
+        message: `No byte of the file came for ${String(idleMs / 1000)} seconds; send it again`,
+      }),
+    );
+  });
+  // The request failing (a client gone mid-body) fails the body, as it would fail the parser.
+  const fail = (error: Error) => body.destroy(error);
+  payload.on('error', fail);
+  // The parser listens while it reads; an error after that (the client gone while the handler
+  // works) has no one left to tell, and must not be thrown as an unheard 'error' event.
+  body.on('error', () => undefined);
+  // Answered (or the client gone): no cut to come, nothing more to pass on.
+  finished(reply.raw, () => {
+    body.stop();
+    payload.removeListener('error', fail);
+  });
+  payload.pipe(body);
+  return body;
 }
 
 /** The media type of a request's body (`image/png; x=y` → `image/png`), or undefined. */
@@ -164,9 +334,12 @@ export interface ImageBodySenders {
  *   is refused unread (401) — and the account must have finished the onboarding
  *   (ONBOARDING_REQUIRED unread, OnboardedGuard's answer). The session is left on the request, so
  *   SessionGuard does not read it again; SessionGuard and OnboardedGuard still run after the body;
- * - and then the body is let in only within the bytes the API receives at once
- *   (`receiveWithinBudget`, owner decision 2026-10-21): an upload with no length or one over the
- *   limit is refused unread, and one past the budget is RATE_LIMITED unread.
+ * - and then the body is let in (`letUploadIn`) only as one of the account's three uploads in
+ *   flight and within the bytes the API receives at once (owner decisions 2026-10-21): one declared
+ *   over the limit is refused unread, and one past either bound is RATE_LIMITED unread. Its body
+ *   is cut once it sends no byte for 30 seconds (`watchUploadBody`, a `preParsing` hook — the
+ *   parser reads the stream it returns). The handler runs its work on the upload through
+ *   `runUploadWork`, so the account's place is held until that work has settled.
  */
 export function installImageBodyParser(fastify: FastifyInstance, senders: ImageBodySenders): void {
   fastify.addHook('onRequest', async (request, reply) => {
@@ -178,8 +351,11 @@ export function installImageBodyParser(fastify: FastifyInstance, senders: ImageB
     if (!session) throw new AppError('UNAUTHENTICATED', { message: 'Sign in required' });
     authenticated.auth = session;
     await senders.assertOnboarded(session.user.id);
-    receiveWithinBudget(request, reply);
+    letUploadIn(request, reply, session.user.id);
   });
+  fastify.addHook('preParsing', async (request, reply, payload) =>
+    receiving.has(request) ? watchUploadBody(request, reply, payload) : payload,
+  );
   fastify.addContentTypeParser(
     [...IMAGE_UPLOAD_CONTENT_TYPES],
     { parseAs: 'buffer', bodyLimit: IMAGE_BODY_LIMIT },
