@@ -361,7 +361,7 @@ describe.skipIf(!hasTestInfra)('/api/v1 comments (integration)', () => {
       code: 'COMMENT_NOT_EDITABLE',
       details: { reason: 'hidden' },
     });
-    // A 대댓글 under the hidden 댓글 stays its author's to edit (7-6, an owner question).
+    // A 대댓글 under the hidden 댓글 stays its author's to edit (오너 결정 2026-10-20, 7-6).
     expect((await edit(answer.id, '고친 답', other)).statusCode).toBe(200);
     const deleting = await remove(comment.id);
     expect(deleting.json<{ data: unknown }>().data).toEqual({
@@ -391,7 +391,7 @@ describe.skipIf(!hasTestInfra)('/api/v1 comments (integration)', () => {
     expect(errorOf(gone).details).toEqual([
       { path: ['parentId'], message: 'no such comment on this post' },
     ]);
-    // A 대댓글 under the placeholder stays its author's to edit (7-6, an owner question).
+    // A 대댓글 under the placeholder stays its author's to edit (오너 결정 2026-10-20, 7-6).
     expect((await edit(answer.id, '고친 답', other)).statusCode).toBe(200);
     // A deleted 대댓글 is gone, too.
     const deletedAnswer = await reply((await written()).id, '지울 답', other);

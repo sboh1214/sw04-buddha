@@ -14,14 +14,20 @@ import {
   commentPageQuery,
   commentPlaceholderMessage,
   commentThreadsOf,
+  commentTextChanged,
   commentWriteErrorMessage,
   commentsClosedMessage,
+  goneBoxReason,
   isStaleThreadRefusal,
+  placeHeldTexts,
   postCommentsKey,
+  resolveCommentDrafts,
+  type HeldText,
   withEditedComment,
   withNewComment,
   withoutComment,
 } from './comments';
+import { NO_COMMENT_DRAFTS, type CommentDrafts } from './comment-drafts';
 import { isPrivateQueryKey } from './market-keys';
 import { POSTS_KEY, postKey } from './posts';
 
@@ -318,5 +324,229 @@ describe('a refused write', () => {
     expect(isStaleThreadRefusal(refusal(400, 'VALIDATION_ERROR'))).toBe(false);
     expect(isStaleThreadRefusal(refusal(403, 'ONBOARDING_REQUIRED'))).toBe(false);
     expect(isStaleThreadRefusal(new TypeError('Failed to fetch'))).toBe(false);
+  });
+});
+
+describe('a box’s text', () => {
+  it('is something to lose only where it differs from what the box started with, as the server keeps it', () => {
+    expect(commentTextChanged('', '')).toBe(false);
+    expect(commentTextChanged('  \n ', '')).toBe(false);
+    expect(commentTextChanged('댓글', '')).toBe(true);
+    expect(commentTextChanged('그대로 ', '그대로')).toBe(false);
+    expect(commentTextChanged('고친 것', '그대로')).toBe(true);
+    // An edit emptied is a change (its save is refused, leaving still loses it).
+    expect(commentTextChanged('', '그대로')).toBe(true);
+  });
+});
+
+describe('text held apart from a box', () => {
+  const held = (id: string, place: HeldText['place']): HeldText => ({
+    id,
+    place,
+    reason: '까닭',
+    text: id,
+    focus: false,
+  });
+  const threads = [thread(comment('t1'), comment('r1', 't1')), thread(comment('t2'))];
+
+  it('stands where its box stood while the thread still has that place, else under the threads', () => {
+    const texts = [
+      held('edit-of-reply', { kind: 'comment', commentId: 'r1', threadId: 't1' }),
+      held('edit-gone', { kind: 'comment', commentId: 'r9', threadId: 't2' }),
+      held('reply', { kind: 'thread', threadId: 't2' }),
+      held('reply-gone', { kind: 'thread', threadId: 't9' }),
+      held('edit-thread-gone', { kind: 'comment', commentId: 'x', threadId: 'x' }),
+      held('new', { kind: 'post' }),
+    ];
+    const placed = placeHeldTexts(threads, texts);
+    expect([...placed.byComment].map(([id, list]) => [id, list.map((one) => one.id)])).toEqual([
+      ['r1', ['edit-of-reply']],
+    ]);
+    expect([...placed.byThread].map(([id, list]) => [id, list.map((one) => one.id)])).toEqual([
+      ['t2', ['edit-gone', 'reply']],
+    ]);
+    expect(placed.rest.map((one) => one.id)).toEqual(['reply-gone', 'edit-thread-gone', 'new']);
+  });
+});
+
+describe('why a box’s place takes its text no more', () => {
+  const threads = [
+    thread(comment('t1'), comment('r1', 't1'), { state: 'hidden', id: 'rh' }),
+    thread({ state: 'deleted', id: 'td' }, comment('r2', 'td')),
+    thread({ state: 'hidden', id: 'th' }),
+  ];
+  const view = (postState: 'published' | 'hidden' | 'deleted' = 'published') => ({
+    postState,
+    threads,
+  });
+
+  it('is nothing while the place still takes it', () => {
+    expect(goneBoxReason({ kind: 'post' }, view())).toBeUndefined();
+    expect(goneBoxReason({ kind: 'thread', threadId: 't1' }, view())).toBeUndefined();
+    expect(
+      goneBoxReason({ kind: 'comment', commentId: 'r1', threadId: 't1' }, view()),
+    ).toBeUndefined();
+  });
+
+  it('is the server’s words for a 댓글 a placeholder or gone, and a comment hidden or gone', () => {
+    expect(goneBoxReason({ kind: 'thread', threadId: 'td' }, view())).toBe(
+      copy.errCommentParentDeleted,
+    );
+    expect(goneBoxReason({ kind: 'thread', threadId: 'th' }, view())).toBe(
+      copy.errCommentParentHidden,
+    );
+    expect(goneBoxReason({ kind: 'thread', threadId: 'gone' }, view())).toBe(
+      copy.errCommentParentGone,
+    );
+    expect(goneBoxReason({ kind: 'comment', commentId: 'rh', threadId: 't1' }, view())).toBe(
+      copy.errCommentNotEditable,
+    );
+    expect(goneBoxReason({ kind: 'comment', commentId: 'td', threadId: 'td' }, view())).toBe(
+      copy.errCommentGone,
+    );
+    expect(goneBoxReason({ kind: 'comment', commentId: 'x', threadId: 'x' }, view())).toBe(
+      copy.errCommentGone,
+    );
+  });
+
+  it('is the closed post’s sentence for a new 댓글 or a 대댓글 — an edit is still its author’s (7-6)', () => {
+    for (const postState of ['hidden', 'deleted'] as const) {
+      expect(goneBoxReason({ kind: 'post' }, view(postState))).toBe(
+        commentsClosedMessage(postState),
+      );
+      expect(goneBoxReason({ kind: 'thread', threadId: 't1' }, view(postState))).toBe(
+        commentsClosedMessage(postState),
+      );
+      expect(
+        goneBoxReason({ kind: 'comment', commentId: 'r1', threadId: 't1' }, view(postState)),
+      ).toBeUndefined();
+    }
+  });
+});
+
+describe('drafts taken back after an onboarding step', () => {
+  const drafts = (partial: Partial<CommentDrafts>): CommentDrafts => ({
+    ...NO_COMMENT_DRAFTS,
+    ...partial,
+  });
+  const mine = (id: string, parentId: string | null = null) => comment(id, parentId);
+  const theirs = (id: string): PublishedComment => ({
+    ...comment(id),
+    author: { ...author, publicId: 'other00000' },
+  });
+  const view = (
+    threads: CommentThread[],
+    more: Partial<{ postState: 'published' | 'hidden' | 'deleted'; allRead: boolean }> = {},
+  ) => ({
+    postId: post,
+    postState: more.postState ?? 'published',
+    threads,
+    allRead: more.allRead ?? true,
+    viewerPublicId: author.kind === 'member' ? author.publicId : '',
+  });
+
+  it('go into their boxes while those can open', () => {
+    const resolved = resolveCommentDrafts(
+      drafts({
+        comment: '새 댓글',
+        replies: new Map([['t1', '답글']]),
+        edits: new Map([
+          ['t1', '고친 댓글'],
+          ['r1', '고친 답글'],
+        ]),
+      }),
+      view([thread(mine('t1'), mine('r1', 't1'))]),
+    );
+    expect(resolved.comment).toBe('새 댓글');
+    expect([...resolved.replies]).toEqual([['t1', '답글']]);
+    expect([...resolved.edits]).toEqual([
+      ['t1', '고친 댓글'],
+      ['r1', '고친 답글'],
+    ]);
+    expect(resolved.unplaced).toEqual([]);
+    expect(resolved.waiting).toBe(false);
+  });
+
+  it('are shown apart, in the server’s words, where their box can no longer open', () => {
+    const resolved = resolveCommentDrafts(
+      drafts({
+        replies: new Map([
+          ['deleted', '지운 댓글에'],
+          ['hidden', '숨긴 댓글에'],
+          ['gone', '없는 댓글에'],
+        ]),
+        edits: new Map([
+          ['hidden-own', '숨긴 내 댓글'],
+          ['gone-own', '없는 내 댓글'],
+          ['their', '남의 댓글'],
+        ]),
+      }),
+      view([
+        thread({ state: 'deleted', id: 'deleted' }, comment('under', 'deleted')),
+        thread({ state: 'hidden', id: 'hidden' }),
+        thread(mine('t1'), { state: 'hidden', id: 'hidden-own' }),
+        thread(theirs('their')),
+      ]),
+    );
+    expect(resolved.replies.size).toBe(0);
+    expect(resolved.edits.size).toBe(0);
+    expect(resolved.unplaced.map(({ text, reason, place }) => [text, reason, place])).toEqual([
+      ['지운 댓글에', copy.errCommentParentDeleted, { kind: 'thread', threadId: 'deleted' }],
+      ['숨긴 댓글에', copy.errCommentParentHidden, { kind: 'thread', threadId: 'hidden' }],
+      ['없는 댓글에', copy.errCommentParentGone, { kind: 'thread', threadId: 'gone' }],
+      [
+        '숨긴 내 댓글',
+        copy.errCommentNotEditable,
+        { kind: 'comment', commentId: 'hidden-own', threadId: 't1' },
+      ],
+      [
+        '없는 내 댓글',
+        copy.errCommentGone,
+        { kind: 'comment', commentId: 'gone-own', threadId: 'gone-own' },
+      ],
+      [
+        '남의 댓글',
+        copy.errCommentNotYours,
+        { kind: 'comment', commentId: 'their', threadId: 'their' },
+      ],
+    ]);
+    expect(resolved.unplaced.map(({ key }) => key)).toEqual([
+      { kind: 'reply', postId: post, parentId: 'deleted' },
+      { kind: 'reply', postId: post, parentId: 'hidden' },
+      { kind: 'reply', postId: post, parentId: 'gone' },
+      { kind: 'edit', postId: post, commentId: 'hidden-own' },
+      { kind: 'edit', postId: post, commentId: 'gone-own' },
+      { kind: 'edit', postId: post, commentId: 'their' },
+    ]);
+  });
+
+  it('under a post hidden or deleted meanwhile: a new 댓글 or a 대댓글 is shown apart, an edit still opens', () => {
+    for (const postState of ['hidden', 'deleted'] as const) {
+      const resolved = resolveCommentDrafts(
+        drafts({
+          comment: '새 댓글',
+          replies: new Map([['t1', '답글']]),
+          edits: new Map([['t1', '고친 댓글']]),
+        }),
+        view([thread(mine('t1'))], { postState }),
+      );
+      expect(resolved.comment).toBeUndefined();
+      expect(resolved.replies.size).toBe(0);
+      expect([...resolved.edits]).toEqual([['t1', '고친 댓글']]);
+      expect(resolved.unplaced.map(({ text, reason }) => [text, reason])).toEqual([
+        ['새 댓글', commentsClosedMessage(postState)],
+        ['답글', commentsClosedMessage(postState)],
+      ]);
+    }
+  });
+
+  it('wait for the pages still to read when their comment is not among those read', () => {
+    const resolved = resolveCommentDrafts(
+      drafts({ replies: new Map([['later', '답글']]), edits: new Map([['later', '고친 댓글']]) }),
+      view([thread(mine('t1'))], { allRead: false }),
+    );
+    expect(resolved.waiting).toBe(true);
+    expect(resolved.unplaced).toEqual([]);
+    expect(resolved.replies.size + resolved.edits.size).toBe(0);
   });
 });

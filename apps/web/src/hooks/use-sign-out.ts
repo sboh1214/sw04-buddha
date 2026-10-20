@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { signOut } from '@/lib/auth-client';
+import { clearAllSessionCommentDrafts } from '@/lib/comment-drafts';
 import { clearSessionPostDrafts } from '@/lib/post-drafts';
 
 /**
@@ -39,9 +40,11 @@ export function useSignOut(): () => Promise<void> {
     // (a localStorage broadcast) and is emptied by SessionCacheGuard when its session
     // identity changes.
     queryClient.clear();
-    // So are the post drafts the onboarding gate kept in this tab (lib/post-drafts.ts): each is
-    // its writer's only, and whoever signs in next here never sees one.
+    // So are the post and comment drafts an onboarding step kept in this tab (lib/post-drafts.ts,
+    // lib/comment-drafts.ts): each is its writer's only, and whoever signs in next here never sees
+    // one.
     clearSessionPostDrafts();
+    clearAllSessionCommentDrafts();
     router.push('/');
     router.refresh();
   };

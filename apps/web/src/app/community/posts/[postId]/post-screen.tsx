@@ -55,10 +55,11 @@ import { useSession } from '@/lib/use-session';
  *
  * The onboarding gate lets an account that finished its onboarding once and faces a re-consent
  * alone open this page (`ONBOARDING_EXEMPT_PAGES`, 오너 결정 2026-10-20): deleting one's own post
- * asks for a session alone (오너 결정 2026-10-19 답 2), on screen too. Its 수정 then goes to the
- * consent step and comes back to the edit screen once that is done (`useOnboardingEntry`);
- * everything else this page links to is gated as before. An account that has not finished is sent
- * on from this page too, and comes back to it at the end.
+ * asks for a session alone (오너 결정 2026-10-19 답 2), on screen too — and so does deleting one's
+ * own comment (#48). Its 수정 then goes to the consent step and comes back to the edit screen once
+ * that is done (`useOnboardingEntry`), and the comments' writes go to it and come back here
+ * (comments-section.tsx, ADR-0074); everything else this page links to is gated as before. An
+ * account that has not finished is sent on from this page too, and comes back to it at the end.
  *
  * A post can leave every view while its page is open: its author deletes it in another tab, the
  * last comment under a deleted post is deleted, or a comment write is refused because the post is
@@ -68,6 +69,9 @@ import { useSession } from '@/lib/use-session';
  * page says '없거나 삭제된 글입니다.' in place of the post and its market, and draws the server page
  * again (`router.refresh`): it answers what a reload does, the 404 (`notFound()`, page.tsx). A read
  * that fails otherwise keeps the post on screen.
+ * The comment section goes with the page — a write refused because the post is gone, its text and
+ * the texts held apart (오너 결정 2026-10-20 답 4) with it; whether the page should keep them first
+ * is a question for the owner (ADR-0074 결과 4).
  */
 export function PostScreen({ postId, fallback }: { postId: string; fallback: Post }) {
   const router = useRouter();
@@ -80,60 +84,53 @@ export function PostScreen({ postId, fallback }: { postId: string; fallback: Pos
     if (gone) router.refresh();
   }, [gone, router]);
 
-  if (gone) {
-    return (
-      <Stack gap="6" data-testid="post-screen">
+  // One tree for every state, the post's head (title, byline and body, the placeholder, or the
+  // sentence of a post gone) in one slot: the comments sit at the same place whether the post is
+  // published, hidden or deleted, so a post closed while its page is open — read again after a
+  // refused write, or in the background — keeps the comment section mounted, with every box open in
+  // it and every text it holds (ADR-0074 결정 6).
+  return (
+    <Stack gap="6" data-testid="post-screen">
+      {gone ? (
         <Alert.Root status="info" data-testid="post-gone">
           <Alert.Indicator />
           <Alert.Content>
             <Alert.Description>{copy.postNotFound}</Alert.Description>
           </Alert.Content>
         </Alert.Root>
-        <BackLink />
-      </Stack>
-    );
-  }
-
-  if (post.state !== 'published') {
-    return (
-      <Stack gap="6" data-testid="post-screen">
+      ) : post.state !== 'published' ? (
         <Alert.Root status="info" data-testid={`post-${post.state}`}>
           <Alert.Indicator />
           <Alert.Content>
             <Alert.Description>{postPlaceholderMessage(post.state)}</Alert.Description>
           </Alert.Content>
         </Alert.Root>
-        <MarketBox market={post.market} />
-        <CommentsSection post={post} />
-        <BackLink />
-      </Stack>
-    );
-  }
-
-  return (
-    <Stack gap="6" data-testid="post-screen">
-      <Stack gap="3">
-        {post.title !== null ? (
-          <Heading as="h2" textStyle="headline" wordBreak="break-word" data-testid="post-title">
-            {post.title}
-          </Heading>
-        ) : (
-          <Heading as="h2" srOnly data-testid="post-title-untitled">
-            {postFirstLine(readPostDocument(post.body).text)}
-          </Heading>
-        )}
-        <HStack justify="space-between" gap="3" flexWrap="wrap">
-          <PostByline
-            author={post.author}
-            createdAt={post.createdAt}
-            editedAt={post.editedAt}
-            size="md"
-          />
-          <AuthorActions post={post} />
-        </HStack>
-      </Stack>
-      <PostBody document={post.body} />
-      <MarketBox market={post.market} />
+      ) : (
+        <>
+          <Stack gap="3">
+            {post.title !== null ? (
+              <Heading as="h2" textStyle="headline" wordBreak="break-word" data-testid="post-title">
+                {post.title}
+              </Heading>
+            ) : (
+              <Heading as="h2" srOnly data-testid="post-title-untitled">
+                {postFirstLine(readPostDocument(post.body).text)}
+              </Heading>
+            )}
+            <HStack justify="space-between" gap="3" flexWrap="wrap">
+              <PostByline
+                author={post.author}
+                createdAt={post.createdAt}
+                editedAt={post.editedAt}
+                size="md"
+              />
+              <AuthorActions post={post} />
+            </HStack>
+          </Stack>
+          <PostBody document={post.body} />
+        </>
+      )}
+      {!gone && <MarketBox market={post.market} />}
       <CommentsSection post={post} />
       <BackLink />
     </Stack>

@@ -60,7 +60,7 @@ describe('the public face of a post (static)', () => {
     });
   });
 
-  it('shows a deleted post as a placeholder only while replies hang under it (#45-5)', () => {
+  it('shows a deleted post as a placeholder only while comments not deleted hang under it (#45-5)', () => {
     const at = new Date();
     expect(publicStateOf({ deletedAt: null, hiddenAt: null }, false)).toBe('published');
     expect(publicStateOf({ deletedAt: at, hiddenAt: null }, false)).toBe('gone');

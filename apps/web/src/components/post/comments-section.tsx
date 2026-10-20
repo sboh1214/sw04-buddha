@@ -14,21 +14,47 @@ import {
   Textarea,
 } from '@chakra-ui/react';
 import { COMMENT_BODY_MAX_LENGTH } from '@buddha/shared';
+import { useQueryClient } from '@tanstack/react-query';
 import type { Route } from 'next';
 import NextLink from 'next/link';
-import { useEffect, useId, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { type RefObject, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { EmptyState } from '@/components/ui/empty-state';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
+import {
+  type CommentBoxRootRef,
+  CommentBoxGoingContext,
+  keepSectionTextsForStep,
+  useCommentBoxDraft,
+  useCommentDraftsTakenBack,
+} from '@/hooks/use-comment-draft';
 import {
   useComments,
   useCreateComment,
   useDeleteComment,
   useUpdateComment,
 } from '@/hooks/use-comments';
+import { useLeaveGuard } from '@/hooks/use-leave-guard';
+import { ME_QUERY_KEY } from '@/hooks/use-me';
+import { useOnboardingEntry } from '@/hooks/use-onboarding-entry';
 import { usePostWriter } from '@/hooks/use-posts';
-import { type CommentThread, type Post, type PostComment, type PublishedComment } from '@/lib/api';
 import {
+  type CommentThread,
+  type Me,
+  type Post,
+  type PostComment,
+  type PublishedComment,
+} from '@/lib/api';
+import {
+  type CommentDraftKey,
+  commentDraftStorageKey,
+  hasCommentDrafts,
+} from '@/lib/comment-drafts';
+import {
+  type HeldText,
+  type HeldTextPlace,
+  type ResolvedCommentDrafts,
   commentCountText,
   commentDraft,
   commentLengthText,
@@ -36,13 +62,15 @@ import {
   commentThreadsOf,
   commentWriteErrorMessage,
   commentsClosedMessage,
-  isStaleThreadRefusal,
-  type CommentWrite,
+  placeHeldTexts,
+  postCommentsKey,
+  resolveCommentDrafts,
 } from '@/lib/comments';
 import { loginPathBackTo } from '@/lib/next-path';
-import { isOwnPost, postPath, postReadErrorMessage } from '@/lib/posts';
+import { isOwnPost, postKey, postPath, postReadErrorMessage } from '@/lib/posts';
 import { useSession } from '@/lib/use-session';
 import { CommentText } from './comment-text';
+import { HeldCommentText, useHeldCommentTexts } from './held-comment-text';
 import { PostByline } from './post-author';
 
 /** Who reads the page, once `GET /me` has said: the account the writes name and its public id. */
@@ -54,6 +82,34 @@ interface Viewer {
 /** Placeholders at a comment's height while the first page loads. */
 const SKELETON_ROWS = [0, 1];
 
+const NOTHING_TAKEN_BACK: ResolvedCommentDrafts = {
+  comment: undefined,
+  replies: new Map(),
+  edits: new Map(),
+  unplaced: [],
+  waiting: false,
+};
+
+/** What every thread is handed alike. */
+interface ThreadContext {
+  postId: string;
+  viewer: Viewer | undefined;
+  /** The post takes new comments. */
+  open: boolean;
+  /**
+   * The account's onboarding step left, coming back to this post (`useOnboardingEntry`): set, every
+   * comment write goes there first — 답글, 수정, and a box's 올리기·저장 (오너 결정 2026-10-20 답 3).
+   */
+  stepPath: string | undefined;
+  /** Drafts taken back after a step, for the boxes to open with (`resolveCommentDrafts`). */
+  takenBack: ResolvedCommentDrafts;
+  /** A box took its draft. */
+  onTaken: (key: CommentDraftKey) => void;
+  onCloseHeld: (id: string) => void;
+  /** The focus to the comments' heading: where it goes when nothing nearer is left. */
+  focusHeading: () => void;
+}
+
 /**
  * A post's comments (#48, ADR-0074), under the post — or under its placeholder: the comments of a
  * hidden post and of a deleted one stay readable (N04 §6: the replies keep their context). The
@@ -64,11 +120,25 @@ const SKELETON_ROWS = [0, 1];
  * The box is for an account that `GET /me` names — a visitor reads and is asked to sign in, coming
  * back to this post (N05 §2 «비로그인 열람, 로그인 작성»); an account with onboarding steps left
  * is taken to its step and back by the onboarding gate (#57-8) — except one facing a re-consent
- * alone, for which this page is exempt (`ONBOARDING_EXEMPT_PAGES`, ADR-0073): its boxes still open
- * until they send it to that step (`useOnboardingEntry`, ADR-0074 결과 5), and the server refuses
- * its writes (ONBOARDING_REQUIRED). A hidden or deleted post takes no comment (#45-5): its box is
- * a sentence saying so. Nothing personal is in the HTML: the first page is public and seeded by the
- * server, whose own and whose 답글 are decided here once `GET /me` has answered.
+ * alone, for which this page is exempt (`ONBOARDING_EXEMPT_PAGES`, ADR-0073) so it can delete its
+ * own comments with a session alone: its comment writes go to that step first and come back here
+ * (`stepPath`, 오너 결정 2026-10-20 답 3). A hidden or deleted post takes no comment (#45-5): its
+ * box is a sentence saying so. Nothing personal is in the HTML: the first page is public and
+ * seeded by the server, whose own and whose 답글 are decided here once `GET /me` has answered.
+ *
+ * What a box holds is kept on the ways the owner decided (오너 결정 2026-10-20 답 1·2·4): leaving
+ * the page with text in a box asks first (`useCommentBoxDraft`); going to an onboarding step keeps
+ * each box's text in this tab, and this page takes it back into its box after the step
+ * (`useCommentDraftsTakenBack`, reading on through the pages for a thread not read yet) — or, when
+ * that box can no longer open, shows it apart with why; and a box whose write was refused (or was
+ * in flight) and which the thread read again no longer holds leaves its text and why it cannot be
+ * sent where the box stood until the writer closes them (`useHeldCommentTexts`, for the account on
+ * screen only). Leaving while any of that is on screen asks too — and going to a step keeps it in
+ * the tab as well, as the draft of the box it stood for, to be shown again after the step
+ * (`keepSectionTextsForStep`). A box with no write that goes
+ * because its thread or the post changed under it — read again in the background — keeps nothing,
+ * and a post gone from every view takes the page, and all of it, to its 404 (post-screen.tsx):
+ * both are questions for the owner (ADR-0074 결과 4).
  */
 export function CommentsSection({ post }: { post: Post }) {
   const comments = useComments(post.id);
@@ -77,100 +147,266 @@ export function CommentsSection({ post }: { post: Post }) {
     writer.accountId !== undefined && writer.publicId !== undefined
       ? { accountId: writer.accountId, publicId: writer.publicId }
       : undefined;
+  const { stepLeft, entryPath } = useOnboardingEntry();
+  const stepPath = stepLeft ? entryPath(postPath(post.id)) : undefined;
   const open = post.state === 'published';
-  const threads = commentThreadsOf(comments.data);
+  const threads = useMemo(() => commentThreadsOf(comments.data), [comments.data]);
+  const heading = useRef<HTMLHeadingElement>(null);
+
+  const heldTexts = useHeldCommentTexts(viewer?.accountId, { postState: post.state, threads });
+  const { drafts, take, reads } = useCommentDraftsTakenBack(post.id, viewer?.accountId, stepLeft);
+  const viewerPublicId = viewer?.publicId;
+  const viewerAccountId = viewer?.accountId;
+  // Drafts taken back go where the post and its threads as read after they came back say: what the
+  // cache kept from before the step can be older than the step — the server's fresh seed of this
+  // page lands in an effect, after the first render — and a box opened by it for a 댓글 deleted
+  // meanwhile would go with the next read, and its draft with it, rather than be shown apart.
+  const queryClient = useQueryClient();
+  const [readAgainFor, setReadAgainFor] = useState(0);
+  useEffect(() => {
+    if (reads === readAgainFor) return;
+    let live = true;
+    void Promise.all([
+      queryClient.refetchQueries({ queryKey: postKey(post.id), exact: true }),
+      queryClient.refetchQueries({ queryKey: postCommentsKey(post.id), exact: true }),
+    ]).then(() => {
+      if (live) setReadAgainFor(reads);
+    });
+    return () => {
+      live = false;
+    };
+  }, [reads, readAgainFor, post.id, queryClient]);
+  const readAgain = reads === readAgainFor;
+  const allRead = comments.isSuccess && !comments.hasNextPage;
+  const takenBack = useMemo(
+    () =>
+      viewerPublicId === undefined || !comments.isSuccess || !readAgain || !hasCommentDrafts(drafts)
+        ? NOTHING_TAKEN_BACK
+        : resolveCommentDrafts(drafts, {
+            postId: post.id.toLowerCase(),
+            postState: post.state,
+            threads,
+            allRead,
+            viewerPublicId,
+          }),
+    [drafts, threads, post.id, post.state, allRead, viewerPublicId, comments.isSuccess, readAgain],
+  );
+  // A draft no box can take any more is shown apart, with why; one whose thread is not read yet
+  // reads on (as a new 댓글 does, ADR-0074 7-14).
+  const { unplaced, waiting } = takenBack;
+  const { hold } = heldTexts;
+  const { hasNextPage, isFetchingNextPage, fetchNextPage } = comments;
+  useEffect(() => {
+    if (unplaced.length === 0 || viewerAccountId === undefined) return;
+    hold(
+      viewerAccountId,
+      unplaced.map(({ key, text, reason, place }) => ({
+        id: `taken-back:${commentDraftStorageKey(key)}`,
+        text,
+        reason,
+        place,
+      })),
+    );
+    take(unplaced.map(({ key }) => key));
+  }, [unplaced, viewerAccountId, hold, take]);
+  useEffect(() => {
+    if (waiting && hasNextPage && !isFetchingNextPage) void fetchNextPage();
+  }, [waiting, hasNextPage, isFetchingNextPage, fetchNextPage]);
+  useLeaveGuard(heldTexts.held.length > 0 || hasCommentDrafts(drafts), copy.postLeaveConfirm);
+  // The same texts, as this render has them, go to a step left as the boxes' texts do (오너 결정
+  // 2026-10-20 답 2·4): kept in this tab when the page goes and `['me']` names a step left of this
+  // account — a write's entry here going to it, or the gate — and shown again after it.
+  const onScreen = useRef({ accountId: viewerAccountId, held: heldTexts.held, drafts });
+  useEffect(() => {
+    onScreen.current = { accountId: viewerAccountId, held: heldTexts.held, drafts };
+  });
+  useEffect(
+    () => () => {
+      keepSectionTextsForStep(
+        { postId: post.id, ...onScreen.current },
+        queryClient.getQueryData<Me>(ME_QUERY_KEY),
+      );
+    },
+    [post.id, queryClient],
+  );
+
+  const placed = placeHeldTexts(threads, heldTexts.held);
+  const onTaken = useCallback((key: CommentDraftKey) => take([key]), [take]);
+  const focusHeading = () => heading.current?.focus({ preventScroll: true });
+  const onCloseHeld = (id: string) => {
+    heldTexts.dismiss(id);
+    // The text and its 닫기 are gone: the focus goes to the comments' heading rather than the
+    // page's start.
+    focusHeading();
+  };
+  const context: ThreadContext = {
+    postId: post.id,
+    viewer,
+    open,
+    stepPath,
+    takenBack,
+    onTaken,
+    onCloseHeld,
+    focusHeading,
+  };
 
   return (
-    <Stack as="section" aria-labelledby="comments-heading" gap="4" data-testid="post-comments">
-      {/* A peer of the post's title (`h2`), not one of its body's headings (`h3`–`h5`). */}
-      <Heading as="h2" id="comments-heading" textStyle="titleLg" data-testid="comments-heading">
-        {commentCountText(post.commentCount)}
-      </Heading>
-      {comments.isRefetchError && (
-        <Alert.Root status="warning" role="status" data-testid="comments-refresh-failed">
-          <Alert.Indicator />
-          <Alert.Content>
-            <Alert.Description>{copy.marketRefreshFailed}</Alert.Description>
-          </Alert.Content>
-        </Alert.Root>
-      )}
-      {comments.isPending ? (
-        SKELETON_ROWS.map((row) => <Skeleton key={row} height="72px" borderRadius="card" />)
-      ) : comments.isLoadingError ? (
-        <Stack gap="3" align="flex-start" data-testid="comments-error">
-          <Alert.Root status="error" role="alert">
+    <CommentBoxGoingContext.Provider value={heldTexts.going}>
+      <Stack as="section" aria-labelledby="comments-heading" gap="4" data-testid="post-comments">
+        {/* A peer of the post's title (`h2`), not one of its body's headings (`h3`–`h5`). */}
+        <Heading
+          ref={heading}
+          as="h2"
+          id="comments-heading"
+          tabIndex={-1}
+          textStyle="titleLg"
+          data-testid="comments-heading"
+        >
+          {commentCountText(post.commentCount)}
+        </Heading>
+        {comments.isRefetchError && (
+          <Alert.Root status="warning" role="status" data-testid="comments-refresh-failed">
             <Alert.Indicator />
             <Alert.Content>
-              <Alert.Description>{postReadErrorMessage(comments.error)}</Alert.Description>
+              <Alert.Description>{copy.marketRefreshFailed}</Alert.Description>
             </Alert.Content>
           </Alert.Root>
-          <Button size="sm" variant="outline" onClick={() => void comments.refetch()}>
-            {copy.retry}
-          </Button>
-        </Stack>
-      ) : threads.length === 0 ? (
-        <Text textStyle="bodySm" color="fg.muted" data-testid="comments-empty">
-          {copy.commentsEmpty}
-        </Text>
-      ) : (
-        <Stack as="ul" gap="5" listStyleType="none" data-testid="comments-list">
-          {threads.map((thread) => (
-            <Thread
-              key={thread.comment.id}
-              postId={post.id}
-              thread={thread}
-              viewer={viewer}
-              open={open}
-            />
-          ))}
-        </Stack>
-      )}
-      {comments.hasNextPage && (
-        <Button
-          alignSelf="center"
-          variant="outline"
-          borderRadius="pill"
-          borderColor="border.emphasized"
-          h="40px"
-          px="4"
-          textStyle="emphasisSm"
-          loading={comments.isFetchingNextPage}
-          onClick={() => void comments.fetchNextPage()}
-          data-testid="comments-more"
-        >
-          {copy.loadMore}
-        </Button>
-      )}
-      {post.state !== 'published' ? (
-        <Text textStyle="bodySm" color="fg.muted" data-testid="comments-closed">
-          {commentsClosedMessage(post.state)}
-        </Text>
-      ) : writer.pending ? (
-        <Skeleton height="96px" borderRadius="card" data-testid="comment-composer-pending" />
-      ) : writer.failed ? (
-        <Text textStyle="bodySm" color="fg.muted" data-testid="comment-composer-failed">
-          {copy.errProfileLoad}
-        </Text>
-      ) : viewer === undefined ? (
-        <EmptyState
-          message={copy.commentSignedOut}
-          action={
-            <Button asChild size="sm" variant="outline">
-              <NextLink
-                href={loginPathBackTo(postPath(post.id)) as Route}
-                data-testid="comment-login"
-              >
-                {copy.login}
-              </NextLink>
+        )}
+        {comments.isPending ? (
+          SKELETON_ROWS.map((row) => <Skeleton key={row} height="72px" borderRadius="card" />)
+        ) : comments.isLoadingError ? (
+          <Stack gap="3" align="flex-start" data-testid="comments-error">
+            <Alert.Root status="error" role="alert">
+              <Alert.Indicator />
+              <Alert.Content>
+                <Alert.Description>{postReadErrorMessage(comments.error)}</Alert.Description>
+              </Alert.Content>
+            </Alert.Root>
+            <Button size="sm" variant="outline" onClick={() => void comments.refetch()}>
+              {copy.retry}
             </Button>
-          }
-          data-testid="comment-signed-out"
-        />
-      ) : (
-        <CommentComposer postId={post.id} parentId={null} accountId={viewer.accountId} />
-      )}
+          </Stack>
+        ) : threads.length === 0 ? (
+          <Text textStyle="bodySm" color="fg.muted" data-testid="comments-empty">
+            {copy.commentsEmpty}
+          </Text>
+        ) : (
+          <Stack as="ul" gap="5" listStyleType="none" data-testid="comments-list">
+            {threads.map((thread) => (
+              <Thread
+                key={thread.comment.id}
+                context={context}
+                thread={thread}
+                heldAtEnd={placed.byThread.get(thread.comment.id) ?? []}
+                heldByComment={placed.byComment}
+              />
+            ))}
+          </Stack>
+        )}
+        {comments.hasNextPage && (
+          <Button
+            alignSelf="center"
+            variant="outline"
+            borderRadius="pill"
+            borderColor="border.emphasized"
+            h="40px"
+            px="4"
+            textStyle="emphasisSm"
+            loading={comments.isFetchingNextPage}
+            onClick={() => void comments.fetchNextPage()}
+            data-testid="comments-more"
+          >
+            {copy.loadMore}
+          </Button>
+        )}
+        <HeldTexts held={placed.rest} onClose={onCloseHeld} />
+        {post.state !== 'published' ? (
+          <Text textStyle="bodySm" color="fg.muted" data-testid="comments-closed">
+            {commentsClosedMessage(post.state)}
+          </Text>
+        ) : writer.pending ? (
+          <Skeleton height="96px" borderRadius="card" data-testid="comment-composer-pending" />
+        ) : writer.failed ? (
+          <Text textStyle="bodySm" color="fg.muted" data-testid="comment-composer-failed">
+            {copy.errProfileLoad}
+          </Text>
+        ) : viewer === undefined ? (
+          <EmptyState
+            message={copy.commentSignedOut}
+            action={
+              <Button asChild size="sm" variant="outline">
+                <NextLink
+                  href={loginPathBackTo(postPath(post.id)) as Route}
+                  data-testid="comment-login"
+                >
+                  {copy.login}
+                </NextLink>
+              </Button>
+            }
+            data-testid="comment-signed-out"
+          />
+        ) : (
+          <CommentComposer
+            postId={post.id}
+            parentId={null}
+            accountId={viewer.accountId}
+            stepPath={stepPath}
+            takenBack={takenBack.comment}
+            onTaken={context.onTaken}
+          />
+        )}
+      </Stack>
+    </CommentBoxGoingContext.Provider>
+  );
+}
+
+/** The held texts of one place, in the order they were held. */
+function HeldTexts({
+  held,
+  onClose,
+}: {
+  held: readonly HeldText[];
+  onClose: (id: string) => void;
+}) {
+  if (held.length === 0) return null;
+  return (
+    <Stack gap="3">
+      {held.map((text) => (
+        <HeldCommentText key={text.id} held={text} onClose={() => onClose(text.id)} />
+      ))}
     </Stack>
   );
+}
+
+/**
+ * A draft handed to a box after an onboarding step (`takenBack`), as the box takes it: once per
+ * draft, while rendering, so the box is drawn with it — and then the section is told, so it holds
+ * the draft no longer (a box closed and opened again starts afresh).
+ */
+function useTakenBack(
+  takenBack: string | undefined,
+  key: CommentDraftKey,
+  onTaken: (key: CommentDraftKey) => void,
+  apply: (text: string) => void,
+): void {
+  const [seen, setSeen] = useState<string | undefined>(undefined);
+  if (takenBack !== undefined && takenBack !== seen) {
+    setSeen(takenBack);
+    apply(takenBack);
+  }
+  const { kind } = key;
+  const id = key.kind === 'reply' ? key.parentId : key.kind === 'edit' ? key.commentId : '';
+  const postId = key.postId;
+  useEffect(() => {
+    if (takenBack === undefined) return;
+    onTaken(
+      kind === 'comment'
+        ? { kind, postId }
+        : kind === 'reply'
+          ? { kind, postId, parentId: id }
+          : { kind, postId, commentId: id },
+    );
+  }, [takenBack, kind, postId, id, onTaken]);
 }
 
 /**
@@ -178,47 +414,75 @@ export function CommentsSection({ post }: { post: Post }) {
  * at the end of the thread: a reply to a 대댓글 is another 대댓글 of the same 댓글, so every reply of
  * the thread is written there and sent under the 댓글. Offered to a signed-in reader while the post
  * and the 댓글 are open: a hidden 댓글 or 대댓글 takes none (#45-5), nor does a deleted 댓글 kept as
- * its placeholder (ADR-0074 7-4, a question for the owner). When the box closes — 취소, or sent —
- * the focus goes back to the 답글 that opened it, rather than to the page's start with the box that
- * held it (WCAG 2.4.3).
+ * its placeholder (오너 결정 2026-10-20, ADR-0074 7-4). With a step left, 답글 goes to it first
+ * (`stepPath`). When the box closes — 취소, or sent — the focus goes back to the 답글 that opened
+ * it, rather than to the page's start with the box that held it (WCAG 2.4.3). A reply draft taken
+ * back after a step opens the box with it — no 답글 opened it, so closing it puts the focus on the
+ * 댓글's own 답글 (or, were that gone, the comments' heading: ADR-0074 7-24).
  */
 function Thread({
-  postId,
+  context,
   thread,
-  viewer,
-  open,
+  heldAtEnd,
+  heldByComment,
 }: {
-  postId: string;
+  context: ThreadContext;
   thread: CommentThread;
-  viewer: Viewer | undefined;
-  open: boolean;
+  heldAtEnd: readonly HeldText[];
+  heldByComment: ReadonlyMap<string, readonly HeldText[]>;
 }) {
+  const { postId, viewer, open, stepPath, takenBack, onTaken, onCloseHeld, focusHeading } = context;
+  const router = useRouter();
   const [replying, setReplying] = useState(false);
+  // The 댓글's own 답글: where the focus goes when no 답글 pressed opened the box.
+  const threadReply = useRef<HTMLButtonElement>(null);
   // Bumped by every 답글, so a box already open takes the focus again.
   const [focusSignal, setFocusSignal] = useState(0);
   // The 답글 last pressed: where the focus returns when the box closes.
   const [opener, setOpener] = useState<HTMLElement | null>(null);
+  // The text a box opened by a draft taken back starts with.
+  const [replyStart, setReplyStart] = useState<string | undefined>(undefined);
+  const threadId = thread.comment.id;
+  useTakenBack(
+    takenBack.replies.get(threadId),
+    { kind: 'reply', postId, parentId: threadId },
+    onTaken,
+    (text) => {
+      setReplyStart(text);
+      setOpener(null);
+      setReplying(true);
+    },
+  );
   const replyable = open && viewer !== undefined && thread.comment.state === 'published';
   const startReply = (button: HTMLElement) => {
+    if (stepPath !== undefined) {
+      router.push(stepPath as Route);
+      return;
+    }
     setOpener(button);
     setReplying(true);
     setFocusSignal((signal) => signal + 1);
   };
   const endReply = () => {
     setReplying(false);
+    setReplyStart(undefined);
     // Still on the page (a sent reply keeps the thread, and its 답글 with it).
     if (opener?.isConnected) opener.focus();
+    else if (threadReply.current?.isConnected) threadReply.current.focus();
+    else focusHeading();
   };
   const replyTo = (comment: PostComment) =>
     replyable && comment.state === 'published' ? startReply : undefined;
 
   return (
-    <Stack as="li" gap="3" data-testid={`comment-thread-${thread.comment.id}`}>
+    <Stack as="li" gap="3" data-testid={`comment-thread-${threadId}`}>
       <CommentItem
-        postId={postId}
+        context={context}
         comment={thread.comment}
-        viewer={viewer}
+        threadId={threadId}
         onReply={replyTo(thread.comment)}
+        replyButton={threadReply}
+        held={heldByComment.get(thread.comment.id) ?? []}
       />
       {(thread.replies.length > 0 || (replying && replyable)) && (
         <Stack
@@ -239,10 +503,11 @@ function Thread({
               {thread.replies.map((reply) => (
                 <li key={reply.id}>
                   <CommentItem
-                    postId={postId}
+                    context={context}
                     comment={reply}
-                    viewer={viewer}
+                    threadId={threadId}
                     onReply={replyTo(reply)}
+                    held={heldByComment.get(reply.id) ?? []}
                   />
                 </li>
               ))}
@@ -251,67 +516,99 @@ function Thread({
           {replying && replyable && viewer !== undefined && (
             <CommentComposer
               postId={postId}
-              parentId={thread.comment.id}
+              parentId={threadId}
               accountId={viewer.accountId}
+              stepPath={stepPath}
+              startText={replyStart}
               focusSignal={focusSignal}
               onDone={endReply}
             />
           )}
         </Stack>
       )}
+      <HeldTexts held={heldAtEnd} onClose={onCloseHeld} />
     </Stack>
   );
 }
 
 /**
  * A comment as the thread shows it: a placeholder of a deleted 댓글 (with 대댓글 under it) or of a
- * hidden comment — neither names the author nor keeps a word (#45-5) — or the comment itself.
+ * hidden comment — neither names the author nor keeps a word (#45-5) — or the comment itself; and
+ * under either, the text an edit of it left when its write was refused (`held`).
  */
 function CommentItem({
-  postId,
+  context,
   comment,
-  viewer,
+  threadId,
   onReply,
+  replyButton,
+  held,
 }: {
-  postId: string;
+  context: ThreadContext;
   comment: PostComment;
-  viewer: Viewer | undefined;
+  threadId: string;
   onReply: ((button: HTMLElement) => void) | undefined;
+  /** Its 답글, for the thread's 댓글 (`Thread`). */
+  replyButton?: RefObject<HTMLButtonElement | null>;
+  held: readonly HeldText[];
 }) {
-  if (comment.state !== 'published') {
-    return (
-      <Box as="article" py="1" data-testid={`comment-${comment.id}`} data-state={comment.state}>
-        <Text textStyle="bodySm" color="fg.muted" data-testid="comment-placeholder">
-          {commentPlaceholderMessage(comment.state)}
-        </Text>
-      </Box>
-    );
-  }
   return (
-    <PublishedCommentItem postId={postId} comment={comment} viewer={viewer} onReply={onReply} />
+    <Stack gap="2">
+      {comment.state !== 'published' ? (
+        <Box as="article" py="1" data-testid={`comment-${comment.id}`} data-state={comment.state}>
+          <Text textStyle="bodySm" color="fg.muted" data-testid="comment-placeholder">
+            {commentPlaceholderMessage(comment.state)}
+          </Text>
+        </Box>
+      ) : (
+        <PublishedCommentItem
+          context={context}
+          comment={comment}
+          threadId={threadId}
+          onReply={onReply}
+          replyButton={replyButton}
+        />
+      )}
+      <HeldTexts held={held} onClose={context.onCloseHeld} />
+    </Stack>
   );
 }
 
 /**
  * A published comment: the byline (author, time, 수정됨 — the post's, ADR-0073), the text with its
- * links, and its actions — 답글 where the thread takes one, and for its author 수정 (in place) and
- * 삭제 (asked first). The author is told by the public id of `GET /me` (`isOwnPost`), never in the
- * HTML; the server checks the author on every write. When the edit closes — 취소, or saved — the
- * focus goes back to 수정, as a reply's goes back to 답글.
+ * links, and its actions — 답글 where the thread takes one, and for its author 수정 (in place, or
+ * the step left first) and 삭제 (asked first, with a session alone). The author is told by the
+ * public id of `GET /me` (`isOwnPost`), never in the HTML; the server checks the author on every
+ * write. When the edit closes — 취소, or saved — the focus goes back to 수정, as a reply's goes back
+ * to 답글. An edit draft taken back after a step opens the edit with it.
  */
 function PublishedCommentItem({
-  postId,
+  context,
   comment,
-  viewer,
+  threadId,
   onReply,
+  replyButton,
 }: {
-  postId: string;
+  context: ThreadContext;
   comment: PublishedComment;
-  viewer: Viewer | undefined;
+  threadId: string;
   onReply: ((button: HTMLElement) => void) | undefined;
+  replyButton: RefObject<HTMLButtonElement | null> | undefined;
 }) {
+  const { postId, viewer, stepPath, takenBack, onTaken } = context;
+  const router = useRouter();
   const [editing, setEditing] = useState(false);
+  const [editStart, setEditStart] = useState<string | undefined>(undefined);
   const own = viewer !== undefined && isOwnPost(comment.author, viewer.publicId);
+  useTakenBack(
+    takenBack.edits.get(comment.id),
+    { kind: 'edit', postId, commentId: comment.id },
+    onTaken,
+    (text) => {
+      setEditStart(text);
+      setEditing(true);
+    },
+  );
   // 수정 comes back as a new button when the form closes: focused once it is there.
   const editButton = useRef<HTMLButtonElement>(null);
   const refocus = useRef(false);
@@ -332,9 +629,13 @@ function PublishedCommentItem({
         <CommentEditForm
           postId={postId}
           comment={comment}
+          threadId={threadId}
           accountId={viewer.accountId}
+          stepPath={stepPath}
+          startText={editStart}
           onDone={() => {
             refocus.current = true;
+            setEditStart(undefined);
             setEditing(false);
           }}
         />
@@ -345,6 +646,7 @@ function PublishedCommentItem({
             <HStack gap="1" ms="-2" data-testid="comment-actions">
               {onReply !== undefined && (
                 <Button
+                  ref={replyButton}
                   size="xs"
                   variant="ghost"
                   onClick={(event) => onReply(event.currentTarget)}
@@ -359,7 +661,10 @@ function PublishedCommentItem({
                     ref={editButton}
                     size="xs"
                     variant="ghost"
-                    onClick={() => setEditing(true)}
+                    onClick={() => {
+                      if (stepPath !== undefined) router.push(stepPath as Route);
+                      else setEditing(true);
+                    }}
                     data-testid="comment-edit"
                   >
                     {copy.commentEdit}
@@ -378,27 +683,63 @@ function PublishedCommentItem({
 /**
  * A new 댓글 (`parentId` null) or a 대댓글 of the 댓글 `parentId`: the box, emptied once the server
  * took it. The answer goes into the thread on screen (use-comments.ts); a reply's box then closes.
- * A refusal is said under the button or as a toast (`inlineRefusal`).
+ * A refusal is said under the button — and should the thread read again no longer hold the box,
+ * where the box stood (`useCommentBoxDraft`). With a step left, 올리기 goes to it first: the box's
+ * text is kept in this tab on the way, and comes back after the step (`stepPath`).
  */
 function CommentComposer({
   postId,
   parentId,
   accountId,
+  stepPath,
+  startText,
+  takenBack,
+  onTaken,
   focusSignal,
   onDone,
 }: {
   postId: string;
   parentId: string | null;
   accountId: string;
-  /** A reply's box: focused when it opens and on every 답글 after. */
+  stepPath: string | undefined;
+  /** A reply's box opened by a draft taken back: its text. */
+  startText?: string;
+  /** The new 댓글's box: a draft taken back after a step, as it arrives. */
+  takenBack?: string;
+  onTaken?: (key: CommentDraftKey) => void;
+  /**
+   * A reply's box: focused when it opens — unless a draft taken back opened it — and on every 답글
+   * after.
+   */
   focusSignal?: number;
   /** A reply's box: closes it, after a send or on 취소. */
   onDone?: () => void;
 }) {
-  const [text, setText] = useState('');
+  const router = useRouter();
+  const [text, setText] = useState(startText ?? '');
+  const [restored, setRestored] = useState(startText !== undefined);
   const { refetch: refetchSession } = useSession();
   const create = useCreateComment(postId, () => void refetchSession());
   const reply = parentId !== null;
+  const key: CommentDraftKey =
+    parentId === null
+      ? { kind: 'comment', postId: postId.toLowerCase() }
+      : { kind: 'reply', postId: postId.toLowerCase(), parentId };
+  const place: HeldTextPlace =
+    parentId === null ? { kind: 'post' } : { kind: 'thread', threadId: parentId };
+  useTakenBack(takenBack, key, onTaken ?? ignoreTaken, (taken) => {
+    setText(taken);
+    setRestored(true);
+  });
+  const box = useCommentBoxDraft({
+    key,
+    accountId,
+    text,
+    initial: '',
+    pending: create.isPending,
+    refused: create.isError,
+    place,
+  });
 
   return (
     <CommentBox
@@ -408,41 +749,80 @@ function CommentComposer({
       placeholder={reply ? copy.commentReplyPlaceholder : copy.commentWritePlaceholder}
       submitLabel={copy.commentSubmit}
       pending={create.isPending}
-      errorMessage={inlineRefusal(create.error, 'create')}
+      restored={restored}
+      errorMessage={
+        create.error === null ? undefined : commentWriteErrorMessage(create.error, 'create')
+      }
       focusSignal={focusSignal}
-      onCancel={onDone}
+      focusOnMount={startText === undefined}
+      rootRef={box.rootRef}
+      onCancel={
+        onDone &&
+        (() => {
+          box.close();
+          create.reset();
+          onDone();
+        })
+      }
       onSubmit={(draft) => {
+        if (stepPath !== undefined) {
+          router.push(stepPath as Route);
+          return;
+        }
         void create
           .mutateAsync({ parentId, body: draft, expectedAccountId: accountId })
           .then(() => {
+            box.landed();
             setText('');
+            setRestored(false);
             onDone?.();
-          }, toastStaleRefusal('create'));
+          }, box.refused);
       }}
       testId={reply ? 'reply-composer' : 'comment-composer'}
     />
   );
 }
 
+function ignoreTaken(): void {
+  // A box opened with its draft (a reply's, an edit's): its opener told the section already.
+}
+
 /**
  * The author's edit, in place of the text (#45-4: any time, the text only): the same box with the
- * comment as it stands. Saving what it already says closes the box without a request — the server
- * would change nothing and mark nothing edited either.
+ * comment as it stands — or with a draft taken back after a step (`startText`). Saving what it
+ * already says closes the box without a request — the server would change nothing and mark nothing
+ * edited either. With a step left, 저장 goes to it first, keeping the text (`stepPath`).
  */
 function CommentEditForm({
   postId,
   comment,
+  threadId,
   accountId,
+  stepPath,
+  startText,
   onDone,
 }: {
   postId: string;
   comment: PublishedComment;
+  threadId: string;
   accountId: string;
+  stepPath: string | undefined;
+  startText: string | undefined;
   onDone: () => void;
 }) {
-  const [text, setText] = useState(comment.body);
+  const router = useRouter();
+  const [text, setText] = useState(startText ?? comment.body);
   const { refetch: refetchSession } = useSession();
   const update = useUpdateComment(postId, () => void refetchSession());
+  const box = useCommentBoxDraft({
+    key: { kind: 'edit', postId: postId.toLowerCase(), commentId: comment.id },
+    accountId,
+    text,
+    initial: comment.body,
+    pending: update.isPending,
+    refused: update.isError,
+    place: { kind: 'comment', commentId: comment.id, threadId },
+  });
 
   return (
     <CommentBox
@@ -452,17 +832,33 @@ function CommentEditForm({
       placeholder={copy.commentWritePlaceholder}
       submitLabel={copy.commentEditSave}
       pending={update.isPending}
-      errorMessage={inlineRefusal(update.error, 'edit')}
+      restored={startText !== undefined}
+      errorMessage={
+        update.error === null ? undefined : commentWriteErrorMessage(update.error, 'edit')
+      }
       focusSignal={0}
-      onCancel={onDone}
+      focusOnMount={startText === undefined}
+      rootRef={box.rootRef}
+      onCancel={() => {
+        box.close();
+        onDone();
+      }}
       onSubmit={(draft) => {
+        if (stepPath !== undefined) {
+          router.push(stepPath as Route);
+          return;
+        }
         if (draft === comment.body) {
+          box.close();
           onDone();
           return;
         }
         void update
           .mutateAsync({ commentId: comment.id, body: draft, expectedAccountId: accountId })
-          .then(onDone, toastStaleRefusal('edit'));
+          .then(() => {
+            box.landed();
+            onDone();
+          }, box.refused);
       }}
       testId="comment-edit-form"
     />
@@ -470,36 +866,13 @@ function CommentEditForm({
 }
 
 /**
- * Where a refused write is said. A refusal that says the thread is out of date (the post or the
- * 댓글 was hidden or deleted meanwhile, the comment is gone — `isStaleThreadRefusal`) reads the
- * thread again before the mutation settles (use-comments.ts), and the thread it reads no longer
- * holds the box: a reply's 댓글 is a placeholder or gone, an edited comment hidden or gone, the
- * post closed. So that refusal is a toast, raised from the write's promise — which settles whether
- * or not the box is still there — and never under the button; every other refusal is under the
- * button (`inlineRefusal`), where the box and its text still are. The text a removed box held goes
- * with it (ADR-0074 결과 4).
- */
-function inlineRefusal(error: Error | null, write: CommentWrite): string | undefined {
-  return error === null || isStaleThreadRefusal(error)
-    ? undefined
-    : commentWriteErrorMessage(error, write);
-}
-
-function toastStaleRefusal(write: CommentWrite) {
-  return (error: unknown) => {
-    if (isStaleThreadRefusal(error)) {
-      toaster.create({ type: 'error', title: commentWriteErrorMessage(error, write) });
-    }
-  };
-}
-
-/**
  * The text box every comment write uses: plain text (no formatting, no images, #45-3), the count
  * under it as the server counts (`commentDraft`: '12 / 1,000자'), and the server's refusal under
  * the buttons. It sends nothing empty or over the limit. Like the post form (ADR-0073), the box is
  * `aria-invalid` past the limit and described by the count and the limit's message, which a polite
- * live region, mounted before it holds anything, announces when it appears. No field asks for a
- * probability, a position or an order (N05 §2).
+ * live region, mounted before it holds anything, announces when it appears. A box holding a draft
+ * taken back after an onboarding step says so under it (`restored`) — the page's toast said it
+ * once — and is described by it. No field asks for a probability, a position or an order (N05 §2).
  */
 function CommentBox({
   text,
@@ -508,8 +881,11 @@ function CommentBox({
   placeholder,
   submitLabel,
   pending,
+  restored,
   errorMessage,
   focusSignal,
+  focusOnMount = true,
+  rootRef,
   onCancel,
   onSubmit,
   testId,
@@ -520,9 +896,17 @@ function CommentBox({
   placeholder: string;
   submitLabel: string;
   pending: boolean;
+  restored: boolean;
   errorMessage: string | undefined;
   /** Focus the box on mount and whenever this changes; undefined: never. */
   focusSignal: number | undefined;
+  /**
+   * False for a box a draft taken back opened: the page does not move the focus into it, only a
+   * later change of `focusSignal` does.
+   */
+  focusOnMount?: boolean;
+  /** Follows the focus in it, for the text it may leave (`useCommentBoxDraft`). */
+  rootRef: CommentBoxRootRef;
   onCancel: (() => void) | undefined;
   /** The text as the server will keep it (`commentDraft`). */
   onSubmit: (body: string) => void;
@@ -532,14 +916,12 @@ function CommentBox({
   const box = useRef<HTMLTextAreaElement>(null);
   const draft = commentDraft(text);
   const blocked = pending || draft.empty || draft.tooLong;
-
-  useEffect(() => {
-    if (focusSignal !== undefined) box.current?.focus();
-  }, [focusSignal]);
+  useFocusOn(box, focusSignal, focusOnMount);
 
   return (
     <Stack
       as="form"
+      ref={rootRef}
       gap="2"
       onSubmit={(event) => {
         event.preventDefault();
@@ -559,9 +941,19 @@ function CommentBox({
         maxLength={COMMENT_BODY_MAX_LENGTH * 2}
         disabled={pending}
         aria-invalid={draft.tooLong}
-        aria-describedby={`${id}-length ${id}-limit`}
+        aria-describedby={`${id}-length ${id}-limit${restored ? ` ${id}-restored` : ''}`}
         data-testid="comment-input"
       />
+      {restored && (
+        <Text
+          id={`${id}-restored`}
+          textStyle="bodyXs"
+          color="fg.muted"
+          data-testid="comment-draft-restored"
+        >
+          {copy.commentDraftRestored}
+        </Text>
+      )}
       <HStack justify="space-between" gap="3" flexWrap="wrap">
         <Text
           as="span"
@@ -614,6 +1006,22 @@ function CommentBox({
       )}
     </Stack>
   );
+}
+
+/**
+ * Focuses `element` when it mounts (`onMount`) and whenever `signal` changes; never while it is
+ * undefined.
+ */
+function useFocusOn(
+  element: RefObject<HTMLElement | null>,
+  signal: number | undefined,
+  onMount: boolean,
+) {
+  const [first] = useState(signal);
+  useEffect(() => {
+    if (signal === undefined || (!onMount && signal === first)) return;
+    element.current?.focus();
+  }, [element, signal, onMount, first]);
 }
 
 /**

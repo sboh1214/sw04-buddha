@@ -6,6 +6,7 @@ import {
 } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, type CommentThread, type Post, type PublishedComment, api } from '@/lib/api';
+import { commentDraftLandedSince, commentDraftMoment } from '@/lib/comment-drafts';
 import {
   type CommentPage,
   type CommentPages,
@@ -201,6 +202,45 @@ describe('the writes', () => {
     ).rejects.toBeInstanceOf(ApiError);
     expect(queryClient.getQueryState(postCommentsKey(post))?.isInvalidated).toBe(true);
     expect(queryClient.getQueryState(postKey(post))?.isInvalidated).toBe(true);
+  });
+
+  it('a write that lands records it for its box, so a draft kept for a step goes (오너 결정 2026-10-20 답 2); a refusal does not', async () => {
+    const queryClient = seeded();
+    const before = commentDraftMoment();
+    const replyBox = { kind: 'reply', postId: post, parentId: commentId } as const;
+    const newBox = { kind: 'comment', postId: post } as const;
+    const editBox = { kind: 'edit', postId: post, commentId } as const;
+    const send = vi.spyOn(api, 'POST');
+    const write = new MutationObserver(
+      queryClient,
+      createCommentOptions(queryClient, POST, () => undefined),
+    );
+    send.mockRejectedValueOnce(
+      new ApiError(409, {
+        code: 'COMMENT_NOT_ALLOWED',
+        message: 'x',
+        details: { reason: 'parent_deleted' },
+      } as never),
+    );
+    await expect(
+      write.mutate({ parentId: COMMENT, body: '답글', expectedAccountId: 'user-1' }),
+    ).rejects.toBeInstanceOf(ApiError);
+    expect(commentDraftLandedSince(replyBox, before)).toBe(false);
+
+    send.mockResolvedValueOnce(
+      answer(published('d3b07384-d9a0-4c9b-8e2f-2d1c0f8a4b11', commentId)),
+    );
+    await write.mutate({ parentId: COMMENT, body: '답글', expectedAccountId: 'user-1' });
+    expect(commentDraftLandedSince(replyBox, before)).toBe(true);
+    expect(commentDraftLandedSince(newBox, before)).toBe(false);
+
+    vi.spyOn(api, 'PUT').mockResolvedValueOnce(answer(published(commentId, null, '고친 댓글')));
+    const edit = new MutationObserver(
+      queryClient,
+      updateCommentOptions(queryClient, POST, () => undefined),
+    );
+    await edit.mutate({ commentId: COMMENT, body: '고친 댓글', expectedAccountId: 'user-1' });
+    expect(commentDraftLandedSince(editBox, before)).toBe(true);
   });
 
   it('a deletion applies its answer to the pages held, and the count is read again', async () => {

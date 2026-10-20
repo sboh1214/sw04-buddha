@@ -15,6 +15,7 @@ import {
   api,
   unwrap,
 } from '@/lib/api';
+import { commentDraftLanded } from '@/lib/comment-drafts';
 import {
   type CommentPage,
   type CommentPages,
@@ -185,6 +186,10 @@ async function afterCommentRefusal(
 /**
  * `POST /posts/:postId/comments` as mutation options for the post `postId`: a 대댓글 goes under its
  * 댓글 in the pages held, a 댓글 arrives with its page (`readOnToTheEnd`); the count goes up by one.
+ * A draft of that box an onboarding step kept in this tab is the comment now and is removed, and
+ * the landing recorded first (`commentDraftLanded`, lib/comment-drafts.ts) — here, as the post
+ * writes do it (use-posts.ts), since the page may have gone to the step with the write in flight,
+ * and a box going before it hears of the success must not keep it again.
  */
 export function createCommentOptions(
   queryClient: QueryClient,
@@ -200,7 +205,12 @@ export function createCommentOptions(
           body,
         }),
       ).data,
-    onSuccess: async (comment: PublishedComment) => {
+    onSuccess: async (comment: PublishedComment, { parentId }: CreateCommentVariables) => {
+      commentDraftLanded(
+        parentId === null || parentId === undefined
+          ? { kind: 'comment', postId: id }
+          : { kind: 'reply', postId: id, parentId: parentId.toLowerCase() },
+      );
       if (comment.parentId === null) await readOnToTheEnd(queryClient, id, comment);
       else await writePages(queryClient, id, (held) => withNewComment(held, comment));
       moveCommentCount(queryClient, id, 1);
@@ -210,7 +220,10 @@ export function createCommentOptions(
   };
 }
 
-/** `PUT /comments/:commentId`: the edited comment replaces the held one; no count changes. */
+/**
+ * `PUT /comments/:commentId`: the edited comment replaces the held one; no count changes. A kept
+ * draft of that edit goes, as a new comment's does.
+ */
 export function updateCommentOptions(
   queryClient: QueryClient,
   postId: string,
@@ -225,8 +238,10 @@ export function updateCommentOptions(
           body,
         }),
       ).data,
-    onSuccess: (comment: PublishedComment) =>
-      writePages(queryClient, id, (held) => withEditedComment(held, comment)),
+    onSuccess: (comment: PublishedComment, { commentId }: UpdateCommentVariables) => {
+      commentDraftLanded({ kind: 'edit', postId: id, commentId: commentId.toLowerCase() });
+      return writePages(queryClient, id, (held) => withEditedComment(held, comment));
+    },
     onError: (error: Error) => afterCommentRefusal(queryClient, id, error, onSessionChanged),
   };
 }

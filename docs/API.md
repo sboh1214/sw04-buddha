@@ -220,9 +220,9 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | --- | --- | --- | --- | --- |
 | GET | `/api/v1/posts` | The community list: every market’s posts, newest first (the only order), never a deleted or hidden one; narrowed by market, by category (either level, like GET /markets) and by q, a case-insensitive partial match in the title or the text | — | `VALIDATION_ERROR`, `RATE_LIMITED` |
 | POST | `/api/v1/posts` | A post on a market in any public status: an optional title and a formatted body (at most 5000 characters of text and 10 images, each an upload of the author’s own); formatting outside the allow-list is removed | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `RATE_LIMITED` |
-| GET | `/api/v1/posts/{postId}` | A post page: the whole post, or a placeholder for a hidden post and for a deleted one that replies hang under; a deleted post with none is NOT_FOUND | — | `VALIDATION_ERROR`, `NOT_FOUND`, `RATE_LIMITED` |
+| GET | `/api/v1/posts/{postId}` | A post page: the whole post, or a placeholder for a hidden post and for a deleted one that comments not deleted (hidden ones too) still hang under; a deleted post with none is NOT_FOUND | — | `VALIDATION_ERROR`, `NOT_FOUND`, `RATE_LIMITED` |
 | PUT | `/api/v1/posts/{postId}` | The author replaces the title and the body (never the market); the post shows as edited and the earlier version is kept for operators. The same content changes nothing. A hidden post cannot be edited (POST_NOT_EDITABLE) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `POST_NOT_EDITABLE`, `RATE_LIMITED` |
-| POST | `/api/v1/posts/{postId}/delete` | The author deletes the post (a hidden one too), signed in whatever their onboarding: it stays as the placeholder 삭제된 글입니다 while replies hang under it, and is gone from every view otherwise. Never restored | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
+| POST | `/api/v1/posts/{postId}/delete` | The author deletes the post (a hidden one too), signed in whatever their onboarding: it stays as the placeholder 삭제된 글입니다 while comments not deleted (hidden ones too) hang under it, and is gone from every view otherwise. Never restored | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
 
 ### `media`
 

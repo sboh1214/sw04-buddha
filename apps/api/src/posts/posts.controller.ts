@@ -83,7 +83,8 @@ export class PostsController {
     operationId: 'getPost',
     summary:
       'A post page: the whole post, or a placeholder for a hidden post and for a deleted one ' +
-      'that replies hang under; a deleted post with none is NOT_FOUND',
+      'that comments not deleted (hidden ones too) still hang under; a deleted post with none ' +
+      'is NOT_FOUND',
   })
   @ApiData(postSchema)
   @ApiErrors('NOT_FOUND', 'VALIDATION_ERROR')
@@ -158,8 +159,8 @@ export class PostsController {
     operationId: 'deletePost',
     summary:
       'The author deletes the post (a hidden one too), signed in whatever their onboarding: it ' +
-      'stays as the placeholder 삭제된 글입니다 while replies hang under it, and is gone from every ' +
-      'view otherwise. Never restored',
+      'stays as the placeholder 삭제된 글입니다 while comments not deleted (hidden ones too) hang ' +
+      'under it, and is gone from every view otherwise. Never restored',
   })
   @ApiData(postDeletionSchema)
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')

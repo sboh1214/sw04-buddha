@@ -8,9 +8,11 @@ import {
 } from '@buddha/shared';
 import { type InfiniteData } from '@tanstack/react-query';
 import { copy } from '@/copy';
+import { type CommentDraftKey, type CommentDrafts } from './comment-drafts';
 import {
   type CommentDeletion,
   type CommentThread,
+  type Post,
   type PostComment,
   type PublishedComment,
   isApiError,
@@ -19,7 +21,7 @@ import {
   validationField,
   validationMessage,
 } from './api';
-import { POSTS_KEY } from './posts';
+import { POSTS_KEY, isOwnPost } from './posts';
 
 /**
  * 댓글·대댓글 (#48, ADR-0074) as the post page reads them: the cache key and request of a post's
@@ -191,6 +193,16 @@ export function commentDraft(text: string): CommentDraft {
   return { body, length, empty: body === '', tooLong: length > COMMENT_BODY_MAX_LENGTH };
 }
 
+/**
+ * Whether a box's text differs from what it started with (`initial`: '' for a new 댓글 or 대댓글,
+ * the comment's text for an edit), as the server would keep each (`normaliseCommentBody`) — so
+ * spaces alone, or the comment as it stands, are nothing to lose. What leaving asks about (오너 결정
+ * 2026-10-20 답 1) and what going to an onboarding step keeps (답 2).
+ */
+export function commentTextChanged(text: string, initial: string): boolean {
+  return normaliseCommentBody(text) !== normaliseCommentBody(initial);
+}
+
 /** The count under a box: '12 / 1,000자'. */
 export function commentLengthText(length: number): string {
   return `${length.toLocaleString('ko-KR')} / ${COMMENT_BODY_MAX_LENGTH.toLocaleString('ko-KR')}${copy.commentLengthUnit}`;
@@ -272,8 +284,11 @@ export function commentWriteErrorMessage(error: unknown, write: CommentWrite): s
  * Whether a refusal means the thread on screen is out of date — the post or a 댓글 was hidden or
  * deleted, or a comment or the post is gone — so the hooks read the post and its comments again
  * and the page shows what they are now: the placeholders, the box closed, or for a post gone from
- * every view its 404 (post-screen.tsx). The box that was refused is often not in what they show,
- * so the refusal is said as a toast (comments-section.tsx).
+ * every view its 404 (post-screen.tsx). A refused write's words stay under its button; should the
+ * thread read again no longer hold the box, they stay with its text where the box stood until the
+ * writer closes them (`useCommentBoxDraft`, components/post/held-comment-text.tsx) — and, being
+ * about the thread, they are what that text says rather than the box's place as read again
+ * (`heldTextsOf`). A refused deletion has no box: it is a toast, as every deletion's refusal is.
  */
 export function isStaleThreadRefusal(error: unknown): boolean {
   return (
@@ -294,4 +309,269 @@ export function commentsClosedMessage(postState: 'deleted' | 'hidden'): string {
 /** A comment's placeholder (#45-5): never its author or a word of it. */
 export function commentPlaceholderMessage(state: 'deleted' | 'hidden'): string {
   return state === 'deleted' ? copy.commentDeletedPlaceholder : copy.commentHiddenPlaceholder;
+}
+
+// ---- text the page holds for a box that is gone ------------------------------------------------
+
+/**
+ * Where a box stood: the new 댓글's (`post`, under the threads), a thread's reply box (at its end),
+ * or an edit (in place of the comment's text, in its thread).
+ */
+export type HeldTextPlace =
+  | { kind: 'post' }
+  | { kind: 'thread'; threadId: string }
+  | { kind: 'comment'; commentId: string; threadId: string };
+
+/**
+ * Text the page shows apart from any box, with why it cannot be sent, until the writer closes it
+ * (오너 결정 2026-10-20 답 4): the text of a box whose write was refused and which went — the post
+ * or the 댓글 hidden or deleted, the comment gone, so the thread read again no longer holds it —
+ * and a draft taken back after an onboarding step whose box can no longer open
+ * (`resolveCommentDrafts`). Only the account on screen's (lib/held-comment-texts.ts).
+ */
+export interface HeldText {
+  id: string;
+  place: HeldTextPlace;
+  /** Why it cannot be sent: the refusal's words, or why its place takes it no more (`goneBoxReason`). */
+  reason: string;
+  text: string;
+  /**
+   * The focus was in the box as it went: it comes here (ADR-0074 7-25). Never for a draft taken back
+   * after a step — no box held it on this page.
+   */
+  focus: boolean;
+}
+
+/**
+ * The box a held text stood for, as the drafts kept in the tab name it (lib/comment-drafts.ts): the
+ * new 댓글's, a thread's reply box, an edit. A held text goes to an onboarding step as its box's
+ * text would (오너 결정 2026-10-20 답 2·4, `keepSectionTextsForStep`).
+ */
+export function commentDraftKeyOfPlace(postId: string, place: HeldTextPlace): CommentDraftKey {
+  switch (place.kind) {
+    case 'post':
+      return { kind: 'comment', postId };
+    case 'thread':
+      return { kind: 'reply', postId, parentId: place.threadId };
+    case 'comment':
+      return { kind: 'edit', postId, commentId: place.commentId };
+  }
+}
+
+/** Where each held text is drawn: under its comment, at the end of its thread, or under them all. */
+export interface PlacedHeldTexts {
+  byComment: ReadonlyMap<string, readonly HeldText[]>;
+  byThread: ReadonlyMap<string, readonly HeldText[]>;
+  rest: readonly HeldText[];
+}
+
+function push<T>(map: Map<string, T[]>, key: string, value: T) {
+  const list = map.get(key);
+  if (list === undefined) map.set(key, [value]);
+  else list.push(value);
+}
+
+/**
+ * Each held text where its box stood, as far as the threads on screen still have that place: an
+ * edit under its comment (a placeholder now, perhaps), else at the end of its thread; a reply at
+ * the end of its thread; and anything whose place is gone — a thread that left the view, the new
+ * 댓글's — under the threads, in the order they were held.
+ */
+export function placeHeldTexts(
+  threads: readonly CommentThread[],
+  held: readonly HeldText[],
+): PlacedHeldTexts {
+  const commentIds = new Set<string>();
+  const threadIds = new Set<string>();
+  for (const thread of threads) {
+    threadIds.add(thread.comment.id);
+    commentIds.add(thread.comment.id);
+    for (const reply of thread.replies) commentIds.add(reply.id);
+  }
+  const byComment = new Map<string, HeldText[]>();
+  const byThread = new Map<string, HeldText[]>();
+  const rest: HeldText[] = [];
+  for (const text of held) {
+    const { place } = text;
+    if (place.kind === 'comment' && commentIds.has(place.commentId)) {
+      push(byComment, place.commentId, text);
+    } else if (place.kind !== 'post' && threadIds.has(place.threadId)) {
+      push(byThread, place.threadId, text);
+    } else {
+      rest.push(text);
+    }
+  }
+  return { byComment, byThread, rest };
+}
+
+/** Why a 대댓글 cannot go under a 댓글 in `state` (#45-5, 7-4), or nothing for a published one. */
+function replyRefusalOf(state: PostComment['state']): string | undefined {
+  switch (state) {
+    case 'published':
+      return undefined;
+    case 'hidden':
+      return copy.errCommentParentHidden;
+    case 'deleted':
+      return copy.errCommentParentDeleted;
+  }
+}
+
+/** Why a comment in `state` cannot be edited (#45-5), or nothing for a published one. */
+function editRefusalOf(state: PostComment['state']): string | undefined {
+  switch (state) {
+    case 'published':
+      return undefined;
+    case 'hidden':
+      return copy.errCommentNotEditable;
+    case 'deleted':
+      return copy.errCommentGone;
+  }
+}
+
+/**
+ * Why the place a box stood in takes its text no more, as the post and its threads now read — in
+ * the words the server would refuse it in — or nothing while it still would: the post hidden or
+ * deleted (a new 댓글, a 대댓글; an edit is still its author's, 7-6), the 댓글 to answer a
+ * placeholder or out of the view, the comment edited hidden or out of it. A box gone from a thread
+ * on screen went with that thread's pages read, so one not among them is gone. What a held text
+ * says when the refusal its box heard was about something else — a network failure, say — and the
+ * box went later because its thread changed (`heldTextsOf`).
+ */
+export function goneBoxReason(
+  place: HeldTextPlace,
+  view: { postState: Post['state']; threads: readonly CommentThread[] },
+): string | undefined {
+  const { postState, threads } = view;
+  if (place.kind !== 'comment' && postState !== 'published') {
+    return commentsClosedMessage(postState);
+  }
+  switch (place.kind) {
+    case 'post':
+      return undefined;
+    case 'thread': {
+      const thread = threads.find((held) => held.comment.id === place.threadId);
+      return thread === undefined
+        ? copy.errCommentParentGone
+        : replyRefusalOf(thread.comment.state);
+    }
+    case 'comment': {
+      const found = threads
+        .flatMap((thread) => [thread.comment, ...thread.replies])
+        .find((held) => held.id === place.commentId);
+      return found === undefined ? copy.errCommentGone : editRefusalOf(found.state);
+    }
+  }
+}
+
+// ---- drafts taken back after an onboarding step ------------------------------------------------
+
+/** A draft taken back that no box can take: shown apart, with why (`HeldText`). */
+export interface UnplacedCommentDraft {
+  key: CommentDraftKey;
+  text: string;
+  reason: string;
+  place: HeldTextPlace;
+}
+
+/** Where the drafts taken back go (`resolveCommentDrafts`). */
+export interface ResolvedCommentDrafts {
+  /** The new 댓글's box opens with it. */
+  comment: string | undefined;
+  /** The reply box of each thread opens with its draft, by the thread's 댓글. */
+  replies: ReadonlyMap<string, string>;
+  /** The edit of each comment opens with its draft, by the comment. */
+  edits: ReadonlyMap<string, string>;
+  /** Drafts whose box can no longer open, and why. */
+  unplaced: readonly UnplacedCommentDraft[];
+  /** A draft's comment is not among the pages read, and pages are left to read. */
+  waiting: boolean;
+}
+
+/**
+ * Where each draft the post page took back after an onboarding step goes (오너 결정 2026-10-20 답 2):
+ * into its box — the new 댓글's while the post takes comments, a thread's reply box while its 댓글
+ * takes 대댓글, an edit while the comment is the viewer's and published — or, where that box can no
+ * longer open, apart, with the words the server would refuse it in (`unplaced`): the post hidden
+ * or deleted meanwhile, the 댓글 a placeholder or gone, the comment hidden or gone. A comment not
+ * among the pages read waits for them (`waiting`: the page reads on) and is gone once every page
+ * is read (`allRead`).
+ */
+export function resolveCommentDrafts(
+  drafts: CommentDrafts,
+  view: {
+    postId: string;
+    postState: Post['state'];
+    threads: readonly CommentThread[];
+    allRead: boolean;
+    viewerPublicId: string;
+  },
+): ResolvedCommentDrafts {
+  const { postId, postState, threads, allRead, viewerPublicId } = view;
+  const replies = new Map<string, string>();
+  const edits = new Map<string, string>();
+  const unplaced: UnplacedCommentDraft[] = [];
+  let comment: string | undefined;
+  let waiting = false;
+
+  if (drafts.comment !== undefined) {
+    if (postState === 'published') comment = drafts.comment;
+    else {
+      unplaced.push({
+        key: { kind: 'comment', postId },
+        text: drafts.comment,
+        reason: commentsClosedMessage(postState),
+        place: { kind: 'post' },
+      });
+    }
+  }
+
+  for (const [parentId, text] of drafts.replies) {
+    const key: CommentDraftKey = { kind: 'reply', postId, parentId };
+    const place: HeldTextPlace = { kind: 'thread', threadId: parentId };
+    const thread = threads.find((held) => held.comment.id === parentId);
+    if (postState !== 'published') {
+      unplaced.push({ key, text, reason: commentsClosedMessage(postState), place });
+    } else if (thread === undefined) {
+      if (allRead) unplaced.push({ key, text, reason: copy.errCommentParentGone, place });
+      else waiting = true;
+    } else {
+      const reason = replyRefusalOf(thread.comment.state);
+      if (reason === undefined) replies.set(parentId, text);
+      else unplaced.push({ key, text, reason, place });
+    }
+  }
+
+  for (const [commentId, text] of drafts.edits) {
+    const key: CommentDraftKey = { kind: 'edit', postId, commentId };
+    const thread = threads.find(
+      (held) =>
+        held.comment.id === commentId || held.replies.some((reply) => reply.id === commentId),
+    );
+    const place: HeldTextPlace = {
+      kind: 'comment',
+      commentId,
+      threadId: thread?.comment.id ?? commentId,
+    };
+    const found =
+      thread === undefined
+        ? undefined
+        : [thread.comment, ...thread.replies].find((held) => held.id === commentId);
+    if (found === undefined) {
+      if (allRead) unplaced.push({ key, text, reason: copy.errCommentGone, place });
+      else waiting = true;
+    } else if (found.state !== 'published') {
+      unplaced.push({
+        key,
+        text,
+        reason: editRefusalOf(found.state) ?? copy.errCommentGone,
+        place,
+      });
+    } else if (!isOwnPost(found.author, viewerPublicId)) {
+      unplaced.push({ key, text, reason: copy.errCommentNotYours, place });
+    } else {
+      edits.set(commentId, text);
+    }
+  }
+
+  return { comment, replies, edits, unplaced, waiting };
 }

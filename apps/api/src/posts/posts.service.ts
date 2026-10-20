@@ -110,12 +110,13 @@ function postMarketOf(row: {
 }
 
 /**
- * What the public sees of a post (#45-5), by its times and whether replies hang under it:
- * `published`; `deleted` — the author deleted it and replies hang under it, the placeholder
- * '삭제된 글입니다' with the author hidden; `gone` — deleted with nothing under it, out of every
- * view; `hidden` — an operator hid it, '운영 정책에 따라 숨긴 글입니다'. The author's deletion
- * comes first: a hidden post its author deleted is deleted. A comment (#48) is seen the same way,
- * its 대댓글 being what hangs under a 댓글 (a 대댓글 has none, so a deleted one is gone).
+ * What the public sees of a post (#45-5), by its times and whether anything hangs under it — for
+ * a post, comments not deleted (hidden ones too, `postHasComments`): `published`; `deleted` — the
+ * author deleted it and such comments hang under it, the placeholder '삭제된 글입니다' with the
+ * author hidden; `gone` — deleted with nothing under it, out of every view; `hidden` — an operator
+ * hid it, '운영 정책에 따라 숨긴 글입니다'. The author's deletion comes first: a hidden post its
+ * author deleted is deleted. A comment (#48) is seen the same way, its 대댓글 not deleted being
+ * what hangs under a 댓글 (a 대댓글 has none, so a deleted one is gone).
  */
 export function publicStateOf(
   post: { deletedAt: Date | null; hiddenAt: Date | null },

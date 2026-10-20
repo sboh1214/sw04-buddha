@@ -957,7 +957,7 @@ export const copy = {
   commentDeletedPlaceholder: '삭제된 글입니다.',
   commentHiddenPlaceholder: '운영 정책에 따라 숨긴 글입니다.',
   // 숨기거나 지운 글은 새 댓글을, 숨긴 댓글은 새 답글을 받지 않는다(#45-5). 지워 자리표시로 남은 댓글도
-  // 새 답글을 받지 않는다(ADR-0074 7-4, 오너에게 묻는 중).
+  // 새 답글을 받지 않는다(오너 결정 2026-10-20, ADR-0074 7-4).
   commentClosedPostHidden: '운영 정책에 따라 숨긴 글에는 댓글을 달 수 없습니다.',
   commentClosedPostDeleted: '삭제된 글에는 댓글을 달 수 없습니다.',
   errCommentParentHidden: '운영 정책에 따라 숨긴 댓글에는 답글을 달 수 없습니다.',
@@ -970,6 +970,14 @@ export const copy = {
   errCommentNotYours: '다른 사람의 댓글은 고치거나 삭제할 수 없습니다.',
   errCommentBodyEmpty: '댓글을 입력해 주세요.',
   errCommentBodyTooLong: '댓글은 1,000자 이하로 입력해 주세요.',
+  // 쓰던 댓글·답글·수정을 두고 떠날 때는 글과 같은 postLeaveConfirm으로 묻는다(오너 결정 2026-10-20 답 1).
+  // 재동의로 남은 단계로 갈 때 이 탭에 1시간 둔 쓰던 댓글·답글·수정을, 단계를 마치고 돌아온 글 화면이 그
+  // 상자에 되살렸을 때 — 토스트로 한 번, 되살린 상자마다 그 아래에도(오너 결정 2026-10-20 답 2, 글의
+  // postDraftRestored와 같은 말).
+  commentDraftRestored: '쓰던 내용을 되살렸습니다.',
+  // 쓰기가 거절되고 그 상자가 다시 읽은 화면에 없을 때(또는 되살린 쓰던 내용을 받을 상자가 없을 때), 거절의
+  // 까닭과 함께 닫을 때까지 보이는 쓰던 글자의 읽기 전용 칸 이름(오너 결정 2026-10-20 답 4). 닫는 단추는 copy.close.
+  commentHeldText: '쓰던 내용',
 
   // 관리자 시장 폼의 미리보기 (Q-M3-6): 실제 카드·규칙 컴포넌트를 그대로 그린다.
   adminMarketPreview: '미리보기',

@@ -1007,7 +1007,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** A post page: the whole post, or a placeholder for a hidden post and for a deleted one that replies hang under; a deleted post with none is NOT_FOUND */
+        /** A post page: the whole post, or a placeholder for a hidden post and for a deleted one that comments not deleted (hidden ones too) still hang under; a deleted post with none is NOT_FOUND */
         get: operations["getPost"];
         /** The author replaces the title and the body (never the market); the post shows as edited and the earlier version is kept for operators. The same content changes nothing. A hidden post cannot be edited (POST_NOT_EDITABLE) */
         put: operations["updatePost"];
@@ -1045,7 +1045,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** The author deletes the post (a hidden one too), signed in whatever their onboarding: it stays as the placeholder 삭제된 글입니다 while replies hang under it, and is gone from every view otherwise. Never restored */
+        /** The author deletes the post (a hidden one too), signed in whatever their onboarding: it stays as the placeholder 삭제된 글입니다 while comments not deleted (hidden ones too) hang under it, and is gone from every view otherwise. Never restored */
         post: operations["deletePost"];
         delete?: never;
         options?: never;

@@ -217,7 +217,7 @@ export class CommentsService {
    * (FORBIDDEN), a deleted or unknown comment (NOT_FOUND) and a hidden one (COMMENT_NOT_EDITABLE,
    * #45-5). A comment under a hidden or deleted post, and a 대댓글 under a hidden 댓글 or under a
    * deleted 댓글's placeholder, stays its author's to edit: only new comments are refused there
-   * (ADR-0074 7-6, a question for the owner).
+   * (오너 결정 2026-10-20, ADR-0074 7-6).
    */
   async update(authorId: string, commentId: string, body: string): Promise<PublishedComment> {
     await this.db.transaction(async (tx) => {

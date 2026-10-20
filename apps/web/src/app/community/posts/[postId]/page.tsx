@@ -25,9 +25,9 @@ export async function generateMetadata({
 
 /**
  * A post page (#46, ADR-0073): the whole post — title, byline, body, its market — or the
- * placeholder of a hidden post and of a deleted one replies hang under (#45-5), and 404 for a
- * deleted post with nothing under it, which is gone (the API answers NOT_FOUND, as for an address
- * that never was a post). Public (N05 §2).
+ * placeholder of a hidden post and of a deleted one that comments not deleted (hidden ones too)
+ * still hang under (#45-5), and 404 for a deleted post with none, which is gone (the API answers
+ * NOT_FOUND, as for an address that never was a post). Public (N05 §2).
  *
  * The post is read here, once, and seeded under its key, so the HTML carries the post and the
  * client component follows the cache from there (an edit writes the new post into it); so is the

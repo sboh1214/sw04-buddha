@@ -1,4 +1,5 @@
 import { type APIRequestContext, type Locator, type Page } from '@playwright/test';
+import type { Me } from '@buddha/shared';
 import { copy } from '../src/copy';
 import { createOpenMarket, expect, freshEmail, freshTag, meOf, signUp, test } from './helpers';
 
@@ -13,10 +14,101 @@ import { createOpenMarket, expect, freshEmail, freshTag, meOf, signUp, test } fr
  * no box to write in (N04 §6), and once its last comment is deleted the open page is its 404. An
  * admin's comment carries '운영자' and offers the member 답글 only. A visitor reads the comments,
  * which the server put in the HTML, a long address wrapping inside a phone's width, and is asked
- * to sign in, coming back to the post. The depth rule, the placeholders' rules, the counts, the
- * permissions and the link safety are the API's and the shared package's tests; this walks the
- * screens.
+ * to sign in, coming back to the post. Leaving a new 댓글, a 답글 or an edit with text asks first
+ * (staying keeps it, an empty box asks nothing); an account facing a re-consent still deletes its
+ * own comment on the post page, while 답글, 수정 and 올리기 take it to the step — every box's text
+ * kept in the tab and put back into its box once the step is done, an open box's 올리기·저장
+ * sending nothing; and a 답글 or an edit refused because its comment was deleted meanwhile, or a new
+ * 댓글 because the post was, leaves its text and why where the box stood until it is closed — the
+ * focus there only from a box that held it, the reason an alert otherwise, and through a re-consent
+ * step too — while every other box stays open (owner decisions 2026-10-20). The depth rule, the
+ * placeholders' rules, the counts, the permissions and the link safety are the API's and the
+ * shared package's tests; this walks the screens.
  */
+
+/**
+ * `GET /me` in this page answering as the server would after a revision of the terms that changed
+ * members' rights, while `on`; agreeing on the step turns it off (posts.spec.ts draws it the same
+ * way — no spec can bring about a re-consent for real).
+ */
+async function asReconsent(page: Page): Promise<{ on: boolean }> {
+  const state = { on: false };
+  await page.route('**/api/v1/me', async (route) => {
+    if (route.request().method() !== 'GET' || !state.on) return route.fallback();
+    const response = await route.fetch();
+    if (!response.ok()) return route.fulfill({ response });
+    const body = (await response.json()) as { data: Me };
+    const { onboarding } = body.data;
+    body.data.onboarding = {
+      ...onboarding,
+      consent: false,
+      completed: false,
+      nextStep: 'consent',
+      consents: onboarding.consents.map((answer) =>
+        answer.item === 'terms' ? { ...answer, version: 'draft-1999-01-01' } : answer,
+      ),
+    };
+    await route.fulfill({ response, json: body });
+  });
+  await page.route('**/api/v1/me/consents', async (route) => {
+    const response = await route.fetch();
+    state.on = false;
+    await route.fulfill({ response });
+  });
+  return state;
+}
+
+/** The consent step of a re-consent, agreed on screen. */
+async function agreeAgain(page: Page): Promise<void> {
+  await expect(page.getByTestId('onboarding-return-reason')).toHaveText(
+    copy.onboardingReconsentReason,
+  );
+  await page.getByTestId('consent-all').click();
+  await page.getByTestId('consent-submit').click();
+}
+
+/** A write refused as the server refuses an account with a step left. */
+const ONBOARDING_REFUSAL = {
+  status: 409,
+  json: {
+    error: {
+      code: 'ONBOARDING_REQUIRED',
+      message: 'The onboarding is not done',
+      details: { steps: ['consent'] },
+    },
+  },
+};
+
+/** A write refused for a frequency limit (#187's, as the server will answer it). */
+const RATE_LIMIT_REFUSAL = {
+  status: 429,
+  json: { error: { code: 'RATE_LIMITED', message: 'Too many requests', details: {} } },
+};
+
+/** The comment drafts kept in this tab's sessionStorage (lib/comment-drafts.ts), by key: text. */
+function commentDraftsInTab(page: Page): Promise<Record<string, string>> {
+  return page.evaluate(() =>
+    Object.fromEntries(
+      Object.keys(sessionStorage)
+        .filter((key) => key.startsWith('buddha.commentDraft:'))
+        .map((key) => [
+          key,
+          (JSON.parse(sessionStorage.getItem(key) ?? '{}') as { text: string }).text,
+        ]),
+    ),
+  );
+}
+
+/** Records each dialog the page opens and answers it with the next of `answers` (no: dismissed). */
+function dialogs(page: Page): { asked: string[]; answers: boolean[] } {
+  const asked: string[] = [];
+  const answers: boolean[] = [];
+  page.on('dialog', (dialog) => {
+    asked.push(`${dialog.type()}: ${dialog.message()}`);
+    void (answers.shift() === true ? dialog.accept() : dialog.dismiss());
+  });
+  return { asked, answers };
+}
 
 /** A post straight at the API with the context's cookie: this spec's subject is its comments. */
 async function postThroughApi(
@@ -300,5 +392,481 @@ test.describe('댓글·대댓글', () => {
     // As a reload says it.
     const gone = await page.reload();
     expect(gone?.status()).toBe(404);
+  });
+  test('쓰던 댓글·답글·수정을 두고 머리의 링크로 떠나면 먼저 묻고, 머무르면 글자가 그대로이며, 빈 상자는 묻지 않는다', async ({
+    admin,
+    page,
+  }) => {
+    const market = await createOpenMarket(admin);
+    const tag = freshTag();
+    await signUp(page, freshEmail());
+    const postId = await postThroughApi(page.request, market.id, `떠나기 전 글 ${tag}`, tag);
+    const own = await commentThroughApi(page.request, postId, null, `내 댓글 ${tag}`);
+    const postPage = `/community/posts/${postId}`;
+    await page.goto(postPage);
+    const { asked, answers } = dialogs(page);
+    const question = `confirm: ${copy.postLeaveConfirm}`;
+    // The wordmark in the header, a Next.js link on every screen and both widths.
+    const home = page.getByRole('heading', { level: 1, name: copy.appName }).getByRole('link');
+
+    // --- the new 댓글's box (오너 결정 2026-10-20 답 1): refused, still here with the text.
+    const newInput = page.getByTestId('comment-composer').getByTestId('comment-input');
+    await newInput.fill(`쓰던 댓글 ${tag}`);
+    answers.push(false);
+    await home.click();
+    await expect.poll(() => asked).toEqual([question]);
+    await expect(page).toHaveURL(postPage);
+    await expect(newInput).toHaveValue(`쓰던 댓글 ${tag}`);
+    await newInput.fill('   ');
+
+    // --- a 답글's box.
+    const ownComment = commentOf(page, own);
+    await ownComment.getByTestId('comment-reply').click();
+    const replyBox = page.getByTestId(`comment-thread-${own}`).getByTestId('reply-composer');
+    await replyBox.getByTestId('comment-input').fill(`쓰던 답글 ${tag}`);
+    answers.push(false);
+    await home.click();
+    await expect.poll(() => asked).toEqual([question, question]);
+    await expect(page).toHaveURL(postPage);
+    await expect(replyBox.getByTestId('comment-input')).toHaveValue(`쓰던 답글 ${tag}`);
+    // 취소 is within the page: it asks nothing.
+    await replyBox.getByTestId('comment-cancel').click();
+    await expect(replyBox).toHaveCount(0);
+
+    // --- an edit: asks once the text differs from the comment.
+    await ownComment.getByTestId('comment-edit').click();
+    const editInput = ownComment.getByTestId('comment-edit-form').getByTestId('comment-input');
+    await editInput.fill(`고치던 댓글 ${tag}`);
+    answers.push(false);
+    await home.click();
+    await expect.poll(() => asked).toEqual([question, question, question]);
+    await expect(editInput).toHaveValue(`고치던 댓글 ${tag}`);
+
+    // --- answered yes: gone to the home screen.
+    answers.push(true);
+    await home.click();
+    await expect(page).toHaveURL('/');
+    expect(asked).toEqual([question, question, question, question]);
+
+    // --- boxes holding nothing to lose ask nothing: an empty 답글, an edit as the comment stands
+    // (an unexpected dialog would be dismissed and keep us).
+    await page.goto(postPage);
+    await ownComment.getByTestId('comment-reply').click();
+    await expect(replyBox.getByTestId('comment-input')).toBeFocused();
+    await home.click();
+    await expect(page).toHaveURL('/');
+    await page.goto(postPage);
+    await ownComment.getByTestId('comment-edit').click();
+    await expect(editInput).toHaveValue(`내 댓글 ${tag}`);
+    await home.click();
+    await expect(page).toHaveURL('/');
+    expect(asked).toHaveLength(4);
+  });
+
+  test('재동의가 남은 계정은 글 화면에서 자기 댓글을 지우고, 답글·수정·올리기는 남은 단계로 가며, 쓰던 댓글·답글·수정은 단계를 마치고 돌아오면 그 상자에 되살아난다', async ({
+    admin,
+    page,
+  }) => {
+    const market = await createOpenMarket(admin);
+    const tag = freshTag();
+    await signUp(page, freshEmail());
+    const postId = await postThroughApi(page.request, market.id, `재동의 글 ${tag}`, tag);
+    const adminMe = await meOf(admin);
+    const theirs = await commentThroughApi(admin, postId, null, `운영자의 댓글 ${tag}`);
+    // Deleted by its author while the reader is on the step: the 답글 to it has no box to go back to.
+    const doomed = await commentThroughApi(admin, postId, null, `곧 지워질 댓글 ${tag}`);
+    const editable = await commentThroughApi(page.request, postId, null, `고칠 댓글 ${tag}`);
+    const deletable = await commentThroughApi(page.request, postId, null, `지울 댓글 ${tag}`);
+    const postPage = `/community/posts/${postId}`;
+    const viaStep = `/onboarding?next=${encodeURIComponent(postPage)}`;
+    const reconsent = await asReconsent(page);
+    const { asked } = dialogs(page);
+
+    // --- four boxes with text: a new 댓글, two 답글 and an edit.
+    await page.goto(postPage);
+    const composer = page.getByTestId('comment-composer');
+    await composer.getByTestId('comment-input').fill(`새 댓글 ${tag}\n둘째 줄`);
+    await commentOf(page, doomed).getByTestId('comment-reply').click();
+    await page
+      .getByTestId(`comment-thread-${doomed}`)
+      .getByTestId('reply-composer')
+      .getByTestId('comment-input')
+      .fill(`갈 곳 없는 답글 ${tag}`);
+    await commentOf(page, theirs).getByTestId('comment-reply').click();
+    const replyBox = page.getByTestId(`comment-thread-${theirs}`).getByTestId('reply-composer');
+    await replyBox.getByTestId('comment-input').fill(`답글 ${tag}`);
+    await commentOf(page, editable).getByTestId('comment-edit').click();
+    const editForm = commentOf(page, editable).getByTestId('comment-edit-form');
+    await editForm.getByTestId('comment-input').fill(`고친 댓글 ${tag}`);
+
+    // --- the 댓글 refused for the onboarding: a revision asked for the consent again meanwhile.
+    // The page is the gate's exception for a re-consent, so it stays — every box with its text.
+    await page.route(`**/api/v1/posts/${postId}/comments`, async (route) => {
+      if (route.request().method() !== 'POST') return route.fallback();
+      reconsent.on = true;
+      await route.fulfill(ONBOARDING_REFUSAL);
+    });
+    await composer.getByTestId('comment-submit').click();
+    await expect(composer.getByTestId('comment-error')).toHaveText(copy.errPostOnboarding);
+    await expect(page).toHaveURL(postPage);
+    await expect(replyBox.getByTestId('comment-input')).toHaveValue(`답글 ${tag}`);
+    await expect(editForm.getByTestId('comment-input')).toHaveValue(`고친 댓글 ${tag}`);
+
+    // --- deleting one's own comment needs a session alone (오너 결정 2026-10-19·20).
+    await commentOf(page, deletable).getByTestId('comment-delete').click();
+    await page.getByTestId('comment-delete-confirm').click();
+    await expect(page.getByText(copy.commentDeletedToast)).toBeVisible();
+    await expect(commentOf(page, deletable)).toHaveCount(0);
+    await expect(page).toHaveURL(postPage);
+
+    // --- 올리기 now goes to the step (오너 결정 2026-10-20 답 3), asking nothing: every box's text
+    // is kept in this tab on the way (답 2).
+    await composer.getByTestId('comment-submit').click();
+    await expect(page).toHaveURL(viaStep);
+    await expect(page.getByTestId('consent-step')).toBeVisible();
+    expect(asked).toEqual([]);
+    const prefix = `buddha.commentDraft:${postId}`;
+    expect(await commentDraftsInTab(page)).toEqual({
+      [`${prefix}:comment`]: `새 댓글 ${tag}\n둘째 줄`,
+      [`${prefix}:reply:${doomed}`]: `갈 곳 없는 답글 ${tag}`,
+      [`${prefix}:reply:${theirs}`]: `답글 ${tag}`,
+      [`${prefix}:edit:${editable}`]: `고친 댓글 ${tag}`,
+    });
+    const doomedGone = await admin.post(`/api/v1/comments/${doomed}/delete`, {
+      data: { expectedAccountId: adminMe.id },
+    });
+    expect(doomedGone.status(), await doomedGone.text()).toBe(200);
+
+    // --- the step done: back on the post, each box open with its text, and said so.
+    await agreeAgain(page);
+    await expect(page).toHaveURL(postPage);
+    await expect(composer.getByTestId('comment-input')).toHaveValue(`새 댓글 ${tag}\n둘째 줄`);
+    await expect(composer.getByTestId('comment-draft-restored')).toHaveText(
+      copy.commentDraftRestored,
+    );
+    await expect(replyBox.getByTestId('comment-input')).toHaveValue(`답글 ${tag}`);
+    await expect(replyBox.getByTestId('comment-draft-restored')).toBeVisible();
+    await expect(editForm.getByTestId('comment-input')).toHaveValue(`고친 댓글 ${tag}`);
+    await expect(editForm.getByTestId('comment-draft-restored')).toBeVisible();
+    // Said once in a toast too — the toaster's region (a polite live region) reads it out.
+    const toasts = page.locator('body > [data-scope="toast"][data-part="group"]');
+    await expect(toasts).toHaveAttribute('aria-live', 'polite');
+    await expect(
+      toasts.getByRole('status').filter({ hasText: copy.commentDraftRestored }),
+    ).toHaveCount(1);
+    // Taken back, they are the boxes' again — gone from the tab.
+    expect(await commentDraftsInTab(page)).toEqual({});
+    // The 답글 whose 댓글 went meanwhile is shown apart with why — read out as an alert, the focus
+    // left where it was and the page where it was: no box on this page held it (ADR-0074 7-25).
+    const held = page.getByTestId('comment-held');
+    await expect(held).toHaveCount(1);
+    await expect(held.getByRole('alert')).toHaveText(copy.errCommentParentGone);
+    await expect(held.getByTestId('comment-held-text')).toHaveValue(`갈 곳 없는 답글 ${tag}`);
+    await expect(held).not.toBeFocused();
+    expect(await page.evaluate(() => window.scrollY)).toBe(0);
+    await held.getByTestId('comment-held-close').click();
+    await expect(held).toHaveCount(0);
+
+    // --- sent: each where it was written.
+    await page.unroute(`**/api/v1/posts/${postId}/comments`);
+    await replyBox.getByTestId('comment-submit').click();
+    await expect(replyBox).toHaveCount(0);
+    await expect(
+      page.getByTestId(`comment-thread-${theirs}`).getByTestId('comment-replies'),
+    ).toContainText(`답글 ${tag}`);
+    // No 답글 opened the restored box: the focus goes to the 댓글's own (WCAG 2.4.3).
+    await expect(commentOf(page, theirs).getByTestId('comment-reply')).toBeFocused();
+    await editForm.getByTestId('comment-submit').click();
+    await expect(commentOf(page, editable).getByTestId('comment-body')).toHaveText(
+      `고친 댓글 ${tag}`,
+    );
+    await composer.getByTestId('comment-submit').click();
+    await expect(composer.getByTestId('comment-input')).toHaveValue('');
+    await expect(composer.getByTestId('comment-draft-restored')).toHaveCount(0);
+    await expect(
+      page.locator('article[data-testid^="comment-"]', { hasText: `새 댓글 ${tag}` }),
+    ).toHaveCount(1);
+    expect(asked).toEqual([]);
+
+    // --- with the consent asked for again, 답글 and 수정 go to the step too, and come back here.
+    reconsent.on = true;
+    await page.reload();
+    await commentOf(page, theirs).getByTestId('comment-reply').click();
+    await expect(page).toHaveURL(viaStep);
+    await page.goto(postPage);
+    await commentOf(page, editable).getByTestId('comment-edit').click();
+    await expect(page).toHaveURL(viaStep);
+    await agreeAgain(page);
+    await expect(page).toHaveURL(postPage);
+    await expect(page.getByTestId('comment-edit-form')).toHaveCount(0);
+    expect(asked).toEqual([]);
+
+    // --- boxes opened before the step was known: their 저장 and 올리기 go to it too, sending
+    // nothing and keeping the text (답 2·3).
+    const writes: string[] = [];
+    page.on('request', (request) => {
+      if (request.method() === 'PUT') writes.push(`PUT ${new URL(request.url()).pathname}`);
+      if (request.method() === 'POST' && request.url().endsWith(`/posts/${postId}/comments`)) {
+        const parentId = (request.postDataJSON() as { parentId?: string | null }).parentId;
+        if (parentId) writes.push(`POST reply ${parentId}`);
+      }
+    });
+    await commentOf(page, editable).getByTestId('comment-edit').click();
+    await editForm.getByTestId('comment-input').fill(`다시 고친 댓글 ${tag}`);
+    await commentOf(page, theirs).getByTestId('comment-reply').click();
+    await replyBox.getByTestId('comment-input').fill(`다시 쓴 답글 ${tag}`);
+    await page.route(`**/api/v1/posts/${postId}/comments`, async (route) => {
+      if (route.request().method() !== 'POST') return route.fallback();
+      reconsent.on = true;
+      await route.fulfill(ONBOARDING_REFUSAL);
+    });
+    // The page learns of the step from a refused 댓글, as above.
+    await composer.getByTestId('comment-input').fill(`또 쓴 댓글 ${tag}`);
+    await composer.getByTestId('comment-submit').click();
+    await expect(composer.getByTestId('comment-error')).toHaveText(copy.errPostOnboarding);
+    await editForm.getByTestId('comment-submit').click();
+    await expect(page).toHaveURL(viaStep);
+    await expect
+      .poll(() => commentDraftsInTab(page))
+      .toEqual({
+        [`${prefix}:comment`]: `또 쓴 댓글 ${tag}`,
+        [`${prefix}:reply:${theirs}`]: `다시 쓴 답글 ${tag}`,
+        [`${prefix}:edit:${editable}`]: `다시 고친 댓글 ${tag}`,
+      });
+    await agreeAgain(page);
+    await expect(page).toHaveURL(postPage);
+    await expect(editForm.getByTestId('comment-input')).toHaveValue(`다시 고친 댓글 ${tag}`);
+    await expect(replyBox.getByTestId('comment-input')).toHaveValue(`다시 쓴 답글 ${tag}`);
+    await composer.getByTestId('comment-submit').click();
+    await expect(composer.getByTestId('comment-error')).toHaveText(copy.errPostOnboarding);
+    await replyBox.getByTestId('comment-submit').click();
+    await expect(page).toHaveURL(viaStep);
+    await expect
+      .poll(() => commentDraftsInTab(page))
+      .toMatchObject({
+        [`${prefix}:reply:${theirs}`]: `다시 쓴 답글 ${tag}`,
+      });
+    expect(writes).toEqual([]);
+    expect(asked).toEqual([]);
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+  });
+
+  test('쓰는 사이 그 댓글이 지워져 답글과 수정이 거절되면 상자가 사라져도 거절의 까닭과 쓰던 글자가 닫을 때까지 남는다', async ({
+    admin,
+    page,
+  }) => {
+    const market = await createOpenMarket(admin);
+    const tag = freshTag();
+    await signUp(page, freshEmail());
+    const me = await meOf(page.request);
+    const adminMe = await meOf(admin);
+    const postId = await postThroughApi(page.request, market.id, `거절될 글 ${tag}`, tag);
+    const theirs = await commentThroughApi(admin, postId, null, `곧 지워질 댓글 ${tag}`);
+    const mine = await commentThroughApi(page.request, postId, null, `곧 지울 내 댓글 ${tag}`);
+    const other = await commentThroughApi(admin, postId, null, `또 지워질 댓글 ${tag}`);
+    const kept = await commentThroughApi(admin, postId, null, `남는 댓글 ${tag}`);
+    const postPage = `/community/posts/${postId}`;
+    await page.goto(postPage);
+    const { asked, answers } = dialogs(page);
+    const home = page.getByRole('heading', { level: 1, name: copy.appName }).getByRole('link');
+    const held = page.getByTestId('comment-held');
+
+    // --- a 답글 to a 댓글 its author deletes meanwhile: with nothing under it, it leaves the view,
+    // and the thread read again holds neither it nor the box (오너 결정 2026-10-20 답 4).
+    await commentOf(page, theirs).getByTestId('comment-reply').click();
+    const replyBox = page.getByTestId(`comment-thread-${theirs}`).getByTestId('reply-composer');
+    await replyBox.getByTestId('comment-input').fill(`보내지 못한 답글 ${tag}\n둘째 줄`);
+    const gone = await admin.post(`/api/v1/comments/${theirs}/delete`, {
+      data: { expectedAccountId: adminMe.id },
+    });
+    expect(gone.status(), await gone.text()).toBe(200);
+    await replyBox.getByTestId('comment-submit').click();
+    await expect(page.getByTestId(`comment-thread-${theirs}`)).toHaveCount(0);
+    await expect(held).toHaveCount(1);
+    await expect(held.getByTestId('comment-held-reason')).toHaveText(copy.errCommentParentGone);
+    await expect(held.getByTestId('comment-held-text')).toHaveValue(
+      `보내지 못한 답글 ${tag}\n둘째 줄`,
+    );
+    // The focus the box held comes here, named by why (and so not an alert besides).
+    await expect(held).toBeFocused();
+    await expect(held).toHaveAccessibleName(copy.errCommentParentGone);
+    await expect(held.getByRole('alert')).toHaveCount(0);
+
+    // --- an edit of a comment deleted meanwhile (another tab of the same account).
+    await commentOf(page, mine).getByTestId('comment-edit').click();
+    const editForm = commentOf(page, mine).getByTestId('comment-edit-form');
+    await editForm.getByTestId('comment-input').fill(`보내지 못한 수정 ${tag}`);
+    const deleted = await page.request.post(`/api/v1/comments/${mine}/delete`, {
+      data: { expectedAccountId: me.id },
+    });
+    expect(deleted.status(), await deleted.text()).toBe(200);
+    await editForm.getByTestId('comment-submit').click();
+    await expect(commentOf(page, mine)).toHaveCount(0);
+    await expect(held).toHaveCount(2);
+    await expect(held.nth(1).getByTestId('comment-held-reason')).toHaveText(copy.errCommentGone);
+    await expect(held.nth(1).getByTestId('comment-held-text')).toHaveValue(
+      `보내지 못한 수정 ${tag}`,
+    );
+
+    // --- a 답글 whose box goes while the reader is in another box: the text stays, the focus
+    // where the reader put it, and why is read out as an alert.
+    await commentOf(page, other).getByTestId('comment-reply').click();
+    const otherBox = page.getByTestId(`comment-thread-${other}`).getByTestId('reply-composer');
+    await otherBox.getByTestId('comment-input').fill(`딴 상자에 있던 답글 ${tag}`);
+    const otherGone = await admin.post(`/api/v1/comments/${other}/delete`, {
+      data: { expectedAccountId: adminMe.id },
+    });
+    expect(otherGone.status(), await otherGone.text()).toBe(200);
+    let release = () => {};
+    const sending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route(`**/api/v1/posts/${postId}/comments`, async (route) => {
+      if (route.request().method() !== 'POST') return route.fallback();
+      await sending;
+      await route.continue();
+    });
+    await otherBox.getByTestId('comment-submit').click();
+    await expect(otherBox.getByTestId('comment-input')).toBeDisabled();
+    const newInput = page.getByTestId('comment-composer').getByTestId('comment-input');
+    await newInput.focus();
+    release();
+    await expect(held).toHaveCount(3);
+    await expect(held.nth(2).getByRole('alert')).toHaveText(copy.errCommentParentGone);
+    await expect(held.nth(2).getByTestId('comment-held-text')).toHaveValue(
+      `딴 상자에 있던 답글 ${tag}`,
+    );
+    await expect(newInput).toBeFocused();
+    await page.unroute(`**/api/v1/posts/${postId}/comments`);
+
+    // --- a refusal that leaves the box where it is (a limit): 취소 closes it holding nothing.
+    await page.route(`**/api/v1/posts/${postId}/comments`, (route) =>
+      route.request().method() === 'POST' ? route.fulfill(RATE_LIMIT_REFUSAL) : route.fallback(),
+    );
+    await commentOf(page, kept).getByTestId('comment-reply').click();
+    const keptBox = page.getByTestId(`comment-thread-${kept}`).getByTestId('reply-composer');
+    await keptBox.getByTestId('comment-input').fill(`한도에 걸린 답글 ${tag}`);
+    await keptBox.getByTestId('comment-submit').click();
+    await expect(keptBox.getByTestId('comment-error')).toBeVisible();
+    await keptBox.getByTestId('comment-cancel').click();
+    await expect(keptBox).toHaveCount(0);
+    await expect(held).toHaveCount(3);
+    await page.unroute(`**/api/v1/posts/${postId}/comments`);
+
+    // --- a re-consent asked for meanwhile, learnt from a refused 댓글: 답글 goes to the step, asking
+    // nothing, and the texts shown apart go with the boxes' texts into the tab, each as the draft
+    // of the box it stood for (답 2·4) — and are shown apart again, with why, once the step is done.
+    const reconsent = await asReconsent(page);
+    await page.route(`**/api/v1/posts/${postId}/comments`, async (route) => {
+      if (route.request().method() !== 'POST') return route.fallback();
+      reconsent.on = true;
+      await route.fulfill(ONBOARDING_REFUSAL);
+    });
+    await newInput.fill(`단계 앞의 댓글 ${tag}`);
+    const composer = page.getByTestId('comment-composer');
+    await composer.getByTestId('comment-submit').click();
+    await expect(composer.getByTestId('comment-error')).toHaveText(copy.errPostOnboarding);
+    await commentOf(page, kept).getByTestId('comment-reply').click();
+    await expect(page).toHaveURL(`/onboarding?next=${encodeURIComponent(postPage)}`);
+    const prefix = `buddha.commentDraft:${postId}`;
+    await expect
+      .poll(() => commentDraftsInTab(page))
+      .toEqual({
+        [`${prefix}:comment`]: `단계 앞의 댓글 ${tag}`,
+        [`${prefix}:reply:${theirs}`]: `보내지 못한 답글 ${tag}\n둘째 줄`,
+        [`${prefix}:edit:${mine}`]: `보내지 못한 수정 ${tag}`,
+        [`${prefix}:reply:${other}`]: `딴 상자에 있던 답글 ${tag}`,
+      });
+    await page.unroute(`**/api/v1/posts/${postId}/comments`);
+    await agreeAgain(page);
+    await expect(page).toHaveURL(postPage);
+    await expect(newInput).toHaveValue(`단계 앞의 댓글 ${tag}`);
+    await expect(held).toHaveCount(3);
+    // Their boxes cannot open: each is apart with why, read out as an alert (no box here held it).
+    await expect(held.getByRole('alert')).toHaveCount(3);
+    const shown = await held.evaluateAll((texts) =>
+      texts.map((text) => [
+        text.querySelector('[data-testid="comment-held-reason"]')?.textContent,
+        text.querySelector('textarea')?.value,
+      ]),
+    );
+    expect(shown.map((pair) => pair.join(' | ')).sort()).toEqual(
+      [
+        `${copy.errCommentParentGone} | 보내지 못한 답글 ${tag}\n둘째 줄`,
+        `${copy.errCommentGone} | 보내지 못한 수정 ${tag}`,
+        `${copy.errCommentParentGone} | 딴 상자에 있던 답글 ${tag}`,
+      ].sort(),
+    );
+    expect(await commentDraftsInTab(page)).toEqual({});
+    expect(asked).toEqual([]);
+    await newInput.fill('');
+
+    // --- leaving while they are shown asks first; staying keeps them.
+    answers.push(false);
+    await home.click();
+    await expect.poll(() => asked).toEqual([`confirm: ${copy.postLeaveConfirm}`]);
+    await expect(held).toHaveCount(3);
+
+    // --- closed, they are gone — the focus on the comments' heading — and leaving asks nothing.
+    await held.nth(0).getByTestId('comment-held-close').click();
+    await expect(held).toHaveCount(2);
+    await expect(page.getByTestId('comments-heading')).toBeFocused();
+    await held.nth(0).getByTestId('comment-held-close').click();
+    await held.getByTestId('comment-held-close').click();
+    await expect(held).toHaveCount(0);
+    await home.click();
+    await expect(page).toHaveURL('/');
+    expect(asked).toHaveLength(1);
+  });
+
+  test('쓰는 사이 글이 지워져 새 댓글이 거절되면 목록 아래에 까닭과 글자가 남고, 열어 둔 수정 상자는 그대로 저장된다', async ({
+    admin,
+    page,
+  }) => {
+    // The post turns into its placeholder under the open page — read again after the refusal —
+    // and the comment section stays the same one: the refused 댓글's text is kept (오너 결정
+    // 2026-10-20 답 4) and the edit open beside it too, an author editing under a deleted post (7-6).
+    const market = await createOpenMarket(admin);
+    const tag = freshTag();
+    await signUp(page, freshEmail());
+    const adminMe = await meOf(admin);
+    const postId = await postThroughApi(admin, market.id, `곧 지워질 글 ${tag}`, tag);
+    const mine = await commentThroughApi(page.request, postId, null, `내 댓글 ${tag}`);
+    await page.goto(`/community/posts/${postId}`);
+    const section = await page.getByTestId('post-comments').elementHandle();
+    const held = page.getByTestId('comment-held');
+
+    const composer = page.getByTestId('comment-composer');
+    await composer.getByTestId('comment-input').fill(`보내지 못한 댓글 ${tag}\n둘째 줄`);
+    await commentOf(page, mine).getByTestId('comment-edit').click();
+    const editForm = commentOf(page, mine).getByTestId('comment-edit-form');
+    await editForm.getByTestId('comment-input').fill(`고친 댓글 ${tag}`);
+
+    // Its author deletes the post meanwhile: a comment hangs under it, so it is '삭제된 글입니다'.
+    const deletion = await admin.post(`/api/v1/posts/${postId}/delete`, {
+      data: { expectedAccountId: adminMe.id },
+    });
+    expect(deletion.status(), await deletion.text()).toBe(200);
+    await composer.getByTestId('comment-submit').click();
+    await expect(page.getByTestId('post-deleted')).toContainText(copy.postDeletedPlaceholder);
+    await expect(page.getByTestId('comments-closed')).toHaveText(copy.commentClosedPostDeleted);
+    await expect(composer).toHaveCount(0);
+    await expect(held).toHaveCount(1);
+    await expect(held.getByTestId('comment-held-reason')).toHaveText(copy.commentClosedPostDeleted);
+    await expect(held.getByTestId('comment-held-text')).toHaveValue(
+      `보내지 못한 댓글 ${tag}\n둘째 줄`,
+    );
+    await expect(held).toBeFocused();
+    // Not drawn afresh: the section the page had.
+    expect(await section?.evaluate((element) => element.isConnected)).toBe(true);
+
+    // The open edit, still open with its text, saves.
+    await expect(editForm.getByTestId('comment-input')).toHaveValue(`고친 댓글 ${tag}`);
+    await editForm.getByTestId('comment-submit').click();
+    await expect(commentOf(page, mine).getByTestId('comment-body')).toHaveText(`고친 댓글 ${tag}`);
+    await expect(commentOf(page, mine).getByTestId('post-edited')).toHaveText(copy.postEdited);
+
+    await held.getByTestId('comment-held-close').click();
+    await expect(held).toHaveCount(0);
   });
 });
