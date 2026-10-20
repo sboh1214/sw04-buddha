@@ -456,7 +456,7 @@ describe.skipIf(!hasTestInfra)('온보딩 /api/v1/me (integration, #58)', () => 
       expect((await getMe(user)).onboarding.nickname).toBe(false);
     });
 
-    it('refuses the interests before the three steps, whatever the body', async () => {
+    it('refuses the interests step before the three steps, picks and the skip alike', async () => {
       const category = await createCategory(t.db);
       expect(stepsOf(await setInterests(user, [category.id]))).toEqual([
         'consent',
@@ -464,8 +464,13 @@ describe.skipIf(!hasTestInfra)('온보딩 /api/v1/me (integration, #58)', () => 
         'nickname',
       ]);
       await atNicknameStep();
-      expect(stepsOf(await setInterests(user, 'not a list'))).toEqual(['nickname']);
+      // The skip answers the step too, so it waits as well. (No OnboardedGuard on the route: only a
+      // dropping of picks passes with sign-in only, ADR-0078 — a body that is not one is a
+      // VALIDATION_ERROR first.)
+      expect(stepsOf(await setInterests(user, []))).toEqual(['nickname']);
+      refusal(await setInterests(user, 'not a list'), 400, 'VALIDATION_ERROR');
       expect(await t.db.select().from(schema.profileInterestCategories)).toEqual([]);
+      expect((await getMe(user)).onboarding.interests).toBe(false);
     });
 
     it('sends an account whose consent no longer stands back to the consent step (#57-5)', async () => {

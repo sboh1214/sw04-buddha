@@ -1,5 +1,5 @@
 import { schema, type Db } from '@buddha/db';
-import { and, count, eq, isNull } from 'drizzle-orm';
+import { and, count, eq, isNull, ne } from 'drizzle-orm';
 
 /** The public profile's counts (`PublicProfile`). */
 export interface ProfileCounts {
@@ -31,10 +31,14 @@ function visibleCommentsOf(authorId: string) {
  * restriction included — and the likes on exactly those (owner decision 2026-10-20: a deleted or
  * hidden post's or comment's likes leave the total). The same visibility a post page reads for
  * each: a 대댓글 under a deleted or hidden 댓글 stays in view and counts, and so does a comment under
- * a hidden post or under a deleted one it keeps as the placeholder. Likes are counted as everywhere
- * (likes/like-queries.ts): every row that stands, a withdrawn liker's included (#37-17), and the
- * member's own on their own post or comment too (#49 lets one like one's own) — the total is the
- * sum of the `likeCount` each of those shows (ADR-0078 7-3, an owner question there).
+ * a hidden post or under a deleted one it keeps as the placeholder. The likes are every row that
+ * stands on those, a withdrawn liker's included (#37-17), but the member's own: #49 lets one like
+ * one's own post or comment, and the `likeCount` it shows keeps that like, while the total the
+ * member *received* leaves it out (owner decision 2026-10-21 answer 3) — so no member raises it by
+ * pressing on their own. The member's own is the row of the member's account (`user_id`, which an
+ * operator's number change keeps, ADR-0076); a like the account sees as its own because a withdrawn
+ * account on its number pressed it (owner decision 2026-10-20 answer 3, ADR-0076) was pressed by
+ * that other account, and counts (ADR-0078 7-3).
  *
  * Numbers shown on the profile and nothing more — never a score, a rank or a skill of the member,
  * and nothing orders by them (N04 §4, N05 §2, D5). Each walks the author's index
@@ -54,12 +58,12 @@ export async function readProfileCounts(executor: Db, authorId: string): Promise
       .select({ count: count() })
       .from(postLikes)
       .innerJoin(posts, eq(posts.id, postLikes.postId))
-      .where(visiblePostsOf(authorId)),
+      .where(and(visiblePostsOf(authorId), ne(postLikes.userId, authorId))),
     executor
       .select({ count: count() })
       .from(commentLikes)
       .innerJoin(postComments, eq(postComments.id, commentLikes.commentId))
-      .where(visibleCommentsOf(authorId)),
+      .where(and(visibleCommentsOf(authorId), ne(commentLikes.userId, authorId))),
   ]);
   return {
     postCount,

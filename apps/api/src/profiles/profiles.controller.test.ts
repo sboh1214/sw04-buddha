@@ -4,11 +4,15 @@
  * (`PUT /me/bio`). Pinned: anyone reads a profile, signed in or not, and every reader hears the
  * same answer; it holds the public items alone — the member's public face (public id, current
  * nickname, image, 운영자 mark), the 소개, the interest categories picked, the month joined in Korea
- * time and the counts of the visible posts, comments and the likes they hold — and nothing more of
- * the account; an unknown or malformed public id is NOT_FOUND, a public id typed in capitals finds
- * the member, and the old link shows the new nickname; only the member writes the 소개 — plain
- * text, 160 characters, line breaks kept, blank clears it — once onboarded, through the account the
- * screen shows, and nothing else of the account changes. Skips when TEST_* are unset.
+ * time and the counts of the visible posts, comments and the likes others gave them — and nothing
+ * more of the account; the gap between that total and the items' own counts is the member's own
+ * likes, which anyone can read (recorded and asked of the owner, ADR-0078 결과 4); an unknown or
+ * malformed public id is NOT_FOUND, a public id typed in capitals finds the member, and the old
+ * link shows the new nickname; only the member writes the 소개 — plain text, 160 characters, line
+ * breaks kept, blank clears it — through the account the screen shows, a new one once onboarded,
+ * and nothing else of the account changes; an account a re-consent holds back clears its 소개 and
+ * drops categories with sign-in only, and adds nothing (owner decision 2026-10-21 answer 2). Skips
+ * when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
 import {
@@ -16,6 +20,7 @@ import {
   createCategory,
   createComment,
   createCommentLike,
+  createConsents,
   createMarket,
   createPost,
   createPostLike,
@@ -24,6 +29,7 @@ import {
 import {
   bioTooLongMessage,
   meSchema,
+  onboardingRequiredDetailsSchema,
   publicProfileSchema,
   type Me,
   type PublicProfile,
@@ -95,6 +101,19 @@ describe.skipIf(!hasTestInfra)('/api/v1/profiles and the 소개 (integration)', 
   };
   const errorOf = (res: { json: <T>() => T }) =>
     res.json<{ error: { code: string; details?: unknown } }>().error;
+  const putInterests = (categoryIds: number[], who: TestUser = member) =>
+    t.app.inject({
+      method: 'PUT',
+      url: '/api/v1/me/interest-categories',
+      headers: { origin: TRUSTED_ORIGIN, 'content-type': 'application/json', cookie: who.cookie },
+      payload: JSON.stringify({ categoryIds, expectedAccountId: who.id }),
+    });
+  /** The steps an ONBOARDING_REQUIRED refusal names, after checking it is one. */
+  const stepsOf = (res: { statusCode: number; body: string; json: <T>() => T }) => {
+    expect(res.statusCode, res.body).toBe(409);
+    expect(errorOf(res).code).toBe('ONBOARDING_REQUIRED');
+    return onboardingRequiredDetailsSchema.parse(errorOf(res).details).steps;
+  };
 
   // ---- the public profile -----------------------------------------------------------------------
 
@@ -247,7 +266,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/profiles and the 소개 (integration)', 
     expect(after.body).not.toContain(before);
   });
 
-  it('counts the visible posts and comments and the likes on them, never a deleted or hidden one (#37-4)', async () => {
+  it('counts the visible posts and comments and the likes others gave them, never a deleted or hidden one (#37-4)', async () => {
     const publicId = await publicIdOf(member.id);
     const open = await createMarket(t.db);
     const voided = await createMarket(t.db, { status: 'voided' });
@@ -322,12 +341,14 @@ describe.skipIf(!hasTestInfra)('/api/v1/profiles and the 소개 (integration)', 
       authorId: member.id,
       parentId: theirHidden.id,
     });
-    // Likes: the member's own on their own post counts like anyone's, so the total is the sum of
-    // the counts each item shows (ADR-0078 7-3); a withdrawn liker's would count too (#37-17).
+    // Likes: anyone's counts (a withdrawn liker's would too, #37-17) but the member's own on their
+    // own post or comment, which each item's count keeps and the total received leaves out (owner
+    // decision 2026-10-21 answer 3).
     const likers = [reader.id, other.id, member.id];
     for (const userId of likers) await createPostLike(t.db, { postId: visible.id, userId });
     await createPostLike(t.db, { postId: onVoided.id, userId: reader.id });
     await createCommentLike(t.db, { commentId: reply.id, userId: reader.id });
+    await createCommentLike(t.db, { commentId: reply.id, userId: member.id });
     await createCommentLike(t.db, { commentId: underDeleted.id, userId: other.id });
     await createCommentLike(t.db, { commentId: underHiddenPost.id, userId: reader.id });
     await createCommentLike(t.db, { commentId: underDeletedPost.id, userId: reader.id });
@@ -343,15 +364,53 @@ describe.skipIf(!hasTestInfra)('/api/v1/profiles and the 소개 (integration)', 
     expect(await profileOf(publicId)).toMatchObject({
       postCount: 2,
       commentCount: 6,
-      receivedLikeCount: 9,
+      receivedLikeCount: 8,
     });
-    // Deleting a post takes it and its likes off the profile (#37-19: 글 삭제의 프로필 반영).
+    // The items' own counts keep the member's likes: the post's 3, the 대댓글's 2.
+    const postPage = await t.app.inject({ method: 'GET', url: `/api/v1/posts/${visible.id}` });
+    expect(postPage.json<{ data: { likeCount: number } }>().data.likeCount).toBe(3);
+    const thread = await t.app.inject({
+      method: 'GET',
+      url: `/api/v1/posts/${theirs.id}/comments`,
+    });
+    expect(thread.statusCode, thread.body).toBe(200);
+    const replyCount = thread
+      .json<{ data: { replies: { id: string; likeCount?: number }[] }[] }>()
+      .data.flatMap((item) => item.replies)
+      .find((row) => row.id === reply.id)?.likeCount;
+    expect(replyCount).toBe(2);
+    // Deleting a post takes it and its likes off the profile (#37-19: 글 삭제의 프로필 반영) —
+    // the other two of its likes; the member's own was never in the total.
     await t.db.update(schema.posts).set({ deletedAt: now }).where(eq(schema.posts.id, visible.id));
     expect(await profileOf(publicId)).toMatchObject({
       postCount: 1,
       commentCount: 6,
       receivedLikeCount: 6,
     });
+  });
+
+  it('lets anyone read the member’s own likes off the two public numbers (answer 3 as it stands; ADR-0078 결과 4 asks the owner)', async () => {
+    // The total leaves the member's own likes out while each item's count keeps them, so the gap
+    // is exactly those likes (decision 7-3) — the ADR records it and asks whether it may stay
+    // against ADR-0076's «누른 사람 목록 없음». Pinned so that an answer changes this with the ADR.
+    const publicId = await publicIdOf(member.id);
+    const market = await createMarket(t.db);
+    const first = await createPost(t.db, { marketId: market.id, authorId: member.id });
+    const second = await createPost(t.db, { marketId: market.id, authorId: member.id });
+    await createPostLike(t.db, { postId: first.id, userId: reader.id });
+    await createPostLike(t.db, { postId: first.id, userId: member.id });
+    const likeCountOf = async (postId: string) => {
+      const res = await t.app.inject({ method: 'GET', url: `/api/v1/posts/${postId}` });
+      expect(res.statusCode, res.body).toBe(200);
+      return res.json<{ data: { likeCount: number } }>().data.likeCount;
+    };
+    // To a visitor signed out, the post says 2 and the profile 1: the member liked their own post.
+    expect(await likeCountOf(first.id)).toBe(2);
+    expect((await profileOf(publicId)).receivedLikeCount).toBe(1);
+    // And which one: the second post's count rises while the total stays.
+    await createPostLike(t.db, { postId: second.id, userId: member.id });
+    expect(await likeCountOf(second.id)).toBe(1);
+    expect((await profileOf(publicId)).receivedLikeCount).toBe(1);
   });
 
   // ---- the 소개 of MY 설정 -----------------------------------------------------------------------
@@ -418,7 +477,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/profiles and the 소개 (integration)', 
     expect((await meOf(member)).profile.bio).toBe('그대로');
   });
 
-  it('lets only the signed-in, onboarded member write their own 소개', async () => {
+  it('lets only the signed-in member write their own 소개, a new one once onboarded', async () => {
     await putBio('내 소개');
     // Nobody signed in.
     expect((await putBio('누구', null)).statusCode).toBe(401);
@@ -430,11 +489,57 @@ describe.skipIf(!hasTestInfra)('/api/v1/profiles and the 소개 (integration)', 
     ]);
     expect((await meOf(member)).profile.bio).toBe('내 소개');
     expect((await meOf(reader)).profile.bio).toBeNull();
-    // An account that has not finished the onboarding only browses (#57-8).
+    // An account that has not finished the onboarding only browses (#57-8): it writes no 소개.
+    // Clearing asks sign-in only (answer 2), and a new account has nothing to clear: nothing changes.
     const fresh = await signUpTestUser(t);
-    const refused = await putBio('새 계정', fresh);
-    expect(refused.statusCode).toBe(409);
-    expect(errorOf(refused).code).toBe('ONBOARDING_REQUIRED');
+    expect(stepsOf(await putBio('새 계정', fresh))).toEqual([
+      'consent',
+      'verification',
+      'nickname',
+    ]);
+    expect((await putBio(null, fresh)).statusCode).toBe(200);
     expect((await meOf(fresh)).profile.bio).toBeNull();
+  });
+
+  it('lets an account a re-consent holds back clear its 소개 and drop categories, and add nothing (owner decision 2026-10-21 answer 2)', async () => {
+    const publicId = await publicIdOf(member.id);
+    const [a, b, c] = await Promise.all([
+      createCategory(t.db),
+      createCategory(t.db),
+      createCategory(t.db),
+    ]);
+    expect((await putBio('내 소개')).statusCode).toBe(200);
+    expect((await putInterests([a.id, b.id])).statusCode).toBe(200);
+    // A revision that changed members' rights asks the consent again: the record the member agreed
+    // to is one the list no longer holds (onboarding.controller.test.ts makes it the same way).
+    await t.db.delete(schema.consentRecords).where(eq(schema.consentRecords.userId, member.id));
+    await createConsents(t.db, { userId: member.id, versions: { terms: 'draft-1999-01-01' } });
+    expect((await meOf(member)).onboarding.nextStep).toBe('consent');
+    const sorted = (ids: number[]) => [...ids].sort((x, y) => x - y);
+
+    // New values wait for the consent: another 소개, a category added (even beside a dropped one).
+    expect(stepsOf(await putBio('새 소개'))).toEqual(['consent']);
+    expect(stepsOf(await putInterests([a.id, b.id, c.id]))).toEqual(['consent']);
+    expect(stepsOf(await putInterests([a.id, c.id]))).toEqual(['consent']);
+    let me = await meOf(member);
+    expect(me.profile.bio).toBe('내 소개');
+    expect(me.profile.interestCategoryIds).toEqual(sorted([a.id, b.id]));
+
+    // Taking them off the public profile asks sign-in only: a category dropped, the 소개 cleared,
+    // then every category.
+    expect((await putInterests([a.id])).statusCode).toBe(200);
+    const cleared = await putBio(null);
+    expect(cleared.statusCode, cleared.body).toBe(200);
+    expect(meSchema.parse(cleared.json<{ data: unknown }>().data).profile.bio).toBeNull();
+    expect((await profileOf(publicId)).interestCategories.map((row) => row.slug)).toEqual([a.slug]);
+    expect((await putInterests([])).statusCode).toBe(200);
+    me = await meOf(member);
+    expect(me.profile).toMatchObject({ bio: null, interestCategoryIds: [] });
+    expect(me.onboarding.nextStep).toBe('consent');
+    expect(await profileOf(publicId)).toMatchObject({ bio: null, interestCategories: [] });
+    // What changes nothing passes too; picking again waits for the consent.
+    expect((await putBio('  ')).statusCode).toBe(200);
+    expect((await putInterests([])).statusCode).toBe(200);
+    expect(stepsOf(await putInterests([a.id]))).toEqual(['consent']);
   });
 });

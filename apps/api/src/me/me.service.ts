@@ -12,7 +12,7 @@ import { PhoneHasher } from '../identity/phone-hash.js';
 import { DB } from '../infra/db/db.provider.js';
 import { NUMBER_USED_START_GRANT, toStartGrant } from '../start-grant/start-grant.service.js';
 import { NicknameService } from './nickname.service.js';
-import { assertPublicItemEdit } from './public-items.js';
+import { assertPublicItemEdit, assertPublicItemOnboarding } from './public-items.js';
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
@@ -157,11 +157,13 @@ export class MeService {
   /**
    * `PUT /me/bio`: the 소개 of the public profile (#41, ADR-0069 decision 3 #37-3), replacing what
    * it was, or none (`null`) to clear it. The text arrives normalised and within BIO_MAX_LENGTH
-   * (`bioInputSchema`). The same text again changes nothing. Otherwise a 소개 with text is a new
-   * value, which a writing or an account restriction refuses, while clearing it stays open
-   * (`assertPublicItemEdit`, #37-9 and decision 7) — asked after the profile row is taken FOR
-   * UPDATE, so what was read holds until the write commits. `updated_at` follows through drizzle's
-   * `$onUpdate`.
+   * (`bioInputSchema`). The same text again changes nothing, whoever sends it. Otherwise a 소개 with
+   * text is a new value: open to accounts that have done the onboarding only, and refused under a
+   * writing or an account restriction; clearing it needs neither — sign-in only, a re-consent
+   * account's too (owner decision 2026-10-21 answer 2), and whatever the sanction (#37-9, decision
+   * 7). Both are asked after the profile row is taken FOR UPDATE (`assertPublicItemOnboarding`,
+   * then `assertPublicItemEdit`), so what was read holds until the write commits. `updated_at`
+   * follows through drizzle's `$onUpdate`.
    */
   async updateBio(userId: string, bio: string | null): Promise<Me> {
     await this.db.transaction(async (tx) => {
@@ -173,7 +175,9 @@ export class MeService {
         .for('update');
       if (!profile) throw new AppError('NOT_FOUND', { message: 'Profile not found' });
       if (profile.bio === bio) return;
-      await assertPublicItemEdit(tx, userId, bio === null ? 'clear' : 'replace');
+      const edit = bio === null ? 'clear' : 'replace';
+      await assertPublicItemOnboarding(tx, userId, edit);
+      await assertPublicItemEdit(tx, userId, edit);
       await tx.update(schema.profiles).set({ bio }).where(eq(schema.profiles.userId, userId));
     });
     return this.getMe(userId);

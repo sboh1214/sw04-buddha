@@ -21,7 +21,8 @@ import { SettingsSection } from './section';
 /**
  * 프로필: the nickname, and the way to the member's own public profile (#41, ADR-0078) — where the
  * nickname, the 소개 and the interest categories edited on this screen are shown to everyone
- * (`/u/<publicId>`, whose own page links back here, ADR-0069 decision 4 #41).
+ * (`/u/<publicId>`, whose own page links back here, ADR-0069 decision 4 #41). MY's summary has the
+ * same way there (owner decision 2026-10-21 answer 7).
  */
 export function NicknameForm() {
   const { data: me, isPending } = useMe();
@@ -37,7 +38,7 @@ export function NicknameForm() {
               href={profilePath(me.profile.publicId) as Route}
               data-testid="settings-view-profile"
             >
-              {copy.settingsViewProfile}
+              {copy.viewOwnProfile}
             </NextLink>
           </ChakraLink>
         </Stack>

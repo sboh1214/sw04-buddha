@@ -405,7 +405,8 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
     body: (fixture) => ({ nickname: `b_${letters(8)}`, expectedAccountId: fixture.a.id }),
     status: 403,
   },
-  // B has done the onboarding, so the guard lets it to the account check, which refuses.
+  // The account check refuses it before the service reads anything (no OnboardedGuard: the
+  // service asks the onboarding for a new value only, ADR-0078).
   'PUT /me/interest-categories': {
     body: (fixture) => ({ categoryIds: [fixture.categoryId], expectedAccountId: fixture.a.id }),
     status: 403,
@@ -432,8 +433,8 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
     body: (fixture) => ({ realName: '다른사람', expectedAccountId: fixture.a.id }),
     status: 403,
   },
-  // B's cookie naming A's account (#41): B has done the onboarding, so the guard lets it to the
-  // account check, which refuses before anything is written — A's 소개 stays (below).
+  // B's cookie naming A's account (#41): the account check refuses it before anything is read or
+  // written — A's 소개 stays (below).
   'PUT /me/bio': {
     body: (fixture) => ({ bio: 'B가 쓴 소개', expectedAccountId: fixture.a.id }),
     status: 403,
@@ -864,7 +865,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
 
     // A's consents (#58), each with the address and browser it came with (sentinels: nobody, A
     // included, is shown them), and a nickname A gave up (#37-3: never shown again). B has done
-    // the onboarding, so its refused interest categories reach the account check.
+    // the onboarding, so its refused writes behind OnboardedGuard reach the account check.
     const consentIp = `2001:db8::${randomInt(0x1000, 0x10000).toString(16)}:${randomInt(0x1000, 0x10000).toString(16)}`;
     const consentAgent = `LeakBrowser/${tag}`;
     await createConsents(t.db, {
@@ -1075,7 +1076,8 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     await createComment(t.db, { postId: post.id, authorId: a.id, parentId: deletedComment.id });
     // A's likes (#49) of A's own post and 댓글 — allowed — held by A's account and the keyed hash
     // of A's number, as LikesService writes them: who liked is nobody's to see, and the hash is
-    // nobody's either (`NEVER_SHOWN`), whatever answer counts them.
+    // nobody's either (`NEVER_SHOWN`), whatever answer counts them. Each item's count has them;
+    // A's profile total leaves them out (owner decision 2026-10-21 answer 3, ADR-0078).
     await createPostLike(t.db, { postId: post.id, userId: a.id, phoneHash });
     await createCommentLike(t.db, { commentId: comment.id, userId: a.id, phoneHash });
 
@@ -1409,9 +1411,10 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       id: expect.any(String) as unknown,
     });
     // The profile route answered A's profile with its public items (#41) — the 소개 and the
-    // category — and counted A's visible posts (not the deleted one), comments (the 댓글, its
-    // 대댓글 and the 대댓글 under the deleted 댓글) and the likes they hold, so its field names were
-    // checked on a full answer.
+    // category — and counted A's visible posts (not the deleted one) and comments (the 댓글, its
+    // 대댓글 and the 대댓글 under the deleted 댓글), so its field names were checked on a full answer.
+    // The two likes they hold are A's own, which the total the member received leaves out (owner
+    // decision 2026-10-21 answer 3).
     expect(parse(bodies.get('GET /profiles/:publicId')!)).toMatchObject({
       data: {
         member: { kind: 'member', publicId: f.publicId, isAdmin: false },
@@ -1419,7 +1422,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         interestCategories: [expect.objectContaining({ slug: expect.any(String) as unknown })],
         postCount: 1,
         commentCount: 3,
-        receivedLikeCount: 2,
+        receivedLikeCount: 0,
       },
     });
     // The answers held A's market, A's fill and the market linked to A's — anonymously — so there

@@ -21,7 +21,6 @@ import { SESSION_SECURITY_SCHEME } from '../openapi/document.js';
 import { RateLimit } from '../rate-limit/rate-limit.decorator.js';
 import { clientAddress } from '../rate-limit/rate-limit.tracker.js';
 import { UNCOUNTED_PEERS } from '../rate-limit/uncounted-peers.js';
-import { OnboardedGuard } from './onboarded.guard.js';
 import { OnboardingService } from './onboarding.service.js';
 
 /**
@@ -115,18 +114,23 @@ export class OnboardingController {
   }
 
   /**
-   * The interest categories (#57-7): after the start Coin, so for onboarded accounts only. An
-   * empty list is the skip; either way the step is answered and not asked again.
+   * The interest categories (#57-7): the step after the start Coin, so its answer (picks or the
+   * skip) is for onboarded accounts only, and so are new picks in MY 설정 (#41); an empty list is
+   * the skip, and either way the step is answered and not asked again. Dropping picks needs sign-in
+   * only, an account held back by a re-consent included (owner decision 2026-10-21 answer 2) — so
+   * no OnboardedGuard: the service asks the onboarding in its transaction for anything but a
+   * dropping (`assertPublicItemOnboarding`).
    */
   @Put('interest-categories')
-  @UseGuards(OnboardedGuard)
   @ApiOperation({
     operationId: 'setMyInterestCategories',
     summary: 'Set the interest categories (none: skip the step)',
   })
   @ApiData(meSchema)
-  // ONBOARDING_REQUIRED: the consent, the verification or the nickname step is not done.
-  // VALIDATION_ERROR: a category that does not exist or is not active (details name each).
+  // ONBOARDING_REQUIRED: the consent, the verification or the nickname step is not done, and the
+  // write is not a dropping of picks (the step's answer, or a category added). FORBIDDEN (no field
+  // named): a category added under a writing or an account restriction, but in the step's first
+  // answer. VALIDATION_ERROR: a category that does not exist or is not active (details name each).
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR', 'ONBOARDING_REQUIRED')
   setInterestCategories(
     @CurrentUser() user: SessionUser,

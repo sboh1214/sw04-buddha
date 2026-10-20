@@ -134,8 +134,9 @@ export function setOnboardingNicknameOptions(
 
 /**
  * `PUT /me/interest-categories` as mutation options: the interest categories (#57-7), some or none
- * (the skip). Open to onboarded accounts only; an ONBOARDING_REQUIRED says `['me']` is out of date
- * (a revision asked for the consent again meanwhile) and asks it again.
+ * (the skip). The step's answer and a category added are open to onboarded accounts only (dropping
+ * picks needs sign-in only, the server's rule, ADR-0078); an ONBOARDING_REQUIRED says `['me']` is
+ * out of date (a revision asked for the consent again meanwhile) and asks it again.
  */
 export function setInterestCategoriesOptions(
   queryClient: QueryClient,

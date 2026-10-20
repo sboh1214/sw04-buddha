@@ -14,12 +14,13 @@ import {
 } from './helpers';
 
 /**
- * 공개 프로필 (#41, ADR-0078; owner decisions in ADR-0069 decision 3 #37, decision 4 #41): a member
- * edits the 소개 and the interest categories in MY 설정 and sees them on their own profile at
- * `/u/<publicId>`, which links back to MY 설정; cleared, neither shows, and Back from MY 설정
- * shows each change, the nickname's too. Anyone reaches a profile from a byline — the post's, a
- * comment's, a community card's — signed in or not, and reads the same public items and counts;
- * only the member gets the link to MY 설정, an admin's profile says
+ * 공개 프로필 (#41, ADR-0078; owner decisions in ADR-0069 decision 3 #37, decision 4 #41 and of
+ * 2026-10-21): a member edits the 소개 and the interest categories in MY 설정 and sees them on
+ * their own profile at `/u/<publicId>`, which links back to MY 설정; cleared, neither shows, and
+ * Back from MY 설정 shows each change, the nickname's too; MY's summary leads there as well. Anyone
+ * reaches a profile from a byline — the post's, a comment's, a community card's — signed in or not,
+ * and reads the same public items and counts (the likes received leave out the member's own, which
+ * the post still counts); only the member gets the link to MY 설정, an admin's profile says
  * '운영자', and an old link shows the new nickname. Every answer is `noindex`, the HTML is the
  * server's and holds nothing private, and an unknown public id is a 404. The field allow-list, the
  * counts' rules (deleted, hidden and voided content), the restriction hook and the refusals are the
@@ -249,6 +250,12 @@ test.describe('공개 프로필', () => {
     await expect(page.getByTestId('profile-bio')).toHaveCount(0);
     await expect(page.getByTestId('profile-interests')).toHaveCount(0);
     await expect(page.getByTestId('profile-edit')).toBeVisible();
+
+    // --- MY's summary leads to the own profile too (owner decision 2026-10-21 answer 7).
+    await page.goto('/my');
+    await page.getByTestId('my-view-profile').click();
+    await expect(page).toHaveURL(profileUrl);
+    await expect(page.getByTestId('profile-nickname')).toHaveText(nickname);
     expect(hydration).toEqual([]);
   });
 
@@ -268,20 +275,26 @@ test.describe('공개 프로필', () => {
     });
     expect(saved.status(), await saved.text()).toBe(200);
     // The member's post, the admin's 댓글 under it and the member's 대댓글 under that; the admin
-    // likes the post and the 대댓글. A post the member deleted counts for nothing (#37-14).
+    // likes the post and the 대댓글, and so does the member — its own likes, which the total it
+    // received leaves out (owner decision 2026-10-21 answer 3). A post the member deleted counts for
+    // nothing (#37-14).
     const postId = await postThroughApi(page.request, market.id, `프로필 글 ${tag}`, tag);
     const adminComment = await commentThroughApi(admin, postId, null, `운영자의 댓글 ${tag}`);
     const reply = await commentThroughApi(page.request, postId, adminComment, `답글 ${tag}`);
     await likeThroughApi(admin, 'posts', postId);
     await likeThroughApi(admin, 'comments', reply);
+    await likeThroughApi(page.request, 'posts', postId);
+    await likeThroughApi(page.request, 'comments', reply);
     const gone = await postThroughApi(page.request, market.id, `지울 글 ${tag}`, `${tag} 지움`);
     const deleted = await page.request.post(`/api/v1/posts/${gone}/delete`, {
       data: { expectedAccountId: me.id },
     });
     expect(deleted.status(), await deleted.text()).toBe(200);
 
-    // --- the post's byline leads to the author's profile: 1 post, 1 comment, 2 likes received.
+    // --- the post's byline leads to the author's profile: 1 post, 1 comment, 2 likes received —
+    // the admin's two, while the post itself counts the member's like too.
     await page.goto(`/community/posts/${postId}`);
+    await expect(page.getByTestId('post-like')).toContainText(`${copy.likeToggle} 2`);
     await page.getByTestId('post-screen').getByTestId('post-author-link').first().click();
     await expect(page).toHaveURL(profileUrl);
     await expect(page.getByTestId('profile-nickname')).toHaveText(me.profile.nickname);

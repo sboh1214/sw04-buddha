@@ -1,7 +1,9 @@
 'use client';
 
-import { HStack, Heading, Skeleton, Stack, Text } from '@chakra-ui/react';
+import { Link as ChakraLink, HStack, Heading, Skeleton, Stack, Text } from '@chakra-ui/react';
 import { parseCoinAmount } from '@buddha/shared';
+import type { Route } from 'next';
+import NextLink from 'next/link';
 import { CoinText } from '@/components/ui/coin-text';
 import { copy } from '@/copy';
 import { useMe } from '@/hooks/use-me';
@@ -10,6 +12,7 @@ import { useLedger } from '@/hooks/use-wallet';
 import { useWatchlist } from '@/hooks/use-watchlist';
 import { MY_PREVIEW_ROWS, MY_TABS, MY_WALLET_PATH, type MyTabKey } from '@/lib/my';
 import { readFailed } from '@/lib/query-client';
+import { profilePath } from '@/lib/profile';
 import { ComingSoonTab } from './coming-soon';
 import {
   BalanceSummary,
@@ -42,6 +45,9 @@ function tab(key: MyTabKey) {
  *
  * The holdings, 정산 이력 and the orders are read once here and handed to every card that shows
  * them, so the summary card and the previews are drawn from one price and one list.
+ *
+ * Above them, the way to the member's own public profile (`ViewOwnProfileLink`, owner decision
+ * 2026-10-21 answer 7), as from MY 설정's 프로필 card.
  */
 export function MySummary() {
   const ended = useSessionEnded();
@@ -55,6 +61,7 @@ export function MySummary() {
   const history = tab('history');
   return (
     <Stack gap="6">
+      <ViewOwnProfileLink />
       <BalanceSummary holdings={holdings} settled={settled} />
       <Section title={positions.label} testId="my-preview-positions" href={positions.href}>
         <PositionsBody holdings={holdings} limit={MY_PREVIEW_ROWS} />
@@ -83,6 +90,24 @@ export function MySummary() {
       <WatchlistPreview />
       <ComingSoonPreview tabKey="notifications" />
     </Stack>
+  );
+}
+
+/**
+ * '내 공개 프로필 보기' (#41, ADR-0078; owner decision 2026-10-21 answer 7: «MY 설정 + MY 요약»): the
+ * page everyone sees of the account at `/u/<publicId>`, the same link as MY 설정's 프로필 card.
+ * Drawn once `GET /me` has answered with the public id; nothing while it is read or when it failed
+ * — 잔고 요약 below reports that failure, once.
+ */
+function ViewOwnProfileLink() {
+  const { data: me } = useMe();
+  if (!me) return null;
+  return (
+    <ChakraLink asChild alignSelf="flex-start" textStyle="bodySm" color="brand.fg">
+      <NextLink href={profilePath(me.profile.publicId) as Route} data-testid="my-view-profile">
+        {copy.viewOwnProfile}
+      </NextLink>
+    </ChakraLink>
   );
 }
 

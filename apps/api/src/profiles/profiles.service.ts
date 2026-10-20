@@ -42,10 +42,10 @@ export class ProfilesService {
         role: profiles.role,
         bio: profiles.bio,
         // #37-3: the year and month, nothing finer, so the answer carries no more than the screen
-        // shows. In Korea time, so every reader sees the same month from that alone. This departs
-        // from ADR-0063, where member screens show times in the member's chosen zone, else the
-        // browser's (Korea time only before hydration and on admin screens): near a month's
-        // boundary a reader elsewhere sees the next or previous month. ADR-0078 7-2 asks the owner.
+        // shows. In Korea time for every reader (owner decision 2026-10-21 answer 1: «한국 시간으로
+        // 모두에게('YYYY-MM'만)») — an exception to ADR-0063, where member screens show times in
+        // the member's chosen zone, else the browser's: near a month's boundary a reader elsewhere
+        // sees Korea's month, not their own (ADR-0078 7-2).
         joinedMonth: sql<string>`to_char(${profiles.createdAt} AT TIME ZONE 'Asia/Seoul', 'YYYY-MM')`,
       })
       .from(profiles)

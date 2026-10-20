@@ -151,8 +151,8 @@ const profileCountSchema = z.number().int().min(0);
  * The counts read what the profile's lists (#51, #37-14) show: the member's posts and comments
  * (대댓글 included) that are neither deleted nor hidden — those of an ended or voided market and
  * those written during a restriction included — and the likes those posts and comments hold
- * (a withdrawn liker's too, #37-17; the member's own on their own too, ADR-0078 7-3; the likes of
- * a deleted or hidden one never, owner decision 2026-10-20).
+ * (a withdrawn liker's too, #37-17; the likes of a deleted or hidden one never, owner decision
+ * 2026-10-20; the member's own on their own never, owner decision 2026-10-21 answer 3).
  */
 export const publicProfileSchema = z
   .object({
@@ -167,7 +167,10 @@ export const publicProfileSchema = z
     postCount: profileCountSchema,
     /** The member's 댓글 and 대댓글 that are neither deleted nor hidden. */
     commentCount: profileCountSchema,
-    /** The likes on those posts and comments, together: the sum of the counts each shows. */
+    /**
+     * The likes on those posts and comments, together, but those the member pressed on their own:
+     * the sum of the counts each shows, less the member's own likes among them.
+     */
     receivedLikeCount: profileCountSchema,
   })
   .meta({ id: 'PublicProfile' });

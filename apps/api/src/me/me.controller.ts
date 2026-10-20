@@ -21,7 +21,6 @@ import { assertExpectedAccount } from '../auth/expected-account.js';
 import { PasswordService } from '../auth/password.service.js';
 import { SessionGuard } from '../auth/session.guard.js';
 import { ApiData, ApiErrors } from '../common/openapi/api-response.decorators.js';
-import { OnboardedGuard } from '../onboarding/onboarded.guard.js';
 import { SESSION_SECURITY_SCHEME } from '../openapi/document.js';
 import { MeService } from './me.service.js';
 
@@ -133,16 +132,17 @@ export class MeController {
   /**
    * The 소개 of the public profile (#41, ADR-0069 decision 3 #37-3, decision 4 #41: edited in MY
    * 설정): plain text of at most BIO_MAX_LENGTH characters with its line breaks, never drawn as a
-   * link; `null` or a blank one clears it. A public item, so open to accounts that finished the
-   * onboarding only — the same as the interest categories, which MY 설정 sends to
-   * `PUT /me/interest-categories` — and, under a writing or an account restriction, only to clear
-   * it (#37-9, decision 7). The body names the account the screen shows (`expectedAccountId`): the
-   * cookie decides whose profile is written, and a window still showing account A after another one
-   * signed in as B would otherwise put A's words on B's public profile. Answers the whole profile
-   * like `PATCH /me`.
+   * link; `null` or a blank one clears it. A public item: a 소개 with text is for accounts that
+   * finished the onboarding only — the same as the interest categories, which MY 설정 sends to
+   * `PUT /me/interest-categories` — and refused under a writing or an account restriction (#37-9,
+   * decision 7), while clearing it needs sign-in only, an account held back by a re-consent
+   * included (owner decision 2026-10-21 answer 2). No OnboardedGuard therefore: the service asks
+   * the onboarding in its transaction for a new value only (`assertPublicItemOnboarding`). The body
+   * names the account the screen shows (`expectedAccountId`): the cookie decides whose profile is
+   * written, and a window still showing account A after another one signed in as B would otherwise
+   * put A's words on B's public profile. Answers the whole profile like `PATCH /me`.
    */
   @Put('bio')
-  @UseGuards(OnboardedGuard)
   @ApiOperation({
     operationId: 'updateMyBio',
     summary: `Set the public profile’s 소개: plain text, line breaks kept, at most ${String(BIO_MAX_LENGTH)} characters; null or blank clears it`,
@@ -150,8 +150,9 @@ export class MeController {
   @ApiData(meSchema)
   // FORBIDDEN: a mutation whose Origin is not ours, a body whose `expectedAccountId` is not the
   // cookie's account (details name the field; nothing written), or a 소개 with text under a writing
-  // or an account restriction (no field named). ONBOARDING_REQUIRED: the onboarding is not done.
-  // VALIDATION_ERROR: more than BIO_MAX_LENGTH characters (`bioTooLongMessage`).
+  // or an account restriction (no field named). ONBOARDING_REQUIRED: a 소개 with text from an
+  // account that has not done the onboarding (clearing it is open). VALIDATION_ERROR: more than
+  // BIO_MAX_LENGTH characters (`bioTooLongMessage`).
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR', 'ONBOARDING_REQUIRED')
   updateBio(
     @CurrentUser() user: SessionUser,

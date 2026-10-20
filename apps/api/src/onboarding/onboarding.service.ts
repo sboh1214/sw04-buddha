@@ -15,7 +15,11 @@ import { AppError } from '../common/errors/app-error.js';
 import { DB } from '../infra/db/db.provider.js';
 import { MeService } from '../me/me.service.js';
 import { NicknameService } from '../me/nickname.service.js';
-import { assertPublicItemEdit } from '../me/public-items.js';
+import {
+  assertPublicItemEdit,
+  assertPublicItemOnboarding,
+  type PublicItemEdit,
+} from '../me/public-items.js';
 import { StartGrantService } from '../start-grant/start-grant.service.js';
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
@@ -119,10 +123,15 @@ export class OnboardingService {
    * waiting while the amount is undecided (decision 4 #70), or records nothing when the verified
    * number's start Coin went to another account (#57-1). Its balance event goes out after the
    * commit. The answer is the whole `Me`: `startGrant` is what the notice screen shows (#57-10).
+   *
+   * The nickname is a public profile item, and this is the account's first choice of it, not a
+   * change (#57-6): a writing or an account restriction lets it through (owner decision 2026-10-21
+   * answer 4, `assertPublicItemEdit`'s `first`) — only MY 설정's change is kept back.
    */
   async setNickname(userId: string, nickname: string): Promise<Me> {
     const granted = await this.db.transaction(async (tx) => {
       await this.assertStepsBeforeNickname(tx, userId);
+      await assertPublicItemEdit(tx, userId, 'first');
       await this.nicknames.confirmInOnboarding(tx, userId, nickname);
       return this.startGrant.grantIn(tx, userId);
     });
@@ -134,37 +143,42 @@ export class OnboardingService {
    * `PUT /me/interest-categories`: the account's interest categories (#57-7), replacing what it
    * had, from the active categories only (top-level and sub-categories, D10: operators keep the
    * list; the seeded one until #17), as many as it likes. None is the skip. Either way the step
-   * is answered, and never asked again. The route is open to onboarded accounts only
-   * (OnboardedGuard): the step comes after the start Coin. MY 설정 (#41) changes them here too,
-   * and they are a public profile item (#37-5): under a writing or an account restriction the
-   * account can drop picks but not add one (`assertPublicItemEdit`, #37-9 and decision 7). The
-   * onboarding's own first answer is no exception: it has no picks yet, so any pick is a new value
-   * and only the skip passes — unlike the nickname step, which a first choice passes (ADR-0078
-   * 7-10, an owner question there).
+   * is answered, and never asked again. MY 설정 (#41) changes them here too, and they are a public
+   * profile item (#37-5). What a write is (`PublicItemEdit`), read under the profile's lock:
+   * - `first` while the step is unanswered (`interests_answered_at` null — the account never
+   *   picked nor skipped here, wherever it sends from): the onboarding's step, after the start
+   *   Coin, so for onboarded accounts only; a first choice, so a writing or an account restriction
+   *   lets it through (owner decision 2026-10-21 answer 4) — picks and the skip alike. An account
+   *   that left the step (ADR-0072 counts it skipped but records nothing) is still here, so its
+   *   first pick from MY 설정 passes too: as it stands, asked of the owner (ADR-0078 결과 4);
+   * - `replace` once answered, when it adds a category the account does not have: onboarded
+   *   accounts only, and refused under a restriction (#37-9);
+   * - `clear` once answered, when it adds none — drops some, all, or none: sign-in only, an account
+   *   held back by a re-consent included (owner decision 2026-10-21 answer 2), and whatever the
+   *   sanction (decision 7).
+   * The onboarding is asked here rather than by OnboardedGuard (`assertPublicItemOnboarding`).
    */
   async setInterests(userId: string, categoryIds: readonly number[]): Promise<Me> {
     const wanted = [...new Set(categoryIds)];
     await this.db.transaction(async (tx) => {
       const [profile] = await tx
-        .select({ userId: schema.profiles.userId })
+        .select({ answeredAt: schema.profiles.interestsAnsweredAt })
         .from(schema.profiles)
         .where(eq(schema.profiles.userId, userId))
         .limit(1)
         .for('update');
       if (!profile) throw new AppError('NOT_FOUND', { message: 'Profile not found' });
-      // A public item (#41, #37-9): adding a category the account does not have is a new value,
-      // which a writing or an account restriction refuses; dropping some (or all) stays open
-      // (decision 7). The picks are read under the profile's lock, which every write of them takes.
+      // The picks are read under the profile's lock, which every write of them takes.
       const current = await tx
         .select({ categoryId: schema.profileInterestCategories.categoryId })
         .from(schema.profileInterestCategories)
         .where(eq(schema.profileInterestCategories.userId, userId));
       const had = new Set(current.map((pick) => pick.categoryId));
-      await assertPublicItemEdit(
-        tx,
-        userId,
-        wanted.every((id) => had.has(id)) ? 'clear' : 'replace',
-      );
+      let edit: PublicItemEdit = 'replace';
+      if (profile.answeredAt === null) edit = 'first';
+      else if (wanted.every((id) => had.has(id))) edit = 'clear';
+      await assertPublicItemOnboarding(tx, userId, edit);
+      await assertPublicItemEdit(tx, userId, edit);
       if (wanted.length > 0) {
         const active = await tx
           .select({ id: schema.categories.id })
