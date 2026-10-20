@@ -114,6 +114,12 @@ export const ERROR_CODES = [
    * first, nothing unpins itself. Details carry the limit, noticePinLimitDetailsSchema.
    */
   'NOTICE_PIN_LIMIT_REACHED',
+  /**
+   * An edit of a notice opened from a version that a save by another admin has replaced since:
+   * nothing was written. Details carry the version of the notice now,
+   * noticeEditConflictDetailsSchema.
+   */
+  'NOTICE_EDIT_CONFLICT',
   'INTERNAL',
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];

@@ -15,7 +15,7 @@ import {
 import type { Route } from 'next';
 import NextLink from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { type NoticeFormOptions, PostForm } from '@/components/post/post-form';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
@@ -31,12 +31,15 @@ import { type AdminNotice } from '@/lib/api';
 import { formatKst } from '@/lib/datetime';
 import {
   ADMIN_NOTICES_PATH,
-  adminNoticeMissing,
+  adminNoticeImagePath,
+  adminNoticeReadView,
+  noticeEditConflict,
   noticePath,
   noticeSaveToast,
   noticeWriteErrorMessage,
 } from '@/lib/notices';
 import { refusedImageIds } from '@/lib/posts';
+import { NoticeHistory } from './notice-history';
 
 /**
  * The posts' form as a notice's (#138, ADR-0077 — «글과 같은 서식 편집기»): the same editor, counts
@@ -76,8 +79,8 @@ function useAdminAccountId(): string | undefined {
 
 /**
  * 공지 쓰기: the title and the body, sent once. The notice starts unpinned — pinning is its own
- * action and record (this PR's choice, ADR-0077) — so the screen goes back to the list, where the
- * new notice heads the unpinned ones with its 고정.
+ * action and record (the owner kept it so, 2026-10-21, ADR-0077) — so the screen goes back to the
+ * list, where the new notice heads the unpinned ones with its 고정. Unpinned, it is not public.
  */
 export function AdminNoticeNew() {
   const router = useRouter();
@@ -126,17 +129,30 @@ export function AdminNoticeNew() {
 
 /**
  * 공지 수정: any admin's (#45-8). Above the form, whether the notice is pinned and since when, its
- * 고정 or 고정 해제, and 공지 보기. Saving a change marks the notice '수정됨' and keeps the earlier
- * version for operators; saving the same content changes nothing and says so. The form keeps what
- * is typed through a refresh of the notice in the background — another admin's edit shows when
- * the screen is opened again, and nothing checks which version the form was opened from: two
- * admins' saves take turns and the later one wins, the one it replaced kept in the operators'
- * history (ADR-0077 decision 8-19 — an open question to the owner, not a rule).
+ * 고정 or 고정 해제, and 공지 보기 while it is pinned (only a pinned notice is public, owner decision
+ * 2026-10-21). Saving a change marks the notice '수정됨' and keeps the earlier version for
+ * operators; saving the same content changes nothing and says so. Under the form, the notice's
+ * operation records and earlier versions (`NoticeHistory`, owner decision 2026-10-21).
+ *
+ * The screen opens on a read made after it opened, never on a copy the cache held from before
+ * (`openedAt`, `adminNoticeReadView`): the form saves with the version it was opened from, and
+ * the owner's rule is about saves made since the screen opened. The form keeps what is typed
+ * through a refresh of the notice in the background, and when another admin saved since, the save
+ * is refused ('다른 운영자가 먼저 고쳤습니다.', owner decision 2026-10-21), what is typed stays,
+ * and 최신 내용 불러오기 opens the form again on the latest version (`generation`) — once that
+ * version is read — with the focus on its title.
  */
 export function AdminNoticeEdit({ noticeId }: { noticeId: string }) {
   const notice = useAdminNotice(noticeId);
+  // When the screen opened: the form waits for a read that landed since (`adminNoticeReadView`).
+  // Only ever compared with the query's own clock, in the browser — the server draws the skeleton
+  // either way (the admin's reads are never made there).
+  const [openedAt] = useState(() => Date.now());
+  // Bumped to open the form again on the version just read (최신 내용 불러오기).
+  const [generation, setGeneration] = useState(0);
+  const view = adminNoticeReadView(notice, openedAt);
   // An unknown id, or a segment that is not a uuid (`adminNoticeMissing`).
-  if (notice.isError && adminNoticeMissing(notice.error)) {
+  if (view === 'missing') {
     return (
       <Stack gap="4">
         <BackLink />
@@ -149,8 +165,7 @@ export function AdminNoticeEdit({ noticeId }: { noticeId: string }) {
       </Stack>
     );
   }
-  if (notice.isPending) return <Skeleton height="48" />;
-  if (notice.isLoadingError) {
+  if (view === 'failed') {
     return (
       <Stack gap="4">
         <BackLink />
@@ -163,6 +178,7 @@ export function AdminNoticeEdit({ noticeId }: { noticeId: string }) {
       </Stack>
     );
   }
+  if (view === 'pending' || notice.data === undefined) return <Skeleton height="48" />;
   return (
     <Stack gap="4" data-testid="admin-notice-edit">
       <BackLink />
@@ -178,13 +194,33 @@ export function AdminNoticeEdit({ noticeId }: { noticeId: string }) {
         </Alert.Root>
       )}
       <PinCard notice={notice.data} />
-      {/* Keyed by the notice: the form holds its draft from the notice it was opened with. */}
-      <EditForm key={notice.data.id} notice={notice.data} />
+      {/* Keyed by the notice and the opening: the form holds its draft, and the version it was
+          opened from, from the notice it was opened with. Opened again, it takes the focus the
+          press of 최신 내용 불러오기 left behind. */}
+      <EditForm
+        key={`${notice.data.id}:${String(generation)}`}
+        notice={notice.data}
+        autoFocusTitle={generation > 0}
+        onReload={async () => {
+          const latest = await notice.refetch();
+          if (latest.isError) {
+            // The answer to the press, which the form keeps through: not the refresh warning
+            // above (which says what is shown is the last read — the form shows the draft).
+            toaster.create({ type: 'error', title: copy.errUnknown });
+            return;
+          }
+          setGeneration((count) => count + 1);
+        }}
+      />
+      <NoticeHistory noticeId={notice.data.id} />
     </Stack>
   );
 }
 
-/** Whether the notice is pinned and since when, with 고정 or 고정 해제 and 공지 보기. */
+/**
+ * Whether the notice is pinned and since when, with 고정 or 고정 해제 and — while it is pinned —
+ * 공지 보기.
+ */
 function PinCard({ notice }: { notice: AdminNotice }) {
   const pin = usePinNotice();
   const unpin = useUnpinNotice();
@@ -217,11 +253,14 @@ function PinCard({ notice }: { notice: AdminNotice }) {
             </Text>
           </Stack>
           <HStack gap="2">
-            <Button asChild size="sm" variant="ghost">
-              <NextLink href={noticePath(notice.id) as Route} data-testid="admin-notice-view">
-                {copy.adminNoticeView}
-              </NextLink>
-            </Button>
+            {/* Only a pinned notice has a public page (owner decision 2026-10-21). */}
+            {pinned && (
+              <Button asChild size="sm" variant="ghost">
+                <NextLink href={noticePath(notice.id) as Route} data-testid="admin-notice-view">
+                  {copy.adminNoticeView}
+                </NextLink>
+              </Button>
+            )}
             {pinned ? (
               <Button
                 size="sm"
@@ -263,11 +302,33 @@ function PinCard({ notice }: { notice: AdminNotice }) {
   );
 }
 
-/** The title and the body, filled with the notice's, saved over it. */
-function EditForm({ notice }: { notice: AdminNotice }) {
+/**
+ * The title and the body, filled with the notice's, saved over it with the version the form was
+ * opened from (`opened`: the notice's `editedAt` then, moved to each save's answer — never by a
+ * refresh in the background, which the draft does not follow). A save another admin's overtook is
+ * refused: the refusal says so above the button with 최신 내용 불러오기 (`onReload`), and what is
+ * typed stays until then. The editor draws the notice's images through the admin route, which
+ * serves them pinned or not.
+ */
+function EditForm({
+  notice,
+  autoFocusTitle,
+  onReload,
+}: {
+  notice: AdminNotice;
+  autoFocusTitle: boolean;
+  onReload: () => Promise<void>;
+}) {
   const accountId = useAdminAccountId();
   const update = useUpdateNotice();
+  const [opened, setOpened] = useState(notice.editedAt);
   const [refusal, setRefusal] = useState<string | undefined>(undefined);
+  const [conflict, setConflict] = useState(false);
+  const [reloading, setReloading] = useState(false);
+  const imageSrc = useCallback(
+    (mediaId: string) => adminNoticeImagePath(notice.id, mediaId),
+    [notice.id],
+  );
   return (
     <PostForm
       notice={NOTICE_FORM}
@@ -277,19 +338,48 @@ function EditForm({ notice }: { notice: AdminNotice }) {
       initialDocument={notice.body}
       accountId={accountId}
       submitLabel={copy.adminNoticeSave}
-      pending={update.isPending}
+      pending={update.isPending || reloading}
       saved={update.isSuccess}
       errorMessage={refusal}
       refusedImageIds={refusedImageIds(update.error)}
+      imageSrc={imageSrc}
+      autoFocusTitle={autoFocusTitle}
+      errorAction={
+        conflict ? (
+          <Stack gap="2" mt="2" align="flex-start">
+            <Text fontSize="sm">{copy.adminNoticeEditConflictHint}</Text>
+            <Button
+              size="sm"
+              variant="outline"
+              loading={reloading}
+              onClick={() => {
+                setReloading(true);
+                void onReload().finally(() => setReloading(false));
+              }}
+              data-testid="admin-notice-reload"
+            >
+              {copy.adminNoticeReloadLatest}
+            </Button>
+          </Stack>
+        ) : undefined
+      }
       onSubmit={({ title, body }) => {
         if (title === null) return; // the form sends nothing without a title
         setRefusal(undefined);
+        setConflict(false);
         update.mutate(
-          { noticeId: notice.id, title, body },
+          { noticeId: notice.id, title, body, expectedEditedAt: opened },
           {
-            // What the server did, not a guess from `editedAt` (`noticeSaveToast`).
-            onSuccess: (result) => toaster.create(noticeSaveToast(result)),
-            onError: (error) => setRefusal(noticeWriteErrorMessage(error)),
+            onSuccess: (result) => {
+              // This save's version is the one the form now holds.
+              setOpened(result.notice.editedAt);
+              // What the server did, not a guess (`noticeSaveToast`).
+              toaster.create(noticeSaveToast(result));
+            },
+            onError: (error) => {
+              setConflict(noticeEditConflict(error));
+              setRefusal(noticeWriteErrorMessage(error));
+            },
           },
         );
       }}

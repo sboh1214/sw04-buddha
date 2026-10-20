@@ -8,7 +8,8 @@
  * nickname it gave up (#58), a post with an image on the market it trades (#46), comments under
  * it (#48) and A's likes of both, made with the keyed hash of A's number (#49), and a pinned
  * notice whose operator — its writer, editor and pinner, and its image's uploader — is A, with an
- * earlier version kept for operators (#138). Then:
+ * earlier version kept for operators, and a notice A wrote and never pinned, which is not public
+ * (#138). Then:
  * - every registered public route (registry.ts) is called anonymously, as another account B and
  *   as A itself, and no answer may hold one of A's values or a field PRIVATE_DATA names, nor a
  *   field naming an excluded feature or keeping a probability — except that a route registered
@@ -330,8 +331,10 @@ const NEVER_SHOWN: readonly string[] = [
   // placeholder ('삭제된 글입니다', a 대댓글 under it).
   'comment revision',
   'deleted comment',
-  // #138: an earlier version of a notice, kept for operators only.
+  // #138: an earlier version of a notice, kept for operators only, and a notice A wrote and never
+  // pinned — only a pinned notice is public (owner decision 2026-10-21).
   'notice revision',
+  'unpinned notice',
 ];
 
 interface OwnerCase {
@@ -1093,6 +1096,19 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         targetId: notice.id,
       })),
     );
+    // And a notice A wrote and never pinned: not public, so no answer may hold its words — the
+    // fixed area lists the pinned one alone (owner decision 2026-10-21, ADR-0077).
+    const unpinnedNoticeText = `leak-unpinned-notice-${tag}`;
+    const unpinnedNotice = await createNotice(t.db, {
+      title: unpinnedNoticeText,
+      text: unpinnedNoticeText,
+    });
+    await t.db.insert(schema.adminActions).values({
+      adminId: a.id,
+      type: 'notice_create',
+      targetType: 'notice',
+      targetId: unpinnedNotice.id,
+    });
 
     // A's search (#15): a term nobody else types, and no market's title holds it.
     const searchTerm = `leak-search-${tag}`;
@@ -1159,6 +1175,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         text('comment revision', commentRevisionText),
         text('deleted comment', deletedCommentText),
         text('notice revision', noticeRevisionText),
+        text('unpinned notice', unpinnedNoticeText),
         text('time zone', timeZone),
         text('real name', realName),
         text('phone', phone),

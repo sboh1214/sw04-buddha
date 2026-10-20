@@ -24,8 +24,8 @@ import { createdAt, timestampTz } from './columns.js';
  *   (`media_deletions`), then the object, and the key only once the store has removed it. Once
  *   attached it stays as long as the post's history needs it: a post's earlier versions and its
  *   deleted original are kept for operators (#45-4, #45-5), and their removal after the retention
- *   period is #184's. A notice's images stay with its history, which nothing removes yet
- *   (ADR-0077, an open question to the owner).
+ *   period is #184's. A notice's images stay with its history, which has no retention period
+ *   (owner decision 2026-10-21, ADR-0077).
  *
  * Rows outlive a withdrawal (`user` RESTRICT, like every record #140 anonymises around).
  */

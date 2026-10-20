@@ -2,21 +2,32 @@ import { randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import { schema, type Db } from '@buddha/db';
 import {
+  NOTICE_ACTION_TYPES,
   NOTICE_PIN_LIMIT,
   canonicalJson,
   decodeKeyset,
+  decodeTupleCursor,
   encodeKeyset,
+  encodeTupleCursor,
   postImageNotUsableMessage,
+  type AdminAccountActor,
   type AdminNotice,
+  type AdminNoticeAction,
   type AdminNoticeListQuery,
+  type AdminNoticeRevision,
+  type AdminNoticeRevisionSummary,
   type AdminNoticeSummary,
   type AdminNoticeUpdateResult,
+  type CursorQuery,
   type Notice,
+  type NoticeActionType,
   type NoticeContent,
+  type NoticeEdit,
+  type NoticeEditConflictDetails,
   type NoticePinLimitDetails,
   type NoticeSummary,
 } from '@buddha/shared';
-import { and, desc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
 import { PG_UNIQUE_VIOLATION, isPgError } from '../common/errors/pg-error.js';
 import { keysetPredicate } from '../common/keyset.js';
@@ -25,11 +36,20 @@ import { DB } from '../infra/db/db.provider.js';
 import { type Page } from '../wallet/wallet.service.js';
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
+
+/** `admin_actions.target_type` of a notice's records. */
+const TARGET_TYPE = 'notice';
 /** Reads that run either inside a transaction or on the pool. */
 type Executor = Db | Tx;
 
 type NoticeRow = typeof schema.notices.$inferSelect;
-type AuditType = 'notice_create' | 'notice_update' | 'notice_pin' | 'notice_unpin';
+type AuditType = NoticeActionType;
+
+/** An earlier version and the one before it (null: it is the notice's first). */
+interface VersionLink {
+  id: number;
+  previousId: number | null;
+}
 
 /**
  * Serialises every change of the pinned set: a pin and an unpin take it before the notice's row
@@ -56,9 +76,11 @@ async function lockNoticePins(tx: Tx): Promise<void> {
  * (ADR-0068). Public answers name nobody: the web shows every notice as 운영팀's. Notices take
  * no comments, likes or reports, so nothing here reads or writes any.
  *
- * Every notice is readable at its address, pinned or not (`get`) — the owner did not say whether
- * an unpinned one should be; this takes the neutral reading that unpinning takes a notice out of
- * the fixed area only (ADR-0077 decision 8-1, an open question to the owner).
+ * The owner's answers of 2026-10-21 (ADR-0077): only a pinned notice is public (`get` answers any
+ * other like a missing one, and MediaService.findShown its images); the admin screens read every
+ * notice, its operation records (`adminActions`) and its earlier versions (`adminRevisions`,
+ * `adminRevision`), which are kept with no retention period; and an edit names the version it was
+ * opened from, refused when another admin saved since (`update`, NOTICE_EDIT_CONFLICT).
  */
 @Injectable()
 export class NoticesService {
@@ -85,10 +107,14 @@ export class NoticesService {
     return rows.map(summaryOf);
   }
 
-  /** `GET /notices/:noticeId`: one notice, pinned or not. NOT_FOUND for an unknown id. */
+  /**
+   * `GET /notices/:noticeId`: one PINNED notice (owner decision 2026-10-21: «고정하지 않았거나 푼
+   * 공지 → 공개 안 함, 주소로도 없는 공지처럼»). NOT_FOUND for a notice never pinned or unpinned, as
+   * for an unknown id — the answer does not tell them apart.
+   */
   async get(noticeId: string): Promise<Notice> {
     const row = await this.find(this.db, noticeId);
-    if (!row) throw noticeNotFound();
+    if (!row || row.pinnedAt === null) throw noticeNotFound();
     return { ...summaryOf(row), body: row.body };
   }
 
@@ -136,11 +162,213 @@ export class NoticesService {
     };
   }
 
-  /** `GET /admin/notices/:noticeId`: one notice as the edit screen loads it. */
+  /** `GET /admin/notices/:noticeId`: one notice as the edit screen loads it, pinned or not. */
   async adminGet(noticeId: string): Promise<AdminNotice> {
     const row = await this.find(this.db, noticeId);
     if (!row) throw noticeNotFound();
     return adminNoticeOf(row);
+  }
+
+  /**
+   * `GET /admin/notices/:noticeId/actions` (owner decision 2026-10-21: «운영 기록(운영자·시각·동작)»):
+   * the notice's records — each write, edit, pin and unpin that changed something, with its admin
+   * (id and current nickname) — newest first, keyset pages on `(created_at, id)`. An edit names the
+   * version it replaced. An unknown notice has no records: an empty page, as the release settings'
+   * changes of a key no record names.
+   *
+   * The `admin_actions_type_created_at_id_idx` index bounds the read to the notices' records (the
+   * four types): operators write them, a few per notice, so no index of its own. Two records of
+   * one millisecond — a write and a pin sent at once — keep one order, by id, not their own.
+   */
+  async adminActions(noticeId: string, query: CursorQuery): Promise<Page<AdminNoticeAction>> {
+    const { adminActions, profiles } = schema;
+    const keyset = decodeKeyset(query.cursor, 'uuid');
+    const rows = await this.db
+      .select({
+        id: adminActions.id,
+        type: adminActions.type,
+        adminId: adminActions.adminId,
+        nickname: profiles.nickname,
+        payload: adminActions.payload,
+        createdAt: adminActions.createdAt,
+      })
+      .from(adminActions)
+      // LEFT, as the related markets' `linkedBy`: every account has a profile (trigger 0002), and a
+      // missing one must never hide a record from the screen that shows them.
+      .leftJoin(profiles, eq(profiles.userId, adminActions.adminId))
+      .where(
+        and(
+          inArray(adminActions.type, [...NOTICE_ACTION_TYPES]),
+          eq(adminActions.targetType, TARGET_TYPE),
+          eq(adminActions.targetId, noticeId),
+          keyset === undefined
+            ? undefined
+            : keysetPredicate(adminActions.createdAt, adminActions.id, keyset, 'uuid'),
+        ),
+      )
+      .orderBy(desc(adminActions.createdAt), desc(adminActions.id))
+      .limit(query.limit + 1);
+    const hasMore = rows.length > query.limit;
+    const kept = hasMore ? rows.slice(0, query.limit) : rows;
+    const last = kept.at(-1);
+    return {
+      items: kept.map((row) => {
+        const type = row.type as NoticeActionType;
+        return {
+          id: row.id,
+          type,
+          actor: { id: row.adminId, nickname: row.nickname ?? '' },
+          createdAt: row.createdAt.toISOString(),
+          revisionId: type === 'notice_update' ? revisionIdOf(row.id, row.payload) : null,
+        };
+      }),
+      nextCursor: hasMore && last ? encodeKeyset({ createdAt: last.createdAt, id: last.id }) : null,
+    };
+  }
+
+  /**
+   * `GET /admin/notices/:noticeId/revisions` (owner decision 2026-10-21: «이전 판을 보임»): the
+   * notice's earlier versions, the newest first (their ids grow with each edit, which the notice's
+   * row lock serialises), a page of `limit` per cursor — the id of the last one. Each with who
+   * wrote it and who replaced it (`versionActors`). An unknown notice has none: an empty page.
+   *
+   * The row past the page, read anyway to tell whether there is a next one, is the version before
+   * the page's oldest: so every version's predecessor is in hand without another read.
+   */
+  async adminRevisions(
+    noticeId: string,
+    query: CursorQuery,
+  ): Promise<Page<AdminNoticeRevisionSummary>> {
+    const { noticeRevisions } = schema;
+    const cursor = decodeTupleCursor(query.cursor, [], 'int');
+    const rows = await this.db
+      .select({
+        id: noticeRevisions.id,
+        title: noticeRevisions.title,
+        writtenAt: noticeRevisions.writtenAt,
+        replacedAt: noticeRevisions.replacedAt,
+      })
+      .from(noticeRevisions)
+      .where(
+        and(
+          eq(noticeRevisions.noticeId, noticeId),
+          cursor === undefined ? undefined : lt(noticeRevisions.id, Number(cursor.id)),
+        ),
+      )
+      .orderBy(desc(noticeRevisions.id))
+      .limit(query.limit + 1);
+    const hasMore = rows.length > query.limit;
+    const kept = hasMore ? rows.slice(0, query.limit) : rows;
+    const links = kept.map((row, index) => ({
+      id: row.id,
+      previousId: rows[index + 1]?.id ?? null,
+    }));
+    const actors = await this.versionActors(noticeId, links);
+    const last = kept.at(-1);
+    return {
+      items: kept.map((row, index) => ({
+        id: row.id,
+        title: row.title,
+        writtenAt: row.writtenAt.toISOString(),
+        replacedAt: row.replacedAt.toISOString(),
+        ...actors(links[index]!),
+      })),
+      nextCursor: hasMore && last ? encodeTupleCursor([], String(last.id)) : null,
+    };
+  }
+
+  /**
+   * `GET /admin/notices/:noticeId/revisions/:revisionId`: one earlier version of this notice, whole,
+   * read-only. NOT_FOUND for a version that is not this notice's.
+   */
+  async adminRevision(noticeId: string, revisionId: number): Promise<AdminNoticeRevision> {
+    const { noticeRevisions } = schema;
+    const [row] = await this.db
+      .select()
+      .from(noticeRevisions)
+      .where(and(eq(noticeRevisions.noticeId, noticeId), eq(noticeRevisions.id, revisionId)));
+    if (!row) throw new AppError('NOT_FOUND', { message: 'Notice version not found' });
+    const [previous] = await this.db
+      .select({ id: noticeRevisions.id })
+      .from(noticeRevisions)
+      .where(and(eq(noticeRevisions.noticeId, noticeId), lt(noticeRevisions.id, revisionId)))
+      .orderBy(desc(noticeRevisions.id))
+      .limit(1);
+    const link = { id: row.id, previousId: previous?.id ?? null };
+    const actors = await this.versionActors(noticeId, [link]);
+    return {
+      id: row.id,
+      title: row.title,
+      body: row.body,
+      writtenAt: row.writtenAt.toISOString(),
+      replacedAt: row.replacedAt.toISOString(),
+      ...actors(link),
+    };
+  }
+
+  /**
+   * Who wrote and who replaced each of `versions`, from the records (`admin_actions`): an edit's
+   * record names the version it replaced (`{ revisionId }`), so the admin who replaced version V is
+   * the one of the edit naming V, and the admin who wrote it the one of the edit naming the version
+   * before it — or of the notice's writing, for its first. One read, of those records only. An
+   * operator is null where no record names the version (a row written past the API).
+   */
+  private async versionActors(
+    noticeId: string,
+    versions: readonly VersionLink[],
+  ): Promise<
+    (version: VersionLink) => Pick<AdminNoticeRevisionSummary, 'writtenBy' | 'replacedBy'>
+  > {
+    const { adminActions, profiles } = schema;
+    const named = [
+      ...new Set(
+        versions.flatMap(({ id, previousId }) => [
+          id,
+          ...(previousId === null ? [] : [previousId]),
+        ]),
+      ),
+    ];
+    const needsCreate = versions.some((version) => version.previousId === null);
+    const rows =
+      versions.length === 0
+        ? []
+        : await this.db
+            .select({
+              id: adminActions.id,
+              type: adminActions.type,
+              adminId: adminActions.adminId,
+              nickname: profiles.nickname,
+              payload: adminActions.payload,
+            })
+            .from(adminActions)
+            .leftJoin(profiles, eq(profiles.userId, adminActions.adminId))
+            .where(
+              and(
+                eq(adminActions.targetType, TARGET_TYPE),
+                eq(adminActions.targetId, noticeId),
+                or(
+                  and(
+                    eq(adminActions.type, 'notice_update'),
+                    inArray(
+                      sql`${adminActions.payload} ->> 'revisionId'`,
+                      named.map((id) => String(id)),
+                    ),
+                  ),
+                  needsCreate ? eq(adminActions.type, 'notice_create') : undefined,
+                ),
+              ),
+            );
+    let created: AdminAccountActor | null = null;
+    const replacedBy = new Map<number, AdminAccountActor>();
+    for (const row of rows) {
+      const actor = { id: row.adminId, nickname: row.nickname ?? '' };
+      if (row.type === 'notice_create') created = actor;
+      else replacedBy.set(revisionIdOf(row.id, row.payload), actor);
+    }
+    return ({ id, previousId }) => ({
+      writtenBy: previousId === null ? created : (replacedBy.get(previousId) ?? null),
+      replacedBy: replacedBy.get(id) ?? null,
+    });
   }
 
   /**
@@ -175,32 +403,44 @@ export class NoticesService {
    * writes, no approval). The version replaced goes to the operators' history (`notice_revisions`)
    * and the notice is marked edited, with one `notice_update` record naming that version; sending
    * what the notice already says changes, marks and records nothing. The answer says which
-   * (`changed`): the screen cannot tell from `editedAt`, since another admin's edit it has not read
-   * yet moves that too. A pinned notice stays pinned where it is. An image the edit takes out stays
-   * attached for the history and is no longer served (`GET /media/:mediaId` serves the current
-   * body's).
+   * (`changed`). A pinned notice stays pinned where it is. An image the edit takes out stays
+   * attached for the history (served to admins only, MediaService.findNoticeImage).
    *
-   * The row lock is what keeps the history whole when two admins save at once: the second reads
-   * the notice only after the first committed, so the version it replaces — and records — is the
-   * first one's, never the one both started from. Nothing checks which version the editor opened:
-   * the later save wins, the earlier one kept in the history (ADR-0077 decision 8-19, an open
-   * question to the owner).
+   * The edit names the version its screen was opened from (`expectedEditedAt`, the notice's
+   * `editedAt` then): when another admin's save has replaced it since, nothing is written and the
+   * answer is NOTICE_EDIT_CONFLICT with the version now (owner decision 2026-10-21: «연 뒤 다른
+   * 운영자가 고쳤으면 저장을 막고 '다른 운영자가 먼저 고쳤습니다'»). The row lock makes the check and
+   * the write one step: of two saves opened from one version, the second reads the notice only
+   * after the first committed and finds its version gone. An edit is stamped strictly after the
+   * version it replaces (`strictlyAfter`), so a version's `editedAt` names it alone even should the
+   * clock repeat or step back.
    */
   async update(
     adminId: string,
     noticeId: string,
-    content: NoticeContent,
+    edit: NoticeEdit,
   ): Promise<AdminNoticeUpdateResult> {
     return this.db.transaction(async (tx) => {
       const current = await this.lockNotice(tx, noticeId);
+      const opened =
+        edit.expectedEditedAt === null ? null : new Date(edit.expectedEditedAt).getTime();
+      if (opened !== (current.editedAt?.getTime() ?? null)) {
+        const details: NoticeEditConflictDetails = {
+          editedAt: current.editedAt?.toISOString() ?? null,
+        };
+        throw new AppError('NOTICE_EDIT_CONFLICT', {
+          message: 'Another admin edited the notice since this edit was opened',
+          details,
+        });
+      }
       if (
-        current.title === content.title &&
-        canonicalJson(current.body) === canonicalJson(content.body.document)
+        current.title === edit.title &&
+        canonicalJson(current.body) === canonicalJson(edit.body.document)
       ) {
         return { notice: adminNoticeOf(current), changed: false };
       }
-      await this.claimImages(tx, adminId, content.body.imageIds, noticeId);
-      const now = await clockTimestamp(tx);
+      await this.claimImages(tx, adminId, edit.body.imageIds, noticeId);
+      const now = strictlyAfter(await clockTimestamp(tx), current.editedAt ?? current.createdAt);
       const [revision] = await tx
         .insert(schema.noticeRevisions)
         .values({
@@ -216,15 +456,15 @@ export class NoticesService {
       const [row] = await tx
         .update(schema.notices)
         .set({
-          title: content.title,
-          body: content.body.document,
-          bodyText: content.body.text,
-          imageIds: content.body.imageIds,
+          title: edit.title,
+          body: edit.body.document,
+          bodyText: edit.body.text,
+          imageIds: edit.body.imageIds,
           editedAt: now,
         })
         .where(eq(schema.notices.id, noticeId))
         .returning();
-      await this.attachImages(tx, noticeId, content.body.imageIds);
+      await this.attachImages(tx, noticeId, edit.body.imageIds);
       await this.audit(tx, adminId, 'notice_update', noticeId, now, {
         revisionId: revision!.id,
       });
@@ -282,8 +522,9 @@ export class NoticesService {
   }
 
   /**
-   * `POST /admin/notices/:noticeId/unpin`: takes the notice out of the fixed area; it stays on the
-   * admin screen and at its address, and may be pinned again (#45-8). A notice that is not pinned
+   * `POST /admin/notices/:noticeId/unpin`: takes the notice out of the fixed area and out of the
+   * public — its address and images answer like a missing notice's (owner decision 2026-10-21) —
+   * while it stays on the admin screen and may be pinned again (#45-8). A notice that is not pinned
    * changes nothing and records nothing.
    */
   async unpin(adminId: string, noticeId: string): Promise<AdminNotice> {
@@ -314,7 +555,8 @@ export class NoticesService {
   /**
    * The notice, locked for the write: NOT_FOUND when there is none. A pin and an unpin hold the
    * pinned set's lock first, so for them it only orders what follows; for an edit it is the one
-   * thing that makes two saves of one notice take turns (`update`).
+   * thing that makes two saves of one notice take turns, the second seeing the first's version
+   * (`update`).
    */
   private async lockNotice(tx: Tx, noticeId: string): Promise<NoticeRow> {
     const [row] = await tx
@@ -420,7 +662,7 @@ export class NoticesService {
     await tx.insert(schema.adminActions).values({
       adminId,
       type,
-      targetType: 'notice',
+      targetType: TARGET_TYPE,
       targetId: noticeId,
       payload,
       createdAt: now,
@@ -446,6 +688,20 @@ function summaryOf(row: {
 /** A notice as the admin screen edits it, and as every admin write answers. */
 function adminNoticeOf(row: NoticeRow): AdminNotice {
   return { ...summaryOf(row), body: row.body, pinnedAt: row.pinnedAt?.toISOString() ?? null };
+}
+
+/**
+ * The version a `notice_update` record names (`{ revisionId }`, as `update` writes it). A record
+ * that does not is a broken invariant, not a request's fault: INTERNAL, naming the row.
+ */
+function revisionIdOf(recordId: string, payload: Record<string, unknown> | null): number {
+  const revisionId = payload?.revisionId;
+  if (typeof revisionId !== 'number' || !Number.isSafeInteger(revisionId) || revisionId < 1) {
+    throw new AppError('INTERNAL', {
+      message: `admin_actions ${recordId} is a notice edit naming no version`,
+    });
+  }
+  return revisionId;
 }
 
 function noticeNotFound(): AppError {

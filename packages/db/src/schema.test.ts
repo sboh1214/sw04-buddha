@@ -1551,7 +1551,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(count?.n).toBe(NOTICE_PIN_LIMIT);
     });
 
-    it('keeps an edit’s history append-only, deletable as the posts’ history is', async () => {
+    it('keeps an edit’s history append-only, and deletable should a later decision ask', async () => {
       const notice = await createNotice(t.db);
       const [revision] = await t.db
         .insert(noticeRevisions)
@@ -1574,8 +1574,9 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       await expect(t.db.delete(notices).where(eq(notices.id, notice.id))).rejects.toSatisfy(
         (e) => sqlState(e) === '23503',
       );
-      // DELETE stays, as on post_revisions: nothing deletes a version yet, and whether #184's
-      // retention covers a notice's history is the owner's to say (ADR-0077).
+      // DELETE stays, as on post_revisions: the owner keeps a notice's history with no retention
+      // period, so nothing deletes a version, and the database can still delete one should a later
+      // decision ask (owner decision 2026-10-21, ADR-0077: «DB는 나중에 지울 수 있게»).
       await t.db.delete(noticeRevisions).where(eq(noticeRevisions.id, revision!.id));
       expect(await t.db.select().from(noticeRevisions)).toEqual([]);
     });

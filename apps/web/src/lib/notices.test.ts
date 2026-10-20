@@ -1,10 +1,12 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import {
+  NOTICE_ACTION_TYPES,
   NOTICE_PIN_LIMIT,
   NOTICE_TITLE_MAX_LENGTH,
   POST_BODY_MAX_LENGTH,
   POST_TITLE_MAX_LENGTH,
+  mediaPath,
   postImageNotUsableMessage,
 } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
@@ -18,12 +20,22 @@ import {
   ADMIN_NOTICE_NEW_PATH,
   NOTICES_KEY,
   PINNED_NOTICES_KEY,
+  adminNoticeActionsKey,
+  adminNoticeImagePath,
   adminNoticeKey,
   adminNoticeListKey,
   adminNoticeListQuery,
   adminNoticeMissing,
+  adminNoticePageQuery,
   adminNoticePath,
+  adminNoticeReadView,
+  adminNoticeRevisionKey,
+  adminNoticeRevisionPath,
+  adminNoticeRevisionsKey,
+  noticeActionLabel,
+  noticeActorName,
   noticeDescription,
+  noticeEditConflict,
   noticePath,
   noticeSaveToast,
   noticeWriteErrorMessage,
@@ -52,11 +64,25 @@ describe('the addresses', () => {
     expect(ADMIN_NOTICES_PATH).toBe('/admin/notices');
     expect(ADMIN_NOTICE_NEW_PATH).toBe('/admin/notices/new');
     expect(adminNoticePath(notice)).toBe(`/admin/notices/${notice}`);
+    expect(adminNoticeRevisionPath(notice, 7)).toBe(`/admin/notices/${notice}/revisions/7`);
     // Each address has its page.
     expect(existsSync(pageOf('community', 'notices', '[noticeId]'))).toBe(true);
     expect(existsSync(pageOf('admin', 'notices'))).toBe(true);
     expect(existsSync(pageOf('admin', 'notices', 'new'))).toBe(true);
     expect(existsSync(pageOf('admin', 'notices', '[noticeId]'))).toBe(true);
+    expect(existsSync(pageOf('admin', 'notices', '[noticeId]', 'revisions', '[revisionId]'))).toBe(
+      true,
+    );
+  });
+
+  it('draws a notice’s images on the admin screens through the admin route, not the public one', () => {
+    // Owner decision 2026-10-21: the public image route serves a pinned notice's current images
+    // only; the admin's edit screen of a notice not pinned, and an earlier version, read them here.
+    const media = '0b6f6a3e-2c1d-4c8e-9f0a-1b2c3d4e5f60';
+    expect(adminNoticeImagePath(notice, media)).toBe(
+      `/api/v1/admin/notices/${notice}/images/${media}`,
+    );
+    expect(adminNoticeImagePath(notice, media)).not.toBe(mediaPath(media));
   });
 });
 
@@ -73,6 +99,28 @@ describe('the cache keys', () => {
     expect(adminNoticeListKey('pinned')).toEqual(['admin', 'notices', 'list', 'pinned']);
     expect(adminNoticeListKey('unpinned')).toEqual(['admin', 'notices', 'list', 'unpinned']);
     expect(adminNoticeKey(NOTICE)).toEqual(['admin', 'notices', 'notice', notice]);
+  });
+
+  it('keeps a notice’s records and earlier versions under the notice’s own key', () => {
+    expect(adminNoticeActionsKey(NOTICE)).toEqual([
+      'admin',
+      'notices',
+      'notice',
+      notice,
+      'actions',
+    ]);
+    expect(adminNoticeRevisionsKey(NOTICE)).toEqual([
+      'admin',
+      'notices',
+      'notice',
+      notice,
+      'revisions',
+    ]);
+    // A version by its id as the address names it, a number or its digits alike.
+    expect(adminNoticeRevisionKey(NOTICE, 7)).toEqual([...adminNoticeRevisionsKey(notice), '7']);
+    expect(adminNoticeRevisionKey(NOTICE, '7')).toEqual(adminNoticeRevisionKey(notice, 7));
+    expect(adminNoticePageQuery()).toEqual({});
+    expect(adminNoticePageQuery('c2')).toEqual({ cursor: 'c2' });
   });
 
   it('asks for a list by its state, and for the next page with the cursor', () => {
@@ -97,11 +145,8 @@ describe('how a notice is drawn', () => {
     expect(noticeDescription(body, 4)).toBe('점검 😀');
   });
 
-  it('says what the save did as the API answers it, whatever `editedAt` the screen held', () => {
-    // Review on #138: the toast was a guess from the `editedAt` the edit screen held. Another
-    // admin's edit the screen had not read yet moved it, so a save of what that edit already said
-    // — nothing written — read as '공지를 고쳤습니다.'. `changed` is the server's own word.
-    // The answers as they come: the notice moved by the other admin's edit, and the word.
+  it('says what the save did as the API answers it', () => {
+    // `changed` is the server's own word, whatever the answer's `editedAt` says.
     const theirs = { editedAt: '2026-10-20T01:00:00.000Z' };
     const unchanged = { notice: theirs, changed: false };
     const changed = { notice: theirs, changed: true };
@@ -145,6 +190,23 @@ describe('the fixed area above the community list (ADR-0077 decision 8-10)', () 
   });
 });
 
+describe('the records and earlier versions (owner decision 2026-10-21)', () => {
+  it('names each of the four records as the owner did: 작성·수정·고정·해제', () => {
+    expect(NOTICE_ACTION_TYPES.map(noticeActionLabel)).toEqual([
+      '작성',
+      '수정',
+      '고정',
+      '고정 해제',
+    ]);
+  });
+
+  it('names the operator by nickname, and says so where no record names one', () => {
+    expect(noticeActorName({ nickname: '운영자하나' })).toBe('운영자하나');
+    expect(noticeActorName(null)).toBe(copy.adminNoticeActorUnknown);
+    expect(noticeActorName({ nickname: '' })).toBe(copy.adminNoticeActorUnknown);
+  });
+});
+
 describe('the admin edit screen', () => {
   it('opened at an unknown id or at a segment that is not a uuid, finds no notice', () => {
     expect(adminNoticeMissing(refusal(404, 'NOT_FOUND'))).toBe(true);
@@ -157,6 +219,59 @@ describe('the admin edit screen', () => {
     expect(adminNoticeMissing(refusal(403, 'FORBIDDEN'))).toBe(false);
     expect(adminNoticeMissing(refusal(500, 'INTERNAL'))).toBe(false);
     expect(adminNoticeMissing(new TypeError('Failed to fetch'))).toBe(false);
+  });
+
+  /** A read with something drawn, settled: what the screens' query reports once a read landed. */
+  const read = {
+    isPending: false,
+    isError: false,
+    isLoadingError: false,
+    error: null as unknown,
+    fetchStatus: 'idle' as 'fetching' | 'paused' | 'idle',
+    dataUpdatedAt: 2_000,
+  };
+
+  it('draws a skeleton before the first read, its not-found or failure after a refused one', () => {
+    const first = { ...read, isPending: true, dataUpdatedAt: 0 };
+    expect(adminNoticeReadView({ ...first, fetchStatus: 'fetching' })).toBe('pending');
+    expect(adminNoticeReadView({ ...first, fetchStatus: 'paused' }, 0)).toBe('pending');
+    const refused = { ...read, isError: true, isLoadingError: true, dataUpdatedAt: 0 };
+    expect(adminNoticeReadView({ ...refused, error: refusal(404, 'NOT_FOUND') })).toBe('missing');
+    expect(adminNoticeReadView({ ...refused, error: refusal(400, 'VALIDATION_ERROR') }, 0)).toBe(
+      'missing',
+    );
+    expect(adminNoticeReadView({ ...refused, error: refusal(500, 'INTERNAL') })).toBe('failed');
+    expect(adminNoticeReadView({ ...refused, error: new TypeError('Failed to fetch') })).toBe(
+      'failed',
+    );
+  });
+
+  it('keeps what was read on screen when a later refresh fails', () => {
+    expect(adminNoticeReadView(read)).toBe('ready');
+    const refreshFailed = { ...read, isError: true, error: refusal(500, 'INTERNAL') };
+    expect(adminNoticeReadView(refreshFailed)).toBe('ready');
+    expect(adminNoticeReadView(refreshFailed, 1_000)).toBe('ready');
+  });
+
+  it('opens the edit form only on a read made after the screen opened (ADR-0077 decision 8-19)', () => {
+    // The screen opened at 1,500 on a copy the cache held from 1,000: not what the form opens on.
+    const held = { ...read, dataUpdatedAt: 1_000 };
+    expect(adminNoticeReadView({ ...held, fetchStatus: 'fetching' }, 1_500)).toBe('pending');
+    expect(adminNoticeReadView({ ...held, fetchStatus: 'paused' }, 1_500)).toBe('pending');
+    // The read on opening was refused: the screen fails as a first read does — no form on the
+    // copy, and the not-found if it found nothing.
+    const refused = { ...held, isError: true, error: refusal(500, 'INTERNAL') };
+    expect(adminNoticeReadView(refused, 1_500)).toBe('failed');
+    expect(adminNoticeReadView({ ...refused, error: refusal(404, 'NOT_FOUND') }, 1_500)).toBe(
+      'missing',
+    );
+    // Asked again (a refocus), it waits for that read.
+    expect(adminNoticeReadView({ ...refused, fetchStatus: 'fetching' }, 1_500)).toBe('pending');
+    // Read since — in the very millisecond it opened, too: the form opens on it.
+    expect(adminNoticeReadView(read, 1_500)).toBe('ready');
+    expect(adminNoticeReadView({ ...read, dataUpdatedAt: 1_500 }, 1_500)).toBe('ready');
+    // The version screen passes no `openedAt`: a version never changes, any copy will do.
+    expect(adminNoticeReadView(held)).toBe('ready');
   });
 });
 
@@ -189,6 +304,21 @@ describe('a refused admin write', () => {
     ).toBe(copy.errPostInvalid);
   });
 
+  it('says another admin saved first in the owner’s words, and knows it from any other refusal', () => {
+    // Owner decision 2026-10-21: «다른 운영자가 먼저 고쳤습니다».
+    const conflict = refusal(409, 'NOTICE_EDIT_CONFLICT', { editedAt: null });
+    expect(noticeWriteErrorMessage(conflict)).toBe('다른 운영자가 먼저 고쳤습니다.');
+    expect(copy.errNoticeEditConflict).toBe('다른 운영자가 먼저 고쳤습니다.');
+    expect(noticeEditConflict(conflict)).toBe(true);
+    for (const other of [
+      refusal(409, 'NOTICE_PIN_LIMIT_REACHED', { limit: NOTICE_PIN_LIMIT }),
+      refusal(404, 'NOT_FOUND'),
+      new TypeError('Failed to fetch'),
+    ]) {
+      expect(noticeEditConflict(other)).toBe(false);
+    }
+  });
+
   it('names a notice that is not there, a revoked admin, the onboarding and an unreachable server', () => {
     expect(noticeWriteErrorMessage(refusal(404, 'NOT_FOUND'))).toBe(copy.adminNoticeNotFound);
     expect(noticeWriteErrorMessage(refusal(403, 'FORBIDDEN'))).toBe(copy.adminOnly);
@@ -218,12 +348,13 @@ describe('the copy', () => {
     expect(titleTooLong('가'.repeat(NOTICE_TITLE_MAX_LENGTH + 1))).toBe(true);
   });
 
-  it('tells the admin, before writing, that an unpinned notice is public at its address', () => {
-    // ADR-0077 decision 8-1 (an open question to the owner): every notice is readable at its
-    // address, pinned or not. The intro is on the list and on the write screen, so it names the
-    // list rather than 'here'.
-    expect(copy.adminNoticesIntro).toContain('고정하지 않은 공지도');
-    expect(copy.adminNoticesIntro).toContain('주소로 누구나 읽을 수 있');
+  it('tells the admin that only a pinned notice is public, and no longer that an unpinned one is', () => {
+    // Owner decision 2026-10-21: «고정하지 않았거나 푼 공지 → 공개 안 함». The intro is on the list
+    // and on the write screen, so it names the list rather than 'here'.
+    expect(copy.adminNoticesIntro).toContain('고정한 공지만 누구나 읽을 수 있');
+    expect(copy.adminNoticesIntro).toContain('고정하지 않은 공지는 공지 목록에만');
+    expect(copy.adminNoticesIntro).not.toContain('고정하지 않은 공지도');
+    expect(copy.adminNoticesIntro).not.toContain('주소로 누구나');
     expect(copy.adminNoticesIntro).toContain('공지 목록에 남아');
     expect(copy.adminNoticesIntro).not.toContain('여기');
   });

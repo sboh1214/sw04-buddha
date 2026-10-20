@@ -23,17 +23,51 @@ import { RetriedImage } from './retried-image';
  *
  * - A link opens in a new tab with `noopener noreferrer` and `nofollow ugc` (a writer's link is
  *   not an endorsement), and only an http(s) address is drawn as a link at all.
- * - An image is ours, by its media id (`GET /media/:id`, served only while a post shows it), and
- *   asked for again when the API said to wait (`RetriedImage`).
+ * - An image is ours, by its media id (`GET /media/:id`, served only while a post or a pinned
+ *   notice shows it), and asked for again when the API said to wait (`RetriedImage`); the admin's
+ *   notice screens draw a notice's through their own route (`imageSrc`, #138).
  * - A colour is a name drawn through the theme (`data-color`, post-content-style.ts).
- * - Headings are `h3`–`h5` under the page's `h1` and the post's `h2`.
+ * - Headings are `h3`–`h5` under the page's `h1` and the post's `h2` — or, one level down
+ *   (`headingFrom`), `h4`–`h6` under a title that is itself an `h3`.
  */
-export function PostBody({ document }: { document: PostDocument }) {
+export function PostBody({
+  document,
+  imageSrc = mediaPath,
+  headingFrom = 3,
+}: {
+  document: PostDocument;
+  /**
+   * Where an image's bytes are read, by its media id: the public `GET /media/:id` by default; the
+   * admin's notice screens pass their own (`adminNoticeImagePath`, #138), since the public route
+   * serves a pinned notice's current images only.
+   */
+  imageSrc?: (mediaId: string) => string;
+  /**
+   * The level the body's first heading (제목 1) takes: 3 under a title that is an `h2` (a post, a
+   * notice's page), 4 under one that is an `h3` (an earlier version of a notice, on the admin's
+   * screen under the admin layout's `h2`, #138) — so a heading in the body sits under the title it
+   * belongs to rather than beside it. How a heading looks does not change (`data-heading`).
+   */
+  headingFrom?: 3 | 4;
+}) {
+  const draw: Draw = {
+    src: imageSrc,
+    headings: headingFrom === 4 ? (['h4', 'h5', 'h6'] as const) : (['h3', 'h4', 'h5'] as const),
+  };
   return (
     <Box css={POST_CONTENT_CSS} data-testid="post-body">
-      {blocks(document.content)}
+      {blocks(document.content, draw)}
     </Box>
   );
+}
+
+/**
+ * What `block` takes from `PostBody` beside the document: where an image node's bytes are read
+ * (`imageSrc`), and the tags of the three heading levels (`headingFrom`).
+ */
+interface Draw {
+  src: (mediaId: string) => string;
+  headings: readonly ['h3', 'h4', 'h5'] | readonly ['h4', 'h5', 'h6'];
 }
 
 /** Only an http(s) address is a link; the server keeps no other, this is the second lock. */
@@ -108,11 +142,11 @@ function inlines(content: PostInline[] | undefined): ReactNode[] {
   return (content ?? []).map((node, index) => inline(node, String(index)));
 }
 
-function listItems(items: PostListItem[]): ReactNode[] {
-  return items.map((item, index) => <li key={index}>{blocks(item.content)}</li>);
+function listItems(items: PostListItem[], draw: Draw): ReactNode[] {
+  return items.map((item, index) => <li key={index}>{blocks(item.content, draw)}</li>);
 }
 
-function tableRows(rows: PostTableRow[]): ReactNode[] {
+function tableRows(rows: PostTableRow[], draw: Draw): ReactNode[] {
   return rows.map((row, rowIndex) => (
     <tr key={rowIndex}>
       {row.content.map((cell, cellIndex) => {
@@ -123,7 +157,7 @@ function tableRows(rows: PostTableRow[]): ReactNode[] {
             colSpan={cell.attrs.colspan > 1 ? cell.attrs.colspan : undefined}
             rowSpan={cell.attrs.rowspan > 1 ? cell.attrs.rowspan : undefined}
           >
-            {blocks(cell.content)}
+            {blocks(cell.content, draw)}
           </Cell>
         );
       })}
@@ -131,12 +165,12 @@ function tableRows(rows: PostTableRow[]): ReactNode[] {
   ));
 }
 
-function block(node: PostBlock, key: number): ReactNode {
+function block(node: PostBlock, key: number, draw: Draw): ReactNode {
   switch (node.type) {
     case 'paragraph':
       return <p key={key}>{inlines(node.content)}</p>;
     case 'heading': {
-      const Tag = (['h3', 'h4', 'h5'] as const)[node.attrs.level - 1] ?? 'h5';
+      const Tag = draw.headings[node.attrs.level - 1] ?? draw.headings[2];
       return (
         <Tag key={key} data-heading={node.attrs.level}>
           {inlines(node.content)}
@@ -144,13 +178,13 @@ function block(node: PostBlock, key: number): ReactNode {
       );
     }
     case 'blockquote':
-      return <blockquote key={key}>{blocks(node.content)}</blockquote>;
+      return <blockquote key={key}>{blocks(node.content, draw)}</blockquote>;
     case 'bulletList':
-      return <ul key={key}>{listItems(node.content)}</ul>;
+      return <ul key={key}>{listItems(node.content, draw)}</ul>;
     case 'orderedList':
       return (
         <ol key={key} start={node.attrs.start > 1 ? node.attrs.start : undefined}>
-          {listItems(node.content)}
+          {listItems(node.content, draw)}
         </ol>
       );
     case 'codeBlock':
@@ -168,7 +202,7 @@ function block(node: PostBlock, key: number): ReactNode {
         // optimiser in front to keep a copy. Asked for again after a 429 (`RetriedImage`).
         <RetriedImage
           key={key}
-          src={mediaPath(node.attrs.mediaId)}
+          src={draw.src(node.attrs.mediaId)}
           alt={copy.postImageAlt}
           loading="lazy"
           data-testid="post-image"
@@ -178,7 +212,7 @@ function block(node: PostBlock, key: number): ReactNode {
       return (
         <Box key={key} overflowX="auto">
           <table>
-            <tbody>{tableRows(node.content)}</tbody>
+            <tbody>{tableRows(node.content, draw)}</tbody>
           </table>
         </Box>
       );
@@ -187,6 +221,6 @@ function block(node: PostBlock, key: number): ReactNode {
   }
 }
 
-function blocks(content: PostBlock[]): ReactNode[] {
-  return content.map((node, index) => block(node, index));
+function blocks(content: PostBlock[], draw: Draw): ReactNode[] {
+  return content.map((node, index) => block(node, index, draw));
 }

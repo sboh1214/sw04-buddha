@@ -385,6 +385,8 @@ const ERROR_NOTES = {
     '그 글이나 댓글은 지금 좋아요를 받지 않는다(#49). 좋아요 취소도 같다. `details.reason` 이 까닭을 말한다 — `deleted`(작성자가 지워 자리표시로 남은 글이나 댓글이다), `hidden`(운영 정책에 따라 숨긴 글이나 댓글이다). 화면에서 빠진 글이나 댓글(아래가 없는 지운 것)은 `NOT_FOUND` 다.',
   NOTICE_PIN_LIMIT_REACHED:
     '이미 공지 3개가 고정되어 있어 더 고정할 수 없다(#138). `details.limit` 이 동시에 고정할 수 있는 수다. 자동으로 풀리는 공지는 없으니 하나를 풀고(`POST /api/v1/admin/notices/{noticeId}/unpin`) 다시 고정한다.',
+  NOTICE_EDIT_CONFLICT:
+    '공지 수정 화면을 연 뒤 다른 운영자가 그 공지를 먼저 고쳤다(#138, 오너 결정 2026-10-21). 아무것도 바꾸지 않았다. 요청의 `expectedEditedAt` 이 공지의 지금 `editedAt` 과 다르다 — `details.editedAt` 이 지금의 판이다(한 번도 고치지 않았으면 null). 최신 공지를 다시 읽고(`GET /api/v1/admin/notices/{noticeId}`) 그 `editedAt` 으로 다시 보낸다.',
   INTERNAL: '그 밖의 서버 오류. 본문에 내부 사정을 담지 않는다.',
 };
 

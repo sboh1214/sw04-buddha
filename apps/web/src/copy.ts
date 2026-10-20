@@ -571,13 +571,14 @@ export const copy = {
   // (NOTICE_PIN_LIMIT, notices.test.ts가 같은 수인지 본다)이고 자동 해제는 없다. 해제한 공지는 공지 목록에
   // 남아 다시 고정할 수 있다. 공지는 '운영팀'으로 보이고, 네 작업은 운영자와 시각만 운영 기록에 남는다
   // (사유 없음, #138). 지우는 기능은 없다(ADR-0077 결정 8-7).
-  // 안내는 목록 화면과 쓰기 화면에 함께 보이므로 '여기'가 아니라 '공지 목록'이라 쓴다. '고정하지 않은 공지도
-  // 주소로 누구나 읽는다'는 ADR-0077 결정 8-1(오너에게 묻는 중, 결과 4-1)의 지금 동작이다 — 운영자가 고정하지
-  // 않은 공지를 비공개 초안으로 여기지 않게 쓰기 전에 알린다. 오너가 고정한 공지만 공개하기로 하면 이 문장을 뺀다.
+  // 안내는 목록 화면과 쓰기 화면에 함께 보이므로 '여기'가 아니라 '공지 목록'이라 쓴다. 고정한 공지만 공개한다
+  // (오너 결정 2026-10-21, ADR-0077 — 고정하지 않았거나 푼 공지는 주소로도 없는 공지처럼 보이고 이 화면에만 남는다).
+  // 지우는 기능은 없다(같은 날 «이대로»).
   adminNotices: '공지',
   adminNoticesIntro:
-    "공지는 커뮤니티 목록 위의 고정 영역에 보입니다. 동시에 3개까지 고정할 수 있고, 해제한 공지는 공지 목록에 남아 다시 고정할 수 있습니다. 고정하지 않은 공지도 쓰는 즉시 그 주소로 누구나 읽을 수 있고, 지울 수 없으며 고칠 수만 있습니다. 공지는 '운영팀'의 이름으로 보이고 댓글·좋아요·신고를 받지 않습니다.",
-  adminNoticeRecordHint: '쓰기·수정·고정·해제는 작업한 운영자와 시각이 운영 기록에 남습니다.',
+    "공지는 커뮤니티 목록 위의 고정 영역에 보입니다. 동시에 3개까지 고정할 수 있고, 해제한 공지는 공지 목록에 남아 다시 고정할 수 있습니다. 고정한 공지만 누구나 읽을 수 있고, 고정하지 않은 공지는 공지 목록에만 보입니다. 공지는 지울 수 없고 고칠 수만 있습니다. 공지는 '운영팀'의 이름으로 보이고 댓글·좋아요·신고를 받지 않습니다.",
+  adminNoticeRecordHint:
+    '쓰기·수정·고정·해제는 작업한 운영자와 시각이 운영 기록에 남고, 공지 수정 화면에서 운영 기록과 이전 판을 볼 수 있습니다.',
   adminNoticeWrite: '공지 쓰기',
   adminNoticesPinned: '고정한 공지',
   adminNoticesUnpinned: '고정하지 않은 공지',
@@ -610,6 +611,27 @@ export const copy = {
   errNoticePinLimit:
     '공지는 동시에 3개까지 고정할 수 있습니다. 고정한 공지 하나를 해제한 뒤 다시 고정해 주세요.',
   errNoticeTitle: '제목을 100자 이하의 한 줄로 입력해 주세요.',
+  // 수정 화면을 연 뒤 다른 운영자가 먼저 저장했을 때(NOTICE_EDIT_CONFLICT). 문장은 오너 결정 2026-10-21 그대로다.
+  // 쓰던 내용은 화면에 남고, '최신 내용 불러오기'가 그것을 최신 판으로 바꾼다(ADR-0077).
+  errNoticeEditConflict: '다른 운영자가 먼저 고쳤습니다.',
+  adminNoticeEditConflictHint: '최신 내용을 불러오면 쓰던 내용은 사라집니다.',
+  adminNoticeReloadLatest: '최신 내용 불러오기',
+  // 공지 수정 화면의 운영 기록과 이전 판(오너 결정 2026-10-21: 운영자·시각·동작, 이전 판을 보임). 사유는 없다.
+  adminNoticeActions: '운영 기록',
+  adminNoticeActionsEmpty: '운영 기록이 없습니다.',
+  adminNoticeActionCreate: '작성',
+  adminNoticeActionUpdate: '수정',
+  adminNoticeActionPin: '고정',
+  adminNoticeActionUnpin: '고정 해제',
+  adminNoticeActionRevision: '바뀌기 전 판',
+  adminNoticeActorUnknown: '기록 없음',
+  adminNoticeRevisions: '이전 판',
+  adminNoticeRevisionsEmpty: '이전 판이 없습니다.',
+  adminNoticeRevisionWritten: '작성',
+  adminNoticeRevisionReplaced: '바뀜',
+  adminNoticeRevisionBadge: '이전 판',
+  adminNoticeRevisionNotFound: '이전 판을 찾을 수 없습니다.',
+  adminNoticeBackToEdit: '공지 수정으로',
 
   // --- markets (M4) ---
   // 홈 (PLAN 11.3, ADR-0041 Kalshi 형): 헤더 2단의 상위 카테고리 · 왼쪽 세부 분류 · 정렬 · 검색.

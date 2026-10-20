@@ -1,4 +1,5 @@
 import {
+  type NoticeActionType,
   type NoticeListState,
   postExcerpt,
   readPostDocument,
@@ -20,13 +21,20 @@ import { postWriteErrorMessage } from './posts';
  * unpinned notice stays on the admin screen to be pinned again. A notice is written by '운영팀',
  * never by an operator's nickname, shows '수정됨' once edited and takes no comments, likes or
  * reports. Every write, edit, pin and unpin records its admin and time (the API's `admin_actions`).
+ *
+ * The owner's answers of 2026-10-21 (ADR-0077): only a pinned notice is public — its page and
+ * images answer like a missing one's otherwise, while the admin screens show it (its images
+ * through the admin route, `adminNoticeImagePath`); the admin's notice screen shows its operation
+ * records and its earlier versions; and an edit opened before another admin's save is refused
+ * ('다른 운영자가 먼저 고쳤습니다.'), the typed content kept on screen.
  */
 
 // ---- addresses -----------------------------------------------------------------------------
 
 /**
  * A notice page: under the community, whose fixed area links to it (this PR's choice — a page of
- * its own rather than a row that opens in place, ADR-0077). The id is the notice's uuid.
+ * its own rather than a row that opens in place, ADR-0077). The id is the notice's uuid. Only a
+ * pinned notice's page is there (owner decision 2026-10-21): any other is the 404.
  */
 export function noticePath(noticeId: string): string {
   return `/community/notices/${noticeId}`;
@@ -38,9 +46,25 @@ export const ADMIN_NOTICES_PATH = '/admin/notices';
 /** The admin's write screen for a new notice. */
 export const ADMIN_NOTICE_NEW_PATH = '/admin/notices/new';
 
-/** The admin's edit screen of a notice, with its pin and unpin. */
+/** The admin's edit screen of a notice, with its pin and unpin, its records and earlier versions. */
 export function adminNoticePath(noticeId: string): string {
   return `${ADMIN_NOTICES_PATH}/${noticeId}`;
+}
+
+/** One earlier version of a notice, read-only, on the admin screens. */
+export function adminNoticeRevisionPath(noticeId: string, revisionId: number): string {
+  return `${adminNoticePath(noticeId)}/revisions/${String(revisionId)}`;
+}
+
+/**
+ * A notice's image as the admin screens draw it (`GET /admin/notices/:noticeId/images/:mediaId`):
+ * any image the notice holds, now or in an earlier version, pinned or not. The public
+ * `GET /media/:mediaId` serves a pinned notice's current images only (owner decision 2026-10-21),
+ * so the edit screen of a notice not pinned, and an earlier version's images, would draw nothing
+ * through it.
+ */
+export function adminNoticeImagePath(noticeId: string, mediaId: string): string {
+  return `/api/v1/admin/notices/${noticeId}/images/${mediaId}`;
 }
 
 // ---- cache keys ----------------------------------------------------------------------------
@@ -66,6 +90,20 @@ export const adminNoticeListKey = (state: NoticeListState) =>
   [...ADMIN_NOTICES_KEY, 'list', state] as const;
 export const adminNoticeKey = (noticeId: string) =>
   [...ADMIN_NOTICES_KEY, 'notice', noticeId.toLowerCase()] as const;
+/**
+ * A notice's operation records and its earlier versions (owner decision 2026-10-21), under the
+ * notice's own key: a write marks both stale with the notice it answered.
+ */
+export const adminNoticeActionsKey = (noticeId: string) =>
+  [...adminNoticeKey(noticeId), 'actions'] as const;
+export const adminNoticeRevisionsKey = (noticeId: string) =>
+  [...adminNoticeKey(noticeId), 'revisions'] as const;
+/**
+ * One earlier version, whole: it never changes once written. By the id as the address names it
+ * (a string: the API, not the key, judges whether it is a version's).
+ */
+export const adminNoticeRevisionKey = (noticeId: string, revisionId: string | number) =>
+  [...adminNoticeRevisionsKey(noticeId), String(revisionId)] as const;
 
 /**
  * One page of an admin list as the browser's `queryFn` asks for it: the state and, after the first
@@ -77,6 +115,14 @@ export function adminNoticeListQuery(
   cursor?: string,
 ): { state: NoticeListState; cursor?: string } {
   return cursor === undefined ? { state } : { state, cursor };
+}
+
+/**
+ * One page of a notice's records or earlier versions as the browser's `queryFn` asks for it: the
+ * cursor after the first page, the API's default page size and order (newest first).
+ */
+export function adminNoticePageQuery(cursor?: string): { cursor?: string } {
+  return cursor === undefined ? {} : { cursor };
 }
 
 /** One page of an admin list as `useInfiniteQuery` holds it. */
@@ -122,19 +168,61 @@ export function pinnedNoticesView<T>(query: {
 }
 
 /**
- * Whether the admin's edit screen was opened at no notice: an unknown id (NOT_FOUND), or a segment
- * that is not a uuid, which the API refuses as a VALIDATION_ERROR — a wrong address all the same.
- * Both say '공지를 찾을 수 없습니다.'; any other failure is the screen's generic one.
+ * Whether an admin notice screen was opened at nothing to show: an unknown id (NOT_FOUND), or a
+ * segment that is not an id, which the API refuses as a VALIDATION_ERROR — a wrong address all the
+ * same. The edit screen then says '공지를 찾을 수 없습니다.'; an earlier version's screen says '이전
+ * 판을 찾을 수 없습니다.' for either segment, the notice's or the version's (an unknown notice has
+ * no versions). Any other failure is the screen's generic one.
  */
 export function adminNoticeMissing(error: unknown): boolean {
   return isApiError(error, 'NOT_FOUND') || isApiError(error, 'VALIDATION_ERROR');
 }
 
 /**
+ * What an admin notice screen draws from its read — the edit screen's notice (`useAdminNotice`),
+ * an earlier version's screen's version (`useAdminNoticeRevision`):
+ * - `pending` while there is nothing to draw yet: a skeleton;
+ * - `missing` when the read found nothing at that address (`adminNoticeMissing`);
+ * - `failed` when it failed otherwise: the screen's generic failure;
+ * - `ready` once something read is there to draw — and still after a later refresh fails: the
+ *   rows read are kept (the edit screen says the refresh failed above them, and an earlier version
+ *   never changes), never swapped for an error.
+ *
+ * `openedAt` is the edit screen's: when it opened (`Date.now()`, the clock `dataUpdatedAt` is on).
+ * The form saves against the version it opens on (`expectedEditedAt`, owner decision 2026-10-21 7:
+ * a save is refused when another admin saved «연 뒤» — after the screen opened), so it opens only
+ * on a read that landed since: a copy the cache held from before — an earlier visit's, or a pin's
+ * answer on the list, read before another admin's save perhaps — is `pending` until the read the
+ * screen asks for on opening lands (`refetchOnMount: 'always'`, `adminNoticeQueryOptions`), and
+ * should that read fail, `failed`, as a first read that failed is (ADR-0077 decision 8-19).
+ */
+export type AdminNoticeReadView = 'pending' | 'missing' | 'failed' | 'ready';
+
+export function adminNoticeReadView(
+  query: {
+    isPending: boolean;
+    isError: boolean;
+    isLoadingError: boolean;
+    error: unknown;
+    fetchStatus: 'fetching' | 'paused' | 'idle';
+    dataUpdatedAt: number;
+  },
+  openedAt?: number,
+): AdminNoticeReadView {
+  if (query.isPending) return 'pending';
+  const failed = adminNoticeMissing(query.error) ? 'missing' : 'failed';
+  if (query.isLoadingError) return failed;
+  if (openedAt !== undefined && query.dataUpdatedAt < openedAt) {
+    // Only the copy from before the screen opened: wait for the read it asked for.
+    return query.isError && query.fetchStatus === 'idle' ? failed : 'pending';
+  }
+  return 'ready';
+}
+
+/**
  * The toast after an admin's save, from what the API says the save did (`changed`): '공지를
- * 고쳤습니다.' for a change, '바뀐 내용이 없습니다.' for the same content. Never from comparing
- * `editedAt` with the one the screen holds — another admin's edit the screen has not read yet moves
- * that too, so a save of what that edit already says would read as a change.
+ * 고쳤습니다.' for a change, '바뀐 내용이 없습니다.' for the same content — the server's own word,
+ * never a guess from a comparison of times.
  */
 export function noticeSaveToast(result: { changed: boolean }): {
   type: 'success' | 'info';
@@ -145,13 +233,46 @@ export function noticeSaveToast(result: { changed: boolean }): {
     : { type: 'info', title: copy.adminNoticeUnchanged };
 }
 
+/** What an operation record says was done (#138: «작성·수정·고정·해제»). */
+export function noticeActionLabel(type: NoticeActionType): string {
+  switch (type) {
+    case 'notice_create':
+      return copy.adminNoticeActionCreate;
+    case 'notice_update':
+      return copy.adminNoticeActionUpdate;
+    case 'notice_pin':
+      return copy.adminNoticeActionPin;
+    case 'notice_unpin':
+      return copy.adminNoticeActionUnpin;
+  }
+}
+
+/**
+ * The operator a record or an earlier version names, by nickname; '기록 없음' where no record
+ * names one (a row written past the API).
+ */
+export function noticeActorName(actor: { nickname: string } | null): string {
+  return actor === null || actor.nickname === '' ? copy.adminNoticeActorUnknown : actor.nickname;
+}
+
 // ---- refusals ------------------------------------------------------------------------------
+
+/**
+ * Whether a save was refused because another admin saved the notice since the edit screen opened
+ * it (NOTICE_EDIT_CONFLICT, owner decision 2026-10-21): the screen then keeps what is typed and
+ * offers the latest version.
+ */
+export function noticeEditConflict(error: unknown): boolean {
+  return isApiError(error, 'NOTICE_EDIT_CONFLICT');
+}
 
 /**
  * What a refused admin write (`POST /admin/notices`, the edit, the pin and the unpin) tells the
  * admin. The server is the judge of every rule:
  * - NOTICE_PIN_LIMIT_REACHED: NOTICE_PIN_LIMIT notices are pinned already — one is unpinned first
  *   (#45-8: nothing unpins automatically);
+ * - NOTICE_EDIT_CONFLICT: another admin saved the notice after this screen opened it — '다른
+ *   운영자가 먼저 고쳤습니다.' (owner decision 2026-10-21);
  * - VALIDATION_ERROR on `title`: blank, more than one line or too long (the form counts the same);
  * - VALIDATION_ERROR on `body`: told apart as a post's body is (`postWriteErrorMessage` — no text,
  *   too long, too many images, an image the admin cannot use);
@@ -162,6 +283,7 @@ export function noticeSaveToast(result: { changed: boolean }): {
  */
 export function noticeWriteErrorMessage(error: unknown): string {
   if (isApiError(error, 'NOTICE_PIN_LIMIT_REACHED')) return copy.errNoticePinLimit;
+  if (noticeEditConflict(error)) return copy.errNoticeEditConflict;
   if (isApiError(error, 'VALIDATION_ERROR')) {
     const field = validationField(error);
     if (field === 'title') return copy.errNoticeTitle;

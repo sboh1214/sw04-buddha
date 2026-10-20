@@ -50,6 +50,9 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<ErrorCode, number>> = {
   // The pinned notices are at their limit (#45-8: at most three, none unpinned automatically): a
   // conflict with that state, which the same request passes once an admin unpins one.
   NOTICE_PIN_LIMIT_REACHED: HttpStatus.CONFLICT,
+  // The notice moved on since the edit screen read it (another admin saved, owner decision
+  // 2026-10-21): a conflict with its version, which a save from the latest one passes.
+  NOTICE_EDIT_CONFLICT: HttpStatus.CONFLICT,
   INTERNAL: HttpStatus.INTERNAL_SERVER_ERROR,
 };
 

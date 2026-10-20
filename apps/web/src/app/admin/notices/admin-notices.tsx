@@ -34,7 +34,9 @@ import { listSection } from '@/lib/query-client';
  * list's fixed area, in its order (the latest pinned first), with how many of NOTICE_PIN_LIMIT
  * are taken — each to unpin; then every other notice, the newest written first, each to pin again
  * (#45-8: an unpinned notice stays here), one page per 더 보기. A title opens the notice's edit
- * screen and 공지 보기 its public page. Any admin does all of it, with no second admin's approval.
+ * screen — with its records and earlier versions — and 공지 보기 a pinned notice's public page: only
+ * a pinned notice is public (owner decision 2026-10-21), so an unpinned row has none. Any admin
+ * does all of it, with no second admin's approval.
  *
  * The limit is the server's, race-safe (a pin while NOTICE_PIN_LIMIT are pinned is refused with
  * NOTICE_PIN_LIMIT_REACHED, and nothing is unpinned to make room): 고정 stays on every unpinned row
@@ -195,7 +197,7 @@ function UnpinnedNotices({ actions }: { actions: RowActions }) {
 
 /**
  * One notice: its title (to its edit screen), when it was written, '수정됨' once edited and since
- * when it is pinned; 공지 보기 (its public page) and 고정 or 고정 해제.
+ * when it is pinned; 공지 보기 (its public page, while it is pinned) and 고정 or 고정 해제.
  */
 function NoticeRow({ notice, actions }: { notice: AdminNoticeSummary; actions: RowActions }) {
   const pinned = notice.pinnedAt !== null;
@@ -223,11 +225,13 @@ function NoticeRow({ notice, actions }: { notice: AdminNoticeSummary; actions: R
         </Text>
       </Stack>
       <HStack gap="2">
-        <Button asChild size="sm" variant="ghost">
-          <NextLink href={noticePath(notice.id) as Route} data-testid="admin-notice-view">
-            {copy.adminNoticeView}
-          </NextLink>
-        </Button>
+        {pinned && (
+          <Button asChild size="sm" variant="ghost">
+            <NextLink href={noticePath(notice.id) as Route} data-testid="admin-notice-view">
+              {copy.adminNoticeView}
+            </NextLink>
+          </Button>
+        )}
         {pinned ? (
           <Button
             size="sm"

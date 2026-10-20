@@ -4,15 +4,21 @@ import { ERROR_CODES } from './api/errors.js';
 import { findExcludedIdentifier } from './guards/excluded.js';
 import { findPrivateField } from './guards/private-data.js';
 import {
+  NOTICE_ACTION_TYPES,
   NOTICE_LIST_STATES,
   NOTICE_PIN_LIMIT,
   NOTICE_TITLE_MAX_LENGTH,
+  adminNoticeActionSchema,
   adminNoticeListQuerySchema,
+  adminNoticeRevisionSchema,
+  adminNoticeRevisionSummarySchema,
   adminNoticeSchema,
   adminNoticeSummarySchema,
   adminNoticeUpdateResultSchema,
   createNoticeBodySchema,
+  noticeEditConflictDetailsSchema,
   noticePinLimitDetailsSchema,
+  noticeRevisionIdParamSchema,
   noticeSchema,
   noticeSummarySchema,
   noticeTitleInputSchema,
@@ -38,11 +44,18 @@ describe('the owner’s notice rules (#45-8, #138)', () => {
   });
 
   it('records each of the four writes as its own admin action type', () => {
-    for (const type of ['notice_create', 'notice_update', 'notice_pin', 'notice_unpin']) {
+    expect(NOTICE_ACTION_TYPES).toEqual([
+      'notice_create',
+      'notice_update',
+      'notice_pin',
+      'notice_unpin',
+    ]);
+    for (const type of NOTICE_ACTION_TYPES) {
       expect(ADMIN_ACTION_TYPES).toContain(type);
       expect(type.length).toBeLessThanOrEqual(40);
     }
     expect(ERROR_CODES).toContain('NOTICE_PIN_LIMIT_REACHED');
+    expect(ERROR_CODES).toContain('NOTICE_EDIT_CONFLICT');
   });
 });
 
@@ -93,8 +106,33 @@ describe('the bodies of the admin writes', () => {
     const empty = updateNoticeBodySchema.safeParse({
       title: '점검',
       body: { type: 'doc', content: [] },
+      expectedEditedAt: null,
     });
     expect(empty.error?.issues.map((issue) => issue.path)).toEqual([['body']]);
+  });
+
+  it('takes an edit with the version it was opened from, null for a notice never edited', () => {
+    // Owner decision 2026-10-21: a save opened before another admin's is refused, so every edit
+    // says which version it read.
+    for (const expectedEditedAt of [null, AT]) {
+      expect(
+        updateNoticeBodySchema.parse({ title: '점검', body: BODY, expectedEditedAt })
+          .expectedEditedAt,
+      ).toBe(expectedEditedAt);
+    }
+    for (const expectedEditedAt of [undefined, '', 'yesterday', 0, '2026-10-20']) {
+      const parsed = updateNoticeBodySchema.safeParse({
+        title: '점검',
+        body: BODY,
+        expectedEditedAt,
+      });
+      expect(
+        parsed.error?.issues.map((issue) => issue.path),
+        String(expectedEditedAt),
+      ).toEqual([['expectedEditedAt']]);
+    }
+    expect(noticeEditConflictDetailsSchema.parse({ editedAt: AT })).toEqual({ editedAt: AT });
+    expect(noticeEditConflictDetailsSchema.parse({ editedAt: null })).toEqual({ editedAt: null });
   });
 
   it('lists the pinned or the unpinned notices, one state at a time', () => {
@@ -144,5 +182,47 @@ describe('the shapes', () => {
     // Both are required: the screen picks its message from `changed`, never from `editedAt`.
     expect(adminNoticeUpdateResultSchema.safeParse({ notice }).success).toBe(false);
     expect(adminNoticeUpdateResultSchema.safeParse(notice).success).toBe(false);
+  });
+});
+
+describe('the admin’s notice screen (owner decision 2026-10-21)', () => {
+  const actor = { id: 'admin-1', nickname: '운영자하나' };
+
+  it('reads a record as who did which of the four, and when; an edit names its version', () => {
+    const record = { id: ID, type: 'notice_update', actor, createdAt: AT, revisionId: 7 };
+    expect(adminNoticeActionSchema.parse(record)).toEqual(record);
+    const pin = { ...record, type: 'notice_pin', revisionId: null };
+    expect(adminNoticeActionSchema.parse(pin)).toEqual(pin);
+    expect(adminNoticeActionSchema.safeParse({ ...record, type: 'admin_grant' }).success).toBe(
+      false,
+    );
+    // No reason: the owner takes none for a notice (#138).
+    expect(Object.keys(adminNoticeActionSchema.shape)).not.toContain('reason');
+  });
+
+  it('reads an earlier version with who wrote and who replaced it, and whole with its body', () => {
+    const version = {
+      id: 3,
+      title: '점검',
+      writtenAt: AT,
+      writtenBy: actor,
+      replacedAt: AT,
+      replacedBy: null,
+    };
+    expect(adminNoticeRevisionSummarySchema.parse(version)).toEqual(version);
+    expect(adminNoticeRevisionSchema.parse({ ...version, body: BODY })).toEqual({
+      ...version,
+      body: BODY,
+    });
+  });
+
+  it('takes a version id in a path as a positive safe integer only', () => {
+    for (const id of ['1', '42', '9'.repeat(15)]) {
+      expect(noticeRevisionIdParamSchema.parse(id)).toBe(id);
+      expect(Number.isSafeInteger(Number(id))).toBe(true);
+    }
+    for (const id of ['', '0', '01', '-1', '1.5', 'x', '9'.repeat(16)]) {
+      expect(noticeRevisionIdParamSchema.safeParse(id).success, id).toBe(false);
+    }
   });
 });

@@ -9,8 +9,14 @@ import { adminAccount, expect, freshEmail, freshTag, meOf, signIn, signUp, test 
  * a link and an image), pins it, and every visitor sees it in the fixed area above the community
  * list — '공지', its title, '운영팀', never the operator — and opens its page, read-only. An edit
  * shows '수정됨'. At most NOTICE_PIN_LIMIT are pinned: the next pin is refused and nothing is
- * unpinned to make room; an unpinned notice leaves the area, stays on the admin screen and at its
- * address, and is pinned again. A member reaches neither the screen nor its API.
+ * unpinned to make room; an unpinned notice leaves the area, stays on the admin screen and is
+ * pinned again. A member reaches neither the screen nor its API.
+ *
+ * The owner's answers of 2026-10-21: only a pinned notice is public — never pinned or unpinned, its
+ * page and its images answer like a missing one's, and pinned again they come back; the admin's
+ * notice screen shows the operation records (who, when, what) and the earlier versions, each
+ * readable whole; and a save opened before another admin's is refused with '다른 운영자가 먼저
+ * 고쳤습니다.', what was typed kept, the latest version a press away.
  *
  * The pinned set is the service's, one for every spec: both projects share one database, and the
  * limit and the area's order are about every notice pinned there. So the pinning runs once, in the
@@ -71,6 +77,37 @@ async function noticeThroughApi(admin: APIRequestContext, title: string): Promis
   expect(res.status(), await res.text()).toBe(201);
   return ((await res.json()) as { data: { id: string } }).data.id;
 }
+
+/** A notice with one image, straight at the admin API, unpinned: its id and the image's. */
+async function noticeWithImageThroughApi(
+  admin: APIRequestContext,
+  title: string,
+): Promise<{ id: string; mediaId: string }> {
+  const { id: accountId } = await meOf(admin);
+  const uploaded = await admin.post(`/api/v1/media/images?expectedAccountId=${accountId}`, {
+    data: PNG,
+    headers: { 'content-type': 'image/png' },
+  });
+  const mediaId = (await dataOf<{ id: string }>(uploaded)).id;
+  const res = await admin.post(NOTICES, {
+    data: {
+      title,
+      body: {
+        type: 'doc',
+        content: [
+          { type: 'paragraph', content: [{ type: 'text', text: `${title} 본문` }] },
+          { type: 'image', attrs: { mediaId } },
+        ],
+      },
+    },
+  });
+  expect(res.status(), await res.text()).toBe(201);
+  return { id: ((await res.json()) as { data: { id: string } }).data.id, mediaId };
+}
+
+/** Whether an `<img>` has loaded its bytes. */
+const loaded = (image: Locator) =>
+  image.evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0);
 
 /** Pastes `html` into the editor as a browser does from another page (posts.spec.ts's helper). */
 async function pasteHtml(editor: Locator, html: string): Promise<void> {
@@ -165,6 +202,8 @@ test.describe('운영 공지 (#138)', () => {
           .getByTestId('post-editor-file')
           .setInputFiles({ name: 'notice.png', mimeType: 'image/png', buffer: PNG });
         await expect(editor.locator('img[data-media-id]')).toHaveCount(1);
+        const mediaId = (await editor.locator('img[data-media-id]').getAttribute('data-media-id'))!;
+        const publicImage = `/api/v1/media/${mediaId}`;
         // The upload done (it holds the send too), only the missing title holds it now.
         await expect(page.getByTestId('post-editor-uploading')).toHaveCount(0);
         // No title, no send: the field is required, labelled as a notice's — exactly, not the
@@ -197,6 +236,11 @@ test.describe('운영 공지 (#138)', () => {
         await expect(adminRow(page, first).getByTestId('admin-notice-pin')).toBeVisible();
         await visitor.goto('/community');
         await expect(visitor.getByTestId('community-notices')).toHaveCount(0);
+        // Not pinned, not public (owner decision 2026-10-21): its page and its image are missing,
+        // and its row offers no public page.
+        expect((await visitor.goto(`/community/notices/${first}`))?.status()).toBe(404);
+        expect((await request.get(publicImage)).status()).toBe(404);
+        await expect(adminRow(page, first).getByTestId('admin-notice-view')).toHaveCount(0);
 
         // --- 고정: it moves to the pinned list, and the fixed area shows it to everyone.
         await adminRow(page, first).getByTestId('admin-notice-pin').click();
@@ -282,12 +326,8 @@ test.describe('운영 공지 (#138)', () => {
         await expect(link).toHaveAttribute('href', 'https://example.com/notice');
         await expect(link).toHaveAttribute('rel', /noopener/);
         const image = body.getByTestId('post-image');
-        await expect(image).toHaveAttribute('src', /^\/api\/v1\/media\/[0-9a-f-]{36}$/);
-        await expect
-          .poll(() =>
-            image.evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0),
-          )
-          .toBe(true);
+        await expect(image).toHaveAttribute('src', publicImage);
+        await expect.poll(() => loaded(image)).toBe(true);
         // No comment, like or report (#45-8), and no operator anywhere on it.
         await expect(visitor.getByTestId('comments-heading')).toHaveCount(0);
         await expect(visitor.getByTestId('post-author-actions')).toHaveCount(0);
@@ -306,6 +346,13 @@ test.describe('운영 공지 (#138)', () => {
           copy.adminNoticeStatePinned,
         );
         await expect(titleInput).toHaveValue(title);
+        // The editor draws the notice's image through the admin route (pinned or not, it is there).
+        const editorImage = page.getByTestId('post-editor-content').locator('img[data-media-id]');
+        await expect(editorImage).toHaveAttribute(
+          'src',
+          `/api/v1/admin/notices/${first}/images/${mediaId}`,
+        );
+        await expect.poll(() => loaded(editorImage)).toBe(true);
         // The same content changes nothing, and says so.
         await expect(page.getByTestId('post-editor-content')).toBeVisible();
         await page.getByTestId('post-submit').click();
@@ -351,7 +398,7 @@ test.describe('운영 공지 (#138)', () => {
           visitor.getByTestId('community-notices').getByTestId('community-notice-title'),
         ).toHaveText([`셋째 공지 ${tag}`, `둘째 공지 ${tag}`, edited]);
 
-        // --- 고정 해제: out of the area, kept on the admin screen and at its address.
+        // --- 고정 해제: out of the area and out of the public, kept on the admin screen.
         await pinnedList(page)
           .getByTestId(`admin-notice-${first}`)
           .getByTestId('admin-notice-unpin')
@@ -365,9 +412,10 @@ test.describe('운영 공지 (#138)', () => {
         await expect(
           visitor.getByTestId('community-notices').getByTestId('community-notice-title'),
         ).toHaveText([`셋째 공지 ${tag}`, `둘째 공지 ${tag}`]);
-        const kept = await visitor.goto(`/community/notices/${first}`);
-        expect(kept?.status()).toBe(200);
-        await expect(visitor.getByTestId('notice-title')).toHaveText(edited);
+        // Its page and image are missing now (owner decision 2026-10-21); its row has no 공지 보기.
+        expect((await visitor.goto(`/community/notices/${first}`))?.status()).toBe(404);
+        expect((await request.get(publicImage)).status()).toBe(404);
+        await expect(adminRow(page, first).getByTestId('admin-notice-view')).toHaveCount(0);
 
         // A slot is free: the fourth pins now, on top; the first is pinned again from its screen.
         await adminRow(page, fourth).getByTestId('admin-notice-pin').click();
@@ -388,6 +436,49 @@ test.describe('운영 공지 (#138)', () => {
         await expect(
           visitor.getByTestId('community-notices').getByTestId('community-notice-title'),
         ).toHaveText([edited, `넷째 공지 ${tag}`, `셋째 공지 ${tag}`]);
+        // Pinned again, public again: its page and its image.
+        expect((await visitor.goto(`/community/notices/${first}`))?.status()).toBe(200);
+        await expect(visitor.getByTestId('notice-title')).toHaveText(edited);
+        await expect.poll(() => loaded(visitor.getByTestId('post-image'))).toBe(true);
+
+        // --- the operation records and the earlier version on its screen (2026-10-21): who did
+        // what and when, newest first — the refused pin and the save of the same content left
+        // none — and the version the edit replaced, readable whole.
+        await page.reload();
+        const records = page.getByTestId('admin-notice-actions');
+        await expect(records.getByTestId('admin-notice-action-type')).toHaveText([
+          copy.adminNoticeActionPin,
+          copy.adminNoticeActionUnpin,
+          copy.adminNoticeActionUpdate,
+          copy.adminNoticeActionPin,
+          copy.adminNoticeActionCreate,
+        ]);
+        await expect(records.getByTestId('admin-notice-action-actor')).toHaveText(
+          Array.from({ length: 5 }, () => nickname),
+        );
+        const versions = page.getByTestId('admin-notice-revisions');
+        await expect(versions.getByTestId('admin-notice-revision-title')).toHaveText([title]);
+        await expect(versions.getByTestId('admin-notice-revision-written')).toContainText(nickname);
+        await expect(versions.getByTestId('admin-notice-revision-replaced')).toContainText(
+          nickname,
+        );
+        // The edit's record and the version both open the version it replaced, read-only.
+        const fromRecord = await records
+          .getByTestId('admin-notice-action-revision')
+          .getAttribute('href');
+        await versions.getByTestId('admin-notice-revision-title').click();
+        await expect(page).toHaveURL(fromRecord!);
+        await expect(page.getByTestId('admin-notice-revision-heading')).toHaveText(title);
+        const old = page.getByTestId('admin-notice-revision').getByTestId('post-body');
+        await expect(old).toContainText(`안내 ${tag}`);
+        await expect(old.getByTestId('post-image')).toHaveAttribute(
+          'src',
+          `/api/v1/admin/notices/${first}/images/${mediaId}`,
+        );
+        await expect.poll(() => loaded(old.getByTestId('post-image'))).toBe(true);
+        await expect(page.getByTestId('post-form')).toHaveCount(0);
+        await page.getByTestId('admin-notice-revision-back').click();
+        await expect(page).toHaveURL(`/admin/notices/${first}`);
       } finally {
         await visitorContext.close();
         await phoneContext.close();
@@ -397,13 +488,13 @@ test.describe('운영 공지 (#138)', () => {
     });
   });
 
-  test('관리자가 아닌 계정은 공지 화면과 API에 닿지 못하고, 고정하지 않은 공지도 주소로 누구나 읽는다', async ({
+  test('관리자가 아닌 계정은 공지 화면과 API에 닿지 못하고, 고정하지 않은 공지는 주소로도 이미지로도 읽히지 않는다', async ({
     admin,
     page,
     request,
   }) => {
     const tag = freshTag();
-    const id = await noticeThroughApi(admin, `주소로 읽는 공지 ${tag}`);
+    const { id, mediaId } = await noticeWithImageThroughApi(admin, `고정하지 않은 공지 ${tag}`);
 
     // Signed out: the admin gate sends the visitor to sign in, and the API asks for a session.
     await page.goto('/admin/notices');
@@ -411,23 +502,29 @@ test.describe('운영 공지 (#138)', () => {
     expect(new URL(page.url()).searchParams.get('next')).toBe('/admin/notices');
     await expectError(await request.post(NOTICES, { data: {} }), 401, 'UNAUTHENTICATED');
 
-    // A notice no one pinned opens at its address for anyone (ADR-0077), and an unknown one is 404.
-    const opened = await page.goto(`/community/notices/${id}`);
-    expect(opened?.status()).toBe(200);
-    await expect(page.getByTestId('notice-title')).toHaveText(`주소로 읽는 공지 ${tag}`);
-    await expect(page.getByTestId('notice-author')).toHaveText(copy.noticeAuthor);
+    // A notice no one pinned is not public (owner decision 2026-10-21): its page, its API and its
+    // image answer as an unknown notice's do. The admin screens still read it, image and all.
+    expect((await page.goto(`/community/notices/${id}`))?.status()).toBe(404);
+    await expectError(await request.get(`/api/v1/notices/${id}`), 404, 'NOT_FOUND');
+    expect((await request.get(`/api/v1/media/${mediaId}`)).status()).toBe(404);
+    expect((await admin.get(`${NOTICES}/${id}/images/${mediaId}`)).status()).toBe(200);
     const missing = await page.goto('/community/notices/00000000-0000-4000-8000-000000000000');
     expect(missing?.status()).toBe(404);
     expect((await page.goto('/community/notices/not-a-notice'))?.status()).toBe(404);
 
-    // A member: the admin layout sends it home, and the API refuses every notice write.
+    // A member: the admin layout sends it home, and the API refuses every notice read and write.
     await signUp(page, freshEmail());
     await page.goto('/admin/notices');
     await expect(page).toHaveURL('/');
     await expect(page.getByTestId('admin-notices')).toHaveCount(0);
     await page.goto('/admin/notices/new');
     await expect(page).toHaveURL('/');
+    await page.goto(`/admin/notices/${id}/revisions/1`);
+    await expect(page).toHaveURL('/');
     await expectError(await page.request.get(`${NOTICES}?state=pinned`), 403, 'FORBIDDEN');
+    for (const path of ['actions', 'revisions', 'revisions/1', `images/${mediaId}`]) {
+      await expectError(await page.request.get(`${NOTICES}/${id}/${path}`), 403, 'FORBIDDEN');
+    }
     await expectError(
       await page.request.post(NOTICES, {
         data: { title: '회원의 공지', body: { type: 'doc', content: [] } },
@@ -437,7 +534,11 @@ test.describe('운영 공지 (#138)', () => {
     );
     await expectError(
       await page.request.put(`${NOTICES}/${id}`, {
-        data: { title: '회원이 고친 공지', body: { type: 'doc', content: [] } },
+        data: {
+          title: '회원이 고친 공지',
+          body: { type: 'doc', content: [] },
+          expectedEditedAt: null,
+        },
       }),
       403,
       'FORBIDDEN',
@@ -448,6 +549,213 @@ test.describe('운영 공지 (#138)', () => {
     const after = await dataOf<{ title: string; pinnedAt: string | null }>(
       await admin.get(`${NOTICES}/${id}`),
     );
-    expect(after).toMatchObject({ title: `주소로 읽는 공지 ${tag}`, pinnedAt: null });
+    expect(after).toMatchObject({ title: `고정하지 않은 공지 ${tag}`, pinnedAt: null });
+  });
+
+  test('다른 운영자가 먼저 고친 공지의 저장은 막히고 쓰던 내용은 남으며, 최신 내용을 불러와 다시 저장한다', async ({
+    admin,
+    secondAdmin,
+    page,
+  }) => {
+    // Owner decision 2026-10-21: «동시 수정 → 연 뒤 다른 운영자가 고쳤으면 저장을 막고 '다른 운영자가
+    // 먼저 고쳤습니다' 알림, 쓰던 내용은 화면에 남김». Never pinned: the pinned set is not touched.
+    const tag = freshTag();
+    const id = await noticeThroughApi(admin, `동시 수정 공지 ${tag}`);
+    const mine = (await meOf(admin)).profile.nickname;
+    const theirs = (await meOf(secondAdmin)).profile.nickname;
+
+    await signIn(page, adminAccount.email, adminAccount.password);
+    await page.goto(`/admin/notices/${id}`);
+    const titleInput = page.getByTestId('post-title-input');
+    await expect(titleInput).toHaveValue(`동시 수정 공지 ${tag}`);
+    await expect(page.getByTestId('admin-notice-revisions-empty')).toHaveText(
+      copy.adminNoticeRevisionsEmpty,
+    );
+    // Not pinned: no public page to open from here.
+    await expect(page.getByTestId('admin-notice-view')).toHaveCount(0);
+    const typed = `내가 고친 제목 ${tag}`;
+    await titleInput.fill(typed);
+
+    // Meanwhile the other admin saves, from the version this screen opened — a body with a
+    // heading, which its earlier version's screen draws under the version's title.
+    const theirTitle = `다른 운영자가 고친 제목 ${tag}`;
+    const theirHeading = `다른 운영자의 소제목 ${tag}`;
+    await dataOf(
+      await secondAdmin.put(`${NOTICES}/${id}`, {
+        data: {
+          title: theirTitle,
+          body: {
+            type: 'doc',
+            content: [
+              {
+                type: 'heading',
+                attrs: { level: 1 },
+                content: [{ type: 'text', text: theirHeading }],
+              },
+              { type: 'paragraph', content: [{ type: 'text', text: '다른 본문' }] },
+            ],
+          },
+          expectedEditedAt: null,
+        },
+      }),
+    );
+
+    // This save is refused in the owner's words; what was typed stays.
+    await page.getByTestId('post-submit').click();
+    const refusal = page.getByTestId('post-form-error');
+    await expect(refusal).toContainText(copy.errNoticeEditConflict);
+    await expect(refusal).toContainText(copy.adminNoticeEditConflictHint);
+    await expect(titleInput).toHaveValue(typed);
+    // The screen read the notice again: the other admin's edit is in its records, and the state
+    // card says '수정됨' — the screen's notice is the other admin's version now.
+    const records = page.getByTestId('admin-notice-actions');
+    await expect(records.getByTestId('admin-notice-action-type')).toHaveText([
+      copy.adminNoticeActionUpdate,
+      copy.adminNoticeActionCreate,
+    ]);
+    await expect(records.getByTestId('admin-notice-action-actor')).toHaveText([theirs, mine]);
+    await expect(page.getByTestId('admin-notice-pin-card')).toContainText(copy.postEdited);
+    // Saved again without 최신 내용 불러오기, it is refused again: the form still saves against the
+    // version it opened, not the one the screen read since — or this would write over the other
+    // admin's edit with a draft never made from it.
+    await page.getByTestId('post-submit').click();
+    await expect(refusal).toContainText(copy.errNoticeEditConflict);
+    await expect(titleInput).toHaveValue(typed);
+    expect((await dataOf<{ title: string }>(await admin.get(`${NOTICES}/${id}`))).title).toBe(
+      theirTitle,
+    );
+    // The API refuses it the same way, with the version the notice is at now.
+    await expectError(
+      await admin.put(`${NOTICES}/${id}`, {
+        data: {
+          title: typed,
+          body: {
+            type: 'doc',
+            content: [{ type: 'paragraph', content: [{ type: 'text', text: 'x' }] }],
+          },
+          expectedEditedAt: null,
+        },
+      }),
+      409,
+      'NOTICE_EDIT_CONFLICT',
+    );
+
+    // 최신 내용 불러오기 that cannot read the notice says so once, in a toast, and leaves the form
+    // as it was — the draft and the refusal. The screen's own refresh warning is the other notice
+    // on screen, and the toast does not repeat it.
+    const noticeRead = (url: URL) => url.pathname === `/api/v1/admin/notices/${id}`;
+    await page.route(noticeRead, (route) =>
+      route.request().method() === 'GET' ? route.fulfill(SERVER_ERROR) : route.fallback(),
+    );
+    await page.getByTestId('admin-notice-reload').click();
+    await expect(page.getByText(copy.errUnknown)).toHaveCount(1);
+    await expect(page.getByText(copy.adminNoticeRefreshFailed)).toHaveCount(1);
+    await expect(titleInput).toHaveValue(typed);
+    await expect(refusal).toContainText(copy.errNoticeEditConflict);
+    await page.unroute(noticeRead);
+
+    // 최신 내용 불러오기: the form opens again on the other admin's version, the focus on its
+    // title (the press's button went with the old form), and saves from it.
+    await page.getByTestId('admin-notice-reload').click();
+    await expect(titleInput).toHaveValue(theirTitle);
+    await expect(titleInput).toBeFocused();
+    await expect(page.getByTestId('post-form-error')).toHaveCount(0);
+    await titleInput.fill(typed);
+    await page.getByTestId('post-submit').click();
+    await expect(page.getByText(copy.adminNoticeSaved)).toBeVisible();
+    // Two earlier versions now, the newest first: the other admin's and the first.
+    const versions = page.getByTestId('admin-notice-revisions');
+    await expect(versions.getByTestId('admin-notice-revision-title')).toHaveText([
+      theirTitle,
+      `동시 수정 공지 ${tag}`,
+    ]);
+    expect((await dataOf<{ title: string }>(await admin.get(`${NOTICES}/${id}`))).title).toBe(
+      typed,
+    );
+
+    // Saved again from the same form, it goes through: the form now holds the version its last
+    // save made, not the one it opened on.
+    const typedAgain = `${typed} 다시`;
+    await titleInput.fill(typedAgain);
+    await page.getByTestId('post-submit').click();
+    await expect
+      .poll(
+        async () => (await dataOf<{ title: string }>(await admin.get(`${NOTICES}/${id}`))).title,
+      )
+      .toBe(typedAgain);
+    await expect(page.getByTestId('post-form-error')).toHaveCount(0);
+    await expect(versions.getByTestId('admin-notice-revision-title')).toHaveText([
+      typed,
+      theirTitle,
+      `동시 수정 공지 ${tag}`,
+    ]);
+    // Each edit's record names its version by the record's time as well, for a list of links.
+    const editRows = records
+      .locator('[data-testid^="admin-notice-action-"]')
+      .filter({ has: page.getByTestId('admin-notice-action-revision') });
+    await expect(editRows).toHaveCount(3);
+    for (const row of await editRows.all()) {
+      const time = await row.getByTestId('admin-notice-action-time').textContent();
+      await expect(row.getByTestId('admin-notice-action-revision')).toHaveAccessibleName(
+        `${time ?? ''} ${copy.adminNoticeActionRevision}`,
+      );
+    }
+
+    // The other admin's version, on its own screen: its heading sits under the version's title
+    // (an h3 under the admin layout's h2), not beside it.
+    await versions.getByTestId('admin-notice-revision-title').nth(1).click();
+    const version = page.getByTestId('admin-notice-revision');
+    await expect(page.getByTestId('admin-notice-revision-heading')).toHaveText(theirTitle);
+    await expect(version.getByRole('heading', { level: 3 })).toHaveText([theirTitle]);
+    await expect(version.getByRole('heading', { level: 4 })).toHaveText([theirHeading]);
+  });
+
+  test('다른 운영자가 저장한 뒤 다시 연 수정 화면은 그 판으로 열리고, 저장은 막히지 않는다', async ({
+    admin,
+    secondAdmin,
+    page,
+  }) => {
+    // The owner's rule blocks a save made after the screen opened (2026-10-21 7, «연 뒤»). The
+    // screen keeps the notice it read when it is left; opened again — through the list, in the
+    // same browser, before that copy is 30 s old — it must not open the form on that copy, older
+    // than the other admin's save, and then refuse the first save. Never pinned.
+    const tag = freshTag();
+    const first = `다시 연 공지 ${tag}`;
+    const id = await noticeThroughApi(admin, first);
+
+    await signIn(page, adminAccount.email, adminAccount.password);
+    await page.goto(`/admin/notices/${id}`);
+    const titleInput = page.getByTestId('post-title-input');
+    await expect(titleInput).toHaveValue(first);
+    await page.getByTestId('admin-notice-back').click();
+    await expect(page).toHaveURL('/admin/notices');
+
+    // The other admin saves while this screen is closed.
+    const theirTitle = `다른 운영자가 고친 제목 ${tag}`;
+    await dataOf(
+      await secondAdmin.put(`${NOTICES}/${id}`, {
+        data: {
+          title: theirTitle,
+          body: {
+            type: 'doc',
+            content: [{ type: 'paragraph', content: [{ type: 'text', text: '다른 본문' }] }],
+          },
+          expectedEditedAt: null,
+        },
+      }),
+    );
+
+    // Opened again from the list (no page load): the form is the other admin's version.
+    await adminRow(page, id).getByTestId('admin-notice-title').click();
+    await expect(page).toHaveURL(`/admin/notices/${id}`);
+    await expect(titleInput).toHaveValue(theirTitle);
+    await expect(page.getByTestId('admin-notice-pin-card')).toContainText(copy.postEdited);
+    // And saves from it, refused by no one.
+    const mine = `다시 연 화면에서 고친 제목 ${tag}`;
+    await titleInput.fill(mine);
+    await page.getByTestId('post-submit').click();
+    await expect(page.getByText(copy.adminNoticeSaved)).toBeVisible();
+    await expect(page.getByTestId('post-form-error')).toHaveCount(0);
+    expect((await dataOf<{ title: string }>(await admin.get(`${NOTICES}/${id}`))).title).toBe(mine);
   });
 });

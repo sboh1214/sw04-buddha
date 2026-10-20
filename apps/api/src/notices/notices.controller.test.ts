@@ -5,11 +5,14 @@
  * body of the posts' editor (its allow-list and limits, links and images); '수정됨' and the
  * operators' history; at most three pinned, never unpinned automatically, an unpinned notice kept
  * and pinnable again; every admin may write, edit, pin and unpin, no approval; each change records
- * its admin and time and no reason; anyone reads, and no answer names an operator. And this PR's
- * choices: an unpinned notice stays readable at its address; the latest pinned first, a pin always
- * after the ones in place; a notice's image belongs to it alone, never to a post; two saves of one
- * notice take turns, the later one winning with the earlier kept in the history. Skips when TEST_*
- * are unset.
+ * its admin and time and no reason; anyone reads, and no answer names an operator. The owner's
+ * answers of 2026-10-21: only a pinned notice is public — another answers like a missing one, its
+ * images too — while the admin screens read it; the latest pinned first; the admin's notice screen
+ * reads its operation records and its earlier versions (and their images); an edit opened from a
+ * version another admin replaced since is refused (NOTICE_EDIT_CONFLICT). And this PR's choices: a
+ * pin always after the ones in place; a notice's image belongs to it alone, never to a post; two
+ * saves of one notice take turns, the second refused when both were opened from one version. Skips
+ * when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
 import {
@@ -22,6 +25,9 @@ import {
 import {
   NOTICE_PIN_LIMIT,
   POST_BODY_MAX_LENGTH,
+  adminNoticeActionSchema,
+  adminNoticeRevisionSchema,
+  adminNoticeRevisionSummarySchema,
   adminNoticeSchema,
   adminNoticeSummarySchema,
   adminNoticeUpdateResultSchema,
@@ -29,13 +35,20 @@ import {
   noticeSummarySchema,
   postImageNotUsableMessage,
   type AdminNotice,
+  type AdminNoticeAction,
+  type AdminNoticeRevisionSummary,
   type AdminNoticeSummary,
   type AdminNoticeUpdateResult,
   type NoticeSummary,
 } from '@buddha/shared';
 import { asc, eq, isNotNull } from 'drizzle-orm';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
+import {
+  IMAGE_READ_BUDGET_BYTES,
+  IMAGE_READ_BUSY_RETRY_SECONDS,
+  imageReads,
+} from '../media/image-reads.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { waitForLockWaiter } from '../test/wait.js';
@@ -46,6 +59,7 @@ const UNKNOWN = '0b6f6a3e-2c1d-4c8e-9f0a-1b2c3d4e5f60';
 
 type ErrorBody = { error: { code: string; details?: unknown } };
 type AdminPage = { data: AdminNoticeSummary[]; meta: { nextCursor: string | null } };
+type Page<T> = { data: T[]; meta: { nextCursor: string | null } };
 
 const doc = (...paragraphs: string[]) => ({
   type: 'doc',
@@ -117,8 +131,28 @@ describe.skipIf(!hasTestInfra)('notices (integration)', () => {
     expect(res.statusCode, res.body).toBe(201);
     return adminNoticeSchema.parse(data(res));
   };
-  const edit = (id: string, payload: unknown, who: TestUser = admin) =>
-    send('PUT', `/admin/notices/${id}`, who, payload);
+  /** The notice's version as an edit screen opening it now reads it: its `editedAt`. */
+  async function versionOf(id: string): Promise<string | null> {
+    const [row] = await t.db
+      .select({ editedAt: schema.notices.editedAt })
+      .from(schema.notices)
+      .where(eq(schema.notices.id, id));
+    return row?.editedAt?.toISOString() ?? null;
+  }
+  /**
+   * An edit, sent with the version it was opened from: `opened` when a test names one (a screen
+   * opened earlier), else the notice's version now — a screen that just opened it.
+   */
+  const edit = async (
+    id: string,
+    payload: Record<string, unknown>,
+    who: TestUser = admin,
+    opened?: string | null,
+  ) =>
+    send('PUT', `/admin/notices/${id}`, who, {
+      ...payload,
+      expectedEditedAt: opened === undefined ? await versionOf(id) : opened,
+    });
   const pin = (id: string, who: TestUser = admin) => send('POST', `/admin/notices/${id}/pin`, who);
   const unpin = (id: string, who: TestUser = admin) =>
     send('POST', `/admin/notices/${id}/unpin`, who);
@@ -207,15 +241,30 @@ describe.skipIf(!hasTestInfra)('notices (integration)', () => {
     expect((await send('GET', '/notices/not-a-uuid', null)).statusCode).toBe(400);
   });
 
-  it('keeps an unpinned notice readable at its address and out of the fixed area', async () => {
+  it('answers a notice that is not pinned like a missing one, and shows it to admins', async () => {
+    // Owner decision 2026-10-21: «고정하지 않았거나 푼 공지 → 공개 안 함(주소로도 없는 공지처럼),
+    // 관리자 화면에서는 보임».
     const never = await created('고정한 적 없는 공지');
     const once = await created('고정했다 푼 공지');
     expect((await pin(once.id)).statusCode).toBe(200);
+    expect((await send('GET', `/notices/${once.id}`, null)).statusCode).toBe(200);
     expect((await unpin(once.id)).statusCode).toBe(200);
     expect(await pinnedIds()).toEqual([]);
+    const missing = await send('GET', `/notices/${UNKNOWN}`, null);
     for (const notice of [never, once]) {
-      expect((await send('GET', `/notices/${notice.id}`, null)).statusCode).toBe(200);
+      for (const who of [null, member, admin]) {
+        const res = await send('GET', `/notices/${notice.id}`, who);
+        // The same answer as an unknown id's: nothing tells a notice kept unpinned from none.
+        expect(res.statusCode).toBe(404);
+        expect(res.json()).toEqual(missing.json());
+      }
+      const kept = await send('GET', `/admin/notices/${notice.id}`, admin);
+      expect(adminNoticeSchema.parse(data(kept))).toMatchObject({ id: notice.id, pinnedAt: null });
     }
+    expect(await adminIds('unpinned')).toEqual([once.id, never.id]);
+    // Pinned again, it is public again.
+    expect((await pin(once.id)).statusCode).toBe(200);
+    expect((await send('GET', `/notices/${once.id}`, null)).statusCode).toBe(200);
   });
 
   // ---- who may write ---------------------------------------------------------------------------
@@ -331,10 +380,9 @@ describe.skipIf(!hasTestInfra)('notices (integration)', () => {
       }),
     ]);
     expect(JSON.stringify(page)).not.toContain('처음');
-    // The same content again changes nothing: no '수정됨' moved, no version, no record.
+    // The same content again, from the version it now is, changes nothing: no '수정됨' moved, no
+    // version, no record — and the answer says so itself (`changed: false`).
     const actionsBefore = await actions();
-    // The answer says so itself: `editedAt` is set (by the first edit) and still nothing changed —
-    // what an admin who never read that edit could not tell from the time.
     const same = await edit(notice.id, { title: ' 고친 제목 ', body: doc('고친 본문') });
     expect(same.statusCode).toBe(200);
     expect(data<AdminNoticeUpdateResult>(same)).toMatchObject({
@@ -573,34 +621,287 @@ describe.skipIf(!hasTestInfra)('notices (integration)', () => {
     }
   }
 
-  it('keeps every version when two admins save one notice at once, the later save winning', async () => {
+  it('refuses the later of two saves opened from one version, keeping the first one’s', async () => {
+    // Owner decision 2026-10-21: «연 뒤 다른 운영자가 고쳤으면 저장을 막고». Both screens opened
+    // the notice never edited (`null`); the row lock lets one save first, and the other then
+    // finds its version gone.
     const notice = await created('처음', doc('처음 본문'));
     const answers = await behindTheNoticeRow(notice.id, [
-      () => edit(notice.id, { title: '가', body: doc('가 본문') }, admin),
-      () => edit(notice.id, { title: '나', body: doc('나 본문') }, otherAdmin),
+      () => edit(notice.id, { title: '가', body: doc('가 본문') }, admin, null),
+      () => edit(notice.id, { title: '나', body: doc('나 본문') }, otherAdmin, null),
     ]);
-    expect(answers.map((res) => res.statusCode)).toEqual([200, 200]);
-    for (const res of answers) expect(data<AdminNoticeUpdateResult>(res).changed).toBe(true);
-    // The second save replaced the first one's version, not the one both started from: the
-    // history holds the original and the version the notice no longer shows, in a chain.
+    expect(answers.map((res) => res.statusCode).sort()).toEqual([200, 409]);
+    const won = answers.find((res) => res.statusCode === 200)!;
+    const lost = answers.find((res) => res.statusCode === 409)!;
+    const saved = adminNoticeUpdateResultSchema.parse(data(won));
+    expect(saved.changed).toBe(true);
+    expect(errorOf(lost)).toEqual({
+      code: 'NOTICE_EDIT_CONFLICT',
+      message: expect.any(String) as unknown,
+      details: { editedAt: saved.notice.editedAt },
+    });
+    // One version kept (the original), one edit recorded: the refused save wrote nothing.
     const [row] = await t.db.select().from(schema.notices);
+    expect(row!.title).toBe(saved.notice.title);
+    const history = await t.db.select().from(schema.noticeRevisions);
+    expect(history.map((revision) => revision.title)).toEqual(['처음']);
+    const updates = (await actions()).filter((action) => action.type === 'notice_update');
+    expect(updates).toHaveLength(1);
+    expect(updates[0]!.payload).toEqual({ revisionId: history[0]!.id });
+  });
+
+  it('refuses an edit opened from a version another admin replaced, changing nothing', async () => {
+    const notice = await created('처음', doc('처음 본문'));
+    const first = adminNoticeUpdateResultSchema.parse(
+      data(await edit(notice.id, { title: '둘째', body: doc('둘째 본문') }, otherAdmin, null)),
+    );
+    const before = await t.db.select().from(schema.notices);
+    const actionsBefore = await actions();
+    // A screen opened before that edit: refused, even to send what the notice now says.
+    for (const payload of [
+      { title: '내 수정', body: doc('내 본문') },
+      { title: '둘째', body: doc('둘째 본문') },
+    ]) {
+      const res = await edit(notice.id, payload, admin, null);
+      expect(res.statusCode, res.body).toBe(409);
+      expect(errorOf(res)).toMatchObject({
+        code: 'NOTICE_EDIT_CONFLICT',
+        details: { editedAt: first.notice.editedAt },
+      });
+    }
+    // A version the notice never had (a time off by a millisecond) is refused the same way.
+    const off = new Date(new Date(first.notice.editedAt!).getTime() - 1).toISOString();
+    expect((await edit(notice.id, { title: 'x', body: doc('x') }, admin, off)).statusCode).toBe(
+      409,
+    );
+    expect(await t.db.select().from(schema.notices)).toEqual(before);
+    expect(await t.db.select().from(schema.noticeRevisions)).toHaveLength(1);
+    expect(await actions()).toEqual(actionsBefore);
+    // Saying no version at all is malformed, not a conflict.
+    const unsaid = await send('PUT', `/admin/notices/${notice.id}`, admin, {
+      title: 'x',
+      body: doc('x'),
+    });
+    expect(unsaid.statusCode).toBe(400);
+    expect((errorOf(unsaid).details as { path: string[] }[])[0]?.path).toEqual([
+      'expectedEditedAt',
+    ]);
+    // Reopened at the latest version, the save goes through, and is stamped after that version.
+    const again = await edit(
+      notice.id,
+      { title: '내 수정', body: doc('내 본문') },
+      admin,
+      first.notice.editedAt,
+    );
+    expect(again.statusCode, again.body).toBe(200);
+    const saved = adminNoticeUpdateResultSchema.parse(data(again));
+    expect(saved.changed).toBe(true);
+    expect(new Date(saved.notice.editedAt!).getTime()).toBeGreaterThan(
+      new Date(first.notice.editedAt!).getTime(),
+    );
+  });
+
+  it('refuses a save its own admin overtook as well: the check reads versions, not who saved', async () => {
+    // ADR-0077 decision 8-19 (a choice, not the owner's — 결과 4 asks): the same admin's other tab,
+    // or a retry of a save that committed but whose answer was lost, sends a version the notice
+    // has left, and is refused as another admin's save would be — the same content included.
+    const notice = await created('처음', doc('처음 본문'));
+    const sent = { title: '내 수정', body: doc('내 본문') };
+    const first = await edit(notice.id, sent, admin, null);
+    expect(first.statusCode, first.body).toBe(200);
+    const saved = adminNoticeUpdateResultSchema.parse(data(first));
+    const actionsBefore = await actions();
+    for (const payload of [sent, { title: '다른 탭의 수정', body: doc('다른 탭') }]) {
+      const res = await edit(notice.id, payload, admin, null);
+      expect(res.statusCode, res.body).toBe(409);
+      expect(errorOf(res)).toMatchObject({
+        code: 'NOTICE_EDIT_CONFLICT',
+        details: { editedAt: saved.notice.editedAt },
+      });
+    }
+    expect(await t.db.select().from(schema.noticeRevisions)).toHaveLength(1);
+    expect(await actions()).toEqual(actionsBefore);
+  });
+
+  it('stamps an edit after the version it replaces even when the clock has not passed it', async () => {
+    // A version whose time the clock has not reached: an edit in the same millisecond, or a clock
+    // that stepped back. The next version must still have a time of its own, or two versions
+    // would share the token an edit screen sends.
+    const ahead = new Date(Date.now() + 60 * 60_000);
+    const notice = await createNotice(t.db, { editedAt: ahead });
+    const res = await edit(
+      notice.id,
+      { title: '고침', body: doc('고친 본문') },
+      admin,
+      ahead.toISOString(),
+    );
+    expect(res.statusCode, res.body).toBe(200);
+    const saved = adminNoticeUpdateResultSchema.parse(data(res));
+    expect(new Date(saved.notice.editedAt!).getTime()).toBe(ahead.getTime() + 1);
+    const [revision] = await t.db.select().from(schema.noticeRevisions);
+    expect(revision).toMatchObject({ writtenAt: ahead, replacedAt: new Date(ahead.getTime() + 1) });
+  });
+
+  // ---- the admin's notice screen: records and earlier versions ----------------------------------
+
+  /** One of a notice's admin lists, page by page (`limit` per page), to the end. */
+  async function pagesOf<T>(url: string, limit: number): Promise<T[]> {
+    const items: T[] = [];
+    let cursor: string | null = null;
+    let pages = 0;
+    do {
+      const query = `limit=${String(limit)}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`;
+      const res = await send('GET', `${url}?${query}`, admin);
+      expect(res.statusCode, res.body).toBe(200);
+      const page = res.json<Page<T>>();
+      items.push(...page.data);
+      cursor = page.meta.nextCursor;
+      pages += 1;
+      if (pages > 20) throw new Error('the cursor never ended');
+    } while (cursor);
+    return items;
+  }
+  const nicknameOf = async (who: TestUser) => {
+    const [row] = await t.db
+      .select({ nickname: schema.profiles.nickname })
+      .from(schema.profiles)
+      .where(eq(schema.profiles.userId, who.id));
+    return row!.nickname;
+  };
+
+  it('shows the admin a notice’s operation records, newest first, with who and when', async () => {
+    // Owner decision 2026-10-21: «관리자 공지 화면 → 운영 기록(운영자·시각·동작)».
+    const notice = await created('기록 공지', doc('처음'));
+    await edit(notice.id, { title: '기록 공지', body: doc('고침') }, otherAdmin);
+    await pin(notice.id, otherAdmin);
+    await unpin(notice.id);
+    const other = await created('다른 공지');
+    await pin(other.id);
+    const [revision] = await t.db.select().from(schema.noticeRevisions);
+    // The API's order: newest first, and by id within a millisecond (uuids compare as their text).
+    const ofNotice = (await actions())
+      .filter((row) => row.targetId === notice.id)
+      .sort(
+        (a, b) =>
+          b.createdAt.getTime() - a.createdAt.getTime() || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0),
+      );
+    for (const limit of [20, 1]) {
+      const items = await pagesOf<AdminNoticeAction>(`/admin/notices/${notice.id}/actions`, limit);
+      for (const item of items) adminNoticeActionSchema.parse(item);
+      // Each of this notice's records, none of the other's: the admin, the time, what was done.
+      expect(items.map(({ id }) => id)).toEqual(ofNotice.map(({ id }) => id));
+      expect(items).toEqual(
+        ofNotice.map((row) => ({
+          id: row.id,
+          type: row.type,
+          actor: { id: row.adminId, nickname: expect.any(String) as unknown },
+          createdAt: row.createdAt.toISOString(),
+          revisionId: row.type === 'notice_update' ? revision!.id : null,
+        })),
+      );
+    }
+    // Who did what, by the nickname the screen shows (the order is checked above).
+    const items = await pagesOf<AdminNoticeAction>(`/admin/notices/${notice.id}/actions`, 20);
+    expect(items.map(({ type, actor }) => `${type} ${actor.nickname}`).sort()).toEqual(
+      [
+        `notice_unpin ${await nicknameOf(admin)}`,
+        `notice_pin ${await nicknameOf(otherAdmin)}`,
+        `notice_update ${await nicknameOf(otherAdmin)}`,
+        `notice_create ${await nicknameOf(admin)}`,
+      ].sort(),
+    );
+    // An unknown notice has none; a member and a visitor are refused (admin-access.test.ts).
+    expect(data(await send('GET', `/admin/notices/${UNKNOWN}/actions`, admin))).toEqual([]);
+    expect((await send('GET', `/admin/notices/${notice.id}/actions`, member)).statusCode).toBe(403);
+    expect((await send('GET', `/admin/notices/not-a-uuid/actions`, admin)).statusCode).toBe(400);
+  });
+
+  it('shows the admin a notice’s earlier versions, who wrote and who replaced each, and one whole', async () => {
+    // Owner decision 2026-10-21: «관리자 공지 화면 → 이전 판을 보임»; the history is kept with no
+    // retention period.
+    const notice = await created('첫 판', doc('첫 본문'));
+    await edit(notice.id, { title: '둘째 판', body: doc('둘째 본문') }, otherAdmin);
+    await edit(notice.id, { title: '셋째 판', body: doc('셋째 본문') }, admin);
+    await edit(notice.id, { title: '지금 판', body: doc('지금 본문') }, otherAdmin);
+    const other = await created('다른 공지');
+    await edit(other.id, { title: '다른 공지 고침', body: doc('x') });
     const history = await t.db
       .select()
       .from(schema.noticeRevisions)
+      .where(eq(schema.noticeRevisions.noticeId, notice.id))
       .orderBy(asc(schema.noticeRevisions.id));
-    expect(history.map((revision) => revision.title)).toEqual([
-      '처음',
-      row!.title === '가' ? '나' : '가',
-    ]);
-    expect(history[1]!.writtenAt).toEqual(history[0]!.replacedAt);
-    expect(row!.editedAt).toEqual(history[1]!.replacedAt);
-    // Each record names the version its own save replaced.
-    const [firstSaver, lastSaver] = row!.title === '나' ? [admin, otherAdmin] : [otherAdmin, admin];
-    const updates = (await actions()).filter((action) => action.type === 'notice_update');
-    expect(Object.fromEntries(updates.map(({ adminId, payload }) => [adminId, payload]))).toEqual({
-      [firstSaver.id]: { revisionId: history[0]!.id },
-      [lastSaver.id]: { revisionId: history[1]!.id },
+    expect(history.map(({ title }) => title)).toEqual(['첫 판', '둘째 판', '셋째 판']);
+    const [mine, theirs] = [
+      { id: admin.id, nickname: await nicknameOf(admin) },
+      { id: otherAdmin.id, nickname: await nicknameOf(otherAdmin) },
+    ];
+    const expected = [
+      { revision: history[2]!, writtenBy: mine, replacedBy: theirs },
+      { revision: history[1]!, writtenBy: theirs, replacedBy: mine },
+      { revision: history[0]!, writtenBy: mine, replacedBy: theirs },
+    ].map(({ revision, writtenBy, replacedBy }) => ({
+      id: revision.id,
+      title: revision.title,
+      writtenAt: revision.writtenAt.toISOString(),
+      writtenBy,
+      replacedAt: revision.replacedAt.toISOString(),
+      replacedBy,
+    }));
+    // Page by page too: the version before a page's oldest is read with the page.
+    for (const limit of [20, 2, 1]) {
+      const items = await pagesOf<AdminNoticeRevisionSummary>(
+        `/admin/notices/${notice.id}/revisions`,
+        limit,
+      );
+      for (const item of items) adminNoticeRevisionSummarySchema.parse(item);
+      expect(items).toEqual(expected);
+    }
+    // One version whole, read-only.
+    const one = await send(
+      'GET',
+      `/admin/notices/${notice.id}/revisions/${String(history[1]!.id)}`,
+      admin,
+    );
+    expect(one.statusCode, one.body).toBe(200);
+    expect(adminNoticeRevisionSchema.parse(data(one))).toEqual({
+      ...expected[1],
+      body: doc('둘째 본문'),
     });
+    const firstVersion = data<{ writtenBy: unknown }>(
+      await send('GET', `/admin/notices/${notice.id}/revisions/${String(history[0]!.id)}`, admin),
+    );
+    expect(firstVersion.writtenBy).toEqual(mine);
+    // Another notice's version, an unknown one, and a malformed id.
+    const [otherVersion] = await t.db
+      .select()
+      .from(schema.noticeRevisions)
+      .where(eq(schema.noticeRevisions.noticeId, other.id));
+    for (const [path, status] of [
+      [`${notice.id}/revisions/${String(otherVersion!.id)}`, 404],
+      [`${notice.id}/revisions/999999`, 404],
+      [`${UNKNOWN}/revisions/${String(history[0]!.id)}`, 404],
+      [`${notice.id}/revisions/0`, 400],
+      [`${notice.id}/revisions/x1`, 400],
+      [`${notice.id}/revisions/${'9'.repeat(16)}`, 400],
+    ] as const) {
+      expect((await send('GET', `/admin/notices/${path}`, admin)).statusCode, path).toBe(status);
+    }
+    expect(data(await send('GET', `/admin/notices/${UNKNOWN}/revisions`, admin))).toEqual([]);
+    // A version no record names (a row written past the API) has no operator to name.
+    const bare = await createNotice(t.db);
+    await t.db.insert(schema.noticeRevisions).values({
+      noticeId: bare.id,
+      title: bare.title,
+      body: bare.body,
+      bodyText: bare.bodyText,
+      imageIds: [],
+      writtenAt: bare.createdAt,
+    });
+    const [unnamed] = await pagesOf<AdminNoticeRevisionSummary>(
+      `/admin/notices/${bare.id}/revisions`,
+      20,
+    );
+    expect(unnamed).toMatchObject({ writtenBy: null, replacedBy: null });
   });
 
   // A pin and an unpin of one notice take the pinned set's lock and then the row, both of them:
@@ -654,6 +955,61 @@ describe.skipIf(!hasTestInfra)('notices (integration)', () => {
     return media;
   }
   const image = (mediaId: string) => send('GET', `/media/${mediaId}`, null);
+  const adminImage = (noticeId: string, mediaId: string, who: TestUser | null = admin) =>
+    send('GET', `/admin/notices/${noticeId}/images/${mediaId}`, who);
+
+  it('serves the admin screens every image a notice holds, privately, and none it does not', async () => {
+    const market = await createMarket(t.db);
+    const kept = await upload();
+    const notice = await created('사진 공지', withImages(kept.id));
+    const res = await adminImage(notice.id, kept.id);
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toBe('image/png');
+    // A copy for this admin's browser alone, asked again on every use.
+    expect(res.headers['cache-control']).toBe('private, no-cache');
+    expect(res.headers.etag).toBe(`"${kept.id}"`);
+    const revalidated = await t.app.inject({
+      method: 'GET',
+      url: `/api/v1/admin/notices/${notice.id}/images/${kept.id}`,
+      headers: { cookie: admin.cookie, 'if-none-match': `"${kept.id}"` },
+    });
+    expect(revalidated.statusCode).toBe(304);
+    // Not another notice's image, a post's, an upload nothing took or an unknown one.
+    const elsewhere = await upload();
+    await createNotice(t.db, { imageIds: [elsewhere.id] });
+    const inPost = await upload();
+    await createPost(t.db, { marketId: market.id, authorId: admin.id, imageIds: [inPost.id] });
+    const loose = await upload();
+    for (const mediaId of [elsewhere.id, inPost.id, loose.id, UNKNOWN]) {
+      expect((await adminImage(notice.id, mediaId)).statusCode, mediaId).toBe(404);
+    }
+    expect((await adminImage(UNKNOWN, kept.id)).statusCode).toBe(404);
+    // Admins only.
+    expect((await adminImage(notice.id, kept.id, member)).statusCode).toBe(403);
+    expect((await adminImage(notice.id, kept.id, null)).statusCode).toBe(401);
+  });
+
+  it('holds an admin’s image read within the public reads’ budget: past it, refused unread; given back once sent', async () => {
+    const kept = await upload();
+    const notice = await created('사진 공지', withImages(kept.id));
+    // Other reads hold the whole budget (the one `GET /media/:mediaId` takes from, image-reads.ts).
+    const others = imageReads.take(IMAGE_READ_BUDGET_BYTES);
+    expect(others).not.toBeNull();
+    try {
+      const busy = await adminImage(notice.id, kept.id);
+      expect(busy.statusCode).toBe(429);
+      expect(busy.headers['retry-after']).toBe(String(IMAGE_READ_BUSY_RETRY_SECONDS));
+      expect(busy.json<{ error: { code: string } }>().error.code).toBe('RATE_LIMITED');
+    } finally {
+      others?.();
+    }
+    expect(imageReads.size).toBe(0);
+    const res = await adminImage(notice.id, kept.id);
+    expect(res.statusCode).toBe(200);
+    await vi.waitFor(() => {
+      expect(imageReads.size).toBe(0);
+    });
+  });
 
   it('takes the admin’s own uploads, serves them while the notice shows them, and keeps them through any admin’s edit', async () => {
     const mine = await upload();
@@ -667,7 +1023,11 @@ describe.skipIf(!hasTestInfra)('notices (integration)', () => {
       .from(schema.mediaObjects)
       .where(eq(schema.mediaObjects.id, mine.id));
     expect(attached?.attachedAt).toBeInstanceOf(Date);
-    // Served unpinned too: the notice is read at its address.
+    // Not served to the public while the notice is not pinned (owner decision 2026-10-21), as its
+    // page is not; the admin screens read it all the same.
+    expect((await image(mine.id)).statusCode).toBe(404);
+    expect((await adminImage(notice.id, mine.id)).statusCode).toBe(200);
+    expect((await pin(notice.id)).statusCode).toBe(200);
     expect((await image(mine.id)).statusCode).toBe(200);
     // Another admin's edit keeps the image the first admin uploaded, and adds its own.
     const theirs = await upload(otherAdmin);
@@ -678,11 +1038,17 @@ describe.skipIf(!hasTestInfra)('notices (integration)', () => {
     );
     expect(kept.statusCode, kept.body).toBe(200);
     expect((await image(theirs.id)).statusCode).toBe(200);
-    // An edit that takes an image out stops serving it; the history keeps it attached.
+    // An edit that takes an image out stops serving it; the history keeps it attached, and the
+    // admin screens still show it with the earlier version.
     const removed = await edit(notice.id, { title: '사진 공지', body: withImages(theirs.id) });
     expect(removed.statusCode, removed.body).toBe(200);
     expect((await image(mine.id)).statusCode).toBe(404);
     expect((await image(theirs.id)).statusCode).toBe(200);
+    expect((await adminImage(notice.id, mine.id)).statusCode).toBe(200);
+    // Unpinned, none of its images is public; the admin screens still show them.
+    expect((await unpin(notice.id)).statusCode).toBe(200);
+    expect((await image(theirs.id)).statusCode).toBe(404);
+    expect((await adminImage(notice.id, theirs.id)).statusCode).toBe(200);
     expect(
       (await t.db.select().from(schema.noticeImages)).map((row) => row.mediaId).sort(),
     ).toEqual([mine.id, theirs.id].sort());

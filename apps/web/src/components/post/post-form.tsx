@@ -18,7 +18,15 @@ import {
   POST_TITLE_MAX_LENGTH,
   type PostDocument,
 } from '@buddha/shared';
-import { type RefObject, useEffect, useId, useReducer, useRef, useState } from 'react';
+import {
+  type ReactNode,
+  type RefObject,
+  useEffect,
+  useId,
+  useReducer,
+  useRef,
+  useState,
+} from 'react';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { useLeaveGuard } from '@/hooks/use-leave-guard';
@@ -90,6 +98,18 @@ export interface PostFormProps {
    * forms (#138), which do not ask yet: that comes with ADR-0077 decision 8-20.
    */
   leaveGuard?: boolean;
+  /**
+   * What the refusal offers beside its message, if anything: a notice's edit refused because
+   * another admin saved first offers its latest version (#138, owner decision 2026-10-21).
+   */
+  errorAction?: ReactNode;
+  /** Where the editor draws an image already in the document (`PostEditor`'s `imageSrc`). */
+  imageSrc?: (mediaId: string) => string;
+  /**
+   * Focus the title when the form mounts: a notice's edit form opened again on the latest version
+   * (최신 내용 불러오기, #138) replaces the form the focus was in, which would leave it on nothing.
+   */
+  autoFocusTitle?: boolean;
 }
 
 /**
@@ -290,6 +310,9 @@ function PostFormFields({
   onHoldingChange,
   notice,
   leaveGuard = true,
+  errorAction,
+  imageSrc,
+  autoFocusTitle = false,
   restored,
   focusTitle,
   titleRef,
@@ -426,6 +449,7 @@ function PostFormFields({
           // select and copy.
           readOnly={gone}
           disabled={pending && !gone}
+          autoFocus={autoFocusTitle}
           onChange={(event) => setTitle(event.target.value.replace(/[\r\n]+/g, ' '))}
           data-testid="post-title-input"
         />
@@ -458,6 +482,7 @@ function PostFormFields({
           describedBy="post-body-length post-body-images post-body-errors"
           refusedImageIds={refusedImageIds}
           placeholder={notice?.bodyPlaceholder}
+          imageSrc={imageSrc}
         />
         <HStack gap="3" justify="flex-end" textStyle="bodyXs" color="fg.muted">
           <Text
@@ -498,6 +523,7 @@ function PostFormFields({
           <Alert.Indicator />
           <Alert.Content>
             <Alert.Description>{errorMessage}</Alert.Description>
+            {errorAction}
           </Alert.Content>
         </Alert.Root>
       )}

@@ -290,10 +290,44 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** One notice, as the editor loads it */
+        /** One notice, pinned or not, as the editor loads it */
         get: operations["adminGetNotice"];
-        /** Replace a notice’s title and body: it shows as edited and the earlier version is kept for operators. The same content changes nothing (`changed: false`). A pinned notice stays pinned. The later of two saves wins; no version is checked */
+        /** Replace a notice’s title and body: it shows as edited and the earlier version is kept for operators. The same content changes nothing (`changed: false`). A pinned notice stays pinned. Refused when another admin saved since the version the edit was opened from (`expectedEditedAt`, NOTICE_EDIT_CONFLICT) */
         put: operations["adminUpdateNotice"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/notices/{noticeId}/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A notice’s operation records, newest first: who wrote, edited, pinned or unpinned it and when (an edit names the version it replaced). An unknown notice has none */
+        get: operations["adminListNoticeActions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/notices/{noticeId}/images/{mediaId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** An image the notice holds, now or in an earlier version, pinned or not (NOT_FOUND for any other). Revalidated on every use (ETag) */
+        get: operations["adminGetNoticeImage"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -318,6 +352,40 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/notices/{noticeId}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A notice’s earlier versions, newest first: each title, when and by whom it was written and replaced. An unknown notice has none */
+        get: operations["adminListNoticeRevisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/notices/{noticeId}/revisions/{revisionId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One earlier version of a notice, whole, to read (NOT_FOUND if not this notice’s) */
+        get: operations["adminGetNoticeRevision"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/notices/{noticeId}/unpin": {
         parameters: {
             query?: never;
@@ -327,7 +395,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Unpin a notice: out of the fixed area, kept on the admin screen and at its address, and may be pinned again. One not pinned changes nothing */
+        /** Unpin a notice: out of the fixed area and out of the public (its page and images answer NOT_FOUND), kept on the admin screen, and may be pinned again. One not pinned changes nothing */
         post: operations["adminUnpinNotice"];
         delete?: never;
         options?: never;
@@ -1059,7 +1127,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** An image a post or a notice shows (NOT_FOUND for any other: not attached, removed by an edit, or of a deleted or hidden post). Revalidated on every use (ETag) */
+        /** An image a post or a pinned notice shows (NOT_FOUND for any other: not attached, removed by an edit, of a deleted or hidden post, or of a notice not pinned). Revalidated on every use (ETag) */
         get: operations["getImage"];
         put?: never;
         post?: never;
@@ -1110,7 +1178,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** A notice page, pinned or not: its title, body and dates */
+        /** A pinned notice’s page: its title, body and dates (NOT_FOUND for a notice not pinned, as for an unknown one) */
         get: operations["getNotice"];
         put?: never;
         post?: never;
@@ -1324,6 +1392,36 @@ export type components = {
             /** Format: date-time */
             pinnedAt: string | null;
             title: string;
+        };
+        AdminNoticeAction: {
+            actor: components["schemas"]["AdminAccountActor"];
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: uuid */
+            id: string;
+            revisionId: number | null;
+            type: components["schemas"]["NoticeActionType"];
+        };
+        AdminNoticeRevision: {
+            body: components["schemas"]["PostDocument"];
+            id: number;
+            /** Format: date-time */
+            replacedAt: string;
+            replacedBy: components["schemas"]["AdminAccountActor"] | null;
+            title: string;
+            /** Format: date-time */
+            writtenAt: string;
+            writtenBy: components["schemas"]["AdminAccountActor"] | null;
+        };
+        AdminNoticeRevisionSummary: {
+            id: number;
+            /** Format: date-time */
+            replacedAt: string;
+            replacedBy: components["schemas"]["AdminAccountActor"] | null;
+            title: string;
+            /** Format: date-time */
+            writtenAt: string;
+            writtenBy: components["schemas"]["AdminAccountActor"] | null;
         };
         AdminNoticeSummary: {
             /** Format: date-time */
@@ -1613,7 +1711,7 @@ export type components = {
             expectedAccountId: string;
         };
         /** @enum {string} */
-        ErrorCode: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "VALIDATION_ERROR" | "MARKET_NOT_OPEN" | "INSUFFICIENT_BALANCE" | "PRICE_MOVED" | "DUPLICATE_REQUEST" | "RATE_LIMITED" | "RULES_REQUIRED" | "VERIFICATION_REQUIRED" | "REFUND_NOT_ALLOWED" | "PAYMENT_GATEWAY_REFUSED" | "PAYMENT_GATEWAY_ERROR" | "ROLE_CHANGE_NOT_ALLOWED" | "APPROVAL_NOT_ALLOWED" | "PHONE_VERIFICATION_NOT_ALLOWED" | "PHONE_VERIFICATION_LIMITED" | "VERIFICATION_CODE_REJECTED" | "SMS_SEND_FAILED" | "SMS_SEND_UNCONFIRMED" | "ONBOARDING_REQUIRED" | "NICKNAME_NOT_ALLOWED" | "POST_NOT_EDITABLE" | "IMAGE_NOT_ALLOWED" | "COMMENT_NOT_ALLOWED" | "COMMENT_NOT_EDITABLE" | "LIKE_NOT_ALLOWED" | "NOTICE_PIN_LIMIT_REACHED" | "INTERNAL";
+        ErrorCode: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "VALIDATION_ERROR" | "MARKET_NOT_OPEN" | "INSUFFICIENT_BALANCE" | "PRICE_MOVED" | "DUPLICATE_REQUEST" | "RATE_LIMITED" | "RULES_REQUIRED" | "VERIFICATION_REQUIRED" | "REFUND_NOT_ALLOWED" | "PAYMENT_GATEWAY_REFUSED" | "PAYMENT_GATEWAY_ERROR" | "ROLE_CHANGE_NOT_ALLOWED" | "APPROVAL_NOT_ALLOWED" | "PHONE_VERIFICATION_NOT_ALLOWED" | "PHONE_VERIFICATION_LIMITED" | "VERIFICATION_CODE_REJECTED" | "SMS_SEND_FAILED" | "SMS_SEND_UNCONFIRMED" | "ONBOARDING_REQUIRED" | "NICKNAME_NOT_ALLOWED" | "POST_NOT_EDITABLE" | "IMAGE_NOT_ALLOWED" | "COMMENT_NOT_ALLOWED" | "COMMENT_NOT_EDITABLE" | "LIKE_NOT_ALLOWED" | "NOTICE_PIN_LIMIT_REACHED" | "NOTICE_EDIT_CONFLICT" | "INTERNAL";
         ErrorEnvelope: {
             error: {
                 code: components["schemas"]["ErrorCode"];
@@ -1787,6 +1885,8 @@ export type components = {
             id: string;
             title: string;
         };
+        /** @enum {string} */
+        NoticeActionType: "notice_create" | "notice_update" | "notice_pin" | "notice_unpin";
         NoticeSummary: {
             /** Format: date-time */
             createdAt: string;
@@ -2284,6 +2384,8 @@ export type components = {
         UpdateNoticeBody: {
             /** @description A PostDocument (the editor’s JSON). Formatting outside the allow-list is removed; at most 5000 characters of text and 10 images, each an upload of the author's own. */
             body: unknown;
+            /** Format: date-time */
+            expectedEditedAt: string | null;
             /** @description Required, one line, at most 100 characters */
             title: string;
         };
@@ -4262,6 +4364,79 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description ONBOARDING_REQUIRED | NOTICE_EDIT_CONFLICT */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminListNoticeActions: {
+        parameters: {
+            query?: {
+                /** @description Opaque; `meta.nextCursor` of the previous page. */
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                noticeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminNoticeAction"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description ONBOARDING_REQUIRED */
             409: {
                 headers: {
@@ -4269,6 +4444,108 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminGetNoticeImage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mediaId: string;
+                noticeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The image */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/gif": string;
+                    "image/jpeg": string;
+                    "image/png": string;
+                    "image/webp": string;
+                };
+            };
+            /** @description Not modified (If-None-Match) */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/gif": components["schemas"]["ErrorEnvelope"];
+                    "image/jpeg": components["schemas"]["ErrorEnvelope"];
+                    "image/png": components["schemas"]["ErrorEnvelope"];
+                    "image/webp": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/gif": components["schemas"]["ErrorEnvelope"];
+                    "image/jpeg": components["schemas"]["ErrorEnvelope"];
+                    "image/png": components["schemas"]["ErrorEnvelope"];
+                    "image/webp": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/gif": components["schemas"]["ErrorEnvelope"];
+                    "image/jpeg": components["schemas"]["ErrorEnvelope"];
+                    "image/png": components["schemas"]["ErrorEnvelope"];
+                    "image/webp": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/gif": components["schemas"]["ErrorEnvelope"];
+                    "image/jpeg": components["schemas"]["ErrorEnvelope"];
+                    "image/png": components["schemas"]["ErrorEnvelope"];
+                    "image/webp": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/gif": components["schemas"]["ErrorEnvelope"];
+                    "image/jpeg": components["schemas"]["ErrorEnvelope"];
+                    "image/png": components["schemas"]["ErrorEnvelope"];
+                    "image/webp": components["schemas"]["ErrorEnvelope"];
                 };
             };
             /** @description RATE_LIMITED */
@@ -4340,6 +4617,157 @@ export interface operations {
                 };
             };
             /** @description ONBOARDING_REQUIRED | NOTICE_PIN_LIMIT_REACHED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminListNoticeRevisions: {
+        parameters: {
+            query?: {
+                /** @description Opaque; `meta.nextCursor` of the previous page. */
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                noticeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminNoticeRevisionSummary"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminGetNoticeRevision: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                noticeId: string;
+                revisionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminNoticeRevision"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
             409: {
                 headers: {
                     [name: string]: unknown;

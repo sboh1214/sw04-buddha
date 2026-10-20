@@ -110,9 +110,11 @@ export type MyPostLikes = components['schemas']['MyPostLikes'];
 export type UploadedImage = components['schemas']['UploadedImage'];
 /**
  * 운영 공지 (#138): a pinned notice as the community list's fixed area shows it (`GET /notices`),
- * a notice page (`GET /notices/:noticeId`) — neither names a person — and the admin screen's row
- * and notice (whether and since when it is pinned), with the bodies of a new notice and an edit,
- * and an edit's answer: the notice and whether that save changed it.
+ * a pinned notice's page (`GET /notices/:noticeId`) — neither names a person — and the admin
+ * screen's row and notice (whether and since when it is pinned), with the bodies of a new notice
+ * and an edit (which names the version it was opened from), and an edit's answer: the notice and
+ * whether that save changed it. The admin's notice screen also reads the notice's operation
+ * records and its earlier versions, which name the operator (owner decision 2026-10-21).
  */
 export type NoticeSummary = components['schemas']['NoticeSummary'];
 export type Notice = components['schemas']['Notice'];
@@ -121,6 +123,9 @@ export type AdminNotice = components['schemas']['AdminNotice'];
 export type CreateNoticeBody = components['schemas']['CreateNoticeBody'];
 export type UpdateNoticeBody = components['schemas']['UpdateNoticeBody'];
 export type AdminNoticeUpdateResult = components['schemas']['AdminNoticeUpdateResult'];
+export type AdminNoticeAction = components['schemas']['AdminNoticeAction'];
+export type AdminNoticeRevisionSummary = components['schemas']['AdminNoticeRevisionSummary'];
+export type AdminNoticeRevision = components['schemas']['AdminNoticeRevision'];
 export type AdminPayment = components['schemas']['AdminPayment'];
 /** `POST /admin/payments/{id}/refund`: why the admin refunds (required, audited). */
 export type RefundPaymentBody = components['schemas']['RefundPaymentBody'];

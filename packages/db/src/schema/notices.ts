@@ -19,19 +19,21 @@ import { mediaObjects } from './media-objects.js';
 /**
  * 운영 공지 (#138; ADR-0069 decision 2 #45-8, decision 4 #138): one row per notice an operator
  * wrote. No author column: a notice is shown as 운영팀's, and who wrote, edited, pinned or unpinned
- * it is the audit log's (`admin_actions` `notice_*`, the admin and the time, #138).
+ * it is the audit log's (`admin_actions` `notice_*`, the admin and the time, #138), which the
+ * admin's notice screen lists. Only a pinned notice is public (owner decision 2026-10-21).
  *
  * - `title`: required, at most 100 characters (`NOTICE_TITLE_MAX_LENGTH`, the post title's).
  * - `body`, `body_text`, `image_ids`: as a post's (posts.ts) — the normalised document of the
  *   posts' editor, its text without formatting and its images in order, derived when written.
- *   `GET /media/:mediaId` serves an image while it is in a notice's `image_ids`.
+ *   `GET /media/:mediaId` serves an image while it is in a pinned notice's `image_ids`.
  * - `edited_at`: the last edit that changed something ('수정됨'), or NULL; the versions it
- *   replaced are `notice_revisions`.
+ *   replaced are `notice_revisions`. It is also the version an edit names (`expectedEditedAt`):
+ *   each edit is stamped strictly after the one before, so no two versions share it.
  * - `pinned_at` / `pin_slot`: pinned above the community list since then, in one of the
- *   NOTICE_PIN_LIMIT slots — or both NULL. The slot is how the database holds the limit (#45-8:
- *   «최대 3개») whoever writes: a slot is 1..NOTICE_PIN_LIMIT and unique, so a pin past the limit
- *   is a constraint violation even for a writer that skipped the API's lock. It means nothing else:
- *   the fixed area orders by `pinned_at`, the latest first.
+ *   NOTICE_PIN_LIMIT slots — or both NULL; only a pinned notice is public. The slot is how the
+ *   database holds the limit (#45-8: «최대 3개») whoever writes: a slot is 1..NOTICE_PIN_LIMIT and
+ *   unique, so a pin past the limit is a constraint violation even for a writer that skipped the
+ *   API's lock. It means nothing else: the fixed area orders by `pinned_at`, the latest first.
  *
  * Notices are never deleted (#45-8: an unpinned notice stays on the admin screen and can be pinned
  * again) and hold no comment, like or report (#45-8).
@@ -73,10 +75,12 @@ export const notices = pgTable(
 
 /**
  * 수정 이력 (#138: «수정 전 내용은 근거 글과 같이 운영자 전용 이력으로 남긴다»): every version an edit
- * replaced, title and body as they were, for operators only (no route reads it yet — as the posts'
- * history). Never rewritten: buddha_app loses UPDATE (migration 0036), as on `post_revisions`, and
- * keeps DELETE as there — whether a notice's history follows the posts' retention period
- * (ADR-0069 decision 7, #184) is the owner's to say (ADR-0077). Nothing deletes a version yet.
+ * replaced, title and body as they were, for operators only — the admin's notice screen lists them
+ * and shows each whole (`GET /admin/notices/:noticeId/revisions`, owner decision 2026-10-21). Never
+ * rewritten: buddha_app loses UPDATE (migration 0036), as on `post_revisions`. Kept with no
+ * retention period (owner decision 2026-10-21: «지우지 않음, 보존기간 대상 아님»), so nothing
+ * deletes a version; buddha_app keeps DELETE so that a later decision to delete needs no privilege
+ * migration («DB는 나중에 지울 수 있게»).
  *
  * - `written_at`: when that version began — the notice's creation or the edit before.
  * - `replaced_at`: when an edit replaced it.

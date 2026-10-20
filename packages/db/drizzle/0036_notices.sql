@@ -50,7 +50,7 @@ CREATE INDEX "notice_revisions_notice_id_id_idx" ON "notice_revisions" USING btr
 CREATE INDEX "notices_unpinned_created_at_id_idx" ON "notices" USING btree ("created_at" desc,"id" desc) WHERE "notices"."pinned_at" IS NULL;--> statement-breakpoint
 -- Hand-edited: an edit's history is the record (#138: earlier versions kept for operators, «근거
 -- 글과 같이»). buddha_app keeps SELECT/INSERT/DELETE of the default privileges in
--- docker/postgres/init/01-roles.sql and loses UPDATE, as on post_revisions (0033); DELETE stays for
--- #184, should the owner put a notice's history under the posts' retention period (ADR-0077, an
--- open question). Nothing deletes a version yet.
+-- docker/postgres/init/01-roles.sql and loses UPDATE, as on post_revisions (0033). The owner keeps a
+-- notice's history with no retention period (2026-10-21, ADR-0077), so nothing deletes a version;
+-- DELETE stays so that a later decision to delete needs no privilege migration.
 REVOKE UPDATE ON TABLE "notice_revisions" FROM buddha_app;

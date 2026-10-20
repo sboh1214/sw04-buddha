@@ -98,7 +98,7 @@ export interface OrphanMediaOutcome {
  *
  * An upload a post or a notice took (`attached_at`) is never this job's: a post's history keeps
  * its images, and their removal after the retention period is #184's; a notice's history keeps
- * its images as well — whether they follow the posts' retention is the owner's to say (ADR-0077).
+ * its images as well, with no retention period (owner decision 2026-10-21, ADR-0077).
  * NoticesService locks the uploads it takes the same way.
  */
 export async function removeOrphanMedia(

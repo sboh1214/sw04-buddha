@@ -1,4 +1,4 @@
-import { Readable, finished } from 'node:stream';
+import { type Readable } from 'node:stream';
 import { Body, Controller, Get, Param, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
 import {
   ApiBody,
@@ -31,12 +31,9 @@ import { ApiData, ApiErrors } from '../common/openapi/api-response.decorators.js
 import { OnboardedGuard } from '../onboarding/onboarded.guard.js';
 import { SESSION_SECURITY_SCHEME } from '../openapi/document.js';
 import { IMAGE_UPLOAD_CONTENT_TYPES, runUploadWork } from './image-body.js';
-import { IMAGE_READ_BUSY_RETRY_SECONDS, imageReads, imageReadsBusy } from './image-reads.js';
+import { IMAGE_BINARY, answerImage } from './image-response.js';
 import { IMAGE_BUSY_RETRY_SECONDS, WEBP_ALPHA_MAX_OUTPUT_PIXELS } from './image.js';
 import { MediaService } from './media.service.js';
-import { memoryAdmission, memoryWaits } from './memory-admission.js';
-
-const BINARY = { schema: { type: 'string', format: 'binary' } } as const;
 
 /**
  * `/api/v1/media` (#46, ADR-0073): a post's images in and out. The upload is owner-only and open to
@@ -73,7 +70,7 @@ export class MediaController {
       `removed if nothing takes it within ${String(ORPHAN_MEDIA_HOURS)} hours`,
   })
   @ApiConsumes(...IMAGE_UPLOAD_CONTENT_TYPES)
-  @ApiBody(BINARY)
+  @ApiBody(IMAGE_BINARY)
   @ApiData(uploadedImageSchema, 201)
   // FORBIDDEN: a mutation whose Origin is not ours (SessionGuard's CSRF check, or the body
   // parser's hook before the body is read — image-body.ts), or a query whose `expectedAccountId`
@@ -129,26 +126,27 @@ export class MediaController {
   }
 
   /**
-   * The image itself, while a post or a notice (#138) shows it (MediaService.findShown): otherwise
-   * NOT_FOUND — an upload nothing took, an image an edit removed, and every image of a deleted or
-   * hidden post (#45-5).
+   * The image itself, while a post or a pinned notice (#138) shows it (MediaService.findShown):
+   * otherwise NOT_FOUND — an upload nothing took, an image an edit removed, every image of a
+   * deleted or hidden post (#45-5) and of a notice that is not pinned (owner decision 2026-10-21).
    *
-   * `Cache-Control: no-cache` with a strong ETag (the id: an image's bytes never change): a browser
-   * keeps the image but asks every time, so hiding or deleting a post stops its images at once,
-   * and an image still shown costs a 304.
+   * `Cache-Control: public, no-cache` with a strong ETag (`answerImage`): a browser keeps the image
+   * but asks every time, so hiding or deleting a post, or unpinning a notice, stops its images at
+   * once, and an image still shown costs a 304.
    *
    * An answer with the image holds its bytes from the storage read until the answer has been handed
    * to the socket, or the client has gone — and in either case until the storage read has settled:
-   * a share of the process's budget (`imageReads`), taken before the store is read. A client that
-   * goes gives the read up (an aborted signal), and the share comes back once that read has stopped.
-   * Past the budget the read is RATE_LIMITED with `Retry-After`, as a full conversion queue is for an
-   * upload — so clients that read slowly, or not at all, or hang up mid-read, fill the budget and not
-   * the API's memory (ADR-0073 decision 9-36). Within the budget, the image's bytes are then asked
-   * of the API's memory (`memoryAdmission`, owner decision 2026-10-22 answer 3): the read waits up
-   * to `memoryWaits.readMs` for the process's RSS and the shares out — a running conversion's
-   * aside, which keeps room for the reads instead (9-46) — to leave room for the image under the
-   * ceiling, and is RATE_LIMITED with `Retry-After` when they did not; that share comes back once
-   * the store's read has settled. A 304 holds nothing.
+   * a share of the process's budget (`imageReads`), taken before the store is read (`answerImage`,
+   * which the admin's notice image route shares). A client that goes gives the read up (an aborted
+   * signal), and the share comes back once that read has stopped. Past the budget the read is
+   * RATE_LIMITED with `Retry-After`, as a full conversion queue is for an upload — so clients that
+   * read slowly, or not at all, or hang up mid-read, fill the budget and not the API's memory
+   * (ADR-0073 decision 9-36). Within the budget, the image's bytes are then asked of the API's
+   * memory (`memoryAdmission`, owner decision 2026-10-22 answer 3): the read waits up to
+   * `memoryWaits.readMs` for the process's RSS and the shares out — a running conversion's aside,
+   * which keeps room for the reads instead (9-46) — to leave room for the image under the ceiling,
+   * and is RATE_LIMITED with `Retry-After` when they did not; that share comes back once the store's
+   * read has settled. A 304 holds nothing.
    *
    * A HEAD (Fastify answers it with this handler, the GET's) is answered from the row alone: the
    * headers a GET would carry, its length the stored object's (`media_objects.byte_size`, written
@@ -161,14 +159,15 @@ export class MediaController {
   @ApiOperation({
     operationId: 'getImage',
     summary:
-      'An image a post or a notice shows (NOT_FOUND for any other: not attached, removed by an ' +
-      'edit, or of a deleted or hidden post). Revalidated on every use (ETag)',
+      'An image a post or a pinned notice shows (NOT_FOUND for any other: not attached, removed ' +
+      'by an edit, of a deleted or hidden post, or of a notice not pinned). Revalidated on every ' +
+      'use (ETag)',
   })
   @ApiProduces(...IMAGE_CONTENT_TYPES)
   @ApiResponse({
     status: 200,
     description: 'The image',
-    content: Object.fromEntries(IMAGE_CONTENT_TYPES.map((type) => [type, BINARY])),
+    content: Object.fromEntries(IMAGE_CONTENT_TYPES.map((type) => [type, IMAGE_BINARY])),
   })
   @ApiResponse({ status: 304, description: 'Not modified (If-None-Match)' })
   // RATE_LIMITED (every route documents it) is also the answer while the images being sent hold
@@ -180,80 +179,6 @@ export class MediaController {
     @Res({ passthrough: true }) reply: FastifyReply,
   ): Promise<Buffer | Readable | undefined> {
     const image = await this.media.findShown(mediaId);
-    if (!image) throw imageNotFound();
-    const etag = `"${mediaId}"`;
-    if (request.headers['if-none-match'] === etag) {
-      void reply.status(304).header('cache-control', 'public, no-cache').header('etag', etag);
-      return undefined;
-    }
-    const answerHeaders = () =>
-      reply
-        .header('content-type', image.contentType)
-        .header('cache-control', 'public, no-cache')
-        .header('etag', etag)
-        .header('content-disposition', 'inline');
-    if (request.method === 'HEAD') {
-      void answerHeaders().header('content-length', String(image.byteSize));
-      // An empty stream, not undefined: Fastify's hook for the HEAD of a GET route sets the length
-      // of an undefined body to 0, and leaves a stream's to the headers.
-      return Readable.from([]);
-    }
-    const giveShare = imageReads.take(image.byteSize);
-    if (giveShare === null) {
-      void reply.header('retry-after', String(IMAGE_READ_BUSY_RETRY_SECONDS));
-      throw imageReadsBusy();
-    }
-    // The client going gives the store's read up (`gone`) — at once if it went already — but the
-    // budget's share is given back only when the answer is out or the client has gone AND the read
-    // has settled: a read given up still holds what it has gathered until it stops, so a client
-    // that hangs up mid-read cannot hand its share on while its image is still being read into
-    // memory.
-    const gone = new AbortController();
-    const answered = new Promise<void>((resolve) => {
-      finished(reply.raw, () => {
-        gone.abort();
-        resolve();
-      });
-    });
-    const giveMemory = await memoryAdmission.admit(image.byteSize, {
-      kind: 'read',
-      waitMs: memoryWaits.readMs,
-      signal: gone.signal,
-    });
-    if (giveMemory === null) {
-      giveShare();
-      // Gone while it waited: there is no one to answer.
-      if (gone.signal.aborted) return undefined;
-      void reply.header('retry-after', String(IMAGE_READ_BUSY_RETRY_SECONDS));
-      throw imageReadsBusy();
-    }
-    if (gone.signal.aborted) {
-      giveShare();
-      giveMemory();
-      return undefined;
-    }
-    const reading = this.media.bytesOf(image, gone.signal);
-    // The memory's share only while the store is read: once that read has settled its bytes are in
-    // the RSS the admission reads (or gone), and counting them as a share as well would count them
-    // twice for as long as a slow client takes. The budget's share still bounds them until the
-    // answer is out (ADR-0073 9-46).
-    void Promise.allSettled([reading]).then(giveMemory);
-    void Promise.allSettled([answered, reading]).then(giveShare);
-    let body: Uint8Array | null;
-    try {
-      body = await reading;
-    } catch (error) {
-      // Given up because the client went: there is no one to answer.
-      if (gone.signal.aborted) return undefined;
-      throw error;
-    }
-    if (body === null) throw imageNotFound();
-    void answerHeaders();
-    // The store's bytes themselves, not a copy of them.
-    return Buffer.from(body.buffer, body.byteOffset, body.byteLength);
+    return answerImage(this.media, image, mediaId, 'public', request, reply);
   }
-}
-
-function imageNotFound(): AppError {
-  return new AppError('NOT_FOUND', { message: 'Image not found' });
 }

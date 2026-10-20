@@ -6,7 +6,10 @@ import { fetchNoticeServer } from '@/lib/api.server';
 import { noticeDescription } from '@/lib/notices';
 import { NoticeView } from './notice-view';
 
-/** Rendered per request: any admin may edit, pin or unpin a notice at any moment. */
+/**
+ * Rendered per request: any admin may edit, pin or unpin a notice at any moment, and an unpinned
+ * one is the 404 from then on.
+ */
 export const dynamic = 'force-dynamic';
 
 /** Search engines cut a description around here (the post page's length). */
@@ -14,8 +17,8 @@ const META_DESCRIPTION_MAX = 160;
 
 /**
  * Kept out of search engines, as the community's other screens are (the #46 follow-up's answer of
- * 2026-10-19, which reaches this branch with the restack — ADR-0075 result 5): this PR's choice,
- * an open question to the owner (ADR-0077). A link shared keeps its title and description.
+ * 2026-10-19, which reaches this branch with the restack — ADR-0075 result 5); the owner kept it
+ * (2026-10-21, ADR-0077). A link shared keeps its title and description.
  */
 const ROBOTS = { index: false } as const;
 
@@ -42,9 +45,9 @@ export async function generateMetadata({
  * (ADR-0069 decision 2 #45-8) — and the same for every visitor, so it is drawn on the server
  * alone: nothing on it depends on who reads it or changes while it is open.
  *
- * A notice that is not pinned answers too, at its address (this PR's choice, ADR-0077: the owner
- * kept unpinned notices on the admin screen and did not say whether their addresses close). An
- * address that is no notice — or not a uuid — is the 404.
+ * Only a pinned notice is public (owner decision 2026-10-21, ADR-0077): one never pinned or
+ * unpinned is the 404, as an address that is no notice — or not a uuid — is. The admin screens
+ * still show it.
  */
 export default async function NoticePage({ params }: { params: Promise<{ noticeId: string }> }) {
   const { noticeId } = await params;

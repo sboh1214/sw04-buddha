@@ -228,8 +228,9 @@ export async function fetchPinnedNoticesServer(): Promise<NoticeSummary[]> {
 /**
  * `GET /notices/:noticeId` for the notice page (#138), memoised for the request like the post, so
  * `generateMetadata` and the page cost one round trip. `null` for NOT_FOUND and for the
- * VALIDATION_ERROR a segment that is not a uuid earns; both are a 404 to a visitor. Any other
- * failure throws. A notice that is not pinned answers too (ADR-0077: readable at its address).
+ * VALIDATION_ERROR a segment that is not a uuid earns; both are a 404 to a visitor, as a notice
+ * that is not pinned is (the API answers it NOT_FOUND, owner decision 2026-10-21). Any other
+ * failure throws.
  */
 export const fetchNoticeServer = cache(async (noticeId: string): Promise<Notice | null> => {
   try {
