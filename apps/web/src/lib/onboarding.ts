@@ -78,9 +78,10 @@ export const ONBOARDING_EXEMPT_PATHS: readonly string[] = [
  * there with a session alone — the server asks nothing more of that action — and the screen has to
  * reach it too (오너 결정 2026-10-20, ADR-0073). Unlike ONBOARDING_EXEMPT_PATHS an entry is exactly
  * one page, never the pages under it: the post page is exempt, its edit screen is not. What the
- * page offers that the onboarding still keeps from the account — writing, editing, and later the
- * comment boxes (#48) — sends it to its step instead of opening the form (`onboardingEntryPath`,
- * hooks/use-onboarding-entry.ts), so the exemption opens the page and never a write.
+ * page offers that the onboarding still keeps from the account — writing, editing, the comment
+ * boxes (#48) and 좋아요 (#49, owner decision 2026-10-20, ADR-0076) — sends it to its step instead
+ * of opening the form or sending the press (`onboardingEntryPath`, hooks/use-onboarding-entry.ts),
+ * so the exemption opens the page and never a write.
  *
  * Only for an account that finished its onboarding once and has a re-consent alone left
  * (`hasOnlyReconsentLeft`, 오너 결정 2026-10-20 3차 답 1): what it did before the revision — its
@@ -101,7 +102,8 @@ export interface OnboardingExemptPage {
 /**
  * The pages exempt for a login-only action. Later issues add theirs here: #77 the proposal list
  * (`/my/proposals`, withdrawing a proposal); #48's comment deletion lives on the post page, whose
- * comment writes — 답글, 수정, 올리기 — go to the step (components/post/comments-section.tsx).
+ * comment writes — 답글, 수정, 올리기 — go to the step (components/post/comments-section.tsx), and so
+ * do its 좋아요 (#49, components/post/like-button.tsx).
  * ADR-0061's watchlist is not one: its server asks for a session alone, and its screens keep the
  * onboarding prompt (#89 — the owner wrote the screen in).
  */
@@ -109,7 +111,7 @@ export const ONBOARDING_EXEMPT_PAGES: readonly OnboardingExemptPage[] = [
   {
     route: '/community/posts/[postId]',
     reason:
-      'an author facing a re-consent deletes their own post and their own comments with a session alone (owner decisions 2026-10-19 answer 2 and 2026-10-20, #46, #48); its edit entry and its comment writes go to the step',
+      'an author facing a re-consent deletes their own post and their own comments with a session alone (owner decisions 2026-10-19 answer 2 and 2026-10-20, #46, #48); its edit entry, its comment writes and its likes (#49) go to the step',
   },
 ];
 

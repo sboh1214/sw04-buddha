@@ -4,9 +4,10 @@
  * caller liked on a post page. Pinned: only an account that finished the onboarding likes, its own
  * too; liking and taking back are idempotent, and racing likes count once; one like per person —
  * per account and per verified number, so an account on a number a withdrawn account liked with
- * sees that like and cannot add one, and an operator's change of a member's number carries its own
- * likes to the new number (one per number where both liked, the new number's other likes left
- * alone) and leaves the old one free to like what it liked; a deleted or hidden target takes none
+ * sees that like and cannot add one, and an operator's change of a member's number carries its
+ * likes to the new number — its own and those it inherited on the old number (one per number
+ * where both liked, the new number's other likes left alone) — and leaves the old one free to like
+ * what they liked; a deleted or hidden target takes none
  * and shows no count, a gone one is NOT_FOUND, and a post of an ended market takes them; the
  * counts are the same answer for everyone and nobody's like rides on a public answer; a like never
  * touches Coin, a balance, the ledger, an order or a position, and never reorders the list. Skips
@@ -299,13 +300,14 @@ describe.skipIf(!hasTestInfra)('/api/v1 likes (integration)', () => {
 
   /**
    * An operator's change of `who`'s number (#57-3) with the procedure docs/OPERATIONS.md gives —
-   * its SQL, as buddha_app, committed — and the API's own hash of the new number.
+   * the old number read, its SQL, as buddha_app, committed — and the API's own hash of the new and
+   * the old number (the CLI's, owner decision 2026-10-21).
    */
   const changeNumber = (who: TestUser, phone: string) =>
     changePhoneAsOperator(t.db, {
       userId: who.id,
       phone,
-      phoneHash: t.app.get(PhoneHasher).hash(phone),
+      hash: (digits) => t.app.get(PhoneHasher).hash(digits),
     });
   /** A change of `who`'s number outside that procedure: the number alone, by hand. */
   const changeNumberOnly = (who: TestUser, phone: string) =>
@@ -420,6 +422,90 @@ describe.skipIf(!hasTestInfra)('/api/v1 likes (integration)', () => {
     expect(stateOf(await likeComment(reply.id, true))).toEqual({ liked: true, likeCount: 2 });
     expect(stateOf(await likeComment(reply.id, false))).toEqual({ liked: false, likeCount: 1 });
     expect(await mine(author)).toEqual({ postLiked: false, likedCommentIds: [reply.id] });
+  });
+
+  it('carries the likes an account inherited on its old number to the new one, and frees the old number (owner decision 2026-10-21)', async () => {
+    // W liked the post and the 댓글 on a number, withdrew, and the returner signed up on it: those
+    // likes are the returner's (answer 3). V, withdrawn, held the number the returner is moved to
+    // and liked the post, the 댓글 and the 대댓글.
+    const oldPhone = '01022223333';
+    const newPhone = '01022224444';
+    const hasher = t.app.get(PhoneHasher);
+    const withdrawnOn = async (phone: string, posts: string[], comments: string[]) => {
+      const gone = await createUser(t.db);
+      await completeOnboarding(t.db, { userId: gone.user.id, phone });
+      const phoneHash = hasher.hash(phone);
+      for (const postId of posts) {
+        await t.db.insert(schema.postLikes).values({ postId, userId: gone.user.id, phoneHash });
+      }
+      for (const commentId of comments) {
+        await t.db
+          .insert(schema.commentLikes)
+          .values({ commentId, userId: gone.user.id, phoneHash });
+      }
+      await t.db
+        .delete(schema.phoneVerifications)
+        .where(eq(schema.phoneVerifications.userId, gone.user.id));
+      return gone.user.id;
+    };
+    const w = await withdrawnOn(oldPhone, [post.id], [comment.id]);
+    const v = await withdrawnOn(newPhone, [post.id], [comment.id, reply.id]);
+    const returner = await signUpTestUser(t);
+    await completeOnboarding(t.db, { userId: returner.id, phone: oldPhone });
+    expect(await mine(returner)).toEqual({ postLiked: true, likedCommentIds: [comment.id] });
+    expect(await counts()).toMatchObject({
+      card: 2,
+      page: 2,
+      comments: { [comment.id]: 2, [reply.id]: 1 },
+    });
+
+    await changeNumber(returner, newPhone);
+    // W's likes went with the returner: still W's rows, under the new number. On the post and the
+    // 댓글, the new number had liked already (V): one like stays on each, the one that came with
+    // the returner (ADR-0076 7-23).
+    const newHash = hasher.hash(newPhone);
+    expect((await hashes()).sort()).toEqual(
+      [
+        [w, newHash],
+        [w, newHash],
+        [v, newHash],
+      ].sort(),
+    );
+    expect(await rows()).toEqual({ posts: [w], comments: [w, v].sort() });
+    expect(await counts()).toMatchObject({
+      card: 1,
+      page: 1,
+      comments: { [comment.id]: 1, [reply.id]: 1 },
+    });
+    // The returner sees them as its own still, with V's like of the 대댓글 (the new number's), and
+    // liking again adds nothing.
+    expect(await mine(returner)).toEqual({
+      postLiked: true,
+      likedCommentIds: [comment.id, reply.id].sort(),
+    });
+    expect(stateOf(await likePost(true, returner))).toEqual({ liked: true, likeCount: 1 });
+    expect(stateOf(await likeComment(comment.id, true, returner))).toEqual({
+      liked: true,
+      likeCount: 1,
+    });
+
+    // The old number's next holder: nothing is its, and it likes the post and the 댓글 freely.
+    const next = await signUpTestUser(t);
+    await completeOnboarding(t.db, { userId: next.id, phone: oldPhone });
+    expect(await mine(next)).toEqual({ postLiked: false, likedCommentIds: [] });
+    expect(stateOf(await likePost(true, next))).toEqual({ liked: true, likeCount: 2 });
+    expect(stateOf(await likeComment(comment.id, true, next))).toEqual({
+      liked: true,
+      likeCount: 2,
+    });
+    expect(await mine(next)).toEqual({ postLiked: true, likedCommentIds: [comment.id] });
+    // Each takes back its own: the returner W's, the newcomer its own.
+    expect(stateOf(await likePost(false, returner))).toEqual({ liked: false, likeCount: 1 });
+    expect(stateOf(await likeComment(comment.id, false, next))).toEqual({
+      liked: false,
+      likeCount: 1,
+    });
+    expect(await rows()).toEqual({ posts: [next.id], comments: [w, v].sort() });
   });
 
   it('never lets the next holder of a number changed outside the procedure read or take back the live account’s likes', async () => {

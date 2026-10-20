@@ -301,6 +301,35 @@ describe('a press', () => {
     expect(postCountOf(queryClient)).toBe(4);
   });
 
+  it('refused for the onboarding, rejects only once `/me` has been read again', async () => {
+    // The button sends a refused press on by `['me']` as that read left it (`likeRefusalMove`,
+    // ADR-0076 7-25): the read is over before the press's promise rejects.
+    const queryClient = seeded();
+    let reads = 0;
+    // Each read takes a moment, as a request does: longer than the rest of the refusal's work.
+    const me = new QueryObserver<Me>(queryClient, {
+      queryKey: ME_QUERY_KEY,
+      queryFn: async () => {
+        const id = `read-${String(++reads)}`;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return { id } as Me;
+      },
+      retry: false,
+    });
+    const unsubscribe = me.subscribe(() => undefined);
+    try {
+      await vi.waitFor(() => expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)?.id).toBe('read-1'));
+      const press = toggle(queryClient, () => Promise.reject(refusal(409, 'ONBOARDING_REQUIRED')));
+      const seen = await press.mutate(onPost(true)).then(
+        () => 'sent',
+        () => queryClient.getQueryData<Me>(ME_QUERY_KEY)?.id,
+      );
+      expect(seen).toBe('read-2');
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it('answered after the tab changed accounts writes the count but not the other account’s likes', async () => {
     const queryClient = seeded();
     const sent = deferred<LikeState>();

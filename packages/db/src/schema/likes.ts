@@ -30,7 +30,8 @@ import { posts } from './posts.js';
  *   CHECK keeps it the 64 lower-case hex the hash is.
  * - (`user_id`, target) is UNIQUE as well: one like per account whatever hash its rows carry. The
  *   operator's change of a member's number (#57-3, docs/OPERATIONS.md) moves the account's rows to
- *   the new number's hash (owner decision 2026-10-20, ADR-0076), so they carry the account's
+ *   the new number's hash — and the rows of a withdrawn account on the old number, which it saw as
+ *   its own (owner decisions 2026-10-20 and 2026-10-21, ADR-0076) — so they carry the account's
  *   current number; this holds should a number ever change outside that procedure.
  * The constraints, not a read before the write, are what hold this when two requests like at once.
  *
@@ -40,7 +41,7 @@ import { posts } from './posts.js';
  * another target or account — only inserted or deleted. The operator's number change carries an
  * account's likes to the new number that way: it deletes the rows and inserts them again under the
  * new hash, with their account, target and time (OPERATOR_PHONE_CHANGE_SQL), and where the new
- * number liked the same target already, the other row goes (one per number).
+ * number liked the same target already, the other row goes (one per number, the one moved stays).
  */
 export const postLikes = pgTable(
   'post_likes',

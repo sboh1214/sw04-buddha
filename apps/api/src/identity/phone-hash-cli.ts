@@ -4,8 +4,10 @@
 //
 //   sudo docker compose -f /data/buddha/compose.yaml exec api node apps/api/dist/identity/phone-hash-cli.js --psql
 //
-// and locally `corepack pnpm --filter api run phone-hash [--psql | --code]` after a build (the
-// .env's key, or the development key outside production). Numbers come on stdin, one per line —
+// and locally `corepack pnpm --filter api run phone-hash [--psql | --psql-old | --code]` after a
+// build (the .env's key, or the development key outside production). `--psql-old` is the same for
+// the account's old number, which the change needs too (the likes it inherited, owner decision
+// 2026-10-21, ADR-0076). Numbers come on stdin, one per line —
 // typed, so they stay out of the shell history and the process list — and only the hashes go to
 // stdout (phone-hash-operator.ts). The key itself is never printed. The environment is checked as
 // the API checks it (`loadEnv`): production refuses to run without a valid PHONE_HASH_KEY.
@@ -61,6 +63,6 @@ for await (const line of createInterface({ input: process.stdin, terminal: false
   }
   for (const out of result.lines) console.log(out);
   printed += 1;
-  if (format === 'psql') break;
+  if (format !== 'hash') break;
 }
 process.exit(failed || printed === 0 ? 1 : 0);

@@ -5,7 +5,7 @@
  * the likes go with it (`changePhoneAsOperator`).
  */
 import type { Db } from '../client.js';
-import { OPERATOR_PHONE_CHANGE_SQL } from '../phone-change.js';
+import { OPERATOR_CURRENT_NUMBER_SQL, OPERATOR_PHONE_CHANGE_SQL } from '../phone-change.js';
 
 /**
  * A psql script's statements as psql sends them: split at each `;` outside a dollar-quoted body
@@ -43,27 +43,43 @@ export interface OperatorPhoneChangeInput {
   userId: string;
   /** The new number, digits only. */
   phone: string;
-  /** The keyed hash of `phone` (the API's `PhoneHasher`, or any 64 hex where no key is at hand). */
-  phoneHash: string;
+  /**
+   * The keyed hash of a number, as the hash CLI prints it (the API's `PhoneHasher`): of the new
+   * number, and of the old one the account holds (owner decision 2026-10-21, ADR-0076).
+   */
+  hash: (phone: string) => string;
 }
 
 /**
- * Step 5 of the operator's change of a member's number (OPERATOR_PHONE_CHANGE_SQL), on one
- * connection of `db` (buddha_app, the doc's role): BEGIN, every statement, COMMIT. For tests whose
- * subject is what the change carries along, not its result table — any statement that fails, or an
- * `UPDATE 0` (no 본인확인 record for the id), rolls the whole of it back and throws. The result
- * table's rows are phone-change.test.ts's.
+ * Steps 3 and 5 of the operator's change of a member's number (OPERATOR_CURRENT_NUMBER_SQL, then
+ * OPERATOR_PHONE_CHANGE_SQL), on one connection of `db` (buddha_app, the doc's role): the number
+ * the account holds now read and hashed for `old_phone` and `old_hash`, the new one hashed for
+ * `new_phone` and `new_hash`, then BEGIN, every statement, COMMIT. For tests whose subject is what
+ * the change carries along, not its result table — no 본인확인 record to read, any statement that
+ * fails, or an `UPDATE 0`, rolls the whole of it back and throws. The result table's rows are
+ * phone-change.test.ts's.
  */
 export async function changePhoneAsOperator(db: Db, input: OperatorPhoneChangeInput) {
-  const vars = { user_id: input.userId, new_phone: input.phone, new_hash: input.phoneHash };
   const client = await db.$client.connect();
   try {
+    const current = await client.query<{ phone: string }>(
+      writePsqlVariables(OPERATOR_CURRENT_NUMBER_SQL, { user_id: input.userId }),
+    );
+    const oldPhone = current.rows[0]?.phone;
+    if (oldPhone === undefined) throw new Error('no 본인확인 to change');
+    const vars = {
+      user_id: input.userId,
+      new_phone: input.phone,
+      new_hash: input.hash(input.phone),
+      old_phone: oldPhone,
+      old_hash: input.hash(oldPhone),
+    };
     await client.query('BEGIN');
     try {
       const [update, ...rest] = splitPsqlStatements(OPERATOR_PHONE_CHANGE_SQL);
       const updated = await client.query(writePsqlVariables(update!, vars));
       if (updated.rowCount !== 1)
-        throw new Error(`UPDATE ${String(updated.rowCount)}: no 본인확인`);
+        throw new Error(`UPDATE ${String(updated.rowCount)}: no 본인확인 on the old number`);
       for (const statement of rest) await client.query(writePsqlVariables(statement, vars));
     } catch (error) {
       await client.query('ROLLBACK');

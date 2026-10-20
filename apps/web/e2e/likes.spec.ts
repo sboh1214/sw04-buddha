@@ -1,4 +1,5 @@
 import { type APIRequestContext, type Locator, type Page } from '@playwright/test';
+import type { Me } from '@buddha/shared';
 import { copy } from '../src/copy';
 import {
   closeMarket,
@@ -19,12 +20,16 @@ import {
  * market still takes likes; a deleted post's placeholder has no count and no button, while the
  * comments under it keep theirs. A visitor reads the counts and a press goes straight to the login
  * page, coming back to the post (owner decision 2026-10-20), the button keeping the keyboard focus
- * as the session answers. For both, the page hydrates without a mismatch. When the member's own
- * likes cannot be read, the counts stay, the buttons cannot be pressed, and one line on the page
- * says why (owner decision 2026-10-20). The once-per-person rule, the refusals, the
- * onboarding and the concurrency are the API's tests (likes.controller.test.ts), and so is that a
- * like moves no Coin and writes no ledger entry (a balance read here could move under a start Coin
- * the worker pays meanwhile); this walks the screens.
+ * as the session answers. For both, the page hydrates without a mismatch. A member facing a
+ * re-consent, whom the post page keeps, sees its toggles, and a press of the post's or a comment's
+ * goes to the remaining step, coming back to the post, and sends nothing (owner decision
+ * 2026-10-20, answer 1); a press made before `GET /me` said so is refused by the server and goes
+ * there then, with no toast — the toast only when `GET /me` cannot be read again (2026-10-21).
+ * When the member's own likes cannot be read, the counts stay, the buttons cannot be pressed, and
+ * one line on the page says why (owner decision 2026-10-20). The once-per-person rule, the
+ * refusals, the onboarding and the concurrency are the API's tests (likes.controller.test.ts), and
+ * so is that a like moves no Coin and writes no ledger entry (a balance read here could move under
+ * a start Coin the worker pays meanwhile); this walks the screens.
  */
 
 /** A post straight at the API with the context's cookie: this spec's subject is its likes. */
@@ -86,6 +91,62 @@ function hydrationErrors(page: Page): string[] {
     if (message.type() === 'error' && /hydrat/i.test(message.text())) seen.push(message.text());
   });
   return seen;
+}
+
+/**
+ * `GET /me` in this page answering as the server would after a revision of the terms that changed
+ * members' rights, while `on`; agreeing on the step turns it off (posts.spec.ts and comments.spec.ts
+ * draw it the same way — no spec can bring about a re-consent for real).
+ */
+async function asReconsent(page: Page): Promise<{ on: boolean }> {
+  const state = { on: false };
+  await page.route('**/api/v1/me', async (route) => {
+    if (route.request().method() !== 'GET' || !state.on) return route.fallback();
+    const response = await route.fetch();
+    if (!response.ok()) return route.fulfill({ response });
+    const body = (await response.json()) as { data: Me };
+    const { onboarding } = body.data;
+    body.data.onboarding = {
+      ...onboarding,
+      consent: false,
+      completed: false,
+      nextStep: 'consent',
+      consents: onboarding.consents.map((answer) =>
+        answer.item === 'terms' ? { ...answer, version: 'draft-1999-01-01' } : answer,
+      ),
+    };
+    await route.fulfill({ response, json: body });
+  });
+  await page.route('**/api/v1/me/consents', async (route) => {
+    const response = await route.fetch();
+    state.on = false;
+    await route.fulfill({ response });
+  });
+  return state;
+}
+
+/**
+ * A like refused as the server refuses an account with a step left (`OnboardedGuard`): no spec can
+ * bring about a re-consent for real, so the refusal is drawn (comments.spec.ts does the same).
+ */
+const ONBOARDING_REFUSAL = {
+  status: 409,
+  json: {
+    error: {
+      code: 'ONBOARDING_REQUIRED',
+      message: 'The onboarding is not done',
+      details: { steps: ['consent'] },
+    },
+  },
+};
+
+/** The consent step of a re-consent, agreed on screen. */
+async function agreeAgain(page: Page): Promise<void> {
+  await expect(page.getByTestId('onboarding-return-reason')).toHaveText(
+    copy.onboardingReconsentReason,
+  );
+  await page.getByTestId('consent-all').click();
+  await page.getByTestId('consent-submit').click();
 }
 
 /** The comment `id`'s like toggle, as the thread draws it. */
@@ -248,6 +309,138 @@ test.describe('좋아요', () => {
     await expect(page.getByTestId(`post-card-${postId}`).getByTestId('post-card-likes')).toHaveText(
       likes(1),
     );
+  });
+
+  test('재동의가 남은 회원이 글 화면에서 글이나 댓글의 좋아요를 누르면 보내지 않고 남은 단계로 가고, 마치면 이 글로 돌아온다', async ({
+    admin,
+    page,
+  }) => {
+    const market = await createOpenMarket(admin);
+    const tag = freshTag();
+    await signUp(page, freshEmail());
+    const postId = await postThroughApi(admin, market.id, `재동의 중에 보는 글 ${tag}`, tag);
+    const comment = await commentThroughApi(admin, postId, null, `운영자의 댓글 ${tag}`);
+    await likeThroughApi(admin, 'posts', postId);
+    const postPage = `/community/posts/${postId}`;
+    const viaStep = `/onboarding?next=${encodeURIComponent(postPage)}`;
+    let presses = 0;
+    page.on('request', (request) => {
+      if (request.method() === 'PUT' && request.url().includes('/like')) presses += 1;
+    });
+    const reconsent = await asReconsent(page);
+    const postLike = page.getByTestId('post-like');
+    /** The browser's read of `GET /me`, which says the step is left — a press waits for it. */
+    const meRead = () =>
+      page.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === '/api/v1/me' &&
+          response.request().method() === 'GET',
+      );
+
+    // --- the post page stays open for the re-consent (ADR-0073), and its likes are read with the
+    // session alone: the toggles as for any member.
+    reconsent.on = true;
+    let read = meRead();
+    await page.goto(postPage);
+    await read;
+    await expect(page).toHaveURL(postPage);
+    await expectToggle(postLike, 1, false);
+    await expectToggle(commentLike(page, comment), 0, false);
+
+    // --- the post's 좋아요: the step, nothing sent; once agreed, back on the post, nothing counted.
+    await postLike.click();
+    await expect(page).toHaveURL(viaStep);
+    expect(presses).toBe(0);
+    await agreeAgain(page);
+    await expect(page).toHaveURL(postPage);
+    await expectToggle(postLike, 1, false);
+
+    // --- a comment's 좋아요 goes the same way.
+    reconsent.on = true;
+    read = meRead();
+    await page.reload();
+    await read;
+    await expectToggle(commentLike(page, comment), 0, false);
+    await commentLike(page, comment).click();
+    await expect(page).toHaveURL(viaStep);
+    await agreeAgain(page);
+    await expect(page).toHaveURL(postPage);
+    await expectToggle(commentLike(page, comment), 0, false);
+    expect(presses).toBe(0);
+
+    // --- with nothing left, a press likes as it always does.
+    await commentLike(page, comment).click();
+    await expectToggle(commentLike(page, comment), 1, true);
+    expect(presses).toBe(1);
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+  });
+
+  test('재동의가 남은 회원이 GET /me의 답보다 먼저 누르면 서버가 거절하고 알림 없이 남은 단계로 가며, 내 정보를 다시 읽지 못할 때만 알린다', async ({
+    admin,
+    page,
+  }) => {
+    // On a hard load the gate's `GET /me` and the member's likes are read side by side, and the
+    // toggle can stand before `GET /me` says a step is left: that press is sent. The server refuses
+    // it, `['me']` is read again, and the press goes where it would have gone — the step, with no
+    // toast (owner decisions 2026-10-20 answer 1 and 2026-10-21, ADR-0076 7-25).
+    const market = await createOpenMarket(admin);
+    const tag = freshTag();
+    await signUp(page, freshEmail());
+    const postId = await postThroughApi(admin, market.id, `재동의 전에 누르는 글 ${tag}`, tag);
+    const postPage = `/community/posts/${postId}`;
+    const viaStep = `/onboarding?next=${encodeURIComponent(postPage)}`;
+    const postLike = page.getByTestId('post-like');
+    const refused = page.getByText(copy.errPostOnboarding);
+    let presses = 0;
+    /** Called as the press is refused: lets a held `GET /me` go on. */
+    let refusing: () => void = () => undefined;
+    await page.route(`**/api/v1/posts/${postId}/like`, async (route) => {
+      presses += 1;
+      refusing();
+      await route.fulfill(ONBOARDING_REFUSAL);
+    });
+
+    // --- `GET /me` failing, before the press and after it: the press is sent, and with no step to
+    // go to the toast says why; the page stays.
+    await page.route('**/api/v1/me', (route) =>
+      route.request().method() === 'GET'
+        ? route.fulfill({
+            status: 503,
+            json: { error: { code: 'INTERNAL', message: 'unavailable' } },
+          })
+        : route.fallback(),
+    );
+    await page.goto(postPage);
+    await expectToggle(postLike, 0, false);
+    await postLike.click();
+    await expect(refused).toBeVisible();
+    await expect(page).toHaveURL(postPage);
+    await expectToggle(postLike, 0, false);
+    expect(presses).toBe(1);
+    await page.unroute('**/api/v1/me');
+
+    // --- `GET /me` held until the press is refused, then answering a re-consent: the press goes to
+    // the step with no toast, and agreeing comes back to the post, nothing counted.
+    const reconsent = await asReconsent(page);
+    reconsent.on = true;
+    const held = new Promise<void>((resolve) => {
+      refusing = () => resolve();
+    });
+    await page.route('**/api/v1/me', async (route) => {
+      if (route.request().method() === 'GET') await held;
+      await route.fallback();
+    });
+    await page.goto(postPage);
+    await expectToggle(postLike, 0, false);
+    await postLike.click();
+    await expect(page).toHaveURL(viaStep);
+    expect(presses).toBe(2);
+    await expect(refused).toHaveCount(0);
+    await agreeAgain(page);
+    await expect(page).toHaveURL(postPage);
+    await expectToggle(postLike, 0, false);
+    await expect(refused).toHaveCount(0);
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
   });
 
   test('내가 누른 좋아요를 불러오지 못하면 수는 보이고 단추는 눌리지 않으며, 까닭이 화면에 한 번 글로 보인다', async ({

@@ -19,6 +19,7 @@ import {
   likeCountText,
   likeFailureMessage,
   likePressAction,
+  likeRefusalMove,
   likedIn,
   likesUnreadableId,
   movedLikeCount,
@@ -30,6 +31,7 @@ import {
   withPostLikeCount,
 } from './likes';
 import { isPrivateQueryKey } from './market-keys';
+import { type Onboarding } from './onboarding';
 import { POSTS_KEY, postKey } from './posts';
 
 /**
@@ -256,22 +258,47 @@ describe('likeButtonView (#49, ADR-0076)', () => {
     };
     for (const [press, action] of Object.entries(sent)) {
       expect(
-        likePressAction({ kind: 'toggle', pressed: press === 'unlike', press: press as LikePress }),
+        likePressAction(
+          { kind: 'toggle', pressed: press === 'unlike', press: press as LikePress },
+          false,
+        ),
         press,
       ).toEqual(action);
     }
   });
 
+  it('takes a member’s press to its onboarding step left instead, sending nothing (owner decision 2026-10-20, answer 1)', () => {
+    // An account facing a re-consent alone stays on the post page and sees its toggle: a like and
+    // an unlike alike go to the step; one on the wire still waits.
+    const step: Record<LikePress, LikePressAction | null> = {
+      like: { kind: 'step' },
+      unlike: { kind: 'step' },
+      wait: null,
+    };
+    for (const [press, action] of Object.entries(step)) {
+      expect(
+        likePressAction(
+          { kind: 'toggle', pressed: press === 'unlike', press: press as LikePress },
+          true,
+        ),
+        press,
+      ).toEqual(action);
+    }
+    // Nothing else changes for it: unknown or unreadable likes send nothing still.
+    expect(likePressAction({ kind: 'pending' }, true)).toBeNull();
+    expect(likePressAction({ kind: 'unavailable' }, true)).toBeNull();
+  });
+
   it('takes a visitor’s press straight to the login page (owner decision 2026-10-20, answer 8)', () => {
     // As the watch button's: no prompt in place, nothing remembered for after the login.
-    expect(likePressAction(likeButtonView({ ...settled, signedIn: false }))).toEqual({
+    expect(likePressAction(likeButtonView({ ...settled, signedIn: false }), false)).toEqual({
       kind: 'login',
     });
   });
 
   it('sends nothing while the reader’s likes are unknown or unreadable', () => {
-    expect(likePressAction({ kind: 'pending' })).toBeNull();
-    expect(likePressAction({ kind: 'unavailable' })).toBeNull();
+    expect(likePressAction({ kind: 'pending' }, false)).toBeNull();
+    expect(likePressAction({ kind: 'unavailable' }, false)).toBeNull();
   });
 });
 
@@ -303,6 +330,90 @@ describe('myLikesUnreadable (owner decision 2026-10-20, answer 10)', () => {
   it('names one line per post page', () => {
     expect(likesUnreadableId('ABC-1')).toBe(likesUnreadableId('abc-1'));
     expect(likesUnreadableId('abc-1')).not.toBe(likesUnreadableId('abc-2'));
+  });
+});
+
+describe('likeRefusalMove (owner decisions 2026-10-20 answer 1 and 2026-10-21)', () => {
+  /** `GET /me`'s `onboarding`: done; then a revision asked for the consent again (#57-5). */
+  const DONE: Onboarding = {
+    consent: true,
+    verification: true,
+    nickname: true,
+    completed: true,
+    interests: true,
+    nextStep: null,
+    consents: [
+      {
+        item: 'terms',
+        version: 'draft-2026-10-18',
+        agreed: true,
+        recordedAt: '2026-10-18T00:00:00.000Z',
+      },
+      {
+        item: 'privacy',
+        version: 'draft-2026-10-18',
+        agreed: true,
+        recordedAt: '2026-10-18T00:00:00.000Z',
+      },
+      {
+        item: 'age',
+        version: 'draft-2026-10-18',
+        agreed: true,
+        recordedAt: '2026-10-18T00:00:00.000Z',
+      },
+    ],
+  };
+  const RECONSENT: Onboarding = { ...DONE, consent: false, completed: false, nextStep: 'consent' };
+  /** An account that never finished: the gate sends it on from the post page too. */
+  const FRESH: Onboarding = {
+    ...DONE,
+    consent: false,
+    verification: false,
+    nickname: false,
+    completed: false,
+    interests: false,
+    nextStep: 'consent',
+    consents: [],
+  };
+  const onboardingRefusal = refusal(409, 'ONBOARDING_REQUIRED');
+  const onPost = (onboarding: Onboarding | undefined, pathname = `/community/posts/${post}`) =>
+    likeRefusalMove(onboardingRefusal, { postId: POST, pathname, onboarding });
+
+  it('goes to the step, with no toast, once `GET /me` read again names one on this post’s page', () => {
+    // A re-consent account pressed before `GET /me` said so: the server refused, and the press goes
+    // where it would have gone had `GET /me` answered first — the URL's case aside.
+    expect(onPost(RECONSENT)).toBe('step');
+    expect(onPost(RECONSENT, `/community/posts/${POST}`)).toBe('step');
+  });
+
+  it('leaves it to the gate when the gate takes the account from the page', () => {
+    // One that never finished its onboarding is not let stay on the post page; nor is a re-consent
+    // account on a page that is not exempt (it went there meanwhile).
+    expect(onPost(FRESH)).toBe('gate');
+    expect(onPost(RECONSENT, '/community')).toBe('gate');
+  });
+
+  it('says why in a toast only when there is no step to go to', () => {
+    // `GET /me` could not be read again (nothing held), or names no step left.
+    expect(onPost(undefined)).toBeUndefined();
+    expect(onPost(DONE)).toBeUndefined();
+    // The reader left the post for a page the gate lets it stay on.
+    expect(onPost(RECONSENT, `/community/posts/${OTHER}`)).toBeUndefined();
+    expect(onPost(RECONSENT, '/terms')).toBeUndefined();
+    // Any other refusal is the toast's (`likeFailureMessage`).
+    for (const error of [
+      refusal(409, 'LIKE_NOT_ALLOWED', { reason: 'hidden' }),
+      refusal(503, 'INTERNAL'),
+      new TypeError('fetch failed'),
+    ]) {
+      expect(
+        likeRefusalMove(error, {
+          postId: POST,
+          pathname: `/community/posts/${post}`,
+          onboarding: RECONSENT,
+        }),
+      ).toBeUndefined();
+    }
   });
 });
 

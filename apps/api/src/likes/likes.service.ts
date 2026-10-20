@@ -36,12 +36,11 @@ interface Liker {
  * number's hash when the account that made it has no 본인확인 record any more (it withdrew, #140):
  * an account that withdrew and came back on the same number sees its like and can take it back,
  * but cannot like again (decision 7; owner decision 2026-10-20, answer 3). An operator's change of
- * a member's number (#57-3) moves the account's rows to the new number's hash in the same
- * transaction (OPERATOR_PHONE_CHANGE_SQL, owner decision 2026-10-20, answer 2), so a live
- * account's own rows carry its current number and its likes no longer hold the old one. The likes
- * it inherited from a withdrawn account on its old number (that account's rows) are not moved:
- * they stay under the old hash and become the old number's next holder's, who sees them as its
- * own and cannot add one to those targets (ADR-0076 7-20, an owner question in 결과 4). A row of
+ * a member's number (#57-3) moves the account's likes to the new number's hash in the same
+ * transaction (OPERATOR_PHONE_CHANGE_SQL, owner decision 2026-10-20, answer 2) — its own rows, and
+ * the rows it inherited from a withdrawn account on its old number, still that account's (owner
+ * decision 2026-10-21) — so a live account's own rows carry its current number, what it sees as
+ * its own still is, and nothing of it holds the old number: the next holder likes freely. A row of
  * an account that still holds its record is that account's alone all the same: should a number
  * ever change outside that procedure, its next holder neither sees nor takes back the live
  * account's likes, and its like of the same target hits the number's primary key and is answered

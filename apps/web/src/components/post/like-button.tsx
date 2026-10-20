@@ -1,11 +1,15 @@
 'use client';
 
 import { Box, Button, Text, type ButtonProps } from '@chakra-ui/react';
+import { useQueryClient } from '@tanstack/react-query';
 import type { Route } from 'next';
 import { useRouter } from 'next/navigation';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { useLike, useMyLikesUnreadable } from '@/hooks/use-likes';
+import { ME_QUERY_KEY } from '@/hooks/use-me';
+import { useOnboardingEntry } from '@/hooks/use-onboarding-entry';
+import type { Me } from '@/lib/api';
 import {
   type LikeButtonView,
   type LikeTarget,
@@ -13,9 +17,11 @@ import {
   likeCountText,
   likeFailureMessage,
   likePressAction,
+  likeRefusalMove,
   likesUnreadableId,
 } from '@/lib/likes';
 import { loginPathBackTo } from '@/lib/next-path';
+import { onboardingEntryPath } from '@/lib/onboarding';
 import { postPath } from '@/lib/posts';
 
 /**
@@ -32,10 +38,20 @@ import { postPath } from '@/lib/posts';
  *
  * A visitor's press goes straight to the login page, told to come back to this post
  * (`loginPathBackTo`), as the watch button's does (owner decision 2026-10-20, answer 8); nothing
- * is remembered for after the login, and the reader presses again. The button is one element on
- * every rung — the server's HTML and the hydrating render are the pending rung, and a visitor's
- * turns into the signed-out one once the session answers, so a keyboard focus a visitor already
- * put on it stays.
+ * is remembered for after the login, and the reader presses again. A member with an onboarding
+ * step left — one facing a re-consent alone, whom the gate lets stay on the post page — goes to
+ * that step, coming back to this post (`useOnboardingEntry`'s `entryPath`), and the press is not
+ * sent (owner decision 2026-10-20, answer 1); the server would refuse it (`OnboardedGuard`). A
+ * press before `GET /me` has said so is sent: on a hard load the gate's `GET /me` and this page's
+ * read of the reader's likes both wait for the session alone and go out together, the likes may
+ * answer first, and a `GET /me` retried after a 5xx leaves the toggle standing for seconds. The
+ * server refuses it (ONBOARDING_REQUIRED), the refusal reads `['me']` again (`afterRefusal`) before
+ * the press's promise rejects, and the press then goes where `likeRefusalMove` says: to the step,
+ * with no toast — or nowhere while the gate takes the account there — and the toast only when
+ * `['me']` names no step to go to (owner decisions 2026-10-20 answer 1 and 2026-10-21, ADR-0076
+ * 7-25). The button is one element on every rung — the server's HTML and the hydrating render are
+ * the pending rung, and a visitor's turns into the signed-out one once the session answers, so a
+ * keyboard focus a visitor already put on it stays.
  *
  * When the reader's likes could not be read, every button of the page shows its count and cannot
  * be pressed, and the page says why in one line (`LikesUnreadableNotice`), which each button names
@@ -58,7 +74,9 @@ export function LikeButton({
   count: number;
 }) {
   const like = useLike(postId, target);
+  const { stepLeft, entryPath } = useOnboardingEntry();
   const router = useRouter();
+  const queryClient = useQueryClient();
   const view = likeButtonView({
     sessionPending: like.sessionPending,
     signedIn: like.signedIn,
@@ -70,10 +88,14 @@ export function LikeButton({
   const unavailable = view.kind === 'unavailable';
 
   const press = () => {
-    const action = likePressAction(view);
+    const action = likePressAction(view, stepLeft);
     if (action === null) return;
     if (action.kind === 'login') {
       router.push(loginPathBackTo(postPath(postId)) as Route);
+      return;
+    }
+    if (action.kind === 'step') {
+      router.push(entryPath(postPath(postId)) as Route);
       return;
     }
     // The toggle is drawn only once the session named the account.
@@ -83,7 +105,18 @@ export function LikeButton({
     void like.toggle
       .mutateAsync({ target, liked, expectedAccountId: accountId })
       .catch((error: unknown) => {
-        toaster.create({ type: 'error', title: likeFailureMessage(error, target.kind, liked) });
+        // `['me']` as the refusal read it again — not as this render saw it — and the page now.
+        const onboarding = queryClient.getQueryData<Me>(ME_QUERY_KEY)?.onboarding;
+        const pathname = window.location.pathname;
+        switch (likeRefusalMove(error, { postId, pathname, onboarding })) {
+          case 'step':
+            router.push(onboardingEntryPath(postPath(postId), onboarding) as Route);
+            return;
+          case 'gate':
+            return;
+          case undefined:
+            toaster.create({ type: 'error', title: likeFailureMessage(error, target.kind, liked) });
+        }
       });
   };
 

@@ -9,6 +9,8 @@ import {
   isForAnotherAccount,
 } from './api';
 import { type CommentPages } from './comments';
+import { type Onboarding, hasOnboardingStepLeft, needsOnboarding } from './onboarding';
+import { postPath } from './posts';
 
 /**
  * 좋아요 (#49, ADR-0076) as the post page and the cards draw them: the cache key of what the
@@ -196,17 +198,27 @@ export function likeButtonView(input: LikeButtonInput): LikeButtonView {
   return { kind: 'toggle', pressed, press: pressed ? 'unlike' : 'like' };
 }
 
-/** What a press of a like button asks for: the login page, or the state to send (`PUT …/like`). */
-export type LikePressAction = { kind: 'login' } | { kind: 'put'; liked: boolean };
+/**
+ * What a press of a like button asks for: the login page, the reader's onboarding step left, or
+ * the state to send (`PUT …/like`).
+ */
+export type LikePressAction =
+  { kind: 'login' } | { kind: 'step' } | { kind: 'put'; liked: boolean };
 
 /**
  * What a press of the button on rung `view` does. A visitor's goes to the login page, which comes
  * back to the post (the watch button's `watchPressAction`); nothing is remembered for after it,
- * so the reader presses again. A toggle's sends its `press`. `null` sends nothing: while the
- * reader's state is unknown or unreadable, and while a press is on the wire — so the second
- * click of a double-click on 좋아요 never sends an unlike behind the like.
+ * so the reader presses again. A toggle's sends its `press` — unless the reader has an onboarding
+ * step left (`stepLeft`, `useOnboardingEntry`): an account facing a re-consent alone stays on the
+ * post page (the gate's exemption, ADR-0073), reads its likes (a session is enough for that) and
+ * sees the toggle, but a like or an unlike needs the onboarding done (#57-8), so the press goes to
+ * that step instead, which comes back to the post, and sends nothing (owner decision 2026-10-20,
+ * answer 1 — the post page's 글쓰기·수정 and comment boxes' way). Nothing is remembered for after
+ * the step either. `null` sends nothing: while the reader's state is unknown or unreadable, and
+ * while a press is on the wire — so the second click of a double-click on 좋아요 never sends an
+ * unlike behind the like.
  */
-export function likePressAction(view: LikeButtonView): LikePressAction | null {
+export function likePressAction(view: LikeButtonView, stepLeft: boolean): LikePressAction | null {
   switch (view.kind) {
     case 'signed-out':
       return { kind: 'login' };
@@ -218,9 +230,9 @@ export function likePressAction(view: LikeButtonView): LikePressAction | null {
         case 'wait':
           return null;
         case 'like':
-          return { kind: 'put', liked: true };
+          return stepLeft ? { kind: 'step' } : { kind: 'put', liked: true };
         case 'unlike':
-          return { kind: 'put', liked: false };
+          return stepLeft ? { kind: 'step' } : { kind: 'put', liked: false };
       }
   }
 }
@@ -293,7 +305,8 @@ const NOT_ALLOWED_MESSAGES: Record<
  *   that the like could not be added, or could not be taken back, as the press asked;
  * - NOT_FOUND: it left every view;
  * - ONBOARDING_REQUIRED: the onboarding is not done (a consent a revision asked for again,
- *   #57-5) — the gate follows `['me']`;
+ *   #57-5) — shown only when `likeRefusalMove` has nowhere to go: `['me']` could not be read
+ *   again or names no step left;
  * - a request that never reached the API, and anything else: the change that did not happen.
  */
 export function likeFailureMessage(
@@ -312,6 +325,37 @@ export function likeFailureMessage(
   if (isApiError(error, 'ONBOARDING_REQUIRED')) return copy.errPostOnboarding;
   if (isApiUnreachable(error)) return copy.errNetwork;
   return liked ? copy.likeAddFailed : copy.likeRemoveFailed;
+}
+
+/**
+ * Where a press the server refused for the onboarding (ONBOARDING_REQUIRED) goes, once `['me']`
+ * has been read again (`afterRefusal` runs before the press's promise rejects): `onboarding` is
+ * what it says now, and `pathname` the page shown now.
+ *
+ * Such a press was sent because `GET /me` had not said yet that a step is left (`likePressAction`
+ * takes it to the step once it has): on a hard load the onboarding gate's `GET /me` and the
+ * reader's likes are read side by side, and the toggle can stand first — for seconds while
+ * `GET /me` is retried. Owner decision 2026-10-20, answer 1: a re-consent account's press goes to
+ * its step, coming back to the post; and a refusal for a re-consent moves to the step without a
+ * toast, which is said only when the account could not be read again (owner decision 2026-10-21,
+ * for #46's refusals). So:
+ * - `gate`: the onboarding gate takes the account from this page (`needsOnboarding`: a step left
+ *   that the page is not exempt for — an account that never finished its onboarding): nothing to
+ *   say, the gate goes to the step;
+ * - `step`: the reader is still on this post's page, which the gate lets an account facing a
+ *   re-consent alone stay on, and a step is left: the press goes to it now, no toast;
+ * - undefined: anything else — another refusal, `['me']` not read again (a failure keeps what it
+ *   held, if anything) or naming no step, or the reader gone from the post meanwhile — and the
+ *   toast says why (`likeFailureMessage`).
+ */
+export function likeRefusalMove(
+  error: unknown,
+  at: { postId: string; pathname: string; onboarding: Onboarding | undefined },
+): 'gate' | 'step' | undefined {
+  if (!isApiError(error, 'ONBOARDING_REQUIRED')) return undefined;
+  if (needsOnboarding(at.pathname, at.onboarding)) return 'gate';
+  const onThePost = at.pathname.toLowerCase() === postPath(at.postId).toLowerCase();
+  return onThePost && hasOnboardingStepLeft(at.onboarding) ? 'step' : undefined;
 }
 
 /**

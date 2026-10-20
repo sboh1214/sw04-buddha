@@ -3,12 +3,13 @@
  * 2026-10-19, 2026-10-19 3차 and 4차, ADR-0071): the SQL docs/OPERATIONS.md gives, verbatim, and
  * what it does when run as buddha_app the way the doc runs it — psql, BEGIN, the statements, then
  * the COMMIT or ROLLBACK the doc's result table gives for what they returned, with psql's variables
- * written in — and what it carries along: the account's likes, onto the new number (#49, owner
- * decision 2026-10-20, ADR-0076). The account lookup and the pre-check of the new number that come
- * before any confirmation SMS (step 1) are run the same way. The keyed hash of the new number and
- * the confirmation code come from the API's phone-hash CLI there (its own tests,
- * apps/api/src/identity/phone-hash-operator.test.ts); here any 64-hex value stands for the hash
- * (this package has no key). Skips the database part when TEST_* are unset.
+ * written in — and what it carries along: the account's likes, its own and those it inherited on
+ * its old number, onto the new number (#49, owner decisions 2026-10-20 and 2026-10-21, ADR-0076).
+ * The account lookup and the pre-check of the new number that come before any confirmation SMS
+ * (step 1), and the read of the old number (step 3), are run the same way. The keyed hashes of
+ * the new and the old number and the confirmation code come from the API's phone-hash CLI there
+ * (its own tests, apps/api/src/identity/phone-hash-operator.test.ts); here any 64-hex value stands
+ * for a hash (this package has no key). Skips the database part when TEST_* are unset.
  */
 import { readFileSync } from 'node:fs';
 import { and, eq, isNull, sql } from 'drizzle-orm';
@@ -16,6 +17,7 @@ import { Client, type DatabaseError, type QueryResult } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   OPERATOR_ACCOUNT_LOOKUP_SQL,
+  OPERATOR_CURRENT_NUMBER_SQL,
   OPERATOR_NUMBER_PRECHECK_SQL,
   OPERATOR_PHONE_CHANGE_SQL,
 } from './phone-change.js';
@@ -48,6 +50,14 @@ const LIVE_NUMBER = 'start_grant_numbers_phone_hash_live_idx';
  */
 const DO_REFUSAL = 'refused: a waiting start grant of another account holds the new number';
 
+/**
+ * What the same DO block raises first when the UPDATE answered 0 — the account holds no `old_phone`
+ * (a mistyped id or old number, or the lines of a change that committed run again): `UPDATE 0`
+ * alone does not stop the transaction, and the likes' block after it would carry another number's
+ * likes over and delete the new number's (ADR-0076 7-24).
+ */
+const OLD_NUMBER_REFUSAL = 'refused: the account does not hold old_phone';
+
 /** The owner's one sentence to the member for every refusal (2026-10-19 3차 answer 3, 4차 answer 1). */
 const REFUSAL_SENTENCE = '지금은 그 번호로 바꿀 수 없습니다';
 
@@ -75,8 +85,8 @@ const statementsIn = (text: string): string[] => splitPsqlStatements(text);
 
 /**
  * The DO blocks' bodies, what psql writes no variable into: the refusal of a waiting grant's number
- * (owner decision 2026-10-19 3차, answer 4), then the move of the account's likes (2026-10-20,
- * ADR-0076).
+ * (owner decision 2026-10-19 3차, answer 4), then the move of the account's likes (2026-10-20 and
+ * 2026-10-21, ADR-0076).
  */
 const [DO_BODY = '', LIKES_BODY = ''] = [
   ...OPERATOR_PHONE_CHANGE_SQL.matchAll(/\$\$([\s\S]*?)\$\$/g),
@@ -101,8 +111,8 @@ interface Held {
   has_grant: boolean;
 }
 
-/** The change's statements in order: the two SET LOCAL lines hand the DO block its values. */
-const STATEMENTS = ['update', 'insert', 'set', 'set', 'do', 'do', 'select'] as const;
+/** The change's statements in order: the three SET LOCAL lines hand the DO blocks their values. */
+const STATEMENTS = ['update', 'insert', 'set', 'set', 'set', 'do', 'do', 'select'] as const;
 
 /**
  * Which statement failed first and how: the constraint for the UPDATE and the INSERT, the message
@@ -112,9 +122,13 @@ type Refusal =
   | { at: 'update' | 'insert'; code: string | undefined; constraint: string | undefined }
   | { at: 'do'; code: string | undefined; message: string };
 
-/** What the statements returned: a refusal (a statement failed), or the counts and rows. */
+/**
+ * What the statements returned: the UPDATE's count (null when it failed), then a refusal (a
+ * statement failed) or the INSERT's count and the last statement's rows.
+ */
 type Outcome =
-  { refused: Refusal } | { updated: number | null; inserted: number | null; held: Held[] };
+  | { updated: number | null; refused: Refusal }
+  | { updated: number | null; inserted: number | null; held: Held[] };
 
 /** The rows of step 5's result table: what psql shows, what it means, what the operator does. */
 const RESULT_ROWS = (() => {
@@ -137,10 +151,13 @@ const RESULT_ROWS = (() => {
  * Whether a row's 결과 cell describes an outcome: every condition the cell states holds — the
  * failing statement, its SQLSTATE and its constraint (or, for the DO block, its message), or
  * `UPDATE n`, `INSERT 0 n`, 한 줄 / 줄 없음 and the last row's columns. A condition the cell does
- * not state is not looked at.
+ * not state is not looked at. An `UPDATE 0` comes first and is the `UPDATE 0` row whatever follows
+ * it — the DO block's refusal of it, or an error of the INSERT before that (the doc's reading rule,
+ * ADR-0076 7-24).
  */
 function describes(cell: string, outcome: Outcome): boolean {
   const error = /^`(UPDATE|INSERT|DO)`에서 오류\((\w+) `([^`]+)`\)$/.exec(cell);
+  if (outcome.updated === 0) return error === null && /`UPDATE 0`/.test(cell);
   if ('refused' in outcome) {
     const refused = outcome.refused;
     if (error === null || error[1]!.toLowerCase() !== refused.at || error[2] !== refused.code) {
@@ -177,6 +194,7 @@ function docRowFor(outcome: Outcome) {
 
 /** What the change returns for the refusal of a number another account's waiting grant holds. */
 const REFUSED_WAITING = {
+  updated: 1,
   refused: { at: 'insert', code: '23505', constraint: LIVE_NUMBER },
   commit: 'ROLLBACK',
 } as const;
@@ -186,13 +204,26 @@ const REFUSED_WAITING = {
  * DO block raises it (owner decision 2026-10-19 3차, answer 4).
  */
 const REFUSED_NO_GRANT = {
+  updated: 1,
   refused: { at: 'do', code: 'P0001', message: DO_REFUSAL },
   commit: 'ROLLBACK',
 } as const;
 
 /** What the change returns for a number another account verified (its UNIQUE, on the UPDATE). */
 const REFUSED_VERIFIED = {
+  updated: null,
   refused: { at: 'update', code: '23505', constraint: 'phone_verifications_phone_unique' },
+  commit: 'ROLLBACK',
+} as const;
+
+/**
+ * What the change returns for an account that holds no `old_phone` — a mistyped id or old number,
+ * or the lines of a change that committed run again: `UPDATE 0`, then the DO block's refusal of it,
+ * so a COMMIT typed after it answers ROLLBACK (ADR-0076 7-24).
+ */
+const REFUSED_OLD_NUMBER = {
+  updated: 0,
+  refused: { at: 'do', code: 'P0001', message: OLD_NUMBER_REFUSAL },
   commit: 'ROLLBACK',
 } as const;
 
@@ -217,39 +248,67 @@ describe('the operator phone change (docs/OPERATIONS.md)', () => {
     expect(OPERATIONS).toContain(
       ['```sql', "\\set user_id '<찾은 계정 id>'", OPERATOR_NUMBER_PRECHECK_SQL, '```'].join('\n'),
     );
+    expect(OPERATIONS).toContain(
+      ['```sql', "\\set user_id '<계정 id>'", OPERATOR_CURRENT_NUMBER_SQL, '```'].join('\n'),
+    );
     expect(OPERATIONS).toContain(CODE_BLOCK);
   });
 
   it('names its psql variables and nothing else, and none inside the DO blocks', () => {
-    expect(variablesOf(OPERATOR_PHONE_CHANGE_SQL)).toEqual(['new_hash', 'new_phone', 'user_id']);
+    // The old number's two (owner decision 2026-10-21, ADR-0076) beside the new number's.
+    expect(variablesOf(OPERATOR_PHONE_CHANGE_SQL)).toEqual([
+      'new_hash',
+      'new_phone',
+      'old_hash',
+      'old_phone',
+      'user_id',
+    ]);
     expect(variablesOf(OPERATOR_ACCOUNT_LOOKUP_SQL)).toEqual(['sender']);
+    expect(variablesOf(OPERATOR_CURRENT_NUMBER_SQL)).toEqual(['user_id']);
     // The pre-check takes what the change takes: the lookup's id and the CLI's two lines.
     expect(variablesOf(OPERATOR_NUMBER_PRECHECK_SQL)).toEqual(['new_hash', 'new_phone', 'user_id']);
-    // psql writes no variable into a dollar-quoted body: each DO block reads the two values the
-    // SET LOCAL lines before them hand over, and nothing else.
+    // psql writes no variable into a dollar-quoted body: each DO block reads the values the SET
+    // LOCAL lines before them hand over, and nothing else.
     expect(DO_BODY).toContain('RAISE EXCEPTION');
     expect(variablesOf(DO_BODY)).toEqual([]);
-    expect([...DO_BODY.matchAll(/current_setting\('([\w.]+)'\)/g)].map((m) => m[1])).toEqual([
-      'phone_change.new_hash',
-      'phone_change.user_id',
-    ]);
-    // The likes' block (owner decision 2026-10-20, ADR-0076) raises nothing of its own: it gives
-    // no result to read, so the result table is the same with it.
+    expect(
+      new Set([...DO_BODY.matchAll(/current_setting\('([\w.]+)'\)/g)].map((m) => m[1])),
+    ).toEqual(new Set(['phone_change.new_hash', 'phone_change.user_id']));
+    // It refuses an `UPDATE 0` first (ADR-0076 7-24), by what the UPDATE writes: the account's
+    // row changed in this transaction carries its start time, `now()`, to the millisecond the
+    // column keeps. Then the waiting grant's number (owner decision 2026-10-19 3차, answer 4).
+    const changedHere = DO_BODY.indexOf('updated_at = now()::timestamptz(3)');
+    const oldNumber = DO_BODY.indexOf(`RAISE EXCEPTION '${OLD_NUMBER_REFUSAL}'`);
+    expect(changedHere).toBeGreaterThan(-1);
+    expect(oldNumber).toBeGreaterThan(changedHere);
+    expect(DO_BODY.indexOf(`RAISE EXCEPTION '${DO_REFUSAL}'`)).toBeGreaterThan(oldNumber);
+    // The likes' block (owner decisions 2026-10-20 and 2026-10-21, ADR-0076) raises nothing of its
+    // own: it gives no result to read, so the result table is the same with it. It alone reads the
+    // old number's hash.
     expect(LIKES_BODY).toContain('post_likes');
     expect(LIKES_BODY).toContain('comment_likes');
     expect(LIKES_BODY).not.toContain('RAISE');
     expect(variablesOf(LIKES_BODY)).toEqual([]);
     expect(
       new Set([...LIKES_BODY.matchAll(/current_setting\('([\w.]+)'\)/g)].map((m) => m[1])),
-    ).toEqual(new Set(['phone_change.new_hash', 'phone_change.user_id']));
+    ).toEqual(new Set(['phone_change.new_hash', 'phone_change.old_hash', 'phone_change.user_id']));
     const statements = statementsIn(OPERATOR_PHONE_CHANGE_SQL);
     expect(statements.map((s) => /^\w+/.exec(s)![0].toLowerCase())).toEqual([...STATEMENTS]);
-    expect(statements.slice(2, 4)).toEqual([
+    expect(statements.slice(2, 5)).toEqual([
       "SET LOCAL phone_change.user_id = :'user_id'",
       "SET LOCAL phone_change.new_hash = :'new_hash'",
+      "SET LOCAL phone_change.old_hash = :'old_hash'",
     ]);
-    // The two statements of step 1 only read.
-    for (const text of [OPERATOR_ACCOUNT_LOOKUP_SQL, OPERATOR_NUMBER_PRECHECK_SQL]) {
+    // The UPDATE changes only an account still on the old number the CLI hashed, and marks the
+    // row it changed with the transaction's start time, which the DO block looks for.
+    expect(statements[0]).toContain("WHERE user_id = :'user_id' AND phone = :'old_phone'");
+    expect(statements[0]).toContain('updated_at = now()');
+    // The two statements of step 1 and the read of step 3 only read.
+    for (const text of [
+      OPERATOR_ACCOUNT_LOOKUP_SQL,
+      OPERATOR_NUMBER_PRECHECK_SQL,
+      OPERATOR_CURRENT_NUMBER_SQL,
+    ]) {
       expect(statementsIn(text)).toHaveLength(1);
       expect(text).toMatch(/^SELECT /);
     }
@@ -456,7 +515,7 @@ describe('the operator phone change (docs/OPERATIONS.md)', () => {
     const text = step1();
     expect(text).toContain('3단계에서는 그 휴대전화 번호만 넣는다');
     expect(text).toContain('새 요청으로 보고 1단계부터 한다(그 번호로 새 확인 번호를 보낸다)');
-    const step3 = sectionOf('**3. 새 번호의 해시.**', '**4. psql.**');
+    const step3 = sectionOf('**3. 새 번호와 옛 번호의 해시.**', '**4. psql.**');
     expect(step3).toContain('1단계에서 확인 번호를 보내고 적어 둔 그 번호를 입력한 뒤');
     expect(step3).toContain('1단계의 사전 확인에서 처음 띄울 때는 요청 메일의 번호를 넣는다');
     const printed = step3.indexOf("```text\n\\set new_phone '");
@@ -497,11 +556,16 @@ describe('the operator phone change (docs/OPERATIONS.md)', () => {
     for (const outcome of [REFUSED_VERIFIED, REFUSED_WAITING, REFUSED_NO_GRANT]) {
       expect(docRowFor(outcome).end).toBe('ROLLBACK');
     }
-    const gone = docRowFor({ updated: 0, inserted: 0, held: [] });
+    const gone = docRowFor(REFUSED_OLD_NUMBER);
     expect(gone.end).toBe('ROLLBACK');
     expect(gone.next).toContain('1단계의 계정 찾기를 답장의 주소로 다시 돌린다');
-    // A mistyped id is the one ROLLBACK that is no refusal: step 5 again with the right id.
+    // A mistyped id or old number is the one ROLLBACK that is no refusal: step 5 again with the
+    // right id, or with the old number read and hashed again (owner decision 2026-10-21).
     expect(gone.next).toContain('그 `id`로 5단계를 다시 하고');
+    expect(gone.next).toContain('3단계의 옛 번호를 다시 읽고 세어 그 두 줄로 5단계를 다시 하며');
+    expect(OPERATIONS).toContain(
+      '`UPDATE 0`에서 id나 옛 번호를 잘못 넣은 것이 드러나 5단계를 다시 할 때만 빼고',
+    );
     // Step 1's refusals before any SMS: no 본인확인 record, the pre-check, the reply's account.
     const text = step1();
     expect(text.match(/거절한다 — 문자를 보내지 않고 거절의 문장만 알린다/g)).toHaveLength(2);
@@ -564,37 +628,123 @@ describe('the operator phone change (docs/OPERATIONS.md)', () => {
   });
 
   it('says the change carries the account’s likes to the new number, and the table reads the same', () => {
-    // Owner decision 2026-10-20 (ADR-0076): «좋아요 한 번» counts per number, so the account's
-    // likes go with it, one stays where the new number liked the same target, and the next holder
-    // of the old number likes freely.
+    // Owner decisions 2026-10-20 and 2026-10-21 (ADR-0076): «좋아요 한 번» counts per number, so
+    // the account's likes go with it — those it inherited on the old number too — one stays where
+    // the new number liked the same target, and the next holder of the old number likes freely.
     const changes = sectionOf('**바뀌는 것.**', '**1. 요청 확인.**');
     expect(changes).toContain(
-      '그 계정의 좋아요(`post_likes`·`comment_likes`, #49)가 새 번호의 해시로 옮겨진다(오너 결정 2026-10-20, ADR-0076)',
+      '그 계정의 좋아요(`post_likes`·`comment_likes`, #49)가 새 번호의 해시로 옮겨진다(오너 결정 2026-10-20·21, ADR-0076)',
+    );
+    expect(changes).toContain(
+      '그 계정이 같은 번호의 탈퇴한 계정에게서 이어받아 자기 것으로 보던 것(옛 번호의 해시를 싣고 행의 계정에 본인확인 기록이 없는 좋아요, ADR-0076 결정 7-3) 모두다',
     );
     expect(changes).toContain('뒤에 옛 번호로 본인확인한 다른 계정은 그 글·댓글에 자유롭게 누른다');
-    expect(changes).toContain('하나만 남긴다 — 그 계정의 것이고');
+    expect(changes).toContain('하나만 남긴다 — 옮겨 오는 것이고');
+    expect(changes).toContain('3단계에서 옛 번호의 해시도 센다');
     expect(changes).toContain('5단계의 둘째 `DO`가 하고, 결과는 `DO` 한 줄이라 읽을 것이 없다');
     expect(OPERATIONS).toContain('표의 줄을 가르지 않으니 표는 그 줄을 빼고 읽는다');
     expect(OPERATIONS).toContain('표의 `DO`에서 오류는 첫 `DO`(거절)의 것이다');
     expect(sectionOf('**하지 않는 것.**', '**로컬.**')).toContain(
       '좋아요를 옮기는 둘째 `DO`를 빼면',
     );
-    // What the first commit said — the likes stay under the old number — is gone.
+    // What the first commit said — the likes stay under the old number — is gone, and so is what
+    // the second said — the inherited likes stay there (owner decision 2026-10-21).
     expect(OPERATIONS).not.toContain('좋아요의 해시를 손으로 고치지 않는다');
     expect(OPERATIONS).not.toContain('#49)는 바뀌지 않는다');
+    expect(OPERATIONS).not.toContain(
+      '자기 것으로 보던 좋아요(행의 계정이 그 탈퇴한 계정이다)는 옮기지 않는다',
+    );
   });
 
-  it('is recorded on the status line of ADR-0071, which owns it, as seven statements now', () => {
+  it('hashes the old number in step 3, as the account holds it, for every run of step 5', () => {
+    // Owner decision 2026-10-21 (ADR-0076): the likes the account inherited on its old number are
+    // found by that number's hash, which SQL cannot compute — the CLI does, from the number read.
+    const step3 = sectionOf('**3. 새 번호와 옛 번호의 해시.**', '**4. psql.**');
+    const read = step3.indexOf(OPERATOR_CURRENT_NUMBER_SQL);
+    const cli = step3.indexOf(
+      'sudo docker compose -f /data/buddha/compose.yaml exec api node apps/api/dist/identity/phone-hash-cli.js --psql-old',
+    );
+    const printed = step3.indexOf("```text\n\\set old_phone '");
+    expect(read).toBeGreaterThan(
+      step3.indexOf('그다음 옛 번호, 곧 그 계정이 지금 가진 번호의 해시를 센다'),
+    );
+    expect(cli).toBeGreaterThan(read);
+    expect(printed).toBeGreaterThan(cli);
+    expect(step3).toContain("\\set old_hash '<소문자 16진 64자>'");
+    expect(step3.slice(printed)).toContain(
+      '찍힌 `\\set old_phone` 줄의 숫자가 psql이 읽은 번호와 같은지 본다',
+    );
+    expect(step3).toContain(
+      '5단계를 다시 할 때마다(`UPDATE 0` 뒤나, 끊긴 세션 뒤에 같은 일을 다시 할 때) 옛 번호는 다시 읽고 다시 센다',
+    );
+    // Step 5 takes the four lines; the UPDATE guards a wrong old number, and nothing is guessed.
+    expect(sectionOf('**5. 바꾸고 기록하기.**', '```sql')).toContain('3단계의 네 줄');
+    expect(OPERATIONS).toContain(
+      "\\set old_phone '01012345678'\n\\set old_hash '<3단계가 옛 번호로 찍은 값>'\n\\set ON_ERROR_ROLLBACK off",
+    );
+    expect(OPERATIONS).toContain('`UPDATE`는 그 계정이 옛 번호(`old_phone`)를 가졌을 때만 바꾼다');
+    expect(docRowFor(REFUSED_OLD_NUMBER).next).not.toContain('`COMMIT;`');
+    expect(sectionOf('**하지 않는 것.**', '**로컬.**')).toContain(
+      '옛 번호의 두 줄은 짐작하거나 앞서 찍은 것을 다시 쓰지 않는다',
+    );
+    expect(OPERATIONS.slice(OPERATIONS.indexOf('**로컬.**'))).toContain(
+      'corepack pnpm --filter api run phone-hash --psql-old',
+    );
+  });
+
+  it('refuses an UPDATE 0 in the SQL itself, so a COMMIT typed after it keeps nothing, and reads it first', () => {
+    // ADR-0076 7-24: `UPDATE 0` only says the account holds no `old_phone`; the transaction goes
+    // on, and the likes' block would carry another number's likes over and delete the new
+    // number's. The DO block refuses it, and the doc names that refusal — not the UPDATE — as what
+    // keeps them.
+    const row = docRowFor(REFUSED_OLD_NUMBER);
+    expect(row.end).toBe('ROLLBACK');
+    expect(row.next).toMatch(/^`ROLLBACK;`\(`COMMIT`해도 `ROLLBACK`이 된다\)/);
+    // Whatever follows `UPDATE 0` — that refusal, or an error of the INSERT before it — the row is
+    // `UPDATE 0`'s, never the waiting grant's refusals', which tell the member to ask again.
+    for (const { refused } of [REFUSED_WAITING, REFUSED_NO_GRANT]) {
+      expect(docRowFor({ updated: 0, refused })).toEqual(row);
+    }
+    expect(RESULT_ROWS.find((r) => r.result === '`UPDATE 0`')?.meaning).toContain(
+      `첫 \`DO\`가 거절해(P0001 \`${OLD_NUMBER_REFUSAL}\``,
+    );
+    expect(OPERATIONS).toContain(
+      '첫 줄이 `UPDATE 0`이면 그 뒤에 무엇이 찍히든(위의 거절이나 `INSERT`의 오류도) 표의 `UPDATE 0` 줄이다',
+    );
+    expect(OPERATIONS).toContain(
+      '`UPDATE 0`은 그것을 알릴 뿐 트랜잭션을 멈추지 않아 뒤의 문장도 돈다',
+    );
+    expect(sectionOf('**3. 새 번호와 옛 번호의 해시.**', '**4. psql.**')).toContain(
+      '첫 `DO`가 트랜잭션을 거절하므로, 다른 번호의 좋아요는 옮겨지지 않는다 — `COMMIT`해도 `ROLLBACK`이 된다',
+    );
+    expect(sectionOf('**하지 않는 것.**', '**로컬.**')).toContain(
+      '`UPDATE 0`은 알림일 뿐이고, 막는 것은 그 거절이다',
+    );
+    // What said the UPDATE itself keeps another number's likes where they are is gone.
+    expect(OPERATIONS).not.toContain('다른 번호의 좋아요를 옮기지 않는다');
+    expect(OPERATIONS).not.toContain('`UPDATE`가 `old_phone`으로 막는다');
+  });
+
+  it('is recorded on the status line of ADR-0071, which owns it, as eight statements now', () => {
     // ADR-0071 says step 5 is six statements (7-20, decision 8). ADR-0076 added the likes' DO
-    // block, and records so on ADR-0071's status line rather than rewriting it (ADR-0047 결과 1),
-    // so that a reader of ADR-0071 learns of the move of the likes.
+    // block, the old number's SET LOCAL line, the UPDATE's check of the old number and the first DO
+    // block's refusal of an `UPDATE 0`, and records
+    // so on ADR-0071's status line rather than rewriting it (ADR-0047 결과 1), so that a reader of
+    // ADR-0071 learns of the move of the likes and of the old number's two lines.
     const start = DECISIONS.indexOf('\n## ADR-0071 ');
     const adr = DECISIONS.slice(start, DECISIONS.indexOf('\n## ADR-0072 ', start));
     const status = /^- 상태: (.+)$/m.exec(adr)?.[1] ?? '';
-    expect(statementsIn(OPERATOR_PHONE_CHANGE_SQL)).toHaveLength(7);
+    expect(statementsIn(OPERATOR_PHONE_CHANGE_SQL)).toHaveLength(8);
     expect(status).toContain('일부 대체됨(ADR-0076: 결정 7-20의 5단계 한 트랜잭션');
     expect(status).toContain('둘째 `DO`');
-    expect(status).toContain("'여섯 문장'은 일곱 문장이다");
+    expect(status).toContain("'여섯 문장'은 여덟 문장이다");
+    expect(status).toContain('`old_phone`·`old_hash`');
+    expect(status).toContain('`--psql-old`');
+    // And that ADR-0071's DO block (7-26) refuses an `UPDATE 0` first now, read first (7-24).
+    expect(status).toContain('결정 7-26의 `DO`가 그 앞에서 `UPDATE 0`도 거절하고');
+    expect(status).toContain(
+      "표를 읽는 법에 '첫 줄이 `UPDATE 0`이면 뒤에 무엇이 찍히든 그 줄'이 더해졌다",
+    );
   });
 
   it('turns psql’s ON_ERROR_ROLLBACK off just before it, so a refusal aborts it all', () => {
@@ -616,10 +766,18 @@ describe.skipIf(!hasTestDb())('the operator phone change (integration)', () => {
     await t.reset();
   });
 
+  /**
+   * The psql variables of step 5. The old number's two (owner decision 2026-10-21) are read as step
+   * 3 reads them when a test leaves them out: `old_phone` the number the account holds now (any
+   * number for an account with none), and `old_hash` a hash nothing carries — the test's own
+   * values where the likes it inherited are the subject.
+   */
   interface Vars {
     user_id: string;
     new_phone: string;
     new_hash: string;
+    old_phone?: string;
+    old_hash?: string;
   }
 
   /** The connection the operator's psql stands for, named so a test can see it wait. */
@@ -629,10 +787,22 @@ describe.skipIf(!hasTestDb())('the operator phone change (integration)', () => {
   const withVariables = writePsqlVariables;
 
   /** The doc's statements, the variables written in. */
-  function statementsOf(vars: Vars): string[] {
+  function statementsOf(vars: Required<Vars>): string[] {
     const statements = statementsIn(withVariables(OPERATOR_PHONE_CHANGE_SQL, { ...vars }));
     expect(statements).toHaveLength(STATEMENTS.length);
     return statements;
+  }
+
+  /** Step 5's variables, the old number's read as step 3 reads them where the test gives none. */
+  async function withOldNumber(vars: Vars): Promise<Required<Vars>> {
+    const [current] = await read<{ phone: string }>(OPERATOR_CURRENT_NUMBER_SQL, {
+      user_id: vars.user_id,
+    });
+    return {
+      old_phone: current?.phone ?? randomPhone(),
+      old_hash: randomPhoneHash(),
+      ...vars,
+    };
   }
 
   /** A read-only statement of the doc's, run as the operator does: psql as buddha_app. */
@@ -653,9 +823,10 @@ describe.skipIf(!hasTestDb())('the operator phone change (integration)', () => {
 
   /** Step 1's pre-check of the new number, before every confirmation code (4차 answer 1). */
   async function precheck(vars: Vars) {
+    const { user_id, new_phone, new_hash } = vars;
     const rows = await read<{ other_verified: boolean; other_waiting: boolean }>(
       OPERATOR_NUMBER_PRECHECK_SQL,
-      { ...vars },
+      { user_id, new_phone, new_hash },
     );
     expect(rows).toHaveLength(1);
     return rows[0]!;
@@ -670,12 +841,14 @@ describe.skipIf(!hasTestDb())('the operator phone change (integration)', () => {
    * they returned. When they all go through, that is the one row of the table that matches the two
    * row counts and the final query's rows, and its COMMIT or ROLLBACK: it returns those and
    * `next`, the one it ran. When one fails, psql goes on to the next, which the aborted
-   * transaction refuses (25P02); the table's row for that failure says ROLLBACK, and a COMMIT
-   * typed instead answers ROLLBACK too, which is what it sends: then it returns which statement
-   * failed, how, and that ROLLBACK — nothing was kept, whatever the operator typed. Either way the
-   * values the SET LOCAL lines handed the DO block are gone once the transaction ends.
+   * transaction refuses (25P02); the table's row for that failure — or `UPDATE 0`'s, when the
+   * UPDATE answered 0 before it — says ROLLBACK, and a COMMIT typed instead answers ROLLBACK too,
+   * which is what it sends: then it returns the UPDATE's count, which statement failed, how, and
+   * that ROLLBACK — nothing was kept, whatever the operator typed. Either way the values the SET
+   * LOCAL lines handed the DO block are gone once the transaction ends.
    */
-  async function change(vars: Vars) {
+  async function change(given: Vars) {
+    const vars = await withOldNumber(given);
     const client = new Client({ connectionString: testDbUrls()!.appUrl, application_name: PSQL });
     await client.connect();
     try {
@@ -707,18 +880,27 @@ describe.skipIf(!hasTestDb())('the operator phone change (integration)', () => {
         const { code, constraint, message } = first.error;
         if (at !== 'update' && at !== 'insert' && at !== 'do') throw first.error;
         const refused: Refusal = at === 'do' ? { at, code, message } : { at, code, constraint };
-        expect(docRowFor({ refused }).end).toBe('ROLLBACK');
+        const updated = at === 'update' ? null : results[0]!.rowCount;
+        expect(docRowFor({ updated, refused }).end).toBe('ROLLBACK');
+        // The COMMIT a misreading operator would type: the aborted transaction answers ROLLBACK.
         const commit = (await client.query('COMMIT')).command;
         expect(rest.map((failure) => failure.error.code)).toEqual(rest.map(() => '25P02'));
         expect(rest).toHaveLength(STATEMENTS.length - 1 - first.index);
-        outcome = { refused, commit };
+        outcome = { updated, refused, commit };
       }
-      const { rows } = await client.query<{ user_id: string | null; new_hash: string | null }>(
+      const { rows } = await client.query<{
+        user_id: string | null;
+        new_hash: string | null;
+        old_hash: string | null;
+      }>(
         `SELECT current_setting('phone_change.user_id', true) AS user_id,
-           current_setting('phone_change.new_hash', true) AS new_hash`,
+           current_setting('phone_change.new_hash', true) AS new_hash,
+           current_setting('phone_change.old_hash', true) AS old_hash`,
       );
       // NULL when the SET LOCAL lines never ran (an earlier statement failed), '' after they did.
-      expect(rows.map((row) => [row.user_id ?? '', row.new_hash ?? ''])).toEqual([['', '']]);
+      expect(
+        rows.map((row) => [row.user_id ?? '', row.new_hash ?? '', row.old_hash ?? '']),
+      ).toEqual([['', '', '']]);
       return outcome;
     } finally {
       await client.end();
@@ -1216,16 +1398,14 @@ describe.skipIf(!hasTestDb())('the operator phone change (integration)', () => {
         new_phone: randomPhone(),
         new_hash: randomPhoneHash(),
       }),
-    ).toEqual({ updated: 0, inserted: 0, held: [], next: 'ROLLBACK' });
-    // A mistyped id on a number a waiting grant holds is still `UPDATE 0`, not the DO block's
-    // refusal: it speaks only for an account with a 본인확인 record — nothing to tell a member.
+    ).toEqual(REFUSED_OLD_NUMBER);
+    // A mistyped id on a number a waiting grant holds is still `UPDATE 0`'s row: the DO block
+    // refuses the `UPDATE 0` before it looks at the waiting grant, whose refusal speaks only for an
+    // account with a 본인확인 record — nothing to tell a member.
     const { y, n, phone } = await waitingHolder();
-    expect(await change({ user_id: 'no-such-account', new_phone: phone, new_hash: n })).toEqual({
-      updated: 0,
-      inserted: 0,
-      held: [{ this_account: false, source: 'grant', paid: false, has_grant: false }],
-      next: 'ROLLBACK',
-    });
+    expect(await change({ user_id: 'no-such-account', new_phone: phone, new_hash: n })).toEqual(
+      REFUSED_OLD_NUMBER,
+    );
     // Nor for the holder itself, whose number it is.
     expect(await change({ user_id: y.id, new_phone: phone, new_hash: n })).toMatchObject({
       updated: 1,
@@ -1240,13 +1420,10 @@ describe.skipIf(!hasTestDb())('the operator phone change (integration)', () => {
     const bPhone = await phoneOf(b.id);
     expect(
       await change({ user_id: b.id, new_phone: verified.phone, new_hash: randomPhoneHash() }),
-    ).toEqual({
-      refused: { at: 'update', code: '23505', constraint: 'phone_verifications_phone_unique' },
-      commit: 'ROLLBACK',
-    });
+    ).toEqual(REFUSED_VERIFIED);
     expect(await phoneOf(b.id)).toBe(bPhone);
   });
-  // ---- the likes (#49, owner decision 2026-10-20, ADR-0076) ----------------------------------
+  // ---- the likes (#49, owner decisions 2026-10-20 and 2026-10-21, ADR-0076) ---------------------
 
   /** Every like row, as (account, target, hash) and its time, ordered for comparing. */
   async function likeRows() {
@@ -1380,24 +1557,259 @@ describe.skipIf(!hasTestDb())('the operator phone change (integration)', () => {
     );
   });
 
+  it('moves the likes the account inherited on its old number too, the one coming with it staying where the new number liked the same target', async () => {
+    // Owner decision 2026-10-21 (ADR-0076): a withdrawn account W held A's old number, and its
+    // likes, which A saw as its own (decision 7-3), go with A to the new number.
+    const one = await targets();
+    const two = await targets();
+    const three = await targets();
+    const oldHash = randomPhoneHash();
+    const newHash = randomPhoneHash();
+    const a = await liker(oldHash);
+    const oldPhone = (await phoneOf(a.user.id))!;
+    const lastWeek = new Date(Date.now() - 7 * 86_400_000);
+    const { user: w } = await createUser(t.db);
+    await createPostLike(t.db, {
+      userId: w.id,
+      postId: one.post.id,
+      phoneHash: oldHash,
+      createdAt: lastWeek,
+    });
+    await createCommentLike(t.db, { userId: w.id, commentId: one.comment.id, phoneHash: oldHash });
+    await createPostLike(t.db, { userId: w.id, postId: two.post.id, phoneHash: oldHash });
+    // A's own like, under the old number too.
+    await createPostLike(t.db, { userId: a.user.id, postId: three.post.id, phoneHash: oldHash });
+    // V, withdrawn, held the new number: it liked `one`'s post and 댓글 (as W did — on both
+    // tables, an inherited like meets the new number's) and `three`'s 댓글 (which nothing of A's
+    // liked).
+    const { user: v } = await createUser(t.db);
+    await createPostLike(t.db, { userId: v.id, postId: one.post.id, phoneHash: newHash });
+    await createCommentLike(t.db, { userId: v.id, commentId: one.comment.id, phoneHash: newHash });
+    await createCommentLike(t.db, {
+      userId: v.id,
+      commentId: three.comment.id,
+      phoneHash: newHash,
+    });
+    // Untouched: a live account's like on a number of its own, and a withdrawn account's on
+    // another number than the old one.
+    const y = await liker(randomPhoneHash());
+    await createPostLike(t.db, { userId: y.user.id, postId: one.post.id, phoneHash: y.phoneHash });
+    const { user: u } = await createUser(t.db);
+    const otherHash = randomPhoneHash();
+    await createCommentLike(t.db, {
+      userId: u.id,
+      commentId: two.comment.id,
+      phoneHash: otherHash,
+    });
+    // And a live account's like under the old number — only a number changed outside the procedure
+    // leaves one there (ADR-0076 7-19): a live account's like is its own, never inherited.
+    const l = await liker(oldHash);
+    await createCommentLike(t.db, {
+      userId: l.user.id,
+      commentId: three.comment.id,
+      phoneHash: oldHash,
+    });
+    const before = await likeRows();
+    const at = (userId: string, target: string) =>
+      before.find((row) => row.userId === userId && row.target === target)!.createdAt;
+
+    const newPhone = randomPhone();
+    const vars = { user_id: a.user.id, new_phone: newPhone, new_hash: newHash };
+    expect(await change({ ...vars, old_phone: oldPhone, old_hash: oldHash })).toEqual({
+      updated: 1,
+      inserted: 0,
+      held: [],
+      next: 'COMMIT',
+    });
+    const row = (userId: string, target: string, phoneHash: string) => ({
+      userId,
+      target,
+      phoneHash,
+      createdAt: at(userId, target),
+    });
+    const expected = [
+      // W's three likes under the new number, still W's, with their time; V's likes of `one`'s post
+      // and 댓글 were the new number's second likes there: the ones coming with A stay, and V has
+      // none left on `one` (ADR-0076 7-23).
+      row(w.id, one.post.id, newHash),
+      row(w.id, one.comment.id, newHash),
+      row(w.id, two.post.id, newHash),
+      row(a.user.id, three.post.id, newHash),
+      // V's like of a target nothing of A's liked stays the new number's (A sees it as its own).
+      row(v.id, three.comment.id, newHash),
+      row(y.user.id, one.post.id, y.phoneHash),
+      row(u.id, two.comment.id, otherHash),
+      row(l.user.id, three.comment.id, oldHash),
+    ].sort((x, z) => `${x.userId}${x.target}`.localeCompare(`${z.userId}${z.target}`));
+    expect(await likeRows()).toEqual(expected);
+    expect(at(w.id, one.post.id)).toEqual(lastWeek);
+    // Nothing is left under the old number: B, its next holder, likes every one of those targets.
+    const b = await liker(oldHash);
+    const freed = [one.post.id, two.post.id, three.post.id];
+    for (const postId of freed) {
+      await createPostLike(t.db, { userId: b.user.id, postId, phoneHash: oldHash });
+    }
+    await createCommentLike(t.db, {
+      userId: b.user.id,
+      commentId: one.comment.id,
+      phoneHash: oldHash,
+    });
+    // B withdraws: its likes are now a withdrawn account's under the old number. The same lines run
+    // again — the old number not read again — are `UPDATE 0`, and the DO block refuses them: they
+    // would carry B's likes to A and delete W's, now the new number's, on the same targets. The
+    // COMMIT a misreading operator types answers ROLLBACK, and nothing moved. Read again (step 3),
+    // the old number is the new one, and nothing more moves.
+    await withdraw(b.user.id);
+    const withB = await likeRows();
+    expect(await change({ ...vars, old_phone: oldPhone, old_hash: oldHash })).toEqual(
+      REFUSED_OLD_NUMBER,
+    );
+    expect(await likeRows()).toEqual(withB);
+    expect(await change({ ...vars, old_phone: newPhone, old_hash: newHash })).toMatchObject({
+      updated: 1,
+      next: 'COMMIT',
+    });
+    expect(await likeRows()).toEqual(withB);
+    expect(withB.filter((like) => like.userId === b.user.id)).toHaveLength(4);
+  });
+
+  it('keeps the account’s own like where one it inherited stood on the same target', async () => {
+    // Only a number changed outside the procedure (ADR-0076 7-3, 7-19) leaves the account's own
+    // like of a target under another hash than the old one — or under the new one already — beside
+    // a withdrawn account's under the old number: one like per number, the account's (7-23).
+    const { post, comment } = await targets();
+    const oldHash = randomPhoneHash();
+    const newHash = randomPhoneHash();
+    const a = await liker(oldHash);
+    await createPostLike(t.db, {
+      userId: a.user.id,
+      postId: post.id,
+      phoneHash: randomPhoneHash(),
+    });
+    await createCommentLike(t.db, { userId: a.user.id, commentId: comment.id, phoneHash: newHash });
+    const { user: w } = await createUser(t.db);
+    await createPostLike(t.db, { userId: w.id, postId: post.id, phoneHash: oldHash });
+    await createCommentLike(t.db, { userId: w.id, commentId: comment.id, phoneHash: oldHash });
+    const before = await likeRows();
+    const vars = { user_id: a.user.id, new_phone: randomPhone(), new_hash: newHash };
+    expect(await change({ ...vars, old_hash: oldHash })).toMatchObject({
+      updated: 1,
+      next: 'COMMIT',
+    });
+    expect(await likeRows()).toEqual(
+      before
+        .filter((like) => like.userId === a.user.id)
+        .map((like) => ({ ...like, phoneHash: newHash })),
+    );
+  });
+
+  it('reads the number the account holds for step 3: none once it has no 본인확인 record', async () => {
+    const { user } = await createUser(t.db);
+    const { phone } = await createPhoneVerification(t.db, { userId: user.id });
+    expect(await read(OPERATOR_CURRENT_NUMBER_SQL, { user_id: user.id })).toEqual([{ phone }]);
+    expect(await read(OPERATOR_CURRENT_NUMBER_SQL, { user_id: 'no-such-account' })).toEqual([]);
+    await withdraw(user.id);
+    expect(await read(OPERATOR_CURRENT_NUMBER_SQL, { user_id: user.id })).toEqual([]);
+  });
+
+  /**
+   * Step 5 typed through to a COMMIT whatever it printed — an operator who reads an `UPDATE 0` as
+   * a COMMIT row: BEGIN, the doc's statements (psql going on past a failed one), COMMIT. What the
+   * UPDATE and the COMMIT answered.
+   */
+  async function committedAnyway(vars: Required<Vars>) {
+    const client = new Client({ connectionString: testDbUrls()!.appUrl });
+    await client.connect();
+    try {
+      await client.query('BEGIN');
+      const counts: (number | null)[] = [];
+      for (const statement of statementsOf(vars)) {
+        counts.push(
+          await client.query(statement).then(
+            (result) => result.rowCount,
+            () => null,
+          ),
+        );
+      }
+      return { updated: counts[0], commit: (await client.query('COMMIT')).command };
+    } finally {
+      await client.end();
+    }
+  }
+
+  it('keeps nothing of a change from an old number the account does not hold, a COMMIT typed after it included', async () => {
+    // A number typed wrong into the CLI's --psql-old, or the lines of a change that committed run
+    // again: the hash is another number's. The likes' block would carry its withdrawn account's
+    // likes to the account and delete the new number's likes of the same targets — for good, as
+    // they are deleted, not changed — and the INSERT would record the new number beside the
+    // account's grant. `UPDATE 0` says so, and the DO block refuses it: even the COMMIT of an
+    // operator who did not read it answers ROLLBACK (ADR-0076 7-24).
+    const one = await targets();
+    const two = await targets();
+    const { user } = await createUser(t.db);
+    const grant = await createStartGrant(t.db, { userId: user.id, amountCoin: 100n });
+    const phone = (await phoneOf(user.id))!;
+    const numbers = await numbersOf(grant.id);
+    const elsewhere = randomPhoneHash();
+    const newHash = randomPhoneHash();
+    // W withdrew on that other number after liking both targets; V withdrew on the new number
+    // after liking `one`'s post and 댓글.
+    const { user: w } = await createUser(t.db);
+    for (const { post, comment } of [one, two]) {
+      await createPostLike(t.db, { userId: w.id, postId: post.id, phoneHash: elsewhere });
+      await createCommentLike(t.db, { userId: w.id, commentId: comment.id, phoneHash: elsewhere });
+    }
+    const { user: v } = await createUser(t.db);
+    await createPostLike(t.db, { userId: v.id, postId: one.post.id, phoneHash: newHash });
+    await createCommentLike(t.db, { userId: v.id, commentId: one.comment.id, phoneHash: newHash });
+    const before = await likeRows();
+    const vars = {
+      user_id: user.id,
+      new_phone: randomPhone(),
+      new_hash: newHash,
+      old_phone: randomPhone(),
+      old_hash: elsewhere,
+    };
+    // As the doc has it: the `UPDATE 0` row, whose ROLLBACK a COMMIT would answer too.
+    expect(await change(vars)).toEqual(REFUSED_OLD_NUMBER);
+    // Typed through to a COMMIT, with nothing read: ROLLBACK, and nothing kept.
+    expect(await committedAnyway(vars)).toEqual({ updated: 0, commit: 'ROLLBACK' });
+    expect(await phoneOf(user.id)).toBe(phone);
+    expect(await numbersOf(grant.id)).toEqual(numbers);
+    expect(await likeRows()).toEqual(before);
+    // The number the account holds, read and hashed as step 3 does, goes through.
+    expect(await change({ ...vars, old_phone: phone, old_hash: randomPhoneHash() })).toMatchObject({
+      updated: 1,
+      inserted: 1,
+      next: 'COMMIT',
+    });
+    expect(await likeRows()).toEqual(before);
+  });
+
   it('moves no like when the change is refused', async () => {
     const { post, comment } = await targets();
     const oldHash = randomPhoneHash();
     // On another account's verified number (the UPDATE) and on a waiting grant's (the DO block,
-    // which comes before the likes' block).
+    // which comes before the likes' block): neither its own likes nor those it inherited move.
     const a = await liker(oldHash);
     await createPostLike(t.db, { userId: a.user.id, postId: post.id, phoneHash: oldHash });
-    await createCommentLike(t.db, { userId: a.user.id, commentId: comment.id, phoneHash: oldHash });
+    const { user: w } = await createUser(t.db);
+    await createCommentLike(t.db, { userId: w.id, commentId: comment.id, phoneHash: oldHash });
     const before = await likeRows();
     const { user: other } = await createUser(t.db);
     const { phone: taken } = await createPhoneVerification(t.db, { userId: other.id });
     expect(
-      await change({ user_id: a.user.id, new_phone: taken, new_hash: randomPhoneHash() }),
+      await change({
+        user_id: a.user.id,
+        new_phone: taken,
+        new_hash: randomPhoneHash(),
+        old_hash: oldHash,
+      }),
     ).toEqual(REFUSED_VERIFIED);
     const { n, phone } = await waitingHolder();
-    expect(await change({ user_id: a.user.id, new_phone: phone, new_hash: n })).toEqual(
-      REFUSED_NO_GRANT,
-    );
+    expect(
+      await change({ user_id: a.user.id, new_phone: phone, new_hash: n, old_hash: oldHash }),
+    ).toEqual(REFUSED_NO_GRANT);
     expect(await likeRows()).toEqual(before);
   });
 
