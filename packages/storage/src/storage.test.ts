@@ -225,6 +225,24 @@ describe('S3ObjectStorage', () => {
     await expect(storage.get(KEY, { signal: gone.signal })).rejects.toMatchObject({
       name: 'AbortError',
     });
+    // Given up between the answer's headers and the read of its body: the body is destroyed
+    // unread, not left on its connection.
+    const unread = new PassThrough();
+    const late = new AbortController();
+    const transform = vi.fn(() => Promise.resolve(bytes(9)));
+    const lateClient = {
+      send: () => {
+        late.abort();
+        return Promise.resolve({
+          Body: Object.assign(unread, { transformToByteArray: transform }),
+        });
+      },
+    } as unknown as S3Sender;
+    await expect(
+      new S3ObjectStorage(lateClient, 'b-1').get(KEY, { signal: late.signal }),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(unread.destroyed).toBe(true);
+    expect(transform).not.toHaveBeenCalled();
     // Without a signal, the body is read whole as before.
     const plain = {
       send: () =>

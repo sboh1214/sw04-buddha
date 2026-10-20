@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import {
   POST_BODY_MAX_LENGTH,
   POST_IMAGES_MAX,
@@ -32,7 +33,14 @@ import {
   postReadErrorMessage,
   postWriteErrorMessage,
   refusedImageIds,
+  writeMarketAfter,
   writePath,
+  writeScreenMarket,
+  writeScreenStart,
+  writeScreenView,
+  type WriteMarket,
+  type WriteMarketLookup,
+  type WriteScreenEvent,
 } from './posts';
 
 /**
@@ -313,5 +321,117 @@ describe('a refused write', () => {
     expect(postWriteErrorMessage(refusal(500, 'INTERNAL'))).toBe(copy.errUnknown);
     expect(postReadErrorMessage(new TypeError('Failed to fetch'))).toBe(copy.errNetwork);
     expect(postReadErrorMessage(refusal(500, 'INTERNAL'))).toBe(copy.errUnknown);
+  });
+});
+
+describe('the market the write screen’s form shows (writeMarketAfter)', () => {
+  const shown: WriteMarket = { id: market, title: '기준금리 인하?', status: 'open' };
+  const other: WriteMarket = { id: POST.toLowerCase(), title: '환율 1,400원?', status: 'closed' };
+
+  it('is the market found, or none when the API says there is no such market', () => {
+    expect(writeMarketAfter(null, { kind: 'found', market: shown })).toEqual(shown);
+    expect(writeMarketAfter(shown, { kind: 'found', market: other })).toEqual(other);
+    expect(writeMarketAfter(null, { kind: 'none' })).toBeNull();
+    expect(writeMarketAfter(shown, { kind: 'none' })).toBeNull();
+  });
+
+  it('keeps the form shown, and its draft, when the read failed (Codex review of #219, round 2)', () => {
+    // The market just picked shows already; the read of its address failed for a moment.
+    expect(writeMarketAfter(other, { kind: 'failed', marketId: other.id })).toBe(other);
+    // No form yet: none to keep (the screen offers to read again).
+    expect(writeMarketAfter(null, { kind: 'failed', marketId: other.id })).toBeNull();
+  });
+});
+
+describe('the write screen’s market (writeScreenMarket, writeScreenView)', () => {
+  const a: WriteMarket = { id: market, title: '기준금리 인하?', status: 'open' };
+  const b: WriteMarket = { id: POST.toLowerCase(), title: '환율 1,400원?', status: 'closed' };
+  const found = (shown: WriteMarket): WriteMarketLookup => ({ kind: 'found', market: shown });
+  const none = (): WriteMarketLookup => ({ kind: 'none' });
+  const failed = (of: WriteMarket): WriteMarketLookup => ({ kind: 'failed', marketId: of.id });
+  // Each read of the page comes as a new object, as the page renders one per read.
+  const read = (lookup: WriteMarketLookup): WriteScreenEvent => ({ kind: 'read', lookup });
+  const picked = (of: WriteMarket): WriteScreenEvent => ({ kind: 'picked', market: of });
+  /** The screen once its first read has come and each event after it in turn. */
+  const after = (first: WriteMarketLookup, ...events: WriteScreenEvent[]) =>
+    events.reduce(writeScreenMarket, writeScreenStart(first));
+
+  it('opens on the form under a market found, the picker for none, and the failure with no form', () => {
+    expect(writeScreenView(after(found(a)))).toEqual({
+      kind: 'form',
+      market: a,
+      back: writePath(a.id),
+    });
+    expect(writeScreenView(after(none()))).toEqual({ kind: 'picker', back: writePath() });
+    // Not the picker: the failure and its retry, and the sign-in comes back to that market.
+    expect(writeScreenView(after(failed(a)))).toEqual({ kind: 'failed', back: writePath(a.id) });
+  });
+
+  it('keeps the form, under the market picked, when the read of its address fails (Codex review of #219, round 2)', () => {
+    expect(writeScreenView(after(found(a), picked(b), read(failed(b))))).toEqual({
+      kind: 'form',
+      market: b,
+      back: writePath(b.id),
+    });
+  });
+
+  it('shows a market picked at once — through a render with the read before it — until the page reads it', () => {
+    const first = found(a);
+    const state = after(first, picked(b));
+    expect(writeScreenView(state)).toEqual({ kind: 'form', market: b, back: writePath(b.id) });
+    // The page renders again with the read it had, before the address has followed: nothing moves.
+    expect(writeScreenMarket(state, read(first))).toBe(state);
+    expect(writeScreenView(after(first, picked(b), read(found(b))))).toMatchObject({
+      kind: 'form',
+      market: b,
+    });
+    // From the picker too.
+    expect(writeScreenView(after(none(), picked(a)))).toMatchObject({ kind: 'form', market: a });
+  });
+
+  it('takes the form away only when the API says the market picked is none', () => {
+    expect(writeScreenView(after(found(a), picked(b), read(none())))).toEqual({
+      kind: 'picker',
+      back: writePath(),
+    });
+  });
+
+  it('shows the form once a retry after a failure finds the market, and the failure while it fails', () => {
+    expect(writeScreenView(after(failed(a), read(found(a))))).toEqual({
+      kind: 'form',
+      market: a,
+      back: writePath(a.id),
+    });
+    expect(writeScreenView(after(failed(a), read(failed(a))))).toEqual({
+      kind: 'failed',
+      back: writePath(a.id),
+    });
+    expect(writeScreenView(after(failed(a), read(none())))).toEqual({
+      kind: 'picker',
+      back: writePath(),
+    });
+  });
+
+  it('is what WriteScreen holds and draws, and the page reads its market through lookUpWriteMarketServer', () => {
+    // No component renders under node and the e2e cannot fail the page's server-side read, so the
+    // screen's wiring is pinned in its source: the steps tested above are the ones it takes.
+    const source = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8');
+    const screen = source('../app/community/write/write-screen.tsx');
+    expect(screen).toContain('useState(() => writeScreenStart(lookup))');
+    expect(screen).toContain("const market = writeScreenMarket(held, { kind: 'read', lookup });");
+    expect(screen).toContain('if (market !== held) setHeld(market);');
+    expect(screen).toContain('const view = writeScreenView(market);');
+    // A pick shows the market picked before its address follows.
+    expect(screen).toMatch(
+      /setHeld\(\(current\) => writeScreenMarket\(current, \{ kind: 'picked', market: picked \}\)\);\s*router\.replace\(writePath\(picked\.id\)/,
+    );
+    expect(screen).toContain('<WriteGate back={view.back}>');
+    expect(screen).toMatch(/view\.kind === 'form' \?\s*\(\s*<WriteForm market=\{view\.market\}/);
+    expect(screen).toContain("view.kind === 'failed' ?");
+    // What the screen shows comes from those steps alone.
+    expect(screen).not.toMatch(/writeMarketAfter|lookup\.kind|setShown/);
+    const page = source('../app/community/write/page.tsx');
+    expect(page).toContain('const lookup = await lookUpWriteMarketServer(marketId);');
+    expect(page).toContain('<WriteScreen lookup={lookup} />');
   });
 });

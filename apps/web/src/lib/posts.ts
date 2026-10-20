@@ -3,6 +3,7 @@ import {
   postExcerpt,
   postListQuerySchema,
   readPostDocument,
+  type MarketStatus,
   type PostState,
 } from '@buddha/shared';
 import type { Metadata } from 'next';
@@ -56,6 +57,131 @@ export function writePath(marketId?: string): string {
   return marketId === undefined
     ? WRITE_PATH
     : `${WRITE_PATH}?${new URLSearchParams({ market: marketId }).toString()}`;
+}
+
+// ---- the write screen's market ---------------------------------------------------------------
+
+/** The market a new post goes to, as the write screen shows it. */
+export interface WriteMarket {
+  id: string;
+  title: string;
+  status: MarketStatus;
+}
+
+/**
+ * What the write page's read of `?market=` came to (WritePage, ADR-0073 9-44): `found`; `none` —
+ * no `?market=`, or one that names no public market (the API's 404, or its 400 for an id it does
+ * not take: a draft or an unknown id); or `failed` — the read failed otherwise (the API
+ * unreachable, a 5xx, a 429), which says nothing about the market.
+ */
+export type WriteMarketLookup =
+  { kind: 'found'; market: WriteMarket } | { kind: 'none' } | { kind: 'failed'; marketId: string };
+
+/**
+ * Reads the market `marketId` names through `read` — `fetchMarketServer`, which answers null for
+ * the API's NOT_FOUND and VALIDATION_ERROR and throws anything else — into a `WriteMarketLookup`.
+ * A throw is `failed`, never `none`: a transient failure is not «no such market» (Codex review of
+ * #219, round 2 — the page turned every failure into none, and the screen then put the picker in
+ * the form's place, its draft gone with it).
+ */
+export async function lookUpWriteMarket(
+  marketId: string | undefined,
+  read: (id: string) => Promise<WriteMarket | null>,
+): Promise<WriteMarketLookup> {
+  if (marketId === undefined) return { kind: 'none' };
+  try {
+    const market = await read(marketId);
+    return market === null
+      ? { kind: 'none' }
+      : { kind: 'found', market: { id: market.id, title: market.title, status: market.status } };
+  } catch {
+    return { kind: 'failed', marketId };
+  }
+}
+
+/**
+ * The market the write screen's form shows once a read of the page (`lookup`) has come, while it
+ * shows `shown` (null: no form — the picker, or the failure, shows instead): the market found; no
+ * form only when the API said there is no such market; and on a failure the form stays as it is —
+ * with the market it shows, which is the one just picked (the screen shows a market picked at once,
+ * before the page is read again) — so a read that failed for a moment never takes a draft away.
+ */
+export function writeMarketAfter(
+  shown: WriteMarket | null,
+  lookup: WriteMarketLookup,
+): WriteMarket | null {
+  switch (lookup.kind) {
+    case 'found':
+      return lookup.market;
+    case 'none':
+      return null;
+    case 'failed':
+      return shown;
+  }
+}
+
+/**
+ * The write screen's market, all WriteScreen holds of it: the market its form shows (`shown`;
+ * null: no form) and the page's read it has taken in (`read`).
+ */
+export interface WriteScreenMarket {
+  readonly shown: WriteMarket | null;
+  readonly read: WriteMarketLookup;
+}
+
+/** What moves the write screen's market: a market picked on the screen, or a read of the page. */
+export type WriteScreenEvent =
+  { kind: 'picked'; market: WriteMarket } | { kind: 'read'; lookup: WriteMarketLookup };
+
+/** The write screen's market as the page's first read (`lookup`) leaves it. */
+export function writeScreenStart(lookup: WriteMarketLookup): WriteScreenMarket {
+  return { shown: writeMarketAfter(null, lookup), read: lookup };
+}
+
+/**
+ * The write screen's market after `event` (ADR-0073 9-44). A market picked shows at once (the
+ * search read it a moment ago — its title and state), before the address follows it and the page
+ * reads it again. A read of the page the screen has not taken in — a new object: the page renders
+ * one per read, after a pick or a retry — settles the market shown (`writeMarketAfter`: a read that
+ * failed keeps the form and its draft); the read taken in already changes nothing, so a render
+ * before the address has followed a pick keeps the market picked rather than going back to the
+ * one that read found. Returns `state` itself when nothing changed.
+ */
+export function writeScreenMarket(
+  state: WriteScreenMarket,
+  event: WriteScreenEvent,
+): WriteScreenMarket {
+  switch (event.kind) {
+    case 'picked': {
+      const { id, title, status } = event.market;
+      return { shown: { id, title, status }, read: state.read };
+    }
+    case 'read':
+      return event.lookup === state.read
+        ? state
+        : { shown: writeMarketAfter(state.shown, event.lookup), read: event.lookup };
+  }
+}
+
+/**
+ * What the write screen shows of its market (`market`): the form under the market shown; with no
+ * form, after a read that failed, the failure and its retry; or else the picker. `back` is the
+ * address the sign-in returns to (WriteGate): the market's, the failed read's included, so it
+ * comes back to that market.
+ */
+export type WriteScreenView =
+  | { kind: 'form'; market: WriteMarket; back: string }
+  | { kind: 'failed'; back: string }
+  | { kind: 'picker'; back: string };
+
+export function writeScreenView(market: WriteScreenMarket): WriteScreenView {
+  if (market.shown !== null) {
+    return { kind: 'form', market: market.shown, back: writePath(market.shown.id) };
+  }
+  if (market.read.kind === 'failed') {
+    return { kind: 'failed', back: writePath(market.read.marketId) };
+  }
+  return { kind: 'picker', back: writePath() };
 }
 
 // ---- the community list's URL --------------------------------------------------------------

@@ -1,4 +1,4 @@
-import { finished } from 'node:stream';
+import { Readable, finished } from 'node:stream';
 import { Body, Controller, Get, Param, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
 import {
   ApiBody,
@@ -76,11 +76,12 @@ export class MediaController {
   // FORBIDDEN: a mutation whose Origin is not ours (SessionGuard's CSRF check, or the body
   // parser's hook before the body is read — image-body.ts), or a query whose `expectedAccountId`
   // is not the cookie's account (details name the field; nothing stored). UNAUTHENTICATED and
-  // ONBOARDING_REQUIRED are answered by that hook too, before the body is read, and so is a body
-  // declared over the parser's limit (413, VALIDATION_ERROR); a body that sends no byte for 30
-  // seconds is cut (408, VALIDATION_ERROR — image-body.ts). RATE_LIMITED (every route documents
-  // it) is also the answer, with `Retry-After`, when the account has three uploads in flight or
-  // the uploads being received hold the process's budget (that hook again, unread —
+  // ONBOARDING_REQUIRED are answered by that hook too, before the body is read — whatever its
+  // Content-Type — and so are a body of a type the route does not take (415, VALIDATION_ERROR)
+  // and one declared over the parser's limit (413, VALIDATION_ERROR); a body that sends no byte
+  // for 30 seconds is cut (408, VALIDATION_ERROR — image-body.ts). RATE_LIMITED (every route
+  // documents it) is also the answer, with `Retry-After`, when the account has three uploads in
+  // flight or the uploads being received hold the process's budget (that hook again, unread —
   // image-body.ts) and when too many conversions are waiting (image.ts).
   @ApiErrors(
     'UNAUTHENTICATED',
@@ -137,6 +138,12 @@ export class MediaController {
    * Past the budget the read is RATE_LIMITED with `Retry-After`, as a full conversion queue is for an
    * upload — so clients that read slowly, or not at all, or hang up mid-read, fill the budget and not
    * the API's memory (ADR-0073 decision 9-36). A 304 holds nothing.
+   *
+   * A HEAD (Fastify answers it with this handler, the GET's) is answered from the row alone: the
+   * headers a GET would carry, its length the stored object's (`media_objects.byte_size`, written
+   * with the object), and no store read nor share — Fastify would send no body anyway, so reading
+   * the image only to drop it would let HEADs fill the budget and refuse the GETs (Codex review of
+   * #219, round 2).
    */
   @Get(':mediaId')
   @RawResponse()
@@ -160,13 +167,25 @@ export class MediaController {
     @Param('mediaId', { schema: uuidParamSchema }) mediaId: string,
     @Req() request: FastifyRequest,
     @Res({ passthrough: true }) reply: FastifyReply,
-  ): Promise<Buffer | undefined> {
+  ): Promise<Buffer | Readable | undefined> {
     const image = await this.media.findShown(mediaId);
     if (!image) throw imageNotFound();
     const etag = `"${mediaId}"`;
     if (request.headers['if-none-match'] === etag) {
       void reply.status(304).header('cache-control', 'public, no-cache').header('etag', etag);
       return undefined;
+    }
+    const answerHeaders = () =>
+      reply
+        .header('content-type', image.contentType)
+        .header('cache-control', 'public, no-cache')
+        .header('etag', etag)
+        .header('content-disposition', 'inline');
+    if (request.method === 'HEAD') {
+      void answerHeaders().header('content-length', String(image.byteSize));
+      // An empty stream, not undefined: Fastify's hook for the HEAD of a GET route sets the length
+      // of an undefined body to 0, and leaves a stream's to the headers.
+      return Readable.from([]);
     }
     const release = imageReads.take(image.byteSize);
     if (release === null) {
@@ -195,11 +214,7 @@ export class MediaController {
       throw error;
     }
     if (body === null) throw imageNotFound();
-    void reply
-      .header('content-type', image.contentType)
-      .header('cache-control', 'public, no-cache')
-      .header('etag', etag)
-      .header('content-disposition', 'inline');
+    void answerHeaders();
     // The store's bytes themselves, not a copy of them.
     return Buffer.from(body.buffer, body.byteOffset, body.byteLength);
   }

@@ -5,6 +5,7 @@ import type {
   fetchMarketsPageServer as FetchMarketsPage,
   fetchPostsPageServer as FetchPostsPage,
   fetchRelatedMarketsPageServer as FetchRelatedMarketsPage,
+  lookUpWriteMarketServer as LookUpWriteMarket,
 } from './api.server';
 import { type MarketFilters, type MarketSearch } from './market-keys';
 
@@ -37,6 +38,7 @@ let fetchMarketsPageServer: typeof FetchMarketsPage;
 let fetchMarketSearchPageServer: typeof FetchMarketSearchPage;
 let fetchRelatedMarketsPageServer: typeof FetchRelatedMarketsPage;
 let fetchPostsPageServer: typeof FetchPostsPage;
+let lookUpWriteMarketServer: typeof LookUpWriteMarket;
 
 beforeAll(async () => {
   vi.stubGlobal('fetch', fakeFetch);
@@ -45,6 +47,7 @@ beforeAll(async () => {
     fetchMarketSearchPageServer,
     fetchRelatedMarketsPageServer,
     fetchPostsPageServer,
+    lookUpWriteMarketServer,
   } = await import('./api.server'));
 });
 afterAll(() => {
@@ -131,5 +134,55 @@ describe('fetchPostsPageServer', () => {
       {},
       { marketId: market, category: 'economy', q: '금리', cursor: 'cursor-1' },
     ]);
+  });
+});
+
+describe('the write page’s read of its market (lookUpWriteMarketServer)', () => {
+  const id = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+  const answer = (status: number, body: unknown) =>
+    Promise.resolve(
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+  const refusal = (status: number, code: string) =>
+    answer(status, { error: { code, message: 'x' } });
+
+  it('is none only when the API says there is no such market, and failed for any other failure (Codex review of #219, round 2)', async () => {
+    fakeFetch.mockImplementationOnce(() =>
+      answer(200, { data: { id, title: '기준금리 인하?', status: 'closed', rules: '…' } }),
+    );
+    await expect(lookUpWriteMarketServer(id)).resolves.toEqual({
+      kind: 'found',
+      market: { id, title: '기준금리 인하?', status: 'closed' },
+    });
+    // A draft or an unknown id (404), an id the route does not take (400): no such market.
+    fakeFetch.mockImplementationOnce(() => refusal(404, 'NOT_FOUND'));
+    await expect(lookUpWriteMarketServer(id)).resolves.toEqual({ kind: 'none' });
+    fakeFetch.mockImplementationOnce(() => refusal(400, 'VALIDATION_ERROR'));
+    await expect(lookUpWriteMarketServer(id)).resolves.toEqual({ kind: 'none' });
+    // The API failing, busy or out of reach says nothing about the market.
+    fakeFetch.mockImplementationOnce(() => refusal(500, 'INTERNAL'));
+    await expect(lookUpWriteMarketServer(id)).resolves.toEqual({
+      kind: 'failed',
+      marketId: id,
+    });
+    fakeFetch.mockImplementationOnce(() => refusal(429, 'RATE_LIMITED'));
+    await expect(lookUpWriteMarketServer(id)).resolves.toEqual({
+      kind: 'failed',
+      marketId: id,
+    });
+    fakeFetch.mockImplementationOnce(() => Promise.reject(new TypeError('fetch failed')));
+    await expect(lookUpWriteMarketServer(id)).resolves.toEqual({
+      kind: 'failed',
+      marketId: id,
+    });
+    // No market in the address: nothing is read.
+    fakeFetch.mockClear();
+    await expect(lookUpWriteMarketServer(undefined)).resolves.toEqual({
+      kind: 'none',
+    });
+    expect(fakeFetch).not.toHaveBeenCalled();
   });
 });

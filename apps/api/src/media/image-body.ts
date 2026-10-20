@@ -277,23 +277,35 @@ function mediaTypeOf(request: FastifyRequest): string | undefined {
   return header.split(';', 1)[0]?.trim().toLowerCase();
 }
 
+/** Whether `request` is a POST to the upload route (the route pattern Fastify matched). */
+function isUploadRoute(request: FastifyRequest): boolean {
+  return (
+    request.method === IMAGE_UPLOAD_ROUTE.method &&
+    request.routeOptions.url === IMAGE_UPLOAD_ROUTE.url
+  );
+}
+
 /**
- * What the gate below makes of `request` before its body is read: `pass` for a request whose body
- * is not this parser's (another type, or a GET or HEAD), a refusal, or `upload` — the upload route
- * from one of our pages, whose sender is checked next (`installImageBodyParser`).
+ * What the gate below makes of `request` before its body is read: `pass` for a request that is not
+ * the upload's and carries no body of this parser's types (another type, or a GET or HEAD), a
+ * refusal, or `upload` — a POST to the upload route from one of our pages, whatever its type,
+ * whose sender is checked next (`installImageBodyParser`).
+ *
+ * The route comes before the type: every POST to the upload route goes through the gate, so a body
+ * of another type — JSON or text, which Fastify's own parsers would read, or one no parser reads —
+ * is not read before its sender is known either (Codex review of #219, round 2: the first gate
+ * looked at the type first and let those through to the parsers, outside the budget and the
+ * account's three).
  */
 function imageBodyStep(
   request: FastifyRequest,
   trustedOrigins: ReadonlySet<string>,
 ): 'pass' | 'upload' | Error {
-  const type = mediaTypeOf(request);
-  if (type === undefined || !IMAGE_UPLOAD_CONTENT_TYPES.includes(type)) return 'pass';
-  // A GET or a HEAD has its body ignored, never parsed: nothing to keep from it.
-  if (request.method === 'GET' || request.method === 'HEAD') return 'pass';
-  if (
-    request.method !== IMAGE_UPLOAD_ROUTE.method ||
-    request.routeOptions.url !== IMAGE_UPLOAD_ROUTE.url
-  ) {
+  if (!isUploadRoute(request)) {
+    // A GET or a HEAD has its body ignored, never parsed: nothing to keep from it.
+    if (request.method === 'GET' || request.method === 'HEAD') return 'pass';
+    const type = mediaTypeOf(request);
+    if (type === undefined || !IMAGE_UPLOAD_CONTENT_TYPES.includes(type)) return 'pass';
     return new errorCodes.FST_ERR_CTP_INVALID_MEDIA_TYPE();
   }
   // SessionGuard's order: the Origin first, which costs no lookup.
@@ -301,6 +313,23 @@ function imageBodyStep(
     return new AppError('FORBIDDEN', { message: 'Cross-origin request refused' });
   }
   return 'upload';
+}
+
+/**
+ * Refuses, unread, an upload whose body is not of a type the route takes (another type or none):
+ * 415 VALIDATION_ERROR, after its sender has been let through, before it takes anything of the
+ * account's three or the budget. Only the image parser reads a body on the upload route — the
+ * handler would refuse anything else it was handed (`The body must be the image file itself`), so
+ * reading one first would only hold it.
+ */
+function assertUploadType(request: FastifyRequest): void {
+  const type = mediaTypeOf(request);
+  if (type !== undefined && IMAGE_UPLOAD_CONTENT_TYPES.includes(type)) return;
+  throw new AppError('VALIDATION_ERROR', {
+    status: HttpStatus.UNSUPPORTED_MEDIA_TYPE,
+    message: 'The body must be the image file itself',
+    details: [{ path: [], message: `send the file as ${IMAGE_UPLOAD_CONTENT_TYPES.join(', ')}` }],
+  });
 }
 
 /** Who may send an upload's body, as the gate asks before reading it. */
@@ -328,12 +357,15 @@ export interface ImageBodySenders {
  *
  * - a body of these types on any other route is refused unread, 415 — what it was before this
  *   parser existed (no other route takes one);
- * - on the upload route, a request from a foreign page is refused unread (403, SessionGuard's
- *   Origin check, `isTrustedOrigin`); then the cookie's session is resolved through better-auth, as
+ * - every POST to the upload route, whatever its Content-Type (one of the route's, JSON or text
+ *   that Fastify's own parsers read, another or none), goes through the rest before any parser
+ *   reads its body: a request from a foreign page is refused unread (403, SessionGuard's Origin
+ *   check, `isTrustedOrigin`); then the cookie's session is resolved through better-auth, as
  *   SessionGuard resolves it — a cookie that names no session (none, made up, expired, signed out)
  *   is refused unread (401) — and the account must have finished the onboarding
  *   (ONBOARDING_REQUIRED unread, OnboardedGuard's answer). The session is left on the request, so
  *   SessionGuard does not read it again; SessionGuard and OnboardedGuard still run after the body;
+ * - a body of a type the route does not take is then refused unread (415, `assertUploadType`);
  * - and then the body is let in (`letUploadIn`) only as one of the account's three uploads in
  *   flight and within the bytes the API receives at once (owner decisions 2026-10-21): one declared
  *   over the limit is refused unread, and one past either bound is RATE_LIMITED unread. Its body
@@ -351,6 +383,7 @@ export function installImageBodyParser(fastify: FastifyInstance, senders: ImageB
     if (!session) throw new AppError('UNAUTHENTICATED', { message: 'Sign in required' });
     authenticated.auth = session;
     await senders.assertOnboarded(session.user.id);
+    assertUploadType(request);
     letUploadIn(request, reply, session.user.id);
   });
   fastify.addHook('preParsing', async (request, reply, payload) =>

@@ -55,6 +55,7 @@ import {
   pastedLinkHref,
   takeImageBatch,
   uploadImageBatch,
+  uploadWithPreview,
   type ImageSlots,
 } from '@/lib/post-editor';
 import { previewSize } from '@/lib/post-drafts';
@@ -75,13 +76,14 @@ import { POST_CONTENT_CSS } from './post-content-style';
  *
  * An image is uploaded the moment it is picked (`POST /media/images`), and the node takes the id
  * the answer names. The server serves an upload only once a post shows it, so a new image is drawn
- * from the file picked (a `data:` URL — the page's CSP allows `data:` images, not `blob:`) until
- * the post is saved; an image already in the post is drawn from `GET /media/:id`. A draft the
- * onboarding gate kept (lib/post-drafts.ts) comes back with a small copy of each new upload's
- * preview (`initialPreviews`) — the file picked is gone with the page — which `onPreview` hands
- * the form as each upload's preview is drawn. The upload counts as under way until then
- * (`onUploadingChange`), so the form sends nothing before it: a write the onboarding refuses —
- * the gate's usual way of taking a draft away — finds every image's preview there to keep.
+ * from a small copy of the file picked (`boundedPreviewOf` — a `data:` URL, as the page's CSP
+ * allows `data:` images, not `blob:`; never the file itself) until the post is saved; an image
+ * already in the post is drawn from `GET /media/:id`. A draft the onboarding gate kept
+ * (lib/post-drafts.ts) comes back with that copy of each new upload (`initialPreviews`) — the file
+ * picked is gone with the page — which `onPreview` hands the form as each upload goes in. The
+ * upload counts as under way until then (`onUploadingChange`), so the form sends nothing before
+ * it: a write the onboarding refuses — the gate's usual way of taking a draft away — finds every
+ * image's preview there to keep.
  */
 
 /** The image node: `{ type: 'image', attrs: { mediaId } }` — never a `src` the writer chose. */
@@ -174,16 +176,36 @@ function keepServerLinks(html: string): string {
 /** The accepted file types, for the file picker; the server decides by the bytes anyway. */
 const IMAGE_ACCEPT = IMAGE_CONTENT_TYPES.join(',');
 
+/** Reads a picked file as a `data:` URL, to be drawn (`boundedPreviewOf`). */
+function readAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      resolve(typeof reader.result === 'string' ? reader.result : '');
+    };
+    reader.onerror = () => {
+      reject(reader.error ?? new Error('unreadable'));
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 /**
- * A small copy of an upload's preview for a kept draft (DRAFT_PREVIEW_MAX_SIDE on the longer side,
- * `previewSize`): WebP, or JPEG on white where the browser does not write WebP (Safari) — a draft
- * that held each upload's whole file would not fit this tab's storage. The first frame of an
- * animation. Undefined when the browser cannot draw it.
+ * The preview of a new upload: what the editor draws it from until the post is saved, and what a
+ * kept draft takes with it (`onPreview`). A copy at most DRAFT_PREVIEW_MAX_SIDE on its longer side
+ * (`previewSize`) — WebP, or JPEG on white where the browser does not write WebP (Safari) — never
+ * the file picked itself: the file is read as a `data:` URL (the page's CSP takes `data:` images,
+ * not `blob:`) only to be drawn into the copy, and let go once drawn. A photo of a few MB decodes
+ * to tens of MB, and the editor drew each upload from its whole file for its life (Codex review of
+ * #219, round 2): a few large photos could freeze or end a phone's tab. The first frame of an
+ * animation (a GIF moves once the post is saved). Undefined when the browser cannot draw it: the
+ * image then shows as the saved post would before it is served — not at all — rather than from its
+ * whole file.
  */
-async function smallPreviewOf(preview: string): Promise<string | undefined> {
+async function boundedPreviewOf(file: File): Promise<string | undefined> {
+  const image = new Image();
   try {
-    const image = new Image();
-    image.src = preview;
+    image.src = await readAsDataUrl(file);
     await image.decode();
     const { width, height } = previewSize(image.naturalWidth, image.naturalHeight);
     const encode = (type: string, background?: string) => {
@@ -203,21 +225,10 @@ async function smallPreviewOf(preview: string): Promise<string | undefined> {
     return webp?.startsWith('data:image/webp') ? webp : encode('image/jpeg', '#ffffff');
   } catch {
     return undefined;
+  } finally {
+    // The decoded file is the copy's source only.
+    image.removeAttribute('src');
   }
-}
-
-/** Reads a picked file as a `data:` URL, the editor's preview of an upload not yet served. */
-function readAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      resolve(typeof reader.result === 'string' ? reader.result : '');
-    };
-    reader.onerror = () => {
-      reject(reader.error ?? new Error('unreadable'));
-    };
-    reader.readAsDataURL(file);
-  });
 }
 
 export interface PostEditorProps {
@@ -228,7 +239,7 @@ export interface PostEditorProps {
   initialDocument?: PostDocument | JSONContent;
   /** A kept draft's previews of its uploads, by media id (`data:` URLs). */
   initialPreviews?: Readonly<Record<string, string>>;
-  /** Each new upload's small preview, once drawn: what a kept draft takes with it. */
+  /** Each new upload's preview (the small copy the editor draws it from), for a kept draft. */
   onPreview?: (mediaId: string, preview: string) => void;
   /** Every change, as the editor's JSON (what the write sends). */
   onChange: (json: unknown) => void;
@@ -276,8 +287,8 @@ export function PostEditor({
   /**
    * Previews of this session's uploads, by media id; read by the image node's `srcOf` whenever
    * ProseMirror draws an image. One Map for the editor's life (state, so render never reads a ref);
-   * filled as uploads land, which is outside render — and, for a draft taken back, with the small
-   * previews it kept.
+   * filled as uploads land, which is outside render, with each upload's small copy and never its
+   * file (`boundedPreviewOf`) — and, for a draft taken back, with the copies it kept.
    */
   const [previews] = useState(() => new Map<string, string>(Object.entries(initialPreviews ?? {})));
   const editor = useEditor({
@@ -403,11 +414,15 @@ export function PostEditor({
       send: async (file, placed) => {
         changeUploads(1);
         try {
-          const [preview, uploaded] = await Promise.all([
-            readAsDataUrl(file),
-            upload(file, accountId),
-          ]);
-          previews.set(uploaded.id, preview);
+          // The preview is drawn while the file goes up, and only it is kept (`boundedPreviewOf`).
+          // A failed upload is said once its copy has settled too, so the line decodes one file
+          // at a time however fast the uploads fail.
+          const { uploaded, preview } = await uploadWithPreview(
+            file,
+            (picked) => upload(picked, accountId),
+            boundedPreviewOf,
+          );
+          if (preview !== undefined) previews.set(uploaded.id, preview);
           // After an image goes in, the selection is that image (a node selection, which is where
           // ProseMirror puts the cursor after an atom at the end): the next one goes after it rather
           // than replacing it, so every image of a batch stays — and so does an image the writer
@@ -425,12 +440,9 @@ export function PostEditor({
             .run();
           // The document counts it from here.
           placed();
-          if (onPreview !== undefined) {
-            // Still counted as uploading (the `finally` below), so the form cannot send — and be
-            // refused for the onboarding — before the kept draft's copy is drawn.
-            const small = await smallPreviewOf(preview);
-            if (small !== undefined) onPreview(uploaded.id, small);
-          }
+          // Drawn before the image went in, so the form has it — for a draft it keeps — before
+          // this upload stops counting (the `finally` below) and the form may send.
+          if (preview !== undefined) onPreview?.(uploaded.id, preview);
         } finally {
           changeUploads(-1);
         }

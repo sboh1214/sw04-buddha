@@ -312,8 +312,13 @@ interface OwnerCase {
    * wherever a key can name one — a page cursor made from A's row, A's id.
    */
   query?: Readonly<Record<string, (fixture: Fixture) => string>>;
-  /** What B sends: A's account wherever the body names one. */
+  /**
+   * What B sends: A's account wherever the body names one. JSON, or — a Buffer — the bytes
+   * themselves under `contentType`.
+   */
   body?: (fixture: Fixture) => unknown;
+  /** The type of a body sent as bytes (`body` a Buffer). */
+  contentType?: string;
   /** B's answer. */
   status: number;
   /**
@@ -490,10 +495,12 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
     status: 403,
   },
   // The file is the body, so the account rides in the query: B naming A is refused before the
-  // body is looked at, and nothing is stored (below).
+  // file is looked at, and nothing is stored (below). Sent as an image: the route takes no JSON
+  // (415 before any check of the account — image-body.ts).
   'POST /media/images': {
     query: { expectedAccountId: (fixture) => fixture.a.id },
-    body: () => ({}),
+    body: () => Buffer.from([0xff, 0xd8, 0xff, 0xe0]),
+    contentType: 'image/jpeg',
     status: 403,
   },
   'POST /payments/charge': {
@@ -1051,6 +1058,8 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       params?: Record<string, string>;
       query?: Record<string, string>;
       body?: unknown;
+      /** The type of a body that is bytes (a Buffer); JSON otherwise. */
+      contentType?: string;
       cookie?: string;
     },
   ) {
@@ -1066,15 +1075,22 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     if (!safe && input.body === undefined) {
       throw new Error(`no body for ${route.key}: add it to this file's cases`);
     }
+    const bytes = Buffer.isBuffer(input.body) ? input.body : undefined;
     return t.app.inject({
       method: route.method as 'GET',
       url,
       headers: {
         origin: ORIGIN,
-        ...(safe ? {} : { 'content-type': 'application/json' }),
+        ...(safe
+          ? {}
+          : {
+              'content-type': bytes
+                ? (input.contentType ?? 'application/octet-stream')
+                : 'application/json',
+            }),
         ...(input.cookie ? { cookie: input.cookie } : {}),
       },
-      ...(safe ? {} : { payload: JSON.stringify(input.body) }),
+      ...(safe ? {} : { payload: bytes ?? JSON.stringify(input.body) }),
     });
   }
 
@@ -1282,6 +1298,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         params,
         query,
         body: ownerCase.body?.(f),
+        contentType: ownerCase.contentType,
         cookie: f.b.cookie,
       });
       answers.push({ route: key, status: res.statusCode, leaks: leaked(res.body) });

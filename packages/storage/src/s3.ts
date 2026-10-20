@@ -58,11 +58,17 @@ interface ObjectBody {
 /**
  * The whole of `body`. A `signal` aborted while the bytes stream in destroys the stream, so the read
  * rejects then rather than downloading the rest (the SDK's own `abortSignal` stops the request; this
- * stops the body after the answer has begun).
+ * stops the body after the answer has begun). One aborted already — between the answer's headers
+ * and this call — destroys the body before a byte of it is read, rather than leaving the stream
+ * unread on its connection.
  */
 async function readWhole(body: ObjectBody, signal: AbortSignal | undefined): Promise<Uint8Array> {
   if (signal === undefined) return body.transformToByteArray();
-  signal.throwIfAborted();
+  if (signal.aborted) {
+    // Closed without an error: nothing reads it, so no one would hear one.
+    body.destroy?.();
+    signal.throwIfAborted();
+  }
   const stop = () => {
     body.destroy?.(signal.reason instanceof Error ? signal.reason : new Error('aborted'));
   };

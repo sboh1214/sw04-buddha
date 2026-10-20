@@ -17,7 +17,13 @@ import {
   relatedMarketsQuery,
   searchListQuery,
 } from './market-keys';
-import { type CommunityFilters, type PostPage, postListQuery } from './posts';
+import {
+  type CommunityFilters,
+  type PostPage,
+  type WriteMarketLookup,
+  lookUpWriteMarket,
+  postListQuery,
+} from './posts';
 import { type TickRange, ticksQueryFor } from './ticks';
 
 const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000').replace(/\/$/, '');
@@ -59,6 +65,16 @@ export const fetchMarketServer = cache(async (idOrSlug: string): Promise<Market 
     throw error;
   }
 });
+
+/**
+ * The write page's read of the market `?market=` names (ADR-0073 9-44): `lookUpWriteMarket` over
+ * `fetchMarketServer` as it is — none only for the API's «no such market», failed for any other
+ * failure, which the write screen keeps its form through. A read that turned failures into null
+ * (`.catch(() => null)`) would make them none, and the screen put the picker in a draft's place.
+ */
+export function lookUpWriteMarketServer(marketId: string | undefined): Promise<WriteMarketLookup> {
+  return lookUpWriteMarket(marketId, fetchMarketServer);
+}
 
 /**
  * `GET /markets/:id/ticks` for the seeded chart. The whole `PriceSeries` is returned and cached,

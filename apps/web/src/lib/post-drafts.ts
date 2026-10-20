@@ -29,9 +29,10 @@ import { hasOnboardingStepLeft, type Onboarding } from './onboarding';
  *   the upload answers, and the gate has taken the editor away by then — so a form whose only
  *   change is an upload in flight keeps nothing, and its screen opened again is not "restored".
  * - The uploads: an image node is its media id, which the server serves only once a post shows it
- *   — so beside the text it keeps a small preview of each new upload (DRAFT_PREVIEW_MAX_SIDE, made
- *   when the image went up), and the editor draws the image from it until the post is saved. A
- *   draft too big for the storage with its previews is kept without them.
+ *   — so beside the text it keeps a small preview of each new upload (DRAFT_PREVIEW_MAX_SIDE: the
+ *   copy the editor drew every new upload from, made while the image went up), and the editor
+ *   taking the draft back draws the image from it until the post is saved. A draft too big for the
+ *   storage with its previews is kept without them.
  *
  * Pure functions over a `DraftStorage` (the tests hand a Map's), plus the browser's binding to this
  * tab's `sessionStorage` at the end — none of it throws: a storage the browser refuses (a private
@@ -68,7 +69,11 @@ export interface DraftStorage {
  */
 export const POST_DRAFT_TTL_MS = 60 * 60 * 1000;
 
-/** The longer side of an upload's kept preview, in pixels. */
+/**
+ * The longer side of a new upload's preview, in pixels: the copy the editor draws the image from
+ * until the post is saved (`boundedPreviewOf`, ADR-0073 9-24) and the copy a kept draft takes with
+ * it (9-38) — one copy, so changing this changes both.
+ */
 export const DRAFT_PREVIEW_MAX_SIDE = 640;
 
 /** Every kept draft's storage key starts with this. */
@@ -281,8 +286,9 @@ export function clearPostDrafts(storage: DraftStorage): void {
 }
 
 /**
- * The size an upload's kept preview is drawn at: `width` × `height` scaled so the longer side is
- * at most `max` (never enlarged), each side at least one pixel.
+ * The size a new upload's preview (the editor's copy, which a kept draft takes) is drawn at:
+ * `width` × `height` scaled so the longer side is at most `max` (never enlarged), each side at
+ * least one pixel.
  */
 export function previewSize(
   width: number,

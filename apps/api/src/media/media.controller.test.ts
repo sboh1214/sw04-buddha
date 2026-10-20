@@ -122,20 +122,28 @@ describe.skipIf(!hasTestInfra)('/api/v1/media (integration)', () => {
   /**
    * An upload over a real socket (`inject` sends its whole payload at once): its body announced at
    * `length` (null: none, so Node sends it chunked) and only `first` of it sent, by `who` (the
-   * author unless said). The answer, and the request to send the rest on — or to hang up.
+   * author unless said; a `cookie` of null sends none) as `type` (a JPEG unless said; null sends
+   * no Content-Type). The answer, and the request to send the rest on — or to hang up.
    */
   function rawUpload(
     length: number | null,
     first: Buffer,
-    options: { who?: TestUser; cookie?: string; origin?: string | null } = {},
+    options: {
+      who?: TestUser;
+      cookie?: string | null;
+      origin?: string | null;
+      type?: string | null;
+    } = {},
   ): { request: ReturnType<typeof httpRequest>; answer: Promise<RawAnswer> } {
     const who = options.who ?? author;
     const origin = options.origin === undefined ? TRUSTED_ORIGIN : options.origin;
+    const type = options.type === undefined ? 'image/jpeg' : options.type;
+    const cookie = options.cookie === undefined ? who.cookie : options.cookie;
     const request = httpRequest(`${t.url!}/api/v1/media/images?expectedAccountId=${who.id}`, {
       method: 'POST',
       headers: {
-        'content-type': 'image/jpeg',
-        cookie: options.cookie ?? who.cookie,
+        ...(type === null ? {} : { 'content-type': type }),
+        ...(cookie === null ? {} : { cookie }),
         ...(origin === null ? {} : { origin }),
         ...(length === null ? {} : { 'content-length': String(length) }),
       },
@@ -275,15 +283,139 @@ describe.skipIf(!hasTestInfra)('/api/v1/media (integration)', () => {
       },
       payload: JSON.stringify({ image: 'data:image/png;base64,AAAA' }),
     });
-    expect(json.statusCode).toBe(400);
-    expect(json.json<{ error: { code: string } }>().error.code).toBe('VALIDATION_ERROR');
-    // Fastify reads text itself, which the handler refuses; a type nobody reads is refused first.
-    const text = await upload('hello', { type: 'text/plain' });
-    expect(text.statusCode).toBe(400);
-    expect(text.json<{ error: { code: string } }>().error.code).toBe('VALIDATION_ERROR');
-    const pdf = await upload('%PDF-1.7', { type: 'application/pdf' });
-    expect(pdf.statusCode).toBe(415);
-    expect(pdf.json<{ error: { code: string } }>().error.code).toBe('VALIDATION_ERROR');
+    // Refused by the gate, unread (Fastify's own parsers read JSON and text, but not here): the
+    // route takes its own types only.
+    expect(json.statusCode).toBe(415);
+    expect(json.json()).toEqual({
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'The body must be the image file itself',
+        details: [{ path: [], message: expect.stringContaining('image/jpeg') as unknown }],
+      },
+    });
+    for (const type of ['text/plain', 'application/pdf', 'multipart/form-data; boundary=x']) {
+      const other = await upload('hello', { type });
+      expect(other.statusCode).toBe(415);
+      expect(other.json<{ error: { code: string } }>().error.code).toBe('VALIDATION_ERROR');
+    }
+    // No type at all: refused alike.
+    const untyped = await t.app.inject({
+      method: 'POST',
+      url: `/api/v1/media/images?expectedAccountId=${author.id}`,
+      headers: { origin: TRUSTED_ORIGIN, cookie: author.cookie },
+      payload: await photo(),
+    });
+    expect(untyped.statusCode).toBe(415);
+    expect(await mediaRows()).toEqual([]);
+    // None of them took a place or a share.
+    expect(imageUploadsInFlight.size).toBe(0);
+    expect(imageUploadsReceiving.size).toBe(0);
+  });
+
+  it('checks the sender of an upload of any type before a parser reads its body (Codex review of #219, round 2)', async () => {
+    // Bodies announced at 1KiB and only begun, of types Fastify's own parsers read (JSON, text),
+    // of one no parser reads, and of none: were a body read first, the answer would wait for the
+    // rest of it (which never comes).
+    const types = ['application/json', 'text/plain', 'application/x-unknown', null];
+    const newcomer = await signUpTestUser(t);
+    const senders: {
+      name: string;
+      options: Parameters<typeof rawUpload>[2];
+      status: number;
+      code: string;
+    }[] = [
+      { name: 'anonymous', options: { cookie: null }, status: 401, code: 'UNAUTHENTICATED' },
+      {
+        name: 'a made-up cookie, no Origin',
+        options: { cookie: `${SESSION_COOKIE}=x`, origin: null },
+        status: 401,
+        code: 'UNAUTHENTICATED',
+      },
+      {
+        name: 'a foreign page',
+        options: { origin: 'https://evil.example' },
+        status: 403,
+        code: 'FORBIDDEN',
+      },
+      {
+        name: 'an account with a step left',
+        options: { who: newcomer },
+        status: 409,
+        code: 'ONBOARDING_REQUIRED',
+      },
+      { name: 'an account that may upload', options: {}, status: 415, code: 'VALIDATION_ERROR' },
+    ];
+    for (const sender of senders) {
+      for (const type of types) {
+        const { request, answer } = rawUpload(1024, Buffer.from('{"a":'), {
+          ...sender.options,
+          type,
+        });
+        try {
+          const res = await beforeTheBody(answer);
+          expect({ sender: sender.name, type, status: res.status }).toEqual({
+            sender: sender.name,
+            type,
+            status: sender.status,
+          });
+          expect(JSON.parse(res.body)).toMatchObject({ error: { code: sender.code } });
+          // Nothing held for it: neither a place among the account's three nor a share.
+          expect(imageUploadsInFlight.size).toBe(0);
+          expect(imageUploadsReceiving.size).toBe(0);
+        } finally {
+          request.destroy();
+        }
+      }
+    }
+    expect(await mediaRows()).toEqual([]);
+  });
+
+  it('refuses a body of a type the route does not take before it takes a place or a share: 415 with the account’s three or the budget full, and over the parser’s limit', async () => {
+    // Bodies of types Fastify's own parsers read (JSON, text) and of none, announced and only begun.
+    const types = ['application/json', 'text/plain', null];
+    const send = async (type: string | null, length = 1024) => {
+      const { request, answer } = rawUpload(length, Buffer.from('{"a":'), { type });
+      try {
+        const res = await beforeTheBody(answer);
+        const { error } = JSON.parse(res.body) as { error: { code: string } };
+        return { type, status: res.status, code: error.code };
+      } finally {
+        request.destroy();
+      }
+    };
+    const refusedForItsType = (type: string | null) => ({
+      type,
+      status: 415,
+      code: 'VALIDATION_ERROR',
+    });
+
+    // The account's three in flight: an image waits its turn (429); the others are refused for
+    // their type all the same — they never asked for a place.
+    const three = Array.from({ length: IMAGE_UPLOADS_PER_ACCOUNT }, () =>
+      imageUploadsInFlight.take(author.id),
+    );
+    try {
+      expect(three).not.toContain(null);
+      expect((await upload(await photo())).statusCode).toBe(429);
+      for (const type of types) expect(await send(type)).toEqual(refusedForItsType(type));
+    } finally {
+      for (const leave of three) leave?.();
+    }
+
+    // The bytes received at once at the budget: alike, they never asked for a share.
+    const all = imageUploadsReceiving.take(IMAGE_UPLOAD_RECEIVING_BYTES);
+    try {
+      expect(all).not.toBeNull();
+      expect((await upload(await photo())).statusCode).toBe(429);
+      for (const type of types) expect(await send(type)).toEqual(refusedForItsType(type));
+    } finally {
+      all?.();
+    }
+
+    // Announced over the parser's limit: refused for its type, not for its length (413).
+    for (const type of types) {
+      expect(await send(type, IMAGE_BODY_LIMIT + 1)).toEqual(refusedForItsType(type));
+    }
     expect(await mediaRows()).toEqual([]);
   });
 
@@ -962,6 +1094,56 @@ describe.skipIf(!hasTestInfra)('/api/v1/media (integration)', () => {
     } finally {
       get.mockRestore();
     }
+  });
+
+  it('answers a HEAD from the row: the headers and length of the GET, no store read and no share (Codex review of #219, round 2)', async () => {
+    const image = await stored();
+    const market = await createMarket(t.db);
+    const post = await createPost(t.db, {
+      marketId: market.id,
+      authorId: author.id,
+      imageIds: [image.id],
+    });
+    const head = (headers: Record<string, string> = {}) =>
+      t.app.inject({ method: 'HEAD', url: `/api/v1/media/${image.id}`, headers });
+    const got = await read(image.id);
+    expect(got.statusCode).toBe(200);
+    await vi.waitFor(() => {
+      expect(imageReads.size).toBe(0);
+    });
+    const get = vi.spyOn(t.storage, 'get');
+    // Other reads hold the whole budget: a GET would be refused, a HEAD takes nothing.
+    const others = imageReads.take(IMAGE_READ_BUDGET_BYTES);
+    expect(others).not.toBeNull();
+    try {
+      expect((await read(image.id)).statusCode).toBe(429);
+      const res = await head();
+      expect(res.statusCode).toBe(200);
+      expect(res.rawPayload.length).toBe(0);
+      expect(res.headers).toMatchObject({
+        'content-type': 'image/png',
+        'content-length': String(image.body.length),
+        'cache-control': 'public, no-cache',
+        etag: `"${image.id}"`,
+        'content-disposition': 'inline',
+      });
+      // The GET's own headers, its length included.
+      expect(res.headers['content-length']).toBe(got.headers['content-length']);
+      expect(imageReads.size).toBe(IMAGE_READ_BUDGET_BYTES);
+      // A revalidation, as for a GET.
+      expect((await head({ 'if-none-match': `"${image.id}"` })).statusCode).toBe(304);
+      expect(get).not.toHaveBeenCalled();
+    } finally {
+      others?.();
+      get.mockRestore();
+    }
+    expect(imageReads.size).toBe(0);
+    // A hidden post's image: not found, as for a GET.
+    await t.db
+      .update(schema.posts)
+      .set({ hiddenAt: new Date() })
+      .where(eq(schema.posts.id, post.id));
+    expect((await head()).statusCode).toBe(404);
   });
 
   it('gives the read up when the client goes before its image is sent, and its share back only once that read has stopped', async () => {

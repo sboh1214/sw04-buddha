@@ -459,3 +459,31 @@ export async function uploadImageBatch<F>(
     slots.give(unsent);
   }
 }
+
+/**
+ * One file's upload (`send`) and its preview (`draw` — the editor's `boundedPreviewOf`, a copy at
+ * most DRAFT_PREVIEW_MAX_SIDE on its longer side), drawn while the file goes up: the upload's
+ * answer and the preview the editor keeps for it. The preview is the drawn copy or nothing — never
+ * the file itself, which the editor would otherwise hold decoded for its life (Codex review of
+ * #219, round 2) — and a copy that could not be drawn fails nothing: the upload stands. An upload
+ * that fails fails the whole, as before, but only once the copy has settled too: the editor's line
+ * (`createUploadQueue`) starts the next file when this one settles, and a failure said at once — the
+ * network gone, the API's 429 — would start the next file's decode while this one's still ran, so a
+ * batch of large photos failing fast decoded them all at the same time (a full decode of each,
+ * hundreds of MB on a phone). Settling after the copy keeps one decode at a time, success or not.
+ */
+export async function uploadWithPreview<F, T>(
+  file: F,
+  send: (file: F) => Promise<T>,
+  draw: (file: F) => Promise<string | undefined>,
+): Promise<{ uploaded: T; preview: string | undefined }> {
+  const drawing = draw(file).catch(() => undefined);
+  let uploaded: T;
+  try {
+    uploaded = await send(file);
+  } catch (error) {
+    await drawing;
+    throw error;
+  }
+  return { uploaded, preview: await drawing };
+}

@@ -1,25 +1,27 @@
 'use client';
 
-import { Badge, Box, Button, HStack, Heading, Stack, Text } from '@chakra-ui/react';
-import { type MarketStatus } from '@buddha/shared';
+import { Alert, Badge, Box, Button, HStack, Heading, Stack, Text } from '@chakra-ui/react';
 import type { Route } from 'next';
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useState, useTransition } from 'react';
 import { MarketPicker } from '@/components/post/market-picker';
 import { PostForm } from '@/components/post/post-form';
 import { WriteGate } from '@/components/post/write-gate';
 import { copy } from '@/copy';
 import { useCreatePost } from '@/hooks/use-posts';
 import { MARKET_STATUS_LABEL, MARKET_STATUS_PALETTE } from '@/lib/market-admin';
-import { postPath, postWriteErrorMessage, refusedImageIds, writePath } from '@/lib/posts';
+import {
+  type WriteMarket,
+  type WriteMarketLookup,
+  postPath,
+  postWriteErrorMessage,
+  refusedImageIds,
+  writePath,
+  writeScreenMarket,
+  writeScreenStart,
+  writeScreenView,
+} from '@/lib/posts';
 import { useSession } from '@/lib/use-session';
-
-/** The market a new post goes to, as the server page read it. */
-export interface WriteMarket {
-  id: string;
-  title: string;
-  status: MarketStatus;
-}
 
 /**
  * 글쓰기: with a market, the form under that market's title (#45-4: the market is chosen once and
@@ -27,24 +29,60 @@ export interface WriteMarket {
  * the title, the body and its images); without one, the picker, which puts the market picked into
  * the address (`?market=`), so a reload or a sign-in comes back to it. A post is sent once, then
  * the screen goes to its page.
+ *
+ * The market the form shows is the screen's own (`writeScreenMarket`, lib/posts.ts, where every
+ * step of it is tested): the page's read (`lookup`) settles it as it comes, and a market picked
+ * shows at once. Only the API's «no such market» takes the form away; a read that failed keeps it —
+ * the market just picked, the draft under it — and, with no form yet, says so and offers to read
+ * again (`writeScreenView`; Codex review of #219, round 2: every failure read as no market, and the
+ * picker took the draft's place).
  */
-export function WriteScreen({ market }: { market: WriteMarket | null }) {
+export function WriteScreen({ lookup }: { lookup: WriteMarketLookup }) {
   const router = useRouter();
+  const [held, setHeld] = useState(() => writeScreenStart(lookup));
+  // A new read of the page (after a pick, a retry) comes as a new object, taken in as it comes.
+  const market = writeScreenMarket(held, { kind: 'read', lookup });
+  if (market !== held) setHeld(market);
+  const view = writeScreenView(market);
+  const [retrying, startRetry] = useTransition();
+  // A market picked shows at once; its address follows, and the page's read of it then settles it.
+  const pick = (picked: WriteMarket) => {
+    setHeld((current) => writeScreenMarket(current, { kind: 'picked', market: picked }));
+    router.replace(writePath(picked.id) as Route);
+  };
   return (
     <Stack gap="6" data-testid="post-write-screen">
       <Heading as="h2" textStyle="headline">
         {copy.postWriteTitle}
       </Heading>
-      <WriteGate back={writePath(market?.id)}>
+      <WriteGate back={view.back}>
         {(writer) =>
-          market === null ? (
+          view.kind === 'form' ? (
+            <WriteForm market={view.market} accountId={writer.accountId} onRepick={pick} />
+          ) : view.kind === 'failed' ? (
+            <Stack gap="3" align="flex-start" data-testid="post-write-market-failed">
+              <Alert.Root status="error" role="alert">
+                <Alert.Indicator />
+                <Alert.Content>
+                  <Alert.Description>{copy.postWriteMarketLoadError}</Alert.Description>
+                </Alert.Content>
+              </Alert.Root>
+              <Button
+                size="sm"
+                variant="outline"
+                loading={retrying}
+                onClick={() => startRetry(() => router.refresh())}
+                data-testid="post-write-market-retry"
+              >
+                {copy.retry}
+              </Button>
+            </Stack>
+          ) : (
             <MarketPicker
               prompt={copy.marketPickerPrompt}
-              onPick={(picked) => router.replace(writePath(picked.id) as Route)}
+              onPick={pick}
               testId="post-write-market-picker"
             />
-          ) : (
-            <WriteForm market={market} accountId={writer.accountId} />
           )
         }
       </WriteGate>
@@ -54,12 +92,20 @@ export function WriteScreen({ market }: { market: WriteMarket | null }) {
 
 /**
  * The market box and the form. Changing the market keeps the draft: the picker opens inside the
- * box, and the market picked replaces the address's (`router.replace`), which re-renders the page
- * with the new market while this component — and the form and the editor under it, which hold the
- * draft — stays mounted (nothing here is keyed by the market). A link to the bare picker would
- * have unmounted the form and lost the draft.
+ * box, and the market picked shows at once and replaces the address's (`onRepick` — the screen's
+ * `router.replace`), which re-renders the page with the new market while this component — and the
+ * form and the editor under it, which hold the draft — stays mounted (nothing here is keyed by the
+ * market). A link to the bare picker would have unmounted the form and lost the draft.
  */
-function WriteForm({ market, accountId }: { market: WriteMarket; accountId: string }) {
+function WriteForm({
+  market,
+  accountId,
+  onRepick,
+}: {
+  market: WriteMarket;
+  accountId: string;
+  onRepick: (market: WriteMarket) => void;
+}) {
   const router = useRouter();
   const { refetch: refetchSession } = useSession();
   const create = useCreatePost(() => void refetchSession());
@@ -101,7 +147,7 @@ function WriteForm({ market, accountId }: { market: WriteMarket; accountId: stri
                 onPick={(picked) => {
                   setChanging(false);
                   setRefusal(undefined);
-                  router.replace(writePath(picked.id) as Route);
+                  onRepick(picked);
                 }}
                 testId="post-write-market-repick"
               />

@@ -1,3 +1,4 @@
+import { crc32, deflateSync } from 'node:zlib';
 import { type APIRequestContext, type Locator, type Page, type Route } from '@playwright/test';
 import type { Me } from '@buddha/shared';
 import { copy } from '../src/copy';
@@ -23,7 +24,9 @@ import {
  * 근거 글과 커뮤니티 (#46, ADR-0073; owner decisions in ADR-0069 decision 2, #45, and of
  * 2026-10-18): a member opens 글쓰기 from the community list, picks a market by its title, changes
  * it before sending without losing the draft, writes a formatted post with an image (a pasted link
- * the post would not keep is not shown as one), finds it in the community list through its search,
+ * the post would not keep is not shown as one; the photo drawn from a small copy of it until the
+ * post is saved, the post then serving it whole), finds it in the community list through its
+ * search,
  * market filter and category controls, sees their current nickname on it, edits it ('수정됨') and
  * deletes it (gone from the list, its page 404). The picker offers a closed market too (#45-6). A
  * visitor reads the list and a post — on a closed market too, whose link still opens the market's
@@ -60,6 +63,36 @@ const PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
   'base64',
 );
+
+/**
+ * A PNG of one colour, `width`×`height`: larger than the editor's preview of an upload (640px on
+ * the longer side), a few KB on the wire.
+ */
+function solidPng(width: number, height: number): Buffer {
+  const chunk = (type: string, data: Buffer) => {
+    const body = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+    const length = Buffer.alloc(4);
+    length.writeUInt32BE(data.length);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(body));
+    return Buffer.concat([length, body, crc]);
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header[8] = 8; // bits per channel
+  header[9] = 2; // RGB
+  // Each row: filter 0 (none), then its pixels.
+  const row = Buffer.alloc(1 + width * 3, 0x5a);
+  row[0] = 0;
+  const pixels = Buffer.concat(Array.from({ length: height }, () => row));
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', header),
+    chunk('IDAT', deflateSync(pixels)),
+    chunk('IEND', Buffer.alloc(0)),
+  ]);
+}
 
 const card = (page: Page, postId: string) => page.getByTestId(`post-card-${postId}`);
 
@@ -271,11 +304,22 @@ test.describe('근거 글', () => {
     await expect(editor.locator('a')).toHaveCount(1);
     await expect(editor.locator('a')).toHaveAttribute('href', 'https://example.com/kept');
     await expect(editor).toContainText('상대 주소 · 맨 주소 · 남는 링크');
+    // A photo larger than the editor's preview: drawn from a small copy of it, not from the file
+    // itself, until the post is saved (Codex review of #219, round 2).
     await page
       .getByTestId('post-editor-file')
-      .setInputFiles({ name: 'evidence.png', mimeType: 'image/png', buffer: PNG });
+      .setInputFiles({ name: 'evidence.png', mimeType: 'image/png', buffer: solidPng(1200, 900) });
     await expect(editor.locator('img[data-media-id]')).toHaveCount(1);
     await expect(page.getByTestId('post-body-images')).toContainText('1 / 10');
+    const preview = editor.locator('img[data-media-id]');
+    await expect(preview).toHaveAttribute('src', /^data:image\/(webp|jpeg);base64,/);
+    await expect
+      .poll(() =>
+        preview.evaluate((img: HTMLImageElement) =>
+          img.complete ? [img.naturalWidth, img.naturalHeight] : null,
+        ),
+      )
+      .toEqual([640, 480]);
     // No probability, position or order is asked for (N05 §2).
     await expect(page.getByTestId('post-form').locator('input[type="range"]')).toHaveCount(0);
     // The body is described by its counts and the live region its limit messages appear in.
@@ -313,9 +357,10 @@ test.describe('근거 글', () => {
     await expect(body).toContainText(`확인 코드 ${tag}`);
     const image = body.getByTestId('post-image');
     await expect(image).toHaveAttribute('src', /^\/api\/v1\/media\/[0-9a-f-]{36}$/);
+    // The saved post serves the image the API stored: the photo at its own size.
     await expect
-      .poll(() => image.evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0))
-      .toBe(true);
+      .poll(() => image.evaluate((img: HTMLImageElement) => (img.complete ? img.naturalWidth : 0)))
+      .toBe(1200);
     await expect(body.getByRole('link', { name: '남는 링크' })).toHaveAttribute(
       'href',
       'https://example.com/kept',

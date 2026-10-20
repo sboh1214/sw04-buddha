@@ -821,6 +821,9 @@ export const copy = {
   postWriteMarketLabel: '시장',
   postWriteMarketHint: '글은 고른 시장에 달리고, 올린 뒤에는 시장을 바꿀 수 없습니다.',
   postWriteMarketChange: '다른 시장 고르기',
+  // 주소의 시장을 읽지 못했을 때(시장이 없다는 답이 아니라 API에 닿지 못하거나 서버 오류 — 그 시장의 글
+  // 양식이 이미 있으면 그대로 두고 이 문장은 양식이 아직 없을 때만, '다시 시도'와 함께).
+  postWriteMarketLoadError: '시장을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.',
   postWriteTitleLabel: '제목 (선택)',
   postWriteTitlePlaceholder: '제목 없이 올려도 됩니다',
   postWriteBodyLabel: '본문',

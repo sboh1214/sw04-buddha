@@ -32,6 +32,7 @@ import {
   titleTooLong,
   uploadContentType,
   uploadImageBatch,
+  uploadWithPreview,
 } from './post-editor';
 
 /**
@@ -746,5 +747,119 @@ describe('createUploadQueue', () => {
       { status: 'fulfilled', value: 'c' },
     ]);
     expect(order).toEqual(['a starts', 'a ends', 'b starts', 'b ends', 'c starts', 'c ends']);
+  });
+});
+
+describe('uploadWithPreview', () => {
+  const file = { name: 'photo.jpg', original: 'data:image/jpeg;base64,THE-WHOLE-FILE' };
+  const small = 'data:image/webp;base64,640px';
+
+  it('keeps the drawn copy as the preview, never the file (Codex review of #219, round 2)', async () => {
+    const send = vi.fn(() => Promise.resolve({ id: 'm-1' }));
+    const draw = vi.fn(() => Promise.resolve(small));
+    const result = await uploadWithPreview(file, send, draw);
+    expect(result).toEqual({ uploaded: { id: 'm-1' }, preview: small });
+    expect(JSON.stringify(result)).not.toContain(file.original);
+    expect(send).toHaveBeenCalledWith(file);
+    expect(draw).toHaveBeenCalledWith(file);
+  });
+
+  it('draws the copy while the file goes up', async () => {
+    let answer!: (value: { id: string }) => void;
+    const send = () =>
+      new Promise<{ id: string }>((resolve) => {
+        answer = resolve;
+      });
+    const draw = vi.fn(() => Promise.resolve(small));
+    const result = uploadWithPreview(file, send, draw);
+    // The upload has not answered, and the copy is being drawn already.
+    expect(draw).toHaveBeenCalledTimes(1);
+    answer({ id: 'm-2' });
+    await expect(result).resolves.toEqual({ uploaded: { id: 'm-2' }, preview: small });
+  });
+
+  it('has no preview, rather than the file, when the copy cannot be drawn; an upload that fails fails it', async () => {
+    const send = () => Promise.resolve({ id: 'm-3' });
+    await expect(
+      uploadWithPreview(file, send, () => Promise.reject(new Error('undecodable'))),
+    ).resolves.toEqual({ uploaded: { id: 'm-3' }, preview: undefined });
+    await expect(uploadWithPreview(file, send, () => Promise.resolve(undefined))).resolves.toEqual({
+      uploaded: { id: 'm-3' },
+      preview: undefined,
+    });
+    await expect(
+      uploadWithPreview(
+        file,
+        () => Promise.reject(new Error('refused')),
+        () => Promise.resolve(small),
+      ),
+    ).rejects.toThrow('refused');
+  });
+
+  it('fails an upload that fails at once only when its copy has settled too', async () => {
+    let drawn!: (value: string | undefined) => void;
+    const draw = () =>
+      new Promise<string | undefined>((resolve) => {
+        drawn = resolve;
+      });
+    const offline = new TypeError('Failed to fetch');
+    const result = uploadWithPreview(file, () => Promise.reject(offline), draw);
+    let settled = false;
+    void result.then(
+      () => (settled = true),
+      () => (settled = true),
+    );
+    // The upload has failed; the copy is still being drawn, and the file is not done with.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(settled).toBe(false);
+    drawn(small);
+    await expect(result).rejects.toBe(offline);
+    // A copy that cannot be drawn either: the upload's failure, still once the copy has settled.
+    await expect(
+      uploadWithPreview(
+        file,
+        () => Promise.reject(offline),
+        () => Promise.reject(new Error('undecodable')),
+      ),
+    ).rejects.toBe(offline);
+  });
+});
+
+describe('the editor’s line, each file sent with its copy (uploadImageBatch over uploadWithPreview)', () => {
+  it('draws one copy at a time even when every upload fails at once, so a batch never decodes its photos side by side', async () => {
+    const files = [file('a'), file('b'), file('c')];
+    const slots = createImageSlots();
+    expect(slots.take(0, files.length)).toBe(true);
+    const drawing: string[] = [];
+    let running = 0;
+    let most = 0;
+    const draw = async ({ name }: { name: string }) => {
+      running += 1;
+      most = Math.max(most, running);
+      drawing.push(`${name} starts`);
+      // A large photo's decode, which outlasts an upload refused at once.
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      drawing.push(`${name} ends`);
+      running -= 1;
+      return 'data:image/webp;base64,640px';
+    };
+    const failed = vi.fn();
+    await uploadImageBatch(files, slots, createUploadQueue(), {
+      alive: () => true,
+      send: async (sending) => {
+        // The network gone: every upload fails before its copy is drawn.
+        await uploadWithPreview(
+          sending,
+          () => Promise.reject(new TypeError('Failed to fetch')),
+          draw,
+        );
+      },
+      failed,
+    });
+    expect(most).toBe(1);
+    expect(drawing).toEqual(['a starts', 'a ends', 'b starts', 'b ends', 'c starts', 'c ends']);
+    // Each file's failure alone: the batch went on, and every slot is back.
+    expect(failed).toHaveBeenCalledTimes(3);
+    expect(slots.inFlight).toBe(0);
   });
 });
