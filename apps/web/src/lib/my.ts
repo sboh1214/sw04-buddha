@@ -27,7 +27,7 @@ export type MyTabKey =
 
 /**
  * The tabs in the owner's order: N02 §8 with 관심 시장 added (N04 §3, N05 §3) and 알림·설정 as two.
- * 내 글 and 알림 are placeholders until #51 and #53 fill them; #89 filled 관심 시장 (ADR-0064).
+ * 알림 is a placeholder until #53 fills it; #89 filled 관심 시장 (ADR-0064) and #51 내 글 (ADR-0080).
  * Next 16 types `href`, so the list is declared as routes rather than plain strings.
  */
 export const MY_TABS: readonly { key: MyTabKey; href: Route; label: string }[] = [

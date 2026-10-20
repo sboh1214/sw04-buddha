@@ -9,6 +9,7 @@ import {
   LEDGER_QUERY_KEY,
   PAYMENTS_QUERY_KEY,
 } from '@/hooks/use-wallet';
+import { AUTHORED_KEY, MY_AUTHORED_KEY, myAuthoredKey, profileAuthoredKey } from './authored';
 import { LIKES_KEY, myPostLikesKey } from './likes';
 import {
   CATEGORIES_QUERY_KEY,
@@ -277,6 +278,9 @@ describe('isPrivateQueryKey', () => {
       ['SEARCH_HISTORY_KEY', SEARCH_HISTORY_KEY],
       ['LIKES_KEY', LIKES_KEY],
       ['myPostLikesKey', myPostLikesKey(ID)],
+      ['MY_AUTHORED_KEY', MY_AUTHORED_KEY],
+      ['myAuthoredKey', myAuthoredKey('posts')],
+      ['myAuthoredKey', myAuthoredKey('comments')],
     ];
     for (const [name, key] of sessionKeys) expect(isPrivateQueryKey(key), name).toBe(true);
   });
@@ -289,7 +293,9 @@ describe('isPrivateQueryKey', () => {
     // fetched on the server or dehydrated (who else may see them is #37 item 11) — this PR
     // changed the list, so the expectation changed with it. 'likes' came with #49 (ADR-0076):
     // whether the reader liked a post or a comment is theirs alone (PRIVATE_DATA `likers`), read
-    // with their cookie; the counts are public and live under the posts' root.
+    // with their cookie; the counts are public and live under the posts' root. 'my-authored' came
+    // with #51 (ADR-0080): MY '내 글' is the member's own writing with the hidden items and their
+    // reasons (#45-5: the member's alone), read with their cookie; a profile's lists are public.
     expect([...PRIVATE_QUERY_ROOTS].sort()).toEqual(
       [
         'admin',
@@ -302,6 +308,7 @@ describe('isPrivateQueryKey', () => {
         'watchlist',
         'search-history',
         'likes',
+        'my-authored',
       ].sort(),
     );
     expect(PRIVATE_QUERY_ROOTS.has('disputes')).toBe(false);
@@ -319,6 +326,9 @@ describe('isPrivateQueryKey', () => {
       ticksKey(ID, '1D'),
       marketFillsKey(ID),
       relatedMarketsKey(ID),
+      // A profile's lists (#51): public, the same for every reader (read in the browser only).
+      AUTHORED_KEY,
+      profileAuthoredKey('k7m2p9qx4z', 'posts'),
     ];
     for (const key of publicKeys) expect(isPrivateQueryKey(key), hashKey(key)).toBe(false);
   });
@@ -347,6 +357,7 @@ describe('dehydratePublic', () => {
       queryClient.setQueryData(watchlistPagesKey({}), { pages: [], pageParams: [] });
       queryClient.setQueryData(watchStateKey(ID), { watched: true });
       queryClient.setQueryData(SEARCH_HISTORY_KEY, [{ id: ID, query: '금리', searchedAt: '' }]);
+      queryClient.setQueryData(myAuthoredKey('posts'), { pages: [], pageParams: [] });
       queryClient.setQueryData(marketKey(ID), { id: ID });
 
       const roots = dehydratePublic(queryClient).queries.map((query) => query.queryKey[0]);

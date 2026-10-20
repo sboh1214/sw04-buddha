@@ -122,6 +122,17 @@ export type ProfileInterestCategory = components['schemas']['ProfileInterestCate
 export type UpdateBioBody = components['schemas']['UpdateBioBody'];
 /** `POST /me/profile-image/delete` (#141, ADR-0079): the account the screen shows. */
 export type DeleteProfileImageBody = components['schemas']['DeleteProfileImageBody'];
+/**
+ * 작성자별 글·댓글 (#51, ADR-0080): a profile's 댓글 tab item (`GET /profiles/:publicId/comments` —
+ * the comment, its post as the public sees it and its market; the 글 tab's items are
+ * `PostSummary`), and MY '내 글''s items (`GET /me/posts`, `/me/comments`), which add `hidden` —
+ * the mark and the reason of an operator's hiding, the member's alone (#45-5).
+ */
+export type AuthoredComment = components['schemas']['AuthoredComment'];
+export type CommentedPost = components['schemas']['CommentedPost'];
+export type HiddenNotice = components['schemas']['HiddenNotice'];
+export type MyPost = components['schemas']['MyPost'];
+export type MyComment = components['schemas']['MyComment'];
 /** `POST /media/images`'s answer: the stored image's id, which the editor's image node carries. */
 export type UploadedImage = components['schemas']['UploadedImage'];
 /**

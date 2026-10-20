@@ -812,6 +812,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/me/comments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The account’s own 댓글 and 대댓글, newest first, each with its post and market, with `hidden` (and its reason) on one an operator hid; never a deleted one */
+        get: operations["listMyComments"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me/consents": {
         parameters: {
             query?: never;
@@ -1025,6 +1042,23 @@ export type paths = {
         };
         /** Every position of the account, most recently changed first. status=open keeps the unsettled rows (qty may be 0 after a full sell), status=settled the settled ones; omitted lists all. No cursor: bounded by the markets one account has touched. */
         get: operations["getMyPositions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/posts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The account’s own posts, newest first, as the community list’s cards with `hidden` (and its reason) on one an operator hid; never a deleted one */
+        get: operations["listMyPosts"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1395,6 +1429,40 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/profiles/{publicId}/comments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A member’s 댓글 and 대댓글 on their profile, newest first, each with the post it sits under (a placeholder by its id alone) and its market: never a deleted or hidden one, those under a hidden or deleted post included. An unknown public id is NOT_FOUND */
+        get: operations["listProfileComments"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/profiles/{publicId}/posts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A member’s posts on their profile, newest first, as the community list’s cards: never a deleted or hidden one; those on ended and voided markets included, and all of them while the member is under a restriction. An unknown public id is NOT_FOUND, as the profile */
+        get: operations["listProfilePosts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 };
 export type webhooks = Record<string, never>;
 export type components = {
@@ -1644,6 +1712,21 @@ export type components = {
             kind: string;
             payload: unknown;
         };
+        AuthoredComment: {
+            author: components["schemas"]["PostAuthor"];
+            body: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            editedAt: string | null;
+            /** Format: uuid */
+            id: string;
+            likeCount: number;
+            market: components["schemas"]["PostMarket"];
+            /** Format: uuid */
+            parentId: string | null;
+            post: components["schemas"]["CommentedPost"];
+        };
         Balance: {
             availableCoin: components["schemas"]["CoinAmount"];
             lockedCoin: components["schemas"]["CoinAmount"];
@@ -1685,6 +1768,27 @@ export type components = {
             /** Format: uuid */
             id: string;
             placeholder: boolean;
+        };
+        CommentedDeletedPost: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            state: "deleted";
+        };
+        CommentedHiddenPost: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            state: "hidden";
+        };
+        CommentedPost: components["schemas"]["CommentedPublishedPost"] | components["schemas"]["CommentedDeletedPost"] | components["schemas"]["CommentedHiddenPost"];
+        CommentedPublishedPost: {
+            excerpt: string;
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            state: "published";
+            title: string | null;
         };
         CommentThread: {
             comment: components["schemas"]["PostComment"];
@@ -1829,6 +1933,9 @@ export type components = {
             /** @enum {string} */
             state: "hidden";
         };
+        HiddenNotice: {
+            reason: string | null;
+        };
         HiddenPost: {
             commentCount: number;
             /** Format: uuid */
@@ -1962,6 +2069,38 @@ export type components = {
             };
             startGrant: components["schemas"]["StartGrant"] | null;
             verification: components["schemas"]["PhoneVerification"] | null;
+        };
+        MyComment: {
+            author: components["schemas"]["PostAuthor"];
+            body: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            editedAt: string | null;
+            hidden: components["schemas"]["HiddenNotice"] | null;
+            /** Format: uuid */
+            id: string;
+            likeCount: number;
+            market: components["schemas"]["PostMarket"];
+            /** Format: uuid */
+            parentId: string | null;
+            post: components["schemas"]["CommentedPost"];
+        };
+        MyPost: {
+            author: components["schemas"]["PostAuthor"];
+            commentCount: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            editedAt: string | null;
+            excerpt: string;
+            hidden: components["schemas"]["HiddenNotice"] | null;
+            /** Format: uuid */
+            id: string;
+            likeCount: number;
+            market: components["schemas"]["PostMarket"];
+            thumbnailUrl: string | null;
+            title: string | null;
         };
         MyPostLikes: {
             likedCommentIds: string[];
@@ -6576,6 +6715,59 @@ export interface operations {
             };
         };
     };
+    listMyComments: {
+        parameters: {
+            query?: {
+                /** @description Opaque; `meta.nextCursor` of the previous page. */
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["MyComment"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     recordMyConsents: {
         parameters: {
             query?: never;
@@ -7379,6 +7571,59 @@ export interface operations {
                 content: {
                     "application/json": {
                         data: components["schemas"]["Position"][];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listMyPosts: {
+        parameters: {
+            query?: {
+                /** @description Opaque; `meta.nextCursor` of the previous page. */
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["MyPost"][];
+                        meta: components["schemas"]["PageMeta"];
                     };
                 };
             };
@@ -9039,6 +9284,116 @@ export interface operations {
                     "application/json": {
                         data: components["schemas"]["PublicProfile"];
                     };
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listProfileComments: {
+        parameters: {
+            query?: {
+                /** @description Opaque; `meta.nextCursor` of the previous page. */
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                publicId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AuthoredComment"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listProfilePosts: {
+        parameters: {
+            query?: {
+                /** @description Opaque; `meta.nextCursor` of the previous page. */
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                publicId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["PostSummary"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             /** @description NOT_FOUND */

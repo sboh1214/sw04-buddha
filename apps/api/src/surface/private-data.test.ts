@@ -164,7 +164,14 @@ interface Fixture {
   categoryId: number;
   paymentId: string;
   /** Page cursors made from A's rows: a page from there holds A's newest row and the older ones. */
-  cursors: { ledger: string; orders: string; payments: string; watchlist: string };
+  cursors: {
+    ledger: string;
+    orders: string;
+    payments: string;
+    watchlist: string;
+    posts: string;
+    comments: string;
+  };
   sentinels: readonly Sentinel[];
 }
 
@@ -610,6 +617,19 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
   'GET /me/likes/posts/:postId': {
     params: { postId: (fixture) => fixture.post.id },
     status: 200,
+  },
+  // B's MY 내 글 (#51), paged from A's newest post and comment — the hidden ones, which only A's
+  // own list shows: B wrote nothing, so nothing of A's may come back. A's own shows A's hidden
+  // post and comment (#45-5) and never what A deleted (`NEVER_SHOWN`).
+  'GET /me/posts': {
+    query: { cursor: (fixture) => fixture.cursors.posts, limit: LIMIT },
+    status: 200,
+    own: ['hidden post'],
+  },
+  'GET /me/comments': {
+    query: { cursor: (fixture) => fixture.cursors.comments, limit: LIMIT },
+    status: 200,
+    own: ['hidden comment'],
   },
   // The file is the body, so the account rides in the query: B naming A is refused before the
   // file is looked at, and nothing is stored (below). Sent as an image: the route takes no JSON
@@ -1117,6 +1137,27 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     // A's profile total leaves them out (owner decision 2026-10-21 answer 3, ADR-0078).
     await createPostLike(t.db, { postId: post.id, userId: a.id, phoneHash });
     await createCommentLike(t.db, { commentId: comment.id, userId: a.id, phoneHash });
+    // A's post an operator hid, with A's 댓글 under it that was hidden too (#45-5): A's words that
+    // only A reads, on MY 내 글 (#51) — every public list leaves them out, and the post page and
+    // the comment list would show them as placeholders. A's newest post and comment, so the
+    // cursors below start from them.
+    const hiddenPostText = `leak-hidden-post-${tag}`;
+    const hiddenPost = await createPost(t.db, {
+      marketId: market.id,
+      authorId: a.id,
+      title: hiddenPostText,
+      text: hiddenPostText,
+      createdAt: new Date(post.createdAt.getTime() + 2_000),
+      hiddenAt: new Date(),
+    });
+    const hiddenCommentText = `leak-hidden-comment-${tag}`;
+    const hiddenComment = await createComment(t.db, {
+      postId: hiddenPost.id,
+      authorId: a.id,
+      body: hiddenCommentText,
+      createdAt: new Date(comment.createdAt.getTime() + 2_000),
+      hiddenAt: new Date(),
+    });
 
     // A notice (#138) A operated, pinned, with A's image in it (its object in the test's store)
     // and an earlier version kept for operators: the notice routes are called with it, and
@@ -1226,6 +1267,8 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         orders: cursorAfter(open.createdAt >= filled.createdAt ? open : filled),
         payments: cursorAfter(payment!),
         watchlist: cursorAfter({ createdAt: watch.watch.watchedAt, id: watched.id }),
+        posts: cursorAfter(hiddenPost),
+        comments: cursorAfter(hiddenComment),
       },
       sentinels: [
         text('user id', a.id),
@@ -1239,6 +1282,8 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         text('deleted comment', deletedCommentText),
         text('notice revision', noticeRevisionText),
         text('unpinned notice', unpinnedNoticeText),
+        text('hidden post', hiddenPostText),
+        text('hidden comment', hiddenCommentText),
         text('time zone', timeZone),
         text('real name', realName),
         text('phone', phone),
@@ -1384,6 +1429,8 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         'GET /comments/:commentId/replies',
         'GET /markets/:id/posts',
         'GET /profiles/:publicId',
+        'GET /profiles/:publicId/posts',
+        'GET /profiles/:publicId/comments',
       ]),
     );
     expect(persons).toEqual(
@@ -1476,6 +1523,21 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         receivedLikeCount: 0,
       },
     });
+    // The profile's lists (#51) answered A's post and A's three comments the profile counts — not
+    // the deleted ones, nor the hidden post and comment — newest first, so their field names were
+    // checked on full answers.
+    const profilePosts = parse(bodies.get('GET /profiles/:publicId/posts')!) as {
+      data: { id: string }[];
+    };
+    expect(profilePosts.data.map((row) => row.id)).toEqual([f.post.id]);
+    const profileComments = parse(bodies.get('GET /profiles/:publicId/comments')!) as {
+      data: { id: string; post: { state: string; id: string } }[];
+    };
+    expect(profileComments.data).toHaveLength(3);
+    expect(profileComments.data.map(({ post }) => [post.state, post.id])).toEqual(
+      Array.from({ length: 3 }, () => ['published', f.post.id]),
+    );
+    expect(profileComments.data.map((row) => row.id)).toContain(f.comment.id);
     // The answers held A's market, A's fill and the market linked to A's — anonymously — so there
     // was something to leak, and the 관련 시장 answer's item had its field names checked rather
     // than an empty page passing for one.

@@ -14,6 +14,7 @@ import { identifierWords } from './excluded.js';
  * and every market's watch count to nobody but the member (#37 for #89, ADR-0061 decision 3,
  * ADR-0064). A member's recorded searches are listed by ADR-0066's own choice: the owner decided
  * they are recorded and shown to the member (#15, ADR-0061 decision 3), not who else may see them.
+ * A hidden post's or comment's mark and reason are its author's (#45-5, ADR-0080).
  * Items nothing stores yet
  * are named ahead (`pending`), so the route or event that brings one is refused from its first
  * day.
@@ -45,6 +46,7 @@ export const PRIVATE_DATA_IDS = [
   'auth-secret',
   'risk-flag',
   'author-holding',
+  'moderation',
   'market-maker',
 ] as const;
 export type PrivateDataId = (typeof PRIVATE_DATA_IDS)[number];
@@ -408,6 +410,27 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
       ['author', 'outcome'],
       ['author', 'order'],
       ['author', 'orders'],
+    ],
+  },
+  {
+    id: 'moderation',
+    name: '운영 조치의 표시와 사유(숨긴 것과 그 사유, 조치한 운영자)',
+    basis: 'ADR-0069 결정 2(#45-5·#45-13), ADR-0080',
+    // A hidden post or comment shows the public its placeholder alone ('운영 정책에 따라 숨긴
+    // 글입니다', #45-5) and leaves every public list; that it was hidden and why is the author's to
+    // read, on MY '내 글' (`GET /me/posts`, `GET /me/comments`: `hidden` and its `reason`, #51), and
+    // who hid it is nobody's but operators' (#45-13). A public shape never marks an item hidden
+    // (`hidden`, `hiddenAt`, `isHidden`), carries a hiding's reason (`hiddenReason`, `hideReason`)
+    // or names a moderation or its moderator — the public tells a hidden post by its `state` alone.
+    fields: [
+      ['hidden'],
+      ['hide'],
+      ['hiding'],
+      ['moderation'],
+      ['moderations'],
+      ['moderated'],
+      ['moderator'],
+      ['moderators'],
     ],
   },
   {

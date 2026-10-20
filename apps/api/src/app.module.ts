@@ -4,6 +4,7 @@ import { AdminAccountsModule } from './admin-accounts/admin-accounts.module.js';
 import { AdminModule } from './admin/admin.module.js';
 import { ApprovalsModule } from './approvals/approvals.module.js';
 import { AuthModule } from './auth/auth.module.js';
+import { AuthoredModule } from './authored/authored.module.js';
 import { CommentsModule } from './comments/comments.module.js';
 import { CommonModule } from './common/common.module.js';
 import { envFilePaths, envSchema } from './config/env.js';
@@ -85,8 +86,11 @@ import { WatchlistModule } from './watchlist/watchlist.module.js';
     // the routes before it where they were.
     ProfilesModule,
     // 프로필 이미지 (#141): the member's upload and deletion of its profile image, into the media
-    // store. Last, after MediaModule and MeModule, whose store, body parser and answer it uses.
+    // store. After MediaModule and MeModule, whose store, body parser and answer it uses.
     ProfileImageModule,
+    // 작성자별 글·댓글 목록 (#51): the profile's 글·댓글 tabs and MY '내 글'. After the profile, whose
+    // member lookup it uses; last, so the document keeps the routes before it where they were.
+    AuthoredModule,
   ],
   controllers: [HealthController],
 })

@@ -285,6 +285,9 @@ export const PRIVATE_QUERY_ROOTS: ReadonlySet<string> = new Set([
   // 좋아요 (#49, ADR-0076): what the reader liked on a post page (`LIKES_KEY`, lib/likes.ts). The
   // counts are public and ride on the post and its comments; whose like is nobody else's.
   'likes',
+  // MY '내 글' (#51, ADR-0080): the member's own posts and comments with the hidden ones and their
+  // reasons (`MY_AUTHORED_KEY`, lib/authored.ts). A profile's lists are public (`['authored']`).
+  'my-authored',
 ]);
 
 export function isPrivateQueryKey(queryKey: readonly unknown[]): boolean {

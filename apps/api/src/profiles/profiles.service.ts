@@ -69,6 +69,27 @@ export class ProfilesService {
   }
 
   /**
+   * The account behind a profile's address, for the profile's lists (#51, `GET
+   * /profiles/:publicId/posts` and `/comments`): the account `getProfile` would answer about, by
+   * the same rule — matched in lower case, and NOT_FOUND for anything that cannot be a public id,
+   * an unknown one and a withdrawn account (#37-16), so a list answers wherever the profile does
+   * and nowhere else. The account id stays on the server: the lists name the member by
+   * `postAuthorOf` alone.
+   */
+  async memberIdOf(publicId: string): Promise<string> {
+    const id = publicId.toLowerCase();
+    if (!PUBLIC_ID_PATTERN.test(id)) throw profileNotFound();
+    const { profiles } = schema;
+    const [row] = await this.db
+      .select({ userId: profiles.userId, ...authorColumns })
+      .from(profiles)
+      .where(eq(profiles.publicId, id))
+      .limit(1);
+    if (!row || postAuthorOf(row).kind !== 'member') throw profileNotFound();
+    return row.userId;
+  }
+
+  /**
    * Every interest category the member picked (#37-5), top-level and sub-categories alike (#57-7),
    * that the category list still offers — active, under an active parent: what `GET /categories`
    * lists and MY 설정 can show (a category operators retire leaves the profile with it). In that
