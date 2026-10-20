@@ -317,11 +317,12 @@ export type BioFormValues = z.input<typeof bioFormSchema>;
 /*
  * 프로필 이미지 (#141, ADR-0079; ADR-0069 decision 3 #37-6, decision 4 #141): uploaded straight from
  * MY 설정 — JPEG, PNG or WebP, at most 5MB — and checked by the server by its bytes, which crops the
- * middle to a 512px square and strips the metadata (EXIF) before storing it; no crop is chosen on
- * screen. Replacing or deleting it removes the earlier one at once. The upload goes the way a post's
- * image does (`PUT /me/profile-image`: the file itself as the body, the account in the query), so
- * the checks before sending and the reasons of a refusal are the post editor's (lib/post-editor.ts),
- * with the profile image's own three types: a GIF is not taken.
+ * middle to a square (512px at most, never enlarged) and strips the metadata (EXIF) before storing
+ * it; no crop is chosen on screen (owner decisions 2026-10-22). Replacing or deleting it removes
+ * the earlier one at once. The upload goes the way a post's image does (`PUT /me/profile-image`:
+ * the file itself as the body, the account in the query), so the checks before sending and the
+ * reasons of a refusal are the post editor's (lib/post-editor.ts), with the profile image's own
+ * three types: a GIF is not taken.
  */
 
 /** The file picker's types: the three the server takes (#37-6); it decides by the bytes anyway. */

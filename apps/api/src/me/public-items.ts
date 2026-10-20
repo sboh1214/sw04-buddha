@@ -91,11 +91,10 @@ export async function assertPublicItemEdit(
  * that has to finish the onboarding hears that first. Callers: `PUT /me/bio` (MeService),
  * `POST /me/onboarding/interests` (OnboardingService, the interests step's answer),
  * `PUT /me/interest-categories` (OnboardingService) and the profile image (#141,
- * ProfileImageService) — whose deletion is open the same way (the brief, widening the owner's
- * 2026-10-21 answer 2 on #41, which named the 소개 and the categories, to the image; ADR-0079 결과 4
- * asks the owner to confirm it), while its upload, always a new value, also has
- * OnboardedGuard on the route: the upload's body is the file, and the guard refuses before the
- * conversion is paid for.
+ * ProfileImageService) — whose deletion is open the same way (owner decision 2026-10-22, ADR-0079:
+ * as the 소개 and the categories of the owner's 2026-10-21 answer 2 on #41), while its upload,
+ * always a new value, also has OnboardedGuard on the route: the upload's body is the file, and the
+ * guard refuses before the conversion is paid for.
  */
 export async function assertPublicItemOnboarding(
   executor: Executor,

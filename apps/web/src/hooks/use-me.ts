@@ -411,10 +411,9 @@ async function postDeleteProfileImage(body: DeleteProfileImageBody): Promise<Me>
 /**
  * `POST /me/profile-image/delete` (#141) as mutation options: the image goes at once, and the
  * answer's `imageUrl: null` goes into `['me']` through `storeMe`, so the card and every observer draw
- * the nickname's first letter again. Sign-in is all it needs (a deletion — the brief widened the
- * owner's 2026-10-21 answer 2 on #41, for the 소개 and the categories, to the image; ADR-0079 결과 4
- * asks the owner to confirm), so the only refusal it acts on is the 403 for another account: the
- * session is asked again.
+ * the nickname's first letter again. Sign-in is all it needs (a deletion — re-consent accounts too,
+ * owner decision 2026-10-22, as the 소개 and the categories on #41), so the only refusal it acts on
+ * is the 403 for another account: the session is asked again.
  */
 export function deleteProfileImageOptions(
   queryClient: QueryClient,

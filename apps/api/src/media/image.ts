@@ -183,6 +183,52 @@ export function decodeBytesPerPixel(
 }
 
 /**
+ * A WebP whose profile square is cut from the file, per pixel: measured on `profileSquare` (sharp
+ * 0.35.5, cache off, one thread, libvips' own high-water mark) at the WebP's bound and at 4:1 to
+ * 40:1, a quarter turn by EXIF or none, lossy and lossless — up to 16.8 with an alpha channel (15.4
+ * without), rounded up. At the 15 a post's WebP is charged, a long one of ~8.9 megapixels took
+ * 129–143 MiB, over IMAGE_DECODE_BUDGET_BYTES; at this, ~7.9 megapixels, 126 MiB at most (121 at
+ * IMAGE_MAX_SIDE_RATIO; ADR-0079 7-16, profile-image-memory.test.ts).
+ */
+export const PROFILE_WEBP_CUT_BYTES_PER_PIXEL = 17;
+
+/**
+ * What a profile image's conversion holds per pixel of a JPEG or WebP frame at its peak, in bytes:
+ * what a post's image of its format does (`decodeBytesPerPixel`), but
+ * PROFILE_WEBP_CUT_BYTES_PER_PIXEL for a WebP whose square `profileSquare` cuts from the file
+ * (`cutsSquareFirst`) — that one is decoded whole, with none of libwebp's scaled decoding a post's
+ * image of the same file gets. `width`×`height` is one frame as stored. A PNG has no cost per pixel
+ * (PNG_LARGEST_FRAME_PIXELS).
+ */
+export function profileDecodeBytesPerPixel(
+  contentType: Exclude<ProfileImageContentType, 'image/png'>,
+  metadata: Pick<Metadata, 'channels' | 'isProgressive'>,
+  width: number,
+  height: number,
+): number {
+  return contentType === 'image/webp' && cutsSquareFirst(contentType, width, height)
+    ? PROFILE_WEBP_CUT_BYTES_PER_PIXEL
+    : decodeBytesPerPixel(contentType, metadata);
+}
+
+/**
+ * The most pixels one frame of a profile image may have: a PNG's as a post's image's
+ * (`largestFramePixels`), a JPEG's or WebP's from IMAGE_DECODE_BUDGET_BYTES and what its
+ * conversion holds per pixel (`profileDecodeBytesPerPixel`).
+ */
+function profileLargestFramePixels(
+  contentType: ProfileImageContentType,
+  metadata: Pick<Metadata, 'channels' | 'depth' | 'isProgressive' | 'pages'>,
+  width: number,
+  height: number,
+): number {
+  if (contentType === 'image/png') return largestFramePixels(contentType, metadata);
+  return Math.floor(
+    IMAGE_DECODE_BUDGET_BYTES / profileDecodeBytesPerPixel(contentType, metadata, width, height),
+  );
+}
+
+/**
  * The most pixels a still WebP with alpha is written with (owner decision 2026-10-22 answer 1,
  * ADR-0073 9-8): one larger is shrunk to this — on top of fitting IMAGE_MAX_DIMENSION, keeping its
  * shape (`outputBox`) — rather than refused; 1,843×1,843 for a square one, while a 4:3 or wider
@@ -586,15 +632,17 @@ interface InspectedImage<T extends ImageContentType> {
 
 /**
  * Steps 1 to 3 of `processImage`, for `processProfileImage`, before anything is decoded: not empty,
- * at most IMAGE_MAX_BYTES, one of `types` by its magic number with the decoder agreeing, and small
- * enough to decode by its header. `animated` reads every frame of a GIF or a WebP — a post's image
- * keeps them — and false reads the first frame only, which is all that is then decoded and so all
- * that is counted.
+ * at most IMAGE_MAX_BYTES, one of `types` by its magic number with the decoder agreeing, not very
+ * thin or long, and small enough to decode by its header — one frame (`width`×`height` as stored)
+ * within `largestFrame`. `animated` reads every frame of a GIF or a WebP — a post's image keeps
+ * them — and false reads the first frame only, which is all that is then decoded and so all that
+ * is counted.
  */
 async function inspectImage<T extends ImageContentType>(
   bytes: Uint8Array,
   types: readonly T[],
   animated: (contentType: T) => boolean,
+  largestFrame: (contentType: T, metadata: Metadata, width: number, height: number) => number,
 ): Promise<InspectedImage<T>> {
   if (bytes.length === 0) throw imageRefused('empty');
   if (bytes.length > IMAGE_MAX_BYTES) throw imageRefused('size');
@@ -621,7 +669,13 @@ async function inspectImage<T extends ImageContentType>(
   const totalHeight = metadata.height;
   if (!width || !totalHeight) throw imageRefused('unreadable');
   const frameHeight = metadata.pageHeight ?? totalHeight;
-  if (width * frameHeight > largestFramePixels(contentType, metadata)) {
+  // Very thin or long (owner decisions 2026-10-22, IMAGE_MAX_SIDE_RATIO): the per-pixel costs below
+  // were measured on ordinary shapes, and a strip costs far more than its pixels say — refused
+  // whatever its pixel count, a quarter turn by EXIF making no difference.
+  if (Math.max(width, frameHeight) > IMAGE_MAX_SIDE_RATIO * Math.min(width, frameHeight)) {
+    throw imageRefused('pixels');
+  }
+  if (width * frameHeight > largestFrame(contentType, metadata, width, frameHeight)) {
     throw imageRefused('pixels');
   }
   if (width * totalHeight > largestImagePixels(contentType, metadata)) {
@@ -665,7 +719,10 @@ async function convert(task: () => Promise<Converted>): Promise<Converted> {
   }
 }
 
-/** A profile image as it is stored: always a PROFILE_IMAGE_SIZE square of one of its three types. */
+/**
+ * A profile image as it is stored: a square of one of its three types, PROFILE_IMAGE_SIZE at most —
+ * the upload's short side when that is smaller.
+ */
 export interface ProcessedProfileImage extends ProcessedImage {
   readonly contentType: ProfileImageContentType;
 }
@@ -678,16 +735,24 @@ export interface ProcessedProfileImage extends ProcessedImage {
  *   else that is not one of the three is.
  * - The first frame of an animated WebP only: the decoder reads that one frame, so the header checks
  *   count that frame alone, and the stored image is still (ADR-0079).
- * - Turned upright by its EXIF orientation, the middle of it cropped to a square and scaled to
- *   exactly PROFILE_IMAGE_SIZE × PROFILE_IMAGE_SIZE — whatever the upload's size: a smaller one is
- *   enlarged, so every profile image is the same square (ADR-0079: the server crops the centre; no
- *   crop box is sent). How it gets there is bounded by memory (`profileSquare`).
+ * - A WebP whose square is cut from the file is counted at what that costs, more than a post's
+ *   image of it (`profileDecodeBytesPerPixel`): past that, `pixels`. A PNG has a post's image's
+ *   bound (`largestFramePixels`).
+ * - Turned upright by its EXIF orientation, and the middle of it cropped to a square: the upload's
+ *   short side, scaled down to PROFILE_IMAGE_SIZE when it is longer, never enlarged — a 300×200
+ *   upload is stored 200×200 (owner decisions 2026-10-22: the centre, no crop box; 512 is the most).
+ *   How it gets there is bounded by memory (`profileSquare`).
  * - Encoded again in its own type, without EXIF or any other metadata, as `processImage` does.
  *
  * Through the same one-at-a-time queue (`imageConversions`); throws as `processImage` does.
  */
 export async function processProfileImage(bytes: Uint8Array): Promise<ProcessedProfileImage> {
-  const inspected = await inspectImage(bytes, PROFILE_IMAGE_CONTENT_TYPES, () => false);
+  const inspected = await inspectImage(
+    bytes,
+    PROFILE_IMAGE_CONTENT_TYPES,
+    () => false,
+    profileLargestFramePixels,
+  );
   const output = await convert(() => profileSquare(bytes, inspected));
   return {
     body: new Uint8Array(output.data),
@@ -698,40 +763,46 @@ export async function processProfileImage(bytes: Uint8Array): Promise<ProcessedP
 }
 
 /**
- * The square itself, in two ways, so that a profile image never costs more memory than a post's
- * image of the same file — the cost the decode budget was measured on (ADR-0073 9-8, ADR-0079
- * 7-16). Scaling straight to the 512 square ('cover') scales by the SHORT side: a long panorama
- * then gets no shrink-on-load and is decoded, turned and resized at full size — a 300KB JPEG of
- * 60000×833 with a quarter turn peaked near 400MB, the API's whole container.
+ * The square itself — the middle square of the upload, at its full resolution, scaled to `target`
+ * (PROFILE_IMAGE_SIZE, or the short side when that is smaller: never enlarged) — in two ways chosen
+ * for memory (ADR-0073 9-8; ADR-0079 7-16 and the table of its 결정 4). Scaling the
+ * whole upload straight to the square ('cover') scales by the SHORT side: a long panorama then gets
+ * no shrink-on-load and is decoded, turned and resized at full size — a 300KB JPEG of 60000×833
+ * with a quarter turn peaked near 400 MiB, the API's whole container.
  *
- * - JPEG and WebP: first `processImage`'s own pass — turned upright, fitted inside
- *   IMAGE_MAX_DIMENSION, so the decoder shrinks by the LONG side as it reads (libjpeg's
- *   shrink-on-load, libwebp's scaled decoding) — as raw pixels (at most 2048×2048×4 bytes), then
- *   the middle square of that scaled to 512. An image more than four times wider than tall has a
- *   short side under 512 after the first pass, so its square is enlarged and softer (ADR-0079
- *   결과 4).
- * - PNG: no decoder shrinks it, so the first pass would gain nothing, and its long-side reduce is
- *   what makes a thin strip of a PNG cost gigabytes (ADR-0079 결과 5). The middle square is cut
- *   first, in the orientation the file is stored in — the same square once turned, since a turn
- *   or a mirror keeps the middle in the middle — and only that square is scaled to 512 and then
- *   turned upright (sharp turns after the resize when `extract` comes before `autoOrient`; the
- *   EXIF tests in image.test.ts would see a square turned the wrong way).
+ * - Scaled first, for a JPEG or a WebP whose short side stays longer than `target` once its long
+ *   side fits inside IMAGE_MAX_DIMENSION — a photo less than four times wider than tall, or one
+ *   whose long side is that small already: `processImage`'s own pass (turned upright, fitted
+ *   inside IMAGE_MAX_DIMENSION, so the decoder shrinks by the LONG side as it reads — libjpeg's
+ *   shrink-on-load, libwebp's scaled decoding) as raw pixels (at most 2048×2048×4 bytes), then the
+ *   middle square of that scaled to `target`. The cheapest way: the same memory as a post's image
+ *   of the same file.
+ * - Cut first (`cutsSquareFirst`), for a PNG — no decoder shrinks it, so a first pass would gain
+ *   nothing, and its long-side reduce is what makes a long PNG cost the most — and for a JPEG or a
+ *   WebP longer than that, whose first pass would leave a short side under `target` (a square then
+ *   enlarged, soft): the middle square is cut in the orientation the file is stored in — the same
+ *   square once turned, since a turn or a mirror keeps the middle in the middle — read from the
+ *   file at its full resolution (no shrink-on-load: the decoder reads the rows and keeps the
+ *   square's columns), scaled to `target` and then turned upright (sharp turns after the resize
+ *   when `extract` comes before `autoOrient`; the EXIF tests in image.test.ts would see a square
+ *   turned the wrong way). A long JPEG is read row by row this way (~62 MiB for 50 megapixels at
+ *   32:1, IMAGE_MAX_SIDE_RATIO). A long WebP is decoded whole — up to 16.8 bytes a pixel, more than the 15 its format is
+ *   charged — so the header check charges it PROFILE_WEBP_CUT_BYTES_PER_PIXEL
+ *   (`profileDecodeBytesPerPixel`), which keeps it within IMAGE_DECODE_BUDGET_BYTES (126 MiB at
+ *   most at its bound). Both more than a post's image of the same file (ADR-0079 결정 4's table,
+ *   profile-image-memory.test.ts).
  */
 function profileSquare(
   bytes: Uint8Array,
   { contentType, input, width, height }: InspectedImage<ProfileImageContentType>,
 ): Promise<Converted> {
-  const toSquare = (pipeline: Sharp) => {
-    pipeline.resize({
-      width: PROFILE_IMAGE_SIZE,
-      height: PROFILE_IMAGE_SIZE,
-      fit: 'cover',
-      position: 'centre',
-    });
+  const target = profileSquareSide(width, height);
+  const toSquare = (pipeline: Sharp, size: number) => {
+    pipeline.resize({ width: size, height: size, fit: 'cover', position: 'centre' });
     encodeAs(pipeline, contentType);
     return pipeline.toBuffer({ resolveWithObject: true });
   };
-  if (contentType === 'image/png') {
+  if (cutsSquareFirst(contentType, width, height)) {
     const side = Math.min(width, height);
     return toSquare(
       sharp(bytes, input)
@@ -742,6 +813,7 @@ function profileSquare(
           height: side,
         })
         .autoOrient(),
+      target,
     );
   }
   return sharp(bytes, input)
@@ -757,6 +829,34 @@ function profileSquare(
     .then(({ data, info }) =>
       toSquare(
         sharp(data, { raw: { width: info.width, height: info.height, channels: info.channels } }),
+        // Never more than the first pass left: nothing is enlarged.
+        Math.min(target, info.width, info.height),
       ),
     );
+}
+
+/** The side of a profile image's square: the upload's short side, PROFILE_IMAGE_SIZE at most. */
+function profileSquareSide(width: number, height: number): number {
+  return Math.min(PROFILE_IMAGE_SIZE, width, height);
+}
+
+/**
+ * Whether `profileSquare` cuts the square from the file at its full resolution — a PNG always, and
+ * a JPEG or a WebP whose short side would be no longer than the square once its long side is fitted
+ * inside IMAGE_MAX_DIMENSION — rather than taking `processImage`'s long-side pass first. The header
+ * check asks it too (`profileDecodeBytesPerPixel`), so the two cannot disagree.
+ */
+function cutsSquareFirst(
+  contentType: ProfileImageContentType,
+  width: number,
+  height: number,
+): boolean {
+  if (contentType === 'image/png') return true;
+  const long = Math.max(width, height);
+  // Scaled first only when the short side stays strictly longer than the square, so the first
+  // pass's rounded short side is at least the square too.
+  return (
+    long > IMAGE_MAX_DIMENSION &&
+    Math.min(width, height) * IMAGE_MAX_DIMENSION <= profileSquareSide(width, height) * long
+  );
 }

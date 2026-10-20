@@ -21,7 +21,8 @@ export const PROFILE_IMAGE_KEY_PREFIX = 'profile-images';
  * the public face carries the image's address (`postAuthorOf`).
  *
  * - Direct upload only, checked and converted by the server (`processProfileImage`: JPEG, PNG or
- *   WebP, 5MB, cropped to a 512px square, without EXIF); never a social login's photo (#37-6).
+ *   WebP, 5MB, not very thin or long, the middle cropped to a square of at most 512px — never
+ *   enlarged — without EXIF); never a social login's photo (#37-6).
  * - No pre-moderation (decision 4 #141): an image is public from its upload; reports and operator
  *   actions (#50) deal with abuse.
  * - Replacing or deleting removes the earlier image at once (decision 4 #141: «곧바로 지운다»): its
@@ -30,9 +31,9 @@ export const PROFILE_IMAGE_KEY_PREFIX = 'profile-images';
  *   `profiles.image_id` and leaves the row, attached and shown by nothing.
  * - A public profile item (#37-9, decision 7): a new image needs the onboarding done and no
  *   writing or account restriction; a deletion needs sign-in only, whatever the sanction — the one
- *   check point of public-item writes (me/public-items.ts). That a re-consent account may delete
- *   its image is the brief's, widening the owner's answer on #41 (2026-10-21 answer 2, the 소개 and
- *   the categories) to the image; ADR-0079 asks the owner to confirm it.
+ *   check point of public-item writes (me/public-items.ts). A re-consent account may delete its
+ *   image too (owner decision 2026-10-22: «재동의만 남은 계정의 프로필 이미지 지우기 → 로그인만으로»,
+ *   as for the 소개 and the categories on #41).
  *
  * Every change runs under the profile row's lock, so two uploads of one member, or an upload and a
  * deletion, take turns: the later one finds the earlier one's image as the one to remove.
@@ -60,8 +61,9 @@ export class ProfileImageService {
    * removal that fails too leaves bytes nothing names, which no reader can reach — logged).
    *
    * #187's daily upload limit (50 a day per verified number's keyed hash, ADR-0069 decision 7)
-   * would plug in before the conversion, beside MediaService.uploadPostImage's: whether a profile
-   * image counts toward it is #187's to settle (ADR-0079).
+   * plugs in before the conversion, beside MediaService.uploadPostImage's, and counts a profile
+   * image with a post's — one count for both (owner decision 2026-10-22: «#187 하루 업로드 50장 →
+   * 프로필 이미지도 함께 셈», ADR-0079).
    */
   async replace(userId: string, bytes: Uint8Array): Promise<void> {
     await assertPublicItemEdit(this.db, userId, 'replace');

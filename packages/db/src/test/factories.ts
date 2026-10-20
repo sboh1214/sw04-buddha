@@ -742,10 +742,10 @@ export interface CreateProfileImageInput {
 
 /**
  * A profile image as `PUT /me/profile-image` leaves it (#141): an upload of `userId`'s of the
- * profile image's kind, 512px square, attached from the start, and the profile's image — replacing
- * the profile's earlier one, whose row stays as an operator's removal leaves it (#50). Only the
- * rows — the object is the test's store's to hold or not; its key is the API's shape,
- * `profile-images/<id>.<ext>`.
+ * profile image's kind, 512px square (a large upload's), attached from the start, and the
+ * profile's image — replacing the profile's earlier one, whose row stays as an operator's removal
+ * leaves it (#50). Only the rows — the object is the test's store's to hold or not; its key is the
+ * API's shape, `profile-images/<id>.<ext>`.
  */
 export async function createProfileImage(db: Db, input: CreateProfileImageInput) {
   const id = randomUUID();

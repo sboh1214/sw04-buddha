@@ -3,9 +3,10 @@
  * content decides the type (a disguised file is refused), metadata never survives (EXIF, the
  * orientation tag included, after the pixels were turned upright), the long side is at most
  * 2,048px and never enlarged, an animation keeps its frames and timing, and a decompression bomb
- * is refused from its header. And a profile image's (#141, decision 3 #37-6): JPEG, PNG or WebP
- * only, the middle cropped to a 512px square whatever the upload's size, metadata gone, an
- * animated WebP kept as its first frame. No database.
+ * is refused from its header, and so is a very thin or long image (owner decision 2026-10-22). And
+ * a profile image's (#141, decision 3 #37-6): JPEG, PNG or WebP only, the middle cropped to a
+ * square of at most 512px at its full resolution — never enlarged (owner decision 2026-10-22) —
+ * metadata gone, an animated WebP kept as its first frame. No database.
  */
 import { crc32 } from 'node:zlib';
 import {
@@ -27,6 +28,7 @@ import {
   JPEG_MAX_COMPONENTS,
   OneAtATime,
   PNG_LARGEST_FRAME_PIXELS,
+  PROFILE_WEBP_CUT_BYTES_PER_PIXEL,
   WEBP_ALPHA_MAX_OUTPUT_PIXELS,
   WEBP_ANIMATION_LARGEST_FRAME_PIXELS,
   WEBP_ANIMATION_MAX_PIXELS,
@@ -38,6 +40,7 @@ import {
   outputBox,
   processImage,
   processProfileImage,
+  profileDecodeBytesPerPixel,
   sniffImageType,
 } from './image.js';
 import { memoryAdmission, memoryWaits } from './memory-admission.js';
@@ -718,12 +721,12 @@ describe('processProfileImage (#141)', () => {
   }
 
   /**
-   * A PNG of three bands across its long side — red, blue, green — the middle band a square:
-   * cropping the middle leaves blue alone, squeezing the whole would leave red and green at the
-   * edges.
+   * A PNG of three bands across its long side — red, blue, green — the middle band a square of
+   * 600px: cropping the middle leaves blue alone, squeezing the whole would leave red and green at
+   * the edges.
    */
   function bands(orientation: 'wide' | 'tall'): Promise<Buffer> {
-    const side = 100;
+    const side = 600;
     const [width, height] = orientation === 'wide' ? [side * 3, side] : [side, side * 3];
     const colours = [
       [255, 0, 0],
@@ -741,7 +744,7 @@ describe('processProfileImage (#141)', () => {
       .toBuffer();
   }
 
-  it('crops the middle of the upload to a 512px square, wide or tall', async () => {
+  it('crops the middle of the upload to a square, scaled down to 512px, wide or tall', async () => {
     expect(PROFILE_IMAGE_SIZE).toBe(512);
     for (const orientation of ['wide', 'tall'] as const) {
       const image = await processProfileImage(await bands(orientation));
@@ -775,29 +778,144 @@ describe('processProfileImage (#141)', () => {
     }
   });
 
-  it('enlarges a small upload to the square, so every profile image is the same size', async () => {
-    const image = await processProfileImage(await solid(10, 6).jpeg().toBuffer());
-    expect(image).toMatchObject({ contentType: 'image/jpeg', width: 512, height: 512 });
-    const photo = await processProfileImage(await solid(4_000, 3_000).jpeg().toBuffer());
-    expect(photo).toMatchObject({ contentType: 'image/jpeg', width: 512, height: 512 });
-    const webp = await processProfileImage(await solid(2_000, 1_500).webp().toBuffer());
-    expect(webp).toMatchObject({ contentType: 'image/webp', width: 512, height: 512 });
+  it('never enlarges: a smaller upload keeps its own size, the middle square of it', async () => {
+    // Owner decision 2026-10-22: «512px보다 작은 프로필 이미지 → 키우지 않음(정사각으로만 자르고 제
+    // 크기, 512는 최대)» — the square of the short side, at most 512.
+    const sizes = [
+      { format: 'jpeg', width: 10, height: 6, side: 6 },
+      { format: 'png', width: 300, height: 200, side: 200 },
+      { format: 'webp', width: 400, height: 600, side: 400 },
+      { format: 'png', width: 512, height: 900, side: 512 },
+      { format: 'jpeg', width: 4_000, height: 3_000, side: 512 },
+      { format: 'webp', width: 2_000, height: 1_500, side: 512 },
+    ] as const;
+    for (const { format, width, height, side } of sizes) {
+      const image = await processProfileImage(
+        await solid(width, height).toFormat(format).toBuffer(),
+      );
+      const metadata = await sharp(image.body).metadata();
+      expect({
+        format,
+        width,
+        stored: [image.width, image.height, metadata.width, metadata.height],
+      }).toEqual({
+        format,
+        width,
+        stored: [side, side, side, side],
+      });
+    }
+  });
+
+  it('keeps a panorama wider than four to one at its full resolution: the middle square of the file, not of a reduced copy', async () => {
+    // 3000×600: fitting the long side inside 2,048px first would leave a short side of 409, and a
+    // square of 512 from that is enlarged — soft. What is stored is the file's own middle 600×600,
+    // scaled down to 512, exactly as cutting it from the file directly gives (ADR-0079 7-16).
+    const [width, height] = [3_000, 600];
+    const raw = Buffer.alloc(width * height * 3);
+    for (let i = 0; i < width * height; i += 1) {
+      // Vertical stripes 2px wide, black and white: detail a reduced copy loses.
+      raw.fill(Math.floor((i % width) / 2) % 2 === 0 ? 0 : 255, i * 3, i * 3 + 3);
+    }
+    /** The mean absolute difference of two images' samples, decoded. */
+    const difference = async (a: Uint8Array, b: Uint8Array) => {
+      const [x, y] = await Promise.all([a, b].map((bytes) => sharp(bytes).raw().toBuffer()));
+      let sum = 0;
+      for (let i = 0; i < x!.length; i += 1) sum += Math.abs(x![i]! - y![i]!);
+      return sum / x!.length;
+    };
+    for (const format of ['jpeg', 'webp'] as const) {
+      const file = await sharp(raw, { raw: { width, height, channels: 3 } })
+        .toFormat(format)
+        .toBuffer();
+      const image = await processProfileImage(file);
+      expect(image).toMatchObject({ contentType: `image/${format}`, width: 512, height: 512 });
+      const middle = await sharp(file)
+        .extract({ left: (width - height) / 2, top: 0, width: height, height })
+        .resize(512, 512)
+        .toFormat(format, format === 'jpeg' ? { quality: 85, mozjpeg: true } : { quality: 85 })
+        .toBuffer();
+      const reduced = await sharp(file)
+        .resize({ width: IMAGE_MAX_DIMENSION, height: IMAGE_MAX_DIMENSION, fit: 'inside' })
+        .toBuffer()
+        .then((copy) => sharp(copy).resize(512, 512, { fit: 'cover' }).toFormat(format).toBuffer());
+      const [toMiddle, toReduced] = [
+        await difference(image.body, middle),
+        await difference(image.body, reduced),
+      ];
+      expect({ format, sharp: toMiddle < 1, soft: toReduced > 10 }).toEqual({
+        format,
+        sharp: true,
+        soft: true,
+      });
+    }
+  });
+
+  it('charges a WebP whose square is cut from the file what decoding it whole costs, and refuses past that from its header', async () => {
+    // ADR-0079 7-16: a WebP more than four times wider than tall is decoded whole for its square —
+    // ~17 bytes a pixel, not the 15 a post's WebP (decoded scaled) is charged.
+    const still = { channels: 4, depth: 'uchar', isProgressive: false } as const;
+    const cost = (type: 'image/jpeg' | 'image/webp', width: number, height: number) =>
+      profileDecodeBytesPerPixel(type, still, width, height);
+    expect(PROFILE_WEBP_CUT_BYTES_PER_PIXEL).toBe(17);
+    // Cut first: just past 4:1 at the WebP's bound, wide or tall; exactly 4:1 (its first pass
+    // would leave a short side of exactly 512, no longer than the square); a short side under 512.
+    expect(cost('image/webp', 5_993, 1_493)).toBe(17);
+    expect(cost('image/webp', 1_493, 5_993)).toBe(17);
+    expect(cost('image/webp', 2_560, 640)).toBe(17);
+    expect(cost('image/webp', 3_000, 400)).toBe(17);
+    // Scaled first, as a post's image is: under 4:1, a square, a long side within 2,048px.
+    expect(cost('image/webp', 5_898, 1_517)).toBe(15);
+    expect(cost('image/webp', 2_991, 2_991)).toBe(15);
+    expect(cost('image/webp', 2_048, 100)).toBe(15);
+    // A JPEG cut first is read row by row: its format's own cost.
+    expect(cost('image/jpeg', 24_000, 600)).toBe(decodeBytesPerPixel('image/jpeg', still));
+
+    const rgba = (width: number, height: number) =>
+      sharp({
+        create: { width, height, channels: 4, background: { r: 9, g: 99, b: 199, alpha: 0.5 } },
+      })
+        .webp({ lossless: true })
+        .withMetadata({ orientation: 6 })
+        .toBuffer();
+    // ~8.9 megapixels: within the 15 bytes a pixel of a post's WebP, over the 17 of one cut first.
+    const long = await rgba(5_993, 1_493);
+    expect(5_993 * 1_493 * 15).toBeLessThanOrEqual(IMAGE_DECODE_BUDGET_BYTES);
+    expect(5_993 * 1_493 * 17).toBeGreaterThan(IMAGE_DECODE_BUDGET_BYTES);
+    expect(await refusal(long, processProfileImage)).toBe('pixels');
+    // A post's image of it is decoded scaled, and taken.
+    expect(await processImage(long)).toMatchObject({ contentType: 'image/webp', height: 2_048 });
+    // As many pixels under 4:1 are scaled first, charged as a post's WebP, and taken.
+    expect(5_898 * 1_517 * 17).toBeGreaterThan(IMAGE_DECODE_BUDGET_BYTES);
+    expect(await processProfileImage(await rgba(5_898, 1_517))).toMatchObject({
+      contentType: 'image/webp',
+      width: 512,
+      height: 512,
+    });
   });
 
   /**
-   * 300×100 as stored, tagged with a quarter turn (EXIF orientation 6: shown turned 90° clockwise,
-   * 100×300): red on the left, green on the right, and between them a square whose top half is
-   * blue and bottom half white. Turned upright, red is on top and green at the bottom, and the
-   * middle square has white on its left and blue on its right; not turned, the square's blue is on
-   * top. A square of one colour would come out the same either way.
+   * `flank` + `side` + `flank` wide and `side` tall as stored, tagged with a quarter turn (EXIF
+   * orientation 6: shown turned 90° clockwise): red on the left, green on the right, and between
+   * them a square whose top half is blue and bottom half white. Turned upright, red is on top and
+   * green at the bottom, and the middle square has white on its left and blue on its right; not
+   * turned, the square's blue is on top. A square of one colour would come out the same either way.
    */
-  function turnedPhoto(format: 'jpeg' | 'png' | 'webp'): Promise<Buffer> {
-    const [width, height] = [300, 100];
+  function turnedPhoto(
+    format: 'jpeg' | 'png' | 'webp',
+    { side, flank }: { side: number; flank: number },
+  ): Promise<Buffer> {
+    const [width, height] = [flank * 2 + side, side];
     const raw = Buffer.alloc(width * height * 3);
     for (let y = 0; y < height; y += 1) {
       for (let x = 0; x < width; x += 1) {
         const colour =
-          x < 100 ? [255, 0, 0] : x >= 200 ? [0, 255, 0] : y < 50 ? [0, 0, 255] : [255, 255, 255];
+          x < flank
+            ? [255, 0, 0]
+            : x >= flank + side
+              ? [0, 255, 0]
+              : y < side / 2
+                ? [0, 0, 255]
+                : [255, 255, 255];
         raw.set(colour, (y * width + x) * 3);
       }
     }
@@ -819,41 +937,67 @@ describe('processProfileImage (#141)', () => {
   }
 
   it('turns a photo upright by its EXIF before the crop, then removes every piece of metadata', async () => {
-    // Each of the three types, so each way to the square (`profileSquare`) is seen turning it.
+    // Each of the three types and each way to the square (`profileSquare`): a small photo kept at
+    // its size, one scaled down to 512 after its long side is fitted (a JPEG or a WebP), and one
+    // five times wider than tall whose square is cut from the file first (a PNG always).
+    const shapes = [
+      { side: 100, flank: 100, stored: 100 },
+      { side: 600, flank: 600, stored: 512 },
+      { side: 600, flank: 1_200, stored: 512 },
+    ];
     for (const format of ['jpeg', 'png', 'webp'] as const) {
-      const photo = await turnedPhoto(format);
-      const before = await sharp(photo).metadata();
-      expect({ format, orientation: before.orientation }).toEqual({ format, orientation: 6 });
-      expect(before.exif).toBeDefined();
+      for (const { side, flank, stored } of shapes) {
+        const photo = await turnedPhoto(format, { side, flank });
+        const before = await sharp(photo).metadata();
+        expect({ format, side, orientation: before.orientation }).toEqual({
+          format,
+          side,
+          orientation: 6,
+        });
+        expect(before.exif).toBeDefined();
 
-      const image = await processProfileImage(photo);
-      expect(image).toMatchObject({ contentType: `image/${format}`, width: 512, height: 512 });
-      // The middle square turned upright: white on the left, blue on the right, top and bottom
-      // alike — never the red or green beside it.
-      const seen = {
-        format,
-        left: [await colourAt(image.body, 64, 128), await colourAt(image.body, 64, 384)],
-        right: [await colourAt(image.body, 448, 128), await colourAt(image.body, 448, 384)],
-      };
-      expect(seen).toEqual({ format, left: ['white', 'white'], right: ['blue', 'blue'] });
+        const image = await processProfileImage(photo);
+        expect(image).toMatchObject({
+          contentType: `image/${format}`,
+          width: stored,
+          height: stored,
+        });
+        // The middle square turned upright: white on the left, blue on the right, top and bottom
+        // alike — never the red or green beside it.
+        const [near, far] = [Math.round(stored / 8), Math.round((stored * 7) / 8)];
+        const [top, bottom] = [Math.round(stored / 4), Math.round((stored * 3) / 4)];
+        const seen = {
+          format,
+          flank,
+          left: [await colourAt(image.body, near, top), await colourAt(image.body, near, bottom)],
+          right: [await colourAt(image.body, far, top), await colourAt(image.body, far, bottom)],
+        };
+        expect(seen).toEqual({
+          format,
+          flank,
+          left: ['white', 'white'],
+          right: ['blue', 'blue'],
+        });
 
-      const after = await sharp(image.body).metadata();
-      expect(after.exif).toBeUndefined();
-      expect(after.xmp).toBeUndefined();
-      expect(after.iptc).toBeUndefined();
-      expect(after.icc).toBeUndefined();
-      expect(after.orientation).toBeUndefined();
-      expect(Buffer.from(image.body).includes('PhoneMaker')).toBe(false);
+        const after = await sharp(image.body).metadata();
+        expect(after.exif).toBeUndefined();
+        expect(after.xmp).toBeUndefined();
+        expect(after.iptc).toBeUndefined();
+        expect(after.icc).toBeUndefined();
+        expect(after.orientation).toBeUndefined();
+        expect(Buffer.from(image.body).includes('PhoneMaker')).toBe(false);
+      }
     }
   });
 
   it('keeps an animated WebP as its first frame', async () => {
+    // Owner decision 2026-10-22: «움직이는 WebP는 첫 장면만 … → 이대로».
     const image = await processProfileImage(await animation('webp', 40, 30, 3));
-    expect(image).toMatchObject({ contentType: 'image/webp', width: 512, height: 512 });
+    expect(image).toMatchObject({ contentType: 'image/webp', width: 30, height: 30 });
     const after = await sharp(image.body, { animated: true }).metadata();
     expect(after.pages ?? 1).toBe(1);
     // The first frame's colour (black — frame n is 80n red), not a later one's.
-    const [r] = await pixel(image.body, 256, 256);
+    const [r] = await pixel(image.body, 15, 15);
     expect(r).toBeLessThan(40);
   });
 
@@ -869,18 +1013,28 @@ describe('processProfileImage (#141)', () => {
     }
   });
 
-  it('refuses as a post’s image does: empty, over 5MB, unreadable, a bomb — and takes exactly 5MB', async () => {
+  it('refuses as a post’s image does: empty, over 5MB, unreadable, a bomb, very thin or long — and takes exactly 5MB and exactly 32:1', async () => {
     const profile = (bytes: Uint8Array) => refusal(bytes, processProfileImage);
     expect(await profile(new Uint8Array(0))).toBe('empty');
     const big = Buffer.alloc(IMAGE_MAX_BYTES + 1);
     big.set([0xff, 0xd8, 0xff]);
     expect(await profile(big)).toBe('size');
     const bound = await processProfileImage(await pngOfExactly(IMAGE_MAX_BYTES));
-    expect(bound).toMatchObject({ contentType: 'image/png', width: 512, height: 512 });
+    expect(bound).toMatchObject({ contentType: 'image/png', width: 8, height: 8 });
     expect(await profile((await solid(200, 200).jpeg().toBuffer()).subarray(0, 40))).toBe(
       'unreadable',
     );
     expect(await profile(pngHeaderOnly(100_000, 100_000))).toBe('pixels');
+    // The same shared header step and bound (owner decisions 2026-10-22: «글·프로필 모두», «하나로
+    // 맞춤(#46이 잰 32배)»).
+    expect(await profile(await solid(330, 10).png().toBuffer())).toBe('pixels');
+    expect(await profile(await solid(10, 330).jpeg().toBuffer())).toBe('pixels');
+    expect(await profile(await solid(3_201, 100).webp().toBuffer())).toBe('pixels');
+    expect(await profile(pngHeaderOnly(5_000_000, 10))).toBe('pixels');
+    const strip = await processProfileImage(await solid(320, 10).png().toBuffer());
+    expect(strip).toMatchObject({ contentType: 'image/png', width: 10, height: 10 });
+    const panorama = await processProfileImage(await solid(3_200, 100).webp().toBuffer());
+    expect(panorama).toMatchObject({ contentType: 'image/webp', width: 100, height: 100 });
   });
 
   it('converts through the same one-at-a-time queue', async () => {

@@ -86,7 +86,7 @@ describe('the 소개 (#37-3)', () => {
 });
 
 describe('the profile image (#141, #37-6)', () => {
-  it('fixes the owner’s rules: JPEG, PNG or WebP, 5MB, a 512px square', () => {
+  it('fixes the owner’s rules: JPEG, PNG or WebP, 5MB, a square of 512px at most', () => {
     expect(PROFILE_IMAGE_CONTENT_TYPES).toEqual(['image/jpeg', 'image/png', 'image/webp']);
     // A post's types but the GIF: the store serves both from the same list.
     expect(IMAGE_CONTENT_TYPES).toEqual(expect.arrayContaining([...PROFILE_IMAGE_CONTENT_TYPES]));

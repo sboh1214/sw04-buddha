@@ -1041,7 +1041,7 @@ export type paths = {
             cookie?: never;
         };
         get?: never;
-        /** Set the public profile’s image: JPEG, PNG or WebP by its content, at most 5242880 bytes. Stored without its metadata as a 512px square cropped from its middle; the earlier image is removed */
+        /** Set the public profile’s image: JPEG, PNG or WebP by its content, at most 5242880 bytes, its long side at most 32 times its short side. Stored without its metadata as the square cropped from its middle, scaled down to 512px when larger (never enlarged); the earlier image is removed */
         put: operations["uploadMyProfileImage"];
         post?: never;
         delete?: never;
@@ -1214,7 +1214,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** An image for a post (or an admin’s notice): JPEG, PNG, WebP or GIF by its content, at most 5242880 bytes. Stored without its metadata, the long side at most 2048px (a still WebP with alpha at most 3400000 pixels), a GIF still moving. Its id goes into the post’s image node; it is served once a post shows it, and removed if nothing takes it within 24 hours */
+        /** An image for a post (or an admin’s notice): JPEG, PNG, WebP or GIF by its content, at most 5242880 bytes, its long side at most 32 times its short side. Stored without its metadata, the long side at most 2048px (a still WebP with alpha at most 3400000 pixels), a GIF still moving. Its id goes into the post’s image node; it is served once a post shows it, and removed if nothing takes it within 24 hours */
         post: operations["uploadImage"];
         delete?: never;
         options?: never;

@@ -19,7 +19,7 @@ import { AppError } from '../common/errors/app-error.js';
 import { ApiData, ApiErrors } from '../common/openapi/api-response.decorators.js';
 import { MeService } from '../me/me.service.js';
 import { IMAGE_UPLOAD_CONTENT_TYPES } from '../media/image-body.js';
-import { IMAGE_BUSY_RETRY_SECONDS } from '../media/image.js';
+import { IMAGE_BUSY_RETRY_SECONDS, IMAGE_MAX_SIDE_RATIO } from '../media/image.js';
 import { OnboardedGuard } from '../onboarding/onboarded.guard.js';
 import { SESSION_SECURITY_SCHEME } from '../openapi/document.js';
 import { ProfileImageService } from './profile-image.service.js';
@@ -56,8 +56,10 @@ export class ProfileImageController {
     operationId: 'uploadMyProfileImage',
     summary:
       `Set the public profile’s image: JPEG, PNG or WebP by its content, at most ` +
-      `${String(IMAGE_MAX_BYTES)} bytes. Stored without its metadata as a ` +
-      `${String(PROFILE_IMAGE_SIZE)}px square cropped from its middle; the earlier image is removed`,
+      `${String(IMAGE_MAX_BYTES)} bytes, its long side at most ${String(IMAGE_MAX_SIDE_RATIO)} ` +
+      `times its short side. Stored without its metadata as the square cropped from its middle, ` +
+      `scaled down to ${String(PROFILE_IMAGE_SIZE)}px when larger (never enlarged); the earlier ` +
+      'image is removed',
   })
   @ApiConsumes(...IMAGE_UPLOAD_CONTENT_TYPES)
   @ApiBody(BINARY)
@@ -106,11 +108,11 @@ export class ProfileImageController {
   /**
    * Deletes the profile image: the profile and the bylines draw the nickname's first letter again.
    * Clearing a public item needs sign-in only — no OnboardedGuard, so an account held back by a
-   * re-consent takes its image down too (the brief, widening the owner's 2026-10-21 answer on #41
-   * for the 소개 to the image; ADR-0079 asks the owner to confirm) — and is open during a
-   * restriction (#37-9, decision 7). With no image it changes nothing. A POST rather
-   * than a DELETE, as a post's deletion: the body names the account the screen shows, and OpenAPI
-   * 3.0 leaves a DELETE's body undefined.
+   * re-consent takes its image down too (owner decision 2026-10-22: «재동의만 남은 계정의 프로필
+   * 이미지 지우기 → 로그인만으로», as for the 소개 on #41) — and is open during a restriction
+   * (#37-9, decision 7). With no image it changes nothing. A POST rather than a DELETE, as a post's
+   * deletion: the body names the account the screen shows, and OpenAPI 3.0 leaves a DELETE's body
+   * undefined.
    */
   @Post('delete')
   @HttpCode(200)

@@ -32,7 +32,11 @@ import { OnboardedGuard } from '../onboarding/onboarded.guard.js';
 import { SESSION_SECURITY_SCHEME } from '../openapi/document.js';
 import { IMAGE_UPLOAD_CONTENT_TYPES, runUploadWork } from './image-body.js';
 import { IMAGE_BINARY, answerImage } from './image-response.js';
-import { IMAGE_BUSY_RETRY_SECONDS, WEBP_ALPHA_MAX_OUTPUT_PIXELS } from './image.js';
+import {
+  IMAGE_BUSY_RETRY_SECONDS,
+  IMAGE_MAX_SIDE_RATIO,
+  WEBP_ALPHA_MAX_OUTPUT_PIXELS,
+} from './image.js';
 import { MediaService } from './media.service.js';
 
 /**
@@ -65,9 +69,10 @@ export class MediaController {
     operationId: 'uploadImage',
     summary:
       `An image for a post (or an admin’s notice): JPEG, PNG, WebP or GIF by its content, at most ${String(IMAGE_MAX_BYTES)} ` +
-      `bytes. Stored without its metadata, the long side at most ${String(IMAGE_MAX_DIMENSION)}px (a ` +
-      `still WebP with alpha at most ${String(WEBP_ALPHA_MAX_OUTPUT_PIXELS)} pixels), a GIF ` +
-      'still moving. Its id goes into the post’s image node; it is served once a post shows it, and ' +
+      `bytes, its long side at most ${String(IMAGE_MAX_SIDE_RATIO)} times its short side. Stored ` +
+      `without its metadata, the long side at most ${String(IMAGE_MAX_DIMENSION)}px (a still WebP ` +
+      `with alpha at most ${String(WEBP_ALPHA_MAX_OUTPUT_PIXELS)} pixels), a GIF still moving. Its ` +
+      'id goes into the post’s image node; it is served once a post shows it, and ' +
       `removed if nothing takes it within ${String(ORPHAN_MEDIA_HOURS)} hours`,
   })
   @ApiConsumes(...IMAGE_UPLOAD_CONTENT_TYPES)

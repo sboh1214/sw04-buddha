@@ -50,11 +50,12 @@ export function ProfileImageSection() {
  * The image as the profile shows it, and the two ways to change it:
  *
  * - 올리기 / 바꾸기 opens the file picker and sends the file the moment it is picked — the server
- *   checks it by its bytes, crops the middle to the 512px square and strips the metadata, so what
- *   the card then shows is the stored image itself, not the picked file. A file that is empty, over
- *   5MB or declared as another type than JPEG·PNG·WebP is refused here with the server's own reason
- *   (`profileImagePrecheck`), as the post editor does. Replacing removes the earlier image at once
- *   (decision 4 #141): picking the file is the deliberate step, and nothing more is asked.
+ *   checks it by its bytes, crops the middle to a square (512px at most, never enlarged) and strips
+ *   the metadata, so what the card then shows is the stored image itself, not the picked file. A
+ *   file that is empty, over 5MB or declared as another type than JPEG·PNG·WebP is refused here
+ *   with the server's own reason (`profileImagePrecheck`), as the post editor does. Replacing
+ *   removes the earlier image at once (decision 4 #141): picking the file is the deliberate step,
+ *   and nothing more is asked.
  * - 삭제 asks first — the image is removed at once and never comes back (decision 4 #141), as a
  *   post's or a comment's deletion asks — and then the nickname's first letter is drawn again.
  *   Sign-in is all the server asks of a deletion, during a restriction too (#37-9, decision 7).

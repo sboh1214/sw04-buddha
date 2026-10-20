@@ -2,14 +2,15 @@
  * 프로필 이미지 (#141, ADR-0079; ADR-0069 decision 3 #37-6, decision 4 #141) against the docker
  * `test` profile: `PUT /me/profile-image` and `POST /me/profile-image/delete`, and where the image
  * shows. Pinned: the upload is the file itself, of an account that finished the onboarding, naming
- * the account the screen shows; it is stored as the server's own 512px square without metadata, in
- * the media store, attached from the start; the profile, the bylines and `GET /me` carry its
- * address, which `GET /media/:mediaId` serves to anyone; replacing or deleting removes the earlier
- * image at once — its row with the write, its object right after the commit, so a slow store holds
- * no lock and a store that will not remove it leaves unreachable bytes, logged — and its address
- * stops; two writes of one member take turns on the profile row; the deletion needs sign-in only;
- * a social login's photo is never shown; another account's cookie changes nothing. The
- * restriction's hook is public-items-sanctioned.test.ts's. Skips when TEST_* are unset.
+ * the account the screen shows; it is stored as the server's own square — 512px at most, a smaller
+ * one at its own size — without metadata, in the media store, attached from the start; the
+ * profile, the bylines and `GET /me` carry its address, which `GET /media/:mediaId` serves to
+ * anyone; replacing or deleting removes the earlier image at once — its row with the write, its
+ * object right after the commit, so a slow store holds no lock and a store that will not remove it
+ * leaves unreachable bytes, logged — and its address stops; two writes of one member take turns on
+ * the profile row; the deletion needs sign-in only; a social login's photo is never shown; another
+ * account's cookie changes nothing. The restriction's hook is public-items-sanctioned.test.ts's.
+ * Skips when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
 import {
@@ -125,8 +126,8 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/profile-image (integration)', () => {
 
   // ---- upload -------------------------------------------------------------------------------
 
-  it('stores the upload as the member’s profile image: a 512px square of its own type, without metadata, attached from the start', async () => {
-    const me = meOf(await upload(await photo()));
+  it('stores the upload as the member’s profile image: a square of its own type, 512px at most and a smaller one at its own size, without metadata, attached from the start', async () => {
+    const me = meOf(await upload(await photo(800, 600)));
     const [row] = await mediaRows();
     expect(row).toMatchObject({
       ownerId: member.id,
@@ -151,6 +152,15 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/profile-image (integration)', () => {
     // GET /me says the same.
     const again = meOf(await read('/api/v1/me', { cookie: member.cookie }));
     expect(again.profile.imageUrl).toBe(me.profile.imageUrl);
+
+    // A smaller upload is never enlarged (owner decision 2026-10-22): its middle square at its
+    // own size — 64×48 is stored 48×48.
+    meOf(await upload(await photo(64, 48)));
+    const [small] = await mediaRows();
+    expect(small).toMatchObject({ width: 48, height: 48 });
+    const smallBytes = t.storage.objects.get(small!.storageKey)!.body;
+    const smallSize = await sharp(smallBytes).metadata();
+    expect({ width: smallSize.width, height: smallSize.height }).toEqual({ width: 48, height: 48 });
   });
 
   it('serves the image to anyone, revalidated on every use, and shows it on the profile and the bylines', async () => {
@@ -167,7 +177,8 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/profile-image (integration)', () => {
       'cache-control': 'public, no-cache',
       etag: `"${imageId}"`,
     });
-    expect((await sharp(res.rawPayload).metadata()).width).toBe(512);
+    // The 10×10 PNG kept at its own size (never enlarged, owner decision 2026-10-22).
+    expect((await sharp(res.rawPayload).metadata()).width).toBe(10);
     expect((await read(imageUrl!, { 'if-none-match': `"${imageId}"` })).statusCode).toBe(304);
 
     // Every public face of the member carries the same address (ADR-0069 decision 5, #37-6).
@@ -293,7 +304,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/profile-image (integration)', () => {
     expect(t.storage.objects.size).toBe(0);
   });
 
-  it('refuses what is not a JPEG, PNG or WebP, or over 5MB, with its reason, and keeps the image it has', async () => {
+  it('refuses what is not a JPEG, PNG or WebP, over 5MB or very thin, with its reason, and keeps the image it has', async () => {
     const kept = meOf(await upload(await photo())).profile.imageUrl;
     const reasonOf = (res: { statusCode: number; json: <T>() => T }) => ({
       status: res.statusCode,
@@ -322,6 +333,10 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/profile-image (integration)', () => {
     expect(reasonOf(await upload(over)).error.details).toEqual({ reason: 'size' });
     const broken = (await photo()).subarray(0, 40);
     expect(reasonOf(await upload(broken)).error.details).toEqual({ reason: 'unreadable' });
+    // Longer than 40 times its short side (owner decision 2026-10-22), as for a post's image.
+    expect(reasonOf(await upload(await photo(410, 10))).error.details).toEqual({
+      reason: 'pixels',
+    });
     // An absurd body is cut by the parser (413), as for a post's image.
     expect((await upload(Buffer.alloc(IMAGE_BODY_LIMIT + 1))).statusCode).toBe(413);
 
@@ -575,8 +590,8 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/profile-image (integration)', () => {
     expect(meOf(await remove(newcomer)).profile.imageUrl).toBeNull();
 
     // A member held back by a re-consent (a revision that changed members' rights): no new image
-    // until it agrees, but its image comes down with sign-in only (the brief, widening the owner's
-    // 2026-10-21 answer on #41 for the 소개 to the image — ADR-0079 asks the owner to confirm).
+    // until it agrees, but its image comes down with sign-in only (owner decision 2026-10-22: «재동의만
+    // 남은 계정의 프로필 이미지 지우기 → 로그인만으로»).
     meOf(await upload(await photo()));
     await t.db.delete(schema.consentRecords).where(eq(schema.consentRecords.userId, member.id));
     await createConsents(t.db, { userId: member.id, versions: { terms: 'draft-1999-01-01' } });

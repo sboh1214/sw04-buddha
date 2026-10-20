@@ -141,7 +141,7 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | POST | `/api/v1/me/onboarding/nickname` | Set or confirm the nickname in the onboarding, and grant the start Coin | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `NICKNAME_NOT_ALLOWED`, `VERIFICATION_REQUIRED`, `RATE_LIMITED` |
 | POST | `/api/v1/me/onboarding/interests` | Answer the onboarding interests step: categories picked, or none to skip it | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `RATE_LIMITED` |
 | PUT | `/api/v1/me/interest-categories` | Set the interest categories in MY settings (none: drop them all) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `RATE_LIMITED` |
-| PUT | `/api/v1/me/profile-image` | Set the public profile’s image: JPEG, PNG or WebP by its content, at most 5242880 bytes. Stored without its metadata as a 512px square cropped from its middle; the earlier image is removed | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `IMAGE_NOT_ALLOWED`, `RATE_LIMITED` |
+| PUT | `/api/v1/me/profile-image` | Set the public profile’s image: JPEG, PNG or WebP by its content, at most 5242880 bytes, its long side at most 32 times its short side. Stored without its metadata as the square cropped from its middle, scaled down to 512px when larger (never enlarged); the earlier image is removed | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `IMAGE_NOT_ALLOWED`, `RATE_LIMITED` |
 | POST | `/api/v1/me/profile-image/delete` | Delete the public profile’s image (the nickname’s first letter is shown instead); removed at once | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
 
 ### `wallet` — 지갑·결제
@@ -251,7 +251,7 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 
 | 메서드 | 경로 | 설명 | 인증 | 오류 |
 | --- | --- | --- | --- | --- |
-| POST | `/api/v1/media/images` | An image for a post (or an admin’s notice): JPEG, PNG, WebP or GIF by its content, at most 5242880 bytes. Stored without its metadata, the long side at most 2048px (a still WebP with alpha at most 3400000 pixels), a GIF still moving. Its id goes into the post’s image node; it is served once a post shows it, and removed if nothing takes it within 24 hours | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `ONBOARDING_REQUIRED`, `IMAGE_NOT_ALLOWED`, `RATE_LIMITED` |
+| POST | `/api/v1/media/images` | An image for a post (or an admin’s notice): JPEG, PNG, WebP or GIF by its content, at most 5242880 bytes, its long side at most 32 times its short side. Stored without its metadata, the long side at most 2048px (a still WebP with alpha at most 3400000 pixels), a GIF still moving. Its id goes into the post’s image node; it is served once a post shows it, and removed if nothing takes it within 24 hours | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `ONBOARDING_REQUIRED`, `IMAGE_NOT_ALLOWED`, `RATE_LIMITED` |
 | GET | `/api/v1/media/{mediaId}` | An image a post or a pinned notice shows, or a member’s profile image (NOT_FOUND for any other: not attached, removed by an edit, of a deleted or hidden post, of a notice not pinned, or no profile’s image now). Revalidated on every use (ETag) | — | `VALIDATION_ERROR`, `NOT_FOUND`, `RATE_LIMITED` |
 
 ### `comments`

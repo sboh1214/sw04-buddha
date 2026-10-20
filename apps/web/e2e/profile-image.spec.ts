@@ -5,14 +5,16 @@ import { createOpenMarket, expect, freshEmail, freshTag, meOf, signUp, test } fr
 
 /**
  * 프로필 이미지 (#141, ADR-0079; owner decisions in ADR-0069 decision 3 #37-6 and decision 4 #141): a
- * member uploads an image in MY 설정 — a GIF is refused before it is sent, and a GIF named a PNG by
- * the server, by its bytes — and the server keeps the middle of it as a 512px square, which anyone
- * reads, on the public profile and as the small round image of the member's bylines (the post page,
- * a 댓글, a community card). Replacing it removes the earlier one at once, deleting it asks first
- * and removes it too, and the nickname's first letter comes back everywhere; Back from MY 설정 to the
- * profile shows each change. The type sniffing, the size, the EXIF removal, the crop, the
- * restriction hook and the permissions are the API's tests (profile-image.controller.test.ts,
- * image.test.ts, public-items*.test.ts, private-data.test.ts); this walks the screens.
+ * member uploads an image in MY 설정 — a GIF is refused before it is sent, a GIF named a PNG by the
+ * server, by its bytes, and a very thin strip by its shape (owner decision 2026-10-22) — and the
+ * server keeps the middle of it as a square, 512px at most and a smaller one at its own size (owner
+ * decision 2026-10-22), which anyone reads, on the public profile and as the small round image of
+ * the member's bylines (the post page, a 댓글, a community card). Replacing it removes the earlier
+ * one at once, deleting it asks first and removes it too, and the nickname's first letter comes
+ * back everywhere; Back from MY 설정 to the profile shows each change. The type sniffing, the size,
+ * the EXIF removal, the crop, the restriction hook and the permissions are the API's tests
+ * (profile-image.controller.test.ts, image.test.ts, public-items*.test.ts, private-data.test.ts);
+ * this walks the screens.
  */
 
 /** A 1×1 GIF: a type a post takes and a profile image does not (#37-6: «JPEG·PNG·WebP»). */
@@ -160,7 +162,7 @@ async function edgeColours(page: Page, src: string): Promise<string[]> {
 }
 
 test.describe('프로필 이미지', () => {
-  test('회원이 MY 설정에서 올린 이미지는 가운데를 512px 정사각형으로 자른 것이 공개 프로필과 글·댓글·카드의 작성자 표기에 보이고, GIF는 받지 않으며, 바꾸면 이전 이미지는 곧바로 없어지고, 삭제하면 닉네임 첫 글자로 돌아간다', async ({
+  test('회원이 MY 설정에서 올린 이미지는 가운데를 정사각형(512px까지, 작으면 제 크기)으로 자른 것이 공개 프로필과 글·댓글·카드의 작성자 표기에 보이고, GIF와 아주 가늘고 긴 이미지는 받지 않으며, 바꾸면 이전 이미지는 곧바로 없어지고, 삭제하면 닉네임 첫 글자로 돌아간다', async ({
     admin,
     page,
     request,
@@ -207,12 +209,28 @@ test.describe('프로필 이미지', () => {
     await expect(card.getByTestId('profile-image-notice')).toHaveText(copy.errProfileImageType);
     expect((await meOf(page.request)).profile.imageUrl).toBeNull();
 
-    // --- three bands, red · green · blue, three times wider than tall: stored as the middle square.
+    // --- a strip 41 times wider than tall (82×2): the server refuses it by its shape, past the
+    // measured 40:1 (owner decision 2026-10-22), with the `pixels` sentence.
+    const thin = page.waitForResponse(isUpload);
+    await file.setInputFiles({
+      name: 'strip.png',
+      mimeType: 'image/png',
+      buffer: bandsPng(
+        Array.from({ length: 41 }, () => RED),
+        2,
+      ),
+    });
+    expect((await thin).status()).toBe(422);
+    await expect(card.getByTestId('profile-image-notice')).toHaveText(copy.errImageTooLarge);
+    expect((await meOf(page.request)).profile.imageUrl).toBeNull();
+
+    // --- three bands, red · green · blue, three times wider than tall: stored as the middle square,
+    // 600px scaled down to 512.
     const saved = page.waitForResponse(isUpload);
     await file.setInputFiles({
       name: 'bands.png',
       mimeType: 'image/png',
-      buffer: bandsPng([RED, GREEN, BLUE], 200),
+      buffer: bandsPng([RED, GREEN, BLUE], 600),
     });
     expect((await saved).status()).toBe(200);
     await expect(page.getByText(copy.profileImageSaved)).toBeVisible();
@@ -279,8 +297,8 @@ test.describe('프로필 이미지', () => {
     expect(second).not.toBe(first);
     await expectImage(card.getByTestId('profile-image-preview-image'), second);
     expect((await request.get(first)).status()).toBe(404);
-    // A smaller upload is the same square, enlarged (ADR-0079).
-    expect(pngSize(await (await request.get(second)).body())).toEqual({ width: 512, height: 512 });
+    // A smaller upload keeps its own size, never enlarged (owner decision 2026-10-22).
+    expect(pngSize(await (await request.get(second)).body())).toEqual({ width: 120, height: 120 });
     await page.goBack();
     await expect(page).toHaveURL(profileUrl);
     await expectImage(page.getByTestId('profile-avatar-image'), second);
