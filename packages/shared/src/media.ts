@@ -74,9 +74,11 @@ export type UploadImageQuery = z.infer<typeof uploadImageQuerySchema>;
  * Why an upload was refused (IMAGE_NOT_ALLOWED): `type` — its content is not a JPEG, PNG, WebP or
  * GIF, whatever its name or declared type says; `size` — larger than IMAGE_MAX_BYTES; `pixels` —
  * an image (one frame of an animation) too large to decode: more pixels than its format's bound,
- * or than IMAGE_MAX_INPUT_PIXELS; `frames` — an animation whose frames each fit but together
- * decode to more than IMAGE_MAX_INPUT_PIXELS (too many frames, not too large a picture);
- * `unreadable` — it says it is one of the four and does not decode as one; `empty` — no bytes.
+ * or than IMAGE_MAX_INPUT_PIXELS, or so thin that converting it costs far more than its pixels
+ * (its long side more than 32 times its short side — apps/api's image.ts, owner 2026-10-22);
+ * `frames` — an animation whose frames each fit but together decode to more than
+ * IMAGE_MAX_INPUT_PIXELS (too many frames, not too large a picture); `unreadable` — it says it is
+ * one of the four and does not decode as one; `empty` — no bytes.
  */
 export const IMAGE_REFUSALS = ['type', 'size', 'pixels', 'frames', 'unreadable', 'empty'] as const;
 export type ImageRefusal = (typeof IMAGE_REFUSALS)[number];

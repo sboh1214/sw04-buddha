@@ -64,13 +64,41 @@ export const IMAGE_EXTENSION: Readonly<Record<ImageContentType, string>> = {
  * The memory one conversion may take, in bytes: what the decoder and the resize hold at their
  * peak for one frame. One conversion runs at a time (`imageConversions`), so this plus the API's
  * own use stays under its container's 448 MiB (deploy/compose.yaml) with room left.
+ *
+ * A known exception, open with the owner (ADR-0073 결과 4 (1)): a thin PNG with alpha or 16-bit
+ * colour — 8-bit RGBA and 16-bit grey + alpha, RGB or RGBA, interlaced or not, and 8-bit grey +
+ * alpha that embeds an ICC profile (an interlaced 8-bit RGB sits at the edge) — passes every check
+ * here and still takes more: up to ~275MiB by libvips' count, ~360MiB at the process's peak
+ * (16-bit RGBA at 32:1 with a profile; IMAGE_MAX_SIDE_RATIO).
  */
 export const IMAGE_DECODE_BUDGET_BYTES = 128 * 1024 * 1024;
 
 /**
+ * How thin one frame may be: its long side at most this many times its short side, else `pixels`
+ * (owner 2026-10-22: a measured long/short side ratio, ADR-0073 9-8). What a conversion holds grows
+ * with how thin the image is, not only with its pixels: fitting a strip inside IMAGE_MAX_DIMENSION
+ * leaves a few output rows to make, so libvips holds every input row at once and buffers a whole
+ * row wide on top — a 5,000,000×10 PNG took ~500MiB (grey, 49KB) and ~1.5GiB (RGB, 146KB) by
+ * libvips' own count, ~0.9 and ~2.6GB at the process's peak. Measured on the pipeline below at the
+ * largest frame an 8-bit grey or RGB PNG may have (IMAGE_MAX_INPUT_PIXELS; sharp 0.35.5, cache off,
+ * one thread, libvips' high-water mark): at 32:1 the RGB one peaks at 116MiB — the same with a
+ * quarter turn by EXIF, which sharp makes after the resize — and at 118MiB when it embeds an ICC
+ * profile (sharp turns the pixels into sRGB before it resizes, and anyone can put a profile in a
+ * file), within IMAGE_DECODE_BUDGET_BYTES; at 48:1 already 132MiB, at 100:1 162MiB. The grey one at
+ * 32:1 takes 39MiB, 73MiB with a profile (`image-memory.test.ts`). Both ways round: a strip stored
+ * tall costs little, but which side a file stores as its width is not what a person sees (EXIF
+ * turns it), and the owner's rule is the long side over the short.
+ *
+ * Not every PNG fits at this ratio: a thin one with alpha or 16-bit colour can take up to ~275MiB
+ * — the known exception in IMAGE_DECODE_BUDGET_BYTES, open with the owner (ADR-0073 결과 4 (1)).
+ */
+export const IMAGE_MAX_SIDE_RATIO = 32;
+
+/**
  * What a conversion holds per pixel of one frame, at its peak, in bytes — measured on the pipeline
  * below (sharp 0.35.5, cache off, one thread, a quarter turn by EXIF where it costs more), at and
- * around the bound, rounded up (ADR-0073 9-8):
+ * around the bound, near square, rounded up (ADR-0073 9-8; a thinner PNG, or one that embeds an
+ * ICC profile, can take more — IMAGE_DECODE_BUDGET_BYTES):
  *
  * - a baseline JPEG is shrunk while it is decoded (libjpeg's shrink-on-load), so even 48
  *   megapixels peak near 45MB: 1 byte;
@@ -163,9 +191,10 @@ export interface ProcessedImage {
  * 1. Not empty, at most IMAGE_MAX_BYTES (the content-type parser stops a larger body first).
  * 2. One of the four types by its magic number (`sniffImageType`), and the decoder agrees.
  * 3. Small enough to decode, read from the header before anything is decoded (a decompression
- *    bomb is a few bytes): one frame within IMAGE_DECODE_BUDGET_BYTES by its format
- *    (`decodeBytesPerPixel`), else `pixels`; every frame together within IMAGE_MAX_INPUT_PIXELS,
- *    else `frames` for an animation and `pixels` for a still — sharp's own limit is a second fence.
+ *    bomb is a few bytes): one frame no thinner than IMAGE_MAX_SIDE_RATIO allows and within
+ *    IMAGE_DECODE_BUDGET_BYTES by its format (`decodeBytesPerPixel`), else `pixels`; every frame
+ *    together within IMAGE_MAX_INPUT_PIXELS, else `frames` for an animation and `pixels` for a
+ *    still — sharp's own limit is a second fence.
  * 4. Turned upright by its EXIF orientation, then shrunk to fit IMAGE_MAX_DIMENSION on its long side
  *    (never enlarged); an animated GIF or WebP keeps every frame and its timing.
  * 5. Encoded again in its own type. sharp writes no metadata unless asked, so EXIF (the place and
@@ -200,8 +229,8 @@ export async function processImage(bytes: Uint8Array): Promise<ProcessedImage> {
   if (!width || !totalHeight) throw imageRefused('unreadable');
   const frameHeight = metadata.pageHeight ?? totalHeight;
   if (
-    width * frameHeight * decodeBytesPerPixel(contentType, metadata) >
-    IMAGE_DECODE_BUDGET_BYTES
+    Math.max(width, frameHeight) > IMAGE_MAX_SIDE_RATIO * Math.min(width, frameHeight) ||
+    width * frameHeight * decodeBytesPerPixel(contentType, metadata) > IMAGE_DECODE_BUDGET_BYTES
   ) {
     throw imageRefused('pixels');
   }

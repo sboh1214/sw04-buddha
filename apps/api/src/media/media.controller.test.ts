@@ -25,6 +25,7 @@ import sharp from 'sharp';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
 import { SESSION_COOKIE } from '../openapi/document.js';
+import { pngOf } from '../test/png.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { ByteBudget } from './byte-budget.js';
 import {
@@ -270,6 +271,21 @@ describe.skipIf(!hasTestInfra)('/api/v1/media (integration)', () => {
     expect(absurd.statusCode).toBe(413);
     expect(absurd.json<{ error: { code: string } }>().error.code).toBe('VALIDATION_ERROR');
     expect(await mediaRows()).toEqual([]);
+  });
+
+  it('refuses an image thin as a line as too large, storing nothing (owner decision 2026-10-22)', async () => {
+    // 49KB of grey PNG, 5,000,000×10: within every other check, and ~500MiB to convert.
+    const res = await upload(pngOf(5_000_000, 10, { channels: 1 }), { type: 'image/png' });
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toEqual({
+      error: {
+        code: 'IMAGE_NOT_ALLOWED',
+        message: expect.any(String) as unknown,
+        details: { reason: 'pixels' },
+      },
+    });
+    expect(await mediaRows()).toEqual([]);
+    expect(t.storage.objects.size).toBe(0);
   });
 
   it('takes the file as the body only: JSON or another type is refused', async () => {

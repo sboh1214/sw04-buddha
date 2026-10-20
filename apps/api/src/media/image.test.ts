@@ -5,13 +5,14 @@
  * 2,048px and never enlarged, an animation keeps its frames and timing, and a decompression bomb
  * is refused from its header. No database.
  */
-import { crc32, deflateSync } from 'node:zlib';
 import { IMAGE_MAX_BYTES, IMAGE_MAX_DIMENSION } from '@buddha/shared';
 import sharp from 'sharp';
 import { describe, expect, it, vi } from 'vitest';
 import { AppError } from '../common/errors/app-error.js';
+import { pngHeaderOnly, pngOf } from '../test/png.js';
 import {
   IMAGE_DECODE_BUDGET_BYTES,
+  IMAGE_MAX_SIDE_RATIO,
   OneAtATime,
   decodeBytesPerPixel,
   imageConversions,
@@ -40,32 +41,6 @@ async function animation(
   return format === 'gif'
     ? image.gif({ delay, loop: 0 }).toBuffer()
     : image.webp({ delay, loop: 0 }).toBuffer();
-}
-
-/**
- * A PNG whose header claims `width`×`height` over a few bytes of pixel data: a bomb, which must be
- * refused from its header (the decoder would fail on the data only after allocating the image).
- */
-function pngHeaderOnly(width: number, height: number): Buffer {
-  const chunk = (type: string, data: Buffer) => {
-    const body = Buffer.concat([Buffer.from(type, 'ascii'), data]);
-    const length = Buffer.alloc(4);
-    length.writeUInt32BE(data.length);
-    const crc = Buffer.alloc(4);
-    crc.writeUInt32BE(crc32(body));
-    return Buffer.concat([length, body, crc]);
-  };
-  const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(width, 0);
-  ihdr.writeUInt32BE(height, 4);
-  ihdr.writeUInt8(8, 8); // bit depth
-  ihdr.writeUInt8(2, 9); // RGB
-  return Buffer.concat([
-    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-    chunk('IHDR', ihdr),
-    chunk('IDAT', deflateSync(Buffer.alloc(64))),
-    chunk('IEND', Buffer.alloc(0)),
-  ]);
 }
 
 /** The reason of an IMAGE_NOT_ALLOWED refusal. */
@@ -217,6 +192,32 @@ describe('processImage', () => {
     expect(await refusal(await solid(5_000, 5_000).jpeg({ progressive: true }).toBuffer())).toBe(
       'pixels',
     );
+  });
+
+  it('refuses a frame over 32 times longer than wide, either way round, from its header', async () => {
+    expect(IMAGE_MAX_SIDE_RATIO).toBe(32);
+    // The owner's case (2026-10-22): 49KB of grey PNG that took ~500MiB to convert, ~1.5GiB as
+    // RGB — within the pixels and the decode budget its format is allowed (the memory is
+    // `image-memory.test.ts`'s).
+    const line = pngOf(5_000_000, 10, { channels: 1 });
+    expect(line.length).toBeLessThan(64 * 1024);
+    expect(await refusal(line)).toBe('pixels');
+    expect(await refusal(pngOf(5_000_000, 10))).toBe('pixels');
+    expect(await refusal(pngOf(10, 5_000_000))).toBe('pixels');
+    // Just past 32:1 either way, small as it is; in an animation, one frame's sides count.
+    expect(await refusal(await solid(3_201, 100).png().toBuffer())).toBe('pixels');
+    expect(await refusal(await solid(100, 3_201).jpeg().toBuffer())).toBe('pixels');
+    expect(await refusal(await animation('gif', 330, 10, 3))).toBe('pixels');
+  });
+
+  it('takes a frame exactly 32 times longer than wide', async () => {
+    const strip = await processImage(await solid(3_200, 100).png().toBuffer());
+    expect(strip).toMatchObject({ contentType: 'image/png', width: 2_048, height: 64 });
+    const tall = await processImage(await solid(100, 3_200).jpeg().toBuffer());
+    expect(tall).toMatchObject({ contentType: 'image/jpeg', width: 64, height: 2_048 });
+    // Frames of 320×10, stacked 320×30: each frame is what is measured.
+    const gif = await processImage(await animation('gif', 320, 10, 3));
+    expect(gif).toMatchObject({ contentType: 'image/gif', width: 320, height: 10 });
   });
 
   it('still takes a phone photo, a 5K screenshot and a 4K GIF', async () => {

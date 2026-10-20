@@ -917,6 +917,7 @@ export const copy = {
   errImageType: 'JPEG·PNG·WebP·GIF 이미지만 넣을 수 있습니다.',
   errImageSize: '이미지는 한 장에 5MB까지 넣을 수 있습니다.',
   // 한 프레임이 너무 크거나(`pixels`) 모든 프레임을 더해 너무 크면(`frames`) — 둘에 같은 문장(오너 결정 2026-10-19).
+  // 긴 변이 짧은 변의 32배를 넘는 아주 가는 이미지도 `pixels`라 이 문장이다(오너 결정 2026-10-22).
   errImageTooLarge: '이미지가 너무 크거나 프레임이 너무 많습니다.',
   errImageUnreadable: '이미지를 읽을 수 없습니다. 다른 파일을 골라 주세요.',
   errImageEmpty: '빈 파일입니다. 다른 파일을 골라 주세요.',
