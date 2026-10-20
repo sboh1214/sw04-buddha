@@ -6,12 +6,12 @@
  * categories dropped but not added, the nickname not changed; the time zone (a private setting)
  * still changes, and the profile still opens (#37-9: «그대로 열린다»). Nothing is written by a
  * refused request. The onboarding's first choices are not changes (owner decision 2026-10-21 answer
- * 4): the nickname step takes a nickname of the member's own, and the interests step — the same
- * route as MY 설정 — takes its first picks; only later additions are refused. Which write is the
- * interests step's first answer is told by `interests_answered_at` alone, so a first pick sent from
- * MY 설정 by an account that left the step unanswered passes too, while one after the 건너뛰기 is
- * refused — pinned here as it stands, an open question to the owner (ADR-0078 결과 4). An account
- * the onboarding holds back (a re-consent) hears that before the restriction (ADR-0078 decision 4).
+ * 4): the nickname step takes a nickname of the member's own, and the interests step's screen
+ * (`POST /me/onboarding/interests`) takes its first picks; only later additions are refused. Only
+ * that screen's first answer passes (owner decision 2026-10-21 (2nd) answer 2): MY 설정's first
+ * pick is refused however the account left the step — with the skip its screen sent on leaving, or
+ * with nothing recorded — and so is the screen's pick once the step is answered. An account the
+ * onboarding holds back (a re-consent) hears that before the restriction (ADR-0078 decision 4).
  * Skips when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
@@ -131,7 +131,7 @@ describe.skipIf(!hasTestInfra)('public profile items under a restriction (integr
     ]);
     expect((await send('PUT', '/me/bio', { bio: '처음 소개' })).statusCode).toBe(200);
     expect(
-      (await send('PUT', '/me/interest-categories', { categoryIds: [a.id, b.id] })).statusCode,
+      (await send('POST', '/me/onboarding/interests', { categoryIds: [a.id, b.id] })).statusCode,
     ).toBe(200);
     const before = await profileRow();
     // The 소개 was a new value with no sanction: asked, and let through. The picks were the
@@ -198,7 +198,7 @@ describe.skipIf(!hasTestInfra)('public profile items under a restriction (integr
     sanction.on = true;
 
     // The step's answer is the account's first choice, not a change: taken without asking.
-    const picked = await send('PUT', '/me/interest-categories', {
+    const picked = await send('POST', '/me/onboarding/interests', {
       categoryIds: [first.id, second.id],
     });
     expect(picked.statusCode, picked.body).toBe(200);
@@ -212,6 +212,12 @@ describe.skipIf(!hasTestInfra)('public profile items under a restriction (integr
     });
     expect(codeOf(added)).toEqual({ status: 403, code: 'FORBIDDEN' });
     expect(sanction.asked).toEqual([member.id]);
+    // Nor is the step's screen a way back to a first choice once it is answered.
+    const again = await send('POST', '/me/onboarding/interests', {
+      categoryIds: [first.id, later.id],
+    });
+    expect(codeOf(again)).toEqual({ status: 403, code: 'FORBIDDEN' });
+    expect(sanction.asked).toEqual([member.id, member.id]);
     const dropped = await send('PUT', '/me/interest-categories', { categoryIds: [first.id] });
     expect(dropped.statusCode, dropped.body).toBe(200);
     expect(await picks()).toEqual([first.id]);
@@ -220,7 +226,7 @@ describe.skipIf(!hasTestInfra)('public profile items under a restriction (integr
   it('takes the skip of the interests step and a nickname of the member’s own in the nickname step (answer 4)', async () => {
     sanction.on = true;
     // The skip answers the step for good, unasked.
-    const skipped = await send('PUT', '/me/interest-categories', { categoryIds: [] });
+    const skipped = await send('POST', '/me/onboarding/interests', { categoryIds: [] });
     expect(skipped.statusCode, skipped.body).toBe(200);
     expect(await answeredAt()).not.toBeNull();
 
@@ -252,7 +258,7 @@ describe.skipIf(!hasTestInfra)('public profile items under a restriction (integr
     ]);
     expect((await send('PUT', '/me/bio', { bio: '내 소개' })).statusCode).toBe(200);
     expect(
-      (await send('PUT', '/me/interest-categories', { categoryIds: [a.id, b.id] })).statusCode,
+      (await send('POST', '/me/onboarding/interests', { categoryIds: [a.id, b.id] })).statusCode,
     ).toBe(200);
     // A revision that changed members' rights asks the consent again (profiles.controller.test.ts
     // makes it the same way): the record the member agreed to is one the list no longer holds.
@@ -282,31 +288,53 @@ describe.skipIf(!hasTestInfra)('public profile items under a restriction (integr
     expect(sanction.asked).toEqual([]);
   });
 
-  it('tells the interests step’s first answer by its timestamp alone, wherever it is sent from (as it stands; ADR-0078 결과 4 asks the owner)', async () => {
-    // `member` finished the three steps and left the interests step unanswered, as an account that
-    // closed the start-Coin notice or the interests screen does: ADR-0072 counts the step as
-    // skipped, but nothing records it. `skipper` pressed 건너뛰기, which is recorded.
-    const skipper = await signUpTestUser(t);
-    await completeOnboarding(t.db, { userId: skipper.id });
-    const skip = await send('PUT', '/me/interest-categories', { categoryIds: [] }, skipper);
-    expect(skip.statusCode, skip.body).toBe(200);
+  it('lets only the onboarding screen’s first answer through: MY 설정’s first pick is refused however the account left the step (owner decision 2026-10-21 (2nd) answer 2)', async () => {
+    // Three members who finished the three steps. `member` left the start-Coin notice with nothing
+    // recorded (the screen's skip never arrived: the browser crashed); `leaver` left the interests
+    // screen, whose skip the server recorded; `picker` is still on the interests screen.
+    const leaver = await signUpTestUser(t);
+    const picker = await signUpTestUser(t);
+    await completeOnboarding(t.db, { userId: leaver.id });
+    await completeOnboarding(t.db, { userId: picker.id });
+    const left = await send('POST', '/me/onboarding/interests', { categoryIds: [] }, leaver);
+    expect(left.statusCode, left.body).toBe(200);
     const category = await createCategory(t.db);
     sanction.on = true;
 
-    // Each picks for the first time from MY 설정 under a restriction. The account that left passes
-    // as a first choice, unasked; the one that pressed 건너뛰기 is refused as a change.
-    const left = await send('PUT', '/me/interest-categories', { categoryIds: [category.id] });
-    expect(left.statusCode, left.body).toBe(200);
-    expect(await picks()).toEqual([category.id]);
-    expect(sanction.asked).toEqual([]);
-    const afterSkip = await send(
+    // MY 설정's first pick is a change for both: refused, nothing written, the step unanswered
+    // where it was.
+    const unrecorded = await send('PUT', '/me/interest-categories', { categoryIds: [category.id] });
+    expect(codeOf(unrecorded)).toEqual({ status: 403, code: 'FORBIDDEN' });
+    expect(await answeredAt()).toBeNull();
+    const recorded = await send(
       'PUT',
       '/me/interest-categories',
       { categoryIds: [category.id] },
-      skipper,
+      leaver,
     );
-    expect(codeOf(afterSkip)).toEqual({ status: 403, code: 'FORBIDDEN' });
-    expect(sanction.asked).toEqual([skipper.id]);
-    expect(await picks(skipper.id)).toEqual([]);
+    expect(codeOf(recorded)).toEqual({ status: 403, code: 'FORBIDDEN' });
+    expect(sanction.asked).toEqual([member.id, leaver.id]);
+    // The step's screen after the recorded leave (its page restored by the back button): a change.
+    const restored = await send(
+      'POST',
+      '/me/onboarding/interests',
+      { categoryIds: [category.id] },
+      leaver,
+    );
+    expect(codeOf(restored)).toEqual({ status: 403, code: 'FORBIDDEN' });
+    expect(await picks()).toEqual([]);
+    expect(await picks(leaver.id)).toEqual([]);
+
+    // The pick inside the onboarding's interests screen is the first choice: taken, unasked.
+    sanction.asked = [];
+    const firstPick = await send(
+      'POST',
+      '/me/onboarding/interests',
+      { categoryIds: [category.id] },
+      picker,
+    );
+    expect(firstPick.statusCode, firstPick.body).toBe(200);
+    expect(await picks(picker.id)).toEqual([category.id]);
+    expect(sanction.asked).toEqual([]);
   });
 });

@@ -21,12 +21,10 @@ import { SettingsSection } from './section';
  * picked, nothing when none (#37-5). The operators' list (`GET /categories`, the seeded one until
  * #17), top-level and sub-categories alike, as many as the member likes, none included: unpicking
  * every one and saving clears them — a deletion, which stays open during a writing or an account
- * restriction while adding one does not (#37-9, decision 7: the server's check). The server tells
- * the onboarding's first answer, which a restriction lets through (owner decision 2026-10-21
- * answer 4), by the step's timestamp alone: an account that left the step without picking or
- * skipping has none, so its first save here passes as that answer for now — whether it should is
- * asked of the owner (ADR-0078 결과 4). The same route and the same `['me']` write as the
- * onboarding's step (`PUT /me/interest-categories`, `useSetInterestCategories`), and the same list
+ * restriction while adding one does not (#37-9, decision 7: the server's check) — the first pick
+ * here included: only the onboarding screen's first answer is let through (owner decision
+ * 2026-10-21 answer 4 and (2nd) answer 2). Its own route (`PUT /me/interest-categories`,
+ * `useSetInterestCategories`), the same `['me']` write as the onboarding's step, and the same list
  * (`InterestChecklist`).
  */
 export function InterestsSection() {
@@ -82,7 +80,8 @@ function InterestsFields({ held }: { held: readonly number[] }) {
       await save.mutateAsync({ categoryIds: chosen, expectedAccountId: accountId });
       toaster.create({ type: 'success', title: copy.interestsSaved });
       // Back to the profile shows the new picks (bio-section.tsx says why). Here, not in the
-      // hook: the onboarding's step uses it too and leaves the screen instead.
+      // hooks' shared write (`interestsWriteOptions`): the onboarding's step shares it and leaves
+      // the screen instead.
       router.refresh();
     } catch (error) {
       const failure = profileItemFailure(error);

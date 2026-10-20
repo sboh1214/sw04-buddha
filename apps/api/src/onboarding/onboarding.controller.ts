@@ -2,10 +2,12 @@ import { type BlockList } from 'node:net';
 import { Body, Controller, HttpCode, Inject, Post, Put, Req, UseGuards } from '@nestjs/common';
 import { ApiCookieAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import {
+  answerInterestsStepBodySchema,
   meSchema,
   recordConsentsBodySchema,
   setInterestCategoriesBodySchema,
   setOnboardingNicknameBodySchema,
+  type AnswerInterestsStepBody,
   type Me,
   type RecordConsentsBody,
   type SetInterestCategoriesBody,
@@ -25,8 +27,9 @@ import { OnboardingService } from './onboarding.service.js';
 
 /**
  * 가입 직후 온보딩 (#58) under `/api/v1/me`: the consent step, the nickname step (which grants the
- * start Coin) and the interest categories. The 본인확인 between the first two is #183's
- * (`/me/phone-verification/*`), and where an account stands is `GET /me`'s `onboarding`.
+ * start Coin), the interests step, and MY 설정's interest categories (#41). The 본인확인 between the
+ * first two is #183's (`/me/phone-verification/*`), and where an account stands is `GET /me`'s
+ * `onboarding`.
  * Owner-only: the session decides whose onboarding is written, and every write names the account
  * the screen shows (`expectedAccountId`, assertExpectedAccount, as every owner write since
  * A-PG-24) — a window still showing account A after another one signed in as B would otherwise
@@ -114,23 +117,54 @@ export class OnboardingController {
   }
 
   /**
-   * The interest categories (#57-7): the step after the start Coin, so its answer (picks or the
-   * skip) is for onboarded accounts only, and so are new picks in MY 설정 (#41); an empty list is
-   * the skip, and either way the step is answered and not asked again. Dropping picks needs sign-in
-   * only, an account held back by a re-consent included (owner decision 2026-10-21 answer 2) — so
-   * no OnboardedGuard: the service asks the onboarding in its transaction for anything but a
-   * dropping (`assertPublicItemOnboarding`).
+   * The interests step (#57-7), from the onboarding's screen: the categories picked, or none — the
+   * skip, which the screen also sends when the account leaves it, or the start-Coin notice before
+   * it, without an answer, so the server records the skip (owner decision 2026-10-21 (2nd) answer
+   * 2, ADR-0078). While the step is unanswered this is its first answer: for onboarded accounts
+   * only, and let through a writing or an account restriction (a first choice, owner decision
+   * 2026-10-21 answer 4). Once answered, a skip changes nothing and picks are a change as in MY 설정
+   * (`PUT /me/interest-categories`). No OnboardedGuard: the service asks the onboarding in its
+   * transaction (`assertPublicItemOnboarding`), as for MY 설정's write.
+   */
+  @Post('onboarding/interests')
+  @HttpCode(200)
+  @ApiOperation({
+    operationId: 'answerMyInterestsStep',
+    summary: 'Answer the onboarding interests step: categories picked, or none to skip it',
+  })
+  @ApiData(meSchema)
+  // ONBOARDING_REQUIRED: the consent, the verification or the nickname step is not done, and the
+  // write is the step's first answer or adds a category. FORBIDDEN (no field named): a category
+  // added once the step is answered, under a writing or an account restriction.
+  // VALIDATION_ERROR: a category that does not exist or is not active (details name each).
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR', 'ONBOARDING_REQUIRED')
+  answerInterestsStep(
+    @CurrentUser() user: SessionUser,
+    @Body({ schema: answerInterestsStepBodySchema }) body: AnswerInterestsStepBody,
+  ): Promise<Me> {
+    assertExpectedAccount(user.id, body.expectedAccountId);
+    return this.onboarding.answerInterestsStep(user.id, body.categoryIds);
+  }
+
+  /**
+   * MY 설정's interest categories (#41): replaced by the list sent. Never the interests step's
+   * first answer — an account that left the onboarding's screens skipped the step (owner decision
+   * 2026-10-21 (2nd) answer 2), so a first pick here is a change like any later one. A category
+   * added is for onboarded accounts only and refused under a restriction (#37-9); dropping picks
+   * needs sign-in only, an account held back by a re-consent included (owner decision 2026-10-21
+   * answer 2) — so no OnboardedGuard: the service asks the onboarding in its transaction for an
+   * addition only (`assertPublicItemOnboarding`).
    */
   @Put('interest-categories')
   @ApiOperation({
     operationId: 'setMyInterestCategories',
-    summary: 'Set the interest categories (none: skip the step)',
+    summary: 'Set the interest categories in MY settings (none: drop them all)',
   })
   @ApiData(meSchema)
   // ONBOARDING_REQUIRED: the consent, the verification or the nickname step is not done, and the
-  // write is not a dropping of picks (the step's answer, or a category added). FORBIDDEN (no field
-  // named): a category added under a writing or an account restriction, but in the step's first
-  // answer. VALIDATION_ERROR: a category that does not exist or is not active (details name each).
+  // write adds a category. FORBIDDEN (no field named): a category added under a writing or an
+  // account restriction. VALIDATION_ERROR: a category that does not exist or is not active
+  // (details name each).
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR', 'ONBOARDING_REQUIRED')
   setInterestCategories(
     @CurrentUser() user: SessionUser,

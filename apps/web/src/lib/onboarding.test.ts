@@ -15,6 +15,7 @@ import {
   isReconsent,
   isRoutePage,
   isStepBack,
+  leavingSkipsInterests,
   needsOnboarding,
   onboardingEntryPath,
   onboardingNext,
@@ -411,6 +412,23 @@ describe('onboardingScreen', () => {
     expect(onboardingScreen(COMPLETED, visit)).toBeNull();
     expect(onboardingScreen(COMPLETED, { reachedNickname: false, noticeRead: true })).toBeNull();
     expect(onboardingScreen(DONE, visit)).toBeNull();
+  });
+});
+
+describe('leavingSkipsInterests (owner decision 2026-10-21 (2nd) answer 2)', () => {
+  it('skips the interests step when the notice or the interests screen is left unanswered', () => {
+    expect(leavingSkipsInterests('notice', false)).toBe(true);
+    expect(leavingSkipsInterests('interests', false)).toBe(true);
+  });
+
+  it('does not while the step’s own answer is on its way, nor before or after the step', () => {
+    // The pick or the 건너뛰기 sent answers the step itself.
+    expect(leavingSkipsInterests('notice', true)).toBe(false);
+    expect(leavingSkipsInterests('interests', true)).toBe(false);
+    // The three steps: the step not reached. Null: nothing left — the step answered.
+    for (const screen of ['consent', 'verification', 'nickname', null] as const) {
+      expect(leavingSkipsInterests(screen, false)).toBe(false);
+    }
   });
 });
 

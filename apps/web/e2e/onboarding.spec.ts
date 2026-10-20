@@ -195,11 +195,19 @@ test.describe('가입 직후 온보딩 (#58)', () => {
     await expect(page.getByTestId('notice-facts')).toContainText(copy.onboardingNoticeCounterparty);
     await page.getByTestId('notice-next').click();
 
-    // --- 관심 카테고리, skipped (#57-7) — and back on the market.
+    // --- 관심 카테고리, skipped (#57-7) — and back on the market. The step's answer is the one
+    // write: leaving the screen it answered sends no second skip (ADR-0078).
+    const stepWrites: string[] = [];
+    page.on('request', (request) => {
+      if (request.url().endsWith('/api/v1/me/onboarding/interests')) {
+        stepWrites.push(request.method());
+      }
+    });
     await expect(page.getByTestId('interests-step')).toBeVisible();
     await expect(page.getByTestId('interests-list')).toBeVisible();
     await page.getByTestId('interests-skip').click();
     await expect(page).toHaveURL(marketPath);
+    expect(stepWrites).toEqual(['POST']);
 
     // What the server holds: each answer with its version, the nickname set, the start Coin
     // recorded (waiting or paid), no categories, nothing left.
@@ -271,7 +279,9 @@ test.describe('가입 직후 온보딩 (#58)', () => {
 
     // Left at the notice: the three steps are done and the interests skipped — they are shown
     // once, right after the nickname step (오너 결정 2026-10-19 (2차) 5). Nothing sends the
-    // account back, and /onboarding opened again goes straight on.
+    // account back, and /onboarding opened again goes straight on. The page that went sent the
+    // skip as it went (`pagehide`), and the server holds it (owner decision 2026-10-21 (2nd)
+    // answer 2, ADR-0078).
     await expect(page.getByTestId('notice-step')).toBeVisible();
     await page.goto('/my/wallet');
     await expect(page.getByTestId('balance-chip')).toBeVisible();
@@ -279,11 +289,13 @@ test.describe('가입 직후 온보딩 (#58)', () => {
     await expect(page).toHaveURL('/my/wallet');
     await page.goto('/onboarding?next=%2Fmy%2Fwallet');
     await expect(page).toHaveURL('/my/wallet');
+    await expect.poll(async () => (await meOf(page.request)).onboarding.interests).toBe(true);
     expect((await meOf(page.request)).onboarding).toMatchObject({
       completed: true,
-      interests: false,
+      interests: true,
       nextStep: null,
     });
+    expect((await meOf(page.request)).profile.interestCategoryIds).toEqual([]);
 
     // Nothing left: other pages open as usual.
     await page.goto('/');
@@ -328,13 +340,19 @@ test.describe('가입 직후 온보딩 (#58)', () => {
     );
     expect(nickname.details).toEqual({ steps: ['consent', 'verification'] });
     const interests = await expectRefused(
-      await page.request.put('/api/v1/me/interest-categories', {
+      await page.request.post('/api/v1/me/onboarding/interests', {
         data: { categoryIds: [], expectedAccountId: id },
       }),
       409,
       'ONBOARDING_REQUIRED',
     );
     expect(interests.details).toEqual({ steps: ['consent', 'verification', 'nickname'] });
+    // MY 설정's write answers no step: dropping nothing changes nothing (ADR-0078).
+    const settings = await page.request.put('/api/v1/me/interest-categories', {
+      data: { categoryIds: [], expectedAccountId: id },
+    });
+    expect(settings.status(), await settings.text()).toBe(200);
+    expect((await meOf(page.request)).onboarding.interests).toBe(false);
 
     // A required item not agreed is refused; nothing is recorded.
     const agreed = { version: 'draft-2026-10-18', agreed: true };
@@ -502,6 +520,181 @@ test.describe('가입 직후 온보딩 (#58)', () => {
     await expect(page.getByTestId('notice-facts')).toContainText(copy.onboardingNoticeCounterparty);
     await page.getByTestId('notice-next').click();
     await expect(page.getByTestId('interests-step')).toBeVisible();
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+  });
+
+  test('지급 안내나 관심 카테고리 화면을 답하지 않고 떠나면 서버에 건너뛴 것으로 남고, MY 설정에서 처음 고르는 것은 그 단계의 답이 아니다', async ({
+    page,
+  }) => {
+    // Owner decision 2026-10-21 (2nd) answer 2 (ADR-0078): leaving the start-Coin notice or the
+    // interests screen without an answer is the skip (ADR-0072), and the stepper tells the server.
+    // Left inside the app: the header's home link from the interests screen.
+    const me = await atNicknameStep(page);
+    const categories = await dataOf<Category[]>(await page.request.get('/api/v1/categories'));
+    const category = categories.find((row) => row.parentId === null);
+    if (category === undefined)
+      throw new Error('the seeded categories are missing: run `pnpm db:seed`');
+    await page.getByTestId('nickname-step-submit').click();
+    await page.getByTestId('notice-next').click();
+    await expect(page.getByTestId('interests-step')).toBeVisible();
+    const skip = page.waitForRequest(
+      (request) =>
+        request.url().endsWith('/api/v1/me/onboarding/interests') && request.method() === 'POST',
+    );
+    await page.getByRole('heading', { level: 1 }).getByRole('link', { name: copy.appName }).click();
+    await expect(page).toHaveURL('/');
+    expect((await skip).postDataJSON()).toEqual({ categoryIds: [], expectedAccountId: me.id });
+    await expect.poll(async () => (await meOf(page.request)).onboarding.interests).toBe(true);
+    // Not shown again.
+    await page.goto('/onboarding');
+    await expect(page).toHaveURL('/');
+
+    // The first pick is MY 설정's, a change the server takes as one (no restriction exists yet —
+    // under one it would be refused, as the API suite shows), not the step's first answer.
+    await page.goto('/my/settings');
+    const interests = page.getByTestId('settings-interests');
+    await interests.getByTestId(`interest-${category.slug}`).click();
+    await interests.getByTestId('interests-settings-save').click();
+    await expect(page.getByText(copy.interestsSaved)).toBeVisible();
+    expect((await meOf(page.request)).profile.interestCategoryIds).toEqual([category.id]);
+
+    // Left by reloading the notice: the page that went sent the skip (`pagehide`), and the
+    // reloaded screen goes straight on.
+    await logOut(page);
+    await atNicknameStep(page);
+    await page.getByTestId('nickname-step-submit').click();
+    await expect(page.getByTestId('notice-step')).toBeVisible();
+    await page.reload();
+    await expect(page).toHaveURL('/');
+    await expect.poll(async () => (await meOf(page.request)).onboarding.interests).toBe(true);
+    expect((await meOf(page.request)).profile.interestCategoryIds).toEqual([]);
+  });
+
+  test('지급 안내나 관심 카테고리 화면의 로그아웃은 세션을 끝내기 전에 건너뛰기를 보내 서버에 남는다', async ({
+    page,
+  }) => {
+    // Owner decision 2026-10-21 (2nd) answer 2 (ADR-0078 decision 6, 7-23): 로그아웃 is the one way
+    // out the screen itself offers, and the session it ends is what the skip needs — so the skip
+    // goes first and is answered (200, not the 401 it would get after), and the stepper going
+    // after the sign-out sends no second one.
+    const categories = await dataOf<Category[]>(await page.request.get('/api/v1/categories'));
+    const category = categories.find((row) => row.parentId === null);
+    if (category === undefined)
+      throw new Error('the seeded categories are missing: run `pnpm db:seed`');
+    const stepWrites: string[] = [];
+    page.on('request', (request) => {
+      if (request.url().endsWith('/api/v1/me/onboarding/interests')) {
+        stepWrites.push(request.method());
+      }
+    });
+    const skipAnswered = () =>
+      page.waitForResponse(
+        (response) =>
+          response.url().endsWith('/api/v1/me/onboarding/interests') &&
+          response.request().method() === 'POST',
+      );
+
+    // On the start-Coin notice.
+    const onNotice = await atNicknameStep(page);
+    await page.getByTestId('nickname-step-submit').click();
+    await expect(page.getByTestId('notice-step')).toBeVisible();
+    const fromNotice = skipAnswered();
+    await page.getByTestId('onboarding-logout').click();
+    await expect(page).toHaveURL('/');
+    await expect(page.getByRole('link', { name: copy.login })).toBeVisible();
+    const noticeSkip = await fromNotice;
+    expect(noticeSkip.status()).toBe(200);
+    expect(noticeSkip.request().postDataJSON()).toEqual({
+      categoryIds: [],
+      expectedAccountId: onNotice.id,
+    });
+    await signIn(page, onNotice.email, E2E_PASSWORD);
+    let me = await meOf(page.request);
+    expect(me.onboarding).toMatchObject({ completed: true, interests: true, nextStep: null });
+    expect(me.profile.interestCategoryIds).toEqual([]);
+    expect(stepWrites).toEqual(['POST']);
+    // Not shown again.
+    await page.goto('/onboarding');
+    await expect(page).toHaveURL('/');
+    await logOut(page);
+
+    // On the interests screen, a category ticked and not saved: the skip, not the tick.
+    stepWrites.length = 0;
+    const onInterests = await atNicknameStep(page);
+    await page.getByTestId('nickname-step-submit').click();
+    await page.getByTestId('notice-next').click();
+    await expect(page.getByTestId('interests-step')).toBeVisible();
+    await page.getByTestId('interests-step').getByTestId(`interest-${category.slug}`).click();
+    const fromInterests = skipAnswered();
+    await page.getByTestId('onboarding-logout').click();
+    await expect(page).toHaveURL('/');
+    const interestsSkip = await fromInterests;
+    expect(interestsSkip.status()).toBe(200);
+    expect(interestsSkip.request().postDataJSON()).toEqual({
+      categoryIds: [],
+      expectedAccountId: onInterests.id,
+    });
+    await signIn(page, onInterests.email, E2E_PASSWORD);
+    me = await meOf(page.request);
+    expect(me.onboarding).toMatchObject({ completed: true, interests: true, nextStep: null });
+    expect(me.profile.interestCategoryIds).toEqual([]);
+    expect(stepWrites).toEqual(['POST']);
+  });
+
+  test('관심 카테고리 단계의 고른 것을 보내는 동안 떠나도 건너뛰기를 보내지 않아, 고른 것이 그 단계의 첫 답으로 남는다', async ({
+    page,
+  }) => {
+    // The step's answer answers the step; a skip sent beside it could land first and turn the picks
+    // into a change — refused under a restriction (ADR-0078 decision 6, 7-23). The answer is held
+    // on its way while the page says it is going (`pagehide`) and the stepper goes (the header's
+    // home link): one write reaches the server, the picks.
+    const me = await atNicknameStep(page);
+    const categories = await dataOf<Category[]>(await page.request.get('/api/v1/categories'));
+    const category = categories.find((row) => row.parentId === null);
+    if (category === undefined)
+      throw new Error('the seeded categories are missing: run `pnpm db:seed`');
+    await page.getByTestId('nickname-step-submit').click();
+    await page.getByTestId('notice-next').click();
+    await expect(page.getByTestId('interests-step')).toBeVisible();
+
+    const stepWrites: unknown[] = [];
+    page.on('request', (request) => {
+      if (request.url().endsWith('/api/v1/me/onboarding/interests')) {
+        stepWrites.push(request.postDataJSON());
+      }
+    });
+    let hold: (route: Route) => void = () => undefined;
+    const held = new Promise<Route>((resolve) => {
+      hold = resolve;
+    });
+    let holding = true;
+    await page.route('**/api/v1/me/onboarding/interests', async (route) => {
+      if (holding) {
+        holding = false;
+        hold(route);
+        return;
+      }
+      await route.continue();
+    });
+
+    await page.getByTestId('interests-step').getByTestId(`interest-${category.slug}`).click();
+    await page.getByTestId('interests-save').click();
+    const answer = await held;
+    await page.evaluate(() => window.dispatchEvent(new Event('pagehide')));
+    await page.getByRole('heading', { level: 1 }).getByRole('link', { name: copy.appName }).click();
+    await expect(page).toHaveURL('/');
+
+    const answered = page.waitForResponse(
+      (response) =>
+        response.url().endsWith('/api/v1/me/onboarding/interests') &&
+        response.request().method() === 'POST',
+    );
+    await answer.continue();
+    expect((await answered).status()).toBe(200);
+    const after = await meOf(page.request);
+    expect(after.onboarding.interests).toBe(true);
+    expect(after.profile.interestCategoryIds).toEqual([category.id]);
+    expect(stepWrites).toEqual([{ categoryIds: [category.id], expectedAccountId: me.id }]);
     await page.unrouteAll({ behavior: 'ignoreErrors' });
   });
 

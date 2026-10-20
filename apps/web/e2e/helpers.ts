@@ -522,14 +522,17 @@ export async function confirmNicknameThroughApi(
   );
 }
 
-/** The interest categories through the API: `categoryIds`, or none — the skip. */
+/**
+ * The interests step through the API (`POST /me/onboarding/interests`): `categoryIds`, or none —
+ * the skip.
+ */
 export async function answerInterestsThroughApi(
   context: APIRequestContext,
   expectedAccountId: string,
   categoryIds: readonly number[],
 ): Promise<Me> {
   return unwrap<Me>(
-    await context.put('/api/v1/me/interest-categories', {
+    await context.post('/api/v1/me/onboarding/interests', {
       data: { categoryIds, expectedAccountId },
     }),
   );

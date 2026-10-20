@@ -405,8 +405,13 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
     body: (fixture) => ({ nickname: `b_${letters(8)}`, expectedAccountId: fixture.a.id }),
     status: 403,
   },
-  // The account check refuses it before the service reads anything (no OnboardedGuard: the
-  // service asks the onboarding for a new value only, ADR-0078).
+  // The account check refuses both before the service reads anything (no OnboardedGuard: the
+  // service asks the onboarding for the step's first answer or a new value only, ADR-0078). The
+  // skip — what the onboarding screen sends when it is left — answers nobody's step either.
+  'POST /me/onboarding/interests': {
+    body: (fixture) => ({ categoryIds: [], expectedAccountId: fixture.a.id }),
+    status: 403,
+  },
   'PUT /me/interest-categories': {
     body: (fixture) => ({ categoryIds: [fixture.categoryId], expectedAccountId: fixture.a.id }),
     status: 403,
@@ -1622,8 +1627,8 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     expect(profile?.timeZone).toBe(sentinel('time zone'));
     expect(passwordBefore).toHaveLength(1);
     expect(await password()).toEqual(passwordBefore);
-    // B's refused consent, nickname, change and interest categories changed nobody's (#58), nor
-    // did its 소개 (#41).
+    // B's refused consent, nickname, change, interests step and interest categories changed
+    // nobody's (#58), nor did its 소개 (#41).
     expect(await onboardingState()).toEqual(onboardingBefore);
 
     // B's refused unwatch left A's watches and their `watch` events, and wrote nothing for B. B

@@ -1,10 +1,15 @@
 import { MutationObserver, QueryObserver, type QueryClient } from '@tanstack/react-query';
-import { describe, expect, it } from 'vitest';
-import { ApiError, type Me } from '@/lib/api';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ApiError, type AnswerInterestsStepBody, type Me } from '@/lib/api';
 import { getQueryClient } from '@/lib/query-client';
 import { ME_QUERY_KEY } from './use-me';
 import {
+  INTERESTS_STEP_MUTATION_KEY,
+  SIGN_OUT_LEAVE_REPORT_WAIT_MS,
+  answerInterestsStepOptions,
+  createInterestsLeaveReport,
   recordConsentsOptions,
+  reportInterestsLeft,
   setInterestCategoriesOptions,
   setOnboardingNicknameOptions,
   storeOnboardingAnswer,
@@ -269,6 +274,10 @@ describe('the onboarding mutations', () => {
     );
     const interests = new MutationObserver(
       queryClient,
+      answerInterestsStepOptions(queryClient, session.onSessionChanged, rejectAsOther),
+    );
+    const settings = new MutationObserver(
+      queryClient,
       setInterestCategoriesOptions(queryClient, session.onSessionChanged, rejectAsOther),
     );
 
@@ -279,8 +288,11 @@ describe('the onboarding mutations', () => {
     await expect(
       interests.mutate({ categoryIds: [], expectedAccountId: 'user-1' }),
     ).rejects.toBeInstanceOf(ApiError);
+    await expect(
+      settings.mutate({ categoryIds: [], expectedAccountId: 'user-1' }),
+    ).rejects.toBeInstanceOf(ApiError);
 
-    expect(session.count()).toBe(3);
+    expect(session.count()).toBe(4);
     queryClient.clear();
   });
 
@@ -355,7 +367,7 @@ describe('the onboarding mutations', () => {
       await me.observer.refetch();
       const interests = new MutationObserver(
         queryClient,
-        setInterestCategoriesOptions(
+        answerInterestsStepOptions(
           queryClient,
           () => undefined,
           () => Promise.resolve(done),
@@ -364,10 +376,216 @@ describe('the onboarding mutations', () => {
 
       await interests.mutate({ categoryIds: [], expectedAccountId: 'user-1' });
 
-      expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)?.onboarding.nextStep).toBeNull();
+      expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)?.onboarding).toMatchObject({
+        interests: true,
+        nextStep: null,
+      });
     } finally {
       me.unsubscribe();
       queryClient.clear();
     }
+  });
+
+  it('keys the step’s answer, which the stepper’s leave report waits on, and not MY 설정’s write', async () => {
+    const queryClient = getQueryClient();
+    let settle: (me: Me) => void = () => undefined;
+    const pending = new Promise<Me>((resolve) => {
+      settle = resolve;
+    });
+    const step = new MutationObserver(
+      queryClient,
+      answerInterestsStepOptions(
+        queryClient,
+        () => undefined,
+        () => pending,
+      ),
+    );
+    const settings = new MutationObserver(
+      queryClient,
+      setInterestCategoriesOptions(
+        queryClient,
+        () => undefined,
+        () => pending,
+      ),
+    );
+    const answering = () => queryClient.isMutating({ mutationKey: INTERESTS_STEP_MUTATION_KEY });
+    try {
+      const saved = settings.mutate({ categoryIds: [1], expectedAccountId: 'user-1' });
+      expect(answering()).toBe(0);
+      const answered = step.mutate({ categoryIds: [1], expectedAccountId: 'user-1' });
+      expect(answering()).toBe(1);
+      settle(named);
+      await Promise.all([saved, answered]);
+      expect(answering()).toBe(0);
+    } finally {
+      queryClient.clear();
+    }
+  });
+});
+
+describe('reportInterestsLeft (owner decision 2026-10-21 (2nd) answer 2)', () => {
+  it('sends the step’s skip for the account on screen, and swallows a failure', async () => {
+    const sent: unknown[] = [];
+    const answered = reportInterestsLeft('user-1', (body) => {
+      sent.push(body);
+      return Promise.resolve();
+    });
+    // Sent before the call returns: the page may be going (`pagehide`).
+    expect(sent).toEqual([{ categoryIds: [], expectedAccountId: 'user-1' }]);
+    await expect(answered).resolves.toBeUndefined();
+    // A refusal or a lost request is nobody's to hear: it settles, it does not reject.
+    let rejected = false;
+    const lost = reportInterestsLeft('user-1', () => {
+      rejected = true;
+      return Promise.reject(new Error('offline'));
+    });
+    expect(rejected).toBe(true);
+    await expect(lost).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * The stepper's leave report (ADR-0078 decision 6, 7-23): what `useInterestsLeaveReport` runs as
+ * the stepper renders (`show`), goes or the page goes (`leave`), and as 로그아웃 is about to end the
+ * session (`beforeSignOut`) — driven here with the REAL QueryClient and the step's own mutation
+ * options, so the hold-back while the step's answer is on its way is the one the stepper has.
+ */
+describe('createInterestsLeaveReport (owner decision 2026-10-21 (2nd) answer 2)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** A post that records what it was sent and settles when the test says. */
+  function recordingPost() {
+    const sent: AnswerInterestsStepBody[] = [];
+    let settle: () => void = () => undefined;
+    const post = (body: AnswerInterestsStepBody) => {
+      sent.push(body);
+      return new Promise<void>((resolve) => {
+        settle = resolve;
+      });
+    };
+    return { sent, post, settle: () => settle() };
+  }
+
+  it('sends the skip once when the account leaves the notice or the interests, and nothing elsewhere', () => {
+    const queryClient = getQueryClient();
+    const { sent, post, settle } = recordingPost();
+    const report = createInterestsLeaveReport(queryClient, post);
+    // Before the stepper has rendered, and on the three steps: nothing to skip yet.
+    report.leave();
+    for (const screen of ['consent', 'verification', 'nickname'] as const) {
+      report.show(screen, 'user-1');
+      report.leave();
+    }
+    expect(sent).toEqual([]);
+    report.show('notice', 'user-1');
+    report.leave();
+    expect(sent).toEqual([{ categoryIds: [], expectedAccountId: 'user-1' }]);
+    // Once: the stepper going after the page's `pagehide`, or after 로그아웃, sends no second one.
+    report.show('interests', 'user-1');
+    report.leave();
+    void report.beforeSignOut();
+    expect(sent).toHaveLength(1);
+    settle();
+
+    // The step answered: the stepper has nothing left to show, and leaving it is no skip.
+    const done = createInterestsLeaveReport(queryClient, post);
+    done.show('interests', 'user-1');
+    done.show(null, 'user-1');
+    done.leave();
+    expect(sent).toHaveLength(1);
+    queryClient.clear();
+  });
+
+  it('holds the skip back while the step’s own answer is on its way, but not for MY 설정’s write', async () => {
+    const queryClient = getQueryClient();
+    const { sent, post } = recordingPost();
+    let answer: (me: Me) => void = () => undefined;
+    const answering = new Promise<Me>((resolve) => {
+      answer = resolve;
+    });
+    const step = new MutationObserver(
+      queryClient,
+      answerInterestsStepOptions(
+        queryClient,
+        () => undefined,
+        () => answering,
+      ),
+    );
+    const settings = new MutationObserver(
+      queryClient,
+      setInterestCategoriesOptions(
+        queryClient,
+        () => undefined,
+        () => new Promise<Me>(() => undefined),
+      ),
+    );
+    try {
+      // The picks sent with 저장, then the account leaves — the page (`pagehide`), the stepper, or
+      // 로그아웃: the answer answers the step, and a skip racing it could make the picks a change.
+      const report = createInterestsLeaveReport(queryClient, post);
+      report.show('interests', 'user-1');
+      const picked = step.mutate({ categoryIds: [3], expectedAccountId: 'user-1' });
+      report.leave();
+      await report.beforeSignOut();
+      expect(sent).toEqual([]);
+      answer(named);
+      await picked;
+
+      // A write of MY 설정 in flight (another tab's) is no answer of the step.
+      const other = createInterestsLeaveReport(queryClient, post);
+      other.show('notice', 'user-1');
+      void settings.mutate({ categoryIds: [3], expectedAccountId: 'user-1' });
+      other.leave();
+      expect(sent).toEqual([{ categoryIds: [], expectedAccountId: 'user-1' }]);
+    } finally {
+      queryClient.clear();
+    }
+  });
+
+  it('sends the skip before 로그아웃 ends the session and waits for its answer, at most a while', async () => {
+    vi.useFakeTimers();
+    const queryClient = getQueryClient();
+    const first = recordingPost();
+    const report = createInterestsLeaveReport(queryClient, first.post);
+    report.show('notice', 'user-1');
+    let waited = false;
+    const before = report.beforeSignOut().then(() => {
+      waited = true;
+    });
+    // Sent at once, and 로그아웃 waits for the answer.
+    expect(first.sent).toEqual([{ categoryIds: [], expectedAccountId: 'user-1' }]);
+    await vi.advanceTimersByTimeAsync(SIGN_OUT_LEAVE_REPORT_WAIT_MS - 1);
+    expect(waited).toBe(false);
+    first.settle();
+    await before;
+    expect(waited).toBe(true);
+    // The stepper going after the sign-out sends nothing more.
+    report.leave();
+    expect(first.sent).toHaveLength(1);
+
+    // An answer that does not come keeps nobody signed in: 로그아웃 goes on after the wait.
+    const second = recordingPost();
+    const slow = createInterestsLeaveReport(queryClient, second.post);
+    slow.show('interests', 'user-2');
+    let gaveUp = false;
+    const late = slow.beforeSignOut().then(() => {
+      gaveUp = true;
+    });
+    await vi.advanceTimersByTimeAsync(SIGN_OUT_LEAVE_REPORT_WAIT_MS - 1);
+    expect(gaveUp).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await late;
+    expect(gaveUp).toBe(true);
+    expect(second.sent).toEqual([{ categoryIds: [], expectedAccountId: 'user-2' }]);
+
+    // Nothing to skip: nothing sent, nothing waited for.
+    const third = recordingPost();
+    const elsewhere = createInterestsLeaveReport(queryClient, third.post);
+    elsewhere.show('consent', 'user-3');
+    await elsewhere.beforeSignOut();
+    expect(third.sent).toEqual([]);
+    queryClient.clear();
   });
 });

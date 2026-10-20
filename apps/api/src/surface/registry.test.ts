@@ -533,7 +533,11 @@ describe('the public API document (static)', () => {
     // The admin surface included (오너 결정 2026-10-19, ADR-0072): a client reads the refusal it
     // can get from the document, as for every other code. And the public profile items, whose
     // service asks the onboarding for a new value only (owner decision 2026-10-21, ADR-0078).
-    const asksInService = ['PUT /me/bio', 'PUT /me/interest-categories'];
+    const asksInService = [
+      'PUT /me/bio',
+      'POST /me/onboarding/interests',
+      'PUT /me/interest-categories',
+    ];
     const guarded = new Set([
       ...routes
         .filter((route) => guardsOf(route).includes(OnboardedGuard))

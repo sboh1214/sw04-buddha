@@ -6,7 +6,7 @@
  * nickname, image, 운영자 mark), the 소개, the interest categories picked, the month joined in Korea
  * time and the counts of the visible posts, comments and the likes others gave them — and nothing
  * more of the account; the gap between that total and the items' own counts is the member's own
- * likes, which anyone can read (recorded and asked of the owner, ADR-0078 결과 4); an unknown or
+ * likes, which anyone can read (accepted by the owner, 2026-10-21 (2nd) answer 1); an unknown or
  * malformed public id is NOT_FOUND, a public id typed in capitals finds the member, and the old
  * link shows the new nickname; only the member writes the 소개 — plain text, 160 characters, line
  * breaks kept, blank clears it — through the account the screen shows, a new one once onboarded,
@@ -389,10 +389,10 @@ describe.skipIf(!hasTestInfra)('/api/v1/profiles and the 소개 (integration)', 
     });
   });
 
-  it('lets anyone read the member’s own likes off the two public numbers (answer 3 as it stands; ADR-0078 결과 4 asks the owner)', async () => {
+  it('lets anyone read the member’s own likes off the two public numbers (answer 3; accepted by the owner, 2026-10-21 (2nd) answer 1)', async () => {
     // The total leaves the member's own likes out while each item's count keeps them, so the gap
-    // is exactly those likes (decision 7-3) — the ADR records it and asks whether it may stay
-    // against ADR-0076's «누른 사람 목록 없음». Pinned so that an answer changes this with the ADR.
+    // is exactly those likes (decision 7-3) — against ADR-0076's «누른 사람 목록 없음» for the
+    // member's own likes, which the owner accepted as it is («이대로 둠», ADR-0078).
     const publicId = await publicIdOf(member.id);
     const market = await createMarket(t.db);
     const first = await createPost(t.db, { marketId: market.id, authorId: member.id });

@@ -52,7 +52,9 @@ export const profiles = pgTable(
     nicknameChangedAt: timestampTz(),
     /**
      * When the onboarding's interest categories step was answered, categories chosen or skipped
-     * (#58, #57-7: never asked again), or null while it was not. The categories themselves are
+     * (#58, #57-7: never asked again) — the skip also what its screen sends when the account leaves
+     * it, or the start-Coin notice before it, unanswered, and a first pick in MY 설정 answering it
+     * too (ADR-0078) — or null while it was not. The categories themselves are
      * `profile_interest_categories`.
      */
     interestsAnsweredAt: timestampTz(),

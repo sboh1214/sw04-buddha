@@ -1,25 +1,34 @@
 'use client';
 
 import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
 import { ME_QUERY_KEY, meBelongsTo, refreshOwnMe } from '@/hooks/use-me';
 import {
   api,
   isApiError,
   isForAnotherAccount,
   unwrap,
+  type AnswerInterestsStepBody,
   type Me,
   type RecordConsentsBody,
   type SetInterestCategoriesBody,
   type SetOnboardingNicknameBody,
 } from '@/lib/api';
 import { nicknameRefusalNeedsRefresh } from '@/lib/nickname';
-import { takeOnboardingAnswer, type OnboardingWrite } from '@/lib/onboarding';
+import {
+  leavingSkipsInterests,
+  takeOnboardingAnswer,
+  type OnboardingScreen,
+  type OnboardingWrite,
+} from '@/lib/onboarding';
 import { useSession } from '@/lib/use-session';
 
 /**
  * The onboarding's writes (#58, ADR-0072) apart from the 본인확인, which is #183's
  * (use-phone-verification.ts): the consent step, the nickname step — with which the server grants
- * the start Coin — and the interest categories. Each answers the whole `Me`, and what the write
+ * the start Coin — the interests step and its skip when the account leaves it (ADR-0078), and MY
+ * 설정's interest categories (#41), which share the step's `['me']` write. Each answers the whole
+ * `Me`, and what the write
  * changed goes into `['me']` before the mutation settles (`storeOnboardingAnswer`), so the
  * stepper, which reads `onboarding.nextStep` there, moves on in the same render the answer lands —
  * and the gate on the page it then returns to already sees the onboarding done.
@@ -41,8 +50,22 @@ async function postNickname(body: SetOnboardingNicknameBody): Promise<Me> {
   return unwrap(await api.POST('/api/v1/me/onboarding/nickname', { body })).data;
 }
 
+async function postInterestsStep(body: AnswerInterestsStepBody): Promise<Me> {
+  return unwrap(await api.POST('/api/v1/me/onboarding/interests', { body })).data;
+}
+
 async function putInterests(body: SetInterestCategoriesBody): Promise<Me> {
   return unwrap(await api.PUT('/api/v1/me/interest-categories', { body })).data;
+}
+
+/**
+ * The skip sent as the account leaves: `keepalive`, so the browser still delivers it once the tab
+ * is closed or another document is loading (`pagehide`). Called synchronously from the handler —
+ * openapi-fetch starts the request before its first `await` — and nobody reads the answer; only
+ * 로그아웃 waits for it to come (`InterestsLeaveReport.beforeSignOut`).
+ */
+async function postInterestsLeft(body: AnswerInterestsStepBody): Promise<void> {
+  await api.POST('/api/v1/me/onboarding/interests', { body, keepalive: true });
 }
 
 /**
@@ -133,20 +156,26 @@ export function setOnboardingNicknameOptions(
 }
 
 /**
- * `PUT /me/interest-categories` as mutation options: the interest categories (#57-7), some or none
- * (the skip). The step's answer and a category added are open to onboarded accounts only (dropping
- * picks needs sign-in only, the server's rule, ADR-0078); an ONBOARDING_REQUIRED says `['me']` is
- * out of date (a revision asked for the consent again meanwhile) and asks it again.
+ * The interests step's write (`answerInterestsStepOptions`): while one is on its way, leaving sends
+ * no skip (`createInterestsLeaveReport`).
  */
-export function setInterestCategoriesOptions(
+export const INTERESTS_STEP_MUTATION_KEY = ['onboarding', 'interests'] as const;
+
+/**
+ * What both interest category writes do once they settle: the answer's `onboarding` and categories
+ * into `['me']`; a refusal as another account asks for the session again, and an
+ * ONBOARDING_REQUIRED says `['me']` is out of date (a revision asked for the consent again
+ * meanwhile) and asks it again.
+ */
+function interestsWriteOptions<Body extends { expectedAccountId: string }>(
   queryClient: QueryClient,
   onSessionChanged: () => void,
-  put: (body: SetInterestCategoriesBody) => Promise<Me> = putInterests,
+  write: (body: Body) => Promise<Me>,
 ) {
   return {
-    mutationFn: put,
+    mutationFn: write,
     onSuccess: (me: Me) => storeOnboardingAnswer(queryClient, me, 'interests', onSessionChanged),
-    onError: async (error: Error, body: SetInterestCategoriesBody) => {
+    onError: async (error: Error, body: Body) => {
       if (isForAnotherAccount(error)) {
         onSessionChanged();
         return;
@@ -156,6 +185,156 @@ export function setInterestCategoriesOptions(
       }
     },
   };
+}
+
+/**
+ * `POST /me/onboarding/interests` as mutation options: the interests step's answer from its screen
+ * (#57-7), some categories or none (the skip) — for onboarded accounts only, and, as the account's
+ * first choice, let through a writing or an account restriction (owner decision 2026-10-21 answer
+ * 4, the server's rule). Keyed (`INTERESTS_STEP_MUTATION_KEY`) so the stepper does not report the
+ * screen left while its answer is on the way (`createInterestsLeaveReport`).
+ */
+export function answerInterestsStepOptions(
+  queryClient: QueryClient,
+  onSessionChanged: () => void,
+  post: (body: AnswerInterestsStepBody) => Promise<Me> = postInterestsStep,
+) {
+  return {
+    mutationKey: INTERESTS_STEP_MUTATION_KEY,
+    ...interestsWriteOptions(queryClient, onSessionChanged, post),
+  };
+}
+
+/**
+ * `PUT /me/interest-categories` as mutation options: MY 설정's interest categories (#41), the ones
+ * kept (none: all dropped). Never the step's answer: a category added is a change — for onboarded
+ * accounts only and refused under a restriction, the first one too (owner decision 2026-10-21
+ * (2nd) answer 2) — and dropping needs sign-in only (the server's rules, ADR-0078).
+ */
+export function setInterestCategoriesOptions(
+  queryClient: QueryClient,
+  onSessionChanged: () => void,
+  put: (body: SetInterestCategoriesBody) => Promise<Me> = putInterests,
+) {
+  return interestsWriteOptions(queryClient, onSessionChanged, put);
+}
+
+/**
+ * Tells the server the account left the interests step without an answer — the skip, which the
+ * step records as its answer (owner decision 2026-10-21 (2nd) answer 2, ADR-0078; ADR-0072 counts
+ * leaving the start-Coin notice or the interests screen as skipping). Fire and forget: the page is
+ * going, and a refusal (the onboarding no longer done, another account's cookie, no session) or a
+ * lost request leaves the step unanswered (ADR-0078 7-23) — the server's own rule still keeps
+ * MY 설정's first pick a change. The promise settles once the answer came or the request failed,
+ * and never rejects: only 로그아웃 waits on it (`InterestsLeaveReport.beforeSignOut`).
+ */
+export function reportInterestsLeft(
+  expectedAccountId: string,
+  post: (body: AnswerInterestsStepBody) => Promise<void> = postInterestsLeft,
+): Promise<void> {
+  return post({ categoryIds: [], expectedAccountId }).catch(() => undefined);
+}
+
+/**
+ * How long 로그아웃 on the start-Coin notice or the interests waits for the skip it sends first
+ * (`InterestsLeaveReport.beforeSignOut`) before it ends the session anyway: the skip needs the
+ * session, and one that has not come by then is left to race the sign-out (ADR-0078 7-23) rather
+ * than keeping the account from signing out.
+ */
+export const SIGN_OUT_LEAVE_REPORT_WAIT_MS = 2_000;
+
+/** Settles once `promise` has, or `ms` went by — whichever is first. Never rejects. */
+function settledWithin(promise: Promise<void>, ms: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const elapsed = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, ms);
+  });
+  return Promise.race([promise, elapsed]).finally(() => clearTimeout(timer));
+}
+
+/** The stepper's leave report (`createInterestsLeaveReport`). */
+export interface InterestsLeaveReport {
+  /** What the stepper shows now — its screen and the account on it — every render. */
+  readonly show: (screen: OnboardingScreen | null, accountId: string) => void;
+  /** The stepper going away inside the app, or the page going (`pagehide`). */
+  readonly leave: () => void;
+  /**
+   * 로그아웃 about to end the session: the skip sent now, while the session is there, and waited
+   * for — at most `waitMs`. Nothing to wait for when leaving does not skip.
+   */
+  readonly beforeSignOut: () => Promise<void>;
+}
+
+/**
+ * The stepper's leave report (owner decision 2026-10-21 (2nd) answer 2, ADR-0078): while the
+ * screen is the start-Coin notice or the interests and no answer of the step is on its way —
+ * asked of the mutation cache as the account leaves (`INTERESTS_STEP_MUTATION_KEY`,
+ * `leavingSkipsInterests`): that answer answers the step itself, and a skip racing it could turn
+ * the picks into a change — leaving sends the skip (`reportInterestsLeft`), once, whichever way the
+ * account leaves. The screen reached nothing to skip or finished the step (null): nothing is sent.
+ * A cache emptied under the stepper (after the sign-out, or for another account) forgets an answer
+ * in flight, and the skip then sent is refused (401, 403) — it changes nothing. Plain, not a hook,
+ * so the unit tests drive it under `environment: 'node'`.
+ */
+export function createInterestsLeaveReport(
+  queryClient: QueryClient,
+  post: (body: AnswerInterestsStepBody) => Promise<void> = postInterestsLeft,
+  waitMs: number = SIGN_OUT_LEAVE_REPORT_WAIT_MS,
+): InterestsLeaveReport {
+  let shown: { screen: OnboardingScreen | null; accountId: string } | null = null;
+  let sent: Promise<void> | null = null;
+  const send = (): Promise<void> | null => {
+    if (sent === null && shown !== null) {
+      const answering = queryClient.isMutating({ mutationKey: INTERESTS_STEP_MUTATION_KEY }) > 0;
+      if (leavingSkipsInterests(shown.screen, answering)) {
+        sent = reportInterestsLeft(shown.accountId, post);
+      }
+    }
+    return sent;
+  };
+  return {
+    show: (screen, accountId) => {
+      shown = { screen, accountId };
+    },
+    leave: () => {
+      // Nobody waits: the page or the stepper is going.
+      void send();
+    },
+    beforeSignOut: () => {
+      const report = send();
+      return report === null ? Promise.resolve() : settledWithin(report, waitMs);
+    },
+  };
+}
+
+/**
+ * The stepper's leave report (`createInterestsLeaveReport`) for its life. Leaving is the stepper
+ * going away inside the app (a link, Back, the account's cache emptied), the page going
+ * (`pagehide`: the tab closed, reloaded — ADR-0072 7-35 counts a reload as leaving — or another
+ * site opened), or 로그아웃, which ends the session before the stepper goes — so the page's
+ * 로그아웃 calls what this returns first (`beforeSignOut`), and the stepper going after it sends
+ * nothing more. The stepper finishing the step goes on to `next` with nothing left to show, so it
+ * sends nothing. What the latest render showed is what the report reads; the stepper never mounts
+ * on the notice or the interests (it reaches them after the nickname step on the same visit), so a
+ * development remount reports nothing.
+ */
+export function useInterestsLeaveReport(
+  screen: OnboardingScreen | null,
+  accountId: string,
+): () => Promise<void> {
+  const queryClient = useQueryClient();
+  const [report] = useState(() => createInterestsLeaveReport(queryClient));
+  useEffect(() => {
+    report.show(screen, accountId);
+  });
+  useEffect(() => {
+    window.addEventListener('pagehide', report.leave);
+    return () => {
+      window.removeEventListener('pagehide', report.leave);
+      report.leave();
+    };
+  }, [report]);
+  return report.beforeSignOut;
 }
 
 /**
@@ -184,7 +363,14 @@ export function useSetOnboardingNickname() {
   return { ...mutation, accountId, ready: accountId !== undefined };
 }
 
-/** `setInterestCategoriesOptions` as the interests step's mutation. */
+/** `answerInterestsStepOptions` as the interests step's mutation. */
+export function useAnswerInterestsStep() {
+  const { queryClient, accountId, refetchSession } = useScreenAccount();
+  const mutation = useMutation(answerInterestsStepOptions(queryClient, refetchSession));
+  return { ...mutation, accountId, ready: accountId !== undefined };
+}
+
+/** `setInterestCategoriesOptions` as MY 설정's interest categories card's mutation (#41). */
 export function useSetInterestCategories() {
   const { queryClient, accountId, refetchSession } = useScreenAccount();
   const mutation = useMutation(setInterestCategoriesOptions(queryClient, refetchSession));

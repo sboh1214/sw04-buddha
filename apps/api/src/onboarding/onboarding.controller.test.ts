@@ -3,7 +3,9 @@
  * the docker `test` profile: the consent step and its record, the order the server holds (consent →
  * 본인확인 → nickname, then the interests), the nickname rules in the onboarding and in MY 설정
  * (ignoring case, the prefix and the reserved words, the 30-day interval and hold), the start Coin
- * granted once by the nickname step only, and the interest categories with their skip.
+ * granted once by the nickname step only, and the interest categories: the onboarding step's
+ * answer with its skip — also what the screen sends when the account leaves it (owner decision
+ * 2026-10-21 (2nd) answer 2, ADR-0078) — and MY 설정's write, which is never that answer.
  *
  * The app trusts one proxy (Caddy's address in production) and lists one uncounted peer (the web
  * server's), so a consent can name a client the way production's do: `inject` presents loopback
@@ -119,6 +121,13 @@ describe.skipIf(!hasTestInfra)('온보딩 /api/v1/me (integration, #58)', () => 
       headers: { origin: ORIGIN, 'content-type': 'application/json', cookie: as.cookie },
       payload: JSON.stringify({ nickname, expectedAccountId: as.id }),
     });
+  /** The onboarding screen's interests step: picks, or none — the skip (and the leave). */
+  const answerInterests = (
+    as: TestUser,
+    categoryIds: unknown,
+    body: Record<string, unknown> = {},
+  ) => call('POST', 'onboarding/interests', as, { categoryIds, expectedAccountId: as.id, ...body });
+  /** MY 설정's interest categories (#41). */
   const setInterests = (as: TestUser, categoryIds: unknown, body: Record<string, unknown> = {}) =>
     call('PUT', 'interest-categories', as, { categoryIds, expectedAccountId: as.id, ...body });
 
@@ -458,7 +467,7 @@ describe.skipIf(!hasTestInfra)('온보딩 /api/v1/me (integration, #58)', () => 
 
     it('refuses the interests step before the three steps, picks and the skip alike', async () => {
       const category = await createCategory(t.db);
-      expect(stepsOf(await setInterests(user, [category.id]))).toEqual([
+      expect(stepsOf(await answerInterests(user, [category.id]))).toEqual([
         'consent',
         'verification',
         'nickname',
@@ -467,8 +476,12 @@ describe.skipIf(!hasTestInfra)('온보딩 /api/v1/me (integration, #58)', () => 
       // The skip answers the step too, so it waits as well. (No OnboardedGuard on the route: only a
       // dropping of picks passes with sign-in only, ADR-0078 — a body that is not one is a
       // VALIDATION_ERROR first.)
-      expect(stepsOf(await setInterests(user, []))).toEqual(['nickname']);
-      refusal(await setInterests(user, 'not a list'), 400, 'VALIDATION_ERROR');
+      expect(stepsOf(await answerInterests(user, []))).toEqual(['nickname']);
+      refusal(await answerInterests(user, 'not a list'), 400, 'VALIDATION_ERROR');
+      // MY 설정's write is no way round it: a pick waits as well, and none changes nothing — it
+      // answers no step (the account has not reached it).
+      expect(stepsOf(await setInterests(user, [category.id]))).toEqual(['nickname']);
+      expect(meOf(await setInterests(user, [])).onboarding.interests).toBe(false);
       expect(await t.db.select().from(schema.profileInterestCategories)).toEqual([]);
       expect((await getMe(user)).onboarding.interests).toBe(false);
     });
@@ -879,14 +892,14 @@ describe.skipIf(!hasTestInfra)('온보딩 /api/v1/me (integration, #58)', () => 
         parentId: parent.id,
       });
       const third = await createCategory(t.db);
-      const me = meOf(await setInterests(user, [child.id, parent.id, child.id]));
+      const me = meOf(await answerInterests(user, [child.id, parent.id, child.id]));
       expect(me.profile.interestCategoryIds).toEqual([parent.id, child.id].sort((x, y) => x - y));
       expect(me.onboarding).toMatchObject({ interests: true, nextStep: null });
       const [kept] = await t.db
         .select()
         .from(schema.profileInterestCategories)
         .where(eq(schema.profileInterestCategories.categoryId, parent.id));
-      // Replaced: what is kept keeps its row, what is dropped goes.
+      // Replaced in MY 설정: what is kept keeps its row, what is dropped goes.
       const replaced = meOf(await setInterests(user, [parent.id, third.id]));
       expect(replaced.profile.interestCategoryIds).toEqual(
         [parent.id, third.id].sort((x, y) => x - y),
@@ -900,22 +913,71 @@ describe.skipIf(!hasTestInfra)('온보딩 /api/v1/me (integration, #58)', () => 
 
     it('is skipped with none: answered, nothing picked', async () => {
       await completeOnboarding(t.db, { userId: user.id });
-      const me = meOf(await setInterests(user, []));
+      const me = meOf(await answerInterests(user, []));
       expect(me.profile.interestCategoryIds).toEqual([]);
       expect(me.onboarding).toMatchObject({ completed: true, interests: true, nextStep: null });
+    });
+
+    it('takes the skip the screen sends when the account leaves, once, and never clears picks with it (owner decision 2026-10-21 (2nd) answer 2)', async () => {
+      await completeOnboarding(t.db, { userId: user.id });
+      const answeredAt = async (userId: string) => {
+        const [row] = await t.db
+          .select({ at: schema.profiles.interestsAnsweredAt })
+          .from(schema.profiles)
+          .where(eq(schema.profiles.userId, userId));
+        return row!.at;
+      };
+      // Left the notice or the interests screen: the screen's skip records the step as answered.
+      expect(meOf(await answerInterests(user, [])).onboarding.interests).toBe(true);
+      const skippedAt = await answeredAt(user.id);
+      expect(skippedAt).not.toBeNull();
+      // Sent again (another tab, a second leave): nothing changes, the time included.
+      meOf(await answerInterests(user, []));
+      expect(await answeredAt(user.id)).toEqual(skippedAt);
+
+      // An account that picked, then the skip arrives (another tab left its screen): the picks stay.
+      const other = await signUpTestUser(t);
+      await completeOnboarding(t.db, { userId: other.id });
+      const category = await createCategory(t.db);
+      meOf(await answerInterests(other, [category.id]));
+      expect(meOf(await answerInterests(other, [])).profile.interestCategoryIds).toEqual([
+        category.id,
+      ]);
+      // Once answered, the screen's picks are a change as MY 설정's: they replace the picks.
+      const another = await createCategory(t.db);
+      expect(meOf(await answerInterests(other, [another.id])).profile.interestCategoryIds).toEqual([
+        another.id,
+      ]);
+    });
+
+    it('never takes MY 설정’s write as the step’s answer: a first pick there answers it as a change, none records nothing (owner decision 2026-10-21 (2nd) answer 2)', async () => {
+      await completeOnboarding(t.db, { userId: user.id });
+      const category = await createCategory(t.db);
+      // None, for an account with none: nothing changes and no step is answered.
+      expect(meOf(await setInterests(user, [])).onboarding.interests).toBe(false);
+      // A first pick from MY 설정 (the account left the onboarding's screens): taken, and the step
+      // is answered with it — the screen cannot answer it as a first choice afterwards.
+      const me = meOf(await setInterests(user, [category.id]));
+      expect(me.profile.interestCategoryIds).toEqual([category.id]);
+      expect(me.onboarding.interests).toBe(true);
+      expect(meOf(await answerInterests(user, [])).profile.interestCategoryIds).toEqual([
+        category.id,
+      ]);
     });
 
     it('refuses a category that does not exist or is retired, naming each, and writes nothing', async () => {
       await completeOnboarding(t.db, { userId: user.id });
       const active = await createCategory(t.db);
       const retired = await createCategory(t.db, { isActive: false });
-      const res = await setInterests(user, [active.id, retired.id, 999_999]);
-      expect(
-        (refusal(res, 400, 'VALIDATION_ERROR') as ValidationIssue[]).map((issue) => issue.path),
-      ).toEqual([
-        ['categoryIds', 1],
-        ['categoryIds', 2],
-      ]);
+      for (const write of [answerInterests, setInterests]) {
+        const res = await write(user, [active.id, retired.id, 999_999]);
+        expect(
+          (refusal(res, 400, 'VALIDATION_ERROR') as ValidationIssue[]).map((issue) => issue.path),
+        ).toEqual([
+          ['categoryIds', 1],
+          ['categoryIds', 2],
+        ]);
+      }
       expect(await t.db.select().from(schema.profileInterestCategories)).toEqual([]);
       expect((await getMe(user)).onboarding.interests).toBe(false);
     });
@@ -931,7 +993,7 @@ describe.skipIf(!hasTestInfra)('온보딩 /api/v1/me (integration, #58)', () => 
       });
       const x = await createCategory(t.db);
       const mine = [p.id, c.id].sort((left, right) => left - right);
-      meOf(await setInterests(user, mine));
+      meOf(await answerInterests(user, mine));
       const picksOf = (userId: string) =>
         t.db
           .select()
@@ -939,8 +1001,11 @@ describe.skipIf(!hasTestInfra)('온보딩 /api/v1/me (integration, #58)', () => 
           .where(eq(schema.profileInterestCategories.userId, userId))
           .orderBy(asc(schema.profileInterestCategories.categoryId));
       const before = await picksOf(user.id);
-      // B saves its own list, then skips: A's rows stay as they were, created_at included.
-      expect(meOf(await setInterests(other, [x.id])).profile.interestCategoryIds).toEqual([x.id]);
+      // B answers its own step, then drops its picks in MY 설정: A's rows stay as they were,
+      // created_at included.
+      expect(meOf(await answerInterests(other, [x.id])).profile.interestCategoryIds).toEqual([
+        x.id,
+      ]);
       expect(await picksOf(user.id)).toEqual(before);
       expect((await getMe(user)).profile.interestCategoryIds).toEqual(mine);
       expect((await getMe(other)).profile.interestCategoryIds).toEqual([x.id]);
@@ -955,12 +1020,17 @@ describe.skipIf(!hasTestInfra)('온보딩 /api/v1/me (integration, #58)', () => 
       await completeOnboarding(t.db, { userId: user.id });
       await completeOnboarding(t.db, { userId: other.id });
       const category = await createCategory(t.db);
-      refusal(
-        await setInterests(user, [category.id], { expectedAccountId: other.id }),
-        403,
-        'FORBIDDEN',
-      );
+      for (const write of [answerInterests, setInterests]) {
+        refusal(
+          await write(user, [category.id], { expectedAccountId: other.id }),
+          403,
+          'FORBIDDEN',
+        );
+        refusal(await write(user, [], { expectedAccountId: other.id }), 403, 'FORBIDDEN');
+      }
       expect(await t.db.select().from(schema.profileInterestCategories)).toEqual([]);
+      expect((await getMe(user)).onboarding.interests).toBe(false);
+      expect((await getMe(other)).onboarding.interests).toBe(false);
     });
   });
 });

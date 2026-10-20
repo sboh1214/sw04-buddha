@@ -12,13 +12,13 @@ type Executor = Db | Tx;
  *   did not have among its picks, a new image;
  * - `clear`: takes a value away and adds none — the 소개 emptied, categories dropped, the image
  *   deleted;
- * - `first`: the account's first choice of it in the onboarding — the nickname step and the
- *   interests step's first answer (picks or the skip) — which is not a change (owner decision
- *   2026-10-21 answer 4, ADR-0078: «처음 고르는 것은 허용»). The interests step's answer is told by
- *   `interests_answered_at` being null, wherever the write comes from, so for now it also covers a
- *   first pick sent from MY 설정 by an account that left the step without picking or skipping
- *   (ADR-0072 counts that as a skip but records nothing); whether a restriction should let that one
- *   through is asked of the owner (ADR-0078 결과 4).
+ * - `first`: the account's first choice of it inside the onboarding's screens — the nickname step
+ *   and the interests step's first answer (picks or the skip, `POST /me/onboarding/interests` while
+ *   `interests_answered_at` is null) — which is not a change (owner decision 2026-10-21 answer 4,
+ *   ADR-0078: «처음 고르는 것은 허용»). Only those screens' writes: an account that left the start-Coin
+ *   notice or the interests screen without answering skipped the step, the screen tells the server
+ *   so, and MY 설정's first pick is a change (`replace`) however it left (owner decision 2026-10-21
+ *   (2nd) answer 2: «온보딩 화면 안의 첫 선택만 허용»).
  * A write that changes nothing is none of them: its caller returns before asking.
  */
 export type PublicItemEdit = 'replace' | 'clear' | 'first';
@@ -42,16 +42,16 @@ export const sanctionInForce: SanctionCheck = () => Promise.resolve(false);
  * The one check point of every public profile item write (#37-9, decision 7): under a writing or
  * an account restriction a public item cannot take a new value — the nickname cannot change — but
  * can be cleared, which stays open whatever the sanction. The onboarding's first choices pass too
- * (owner decision 2026-10-21 answer 4, `first` — see there for the interests step's first answer
- * sent from MY 설정): only the later changes of MY 설정 are kept back. The restriction never closes
- * the profile itself (#37-9: «그대로 열린다»), nor a private setting such as the time zone, which
- * never asks.
+ * (owner decision 2026-10-21 answer 4, `first`): only MY 설정's values are kept back, its first pick
+ * of interest categories included. The restriction never closes the profile itself (#37-9: «그대로
+ * 열린다»), nor a private setting such as the time zone, which never asks.
  *
  * Callers: the onboarding's nickname step (`POST /me/onboarding/nickname`, OnboardingService,
  * always `first`), the nickname change (`PATCH /me`, NicknameService), the 소개 (`PUT /me/bio`,
- * MeService) and the interest categories (`PUT /me/interest-categories`, OnboardingService — `first`
- * while the interests step is unanswered); the image (#141) joins them. `sanctioned` is the lookup
- * — `sanctionInForce` but in unit tests.
+ * MeService), the interests step (`POST /me/onboarding/interests`, OnboardingService — `first`
+ * while the step is unanswered) and MY 설정's interest categories (`PUT /me/interest-categories`,
+ * OnboardingService — never `first`); the image (#141) joins them. `sanctioned` is the lookup —
+ * `sanctionInForce` but in unit tests.
  *
  * The refusal is a 403 FORBIDDEN that names no field (the web tells the other account's cookie by
  * its `expectedAccountId` detail) — until #185 and #139, which give it a code of its own carrying
@@ -85,9 +85,10 @@ export async function assertPublicItemEdit(
  * Why not OnboardedGuard on the routes: a guard runs before the body is read, and whether a write
  * clears is known only against what the account has, read under the write's lock — this is asked
  * there, in the write's transaction, before the sanction (`assertPublicItemEdit`), so an account
- * that has to finish the onboarding hears that first. Callers: `PUT /me/bio` (MeService) and
- * `PUT /me/interest-categories` (OnboardingService). Whether the image's deletion (#141) is open
- * the same way is #141's to settle (the answer named the 소개 and the categories).
+ * that has to finish the onboarding hears that first. Callers: `PUT /me/bio` (MeService),
+ * `POST /me/onboarding/interests` and `PUT /me/interest-categories` (OnboardingService). Whether
+ * the image's deletion (#141) is open the same way is #141's to settle (the answer named the 소개
+ * and the categories).
  */
 export async function assertPublicItemOnboarding(
   executor: Executor,

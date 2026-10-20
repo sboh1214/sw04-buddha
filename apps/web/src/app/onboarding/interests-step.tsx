@@ -5,7 +5,7 @@ import { type ReactNode, useMemo, useState } from 'react';
 import { InterestChecklist } from '@/components/profile/interest-checklist';
 import { copy } from '@/copy';
 import { useCategories } from '@/hooks/use-markets';
-import { useSetInterestCategories } from '@/hooks/use-onboarding';
+import { useAnswerInterestsStep } from '@/hooks/use-onboarding';
 import { isApiError, isForAnotherAccount } from '@/lib/api';
 import { groupCategories } from '@/lib/category-tree';
 import { interestIds, withInterest } from '@/lib/onboarding';
@@ -14,11 +14,13 @@ import { interestIds, withInterest } from '@/lib/onboarding';
  * 관심 카테고리, the onboarding's last screen (#58, ADR-0069 decision 1 #57-7): after the start Coin
  * and its notice, before the market. The categories are the operators' list (D10) — the seeded one
  * until #17's admin screen, `GET /categories` — top-level and sub-categories alike, as many as the
- * member likes. 건너뛰기 sends none, and either way the step is answered and never asked again
- * (#57-7) — nor is it once the account left this screen or the notice before it: the screen shows
- * once, right after the nickname step (오너 결정 2026-10-19 (2차) 5). What was picked is the
- * account's interest categories, a public profile item once #41 shows the profile. Changing them
- * later is #41's MY setting, not this screen.
+ * member likes (`POST /me/onboarding/interests`). 건너뛰기 sends none, and either way the step is
+ * answered and never asked again (#57-7) — nor is it once the account left this screen or the
+ * notice before it: the screen shows once, right after the nickname step (오너 결정 2026-10-19
+ * (2차) 5), and the stepper sends the same skip as the account leaves (owner decision 2026-10-21
+ * (2nd) answer 2, ADR-0078). This screen's first answer is the account's first choice, which a
+ * writing or an account restriction lets through (owner decision 2026-10-21 answer 4); MY 설정's
+ * card (#41) changes them later, a first pick there included, under the restriction's rule.
  *
  * The categories are grouped as the header groups them (`groupCategories`): each top-level category
  * with its sub-categories under it, each a checkbox of its own (`InterestChecklist`, the list MY
@@ -29,7 +31,7 @@ import { interestIds, withInterest } from '@/lib/onboarding';
  */
 export function InterestsStep() {
   const categories = useCategories();
-  const save = useSetInterestCategories();
+  const save = useAnswerInterestsStep();
   const [picked, setPicked] = useState<ReadonlySet<number>>(new Set());
   const [notice, setNotice] = useState<string | null>(null);
   const tree = useMemo(() => groupCategories(categories.data ?? []), [categories.data]);

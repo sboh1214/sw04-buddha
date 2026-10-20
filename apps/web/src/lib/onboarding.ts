@@ -248,7 +248,9 @@ export function gatedPagePath(pathname: string, location: { pathname: string; se
  * the notice (it says what the nickname step's answer, `startGrant`, and two fixed facts say) nor
  * that the interests were shown, and an account that left at either has skipped the interests —
  * the gate does not send it back, and /onboarding opened again goes straight on (오너 결정
- * 2026-10-19 (2차) 5: the interest step is shown once).
+ * 2026-10-19 (2차) 5: the interest step is shown once). The stepper tells the server that skip as
+ * the account leaves (`leavingSkipsInterests`, owner decision 2026-10-21 (2nd) answer 2,
+ * ADR-0078), so the step's first answer — which a restriction lets through — is the screen's own.
  */
 export const ONBOARDING_SCREENS = [
   'consent',
@@ -283,6 +285,20 @@ export function onboardingScreen(
   if (onboarding.nextStep !== null) return onboarding.nextStep;
   if (!visit.reachedNickname || onboarding.interests) return null;
   return visit.noticeRead ? 'interests' : 'notice';
+}
+
+/**
+ * Whether leaving the stepper now skips the interests step (ADR-0072: leaving the start-Coin notice
+ * or the interests screen is skipping it), so the server is to be told (owner decision 2026-10-21
+ * (2nd) answer 2, ADR-0078): the screen is one of those two and no answer of the step is on its
+ * way (`answering` — the pick or the 건너뛰기 sent; it answers the step itself). Any other screen
+ * has not reached the step — or, null, has nothing left to show: the step answered.
+ */
+export function leavingSkipsInterests(
+  screen: OnboardingScreen | null,
+  answering: boolean,
+): boolean {
+  return (screen === 'notice' || screen === 'interests') && !answering;
 }
 
 /** Whether `to` comes before `from` among the screens: the server sent the account back. */
@@ -430,10 +446,11 @@ export function withInterest(
 }
 
 /**
- * The ids `PUT /me/interest-categories` is sent: what is picked among the categories on screen
+ * The ids an interests write is sent (the step's `POST /me/onboarding/interests`, MY 설정's
+ * `PUT /me/interest-categories`): what is picked among the categories on screen
  * (one retired since the list loaded is not there to pick, and one picked before a reload that no
  * longer lists it is dropped), in id order — the order `Me.profile.interestCategoryIds` answers in.
- * Empty is the skip (#57-7).
+ * Empty is the step's skip (#57-7), or MY 설정's dropping them all.
  */
 export function interestIds(
   picked: ReadonlySet<number>,

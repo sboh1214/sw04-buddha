@@ -140,25 +140,54 @@ export class OnboardingService {
   }
 
   /**
-   * `PUT /me/interest-categories`: the account's interest categories (#57-7), replacing what it
-   * had, from the active categories only (top-level and sub-categories, D10: operators keep the
-   * list; the seeded one until #17), as many as it likes. None is the skip. Either way the step
-   * is answered, and never asked again. MY 설정 (#41) changes them here too, and they are a public
-   * profile item (#37-5). What a write is (`PublicItemEdit`), read under the profile's lock:
-   * - `first` while the step is unanswered (`interests_answered_at` null — the account never
-   *   picked nor skipped here, wherever it sends from): the onboarding's step, after the start
-   *   Coin, so for onboarded accounts only; a first choice, so a writing or an account restriction
-   *   lets it through (owner decision 2026-10-21 answer 4) — picks and the skip alike. An account
-   *   that left the step (ADR-0072 counts it skipped but records nothing) is still here, so its
-   *   first pick from MY 설정 passes too: as it stands, asked of the owner (ADR-0078 결과 4);
-   * - `replace` once answered, when it adds a category the account does not have: onboarded
-   *   accounts only, and refused under a restriction (#37-9);
-   * - `clear` once answered, when it adds none — drops some, all, or none: sign-in only, an account
-   *   held back by a re-consent included (owner decision 2026-10-21 answer 2), and whatever the
-   *   sanction (decision 7).
-   * The onboarding is asked here rather than by OnboardedGuard (`assertPublicItemOnboarding`).
+   * `POST /me/onboarding/interests`: the interests step's answer from its screen (#57-7) — some
+   * categories, or none: the skip, which the screen also sends when the account leaves it, or the
+   * start-Coin notice before it, without an answer (owner decision 2026-10-21 (2nd) answer 2,
+   * ADR-0078). While the step is unanswered (`interests_answered_at` null) this is its first answer
+   * (`first`): the onboarding's step after the start Coin, so for onboarded accounts only, and a
+   * first choice, so a writing or an account restriction lets it through (owner decision 2026-10-21
+   * answer 4) — picks and the skip alike. Either way the step is answered and never asked again.
+   * Once it is answered — another tab answered it, or the account left and the screen came back
+   * (the browser's back-forward cache) — a skip changes nothing, and picks are a change as MY 설정's
+   * (`setInterests`): never a way back to the first answer.
    */
-  async setInterests(userId: string, categoryIds: readonly number[]): Promise<Me> {
+  answerInterestsStep(userId: string, categoryIds: readonly number[]): Promise<Me> {
+    return this.writeInterests(userId, categoryIds, 'step');
+  }
+
+  /**
+   * `PUT /me/interest-categories`: MY 설정's interest categories (#41), replacing what the account
+   * had. Never the interests step's first answer, whether or not the step was answered (owner
+   * decision 2026-10-21 (2nd) answer 2: an account that left the onboarding's screens skipped the
+   * step, so its first pick here is a change like any later one). What it is, read under the
+   * profile's lock:
+   * - `replace` when it adds a category the account does not have: onboarded accounts only, and
+   *   refused under a restriction (#37-9) — and, the step unanswered, it answers it (the account
+   *   left the step to be here: the skip that the screen did not get to send);
+   * - `clear` when it adds none and drops some or all: sign-in only, an account held back by a
+   *   re-consent included (owner decision 2026-10-21 answer 2), and whatever the sanction
+   *   (decision 7);
+   * - nothing when it changes nothing — the same picks, or none for an account with none, which
+   *   records nothing either: it may not have reached the step (a new account).
+   */
+  setInterests(userId: string, categoryIds: readonly number[]): Promise<Me> {
+    return this.writeInterests(userId, categoryIds, 'settings');
+  }
+
+  /**
+   * The interest categories (#57-7), replacing what the account had, from the active categories
+   * only (top-level and sub-categories, D10: operators keep the list; the seeded one until #17), as
+   * many as it likes, and the step answered (`interests_answered_at`, kept from its first answer).
+   * They are a public profile item (#37-5), so a write is a `PublicItemEdit` asked of the onboarding
+   * (`assertPublicItemOnboarding`, rather than OnboardedGuard: a dropping needs sign-in only) and
+   * of the restriction (`assertPublicItemEdit`), in that order, under the profile's lock — and only
+   * the onboarding screen's write while the step is unanswered is `first` (`from: 'step'`).
+   */
+  private async writeInterests(
+    userId: string,
+    categoryIds: readonly number[],
+    from: 'step' | 'settings',
+  ): Promise<Me> {
     const wanted = [...new Set(categoryIds)];
     await this.db.transaction(async (tx) => {
       const [profile] = await tx
@@ -174,9 +203,15 @@ export class OnboardingService {
         .from(schema.profileInterestCategories)
         .where(eq(schema.profileInterestCategories.userId, userId));
       const had = new Set(current.map((pick) => pick.categoryId));
-      let edit: PublicItemEdit = 'replace';
-      if (profile.answeredAt === null) edit = 'first';
-      else if (wanted.every((id) => had.has(id))) edit = 'clear';
+      const adds = wanted.some((id) => !had.has(id));
+      const first = from === 'step' && profile.answeredAt === null;
+      // What changes nothing asks and writes nothing: the same picks, or the skip of a step already
+      // answered — a skip never takes picks away.
+      const skipsAgain = from === 'step' && wanted.length === 0;
+      if (!first && (skipsAgain || (!adds && wanted.length === had.size))) return;
+      let edit: PublicItemEdit = 'clear';
+      if (first) edit = 'first';
+      else if (adds) edit = 'replace';
       await assertPublicItemOnboarding(tx, userId, edit);
       await assertPublicItemEdit(tx, userId, edit);
       if (wanted.length > 0) {

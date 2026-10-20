@@ -4,11 +4,12 @@ import { Alert, Box, Button, Heading, HStack, Skeleton, Stack, Text } from '@cha
 import type { Route } from 'next';
 import NextLink from 'next/link';
 import { useRouter } from 'next/navigation';
-import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from 'react';
 import { SignOutButton } from '@/components/auth/sign-out-button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { copy } from '@/copy';
 import { useMe } from '@/hooks/use-me';
+import { useInterestsLeaveReport } from '@/hooks/use-onboarding';
 import { type Me } from '@/lib/api';
 import { consentStepItems } from '@/lib/consent';
 import {
@@ -52,10 +53,18 @@ const RETURN_REASONS: Readonly<Record<OnboardingReturnReason, string>> = {
  * on nothing being left: an account that arrives done already (another tab finished, Back returned
  * here, or it left at the notice or the interests — they are shown once, 오너 결정 2026-10-19
  * (2차) 5) is sent straight on, and the last step lands in the same place — nothing can navigate
- * twice.
+ * twice. Leaving at the notice or the interests tells the server it skipped the interests step
+ * (`useInterestsLeaveReport`, owner decision 2026-10-21 (2nd) answer 2, ADR-0078) — 로그아웃 too,
+ * which tells it before the session ends: the stepper hands its report to the button below
+ * (`beforeSignOut`), since the stepper goes only once the session has.
  */
 export function OnboardingForm({ next }: { next: string }) {
   const { data: me, isPending, isFetching, isLoggedIn, refetch } = useMe();
+  // The stepper's `beforeSignOut` while one is on screen.
+  const leaveReport = useRef<(() => Promise<void>) | null>(null);
+  const holdLeaveReport = useCallback((report: (() => Promise<void>) | null) => {
+    leaveReport.current = report;
+  }, []);
   // The four states MY's screens read (`profileView`), for the same reason: the page's
   // session check is server-side and runs only on navigation, so a session that ends under this
   // form (it expired, another tab signed out) left it offering a retry that can only 401.
@@ -102,7 +111,7 @@ export function OnboardingForm({ next }: { next: string }) {
     // Keyed on the account, so a session switched under this screen (SessionCacheGuard) mounts a
     // fresh stepper — and fresh steps — for the new one instead of keeping the previous account's
     // inputs, countdowns and the notice it read.
-    body = <Stepper key={me.id} me={me} next={next} />;
+    body = <Stepper key={me.id} me={me} next={next} onLeaveReport={holdLeaveReport} />;
   }
 
   // 로그아웃 under every rung of an account held here (owner decision 2026-10-13, #16): the header
@@ -111,7 +120,11 @@ export function OnboardingForm({ next }: { next: string }) {
   return (
     <Stack gap="4">
       {body}
-      <SignOutButton alignSelf="center" data-testid="onboarding-logout" />
+      <SignOutButton
+        alignSelf="center"
+        data-testid="onboarding-logout"
+        beforeSignOut={() => leaveReport.current?.() ?? Promise.resolve()}
+      />
     </Stack>
   );
 }
@@ -135,7 +148,16 @@ export function OnboardingForm({ next }: { next: string }) {
  * described by the sentence (`aria-describedby`): the step's name and the reason are read together
  * (ADR-0072 7-36).
  */
-function Stepper({ me, next }: { me: Me; next: string }) {
+function Stepper({
+  me,
+  next,
+  onLeaveReport,
+}: {
+  me: Me;
+  next: string;
+  /** Takes what 로그아웃 calls before it ends the session, and null as the stepper goes. */
+  onLeaveReport: (report: (() => Promise<void>) | null) => void;
+}) {
   const router = useRouter();
   const [noticeRead, setNoticeRead] = useState(false);
   const [reachedNickname, setReachedNickname] = useState(me.onboarding.nextStep === 'nickname');
@@ -151,6 +173,13 @@ function Stepper({ me, next }: { me: Me; next: string }) {
   const heading = useRef<HTMLHeadingElement>(null);
   // No screen before the first, so the effect below focuses it, only on a re-consent arrival.
   const lastScreen = useRef<OnboardingScreen | null>(arrivedForReconsent ? null : screen);
+  // Leaving the notice or the interests unanswered is the interests step's skip: the server is told
+  // — by 로그아웃 before the session ends (`onLeaveReport`), else as the stepper or the page goes.
+  const reportBeforeSignOut = useInterestsLeaveReport(screen, me.id);
+  useEffect(() => {
+    onLeaveReport(reportBeforeSignOut);
+    return () => onLeaveReport(null);
+  }, [onLeaveReport, reportBeforeSignOut]);
 
   useEffect(() => {
     if (screen === null) router.replace(next as Route);
