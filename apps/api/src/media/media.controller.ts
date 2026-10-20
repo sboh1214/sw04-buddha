@@ -71,8 +71,11 @@ export class MediaController {
   // FORBIDDEN: a mutation whose Origin is not ours (SessionGuard's CSRF check, or the body
   // parser's hook before the body is read — image-body.ts), or a query whose `expectedAccountId`
   // is not the cookie's account (details name the field; nothing stored). UNAUTHENTICATED and
-  // ONBOARDING_REQUIRED are answered by that hook too, before the body is read. RATE_LIMITED
-  // (every route documents it) is also the answer when too many conversions are waiting (image.ts).
+  // ONBOARDING_REQUIRED are answered by that hook too, before the body is read, and so are a body
+  // with no Content-Length (411) or one over the parser's limit (413), both VALIDATION_ERROR.
+  // RATE_LIMITED (every route documents it) is also the answer, with `Retry-After`, when the
+  // uploads being received hold the process's budget (that hook again, unread — image-body.ts) and
+  // when too many conversions are waiting (image.ts).
   @ApiErrors(
     'UNAUTHENTICATED',
     'FORBIDDEN',

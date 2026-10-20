@@ -14,6 +14,7 @@ import {
   POST_TEXT_COLOR_LABEL,
   bodyChangedFrom,
   countEditorDocument,
+  countWithUploads,
   createImageSlots,
   draftChanged,
   editorImageIds,
@@ -25,6 +26,7 @@ import {
   pastedLinkHref,
   postTextColorToken,
   refusesImageBatch,
+  takeImageBatch,
   titleTooLong,
   uploadContentType,
   uploadImageBatch,
@@ -160,7 +162,7 @@ describe('a picked image', () => {
     expect(imageUploadErrorMessage(refused('empty'))).toBe(copy.errImageEmpty);
     expect(imageUploadErrorMessage(refused('later'))).toBe(copy.errImageUpload);
     expect(imageRefusalMessage('size')).toBe(copy.errImageSize);
-    // Fastify's own cut-off, twice the limit.
+    // Refused by its length before the route, past twice the limit.
     expect(
       imageUploadErrorMessage(
         new ApiError(413, { code: 'VALIDATION_ERROR', message: 'too large' } as never),
@@ -176,6 +178,32 @@ describe('a picked image', () => {
       ),
     ).toBe(copy.sessionChanged);
     expect(imageUploadErrorMessage(new TypeError('Failed to fetch'))).toBe(copy.errNetwork);
+  });
+
+  it('says nothing for a refusal for the onboarding: the gate takes the account to its step (owner decision 2026-10-21)', () => {
+    expect(
+      imageUploadErrorMessage(
+        new ApiError(409, {
+          code: 'ONBOARDING_REQUIRED',
+          message: 'x',
+          details: { steps: ['consent'] },
+        } as never),
+      ),
+    ).toBeUndefined();
+  });
+
+  it('says that the file failed when the API is busy receiving other uploads (owner decision 2026-10-21)', () => {
+    // 429 with Retry-After: the uploads being received hold the process's budget, or too many
+    // conversions wait — that file's failure, nothing about the account.
+    expect(
+      imageUploadErrorMessage(
+        new ApiError(429, {
+          code: 'RATE_LIMITED',
+          message: 'busy',
+          details: { retryAfterSeconds: 2 },
+        } as never),
+      ),
+    ).toBe(copy.errImageUpload);
   });
 });
 
@@ -308,6 +336,40 @@ describe('bodyChangedFrom', () => {
   });
 });
 
+describe('countWithUploads', () => {
+  const doc = (images: number) => ({
+    type: 'doc',
+    content: [
+      { type: 'paragraph', content: [{ type: 'text', text: '근거' }] },
+      ...Array.from({ length: images }, (_, index) => ({
+        type: 'image',
+        attrs: { mediaId: `m${String(index)}` },
+      })),
+    ],
+  });
+
+  it('counts the uploads on their way with the document’s images (owner decision 2026-10-21)', () => {
+    const counted = countWithUploads(countEditorDocument(doc(3)), 4);
+    expect(counted.images).toBe(7);
+    expect(counted.tooManyImages).toBe(false);
+    // The text's count is the document's.
+    expect(counted.length).toBe(2);
+    expect(counted.empty).toBe(false);
+    expect(countWithUploads(countEditorDocument(doc(0)), 0).images).toBe(0);
+  });
+
+  it('holds still while an image goes from the uploads into the document', () => {
+    expect(countWithUploads(countEditorDocument(doc(6)), 4).images).toBe(POST_IMAGES_MAX);
+    expect(countWithUploads(countEditorDocument(doc(7)), 3).images).toBe(POST_IMAGES_MAX);
+    expect(countWithUploads(countEditorDocument(doc(7)), 3).tooManyImages).toBe(false);
+  });
+
+  it('is past the limit only when the two together are', () => {
+    expect(countWithUploads(countEditorDocument(doc(10)), 1).tooManyImages).toBe(true);
+    expect(countWithUploads(countEditorDocument(doc(11)), 0).tooManyImages).toBe(true);
+  });
+});
+
 describe('createImageSlots', () => {
   it('counts the uploads on their way beside the document, so batches together stay within the limit', () => {
     const slots = createImageSlots();
@@ -346,6 +408,21 @@ describe('createImageSlots', () => {
     expect(slots.inFlight).toBe(2);
     expect(slots.take(2, 6)).toBe(true);
   });
+
+  it('tells every change of the uploads on their way, and nothing else (the form’s count)', () => {
+    const heard: number[] = [];
+    const slots = createImageSlots(POST_IMAGES_MAX, (inFlight) => heard.push(inFlight));
+    expect(slots.take(0, 6)).toBe(true);
+    // Refused: nothing taken, nothing told.
+    expect(slots.take(0, 5)).toBe(false);
+    slots.give();
+    slots.give(2);
+    // Nothing given back that was not taken, nothing given at all: no change.
+    slots.give(0);
+    slots.give(5);
+    slots.give();
+    expect(heard).toEqual([6, 5, 3, 0]);
+  });
 });
 
 /** An upload refusal the API would answer, as `unwrap` throws it. */
@@ -373,9 +450,63 @@ describe('refusesImageBatch', () => {
   });
 });
 
-describe('uploadImageBatch', () => {
-  const file = (name: string, size = 100, type = 'image/png') => ({ name, size, type });
+const file = (name: string, size = 100, type = 'image/png') => ({ name, size, type });
+const photos = (count: number, first = 1) =>
+  Array.from({ length: count }, (_, index) => file(`photo-${String(first + index)}`));
 
+describe('takeImageBatch', () => {
+  it('says the precheck’s refusals at once and takes slots for the files it lets through alone', () => {
+    const slots = createImageSlots();
+    const files = [
+      file('first'),
+      file('empty', 0),
+      file('too-large', IMAGE_MAX_BYTES + 1),
+      file('a-pdf', 100, 'application/pdf'),
+      file('second'),
+    ];
+    const batch = takeImageBatch(files, 0, slots);
+    expect(batch.sending.map(({ name }) => name)).toEqual(['first', 'second']);
+    expect(batch.refusals).toEqual(['empty', 'size', 'type']);
+    expect(batch.taken).toBe(true);
+    // Two on their way, not five: the count shows two (owner decision 2026-10-21 answer 2).
+    expect(slots.inFlight).toBe(2);
+  });
+
+  it('takes one slot fewer for a file over 5MB: eleven with one too large are ten, within the limit', () => {
+    const slots = createImageSlots();
+    const files = [...photos(5), file('too-large', IMAGE_MAX_BYTES + 1), ...photos(5, 6)];
+    const batch = takeImageBatch(files, 0, slots);
+    expect(batch.taken).toBe(true);
+    expect(batch.sending).toHaveLength(POST_IMAGES_MAX);
+    expect(batch.refusals).toEqual(['size']);
+    expect(slots.inFlight).toBe(POST_IMAGES_MAX);
+  });
+
+  it('refuses a batch whose sendable files would pass the limit, taking nothing — the refusals still said', () => {
+    const slots = createImageSlots();
+    expect(slots.take(0, 6)).toBe(true);
+    // Three fit beside the document's one and the six on their way: ten. The PDF the precheck
+    // refuses is not counted — a slot for every file would have made it eleven, refused whole.
+    const fits = takeImageBatch([...photos(3), file('a-pdf', 100, 'application/pdf')], 1, slots);
+    expect(fits.taken).toBe(true);
+    expect(slots.inFlight).toBe(9);
+    // Two more that would be sent pass the limit: nothing taken, the empty file still said.
+    const over = takeImageBatch([...photos(2), file('empty', 0)], 1, slots);
+    expect(over.taken).toBe(false);
+    expect(over.refusals).toEqual(['empty']);
+    expect(slots.inFlight).toBe(9);
+  });
+
+  it('takes nothing for a batch the precheck refuses whole, and calls it no batch past the limit', () => {
+    const slots = createImageSlots();
+    expect(slots.take(0, POST_IMAGES_MAX)).toBe(true);
+    const batch = takeImageBatch([file('a-pdf', 100, 'application/pdf')], 0, slots);
+    expect(batch).toEqual({ sending: [], refusals: ['type'], taken: true });
+    expect(slots.inFlight).toBe(POST_IMAGES_MAX);
+  });
+});
+
+describe('uploadImageBatch', () => {
   /**
    * A batch over `files` whose slots were taken, each send answered by `answer` (a thrown error, or
    * nothing for an upload that lands and is placed): what each step saw, and the slots it holds
@@ -390,11 +521,9 @@ describe('uploadImageBatch', () => {
     expect(slots.take(0, files.length)).toBe(true);
     const sent: string[] = [];
     const heldWhileSending: number[] = [];
-    const refused = vi.fn();
     const failed = vi.fn();
     await uploadImageBatch(files, slots, {
       alive: options.alive ?? (() => true),
-      refused,
       send: async (sending, placed) => {
         sent.push(sending.name);
         heldWhileSending.push(slots.inFlight);
@@ -407,19 +536,11 @@ describe('uploadImageBatch', () => {
       },
       failed,
     });
-    return { slots, sent, heldWhileSending, refused, failed };
+    return { slots, sent, heldWhileSending, failed };
   }
 
-  it('gives each file’s slot back however it ends: placed, refused before it left, or failed', async () => {
-    const files = [
-      file('placed'),
-      file('empty', 0),
-      file('too-large', IMAGE_MAX_BYTES + 1),
-      file('a-pdf', 100, 'application/pdf'),
-      file('not-an-image'),
-      file('down'),
-      file('last'),
-    ];
+  it('gives each file’s slot back however it ends: placed, or failed', async () => {
+    const files = [file('placed'), file('not-an-image'), file('down'), file('last')];
     const result = await run(files, (name) =>
       name === 'not-an-image'
         ? NOT_AN_IMAGE
@@ -429,13 +550,24 @@ describe('uploadImageBatch', () => {
     );
     // A refusal about the file, or the network, leaves the rest of the batch going.
     expect(result.sent).toEqual(['placed', 'not-an-image', 'down', 'last']);
-    expect(result.refused.mock.calls).toEqual([['empty'], ['size'], ['type']]);
     expect(result.failed.mock.calls).toEqual([[NOT_AN_IMAGE], [expect.any(TypeError)]]);
-    // Seven taken; the first placed gives one back at once, each refusal its own before the next.
-    expect(result.heldWhileSending).toEqual([7, 6, 3, 2, 1, 0]);
+    // Four taken; the first placed gives one back at once, each failure its own before the next.
+    expect(result.heldWhileSending).toEqual([4, 3, 3, 2, 1, 0]);
     expect(result.slots.inFlight).toBe(0);
     // All ten are free again.
     expect(result.slots.take(0, POST_IMAGES_MAX)).toBe(true);
+  });
+
+  it('goes on past a file refused because the API is busy receiving uploads (owner decision 2026-10-21)', async () => {
+    const BUSY = refusal(429, 'RATE_LIMITED', { retryAfterSeconds: 2 });
+    const result = await run([file('a'), file('b'), file('c')], (name) =>
+      name === 'b' ? BUSY : undefined,
+    );
+    // That file's failure alone: the others are sent and placed, every slot back.
+    expect(result.sent).toEqual(['a', 'b', 'c']);
+    expect(result.failed.mock.calls).toEqual([[BUSY]]);
+    expect(result.slots.inFlight).toBe(0);
+    expect(result.slots.take(2, POST_IMAGES_MAX - 2)).toBe(true);
   });
 
   it.each([

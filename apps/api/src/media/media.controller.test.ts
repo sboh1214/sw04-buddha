@@ -4,21 +4,31 @@
  * the onboarding and naming the account the screen shows; the content decides the type and the
  * stored object is the server's own encoding without metadata; the read serves an image only
  * while a post shows it, to anyone, revalidated on every use, and holds no more images at once than
- * the process's budget. Skips when TEST_* are unset.
+ * the process's budget; the upload bodies received at once stay within theirs (owner decision
+ * 2026-10-21). Skips when TEST_* are unset.
  */
-import { type IncomingMessage, get as httpGet, request as httpRequest } from 'node:http';
+import {
+  type IncomingHttpHeaders,
+  type IncomingMessage,
+  get as httpGet,
+  request as httpRequest,
+} from 'node:http';
 import { schema } from '@buddha/db';
 import { completeOnboarding, createMarket, createMedia, createPost } from '@buddha/db/test';
 import { IMAGE_MAX_BYTES, uploadedImageSchema, type UploadedImage } from '@buddha/shared';
 import { eq } from 'drizzle-orm';
 import sharp from 'sharp';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
 import { SESSION_COOKIE } from '../openapi/document.js';
 import { hasTestInfra } from '../test/setup-env.js';
-import { IMAGE_BODY_LIMIT } from './image-body.js';
+import { ByteBudget } from './byte-budget.js';
 import {
-  ByteBudget,
+  IMAGE_BODY_LIMIT,
+  IMAGE_UPLOAD_RECEIVING_BYTES,
+  imageUploadsReceiving,
+} from './image-body.js';
+import {
   IMAGE_READ_BUDGET_BYTES,
   IMAGE_READ_BUSY_RETRY_SECONDS,
   imageReads,
@@ -54,6 +64,12 @@ describe.skipIf(!hasTestInfra)('/api/v1/media (integration)', () => {
     author = await signUpTestUser(t);
     await completeOnboarding(t.db, { userId: author.id });
   });
+  afterEach(async () => {
+    // Every upload a spec began has given its share back (a request hung up on is let go at once).
+    await vi.waitFor(() => {
+      expect(imageUploadsReceiving.size).toBe(0);
+    });
+  });
 
   const upload = (
     body: Buffer | string,
@@ -75,6 +91,66 @@ describe.skipIf(!hasTestInfra)('/api/v1/media (integration)', () => {
 
   const read = (mediaId: string, headers: Record<string, string> = {}) =>
     t.app.inject({ method: 'GET', url: `/api/v1/media/${mediaId}`, headers });
+
+  interface RawAnswer {
+    status: number;
+    headers: IncomingHttpHeaders;
+    body: string;
+  }
+
+  /**
+   * An upload over a real socket (`inject` sends its whole payload at once): its body announced at
+   * `length` (null: none, so Node sends it chunked) and only `first` of it sent. The answer, and the
+   * request to send the rest on — or to hang up.
+   */
+  function rawUpload(
+    length: number | null,
+    first: Buffer,
+    options: { cookie?: string; origin?: string | null } = {},
+  ): { request: ReturnType<typeof httpRequest>; answer: Promise<RawAnswer> } {
+    const origin = options.origin === undefined ? TRUSTED_ORIGIN : options.origin;
+    const request = httpRequest(`${t.url!}/api/v1/media/images?expectedAccountId=${author.id}`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'image/jpeg',
+        cookie: options.cookie ?? author.cookie,
+        ...(origin === null ? {} : { origin }),
+        ...(length === null ? {} : { 'content-length': String(length) }),
+      },
+    });
+    // A hang-up of ours, or the API closing a connection it refused.
+    request.on('error', () => undefined);
+    const answer = new Promise<RawAnswer>((resolve) => {
+      request.on('response', (response) => {
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk: Buffer) => chunks.push(chunk));
+        response.on('end', () => {
+          resolve({
+            status: response.statusCode ?? 0,
+            headers: response.headers,
+            body: Buffer.concat(chunks).toString(),
+          });
+        });
+      });
+    });
+    request.write(first);
+    return { request, answer };
+  }
+
+  /** `answer` if it comes within 3s, a failure otherwise: an answer that waited for the body. */
+  async function beforeTheBody<T>(answer: Promise<T>): Promise<T> {
+    let timer: NodeJS.Timeout | undefined;
+    const waited = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        reject(new Error('no answer before the body was sent'));
+      }, 3_000);
+    });
+    try {
+      return await Promise.race([answer, waited]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 
   const mediaRows = () => t.db.select().from(schema.mediaObjects);
 
@@ -218,7 +294,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/media (integration)', () => {
       payload: huge,
     });
     expect(foreign.statusCode).toBe(403);
-    // The upload route itself still reads it, and cuts it at the limit.
+    // The upload route itself refuses it by its declared length (413, unread too — below).
     expect((await upload(huge)).statusCode).toBe(413);
     expect(await mediaRows()).toEqual([]);
   });
@@ -226,39 +302,179 @@ describe.skipIf(!hasTestInfra)('/api/v1/media (integration)', () => {
   it('answers a made-up cookie before the body has come', async () => {
     // A real socket, the body announced at the parser's limit and only begun: were the body read
     // first, the answer would wait for the rest of it (which never comes).
-    const request = httpRequest(`${t.url!}/api/v1/media/images?expectedAccountId=${author.id}`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'image/jpeg',
-        'content-length': String(IMAGE_BODY_LIMIT),
-        cookie: `${SESSION_COOKIE}=x`,
-      },
+    const { request, answer } = rawUpload(IMAGE_BODY_LIMIT, Buffer.alloc(1024), {
+      cookie: `${SESSION_COOKIE}=x`,
+      origin: null,
     });
-    let timer: NodeJS.Timeout | undefined;
     try {
-      const answered = new Promise<{ status: number; body: string }>((resolve, reject) => {
-        request.on('response', (response) => {
-          const chunks: Buffer[] = [];
-          response.on('data', (chunk: Buffer) => chunks.push(chunk));
-          response.on('end', () => {
-            resolve({ status: response.statusCode ?? 0, body: Buffer.concat(chunks).toString() });
-          });
-        });
-        request.on('error', reject);
-        request.write(Buffer.alloc(1024));
-      });
-      const waited = new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => {
-          reject(new Error('no answer before the body was sent'));
-        }, 3_000);
-      });
-      const res = await Promise.race([answered, waited]);
+      const res = await beforeTheBody(answer);
       expect(res.status).toBe(401);
       expect(JSON.parse(res.body)).toMatchObject({ error: { code: 'UNAUTHENTICATED' } });
     } finally {
-      clearTimeout(timer);
       request.destroy();
     }
+  });
+
+  it('refuses unread an upload that declares no length, or one over the limit', async () => {
+    // Sent chunked: what it would hold is not known before it has all come.
+    const chunked = rawUpload(null, Buffer.alloc(1024));
+    // Announced past the parser's limit: refused by that length, as Fastify itself would.
+    const over = rawUpload(IMAGE_BODY_LIMIT + 1, Buffer.alloc(1024));
+    try {
+      const noLength = await beforeTheBody(chunked.answer);
+      expect(noLength.status).toBe(411);
+      expect(JSON.parse(noLength.body)).toMatchObject({ error: { code: 'VALIDATION_ERROR' } });
+      const tooLong = await beforeTheBody(over.answer);
+      expect(tooLong.status).toBe(413);
+      expect(JSON.parse(tooLong.body)).toMatchObject({ error: { code: 'VALIDATION_ERROR' } });
+      // Neither took a share of the uploads being received.
+      expect(imageUploadsReceiving.size).toBe(0);
+    } finally {
+      chunked.request.destroy();
+      over.request.destroy();
+    }
+    expect(await mediaRows()).toEqual([]);
+  });
+
+  it('receives no more upload bytes at once than the process’s budget: past it, refused unread with Retry-After', async () => {
+    // Six uploads announced at the parser's limit and only begun: 60MiB on its way, held while it
+    // comes (owner decision 2026-10-21: 64MiB).
+    const held = Array.from({ length: 6 }, () => rawUpload(IMAGE_BODY_LIMIT, Buffer.alloc(1024)));
+    const others: ReturnType<typeof rawUpload>[] = [];
+    try {
+      await vi.waitFor(() => {
+        expect(imageUploadsReceiving.size).toBe(6 * IMAGE_BODY_LIMIT);
+      });
+      // A seventh as large would pass 64MiB: answered at once, its body never read.
+      const seventh = rawUpload(IMAGE_BODY_LIMIT, Buffer.alloc(1024));
+      others.push(seventh);
+      const busy = await beforeTheBody(seventh.answer);
+      expect(busy.status).toBe(429);
+      expect(busy.headers['retry-after']).toBe(String(IMAGE_BUSY_RETRY_SECONDS));
+      expect(JSON.parse(busy.body)).toMatchObject({
+        error: { code: 'RATE_LIMITED', details: { retryAfterSeconds: IMAGE_BUSY_RETRY_SECONDS } },
+      });
+      expect(imageUploadsReceiving.size).toBe(6 * IMAGE_BODY_LIMIT);
+      // A photo fits beside them, and gives its share back once its body is in.
+      const fits = await upload(await photo());
+      expect(fits.statusCode).toBe(201);
+      expect(imageUploadsReceiving.size).toBe(6 * IMAGE_BODY_LIMIT);
+      // One that fills the budget to the byte is taken; past that, even a photo waits.
+      const rest = IMAGE_UPLOAD_RECEIVING_BYTES - 6 * IMAGE_BODY_LIMIT;
+      others.push(rawUpload(rest, Buffer.alloc(1024)));
+      await vi.waitFor(() => {
+        expect(imageUploadsReceiving.size).toBe(IMAGE_UPLOAD_RECEIVING_BYTES);
+      });
+      const full = await upload(await photo());
+      expect(full.statusCode).toBe(429);
+      expect(full.headers['retry-after']).toBe(String(IMAGE_BUSY_RETRY_SECONDS));
+      expect(full.json<{ error: { code: string } }>().error.code).toBe('RATE_LIMITED');
+      expect(await mediaRows()).toHaveLength(1);
+    } finally {
+      for (const { request } of [...held, ...others]) request.destroy();
+    }
+    // Hung up on mid-body: every share comes back, and uploads are taken again.
+    await vi.waitFor(() => {
+      expect(imageUploadsReceiving.size).toBe(0);
+    });
+    expect((await upload(await photo())).statusCode).toBe(201);
+  });
+
+  it('gives an upload’s share back once its body is in, or once its client has gone mid-body', async () => {
+    const image = await photo();
+    const half = Math.floor(image.length / 2);
+    const sent = rawUpload(image.length, image.subarray(0, half));
+    const dropped = rawUpload(IMAGE_BODY_LIMIT, Buffer.alloc(1024));
+    try {
+      // Both are held while their bodies come.
+      await vi.waitFor(() => {
+        expect(imageUploadsReceiving.size).toBe(image.length + IMAGE_BODY_LIMIT);
+      });
+      // The client goes before the rest of its body: its share comes back.
+      dropped.request.destroy();
+      await vi.waitFor(() => {
+        expect(imageUploadsReceiving.size).toBe(image.length);
+      });
+      // The rest of the other comes: stored, its share back by the time it is answered.
+      sent.request.end(image.subarray(half));
+      const res = await sent.answer;
+      expect(res.status).toBe(201);
+      expect(
+        uploadedImageSchema.safeParse((JSON.parse(res.body) as { data: unknown }).data).success,
+      ).toBe(true);
+      expect(imageUploadsReceiving.size).toBe(0);
+    } finally {
+      sent.request.destroy();
+      dropped.request.destroy();
+    }
+    expect(await mediaRows()).toHaveLength(1);
+  });
+
+  it('gives an upload’s share back as soon as its body is in, while it still waits for its conversion', async () => {
+    // The conversion held until let go: the upload is answered only after it. Were the share given
+    // back only when the answer ends (`stream.finished`), it would be held all this while — through
+    // the conversion queue's wait (owner decision 2026-10-21 answer 1: given back once the body is
+    // in). Checked once the answer has ended, the two cannot be told apart.
+    const real = imageConversions.run.bind(imageConversions);
+    let letGo!: () => void;
+    const held = new Promise<void>((resolve) => {
+      letGo = resolve;
+    });
+    let entered!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const run = vi.spyOn(imageConversions, 'run').mockImplementation(async (task) => {
+      entered();
+      await held;
+      return real(task);
+    });
+    const image = await photo();
+    // Through `inject`, and over a real socket with its whole body sent.
+    const injected = upload(image);
+    const raw = rawUpload(image.length, image);
+    try {
+      raw.request.end();
+      await waiting;
+      await vi.waitFor(() => {
+        expect(run).toHaveBeenCalledTimes(2);
+      });
+      // Both bodies are the handler's now: nothing of them is held as being received.
+      expect(imageUploadsReceiving.size).toBe(0);
+      letGo();
+      expect((await injected).statusCode).toBe(201);
+      expect((await raw.answer).status).toBe(201);
+    } finally {
+      letGo();
+      raw.request.destroy();
+      run.mockRestore();
+    }
+    expect(await mediaRows()).toHaveLength(2);
+  });
+
+  it('holds an upload’s share by its declared length alone, for as long as its connection stays open', async () => {
+    // Today's behaviour, an open question to the owner (ADR-0073 결과 4): the share is taken before
+    // a byte of the body has come, and nothing times out a body that never comes — the server has
+    // no request or connection timeout (Fastify 5's 0; main.ts sets neither, as this app does not).
+    const server = t.app.getHttpServer();
+    expect(server.requestTimeout).toBe(0);
+    expect(server.timeout).toBe(0);
+    const idle = rawUpload(IMAGE_BODY_LIMIT, Buffer.alloc(0));
+    idle.request.flushHeaders();
+    try {
+      await vi.waitFor(() => {
+        expect(imageUploadsReceiving.size).toBe(IMAGE_BODY_LIMIT);
+      });
+      // No body byte sent, none coming: still held.
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      expect(imageUploadsReceiving.size).toBe(IMAGE_BODY_LIMIT);
+    } finally {
+      idle.request.destroy();
+    }
+    // Only the connection's end gives it back.
+    await vi.waitFor(() => {
+      expect(imageUploadsReceiving.size).toBe(0);
+    });
   });
 
   it('removes the stored object when its row cannot be written', async () => {
@@ -592,6 +808,14 @@ describe.skipIf(!hasTestInfra)('/api/v1/media (integration)', () => {
       request.destroy();
       get.mockRestore();
     }
+  });
+});
+
+describe('the upload bodies received at once', () => {
+  it('are 64MiB per process, the owner’s value (owner decision 2026-10-21 answer 1)', () => {
+    // The integration test above works from the constant; this holds the constant to the owner's
+    // number (ADR-0073 decision 9-43, docs/SETTINGS.md).
+    expect(IMAGE_UPLOAD_RECEIVING_BYTES).toBe(64 * 1024 * 1024);
   });
 });
 

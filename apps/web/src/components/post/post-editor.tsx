@@ -42,13 +42,14 @@ import {
   POST_TEXT_COLOR_LABEL,
   POST_TEXT_COLOR_OPTIONS,
   countEditorDocument,
-  createImageSlots,
   imageRefusalMessage,
   imageUploadErrorMessage,
   isPostTextColor,
   linkInputHref,
   pastedLinkHref,
+  takeImageBatch,
   uploadImageBatch,
+  type ImageSlots,
 } from '@/lib/post-editor';
 import { previewSize } from '@/lib/post-drafts';
 import { useSession } from '@/lib/use-session';
@@ -233,6 +234,13 @@ export interface PostEditorProps {
   onReady?: (json: unknown) => void;
   /** The account on screen, which an upload names; no upload while it is unknown. */
   accountId: string | undefined;
+  /**
+   * The image slots of the uploads on their way (`createImageSlots`), one for the editor's life:
+   * the form's, which counts them with the document's images ('이미지 n / 10장', owner decision
+   * 2026-10-21) and hears each change as it happens — an image going into the document leaves the
+   * uploads in the same render, so the count holds still.
+   */
+  imageSlots: ImageSlots;
   /** Uploads in flight, so the form can hold its submit until they land. */
   onUploadingChange: (uploading: boolean) => void;
   /** While the post is being sent. */
@@ -252,6 +260,7 @@ export function PostEditor({
   onChange,
   onReady,
   accountId,
+  imageSlots: slots,
   onUploadingChange,
   disabled = false,
   invalid = false,
@@ -321,8 +330,6 @@ export function PostEditor({
   });
 
   const [uploads, setUploads] = useState(0);
-  // The slots the uploads on their way hold (`createImageSlots`): one for the editor's life.
-  const [slots] = useState(createImageSlots);
   const { refetch: refetchSession } = useSession();
   // A refused upload runs a refused send's side effects (`postImageUploader`).
   const upload = useUploadPostImage(() => void refetchSession());
@@ -360,19 +367,22 @@ export function PostEditor({
 
   const insertImages = async (files: File[]) => {
     if (editor === null || accountId === undefined) return;
-    // The document's images and the uploads still on their way (`createImageSlots`): a batch
-    // picked or dropped while another uploads cannot pass the limit together with it.
-    if (!slots.take(countEditorDocument(editor.getJSON()).images, files.length)) {
+    // A file the precheck refuses is said at once and takes no slot; the others take theirs beside
+    // the document's images and the uploads still on their way (`takeImageBatch`): a batch picked
+    // or dropped while another uploads cannot pass the limit together with it.
+    const batch = takeImageBatch(files, countEditorDocument(editor.getJSON()).images, slots);
+    for (const reason of batch.refusals) {
+      toaster.create({ type: 'error', title: imageRefusalMessage(reason) });
+    }
+    if (!batch.taken) {
       toaster.create({ type: 'error', title: copy.errPostTooManyImages });
       return;
     }
+    if (batch.sending.length === 0) return;
     // One file after another; a refusal about the account, or the editor gone, ends the batch
     // (`uploadImageBatch`).
-    await uploadImageBatch(files, slots, {
+    await uploadImageBatch(batch.sending, slots, {
       alive: () => !editor.isDestroyed,
-      refused: (reason) => {
-        toaster.create({ type: 'error', title: imageRefusalMessage(reason) });
-      },
       send: async (file, placed) => {
         changeUploads(1);
         try {
@@ -409,9 +419,14 @@ export function PostEditor({
         }
       },
       // A refusal for the onboarding or as another account has already put the account's state
-      // on screen (`useUploadPostImage`), as a refused send does.
+      // on screen (`useUploadPostImage`), as a refused send does. The onboarding's says nothing
+      // (owner decision 2026-10-21): the gate takes the account to its step, the draft kept in the
+      // tab — a toast would follow it there. (Should `['me']` fail to be read again, the gate stays
+      // and nothing is said: an open question to the owner, ADR-0073 결과 4.) Any other is said:
+      // that file's failure alone.
       failed: (error) => {
-        toaster.create({ type: 'error', title: imageUploadErrorMessage(error) });
+        const message = imageUploadErrorMessage(error);
+        if (message !== undefined) toaster.create({ type: 'error', title: message });
       },
     });
   };

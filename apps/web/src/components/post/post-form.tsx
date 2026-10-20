@@ -26,6 +26,8 @@ import { useKeepPostDraftForOnboarding } from '@/hooks/use-post-draft';
 import {
   bodyChangedFrom,
   countEditorDocument,
+  countWithUploads,
+  createImageSlots,
   draftChanged,
   titleTooLong,
 } from '@/lib/post-editor';
@@ -69,8 +71,10 @@ export interface PostFormProps {
  * The write and edit screens' form (#46, ADR-0073): an optional one-line title (#45-1, at most
  * 100 characters — owner decision 2026-10-18), the editor, and under it the two counts the server
  * holds the body to (#45-3: 5,000 characters of text without formatting, 10 images), counted the
- * way the server counts (`countEditorDocument`). Nothing asks for a probability, a position or an
- * order (N05 §2: writing and trading are independent). The send waits for every upload in flight;
+ * way the server counts (`countEditorDocument`) — the images with the uploads still on their way,
+ * as a batch picked past the limit is refused by (owner decision 2026-10-21, `countWithUploads`).
+ * Nothing asks for a probability, a position or an order (N05 §2: writing and trading are
+ * independent). The send waits for every upload in flight;
  * a refusal from the server is shown above the button in the server's terms (`errorMessage`), and
  * the images it refused are marked in the editor (`refusedImageIds`).
  *
@@ -245,6 +249,12 @@ function PostFormFields({
     restored?.body ?? initialDocument ?? { type: 'doc', content: [] },
   );
   const [uploading, setUploading] = useState(false);
+  // The uploads on their way (`createImageSlots`), one set of slots for the form's life (a discard
+  // draws a new form, and editor, with new ones): told of every change as it happens, from the
+  // editor's own upload code, so an image going into the document (`body`) and leaving the uploads
+  // land in one render.
+  const [imagesUploading, setImagesUploading] = useState(0);
+  const [imageSlots] = useState(() => createImageSlots(POST_IMAGES_MAX, setImagesUploading));
   // The editor's own JSON when it was made (`onReady`), and whether the body differs from it now.
   const baseline = useRef<string | null>(null);
   const [bodyChanged, setBodyChanged] = useState(false);
@@ -271,7 +281,8 @@ function PostFormFields({
     if (restored !== null) noticeRef.current?.focus();
     else if (focusTitle) titleRef.current?.focus();
   }, [restored, focusTitle, titleRef]);
-  const count = countEditorDocument(body);
+  // '이미지 n / 10장' counts the uploads on their way too (owner decision 2026-10-21).
+  const count = countWithUploads(countEditorDocument(body), imagesUploading);
   const titleInvalid = titleTooLong(title);
   const blocked =
     pending ||
@@ -355,6 +366,7 @@ function PostFormFields({
             previews.set(mediaId, preview);
           }}
           accountId={accountId}
+          imageSlots={imageSlots}
           onUploadingChange={setUploading}
           disabled={pending}
           invalid={count.tooLong || count.tooManyImages}

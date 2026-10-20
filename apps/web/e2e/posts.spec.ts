@@ -44,9 +44,11 @@ import {
  * 2026-10-20 3차 답 1). No spec can bring about a re-consent for real (the consent versions are
  * the build's), so `GET /me` says it in the browser (`asReconsent`), as onboarding.spec.ts draws
  * it. An image upload refused for the onboarding takes the writer to the step as a refused send
- * does, and one refused as another account reads the session again — either way the rest of the
- * batch is not sent; images picked while others upload count those too, so a post never takes
- * more than ten, and an image refused or failed gives its place back; and an image the API asked
+ * does, saying nothing, and one refused as another account reads the session again — either way
+ * the rest of the batch is not sent; one refused because the API is busy receiving uploads (429)
+ * is that file's failure alone; images picked while others upload count those too — and so does
+ * '이미지 n / 10장' — so a post never takes more than ten, and an image refused or failed gives its
+ * place back (owner decisions 2026-10-21); and an image the API asked
  * to read again later (429) is drawn once it can be — a post's and a card's — but asked for three
  * times at most (ADR-0073 결과 5, Codex review of #219).
  * The allow-list, the image checks, the permissions and the paging are the API's and the shared
@@ -1078,7 +1080,7 @@ test.describe('근거 글', () => {
     await page.unrouteAll({ behavior: 'ignoreErrors' });
   });
 
-  test('이미지 업로드가 온보딩 때문에 거절되면 보내기가 거절될 때처럼 남은 단계로 가고, 쓰던 글은 이 탭에 두며, 함께 고른 나머지는 보내지 않는다', async ({
+  test('이미지 업로드가 온보딩 때문에 거절되면 보내기가 거절될 때처럼 알림 없이 남은 단계로 가고, 쓰던 글은 이 탭에 두며, 함께 고른 나머지는 보내지 않는다', async ({
     admin,
     page,
   }) => {
@@ -1100,14 +1102,19 @@ test.describe('근거 글', () => {
     await expect(page).toHaveURL(`/onboarding?next=${encodeURIComponent(write)}`);
     expect(Object.keys(await draftsInTab(page))).toEqual([`buddha.postDraft:new:${market.id}`]);
     // The refusal is about the account: the other two would be refused alike, so they never leave
-    // and the refusal is said once (ADR-0073 decision 9-41).
+    // (ADR-0073 decision 9-41). It says nothing, as a refused send does (owner decision
+    // 2026-10-21): no toast followed the account to its step.
     await settle();
     expect(uploads).toBe(1);
-    await expect(toastsOf(page).getByText(copy.errPostOnboarding)).toHaveCount(1);
+    await expect(page.getByTestId('onboarding-return-reason')).toHaveText(
+      copy.onboardingReconsentReason,
+    );
+    await expect(toastsOf(page).locator('[data-part="root"]')).toHaveCount(0);
+    await expect(page.getByText(copy.errPostOnboarding)).toHaveCount(0);
     await page.unrouteAll({ behavior: 'ignoreErrors' });
   });
 
-  test('이미지를 올리는 동안 더 고른 이미지는 올리는 중인 것까지 세어 글마다 10장을 넘기지 않는다', async ({
+  test('이미지를 올리는 동안 더 고른 이미지는 올리는 중인 것까지 세어 글마다 10장을 넘기지 않고, 이미지 수도 올리는 중인 것을 세며, 미리 거른 파일은 세지 않는다', async ({
     admin,
     page,
   }) => {
@@ -1124,19 +1131,74 @@ test.describe('근거 글', () => {
       else await route.continue();
     });
     const picker = page.getByTestId('post-editor-file');
+    const images = page.getByTestId('post-body-images');
+    const bodyErrors = page.getByTestId('post-body-errors');
     await picker.setInputFiles(pngFiles(6, 1));
     await expect.poll(() => held.length).toBe(1);
+    // The count says the six on their way, none of them in the document yet (owner decision
+    // 2026-10-21): the number the refusal below goes by.
+    await expect(editor.locator('img[data-media-id]')).toHaveCount(0);
+    await expect(images).toContainText('6 / 10');
     // Five more with six on their way would be eleven: refused, nothing of it sent.
     await picker.setInputFiles(pngFiles(5, 7));
     await expect(toastsOf(page).getByText(copy.errPostTooManyImages)).toBeVisible();
-    // Four fit beside them.
-    await picker.setInputFiles(pngFiles(4, 12));
+    await expect(images).toContainText('6 / 10');
+    // Four fit beside them: ten, within the limit — nothing said under the counts. A file the
+    // editor refuses before it leaves comes with them: said at once, never on its way, so not
+    // counted (`takeImageBatch` — a slot for each of the five would have been eleven, refused).
+    await picker.setInputFiles([
+      ...pngFiles(4, 12),
+      { name: 'notes.txt', mimeType: 'text/plain', buffer: PNG },
+    ]);
+    await expect(toastsOf(page).getByText(copy.errImageType)).toBeVisible();
     await expect.poll(() => held.length).toBe(2);
+    await expect(images).toContainText('10 / 10');
+    await expect(bodyErrors.getByText(copy.errPostTooManyImages)).toHaveCount(0);
     holding = false;
     for (const route of held) await route.continue();
     await expect(page.getByTestId('post-editor-uploading')).toHaveCount(0);
     await expect(editor.locator('img[data-media-id]')).toHaveCount(10);
-    await expect(page.getByTestId('post-body-images')).toContainText('10 / 10');
+    await expect(images).toContainText('10 / 10');
+    await expect(bodyErrors.getByText(copy.errPostTooManyImages)).toHaveCount(0);
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+  });
+
+  test('API가 받는 중인 업로드로 예산(64MiB)을 넘어 거절한(429) 이미지는 그 파일의 실패만 알리고, 함께 고른 나머지는 올라간다', async ({
+    admin,
+    page,
+  }) => {
+    const market = await createOpenMarket(admin);
+    await signUp(page, freshEmail());
+    await page.goto(`/community/write?market=${market.id}`);
+    const editor = page.getByTestId('post-editor-content');
+    await expect(editor).toBeVisible();
+    // The second upload would take the API's uploads being received past their budget (owner
+    // decision 2026-10-21: 64MiB per process — the API's own refusal is its integration test's).
+    let uploads = 0;
+    await page.route('**/api/v1/media/images**', async (route) => {
+      uploads += 1;
+      if (uploads !== 2) return route.continue();
+      await route.fulfill({
+        status: 429,
+        headers: { 'retry-after': '2' },
+        json: {
+          error: {
+            code: 'RATE_LIMITED',
+            message: 'Too many uploads are being received; send it again',
+            details: { retryAfterSeconds: 2 },
+          },
+        },
+      });
+    });
+    await page.getByTestId('post-editor-file').setInputFiles(pngFiles(3));
+    // That file's failure, said once; the batch goes on and the other two go in.
+    await expect(page.getByTestId('post-editor-uploading')).toHaveCount(0);
+    await expect.poll(() => uploads).toBe(3);
+    await expect(editor.locator('img[data-media-id]')).toHaveCount(2);
+    await expect(page.getByTestId('post-body-images')).toContainText('2 / 10');
+    const toasts = toastsOf(page);
+    await expect(toasts.getByText(copy.errImageUpload)).toHaveCount(1);
+    await expect(toasts.locator('[data-part="root"]')).toHaveCount(1);
     await page.unrouteAll({ behavior: 'ignoreErrors' });
   });
 

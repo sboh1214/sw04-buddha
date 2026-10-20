@@ -76,6 +76,19 @@ export function countEditorDocument(json: unknown): EditorCount {
 }
 
 /**
+ * The count the form shows and judges ('이미지 n / 10장'): the document's images and the uploads
+ * still on their way (`ImageSlots.inFlight` — a batch's files the precheck let through, from when
+ * it is picked until each is in the document or has failed, `takeImageBatch`), as a batch picked
+ * past the limit is refused by (owner decision 2026-10-21). A file the precheck refuses is never
+ * on its way, so never counted. An upload going into the document moves from one to the other, so
+ * the number holds still while a batch lands and falls only for a file that fails or is refused.
+ */
+export function countWithUploads(count: EditorCount, uploading: number): EditorCount {
+  const images = count.images + uploading;
+  return { ...count, images, tooManyImages: images > POST_IMAGES_MAX };
+}
+
+/**
  * The media ids of the editor's image nodes, in the order they appear (each once): the uploads a
  * kept draft holds previews for (lib/post-drafts.ts).
  */
@@ -152,18 +165,21 @@ function refusalOf(details: unknown): ImageRefusal | undefined {
 }
 
 /**
- * What a refused upload says: the server's reason (IMAGE_NOT_ALLOWED); a body Fastify cut off
- * before the route (413, twice the limit) is the size; the cookie as another account is a stale
- * screen; anything else is a failed upload, said apart from an unreachable server.
+ * What a refused upload says, or nothing: the server's reason (IMAGE_NOT_ALLOWED); a body refused
+ * by its length before the route (413, twice the limit) is the size; the cookie as another account
+ * is a stale screen; a refusal for the onboarding says nothing — the gate takes the account to its
+ * step and the form keeps its draft in the tab, as for a refused send (owner decision 2026-10-21);
+ * anything else is a failed upload, said apart from an unreachable server — the API busy receiving
+ * other uploads (RATE_LIMITED) included: that file failed, the batch goes on.
  */
-export function imageUploadErrorMessage(error: unknown): string {
+export function imageUploadErrorMessage(error: unknown): string | undefined {
   if (isForAnotherAccount(error)) return copy.sessionChanged;
   if (isApiError(error, 'IMAGE_NOT_ALLOWED')) {
     const reason = refusalOf(error.details);
     return reason === undefined ? copy.errImageUpload : imageRefusalMessage(reason);
   }
   if (isApiError(error) && error.status === 413) return copy.errImageSize;
-  if (isApiError(error, 'ONBOARDING_REQUIRED')) return copy.errPostOnboarding;
+  if (isApiError(error, 'ONBOARDING_REQUIRED')) return undefined;
   return isApiUnreachable(error) ? copy.errNetwork : copy.errImageUpload;
 }
 
@@ -265,23 +281,33 @@ export interface ImageSlots {
  * still on their way. The toolbar and the drop target stay open while uploads run, so a second
  * batch picked or dropped meanwhile counts the first one's files too — counting the document alone,
  * two batches could each pass and land more images than a post holds, the form unsendable and the
- * surplus uploads orphans. A batch takes its slots before its first file leaves and gives each back
- * as its image goes into the document or fails — and those of the files a stopped batch never sent,
- * at once (`uploadImageBatch`).
+ * surplus uploads orphans. A batch takes its slots before its first file leaves — one for each file
+ * the precheck lets through (`takeImageBatch`) — and gives each back as its image goes into the
+ * document or fails, and those of the files a stopped batch never sent at once (`uploadImageBatch`).
+ * `onChange` hears every change of `inFlight`: the form's count shows the uploads too
+ * (`countWithUploads`).
  */
-export function createImageSlots(max: number = POST_IMAGES_MAX): ImageSlots {
+export function createImageSlots(
+  max: number = POST_IMAGES_MAX,
+  onChange?: (inFlight: number) => void,
+): ImageSlots {
   let inFlight = 0;
+  const set = (next: number) => {
+    if (next === inFlight) return;
+    inFlight = next;
+    onChange?.(inFlight);
+  };
   return {
     get inFlight() {
       return inFlight;
     },
     take(held, count) {
       if (held + inFlight + count > max) return false;
-      inFlight += count;
+      set(inFlight + count);
       return true;
     },
     give(count = 1) {
-      inFlight = Math.max(0, inFlight - count);
+      set(Math.max(0, inFlight - count));
     },
   };
 }
@@ -299,12 +325,49 @@ export function refusesImageBatch(error: unknown): boolean {
   );
 }
 
+/** A picked or dropped batch as `takeImageBatch` starts it. */
+export interface ImageBatchStart<F> {
+  /** The files the precheck let through, in the order picked: the ones the batch sends. */
+  readonly sending: readonly F[];
+  /** The precheck's reason for each file it refused (`imagePrecheck`), in order: never sent. */
+  readonly refusals: readonly ImageRefusal[];
+  /**
+   * Whether `sending` holds its slots now: false when the document's images, the uploads on their
+   * way and these would pass the limit — then none of the batch is sent. True for a batch the
+   * precheck refused whole (nothing to take).
+   */
+  readonly taken: boolean;
+}
+
+/**
+ * Starts a batch: the precheck over every file first (`imagePrecheck`), then the slots
+ * (`ImageSlots.take`) for the files it let through, and for those alone. A file refused here never
+ * leaves, so it is never one of the uploads on their way — not in the count ('이미지 n / 10장'),
+ * nor in the number a batch past the limit is refused by (owner decision 2026-10-21 answer 2) —
+ * and its refusal is said at once, not after every upload ahead of it. Taking first, a batch's
+ * 6MB photo held a slot until its turn came, and eleven files with one of them over 5MB were
+ * refused whole although ten would have been sent.
+ */
+export function takeImageBatch<F extends { type: string; size: number }>(
+  files: readonly F[],
+  held: number,
+  slots: ImageSlots,
+): ImageBatchStart<F> {
+  const sending: F[] = [];
+  const refusals: ImageRefusal[] = [];
+  for (const file of files) {
+    const refusal = imagePrecheck(file);
+    if (refusal === undefined) sending.push(file);
+    else refusals.push(refusal);
+  }
+  const taken = sending.length === 0 || slots.take(held, sending.length);
+  return { sending, refusals, taken };
+}
+
 /** What `uploadImageBatch` does with each file (components/post/post-editor.tsx). */
 export interface ImageBatchSteps<F> {
   /** False once the editor is gone (the onboarding gate took the form away): nothing more leaves. */
   alive(): boolean;
-  /** A file the precheck refused (`imagePrecheck`): never sent. */
-  refused(reason: ImageRefusal): void;
   /**
    * Sends one file and puts its image in the document, calling `placed` once the image is there
    * (the document counts it from then on); settles when the file is done with.
@@ -315,14 +378,16 @@ export interface ImageBatchSteps<F> {
 }
 
 /**
- * Sends a batch whose slots are taken (`ImageSlots.take`), one file after another, and gives each
- * file's slot back however it ends: refused before it left, placed in the document, or failed. A
- * refusal about the account (`refusesImageBatch`) ends the batch — said once, the account's state
- * already put on screen by the upload (`postImageUploader`) — and so does an editor gone; the files
- * not sent give their slots back at once. Sending on would have every later file refused alike,
- * each refusal reading the account again and said once more, on the page the gate moved to.
+ * Sends the files `takeImageBatch` let through and took the slots for, one file after another, and
+ * gives each file's slot back however it ends: placed in the document, or failed. A refusal about
+ * the account (`refusesImageBatch`) ends the batch — handed to `failed` once (said once, or for the
+ * onboarding not at all — `imageUploadErrorMessage`), the account's state already put on screen by
+ * the upload (`postImageUploader`) — and so does an editor gone; the files not sent give their
+ * slots back at once. Sending on would have every later file refused alike, each refusal reading
+ * the account again, on the page the gate moved to. Any other failure is that file's alone (a
+ * refused image, the network, the API busy receiving — RATE_LIMITED): the batch goes on.
  */
-export async function uploadImageBatch<F extends { type: string; size: number }>(
+export async function uploadImageBatch<F>(
   files: readonly F[],
   slots: ImageSlots,
   steps: ImageBatchSteps<F>,
@@ -340,17 +405,10 @@ export async function uploadImageBatch<F extends { type: string; size: number }>
         slots.give();
       };
       try {
-        const refusal = imagePrecheck(file);
-        if (refusal !== undefined) {
-          steps.refused(refusal);
-          continue;
-        }
-        try {
-          await steps.send(file, giveBack);
-        } catch (error) {
-          steps.failed(error);
-          if (refusesImageBatch(error)) return;
-        }
+        await steps.send(file, giveBack);
+      } catch (error) {
+        steps.failed(error);
+        if (refusesImageBatch(error)) return;
       } finally {
         giveBack();
       }

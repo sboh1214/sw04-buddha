@@ -1,4 +1,5 @@
 import { AppError } from '../common/errors/app-error.js';
+import { ByteBudget } from './byte-budget.js';
 
 /**
  * The bytes of the image reads the API may hold at once, process-wide (`GET /media/:mediaId`,
@@ -21,33 +22,9 @@ export const IMAGE_READ_BUDGET_BYTES = 32 * 1024 * 1024;
 export const IMAGE_READ_BUSY_RETRY_SECONDS = 1;
 
 /**
- * A budget of bytes held at once: `take` gives a share back as a `release` (idempotent), or null
- * when the share would pass the budget. A budget holding nothing takes any one share, however
- * large, so no image is refused for its own size alone.
+ * The API's image reads (MediaController.read): one budget for the process. Holding nothing, it
+ * takes any one image, so no image is refused for its own size alone.
  */
-export class ByteBudget {
-  private held = 0;
-
-  constructor(private readonly max: number) {}
-
-  /** The bytes held now. */
-  get size(): number {
-    return this.held;
-  }
-
-  take(bytes: number): (() => void) | null {
-    if (this.held > 0 && this.held + bytes > this.max) return null;
-    this.held += bytes;
-    let released = false;
-    return () => {
-      if (released) return;
-      released = true;
-      this.held -= bytes;
-    };
-  }
-}
-
-/** The API's image reads (MediaController.read): one budget for the process. */
 export const imageReads = new ByteBudget(IMAGE_READ_BUDGET_BYTES);
 
 /** The refusal of a read past the budget: the client reads again in a moment. */
