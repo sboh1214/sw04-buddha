@@ -39,7 +39,8 @@ import { MediaService } from './media.service.js';
  * `/api/v1/media` (#46, ADR-0073): a post's images in and out. The upload is owner-only and open to
  * accounts that finished the onboarding (#57-8: writing a post is), the read is public — a post's
  * images are as public as the post — and both go through the API: the bucket is private and the
- * browser never touches it (ADR-0069 decision 2 #45-3).
+ * browser never touches it (ADR-0069 decision 2 #45-3). The read serves a member's profile image
+ * too (#141, ADR-0079 — as public as the profile); its upload is `PUT /me/profile-image`.
  */
 @ApiTags('media')
 @Controller('media')
@@ -126,9 +127,11 @@ export class MediaController {
   }
 
   /**
-   * The image itself, while a post or a pinned notice (#138) shows it (MediaService.findShown):
-   * otherwise NOT_FOUND — an upload nothing took, an image an edit removed, every image of a
-   * deleted or hidden post (#45-5) and of a notice that is not pinned (owner decision 2026-10-21).
+   * The image itself, while a post or a pinned notice (#138) shows it, or it is a member's profile
+   * image (#141; MediaService.findShown): otherwise NOT_FOUND — an upload nothing took, an image an
+   * edit removed, every image of a deleted or hidden post (#45-5) and of a notice that is not
+   * pinned (owner decision 2026-10-21), and a profile image replaced, deleted or kept for operators
+   * (#37-10).
    *
    * `Cache-Control: public, no-cache` with a strong ETag (`answerImage`): a browser keeps the image
    * but asks every time, so hiding or deleting a post, or unpinning a notice, stops its images at
@@ -159,9 +162,9 @@ export class MediaController {
   @ApiOperation({
     operationId: 'getImage',
     summary:
-      'An image a post or a pinned notice shows (NOT_FOUND for any other: not attached, removed ' +
-      'by an edit, of a deleted or hidden post, or of a notice not pinned). Revalidated on every ' +
-      'use (ETag)',
+      'An image a post or a pinned notice shows, or a member’s profile image (NOT_FOUND for any ' +
+      'other: not attached, removed by an edit, of a deleted or hidden post, of a notice not ' +
+      'pinned, or no profile’s image now). Revalidated on every use (ETag)',
   })
   @ApiProduces(...IMAGE_CONTENT_TYPES)
   @ApiResponse({

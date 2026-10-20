@@ -334,12 +334,12 @@ export function postListQuery(
 
 /**
  * An author as the screens draw it (ADR-0069 decision 3, #37-3 and #37-6): the CURRENT nickname
- * beside a small round image — the nickname's first letter while there is no image (#141 brings
- * uploads) — and '운영자' for an account with the admin role (#45-9: operating rights only, never a
- * forecasting credential). A member's image and name lead to their public profile (#41,
- * ADR-0078: `href`, `/u/<publicId>` — the public id, so a link keeps finding the member after a
- * nickname change, #37-2). A withdrawn author (#140) is '탈퇴한 사용자' with nothing else and no
- * link (#37-16).
+ * beside a small round image — the profile image the member uploaded (#141, ADR-0079), the
+ * nickname's first letter while there is none — and '운영자' for an account with the admin role
+ * (#45-9: operating rights only, never a forecasting credential). A member's image and name lead to
+ * their public profile (#41, ADR-0078: `href`, `/u/<publicId>` — the public id, so a link keeps
+ * finding the member after a nickname change, #37-2). A withdrawn author (#140) is '탈퇴한 사용자' with
+ * nothing else and no link (#37-16).
  */
 export type AuthorView =
   | {

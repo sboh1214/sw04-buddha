@@ -20,6 +20,7 @@ import { OnboardingModule } from './onboarding/onboarding.module.js';
 import { AdminSmsStatusModule } from './phone-verification/admin-sms-status.module.js';
 import { PhoneVerificationModule } from './phone-verification/phone-verification.module.js';
 import { PostsModule } from './posts/posts.module.js';
+import { ProfileImageModule } from './profile-image/profile-image.module.js';
 import { ProfilesModule } from './profiles/profiles.module.js';
 import { RateLimitModule } from './rate-limit/rate-limit.module.js';
 import { RealtimeModule } from './realtime/realtime.module.js';
@@ -80,9 +81,12 @@ import { WatchlistModule } from './watchlist/watchlist.module.js';
     // 운영 공지 (#138): the pinned notices above the community list, a notice page and the admins'
     // writes, pins and unpins. After the posts and the comments, whose community it joins.
     NoticesModule,
-    // 공개 프로필 (#41): a member's public profile. Last, so the document keeps the routes before it
-    // where they were.
+    // 공개 프로필 (#41): a member's public profile. After the modules above, so the document keeps
+    // the routes before it where they were.
     ProfilesModule,
+    // 프로필 이미지 (#141): the member's upload and deletion of its profile image, into the media
+    // store. Last, after MediaModule and MeModule, whose store, body parser and answer it uses.
+    ProfileImageModule,
   ],
   controllers: [HealthController],
 })

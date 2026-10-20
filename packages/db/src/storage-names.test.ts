@@ -80,6 +80,8 @@ const VARCHAR_VALUES: Readonly<Record<string, readonly string[]>> = {
   'consent_records.item': CONSENT_ITEMS,
   'media_objects.kind': MEDIA_KINDS,
   'media_objects.content_type': IMAGE_CONTENT_TYPES,
+  // Generated (#141): the profile image's kind its foreign key requires, NULL without an image.
+  'profiles.image_kind': MEDIA_KINDS.filter((kind) => kind === 'profile_image'),
 };
 
 /**

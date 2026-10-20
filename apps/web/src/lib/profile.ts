@@ -1,9 +1,11 @@
 import {
   BIO_MAX_LENGTH,
   JOINED_MONTH_PATTERN,
+  PROFILE_IMAGE_CONTENT_TYPES,
   bioRefusalOf,
   codePointLength,
   normaliseBio,
+  type ImageRefusal,
 } from '@buddha/shared';
 import type { Metadata } from 'next';
 import * as z from 'zod';
@@ -19,23 +21,31 @@ import {
 } from './api';
 import { CATEGORY_TRAIL_SEPARATOR } from './category-label';
 import { type Onboarding, hasOnboardingStepLeft, needsOnboarding } from './onboarding';
+import {
+  imagePrecheck,
+  imageRefusalMessage,
+  imageUploadErrorMessage,
+  uploadContentType,
+} from './post-editor';
 
 /**
  * 공개 프로필 (#41, ADR-0078) as the screens read it: its address, what the page says of the
- * member's public items, and MY 설정's two editors of them — the 소개 and the interest categories.
+ * member's public items, and MY 설정's editors of them — the image (#141, ADR-0079), the 소개 and the
+ * interest categories.
  * Pure functions of the API's answers, kept apart from the components and the hooks so the node
  * test runner reaches them, and free of `'use client'`, so the server page uses them too.
  *
  * Owner decisions (ADR-0069 decision 3 #37, decision 4 #41, decision 7): the profile lives at
  * `/u/<publicId>` — the public id never changes, so an old link finds the member after a nickname
  * change (#37-2) — and anyone reads it, signed in or not, while search engines are kept away
- * (#37-1). It shows the CURRENT nickname (#37-3), the image (#141; the nickname's first letter
- * until then, #37-6), '운영자' on an admin account (#45-9), the 소개 — plain text of at most 160
- * characters, its line breaks kept, never a link (#37-3) —, every interest category picked and
- * nothing when none (#37-5), the year and month joined ('2026년 10월 가입', #37-3), and the counts
- * of posts, comments and likes received (#37-4) — numbers, never a score, a rank or a skill (N05
- * §2, D5). Nothing else of the account (#37-8, #37-11~13). The member edits the 소개 and the
- * categories in MY 설정, and the own profile links there (decision 4 #41).
+ * (#37-1). It shows the CURRENT nickname (#37-3), the image the member uploaded (#141) or else the
+ * nickname's first letter — never a social login's photo (#37-6) —, '운영자' on an admin account
+ * (#45-9), the 소개 — plain text of at most 160 characters, its line breaks kept, never a link
+ * (#37-3) —, every interest category picked and nothing when none (#37-5), the year and month
+ * joined ('2026년 10월 가입', #37-3), and the counts of posts, comments and likes received (#37-4) —
+ * numbers, never a score, a rank or a skill (N05 §2, D5). Nothing else of the account (#37-8,
+ * #37-11~13). The member edits the image, the 소개 and the categories in MY 설정, and the own profile
+ * links there (decision 4 #41).
  */
 
 // ---- the address ---------------------------------------------------------------------------------
@@ -301,3 +311,64 @@ export const bioFormSchema = z.object({
   }),
 });
 export type BioFormValues = z.input<typeof bioFormSchema>;
+
+// ---- MY 설정: the image -----------------------------------------------------------------------------
+
+/*
+ * 프로필 이미지 (#141, ADR-0079; ADR-0069 decision 3 #37-6, decision 4 #141): uploaded straight from
+ * MY 설정 — JPEG, PNG or WebP, at most 5MB — and checked by the server by its bytes, which crops the
+ * middle to a 512px square and strips the metadata (EXIF) before storing it; no crop is chosen on
+ * screen. Replacing or deleting it removes the earlier one at once. The upload goes the way a post's
+ * image does (`PUT /me/profile-image`: the file itself as the body, the account in the query), so
+ * the checks before sending and the reasons of a refusal are the post editor's (lib/post-editor.ts),
+ * with the profile image's own three types: a GIF is not taken.
+ */
+
+/** The file picker's types: the three the server takes (#37-6); it decides by the bytes anyway. */
+export const PROFILE_IMAGE_ACCEPT = PROFILE_IMAGE_CONTENT_TYPES.join(',');
+
+/**
+ * Whether a picked file is worth sending as the profile image: an empty file, one over 5MB, or one
+ * declared as another type than the three (a GIF included) is refused here with the server's own
+ * reason; anything else — a file with no declared type too — goes up and the server decides.
+ */
+export function profileImagePrecheck(file: {
+  type: string;
+  size: number;
+}): ImageRefusal | undefined {
+  return imagePrecheck(file, PROFILE_IMAGE_CONTENT_TYPES);
+}
+
+/** The upload's `Content-Type`: the file's own when it is one of the three, else bytes. */
+export function profileImageContentType(file: { type: string }): string {
+  return uploadContentType(file, PROFILE_IMAGE_CONTENT_TYPES);
+}
+
+/**
+ * Why a profile image was refused, in the member's words: the type and the size name the profile
+ * image's own rule (JPEG·PNG·WebP, 5MB — a post's names the GIF too), the rest are a post image's.
+ */
+export function profileImageRefusalMessage(reason: ImageRefusal): string {
+  if (reason === 'type') return copy.errProfileImageType;
+  if (reason === 'size') return copy.errProfileImageSize;
+  return imageRefusalMessage(reason);
+}
+
+/**
+ * What a refused upload says: as a post image's (`imageUploadErrorMessage` — the server's reason,
+ * the cookie as another account, ONBOARDING_REQUIRED, an unreachable server, a failed upload) with
+ * the profile image's reasons. The FORBIDDEN a writing or an account restriction answers for a new
+ * image names no field and is a failed upload for now: what the member sees of a restriction is
+ * #185's and #139's to say (owner decision 2026-10-21 answer 8 on #41, ADR-0078 7-9).
+ */
+export function profileImageUploadFailure(error: unknown): string {
+  // Nothing here is ever an editor's upload given up (`UploadAbandoned`), the one thing said as
+  // nothing with `gateMoves` false.
+  return imageUploadErrorMessage(error, false, profileImageRefusalMessage) ?? copy.errImageUpload;
+}
+
+/** What a refused deletion says: the session switched, the connection, or that it failed. */
+export function profileImageDeleteFailure(error: unknown): string {
+  if (isForAnotherAccount(error)) return copy.sessionChanged;
+  return isApiUnreachable(error) ? copy.errNetwork : copy.errProfileImageDelete;
+}

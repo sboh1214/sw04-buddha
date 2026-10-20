@@ -77,6 +77,7 @@ import {
   createPost,
   createPostLike,
   createPosition,
+  createProfileImage,
   createSearch,
   createSettlementStep,
   createStartGrant,
@@ -1609,6 +1610,110 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     // buddha_app writes it like the nickname and clears it with null.
     await t.db.update(profiles).set({ bio: null }).where(eq(profiles.userId, u.id));
     expect(await bioOf()).toBeNull();
+  });
+
+  describe('the profile image (migration 0037, #141)', () => {
+    /** The image a profile names, read back. */
+    const imageOf = async (userId: string) =>
+      (
+        await t.db
+          .select({ imageId: profiles.imageId, imageKind: profiles.imageKind })
+          .from(profiles)
+          .where(eq(profiles.userId, userId))
+      )[0];
+
+    it('names a profile image of the profile’s own account, attached from the start', async () => {
+      const { user: u, profile } = await createUser(t.db);
+      // None until the member uploads one: every new and existing profile.
+      expect(profile.imageId).toBeNull();
+      expect(await imageOf(u.id)).toEqual({ imageId: null, imageKind: null });
+      const image = await createProfileImage(t.db, { userId: u.id });
+      expect(image).toMatchObject({ kind: 'profile_image', ownerId: u.id });
+      expect(image.attachedAt).not.toBeNull();
+      expect(await imageOf(u.id)).toEqual({ imageId: image.id, imageKind: 'profile_image' });
+      // The relations resolve both ways.
+      const withImage = await t.db.query.profiles.findFirst({
+        where: eq(profiles.userId, u.id),
+        with: { image: { with: { profile: true } } },
+      });
+      expect(withImage?.image?.id).toBe(image.id);
+      expect(withImage?.image?.profile?.userId).toBe(u.id);
+      // Cleared with null (a deletion, or an operator's removal that keeps the row, #50).
+      await t.db.update(profiles).set({ imageId: null }).where(eq(profiles.userId, u.id));
+      expect(await imageOf(u.id)).toEqual({ imageId: null, imageKind: null });
+    });
+
+    it('refuses another account’s image, a post’s image and a second profile for one image', async () => {
+      const { user: a } = await createUser(t.db);
+      const { user: b } = await createUser(t.db);
+      // B's profile image, and an earlier one of B's that no profile names any more (as an
+      // operator's removal keeps it, #50).
+      const kept = await createProfileImage(t.db, { userId: b.id });
+      const theirs = await createProfileImage(t.db, { userId: b.id });
+      const postImage = await createMedia(t.db, { ownerId: a.id });
+      // A post's image attached, as a post takes it, is still no profile image.
+      await t.db
+        .update(mediaObjects)
+        .set({ attachedAt: new Date() })
+        .where(eq(mediaObjects.id, postImage.id));
+      for (const imageId of [kept.id, postImage.id, randomUUID()]) {
+        await expect(
+          t.db.update(profiles).set({ imageId }).where(eq(profiles.userId, a.id)),
+        ).rejects.toSatisfy(
+          (e) => sqlState(e) === '23503' && sqlConstraint(e) === 'profiles_image_fk',
+        );
+      }
+      // The image B's profile names is refused before its owner is looked at: one profile's.
+      await expect(
+        t.db.update(profiles).set({ imageId: theirs.id }).where(eq(profiles.userId, a.id)),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23505' && sqlConstraint(e) === 'profiles_image_id_unique',
+      );
+      expect(await imageOf(a.id)).toEqual({ imageId: null, imageKind: null });
+      expect(await imageOf(b.id)).toEqual({ imageId: theirs.id, imageKind: 'profile_image' });
+      // The generated kind cannot be written.
+      await expect(
+        t.db.execute(sql`UPDATE profiles SET image_kind = 'post_image' WHERE user_id = ${a.id}`),
+      ).rejects.toSatisfy((e) => sqlState(e) === '428C9');
+    });
+
+    it('keeps a profile image attached, and removable only once no profile names it', async () => {
+      const { user: u } = await createUser(t.db);
+      const image = await createProfileImage(t.db, { userId: u.id });
+      await expect(
+        t.db.update(mediaObjects).set({ attachedAt: null }).where(eq(mediaObjects.id, image.id)),
+      ).rejects.toSatisfy(
+        (e) =>
+          sqlState(e) === '23514' &&
+          sqlConstraint(e) === 'media_objects_profile_image_attached_check',
+      );
+      await expect(
+        t.db.insert(mediaObjects).values({
+          ownerId: u.id,
+          kind: 'profile_image',
+          storageKey: `profile-images/${randomUUID()}.png`,
+          contentType: 'image/png',
+          byteSize: 1,
+          width: 1,
+          height: 1,
+        }),
+      ).rejects.toSatisfy(
+        (e) =>
+          sqlState(e) === '23514' &&
+          sqlConstraint(e) === 'media_objects_profile_image_attached_check',
+      );
+      await expect(
+        t.db.delete(mediaObjects).where(eq(mediaObjects.id, image.id)),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23503' && sqlConstraint(e) === 'profiles_image_fk',
+      );
+      // Let go of first, in the same transaction, as the member's replacement and deletion do.
+      await t.db.transaction(async (tx) => {
+        await tx.update(profiles).set({ imageId: null }).where(eq(profiles.userId, u.id));
+        await tx.delete(mediaObjects).where(eq(mediaObjects.id, image.id));
+      });
+      expect(await t.db.select().from(mediaObjects)).toEqual([]);
+    });
   });
 
   describe('the direct AMM is gone (migration 0017, #125)', () => {

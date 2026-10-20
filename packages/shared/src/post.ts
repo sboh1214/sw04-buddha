@@ -52,11 +52,12 @@ export const postTitleInputSchema = z
 /**
  * Who wrote a post, as every public answer shows it (ADR-0069 decision 5): the account's public id
  * (the `/u/<publicId>` of #41, never the account id), its CURRENT nickname (#37-3: old posts too),
- * its image (#141; null until it has one, and the web draws the nickname's first letter) and
- * whether it is an operator (#45-9: '운영자' on every post of an admin account — operating rights
- * only, never a forecasting credential). A withdrawn author (#140) is `former_member`, shown as
- * '탈퇴한 사용자' with no link and nothing of the account (#37-16): the projection of the API has
- * one place where #140 makes it.
+ * its profile image (#141, ADR-0079: its address `mediaPath`, served by `GET /media/:mediaId`; null
+ * while it has none, and the web draws the nickname's first letter — never a social login's photo,
+ * #37-6) and whether it is an operator (#45-9: '운영자' on every post of an admin account — operating
+ * rights only, never a forecasting credential). A withdrawn author (#140) is `former_member`, shown
+ * as '탈퇴한 사용자' with no link and nothing of the account (#37-16): the projection of the API has one
+ * place where #140 makes it.
  */
 export const postAuthorSchema = z
   .discriminatedUnion('kind', [

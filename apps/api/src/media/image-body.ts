@@ -11,17 +11,25 @@ import { InFlightPerKey } from './in-flight.js';
 import { type Release, memoryAdmission, memoryWaits } from './memory-admission.js';
 
 /**
- * The Content-Types `POST /media/images` takes its file under: the four image types and the
- * generic `application/octet-stream`. The declared type decides nothing — the bytes are checked
- * by their magic number (image.ts) — it only lets the body through to the handler as bytes.
+ * The Content-Types an upload route takes its file under: the four image types and the generic
+ * `application/octet-stream`. The declared type decides nothing — the bytes are checked by their
+ * magic number (image.ts) — it only lets the body through to the handler as bytes.
  */
 export const IMAGE_UPLOAD_CONTENT_TYPES: readonly string[] = [
   ...IMAGE_CONTENT_TYPES,
   'application/octet-stream',
 ];
 
-/** The one route that takes a body of those types: the route pattern Fastify matched. */
-export const IMAGE_UPLOAD_ROUTE = { method: 'POST', url: '/api/v1/media/images' } as const;
+/**
+ * The routes that take a body of those types, by the route pattern Fastify matched: a post's image
+ * (#46) and the profile image (#141, ADR-0079). Both are uploads of an account that finished the
+ * onboarding, so the gate below asks the same of each; a new upload route joins this list and
+ * nothing else of the gate.
+ */
+export const IMAGE_UPLOAD_ROUTES: readonly { readonly method: string; readonly url: string }[] = [
+  { method: 'POST', url: '/api/v1/media/images' },
+  { method: 'PUT', url: '/api/v1/me/profile-image' },
+];
 
 /**
  * How large a body the parser reads: twice the upload limit, so a file a little over 5MB reaches
@@ -144,7 +152,7 @@ function uploadBusy(reply: FastifyReply, message: string): AppError {
  * unread with a declared length over the parser's limit (413, VALIDATION_ERROR — Fastify's own
  * answer from its Content-Length, which it would give at the parser), with three of the account's
  * uploads in flight already, or past the budget. Both of those are RATE_LIMITED with `Retry-After`,
- * the upload route's answer for a full conversion queue (image.ts) — a client may send it again
+ * the upload routes' answer for a full conversion queue (image.ts) — a client may send it again
  * then; the web's editor waits out the wait it names and sends the file again, twice at most,
  * still uploading, and only when the third send is refused too says that file failed and goes on
  * with its batch (owner decisions 2026-10-21, 2026-10-22 (2차) answer 3). A body that declares no
@@ -362,21 +370,20 @@ function mediaTypeOf(request: FastifyRequest): string | undefined {
   return header.split(';', 1)[0]?.trim().toLowerCase();
 }
 
-/** Whether `request` is a POST to the upload route (the route pattern Fastify matched). */
+/** Whether `request` is to one of IMAGE_UPLOAD_ROUTES (the route pattern Fastify matched). */
 function isUploadRoute(request: FastifyRequest): boolean {
-  return (
-    request.method === IMAGE_UPLOAD_ROUTE.method &&
-    request.routeOptions.url === IMAGE_UPLOAD_ROUTE.url
+  return IMAGE_UPLOAD_ROUTES.some(
+    (route) => request.method === route.method && request.routeOptions.url === route.url,
   );
 }
 
 /**
  * What the gate below makes of `request` before its body is read: `pass` for a request that is not
- * the upload's and carries no body of this parser's types (another type, or a GET or HEAD), a
- * refusal, or `upload` — a POST to the upload route from one of our pages, whatever its type,
- * whose sender is checked next (`installImageBodyParser`).
+ * an upload's and carries no body of this parser's types (another type, or a GET or HEAD), a
+ * refusal, or `upload` — a request to an upload route (IMAGE_UPLOAD_ROUTES) from one of our pages,
+ * whatever its type, whose sender is checked next (`installImageBodyParser`).
  *
- * The route comes before the type: every POST to the upload route goes through the gate, so a body
+ * The route comes before the type: every request to an upload route goes through the gate, so a body
  * of another type — JSON or text, which Fastify's own parsers would read, or one no parser reads —
  * is not read before its sender is known either (Codex review of #219, round 2: the first gate
  * looked at the type first and let those through to the parsers, outside the budget and the
@@ -403,7 +410,7 @@ function imageBodyStep(
 /**
  * Refuses, unread, an upload whose body is not of a type the route takes (another type or none):
  * 415 VALIDATION_ERROR, after its sender has been let through, before it takes anything of the
- * account's three or the budget. Only the image parser reads a body on the upload route — the
+ * account's three or the budget. Only the image parser reads a body on an upload route — the
  * handler would refuse anything else it was handed (`The body must be the image file itself`), so
  * reading one first would only hold it.
  */
@@ -437,14 +444,14 @@ export interface ImageBodySenders {
  * A content-type parser belongs to the whole instance, and Nest puts every route on that one
  * instance; Fastify reads the body before any Nest guard runs. So a gate (`onRequest`, ahead of
  * the parser, after the address limit's hook — address-limit.ts, installed before the app's init)
- * keeps the parser to the upload route and to the accounts that may upload, so no one else can make
- * the API hold up to 10MiB per request:
+ * keeps the parser to the upload routes and to the accounts that may upload, so no one else can
+ * make the API hold up to 10MiB per request:
  *
  * - a body of these types on any other route is refused unread, 415 — what it was before this
  *   parser existed (no other route takes one);
- * - every POST to the upload route, whatever its Content-Type (one of the route's, JSON or text
- *   that Fastify's own parsers read, another or none), goes through the rest before any parser
- *   reads its body: a request from a foreign page is refused unread (403, SessionGuard's Origin
+ * - every request to an upload route (IMAGE_UPLOAD_ROUTES: a post's image and the profile image),
+ *   whatever its Content-Type (one of the route's, JSON or text that Fastify's own parsers read,
+ *   another or none), goes through the rest before any parser reads its body: a request from a foreign page is refused unread (403, SessionGuard's Origin
  *   check, `isTrustedOrigin`); then the cookie's session is resolved through better-auth, as
  *   SessionGuard resolves it — a cookie that names no session (none, made up, expired, signed out)
  *   is refused unread (401) — and the account must have finished the onboarding
@@ -452,7 +459,8 @@ export interface ImageBodySenders {
  *   SessionGuard does not read it again; SessionGuard and OnboardedGuard still run after the body;
  * - a body of a type the route does not take is then refused unread (415, `assertUploadType`);
  * - and then the body is let in (`letUploadIn`) only as one of the account's three uploads in
- *   flight and within the bytes the API receives at once (owner decisions 2026-10-21), and once
+ *   flight — a post's image and the profile image (#141) counted together — and within the bytes
+ *   the API receives at once (owner decisions 2026-10-21), and once
  *   the API's memory has room for it (owner decision 2026-10-22 answer 3 — it waits up to
  *   `memoryWaits.uploadMs` for that): one declared over the limit is refused unread, and one past
  *   any of those bounds is RATE_LIMITED unread. Its body is cut once it sends no byte for 30

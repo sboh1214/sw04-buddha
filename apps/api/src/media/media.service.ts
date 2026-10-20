@@ -21,9 +21,11 @@ export interface ShownImage {
 }
 
 /**
- * 올린 이미지 (#46, ADR-0073): the upload of a post's image and its public read. The API is the
- * only way in and out of the store (ADR-0069 decision 2 #45-3: the browser never writes to it, and
- * the bucket is private), so whether an image may be shown is decided here on every read.
+ * 올린 이미지 (#46, ADR-0073): the upload of a post's image and the public read of every image — a
+ * post's, a pinned notice's (#138), and a member's profile image (#141, ADR-0079, whose writes are
+ * ProfileImageService's). The API is the only way in and out of the store (ADR-0069 decision 2
+ * #45-3: the browser never writes to it, and the bucket is private), so whether an image may be
+ * shown is decided here on every read.
  */
 @Injectable()
 export class MediaService {
@@ -78,17 +80,31 @@ export class MediaService {
   }
 
   /**
-   * One image, while a post or a notice shows it: attached to a post that is neither deleted nor
-   * hidden, and in that post's current body (`posts.image_ids` — an image an edit took out stays
-   * for the operators' history and is no longer served), or in the current body of a PINNED notice
-   * (#138: only a pinned notice is public, owner decision 2026-10-21 — an unpinned one's images
-   * answer like a missing one, as its page does; admins see them through `findNoticeImage`). Null
-   * otherwise, whoever asks: an upload nothing took yet, a hidden or deleted post's image (#45-5),
-   * an unpinned notice's and an unknown id answer alike. The row only — the bytes are `bytesOf`'s,
-   * so a revalidation that ends in a 304 reads no object.
+   * One image, while something shows it:
+   *
+   * - a post's image while a post shows it: attached to a post that is neither deleted nor hidden,
+   *   and in that post's current body (`posts.image_ids` — an image an edit took out stays for the
+   *   operators' history and is no longer served);
+   * - a notice's image while it is in the current body of a PINNED notice (#138: only a pinned
+   *   notice is public, owner decision 2026-10-21 — an unpinned one's images answer like a missing
+   *   one, as its page does; admins see them through `findNoticeImage`);
+   * - a profile image while it is its member's profile image (`profiles.image_id`, #141) — the
+   *   profile is public (#37-1) and so are the bylines that show it. A replaced or deleted one is
+   *   gone already (ProfileImageService), and one an operator removed (#50) is kept for operators
+   *   only and served to nobody (#37-10).
+   *
+   * Each by its own kind: a post's or a notice's image is a `post_image` (the editor's upload), a
+   * profile's a `profile_image`, so no image is served as the other. Null otherwise, whoever asks:
+   * an upload nothing took yet, a hidden or deleted post's image (#45-5), an unpinned notice's and
+   * an unknown id answer alike. The row only — the bytes are `bytesOf`'s, so a revalidation that
+   * ends in a 304 reads no object.
    */
   async findShown(mediaId: string): Promise<ShownImage | null> {
-    return (await this.findShownByPost(mediaId)) ?? (await this.findShownByNotice(mediaId));
+    return (
+      (await this.findShownByPost(mediaId)) ??
+      (await this.findShownOnProfile(mediaId)) ??
+      (await this.findShownByNotice(mediaId))
+    );
   }
 
   /** `findShown` for a post's image: the read #46 wrote, the one most images take. */
@@ -106,11 +122,33 @@ export class MediaService {
       .where(
         and(
           eq(mediaObjects.id, mediaId),
+          eq(mediaObjects.kind, 'post_image'),
           isNull(posts.deletedAt),
           isNull(posts.hiddenAt),
           sql`${mediaObjects.id} = ANY(${posts.imageIds})`,
         ),
       );
+    return row ? shownImage(row) : null;
+  }
+
+  /**
+   * `findShown` for a profile image (#141): by the owner's profile (its primary key) and the image
+   * it names — `profiles_image_fk` holds that a profile names only its own account's profile image.
+   */
+  private async findShownOnProfile(mediaId: string): Promise<ShownImage | null> {
+    const { mediaObjects, profiles } = schema;
+    const [row] = await this.db
+      .select({
+        storageKey: mediaObjects.storageKey,
+        contentType: mediaObjects.contentType,
+        byteSize: mediaObjects.byteSize,
+      })
+      .from(mediaObjects)
+      .innerJoin(
+        profiles,
+        and(eq(profiles.userId, mediaObjects.ownerId), eq(profiles.imageId, mediaObjects.id)),
+      )
+      .where(and(eq(mediaObjects.id, mediaId), eq(mediaObjects.kind, 'profile_image')));
     return row ? shownImage(row) : null;
   }
 
@@ -132,6 +170,7 @@ export class MediaService {
       .where(
         and(
           eq(mediaObjects.id, mediaId),
+          eq(mediaObjects.kind, 'post_image'),
           isNotNull(notices.pinnedAt),
           sql`${mediaObjects.id} = ANY(${notices.imageIds})`,
         ),

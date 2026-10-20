@@ -8,19 +8,20 @@ import { publicIdSchema } from './public-id.js';
  * decision 7): a member's profile lives at `/u/<publicId>` — the public id that never changes, so
  * an old link keeps pointing at the same person after a nickname change (#37-2) — and anyone reads
  * it, signed in or not, while search engines are kept away (#37-1). It shows the nickname (the
- * current one; earlier ones never, #37-3), the image (#141; the nickname's first letter until
- * then), the 소개 (plain text of at most 160 characters, line breaks kept, no links, #37-3), every
- * interest category picked — nothing when none (#37-5) —, the year and month the account joined
- * (#37-3), its post and comment counts and the likes they received (#37-4), and '운영자' on an
- * admin account (#45-9, #37-7: operating rights only). Nothing else of the account is public
- * (#37-8·#37-11·#37-12·#37-13): no balance, order, holding, fill, PnL, watched market, proposal,
- * verification, restriction, email, real name or number — and no score of any kind (N04 §4).
+ * current one; earlier ones never, #37-3), the image (#141: the one the member uploaded, else the
+ * nickname's first letter), the 소개 (plain text of at most 160 characters, line breaks kept, no
+ * links, #37-3), every interest category picked — nothing when none (#37-5) —, the year and month
+ * the account joined (#37-3), its post and comment counts and the likes they received (#37-4), and
+ * '운영자' on an admin account (#45-9, #37-7: operating rights only). Nothing else of the account is
+ * public (#37-8·#37-11·#37-12·#37-13): no balance, order, holding, fill, PnL, watched market,
+ * proposal, verification, restriction, email, real name or number — and no score of any kind
+ * (N04 §4).
  *
- * The member edits the 소개 and the interest categories in MY 설정 (decision 4 #41), the nickname
- * there too (#58). During a writing or an account restriction (#185, #139) a public item can be
- * cleared — the 소개 emptied, a category dropped, the image deleted — but never set to a new value,
- * and the nickname never changes (#37-9, decision 7). A withdrawn account's profile answers like an
- * unknown one (#37-16, #140).
+ * The member edits the 소개 and the interest categories in MY 설정 (decision 4 #41), the nickname (#58)
+ * and the image (#141) there too. During a writing or an account restriction (#185, #139) a public
+ * item can be cleared — the 소개 emptied, a category dropped, the image deleted — but never set to a
+ * new value, and the nickname never changes (#37-9, decision 7). A withdrawn account's profile
+ * answers like an unknown one (#37-16, #140).
  */
 
 // ---- the 소개 ------------------------------------------------------------------------------------
@@ -99,14 +100,39 @@ export const updateBioBodySchema = z
   .meta({ id: 'UpdateBioBody' });
 export type UpdateBioBody = z.input<typeof updateBioBodySchema>;
 
+// ---- the image ----------------------------------------------------------------------------------
+
+/*
+ * The profile image (#141, ADR-0079; ADR-0069 decision 3 #37-6): uploaded by the member in MY 설정
+ * — `PUT /me/profile-image`, the file itself as the body and the account in the query
+ * (`uploadImageQuerySchema`, media.ts), as a post's image is uploaded — and deleted there. Never a
+ * social login's photo (#37-6). Without one, the profile and the bylines draw the nickname's first
+ * letter. Replacing or deleting it removes the earlier one at once (decision 4 #141).
+ */
+
+/**
+ * `POST /me/profile-image/delete`: the member deletes its profile image — only the account the
+ * screen shows (`expectedAccountId`): a window still showing account A after another one signed
+ * in as B would otherwise take B's image away. A POST rather than a DELETE, as a post's deletion:
+ * the body names the account, and OpenAPI 3.0 leaves a DELETE's body undefined.
+ */
+export const deleteProfileImageBodySchema = z
+  .object({
+    /** The signed-in user id the screen is showing (better-auth `user.id`, text). */
+    expectedAccountId: z.string().min(1).max(255),
+  })
+  .meta({ id: 'DeleteProfileImageBody' });
+export type DeleteProfileImageBody = z.infer<typeof deleteProfileImageBodySchema>;
+
 // ---- the public profile -------------------------------------------------------------------------
 
 /**
  * Who the profile is, as every public answer names a person (ADR-0069 decision 5): exactly the
- * `member` face of PostAuthor — the public id, the CURRENT nickname, the image (#141; null until it
- * has one, and the web draws the nickname's first letter) and the 운영자 mark — so the profile and a
- * post's byline show a person the same way and registry.test.ts holds both to that face. Never the
- * account id. A withdrawn account has no profile (#37-16: 404), so there is no `former_member` here.
+ * `member` face of PostAuthor — the public id, the CURRENT nickname, the profile image (#141: its
+ * address, or null while there is none, and the web draws the nickname's first letter) and the 운영자
+ * mark — so the profile and a post's byline show a person the same way and registry.test.ts holds
+ * both to that face. Never the account id. A withdrawn account has no profile (#37-16: 404), so
+ * there is no `former_member` here.
  */
 export const profileMemberSchema = z
   .object({

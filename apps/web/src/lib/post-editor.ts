@@ -121,25 +121,31 @@ export function titleTooLong(title: string): boolean {
  * a 6MB photo would otherwise travel all the way up to be refused. Anything else goes up and the
  * server decides by the bytes (a file with no declared type included), so this never lets a file
  * through that the server would not check, and never refuses one it would take.
+ *
+ * `types` are the types the route takes: a post's four by default, the profile image's three
+ * (#141, lib/profile.ts) — the same size limit for both (#45-3, #37-6: «5MB»).
  */
-export function imagePrecheck(file: { type: string; size: number }): ImageRefusal | undefined {
+export function imagePrecheck(
+  file: { type: string; size: number },
+  types: readonly string[] = IMAGE_CONTENT_TYPES,
+): ImageRefusal | undefined {
   if (file.size === 0) return 'empty';
   if (file.size > IMAGE_MAX_BYTES) return 'size';
-  if (file.type !== '' && !(IMAGE_CONTENT_TYPES as readonly string[]).includes(file.type)) {
-    return 'type';
-  }
+  if (file.type !== '' && !types.includes(file.type)) return 'type';
   return undefined;
 }
 
 /**
- * The `Content-Type` the upload goes under: the file's own when it is one of the four the route
- * takes, `application/octet-stream` otherwise (the route's parser takes those five only). The
- * declared type decides nothing on the server — the bytes do.
+ * The `Content-Type` the upload goes under: the file's own when it is one of the `types` the route
+ * takes (a post's four by default), `application/octet-stream` otherwise (the routes' parser takes
+ * the four image types and that one only). The declared type decides nothing on the server — the
+ * bytes do.
  */
-export function uploadContentType(file: { type: string }): string {
-  return (IMAGE_CONTENT_TYPES as readonly string[]).includes(file.type)
-    ? file.type
-    : 'application/octet-stream';
+export function uploadContentType(
+  file: { type: string },
+  types: readonly string[] = IMAGE_CONTENT_TYPES,
+): string {
+  return types.includes(file.type) ? file.type : 'application/octet-stream';
 }
 
 const IMAGE_REFUSAL_MESSAGE: Record<ImageRefusal, string> = {
@@ -184,15 +190,21 @@ function refusalOf(details: unknown): ImageRefusal | undefined {
  * the uploads it receives, the account's three in flight, its memory, the conversion queue) still
  * after the editor sent it again (`sendRetrying`, owner decision 2026-10-22 (2차) answer 3), and a
  * body cut for idling or for its deadline (408), included: that file failed, the batch goes on.
+ * `refusalMessage` words a reason: a post image's by default, the profile image's (#141,
+ * lib/profile.ts) names its own three types.
  */
-export function imageUploadErrorMessage(error: unknown, gateMoves: boolean): string | undefined {
+export function imageUploadErrorMessage(
+  error: unknown,
+  gateMoves: boolean,
+  refusalMessage: (reason: ImageRefusal) => string = imageRefusalMessage,
+): string | undefined {
   if (error instanceof UploadAbandoned) return undefined;
   if (isForAnotherAccount(error)) return copy.sessionChanged;
   if (isApiError(error, 'IMAGE_NOT_ALLOWED')) {
     const reason = refusalOf(error.details);
-    return reason === undefined ? copy.errImageUpload : imageRefusalMessage(reason);
+    return reason === undefined ? copy.errImageUpload : refusalMessage(reason);
   }
-  if (isApiError(error) && error.status === 413) return copy.errImageSize;
+  if (isApiError(error) && error.status === 413) return refusalMessage('size');
   if (isApiError(error, 'ONBOARDING_REQUIRED')) {
     return gateMoves ? undefined : copy.errPostOnboarding;
   }

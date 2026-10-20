@@ -2,9 +2,12 @@ import {
   IMAGE_MAX_BYTES,
   IMAGE_MAX_DIMENSION,
   IMAGE_MAX_INPUT_PIXELS,
+  PROFILE_IMAGE_CONTENT_TYPES,
+  PROFILE_IMAGE_SIZE,
   type ImageContentType,
   type ImageNotAllowedDetails,
   type ImageRefusal,
+  type ProfileImageContentType,
 } from '@buddha/shared';
 import sharp, {
   type GifOptions,
@@ -12,6 +15,7 @@ import sharp, {
   type Metadata,
   type OutputInfo,
   type PngOptions,
+  type Sharp,
   type WebpOptions,
 } from 'sharp';
 import { AppError } from '../common/errors/app-error.js';
@@ -569,4 +573,190 @@ export async function processImage(bytes: Uint8Array): Promise<ProcessedImage> {
     width: output.info.width,
     height: output.info.pageHeight ?? output.info.height,
   };
+}
+
+/** An upload the header checks let through: its type, how the decoder is to read it, one frame's size. */
+interface InspectedImage<T extends ImageContentType> {
+  readonly contentType: T;
+  readonly input: { readonly animated: boolean; readonly limitInputPixels: number };
+  /** One frame as stored, before any EXIF orientation turns it. */
+  readonly width: number;
+  readonly height: number;
+}
+
+/**
+ * Steps 1 to 3 of `processImage`, for `processProfileImage`, before anything is decoded: not empty,
+ * at most IMAGE_MAX_BYTES, one of `types` by its magic number with the decoder agreeing, and small
+ * enough to decode by its header. `animated` reads every frame of a GIF or a WebP — a post's image
+ * keeps them — and false reads the first frame only, which is all that is then decoded and so all
+ * that is counted.
+ */
+async function inspectImage<T extends ImageContentType>(
+  bytes: Uint8Array,
+  types: readonly T[],
+  animated: (contentType: T) => boolean,
+): Promise<InspectedImage<T>> {
+  if (bytes.length === 0) throw imageRefused('empty');
+  if (bytes.length > IMAGE_MAX_BYTES) throw imageRefused('size');
+  const sniffed = sniffImageType(bytes);
+  const contentType = types.find((type) => type === sniffed);
+  if (contentType === undefined) throw imageRefused('type');
+
+  const input = { animated: animated(contentType), limitInputPixels: IMAGE_MAX_INPUT_PIXELS };
+  let metadata: Metadata;
+  try {
+    // The header only: nothing is decoded, so no pixel limit is needed to read it (sharp's own
+    // would refuse a bomb here as a failure to read, not as what it is).
+    metadata = await sharp(bytes, { ...input, limitInputPixels: false }).metadata();
+  } catch {
+    throw imageRefused('unreadable');
+  }
+  if (metadata.format !== SHARP_FORMAT[contentType]) throw imageRefused('unreadable');
+  if (contentType === 'image/jpeg' && metadata.channels > JPEG_MAX_COMPONENTS) {
+    throw imageRefused('unreadable');
+  }
+  const width = metadata.width;
+  // `height` is every frame read stacked (one, unless `animated`); `pageHeight` one frame's (none
+  // for a still image).
+  const totalHeight = metadata.height;
+  if (!width || !totalHeight) throw imageRefused('unreadable');
+  const frameHeight = metadata.pageHeight ?? totalHeight;
+  if (width * frameHeight > largestFramePixels(contentType, metadata)) {
+    throw imageRefused('pixels');
+  }
+  if (width * totalHeight > largestImagePixels(contentType, metadata)) {
+    throw imageRefused(frameHeight < totalHeight ? 'frames' : 'pixels');
+  }
+  return { contentType, input, width, height: frameHeight };
+}
+
+/** Encodes `pipeline` in `contentType` again — what makes the stored bytes the server's own. */
+function encodeAs(pipeline: Sharp, contentType: ImageContentType): void {
+  switch (contentType) {
+    case 'image/jpeg':
+      pipeline.jpeg({ quality: 85, mozjpeg: true });
+      break;
+    case 'image/png':
+      pipeline.png();
+      break;
+    case 'image/gif':
+      pipeline.gif();
+      break;
+    case 'image/webp':
+      pipeline.webp({ quality: 85 });
+      break;
+  }
+}
+
+/** A conversion's output: the encoded bytes and what sharp says of them. */
+type Converted = { data: Buffer; info: OutputInfo };
+
+/**
+ * Runs a conversion in the API's queue (`imageConversions`) — all of `task`, however many passes it
+ * makes, as one turn — refusing what the decoder cannot read.
+ */
+async function convert(task: () => Promise<Converted>): Promise<Converted> {
+  try {
+    return await imageConversions.run(task);
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    if (error instanceof Error && /pixel limit/i.test(error.message)) throw imageRefused('pixels');
+    throw imageRefused('unreadable');
+  }
+}
+
+/** A profile image as it is stored: always a PROFILE_IMAGE_SIZE square of one of its three types. */
+export interface ProcessedProfileImage extends ProcessedImage {
+  readonly contentType: ProfileImageContentType;
+}
+
+/**
+ * Checks and converts a profile image (#141, ADR-0069 decision 3 #37-6: «JPEG·PNG·WebP, 5MB, 서버에서
+ * 정사각 512px로 자르고 EXIF 제거») — as a post's image is (`processImage`), but:
+ *
+ * - JPEG, PNG or WebP only (PROFILE_IMAGE_CONTENT_TYPES): a GIF is refused as `type`, as anything
+ *   else that is not one of the three is.
+ * - The first frame of an animated WebP only: the decoder reads that one frame, so the header checks
+ *   count that frame alone, and the stored image is still (ADR-0079).
+ * - Turned upright by its EXIF orientation, the middle of it cropped to a square and scaled to
+ *   exactly PROFILE_IMAGE_SIZE × PROFILE_IMAGE_SIZE — whatever the upload's size: a smaller one is
+ *   enlarged, so every profile image is the same square (ADR-0079: the server crops the centre; no
+ *   crop box is sent). How it gets there is bounded by memory (`profileSquare`).
+ * - Encoded again in its own type, without EXIF or any other metadata, as `processImage` does.
+ *
+ * Through the same one-at-a-time queue (`imageConversions`); throws as `processImage` does.
+ */
+export async function processProfileImage(bytes: Uint8Array): Promise<ProcessedProfileImage> {
+  const inspected = await inspectImage(bytes, PROFILE_IMAGE_CONTENT_TYPES, () => false);
+  const output = await convert(() => profileSquare(bytes, inspected));
+  return {
+    body: new Uint8Array(output.data),
+    contentType: inspected.contentType,
+    width: output.info.width,
+    height: output.info.height,
+  };
+}
+
+/**
+ * The square itself, in two ways, so that a profile image never costs more memory than a post's
+ * image of the same file — the cost the decode budget was measured on (ADR-0073 9-8, ADR-0079
+ * 7-16). Scaling straight to the 512 square ('cover') scales by the SHORT side: a long panorama
+ * then gets no shrink-on-load and is decoded, turned and resized at full size — a 300KB JPEG of
+ * 60000×833 with a quarter turn peaked near 400MB, the API's whole container.
+ *
+ * - JPEG and WebP: first `processImage`'s own pass — turned upright, fitted inside
+ *   IMAGE_MAX_DIMENSION, so the decoder shrinks by the LONG side as it reads (libjpeg's
+ *   shrink-on-load, libwebp's scaled decoding) — as raw pixels (at most 2048×2048×4 bytes), then
+ *   the middle square of that scaled to 512. An image more than four times wider than tall has a
+ *   short side under 512 after the first pass, so its square is enlarged and softer (ADR-0079
+ *   결과 4).
+ * - PNG: no decoder shrinks it, so the first pass would gain nothing, and its long-side reduce is
+ *   what makes a thin strip of a PNG cost gigabytes (ADR-0079 결과 5). The middle square is cut
+ *   first, in the orientation the file is stored in — the same square once turned, since a turn
+ *   or a mirror keeps the middle in the middle — and only that square is scaled to 512 and then
+ *   turned upright (sharp turns after the resize when `extract` comes before `autoOrient`; the
+ *   EXIF tests in image.test.ts would see a square turned the wrong way).
+ */
+function profileSquare(
+  bytes: Uint8Array,
+  { contentType, input, width, height }: InspectedImage<ProfileImageContentType>,
+): Promise<Converted> {
+  const toSquare = (pipeline: Sharp) => {
+    pipeline.resize({
+      width: PROFILE_IMAGE_SIZE,
+      height: PROFILE_IMAGE_SIZE,
+      fit: 'cover',
+      position: 'centre',
+    });
+    encodeAs(pipeline, contentType);
+    return pipeline.toBuffer({ resolveWithObject: true });
+  };
+  if (contentType === 'image/png') {
+    const side = Math.min(width, height);
+    return toSquare(
+      sharp(bytes, input)
+        .extract({
+          left: Math.floor((width - side) / 2),
+          top: Math.floor((height - side) / 2),
+          width: side,
+          height: side,
+        })
+        .autoOrient(),
+    );
+  }
+  return sharp(bytes, input)
+    .autoOrient()
+    .resize({
+      width: IMAGE_MAX_DIMENSION,
+      height: IMAGE_MAX_DIMENSION,
+      fit: 'inside',
+      withoutEnlargement: true,
+    })
+    .raw()
+    .toBuffer({ resolveWithObject: true })
+    .then(({ data, info }) =>
+      toSquare(
+        sharp(data, { raw: { width: info.width, height: info.height, channels: info.channels } }),
+      ),
+    );
 }

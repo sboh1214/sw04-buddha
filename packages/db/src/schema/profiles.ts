@@ -1,8 +1,18 @@
 import { desc, sql } from 'drizzle-orm';
-import { check, index, pgTable, text, uniqueIndex, varchar } from 'drizzle-orm/pg-core';
+import {
+  check,
+  foreignKey,
+  index,
+  pgTable,
+  text,
+  uniqueIndex,
+  uuid,
+  varchar,
+} from 'drizzle-orm/pg-core';
 import { user } from './auth.js';
 import { createdAt, timestampTz, updatedAt } from './columns.js';
 import { roleEnum } from './enums.js';
+import { mediaObjects } from './media-objects.js';
 
 /**
  * One row per better-auth user. Created together with `balances` by the AFTER INSERT
@@ -67,6 +77,26 @@ export const profiles = pgTable(
      * restriction it can be emptied but not set anew (#37-9, decision 7).
      */
     bio: varchar({ length: 160 }),
+    /**
+     * The profile image (#141, ADR-0079; ADR-0069 decision 3 #37-6): an upload of the member's in MY
+     * 설정 (`media_objects`, kind `profile_image`) — never a social login's photo — or null while
+     * there is none, and then the profile and the bylines draw the nickname's first letter. Every
+     * upload is a new row with a new id, so a replaced image has a new address (`mediaPath`). The
+     * member's replacement or deletion removes the earlier image, row and object, at once (decision
+     * 4 #141); an operator's removal (#50) clears this and keeps the image for operators only
+     * (#37-10). One profile's at most (UNIQUE — also the index `GET /media/:mediaId` asks by). Like
+     * the 소개, it can be deleted during a writing or an account restriction but not replaced
+     * (#37-9, decision 7).
+     */
+    imageId: uuid().unique('profiles_image_id_unique'),
+    /**
+     * What `profiles_image_fk` requires of the image's kind — `profile_image` — and NULL while
+     * there is no image to look up (a foreign key with a NULL column is not checked), as
+     * `post_comments.parent_is_reply` does for a 대댓글's parent.
+     */
+    imageKind: varchar({ length: 16 }).generatedAlwaysAs(
+      sql`CASE WHEN image_id IS NOT NULL THEN 'profile_image' END`,
+    ),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -100,5 +130,16 @@ export const profiles = pgTable(
     check('profiles_public_id_check', sql`${t.publicId} ~ '^[2-9a-hj-np-z]{10}$'`),
     /** A bio is absent or has text: the API stores a blank one as none, as a post's title. */
     check('profiles_bio_check', sql`${t.bio} IS NULL OR btrim(${t.bio}) <> ''`),
+    /**
+     * The profile image is a profile image of this very account (#141): the database holds it,
+     * whoever writes — never another member's upload, nor a post's image (which the public reads
+     * only while its post shows it). RESTRICT: an image is removed only after the profile let go of
+     * it, in the same transaction.
+     */
+    foreignKey({
+      name: 'profiles_image_fk',
+      columns: [t.imageId, t.userId, t.imageKind],
+      foreignColumns: [mediaObjects.id, mediaObjects.ownerId, mediaObjects.kind],
+    }).onDelete('restrict'),
   ],
 );

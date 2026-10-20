@@ -1,11 +1,12 @@
 /**
  * `media.orphan_cleanup` (#46, ADR-0073) on the docker `test` database: which uploads it removes
  * — those no post took within ORPHAN_MEDIA_HOURS, row and object — and which it leaves: a younger
- * one, one a post or a notice (#138) took, and one a post is taking at that moment (locked,
- * skipped). An object the store refuses to remove keeps its key queued (`media_deletions`) and a
- * later run removes it once the store lets it go — the key is never lost before then (Codex review
- * of #219, round 3) — and the hourly runs try it again 1, 2, 4 … hours after the run it was
- * refused on, however late in that run the refusal came. Skips when TEST_* are unset.
+ * one, one a post or a notice (#138) took, one a post is taking at that moment (locked, skipped),
+ * and a profile image (#141), however old — the profile's from its upload. An object the store
+ * refuses to remove keeps its key queued (`media_deletions`) and a later run removes it once the
+ * store lets it go — the key is never lost before then (Codex review of #219, round 3) — and the
+ * hourly runs try it again 1, 2, 4 … hours after the run it was refused on, however late in that
+ * run the refusal came. Skips when TEST_* are unset.
  */
 import { schema, type Db } from '@buddha/db';
 import {
@@ -14,6 +15,7 @@ import {
   createMedia,
   createNotice,
   createPost,
+  createProfileImage,
   createUser,
   hasTestDb,
   type TestDb,
@@ -123,6 +125,29 @@ describe.skipIf(!hasTestDb())('media.orphan_cleanup (integration)', () => {
     expect(await queue()).toEqual([]);
     expect(await rows()).toEqual([taken.id]);
     expect(storage.objects.has(taken.storageKey)).toBe(true);
+  });
+
+  it('never removes a profile image, the member’s now or one kept for operators (#141)', async () => {
+    // Two images of the owner's: the first no profile names any more, as an operator's removal
+    // leaves it (#50, kept for the retention period), the second the profile's now. Both older
+    // than the period, and the post image beside them is the only orphan.
+    const kept = await createProfileImage(t.db, { userId: ownerId });
+    const current = await createProfileImage(t.db, { userId: ownerId });
+    const long = new Date(Date.now() - (ORPHAN_MEDIA_HOURS + 48) * HOUR_MS);
+    await t.db
+      .update(schema.mediaObjects)
+      .set({ createdAt: long })
+      .where(eq(schema.mediaObjects.kind, 'profile_image'));
+    for (const image of [kept, current]) {
+      await storage.put(image.storageKey, new Uint8Array([1]), image.contentType);
+    }
+    const orphan = await upload(ORPHAN_MEDIA_HOURS + 1);
+    expect(await removeOrphanMedia(t.db, storage)).toEqual({ removed: 1, failed: 0, failures: [] });
+    expect(await rows()).toEqual([kept.id, current.id].sort());
+    expect(storage.objects.has(orphan.storageKey)).toBe(false);
+    expect(storage.objects.has(kept.storageKey) && storage.objects.has(current.storageKey)).toBe(
+      true,
+    );
   });
 
   it('works through a backlog a batch at a time, oldest first', async () => {

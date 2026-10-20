@@ -3,9 +3,17 @@
  * content decides the type (a disguised file is refused), metadata never survives (EXIF, the
  * orientation tag included, after the pixels were turned upright), the long side is at most
  * 2,048px and never enlarged, an animation keeps its frames and timing, and a decompression bomb
- * is refused from its header. No database.
+ * is refused from its header. And a profile image's (#141, decision 3 #37-6): JPEG, PNG or WebP
+ * only, the middle cropped to a 512px square whatever the upload's size, metadata gone, an
+ * animated WebP kept as its first frame. No database.
  */
-import { IMAGE_MAX_BYTES, IMAGE_MAX_DIMENSION, IMAGE_MAX_INPUT_PIXELS } from '@buddha/shared';
+import { crc32 } from 'node:zlib';
+import {
+  IMAGE_MAX_BYTES,
+  IMAGE_MAX_DIMENSION,
+  IMAGE_MAX_INPUT_PIXELS,
+  PROFILE_IMAGE_SIZE,
+} from '@buddha/shared';
 import sharp from 'sharp';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AppError } from '../common/errors/app-error.js';
@@ -29,6 +37,7 @@ import {
   largestImagePixels,
   outputBox,
   processImage,
+  processProfileImage,
   sniffImageType,
 } from './image.js';
 import { memoryAdmission, memoryWaits } from './memory-admission.js';
@@ -58,10 +67,41 @@ async function animation(
     : image.webp({ delay, loop: 0 }).toBuffer();
 }
 
-/** The reason of an IMAGE_NOT_ALLOWED refusal. */
-async function refusal(bytes: Uint8Array): Promise<unknown> {
+/** A PNG chunk: its length, its type, `data`, and the CRC of the type and the data. */
+function pngChunk(type: string, data: Buffer): Buffer {
+  const body = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(data.length);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(body));
+  return Buffer.concat([length, body, crc]);
+}
+
+/**
+ * A valid PNG of 8×8 padded to exactly `size` bytes by a text chunk after its header — which a
+ * decoder reads past — so a size check meets a real image at its bound.
+ */
+async function pngOfExactly(size: number): Promise<Buffer> {
+  const png = await solid(8, 8).png().toBuffer();
+  const headerEnd = 8 + 25; // the signature, then IHDR: length, type, 13 bytes, CRC
+  const keyword = Buffer.from('Comment\0', 'latin1');
+  const filler = Buffer.alloc(size - png.length - 12 - keyword.length, 0x61);
+  const padded = Buffer.concat([
+    png.subarray(0, headerEnd),
+    pngChunk('tEXt', Buffer.concat([keyword, filler])),
+    png.subarray(headerEnd),
+  ]);
+  expect(padded.length).toBe(size);
+  return padded;
+}
+
+/** The reason of an IMAGE_NOT_ALLOWED refusal, of `process` (a post's image by default). */
+async function refusal(
+  bytes: Uint8Array,
+  process: (bytes: Uint8Array) => Promise<unknown> = processImage,
+): Promise<unknown> {
   try {
-    await processImage(bytes);
+    await process(bytes);
   } catch (error) {
     if (error instanceof AppError && error.code === 'IMAGE_NOT_ALLOWED') {
       expect(error.status).toBe(422);
@@ -200,11 +240,14 @@ describe('processImage', () => {
     expect(await refusal(Buffer.from('GIF89a garbage'))).toBe('unreadable');
   });
 
-  it('refuses an empty file and one over 5MB before looking at it', async () => {
+  it('refuses an empty file and one over 5MB before looking at it, and takes one of exactly 5MB', async () => {
     expect(await refusal(new Uint8Array(0))).toBe('empty');
     const big = Buffer.alloc(IMAGE_MAX_BYTES + 1);
     big.set([0xff, 0xd8, 0xff]);
     expect(await refusal(big)).toBe('size');
+    // «5MB» is the bound itself: the screen lets a file of exactly IMAGE_MAX_BYTES through too.
+    const image = await processImage(await pngOfExactly(IMAGE_MAX_BYTES));
+    expect(image).toMatchObject({ contentType: 'image/png', width: 8, height: 8 });
   });
 
   it('refuses a decompression bomb from its header, before decoding it', async () => {
@@ -661,6 +704,194 @@ describe('the encoders: settings and the bounds the whole conversion needs (Code
       width: 2_048,
     });
   }, 60_000);
+});
+
+describe('processProfileImage (#141)', () => {
+  /** The colour of the stored image's pixel at (x, y), as [r, g, b]. */
+  async function pixel(body: Uint8Array, x: number, y: number): Promise<number[]> {
+    const { data, info } = await sharp(body)
+      .removeAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const at = (y * info.width + x) * info.channels;
+    return [data[at]!, data[at + 1]!, data[at + 2]!];
+  }
+
+  /**
+   * A PNG of three bands across its long side — red, blue, green — the middle band a square:
+   * cropping the middle leaves blue alone, squeezing the whole would leave red and green at the
+   * edges.
+   */
+  function bands(orientation: 'wide' | 'tall'): Promise<Buffer> {
+    const side = 100;
+    const [width, height] = orientation === 'wide' ? [side * 3, side] : [side, side * 3];
+    const colours = [
+      [255, 0, 0],
+      [0, 0, 255],
+      [0, 255, 0],
+    ] as const;
+    const raw = Buffer.alloc(width * height * 3);
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        raw.set(colours[Math.floor((orientation === 'wide' ? x : y) / side)]!, (y * width + x) * 3);
+      }
+    }
+    return sharp(raw, { raw: { width, height, channels: 3 } })
+      .png()
+      .toBuffer();
+  }
+
+  it('crops the middle of the upload to a 512px square, wide or tall', async () => {
+    expect(PROFILE_IMAGE_SIZE).toBe(512);
+    for (const orientation of ['wide', 'tall'] as const) {
+      const image = await processProfileImage(await bands(orientation));
+      expect(image, orientation).toMatchObject({
+        contentType: 'image/png',
+        width: PROFILE_IMAGE_SIZE,
+        height: PROFILE_IMAGE_SIZE,
+      });
+      const metadata = await sharp(image.body).metadata();
+      expect({ width: metadata.width, height: metadata.height }).toEqual({
+        width: 512,
+        height: 512,
+      });
+      // Blue from edge to edge: the middle band, never the red or green ones beside it. A few
+      // pixels in from each edge, past the resampling's blend at the cut.
+      for (const [x, y] of [
+        [40, 40],
+        [256, 256],
+        [471, 471],
+        [40, 471],
+        [471, 40],
+      ] as const) {
+        const [r, g, b] = await pixel(image.body, x, y);
+        expect({ orientation, x, y, blue: b! > 200 && r! < 60 && g! < 60 }).toEqual({
+          orientation,
+          x,
+          y,
+          blue: true,
+        });
+      }
+    }
+  });
+
+  it('enlarges a small upload to the square, so every profile image is the same size', async () => {
+    const image = await processProfileImage(await solid(10, 6).jpeg().toBuffer());
+    expect(image).toMatchObject({ contentType: 'image/jpeg', width: 512, height: 512 });
+    const photo = await processProfileImage(await solid(4_000, 3_000).jpeg().toBuffer());
+    expect(photo).toMatchObject({ contentType: 'image/jpeg', width: 512, height: 512 });
+    const webp = await processProfileImage(await solid(2_000, 1_500).webp().toBuffer());
+    expect(webp).toMatchObject({ contentType: 'image/webp', width: 512, height: 512 });
+  });
+
+  /**
+   * 300×100 as stored, tagged with a quarter turn (EXIF orientation 6: shown turned 90° clockwise,
+   * 100×300): red on the left, green on the right, and between them a square whose top half is
+   * blue and bottom half white. Turned upright, red is on top and green at the bottom, and the
+   * middle square has white on its left and blue on its right; not turned, the square's blue is on
+   * top. A square of one colour would come out the same either way.
+   */
+  function turnedPhoto(format: 'jpeg' | 'png' | 'webp'): Promise<Buffer> {
+    const [width, height] = [300, 100];
+    const raw = Buffer.alloc(width * height * 3);
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const colour =
+          x < 100 ? [255, 0, 0] : x >= 200 ? [0, 255, 0] : y < 50 ? [0, 0, 255] : [255, 255, 255];
+        raw.set(colour, (y * width + x) * 3);
+      }
+    }
+    return sharp(raw, { raw: { width, height, channels: 3 } })
+      .toFormat(format)
+      .withMetadata({ orientation: 6 })
+      .withExif({ IFD0: { Copyright: 'GPS 37.5665 126.9780', Make: 'PhoneMaker' } })
+      .toBuffer();
+  }
+
+  /** The stored image's pixel at (x, y), named. */
+  async function colourAt(body: Uint8Array, x: number, y: number): Promise<string> {
+    const [r = 0, g = 0, b = 0] = await pixel(body, x, y);
+    if (r > 200 && g > 200 && b > 200) return 'white';
+    if (b > 200 && r < 60 && g < 60) return 'blue';
+    if (r > 200 && g < 60 && b < 60) return 'red';
+    if (g > 200 && r < 60 && b < 60) return 'green';
+    return `rgb(${String(r)}, ${String(g)}, ${String(b)})`;
+  }
+
+  it('turns a photo upright by its EXIF before the crop, then removes every piece of metadata', async () => {
+    // Each of the three types, so each way to the square (`profileSquare`) is seen turning it.
+    for (const format of ['jpeg', 'png', 'webp'] as const) {
+      const photo = await turnedPhoto(format);
+      const before = await sharp(photo).metadata();
+      expect({ format, orientation: before.orientation }).toEqual({ format, orientation: 6 });
+      expect(before.exif).toBeDefined();
+
+      const image = await processProfileImage(photo);
+      expect(image).toMatchObject({ contentType: `image/${format}`, width: 512, height: 512 });
+      // The middle square turned upright: white on the left, blue on the right, top and bottom
+      // alike — never the red or green beside it.
+      const seen = {
+        format,
+        left: [await colourAt(image.body, 64, 128), await colourAt(image.body, 64, 384)],
+        right: [await colourAt(image.body, 448, 128), await colourAt(image.body, 448, 384)],
+      };
+      expect(seen).toEqual({ format, left: ['white', 'white'], right: ['blue', 'blue'] });
+
+      const after = await sharp(image.body).metadata();
+      expect(after.exif).toBeUndefined();
+      expect(after.xmp).toBeUndefined();
+      expect(after.iptc).toBeUndefined();
+      expect(after.icc).toBeUndefined();
+      expect(after.orientation).toBeUndefined();
+      expect(Buffer.from(image.body).includes('PhoneMaker')).toBe(false);
+    }
+  });
+
+  it('keeps an animated WebP as its first frame', async () => {
+    const image = await processProfileImage(await animation('webp', 40, 30, 3));
+    expect(image).toMatchObject({ contentType: 'image/webp', width: 512, height: 512 });
+    const after = await sharp(image.body, { animated: true }).metadata();
+    expect(after.pages ?? 1).toBe(1);
+    // The first frame's colour (black — frame n is 80n red), not a later one's.
+    const [r] = await pixel(image.body, 256, 256);
+    expect(r).toBeLessThan(40);
+  });
+
+  it('takes JPEG, PNG and WebP only: a GIF is refused as any other type is', async () => {
+    const profile = (bytes: Uint8Array) => refusal(bytes, processProfileImage);
+    expect(await profile(await solid(8, 8).gif().toBuffer())).toBe('type');
+    expect(await profile(await animation('gif', 8, 8, 2))).toBe('type');
+    expect(await profile(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'))).toBe('type');
+    expect(await profile(await solid(4, 4).tiff().toBuffer())).toBe('type');
+    for (const format of ['jpeg', 'png', 'webp'] as const) {
+      const image = await processProfileImage(await solid(8, 8).toFormat(format).toBuffer());
+      expect((await sharp(image.body).metadata()).format).toBe(format);
+    }
+  });
+
+  it('refuses as a post’s image does: empty, over 5MB, unreadable, a bomb — and takes exactly 5MB', async () => {
+    const profile = (bytes: Uint8Array) => refusal(bytes, processProfileImage);
+    expect(await profile(new Uint8Array(0))).toBe('empty');
+    const big = Buffer.alloc(IMAGE_MAX_BYTES + 1);
+    big.set([0xff, 0xd8, 0xff]);
+    expect(await profile(big)).toBe('size');
+    const bound = await processProfileImage(await pngOfExactly(IMAGE_MAX_BYTES));
+    expect(bound).toMatchObject({ contentType: 'image/png', width: 512, height: 512 });
+    expect(await profile((await solid(200, 200).jpeg().toBuffer()).subarray(0, 40))).toBe(
+      'unreadable',
+    );
+    expect(await profile(pngHeaderOnly(100_000, 100_000))).toBe('pixels');
+  });
+
+  it('converts through the same one-at-a-time queue', async () => {
+    const run = vi.spyOn(imageConversions, 'run');
+    try {
+      await processProfileImage(await solid(4, 4).png().toBuffer());
+      expect(run).toHaveBeenCalledTimes(1);
+    } finally {
+      run.mockRestore();
+    }
+  });
 });
 
 describe('one conversion at a time', () => {

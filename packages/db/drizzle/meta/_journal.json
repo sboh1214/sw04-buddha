@@ -267,6 +267,13 @@
       "when": 1792589015818,
       "tag": "0037_profile_bio",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1792604441269,
+      "tag": "0038_profile_image",
+      "breakpoints": true
     }
   ]
 }

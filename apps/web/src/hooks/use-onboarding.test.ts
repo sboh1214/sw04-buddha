@@ -50,6 +50,7 @@ const fresh: Me = {
     nicknameChangeAvailableAt: null,
     interestCategoryIds: [],
     bio: null,
+    imageUrl: null,
   },
   balance: { availableCoin: '0', lockedCoin: '0' },
   linkedAccounts: [],

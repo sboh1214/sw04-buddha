@@ -42,6 +42,8 @@ export const profilesRelations = relations(profiles, ({ one, many }) => ({
   user: one(user, { fields: [profiles.userId], references: [user.id] }),
   balance: one(balances, { fields: [profiles.userId], references: [balances.userId] }),
   interestCategories: many(profileInterestCategories),
+  // The profile image (#141): one end of `profiles_image_fk`.
+  image: one(mediaObjects, { fields: [profiles.imageId], references: [mediaObjects.id] }),
 }));
 
 export const profileInterestCategoriesRelations = relations(
@@ -210,6 +212,8 @@ export const mediaObjectsRelations = relations(mediaObjects, ({ one }) => ({
   post: one(postImages, { fields: [mediaObjects.id], references: [postImages.mediaId] }),
   // 운영 공지 (#138): an upload a notice took instead (never both, the API's rule).
   notice: one(noticeImages, { fields: [mediaObjects.id], references: [noticeImages.mediaId] }),
+  // The profile whose image it is (#141), while one is.
+  profile: one(profiles, { fields: [mediaObjects.id], references: [profiles.imageId] }),
 }));
 
 export const noticesRelations = relations(notices, ({ many }) => ({

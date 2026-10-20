@@ -8,6 +8,7 @@ import {
   isApiError,
   isForAnotherAccount,
   unwrap,
+  type DeleteProfileImageBody,
   type Me,
   type UpdateBioBody,
   type UpdateMeBody,
@@ -16,6 +17,7 @@ import {
 import { authClient, authErrorMessage } from '@/lib/auth-client';
 import { applyBalanceEvent } from '@/lib/market-live';
 import { nicknameRefusalNeedsRefresh } from '@/lib/nickname';
+import { profileImageContentType } from '@/lib/profile';
 import { useSession } from '@/lib/use-session';
 
 /** Query key rule from PLAN 11.5. */
@@ -106,9 +108,10 @@ export function meBelongsTo(queryClient: QueryClient, account: string): boolean 
 /**
  * The profile field a profile write owns: the one `storeMe` takes from its answer. A nickname
  * change brings when the nickname may change next with it (#58: once in 30 days); the 소개 is the
- * public profile's (#41, `PUT /me/bio`).
+ * public profile's (#41, `PUT /me/bio`), and so is the image's address (#141, `PUT /me/profile-image`
+ * and its deletion).
  */
-export type ProfileField = 'nickname' | 'timeZone' | 'bio';
+export type ProfileField = 'nickname' | 'timeZone' | 'bio' | 'image';
 
 /** `held`'s profile with what the `field` write changed taken from `answer`. */
 function withProfileField(held: Me, answer: Me, field: ProfileField): Me['profile'] {
@@ -123,6 +126,8 @@ function withProfileField(held: Me, answer: Me, field: ProfileField): Me['profil
       return { ...held.profile, timeZone: answer.profile.timeZone };
     case 'bio':
       return { ...held.profile, bio: answer.profile.bio };
+    case 'image':
+      return { ...held.profile, imageUrl: answer.profile.imageUrl };
   }
 }
 
@@ -140,8 +145,8 @@ export async function refreshOwnMe(queryClient: QueryClient, account: string): P
 
 /**
  * Writes the profile a profile write answered with (`PATCH /me`, `PUT /me/time-zone`,
- * `PUT /me/bio`) into `['me']`, so every observer — TimeZoneProvider, the header — takes it
- * without a refetch.
+ * `PUT /me/bio`, `PUT /me/profile-image` and its deletion) into `['me']`, so every observer —
+ * TimeZoneProvider, the header — takes it without a refetch.
  *
  * Only the field the write changed (`field`): the answer is a whole `Me`, but the write changed
  * nothing else. Two profile writes can overlap — a nickname save and a time-zone save from the
@@ -334,6 +339,102 @@ export function useUpdateBio() {
   const queryClient = useQueryClient();
   const { refetch: refetchSession } = useSession();
   return useMutation(updateBioOptions(queryClient, () => void refetchSession()));
+}
+
+/** A profile image to upload: the picked file, and the account the card shows. */
+export interface ProfileImageUpload {
+  file: Blob & { type: string };
+  expectedAccountId: string;
+}
+
+/**
+ * `PUT /api/v1/me/profile-image` (#141, ADR-0079): the file itself as the body (no multipart), under
+ * its own type or `application/octet-stream` (`profileImageContentType`), with the account the card
+ * shows in the query — the body is the file, so it cannot ride there — as a post's image goes
+ * (`uploadPostImage`). The answer is the whole profile, its new image's address in it.
+ */
+export async function putProfileImage({
+  file,
+  expectedAccountId,
+}: ProfileImageUpload): Promise<Me> {
+  return unwrap(
+    await api.PUT('/api/v1/me/profile-image', {
+      params: { query: { expectedAccountId } },
+      // openapi-fetch would JSON-encode the body: the file goes as it is.
+      body: file as unknown as string,
+      bodySerializer: (body: unknown) => body as BodyInit,
+      headers: { 'Content-Type': profileImageContentType(file) },
+    }),
+  ).data;
+}
+
+/**
+ * `PUT /me/profile-image` as mutation options: the answer's image address goes into `['me']`
+ * through `storeMe`, as the 소개's does, so the card and every observer show the new image at once
+ * — a new upload is a new address, so no cache shows the old image under it. The 403 for another
+ * account asks for the session again; an ONBOARDING_REQUIRED — a revision asked for the consent
+ * again while the screen was open — asks `['me']` again, and the gate takes the member on. A refused
+ * file (IMAGE_NOT_ALLOWED) is neither: the card says why.
+ */
+export function uploadProfileImageOptions(
+  queryClient: QueryClient,
+  onSessionChanged: () => void,
+  put: (upload: ProfileImageUpload) => Promise<Me> = putProfileImage,
+) {
+  return {
+    mutationFn: put,
+    // Returned, so `mutateAsync` settles only once `['me']` holds the answer.
+    onSuccess: (me: Me) => storeMe(queryClient, me, 'image', onSessionChanged),
+    onError: async (error: Error, upload: ProfileImageUpload) => {
+      if (isForAnotherAccount(error)) {
+        onSessionChanged();
+        return;
+      }
+      if (isApiError(error, 'ONBOARDING_REQUIRED')) {
+        await refreshOwnMe(queryClient, upload.expectedAccountId);
+      }
+    },
+  };
+}
+
+/** `uploadProfileImageOptions` as MY 설정's 프로필 이미지 card's upload. */
+export function useUploadProfileImage() {
+  const queryClient = useQueryClient();
+  const { refetch: refetchSession } = useSession();
+  return useMutation(uploadProfileImageOptions(queryClient, () => void refetchSession()));
+}
+
+async function postDeleteProfileImage(body: DeleteProfileImageBody): Promise<Me> {
+  return unwrap(await api.POST('/api/v1/me/profile-image/delete', { body })).data;
+}
+
+/**
+ * `POST /me/profile-image/delete` (#141) as mutation options: the image goes at once, and the
+ * answer's `imageUrl: null` goes into `['me']` through `storeMe`, so the card and every observer draw
+ * the nickname's first letter again. Sign-in is all it needs (a deletion — the brief widened the
+ * owner's 2026-10-21 answer 2 on #41, for the 소개 and the categories, to the image; ADR-0079 결과 4
+ * asks the owner to confirm), so the only refusal it acts on is the 403 for another account: the
+ * session is asked again.
+ */
+export function deleteProfileImageOptions(
+  queryClient: QueryClient,
+  onSessionChanged: () => void,
+  post: (body: DeleteProfileImageBody) => Promise<Me> = postDeleteProfileImage,
+) {
+  return {
+    mutationFn: post,
+    onSuccess: (me: Me) => storeMe(queryClient, me, 'image', onSessionChanged),
+    onError: (error: Error) => {
+      if (isForAnotherAccount(error)) onSessionChanged();
+    },
+  };
+}
+
+/** `deleteProfileImageOptions` as MY 설정's 프로필 이미지 card's deletion. */
+export function useDeleteProfileImage() {
+  const queryClient = useQueryClient();
+  const { refetch: refetchSession } = useSession();
+  return useMutation(deleteProfileImageOptions(queryClient, () => void refetchSession()));
 }
 
 /**

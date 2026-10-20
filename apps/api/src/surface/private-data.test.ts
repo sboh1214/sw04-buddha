@@ -50,6 +50,7 @@ import {
   createPhoneVerification,
   createPost,
   createPostLike,
+  createProfileImage,
   createSearch,
   createStartGrant,
   createUser,
@@ -141,6 +142,11 @@ interface Fixture {
   publicId: string;
   /** A's 소개 (#41): public, shown on A's profile — not a sentinel. */
   bio: string;
+  /**
+   * A's profile image (#141): its id is in every public face of A (`imageUrl`), so the person
+   * routes may show it and no other may — a sentinel like A's nickname and public id.
+   */
+  profileImageId: string;
   /**
    * Closed, and on A's watchlist alone (#89). Closed so no public call here lists it — `GET
    * /markets` is called without a query and lists open markets, and the detail routes are called
@@ -299,11 +305,11 @@ const PUBLIC_PARAMS: Readonly<Record<string, (fixture: Fixture) => string>> = {
 
 /**
  * What a route that shows a person (`showsPerson`, ADR-0069 decision 5) may hold of A, the author
- * of the post it shows or the member of the profile: A's nickname — the current one (#37-3) — and
- * A's public id. Nothing else of A: the account id, the email and every other value stay sentinels
- * there as everywhere. #141 adds the image when A has one.
+ * of the post it shows or the member of the profile: A's nickname — the current one (#37-3) —, A's
+ * public id and A's profile image (#141, #37-6: its address). Nothing else of A: the account id,
+ * the email and every other value stay sentinels there as everywhere.
  */
-const PERSON_LABELS: readonly string[] = ['nickname', 'public id'];
+const PERSON_LABELS: readonly string[] = ['nickname', 'public id', 'profile image'];
 
 /** A post body B sends in its refused writes: one paragraph, nothing of A's. */
 const B_POST_BODY = {
@@ -376,6 +382,7 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
     own: [
       'email',
       'nickname',
+      'profile image',
       'time zone',
       'real name',
       'phone',
@@ -442,6 +449,19 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
   // written — A's 소개 stays (below).
   'PUT /me/bio': {
     body: (fixture) => ({ bio: 'B가 쓴 소개', expectedAccountId: fixture.a.id }),
+    status: 403,
+  },
+  // B's cookie naming A's account (#141): the file is the body, so the account rides in the query —
+  // refused before the body is looked at; nothing is stored and A's image stays A's (below).
+  'PUT /me/profile-image': {
+    query: { expectedAccountId: (fixture) => fixture.a.id },
+    body: () => ({}),
+    status: 403,
+  },
+  // B's cookie naming A's account (#141): refused before anything is read — A's image stays, row
+  // and object (below).
+  'POST /me/profile-image/delete': {
+    body: (fixture) => ({ expectedAccountId: fixture.a.id }),
     status: 403,
   },
   // B's cookie naming A's account: refused before anything is written, and A's zone stays (below).
@@ -893,6 +913,15 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     const bio = `A의 소개 ${tag}\n둘째 줄`;
     await t.db.update(schema.profiles).set({ bio }).where(eq(schema.profiles.userId, a.id));
     await t.db.insert(schema.profileInterestCategories).values({ userId: a.id, categoryId });
+    // A's profile image (#141), its object in the test's store: every public face of A carries its
+    // address, so its id is A's to show on the `showsPerson` routes only (its label joins
+    // PERSON_LABELS).
+    const profileImage = await createProfileImage(t.db, { userId: a.id, contentType: 'image/png' });
+    await t.storage.put(
+      profileImage.storageKey,
+      new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+      'image/png',
+    );
 
     // The balance as the books would have it: the change is an ADMIN_ADJUST entry.
     const [before] = await t.db
@@ -1182,6 +1211,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       notice: { id: notice.id },
       publicId,
       bio,
+      profileImageId: profileImage.id,
       watchedCategory: watchedCategory!.slug,
       searchId: search.id,
       phone,
@@ -1199,6 +1229,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         text('email', a.email),
         text('nickname', nickname),
         text('public id', publicId),
+        text('profile image', profileImage.id),
         text('post revision', revisionText),
         text('deleted post', deletedText),
         text('comment revision', commentRevisionText),
@@ -1341,7 +1372,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     // The allowance is not vacuous: every route that may show a person showed A, the author of
     // the post it was called with, to everyone — the list and the post page (#46), the post's
     // comments and a comment's reply page (#48) and the 토론 of the market the post is on (#47) —
-    // and A's profile showed A (#41).
+    // and A's profile showed A (#41), each with A's profile image (#141).
     expect(persons.map(({ route }) => route)).toEqual(
       expect.arrayContaining([
         'GET /posts',
@@ -1377,6 +1408,13 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     expect(parse(bodies.get('GET /notices/:noticeId')!)).toMatchObject({
       data: { id: f.notice.id },
     });
+    // A's profile image is served the same way, to anyone (#141).
+    const profileImage = await t.app.inject({
+      method: 'GET',
+      url: `/api/v1/media/${f.profileImageId}`,
+    });
+    expect(profileImage.statusCode).toBe(200);
+    expect(profileImage.body).toContain('PNG');
     // The comment route answered A's 댓글 with its 대댓글 and the placeholder of the deleted one.
     const threads = parse(bodies.get('GET /posts/:postId/comments')!) as {
       data: {
@@ -1422,7 +1460,12 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     // decision 2026-10-21 answer 3).
     expect(parse(bodies.get('GET /profiles/:publicId')!)).toMatchObject({
       data: {
-        member: { kind: 'member', publicId: f.publicId, isAdmin: false },
+        member: {
+          kind: 'member',
+          publicId: f.publicId,
+          imageUrl: `/api/v1/media/${f.profileImageId}`,
+          isAdmin: false,
+        },
         bio: f.bio,
         interestCategories: [expect.objectContaining({ slug: expect.any(String) as unknown })],
         postCount: 1,
@@ -1535,6 +1578,8 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
             changed: schema.profiles.nicknameChangedAt,
             interests: schema.profiles.interestsAnsweredAt,
             bio: schema.profiles.bio,
+            // #141: the image B's refused upload and deletion would have changed.
+            image: schema.profiles.imageId,
           })
           .from(schema.profiles)
           .orderBy(schema.profiles.userId),

@@ -1,17 +1,33 @@
 import { MutationObserver, QueryObserver, type QueryClient } from '@tanstack/react-query';
-import { describe, expect, it } from 'vitest';
-import { ApiError, type Me, type UpdateBioBody, type UpdateTimeZoneBody } from '@/lib/api';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  ApiError,
+  api,
+  type DeleteProfileImageBody,
+  type Me,
+  type UpdateBioBody,
+  type UpdateTimeZoneBody,
+} from '@/lib/api';
 import { getQueryClient } from '@/lib/query-client';
 import {
   ME_QUERY_KEY,
+  type ProfileImageUpload,
+  deleteProfileImageOptions,
+  putProfileImage,
   storeMe,
   updateBioOptions,
   updateNicknameOptions,
   updateTimeZoneOptions,
+  uploadProfileImageOptions,
 } from './use-me';
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 /**
- * The profile writes' cache writes (`PATCH /me`, `PUT /me/time-zone`, `PUT /me/bio`), driven through the REAL
+ * The profile writes' cache writes (`PATCH /me`, `PUT /me/time-zone`, `PUT /me/bio`, the profile
+ * image's upload and deletion), driven through the REAL
  * QueryClient (`getQueryClient()` answers a fresh one per call under node). Nothing renders:
  * apps/web runs vitest under `environment: 'node'`, which is why `storeMe` and the two mutations'
  * options are exported apart from their hooks. The `['me']` observer stands in for
@@ -32,6 +48,7 @@ const following: Me = {
     nicknameChangeAvailableAt: null,
     interestCategoryIds: [],
     bio: null,
+    imageUrl: null,
   },
   balance: { availableCoin: '0', lockedCoin: '0' },
   linkedAccounts: [],
@@ -76,6 +93,10 @@ function deferred<T>() {
   });
   return { promise, resolve };
 }
+
+/** A stored profile image's id, as `GET /media/:mediaId` serves it. */
+const IMAGE = '3f2504e0-4f89-11d3-9a0c-0305e82c3301';
+const NEXT_IMAGE = '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d';
 
 /** Lets a late answer run every callback it has queued before the test looks. */
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -315,6 +336,28 @@ describe('storeMe', () => {
       expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)?.profile).toEqual({
         ...inNewYork.profile,
         bio: '첫 줄\n둘째 줄',
+      });
+    } finally {
+      me.unsubscribe();
+      queryClient.clear();
+    }
+  });
+
+  it('takes the image’s address alone from a profile image answer (#141)', async () => {
+    const queryClient = getQueryClient();
+    const me = meObserver(queryClient, () => Promise.resolve(inNewYork));
+    try {
+      await me.observer.refetch();
+      const withImage: Me = {
+        ...following,
+        profile: { ...following.profile, nickname: '옛이름', imageUrl: `/api/v1/media/${IMAGE}` },
+      };
+
+      await storeMe(queryClient, withImage, 'image', () => undefined);
+
+      expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)?.profile).toEqual({
+        ...inNewYork.profile,
+        imageUrl: `/api/v1/media/${IMAGE}`,
       });
     } finally {
       me.unsubscribe();
@@ -645,6 +688,179 @@ describe('the profile mutations', () => {
       await settle();
       expect(session.count()).toBe(1);
       expect(me.requests()).toBe(2);
+      expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)).toEqual(following);
+    } finally {
+      me.unsubscribe();
+      queryClient.clear();
+    }
+  });
+});
+
+describe('the profile image (#141)', () => {
+  it('sends the file itself, under its type, with the account in the query', async () => {
+    const answered: Me = {
+      ...following,
+      profile: { ...following.profile, imageUrl: `/api/v1/media/${IMAGE}` },
+    };
+    // openapi-fetch's `{ data, response }`, the shape `unwrap` reads.
+    const reply: never = {
+      data: { data: answered },
+      response: new Response(null, { status: 200 }),
+    } as never;
+    const put = vi.spyOn(api, 'PUT').mockResolvedValue(reply);
+    const file = new Blob([new Uint8Array([1, 2, 3])], { type: 'image/webp' });
+
+    await expect(putProfileImage({ file, expectedAccountId: following.id })).resolves.toEqual(
+      answered,
+    );
+
+    const [path, init] = put.mock.calls[0] as unknown as [
+      string,
+      {
+        params: unknown;
+        body: unknown;
+        headers: Record<string, string>;
+        bodySerializer: (body: unknown) => unknown;
+      },
+    ];
+    expect(path).toBe('/api/v1/me/profile-image');
+    expect(init.params).toEqual({ query: { expectedAccountId: following.id } });
+    expect(init.headers).toEqual({ 'Content-Type': 'image/webp' });
+    // The file as it is: neither JSON nor a form.
+    expect(init.bodySerializer(init.body)).toBe(file);
+  });
+
+  it('writes the address each upload answers into every observer, and null once deleted', async () => {
+    const queryClient = getQueryClient();
+    const me = meObserver(queryClient, () => Promise.resolve(following));
+    const sent: ProfileImageUpload[] = [];
+    const answers = [IMAGE, NEXT_IMAGE];
+    const upload = new MutationObserver(
+      queryClient,
+      uploadProfileImageOptions(
+        queryClient,
+        () => undefined,
+        (body) => {
+          sent.push(body);
+          const id = answers.shift() ?? IMAGE;
+          return Promise.resolve({
+            ...following,
+            profile: { ...following.profile, imageUrl: `/api/v1/media/${id}` },
+          });
+        },
+      ),
+    );
+    const deletions: DeleteProfileImageBody[] = [];
+    const remove = new MutationObserver(
+      queryClient,
+      deleteProfileImageOptions(
+        queryClient,
+        () => undefined,
+        (body) => {
+          deletions.push(body);
+          return Promise.resolve(following);
+        },
+      ),
+    );
+    const image = () => me.observer.getCurrentResult().data?.profile.imageUrl;
+    try {
+      await me.observer.refetch();
+      const file = new Blob([new Uint8Array([1])], { type: 'image/png' });
+
+      await upload.mutate({ file, expectedAccountId: following.id });
+      expect(image()).toBe(`/api/v1/media/${IMAGE}`);
+      // A replacement is a new address (a new id per upload), so no cache shows the old image.
+      await upload.mutate({ file, expectedAccountId: following.id });
+      expect(image()).toBe(`/api/v1/media/${NEXT_IMAGE}`);
+      await remove.mutate({ expectedAccountId: following.id });
+      expect(image()).toBeNull();
+
+      expect(sent.map((body) => body.expectedAccountId)).toEqual([following.id, following.id]);
+      expect(deletions).toEqual([{ expectedAccountId: following.id }]);
+      expect(me.requests()).toBe(1);
+    } finally {
+      me.unsubscribe();
+      queryClient.clear();
+    }
+  });
+
+  it('asks for the session on another account, GET /me again on ONBOARDING_REQUIRED, and neither for a refused file', async () => {
+    const queryClient = getQueryClient();
+    const session = sessionRefetches();
+    const me = meObserver(queryClient, () => Promise.resolve(following));
+    const failures = [
+      new ApiError(403, {
+        code: 'FORBIDDEN',
+        message: 'other account',
+        details: [{ path: ['expectedAccountId'], message: 'session belongs to another account' }],
+      }),
+      new ApiError(409, {
+        code: 'ONBOARDING_REQUIRED',
+        message: 'onboarding',
+        details: { steps: ['consent'] },
+      }),
+      new ApiError(422, {
+        code: 'IMAGE_NOT_ALLOWED',
+        message: 'refused',
+        details: { reason: 'type' },
+      }),
+    ];
+    const upload = new MutationObserver(
+      queryClient,
+      uploadProfileImageOptions(queryClient, session.refetch, () =>
+        Promise.reject(failures.shift() ?? new Error('no failure left')),
+      ),
+    );
+    try {
+      await me.observer.refetch();
+      const body = {
+        file: new Blob([new Uint8Array([1])], { type: 'image/png' }),
+        expectedAccountId: following.id,
+      };
+
+      await expect(upload.mutate(body)).rejects.toThrow('other account');
+      expect(session.count()).toBe(1);
+      expect(me.requests()).toBe(1);
+      await expect(upload.mutate(body)).rejects.toThrow('onboarding');
+      await settle();
+      expect(session.count()).toBe(1);
+      expect(me.requests()).toBe(2);
+      await expect(upload.mutate(body)).rejects.toThrow('refused');
+      await settle();
+      expect(session.count()).toBe(1);
+      expect(me.requests()).toBe(2);
+      expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)).toEqual(following);
+    } finally {
+      me.unsubscribe();
+      queryClient.clear();
+    }
+  });
+
+  it('asks for the session again when a deletion is refused for another account', async () => {
+    const queryClient = getQueryClient();
+    const session = sessionRefetches();
+    const me = meObserver(queryClient, () => Promise.resolve(following));
+    const remove = new MutationObserver(
+      queryClient,
+      deleteProfileImageOptions(queryClient, session.refetch, () =>
+        Promise.reject(
+          new ApiError(403, {
+            code: 'FORBIDDEN',
+            message: 'other account',
+            details: [
+              { path: ['expectedAccountId'], message: 'session belongs to another account' },
+            ],
+          }),
+        ),
+      ),
+    );
+    try {
+      await me.observer.refetch();
+      await expect(remove.mutate({ expectedAccountId: following.id })).rejects.toThrow(
+        'other account',
+      );
+      expect(session.count()).toBe(1);
+      expect(me.requests()).toBe(1);
       expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)).toEqual(following);
     } finally {
       me.unsubscribe();

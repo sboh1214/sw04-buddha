@@ -1,0 +1,134 @@
+import { Body, Controller, HttpCode, Post, Put, Query, Res, UseGuards } from '@nestjs/common';
+import { ApiBody, ApiConsumes, ApiCookieAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  IMAGE_MAX_BYTES,
+  PROFILE_IMAGE_SIZE,
+  deleteProfileImageBodySchema,
+  meSchema,
+  uploadImageQuerySchema,
+  type DeleteProfileImageBody,
+  type Me,
+  type UploadImageQuery,
+} from '@buddha/shared';
+import { type FastifyReply } from 'fastify';
+import { type SessionUser } from '../auth/auth.js';
+import { CurrentUser } from '../auth/current-user.decorator.js';
+import { assertExpectedAccount } from '../auth/expected-account.js';
+import { SessionGuard } from '../auth/session.guard.js';
+import { AppError } from '../common/errors/app-error.js';
+import { ApiData, ApiErrors } from '../common/openapi/api-response.decorators.js';
+import { MeService } from '../me/me.service.js';
+import { IMAGE_UPLOAD_CONTENT_TYPES } from '../media/image-body.js';
+import { IMAGE_BUSY_RETRY_SECONDS } from '../media/image.js';
+import { OnboardedGuard } from '../onboarding/onboarded.guard.js';
+import { SESSION_SECURITY_SCHEME } from '../openapi/document.js';
+import { ProfileImageService } from './profile-image.service.js';
+
+const BINARY = { schema: { type: 'string', format: 'binary' } } as const;
+
+/**
+ * `/api/v1/me/profile-image` (#141, ADR-0079): the member's profile image, uploaded and deleted in
+ * MY 설정 (ADR-0069 decision 3 #37-6). Both answer the whole profile (`Me`, whose `imageUrl` is the
+ * new address), as `PUT /me/bio` does. The image itself is read through `GET /media/:mediaId`, as a
+ * post's image is.
+ */
+@ApiTags('me')
+@ApiCookieAuth(SESSION_SECURITY_SCHEME)
+@Controller('me/profile-image')
+@UseGuards(SessionGuard)
+export class ProfileImageController {
+  constructor(
+    private readonly images: ProfileImageService,
+    private readonly me: MeService,
+  ) {}
+
+  /**
+   * The file itself as the body, as a post's image is uploaded (`POST /media/images`, the same
+   * body parser and gate — image-body.ts's IMAGE_UPLOAD_ROUTES), with the account the screen shows
+   * in the query (`expectedAccountId`): the body is the file, and the cookie alone would put the
+   * image on whichever account signed in last in another tab. A new public item: for accounts that
+   * finished the onboarding (OnboardedGuard), and refused during a writing or an account
+   * restriction (#37-9, decision 7 — the service asks).
+   */
+  @Put()
+  @UseGuards(OnboardedGuard)
+  @ApiOperation({
+    operationId: 'uploadMyProfileImage',
+    summary:
+      `Set the public profile’s image: JPEG, PNG or WebP by its content, at most ` +
+      `${String(IMAGE_MAX_BYTES)} bytes. Stored without its metadata as a ` +
+      `${String(PROFILE_IMAGE_SIZE)}px square cropped from its middle; the earlier image is removed`,
+  })
+  @ApiConsumes(...IMAGE_UPLOAD_CONTENT_TYPES)
+  @ApiBody(BINARY)
+  @ApiData(meSchema)
+  // FORBIDDEN: a mutation whose Origin is not ours (SessionGuard's CSRF check, or the body parser's
+  // hook before the body is read — image-body.ts), a query whose `expectedAccountId` is not the
+  // cookie's account (details name the field; nothing stored), or a new image under a writing or an
+  // account restriction (no field named). RATE_LIMITED (every route documents it) is also the
+  // answer when too many conversions are waiting (image.ts), as for a post's image.
+  @ApiErrors(
+    'UNAUTHENTICATED',
+    'FORBIDDEN',
+    'NOT_FOUND',
+    'VALIDATION_ERROR',
+    'ONBOARDING_REQUIRED',
+    'IMAGE_NOT_ALLOWED',
+  )
+  async upload(
+    @CurrentUser() user: SessionUser,
+    @Query({ schema: uploadImageQuerySchema }) query: UploadImageQuery,
+    @Body() body: unknown,
+    @Res({ passthrough: true }) reply: FastifyReply,
+  ): Promise<Me> {
+    assertExpectedAccount(user.id, query.expectedAccountId);
+    if (!(body instanceof Buffer)) {
+      throw new AppError('VALIDATION_ERROR', {
+        message: 'The body must be the image file itself',
+        details: [
+          { path: [], message: `send the file as ${IMAGE_UPLOAD_CONTENT_TYPES.join(', ')}` },
+        ],
+      });
+    }
+    try {
+      await this.images.replace(user.id, new Uint8Array(body));
+    } catch (error) {
+      // Too many conversions waiting (image.ts `imageConversions`): the header every other 429 of
+      // the API carries, with the same seconds as `details.retryAfterSeconds`.
+      if (error instanceof AppError && error.code === 'RATE_LIMITED') {
+        void reply.header('retry-after', String(IMAGE_BUSY_RETRY_SECONDS));
+      }
+      throw error;
+    }
+    return this.me.getMe(user.id);
+  }
+
+  /**
+   * Deletes the profile image: the profile and the bylines draw the nickname's first letter again.
+   * Clearing a public item needs sign-in only — no OnboardedGuard, so an account held back by a
+   * re-consent takes its image down too (the brief, widening the owner's 2026-10-21 answer on #41
+   * for the 소개 to the image; ADR-0079 asks the owner to confirm) — and is open during a
+   * restriction (#37-9, decision 7). With no image it changes nothing. A POST rather
+   * than a DELETE, as a post's deletion: the body names the account the screen shows, and OpenAPI
+   * 3.0 leaves a DELETE's body undefined.
+   */
+  @Post('delete')
+  @HttpCode(200)
+  @ApiOperation({
+    operationId: 'deleteMyProfileImage',
+    summary:
+      'Delete the public profile’s image (the nickname’s first letter is shown instead); removed at once',
+  })
+  @ApiData(meSchema)
+  // FORBIDDEN: a mutation whose Origin is not ours, or a body whose `expectedAccountId` is not the
+  // cookie's account (details name the field; nothing deleted).
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
+  async remove(
+    @CurrentUser() user: SessionUser,
+    @Body({ schema: deleteProfileImageBodySchema }) body: DeleteProfileImageBody,
+  ): Promise<Me> {
+    assertExpectedAccount(user.id, body.expectedAccountId);
+    await this.images.remove(user.id);
+    return this.me.getMe(user.id);
+  }
+}

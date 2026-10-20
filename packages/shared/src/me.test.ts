@@ -15,6 +15,7 @@ describe('meSchema', () => {
       nicknameChangeAvailableAt: null,
       interestCategoryIds: [],
       bio: null,
+      imageUrl: null,
     },
     balance: { availableCoin: '0', lockedCoin: '0' },
     linkedAccounts: [
@@ -154,6 +155,14 @@ describe('meSchema', () => {
     expect(meSchema.parse(withBio)).toEqual(withBio);
     const { bio: _dropped, ...profileWithoutBio } = sample.profile;
     expect(meSchema.safeParse({ ...sample, profile: profileWithoutBio }).success).toBe(false);
+  });
+
+  it('carries the profile image’s address, or null while there is none, and requires the key (#141)', () => {
+    const imageUrl = '/api/v1/media/0b6f6a3e-2c1d-4c8e-9f0a-1b2c3d4e5f60';
+    const withImage = { ...sample, profile: { ...sample.profile, imageUrl } };
+    expect(meSchema.parse(withImage)).toEqual(withImage);
+    const { imageUrl: _dropped, ...profileWithoutImage } = sample.profile;
+    expect(meSchema.safeParse({ ...sample, profile: profileWithoutImage }).success).toBe(false);
   });
 
   it('validates PATCH /me bodies: the nickname and the account the screen shows', () => {

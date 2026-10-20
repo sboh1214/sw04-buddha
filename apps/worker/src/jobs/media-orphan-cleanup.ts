@@ -99,7 +99,9 @@ export interface OrphanMediaOutcome {
  * An upload a post or a notice took (`attached_at`) is never this job's: a post's history keeps
  * its images, and their removal after the retention period is #184's; a notice's history keeps
  * its images as well, with no retention period (owner decision 2026-10-21, ADR-0077).
- * NoticesService locks the uploads it takes the same way.
+ * NoticesService locks the uploads it takes the same way. Nor is a profile image (#141): it is
+ * attached from the transaction that stores it (a CHECK of `media_objects`), and the member's
+ * replacement or deletion removes it at once (the API's ProfileImageService).
  */
 export async function removeOrphanMedia(
   db: Db,

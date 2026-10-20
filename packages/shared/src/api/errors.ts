@@ -87,9 +87,10 @@ export const ERROR_CODES = [
    */
   'POST_NOT_EDITABLE',
   /**
-   * An upload the image rules refuse: its content is not a JPEG, PNG, WebP or GIF, it is too large,
-   * a frame is too large to decode (or too thin: its long side over 32 times its short side) or an
-   * animation has too many frames, it does not decode, or it is empty. Details carry the reason,
+   * An upload the image rules refuse: its content is not a JPEG, PNG, WebP or GIF (a profile image:
+   * not a JPEG, PNG or WebP), it is too large, a frame is too large to decode (or too thin: its long
+   * side over 32 times its short side) or an animation has too many frames, it does not decode, or
+   * it is empty. Details carry the reason,
    * imageNotAllowedDetailsSchema.
    */
   'IMAGE_NOT_ALLOWED',

@@ -3,7 +3,8 @@
  * #37-9 and decision 7), proven against the docker `test` profile with the sanction lookup
  * stubbed — no writing restriction (#185) or account restriction (#139) exists yet, so a flag here
  * stands for "the account is under one". Under it: the 소개 can be emptied but not written, interest
- * categories dropped but not added, the nickname not changed; the time zone (a private setting)
+ * categories dropped but not added, the nickname not changed, the profile image (#141) deleted but
+ * not uploaded — refused before the file is converted; the time zone (a private setting)
  * still changes, and the profile still opens (#37-9: «그대로 열린다»). Nothing is written by a
  * refused request. The onboarding's first choices are not changes (owner decision 2026-10-21 answer
  * 4): the nickname step takes a nickname of the member's own, and the interests step's screen
@@ -26,7 +27,9 @@ import {
 } from '@buddha/db/test';
 import { meSchema, onboardingRequiredDetailsSchema } from '@buddha/shared';
 import { eq, sql } from 'drizzle-orm';
+import sharp from 'sharp';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { imageConversions } from '../media/image.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import type * as PublicItems from './public-items.js';
@@ -194,6 +197,57 @@ describe.skipIf(!hasTestInfra)('public profile items under a restriction (integr
     sanction.on = false;
     expect((await send('PUT', '/me/bio', { bio: '새 소개' })).statusCode).toBe(200);
     expect((await profileRow()).bio).toBe('새 소개');
+  });
+
+  it('keeps the profile image from a new one, before converting it, and lets it be deleted (#141)', async () => {
+    const image = () =>
+      sharp({ create: { width: 32, height: 32, channels: 3, background: '#3366cc' } })
+        .png()
+        .toBuffer();
+    const upload = async (who: TestUser = member) =>
+      t.app.inject({
+        method: 'PUT',
+        url: `/api/v1/me/profile-image?expectedAccountId=${who.id}`,
+        headers: { origin: TRUSTED_ORIGIN, 'content-type': 'image/png', cookie: who.cookie },
+        payload: await image(),
+      });
+    const imageIdOf = async () =>
+      (
+        await t.db
+          .select({ imageId: schema.profiles.imageId })
+          .from(schema.profiles)
+          .where(eq(schema.profiles.userId, member.id))
+      )[0]!.imageId;
+    const first = await upload();
+    expect(first.statusCode, first.body).toBe(200);
+    const kept = await imageIdOf();
+    expect(kept).not.toBeNull();
+    // The upload was a new value with no sanction: asked before the conversion and under the lock.
+    expect(sanction.asked).toEqual([member.id, member.id]);
+    sanction.asked = [];
+    sanction.on = true;
+
+    // A new image: refused before anything is converted or stored, and the image stays.
+    const run = vi.spyOn(imageConversions, 'run');
+    try {
+      const refused = await upload();
+      expect(codeOf(refused)).toEqual({ status: 403, code: 'FORBIDDEN' });
+      expect(run).not.toHaveBeenCalled();
+    } finally {
+      run.mockRestore();
+    }
+    expect(sanction.asked).toEqual([member.id]);
+    expect(await imageIdOf()).toBe(kept);
+    expect(t.storage.objects.size).toBe(1);
+
+    // Deleting it is clearing: open under the restriction, unasked.
+    sanction.asked = [];
+    const deleted = await send('POST', '/me/profile-image/delete', {});
+    expect(deleted.statusCode, deleted.body).toBe(200);
+    expect(meSchema.parse(deleted.json<{ data: unknown }>().data).profile.imageUrl).toBeNull();
+    expect(await imageIdOf()).toBeNull();
+    expect(t.storage.objects.size).toBe(0);
+    expect(sanction.asked).toEqual([]);
   });
 
   it('takes the onboarding’s first picks as a first choice, and refuses later additions (owner decision 2026-10-21 answer 4)', async () => {
