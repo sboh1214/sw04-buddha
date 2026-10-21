@@ -28,6 +28,7 @@ export * from './market-links.js';
 export * from './market-searches.js';
 export * from './market-settlement-steps.js';
 export * from './markets.js';
+export * from './media-deletions.js';
 export * from './media-objects.js';
 export * from './nickname-holds.js';
 export * from './orders.js';

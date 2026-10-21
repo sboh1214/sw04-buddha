@@ -9,15 +9,24 @@ import { IMAGE_MAX_BYTES, IMAGE_MAX_DIMENSION, IMAGE_MAX_INPUT_PIXELS } from '@b
 import sharp from 'sharp';
 import { describe, expect, it, vi } from 'vitest';
 import { AppError } from '../common/errors/app-error.js';
+import { jpegWithComponents, jpegWithFrame } from '../test/jpeg.js';
 import { type PngKind, pngHeaderOnly, pngOf } from '../test/png.js';
 import {
+  GIF_ANIMATION_LARGEST_FRAME_PIXELS,
+  IMAGE_CONVERSION_PEAK_BYTES,
   IMAGE_DECODE_BUDGET_BYTES,
   IMAGE_MAX_SIDE_RATIO,
+  JPEG_MAX_COMPONENTS,
   OneAtATime,
   PNG_LARGEST_FRAME_PIXELS,
+  WEBP_ALPHA_LARGEST_FRAME_PIXELS,
+  WEBP_ANIMATION_LARGEST_FRAME_PIXELS,
+  WEBP_ANIMATION_MAX_PIXELS,
   decodeBytesPerPixel,
+  encoderOptions,
   imageConversions,
   largestFramePixels,
+  largestImagePixels,
   processImage,
   sniffImageType,
 } from './image.js';
@@ -218,6 +227,49 @@ describe('processImage', () => {
     expect(await refusal(pngHeaderOnly(8_000, 6_000, { channels: 4 }))).toBe('pixels');
   });
 
+  it('bounds a progressive JPEG by its components from its header, and refuses more than four', async () => {
+    const red = () => solid(16, 16);
+    const rgb = await red().jpeg({ progressive: true, chromaSubsampling: '4:4:4' }).toBuffer();
+    const cmyk = await red().toColourspace('cmyk').jpeg({ progressive: true }).toBuffer();
+    const baselineCmyk = await red().toColourspace('cmyk').jpeg().toBuffer();
+    expect(await sharp(cmyk).metadata()).toMatchObject({
+      channels: 4,
+      space: 'cmyk',
+      isProgressive: true,
+    });
+    expect(await processImage(cmyk)).toMatchObject({ contentType: 'image/jpeg', width: 16 });
+
+    // Four components keep a third more coefficients than three (Codex review of #219, round 3):
+    // at its bound the header passes and the decoder gets the few bytes of pixels there are
+    // (`unreadable`); a column more is refused before anything is decoded.
+    const bound = largestFramePixels('image/jpeg', {
+      channels: 4,
+      depth: 'uchar',
+      isProgressive: true,
+      hasAlpha: false,
+    });
+    const [width, height] = frameOf(bound);
+    expect(await refusal(jpegWithFrame(cmyk, width, height))).toBe('unreadable');
+    expect(await refusal(jpegWithFrame(cmyk, width + 1, height))).toBe('pixels');
+    // At the three-component bound (3,663², ~158MiB for CMYK) only three components pass.
+    expect(await refusal(jpegWithFrame(rgb, 3_663, 3_663))).toBe('unreadable');
+    expect(await refusal(jpegWithFrame(cmyk, 3_663, 3_663))).toBe('pixels');
+    // A baseline CMYK JPEG is shrunk while it is decoded, as a baseline RGB one is.
+    expect(await refusal(jpegWithFrame(baselineCmyk, 7_071, 7_071))).toBe('unreadable');
+
+    // A fifth component: sharp reads it and would convert it (five bands, the first three taken
+    // for the JPEG it writes) — a small file here, 187MiB at the three-component bound — so the
+    // header refuses it, small or not. Six and up sharp's own header read refuses.
+    const five = jpegWithComponents(cmyk, 1);
+    expect((await sharp(five).metadata()).channels).toBe(JPEG_MAX_COMPONENTS + 1);
+    expect((await sharp(five).jpeg().toBuffer({ resolveWithObject: true })).info).toMatchObject({
+      width: 16,
+    });
+    expect(await refusal(five)).toBe('unreadable');
+    expect(await refusal(jpegWithComponents(rgb, 2))).toBe('unreadable');
+    expect(await refusal(jpegWithComponents(cmyk, 2))).toBe('unreadable');
+  });
+
   it('refuses a PNG past its kind’s largest frame from its header, and decodes one at it', async () => {
     for (const channels of [1, 2, 3, 4] as const) {
       for (const depth of [8, 16] as const) {
@@ -347,9 +399,12 @@ describe('processImage', () => {
   });
 
   it('bounds a frame by its format’s measured largest frame', () => {
-    const still = { channels: 3, depth: 'uchar', isProgressive: false } as const;
+    const still = { channels: 3, depth: 'uchar', isProgressive: false, hasAlpha: false } as const;
     expect(decodeBytesPerPixel('image/jpeg', still)).toBe(1);
-    expect(decodeBytesPerPixel('image/jpeg', { isProgressive: true })).toBe(10);
+    expect(decodeBytesPerPixel('image/jpeg', { ...still, channels: 4 })).toBe(1);
+    expect(decodeBytesPerPixel('image/jpeg', { isProgressive: true, channels: 1 })).toBe(10);
+    expect(decodeBytesPerPixel('image/jpeg', { isProgressive: true, channels: 3 })).toBe(10);
+    expect(decodeBytesPerPixel('image/jpeg', { isProgressive: true, channels: 4 })).toBe(14);
     expect(decodeBytesPerPixel('image/gif', still)).toBe(16);
     expect(decodeBytesPerPixel('image/webp', still)).toBe(15);
     // A JPEG, GIF or WebP frame: the budget over what one of its pixels holds — a 4K frame
@@ -357,10 +412,45 @@ describe('processImage', () => {
     // JPEG's (a byte a pixel) is past the 50 million every frame together may have.
     expect(largestFramePixels('image/jpeg', still)).toBe(134_217_728);
     expect(largestFramePixels('image/jpeg', { ...still, isProgressive: true })).toBe(13_421_772);
+    // A progressive CMYK JPEG: 3,096² — an A4 page at 300dpi (2,480×3,508) fits.
+    const cmyk = { ...still, channels: 4, isProgressive: true } as const;
+    expect(largestFramePixels('image/jpeg', cmyk)).toBe(9_586_980);
+    expect(2_480 * 3_508).toBeLessThan(largestFramePixels('image/jpeg', cmyk));
+    expect(JPEG_MAX_COMPONENTS).toBe(4);
     expect(largestFramePixels('image/gif', still)).toBe(8_388_608);
     expect(largestFramePixels('image/webp', still)).toBe(8_947_848);
     expect(3_840 * 2_160).toBeLessThan(largestFramePixels('image/gif', still));
     expect(IMAGE_DECODE_BUDGET_BYTES).toBe(128 * 1024 * 1024);
+    // What the encoders hold is not libvips' to count: a still WebP with alpha, a WebP animation
+    // and a GIF animation have bounds measured on the whole conversion, within
+    // IMAGE_CONVERSION_PEAK_BYTES (Codex review of #219, round 3; `image-memory.test.ts`). A WebP
+    // animation's frames together have a bound of their own too; a GIF's do not.
+    expect(IMAGE_CONVERSION_PEAK_BYTES).toBe(144 * 1024 * 1024);
+    expect([
+      WEBP_ALPHA_LARGEST_FRAME_PIXELS,
+      WEBP_ANIMATION_LARGEST_FRAME_PIXELS,
+      WEBP_ANIMATION_MAX_PIXELS,
+      GIF_ANIMATION_LARGEST_FRAME_PIXELS,
+    ]).toEqual([2_600_000, 1_050_000, 12_000_000, 5_000_000]);
+    const alpha = { ...still, channels: 4, hasAlpha: true } as const;
+    expect(largestFramePixels('image/webp', alpha)).toBe(WEBP_ALPHA_LARGEST_FRAME_PIXELS);
+    expect(largestFramePixels('image/webp', { ...still, pages: 1 })).toBe(8_947_848);
+    for (const animation of [
+      { ...still, pages: 2 },
+      { ...alpha, pages: 12 },
+    ]) {
+      expect(largestFramePixels('image/webp', animation)).toBe(WEBP_ANIMATION_LARGEST_FRAME_PIXELS);
+      expect(largestImagePixels('image/webp', animation)).toBe(WEBP_ANIMATION_MAX_PIXELS);
+      expect(largestFramePixels('image/gif', animation)).toBe(GIF_ANIMATION_LARGEST_FRAME_PIXELS);
+      expect(largestImagePixels('image/gif', animation)).toBe(IMAGE_MAX_INPUT_PIXELS);
+    }
+    expect(largestFramePixels('image/gif', { ...alpha, pages: 1 })).toBe(8_388_608);
+    expect(largestImagePixels('image/webp', { ...alpha, pages: 1 })).toBe(IMAGE_MAX_INPUT_PIXELS);
+    // A 1280×720 WebP animation and a 1600×1600 sticker fit; so does a 2560×1440 (QHD) frame of
+    // a GIF animation (a 4K one does not: 8.3 megapixels).
+    expect(1_280 * 720).toBeLessThanOrEqual(WEBP_ANIMATION_LARGEST_FRAME_PIXELS);
+    expect(1_600 * 1_600).toBeLessThanOrEqual(WEBP_ALPHA_LARGEST_FRAME_PIXELS);
+    expect(2_560 * 1_440).toBeLessThanOrEqual(GIF_ANIMATION_LARGEST_FRAME_PIXELS);
     // A PNG frame: its kind's measured value (owner 2026-10-22; `image-memory.test.ts` converts
     // each kind's costliest shape at it), by the channels it decodes to, 8 or 16 bits a sample,
     // interlaced or not. 8-bit grey (interlaced too), plain 8-bit RGB and plain 16-bit grey keep
@@ -376,7 +466,12 @@ describe('processImage', () => {
       4: { 8: [19_700_000, 15_700_000], 16: [3_300_000, 4_600_000] },
     });
     const png = (channels: 1 | 2 | 3 | 4, depth: 'uchar' | 'ushort', isProgressive: boolean) =>
-      largestFramePixels('image/png', { channels, depth, isProgressive });
+      largestFramePixels('image/png', {
+        channels,
+        depth,
+        isProgressive,
+        hasAlpha: channels % 2 === 0,
+      });
     expect(png(4, 'uchar', false)).toBe(PNG_LARGEST_FRAME_PIXELS[4][8][0]);
     expect(png(2, 'ushort', false)).toBe(PNG_LARGEST_FRAME_PIXELS[2][16][0]);
     expect(png(3, 'uchar', true)).toBe(PNG_LARGEST_FRAME_PIXELS[3][8][1]);
@@ -399,6 +494,62 @@ describe('processImage', () => {
     expect(PNG_LARGEST_FRAME_PIXELS[4][16][1]).toBeGreaterThan(PNG_LARGEST_FRAME_PIXELS[4][16][0]);
     expect(5_120 * 2_880).toBeLessThanOrEqual(PNG_LARGEST_FRAME_PIXELS[4][8][0]);
   });
+});
+
+describe('the encoders: settings and the bounds the whole conversion needs (Codex review of #219, round 3)', () => {
+  it('asks each encoder for the settings measured to bound its memory', () => {
+    expect(encoderOptions('image/jpeg', { hasAlpha: false })).toEqual({
+      quality: 85,
+      mozjpeg: true,
+    });
+    expect(encoderOptions('image/png', { hasAlpha: true })).toEqual({});
+    // libimagequant at 3 holds about half what it holds from 4 up (sharp's default is 7).
+    expect(encoderOptions('image/gif', { hasAlpha: true, pages: 4 })).toEqual({ effort: 3 });
+    // libwebp from 3 up keeps the whole image's tokens; with alpha, the least effort's alpha coder.
+    expect(encoderOptions('image/webp', { hasAlpha: false })).toEqual({
+      quality: 85,
+      effort: 2,
+      smartSubsample: false,
+    });
+    expect(encoderOptions('image/webp', { hasAlpha: true })).toEqual({
+      quality: 85,
+      effort: 0,
+      smartSubsample: false,
+    });
+    expect(encoderOptions('image/webp', { hasAlpha: true, pages: 3 })).toMatchObject({ effort: 2 });
+  });
+
+  it('refuses a WebP with alpha, a WebP animation and a GIF animation past their own bounds, from the header', async () => {
+    const sticker = (width: number, height: number) =>
+      sharp({
+        create: { width, height, channels: 4, background: { r: 9, g: 99, b: 199, alpha: 0.5 } },
+      })
+        .webp()
+        .toBuffer();
+    // 1700×1700 is 2.89 megapixels: past a WebP with alpha's bound, within one without alpha's.
+    expect(await refusal(await sticker(1_700, 1_700))).toBe('pixels');
+    expect(await processImage(await sticker(1_600, 1_600))).toMatchObject({
+      contentType: 'image/webp',
+      width: 1_600,
+    });
+    expect(await processImage(await solid(1_700, 1_700).webp().toBuffer())).toMatchObject({
+      contentType: 'image/webp',
+      width: 1_700,
+    });
+    // A WebP animation: a frame past its bound is `pixels`, frames together past theirs `frames`.
+    expect(await refusal(await animation('webp', 1_100, 1_000, 2))).toBe('pixels');
+    expect(await refusal(await animation('webp', 600, 600, 34))).toBe('frames');
+    expect(await processImage(await animation('webp', 1_000, 1_000, 2))).toMatchObject({
+      contentType: 'image/webp',
+      width: 1_000,
+    });
+    // A GIF animation's frame has a bound of its own; a still GIF keeps its decoding's.
+    expect(await refusal(await animation('gif', 2_300, 2_300, 2))).toBe('pixels');
+    expect(await processImage(await solid(2_300, 2_300).gif().toBuffer())).toMatchObject({
+      contentType: 'image/gif',
+      width: 2_048,
+    });
+  }, 60_000);
 });
 
 describe('one conversion at a time', () => {

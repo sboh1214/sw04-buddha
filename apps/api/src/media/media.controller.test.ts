@@ -16,6 +16,7 @@ import {
   get as httpGet,
   request as httpRequest,
 } from 'node:http';
+import { readFileSync } from 'node:fs';
 import { finished } from 'node:stream';
 import { schema } from '@buddha/db';
 import { completeOnboarding, createMarket, createMedia, createPost } from '@buddha/db/test';
@@ -43,7 +44,13 @@ import {
   imageReads,
 } from './image-reads.js';
 import { OnboardedGuard } from '../onboarding/onboarded.guard.js';
-import { IMAGE_BUSY_RETRY_SECONDS, OneAtATime, imageConversions } from './image.js';
+import {
+  IMAGE_BUSY_RETRY_SECONDS,
+  IMAGE_CONVERSIONS_WAITING_MAX,
+  IMAGE_CONVERSION_PEAK_BYTES,
+  OneAtATime,
+  imageConversions,
+} from './image.js';
 import { InFlightPerKey } from './in-flight.js';
 import { MediaService } from './media.service.js';
 
@@ -1301,6 +1308,50 @@ describe('the upload bodies received at once', () => {
     expect(IMAGE_UPLOAD_IDLE_SECONDS).toBe(30);
     expect(imageUploadIdle.ms).toBe(30_000);
     expect(IMAGE_UPLOADS_PER_ACCOUNT).toBe(3);
+  });
+});
+
+describe('the image budgets in the API container (ADR-0073 결과 5, open: 결과 4 question 3)', () => {
+  const MiB = 1024 * 1024;
+
+  /** The api service's memory limit in deploy/compose.yaml. */
+  function apiContainerLimit(): number {
+    const compose = readFileSync(
+      new URL('../../../../deploy/compose.yaml', import.meta.url),
+      'utf8',
+    );
+    const api = /^ {2}api:\n([\s\S]*?)^ {2}\S/m.exec(compose)?.[1] ?? '';
+    const limit = /^\s+memory: (\d+)m$/m.exec(api)?.[1];
+    expect(limit, 'the api service has a memory limit in MiB').toBeDefined();
+    return Number(limit) * MiB;
+  }
+
+  it('wait for at most eight conversions and read 32MiB at once, the values the owner kept', () => {
+    // Implementation-chosen and kept by the owner: one conversion and eight waiting (owner decision
+    // 2026-10-19 answer 6, decision 9-8), 32MiB of reads (owner decision 2026-10-20 answer 4,
+    // decision 9-36). Lowering them so the container total fits is the owner's call (결과 4
+    // question 3), not the code's.
+    expect(IMAGE_CONVERSIONS_WAITING_MAX).toBe(8);
+    expect(IMAGE_READ_BUDGET_BYTES).toBe(32 * MiB);
+  });
+
+  it('leave the API less of its container than it holds idle, as 결과 5 says, until the owner answers', () => {
+    // Every budget full at once: the bodies being received, the bodies the conversions hold (the
+    // one converting, outside its peak, and those waiting, each up to IMAGE_MAX_BYTES), the reads
+    // and one conversion's peak.
+    const budgets =
+      IMAGE_UPLOAD_RECEIVING_BYTES +
+      (1 + IMAGE_CONVERSIONS_WAITING_MAX) * IMAGE_MAX_BYTES +
+      IMAGE_READ_BUDGET_BYTES +
+      IMAGE_CONVERSION_PEAK_BYTES;
+    expect(budgets).toBe((64 + 45 + 32 + 144) * MiB);
+    const limit = apiContainerLimit();
+    expect(limit).toBe(448 * MiB);
+    // What is left for the API itself (163MiB) is under what it held idle in its image: ~293MiB
+    // resident, ~234MiB of it anonymous (결과 5). When the owner's answer changes the limit or a
+    // budget, this fails: write the answer into 결과 4·5 and this test with it.
+    expect(limit - budgets).toBe(163 * MiB);
+    expect(limit - budgets).toBeLessThan(234 * MiB);
   });
 });
 

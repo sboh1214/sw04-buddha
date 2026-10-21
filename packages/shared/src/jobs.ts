@@ -22,7 +22,8 @@ export const JOB_NAMES = {
   startGrantPay: 'start_grant.pay',
   /**
    * Removes the uploads nothing took (#46, ADR-0073): an image uploaded for a post that was never
-   * written, ORPHAN_MEDIA_HOURS after its upload — its object from storage and its row. The
+   * written, ORPHAN_MEDIA_HOURS after its upload — its row, then its object from storage (the key
+   * queued in `media_deletions` until the store has removed it, retried on later runs). The
    * worker's hourly scan.
    */
   mediaOrphanCleanup: 'media.orphan_cleanup',

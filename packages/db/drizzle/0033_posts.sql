@@ -10,8 +10,19 @@
 -- - post_revisions: every version an edit replaced, for operators only (append-only below).
 -- - media_objects: the images the API received, checked, converted and stored in object storage;
 --   post_images: which post an image belongs to (one post per image).
+-- - media_deletions: the key of every object still in the store after its upload's row went (the
+--   orphan clean-up), until the store has removed it — retried on later runs, never dropped.
 -- - profiles.public_id: the account's public id, what public answers name a person by instead of
 --   the account id — drawn by gen_public_id() for every existing and every new profile.
+CREATE TABLE "media_deletions" (
+	"storage_key" varchar(160) PRIMARY KEY NOT NULL,
+	"queued_at" timestamp (3) with time zone DEFAULT now() NOT NULL,
+	"attempts" integer DEFAULT 0 NOT NULL,
+	"next_attempt_at" timestamp (3) with time zone DEFAULT now() NOT NULL,
+	"last_error" text,
+	CONSTRAINT "media_deletions_attempts_check" CHECK ("media_deletions"."attempts" >= 0)
+);
+--> statement-breakpoint
 CREATE TABLE "media_objects" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"owner_id" text NOT NULL,
@@ -82,6 +93,7 @@ ALTER TABLE "post_images" ADD CONSTRAINT "post_images_media_id_media_objects_id_
 ALTER TABLE "post_revisions" ADD CONSTRAINT "post_revisions_post_id_posts_id_fk" FOREIGN KEY ("post_id") REFERENCES "public"."posts"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "posts" ADD CONSTRAINT "posts_market_id_markets_id_fk" FOREIGN KEY ("market_id") REFERENCES "public"."markets"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "posts" ADD CONSTRAINT "posts_author_id_user_id_fk" FOREIGN KEY ("author_id") REFERENCES "public"."user"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "media_deletions_next_attempt_at_idx" ON "media_deletions" USING btree ("next_attempt_at");--> statement-breakpoint
 CREATE INDEX "media_objects_unattached_created_at_idx" ON "media_objects" USING btree ("created_at") WHERE "media_objects"."attached_at" IS NULL;--> statement-breakpoint
 CREATE INDEX "media_objects_owner_id_idx" ON "media_objects" USING btree ("owner_id");--> statement-breakpoint
 CREATE INDEX "post_revisions_post_id_id_idx" ON "post_revisions" USING btree ("post_id","id");--> statement-breakpoint

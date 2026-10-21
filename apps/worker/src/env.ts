@@ -28,7 +28,8 @@ export const envSchema = z
     WORKER_HOST: z.string().min(1).default('localhost'),
     /**
      * The media store (#46, ADR-0073), the same keys as apps/api: the worker removes the uploads no
-     * post took (`media.orphan_cleanup`), object and row, from the store the API wrote them to.
+     * post took (`media.orphan_cleanup`), row and object, from the store the API wrote them to (a
+     * key the store refused stays queued in `media_deletions` for a later run).
      */
     ...mediaStorageEnvShape,
   })

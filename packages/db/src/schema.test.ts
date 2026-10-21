@@ -32,6 +32,7 @@ import {
   marketWatchEvents,
   marketWatches,
   markets,
+  mediaDeletions,
   mediaObjects,
   nicknameHolds,
   orders,
@@ -847,6 +848,24 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       await t.db.insert(mediaObjects).values(base);
       await expect(t.db.insert(mediaObjects).values(base)).rejects.toSatisfy(
         (e) => sqlState(e) === '23505' && sqlConstraint(e) === 'media_objects_storage_key_unique',
+      );
+    });
+
+    it('queues an object key for removal once, never with a negative count (media_deletions)', async () => {
+      const [queued] = await t.db
+        .insert(mediaDeletions)
+        .values({ storageKey: 'post-images/x.png' })
+        .returning();
+      // Queued now, due now, refused by nothing yet.
+      expect(queued).toMatchObject({ attempts: 0, lastError: null });
+      expect(queued!.nextAttemptAt.getTime()).toBe(queued!.queuedAt.getTime());
+      await expect(
+        t.db.insert(mediaDeletions).values({ storageKey: 'post-images/x.png' }),
+      ).rejects.toSatisfy((e) => sqlState(e) === '23505');
+      await expect(
+        t.db.insert(mediaDeletions).values({ storageKey: 'post-images/y.png', attempts: -1 }),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'media_deletions_attempts_check',
       );
     });
   });

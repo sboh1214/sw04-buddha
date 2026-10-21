@@ -27,11 +27,14 @@ export const IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 export const IMAGE_MAX_DIMENSION = 2_048;
 
 /**
- * The most pixels the server decodes, every frame of an animation together: a small file can
- * unpack into an enormous image (a decompression bomb), and an animation's frames are decoded one
- * after another, each costing time. 50 megapixels holds any photo a phone takes, and an animation
- * of 200 frames at 500×500. One frame has a tighter bound by its format (apps/api's image.ts,
- * ADR-0073 9-8): what the decoder holds of a frame at once must fit the API's memory.
+ * The most pixels the server decodes, every frame of an animation together — against a
+ * decompression bomb (a small file can unpack into an enormous image) and the time a long
+ * animation takes. 50 megapixels holds any photo a phone takes, and a GIF animation of 200 frames
+ * at 500×500. Tighter bounds, measured on the whole conversion, are apps/api's image.ts's
+ * (ADR-0073 9-8): one frame's by its kind, what the decoder and the encoders hold of it at once
+ * fitting the API's memory — and a GIF animation's frame its own, its thin frames stacking up in
+ * the resize; a WebP animation is decoded whole before it is resized, so its frames together have
+ * a far smaller bound (`WEBP_ANIMATION_MAX_PIXELS`, 12 megapixels — 48 frames at 500×500).
  */
 export const IMAGE_MAX_INPUT_PIXELS = 50_000_000;
 
@@ -73,12 +76,15 @@ export type UploadImageQuery = z.infer<typeof uploadImageQuerySchema>;
 /**
  * Why an upload was refused (IMAGE_NOT_ALLOWED): `type` — its content is not a JPEG, PNG, WebP or
  * GIF, whatever its name or declared type says; `size` — larger than IMAGE_MAX_BYTES; `pixels` —
- * an image (one frame of an animation) too large to decode: more pixels than its format's bound,
- * or than IMAGE_MAX_INPUT_PIXELS, or so thin that converting it costs far more than its pixels
- * (its long side more than 32 times its short side — apps/api's image.ts, owner 2026-10-22);
- * `frames` — an animation whose frames each fit but together decode to more than
- * IMAGE_MAX_INPUT_PIXELS (too many frames, not too large a picture); `unreadable` — it says it is
- * one of the four and does not decode as one; `empty` — no bytes.
+ * an image (one frame of an animation) too large to convert: more pixels than its kind's bound
+ * (what decoding it takes, and for a WebP with alpha, a WebP animation and a GIF animation what
+ * encoding it again takes — apps/api's image.ts), or than IMAGE_MAX_INPUT_PIXELS, or so thin that
+ * converting it costs far more than its pixels (its long side more than 32 times its short side,
+ * owner 2026-10-22); `frames` — an animation whose frames each fit but together decode to more
+ * than IMAGE_MAX_INPUT_PIXELS, or a WebP animation's own smaller bound (too many frames, not too
+ * large a picture); `unreadable` — it says it is
+ * one of the four and does not decode as one (a JPEG of more than four components too); `empty` —
+ * no bytes.
  */
 export const IMAGE_REFUSALS = ['type', 'size', 'pixels', 'frames', 'unreadable', 'empty'] as const;
 export type ImageRefusal = (typeof IMAGE_REFUSALS)[number];

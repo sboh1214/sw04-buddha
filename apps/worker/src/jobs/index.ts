@@ -101,18 +101,31 @@ const HANDLERS: Partial<Record<string, Handler>> = {
     return result;
   },
   [JOB_NAMES.mediaOrphanCleanup]: async (_job, { db, storage, logger }) => {
-    const { removed, failed, failures } = await removeOrphanMedia(db, storage);
-    // An object the store kept is a stray file nothing names: one error line each, and the run
-    // itself does not fail (its rows are gone, so a retry would not find them).
-    for (const { storageKey, err } of failures) {
-      logger.error({ storageKey, err }, 'orphan upload object not removed');
+    const { queued, removed, failed, failures, pending } = await removeOrphanMedia(db, storage);
+    // An object the store kept stays queued (media_deletions) and a later run tries it again: one
+    // error line each, with how many times the store has refused it, and the run itself does not
+    // fail (retrying the job at once would only ask the same store again).
+    for (const { storageKey, attempts, err } of failures) {
+      logger.error(
+        { storageKey, attempts, err },
+        'orphan upload object not removed; kept for retry',
+      );
     }
     const result = {
+      queued,
       removed,
       failed,
-      failures: failures.map(({ storageKey, message }) => ({ storageKey, message })),
+      failures: failures.map(({ storageKey, attempts, message }) => ({
+        storageKey,
+        attempts,
+        message,
+      })),
+      pending,
     };
-    logger[removed > 0 ? 'info' : 'debug'](result, 'orphan upload clean-up');
+    logger[queued > 0 || removed > 0 || failed > 0 ? 'info' : 'debug'](
+      result,
+      'orphan upload clean-up',
+    );
     return result;
   },
 };

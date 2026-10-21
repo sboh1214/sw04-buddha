@@ -6,7 +6,14 @@ import {
   type ImageNotAllowedDetails,
   type ImageRefusal,
 } from '@buddha/shared';
-import sharp, { type Metadata, type OutputInfo } from 'sharp';
+import sharp, {
+  type GifOptions,
+  type JpegOptions,
+  type Metadata,
+  type OutputInfo,
+  type PngOptions,
+  type WebpOptions,
+} from 'sharp';
 import { AppError } from '../common/errors/app-error.js';
 
 // Memory before speed (ADR-0073 9-8): the API's container has 448 MiB for everything it does, and
@@ -45,7 +52,7 @@ export function sniffImageType(bytes: Uint8Array): ImageContentType | undefined 
 }
 
 /** sharp's name of each allowed type: what the decoder must agree the bytes are. */
-const SHARP_FORMAT: Readonly<Record<ImageContentType, string>> = {
+const SHARP_FORMAT: Readonly<Record<ImageContentType, 'jpeg' | 'png' | 'gif' | 'webp'>> = {
   'image/jpeg': 'jpeg',
   'image/png': 'png',
   'image/gif': 'gif',
@@ -62,14 +69,36 @@ export const IMAGE_EXTENSION: Readonly<Record<ImageContentType, string>> = {
 
 /**
  * The memory one conversion may take, in bytes: what the decoder and the resize hold at their
- * peak for one frame, by libvips' own count. One conversion runs at a time (`imageConversions`),
- * so this plus the API's own use stays under its container's 448 MiB (deploy/compose.yaml) with
- * room left. The header checks keep a frame within it: a JPEG, GIF or WebP frame by what it
- * holds per pixel (`decodeBytesPerPixel`), a PNG frame by its kind's largest frame, measured at
- * every shape up to IMAGE_MAX_SIDE_RATIO (PNG_LARGEST_FRAME_PIXELS — owner 2026-10-22, ADR-0073
- * 9-8).
+ * peak for one frame, by libvips' own count. The header checks keep a frame within it: a JPEG,
+ * GIF or opaque still WebP frame by what it holds per pixel (`decodeBytesPerPixel`), a PNG frame
+ * by its kind's largest frame, measured at every shape up to IMAGE_MAX_SIDE_RATIO
+ * (PNG_LARGEST_FRAME_PIXELS — owner 2026-10-22, ADR-0073 9-8). What libvips does not count — the
+ * encoder above all — is IMAGE_CONVERSION_PEAK_BYTES' to bound.
  */
 export const IMAGE_DECODE_BUDGET_BYTES = 128 * 1024 * 1024;
+
+/**
+ * The most one whole conversion — decode, resize and encode, inside libvips and outside it — may
+ * add to the API process's memory at its peak, in bytes: the process's peak resident memory above
+ * what it held just before the conversion, measured on Linux arm64 in the API's own image (the
+ * container it runs in, glibc's allocator), on the content that costs most — noise, a different
+ * picture in every frame — at each kind's bounds (ADR-0073 9-8, Codex review of #219, round 3).
+ * libvips' count (IMAGE_DECODE_BUDGET_BYTES) leaves the encoders out: libwebp, libimagequant and
+ * cgif, mozjpeg and libspng allocate on their own, and a high-entropy WebP with alpha at the bound
+ * it had (about 8.9 megapixels, 2,048px a side once fitted) took ~223MiB by this count while
+ * libvips counted 66MiB. 144 is the budget's 128 and 16 for what libvips does not count: the PNG
+ * bounds' costliest frames (owner 2026-10-22) take 116–137MiB this way. One conversion runs at a
+ * time (`imageConversions`), so this, the uploads being received (64MiB, image-body.ts), the
+ * bodies the conversions hold (the one converting — held before it starts, so outside this — and
+ * IMAGE_CONVERSIONS_WAITING_MAX waiting, at most IMAGE_MAX_BYTES each: 45MiB), the image reads
+ * (32MiB, image-reads.ts) and the API's own use share its container's 448MiB
+ * (deploy/compose.yaml; ADR-0073 결과 5 has what that leaves). What keeps each kind within it:
+ * the encoder settings (`encoderOptions`), the bound of a progressive JPEG of four components
+ * (`decodeBytesPerPixel` — at the three-component one, CMYK took ~158MiB) and the bounds of WebP
+ * with alpha, WebP animations and GIF animations below; `image-memory.test.ts` converts each
+ * kind's costliest case.
+ */
+export const IMAGE_CONVERSION_PEAK_BYTES = 144 * 1024 * 1024;
 
 /**
  * How thin one frame may be: its long side at most this many times its short side, else `pixels`
@@ -107,25 +136,89 @@ export const IMAGE_MAX_SIDE_RATIO = 32;
  * has PNG_LARGEST_FRAME_PIXELS):
  *
  * - a baseline JPEG is shrunk while it is decoded (libjpeg's shrink-on-load), so even 48
- *   megapixels peak near 45MB: 1 byte;
- * - a progressive JPEG keeps every coefficient until the last scan: up to 10 (4:4:4);
+ *   megapixels peak near 45MB — a CMYK one too, 65–70MiB at 50 megapixels by the process's count:
+ *   1 byte;
+ * - a progressive JPEG — or any of several scans, which libvips reports as progressive — keeps
+ *   every coefficient until the last scan, two bytes each, as many as the frame has pixels for
+ *   each of its components (fewer for a subsampled one): up to 10 with three (4:4:4), and 14 with
+ *   four (CMYK or YCCK, 4:4:4:4 — a third more coefficients, and the turn from CMYK into sRGB).
+ *   libjpeg allocates them outside libvips' count, so the four-component value is measured on the
+ *   whole conversion (IMAGE_CONVERSION_PEAK_BYTES, ADR-0073 9-8): CMYK noise at that bound (3,096²)
+ *   peaked at 131MiB on Linux arm64 and 137 on x64 — what three components take at theirs (133,
+ *   136) — against ~158 at the three-component bound (3,663²). A JPEG of more than four is
+ *   refused before this (`JPEG_MAX_COMPONENTS`);
  * - a GIF frame is unpacked whole with the frame before it: 16; a WebP frame (read as an
- *   animation, a still one too): 15. The frames of an animation are decoded one after another,
- *   so the frame counts here and all of them only against IMAGE_MAX_INPUT_PIXELS.
+ *   animation, a still one too): 15.
+ *
+ * The bound this gives is the frame's for a JPEG, a still GIF and a still WebP without alpha. The
+ * encoders cost more than libvips counts for the rest, so they have bounds of their own, measured
+ * on the whole conversion (IMAGE_CONVERSION_PEAK_BYTES): a still WebP with alpha
+ * (WEBP_ALPHA_LARGEST_FRAME_PIXELS), a WebP animation (WEBP_ANIMATION_LARGEST_FRAME_PIXELS and
+ * WEBP_ANIMATION_MAX_PIXELS) and a GIF animation (GIF_ANIMATION_LARGEST_FRAME_PIXELS).
  */
 export function decodeBytesPerPixel(
   contentType: Exclude<ImageContentType, 'image/png'>,
-  metadata: Pick<Metadata, 'isProgressive'>,
+  metadata: Pick<Metadata, 'isProgressive' | 'channels'>,
 ): number {
   switch (contentType) {
     case 'image/jpeg':
-      return metadata.isProgressive ? 10 : 1;
+      if (!metadata.isProgressive) return 1;
+      return metadata.channels < 4 ? 10 : 14;
     case 'image/gif':
       return 16;
     case 'image/webp':
       return 15;
   }
 }
+
+/**
+ * The largest frame of a still WebP with alpha, in pixels (ADR-0073 9-8, Codex review of #219,
+ * round 3). libwebp writes the alpha plane losslessly, and that coder holds far more than libvips
+ * counts, growing with the frame it writes (at most 2,048px a side, IMAGE_MAX_DIMENSION): a WebP
+ * whose alpha is noise took ~176MiB of the process at 2048×2048 even with the encoder's least
+ * effort (`encoderOptions`), ~209 with its default. At this bound — 1,612×1,612 — the costliest
+ * measured (alpha and colour both noise, the frame written as it came, upright or turned by EXIF,
+ * with or without an ICC profile, wide or square, run again and again, a few at once) took at
+ * most ~130MiB within IMAGE_CONVERSION_PEAK_BYTES; at 2.8 megapixels already ~142 now and then.
+ * A WebP without alpha keeps the bound its decoding gives (`decodeBytesPerPixel`, ~8.9
+ * megapixels): the colour coder alone took at most ~82MiB there.
+ */
+export const WEBP_ALPHA_LARGEST_FRAME_PIXELS = 2_600_000;
+
+/**
+ * The largest frame of a WebP animation, and every frame of it together, in pixels (ADR-0073 9-8,
+ * Codex review of #219, round 3). libvips decodes a WebP animation whole before it resizes it — in
+ * memory while that is under 100MB — and libwebp's animation encoder keeps canvases as large as a
+ * frame and every frame's candidate encodings: 2,048×2,048 frames took ~236MiB of the process with
+ * two frames that are one colour each and ~354 with five that are noise, eleven of them ~381, at
+ * any effort. At these bounds the costliest measured (noise with alpha in every frame, eleven
+ * 1,024×1,024 frames; a different colour in every frame; thin frames) took at most ~116MiB on
+ * Linux arm64 and ~122 on x64, within IMAGE_CONVERSION_PEAK_BYTES. A frame past the first is
+ * `pixels`, frames together past the second are `frames`.
+ */
+export const WEBP_ANIMATION_LARGEST_FRAME_PIXELS = 1_050_000;
+export const WEBP_ANIMATION_MAX_PIXELS = 12_000_000;
+
+/**
+ * The largest frame of a GIF animation, in pixels (ADR-0073 9-8, Codex review of #219, round 3).
+ * A still GIF keeps the bound its decoding gives (`decodeBytesPerPixel`, ~8.4 megapixels), but an
+ * animation of thin frames holds more with every frame, up to a few: eight-megapixel frames at
+ * 32:1 took ~115MiB of the process as a still and ~159 as five frames — the resize of the frames
+ * stacked, not the encoder. At this bound the costliest measured (32:1, ten frames, a different
+ * colour in each) took about 130MiB within IMAGE_CONVERSION_PEAK_BYTES (16:1 ~107, square ~90);
+ * at six megapixels 32:1 already took 144.
+ */
+export const GIF_ANIMATION_LARGEST_FRAME_PIXELS = 5_000_000;
+
+/**
+ * The most components a JPEG may have: CMYK's (or YCCK's) four. libjpeg reads up to ten and libvips
+ * hands each on as a band, but no picture a person sends has more than four, and a progressive one
+ * holds more than any bound here is measured for — a five-component one at the three-component
+ * bound (3,663², 13.4 megapixels) took 187MiB of the process on Linux arm64, 191 on x64, and was
+ * converted (ADR-0073 9-8). More is refused from the header as `unreadable` (sharp's header read
+ * already refuses six and up).
+ */
+export const JPEG_MAX_COMPONENTS = 4;
 
 /** A PNG's channels as it decodes: grey, grey + alpha, RGB, RGBA. */
 type PngChannels = Metadata['channels'];
@@ -174,20 +267,84 @@ export const PNG_LARGEST_FRAME_PIXELS: Readonly<
   4: { 8: [19_700_000, 15_700_000], 16: [3_300_000, 4_600_000] },
 };
 
+/** Whether the header says the image has more than one frame (a GIF or WebP animation). */
+function isAnimation(metadata: Pick<Metadata, 'pages'>): boolean {
+  return (metadata.pages ?? 1) > 1;
+}
+
 /**
  * The most pixels one frame of this image may have (step 3 of `processImage`): a PNG's from
- * PNG_LARGEST_FRAME_PIXELS, any other's from IMAGE_DECODE_BUDGET_BYTES and what it holds per pixel.
+ * PNG_LARGEST_FRAME_PIXELS, a still WebP with alpha's, a WebP animation's and a GIF animation's
+ * from their own bounds, any other's from IMAGE_DECODE_BUDGET_BYTES and what it holds per pixel.
  */
 export function largestFramePixels(
   contentType: ImageContentType,
-  metadata: Pick<Metadata, 'channels' | 'depth' | 'isProgressive'>,
+  metadata: Pick<Metadata, 'channels' | 'depth' | 'isProgressive' | 'hasAlpha' | 'pages'>,
 ): number {
-  if (contentType !== 'image/png') {
-    return Math.floor(IMAGE_DECODE_BUDGET_BYTES / decodeBytesPerPixel(contentType, metadata));
+  if (contentType === 'image/png') {
+    return PNG_LARGEST_FRAME_PIXELS[metadata.channels][metadata.depth === 'ushort' ? 16 : 8][
+      metadata.isProgressive ? 1 : 0
+    ];
   }
-  return PNG_LARGEST_FRAME_PIXELS[metadata.channels][metadata.depth === 'ushort' ? 16 : 8][
-    metadata.isProgressive ? 1 : 0
-  ];
+  if (contentType === 'image/webp') {
+    if (isAnimation(metadata)) return WEBP_ANIMATION_LARGEST_FRAME_PIXELS;
+    if (metadata.hasAlpha) return WEBP_ALPHA_LARGEST_FRAME_PIXELS;
+  }
+  if (contentType === 'image/gif' && isAnimation(metadata)) {
+    return GIF_ANIMATION_LARGEST_FRAME_PIXELS;
+  }
+  return Math.floor(IMAGE_DECODE_BUDGET_BYTES / decodeBytesPerPixel(contentType, metadata));
+}
+
+/**
+ * The most pixels every frame of this image together may have (step 3 of `processImage`): a WebP
+ * animation's own bound, any other's IMAGE_MAX_INPUT_PIXELS.
+ */
+export function largestImagePixels(
+  contentType: ImageContentType,
+  metadata: Pick<Metadata, 'pages'>,
+): number {
+  return contentType === 'image/webp' && isAnimation(metadata)
+    ? WEBP_ANIMATION_MAX_PIXELS
+    : IMAGE_MAX_INPUT_PIXELS;
+}
+
+/**
+ * What each encoder is asked for (step 5 of `processImage`), by the image's header (ADR-0073 9-8,
+ * Codex review of #219, round 3). The settings that matter are the ones that bound the encoder's
+ * memory, measured on the whole conversion (IMAGE_CONVERSION_PEAK_BYTES):
+ *
+ * - JPEG: quality 85 with mozjpeg's settings (progressive, trellis): ~30MiB at 2,048px.
+ * - PNG: sharp's defaults (zlib level 6, adaptive filters): ~20MiB.
+ * - GIF: effort 3 — libimagequant's palette at this effort holds about half what it holds at 4 and
+ *   above (7 is sharp's default; 1 to 3 hold and write the same): five 2,896×2,896 frames took
+ *   ~108MiB against ~181 at 7, 16-colour noise ~94 against ~140, eleven 2,048px frames ~80 against
+ *   ~150. The palette is a little rougher: a GIF that is not shrunk comes back at ~47dB PSNR
+ *   against ~67 at 7, a shrunk one ~42 against ~44, and 10–20% larger.
+ * - WebP: quality 85; effort 2, not sharp's default 4 — from 3 up libwebp keeps the whole image's
+ *   tokens for its rate optimisation (~129MiB for noise at 2,048px against ~82 at 2), for photos
+ *   2–6% larger at the same quality — and effort 0 for a still WebP with alpha, whose lossless
+ *   alpha coder holds less the less it searches (~30MiB less at 2,048px than at 2), for photos
+ *   about a quarter larger. `smartSubsample` stays off (it keeps another copy of the image).
+ */
+export function encoderOptions(
+  contentType: ImageContentType,
+  metadata: Pick<Metadata, 'hasAlpha' | 'pages'>,
+): JpegOptions | PngOptions | GifOptions | WebpOptions {
+  switch (contentType) {
+    case 'image/jpeg':
+      return { quality: 85, mozjpeg: true };
+    case 'image/png':
+      return {};
+    case 'image/gif':
+      return { effort: 3 };
+    case 'image/webp':
+      return {
+        quality: 85,
+        effort: metadata.hasAlpha && !isAnimation(metadata) ? 0 : 2,
+        smartSubsample: false,
+      };
+  }
 }
 
 /** How long a client refused for a full queue waits before sending again. */
@@ -231,7 +388,9 @@ export class OneAtATime {
 /**
  * Conversions waiting behind the one running, at most: a few seconds of work (a conversion takes
  * well under a second for a photo, a few seconds for a long animation), and at most this many
- * uploads' bytes held while they wait.
+ * uploads' bytes held while they wait. Implementation-chosen; the owner kept it as built (owner
+ * decision 2026-10-19 answer 6). Its bodies are part of what ADR-0073 결과 5 found cannot all fit
+ * in the API container's 448MiB at once — whether to lower it is the owner's question (결과 4).
  */
 export const IMAGE_CONVERSIONS_WAITING_MAX = 8;
 
@@ -251,17 +410,21 @@ export interface ProcessedImage {
  * never the bytes it received:
  *
  * 1. Not empty, at most IMAGE_MAX_BYTES (the content-type parser stops a larger body first).
- * 2. One of the four types by its magic number (`sniffImageType`), and the decoder agrees.
- * 3. Small enough to decode, read from the header before anything is decoded (a decompression
+ * 2. One of the four types by its magic number (`sniffImageType`), and the decoder agrees — a
+ *    JPEG of at most JPEG_MAX_COMPONENTS components.
+ * 3. Small enough to convert, read from the header before anything is decoded (a decompression
  *    bomb is a few bytes): one frame no thinner than IMAGE_MAX_SIDE_RATIO allows and no larger
- *    than its format's largest frame (`largestFramePixels` — within IMAGE_DECODE_BUDGET_BYTES),
- *    else `pixels`; every frame together within IMAGE_MAX_INPUT_PIXELS, else `frames` for an
- *    animation and `pixels` for a still — sharp's own limit is a second fence.
+ *    than its kind's largest frame (`largestFramePixels` — within IMAGE_DECODE_BUDGET_BYTES by
+ *    libvips' count and IMAGE_CONVERSION_PEAK_BYTES by the process's), else `pixels`; every frame
+ *    together within IMAGE_MAX_INPUT_PIXELS (a WebP animation's own bound, `largestImagePixels`),
+ *    else `frames` for an animation and `pixels` for a still — sharp's own limit is a second
+ *    fence.
  * 4. Turned upright by its EXIF orientation, then shrunk to fit IMAGE_MAX_DIMENSION on its long side
  *    (never enlarged); an animated GIF or WebP keeps every frame and its timing.
- * 5. Encoded again in its own type. sharp writes no metadata unless asked, so EXIF (the place and
- *    the device a photo was taken with), XMP, IPTC and the ICC profile are gone — the pixels are
- *    turned into sRGB first, so the colours stay.
+ * 5. Encoded again in its own type, with the settings that bound the encoder's memory
+ *    (`encoderOptions`). sharp writes no metadata unless asked, so EXIF (the place and the device a
+ *    photo was taken with), XMP, IPTC and the ICC profile are gone — the pixels are turned into
+ *    sRGB first, so the colours stay.
  *
  * Steps 4 and 5 run one conversion at a time (`imageConversions`); a refusal from the header waits
  * for nothing. Throws IMAGE_NOT_ALLOWED with the reason for anything it refuses, and RATE_LIMITED
@@ -285,6 +448,9 @@ export async function processImage(bytes: Uint8Array): Promise<ProcessedImage> {
     throw imageRefused('unreadable');
   }
   if (metadata.format !== SHARP_FORMAT[contentType]) throw imageRefused('unreadable');
+  if (contentType === 'image/jpeg' && metadata.channels > JPEG_MAX_COMPONENTS) {
+    throw imageRefused('unreadable');
+  }
   const width = metadata.width;
   // `height` is every frame stacked; `pageHeight` one frame's (none for a still image).
   const totalHeight = metadata.height;
@@ -296,30 +462,19 @@ export async function processImage(bytes: Uint8Array): Promise<ProcessedImage> {
   ) {
     throw imageRefused('pixels');
   }
-  if (width * totalHeight > IMAGE_MAX_INPUT_PIXELS) {
+  if (width * totalHeight > largestImagePixels(contentType, metadata)) {
     throw imageRefused(frameHeight < totalHeight ? 'frames' : 'pixels');
   }
 
-  const pipeline = sharp(bytes, input).autoOrient().resize({
-    width: IMAGE_MAX_DIMENSION,
-    height: IMAGE_MAX_DIMENSION,
-    fit: 'inside',
-    withoutEnlargement: true,
-  });
-  switch (contentType) {
-    case 'image/jpeg':
-      pipeline.jpeg({ quality: 85, mozjpeg: true });
-      break;
-    case 'image/png':
-      pipeline.png();
-      break;
-    case 'image/gif':
-      pipeline.gif();
-      break;
-    case 'image/webp':
-      pipeline.webp({ quality: 85 });
-      break;
-  }
+  const pipeline = sharp(bytes, input)
+    .autoOrient()
+    .resize({
+      width: IMAGE_MAX_DIMENSION,
+      height: IMAGE_MAX_DIMENSION,
+      fit: 'inside',
+      withoutEnlargement: true,
+    })
+    .toFormat(SHARP_FORMAT[contentType], encoderOptions(contentType, metadata));
   let output: { data: Buffer; info: OutputInfo };
   try {
     output = await imageConversions.run(() => pipeline.toBuffer({ resolveWithObject: true }));

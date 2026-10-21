@@ -18,6 +18,7 @@ const requireFromApi = createRequire(path.join(API_DIR, 'package.json'));
 const IMAGE_JS = path.join(API_DIR, 'dist', 'media', 'image.js');
 const IMAGE_TS = path.join(API_DIR, 'src', 'media', 'image.ts');
 const MEASURE_MJS = fileURLToPath(new URL('./measure.mjs', import.meta.url));
+const MAKE_IMAGE_MJS = fileURLToPath(new URL('./make-image.mjs', import.meta.url));
 
 /** The API's own sharp (apps/api's dependency), so the versions measured are the API's. */
 export function loadSharp() {
@@ -338,10 +339,10 @@ export async function pngOf(width, height, kind, iccBytes) {
 // ---------------------------------------------------------------------------------------------
 // One measurement in a process of its own, and many of them a few at a time.
 
-/** Runs `measure.mjs` with these options in a new process; its JSON line, or `{ error }`. */
-export function measureInChild(flags) {
+/** Runs `script` with these options in a new process; its last JSON line, or `{ error }`. */
+export function runInChild(script, flags) {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [MEASURE_MJS, ...flags], {
+    const child = spawn(process.execPath, [script, ...flags], {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let out = '';
@@ -357,6 +358,16 @@ export function measureInChild(flags) {
       }
     });
   });
+}
+
+/** Runs `measure.mjs` with these options in a new process; its JSON line, or `{ error }`. */
+export function measureInChild(flags) {
+  return runInChild(MEASURE_MJS, flags);
+}
+
+/** Runs `make-image.mjs` with these options in a new process; its JSON line, or `{ error }`. */
+export function makeImageInChild(flags) {
+  return runInChild(MAKE_IMAGE_MJS, flags);
 }
 
 /** Runs `task` for every item, `jobs` at a time; the results in the items' order. */

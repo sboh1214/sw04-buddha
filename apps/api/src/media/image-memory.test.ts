@@ -26,17 +26,53 @@
  * frame inside IMAGE_MAX_DIMENSION: this file converts only the shapes recorded, so a change to
  * IMAGE_MAX_DIMENSION, the budget, the ratio or IMAGE_MAX_INPUT_PIXELS, or to sharp or libvips,
  * needs the measurement again (ADR-0073 결과 5).
+ *
+ * The whole conversion (Codex review of #219, round 3): libvips' mark leaves the encoders out —
+ * libwebp's alpha coder, libimagequant's palette, mozjpeg's coefficients — and a high-entropy WebP
+ * with alpha at the bound it had took ~223MiB of the process while libvips counted 66. The last
+ * block converts each kind's costliest case, at its bounds, in a process of its own
+ * (`test/image-child.mjs` — this one has converted already, and the allocator keeps and reuses
+ * what it freed) and checks the process's resident memory rose by at most
+ * IMAGE_CONVERSION_PEAK_BYTES — a progressive CMYK JPEG among them, whose fourth component's
+ * coefficients took ~158MiB at the three-component bound. Each case is converted
+ * CONVERSION_RUNS times, each in a new process, and the median is what is checked: one case moves
+ * by 10MiB or so from run to run (the allocator, ADR-0073 결과 5), and the costliest sit within
+ * 7–14MiB of the bound, so one sample would fail now and then with nothing changed — a bound or
+ * an encoder setting that costs more lifts every run. Those values are Linux's (production's:
+ * measured in the API's image, arm64, and the same within a few MiB on x64): macOS's allocator
+ * holds on to more, so there that check is skipped and only the pipeline itself is checked
+ * against processImage.
  */
-import { IMAGE_MAX_DIMENSION, IMAGE_MAX_INPUT_PIXELS } from '@buddha/shared';
+import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { promisify } from 'node:util';
+import {
+  IMAGE_MAX_BYTES,
+  IMAGE_MAX_DIMENSION,
+  IMAGE_MAX_INPUT_PIXELS,
+  type ImageContentType,
+} from '@buddha/shared';
 import sharp from 'sharp';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppError } from '../common/errors/app-error.js';
 import { type PngKind, pngOf } from '../test/png.js';
 import {
+  GIF_ANIMATION_LARGEST_FRAME_PIXELS,
+  IMAGE_CONVERSION_PEAK_BYTES,
   IMAGE_DECODE_BUDGET_BYTES,
   IMAGE_MAX_SIDE_RATIO,
   PNG_LARGEST_FRAME_PIXELS,
+  WEBP_ALPHA_LARGEST_FRAME_PIXELS,
+  WEBP_ANIMATION_LARGEST_FRAME_PIXELS,
+  WEBP_ANIMATION_MAX_PIXELS,
+  encoderOptions,
+  largestFramePixels,
+  largestImagePixels,
   processImage,
+  sniffImageType,
 } from './image.js';
 
 /** libvips' high-water mark of the memory it has allocated in this process, in MiB. */
@@ -154,4 +190,268 @@ describe('processImage: memory of a thin image (#46, owner 2026-10-22)', () => {
     // Near the budget: each kind's largest frame is about as large as the budget lets it be.
     expect(highWater()).toBeGreaterThan(BUDGET_MIB - 8);
   }, 120_000);
+});
+
+const IMAGE_CHILD = path.join(import.meta.dirname, '..', 'test', 'image-child.mjs');
+const run = promisify(execFile);
+
+/** What `image-child.mjs convert` prints. */
+interface ChildConversion {
+  peakBytes: number;
+  width: number;
+  height: number;
+  bytes: number;
+  sha256: string;
+}
+
+/** The input a case converts, as `image-child.mjs make` takes it. */
+interface ChildInput {
+  format: 'jpeg' | 'png' | 'gif' | 'webp';
+  width: number;
+  height: number;
+  channels?: 3 | 4;
+  frames?: number;
+  content?: 'noise' | 'frames';
+  alphaLevels?: number;
+  /** A JPEG of four components. */
+  colourspace?: 'cmyk';
+  encoder?: Record<string, unknown>;
+}
+
+const SHARP_FORMAT = {
+  'image/jpeg': 'jpeg',
+  'image/png': 'png',
+  'image/gif': 'gif',
+  'image/webp': 'webp',
+} as const;
+
+async function makeInChild(input: ChildInput, file: string): Promise<void> {
+  await run(process.execPath, [IMAGE_CHILD, 'make', JSON.stringify(input), file], {
+    maxBuffer: 1024 * 1024,
+  });
+}
+
+/** processImage's pipeline on `file` in a process of its own, as processImage would encode it. */
+async function convertInChild(file: string, bytes: Uint8Array): Promise<ChildConversion> {
+  const contentType = sniffImageType(bytes)!;
+  const animated = contentType === 'image/gif' || contentType === 'image/webp';
+  const metadata = await sharp(bytes, { animated, limitInputPixels: false }).metadata();
+  const options = {
+    animated,
+    limitInputPixels: IMAGE_MAX_INPUT_PIXELS,
+    maxDimension: IMAGE_MAX_DIMENSION,
+    format: SHARP_FORMAT[contentType],
+    encoder: encoderOptions(contentType, metadata),
+  };
+  const { stdout } = await run(
+    process.execPath,
+    [IMAGE_CHILD, 'convert', file, JSON.stringify(options)],
+    { maxBuffer: 1024 * 1024 },
+  );
+  return JSON.parse(stdout) as ChildConversion;
+}
+
+const sha256 = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
+const side = (pixels: number) => Math.floor(Math.sqrt(pixels));
+
+/** How many times the Linux check converts each case, each in a new process (above). */
+const CONVERSION_RUNS = 3;
+
+/** The middle of an odd count of values. */
+const median = (values: readonly number[]) =>
+  [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)]!;
+
+describe('processImage: memory of the whole conversion, encoders included (Codex review of #219, round 3)', () => {
+  let dir: string;
+  beforeAll(() => {
+    dir = mkdtempSync(path.join(tmpdir(), 'image-memory-'));
+  });
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('converts in a process of its own byte for byte what processImage does', async () => {
+    const rgba = (width: number, height: number) =>
+      sharp({
+        create: { width, height, channels: 4, background: { r: 9, g: 99, b: 199, alpha: 0.5 } },
+      });
+    const frames = (format: 'gif' | 'webp', width: number, height: number, count: number) => {
+      const raw = Buffer.alloc(width * height * count * 3);
+      for (let i = 0; i < width * height * count; i += 1) raw[i * 3] = (i % 251) + 1;
+      return sharp(raw, { raw: { width, height: height * count, channels: 3, pageHeight: height } })
+        .toFormat(format, { delay: Array.from({ length: count }, () => 100), loop: 0 })
+        .toBuffer();
+    };
+    const inputs: [string, Buffer][] = [
+      ['jpeg', await rgba(300, 200).flatten().jpeg().withMetadata({ orientation: 6 }).toBuffer()],
+      [
+        'jpeg-cmyk',
+        await rgba(300, 200).flatten().toColourspace('cmyk').jpeg({ progressive: true }).toBuffer(),
+      ],
+      ['png', await rgba(2_300, 200).png().toBuffer()],
+      ['gif', await frames('gif', 120, 80, 3)],
+      ['webp-alpha', await rgba(200, 100).webp().toBuffer()],
+      ['webp-opaque', await rgba(300, 100).flatten().webp().toBuffer()],
+      ['webp-animation', await frames('webp', 100, 80, 3)],
+    ];
+    for (const [name, bytes] of inputs) {
+      const file = path.join(dir, `mirror-${name}`);
+      writeFileSync(file, bytes);
+      const child = await convertInChild(file, bytes);
+      const image = await processImage(bytes);
+      expect({ name, ...child, peakBytes: undefined }).toEqual({
+        name,
+        peakBytes: undefined,
+        width: image.width,
+        height: image.height,
+        bytes: image.body.length,
+        sha256: sha256(image.body),
+      });
+    }
+  }, 60_000);
+
+  // Linux only: the values are production's allocator's (above).
+  it.runIf(process.platform === 'linux')(
+    'converts each kind’s costliest case at its bounds within IMAGE_CONVERSION_PEAK_BYTES',
+    async () => {
+      const still = { channels: 3, depth: 'uchar', isProgressive: false, hasAlpha: false } as const;
+      const progressiveBound = largestFramePixels('image/jpeg', { ...still, isProgressive: true });
+      const cmykBound = largestFramePixels('image/jpeg', {
+        ...still,
+        channels: 4,
+        isProgressive: true,
+      });
+      const gifStillBound = largestFramePixels('image/gif', still);
+      const webpOpaqueBound = largestFramePixels('image/webp', still);
+      const [progressive, cmyk, gifStill, webpOpaque] = [
+        progressiveBound,
+        cmykBound,
+        gifStillBound,
+        webpOpaqueBound,
+      ].map(side) as [number, number, number, number];
+      const gifHeight = Math.floor(
+        Math.sqrt(GIF_ANIMATION_LARGEST_FRAME_PIXELS / IMAGE_MAX_SIDE_RATIO),
+      );
+      const gifWidth = IMAGE_MAX_SIDE_RATIO * gifHeight;
+      const animSide = side(WEBP_ANIMATION_LARGEST_FRAME_PIXELS);
+      // [case, its input, the bound its frame sits at]: the costliest measured of each kind
+      // (ADR-0073 9-8, scripts/image-memory/sweep-encode.mjs), most of them noise — what the
+      // encoders hold most for — small enough for IMAGE_MAX_BYTES at a low quality.
+      const cases: readonly (readonly [string, ChildInput | Uint8Array, number])[] = [
+        [
+          'PNG, 8-bit grey + alpha at its costliest shape, with a profile',
+          pngOf(32_712, 1_131, { channels: 2, profile: true }),
+          PNG_LARGEST_FRAME_PIXELS[2][8][0],
+        ],
+        [
+          'progressive 4:4:4 JPEG of noise',
+          {
+            format: 'jpeg',
+            width: progressive,
+            height: progressive,
+            encoder: { quality: 12, progressive: true, chromaSubsampling: '4:4:4' },
+          },
+          progressiveBound,
+        ],
+        [
+          'progressive CMYK JPEG of noise',
+          {
+            format: 'jpeg',
+            width: cmyk,
+            height: cmyk,
+            colourspace: 'cmyk',
+            encoder: { quality: 1, progressive: true },
+          },
+          cmykBound,
+        ],
+        [
+          'GIF of 16-colour noise',
+          { format: 'gif', width: gifStill, height: gifStill, encoder: { colours: 16, dither: 0 } },
+          gifStillBound,
+        ],
+        [
+          'GIF animation at 32:1, a colour a frame, as many frames as fit',
+          {
+            format: 'gif',
+            width: gifWidth,
+            height: gifHeight,
+            content: 'frames',
+            frames: Math.floor(IMAGE_MAX_INPUT_PIXELS / (gifWidth * gifHeight)),
+          },
+          GIF_ANIMATION_LARGEST_FRAME_PIXELS,
+        ],
+        [
+          'opaque WebP of noise',
+          { format: 'webp', width: webpOpaque, height: webpOpaque, encoder: { quality: 50 } },
+          webpOpaqueBound,
+        ],
+        [
+          'WebP with alpha, colour and alpha both noise',
+          {
+            format: 'webp',
+            width: IMAGE_MAX_DIMENSION,
+            height: Math.floor(WEBP_ALPHA_LARGEST_FRAME_PIXELS / IMAGE_MAX_DIMENSION),
+            channels: 4,
+            encoder: { quality: 1 },
+          },
+          WEBP_ALPHA_LARGEST_FRAME_PIXELS,
+        ],
+        [
+          'WebP animation of noise with alpha, as many frames as fit',
+          {
+            format: 'webp',
+            width: animSide,
+            height: animSide,
+            channels: 4,
+            alphaLevels: 2,
+            frames: Math.floor(WEBP_ANIMATION_MAX_PIXELS / animSide ** 2),
+            encoder: { quality: 1 },
+          },
+          WEBP_ANIMATION_LARGEST_FRAME_PIXELS,
+        ],
+      ];
+      const peaks: Record<string, number> = {};
+      for (const [name, input, bound] of cases) {
+        const file = path.join(dir, `case-${Object.keys(peaks).length}`);
+        let bytes: Uint8Array;
+        if (input instanceof Uint8Array) {
+          bytes = input;
+          writeFileSync(file, bytes);
+        } else {
+          await makeInChild(input, file);
+          bytes = new Uint8Array(readFileSync(file));
+        }
+        // An upload processImage takes, from its header — at its kind's bound (within 3% of it,
+        // so a looser bound fails here until it is measured again).
+        const contentType: ImageContentType = sniffImageType(bytes)!;
+        const metadata = await sharp(bytes, { animated: true, limitInputPixels: false }).metadata();
+        const frameHeight = metadata.pageHeight ?? metadata.height;
+        const frame = metadata.width * frameHeight;
+        expect(bytes.length, name).toBeLessThanOrEqual(IMAGE_MAX_BYTES);
+        expect(frame, name).toBeLessThanOrEqual(largestFramePixels(contentType, metadata));
+        expect(frame, name).toBeGreaterThan(0.97 * bound);
+        expect(metadata.width * metadata.height, name).toBeLessThanOrEqual(
+          largestImagePixels(contentType, metadata),
+        );
+        const runs: number[] = [];
+        for (let run = 0; run < CONVERSION_RUNS; run += 1) {
+          const converted = await convertInChild(file, bytes);
+          expect(Math.max(converted.width, converted.height), name).toBeLessThanOrEqual(
+            IMAGE_MAX_DIMENSION,
+          );
+          runs.push(converted.peakBytes);
+        }
+        const mib = runs.map((peak) => Math.round(peak / (1024 * 1024)));
+        peaks[name] = median(mib);
+        expect(median(runs), `${name}: ${mib.join(', ')}MiB`).toBeLessThanOrEqual(
+          IMAGE_CONVERSION_PEAK_BYTES,
+        );
+      }
+      // The sampling saw the conversions (a gauge that read nothing would pass the lines above).
+      expect(Math.max(...Object.values(peaks))).toBeGreaterThan(
+        IMAGE_CONVERSION_PEAK_BYTES / (2 * 1024 * 1024),
+      );
+    },
+    420_000,
+  );
 });

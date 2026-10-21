@@ -36,7 +36,9 @@ export const IMAGE_BODY_LIMIT = IMAGE_MAX_BYTES * 2;
  * 2026-10-21, ADR-0073). The gate below lets a body in only for an account that may upload, but
  * one such account could still send many uploads at once, each held up to IMAGE_BODY_LIMIT while
  * it arrives — past the API container's 448MiB (deploy/compose.yaml) beside a conversion's
- * 128MiB (image.ts) and the reads' 32MiB (image-reads.ts). So an upload takes its declared length
+ * IMAGE_CONVERSION_PEAK_BYTES (144MiB, image.ts) and the reads' 32MiB (image-reads.ts); ADR-0073
+ * 결과 5 found that these and the API's own use cannot all fit at once (a question for the owner,
+ * 결과 4). So an upload takes its declared length
  * (`Content-Length`), or the parser's limit when it declares none, out of this budget before a
  * byte of its body is read, and gives it back once the body is in or the request has ended
  * without it. 64MiB is six bodies at the parser's limit, or a dozen photos near 5MB.

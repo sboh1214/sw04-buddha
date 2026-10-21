@@ -4,7 +4,7 @@ import { ByteBudget } from './byte-budget.js';
 /**
  * The bytes of the image reads the API may hold at once, process-wide (`GET /media/:mediaId`,
  * ADR-0073 decision 9-36). Implementation-chosen; the owner kept it as built (owner decision
- * 2026-10-20), and the retry second with it.
+ * 2026-10-20 answer 4), and the retry second with it.
  *
  * A read holds its whole image (the store answers with the bytes, at most a few MB each) from the
  * storage read until its answer has been handed to the socket — for a client that reads slowly or
@@ -13,8 +13,10 @@ import { ByteBudget } from './byte-budget.js';
  * could have hundreds of reads in flight and their images in the API's memory together, past the
  * container's 448MiB (deploy/compose.yaml). The bound is in bytes, not reads, so a page of small
  * thumbnails is not refused for the size a few large GIFs would take: 32MiB is some forty ordinary
- * photos (2,048px JPEG, under 1MB) or six animated GIFs near 5MB, beside decision 9-8's 128MiB for
- * a conversion and the heap.
+ * photos (2,048px JPEG, under 1MB) or six animated GIFs near 5MB. It was chosen beside decision
+ * 9-8's 128MiB for a conversion, as it was then, and the heap; a conversion is now bounded at
+ * IMAGE_CONVERSION_PEAK_BYTES (144MiB, image.ts), and ADR-0073 결과 5 found that the budgets and
+ * the API's own use cannot all fit in the 448MiB at once (a question for the owner, 결과 4).
  */
 export const IMAGE_READ_BUDGET_BYTES = 32 * 1024 * 1024;
 

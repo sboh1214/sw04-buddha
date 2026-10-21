@@ -273,33 +273,41 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
     expect(paid?.amountCoin).toBe(10_000n);
   });
 
-  it('media.orphan_cleanup reports JSON-safe counts and logs an object the store kept (#46)', async () => {
+  it('media.orphan_cleanup reports JSON-safe counts and logs an object the store kept, keeping it queued (#46)', async () => {
     const { user } = await createUser(t.db);
     const old = new Date(Date.now() - 25 * 60 * MINUTE_MS);
     const gone = await createMedia(t.db, { ownerId: user.id, createdAt: old });
     const kept = await createMedia(t.db, { ownerId: user.id, createdAt: old });
     await storage.put(gone.storageKey, new Uint8Array([1]), 'image/webp');
-    // The store refuses one key: its row is gone all the same, and the job does not fail.
+    // The store refuses one key: both rows go, the refused key stays queued for a later run, and
+    // the job does not fail.
     const refusing = storage.delete.bind(storage);
     storage.delete = (key) =>
       key === kept.storageKey ? Promise.reject(new Error('AccessDenied')) : refusing(key);
     const result = await run({ name: JOB_NAMES.mediaOrphanCleanup });
     expect(result).toEqual({
-      removed: 2,
+      queued: 2,
+      removed: 1,
       failed: 1,
-      failures: [{ storageKey: kept.storageKey, message: 'AccessDenied' }],
+      failures: [{ storageKey: kept.storageKey, attempts: 1, message: 'AccessDenied' }],
+      pending: 1,
     });
     expect(JSON.parse(JSON.stringify(result))).toEqual(result);
     expect(storage.objects.has(gone.storageKey)).toBe(false);
     expect(await t.db.select().from(schema.mediaObjects)).toEqual([]);
-    expect(logs.filter((line) => line.msg === 'orphan upload object not removed')).toEqual([
-      expect.objectContaining({ storageKey: kept.storageKey, level: 50 }),
+    expect((await t.db.select().from(schema.mediaDeletions)).map((row) => row.storageKey)).toEqual([
+      kept.storageKey,
     ]);
-    // A run with nothing to do is quiet (debug).
+    expect(
+      logs.filter((line) => line.msg === 'orphan upload object not removed; kept for retry'),
+    ).toEqual([expect.objectContaining({ storageKey: kept.storageKey, attempts: 1, level: 50 })]);
+    // The next run, before the refused key is due again, has nothing to do and is quiet (debug).
     expect(await run({ name: JOB_NAMES.mediaOrphanCleanup })).toEqual({
+      queued: 0,
       removed: 0,
       failed: 0,
       failures: [],
+      pending: 1,
     });
     expect(
       logs.filter((line) => line.msg === 'orphan upload clean-up').map((line) => line.level),
