@@ -139,6 +139,7 @@ describe('the notice above a 더 보기 that failed', () => {
         'app/my/wallet/ledger-list.tsx',
         'app/my/wallet/payment-history.tsx',
         'app/my/watchlist/watchlist.tsx',
+        'components/authored/authored-list.tsx',
         'components/post/comments-section.tsx',
         'components/post/market-picker.tsx',
       ].sort(),

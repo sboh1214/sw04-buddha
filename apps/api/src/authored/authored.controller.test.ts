@@ -27,6 +27,7 @@ import {
   createCommentLike,
   createMarket,
   createMedia,
+  createNotice,
   createPost,
   createPostLike,
   createUser,
@@ -264,16 +265,32 @@ describe.skipIf(!hasTestInfra)('/api/v1 authored lists (integration)', () => {
     }
   });
 
-  it('marks the member an operator on an admin account’s items (#45-9)', async () => {
+  it('marks the member an operator on an admin account’s items (#45-9), and lists no notice the admin operated (#138)', async () => {
     const admin = await createUser(t.db, { role: 'admin' });
     const [row] = await t.db
       .select({ publicId: schema.profiles.publicId })
       .from(schema.profiles)
       .where(eq(schema.profiles.userId, admin.user.id));
     const post = await createPost(t.db, { marketId: market.id, authorId: admin.user.id });
-    await createComment(t.db, { postId: post.id, authorId: admin.user.id });
-    const [card] = (await profilePosts('', row!.publicId)).data;
-    const [comment] = (await profileComments('', row!.publicId)).data;
+    const written = await createComment(t.db, { postId: post.id, authorId: admin.user.id });
+    // A notice the admin wrote and pinned, newer than both (#138, ADR-0077): '운영팀''s, in a table
+    // of its own (`notices`), so never one of the admin's items — as the profile's counts leave it
+    // out (ADR-0078).
+    const notice = await createNotice(t.db, { pinSlot: 1 });
+    await t.db.insert(schema.adminActions).values(
+      (['notice_create', 'notice_pin'] as const).map((type) => ({
+        adminId: admin.user.id,
+        type,
+        targetType: 'notice',
+        targetId: notice.id,
+      })),
+    );
+    const posts = await profilePosts('', row!.publicId);
+    const comments = await profileComments('', row!.publicId);
+    expect(ids(posts)).toEqual([post.id]);
+    expect(ids(comments)).toEqual([written.id]);
+    const [card] = posts.data;
+    const [comment] = comments.data;
     expect(card?.author).toMatchObject({ kind: 'member', isAdmin: true });
     expect(comment?.author).toMatchObject({ kind: 'member', isAdmin: true });
   });
@@ -598,18 +615,31 @@ describe.skipIf(!hasTestInfra)('/api/v1 authored lists (integration)', () => {
     expect(again.statusCode).toBe(404);
   });
 
-  it('lets an account the onboarding has not finished delete its hidden comment: signed in is enough', async () => {
-    // The comment route asks a session only (ADR-0074). The post route does too once this branch
-    // sits on #46's answers (owner decision 2026-10-19 답 2, ADR-0073 9-16 there); on this base it
-    // still asks the onboarding, so the post case joins this test with the restack (ADR-0080 결과 5).
+  it('lets an account the onboarding has not finished delete its hidden post and comment: signed in is enough', async () => {
+    // Both delete routes ask a session only: the comment's (ADR-0074) and the post's (owner
+    // decision 2026-10-19 답 2, ADR-0073 9-16) — so MY's 삭제 reaches either whatever is left of
+    // the onboarding (ADR-0080 결정 4).
     const fresh = await signUpTestUser(t);
+    const hiddenPost = await createPost(t.db, {
+      marketId: market.id,
+      authorId: fresh.id,
+      hiddenAt: new Date(),
+    });
     const othersPost = await createPost(t.db, { marketId: market.id, authorId: other.id });
     const hidden = await createComment(t.db, {
       postId: othersPost.id,
       authorId: fresh.id,
       hiddenAt: new Date(),
     });
+    expect(ids(await myPosts(fresh))).toEqual([hiddenPost.id]);
     expect(ids(await myComments(fresh))).toEqual([hidden.id]);
+    const post = await send(
+      `/posts/${hiddenPost.id}/delete`,
+      { expectedAccountId: fresh.id },
+      fresh,
+    );
+    expect(post.statusCode, post.body).toBe(200);
+    expect((await myPosts(fresh)).data).toEqual([]);
     const res = await send(`/comments/${hidden.id}/delete`, { expectedAccountId: fresh.id }, fresh);
     expect(res.statusCode, res.body).toBe(200);
     expect((await myComments(fresh)).data).toEqual([]);

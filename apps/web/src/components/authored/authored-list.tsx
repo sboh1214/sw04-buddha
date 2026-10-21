@@ -3,6 +3,7 @@
 import { Alert, Box, Button, Skeleton, Stack } from '@chakra-ui/react';
 import { type ReactNode } from 'react';
 import { EmptyState } from '@/components/ui/empty-state';
+import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { copy } from '@/copy';
 import {
   type AuthoredPage,
@@ -14,9 +15,9 @@ import { postReadErrorMessage } from '@/lib/posts';
 import { listSection } from '@/lib/query-client';
 
 /**
- * What a list body reads of its `useInfiniteQuery` (use-authored.ts). `isFetchNextPageError` and
- * `failureReason` are what the community stack's failed-더 보기 notice reads (`LoadMoreFailed`,
- * owner decision 2026-10-20 7), held here already so the restack only draws it (ADR-0080 결과 5).
+ * What a list body reads of its `useInfiniteQuery` (use-authored.ts). `isFetchNextPageError`,
+ * `isFetchingNextPage` and `failureReason` are what the failed-더 보기 notice reads
+ * (`LoadMoreFailed`, owner decision 2026-10-20 7 — every 더 보기 list, MY's too).
  */
 export interface AuthoredListQuery<Row> {
   data: { pages: AuthoredPage<Row>[] } | undefined;
@@ -37,8 +38,9 @@ export interface AuthoredListQuery<Row> {
  * (`limit`, MY_PREVIEW_ROWS: the newest few and no 더 보기, `authoredRows`) — drawn the way the other
  * lists are (`listSection`, as MY's 관심 시장): a skeleton while the first page loads, a first read
  * that failed (an unreachable server told apart, `postReadErrorMessage`) with 다시 시도, the tab's
- * empty line, the rows newest first with 더 보기 while there are more, and a refresh that failed
- * over rows that are kept under a notice rather than dropping them.
+ * empty line, the rows newest first with 더 보기 while there are more, a 더 보기 that failed said
+ * right above the button with the first read's words (`LoadMoreFailed`, owner decision 2026-10-20
+ * 7), and a refresh that failed over rows that are kept under a notice rather than dropping them.
  *
  * Each row is what `renderRow` draws — the community card for a post, `AuthoredCommentCard` for a
  * comment, either under MY's '숨김' line — in a list item, so a screen reader hears how many. The
@@ -101,21 +103,27 @@ export function AuthoredListBody<Row extends { id: string }>({
               </Box>
             ))}
           </Stack>
-          {/* Once this sits on the community stack, a 더 보기 that failed says so right above this
-              button, inside this condition (`LoadMoreFailed`, owner decision 2026-10-20 7 — MY's
-              lists too), as every 더 보기 list does; until then it fails silently, as every 더 보기
-              list on this base does (ADR-0080 결과 5). */}
           {more && (
-            <Button
-              alignSelf="center"
-              size="sm"
-              variant="ghost"
-              loading={list.isFetchingNextPage}
-              onClick={() => void list.fetchNextPage()}
-              data-testid={`${testId}-more`}
-            >
-              {copy.loadMore}
-            </Button>
+            <>
+              {/* A 더 보기 that failed: the rows stay, and this says why nothing came — an
+                  unreachable server told apart, as the first read's failure is — above the button
+                  that asks again (owner decision 2026-10-20 7, as every 더 보기 list). */}
+              <LoadMoreFailed
+                list={list}
+                message={postReadErrorMessage(list.error)}
+                data-testid={`${testId}-more-failed`}
+              />
+              <Button
+                alignSelf="center"
+                size="sm"
+                variant="ghost"
+                loading={list.isFetchingNextPage}
+                onClick={() => void list.fetchNextPage()}
+                data-testid={`${testId}-more`}
+              >
+                {copy.loadMore}
+              </Button>
+            </>
           )}
         </>
       )}

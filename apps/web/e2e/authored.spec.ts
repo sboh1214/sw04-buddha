@@ -130,6 +130,13 @@ function isAuthoredListRead(url: URL): boolean {
   return /^\/api\/v1\/(me|profiles\/[^/]+)\/(posts|comments)$/.test(url.pathname);
 }
 
+/** A server error as the API's envelope says it (discussion.spec.ts's): the client retries it twice. */
+const SERVER_ERROR = {
+  status: 500,
+  contentType: 'application/json',
+  body: JSON.stringify({ error: { code: 'INTERNAL', message: 'Internal error' } }),
+};
+
 /** React's hydration complaints in the browser's console from now on (profile.spec.ts's). */
 function hydrationErrors(page: Page): string[] {
   const seen: string[] = [];
@@ -376,7 +383,7 @@ test.describe('작성자별 글·댓글', () => {
     );
   });
 
-  test('MY 요약은 글과 댓글을 최신 셋씩 이름 붙은 목록으로 보이고 더 보기가 없으며, 내 글 탭과 프로필의 두 탭은 더 보기로 다음 페이지를 이어 모두 보인다', async ({
+  test('MY 요약은 글과 댓글을 최신 셋씩 이름 붙은 목록으로 보이고 더 보기가 없으며, 내 글 탭과 프로필의 두 탭은 더 보기로 다음 페이지를 이어 모두 보이고, 실패한 더 보기는 단추 위에 까닭을 말하고 다시 누르면 잇는다', async ({
     admin,
     page,
   }) => {
@@ -421,11 +428,16 @@ test.describe('작성자별 글·댓글', () => {
 
     // --- two to a page from here on (the browser's reads get `limit=2`): each list shows its first
     // page, 더 보기 brings the next after it, newest first still, and goes away on the last page.
+    // A 더 보기 that fails first — the next page refused through the client's retries — keeps the
+    // first page, says so right above the button with the first read's words (a server error:
+    // '문제가 발생했습니다…') and leaves 더 보기 to ask again (owner decision 2026-10-20 7, as
+    // discussion.spec.ts's); asked again, the next page comes and the notice goes with the button.
     await page.route(isAuthoredListRead, (route) => {
       const url = new URL(route.request().url());
       url.searchParams.set('limit', '2');
       return route.continue({ url: url.toString() });
     });
+    const isNextPage = (url: URL) => isAuthoredListRead(url) && url.searchParams.has('cursor');
     const pagesThrough = async (
       list: Locator,
       more: Locator,
@@ -433,8 +445,22 @@ test.describe('작성자별 글·댓글', () => {
       ids: string[],
     ) => {
       await expectRows(list, ids.slice(0, 2));
+      const moreTestId = (await more.getAttribute('data-testid')) ?? '';
+      const moreFailed = page.getByTestId(`${moreTestId}-failed`);
+      await expect(moreFailed).toHaveCount(0);
+      await page.route(isNextPage, (route) => route.fulfill(SERVER_ERROR));
+      await more.click();
+      await expect(moreFailed).toHaveText(copy.errUnknown);
+      await expect(moreFailed).toHaveAttribute('role', 'alert');
+      await expect(
+        page.locator(`[data-testid="${moreTestId}-failed"] + [data-testid="${moreTestId}"]`),
+      ).toHaveCount(1);
+      await expectRows(list, ids.slice(0, 2));
+      await expect(more).toBeEnabled();
+      await page.unroute(isNextPage);
       await more.click();
       await expectRows(list, ids);
+      await expect(moreFailed).toHaveCount(0);
       await expect(more).toHaveCount(0);
     };
     await page.goto('/my/posts');
