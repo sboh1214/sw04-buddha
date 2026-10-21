@@ -58,8 +58,10 @@ export function NicknameForm() {
  * operator-impersonating word, checked before sending; the server's answers for a nickname taken
  * (ignoring case) or held for 30 days after another account gave it up, and for the 30 days
  * between changes — with when the next change is allowed, in the member's time zone — under the
- * input. MY 설정 is reached only by an onboarded account (the gate), so `ONBOARDING_REQUIRED` here
- * means another tab's state changed: `['me']` is asked again, and the gate follows it.
+ * input. MY 설정 is reached by an onboarded account (the gate) — and by one facing a re-consent
+ * alone (ONBOARDING_EXEMPT_PAGES, #41), whose nickname step is done, which is all `PATCH /me` asks
+ * of the onboarding — so `ONBOARDING_REQUIRED` here means another tab's state changed: `['me']` is
+ * asked again, and the gate follows it.
  */
 function NicknameFields({ nickname, accountId }: { nickname: string; accountId: string }) {
   const update = useUpdateNickname();

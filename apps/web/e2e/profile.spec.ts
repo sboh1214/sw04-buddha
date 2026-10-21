@@ -22,7 +22,10 @@ import {
  * and reads the same public items and counts (the likes received leave out the member's own, which
  * the post still counts); only the member gets the link to MY 설정, an admin's profile says
  * '운영자', and an old link shows the new nickname. Every answer is `noindex`, the HTML is the
- * server's and holds nothing private, and an unknown public id is a 404. The field allow-list, the
+ * server's and holds nothing private, and an unknown public id is a 404. A member facing a
+ * re-consent stays on MY 설정 to clear the 소개 and drop categories; a new 소개, a category added and
+ * the marketing switch go to the step and come back (owner decision 2026-10-21 answer 2, ADR-0078
+ * 7-24). The field allow-list, the
  * counts' rules (deleted, hidden and voided content), the restriction hook and the refusals are the
  * API's tests (profiles.controller.test.ts, public-items*.test.ts, private-data.test.ts); this
  * walks the screens.
@@ -117,6 +120,47 @@ async function expectCounts(
   await expect(count('posts')).toHaveText(`${copy.profilePostCount}${String(posts)}`);
   await expect(count('comments')).toHaveText(`${copy.profileCommentCount}${String(comments)}`);
   await expect(count('likes')).toHaveText(`${copy.profileReceivedLikes}${String(likes)}`);
+}
+
+/**
+ * `GET /me` in this page answering as the server would after a revision of the terms that changed
+ * members' rights, while `on`; agreeing on the step turns it off (likes.spec.ts and comments.spec.ts
+ * draw it the same way — no spec can bring about a re-consent for real).
+ */
+async function asReconsent(page: Page): Promise<{ on: boolean }> {
+  const state = { on: false };
+  await page.route('**/api/v1/me', async (route) => {
+    if (route.request().method() !== 'GET' || !state.on) return route.fallback();
+    const response = await route.fetch();
+    if (!response.ok()) return route.fulfill({ response });
+    const body = (await response.json()) as { data: Me };
+    const { onboarding } = body.data;
+    body.data.onboarding = {
+      ...onboarding,
+      consent: false,
+      completed: false,
+      nextStep: 'consent',
+      consents: onboarding.consents.map((answer) =>
+        answer.item === 'terms' ? { ...answer, version: 'draft-1999-01-01' } : answer,
+      ),
+    };
+    await route.fulfill({ response, json: body });
+  });
+  await page.route('**/api/v1/me/consents', async (route) => {
+    const response = await route.fetch();
+    state.on = false;
+    await route.fulfill({ response });
+  });
+  return state;
+}
+
+/** The consent step of a re-consent, agreed on screen. */
+async function agreeAgain(page: Page): Promise<void> {
+  await expect(page.getByTestId('onboarding-return-reason')).toHaveText(
+    copy.onboardingReconsentReason,
+  );
+  await page.getByTestId('consent-all').click();
+  await page.getByTestId('consent-submit').click();
 }
 
 /** The 소개 as the page lays it out: its line breaks as `\n` (`pre-line`), never a link in it. */
@@ -347,5 +391,114 @@ test.describe('공개 프로필', () => {
     const missing = await page.goto('/u/zzzzzzzzzz');
     expect(missing?.status()).toBe(404);
     await expect(page.locator('meta[name="robots"]').first()).toHaveAttribute('content', /noindex/);
+  });
+
+  test('재동의가 남은 회원은 MY 설정에서 로그인만으로 소개를 비우고 관심 카테고리를 빼며, 새 소개·카테고리 더하기와 마케팅 정보 수신은 보내지 않고 남은 단계로 갔다가 마치면 MY 설정으로 돌아온다', async ({
+    page,
+  }) => {
+    const tag = freshTag();
+    await signUp(page, freshEmail());
+    const me = await meOf(page.request);
+    const { top, sub } = await topAndSub(page.request);
+    // A 소개 and a category, written while nothing was left — straight at the API.
+    const bio = `재동의 전에 쓴 소개 ${tag}`;
+    let res = await page.request.put('/api/v1/me/bio', {
+      data: { bio, expectedAccountId: me.id },
+    });
+    expect(res.status(), await res.text()).toBe(200);
+    res = await page.request.put('/api/v1/me/interest-categories', {
+      data: { categoryIds: [top.id], expectedAccountId: me.id },
+    });
+    expect(res.status(), await res.text()).toBe(200);
+
+    const settings = '/my/settings';
+    const viaStep = `/onboarding?next=${encodeURIComponent(settings)}`;
+    // What the browser sends of the public items and of the consent.
+    const profileWrites: string[] = [];
+    let consentWrites = 0;
+    page.on('request', (request) => {
+      const { pathname } = new URL(request.url());
+      if (
+        request.method() === 'PUT' &&
+        (pathname === '/api/v1/me/bio' || pathname === '/api/v1/me/interest-categories')
+      ) {
+        profileWrites.push(pathname);
+      }
+      if (request.method() === 'POST' && pathname === '/api/v1/me/consents') consentWrites += 1;
+    });
+    const reconsent = await asReconsent(page);
+    /** The browser's read of `GET /me`, which says the step is left — the cards wait for it. */
+    const meRead = () =>
+      page.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === '/api/v1/me' &&
+          response.request().method() === 'GET',
+      );
+    const reloadAsReconsent = async () => {
+      reconsent.on = true;
+      const read = meRead();
+      await page.reload();
+      await read;
+      await expect(page).toHaveURL(settings);
+    };
+    const bioCard = page.getByTestId('settings-bio');
+    const bioInput = bioCard.getByTestId('bio-input');
+    const interests = page.getByTestId('settings-interests');
+    const save = interests.getByTestId('interests-settings-save');
+
+    // --- MY 설정 stays open for the re-consent (ADR-0078 7-24), with the account's 소개.
+    reconsent.on = true;
+    const firstRead = meRead();
+    await page.goto(settings);
+    await firstRead;
+    await expect(page).toHaveURL(settings);
+    await expect(bioInput).toHaveValue(bio);
+
+    // --- a new 소개: not sent — the step, and back on MY 설정 once agreed, the 소개 as it was.
+    await bioInput.fill(`${bio} 더`);
+    await bioCard.getByTestId('bio-save').click();
+    await expect(page).toHaveURL(viaStep);
+    await agreeAgain(page);
+    await expect(page).toHaveURL(settings);
+    await expect(bioInput).toHaveValue(bio);
+    expect(profileWrites).toEqual([]);
+
+    // --- a category added goes the same way.
+    await reloadAsReconsent();
+    await interests.getByTestId(`interest-${sub.slug}`).click();
+    await save.click();
+    await expect(page).toHaveURL(viaStep);
+    await agreeAgain(page);
+    await expect(page).toHaveURL(settings);
+    expect(profileWrites).toEqual([]);
+
+    // --- so does the marketing switch: a consent record comes with the consent step's items.
+    await reloadAsReconsent();
+    const consentsBefore = consentWrites;
+    await page.getByTestId('settings-marketing-switch').click();
+    await expect(page).toHaveURL(viaStep);
+    expect(consentWrites).toBe(consentsBefore);
+    await agreeAgain(page);
+    await expect(page).toHaveURL(settings);
+
+    // --- clearing the 소개 and dropping the category: sent with a session alone, right here.
+    await reloadAsReconsent();
+    await bioInput.fill('');
+    await bioCard.getByTestId('bio-save').click();
+    await expect(page.getByText(copy.bioCleared)).toBeVisible();
+    await interests.getByTestId(`interest-${top.slug}`).click();
+    await save.click();
+    await expect(page.getByText(copy.interestsSaved)).toBeVisible();
+    await expect(page).toHaveURL(settings);
+    expect(profileWrites).toEqual(['/api/v1/me/bio', '/api/v1/me/interest-categories']);
+    expect((await meOf(page.request)).profile).toMatchObject({
+      bio: null,
+      interestCategoryIds: [],
+    });
+
+    // --- MY's other screens still send the re-consent to its step.
+    await page.goto('/my');
+    await expect(page).toHaveURL(`/onboarding?next=${encodeURIComponent('/my')}`);
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
   });
 });

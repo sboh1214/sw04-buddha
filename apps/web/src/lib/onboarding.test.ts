@@ -138,9 +138,10 @@ const POST_ID = '0b6f6c1e-3f7a-4c51-9d0e-6a1f2b3c4d5e';
 const POST_PAGE = `/community/posts/${POST_ID}`;
 
 describe('the pages exempt for a login-only action (오너 결정 2026-10-20)', () => {
-  it('lists exactly the post page, each entry with its reason', () => {
+  it('lists exactly the post page and MY 설정 (#41), each entry with its reason', () => {
     expect(ONBOARDING_EXEMPT_PAGES.map((page) => page.route)).toEqual([
       '/community/posts/[postId]',
+      '/my/settings',
     ]);
     for (const page of ONBOARDING_EXEMPT_PAGES) expect(page.reason.trim()).not.toBe('');
   });
@@ -223,6 +224,42 @@ describe('the pages exempt for a login-only action (오너 결정 2026-10-20)', 
     expect(needsOnboarding(POST_PAGE, undefined)).toBe(false);
     expect(needsOnboarding(POST_PAGE, COMPLETED)).toBe(false);
     expect(needsOnboarding(POST_PAGE, DONE)).toBe(false);
+  });
+});
+
+describe('MY 설정 for an account facing a re-consent (#41, 오너 결정 2026-10-21 답 2)', () => {
+  it('is MY 설정 alone — not MY, its other tabs or anything under MY 설정', () => {
+    expect(isOnboardingExemptPage('/my/settings')).toBe(true);
+    // Not exempt for every account, as the auth and legal screens are.
+    expect(isOnboardingExempt('/my/settings')).toBe(false);
+    for (const path of ['/my', '/my/wallet', '/my/posts', '/my/settings/x', '/my/settingsx']) {
+      expect(isOnboardingExemptPage(path), path).toBe(false);
+    }
+  });
+
+  it('lets an account that finished once and faces a re-consent alone stay there, to clear its 소개 and categories', () => {
+    expect(needsOnboarding('/my/settings', RECONSENT)).toBe(false);
+    // MY's other screens still send it on.
+    for (const path of ['/my', '/my/wallet', '/my/posts']) {
+      expect(needsOnboarding(path, RECONSENT), path).toBe(true);
+    }
+  });
+
+  it('sends an account that has not finished its onboarding on from it, MY 설정 as next', () => {
+    const agreedThenLeft: Onboarding = { ...CONSENTED, consent: false, nextStep: 'consent' };
+    for (const onboarding of [FRESH, CONSENTED, VERIFIED, agreedThenLeft]) {
+      expect(needsOnboarding('/my/settings', onboarding), String(onboarding.nextStep)).toBe(true);
+    }
+    expect(onboardingPath('/my/settings')).toBe('/onboarding?next=%2Fmy%2Fsettings');
+  });
+
+  it('takes a re-consent’s new value to the step, which comes back to MY 설정', () => {
+    const path = onboardingEntryPath('/my/settings', RECONSENT);
+    expect(path).toBe('/onboarding?next=%2Fmy%2Fsettings');
+    expect(onboardingNext(new URL(path, 'https://x.invalid').searchParams.get('next'))).toBe(
+      '/my/settings',
+    );
+    expect(onboardingEntryPath('/my/settings', DONE)).toBe('/my/settings');
   });
 });
 

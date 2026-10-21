@@ -9,9 +9,15 @@ import { copy } from '@/copy';
 import { useCategories } from '@/hooks/use-markets';
 import { useMe } from '@/hooks/use-me';
 import { useSetInterestCategories } from '@/hooks/use-onboarding';
+import { useSettingsStep } from '@/hooks/use-settings-step';
 import { groupCategories } from '@/lib/category-tree';
 import { interestIds, withInterest } from '@/lib/onboarding';
-import { interestsChanged, profileItemFailure } from '@/lib/profile';
+import {
+  interestsChanged,
+  interestsEdit,
+  profileItemFailure,
+  profileItemSaveGoesToStep,
+} from '@/lib/profile';
 import { ProfileUnavailable } from './profile-unavailable';
 import { SettingsSection } from './section';
 
@@ -23,9 +29,11 @@ import { SettingsSection } from './section';
  * every one and saving clears them — a deletion, which stays open during a writing or an account
  * restriction while adding one does not (#37-9, decision 7: the server's check) — the first pick
  * here included: only the onboarding screen's first answer is let through (owner decision
- * 2026-10-21 answer 4 and (2nd) answer 2). Its own route (`PUT /me/interest-categories`,
- * `useSetInterestCategories`), the same `['me']` write as the onboarding's step, and the same list
- * (`InterestChecklist`).
+ * 2026-10-21 answer 4 and (2nd) answer 2). Dropping needs a session alone, an account facing a
+ * re-consent included (answer 2): the page is the gate's exception for it, and a category it adds
+ * goes to the step first, coming back here (`useSettingsStep`, ADR-0078 7-24). Its own route
+ * (`PUT /me/interest-categories`, `useSetInterestCategories`), the same `['me']` write as the
+ * onboarding's step, and the same list (`InterestChecklist`).
  */
 export function InterestsSection() {
   const { data: me, isPending } = useMe();
@@ -52,12 +60,15 @@ export function InterestsSection() {
  * `interestsChanged`): a category operators retired is neither shown nor sent, so saving drops it,
  * as the public profile already leaves it out. A category retired while the screen was open is
  * refused by the server (VALIDATION_ERROR naming `categoryIds`): the list is loaded again and the
- * member picks again from what is there, as in the onboarding.
+ * member picks again from what is there, as in the onboarding. With a step left — a re-consent, the
+ * only one the gate keeps on this page — a save that adds a category is not sent: 저장 goes to the
+ * step (`profileItemSaveGoesToStep`), and one the server refused for the onboarding goes there too.
  */
 function InterestsFields({ held }: { held: readonly number[] }) {
   const categories = useCategories();
   const save = useSetInterestCategories();
   const router = useRouter();
+  const step = useSettingsStep();
   const [picked, setPicked] = useState<ReadonlySet<number>>(() => new Set(held));
   const [base, setBase] = useState<readonly number[]>(held);
   const [notice, setNotice] = useState<string | null>(null);
@@ -76,6 +87,10 @@ function InterestsFields({ held }: { held: readonly number[] }) {
     const accountId = save.accountId;
     if (accountId === undefined) return;
     setNotice(null);
+    if (profileItemSaveGoesToStep(interestsEdit(chosen, held), step.stepLeft)) {
+      step.toStep();
+      return;
+    }
     try {
       await save.mutateAsync({ categoryIds: chosen, expectedAccountId: accountId });
       toaster.create({ type: 'success', title: copy.interestsSaved });
@@ -84,6 +99,7 @@ function InterestsFields({ held }: { held: readonly number[] }) {
       // the screen instead.
       router.refresh();
     } catch (error) {
+      if (step.afterRefusal(error)) return;
       const failure = profileItemFailure(error);
       if (failure.kind === 'categories') void categories.refetch();
       setNotice(failure.message);

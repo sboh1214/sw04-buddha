@@ -293,7 +293,8 @@ async function putBio(body: UpdateBioBody): Promise<Me> {
  * nickname's does, so the card shows what the server kept (normalised: trimmed, line breaks as
  * `\n`). The 403 for another account asks for the session again, so SessionCacheGuard puts the
  * account really signed in on screen; an ONBOARDING_REQUIRED — a revision asked for the consent
- * again while the screen was open — asks `['me']` again, and the gate takes the member on.
+ * again while the screen was open — asks `['me']` again, and the gate, or on MY 설정 the step
+ * (`useSettingsStep`), takes the member on.
  */
 export function updateBioOptions(
   queryClient: QueryClient,

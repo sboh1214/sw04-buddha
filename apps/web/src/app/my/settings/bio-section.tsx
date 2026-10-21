@@ -9,12 +9,15 @@ import { useForm, useWatch } from 'react-hook-form';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { useMe, useUpdateBio } from '@/hooks/use-me';
+import { useSettingsStep } from '@/hooks/use-settings-step';
 import {
   bioDraft,
+  bioEdit,
   bioFormSchema,
   bioLengthText,
   bioToSend,
   profileItemFailure,
+  profileItemSaveGoesToStep,
   type BioFormValues,
 } from '@/lib/profile';
 import { ProfileUnavailable } from './profile-unavailable';
@@ -24,7 +27,10 @@ import { SettingsSection } from './section';
  * 소개 (#41, ADR-0078): the public profile's 소개, edited here (ADR-0069 decision 4 #41: «MY 설정»).
  * Plain text of at most 160 characters with its line breaks, never a link (#37-3); saving an empty
  * box clears it — a deletion, which stays open during a writing or an account restriction while a
- * new text does not (#37-9, decision 7: the server's check, #185/#139 bring the restriction).
+ * new text does not (#37-9, decision 7: the server's check, #185/#139 bring the restriction), and
+ * which an account facing a re-consent alone makes here too, with a session alone (owner decision
+ * 2026-10-21 answer 2): the page is the gate's exception for it, and its new text goes to the step
+ * first, coming back here (`useSettingsStep`, ADR-0078 7-24).
  */
 export function BioSection() {
   const { data: me, isPending } = useMe();
@@ -45,11 +51,14 @@ export function BioSection() {
  * progress — the nickname card's arrangement (`values` + `keepDirtyValues`). The count under the
  * box is the server's (`bioDraft`: normalised, code points), so the limit shows before saving,
  * and 저장 waits while the box holds more than the limit or nothing new. The body names the account
- * the card shows (`expectedAccountId`).
+ * the card shows (`expectedAccountId`). With a step left — a re-consent, the only one the gate
+ * keeps on this page — a new text is not sent: 저장 goes to the step (`profileItemSaveGoesToStep`),
+ * and a new text the server refused for the onboarding goes there too (`afterRefusal`).
  */
 function BioFields({ bio, accountId }: { bio: string | null; accountId: string }) {
   const update = useUpdateBio();
   const router = useRouter();
+  const step = useSettingsStep();
   const id = useId();
   const [notice, setNotice] = useState<string | null>(null);
   const values = useMemo(() => ({ bio: bio ?? '' }), [bio]);
@@ -71,6 +80,10 @@ function BioFields({ bio, accountId }: { bio: string | null; accountId: string }
   const onSubmit = handleSubmit(async (form) => {
     setNotice(null);
     const next = bioToSend(form.bio);
+    if (profileItemSaveGoesToStep(bioEdit(next), step.stepLeft)) {
+      step.toStep();
+      return;
+    }
     try {
       const me = await update.mutateAsync({ bio: next, expectedAccountId: accountId });
       // What the server kept (trimmed, line breaks as `\n`), not what was typed. Explicitly not
@@ -88,7 +101,8 @@ function BioFields({ bio, accountId }: { bio: string | null; accountId: string }
         setError('bio', { message: failure.message }, { shouldFocus: true });
         return;
       }
-      // `refresh`: the hook has asked `['me']` again, and the gate follows it.
+      // `refresh`: the hook has asked `['me']` again, and the gate or the step follows it.
+      if (step.afterRefusal(error)) return;
       setNotice(failure.message);
     }
   });

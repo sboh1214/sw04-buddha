@@ -18,6 +18,7 @@ import {
   validationMessage,
 } from './api';
 import { CATEGORY_TRAIL_SEPARATOR } from './category-label';
+import { type Onboarding, hasOnboardingStepLeft, needsOnboarding } from './onboarding';
 
 /**
  * 공개 프로필 (#41, ADR-0078) as the screens read it: its address, what the page says of the
@@ -159,7 +160,8 @@ export type ProfileItemFailure =
   | { kind: 'field'; message: string }
   /**
    * `['me']` is out of date — a revision asked for the consent again while the screen was open
-   * (ONBOARDING_REQUIRED) — and the hook has asked for it again: the gate follows from there.
+   * (ONBOARDING_REQUIRED) — and the hook has asked for it again: the gate, or on this page the step
+   * (`profileItemRefusalMove`), takes the member on from there; said only when neither does.
    */
   | { kind: 'refresh'; message: string }
   /** The categories on screen are not all offered any more: the list is read again. */
@@ -170,8 +172,11 @@ export type ProfileItemFailure =
 /**
  * What a refused public-item write tells the member:
  * - the cookie is another account than the screen's (`expectedAccountId`): the session switched;
- * - ONBOARDING_REQUIRED: MY 설정 is reached onboarded only, so another tab or a revision changed
- *   that — the hook asked `['me']` again and the gate takes the member on;
+ * - ONBOARDING_REQUIRED: a new value from an account whose `['me']` said nothing was left — a
+ *   revision asked for the consent again while the screen was open, say. MY 설정 is reached by an
+ *   onboarded account and, for clearing, by one facing a re-consent alone (ONBOARDING_EXEMPT_PAGES,
+ *   owner decision 2026-10-21 answer 2): the hook asked `['me']` again, and the gate or the step
+ *   takes the member on (`profileItemRefusalMove`) — this is said when neither can;
  * - VALIDATION_ERROR on `bio` (`bioRefusalOf`): more than 160 characters; on `categoryIds`: a
  *   category retired while the screen was open — the list is loaded again;
  * - a request that never reached the API, and anything else — the FORBIDDEN a writing or an
@@ -197,6 +202,70 @@ export function profileItemFailure(error: unknown): ProfileItemFailure {
     kind: 'notice',
     message: isApiUnreachable(error) ? copy.errNetwork : copy.errUnknown,
   };
+}
+
+// ---- MY 설정 for an account facing a re-consent ---------------------------------------------------
+
+/**
+ * What a save of a public item is, as the server tells them apart (`assertPublicItemOnboarding`,
+ * ADR-0078 decision 4, 7-8 and 7-11): `clear` — the 소개 emptied, interest categories dropped and
+ * none added — asks for a session alone, an account facing a re-consent included (owner decision
+ * 2026-10-21 answer 2); `replace` — a 소개 with text, a category the account did not have — is for
+ * an account that has done its onboarding.
+ */
+export type PublicItemEdit = 'clear' | 'replace';
+
+/** The 소개's save: `null` (`bioToSend` of a blank box) clears it, any text is a new value. */
+export function bioEdit(next: string | null): PublicItemEdit {
+  return next === null ? 'clear' : 'replace';
+}
+
+/**
+ * The interest categories' save: a new value when it holds a category the account does not have
+ * (`held`, `Me.profile.interestCategoryIds`) — dropping some or all of them is a deletion, and a
+ * save that drops one and adds another is a new value (ADR-0078 7-11).
+ */
+export function interestsEdit(chosen: readonly number[], held: readonly number[]): PublicItemEdit {
+  const had = new Set(held);
+  return chosen.some((id) => !had.has(id)) ? 'replace' : 'clear';
+}
+
+/**
+ * Whether MY 설정 takes a save to the account's remaining step rather than sending it. The page is
+ * exempt for an account facing a re-consent alone (ONBOARDING_EXEMPT_PAGES) so it can clear its
+ * public items with a session alone (owner decision 2026-10-21 answer 2, ADR-0078 7-24); a new value
+ * is for an onboarded account only — the server would refuse it — so it goes to the step first, which
+ * comes back to MY 설정 (`onboardingEntryPath`), as the post page's writes do (#46, #48, #49).
+ * `stepLeft` is `useOnboardingEntry`'s: `GET /me` names a step left — on this page, a re-consent.
+ */
+export function profileItemSaveGoesToStep(edit: PublicItemEdit, stepLeft: boolean): boolean {
+  return stepLeft && edit === 'replace';
+}
+
+/**
+ * Where a save the server refused for the onboarding (ONBOARDING_REQUIRED) goes, once `['me']` has
+ * been read again (the hooks do it before the save's promise rejects): `onboarding` is what it says
+ * now, and `pathname` the page shown now. Such a save was sent because `GET /me` had not said a step
+ * is left — a revision asked for the consent again while the screen was open. As a 좋아요's
+ * (`likeRefusalMove`; owner decisions 2026-10-20 answer 1 and 2026-10-21 for #46's refusals: a
+ * refusal for a re-consent moves to the step without a word):
+ * - `gate`: the onboarding gate takes the account from this page (`needsOnboarding` — an onboarding
+ *   not finished): nothing to say, the gate goes to the step;
+ * - `step`: still on MY 설정, which the gate lets an account facing a re-consent alone stay on, with a
+ *   step left: the save goes to it now, nothing said;
+ * - undefined: anything else — another refusal, `['me']` not read again (a failure keeps what it
+ *   held) or naming no step, the member gone from MY 설정 meanwhile — and the card says why
+ *   (`profileItemFailure`).
+ */
+export function profileItemRefusalMove(
+  error: unknown,
+  at: { pathname: string; onboarding: Onboarding | undefined },
+): 'gate' | 'step' | undefined {
+  if (!isApiError(error, 'ONBOARDING_REQUIRED')) return undefined;
+  if (needsOnboarding(at.pathname, at.onboarding)) return 'gate';
+  return at.pathname === PROFILE_SETTINGS_PATH && hasOnboardingStepLeft(at.onboarding)
+    ? 'step'
+    : undefined;
 }
 
 // ---- MY 설정: the interest categories -------------------------------------------------------------

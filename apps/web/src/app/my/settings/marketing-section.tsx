@@ -7,6 +7,7 @@ import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { useMe } from '@/hooks/use-me';
 import { useRecordConsents } from '@/hooks/use-onboarding';
+import { useSettingsStep } from '@/hooks/use-settings-step';
 import { ConsentTextRegion } from '@/legal/consent-text-view';
 import { MARKETING_CONSENT_TEXT } from '@/legal/consent-texts';
 import { resolveLegalDocument } from '@/legal/document';
@@ -26,6 +27,11 @@ const MARKETING_TEXT = resolveLegalDocument(MARKETING_CONSENT_TEXT);
  * (`marketingConsentBody`): a record of its own, with the time, the address and the browser, as the
  * consent step's. The text agreed to opens in place ('내용 보기'), and the time of the last change
  * shows in the member's time zone. Nothing sends marketing yet.
+ *
+ * An account facing a re-consent alone stays on MY 설정 to clear its public items (#41,
+ * ONBOARDING_EXEMPT_PAGES); its consent record is taken only with the items its consent step asks
+ * (`POST /me/consents`), so the switch takes it to that step rather than send a record the server
+ * would refuse, coming back here (`useSettingsStep`, ADR-0078 7-24).
  */
 export function MarketingSection() {
   const { data: me, isPending } = useMe();
@@ -47,6 +53,7 @@ export function MarketingSection() {
 
 function MarketingSwitch({ consents }: { consents: Me['onboarding']['consents'] }) {
   const record = useRecordConsents();
+  const step = useSettingsStep();
   const formatDate = useFormatDateTime();
   const [open, setOpen] = useState(false);
   const regionId = useId();
@@ -57,6 +64,10 @@ function MarketingSwitch({ consents }: { consents: Me['onboarding']['consents'] 
     // Unreachable while the switch honours `ready`.
     const accountId = record.accountId;
     if (accountId === undefined) return;
+    if (step.stepLeft) {
+      step.toStep();
+      return;
+    }
     try {
       const me = await record.mutateAsync(marketingConsentBody(agreed, accountId));
       const answer = me.onboarding.consents.find((item) => item.item === 'marketing');

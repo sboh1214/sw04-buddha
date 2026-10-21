@@ -79,13 +79,15 @@ export const ONBOARDING_EXEMPT_PATHS: readonly string[] = [
  * reach it too (오너 결정 2026-10-20, ADR-0073). Unlike ONBOARDING_EXEMPT_PATHS an entry is exactly
  * one page, never the pages under it: the post page is exempt, its edit screen is not. What the
  * page offers that the onboarding still keeps from the account — writing, editing, the comment
- * boxes (#48) and 좋아요 (#49, owner decision 2026-10-20, ADR-0076) — sends it to its step instead
- * of opening the form or sending the press (`onboardingEntryPath`, hooks/use-onboarding-entry.ts),
- * so the exemption opens the page and never a write.
+ * boxes (#48) and 좋아요 (#49, owner decision 2026-10-20, ADR-0076), a public profile item's new
+ * value (#41) — sends it to its step instead of opening the form or sending the press
+ * (`onboardingEntryPath`, hooks/use-onboarding-entry.ts), so the exemption opens the page and never
+ * a write the server would refuse it.
  *
  * Only for an account that finished its onboarding once and has a re-consent alone left
  * (`hasOnlyReconsentLeft`, 오너 결정 2026-10-20 3차 답 1): what it did before the revision — its
- * own posts — is what it may still remove. An account that has not finished — a new one that signed
+ * own posts, and its public profile's 소개 and interest categories (오너 결정 2026-10-21 답 2,
+ * #41) — is what it may still remove. An account that has not finished — a new one that signed
  * up or signed in from the page, `next` bringing it back there — is sent on from it like from any
  * page, with the page as `next`, and comes back to it at the end (#57-9).
  */
@@ -103,7 +105,11 @@ export interface OnboardingExemptPage {
  * The pages exempt for a login-only action. Later issues add theirs here: #77 the proposal list
  * (`/my/proposals`, withdrawing a proposal); #48's comment deletion lives on the post page, whose
  * comment writes — 답글, 수정, 올리기 — go to the step (components/post/comments-section.tsx), and so
- * do its 좋아요 (#49, components/post/like-button.tsx).
+ * do its 좋아요 (#49, components/post/like-button.tsx). #41's MY 설정 clears the public profile's
+ * 소개 and drops its interest categories; a new 소개, a category added and the marketing switch —
+ * a consent record, which the consent step's items come with — go to the step
+ * (app/my/settings: `profileItemSaveGoesToStep`, lib/profile.ts). Its other cards write what the
+ * server takes with a session alone (ADR-0078 7-24).
  * ADR-0061's watchlist is not one: its server asks for a session alone, and its screens keep the
  * onboarding prompt (#89 — the owner wrote the screen in).
  */
@@ -112,6 +118,11 @@ export const ONBOARDING_EXEMPT_PAGES: readonly OnboardingExemptPage[] = [
     route: '/community/posts/[postId]',
     reason:
       'an author facing a re-consent deletes their own post and their own comments with a session alone (owner decisions 2026-10-19 answer 2 and 2026-10-20, #46, #48); its edit entry, its comment writes and its likes (#49) go to the step',
+  },
+  {
+    route: '/my/settings',
+    reason:
+      'a member facing a re-consent clears the 소개 and drops interest categories of their public profile with a session alone (owner decision 2026-10-21 answer 2, #41); a new 소개, a category added and the marketing switch go to the step',
   },
 ];
 

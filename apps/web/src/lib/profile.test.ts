@@ -2,18 +2,23 @@ import { BIO_MAX_LENGTH, bioTooLongMessage, findExcludedText } from '@buddha/sha
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
 import { ApiError, type PublicProfile } from './api';
+import { type Onboarding, isOnboardingExemptPage } from './onboarding';
 import {
   PROFILE_SETTINGS_PATH,
   bioDraft,
+  bioEdit,
   bioFormSchema,
   bioLengthText,
   bioToSend,
   interestCategoryLabel,
   interestsChanged,
+  interestsEdit,
   isOwnProfile,
   joinedMonthText,
   profileCounts,
   profileItemFailure,
+  profileItemRefusalMove,
+  profileItemSaveGoesToStep,
   profilePageMetadata,
   profilePath,
 } from './profile';
@@ -184,6 +189,99 @@ describe('MY 설정: the interest categories (#37-5, #57-7)', () => {
   it('ignores a category the list no longer offers (retired by operators)', () => {
     // The account had 9, retired since: neither shown nor sent, so nothing moved on screen.
     expect(interestsChanged([1], [1, 9], offered)).toBe(false);
+  });
+});
+
+describe('MY 설정 for an account facing a re-consent (owner decision 2026-10-21 answer 2)', () => {
+  /** `GET /me`'s onboarding: everything done, then a revision asked for the consent again. */
+  const done: Onboarding = {
+    consent: true,
+    verification: true,
+    nickname: true,
+    completed: true,
+    interests: true,
+    nextStep: null,
+    consents: [
+      {
+        item: 'terms',
+        version: 'draft-2026-10-18',
+        agreed: true,
+        recordedAt: '2026-10-18T00:00:00.000Z',
+      },
+    ],
+  };
+  const reconsent: Onboarding = { ...done, consent: false, completed: false, nextStep: 'consent' };
+  /** Agreed once, left before the 본인확인, then a revision: never finished. */
+  const notFinished: Onboarding = {
+    ...reconsent,
+    verification: false,
+    nickname: false,
+  };
+  const onboardingRefusal = refusal(409, 'ONBOARDING_REQUIRED', { steps: ['consent'] });
+
+  it('is a page the gate keeps such an account on', () => {
+    expect(isOnboardingExemptPage(PROFILE_SETTINGS_PATH)).toBe(true);
+  });
+
+  it('tells a deletion from a new value as the server does', () => {
+    expect(bioEdit(null)).toBe('clear');
+    expect(bioEdit(bioToSend('   \n  '))).toBe('clear');
+    expect(bioEdit(bioToSend(' 새 소개 '))).toBe('replace');
+    // Dropping some or all is a deletion; anything the account did not have is a new value, even
+    // beside a drop (ADR-0078 7-11).
+    expect(interestsEdit([], [1, 2])).toBe('clear');
+    expect(interestsEdit([2], [1, 2])).toBe('clear');
+    expect(interestsEdit([1, 2], [1, 2])).toBe('clear');
+    expect(interestsEdit([1, 3], [1, 2])).toBe('replace');
+    expect(interestsEdit([3], [])).toBe('replace');
+  });
+
+  it('sends a deletion with a session alone and takes a new value to the step', () => {
+    expect(profileItemSaveGoesToStep('clear', true)).toBe(false);
+    expect(profileItemSaveGoesToStep('replace', true)).toBe(true);
+    // Nothing left, or not known yet: sent — the server decides.
+    expect(profileItemSaveGoesToStep('replace', false)).toBe(false);
+    expect(profileItemSaveGoesToStep('clear', false)).toBe(false);
+  });
+
+  it('moves a save refused for the onboarding to the step on MY 설정, without a word', () => {
+    expect(
+      profileItemRefusalMove(onboardingRefusal, {
+        pathname: PROFILE_SETTINGS_PATH,
+        onboarding: reconsent,
+      }),
+    ).toBe('step');
+  });
+
+  it('leaves it to the gate for an onboarding not finished', () => {
+    expect(
+      profileItemRefusalMove(onboardingRefusal, {
+        pathname: PROFILE_SETTINGS_PATH,
+        onboarding: notFinished,
+      }),
+    ).toBe('gate');
+  });
+
+  it('says why when there is nowhere to go: `GET /me` not read again or naming no step, another page, another refusal', () => {
+    for (const onboarding of [undefined, done]) {
+      expect(
+        profileItemRefusalMove(onboardingRefusal, { pathname: PROFILE_SETTINGS_PATH, onboarding }),
+      ).toBeUndefined();
+    }
+    expect(
+      profileItemRefusalMove(onboardingRefusal, { pathname: '/my/settingsx', onboarding: done }),
+    ).toBeUndefined();
+    expect(
+      profileItemRefusalMove(refusal(403, 'FORBIDDEN'), {
+        pathname: PROFILE_SETTINGS_PATH,
+        onboarding: reconsent,
+      }),
+    ).toBeUndefined();
+    // What the card then says.
+    expect(profileItemFailure(onboardingRefusal)).toEqual({
+      kind: 'refresh',
+      message: copy.errPostOnboarding,
+    });
   });
 });
 
